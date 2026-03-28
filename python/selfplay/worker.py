@@ -34,6 +34,31 @@ _BOARD_SIZE: int = 19
 _N_ACTIONS:  int = _BOARD_SIZE * _BOARD_SIZE + 1  # 362
 
 
+def get_temperature(ply: int, mode: str, config: Dict[str, Any]) -> float:
+    """Return the MCTS sampling temperature for the current game state.
+
+    Args:
+        ply:    Total half-moves played so far (board.ply).
+        mode:   "training"   → tau=1.0 for first N plies, tau=0.1 after.
+                "evaluation" → tau=0.0 (argmax, deterministic).
+                "bootstrap"  → tau=0.5 (moderate, for minimax corpus games).
+        config: Config dict.  Reads ``temperature_threshold_ply`` from the
+                ``mcts`` sub-dict if present, else top-level, else default 30.
+
+    Returns:
+        Sampling temperature as a float.
+    """
+    if mode == "evaluation":
+        return 0.0
+    if mode == "bootstrap":
+        return 0.5
+    # Training mode: ply-based schedule.
+    mcts_cfg = config.get("mcts", config)
+    threshold = int(mcts_cfg.get("temperature_threshold_ply",
+                                  config.get("temperature_threshold_ply", 30)))
+    return 1.0 if ply < threshold else 0.1
+
+
 def _flat_to_coords(flat: int) -> Tuple[int, int]:
     """Convert a flat board index back to (q, r) axial coordinates."""
     half = (_BOARD_SIZE - 1) // 2   # 9
@@ -137,8 +162,11 @@ class SelfPlayWorker:
                     dirichlet_applied = True
 
         if temperature is None:
-            ply = board.ply
-            temperature = 1.0 if ply < self.temp_threshold else 0.1
+            temperature = get_temperature(
+                ply=int(board.ply),
+                mode="evaluation" if not use_dirichlet else "training",
+                config=self.config,
+            )
 
         return self.tree.get_policy(temperature=temperature, board_size=_BOARD_SIZE)
 
