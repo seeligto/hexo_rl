@@ -1,0 +1,29 @@
+# fast_debug.yaml — tiny config for pipeline validation (Phase 1)
+# Use this config to verify the end-to-end loop runs without crashing.
+# Not intended to produce a strong model.
+
+board_size: 9          # smaller board for fast iteration
+res_blocks: 4          # shallow network
+filters: 64            # narrow network
+n_simulations: 50      # tiny MCTS search
+batch_size: 64         # training batch size
+n_workers: 1           # single self-play process
+
+# Replay buffer
+buffer_capacity: 50000
+min_buffer_size: 512   # start training once buffer has this many positions
+
+# Training
+lr: 2.0e-3
+weight_decay: 1.0e-4
+checkpoint_interval: 100   # save every N training steps
+log_interval: 10           # log loss every N training steps
+
+# Self-play
+temperature_threshold_ply: 30   # use temp=1.0 before this ply, 0.1 after
+c_puct: 1.5
+dirichlet_alpha: 0.3
+dirichlet_epsilon: 0.25
+
+# Seed
+seed: 42
