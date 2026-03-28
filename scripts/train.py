@@ -2,25 +2,21 @@
 """
 End-to-end training loop: self-play → buffer → train → repeat.
 
-Phase 1 design (single-process, no worker pool, no rich dashboard):
+Phase 2 design:
   1. Play self-play games until the buffer has enough data.
   2. Run one training step per self-play game (interleaved).
-  3. Log to structlog JSON file every log_interval steps.
-  4. Save checkpoints every checkpoint_interval steps.
-  5. Stop after --iterations steps (default: runs until Ctrl-C).
+  3. Log structured JSON to file (structlog) every event.
+  4. Display rich live dashboard in terminal.
+  5. Monitor GPU stats every 5 s via pynvml daemon thread.
+  6. Save checkpoints every checkpoint_interval steps.
+  7. Stop after --iterations steps (default: runs until Ctrl-C).
 
 Usage:
     .venv/bin/python scripts/train.py --config configs/fast_debug.yaml
     .venv/bin/python scripts/train.py --config configs/fast_debug.yaml \\
         --checkpoint checkpoints/checkpoint_00000100.pt
     .venv/bin/python scripts/train.py --config configs/fast_debug.yaml \\
-        --iterations 500
-
-Phase 1 exit criteria (from docs/02_roadmap.md):
-  - Runs 1 hour without crashing.
-  - Policy loss decreases from its initial value.
-  - Value loss converges below 0.5.
-  - Checkpoint save/load round-trips correctly.
+        --iterations 500 --no-dashboard
 """
 
 from __future__ import annotations
@@ -41,8 +37,10 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from python.logging.dashboard import TrainingDashboard
+from python.logging.gpu_monitor import GPUMonitor
 from python.logging.setup import configure_logging
-from python.model.network import HexTacToeNet
+from python.model.network import HexTacToeNet, compile_model
 from python.selfplay.worker import SelfPlayWorker
 from python.training.replay_buffer import ReplayBuffer
 from python.training.trainer import Trainer
@@ -85,6 +83,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--run-name", default=None,
         help="Run identifier for log file name (default: timestamp)"
+    )
+    p.add_argument(
+        "--no-dashboard", action="store_true",
+        help="Disable rich live dashboard (useful in CI or non-interactive mode)"
+    )
+    p.add_argument(
+        "--no-compile", action="store_true",
+        help="Disable torch.compile (useful for debugging)"
     )
     return p.parse_args()
 
@@ -136,6 +142,11 @@ def main() -> None:
         )
         log.info("new_run", model_params=sum(p.numel() for p in model.parameters()))
 
+    # Apply torch.compile (Phase 2) unless disabled.
+    if not args.no_compile:
+        trainer.model = compile_model(trainer.model)
+        log.info("torch_compile", applied=True)
+
     # ── Replay buffer ──
     capacity     = int(config.get("buffer_capacity", 500_000))
     min_buf_size = int(config.get("min_buffer_size", 512))
@@ -148,6 +159,10 @@ def main() -> None:
 
     # ── Self-play worker ──
     worker = SelfPlayWorker(trainer.model, config, device)
+
+    # ── GPU monitor (daemon thread, polls every 5 s) ──
+    gpu_monitor = GPUMonitor(interval_sec=5)
+    gpu_monitor.start()
 
     # ── Graceful shutdown on Ctrl-C ──
     _running = [True]
@@ -162,68 +177,90 @@ def main() -> None:
     train_step    = trainer.step
     games_played  = 0
     t_start       = time.time()
+    t_games_window_start = t_start
 
     # Track initial policy loss for exit-criteria logging
     initial_policy_loss: float | None = None
-    last_loss_info = {}
+    last_loss_info: dict = {}
 
-    print(f"Training on {device}. Press Ctrl-C to stop cleanly.")
+    dashboard = TrainingDashboard() if not args.no_dashboard else None
+    total_steps = args.iterations or 0
 
-    while _running[0]:
-        if args.iterations and train_step >= args.iterations:
-            log.info("iteration_limit_reached", iterations=args.iterations)
-            break
+    def _run_loop() -> None:
+        nonlocal train_step, games_played, initial_policy_loss, last_loss_info
+        nonlocal t_games_window_start
 
-        # ── Self-play: play one game ──
-        t_game = time.time()
-        n_positions = worker.play_game(buffer)
-        game_elapsed = time.time() - t_game
-        games_played += 1
+        while _running[0]:
+            if args.iterations and train_step >= args.iterations:
+                log.info("iteration_limit_reached", iterations=args.iterations)
+                break
 
-        log.info(
-            "game_complete",
-            game_id=games_played,
-            plies=n_positions,
-            duration_sec=round(game_elapsed, 2),
-            buffer_size=buffer.size,
-        )
+            # ── Self-play: play one game ──
+            t_game = time.time()
+            n_positions = worker.play_game(buffer)
+            game_elapsed = time.time() - t_game
+            games_played += 1
 
-        # ── Training: skip until buffer is warm ──
-        if buffer.size < min_buf_size:
-            continue
-
-        # ── One training step ──
-        loss_info = trainer.train_step(buffer)
-        train_step = trainer.step
-
-        if initial_policy_loss is None:
-            initial_policy_loss = loss_info["policy_loss"]
-
-        last_loss_info = loss_info
-
-        if train_step % log_interval == 0:
-            elapsed = time.time() - t_start
             log.info(
-                "train_step",
-                step=train_step,
-                policy_loss=round(loss_info["policy_loss"], 4),
-                value_loss=round(loss_info["value_loss"],   4),
-                total_loss=round(loss_info["loss"],         4),
+                "game_complete",
+                game_id=games_played,
+                plies=n_positions,
+                duration_sec=round(game_elapsed, 2),
                 buffer_size=buffer.size,
-                games_played=games_played,
-                elapsed_sec=round(elapsed, 1),
             )
 
-            # Console summary (Phase 1: plain print, no rich dashboard)
-            print(
-                f"step={train_step:6d}  "
-                f"loss={loss_info['loss']:.4f}  "
-                f"policy={loss_info['policy_loss']:.4f}  "
-                f"value={loss_info['value_loss']:.4f}  "
-                f"buf={buffer.size}  "
-                f"games={games_played}  "
-                f"t={elapsed:.0f}s"
-            )
+            # ── Training: skip until buffer is warm ──
+            if buffer.size < min_buf_size:
+                continue
+
+            # ── One training step ──
+            loss_info = trainer.train_step(buffer)
+            train_step = trainer.step
+
+            if initial_policy_loss is None:
+                initial_policy_loss = loss_info["policy_loss"]
+
+            last_loss_info = loss_info
+
+            if train_step % log_interval == 0:
+                elapsed    = time.time() - t_start
+                window_sec = max(time.time() - t_games_window_start, 1e-6)
+                games_per_hour = games_played / elapsed * 3600 if elapsed > 0 else 0.0
+
+                log.info(
+                    "train_step",
+                    step=train_step,
+                    policy_loss=round(loss_info["policy_loss"], 4),
+                    value_loss=round(loss_info["value_loss"],   4),
+                    total_loss=round(loss_info["loss"],         4),
+                    buffer_size=buffer.size,
+                    games_played=games_played,
+                    elapsed_sec=round(elapsed, 1),
+                )
+
+                metrics = {
+                    "iteration":     train_step,
+                    "policy_loss":   loss_info["policy_loss"],
+                    "value_loss":    loss_info["value_loss"],
+                    "buffer_size":   buffer.size,
+                    "games_total":   games_played,
+                    "games_per_hour": games_per_hour,
+                    "gpu_util":      gpu_monitor.gpu_util_pct,
+                    "vram_gb":       gpu_monitor.vram_used_gb,
+                }
+
+                if dashboard is not None:
+                    dashboard.update(train_step, total_steps, metrics)
+
+    if dashboard is not None:
+        with dashboard.live():
+            _run_loop()
+    else:
+        _run_loop()
+
+    # ── Cleanup ──
+    gpu_monitor.stop()
+    gpu_monitor.join(timeout=2.0)
 
     # ── Session end: save final checkpoint and log summary ──
     final_ckpt = trainer.save_checkpoint(last_loss_info if last_loss_info else None)
