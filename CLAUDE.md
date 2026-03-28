@@ -205,3 +205,20 @@ Run `python scripts/benchmark.py` to check. Phase 2 does not complete until:
 2. Check the live community repos (clone/fetch as above)
 3. Check git log to understand what has already been implemented
 4. Ask before making architectural decisions that contradict the docs
+
+## MCP tools available
+
+- **context7**: use this when writing code that uses PyTorch, PyO3, maturin, 
+  structlog, rich, or any library where API details matter. Call 
+  resolve_library_id() first, then get_library_docs().
+  
+- **github**: use this to fetch current versions of community specs before 
+  implementing against them:
+    - hex-tic-tac-toe/htttx-bot-api (bot API spec — draft, check before implementing)
+    - hex-tic-tac-toe/hexagonal-tic-tac-toe-notation (notation — draft)
+    - Ramora0/HexTicTacToe (engine source)
+    
+- **memory**: record completed phase checklist items, benchmark results, 
+  and architectural decisions here so they persist across sessions.
+
+The github mcp may not work since there is no token specified.
