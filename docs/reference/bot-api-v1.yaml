@@ -1,0 +1,203 @@
+openapi: "3.1.0"
+
+
+info:
+  title: HTTTX hexagonal tic-tac-toe base bot/engine API.
+  version: v1
+  description: Api for bots to implement to be compatible with the platform.
+
+
+paths:
+  /capabilities.json:
+    get:
+      summary: Request the bot to provide its capabilities list.
+      responses:
+        "200":
+          description: Bot capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+
+
+components:
+  schemas:
+    Capabilities:
+      description: | 
+        Versioned capabilities of the bot. Should only include the capabilities that the bot fully supports.
+        Optional "meta" field is not a capability, but an object containing information about the bot.
+      type: object
+      properties:
+        meta:
+          $ref: "#/components/schemas/Meta"
+        stateless:
+          $ref: "#/components/schemas/StatelessCapability"
+        basic_websocket:
+          $ref: "#/components/schemas/BasicWebsocketCapability"
+
+    Meta:
+      description: Meta information about the bot. A bot may define any number of any additional fields not defined here.
+      type: object
+      properties:
+        name:
+          description: Optional human readable name of the bot.
+          type: string
+        description:
+          description: Optional human readable description of the bot.
+          type: string
+        author:
+          description: Optional name or username of the Author of the bot.
+          type: string
+        version:
+          description: Optional version of the bot. Semantic versioning is preferred, but not required.
+          type: string
+
+    StatelessCapability:
+      description: Whether this bot can run answer stateless http move requests.
+      type: object
+      required:
+        - versions
+      properties:
+        versions:
+          description: |
+            Versions of the stateless api the bot supports. If it is an empty object, bot does not support stateless api.
+            The fields for all supported versions should be set. If only the base set of features is supported,
+            those properties can be set to empty objects.
+          type: object
+          properties:
+            v1-alpha:
+              type: object
+              description: | 
+                If this property is set, bot must support all 
+                required fields and routes of the Stateless API version v1-alpha.
+              properties:
+                api_root:
+                  type: string
+                  description: |
+                    Base path, relative to the "capabilities.json", of the Stateless API v1-alpha routes.
+                    Should, but not required to end in the version of the Stateless API.
+
+                    If not set, assumed to be "stateless/v1-alpha".
+
+                    For example, if the bot's capabilities.json is hosted at 
+                    https://example.com/epic_engine/api/htttx/v1/capabilities.json
+                    Stateless API's "turn" handle will be assumed to be at
+                    https://example.com/epic_engine/api/htttx/v1/stateless/v1-alpha/turn
+
+                    Clients must respect this property, if set.
+
+                move_time_limit:
+                  type: boolean
+                  description: If this property is true, bot must support and respect time_limit field of move request.
+
+
+    BasicWebsocketCapability:
+      description: Whether this bot supports real-time play via a bot-side websocket.
+      type: object
+      required:
+        - versions
+      properties:
+        versions:
+          description: |
+            Versions of the basic websocket api the bot supports.
+            If it is an empty object, bot does not support basic websocket api.
+            The fields for all supported versions should be set. If only the base set of features is supported,
+            those properties can be set to empty objects.
+          type: object
+          properties:
+            v1-alpha:
+              type: object
+              description: |
+                If this property is set, bot must support all 
+                required fields and routes of the Basic Websocket API version v1-alpha.
+              properties:
+                api_root:
+                  type: string
+                  description: |
+                    Base path, relative to the /v1/capabilities.json, of the Basic Websocket API v1-alpha routes.
+                    Should, but not required to end in the version of the Basic Websocket API.
+
+                    If not set, assumed to be "bws/v1-alpha".
+
+                    For example, if the bot's capabilities.json is hosted at 
+                    https://example.com/epic_engine/api/htttx/v1/capabilities.json
+                    Stateless API's "game" socket will be assumed to be at
+                    wss://example.com/epic_engine/api/htttx/v1/bws/v1-alpha/game
+
+                    Clients must respect this property, if set.
+                
+                move_time_limit:
+                  type: boolean
+                  description: | 
+                    If this property is true, the bot must support and respect time_limit field of 
+                    the move request packet.
+                
+                evaluation_time_limit:
+                  type: boolean
+                  description: | 
+                    If this property is true, the bot must support and respect time_limit field of
+                    the evaluation request packet. Meaningless if the bot does not support "evaluation".
+
+                config:
+                  type: object
+                  description: |
+                    If this property is set, the bot must support the configuration packet type.
+                  properties:
+                    dynamic:
+                      type: boolean
+                      description: |
+                        If this property is true, the bot supports applying configuration after any turn.
+                        Otherwise the bot only supports configuration changes before the first setup packet is sent.
+                
+                free_setup:
+                  type: boolean
+                  description: |
+                    If this property is true, the bot must support any board configuration as initial state.
+                    Otherwise the setup packet must contain a single cross, at 0 0, and no circles.
+
+                move_skips:
+                  type: boolean
+                  description: |
+                    If this property is true, the client may make some moves on behalf of the bot, and send them
+                    in the next move request. 
+                    Unless dual_sided is set, all of the moves requested from the bot must be from the same side.
+                    Unless free_move_order is set, all of the moves made by the client must still adhere to the 
+                    standard alternating move order.
+
+                dual_sided:
+                  type: boolean
+                  description: |
+                    If this property is true, the client may request moves for both crosses and circles in strictly 
+                    alternating order, within the same game session. If this property is false, or unset,
+                    the client must pick a side in the beginning of the session, and only request moves for that side.
+                    This feature can be useful for bots working as engines for game analysis, rather than for pure play.
+
+                free_move_order:
+                  type: boolean
+                  description: |
+                    If this property is true, the client may request moves regardless of the move order being 
+                    alternating or not, for any position within the same game session.
+                    Unless "dual_sided" is true, the client must still only request the bot to make moves with a single
+                    piece type.
+                    This feature can be useful for some very specific strategy evaluation scenarios.
+                
+                evaluation:
+                  type: boolean
+                  description: |
+                    If this property is true, the client may send evaluation request packets. It should be true only
+                    if the bot can provide board state evaluations, without making a move.
+                    Unless "dual_sided" is true, the client may only request evaluations with the side being
+                    consistent with the move requests, and constant within the same game session.
+                
+                resettable_state:
+                  type: boolean
+                  description: |
+                    if this property is true, the client may send a game setup packet at any point.
+                    Otherwise the setup packet may only be sent once, before requesting any moves or evaluations.
+                
+                interruptable:
+                  type: boolean
+                  description: |
+                    If this property is true, the client may send an interrupt packet at any point, to request the bot
+                    to stop evaluation and ignore the last move request packet, including its "previous" field
+                    containing the applied moves.
