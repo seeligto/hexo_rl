@@ -234,6 +234,17 @@ impl PyMCTSTree {
     pub fn root_visits(&self) -> u32 {
         self.inner.root_visits()
     }
+
+    /// Reset the tree to its root state (for benchmarking / reuse).
+    pub fn reset(&mut self) {
+        self.inner.reset();
+    }
+
+    /// Run `n` simulations using uniform priors and value=0 (no neural network).
+    /// Used for CPU-only MCTS throughput benchmarking.
+    pub fn run_simulations_cpu_only(&mut self, n: usize) {
+        self.inner.run_simulations_cpu_only(n);
+    }
 }
 
 // ── Module registration ───────────────────────────────────────────────────────

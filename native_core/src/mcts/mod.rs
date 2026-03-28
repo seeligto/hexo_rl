@@ -1,31 +1,39 @@
 /// Single-threaded PUCT MCTS tree with a flat pre-allocated node pool.
 ///
 /// Design notes:
-/// - No virtual loss (Phase 2 adds that for parallel search).
+/// - Virtual loss (Phase 2): when `select_one_leaf` descends through a node
+///   it increments `virtual_loss_count`. This decreases the effective Q seen
+///   by subsequent selections on the same path, so batched calls to
+///   `select_leaves(n)` naturally spread across different branches. The
+///   penalty is reversed during `backup`, leaving `w_value` / `n_visits`
+///   correct after the full round-trip.
 /// - No per-node heap allocation: all nodes live in `pool: Vec<Node>`.
 /// - Negamax value convention: `node.w_value` accumulates values from THAT
-///   node's player's perspective. Backup flips sign when the player changes
-///   (which happens when `parent.moves_remaining == 1`).
+///   node's player-to-move perspective. Backup flips sign when the player
+///   changes (which happens when `parent.moves_remaining == 1`).
 /// - PUCT formula (AlphaZero):
 ///   `Q(s,a) + c_puct · P(s,a) · √N(s) / (1 + N(s,a))`
 ///   where Q is from the *parent's* perspective.
 ///
-/// Phase 1 usage (Python side):
+/// Phase 2 usage (Python side):
 /// ```python
 /// tree = MCTSTree(c_puct=1.5)
 /// tree.new_game(board)
-/// for _ in range(n_simulations):
-///     boards = tree.select_leaves(1)       # one leaf per call
-///     policy, value = model(tensor(boards[0]))
-///     tree.expand_and_backup([[policy]], [value])
-/// move_policy = tree.get_policy(temperature=1.0, board_size=9)
+/// # Select a batch of leaves in one shot — virtual loss spreads them:
+/// boards = tree.select_leaves(64)
+/// policies, values = model(batch_tensor(boards))
+/// tree.expand_and_backup(policies, values)
+/// move_policy = tree.get_policy(temperature=1.0, board_size=19)
 /// ```
 
 use crate::board::{Board, coords, idx as board_idx, BOARD_SIZE};
 
 /// Pre-allocated pool size. 200 k nodes ≈ 6.4 MB.
-/// Phase 1 (50 sims, 9×9) uses ≪ 50 × 81 = 4 050 nodes per move.
 pub const MAX_NODES: usize = 200_000;
+
+/// Virtual-loss penalty applied per unresolved selection.
+/// 1.0 is the standard AlphaZero value (equivalent to one loss).
+pub const VIRTUAL_LOSS_PENALTY: f32 = 1.0;
 
 // ── Node ─────────────────────────────────────────────────────────────────────
 
@@ -37,7 +45,7 @@ pub struct Node {
     /// Flat board-cell index of the move that created this node.
     /// `u16::MAX` means "root (no incoming move)".
     pub action_idx: u16,
-    /// Visit count N(s,a).
+    /// Visit count N(s,a). Incremented during `backup`, not during selection.
     pub n_visits: u32,
     /// Sum of backed-up values, from *this node's* player-to-move perspective.
     pub w_value: f32,
@@ -55,6 +63,10 @@ pub struct Node {
     pub is_terminal: bool,
     /// Terminal outcome from this node's player's perspective. Valid only if `is_terminal`.
     pub terminal_value: f32,
+    /// Number of in-flight virtual losses currently applied to this node.
+    /// Incremented in `select_one_leaf` when the node is on the selected path;
+    /// decremented in `backup` when the real value is propagated back.
+    pub virtual_loss_count: u32,
 }
 
 impl Node {
@@ -70,16 +82,24 @@ impl Node {
             moves_remaining: 1,
             is_terminal: false,
             terminal_value: 0.0,
+            virtual_loss_count: 0,
         }
     }
 
-    /// Mean value Q(s,a) from this node's player's perspective.
+    /// Mean value Q(s,a) from this node's player's perspective, adjusted for
+    /// any outstanding virtual losses.
+    ///
+    /// Effective formula:
+    ///   Q_eff = (w_value − vl_count × penalty) / (n_visits + vl_count)
+    ///
+    /// When `vl_count == 0` and `n_visits == 0` this returns 0.0 (unvisited).
     #[inline]
-    pub fn q_value(&self) -> f32 {
-        if self.n_visits == 0 {
+    pub fn q_value_vl(&self, penalty: f32) -> f32 {
+        let effective_n = self.n_visits + self.virtual_loss_count;
+        if effective_n == 0 {
             0.0
         } else {
-            self.w_value / self.n_visits as f32
+            (self.w_value - self.virtual_loss_count as f32 * penalty) / effective_n as f32
         }
     }
 
@@ -101,6 +121,8 @@ pub struct MCTSTree {
     root_board: Board,
     /// PUCT exploration constant.
     pub(crate) c_puct: f32,
+    /// Virtual-loss penalty (default 1.0).
+    pub(crate) virtual_loss: f32,
     /// Leaves selected by the most recent `select_leaves` call, waiting for
     /// `expand_and_backup`. Contains `(node_index, reconstructed_board)`.
     pending: Vec<(u32, Board)>,
@@ -108,12 +130,17 @@ pub struct MCTSTree {
 
 impl MCTSTree {
     pub fn new(c_puct: f32) -> Self {
+        MCTSTree::new_with_vl(c_puct, VIRTUAL_LOSS_PENALTY)
+    }
+
+    pub fn new_with_vl(c_puct: f32, virtual_loss: f32) -> Self {
         let pool = vec![Node::uninit(); MAX_NODES];
         MCTSTree {
             pool,
             next_free: 1,
             root_board: Board::new(),
             c_puct,
+            virtual_loss,
             pending: Vec::new(),
         }
     }
@@ -157,6 +184,10 @@ impl MCTSTree {
 
     /// PUCT score for `child_idx`, evaluated from `parent_idx`'s player perspective.
     ///
+    /// Q is virtual-loss-adjusted. `parent_n` is the effective visit count of the
+    /// parent (n_visits + virtual_loss_count), supplied by the caller to avoid
+    /// re-reading the parent node.
+    ///
     /// If `parent.moves_remaining == 1` the move passes the turn to the other
     /// player, so we negate the child's Q value to get the parent's view.
     #[inline]
@@ -165,29 +196,38 @@ impl MCTSTree {
         let parent = &self.pool[parent_idx as usize];
 
         let q = if parent.moves_remaining == 1 {
-            -child.q_value() // turn changed → flip perspective
+            -child.q_value_vl(self.virtual_loss) // turn changed → flip perspective
         } else {
-            child.q_value()  // same player's second move in a turn
+            child.q_value_vl(self.virtual_loss)  // same player's second move in a turn
         };
 
         let u = self.c_puct * child.prior * parent_n.sqrt()
-            / (1.0 + child.n_visits as f32);
+            / (1.0 + child.n_visits as f32 + child.virtual_loss_count as f32);
         q + u
     }
 
     // ── Selection ────────────────────────────────────────────────────────────
 
     /// Walk the tree via PUCT until an unexpanded (or terminal) leaf is found.
+    ///
+    /// Applies virtual loss to every node on the path (including the leaf).
+    /// This causes subsequent calls to `select_one_leaf` to prefer different
+    /// branches, enabling effective batched leaf evaluation.
+    ///
     /// Returns `(leaf_node_idx, reconstructed_board_at_leaf)`.
-    fn select_one_leaf(&self) -> (u32, Board) {
+    fn select_one_leaf(&mut self) -> (u32, Board) {
         let mut cur: u32 = 0;
         loop {
+            // Apply virtual loss to this node before we inspect it.
+            self.pool[cur as usize].virtual_loss_count += 1;
+
             let node = &self.pool[cur as usize];
             if node.is_terminal || !node.is_expanded() {
                 return (cur, self.reconstruct_board(cur));
             }
-            // Descend to the child with the highest PUCT score.
-            let parent_n = node.n_visits as f32;
+
+            // Effective parent visit count includes outstanding virtual losses.
+            let parent_n = (node.n_visits + node.virtual_loss_count) as f32;
             let first    = node.first_child as usize;
             let n_ch     = node.n_children  as usize;
 
@@ -205,9 +245,9 @@ impl MCTSTree {
 
     /// Select up to `n` distinct leaves for evaluation.
     ///
-    /// Deduplicates: if the same leaf would be selected more than once (e.g. when
-    /// the root has never been expanded) only the first occurrence is kept, so
-    /// `boards.len() == self.pending.len()` always holds.
+    /// Virtual loss is applied as each leaf is selected, so subsequent calls
+    /// naturally diverge to different branches. Deduplication is retained as a
+    /// safety measure (can still occur early before the tree is expanded).
     ///
     /// Caller must call `expand_and_backup` with exactly `boards.len()` entries.
     pub fn select_leaves(&mut self, n: usize) -> Vec<Board> {
@@ -215,8 +255,10 @@ impl MCTSTree {
         let mut boards = Vec::with_capacity(n);
         for _ in 0..n {
             let (leaf_idx, board) = self.select_one_leaf();
-            // Skip duplicates — same leaf can't be expanded twice in one batch.
+            // Skip duplicates — dedup is a safety net; VL normally prevents this.
             if self.pending.iter().any(|(i, _)| *i == leaf_idx) {
+                // Undo the VL we just applied on this redundant path.
+                self.undo_virtual_loss(leaf_idx);
                 continue;
             }
             boards.push(board.clone());
@@ -225,10 +267,28 @@ impl MCTSTree {
         boards
     }
 
+    /// Reverse virtual loss on all nodes from `node_idx` to the root.
+    /// Used when a duplicate leaf is detected in `select_leaves`.
+    fn undo_virtual_loss(&mut self, mut node_idx: u32) {
+        loop {
+            let node = &mut self.pool[node_idx as usize];
+            if node.virtual_loss_count > 0 {
+                node.virtual_loss_count -= 1;
+            }
+            let parent = node.parent;
+            if parent == u32::MAX {
+                break;
+            }
+            node_idx = parent;
+        }
+    }
+
     // ── Expansion and backup ─────────────────────────────────────────────────
 
     /// Given network outputs for the last `select_leaves` batch, expand each
     /// leaf and backup values to the root.
+    ///
+    /// Also reverses the virtual loss applied during selection.
     ///
     /// * `policies[i]`: flat probability vector of length `board_size² + 1`;
     ///   index corresponds to flat board cell index.
@@ -304,16 +364,17 @@ impl MCTSTree {
                     1.0 / n_ch as f32
                 };
                 self.pool[ci] = Node {
-                    parent:         leaf_idx,
-                    action_idx:     action_flat,
-                    n_visits:       0,
-                    w_value:        0.0,
+                    parent:              leaf_idx,
+                    action_idx:          action_flat,
+                    n_visits:            0,
+                    w_value:             0.0,
                     prior,
-                    first_child:    u32::MAX,
-                    n_children:     0,
-                    moves_remaining: child_mr,
-                    is_terminal:    false,
-                    terminal_value: 0.0,
+                    first_child:         u32::MAX,
+                    n_children:          0,
+                    moves_remaining:     child_mr,
+                    is_terminal:         false,
+                    terminal_value:      0.0,
+                    virtual_loss_count:  0,
                 };
             }
 
@@ -328,12 +389,19 @@ impl MCTSTree {
     /// `value` is from `node_idx`'s player-to-move perspective. It is negated
     /// each time we ascend a level where the player changes (i.e. when the
     /// parent's `moves_remaining` was 1).
+    ///
+    /// Also reverses one unit of virtual loss at each node on the path.
     fn backup(&mut self, mut node_idx: u32, mut value: f32) {
         loop {
-            self.pool[node_idx as usize].n_visits += 1;
-            self.pool[node_idx as usize].w_value  += value;
+            let node = &mut self.pool[node_idx as usize];
+            node.n_visits += 1;
+            node.w_value  += value;
+            // Reverse the virtual loss applied during selection.
+            if node.virtual_loss_count > 0 {
+                node.virtual_loss_count -= 1;
+            }
 
-            let parent = self.pool[node_idx as usize].parent;
+            let parent = node.parent;
             if parent == u32::MAX {
                 break; // reached root
             }
@@ -397,6 +465,32 @@ impl MCTSTree {
     pub fn root_visits(&self) -> u32 {
         self.pool[0].n_visits
     }
+
+    /// Reset the tree without changing the root board (for benchmarking).
+    pub fn reset(&mut self) {
+        let mr = self.pool[0].moves_remaining;
+        let board = self.root_board.clone();
+        self.new_game(board);
+        self.pool[0].moves_remaining = mr;
+    }
+
+    /// Run `n` simulations using uniform priors and a value of 0.0 (no neural
+    /// network). Used for CPU-only throughput benchmarking.
+    pub fn run_simulations_cpu_only(&mut self, n: usize) {
+        let uniform_prior = 1.0 / (BOARD_SIZE * BOARD_SIZE + 1) as f32;
+        let uniform_policy = vec![uniform_prior; BOARD_SIZE * BOARD_SIZE + 1];
+        for _ in 0..n {
+            let boards = self.select_leaves(1);
+            if boards.is_empty() {
+                continue;
+            }
+            let policies: Vec<Vec<f32>> = (0..boards.len())
+                .map(|_| uniform_policy.clone())
+                .collect();
+            let values: Vec<f32> = vec![0.0; boards.len()];
+            self.expand_and_backup(&policies, &values);
+        }
+    }
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -404,8 +498,6 @@ impl MCTSTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::Player;
-
     /// Build a tiny manual tree:
     ///   root  (mr=2, n=0)
     ///     ├─ child_a (action=0, prior=0.7, n=0)
@@ -425,11 +517,13 @@ mod tests {
             parent: 0, action_idx: 0, n_visits: 0, w_value: 0.0,
             prior: 0.7, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
+            virtual_loss_count: 0,
         };
         tree.pool[2] = Node {
             parent: 0, action_idx: 1, n_visits: 0, w_value: 0.0,
             prior: 0.3, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
+            virtual_loss_count: 0,
         };
         (tree, 1, 2)
     }
@@ -477,12 +571,14 @@ mod tests {
             parent: 0, action_idx: 0, n_visits: 0, w_value: 0.0,
             prior: 1.0, first_child: u32::MAX, n_children: 0,
             moves_remaining: 2, is_terminal: false, terminal_value: 0.0,
+            virtual_loss_count: 0,
         };
         // grandchild at index 2: mr=1, parent=child
         tree.pool[2] = Node {
             parent: 1, action_idx: 1, n_visits: 0, w_value: 0.0,
             prior: 1.0, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
+            virtual_loss_count: 0,
         };
         tree.next_free = 3;
 
@@ -513,6 +609,7 @@ mod tests {
             parent: 0, action_idx: 0, n_visits: 0, w_value: 0.0,
             prior: 1.0, first_child: u32::MAX, n_children: 0,
             moves_remaining: 2, is_terminal: false, terminal_value: 0.0,
+            virtual_loss_count: 0,
         };
         tree.next_free = 2;
 
@@ -632,5 +729,94 @@ mod tests {
         let policy = tree.get_policy(1.0, BOARD_SIZE);
         let sum: f32 = policy.iter().sum();
         assert!((sum - 1.0).abs() < 1e-4, "policy should sum to 1.0, got {sum}");
+    }
+
+    // ── Virtual loss tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_virtual_loss_applied_during_select() {
+        // After select_leaves(1), the nodes on the selected path (just root here,
+        // since root is unexpanded) should have virtual_loss_count > 0 UNTIL backup.
+        let mut tree = MCTSTree::new(1.5);
+        tree.new_game(Board::new());
+
+        // Root is not yet expanded — select will return root as leaf.
+        let _leaves = tree.select_leaves(1);
+
+        // VL should be on root now (backup hasn't happened yet).
+        assert_eq!(
+            tree.pool[0].virtual_loss_count, 1,
+            "root should have virtual_loss_count=1 after select before backup"
+        );
+    }
+
+    #[test]
+    fn test_virtual_loss_reversed_after_backup() {
+        // After a full select → expand_and_backup round-trip, VL should be 0.
+        let mut tree = MCTSTree::new(1.5);
+        tree.new_game(Board::new());
+
+        let leaves = tree.select_leaves(1);
+        let n = leaves.len();
+        let uniform = vec![1.0 / (BOARD_SIZE * BOARD_SIZE + 1) as f32; BOARD_SIZE * BOARD_SIZE + 1];
+        let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+        tree.expand_and_backup(&policies, &vec![0.0; n]);
+
+        // All nodes should have VL cleared.
+        for i in 0..tree.next_free as usize {
+            assert_eq!(
+                tree.pool[i].virtual_loss_count, 0,
+                "node {i} should have virtual_loss_count=0 after backup"
+            );
+        }
+    }
+
+    #[test]
+    fn test_virtual_loss_causes_path_divergence() {
+        // With VL, selecting the same expanded tree twice should visit DIFFERENT
+        // children, not the same one twice.
+        //
+        // We use setup_two_child_tree (priors 0.7 and 0.3). Without VL, both
+        // selects would always return child_a (prior dominates at N=0). With VL,
+        // child_a gets a -1.0 Q penalty after the first select, causing the second
+        // select to prefer child_b.
+        //
+        // Trace (c_puct=1.5, VL penalty=1.0):
+        //   Select 1: root.vl=1, parent_n=2, PUCT(A)=+1.485, PUCT(B)=+0.636 → A
+        //   Select 2: root.vl=2, parent_n=3, PUCT(A)=-0.091, PUCT(B)=+0.779 → B
+        let (mut tree, child_a, child_b) = setup_two_child_tree(1.5);
+        // Root needs at least 1 real visit so sqrt(parent_n) is meaningful.
+        tree.pool[0].n_visits = 1;
+
+        let batch = tree.select_leaves(2);
+        assert_eq!(batch.len(), 2, "VL should cause selections to diverge to 2 distinct leaves");
+
+        // Backup both with 0.0 to reverse virtual losses.
+        let dummy = vec![0.5f32; BOARD_SIZE * BOARD_SIZE + 1];
+        let policies: Vec<Vec<f32>> = (0..2).map(|_| dummy.clone()).collect();
+        tree.expand_and_backup(&policies, &vec![0.0; 2]);
+
+        // All VL counts should be zero after backup.
+        assert_eq!(tree.pool[0].virtual_loss_count, 0, "root VL not reversed");
+        assert_eq!(tree.pool[child_a as usize].virtual_loss_count, 0, "child_a VL not reversed");
+        assert_eq!(tree.pool[child_b as usize].virtual_loss_count, 0, "child_b VL not reversed");
+    }
+
+    #[test]
+    fn test_virtual_loss_q_adjustment() {
+        // Verify that q_value_vl correctly penalises a node with outstanding VL.
+        let node = Node {
+            parent: u32::MAX, action_idx: u16::MAX,
+            n_visits: 4, w_value: 2.0, // Q = 0.5 without VL
+            prior: 0.5, first_child: u32::MAX, n_children: 0,
+            moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
+            virtual_loss_count: 2,
+        };
+        // Q_eff = (2.0 - 2*1.0) / (4 + 2) = 0.0 / 6 = 0.0
+        let q = node.q_value_vl(VIRTUAL_LOSS_PENALTY);
+        assert!(
+            q.abs() < 1e-6,
+            "Q should be 0.0 with 2 VL on node with w=2.0, n=4: got {q}"
+        );
     }
 }
