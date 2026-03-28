@@ -1,0 +1,191 @@
+"""
+Single-process self-play worker.
+
+Plays one game at a time using MCTS + the current network. Each game
+position is recorded with its MCTS policy and pushed to the replay buffer
+at game end (once the outcome is known).
+
+Phase 1 design — deliberately simple:
+  - No worker pool (one process, one game).
+  - No inference server (model called directly).
+  - No Dirichlet noise (added in Phase 2).
+  - No temperature scheduler object (inline threshold logic).
+  - Board is always 19×19.
+
+Usage (via scripts/train.py):
+    worker = SelfPlayWorker(model, config, device)
+    n_positions = worker.play_game(replay_buffer)
+"""
+
+from __future__ import annotations
+
+from typing import Dict, Any, List, Tuple
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+from native_core import Board, MCTSTree
+from python.env.game_state import GameState
+from python.model.network import HexTacToeNet
+from python.training.replay_buffer import ReplayBuffer
+
+# Board is always 19×19 (BOARD_SIZE from native_core)
+_BOARD_SIZE: int = 19
+_N_ACTIONS:  int = _BOARD_SIZE * _BOARD_SIZE + 1  # 362
+
+
+def _flat_to_coords(flat: int) -> Tuple[int, int]:
+    """Convert a flat board index back to (q, r) axial coordinates."""
+    half = (_BOARD_SIZE - 1) // 2   # 9
+    q = flat // _BOARD_SIZE - half
+    r = flat %  _BOARD_SIZE - half
+    return q, r
+
+
+class SelfPlayWorker:
+    """Plays self-play games and pushes data to a ReplayBuffer.
+
+    Args:
+        model:   Trained (or random) HexTacToeNet.
+        config:  Config dict.  Used keys:
+                     n_simulations, c_puct, temperature_threshold_ply,
+                     board_size (must match network input).
+        device:  torch.device.
+    """
+
+    def __init__(
+        self,
+        model:  HexTacToeNet,
+        config: Dict[str, Any],
+        device: torch.device,
+    ) -> None:
+        self.model  = model
+        self.config = config
+        self.device = device
+        self.n_sims = int(config["n_simulations"])
+        self.c_puct = float(config.get("c_puct", 1.5))
+        self.temp_threshold = int(config.get("temperature_threshold_ply", 30))
+        self.tree   = MCTSTree(c_puct=self.c_puct)
+
+    # ── Inference ─────────────────────────────────────────────────────────────
+
+    @torch.no_grad()
+    def _infer(self, board: Board) -> Tuple[List[float], float]:
+        """Run network inference on a single board.
+
+        Returns (policy_probs, value) where policy_probs is a list of
+        length _N_ACTIONS and value ∈ [-1, 1].
+
+        Uses GameState.from_board with no history context (leaf nodes in MCTS
+        don't carry full game history). The 8 history planes are zero except
+        for the current board at position 7.
+        """
+        state = GameState.from_board(board)
+        tensor = torch.from_numpy(state.to_tensor()).unsqueeze(0).to(self.device)
+
+        self.model.eval()
+        log_policy, value = self.model(tensor.float())  # float32 for single inference
+
+        policy_probs = log_policy.exp().squeeze(0).cpu().numpy().tolist()
+        v = value.squeeze().item()
+        return policy_probs, v
+
+    # ── MCTS search ───────────────────────────────────────────────────────────
+
+    def _run_mcts(self, board: Board) -> List[float]:
+        """Run self.n_sims MCTS simulations from `board`.
+
+        Returns the visit-count policy vector (length _N_ACTIONS).
+        """
+        self.tree.new_game(board)
+
+        for _ in range(self.n_sims):
+            leaves = self.tree.select_leaves(1)
+            if not leaves:
+                break
+            policy, value = self._infer(leaves[0])
+            self.tree.expand_and_backup([policy], [value])
+
+        ply = board.ply
+        temperature = 1.0 if ply < self.temp_threshold else 0.1
+        return self.tree.get_policy(temperature=temperature, board_size=_BOARD_SIZE)
+
+    # ── Action sampling ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _sample_action(policy: List[float], legal_moves: List[Tuple[int, int]]) -> Tuple[int, int]:
+        """Sample a move from the MCTS policy, restricted to legal moves.
+
+        If MCTS assigns zero probability to all legal moves (degenerate case),
+        falls back to uniform sampling.
+        """
+        n_actions = _BOARD_SIZE * _BOARD_SIZE + 1
+        half = (_BOARD_SIZE - 1) // 2
+
+        # Map legal moves to flat indices
+        legal_flat = [
+            (q + half) * _BOARD_SIZE + (r + half)
+            for q, r in legal_moves
+        ]
+
+        # Extract and normalise probabilities over legal moves
+        probs = np.array([policy[i] if i < n_actions else 0.0 for i in legal_flat],
+                         dtype=np.float64)
+        total = probs.sum()
+        if total < 1e-9:
+            probs = np.ones(len(legal_moves)) / len(legal_moves)
+        else:
+            probs /= total
+
+        idx = np.random.choice(len(legal_moves), p=probs)
+        return legal_moves[idx]
+
+    # ── Game loop ─────────────────────────────────────────────────────────────
+
+    def play_game(self, buffer: ReplayBuffer) -> int:
+        """Play one complete game and push all positions to `buffer`.
+
+        Returns the number of positions added (= game length in half-moves).
+        """
+        rust_board = Board()
+        state      = GameState.from_board(rust_board)
+
+        # Collect (tensor, mcts_policy) for each step; outcome unknown until game end.
+        records: List[Tuple[np.ndarray, np.ndarray, int]] = []
+        # Each record: (state_tensor, mcts_policy, player_at_this_move)
+
+        while True:
+            # ── Win / draw check ──
+            if rust_board.check_win() or rust_board.legal_move_count() == 0:
+                break
+
+            # ── MCTS search ──
+            mcts_policy = self._run_mcts(rust_board)  # list[float]
+
+            # ── Record position ──
+            state_tensor = state.to_tensor()           # (18, 19, 19) float16
+            policy_arr   = np.array(mcts_policy, dtype=np.float32)
+            records.append((state_tensor, policy_arr, state.current_player))
+
+            # ── Sample and apply move ──
+            legal = rust_board.legal_moves()
+            if not legal:
+                break
+            q, r = self._sample_action(mcts_policy, legal)
+            state = state.apply_move(rust_board, q, r)
+
+        # ── Determine outcome ──
+        # check_win() is True if the player who JUST moved won.
+        # current_player at game end is the player who will move NEXT (the loser).
+        winner = rust_board.winner()  # 1, -1, or None (draw)
+
+        # Push to buffer: outcome from each player's own perspective.
+        for state_tensor, policy_arr, player in records:
+            if winner is None:
+                outcome = 0.0
+            else:
+                outcome = 1.0 if player == winner else -1.0
+            buffer.push(state_tensor, policy_arr, outcome)
+
+        return len(records)

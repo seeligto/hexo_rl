@@ -2,7 +2,7 @@
 # Use this config to verify the end-to-end loop runs without crashing.
 # Not intended to produce a strong model.
 
-board_size: 9          # smaller board for fast iteration
+board_size: 19         # Rust board is fixed 19x19; speed comes from smaller network
 res_blocks: 4          # shallow network
 filters: 64            # narrow network
 n_simulations: 50      # tiny MCTS search
