@@ -56,6 +56,27 @@ The test suite in `tests/` must pass before any commit.
 Win detection tests are especially critical — a bug here corrupts all training data.
 Run `cargo test` and `pytest` before every commit.
 
+### Session start protocol
+
+At the start of every session, in this order:
+1. Read this file (CLAUDE.md)
+2. Check the memory MCP for stored phase progress and notes from previous sessions
+3. Run `cargo test` and `pytest` to confirm clean baseline
+4. Check `git log --oneline -20` to understand what was last committed
+5. Only then begin work
+
+### Session end protocol
+
+Before ending any session or when asked to stop:
+1. Finish the current atomic task and commit it
+2. Run full test suite — confirm it passes
+3. Write a memory note via the memory MCP containing:
+   - Current phase and which checklist items are complete
+   - Test counts (pytest N passing, cargo test N passing)
+   - Any architectural decisions made this session
+   - Exact next task to resume from
+4. Summarise the above in chat before closing
+
 ---
 
 ## Language and toolchain
@@ -206,19 +227,23 @@ Run `python scripts/benchmark.py` to check. Phase 2 does not complete until:
 3. Check git log to understand what has already been implemented
 4. Ask before making architectural decisions that contradict the docs
 
+---
+
 ## MCP tools available
 
-- **context7**: use this when writing code that uses PyTorch, PyO3, maturin, 
-  structlog, rich, or any library where API details matter. Call 
+- **context7**: use this when writing code that uses PyTorch, PyO3, maturin,
+  structlog, rich, or any library where API details matter. Call
   resolve_library_id() first, then get_library_docs().
-  
-- **github**: use this to fetch current versions of community specs before 
+
+- **github**: use this to fetch current versions of community specs before
   implementing against them:
     - hex-tic-tac-toe/htttx-bot-api (bot API spec — draft, check before implementing)
     - hex-tic-tac-toe/hexagonal-tic-tac-toe-notation (notation — draft)
     - Ramora0/HexTicTacToe (engine source)
-    
-- **memory**: record completed phase checklist items, benchmark results, 
-  and architectural decisions here so they persist across sessions.
+  **Note: the GitHub MCP may not work if no GITHUB_TOKEN is set in the environment.
+  If it fails, fall back to curl/git clone as shown in the community resources section above.**
 
-The github mcp may not work since there is no token specified.
+- **memory**: record completed phase checklist items, benchmark results,
+  and architectural decisions here so they persist across sessions.
+  Follow the session start and end protocols above — they tell you exactly
+  what to read and write.
