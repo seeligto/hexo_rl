@@ -21,10 +21,13 @@ Architecture (from docs/01_architecture.md §2):
     → Linear(H·W → 256) → ReLU → Linear(256 → 1) → Tanh
 """
 
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple
+
+_log = logging.getLogger(__name__)
 
 
 class ResidualBlock(nn.Module):
@@ -107,3 +110,30 @@ class HexTacToeNet(nn.Module):
         value = torch.tanh(self.value_fc2(v))
 
         return log_policy, value
+
+
+def compile_model(model: HexTacToeNet, mode: str = "default") -> HexTacToeNet:
+    """Apply torch.compile() to `model` with graceful fallback.
+
+    If compilation fails (unsupported op, wrong PyTorch version, no CUDA),
+    logs a warning and returns the original uncompiled model so training
+    can continue.
+
+    Args:
+        model: The network to compile.
+        mode:  torch.compile mode. Default "default" is stable across
+               PyTorch 2.x. Avoid "reduce-overhead" / "max-autotune" until
+               the CUDA graph regression in PyTorch 2.5+ is resolved.
+
+    Returns:
+        Compiled model (or original if compilation failed).
+    """
+    try:
+        compiled = torch.compile(model, mode=mode)
+        _log.info("torch.compile applied successfully (mode=%s)", mode)
+        return compiled  # type: ignore[return-value]
+    except Exception as exc:
+        _log.warning(
+            "torch.compile failed, continuing without compilation: %s", exc
+        )
+        return model
