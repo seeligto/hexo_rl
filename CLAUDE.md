@@ -9,6 +9,7 @@ Read it fully before doing anything. Then read the docs it references.
 
 An AlphaZero-style self-learning AI for Hex Tac Toe — hexagonal grid, 6-in-a-row to win,
 player 1 opens with 1 move then both players alternate 2 moves per turn.
+The board is theoretically infinite — see "Board representation" below for how we handle this.
 Target hardware: AMD Ryzen 7 3700x + RTX 3070 + 48GB RAM.
 
 Full context is in `docs/`. Read them in order before starting any task:
@@ -19,6 +20,27 @@ Full context is in `docs/`. Read them in order before starting any task:
 - `docs/03_TOOLING.md` — logging, benchmarking, progress display conventions
 - `docs/04_BOOTSTRAP_STRATEGY.md` — minimax corpus generation and pretraining
 - `docs/05_COMMUNITY_INTEGRATION.md` — community bot, API, notation, formations
+
+---
+
+## Board representation — infinite board strategy
+
+The board is infinite. The NN requires fixed-size tensors. We resolve this as follows:
+
+**Internal storage (Rust):** `HashMap<(q,r), Player>` — sparse, genuinely unbounded.
+No allocation for empty cells. No fixed grid size in the data structure.
+
+**NN view window:** Always a fixed 19×19 tensor extracted from a sliding window
+centered on the centroid of the bounding box of played stones. As play drifts,
+the window follows. The NN always sees a consistent 19×19 view of the active area.
+
+**Legal moves:** All empty cells within `bounding_box_of_stones + 2 cell margin`,
+clipped to the current 19×19 window. No explicit expansion logic needed —
+the playable area grows naturally as the bounding box grows.
+
+**Phase 0 note:** Phase 0 built a fixed 2D array board. This was migrated to a
+sparse HashMap in Phase 1.5 before bootstrap corpus generation began.
+If resuming and unsure which is current, check native_core/src/board/mod.rs.
 
 ---
 
@@ -101,40 +123,119 @@ cargo bench                               # Rust micro-benchmarks
 
 ---
 
+## Community bots — use existing bots, never build your own minimax
+
+**We do not implement our own minimax or bot heuristics.** The community already has
+strong bots. We use them directly as git submodules, read their source to understand
+the interface, and wrap them behind BotProtocol. This gives us:
+- Stronger corpus data than any minimax we could write
+- Diversity of playing styles across multiple bots
+- The exact bots the community benchmarks against — so our Elo comparisons are meaningful
+
+### Adding a bot as a submodule (correct way)
+
+Always use `git submodule add` — never clone into a tracked path:
+
+```bash
+# Add a bot as a submodule under vendor/bots/
+git submodule add https://github.com/Ramora0/HexTicTacToe vendor/bots/ramora
+git submodule add https://github.com/Ramora0/HexTacToeBots vendor/bots/httt_collection
+
+# After cloning the repo fresh, initialise submodules:
+git submodule update --init --recursive
+
+# To update a submodule to latest upstream:
+cd vendor/bots/ramora && git pull origin main && cd -
+git add vendor/bots/ramora && git commit -m "chore(vendor): update ramora to latest"
+```
+
+### When integrating a new bot
+
+1. Add as submodule (above)
+2. Read its source — understand the interface, build system, and move format
+3. Check for known bugs (Ramora0 has a documented line-1094 bug — see docs/05_COMMUNITY_INTEGRATION.md)
+4. Write a `BotProtocol` wrapper in `python/bootstrap/bots/`
+5. Add a build step to `scripts/build_vendor.sh` if it needs compilation
+6. Write a smoke test: bot returns a legal move on a fresh board
+7. Commit: `feat(bootstrap): add <botname> wrapper`
+
+### Current bot submodules
+
+| Path | Bot | Notes |
+|---|---|---|
+| `vendor/bots/ramora` | Ramora0/HexTicTacToe | Strongest public bot — apply line-1094 fix before use |
+| `vendor/bots/httt_collection` | Ramora0/HexTacToeBots | Community collection + tournament runner |
+
+When the community adds new bots, add them here as submodules. Check the
+HexTacToeBots repo and the community Discord periodically for new entries.
+
+### Bot compilation
+
+Ramora0 is C++ and must be compiled before use:
+
+```bash
+# scripts/build_vendor.sh — run once after cloning or updating submodules
+cd vendor/bots/ramora/cpp
+# Apply the line-1094 bug fix first (see docs/05_COMMUNITY_INTEGRATION.md)
+g++ -O3 -o engine engine.h   # or whatever the actual build command is
+                               # read the repo's README first
+```
+
+The agent must read the actual README/build instructions in the submodule
+before writing the build command — do not guess.
+
+---
+
+## Bot protocol — all bots are interchangeable
+
+Every game source implements `BotProtocol` (python/bootstrap/bot_protocol.py).
+This makes all bots swappable for corpus generation and evaluation.
+
+```python
+class BotProtocol(ABC):
+    @abstractmethod
+    def get_move(self, state: GameState) -> tuple[int, int]: ...
+    @abstractmethod
+    def name(self) -> str: ...
+
+# Wrappers live in python/bootstrap/bots/:
+#   ramora_bot.py        — wraps compiled Ramora0 binary at configurable depth
+#   our_model_bot.py     — wraps our checkpoint + MCTS
+#   random_bot.py        — uniform random (baseline)
+#   community_api_bot.py — wraps any bot-api-v1 HTTP endpoint
+```
+
+`CommunityAPIBot` is the key one: any community bot at a known URL can be
+plugged into corpus generation or evaluation with zero extra code.
+Never hardcode which bots generate corpus games — drive from config.
+
+---
+
 ## Community resources — check live state before implementing
 
-The following resources are **active and may have changed** since the docs were written.
-Before implementing anything that touches them, clone/fetch and read current state:
-
-### Ramora0 engine (bootstrap source)
-```bash
-# Clone the strongest public bot — used to generate training corpus
-git clone https://github.com/Ramora0/HexTicTacToe vendor/ramora_engine
-# Also clone the shared bot collection / tournament runner
-git clone https://github.com/Ramora0/HexTacToeBots vendor/httt_bots
-```
-Read `vendor/ramora_engine/cpp/engine.h` to understand the interface.
-Apply the line-1094 bug fix before using it (documented in `docs/05_COMMUNITY_INTEGRATION.md`).
-Read the tournament runner in `vendor/httt_bots` to understand how to run matches.
+### Human game archive (bootstrap data — 42k+ real games)
+URL: https://hexo.did.science/games
+Paginated listing of all community games. Filter: rated games, moves > 20.
+Scraper: python/bootstrap/scraper.py — see docs/04_BOOTSTRAP_STRATEGY.md.
+**Before implementing the scraper:** fetch one game page, inspect the actual HTML
+structure, then implement. Do not guess selectors.
 
 ### Bot API spec — DRAFT, not final
+Deployment target: https://explore.htttx.io/
+Spec repo: https://github.com/hex-tic-tac-toe/htttx-bot-api
 ```bash
-# Fetch current spec before implementing the API server
 curl -L https://raw.githubusercontent.com/hex-tic-tac-toe/htttx-bot-api/main/definitions/bot-api-v1.yaml \
   -o docs/reference/bot-api-v1.yaml
 ```
-Read the downloaded YAML. Do not assume our docs reflect the current spec.
-The community explicitly noted this spec is still evolving.
-Implement only what the current YAML actually requires.
+Read the downloaded YAML before implementing anything. Do not assume our docs
+reflect the current spec — the repo is ground truth.
 
 ### Notation standard — DRAFT, not final
 ```bash
-# Fetch current notation spec
 git clone https://github.com/hex-tic-tac-toe/hexagonal-tic-tac-toe-notation \
   docs/reference/notation
 ```
-Read it before implementing the BKE parser.
-Our docs describe the notation as we understood it — the repo is ground truth.
+Read before implementing the BKE parser.
 
 ---
 
@@ -142,7 +243,7 @@ Our docs describe the notation as we understood it — the repo is ground truth.
 
 ```
 hex_tac_toe_az/
-├── CLAUDE.md                        ← this file
+├── CLAUDE.md
 ├── docs/
 │   ├── 00_AGENT_CONTEXT.md
 │   ├── 01_ARCHITECTURE.md
@@ -150,45 +251,42 @@ hex_tac_toe_az/
 │   ├── 03_TOOLING.md
 │   ├── 04_BOOTSTRAP_STRATEGY.md
 │   ├── 05_COMMUNITY_INTEGRATION.md
-│   └── reference/                   ← downloaded community specs (git-ignored)
-│       ├── bot-api-v1.yaml
-│       └── notation/
-├── native_core/                     ← Rust crate
+│   └── reference/                   ← downloaded specs (git-ignored)
+├── native_core/
 │   ├── src/
-│   │   ├── board/                   ← bitboard, axial coords, win detection
+│   │   ├── board/                   ← sparse HashMap board, axial coords, win detection
 │   │   ├── mcts/                    ← PUCT tree, node pool, virtual loss
-│   │   ├── formations/              ← formation detection (incremental)
-│   │   └── lib.rs                   ← PyO3 bindings
-│   ├── benches/
+│   │   ├── formations/              ← incremental formation detection
+│   │   └── lib.rs
 │   └── Cargo.toml
 ├── python/
-│   ├── model/                       ← ResNet + dual heads
-│   ├── selfplay/                    ← worker pool, inference server
-│   ├── training/                    ← trainer, replay buffer, loss
-│   ├── bootstrap/                   ← Ramora wrapper, corpus gen, pretrain
-│   ├── eval/                        ← tournament, Elo, SPRT
-│   ├── opening_book/                ← BKE parser, named openings
-│   ├── api/                         ← bot API HTTP server (FastAPI)
-│   └── logging/                     ← structlog config, rich dashboard, metrics
+│   ├── model/
+│   ├── selfplay/
+│   ├── training/
+│   ├── bootstrap/
+│   │   ├── bot_protocol.py          ← BotProtocol ABC
+│   │   ├── bots/
+│   │   │   ├── ramora_bot.py        ← RamoraBot wrapper
+│   │   │   ├── our_model_bot.py     ← OurModelBot wrapper
+│   │   │   ├── random_bot.py        ← RandomBot
+│   │   │   └── community_api_bot.py ← CommunityAPIBot (HTTP)
+│   │   ├── scraper.py               ← hexo.did.science scraper
+│   │   ├── generate_corpus.py       ← orchestrates all corpus sources
+│   │   └── pretrain.py
+│   ├── eval/
+│   ├── opening_book/
+│   ├── api/
+│   └── logging/
 ├── configs/
-│   ├── default.yaml
-│   └── fast_debug.yaml              ← tiny model, board_size=9, 50 sims
 ├── scripts/
-│   ├── train.py
-│   ├── benchmark.py
-│   ├── serve_bot.py
-│   └── watch_game.py
+│   ├── build_vendor.sh              ← compiles C++ bots after submodule init
+│   └── ...
 ├── tests/
-│   ├── test_board.py
-│   ├── test_mcts.py
-│   ├── test_formations.py
-│   └── test_bke_parser.py
-├── vendor/                          ← git-ignored, populated by setup script
-│   ├── ramora_engine/
-│   └── httt_bots/
-├── .gitignore
-├── pyproject.toml
-└── Cargo.toml                       ← workspace root
+├── vendor/
+│   └── bots/                        ← git submodules
+│       ├── ramora/                  ← Ramora0/HexTicTacToe
+│       └── httt_collection/         ← Ramora0/HexTacToeBots
+└── .gitmodules                      ← submodule tracking (committed)
 ```
 
 ---
@@ -203,12 +301,13 @@ hex_tac_toe_az/
 - Seed everything: `random`, `numpy`, `torch`, `torch.cuda` — log the seed used
 - Type hints on all Python function signatures
 - Rust: prefer flat pre-allocated node pools over per-node heap allocation
+- All bot integrations go through `BotProtocol` — never call a bot binary directly
 
 ---
 
 ## Benchmarks — must pass before Phase 3
 
-Run `python scripts/benchmark.py` to check. Phase 2 does not complete until:
+Run `python scripts/benchmark.py`. Phase 2 does not complete until:
 
 | Metric | Target |
 |---|---|
@@ -223,7 +322,7 @@ Run `python scripts/benchmark.py` to check. Phase 2 does not complete until:
 ## If you are unsure about anything
 
 1. Check `docs/` first
-2. Check the live community repos (clone/fetch as above)
+2. Check the live community repos and submodules
 3. Check git log to understand what has already been implemented
 4. Ask before making architectural decisions that contradict the docs
 
@@ -231,19 +330,14 @@ Run `python scripts/benchmark.py` to check. Phase 2 does not complete until:
 
 ## MCP tools available
 
-- **context7**: use this when writing code that uses PyTorch, PyO3, maturin,
+- **context7**: use when writing code that uses PyTorch, PyO3, maturin,
   structlog, rich, or any library where API details matter. Call
   resolve_library_id() first, then get_library_docs().
 
-- **github**: use this to fetch current versions of community specs before
-  implementing against them:
-    - hex-tic-tac-toe/htttx-bot-api (bot API spec — draft, check before implementing)
-    - hex-tic-tac-toe/hexagonal-tic-tac-toe-notation (notation — draft)
-    - Ramora0/HexTicTacToe (engine source)
-  **Note: the GitHub MCP may not work if no GITHUB_TOKEN is set in the environment.
-  If it fails, fall back to curl/git clone as shown in the community resources section above.**
+- **github**: use to fetch current versions of community specs and check
+  for new bots in the community repos. Requires GITHUB_TOKEN env var.
+  If unset, fall back to curl/git as shown above.
 
-- **memory**: record completed phase checklist items, benchmark results,
-  and architectural decisions here so they persist across sessions.
-  Follow the session start and end protocols above — they tell you exactly
-  what to read and write.
+- **memory**: record completed phase checklist items, benchmark results, and
+  architectural decisions so they persist across sessions. Follow the session
+  start and end protocols above.

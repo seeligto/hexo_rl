@@ -6,15 +6,142 @@
 
 A freshly initialized AlphaZero network plays randomly. The first thousands of self-play games are essentially noise — two random agents occasionally stumbling into wins, with almost no useful signal for learning tactics. This means the network spends a very long time learning things a human beginner knows immediately: don't leave 5-in-a-rows unblocked, build toward 6, etc.
 
-The Hex Tac Toe community already has bots — likely minimax-based with handcrafted heuristics. Even a weak minimax bot at depth 3-4 understands:
+Pretraining on existing games gives the network a warm start with tactical intuitions already baked in. Self-play then builds strategic depth on top of that foundation rather than rediscovering basics from scratch.
 
-- Immediate wins and losses (forced moves)
-- Open and semi-open runs of 3, 4, 5 in a row
-- Relative threat priority
+**Observed effect in analogous projects**: pretraining compresses 1–3 weeks of early self-play into 1–2 hours of supervised training, and the resulting Elo trajectory is measurably steeper throughout.
 
-Generating games from these bots and pretraining on them gives the network a warm start with tactical intuitions already baked in. Self-play then builds strategic depth on top of that foundation, rather than having to rediscover basic tactics from scratch.
+---
 
-**Observed effect in analogous projects**: pretraining from weak bots typically compresses 1–3 weeks of early self-play into 1–2 hours of supervised training, and the resulting self-play Elo trajectory is measurably steeper throughout.
+## Corpus sources — three tiers, combined
+
+All three sources are fed into a single pretrain dataset. They are complementary: human games have strategic depth, Ramora0 games have tactical precision, random games add coverage diversity.
+
+| Source | Volume | Strength | How to get |
+|---|---|---|---|
+| Human game archive (hexo.did.science) | 42,000+ rated games | Real strategic patterns | Scraper (see below) |
+| Ramora0 engine self-play | Unlimited | Tactical precision | RamoraBot wrapper |
+| Random play | Unlimited | Coverage only | RandomBot |
+
+**Priority order**: human games first, then Ramora0, then random to fill gaps. Human games are the most valuable signal — they contain opening theory, formation recognition, and endgame technique that minimax at depth 3–5 won't generate.
+
+Corpus generation is configured in `configs/default.yaml`:
+```yaml
+bootstrap:
+  human_games_min_moves: 20          # filter out surrenders and short games
+  human_games_rated_only: true
+  ramora_depth_mix: {3: 0.7, 5: 0.3} # 70% depth-3, 30% depth-5
+  target_positions: 500000            # total positions in pretrain dataset
+```
+
+---
+
+## Bot protocol — all bots are interchangeable
+
+Every game source (Ramora0, community bots, our own model, random) implements `BotProtocol`.
+This means any community bot implementing the API spec can be plugged into corpus generation
+or evaluation without additional code.
+
+```python
+# python/bootstrap/bot_protocol.py
+from abc import ABC, abstractmethod
+
+class BotProtocol(ABC):
+    @abstractmethod
+    def get_move(self, state: GameState) -> tuple[int, int]: ...
+    
+    @abstractmethod
+    def name(self) -> str: ...
+
+class RamoraBot(BotProtocol):
+    """Wraps the Ramora0 C++ engine at a given search depth."""
+    def __init__(self, binary_path: str, depth: int = 5): ...
+
+class OurModelBot(BotProtocol):
+    """Wraps our own checkpoint + MCTS at configurable simulations."""
+    def __init__(self, checkpoint_path: str, n_simulations: int = 400): ...
+
+class RandomBot(BotProtocol):
+    """Uniform random legal move. Baseline and corpus diversity filler."""
+    ...
+
+class CommunityAPIBot(BotProtocol):
+    """Wraps any community bot implementing bot-api-v1 over HTTP."""
+    def __init__(self, base_url: str): ...
+```
+
+Corpus generation always takes a list of `BotProtocol` instances — never hardcodes which bots to use. Drive from config.
+
+---
+
+## Human game archive scraper
+
+**URL:** https://hexo.did.science/games  
+**Volume:** 42,477+ archived matches (as of 2026-03-28), paginated 20 per page  
+**Format:** HTML — session IDs in listing, individual game pages at `/games/{session_id}`
+
+```python
+# python/bootstrap/scraper.py
+import httpx
+import time
+from bs4 import BeautifulSoup
+import structlog
+
+log = structlog.get_logger()
+
+BASE_URL = "https://hexo.did.science"
+
+def scrape_game_index(
+    max_pages: int = 2125,      # 42,477 / 20
+    rated_only: bool = True,
+    delay_sec: float = 0.5,     # be polite — don't hammer the server
+) -> list[str]:
+    """Paginate the game archive and return session IDs matching filters."""
+    session_ids = []
+    for page in range(1, max_pages + 1):
+        resp = httpx.get(f"{BASE_URL}/games", params={"page": page}, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        for game_card in soup.select("[data-session-id]"):  # inspect actual HTML for selector
+            is_rated = "Rated" in game_card.text
+            move_count = extract_move_count(game_card)
+            if rated_only and not is_rated:
+                continue
+            if move_count < 20:    # filter surrenders and trivial games
+                continue
+            session_ids.append(game_card["data-session-id"])
+        
+        if page % 50 == 0:
+            log.info("scrape_progress", page=page, collected=len(session_ids))
+        time.sleep(delay_sec)
+    
+    return session_ids
+
+def scrape_game(session_id: str) -> list[tuple[int, int]] | None:
+    """Fetch a single game and return its move sequence as (q, r) axial coords."""
+    resp = httpx.get(f"{BASE_URL}/games/{session_id}", timeout=10)
+    # Parse move sequence from game page — format TBD based on actual page structure
+    # May be BKE notation, JSON embedded in page, or rendered board state
+    ...
+
+def scrape_corpus(output_path: str = "data/human_games.npz", **kwargs):
+    """Full pipeline: scrape index → fetch games → convert to tensors → save."""
+    session_ids = scrape_game_index(**kwargs)
+    log.info("scrape_index_complete", total=len(session_ids))
+    
+    all_records = []
+    for sid in session_ids:
+        moves = scrape_game(sid)
+        if moves:
+            all_records.extend(game_to_training_records(moves))
+        time.sleep(0.3)
+    
+    save_corpus(all_records, output_path)
+    log.info("scrape_corpus_complete", positions=len(all_records), path=output_path)
+```
+
+**Implementation note:** The actual HTML selectors and game page format need to be determined by the agent when implementing. The agent should fetch one game page, inspect the structure, then implement the parser. Do not guess the selectors — read the actual HTML first.
+
+**Rate limiting:** The site is community-run. Use `delay_sec=0.5` minimum between requests. Check for `robots.txt` before scraping. If the site adds rate limiting or asks to stop, respect it.
 
 ---
 
