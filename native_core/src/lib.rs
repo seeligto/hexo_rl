@@ -245,6 +245,27 @@ impl PyMCTSTree {
     pub fn run_simulations_cpu_only(&mut self, n: usize) {
         self.inner.run_simulations_cpu_only(n);
     }
+
+    /// Mix Dirichlet noise into the root node's priors (self-play only).
+    ///
+    /// Call after the first expand_and_backup (which expands the root).
+    /// On the Python side, generate `noise` with:
+    ///     noise = np.random.dirichlet([alpha] * tree.root_n_children()).tolist()
+    ///
+    /// Args:
+    ///     noise:   list of floats, length == root_n_children().
+    ///     epsilon: mixing weight (default 0.25 per AlphaZero).
+    #[pyo3(signature = (noise, epsilon = 0.25))]
+    pub fn apply_dirichlet_to_root(&mut self, noise: Vec<f32>, epsilon: f32) {
+        self.inner.apply_dirichlet_to_root(&noise, epsilon);
+    }
+
+    /// Number of children at the root (0 if not yet expanded).
+    /// Use this to determine the noise vector length before calling
+    /// apply_dirichlet_to_root.
+    pub fn root_n_children(&self) -> usize {
+        self.inner.root_n_children()
+    }
 }
 
 // ── Module registration ───────────────────────────────────────────────────────

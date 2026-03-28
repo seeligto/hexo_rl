@@ -1,25 +1,24 @@
 """
-Single-process self-play worker.
+Single-process self-play worker (Phase 2).
 
 Plays one game at a time using MCTS + the current network. Each game
 position is recorded with its MCTS policy and pushed to the replay buffer
 at game end (once the outcome is known).
 
-Phase 1 design — deliberately simple:
-  - No worker pool (one process, one game).
-  - No inference server (model called directly).
-  - No Dirichlet noise (added in Phase 2).
-  - No temperature scheduler object (inline threshold logic).
-  - Board is always 19×19.
+Phase 2 additions over Phase 1:
+  - Dirichlet noise at root (self-play only, disabled for evaluation).
+  - Temperature scheduling by ply (tau=1.0 early, tau=0.1 late, tau=0 eval).
+  - Both controlled by config and a `use_dirichlet` flag.
 
 Usage (via scripts/train.py):
     worker = SelfPlayWorker(model, config, device)
     n_positions = worker.play_game(replay_buffer)
+    n_positions = worker.play_game(replay_buffer, use_dirichlet=False)  # eval
 """
 
 from __future__ import annotations
 
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -63,10 +62,15 @@ class SelfPlayWorker:
         self.model  = model
         self.config = config
         self.device = device
-        self.n_sims = int(config["n_simulations"])
-        self.c_puct = float(config.get("c_puct", 1.5))
-        self.temp_threshold = int(config.get("temperature_threshold_ply", 30))
-        self.tree   = MCTSTree(c_puct=self.c_puct)
+
+        mcts_cfg = config.get("mcts", config)
+        self.n_sims         = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
+        self.c_puct         = float(mcts_cfg.get("c_puct", 1.5))
+        self.temp_threshold = int(mcts_cfg.get("temperature_threshold_ply", 30))
+        self.dirichlet_alpha = float(mcts_cfg.get("dirichlet_alpha", 0.3))
+        self.dirichlet_eps   = float(mcts_cfg.get("epsilon", 0.25))
+
+        self.tree = MCTSTree(c_puct=self.c_puct)
 
     # ── Inference ─────────────────────────────────────────────────────────────
 
@@ -93,22 +97,49 @@ class SelfPlayWorker:
 
     # ── MCTS search ───────────────────────────────────────────────────────────
 
-    def _run_mcts(self, board: Board) -> List[float]:
+    def _run_mcts(
+        self,
+        board: Board,
+        use_dirichlet: bool = True,
+        temperature: Optional[float] = None,
+    ) -> List[float]:
         """Run self.n_sims MCTS simulations from `board`.
 
-        Returns the visit-count policy vector (length _N_ACTIONS).
+        Args:
+            board:          Current board state (root of search).
+            use_dirichlet:  If True, mix Dirichlet noise into root priors after
+                            the first expansion (self-play mode).  Set False for
+                            evaluation games.
+            temperature:    Override sampling temperature.  If None, uses the
+                            ply-based schedule (tau=1.0 early, tau=0.1 late).
+
+        Returns:
+            Visit-count policy vector (length _N_ACTIONS).
         """
         self.tree.new_game(board)
+        dirichlet_applied = False
 
-        for _ in range(self.n_sims):
+        for sim_idx in range(self.n_sims):
             leaves = self.tree.select_leaves(1)
             if not leaves:
                 break
             policy, value = self._infer(leaves[0])
             self.tree.expand_and_backup([policy], [value])
 
-        ply = board.ply
-        temperature = 1.0 if ply < self.temp_threshold else 0.1
+            # Apply Dirichlet noise to root priors after the first expansion.
+            if use_dirichlet and not dirichlet_applied:
+                n_ch = self.tree.root_n_children()
+                if n_ch > 0:
+                    noise = np.random.dirichlet(
+                        [self.dirichlet_alpha] * n_ch
+                    ).tolist()
+                    self.tree.apply_dirichlet_to_root(noise, self.dirichlet_eps)
+                    dirichlet_applied = True
+
+        if temperature is None:
+            ply = board.ply
+            temperature = 1.0 if ply < self.temp_threshold else 0.1
+
         return self.tree.get_policy(temperature=temperature, board_size=_BOARD_SIZE)
 
     # ── Action sampling ───────────────────────────────────────────────────────
@@ -143,10 +174,16 @@ class SelfPlayWorker:
 
     # ── Game loop ─────────────────────────────────────────────────────────────
 
-    def play_game(self, buffer: ReplayBuffer) -> int:
+    def play_game(self, buffer: ReplayBuffer, use_dirichlet: bool = True) -> int:
         """Play one complete game and push all positions to `buffer`.
 
-        Returns the number of positions added (= game length in half-moves).
+        Args:
+            buffer:        Target replay buffer.
+            use_dirichlet: True for self-play training games (adds exploration
+                           noise at root). False for evaluation games.
+
+        Returns:
+            Number of positions added (= game length in half-moves).
         """
         rust_board = Board()
         state      = GameState.from_board(rust_board)
@@ -161,7 +198,7 @@ class SelfPlayWorker:
                 break
 
             # ── MCTS search ──
-            mcts_policy = self._run_mcts(rust_board)  # list[float]
+            mcts_policy = self._run_mcts(rust_board, use_dirichlet=use_dirichlet)  # list[float]
 
             # ── Record position ──
             state_tensor = state.to_tensor()           # (18, 19, 19) float16

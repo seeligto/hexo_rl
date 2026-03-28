@@ -474,6 +474,47 @@ impl MCTSTree {
         self.pool[0].moves_remaining = mr;
     }
 
+    // ── Dirichlet noise ───────────────────────────────────────────────────────
+
+    /// Mix pre-computed Dirichlet noise into the root's children's priors.
+    ///
+    /// Call this after the root has been expanded (i.e. after the first
+    /// `expand_and_backup`), and only during self-play — not evaluation.
+    ///
+    /// Formula: `P_root[i] = (1 − epsilon) · P_net[i] + epsilon · noise[i]`
+    ///
+    /// * `noise`: Dirichlet sample of the same length as the number of
+    ///   root children.  Generate on the Python side with:
+    ///   `np.random.dirichlet([alpha] * n_children)`.
+    /// * `epsilon`: mixing coefficient (typical: 0.25).
+    ///
+    /// If the root is not yet expanded, or `noise` length does not match
+    /// the child count, the call is silently ignored.
+    pub fn apply_dirichlet_to_root(&mut self, noise: &[f32], epsilon: f32) {
+        let root = &self.pool[0];
+        if !root.is_expanded() {
+            return;
+        }
+        let n_ch = root.n_children as usize;
+        if noise.len() < n_ch {
+            return;
+        }
+        let first = root.first_child as usize;
+        for j in 0..n_ch {
+            let child = &mut self.pool[first + j];
+            child.prior = (1.0 - epsilon) * child.prior + epsilon * noise[j];
+        }
+    }
+
+    /// Number of children at the root (0 if not yet expanded).
+    pub fn root_n_children(&self) -> usize {
+        if self.pool[0].is_expanded() {
+            self.pool[0].n_children as usize
+        } else {
+            0
+        }
+    }
+
     /// Run `n` simulations using uniform priors and a value of 0.0 (no neural
     /// network). Used for CPU-only throughput benchmarking.
     pub fn run_simulations_cpu_only(&mut self, n: usize) {
@@ -818,5 +859,56 @@ mod tests {
             q.abs() < 1e-6,
             "Q should be 0.0 with 2 VL on node with w=2.0, n=4: got {q}"
         );
+    }
+
+    // ── Dirichlet noise tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_dirichlet_ignored_before_root_expanded() {
+        // apply_dirichlet_to_root should be a no-op when root has no children yet.
+        let mut tree = MCTSTree::new(1.5);
+        tree.new_game(Board::new());
+        // Root not yet expanded.
+        tree.apply_dirichlet_to_root(&[0.5, 0.5], 0.25);
+        // No panic, nothing changed.
+        assert_eq!(tree.root_n_children(), 0);
+    }
+
+    #[test]
+    fn test_dirichlet_mixes_priors_correctly() {
+        // After expanding root with known priors, verify mixing formula.
+        // Root has 2 children (setup_two_child_tree, priors 0.7 and 0.3).
+        let (mut tree, child_a, child_b) = setup_two_child_tree(1.5);
+        // Pretend root is expanded (already set up manually).
+        // But root.first_child = 1 and n_children = 2.
+        assert!(tree.pool[0].is_expanded());
+
+        let noise   = [0.9f32, 0.1f32];
+        let epsilon = 0.25f32;
+        tree.apply_dirichlet_to_root(&noise, epsilon);
+
+        let expected_a = (1.0 - epsilon) * 0.7 + epsilon * 0.9;
+        let expected_b = (1.0 - epsilon) * 0.3 + epsilon * 0.1;
+
+        let prior_a = tree.pool[child_a as usize].prior;
+        let prior_b = tree.pool[child_b as usize].prior;
+
+        assert!(
+            (prior_a - expected_a).abs() < 1e-6,
+            "child_a prior: expected {expected_a:.6}, got {prior_a:.6}"
+        );
+        assert!(
+            (prior_b - expected_b).abs() < 1e-6,
+            "child_b prior: expected {expected_b:.6}, got {prior_b:.6}"
+        );
+    }
+
+    #[test]
+    fn test_dirichlet_not_applied_in_evaluation_mode() {
+        // Verify that NOT calling apply_dirichlet leaves priors unchanged.
+        let (tree, child_a, child_b) = setup_two_child_tree(1.5);
+        // No apply_dirichlet called.
+        assert!((tree.pool[child_a as usize].prior - 0.7).abs() < 1e-6);
+        assert!((tree.pool[child_b as usize].prior - 0.3).abs() < 1e-6);
     }
 }
