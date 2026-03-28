@@ -1,9 +1,10 @@
 /// native_core — PyO3 extension module.
 ///
-/// Exposes the Rust Board to Python:
-///   from native_core import Board
+/// Exposes to Python:
+///   from native_core import Board, MCTSTree
 
 pub mod board;
+pub mod mcts;
 
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
@@ -128,10 +129,118 @@ impl PyBoard {
     }
 }
 
+impl PyBoard {
+    /// Construct a PyBoard directly from a Rust Board (used by PyMCTSTree).
+    pub fn from_inner(inner: board::Board) -> Self {
+        PyBoard { inner }
+    }
+}
+
+// ── PyMCTSTree ────────────────────────────────────────────────────────────────
+
+use mcts::MCTSTree;
+
+/// Single-threaded PUCT MCTS tree exposed to Python.
+///
+/// Usage (Python):
+///
+/// ```python
+/// tree = MCTSTree(c_puct=1.5)
+/// tree.new_game(board)
+/// for _ in range(n_simulations):
+///     boards = tree.select_leaves(1)
+///     policies = [[...]]   # list of float lists, length = board_size^2 + 1
+///     values   = [0.5]     # list of scalars
+///     tree.expand_and_backup(policies, values)
+/// policy = tree.get_policy(temperature=1.0, board_size=9)
+/// visits = tree.root_visits()
+/// ```
+#[pyclass(name = "MCTSTree")]
+pub struct PyMCTSTree {
+    inner: MCTSTree,
+    board_size: usize,
+}
+
+#[pymethods]
+impl PyMCTSTree {
+    /// Create a new MCTS tree.
+    ///
+    /// Args:
+    ///     c_puct: exploration constant (default 1.5).
+    #[new]
+    #[pyo3(signature = (c_puct = 1.5))]
+    pub fn new(c_puct: f32) -> Self {
+        PyMCTSTree {
+            inner: MCTSTree::new(c_puct),
+            board_size: board::BOARD_SIZE,
+        }
+    }
+
+    /// Reset the tree for a new game starting from `board`.
+    ///
+    /// This re-uses the pre-allocated pool — no heap allocation.
+    pub fn new_game(&mut self, board: &PyBoard) {
+        self.board_size = BOARD_SIZE;
+        self.inner.new_game(board.inner.clone());
+    }
+
+    /// Select up to `n` distinct leaves for neural-network evaluation.
+    ///
+    /// Returns a list of Board objects (one per unique leaf).
+    /// Always call `expand_and_backup` with the same number of results
+    /// before the next call to `select_leaves`.
+    pub fn select_leaves(&mut self, py: Python<'_>, n: usize) -> PyResult<Vec<Py<PyBoard>>> {
+        let boards = self.inner.select_leaves(n);
+        boards
+            .into_iter()
+            .map(|b| Py::new(py, PyBoard::from_inner(b)))
+            .collect()
+    }
+
+    /// Expand leaves and backup values from the last `select_leaves` call.
+    ///
+    /// Args:
+    ///     policies: list of policy vectors (one per leaf).
+    ///               Each vector has length `board_size * board_size + 1`.
+    ///     values:   list of scalar values in [-1, 1] (one per leaf),
+    ///               from the current player's perspective at that leaf.
+    pub fn expand_and_backup(
+        &mut self,
+        policies: Vec<Vec<f32>>,
+        values: Vec<f32>,
+    ) -> PyResult<()> {
+        self.inner.expand_and_backup(&policies, &values);
+        Ok(())
+    }
+
+    /// Return the visit-count policy at the root.
+    ///
+    /// Args:
+    ///     temperature: sampling temperature (0 = argmax).
+    ///     board_size:  spatial dimension (default: size from last `new_game`).
+    ///
+    /// Returns a list of length `board_size * board_size + 1`.
+    #[pyo3(signature = (temperature = 1.0, board_size = None))]
+    pub fn get_policy(
+        &self,
+        temperature: f32,
+        board_size: Option<usize>,
+    ) -> Vec<f32> {
+        let bs = board_size.unwrap_or(self.board_size);
+        self.inner.get_policy(temperature, bs)
+    }
+
+    /// Total visit count at the root (= number of simulations run).
+    pub fn root_visits(&self) -> u32 {
+        self.inner.root_visits()
+    }
+}
+
 // ── Module registration ───────────────────────────────────────────────────────
 
 #[pymodule]
 fn native_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoard>()?;
+    m.add_class::<PyMCTSTree>()?;
     Ok(())
 }
