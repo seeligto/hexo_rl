@@ -5,7 +5,7 @@ Run with: .venv/bin/pytest tests/test_network.py -v
 """
 import pytest
 import torch
-from python.model.network import HexTacToeNet
+from python.model.network import HexTacToeNet, compile_model
 
 
 def make_net(board_size: int = 9, filters: int = 32, res_blocks: int = 2) -> HexTacToeNet:
@@ -61,3 +61,35 @@ def test_default_architecture_params():
     # Count residual blocks
     res_count = sum(1 for _ in net.tower.children())
     assert res_count == 10
+
+
+def test_compile_model_produces_correct_output():
+    """compile_model returns a model that produces the same output shapes."""
+    net = make_net(board_size=9)
+    compiled = compile_model(net)
+    x = torch.zeros(2, 18, 9, 9)
+    log_policy, value = compiled(x)
+    assert log_policy.shape == (2, 9 * 9 + 1)
+    assert value.shape == (2, 1)
+
+
+def test_compile_model_policy_still_sums_to_one():
+    """Compiled model policy head still produces valid log-probabilities."""
+    net = make_net()
+    compiled = compile_model(net)
+    x = torch.randn(3, 18, 9, 9)
+    log_policy, _ = compiled(x)
+    probs_sum = log_policy.exp().sum(dim=1)
+    assert torch.allclose(probs_sum, torch.ones(3), atol=1e-4), (
+        f"probs sum after compile: {probs_sum}"
+    )
+
+
+def test_compile_model_fallback_on_bad_mode():
+    """compile_model with an invalid mode falls back to the uncompiled model."""
+    net = make_net()
+    result = compile_model(net, mode="this_mode_does_not_exist")
+    # Should return something callable (either compiled or original model).
+    x = torch.zeros(2, 18, 9, 9)
+    log_policy, value = result(x)
+    assert log_policy.shape == (2, 9 * 9 + 1)
