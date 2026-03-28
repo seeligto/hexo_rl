@@ -10,7 +10,7 @@ build/
 .eggs/
 .venv/
 venv/
-env/
+/env/
 .env
 *.so
 *.dylib
