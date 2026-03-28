@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+*.so
+*.dylib
+
+# Maturin / PyO3 build outputs
+native_core/target/
+*.pyi.bak
+
+# Rust
+target/
+Cargo.lock
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data / checkpoints (large, generated)
+data/
+checkpoints/
+logs/
+runs/
+
+# Vendor (populated by setup.sh, not committed)
+vendor/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Benchmark output
+native_core/benches/*.html
+criterion/
