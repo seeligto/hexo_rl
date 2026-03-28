@@ -142,83 +142,116 @@ def bke_to_axial(ring: str, offset: int, zero_line_direction: tuple) -> tuple[in
 
 ## 4. Bot API compliance
 
-Our bot must implement the `htttx-bot-api-v1` spec to participate in community tournaments via `HexTacToeBots`. This is an HTTP API.
+Our bot must implement the `htttx-bot-api-v1` spec to participate in community tournaments
+via `HexTacToeBots`. The live spec is at `docs/reference/bot-api-v1.yaml`.
 
-### Required endpoints
+**Note (2026-03-28):** The live spec differs substantially from the earlier draft described
+here. The notes below reflect the current `bot-api-v1.yaml`. The spec is still marked
+v1-alpha / draft and may continue to evolve.
 
-```yaml
-# From bot-api-v1.yaml (community standard)
+### What the live spec actually defines
 
-GET /capabilities
-  # Returns bot metadata and supported features
-  Response:
-    meta:
-      name: string
-      description: string
-      authors: string[]
-      version: string
-    tags: string[]          # flexible extension: ["alphazero", "rl", "mcts"]
-    supported_features: []
+The spec defines a single required endpoint and a capability schema:
 
-POST /move
-  # Given a board state, return the bot's chosen move
-  Request:
-    board: BoardState
-    time_limit_ms: int
-  Response:
-    row: int
-    col: int
-    metadata:               # optional
-      confidence: float     # value head output for chosen move
-      top_moves: []         # policy head top-k
+```
+GET /capabilities.json
+  Returns a Capabilities object declaring which API modes the bot supports.
 ```
 
-### Implementation
+There is **no** `/move` endpoint, **no** `POST /move`, and **no** `tags` or
+`supported_features` fields in the live spec. All of that was an earlier draft.
+
+### Capabilities schema (from bot-api-v1.yaml)
+
+```yaml
+Capabilities:
+  meta:                        # optional — human-readable bot info
+    name: string
+    description: string
+    author: string             # single string, not array
+    version: string            # semantic versioning preferred
+  stateless:                   # optional — declare stateless HTTP support
+    versions:
+      v1-alpha:                # set this object to opt in
+        api_root: string       # base path relative to capabilities.json
+                               # defaults to "stateless/v1-alpha" if absent
+        move_time_limit: bool  # if true, bot must respect time_limit in move requests
+  basic_websocket:             # optional — declare real-time WebSocket support
+    versions:
+      v1-alpha:                # set this object to opt in
+        api_root: string       # defaults to "bws/v1-alpha"
+        move_time_limit: bool
+        evaluation_time_limit: bool
+        config:
+          dynamic: bool        # supports config changes mid-game
+        free_setup: bool       # supports arbitrary initial positions
+        move_skips: bool       # client can make moves on bot's behalf
+        dual_sided: bool       # bot can play both sides in one session
+        free_move_order: bool  # client can request moves out of turn order
+        evaluation: bool       # bot supports evaluation-only requests
+        resettable_state: bool # client can resend setup packet at any point
+        interruptable: bool    # bot supports interrupt packets
+```
+
+The move/turn endpoints themselves are defined by the versioned sub-APIs (`stateless/v1-alpha`
+and `bws/v1-alpha`), not by this capabilities document. The stateless API's turn handle is
+inferred to be at `{api_root}/turn`.
+
+### Implementation plan
+
+For Phase 6, implement the stateless capability first (simpler — pure HTTP, no WebSocket):
 
 ```python
 # python/api/bot_server.py
 from fastapi import FastAPI
-from pydantic import BaseModel
-import torch
 
 app = FastAPI()
 
-class MoveRequest(BaseModel):
-    board: dict
-    time_limit_ms: int = 5000
-
-@app.get("/capabilities")
+@app.get("/capabilities.json")
 def capabilities():
     return {
         "meta": {
             "name": "HexTacToe-AlphaZero",
-            "description": "AlphaZero-style MCTS + ResNet. First RL bot in community.",
-            "authors": ["<your name>"],
+            "description": "AlphaZero-style MCTS + ResNet.",
+            "author": "<your name>",
             "version": "0.1.0",
         },
-        "tags": ["alphazero", "mcts", "reinforcement-learning", "resnet"],
-        "supported_features": [],
+        "stateless": {
+            "versions": {
+                "v1-alpha": {
+                    "move_time_limit": True,
+                }
+            }
+        },
     }
 
-@app.post("/move")
-def make_move(req: MoveRequest):
-    state = board_dict_to_game_state(req.board)
-    move, metadata = inference_server.get_best_move(
-        state, 
-        time_budget_ms=req.time_limit_ms,
-    )
-    return {
-        "row": move[0],
-        "col": move[1],
-        "metadata": metadata,
-    }
+# The stateless turn endpoint lives at /stateless/v1-alpha/turn
+# (exact request/response schema defined by the v1-alpha stateless sub-spec,
+#  which is not yet part of bot-api-v1.yaml — check for updates before implementing)
 ```
 
 Run with: `uvicorn python.api.bot_server:app --port 8080`
 
+### Differences from earlier draft
+
+| Earlier draft | Live spec (2026-03-28) |
+|---|---|
+| `GET /capabilities` | `GET /capabilities.json` |
+| `POST /move` with `board` + `time_limit_ms` | No `/move` endpoint in spec |
+| `tags: string[]` | Not present |
+| `supported_features: []` | Not present |
+| `authors: string[]` | `author: string` (single) |
+| No WebSocket | `basic_websocket` capability defined |
+| Move API fully specified | Move API in versioned sub-specs not yet published |
+
+**Action required before Phase 6:** Re-fetch `bot-api-v1.yaml` and check for a companion
+stateless sub-spec. The turn request/response schema is not yet documented in the current
+YAML — the community noted this spec is still evolving.
+
 ### CLI-to-API wrapper
 
-The community discussed a localhost wrapper pattern: bots launched via shell + stdio are wrapped behind the API. Implement this so our bot can run in both modes:
+The community discussed a localhost wrapper pattern: bots launched via shell + stdio are
+wrapped behind the API. Implement this so our bot can run in both modes:
 
 ```bash
 # Standalone API mode
