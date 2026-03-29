@@ -377,6 +377,57 @@ impl Board {
     pub fn view_window(&self, _size: usize) -> Vec<f32> {
         self.to_planes()
     }
+
+    /// Encode the board as a flat f32 array of length `2 * TOTAL_CELLS`
+    /// representing the macro-grid (global_map).
+    pub fn to_global_planes(&self) -> Vec<f32> {
+        let mut out = vec![0.0f32; 2 * TOTAL_CELLS];
+        if self.cells.is_empty() {
+            return out;
+        }
+
+        let mut min_q = i32::MAX;
+        let mut max_q = i32::MIN;
+        let mut min_r = i32::MAX;
+        let mut max_r = i32::MIN;
+
+        for &(q, r) in self.cells.keys() {
+            min_q = min_q.min(q);
+            max_q = max_q.max(q);
+            min_r = min_r.min(r);
+            max_r = max_r.max(r);
+        }
+
+        min_q -= 2;
+        max_q += 2;
+        min_r -= 2;
+        max_r += 2;
+
+        let q_span = (max_q - min_q + 1) as f32;
+        let r_span = (max_r - min_r + 1) as f32;
+        let q_step = q_span / BOARD_SIZE as f32;
+        let r_step = r_span / BOARD_SIZE as f32;
+
+        let (my_cell, opp_cell) = match self.current_player {
+            Player::One => (Cell::P1, Cell::P2),
+            Player::Two => (Cell::P2, Cell::P1),
+        };
+
+        for (&(q, r), &cell) in &self.cells {
+            let mut mq = ((q - min_q) as f32 / q_step) as usize;
+            let mut mr = ((r - min_r) as f32 / r_step) as usize;
+            if mq >= BOARD_SIZE { mq = BOARD_SIZE - 1; }
+            if mr >= BOARD_SIZE { mr = BOARD_SIZE - 1; }
+
+            let flat = mq * BOARD_SIZE + mr;
+            if cell == my_cell {
+                out[flat] += 1.0;
+            } else if cell == opp_cell {
+                out[TOTAL_CELLS + flat] += 1.0;
+            }
+        }
+        out
+    }
 }
 
 impl Default for Board {

@@ -114,6 +114,11 @@ impl PyBoard {
         self.inner.to_planes()
     }
 
+    /// Returns a tuple of (local_map, global_map) as flat lists of floats.
+    pub fn get_dual_state(&self) -> (Vec<f32>, Vec<f32>) {
+        (self.inner.to_planes(), self.inner.to_global_planes())
+    }
+
     /// Window-relative flat index for axial (q, r).
     /// Used by selfplay workers to convert legal-move coords to policy indices.
     pub fn to_flat(&self, q: i32, r: i32) -> usize {
