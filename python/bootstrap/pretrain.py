@@ -189,5 +189,83 @@ def pretrain():
     torch.save(model.state_dict(), save_path)
     log.info("model_saved", path=str(save_path))
 
+    # 7. Validate
+    validate(model, device)
+
+
+def validate(model: HexTacToeNet, device: torch.device):
+    from python.selfplay.worker import SelfPlayWorker
+    
+    # Simple wrapper to use the model in MCTS
+    config = {
+        'mcts': {
+            'n_simulations': 100, # Faster eval
+            'c_puct': 1.5,
+            'temperature_threshold_ply': 30,
+            'dirichlet_alpha': 0.3,
+            'epsilon': 0.25
+        }
+    }
+    worker = SelfPlayWorker(model, config, device)
+    
+    # 1. vs RandomBot
+    log.info("validating_vs_random")
+    random_bot = RandomBot()
+    win_count = 0
+    n_games = 20
+    
+    for i in range(n_games):
+        board = Board()
+        state = GameState.from_board(board)
+        # Randomize who starts
+        model_player = 1 if i % 2 == 0 else -1
+        
+        while not board.check_win() and board.legal_move_count() > 0:
+            if board.current_player == model_player:
+                # Use MCTS with model
+                policy = worker._run_mcts_with_sims(board, n_sims=100, use_dirichlet=False, temperature=0.0)
+                q, r = worker._sample_action(policy, board.legal_moves(), board)
+            else:
+                q, r = random_bot.get_move(state, board)
+            
+            state = state.apply_move(board, q, r)
+            
+        if board.winner() == model_player:
+            win_count += 1
+            
+    random_win_rate = win_count / n_games
+    log.info("validation_random_result", win_rate=random_win_rate)
+    
+    # 2. vs RamoraBot(depth=3)
+    log.info("validating_vs_ramora_d3")
+    ramora_bot = RamoraBot(time_limit=0.05) # depth 3 approx
+    win_count = 0
+    n_games = 10
+    
+    for i in range(n_games):
+        board = Board()
+        state = GameState.from_board(board)
+        model_player = 1 if i % 2 == 0 else -1
+        
+        while not board.check_win() and board.legal_move_count() > 0:
+            if board.current_player == model_player:
+                policy = worker._run_mcts_with_sims(board, n_sims=400, use_dirichlet=False, temperature=0.0)
+                q, r = worker._sample_action(policy, board.legal_moves(), board)
+            else:
+                q, r = ramora_bot.get_move(state, board)
+            
+            state = state.apply_move(board, q, r)
+            
+        if board.winner() == model_player:
+            win_count += 1
+            
+    ramora_win_rate = win_count / n_games
+    log.info("validation_ramora_result", win_rate=ramora_win_rate)
+    
+    if random_win_rate >= 0.90 and ramora_win_rate > 0.05:
+        log.info("validation_passed")
+    else:
+        log.warning("validation_failed")
+
 if __name__ == "__main__":
     pretrain()
