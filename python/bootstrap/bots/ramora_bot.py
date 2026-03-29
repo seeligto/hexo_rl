@@ -15,9 +15,12 @@ import sys
 import os
 from pathlib import Path
 from typing import Optional
+import structlog
 
 from python.bootstrap.bot_protocol import BotProtocol
 from python.env import GameState
+
+log = structlog.get_logger()
 
 # Ensure vendor/bots/ramora is importable as a flat-namespace package.
 _RAMORA_PATH = str(Path(__file__).parents[3] / "vendor" / "bots" / "ramora")
@@ -62,6 +65,25 @@ def _build_hex_game(state: GameState, rust_board: object) -> HexGame:
         RamoraPlayer.A if state.current_player == 1 else RamoraPlayer.B
     )
     game.moves_left_in_turn = state.moves_remaining
+
+    # ── Monkey-patch is_valid_move ──
+    # Force Ramora to respect our 19x19 sliding window bounds.
+    legal_set = set(rust_board.legal_moves())
+    original_is_valid = game.is_valid_move
+
+    def patched_is_valid_move(q: int, r: int) -> bool:
+        # Must be both valid by Ramora's rules AND within our current window.
+        valid = original_is_valid(q, r) and (q, r) in legal_set
+        if not valid and (q, r) in game.board:
+            # Already occupied, Ramora handles this
+            pass
+        elif not valid:
+            # This is likely an out-of-window move being pruned
+            pass
+        return valid
+
+    game.is_valid_move = patched_is_valid_move
+
     return game
 
 
@@ -85,20 +107,54 @@ class RamoraBot(BotProtocol):
         if self._pending_move is not None:
             move = self._pending_move
             self._pending_move = None
-            return move
+            # Check if still legal (window might have shifted)
+            if rust_board.in_window(move[0], move[1]) and rust_board.get(move[0], move[1]) == 0:
+                return move
+            # Window shifted or occupied, fall through to re-run search.
 
         game = _build_hex_game(state, rust_board)
-        result = self._bot.get_move(game)
+        try:
+            result = self._bot.get_move(game)
+        except ValueError as e:
+            if "move out of window" in str(e):
+                log.error("ramora_bot_internal_error_out_of_window", error=str(e))
+                import random
+                return random.choice(rust_board.legal_moves())
+            raise e
 
         # result is always a list of (q, r) tuples.
         if len(result) == 0:
-            raise RuntimeError("RamoraBot returned empty move list")
+            # This should be rare with the patched is_valid_move, but if search
+            # fails to find any valid move within the window, fallback.
+            log.warning("ramora_bot_no_moves_found", ply=state.ply)
+            legal_moves = rust_board.legal_moves()
+            if not legal_moves:
+                raise RuntimeError("No legal moves available on board")
+            import random
+            return random.choice(legal_moves)
 
-        if len(result) >= 2:
+        # ── Final safety check ──
+        # Even with the patched is_valid_move, if Ramora's search somehow
+        # returns an out-of-window move (e.g. from TT or a bug), we must
+        # not return it to our Board.apply_move().
+        safe_result = []
+        for q, r in result:
+            if rust_board.in_window(q, r) and rust_board.get(q, r) == 0:
+                safe_result.append((q, r))
+            else:
+                log.warning("ramora_bot_returned_illegal_move", q=q, r=r, 
+                            in_window=rust_board.in_window(q, r),
+                            occupied=rust_board.get(q, r) != 0)
+
+        if not safe_result:
+            import random
+            return random.choice(rust_board.legal_moves())
+
+        if len(safe_result) >= 2:
             # Cache second move for the next call.
-            self._pending_move = result[1]
+            self._pending_move = safe_result[1]
 
-        return result[0]
+        return safe_result[0]
 
     def name(self) -> str:
         return f"ramora_bot(t={self._bot.time_limit:.3f})"

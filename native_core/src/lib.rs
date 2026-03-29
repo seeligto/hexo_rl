@@ -4,6 +4,7 @@
 ///   from native_core import Board, MCTSTree
 
 pub mod board;
+pub mod formations;
 pub mod mcts;
 
 use pyo3::prelude::*;
@@ -62,6 +63,15 @@ impl PyBoard {
         self.inner.legal_move_count()
     }
 
+    /// Returns the cell value at (q, r): 0=empty, 1=P1, -1=P2.
+    pub fn get(&self, q: i32, r: i32) -> i8 {
+        match self.inner.get(q, r) {
+            board::Cell::Empty => 0,
+            board::Cell::P1    => 1,
+            board::Cell::P2    => -1,
+        }
+    }
+
     /// Current player: 1 for player 1, -1 for player 2.
     #[getter]
     pub fn current_player(&self) -> i8 {
@@ -113,6 +123,11 @@ impl PyBoard {
     /// (cq, cr) centre of the current 19×19 view window.
     pub fn window_center(&self) -> (i32, i32) {
         self.inner.window_center()
+    }
+
+    /// Whether (q, r) is inside the current 19×19 view window.
+    pub fn in_window(&self, q: i32, r: i32) -> bool {
+        self.inner.in_window(q, r)
     }
 
     /// Board size (cells per axis = 19).

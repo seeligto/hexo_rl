@@ -1,0 +1,1 @@
+thejackofclubs (community) is building a mate-in-N puzzle dataset extracted from game archives. If published before Phase 5 training begins, add to corpus. Monitor Bot Dev Discord: discord.gg/7P8NeXnM4

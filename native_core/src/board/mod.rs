@@ -78,7 +78,7 @@ pub enum Cell {
 #[derive(Debug, Clone)]
 pub struct Board {
     /// Sparse stone map: (q, r) → Cell.
-    cells: HashMap<(i32, i32), Cell>,
+    pub(crate) cells: HashMap<(i32, i32), Cell>,
     /// Whose turn it is.
     pub current_player: Player,
     /// How many moves the current player still has to place this turn.
@@ -143,6 +143,11 @@ impl Board {
         let wq = q - cq + HALF;
         let wr = r - cr + HALF;
         wq as usize * BOARD_SIZE + wr as usize
+    }
+
+    /// Returns the cell at (q, r).
+    pub fn get_cell(&self, q: i32, r: i32) -> Cell {
+        self.cells.get(&(q, r)).copied().unwrap_or(Cell::Empty)
     }
 
     /// Axial coordinates (q, r) from a window-relative flat index.
@@ -324,7 +329,7 @@ impl Board {
 
     /// Count consecutive stones of `cell` starting from (q, r) in direction
     /// (dq, dr), not counting (q, r) itself.
-    fn count_direction(&self, mut q: i32, mut r: i32, dq: i32, dr: i32, cell: Cell) -> usize {
+    pub(crate) fn count_direction(&self, mut q: i32, mut r: i32, dq: i32, dr: i32, cell: Cell) -> usize {
         let mut count = 0;
         loop {
             q += dq;

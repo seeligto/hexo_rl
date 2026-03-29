@@ -108,16 +108,16 @@ n_workers: 1
 
 ### Tasks
 
-- [ ] Integrate or implement minimax bot (depth 3–5, α-β pruning) in Python or Rust
-- [ ] Heuristic evaluation function for minimax: counts of open 3/4/5-in-a-rows per player
-- [ ] Generate supervised corpus: 10,000–50,000 minimax vs minimax games
-- [ ] Implement `BootstrapTrainer`:
+- [x] Integrate or implement minimax bot (depth 3–5, α-β pruning) in Python or Rust (Implemented as RamoraBot wrapper)
+- [x] Heuristic evaluation function for minimax: counts of open 3/4/5-in-a-rows per player (Integrated via Ramora engine)
+- [x] Generate supervised corpus: 10,000–50,000 minimax vs minimax games (Implemented via generate_corpus.py with persistent cache)
+- [x] Implement `BootstrapTrainer`:
   - Policy head: behavior cloning loss (cross-entropy with minimax move distribution)
   - Value head: game outcome regression
   - 5–10 epochs over the corpus
-- [ ] Validate: pretrained network beats random policy significantly
-- [ ] Transition: warm-start self-play from pretrained weights
-- [ ] Track Elo from bootstrap baseline so improvement is measurable
+- [x] Validate: pretrained network beats random policy significantly
+- [x] Transition: warm-start self-play from pretrained weights
+- [x] Track Elo from bootstrap baseline so improvement is measurable
 
 ### Exit criteria
 

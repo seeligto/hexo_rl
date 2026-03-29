@@ -1,0 +1,54 @@
+
+# default.yaml — standard AlphaZero hyperparameters for Hex Tac Toe
+
+# Model
+model:
+  board_size: 19
+  in_channels: 18
+  res_blocks: 10
+  filters: 128
+
+# MCTS
+mcts:
+  n_simulations: 800
+  c_puct: 1.5
+  dirichlet_alpha: 0.3
+  epsilon: 0.25
+  temperature_threshold_ply: 30
+
+# Self-play
+selfplay:
+  n_workers: 6
+  inference_batch_size: 64
+  replay_buffer_capacity: 500000
+
+# Training
+training:
+  batch_size: 256
+  lr: 0.002
+  weight_decay: 0.0001
+  lr_schedule: cosine
+  eval_interval: 100
+  checkpoint_interval: 50
+
+# Rewards
+rewards:
+  shaped_decay_steps: 500
+  # Note: Formation rewards are handled in python/training/formation_rewards.py
+
+# Analysis
+analysis:
+  track_winrate_by_side: true
+  expected_o_winrate: 0.52
+
+# Bootstrap
+bootstrap:
+  enabled: true
+  corpus_path: "data/bootstrap_corpus.npz"
+  n_games: 20000
+  human_games_min_moves: 20
+  human_games_rated_only: true
+  ramora_depth_mix: {3: 0.7, 5: 0.3}
+
+# Seed
+seed: 42

@@ -122,6 +122,8 @@ class TrainingDashboard:
         table.add_row("Iteration",    str(metrics.get("iteration", metrics.get("step", "-"))))
         table.add_row("Policy loss",  fmt_float("policy_loss"))
         table.add_row("Value loss",   fmt_float("value_loss"))
+        table.add_row("X win rate",   fmt_float("x_winrate", ".3f"))
+        table.add_row("O win rate",   fmt_float("o_winrate", ".3f"))
         table.add_row("Elo (latest)", fmt_int("elo"))
         table.add_row("Buffer size",  fmt_int("buffer_size"))
         table.add_row("Games/hour",   fmt_float("games_per_hour", ".0f"))
