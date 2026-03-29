@@ -176,6 +176,9 @@ def main() -> None:
     log_interval  = int(config.get("log_interval",  10))
     train_step    = trainer.step
     games_played  = 0
+    x_wins        = 0
+    o_wins        = 0
+    draws         = 0
     t_start       = time.time()
     t_games_window_start = t_start
 
@@ -188,7 +191,7 @@ def main() -> None:
 
     def _run_loop() -> None:
         nonlocal train_step, games_played, initial_policy_loss, last_loss_info
-        nonlocal t_games_window_start
+        nonlocal t_games_window_start, x_wins, o_wins, draws
 
         while _running[0]:
             if args.iterations and train_step >= args.iterations:
@@ -197,9 +200,16 @@ def main() -> None:
 
             # ── Self-play: play one game ──
             t_game = time.time()
-            n_positions = worker.play_game(buffer)
+            n_positions, winner = worker.play_game(buffer)
             game_elapsed = time.time() - t_game
             games_played += 1
+            
+            if winner == 1:
+                x_wins += 1
+            elif winner == -1:
+                o_wins += 1
+            else:
+                draws += 1
 
             log.info(
                 "game_complete",
@@ -207,6 +217,7 @@ def main() -> None:
                 plies=n_positions,
                 duration_sec=round(game_elapsed, 2),
                 buffer_size=buffer.size,
+                winner=winner,
             )
 
             # ── Training: skip until buffer is warm ──
@@ -226,6 +237,9 @@ def main() -> None:
                 elapsed    = time.time() - t_start
                 window_sec = max(time.time() - t_games_window_start, 1e-6)
                 games_per_hour = games_played / elapsed * 3600 if elapsed > 0 else 0.0
+                
+                x_winrate = x_wins / games_played if games_played > 0 else 0.0
+                o_winrate = o_wins / games_played if games_played > 0 else 0.0
 
                 log.info(
                     "train_step",
@@ -236,6 +250,8 @@ def main() -> None:
                     buffer_size=buffer.size,
                     games_played=games_played,
                     elapsed_sec=round(elapsed, 1),
+                    x_winrate=round(x_winrate, 3),
+                    o_winrate=round(o_winrate, 3),
                 )
 
                 metrics = {
@@ -247,6 +263,8 @@ def main() -> None:
                     "games_per_hour": games_per_hour,
                     "gpu_util":      gpu_monitor.gpu_util_pct,
                     "vram_gb":       gpu_monitor.vram_used_gb,
+                    "x_winrate":     x_winrate,
+                    "o_winrate":     o_winrate,
                 }
 
                 if dashboard is not None:

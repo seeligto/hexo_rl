@@ -19,6 +19,7 @@ All three sources are fed into a single pretrain dataset. They are complementary
 | Source | Volume | Strength | How to get |
 |---|---|---|---|
 | Human game archive (hexo.did.science) | 42,000+ rated games | Real strategic patterns | Scraper (see below) |
+| Human game archive (he-xo.com) | ~5,000 games | Strategic diversity | Scraper (see below) |
 | Ramora0 engine self-play | Unlimited | Tactical precision | RamoraBot wrapper |
 | Random play | Unlimited | Coverage only | RandomBot |
 
@@ -75,20 +76,13 @@ Corpus generation always takes a list of `BotProtocol` instances — never hardc
 
 ## Human game archive scraper
 
-**URL:** https://hexo.did.science/games  
-**Volume:** 42,477+ archived matches (as of 2026-03-28), paginated 20 per page  
-**Format:** HTML — session IDs in listing, individual game pages at `/games/{session_id}`
+**URLs:** 
+- https://hexo.did.science/games (42k+ games)
+- https://he-xo.com/games/ (approx 5k games)
 
-```python
-# python/bootstrap/scraper.py
-import httpx
-import time
-from bs4 import BeautifulSoup
-import structlog
-
-log = structlog.get_logger()
-
-BASE_URL = "https://hexo.did.science"
+**Volume:** 47,000+ total archived matches (as of 2026-03-29), both paginated.
+**Format:** React SPAs — session IDs in listing, individual game pages at `/games/{session_id}`.
+**Strategy:** Scrape session IDs from paginated index, then fetch game details. If static HTML doesn't contain the moves, use playwright to extract from DOM/Network.
 
 def scrape_game_index(
     max_pages: int = 2125,      # 42,477 / 20

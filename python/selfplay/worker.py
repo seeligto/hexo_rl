@@ -198,7 +198,7 @@ class SelfPlayWorker:
 
     # ── Game loop ─────────────────────────────────────────────────────────────
 
-    def play_game(self, buffer: ReplayBuffer, use_dirichlet: bool = True) -> int:
+    def play_game(self, buffer: ReplayBuffer, use_dirichlet: bool = True) -> Tuple[int, Optional[int]]:
         """Play one complete game and push all positions to `buffer`.
 
         Args:
@@ -207,7 +207,8 @@ class SelfPlayWorker:
                            noise at root). False for evaluation games.
 
         Returns:
-            Number of positions added (= game length in half-moves).
+            Tuple of (number of positions added, winner).
+            Winner is 1, -1, or None (draw).
         """
         rust_board = Board()
         state      = GameState.from_board(rust_board)
@@ -216,13 +217,23 @@ class SelfPlayWorker:
         records: List[Tuple[np.ndarray, np.ndarray, int]] = []
         # Each record: (state_tensor, mcts_policy, player_at_this_move)
 
+        # Playout cap randomization (only for self-play)
+        # 90% fast search, 10% deep search
+        fast_sims = np.random.randint(15, 26) # 15-25 sims
+
         while True:
             # ── Win / draw check ──
             if rust_board.check_win() or rust_board.legal_move_count() == 0:
                 break
 
+            # ── Playout cap randomization ──
+            current_n_sims = self.n_sims
+            if use_dirichlet: # self-play
+                if np.random.random() < 0.9:
+                    current_n_sims = fast_sims
+            
             # ── MCTS search ──
-            mcts_policy = self._run_mcts(rust_board, use_dirichlet=use_dirichlet)  # list[float]
+            mcts_policy = self._run_mcts_with_sims(rust_board, n_sims=current_n_sims, use_dirichlet=use_dirichlet)
 
             # ── Record position ──
             state_tensor = state.to_tensor()           # (18, 19, 19) float16
@@ -249,4 +260,41 @@ class SelfPlayWorker:
                 outcome = 1.0 if player == winner else -1.0
             buffer.push(state_tensor, policy_arr, outcome)
 
-        return len(records)
+        return len(records), winner
+
+    def _run_mcts_with_sims(
+        self,
+        board: Board,
+        n_sims: int,
+        use_dirichlet: bool = True,
+        temperature: Optional[float] = None,
+    ) -> List[float]:
+        """Run n_sims MCTS simulations from `board`."""
+        self.tree.new_game(board)
+        dirichlet_applied = False
+
+        for _ in range(n_sims):
+            leaves = self.tree.select_leaves(1)
+            if not leaves:
+                break
+            policy, value = self._infer(leaves[0])
+            self.tree.expand_and_backup([policy], [value])
+
+            # Apply Dirichlet noise to root priors after the first expansion.
+            if use_dirichlet and not dirichlet_applied:
+                n_ch = self.tree.root_n_children()
+                if n_ch > 0:
+                    noise = np.random.dirichlet(
+                        [self.dirichlet_alpha] * n_ch
+                    ).tolist()
+                    self.tree.apply_dirichlet_to_root(noise, self.dirichlet_eps)
+                    dirichlet_applied = True
+
+        if temperature is None:
+            temperature = get_temperature(
+                ply=int(board.ply),
+                mode="evaluation" if not use_dirichlet else "training",
+                config=self.config,
+            )
+
+        return self.tree.get_policy(temperature=temperature, board_size=_BOARD_SIZE)

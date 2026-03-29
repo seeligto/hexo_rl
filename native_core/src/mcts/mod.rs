@@ -27,6 +27,7 @@
 /// ```
 
 use crate::board::{Board, BOARD_SIZE};
+use crate::formations::FormationDetector;
 
 /// Pre-allocated pool size. 200 k nodes ≈ 6.4 MB.
 pub const MAX_NODES: usize = 200_000;
@@ -333,6 +334,16 @@ impl MCTSTree {
                 self.pool[leaf_idx as usize].is_terminal    = true;
                 self.pool[leaf_idx as usize].terminal_value = 0.0;
                 self.backup(leaf_idx, 0.0);
+                continue;
+            }
+
+            // ── Early Termination: Forced-win formation ──
+            // If the player TO MOVE already has a formation that guarantees
+            // a win (like an Open Three), we can terminate here with +1.0.
+            if FormationDetector::has_forced_win(board, board.current_player) {
+                self.pool[leaf_idx as usize].is_terminal    = true;
+                self.pool[leaf_idx as usize].terminal_value = 1.0;
+                self.backup(leaf_idx, 1.0);
                 continue;
             }
 
