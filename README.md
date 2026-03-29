@@ -18,7 +18,7 @@ We employ a "Multi-Window Cluster-Based Approach" to handle the infinite board: 
    ```
    Install dependencies:
    ```bash
-   pip install -r requirements.txt # (or as specified in the project)
+   pip install -r requirements.txt
    ```
 
 2. **Rust Core:**

@@ -1,0 +1,9 @@
+torch
+numpy
+structlog
+rich
+tqdm
+requests
+pyyaml
+pytest
+nvidia-ml-py
