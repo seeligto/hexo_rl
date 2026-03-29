@@ -34,8 +34,9 @@ checkpoints/
 logs/
 runs/
 
-# Vendor (populated by setup.sh, not committed)
-vendor/
+# Vendor (compiled artifacts — not committed; submodules under vendor/bots/ ARE committed)
+vendor/*
+!vendor/bots
 
 # Editor / OS
 .idea/
