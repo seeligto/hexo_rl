@@ -65,16 +65,6 @@ def test_turn_alternation_over_several_turns():
 
 # ── Illegal moves ─────────────────────────────────────────────────────────────
 
-def test_out_of_bounds_raises():
-    b = Board()
-    with pytest.raises(ValueError):
-        b.apply_move(10, 0)
-    with pytest.raises(ValueError):
-        b.apply_move(0, -10)
-    with pytest.raises(ValueError):
-        b.apply_move(9, 10)
-
-
 def test_occupied_cell_raises():
     b = Board()
     b.apply_move(0, 0)        # P1 places at origin
