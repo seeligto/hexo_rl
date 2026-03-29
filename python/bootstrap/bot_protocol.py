@@ -11,6 +11,12 @@ from abc import ABC, abstractmethod
 from python.env import GameState
 
 
+class ResignationException(Exception):
+    """Raised when a bot identifies a forced loss and wants to resign early."""
+    def __init__(self, winner: int):
+        self.winner = winner
+        super().__init__(f"Bot resigns. Winner: {winner}")
+
 class BotProtocol(ABC):
     """Every bot that can play Hex Tac Toe must implement this interface."""
 

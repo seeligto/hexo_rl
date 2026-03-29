@@ -118,15 +118,32 @@ def main() -> None:
     log.info("device", device=str(device))
 
     # ── Model + Trainer ──
-    board_size  = int(config.get("board_size",  19))
-    res_blocks  = int(config.get("res_blocks",  10))
-    filters     = int(config.get("filters",     128))
+    # Handle both nested (default.yaml) and flat (fast_debug.yaml) configs
+    model_config = config.get("model", {})
+    train_config = config.get("training", {})
+    mcts_config  = config.get("mcts", {})
+    self_config  = config.get("selfplay", {})
+    
+    # Merge all into one flat dict for Trainer/MCTS/SelfPlay usage
+    # If the config is flat (like fast_debug.yaml), 'config' itself has the keys.
+    combined_config = {
+        **config,        # Base level (for flat configs)
+        **model_config,  # Overrides from nested model section
+        **train_config,  # Overrides from nested training section
+        **mcts_config,   # Overrides from nested mcts section
+        **self_config,   # Overrides from nested selfplay section
+    }
+
+    board_size  = int(combined_config.get("board_size",  19))
+    res_blocks  = int(combined_config.get("res_blocks",  10))
+    filters     = int(combined_config.get("filters",     128))
 
     if args.checkpoint:
         trainer = Trainer.load_checkpoint(
             args.checkpoint,
             checkpoint_dir=args.checkpoint_dir,
             device=device,
+            fallback_config=combined_config,
         )
         log.info("resumed", checkpoint=args.checkpoint, step=trainer.step)
     else:
@@ -136,7 +153,7 @@ def main() -> None:
             filters=filters,
         )
         trainer = Trainer(
-            model, config,
+            model, combined_config,
             checkpoint_dir=args.checkpoint_dir,
             device=device,
         )

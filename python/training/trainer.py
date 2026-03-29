@@ -167,6 +167,7 @@ class Trainer:
         checkpoint_path: str | Path,
         checkpoint_dir: Optional[str | Path] = None,
         device: Optional[torch.device] = None,
+        fallback_config: Optional[Dict[str, Any]] = None,
     ) -> "Trainer":
         """Restore a Trainer from a checkpoint file.
 
@@ -175,9 +176,26 @@ class Trainer:
             checkpoint_dir:  Where to write future checkpoints (defaults to
                              the same directory as the checkpoint file).
             device:          Override device.
+            fallback_config: Config to use if the checkpoint is weights-only.
         """
         ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-        config = ckpt["config"]
+        
+        # If it's a full checkpoint, it should have a 'config' or 'model_state' key.
+        # If it's a weights-only state_dict, it will have keys like 'resnet.0.weight' etc.
+        is_full_ckpt = "model_state" in ckpt and "config" in ckpt
+        
+        if is_full_ckpt:
+            config = ckpt["config"]
+            model_state = ckpt["model_state"]
+        else:
+            if fallback_config is None:
+                raise ValueError(
+                    f"Checkpoint {checkpoint_path} appears to be weights-only, "
+                    "but no fallback_config was provided."
+                )
+            config = fallback_config
+            model_state = ckpt
+
         board_size  = int(config.get("board_size", 19))
         res_blocks  = int(config.get("res_blocks", 10))
         filters     = int(config.get("filters", 128))
@@ -187,12 +205,14 @@ class Trainer:
             res_blocks=res_blocks,
             filters=filters,
         )
-        model.load_state_dict(ckpt["model_state"])
+        model.load_state_dict(model_state)
 
         ckpt_dir = Path(checkpoint_dir) if checkpoint_dir else Path(checkpoint_path).parent
         trainer = cls(model, config, checkpoint_dir=ckpt_dir, device=device)
-        trainer.optimizer.load_state_dict(ckpt["optimizer_state"])
-        trainer.scaler.load_state_dict(ckpt["scaler_state"])
-        trainer.step = ckpt["step"]
+        
+        if is_full_ckpt:
+            trainer.optimizer.load_state_dict(ckpt["optimizer_state"])
+            trainer.scaler.load_state_dict(ckpt["scaler_state"])
+            trainer.step = ckpt["step"]
 
         return trainer

@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from native_core import Board
 from python.env.game_state import GameState
+from python.bootstrap.bot_protocol import ResignationException
 from python.bootstrap.bots.ramora_bot import RamoraBot
 from python.bootstrap.scraper import scrape_hexo_did, deduplicate_games
 
@@ -88,17 +89,30 @@ def generate_bot_games(n_target: int, depth_mix: Dict[int, float], force_regener
         board = Board()
         state = GameState.from_board(board)
         moves = []
+        winner = None
         
         while not board.check_win() and board.legal_move_count() > 0:
             try:
-                q, r = bot.get_move(state, board)
+                # Randomize the first 10 plies (approx 5 turns)
+                # This ensures we get out of the "opening trap" and into diverse mid-games
+                if board.ply < 10:
+                    legal = board.legal_moves()
+                    import random
+                    q, r = random.choice(legal)
+                else:
+                    q, r = bot.get_move(state, board)
+                
                 moves.append((q, r))
                 state = state.apply_move(board, q, r)
+            except ResignationException as e:
+                winner = e.winner
+                break
             except Exception as e:
                 log.error("generation_error", error=str(e))
                 break
                 
-        winner = board.winner()
+        if winner is None:
+            winner = board.winner()
         save_bot_game(moves, winner)
         all_games.append(moves)
         

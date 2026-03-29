@@ -73,6 +73,8 @@ class HexTacToeNet(nn.Module):
     ) -> None:
         super().__init__()
         self.board_size = board_size
+        self.filters = filters
+        self.res_blocks = res_blocks
         spatial = board_size * board_size
 
         self.trunk = Trunk(in_channels, filters, res_blocks)

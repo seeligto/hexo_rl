@@ -101,50 +101,80 @@ class SelfPlayWorker:
 
     @torch.no_grad()
     def _infer(self, board: Board) -> Tuple[List[float], float]:
-        state = GameState.from_board(board)
-        tensor, centers = state.to_tensor(board)
-        tensor = torch.from_numpy(tensor).to(self.device)
+        policies, values = self._infer_batch([board])
+        return policies[0], values[0]
 
-        self.model.eval()
-        log_policy, value = self.model(tensor.float())
-
-        policies_np = log_policy.exp().cpu().numpy() # (K, 362)
-        values_np = value.squeeze(-1).cpu().numpy()  # (K,)
-
-        # Aggregate values (pessimistic from our perspective)
-        v = float(values_np.min())
-
-        # Map K local policies to global policy vector 362 matching MCTS
-        # Since MCTS currently uses `board.to_flat`, we map coordinates using `board.window_center()`
-        # which acts as the global origin for MCTS actions.
-        n_actions = _BOARD_SIZE * _BOARD_SIZE + 1
-        global_policy = np.zeros(n_actions, dtype=np.float64)
+    @torch.no_grad()
+    def _infer_batch(self, boards: List[Board]) -> Tuple[List[List[float]], List[float]]:
+        if not boards:
+            return [], []
+            
+        all_tensors = []
+        board_info = [] # (K, centers)
         
-        legal = board.legal_moves()
-        for q, r in legal:
-            mcts_idx = board.to_flat(q, r)
-            if mcts_idx >= n_actions - 1:
-                continue
+        for board in boards:
+            state = GameState.from_board(board)
+            tensor, centers = state.to_tensor(board)
+            all_tensors.append(torch.from_numpy(tensor))
+            board_info.append((len(centers), centers))
+            
+        # Concatenate all clusters into one large batch for the network
+        batch_tensor = torch.cat(all_tensors, dim=0).to(self.device)
+        
+        self.model.eval()
+        # Use float16 for inference speedup if on CUDA
+        with torch.amp.autocast(device_type=self.device.type, enabled=(self.device.type == "cuda")):
+            log_policy, value = self.model(batch_tensor.float())
+        
+        policies_np = log_policy.exp().cpu().float().numpy() # (TotalK, 362)
+        values_np = value.squeeze(-1).cpu().float().numpy()  # (TotalK,)
+        
+        results_p = []
+        results_v = []
+        
+        curr = 0
+        for i, board in enumerate(boards):
+            K, centers = board_info[i]
+            
+            # Extract sub-batch for this board
+            board_policies = policies_np[curr:curr+K]
+            board_values = values_np[curr:curr+K]
+            curr += K
+            
+            # Aggregate value (pessimistic)
+            v = float(board_values.min())
+            
+            # Map local cluster policies to global policy vector
+            n_actions = _BOARD_SIZE * _BOARD_SIZE + 1
+            global_policy = np.zeros(n_actions, dtype=np.float64)
+            legal = board.legal_moves()
+            
+            for q, r in legal:
+                mcts_idx = board.to_flat(q, r)
+                if mcts_idx >= n_actions - 1:
+                    continue
+                    
+                max_prob = 0.0
+                for k, (cq, cr) in enumerate(centers):
+                    wq = q - cq + (_BOARD_SIZE - 1) // 2
+                    wr = r - cr + (_BOARD_SIZE - 1) // 2
+                    if 0 <= wq < _BOARD_SIZE and 0 <= wr < _BOARD_SIZE:
+                        local_idx = wq * _BOARD_SIZE + wr
+                        if board_policies[k, local_idx] > max_prob:
+                            max_prob = board_policies[k, local_idx]
                 
-            # Find max probability across all clusters for this move
-            max_prob = 0.0
-            for k, (cq, cr) in enumerate(centers):
-                wq = q - cq + (_BOARD_SIZE - 1) // 2
-                wr = r - cr + (_BOARD_SIZE - 1) // 2
-                if 0 <= wq < _BOARD_SIZE and 0 <= wr < _BOARD_SIZE:
-                    local_idx = wq * _BOARD_SIZE + wr
-                    if policies_np[k, local_idx] > max_prob:
-                        max_prob = policies_np[k, local_idx]
+                global_policy[mcts_idx] = max_prob
+                
+            total = global_policy.sum()
+            if total > 1e-9:
+                global_policy /= total
+            else:
+                global_policy.fill(1.0 / n_actions)
+                
+            results_p.append(global_policy.tolist())
+            results_v.append(v)
             
-            global_policy[mcts_idx] = max_prob
-            
-        total = global_policy.sum()
-        if total > 1e-9:
-            global_policy /= total
-        else:
-            global_policy.fill(1.0 / n_actions)
-            
-        return global_policy.tolist(), v
+        return results_p, results_v
 
     # ── MCTS search ───────────────────────────────────────────────────────────
 
@@ -154,47 +184,7 @@ class SelfPlayWorker:
         use_dirichlet: bool = True,
         temperature: Optional[float] = None,
     ) -> List[float]:
-        """Run self.n_sims MCTS simulations from `board`.
-
-        Args:
-            board:          Current board state (root of search).
-            use_dirichlet:  If True, mix Dirichlet noise into root priors after
-                            the first expansion (self-play mode).  Set False for
-                            evaluation games.
-            temperature:    Override sampling temperature.  If None, uses the
-                            ply-based schedule (tau=1.0 early, tau=0.1 late).
-
-        Returns:
-            Visit-count policy vector (length _N_ACTIONS).
-        """
-        self.tree.new_game(board)
-        dirichlet_applied = False
-
-        for sim_idx in range(self.n_sims):
-            leaves = self.tree.select_leaves(1)
-            if not leaves:
-                break
-            policy, value = self._infer(leaves[0])
-            self.tree.expand_and_backup([policy], [value])
-
-            # Apply Dirichlet noise to root priors after the first expansion.
-            if use_dirichlet and not dirichlet_applied:
-                n_ch = self.tree.root_n_children()
-                if n_ch > 0:
-                    noise = np.random.dirichlet(
-                        [self.dirichlet_alpha] * n_ch
-                    ).tolist()
-                    self.tree.apply_dirichlet_to_root(noise, self.dirichlet_eps)
-                    dirichlet_applied = True
-
-        if temperature is None:
-            temperature = get_temperature(
-                ply=int(board.ply),
-                mode="evaluation" if not use_dirichlet else "training",
-                config=self.config,
-            )
-
-        return self.tree.get_policy(temperature=temperature, board_size=_BOARD_SIZE)
+        return self._run_mcts_with_sims(board, n_sims=self.n_sims, use_dirichlet=use_dirichlet, temperature=temperature)
 
     # ── Action sampling ───────────────────────────────────────────────────────
 
@@ -294,17 +284,22 @@ class SelfPlayWorker:
         n_sims: int,
         use_dirichlet: bool = True,
         temperature: Optional[float] = None,
+        batch_size: int = 8,
     ) -> List[float]:
-        """Run n_sims MCTS simulations from `board`."""
+        """Run n_sims MCTS simulations from `board` using batched inference."""
         self.tree.new_game(board)
         dirichlet_applied = False
 
-        for _ in range(n_sims):
-            leaves = self.tree.select_leaves(1)
+        # Run simulations in batches
+        for sim_idx in range(0, n_sims, batch_size):
+            current_batch = min(batch_size, n_sims - sim_idx)
+            leaves = self.tree.select_leaves(current_batch)
             if not leaves:
                 break
-            policy, value = self._infer(leaves[0])
-            self.tree.expand_and_backup([policy], [value])
+            
+            # Batch inference on all selected leaves
+            policies, values = self._infer_batch(leaves)
+            self.tree.expand_and_backup(policies, values)
 
             # Apply Dirichlet noise to root priors after the first expansion.
             if use_dirichlet and not dirichlet_applied:
