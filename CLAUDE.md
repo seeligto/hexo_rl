@@ -30,13 +30,9 @@ The board is infinite. The NN requires fixed-size tensors. We resolve this as fo
 **Internal storage (Rust):** `HashMap<(q,r), Player>` — sparse, genuinely unbounded.
 No allocation for empty cells. No fixed grid size in the data structure.
 
-**NN view window:** Always a fixed 19×19 tensor extracted from a sliding window
-centered on the centroid of the bounding box of played stones. As play drifts,
-the window follows. The NN always sees a consistent 19×19 view of the active area.
+**NN view window (Multi-Window Clustering):** The board state is dynamically grouped into K distinct clusters (colonies) of stones. The Rust core generates K distinct 19×19 tensors, one centered on each cluster's centroid. These are evaluated as a batch by the neural network.
 
-**Legal moves:** All empty cells within `bounding_box_of_stones + 2 cell margin`,
-clipped to the current 19×19 window. No explicit expansion logic needed —
-the playable area grows naturally as the bounding box grows.
+**Legal moves:** All empty cells within a margin of existing stones, across all K clusters. The network outputs K policy distributions which are mapped back to global coordinates and unified via softmax.
 
 **Phase 0 note:** Phase 0 built a fixed 2D array board. This was migrated to a
 sparse HashMap in Phase 1.5 before bootstrap corpus generation began.
