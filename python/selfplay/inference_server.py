@@ -180,21 +180,29 @@ class InferenceServer(threading.Thread):
         """Run one forward pass over the batch and resolve all requests."""
         self._total_requests += len(batch)
 
-        # Stack states → (B, 18, 19, 19) float16 on device.
-        states_np = np.stack([req.state for req in batch])
-        tensor = torch.from_numpy(states_np).to(self.device)
+        # states are (K, 18, 19, 19). We concatenate them along dim=0.
+        k_sizes = [req.state.shape[0] for req in batch]
+        
+        # Concatenate states -> (sum(K), 18, 19, 19)
+        tensor = torch.cat([torch.from_numpy(req.state) for req in batch], dim=0).to(self.device)
 
         self.model.eval()
         with torch.no_grad():
             with torch.amp.autocast(device_type=self.device.type):
                 log_policy, value = self.model(tensor.float())
 
-        # log_policy: (B, 362) log-softmax  →  exp → probabilities
-        policies_np = log_policy.exp().cpu().numpy().astype(np.float32)  # (B, 362)
-        values_np   = value.squeeze(-1).cpu().numpy()                    # (B,)
+        # log_policy: (sum(K), 362) log-softmax  →  exp → probabilities
+        policies_np = log_policy.exp().cpu().numpy().astype(np.float32)  # (sum(K), 362)
+        values_np   = value.squeeze(-1).cpu().numpy()                    # (sum(K),)
 
+        # Slice results back to each request
+        offset = 0
         for i, req in enumerate(batch):
-            req.result = (policies_np[i], float(values_np[i]))
+            k = k_sizes[i]
+            req_policies = policies_np[offset:offset+k]
+            req_values = values_np[offset:offset+k]
+            req.result = (req_policies, req_values)
             req.event.set()
+            offset += k
 
         self._forward_count += 1
