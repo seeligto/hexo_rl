@@ -142,6 +142,19 @@ impl PyBoard {
     }
 
     /// Human-readable string showing the 19×19 view window (for debugging).
+    
+    /// Returns a list of all stones on the board as (q, r, player).
+    pub fn get_stones(&self) -> Vec<(i32, i32, i8)> {
+        self.inner.cells.iter().map(|(&(q, r), &cell)| {
+            let p = match cell {
+                board::Cell::Empty => 0,
+                board::Cell::P1 => 1,
+                board::Cell::P2 => -1,
+            };
+            (q, r, p)
+        }).collect()
+    }
+
     pub fn __repr__(&self) -> String {
         let mut s = format!(
             "Board(ply={}, player={}, moves_remaining={})\n",
