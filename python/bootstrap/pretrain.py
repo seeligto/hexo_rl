@@ -1,6 +1,7 @@
-
 import os
 import json
+import argparse
+import pickle
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -16,6 +17,7 @@ from native_core import Board
 from python.bootstrap.scraper import scrape_hexo_did
 from python.bootstrap.bots.ramora_bot import RamoraBot
 from python.bootstrap.bots.random_bot import RandomBot
+from python.bootstrap.generate_corpus import load_cached_bot_games, RAW_HUMAN_DIR
 
 log = structlog.get_logger()
 
@@ -39,7 +41,7 @@ class BootstrapTrainer:
         
         pbar = tqdm(loader, desc="Training")
         for states, policies, outcomes in pbar:
-            states = states.to(self.device).float() # Ensure float32 for autocast
+            states = states.to(self.device).float()
             policies = policies.to(self.device)
             outcomes = outcomes.to(self.device)
             
@@ -48,12 +50,8 @@ class BootstrapTrainer:
             with torch.amp.autocast(device_type=self.device.type, dtype=torch.float16, enabled=(self.device.type == "cuda")):
                 log_policy, value = self.model(states)
                 
-                # Policy loss: cross-entropy
                 policy_loss = -(policies * log_policy).sum(dim=1).mean()
-                
-                # Value loss: MSE
                 value_loss = nn.functional.mse_loss(value.squeeze(1), outcomes)
-                
                 loss = policy_loss + value_loss
                 
             self.scaler.scale(loss).backward()
@@ -68,39 +66,6 @@ class BootstrapTrainer:
             
         return total_loss / len(loader), total_policy_loss / len(loader), total_value_loss / len(loader)
 
-def generate_bot_games(n_games: int, depth_mix: Dict[int, float]) -> List[List[Tuple[int, int]]]:
-    log.info("generating_bot_games", n_games=n_games, depth_mix=depth_mix)
-    all_games = []
-    
-    # Map depth to time_limit (simplified)
-    depth_to_time = {3: 0.05, 5: 0.2}
-    
-    for _ in tqdm(range(n_games), desc="Bot Games"):
-        # Choose depth based on mix
-        r = np.random.random()
-        cumulative = 0
-        chosen_depth = 3
-        for depth, prob in depth_mix.items():
-            cumulative += prob
-            if r <= cumulative:
-                chosen_depth = depth
-                break
-        
-        bot = RamoraBot(time_limit=depth_to_time.get(chosen_depth, 0.05))
-        
-        board = Board()
-        state = GameState.from_board(board)
-        moves = []
-        
-        while not board.check_win() and board.legal_move_count() > 0:
-            q, r = bot.get_move(state, board)
-            moves.append((q, r))
-            state = state.apply_move(board, q, r)
-            
-        all_games.append(moves)
-        
-    return all_games
-
 def convert_to_dataset(games: List[List[Tuple[int, int]]]) -> List[Tuple[np.ndarray, np.ndarray, float]]:
     log.info("converting_to_dataset", n_games=len(games))
     dataset = []
@@ -109,35 +74,39 @@ def convert_to_dataset(games: List[List[Tuple[int, int]]]) -> List[Tuple[np.ndar
         board = Board()
         state = GameState.from_board(board)
         
-        history = [] # (state_tensor, move_idx)
+        history = []
         
         for q, r in moves:
-            # Check if move is in current window
-            if not board.in_window(q, r):
-                # Game drifted out of window, stop replaying this game
-                break
-                
-            # Policy target: one-hot on the actual move
-            action_idx = board.to_flat(q, r)
-            policy = np.zeros(19*19 + 1, dtype=np.float32)
-            policy[action_idx] = 1.0
+            tensor, centers = state.to_tensor(board)
+            K = len(centers)
             
-            history.append((state.to_tensor(), policy, board.current_player))
+            target_k = -1
+            target_local_idx = -1
+            
+            for k, (cq, cr) in enumerate(centers):
+                wq = q - cq + 9
+                wr = r - cr + 9
+                if 0 <= wq < 19 and 0 <= wr < 19:
+                    target_k = k
+                    target_local_idx = wq * 19 + wr
+                    break
+                    
+            if target_k != -1:
+                policy = np.zeros(19*19 + 1, dtype=np.float32)
+                policy[target_local_idx] = 1.0
+                history.append((tensor[target_k], policy, board.current_player))
             
             try:
                 state = state.apply_move(board, q, r)
-            except:
-                # Illegal move in record? Skip rest of game
+            except Exception:
                 break
                 
-        # Determine outcome
         winner = board.winner()
         outcome = 0.0
         if winner is not None:
             outcome = float(winner)
             
         for s_t, p, player in history:
-            # Value from player's perspective
             val = 1.0 if player == outcome else (-1.0 if outcome != 0.0 else 0.0)
             dataset.append((s_t, p, val))
             
@@ -155,7 +124,11 @@ class BootstrapDataset(torch.utils.data.Dataset):
         return torch.from_numpy(s), torch.from_numpy(p), torch.tensor(v, dtype=torch.float32)
 
 def pretrain():
-    # 1. Configuration
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--use-cache", action="store_true", help="Use cached parsed dataset if available")
+    parser.add_argument("--force-regenerate", action="store_true", help="Force dataset generation")
+    args = parser.parse_args()
+
     config = {
         'lr': 0.002,
         'weight_decay': 0.0001,
@@ -167,128 +140,54 @@ def pretrain():
     }
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # 2. Collect/Load cached games
-    from python.bootstrap.generate_corpus import load_cached_bot_games, RAW_HUMAN_DIR
-    import json
-    
-    bot_games = load_cached_bot_games()
-    log.info("loaded_bot_games", count=len(bot_games))
-    
-    human_games = []
-    for p in RAW_HUMAN_DIR.glob("*.json"):
-        try:
-            with open(p, 'r') as f:
-                game_details = json.load(f)
-                if 'moves' in game_details:
-                    moves = [(m['x'], m['y']) for m in game_details['moves']]
-                    human_games.append(moves)
-        except:
-            continue
-    log.info("loaded_human_games", count=len(human_games))
-    
-    all_games = human_games + bot_games
-    if not all_games:
-        log.warning("no_games_found", hint="Run generate_corpus.py first")
-        return
+    cache_dir = Path("data/corpus")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / "parsed_dataset.pkl"
+
+    if args.use_cache and cache_file.exists() and not args.force_regenerate:
+        log.info("loading_cached_dataset", path=str(cache_file))
+        with open(cache_file, "rb") as f:
+            data = pickle.load(f)
+    else:
+        bot_games = load_cached_bot_games()
+        log.info("loaded_bot_games", count=len(bot_games))
         
-    log.info("total_games", count=len(all_games))
-    
-    # 3. Create dataset
-    data = convert_to_dataset(all_games)
+        human_games = []
+        for p in RAW_HUMAN_DIR.glob("*.json"):
+            try:
+                with open(p, 'r') as f:
+                    game_details = json.load(f)
+                    if 'moves' in game_details:
+                        moves = [(m['x'], m['y']) for m in game_details['moves']]
+                        human_games.append(moves)
+            except:
+                continue
+        log.info("loaded_human_games", count=len(human_games))
+        
+        all_games = human_games + bot_games
+        if not all_games:
+            log.warning("no_games_found", hint="Run generate_corpus.py first")
+            return
+            
+        data = convert_to_dataset(all_games)
+        with open(cache_file, "wb") as f:
+            pickle.dump(data, f)
+        log.info("saved_cached_dataset", path=str(cache_file))
+
     dataset = BootstrapDataset(data)
     loader = torch.utils.data.DataLoader(dataset, batch_size=config['batch_size'], shuffle=True)
     
-    # 4. Initialize model
     model = HexTacToeNet(board_size=19, res_blocks=10, filters=128)
     trainer = BootstrapTrainer(model, config, device)
     
-    # 5. Train
     for epoch in range(1, config['epochs'] + 1):
         loss, p_loss, v_loss = trainer.train_epoch(loader)
         log.info("epoch_complete", epoch=epoch, loss=loss, p_loss=p_loss, v_loss=v_loss)
         
-    # 6. Save
     save_path = Path("checkpoints/bootstrap_model.pt")
     save_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), save_path)
     log.info("model_saved", path=str(save_path))
-    
-    # 7. Validate
-    validate(model, device)
-
-def validate(model: HexTacToeNet, device: torch.device):
-    from python.selfplay.worker import SelfPlayWorker
-    
-    # Simple wrapper to use the model in MCTS
-    config = {
-        'mcts': {
-            'n_simulations': 100, # Faster eval
-            'c_puct': 1.5,
-            'temperature_threshold_ply': 30,
-            'dirichlet_alpha': 0.3,
-            'epsilon': 0.25
-        }
-    }
-    worker = SelfPlayWorker(model, config, device)
-    
-    # 1. vs RandomBot
-    log.info("validating_vs_random")
-    random_bot = RandomBot()
-    win_count = 0
-    n_games = 20
-    
-    for i in range(n_games):
-        board = Board()
-        state = GameState.from_board(board)
-        # Randomize who starts
-        model_player = 1 if i % 2 == 0 else -1
-        
-        while not board.check_win() and board.legal_move_count() > 0:
-            if board.current_player == model_player:
-                # Use MCTS with model
-                policy = worker._run_mcts_with_sims(board, n_sims=100, use_dirichlet=False, temperature=0.0)
-                q, r = worker._sample_action(policy, board.legal_moves(), board)
-            else:
-                q, r = random_bot.get_move(state, board)
-            
-            state = state.apply_move(board, q, r)
-            
-        if board.winner() == model_player:
-            win_count += 1
-            
-    random_win_rate = win_count / n_games
-    log.info("validation_random_result", win_rate=random_win_rate)
-    
-    # 2. vs RamoraBot(depth=3)
-    log.info("validating_vs_ramora_d3")
-    ramora_bot = RamoraBot(time_limit=0.05) # depth 3 approx
-    win_count = 0
-    n_games = 10
-    
-    for i in range(n_games):
-        board = Board()
-        state = GameState.from_board(board)
-        model_player = 1 if i % 2 == 0 else -1
-        
-        while not board.check_win() and board.legal_move_count() > 0:
-            if board.current_player == model_player:
-                policy = worker._run_mcts_with_sims(board, n_sims=400, use_dirichlet=False, temperature=0.0)
-                q, r = worker._sample_action(policy, board.legal_moves(), board)
-            else:
-                q, r = ramora_bot.get_move(state, board)
-            
-            state = state.apply_move(board, q, r)
-            
-        if board.winner() == model_player:
-            win_count += 1
-            
-    ramora_win_rate = win_count / n_games
-    log.info("validation_ramora_result", win_rate=ramora_win_rate)
-    
-    if random_win_rate >= 0.90 and ramora_win_rate > 0.05:
-        log.info("validation_passed")
-    else:
-        log.warning("validation_failed")
 
 if __name__ == "__main__":
     pretrain()
