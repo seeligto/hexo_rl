@@ -113,8 +113,11 @@ class SelfPlayWorker:
         state = GameState.from_board(board)
         tensor = torch.from_numpy(state.to_tensor()).unsqueeze(0).to(self.device)
 
+        local_tensor = tensor[:, :18, :, :]
+        global_tensor = tensor[:, 18:, :, :]
+
         self.model.eval()
-        log_policy, value = self.model(tensor.float())  # float32 for single inference
+        log_policy, value = self.model(local_tensor.float(), global_tensor.float())
 
         policy_probs = log_policy.exp().squeeze(0).cpu().numpy().tolist()
         v = value.squeeze().item()

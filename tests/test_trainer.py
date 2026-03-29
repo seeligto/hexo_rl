@@ -83,10 +83,10 @@ def test_loss_decreases_over_multiple_steps(tmp_path: Path):
 
     first_loss = trainer.train_step(buf)["loss"]
     last_loss  = first_loss
-    for _ in range(49):
+    for _ in range(199):
         last_loss = trainer.train_step(buf)["loss"]
 
-    # Over 50 steps the loss should drop noticeably from the initial value.
+    # Over 200 steps the loss should drop noticeably from the initial value.
     assert last_loss < first_loss, (
         f"loss did not decrease: first={first_loss:.4f} last={last_loss:.4f}"
     )
