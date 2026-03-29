@@ -48,7 +48,6 @@ Usage
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Dict, Any, List, Optional
 
@@ -87,26 +86,39 @@ class _InferenceClient:
         self._resp_q = response_queue
         self._next_id: int = 0
 
-    def infer(self, state: np.ndarray):
-        """Synchronously request inference for `state`.
+    def infer_batch(self, states: List[np.ndarray]):
+        """Synchronously request inference for a batch of K-cluster tensors.
 
-        Returns (policy_probs, value).
-        policy_probs: np.ndarray (362,) float32
-        value: float
+        Args:
+            states: list of leaf tensors; each item is shape (K, 18, 19, 19).
+
+        Returns:
+            list of per-leaf outputs, where each item is
+            (cluster_policies, cluster_values).
         """
+        if not states:
+            return []
+
         req_id = self._next_id
         self._next_id += 1
-        self._req_q.put((self._worker_id, req_id, state))
+        self._req_q.put((self._worker_id, req_id, states))
         # Block until the matching response arrives.
         while True:
             resp = self._resp_q.get()
             if resp is None:
                 return None  # stop sentinel
-            w_id, r_id, policy, value = resp
+            w_id, r_id, outputs = resp
             if r_id == req_id:
-                return policy, value
+                return outputs
             # Out-of-order (shouldn't happen in practice): put it back.
             self._resp_q.put(resp)
+
+    def infer(self, state: np.ndarray):
+        """Backwards-compatible single-state helper."""
+        outputs = self.infer_batch([state])
+        if outputs is None:
+            return None
+        return outputs[0]
 
 
 # ── Worker process function ───────────────────────────────────────────────────
@@ -134,6 +146,7 @@ def _worker_fn(
     sp_cfg   = config.get("selfplay", config)
 
     n_sims       = int(mcts_cfg.get("n_simulations", 50))
+    leaf_batch_size = int(sp_cfg.get("leaf_batch_size", 8))
     c_puct       = float(mcts_cfg.get("c_puct", 1.5))
     temp_thresh  = int(mcts_cfg.get("temperature_threshold_ply", 30))
     board_size   = _BOARD_SIZE
@@ -141,10 +154,42 @@ def _worker_fn(
     half = (board_size - 1) // 2
     tree = MCTSTree(c_puct=c_puct)
 
-    def flat_to_coords(flat: int):
-        q = flat // board_size - half
-        r = flat %  board_size - half
-        return q, r
+    def _merge_cluster_outputs(
+        leaf_board: "Board",
+        centers: List[tuple[int, int]],
+        cluster_policies: np.ndarray,
+        cluster_values: np.ndarray,
+    ) -> tuple[list[float], float]:
+        """Map per-cluster network outputs back to global board policy."""
+        n_actions = board_size * board_size + 1
+        global_policy = np.zeros(n_actions, dtype=np.float64)
+
+        legal = leaf_board.legal_moves()
+        for q, r in legal:
+            mcts_idx = leaf_board.to_flat(q, r)
+            if mcts_idx >= n_actions - 1:
+                continue
+
+            max_prob = 0.0
+            for k, (cq, cr) in enumerate(centers):
+                wq = q - cq + half
+                wr = r - cr + half
+                if 0 <= wq < board_size and 0 <= wr < board_size:
+                    local_idx = wq * board_size + wr
+                    p = float(cluster_policies[k, local_idx])
+                    if p > max_prob:
+                        max_prob = p
+
+            global_policy[mcts_idx] = max_prob
+
+        total = global_policy.sum()
+        if total > 1e-9:
+            global_policy /= total
+        else:
+            global_policy.fill(1.0 / n_actions)
+
+        value = float(cluster_values.min()) if cluster_values.size else 0.0
+        return global_policy.tolist(), value
 
     games_played = 0
 
@@ -159,26 +204,51 @@ def _worker_fn(
 
             # ── MCTS search ──
             tree.new_game(rust_board)
-            for _ in range(n_sims):
-                leaves = tree.select_leaves(1)
+            for sim_idx in range(0, n_sims, leaf_batch_size):
+                current_batch = min(leaf_batch_size, n_sims - sim_idx)
+                leaves = tree.select_leaves(current_batch)
                 if not leaves:
                     break
-                leaf_board = leaves[0]
-                leaf_state = GameState.from_board(leaf_board)
-                leaf_tensor = leaf_state.to_tensor()  # (18, 19, 19) float16
 
-                result = client.infer(leaf_tensor)
-                if result is None:
+                leaf_tensors: List[np.ndarray] = []
+                leaf_centers: List[List[tuple[int, int]]] = []
+                for leaf_board in leaves:
+                    leaf_state = GameState.from_board(leaf_board)
+                    leaf_tensor, centers = leaf_state.to_tensor()  # (K, 18, 19, 19), centers
+                    leaf_tensors.append(leaf_tensor)
+                    leaf_centers.append(centers)
+
+                batch_results = client.infer_batch(leaf_tensors)
+                if batch_results is None:
                     return  # stop signal
-                policy, value = result
-                tree.expand_and_backup([list(policy)], [value])
+
+                policies: List[List[float]] = []
+                values: List[float] = []
+                for leaf_board, centers, result in zip(leaves, leaf_centers, batch_results):
+                    cluster_policies, cluster_values = result
+                    policy, value = _merge_cluster_outputs(
+                        leaf_board=leaf_board,
+                        centers=centers,
+                        cluster_policies=cluster_policies,
+                        cluster_values=cluster_values,
+                    )
+                    policies.append(policy)
+                    values.append(value)
+
+                tree.expand_and_backup(policies, values)
 
             ply = rust_board.ply
             temperature = 1.0 if ply < temp_thresh else 0.1
             mcts_policy = tree.get_policy(temperature=temperature, board_size=board_size)
 
             # Record position.
-            state_tensor = state.to_tensor()
+            # to_tensor() returns (K, 18, 19, 19) tensor and list of K centers
+            full_tensor, centers = state.to_tensor()
+            
+            # For Phase 1 / simplicity, we only store the first cluster in the buffer.
+            # In Phase 2+, we will store all K clusters.
+            state_tensor = full_tensor[0] # (18, 19, 19)
+            
             policy_arr   = np.array(mcts_policy, dtype=np.float32)
             records.append((state_tensor, policy_arr, state.current_player))
 
@@ -256,6 +326,7 @@ class WorkerPool:
         sp_cfg = config.get("selfplay", config)
         self.n_workers    = n_workers or int(sp_cfg.get("n_workers", 4))
         self._batch_size  = int(sp_cfg.get("inference_batch_size", 64))
+        self._dispatch_wait_s = float(sp_cfg.get("dispatch_wait_ms", 2.0)) / 1000.0
         self._queue_maxsize = self._batch_size * self.n_workers * 2  # backpressure
 
         # mp.Queue: workers send (worker_id, req_id, state_np)
@@ -325,6 +396,16 @@ class WorkerPool:
     def stop(self) -> None:
         """Signal all workers to stop and wait for them to exit."""
         self._stop_event.set()
+        self._request_queue.put(_STOP_SENTINEL)
+        self._result_queue.put(_STOP_SENTINEL)
+        for q in self._response_queues:
+            q.put(_STOP_SENTINEL)
+
+        if self._dispatch_thread is not None:
+            self._dispatch_thread.join(timeout=5.0)
+        if self._collect_thread is not None:
+            self._collect_thread.join(timeout=5.0)
+
         for p in self._workers:
             p.join(timeout=30.0)
             if p.is_alive():
@@ -343,20 +424,47 @@ class WorkerPool:
         """Read inference requests from workers, call server, route responses."""
         while not self._stop_event.is_set():
             try:
-                item = self._request_queue.get(timeout=0.1)
+                first_item = self._request_queue.get(timeout=0.1)
             except Exception:
                 continue
-            if item is None:
+            if first_item is None:
                 break
-            worker_id, req_id, state = item
+
+            pending = [first_item]
+            deadline = time.monotonic() + self._dispatch_wait_s
+            while len(pending) < self._batch_size:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    item = self._request_queue.get(timeout=remaining)
+                except Exception:
+                    break
+                if item is None:
+                    break
+                pending.append(item)
+
+            all_states: List[np.ndarray] = []
+            req_meta: List[tuple[int, int, int]] = []  # (worker_id, req_id, n_states)
+            for worker_id, req_id, state_batch in pending:
+                req_meta.append((worker_id, req_id, len(state_batch)))
+                all_states.extend(state_batch)
+
             try:
-                result = self._inference_server.infer(state)
+                all_outputs = self._inference_server.infer_many(all_states)
             except Exception:
-                result = (np.ones(_N_ACTIONS, dtype=np.float32) / _N_ACTIONS, 0.0)
-            if result is None:
-                continue
-            policy, value = result
-            self._response_queues[worker_id].put((worker_id, req_id, policy, value))
+                all_outputs = []
+                for state in all_states:
+                    k = int(state.shape[0])
+                    fallback_policy = np.ones((k, _N_ACTIONS), dtype=np.float32) / _N_ACTIONS
+                    fallback_value = np.zeros((k,), dtype=np.float32)
+                    all_outputs.append((fallback_policy, fallback_value))
+
+            offset = 0
+            for worker_id, req_id, n_states in req_meta:
+                outputs = all_outputs[offset:offset + n_states]
+                offset += n_states
+                self._response_queues[worker_id].put((worker_id, req_id, outputs))
 
     def _collect_loop(self) -> None:
         """Pop completed game records from result_queue → push to ReplayBuffer."""

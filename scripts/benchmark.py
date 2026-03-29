@@ -23,22 +23,21 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 import numpy as np
 import torch
 import yaml
+from rich.console import Console
+from rich.table import Table
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from rich.console import Console
-from rich.table import Table
-
-from native_core import Board, MCTSTree
-from python.model.network import HexTacToeNet, compile_model
-from python.training.replay_buffer import ReplayBuffer
+if TYPE_CHECKING:
+    from python.model.network import HexTacToeNet
+    from python.training.replay_buffer import ReplayBuffer
 
 console = Console()
 
@@ -47,6 +46,8 @@ console = Console()
 
 def benchmark_mcts(n_simulations: int = 50_000) -> Dict[str, Any]:
     """CPU-only MCTS throughput (no neural network)."""
+    from native_core import Board, MCTSTree  # type: ignore[attr-defined]
+
     board = Board()
     tree  = MCTSTree(c_puct=1.5)
     tree.new_game(board)
@@ -68,7 +69,7 @@ def benchmark_mcts(n_simulations: int = 50_000) -> Dict[str, Any]:
 
 
 def benchmark_inference(
-    model: HexTacToeNet,
+    model: "HexTacToeNet",
     n_positions: int = 10_000,
     batch_size:  int = 64,
 ) -> Dict[str, Any]:
@@ -76,10 +77,9 @@ def benchmark_inference(
     model.eval()
     device = next(model.parameters()).device
     dummy_local  = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
-    dummy_global = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
 
     # Warm up
-    with torch.no_grad(), torch.amp.autocast(device_type=device.type):
+    with torch.no_grad(), torch.autocast(device_type=device.type):
         for _ in range(10):
             model(dummy_local)
     if device.type == "cuda":
@@ -87,7 +87,7 @@ def benchmark_inference(
 
     n_batches = n_positions // batch_size
     start = time.perf_counter()
-    with torch.no_grad(), torch.amp.autocast(device_type=device.type):
+    with torch.no_grad(), torch.autocast(device_type=device.type):
         for _ in range(n_batches):
             model(dummy_local)
     if device.type == "cuda":
@@ -104,15 +104,14 @@ def benchmark_inference(
     }
 
 
-def benchmark_inference_latency(model: HexTacToeNet) -> Dict[str, Any]:
+def benchmark_inference_latency(model: "HexTacToeNet") -> Dict[str, Any]:
     """Single-position latency (worst case for synchronous MCTS)."""
     device = next(model.parameters()).device
     dummy_local  = torch.zeros(1, 18, 19, 19, dtype=torch.float32, device=device)
-    dummy_global = torch.zeros(1, 18, 19, 19, dtype=torch.float32, device=device)
     model.eval()
     times: List[float] = []
 
-    with torch.no_grad(), torch.amp.autocast(device_type=device.type):
+    with torch.no_grad(), torch.autocast(device_type=device.type):
         for _ in range(500):
             if device.type == "cuda":
                 torch.cuda.synchronize()
@@ -131,7 +130,7 @@ def benchmark_inference_latency(model: HexTacToeNet) -> Dict[str, Any]:
     }
 
 
-def benchmark_replay_buffer(buffer: ReplayBuffer) -> Dict[str, Any]:
+def benchmark_replay_buffer(buffer: "ReplayBuffer") -> Dict[str, Any]:
     """Replay buffer sample speed."""
     # 1. Raw sampling
     t0 = time.perf_counter()
@@ -154,7 +153,7 @@ def benchmark_replay_buffer(buffer: ReplayBuffer) -> Dict[str, Any]:
     }
 
 
-def benchmark_gpu_utilisation(model: HexTacToeNet) -> Dict[str, Any]:
+def benchmark_gpu_utilisation(model: "HexTacToeNet") -> Dict[str, Any]:
     """Estimate GPU utilisation by measuring compute vs wall-clock time."""
     device = next(model.parameters()).device
     if device.type != "cuda":
@@ -175,17 +174,17 @@ def benchmark_gpu_utilisation(model: HexTacToeNet) -> Dict[str, Any]:
         util_samples: List[float] = []
 
         t_end = time.monotonic() + 5.0  # 5-second sample window
-        with torch.no_grad(), torch.amp.autocast(device_type="cuda"):
+        with torch.no_grad(), torch.autocast(device_type="cuda"):
             while time.monotonic() < t_end:
                 model(dummy_local)
                 util_samples.append(
-                    pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
+                    float(pynvml.nvmlDeviceGetUtilizationRates(handle).gpu)
                 )
         torch.cuda.synchronize()
 
         mem        = pynvml.nvmlDeviceGetMemoryInfo(handle)
         gpu_util   = float(np.mean(util_samples)) if util_samples else 0.0
-        vram_gb    = mem.used / 1e9
+        vram_gb    = float(mem.used) / 1e9
     except Exception as exc:
         console.print(f"[yellow]GPU util measurement failed: {exc}[/yellow]")
         gpu_util = 0.0
@@ -195,6 +194,52 @@ def benchmark_gpu_utilisation(model: HexTacToeNet) -> Dict[str, Any]:
         "name":        "GPU utilisation",
         "gpu_util_pct": gpu_util,
         "vram_used_gb": vram_gb,
+    }
+
+
+def benchmark_worker_pool(
+    model: "HexTacToeNet",
+    config: Dict[str, Any],
+    device: torch.device,
+    duration_sec: int = 15,
+    n_workers: int = 4,
+) -> Dict[str, Any]:
+    """Measure end-to-end self-play throughput in the multiprocess pool."""
+    from python.selfplay.pool import WorkerPool
+    from python.training.replay_buffer import ReplayBuffer
+
+    bench_cfg = {
+        "mcts": {
+            "n_simulations": int(config.get("n_simulations", 30)),
+            "c_puct": float(config.get("c_puct", 1.5)),
+            "temperature_threshold_ply": int(config.get("temperature_threshold_ply", 30)),
+        },
+        "selfplay": {
+            "n_workers": n_workers,
+            "inference_batch_size": int(config.get("inference_batch_size", 32)),
+            "inference_max_wait_ms": float(config.get("inference_max_wait_ms", 8.0)),
+            "dispatch_wait_ms": float(config.get("dispatch_wait_ms", 2.0)),
+            "leaf_batch_size": int(config.get("leaf_batch_size", 8)),
+        },
+    }
+    replay = ReplayBuffer(capacity=25_000, board_channels=18)
+    pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
+
+    pool.start()
+    t0 = time.perf_counter()
+    try:
+        time.sleep(duration_sec)
+    finally:
+        pool.stop()
+
+    elapsed = max(time.perf_counter() - t0, 1e-6)
+    games_per_hour = (pool.games_completed / elapsed) * 3600.0
+    return {
+        "name": "Worker pool throughput",
+        "games_completed": pool.games_completed,
+        "positions_pushed": pool.positions_pushed,
+        "elapsed_sec": elapsed,
+        "games_per_hour": games_per_hour,
     }
 
 
@@ -253,12 +298,18 @@ def print_benchmark_report(results: List[Dict[str, Any]]) -> bool:
 
 
 def _unit(key: str) -> str:
-    if "us_" in key:   return " μs"
-    if "_ms" in key:   return " ms"
-    if "_gb" in key:   return " GB"
-    if "_pct" in key:  return "%"
-    if "_per_sec" in key and "pos" in key: return " pos/s"
-    if "_per_sec" in key:                  return " sim/s"
+    if "us_" in key:
+        return " μs"
+    if "_ms" in key:
+        return " ms"
+    if "_gb" in key:
+        return " GB"
+    if "_pct" in key:
+        return "%"
+    if "_per_sec" in key and "pos" in key:
+        return " pos/s"
+    if "_per_sec" in key:
+        return " sim/s"
     return ""
 
 
@@ -271,6 +322,10 @@ def parse_args() -> argparse.Namespace:
                    help="Skip torch.compile (faster startup for quick checks)")
     p.add_argument("--mcts-sims",  type=int, default=50_000,
                    help="MCTS simulations for throughput benchmark")
+    p.add_argument("--pool-workers", type=int, default=4,
+                   help="Worker count for self-play throughput benchmark")
+    p.add_argument("--pool-duration", type=int, default=15,
+                   help="Duration in seconds for worker pool benchmark")
     return p.parse_args()
 
 
@@ -282,6 +337,9 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     console.print(f"[bold]Benchmarking on {device}[/bold]")
+
+    from python.model.network import HexTacToeNet, compile_model
+    from python.training.replay_buffer import ReplayBuffer
 
     # ── Build model ──
     model = HexTacToeNet(
@@ -295,10 +353,10 @@ def main() -> None:
         model = compile_model(model)
 
     # ── Fill replay buffer with dummy data ──
-    buffer = ReplayBuffer(capacity=100_000, board_channels=36)
+    buffer = ReplayBuffer(capacity=100_000, board_channels=18)
     for _ in range(10_000):
         buffer.push(
-            np.zeros((36, 19, 19), dtype=np.float16),
+            np.zeros((18, 19, 19), dtype=np.float16),
             np.ones(362, dtype=np.float32) / 362,
             0.0,
         )
@@ -321,6 +379,17 @@ def main() -> None:
     with console.status("[bold green]GPU utilisation (5 s)…"):
         results.append(benchmark_gpu_utilisation(model))
 
+    with console.status("[bold green]Worker pool throughput…"):
+        results.append(
+            benchmark_worker_pool(
+                model=model,
+                config=config,
+                device=device,
+                duration_sec=args.pool_duration,
+                n_workers=args.pool_workers,
+            )
+        )
+
     # ── Print individual results ──
     for r in results:
         console.print(f"  [dim]{r['name']}:[/dim]", end=" ")
@@ -341,6 +410,11 @@ def main() -> None:
             console.print(
                 f"{pct:.0f}%  VRAM={vram:.2f} GB"
                 if pct is not None else "N/A"
+            )
+        elif "games_per_hour" in r:
+            console.print(
+                f"{r['games_per_hour']:.1f} games/hour  "
+                f"games={r['games_completed']}  positions={r['positions_pushed']}"
             )
 
     all_pass = print_benchmark_report(results)
