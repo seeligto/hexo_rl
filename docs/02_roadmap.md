@@ -127,6 +127,26 @@ n_workers: 1
 
 ---
 
+## Phase 3.5 — Foveated Vision refactor [COMPLETED]
+
+**Goal**: Solve the "Attention Hijacking" (Colony Meta) exploit where the network becomes blind to distant lethal threats when anchored to a local fight.
+
+### Tasks
+
+- [x] **Rust Core Update**: Implement $O(N)$ global macro-grid aggregation to provide a low-res bird's-eye view.
+- [x] **Network Refactor**: Implement dual-trunk ResNet (local + global) with Global Average Pooling (GAP) and MLP feature fusion.
+- [x] **Pipeline Integration**: Update `GameState` and `SelfPlayWorker` to extract and process dual tensors (36 channels total).
+- [x] **Performance Optimization**: Vectorize hexagonal symmetry augmentation in `ReplayBuffer` using flat index mapping.
+- [x] **Benchmarking**: Verify throughput stays $>5,000$ pos/sec on RTX 3070 (Actual: $\sim 35,000$ pos/sec).
+
+### Exit criteria
+
+- Dual-trunk model maintains $>30,000$ pos/sec throughput on GPU.
+- Replay buffer sampling (batch=256) latency $\approx 500$ μs.
+- `benchmark.py` passes all checks with the new architecture.
+
+---
+
 ## Phase 4 — Evaluation & Elo (1 week)
 
 **Goal**: Automated, reliable measurement of model strength over time.

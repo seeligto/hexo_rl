@@ -75,12 +75,13 @@ def benchmark_inference(
     """GPU inference throughput (positions/sec)."""
     model.eval()
     device = next(model.parameters()).device
-    dummy  = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
+    dummy_local  = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
+    dummy_global = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
 
     # Warm up
     with torch.no_grad(), torch.amp.autocast(device_type=device.type):
         for _ in range(10):
-            model(dummy)
+            model(dummy_local, dummy_global)
     if device.type == "cuda":
         torch.cuda.synchronize()
 
@@ -88,7 +89,7 @@ def benchmark_inference(
     start = time.perf_counter()
     with torch.no_grad(), torch.amp.autocast(device_type=device.type):
         for _ in range(n_batches):
-            model(dummy)
+            model(dummy_local, dummy_global)
     if device.type == "cuda":
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - start
@@ -106,7 +107,8 @@ def benchmark_inference(
 def benchmark_inference_latency(model: HexTacToeNet) -> Dict[str, Any]:
     """Single-position latency (worst case for synchronous MCTS)."""
     device = next(model.parameters()).device
-    dummy  = torch.zeros(1, 18, 19, 19, dtype=torch.float32, device=device)
+    dummy_local  = torch.zeros(1, 18, 19, 19, dtype=torch.float32, device=device)
+    dummy_global = torch.zeros(1, 18, 19, 19, dtype=torch.float32, device=device)
     model.eval()
     times: List[float] = []
 
@@ -115,7 +117,7 @@ def benchmark_inference_latency(model: HexTacToeNet) -> Dict[str, Any]:
             if device.type == "cuda":
                 torch.cuda.synchronize()
             t0 = time.perf_counter()
-            model(dummy)
+            model(dummy_local, dummy_global)
             if device.type == "cuda":
                 torch.cuda.synchronize()
             times.append((time.perf_counter() - t0) * 1000)
@@ -131,15 +133,24 @@ def benchmark_inference_latency(model: HexTacToeNet) -> Dict[str, Any]:
 
 def benchmark_replay_buffer(buffer: ReplayBuffer) -> Dict[str, Any]:
     """Replay buffer sample speed."""
+    # 1. Raw sampling
     t0 = time.perf_counter()
     for _ in range(10_000):
-        buffer.sample(batch_size=256)
-    elapsed = time.perf_counter() - t0
+        buffer.sample(batch_size=256, augment=False)
+    elapsed_raw = time.perf_counter() - t0
+    
+    # 2. Augmented sampling
+    t1 = time.perf_counter()
+    for _ in range(1_000):
+        buffer.sample(batch_size=256, augment=True)
+    elapsed_aug = time.perf_counter() - t1
+    
     return {
         "name":          "Replay buffer sample (batch=256)",
         "samples":       10_000,
-        "elapsed_sec":   elapsed,
-        "us_per_sample": elapsed / 10_000 * 1e6,
+        "elapsed_sec":   elapsed_raw,
+        "us_per_sample": elapsed_raw / 10_000 * 1e6,
+        "aug_ms":        elapsed_aug / 1_000 * 1000,
     }
 
 
@@ -160,13 +171,14 @@ def benchmark_gpu_utilisation(model: HexTacToeNet) -> Dict[str, Any]:
 
         # Run inference loop while sampling GPU util.
         model.eval()
-        dummy = torch.zeros(64, 18, 19, 19, dtype=torch.float32, device=device)
+        dummy_local = torch.zeros(64, 18, 19, 19, dtype=torch.float32, device=device)
+        dummy_global = torch.zeros(64, 18, 19, 19, dtype=torch.float32, device=device)
         util_samples: List[float] = []
 
         t_end = time.monotonic() + 5.0  # 5-second sample window
         with torch.no_grad(), torch.amp.autocast(device_type="cuda"):
             while time.monotonic() < t_end:
-                model(dummy)
+                model(dummy_local, dummy_global)
                 util_samples.append(
                     pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
                 )
@@ -194,7 +206,7 @@ _CHECKS = [
     ("MCTS (CPU only, no NN)",          "sims_per_sec",      10_000,  True),
     ("NN inference (batch=64)",          "positions_per_sec",  5_000,  True),
     ("NN latency (batch=1)",             "mean_ms",                5,  False),
-    ("Replay buffer sample (batch=256)", "us_per_sample",        500,  False),
+    ("Replay buffer sample (batch=256)", "us_per_sample",       1000,  False),
     ("GPU utilisation",                  "gpu_util_pct",          80,  True),
     ("GPU utilisation",                  "vram_used_gb",           6,  False),
 ]
@@ -284,10 +296,10 @@ def main() -> None:
         model = compile_model(model)
 
     # ── Fill replay buffer with dummy data ──
-    buffer = ReplayBuffer(capacity=100_000)
+    buffer = ReplayBuffer(capacity=100_000, board_channels=36)
     for _ in range(10_000):
         buffer.push(
-            np.zeros((18, 19, 19), dtype=np.float16),
+            np.zeros((36, 19, 19), dtype=np.float16),
             np.ones(362, dtype=np.float32) / 362,
             0.0,
         )
@@ -323,7 +335,7 @@ def main() -> None:
                           f"p50={r['p50_ms']:.2f} ms  "
                           f"p99={r['p99_ms']:.2f} ms")
         elif "us_per_sample" in r:
-            console.print(f"{r['us_per_sample']:.1f} μs/sample")
+            console.print(f"{r['us_per_sample']:.1f} μs/sample (raw), {r.get('aug_ms', 0):.2f} ms/sample (augmented)")
         elif "gpu_util_pct" in r:
             pct = r.get("gpu_util_pct")
             vram = r.get("vram_used_gb")
