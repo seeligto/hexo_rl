@@ -127,13 +127,14 @@ def pretrain():
     parser = argparse.ArgumentParser()
     parser.add_argument("--use-cache", action="store_true", help="Use cached parsed dataset if available")
     parser.add_argument("--force-regenerate", action="store_true", help="Force dataset generation")
+    parser.add_argument("--epochs", type=int, default=7, help="Number of training epochs")
     args = parser.parse_args()
 
     config = {
         'lr': 0.002,
         'weight_decay': 0.0001,
         'batch_size': 512,
-        'epochs': 7,
+        'epochs': args.epochs,
         'board_size': 19,
         'res_blocks': 10,
         'filters': 128

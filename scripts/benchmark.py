@@ -81,7 +81,7 @@ def benchmark_inference(
     # Warm up
     with torch.no_grad(), torch.amp.autocast(device_type=device.type):
         for _ in range(10):
-            model(dummy_local, dummy_global)
+            model(dummy_local)
     if device.type == "cuda":
         torch.cuda.synchronize()
 
@@ -89,7 +89,7 @@ def benchmark_inference(
     start = time.perf_counter()
     with torch.no_grad(), torch.amp.autocast(device_type=device.type):
         for _ in range(n_batches):
-            model(dummy_local, dummy_global)
+            model(dummy_local)
     if device.type == "cuda":
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - start
@@ -117,7 +117,7 @@ def benchmark_inference_latency(model: HexTacToeNet) -> Dict[str, Any]:
             if device.type == "cuda":
                 torch.cuda.synchronize()
             t0 = time.perf_counter()
-            model(dummy_local, dummy_global)
+            model(dummy_local)
             if device.type == "cuda":
                 torch.cuda.synchronize()
             times.append((time.perf_counter() - t0) * 1000)
@@ -172,13 +172,12 @@ def benchmark_gpu_utilisation(model: HexTacToeNet) -> Dict[str, Any]:
         # Run inference loop while sampling GPU util.
         model.eval()
         dummy_local = torch.zeros(64, 18, 19, 19, dtype=torch.float32, device=device)
-        dummy_global = torch.zeros(64, 18, 19, 19, dtype=torch.float32, device=device)
         util_samples: List[float] = []
 
         t_end = time.monotonic() + 5.0  # 5-second sample window
         with torch.no_grad(), torch.amp.autocast(device_type="cuda"):
             while time.monotonic() < t_end:
-                model(dummy_local, dummy_global)
+                model(dummy_local)
                 util_samples.append(
                     pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
                 )
