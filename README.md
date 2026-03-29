@@ -6,7 +6,7 @@ Welcome to the Hex Tac Toe AlphaZero project. This project implements an AlphaZe
 
 Hex Tac Toe is played on an infinite hexagonal grid. This repository contains the core Rust engine for high-performance board representation and Monte Carlo Tree Search (MCTS), bound to a Python environment where a PyTorch-based neural network is trained via self-play.
 
-We employ a "Foveated Vision" architecture to handle the infinite board: a Dual-Resolution CNN that processes both a local, high-resolution view of the last move and a global, dynamically scaled macro-grid of all active stones.
+We employ a "Multi-Window Cluster-Based Approach" to handle the infinite board: the Rust core dynamically clusters active stones into distinct colonies and generates K distinct 19x19 tensors. These are evaluated as a batch by a single sliding-window ResNet, resolving Attention Hijacking while maintaining high performance.
 
 ## Setup Instructions
 

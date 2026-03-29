@@ -70,27 +70,23 @@ This runs in nanoseconds per move — no loop over cells, no Python overhead.
 
 ## 2. Neural network
 
-### Architecture (Dual-Resolution Foveated Vision)
+### Architecture (Multi-Window Cluster-Based Approach)
 
-To solve the "Attention Hijacking" (Colony Meta) exploit where the network becomes blind to distant lethal threats when anchored to a local fight, we employ a Foveated Vision architecture.
+To solve the "Attention Hijacking" (Colony Meta) exploit where the network becomes blind to distant lethal threats, we employ a Multi-Window Cluster-Based Approach. The infinite board is dynamically partitioned into distinct spatial clusters (colonies).
 
 Input:
-- `local_map`: (18, 19, 19) float16 tensor, 1:1 scale, centered on the last move (high-res tactics).
-- `global_map`: (18, 19, 19) float16 tensor, dynamically scaled macro-grid encompassing the absolute bounding box of all stones (low-res global strategy/threat detection).
+- `K` dynamic `local_map` tensors: Shape `(K, 18, 19, 19)` float16. The Rust core groups active stones into K distinct clusters (distanced by max 8 cells). A 19×19 sliding window is centered on each cluster's centroid.
 
-Backbone (Dual ResNet-10 Trunks):
-- `local_trunk`: Processes `local_map` (10 residual blocks, 128 channels).
-- `global_trunk`: Processes `global_map` (10 residual blocks, 128 channels).
+Backbone (Single ResNet-10 Trunk):
+- Processes the `K` tensors as a single batch (effective batch size = batch_size * K) through a highly optimized 19×19 ResNet-10.
 
-Feature Fusion:
-- Both trunks output a 128-channel feature map.
-- Global Average Pooling (GAP) is applied to both outputs to produce two 128-d vectors.
-- These vectors are concatenated (256-d) and passed through a short MLP before being fed to the Policy and Value heads.
-- This design doubles the FLOPs but comfortably maintains the required >5,000 pos/sec throughput on an RTX 3070, completely eliminating the Attention Hijacking blindspot.
+Value Aggregation (Pooling):
+- The network outputs `K` values. The true state value is aggregated using logical pooling (e.g., `min()` if it's the opponent's turn to act in a critical colony, or a weighted average) to ensure lethal threats in any cluster override localized advantages.
 
-Policy head:
-  Conv2d(128 → 2, 1×1) → BN → ReLU → Flatten → Linear(2·19·19 → 362)
-  Output: log-softmax over (19×19 + 1) positions (last = pass). The global map primarily serves to inform the Value head of distant threats, tanking the state value and forcing MCTS to explore elsewhere.
+Policy Mapping:
+- The network outputs `K` policy distributions (each 362 logits).
+- The local 19×19 coordinates of each distribution are mapped back to the absolute global `(q,r)` coordinates using the respective cluster centers provided by the Rust core.
+- The aggregated legal moves are unified via a final softmax to form a single global policy vector for MCTS.
 
 Value head:
   Conv2d(128 → 1, 1×1) → BN → ReLU → Flatten → Linear(361 → 256) → ReLU → Linear(256 → 1) → Tanh
