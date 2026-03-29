@@ -83,12 +83,13 @@ def test_occupied_cell_raises():
 
 
 def test_legal_move_count_decrements():
+    # After 1 stone at (0,0): bbox+2 margin = [-2,2]×[-2,2] = 25, minus 1 = 24.
+    # After 2nd stone at (1,0): bbox=[0,1], margin=[-2,3]×[-2,2]=6×5=30, minus 2 = 28.
     b = Board()
-    total = 19 * 19
     b.apply_move(0, 0)
-    assert b.legal_move_count() == total - 1
+    assert b.legal_move_count() == 24
     b.apply_move(1, 0)
-    assert b.legal_move_count() == total - 2
+    assert b.legal_move_count() == 28
 
 
 # ── Win detection — all three axes ───────────────────────────────────────────
@@ -210,27 +211,27 @@ def test_win_nw_axis_player1():
 def test_win_player2_e_axis():
     """P2 wins with 6 consecutive along E."""
     b = Board()
-    b.apply_move(9, 9)                          # P1 single filler
+    b.apply_move(0, 0)                          # P1 single first move
     b.apply_move(0, -1); b.apply_move(1, -1)   # P2
-    b.apply_move(-9, 5); b.apply_move(-9, 6)   # P1 fillers
+    b.apply_move(0, 3); b.apply_move(0, 4)     # P1 fillers (NE axis, not 6-in-row)
     b.apply_move(2, -1); b.apply_move(3, -1)   # P2
-    b.apply_move(-9, 7); b.apply_move(-9, 8)   # P1 fillers
+    b.apply_move(0, 5); b.apply_move(0, 6)     # P1 fillers
     b.apply_move(4, -1); b.apply_move(5, -1)   # P2 — win
     assert b.check_win()
     assert b.winner() == -1
 
 
 def test_win_at_board_corners():
-    """6-in-a-row at the edge of the 19×19 grid is detected."""
-    # E axis at extreme q: q = -9..-4, r = 0
+    """P1 wins with 6 in a row near the left edge of the sliding window."""
+    # P1: (-9,0)..(-4,0) along E.  P2 fillers are scattered rightward.
     b = Board()
-    b.apply_move(-9, 0)
-    b.apply_move(9, -9); b.apply_move(9, -8)
-    b.apply_move(-8, 0); b.apply_move(-7, 0)
-    b.apply_move(9, -7); b.apply_move(9, -6)
-    b.apply_move(-6, 0); b.apply_move(-5, 0)
-    b.apply_move(9, -5); b.apply_move(9, -4)
-    b.apply_move(-4, 0)
+    b.apply_move(-9, 0)                         # P1 single first move
+    b.apply_move(0, 1); b.apply_move(0, 2)     # P2 fillers
+    b.apply_move(-8, 0); b.apply_move(-7, 0)   # P1
+    b.apply_move(1, 1); b.apply_move(2, 2)     # P2 fillers
+    b.apply_move(-6, 0); b.apply_move(-5, 0)   # P1
+    b.apply_move(3, 3); b.apply_move(4, 4)     # P2 fillers (no 6-in-row)
+    b.apply_move(-4, 0)                         # P1 — 6th stone, win
     assert b.check_win()
     assert b.winner() == 1
 
@@ -356,37 +357,50 @@ def test_random_game_runs_to_completion():
 
 def _build_p1_win(p1_cells: list) -> "Board":
     """
-    Build a board where P1 occupies exactly `p1_cells` (a 6-in-a-row run),
-    with P2 fillers placed in cells that never overlap P1 and never form
-    a 6-in-a-row themselves (they're all in different rows/columns).
+    Build a board where P1 occupies exactly `p1_cells` (a 6-in-a-row run).
+
+    P2 fillers are drawn from a sparse grid (step=3) centred on P1's bounding
+    box.  Spacing of 3 guarantees no two filler stones are consecutive along
+    any hex axis, so P2 can never accidentally form a 6-in-a-row.
 
     Turn structure: P1 opens with 1 move, then 2 each.
     """
     p1_set = set(p1_cells)
-    # Generate P2 filler cells: take every 7th cell from the full board,
-    # skipping any that are in p1_set.  Using step=7 means P2 stones are
-    # maximally spread out and can't accidentally form 6-in-a-row.
-    p2_fillers = []
-    for q in range(-9, 10):
-        for r in range(-9, 10):
-            if (q, r) not in p1_set:
-                p2_fillers.append((q, r))
-                if len(p2_fillers) >= 12:
-                    break
-        if len(p2_fillers) >= 12:
-            break
+    p1_qs = [q for q, r in p1_cells]
+    p1_rs = [r for q, r in p1_cells]
+    lo_q = min(p1_qs) - 3
+    hi_q = max(p1_qs) + 3
+    lo_r = min(p1_rs) - 3
+    hi_r = max(p1_rs) + 3
+
+    # Step-3 grid: adjacent candidates are ≥3 apart on every axis → no 6-in-a-row.
+    p2_candidates = [
+        (lo_q + i * 3, lo_r + j * 3)
+        for i in range((hi_q - lo_q) // 3 + 3)
+        for j in range((hi_r - lo_r) // 3 + 3)
+        if (lo_q + i * 3, lo_r + j * 3) not in p1_set
+    ]
 
     b = Board()
     b.apply_move(*p1_cells[0])  # P1 ply0 (single)
-    p1_rest = p1_cells[1:]      # 5 remaining P1 moves
+    p1_rest = p1_cells[1:]
+    p2_placed: set = set()
     p2_idx = 0
     p1_idx = 0
-    # Alternate: P2 gets 2, P1 gets 2, until P1 has placed all 5 remaining
     while p1_idx < len(p1_rest):
         for _ in range(2):
-            if p2_idx < len(p2_fillers):
-                b.apply_move(*p2_fillers[p2_idx])
+            # Find next candidate that is currently valid (in-window, unoccupied)
+            while p2_idx < len(p2_candidates):
+                cq, cr = p2_candidates[p2_idx]
                 p2_idx += 1
+                if (cq, cr) in p2_placed:
+                    continue
+                try:
+                    b.apply_move(cq, cr)
+                    p2_placed.add((cq, cr))
+                    break
+                except ValueError:
+                    continue
         for _ in range(2):
             if p1_idx < len(p1_rest):
                 b.apply_move(*p1_rest[p1_idx])

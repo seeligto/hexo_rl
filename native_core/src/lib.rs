@@ -98,13 +98,30 @@ impl PyBoard {
         self.inner.to_planes()
     }
 
+    /// Same as `to_tensor` but makes the sliding-window semantics explicit.
+    /// `size` is ignored — always 19×19.
+    pub fn view_window(&self, _size: usize) -> Vec<f32> {
+        self.inner.to_planes()
+    }
+
+    /// Window-relative flat index for axial (q, r).
+    /// Used by selfplay workers to convert legal-move coords to policy indices.
+    pub fn to_flat(&self, q: i32, r: i32) -> usize {
+        self.inner.window_flat_idx(q, r)
+    }
+
+    /// (cq, cr) centre of the current 19×19 view window.
+    pub fn window_center(&self) -> (i32, i32) {
+        self.inner.window_center()
+    }
+
     /// Board size (cells per axis = 19).
     #[getter]
     pub fn size(&self) -> usize {
         BOARD_SIZE
     }
 
-    /// Human-readable string showing the board (for debugging).
+    /// Human-readable string showing the 19×19 view window (for debugging).
     pub fn __repr__(&self) -> String {
         let mut s = format!(
             "Board(ply={}, player={}, moves_remaining={})\n",
@@ -112,9 +129,12 @@ impl PyBoard {
             match self.inner.current_player { Player::One => 1, Player::Two => -1 },
             self.inner.moves_remaining,
         );
-        // Print a simple grid: q increases left-to-right, r increases top-to-bottom
-        for r in (-9i32..=9).rev() {
-            for q in -9i32..=9 {
+        let (cq, cr) = self.inner.window_center();
+        // wr=18 is top row visually; wq=0 is left column
+        for wr in (0..board::BOARD_SIZE).rev() {
+            for wq in 0..board::BOARD_SIZE {
+                let q = wq as i32 - board::HALF + cq;
+                let r = wr as i32 - board::HALF + cr;
                 let c = match self.inner.get(q, r) {
                     board::Cell::Empty => '.',
                     board::Cell::P1    => 'X',

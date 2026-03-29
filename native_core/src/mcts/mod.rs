@@ -26,7 +26,7 @@
 /// move_policy = tree.get_policy(temperature=1.0, board_size=19)
 /// ```
 
-use crate::board::{Board, coords, idx as board_idx, BOARD_SIZE};
+use crate::board::{Board, BOARD_SIZE};
 
 /// Pre-allocated pool size. 200 k nodes ≈ 6.4 MB.
 pub const MAX_NODES: usize = 200_000;
@@ -172,7 +172,7 @@ impl MCTSTree {
         // Replay in root-to-leaf order.
         let mut board = self.root_board.clone();
         for &action in path.iter().rev() {
-            let (q, r) = coords(action as usize);
+            let (q, r) = board.window_coords(action as usize);
             board
                 .apply_move(q, r)
                 .expect("reconstructed move should always be legal");
@@ -356,7 +356,7 @@ impl MCTSTree {
 
             for (j, &(q, r)) in legal_moves.iter().enumerate() {
                 let ci          = first_child as usize + j;
-                let action_flat = board_idx(q, r) as u16;
+                let action_flat = board.window_flat_idx(q, r) as u16;
                 // Look up prior from the policy vector; fall back to uniform.
                 let prior = if (action_flat as usize) < policy.len() {
                     policy[action_flat as usize]

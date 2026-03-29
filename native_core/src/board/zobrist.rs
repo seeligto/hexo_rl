@@ -43,13 +43,40 @@ pub struct ZobristTable;
 
 impl ZobristTable {
     /// Return the Zobrist key for placing a stone of `player` (0=P1, 1=P2)
-    /// at flat cell index `cell`.
+    /// at flat cell index `cell` (for the 19×19 absolute grid).
     #[inline(always)]
     pub fn get(cell: usize, player: usize) -> u64 {
         if player == 0 {
             KEYS_P1[cell]
         } else {
             KEYS_P2[cell]
+        }
+    }
+
+    /// Return the Zobrist key for placing a stone of `player` (0=P1, 1=P2)
+    /// at absolute axial coordinate (q, r).
+    ///
+    /// For coordinates within [-9, 9] uses the pre-generated table.
+    /// For out-of-range coordinates uses splitmix64-based hashing.
+    ///
+    /// This is position-independent: the same (q, r, player) always returns
+    /// the same key regardless of board history or window position.
+    #[inline]
+    pub fn get_for_pos(q: i32, r: i32, player: usize) -> u64 {
+        const HALF: i32 = 9;
+        const SIZE: i32 = 19;
+        if q >= -HALF && q <= HALF && r >= -HALF && r <= HALF {
+            let cell = ((q + HALF) as usize) * (SIZE as usize) + ((r + HALF) as usize);
+            Self::get(cell, player)
+        } else {
+            // Mixing primes for arbitrary coordinates
+            const M1: u64 = 0x6c62272e07bb0142;
+            const M2: u64 = 0x62b821756295c58d;
+            const M3: u64 = 0x94d049bb133111eb;
+            let seed = (q as i64 as u64).wrapping_mul(M1)
+                ^ (r as i64 as u64).wrapping_mul(M2)
+                ^ (player as u64).wrapping_mul(M3);
+            splitmix64(seed)
         }
     }
 }

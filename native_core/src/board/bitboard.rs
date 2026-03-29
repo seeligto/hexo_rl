@@ -186,7 +186,12 @@ impl Bitboard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::idx;
+    use super::super::{BOARD_SIZE, HALF};
+
+    // Local helper: absolute flat index (q+9)*19+(r+9) for bitboard tests.
+    fn idx(q: i32, r: i32) -> usize {
+        ((q + HALF) as usize) * BOARD_SIZE + ((r + HALF) as usize)
+    }
 
     fn set_row_e(bb: &mut Bitboard, q_start: i32, r: i32, len: usize) {
         for i in 0..len as i32 {

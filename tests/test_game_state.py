@@ -45,14 +45,16 @@ def test_board_array_p1_stone():
 
 
 def test_board_array_p2_stone():
+    # Use symmetric P2 stones so the window centre stays at (0,0).
+    # bbox after (0,0),(-1,0),(1,0): min_q=-1,max_q=1 → centre_q=0; same for r.
     b = Board()
-    b.apply_move(0, 0)   # P1 ply0
-    b.apply_move(1, 0)   # P2 stone at (1,0)
-    b.apply_move(2, 0)   # P2 second stone
+    b.apply_move(0, 0)    # P1 ply0
+    b.apply_move(-1, 0)   # P2 first stone  (symmetric)
+    b.apply_move( 1, 0)   # P2 second stone (symmetric — centre stays at (0,0))
     # Now P1's turn again
     s = GameState.from_board(b)
-    assert s.board[1 + 9, 0 + 9] == -1  # P2 stone should be -1
-    assert s.board[2 + 9, 0 + 9] == -1
+    assert s.board[-1 + 9, 0 + 9] == -1  # P2 stone at (-1,0)
+    assert s.board[ 1 + 9, 0 + 9] == -1  # P2 stone at (1,0)
 
 
 def test_board_array_empty_cells_are_zero():
