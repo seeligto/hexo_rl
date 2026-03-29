@@ -173,20 +173,16 @@ class SelfPlayWorker:
     # ── Action sampling ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _sample_action(policy: List[float], legal_moves: List[Tuple[int, int]]) -> Tuple[int, int]:
+    def _sample_action(policy: List[float], legal_moves: List[Tuple[int, int]], board: "Board") -> Tuple[int, int]:
         """Sample a move from the MCTS policy, restricted to legal moves.
 
         If MCTS assigns zero probability to all legal moves (degenerate case),
         falls back to uniform sampling.
         """
         n_actions = _BOARD_SIZE * _BOARD_SIZE + 1
-        half = (_BOARD_SIZE - 1) // 2
 
-        # Map legal moves to flat indices
-        legal_flat = [
-            (q + half) * _BOARD_SIZE + (r + half)
-            for q, r in legal_moves
-        ]
+        # Map legal moves to window-relative flat indices (matches MCTS policy vector)
+        legal_flat = [board.to_flat(q, r) for q, r in legal_moves]
 
         # Extract and normalise probabilities over legal moves
         probs = np.array([policy[i] if i < n_actions else 0.0 for i in legal_flat],
@@ -237,7 +233,7 @@ class SelfPlayWorker:
             legal = rust_board.legal_moves()
             if not legal:
                 break
-            q, r = self._sample_action(mcts_policy, legal)
+            q, r = self._sample_action(mcts_policy, legal, rust_board)
             state = state.apply_move(rust_board, q, r)
 
         # ── Determine outcome ──

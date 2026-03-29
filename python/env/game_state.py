@@ -34,12 +34,15 @@ HALF: int = 9  # coordinate range: -HALF .. +HALF
 
 
 def _board_to_array(rust_board: Board) -> np.ndarray:
-    """Convert the Rust board to a (19, 19) int8 array.
+    """Convert the Rust board to a (19, 19) int8 array using the sliding view window.
 
     Values: 0 = empty, 1 = P1, -1 = P2.
-    Axis layout: arr[q_idx, r_idx] where q_idx = q + 9, r_idx = r + 9.
+    Axis layout: arr[wq, wr] where (wq, wr) are window-relative indices
+    centred on the bounding-box centroid of all placed stones.
+    When the board is empty (or centroid == (0,0)) this is identical to the
+    old absolute layout arr[q+9, r+9].
     """
-    planes = np.array(rust_board.to_tensor(), dtype=np.float32).reshape(2, BOARD_SIZE, BOARD_SIZE)
+    planes = np.array(rust_board.view_window(BOARD_SIZE), dtype=np.float32).reshape(2, BOARD_SIZE, BOARD_SIZE)
     # plane 0: current player's stones, plane 1: opponent's stones
     cp = rust_board.current_player  # +1 or -1
     arr = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=np.int8)
