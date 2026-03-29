@@ -101,27 +101,50 @@ class SelfPlayWorker:
 
     @torch.no_grad()
     def _infer(self, board: Board) -> Tuple[List[float], float]:
-        """Run network inference on a single board.
-
-        Returns (policy_probs, value) where policy_probs is a list of
-        length _N_ACTIONS and value ∈ [-1, 1].
-
-        Uses GameState.from_board with no history context (leaf nodes in MCTS
-        don't carry full game history). The 8 history planes are zero except
-        for the current board at position 7.
-        """
         state = GameState.from_board(board)
-        tensor = torch.from_numpy(state.to_tensor()).unsqueeze(0).to(self.device)
-
-        local_tensor = tensor[:, :18, :, :]
-        global_tensor = tensor[:, 18:, :, :]
+        tensor, centers = state.to_tensor(board)
+        tensor = torch.from_numpy(tensor).to(self.device)
 
         self.model.eval()
-        log_policy, value = self.model(local_tensor.float(), global_tensor.float())
+        log_policy, value = self.model(tensor.float())
 
-        policy_probs = log_policy.exp().squeeze(0).cpu().numpy().tolist()
-        v = value.squeeze().item()
-        return policy_probs, v
+        policies_np = log_policy.exp().cpu().numpy() # (K, 362)
+        values_np = value.squeeze(-1).cpu().numpy()  # (K,)
+
+        # Aggregate values (pessimistic from our perspective)
+        v = float(values_np.min())
+
+        # Map K local policies to global policy vector 362 matching MCTS
+        # Since MCTS currently uses `board.to_flat`, we map coordinates using `board.window_center()`
+        # which acts as the global origin for MCTS actions.
+        n_actions = _BOARD_SIZE * _BOARD_SIZE + 1
+        global_policy = np.zeros(n_actions, dtype=np.float64)
+        
+        legal = board.legal_moves()
+        for q, r in legal:
+            mcts_idx = board.to_flat(q, r)
+            if mcts_idx >= n_actions - 1:
+                continue
+                
+            # Find max probability across all clusters for this move
+            max_prob = 0.0
+            for k, (cq, cr) in enumerate(centers):
+                wq = q - cq + (_BOARD_SIZE - 1) // 2
+                wr = r - cr + (_BOARD_SIZE - 1) // 2
+                if 0 <= wq < _BOARD_SIZE and 0 <= wr < _BOARD_SIZE:
+                    local_idx = wq * _BOARD_SIZE + wr
+                    if policies_np[k, local_idx] > max_prob:
+                        max_prob = policies_np[k, local_idx]
+            
+            global_policy[mcts_idx] = max_prob
+            
+        total = global_policy.sum()
+        if total > 1e-9:
+            global_policy /= total
+        else:
+            global_policy.fill(1.0 / n_actions)
+            
+        return global_policy.tolist(), v
 
     # ── MCTS search ───────────────────────────────────────────────────────────
 
@@ -239,7 +262,7 @@ class SelfPlayWorker:
             mcts_policy = self._run_mcts_with_sims(rust_board, n_sims=current_n_sims, use_dirichlet=use_dirichlet)
 
             # ── Record position ──
-            state_tensor = state.to_tensor()           # (18, 19, 19) float16
+            state_tensor = state.to_tensor(rust_board)[0][0] # just store one for replay for now           # (18, 19, 19) float16
             policy_arr   = np.array(mcts_policy, dtype=np.float32)
             records.append((state_tensor, policy_arr, state.current_player))
 

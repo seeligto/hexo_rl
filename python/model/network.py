@@ -1,8 +1,8 @@
 """
 HexTacToeNet — ResNet backbone with policy and value heads.
 
-Architecture (from docs/01_architecture.md §2):
-  Input:  (18, 19, 19) float16 tensor
+Architecture (Multi-Window Cluster-Based Approach):
+  Input:  (B, 18, 19, 19) float16 tensor
 
   Backbone:
     Conv2d(18 → filters, 3×3, padding=1) → BN → ReLU
@@ -61,7 +61,7 @@ class Trunk(nn.Module):
 
 class HexTacToeNet(nn.Module):
     """
-    Dual-Resolution Foveated Vision ResNet for Hex Tac Toe.
+    Multi-Window Cluster-Based ResNet for Hex Tac Toe.
     """
 
     def __init__(
@@ -75,66 +75,41 @@ class HexTacToeNet(nn.Module):
         self.board_size = board_size
         spatial = board_size * board_size
 
-        # Dual Trunks
-        self.local_trunk = Trunk(in_channels, filters, res_blocks)
-        self.global_trunk = Trunk(in_channels, filters, res_blocks)
+        self.trunk = Trunk(in_channels, filters, res_blocks)
 
-        # Fusion MLP
-        self.fusion_mlp = nn.Sequential(
-            nn.Linear(filters * 2, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU()
-        )
+        self.policy_conv = nn.Conv2d(filters, 2, 1)
+        self.policy_bn = nn.BatchNorm2d(2)
+        self.policy_fc = nn.Linear(2 * spatial, spatial + 1)
 
-        # Heads
-        self.policy_fc = nn.Linear(256, spatial + 1)
-        self.value_fc = nn.Linear(256, 1)
+        self.value_conv = nn.Conv2d(filters, 1, 1)
+        self.value_bn = nn.BatchNorm2d(1)
+        self.value_fc1 = nn.Linear(spatial, 256)
+        self.value_fc2 = nn.Linear(256, 1)
 
-    def forward(self, local_x: torch.Tensor, global_x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            local_x: (B, 18, H, W) float16 tensor, 1:1 scale local view.
-            global_x: (B, 18, H, W) float16 tensor, macro-grid view.
+            x: (B, 18, H, W) float16 tensor, 1:1 scale local view. B can be K clusters.
 
         Returns:
             log_policy: (B, H*W + 1) log-softmax probabilities
             value:      (B, 1)       tanh scalar in [-1, 1]
         """
-        local_out = self.local_trunk(local_x)
-        global_out = self.global_trunk(global_x)
+        out = self.trunk(x)
 
-        # Global Average Pooling (GAP)
-        local_gap = F.adaptive_avg_pool2d(local_out, (1, 1)).flatten(1)
-        global_gap = F.adaptive_avg_pool2d(global_out, (1, 1)).flatten(1)
+        p = F.relu(self.policy_bn(self.policy_conv(out)))
+        p = p.flatten(1)
+        log_policy = F.log_softmax(self.policy_fc(p), dim=1)
 
-        # Feature Fusion
-        fused = torch.cat([local_gap, global_gap], dim=1)
-        fused = self.fusion_mlp(fused)
-
-        # Output Heads
-        log_policy = F.log_softmax(self.policy_fc(fused), dim=1)
-        value = torch.tanh(self.value_fc(fused))
+        v = F.relu(self.value_bn(self.value_conv(out)))
+        v = v.flatten(1)
+        v = F.relu(self.value_fc1(v))
+        value = torch.tanh(self.value_fc2(v))
 
         return log_policy, value
 
 
 def compile_model(model: HexTacToeNet, mode: str = "default") -> HexTacToeNet:
-    """Apply torch.compile() to `model` with graceful fallback.
-
-    If compilation fails (unsupported op, wrong PyTorch version, no CUDA),
-    logs a warning and returns the original uncompiled model so training
-    can continue.
-
-    Args:
-        model: The network to compile.
-        mode:  torch.compile mode. Default "default" is stable across
-               PyTorch 2.x. Avoid "reduce-overhead" / "max-autotune" until
-               the CUDA graph regression in PyTorch 2.5+ is resolved.
-
-    Returns:
-        Compiled model (or original if compilation failed).
-    """
     try:
         compiled = torch.compile(model, mode=mode)
         _log.info("torch.compile applied successfully (mode=%s)", mode)
