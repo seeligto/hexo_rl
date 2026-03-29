@@ -1,43 +1,39 @@
-# Evaluation of `hexo` Python Package
+# `hexo` Python Package Evaluation (v0.2.0)
 
 ## Overview
-The `hexo` package (v0.2.0) provides a fast, reusable engine for Hexo on an infinite hex grid. It handles core game logic, including turn enforcement, win detection, and move validation.
+`hexo` is a community-contributed Python engine for Hex Tac Toe on an infinite hex grid.
 
 ## Findings
 
-### Turn Structure
-- **Requirement:** X places 1 on turn 0, then 2-2-2.
-- **Implementation:** `Hexo.new()` automatically places the opening stone for P1 (X) at `(0, 0)` and sets the next player to P2 (O). Subsequent calls to `push()` or `play()` enforce 2-stone turns.
-- **Match:** Perfect.
+### 1. Turn Structure (1-2-2-2)
+- **Pass.** `Hexo.__init__` automatically places `P1` at `(0,0)` and sets `_to_move = Player.P2`.
+- Subsequent `push()` calls expect two stones per player, then switch sides.
+- Correctly handles the 1-2-2-2 turn structure from the start.
 
-### 3-Axis Win Detection
-- **Requirement:** 6-in-a-row on any of the three hex axes.
-- **Implementation:** Uses `AXES = ((1, 0), (0, 1), (1, -1))` for straight-line detection of `win_length = 6`.
-- **Match:** Perfect.
+### 2. 3-Axis Win Detection
+- **Pass.** Uses axial axes `((1, 0), (0, 1), (1, -1))`.
+- Win length is configurable (default 6).
+- Uses `_has_winning_line` after each placement to check for terminal state.
+- **Limitation:** Does not use bitboards (uses `set` and directional scan), but for Python-side utilities, this is fine.
 
-### BKE Notation Parsing
-- **Requirement:** Parse BKE (hexagonal-tic-tac-toe-notation).
-- **Implementation:** Not natively supported in the `hexo` package v0.2.0. However, `Hexo.from_state()` supports a JSON-like state, and the core `push()` method can be used to replay moves parsed from BKE.
-- **Match:** Partial (requires external parser).
+### 3. BKE Notation Parsing
+- **Fail.** No native BKE parser found in the package (as of v0.2.0).
+- Only supports custom JSON state: `{"turns": [[ [q1,r1], [q2,r2] ], ...], "pending": [[q3,r3], ...]}`.
+- We will still need our own `BKEParser` in `python/bootstrap/`.
 
-### Infinite Board Handling
-- **Requirement:** Handle theoretically infinite board.
-- **Implementation:** Uses a `placement_radius` (default 8) to restrict moves to a valid area around existing stones. This prevents the search space from exploding while allowing the board to grow naturally.
-- **Match:** Perfect.
+### 4. Infinite Board Handling
+- **Pass.** Implements `placement_radius` (default 8).
+- Only considers empty cells within distance 8 of any existing stone as legal.
+- Matches the community rules for "infinite" board growth.
 
-### Coordinate System
-- **Requirement:** Axial coordinates `(q, r)`.
-- **Implementation:** Uses `Coord = tuple[int, int]` representing axial `(q, r)`.
-- **Match:** Perfect.
+### 5. Coordinate System
+- **Pass.** Uses axial `(q, r)` as `Coord = tuple[int, int]`.
+- Matches our `native_core` representation.
 
-## Decision
-Integrate `hexo` into `python/bootstrap/` for:
-1. Validating scraped games.
-2. Managing game state during corpus conversion.
-3. Serving as a ground-truth engine for `BotProtocol` wrappers if needed.
+## Decision Rule
+Integrate `hexo` for:
+- Validating scraped games from archives.
+- Managing game state during corpus conversion.
+- Serializing/Deserializing games to JSON.
 
-We will need to implement our own BKE parser to convert the notation into a sequence of `push()` calls.
-
-## Integration Plan
-- Use `hexo.Hexo` for game state management in `python/bootstrap/`.
-- Implement BKE parser in `python/bootstrap/notation.py`.
+We will keep our `native_core` Rust board for performance-critical MCTS and training, but use `hexo` for Python orchestration.
