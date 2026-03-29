@@ -261,7 +261,7 @@ class MinimaxBot:
 - Depth 5: slower, ~1,000 games/hour, stronger tactics, better training signal
 - Depth 7+: avoid — too slow, and too strong a prior may constrain self-play
 
-Use a **mix**: 60% depth-3 games (quantity) + 40% depth-5 games (quality).
+Use a **mix**: 70% depth-3 games (quantity) + 30% depth-5 games (quality).
 
 ---
 
@@ -314,11 +314,11 @@ def generate_corpus(
 ):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # Mix of depths: 60% depth-3, 40% depth-5
+    # Mix of depths: 70% depth-3, 30% depth-5
     tasks = []
     for i in range(n_games):
-        a_depth = 3 if i < n_games * 0.6 else 5
-        b_depth = 3 if i < n_games * 0.6 else 5
+        a_depth = 3 if i < n_games * 0.7 else 5
+        b_depth = 3 if i < n_games * 0.7 else 5
         tasks.append((i, a_depth, b_depth, i * 1337))
 
     all_states, all_policies, all_outcomes = [], [], []

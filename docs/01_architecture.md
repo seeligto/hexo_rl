@@ -237,7 +237,9 @@ Applied during early training only. Weight: `w = max(0.0, 1.0 - iteration / deca
 | Formation event | Shaped reward |
 |---|---|
 | Singlet (pre-emp) created | +0.01 |
+| Singlet blocked | +0.005 |
 | Threat created | +0.03 |
+| Threat blocked | +0.02 |
 | Double threat created | +0.08 |
 | Triangle created (`x A0 A1`) | +0.20 |
 | Open Three created (`x A0 A3`) | +0.15 |
