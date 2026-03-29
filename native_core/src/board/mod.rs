@@ -37,6 +37,10 @@ pub const TOTAL_CELLS: usize = BOARD_SIZE * BOARD_SIZE; // 361
 const WIN_LENGTH: usize = 6;
 
 /// The three hex axis directions (positive direction only; win scan uses ±).
+pub fn hex_distance(q1: i32, r1: i32, q2: i32, r2: i32) -> i32 {
+    ((q1 - q2).abs() + (q1 + r1 - q2 - r2).abs() + (r1 - r2).abs()) / 2
+}
+
 pub const HEX_AXES: [(i32, i32); 3] = [
     (1, 0),  // E / W
     (0, 1),  // NE / SW
@@ -179,28 +183,58 @@ impl Board {
     /// All legal moves: empty cells within bounding_box + 2 margin, clipped to
     /// the current 19×19 window.  On an empty board returns all 361 cells.
     pub fn legal_moves(&self) -> Vec<(i32, i32)> {
-        let (cq, cr) = self.window_center();
-        let (lo_q, hi_q, lo_r, hi_r) = if self.has_stones {
-            (
-                (self.min_q - 2).max(cq - HALF),
-                (self.max_q + 2).min(cq + HALF),
-                (self.min_r - 2).max(cr - HALF),
-                (self.max_r + 2).min(cr + HALF),
-            )
+        let mut moves = std::collections::HashSet::new();
+        let clusters = self.get_clusters();
+        
+        if clusters.is_empty() {
+            let (cq, cr) = (0, 0);
+            let lo_q = cq - HALF;
+            let hi_q = cq + HALF;
+            let lo_r = cr - HALF;
+            let hi_r = cr + HALF;
+            for q in lo_q..=hi_q {
+                for r in lo_r..=hi_r {
+                    moves.insert((q, r));
+                }
+            }
         } else {
-            (cq - HALF, cq + HALF, cr - HALF, cr + HALF)
-        };
-
-        let cap = ((hi_q - lo_q + 1) * (hi_r - lo_r + 1)) as usize;
-        let mut moves = Vec::with_capacity(cap);
-        for q in lo_q..=hi_q {
-            for r in lo_r..=hi_r {
-                if !self.cells.contains_key(&(q, r)) {
-                    moves.push((q, r));
+            for cluster in clusters {
+                let mut min_q = i32::MAX;
+                let mut max_q = i32::MIN;
+                let mut min_r = i32::MAX;
+                let mut max_r = i32::MIN;
+                for &(q, r) in &cluster {
+                    min_q = min_q.min(q);
+                    max_q = max_q.max(q);
+                    min_r = min_r.min(r);
+                    max_r = max_r.max(r);
+                }
+                
+                let cq = (min_q + max_q) / 2;
+                let cr = (min_r + max_r) / 2;
+                
+                let lo_q = (min_q - 2).max(cq - HALF);
+                let hi_q = (max_q + 2).min(cq + HALF);
+                let lo_r = (min_r - 2).max(cr - HALF);
+                let hi_r = (max_r + 2).min(cr + HALF);
+                
+                for q in lo_q..=hi_q {
+                    for r in lo_r..=hi_r {
+                        if !self.cells.contains_key(&(q, r)) {
+                            let wq = q - cq + HALF;
+                            let wr = r - cr + HALF;
+                            if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
+                                moves.insert((q, r));
+                            }
+                        }
+                    }
                 }
             }
         }
-        moves
+        
+        let mut moves_vec: Vec<(i32, i32)> = moves.into_iter().collect();
+        moves_vec.sort_unstable();
+        moves_vec
     }
 
     /// Number of legal moves.
@@ -222,9 +256,6 @@ impl Board {
     /// - When it reaches 0 the turn passes: `current_player` flips and
     ///   `moves_remaining` resets to 2.
     pub fn apply_move(&mut self, q: i32, r: i32) -> Result<(), &'static str> {
-        if !self.in_window(q, r) {
-            return Err("move out of window");
-        }
         if self.cells.contains_key(&(q, r)) {
             return Err("cell already occupied");
         }
@@ -378,55 +409,83 @@ impl Board {
         self.to_planes()
     }
 
-    /// Encode the board as a flat f32 array of length `2 * TOTAL_CELLS`
-    /// representing the macro-grid (global_map).
-    pub fn to_global_planes(&self) -> Vec<f32> {
-        let mut out = vec![0.0f32; 2 * TOTAL_CELLS];
+    pub fn get_clusters(&self) -> Vec<Vec<(i32, i32)>> {
+        let mut clusters: Vec<Vec<(i32, i32)>> = Vec::new();
         if self.cells.is_empty() {
-            return out;
+            return clusters;
         }
-
-        let mut min_q = i32::MAX;
-        let mut max_q = i32::MIN;
-        let mut min_r = i32::MAX;
-        let mut max_r = i32::MIN;
-
-        for &(q, r) in self.cells.keys() {
-            min_q = min_q.min(q);
-            max_q = max_q.max(q);
-            min_r = min_r.min(r);
-            max_r = max_r.max(r);
+        
+        let stones: Vec<(i32, i32)> = self.cells.keys().copied().collect();
+        let mut visited = vec![false; stones.len()];
+        
+        for i in 0..stones.len() {
+            if visited[i] { continue; }
+            let mut cluster = Vec::new();
+            let mut queue = vec![i];
+            visited[i] = true;
+            
+            while let Some(curr) = queue.pop() {
+                cluster.push(stones[curr]);
+                for j in 0..stones.len() {
+                    if !visited[j] && crate::board::hex_distance(stones[curr].0, stones[curr].1, stones[j].0, stones[j].1) <= 8 {
+                        visited[j] = true;
+                        queue.push(j);
+                    }
+                }
+            }
+            clusters.push(cluster);
         }
+        
+        clusters
+    }
 
-        min_q -= 2;
-        max_q += 2;
-        min_r -= 2;
-        max_r += 2;
+    pub fn get_cluster_centers(&self) -> Vec<(i32, i32)> {
+        let clusters = self.get_clusters();
+        if clusters.is_empty() {
+            return vec![(0, 0)];
+        }
+        
+        clusters.into_iter().map(|cluster| {
+            let mut min_q = i32::MAX;
+            let mut max_q = i32::MIN;
+            let mut min_r = i32::MAX;
+            let mut max_r = i32::MIN;
+            for &(q, r) in &cluster {
+                min_q = min_q.min(q);
+                max_q = max_q.max(q);
+                min_r = min_r.min(r);
+                max_r = max_r.max(r);
+            }
+            ((min_q + max_q) / 2, (min_r + max_r) / 2)
+        }).collect()
+    }
 
-        let q_span = (max_q - min_q + 1) as f32;
-        let r_span = (max_r - min_r + 1) as f32;
-        let q_step = q_span / BOARD_SIZE as f32;
-        let r_step = r_span / BOARD_SIZE as f32;
-
+    pub fn get_cluster_views(&self) -> (Vec<Vec<f32>>, Vec<(i32, i32)>) {
+        let centers = self.get_cluster_centers();
+        let mut views = Vec::with_capacity(centers.len());
+        
         let (my_cell, opp_cell) = match self.current_player {
             Player::One => (Cell::P1, Cell::P2),
             Player::Two => (Cell::P2, Cell::P1),
         };
-
-        for (&(q, r), &cell) in &self.cells {
-            let mut mq = ((q - min_q) as f32 / q_step) as usize;
-            let mut mr = ((r - min_r) as f32 / r_step) as usize;
-            if mq >= BOARD_SIZE { mq = BOARD_SIZE - 1; }
-            if mr >= BOARD_SIZE { mr = BOARD_SIZE - 1; }
-
-            let flat = mq * BOARD_SIZE + mr;
-            if cell == my_cell {
-                out[flat] += 1.0;
-            } else if cell == opp_cell {
-                out[TOTAL_CELLS + flat] += 1.0;
+        
+        for &(cq, cr) in &centers {
+            let mut out = vec![0.0f32; 2 * TOTAL_CELLS];
+            for (&(q, r), &cell) in &self.cells {
+                let wq = q - cq + HALF;
+                let wr = r - cr + HALF;
+                if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
+                    let flat = wq as usize * BOARD_SIZE + wr as usize;
+                    if cell == my_cell {
+                        out[flat] = 1.0;
+                    } else if cell == opp_cell {
+                        out[TOTAL_CELLS + flat] = 1.0;
+                    }
+                }
             }
+            views.push(out);
         }
-        out
+        (views, centers)
     }
 }
 
@@ -471,13 +530,7 @@ mod tests {
         assert_eq!(b.moves_remaining, 2);
     }
 
-    #[test]
-    fn out_of_window_rejected() {
-        let mut b = Board::new();
-        // Empty board: window = [-9,9]×[-9,9]
-        assert!(b.apply_move(10, 0).is_err());
-        assert!(b.apply_move(0, -10).is_err());
-    }
+
 
     #[test]
     fn occupied_cell_rejected() {
