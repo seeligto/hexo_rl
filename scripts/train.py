@@ -41,7 +41,6 @@ from python.logging.dashboard import TrainingDashboard
 from python.logging.gpu_monitor import GPUMonitor
 from python.logging.setup import configure_logging
 from python.model.network import HexTacToeNet, compile_model
-from python.selfplay.worker import SelfPlayWorker
 from python.training.replay_buffer import ReplayBuffer
 from python.training.trainer import Trainer
 
@@ -174,16 +173,22 @@ def main() -> None:
     )
     log.info("buffer_init", capacity=capacity, min_buffer_size=min_buf_size)
 
-    # ── Self-play worker ──
-    worker = SelfPlayWorker(trainer.model, config, device)
-
-    # ── GPU monitor (daemon thread, polls every 5 s) ──
+    # ── Self-play pool ──
+    from python.selfplay.pool import WorkerPool
+    from python.eval.evaluator import Evaluator
+    
+    pool = WorkerPool(trainer.model, config, device, buffer)
+    train_cfg = config.get("training", config)
+    enable_periodic_eval = bool(train_cfg.get("enable_periodic_eval", config.get("enable_periodic_eval", False)))
+    evaluator = Evaluator(trainer.model, device, config) if enable_periodic_eval else None
+    
+    # ── GPU monitor ──
     gpu_monitor = GPUMonitor(interval_sec=5)
     gpu_monitor.start()
 
-    # ── Graceful shutdown on Ctrl-C ──
+    # ── Graceful shutdown ──
     _running = [True]
-    def _stop(sig, frame):  # noqa: ANN001
+    def _stop(sig, frame):
         log.info("shutdown_requested")
         _running[0] = False
     signal.signal(signal.SIGINT,  _stop)
@@ -191,86 +196,65 @@ def main() -> None:
 
     # ── Loop ──
     log_interval  = int(config.get("log_interval",  10))
+    eval_interval = int(train_cfg.get("eval_interval", config.get("eval_interval", 100)))
     train_step    = trainer.step
     games_played  = 0
-    x_wins        = 0
-    o_wins        = 0
-    draws         = 0
     t_start       = time.time()
-    t_games_window_start = t_start
-
-    # Track initial policy loss for exit-criteria logging
     initial_policy_loss: float | None = None
-    last_loss_info: dict = {}
+    last_loss_info: dict[str, float] = {}
 
     dashboard = TrainingDashboard() if not args.no_dashboard else None
     total_steps = args.iterations or 0
+    
+    # Start multiprocess self-play
+    pool.start()
+    log.info("selfplay_pool_started", n_workers=pool.n_workers)
 
     def _run_loop() -> None:
         nonlocal train_step, games_played, initial_policy_loss, last_loss_info
-        nonlocal t_games_window_start, x_wins, o_wins, draws
 
+        last_train_game_count = 0
+        
         while _running[0]:
             if args.iterations and train_step >= args.iterations:
                 log.info("iteration_limit_reached", iterations=args.iterations)
                 break
 
-            # ── Self-play: play one game ──
-            t_game = time.time()
-            n_positions, winner = worker.play_game(buffer)
-            game_elapsed = time.time() - t_game
-            games_played += 1
+            # ── Training Throttling ──
+            # Only train if we have enough data and we haven't already trained 
+            # for the current batch of games.
+            games_played = pool.games_completed
             
-            if winner == 1:
-                x_wins += 1
-            elif winner == -1:
-                o_wins += 1
-            else:
-                draws += 1
-
-            log.info(
-                "game_complete",
-                game_id=games_played,
-                plies=n_positions,
-                duration_sec=round(game_elapsed, 2),
-                buffer_size=buffer.size,
-                winner=winner,
-            )
-
-            # ── Training: skip until buffer is warm ──
             if buffer.size < min_buf_size:
+                time.sleep(1.0)
+                continue
+                
+            # Gate: One training step per completed game (standard AlphaZero ratio)
+            if games_played <= last_train_game_count:
+                time.sleep(0.1) # Wait for workers
                 continue
 
-            # ── One training step ──
+            # Perform one training step
             loss_info = trainer.train_step(buffer)
             train_step = trainer.step
-
+            last_train_game_count = games_played
             if initial_policy_loss is None:
-                initial_policy_loss = loss_info["policy_loss"]
-
+                initial_policy_loss = float(loss_info["policy_loss"])
             last_loss_info = loss_info
 
+            # ── Evaluation ──
+            eval_metrics = {}
+            if evaluator is not None and train_step > 0 and train_step % eval_interval == 0:
+                log.info("evaluation_start", step=train_step)
+                wr_random = evaluator.evaluate_vs_random(n_games=10)
+                wr_ramora = evaluator.evaluate_vs_ramora(n_games=5)
+                eval_metrics = {"wr_random": wr_random, "wr_ramora": wr_ramora}
+                log.info("evaluation_complete", step=train_step, **eval_metrics)
+
             if train_step % log_interval == 0:
-                elapsed    = time.time() - t_start
-                window_sec = max(time.time() - t_games_window_start, 1e-6)
+                elapsed = time.time() - t_start
                 games_per_hour = games_played / elapsed * 3600 if elapsed > 0 else 0.0
                 
-                x_winrate = x_wins / games_played if games_played > 0 else 0.0
-                o_winrate = o_wins / games_played if games_played > 0 else 0.0
-
-                log.info(
-                    "train_step",
-                    step=train_step,
-                    policy_loss=round(loss_info["policy_loss"], 4),
-                    value_loss=round(loss_info["value_loss"],   4),
-                    total_loss=round(loss_info["loss"],         4),
-                    buffer_size=buffer.size,
-                    games_played=games_played,
-                    elapsed_sec=round(elapsed, 1),
-                    x_winrate=round(x_winrate, 3),
-                    o_winrate=round(o_winrate, 3),
-                )
-
                 metrics = {
                     "iteration":     train_step,
                     "policy_loss":   loss_info["policy_loss"],
@@ -280,22 +264,24 @@ def main() -> None:
                     "games_per_hour": games_per_hour,
                     "gpu_util":      gpu_monitor.gpu_util_pct,
                     "vram_gb":       gpu_monitor.vram_used_gb,
-                    "x_winrate":     x_winrate,
-                    "o_winrate":     o_winrate,
+                    "x_winrate":     0.0, # WorkerPool needs to track this separately if desired
+                    "o_winrate":     0.0,
+                    **eval_metrics
                 }
 
                 if dashboard is not None:
                     dashboard.update(train_step, total_steps, metrics)
 
-    if dashboard is not None:
-        with dashboard.live():
+    try:
+        if dashboard is not None:
+            with dashboard.live():
+                _run_loop()
+        else:
             _run_loop()
-    else:
-        _run_loop()
-
-    # ── Cleanup ──
-    gpu_monitor.stop()
-    gpu_monitor.join(timeout=2.0)
+    finally:
+        pool.stop()
+        gpu_monitor.stop()
+        gpu_monitor.join(timeout=2.0)
 
     # ── Session end: save final checkpoint and log summary ──
     final_ckpt = trainer.save_checkpoint(last_loss_info if last_loss_info else None)

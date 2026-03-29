@@ -55,10 +55,12 @@ class InferenceRequest:
     The caller creates this, puts it on the server queue, waits on `event`,
     then reads `result`.
     """
-    state: np.ndarray          # (18, 19, 19) float16
+    state: np.ndarray          # (K, 18, 19, 19) float16
     event: threading.Event = field(default_factory=threading.Event)
-    result: Optional[Tuple[np.ndarray, float]] = field(default=None)
-    # result is a (policy_probs, value) tuple; policy_probs shape (362,) float32
+    result: Optional[Tuple[np.ndarray, np.ndarray]] = field(default=None)
+    # result is (cluster_policies, cluster_values):
+    #   cluster_policies shape (K, 362) float32
+    #   cluster_values   shape (K,) float32
 
 
 # ── Server ────────────────────────────────────────────────────────────────────
@@ -98,7 +100,32 @@ class InferenceServer(threading.Thread):
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def infer(self, state: np.ndarray) -> Tuple[np.ndarray, float]:
+    def _normalize_state(self, state: np.ndarray) -> np.ndarray:
+        """Normalize to (K, 18, 19, 19) float16 contiguous array."""
+        state_arr = np.asarray(state)
+        if state_arr.ndim == 3:
+            state_arr = state_arr[None, ...]
+        return np.ascontiguousarray(state_arr, dtype=np.float16)
+
+    def infer_many(self, states: list[np.ndarray]) -> list[Tuple[np.ndarray, np.ndarray]]:
+        """Submit many states and wait until all are resolved."""
+        if not states:
+            return []
+
+        requests: list[InferenceRequest] = []
+        for state in states:
+            req = InferenceRequest(state=self._normalize_state(state))
+            self._queue.put(req)
+            requests.append(req)
+
+        results: list[Tuple[np.ndarray, np.ndarray]] = []
+        for req in requests:
+            req.event.wait()
+            assert req.result is not None
+            results.append(req.result)
+        return results
+
+    def infer(self, state: np.ndarray):
         """Submit `state` for inference; block until the result is ready.
 
         Args:
@@ -108,11 +135,11 @@ class InferenceServer(threading.Thread):
             policy_probs: np.ndarray, shape (362,), float32, sums to 1.
             value:        float in [-1, 1] from current player's perspective.
         """
-        req = InferenceRequest(state=state)
-        self._queue.put(req)
-        req.event.wait()
-        assert req.result is not None
-        return req.result
+        result = self.infer_many([state])[0]
+        cluster_policies, cluster_values = result
+        if np.asarray(state).ndim == 3:
+            return cluster_policies[0], float(cluster_values[0])
+        return result
 
     def stop(self) -> None:
         """Signal the server to stop after draining its current batch."""

@@ -232,6 +232,28 @@ def print_training_summary(history: list[dict]):
 | VRAM peak | GB | ≤ 6.0 |
 | Replay buffer sample | μs per sample | ≤ 500 |
 
+### Practical benchmark commands
+
+Quick local sanity pass:
+
+```bash
+.venv/bin/python scripts/benchmark.py --config configs/fast_debug.yaml --no-compile --mcts-sims 2000 --pool-workers 1 --pool-duration 10
+```
+
+Throughput-oriented pass:
+
+```bash
+.venv/bin/python scripts/benchmark.py --config configs/default.yaml --mcts-sims 50000 --pool-workers 6 --pool-duration 30
+```
+
+If worker-pool throughput reports 0 games/hour in short runs, increase `--pool-duration`.
+
+### Focused validation for inference/pool changes
+
+```bash
+.venv/bin/python -m pytest -q tests/test_inference_server.py tests/test_worker_pool.py tests/test_benchmark_smoke.py
+```
+
 ### Python benchmark runner
 
 ```python
