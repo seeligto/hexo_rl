@@ -127,23 +127,24 @@ n_workers: 1
 
 ---
 
-## Phase 3.5 — Foveated Vision refactor [COMPLETED]
+## Phase 3.5 — Multi-Window Cluster Refactor [COMPLETED]
 
-**Goal**: Solve the "Attention Hijacking" (Colony Meta) exploit where the network becomes blind to distant lethal threats when anchored to a local fight.
+**Goal**: Solve the "Attention Hijacking" (Colony Meta) exploit where the network becomes blind to distant lethal threats.
 
 ### Tasks
 
-- [x] **Rust Core Update**: Implement $O(N)$ global macro-grid aggregation to provide a low-res bird's-eye view.
-- [x] **Network Refactor**: Implement dual-trunk ResNet (local + global) with Global Average Pooling (GAP) and MLP feature fusion.
-- [x] **Pipeline Integration**: Update `GameState` and `SelfPlayWorker` to extract and process dual tensors (36 channels total).
-- [x] **Performance Optimization**: Vectorize hexagonal symmetry augmentation in `ReplayBuffer` using flat index mapping.
-- [x] **Benchmarking**: Verify throughput stays $>5,000$ pos/sec on RTX 3070 (Actual: $\sim 35,000$ pos/sec).
+- [x] **Rust Core Update**: Implement dynamic stone clustering (distance ≤ 8) and Multi-Window tensor generation (K x 19x19).
+- [x] **Network Refactor**: Simplify to a single-trunk ResNet-10 that processes K clusters as a batch.
+- [x] **Pipeline Integration**: Implement Value Pooling (min-pooling for pessimistic threat detection) and Policy Mapping (global coordinate translation).
+- [x] **Un-constrain Bots**: Remove 19x19 bounds from RamoraBot to enable full colony meta play.
+- [x] **Benchmarking**: Verify throughput stays >5,000 pos/sec (Actual: ~52,000 pos/sec).
 
 ### Exit criteria
 
-- Dual-trunk model maintains $>30,000$ pos/sec throughput on GPU.
-- Replay buffer sampling (batch=256) latency $\approx 500$ μs.
-- `benchmark.py` passes all checks with the new architecture.
+- Multi-window model maintains >50,000 pos/sec throughput on GPU.
+- Replay buffer sampling (batch=256) latency < 1,000 μs.
+- `smoke_test_clusters.py` confirms detection of distant lethal threats.
+- `benchmark.py` passes all checks.
 
 ---
 
