@@ -77,6 +77,7 @@ Run `cargo test` and `pytest` before every commit.
 ### Session start protocol
 
 At the start of every session, in this order:
+
 1. Read this file (CLAUDE.md)
 2. Check the memory MCP for stored phase progress and notes from previous sessions
 3. Run `cargo test` and `pytest` to confirm clean baseline
@@ -86,6 +87,7 @@ At the start of every session, in this order:
 ### Session end protocol
 
 Before ending any session or when asked to stop:
+
 1. Finish the current atomic task and commit it
 2. Run full test suite — confirm it passes
 3. Write a memory note via the memory MCP containing:
@@ -109,6 +111,7 @@ Before ending any session or when asked to stop:
 PyO3 exposes Rust to Python. Import as: `from native_core import Board, MCTSTree`
 
 Build commands:
+
 ```bash
 cd native_core && cargo build --release   # Rust only
 maturin develop --release                 # builds + installs Python extension
@@ -124,6 +127,7 @@ cargo bench                               # Rust micro-benchmarks
 **We do not implement our own minimax or bot heuristics.** The community already has
 strong bots. We use them directly as git submodules, read their source to understand
 the interface, and wrap them behind BotProtocol. This gives us:
+
 - Stronger corpus data than any minimax we could write
 - Diversity of playing styles across multiple bots
 - The exact bots the community benchmarks against — so our Elo comparisons are meaningful
@@ -210,27 +214,33 @@ Never hardcode which bots generate corpus games — drive from config.
 ## Community resources — check live state before implementing
 
 ### Human game archive (bootstrap data — 42k+ real games)
-URL: https://[site-redacted]/games
+
+URL: <https://[site-redacted]/games>
 Paginated listing of all community games. Filter: rated games, moves > 20.
 Scraper: python/bootstrap/scraper.py — see docs/04_BOOTSTRAP_STRATEGY.md.
 **Before implementing the scraper:** fetch one game page, inspect the actual HTML
 structure, then implement. Do not guess selectors.
 
 ### Bot API spec — DRAFT, not final
-Deployment target: https://explore.htttx.io/
-Spec repo: https://github.com/hex-tic-tac-toe/htttx-bot-api
+
+Deployment target: <https://explore.htttx.io/>
+Spec repo: <https://github.com/hex-tic-tac-toe/htttx-bot-api>
+
 ```bash
 curl -L https://raw.githubusercontent.com/hex-tic-tac-toe/htttx-bot-api/main/definitions/bot-api-v1.yaml \
   -o docs/reference/bot-api-v1.yaml
 ```
+
 Read the downloaded YAML before implementing anything. Do not assume our docs
 reflect the current spec — the repo is ground truth.
 
 ### Notation standard — DRAFT, not final
+
 ```bash
 git clone https://github.com/hex-tic-tac-toe/hexagonal-tic-tac-toe-notation \
   docs/reference/notation
 ```
+
 Read before implementing the BKE parser.
 
 ---
