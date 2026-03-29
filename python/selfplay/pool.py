@@ -188,7 +188,7 @@ def _worker_fn(
                 break
 
             n_acts = board_size * board_size + 1
-            legal_flat = [(q + half) * board_size + (r + half) for q, r in legal]
+            legal_flat = [rust_board.to_flat(q, r) for q, r in legal]
             probs = np.array([mcts_policy[i] if i < n_acts else 0.0 for i in legal_flat],
                              dtype=np.float64)
             total = probs.sum()
