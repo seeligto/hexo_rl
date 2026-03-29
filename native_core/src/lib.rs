@@ -114,9 +114,9 @@ impl PyBoard {
         self.inner.to_planes()
     }
 
-    /// Returns a tuple of (local_map, global_map) as flat lists of floats.
-    pub fn get_dual_state(&self) -> (Vec<f32>, Vec<f32>) {
-        (self.inner.to_planes(), self.inner.to_global_planes())
+    /// Returns a tuple of list of flat planes and list of (q, r) centers for each cluster.
+    pub fn get_cluster_views(&self) -> (Vec<Vec<f32>>, Vec<(i32, i32)>) {
+        self.inner.get_cluster_views()
     }
 
     /// Window-relative flat index for axial (q, r).
