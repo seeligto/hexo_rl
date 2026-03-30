@@ -223,7 +223,21 @@ def benchmark_worker_pool(
         },
     }
     replay = ReplayBuffer(capacity=25_000, board_channels=18)
-    pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
+    try:
+        pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
+    except PermissionError as exc:
+        # Some sandboxed environments block POSIX semaphore creation, which
+        # prevents multiprocessing queues from being constructed (mp.Queue).
+        # In that case, skip the worker-pool benchmark but keep the script running.
+        return {
+            "name": "Worker pool throughput",
+            "games_completed": 0,
+            "positions_pushed": 0,
+            "elapsed_sec": 0.0,
+            "games_per_hour": 0.0,
+            "skipped": 1.0,
+            "error": str(exc),
+        }
 
     pool.start()
     t0 = time.perf_counter()
