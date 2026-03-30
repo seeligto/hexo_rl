@@ -30,7 +30,9 @@ class Evaluator:
     """Benchmarking agent against baseline bots."""
     
     def __init__(self, model: HexTacToeNet, device: torch.device, config: Dict[str, Any]):
-        self.model = model
+        # Unwrap compiled model to avoid PyTorch torch.compile deadlocks 
+        # when running concurrently with the background WorkerPool inference thread
+        self.model = getattr(model, "_orig_mod", model)
         self.device = device
         self.config = config
         eval_cfg = config.get("evaluation", config.get("eval", {}))

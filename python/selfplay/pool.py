@@ -10,6 +10,7 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
+import numpy as np
 import torch
 from native_core import RustSelfPlayRunner  # type: ignore[attr-defined]
 
@@ -39,9 +40,15 @@ class WorkerPool:
         board_size = int(getattr(model, "board_size", 19))
         in_channels = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
 
+        mcts_cfg = config.get("mcts", config)
+        self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
+        self.c_puct = float(mcts_cfg.get("c_puct", 1.5))
+
         self._runner = RustSelfPlayRunner(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_moves_per_game", 128)),
+            n_simulations=self.n_simulations,
+            c_puct=self.c_puct,
             feature_len=in_channels * board_size * board_size,
             policy_len=board_size * board_size + 1,
         )
@@ -75,24 +82,19 @@ class WorkerPool:
             self.model.eval()
 
     def _stats_loop(self) -> None:
-        board_size = int(getattr(self.model, "board_size", 19))
-        n_actions = board_size * board_size + 1
-        zero_state = torch.zeros((18, board_size, board_size), dtype=torch.float16).numpy()
-        uniform_policy = (torch.ones((n_actions,), dtype=torch.float32) / float(n_actions)).numpy()
-        last_positions = 0
-
         while not self._stop_event.is_set():
-            current_positions = int(self._runner.positions_generated)
-            new_positions = max(0, current_positions - last_positions)
-            to_push = min(new_positions, 256)
-            for _ in range(to_push):
-                self.replay_buffer.push(zero_state, uniform_policy, 0.0)
-            last_positions += to_push
+            # Collect real data from Rust
+            data = self._runner.collect_data()
+            for feat, pol, outcome in data:
+                feat_np = np.array(feat, dtype=np.float32).reshape(18, 19, 19)
+                pol_np = np.array(pol, dtype=np.float32)
+                self.replay_buffer.push(feat_np, pol_np, float(outcome))
+                with self._lock:
+                    self.positions_pushed += 1
 
             with self._lock:
                 self.games_completed = int(self._runner.games_completed)
-                self.positions_pushed = current_positions
-            time.sleep(0.05)
+            time.sleep(0.1)
 
     def start(self) -> None:
         if self._runner.is_running():

@@ -217,7 +217,11 @@ impl MCTSTree {
                 })
                 .unwrap() as u32;
 
-            let (q, r) = board.window_coords(self.pool[best as usize].action_idx as usize);
+            // action_idx stores absolute coordinates: (q + 128) << 8 | (r + 128)
+            let val = self.pool[best as usize].action_idx;
+            let q = (val >> 8) as i32 - 128;
+            let r = (val & 0xFF) as i32 - 128;
+
             let diff = board
                 .apply_move_tracked(q, r)
                 .expect("selected move should always be legal");
@@ -373,9 +377,13 @@ impl MCTSTree {
                 } else {
                     1.0 / n_ch as f32
                 };
+                
+                // Encode absolute coordinates: (q + 128) << 8 | (r + 128)
+                let action_encoded = (((q + 128) as u16) << 8) | ((r + 128) as u16);
+                
                 self.pool[ci] = Node {
                     parent:              leaf_idx,
-                    action_idx:          action_flat,
+                    action_idx:          action_encoded,
                     n_visits:            0,
                     w_value:             0.0,
                     prior,
@@ -448,7 +456,11 @@ impl MCTSTree {
             if let Some(best) = (first..first + n_ch)
                 .max_by_key(|&i| self.pool[i].n_visits)
             {
-                let action = self.pool[best].action_idx as usize;
+                let val = self.pool[best].action_idx;
+                let q = (val >> 8) as i32 - 128;
+                let r = (val & 0xFF) as i32 - 128;
+                let action = self.root_board.window_flat_idx(q, r);
+                
                 if action < n_actions {
                     policy[action] = 1.0;
                 }
@@ -460,7 +472,11 @@ impl MCTSTree {
             let total: f32 = visits.iter().sum();
             if total > 0.0 {
                 for (j, &v) in visits.iter().enumerate() {
-                    let action = self.pool[first + j].action_idx as usize;
+                    let val = self.pool[first + j].action_idx;
+                    let q = (val >> 8) as i32 - 128;
+                    let r = (val & 0xFF) as i32 - 128;
+                    let action = self.root_board.window_flat_idx(q, r);
+
                     if action < n_actions {
                         policy[action] = v / total;
                     }
@@ -551,8 +567,8 @@ mod tests {
     use super::*;
     /// Build a tiny manual tree:
     ///   root  (mr=2, n=0)
-    ///     ├─ child_a (action=0, prior=0.7, n=0)
-    ///     └─ child_b (action=1, prior=0.3, n=0)
+    ///     ├─ child_a (action=(0,0), prior=0.7, n=0)
+    ///     └─ child_b (action=(0,1), prior=0.3, n=0)
     fn setup_two_child_tree(c_puct: f32) -> (MCTSTree, u32, u32) {
         let mut tree = MCTSTree::new(c_puct);
         // Override root to have mr=2 so children have same player
@@ -564,14 +580,18 @@ mod tests {
         tree.pool[0].first_child = first_child;
         tree.pool[0].n_children  = 2;
 
+        // Encode absolute (0, 0) and (0, 1)
+        let action_a = ((0 + 128) << 8) | (0 + 128);
+        let action_b = ((0 + 128) << 8) | (1 + 128);
+
         tree.pool[1] = Node {
-            parent: 0, action_idx: 0, n_visits: 0, w_value: 0.0,
+            parent: 0, action_idx: action_a as u16, n_visits: 0, w_value: 0.0,
             prior: 0.7, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 0,
         };
         tree.pool[2] = Node {
-            parent: 0, action_idx: 1, n_visits: 0, w_value: 0.0,
+            parent: 0, action_idx: action_b as u16, n_visits: 0, w_value: 0.0,
             prior: 0.3, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 0,
@@ -619,14 +639,14 @@ mod tests {
 
         // child at index 1: mr=2, parent=root
         tree.pool[1] = Node {
-            parent: 0, action_idx: 0, n_visits: 0, w_value: 0.0,
+            parent: 0, action_idx: ((128 << 8) | 128) as u16, n_visits: 0, w_value: 0.0,
             prior: 1.0, first_child: u32::MAX, n_children: 0,
             moves_remaining: 2, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 0,
         };
         // grandchild at index 2: mr=1, parent=child
         tree.pool[2] = Node {
-            parent: 1, action_idx: 1, n_visits: 0, w_value: 0.0,
+            parent: 1, action_idx: ((128 << 8) | 129) as u16, n_visits: 0, w_value: 0.0,
             prior: 1.0, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 0,
@@ -657,7 +677,7 @@ mod tests {
         tree.pool[0].moves_remaining = 1; // turn passes after root's move
 
         tree.pool[1] = Node {
-            parent: 0, action_idx: 0, n_visits: 0, w_value: 0.0,
+            parent: 0, action_idx: ((128 << 8) | 128) as u16, n_visits: 0, w_value: 0.0,
             prior: 1.0, first_child: u32::MAX, n_children: 0,
             moves_remaining: 2, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 0,
@@ -684,8 +704,8 @@ mod tests {
         tree.pool[child_b as usize].n_visits = 3;
 
         let policy = tree.get_policy(1.0, BOARD_SIZE);
-        let pa = policy[0]; // action_idx=0
-        let pb = policy[1]; // action_idx=1
+        let pa = policy[180]; // action (0,0)
+        let pb = policy[181]; // action (0,1)
 
         assert!((pa - 0.7).abs() < 1e-5, "action 0 should get 70%: {pa}");
         assert!((pb - 0.3).abs() < 1e-5, "action 1 should get 30%: {pb}");
@@ -700,8 +720,8 @@ mod tests {
         tree.pool[child_b as usize].n_visits = 3;
 
         let policy = tree.get_policy(0.0, BOARD_SIZE);
-        assert_eq!(policy[0], 1.0); // child_a has more visits
-        assert_eq!(policy[1], 0.0);
+        assert_eq!(policy[180], 1.0); // child_a has more visits
+        assert_eq!(policy[181], 0.0);
     }
 
     #[test]
@@ -857,7 +877,7 @@ mod tests {
     fn test_virtual_loss_q_adjustment() {
         // Verify that q_value_vl correctly penalises a node with outstanding VL.
         let node = Node {
-            parent: u32::MAX, action_idx: u16::MAX,
+            parent: u32::MAX, action_idx: ((128 << 8) | 128) as u16,
             n_visits: 4, w_value: 2.0, // Q = 0.5 without VL
             prior: 0.5, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,

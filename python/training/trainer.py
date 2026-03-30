@@ -358,7 +358,7 @@ class Trainer:
             res_blocks=model_hparams["res_blocks"],
             filters=model_hparams["filters"],
         )
-        model.load_state_dict(model_state)
+        model.load_state_dict(model_state, strict=False)
 
         ckpt_dir = Path(checkpoint_dir) if checkpoint_dir else Path(checkpoint_path).parent
         trainer = cls(model, config, checkpoint_dir=ckpt_dir, device=device)

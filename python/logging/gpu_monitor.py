@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import threading
 import time
+import warnings
 from typing import Optional
+
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*pynvml package is deprecated.*")
 
 import structlog
 
