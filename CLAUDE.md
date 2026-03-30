@@ -72,7 +72,14 @@ If you are unsure what phase we are in, check git log for the most recent feat c
 Write tests alongside implementation, not after.
 The test suite in `tests/` must pass before any commit.
 Win detection tests are especially critical — a bug here corrupts all training data.
-Run `cargo test` and `pytest` before every commit.
+Prefer Make targets for consistency:
+
+```bash
+make test.rust
+make test.py
+```
+
+Fallback (if Makefile is unavailable): run `cargo test` and `pytest` directly.
 
 ### Session start protocol
 
@@ -80,9 +87,14 @@ At the start of every session, in this order:
 
 1. Read this file (CLAUDE.md)
 2. Check the memory MCP for stored phase progress and notes from previous sessions
-3. Run `cargo test` and `pytest` to confirm clean baseline
+3. Run baseline checks with Make:
+
+- `make env.check`
+- `make test.rust`
+- `make test.py`
+
 4. Check `git log --oneline -20` to understand what was last committed
-5. Only then begin work
+2. Only then begin work
 
 ### Session end protocol
 
@@ -118,6 +130,18 @@ maturin develop --release                 # builds + installs Python extension
 pytest tests/                             # Python tests
 cargo test                                # Rust tests
 cargo bench                               # Rust micro-benchmarks
+```
+
+Make commands (preferred):
+
+```bash
+make env.check        # verify .venv + native_core import
+make native.build     # build/install Rust extension via maturin
+make test.rust        # Rust tests
+make test.py          # Python tests (tests/ only)
+make test.all         # Rust + Python tests
+make bench.lite       # quick benchmark pass
+make bench.full       # higher-confidence benchmark pass
 ```
 
 ---
