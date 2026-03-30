@@ -23,20 +23,25 @@ Full context is in `docs/`. Read them in order before starting any task:
 
 ---
 
+## Prime Directive
+
+**Context first, benchmarking mandatory.** Never suggest an architectural change without first reading the relevant `docs/` and `native_core` source. Never commit a performance-sensitive change (MCTS, NN, Buffer) without running `make bench.full` and verifying no regressions against the baseline.
+
+---
+
 ## Board representation — infinite board strategy
 
 The board is infinite. The NN requires fixed-size tensors. We resolve this as follows:
 
 **Internal storage (Rust):** `HashMap<(q,r), Player>` — sparse, genuinely unbounded.
 No allocation for empty cells. No fixed grid size in the data structure.
+**Transposition Table (TT):** Uses `FxHashMap` with 64-bit Zobrist hashing for O(1) state lookups, critical for MCTS efficiency.
 
-**NN view window (Multi-Window Clustering):** The board state is dynamically grouped into K distinct clusters (colonies) of stones. The Rust core generates K distinct 19×19 tensors, one centered on each cluster's centroid. These are evaluated as a batch by the neural network.
+**NN view window (Hybrid Attention-Anchored Windowing):** The board state is dynamically grouped into K distinct clusters (colonies) of stones. The Rust core generates K distinct 19×19 tensors. To prevent "Attention Hijacking" (where the model ignores distant but winning threats), we use **Attention-Anchored Windowing**: windows are centered on high-attention regions and critical formations, not just centroids.
+
+**Value Aggregation (Min-Pooling):** When multiple windows are evaluated for a single board state, the scalar Value ($v$) is aggregated using **Min-Pooling** (from the perspective of the current player) to ensure that if any window contains a losing threat, the entire state is treated as high-risk.
 
 **Legal moves:** All empty cells within a margin of existing stones, across all K clusters. The network outputs K policy distributions which are mapped back to global coordinates and unified via softmax.
-
-**Phase 0 note:** Phase 0 built a fixed 2D array board. This was migrated to a
-sparse HashMap in Phase 1.5 before bootstrap corpus generation began.
-If resuming and unsure which is current, check native_core/src/board/mod.rs.
 
 ---
 
@@ -50,6 +55,7 @@ Use conventional commit format:
 ```
 feat(env): add axial coordinate board with win detection
 feat(mcts): implement PUCT node selection in Rust
+feat(mcts): integrate FxHashMap Transposition Table with Zobrist hashing
 feat(training): add FP16 replay buffer with NumPy ring arrays
 fix(mcts): apply Ramora0 transposition table bug fix
 test(env): add win detection tests for all 3 hex axes
@@ -63,7 +69,9 @@ After each commit, confirm tests still pass before starting the next task.
 ### Phase discipline
 
 Always check `docs/02_ROADMAP.md` for the current phase before starting work.
-Do not implement Phase 2 components while Phase 0 is incomplete.
+**Current Status:** Phase 3C (Supervised Pretraining) is **Complete/Pending Final Validation**.
+**Next Phase:** Phase 4.0 (Self-Play RL) — Initializing the distributed self-play loop.
+
 Each phase has explicit exit criteria — do not advance until they are met.
 If you are unsure what phase we are in, check git log for the most recent feat commits.
 
@@ -338,16 +346,17 @@ hex_tac_toe_az/
 
 ## Benchmarks — must pass before Phase 4.5
 
-Run `python scripts/benchmark.py`. Phase 3.5 / 4 does not complete until:
+Run `make bench.full`. Latest baseline (2026-03-31, Ryzen 7 3700x + RTX 3070):
 
-| Metric | Target |
-|---|---|
-| MCTS simulations/sec | ≥ 150,000 |
-| NN inference (batch=64) | ≥ 8,000 pos/sec |
-| GPU utilization during training | ≥ 80% |
-| VRAM usage | ≤ 80% Total VRAM |
-| Self-play games/hour | ≥ 1,500 |
-| Batch Saturation | ≥ 50% |
+| Metric | Baseline (Post-TT) | Target |
+|---|---|---|
+| MCTS (CPU only, no NN) | ~274,000 sim/s | ≥ 150,000 sim/s |
+| NN inference (batch=64) | 10,733 pos/s | ≥ 8,000 pos/s |
+| NN latency (batch=1, mean) | 0.8 ms | ≤ 5 ms |
+| Replay buffer (batch=256) | 253 μs/sample | ≤ 1,000 μs |
+| GPU utilization | 93.4% | ≥ 80% |
+| Self-play throughput | 3,829 games/hour | ≥ 1,500 games/hour |
+| Batch Saturation | 60.8% | ≥ 50% |
 
 
 ---

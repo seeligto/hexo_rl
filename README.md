@@ -48,11 +48,12 @@ We employ a "Multi-Window Cluster-Based Approach" to handle the infinite board: 
 
 ## Roadmap
 
-* **Phase 1: Foundation** - Basic board representation, game state, and neural network architecture.
-* **Phase 2: MCTS** - Monte Carlo Tree Search implementation in Rust with PyO3 bindings.
-* **Phase 3: Bootstrap** - Integration of baseline bots and community engines for initial pre-training.
-* **Phase 3.5: Foveated Vision Refactor** - Implementation of the Dual-Resolution CNN to prevent attention hijacking (Current Phase).
-* **Phase 4: Distributed Self-Play** - Scaling up training with distributed workers.
+* **Phase 1: Foundation** - Basic board representation, game state, and neural network architecture. [DONE]
+* **Phase 2: MCTS** - Monte Carlo Tree Search implementation in Rust with PyO3 bindings. [DONE]
+* **Phase 3: Bootstrap** - Integration of baseline bots and community engines. [DONE]
+* **Phase 3.5: Foveated Vision & Hybrid Windowing** - Dual-Resolution CNN and Attention-Anchored Windowing to prevent attention hijacking. [DONE]
+* **Phase 3C: Supervised Pretraining** - Training model on expert corpus (Minimax/Human). [COMPLETE/VALIDATING]
+* **Phase 4.0: Self-Play RL** - Initializing the AlphaZero self-play loop (CURRENT).
 * **Phase 5: Evaluation** - Benchmarking against state-of-the-art bots.
 
 ## Training Workflow
@@ -123,6 +124,13 @@ Notes:
 - The worker-pool throughput metric counts completed games; very short durations can show 0 games/hour. Increase --pool-duration for representative numbers.
 - Warnings about pynvml deprecation are emitted by third-party dependencies and do not indicate a training or benchmark failure.
 
-## Performance Note
+## Performance (March 2026 Baseline)
 
-This project uses **Batched MCTS Inferences**, providing a ~15x speedup on NVIDIA GPUs. Ensure `torch` is correctly utilizing CUDA for optimal training throughput.
+The Rust core is highly optimized, utilizing a Transposition Table (FxHashMap + Zobrist hashing) and efficient parallelization:
+
+- **MCTS Performance:** ~274k simulations/sec (CPU only)
+- **NN Inference:** >10k positions/sec (RTX 3070, batch=64)
+- **Self-Play Throughput:** ~3.8k games/hour
+- **Inference Latency:** 0.8ms (batch=1)
+
+This project uses **Batched MCTS Inferences**, providing a ~15x speedup on NVIDIA GPUs.
