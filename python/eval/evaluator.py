@@ -1,5 +1,4 @@
-
-import structlog
+import logging
 import torch
 import time
 from typing import Dict, Any
@@ -10,7 +9,22 @@ from python.bootstrap.bots.ramora_bot import RamoraBot
 from python.model.network import HexTacToeNet
 from python.selfplay.worker import SelfPlayWorker
 
-log = structlog.get_logger()
+try:
+    import structlog
+    log = structlog.get_logger()
+except ImportError:
+    class _StdLoggerAdapter:
+        def __init__(self) -> None:
+            self._log = logging.getLogger("evaluator")
+
+        def info(self, event: str, **kwargs: Any) -> None:
+            if kwargs:
+                self._log.info("%s %s", event, kwargs)
+            else:
+                self._log.info("%s", event)
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    log = _StdLoggerAdapter()
 
 class Evaluator:
     """Benchmarking agent against baseline bots."""

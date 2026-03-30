@@ -4,11 +4,9 @@ Phase 1 tests for Trainer (training step + checkpoint round-trip).
 Run with: .venv/bin/pytest tests/test_trainer.py -v
 """
 import json
-import tempfile
 from pathlib import Path
 
 import numpy as np
-import pytest
 import torch
 
 from python.model.network import HexTacToeNet
@@ -179,3 +177,72 @@ def test_checkpoint_optimizer_state_preserved(tmp_path: Path):
     rest_state = restored.optimizer.state_dict()
     assert len(orig_state["state"]) == len(rest_state["state"]), \
         "optimizer state group count mismatch"
+
+
+def test_scheduler_steps_each_train_step(tmp_path: Path):
+    cfg = {
+        **FAST_CONFIG,
+        "lr_schedule": "cosine",
+        "total_steps": 20,
+        "min_lr": 1e-5,
+    }
+    model = HexTacToeNet(board_size=9, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+
+    assert trainer.scheduler is not None
+    start_epoch = trainer.scheduler.last_epoch
+
+    trainer.train_step(buf)
+    assert trainer.scheduler.last_epoch == start_epoch + 1
+
+    trainer.train_step(buf)
+    assert trainer.scheduler.last_epoch == start_epoch + 2
+
+
+def test_scheduler_state_round_trip(tmp_path: Path):
+    cfg = {
+        **FAST_CONFIG,
+        "lr_schedule": "cosine",
+        "total_steps": 20,
+        "min_lr": 1e-5,
+    }
+    model = HexTacToeNet(board_size=9, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+
+    for _ in range(5):
+        trainer.train_step(buf)
+
+    ckpt_path = tmp_path / "checkpoint_00000005.pt"
+    restored = Trainer.load_checkpoint(ckpt_path, checkpoint_dir=tmp_path)
+
+    assert trainer.scheduler is not None
+    assert restored.scheduler is not None
+    assert restored.scheduler.last_epoch == trainer.scheduler.last_epoch
+
+
+def test_load_checkpoint_allows_config_override(tmp_path: Path):
+    cfg = {
+        **FAST_CONFIG,
+        "lr_schedule": "cosine",
+        "total_steps": 20,
+        "min_lr": 1e-5,
+    }
+    model = HexTacToeNet(board_size=9, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+
+    for _ in range(5):
+        trainer.train_step(buf)
+
+    ckpt_path = tmp_path / "checkpoint_00000005.pt"
+    restored = Trainer.load_checkpoint(
+        ckpt_path,
+        checkpoint_dir=tmp_path,
+        config_overrides={"total_steps": 100},
+    )
+
+    assert restored.config.get("total_steps") == 100
+    assert restored.scheduler is not None
+    assert int(restored.scheduler.T_max) == 100

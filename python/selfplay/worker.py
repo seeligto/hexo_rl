@@ -27,6 +27,7 @@ import torch.nn.functional as F
 from native_core import Board, MCTSTree
 from python.env.game_state import GameState
 from python.model.network import HexTacToeNet
+from python.selfplay.policy_projection import project_global_policy_to_local
 from python.training.replay_buffer import ReplayBuffer
 
 # Board is always 19×19 (BOARD_SIZE from native_core)
@@ -252,9 +253,17 @@ class SelfPlayWorker:
             mcts_policy = self._run_mcts_with_sims(rust_board, n_sims=current_n_sims, use_dirichlet=use_dirichlet)
 
             # ── Record position ──
-            state_tensor = state.to_tensor(rust_board)[0][0] # just store one for replay for now           # (18, 19, 19) float16
-            policy_arr   = np.array(mcts_policy, dtype=np.float32)
-            records.append((state_tensor, policy_arr, state.current_player))
+            full_tensor, centers = state.to_tensor(rust_board)
+            global_policy = np.array(mcts_policy, dtype=np.float32)
+            for k, center in enumerate(centers):
+                state_tensor = full_tensor[k]
+                policy_arr = project_global_policy_to_local(
+                    rust_board,
+                    center,
+                    global_policy,
+                    board_size=_BOARD_SIZE,
+                )
+                records.append((state_tensor, policy_arr, state.current_player))
 
             # ── Sample and apply move ──
             legal = rust_board.legal_moves()
