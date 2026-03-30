@@ -14,6 +14,7 @@ from python.bootstrap.bot_protocol import BotProtocol
 from python.env import GameState
 from python.model.network import HexTacToeNet
 from python.selfplay.worker import SelfPlayWorker
+from python.training.trainer import Trainer
 
 
 class OurModelBot(BotProtocol):
@@ -36,8 +37,16 @@ class OurModelBot(BotProtocol):
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        net = HexTacToeNet(config)
-        state_dict = torch.load(checkpoint_path, map_location=device)
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        state_dict = Trainer._normalize_model_state_dict_keys(Trainer._extract_model_state(payload))
+        model_hparams = Trainer._resolve_model_hparams(dict(config), state_dict)
+
+        net = HexTacToeNet(
+            board_size=model_hparams["board_size"],
+            in_channels=model_hparams["in_channels"],
+            filters=model_hparams["filters"],
+            res_blocks=model_hparams["res_blocks"],
+        )
         net.load_state_dict(state_dict)
         net.to(device)
         net.eval()

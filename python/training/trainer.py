@@ -17,6 +17,8 @@ Checkpointing every N steps:
 from __future__ import annotations
 
 import json
+import math
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -152,19 +154,123 @@ class Trainer:
 
     @staticmethod
     def _normalize_model_state_dict_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Normalize model state dict keys across compiled/non-compiled models."""
+        """Normalize model state dict keys across save variants.
+
+        Handles:
+            - ``_orig_mod.`` prefix from torch.compile wrappers
+            - ``module.`` prefix from DataParallel/DDP wrappers
+            - ``tower.`` vs ``trunk.tower.`` aliasing
+        """
         if not state_dict:
             return state_dict
 
-        has_orig_prefix = any(k.startswith("_orig_mod.") for k in state_dict.keys())
-        if not has_orig_prefix:
-            return state_dict
+        prefixes = ("_orig_mod.", "module.")
+        normalized: Dict[str, torch.Tensor] = {}
+        for key, value in state_dict.items():
+            norm_key = key
+            changed = True
+            while changed:
+                changed = False
+                for prefix in prefixes:
+                    if norm_key.startswith(prefix):
+                        norm_key = norm_key[len(prefix):]
+                        changed = True
+            normalized[norm_key] = value
 
-        prefix = "_orig_mod."
-        return {
-            (k[len(prefix):] if k.startswith(prefix) else k): v
-            for k, v in state_dict.items()
+        has_tower = any(k.startswith("tower.") for k in normalized.keys())
+        has_trunk_tower = any(k.startswith("trunk.tower.") for k in normalized.keys())
+        if has_tower and not has_trunk_tower:
+            for key, value in list(normalized.items()):
+                if key.startswith("tower."):
+                    normalized.setdefault(f"trunk.{key}", value)
+        elif has_trunk_tower and not has_tower:
+            for key, value in list(normalized.items()):
+                if key.startswith("trunk.tower."):
+                    normalized.setdefault(key[len("trunk."):], value)
+
+        return normalized
+
+    @staticmethod
+    def _infer_res_blocks_from_state_dict(state_dict: Dict[str, torch.Tensor]) -> Optional[int]:
+        pattern = re.compile(r"^(?:trunk\.)?tower\.(\d+)\.")
+        idxs = {
+            int(match.group(1))
+            for key in state_dict.keys()
+            for match in [pattern.search(key)]
+            if match is not None
         }
+        if not idxs:
+            return None
+        return max(idxs) + 1
+
+    @staticmethod
+    def _infer_model_hparams(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
+        """Infer model hyperparameters directly from a checkpoint state_dict."""
+        inferred: Dict[str, int] = {}
+
+        conv_w = state_dict.get("trunk.input_conv.weight")
+        if conv_w is not None and conv_w.ndim == 4:
+            inferred["filters"] = int(conv_w.shape[0])
+            inferred["in_channels"] = int(conv_w.shape[1])
+
+        policy_fc_w = state_dict.get("policy_fc.weight")
+        if policy_fc_w is not None and policy_fc_w.ndim == 2:
+            two_spatial = int(policy_fc_w.shape[1])
+            if two_spatial % 2 == 0:
+                spatial = two_spatial // 2
+                board_size = int(math.isqrt(spatial))
+                if board_size * board_size == spatial:
+                    inferred["board_size"] = board_size
+
+        res_blocks = Trainer._infer_res_blocks_from_state_dict(state_dict)
+        if res_blocks is not None:
+            inferred["res_blocks"] = int(res_blocks)
+
+        return inferred
+
+    @staticmethod
+    def _extract_model_state(ckpt: Any) -> Dict[str, torch.Tensor]:
+        """Extract the model state dict from common checkpoint payload layouts."""
+        if not isinstance(ckpt, dict):
+            raise ValueError(f"Unsupported checkpoint payload type: {type(ckpt)!r}")
+
+        for key in ("model_state", "model_state_dict", "state_dict"):
+            maybe_state = ckpt.get(key)
+            if isinstance(maybe_state, dict):
+                return maybe_state
+
+        # Weights-only checkpoints are plain state_dict payloads.
+        if all(isinstance(k, str) for k in ckpt.keys()):
+            return ckpt
+
+        raise ValueError("Unable to locate model state dict in checkpoint payload")
+
+    @staticmethod
+    def _resolve_model_hparams(config: Dict[str, Any], model_state: Dict[str, torch.Tensor]) -> Dict[str, int]:
+        model_cfg = config.get("model") if isinstance(config.get("model"), dict) else {}
+
+        resolved = {
+            "board_size": int(model_cfg.get("board_size", config.get("board_size", 19))),
+            "res_blocks": int(model_cfg.get("res_blocks", config.get("res_blocks", 10))),
+            "filters": int(model_cfg.get("filters", config.get("filters", 128))),
+            "in_channels": int(model_cfg.get("in_channels", config.get("in_channels", 18))),
+        }
+
+        inferred = Trainer._infer_model_hparams(model_state)
+        for key, inferred_value in inferred.items():
+            if key in resolved:
+                resolved[key] = int(inferred_value)
+
+        # Keep top-level config aligned with inferred model dimensions.
+        config["board_size"] = resolved["board_size"]
+        config["res_blocks"] = resolved["res_blocks"]
+        config["filters"] = resolved["filters"]
+        config["in_channels"] = resolved["in_channels"]
+        if isinstance(model_cfg, dict):
+            model_cfg.update(resolved)
+            config["model"] = model_cfg
+
+        return resolved
 
     def save_checkpoint(self, loss_info: Optional[Dict[str, float]] = None) -> Path:
         """Save full checkpoint and inference-only weights.
@@ -223,36 +329,34 @@ class Trainer:
                               behavior such as scheduler horizon changes).
         """
         ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-        
-        # If it's a full checkpoint, it should have a 'config' or 'model_state' key.
-        # If it's a weights-only state_dict, it will have keys like 'resnet.0.weight' etc.
-        is_full_ckpt = "model_state" in ckpt and "config" in ckpt
-        
-        if is_full_ckpt:
+        if not isinstance(ckpt, dict):
+            raise ValueError(f"Unsupported checkpoint payload type: {type(ckpt)!r}")
+
+        is_full_ckpt = all(k in ckpt for k in ("model_state", "config", "optimizer_state", "scaler_state", "step"))
+
+        if "config" in ckpt and isinstance(ckpt["config"], dict):
             config = dict(ckpt["config"])
-            model_state = ckpt["model_state"]
-        else:
-            if fallback_config is None:
-                raise ValueError(
-                    f"Checkpoint {checkpoint_path} appears to be weights-only, "
-                    "but no fallback_config was provided."
-                )
+        elif fallback_config is not None:
             config = dict(fallback_config)
-            model_state = ckpt
+        else:
+            raise ValueError(
+                f"Checkpoint {checkpoint_path} does not include config and no fallback_config was provided."
+            )
+
+        model_state = cls._extract_model_state(ckpt)
 
         if config_overrides:
             config.update(config_overrides)
 
         model_state = cls._normalize_model_state_dict_keys(model_state)
 
-        board_size  = int(config.get("board_size", 19))
-        res_blocks  = int(config.get("res_blocks", 10))
-        filters     = int(config.get("filters", 128))
+        model_hparams = cls._resolve_model_hparams(config, model_state)
 
         model = HexTacToeNet(
-            board_size=board_size,
-            res_blocks=res_blocks,
-            filters=filters,
+            board_size=model_hparams["board_size"],
+            in_channels=model_hparams["in_channels"],
+            res_blocks=model_hparams["res_blocks"],
+            filters=model_hparams["filters"],
         )
         model.load_state_dict(model_state)
 

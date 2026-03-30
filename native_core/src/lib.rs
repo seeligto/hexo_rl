@@ -5,12 +5,16 @@
 
 pub mod board;
 pub mod formations;
+pub mod game_runner;
+pub mod inference_bridge;
 pub mod mcts;
 
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
 
 use board::{Board as RustBoard, Player, BOARD_SIZE};
+use game_runner::RustSelfPlayRunner;
+use inference_bridge::RustInferenceBatcher;
 
 // ── Python-visible Board wrapper ──────────────────────────────────────────────
 
@@ -327,5 +331,7 @@ impl PyMCTSTree {
 fn native_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoard>()?;
     m.add_class::<PyMCTSTree>()?;
+    m.add_class::<RustInferenceBatcher>()?;
+    m.add_class::<RustSelfPlayRunner>()?;
     Ok(())
 }

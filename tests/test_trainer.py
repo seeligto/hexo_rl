@@ -246,3 +246,50 @@ def test_load_checkpoint_allows_config_override(tmp_path: Path):
     assert restored.config.get("total_steps") == 100
     assert restored.scheduler is not None
     assert int(restored.scheduler.T_max) == 100
+
+
+def test_normalize_state_dict_adds_tower_aliases():
+    state = {
+        "trunk.tower.0.conv1.weight": torch.randn(8, 8, 3, 3),
+        "_orig_mod.module.policy_fc.weight": torch.randn(10, 20),
+    }
+
+    normalized = Trainer._normalize_model_state_dict_keys(state)
+
+    assert "trunk.tower.0.conv1.weight" in normalized
+    assert "tower.0.conv1.weight" in normalized
+    assert "policy_fc.weight" in normalized
+
+
+def test_load_weights_only_checkpoint_infers_architecture(tmp_path: Path):
+    base = HexTacToeNet(board_size=9, in_channels=18, res_blocks=2, filters=32)
+    base_state = base.state_dict()
+
+    # Simulate a bootstrap-style checkpoint that only has trunk.* keys.
+    trunk_only = {
+        k: v
+        for k, v in base_state.items()
+        if not k.startswith("tower.")
+    }
+
+    ckpt_path = tmp_path / "bootstrap_like.pt"
+    torch.save(trunk_only, ckpt_path)
+
+    # Intentionally mismatched fallback config: loader should reconcile from state_dict.
+    fallback = {
+        "board_size": 19,
+        "res_blocks": 1,
+        "filters": 16,
+        "in_channels": 18,
+        "batch_size": 8,
+        "lr": 2e-3,
+        "weight_decay": 1e-4,
+        "checkpoint_interval": 5,
+        "log_interval": 1,
+    }
+
+    restored = Trainer.load_checkpoint(ckpt_path, checkpoint_dir=tmp_path, fallback_config=fallback)
+
+    assert restored.model.board_size == 9
+    assert restored.model.res_blocks == 2
+    assert restored.model.filters == 32
