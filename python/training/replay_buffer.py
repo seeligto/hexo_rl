@@ -44,10 +44,14 @@ class ReplayBuffer:
         )
         self.policies = np.zeros((capacity, self._n_actions), dtype=np.float32)
         self.outcomes = np.zeros((capacity,),                 dtype=np.float32)
+        # Game-position ID per slot — used to prevent same-position cluster pairs
+        # from landing in the same training batch (Multi-Window correlation guard).
+        self.game_ids = np.full(capacity, -1, dtype=np.int64)
 
-        self._ptr  = 0   # next write index
-        self._size = 0   # number of valid entries
-        self._rng  = np.random.default_rng()
+        self._ptr     = 0    # next write index
+        self._size    = 0    # number of valid entries
+        self._game_id = 0    # monotonic counter; bumped by push_new_position()
+        self._rng     = np.random.default_rng()
 
         # Precompute flat index maps for all 12 hexagonal symmetries.
         self._sym_indices = self._precompute_symmetry_indices(board_size)
@@ -89,8 +93,12 @@ class ReplayBuffer:
         state:   "np.ndarray",  # (board_channels, board_size, board_size) float16
         policy:  "np.ndarray",  # (n_actions,) float32
         outcome: float,
+        game_id: int = -1,
     ) -> None:
         """Store a single (state, policy, outcome) triple.
+
+        Pass `game_id` (from `next_game_id()`) to tag which board position this
+        cluster belongs to — enables correlation-safe sampling.
 
         Overwrites the oldest entry once capacity is reached.
         No allocation occurs — writes directly into the pre-allocated arrays.
@@ -98,8 +106,19 @@ class ReplayBuffer:
         self.states  [self._ptr] = state
         self.policies[self._ptr] = policy
         self.outcomes[self._ptr] = outcome
+        self.game_ids[self._ptr] = game_id
         self._ptr  = (self._ptr + 1) % self.capacity
         self._size = min(self._size + 1, self.capacity)
+
+    def next_game_id(self) -> int:
+        """Return a fresh monotonic game-position ID and advance the counter.
+
+        Call once per board position (not once per cluster).  Pass the returned
+        ID to every cluster's `push()` call so the sampler can group them.
+        """
+        gid = self._game_id
+        self._game_id += 1
+        return gid
 
     def push_game(
         self,
@@ -138,7 +157,12 @@ class ReplayBuffer:
     def sample(
         self, batch_size: int, augment: bool = True
     ) -> Tuple["np.ndarray", "np.ndarray", "np.ndarray"]:
-        """Sample `batch_size` entries uniformly at random.
+        """Sample `batch_size` entries with Multi-Window correlation guard.
+
+        Entries belonging to the same board position (same game_id) are never
+        allowed into the same batch together — at most one cluster per position
+        is included.  Falls back to plain uniform sampling if game_ids are not
+        set (all -1, e.g. data loaded from an older checkpoint).
 
         Args:
             batch_size: Number of entries to sample.
@@ -151,8 +175,26 @@ class ReplayBuffer:
         """
         if self._size == 0:
             raise ValueError("Cannot sample from an empty replay buffer")
-        
-        indices = np.random.randint(0, self._size, size=batch_size)
+
+        valid_ids = self.game_ids[:self._size]
+        use_dedup = valid_ids[0] != -1  # fast check: ids assigned?
+
+        if use_dedup:
+            # Shuffle all valid indices, then pick the first occurrence of each
+            # unique game_id.  This is O(size) but uses no Python loops.
+            perm = self._rng.permutation(self._size)
+            shuffled_ids = valid_ids[perm]
+            _, first_occurrence = np.unique(shuffled_ids, return_index=True)
+            candidate_indices = perm[first_occurrence]
+            if len(candidate_indices) >= batch_size:
+                chosen = self._rng.choice(candidate_indices, size=batch_size, replace=False)
+            else:
+                # Fewer distinct positions than batch_size — fall back to allowing
+                # duplicates rather than under-filling the batch.
+                chosen = self._rng.choice(self._size, size=batch_size, replace=True)
+            indices = chosen
+        else:
+            indices = np.random.randint(0, self._size, size=batch_size)
         
         if not augment:
             return self.states[indices], self.policies[indices], self.outcomes[indices]

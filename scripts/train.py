@@ -72,6 +72,13 @@ def parse_args() -> argparse.Namespace:
         help="Stop after this many training steps (default: run until Ctrl-C)"
     )
     p.add_argument(
+        "--override-scheduler-horizon", action="store_true",
+        help=(
+            "When resuming from a full checkpoint with --iterations, override "
+            "checkpoint total_steps so the LR scheduler horizon follows the CLI value"
+        ),
+    )
+    p.add_argument(
         "--log-dir", default="logs",
         help="Directory for structlog JSON files (default: logs/)"
     )
@@ -101,6 +108,10 @@ def parse_args() -> argparse.Namespace:
 # ── Main training loop ────────────────────────────────────────────────────────
 
 def main() -> None:
+    if hasattr(signal, "SIGHUP"):
+        # Detached runs should survive terminal hangups.
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+
     args = parse_args()
 
     # ── Load config ──
@@ -138,18 +149,34 @@ def main() -> None:
     }
     train_cfg = config.get("training", config)
 
+    # Tie LR schedule horizon to the requested run length when provided.
+    if args.iterations is not None:
+        combined_config["total_steps"] = int(args.iterations)
+        train_cfg["total_steps"] = int(args.iterations)
+
     board_size  = int(combined_config.get("board_size",  19))
     res_blocks  = int(combined_config.get("res_blocks",  10))
     filters     = int(combined_config.get("filters",     128))
 
     if args.checkpoint:
+        config_overrides = None
+        if args.iterations is not None and args.override_scheduler_horizon:
+            config_overrides = {"total_steps": int(args.iterations)}
+
         trainer = Trainer.load_checkpoint(
             args.checkpoint,
             checkpoint_dir=args.checkpoint_dir,
             device=device,
             fallback_config=combined_config,
+            config_overrides=config_overrides,
         )
-        log.info("resumed", checkpoint=args.checkpoint, step=trainer.step)
+        log.info(
+            "resumed",
+            checkpoint=args.checkpoint,
+            step=trainer.step,
+            scheduler_horizon_overridden=bool(config_overrides),
+            configured_total_steps=trainer.config.get("total_steps"),
+        )
     else:
         model   = HexTacToeNet(
             board_size=board_size,

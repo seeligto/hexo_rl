@@ -58,6 +58,7 @@ import torch
 import torch.multiprocessing as mp
 
 from python.model.network import HexTacToeNet
+from python.selfplay.policy_projection import project_global_policy_to_local
 from python.training.replay_buffer import ReplayBuffer
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -282,16 +283,23 @@ def _worker_fn(
             temperature = 1.0 if ply < temp_thresh else 0.1
             mcts_policy = tree.get_policy(temperature=temperature, board_size=board_size)
 
-            # Record position.
-            # to_tensor() returns (K, 18, 19, 19) tensor and list of K centers
-            full_tensor, centers = state.to_tensor()
-            
-            # For Phase 1 / simplicity, we only store the first cluster in the buffer.
-            # In Phase 2+, we will store all K clusters.
-            state_tensor = full_tensor[0] # (18, 19, 19)
-            
-            policy_arr   = np.array(mcts_policy, dtype=np.float32)
-            records.append((state_tensor, policy_arr, state.current_player))
+            # Record all cluster-local views so training sees every active colony.
+            # All K clusters for the same board position share one position_id so
+            # the replay buffer sampler can enforce at-most-one-per-position per
+            # batch (Multi-Window correlation guard).
+            full_tensor, centers = state.to_tensor()  # (K, 18, 19, 19), K centers
+            global_policy = np.array(mcts_policy, dtype=np.float32)
+            position_id = len(records)  # unique within this game; combined with
+                                        # worker_id in the collector thread
+            for k, center in enumerate(centers):
+                state_tensor = full_tensor[k]
+                policy_arr = project_global_policy_to_local(
+                    rust_board,
+                    center,
+                    global_policy,
+                    board_size=board_size,
+                )
+                records.append((state_tensor, policy_arr, state.current_player, position_id))
 
             # Sample and apply move.
             legal = rust_board.legal_moves()
@@ -530,12 +538,22 @@ class WorkerPool:
             if item is None:
                 break
             records, winner, _worker_id = item
-            for state_tensor, policy_arr, player in records:
+            # Assign globally unique game_ids: one shared ID per board position
+            # (position_id is unique within the game; we offset by buffer counter
+            # to make it globally unique across games and workers).
+            prev_pos_id = None
+            shared_game_id = -1
+            for entry in records:
+                state_tensor, policy_arr, player, position_id = entry
+                if position_id != prev_pos_id:
+                    shared_game_id = self.replay_buffer.next_game_id()
+                    prev_pos_id = position_id
                 if winner is None:
                     outcome = 0.0
                 else:
                     outcome = 1.0 if player == winner else -1.0
-                self.replay_buffer.push(state_tensor, policy_arr, outcome)
+                self.replay_buffer.push(state_tensor, policy_arr, outcome,
+                                        game_id=shared_game_id)
                 self.positions_pushed += 1
             self.games_completed += 1
             if winner == 1:

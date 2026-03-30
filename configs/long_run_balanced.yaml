@@ -16,25 +16,27 @@ mcts:
 selfplay:
   n_workers: 6
   # Explicit self-play override so we do not inherit heavy mcts.n_simulations.
-  n_simulations: 96
+  n_simulations: 160
   inference_batch_size: 64
   inference_max_wait_ms: 8.0
   dispatch_wait_ms: 2.0
   leaf_batch_size: 8
-  fast_playout_prob: 0.9
-  fast_sims_min: 16
-  fast_sims_max: 28
+  fast_playout_prob: 0.5
+  fast_sims_min: 32
+  fast_sims_max: 56
   replay_buffer_capacity: 500000
 
 training:
   batch_size: 256
   min_buffer_size: 256
-  # >1.0 helps keep GPU busier while self-play catches up.
-  training_steps_per_game: 3.0
-  max_train_burst: 10
+  # Keep updates/game moderate to reduce overfitting to fresh buffer slices.
+  training_steps_per_game: 1.0
+  max_train_burst: 8
   lr: 0.002
   weight_decay: 0.0001
   lr_schedule: cosine
+  min_lr: 0.0001
+  total_steps: 50000
   eval_interval: 200
   checkpoint_interval: 100
 
