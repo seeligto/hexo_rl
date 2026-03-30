@@ -599,7 +599,7 @@ impl Board {
                         final_centers.push(((min_q + max_q) / 2, (min_r + max_r) / 2));
                     } else {
                         // Deduplicate anchors: radius 5
-                        let mut deduped = Vec::new();
+                        let mut deduped: Vec<(i32, i32)> = Vec::new();
                         for &a in &cluster_anchors {
                             if !deduped.iter().any(|&d| hex_distance(a.0, a.1, d.0, d.1) <= 5) {
                                 deduped.push(a);
