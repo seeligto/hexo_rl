@@ -22,6 +22,8 @@ Architecture (Multi-Window Cluster-Based Approach):
 """
 
 import logging
+import os
+from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -78,6 +80,8 @@ class HexTacToeNet(nn.Module):
         spatial = board_size * board_size
 
         self.trunk = Trunk(in_channels, filters, res_blocks)
+        # Backward-compatible alias expected by older tests and tooling.
+        self.tower = self.trunk.tower
 
         self.policy_conv = nn.Conv2d(filters, 2, 1)
         self.policy_bn = nn.BatchNorm2d(2)
@@ -113,6 +117,10 @@ class HexTacToeNet(nn.Module):
 
 def compile_model(model: HexTacToeNet, mode: str = "default") -> HexTacToeNet:
     try:
+        if "TORCHINDUCTOR_CACHE_DIR" not in os.environ:
+            cache_dir = Path(".torchinductor-cache").resolve()
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(cache_dir)
         compiled = torch.compile(model, mode=mode)
         _log.info("torch.compile applied successfully (mode=%s)", mode)
         return compiled  # type: ignore[return-value]

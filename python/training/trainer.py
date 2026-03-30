@@ -17,14 +17,13 @@ Checkpointing every N steps:
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.amp import GradScaler, autocast  # type: ignore[attr-defined]
 
 from python.model.network import HexTacToeNet
@@ -63,6 +62,7 @@ class Trainer:
             lr=float(config["lr"]),
             weight_decay=float(config["weight_decay"]),
         )
+        self.scheduler = self._build_scheduler(config)
 
         # GradScaler for FP16 training; no-op on CPU.
         self.scaler = GradScaler(device=self.device.type, enabled=(self.device.type == "cuda"))
@@ -75,6 +75,19 @@ class Trainer:
         if log_path.exists():
             with open(log_path) as f:
                 self.checkpoint_log = json.load(f)
+
+    def _build_scheduler(self, config: Dict[str, Any]):
+        schedule = str(config.get("lr_schedule", "none")).lower()
+        if schedule in {"none", "off", "disabled"}:
+            return None
+
+        if schedule == "cosine":
+            total_steps = int(config.get("scheduler_t_max", config.get("total_steps", 50_000)))
+            total_steps = max(1, total_steps)
+            min_lr = float(config.get("min_lr", 1e-5))
+            return CosineAnnealingLR(self.optimizer, T_max=total_steps, eta_min=min_lr)
+
+        raise ValueError(f"Unsupported lr_schedule: {schedule}")
 
     # ── Training step ─────────────────────────────────────────────────────────
 
@@ -110,9 +123,16 @@ class Trainer:
 
             loss = policy_loss + value_loss
 
-        self.scaler.scale(loss).backward()
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        if self.device.type == "cuda":
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss.backward()
+            self.optimizer.step()
+
+        if self.scheduler is not None:
+            self.scheduler.step()
 
         self.step += 1
 
@@ -161,6 +181,7 @@ class Trainer:
                 "model_state":     model_state,
                 "optimizer_state": self.optimizer.state_dict(),
                 "scaler_state":    self.scaler.state_dict(),
+                "scheduler_state": self.scheduler.state_dict() if self.scheduler is not None else None,
                 "config":          self.config,
             },
             ckpt_path,
@@ -187,6 +208,7 @@ class Trainer:
         checkpoint_dir: Optional[str | Path] = None,
         device: Optional[torch.device] = None,
         fallback_config: Optional[Dict[str, Any]] = None,
+        config_overrides: Optional[Dict[str, Any]] = None,
     ) -> "Trainer":
         """Restore a Trainer from a checkpoint file.
 
@@ -196,6 +218,9 @@ class Trainer:
                              the same directory as the checkpoint file).
             device:          Override device.
             fallback_config: Config to use if the checkpoint is weights-only.
+            config_overrides: Optional config keys to override after loading
+                              checkpoint config (useful for controlled resume
+                              behavior such as scheduler horizon changes).
         """
         ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         
@@ -204,7 +229,7 @@ class Trainer:
         is_full_ckpt = "model_state" in ckpt and "config" in ckpt
         
         if is_full_ckpt:
-            config = ckpt["config"]
+            config = dict(ckpt["config"])
             model_state = ckpt["model_state"]
         else:
             if fallback_config is None:
@@ -212,8 +237,11 @@ class Trainer:
                     f"Checkpoint {checkpoint_path} appears to be weights-only, "
                     "but no fallback_config was provided."
                 )
-            config = fallback_config
+            config = dict(fallback_config)
             model_state = ckpt
+
+        if config_overrides:
+            config.update(config_overrides)
 
         model_state = cls._normalize_model_state_dict_keys(model_state)
 
@@ -234,6 +262,17 @@ class Trainer:
         if is_full_ckpt:
             trainer.optimizer.load_state_dict(ckpt["optimizer_state"])
             trainer.scaler.load_state_dict(ckpt["scaler_state"])
+            if trainer.scheduler is not None and ckpt.get("scheduler_state") is not None:
+                scheduler_state = ckpt["scheduler_state"]
+                # Optional: let explicit config overrides update scheduler horizon.
+                if config_overrides and (
+                    "scheduler_t_max" in config_overrides or "total_steps" in config_overrides
+                ):
+                    scheduler_state = dict(scheduler_state)
+                    scheduler_state["T_max"] = int(
+                        config.get("scheduler_t_max", config.get("total_steps", scheduler_state.get("T_max", 1)))
+                    )
+                trainer.scheduler.load_state_dict(scheduler_state)
             trainer.step = ckpt["step"]
 
         return trainer
