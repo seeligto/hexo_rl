@@ -231,7 +231,7 @@ def _worker_fn(
                 current_batch = min(safe_leaf_batch_size, current_n_sims - sim_idx)
                 try:
                     leaves = tree.select_leaves(current_batch)
-                except Exception as exc:
+                except BaseException as exc:
                     # Rare native_core panic in batched selection path can occur under
                     # high concurrency. Fall back to single-leaf mode for stability.
                     if safe_leaf_batch_size > 1:
@@ -244,7 +244,7 @@ def _worker_fn(
                             warned_fallback = True
                         try:
                             leaves = tree.select_leaves(1)
-                        except Exception:
+                        except BaseException:
                             break
                     else:
                         break
@@ -387,6 +387,9 @@ class WorkerPool:
         # Stats.
         self.games_completed: int = 0
         self.positions_pushed: int = 0
+        self.x_wins: int = 0
+        self.o_wins: int = 0
+        self.draws: int = 0
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -459,6 +462,16 @@ class WorkerPool:
         """Hot-swap model weights (called after a new best checkpoint is found)."""
         self.model.load_state_dict(state_dict)
 
+    @property
+    def x_winrate(self) -> float:
+        total = self.games_completed
+        return (self.x_wins / total) if total > 0 else 0.0
+
+    @property
+    def o_winrate(self) -> float:
+        total = self.games_completed
+        return (self.o_wins / total) if total > 0 else 0.0
+
     # ── Internal threads ──────────────────────────────────────────────────────
 
     def _dispatch_loop(self) -> None:
@@ -525,3 +538,9 @@ class WorkerPool:
                 self.replay_buffer.push(state_tensor, policy_arr, outcome)
                 self.positions_pushed += 1
             self.games_completed += 1
+            if winner == 1:
+                self.x_wins += 1
+            elif winner == -1:
+                self.o_wins += 1
+            else:
+                self.draws += 1

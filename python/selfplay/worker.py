@@ -289,17 +289,32 @@ class SelfPlayWorker:
         """Run n_sims MCTS simulations from `board` using batched inference."""
         self.tree.new_game(board)
         dirichlet_applied = False
+        effective_batch_size = max(1, int(batch_size))
 
-        # Run simulations in batches
-        for sim_idx in range(0, n_sims, batch_size):
-            current_batch = min(batch_size, n_sims - sim_idx)
-            leaves = self.tree.select_leaves(current_batch)
+        # Run simulations in batches.
+        sims_done = 0
+        while sims_done < n_sims:
+            current_batch = min(effective_batch_size, n_sims - sims_done)
+            try:
+                leaves = self.tree.select_leaves(current_batch)
+            except BaseException as exc:
+                # Native MCTS can occasionally panic during batched leaf
+                # reconstruction. Recover by restarting search at root and
+                # continuing in conservative batch_size=1 mode.
+                if current_batch > 1 and "cell already occupied" in str(exc):
+                    self.tree.new_game(board)
+                    dirichlet_applied = False
+                    effective_batch_size = 1
+                    leaves = self.tree.select_leaves(1)
+                else:
+                    raise
             if not leaves:
                 break
             
             # Batch inference on all selected leaves
             policies, values = self._infer_batch(leaves)
             self.tree.expand_and_backup(policies, values)
+            sims_done += current_batch
 
             # Apply Dirichlet noise to root priors after the first expansion.
             if use_dirichlet and not dirichlet_applied:
