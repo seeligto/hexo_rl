@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List
@@ -132,24 +133,27 @@ def benchmark_inference_latency(model: "HexTacToeNet") -> Dict[str, Any]:
 
 def benchmark_replay_buffer(buffer: "ReplayBuffer") -> Dict[str, Any]:
     """Replay buffer sample speed."""
+    raw_iters = 2_000
+    aug_iters = 200
+
     # 1. Raw sampling
     t0 = time.perf_counter()
-    for _ in range(10_000):
+    for _ in range(raw_iters):
         buffer.sample(batch_size=256, augment=False)
     elapsed_raw = time.perf_counter() - t0
     
     # 2. Augmented sampling
     t1 = time.perf_counter()
-    for _ in range(1_000):
+    for _ in range(aug_iters):
         buffer.sample(batch_size=256, augment=True)
     elapsed_aug = time.perf_counter() - t1
     
     return {
         "name":          "Replay buffer sample (batch=256)",
-        "samples":       10_000,
+        "samples":       raw_iters,
         "elapsed_sec":   elapsed_raw,
-        "us_per_sample": elapsed_raw / 10_000 * 1e6,
-        "aug_ms":        elapsed_aug / 1_000 * 1000,
+        "us_per_sample": elapsed_raw / raw_iters * 1e6,
+        "aug_ms":        elapsed_aug / aug_iters * 1000,
     }
 
 
@@ -218,8 +222,7 @@ def benchmark_worker_pool(
             "n_workers": n_workers,
             "inference_batch_size": int(config.get("inference_batch_size", 32)),
             "inference_max_wait_ms": float(config.get("inference_max_wait_ms", 8.0)),
-            "dispatch_wait_ms": float(config.get("dispatch_wait_ms", 2.0)),
-            "leaf_batch_size": int(config.get("leaf_batch_size", 8)),
+            "max_moves_per_game": int(config.get("max_moves_per_game", 128)),
         },
     }
     replay = ReplayBuffer(capacity=25_000, board_channels=18)
@@ -241,20 +244,38 @@ def benchmark_worker_pool(
 
     pool.start()
     t0 = time.perf_counter()
+    stop_error: str | None = None
     try:
         time.sleep(duration_sec)
     finally:
-        pool.stop()
+        done = threading.Event()
+
+        def _stop_pool() -> None:
+            nonlocal stop_error
+            try:
+                pool.stop()
+            except Exception as exc:  # pragma: no cover - defensive cleanup path
+                stop_error = str(exc)
+            finally:
+                done.set()
+
+        stop_thread = threading.Thread(target=_stop_pool, daemon=True)
+        stop_thread.start()
+        if not done.wait(5.0):
+            stop_error = "pool.stop timeout"
 
     elapsed = max(time.perf_counter() - t0, 1e-6)
     games_per_hour = (pool.games_completed / elapsed) * 3600.0
-    return {
+    result = {
         "name": "Worker pool throughput",
         "games_completed": pool.games_completed,
         "positions_pushed": pool.positions_pushed,
         "elapsed_sec": elapsed,
         "games_per_hour": games_per_hour,
     }
+    if stop_error is not None:
+        result["stop_error"] = stop_error
+    return result
 
 
 # ── Report ────────────────────────────────────────────────────────────────────

@@ -1,149 +1,75 @@
-"""
-Batched GPU inference server.
+"""Rust-driven batched GPU inference server.
 
-Multiple concurrent self-play games accumulate leaf-evaluation requests
-into a shared queue. When the queue reaches `batch_size` (or a wall-clock
-timeout expires), the server fires a single model.forward() call and
-distributes (policy, value) results back to the waiting callers.
-
-This is the critical GPU-utilisation optimisation: without batching, each
-game fires a single-position forward pass and the GPU sits idle between
-calls.  With batching, N games fill one batch and the GPU is kept busy.
-
-Thread model
-────────────
-  InferenceServer — one daemon thread.  Games push InferenceRequest objects
-  to a queue, block on their per-request threading.Event, and read the
-  result after the event fires.
-
-  This is a single-process (multi-thread) design.  The WorkerPool (pool.py)
-  wraps this for multi-process use via mp.Queue.
-
-Usage
-─────
-    server = InferenceServer(model, device, config)
-    server.start()
-
-    # From any thread:
-    policy, value = server.infer(state_tensor)  # blocks until batched
-
-    server.stop()
-    server.join()
+Rust owns request concurrency via `RustInferenceBatcher`. Python only runs a
+thin `while True` loop: fetch fused batch from Rust, execute model forward,
+submit policy/value outputs back to Rust, and wake blocked game threads.
 """
 
 from __future__ import annotations
 
-import math
-import queue
 import threading
-import time
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
 
+from native_core import RustInferenceBatcher  # type: ignore[attr-defined]
 from python.model.network import HexTacToeNet
-
-
-# ── Request ───────────────────────────────────────────────────────────────────
-
-@dataclass
-class InferenceRequest:
-    """A single leaf-evaluation request.
-
-    The caller creates this, puts it on the server queue, waits on `event`,
-    then reads `result`.
-    """
-    state: np.ndarray          # (K, 18, 19, 19) float16
-    event: threading.Event = field(default_factory=threading.Event)
-    result: Optional[Tuple[np.ndarray, np.ndarray]] = field(default=None)
-    # result is (cluster_policies, cluster_values):
-    #   cluster_policies shape (K, 362) float32
-    #   cluster_values   shape (K,) float32
 
 
 # ── Server ────────────────────────────────────────────────────────────────────
 
 class InferenceServer(threading.Thread):
-    """Daemon thread that batches leaf-state inference requests.
-
-    Args:
-        model:       The neural network (HexTacToeNet).
-        device:      torch.device to run inference on.
-        config:      Config dict.  Used keys (under ``selfplay`` sub-dict if
-                     present, else top-level):
-                       inference_batch_size  (default 64)
-                       inference_max_wait_ms (default 10.0)
-    """
+    """Thin Python inference loop backed by a Rust-owned batching queue."""
 
     def __init__(
         self,
         model: HexTacToeNet,
         device: torch.device,
         config: Dict[str, Any],
+        batcher: Optional[RustInferenceBatcher] = None,
     ) -> None:
         super().__init__(daemon=True, name="inference-server")
-        self.model  = model
+        self.model = model
         self.device = device
 
         sp = config.get("selfplay", config)
-        self._batch_size   = int(sp.get("inference_batch_size",  64))
-        self._max_wait_s   = float(sp.get("inference_max_wait_ms", 10.0)) / 1000.0
+        self._batch_size = int(sp.get("inference_batch_size", 64))
+        self._max_wait_ms = int(float(sp.get("inference_max_wait_ms", 10.0)))
 
-        self._queue: queue.Queue[InferenceRequest] = queue.Queue()
-        self._stop  = threading.Event()
+        board_size = int(getattr(model, "board_size", 19))
+        in_channels = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
+        self._policy_len = board_size * board_size + 1
+        self._feature_len = in_channels * board_size * board_size
+        self._shape = (in_channels, board_size, board_size)
 
-        # Counters (read from tests / monitoring; not locked — approximate ok).
-        self._forward_count: int = 0
-        self._total_requests: int = 0
+        self._batcher = batcher or RustInferenceBatcher(
+            feature_len=self._feature_len,
+            policy_len=self._policy_len,
+        )
+        self._stop_event = threading.Event()
+        self._forward_count = 0
+        self._total_requests = 0
 
-    # ── Public API ────────────────────────────────────────────────────────────
-
-    def _normalize_state(self, state: np.ndarray) -> np.ndarray:
-        """Normalize to (K, 18, 19, 19) float16 contiguous array."""
-        state_arr = np.asarray(state)
-        if state_arr.ndim == 3:
-            state_arr = state_arr[None, ...]
-        return np.ascontiguousarray(state_arr, dtype=np.float16)
-
-    def infer_many(self, states: list[np.ndarray]) -> list[Tuple[np.ndarray, np.ndarray]]:
-        """Submit many states and wait until all are resolved."""
-        if not states:
-            return []
-
-        requests: list[InferenceRequest] = []
-        for state in states:
-            req = InferenceRequest(state=self._normalize_state(state))
-            self._queue.put(req)
-            requests.append(req)
-
-        results: list[Tuple[np.ndarray, np.ndarray]] = []
-        for req in requests:
-            req.event.wait()
-            assert req.result is not None
-            results.append(req.result)
-        return results
-
-    def infer(self, state: np.ndarray):
-        """Submit `state` for inference; block until the result is ready.
-
-        Args:
-            state: Board tensor, shape (18, 19, 19), dtype float16.
-
-        Returns:
-            policy_probs: np.ndarray, shape (362,), float32, sums to 1.
-            value:        float in [-1, 1] from current player's perspective.
-        """
-        result = self.infer_many([state])[0]
-        cluster_policies, cluster_values = result
-        if np.asarray(state).ndim == 3:
-            return cluster_policies[0], float(cluster_values[0])
-        return result
+    @property
+    def batcher(self) -> RustInferenceBatcher:
+        return self._batcher
 
     def stop(self) -> None:
-        """Signal the server to stop after draining its current batch."""
-        self._stop.set()
+        self._stop_event.set()
+        self._batcher.close()
+
+    def submit_and_wait(self, state: np.ndarray) -> tuple[np.ndarray, float]:
+        """Compatibility helper for single direct requests via Rust queue."""
+        arr = np.asarray(state, dtype=np.float32).reshape(-1)
+        policy, value = self._batcher.submit_request_and_wait(arr.tolist())
+        return np.asarray(policy, dtype=np.float32), float(value)
+
+    def infer(self, state: np.ndarray) -> tuple[np.ndarray, float]:
+        return self.submit_and_wait(state)
+
+    def infer_many(self, states: list[np.ndarray]) -> list[tuple[np.ndarray, float]]:
+        return [self.submit_and_wait(state) for state in states]
 
     @property
     def forward_count(self) -> int:
@@ -156,94 +82,38 @@ class InferenceServer(threading.Thread):
     # ── Thread body ───────────────────────────────────────────────────────────
 
     def run(self) -> None:
-        while not self._stop.is_set():
-            batch = self._collect_batch()
-            if batch:
-                self._process_batch(batch)
-
-        # Drain any remaining requests so callers don't hang on stop().
-        while True:
-            try:
-                batch = self._collect_batch(drain=True)
-                if not batch:
-                    break
-                self._process_batch(batch)
-            except Exception:
-                break
-
-    # ── Internal ──────────────────────────────────────────────────────────────
-
-    def _collect_batch(self, *, drain: bool = False) -> list[InferenceRequest]:
-        """Collect up to `_batch_size` requests.
-
-        Blocks up to `_max_wait_s` for the first item, then greedily reads
-        more until `_batch_size` is reached or the deadline expires.
-
-        With `drain=True`, uses a very short timeout (no blocking).
-        """
-        batch: list[InferenceRequest] = []
-        timeout = 0.001 if drain else self._max_wait_s
-
         try:
-            first = self._queue.get(timeout=timeout)
-            batch.append(first)
-        except queue.Empty:
-            return batch
+            while not self._stop_event.is_set():
+                request_ids, batch = self._batcher.next_inference_batch(
+                    self._batch_size,
+                    self._max_wait_ms,
+                )
+                if not request_ids:
+                    continue
 
-        deadline = time.monotonic() + self._max_wait_s
-        while len(batch) < self._batch_size:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            try:
-                req = self._queue.get(timeout=remaining)
-                batch.append(req)
-            except queue.Empty:
-                break
+                self._total_requests += len(request_ids)
+                batch_np = np.asarray(batch, dtype=np.float32)
+                tensor = torch.from_numpy(batch_np).to(self.device).reshape(len(request_ids), *self._shape)
 
-        return batch
+                try:
+                    self.model.eval()
+                    with torch.no_grad():
+                        with torch.autocast(device_type=self.device.type):
+                            log_policy, value = self.model(tensor)
+                    policies = log_policy.exp().cpu().numpy().astype(np.float32)
+                    values = value.squeeze(-1).cpu().numpy().astype(np.float32)
+                except Exception:
+                    # Never deadlock Rust waiters when model inference fails.
+                    policies = np.ones((len(request_ids), self._policy_len), dtype=np.float32)
+                    policies /= float(self._policy_len)
+                    values = np.zeros((len(request_ids),), dtype=np.float32)
 
-    def _process_batch(self, batch: list[InferenceRequest]) -> None:
-        """Run one forward pass over the batch and resolve all requests."""
-        self._total_requests += len(batch)
-
-        # states are (K, 18, 19, 19). We concatenate them along dim=0.
-        k_sizes = [req.state.shape[0] for req in batch]
-        
-        # Concatenate states -> (sum(K), 18, 19, 19)
-        tensor = torch.cat([torch.from_numpy(req.state) for req in batch], dim=0).to(self.device)
-
-        sum_k = int(tensor.shape[0])
-        h = int(tensor.shape[-2])
-        w = int(tensor.shape[-1])
-        n_actions = h * w + 1
-
-        try:
-            self.model.eval()
-            with torch.no_grad():
-                with torch.amp.autocast(device_type=self.device.type):
-                    # Input tensors are already float16 from _normalize_state.
-                    # Avoid an extra per-batch tensor.float() cast.
-                    log_policy, value = self.model(tensor)
-
-            # log_policy: (sum(K), n_actions) log-softmax  →  exp → probabilities
-            policies_np = log_policy.exp().cpu().numpy().astype(np.float32)  # (sum(K), n_actions)
-            values_np = value.squeeze(-1).cpu().numpy().astype(np.float32)  # (sum(K),)
-        except Exception:
-            # Critical: never allow a forward failure to deadlock worker callers.
-            # If inference throws, return uniform priors and zero value, and
-            # still set req.event for every waiting request.
-            policies_np = np.ones((sum_k, n_actions), dtype=np.float32) / float(n_actions)
-            values_np = np.zeros((sum_k,), dtype=np.float32)
-
-        # Slice results back to each request
-        offset = 0
-        for i, req in enumerate(batch):
-            k = k_sizes[i]
-            req_policies = policies_np[offset:offset+k]
-            req_values = values_np[offset:offset+k]
-            req.result = (req_policies, req_values)
-            req.event.set()
-            offset += k
-
-        self._forward_count += 1
+                self._batcher.submit_inference_results(
+                    request_ids,
+                    policies.tolist(),
+                    values.tolist(),
+                )
+                self._forward_count += 1
+        finally:
+            # Ensure blocked Rust waiters are released even if this thread exits unexpectedly.
+            self._batcher.close()

@@ -254,6 +254,14 @@ If worker-pool throughput reports 0 games/hour in short runs, increase `--pool-d
 .venv/bin/python -m pytest -q tests/test_inference_server.py tests/test_worker_pool.py tests/test_benchmark_smoke.py
 ```
 
+For Rust-runner handshake debugging during migration, run:
+
+```bash
+.venv/bin/python -m pytest -vv -s --maxfail=1 tests/test_inference_server.py tests/test_worker_pool.py
+```
+
+This pair is the fastest signal for deadlocks and queue handoff regressions.
+
 ### Python benchmark runner
 
 ```python

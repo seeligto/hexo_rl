@@ -175,22 +175,27 @@ P_root = (1 - epsilon) * P_net + epsilon * noise
 
 ```
 Main process
-  ├── InferenceServer (GPU thread)           — batches requests, runs forward passes
-  ├── WorkerPool (N CPU processes, N=4–8)
-  │     Each worker:
+  ├── InferenceServer (GPU thread)            — thin loop over Rust batch queue
+  │     while True:
+  │       ids, fused = batcher.next_inference_batch(B, wait_ms)
+  │       log_policy, value = model(fused)
+  │       batcher.submit_inference_results(ids, log_policy.exp(), value)
+  ├── RustSelfPlayRunner (N Rust threads)
+  │     Each worker thread:
   │       loop:
   │         game = new_game()
   │         while not game.terminal:
-  │           leaf_states = mcts.search(game.state, n_simulations)
-  │           # sends leaves to InferenceServer via queue
-  │           policy = mcts.get_policy(temperature)
-  │           move = sample(policy)
+  │           features = leaf_encoder(game_state)
+  │           # blocks in Rust until Python inference returns
+  │           policy, value = batcher.submit_request_and_wait(features)
+  │           mcts.expand_and_backup(policy, value)
+  │           move = sample(mcts_policy)
   │           game.apply(move)
-  │         replay_buffer.push(game.records)
+  │         sample_queue.push(game.records)
   └── Trainer (runs in main process, sampling from replay_buffer)
 ```
 
-Workers use `torch.multiprocessing` with `spawn` start method. The inference queue is a `mp.Queue` with a max size to apply backpressure.
+The hot-path concurrency is Rust-owned (not Python multiprocessing). Python is responsible for the NN forward pass only, while Rust owns game-thread scheduling, request blocking, and wake-up semantics.
 
 ### Replay buffer
 

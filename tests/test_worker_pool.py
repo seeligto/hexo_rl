@@ -1,121 +1,124 @@
-"""
-Tests for WorkerPool — multiprocess self-play.
+"""Tests for Phase 3.5 self-play concurrency interfaces.
 
-These tests start real worker processes and verify end-to-end behaviour.
-They use a tiny config (n_sims=5, n_workers=2, small model) to run fast.
-
-Because spawning processes has overhead, the test allows up to 60 s for
-games to appear in the replay buffer.
+Legacy multiprocessing queue tests were removed. These tests validate:
+1) RustInferenceBatcher block/batch/unblock behavior.
+2) WorkerPool basic in-process threaded self-play smoke path.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Dict, Any
 
+import numpy as np
 import pytest
 import torch
-import torch.multiprocessing as mp
 
+from native_core import RustInferenceBatcher, RustSelfPlayRunner
 from python.model.network import HexTacToeNet
-from python.training.replay_buffer import ReplayBuffer
+from python.selfplay.inference_server import InferenceServer
 from python.selfplay.pool import WorkerPool
+from python.training.replay_buffer import ReplayBuffer
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+@pytest.mark.timeout(30)
+def test_rust_batcher_blocks_batches_and_unblocks():
+    feature_len = 18 * 19 * 19
+    policy_len = 19 * 19 + 1
 
-def _tiny_config() -> Dict[str, Any]:
-    """Minimal config for fast test runs."""
-    return {
+    batcher = RustInferenceBatcher(feature_len=feature_len, policy_len=policy_len)
+    try:
+        batcher.spawn_mock_games(10)
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not batcher.has_pending_requests():
+            time.sleep(0.01)
+
+        assert batcher.has_pending_requests(), "mock game requests did not reach Rust queue"
+
+        all_ids: list[int] = []
+        all_rows: list[np.ndarray] = []
+        collect_deadline = time.monotonic() + 5.0
+        while len(all_ids) < 10 and time.monotonic() < collect_deadline:
+            req_ids, fused = batcher.next_inference_batch(batch_size=16, max_wait_ms=500)
+            if not req_ids:
+                continue
+            fused_np = np.asarray(fused, dtype=np.float32)
+            all_ids.extend(req_ids)
+            all_rows.append(fused_np)
+
+        assert len(all_ids) == 10
+        merged = np.concatenate(all_rows, axis=0)
+        assert merged.shape == (10, feature_len)
+
+        policies = np.full((10, policy_len), 1.0 / float(policy_len), dtype=np.float32)
+        values = np.zeros((10,), dtype=np.float32)
+        batcher.submit_inference_results(all_ids, policies.tolist(), values.tolist())
+
+        done_deadline = time.monotonic() + 5.0
+        while time.monotonic() < done_deadline and batcher.completed_mock_games() < 10:
+            time.sleep(0.01)
+
+        assert batcher.completed_mock_games() == 10
+    finally:
+        batcher.close()
+
+
+@pytest.mark.timeout(60)
+def test_worker_pool_produces_positions_threaded_smoke():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
+    buffer = ReplayBuffer(capacity=10_000)
+
+    config = {
         "mcts": {
-            "n_simulations": 5,
-            "c_puct": 1.5,
-            "temperature_threshold_ply": 30,
+            "n_simulations": 1,
+            "c_puct": 1.0,
+            "temperature_threshold_ply": 8,
         },
         "selfplay": {
-            "n_workers": 2,
-            "inference_batch_size": 4,
-            "inference_max_wait_ms": 20.0,
+            "n_workers": 1,
         },
     }
 
-
-def _small_model(device: torch.device) -> HexTacToeNet:
-    return HexTacToeNet(
-        board_size=19,
-        in_channels=18,
-        filters=32,
-        res_blocks=2,
-    ).to(device)
-
-
-# ── Tests ──────────────────────────────────────────────────────────────────────
-
-@pytest.mark.timeout(90)
-def test_worker_pool_produces_positions():
-    """Start a pool with 2 workers, wait until ≥1 game completes."""
-    # torch.multiprocessing requires spawn start method.
-    try:
-        mp.set_start_method("spawn", force=False)
-    except RuntimeError:
-        pass  # already set
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model  = _small_model(device)
-    buffer = ReplayBuffer(capacity=10_000)
-    config = _tiny_config()
-
-    try:
-        pool = WorkerPool(model, config, device, buffer, n_workers=2)
-    except PermissionError as exc:
-        # Some sandboxed environments block POSIX semaphore creation, which
-        # prevents multiprocessing queues from being constructed at all.
-        pytest.skip(f"multiprocessing queues not permitted here: {exc}")
+    pool = WorkerPool(model, config, device, buffer, n_workers=1)
     pool.start()
-
     try:
-        # Wait up to 60 s for at least 1 game to finish.
-        deadline = time.monotonic() + 60.0
+        deadline = time.monotonic() + 30.0
         while time.monotonic() < deadline:
-            if pool.games_completed >= 1:
+            if pool.games_completed >= 1 and pool.positions_pushed > 0 and buffer.size > 0:
                 break
-            time.sleep(0.5)
+            time.sleep(0.1)
 
-        assert pool.games_completed >= 1, (
-            f"No games completed within timeout. "
-            f"positions_pushed={pool.positions_pushed}"
-        )
-        assert pool.positions_pushed > 0, "No positions pushed to replay buffer"
-        assert buffer.size > 0, "Replay buffer is still empty"
+        assert pool.games_completed >= 1
+        assert pool.positions_pushed > 0
+        assert buffer.size > 0
     finally:
         pool.stop()
 
 
-@pytest.mark.timeout(90)
-def test_worker_pool_respects_backpressure():
-    """Pool should not overflow the request queue; it stays bounded."""
-    try:
-        mp.set_start_method("spawn", force=False)
-    except RuntimeError:
-        pass
-
+@pytest.mark.timeout(30)
+def test_rust_runner_with_inference_server_generates_positions():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model  = _small_model(device)
-    buffer = ReplayBuffer(capacity=10_000)
-    config = _tiny_config()
+    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
 
+    runner = RustSelfPlayRunner(n_workers=2, max_moves_per_game=16)
+    server = InferenceServer(
+        model,
+        device,
+        {"selfplay": {"inference_batch_size": 32, "inference_max_wait_ms": 5.0}},
+        batcher=runner.batcher,
+    )
+
+    server.start()
+    runner.start()
     try:
-        pool = WorkerPool(model, config, device, buffer, n_workers=2)
-    except PermissionError as exc:
-        pytest.skip(f"multiprocessing queues not permitted here: {exc}")
-    pool.start()
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and runner.positions_generated <= 0:
+            time.sleep(0.05)
 
-    # Let it run for a short time, verify no exceptions and request queue stays bounded.
-    time.sleep(5.0)
-    qsize = pool._request_queue.qsize()
-    maxsize = pool._request_queue._maxsize  # type: ignore[attr-defined]
-
-    pool.stop()
-
-    # The queue should never exceed its maxsize (backpressure is working).
-    assert qsize <= maxsize, f"Queue overflow: qsize={qsize}, maxsize={maxsize}"
+        assert runner.positions_generated > 0
+        assert runner.games_completed >= 1
+    finally:
+        runner.stop()
+        server.stop()
+        server.join(timeout=5.0)
