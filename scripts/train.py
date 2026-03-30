@@ -91,6 +91,10 @@ def parse_args() -> argparse.Namespace:
         "--no-compile", action="store_true",
         help="Disable torch.compile (useful for debugging)"
     )
+    p.add_argument(
+        "--min-buffer-size", type=int, default=None,
+        help="Override replay warmup size before first training step"
+    )
     return p.parse_args()
 
 
@@ -132,6 +136,7 @@ def main() -> None:
         **mcts_config,   # Overrides from nested mcts section
         **self_config,   # Overrides from nested selfplay section
     }
+    train_cfg = config.get("training", config)
 
     board_size  = int(combined_config.get("board_size",  19))
     res_blocks  = int(combined_config.get("res_blocks",  10))
@@ -164,8 +169,16 @@ def main() -> None:
         log.info("torch_compile", applied=True)
 
     # ── Replay buffer ──
-    capacity     = int(config.get("buffer_capacity", 500_000))
-    min_buf_size = int(config.get("min_buffer_size", 512))
+    capacity = int(config.get("buffer_capacity", train_cfg.get("buffer_capacity", 500_000)))
+    configured_min_buf = train_cfg.get("min_buffer_size", config.get("min_buffer_size"))
+    if args.min_buffer_size is not None:
+        min_buf_size = int(args.min_buffer_size)
+    elif configured_min_buf is not None:
+        min_buf_size = int(configured_min_buf)
+    else:
+        # Default warmup heuristic: enough samples for a few batches, but not so
+        # high that training appears stalled on first launch.
+        min_buf_size = max(128, min(512, int(train_cfg.get("batch_size", config.get("batch_size", 256)))))
     buffer = ReplayBuffer(
         capacity=capacity,
         board_channels=18,
@@ -178,7 +191,6 @@ def main() -> None:
     from python.eval.evaluator import Evaluator
     
     pool = WorkerPool(trainer.model, config, device, buffer)
-    train_cfg = config.get("training", config)
     enable_periodic_eval = bool(train_cfg.get("enable_periodic_eval", config.get("enable_periodic_eval", False)))
     evaluator = Evaluator(trainer.model, device, config) if enable_periodic_eval else None
     
@@ -197,6 +209,8 @@ def main() -> None:
     # ── Loop ──
     log_interval  = int(config.get("log_interval",  10))
     eval_interval = int(train_cfg.get("eval_interval", config.get("eval_interval", 100)))
+    training_steps_per_game = float(train_cfg.get("training_steps_per_game", 1.0))
+    max_train_burst = int(train_cfg.get("max_train_burst", 8))
     train_step    = trainer.step
     games_played  = 0
     t_start       = time.time()
@@ -214,6 +228,34 @@ def main() -> None:
         nonlocal train_step, games_played, initial_policy_loss, last_loss_info
 
         last_train_game_count = 0
+        last_ui_refresh = 0.0
+        ui_refresh_sec = 1.0
+        last_warmup_log = 0.0
+
+        def _refresh_dashboard(eval_metrics: dict | None = None) -> None:
+            if dashboard is None:
+                return
+            nonlocal last_ui_refresh
+            now = time.time()
+            if now - last_ui_refresh < ui_refresh_sec:
+                return
+            elapsed = max(now - t_start, 1e-6)
+            metrics = {
+                "iteration": train_step,
+                "policy_loss": last_loss_info.get("policy_loss") if last_loss_info else None,
+                "value_loss": last_loss_info.get("value_loss") if last_loss_info else None,
+                "buffer_size": buffer.size,
+                "games_total": games_played,
+                "games_per_hour": games_played / elapsed * 3600,
+                "gpu_util": gpu_monitor.gpu_util_pct,
+                "vram_gb": gpu_monitor.vram_used_gb,
+                "x_winrate": 0.0,
+                "o_winrate": 0.0,
+            }
+            if eval_metrics:
+                metrics.update(eval_metrics)
+            dashboard.update(train_step, total_steps, metrics)
+            last_ui_refresh = now
         
         while _running[0]:
             if args.iterations and train_step >= args.iterations:
@@ -224,53 +266,76 @@ def main() -> None:
             # Only train if we have enough data and we haven't already trained 
             # for the current batch of games.
             games_played = pool.games_completed
+            _refresh_dashboard()
             
             if buffer.size < min_buf_size:
+                if dashboard is None and (time.time() - last_warmup_log) >= 5.0:
+                    print(
+                        f"[warmup] buffer={buffer.size}/{min_buf_size} games={games_played} "
+                        f"gpu={gpu_monitor.gpu_util_pct:.0f}%",
+                        flush=True,
+                    )
+                    last_warmup_log = time.time()
                 time.sleep(1.0)
                 continue
                 
-            # Gate: One training step per completed game (standard AlphaZero ratio)
-            if games_played <= last_train_game_count:
+            new_games = games_played - last_train_game_count
+            if new_games <= 0:
+                if dashboard is None and (time.time() - last_warmup_log) >= 5.0:
+                    print(
+                        f"[waiting] games={games_played} trained_games={last_train_game_count} "
+                        f"buffer={buffer.size}",
+                        flush=True,
+                    )
+                    last_warmup_log = time.time()
                 time.sleep(0.1) # Wait for workers
                 continue
 
-            # Perform one training step
-            loss_info = trainer.train_step(buffer)
-            train_step = trainer.step
+            steps_budget = max(1, int(round(new_games * training_steps_per_game)))
+            steps_budget = min(steps_budget, max_train_burst)
             last_train_game_count = games_played
-            if initial_policy_loss is None:
-                initial_policy_loss = float(loss_info["policy_loss"])
-            last_loss_info = loss_info
 
-            # ── Evaluation ──
-            eval_metrics = {}
-            if evaluator is not None and train_step > 0 and train_step % eval_interval == 0:
-                log.info("evaluation_start", step=train_step)
-                wr_random = evaluator.evaluate_vs_random(n_games=10)
-                wr_ramora = evaluator.evaluate_vs_ramora(n_games=5)
-                eval_metrics = {"wr_random": wr_random, "wr_ramora": wr_ramora}
-                log.info("evaluation_complete", step=train_step, **eval_metrics)
+            for _ in range(steps_budget):
+                if args.iterations and train_step >= args.iterations:
+                    break
 
-            if train_step % log_interval == 0:
-                elapsed = time.time() - t_start
-                games_per_hour = games_played / elapsed * 3600 if elapsed > 0 else 0.0
-                
-                metrics = {
-                    "iteration":     train_step,
-                    "policy_loss":   loss_info["policy_loss"],
-                    "value_loss":    loss_info["value_loss"],
-                    "buffer_size":   buffer.size,
-                    "games_total":   games_played,
-                    "games_per_hour": games_per_hour,
-                    "gpu_util":      gpu_monitor.gpu_util_pct,
-                    "vram_gb":       gpu_monitor.vram_used_gb,
-                    "x_winrate":     0.0, # WorkerPool needs to track this separately if desired
-                    "o_winrate":     0.0,
-                    **eval_metrics
-                }
+                # Perform one training step
+                loss_info = trainer.train_step(buffer)
+                train_step = trainer.step
+                if initial_policy_loss is None:
+                    initial_policy_loss = float(loss_info["policy_loss"])
+                last_loss_info = loss_info
 
-                if dashboard is not None:
-                    dashboard.update(train_step, total_steps, metrics)
+                # ── Evaluation ──
+                eval_metrics = {}
+                if evaluator is not None and train_step > 0 and train_step % eval_interval == 0:
+                    log.info("evaluation_start", step=train_step)
+                    wr_random = evaluator.evaluate_vs_random(n_games=10)
+                    wr_ramora = evaluator.evaluate_vs_ramora(n_games=5)
+                    eval_metrics = {"wr_random": wr_random, "wr_ramora": wr_ramora}
+                    log.info("evaluation_complete", step=train_step, **eval_metrics)
+
+                if train_step % log_interval == 0:
+                    elapsed = time.time() - t_start
+                    games_per_hour = games_played / elapsed * 3600 if elapsed > 0 else 0.0
+
+                    metrics = {
+                        "iteration":     train_step,
+                        "policy_loss":   loss_info["policy_loss"],
+                        "value_loss":    loss_info["value_loss"],
+                        "buffer_size":   buffer.size,
+                        "games_total":   games_played,
+                        "games_per_hour": games_per_hour,
+                        "gpu_util":      gpu_monitor.gpu_util_pct,
+                        "vram_gb":       gpu_monitor.vram_used_gb,
+                        "x_winrate":     0.0, # WorkerPool needs to track this separately if desired
+                        "o_winrate":     0.0,
+                        **eval_metrics
+                    }
+
+                    if dashboard is not None:
+                        dashboard.update(train_step, total_steps, metrics)
+                        last_ui_refresh = time.time()
 
     try:
         if dashboard is not None:
