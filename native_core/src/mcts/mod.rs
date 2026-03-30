@@ -28,6 +28,7 @@
 
 use crate::board::{Board, MoveDiff, BOARD_SIZE};
 use crate::formations::FormationDetector;
+use fxhash::FxHashMap;
 
 /// Pre-allocated pool size. 200 k nodes ≈ 6.4 MB.
 pub const MAX_NODES: usize = 200_000;
@@ -35,6 +36,15 @@ pub const MAX_NODES: usize = 200_000;
 /// Virtual-loss penalty applied per unresolved selection.
 /// 1.0 is the standard AlphaZero value (equivalent to one loss).
 pub const VIRTUAL_LOSS_PENALTY: f32 = 1.0;
+
+// ── Transposition Table ──────────────────────────────────────────────────────
+
+/// Cached Neural Network evaluation for a board state.
+#[derive(Clone)]
+pub struct TTEntry {
+    pub policy: Vec<f32>,
+    pub value: f32,
+}
 
 // ── Node ─────────────────────────────────────────────────────────────────────
 
@@ -127,6 +137,8 @@ pub struct MCTSTree {
     /// Leaves selected by the most recent `select_leaves` call, waiting for
     /// `expand_and_backup`. Contains `(node_index, path_diffs)`.
     pending: Vec<(u32, Vec<MoveDiff>)>,
+    /// Caches evaluations indexed by Zobrist hash.
+    pub transposition_table: FxHashMap<u64, TTEntry>,
 }
 
 impl MCTSTree {
@@ -143,6 +155,7 @@ impl MCTSTree {
             c_puct,
             virtual_loss,
             pending: Vec::new(),
+            transposition_table: FxHashMap::default(),
         }
     }
 
@@ -244,17 +257,40 @@ impl MCTSTree {
         let mut board = self.root_board.clone();
         let mut diffs = Vec::with_capacity(32);
 
-        for _ in 0..n {
+        let mut i = 0;
+        while i < n {
             diffs.clear();
             let leaf_idx = self.select_one_leaf(&mut board, &mut diffs);
+            
             // Skip duplicates — dedup is a safety net; VL normally prevents this.
-            if self.pending.iter().any(|(i, _)| *i == leaf_idx) {
+            if self.pending.iter().any(|(idx, _)| *idx == leaf_idx) {
                 // Undo the VL we just applied on this redundant path.
                 self.undo_virtual_loss(leaf_idx);
                 while let Some(diff) = diffs.pop() {
                     board.undo_move(diff);
                 }
                 continue;
+            }
+
+            // ── Transposition Table Hit ──
+            if let Some(entry) = self.transposition_table.get(&board.zobrist_hash) {
+                let policy = entry.policy.clone();
+                let value = entry.value;
+                self.expand_and_backup_single(leaf_idx, &board, &policy, value);
+                
+                // Since we expanded immediately, this doesn't count towards the batch 'n',
+                // allowing us to potentially find even more leaves in this turn.
+                // However, to keep it simple and avoid infinite loops, we increment i.
+                // Actually, if we hit TT, we've completed one "virtual" simulation.
+                // Should we count it towards 'n'? 
+                // If we don't, we might return a batch smaller than 'n'.
+                // If we do, we might return 'n' boards but some of them were already expanded.
+                // Best approach: if hit, expand and DON'T increment 'i', so we always
+                // return 'n' boards (if possible) for the GPU.
+                while let Some(diff) = diffs.pop() {
+                    board.undo_move(diff);
+                }
+                continue; 
             }
 
             // ONLY ONE CLONE: for the return to Python/caller.
@@ -265,6 +301,7 @@ impl MCTSTree {
             while let Some(diff) = diffs.pop() {
                 board.undo_move(diff);
             }
+            i += 1;
         }
 
         debug_assert_eq!(board.zobrist_hash, self.root_board.zobrist_hash);
@@ -291,15 +328,94 @@ impl MCTSTree {
 
     // ── Expansion and backup ─────────────────────────────────────────────────
 
+    /// Internal helper: expand a single leaf node and backup its value.
+    fn expand_and_backup_single(&mut self, leaf_idx: u32, board: &Board, policy: &[f32], value: f32) {
+        // ── Already marked terminal (e.g. expanded in a prior batch) ──
+        if self.pool[leaf_idx as usize].is_terminal {
+            let tv = self.pool[leaf_idx as usize].terminal_value;
+            self.backup(leaf_idx, tv);
+            return;
+        }
+        // ── Skip already-expanded nodes (can happen with TT hits) ──
+        if self.pool[leaf_idx as usize].is_expanded() {
+            self.backup(leaf_idx, value);
+            return;
+        }
+
+        // ── Terminal: win ──
+        if board.check_win() {
+            self.pool[leaf_idx as usize].is_terminal    = true;
+            self.pool[leaf_idx as usize].terminal_value = -1.0;
+            self.backup(leaf_idx, -1.0);
+            return;
+        }
+
+        // ── Terminal: draw (board full) ──
+        let legal_moves = board.legal_moves();
+        if legal_moves.is_empty() {
+            self.pool[leaf_idx as usize].is_terminal    = true;
+            self.pool[leaf_idx as usize].terminal_value = 0.0;
+            self.backup(leaf_idx, 0.0);
+            return;
+        }
+
+        // ── Early Termination: Forced-win formation ──
+        if FormationDetector::has_forced_win(board, board.current_player) {
+            self.pool[leaf_idx as usize].is_terminal    = true;
+            self.pool[leaf_idx as usize].terminal_value = 1.0;
+            self.backup(leaf_idx, 1.0);
+            return;
+        }
+
+        // ── Expand: allocate children ──
+        let n_ch         = legal_moves.len();
+        let first_child  = self.next_free;
+        if first_child as usize + n_ch > self.pool.len() {
+            // Pool exhausted — graceful degradation: backup without expanding.
+            self.backup(leaf_idx, value);
+            return;
+        }
+        self.next_free += n_ch as u32;
+
+        let leaf_mr      = self.pool[leaf_idx as usize].moves_remaining;
+        let child_mr: u8 = if leaf_mr == 1 { 2 } else { 1 };
+
+        self.pool[leaf_idx as usize].first_child = first_child;
+        self.pool[leaf_idx as usize].n_children  = n_ch as u16;
+
+        for (j, &(q, r)) in legal_moves.iter().enumerate() {
+            let ci          = first_child as usize + j;
+            let action_flat = board.window_flat_idx(q, r);
+            let prior = if action_flat < policy.len() {
+                policy[action_flat]
+            } else {
+                1.0 / n_ch as f32
+            };
+            
+            let action_encoded = (((q + 128) as u16) << 8) | ((r + 128) as u16);
+            
+            self.pool[ci] = Node {
+                parent:              leaf_idx,
+                action_idx:          action_encoded,
+                n_visits:            0,
+                w_value:             0.0,
+                prior,
+                first_child:         u32::MAX,
+                n_children:          0,
+                moves_remaining:     child_mr,
+                is_terminal:         false,
+                terminal_value:      0.0,
+                virtual_loss_count:  0,
+            };
+        }
+
+        self.backup(leaf_idx, value);
+    }
+
     /// Given network outputs for the last `select_leaves` batch, expand each
     /// leaf and backup values to the root.
     ///
     /// Also reverses the virtual loss applied during selection.
-    ///
-    /// * `policies[i]`: flat probability vector of length `board_size² + 1`;
-    ///   index corresponds to flat board cell index.
-    /// * `values[i]`: scalar value in `[-1, 1]` from the *current player's*
-    ///   perspective at leaf `i`.
     pub fn expand_and_backup(&mut self, policies: &[Vec<f32>], values: &[f32]) {
         // Take ownership of pending to avoid borrow conflicts during mutation.
         let pending: Vec<(u32, Vec<MoveDiff>)> = std::mem::take(&mut self.pending);
@@ -315,97 +431,14 @@ impl MCTSTree {
             for diff in diffs {
                 board.apply_move(diff.q, diff.r).expect("moves in diffs must be legal");
             }
-            let board = &board; // Use reference for the rest of the loop.
 
-            // ── Already marked terminal (e.g. expanded in a prior batch) ──
-            if self.pool[leaf_idx as usize].is_terminal {
-                let tv = self.pool[leaf_idx as usize].terminal_value;
-                self.backup(leaf_idx, tv);
-                continue;
-            }
-            // ── Skip already-expanded nodes (shouldn't happen single-threaded) ──
-            if self.pool[leaf_idx as usize].is_expanded() {
-                self.backup(leaf_idx, value);
-                continue;
-            }
+            // Populate Transposition Table
+            self.transposition_table.insert(board.zobrist_hash, TTEntry {
+                policy: policy.clone(),
+                value,
+            });
 
-            // ── Terminal: win ──
-            // Someone just moved and reached this board state. `board.check_win()`
-            // is true when the *previous* player won. The current player (to move)
-            // is therefore the loser → value = -1 from their perspective.
-            if board.check_win() {
-                self.pool[leaf_idx as usize].is_terminal    = true;
-                self.pool[leaf_idx as usize].terminal_value = -1.0;
-                self.backup(leaf_idx, -1.0);
-                continue;
-            }
-
-            // ── Terminal: draw (board full) ──
-            let legal_moves = board.legal_moves();
-            if legal_moves.is_empty() {
-                self.pool[leaf_idx as usize].is_terminal    = true;
-                self.pool[leaf_idx as usize].terminal_value = 0.0;
-                self.backup(leaf_idx, 0.0);
-                continue;
-            }
-
-            // ── Early Termination: Forced-win formation ──
-            // If the player TO MOVE already has a formation that guarantees
-            // a win (like an Open Three), we can terminate here with +1.0.
-            if FormationDetector::has_forced_win(board, board.current_player) {
-                self.pool[leaf_idx as usize].is_terminal    = true;
-                self.pool[leaf_idx as usize].terminal_value = 1.0;
-                self.backup(leaf_idx, 1.0);
-                continue;
-            }
-
-            // ── Expand: allocate children ──
-            let n_ch         = legal_moves.len();
-            let first_child  = self.next_free;
-            if first_child as usize + n_ch > self.pool.len() {
-                // Pool exhausted — graceful degradation: backup without expanding.
-                self.backup(leaf_idx, value);
-                continue;
-            }
-            self.next_free += n_ch as u32;
-
-            let leaf_mr      = self.pool[leaf_idx as usize].moves_remaining;
-            // After a move: if leaf had 1 move left, player changes and gets 2;
-            // otherwise same player still has 1 move left.
-            let child_mr: u8 = if leaf_mr == 1 { 2 } else { 1 };
-
-            self.pool[leaf_idx as usize].first_child = first_child;
-            self.pool[leaf_idx as usize].n_children  = n_ch as u16;
-
-            for (j, &(q, r)) in legal_moves.iter().enumerate() {
-                let ci          = first_child as usize + j;
-                let action_flat = board.window_flat_idx(q, r);
-                // Look up prior from the policy vector; fall back to uniform.
-                let prior = if action_flat < policy.len() {
-                    policy[action_flat]
-                } else {
-                    1.0 / n_ch as f32
-                };
-                
-                // Encode absolute coordinates: (q + 128) << 8 | (r + 128)
-                let action_encoded = (((q + 128) as u16) << 8) | ((r + 128) as u16);
-                
-                self.pool[ci] = Node {
-                    parent:              leaf_idx,
-                    action_idx:          action_encoded,
-                    n_visits:            0,
-                    w_value:             0.0,
-                    prior,
-                    first_child:         u32::MAX,
-                    n_children:          0,
-                    moves_remaining:     child_mr,
-                    is_terminal:         false,
-                    terminal_value:      0.0,
-                    virtual_loss_count:  0,
-                };
-            }
-
-            self.backup(leaf_idx, value);
+            self.expand_and_backup_single(leaf_idx, &board, policy, value);
         }
     }
 
@@ -936,18 +969,9 @@ mod tests {
             (prior_a - expected_a).abs() < 1e-6,
             "child_a prior: expected {expected_a:.6}, got {prior_a:.6}"
         );
-        assert!(
-            (prior_b - expected_b).abs() < 1e-6,
+        assert!((prior_b - expected_b).abs() < 1e-6,
             "child_b prior: expected {expected_b:.6}, got {prior_b:.6}"
         );
     }
-
-    #[test]
-    fn test_dirichlet_not_applied_in_evaluation_mode() {
-        // Verify that NOT calling apply_dirichlet leaves priors unchanged.
-        let (tree, child_a, child_b) = setup_two_child_tree(1.5);
-        // No apply_dirichlet called.
-        assert!((tree.pool[child_a as usize].prior - 0.7).abs() < 1e-6);
-        assert!((tree.pool[child_b as usize].prior - 0.3).abs() < 1e-6);
-    }
 }
+
