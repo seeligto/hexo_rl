@@ -5,7 +5,7 @@
 ///   NE: ( 0, +1)   SW: ( 0, -1)
 ///   NW: (-1, +1)   SE: (+1, -1)
 ///
-/// Storage: DashMap<(q,r), Cell> — unbounded.
+/// Storage: FxHashMap<(q,r), Cell> — unbounded.
 ///
 /// View window: fixed 19×19 tensor centred on the bounding-box centroid of all
 /// placed stones.  On an empty board the window is centred at (0,0).
@@ -24,7 +24,7 @@
 pub mod bitboard;
 pub mod zobrist;
 
-use dashmap::DashMap;
+use fxhash::FxHashMap;
 use fxhash::FxBuildHasher;
 use zobrist::ZobristTable;
 
@@ -37,10 +37,9 @@ use zobrist::ZobristTable;
 /// `apply_move_tracked`, and the only way to consume it is through `undo_move`.
 #[derive(Debug, Clone)]
 pub struct MoveDiff {
-    // The stone that was placed.
-    q: i32,
-    r: i32,
-    player: Player,
+    pub(crate) q: i32,
+    pub(crate) r: i32,
+    pub(crate) player: Player,
     // Previous full Zobrist hash state.
     prev_zobrist_hash: u64,
     // Turn-structure state before the move.
@@ -112,7 +111,7 @@ pub enum Cell {
 #[derive(Debug, Clone)]
 pub struct Board {
     /// Sparse stone map: (q, r) → Cell.
-    pub(crate) cells: DashMap<(i32, i32), Cell, FxBuildHasher>,
+    pub(crate) cells: FxHashMap<(i32, i32), Cell>,
     /// Whose turn it is.
     pub current_player: Player,
     /// How many moves the current player still has to place this turn.
@@ -137,7 +136,7 @@ impl Board {
     /// Create an empty board ready for the first move.
     pub fn new() -> Self {
         Board {
-            cells: DashMap::with_hasher(FxBuildHasher::default()),
+            cells: FxHashMap::default(),
             current_player: Player::One,
             moves_remaining: 1,
             ply: 0,
@@ -361,7 +360,7 @@ impl Board {
 
     /// Undo a move previously applied by `apply_move_tracked`.
     pub fn undo_move(&mut self, diff: MoveDiff) {
-        if let Some((_, cell)) = self.cells.remove(&(diff.q, diff.r)) {
+        if let Some(cell) = self.cells.remove(&(diff.q, diff.r)) {
             debug_assert_eq!(
                 cell,
                 match diff.player {
@@ -424,8 +423,7 @@ impl Board {
             }
         }
         // Fallback: scan all stones of this player (reached when player != last mover).
-        for r in self.cells.iter() {
-            let (&(q, r), &c) = r.pair();
+        for (&(q, r), &c) in self.cells.iter() {
             if c == cell && self.count_in_line(q, r, cell) >= WIN_LENGTH {
                 return true;
             }
@@ -477,8 +475,7 @@ impl Board {
             Player::One => (Cell::P1, Cell::P2),
             Player::Two => (Cell::P2, Cell::P1),
         };
-        for r in self.cells.iter() {
-            let (&(q, r), &cell) = r.pair();
+        for (&(q, r), &cell) in self.cells.iter() {
             let flat = self.window_flat_idx(q, r);
             if flat < TOTAL_CELLS {
                 if cell == my_cell {
@@ -503,7 +500,7 @@ impl Board {
             return clusters;
         }
         
-        let stones: Vec<(i32, i32)> = self.cells.iter().map(|r| *r.key()).collect();
+        let stones: Vec<(i32, i32)> = self.cells.keys().cloned().collect();
         let mut visited = vec![false; stones.len()];
         
         for i in 0..stones.len() {
@@ -559,8 +556,7 @@ impl Board {
         
         for &(cq, cr) in &centers {
             let mut out = vec![0.0f32; 2 * TOTAL_CELLS];
-            for r in self.cells.iter() {
-                let (&(q, r), &cell) = r.pair();
+            for (&(q, r), &cell) in self.cells.iter() {
                 let flat = Self::window_flat_idx_at(q, r, cq, cr);
                 if flat < TOTAL_CELLS {
                     if cell == my_cell {
@@ -590,8 +586,7 @@ mod tests {
 
     fn recompute_zobrist(board: &Board) -> u64 {
         let mut hash = 0u64;
-        for r in board.cells.iter() {
-            let (&(q, r), &cell) = r.pair();
+        for (&(q, r), &cell) in board.cells.iter() {
             let player_idx = match cell {
                 Cell::P1 => 0,
                 Cell::P2 => 1,

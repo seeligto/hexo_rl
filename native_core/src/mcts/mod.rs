@@ -125,8 +125,8 @@ pub struct MCTSTree {
     /// Virtual-loss penalty (default 1.0).
     pub(crate) virtual_loss: f32,
     /// Leaves selected by the most recent `select_leaves` call, waiting for
-    /// `expand_and_backup`. Contains `(node_index, reconstructed_board)`.
-    pending: Vec<(u32, Board)>,
+    /// `expand_and_backup`. Contains `(node_index, path_diffs)`.
+    pending: Vec<(u32, Vec<MoveDiff>)>,
 }
 
 impl MCTSTree {
@@ -242,9 +242,10 @@ impl MCTSTree {
         self.pending.clear();
         let mut boards = Vec::with_capacity(n);
         let mut board = self.root_board.clone();
+        let mut diffs = Vec::with_capacity(32);
 
         for _ in 0..n {
-            let mut diffs = Vec::new();
+            diffs.clear();
             let leaf_idx = self.select_one_leaf(&mut board, &mut diffs);
             // Skip duplicates — dedup is a safety net; VL normally prevents this.
             if self.pending.iter().any(|(i, _)| *i == leaf_idx) {
@@ -256,9 +257,10 @@ impl MCTSTree {
                 continue;
             }
 
-            let leaf_board = board.clone();
-            self.pending.push((leaf_idx, leaf_board.clone()));
-            boards.push(leaf_board);
+            // ONLY ONE CLONE: for the return to Python/caller.
+            boards.push(board.clone());
+            // Store the path diffs so expand_and_backup can re-create this leaf.
+            self.pending.push((leaf_idx, diffs.clone()));
 
             while let Some(diff) = diffs.pop() {
                 board.undo_move(diff);
@@ -300,13 +302,20 @@ impl MCTSTree {
     ///   perspective at leaf `i`.
     pub fn expand_and_backup(&mut self, policies: &[Vec<f32>], values: &[f32]) {
         // Take ownership of pending to avoid borrow conflicts during mutation.
-        let pending: Vec<(u32, Board)> = std::mem::take(&mut self.pending);
+        let pending: Vec<(u32, Vec<MoveDiff>)> = std::mem::take(&mut self.pending);
         let n = pending.len().min(policies.len()).min(values.len());
 
         for i in 0..n {
-            let (leaf_idx, ref board) = pending[i];
+            let (leaf_idx, ref diffs) = pending[i];
             let policy = &policies[i];
             let value  = values[i];
+
+            // Re-create the board from the root using diffs.
+            let mut board = self.root_board.clone();
+            for diff in diffs {
+                board.apply_move(diff.q, diff.r).expect("moves in diffs must be legal");
+            }
+            let board = &board; // Use reference for the rest of the loop.
 
             // ── Already marked terminal (e.g. expanded in a prior batch) ──
             if self.pool[leaf_idx as usize].is_terminal {
