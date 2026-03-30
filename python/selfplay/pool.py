@@ -170,6 +170,8 @@ def _worker_fn(
 
     half = (board_size - 1) // 2
     tree = MCTSTree(c_puct=c_puct)
+    safe_leaf_batch_size = max(1, leaf_batch_size)
+    warned_fallback = False
 
     def _merge_cluster_outputs(
         leaf_board: "Board",
@@ -225,9 +227,27 @@ def _worker_fn(
             if np.random.random() < fast_playout_prob:
                 current_n_sims = np.random.randint(fast_sims_min, fast_sims_max + 1)
 
-            for sim_idx in range(0, current_n_sims, leaf_batch_size):
-                current_batch = min(leaf_batch_size, current_n_sims - sim_idx)
-                leaves = tree.select_leaves(current_batch)
+            for sim_idx in range(0, current_n_sims, safe_leaf_batch_size):
+                current_batch = min(safe_leaf_batch_size, current_n_sims - sim_idx)
+                try:
+                    leaves = tree.select_leaves(current_batch)
+                except Exception as exc:
+                    # Rare native_core panic in batched selection path can occur under
+                    # high concurrency. Fall back to single-leaf mode for stability.
+                    if safe_leaf_batch_size > 1:
+                        safe_leaf_batch_size = 1
+                        if not warned_fallback:
+                            print(
+                                f"[worker {worker_id}] select_leaves fallback to batch=1 after error: {exc}",
+                                flush=True,
+                            )
+                            warned_fallback = True
+                        try:
+                            leaves = tree.select_leaves(1)
+                        except Exception:
+                            break
+                    else:
+                        break
                 if not leaves:
                     break
 

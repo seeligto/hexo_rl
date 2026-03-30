@@ -333,6 +333,20 @@ def main() -> None:
                         **eval_metrics
                     }
 
+                    log.info(
+                        "train_step",
+                        step=train_step,
+                        policy_loss=round(float(loss_info["policy_loss"]), 4),
+                        value_loss=round(float(loss_info["value_loss"]), 4),
+                        total_loss=round(float(loss_info["loss"]), 4),
+                        buffer_size=buffer.size,
+                        games_played=games_played,
+                        games_per_hour=round(float(games_per_hour), 1),
+                        gpu_util=round(float(gpu_monitor.gpu_util_pct), 1),
+                        vram_gb=round(float(gpu_monitor.vram_used_gb), 2),
+                        **eval_metrics,
+                    )
+
                     if dashboard is not None:
                         dashboard.update(train_step, total_steps, metrics)
                         last_ui_refresh = time.time()
