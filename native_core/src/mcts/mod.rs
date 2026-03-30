@@ -26,7 +26,7 @@
 /// move_policy = tree.get_policy(temperature=1.0, board_size=19)
 /// ```
 
-use crate::board::{Board, BOARD_SIZE};
+use crate::board::{Board, MoveDiff, BOARD_SIZE};
 use crate::formations::FormationDetector;
 
 /// Pre-allocated pool size. 200 k nodes ≈ 6.4 MB.
@@ -158,29 +158,6 @@ impl MCTSTree {
         self.pending.clear();
     }
 
-    // ── Board reconstruction ─────────────────────────────────────────────────
-
-    /// Reconstruct the board at `node_idx` by replaying moves from the root.
-    fn reconstruct_board(&self, node_idx: u32) -> Board {
-        // Collect path from node to root by following parent pointers.
-        let mut path: Vec<u16> = Vec::new();
-        let mut cur = node_idx;
-        while cur != 0 {
-            let node = &self.pool[cur as usize];
-            path.push(node.action_idx);
-            cur = node.parent;
-        }
-        // Replay in root-to-leaf order.
-        let mut board = self.root_board.clone();
-        for &action in path.iter().rev() {
-            let (q, r) = board.window_coords(action as usize);
-            board
-                .apply_move(q, r)
-                .expect("reconstructed move should always be legal");
-        }
-        board
-    }
-
     // ── PUCT ─────────────────────────────────────────────────────────────────
 
     /// PUCT score for `child_idx`, evaluated from `parent_idx`'s player perspective.
@@ -215,8 +192,8 @@ impl MCTSTree {
     /// This causes subsequent calls to `select_one_leaf` to prefer different
     /// branches, enabling effective batched leaf evaluation.
     ///
-    /// Returns `(leaf_node_idx, reconstructed_board_at_leaf)`.
-    fn select_one_leaf(&mut self) -> (u32, Board) {
+    /// Returns the selected leaf node index and tracks board diffs in `diffs`.
+    fn select_one_leaf(&mut self, board: &mut Board, diffs: &mut Vec<MoveDiff>) -> u32 {
         let mut cur: u32 = 0;
         loop {
             // Apply virtual loss to this node before we inspect it.
@@ -224,7 +201,7 @@ impl MCTSTree {
 
             let node = &self.pool[cur as usize];
             if node.is_terminal || !node.is_expanded() {
-                return (cur, self.reconstruct_board(cur));
+                return cur;
             }
 
             // Effective parent visit count includes outstanding virtual losses.
@@ -240,6 +217,12 @@ impl MCTSTree {
                 })
                 .unwrap() as u32;
 
+            let (q, r) = board.window_coords(self.pool[best as usize].action_idx as usize);
+            let diff = board
+                .apply_move_tracked(q, r)
+                .expect("selected move should always be legal");
+            diffs.push(diff);
+
             cur = best;
         }
     }
@@ -254,17 +237,33 @@ impl MCTSTree {
     pub fn select_leaves(&mut self, n: usize) -> Vec<Board> {
         self.pending.clear();
         let mut boards = Vec::with_capacity(n);
+        let mut board = self.root_board.clone();
+
         for _ in 0..n {
-            let (leaf_idx, board) = self.select_one_leaf();
+            let mut diffs = Vec::new();
+            let leaf_idx = self.select_one_leaf(&mut board, &mut diffs);
             // Skip duplicates — dedup is a safety net; VL normally prevents this.
             if self.pending.iter().any(|(i, _)| *i == leaf_idx) {
                 // Undo the VL we just applied on this redundant path.
                 self.undo_virtual_loss(leaf_idx);
+                while let Some(diff) = diffs.pop() {
+                    board.undo_move(diff);
+                }
                 continue;
             }
-            boards.push(board.clone());
-            self.pending.push((leaf_idx, board));
+
+            let leaf_board = board.clone();
+            self.pending.push((leaf_idx, leaf_board.clone()));
+            boards.push(leaf_board);
+
+            while let Some(diff) = diffs.pop() {
+                board.undo_move(diff);
+            }
         }
+
+        debug_assert_eq!(board.zobrist_hash, self.root_board.zobrist_hash);
+        debug_assert_eq!(board.ply, self.root_board.ply);
+
         boards
     }
 

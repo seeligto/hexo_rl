@@ -27,6 +27,35 @@ pub mod zobrist;
 use std::collections::HashMap;
 use zobrist::ZobristTable;
 
+// ── MoveDiff ──────────────────────────────────────────────────────────────────
+
+/// Captures everything mutated by one `apply_move_tracked` call so that
+/// `undo_move` can reverse it in O(1) without any HashMap scan.
+///
+/// All fields are private; the only way to construct a `MoveDiff` is through
+/// `apply_move_tracked`, and the only way to consume it is through `undo_move`.
+#[derive(Debug, Clone)]
+pub struct MoveDiff {
+    // The stone that was placed.
+    q: i32,
+    r: i32,
+    player: Player,
+    // Previous full Zobrist hash state.
+    prev_zobrist_hash: u64,
+    // Turn-structure state before the move.
+    prev_moves_remaining: u8,
+    prev_current_player: Player,
+    prev_ply: u32,
+    // Win-detection state before the move.
+    prev_last_move: Option<(i32, i32)>,
+    // Bounding-box state before the move (needed for O(1) bbox undo).
+    prev_min_q: i32,
+    prev_max_q: i32,
+    prev_min_r: i32,
+    prev_max_r: i32,
+    prev_has_stones: bool,
+}
+
 /// Board size (cells per axis of the view window).
 pub const BOARD_SIZE: usize = 19;
 /// Half-width: window covers [-HALF, HALF] relative to its centre.
@@ -152,6 +181,11 @@ impl Board {
     /// Returns the cell at (q, r).
     pub fn get_cell(&self, q: i32, r: i32) -> Cell {
         self.cells.get(&(q, r)).copied().unwrap_or(Cell::Empty)
+    }
+
+    /// Iterate over all occupied cells: `(&(q, r), &Cell)`.
+    pub fn cells_iter(&self) -> impl Iterator<Item = (&(i32, i32), &Cell)> {
+        self.cells.iter()
     }
 
     /// Axial coordinates (q, r) from a window-relative flat index.
@@ -296,6 +330,56 @@ impl Board {
         }
 
         Ok(())
+    }
+
+    /// Apply a move and return a reversible state diff for O(1) undo.
+    pub fn apply_move_tracked(&mut self, q: i32, r: i32) -> Result<MoveDiff, &'static str> {
+        let diff = MoveDiff {
+            q,
+            r,
+            player: self.current_player,
+            prev_zobrist_hash: self.zobrist_hash,
+            prev_moves_remaining: self.moves_remaining,
+            prev_current_player: self.current_player,
+            prev_ply: self.ply,
+            prev_last_move: self.last_move,
+            prev_min_q: self.min_q,
+            prev_max_q: self.max_q,
+            prev_min_r: self.min_r,
+            prev_max_r: self.max_r,
+            prev_has_stones: self.has_stones,
+        };
+
+        self.apply_move(q, r)?;
+        Ok(diff)
+    }
+
+    /// Undo a move previously applied by `apply_move_tracked`.
+    pub fn undo_move(&mut self, diff: MoveDiff) {
+        if let Some(cell) = self.cells.remove(&(diff.q, diff.r)) {
+            debug_assert_eq!(
+                cell,
+                match diff.player {
+                    Player::One => Cell::P1,
+                    Player::Two => Cell::P2,
+                },
+                "undo_move removed a stone with mismatched player",
+            );
+        } else {
+            debug_assert!(false, "undo_move expected placed stone to exist");
+        }
+
+        self.zobrist_hash = diff.prev_zobrist_hash;
+        self.moves_remaining = diff.prev_moves_remaining;
+        self.current_player = diff.prev_current_player;
+        self.ply = diff.prev_ply;
+        self.last_move = diff.prev_last_move;
+
+        self.min_q = diff.prev_min_q;
+        self.max_q = diff.prev_max_q;
+        self.min_r = diff.prev_min_r;
+        self.max_r = diff.prev_max_r;
+        self.has_stones = diff.prev_has_stones;
     }
 
     // ── Win detection ─────────────────────────────────────────────────────────
@@ -501,6 +585,26 @@ impl Default for Board {
 mod tests {
     use super::*;
 
+    fn recompute_zobrist(board: &Board) -> u64 {
+        let mut hash = 0u64;
+        for (&(q, r), &cell) in board.cells_iter() {
+            let player_idx = match cell {
+                Cell::P1 => 0,
+                Cell::P2 => 1,
+                Cell::Empty => continue,
+            };
+            hash ^= super::zobrist::ZobristTable::get_for_pos(q, r, player_idx);
+        }
+        hash
+    }
+
+    fn next_u64(seed: &mut u64) -> u64 {
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *seed
+    }
+
     #[test]
     fn empty_board_no_win() {
         let b = Board::new();
@@ -679,5 +783,46 @@ mod tests {
         assert_eq!(b.legal_move_count(), 24);
         b.apply_move(5, 0).unwrap(); // P2: bbox=[0,5], margin=[-2,7]×[-2,2]=10×5-2=48
         assert_eq!(b.legal_move_count(), 48);
+    }
+
+    #[test]
+    fn test_apply_undo_symmetry() {
+        let mut board = Board::new();
+        let mut diffs = Vec::new();
+        let mut seed = 0x5eed_1234_5678_90abu64;
+
+        for _ in 0..10 {
+            let legal = board.legal_moves();
+            assert!(!legal.is_empty(), "expected at least one legal move");
+            let idx = (next_u64(&mut seed) as usize) % legal.len();
+            let (q, r) = legal[idx];
+
+            let diff = board.apply_move_tracked(q, r).expect("move should be legal");
+            diffs.push(diff);
+
+            assert_eq!(board.zobrist_hash, recompute_zobrist(&board));
+            assert!(board.has_stones);
+            assert!(board.min_q <= board.max_q);
+            assert!(board.min_r <= board.max_r);
+            assert!(q >= board.min_q && q <= board.max_q);
+            assert!(r >= board.min_r && r <= board.max_r);
+        }
+
+        while let Some(diff) = diffs.pop() {
+            board.undo_move(diff);
+        }
+
+        let empty = Board::new();
+        assert_eq!(board.cells.len(), empty.cells.len());
+        assert_eq!(board.zobrist_hash, empty.zobrist_hash);
+        assert_eq!(board.min_q, empty.min_q);
+        assert_eq!(board.max_q, empty.max_q);
+        assert_eq!(board.min_r, empty.min_r);
+        assert_eq!(board.max_r, empty.max_r);
+        assert_eq!(board.has_stones, empty.has_stones);
+        assert_eq!(board.current_player, empty.current_player);
+        assert_eq!(board.moves_remaining, empty.moves_remaining);
+        assert_eq!(board.ply, empty.ply);
+        assert_eq!(board.last_move, empty.last_move);
     }
 }
