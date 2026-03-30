@@ -213,14 +213,28 @@ class InferenceServer(threading.Thread):
         # Concatenate states -> (sum(K), 18, 19, 19)
         tensor = torch.cat([torch.from_numpy(req.state) for req in batch], dim=0).to(self.device)
 
-        self.model.eval()
-        with torch.no_grad():
-            with torch.amp.autocast(device_type=self.device.type):
-                log_policy, value = self.model(tensor.float())
+        sum_k = int(tensor.shape[0])
+        h = int(tensor.shape[-2])
+        w = int(tensor.shape[-1])
+        n_actions = h * w + 1
 
-        # log_policy: (sum(K), 362) log-softmax  →  exp → probabilities
-        policies_np = log_policy.exp().cpu().numpy().astype(np.float32)  # (sum(K), 362)
-        values_np   = value.squeeze(-1).cpu().numpy()                    # (sum(K),)
+        try:
+            self.model.eval()
+            with torch.no_grad():
+                with torch.amp.autocast(device_type=self.device.type):
+                    # Input tensors are already float16 from _normalize_state.
+                    # Avoid an extra per-batch tensor.float() cast.
+                    log_policy, value = self.model(tensor)
+
+            # log_policy: (sum(K), n_actions) log-softmax  →  exp → probabilities
+            policies_np = log_policy.exp().cpu().numpy().astype(np.float32)  # (sum(K), n_actions)
+            values_np = value.squeeze(-1).cpu().numpy().astype(np.float32)  # (sum(K),)
+        except Exception:
+            # Critical: never allow a forward failure to deadlock worker callers.
+            # If inference throws, return uniform priors and zero value, and
+            # still set req.event for every waiting request.
+            policies_np = np.ones((sum_k, n_actions), dtype=np.float32) / float(n_actions)
+            values_np = np.zeros((sum_k,), dtype=np.float32)
 
         # Slice results back to each request
         offset = 0

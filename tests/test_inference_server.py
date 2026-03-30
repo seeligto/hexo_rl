@@ -175,3 +175,53 @@ class TestInferenceServerBatching:
         server.stop()
         server.join(timeout=2.0)
         assert server.total_requests == n_requests
+
+
+class TestInferenceServerFailureHandling:
+    def test_infer_returns_on_model_forward_exception(self, device):
+        """Regression: inference failures must not deadlock callers waiting on req.event."""
+        class FailingNet(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                # Ensure the module can be moved to device.
+                self.dummy = torch.nn.Parameter(torch.zeros(1))
+
+            def forward(self, x: torch.Tensor):
+                raise RuntimeError("boom")
+
+        model = FailingNet().to(device)
+        model.eval()
+
+        # Small batch size to keep the test deterministic/tight.
+        server = InferenceServer(
+            model,
+            device,
+            {"selfplay": {"inference_batch_size": 4, "inference_max_wait_ms": 20.0}},
+        )
+        server.start()
+        try:
+            state = _random_state()
+            result: dict[str, np.ndarray | float] = {}
+            done = threading.Event()
+
+            def _call() -> None:
+                policy, value = server.infer(state)
+                result["policy"] = policy
+                result["value"] = value
+                done.set()
+
+            t = threading.Thread(target=_call, daemon=True)
+            t.start()
+
+            assert done.wait(5.0), "server.infer() hung waiting for results"
+            policy = result["policy"]
+            value = float(result["value"])
+
+            assert isinstance(policy, np.ndarray)
+            assert policy.shape == (N_ACTIONS,)
+            assert np.all(np.isfinite(policy)), "fallback policy contains non-finite values"
+            assert abs(float(policy.sum()) - 1.0) < 1e-4, f"fallback policy sum: {policy.sum()}"
+            assert value == 0.0, f"fallback value expected 0.0, got {value}"
+        finally:
+            server.stop()
+            server.join(timeout=2.0)

@@ -65,7 +65,12 @@ def test_worker_pool_produces_positions():
     buffer = ReplayBuffer(capacity=10_000)
     config = _tiny_config()
 
-    pool = WorkerPool(model, config, device, buffer, n_workers=2)
+    try:
+        pool = WorkerPool(model, config, device, buffer, n_workers=2)
+    except PermissionError as exc:
+        # Some sandboxed environments block POSIX semaphore creation, which
+        # prevents multiprocessing queues from being constructed at all.
+        pytest.skip(f"multiprocessing queues not permitted here: {exc}")
     pool.start()
 
     try:
@@ -99,7 +104,10 @@ def test_worker_pool_respects_backpressure():
     buffer = ReplayBuffer(capacity=10_000)
     config = _tiny_config()
 
-    pool = WorkerPool(model, config, device, buffer, n_workers=2)
+    try:
+        pool = WorkerPool(model, config, device, buffer, n_workers=2)
+    except PermissionError as exc:
+        pytest.skip(f"multiprocessing queues not permitted here: {exc}")
     pool.start()
 
     # Let it run for a short time, verify no exceptions and request queue stays bounded.
