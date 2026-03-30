@@ -33,6 +33,7 @@ data/
 checkpoints/
 logs/
 runs/
+plots/
 
 # Vendor (compiled artifacts — not committed; submodules under vendor/bots/ ARE committed)
 vendor/*
