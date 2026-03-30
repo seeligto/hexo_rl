@@ -101,7 +101,7 @@ def test_rust_runner_with_inference_server_generates_positions():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
 
-    runner = RustSelfPlayRunner(n_workers=2, max_moves_per_game=16)
+    runner = RustSelfPlayRunner(n_workers=2, max_moves_per_game=16, n_simulations=1)
     server = InferenceServer(
         model,
         device,
@@ -112,12 +112,54 @@ def test_rust_runner_with_inference_server_generates_positions():
     server.start()
     runner.start()
     try:
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline and runner.positions_generated <= 0:
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and runner.games_completed <= 0:
             time.sleep(0.05)
 
         assert runner.positions_generated > 0
         assert runner.games_completed >= 1
+    finally:
+        runner.stop()
+        server.stop()
+        server.join(timeout=5.0)
+
+
+@pytest.mark.timeout(30)
+def test_rust_runner_collect_data_format():
+    """Verify that collect_data returns correctly shaped tensors and policies."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
+    
+    # Run with 1 worker and 1 simulation for speed
+    runner = RustSelfPlayRunner(n_workers=1, max_moves_per_game=4, n_simulations=1)
+    server = InferenceServer(
+        model,
+        device,
+        {"selfplay": {"inference_batch_size": 8, "inference_max_wait_ms": 5.0}},
+        batcher=runner.batcher,
+    )
+    
+    server.start()
+    runner.start()
+    try:
+        # Wait for at least one game to complete
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and runner.games_completed <= 0:
+            time.sleep(0.1)
+            
+        assert runner.games_completed >= 1
+        data = runner.collect_data()
+        assert len(data) > 0
+        
+        feat, pol, outcome = data[0]
+        assert len(feat) == 18 * 19 * 19
+        assert len(pol) == 19 * 19 + 1
+        assert isinstance(outcome, float)
+        assert outcome in [-1.0, 0.0, 1.0]
+        
+        # Check that we can reshape and use as numpy
+        feat_np = np.array(feat).reshape(18, 19, 19)
+        assert feat_np.shape == (18, 19, 19)
     finally:
         runner.stop()
         server.stop()

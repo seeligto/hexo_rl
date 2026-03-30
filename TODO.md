@@ -1,0 +1,7 @@
+- [x] check the eval against random and verify that it is correct/ makes sense (0.9 winrate vs random)
+- [x] check performance with the new threaded rust setup should be more nn interferance? (YES, benchmarks show huge improvement)
+- [x] check git log for latest changes and verify the implementation is working
+- [x] look into virtual loss stuff etc for more concurrency? (Implemented in Rust)
+- [x] analyze the curr implementation and look for logic issues etc and then name them
+- [x] Fix checkpoint loading prefix/architecture mismatch bug with bootstrap_model.pt
+- [x] Replace slow Python multiprocessing worker pool with Rust-native Game-Level Parallelism

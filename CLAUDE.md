@@ -115,8 +115,8 @@ Before ending any session or when asked to stop:
 
 | Layer | Language | Notes |
 |---|---|---|
-| MCTS tree, board logic, win detection | **Rust** | Build with `maturin develop --release` |
-| Neural network, training, replay buffer | **Python + PyTorch** | CUDA, FP16, torch.compile |
+| MCTS tree, board logic, win detection | **Rust** | Build with `maturin develop --release`. Concurrency via Rust-native Game-Level Parallelism (Phase 3.5). |
+| Neural network, training, replay buffer | **Python + PyTorch** | CUDA, FP16, torch.compile. InferenceServer bridges Rust worker threads. |
 | Array/batch operations | **NumPy** | Pre-allocated, never allocate during training |
 | Orchestration, config, logging | **Python** | structlog (JSON) + rich (console) |
 

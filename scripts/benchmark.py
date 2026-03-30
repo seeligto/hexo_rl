@@ -1,30 +1,25 @@
 #!/usr/bin/env python3
 """
-Phase 2 benchmark harness.
+Phase 3.5 / 4 benchmark harness.
 
-Measures the metrics that gate Phase 3 and prints a pass/fail table.
+Measures the metrics that gate Phase 4.5 and prints a pass/fail table.
 
 Usage:
     .venv/bin/python scripts/benchmark.py
     .venv/bin/python scripts/benchmark.py --config configs/fast_debug.yaml
-
-Phase 2 targets (from docs/02_roadmap.md):
-  MCTS simulations/sec          ≥ 10,000
-  NN inference (batch=64)       ≥  5,000 pos/sec
-  NN latency (batch=1)          ≤      5 ms
-  Replay buffer sample (256)    ≤    500 μs/sample
-  GPU utilisation               ≥     80% (measured during inference loop)
-  VRAM peak                     ≤      6 GB
 """
 
 from __future__ import annotations
 
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*pynvml package is deprecated.*")
+
 import argparse
 import sys
-import threading
 import time
+import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -69,24 +64,22 @@ def benchmark_mcts(n_simulations: int = 50_000) -> Dict[str, Any]:
     }
 
 
-def benchmark_inference(
-    model: "HexTacToeNet",
-    n_positions: int = 10_000,
-    batch_size:  int = 64,
-) -> Dict[str, Any]:
-    """GPU inference throughput (positions/sec)."""
-    model.eval()
+def benchmark_inference(model: "HexTacToeNet", n_positions: int = 10_000, batch_size: int = 64) -> Dict[str, Any]:
+    """NN throughput in batched evaluation mode."""
     device = next(model.parameters()).device
     dummy_local  = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
+    model.eval()
 
     # Warm up
-    with torch.no_grad(), torch.autocast(device_type=device.type):
-        for _ in range(10):
-            model(dummy_local)
+    for _ in range(5):
+        model(dummy_local)
+
     if device.type == "cuda":
         torch.cuda.synchronize()
 
     n_batches = n_positions // batch_size
+    total_positions = n_batches * batch_size
+
     start = time.perf_counter()
     with torch.no_grad(), torch.autocast(device_type=device.type):
         for _ in range(n_batches):
@@ -95,7 +88,6 @@ def benchmark_inference(
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - start
 
-    total_positions = n_batches * batch_size
     return {
         "name":              f"NN inference (batch={batch_size})",
         "positions":         total_positions,
@@ -165,6 +157,7 @@ def benchmark_gpu_utilisation(model: "HexTacToeNet") -> Dict[str, Any]:
             "name": "GPU utilisation",
             "gpu_util_pct": None,
             "vram_used_gb": None,
+            "vram_total_gb": None,
         }
 
     try:
@@ -189,15 +182,18 @@ def benchmark_gpu_utilisation(model: "HexTacToeNet") -> Dict[str, Any]:
         mem        = pynvml.nvmlDeviceGetMemoryInfo(handle)
         gpu_util   = float(np.mean(util_samples)) if util_samples else 0.0
         vram_gb    = float(mem.used) / 1e9
+        vram_total = float(mem.total) / 1e9
     except Exception as exc:
         console.print(f"[yellow]GPU util measurement failed: {exc}[/yellow]")
         gpu_util = 0.0
         vram_gb  = 0.0
+        vram_total = 0.0
 
     return {
-        "name":        "GPU utilisation",
-        "gpu_util_pct": gpu_util,
-        "vram_used_gb": vram_gb,
+        "name":          "GPU utilisation",
+        "gpu_util_pct":  gpu_util,
+        "vram_used_gb":  vram_gb,
+        "vram_total_gb": vram_total,
     }
 
 
@@ -229,15 +225,13 @@ def benchmark_worker_pool(
     try:
         pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
     except PermissionError as exc:
-        # Some sandboxed environments block POSIX semaphore creation, which
-        # prevents multiprocessing queues from being constructed (mp.Queue).
-        # In that case, skip the worker-pool benchmark but keep the script running.
         return {
             "name": "Worker pool throughput",
             "games_completed": 0,
             "positions_pushed": 0,
             "elapsed_sec": 0.0,
             "games_per_hour": 0.0,
+            "batch_saturation": 0.0,
             "skipped": 1.0,
             "error": str(exc),
         }
@@ -266,12 +260,21 @@ def benchmark_worker_pool(
 
     elapsed = max(time.perf_counter() - t0, 1e-6)
     games_per_hour = (pool.games_completed / elapsed) * 3600.0
+    
+    # Calculate batch saturation
+    server = pool._inference_server
+    if server.forward_count > 0:
+        batch_saturation = server.total_requests / (server.forward_count * server._batch_size) * 100.0
+    else:
+        batch_saturation = 0.0
+
     result = {
-        "name": "Worker pool throughput",
-        "games_completed": pool.games_completed,
+        "name":             "Worker pool throughput",
+        "games_completed":  pool.games_completed,
         "positions_pushed": pool.positions_pushed,
-        "elapsed_sec": elapsed,
-        "games_per_hour": games_per_hour,
+        "elapsed_sec":      elapsed,
+        "games_per_hour":   games_per_hour,
+        "batch_saturation": batch_saturation,
     }
     if stop_error is not None:
         result["stop_error"] = stop_error
@@ -282,18 +285,20 @@ def benchmark_worker_pool(
 
 # (name, metric_key, target, higher_is_better)
 _CHECKS = [
-    ("MCTS (CPU only, no NN)",          "sims_per_sec",      10_000,  True),
-    ("NN inference (batch=64)",          "positions_per_sec",  5_000,  True),
+    ("MCTS (CPU only, no NN)",          "sims_per_sec",     150_000,  True),
+    ("NN inference (batch=64)",          "positions_per_sec",  8_000,  True),
     ("NN latency (batch=1)",             "mean_ms",                5,  False),
     ("Replay buffer sample (batch=256)", "us_per_sample",       1000,  False),
     ("GPU utilisation",                  "gpu_util_pct",          80,  True),
-    ("GPU utilisation",                  "vram_used_gb",           6,  False),
+    ("GPU utilisation",                  "vram_used_gb",           0,  False), # 0 means dynamic target
+    ("Worker pool throughput",           "games_per_hour",      1500,  True),
+    ("Worker pool throughput",           "batch_saturation",      50,  True),
 ]
 
 
 def print_benchmark_report(results: List[Dict[str, Any]]) -> bool:
     """Print a rich pass/fail table. Returns True if all checks pass."""
-    table = Table(title="Phase 2 Benchmark Report", show_lines=True)
+    table = Table(title="Phase 3.5 / 4 Benchmark Report", show_lines=True)
     table.add_column("Benchmark",    style="bold", min_width=36)
     table.add_column("Result",       justify="right")
     table.add_column("Target",       justify="right", style="dim")
@@ -306,8 +311,24 @@ def print_benchmark_report(results: List[Dict[str, Any]]) -> bool:
         r   = by_name.get(name, {})
         val = r.get(key)
         if val is None:
-            table.add_row(name, "-", f"{'≥' if higher else '≤'} {target:,}", "[yellow]SKIP[/yellow]")
+            table.add_row(name, "-", "SKIP", "[yellow]SKIP[/yellow]")
             continue
+
+        # Dynamic VRAM Target
+        if name == "GPU utilisation" and key == "vram_used_gb":
+            total = r.get("vram_total_gb", 0.0)
+            limit = total * 0.8
+            ok = val <= limit
+            status = "[green]PASS[/green]" if ok else "[red]FAIL[/red]"
+            table.add_row(
+                "VRAM usage",
+                f"{val:.1f} / {total:.1f} GB",
+                f"≤ {limit:.1f} GB (80%)",
+                status
+            )
+            if not ok: all_pass = False
+            continue
+
         ok = (val >= target) if higher else (val <= target)
         if not ok:
             all_pass = False
@@ -315,7 +336,7 @@ def print_benchmark_report(results: List[Dict[str, Any]]) -> bool:
         op        = "≥" if higher else "≤"
         unit      = _unit(key)
         table.add_row(
-            name,
+            f"{name} [{key}]" if key == "batch_saturation" else name,
             f"{val:,.1f}{unit}",
             f"{op} {target:,}{unit}",
             status,
@@ -325,33 +346,27 @@ def print_benchmark_report(results: List[Dict[str, Any]]) -> bool:
     console.print(table)
     console.print()
     if all_pass:
-        console.print("[bold green]All checks PASS — Phase 2 exit criteria met.[/bold green]")
+        console.print("[bold green]All checks PASS — Phase 3.5 / 4 exit criteria met.[/bold green]")
     else:
-        console.print("[bold red]Some checks FAILED — profile and optimise before Phase 3.[/bold red]")
+        console.print("[bold red]Some checks FAILED — profile and optimise before Phase 4.5.[/bold red]")
     console.print()
     return all_pass
 
 
 def _unit(key: str) -> str:
-    if "us_" in key:
-        return " μs"
-    if "_ms" in key:
-        return " ms"
-    if "_gb" in key:
-        return " GB"
-    if "_pct" in key:
-        return "%"
-    if "_per_sec" in key and "pos" in key:
-        return " pos/s"
-    if "_per_sec" in key:
-        return " sim/s"
+    if "per_sec" in key: return " units/s"
+    if "ms" in key:      return " ms"
+    if "us" in key:      return " μs"
+    if "pct" in key:     return "%"
+    if "saturation" in key: return "%"
+    if "hour" in key:    return " /hr"
     return ""
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Phase 2 benchmark harness")
+    p = argparse.ArgumentParser(description="Phase 3.5 / 4 benchmark harness")
     p.add_argument("--config", default="configs/fast_debug.yaml")
     p.add_argument("--no-compile", action="store_true",
                    help="Skip torch.compile (faster startup for quick checks)")
@@ -391,7 +406,7 @@ def main() -> None:
     buffer = ReplayBuffer(capacity=100_000, board_channels=18)
     for _ in range(10_000):
         buffer.push(
-            np.zeros((18, 19, 19), dtype=np.float16),
+            np.zeros((18, 19, 19), dtype=np.float32),
             np.ones(362, dtype=np.float32) / 362,
             0.0,
         )

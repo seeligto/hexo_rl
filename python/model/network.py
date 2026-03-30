@@ -80,9 +80,7 @@ class HexTacToeNet(nn.Module):
         spatial = board_size * board_size
 
         self.trunk = Trunk(in_channels, filters, res_blocks)
-        # Backward-compatible alias expected by older tests and tooling.
-        self.tower = self.trunk.tower
-
+        
         self.policy_conv = nn.Conv2d(filters, 2, 1)
         self.policy_bn = nn.BatchNorm2d(2)
         self.policy_fc = nn.Linear(2 * spatial, spatial + 1)
@@ -91,6 +89,11 @@ class HexTacToeNet(nn.Module):
         self.value_bn = nn.BatchNorm2d(1)
         self.value_fc1 = nn.Linear(spatial, 256)
         self.value_fc2 = nn.Linear(256, 1)
+
+    @property
+    def tower(self) -> nn.Sequential:
+        """Backward-compatible alias for the trunk tower."""
+        return self.trunk.tower
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
