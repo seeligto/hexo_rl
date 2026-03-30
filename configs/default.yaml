@@ -19,12 +19,22 @@ mcts:
 # Self-play
 selfplay:
   n_workers: 6
+  n_simulations: 80
   inference_batch_size: 64
+  inference_max_wait_ms: 8.0
+  dispatch_wait_ms: 2.0
+  leaf_batch_size: 8
+  fast_playout_prob: 0.9
+  fast_sims_min: 15
+  fast_sims_max: 25
   replay_buffer_capacity: 500000
 
 # Training
 training:
   batch_size: 256
+  min_buffer_size: 256
+  training_steps_per_game: 2.0
+  max_train_burst: 8
   lr: 0.002
   weight_decay: 0.0001
   lr_schedule: cosine

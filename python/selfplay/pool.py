@@ -49,6 +49,8 @@ Usage
 from __future__ import annotations
 
 import time
+import signal
+import queue
 from typing import Dict, Any, List, Optional
 
 import numpy as np
@@ -101,10 +103,18 @@ class _InferenceClient:
 
         req_id = self._next_id
         self._next_id += 1
-        self._req_q.put((self._worker_id, req_id, states))
+        try:
+            self._req_q.put((self._worker_id, req_id, states))
+        except (BrokenPipeError, EOFError, OSError, KeyboardInterrupt):
+            return None
         # Block until the matching response arrives.
         while True:
-            resp = self._resp_q.get()
+            try:
+                resp = self._resp_q.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            except (BrokenPipeError, EOFError, OSError, KeyboardInterrupt):
+                return None
             if resp is None:
                 return None  # stop sentinel
             w_id, r_id, outputs = resp
@@ -140,13 +150,20 @@ def _worker_fn(
     from native_core import Board, MCTSTree
     from python.env.game_state import GameState
 
+    # Parent handles graceful shutdown. Workers ignore SIGINT so they can
+    # terminate via stop_event/sentinels without noisy traceback spam.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     client = _InferenceClient(worker_id, request_queue, response_queue)
 
     mcts_cfg = config.get("mcts", config)
     sp_cfg   = config.get("selfplay", config)
 
-    n_sims       = int(mcts_cfg.get("n_simulations", 50))
+    n_sims       = int(sp_cfg.get("n_simulations", mcts_cfg.get("n_simulations", 50)))
     leaf_batch_size = int(sp_cfg.get("leaf_batch_size", 8))
+    fast_playout_prob = float(sp_cfg.get("fast_playout_prob", 0.9))
+    fast_sims_min = int(sp_cfg.get("fast_sims_min", 15))
+    fast_sims_max = int(sp_cfg.get("fast_sims_max", 25))
     c_puct       = float(mcts_cfg.get("c_puct", 1.5))
     temp_thresh  = int(mcts_cfg.get("temperature_threshold_ply", 30))
     board_size   = _BOARD_SIZE
@@ -204,8 +221,12 @@ def _worker_fn(
 
             # ── MCTS search ──
             tree.new_game(rust_board)
-            for sim_idx in range(0, n_sims, leaf_batch_size):
-                current_batch = min(leaf_batch_size, n_sims - sim_idx)
+            current_n_sims = n_sims
+            if np.random.random() < fast_playout_prob:
+                current_n_sims = np.random.randint(fast_sims_min, fast_sims_max + 1)
+
+            for sim_idx in range(0, current_n_sims, leaf_batch_size):
+                current_batch = min(leaf_batch_size, current_n_sims - sim_idx)
                 leaves = tree.select_leaves(current_batch)
                 if not leaves:
                     break
