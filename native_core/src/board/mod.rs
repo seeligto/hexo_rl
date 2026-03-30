@@ -25,7 +25,6 @@ pub mod bitboard;
 pub mod zobrist;
 
 use fxhash::FxHashMap;
-use fxhash::FxBuildHasher;
 use zobrist::ZobristTable;
 
 // ── MoveDiff ──────────────────────────────────────────────────────────────────
@@ -54,6 +53,9 @@ pub struct MoveDiff {
     prev_min_r: i32,
     prev_max_r: i32,
     prev_has_stones: bool,
+    // Action anchors state before the move.
+    prev_action_anchors: [(i32, i32); 4],
+    prev_action_anchors_count: usize,
 }
 
 /// Board size (cells per axis of the view window).
@@ -130,6 +132,9 @@ pub struct Board {
     max_r: i32,
     /// True once at least one stone has been placed.
     has_stones: bool,
+    /// Last 4 stones placed (q, r).
+    pub(crate) action_anchors: [(i32, i32); 4],
+    pub(crate) action_anchors_count: usize,
 }
 
 impl Board {
@@ -147,6 +152,8 @@ impl Board {
             min_r: 0,
             max_r: 0,
             has_stones: false,
+            action_anchors: [(0, 0); 4],
+            action_anchors_count: 0,
         }
     }
 
@@ -321,6 +328,18 @@ impl Board {
             Player::Two => Cell::P2,
         };
         self.cells.insert((q, r), cell);
+
+        // Update action anchors (last 4 stones).
+        if self.action_anchors_count < 4 {
+            self.action_anchors[self.action_anchors_count] = (q, r);
+            self.action_anchors_count += 1;
+        } else {
+            self.action_anchors[0] = self.action_anchors[1];
+            self.action_anchors[1] = self.action_anchors[2];
+            self.action_anchors[2] = self.action_anchors[3];
+            self.action_anchors[3] = (q, r);
+        }
+
         // Use absolute (q, r) for Zobrist — position-independent, no window dependency.
         self.zobrist_hash ^= ZobristTable::get_for_pos(q, r, player_idx);
         self.ply += 1;
@@ -352,6 +371,8 @@ impl Board {
             prev_min_r: self.min_r,
             prev_max_r: self.max_r,
             prev_has_stones: self.has_stones,
+            prev_action_anchors: self.action_anchors,
+            prev_action_anchors_count: self.action_anchors_count,
         };
 
         self.apply_move(q, r)?;
@@ -384,6 +405,9 @@ impl Board {
         self.min_r = diff.prev_min_r;
         self.max_r = diff.prev_max_r;
         self.has_stones = diff.prev_has_stones;
+
+        self.action_anchors = diff.prev_action_anchors;
+        self.action_anchors_count = diff.prev_action_anchors_count;
     }
 
     // ── Win detection ─────────────────────────────────────────────────────────
@@ -569,6 +593,70 @@ impl Board {
             views.push(out);
         }
         (views, centers)
+    }
+
+    /// Returns the (q, r) centers of any open 3-in-a-row or 4-in-a-row formations.
+    /// A formation is considered "open" if at least one of its ends is empty.
+    ///
+    /// Performance: Optimized O(Stones) by skipping redundant scans.
+    pub fn get_threat_anchors(&self) -> Vec<(i32, i32)> {
+        let mut anchors = Vec::with_capacity(8);
+        if self.cells.is_empty() {
+            return anchors;
+        }
+
+        // Pre-collect stones by player to avoid repeated HashMap scans.
+        let mut p1_stones = Vec::with_capacity(self.cells.len());
+        let mut p2_stones = Vec::with_capacity(self.cells.len());
+        for (&pos, &cell) in self.cells.iter() {
+            match cell {
+                Cell::P1 => p1_stones.push(pos),
+                Cell::P2 => p2_stones.push(pos),
+                Cell::Empty => {}
+            }
+        }
+
+        self.append_threat_anchors_for_player(&p1_stones, Cell::P1, &mut anchors);
+        self.append_threat_anchors_for_player(&p2_stones, Cell::P2, &mut anchors);
+
+        anchors
+    }
+
+    fn append_threat_anchors_for_player(
+        &self,
+        stones: &[(i32, i32)],
+        player_cell: Cell,
+        anchors: &mut Vec<(i32, i32)>,
+    ) {
+        // Track visited (pos, axis) to avoid redundant scans for the same sequence.
+        // There are 3 axes, so we can pack (q, r, axis_idx) into a single key if needed,
+        // but for simplicity and to avoid allocations, we just check if the previous
+        // cell in the direction is the same color.
+        for &(q, r) in stones {
+            for (dq, dr) in HEX_AXES {
+                // Efficiency: Only start scanning if this stone is the *start* of a sequence
+                // in this direction. This ensures each sequence is scanned exactly once.
+                if self.get(q - dq, r - dr) == player_cell {
+                    continue;
+                }
+
+                let mut count = 1;
+                while self.get(q + dq * count, r + dr * count) == player_cell {
+                    count += 1;
+                }
+
+                if count == 3 || count == 4 {
+                    // Check if open at either end.
+                    let open_start = self.get(q - dq, r - dr) == Cell::Empty;
+                    let open_end = self.get(q + dq * count, r + dr * count) == Cell::Empty;
+
+                    if open_start || open_end {
+                        let center_idx = count / 2;
+                        anchors.push((q + dq * center_idx, r + dr * center_idx));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -785,6 +873,54 @@ mod tests {
     }
 
     #[test]
+    fn test_action_anchors_tracking() {
+        let mut board = Board::new();
+        assert_eq!(board.action_anchors_count, 0);
+
+        board.apply_move(0, 0).unwrap();
+        assert_eq!(board.action_anchors_count, 1);
+        assert_eq!(board.action_anchors[0], (0, 0));
+
+        board.apply_move(1, 1).unwrap();
+        board.apply_move(2, 2).unwrap();
+        board.apply_move(3, 3).unwrap();
+        assert_eq!(board.action_anchors_count, 4);
+        assert_eq!(board.action_anchors[0], (0, 0));
+        assert_eq!(board.action_anchors[3], (3, 3));
+
+        board.apply_move(4, 4).unwrap();
+        assert_eq!(board.action_anchors_count, 4);
+        assert_eq!(board.action_anchors[0], (1, 1)); // (0,0) was evicted
+        assert_eq!(board.action_anchors[3], (4, 4));
+    }
+
+    #[test]
+    fn test_threat_anchors_identification() {
+        let mut board = Board::new();
+        // Place a 3-in-a-row for P1 along the E axis: (0,0), (1,0), (2,0)
+        board.cells.insert((0, 0), Cell::P1);
+        board.cells.insert((1, 0), Cell::P1);
+        board.cells.insert((2, 0), Cell::P1);
+        
+        // It's open at both ends ((-1,0) and (3,0) are Empty)
+        let anchors = board.get_threat_anchors();
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(anchors[0], (1, 0)); // The center stone
+
+        // Now place another 4-in-a-row for P2 along the NE axis: (5,5), (5,6), (5,7), (5,8)
+        board.cells.insert((5, 5), Cell::P2);
+        board.cells.insert((5, 6), Cell::P2);
+        board.cells.insert((5, 7), Cell::P2);
+        board.cells.insert((5, 8), Cell::P2);
+        
+        let anchors = board.get_threat_anchors();
+        assert_eq!(anchors.len(), 2);
+        // Centers for 4-in-a-row: count / 2 = 2. So (5, 5 + 2) = (5, 7).
+        assert!(anchors.contains(&(1, 0)));
+        assert!(anchors.contains(&(5, 7)));
+    }
+
+    #[test]
     fn test_apply_undo_symmetry() {
         let mut board = Board::new();
         let mut diffs = Vec::new();
@@ -823,5 +959,6 @@ mod tests {
         assert_eq!(board.moves_remaining, empty.moves_remaining);
         assert_eq!(board.ply, empty.ply);
         assert_eq!(board.last_move, empty.last_move);
+        assert_eq!(board.action_anchors_count, empty.action_anchors_count);
     }
 }
