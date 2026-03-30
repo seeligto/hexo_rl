@@ -191,8 +191,50 @@ def main() -> None:
     from python.eval.evaluator import Evaluator
     
     pool = WorkerPool(trainer.model, config, device, buffer)
-    enable_periodic_eval = bool(train_cfg.get("enable_periodic_eval", config.get("enable_periodic_eval", False)))
+    eval_cfg = config.get("evaluation", config.get("eval", {}))
+    enable_periodic_eval = bool(
+        train_cfg.get("enable_periodic_eval", config.get("enable_periodic_eval", eval_cfg.get("enabled", False)))
+    )
+    eval_random_games = int(eval_cfg.get("random_n_games", 10))
+    eval_ramora_games = int(eval_cfg.get("ramora_n_games", 5))
+    eval_ramora_time_limit = float(eval_cfg.get("ramora_time_limit", 0.03))
+    eval_random_model_sims = eval_cfg.get("random_model_sims")
+    eval_ramora_model_sims = eval_cfg.get("ramora_model_sims")
+    enable_best_arena = bool(eval_cfg.get("enable_best_arena", False))
+    best_arena_games = int(eval_cfg.get("best_n_games", 20))
+    best_promotion_winrate = float(eval_cfg.get("best_promotion_winrate", 0.55))
+    best_current_model_sims = eval_cfg.get("best_current_model_sims")
+    best_opponent_model_sims = eval_cfg.get("best_opponent_model_sims")
+    best_model_path = Path(eval_cfg.get("best_model_path", "checkpoints/best_model.pt"))
     evaluator = Evaluator(trainer.model, device, config) if enable_periodic_eval else None
+
+    best_model = None
+    best_model_step: int | None = None
+    if evaluator is not None and enable_best_arena:
+        best_model_path.parent.mkdir(parents=True, exist_ok=True)
+        if best_model_path.exists():
+            best_ref = Trainer.load_checkpoint(
+                best_model_path,
+                checkpoint_dir=args.checkpoint_dir,
+                device=device,
+                fallback_config=combined_config,
+            )
+            best_model = best_ref.model
+            best_model.eval()
+            best_model_step = best_ref.step
+            log.info("best_model_loaded", path=str(best_model_path), step=best_model_step)
+        else:
+            base_model = getattr(trainer.model, "_orig_mod", trainer.model)
+            best_model = HexTacToeNet(
+                board_size=board_size,
+                res_blocks=res_blocks,
+                filters=filters,
+            ).to(device)
+            best_model.load_state_dict(base_model.state_dict())
+            best_model.eval()
+            torch.save(best_model.state_dict(), best_model_path)
+            best_model_step = trainer.step
+            log.info("best_model_initialized", path=str(best_model_path), step=best_model_step)
     
     # ── GPU monitor ──
     gpu_monitor = GPUMonitor(interval_sec=5)
@@ -249,8 +291,12 @@ def main() -> None:
                 "games_per_hour": games_played / elapsed * 3600,
                 "gpu_util": gpu_monitor.gpu_util_pct,
                 "vram_gb": gpu_monitor.vram_used_gb,
-                "x_winrate": 0.0,
-                "o_winrate": 0.0,
+                "x_winrate": pool.x_winrate,
+                "o_winrate": pool.o_winrate,
+                "draw_rate": (pool.draws / games_played) if games_played > 0 else 0.0,
+                "x_wins": pool.x_wins,
+                "o_wins": pool.o_wins,
+                "draws": pool.draws,
             }
             if eval_metrics:
                 metrics.update(eval_metrics)
@@ -310,9 +356,51 @@ def main() -> None:
                 eval_metrics = {}
                 if evaluator is not None and train_step > 0 and train_step % eval_interval == 0:
                     log.info("evaluation_start", step=train_step)
-                    wr_random = evaluator.evaluate_vs_random(n_games=10)
-                    wr_ramora = evaluator.evaluate_vs_ramora(n_games=5)
+                    log.info("evaluation_phase_start", step=train_step, phase="random")
+                    wr_random = evaluator.evaluate_vs_random(
+                        n_games=eval_random_games,
+                        model_sims=eval_random_model_sims,
+                    )
+                    log.info("evaluation_phase_complete", step=train_step, phase="random", wr_random=wr_random)
+
+                    log.info("evaluation_phase_start", step=train_step, phase="ramora")
+                    wr_ramora = evaluator.evaluate_vs_ramora(
+                        n_games=eval_ramora_games,
+                        time_limit=eval_ramora_time_limit,
+                        model_sims=eval_ramora_model_sims,
+                    )
+                    log.info("evaluation_phase_complete", step=train_step, phase="ramora", wr_ramora=wr_ramora)
                     eval_metrics = {"wr_random": wr_random, "wr_ramora": wr_ramora}
+
+                    if enable_best_arena and best_model is not None:
+                        log.info("evaluation_phase_start", step=train_step, phase="best_arena")
+                        wr_best = evaluator.evaluate_vs_model(
+                            best_model,
+                            n_games=best_arena_games,
+                            model_sims=best_current_model_sims,
+                            opponent_sims=best_opponent_model_sims,
+                        )
+                        log.info("evaluation_phase_complete", step=train_step, phase="best_arena", wr_best=wr_best)
+                        eval_metrics["wr_best"] = wr_best
+
+                        if wr_best >= best_promotion_winrate:
+                            base_model = getattr(trainer.model, "_orig_mod", trainer.model)
+                            best_model.load_state_dict(base_model.state_dict())
+                            best_model.eval()
+                            torch.save(best_model.state_dict(), best_model_path)
+                            best_model_step = train_step
+                            eval_metrics["best_promoted"] = 1.0
+                            log.info(
+                                "best_model_promoted",
+                                step=train_step,
+                                wr_best=wr_best,
+                                threshold=best_promotion_winrate,
+                                path=str(best_model_path),
+                            )
+                        else:
+                            eval_metrics["best_promoted"] = 0.0
+                        eval_metrics["best_model_step"] = float(best_model_step or 0)
+
                     log.info("evaluation_complete", step=train_step, **eval_metrics)
 
                 if train_step % log_interval == 0:
@@ -328,8 +416,8 @@ def main() -> None:
                         "games_per_hour": games_per_hour,
                         "gpu_util":      gpu_monitor.gpu_util_pct,
                         "vram_gb":       gpu_monitor.vram_used_gb,
-                        "x_winrate":     0.0, # WorkerPool needs to track this separately if desired
-                        "o_winrate":     0.0,
+                        "x_winrate":     pool.x_winrate,
+                        "o_winrate":     pool.o_winrate,
                         **eval_metrics
                     }
 
@@ -342,6 +430,12 @@ def main() -> None:
                         buffer_size=buffer.size,
                         games_played=games_played,
                         games_per_hour=round(float(games_per_hour), 1),
+                        x_wins=pool.x_wins,
+                        o_wins=pool.o_wins,
+                        draws=pool.draws,
+                        x_winrate=round(float(pool.x_winrate), 3),
+                        o_winrate=round(float(pool.o_winrate), 3),
+                        draw_rate=round(float(pool.draws / games_played), 3) if games_played > 0 else 0.0,
                         gpu_util=round(float(gpu_monitor.gpu_util_pct), 1),
                         vram_gb=round(float(gpu_monitor.vram_used_gb), 2),
                         **eval_metrics,

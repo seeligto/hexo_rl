@@ -130,16 +130,35 @@ class Trainer:
 
     # ── Checkpoint I/O ────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _normalize_model_state_dict_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Normalize model state dict keys across compiled/non-compiled models."""
+        if not state_dict:
+            return state_dict
+
+        has_orig_prefix = any(k.startswith("_orig_mod.") for k in state_dict.keys())
+        if not has_orig_prefix:
+            return state_dict
+
+        prefix = "_orig_mod."
+        return {
+            (k[len(prefix):] if k.startswith(prefix) else k): v
+            for k, v in state_dict.items()
+        }
+
     def save_checkpoint(self, loss_info: Optional[Dict[str, float]] = None) -> Path:
         """Save full checkpoint and inference-only weights.
 
         Returns path to the checkpoint file.
         """
+        base_model = getattr(self.model, "_orig_mod", self.model)
+        model_state = base_model.state_dict()
+
         ckpt_path = self.checkpoint_dir / f"checkpoint_{self.step:08d}.pt"
         torch.save(
             {
                 "step":            self.step,
-                "model_state":     self.model.state_dict(),
+                "model_state":     model_state,
                 "optimizer_state": self.optimizer.state_dict(),
                 "scaler_state":    self.scaler.state_dict(),
                 "config":          self.config,
@@ -149,7 +168,7 @@ class Trainer:
 
         # Inference-only copy (weights only, no optimizer state).
         inf_path = self.checkpoint_dir / "inference_only.pt"
-        torch.save(self.model.state_dict(), inf_path)
+        torch.save(model_state, inf_path)
 
         # Update log.
         entry: Dict[str, Any] = {"step": self.step}
@@ -195,6 +214,8 @@ class Trainer:
                 )
             config = fallback_config
             model_state = ckpt
+
+        model_state = cls._normalize_model_state_dict_keys(model_state)
 
         board_size  = int(config.get("board_size", 19))
         res_blocks  = int(config.get("res_blocks", 10))

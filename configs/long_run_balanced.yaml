@@ -38,6 +38,20 @@ training:
   eval_interval: 200
   checkpoint_interval: 100
 
+evaluation:
+  enabled: true
+  random_n_games: 10
+  ramora_n_games: 8
+  ramora_time_limit: 0.03
+  random_model_sims: 96
+  ramora_model_sims: 128
+  enable_best_arena: false
+  best_n_games: 24
+  best_promotion_winrate: 0.55
+  best_current_model_sims: 128
+  best_opponent_model_sims: 128
+  best_model_path: checkpoints/best_model.pt
+
 rewards:
   shaped_decay_steps: 500
 
