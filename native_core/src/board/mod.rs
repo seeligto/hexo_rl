@@ -5,7 +5,7 @@
 ///   NE: ( 0, +1)   SW: ( 0, -1)
 ///   NW: (-1, +1)   SE: (+1, -1)
 ///
-/// Storage: HashMap<(q,r), Cell> — unbounded.
+/// Storage: DashMap<(q,r), Cell> — unbounded.
 ///
 /// View window: fixed 19×19 tensor centred on the bounding-box centroid of all
 /// placed stones.  On an empty board the window is centred at (0,0).
@@ -24,7 +24,8 @@
 pub mod bitboard;
 pub mod zobrist;
 
-use std::collections::HashMap;
+use dashmap::DashMap;
+use fxhash::FxBuildHasher;
 use zobrist::ZobristTable;
 
 // ── MoveDiff ──────────────────────────────────────────────────────────────────
@@ -111,7 +112,7 @@ pub enum Cell {
 #[derive(Debug, Clone)]
 pub struct Board {
     /// Sparse stone map: (q, r) → Cell.
-    pub(crate) cells: HashMap<(i32, i32), Cell>,
+    pub(crate) cells: DashMap<(i32, i32), Cell, FxBuildHasher>,
     /// Whose turn it is.
     pub current_player: Player,
     /// How many moves the current player still has to place this turn.
@@ -136,7 +137,7 @@ impl Board {
     /// Create an empty board ready for the first move.
     pub fn new() -> Self {
         Board {
-            cells: HashMap::new(),
+            cells: DashMap::with_hasher(FxBuildHasher::default()),
             current_player: Player::One,
             moves_remaining: 1,
             ply: 0,
@@ -168,24 +169,28 @@ impl Board {
 
     /// Window-relative flat index for axial (q, r).
     ///
-    /// Result is in [0, TOTAL_CELLS).  Does not panic; will produce garbage for
-    /// out-of-window coords (callers should call `in_window` first).
+    /// Result is in [0, TOTAL_CELLS). Returns usize::MAX for out-of-window coords.
     #[inline]
     pub fn window_flat_idx(&self, q: i32, r: i32) -> usize {
         let (cq, cr) = self.window_center();
+        Self::window_flat_idx_at(q, r, cq, cr)
+    }
+
+    /// Window-relative flat index for axial (q, r) at a specific center.
+    #[inline]
+    pub fn window_flat_idx_at(q: i32, r: i32, cq: i32, cr: i32) -> usize {
         let wq = q - cq + HALF;
         let wr = r - cr + HALF;
-        wq as usize * BOARD_SIZE + wr as usize
+        if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
+            (wq as usize * BOARD_SIZE) + wr as usize
+        } else {
+            usize::MAX
+        }
     }
 
     /// Returns the cell at (q, r).
     pub fn get_cell(&self, q: i32, r: i32) -> Cell {
-        self.cells.get(&(q, r)).copied().unwrap_or(Cell::Empty)
-    }
-
-    /// Iterate over all occupied cells: `(&(q, r), &Cell)`.
-    pub fn cells_iter(&self) -> impl Iterator<Item = (&(i32, i32), &Cell)> {
-        self.cells.iter()
+        self.cells.get(&(q, r)).map(|r| *r).unwrap_or(Cell::Empty)
     }
 
     /// Axial coordinates (q, r) from a window-relative flat index.
@@ -211,7 +216,7 @@ impl Board {
     /// Cell at (q, r).  Returns Empty for unoccupied or out-of-window cells.
     #[inline]
     pub fn get(&self, q: i32, r: i32) -> Cell {
-        self.cells.get(&(q, r)).copied().unwrap_or(Cell::Empty)
+        self.cells.get(&(q, r)).map(|r| *r).unwrap_or(Cell::Empty)
     }
 
     /// All legal moves: empty cells within bounding_box + 2 margin, clipped to
@@ -356,7 +361,7 @@ impl Board {
 
     /// Undo a move previously applied by `apply_move_tracked`.
     pub fn undo_move(&mut self, diff: MoveDiff) {
-        if let Some(cell) = self.cells.remove(&(diff.q, diff.r)) {
+        if let Some((_, cell)) = self.cells.remove(&(diff.q, diff.r)) {
             debug_assert_eq!(
                 cell,
                 match diff.player {
@@ -414,12 +419,13 @@ impl Board {
         };
         // Fast path: only the player who just moved can have just won.
         if let Some((lq, lr)) = self.last_move {
-            if self.cells.get(&(lq, lr)).copied() == Some(cell) {
+            if self.cells.get(&(lq, lr)).map(|r| *r) == Some(cell) {
                 return self.count_in_line(lq, lr, cell) >= WIN_LENGTH;
             }
         }
         // Fallback: scan all stones of this player (reached when player != last mover).
-        for (&(q, r), &c) in &self.cells {
+        for r in self.cells.iter() {
+            let (&(q, r), &c) = r.pair();
             if c == cell && self.count_in_line(q, r, cell) >= WIN_LENGTH {
                 return true;
             }
@@ -449,7 +455,7 @@ impl Board {
         loop {
             q += dq;
             r += dr;
-            if self.cells.get(&(q, r)).copied() != Some(cell) {
+            if self.cells.get(&(q, r)).map(|r| *r) != Some(cell) {
                 break;
             }
             count += 1;
@@ -471,12 +477,10 @@ impl Board {
             Player::One => (Cell::P1, Cell::P2),
             Player::Two => (Cell::P2, Cell::P1),
         };
-        let (cq, cr) = self.window_center();
-        for (&(q, r), &cell) in &self.cells {
-            let wq = q - cq + HALF;
-            let wr = r - cr + HALF;
-            if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
-                let flat = wq as usize * BOARD_SIZE + wr as usize;
+        for r in self.cells.iter() {
+            let (&(q, r), &cell) = r.pair();
+            let flat = self.window_flat_idx(q, r);
+            if flat < TOTAL_CELLS {
                 if cell == my_cell {
                     out[flat] = 1.0;
                 } else if cell == opp_cell {
@@ -499,7 +503,7 @@ impl Board {
             return clusters;
         }
         
-        let stones: Vec<(i32, i32)> = self.cells.keys().copied().collect();
+        let stones: Vec<(i32, i32)> = self.cells.iter().map(|r| *r.key()).collect();
         let mut visited = vec![false; stones.len()];
         
         for i in 0..stones.len() {
@@ -555,11 +559,10 @@ impl Board {
         
         for &(cq, cr) in &centers {
             let mut out = vec![0.0f32; 2 * TOTAL_CELLS];
-            for (&(q, r), &cell) in &self.cells {
-                let wq = q - cq + HALF;
-                let wr = r - cr + HALF;
-                if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
-                    let flat = wq as usize * BOARD_SIZE + wr as usize;
+            for r in self.cells.iter() {
+                let (&(q, r), &cell) = r.pair();
+                let flat = Self::window_flat_idx_at(q, r, cq, cr);
+                if flat < TOTAL_CELLS {
                     if cell == my_cell {
                         out[flat] = 1.0;
                     } else if cell == opp_cell {
@@ -587,7 +590,8 @@ mod tests {
 
     fn recompute_zobrist(board: &Board) -> u64 {
         let mut hash = 0u64;
-        for (&(q, r), &cell) in board.cells_iter() {
+        for r in board.cells.iter() {
+            let (&(q, r), &cell) = r.pair();
             let player_idx = match cell {
                 Cell::P1 => 0,
                 Cell::P2 => 1,
@@ -756,7 +760,7 @@ mod tests {
         let b = Board::new();
         let planes = b.to_planes();
         assert_eq!(planes.len(), 2 * TOTAL_CELLS);
-        assert!(planes.iter().all(|&x| x == 0.0), "empty board planes must be all zero");
+        assert!(planes.iter().all(|x| *x == 0.0), "empty board planes must be all zero");
     }
 
     #[test]

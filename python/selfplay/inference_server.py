@@ -84,36 +84,51 @@ class InferenceServer(threading.Thread):
     def run(self) -> None:
         try:
             while not self._stop_event.is_set():
-                request_ids, batch = self._batcher.next_inference_batch(
-                    self._batch_size,
-                    self._max_wait_ms,
-                )
-                if not request_ids:
-                    continue
-
-                self._total_requests += len(request_ids)
-                batch_np = np.asarray(batch, dtype=np.float32)
-                tensor = torch.from_numpy(batch_np).to(self.device).reshape(len(request_ids), *self._shape)
-
                 try:
-                    self.model.eval()
-                    with torch.no_grad():
-                        with torch.autocast(device_type=self.device.type):
-                            log_policy, value = self.model(tensor)
-                    policies = log_policy.exp().cpu().numpy().astype(np.float32)
-                    values = value.squeeze(-1).cpu().numpy().astype(np.float32)
-                except Exception:
-                    # Never deadlock Rust waiters when model inference fails.
-                    policies = np.ones((len(request_ids), self._policy_len), dtype=np.float32)
-                    policies /= float(self._policy_len)
-                    values = np.zeros((len(request_ids),), dtype=np.float32)
+                    request_ids, batch = self._batcher.next_inference_batch(
+                        self._batch_size,
+                        self._max_wait_ms,
+                    )
+                    if not request_ids:
+                        continue
 
-                self._batcher.submit_inference_results(
-                    request_ids,
-                    policies.tolist(),
-                    values.tolist(),
-                )
-                self._forward_count += 1
+                    self._total_requests += len(request_ids)
+                    # Ensure the batch is explicitly C-contiguous for safe pointer arithmetic in Rust as_slice()
+                    # Coordinate Sentinels (usize::MAX): These are handled in the Rust core during tensor extraction;
+                    # out-of-window indices are zeroed before reaching this fused batch.
+                    batch_np = np.ascontiguousarray(batch, dtype=np.float32)
+                    tensor = torch.from_numpy(batch_np).to(self.device).reshape(len(request_ids), *self._shape)
+
+                    try:
+                        self.model.eval()
+                        with torch.no_grad():
+                            with torch.autocast(device_type=self.device.type):
+                                log_policy, value = self.model(tensor)
+                        
+                        # Ensure arrays are C-contiguous for Rust as_slice()
+                        policies = np.ascontiguousarray(log_policy.exp().cpu().numpy().astype(np.float32))
+                        values = np.ascontiguousarray(value.squeeze(-1).cpu().numpy().astype(np.float32))
+
+                        self._batcher.submit_inference_results(
+                            request_ids,
+                            policies,
+                            values,
+                        )
+                    except Exception as exc:
+                        # Explicitly signal failure to Rust waiters rather than returning dummy data
+                        # or failing silently. This allows Rust to handle the error properly.
+                        error_msg = f"Model inference failed: {str(exc)}"
+                        self._batcher.submit_inference_failure(request_ids, error_msg)
+                        # We don't raise here so the server can potentially recover for the next batch
+                        continue
+                    
+                    self._forward_count += 1
+                except Exception as exc:
+                    import traceback
+                    print(f"InferenceServer loop error: {exc}")
+                    traceback.print_exc()
+                    if self._stop_event.is_set():
+                        break
         finally:
             # Ensure blocked Rust waiters are released even if this thread exits unexpectedly.
             self._batcher.close()

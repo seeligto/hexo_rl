@@ -112,6 +112,11 @@ def main() -> None:
         # Detached runs should survive terminal hangups.
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
+    # Optimization: Enable TensorFloat32 (TF32) for better performance on Ampere+ GPUs
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')
+        torch.backends.cudnn.benchmark = True
+
     args = parse_args()
 
     # ── Load config ──

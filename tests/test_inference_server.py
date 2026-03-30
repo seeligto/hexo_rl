@@ -201,27 +201,23 @@ class TestInferenceServerFailureHandling:
         server.start()
         try:
             state = _random_state()
-            result: dict[str, np.ndarray | float] = {}
             done = threading.Event()
+            error_caught = []
 
             def _call() -> None:
-                policy, value = server.infer(state)
-                result["policy"] = policy
-                result["value"] = value
-                done.set()
+                try:
+                    server.infer(state)
+                except ValueError as e:
+                    error_caught.append(str(e))
+                finally:
+                    done.set()
 
             t = threading.Thread(target=_call, daemon=True)
             t.start()
 
             assert done.wait(5.0), "server.infer() hung waiting for results"
-            policy = result["policy"]
-            value = float(result["value"])
-
-            assert isinstance(policy, np.ndarray)
-            assert policy.shape == (N_ACTIONS,)
-            assert np.all(np.isfinite(policy)), "fallback policy contains non-finite values"
-            assert abs(float(policy.sum()) - 1.0) < 1e-4, f"fallback policy sum: {policy.sum()}"
-            assert value == 0.0, f"fallback value expected 0.0, got {value}"
+            assert len(error_caught) == 1
+            assert "Model inference failed: boom" in error_caught[0]
         finally:
             server.stop()
             server.join(timeout=2.0)

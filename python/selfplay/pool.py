@@ -43,11 +43,13 @@ class WorkerPool:
         mcts_cfg = config.get("mcts", config)
         self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
         self.c_puct = float(mcts_cfg.get("c_puct", 1.5))
+        leaf_batch_size = int(sp.get("leaf_batch_size", 8))
 
         self._runner = RustSelfPlayRunner(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_moves_per_game", 128)),
             n_simulations=self.n_simulations,
+            leaf_batch_size=leaf_batch_size,
             c_puct=self.c_puct,
             feature_len=in_channels * board_size * board_size,
             policy_len=board_size * board_size + 1,

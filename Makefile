@@ -55,11 +55,17 @@ test.all: test.rust test.py ## Run rust + python tests
 
 .PHONY: bench.lite
 bench.lite: ## Quick local benchmark pass
-	$(PY) scripts/benchmark.py --config $(CONFIG_LITE) --no-compile --mcts-sims 2000 --pool-workers 1 --pool-duration 10
+	$(PY) scripts/benchmark.py --config $(CONFIG_LITE) --no-compile --mcts-sims 2000 --pool-workers $(N_CORES) --pool-duration 10
+
+N_CORES ?= $(shell python3 -c "import os; print(os.cpu_count() or 4)")
 
 .PHONY: bench.full
 bench.full: ## Higher-confidence benchmark pass
-	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 50000 --pool-workers 6 --pool-duration 30
+	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 30
+
+.PHONY: bench.stress
+bench.stress: ## Heavy stress test (5 mins, high sims)
+	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 100000 --pool-workers $(N_CORES) --pool-duration 300 --mcts-search-sims 800
 
 .PHONY: bench.mcts
 bench.mcts: ## Dedicated Rust MCTS micro-benchmark

@@ -87,7 +87,7 @@ class Trainer:
             total_steps = int(config.get("scheduler_t_max", config.get("total_steps", 50_000)))
             total_steps = max(1, total_steps)
             min_lr = float(config.get("min_lr", 1e-5))
-            return CosineAnnealingLR(self.optimizer, T_max=total_steps, eta_min=min_lr)
+            return CosineAnnealingLR(self.optimizer, T_max=total_steps, eta_min=min_lr, last_epoch=-1)
 
         raise ValueError(f"Unsupported lr_schedule: {schedule}")
 

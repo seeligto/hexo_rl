@@ -52,7 +52,7 @@ def test_rust_batcher_blocks_batches_and_unblocks():
 
         policies = np.full((10, policy_len), 1.0 / float(policy_len), dtype=np.float32)
         values = np.zeros((10,), dtype=np.float32)
-        batcher.submit_inference_results(all_ids, policies.tolist(), values.tolist())
+        batcher.submit_inference_results(all_ids, policies, values)
 
         done_deadline = time.monotonic() + 5.0
         while time.monotonic() < done_deadline and batcher.completed_mock_games() < 10:
@@ -101,7 +101,7 @@ def test_rust_runner_with_inference_server_generates_positions():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
 
-    runner = RustSelfPlayRunner(n_workers=2, max_moves_per_game=16, n_simulations=1)
+    runner = RustSelfPlayRunner(n_workers=2, max_moves_per_game=16, n_simulations=1, leaf_batch_size=1)
     server = InferenceServer(
         model,
         device,
@@ -131,7 +131,7 @@ def test_rust_runner_collect_data_format():
     model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
     
     # Run with 1 worker and 1 simulation for speed
-    runner = RustSelfPlayRunner(n_workers=1, max_moves_per_game=4, n_simulations=1)
+    runner = RustSelfPlayRunner(n_workers=1, max_moves_per_game=4, n_simulations=1, leaf_batch_size=1)
     server = InferenceServer(
         model,
         device,

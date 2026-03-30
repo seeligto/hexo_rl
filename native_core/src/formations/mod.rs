@@ -24,7 +24,8 @@ impl FormationDetector {
             Player::Two => crate::board::Cell::P2,
         };
 
-        for (&(q, r), &cell) in &board.cells {
+        for r in board.cells.iter() {
+            let (&(q, r), &cell) = r.pair();
             if cell != target_cell {
                 continue;
             }

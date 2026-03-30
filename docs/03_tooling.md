@@ -223,27 +223,33 @@ def print_training_summary(history: list[dict]):
 
 | Benchmark | Unit | Target |
 |---|---|---|
-| MCTS throughput | simulations/sec | ≥ 10,000 |
-| Inference throughput | positions/sec | ≥ 5,000 |
+| MCTS throughput | simulations/sec | ≥ 150,000 |
+| Inference throughput | positions/sec | ≥ 8,000 |
 | Inference latency (batch=1) | ms | ≤ 5 ms |
-| Inference latency (batch=64) | ms | ≤ 15 ms |
-| Game throughput | games/hour | ≥ 500 |
+| Game throughput | games/hour | ≥ 1,500 |
 | GPU utilization | % | ≥ 80% during training |
-| VRAM peak | GB | ≤ 6.0 |
-| Replay buffer sample | μs per sample | ≤ 500 |
+| VRAM peak | % | ≤ 80% of Total VRAM |
+| Batch Saturation | % | ≥ 50% |
+| Replay buffer sample | μs per sample | ≤ 1,000 |
 
 ### Practical benchmark commands
 
 Quick local sanity pass:
 
 ```bash
-.venv/bin/python scripts/benchmark.py --config configs/fast_debug.yaml --no-compile --mcts-sims 2000 --pool-workers 1 --pool-duration 10
+make bench.lite
 ```
 
 Throughput-oriented pass:
 
 ```bash
-.venv/bin/python scripts/benchmark.py --config configs/default.yaml --mcts-sims 50000 --pool-workers 6 --pool-duration 30
+make bench.full
+```
+
+Heavy stability and deep search stress test:
+
+```bash
+make bench.stress
 ```
 
 If worker-pool throughput reports 0 games/hour in short runs, increase `--pool-duration`.
