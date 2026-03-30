@@ -548,37 +548,76 @@ impl Board {
         clusters
     }
 
-    pub fn get_cluster_centers(&self) -> Vec<(i32, i32)> {
-        let clusters = self.get_clusters();
-        if clusters.is_empty() {
-            return vec![(0, 0)];
-        }
-        
-        clusters.into_iter().map(|cluster| {
-            let mut min_q = i32::MAX;
-            let mut max_q = i32::MIN;
-            let mut min_r = i32::MAX;
-            let mut max_r = i32::MIN;
-            for &(q, r) in &cluster {
-                min_q = min_q.min(q);
-                max_q = max_q.max(q);
-                min_r = min_r.min(r);
-                max_r = max_r.max(r);
-            }
-            ((min_q + max_q) / 2, (min_r + max_r) / 2)
-        }).collect()
-    }
-
     pub fn get_cluster_views(&self) -> (Vec<Vec<f32>>, Vec<(i32, i32)>) {
-        let centers = self.get_cluster_centers();
-        let mut views = Vec::with_capacity(centers.len());
-        
+        let clusters = self.get_clusters();
+        let mut final_centers = Vec::new();
+
+        if clusters.is_empty() {
+            final_centers.push((0, 0));
+        } else {
+            let threat_anchors = self.get_threat_anchors();
+            let action_anchors = &self.action_anchors[..self.action_anchors_count];
+
+            for cluster in clusters {
+                let mut min_q = i32::MAX;
+                let mut max_q = i32::MIN;
+                let mut min_r = i32::MAX;
+                let mut max_r = i32::MIN;
+                for &(q, r) in &cluster {
+                    min_q = min_q.min(q);
+                    max_q = max_q.max(q);
+                    min_r = min_r.min(r);
+                    max_r = max_r.max(r);
+                }
+
+                let span_q = max_q - min_q;
+                let span_r = max_r - min_r;
+
+                if span_q <= 15 && span_r <= 15 {
+                    // Small Clusters: single 19x19 window centered on geometric middle
+                    final_centers.push(((min_q + max_q) / 2, (min_r + max_r) / 2));
+                } else {
+                    // Massive Clusters: window centered on each Action and Threat anchor in the cluster
+                    let mut cluster_anchors = Vec::new();
+                    
+                    // Action anchors in this cluster
+                    for &anchor in action_anchors {
+                        if cluster.contains(&anchor) {
+                            cluster_anchors.push(anchor);
+                        }
+                    }
+                    
+                    // Threat anchors in this cluster
+                    for &anchor in &threat_anchors {
+                        if cluster.contains(&anchor) {
+                            cluster_anchors.push(anchor);
+                        }
+                    }
+
+                    if cluster_anchors.is_empty() {
+                        // Fallback if no anchors found
+                        final_centers.push(((min_q + max_q) / 2, (min_r + max_r) / 2));
+                    } else {
+                        // Deduplicate anchors: radius 5
+                        let mut deduped = Vec::new();
+                        for &a in &cluster_anchors {
+                            if !deduped.iter().any(|&d| hex_distance(a.0, a.1, d.0, d.1) <= 5) {
+                                deduped.push(a);
+                            }
+                        }
+                        final_centers.extend(deduped);
+                    }
+                }
+            }
+        }
+
+        let mut views = Vec::with_capacity(final_centers.len());
         let (my_cell, opp_cell) = match self.current_player {
             Player::One => (Cell::P1, Cell::P2),
             Player::Two => (Cell::P2, Cell::P1),
         };
         
-        for &(cq, cr) in &centers {
+        for &(cq, cr) in &final_centers {
             let mut out = vec![0.0f32; 2 * TOTAL_CELLS];
             for (&(q, r), &cell) in self.cells.iter() {
                 let flat = Self::window_flat_idx_at(q, r, cq, cr);
@@ -592,7 +631,7 @@ impl Board {
             }
             views.push(out);
         }
-        (views, centers)
+        (views, final_centers)
     }
 
     /// Returns the (q, r) centers of any open 3-in-a-row or 4-in-a-row formations.
