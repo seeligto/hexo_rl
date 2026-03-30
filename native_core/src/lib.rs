@@ -149,7 +149,8 @@ impl PyBoard {
     
     /// Returns a list of all stones on the board as (q, r, player).
     pub fn get_stones(&self) -> Vec<(i32, i32, i8)> {
-        self.inner.cells.iter().map(|(&(q, r), &cell)| {
+        self.inner.cells.iter().map(|r| {
+            let (&(q, r), &cell) = r.pair();
             let p = match cell {
                 board::Cell::Empty => 0,
                 board::Cell::P1 => 1,
@@ -247,7 +248,7 @@ impl PyMCTSTree {
     /// Always call `expand_and_backup` with the same number of results
     /// before the next call to `select_leaves`.
     pub fn select_leaves(&mut self, py: Python<'_>, n: usize) -> PyResult<Vec<Py<PyBoard>>> {
-        let boards = self.inner.select_leaves(n);
+        let boards = py.allow_threads(|| self.inner.select_leaves(n));
         boards
             .into_iter()
             .map(|b| Py::new(py, PyBoard::from_inner(b)))
@@ -263,10 +264,11 @@ impl PyMCTSTree {
     ///               from the current player's perspective at that leaf.
     pub fn expand_and_backup(
         &mut self,
+        py: Python<'_>,
         policies: Vec<Vec<f32>>,
         values: Vec<f32>,
     ) -> PyResult<()> {
-        self.inner.expand_and_backup(&policies, &values);
+        py.allow_threads(|| self.inner.expand_and_backup(&policies, &values));
         Ok(())
     }
 

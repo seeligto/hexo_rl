@@ -67,12 +67,12 @@ def trained_trainer(tmp_path_factory):
     while buffer.size < config["min_buffer_size"]:
         worker.play_game(buffer)
 
-    # Run 100 training steps (interleaved with self-play)
+    # Run 150 training steps (interleaved with self-play)
     losses = []
-    for step in range(100):
+    for step in range(150):
         info = trainer.train_step(buffer)
         losses.append(info)
-        if step % 3 == 0:
+        if step % 2 == 0:
             worker.play_game(buffer)
 
     return trainer, losses, buffer, tmp
@@ -82,8 +82,8 @@ class TestPhase1ExitCriteria:
     def test_no_crash(self, trained_trainer):
         """Training runs without raising any exception."""
         trainer, losses, buffer, _ = trained_trainer
-        assert trainer.step == 100
-        assert len(losses) == 100
+        assert trainer.step == 150
+        assert len(losses) == 150
 
     def test_policy_loss_decreases(self, trained_trainer):
         """Policy loss at the end is lower than at the start."""

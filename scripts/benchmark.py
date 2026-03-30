@@ -64,15 +64,16 @@ def benchmark_mcts(n_simulations: int = 50_000) -> Dict[str, Any]:
     }
 
 
-def benchmark_inference(model: "HexTacToeNet", n_positions: int = 10_000, batch_size: int = 64) -> Dict[str, Any]:
+def benchmark_inference(model: "HexTacToeNet", n_positions: int = 20_000, batch_size: int = 64) -> Dict[str, Any]:
     """NN throughput in batched evaluation mode."""
     device = next(model.parameters()).device
     dummy_local  = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
     model.eval()
 
-    # Warm up
-    for _ in range(5):
-        model(dummy_local)
+    # Warm up: 15-20 iterations to fully stabilize torch.compile
+    with torch.no_grad(), torch.autocast(device_type=device.type):
+        for _ in range(20):
+            model(dummy_local)
 
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -203,14 +204,19 @@ def benchmark_worker_pool(
     device: torch.device,
     duration_sec: int = 15,
     n_workers: int = 4,
+    mcts_sims_override: Optional[int] = None,
+    quick: bool = False,
 ) -> Dict[str, Any]:
     """Measure end-to-end self-play throughput in the multiprocess pool."""
     from python.selfplay.pool import WorkerPool
     from python.training.replay_buffer import ReplayBuffer
 
+    if quick:
+        duration_sec = min(duration_sec, 5)
+
     bench_cfg = {
         "mcts": {
-            "n_simulations": int(config.get("n_simulations", 30)),
+            "n_simulations": mcts_sims_override if mcts_sims_override is not None else int(config.get("n_simulations", 30)),
             "c_puct": float(config.get("c_puct", 1.5)),
             "temperature_threshold_ply": int(config.get("temperature_threshold_ply", 30)),
         },
@@ -224,7 +230,7 @@ def benchmark_worker_pool(
     replay = ReplayBuffer(capacity=25_000, board_channels=18)
     try:
         pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
-    except PermissionError as exc:
+    except Exception as exc:
         return {
             "name": "Worker pool throughput",
             "games_completed": 0,
@@ -239,8 +245,18 @@ def benchmark_worker_pool(
     pool.start()
     t0 = time.perf_counter()
     stop_error: str | None = None
+    
+    # Live reporting loop
+    last_report = t0
     try:
-        time.sleep(duration_sec)
+        while time.perf_counter() - t0 < duration_sec:
+            time.sleep(1.0)
+            now = time.perf_counter()
+            if now - last_report >= 5.0:
+                elapsed = now - t0
+                gph = (pool.games_completed / elapsed) * 3600.0
+                console.print(f"    [dim]… {elapsed:.0f}s: {gph:,.1f} games/hour, {pool.positions_pushed} positions[/dim]")
+                last_report = now
     finally:
         done = threading.Event()
 
@@ -255,7 +271,7 @@ def benchmark_worker_pool(
 
         stop_thread = threading.Thread(target=_stop_pool, daemon=True)
         stop_thread.start()
-        if not done.wait(5.0):
+        if not done.wait(10.0):
             stop_error = "pool.stop timeout"
 
     elapsed = max(time.perf_counter() - t0, 1e-6)
@@ -366,21 +382,32 @@ def _unit(key: str) -> str:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
+    import os
+    default_workers = os.cpu_count() or 4
     p = argparse.ArgumentParser(description="Phase 3.5 / 4 benchmark harness")
     p.add_argument("--config", default="configs/fast_debug.yaml")
     p.add_argument("--no-compile", action="store_true",
                    help="Skip torch.compile (faster startup for quick checks)")
     p.add_argument("--mcts-sims",  type=int, default=50_000,
                    help="MCTS simulations for throughput benchmark")
-    p.add_argument("--pool-workers", type=int, default=4,
+    p.add_argument("--pool-workers", type=int, default=default_workers,
                    help="Worker count for self-play throughput benchmark")
     p.add_argument("--pool-duration", type=int, default=15,
                    help="Duration in seconds for worker pool benchmark")
+    p.add_argument("--mcts-search-sims", type=int, default=None,
+                   help="Override MCTS simulations per move (default from config)")
+    p.add_argument("--quick", action="store_true", help="Run shorter benchmarks for fast verification")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    # Optimization: Enable TensorFloat32 (TF32) for better performance on Ampere+ GPUs
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')
+        # Also enable CUDNN autotuner
+        torch.backends.cudnn.benchmark = True
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
@@ -415,10 +442,10 @@ def main() -> None:
     results: List[Dict[str, Any]] = []
 
     with console.status("[bold green]MCTS throughput…"):
-        results.append(benchmark_mcts(n_simulations=args.mcts_sims))
+        results.append(benchmark_mcts(n_simulations=args.mcts_sims if not args.quick else 5000))
 
     with console.status("[bold green]NN inference (batch=64)…"):
-        results.append(benchmark_inference(model, batch_size=64))
+        results.append(benchmark_inference(model, batch_size=64, n_positions=20000 if not args.quick else 2000))
 
     with console.status("[bold green]NN latency (batch=1)…"):
         results.append(benchmark_inference_latency(model))
@@ -437,6 +464,8 @@ def main() -> None:
                 device=device,
                 duration_sec=args.pool_duration,
                 n_workers=args.pool_workers,
+                mcts_sims_override=args.mcts_search_sims,
+                quick=args.quick,
             )
         )
 
@@ -464,8 +493,13 @@ def main() -> None:
         elif "games_per_hour" in r:
             console.print(
                 f"{r['games_per_hour']:.1f} games/hour  "
-                f"games={r['games_completed']}  positions={r['positions_pushed']}"
+                f"games={r['games_completed']}  positions={r['positions_pushed']}",
+                end=""
             )
+            if "stop_error" in r:
+                console.print(f"  [bold red](STOP ERROR: {r['stop_error']})[/bold red]")
+            else:
+                console.print()
 
     all_pass = print_benchmark_report(results)
     sys.exit(0 if all_pass else 1)

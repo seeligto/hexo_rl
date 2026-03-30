@@ -116,7 +116,7 @@ Before ending any session or when asked to stop:
 | Layer | Language | Notes |
 |---|---|---|
 | MCTS tree, board logic, win detection | **Rust** | Build with `maturin develop --release`. Concurrency via Rust-native Game-Level Parallelism (Phase 3.5). |
-| Neural network, training, replay buffer | **Python + PyTorch** | CUDA, FP16, torch.compile. InferenceServer bridges Rust worker threads. |
+| Neural network, training, replay buffer | **Python + PyTorch** | CUDA, FP16, TF32 enabled, torch.compile. InferenceServer bridges Rust worker threads. |
 | Array/batch operations | **NumPy** | Pre-allocated, never allocate during training |
 | Orchestration, config, logging | **Python** | structlog (JSON) + rich (console) |
 
@@ -142,6 +142,7 @@ make test.py          # Python tests (tests/ only)
 make test.all         # Rust + Python tests
 make bench.lite       # quick benchmark pass
 make bench.full       # higher-confidence benchmark pass
+make bench.stress     # heavy 5-min stability test
 ```
 
 ---
@@ -335,17 +336,19 @@ hex_tac_toe_az/
 
 ---
 
-## Benchmarks — must pass before Phase 3
+## Benchmarks — must pass before Phase 4.5
 
-Run `python scripts/benchmark.py`. Phase 2 does not complete until:
+Run `python scripts/benchmark.py`. Phase 3.5 / 4 does not complete until:
 
 | Metric | Target |
 |---|---|
-| MCTS simulations/sec | ≥ 10,000 |
-| NN inference (batch=64) | ≥ 5,000 pos/sec |
+| MCTS simulations/sec | ≥ 150,000 |
+| NN inference (batch=64) | ≥ 8,000 pos/sec |
 | GPU utilization during training | ≥ 80% |
-| VRAM usage | ≤ 6 GB |
-| Self-play games/hour | ≥ 500 |
+| VRAM usage | ≤ 80% Total VRAM |
+| Self-play games/hour | ≥ 1,500 |
+| Batch Saturation | ≥ 50% |
+
 
 ---
 

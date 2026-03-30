@@ -370,10 +370,10 @@ impl MCTSTree {
 
             for (j, &(q, r)) in legal_moves.iter().enumerate() {
                 let ci          = first_child as usize + j;
-                let action_flat = board.window_flat_idx(q, r) as u16;
+                let action_flat = board.window_flat_idx(q, r);
                 // Look up prior from the policy vector; fall back to uniform.
-                let prior = if (action_flat as usize) < policy.len() {
-                    policy[action_flat as usize]
+                let prior = if action_flat < policy.len() {
+                    policy[action_flat]
                 } else {
                     1.0 / n_ch as f32
                 };

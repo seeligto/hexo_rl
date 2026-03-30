@@ -22,7 +22,10 @@ class GameState:
     @staticmethod
     def from_board(rust_board: Board, history: Tuple[GameState, ...] = ()) -> "GameState":
         views_flat, centers = rust_board.get_cluster_views()
-        views = [np.array(v, dtype=np.float32).reshape(2, BOARD_SIZE, BOARD_SIZE) for v in views_flat]
+        # Convert Rust-extracted views to explicitly C-contiguous numpy arrays.
+        # This prevents potential deadlocks when these views are passed back 
+        # to Rust functions that expect safe slice boundaries.
+        views = [np.ascontiguousarray(v, dtype=np.float32).reshape(2, BOARD_SIZE, BOARD_SIZE) for v in views_flat]
         if not views:
             views = [np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
             centers = [(0, 0)]

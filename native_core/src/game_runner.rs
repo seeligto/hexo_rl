@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use pyo3::prelude::*;
-use crate::board::{Board, Player, BOARD_SIZE, TOTAL_CELLS};
+use crate::board::{Board, BOARD_SIZE, TOTAL_CELLS, HALF};
 use crate::mcts::MCTSTree;
 use crate::inference_bridge::RustInferenceBatcher;
 use rand::seq::SliceRandom;
@@ -24,6 +24,7 @@ pub struct RustSelfPlayRunner {
     n_workers: usize,
     max_moves_per_game: usize,
     n_simulations: usize,
+    leaf_batch_size: usize,
     c_puct: f32,
     running: Arc<AtomicBool>,
     games_completed: Arc<AtomicUsize>,
@@ -35,11 +36,12 @@ pub struct RustSelfPlayRunner {
 #[pymethods]
 impl RustSelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, c_puct = 1.5, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
         n_simulations: usize,
+        leaf_batch_size: usize,
         c_puct: f32,
         feature_len: usize,
         policy_len: usize,
@@ -49,6 +51,7 @@ impl RustSelfPlayRunner {
             n_workers,
             max_moves_per_game,
             n_simulations,
+            leaf_batch_size,
             c_puct,
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
@@ -71,6 +74,7 @@ impl RustSelfPlayRunner {
             let batcher = self.batcher.clone();
             let max_moves = self.max_moves_per_game;
             let n_sims = self.n_simulations;
+            let leaf_batch_size = self.leaf_batch_size;
             let c_puct = self.c_puct;
             let results_queue = self.results.clone();
 
@@ -89,36 +93,72 @@ impl RustSelfPlayRunner {
                         // ── MCTS Search ──
                         tree.new_game(board.clone());
                         let mut sims_done = 0;
-                        let batch_size = 8;
                         
                         while sims_done < n_sims {
                             if !running.load(Ordering::SeqCst) { break; }
                             
-                            let leaves = tree.select_leaves(batch_size);
+                            let leaves = tree.select_leaves(leaf_batch_size);
                             if leaves.is_empty() { break; }
                             
-                            let mut batch_features = Vec::with_capacity(leaves.len());
+                            let mut all_batch_features = Vec::new();
+                            let mut leaf_metadata = Vec::with_capacity(leaves.len());
+                            
                             for leaf in &leaves {
-                                batch_features.push(Self::encode_18_planes(leaf));
-                            }
-                            
-                            // Batch inference via bridge
-                            let mut policies = Vec::with_capacity(leaves.len());
-                            let mut values = Vec::with_capacity(leaves.len());
-                            
-                            for feat in batch_features {
-                                match batcher.submit_request_and_wait_rust(feat) {
-                                    Ok((p, v)) => {
-                                        policies.push(p);
-                                        values.push(v);
-                                    }
-                                    Err(_) => break,
+                                let (views, centers) = leaf.get_cluster_views();
+                                let k = views.len();
+                                leaf_metadata.push((k, centers));
+                                
+                                for view in views {
+                                    all_batch_features.push(Self::encode_18_planes_from_view(
+                                        &view,
+                                        leaf.moves_remaining,
+                                        leaf.ply
+                                    ));
                                 }
                             }
                             
-                            if policies.len() < leaves.len() { break; }
+                            if all_batch_features.is_empty() { break; }
                             
-                            tree.expand_and_backup(&policies, &values);
+                            let total_clusters: usize = leaf_metadata.iter().map(|(k, _)| *k).sum();
+                            
+                            // Batch inference via bridge - submit all clusters from all leaves
+                            let (all_policies, all_values) = match batcher.submit_batch_and_wait_rust(all_batch_features) {
+                                Ok(results) => {
+                                    let mut ps = Vec::with_capacity(results.len());
+                                    let mut vs = Vec::with_capacity(results.len());
+                                    for (p, v) in results {
+                                        ps.push(p);
+                                        vs.push(v);
+                                    }
+                                    (ps, vs)
+                                }
+                                Err(_) => break,
+                            };
+                            
+                            if all_policies.len() < total_clusters { break; }
+                            
+                            // Aggregate cluster-based policies and values back into one per leaf
+                            let mut aggregated_policies = Vec::with_capacity(leaves.len());
+                            let mut aggregated_values = Vec::with_capacity(leaves.len());
+                            let mut curr = 0;
+                            
+                            for (i, (k, centers)) in leaf_metadata.iter().enumerate() {
+                                let leaf_policies = &all_policies[curr..curr+k];
+                                let leaf_values = &all_values[curr..curr+k];
+                                curr += k;
+                                
+                                // Pessimistic value aggregation: use the minimum value among clusters
+                                let mut min_v = leaf_values[0];
+                                for &v in leaf_values {
+                                    if v < min_v { min_v = v; }
+                                }
+                                aggregated_values.push(min_v);
+                                
+                                // Map local cluster policies to global policy vector
+                                aggregated_policies.push(Self::aggregate_policy(&leaves[i], centers, leaf_policies));
+                            }
+                            
+                            tree.expand_and_backup(&aggregated_policies, &aggregated_values);
                             sims_done += leaves.len();
                         }
 
@@ -139,7 +179,12 @@ impl RustSelfPlayRunner {
                         };
                         
                         // ── Record position ──
-                        records.push((Self::encode_18_planes(&board), policy, board.current_player));
+                        let (views, centers) = board.get_cluster_views();
+                        for (k, center) in centers.iter().enumerate() {
+                            let feat = Self::encode_18_planes_from_view(&views[k], board.moves_remaining, board.ply);
+                            let projected_policy = Self::aggregate_policy_to_local(&board, center, &policy);
+                            records.push((feat, projected_policy, board.current_player));
+                        }
 
                         if board.apply_move(move_idx.0, move_idx.1).is_err() {
                             break;
@@ -212,10 +257,8 @@ impl RustSelfPlayRunner {
 }
 
 impl RustSelfPlayRunner {
-    fn encode_18_planes(board: &Board) -> Vec<f32> {
+    fn encode_18_planes_from_view(planes: &[f32], moves_remaining: u8, ply: u32) -> Vec<f32> {
         let mut out = vec![0.0f32; 18 * TOTAL_CELLS];
-        let planes = board.to_planes(); // returns [2, 19, 19]
-        
         // Plane 0: my stones
         for i in 0..TOTAL_CELLS {
             out[i] = planes[i];
@@ -225,17 +268,87 @@ impl RustSelfPlayRunner {
             out[8 * TOTAL_CELLS + i] = planes[TOTAL_CELLS + i];
         }
         // Plane 16: moves_remaining == 2 ? 1.0 : 0.0
-        let mr_val = if board.moves_remaining == 2 { 1.0 } else { 0.0 };
+        let mr_val = if moves_remaining == 2 { 1.0 } else { 0.0 };
         for i in 0..TOTAL_CELLS {
             out[16 * TOTAL_CELLS + i] = mr_val;
         }
         // Plane 17: ply % 2
-        let ply_val = (board.ply % 2) as f32;
+        let ply_val = (ply % 2) as f32;
         for i in 0..TOTAL_CELLS {
             out[17 * TOTAL_CELLS + i] = ply_val;
         }
-        
         out
+    }
+
+    fn aggregate_policy(board: &Board, centers: &[(i32, i32)], cluster_policies: &[Vec<f32>]) -> Vec<f32> {
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let mut global_policy = vec![0.0; n_actions];
+        let legal = board.legal_moves();
+        
+        for &(q, r) in &legal {
+            let mcts_idx = board.window_flat_idx(q, r);
+            if mcts_idx >= n_actions - 1 { continue; }
+            
+            let mut max_prob = 0.0;
+            for (k, &(cq, cr)) in centers.iter().enumerate() {
+                let wq = q - cq + HALF;
+                let wr = r - cr + HALF;
+                if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
+                    let local_idx = wq as usize * BOARD_SIZE + wr as usize;
+                    if cluster_policies[k][local_idx] > max_prob {
+                        max_prob = cluster_policies[k][local_idx];
+                    }
+                }
+            }
+            global_policy[mcts_idx] = max_prob;
+        }
+        
+        // Pass move is always copied from the first cluster (should be consistent)
+        if !cluster_policies.is_empty() {
+            global_policy[n_actions - 1] = cluster_policies[0][n_actions - 1];
+        }
+        
+        let sum: f32 = global_policy.iter().sum();
+        if sum > 1e-9 {
+            for p in &mut global_policy { *p /= sum; }
+        } else {
+            let uniform = 1.0 / n_actions as f32;
+            for p in &mut global_policy { *p = uniform; }
+        }
+        global_policy
+    }
+
+    fn aggregate_policy_to_local(board: &Board, center: &(i32, i32), global_policy: &[f32]) -> Vec<f32> {
+        let (cq, cr) = *center;
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let mut local_policy = vec![0.0; n_actions];
+        let legal = board.legal_moves();
+        
+        for &(q, r) in &legal {
+            let wq = q - cq + HALF;
+            let wr = r - cr + HALF;
+            if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
+                let local_idx = wq as usize * BOARD_SIZE + wr as usize;
+                let mcts_idx = board.window_flat_idx(q, r);
+                if mcts_idx < global_policy.len() {
+                    local_policy[local_idx] = global_policy[mcts_idx];
+                }
+            }
+        }
+        
+        // Pass move (the last element) is always copied from the global policy
+        if n_actions > 0 && global_policy.len() >= n_actions {
+            local_policy[n_actions - 1] = global_policy[n_actions - 1];
+        }
+        
+        let sum: f32 = local_policy.iter().sum();
+        if sum > 1e-9 {
+            for p in &mut local_policy { *p /= sum; }
+        } else {
+            let uniform = 1.0 / n_actions as f32;
+            for p in &mut local_policy { *p = uniform; }
+        }
+        local_policy
     }
 
     fn sample_policy(policy: &[f32], legal_moves: &[(i32, i32)], board: &Board) -> Option<(i32, i32)> {

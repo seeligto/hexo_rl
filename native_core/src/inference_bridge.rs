@@ -1,9 +1,11 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use numpy::PyArray2;
+use dashmap::DashMap;
+use fxhash::FxBuildHasher;
+use numpy::{PyArray1, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -15,14 +17,14 @@ struct PendingRequest {
 
 #[derive(Default)]
 struct Waiter {
-    result: Mutex<Option<(Vec<f32>, f32)>>,
+    result: Mutex<Option<Result<(Vec<f32>, f32), String>>>,
     cv: Condvar,
 }
 
 struct Inner {
     queue: Mutex<VecDeque<PendingRequest>>,
     queue_cv: Condvar,
-    waiters: Mutex<HashMap<u64, Arc<Waiter>>>,
+    waiters: DashMap<u64, Arc<Waiter>, FxBuildHasher>,
     next_id: AtomicU64,
     closed: AtomicBool,
     completed_mock_games: AtomicUsize,
@@ -33,7 +35,7 @@ impl Inner {
         Self {
             queue: Mutex::new(VecDeque::new()),
             queue_cv: Condvar::new(),
-            waiters: Mutex::new(HashMap::new()),
+            waiters: DashMap::with_hasher(FxBuildHasher::default()),
             next_id: AtomicU64::new(1),
             closed: AtomicBool::new(false),
             completed_mock_games: AtomicUsize::new(0),
@@ -61,10 +63,7 @@ impl Inner {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let waiter = Arc::new(Waiter::default());
 
-        {
-            let mut waiters = self.waiters.lock().expect("waiters lock poisoned");
-            waiters.insert(id, waiter.clone());
-        }
+        self.waiters.insert(id, waiter.clone());
 
         {
             let mut queue = self.queue.lock().expect("queue lock poisoned");
@@ -74,15 +73,20 @@ impl Inner {
 
         let mut guard = waiter.result.lock().expect("waiter lock poisoned");
         loop {
-            if let Some((policy, value)) = guard.take() {
-                if policy.len() != expected_policy_len {
-                    return Err(PyValueError::new_err(format!(
-                        "policy length mismatch for request {id}: got {}, expected {}",
-                        policy.len(),
-                        expected_policy_len
-                    )));
+            if let Some(res) = guard.take() {
+                match res {
+                    Ok((policy, value)) => {
+                        if policy.len() != expected_policy_len {
+                            return Err(PyValueError::new_err(format!(
+                                "policy length mismatch for request {id}: got {}, expected {}",
+                                policy.len(),
+                                expected_policy_len
+                            )));
+                        }
+                        return Ok((policy, value));
+                    }
+                    Err(e) => return Err(PyValueError::new_err(format!("inference failed: {e}"))),
                 }
-                return Ok((policy, value));
             }
 
             if self.closed.load(Ordering::SeqCst) {
@@ -156,10 +160,7 @@ impl RustInferenceBatcher {
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let waiter = Arc::new(Waiter::default());
 
-        {
-            let mut waiters = self.inner.waiters.lock().expect("waiters lock poisoned");
-            waiters.insert(id, waiter.clone());
-        }
+        self.inner.waiters.insert(id, waiter.clone());
 
         {
             let mut queue = self.inner.queue.lock().expect("queue lock poisoned");
@@ -169,11 +170,16 @@ impl RustInferenceBatcher {
 
         let mut guard = waiter.result.lock().expect("waiter lock poisoned");
         loop {
-            if let Some((policy, value)) = guard.take() {
-                if policy.len() != self.policy_len {
-                    return Err(());
+            if let Some(res) = guard.take() {
+                match res {
+                    Ok((policy, value)) => {
+                        if policy.len() != self.policy_len {
+                            return Err(());
+                        }
+                        return Ok((policy, value));
+                    }
+                    Err(_) => return Err(()),
                 }
-                return Ok((policy, value));
             }
 
             if self.inner.closed.load(Ordering::SeqCst) {
@@ -184,13 +190,64 @@ impl RustInferenceBatcher {
         }
     }
 
+    pub(crate) fn submit_batch_and_wait_rust(
+        &self,
+        batch_features: Vec<Vec<f32>>,
+    ) -> Result<Vec<(Vec<f32>, f32)>, ()> {
+        if self.inner.closed.load(Ordering::SeqCst) {
+            return Err(());
+        }
+
+        let n = batch_features.len();
+        let mut ids = Vec::with_capacity(n);
+        let mut waiters = Vec::with_capacity(n);
+
+        {
+            let mut queue = self.inner.queue.lock().expect("queue lock poisoned");
+
+            for features in batch_features {
+                if features.len() != self.feature_len {
+                    return Err(());
+                }
+                let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
+                let waiter = Arc::new(Waiter::default());
+                self.inner.waiters.insert(id, waiter.clone());
+                queue.push_back(PendingRequest { id, features });
+                ids.push(id);
+                waiters.push(waiter);
+            }
+            self.inner.queue_cv.notify_all();
+        }
+
+        let mut results = Vec::with_capacity(n);
+        for waiter in waiters {
+            let mut guard = waiter.result.lock().expect("waiter lock poisoned");
+            loop {
+                if let Some(res) = guard.take() {
+                    match res {
+                        Ok((policy, value)) => {
+                            results.push((policy, value));
+                            break;
+                        }
+                        Err(_) => return Err(()),
+                    }
+                }
+                if self.inner.closed.load(Ordering::SeqCst) {
+                    return Err(());
+                }
+                guard = waiter.cv.wait(guard).expect("waiter condvar poisoned");
+            }
+        }
+
+        Ok(results)
+    }
+
     pub(crate) fn close_rust(&self) {
         self.inner.closed.store(true, Ordering::SeqCst);
         self.inner.queue_cv.notify_all();
 
-        let waiters = self.inner.waiters.lock().expect("waiters lock poisoned");
-        for waiter in waiters.values() {
-            waiter.cv.notify_all();
+        for r in self.inner.waiters.iter() {
+            r.value().cv.notify_all();
         }
     }
 
@@ -278,14 +335,17 @@ impl RustInferenceBatcher {
             return Ok((Vec::new(), arr));
         }
 
-        let mut ids = Vec::with_capacity(pulled.len());
-        let mut rows = Vec::with_capacity(pulled.len());
+        let n = pulled.len();
+        let mut ids = Vec::with_capacity(n);
+        // Optimize: use a single flat vector to avoid Vec<Vec<f32>> overhead
+        let mut flat_features = Vec::with_capacity(n * self.feature_len);
         for req in pulled {
             ids.push(req.id);
-            rows.push(req.features);
+            flat_features.extend(req.features);
         }
 
-        let arr = PyArray2::from_vec2(py, &rows)?;
+        let arr = PyArray1::from_vec(py, flat_features)
+            .reshape([n, self.feature_len])?;
         Ok((ids, arr))
     }
 
@@ -293,32 +353,59 @@ impl RustInferenceBatcher {
     pub fn submit_inference_results(
         &self,
         request_ids: Vec<u64>,
-        policies: Vec<Vec<f32>>,
-        values: Vec<f32>,
+        policies: Bound<'_, PyArray2<f32>>,
+        values: Bound<'_, PyArray1<f32>>,
     ) -> PyResult<()> {
-        if request_ids.len() != policies.len() || request_ids.len() != values.len() {
+        let n = request_ids.len();
+        if policies.shape()[0] != n || values.len() != n {
             return Err(PyValueError::new_err(format!(
                 "length mismatch ids/policies/values: {}/{}/{}",
-                request_ids.len(),
-                policies.len(),
+                n,
+                policies.shape()[0],
                 values.len()
             )));
         }
 
-        let mut waiters = self.inner.waiters.lock().expect("waiters lock poisoned");
-        for i in 0..request_ids.len() {
+        if policies.shape()[1] != self.policy_len {
+            return Err(PyValueError::new_err(format!(
+                "policy length mismatch: expected {}, got {}",
+                self.policy_len,
+                policies.shape()[1]
+            )));
+        }
+
+        // Access numpy arrays via read-only views for performance
+        let policies_view = policies.readonly();
+        let policies_slice = policies_view.as_slice()?;
+        let values_view = values.readonly();
+        let values_slice = values_view.as_slice()?;
+
+        for i in 0..n {
             let id = request_ids[i];
-            if let Some(waiter) = waiters.remove(&id) {
-                if policies[i].len() != self.policy_len {
-                    return Err(PyValueError::new_err(format!(
-                        "policy length mismatch for request {id}: got {}, expected {}",
-                        policies[i].len(),
-                        self.policy_len
-                    )));
-                }
+            if let Some((_, waiter)) = self.inner.waiters.remove(&id) {
+                let start = i * self.policy_len;
+                let end = start + self.policy_len;
+                let policy_vec = policies_slice[start..end].to_vec();
+                let value = values_slice[i];
 
                 let mut result_guard = waiter.result.lock().expect("waiter lock poisoned");
-                *result_guard = Some((policies[i].clone(), values[i]));
+                *result_guard = Some(Ok((policy_vec, value)));
+                waiter.cv.notify_all();
+            }
+        }
+        Ok(())
+    }
+
+    /// Signal failure for a batch of requests.
+    pub fn submit_inference_failure(
+        &self,
+        request_ids: Vec<u64>,
+        error_msg: String,
+    ) -> PyResult<()> {
+        for id in request_ids {
+            if let Some((_, waiter)) = self.inner.waiters.remove(&id) {
+                let mut result_guard = waiter.result.lock().expect("waiter lock poisoned");
+                *result_guard = Some(Err(error_msg.clone()));
                 waiter.cv.notify_all();
             }
         }
