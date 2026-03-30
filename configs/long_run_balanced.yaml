@@ -40,6 +40,7 @@ training:
 
 evaluation:
   enabled: true
+  progress_every: 1
   random_n_games: 10
   ramora_n_games: 8
   ramora_time_limit: 0.03
