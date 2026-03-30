@@ -104,7 +104,11 @@ impl Inner {
     ) -> Vec<PendingRequest> {
         let deadline = Instant::now() + Duration::from_millis(max_wait_ms);
         let mut queue = self.queue.lock().expect("queue lock poisoned");
-        while queue.is_empty() && !self.closed.load(Ordering::SeqCst) {
+        
+        // Wait until we have enough requests OR the timeout expires.
+        // We target at least 50% saturation (32/64).
+        let threshold = batch_size / 2;
+        while queue.len() < threshold && !self.closed.load(Ordering::SeqCst) {
             let now = Instant::now();
             if now >= deadline {
                 break;
@@ -143,6 +147,8 @@ pub struct RustInferenceBatcher {
     inner: Arc<Inner>,
     feature_len: usize,
     policy_len: usize,
+    pool_sender: flume::Sender<Vec<f32>>,
+    pool_receiver: flume::Receiver<Vec<f32>>,
 }
 
 impl RustInferenceBatcher {
@@ -254,6 +260,20 @@ impl RustInferenceBatcher {
     pub(crate) fn feature_len(&self) -> usize {
         self.feature_len
     }
+
+    pub fn get_feature_buffer(&self) -> Vec<f32> {
+        self.pool_receiver.try_recv().unwrap_or_else(|_| {
+            vec![0.0f32; self.feature_len]
+        })
+    }
+
+    pub fn return_feature_buffer(&self, mut buf: Vec<f32>) {
+        if buf.capacity() >= self.feature_len {
+            buf.clear();
+            buf.resize(self.feature_len, 0.0);
+            let _ = self.pool_sender.try_send(buf);
+        }
+    }
 }
 
 #[pymethods]
@@ -261,12 +281,20 @@ impl RustInferenceBatcher {
     #[new]
     #[pyo3(signature = (feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1))]
     pub fn new(feature_len: usize, policy_len: usize) -> Self {
+        let (pool_sender, pool_receiver) = flume::bounded(1024);
+        for _ in 0..512 {
+            let _ = pool_sender.send(vec![0.0f32; feature_len]);
+        }
+
         Self {
             inner: Arc::new(Inner::new()),
             feature_len,
             policy_len,
+            pool_sender,
+            pool_receiver,
         }
     }
+
 
     /// Submit one request and block until Python returns its policy/value.
     pub fn submit_request_and_wait(
@@ -341,7 +369,8 @@ impl RustInferenceBatcher {
         let mut flat_features = Vec::with_capacity(n * self.feature_len);
         for req in pulled {
             ids.push(req.id);
-            flat_features.extend(req.features);
+            flat_features.extend(&req.features);
+            self.return_feature_buffer(req.features);
         }
 
         let arr = PyArray1::from_vec(py, flat_features)

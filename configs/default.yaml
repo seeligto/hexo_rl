@@ -21,9 +21,9 @@ selfplay:
   n_workers: 6
   n_simulations: 80
   inference_batch_size: 64
-  inference_max_wait_ms: 8.0
+  inference_max_wait_ms: 12.0
   dispatch_wait_ms: 2.0
-  leaf_batch_size: 8
+  leaf_batch_size: 16
   fast_playout_prob: 0.9
   fast_sims_min: 15
   fast_sims_max: 25

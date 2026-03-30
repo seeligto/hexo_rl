@@ -109,11 +109,14 @@ impl RustSelfPlayRunner {
                                 leaf_metadata.push((k, centers));
                                 
                                 for view in views {
-                                    all_batch_features.push(Self::encode_18_planes_from_view(
+                                    let mut buffer = batcher.get_feature_buffer();
+                                    Self::encode_18_planes_to_buffer(
                                         &view,
                                         leaf.moves_remaining,
-                                        leaf.ply
-                                    ));
+                                        leaf.ply,
+                                        &mut buffer
+                                    );
+                                    all_batch_features.push(buffer);
                                 }
                             }
                             
@@ -181,7 +184,8 @@ impl RustSelfPlayRunner {
                         // ── Record position ──
                         let (views, centers) = board.get_cluster_views();
                         for (k, center) in centers.iter().enumerate() {
-                            let feat = Self::encode_18_planes_from_view(&views[k], board.moves_remaining, board.ply);
+                            let mut feat = batcher.get_feature_buffer();
+                            Self::encode_18_planes_to_buffer(&views[k], board.moves_remaining, board.ply, &mut feat);
                             let projected_policy = Self::aggregate_policy_to_local(&board, center, &policy);
                             records.push((feat, projected_policy, board.current_player));
                         }
@@ -257,8 +261,7 @@ impl RustSelfPlayRunner {
 }
 
 impl RustSelfPlayRunner {
-    fn encode_18_planes_from_view(planes: &[f32], moves_remaining: u8, ply: u32) -> Vec<f32> {
-        let mut out = vec![0.0f32; 18 * TOTAL_CELLS];
+    fn encode_18_planes_to_buffer(planes: &[f32], moves_remaining: u8, ply: u32, out: &mut [f32]) {
         // Plane 0: my stones
         for i in 0..TOTAL_CELLS {
             out[i] = planes[i];
@@ -277,7 +280,6 @@ impl RustSelfPlayRunner {
         for i in 0..TOTAL_CELLS {
             out[17 * TOTAL_CELLS + i] = ply_val;
         }
-        out
     }
 
     fn aggregate_policy(board: &Board, centers: &[(i32, i32)], cluster_policies: &[Vec<f32>]) -> Vec<f32> {
