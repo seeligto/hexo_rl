@@ -1,0 +1,56 @@
+# long_run_balanced.yaml — multi-hour training profile for stable throughput
+
+model:
+  board_size: 19
+  in_channels: 18
+  res_blocks: 10
+  filters: 128
+
+mcts:
+  n_simulations: 800
+  c_puct: 1.5
+  dirichlet_alpha: 0.3
+  epsilon: 0.25
+  temperature_threshold_ply: 30
+
+selfplay:
+  n_workers: 6
+  # Explicit self-play override so we do not inherit heavy mcts.n_simulations.
+  n_simulations: 96
+  inference_batch_size: 64
+  inference_max_wait_ms: 8.0
+  dispatch_wait_ms: 2.0
+  leaf_batch_size: 8
+  fast_playout_prob: 0.9
+  fast_sims_min: 16
+  fast_sims_max: 28
+  replay_buffer_capacity: 500000
+
+training:
+  batch_size: 256
+  min_buffer_size: 256
+  # >1.0 helps keep GPU busier while self-play catches up.
+  training_steps_per_game: 3.0
+  max_train_burst: 10
+  lr: 0.002
+  weight_decay: 0.0001
+  lr_schedule: cosine
+  eval_interval: 200
+  checkpoint_interval: 100
+
+rewards:
+  shaped_decay_steps: 500
+
+analysis:
+  track_winrate_by_side: true
+  expected_o_winrate: 0.52
+
+bootstrap:
+  enabled: true
+  corpus_path: "data/bootstrap_corpus.npz"
+  n_games: 20000
+  human_games_min_moves: 20
+  human_games_rated_only: true
+  ramora_depth_mix: {3: 0.7, 5: 0.3}
+
+seed: 42
