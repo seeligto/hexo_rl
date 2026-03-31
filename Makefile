@@ -82,22 +82,50 @@ bench.stress: ## Heavy stress test (5 mins, high sims)
 bench.mcts: ## Dedicated Rust MCTS micro-benchmark
 	$(PY) scripts/benchmark_mcts.py
 
+DASHBOARD_PORT ?= 5001
+DASHBOARD_URL  ?= http://localhost:$(DASHBOARD_PORT)
+
+.PHONY: dashboard
+dashboard: ## Start the web dashboard server (DASHBOARD_PORT=5001 by default)
+	$(PY) dashboard.py $(DASHBOARD_PORT)
+
 .PHONY: train.lite
-train.lite: ## Fast debug training (short run)
+train.lite: ## Fast debug training — short run, no dashboard
 	$(PY) scripts/train.py --config $(CONFIG_LITE) --iterations 100 --no-dashboard --no-compile
 
+.PHONY: train.lite.dashboard
+train.lite.dashboard: ## Fast debug training with web dashboard (start dashboard separately first)
+	$(PY) scripts/train.py --config $(CONFIG_LITE) --iterations 100 --no-compile \
+	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
+
 .PHONY: train.full
-train.full: ## Standard training from bootstrap checkpoint
+train.full: ## Standard training from bootstrap checkpoint, no dashboard
 	$(PY) scripts/train.py --config $(CONFIG_FULL) --checkpoint $(CHECKPOINT_BOOTSTRAP)
+
+.PHONY: train.full.dashboard
+train.full.dashboard: ## Standard training with web dashboard (start dashboard separately first)
+	$(PY) scripts/train.py --config $(CONFIG_FULL) --checkpoint $(CHECKPOINT_BOOTSTRAP) \
+	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
 
 .PHONY: train.multi
 train.multi: ## Multi-hour training profile from bootstrap checkpoint
 	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_BOOTSTRAP)
 
+.PHONY: train.multi.dashboard
+train.multi.dashboard: ## Multi-hour training with web dashboard
+	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_BOOTSTRAP) \
+	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
+
 .PHONY: train.resume
 train.resume: ## Resume multi-hour training from latest checkpoint
 	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
 	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_LATEST)
+
+.PHONY: train.resume.dashboard
+train.resume.dashboard: ## Resume training from latest checkpoint with web dashboard
+	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
+	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_LATEST) \
+	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
 
 .PHONY: plot.train.latest
 plot.train.latest: ## Plot latest training log

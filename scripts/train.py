@@ -43,6 +43,7 @@ from python.logging.setup import configure_logging
 from python.model.network import HexTacToeNet, compile_model
 from native_core import RustReplayBuffer
 from python.training.trainer import Trainer
+from python.training.dashboard_utils import DashboardClient
 
 
 # ── Seeding ───────────────────────────────────────────────────────────────────
@@ -93,6 +94,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-dashboard", action="store_true",
         help="Disable rich live dashboard (useful in CI or non-interactive mode)"
+    )
+    p.add_argument(
+        "--web-dashboard", action="store_true",
+        help="Push game/metric data to a running dashboard.py server",
+    )
+    p.add_argument(
+        "--web-dashboard-url", default="http://localhost:5001",
+        help="Base URL of the dashboard server (default: http://localhost:5001)",
     )
     p.add_argument(
         "--no-compile", action="store_true",
@@ -268,6 +277,9 @@ def main() -> None:
     gpu_monitor = GPUMonitor(interval_sec=5)
     gpu_monitor.start()
 
+    # ── Web dashboard client (fire-and-forget) ──
+    web_dash = DashboardClient(base_url=args.web_dashboard_url) if args.web_dashboard else None
+
     # ── Graceful shutdown ──
     _running = [True]
     def _stop(sig, frame):
@@ -299,6 +311,10 @@ def main() -> None:
 
         last_train_game_count = 0
         last_ui_refresh = 0.0
+        last_web_games = 0
+        last_x_wins = 0
+        last_o_wins = 0
+        last_draws = 0
         ui_refresh_sec = 1.0
         last_warmup_log = 0.0
 
@@ -469,6 +485,34 @@ def main() -> None:
                         **eval_metrics,
                     )
 
+                    if web_dash is not None:
+                        new_web_games = games_played - last_web_games
+                        if new_web_games > 0:
+                            dx  = pool.x_wins - last_x_wins
+                            do_ = pool.o_wins - last_o_wins
+                            dd  = pool.draws  - last_draws
+                            for _ in range(dx):
+                                web_dash.send_game(moves=[], result=1.0)
+                            for _ in range(do_):
+                                web_dash.send_game(moves=[], result=-1.0)
+                            for _ in range(dd):
+                                web_dash.send_game(moves=[], result=0.0)
+                            last_web_games = games_played
+                            last_x_wins = pool.x_wins
+                            last_o_wins = pool.o_wins
+                            last_draws  = pool.draws
+                        web_dash.send_metrics(
+                            iteration=train_step,
+                            loss=float(loss_info["loss"]),
+                            elo=eval_metrics.get("wr_ramora"),
+                            policy_loss=float(loss_info["policy_loss"]),
+                            value_loss=float(loss_info["value_loss"]),
+                            games_total=games_played,
+                            gpu_util=gpu_monitor.gpu_util_pct,
+                            x_winrate=round(float(pool.x_winrate), 3),
+                            o_winrate=round(float(pool.o_winrate), 3),
+                        )
+
                     if dashboard is not None:
                         dashboard.update(train_step, total_steps, metrics)
                         last_ui_refresh = time.time()
@@ -481,6 +525,8 @@ def main() -> None:
             _run_loop()
     finally:
         pool.stop()
+        if web_dash is not None:
+            web_dash.stop()
         gpu_monitor.stop()
         gpu_monitor.join(timeout=2.0)
 
