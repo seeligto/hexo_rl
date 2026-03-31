@@ -96,6 +96,7 @@ This runs in nanoseconds per move — no loop over cells, no Python overhead.
 To solve the "Attention Hijacking" (Colony Meta) exploit where the network becomes blind to distant lethal threats, we employ a Multi-Window Cluster-Based Approach. The infinite board is dynamically partitioned into distinct spatial clusters (colonies).
 
 Input:
+
 - `K` dynamic `local_map` tensors: Shape `(K, 18, 19, 19)` float16. The Rust
   core groups active stones into K distinct clusters (distanced by max 8 cells)
   and returns 2-plane snapshots per cluster via `get_cluster_views()`.
@@ -103,12 +104,15 @@ Input:
   encoding" above).
 
 Backbone (Single ResNet-10 Trunk):
+
 - Processes the `K` tensors as a single batch (effective batch size = batch_size * K) through a highly optimized 19×19 ResNet-10.
 
 Value Aggregation (Pooling):
+
 - The network outputs `K` values. The true state value is aggregated using logical pooling (e.g., `min()` if it's the opponent's turn to act in a critical colony, or a weighted average) to ensure lethal threats in any cluster override localized advantages.
 
 Policy Mapping:
+
 - The network outputs `K` policy distributions (each 362 logits).
 - The local 19×19 coordinates of each distribution are mapped back to the absolute global `(q,r)` coordinates using the respective cluster centers provided by the Rust core.
 - The aggregated legal moves are unified via a final softmax to form a single global policy vector for MCTS.
@@ -131,6 +135,7 @@ Value head:
 ### Checkpointing
 
 Every N training steps:
+
 1. Save full model state dict + optimizer state
 2. Save a separate `inference_only.pt` (weights only, for deployment)
 3. Record step number, Elo estimate, and loss values in `checkpoint_log.json`
@@ -228,17 +233,20 @@ The replay buffer lives entirely in Rust and is exposed to Python via PyO3.
 The Python `ReplayBuffer` class has been deleted; `RustReplayBuffer` is the only buffer.
 
 **Storage layout:**
+
 - `states: Vec<u16>` — f16 bits stored as u16, logical shape `[capacity, 18, 19, 19]`
 - `policies: Vec<f32>` — logical shape `[capacity, 362]`
 - `outcomes: Vec<f32>` — logical shape `[capacity]`
 - `game_ids: Vec<i64>` — multi-window correlation guard (prevents clusters from the same game appearing in one training batch)
 
 **Key properties:**
+
 - **12-fold hex augmentation** — applied lazily at sample time. 6 rotations × 2 (with/without reflection). Scatter-copy via pre-computed symmetry tables. Cells that fall outside the 19×19 window after transformation are left as zero.
 - **Zero-copy transfer** — Python receives numpy arrays directly via PyO3's `IntoPyArray`; no type conversion in the hot path.
 - **f16-as-u16 storage** — states are stored as raw u16 (f16 bit-pattern) to halve VRAM footprint; reinterpreted as f16 on PyO3 return.
 
 **Python API:**
+
 ```python
 from native_core import RustReplayBuffer
 
@@ -294,6 +302,7 @@ Shaped rewards are returned alongside the terminal reward signal.
 ### Elo ladder
 
 Every `eval_interval` training steps, the new checkpoint plays a round-robin tournament against:
+
 - Previous checkpoint
 - Best checkpoint so far
 - Ramora0 engine at depth 3 (compiled with line-1094 bug fixed)
@@ -302,6 +311,7 @@ Every `eval_interval` training steps, the new checkpoint plays a round-robin tou
 The **win rate vs Ramora0 depth-5** is the primary community benchmark. Target: ≥ 55% win rate over 100 games = meaningfully stronger than the current best public bot.
 
 Elo is updated using standard formula:
+
 ```
 E_a = 1 / (1 + 10^((R_b - R_a) / 400))
 R_a_new = R_a + K * (S_a - E_a)   # K=32, S_a ∈ {0, 0.5, 1}

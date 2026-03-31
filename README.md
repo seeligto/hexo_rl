@@ -121,8 +121,8 @@ python scripts/train.py --config configs/default.yaml --checkpoint checkpoints/b
 
 Notes:
 
-- The primary worker throughput metric is **positions/hour** (games/hour is also reported). Very short durations can show 0 positions/hour — increase `--pool-duration` for representative numbers.
-- Warnings about pynvml deprecation are emitted by third-party dependencies and do not indicate a training or benchmark failure.
+* The primary worker throughput metric is **positions/hour** (games/hour is also reported). Very short durations can show 0 positions/hour — increase `--pool-duration` for representative numbers.
+* Warnings about pynvml deprecation are emitted by third-party dependencies and do not indicate a training or benchmark failure.
 
 ## Performance (March 2026 Baseline)
 

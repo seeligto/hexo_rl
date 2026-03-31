@@ -114,6 +114,7 @@ A Flask + SocketIO live dashboard based on saiki77's hexbot training dashboard.
 Pure data sink — no game-engine imports. Accepts training data via REST or WebSocket.
 
 **Start the server** (run in a separate terminal before training):
+
 ```bash
 make dashboard                        # port 5001 (default)
 make dashboard DASHBOARD_PORT=5002    # custom port
@@ -124,6 +125,7 @@ make dashboard DASHBOARD_PORT=5002    # custom port
 Then open `http://localhost:5001` in a browser.
 
 **Wire training to the dashboard:**
+
 ```bash
 make train.full.dashboard             # full run + dashboard
 make train.resume.dashboard           # resume + dashboard
@@ -133,6 +135,7 @@ make train.resume.dashboard           # resume + dashboard
 ```
 
 **DashboardClient** (`python/training/dashboard_utils.py`) — fire-and-forget bridge:
+
 - Background daemon thread + `queue.Queue(maxsize=512)`
 - Enqueue cost: ~0.7 µs/call — negligible vs training step time
 - Data is sent every `log_interval` training steps (default: 10)
@@ -148,6 +151,7 @@ client.stop()
 ```
 
 **REST endpoints** (can be called directly or via DashboardClient):
+
 | Method | Endpoint | Body |
 |---|---|---|
 | POST | `/api/game` | `{"moves": [[q,r],...], "result": ±1.0}` |
@@ -652,6 +656,7 @@ rewards:
 ```
 
 Load with:
+
 ```python
 import yaml
 from dataclasses import dataclass
