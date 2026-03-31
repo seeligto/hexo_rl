@@ -61,7 +61,7 @@ N_CORES ?= $(shell python3 -c "import os; print(os.cpu_count() or 4)")
 
 .PHONY: bench.full
 bench.full: ## Higher-confidence benchmark pass
-	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 30
+	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60
 
 .PHONY: bench.stress
 bench.stress: ## Heavy stress test (5 mins, high sims)
