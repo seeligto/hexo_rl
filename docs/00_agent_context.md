@@ -42,12 +42,13 @@ hex_tac_toe_az/
 | Layer | Language | Why |
 |---|---|---|
 | MCTS tree traversal | **Rust** | Sequential pointer-chasing loop — Python is 30-100× too slow |
-| Board logic + win detection | **Rust** | Bitboard ops + Zobrist hashing at call frequency of millions/sec |
+| Board logic + win detection | **Rust** | Bitboard ops + 128-bit Zobrist hashing at call frequency of millions/sec |
+| Replay buffer | **Rust** (RustReplayBuffer) | f16-as-u16 ring buffer, 12-fold hex augmentation, zero-copy PyO3 transfer |
 | Neural network | **Python + PyTorch CUDA** | Already native speed via CUDA kernels — never rewrite |
-| Replay buffer + tensor prep | **Python + NumPy** | Vectorised batch ops, pre-allocated ring arrays |
+| Temporal tensor assembly | **Python + NumPy** | Stacks 2-plane cluster snapshots + `move_history` into `(18, 19, 19)` tensors |
 | Orchestration, training loop | **Python** | Runs ~once per second — Python speed is irrelevant here |
 
-Rust exposes its API to Python via **PyO3**. Import as: `from native_core import MCTSTree, Board, Benchmarks`.
+Rust exposes its API to Python via **PyO3**. Import as: `from native_core import MCTSTree, Board, RustReplayBuffer`.
 
 ---
 

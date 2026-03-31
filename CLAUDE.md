@@ -35,9 +35,9 @@ The board is infinite. The NN requires fixed-size tensors. We resolve this as fo
 
 **Internal storage (Rust):** `HashMap<(q,r), Player>` — sparse, genuinely unbounded.
 No allocation for empty cells. No fixed grid size in the data structure.
-**Transposition Table (TT):** Uses `FxHashMap` with 64-bit Zobrist hashing for O(1) state lookups, critical for MCTS efficiency.
+**Transposition Table (TT):** Uses `FxHashMap` with **128-bit Zobrist hashing** (splitmix128) for O(1) state lookups, critical for MCTS efficiency. 128-bit keys eliminate collision risk at sustained >150k sim/s throughput.
 
-**NN view window (Hybrid Attention-Anchored Windowing):** The board state is dynamically grouped into K distinct clusters (colonies) of stones. The Rust core generates K distinct 19×19 tensors. To prevent "Attention Hijacking" (where the model ignores distant but winning threats), we use **Attention-Anchored Windowing**: windows are centered on high-attention regions and critical formations, not just centroids.
+**NN view window (Hybrid Attention-Anchored Windowing):** The board state is dynamically grouped into K distinct clusters (colonies) of stones. The Rust core returns K distinct **2-plane (19×19) cluster snapshots** (current player + opponent stones). Python's `GameState.to_tensor()` stacks these snapshots with `move_history` to assemble the full 18-plane temporal tensor. To prevent "Attention Hijacking" (where the model ignores distant but winning threats), we use **Attention-Anchored Windowing**: windows are centered on high-attention regions and critical formations, not just centroids.
 
 **Value Aggregation (Min-Pooling):** When multiple windows are evaluated for a single board state, the scalar Value ($v$) is aggregated using **Min-Pooling** (from the perspective of the current player) to ensure that if any window contains a losing threat, the entire state is treated as high-risk.
 
@@ -69,8 +69,7 @@ After each commit, confirm tests still pass before starting the next task.
 ### Phase discipline
 
 Always check `docs/02_ROADMAP.md` for the current phase before starting work.
-**Current Status:** Phase 3C (Supervised Pretraining) is **Complete/Pending Final Validation**.
-**Next Phase:** Phase 4.0 (Self-Play RL) — Initializing the distributed self-play loop.
+**Current Status:** Phase 3C (Supervised Pretraining) is **Complete**. **Currently initializing Phase 4.0 Self-Play RL loop.**
 
 Each phase has explicit exit criteria — do not advance until they are met.
 If you are unsure what phase we are in, check git log for the most recent feat commits.
@@ -124,11 +123,12 @@ Before ending any session or when asked to stop:
 | Layer | Language | Notes |
 |---|---|---|
 | MCTS tree, board logic, win detection | **Rust** | Build with `maturin develop --release`. Concurrency via Rust-native Game-Level Parallelism (Phase 3.5). |
-| Neural network, training, replay buffer | **Python + PyTorch** | CUDA, FP16, TF32 enabled, torch.compile. InferenceServer bridges Rust worker threads. |
-| Array/batch operations | **NumPy** | Pre-allocated, never allocate during training |
+| Replay buffer | **Rust** (RustReplayBuffer) | f16-as-u16 ring buffer, 12-fold hex augmentation, zero-copy PyO3 transfer. |
+| Neural network, training loop | **Python + PyTorch** | CUDA, FP16, TF32 enabled, torch.compile. InferenceServer bridges Rust worker threads. |
+| Temporal tensor assembly | **Python + NumPy** | Stacks 2-plane cluster snapshots + `move_history` into `(18, 19, 19)` tensors. |
 | Orchestration, config, logging | **Python** | structlog (JSON) + rich (console) |
 
-PyO3 exposes Rust to Python. Import as: `from native_core import Board, MCTSTree`
+PyO3 exposes Rust to Python. Import as: `from native_core import Board, MCTSTree, RustReplayBuffer`
 
 Build commands:
 
@@ -344,19 +344,45 @@ hex_tac_toe_az/
 
 ---
 
+## Testing conventions
+
+### Loss-convergence tests must disable augmentation
+
+Any test that asserts on loss values decreasing over N training steps **must** pass
+`augment=False` to `trainer.train_step()`. Example:
+
+```python
+loss1 = trainer.train_step(buf, augment=False)
+loss2 = trainer.train_step(buf, augment=False)
+assert loss2 < loss1
+```
+
+**Why:** 12-fold hex augmentation applies a random symmetry transform to each sampled
+batch. With augmentation enabled, the effective training distribution varies per call,
+introducing RNG-dependent variance that can flip the loss ordering over a short N-step
+window. This produces flaky tests even when the optimizer is converging correctly.
+
+**Scope:** This restriction applies only to short-window convergence assertions in unit
+tests. Full training runs must always use `augment=True` (the default).
+
+---
+
 ## Benchmarks — must pass before Phase 4.5
 
-Run `make bench.full`. Latest baseline (2026-03-31, Ryzen 7 3700x + RTX 3070):
+Run `make bench.full`. Latest baseline (2026-03-31, Ryzen 7 3700x + RTX 3070, 16 workers):
 
-| Metric | Baseline (Post-TT) | Target |
+| Metric | Baseline | Target |
 |---|---|---|
-| MCTS (CPU only, no NN) | ~274,000 sim/s | ≥ 150,000 sim/s |
-| NN inference (batch=64) | 10,733 pos/s | ≥ 8,000 pos/s |
-| NN latency (batch=1, mean) | 0.8 ms | ≤ 5 ms |
-| Replay buffer (batch=256) | 253 μs/sample | ≤ 1,000 μs |
-| GPU utilization | 93.4% | ≥ 80% |
-| Self-play throughput | 3,829 games/hour | ≥ 1,500 games/hour |
-| Batch Saturation | 60.8% | ≥ 50% |
+| MCTS (CPU only, no NN) | 160,882 sim/s | ≥ 150,000 sim/s |
+| NN inference (batch=64) | 11,479 pos/s | ≥ 8,000 pos/s |
+| NN latency (batch=1, mean) | 0.74 ms (p99: 2.57 ms) | ≤ 5 ms |
+| Replay buffer push | 219,444 pos/sec | ≥ 50,000 pos/sec |
+| Replay buffer sample raw (batch=256) | 951 µs/batch | ≤ 1,000 µs |
+| Replay buffer sample augmented (batch=256) | 936 µs/batch (3.66 µs/pos) | ≤ 1,000 µs |
+| GPU utilization | 95.4% | ≥ 80% |
+| VRAM usage | 0.77 GB / 8.6 GB | ≤ 80% |
+| Worker throughput | 4,134 games/hr / 1,734,003 pos/hr | ≥ 500,000 pos/hr |
+| Batch fill % | 99.8% | ≥ 50% |
 
 
 ---

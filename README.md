@@ -6,7 +6,7 @@ Welcome to the Hex Tac Toe AlphaZero project. This project implements an AlphaZe
 
 Hex Tac Toe is played on an infinite hexagonal grid. This repository contains the core Rust engine for high-performance board representation and Monte Carlo Tree Search (MCTS), bound to a Python environment where a PyTorch-based neural network is trained via self-play.
 
-We employ a "Multi-Window Cluster-Based Approach" to handle the infinite board: the Rust core dynamically clusters active stones into distinct colonies and generates K distinct 19x19 tensors. These are evaluated as a batch by a single sliding-window ResNet, resolving Attention Hijacking while maintaining high performance.
+We employ a "Multi-Window Cluster-Based Approach" to handle the infinite board: the Rust core dynamically clusters active stones into distinct colonies and returns K distinct 2-plane (19×19) cluster snapshots per colony. Python's `GameState.to_tensor()` stacks these snapshots with `move_history` to assemble the full 18-plane temporal tensor. These are evaluated as a batch by a single sliding-window ResNet, resolving Attention Hijacking while maintaining high performance.
 
 ## Setup Instructions
 
@@ -121,16 +121,22 @@ python scripts/train.py --config configs/default.yaml --checkpoint checkpoints/b
 
 Notes:
 
-- The worker-pool throughput metric counts completed games; very short durations can show 0 games/hour. Increase --pool-duration for representative numbers.
+- The primary worker throughput metric is **positions/hour** (games/hour is also reported). Very short durations can show 0 positions/hour — increase `--pool-duration` for representative numbers.
 - Warnings about pynvml deprecation are emitted by third-party dependencies and do not indicate a training or benchmark failure.
 
 ## Performance (March 2026 Baseline)
 
-The Rust core is highly optimized, utilizing a Transposition Table (FxHashMap + Zobrist hashing) and efficient parallelization:
+Measured 2026-03-31, Ryzen 7 3700x + RTX 3070, 16 workers, `make bench.full`. The Rust core uses a Transposition Table (FxHashMap + **128-bit Zobrist hashing**, splitmix128) — 128-bit keys eliminate collision risk at sustained >150k sim/s throughput.
 
-- **MCTS Performance:** ~274k simulations/sec (CPU only)
-- **NN Inference:** >10k positions/sec (RTX 3070, batch=64)
-- **Self-Play Throughput:** ~3.8k games/hour
-- **Inference Latency:** 0.8ms (batch=1)
+| Metric | Measured |
+|---|---|
+| MCTS (CPU only) | 160,882 sim/s |
+| NN inference (batch=64) | 11,479 pos/s |
+| NN latency (batch=1, mean) | 0.74 ms (p99: 2.57 ms) |
+| Replay buffer push | 219,444 pos/sec |
+| Replay buffer sample (aug, batch=256) | 936 µs/batch (3.66 µs/pos) |
+| Worker throughput | 4,134 games/hr / **1,734,003 pos/hr** |
+| GPU utilization | 95.4% |
+| Batch fill % | 99.8% |
 
 This project uses **Batched MCTS Inferences**, providing a ~15x speedup on NVIDIA GPUs.

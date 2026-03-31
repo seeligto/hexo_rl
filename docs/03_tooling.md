@@ -144,7 +144,7 @@ class TrainingDashboard:
         table.add_row("Value loss",       f"{metrics.get('value_loss', 0):.4f}")
         table.add_row("Elo (latest)",     str(metrics.get("elo", "-")))
         table.add_row("Buffer size",      f"{metrics.get('buffer_size', 0):,}")
-        table.add_row("Games/hour",       f"{metrics.get('games_per_hour', 0):.0f}")
+        table.add_row("Positions/hour",    f"{metrics.get('positions_per_hour', 0):.0f}")
         table.add_row("Sims/sec",         f"{metrics.get('sims_per_sec', 0):,.0f}")
         table.add_row("GPU util",         f"{metrics.get('gpu_util', 0):.0f}%")
         table.add_row("VRAM used",        f"{metrics.get('vram_gb', 0):.1f} GB")
@@ -221,16 +221,18 @@ def print_training_summary(history: list[dict]):
 
 ### What to measure
 
-| Benchmark | Unit | Target |
-|---|---|---|
-| MCTS throughput | simulations/sec | ≥ 150,000 |
-| Inference throughput | positions/sec | ≥ 8,000 |
-| Inference latency (batch=1) | ms | ≤ 5 ms |
-| Game throughput | games/hour | ≥ 1,500 |
-| GPU utilization | % | ≥ 80% during training |
-| VRAM peak | % | ≤ 80% of Total VRAM |
-| Batch Saturation | % | ≥ 50% |
-| Replay buffer sample | μs per sample | ≤ 1,000 |
+| Benchmark | Unit | Target | Baseline (2026-03-31, 16w) |
+|---|---|---|---|
+| MCTS throughput | simulations/sec | ≥ 150,000 | 160,882 |
+| Inference throughput | positions/sec | ≥ 8,000 | 11,479 |
+| Inference latency (batch=1) | ms mean | ≤ 5 ms | 0.74 ms |
+| Worker throughput | positions/hour | ≥ 500,000 | 1,734,003 |
+| GPU utilization | % | ≥ 80% | 95.4% |
+| VRAM peak | GB | ≤ 6.9 GB (80%) | 0.77 GB |
+| Batch fill % | % | ≥ 50% | 99.8% |
+| Replay buffer push | positions/sec | ≥ 50,000 | 219,444 |
+| Replay buffer sample raw (batch=256) | µs/batch | ≤ 1,000 | 951 |
+| Replay buffer sample augmented (batch=256) | µs/batch | ≤ 1,000 | 936 (3.66 µs/pos) |
 
 ### Practical benchmark commands
 
@@ -252,7 +254,7 @@ Heavy stability and deep search stress test:
 make bench.stress
 ```
 
-If worker-pool throughput reports 0 games/hour in short runs, increase `--pool-duration`.
+If worker-pool throughput reports 0 positions/hour in short runs, increase `--pool-duration`.
 
 ### Focused validation for inference/pool changes
 
@@ -352,10 +354,10 @@ def benchmark_inference_latency(model) -> dict:
 def benchmark_replay_buffer(buffer) -> dict:
     t0 = time.perf_counter()
     for _ in range(10_000):
-        buffer.sample(batch_size=256)
+        buffer.sample_batch(256, augment=True)
     elapsed = time.perf_counter() - t0
     return {
-        "name":          "Replay buffer sample (batch=256)",
+        "name":          "Replay buffer sample (augmented, batch=256)",
         "samples":       10_000,
         "elapsed_sec":   elapsed,
         "us_per_sample": elapsed / 10_000 * 1e6,
@@ -391,16 +393,17 @@ def print_benchmark_report(results: list[dict]):
 
 if __name__ == "__main__":
     from python.model.network import HexTacToeNet
-    from python.training.replay_buffer import ReplayBuffer
+    from native_core import RustReplayBuffer
 
     model = HexTacToeNet().cuda().half()
-    buffer = ReplayBuffer(capacity=100_000)
+    buffer = RustReplayBuffer(capacity=100_000)
     # fill buffer with dummy data for benchmark
-    for _ in range(10_000):
+    for i in range(10_000):
         buffer.push(
             np.zeros((18, 19, 19), dtype=np.float16),
             np.ones(362, dtype=np.float32) / 362,
             0.0,
+            i,  # game_id
         )
 
     results = [

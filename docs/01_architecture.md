@@ -26,7 +26,7 @@ class GameState:
     current_player: int      # 1 or -1
     moves_remaining: int     # 1 or 2 (p1 opens with 1, then 2 each)
     move_history: tuple      # last N board snapshots for tensor stacking
-    zobrist_hash: int        # incremental hash for transposition table
+    zobrist_hash: int        # 128-bit incremental hash (splitmix128) for transposition table
     ply: int                 # total half-moves played
 ```
 
@@ -222,31 +222,33 @@ Main process
 
 The hot-path concurrency is Rust-owned (not Python multiprocessing). Python is responsible for the NN forward pass only, while Rust owns game-thread scheduling, request blocking, and wake-up semantics.
 
-### Replay buffer
+### Replay buffer (Rust — RustReplayBuffer)
 
-Pre-allocated NumPy ring arrays. Never allocates during training.
+The replay buffer lives entirely in Rust and is exposed to Python via PyO3.
+The Python `ReplayBuffer` class has been deleted; `RustReplayBuffer` is the only buffer.
 
+**Storage layout:**
+- `states: Vec<u16>` — f16 bits stored as u16, logical shape `[capacity, 18, 19, 19]`
+- `policies: Vec<f32>` — logical shape `[capacity, 362]`
+- `outcomes: Vec<f32>` — logical shape `[capacity]`
+- `game_ids: Vec<i64>` — multi-window correlation guard (prevents clusters from the same game appearing in one training batch)
+
+**Key properties:**
+- **12-fold hex augmentation** — applied lazily at sample time. 6 rotations × 2 (with/without reflection). Scatter-copy via pre-computed symmetry tables. Cells that fall outside the 19×19 window after transformation are left as zero.
+- **Zero-copy transfer** — Python receives numpy arrays directly via PyO3's `IntoPyArray`; no type conversion in the hot path.
+- **f16-as-u16 storage** — states are stored as raw u16 (f16 bit-pattern) to halve VRAM footprint; reinterpreted as f16 on PyO3 return.
+
+**Python API:**
 ```python
-class ReplayBuffer:
-    def __init__(self, capacity=500_000, board_channels=18, board_size=19):
-        n = capacity
-        self.states   = np.zeros((n, board_channels, board_size, board_size), dtype=np.float16)
-        self.policies = np.zeros((n, board_size * board_size + 1), dtype=np.float32)
-        self.outcomes = np.zeros((n,), dtype=np.float32)
-        self.ptr  = 0
-        self.size = 0
+from native_core import RustReplayBuffer
 
-    def push(self, state, policy, outcome):
-        self.states[self.ptr]   = state
-        self.policies[self.ptr] = policy
-        self.outcomes[self.ptr] = outcome
-        self.ptr  = (self.ptr + 1) % len(self.states)
-        self.size = min(self.size + 1, len(self.states))
-
-    def sample(self, batch_size):
-        idx = np.random.randint(0, self.size, batch_size)
-        return self.states[idx], self.policies[idx], self.outcomes[idx]
+buf = RustReplayBuffer(capacity=500_000)
+buf.push(state_f16, policy_f32, outcome_f32, game_id)        # single position
+buf.push_game(states_f16, policies_f32, outcomes_f32, game_id)  # full game batch
+states, policies, outcomes = buf.sample_batch(batch_size, augment=True)
 ```
+
+**Performance (2026-03-31 baseline, 16 workers):** 219,444 pushes/sec; 936 µs/batch (3.66 µs/pos, augmented, batch=256); raw (no augmentation) 951 µs/batch.
 
 ---
 
