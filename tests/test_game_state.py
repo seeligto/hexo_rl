@@ -192,3 +192,51 @@ def test_to_tensor_uses_cached_views():
     assert t.shape == (1, 18, 19, 19)
     # Current player is P2; opponent (P1) stone at (0,0) is in tensor plane 8.
     assert t[0, 8, 9, 9] == 1.0, "opponent stone must appear in plane 8 of to_tensor output"
+
+
+# ── Split-responsibility boundary tests ───────────────────────────────────────
+# These tests verify that Python's to_tensor() correctly reads from the cached
+# 2-plane views (split-responsibility: Rust supplies 2 planes, Python assembles 18).
+
+def test_plane_0_current_my_stones_after_p1_move():
+    """Given: P1 places at (0,0), P2 places at (1,0).
+    When: to_tensor() is called (P1's turn).
+    Then: plane 0 (my-stones at t) contains P1's stone at (0,0).
+    """
+    b = Board()
+    s = GameState.from_board(b)
+    s = s.apply_move(b, 0, 0)   # P1 ply 0 → P2's turn
+    s = s.apply_move(b, 1, 0)   # P2 ply 1
+    s = s.apply_move(b, 2, 0)   # P2 ply 2 → P1's turn
+
+    t, centers = s.to_tensor()
+    cq, cr = centers[0]
+    # P1 stone at (0,0) → window idx
+    wq = 0 - cq + 9
+    wr = 0 - cr + 9
+    assert t[0, 0, wq, wr] == 1.0, \
+        "plane 0 (current my-stones) must contain P1's stone at (0,0)"
+
+
+def test_plane_8_opponent_stones_after_p1_move():
+    """Given: P1 places at (0,0), P2 places a pair.
+    When: to_tensor() is called (P1's turn).
+    Then: plane 8 (opponent's stones at t) contains P2's stones.
+    """
+    b = Board()
+    s = GameState.from_board(b)
+    s = s.apply_move(b, 0, 0)   # P1 ply 0 → P2's turn
+    s = s.apply_move(b, 1, 0)   # P2 ply 1
+    s = s.apply_move(b, 2, 0)   # P2 ply 2 → P1's turn
+
+    t, centers = s.to_tensor()
+    cq, cr = centers[0]
+    # P2 stones at (1,0) and (2,0) must appear in plane 8 (opponent at t)
+    wq1 = 1 - cq + 9
+    wr1 = 0 - cr + 9
+    wq2 = 2 - cq + 9
+    wr2 = 0 - cr + 9
+    assert t[0, 8, wq1, wr1] == 1.0, \
+        "plane 8 (opponent my-stones) must contain P2's first stone at (1,0)"
+    assert t[0, 8, wq2, wr2] == 1.0, \
+        "plane 8 (opponent my-stones) must contain P2's second stone at (2,0)"
