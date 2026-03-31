@@ -94,16 +94,22 @@ class Trainer:
     # ── Training step ─────────────────────────────────────────────────────────
 
     def train_step(
-        self, buffer: "RustReplayBuffer"
+        self, buffer: "RustReplayBuffer", augment: bool = True
     ) -> Dict[str, float]:
         """Sample a batch from `buffer` and perform one gradient update.
+
+        Args:
+            buffer:  Replay buffer to sample from.
+            augment: Whether to apply 12-fold hex augmentation during sampling.
+                     Set False in tests that assert on loss convergence to
+                     eliminate RNG-dependent variance.
 
         Returns:
             dict with keys "loss", "policy_loss", "value_loss".
         """
         batch_size = int(self.config["batch_size"])
 
-        states, policies, outcomes = buffer.sample_batch(batch_size, True)
+        states, policies, outcomes = buffer.sample_batch(batch_size, augment)
 
         # Move to device; keep float16 states as-is for autocast.
         states_t   = torch.from_numpy(states).to(self.device)       # float16

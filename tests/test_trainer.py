@@ -72,16 +72,20 @@ def test_train_step_increments_step(tmp_path: Path):
 
 
 def test_loss_decreases_over_multiple_steps(tmp_path: Path):
-    """Policy loss should decrease when the model is trained on fixed data."""
+    """Policy loss should decrease when the model is trained on fixed data.
+
+    Uses augment=False so the test is deterministic regardless of the Rust
+    buffer's internal RNG seed. We're testing the optimizer loop, not augmentation.
+    """
     torch.manual_seed(42)
     model   = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
     trainer = Trainer(model, FAST_CONFIG, checkpoint_dir=tmp_path)
     buf     = fill_buffer(size=64)
 
-    first_loss = trainer.train_step(buf)["loss"]
+    first_loss = trainer.train_step(buf, augment=False)["loss"]
     last_loss  = first_loss
     for _ in range(199):
-        last_loss = trainer.train_step(buf)["loss"]
+        last_loss = trainer.train_step(buf, augment=False)["loss"]
 
     # Over 200 steps the loss should drop noticeably from the initial value.
     assert last_loss < first_loss, (
