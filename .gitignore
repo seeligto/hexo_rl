@@ -29,9 +29,13 @@ Cargo.lock
 htmlcov/
 
 # Data / checkpoints (large, generated)
-data/
+data/corpus/raw_human/*
+!data/corpus/raw_human/.gitkeep
+data/corpus/processed/*
+!data/corpus/processed/.gitkeep
 checkpoints/
 logs/
+logs/scrape_history.log
 runs/
 plots/
 
