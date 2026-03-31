@@ -581,6 +581,37 @@ impl Board {
         clusters
     }
 
+    /// Returns **2-plane views** (2 × TOTAL_CELLS = 722 floats each) and the
+    /// window centre (cq, cr) for each cluster.
+    ///
+    /// Plane 0 = current player's stones in this 19×19 window.
+    /// Plane 1 = opponent's stones in this 19×19 window.
+    ///
+    /// # Why 2 planes, not 18?
+    ///
+    /// The full AlphaZero input has 18 planes:
+    ///   - planes  0–7:  current player's stones at t, t-1, … t-7
+    ///   - planes  8–15: opponent's stones        at t, t-1, … t-7
+    ///   - planes 16–17: game-state scalars (moves_remaining, ply parity)
+    ///
+    /// Assembling all 18 planes requires the full move history — which only
+    /// Python's `GameState.move_history` possesses.  Encoding 18 planes in
+    /// Rust would mean crossing the PyO3 boundary with 6 498 floats per
+    /// cluster (18 × 361) while 14 of them are always zero, a 9× overhead.
+    ///
+    /// Instead:
+    ///   - `get_cluster_views` returns the 2-plane current snapshot (722 floats).
+    ///   - `GameState.to_tensor()` stacks the current snapshot with historical
+    ///     snapshots from `move_history` to form the final (18, 19, 19) tensor.
+    ///
+    /// The Rust self-play hot-path (`game_runner.rs`) has no Python history.
+    /// It expands the 2-plane view to 18 planes via `encode_18_planes_to_buffer`
+    /// in-place — the network receives planes 1–7 and 9–15 as zeros for
+    /// Rust-driven self-play, which is an acceptable approximation for the
+    /// warmup / RL phases before Python-side history is plumbed in.
+    ///
+    /// `to_planes()` / `Board.to_tensor()` (the single-board Python binding) still
+    /// use the full 18-plane encoding via `encode_18_planes_to_buffer`.
     pub fn get_cluster_views(&self) -> (Vec<Vec<f32>>, Vec<(i32, i32)>) {
         let clusters = self.get_clusters();
         let mut final_centers = Vec::new();
@@ -662,9 +693,7 @@ impl Board {
                     }
                 }
             }
-            let mut out = vec![0.0f32; 18 * TOTAL_CELLS];
-            self.encode_18_planes_to_buffer(&planes_2, &mut out);
-            views.push(out);
+            views.push(planes_2);
         }
         (views, final_centers)
     }
@@ -1034,5 +1063,26 @@ mod tests {
         assert_eq!(board.ply, empty.ply);
         assert_eq!(board.last_move, empty.last_move);
         assert_eq!(board.action_anchors_count, empty.action_anchors_count);
+    }
+
+    #[test]
+    fn cluster_views_returns_two_planes() {
+        let mut b = Board::new();
+        b.apply_move(0, 0).unwrap(); // P1 at origin; turn passes to P2
+        let (views, centers) = b.get_cluster_views();
+        assert_eq!(views.len(), 1, "one cluster expected");
+        assert_eq!(centers.len(), 1);
+        assert_eq!(
+            views[0].len(),
+            2 * TOTAL_CELLS,
+            "get_cluster_views must return 2-plane views (2 * 361 = 722 floats)"
+        );
+        // Current player is P2. Plane 0 = P2 (current, no stones), Plane 1 = P1 (opponent).
+        // P1 stone at origin → flat index = HALF * BOARD_SIZE + HALF = 9*19+9 = 180.
+        let origin_flat = (HALF as usize) * BOARD_SIZE + (HALF as usize);
+        assert_eq!(views[0][TOTAL_CELLS + origin_flat], 1.0,
+            "P1 stone should be in opponent plane (offset TOTAL_CELLS)");
+        assert_eq!(views[0][origin_flat], 0.0,
+            "current player (P2) has no stones yet");
     }
 }

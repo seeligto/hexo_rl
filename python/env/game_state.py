@@ -7,7 +7,7 @@ import numpy as np
 from native_core import Board
 
 BOARD_SIZE: int = 19
-HISTORY_LEN: int = 8
+HISTORY_LEN: int = 8  # AlphaZero uses 8 timesteps (current + 7 prior)
 
 @dataclass(frozen=True)
 class GameState:
@@ -16,21 +16,25 @@ class GameState:
     zobrist_hash: int
     ply: int
     move_history: Tuple[GameState, ...] = field(default_factory=tuple)
+    # Each view is shape (2, BOARD_SIZE, BOARD_SIZE): plane 0 = current player's
+    # stones, plane 1 = opponent's stones.  This is what Rust's get_cluster_views()
+    # returns — 2 planes, not 18.  to_tensor() assembles the full 18-plane tensor
+    # by stacking the current snapshot with historical snapshots.
     views: List[np.ndarray] = field(default_factory=list)
     centers: List[Tuple[int, int]] = field(default_factory=list)
 
     @staticmethod
     def from_board(rust_board: Board, history: Tuple[GameState, ...] = ()) -> "GameState":
         views_flat, centers = rust_board.get_cluster_views()
-        # Convert Rust-extracted views to explicitly C-contiguous numpy arrays.
-        # This prevents potential deadlocks when these views are passed back
-        # to Rust functions that expect safe slice boundaries.
-        # get_cluster_views returns 18-plane encoded views (18 * 19 * 19 = 6498 floats).
-        views = [np.ascontiguousarray(v, dtype=np.float32).reshape(18, BOARD_SIZE, BOARD_SIZE) for v in views_flat]
+        # get_cluster_views returns 2-plane views (2 * 19 * 19 = 722 floats each):
+        #   plane 0 = current player's stones, plane 1 = opponent's stones.
+        # Convert to C-contiguous arrays to prevent deadlocks when passed back to Rust.
+        views = [np.ascontiguousarray(v, dtype=np.float32).reshape(2, BOARD_SIZE, BOARD_SIZE)
+                 for v in views_flat]
         if not views:
-            views = [np.zeros((18, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
+            views = [np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
             centers = [(0, 0)]
-            
+
         return GameState(
             current_player=rust_board.current_player,
             moves_remaining=rust_board.moves_remaining,
@@ -47,37 +51,68 @@ class GameState:
         return GameState.from_board(rust_board, history=new_history)
 
     def to_tensor(self, rust_board: Board = None) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
-        """Encode the state into K tensors of shape (18, 19, 19).
+        """Encode the state into K tensors of shape (18, 19, 19) float16.
 
-        get_cluster_views() already returns fully-encoded 18-plane views:
-          plane  0:     current player's stones
-          planes 1-7:   history slots (zeros until history is wired up)
-          plane  8:     opponent's stones
-          planes 9-15:  opponent history slots (zeros until history is wired up)
-          plane 16:     moves_remaining == 2 flag
-          plane 17:     ply parity
+        The 18-plane layout follows AlphaZero's 8-step history encoding:
+
+          plane  0:    current player's stones at t           (views[k][0])
+          planes 1–7:  current player's stones at t-1 … t-7  (from move_history)
+          plane  8:    opponent's stones at t                 (views[k][1])
+          planes 9–15: opponent's stones at t-1 … t-7        (from move_history)
+          plane 16:    moves_remaining == 2 flag (0.0 or 1.0, broadcast)
+          plane 17:    ply parity (ply % 2, broadcast)
+
+        Planes for timesteps earlier than the start of the game are zeros.
+
+        The Rust self-play loop (game_runner.rs) has no Python history, so it
+        expands 2-plane views to 18 planes via encode_18_planes_to_buffer, leaving
+        history planes as zeros.  Full history is only available on the Python path
+        (worker.py, evaluator.py, pretrain.py) which uses this method.
         """
-        # If rust_board is provided, re-extract views. Otherwise use cached ones.
         if rust_board is not None:
             views_flat, centers = rust_board.get_cluster_views()
-            views = [np.ascontiguousarray(v, dtype=np.float32).reshape(18, BOARD_SIZE, BOARD_SIZE)
-                     for v in views_flat]
-            if not views:
-                views = [np.zeros((18, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
+            current_views = [
+                np.ascontiguousarray(v, dtype=np.float32).reshape(2, BOARD_SIZE, BOARD_SIZE)
+                for v in views_flat
+            ]
+            if not current_views:
+                current_views = [np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
                 centers = [(0, 0)]
         else:
-            views = self.views
+            current_views = self.views
             centers = self.centers
 
         K = len(centers)
-        tensor = np.empty((K, 18, 19, 19), dtype=np.float16)
+        tensor = np.zeros((K, 18, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+
+        # Scalar planes are identical across all clusters.
+        mr_val = np.float16(0.0 if self.moves_remaining == 1 else 1.0)
+        ply_val = np.float16(float(self.ply % 2))
+        tensor[:, 16, :, :] = mr_val
+        tensor[:, 17, :, :] = ply_val
+
+        history = self.move_history  # tuple of prior GameStates, oldest first
+
         for k in range(K):
-            tensor[k] = views[k]
+            # Current timestep
+            tensor[k, 0] = current_views[k][0]
+            tensor[k, 8] = current_views[k][1]
+
+            # Historical timesteps t-1 … t-7
+            for t in range(1, HISTORY_LEN):
+                hist_idx = len(history) - t  # index into history tuple
+                if hist_idx < 0:
+                    break  # no more history; remaining planes stay zero
+                prior = history[hist_idx]
+                if k < len(prior.views):
+                    tensor[k, t]     = prior.views[k][0]  # prior my-stones
+                    tensor[k, 8 + t] = prior.views[k][1]  # prior opp-stones
+                # if the prior state had fewer clusters, leave the planes as zero
 
         return tensor, centers
 
     def __hash__(self) -> int:
-        # zobrist_hash is u128; Python's hash() reduces it to Py_hash_t width.
+        # zobrist_hash is u128; Python's hash() reduces large ints to Py_hash_t width.
         return hash(self.zobrist_hash)
 
     def __eq__(self, other: object) -> bool:
