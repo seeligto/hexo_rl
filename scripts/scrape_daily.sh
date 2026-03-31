@@ -46,3 +46,30 @@ echo "${summary}"
 
 mkdir -p "$(dirname "${LOG_FILE}")"
 echo "${summary}" >> "${LOG_FILE}"
+
+# Write manifest.json — tiny metadata file, committed to git
+MANIFEST_FILE="${REPO_ROOT}/data/corpus/manifest.json"
+last_updated=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+# Derive date range from filenames: game JSONs contain a "created_at" field.
+# Fall back to empty strings if no files exist or jq is unavailable.
+oldest=""
+newest=""
+if command -v jq &>/dev/null && [[ ${after} -gt 0 ]]; then
+    # Extract created_at from all cached game files, sort, take first and last.
+    oldest=$(find "${CACHE_DIR}" -maxdepth 1 -name "*.json" \
+        -exec jq -r '.created_at // empty' {} \; 2>/dev/null \
+        | sort | head -1)
+    newest=$(find "${CACHE_DIR}" -maxdepth 1 -name "*.json" \
+        -exec jq -r '.created_at // empty' {} \; 2>/dev/null \
+        | sort | tail -1)
+fi
+
+cat > "${MANIFEST_FILE}" <<JSON
+{
+  "last_updated": "${last_updated}",
+  "total_games": ${after},
+  "date_range": { "oldest": "${oldest}", "newest": "${newest}" },
+  "filter": { "rated": true, "min_moves": 20, "reason": "six-in-a-row" }
+}
+JSON
