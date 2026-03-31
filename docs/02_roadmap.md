@@ -156,6 +156,7 @@ n_workers: 1
 **Goal**: Run the distributed self-play loop continuously to produce training data from the bootstrapped model checkpoint.
 
 The split-responsibility architecture is fully in place:
+
 - **Rust workers** (`RustSelfPlayRunner`) drive MCTS and produce raw 2-plane snapshots + game records.
 - **Python** (`GameState.to_tensor()`, `TensorBuffer`) assembles full 18-plane temporal tensors from `move_history`.
 - **RustReplayBuffer** stores, augments, and serves training batches with zero-copy transfer.

@@ -18,7 +18,7 @@ There is an active human community with existing openings and strategies. The in
 
 ## Repository map
 
-```
+```txt
 hex_tac_toe_az/
 ├── native_core/        Rust crate — MCTS tree, board logic, bitboards (hot paths)
 ├── python/

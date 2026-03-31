@@ -8,15 +8,15 @@ This document captures everything learned from the Hex Tac Toe community Discord
 
 | Resource | URL | Relevance |
 |---|---|---|
-| Strongest public engine | https://github.com/Ramora0/HexTicTacToe | Bootstrap source — apply line-1094 fix before use |
-| Shared bot collection + tournament runner | https://github.com/Ramora0/HexTacToeBots | Evaluation target |
-| `hexo` Python package | https://github.com/PierreLapolla/hexo (PyPI: `hexo`) | **Investigate first** — may replace our board/notation layer |
-| Bot API spec (v1) | https://github.com/hex-tic-tac-toe/htttx-bot-api | Deploy target: https://explore.htttx.io/ |
-| Notation standard | https://github.com/hex-tic-tac-toe/hexagonal-tic-tac-toe-notation | BKE — read limitations in section 3 |
-| Community GitHub org | https://github.com/hex-tic-tac-toe | Standards home |
-| Game archive (primary) | https://hexo.did.science/games | 42k+ rated games — main corpus source |
-| Game archive (secondary) | https://he-xo.com/games/ | Additional game hosting site |
-| Bot Dev Discord | https://discord.gg/7P8NeXnM4 | Dedicated bot dev server — monitor for new bots |
+| Strongest public engine | <https://github.com/Ramora0/HexTicTacToe> | Bootstrap source — apply line-1094 fix before use |
+| Shared bot collection + tournament runner | <https://github.com/Ramora0/HexTacToeBots> | Evaluation target |
+| `hexo` Python package | <https://github.com/PierreLapolla/hexo> (PyPI: `hexo`) | **Investigate first** — may replace our board/notation layer |
+| Bot API spec (v1) | <https://github.com/hex-tic-tac-toe/htttx-bot-api> | Deploy target: <https://explore.htttx.io/> |
+| Notation standard | <https://github.com/hex-tic-tac-toe/hexagonal-tic-tac-toe-notation> | BKE — read limitations in section 3 |
+| Community GitHub org | <https://github.com/hex-tic-tac-toe> | Standards home |
+| Game archive (primary) | <https://hexo.did.science/games> | 42k+ rated games — main corpus source |
+| Game archive (secondary) | <https://he-xo.com/games/> | Additional game hosting site |
+| Bot Dev Discord | <https://discord.gg/7P8NeXnM4> | Dedicated bot dev server — monitor for new bots |
 
 ---
 
@@ -105,6 +105,7 @@ Examples:
 ### Parser notes
 
 A TypeScript reference parser exists (`standardNotationParser.ts`, written by BSoD). Known issues:
+
 - Does minimal validation — safe for client-side use only, vulnerable to malicious input server-side
 - Has a comment typo (`s = -q - s` should be `s = -q - r`) but the code itself is correct
 - Community parsers run to ~400 lines — don't underestimate this
@@ -408,12 +409,14 @@ From the Discord: no RL bot has yet surpassed the strongest public minimax bot. 
 ## 8. `hexo` Python package — evaluate before reimplementing
 
 Pedro published a Python package called `hexo` on PyPI (2026-03-29):
+
 - PyPI: `pip install hexo`
-- Repo: https://github.com/PierreLapolla/hexo
+- Repo: <https://github.com/PierreLapolla/hexo>
 - Described as: "python-chess for chess but for HexO"
 
 **Before implementing any board logic, BKE parsing, or game utilities in Python,
 the agent must evaluate this package first.** It may already provide:
+
 - Board state representation and move application
 - BKE notation parsing and serialisation
 - Win detection
@@ -426,6 +429,7 @@ but for Python-side utilities (scraper, corpus conversion, opening book), using
 a maintained community library is strictly better than maintaining our own.
 
 **Evaluation task (Phase 3 sub-task):**
+
 ```bash
 pip install hexo
 python3 -c "import hexo; help(hexo)"
@@ -434,6 +438,7 @@ python3 -c "import hexo; help(hexo)"
 # Test: does it parse all openings from our NAMED_OPENINGS table correctly?
 # Test: does it detect all winning patterns we tested in Phase 0?
 ```
+
 Document findings in `docs/reference/hexo_package_notes.md`.
 If it passes all checks, update the bootstrap pipeline to use it.
 If it has gaps, use it where it works and note what it misses.
@@ -485,6 +490,7 @@ players place 2 stones per turn. X's single opening move is a tempo gift, but O
 then gets persistent 2-stone turns from the start and effectively dictates flow.
 
 **Implications for training:**
+
 - The value head must learn asymmetric win probabilities from the opening position
 - Self-play should track Elo and win rate broken down by side (O vs X) separately
 - If O win rate in self-play exceeds ~58%, the asymmetry is being correctly learned
@@ -524,6 +530,7 @@ Community member thejackofclubs is building a "mate-in-N" puzzle extractor from
 the game archive — finding positions where one player can force a win in 2-3 moves.
 
 These positions are extremely high-signal training data if they become available:
+
 - The correct move is known (forced win)
 - The position is real (from actual community games)
 - They stress-test the policy head on the exact situations where errors are costly

@@ -26,6 +26,7 @@ All three sources are fed into a single pretrain dataset. They are complementary
 **Priority order**: human games first, then Ramora0, then random to fill gaps. Human games are the most valuable signal — they contain opening theory, formation recognition, and endgame technique that minimax at depth 3–5 won't generate.
 
 Corpus generation is configured in `configs/default.yaml`:
+
 ```yaml
 bootstrap:
   human_games_min_moves: 20          # filter out surrenders and short games
@@ -76,9 +77,10 @@ Corpus generation always takes a list of `BotProtocol` instances — never hardc
 
 ## Human game archive scraper
 
-**URLs:** 
-- https://hexo.did.science/games (42k+ games)
-- https://he-xo.com/games/ (approx 5k games)
+**URLs:**
+
+- <https://hexo.did.science/games> (42k+ games)
+- <https://he-xo.com/games/> (approx 5k games)
 
 **Volume:** 47,000+ total archived matches (as of 2026-03-29), both paginated.
 **Format:** React SPAs — session IDs in listing, individual game pages at `/games/{session_id}`.
@@ -94,7 +96,7 @@ def scrape_game_index(
     for page in range(1, max_pages + 1):
         resp = httpx.get(f"{BASE_URL}/games", params={"page": page}, timeout=10)
         soup = BeautifulSoup(resp.text, "html.parser")
-        
+
         for game_card in soup.select("[data-session-id]"):  # inspect actual HTML for selector
             is_rated = "Rated" in game_card.text
             move_count = extract_move_count(game_card)
@@ -121,7 +123,7 @@ def scrape_corpus(output_path: str = "data/human_games.npz", **kwargs):
     """Full pipeline: scrape index → fetch games → convert to tensors → save."""
     session_ids = scrape_game_index(**kwargs)
     log.info("scrape_index_complete", total=len(session_ids))
-    
+
     all_records = []
     for sid in session_ids:
         moves = scrape_game(sid)
@@ -131,6 +133,7 @@ def scrape_corpus(output_path: str = "data/human_games.npz", **kwargs):
     
     save_corpus(all_records, output_path)
     log.info("scrape_corpus_complete", positions=len(all_records), path=output_path)
+
 ```
 
 **Implementation note:** The actual HTML selectors and game page format need to be determined by the agent when implementing. The agent should fetch one game page, inspect the structure, then implement the parser. Do not guess the selectors — read the actual HTML first.
@@ -251,6 +254,7 @@ class MinimaxBot:
 ```
 
 **Recommended depths for corpus generation**:
+
 - Depth 3: fast, ~10,000 games/hour, basic tactical awareness
 - Depth 5: slower, ~1,000 games/hour, stronger tactics, better training signal
 - Depth 7+: avoid — too slow, and too strong a prior may constrain self-play
