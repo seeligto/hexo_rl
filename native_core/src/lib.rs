@@ -8,6 +8,7 @@ pub mod formations;
 pub mod game_runner;
 pub mod inference_bridge;
 pub mod mcts;
+pub mod replay_buffer;
 
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
@@ -16,6 +17,7 @@ use numpy::{PyArray1, PyArray3, PyArrayMethods};
 use board::{Board as RustBoard, Player, BOARD_SIZE};
 use game_runner::RustSelfPlayRunner;
 use inference_bridge::RustInferenceBatcher;
+use replay_buffer::RustReplayBuffer;
 
 // ── Python-visible Board wrapper ──────────────────────────────────────────────
 
@@ -387,5 +389,6 @@ fn native_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMCTSTree>()?;
     m.add_class::<RustInferenceBatcher>()?;
     m.add_class::<RustSelfPlayRunner>()?;
+    m.add_class::<RustReplayBuffer>()?;
     Ok(())
 }
