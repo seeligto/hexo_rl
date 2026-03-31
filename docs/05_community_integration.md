@@ -24,15 +24,6 @@ This document captures everything learned from the Hex Tac Toe community Discord
 
 **Do not build our own minimax bot.** The Ramora0 C++ engine (`cpp/engine.h`) is already the strongest public bot, written by imaseal, and publicly available. Use it directly to generate the bootstrap corpus.
 
-### Known bug — must fix before generating training data
-
-**File:** `cpp/engine.h`, line 1094  
-**Bug (reported by P_P):** The engine incorrectly treats a fail-low result as an exact score. When `old_alpha < v < alpha` (search fails low), the actual score is an upper bound — but the parent node, without proper alpha adjustments, treats it as exact. This can corrupt evaluations silently.
-
-**Fix location:** line 1265 — preserve the old transposition table move when the best move is not found in the current search. This is a one-liner fix standard in chess engines.
-
-**Consequence for bootstrap:** If we generate games from the unpatched engine, some positions will have incorrect evaluations baked into training data. Apply the fix before any corpus generation. The bug is documented and the fix is known — this is low-effort.
-
 ### How to use the engine
 
 The engine exposes a standard interface. Wrap it behind the community Bot API spec (see section 4) and generate games via the tournament runner in `HexTacToeBots`. This is far faster than calling it through Python subprocesses naively.
