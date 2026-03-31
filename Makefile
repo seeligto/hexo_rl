@@ -16,10 +16,6 @@ RAMORA_N ?= 100
 RAMORA_TIME ?= 0.03
 RAMORA_SIMS ?= 128
 
-BOT_GAMES_LITE ?= 100
-BOT_GAMES_FULL ?= 1000
-HUMAN_PAGES_LITE ?= 5
-HUMAN_PAGES_FULL ?= 50
 
 .PHONY: help
 help: ## Show all useful commands
@@ -162,18 +158,6 @@ eval.ramora.quick: ## Quick Ramora eval (10 games)
 eval.ramora.full: ## Full Ramora eval (100 games)
 	$(MAKE) eval.ramora.latest RAMORA_N=100 RAMORA_TIME=0.03 RAMORA_SIMS=128
 
-.PHONY: corpus.lite
-corpus.lite: ## Build small bootstrap corpus (bot + human)
-	$(PY) python/bootstrap/generate_corpus.py --bot-games $(BOT_GAMES_LITE) --human-pages $(HUMAN_PAGES_LITE)
-
-.PHONY: corpus.full
-corpus.full: ## Build larger bootstrap corpus (bot + human)
-	$(PY) python/bootstrap/generate_corpus.py --bot-games $(BOT_GAMES_FULL) --human-pages $(HUMAN_PAGES_FULL)
-
-.PHONY: corpus.fresh
-corpus.fresh: ## Rebuild corpus cache from scratch
-	$(PY) python/bootstrap/generate_corpus.py --bot-games $(BOT_GAMES_FULL) --human-pages $(HUMAN_PAGES_FULL) --force-regenerate
-
 .PHONY: pretrain.lite
 pretrain.lite: ## Short bootstrap pretrain
 	$(PY) -m python.bootstrap.pretrain --epochs 5 --use-cache
@@ -182,8 +166,3 @@ pretrain.lite: ## Short bootstrap pretrain
 pretrain.full: ## Full bootstrap pretrain
 	$(PY) -m python.bootstrap.pretrain --epochs 15 --force-regenerate
 
-.PHONY: bootstrap.lite
-bootstrap.lite: corpus.lite pretrain.lite ## Lite corpus + pretrain pipeline
-
-.PHONY: bootstrap.full
-bootstrap.full: corpus.full pretrain.full ## Full corpus + pretrain pipeline
