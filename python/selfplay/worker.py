@@ -25,7 +25,7 @@ import torch
 import torch.nn.functional as F
 
 from native_core import Board, MCTSTree
-from python.env.game_state import GameState
+from python.env.game_state import GameState, HISTORY_LEN
 from python.model.network import HexTacToeNet
 from python.selfplay.policy_projection import project_global_policy_to_local
 from python.training.replay_buffer import ReplayBuffer
@@ -98,6 +98,59 @@ class SelfPlayWorker:
 
         self.tree = MCTSTree(c_puct=self.c_puct)
 
+        # Rolling tensor buffer for the game loop (avoids per-step np.zeros + history rebuild).
+        # Reset at the start of each play_game call.
+        self._game_buf: Optional[np.ndarray] = None  # shape (K, 18, 19, 19) float16
+        self._game_K: int = 0
+
+    # ── Rolling tensor buffer ─────────────────────────────────────────────────
+
+    def _assemble_tensor(
+        self, state: GameState
+    ) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
+        """Assemble the (K, 18, 19, 19) float16 tensor using a pre-allocated rolling buffer.
+
+        On first call (or when K changes), allocates and fills from scratch.
+        On subsequent calls with the same K, performs an in-place circular shift
+        of the history planes and writes only the new current planes 0 and 8,
+        avoiding both np.zeros allocation and the 7-step history loop.
+        """
+        K = len(state.views)
+        centers = state.centers
+
+        if self._game_buf is None or K != self._game_K:
+            # Full rebuild: new game or cluster count changed.
+            self._game_K = K
+            buf = np.zeros((K, 18, _BOARD_SIZE, _BOARD_SIZE), dtype=np.float16)
+            history = state.move_history
+            for k in range(K):
+                for t in range(1, HISTORY_LEN):
+                    if t > len(history):
+                        break
+                    prior = history[-t]
+                    if k < len(prior.views):
+                        buf[k, t]     = prior.views[k][0]
+                        buf[k, 8 + t] = prior.views[k][1]
+            self._game_buf = buf
+        else:
+            # Circular shift: push all history planes one step older.
+            # planes 1..7 ← 0..6  (my-stones history)
+            # planes 9..15 ← 8..14 (opp-stones history)
+            buf = self._game_buf
+            buf[:, 1:8, :, :] = buf[:, 0:7, :, :]
+            buf[:, 9:16, :, :] = buf[:, 8:15, :, :]
+
+        # Write current-timestep planes (always overwritten).
+        for k in range(K):
+            buf[k, 0] = state.views[k][0]
+            buf[k, 8] = state.views[k][1]
+
+        # Scalar planes (broadcast across K and spatial dims).
+        buf[:, 16, :, :] = np.float16(0.0 if state.moves_remaining == 1 else 1.0)
+        buf[:, 17, :, :] = np.float16(float(state.ply % 2))
+
+        return buf, centers
+
     # ── Inference ─────────────────────────────────────────────────────────────
 
     @torch.no_grad()
@@ -115,7 +168,7 @@ class SelfPlayWorker:
         
         for board in boards:
             state = GameState.from_board(board)
-            tensor, centers = state.to_tensor(board)
+            tensor, centers = state.to_tensor()  # uses cached self.views, no second get_cluster_views
             all_tensors.append(torch.from_numpy(tensor))
             board_info.append((len(centers), centers))
             
@@ -229,6 +282,9 @@ class SelfPlayWorker:
         """
         rust_board = Board()
         state      = GameState.from_board(rust_board)
+        # Reset rolling buffer for new game.
+        self._game_buf = None
+        self._game_K = 0
 
         # Collect (tensor, mcts_policy) for each step; outcome unknown until game end.
         records: List[Tuple[np.ndarray, np.ndarray, int]] = []
@@ -253,10 +309,12 @@ class SelfPlayWorker:
             mcts_policy = self._run_mcts_with_sims(rust_board, n_sims=current_n_sims, use_dirichlet=use_dirichlet)
 
             # ── Record position ──
-            full_tensor, centers = state.to_tensor(rust_board)
+            # _assemble_tensor reuses the rolling buffer in-place, so we must
+            # copy each cluster slice before storing (buffer is overwritten next step).
+            full_tensor, centers = self._assemble_tensor(state)
             global_policy = np.array(mcts_policy, dtype=np.float32)
             for k, center in enumerate(centers):
-                state_tensor = full_tensor[k]
+                state_tensor = full_tensor[k].copy()
                 policy_arr = project_global_policy_to_local(
                     rust_board,
                     center,

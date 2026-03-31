@@ -183,12 +183,12 @@ def test_history_planes_are_filled():
     # s2 was P2's turn with stone at (1,0); s2.views[k][0] = P2 stones = non-zero.
     assert t[0, 1].any(), "t-1 my-stones plane should be non-zero (prior position recorded)"
 
-def test_to_tensor_rust_board_override():
-    """to_tensor(rust_board=...) must produce (K, 18, 19, 19) with correct stone planes."""
+def test_to_tensor_uses_cached_views():
+    """to_tensor() must produce (K, 18, 19, 19) with correct stone planes using cached self.views."""
     b = Board()
     b.apply_move(0, 0)   # P1 at (0,0); now P2's turn
     s = GameState.from_board(b)
-    t, c = s.to_tensor(rust_board=b)
+    t, c = s.to_tensor()
     assert t.shape == (1, 18, 19, 19)
     # Current player is P2; opponent (P1) stone at (0,0) is in tensor plane 8.
     assert t[0, 8, 9, 9] == 1.0, "opponent stone must appear in plane 8 of to_tensor output"
