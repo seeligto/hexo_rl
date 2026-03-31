@@ -41,7 +41,7 @@ from python.logging.dashboard import TrainingDashboard
 from python.logging.gpu_monitor import GPUMonitor
 from python.logging.setup import configure_logging
 from python.model.network import HexTacToeNet, compile_model
-from python.training.replay_buffer import ReplayBuffer
+from native_core import RustReplayBuffer
 from python.training.trainer import Trainer
 
 
@@ -211,11 +211,7 @@ def main() -> None:
         # Default warmup heuristic: enough samples for a few batches, but not so
         # high that training appears stalled on first launch.
         min_buf_size = max(128, min(512, int(train_cfg.get("batch_size", config.get("batch_size", 256)))))
-    buffer = ReplayBuffer(
-        capacity=capacity,
-        board_channels=18,
-        board_size=board_size,
-    )
+    buffer = RustReplayBuffer(capacity=capacity)
     log.info("buffer_init", capacity=capacity, min_buffer_size=min_buf_size)
 
     # ── Self-play pool ──

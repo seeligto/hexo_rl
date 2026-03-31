@@ -17,7 +17,7 @@ from native_core import RustInferenceBatcher, RustSelfPlayRunner
 from python.model.network import HexTacToeNet
 from python.selfplay.inference_server import InferenceServer
 from python.selfplay.pool import WorkerPool
-from python.training.replay_buffer import ReplayBuffer
+from native_core import RustReplayBuffer
 
 
 @pytest.mark.timeout(30)
@@ -67,7 +67,7 @@ def test_rust_batcher_blocks_batches_and_unblocks():
 def test_worker_pool_produces_positions_threaded_smoke():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
-    buffer = ReplayBuffer(capacity=10_000)
+    buffer = RustReplayBuffer(capacity=10_000)
 
     config = {
         "mcts": {

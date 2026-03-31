@@ -32,7 +32,7 @@ import yaml
 
 from python.model.network import HexTacToeNet
 from python.selfplay.worker import SelfPlayWorker
-from python.training.replay_buffer import ReplayBuffer
+from native_core import RustReplayBuffer
 from python.training.trainer import Trainer
 
 
@@ -57,7 +57,7 @@ def trained_trainer(tmp_path_factory):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model  = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
     trainer = Trainer(model, config, checkpoint_dir=tmp)
-    buffer  = ReplayBuffer(capacity=10_000, board_channels=18, board_size=19)
+    buffer  = RustReplayBuffer(capacity=10_000)
     worker  = SelfPlayWorker(trainer.model, config, device)
 
     torch.manual_seed(7)
