@@ -11,6 +11,7 @@ pub mod mcts;
 
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use numpy::{PyArray1, PyArray3, PyArrayMethods};
 
 use board::{Board as RustBoard, Player, BOARD_SIZE};
 use game_runner::RustSelfPlayRunner;
@@ -120,9 +121,27 @@ impl PyBoard {
         self.inner.to_planes()
     }
 
-    /// Returns a tuple of list of flat planes and list of (q, r) centers for each cluster.
-    pub fn get_cluster_views(&self) -> (Vec<Vec<f32>>, Vec<(i32, i32)>) {
-        self.inner.get_cluster_views()
+    /// Returns a tuple of (list of NumPy arrays, list of (q, r) centers) for each cluster.
+    ///
+    /// Each NumPy array has shape (2, 19, 19), dtype float32:
+    ///   plane 0 = current player's stones, plane 1 = opponent's stones.
+    ///
+    /// Arrays are created via zero-copy transfer of ownership from Rust allocations.
+    pub fn get_cluster_views<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(Vec<Py<PyArray3<f32>>>, Vec<(i32, i32)>)> {
+        let (views, centers) = self.inner.get_cluster_views();
+        let py_views: PyResult<Vec<_>> = views
+            .into_iter()
+            .map(|v| {
+                // Transfer Vec ownership to NumPy (zero-copy), then reshape to (2, 19, 19).
+                PyArray1::from_vec(py, v)
+                    .reshape([2_usize, board::BOARD_SIZE, board::BOARD_SIZE])
+                    .map(|arr| arr.unbind())
+            })
+            .collect();
+        Ok((py_views?, centers))
     }
 
     /// Window-relative flat index for axial (q, r).

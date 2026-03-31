@@ -1,8 +1,9 @@
 """GameState — immutable snapshot of a Hex Tac Toe board position."""
 
 from __future__ import annotations
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Tuple, List
+from typing import Deque, List, Optional, Tuple
 import numpy as np
 from native_core import Board
 
@@ -15,7 +16,10 @@ class GameState:
     moves_remaining: int
     zobrist_hash: int
     ply: int
-    move_history: Tuple[GameState, ...] = field(default_factory=tuple)
+    # deque(maxlen=HISTORY_LEN): most-recent state is at the right (index -1).
+    move_history: Deque["GameState"] = field(
+        default_factory=lambda: deque(maxlen=HISTORY_LEN)
+    )
     # Each view is shape (2, BOARD_SIZE, BOARD_SIZE): plane 0 = current player's
     # stones, plane 1 = opponent's stones.  This is what Rust's get_cluster_views()
     # returns — 2 planes, not 18.  to_tensor() assembles the full 18-plane tensor
@@ -24,13 +28,15 @@ class GameState:
     centers: List[Tuple[int, int]] = field(default_factory=list)
 
     @staticmethod
-    def from_board(rust_board: Board, history: Tuple[GameState, ...] = ()) -> "GameState":
-        views_flat, centers = rust_board.get_cluster_views()
-        # get_cluster_views returns 2-plane views (2 * 19 * 19 = 722 floats each):
-        #   plane 0 = current player's stones, plane 1 = opponent's stones.
-        # Convert to C-contiguous arrays to prevent deadlocks when passed back to Rust.
-        views = [np.ascontiguousarray(v, dtype=np.float32).reshape(2, BOARD_SIZE, BOARD_SIZE)
-                 for v in views_flat]
+    def from_board(
+        rust_board: Board,
+        history: Optional[Deque["GameState"]] = None,
+    ) -> "GameState":
+        if history is None:
+            history = deque(maxlen=HISTORY_LEN)
+        # get_cluster_views returns (list of (2,19,19) float32 numpy arrays, list of centers).
+        # Arrays are C-contiguous, created zero-copy in Rust via the numpy crate.
+        views, centers = rust_board.get_cluster_views()
         if not views:
             views = [np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
             centers = [(0, 0)]
@@ -42,15 +48,16 @@ class GameState:
             ply=rust_board.ply,
             move_history=history,
             views=views,
-            centers=centers
+            centers=centers,
         )
 
     def apply_move(self, rust_board: Board, q: int, r: int) -> "GameState":
         rust_board.apply_move(q, r)
-        new_history = (self.move_history + (self,))[-HISTORY_LEN:]
+        new_history: Deque["GameState"] = deque(self.move_history, maxlen=HISTORY_LEN)
+        new_history.append(self)
         return GameState.from_board(rust_board, history=new_history)
 
-    def to_tensor(self, rust_board: Board = None) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
+    def to_tensor(self) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
         """Encode the state into K tensors of shape (18, 19, 19) float16.
 
         The 18-plane layout follows AlphaZero's 8-step history encoding:
@@ -69,18 +76,8 @@ class GameState:
         history planes as zeros.  Full history is only available on the Python path
         (worker.py, evaluator.py, pretrain.py) which uses this method.
         """
-        if rust_board is not None:
-            views_flat, centers = rust_board.get_cluster_views()
-            current_views = [
-                np.ascontiguousarray(v, dtype=np.float32).reshape(2, BOARD_SIZE, BOARD_SIZE)
-                for v in views_flat
-            ]
-            if not current_views:
-                current_views = [np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
-                centers = [(0, 0)]
-        else:
-            current_views = self.views
-            centers = self.centers
+        current_views = self.views
+        centers = self.centers
 
         K = len(centers)
         tensor = np.zeros((K, 18, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
@@ -91,19 +88,18 @@ class GameState:
         tensor[:, 16, :, :] = mr_val
         tensor[:, 17, :, :] = ply_val
 
-        history = self.move_history  # tuple of prior GameStates, oldest first
+        history = self.move_history  # deque of prior GameStates, oldest first
 
         for k in range(K):
             # Current timestep
             tensor[k, 0] = current_views[k][0]
             tensor[k, 8] = current_views[k][1]
 
-            # Historical timesteps t-1 … t-7
+            # Historical timesteps t-1 … t-7 (deque[-1]=most recent, deque[-t]=t steps back)
             for t in range(1, HISTORY_LEN):
-                hist_idx = len(history) - t  # index into history tuple
-                if hist_idx < 0:
+                if t > len(history):
                     break  # no more history; remaining planes stay zero
-                prior = history[hist_idx]
+                prior = history[-t]
                 if k < len(prior.views):
                     tensor[k, t]     = prior.views[k][0]  # prior my-stones
                     tensor[k, 8 + t] = prior.views[k][1]  # prior opp-stones
