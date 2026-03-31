@@ -108,7 +108,70 @@ tracing::info!(
 
 ## 2. Progress display — rich
 
-### Training dashboard
+### Web dashboard (dashboard.py)
+
+A Flask + SocketIO live dashboard based on saiki77's hexbot training dashboard.
+Pure data sink — no game-engine imports. Accepts training data via REST or WebSocket.
+
+**Start the server** (run in a separate terminal before training):
+```bash
+make dashboard                        # port 5001 (default)
+make dashboard DASHBOARD_PORT=5002    # custom port
+# or directly:
+.venv/bin/python dashboard.py 5001
+```
+
+Then open `http://localhost:5001` in a browser.
+
+**Wire training to the dashboard:**
+```bash
+make train.full.dashboard             # full run + dashboard
+make train.resume.dashboard           # resume + dashboard
+# or pass flags directly:
+.venv/bin/python scripts/train.py --config configs/default.yaml \
+    --web-dashboard --web-dashboard-url http://localhost:5001
+```
+
+**DashboardClient** (`python/training/dashboard_utils.py`) — fire-and-forget bridge:
+- Background daemon thread + `queue.Queue(maxsize=512)`
+- Enqueue cost: ~0.7 µs/call — negligible vs training step time
+- Data is sent every `log_interval` training steps (default: 10)
+- If server is not running: warns once, then silently discards — never blocks training
+
+```python
+from python.training.dashboard_utils import DashboardClient
+
+client = DashboardClient(base_url="http://localhost:5001")
+client.send_game(moves=[], result=1.0)
+client.send_metrics(iteration=100, loss=0.31, elo=1055.0, gpu_util=89.5)
+client.stop()
+```
+
+**REST endpoints** (can be called directly or via DashboardClient):
+| Method | Endpoint | Body |
+|---|---|---|
+| POST | `/api/game` | `{"moves": [[q,r],...], "result": ±1.0}` |
+| POST | `/api/metric` | `{"iteration": N, "loss": F, "elo": F, ...}` |
+| GET  | `/api/stats` | — current aggregate stats |
+| GET  | `/api/losses` | — loss history |
+| GET  | `/api/elo` | — ELO history |
+| GET  | `/api/winrates` | — win-rate history |
+| GET  | `/api/resources` | — CPU/RAM history |
+
+**Performance validation (2026-03-31):**
+
+| Metric | Without dashboard | With dashboard | Delta |
+|---|---|---|---|
+| MCTS sim/s | 160,590 | 159,347 | −0.77% (run noise) |
+| Positions/hr | 1,359,008 | 1,480,651 | +8.9% (run noise) |
+| GPU utilization | 89.8% | 89.2% | −0.6% (run noise) |
+| Batch saturation | 99.1% | 99.9% | +0.8% |
+
+Conclusion: zero measurable impact on MCTS or GPU metrics.
+
+---
+
+### Terminal dashboard (rich)
 
 ```python
 # python/logging/dashboard.py

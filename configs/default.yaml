@@ -40,6 +40,7 @@ training:
   lr_schedule: cosine
   eval_interval: 100
   checkpoint_interval: 50
+  log_interval: 10        # also controls web-dashboard send frequency
 
 evaluation:
   enabled: true
