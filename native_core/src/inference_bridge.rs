@@ -151,6 +151,7 @@ pub struct RustInferenceBatcher {
     pool_receiver: flume::Receiver<Vec<f32>>,
 }
 
+#[allow(dead_code)]
 impl RustInferenceBatcher {
     pub(crate) fn submit_request_and_wait_rust(
         &self,

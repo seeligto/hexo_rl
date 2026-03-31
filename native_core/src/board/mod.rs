@@ -362,13 +362,7 @@ mod prop_tests {
     use super::*;
     use proptest::prelude::*;
 
-    fn next_u64_prop(seed: &mut u64) -> u64 {
-        *seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        *seed
-    }
-
+    // removed: superseded by splitmix128
     proptest! {
         /// apply_move_tracked + undo_move always restores the exact 128-bit Zobrist hash.
         ///

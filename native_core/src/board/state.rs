@@ -191,6 +191,11 @@ impl Board {
 
     // ── Queries ───────────────────────────────────────────────────────────────
 
+    /// Iterator over all occupied cells: yields `(&(q, r), &Cell)` pairs.
+    pub fn cells_iter(&self) -> impl Iterator<Item = (&(i32, i32), &Cell)> {
+        self.cells.iter()
+    }
+
     /// Cell at (q, r).  Returns Empty for unoccupied or out-of-window cells.
     #[inline]
     pub fn get(&self, q: i32, r: i32) -> Cell {
