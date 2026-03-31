@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use pyo3::prelude::*;
-use crate::board::{Board, BOARD_SIZE, TOTAL_CELLS, HALF};
+use crate::board::{Board, BOARD_SIZE, HALF};
 use crate::mcts::MCTSTree;
 use crate::inference_bridge::RustInferenceBatcher;
 use rand::seq::SliceRandom;
@@ -107,19 +107,14 @@ impl RustSelfPlayRunner {
                                 let (views, centers) = leaf.get_cluster_views();
                                 let k = views.len();
                                 leaf_metadata.push((k, centers));
-                                
+
                                 for view in views {
                                     let mut buffer = batcher.get_feature_buffer();
-                                    Self::encode_18_planes_to_buffer(
-                                        &view,
-                                        leaf.moves_remaining,
-                                        leaf.ply,
-                                        &mut buffer
-                                    );
+                                    // views already contain 18 planes from get_cluster_views
+                                    buffer.copy_from_slice(&view);
                                     all_batch_features.push(buffer);
                                 }
                             }
-                            
                             if all_batch_features.is_empty() { break; }
                             
                             let total_clusters: usize = leaf_metadata.iter().map(|(k, _)| *k).sum();
@@ -185,7 +180,8 @@ impl RustSelfPlayRunner {
                         let (views, centers) = board.get_cluster_views();
                         for (k, center) in centers.iter().enumerate() {
                             let mut feat = batcher.get_feature_buffer();
-                            Self::encode_18_planes_to_buffer(&views[k], board.moves_remaining, board.ply, &mut feat);
+                            // views already contain 18 planes from get_cluster_views
+                            feat.copy_from_slice(&views[k]);
                             let projected_policy = Self::aggregate_policy_to_local(&board, center, &policy);
                             records.push((feat, projected_policy, board.current_player));
                         }
@@ -261,27 +257,6 @@ impl RustSelfPlayRunner {
 }
 
 impl RustSelfPlayRunner {
-    fn encode_18_planes_to_buffer(planes: &[f32], moves_remaining: u8, ply: u32, out: &mut [f32]) {
-        // Plane 0: my stones
-        for i in 0..TOTAL_CELLS {
-            out[i] = planes[i];
-        }
-        // Plane 8: opp stones
-        for i in 0..TOTAL_CELLS {
-            out[8 * TOTAL_CELLS + i] = planes[TOTAL_CELLS + i];
-        }
-        // Plane 16: moves_remaining == 2 ? 1.0 : 0.0
-        let mr_val = if moves_remaining == 2 { 1.0 } else { 0.0 };
-        for i in 0..TOTAL_CELLS {
-            out[16 * TOTAL_CELLS + i] = mr_val;
-        }
-        // Plane 17: ply % 2
-        let ply_val = (ply % 2) as f32;
-        for i in 0..TOTAL_CELLS {
-            out[17 * TOTAL_CELLS + i] = ply_val;
-        }
-    }
-
     fn aggregate_policy(board: &Board, centers: &[(i32, i32)], cluster_policies: &[Vec<f32>]) -> Vec<f32> {
         let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
         let mut global_policy = vec![0.0; n_actions];

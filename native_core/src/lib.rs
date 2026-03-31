@@ -102,12 +102,14 @@ impl PyBoard {
         self.inner.zobrist_hash
     }
 
-    /// Encode the board as a flat list of floats for the two "current" tensor planes
-    /// (shape conceptually [2, 19, 19], returned as a flat list of length 2×361=722):
+    /// Encode the board as a flat list of floats for the 18 tensor planes
+    /// (shape conceptually [18, 19, 19], returned as a flat list of length 18×361=6498):
     ///   plane 0: current player's stones
-    ///   plane 1: opponent's stones
+    ///   plane 8: opponent's stones
+    ///   plane 16: moves_remaining == 2 ? 1.0 : 0.0
+    ///   plane 17: ply % 2
     ///
-    /// Use numpy.array(board.to_tensor(), dtype=numpy.float32).reshape(2, 19, 19).
+    /// Use numpy.array(board.to_tensor(), dtype=numpy.float32).reshape(18, 19, 19).
     pub fn to_tensor(&self) -> Vec<f32> {
         self.inner.to_planes()
     }

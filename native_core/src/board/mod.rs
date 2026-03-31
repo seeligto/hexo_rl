@@ -487,14 +487,44 @@ impl Board {
 
     // ── Tensor encoding ───────────────────────────────────────────────────────
 
-    /// Encode the board as a flat f32 array of length `2 * TOTAL_CELLS`
-    /// representing shape [2, BOARD_SIZE, BOARD_SIZE]:
-    ///   plane 0: current player's stones (window-relative indexing)
-    ///   plane 1: opponent's stones
+    /// Encode 18 planes for the neural network.
+    /// out must have length 18 * TOTAL_CELLS.
+    pub fn encode_18_planes_to_buffer(
+        &self,
+        planes_2: &[f32], // The 2-plane [my, opp] view
+        out: &mut [f32]
+    ) {
+        // Plane 0: my stones
+        for i in 0..TOTAL_CELLS {
+            out[i] = planes_2[i];
+        }
+        // Plane 8: opp stones
+        for i in 0..TOTAL_CELLS {
+            out[8 * TOTAL_CELLS + i] = planes_2[TOTAL_CELLS + i];
+        }
+        // Plane 16: moves_remaining == 2 ? 1.0 : 0.0
+        let mr_val = if self.moves_remaining == 2 { 1.0 } else { 0.0 };
+        for i in 0..TOTAL_CELLS {
+            out[16 * TOTAL_CELLS + i] = mr_val;
+        }
+        // Plane 17: ply % 2
+        let ply_val = (self.ply % 2) as f32;
+        for i in 0..TOTAL_CELLS {
+            out[17 * TOTAL_CELLS + i] = ply_val;
+        }
+        // Planes 1..7 and 9..15 are left as 0.0 (placeholder for history if needed later)
+    }
+
+    /// Encode the board as a flat f32 array of length `18 * TOTAL_CELLS`
+    /// representing shape [18, BOARD_SIZE, BOARD_SIZE]:
+    ///   plane 0: current player's stones
+    ///   plane 8: opponent's stones
+    ///   plane 16: moves_remaining == 2 ? 1.0 : 0.0
+    ///   plane 17: ply % 2
     ///
     /// Stones outside the current 19×19 window are silently omitted.
     pub fn to_planes(&self) -> Vec<f32> {
-        let mut out = vec![0.0f32; 2 * TOTAL_CELLS];
+        let mut planes_2 = vec![0.0f32; 2 * TOTAL_CELLS];
         let (my_cell, opp_cell) = match self.current_player {
             Player::One => (Cell::P1, Cell::P2),
             Player::Two => (Cell::P2, Cell::P1),
@@ -503,12 +533,15 @@ impl Board {
             let flat = self.window_flat_idx(q, r);
             if flat < TOTAL_CELLS {
                 if cell == my_cell {
-                    out[flat] = 1.0;
+                    planes_2[flat] = 1.0;
                 } else if cell == opp_cell {
-                    out[TOTAL_CELLS + flat] = 1.0;
+                    planes_2[TOTAL_CELLS + flat] = 1.0;
                 }
             }
         }
+
+        let mut out = vec![0.0f32; 18 * TOTAL_CELLS];
+        self.encode_18_planes_to_buffer(&planes_2, &mut out);
         out
     }
 
@@ -618,17 +651,19 @@ impl Board {
         };
         
         for &(cq, cr) in &final_centers {
-            let mut out = vec![0.0f32; 2 * TOTAL_CELLS];
+            let mut planes_2 = vec![0.0f32; 2 * TOTAL_CELLS];
             for (&(q, r), &cell) in self.cells.iter() {
                 let flat = Self::window_flat_idx_at(q, r, cq, cr);
                 if flat < TOTAL_CELLS {
                     if cell == my_cell {
-                        out[flat] = 1.0;
+                        planes_2[flat] = 1.0;
                     } else if cell == opp_cell {
-                        out[TOTAL_CELLS + flat] = 1.0;
+                        planes_2[TOTAL_CELLS + flat] = 1.0;
                     }
                 }
             }
+            let mut out = vec![0.0f32; 18 * TOTAL_CELLS];
+            self.encode_18_planes_to_buffer(&planes_2, &mut out);
             views.push(out);
         }
         (views, final_centers)
@@ -881,7 +916,7 @@ mod tests {
     fn empty_view_window_is_all_zeros() {
         let b = Board::new();
         let planes = b.to_planes();
-        assert_eq!(planes.len(), 2 * TOTAL_CELLS);
+        assert_eq!(planes.len(), 18 * TOTAL_CELLS);
         assert!(planes.iter().all(|x| *x == 0.0), "empty board planes must be all zero");
     }
 
