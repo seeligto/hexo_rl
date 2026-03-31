@@ -8,7 +8,7 @@ boundary plies, and reads the threshold from config.
 from __future__ import annotations
 
 import pytest
-from python.selfplay.worker import get_temperature
+from python.selfplay.utils import get_temperature
 
 
 # ── Config fixtures ──────────────────────────────────────────────────────────
