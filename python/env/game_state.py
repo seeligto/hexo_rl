@@ -23,11 +23,12 @@ class GameState:
     def from_board(rust_board: Board, history: Tuple[GameState, ...] = ()) -> "GameState":
         views_flat, centers = rust_board.get_cluster_views()
         # Convert Rust-extracted views to explicitly C-contiguous numpy arrays.
-        # This prevents potential deadlocks when these views are passed back 
+        # This prevents potential deadlocks when these views are passed back
         # to Rust functions that expect safe slice boundaries.
-        views = [np.ascontiguousarray(v, dtype=np.float32).reshape(2, BOARD_SIZE, BOARD_SIZE) for v in views_flat]
+        # get_cluster_views returns 18-plane encoded views (18 * 19 * 19 = 6498 floats).
+        views = [np.ascontiguousarray(v, dtype=np.float32).reshape(18, BOARD_SIZE, BOARD_SIZE) for v in views_flat]
         if not views:
-            views = [np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
+            views = [np.zeros((18, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
             centers = [(0, 0)]
             
         return GameState(
@@ -46,32 +47,38 @@ class GameState:
         return GameState.from_board(rust_board, history=new_history)
 
     def to_tensor(self, rust_board: Board = None) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
-        """Encode the state into K tensors of shape (18, 19, 19)."""
-        # If rust_board is provided, we re-extract views. Otherwise we use cached ones.
+        """Encode the state into K tensors of shape (18, 19, 19).
+
+        get_cluster_views() already returns fully-encoded 18-plane views:
+          plane  0:     current player's stones
+          planes 1-7:   history slots (zeros until history is wired up)
+          plane  8:     opponent's stones
+          planes 9-15:  opponent history slots (zeros until history is wired up)
+          plane 16:     moves_remaining == 2 flag
+          plane 17:     ply parity
+        """
+        # If rust_board is provided, re-extract views. Otherwise use cached ones.
         if rust_board is not None:
             views_flat, centers = rust_board.get_cluster_views()
-            views = [np.array(v, dtype=np.float32).reshape(2, BOARD_SIZE, BOARD_SIZE) for v in views_flat]
+            views = [np.ascontiguousarray(v, dtype=np.float32).reshape(18, BOARD_SIZE, BOARD_SIZE)
+                     for v in views_flat]
             if not views:
-                views = [np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
+                views = [np.zeros((18, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
                 centers = [(0, 0)]
         else:
             views = self.views
             centers = self.centers
-            
+
         K = len(centers)
-        tensor = np.zeros((K, 18, 19, 19), dtype=np.float16)
-        
+        tensor = np.empty((K, 18, 19, 19), dtype=np.float16)
         for k in range(K):
-            planes = views[k]
-            tensor[k, 0] = planes[0]
-            tensor[k, 8] = planes[1]
-            tensor[k, 16] = 0.0 if self.moves_remaining == 1 else 1.0
-            tensor[k, 17] = float(self.ply % 2)
-            
+            tensor[k] = views[k]
+
         return tensor, centers
 
     def __hash__(self) -> int:
-        return self.zobrist_hash
+        # zobrist_hash is u128; Python's hash() reduces it to Py_hash_t width.
+        return hash(self.zobrist_hash)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, GameState):
