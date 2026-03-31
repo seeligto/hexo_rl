@@ -42,6 +42,27 @@ Channel layout (18 channels, 19×19):
   17:    turn parity — 0.0 if ply is even, 1.0 if odd
 ```
 
+#### Rust / Python encoding split
+
+`Board.get_cluster_views()` (Rust) returns **2-plane snapshots** per cluster
+(plane 0 = current player's stones, plane 1 = opponent's stones — 722 floats).
+It does **not** return 18 planes because:
+
+- Planes 1–7 and 9–15 (history) require the full move sequence, which lives
+  only in Python's `GameState.move_history`.
+- Encoding 18 planes in Rust and crossing the PyO3 boundary with 6 498 zeros
+  per cluster would be a 9× overhead for no gain.
+
+`GameState.to_tensor()` (Python) assembles the final `(18, 19, 19)` tensor by
+stacking the current 2-plane snapshot with up to 7 prior snapshots from
+`move_history`. Missing history slots (early in the game) are left as zeros.
+
+The **Rust self-play hot-path** (`game_runner.rs`) has no Python history. It
+calls `Board.encode_18_planes_to_buffer()` to expand each 2-plane view to
+18 planes in-place, leaving history planes as zeros. This is a valid
+approximation for the RL warmup phase; full history encoding is available on
+the Python path (worker.py, evaluator.py, pretrain.py).
+
 ### Turn structure
 
 Turn 0: player 1 places 1 stone.
@@ -75,7 +96,11 @@ This runs in nanoseconds per move — no loop over cells, no Python overhead.
 To solve the "Attention Hijacking" (Colony Meta) exploit where the network becomes blind to distant lethal threats, we employ a Multi-Window Cluster-Based Approach. The infinite board is dynamically partitioned into distinct spatial clusters (colonies).
 
 Input:
-- `K` dynamic `local_map` tensors: Shape `(K, 18, 19, 19)` float16. The Rust core groups active stones into K distinct clusters (distanced by max 8 cells). A 19×19 sliding window is centered on each cluster's centroid.
+- `K` dynamic `local_map` tensors: Shape `(K, 18, 19, 19)` float16. The Rust
+  core groups active stones into K distinct clusters (distanced by max 8 cells)
+  and returns 2-plane snapshots per cluster via `get_cluster_views()`.
+  `GameState.to_tensor()` assembles the full 18-plane tensor (see "Tensor
+  encoding" above).
 
 Backbone (Single ResNet-10 Trunk):
 - Processes the `K` tensors as a single batch (effective batch size = batch_size * K) through a highly optimized 19×19 ResNet-10.

@@ -110,8 +110,11 @@ impl RustSelfPlayRunner {
 
                                 for view in views {
                                     let mut buffer = batcher.get_feature_buffer();
-                                    // views already contain 18 planes from get_cluster_views
-                                    buffer.copy_from_slice(&view);
+                                    // get_cluster_views returns 2-plane views (722 floats).
+                                    // Expand to 18 planes in-place for the network;
+                                    // history planes 1-7 and 9-15 are zeros (Rust has no
+                                    // Python move_history — see get_cluster_views doc).
+                                    leaf.encode_18_planes_to_buffer(&view, &mut buffer);
                                     all_batch_features.push(buffer);
                                 }
                             }
@@ -180,8 +183,8 @@ impl RustSelfPlayRunner {
                         let (views, centers) = board.get_cluster_views();
                         for (k, center) in centers.iter().enumerate() {
                             let mut feat = batcher.get_feature_buffer();
-                            // views already contain 18 planes from get_cluster_views
-                            feat.copy_from_slice(&views[k]);
+                            // get_cluster_views returns 2-plane views; expand to 18 for storage.
+                            board.encode_18_planes_to_buffer(&views[k], &mut feat);
                             let projected_policy = Self::aggregate_policy_to_local(&board, center, &policy);
                             records.push((feat, projected_policy, board.current_player));
                         }
