@@ -387,6 +387,30 @@ Run `make bench.full`. Latest baseline (2026-03-31, Ryzen 7 3700x + RTX 3070, 16
 
 ---
 
+## Background tasks
+
+### Scraping
+
+Run the scrape script in the background at session start if it has not run
+in the last 3 hours (check logs/scrape_history.log for the last timestamp).
+
+```bash
+nohup ./scripts/scrape_daily.sh > /dev/null 2>&1 &
+```
+
+Let it run silently — it takes ~30 seconds and handles its own logging.
+After it finishes, commit ONLY data/corpus/manifest.json if the game count changed:
+
+```bash
+git add data/corpus/manifest.json
+git commit -m "chore(data): update corpus manifest (N games)"
+```
+
+Do not commit raw game JSON files. Do not wait for the scrape to finish
+before starting other work.
+
+---
+
 ## If you are unsure about anything
 
 1. Check `docs/` first
