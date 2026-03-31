@@ -205,7 +205,9 @@ mod tests {
     // ── New sliding-window tests ───────────────────────────────────────────────
 
     #[test]
-    fn empty_view_window_is_all_zeros() {
+    // Tests the Rust hot-path `to_planes()` method (single-window, 18-plane encoding).
+    // This is NOT the Python-side split-responsibility path (get_cluster_views returns 2 planes).
+    fn to_planes_empty_board_all_zeros() {
         let b = Board::new();
         let planes = b.to_planes();
         assert_eq!(planes.len(), 18 * TOTAL_CELLS);
@@ -213,7 +215,10 @@ mod tests {
     }
 
     #[test]
-    fn window_slides_not_clips() {
+    // Tests internal single-window helpers (window_center / in_window) used by
+    // MCTS move generation and the Rust hot-path to_planes(). NOT the multi-cluster
+    // get_cluster_views path used by Python GameState.
+    fn single_window_center_slides_with_bbox() {
         // After P1@(0,0) and P2@(8,0) the window must slide right.
         // Both stones must remain visible; the left side must also be accessible.
         let mut b = Board::new();
@@ -347,5 +352,101 @@ mod tests {
             "P1 stone should be in opponent plane (offset TOTAL_CELLS)");
         assert_eq!(views[0][origin_flat], 0.0,
             "current player (P2) has no stones yet");
+    }
+}
+
+// ── Property-based tests ───────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn next_u64_prop(seed: &mut u64) -> u64 {
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *seed
+    }
+
+    proptest! {
+        /// apply_move_tracked + undo_move always restores the exact 128-bit Zobrist hash.
+        ///
+        /// Generates a random sequence of up to 20 moves, applies all of them, then
+        /// undoes them all in reverse order. The final hash must equal the initial hash
+        /// of an empty board, regardless of the move sequence.
+        #[test]
+        fn undo_restores_hash(indices in proptest::collection::vec(0usize..361, 1..=20usize)) {
+            let mut board = Board::new();
+            let initial_hash = board.zobrist_hash;
+            let mut diffs = Vec::new();
+
+            for idx in &indices {
+                let legal = board.legal_moves();
+                if legal.is_empty() { break; }
+                let (q, r) = legal[idx % legal.len()];
+                let diff = board.apply_move_tracked(q, r).expect("legal move must succeed");
+                diffs.push(diff);
+            }
+
+            while let Some(diff) = diffs.pop() {
+                board.undo_move(diff);
+            }
+
+            prop_assert_eq!(
+                board.zobrist_hash,
+                initial_hash,
+                "undo sequence must restore the exact 128-bit Zobrist hash"
+            );
+            prop_assert_eq!(board.ply, 0, "undo must restore ply to 0");
+            prop_assert_eq!(board.cells.len(), 0, "undo must restore empty board");
+            prop_assert_eq!(board.has_stones, false, "has_stones must be false after full undo");
+        }
+
+        /// Partial undo/redo: undo k steps then replay the same k moves → same hash.
+        ///
+        /// This proves that undo_move is perfectly inverse to apply_move, not just for
+        /// a full sequence but for any prefix of arbitrary length.
+        #[test]
+        fn partial_undo_redo_preserves_hash(
+            indices in proptest::collection::vec(0usize..361, 2..=15usize),
+            undo_fraction in 1usize..=8usize,
+        ) {
+            let mut board = Board::new();
+            let mut applied: Vec<(i32, i32)> = Vec::new();
+            let mut diffs: Vec<MoveDiff> = Vec::new();
+
+            for idx in &indices {
+                let legal = board.legal_moves();
+                if legal.is_empty() { break; }
+                let (q, r) = legal[idx % legal.len()];
+                let diff = board.apply_move_tracked(q, r).expect("legal move must succeed");
+                applied.push((q, r));
+                diffs.push(diff);
+            }
+
+            if applied.is_empty() { return Ok(()); }
+
+            let hash_after_all = board.zobrist_hash;
+            let k = undo_fraction.min(applied.len());
+
+            // Undo the last k moves
+            let to_redo: Vec<(i32, i32)> = applied[applied.len() - k..].to_vec();
+            for _ in 0..k {
+                let diff = diffs.pop().unwrap();
+                board.undo_move(diff);
+            }
+
+            // Replay the same k moves
+            for (q, r) in &to_redo {
+                board.apply_move(*q, *r).expect("replayed move must be legal");
+            }
+
+            prop_assert_eq!(
+                board.zobrist_hash,
+                hash_after_all,
+                "partial undo then redo must restore the exact 128-bit hash"
+            );
+        }
     }
 }

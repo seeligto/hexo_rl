@@ -120,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn xor_incremental_matches_bulk() {
+    fn xor_incremental_matches_bulk_deterministic() {
         // Place three stones and verify that XOR-ing the keys gives a consistent hash.
         let cells = [10usize, 50, 200];
         let players = [0usize, 1, 0];
@@ -137,5 +137,65 @@ mod tests {
         }
 
         assert_eq!(hash, hash2, "hash must be order-independent");
+    }
+}
+
+// ── Property-based tests ───────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// XOR of any set of Zobrist keys is order-independent (commutativity).
+        ///
+        /// This is the mathematical property that makes incremental Zobrist hashing
+        /// correct: the final hash depends only on the set of stones, not the order
+        /// they were placed or removed.
+        #[test]
+        fn xor_is_commutative(
+            pairs in proptest::collection::vec((0usize..TOTAL_CELLS, 0usize..2usize), 1..=30usize),
+        ) {
+            let mut h_forward = 0u128;
+            for &(cell, player) in &pairs {
+                h_forward ^= ZobristTable::get(cell, player);
+            }
+            let mut h_reverse = 0u128;
+            for &(cell, player) in pairs.iter().rev() {
+                h_reverse ^= ZobristTable::get(cell, player);
+            }
+            prop_assert_eq!(h_forward, h_reverse,
+                "XOR of Zobrist keys must be order-independent (commutative)");
+        }
+
+        /// Each Zobrist key is self-inverse: key XOR key == 0.
+        ///
+        /// This underpins undo_move: XOR-ing the same key twice cancels it out,
+        /// restoring the hash to its state before the move.
+        #[test]
+        fn xor_self_inverse(cell in 0usize..TOTAL_CELLS, player in 0usize..2usize) {
+            let key = ZobristTable::get(cell, player);
+            prop_assert_ne!(key, 0u128, "Zobrist key must be non-zero");
+            prop_assert_eq!(key ^ key, 0u128, "key XOR itself must be zero (self-inverse)");
+        }
+
+        /// Distinct (cell, player) pairs must yield distinct keys (collision resistance).
+        ///
+        /// Proves that no two different stone placements share a key, which would
+        /// cause hash collisions between distinct board states.
+        #[test]
+        fn distinct_placements_have_distinct_keys(
+            a in 0usize..TOTAL_CELLS,
+            b in 0usize..TOTAL_CELLS,
+            player in 0usize..2usize,
+        ) {
+            prop_assume!(a != b);
+            prop_assert_ne!(
+                ZobristTable::get(a, player),
+                ZobristTable::get(b, player),
+                "distinct cell indices must have distinct Zobrist keys"
+            );
+        }
     }
 }

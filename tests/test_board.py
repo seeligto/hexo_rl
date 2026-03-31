@@ -398,39 +398,47 @@ def _build_p1_win(p1_cells: list) -> "Board":
     return b
 
 
-def test_twenty_hand_crafted_winning_positions():
+_WINNING_POSITIONS = [
+    # (description, q_start, r_start, dq, dr)
+    ("E  center",     0,  0,  1,  0),
+    ("E  top row",    0,  9,  1,  0),
+    ("E  bottom row", 0, -9,  1,  0),
+    ("E  low q",     -9,  0,  1,  0),
+    ("E  high q",     4,  0,  1,  0),
+    ("E  corner",    -9,  9,  1,  0),
+    ("NE center",     0, -3,  0,  1),
+    ("NE low q",     -9, -3,  0,  1),
+    ("NE high q",     9, -3,  0,  1),
+    ("NE low r",      0, -9,  0,  1),
+    ("NE high r",     0,  4,  0,  1),
+    ("NE corner",    -9, -9,  0,  1),
+    ("SE center",    -3,  3,  1, -1),
+    ("SE top r",     -3,  9,  1, -1),
+    ("SE low r",     -3, -4,  1, -1),
+    ("SE low q",     -9,  9,  1, -1),
+    ("SE high q",     4,  9,  1, -1),
+    ("NW center",     3, -3, -1,  1),
+    ("NW corner",     9, -9, -1,  1),
+    ("NW top",        9,  4, -1,  1),
+]
+
+
+@pytest.mark.parametrize(
+    "desc,q0,r0,dq,dr",
+    _WINNING_POSITIONS,
+    ids=[p[0].strip() for p in _WINNING_POSITIONS],
+)
+def test_hand_crafted_winning_position(desc: str, q0: int, r0: int, dq: int, dr: int) -> None:
+    """Given: P1 plays 6 in a row at a specific location and axis.
+    When: the board is evaluated.
+    Then: check_win() is True and winner() is 1.
+
+    Covers E, NE, SE/NW axes at 20 distinct board locations including corners and edges.
     """
-    20 hand-crafted positions, each a 6-in-a-row, verified by building the board
-    and calling check_win(). Covers E, NE, SE/NW axes at various board locations.
-    """
-    positions = [
-        # (description, q_start, r_start, dq, dr)
-        ("E  center",     0,  0,  1,  0),
-        ("E  top row",    0,  9,  1,  0),
-        ("E  bottom row", 0, -9,  1,  0),
-        ("E  low q",     -9,  0,  1,  0),
-        ("E  high q",     4,  0,  1,  0),
-        ("E  corner",    -9,  9,  1,  0),
-        ("NE center",     0, -3,  0,  1),
-        ("NE low q",     -9, -3,  0,  1),
-        ("NE high q",     9, -3,  0,  1),
-        ("NE low r",      0, -9,  0,  1),
-        ("NE high r",     0,  4,  0,  1),
-        ("NE corner",    -9, -9,  0,  1),
-        ("SE center",    -3,  3,  1, -1),
-        ("SE top r",     -3,  9,  1, -1),
-        ("SE low r",     -3, -4,  1, -1),
-        ("SE low q",     -9,  9,  1, -1),
-        ("SE high q",     4,  9,  1, -1),
-        ("NW center",     3, -3, -1,  1),
-        ("NW corner",     9, -9, -1,  1),
-        ("NW top",        9,  4, -1,  1),
-    ]
-    for desc, q0, r0, dq, dr in positions:
-        cells = [(q0 + i * dq, r0 + i * dr) for i in range(6)]
-        valid = all(-9 <= q <= 9 and -9 <= r <= 9 for q, r in cells)
-        if not valid:
-            pytest.skip(f"position {desc} has out-of-bounds cells: {cells}")
-        b = _build_p1_win(cells)
-        assert b.check_win() and b.winner() == 1, \
-            f"Expected P1 win at '{desc}': cells={cells}"
+    cells = [(q0 + i * dq, r0 + i * dr) for i in range(6)]
+    valid = all(-9 <= q <= 9 and -9 <= r <= 9 for q, r in cells)
+    if not valid:
+        pytest.skip(f"position '{desc}' has out-of-bounds cells: {cells}")
+    b = _build_p1_win(cells)
+    assert b.check_win() and b.winner() == 1, \
+        f"Expected P1 win at '{desc}': cells={cells}"
