@@ -42,9 +42,13 @@ native.build: ## Build/install Rust extension via maturin
 test.py: ## Run python test suite
 	$(PY) -m pytest -q tests
 
+.PHONY: test.py.fast
+test.py.fast: ## Python unit tests only — skips slow self-play integration (~20s)
+	$(PY) -m pytest -q tests --ignore=tests/test_phase1_exit_criteria.py
+
 .PHONY: test.focus
-test.focus: ## Run focused inference/pool benchmark smoke tests
-	$(PY) -m pytest -q tests/test_inference_server.py tests/test_worker_pool.py tests/test_benchmark_smoke.py
+test.focus: ## Run focused buffer/inference/pool smoke tests
+	$(PY) -m pytest -q tests/test_rust_replay_buffer.py tests/test_inference_server.py tests/test_worker_pool.py tests/test_benchmark_smoke.py
 
 .PHONY: test.rust
 test.rust: ## Run Rust tests
@@ -52,6 +56,13 @@ test.rust: ## Run Rust tests
 
 .PHONY: test.all
 test.all: test.rust test.py ## Run rust + python tests
+
+.PHONY: ci
+ci: test.all bench.quick ## Full pre-push gate: all tests + quick benchmark
+
+.PHONY: bench.quick
+bench.quick: ## Fast sanity benchmark — did I break anything? (~30s)
+	$(PY) scripts/benchmark.py --config $(CONFIG_LITE) --no-compile --quick --mcts-sims 2000 --pool-workers $(N_CORES) --pool-duration 10
 
 .PHONY: bench.lite
 bench.lite: ## Quick local benchmark pass
