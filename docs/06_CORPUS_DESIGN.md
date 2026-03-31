@@ -1,6 +1,6 @@
 # Corpus Pipeline Design — `python/corpus/`
 
-> Design document only. No implementation. Last updated: 2026-04-01.
+> Last updated: 2026-04-01. Q1–Q6 resolved; implementation in progress.
 
 ---
 
@@ -323,45 +323,49 @@ Log this every 100 games or at pipeline completion.
 
 ---
 
-## 7. Open Questions
+## 7. Resolved Decisions
 
-The following require a decision before implementation begins.
+All open questions resolved 2026-04-01:
 
-**Q1. Dedup hash scope**
-Ordered vs. sorted was resolved above (ordered). But: should dedup be run across
-*both* `HumanGameSource` and `HybridGameSource`? A hybrid game's move list will never
-match a full human game's move list (different lengths), so cross-source dedup does
-nothing. Recommend: dedup within each source only. Confirm this is acceptable.
+**Q1. Dedup hash scope — within each source only.**
+Cross-source dedup is unnecessary: a hybrid game's move list (human opening + bot
+continuation) can never match a full human game's move list. Dedup runs per-source,
+in-memory, not persisted.
 
-**Q2. Human opening positions — include in training or not?**
-For a hybrid game, should the training triples from the human opening portion (plies
-0..handoff-1) be included in the buffer, or only the bot portion (plies handoff..end)?
-Arguments for including: more positions per game, human moves are high quality.
-Arguments against: the value label for those positions is the *hybrid outcome*, which
-may not match the human game's outcome (flip). This is a training signal quality
-question, not a correctness question. **Decision needed.**
+**Q2. Human opening positions — include in training.**
+All positions in a hybrid game (plies 0..handoff-1 AND the bot continuation) are
+included in the training buffer. The value label for ALL positions is the **hybrid
+terminal outcome** (not the original human game's winner). This is the correct label
+because it reflects what actually happened in the game the network trains on. The
+original human winner is retained in `metadata["human_winner"]` for the value-flip
+diagnostic metric.
 
-**Q3. `games_per_seed` variation strategy**
-SealBot is time-limited and not fully deterministic, but if the host system is
-consistently fast, continuations may converge. Should we deliberately inject entropy
-(e.g. random first-move perturbation from the handoff position) to ensure 3 genuinely
-distinct continuations? Or rely on timing variance? **Decision needed before measuring
-whether games_per_seed=3 actually produces diverse continuations.**
+**Q3. Entropy injection — explicit random move per continuation.**
+For continuation index `i`, apply **one random legal move** from the handoff position
+(using `rng_seed + i` as the seed) before handing off to SealBot. This guarantees
+distinct continuations regardless of wall-clock variance in SealBot's time-limited
+search.
 
-**Q4. Hybrid game: which player does the bot play as?**
-With the snap-to-turn-boundary rule and N=8, the bot always enters as P2.
-Is it acceptable that P1's moves in the bot continuation are played by a *second
-instance* of SealBotBot, or should the bot play both sides? Both-sides is simpler
-(one bot instance per game, alternating). One-side-each is more diverse. The current
-`BotProtocol` does not distinguish — **confirm which configuration is intended.**
+**Q4. Bot plays both sides.**
+One `SealBotBot` instance per game, alternating turns. This is simpler (one instance,
+no coordination) and produces self-consistent games. Tag `metadata["bot_plays_as"]`
+for analysis.
 
-**Q5. Minimum game length filter for hybrid games**
-If SealBot continuation is very short (e.g. 3 plies, because it finds a forced win),
-should the hybrid game be included? Very short continuations produce few positions.
-Recommend a minimum of 10 bot plies (configurable). Confirm this threshold.
+**Handoff player alternation (added to avoid systematic P2-only bias):**
+The turn-boundary snap at N=8 always lands at ply 9 = P2's start-of-turn.
+With `games_per_seed=3`, alternate the handoff player by continuation index:
+- i=0, i=2: natural snap → bot enters as P2 (ply 9)
+- i=1: after natural snap, replay one more full P2 turn (2 moves from human game;
+  use random if human game is exhausted) → bot enters as P1 (ply 11)
 
-**Q6. Persistence of the dedup set**
-The current design does not persist the seen-hash set across runs. This means the
-same human game will enter the buffer in every pipeline run. Is that acceptable, or
-should we write `data/corpus/seen_hashes.pkl`? For a ring buffer that replaces old
-positions, multi-run duplication is not harmful — but worth confirming explicitly.
+Human corpus P1 win rate: 50.7% (103/203) — balanced; no additional sampling
+correction needed.
+
+**Q5. Minimum 10 bot plies.**
+Hybrid games where the post-handoff continuation (entropy move + bot moves) totals
+fewer than 10 plies are discarded. Logged as `hybrid_game_too_short`. Threshold is
+configurable via `HybridGameSource(min_bot_plies=10)`.
+
+**Q6. No dedup persistence across runs.**
+The seen-hash set is in-memory only and rebuilt each pipeline run. The ring buffer's
+position-level replacement already handles multi-run re-entry gracefully.
