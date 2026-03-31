@@ -100,17 +100,23 @@ impl Node {
     /// Mean value Q(s,a) from this node's player's perspective, adjusted for
     /// any outstanding virtual losses.
     ///
-    /// Effective formula:
-    ///   Q_eff = (w_value − vl_count × penalty) / (n_visits + vl_count)
+    /// Effective formula (Adaptive):
+    ///   Q_eff = (w_value - sqrt(vl_count) * penalty) / (n_visits + vl_count)
     ///
-    /// When `vl_count == 0` and `n_visits == 0` this returns 0.0 (unvisited).
+    /// Standard formula:
+    ///   Q_eff = (w_value - vl_count * penalty) / (n_visits + vl_count)
     #[inline]
-    pub fn q_value_vl(&self, penalty: f32) -> f32 {
+    pub fn q_value_vl(&self, penalty: f32, adaptive: bool) -> f32 {
         let effective_n = self.n_visits + self.virtual_loss_count;
         if effective_n == 0 {
             0.0
         } else {
-            (self.w_value - self.virtual_loss_count as f32 * penalty) / effective_n as f32
+            let total_penalty = if adaptive {
+                (self.virtual_loss_count as f32).sqrt() * penalty
+            } else {
+                self.virtual_loss_count as f32 * penalty
+            };
+            (self.w_value - total_penalty) / effective_n as f32
         }
     }
 
@@ -134,6 +140,12 @@ pub struct MCTSTree {
     pub(crate) c_puct: f32,
     /// Virtual-loss penalty (default 1.0).
     pub(crate) virtual_loss: f32,
+    /// Adaptive virtual loss enabled?
+    pub(crate) vl_adaptive: bool,
+    /// Benchmarking: total number of selection overlaps.
+    pub selection_overlap_count: u32,
+    /// Benchmarking: maximum depth reached during selections.
+    pub max_depth_observed: u32,
     /// Leaves selected by the most recent `select_leaves` call, waiting for
     /// `expand_and_backup`. Contains `(node_index, path_diffs)`.
     pending: Vec<(u32, Vec<MoveDiff>)>,
@@ -154,6 +166,9 @@ impl MCTSTree {
             root_board: Board::new(),
             c_puct,
             virtual_loss,
+            vl_adaptive: false,
+            selection_overlap_count: 0,
+            max_depth_observed: 0,
             pending: Vec::new(),
             transposition_table: FxHashMap::default(),
         }
@@ -169,6 +184,8 @@ impl MCTSTree {
         self.pool[0].moves_remaining = mr;
         self.next_free = 1;
         self.pending.clear();
+        self.selection_overlap_count = 0;
+        self.max_depth_observed = 0;
     }
 
     // ── PUCT ─────────────────────────────────────────────────────────────────
@@ -187,9 +204,9 @@ impl MCTSTree {
         let parent = &self.pool[parent_idx as usize];
 
         let q = if parent.moves_remaining == 1 {
-            -child.q_value_vl(self.virtual_loss) // turn changed → flip perspective
+            -child.q_value_vl(self.virtual_loss, self.vl_adaptive) // turn changed → flip perspective
         } else {
-            child.q_value_vl(self.virtual_loss)  // same player's second move in a turn
+            child.q_value_vl(self.virtual_loss, self.vl_adaptive)  // same player's second move in a turn
         };
 
         let u = self.c_puct * child.prior * parent_n.sqrt()
@@ -208,12 +225,16 @@ impl MCTSTree {
     /// Returns the selected leaf node index and tracks board diffs in `diffs`.
     fn select_one_leaf(&mut self, board: &mut Board, diffs: &mut Vec<MoveDiff>) -> u32 {
         let mut cur: u32 = 0;
+        let mut depth = 0;
         loop {
             // Apply virtual loss to this node before we inspect it.
             self.pool[cur as usize].virtual_loss_count += 1;
 
             let node = &self.pool[cur as usize];
             if node.is_terminal || !node.is_expanded() {
+                if depth > self.max_depth_observed {
+                    self.max_depth_observed = depth;
+                }
                 return cur;
             }
 
@@ -241,6 +262,7 @@ impl MCTSTree {
             diffs.push(diff);
 
             cur = best;
+            depth += 1;
         }
     }
 
@@ -258,7 +280,11 @@ impl MCTSTree {
         let mut diffs = Vec::with_capacity(32);
 
         let mut i = 0;
-        while i < n {
+        let mut attempts = 0;
+        let max_attempts = n * 4;
+
+        while i < n && attempts < max_attempts {
+            attempts += 1;
             diffs.clear();
             let leaf_idx = self.select_one_leaf(&mut board, &mut diffs);
             
@@ -266,6 +292,7 @@ impl MCTSTree {
             if self.pending.iter().any(|(idx, _)| *idx == leaf_idx) {
                 // Undo the VL we just applied on this redundant path.
                 self.undo_virtual_loss(leaf_idx);
+                self.selection_overlap_count += 1;
                 while let Some(diff) = diffs.pop() {
                     board.undo_move(diff);
                 }
@@ -926,7 +953,7 @@ mod tests {
             virtual_loss_count: 2,
         };
         // Q_eff = (2.0 - 2*1.0) / (4 + 2) = 0.0 / 6 = 0.0
-        let q = node.q_value_vl(VIRTUAL_LOSS_PENALTY);
+        let q = node.q_value_vl(VIRTUAL_LOSS_PENALTY, false);
         assert!(
             q.abs() < 1e-6,
             "Q should be 0.0 with 2 VL on node with w=2.0, n=4: got {q}"
