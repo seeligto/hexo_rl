@@ -4,3 +4,6 @@
 [submodule "vendor/bots/httt_collection"]
 	path = vendor/bots/httt_collection
 	url = https://github.com/Ramora0/HexTacToeBots
+[submodule "vendor/bots/sealbot"]
+	path = vendor/bots/sealbot
+	url = https://github.com/Ramora0/SealBot
