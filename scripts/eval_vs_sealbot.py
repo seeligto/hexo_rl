@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Evaluate one or many checkpoints against Ramora and record results.
+"""Evaluate one or many checkpoints against SealBot and record results.
 
 Examples:
-  .venv/bin/python scripts/eval_vs_ramora.py --latest --n-games 10
-  .venv/bin/python scripts/eval_vs_ramora.py --latest --n-games 100 --time-limit 0.03 --model-sims 96
-  .venv/bin/python scripts/eval_vs_ramora.py --all-checkpoints --every 10 --n-games 20
+  .venv/bin/python scripts/eval_vs_sealbot.py --latest --n-games 10
+  .venv/bin/python scripts/eval_vs_sealbot.py --latest --n-games 100 --time-limit 0.03 --model-sims 96
+  .venv/bin/python scripts/eval_vs_sealbot.py --all-checkpoints --every 10 --n-games 20
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Evaluate checkpoints vs Ramora")
+    p = argparse.ArgumentParser(description="Evaluate checkpoints vs SealBot")
     p.add_argument("--config", default="configs/default.yaml", help="Config path")
     p.add_argument("--checkpoint", default=None, help="Specific checkpoint path")
     p.add_argument("--latest", action="store_true", help="Use latest checkpoint")
@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--every", type=int, default=1, help="Evaluate every Nth checkpoint when using --all-checkpoints")
     p.add_argument("--max-checkpoints", type=int, default=0, help="Limit number of checkpoints (0 = all)")
     p.add_argument("--n-games", type=int, default=10, help="Number of games per checkpoint (recommend 10+; 100 for stronger estimate)")
-    p.add_argument("--time-limit", type=float, default=0.03, help="Ramora think time per move in seconds")
+    p.add_argument("--time-limit", type=float, default=0.03, help="SealBot think time per move in seconds")
     p.add_argument("--model-sims", type=int, default=96, help="Model MCTS simulations per move")
     p.add_argument("--out", default=None, help="Optional output JSONL path")
     return p.parse_args()
@@ -83,7 +83,7 @@ def main() -> None:
         cfg = yaml.safe_load(f)
 
     cfg.setdefault("evaluation", {})
-    cfg["evaluation"]["ramora_model_sims"] = int(args.model_sims)
+    cfg["evaluation"]["sealbot_model_sims"] = int(args.model_sims)
 
     ckpts = resolve_checkpoints(args)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -91,7 +91,7 @@ def main() -> None:
     out_path = (
         Path(args.out)
         if args.out
-        else Path("logs") / f"ramora_eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+        else Path("logs") / f"sealbot_eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -104,13 +104,13 @@ def main() -> None:
             fallback_config=cfg,
         )
         evaluator = Evaluator(trainer.model, device, cfg)
-        wr = evaluator.evaluate_vs_ramora(
+        wr = evaluator.evaluate_vs_sealbot(
             n_games=int(args.n_games),
             time_limit=float(args.time_limit),
             model_sims=int(args.model_sims),
         )
         rec = {
-            "event": "eval_vs_ramora",
+            "event": "eval_vs_sealbot",
             "checkpoint": str(ckpt),
             "step": checkpoint_step(ckpt),
             "n_games": int(args.n_games),

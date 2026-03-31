@@ -174,6 +174,10 @@ class DataStore:
                     loss_entry.update(m["loss"])
                 else:
                     loss_entry["total"] = m["loss"]
+                if m.get("policy_loss") is not None:
+                    loss_entry["policy"] = m["policy_loss"]
+                if m.get("value_loss") is not None:
+                    loss_entry["value"] = m["value_loss"]
                 self.loss_history.append(loss_entry)
             if "wins" in m:
                 w = m["wins"]
@@ -218,6 +222,10 @@ class DataStore:
                 "win_p0": round(self._iter_wins[0] / total_w * 100, 1),
                 "win_p1": round(self._iter_wins[1] / total_w * 100, 1),
                 "latest_loss": latest.get("loss"),
+                "latest_policy_loss": latest.get("policy_loss"),
+                "latest_value_loss": latest.get("value_loss"),
+                "fill_pct": latest.get("fill_pct"),
+                "positions_hr": latest.get("positions_hr"),
                 "buffer_size": latest.get("buffer_size", 0),
                 "self_play_time": latest.get("self_play_time", 0),
             }
@@ -449,16 +457,17 @@ main{display:flex;flex:1;overflow:hidden}
 #hex-canvas-wrap{flex:1;position:relative;width:100%;min-height:0}
 #hex-canvas{position:absolute;top:0;left:0;width:100%;height:100%;border:1px solid #eee}
 .game-info{font-size:11px;letter-spacing:1px;min-height:18px;margin-top:8px;flex-shrink:0}
-footer{padding:12px 24px;display:flex;gap:20px;flex-wrap:wrap;font-size:11px;letter-spacing:.5px;border-top:1px solid #000}
-footer b{font-weight:700}
-footer span{white-space:nowrap}
-.sep{color:#ccc}
-.res-bar{display:flex;gap:4px;align-items:center}
-.res-meter{width:40px;height:8px;border:1px solid #000;display:inline-block;position:relative;vertical-align:middle}
+footer{border-top:2px solid #000;font:11px 'SF Mono','Courier New',monospace;flex-shrink:0}
+.frow{display:flex;align-items:center;gap:0;padding:5px 20px;border-bottom:1px solid #eee}
+.frow:last-child{border-bottom:none}
+.fgroup-label{font-weight:700;letter-spacing:2px;font-size:9px;text-transform:uppercase;
+  width:76px;flex-shrink:0;color:#888}
+.frow b{font-weight:700}
+.frow span{white-space:nowrap;margin-right:16px}
+.sep{color:#ccc;margin-right:16px}
+.res-bar{display:flex;gap:4px;align-items:center;margin-right:16px}
+.res-meter{width:36px;height:7px;border:1px solid #000;display:inline-block;position:relative;vertical-align:middle}
 .res-meter-fill{height:100%;background:#000;transition:width .3s}
-#live-stats{width:100%;padding:0 0 12px 0;font:11px 'SF Mono','Courier New',monospace;
-  border-bottom:1px solid #eee;margin-bottom:12px}
-#live-stats .row{display:flex;justify-content:space-between;margin-bottom:4px}
 #progress-wrap{width:100%;margin-bottom:8px;display:none}
 .progress-bar{display:flex;align-items:center;gap:8px}
 .progress-track{flex:1;height:6px;background:#eee;border-radius:3px;overflow:hidden}
@@ -517,18 +526,6 @@ footer span{white-space:nowrap}
 </div>
 <main>
   <div class="left">
-    <div id="live-stats">
-      <div class="row">
-        <span><b>Iteration</b> <span id="ls-iter">&mdash;</span></span>
-        <span><b>Workers</b> <span id="ls-workers">&mdash;</span></span>
-        <span><b>Games</b> <span id="ls-games">&mdash;</span></span>
-      </div>
-      <div class="row">
-        <span><b>Avg Length</b> <span id="ls-len">&mdash;</span></span>
-        <span><b>Win%</b> P0:<span id="ls-w0">&mdash;</span> P1:<span id="ls-w1">&mdash;</span></span>
-        <span><b>Loss</b> <span id="ls-loss">&mdash;</span></span>
-      </div>
-    </div>
     <div id="progress-wrap">
       <div class="progress-bar">
         <div class="progress-track">
@@ -590,27 +587,41 @@ footer span{white-space:nowrap}
         <div class="canvas-wrap"><canvas id="speed-chart"></canvas></div>
       </div>
     </div>
-    <div class="chart-box" id="box-resources">
-      <div class="chart-header" onclick="toggleChart('resources')">
-        <span class="toggle" id="tog-resources">&#9660;</span> Resources (CPU / RAM)
-      </div>
-      <div class="chart-body" id="body-resources">
-        <div class="canvas-wrap" style="min-height:140px;height:140px"><canvas id="res-chart"></canvas></div>
-      </div>
-    </div>
   </div>
 </main>
 <footer>
-  <span>Iter <b id="s-iter">0</b></span>
-  <span class="sep">|</span>
-  <span>Games <b id="s-games">0</b></span>
-  <span class="sep">|</span>
-  <span>Elo <b id="s-elo">1000</b></span>
-  <span class="sep">|</span>
-  <span>Win P0:<b id="s-w0">0</b>% P1:<b id="s-w1">0</b>%</span>
-  <span class="sep">|</span>
-  <span class="res-bar">CPU <div class="res-meter"><div class="res-meter-fill" id="cpu-fill" style="width:0%"></div></div> <b id="s-cpu">0</b>%</span>
-  <span class="res-bar">RAM <div class="res-meter"><div class="res-meter-fill" id="ram-fill" style="width:0%"></div></div> <b id="s-ram">0</b>%</span>
+  <div class="frow">
+    <span class="fgroup-label">Training</span>
+    <span>Iter <b id="s-iter">—</b></span>
+    <span class="sep">·</span>
+    <span>Loss <b id="s-loss">—</b></span>
+    <span class="sep">·</span>
+    <span>Policy <b id="s-ploss">—</b></span>
+    <span class="sep">·</span>
+    <span>Value <b id="s-vloss">—</b></span>
+    <span class="sep">·</span>
+    <span>Buffer <b id="s-fill">—</b></span>
+    <span class="sep">·</span>
+    <span>Pos/hr <b id="s-poshr">—</b></span>
+  </div>
+  <div class="frow">
+    <span class="fgroup-label">Games</span>
+    <span><b id="s-games">0</b> total</span>
+    <span class="sep">·</span>
+    <span>Avg <b id="s-len">—</b> moves</span>
+    <span class="sep">·</span>
+    <span>Win P0:<b id="s-w0">—</b>% P1:<b id="s-w1">—</b>%</span>
+    <span class="sep">·</span>
+    <span>Workers <b id="s-workers">—</b></span>
+  </div>
+  <div class="frow">
+    <span class="fgroup-label">System</span>
+    <span>Elo <b id="s-elo">1000</b></span>
+    <span class="sep">·</span>
+    <span class="res-bar">CPU <div class="res-meter"><div class="res-meter-fill" id="cpu-fill" style="width:0%"></div></div> <b id="s-cpu">0</b>%</span>
+    <span class="sep">·</span>
+    <span class="res-bar">RAM <div class="res-meter"><div class="res-meter-fill" id="ram-fill" style="width:0%"></div></div> <b id="s-ram">0</b>%</span>
+  </div>
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
@@ -935,14 +946,10 @@ socket.on('game_complete', d => {
       const plab = el('progress-label');
       if (plab) plab.textContent = 'Self-play ' + d.game_idx + '/' + d.total_games;
     }
-    // Stats
+    // Accumulate local game stats (footer updated by stats_update from server)
     gameStats.count++;
     gameStats.totalLen += (d.num_moves || 0);
     if (d.result > 0) gameStats.w0++; else if (d.result < 0) gameStats.w1++;
-    const lsG = el('ls-games'); if (lsG) lsG.textContent = gameStats.count;
-    const lsL = el('ls-len'); if (lsL && gameStats.count) lsL.textContent = Math.round(gameStats.totalLen / gameStats.count);
-    const lsW0 = el('ls-w0'); if (lsW0 && gameStats.count) lsW0.textContent = Math.round(gameStats.w0 / gameStats.count * 100) + '%';
-    const lsW1 = el('ls-w1'); if (lsW1 && gameStats.count) lsW1.textContent = Math.round(gameStats.w1 / gameStats.count * 100) + '%';
     // History + replay (NEVER interrupt a playing game)
     if (d.moves && d.moves.length) {
       addToHistory(d);
@@ -957,20 +964,24 @@ socket.on('game_complete', d => {
 
 socket.on('stats_update', d => {
   try {
-    if (d.iteration != null) {
-      el('s-iter').textContent = d.iteration;
-      el('ls-iter').textContent = d.iteration;
-    }
-    if (d.total_games != null) el('s-games').textContent = d.total_games;
-    if (d.current_elo != null) el('s-elo').textContent = Math.round(d.current_elo);
-    if (d.workers != null) el('ls-workers').textContent = d.workers;
-    if (d.win_p0 != null) el('s-w0').textContent = Math.round(d.win_p0);
-    if (d.win_p1 != null) el('s-w1').textContent = Math.round(d.win_p1);
+    if (d.iteration != null)      el('s-iter').textContent    = d.iteration;
+    if (d.total_games != null)    el('s-games').textContent   = d.total_games;
+    if (d.current_elo != null)    el('s-elo').textContent     = Math.round(d.current_elo);
+    if (d.workers != null)        el('s-workers').textContent = d.workers;
+    if (d.win_p0 != null)         el('s-w0').textContent      = Math.round(d.win_p0);
+    if (d.win_p1 != null)         el('s-w1').textContent      = Math.round(d.win_p1);
+    if (d.avg_game_length)        el('s-len').textContent     = d.avg_game_length;
     if (d.latest_loss != null) {
       const lv = typeof d.latest_loss === 'object' ? d.latest_loss.total : d.latest_loss;
-      if (lv != null) el('ls-loss').textContent = parseFloat(lv).toFixed(4);
+      if (lv != null) el('s-loss').textContent = parseFloat(lv).toFixed(4);
     }
-    if (d.avg_game_length) el('ls-len').textContent = d.avg_game_length;
+    if (d.latest_policy_loss != null) el('s-ploss').textContent = parseFloat(d.latest_policy_loss).toFixed(4);
+    if (d.latest_value_loss  != null) el('s-vloss').textContent = parseFloat(d.latest_value_loss).toFixed(4);
+    if (d.fill_pct != null)    el('s-fill').textContent  = parseFloat(d.fill_pct).toFixed(1) + '%';
+    if (d.positions_hr != null) {
+      const p = d.positions_hr;
+      el('s-poshr').textContent = p >= 1e6 ? (p/1e6).toFixed(1)+'M' : Math.round(p).toLocaleString();
+    }
     fetchCharts();
   } catch (e) { console.error('stats_update error:', e); }
 });
@@ -985,7 +996,7 @@ socket.on('train_progress', d => {
     const phase = d.phase || 'Training';
     const lossStr = d.loss != null ? ' (loss ' + d.loss + ')' : '';
     if (plab) plab.textContent = phase + ' ' + d.step + '/' + d.total + lossStr;
-    if (d.loss != null) el('ls-loss').textContent = d.loss;
+    if (d.loss != null) el('s-loss').textContent = d.loss;
     el('status').textContent = phase.toUpperCase() + ' ' + d.step + '/' + d.total;
   } catch (e) { console.error('train_progress error:', e); }
 });
@@ -1115,14 +1126,6 @@ function fetchCharts() {
       [{ label: 'Games/s', data: data.map(d => ({ x: d.iteration, y: d.games_per_sec })), dash: [] }], {});
   }).catch(() => {});
 
-  fetch('/api/resources').then(r => r.json()).then(data => {
-    const h = data.history || [];
-    if (h.length < 2) return;
-    drawLineChart(el('res-chart'), [
-      { label: 'CPU%', data: h.map((d, i) => ({ x: i, y: d.cpu_pct })), dash: [] },
-      { label: 'RAM%', data: h.map((d, i) => ({ x: i, y: d.ram_pct })), dash: [6, 3] },
-    ], { yMin: 0, yMax: 100 });
-  }).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------

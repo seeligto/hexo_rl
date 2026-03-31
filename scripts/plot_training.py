@@ -53,7 +53,7 @@ def load_train_steps(path: Path) -> dict[str, list[float]]:
         "games_per_hour": [],
         "gpu_util": [],
         "wr_random": [],
-        "wr_ramora": [],
+        "wr_sealbot": [],
         "wr_best": [],
         "x_winrate": [],
         "o_winrate": [],
@@ -83,10 +83,10 @@ def load_train_steps(path: Path) -> dict[str, list[float]]:
             data["games_per_hour"].append(float(rec.get("games_per_hour", 0.0)))
             data["gpu_util"].append(float(rec.get("gpu_util", 0.0)))
             wr_random = rec.get("wr_random")
-            wr_ramora = rec.get("wr_ramora")
+            wr_sealbot = rec.get("wr_sealbot")
             wr_best = rec.get("wr_best")
             data["wr_random"].append(float(wr_random) if wr_random is not None else float("nan"))
-            data["wr_ramora"].append(float(wr_ramora) if wr_ramora is not None else float("nan"))
+            data["wr_sealbot"].append(float(wr_sealbot) if wr_sealbot is not None else float("nan"))
             data["wr_best"].append(float(wr_best) if wr_best is not None else float("nan"))
             xw = rec.get("x_winrate")
             ow = rec.get("o_winrate")
@@ -150,7 +150,7 @@ def main() -> None:
     axs[1, 0].set_xlabel("Step")
     ax_eval = axs[1, 0].twinx()
     ax_eval.plot(x, data["wr_random"], linestyle="--", label="WR vs Random", alpha=0.8)
-    ax_eval.plot(x, data["wr_ramora"], linestyle="--", label="WR vs Ramora", alpha=0.8)
+    ax_eval.plot(x, data["wr_sealbot"], linestyle="--", label="WR vs SealBot", alpha=0.8)
     ax_eval.plot(x, data["wr_best"], linestyle="--", label="WR vs Best", alpha=0.8)
     ax_eval.set_ylim(0.0, 1.0)
     ax_eval.set_ylabel("Eval WR")

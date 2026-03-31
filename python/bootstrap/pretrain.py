@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from python.model.network import HexTacToeNet
 from python.bootstrap.dataset import BootstrapDataset, convert_to_dataset
-from python.bootstrap.bots.ramora_bot import RamoraBot
+from python.bootstrap.bots.sealbot_bot import SealBotBot
 from python.bootstrap.bots.random_bot import RandomBot
 from python.bootstrap.generate_corpus import load_cached_bot_games, RAW_HUMAN_DIR
 
@@ -170,9 +170,9 @@ def validate(model: HexTacToeNet, device: torch.device) -> None:
     random_win_rate = win_count / n_games
     log.info("validation_random_result", win_rate=random_win_rate)
 
-    # 2. vs RamoraBot(depth≈3)
-    log.info("validating_vs_ramora_d3")
-    ramora_bot = RamoraBot(time_limit=0.05)
+    # 2. vs SealBot (shallow time budget ≈ depth-3)
+    log.info("validating_vs_sealbot")
+    sealbot = SealBotBot(time_limit=0.05)
     win_count  = 0
     n_games    = 10
     for i in range(n_games):
@@ -184,14 +184,14 @@ def validate(model: HexTacToeNet, device: torch.device) -> None:
                 policy = worker._run_mcts_with_sims(board, n_sims=400, use_dirichlet=False, temperature=0.0)
                 q, r   = worker._sample_action(policy, board.legal_moves(), board)
             else:
-                q, r = ramora_bot.get_move(state, board)
+                q, r = sealbot.get_move(state, board)
             state = state.apply_move(board, q, r)
         if board.winner() == model_player:
             win_count += 1
-    ramora_win_rate = win_count / n_games
-    log.info("validation_ramora_result", win_rate=ramora_win_rate)
+    sealbot_win_rate = win_count / n_games
+    log.info("validation_sealbot_result", win_rate=sealbot_win_rate)
 
-    if random_win_rate >= 0.90 and ramora_win_rate > 0.05:
+    if random_win_rate >= 0.90 and sealbot_win_rate > 0.05:
         log.info("validation_passed")
     else:
         log.warning("validation_failed")

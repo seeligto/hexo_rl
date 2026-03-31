@@ -10,7 +10,7 @@ from native_core import Board
 from python.env import GameState
 from python.bootstrap.bot_protocol import BotProtocol
 from python.bootstrap.bots.random_bot import RandomBot
-from python.bootstrap.bots.ramora_bot import RamoraBot
+from python.bootstrap.bots.sealbot_bot import SealBotBot
 
 
 # ── BotProtocol ABC ───────────────────────────────────────────────────────────
@@ -46,37 +46,36 @@ def test_random_bot_name():
     assert isinstance(RandomBot().name(), str)
 
 
-# ── RamoraBot ─────────────────────────────────────────────────────────────────
+# ── SealBotBot ────────────────────────────────────────────────────────────────
 
-def test_ramora_bot_returns_legal_move_on_fresh_board():
+def test_sealbot_bot_returns_legal_move_on_fresh_board():
     b = Board()
     s = GameState.from_board(b)
-    bot = RamoraBot(time_limit=0.05)
+    bot = SealBotBot(time_limit=0.05)
     q, r = bot.get_move(s, b)
-    # On a fresh board Ramora plays (0,0) — it must be legal.
     legal = b.legal_moves()
     assert (q, r) in legal
 
 
-def test_ramora_bot_returns_legal_move_mid_game():
+def test_sealbot_bot_returns_legal_move_mid_game():
     b = Board()
     b.apply_move(0, 0)   # P1 ply0
     b.apply_move(1, 0)   # P2 first of 2
     s = GameState.from_board(b)
-    bot = RamoraBot(time_limit=0.05)
+    bot = SealBotBot(time_limit=0.05)
     q, r = bot.get_move(s, b)
     legal = b.legal_moves()
     assert (q, r) in legal
 
 
-def test_ramora_bot_second_move_of_pair_cached():
+def test_sealbot_bot_second_move_of_pair_cached():
     """After the first call the cached second move should be a legal move."""
     b = Board()
     b.apply_move(0, 0)   # P1 ply0 — now P2's double turn
     s = GameState.from_board(b)
-    bot = RamoraBot(time_limit=0.05)
+    bot = SealBotBot(time_limit=0.05)
 
-    # First call — Ramora plans both moves, returns first.
+    # First call — SealBot plans both moves, returns first.
     q1, r1 = bot.get_move(s, b)
     legal = b.legal_moves()
     assert (q1, r1) in legal
@@ -90,5 +89,5 @@ def test_ramora_bot_second_move_of_pair_cached():
     assert (q2, r2) in legal2
 
 
-def test_ramora_bot_name():
-    assert "ramora_bot" in RamoraBot().name()
+def test_sealbot_bot_name():
+    assert "SealBot" in SealBotBot().name()

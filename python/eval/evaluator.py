@@ -5,7 +5,7 @@ from typing import Dict, Any
 from native_core import Board  # type: ignore[attr-defined]
 from python.env.game_state import GameState
 from python.bootstrap.bots.random_bot import RandomBot
-from python.bootstrap.bots.ramora_bot import RamoraBot
+from python.bootstrap.bots.sealbot_bot import SealBotBot
 from python.model.network import HexTacToeNet
 from python.selfplay.worker import SelfPlayWorker
 
@@ -37,7 +37,7 @@ class Evaluator:
         self.config = config
         eval_cfg = config.get("evaluation", config.get("eval", {}))
         self.random_model_sims = int(eval_cfg.get("random_model_sims", 100))
-        self.ramora_model_sims = int(eval_cfg.get("ramora_model_sims", 200))
+        self.sealbot_model_sims = int(eval_cfg.get("sealbot_model_sims", 200))
         self.progress_every = max(1, int(eval_cfg.get("progress_every", 1)))
         # Use a worker instance for MCTS search during evaluation
         self.worker = SelfPlayWorker(model, config, device)
@@ -93,52 +93,51 @@ class Evaluator:
         log.info("evaluation_games_complete", phase="random", n_games=n_games, model_sims=sims, winrate=wr, elapsed_sec=round(time.time() - t0, 2))
         return wr
 
-    def evaluate_vs_ramora(
+    def evaluate_vs_sealbot(
         self,
         n_games: int = 10,
         time_limit: float = 0.05,
         model_sims: int | None = None,
     ) -> float:
-        """Play n_games against RamoraBot, return win rate."""
-        ramora_bot = RamoraBot(time_limit=time_limit)
+        """Play n_games against SealBotBot, return win rate."""
+        sealbot = SealBotBot(time_limit=time_limit)
         win_count = 0
-        sims = self.ramora_model_sims if model_sims is None else int(model_sims)
+        sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
         t0 = time.time()
 
         log.info(
             "evaluation_games_start",
-            phase="ramora",
+            phase="sealbot",
             n_games=n_games,
             model_sims=sims,
-            ramora_time_limit=time_limit,
+            sealbot_time_limit=time_limit,
         )
-        
+
         for i in range(n_games):
             board = Board()
             state = GameState.from_board(board)
             model_player = 1 if i % 2 == 0 else -1
-            
+
             while not board.check_win() and board.legal_move_count() > 0:
                 if board.current_player == model_player:
-                    # Stronger search for benchmarking
                     policy = self.worker._run_mcts_with_sims(board, n_sims=sims, use_dirichlet=False, temperature=0.0)
                     q, r = self.worker._sample_action(policy, board.legal_moves(), board)
                 else:
-                    q, r = ramora_bot.get_move(state, board)
-                
+                    q, r = sealbot.get_move(state, board)
+
                 state = state.apply_move(board, q, r)
-                
+
             if board.winner() == model_player:
                 win_count += 1
-            self._log_progress("ramora", i + 1, n_games, t0, win_count)
+            self._log_progress("sealbot", i + 1, n_games, t0, win_count)
 
         wr = win_count / n_games
         log.info(
             "evaluation_games_complete",
-            phase="ramora",
+            phase="sealbot",
             n_games=n_games,
             model_sims=sims,
-            ramora_time_limit=time_limit,
+            sealbot_time_limit=time_limit,
             winrate=wr,
             elapsed_sec=round(time.time() - t0, 2),
         )
@@ -152,8 +151,8 @@ class Evaluator:
         opponent_sims: int | None = None,
     ) -> float:
         """Play n_games against another model and return current-model win rate."""
-        current_sims = self.ramora_model_sims if model_sims is None else int(model_sims)
-        other_sims = self.ramora_model_sims if opponent_sims is None else int(opponent_sims)
+        current_sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
+        other_sims = self.sealbot_model_sims if opponent_sims is None else int(opponent_sims)
 
         # Keep the opponent worker separate so each side has its own tree state.
         opponent_worker = SelfPlayWorker(opponent_model, self.config, self.device)

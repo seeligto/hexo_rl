@@ -46,10 +46,10 @@ evaluation:
   enabled: true
   progress_every: 1
   random_n_games: 10
-  ramora_n_games: 5
-  ramora_time_limit: 0.03
+  sealbot_n_games: 5
+  sealbot_time_limit: 0.03
   random_model_sims: 96
-  ramora_model_sims: 128
+  sealbot_model_sims: 128
   enable_best_arena: false
   best_n_games: 20
   best_promotion_winrate: 0.55
@@ -74,7 +74,7 @@ bootstrap:
   n_games: 20000
   human_games_min_moves: 20
   human_games_rated_only: true
-  ramora_depth_mix: {3: 0.7, 5: 0.3}
+  sealbot_time_mix: {0.03: 0.7, 0.1: 0.3}
 
 # Seed
 seed: 42

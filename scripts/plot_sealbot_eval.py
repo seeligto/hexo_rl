@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Plot Ramora evaluation JSONL output from scripts/eval_vs_ramora.py.
+"""Plot SealBot evaluation JSONL output from scripts/eval_vs_sealbot.py.
 
 Usage:
-  .venv/bin/python scripts/plot_ramora_eval.py --latest
-  .venv/bin/python scripts/plot_ramora_eval.py --eval-file logs/ramora_eval_20260330_024500.jsonl
-  .venv/bin/python scripts/plot_ramora_eval.py --all --out plots/ramora_eval_trend.png
+  .venv/bin/python scripts/plot_sealbot_eval.py --latest
+  .venv/bin/python scripts/plot_sealbot_eval.py --eval-file logs/sealbot_eval_20260401_000000.jsonl
+  .venv/bin/python scripts/plot_sealbot_eval.py --all --out plots/sealbot_eval_trend.png
 """
 
 from __future__ import annotations
@@ -31,10 +31,10 @@ def _parse_ts(value: str | None) -> datetime | None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Plot Ramora evaluation trend")
+    p = argparse.ArgumentParser(description="Plot SealBot evaluation trend")
     p.add_argument("--eval-file", default=None, help="Specific eval JSONL file")
-    p.add_argument("--latest", action="store_true", help="Use latest ramora_eval_*.jsonl")
-    p.add_argument("--all", action="store_true", help="Aggregate all ramora_eval_*.jsonl files")
+    p.add_argument("--latest", action="store_true", help="Use latest sealbot_eval_*.jsonl")
+    p.add_argument("--all", action="store_true", help="Aggregate all sealbot_eval_*.jsonl files")
     p.add_argument(
         "--train-log",
         default=None,
@@ -122,9 +122,9 @@ def discover_files(args: argparse.Namespace) -> list[Path]:
     if not logs_dir.exists():
         raise FileNotFoundError("logs/ directory not found")
 
-    files = sorted(logs_dir.glob("ramora_eval_*.jsonl"))
+    files = sorted(logs_dir.glob("sealbot_eval_*.jsonl"))
     if not files:
-        raise FileNotFoundError("No ramora_eval_*.jsonl files found in logs/")
+        raise FileNotFoundError("No sealbot_eval_*.jsonl files found in logs/")
 
     if args.all:
         return files
@@ -147,7 +147,7 @@ def load_records(files: list[Path]) -> list[dict]:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if rec.get("event") != "eval_vs_ramora":
+                if rec.get("event") != "eval_vs_sealbot":
                     continue
                 rec["_source"] = str(path)
                 records.append(rec)
@@ -204,7 +204,7 @@ def main() -> None:
         end_ts=end_ts,
     )
     if not records:
-        print("No eval_vs_ramora events found after filters.")
+        print("No eval_vs_sealbot events found after filters.")
         return
 
     try:
@@ -217,11 +217,11 @@ def main() -> None:
     winrates = [float(r.get("winrate", 0.0)) for r in records]
     n_games = [int(r.get("n_games", 0)) for r in records]
 
-    out_path = Path(args.out) if args.out else Path("plots") / "ramora_eval_trend.png"
+    out_path = Path(args.out) if args.out else Path("plots") / "sealbot_eval_trend.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(10, 5.5))
-    ax.plot(steps, winrates, marker="o", linewidth=1.5, label="Winrate vs Ramora")
+    ax.plot(steps, winrates, marker="o", linewidth=1.5, label="Winrate vs SealBot")
 
     # Encode confidence intuition by marker size (more games => larger marker).
     sizes = [max(20, min(220, ng * 2)) for ng in n_games]
@@ -230,7 +230,7 @@ def main() -> None:
     for s, w, ng in zip(steps, winrates, n_games):
         ax.annotate(f"n={ng}", (s, w), textcoords="offset points", xytext=(0, 6), ha="center", fontsize=8)
 
-    ax.set_title("Model vs Ramora Winrate Trend")
+    ax.set_title("Model vs SealBot Winrate Trend")
     ax.set_xlabel("Checkpoint step")
     ax.set_ylabel("Winrate")
     ax.set_ylim(0.0, 1.0)
@@ -242,7 +242,7 @@ def main() -> None:
         subtitle += f", run={train_log.name}"
     if args.min_games > 0:
         subtitle += f", min_games={args.min_games}"
-    fig.suptitle(f"Ramora Eval ({subtitle})")
+    fig.suptitle(f"SealBot Eval ({subtitle})")
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     print(f"Saved plot: {out_path}")
