@@ -29,7 +29,7 @@ from python.model.network import HexTacToeNet
 from python.selfplay.inference import LocalInferenceEngine
 from python.selfplay.policy_projection import project_global_policy_to_local
 from python.selfplay.tensor_buffer import TensorBuffer
-from python.training.replay_buffer import ReplayBuffer
+from native_core import RustReplayBuffer
 from python.selfplay.utils import BOARD_SIZE, N_ACTIONS, get_temperature  # noqa: F401 (re-exported)
 
 # Backward-compat: callers that do `from python.selfplay.worker import get_temperature`
@@ -38,7 +38,7 @@ __all__ = ["SelfPlayWorker", "get_temperature"]
 
 
 class SelfPlayWorker:
-    """Plays self-play games and pushes data to a ReplayBuffer.
+    """Plays self-play games and pushes data to a RustReplayBuffer.
 
     Args:
         model:   Trained (or random) HexTacToeNet.
@@ -178,7 +178,7 @@ class SelfPlayWorker:
     # ── Game loop ──────────────────────────────────────────────────────────────
 
     def play_game(
-        self, buffer: ReplayBuffer, use_dirichlet: bool = True
+        self, buffer: "RustReplayBuffer", use_dirichlet: bool = True
     ) -> Tuple[int, Optional[int]]:
         """Play one complete game and push all positions to `buffer`.
 

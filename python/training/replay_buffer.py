@@ -53,39 +53,6 @@ class ReplayBuffer:
         self._game_id = 0    # monotonic counter; bumped by push_new_position()
         self._rng     = np.random.default_rng()
 
-        # Precompute flat index maps for all 12 hexagonal symmetries.
-        self._sym_indices = self._precompute_symmetry_indices(board_size)
-
-    @staticmethod
-    def _precompute_symmetry_indices(board_size: int) -> np.ndarray:
-        """Return (12, H*W) array of flat indices mapping src -> dst."""
-        half = (board_size - 1) // 2
-        H = W = board_size
-        i_grid, j_grid = np.meshgrid(np.arange(H), np.arange(W), indexing='ij')
-        q_base = i_grid - half
-        r_base = j_grid - half
-
-        sym_indices = np.zeros((12, board_size * board_size), dtype=np.int64)
-
-        for sym_idx in range(12):
-            reflect = sym_idx >= 6
-            rot = sym_idx % 6
-            q = q_base.copy()
-            r = r_base.copy()
-            if reflect:
-                q, r = r.copy(), q.copy()
-            for _ in range(rot):
-                q, r = -r, q + r
-            
-            dst_i = q + half
-            dst_j = r + half
-            
-            valid = (dst_i >= 0) & (dst_i < H) & (dst_j >= 0) & (dst_j < W)
-            flat_dst = np.where(valid, dst_i * board_size + dst_j, -1).flatten()
-            sym_indices[sym_idx] = flat_dst
-            
-        return sym_indices
-
     # ── Write ─────────────────────────────────────────────────────────────────
 
     def push(
@@ -155,7 +122,7 @@ class ReplayBuffer:
     # ── Read ──────────────────────────────────────────────────────────────────
 
     def sample(
-        self, batch_size: int, augment: bool = True
+        self, batch_size: int
     ) -> Tuple["np.ndarray", "np.ndarray", "np.ndarray"]:
         """Sample `batch_size` entries with Multi-Window correlation guard.
 
@@ -164,9 +131,8 @@ class ReplayBuffer:
         is included.  Falls back to plain uniform sampling if game_ids are not
         set (all -1, e.g. data loaded from an older checkpoint).
 
-        Args:
-            batch_size: Number of entries to sample.
-            augment:    If True, apply random 12-fold hexagonal symmetry.
+        Note: augmentation is handled by RustReplayBuffer.sample_batch. Use
+        that for training; this method is for testing/inspection only.
 
         Returns:
             states:   (batch_size, board_channels, board_size, board_size) float16
@@ -180,8 +146,6 @@ class ReplayBuffer:
         use_dedup = valid_ids[0] != -1  # fast check: ids assigned?
 
         if use_dedup:
-            # Shuffle all valid indices, then pick the first occurrence of each
-            # unique game_id.  This is O(size) but uses no Python loops.
             perm = self._rng.permutation(self._size)
             shuffled_ids = valid_ids[perm]
             _, first_occurrence = np.unique(shuffled_ids, return_index=True)
@@ -189,59 +153,12 @@ class ReplayBuffer:
             if len(candidate_indices) >= batch_size:
                 chosen = self._rng.choice(candidate_indices, size=batch_size, replace=False)
             else:
-                # Fewer distinct positions than batch_size — fall back to allowing
-                # duplicates rather than under-filling the batch.
                 chosen = self._rng.choice(self._size, size=batch_size, replace=True)
             indices = chosen
         else:
             indices = np.random.randint(0, self._size, size=batch_size)
-        
-        if not augment:
-            return self.states[indices], self.policies[indices], self.outcomes[indices]
 
-        # Use views for source data to avoid copying before transformation
-        states = self.states[indices]
-        policies = self.policies[indices]
-        outcomes = self.outcomes[indices]
-
-        sym_choices = np.random.randint(0, 12, size=batch_size)
-        # Create buffers for transformed data
-        new_states = np.zeros_like(states)
-        new_policies = np.zeros_like(policies)
-        new_policies[:, -1] = policies[:, -1] # pass move stays
-
-        for sym_idx in range(12):
-            mask = sym_choices == sym_idx
-            if not mask.any():
-                continue
-            
-            if sym_idx == 0: # identity
-                new_states[mask] = states[mask]
-                new_policies[mask, :-1] = policies[mask, :-1]
-                continue
-
-            flat_map = self._sym_indices[sym_idx]
-            valid_mask = flat_map >= 0
-            valid_src = np.where(valid_mask)[0]
-            valid_dst = flat_map[valid_mask]
-
-            # Vectorized scatter for this symmetry group
-            mask_indices = mask.nonzero()[0]
-            K = len(mask_indices)
-            
-            # Write to flattened view of the target buffer
-            s_batch = states[mask].reshape(K, self.board_channels, self.spatial)
-            target_view = new_states[mask_indices].reshape(K, self.board_channels, self.spatial)
-            target_view[:, :, valid_dst] = s_batch[:, :, valid_src]
-            new_states[mask_indices] = target_view.reshape(K, self.board_channels, self.board_size, self.board_size)
-            
-            # Policy grids (K, spatial)
-            p_batch = policies[mask, :-1]
-            target_p_view = new_policies[mask_indices, :-1]
-            target_p_view[:, valid_dst] = p_batch[:, valid_src]
-            new_policies[mask_indices, :-1] = target_p_view
-        
-        return new_states, new_policies, outcomes
+        return self.states[indices], self.policies[indices], self.outcomes[indices]
     
     # ── Properties ────────────────────────────────────────────────────────────
 

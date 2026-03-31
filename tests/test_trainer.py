@@ -9,13 +9,13 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from native_core import RustReplayBuffer
 from python.model.network import HexTacToeNet
-from python.training.replay_buffer import ReplayBuffer
 from python.training.trainer import Trainer
 
 
 FAST_CONFIG = {
-    "board_size":           9,
+    "board_size":           19,
     "res_blocks":           2,
     "filters":              32,
     "batch_size":           8,
@@ -27,17 +27,16 @@ FAST_CONFIG = {
 
 
 def make_trainer(tmp_path: Path) -> Trainer:
-    model = HexTacToeNet(board_size=9, res_blocks=2, filters=32)
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
     return Trainer(model, FAST_CONFIG, checkpoint_dir=tmp_path)
 
 
-def fill_buffer(size: int = 32, board_size: int = 9) -> ReplayBuffer:
-    buf = ReplayBuffer(capacity=200, board_channels=18, board_size=board_size)
+def fill_buffer(size: int = 32) -> RustReplayBuffer:
+    buf = RustReplayBuffer(capacity=200)
     rng = np.random.default_rng(0)
-    n_actions = board_size * board_size + 1
     for _ in range(size):
-        state   = rng.random((18, board_size, board_size), dtype=np.float32).astype(np.float16)
-        policy  = rng.dirichlet(np.ones(n_actions)).astype(np.float32)
+        state   = rng.random((18, 19, 19), dtype=np.float32).astype(np.float16)
+        policy  = rng.dirichlet(np.ones(362)).astype(np.float32)
         outcome = float(rng.choice([-1.0, 0.0, 1.0]))
         buf.push(state, policy, outcome)
     return buf
@@ -75,7 +74,7 @@ def test_train_step_increments_step(tmp_path: Path):
 def test_loss_decreases_over_multiple_steps(tmp_path: Path):
     """Policy loss should decrease when the model is trained on fixed data."""
     torch.manual_seed(42)
-    model   = HexTacToeNet(board_size=9, res_blocks=2, filters=32)
+    model   = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
     trainer = Trainer(model, FAST_CONFIG, checkpoint_dir=tmp_path)
     buf     = fill_buffer(size=64)
 
@@ -130,7 +129,7 @@ def test_checkpoint_log_json_written(tmp_path: Path):
 def test_checkpoint_round_trip(tmp_path: Path):
     """Load a checkpoint and verify model outputs match before/after."""
     torch.manual_seed(0)
-    model   = HexTacToeNet(board_size=9, res_blocks=2, filters=32)
+    model   = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
     trainer = Trainer(model, FAST_CONFIG, checkpoint_dir=tmp_path)
     buf     = fill_buffer()
 
@@ -141,7 +140,7 @@ def test_checkpoint_round_trip(tmp_path: Path):
     assert ckpt_path.exists()
 
     # Record model outputs before reload.
-    x = torch.zeros(1, 18, 9, 9, device=trainer.device)
+    x = torch.zeros(1, 18, 19, 19, device=trainer.device)
     trainer.model.eval()
     with torch.no_grad():
         log_p_before, v_before = trainer.model(x)
@@ -150,7 +149,7 @@ def test_checkpoint_round_trip(tmp_path: Path):
     restored = Trainer.load_checkpoint(ckpt_path, checkpoint_dir=tmp_path)
     assert restored.step == 5
 
-    x_r = torch.zeros(1, 18, 9, 9, device=restored.device)
+    x_r = torch.zeros(1, 18, 19, 19, device=restored.device)
     restored.model.eval()
     with torch.no_grad():
         log_p_after, v_after = restored.model(x_r)
@@ -164,7 +163,7 @@ def test_checkpoint_round_trip(tmp_path: Path):
 
 def test_checkpoint_optimizer_state_preserved(tmp_path: Path):
     """AdamW momentum state should survive a round-trip."""
-    model   = HexTacToeNet(board_size=9, res_blocks=2, filters=32)
+    model   = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
     trainer = Trainer(model, FAST_CONFIG, checkpoint_dir=tmp_path)
     buf     = fill_buffer()
     for _ in range(5):
@@ -186,7 +185,7 @@ def test_scheduler_steps_each_train_step(tmp_path: Path):
         "total_steps": 20,
         "min_lr": 1e-5,
     }
-    model = HexTacToeNet(board_size=9, res_blocks=2, filters=32)
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
     trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
     buf = fill_buffer()
 
@@ -207,7 +206,7 @@ def test_scheduler_state_round_trip(tmp_path: Path):
         "total_steps": 20,
         "min_lr": 1e-5,
     }
-    model = HexTacToeNet(board_size=9, res_blocks=2, filters=32)
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
     trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
     buf = fill_buffer()
 
@@ -229,7 +228,7 @@ def test_load_checkpoint_allows_config_override(tmp_path: Path):
         "total_steps": 20,
         "min_lr": 1e-5,
     }
-    model = HexTacToeNet(board_size=9, res_blocks=2, filters=32)
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
     trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
     buf = fill_buffer()
 

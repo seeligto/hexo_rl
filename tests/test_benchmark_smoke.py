@@ -3,18 +3,18 @@ from __future__ import annotations
 import torch
 
 from python.model.network import HexTacToeNet
-from python.training.replay_buffer import ReplayBuffer
+from native_core import RustReplayBuffer
 from scripts.benchmark import benchmark_replay_buffer, benchmark_worker_pool
 
 
 def test_replay_buffer_benchmark_smoke() -> None:
     """Replay benchmark should run and return expected metrics keys."""
-    replay = ReplayBuffer(capacity=1024, board_channels=18)
+    replay = RustReplayBuffer(capacity=1024)
     for _ in range(512):
         replay.push(
-            state=torch.zeros((18, 19, 19), dtype=torch.float16).numpy(),
-            policy=(torch.ones((362,), dtype=torch.float32) / 362.0).numpy(),
-            outcome=0.0,
+            torch.zeros((18, 19, 19), dtype=torch.float16).numpy(),
+            (torch.ones((362,), dtype=torch.float32) / 362.0).numpy(),
+            0.0,
         )
 
     result = benchmark_replay_buffer(replay)

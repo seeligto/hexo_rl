@@ -16,7 +16,7 @@ from native_core import RustSelfPlayRunner  # type: ignore[attr-defined]
 
 from python.model.network import HexTacToeNet
 from python.selfplay.inference_server import InferenceServer
-from python.training.replay_buffer import ReplayBuffer
+from native_core import RustReplayBuffer
 
 
 class WorkerPool:
@@ -27,7 +27,7 @@ class WorkerPool:
         model: HexTacToeNet,
         config: Dict[str, Any],
         device: torch.device,
-        replay_buffer: ReplayBuffer,
+        replay_buffer: "RustReplayBuffer",
         n_workers: Optional[int] = None,
     ) -> None:
         self.model = model
@@ -88,7 +88,7 @@ class WorkerPool:
             # Collect real data from Rust
             data = self._runner.collect_data()
             for feat, pol, outcome in data:
-                feat_np = np.array(feat, dtype=np.float32).reshape(18, 19, 19)
+                feat_np = np.array(feat, dtype=np.float16).reshape(18, 19, 19)
                 pol_np = np.array(pol, dtype=np.float32)
                 self.replay_buffer.push(feat_np, pol_np, float(outcome))
                 with self._lock:

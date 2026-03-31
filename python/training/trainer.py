@@ -29,7 +29,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.amp import GradScaler, autocast  # type: ignore[attr-defined]
 
 from python.model.network import HexTacToeNet
-from python.training.replay_buffer import ReplayBuffer
+from native_core import RustReplayBuffer
 
 
 class Trainer:
@@ -94,7 +94,7 @@ class Trainer:
     # ── Training step ─────────────────────────────────────────────────────────
 
     def train_step(
-        self, buffer: ReplayBuffer
+        self, buffer: "RustReplayBuffer"
     ) -> Dict[str, float]:
         """Sample a batch from `buffer` and perform one gradient update.
 
@@ -103,7 +103,7 @@ class Trainer:
         """
         batch_size = int(self.config["batch_size"])
 
-        states, policies, outcomes = buffer.sample(batch_size)
+        states, policies, outcomes = buffer.sample_batch(batch_size, True)
 
         # Move to device; keep float16 states as-is for autocast.
         states_t   = torch.from_numpy(states).to(self.device)       # float16

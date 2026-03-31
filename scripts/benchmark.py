@@ -33,7 +33,7 @@ if str(ROOT) not in sys.path:
 
 if TYPE_CHECKING:
     from python.model.network import HexTacToeNet
-    from python.training.replay_buffer import ReplayBuffer
+    from native_core import RustReplayBuffer
 
 console = Console()
 
@@ -124,7 +124,7 @@ def benchmark_inference_latency(model: "HexTacToeNet") -> Dict[str, Any]:
     }
 
 
-def benchmark_replay_buffer(buffer: "ReplayBuffer") -> Dict[str, Any]:
+def benchmark_replay_buffer(buffer: "RustReplayBuffer") -> Dict[str, Any]:
     """Replay buffer sample speed."""
     raw_iters = 2_000
     aug_iters = 200
@@ -132,13 +132,13 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer") -> Dict[str, Any]:
     # 1. Raw sampling
     t0 = time.perf_counter()
     for _ in range(raw_iters):
-        buffer.sample(batch_size=256, augment=False)
+        buffer.sample_batch(256, False)
     elapsed_raw = time.perf_counter() - t0
-    
+
     # 2. Augmented sampling
     t1 = time.perf_counter()
     for _ in range(aug_iters):
-        buffer.sample(batch_size=256, augment=True)
+        buffer.sample_batch(256, True)
     elapsed_aug = time.perf_counter() - t1
     
     return {
@@ -209,7 +209,7 @@ def benchmark_worker_pool(
 ) -> Dict[str, Any]:
     """Measure end-to-end self-play throughput in the multiprocess pool."""
     from python.selfplay.pool import WorkerPool
-    from python.training.replay_buffer import ReplayBuffer
+    from native_core import RustReplayBuffer
 
     if quick:
         duration_sec = min(duration_sec, 5)
@@ -227,7 +227,7 @@ def benchmark_worker_pool(
             "max_moves_per_game": int(config.get("max_moves_per_game", 128)),
         },
     }
-    replay = ReplayBuffer(capacity=25_000, board_channels=18)
+    replay = RustReplayBuffer(capacity=25_000)
     try:
         pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
     except Exception as exc:
@@ -416,7 +416,7 @@ def main() -> None:
     console.print(f"[bold]Benchmarking on {device}[/bold]")
 
     from python.model.network import HexTacToeNet, compile_model
-    from python.training.replay_buffer import ReplayBuffer
+    from native_core import RustReplayBuffer
 
     # ── Build model ──
     model = HexTacToeNet(
@@ -430,10 +430,10 @@ def main() -> None:
         model = compile_model(model)
 
     # ── Fill replay buffer with dummy data ──
-    buffer = ReplayBuffer(capacity=100_000, board_channels=18)
+    buffer = RustReplayBuffer(capacity=100_000)
     for _ in range(10_000):
         buffer.push(
-            np.zeros((18, 19, 19), dtype=np.float32),
+            np.zeros((18, 19, 19), dtype=np.float16),
             np.ones(362, dtype=np.float32) / 362,
             0.0,
         )
