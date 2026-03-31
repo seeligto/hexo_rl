@@ -98,7 +98,7 @@ impl PyBoard {
     }
 
     /// Incremental Zobrist hash of the current position.
-    pub fn zobrist_hash(&self) -> u64 {
+    pub fn zobrist_hash(&self) -> u128 {
         self.inner.zobrist_hash
     }
 

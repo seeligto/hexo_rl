@@ -150,7 +150,7 @@ pub struct MCTSTree {
     /// `expand_and_backup`. Contains `(node_index, path_diffs)`.
     pending: Vec<(u32, Vec<MoveDiff>)>,
     /// Caches evaluations indexed by Zobrist hash.
-    pub transposition_table: FxHashMap<u64, TTEntry>,
+    pub transposition_table: FxHashMap<u128, TTEntry>,
 }
 
 impl MCTSTree {

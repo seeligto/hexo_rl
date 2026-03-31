@@ -40,7 +40,7 @@ pub struct MoveDiff {
     pub(crate) r: i32,
     pub(crate) player: Player,
     // Previous full Zobrist hash state.
-    prev_zobrist_hash: u64,
+    prev_zobrist_hash: u128,
     // Turn-structure state before the move.
     prev_moves_remaining: u8,
     prev_current_player: Player,
@@ -122,7 +122,7 @@ pub struct Board {
     /// Total half-moves placed so far.
     pub ply: u32,
     /// Incremental Zobrist hash.
-    pub zobrist_hash: u64,
+    pub zobrist_hash: u128,
     /// The move most recently applied (used for fast win detection).
     last_move: Option<(i32, i32)>,
     /// Bounding box of all placed stones (maintained incrementally).
@@ -746,8 +746,8 @@ impl Default for Board {
 mod tests {
     use super::*;
 
-    fn recompute_zobrist(board: &Board) -> u64 {
-        let mut hash = 0u64;
+    fn recompute_zobrist(board: &Board) -> u128 {
+        let mut hash = 0u128;
         for (&(q, r), &cell) in board.cells.iter() {
             let player_idx = match cell {
                 Cell::P1 => 0,

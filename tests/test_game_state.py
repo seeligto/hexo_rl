@@ -10,7 +10,7 @@ def test_from_board_initial():
     assert s.current_player == 1
     assert s.moves_remaining == 1
     assert len(s.views) == 1
-    assert s.views[0].shape == (2, 19, 19)
+    assert s.views[0].shape == (18, 19, 19)
     assert len(s.centers) == 1
     assert s.centers[0] == (0, 0)
 
@@ -26,19 +26,19 @@ def test_from_board_after_moves():
 def test_board_array_p1_stone():
     b = Board()
     b.apply_move(0, 0)   # P1 stone at (0,0)
-    # After ply0 it's now P2's turn. P1 is opponent.
+    # After ply0 it's now P2's turn. P1 is opponent → plane 8.
     s = GameState.from_board(b)
     q_idx, r_idx = 9, 9
-    assert s.views[0][1, q_idx, r_idx] == 1.0   # P1 stone should be 1.0 in opponent view (plane 1)
+    assert s.views[0][8, q_idx, r_idx] == 1.0   # P1 stone in opponent view (plane 8)
 
 def test_board_array_p2_stone():
     b = Board()
     b.apply_move(0, 0)    # P1 ply0
     b.apply_move(-1, 0)   # P2 first stone
     b.apply_move( 1, 0)   # P2 second stone
-    # Now P1's turn again. P2 is opponent.
+    # Now P1's turn again. P2 is opponent → plane 8.
     s = GameState.from_board(b)
-    assert s.views[0][1, -1 + 9, 0 + 9] == 1.0  # P2 stone at (-1,0) should be 1.0 in opponent view
+    assert s.views[0][8, -1 + 9, 0 + 9] == 1.0  # P2 stone at (-1,0) in opponent view (plane 8)
 
 def test_board_array_empty_cells_are_zero():
     b = Board()
@@ -53,8 +53,8 @@ def test_apply_move_returns_new_state():
     assert s1.ply == 1
     assert s1.current_player == -1
     assert s1.moves_remaining == 2
-    # It's now P2's turn. P1's stone at (0,0) is in plane 1.
-    assert s1.views[0][1, 9, 9] == 1.0
+    # It's now P2's turn. P1's stone at (0,0) is in opponent plane 8.
+    assert s1.views[0][8, 9, 9] == 1.0
 
 def test_apply_move_does_not_mutate_history_board():
     b = Board()
@@ -87,7 +87,8 @@ def test_zobrist_hash_used_for_python_hash():
     b = Board()
     b.apply_move(0, 0)
     s = GameState.from_board(b)
-    assert hash(s) == s.zobrist_hash
+    # zobrist_hash is u128; Python's hash() reduces large ints to Py_hash_t width.
+    assert hash(s) == hash(s.zobrist_hash)
 
 def test_to_tensor_shape():
     b = Board()
