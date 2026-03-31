@@ -220,17 +220,49 @@ pub struct PyMCTSTree {
 
 #[pymethods]
 impl PyMCTSTree {
-    /// Create a new MCTS tree.
-    ///
     /// Args:
     ///     c_puct: exploration constant (default 1.5).
+    ///     virtual_loss: fixed penalty (default 1.0).
+    ///     vl_adaptive: enable scaled virtual loss (default False).
     #[new]
-    #[pyo3(signature = (c_puct = 1.5))]
-    pub fn new(c_puct: f32) -> Self {
+    #[pyo3(signature = (c_puct = 1.5, virtual_loss = 1.0, vl_adaptive = false))]
+    pub fn new(c_puct: f32, virtual_loss: f32, vl_adaptive: bool) -> Self {
+        let mut inner = MCTSTree::new_with_vl(c_puct, virtual_loss);
+        inner.vl_adaptive = vl_adaptive;
         PyMCTSTree {
-            inner: MCTSTree::new(c_puct),
+            inner,
             board_size: board::BOARD_SIZE,
         }
+    }
+
+    #[getter]
+    pub fn vl_adaptive(&self) -> bool {
+        self.inner.vl_adaptive
+    }
+
+    #[setter]
+    pub fn set_vl_adaptive(&mut self, val: bool) {
+        self.inner.vl_adaptive = val;
+    }
+
+    #[getter]
+    pub fn virtual_loss(&self) -> f32 {
+        self.inner.virtual_loss
+    }
+
+    #[setter]
+    pub fn set_virtual_loss(&mut self, val: f32) {
+        self.inner.virtual_loss = val;
+    }
+
+    #[getter]
+    pub fn selection_overlap_count(&self) -> u32 {
+        self.inner.selection_overlap_count
+    }
+
+    #[getter]
+    pub fn max_depth_observed(&self) -> u32 {
+        self.inner.max_depth_observed
     }
 
     /// Reset the tree for a new game starting from `board`.
