@@ -230,17 +230,13 @@ def test_next_game_id_monotonic():
 # ── Benchmark ─────────────────────────────────────────────────────────────────
 
 def test_benchmark_sample_latency(capsys):
-    """
-    Benchmark: sample_batch(256) must complete in < 128ms (< 0.5ms/sample).
-    Also compares against the Python ReplayBuffer for reference.
-    """
+    """Benchmark: sample_batch(256) must complete in < 128ms (< 0.5ms/sample)."""
     CAPACITY   = 200_000
     FILL       = 50_000
     BATCH      = 256
     WARMUP     = 10
     N_ITERS    = 200
 
-    # ── Rust buffer ───────────────────────────────────────────────────────────
     rust_buf = RustReplayBuffer(CAPACITY)
     batch_s  = np.random.randn(1000, CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
     batch_p  = np.abs(np.random.randn(1000, N_ACTIONS).astype(np.float32))
@@ -258,33 +254,11 @@ def test_benchmark_sample_latency(capsys):
         rust_buf.sample_batch(BATCH, augment=True)
     rust_ms = (time.perf_counter() - t0) / N_ITERS * 1000
 
-    # ── Python buffer (reference) ─────────────────────────────────────────────
-    try:
-        from python.training.replay_buffer import ReplayBuffer
-        py_buf = ReplayBuffer(capacity=CAPACITY)
-        for _ in range(FILL // 1000):
-            py_buf.push_game(batch_s, batch_p, batch_o)
-
-        for _ in range(WARMUP):
-            py_buf.sample(BATCH, augment=True)
-
-        t0 = time.perf_counter()
-        for _ in range(N_ITERS):
-            py_buf.sample(BATCH, augment=True)
-        py_ms = (time.perf_counter() - t0) / N_ITERS * 1000
-        py_label = f"{py_ms:.3f} ms/batch  ({py_ms/BATCH*1000:.2f} µs/sample)"
-    except Exception as exc:
-        py_label = f"(unavailable: {exc})"
-        py_ms    = None
-
     with capsys.disabled():
         print(f"\n{'─'*56}")
-        print(f"  ReplayBuffer sample_batch benchmark  (batch={BATCH})")
+        print(f"  RustReplayBuffer sample_batch benchmark  (batch={BATCH})")
         print(f"{'─'*56}")
-        print(f"  Rust  : {rust_ms:.3f} ms/batch  ({rust_ms/BATCH*1000:.2f} µs/sample)")
-        print(f"  Python: {py_label}")
-        if py_ms is not None:
-            print(f"  Speedup: {py_ms/rust_ms:.1f}×")
+        print(f"  {rust_ms:.3f} ms/batch  ({rust_ms/BATCH*1000:.2f} µs/sample)")
         print(f"{'─'*56}\n")
 
     # Target: < 0.5 ms per sample = < 128 ms per 256-sample batch
