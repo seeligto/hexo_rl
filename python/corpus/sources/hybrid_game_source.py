@@ -63,7 +63,9 @@ class HybridGameSource(CorpusSource):
         return "hybrid"
 
     def __len__(self) -> int | None:
-        seed_len = len(self._seed_source)
+        # Call __len__ directly rather than len() — the base class signals
+        # "unknown length" with None, which builtin len() cannot accept.
+        seed_len = self._seed_source.__len__()
         if seed_len is None:
             return None
         return seed_len * self._games_per_seed
