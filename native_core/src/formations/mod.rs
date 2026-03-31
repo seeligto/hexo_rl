@@ -14,6 +14,7 @@ pub enum Formation {
 
 pub struct FormationDetector;
 
+#[allow(dead_code)]
 impl FormationDetector {
     /// Returns true if the current player has a forced-win formation.
     /// For now, we implement a simplified version that checks for 
