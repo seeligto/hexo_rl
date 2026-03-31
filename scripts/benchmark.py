@@ -125,28 +125,49 @@ def benchmark_inference_latency(model: "HexTacToeNet") -> Dict[str, Any]:
 
 
 def benchmark_replay_buffer(buffer: "RustReplayBuffer") -> Dict[str, Any]:
-    """Replay buffer sample speed."""
-    raw_iters = 2_000
-    aug_iters = 200
+    """Replay buffer push + sample speed.
 
-    # 1. Raw sampling
+    Measures three things:
+      push_per_sec     — how fast the stats-loop thread can ingest positions
+      us_per_batch     — raw (no-augment) sample_batch(256) latency in µs
+      us_per_batch_aug — augmented sample_batch(256) latency in µs
+    """
+    BATCH     = 256
+    raw_iters = 2_000
+    aug_iters = 500
+    push_iters = 10_000
+
+    dummy_state  = np.zeros((18, 19, 19), dtype=np.float16)
+    dummy_policy = np.ones(362, dtype=np.float32) / 362.0
+
+    # 1. Push throughput
+    t0 = time.perf_counter()
+    for _ in range(push_iters):
+        buffer.push(dummy_state, dummy_policy, 0.0)
+    elapsed_push = time.perf_counter() - t0
+    push_per_sec = push_iters / elapsed_push
+
+    # 2. Raw sampling (no augmentation)
     t0 = time.perf_counter()
     for _ in range(raw_iters):
-        buffer.sample_batch(256, False)
+        buffer.sample_batch(BATCH, False)
     elapsed_raw = time.perf_counter() - t0
 
-    # 2. Augmented sampling
+    # 3. Augmented sampling
     t1 = time.perf_counter()
     for _ in range(aug_iters):
-        buffer.sample_batch(256, True)
+        buffer.sample_batch(BATCH, True)
     elapsed_aug = time.perf_counter() - t1
-    
+
+    us_per_batch     = elapsed_raw / raw_iters * 1e6
+    us_per_batch_aug = elapsed_aug / aug_iters * 1e6
+
     return {
-        "name":          "Replay buffer sample (batch=256)",
-        "samples":       raw_iters,
-        "elapsed_sec":   elapsed_raw,
-        "us_per_sample": elapsed_raw / raw_iters * 1e6,
-        "aug_ms":        elapsed_aug / aug_iters * 1000,
+        "name":              "Replay buffer sample (batch=256)",
+        "push_per_sec":      push_per_sec,
+        "us_per_batch":      us_per_batch,
+        "us_per_batch_aug":  us_per_batch_aug,
+        "us_per_pos_aug":    us_per_batch_aug / BATCH,
     }
 
 
@@ -284,13 +305,16 @@ def benchmark_worker_pool(
     else:
         batch_saturation = 0.0
 
+    positions_per_hour = (pool.positions_pushed / elapsed) * 3600.0
+
     result = {
-        "name":             "Worker pool throughput",
-        "games_completed":  pool.games_completed,
-        "positions_pushed": pool.positions_pushed,
-        "elapsed_sec":      elapsed,
-        "games_per_hour":   games_per_hour,
-        "batch_saturation": batch_saturation,
+        "name":               "Worker pool throughput",
+        "games_completed":    pool.games_completed,
+        "positions_pushed":   pool.positions_pushed,
+        "elapsed_sec":        elapsed,
+        "games_per_hour":     games_per_hour,
+        "positions_per_hour": positions_per_hour,
+        "batch_saturation":   batch_saturation,
     }
     if stop_error is not None:
         result["stop_error"] = stop_error
@@ -301,14 +325,17 @@ def benchmark_worker_pool(
 
 # (name, metric_key, target, higher_is_better)
 _CHECKS = [
-    ("MCTS (CPU only, no NN)",          "sims_per_sec",     150_000,  True),
-    ("NN inference (batch=64)",          "positions_per_sec",  8_000,  True),
-    ("NN latency (batch=1)",             "mean_ms",                5,  False),
-    ("Replay buffer sample (batch=256)", "us_per_sample",       1000,  False),
-    ("GPU utilisation",                  "gpu_util_pct",          80,  True),
-    ("GPU utilisation",                  "vram_used_gb",           0,  False), # 0 means dynamic target
-    ("Worker pool throughput",           "games_per_hour",      1500,  True),
-    ("Worker pool throughput",           "batch_saturation",      50,  True),
+    ("MCTS (CPU only, no NN)",          "sims_per_sec",       150_000,  True),
+    ("NN inference (batch=64)",          "positions_per_sec",    8_000,  True),
+    ("NN latency (batch=1)",             "mean_ms",                  5,  False),
+    ("Replay buffer sample (batch=256)", "us_per_batch",          1000,  False),
+    ("Replay buffer sample (batch=256)", "us_per_batch_aug",      1000,  False),
+    ("Replay buffer sample (batch=256)", "push_per_sec",        50_000,  True),
+    ("GPU utilisation",                  "gpu_util_pct",             80,  True),
+    ("GPU utilisation",                  "vram_used_gb",              0,  False), # 0 means dynamic target
+    ("Worker pool throughput",           "games_per_hour",         1500,  True),
+    ("Worker pool throughput",           "positions_per_hour",   50_000,  True),
+    ("Worker pool throughput",           "batch_saturation",         50,  True),
 ]
 
 
@@ -348,11 +375,22 @@ def print_benchmark_report(results: List[Dict[str, Any]]) -> bool:
         ok = (val >= target) if higher else (val <= target)
         if not ok:
             all_pass = False
-        status    = "[green]PASS[/green]" if ok else "[red]FAIL[/red]"
-        op        = "≥" if higher else "≤"
-        unit      = _unit(key)
+        status = "[green]PASS[/green]" if ok else "[red]FAIL[/red]"
+        op     = "≥" if higher else "≤"
+        unit   = _unit(key)
+
+        # Human-readable row label overrides (kept short to fit 80-col terminal)
+        _LABELS = {
+            "batch_saturation":   "Worker pool batch fill %",
+            "us_per_batch":       "Buffer sample raw (batch=256)",
+            "us_per_batch_aug":   "Buffer sample aug (batch=256)",
+            "push_per_sec":       "Buffer push throughput",
+            "positions_per_hour": "Worker pool positions/hr",
+        }
+        row_name = _LABELS.get(key, name)
+
         table.add_row(
-            f"{name} [{key}]" if key == "batch_saturation" else name,
+            row_name,
             f"{val:,.1f}{unit}",
             f"{op} {target:,}{unit}",
             status,
@@ -370,12 +408,13 @@ def print_benchmark_report(results: List[Dict[str, Any]]) -> bool:
 
 
 def _unit(key: str) -> str:
-    if "per_sec" in key: return " units/s"
-    if "ms" in key:      return " ms"
-    if "us" in key:      return " μs"
-    if "pct" in key:     return "%"
+    if "per_sec" in key:  return " /s"
+    if "per_hour" in key: return " /hr"
+    if "_ms" in key:      return " ms"
+    if "_us" in key:      return " μs"
+    if "pct" in key:      return "%"
     if "saturation" in key: return "%"
-    if "hour" in key:    return " /hr"
+    if "hour" in key:     return " /hr"
     return ""
 
 
@@ -481,8 +520,13 @@ def main() -> None:
             console.print(f"mean={r['mean_ms']:.2f} ms  "
                           f"p50={r['p50_ms']:.2f} ms  "
                           f"p99={r['p99_ms']:.2f} ms")
-        elif "us_per_sample" in r:
-            console.print(f"{r['us_per_sample']:.1f} μs/sample (raw), {r.get('aug_ms', 0):.2f} ms/sample (augmented)")
+        elif "us_per_batch" in r:
+            console.print(
+                f"push={r['push_per_sec']:,.0f}/s  "
+                f"raw={r['us_per_batch']:.0f} μs/batch  "
+                f"aug={r['us_per_batch_aug']:.0f} μs/batch "
+                f"({r['us_per_pos_aug']:.2f} μs/pos)"
+            )
         elif "gpu_util_pct" in r:
             pct = r.get("gpu_util_pct")
             vram = r.get("vram_used_gb")
@@ -492,7 +536,8 @@ def main() -> None:
             )
         elif "games_per_hour" in r:
             console.print(
-                f"{r['games_per_hour']:.1f} games/hour  "
+                f"{r['games_per_hour']:,.0f} games/hr  "
+                f"{r.get('positions_per_hour', 0):,.0f} pos/hr  "
                 f"games={r['games_completed']}  positions={r['positions_pushed']}",
                 end=""
             )
