@@ -1,6 +1,3 @@
-[submodule "vendor/bots/ramora"]
-	path = vendor/bots/ramora
-	url = https://github.com/Ramora0/HexTicTacToe
 [submodule "vendor/bots/httt_collection"]
 	path = vendor/bots/httt_collection
 	url = https://github.com/Ramora0/HexTacToeBots

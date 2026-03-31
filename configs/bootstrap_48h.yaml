@@ -1,0 +1,22 @@
+# bootstrap_48h.yaml — bootstrap run capped at 48 wall-clock hours
+
+bootstrap:
+  wall_clock_hours: 48
+  workers: 16
+  buffer_capacity: 1_000_000
+  depth_schedule:
+    3: 0.30
+    5: 0.70
+  train_start_fill_fraction: 0.50
+  augment: true
+  tag_game_ids: true
+  min_ply_before_push: 2
+
+  auto_promote:
+    value_loss: 0.20
+    policy_loss: 3.80
+    win_rate_vs_sealbot: 0.35
+
+  checkpoint_every_steps: 1000
+  log_dir: logs/bootstrap_48h
+  checkpoint_dir: checkpoints/bootstrap_48h

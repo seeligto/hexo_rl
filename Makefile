@@ -12,9 +12,9 @@ CONFIG_MULTI ?= configs/long_run_balanced.yaml
 CHECKPOINT_BOOTSTRAP ?= checkpoints/bootstrap_model.pt
 CHECKPOINT_LATEST ?= $(shell ls -1 checkpoints/checkpoint_*.pt 2>/dev/null | tail -n 1)
 
-RAMORA_N ?= 100
-RAMORA_TIME ?= 0.03
-RAMORA_SIMS ?= 128
+SEALBOT_N ?= 100
+SEALBOT_TIME ?= 0.03
+SEALBOT_SIMS ?= 128
 
 
 .PHONY: help
@@ -132,31 +132,31 @@ plot.train: ## Plot a specific training log (LOG=logs/xxxx.jsonl)
 	@test -n "$(LOG)" || (echo "Usage: make plot.train LOG=logs/<file>.jsonl" && exit 1)
 	$(PY) scripts/plot_training.py --log-file "$(LOG)"
 
-.PHONY: plot.ramora.latest
-plot.ramora.latest: ## Plot latest Ramora eval log
-	$(PY) scripts/plot_ramora_eval.py --latest
+.PHONY: plot.sealbot.latest
+plot.sealbot.latest: ## Plot latest SealBot eval log
+	$(PY) scripts/plot_sealbot_eval.py --latest
 
-.PHONY: plot.ramora.all
-plot.ramora.all: ## Plot aggregated Ramora eval trend
-	$(PY) scripts/plot_ramora_eval.py --all
+.PHONY: plot.sealbot.all
+plot.sealbot.all: ## Plot aggregated SealBot eval trend
+	$(PY) scripts/plot_sealbot_eval.py --all
 
-.PHONY: eval.ramora.latest
-eval.ramora.latest: ## Evaluate latest checkpoint vs Ramora
+.PHONY: eval.sealbot.latest
+eval.sealbot.latest: ## Evaluate latest checkpoint vs SealBot
 	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
-	$(PY) scripts/eval_vs_ramora.py --checkpoint $(CHECKPOINT_LATEST) --n-games $(RAMORA_N) --time-limit $(RAMORA_TIME) --model-sims $(RAMORA_SIMS)
+	$(PY) scripts/eval_vs_sealbot.py --checkpoint $(CHECKPOINT_LATEST) --n-games $(SEALBOT_N) --time-limit $(SEALBOT_TIME) --model-sims $(SEALBOT_SIMS)
 
-.PHONY: eval.ramora
-eval.ramora: ## Evaluate specific checkpoint vs Ramora (CKPT=...)
-	@test -n "$(CKPT)" || (echo "Usage: make eval.ramora CKPT=checkpoints/checkpoint_XXXXXXXX.pt" && exit 1)
-	$(PY) scripts/eval_vs_ramora.py --checkpoint "$(CKPT)" --n-games $(RAMORA_N) --time-limit $(RAMORA_TIME) --model-sims $(RAMORA_SIMS)
+.PHONY: eval.sealbot
+eval.sealbot: ## Evaluate specific checkpoint vs SealBot (CKPT=...)
+	@test -n "$(CKPT)" || (echo "Usage: make eval.sealbot CKPT=checkpoints/checkpoint_XXXXXXXX.pt" && exit 1)
+	$(PY) scripts/eval_vs_sealbot.py --checkpoint "$(CKPT)" --n-games $(SEALBOT_N) --time-limit $(SEALBOT_TIME) --model-sims $(SEALBOT_SIMS)
 
-.PHONY: eval.ramora.quick
-eval.ramora.quick: ## Quick Ramora eval (10 games)
-	$(MAKE) eval.ramora.latest RAMORA_N=10 RAMORA_TIME=0.01 RAMORA_SIMS=64
+.PHONY: eval.sealbot.quick
+eval.sealbot.quick: ## Quick SealBot eval (10 games)
+	$(MAKE) eval.sealbot.latest SEALBOT_N=10 SEALBOT_TIME=0.01 SEALBOT_SIMS=64
 
-.PHONY: eval.ramora.full
-eval.ramora.full: ## Full Ramora eval (100 games)
-	$(MAKE) eval.ramora.latest RAMORA_N=100 RAMORA_TIME=0.03 RAMORA_SIMS=128
+.PHONY: eval.sealbot.full
+eval.sealbot.full: ## Full SealBot eval (100 games)
+	$(MAKE) eval.sealbot.latest SEALBOT_N=100 SEALBOT_TIME=0.03 SEALBOT_SIMS=128
 
 .PHONY: pretrain.lite
 pretrain.lite: ## Short bootstrap pretrain
