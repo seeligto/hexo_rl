@@ -8,7 +8,7 @@ This document captures everything learned from the Hex Tac Toe community Discord
 
 | Resource | URL | Relevance |
 |---|---|---|
-| Strongest public engine | <https://github.com/Ramora0/HexTicTacToe> | Bootstrap source — apply line-1094 fix before use |
+| Strongest public engine | <https://github.com/Ramora0/SealBot> | Bootstrap source — pybind11 minimax engine |
 | Shared bot collection + tournament runner | <https://github.com/Ramora0/HexTacToeBots> | Evaluation target |
 | `hexo` Python package | <https://github.com/PierreLapolla/hexo> (PyPI: `hexo`) | **Investigate first** — may replace our board/notation layer |
 | Bot API spec (v1) | <https://github.com/hex-tic-tac-toe/htttx-bot-api> | Deploy target: <https://explore.htttx.io/> |
@@ -20,57 +20,41 @@ This document captures everything learned from the Hex Tac Toe community Discord
 
 ---
 
-## 2. The Ramora0 engine — bootstrap source
+## 2. The SealBot engine — bootstrap source
 
-**Do not build our own minimax bot.** The Ramora0 C++ engine (`cpp/engine.h`) is already the strongest public bot, written by imaseal, and publicly available. Use it directly to generate the bootstrap corpus.
+**Do not build our own minimax bot.** SealBot (by imaseal, repo: `Ramora0/SealBot`) is the strongest public bot, available as a pybind11 module. Use it directly to generate the bootstrap corpus.
 
 ### How to use the engine
 
-The engine exposes a standard interface. Wrap it behind the community Bot API spec (see section 4) and generate games via the tournament runner in `HexTacToeBots`. This is far faster than calling it through Python subprocesses naively.
+SealBot is imported directly as a Python module via pybind11 — no subprocess or binary compilation needed. The wrapper at `python/bootstrap/bots/sealbot_bot.py` handles path setup and the `BotProtocol` interface.
 
 ```python
-# python/bootstrap/ramora_wrapper.py
+# python/bootstrap/bots/sealbot_bot.py (simplified)
+from minimax_cpp import MinimaxBot as _MinimaxBot
+from game import Player as SealPlayer
 
-import subprocess
-import json
-from pathlib import Path
+class SealBotBot(BotProtocol):
+    """Wraps the SealBot pybind11 minimax engine."""
+    def __init__(self, time_limit: float = 0.05):
+        self._bot = _MinimaxBot(time_limit)
+        ...
 
-class RamoraEngine:
-    """
-    Wraps the compiled Ramora0 C++ engine via the community bot API.
-    Assumes the engine binary is built at native_core/vendor/ramora/engine.
-    Apply the line-1094 patch before building.
-    """
-    def __init__(self, binary_path: str, depth: int = 5):
-        self.binary = Path(binary_path)
-        self.depth = depth
-        assert self.binary.exists(), f"Engine binary not found: {binary_path}"
-
-    def get_move(self, board_state: dict) -> tuple[int, int]:
-        """
-        Send a board state dict (in bot-api-v1 format) and get back a move.
-        """
-        payload = json.dumps({
-            "board": board_state,
-            "depth": self.depth,
-        })
-        result = subprocess.run(
-            [str(self.binary)],
-            input=payload, capture_output=True, text=True, timeout=30,
-        )
-        response = json.loads(result.stdout)
-        return response["row"], response["col"]
+    def get_move(self, state, board) -> tuple[int, int]:
+        result = self._bot.get_move(game)
+        return (result.q, result.r)
 ```
 
-### Recommended depth mix for corpus generation
+### Time limit configuration for corpus generation
 
-| Depth | Speed (approx) | Use |
+SealBot uses a time limit (seconds per move) rather than a fixed depth:
+
+| Time limit | Speed (approx) | Use |
 |---|---|---|
-| 3 | ~50,000 games/hour | Bulk corpus — tactical basics |
-| 5 | ~5,000 games/hour | Quality games — stronger patterns |
-| 7 | ~200 games/hour | Avoid — too slow, prior too strong |
+| 0.03s | Fast | Bulk corpus — tactical basics |
+| 0.05s | Medium | Default — good balance of speed and quality |
+| 0.10s | Slow | Quality games — stronger patterns |
 
-Recommended split: **70% depth-3, 30% depth-5**. The depth-5 games provide stronger positional signal; the depth-3 games provide volume and diversity.
+Configured via `sealbot_time_limit` in bootstrap YAML configs. The `sealbot_time_mix` option allows mixing multiple time limits for diversity.
 
 ---
 
@@ -392,8 +376,8 @@ From the Discord: no RL bot has yet surpassed the strongest public minimax bot. 
 
 - **Can it explain its moves?** Outputting top-k policy moves + value estimates (via the bot API metadata field) gives the community something to analyse.
 - **Does it play known theory?** Early evaluation games should be checked against the opening table — if the network is ignoring `A0 A2 x A1 A4` (closed game main line) in favour of random-looking moves, something is wrong.
-- **Win rate vs Ramora0 at depth 5** is the natural community benchmark. Target: ≥ 55% win rate = clearly stronger.
-- **SPRT-style testing**: P_P has a working SPRT runner. Once we reach a candidate, run SPRT against the Ramora0 baseline for a statistically valid strength claim.
+- **Win rate vs SealBot** is the natural community benchmark. Target: ≥ 55% win rate = clearly stronger.
+- **SPRT-style testing**: P_P has a working SPRT runner. Once we reach a candidate, run SPRT against the SealBot baseline for a statistically valid strength claim.
 
 ---
 
@@ -441,7 +425,7 @@ If it has gaps, use it where it works and note what it misses.
 
 ## 9. SealBot engine internals — candidate generation pattern
 
-The community's strongest bot (SealBot / Ramora0) uses these constants:
+The community's strongest bot (SealBot) uses these constants:
 
 ```cpp
 static constexpr int    CANDIDATE_CAP      = 15;  // max candidate moves per node

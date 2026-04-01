@@ -305,10 +305,10 @@ Every `eval_interval` training steps, the new checkpoint plays a round-robin tou
 
 - Previous checkpoint
 - Best checkpoint so far
-- Ramora0 engine at depth 3 (compiled with line-1094 bug fixed)
-- Ramora0 engine at depth 5
+- SealBot engine (time_limit=0.03)
+- SealBot engine (time_limit=0.10)
 
-The **win rate vs Ramora0 depth-5** is the primary community benchmark. Target: ≥ 55% win rate over 100 games = meaningfully stronger than the current best public bot.
+The **win rate vs SealBot** is the primary community benchmark. Target: ≥ 55% win rate over 100 games = meaningfully stronger than the current best public bot.
 
 Elo is updated using standard formula:
 

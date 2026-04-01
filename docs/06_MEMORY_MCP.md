@@ -17,7 +17,7 @@
   - [x] ResNet-10 single-trunk batching (K clusters evaluated as one batch).
   - [x] Value min-pooling for pessimistic threat detection across colonies.
   - [x] Global Policy Mapping for infinite board coordination.
-  - [x] RamoraBot bounds constraint removed.
+  - [x] SealBotBot bounds constraint removed.
   - [x] `requirements.txt` added and setup instructions updated.
 
 ## Benchmarks (RTX 3070)

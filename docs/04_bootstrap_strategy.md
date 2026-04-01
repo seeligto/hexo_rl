@@ -14,16 +14,16 @@ Pretraining on existing games gives the network a warm start with tactical intui
 
 ## Corpus sources — three tiers, combined
 
-All three sources are fed into a single pretrain dataset. They are complementary: human games have strategic depth, Ramora0 games have tactical precision, random games add coverage diversity.
+All three sources are fed into a single pretrain dataset. They are complementary: human games have strategic depth, SealBot games have tactical precision, random games add coverage diversity.
 
 | Source | Volume | Strength | How to get |
 |---|---|---|---|
 | Human game archive (hexo.did.science) | 42,000+ rated games | Real strategic patterns | Scraper (see below) |
 | Human game archive (he-xo.com) | ~5,000 games | Strategic diversity | Scraper (see below) |
-| Ramora0 engine self-play | Unlimited | Tactical precision | RamoraBot wrapper |
+| SealBot engine self-play | Unlimited | Tactical precision | SealBotBot wrapper |
 | Random play | Unlimited | Coverage only | RandomBot |
 
-**Priority order**: human games first, then Ramora0, then random to fill gaps. Human games are the most valuable signal — they contain opening theory, formation recognition, and endgame technique that minimax at depth 3–5 won't generate.
+**Priority order**: human games first, then SealBot, then random to fill gaps. Human games are the most valuable signal — they contain opening theory, formation recognition, and endgame technique that minimax won't generate.
 
 Corpus generation is configured in `configs/default.yaml`:
 
@@ -31,7 +31,7 @@ Corpus generation is configured in `configs/default.yaml`:
 bootstrap:
   human_games_min_moves: 20          # filter out surrenders and short games
   human_games_rated_only: true
-  ramora_depth_mix: {3: 0.7, 5: 0.3} # 70% depth-3, 30% depth-5
+  sealbot_time_mix: {0.03: 0.7, 0.1: 0.3} # 70% fast, 30% quality
   target_positions: 500000            # total positions in pretrain dataset
 ```
 
@@ -39,7 +39,7 @@ bootstrap:
 
 ## Bot protocol — all bots are interchangeable
 
-Every game source (Ramora0, community bots, our own model, random) implements `BotProtocol`.
+Every game source (SealBot, community bots, our own model, random) implements `BotProtocol`.
 This means any community bot implementing the API spec can be plugged into corpus generation
 or evaluation without additional code.
 
@@ -50,13 +50,13 @@ from abc import ABC, abstractmethod
 class BotProtocol(ABC):
     @abstractmethod
     def get_move(self, state: GameState) -> tuple[int, int]: ...
-    
+
     @abstractmethod
     def name(self) -> str: ...
 
-class RamoraBot(BotProtocol):
-    """Wraps the Ramora0 C++ engine at a given search depth."""
-    def __init__(self, binary_path: str, depth: int = 5): ...
+class SealBotBot(BotProtocol):
+    """Wraps the SealBot pybind11 minimax engine."""
+    def __init__(self, time_limit: float = 0.05): ...
 
 class OurModelBot(BotProtocol):
     """Wraps our own checkpoint + MCTS at configurable simulations."""
@@ -142,13 +142,11 @@ def scrape_corpus(output_path: str = "data/human_games.npz", **kwargs):
 
 ---
 
-## Minimax bot — use Ramora0, don't build from scratch
+## Minimax bot — use SealBot, don't build from scratch
 
-**Do not implement a minimax bot.** The Ramora0 C++ engine (`cpp/engine.h`) is the strongest known public bot and is already available at https://github.com/Ramora0/HexTicTacToe. Use it directly.
+**Do not implement a minimax bot.** SealBot (repo: `Ramora0/SealBot`) is the strongest known public bot and is available as a pybind11 module. Use it directly via the `SealBotBot` wrapper.
 
-**Before generating any corpus, apply the line-1094 bug fix** (documented in `05_COMMUNITY_INTEGRATION.md`). The bug causes some positions to receive incorrect evaluations — training on corrupted positions silently degrades the value head. The fix is a one-liner and the community has documented exactly what to change.
-
-See `05_COMMUNITY_INTEGRATION.md` section 2 for the `RamoraEngine` Python wrapper and recommended depth mix.
+See `05_COMMUNITY_INTEGRATION.md` section 2 for the `SealBotBot` wrapper and recommended time limit configuration.
 
 ---
 
@@ -421,7 +419,7 @@ Before starting self-play, verify the pretrained model is sane. Two checks:
 def validate_pretrained(model, n_games: int = 100) -> dict:
     """
     Check 1: beat random opponent >> 95% of the time.
-    Check 2: win rate vs Ramora0 depth-3 should be > 10% 
+    Check 2: win rate vs SealBot should be > 10%
              (not expected to beat it yet, but shouldn't be 0%).
     """
     wins = 0

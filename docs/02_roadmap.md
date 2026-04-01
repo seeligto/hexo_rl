@@ -109,8 +109,8 @@ n_workers: 1
 
 ### Tasks
 
-- [x] Integrate or implement minimax bot (depth 3–5, α-β pruning) in Python or Rust (Implemented as RamoraBot wrapper)
-- [x] Heuristic evaluation function for minimax: counts of open 3/4/5-in-a-rows per player (Integrated via Ramora engine)
+- [x] Integrate or implement minimax bot (depth 3–5, α-β pruning) in Python or Rust (Implemented as SealBotBot wrapper)
+- [x] Heuristic evaluation function for minimax: counts of open 3/4/5-in-a-rows per player (Integrated via SealBot engine)
 - [x] Generate supervised corpus: 10,000–50,000 minimax vs minimax games (Implemented via generate_corpus.py with persistent cache)
 - [x] Implement `BootstrapTrainer`:
   - Policy head: behavior cloning loss (cross-entropy with minimax move distribution)
@@ -137,7 +137,7 @@ n_workers: 1
 - [x] **Rust Core Update**: Implement dynamic stone clustering (distance ≤ 8) and multi-window 2-plane snapshot generation (K × 19×19 per cluster). Rust returns 2-plane views; Python assembles 18-plane tensors.
 - [x] **Network Refactor**: Simplify to a single-trunk ResNet-10 that processes K clusters as a batch.
 - [x] **Pipeline Integration**: Implement Value Pooling (min-pooling for pessimistic threat detection) and Policy Mapping (global coordinate translation).
-- [x] **Un-constrain Bots**: Remove 19x19 bounds from RamoraBot to enable full colony meta play.
+- [x] **Un-constrain Bots**: Remove 19x19 bounds from SealBotBot to enable full colony meta play.
 - [x] **RustReplayBuffer**: Port replay buffer and 12-fold hex augmentation to Rust (f16-as-u16 storage, zero-copy PyO3 transfer). Python `ReplayBuffer` deleted.
 - [x] **128-bit Zobrist**: Upgrade hashing from 64-bit to 128-bit (splitmix128) to eliminate collision risk at sustained >150k sim/s.
 - [x] **Benchmarking**: Verify throughput stays >5,000 pos/sec (Actual: ~52,000 pos/sec).

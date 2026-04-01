@@ -57,7 +57,7 @@ feat(env): add axial coordinate board with win detection
 feat(mcts): implement PUCT node selection in Rust
 feat(mcts): integrate FxHashMap Transposition Table with Zobrist hashing
 feat(training): add FP16 replay buffer with NumPy ring arrays
-fix(mcts): apply Ramora0 transposition table bug fix
+fix(mcts): apply SealBot transposition table bug fix
 test(env): add win detection tests for all 3 hex axes
 chore(deps): add pyo3, maturin, structlog to dependencies
 ```
@@ -171,22 +171,22 @@ Always use `git submodule add` — never clone into a tracked path:
 
 ```bash
 # Add a bot as a submodule under vendor/bots/
-git submodule add https://github.com/Ramora0/HexTicTacToe vendor/bots/ramora
+git submodule add https://github.com/Ramora0/SealBot vendor/bots/sealbot
 git submodule add https://github.com/Ramora0/HexTacToeBots vendor/bots/httt_collection
 
 # After cloning the repo fresh, initialise submodules:
 git submodule update --init --recursive
 
 # To update a submodule to latest upstream:
-cd vendor/bots/ramora && git pull origin main && cd -
-git add vendor/bots/ramora && git commit -m "chore(vendor): update ramora to latest"
+cd vendor/bots/sealbot && git pull origin main && cd -
+git add vendor/bots/sealbot && git commit -m "chore(vendor): update sealbot to latest"
 ```
 
 ### When integrating a new bot
 
 1. Add as submodule (above)
 2. Read its source — understand the interface, build system, and move format
-3. Check for known bugs (Ramora0 has a documented line-1094 bug — see docs/05_COMMUNITY_INTEGRATION.md)
+3. Check for known bugs (SealBot has a documented colony-bug risk — see docs/05_COMMUNITY_INTEGRATION.md)
 4. Write a `BotProtocol` wrapper in `python/bootstrap/bots/`
 5. Add a build step to `scripts/build_vendor.sh` if it needs compilation
 6. Write a smoke test: bot returns a legal move on a fresh board
@@ -196,7 +196,7 @@ git add vendor/bots/ramora && git commit -m "chore(vendor): update ramora to lat
 
 | Path | Bot | Notes |
 |---|---|---|
-| `vendor/bots/ramora` | Ramora0/HexTicTacToe | Strongest public bot — apply line-1094 fix before use |
+| `vendor/bots/sealbot` | Ramora0/SealBot | Strongest public bot — pybind11 minimax engine |
 | `vendor/bots/httt_collection` | Ramora0/HexTacToeBots | Community collection + tournament runner |
 
 When the community adds new bots, add them here as submodules. Check the
@@ -204,15 +204,9 @@ HexTacToeBots repo and the community Discord periodically for new entries.
 
 ### Bot compilation
 
-Ramora0 is C++ and must be compiled before use:
-
-```bash
-# scripts/build_vendor.sh — run once after cloning or updating submodules
-cd vendor/bots/ramora/cpp
-# Apply the line-1094 bug fix first (see docs/05_COMMUNITY_INTEGRATION.md)
-g++ -O3 -o engine engine.h   # or whatever the actual build command is
-                               # read the repo's README first
-```
+SealBot uses pybind11 and is imported directly as a Python module — no separate
+compilation step is needed. The wrapper at `python/bootstrap/bots/sealbot_bot.py`
+adds `vendor/bots/sealbot` to `sys.path` and imports `minimax_cpp.MinimaxBot`.
 
 The agent must read the actual README/build instructions in the submodule
 before writing the build command — do not guess.
@@ -232,7 +226,7 @@ class BotProtocol(ABC):
     def name(self) -> str: ...
 
 # Wrappers live in python/bootstrap/bots/:
-#   ramora_bot.py        — wraps compiled Ramora0 binary at configurable depth
+#   sealbot_bot.py       — wraps SealBot pybind11 minimax engine
 #   our_model_bot.py     — wraps our checkpoint + MCTS
 #   random_bot.py        — uniform random (baseline)
 #   community_api_bot.py — wraps any bot-api-v1 HTTP endpoint
@@ -305,7 +299,7 @@ hex_tac_toe_az/
 │   ├── bootstrap/
 │   │   ├── bot_protocol.py          ← BotProtocol ABC
 │   │   ├── bots/
-│   │   │   ├── ramora_bot.py        ← RamoraBot wrapper
+│   │   │   ├── sealbot_bot.py       ← SealBotBot wrapper
 │   │   │   ├── our_model_bot.py     ← OurModelBot wrapper
 │   │   │   ├── random_bot.py        ← RandomBot
 │   │   │   └── community_api_bot.py ← CommunityAPIBot (HTTP)
@@ -323,7 +317,7 @@ hex_tac_toe_az/
 ├── tests/
 ├── vendor/
 │   └── bots/                        ← git submodules
-│       ├── ramora/                  ← Ramora0/HexTicTacToe
+│       ├── sealbot/                 ← Ramora0/SealBot
 │       └── httt_collection/         ← Ramora0/HexTacToeBots
 └── .gitmodules                      ← submodule tracking (committed)
 ```
