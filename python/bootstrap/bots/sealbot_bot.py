@@ -27,9 +27,12 @@ from game import Player as SealPlayer              # type: ignore[import]
 
 
 class SealBotBot(BotProtocol):
-    def __init__(self, time_limit: float = 0.05) -> None:
+    def __init__(self, time_limit: float = 0.05, max_depth: Optional[int] = None) -> None:
         self._time_limit = time_limit
+        self._max_depth = max_depth
         self._bot = _MinimaxBot(time_limit=time_limit)
+        if max_depth is not None:
+            self._bot.max_depth = max_depth
         self._pending_move: Optional[tuple[int, int]] = None
         self._colony_risk_count: int = 0
 
@@ -103,4 +106,6 @@ class SealBotBot(BotProtocol):
         return (q1, r1)
 
     def name(self) -> str:
+        if self._max_depth is not None:
+            return f"SealBot(d={self._max_depth})"
         return f"SealBot(t={self._time_limit})"
