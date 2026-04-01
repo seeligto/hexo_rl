@@ -43,6 +43,9 @@ plots/
 vendor/*
 !vendor/bots
 
+# Deploy (VPS scraper, not ready for version control yet)
+deploy/
+
 # Editor / OS
 .idea/
 .vscode/
