@@ -11,7 +11,7 @@ import torch
 
 from native_core import RustReplayBuffer
 from python.model.network import HexTacToeNet
-from python.training.trainer import Trainer
+from python.training.trainer import Trainer, prune_policy_targets
 
 
 FAST_CONFIG = {
@@ -23,6 +23,7 @@ FAST_CONFIG = {
     "weight_decay":         1e-4,
     "checkpoint_interval":  5,
     "log_interval":         1,
+    "torch_compile":        False,
 }
 
 
@@ -296,3 +297,44 @@ def test_load_weights_only_checkpoint_infers_architecture(tmp_path: Path):
     assert restored.model.board_size == 9
     assert restored.model.res_blocks == 2
     assert restored.model.filters == 32
+
+
+# ── Policy target pruning ────────────────────────────────────────────────────
+
+def test_prune_policy_targets_basic():
+    """Verify pruning zeros entries at/below threshold and renormalizes."""
+    pi = torch.tensor([[0.5, 0.01, 0.4, 0.09]])
+    pruned = prune_policy_targets(pi, threshold_frac=0.02)
+
+    # threshold = 0.02 * 0.5 = 0.01; strict > means 0.01 is zeroed
+    assert pruned[0, 1].item() == 0.0, "entry at threshold should be zeroed"
+    assert pruned[0, 0].item() > 0.0, "max entry should be kept"
+    assert pruned[0, 2].item() > 0.0, "0.4 should be kept"
+    assert pruned[0, 3].item() > 0.0, "0.09 should be kept"
+    assert abs(pruned.sum().item() - 1.0) < 1e-5, "should renormalize to 1.0"
+
+
+def test_prune_policy_targets_zero_frac_noop():
+    """threshold_frac=0 should return the input unchanged."""
+    pi = torch.tensor([[0.5, 0.3, 0.2]])
+    result = prune_policy_targets(pi, threshold_frac=0.0)
+    assert torch.allclose(pi, result)
+
+
+def test_prune_policy_targets_batch():
+    """Pruning should work independently per row."""
+    pi = torch.tensor([
+        [0.8, 0.1, 0.05, 0.05],
+        [0.25, 0.25, 0.25, 0.25],
+    ])
+    pruned = prune_policy_targets(pi, threshold_frac=0.10)
+    # Row 0: threshold = 0.10 * 0.8 = 0.08. Keep 0.8 and 0.1; prune 0.05, 0.05
+    assert pruned[0, 2].item() == 0.0
+    assert pruned[0, 3].item() == 0.0
+    assert pruned[0, 0].item() > 0.0
+    assert pruned[0, 1].item() > 0.0
+    # Row 1: threshold = 0.10 * 0.25 = 0.025. All entries > 0.025, so all kept
+    assert (pruned[1] > 0).all()
+    # Both rows sum to 1.0
+    assert abs(pruned[0].sum().item() - 1.0) < 1e-5
+    assert abs(pruned[1].sum().item() - 1.0) < 1e-5
