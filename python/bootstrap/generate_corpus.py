@@ -11,6 +11,7 @@ Games are saved as JSON files to data/corpus/bot_games/<bot>_d<depth>/
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -69,18 +70,31 @@ def _play_one_game(
     }
 
 
+def _game_hash(moves: list[dict]) -> str:
+    """SHA-256 of the move sequence, truncated to 16 hex chars."""
+    key = json.dumps(moves, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
 def generate_bot_games(
     bot: BotProtocol,
     n_games: int,
     output_dir: Path,
     rng_seed: int = 42,
 ) -> int:
-    """Generate n_games self-play games and save to output_dir.
+    """Generate n_games unique self-play games and save to output_dir.
 
-    Returns the number of games successfully generated (with a winner).
+    Games are named by a hash of their move sequence, so:
+    - Re-running never overwrites existing games with different content
+    - Duplicate games (identical move sequences) are detected and skipped
+
+    Returns the number of new games saved (excludes duplicates and pre-existing).
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = set(p.stem for p in output_dir.glob("*.json"))
     saved = 0
+    dupes = 0
     t0 = time.monotonic()
 
     for i in range(n_games):
@@ -89,21 +103,27 @@ def generate_bot_games(
             log.info("game_no_winner", game=i, status="skipped")
             continue
 
-        path = output_dir / f"game_{i:06d}.json"
+        name = _game_hash(result["moves"])
+        if name in existing:
+            dupes += 1
+            continue
+
+        path = output_dir / f"{name}.json"
         with open(path, "w") as f:
             json.dump(result, f)
+        existing.add(name)
         saved += 1
 
         if saved % 50 == 0:
             elapsed = time.monotonic() - t0
             rate = saved / elapsed if elapsed > 0 else 0
             log.info("corpus_progress", saved=saved, total=n_games,
-                     rate_per_min=f"{rate * 60:.1f}")
+                     dupes=dupes, rate_per_min=f"{rate * 60:.1f}")
 
     elapsed = time.monotonic() - t0
     log.info("corpus_generation_complete",
-             saved=saved, attempted=n_games,
-             elapsed_min=f"{elapsed / 60:.1f}")
+             saved=saved, dupes=dupes, attempted=n_games,
+             total_on_disk=len(existing), elapsed_min=f"{elapsed / 60:.1f}")
     return saved
 
 
