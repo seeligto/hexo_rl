@@ -17,12 +17,11 @@ def test_replay_buffer_benchmark_smoke() -> None:
             0.0,
         )
 
-    result = benchmark_replay_buffer(replay)
-    assert result["name"] == "Replay buffer sample (batch=256)"
-    assert result["push_per_sec"] > 0.0
-    assert result["us_per_batch"] >= 0.0
-    assert result["us_per_batch_aug"] >= 0.0
-    assert result["us_per_pos_aug"] >= 0.0
+    result = benchmark_replay_buffer(replay, n_runs=1, warmup_sec=0.5)
+    assert result["name"] == "Replay buffer"
+    assert result["push"]["value"] > 0.0
+    assert result["raw"]["value"] >= 0.0
+    assert result["aug"]["value"] >= 0.0
 
 
 def test_worker_pool_benchmark_smoke() -> None:
@@ -46,11 +45,11 @@ def test_worker_pool_benchmark_smoke() -> None:
         device=device,
         duration_sec=3,
         n_workers=1,
+        n_runs=1,
+        warmup_sec=3.0,
     )
 
     assert result["name"] == "Worker pool throughput"
-    assert result["elapsed_sec"] > 0.0
-    assert result["games_completed"] >= 0
-    assert result["positions_pushed"] >= 0
-    assert result["games_per_hour"] >= 0.0
-    assert result["positions_per_hour"] >= 0.0
+    assert result["pph"]["value"] >= 0.0
+    assert result["gph"]["value"] >= 0.0
+    assert result["bat"]["value"] >= 0.0
