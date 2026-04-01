@@ -27,7 +27,6 @@
 /// ```
 
 use crate::board::{Board, MoveDiff, BOARD_SIZE};
-use crate::formations::FormationDetector;
 use fxhash::FxHashMap;
 
 /// Pre-allocated pool size. 200 k nodes ≈ 6.4 MB.
@@ -386,13 +385,10 @@ impl MCTSTree {
             return;
         }
 
-        // ── Early Termination: Forced-win formation ──
-        if FormationDetector::has_forced_win(board, board.current_player) {
-            self.pool[leaf_idx as usize].is_terminal    = true;
-            self.pool[leaf_idx as usize].terminal_value = 1.0;
-            self.backup(leaf_idx, 1.0);
-            return;
-        }
+        // NOTE: No forced-win formation short-circuit here. Phoenix showed that
+        // bypassing the NN for near-win positions hurts training — the network
+        // must learn to evaluate these positions itself. Only actual terminal
+        // states (6-in-a-row, draw) are short-circuited above.
 
         // ── Expand: allocate children ──
         let n_ch         = legal_moves.len();
@@ -998,6 +994,52 @@ mod tests {
         );
         assert!((prior_b - expected_b).abs() < 1e-6,
             "child_b prior: expected {expected_b:.6}, got {prior_b:.6}"
+        );
+    }
+
+    #[test]
+    fn test_no_forced_win_short_circuit_in_expansion() {
+        // INVARIANT: MCTS must NOT mark nodes as terminal based on forced-win
+        // formation detection. Only actual game outcomes (6-in-a-row, draw)
+        // may be terminal. The NN must learn to evaluate near-win positions.
+        //
+        // Build a board with an open-four (forced win formation) and verify
+        // that expand_and_backup does NOT mark it terminal.
+        use crate::board::Player;
+
+        let mut board = Board::new();
+        // Place P1 stones at (0,0), (0,1), (0,2), (0,3) — open four on r-axis.
+        // Leave both ends (0,-1) and (0,4) empty.
+        for r in 0..4 {
+            board.cells.insert((0, r), crate::board::Cell::P1);
+        }
+        board.ply = 7; // P1's turn (odd ply = P1 in compound-move counting)
+        board.current_player = Player::One;
+
+        // Sanity: this IS a forced-win formation.
+        assert!(
+            crate::formations::FormationDetector::has_forced_win(&board, Player::One),
+            "test setup: board should have a forced-win formation"
+        );
+        // But NOT an actual win (need 6, not 4).
+        assert!(!board.check_win(), "test setup: board should not be a terminal win");
+
+        // Run MCTS expansion on this board.
+        let mut tree = MCTSTree::new(1.5);
+        tree.new_game(board);
+
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform_policy = vec![1.0 / n_actions as f32; n_actions];
+        let nn_value = 0.5;
+
+        // Expand root — should use the NN value, not a hard 1.0.
+        tree.expand_and_backup(&[uniform_policy], &[nn_value]);
+
+        let root = &tree.pool[0];
+        assert!(
+            !root.is_terminal,
+            "root must NOT be marked terminal for a forced-win formation — \
+             the NN must evaluate these positions, not a heuristic"
         );
     }
 }
