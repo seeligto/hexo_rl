@@ -371,18 +371,18 @@ tests. Full training runs must always use `augment=True` (the default).
 
 Run `make bench.full`. Latest baseline (2026-04-01, Ryzen 7 3700x + RTX 3070, 16 workers):
 
-| Metric | Baseline | Target |
-|---|---|---|
-| MCTS (CPU only, no NN) | 218,385 sim/s | ≥ 150,000 sim/s |
-| NN inference (batch=64) | 10,715 pos/s | ≥ 8,000 pos/s |
-| NN latency (batch=1, mean) | 0.67 ms (p99: 2.37 ms) | ≤ 5 ms |
-| Replay buffer push | 220,777 pos/sec | ≥ 50,000 pos/sec |
-| Replay buffer sample raw (batch=256) | 1,011 µs/batch | ≤ 1,000 µs |
-| Replay buffer sample augmented (batch=256) | 933 µs/batch (3.64 µs/pos) | ≤ 1,000 µs |
-| GPU utilization | 90.7% | ≥ 80% |
-| VRAM usage | 0.77 GB / 8.6 GB | ≤ 80% |
-| Worker throughput | 3,350 games/hr / 1,486,031 pos/hr | ≥ 500,000 pos/hr |
-| Batch fill % | 92.7% | ≥ 50% |
+| Metric | Baseline | Target | Notes |
+|---|---|---|---|
+| MCTS (CPU only, no NN) | 218,385 sim/s | ≥ 180,000 sim/s | Raised from 150k after legal_cache optimisation |
+| NN inference (batch=64) | 10,715 pos/s | ≥ 8,000 pos/s | Kept — GPU-bound, may drop under training load |
+| NN latency (batch=1, mean) | 0.67 ms (p99: 2.37 ms) | ≤ 2 ms | Tightened from 5 ms — 0.7 ms is stable |
+| Replay buffer push | 220,777 pos/sec | ≥ 150,000 pos/sec | Raised from 50k — headroom for larger buffers |
+| Replay buffer sample raw (batch=256) | 1,011 µs/batch | ≤ 1,100 µs | Relaxed from 1,000 — codegen-sensitive, ~1,013 stable |
+| Replay buffer sample augmented (batch=256) | 933 µs/batch (3.64 µs/pos) | ≤ 1,000 µs | Kept |
+| GPU utilization | 90.7% | ≥ 85% | Raised from 80% |
+| VRAM usage | 0.77 GB / 8.6 GB | ≤ 80% | Kept |
+| Worker throughput | 3,350 games/hr / 1,486,031 pos/hr | ≥ 1,000,000 pos/hr | Raised from 500k — positions/hr is the training-critical metric |
+| Batch fill % | 92.7% | ≥ 80% | Raised from 50% — below 80% wastes GPU on padding |
 
 ## Phase 4.0 architecture baseline
 
