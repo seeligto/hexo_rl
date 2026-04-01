@@ -69,7 +69,13 @@ After each commit, confirm tests still pass before starting the next task.
 ### Phase discipline
 
 Always check `docs/02_ROADMAP.md` for the current phase before starting work.
-**Current Status:** Phase 3C (Supervised Pretraining) is **Complete**. **Currently initializing Phase 4.0 Self-Play RL loop.**
+
+**Current Status:** Phase 3C (Supervised Pretraining) is **Complete**.
+
+**Initialising Phase 4.0 Self-Play RL loop.**
+
+Three blocking questions must be resolved before full Phase 4.0 launch —
+see "Phase 4.0 architecture baseline" section and docs/06_OPEN_QUESTIONS.md.
 
 Each phase has explicit exit criteria — do not advance until they are met.
 If you are unsure what phase we are in, check git log for the most recent feat commits.
@@ -196,7 +202,7 @@ git add vendor/bots/sealbot && git commit -m "chore(vendor): update sealbot to l
 
 | Path | Bot | Notes |
 |---|---|---|
-| `vendor/bots/sealbot` | Ramora0/SealBot | Strongest public bot — pybind11 minimax engine |
+| `vendor/bots/sealbot` | Ramora0/SealBot | Strongest public bot — pybind11 minimax engine and primary ELO benchmark target for Phase 4+ |
 | `vendor/bots/httt_collection` | Ramora0/HexTacToeBots | Community collection + tournament runner |
 
 When the community adds new bots, add them here as submodules. Check the
@@ -378,6 +384,19 @@ Run `make bench.full`. Latest baseline (2026-04-01, Ryzen 7 3700x + RTX 3070, 16
 | Worker throughput | 3,350 games/hr / 1,486,031 pos/hr | ≥ 500,000 pos/hr |
 | Batch fill % | 92.7% | ≥ 50% |
 
+## Phase 4.0 architecture baseline
+
+Starting config for self-play RL (do not exceed without benchmarking):
+- Network: 12 residual blocks × 128 channels, SE blocks on every block
+- Value head: global avg + max pooling → FC → cross-entropy loss
+- Auxiliary loss: opponent reply prediction (weight 0.15)
+- Replay buffer: start at 250K samples, grow toward 1M as training stabilises
+- ELO benchmark target: SealBot (replaces Ramora0 as external reference)
+
+Resolved before Phase 4.0 launch:
+- [ ] Open Question 6: sequential vs compound action space
+- [ ] Open Question 5: supervised→self-play transition schedule
+- [ ] Open Question 2: value aggregation strategy (min/mean/attention)
 
 ---
 
