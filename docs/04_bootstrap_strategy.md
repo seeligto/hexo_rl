@@ -529,7 +529,7 @@ The community game archive has a 500-game API limit. A cron job on a VPS
 scrapes new games every 4 hours. During Phase 4.0, the bootstrapping corpus
 consists of:
 - Human games: accumulated via cron (415 games as of 2026-04-01, growing)
-- Bot games: SealBot self-play at depth 4 (2,000 games) and depth 8 (1,000)
+- Bot games: SealBot self-play at depth 4 (2,000 games) and depth 6 (1,000)
 - Combined corpus analysis: reports/corpus_analysis/combined_summary.json
 
 Training configuration for small-corpus regime:
