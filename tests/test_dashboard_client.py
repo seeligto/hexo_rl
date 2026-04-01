@@ -59,21 +59,19 @@ def test_warn_once_on_failure() -> None:
 
 def test_send_game_enqueues_correct_payload() -> None:
     """send_game must put the right endpoint + payload onto the queue."""
-    client = _make_client()
-    # Drain any in-flight items first by using a fresh client with a stopped worker
-    c2 = DashboardClient.__new__(DashboardClient)
-    c2._base_url = "http://localhost:59998"
-    c2._q = queue.Queue(maxsize=512)
-    c2._warned = False
-    c2._connected = False
+    # Use __new__ to skip __init__ (no daemon thread spawned)
+    c = DashboardClient.__new__(DashboardClient)
+    c._base_url = "http://localhost:59998"
+    c._q = queue.Queue(maxsize=512)
+    c._warned = False
+    c._connected = False
 
-    c2.send_game(moves=[[0, 0], [1, 1]], result=1.0, metadata={"test": True})
-    item = c2._q.get_nowait()
+    c.send_game(moves=[[0, 0], [1, 1]], result=1.0, metadata={"test": True})
+    item = c._q.get_nowait()
     assert item["endpoint"] == "/api/game"
     assert item["payload"]["result"] == 1.0
     assert item["payload"]["moves"] == [[0, 0], [1, 1]]
     assert item["payload"]["metadata"] == {"test": True}
-    client.stop()
 
 
 def test_send_metrics_enqueues_correct_payload() -> None:

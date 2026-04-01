@@ -92,7 +92,7 @@ class TestHybridGameSourceBasic:
         src = _make_seed_source([moves])
         hyb = HybridGameSource(src, RandomBot(), games_per_seed=1, min_bot_plies=2)
         for r in hyb:
-            assert r.winner in (1, -1)
+            assert r.winner in (1, -1, 0)  # 0 = draw (game capped)
 
     def test_name(self):
         src = _make_seed_source([])
