@@ -110,9 +110,31 @@ class Trainer:
             and optionally "opp_reply_loss".
         """
         batch_size = int(self.config["batch_size"])
-        aux_weight = float(self.config.get("aux_opp_reply_weight", 0.0))
-
         states, policies, outcomes = buffer.sample_batch(batch_size, augment)
+        return self._train_on_batch(states, policies, outcomes)
+
+    def train_step_from_tensors(
+        self,
+        states: "numpy.ndarray",
+        policies: "numpy.ndarray",
+        outcomes: "numpy.ndarray",
+    ) -> Dict[str, float]:
+        """Perform one gradient update from pre-built numpy arrays.
+
+        Used by the mixed-buffer training loop (Phase 4.0) where samples
+        are drawn from pretrained + self-play buffers externally.
+        """
+        return self._train_on_batch(states, policies, outcomes)
+
+    def _train_on_batch(
+        self,
+        states: "numpy.ndarray",
+        policies: "numpy.ndarray",
+        outcomes: "numpy.ndarray",
+    ) -> Dict[str, float]:
+        """Core training step: forward, loss, backward, optimizer step."""
+        import numpy  # noqa: F811 — deferred import for type alias above
+        aux_weight = float(self.config.get("aux_opp_reply_weight", 0.0))
 
         # Move to device; keep float16 states as-is for autocast.
         states_t   = torch.from_numpy(states).to(self.device)       # float16
@@ -131,8 +153,12 @@ class Trainer:
                 log_policy, value, v_logit = self.model(states_t)
 
             # Policy loss: cross-entropy with MCTS visit distribution.
-            # log_policy is already log_softmax; policies_t is the target.
-            policy_loss = -(policies_t * log_policy).sum(dim=1).mean()
+            # Mask out value-only positions (zero-policy from fast playout games).
+            policy_valid = policies_t.sum(dim=1) > 1e-6
+            if policy_valid.any():
+                policy_loss = -(policies_t[policy_valid] * log_policy[policy_valid]).sum(dim=1).mean()
+            else:
+                policy_loss = torch.zeros(1, device=self.device, dtype=torch.float32).squeeze()
 
             # Value loss: BCE on pre-tanh logit, target mapped from {-1,+1} to {0,1}.
             value_target = (outcomes_t + 1.0) / 2.0  # {-1,+1} → {0,1}
@@ -143,9 +169,11 @@ class Trainer:
             loss = policy_loss + value_loss
 
             if use_aux:
-                # Opponent reply auxiliary loss: same structure as policy loss
-                # but using the policy as a proxy target for opponent's move.
-                opp_reply_loss = -(policies_t * opp_reply).sum(dim=1).mean()
+                # Opponent reply auxiliary loss: same masking as policy loss.
+                if policy_valid.any():
+                    opp_reply_loss = -(policies_t[policy_valid] * opp_reply[policy_valid]).sum(dim=1).mean()
+                else:
+                    opp_reply_loss = torch.zeros(1, device=self.device, dtype=torch.float32).squeeze()
                 loss = loss + aux_weight * opp_reply_loss
 
         if self.device.type == "cuda":

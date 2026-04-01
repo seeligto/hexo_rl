@@ -341,6 +341,43 @@ impl RustReplayBuffer {
         Ok((states_np, policies_np, outcomes_np))
     }
 
+    // ── Resize ─────────────────────────────────────────────────────────────────
+
+    /// Grow the buffer to `new_capacity` positions, preserving all existing data.
+    ///
+    /// The ring buffer is linearised in-place (oldest entry → slot 0) before
+    /// extending.  Raises `ValueError` if `new_capacity <= self.capacity`.
+    pub fn resize(&mut self, new_capacity: usize) -> PyResult<()> {
+        if new_capacity <= self.capacity {
+            return Err(PyValueError::new_err(format!(
+                "resize: new_capacity ({}) must be greater than current capacity ({})",
+                new_capacity, self.capacity,
+            )));
+        }
+
+        // Linearise the ring buffer when it has wrapped around.
+        if self.size == self.capacity && self.head != 0 {
+            self.states[..self.capacity * STATE_STRIDE]
+                .rotate_left(self.head * STATE_STRIDE);
+            self.policies[..self.capacity * POLICY_STRIDE]
+                .rotate_left(self.head * POLICY_STRIDE);
+            self.outcomes[..self.capacity]
+                .rotate_left(self.head);
+            self.game_ids[..self.capacity]
+                .rotate_left(self.head);
+        }
+
+        // Extend storage to new capacity.
+        self.states.resize(new_capacity * STATE_STRIDE, 0u16);
+        self.policies.resize(new_capacity * POLICY_STRIDE, 0.0f32);
+        self.outcomes.resize(new_capacity, 0.0f32);
+        self.game_ids.resize(new_capacity, -1i64);
+
+        self.head = self.size;
+        self.capacity = new_capacity;
+        Ok(())
+    }
+
     // ── Properties ────────────────────────────────────────────────────────────
 
     #[getter]
@@ -435,3 +472,4 @@ impl RustReplayBuffer {
         dst_policy[N_CELLS] = src_policy[N_CELLS];
     }
 }
+

@@ -45,6 +45,8 @@ class WorkerPool:
         self.c_puct = float(mcts_cfg.get("c_puct", 1.5))
         leaf_batch_size = int(sp.get("leaf_batch_size", 8))
 
+        pc = sp.get("playout_cap", config.get("playout_cap", {}))
+
         self._runner = RustSelfPlayRunner(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_moves_per_game", 128)),
@@ -53,6 +55,10 @@ class WorkerPool:
             c_puct=self.c_puct,
             feature_len=in_channels * board_size * board_size,
             policy_len=board_size * board_size + 1,
+            fast_prob=float(pc.get("fast_prob", 0.0)),
+            fast_sims=int(pc.get("fast_sims", 50)),
+            standard_sims=int(pc.get("standard_sims", 0)),
+            temp_threshold_compound_moves=int(pc.get("temperature_threshold_compound_moves", 15)),
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 

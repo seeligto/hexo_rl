@@ -23,9 +23,12 @@ pub struct RustSelfPlayRunner {
     batcher: RustInferenceBatcher,
     n_workers: usize,
     max_moves_per_game: usize,
-    n_simulations: usize,
     leaf_batch_size: usize,
     c_puct: f32,
+    fast_prob: f32,
+    fast_sims: usize,
+    standard_sims: usize,
+    temp_threshold_compound_moves: usize,
     running: Arc<AtomicBool>,
     games_completed: Arc<AtomicUsize>,
     positions_generated: Arc<AtomicUsize>,
@@ -36,7 +39,7 @@ pub struct RustSelfPlayRunner {
 #[pymethods]
 impl RustSelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -45,14 +48,23 @@ impl RustSelfPlayRunner {
         c_puct: f32,
         feature_len: usize,
         policy_len: usize,
+        fast_prob: f32,
+        fast_sims: usize,
+        standard_sims: usize,
+        temp_threshold_compound_moves: usize,
     ) -> Self {
+        // If standard_sims is 0, fall back to n_simulations.
+        let effective_standard = if standard_sims == 0 { n_simulations } else { standard_sims };
         Self {
             batcher: RustInferenceBatcher::new(feature_len, policy_len),
             n_workers,
             max_moves_per_game,
-            n_simulations,
             leaf_batch_size,
             c_puct,
+            fast_prob,
+            fast_sims,
+            standard_sims: effective_standard,
+            temp_threshold_compound_moves,
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
             positions_generated: Arc::new(AtomicUsize::new(0)),
@@ -73,18 +85,26 @@ impl RustSelfPlayRunner {
             let positions_generated = self.positions_generated.clone();
             let batcher = self.batcher.clone();
             let max_moves = self.max_moves_per_game;
-            let n_sims = self.n_simulations;
             let leaf_batch_size = self.leaf_batch_size;
             let c_puct = self.c_puct;
+            let fast_prob = self.fast_prob;
+            let fast_sims = self.fast_sims;
+            let standard_sims = self.standard_sims;
+            let temp_threshold = self.temp_threshold_compound_moves;
             let results_queue = self.results.clone();
 
             let handle = thread::spawn(move || {
                 let mut tree = MCTSTree::new(c_puct);
-                
+                let mut rng = thread_rng();
+
                 while running.load(Ordering::SeqCst) {
                     let mut board = Board::new();
                     let mut records = Vec::new();
-                    
+
+                    // KataGo-style playout cap randomisation.
+                    let is_fast_game = fast_prob > 0.0 && rand::Rng::gen::<f32>(&mut rng) < fast_prob;
+                    let game_sims = if is_fast_game { fast_sims } else { standard_sims };
+
                     for _ in 0..max_moves {
                         if !running.load(Ordering::SeqCst) || board.check_win() || board.legal_move_count() == 0 {
                             break;
@@ -93,8 +113,8 @@ impl RustSelfPlayRunner {
                         // ── MCTS Search ──
                         tree.new_game(board.clone());
                         let mut sims_done = 0;
-                        
-                        while sims_done < n_sims {
+
+                        while sims_done < game_sims {
                             if !running.load(Ordering::SeqCst) { break; }
                             
                             let leaves = tree.select_leaves(leaf_batch_size);
@@ -165,27 +185,40 @@ impl RustSelfPlayRunner {
 
                         if !running.load(Ordering::SeqCst) { break; }
 
-                        // ── MCTS Policy ──
-                        let policy = tree.get_policy(1.0, BOARD_SIZE);
+                        // ── MCTS Policy with temperature schedule ──
+                        let compound_move = if board.ply == 0 { 0 } else { (board.ply as usize + 1) / 2 };
+                        let temperature = if is_fast_game {
+                            1.0  // fast games: always exploratory
+                        } else if compound_move < temp_threshold {
+                            1.0
+                        } else {
+                            0.0  // argmax after threshold
+                        };
+                        let policy = tree.get_policy(temperature, BOARD_SIZE);
 
                         // ── Sample and apply move ──
                         let legal = board.legal_moves();
                         if legal.is_empty() { break; }
-                        
+
                         // Sample from policy
-                        let mut rng = thread_rng();
                         let move_idx = match Self::sample_policy(&policy, &legal, &board) {
                             Some(idx) => idx,
                             None => *legal.choose(&mut rng).unwrap(),
                         };
                         
                         // ── Record position ──
+                        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
                         let (views, centers) = board.get_cluster_views();
                         for (k, center) in centers.iter().enumerate() {
                             let mut feat = batcher.get_feature_buffer();
                             // get_cluster_views returns 2-plane views; expand to 18 for storage.
                             board.encode_18_planes_to_buffer(&views[k], &mut feat);
-                            let projected_policy = Self::aggregate_policy_to_local(&board, center, &policy);
+                            // Fast games: zero-policy marks value-only targets.
+                            let projected_policy = if is_fast_game {
+                                vec![0.0; n_actions]
+                            } else {
+                                Self::aggregate_policy_to_local(&board, center, &policy)
+                            };
                             records.push((feat, projected_policy, board.current_player));
                         }
 
