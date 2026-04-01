@@ -1,9 +1,11 @@
 import logging
 import torch
 import time
+from dataclasses import dataclass
 from typing import Dict, Any
 from native_core import Board  # type: ignore[attr-defined]
 from python.env.game_state import GameState
+from python.eval.colony_detection import is_colony_win
 from python.bootstrap.bots.random_bot import RandomBot
 from python.bootstrap.bots.sealbot_bot import SealBotBot
 from python.model.network import HexTacToeNet
@@ -26,6 +28,15 @@ except ImportError:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     log = _StdLoggerAdapter()
 
+@dataclass
+class EvalResult:
+    """Result from a set of evaluation games."""
+    win_rate: float
+    win_count: int
+    n_games: int
+    colony_wins: int
+
+
 class Evaluator:
     """Benchmarking agent against baseline bots."""
     
@@ -39,6 +50,9 @@ class Evaluator:
         self.random_model_sims = int(eval_cfg.get("random_model_sims", 100))
         self.sealbot_model_sims = int(eval_cfg.get("sealbot_model_sims", 200))
         self.progress_every = max(1, int(eval_cfg.get("progress_every", 1)))
+        self.colony_centroid_threshold = float(
+            eval_cfg.get("colony_centroid_threshold", 6.0)
+        )
         # Use a worker instance for MCTS search during evaluation
         self.worker = SelfPlayWorker(model, config, device)
 
@@ -60,21 +74,22 @@ class Evaluator:
             partial_winrate=round(win_count / games_done, 3),
         )
         
-    def evaluate_vs_random(self, n_games: int = 20, model_sims: int | None = None) -> float:
-        """Play n_games against RandomBot, return win rate."""
+    def evaluate_vs_random(self, n_games: int = 20, model_sims: int | None = None) -> EvalResult:
+        """Play n_games against RandomBot, return EvalResult."""
         random_bot = RandomBot()
         win_count = 0
+        colony_wins = 0
         sims = self.random_model_sims if model_sims is None else int(model_sims)
         t0 = time.time()
 
         log.info("evaluation_games_start", phase="random", n_games=n_games, model_sims=sims)
-        
+
         for i in range(n_games):
             board = Board()
             state = GameState.from_board(board)
             # Alternate who starts
             model_player = 1 if i % 2 == 0 else -1
-            
+
             while not board.check_win() and board.legal_move_count() > 0:
                 if board.current_player == model_player:
                     # Deterministic play for evaluation (temperature=0)
@@ -82,26 +97,29 @@ class Evaluator:
                     q, r = self.worker._sample_action(policy, board.legal_moves(), board)
                 else:
                     q, r = random_bot.get_move(state, board)
-                
+
                 state = state.apply_move(board, q, r)
-                
+
             if board.winner() == model_player:
                 win_count += 1
+                if is_colony_win(board.get_stones(), model_player, self.colony_centroid_threshold):
+                    colony_wins += 1
             self._log_progress("random", i + 1, n_games, t0, win_count)
 
         wr = win_count / n_games
-        log.info("evaluation_games_complete", phase="random", n_games=n_games, model_sims=sims, winrate=wr, elapsed_sec=round(time.time() - t0, 2))
-        return wr
+        log.info("evaluation_games_complete", phase="random", n_games=n_games, model_sims=sims, winrate=wr, colony_wins=colony_wins, elapsed_sec=round(time.time() - t0, 2))
+        return EvalResult(win_rate=wr, win_count=win_count, n_games=n_games, colony_wins=colony_wins)
 
     def evaluate_vs_sealbot(
         self,
         n_games: int = 10,
         time_limit: float = 0.05,
         model_sims: int | None = None,
-    ) -> float:
-        """Play n_games against SealBotBot, return win rate."""
+    ) -> EvalResult:
+        """Play n_games against SealBotBot, return EvalResult."""
         sealbot = SealBotBot(time_limit=time_limit)
         win_count = 0
+        colony_wins = 0
         sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
         t0 = time.time()
 
@@ -129,6 +147,8 @@ class Evaluator:
 
             if board.winner() == model_player:
                 win_count += 1
+                if is_colony_win(board.get_stones(), model_player, self.colony_centroid_threshold):
+                    colony_wins += 1
             self._log_progress("sealbot", i + 1, n_games, t0, win_count)
 
         wr = win_count / n_games
@@ -139,9 +159,10 @@ class Evaluator:
             model_sims=sims,
             sealbot_time_limit=time_limit,
             winrate=wr,
+            colony_wins=colony_wins,
             elapsed_sec=round(time.time() - t0, 2),
         )
-        return wr
+        return EvalResult(win_rate=wr, win_count=win_count, n_games=n_games, colony_wins=colony_wins)
 
     def evaluate_vs_model(
         self,
@@ -149,14 +170,15 @@ class Evaluator:
         n_games: int = 20,
         model_sims: int | None = None,
         opponent_sims: int | None = None,
-    ) -> float:
-        """Play n_games against another model and return current-model win rate."""
+    ) -> EvalResult:
+        """Play n_games against another model and return EvalResult."""
         current_sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
         other_sims = self.sealbot_model_sims if opponent_sims is None else int(opponent_sims)
 
         # Keep the opponent worker separate so each side has its own tree state.
         opponent_worker = SelfPlayWorker(opponent_model, self.config, self.device)
         win_count = 0
+        colony_wins = 0
         t0 = time.time()
 
         log.info(
@@ -194,6 +216,8 @@ class Evaluator:
 
             if board.winner() == model_player:
                 win_count += 1
+                if is_colony_win(board.get_stones(), model_player, self.colony_centroid_threshold):
+                    colony_wins += 1
             self._log_progress("best_arena", i + 1, n_games, t0, win_count)
 
         wr = win_count / n_games
@@ -204,6 +228,7 @@ class Evaluator:
             model_sims=current_sims,
             opponent_sims=other_sims,
             winrate=wr,
+            colony_wins=colony_wins,
             elapsed_sec=round(time.time() - t0, 2),
         )
-        return wr
+        return EvalResult(win_rate=wr, win_count=win_count, n_games=n_games, colony_wins=colony_wins)

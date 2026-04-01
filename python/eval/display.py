@@ -11,6 +11,51 @@ from rich.table import Table
 _console = Console()
 
 
+def print_colony_win_breakdown(
+    colony_stats: list[tuple[int, int, int, int, int]],
+    player_names: Dict[int, str],
+) -> None:
+    """Print colony-win diagnostic table.
+
+    Args:
+        colony_stats: List of (player_a_id, player_b_id, total_wins, colony_wins, total_games)
+            from ResultsDB.get_colony_win_stats().
+        player_names: ``{player_id: display_name}``.
+    """
+    total_wins = sum(row[2] for row in colony_stats)
+    total_colony = sum(row[3] for row in colony_stats)
+
+    if total_wins == 0:
+        return
+
+    table = Table(title="Colony Win Breakdown")
+    table.add_column("Matchup")
+    table.add_column("Wins", justify="right")
+    table.add_column("Colony Wins", justify="right")
+    table.add_column("Colony %", justify="right")
+
+    for a_id, b_id, wins, colony, games in colony_stats:
+        a_name = player_names.get(a_id, f"player_{a_id}")
+        b_name = player_names.get(b_id, f"player_{b_id}")
+        pct = colony / wins * 100 if wins > 0 else 0.0
+        table.add_row(
+            f"{a_name} vs {b_name}",
+            str(wins),
+            str(colony),
+            f"{pct:.1f}%",
+        )
+
+    overall_pct = total_colony / total_wins * 100
+    table.add_row(
+        "[bold]Total[/bold]",
+        f"[bold]{total_wins}[/bold]",
+        f"[bold]{total_colony}[/bold]",
+        f"[bold]{overall_pct:.1f}%[/bold]",
+    )
+
+    _console.print(table)
+
+
 def print_ratings_table(
     ratings: Dict[int, Tuple[float, float, float]],
     player_names: Dict[int, str],

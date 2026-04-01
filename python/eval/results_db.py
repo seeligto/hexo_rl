@@ -58,7 +58,17 @@ class ResultsDB:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        self._migrate_colony_win()
         self._conn.commit()
+
+    def _migrate_colony_win(self) -> None:
+        """Add colony_win column if it doesn't exist (ALTER TABLE migration)."""
+        cur = self._conn.execute("PRAGMA table_info(matches)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "colony_win" not in columns:
+            self._conn.execute(
+                "ALTER TABLE matches ADD COLUMN colony_win BOOLEAN DEFAULT 0"
+            )
 
     # ── Players ──────────────────────────────────────────────────────
 
@@ -105,15 +115,18 @@ class ResultsDB:
         win_rate_a: float,
         ci_lower: float,
         ci_upper: float,
+        colony_wins_a: int = 0,
+        colony_wins_b: int = 0,
     ) -> None:
         ts = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """INSERT OR REPLACE INTO matches
                (eval_step, player_a_id, player_b_id, wins_a, wins_b,
-                draws, n_games, win_rate_a, ci_lower, ci_upper, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                draws, n_games, win_rate_a, ci_lower, ci_upper, colony_win, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (eval_step, player_a_id, player_b_id, wins_a, wins_b,
-             draws, n_games, win_rate_a, ci_lower, ci_upper, ts),
+             draws, n_games, win_rate_a, ci_lower, ci_upper,
+             colony_wins_a + colony_wins_b, ts),
         )
         self._conn.commit()
 
@@ -129,6 +142,19 @@ class ResultsDB:
                GROUP BY player_a_id, player_b_id"""
         )
         return [(r[0], r[1], r[2], r[3]) for r in cur.fetchall()]
+
+    def get_colony_win_stats(self) -> list[tuple[int, int, int, int, int]]:
+        """Return colony win breakdown per player pair.
+
+        Returns list of (player_a_id, player_b_id, total_wins, total_colony_wins, total_games).
+        """
+        cur = self._conn.execute(
+            """SELECT player_a_id, player_b_id,
+                      SUM(wins_a + wins_b), SUM(COALESCE(colony_win, 0)), SUM(n_games)
+               FROM matches
+               GROUP BY player_a_id, player_b_id"""
+        )
+        return [(r[0], r[1], r[2], r[3], r[4]) for r in cur.fetchall()]
 
     # ── Ratings ──────────────────────────────────────────────────────
 
