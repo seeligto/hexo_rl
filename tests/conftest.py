@@ -3,16 +3,53 @@ conftest.py — shared pytest configuration and fixtures.
 
 Adds the project root to sys.path and provides reusable Board + GameState fixtures
 that test files can request by name.
+
+Global seeding: every test session seeds random, numpy, and torch from a single
+value.  Override with PYTEST_SEED=<int> for reproducibility.  The seed is printed
+on failure via the pytest header.
 """
+import os
 import sys
+import random
 import pathlib
 
+import numpy as np
 import pytest
 
 # Project root is one level up from this file (tests/)
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+# ── Global deterministic seeding ─────────────────────────────────────────────
+
+def _resolve_seed() -> int:
+    env = os.environ.get("PYTEST_SEED")
+    if env is not None:
+        return int(env)
+    return random.randrange(2**32)
+
+
+GLOBAL_SEED: int = _resolve_seed()
+
+
+def pytest_report_header():
+    return f"PYTEST_SEED={GLOBAL_SEED}"
+
+
+@pytest.fixture(autouse=True)
+def _seed_everything():
+    """Seed all RNGs before every test for reproducibility."""
+    random.seed(GLOBAL_SEED)
+    np.random.seed(GLOBAL_SEED)
+    try:
+        import torch
+        torch.manual_seed(GLOBAL_SEED)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(GLOBAL_SEED)
+    except ImportError:
+        pass
 
 
 # ── Board fixtures ────────────────────────────────────────────────────────────
