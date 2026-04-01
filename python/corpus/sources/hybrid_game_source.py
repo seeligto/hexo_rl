@@ -40,6 +40,9 @@ class HybridGameSource(CorpusSource):
         games_per_seed:   Number of continuations per seed game. Default 3.
         min_bot_plies:    Minimum post-handoff plies (entropy move + bot moves).
                           Games shorter than this are discarded. Default 10.
+        max_bot_plies:    Maximum bot moves before forcing game end. Prevents
+                          infinite games with weak bots on an infinite board.
+                          Default 500.
         rng_seed:         Base RNG seed. Continuation i uses ``rng_seed + i``.
     """
 
@@ -50,6 +53,7 @@ class HybridGameSource(CorpusSource):
         n_opening_moves: int = 8,
         games_per_seed: int = 3,
         min_bot_plies: int = 10,
+        max_bot_plies: int = 500,
         rng_seed: int = 42,
     ) -> None:
         self._seed_source    = seed_source
@@ -57,6 +61,7 @@ class HybridGameSource(CorpusSource):
         self._n_opening      = n_opening_moves
         self._games_per_seed = games_per_seed
         self._min_bot_plies  = min_bot_plies
+        self._max_bot_plies  = max_bot_plies
         self._rng_seed       = rng_seed
 
     def name(self) -> str:
@@ -121,7 +126,7 @@ class HybridGameSource(CorpusSource):
             # --- Step 4: Bot continuation (both sides) ---
             bot_moves: list[tuple[int, int]] = []
             try:
-                while not board.check_win() and board.legal_move_count() > 0:
+                while not board.check_win() and board.legal_move_count() > 0 and len(bot_moves) < self._max_bot_plies:
                     q, r = self._bot.get_move(state, board)
                     state = state.apply_move(board, q, r)
                     bot_moves.append((q, r))
@@ -141,9 +146,15 @@ class HybridGameSource(CorpusSource):
 
             winner = board.winner()
             if winner is None:
-                log.warning("hybrid_game_no_winner",
-                            seed_id=seed.game_id_str, continuation=i)
-                continue
+                if len(bot_moves) >= self._max_bot_plies:
+                    log.info("hybrid_game_capped",
+                             seed_id=seed.game_id_str, continuation=i,
+                             bot_plies=len(bot_moves))
+                    winner = 0  # draw — game capped without a winner
+                else:
+                    log.warning("hybrid_game_no_winner",
+                                seed_id=seed.game_id_str, continuation=i)
+                    continue
 
             full_moves = opening_moves + [entropy_move] + bot_moves
 
