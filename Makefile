@@ -38,10 +38,6 @@ native.build: ## Build/install Rust extension via maturin
 test.py: ## Run python test suite
 	$(PY) -m pytest -q tests
 
-.PHONY: test.py.fast
-test.py.fast: ## Python unit tests only — skips slow self-play integration (~20s)
-	$(PY) -m pytest -q tests --ignore=tests/test_phase1_exit_criteria.py
-
 .PHONY: test.focus
 test.focus: ## Run focused buffer/inference/pool smoke tests
 	$(PY) -m pytest -q tests/test_rust_replay_buffer.py tests/test_inference_server.py tests/test_worker_pool.py tests/test_benchmark_smoke.py
@@ -165,4 +161,24 @@ pretrain.lite: ## Short bootstrap pretrain
 .PHONY: pretrain.full
 pretrain.full: ## Full bootstrap pretrain
 	$(PY) -m python.bootstrap.pretrain --epochs 15 --force-regenerate
+
+# ── Corpus generation ────────────────────────────────────────────────────────
+
+CORPUS_DEPTH4_N ?= 2000
+CORPUS_DEPTH8_N ?= 1000
+
+.PHONY: corpus.d4
+corpus.d4: ## Generate SealBot depth-4 self-play corpus (CORPUS_DEPTH4_N=2000)
+	$(PY) -m python.bootstrap.generate_corpus --bot sealbot --depth 4 --n-games $(CORPUS_DEPTH4_N) --output data/corpus/bot_games/sealbot_d4
+
+.PHONY: corpus.d8
+corpus.d8: ## Generate SealBot depth-8 self-play corpus (CORPUS_DEPTH8_N=1000)
+	$(PY) -m python.bootstrap.generate_corpus --bot sealbot --depth 8 --n-games $(CORPUS_DEPTH8_N) --output data/corpus/bot_games/sealbot_d8
+
+.PHONY: corpus.all
+corpus.all: corpus.d4 corpus.d8 ## Generate both d4 and d8 corpora
+
+.PHONY: corpus.analysis
+corpus.analysis: ## Run corpus analysis on human + bot games
+	$(PY) -m python.bootstrap.corpus_analysis --include-bot-games
 
