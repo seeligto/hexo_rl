@@ -5,8 +5,9 @@
 model:
   board_size: 19
   in_channels: 18
-  res_blocks: 10
+  res_blocks: 12
   filters: 128
+  se_reduction_ratio: 4
 
 # MCTS
 mcts:
@@ -41,6 +42,7 @@ training:
   eval_interval: 100
   checkpoint_interval: 50
   log_interval: 10        # also controls web-dashboard send frequency
+  aux_opp_reply_weight: 0.15
 
 evaluation:
   enabled: true

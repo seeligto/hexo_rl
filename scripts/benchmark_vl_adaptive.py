@@ -62,7 +62,7 @@ def evaluate_batch(model: HexTacToeNet, device: torch.device, boards: List[Board
         metadata.append((len(centers), centers))
     if not all_tensors: return [], []
     batch_tensor = torch.cat(all_tensors, dim=0)
-    log_policies, values = model(batch_tensor)
+    log_policies, values, _v_logit = model(batch_tensor)
     policies = torch.exp(log_policies).cpu().numpy()
     values = values.cpu().numpy()
     final_policies = []

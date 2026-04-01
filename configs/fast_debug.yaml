@@ -5,6 +5,7 @@
 board_size: 19         # Rust board is fixed 19x19; speed comes from smaller network
 res_blocks: 4          # shallow network
 filters: 64            # narrow network
+se_reduction_ratio: 4  # SE block bottleneck ratio
 n_simulations: 50      # tiny MCTS search
 batch_size: 64         # training batch size
 n_workers: 1           # single self-play process

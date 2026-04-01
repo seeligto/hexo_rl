@@ -1,0 +1,8 @@
+# model.yaml — model architecture hyperparameters
+# These are also present in default.yaml; this file exists for standalone reference.
+
+board_size: 19
+in_channels: 18
+res_blocks: 12
+filters: 128
+se_reduction_ratio: 4

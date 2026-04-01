@@ -147,7 +147,7 @@ def test_checkpoint_round_trip(tmp_path: Path):
     x = torch.zeros(1, 18, 19, 19, device=trainer.device)
     trainer.model.eval()
     with torch.no_grad():
-        log_p_before, v_before = trainer.model(x)
+        log_p_before, v_before, _ = trainer.model(x)
 
     # Reload.
     restored = Trainer.load_checkpoint(ckpt_path, checkpoint_dir=tmp_path)
@@ -156,7 +156,7 @@ def test_checkpoint_round_trip(tmp_path: Path):
     x_r = torch.zeros(1, 18, 19, 19, device=restored.device)
     restored.model.eval()
     with torch.no_grad():
-        log_p_after, v_after = restored.model(x_r)
+        log_p_after, v_after, _ = restored.model(x_r)
 
     # Compare on CPU.
     assert torch.allclose(log_p_before.cpu(), log_p_after.cpu(), atol=1e-4), \
