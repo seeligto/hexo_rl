@@ -28,7 +28,7 @@ mod moves;
 
 pub use state::{
     Board, MoveDiff, Player, Cell,
-    BOARD_SIZE, HALF, TOTAL_CELLS, HEX_AXES,
+    BOARD_SIZE, HALF, TOTAL_CELLS, HEX_AXES, HEX_DIRS,
     hex_distance,
 };
 
@@ -99,9 +99,10 @@ mod tests {
     #[test]
     fn legal_moves_counts_empty_cells() {
         let mut b = Board::new();
-        assert_eq!(b.legal_move_count(), TOTAL_CELLS); // empty → full window
+        // Empty board: 5×5 init region = 25 cells (MCTS-optimised first-move).
+        assert_eq!(b.legal_move_count(), 25);
         b.apply_move(0, 0).unwrap();
-        // bbox+2 margin = [-2,2]×[-2,2] = 25 cells, minus 1 occupied = 24
+        // bbox+2 margin = [-2,2]×[-2,2] = 25 cells, minus 1 occupied = 24.
         assert_eq!(b.legal_move_count(), 24);
     }
 
@@ -237,9 +238,9 @@ mod tests {
     #[test]
     fn legal_grows_with_bounding_box() {
         let mut b = Board::new();
-        b.apply_move(0, 0).unwrap(); // P1 ply0: bbox+2=[-2,2]×[-2,2], 25-1=24
+        b.apply_move(0, 0).unwrap(); // P1 ply0: cluster bbox+2=[-2,2]×[-2,2] → 24 legal
         assert_eq!(b.legal_move_count(), 24);
-        b.apply_move(5, 0).unwrap(); // P2: bbox=[0,5], margin=[-2,7]×[-2,2]=10×5-2=48
+        b.apply_move(5, 0).unwrap(); // P2: same cluster, bbox+2=[-2,7]×[-2,2]=50-2=48
         assert_eq!(b.legal_move_count(), 48);
     }
 
@@ -331,6 +332,7 @@ mod tests {
         assert_eq!(board.ply, empty.ply);
         assert_eq!(board.last_move, empty.last_move);
         assert_eq!(board.action_anchors_count, empty.action_anchors_count);
+        assert_eq!(board.legal_moves_set(), empty.legal_moves_set(), "undo must restore legal moves to the initial 25-cell set");
     }
 
     #[test]

@@ -13,55 +13,16 @@ use native_core::board::{bitboard::Bitboard, Board, BOARD_SIZE, HALF};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Build a board with `n_stones` placed in a non-winning pattern.
-/// Alternates between two "safe" regions so no run-of-6 forms.
+/// Build a board with `n_stones` placed by always picking the lexicographic-minimum
+/// legal move.  Guaranteed collision-free and deterministic.
 fn board_with_n_stones(n_stones: usize) -> Board {
     let mut b = Board::new();
-    // P1 places on the E axis from q=0 up to q=4 (max 5, no 6-in-a-row).
-    // P2 places on r=-5 row (separate region).
-    let mut p1_q = 0i32;
-    let mut p2_q = 0i32;
-    let mut placed = 0;
-
-    // First move: P1 single stone.
-    if placed < n_stones {
-        b.apply_move(p1_q, 0).unwrap();
-        p1_q += 1;
-        if p1_q >= 5 { p1_q = -9; } // wrap to far end
-        placed += 1;
-    }
-
-    while placed < n_stones {
-        // P2 first stone of its turn.
-        if placed < n_stones {
-            b.apply_move(p2_q, -5).unwrap();
-            p2_q += 1;
-            if p2_q >= 5 { p2_q = -9; }
-            placed += 1;
-        }
-        // P2 second stone.
-        if placed < n_stones {
-            let r_offset = (placed as i32 % 3) - 1;
-            b.apply_move(p2_q, -5 + r_offset).unwrap();
-            p2_q += 1;
-            if p2_q >= 5 { p2_q = -9; }
-            placed += 1;
-        }
-        // P1 first stone of its turn.
-        if placed < n_stones {
-            b.apply_move(p1_q, 0).unwrap();
-            p1_q += 1;
-            if p1_q >= 5 { p1_q = -9; }
-            placed += 1;
-        }
-        // P1 second stone.
-        if placed < n_stones {
-            let r_offset = (placed as i32 % 3) - 1;
-            b.apply_move(p1_q, r_offset).unwrap();
-            p1_q += 1;
-            if p1_q >= 5 { p1_q = -9; }
-            placed += 1;
-        }
+    for _ in 0..n_stones {
+        let mv = *b.legal_moves_set()
+            .iter()
+            .min()
+            .expect("no legal moves");
+        b.apply_move(mv.0, mv.1).expect("apply failed");
     }
     b
 }

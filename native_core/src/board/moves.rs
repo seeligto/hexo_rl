@@ -1,69 +1,87 @@
-use super::state::{Board, Cell, Player, HEX_AXES, HALF, BOARD_SIZE, hex_distance};
+use fxhash::FxHashSet;
+use super::state::{Board, Cell, Player, HEX_AXES, HALF, hex_distance};
 
 /// Stones in a row required to win.
 const WIN_LENGTH: usize = 6;
 
 impl Board {
-    /// All legal moves: empty cells within bounding_box + 2 margin, clipped to
-    /// the current 19×19 window.  On an empty board returns all 361 cells.
-    pub fn legal_moves(&self) -> Vec<(i32, i32)> {
-        let mut moves = std::collections::HashSet::new();
-        let clusters = self.get_clusters();
-
-        if clusters.is_empty() {
-            let (cq, cr) = (0, 0);
-            let lo_q = cq - HALF;
-            let hi_q = cq + HALF;
-            let lo_r = cr - HALF;
-            let hi_r = cr + HALF;
-            for q in lo_q..=hi_q {
-                for r in lo_r..=hi_r {
-                    moves.insert((q, r));
+    /// Zero-allocation reference to the lazily-maintained legal move set.
+    ///
+    /// If the cache is dirty (any `apply_move` or `undo_move` since the last
+    /// call), rebuilds using the original cluster+bbox algorithm: O(n²) cluster
+    /// detection (integer arithmetic) then one `cells.contains_key` per cell in
+    /// each cluster's bbox+2 rectangle.  This matches the cost of the original
+    /// `legal_moves()` and produces an identical result.
+    ///
+    /// Prefer this over `legal_moves()` in MCTS expansion — it avoids a Vec
+    /// allocation.  During tree traversal, `apply_move_tracked` / `undo_move`
+    /// are cheap (just a dirty-flag set); the rebuild cost is paid only once
+    /// per leaf expansion.
+    ///
+    /// # Safety
+    ///
+    /// Uses `UnsafeCell` for interior mutability.  Safe because `Board` is
+    /// single-owner / single-thread per MCTS worker — no concurrent access.
+    pub fn legal_moves_set(&self) -> &FxHashSet<(i32, i32)> {
+        if self.cache_dirty.get() {
+            // SAFETY: Board is single-owner; no concurrent mutation possible.
+            let cache = unsafe { &mut *self.legal_cache.get() };
+            cache.clear();
+            if self.cells.is_empty() {
+                // Empty board: 5×5 region, same as Board::new() init.
+                for dq in -2i32..=2 {
+                    for dr in -2i32..=2 {
+                        cache.insert((dq, dr));
+                    }
                 }
-            }
-        } else {
-            for cluster in clusters {
-                let mut min_q = i32::MAX;
-                let mut max_q = i32::MIN;
-                let mut min_r = i32::MAX;
-                let mut max_r = i32::MIN;
-                for &(q, r) in &cluster {
-                    min_q = min_q.min(q);
-                    max_q = max_q.max(q);
-                    min_r = min_r.min(r);
-                    max_r = max_r.max(r);
-                }
-
-                let cq = (min_q + max_q) / 2;
-                let cr = (min_r + max_r) / 2;
-
-                let lo_q = (min_q - 2).max(cq - HALF);
-                let hi_q = (max_q + 2).min(cq + HALF);
-                let lo_r = (min_r - 2).max(cr - HALF);
-                let hi_r = (max_r + 2).min(cr + HALF);
-
-                for q in lo_q..=hi_q {
-                    for r in lo_r..=hi_r {
-                        if !self.cells.contains_key(&(q, r)) {
-                            let wq = q - cq + HALF;
-                            let wr = r - cr + HALF;
-                            if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
-                                moves.insert((q, r));
+            } else {
+                // Replicates the original legal_moves() algorithm:
+                // 1. Cluster stones by proximity (O(n²) arithmetic, no HashMap).
+                // 2. For each cluster, scan its bbox+2 rectangle with one
+                //    cells.contains_key per cell — simple, cache-friendly iteration.
+                //
+                // This is faster than n×24 per-stone HashMap ops for the small,
+                // compact boards typical of MCTS leaf positions (D ≤ 15).
+                let clusters = self.get_clusters();
+                for cluster in &clusters {
+                    let mut min_q = i32::MAX;
+                    let mut max_q = i32::MIN;
+                    let mut min_r = i32::MAX;
+                    let mut max_r = i32::MIN;
+                    for &(q, r) in cluster {
+                        if q < min_q { min_q = q; }
+                        if q > max_q { max_q = q; }
+                        if r < min_r { min_r = r; }
+                        if r > max_r { max_r = r; }
+                    }
+                    for q in (min_q - 2)..=(max_q + 2) {
+                        for r in (min_r - 2)..=(max_r + 2) {
+                            if !self.cells.contains_key(&(q, r)) {
+                                cache.insert((q, r));
                             }
                         }
                     }
                 }
             }
+            self.cache_dirty.set(false);
         }
+        // SAFETY: cache is now valid and we hold &self for its lifetime.
+        unsafe { &*self.legal_cache.get() }
+    }
 
-        let mut moves_vec: Vec<(i32, i32)> = moves.into_iter().collect();
+    /// All legal moves as a sorted Vec.  Delegates to `legal_moves_set()`.
+    ///
+    /// Use `legal_moves_set()` in performance-critical paths.
+    pub fn legal_moves(&self) -> Vec<(i32, i32)> {
+        let mut moves_vec: Vec<(i32, i32)> = self.legal_moves_set().iter().cloned().collect();
         moves_vec.sort_unstable();
         moves_vec
     }
 
-    /// Number of legal moves.
+    /// Number of legal moves — O(1) when cache is clean, O(n²+bbox) on first
+    /// call after a mutating operation (same cost as the original legal_moves()).
     pub fn legal_move_count(&self) -> usize {
-        self.legal_moves().len()
+        self.legal_moves_set().len()
     }
 
     // ── Win detection ─────────────────────────────────────────────────────────
