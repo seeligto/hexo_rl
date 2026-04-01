@@ -70,6 +70,11 @@ bench.full: ## Higher-confidence benchmark (n=5, CPU pin attempted, warm-up)
 bench.stress: ## Heavy stress test (n=10, CPU pin required, 5-min pool runs)
 	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 100000 --pool-workers $(N_CORES) --pool-duration 300 --mcts-search-sims 800 --mode stress
 
+.PHONY: bench.baseline
+bench.baseline: ## Run bench.full and save as dated baseline report
+	mkdir -p reports/benchmarks
+	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full 2>&1 | tee reports/benchmarks/$$(date +%Y-%m-%d)_baseline.log
+
 .PHONY: bench.mcts
 bench.mcts: ## Dedicated Rust MCTS micro-benchmark
 	$(PY) scripts/benchmark_mcts.py

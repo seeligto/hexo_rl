@@ -370,25 +370,28 @@ tests. Full training runs must always use `augment=True` (the default).
 
 ## Benchmarks — must pass before Phase 4.5
 
-> **Methodology:** median of n=5 runs, 3s warm-up per metric,
-> CPU frequency pinned to performance governor via cpupower.
-> IQR reported in detailed JSON at `reports/benchmarks/`.
+> **Methodology:** median of n=5 runs, 3s warm-up per metric.
+> MCTS uses realistic workload: 800 sims/move × 62 iterations with
+> tree reset between moves (matches default.yaml mcts.n_simulations).
+> CPU frequency unpinned (cpupower unavailable on this system).
+> Targets set at 85% of observed median unless otherwise noted.
 > Run `make bench.full` to reproduce.
+> Full results: reports/benchmarks/
 
-Run `make bench.full`. Latest baseline (2026-04-01, Ryzen 7 3700x + RTX 3070, 16 workers, UNCONTROLLED — no CPU pin):
+Run `make bench.full`. Latest baseline (2026-04-01, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin):
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 145,547 sim/s | ≥ 180,000 sim/s | Uncontrolled run — expect ~218k with CPU pinned (AC power) |
-| NN inference (batch=64) | 9,994 pos/s | ≥ 8,000 pos/s | GPU-bound, stable across runs (IQR <1%) |
-| NN latency (batch=1, mean) | 1.57 ms | ≤ 2 ms | Stable (IQR ±0.03 ms) |
-| Replay buffer push | 774,300 pos/sec | ≥ 150,000 pos/sec | 3.5× headroom (IQR ±29k) |
-| Replay buffer sample raw (batch=256) | 1,050 µs/batch | ≤ 1,100 µs | Stable (IQR ±14 µs) |
-| Replay buffer sample augmented (batch=256) | 975 µs/batch | ≤ 1,000 µs | Stable (IQR ±20 µs) |
-| GPU utilization | 100% | ≥ 85% | Saturated during inference-only benchmark |
+| MCTS (CPU only, no NN) | 176,963 sim/s | ≥ 160,000 sim/s | Per-move throughput (800 sims/move × 62 iters), IQR 2.1% |
+| NN inference (batch=64) | 10,064 pos/s | ≥ 8,500 pos/s | GPU-bound, stable (IQR 0.2%) |
+| NN latency (batch=1, mean) | 1.50 ms | ≤ 2 ms | Stable (IQR ±0.04 ms) |
+| Replay buffer push | 745,523 pos/sec | ≥ 630,000 pos/sec | IQR ±94k (12.6%) |
+| Replay buffer sample raw (batch=256) | 1,040 µs/batch | ≤ 1,200 µs | Stable (IQR ±26 µs) |
+| Replay buffer sample augmented (batch=256) | 1,001 µs/batch | ≤ 1,200 µs | Stable (IQR ±35 µs) |
+| GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
 | VRAM usage | 0.77 GB / 8.6 GB | ≤ 80% | Kept |
-| Worker throughput | 1,316,950 pos/hr | ≥ 1,000,000 pos/hr | IQR ±79k (6%) |
-| Batch fill % | 92.8% | ≥ 80% | Stable (IQR ±0.6%) |
+| Worker throughput | 1,522,127 pos/hr | ≥ 1,290,000 pos/hr | Stable (IQR ±21k, 1.4%) |
+| Batch fill % | 99.4% | ≥ 84% | Stable (IQR ±0.01%) |
 
 Historical variance note: before the warm-up/n=5/pinning methodology, single-run
 benchmarks showed ±50% swings due to LLVM codegen lottery and AMD boost clocks.

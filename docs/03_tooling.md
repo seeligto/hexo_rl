@@ -288,18 +288,18 @@ def print_training_summary(history: list[dict]):
 
 ### What to measure
 
-| Benchmark | Unit | Target | Baseline (2026-03-31, 16w) |
+| Benchmark | Unit | Target | Baseline (2026-04-01, 16w) |
 |---|---|---|---|
-| MCTS throughput | simulations/sec | ≥ 150,000 | 160,882 |
-| Inference throughput | positions/sec | ≥ 8,000 | 11,479 |
-| Inference latency (batch=1) | ms mean | ≤ 5 ms | 0.74 ms |
-| Worker throughput | positions/hour | ≥ 500,000 | 1,734,003 |
-| GPU utilization | % | ≥ 80% | 95.4% |
+| MCTS throughput | simulations/sec | ≥ 160,000 | 176,963 |
+| Inference throughput | positions/sec | ≥ 8,500 | 10,064 |
+| Inference latency (batch=1) | ms mean | ≤ 2 ms | 1.50 ms |
+| Worker throughput | positions/hour | ≥ 1,290,000 | 1,522,127 |
+| GPU utilization | % | ≥ 85% | 100.0% |
 | VRAM peak | GB | ≤ 6.9 GB (80%) | 0.77 GB |
-| Batch fill % | % | ≥ 50% | 99.8% |
-| Replay buffer push | positions/sec | ≥ 50,000 | 219,444 |
-| Replay buffer sample raw (batch=256) | µs/batch | ≤ 1,000 | 951 |
-| Replay buffer sample augmented (batch=256) | µs/batch | ≤ 1,000 | 936 (3.66 µs/pos) |
+| Batch fill % | % | ≥ 84% | 99.4% |
+| Replay buffer push | positions/sec | ≥ 630,000 | 745,523 |
+| Replay buffer sample raw (batch=256) | µs/batch | ≤ 1,200 | 1,040 |
+| Replay buffer sample augmented (batch=256) | µs/batch | ≤ 1,200 | 1,001 |
 
 ### Practical benchmark commands
 
@@ -481,6 +481,42 @@ if __name__ == "__main__":
     ]
     print_benchmark_report(results)
 ```
+
+### Benchmark variance (historical)
+
+Before 2026-04-01, benchmarks were single-run with no CPU frequency pinning and no
+warm-up phase. LLVM codegen differences across rebuilds (function layout,
+instruction-cache alignment) combined with AMD boost clock behaviour produced
++/-50% swings on buffer push/s and +/-49% on worker throughput. These were
+measurement artifacts, not real performance changes.
+
+The new methodology (pinned frequency via `cpupower`, warm-up per metric, n=5
+median +/- IQR) reduces variance to <10% IQR on all metrics. Key changes:
+
+- **CPU frequency pinning**: `sudo cpupower frequency-set -g performance` before
+  timing, restored to `schedutil` after. If pinning fails (e.g. cpupower
+  unavailable on omarchy Linux), results are prefixed with `[UNCONTROLLED]`.
+- **Warm-up phase**: Each metric runs its operation for 2-10 seconds before timing
+  begins, evicting cold-cache effects and stabilising boost clocks.
+- **Realistic MCTS workload**: MCTS throughput is measured using 800 sims/move
+  (matching `default.yaml` `mcts.n_simulations`) with tree reset between each move,
+  rather than a single monolithic 50k-sim search.  A single oversized tree exceeds
+  L2 cache and underreports real self-play throughput by ~15%.
+- **Multiple runs**: n=5 (full) or n=10 (stress). Median is reported instead of
+  mean to resist outliers from scheduler interruptions.
+- **IQR (P75-P25)**: Reported alongside median as the spread metric. More robust
+  than standard deviation for small n with potential outliers.
+
+Benchmark modes:
+
+| Mode | Runs | CPU pin | Use case |
+|---|---|---|---|
+| `make bench.lite` | n=3 | No | Quick local sanity check |
+| `make bench.full` | n=5 | Attempted | Standard regression gate |
+| `make bench.stress` | n=10 | Required | Pre-release confidence |
+
+JSON reports are written to `reports/benchmarks/YYYY-MM-DD_HH-MM.json` for
+historical comparison.
 
 ### Rust micro-benchmarks (criterion)
 

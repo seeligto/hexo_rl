@@ -3,10 +3,14 @@
 Phase 3.5 / 4 benchmark harness.
 
 Measures the metrics that gate Phase 4.5 and prints a pass/fail table.
+Methodology: warm-up per metric, N repeated runs, median +/- IQR summary.
+Optional CPU frequency pinning via cpupower for reproducibility.
 
 Usage:
-    .venv/bin/python scripts/benchmark.py
-    .venv/bin/python scripts/benchmark.py --config configs/fast_debug.yaml
+    .venv/bin/python scripts/benchmark.py                          # default (n=5, pin attempted)
+    .venv/bin/python scripts/benchmark.py --mode lite              # n=3, no pinning
+    .venv/bin/python scripts/benchmark.py --mode stress            # n=10, pinning required
+    .venv/bin/python scripts/benchmark.py --config configs/fast_debug.yaml --quick
 """
 
 from __future__ import annotations
@@ -15,9 +19,13 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*pynvml package is deprecated.*")
 
 import argparse
+import json
+import statistics
+import subprocess
 import sys
 import time
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -37,185 +45,294 @@ if TYPE_CHECKING:
 
 console = Console()
 
+# ── CPU frequency control ────────────────────────────────────────────────────
+
+
+def pin_cpu_frequency() -> bool:
+    """
+    Attempt to pin all cores to their base frequency via cpupower.
+    Returns True if successful, False if cpupower is unavailable
+    (e.g. running without root). In that case, print a warning but
+    do not abort -- results will be marked as 'uncontrolled'.
+    """
+    try:
+        result = subprocess.run(
+            ["sudo", "cpupower", "frequency-set", "-g", "performance"],
+            capture_output=True, timeout=5,
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def restore_cpu_frequency():
+    try:
+        subprocess.run(
+            ["sudo", "cpupower", "frequency-set", "-g", "schedutil"],
+            capture_output=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+
+# ── Statistics ───────────────────────────────────────────────────────────────
+
+
+def summarise(values: list[float]) -> dict[str, float]:
+    """Compute median, IQR, min, max from a list of measurements."""
+    arr = sorted(values)
+    n = len(arr)
+    return {
+        "median": statistics.median(arr),
+        "p25":    arr[n // 4],
+        "p75":    arr[(3 * n) // 4],
+        "iqr":    arr[(3 * n) // 4] - arr[n // 4],
+        "min":    arr[0],
+        "max":    arr[-1],
+        "n":      n,
+    }
+
+
+# ── Warm-up helper ───────────────────────────────────────────────────────────
+
+
+def warmup(operation, duration_sec: float):
+    """Run operation repeatedly for duration_sec to stabilise caches/clocks."""
+    deadline = time.monotonic() + duration_sec
+    while time.monotonic() < deadline:
+        operation()
+
+
 # ── Individual benchmarks ─────────────────────────────────────────────────────
 
 
-def benchmark_mcts(n_simulations: int = 50_000) -> Dict[str, Any]:
-    """CPU-only MCTS throughput (no neural network)."""
+def benchmark_mcts(n_simulations: int = 50_000, sims_per_move: int = 800,
+                   n_runs: int = 5, warmup_sec: float = 3.0) -> Dict[str, Any]:
+    """CPU-only MCTS throughput (no neural network).
+
+    Measures realistic per-move throughput by running many iterations of
+    sims_per_move searches (matching default.yaml mcts.n_simulations) with
+    tree reset between each, rather than a single monolithic search.  A single
+    large tree exceeds L2 cache and underreports real self-play throughput.
+    """
     from native_core import Board, MCTSTree  # type: ignore[attr-defined]
 
     board = Board()
-    tree  = MCTSTree(c_puct=1.5)
+    tree = MCTSTree(c_puct=1.5)
     tree.new_game(board)
 
-    # Warm up
-    tree.run_simulations_cpu_only(n=1_000)
-    tree.reset()
+    n_iters = max(1, n_simulations // sims_per_move)
 
-    start = time.perf_counter()
-    tree.run_simulations_cpu_only(n=n_simulations)
-    elapsed = time.perf_counter() - start
+    def run_op():
+        for _ in range(n_iters):
+            tree.run_simulations_cpu_only(n=sims_per_move)
+            tree.reset()
 
+    warmup(run_op, warmup_sec)
+
+    rates: list[float] = []
+    for _ in range(n_runs):
+        tree.reset()
+        t0 = time.perf_counter()
+        for _ in range(n_iters):
+            tree.run_simulations_cpu_only(n=sims_per_move)
+            tree.reset()
+        elapsed = time.perf_counter() - t0
+        total_sims = sims_per_move * n_iters
+        rates.append(total_sims / elapsed)
+
+    stats = summarise(rates)
     return {
-        "name":          "MCTS (CPU only, no NN)",
-        "sims":          n_simulations,
-        "elapsed_sec":   elapsed,
-        "sims_per_sec":  n_simulations / elapsed,
+        "name": "MCTS (CPU only, no NN)",
+        "key": "mcts_sim_per_s",
+        "stats": stats,
+        "value": stats["median"],
     }
 
 
-def benchmark_inference(model: "HexTacToeNet", n_positions: int = 20_000, batch_size: int = 64) -> Dict[str, Any]:
+def benchmark_inference(model: "HexTacToeNet", n_positions: int = 20_000,
+                        batch_size: int = 64, n_runs: int = 5,
+                        warmup_sec: float = 3.0) -> Dict[str, Any]:
     """NN throughput in batched evaluation mode."""
     device = next(model.parameters()).device
-    dummy_local  = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
+    dummy_local = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
     model.eval()
-
-    # Warm up: 15-20 iterations to fully stabilize torch.compile
-    with torch.no_grad(), torch.autocast(device_type=device.type):
-        for _ in range(20):
-            model(dummy_local)
-
-    if device.type == "cuda":
-        torch.cuda.synchronize()
-
     n_batches = n_positions // batch_size
     total_positions = n_batches * batch_size
 
-    start = time.perf_counter()
-    with torch.no_grad(), torch.autocast(device_type=device.type):
-        for _ in range(n_batches):
-            model(dummy_local)
-    if device.type == "cuda":
-        torch.cuda.synchronize()
-    elapsed = time.perf_counter() - start
+    def run_op():
+        with torch.no_grad(), torch.autocast(device_type=device.type):
+            for _ in range(n_batches):
+                model(dummy_local)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
 
+    warmup(run_op, warmup_sec)
+
+    rates: list[float] = []
+    for _ in range(n_runs):
+        t0 = time.perf_counter()
+        run_op()
+        elapsed = time.perf_counter() - t0
+        rates.append(total_positions / elapsed)
+
+    stats = summarise(rates)
     return {
-        "name":              f"NN inference (batch={batch_size})",
-        "positions":         total_positions,
-        "elapsed_sec":       elapsed,
-        "positions_per_sec": total_positions / elapsed,
-        "latency_ms":        elapsed / n_batches * 1000,
+        "name": f"NN inference (batch={batch_size})",
+        "key": "nn_inference_pos_per_s",
+        "stats": stats,
+        "value": stats["median"],
     }
 
 
-def benchmark_inference_latency(model: "HexTacToeNet") -> Dict[str, Any]:
+def benchmark_inference_latency(model: "HexTacToeNet", n_runs: int = 5,
+                                warmup_sec: float = 2.0) -> Dict[str, Any]:
     """Single-position latency (worst case for synchronous MCTS)."""
     device = next(model.parameters()).device
-    dummy_local  = torch.zeros(1, 18, 19, 19, dtype=torch.float32, device=device)
+    dummy_local = torch.zeros(1, 18, 19, 19, dtype=torch.float32, device=device)
     model.eval()
-    times: List[float] = []
 
-    with torch.no_grad(), torch.autocast(device_type=device.type):
-        for _ in range(500):
+    def single_inference():
+        with torch.no_grad(), torch.autocast(device_type=device.type):
             if device.type == "cuda":
                 torch.cuda.synchronize()
-            t0 = time.perf_counter()
             model(dummy_local)
             if device.type == "cuda":
                 torch.cuda.synchronize()
-            times.append((time.perf_counter() - t0) * 1000)
 
-    times = times[50:]  # discard warm-up
+    warmup(single_inference, warmup_sec)
+
+    # Each "run" collects 450 latency samples (after discarding 50 warm-up)
+    run_means: list[float] = []
+    run_p99s: list[float] = []
+    for _ in range(n_runs):
+        times: list[float] = []
+        with torch.no_grad(), torch.autocast(device_type=device.type):
+            for _ in range(500):
+                if device.type == "cuda":
+                    torch.cuda.synchronize()
+                t0 = time.perf_counter()
+                model(dummy_local)
+                if device.type == "cuda":
+                    torch.cuda.synchronize()
+                times.append((time.perf_counter() - t0) * 1000)
+        times = times[50:]  # discard per-run warm-up
+        run_means.append(float(np.mean(times)))
+        run_p99s.append(float(np.percentile(times, 99)))
+
+    stats = summarise(run_means)
+    p99_stats = summarise(run_p99s)
     return {
-        "name":    "NN latency (batch=1)",
-        "mean_ms": float(np.mean(times)),
-        "p50_ms":  float(np.percentile(times, 50)),
-        "p99_ms":  float(np.percentile(times, 99)),
+        "name": "NN latency (batch=1)",
+        "key": "nn_latency_mean_ms",
+        "stats": stats,
+        "value": stats["median"],
+        "p99_stats": p99_stats,
+        "p99_value": p99_stats["median"],
     }
 
 
-def benchmark_replay_buffer(buffer: "RustReplayBuffer") -> Dict[str, Any]:
-    """Replay buffer push + sample speed.
-
-    Measures three things:
-      push_per_sec     — how fast the stats-loop thread can ingest positions
-      us_per_batch     — raw (no-augment) sample_batch(256) latency in µs
-      us_per_batch_aug — augmented sample_batch(256) latency in µs
-    """
-    BATCH     = 256
+def benchmark_replay_buffer(buffer: "RustReplayBuffer", n_runs: int = 5,
+                            warmup_sec: float = 2.0) -> Dict[str, Any]:
+    """Replay buffer push + sample speed."""
+    BATCH = 256
     raw_iters = 2_000
     aug_iters = 500
     push_iters = 10_000
 
-    dummy_state  = np.zeros((18, 19, 19), dtype=np.float16)
+    dummy_state = np.zeros((18, 19, 19), dtype=np.float16)
     dummy_policy = np.ones(362, dtype=np.float32) / 362.0
 
-    # 1. Push throughput
-    t0 = time.perf_counter()
-    for _ in range(push_iters):
-        buffer.push(dummy_state, dummy_policy, 0.0)
-    elapsed_push = time.perf_counter() - t0
-    push_per_sec = push_iters / elapsed_push
+    # Warm-up push
+    warmup(lambda: buffer.push(dummy_state, dummy_policy, 0.0), warmup_sec)
 
-    # 2. Raw sampling (no augmentation)
-    t0 = time.perf_counter()
-    for _ in range(raw_iters):
-        buffer.sample_batch(BATCH, False)
-    elapsed_raw = time.perf_counter() - t0
+    # Warm-up sample
+    warmup(lambda: buffer.sample_batch(BATCH, False), warmup_sec)
 
-    # 3. Augmented sampling
-    t1 = time.perf_counter()
-    for _ in range(aug_iters):
-        buffer.sample_batch(BATCH, True)
-    elapsed_aug = time.perf_counter() - t1
+    push_rates: list[float] = []
+    raw_times: list[float] = []
+    aug_times: list[float] = []
 
-    us_per_batch     = elapsed_raw / raw_iters * 1e6
-    us_per_batch_aug = elapsed_aug / aug_iters * 1e6
+    for _ in range(n_runs):
+        # Push throughput
+        t0 = time.perf_counter()
+        for _ in range(push_iters):
+            buffer.push(dummy_state, dummy_policy, 0.0)
+        elapsed_push = time.perf_counter() - t0
+        push_rates.append(push_iters / elapsed_push)
+
+        # Raw sampling
+        t0 = time.perf_counter()
+        for _ in range(raw_iters):
+            buffer.sample_batch(BATCH, False)
+        elapsed_raw = time.perf_counter() - t0
+        raw_times.append(elapsed_raw / raw_iters * 1e6)
+
+        # Augmented sampling
+        t0 = time.perf_counter()
+        for _ in range(aug_iters):
+            buffer.sample_batch(BATCH, True)
+        elapsed_aug = time.perf_counter() - t0
+        aug_times.append(elapsed_aug / aug_iters * 1e6)
 
     return {
-        "name":              "Replay buffer sample (batch=256)",
-        "push_per_sec":      push_per_sec,
-        "us_per_batch":      us_per_batch,
-        "us_per_batch_aug":  us_per_batch_aug,
-        "us_per_pos_aug":    us_per_batch_aug / BATCH,
+        "name": "Replay buffer",
+        "push": {"key": "buffer_push_per_s", "stats": summarise(push_rates), "value": summarise(push_rates)["median"]},
+        "raw":  {"key": "buffer_sample_raw_us", "stats": summarise(raw_times), "value": summarise(raw_times)["median"]},
+        "aug":  {"key": "buffer_sample_aug_us", "stats": summarise(aug_times), "value": summarise(aug_times)["median"]},
     }
 
 
-def benchmark_gpu_utilisation(model: "HexTacToeNet") -> Dict[str, Any]:
+def benchmark_gpu_utilisation(model: "HexTacToeNet", n_runs: int = 5) -> Dict[str, Any]:
     """Estimate GPU utilisation by measuring compute vs wall-clock time."""
     device = next(model.parameters()).device
     if device.type != "cuda":
         return {
             "name": "GPU utilisation",
-            "gpu_util_pct": None,
-            "vram_used_gb": None,
-            "vram_total_gb": None,
+            "gpu": {"key": "gpu_util_pct", "stats": None, "value": None},
+            "vram": {"key": "vram_used_gb", "stats": None, "value": None},
+            "vram_total": None,
         }
 
     try:
         import pynvml
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-
-        # Run inference loop while sampling GPU util.
         model.eval()
         dummy_local = torch.zeros(64, 18, 19, 19, dtype=torch.float32, device=device)
-        util_samples: List[float] = []
 
-        t_end = time.monotonic() + 5.0  # 5-second sample window
-        with torch.no_grad(), torch.autocast(device_type="cuda"):
-            while time.monotonic() < t_end:
-                model(dummy_local)
-                util_samples.append(
-                    float(pynvml.nvmlDeviceGetUtilizationRates(handle).gpu)
-                )
-        torch.cuda.synchronize()
+        util_runs: list[float] = []
+        vram_runs: list[float] = []
 
-        mem        = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        gpu_util   = float(np.mean(util_samples)) if util_samples else 0.0
-        vram_gb    = float(mem.used) / 1e9
-        vram_total = float(mem.total) / 1e9
+        for _ in range(n_runs):
+            util_samples: list[float] = []
+            t_end = time.monotonic() + 5.0
+            with torch.no_grad(), torch.autocast(device_type="cuda"):
+                while time.monotonic() < t_end:
+                    model(dummy_local)
+                    util_samples.append(
+                        float(pynvml.nvmlDeviceGetUtilizationRates(handle).gpu)
+                    )
+            torch.cuda.synchronize()
+            util_runs.append(float(np.mean(util_samples)) if util_samples else 0.0)
+            mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            vram_runs.append(float(mem.used) / 1e9)
+
+        vram_total = float(pynvml.nvmlDeviceGetMemoryInfo(handle).total) / 1e9
     except Exception as exc:
         console.print(f"[yellow]GPU util measurement failed: {exc}[/yellow]")
-        gpu_util = 0.0
-        vram_gb  = 0.0
-        vram_total = 0.0
+        return {
+            "name": "GPU utilisation",
+            "gpu": {"key": "gpu_util_pct", "stats": None, "value": None},
+            "vram": {"key": "vram_used_gb", "stats": None, "value": None},
+            "vram_total": None,
+        }
 
     return {
-        "name":          "GPU utilisation",
-        "gpu_util_pct":  gpu_util,
-        "vram_used_gb":  vram_gb,
-        "vram_total_gb": vram_total,
+        "name": "GPU utilisation",
+        "gpu": {"key": "gpu_util_pct", "stats": summarise(util_runs), "value": summarise(util_runs)["median"]},
+        "vram": {"key": "vram_used_gb", "stats": summarise(vram_runs), "value": summarise(vram_runs)["median"]},
+        "vram_total": vram_total,
     }
 
 
@@ -227,6 +344,8 @@ def benchmark_worker_pool(
     n_workers: int = 4,
     mcts_sims_override: Optional[int] = None,
     quick: bool = False,
+    n_runs: int = 5,
+    warmup_sec: float = 10.0,
 ) -> Dict[str, Any]:
     """Measure end-to-end self-play throughput in the multiprocess pool."""
     from python.selfplay.pool import WorkerPool
@@ -248,174 +367,250 @@ def benchmark_worker_pool(
             "max_moves_per_game": int(config.get("max_moves_per_game", 128)),
         },
     }
-    replay = RustReplayBuffer(capacity=25_000)
-    try:
-        pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
-    except Exception as exc:
-        return {
-            "name": "Worker pool throughput",
-            "games_completed": 0,
-            "positions_pushed": 0,
-            "elapsed_sec": 0.0,
-            "games_per_hour": 0.0,
-            "batch_saturation": 0.0,
-            "skipped": 1.0,
-            "error": str(exc),
-        }
 
-    pool.start()
-    t0 = time.perf_counter()
-    stop_error: str | None = None
-    
-    # Live reporting loop
-    last_report = t0
-    try:
-        while time.perf_counter() - t0 < duration_sec:
-            time.sleep(1.0)
-            now = time.perf_counter()
-            if now - last_report >= 5.0:
-                elapsed = now - t0
-                gph = (pool.games_completed / elapsed) * 3600.0
-                console.print(f"    [dim]… {elapsed:.0f}s: {gph:,.1f} games/hour, {pool.positions_pushed} positions[/dim]")
-                last_report = now
-    finally:
-        done = threading.Event()
+    def run_pool(run_duration: int) -> tuple[float, float, float]:
+        """Run a single pool session, return (games/hr, pos/hr, batch_sat%)."""
+        replay = RustReplayBuffer(capacity=25_000)
+        try:
+            pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
+        except Exception as exc:
+            console.print(f"[yellow]Worker pool init failed: {exc}[/yellow]")
+            return (0.0, 0.0, 0.0)
 
-        def _stop_pool() -> None:
-            nonlocal stop_error
-            try:
-                pool.stop()
-            except Exception as exc:  # pragma: no cover - defensive cleanup path
-                stop_error = str(exc)
-            finally:
-                done.set()
+        pool.start()
+        t0 = time.perf_counter()
+        stop_error: str | None = None
 
-        stop_thread = threading.Thread(target=_stop_pool, daemon=True)
-        stop_thread.start()
-        if not done.wait(10.0):
-            stop_error = "pool.stop timeout"
+        last_report = t0
+        try:
+            while time.perf_counter() - t0 < run_duration:
+                time.sleep(1.0)
+                now = time.perf_counter()
+                if now - last_report >= 5.0:
+                    elapsed = now - t0
+                    gph = (pool.games_completed / elapsed) * 3600.0
+                    console.print(f"    [dim]... {elapsed:.0f}s: {gph:,.1f} games/hour, {pool.positions_pushed} positions[/dim]")
+                    last_report = now
+        finally:
+            done = threading.Event()
 
-    elapsed = max(time.perf_counter() - t0, 1e-6)
-    games_per_hour = (pool.games_completed / elapsed) * 3600.0
-    
-    # Calculate batch saturation
-    server = pool._inference_server
-    if server.forward_count > 0:
-        batch_saturation = server.total_requests / (server.forward_count * server._batch_size) * 100.0
-    else:
-        batch_saturation = 0.0
+            def _stop_pool() -> None:
+                nonlocal stop_error
+                try:
+                    pool.stop()
+                except Exception as exc:
+                    stop_error = str(exc)
+                finally:
+                    done.set()
 
-    positions_per_hour = (pool.positions_pushed / elapsed) * 3600.0
+            stop_thread = threading.Thread(target=_stop_pool, daemon=True)
+            stop_thread.start()
+            if not done.wait(10.0):
+                stop_error = "pool.stop timeout"
 
-    result = {
-        "name":               "Worker pool throughput",
-        "games_completed":    pool.games_completed,
-        "positions_pushed":   pool.positions_pushed,
-        "elapsed_sec":        elapsed,
-        "games_per_hour":     games_per_hour,
-        "positions_per_hour": positions_per_hour,
-        "batch_saturation":   batch_saturation,
+        elapsed = max(time.perf_counter() - t0, 1e-6)
+        games_per_hour = (pool.games_completed / elapsed) * 3600.0
+        positions_per_hour = (pool.positions_pushed / elapsed) * 3600.0
+
+        server = pool._inference_server
+        if server.forward_count > 0:
+            batch_sat = server.total_requests / (server.forward_count * server._batch_size) * 100.0
+        else:
+            batch_sat = 0.0
+
+        return (games_per_hour, positions_per_hour, batch_sat)
+
+    # Warm-up run (discarded)
+    if warmup_sec > 0 and not quick:
+        console.print(f"    [dim]Worker pool warm-up ({warmup_sec:.0f}s)...[/dim]")
+        run_pool(int(warmup_sec))
+
+    gph_runs: list[float] = []
+    pph_runs: list[float] = []
+    bat_runs: list[float] = []
+
+    for i in range(n_runs):
+        console.print(f"    [dim]Worker pool run {i+1}/{n_runs} ({duration_sec}s)...[/dim]")
+        gph, pph, bat = run_pool(duration_sec)
+        gph_runs.append(gph)
+        pph_runs.append(pph)
+        bat_runs.append(bat)
+
+    return {
+        "name": "Worker pool throughput",
+        "gph":  {"key": "worker_games_per_hr", "stats": summarise(gph_runs), "value": summarise(gph_runs)["median"]},
+        "pph":  {"key": "worker_pos_per_hr", "stats": summarise(pph_runs), "value": summarise(pph_runs)["median"]},
+        "bat":  {"key": "worker_batch_fill_pct", "stats": summarise(bat_runs), "value": summarise(bat_runs)["median"]},
     }
-    if stop_error is not None:
-        result["stop_error"] = stop_error
-    return result
 
 
 # ── Report ────────────────────────────────────────────────────────────────────
 
-# (name, metric_key, target, higher_is_better)
-_CHECKS = [
-    ("MCTS (CPU only, no NN)",          "sims_per_sec",       150_000,  True),
-    ("NN inference (batch=64)",          "positions_per_sec",    8_000,  True),
-    ("NN latency (batch=1)",             "mean_ms",                  5,  False),
-    ("Replay buffer sample (batch=256)", "us_per_batch",          1000,  False),
-    ("Replay buffer sample (batch=256)", "us_per_batch_aug",      1000,  False),
-    ("Replay buffer sample (batch=256)", "push_per_sec",        50_000,  True),
-    ("GPU utilisation",                  "gpu_util_pct",             80,  True),
-    ("GPU utilisation",                  "vram_used_gb",              0,  False), # 0 means dynamic target
-    ("Worker pool throughput",           "games_per_hour",         1500,  True),
-    ("Worker pool throughput",           "positions_per_hour",   50_000,  True),
-    ("Worker pool throughput",           "batch_saturation",         50,  True),
+# (row_label, result_name, sub_key, metric_key_in_stats_or_value, target, higher_is_better)
+_CHECKS: list[tuple[str, str, str | None, str, float, bool]] = [
+    ("MCTS sim/s (CPU, no NN)",           "MCTS (CPU only, no NN)",  None,    "value",  160_000,   True),
+    ("NN inference batch=64 pos/s",       "NN inference (batch=64)", None,    "value",    8_500,   True),
+    ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",        2,   False),
+    ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  630_000,   True),
+    ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_200,   False),
+    ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_200,   False),
+    ("GPU utilisation %",                 "GPU utilisation",         "gpu",   "value",       85,   True),
+    ("VRAM usage GB",                     "GPU utilisation",         "vram",  "value",        0,   False),  # dynamic
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  1_290_000, True),
+    ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
 ]
 
 
-def print_benchmark_report(results: List[Dict[str, Any]]) -> bool:
+def _get_metric(by_name: dict, result_name: str, sub_key: str | None) -> dict | None:
+    r = by_name.get(result_name)
+    if r is None:
+        return None
+    if sub_key is not None:
+        return r.get(sub_key)
+    return r
+
+
+def _fmt_range(stats: dict) -> str:
+    """Format min-max range with K/M suffixes."""
+    lo, hi = stats["min"], stats["max"]
+    def _short(v: float) -> str:
+        if abs(v) >= 1_000_000:
+            return f"{v/1e6:.2f}M"
+        if abs(v) >= 1_000:
+            return f"{v/1e3:.1f}k"
+        return f"{v:.1f}"
+    return f"{_short(lo)}-{_short(hi)}"
+
+
+def print_benchmark_report(results: List[Dict[str, Any]], cpu_pinned: bool,
+                           n_runs: int, warmup_note: str) -> bool:
     """Print a rich pass/fail table. Returns True if all checks pass."""
-    table = Table(title="Phase 3.5 / 4 Benchmark Report", show_lines=True)
-    table.add_column("Benchmark",    style="bold", min_width=36)
-    table.add_column("Result",       justify="right")
-    table.add_column("Target",       justify="right", style="dim")
-    table.add_column("Status",       justify="center")
+    table = Table(title="Benchmark Report", show_lines=True)
+    table.add_column("Metric", style="bold", min_width=36)
+    table.add_column("Median", justify="right")
+    table.add_column("IQR", justify="right")
+    table.add_column("Range", justify="right")
+    table.add_column("Target", justify="right", style="dim")
+    table.add_column("", justify="center")
 
     by_name = {r["name"]: r for r in results}
     all_pass = True
 
-    for name, key, target, higher in _CHECKS:
-        r   = by_name.get(name, {})
-        val = r.get(key)
-        if val is None:
-            table.add_row(name, "-", "SKIP", "[yellow]SKIP[/yellow]")
+    for row_label, result_name, sub_key, val_key, target, higher in _CHECKS:
+        metric = _get_metric(by_name, result_name, sub_key)
+        if metric is None or metric.get("value") is None:
+            table.add_row(row_label, "-", "-", "-", "SKIP", "[yellow]SKIP[/yellow]")
             continue
 
-        # Dynamic VRAM Target
-        if name == "GPU utilisation" and key == "vram_used_gb":
-            total = r.get("vram_total_gb", 0.0)
+        val = metric["value"]
+        stats = metric.get("stats", {})
+
+        # Dynamic VRAM target
+        if row_label == "VRAM usage GB":
+            gpu_result = by_name.get("GPU utilisation", {})
+            total = gpu_result.get("vram_total", 0.0)
+            if total is None or total == 0:
+                table.add_row(row_label, "-", "-", "-", "SKIP", "[yellow]SKIP[/yellow]")
+                continue
             limit = total * 0.8
             ok = val <= limit
             status = "[green]PASS[/green]" if ok else "[red]FAIL[/red]"
-            table.add_row(
-                "VRAM usage",
-                f"{val:.1f} / {total:.1f} GB",
-                f"≤ {limit:.1f} GB (80%)",
-                status
-            )
-            if not ok: all_pass = False
+            if not ok:
+                all_pass = False
+            iqr_str = f"+/-{stats.get('iqr', 0):.2f}" if stats else "-"
+            range_str = _fmt_range(stats) if stats else "-"
+            table.add_row(row_label, f"{val:.2f}/{total:.1f}", iqr_str, range_str,
+                          f"<= {limit:.1f} (80%)", status)
             continue
 
         ok = (val >= target) if higher else (val <= target)
         if not ok:
             all_pass = False
         status = "[green]PASS[/green]" if ok else "[red]FAIL[/red]"
-        op     = "≥" if higher else "≤"
-        unit   = _unit(key)
+        op = ">=" if higher else "<="
 
-        # Human-readable row label overrides (kept short to fit 80-col terminal)
-        _LABELS = {
-            "batch_saturation":   "Worker pool batch fill %",
-            "us_per_batch":       "Buffer sample raw (batch=256)",
-            "us_per_batch_aug":   "Buffer sample aug (batch=256)",
-            "push_per_sec":       "Buffer push throughput",
-            "positions_per_hour": "Worker pool positions/hr",
-        }
-        row_name = _LABELS.get(key, name)
+        # Format values
+        def _fmt_val(v: float) -> str:
+            if abs(v) >= 10_000:
+                return f"{v:,.0f}"
+            if abs(v) >= 100:
+                return f"{v:,.1f}"
+            return f"{v:,.2f}"
+
+        iqr_str = f"+/-{_fmt_val(stats.get('iqr', 0))}" if stats else "-"
+        range_str = _fmt_range(stats) if stats else "-"
 
         table.add_row(
-            row_name,
-            f"{val:,.1f}{unit}",
-            f"{op} {target:,}{unit}",
+            row_label,
+            _fmt_val(val),
+            iqr_str,
+            range_str,
+            f"{op} {target:,.0f}",
             status,
         )
 
     console.print()
     console.print(table)
     console.print()
+
+    pin_label = "PINNED (performance governor)" if cpu_pinned else "[UNCONTROLLED]"
+    console.print(f"  CPU frequency: {pin_label}")
+    console.print(f"  Warm-up: {warmup_note} | Runs: n={n_runs} | Summary: median +/- IQR")
+    console.print()
+
     if all_pass:
-        console.print("[bold green]All checks PASS — Phase 3.5 / 4 exit criteria met.[/bold green]")
+        console.print("[bold green]All checks PASS -- Phase 4.5 exit criteria met.[/bold green]")
     else:
-        console.print("[bold red]Some checks FAILED — profile and optimise before Phase 4.5.[/bold red]")
+        console.print("[bold red]Some checks FAILED -- profile and optimise before Phase 4.5.[/bold red]")
     console.print()
     return all_pass
 
 
-def _unit(key: str) -> str:
-    if "per_sec" in key:  return " /s"
-    if "per_hour" in key: return " /hr"
-    if "_ms" in key:      return " ms"
-    if "_us" in key:      return " μs"
-    if "pct" in key:      return "%"
-    if "saturation" in key: return "%"
-    if "hour" in key:     return " /hr"
-    return ""
+def write_json_report(results: List[Dict[str, Any]], cpu_pinned: bool, n_runs: int) -> Path:
+    """Write structured JSON report to reports/benchmarks/."""
+    report_dir = ROOT / "reports" / "benchmarks"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    report_path = report_dir / f"{timestamp}.json"
+
+    by_name = {r["name"]: r for r in results}
+    metrics: dict[str, Any] = {}
+    targets_met: dict[str, bool] = {}
+
+    for row_label, result_name, sub_key, val_key, target, higher in _CHECKS:
+        metric = _get_metric(by_name, result_name, sub_key)
+        if metric is None or metric.get("value") is None:
+            continue
+        key = metric.get("key", row_label)
+        val = metric["value"]
+        stats = metric.get("stats", {})
+
+        entry = {k: v for k, v in stats.items()} if stats else {}
+        entry["median"] = val
+        metrics[key] = entry
+
+        if row_label == "VRAM usage GB":
+            gpu_result = by_name.get("GPU utilisation", {})
+            total = gpu_result.get("vram_total", 0.0)
+            limit = (total or 1) * 0.8
+            targets_met[key] = val <= limit
+        else:
+            targets_met[key] = (val >= target) if higher else (val <= target)
+
+    report = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "cpu_pinned": cpu_pinned,
+        "n_runs": n_runs,
+        "metrics": metrics,
+        "targets_met": targets_met,
+        "all_targets_met": all(targets_met.values()),
+    }
+
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2)
+
+    console.print(f"  JSON report: {report_path}")
+    return report_path
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -427,7 +622,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", default="configs/fast_debug.yaml")
     p.add_argument("--no-compile", action="store_true",
                    help="Skip torch.compile (faster startup for quick checks)")
-    p.add_argument("--mcts-sims",  type=int, default=50_000,
+    p.add_argument("--mcts-sims", type=int, default=50_000,
                    help="MCTS simulations for throughput benchmark")
     p.add_argument("--pool-workers", type=int, default=default_workers,
                    help="Worker count for self-play throughput benchmark")
@@ -435,40 +630,76 @@ def parse_args() -> argparse.Namespace:
                    help="Duration in seconds for worker pool benchmark")
     p.add_argument("--mcts-search-sims", type=int, default=None,
                    help="Override MCTS simulations per move (default from config)")
-    p.add_argument("--quick", action="store_true", help="Run shorter benchmarks for fast verification")
+    p.add_argument("--quick", action="store_true",
+                   help="Run shorter benchmarks for fast verification")
+    p.add_argument("--mode", choices=["lite", "full", "stress"], default="full",
+                   help="Benchmark mode: lite (n=3, no pin), full (n=5, pin attempted), "
+                        "stress (n=10, pin required)")
+    p.add_argument("--n-runs", type=int, default=None,
+                   help="Override number of runs (default depends on --mode)")
+    p.add_argument("--no-pin", action="store_true",
+                   help="Skip CPU frequency pinning attempt")
+    p.add_argument("--require-pin", action="store_true",
+                   help="Abort if CPU frequency pinning fails")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
-    # Optimization: Enable TensorFloat32 (TF32) for better performance on Ampere+ GPUs
+    # Mode defaults
+    mode_defaults = {
+        "lite":   {"n_runs": 3, "try_pin": False, "require_pin": False},
+        "full":   {"n_runs": 5, "try_pin": True,  "require_pin": False},
+        "stress": {"n_runs": 10, "try_pin": True, "require_pin": True},
+    }
+    mode_cfg = mode_defaults[args.mode]
+    n_runs = args.n_runs if args.n_runs is not None else mode_cfg["n_runs"]
+    try_pin = mode_cfg["try_pin"] and not args.no_pin
+    require_pin = mode_cfg["require_pin"] or args.require_pin
+
+    # CPU frequency pinning
+    cpu_pinned = False
+    if try_pin or require_pin:
+        console.print("[bold]Attempting CPU frequency pinning...[/bold]")
+        cpu_pinned = pin_cpu_frequency()
+        if cpu_pinned:
+            console.print("[green]CPU frequency pinned to performance governor.[/green]")
+        else:
+            if require_pin:
+                console.print("[bold red]CPU frequency pinning failed. bench.stress requires pinning.[/bold red]")
+                console.print("Run with sudo or install cpupower.")
+                sys.exit(1)
+            console.print("[yellow]CPU pinning failed -- results marked [UNCONTROLLED].[/yellow]")
+
+    uncontrolled = "" if cpu_pinned else "[UNCONTROLLED] "
+
+    # Optimization: Enable TensorFloat32 for Ampere+ GPUs
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision('high')
-        # Also enable CUDNN autotuner
         torch.backends.cudnn.benchmark = True
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    console.print(f"[bold]Benchmarking on {device}[/bold]")
+    console.print(f"[bold]Benchmarking on {device} | mode={args.mode} | n={n_runs}[/bold]")
 
     from python.model.network import HexTacToeNet, compile_model
     from native_core import RustReplayBuffer
 
-    # ── Build model ──
+    # Build model
     model = HexTacToeNet(
-        board_size  = int(config.get("board_size",  19)),
-        in_channels = 18,
-        filters     = int(config.get("filters",     128)),
-        res_blocks  = int(config.get("res_blocks",  10)),
+        board_size=int(config.get("board_size", 19)),
+        in_channels=18,
+        filters=int(config.get("filters", 128)),
+        res_blocks=int(config.get("res_blocks", 10)),
     ).to(device)
 
     if not args.no_compile:
         model = compile_model(model)
 
-    # ── Fill replay buffer with dummy data ──
+    # Fill replay buffer with dummy data
     buffer = RustReplayBuffer(capacity=100_000)
     for _ in range(10_000):
         buffer.push(
@@ -477,27 +708,45 @@ def main() -> None:
             0.0,
         )
 
-    # ── Run benchmarks ──
-    results: List[Dict[str, Any]] = []
+    # Warm-up durations
+    warmup_mcts = 3.0
+    warmup_nn = 3.0
+    warmup_latency = 2.0
+    warmup_buffer = 2.0
+    warmup_worker = 10.0
 
-    with console.status("[bold green]MCTS throughput…"):
-        results.append(benchmark_mcts(n_simulations=args.mcts_sims if not args.quick else 5000))
+    if args.quick:
+        warmup_mcts = warmup_nn = warmup_latency = warmup_buffer = 1.0
+        warmup_worker = 3.0
 
-    with console.status("[bold green]NN inference (batch=64)…"):
-        results.append(benchmark_inference(model, batch_size=64, n_positions=20000 if not args.quick else 2000))
+    try:
+        # Run benchmarks
+        results: List[Dict[str, Any]] = []
 
-    with console.status("[bold green]NN latency (batch=1)…"):
-        results.append(benchmark_inference_latency(model))
+        with console.status(f"[bold green]{uncontrolled}MCTS throughput (n={n_runs})..."):
+            results.append(benchmark_mcts(
+                n_simulations=args.mcts_sims if not args.quick else 5000,
+                n_runs=n_runs, warmup_sec=warmup_mcts))
 
-    with console.status("[bold green]Replay buffer…"):
-        results.append(benchmark_replay_buffer(buffer))
+        with console.status(f"[bold green]{uncontrolled}NN inference batch=64 (n={n_runs})..."):
+            results.append(benchmark_inference(
+                model, batch_size=64,
+                n_positions=20000 if not args.quick else 2000,
+                n_runs=n_runs, warmup_sec=warmup_nn))
 
-    with console.status("[bold green]GPU utilisation (5 s)…"):
-        results.append(benchmark_gpu_utilisation(model))
+        with console.status(f"[bold green]{uncontrolled}NN latency batch=1 (n={n_runs})..."):
+            results.append(benchmark_inference_latency(
+                model, n_runs=n_runs, warmup_sec=warmup_latency))
 
-    with console.status("[bold green]Worker pool throughput…"):
-        results.append(
-            benchmark_worker_pool(
+        with console.status(f"[bold green]{uncontrolled}Replay buffer (n={n_runs})..."):
+            results.append(benchmark_replay_buffer(
+                buffer, n_runs=n_runs, warmup_sec=warmup_buffer))
+
+        with console.status(f"[bold green]{uncontrolled}GPU utilisation (n={n_runs})..."):
+            results.append(benchmark_gpu_utilisation(model, n_runs=n_runs))
+
+        with console.status(f"[bold green]{uncontrolled}Worker pool throughput (n={n_runs})..."):
+            results.append(benchmark_worker_pool(
                 model=model,
                 config=config,
                 device=device,
@@ -505,49 +754,39 @@ def main() -> None:
                 n_workers=args.pool_workers,
                 mcts_sims_override=args.mcts_search_sims,
                 quick=args.quick,
-            )
-        )
+                n_runs=n_runs,
+                warmup_sec=warmup_worker,
+            ))
 
-    # ── Print individual results ──
-    for r in results:
-        console.print(f"  [dim]{r['name']}:[/dim]", end=" ")
-        if "sims_per_sec" in r:
-            console.print(f"{r['sims_per_sec']:,.0f} sim/s")
-        elif "positions_per_sec" in r:
-            console.print(f"{r['positions_per_sec']:,.0f} pos/s  "
-                          f"latency={r['latency_ms']:.1f} ms")
-        elif "mean_ms" in r:
-            console.print(f"mean={r['mean_ms']:.2f} ms  "
-                          f"p50={r['p50_ms']:.2f} ms  "
-                          f"p99={r['p99_ms']:.2f} ms")
-        elif "us_per_batch" in r:
-            console.print(
-                f"push={r['push_per_sec']:,.0f}/s  "
-                f"raw={r['us_per_batch']:.0f} μs/batch  "
-                f"aug={r['us_per_batch_aug']:.0f} μs/batch "
-                f"({r['us_per_pos_aug']:.2f} μs/pos)"
-            )
-        elif "gpu_util_pct" in r:
-            pct = r.get("gpu_util_pct")
-            vram = r.get("vram_used_gb")
-            console.print(
-                f"{pct:.0f}%  VRAM={vram:.2f} GB"
-                if pct is not None else "N/A"
-            )
-        elif "games_per_hour" in r:
-            console.print(
-                f"{r['games_per_hour']:,.0f} games/hr  "
-                f"{r.get('positions_per_hour', 0):,.0f} pos/hr  "
-                f"games={r['games_completed']}  positions={r['positions_pushed']}",
-                end=""
-            )
-            if "stop_error" in r:
-                console.print(f"  [bold red](STOP ERROR: {r['stop_error']})[/bold red]")
-            else:
-                console.print()
+        # Print per-metric summaries
+        for r in results:
+            name = r["name"]
+            if "stats" in r:
+                s = r["stats"]
+                console.print(f"  [dim]{uncontrolled}{name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
+            elif "push" in r:
+                for sub_name, sub in [("push", r["push"]), ("raw", r["raw"]), ("aug", r["aug"])]:
+                    s = sub["stats"]
+                    console.print(f"  [dim]{uncontrolled}{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
+            elif "gpu" in r:
+                for sub_name, sub in [("util%", r["gpu"]), ("vram", r["vram"])]:
+                    if sub.get("stats"):
+                        s = sub["stats"]
+                        console.print(f"  [dim]{uncontrolled}{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
+            elif "pph" in r:
+                for sub_name, sub in [("pos/hr", r["pph"]), ("games/hr", r["gph"]), ("batch%", r["bat"])]:
+                    s = sub["stats"]
+                    console.print(f"  [dim]{uncontrolled}{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
 
-    all_pass = print_benchmark_report(results)
-    sys.exit(0 if all_pass else 1)
+        warmup_note = f"{warmup_mcts:.0f}s MCTS / {warmup_nn:.0f}s NN / {warmup_buffer:.0f}s buffer / {warmup_worker:.0f}s worker"
+        all_pass = print_benchmark_report(results, cpu_pinned, n_runs, warmup_note)
+        write_json_report(results, cpu_pinned, n_runs)
+        sys.exit(0 if all_pass else 1)
+
+    finally:
+        if cpu_pinned:
+            console.print("[dim]Restoring CPU governor to schedutil...[/dim]")
+            restore_cpu_frequency()
 
 
 if __name__ == "__main__":
