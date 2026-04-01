@@ -27,11 +27,6 @@ selfplay:
   leaf_batch_size: 16
   replay_buffer_capacity: 500000
 
-  opponent_mix:
-    self_play_fraction: 0.80
-    sealbot_fraction: 0.20
-    sealbot_time_limit_ms: 500  # randomised ±200ms for non-determinism
-
   playout_cap:
     fast_prob: 0.25
     fast_sims: 50

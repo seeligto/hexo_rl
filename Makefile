@@ -32,7 +32,7 @@ deps.install: ## Install python deps into .venv
 
 .PHONY: native.build
 native.build: ## Build/install Rust extension via maturin
-	$(MATURIN) develop --release -m native_core/Cargo.toml
+	RUSTFLAGS="-C target-cpu=native" $(MATURIN) develop --release -m native_core/Cargo.toml
 
 .PHONY: test.py
 test.py: ## Run python test suite
