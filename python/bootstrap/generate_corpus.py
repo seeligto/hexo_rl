@@ -35,8 +35,13 @@ def _play_one_game(
     bot: BotProtocol,
     game_idx: int,
     rng_seed: int = 0,
+    n_random_opening: int = 1,
 ) -> dict | None:
     """Play one self-play game using bot for both sides.
+
+    To ensure opening diversity (deterministic bots like SealBot at fixed
+    depth always play the same game otherwise), the first n_random_opening
+    moves are random.  The bot takes over after that.
 
     Returns a dict with keys: moves, winner, plies, bot_name.
     Returns None if the game ends without a winner (capped).
@@ -48,6 +53,15 @@ def _play_one_game(
     moves: list[tuple[int, int]] = []
 
     rng = random.Random(rng_seed + game_idx)
+
+    # Random opening moves for diversity
+    for _ in range(n_random_opening):
+        legal = board.legal_moves()
+        if not legal or board.check_win():
+            break
+        q, r = rng.choice(legal)
+        state = state.apply_move(board, q, r)
+        moves.append((q, r))
 
     while not board.check_win() and board.legal_move_count() > 0 and len(moves) < MAX_MOVES_PER_GAME:
         try:
