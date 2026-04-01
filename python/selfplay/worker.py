@@ -104,7 +104,11 @@ class SelfPlayWorker:
     ) -> List[float]:
         """Run n_sims MCTS simulations from `board` using batched inference."""
         self.tree.new_game(board)
-        dirichlet_applied  = False
+        # Dirichlet noise only at the start of a full compound turn, not at
+        # intermediate plies (second stone of a 2-stone turn).  Ply 0 is P1's
+        # single opening stone — that IS a full turn, so noise applies there.
+        is_intermediate_ply = board.moves_remaining == 1 and board.ply > 0
+        dirichlet_applied  = is_intermediate_ply  # skip noise if mid-turn
         effective_batch    = max(1, int(batch_size))
 
         sims_done = 0
