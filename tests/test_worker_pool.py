@@ -3,7 +3,6 @@
 Legacy multiprocessing queue tests were removed. These tests validate:
 1) RustInferenceBatcher block/batch/unblock behavior.
 2) WorkerPool basic in-process threaded self-play smoke path.
-3) Mixed opponent scheduling (SealBot fraction).
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import torch
 from native_core import RustInferenceBatcher, RustSelfPlayRunner
 from python.model.network import HexTacToeNet
 from python.selfplay.inference_server import InferenceServer
-from python.selfplay.pool import WorkerPool, _compute_worker_split
+from python.selfplay.pool import WorkerPool
 from native_core import RustReplayBuffer
 
 
@@ -165,125 +164,3 @@ def test_rust_runner_collect_data_format():
         runner.stop()
         server.stop()
         server.join(timeout=5.0)
-
-
-# ── Mixed opponent scheduling tests ──────────────────────────────────────────
-
-
-def test_worker_split_zero_sealbot():
-    """With sealbot_fraction=0, all workers are self-play."""
-    n_sp, n_sb = _compute_worker_split(16, 0.0)
-    assert n_sp == 16
-    assert n_sb == 0
-
-
-def test_worker_split_all_sealbot():
-    """With sealbot_fraction=1.0, all workers are SealBot."""
-    n_sp, n_sb = _compute_worker_split(16, 1.0)
-    assert n_sp == 0
-    assert n_sb == 16
-
-
-def test_worker_split_fractional():
-    """With 16 workers and 0.20 fraction, 3 SealBot, 13 self-play."""
-    n_sp, n_sb = _compute_worker_split(16, 0.20)
-    assert n_sb == 3
-    assert n_sp == 13
-    assert n_sp + n_sb == 16
-
-
-def test_no_sealbot_workers_when_fraction_zero():
-    """WorkerPool with sealbot_fraction=0 should have 0 SealBot threads."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
-    buffer = RustReplayBuffer(capacity=10_000)
-
-    config = {
-        "mcts": {"n_simulations": 1, "c_puct": 1.0},
-        "selfplay": {
-            "n_workers": 4,
-            "opponent_mix": {
-                "self_play_fraction": 1.0,
-                "sealbot_fraction": 0.0,
-            },
-        },
-    }
-    pool = WorkerPool(model, config, device, buffer, n_workers=4)
-    assert pool._n_sealbot_workers == 0
-    assert pool._n_selfplay_workers == 4
-
-
-def test_all_sealbot_workers_when_fraction_one():
-    """WorkerPool with sealbot_fraction=1.0 should have no Rust runner."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
-    buffer = RustReplayBuffer(capacity=10_000)
-
-    config = {
-        "mcts": {"n_simulations": 1, "c_puct": 1.0},
-        "selfplay": {
-            "n_workers": 4,
-            "opponent_mix": {
-                "self_play_fraction": 0.0,
-                "sealbot_fraction": 1.0,
-                "sealbot_time_limit_ms": 500,
-            },
-        },
-    }
-    pool = WorkerPool(model, config, device, buffer, n_workers=4)
-    assert pool._n_sealbot_workers == 4
-    assert pool._n_selfplay_workers == 0
-    assert pool._runner is None
-
-
-def test_sealbot_time_limit_randomisation():
-    """Time limit randomisation produces values within expected range."""
-    import random as rng
-
-    base_ms = 500.0
-    results = []
-    for _ in range(1000):
-        jitter = rng.uniform(-200, 200)
-        t = max(50, base_ms + jitter)
-        results.append(t)
-
-    assert min(results) >= 50.0
-    assert max(results) <= 700.0
-    # Should span a wide range (not all the same)
-    assert max(results) - min(results) > 100.0
-
-
-def test_reload_config_updates_mix():
-    """reload_config should update opponent mix parameters."""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
-    buffer = RustReplayBuffer(capacity=10_000)
-
-    config = {
-        "mcts": {"n_simulations": 1, "c_puct": 1.0},
-        "selfplay": {
-            "n_workers": 4,
-            "opponent_mix": {
-                "self_play_fraction": 0.8,
-                "sealbot_fraction": 0.2,
-                "sealbot_time_limit_ms": 500,
-            },
-        },
-    }
-    pool = WorkerPool(model, config, device, buffer, n_workers=4)
-    assert pool._opponent_mix["sealbot_time_limit_ms"] == 500
-
-    new_config = {
-        "mcts": {"n_simulations": 1, "c_puct": 1.0},
-        "selfplay": {
-            "n_workers": 4,
-            "opponent_mix": {
-                "self_play_fraction": 0.7,
-                "sealbot_fraction": 0.3,
-                "sealbot_time_limit_ms": 300,
-            },
-        },
-    }
-    pool.reload_config(new_config)
-    assert pool._opponent_mix["sealbot_time_limit_ms"] == 300
-    assert pool._opponent_mix["sealbot_fraction"] == 0.3
