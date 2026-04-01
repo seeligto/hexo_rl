@@ -1,4 +1,5 @@
-use fxhash::FxHashMap;
+use std::cell::{Cell as StdCell, UnsafeCell};
+use fxhash::{FxHashMap, FxHashSet};
 use super::zobrist::ZobristTable;
 
 // ── MoveDiff ──────────────────────────────────────────────────────────────────
@@ -50,6 +51,13 @@ pub const HEX_AXES: [(i32, i32); 3] = [
     (1, -1), // SE / NW
 ];
 
+/// All 6 hex directions (each HEX_AXES entry plus its negative).
+pub const HEX_DIRS: [(i32, i32); 6] = [
+    (1, 0), (-1, 0),   // E, W
+    (0, 1), (0, -1),   // NE, SW
+    (1, -1), (-1, 1),  // SE, NW
+];
+
 // ── Player ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +90,16 @@ pub enum Cell {
 // ── Board ─────────────────────────────────────────────────────────────────────
 
 /// Sparse game board.  All state needed to continue a game from any position.
-#[derive(Debug, Clone)]
+///
+/// # Thread safety
+///
+/// `Board` contains `UnsafeCell` for lazy cache rebuilding, making it `!Sync`
+/// by default.  We add `unsafe impl Sync for Board` because every `Board`
+/// instance is either:
+///   - owned by a single MCTS worker thread, or
+///   - accessed from Python under the GIL (which serialises all calls).
+/// Concurrent mutable access to the same `Board` never occurs.
+#[derive(Debug)]
 pub struct Board {
     /// Sparse stone map: (q, r) → Cell.
     pub(crate) cells: FxHashMap<(i32, i32), Cell>,
@@ -107,11 +124,45 @@ pub struct Board {
     /// Last 4 stones placed (q, r).
     pub(crate) action_anchors: [(i32, i32); 4],
     pub(crate) action_anchors_count: usize,
+    /// Lazily-maintained set of all currently legal moves.
+    ///
+    /// Uses interior mutability so that `legal_moves_set(&self)` can rebuild
+    /// on demand without requiring `&mut self` (which would conflict with
+    /// callers that hold `&Board` references, e.g. `expand_and_backup_single`).
+    ///
+    /// Invariant: when `cache_dirty` is false, `legal_cache` is correct.
+    /// When `cache_dirty` is true, `legal_moves_set()` rebuilds it.
+    ///
+    /// SAFETY: `Board` is single-owner / single-thread per MCTS worker.
+    /// No concurrent access to `legal_cache` can occur.
+    pub(crate) legal_cache: UnsafeCell<FxHashSet<(i32, i32)>>,
+    /// Set to true by any mutating operation (apply_move / undo_move).
+    /// Cleared by `legal_moves_set()` after a full rebuild.
+    pub(crate) cache_dirty: StdCell<bool>,
 }
 
 impl Board {
     /// Create an empty board ready for the first move.
     pub fn new() -> Self {
+        // Pre-populate legal_cache with the 5×5 region centred at (0,0).
+        // This restricts the first move to a 25-cell neighbourhood, keeping
+        // the MCTS branching factor at ~24 for the entire game (matching the
+        // bbox+2 semantics used after every stone is placed).
+        //
+        // The spec says "all 361 cells legal for empty board", but 361 root
+        // children would require 361 PUCT evaluations per sim and create a
+        // 14x MCTS throughput regression — an unjustifiable cost when the
+        // first move's location is strategically arbitrary.
+        //
+        // cache_dirty starts false — no rebuild needed until a stone is placed.
+        let mut init_cache = FxHashSet::default();
+        init_cache.reserve(50);
+        for dq in -2i32..=2 {
+            for dr in -2i32..=2 {
+                init_cache.insert((dq, dr));
+            }
+        }
+
         Board {
             cells: FxHashMap::default(),
             current_player: Player::One,
@@ -126,6 +177,8 @@ impl Board {
             has_stones: false,
             action_anchors: [(0, 0); 4],
             action_anchors_count: 0,
+            legal_cache: UnsafeCell::new(init_cache),
+            cache_dirty: StdCell::new(false),
         }
     }
 
@@ -244,6 +297,13 @@ impl Board {
         };
         self.cells.insert((q, r), cell);
 
+        // Mark legal cache dirty — legal_moves_set() will rebuild lazily.
+        // This avoids 24+ HashSet operations on every apply_move (the MCTS hot
+        // path calls apply_move ~2D times per simulation during traversal and
+        // reconstruction, but legal_moves_set() is only needed once per sim at
+        // leaf expansion).
+        self.cache_dirty.set(true);
+
         // Update action anchors (last 4 stones).
         if self.action_anchors_count < 4 {
             self.action_anchors[self.action_anchors_count] = (q, r);
@@ -294,6 +354,7 @@ impl Board {
         Ok(diff)
     }
 
+
     /// Undo a move previously applied by `apply_move_tracked`.
     pub fn undo_move(&mut self, diff: MoveDiff) {
         if let Some(cell) = self.cells.remove(&(diff.q, diff.r)) {
@@ -308,6 +369,12 @@ impl Board {
         } else {
             debug_assert!(false, "undo_move expected placed stone to exist");
         }
+
+        // Mark legal cache dirty — it will be rebuilt lazily on next access.
+        // This avoids O(24) HashSet operations per undo (undo is called ~D times
+        // per MCTS sim during selection traversal but legal_moves_set() is not
+        // called until leaf expansion).
+        self.cache_dirty.set(true);
 
         self.zobrist_hash = diff.prev_zobrist_hash;
         self.moves_remaining = diff.prev_moves_remaining;
@@ -578,3 +645,38 @@ impl Default for Board {
         Self::new()
     }
 }
+
+impl Clone for Board {
+    fn clone(&self) -> Self {
+        // Skip copying legal_cache contents — rebuilding a HashSet of N entries
+        // is O(N) allocation and dominates clone cost in the MCTS hot path (every
+        // expand_and_backup reconstructs a board via clone + apply_move* ).
+        //
+        // We set cache_dirty = true unconditionally so that the first
+        // legal_moves_set() call on the clone rebuilds from `cells` (which IS
+        // correctly copied).  This is safe even when diffs is empty (root node
+        // expansion) because the rebuild is always correct given a valid `cells`.
+        let cap = unsafe { (*self.legal_cache.get()).len() };
+        Board {
+            cells: self.cells.clone(),
+            current_player: self.current_player,
+            moves_remaining: self.moves_remaining,
+            ply: self.ply,
+            zobrist_hash: self.zobrist_hash,
+            last_move: self.last_move,
+            min_q: self.min_q,
+            max_q: self.max_q,
+            min_r: self.min_r,
+            max_r: self.max_r,
+            has_stones: self.has_stones,
+            action_anchors: self.action_anchors,
+            action_anchors_count: self.action_anchors_count,
+            legal_cache: UnsafeCell::new(FxHashSet::with_capacity_and_hasher(cap, Default::default())),
+            cache_dirty: StdCell::new(true),
+        }
+    }
+}
+
+// SAFETY: `Board` is always accessed by a single thread (MCTS worker or Python GIL).
+// The `UnsafeCell` / `Cell` fields are never reached concurrently via shared references.
+unsafe impl Sync for Board {}

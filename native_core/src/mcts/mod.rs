@@ -378,7 +378,7 @@ impl MCTSTree {
         }
 
         // ── Terminal: draw (board full) ──
-        let legal_moves = board.legal_moves();
+        let legal_moves = board.legal_moves_set();
         if legal_moves.is_empty() {
             self.pool[leaf_idx as usize].is_terminal    = true;
             self.pool[leaf_idx as usize].terminal_value = 0.0;
