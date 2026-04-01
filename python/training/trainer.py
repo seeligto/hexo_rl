@@ -1,11 +1,12 @@
 """
-Trainer — FP16 training step with policy and value loss.
+Trainer — FP16 training step with policy, value, and auxiliary losses.
 
 Architecture spec (docs/01_architecture.md §2):
     Optimizer:  AdamW, lr=2e-3, weight_decay=1e-4
-    Loss:       L = L_policy + L_value
-                L_policy = -sum(π_mcts · log π_net)   (cross-entropy)
-                L_value  = MSE(v_net, z)   z ∈ {-1, 0, +1}
+    Loss:       L = L_policy + L_value + w_aux · L_opp_reply
+                L_policy     = -sum(π_mcts · log π_net)   (cross-entropy)
+                L_value      = BCE(sigmoid(v_logit), (z+1)/2)
+                L_opp_reply  = -sum(π_opp · log π_opp_net)  (auxiliary)
     Mixed prec: torch.autocast(device_type, dtype=float16) + GradScaler
 
 Checkpointing every N steps:
@@ -105,9 +106,11 @@ class Trainer:
                      eliminate RNG-dependent variance.
 
         Returns:
-            dict with keys "loss", "policy_loss", "value_loss".
+            dict with keys "loss", "policy_loss", "value_loss",
+            and optionally "opp_reply_loss".
         """
         batch_size = int(self.config["batch_size"])
+        aux_weight = float(self.config.get("aux_opp_reply_weight", 0.0))
 
         states, policies, outcomes = buffer.sample_batch(batch_size, augment)
 
@@ -120,16 +123,30 @@ class Trainer:
 
         with autocast(device_type=self.device.type, dtype=torch.float16,
                       enabled=(self.device.type == "cuda")):
-            log_policy, value = self.model(states_t)
+            use_aux = aux_weight > 0.0
+
+            if use_aux:
+                log_policy, value, v_logit, opp_reply = self.model(states_t, aux=True)
+            else:
+                log_policy, value, v_logit = self.model(states_t)
 
             # Policy loss: cross-entropy with MCTS visit distribution.
             # log_policy is already log_softmax; policies_t is the target.
             policy_loss = -(policies_t * log_policy).sum(dim=1).mean()
 
-            # Value loss: MSE between predicted and actual game outcome.
-            value_loss = nn.functional.mse_loss(value.squeeze(1), outcomes_t)
+            # Value loss: BCE on pre-tanh logit, target mapped from {-1,+1} to {0,1}.
+            value_target = (outcomes_t + 1.0) / 2.0  # {-1,+1} → {0,1}
+            value_loss = nn.functional.binary_cross_entropy_with_logits(
+                v_logit.squeeze(1), value_target
+            )
 
             loss = policy_loss + value_loss
+
+            if use_aux:
+                # Opponent reply auxiliary loss: same structure as policy loss
+                # but using the policy as a proxy target for opponent's move.
+                opp_reply_loss = -(policies_t * opp_reply).sum(dim=1).mean()
+                loss = loss + aux_weight * opp_reply_loss
 
         if self.device.type == "cuda":
             self.scaler.scale(loss).backward()
@@ -149,6 +166,8 @@ class Trainer:
             "policy_loss": policy_loss.item(),
             "value_loss":  value_loss.item(),
         }
+        if use_aux:
+            result["opp_reply_loss"] = opp_reply_loss.item()
 
         interval = int(self.config.get("checkpoint_interval", 100))
         if self.step % interval == 0:
@@ -257,9 +276,10 @@ class Trainer:
 
         resolved = {
             "board_size": int(model_cfg.get("board_size", config.get("board_size", 19))),
-            "res_blocks": int(model_cfg.get("res_blocks", config.get("res_blocks", 10))),
+            "res_blocks": int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
             "filters": int(model_cfg.get("filters", config.get("filters", 128))),
             "in_channels": int(model_cfg.get("in_channels", config.get("in_channels", 18))),
+            "se_reduction_ratio": int(model_cfg.get("se_reduction_ratio", config.get("se_reduction_ratio", 4))),
         }
 
         inferred = Trainer._infer_model_hparams(model_state)
@@ -363,6 +383,7 @@ class Trainer:
             in_channels=model_hparams["in_channels"],
             res_blocks=model_hparams["res_blocks"],
             filters=model_hparams["filters"],
+            se_reduction_ratio=model_hparams.get("se_reduction_ratio", 4),
         )
         model.load_state_dict(model_state, strict=False)
 

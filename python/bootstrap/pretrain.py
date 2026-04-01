@@ -45,9 +45,12 @@ class BootstrapTrainer:
             self.optimizer.zero_grad()
 
             with torch.amp.autocast(device_type=self.device.type, dtype=torch.float16, enabled=(self.device.type == "cuda")):
-                log_policy, value = self.model(states)
+                log_policy, value, v_logit = self.model(states)
                 policy_loss = -(policies * log_policy).sum(dim=1).mean()
-                value_loss  = nn.functional.mse_loss(value.squeeze(1), outcomes)
+                value_target = (outcomes + 1.0) / 2.0
+                value_loss  = nn.functional.binary_cross_entropy_with_logits(
+                    v_logit.squeeze(1), value_target
+                )
                 loss        = policy_loss + value_loss
 
             self.scaler.scale(loss).backward()
@@ -118,7 +121,7 @@ def pretrain():
     dataset = BootstrapDataset(data)
     loader  = torch.utils.data.DataLoader(dataset, batch_size=config['batch_size'], shuffle=True)
 
-    model   = HexTacToeNet(board_size=19, res_blocks=10, filters=128)
+    model   = HexTacToeNet(board_size=19, res_blocks=12, filters=128)
     trainer = BootstrapTrainer(model, config, device)
 
     for epoch in range(1, config['epochs'] + 1):

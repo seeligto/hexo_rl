@@ -46,6 +46,7 @@ class OurModelBot(BotProtocol):
             in_channels=model_hparams["in_channels"],
             filters=model_hparams["filters"],
             res_blocks=model_hparams["res_blocks"],
+            se_reduction_ratio=model_hparams.get("se_reduction_ratio", 4),
         )
         net.load_state_dict(state_dict)
         net.to(device)

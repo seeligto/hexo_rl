@@ -58,7 +58,7 @@ class LocalInferenceEngine:
 
         self.model.eval()
         with torch.amp.autocast(device_type=self.device.type, enabled=(self.device.type == "cuda")):
-            log_policy, value = self.model(batch_tensor.float())
+            log_policy, value, _v_logit = self.model(batch_tensor.float())
 
         policies_np = log_policy.exp().cpu().float().numpy()  # (TotalK, N_ACTIONS)
         values_np   = value.squeeze(-1).cpu().float().numpy()  # (TotalK,)

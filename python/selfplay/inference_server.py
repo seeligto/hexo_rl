@@ -103,7 +103,7 @@ class InferenceServer(threading.Thread):
                         self.model.eval()
                         with torch.no_grad():
                             with torch.autocast(device_type=self.device.type):
-                                log_policy, value = self.model(tensor)
+                                log_policy, value, _v_logit = self.model(tensor)
                         
                         # Ensure arrays are C-contiguous for Rust as_slice()
                         policies = np.ascontiguousarray(log_policy.exp().cpu().numpy().astype(np.float32))
