@@ -1,0 +1,7 @@
+corpus_filter:
+  min_game_length: 27
+  min_move_entropy_nats: 0.5
+  exclude_reasons:
+  - timeout
+  - resignation
+  require_reason: six-in-a-row
