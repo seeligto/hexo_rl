@@ -52,6 +52,11 @@ training:
   log_interval: 10        # also controls web-dashboard send frequency
   aux_opp_reply_weight: 0.15
 
+  game_length_weights:
+    thresholds: [10, 25]
+    weights: [0.15, 0.50]
+    default_weight: 1.0
+
   buffer_schedule:
     - {step: 0,         capacity: 250_000}
     - {step: 500_000,   capacity: 500_000}
