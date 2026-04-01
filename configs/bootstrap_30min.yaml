@@ -1,6 +1,6 @@
 # configs/bootstrap_30min.yaml — 30-minute Phase 4 bootstrap smoke/test run
 # Depth-1 removed: plays near-random moves that hit unusual positions more
-# frequently and are the primary trigger for the Ramora line-1094 C++ crash.
+# frequently and are the primary trigger for SealBot instability at low depth.
 # Depth 2-4 produces more natural play and is significantly more stable.
 
 bootstrap:

@@ -33,7 +33,7 @@ We employ a "Multi-Window Cluster-Based Approach" to handle the infinite board: 
    ```
 
 3. **Git Submodules:**
-   Initialize and update required submodules (for baseline bots, Ramora engine, etc.):
+   Initialize and update required submodules (for baseline bots, SealBot engine, etc.):
 
    ```bash
    git submodule update --init --recursive
@@ -62,7 +62,7 @@ The training process is divided into three main stages:
 
 ### 1. Corpus Generation (Bootstrap)
 
-Generate a dataset of expert-level games using the compiled Ramora C++ engine and human games scraped from the community archive.
+Generate a dataset of expert-level games using the SealBot engine and human games scraped from the community archive.
 
 ```bash
 # Generate 500 bot games and 50 pages of human games

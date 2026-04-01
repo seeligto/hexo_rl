@@ -21,9 +21,9 @@ for dir in model selfplay training bootstrap eval opening_book api logging; do
 done
 
 echo "→ Cloning community resources into vendor/..."
-git clone --depth=1 https://github.com/Ramora0/HexTicTacToe vendor/ramora_engine || \
+git clone --depth=1 https://github.com/Ramora0/SealBot vendor/bots/sealbot || \
   echo "  (already cloned or network unavailable)"
-git clone --depth=1 https://github.com/Ramora0/HexTacToeBots vendor/httt_bots || \
+git clone --depth=1 https://github.com/Ramora0/HexTacToeBots vendor/bots/httt_collection || \
   echo "  (already cloned or network unavailable)"
 
 echo "→ Fetching community specs into docs/reference/..."
@@ -33,6 +33,6 @@ git clone --depth=1 https://github.com/hex-tic-tac-toe/hexagonal-tic-tac-toe-not
   docs/reference/notation 2>/dev/null || echo "  (notation repo already cloned)"
 
 echo "→ Done. Next steps:"
-echo "   1. Review vendor/ramora_engine/cpp/engine.h"
+echo "   1. Review vendor/bots/sealbot/ README"
 echo "   2. Read docs/reference/bot-api-v1.yaml"
 echo "   3. Run: claude  (to start Claude Code)"
