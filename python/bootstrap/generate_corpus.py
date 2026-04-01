@@ -144,7 +144,7 @@ def _make_bot(bot_name: str, depth: int | None, time_limit: float | None) -> Bot
     """Create a bot instance by name with optional depth/time overrides."""
     if bot_name == "sealbot":
         from python.bootstrap.bots.sealbot_bot import SealBotBot
-        tl = time_limit if time_limit is not None else 60.0
+        tl = time_limit if time_limit is not None else 1.0
         return SealBotBot(time_limit=tl, max_depth=depth)
     elif bot_name == "random":
         from python.bootstrap.bots.random_bot import RandomBot
