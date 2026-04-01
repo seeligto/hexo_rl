@@ -22,8 +22,10 @@ def test_new_board_is_empty():
 def test_legal_moves_on_empty_board():
     b = Board()
     moves = b.legal_moves()
-    assert len(moves) == 19 * 19
-    assert b.legal_move_count() == 19 * 19
+    # Empty board uses a 5×5 init region (25 cells) to keep MCTS branching
+    # factor manageable — first move location is strategically arbitrary.
+    assert len(moves) == 25
+    assert b.legal_move_count() == 25
 
 
 # ── Turn structure ────────────────────────────────────────────────────────────
@@ -396,6 +398,63 @@ def _build_p1_win(p1_cells: list) -> "Board":
                 b.apply_move(*p1_rest[p1_idx])
                 p1_idx += 1
     return b
+
+
+# ── Compound turn — sequential action space ──────────────────────────────────
+
+def test_compound_turn_state_transitions():
+    """A complete 2-stone compound turn must:
+    1. Keep the same current_player for both stones.
+    2. Decrement moves_remaining from 2 → 1 after the first stone.
+    3. Flip current_player and reset moves_remaining to 2 after the second stone.
+    """
+    b = Board()
+    b.apply_move(0, 0)          # P1 ply 0 (single)
+    assert b.current_player == -1
+    assert b.moves_remaining == 2
+
+    # P2 first stone of compound turn
+    b.apply_move(1, 0)
+    assert b.current_player == -1, "player must NOT flip mid-turn"
+    assert b.moves_remaining == 1
+    assert b.ply == 2
+
+    # P2 second stone — completes compound turn
+    b.apply_move(2, 0)
+    assert b.current_player == 1, "player must flip after full compound turn"
+    assert b.moves_remaining == 2
+    assert b.ply == 3
+
+
+def test_intermediate_ply_detection():
+    """Verify the condition used to skip Dirichlet noise at intermediate plies.
+
+    Intermediate ply = moves_remaining == 1 AND ply > 0.
+    Ply 0 has moves_remaining == 1 but is NOT intermediate (it's P1's full turn).
+    """
+    b = Board()
+    # Ply 0: moves_remaining=1, ply=0 → NOT intermediate
+    assert not (b.moves_remaining == 1 and b.ply > 0)
+
+    b.apply_move(0, 0)  # P1 ply 0
+    # Now P2's turn start: moves_remaining=2 → NOT intermediate
+    assert not (b.moves_remaining == 1 and b.ply > 0)
+
+    b.apply_move(1, 0)  # P2 first stone
+    # Intermediate ply: moves_remaining=1, ply=2 → IS intermediate
+    assert b.moves_remaining == 1 and b.ply > 0
+
+    b.apply_move(2, 0)  # P2 second stone
+    # P1's turn start: moves_remaining=2 → NOT intermediate
+    assert not (b.moves_remaining == 1 and b.ply > 0)
+
+    b.apply_move(3, 0)  # P1 first stone
+    # Intermediate ply again
+    assert b.moves_remaining == 1 and b.ply > 0
+
+    b.apply_move(4, 0)  # P1 second stone
+    # P2's turn start
+    assert not (b.moves_remaining == 1 and b.ply > 0)
 
 
 _WINNING_POSITIONS = [
