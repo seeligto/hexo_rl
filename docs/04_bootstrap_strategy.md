@@ -520,3 +520,22 @@ def parse_sgf_game(sgf_text: str) -> list[dict]:
 ```
 
 Real human/bot games at any level are worth including — even mediocre play teaches the network that some positions are structurally better than others.
+
+---
+
+## Small-corpus strategy (Phase 4.0)
+
+The community game archive has a 500-game API limit. A cron job on a VPS
+scrapes new games every 4 hours. During Phase 4.0, the bootstrapping corpus
+consists of:
+- Human games: accumulated via cron (415 games as of 2026-04-01, growing)
+- Bot games: SealBot self-play at depth 4 (2,000 games) and depth 8 (1,000)
+- Combined corpus analysis: reports/corpus_analysis/combined_summary.json
+
+Training configuration for small-corpus regime:
+- Label smoothing: ε=0.05 (raise to 0.1 once corpus exceeds ~2,000 human games)
+- Elo-weighted sampling: weight ∝ player_elo² to downweight low-Elo games
+- Passes over pretrained data: up to 10× (12-fold augmentation limits
+  overfitting risk; monitor held-out validation loss on 10% split)
+- Trigger full corpus_analysis.py rerun whenever human game count crosses
+  1,000 / 5,000 / 10,000 thresholds

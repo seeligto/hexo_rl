@@ -70,12 +70,9 @@ After each commit, confirm tests still pass before starting the next task.
 
 Always check `docs/02_ROADMAP.md` for the current phase before starting work.
 
-**Current Status:** Phase 3C (Supervised Pretraining) is **Complete**.
-
-**Initialising Phase 4.0 Self-Play RL loop.**
-
-Three blocking questions must be resolved before full Phase 4.0 launch —
-see "Phase 4.0 architecture baseline" section and docs/06_OPEN_QUESTIONS.md.
+**Current Status:** Phase 4.0 Self-Play RL loop is **Active**.
+Blockers cleared: pytest hang, action space verification, bot corpus.
+Next milestone: Phase 4.5 (benchmark gate — see docs/02_ROADMAP.md).
 
 Each phase has explicit exit criteria — do not advance until they are met.
 If you are unsure what phase we are in, check git log for the most recent feat commits.
@@ -384,6 +381,9 @@ Run `make bench.full`. Latest baseline (2026-04-01, Ryzen 7 3700x + RTX 3070, 16
 | Worker throughput | 3,350 games/hr / 1,486,031 pos/hr | ≥ 1,000,000 pos/hr | Raised from 500k — positions/hr is the training-critical metric |
 | Batch fill % | 92.7% | ≥ 80% | Raised from 50% — below 80% wastes GPU on padding |
 
+Targets set at worst-case floor across observed LLVM codegen variance
+(±50% swing on buffer push is a measurement artifact — see docs/03_TOOLING.md#benchmark-variance).
+
 ## Phase 4.0 architecture baseline
 
 Starting config for self-play RL (do not exceed without benchmarking):
@@ -394,8 +394,8 @@ Starting config for self-play RL (do not exceed without benchmarking):
 - ELO benchmark target: SealBot (replaces Ramora0 as external reference)
 
 Resolved before Phase 4.0 launch:
-- [ ] Open Question 6: sequential vs compound action space
-- [ ] Open Question 5: supervised→self-play transition schedule
+- [x] Open Question 6: sequential vs compound action space
+- [x] Open Question 5: supervised→self-play transition schedule
 - [ ] Open Question 2: value aggregation strategy (min/mean/attention)
 
 ---
