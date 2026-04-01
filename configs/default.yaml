@@ -25,10 +25,13 @@ selfplay:
   inference_max_wait_ms: 12.0
   dispatch_wait_ms: 2.0
   leaf_batch_size: 16
-  fast_playout_prob: 0.9
-  fast_sims_min: 15
-  fast_sims_max: 25
   replay_buffer_capacity: 500000
+
+  playout_cap:
+    fast_prob: 0.25
+    fast_sims: 50
+    standard_sims: 400
+    temperature_threshold_compound_moves: 15
 
 # Training
 training:
@@ -43,6 +46,17 @@ training:
   checkpoint_interval: 50
   log_interval: 10        # also controls web-dashboard send frequency
   aux_opp_reply_weight: 0.15
+
+  buffer_schedule:
+    - {step: 0,         capacity: 250_000}
+    - {step: 500_000,   capacity: 500_000}
+    - {step: 1_500_000, capacity: 1_000_000}
+
+  mixing:
+    pretrained_buffer_path: "data/bootstrap_corpus.npz"
+    decay_steps: 1_000_000
+    min_pretrained_weight: 0.1
+    initial_pretrained_weight: 0.8
 
 evaluation:
   enabled: true

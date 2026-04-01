@@ -227,6 +227,101 @@ def test_next_game_id_monotonic():
     assert ids == list(range(100))
 
 
+# ── Resize ───────────────────────────────────────────────────────────────────
+
+def test_resize_basic():
+    """Resize grows capacity and preserves data."""
+    buf = make_buf(capacity=10)
+    push_n(buf, 5)
+    assert buf.size == 5
+    assert buf.capacity == 10
+
+    buf.resize(20)
+    assert buf.capacity == 20
+    assert buf.size == 5
+
+    # Can sample after resize.
+    s, p, o = buf.sample_batch(5, augment=False)
+    assert s.shape[0] == 5
+
+
+def test_resize_rejects_same_or_smaller():
+    buf = make_buf(capacity=10)
+    with pytest.raises(Exception):
+        buf.resize(10)
+    with pytest.raises(Exception):
+        buf.resize(5)
+
+
+def test_resize_preserves_data_after_wrap():
+    """After ring-buffer wraps and resize, data is still valid and sampleable."""
+    buf = make_buf(capacity=10)
+    # Push 15 entries — wraps around, only 10 retained.
+    push_n(buf, 15)
+    assert buf.size == 10
+
+    buf.resize(20)
+    assert buf.capacity == 20
+    assert buf.size == 10
+
+    # Sample and verify shapes.
+    s, p, o = buf.sample_batch(10, augment=False)
+    assert s.shape == (10, CHANNELS, BOARD_SIZE, BOARD_SIZE)
+
+
+def test_resize_then_push():
+    """After resize, new pushes work correctly."""
+    buf = make_buf(capacity=5)
+    push_n(buf, 8)  # wraps
+    assert buf.size == 5
+
+    buf.resize(10)
+    push_n(buf, 3)
+    assert buf.size == 8
+
+    s, p, o = buf.sample_batch(8, augment=False)
+    assert s.shape[0] == 8
+
+
+def test_resize_full_head_zero():
+    """Edge case: buffer full with head==0 (no actual rotation needed)."""
+    buf = make_buf(capacity=5)
+    push_n(buf, 5)  # exactly fills, head wraps to 0
+    assert buf.size == 5
+
+    buf.resize(10)
+    assert buf.capacity == 10
+    assert buf.size == 5
+
+    # Push more.
+    push_n(buf, 3)
+    assert buf.size == 8
+
+
+def test_resize_content_roundtrip():
+    """Verify specific outcomes survive resize through wrap-around."""
+    buf = RustReplayBuffer(5)
+    # Push outcomes 0..7. Entries 0-2 overwritten by 5-7.
+    for i in range(8):
+        s = random_state()
+        p = random_policy()
+        buf.push(s, p, float(i))
+
+    # Buffer now contains outcomes [5, 6, 7, 3, 4] (head=3, oldest at slot 3→outcome 3).
+    # Actually ring buffer: pushed 8 into cap 5, head=3, outcomes at slots:
+    # slot 0: 5, slot 1: 6, slot 2: 7, slot 3: 3, slot 4: 4
+    # Logical order oldest→newest: [3, 4, 5, 6, 7]
+    buf.resize(10)
+
+    # Sample all 5 entries many times to collect outcomes.
+    seen = set()
+    for _ in range(50):
+        _, _, outcomes = buf.sample_batch(5, augment=False)
+        for o in outcomes:
+            seen.add(int(round(o)))
+    assert seen == {3, 4, 5, 6, 7}, f"Expected {{3,4,5,6,7}}, got {seen}"
+
+
 # ── Benchmark ─────────────────────────────────────────────────────────────────
 
 def test_benchmark_sample_latency(capsys):

@@ -1,5 +1,5 @@
 use fxhash::FxHashSet;
-use super::state::{Board, Cell, Player, HEX_AXES, HALF, hex_distance};
+use super::state::{Board, Cell, Player, HEX_AXES, hex_distance};
 
 /// Stones in a row required to win.
 const WIN_LENGTH: usize = 6;

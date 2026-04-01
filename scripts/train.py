@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import random
 import signal
 import sys
@@ -209,19 +210,51 @@ def main() -> None:
         trainer.model = compile_model(trainer.model)
         log.info("torch_compile", applied=True)
 
-    # ── Replay buffer ──
-    capacity = int(config.get("buffer_capacity", train_cfg.get("buffer_capacity", 500_000)))
+    # ── Replay buffer with growth schedule ──
+    buffer_schedule_raw = train_cfg.get("buffer_schedule", config.get("buffer_schedule", []))
+    buffer_schedule = sorted(
+        [{"step": int(e["step"]), "capacity": int(e["capacity"])} for e in buffer_schedule_raw],
+        key=lambda x: x["step"],
+    )
+    if buffer_schedule:
+        capacity = buffer_schedule[0]["capacity"]
+    else:
+        capacity = int(config.get("buffer_capacity", train_cfg.get("buffer_capacity", 500_000)))
+
     configured_min_buf = train_cfg.get("min_buffer_size", config.get("min_buffer_size"))
     if args.min_buffer_size is not None:
         min_buf_size = int(args.min_buffer_size)
     elif configured_min_buf is not None:
         min_buf_size = int(configured_min_buf)
     else:
-        # Default warmup heuristic: enough samples for a few batches, but not so
-        # high that training appears stalled on first launch.
         min_buf_size = max(128, min(512, int(train_cfg.get("batch_size", config.get("batch_size", 256)))))
     buffer = RustReplayBuffer(capacity=capacity)
-    log.info("buffer_init", capacity=capacity, min_buffer_size=min_buf_size)
+    schedule_idx = 1  # first entry already applied at construction
+    log.info("buffer_init", capacity=capacity, min_buffer_size=min_buf_size,
+             schedule_entries=len(buffer_schedule))
+
+    # ── Pretrained buffer (mixed data streams) ──
+    mixing_cfg = train_cfg.get("mixing", config.get("mixing", {}))
+    pretrained_buffer = None
+    pretrained_path = mixing_cfg.get("pretrained_buffer_path")
+    if pretrained_path and Path(pretrained_path).exists():
+        data = np.load(pretrained_path)
+        pre_states = data["states"]       # (T, 18, 19, 19) float16
+        pre_policies = data["policies"]   # (T, 362) float32
+        pre_outcomes = data["outcomes"]   # (T,) float32
+        pretrained_buffer = RustReplayBuffer(capacity=len(pre_outcomes))
+        pretrained_buffer.push_game(pre_states, pre_policies, pre_outcomes)
+        log.info("pretrained_buffer_loaded", path=pretrained_path,
+                 size=pretrained_buffer.size)
+    elif pretrained_path:
+        log.warning("pretrained_buffer_missing", path=pretrained_path)
+
+    mixing_decay_steps = float(mixing_cfg.get("decay_steps", 1_000_000))
+    mixing_min_w = float(mixing_cfg.get("min_pretrained_weight", 0.1))
+    mixing_initial_w = float(mixing_cfg.get("initial_pretrained_weight", 0.8))
+
+    def compute_pretrained_weight(step: int) -> float:
+        return max(mixing_min_w, mixing_initial_w * math.exp(-step / mixing_decay_steps))
 
     # ── Self-play pool ──
     from python.selfplay.pool import WorkerPool
@@ -389,8 +422,30 @@ def main() -> None:
                 if args.iterations and train_step >= args.iterations:
                     break
 
-                # Perform one training step
-                loss_info = trainer.train_step(buffer)
+                # ── Buffer growth schedule ──
+                nonlocal schedule_idx
+                while schedule_idx < len(buffer_schedule) and train_step >= buffer_schedule[schedule_idx]["step"]:
+                    new_cap = buffer_schedule[schedule_idx]["capacity"]
+                    if new_cap > buffer.capacity:
+                        buffer.resize(new_cap)
+                        log.info("buffer_resized", step=train_step, new_capacity=new_cap)
+                    schedule_idx += 1
+
+                # ── Training step (mixed or single buffer) ──
+                batch_size = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
+                if pretrained_buffer is not None and pretrained_buffer.size > 0 and buffer.size > 0:
+                    w_pre = compute_pretrained_weight(train_step)
+                    n_pre = max(1, int(math.ceil(batch_size * w_pre)))
+                    n_self = batch_size - n_pre
+                    s_pre, p_pre, o_pre = pretrained_buffer.sample_batch(n_pre, True)
+                    s_self, p_self, o_self = buffer.sample_batch(max(1, n_self), True)
+                    states = np.concatenate([s_pre, s_self], axis=0)
+                    policies = np.concatenate([p_pre, p_self], axis=0)
+                    outcomes = np.concatenate([o_pre, o_self], axis=0)
+                    loss_info = trainer.train_step_from_tensors(states, policies, outcomes)
+                else:
+                    w_pre = 0.0
+                    loss_info = trainer.train_step(buffer)
                 train_step = trainer.step
                 if initial_policy_loss is None:
                     initial_policy_loss = float(loss_info["policy_loss"])
@@ -456,6 +511,9 @@ def main() -> None:
                         "policy_loss":   loss_info["policy_loss"],
                         "value_loss":    loss_info["value_loss"],
                         "buffer_size":   buffer.size,
+                        "buffer_capacity": buffer.capacity,
+                        "pretrained_weight": round(w_pre, 4),
+                        "selfplay_weight": round(1.0 - w_pre, 4),
                         "games_total":   games_played,
                         "games_per_hour": games_per_hour,
                         "gpu_util":      gpu_monitor.gpu_util_pct,
@@ -472,6 +530,9 @@ def main() -> None:
                         value_loss=round(float(loss_info["value_loss"]), 4),
                         total_loss=round(float(loss_info["loss"]), 4),
                         buffer_size=buffer.size,
+                        buffer_capacity=buffer.capacity,
+                        pretrained_weight=round(w_pre, 4),
+                        selfplay_weight=round(1.0 - w_pre, 4),
                         games_played=games_played,
                         games_per_hour=round(float(games_per_hour), 1),
                         x_wins=pool.x_wins,

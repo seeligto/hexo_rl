@@ -12,3 +12,14 @@ eval_interval: 100
 checkpoint_interval: 50
 log_interval: 10
 aux_opp_reply_weight: 0.15
+
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 500_000,   capacity: 500_000}
+  - {step: 1_500_000, capacity: 1_000_000}
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus.npz"
+  decay_steps: 1_000_000
+  min_pretrained_weight: 0.1
+  initial_pretrained_weight: 0.8
