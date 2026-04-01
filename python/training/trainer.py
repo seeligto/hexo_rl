@@ -29,8 +29,36 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.amp import GradScaler, autocast  # type: ignore[attr-defined]
 
+import structlog
+
 from python.model.network import HexTacToeNet
 from native_core import RustReplayBuffer
+
+log = structlog.get_logger()
+
+
+def prune_policy_targets(
+    pi: torch.Tensor, threshold_frac: float = 0.02
+) -> torch.Tensor:
+    """Zero out policy target entries below threshold and renormalize.
+
+    Entries strictly at or below ``threshold_frac * max(row)`` are zeroed,
+    then the row is renormalized to sum to 1. This sharpens MCTS visit
+    distributions by removing exploration noise on clearly-bad moves.
+
+    Args:
+        pi: (B, A) policy target tensor (non-negative, sums to ~1).
+        threshold_frac: fraction of per-row max below which entries are pruned.
+
+    Returns:
+        Pruned and renormalized tensor of same shape.
+    """
+    if threshold_frac <= 0.0:
+        return pi
+    max_vals = pi.max(dim=-1, keepdim=True).values
+    mask = pi > (threshold_frac * max_vals)
+    pruned = pi * mask
+    return pruned / pruned.sum(dim=-1, keepdim=True).clamp(min=1e-8)
 
 
 class Trainer:
@@ -56,6 +84,13 @@ class Trainer:
             "cuda" if torch.cuda.is_available() else "cpu"
         )
         self.model = model.to(self.device)
+
+        fp16_requested = bool(config.get("fp16", True))
+        if fp16_requested and self.device.type != "cuda":
+            log.warning("fp16_disabled_no_cuda", device=str(self.device))
+            fp16_requested = False
+        self.fp16 = fp16_requested
+
         self.config = config
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -68,7 +103,17 @@ class Trainer:
         self.scheduler = self._build_scheduler(config)
 
         # GradScaler for FP16 training; no-op on CPU.
-        self.scaler = GradScaler(device=self.device.type, enabled=(self.device.type == "cuda"))
+        self.scaler = GradScaler(device=self.device.type, enabled=self.fp16)
+
+        # torch.compile: reduce-overhead mode uses CUDA graphs for lower overhead.
+        if config.get("torch_compile", True) and self.device.type == "cuda":
+            try:
+                self.model = torch.compile(
+                    self.model, mode="reduce-overhead", fullgraph=False
+                )
+                log.info("torch_compile_enabled", mode="reduce-overhead")
+            except Exception as exc:
+                log.warning("torch_compile_failed", error=str(exc))
 
         self.step = 0
         self.checkpoint_log: list = []
@@ -141,10 +186,14 @@ class Trainer:
         policies_t = torch.from_numpy(policies).to(self.device)     # float32
         outcomes_t = torch.from_numpy(outcomes).to(self.device)     # float32
 
+        prune_frac = float(self.config.get("policy_prune_frac", 0.0))
+        if prune_frac > 0.0:
+            policies_t = prune_policy_targets(policies_t, prune_frac)
+
         self.optimizer.zero_grad()
 
         with autocast(device_type=self.device.type, dtype=torch.float16,
-                      enabled=(self.device.type == "cuda")):
+                      enabled=self.fp16):
             use_aux = aux_weight > 0.0
 
             if use_aux:
@@ -176,12 +225,15 @@ class Trainer:
                     opp_reply_loss = torch.zeros(1, device=self.device, dtype=torch.float32).squeeze()
                 loss = loss + aux_weight * opp_reply_loss
 
-        if self.device.type == "cuda":
+        if self.fp16:
             self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.scaler.step(self.optimizer)
             self.scaler.update()
         else:
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.optimizer.step()
 
         if self.scheduler is not None:

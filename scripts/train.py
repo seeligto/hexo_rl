@@ -42,7 +42,7 @@ if str(ROOT) not in sys.path:
 from python.logging.dashboard import TrainingDashboard
 from python.logging.gpu_monitor import GPUMonitor
 from python.logging.setup import configure_logging
-from python.model.network import HexTacToeNet, compile_model
+from python.model.network import HexTacToeNet
 from native_core import RustReplayBuffer
 from python.training.trainer import Trainer
 from python.training.dashboard_utils import DashboardClient
@@ -170,6 +170,12 @@ def main() -> None:
         combined_config["total_steps"] = int(args.iterations)
         train_cfg["total_steps"] = int(args.iterations)
 
+    # torch.compile is now handled inside Trainer.__init__ via config.
+    # The --no-compile flag overrides the config key before construction.
+    if args.no_compile:
+        combined_config["torch_compile"] = False
+        train_cfg["torch_compile"] = False
+
     board_size  = int(combined_config.get("board_size",  19))
     res_blocks  = int(combined_config.get("res_blocks",  10))
     filters     = int(combined_config.get("filters",     128))
@@ -205,11 +211,6 @@ def main() -> None:
             device=device,
         )
         log.info("new_run", model_params=sum(p.numel() for p in model.parameters()))
-
-    # Apply torch.compile (Phase 2) unless disabled.
-    if not args.no_compile:
-        trainer.model = compile_model(trainer.model)
-        log.info("torch_compile", applied=True)
 
     # ── Replay buffer with growth schedule ──
     buffer_schedule_raw = train_cfg.get("buffer_schedule", config.get("buffer_schedule", []))
