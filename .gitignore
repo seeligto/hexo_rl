@@ -33,6 +33,8 @@ data/corpus/raw_human/*
 !data/corpus/raw_human/.gitkeep
 data/corpus/processed/*
 !data/corpus/processed/.gitkeep
+data/corpus/bot_games/
+reports/
 checkpoints/
 logs/
 logs/scrape_history.log
