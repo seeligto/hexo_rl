@@ -95,6 +95,7 @@ def generate_bot_games(
     n_games: int,
     output_dir: Path,
     rng_seed: int = 42,
+    n_random_opening: int = 1,
 ) -> int:
     """Generate n_games unique self-play games and save to output_dir.
 
@@ -112,7 +113,8 @@ def generate_bot_games(
     t0 = time.monotonic()
 
     for i in range(n_games):
-        result = _play_one_game(bot, i, rng_seed=rng_seed)
+        result = _play_one_game(bot, i, rng_seed=rng_seed,
+                                n_random_opening=n_random_opening)
         if result is None:
             log.info("game_no_winner", game=i, status="skipped")
             continue
@@ -200,13 +202,24 @@ def main() -> None:
                         help="Number of games to generate")
     parser.add_argument("--output", type=str, default=None,
                         help="Output directory (default: auto from bot+depth)")
+    parser.add_argument("--random-opening", type=int, default=None,
+                        help="Random opening moves for diversity (default: auto by depth)")
     parser.add_argument("--seed", type=int, default=42,
                         help="RNG seed")
     args = parser.parse_args()
 
     bot = _make_bot(args.bot, args.depth, args.time_limit)
+
+    # Auto-scale random opening moves: shallow depths need more diversity
+    if args.random_opening is not None:
+        n_random = args.random_opening
+    elif args.depth is not None and args.depth <= 4:
+        n_random = 3  # d4 converges fast — need 3 random moves
+    else:
+        n_random = 1  # d8+ has natural diversity
+
     log.info("bot_created", name=bot.name(), depth=args.depth,
-             time_limit=args.time_limit)
+             time_limit=args.time_limit, random_opening=n_random)
 
     if args.output:
         output = Path(args.output)
@@ -214,7 +227,8 @@ def main() -> None:
         suffix = f"d{args.depth}" if args.depth else f"t{args.time_limit or 'default'}"
         output = BOT_GAMES_DIR / f"{args.bot}_{suffix}"
 
-    generate_bot_games(bot, args.n_games, output, rng_seed=args.seed)
+    generate_bot_games(bot, args.n_games, output, rng_seed=args.seed,
+                       n_random_opening=n_random)
 
 
 if __name__ == "__main__":
