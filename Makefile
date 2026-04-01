@@ -57,18 +57,18 @@ bench.quick: ## Fast sanity benchmark — did I break anything? (~30s)
 	$(PY) scripts/benchmark.py --config $(CONFIG_LITE) --no-compile --quick --mcts-sims 2000 --pool-workers $(N_CORES) --pool-duration 10
 
 .PHONY: bench.lite
-bench.lite: ## Quick local benchmark pass
-	$(PY) scripts/benchmark.py --config $(CONFIG_LITE) --no-compile --mcts-sims 2000 --pool-workers $(N_CORES) --pool-duration 10
+bench.lite: ## Quick benchmark (n=3, no CPU pin, warm-up)
+	$(PY) scripts/benchmark.py --config $(CONFIG_LITE) --no-compile --mcts-sims 2000 --pool-workers $(N_CORES) --pool-duration 10 --mode lite
 
 N_CORES ?= $(shell python3 -c "import os; print(os.cpu_count() or 4)")
 
 .PHONY: bench.full
-bench.full: ## Higher-confidence benchmark pass
-	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60
+bench.full: ## Higher-confidence benchmark (n=5, CPU pin attempted, warm-up)
+	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full
 
 .PHONY: bench.stress
-bench.stress: ## Heavy stress test (5 mins, high sims)
-	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 100000 --pool-workers $(N_CORES) --pool-duration 300 --mcts-search-sims 800
+bench.stress: ## Heavy stress test (n=10, CPU pin required, 5-min pool runs)
+	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 100000 --pool-workers $(N_CORES) --pool-duration 300 --mcts-search-sims 800 --mode stress
 
 .PHONY: bench.mcts
 bench.mcts: ## Dedicated Rust MCTS micro-benchmark
@@ -176,9 +176,13 @@ corpus.d8: ## Generate SealBot depth-8 self-play corpus (CORPUS_DEPTH8_N=1000)
 	$(PY) -m python.bootstrap.generate_corpus --bot sealbot --depth 8 --n-games $(CORPUS_DEPTH8_N) --output data/corpus/bot_games/sealbot_d8
 
 .PHONY: corpus.all
-corpus.all: corpus.d4 corpus.d8 ## Generate both d4 and d8 corpora
+corpus.all: corpus.d4 corpus.d8 corpus.manifest ## Generate both d4 and d8 corpora
+
+.PHONY: corpus.manifest
+corpus.manifest: ## Update data/corpus/manifest.json (scans human + bot dirs)
+	$(PY) scripts/update_manifest.py
 
 .PHONY: corpus.analysis
-corpus.analysis: ## Run corpus analysis on human + bot games
+corpus.analysis: corpus.manifest ## Run corpus analysis on human + bot games
 	$(PY) -m python.bootstrap.corpus_analysis --include-bot-games
 
