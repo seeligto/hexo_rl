@@ -8,6 +8,7 @@ pyyaml
 pytest
 nvidia-ml-py
 matplotlib
+scipy
 flask
 flask-socketio
 psutil

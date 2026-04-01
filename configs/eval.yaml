@@ -1,0 +1,32 @@
+# eval.yaml — Phase 4.0 evaluation pipeline configuration
+
+eval_pipeline:
+  enabled: true
+  eval_interval: 1000            # training steps between eval rounds
+  report_dir: reports/eval
+  db_path: reports/eval/results.db
+  ratings_plot_path: reports/eval/ratings_curve.png
+
+  opponents:
+    best_checkpoint:
+      enabled: true
+      n_games: 200               # primary gating: must be statistically significant
+      model_sims: 128
+      opponent_sims: 128
+    sealbot:
+      enabled: true
+      n_games: 50
+      time_limit: 0.03
+      model_sims: 128
+    random:
+      enabled: true
+      n_games: 20
+      model_sims: 96
+
+  gating:
+    promotion_winrate: 0.55      # win rate vs previous best to promote
+    best_model_path: checkpoints/best_model.pt
+
+  bradley_terry:
+    anchor_player: "checkpoint_0"
+    regularization: 1.0e-6       # small prior for perfect-record edge cases

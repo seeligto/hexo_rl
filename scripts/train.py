@@ -26,6 +26,7 @@ import math
 import random
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -258,29 +259,33 @@ def main() -> None:
 
     # ── Self-play pool ──
     from python.selfplay.pool import WorkerPool
-    from python.eval.evaluator import Evaluator
-    
-    pool = WorkerPool(trainer.model, config, device, buffer)
-    eval_cfg = config.get("evaluation", config.get("eval", {}))
-    enable_periodic_eval = bool(
-        train_cfg.get("enable_periodic_eval", config.get("enable_periodic_eval", eval_cfg.get("enabled", False)))
-    )
-    eval_random_games = int(eval_cfg.get("random_n_games", 10))
-    eval_sealbot_games = int(eval_cfg.get("sealbot_n_games", 5))
-    eval_sealbot_time_limit = float(eval_cfg.get("sealbot_time_limit", 0.03))
-    eval_random_model_sims = eval_cfg.get("random_model_sims")
-    eval_sealbot_model_sims = eval_cfg.get("sealbot_model_sims")
-    enable_best_arena = bool(eval_cfg.get("enable_best_arena", False))
-    best_arena_games = int(eval_cfg.get("best_n_games", 20))
-    best_promotion_winrate = float(eval_cfg.get("best_promotion_winrate", 0.55))
-    best_current_model_sims = eval_cfg.get("best_current_model_sims")
-    best_opponent_model_sims = eval_cfg.get("best_opponent_model_sims")
-    best_model_path = Path(eval_cfg.get("best_model_path", "checkpoints/best_model.pt"))
-    evaluator = Evaluator(trainer.model, device, config) if enable_periodic_eval else None
+    from python.eval.eval_pipeline import EvalPipeline
 
-    best_model = None
+    pool = WorkerPool(trainer.model, config, device, buffer)
+
+    # ── Evaluation pipeline (Phase 4.0) ──
+    eval_yaml_path = Path("configs/eval.yaml")
+    eval_pipeline: EvalPipeline | None = None
+    if eval_yaml_path.exists():
+        with open(eval_yaml_path) as f:
+            eval_ext_config = yaml.safe_load(f)
+        ep_cfg = eval_ext_config.get("eval_pipeline", {})
+        if ep_cfg.get("enabled", False):
+            eval_pipeline = EvalPipeline(eval_ext_config, device)
+            eval_interval = int(ep_cfg.get("eval_interval", 1000))
+            log.info("eval_pipeline_enabled", interval=eval_interval)
+    if eval_pipeline is None:
+        # Fall back to default.yaml eval_interval
+        eval_interval = int(train_cfg.get("eval_interval", config.get("eval_interval", 100)))
+
+    # Best model for gating
+    best_model_path = Path(
+        eval_ext_config["eval_pipeline"]["gating"]["best_model_path"]
+        if eval_pipeline else "checkpoints/best_model.pt"
+    )
+    best_model: HexTacToeNet | None = None
     best_model_step: int | None = None
-    if evaluator is not None and enable_best_arena:
+    if eval_pipeline is not None:
         best_model_path.parent.mkdir(parents=True, exist_ok=True)
         if best_model_path.exists():
             best_ref = Trainer.load_checkpoint(
@@ -305,6 +310,10 @@ def main() -> None:
             torch.save(best_model.state_dict(), best_model_path)
             best_model_step = trainer.step
             log.info("best_model_initialized", path=str(best_model_path), step=best_model_step)
+
+    # Non-blocking eval state
+    _eval_thread: threading.Thread | None = None
+    _eval_result: list[dict | None] = [None]  # mutable holder for thread result
     
     # ── GPU monitor ──
     gpu_monitor = GPUMonitor(interval_sec=5)
@@ -341,6 +350,7 @@ def main() -> None:
 
     def _run_loop() -> None:
         nonlocal train_step, games_played, initial_policy_loss, last_loss_info
+        nonlocal _eval_thread, best_model, best_model_step
 
         last_train_game_count = 0
         last_ui_refresh = 0.0
@@ -451,56 +461,55 @@ def main() -> None:
                     initial_policy_loss = float(loss_info["policy_loss"])
                 last_loss_info = loss_info
 
-                # ── Evaluation ──
+                # ── Evaluation (non-blocking via background thread) ──
                 eval_metrics = {}
-                if evaluator is not None and train_step > 0 and train_step % eval_interval == 0:
-                    log.info("evaluation_start", step=train_step)
-                    log.info("evaluation_phase_start", step=train_step, phase="random")
-                    wr_random = evaluator.evaluate_vs_random(
-                        n_games=eval_random_games,
-                        model_sims=eval_random_model_sims,
-                    )
-                    log.info("evaluation_phase_complete", step=train_step, phase="random", wr_random=wr_random)
-
-                    log.info("evaluation_phase_start", step=train_step, phase="sealbot")
-                    wr_sealbot = evaluator.evaluate_vs_sealbot(
-                        n_games=eval_sealbot_games,
-                        time_limit=eval_sealbot_time_limit,
-                        model_sims=eval_sealbot_model_sims,
-                    )
-                    log.info("evaluation_phase_complete", step=train_step, phase="sealbot", wr_sealbot=wr_sealbot)
-                    eval_metrics = {"wr_random": wr_random, "wr_sealbot": wr_sealbot}
-
-                    if enable_best_arena and best_model is not None:
-                        log.info("evaluation_phase_start", step=train_step, phase="best_arena")
-                        wr_best = evaluator.evaluate_vs_model(
-                            best_model,
-                            n_games=best_arena_games,
-                            model_sims=best_current_model_sims,
-                            opponent_sims=best_opponent_model_sims,
-                        )
-                        log.info("evaluation_phase_complete", step=train_step, phase="best_arena", wr_best=wr_best)
-                        eval_metrics["wr_best"] = wr_best
-
-                        if wr_best >= best_promotion_winrate:
+                if eval_pipeline is not None and train_step > 0 and train_step % eval_interval == 0:
+                    # Harvest previous eval result if ready
+                    if _eval_thread is not None and not _eval_thread.is_alive():
+                        prev = _eval_result[0]
+                        if prev is not None and prev.get("promoted"):
                             base_model = getattr(trainer.model, "_orig_mod", trainer.model)
                             best_model.load_state_dict(base_model.state_dict())
                             best_model.eval()
                             torch.save(best_model.state_dict(), best_model_path)
                             best_model_step = train_step
-                            eval_metrics["best_promoted"] = 1.0
-                            log.info(
-                                "best_model_promoted",
-                                step=train_step,
-                                wr_best=wr_best,
-                                threshold=best_promotion_winrate,
-                                path=str(best_model_path),
-                            )
-                        else:
-                            eval_metrics["best_promoted"] = 0.0
-                        eval_metrics["best_model_step"] = float(best_model_step or 0)
+                            log.info("best_model_promoted", step=train_step, path=str(best_model_path))
+                        _eval_result[0] = None
+                        _eval_thread = None
 
-                    log.info("evaluation_complete", step=train_step, **eval_metrics)
+                    if _eval_thread is None or not _eval_thread.is_alive():
+                        # Clone model for eval (avoids sharing torch.compiled model)
+                        base_model = getattr(trainer.model, "_orig_mod", trainer.model)
+                        eval_model = HexTacToeNet(
+                            board_size=board_size,
+                            res_blocks=res_blocks,
+                            filters=filters,
+                        ).to(device)
+                        eval_model.load_state_dict(base_model.state_dict())
+                        eval_model.eval()
+
+                        step_snapshot = train_step
+                        log.info("evaluation_start", step=step_snapshot)
+
+                        def _run_eval(
+                            _model: HexTacToeNet = eval_model,
+                            _step: int = step_snapshot,
+                            _best: HexTacToeNet | None = best_model,
+                            _cfg: dict = config,
+                        ) -> None:
+                            try:
+                                _eval_result[0] = eval_pipeline.run_evaluation(
+                                    _model, _step, _best, full_config=_cfg,
+                                )
+                            except Exception:
+                                import traceback
+                                log.info("evaluation_error", step=_step, tb=traceback.format_exc())
+                                _eval_result[0] = {"promoted": False, "error": True}
+
+                        _eval_thread = threading.Thread(target=_run_eval, daemon=True)
+                        _eval_thread.start()
+                    else:
+                        log.info("eval_skipped_still_running", step=train_step)
 
                 if train_step % log_interval == 0:
                     elapsed = time.time() - t_start
