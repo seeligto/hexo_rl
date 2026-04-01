@@ -155,8 +155,8 @@ make bench.lite       # quick benchmark pass
 make bench.full       # higher-confidence benchmark pass
 make bench.stress     # heavy 5-min stability test
 make corpus.d4        # generate SealBot depth-4 self-play corpus (2,000 games)
-make corpus.d8        # generate SealBot depth-8 self-play corpus (1,000 games)
-make corpus.all       # generate both d4 and d8 corpora
+make corpus.d6        # generate SealBot depth-6 self-play corpus (1,000 games)
+make corpus.all       # generate both d4 and d6 corpora
 make corpus.analysis  # run corpus analysis on human + bot games
 ```
 
@@ -370,23 +370,29 @@ tests. Full training runs must always use `augment=True` (the default).
 
 ## Benchmarks — must pass before Phase 4.5
 
-Run `make bench.full`. Latest baseline (2026-04-01, Ryzen 7 3700x + RTX 3070, 16 workers):
+> **Methodology:** median of n=5 runs, 3s warm-up per metric,
+> CPU frequency pinned to performance governor via cpupower.
+> IQR reported in detailed JSON at `reports/benchmarks/`.
+> Run `make bench.full` to reproduce.
 
-| Metric | Baseline | Target | Notes |
+Run `make bench.full`. Latest baseline (2026-04-01, Ryzen 7 3700x + RTX 3070, 16 workers, UNCONTROLLED — no CPU pin):
+
+| Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 218,385 sim/s | ≥ 180,000 sim/s | Raised from 150k after legal_cache optimisation |
-| NN inference (batch=64) | 10,715 pos/s | ≥ 8,000 pos/s | Kept — GPU-bound, may drop under training load |
-| NN latency (batch=1, mean) | 0.67 ms (p99: 2.37 ms) | ≤ 2 ms | Tightened from 5 ms — 0.7 ms is stable |
-| Replay buffer push | 220,777 pos/sec | ≥ 150,000 pos/sec | Raised from 50k — headroom for larger buffers |
-| Replay buffer sample raw (batch=256) | 1,011 µs/batch | ≤ 1,100 µs | Relaxed from 1,000 — codegen-sensitive, ~1,013 stable |
-| Replay buffer sample augmented (batch=256) | 933 µs/batch (3.64 µs/pos) | ≤ 1,000 µs | Kept |
-| GPU utilization | 90.7% | ≥ 85% | Raised from 80% |
+| MCTS (CPU only, no NN) | 145,547 sim/s | ≥ 180,000 sim/s | Uncontrolled run — expect ~218k with CPU pinned (AC power) |
+| NN inference (batch=64) | 9,994 pos/s | ≥ 8,000 pos/s | GPU-bound, stable across runs (IQR <1%) |
+| NN latency (batch=1, mean) | 1.57 ms | ≤ 2 ms | Stable (IQR ±0.03 ms) |
+| Replay buffer push | 774,300 pos/sec | ≥ 150,000 pos/sec | 3.5× headroom (IQR ±29k) |
+| Replay buffer sample raw (batch=256) | 1,050 µs/batch | ≤ 1,100 µs | Stable (IQR ±14 µs) |
+| Replay buffer sample augmented (batch=256) | 975 µs/batch | ≤ 1,000 µs | Stable (IQR ±20 µs) |
+| GPU utilization | 100% | ≥ 85% | Saturated during inference-only benchmark |
 | VRAM usage | 0.77 GB / 8.6 GB | ≤ 80% | Kept |
-| Worker throughput | 3,350 games/hr / 1,486,031 pos/hr | ≥ 1,000,000 pos/hr | Raised from 500k — positions/hr is the training-critical metric |
-| Batch fill % | 92.7% | ≥ 80% | Raised from 50% — below 80% wastes GPU on padding |
+| Worker throughput | 1,316,950 pos/hr | ≥ 1,000,000 pos/hr | IQR ±79k (6%) |
+| Batch fill % | 92.8% | ≥ 80% | Stable (IQR ±0.6%) |
 
-Targets set at worst-case floor across observed LLVM codegen variance
-(±50% swing on buffer push is a measurement artifact — see docs/03_TOOLING.md#benchmark-variance).
+Historical variance note: before the warm-up/n=5/pinning methodology, single-run
+benchmarks showed ±50% swings due to LLVM codegen lottery and AMD boost clocks.
+See `docs/03_TOOLING.md` § "Benchmark variance (historical)" for details.
 
 ## Phase 4.0 architecture baseline
 

@@ -165,18 +165,18 @@ pretrain.full: ## Full bootstrap pretrain
 # ── Corpus generation ────────────────────────────────────────────────────────
 
 CORPUS_DEPTH4_N ?= 2000
-CORPUS_DEPTH8_N ?= 1000
+CORPUS_DEPTH6_N ?= 1000
 
 .PHONY: corpus.d4
 corpus.d4: ## Generate SealBot depth-4 self-play corpus (CORPUS_DEPTH4_N=2000)
 	$(PY) -m python.bootstrap.generate_corpus --bot sealbot --depth 4 --n-games $(CORPUS_DEPTH4_N) --output data/corpus/bot_games/sealbot_d4
 
-.PHONY: corpus.d8
-corpus.d8: ## Generate SealBot depth-8 self-play corpus (CORPUS_DEPTH8_N=1000)
-	$(PY) -m python.bootstrap.generate_corpus --bot sealbot --depth 8 --n-games $(CORPUS_DEPTH8_N) --output data/corpus/bot_games/sealbot_d8
+.PHONY: corpus.d6
+corpus.d6: ## Generate SealBot depth-6 self-play corpus (CORPUS_DEPTH6_N=1000)
+	$(PY) -m python.bootstrap.generate_corpus --bot sealbot --depth 6 --n-games $(CORPUS_DEPTH6_N) --output data/corpus/bot_games/sealbot_d6
 
 .PHONY: corpus.all
-corpus.all: corpus.d4 corpus.d8 corpus.manifest ## Generate both d4 and d8 corpora
+corpus.all: corpus.d4 corpus.d6 corpus.manifest ## Generate both d4 and d6 corpora
 
 .PHONY: corpus.manifest
 corpus.manifest: ## Update data/corpus/manifest.json (scans human + bot dirs)
