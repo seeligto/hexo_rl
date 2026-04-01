@@ -27,6 +27,8 @@ eval_pipeline:
     promotion_winrate: 0.55      # win rate vs previous best to promote
     best_model_path: checkpoints/best_model.pt
 
+  colony_centroid_threshold: 6    # axial distance between component centroids for colony-win tag
+
   bradley_terry:
     anchor_player: "checkpoint_0"
     regularization: 1.0e-6       # small prior for perfect-record edge cases

@@ -21,7 +21,7 @@ import numpy as np
 import torch
 
 from python.eval.bradley_terry import compute_ratings
-from python.eval.display import print_match_result, print_ratings_table
+from python.eval.display import print_colony_win_breakdown, print_match_result, print_ratings_table
 from python.eval.evaluator import Evaluator
 from python.eval.results_db import ResultsDB
 from python.model.network import HexTacToeNet
@@ -98,6 +98,10 @@ class EvalPipeline:
         eval_section = config_for_eval.get("evaluation", {})
         eval_section.setdefault("random_model_sims", self.random_cfg.get("model_sims", 96))
         eval_section.setdefault("sealbot_model_sims", self.sealbot_cfg.get("model_sims", 128))
+        eval_section.setdefault(
+            "colony_centroid_threshold",
+            self.cfg.get("colony_centroid_threshold", 6.0),
+        )
         config_for_eval["evaluation"] = eval_section
 
         evaluator = Evaluator(current_model, self.device, config_for_eval)
@@ -114,32 +118,34 @@ class EvalPipeline:
         if self.random_cfg.get("enabled", True):
             n = int(self.random_cfg.get("n_games", 20))
             sims = self.random_cfg.get("model_sims")
-            wr = evaluator.evaluate_vs_random(n_games=n, model_sims=sims)
-            wins = round(wr * n)
-            ci_lo, ci_hi = _binomial_ci(wins, n)
+            er = evaluator.evaluate_vs_random(n_games=n, model_sims=sims)
+            ci_lo, ci_hi = _binomial_ci(er.win_count, n)
             self.db.insert_match(
                 train_step, ckpt_pid, self._random_pid,
-                wins, n - wins, 0, n, wr, ci_lo, ci_hi,
+                er.win_count, n - er.win_count, 0, n, er.win_rate, ci_lo, ci_hi,
+                colony_wins_a=er.colony_wins,
             )
-            print_match_result(ckpt_name, "random_bot", wins, n - wins, n, ci_lo, ci_hi)
-            results["wr_random"] = wr
+            print_match_result(ckpt_name, "random_bot", er.win_count, n - er.win_count, n, ci_lo, ci_hi)
+            results["wr_random"] = er.win_rate
             results["ci_random"] = (ci_lo, ci_hi)
+            results["colony_wins_random"] = er.colony_wins
 
         # ── vs SealBot ───────────────────────────────────────────────
         if self.sealbot_cfg.get("enabled", True):
             n = int(self.sealbot_cfg.get("n_games", 50))
             tl = float(self.sealbot_cfg.get("time_limit", 0.03))
             sims = self.sealbot_cfg.get("model_sims")
-            wr = evaluator.evaluate_vs_sealbot(n_games=n, time_limit=tl, model_sims=sims)
-            wins = round(wr * n)
-            ci_lo, ci_hi = _binomial_ci(wins, n)
+            er = evaluator.evaluate_vs_sealbot(n_games=n, time_limit=tl, model_sims=sims)
+            ci_lo, ci_hi = _binomial_ci(er.win_count, n)
             self.db.insert_match(
                 train_step, ckpt_pid, self._sealbot_pid,
-                wins, n - wins, 0, n, wr, ci_lo, ci_hi,
+                er.win_count, n - er.win_count, 0, n, er.win_rate, ci_lo, ci_hi,
+                colony_wins_a=er.colony_wins,
             )
-            print_match_result(ckpt_name, f"SealBot(t={tl})", wins, n - wins, n, ci_lo, ci_hi)
-            results["wr_sealbot"] = wr
+            print_match_result(ckpt_name, f"SealBot(t={tl})", er.win_count, n - er.win_count, n, ci_lo, ci_hi)
+            results["wr_sealbot"] = er.win_rate
             results["ci_sealbot"] = (ci_lo, ci_hi)
+            results["colony_wins_sealbot"] = er.colony_wins
 
         # ── vs Best Checkpoint ────────────────────────────────────────
         wr_best = None
@@ -147,11 +153,10 @@ class EvalPipeline:
             n = int(self.best_cfg.get("n_games", 200))
             sims = self.best_cfg.get("model_sims")
             opp_sims = self.best_cfg.get("opponent_sims")
-            wr = evaluator.evaluate_vs_model(
+            er = evaluator.evaluate_vs_model(
                 best_model, n_games=n, model_sims=sims, opponent_sims=opp_sims,
             )
-            wins = round(wr * n)
-            ci_lo, ci_hi = _binomial_ci(wins, n)
+            ci_lo, ci_hi = _binomial_ci(er.win_count, n)
 
             # Find or create the "best" player
             best_pid = self.db.get_or_create_player(
@@ -159,12 +164,14 @@ class EvalPipeline:
             )
             self.db.insert_match(
                 train_step, ckpt_pid, best_pid,
-                wins, n - wins, 0, n, wr, ci_lo, ci_hi,
+                er.win_count, n - er.win_count, 0, n, er.win_rate, ci_lo, ci_hi,
+                colony_wins_a=er.colony_wins,
             )
-            print_match_result(ckpt_name, "best_checkpoint", wins, n - wins, n, ci_lo, ci_hi)
-            results["wr_best"] = wr
+            print_match_result(ckpt_name, "best_checkpoint", er.win_count, n - er.win_count, n, ci_lo, ci_hi)
+            results["wr_best"] = er.win_rate
             results["ci_best"] = (ci_lo, ci_hi)
-            wr_best = wr
+            results["colony_wins_best"] = er.colony_wins
+            wr_best = er.win_rate
 
         # ── Gating ────────────────────────────────────────────────────
         threshold = float(self.gating_cfg.get("promotion_winrate", 0.55))
@@ -206,6 +213,10 @@ class EvalPipeline:
                 player_names.get(pid, str(pid)): {"rating": r, "ci": (lo, hi)}
                 for pid, (r, lo, hi) in ratings.items()
             }
+
+            # Colony win breakdown
+            colony_stats = self.db.get_colony_win_stats()
+            print_colony_win_breakdown(colony_stats, player_names)
 
             # Plot
             self._plot_ratings_curve()
