@@ -363,20 +363,20 @@ tests. Full training runs must always use `augment=True` (the default).
 
 ## Benchmarks — must pass before Phase 4.5
 
-Run `make bench.full`. Latest baseline (2026-03-31, Ryzen 7 3700x + RTX 3070, 16 workers):
+Run `make bench.full`. Latest baseline (2026-04-01, Ryzen 7 3700x + RTX 3070, 16 workers):
 
 | Metric | Baseline | Target |
 |---|---|---|
-| MCTS (CPU only, no NN) | 160,882 sim/s | ≥ 150,000 sim/s |
-| NN inference (batch=64) | 11,479 pos/s | ≥ 8,000 pos/s |
-| NN latency (batch=1, mean) | 0.74 ms (p99: 2.57 ms) | ≤ 5 ms |
-| Replay buffer push | 219,444 pos/sec | ≥ 50,000 pos/sec |
-| Replay buffer sample raw (batch=256) | 951 µs/batch | ≤ 1,000 µs |
-| Replay buffer sample augmented (batch=256) | 936 µs/batch (3.66 µs/pos) | ≤ 1,000 µs |
-| GPU utilization | 95.4% | ≥ 80% |
+| MCTS (CPU only, no NN) | 218,385 sim/s | ≥ 150,000 sim/s |
+| NN inference (batch=64) | 10,715 pos/s | ≥ 8,000 pos/s |
+| NN latency (batch=1, mean) | 0.67 ms (p99: 2.37 ms) | ≤ 5 ms |
+| Replay buffer push | 220,777 pos/sec | ≥ 50,000 pos/sec |
+| Replay buffer sample raw (batch=256) | 1,011 µs/batch | ≤ 1,000 µs |
+| Replay buffer sample augmented (batch=256) | 933 µs/batch (3.64 µs/pos) | ≤ 1,000 µs |
+| GPU utilization | 90.7% | ≥ 80% |
 | VRAM usage | 0.77 GB / 8.6 GB | ≤ 80% |
-| Worker throughput | 4,134 games/hr / 1,734,003 pos/hr | ≥ 500,000 pos/hr |
-| Batch fill % | 99.8% | ≥ 50% |
+| Worker throughput | 3,350 games/hr / 1,486,031 pos/hr | ≥ 500,000 pos/hr |
+| Batch fill % | 92.7% | ≥ 50% |
 
 
 ---
