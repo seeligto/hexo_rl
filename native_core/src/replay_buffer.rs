@@ -27,6 +27,44 @@ use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 use std::collections::HashSet;
 
+// ── Weight schedule ──────────────────────────────────────────────────────────
+
+/// A single threshold bracket: games with length < `max_moves` get `weight`.
+/// Brackets are evaluated in order; the first match wins.
+#[derive(Clone, Debug)]
+struct WeightBracket {
+    max_moves: u16,   // exclusive upper bound (game_length < max_moves)
+    weight:    u16,   // f16-as-u16 bits
+}
+
+/// Config-driven weight schedule for game-length-based sampling.
+/// Default: all positions have weight 1.0 (uniform sampling).
+#[derive(Clone, Debug)]
+struct WeightSchedule {
+    brackets: Vec<WeightBracket>,
+    default_weight: u16, // f16 bits for weight when no bracket matches
+}
+
+impl WeightSchedule {
+    fn uniform() -> Self {
+        WeightSchedule {
+            brackets: Vec::new(),
+            default_weight: f16::from_f32(1.0).to_bits(),
+        }
+    }
+
+    /// Look up the weight (as f16 bits) for a given game length.
+    #[inline]
+    fn weight_for(&self, game_length: u16) -> u16 {
+        for b in &self.brackets {
+            if game_length < b.max_moves {
+                return b.weight;
+            }
+        }
+        self.default_weight
+    }
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const N_PLANES:  usize = 18;
@@ -122,10 +160,12 @@ pub struct RustReplayBuffer {
     policies: Vec<f32>,  // flat [capacity × N_ACTIONS]
     outcomes: Vec<f32>,  // flat [capacity]
     game_ids: Vec<i64>,  // flat [capacity]; −1 = untagged
+    weights:  Vec<u16>,  // f16-as-u16 bits; flat [capacity]; sampling weight per position
 
-    sym_tables:   SymTables,
-    next_game_id: i64,
-    rng:          StdRng,
+    sym_tables:      SymTables,
+    weight_schedule: WeightSchedule,
+    next_game_id:    i64,
+    rng:             StdRng,
 }
 
 #[pymethods]
@@ -135,6 +175,7 @@ impl RustReplayBuffer {
     /// Pre-allocates all storage.  Building the symmetry tables is O(N_CELLS × N_SYMS) ≈ 4 µs.
     #[new]
     pub fn new(capacity: usize) -> Self {
+        let default_w = f16::from_f32(1.0).to_bits();
         RustReplayBuffer {
             capacity,
             size: 0,
@@ -143,7 +184,9 @@ impl RustReplayBuffer {
             policies: vec![0.0f32; capacity * POLICY_STRIDE],
             outcomes: vec![0.0f32; capacity],
             game_ids: vec![-1i64; capacity],
+            weights:  vec![default_w; capacity],
             sym_tables: SymTables::new(),
+            weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
             rng: StdRng::from_entropy(),
         }
@@ -167,17 +210,19 @@ impl RustReplayBuffer {
     /// Store a single (state, policy, outcome) triple.
     ///
     /// Args:
-    ///     state:   float16 numpy array of shape (18, 19, 19)
-    ///     policy:  float32 numpy array of shape (362,)
-    ///     outcome: scalar float32  (−1 / 0 / +1)
-    ///     game_id: position tag for correlation guard (from `next_game_id()`); default −1
-    #[pyo3(signature = (state, policy, outcome, game_id = -1))]
+    ///     state:       float16 numpy array of shape (18, 19, 19)
+    ///     policy:      float32 numpy array of shape (362,)
+    ///     outcome:     scalar float32  (−1 / 0 / +1)
+    ///     game_id:     position tag for correlation guard (from `next_game_id()`); default −1
+    ///     game_length: total compound moves in the originating game; default 0 (= weight 1.0)
+    #[pyo3(signature = (state, policy, outcome, game_id = -1, game_length = 0))]
     pub fn push(
         &mut self,
-        state:   PyReadonlyArray3<f16>,
-        policy:  PyReadonlyArray1<f32>,
-        outcome: f32,
-        game_id: i64,
+        state:       PyReadonlyArray3<f16>,
+        policy:      PyReadonlyArray1<f32>,
+        outcome:     f32,
+        game_id:     i64,
+        game_length: u16,
     ) -> PyResult<()> {
         let state_slice  = state.as_slice()
             .map_err(|e| PyValueError::new_err(format!("state not contiguous: {e}")))?;
@@ -207,6 +252,11 @@ impl RustReplayBuffer {
             .copy_from_slice(policy_slice);
         self.outcomes[slot] = outcome;
         self.game_ids[slot] = game_id;
+        self.weights[slot] = if game_length == 0 {
+            f16::from_f32(1.0).to_bits()
+        } else {
+            self.weight_schedule.weight_for(game_length)
+        };
 
         self.head = (self.head + 1) % self.capacity;
         self.size  = (self.size + 1).min(self.capacity);
@@ -218,17 +268,19 @@ impl RustReplayBuffer {
     /// Handles ring-buffer wrap-around correctly.
     ///
     /// Args:
-    ///     states:   float16 numpy array of shape (T, 18, 19, 19)
-    ///     policies: float32 numpy array of shape (T, 362)
-    ///     outcomes: float32 numpy array of shape (T,)
-    ///     game_id:  shared position tag for all T entries; default −1
-    #[pyo3(signature = (states, policies, outcomes, game_id = -1))]
+    ///     states:      float16 numpy array of shape (T, 18, 19, 19)
+    ///     policies:    float32 numpy array of shape (T, 362)
+    ///     outcomes:    float32 numpy array of shape (T,)
+    ///     game_id:     shared position tag for all T entries; default −1
+    ///     game_length: total compound moves in the originating game; default 0 (= weight 1.0)
+    #[pyo3(signature = (states, policies, outcomes, game_id = -1, game_length = 0))]
     pub fn push_game(
         &mut self,
-        states:   PyReadonlyArray4<f16>,
-        policies: PyReadonlyArray2<f32>,
-        outcomes: PyReadonlyArray1<f32>,
-        game_id:  i64,
+        states:      PyReadonlyArray4<f16>,
+        policies:    PyReadonlyArray2<f32>,
+        outcomes:    PyReadonlyArray1<f32>,
+        game_id:     i64,
+        game_length: u16,
     ) -> PyResult<()> {
         let states_s   = states.as_slice()
             .map_err(|e| PyValueError::new_err(format!("states not contiguous: {e}")))?;
@@ -242,6 +294,12 @@ impl RustReplayBuffer {
 
         if states_s.len()   != t * STATE_STRIDE  { return Err(PyValueError::new_err("states shape mismatch")); }
         if policies_s.len() != t * POLICY_STRIDE { return Err(PyValueError::new_err("policies shape mismatch")); }
+
+        let w = if game_length == 0 {
+            f16::from_f32(1.0).to_bits()
+        } else {
+            self.weight_schedule.weight_for(game_length)
+        };
 
         for i in 0..t {
             let slot = (self.head + i) % self.capacity;
@@ -260,6 +318,7 @@ impl RustReplayBuffer {
 
             self.outcomes[slot] = outcomes_s[i];
             self.game_ids[slot] = game_id;
+            self.weights[slot]  = w;
         }
 
         self.head = (self.head + t) % self.capacity;
@@ -365,16 +424,54 @@ impl RustReplayBuffer {
                 .rotate_left(self.head);
             self.game_ids[..self.capacity]
                 .rotate_left(self.head);
+            self.weights[..self.capacity]
+                .rotate_left(self.head);
         }
 
         // Extend storage to new capacity.
+        let default_w = f16::from_f32(1.0).to_bits();
         self.states.resize(new_capacity * STATE_STRIDE, 0u16);
         self.policies.resize(new_capacity * POLICY_STRIDE, 0.0f32);
         self.outcomes.resize(new_capacity, 0.0f32);
         self.game_ids.resize(new_capacity, -1i64);
+        self.weights.resize(new_capacity, default_w);
 
         self.head = self.size;
         self.capacity = new_capacity;
+        Ok(())
+    }
+
+    /// Set the game-length weight schedule from Python config.
+    ///
+    /// Args:
+    ///     thresholds: list of exclusive upper bounds (must be sorted ascending)
+    ///     weights:    list of f32 weights, same length as thresholds
+    ///     default_weight: weight for games >= all thresholds (typically 1.0)
+    ///
+    /// Example (from training.yaml):
+    ///     buf.set_weight_schedule([10, 25], [0.15, 0.50], 1.0)
+    ///     # game < 10 moves → 0.15, 10–24 → 0.50, 25+ → 1.0
+    pub fn set_weight_schedule(
+        &mut self,
+        thresholds:     Vec<u16>,
+        weights:        Vec<f32>,
+        default_weight: f32,
+    ) -> PyResult<()> {
+        if thresholds.len() != weights.len() {
+            return Err(PyValueError::new_err(
+                "thresholds and weights must have the same length"
+            ));
+        }
+        let brackets: Vec<WeightBracket> = thresholds.iter().zip(weights.iter())
+            .map(|(&t, &w)| WeightBracket {
+                max_moves: t,
+                weight: f16::from_f32(w).to_bits(),
+            })
+            .collect();
+        self.weight_schedule = WeightSchedule {
+            brackets,
+            default_weight: f16::from_f32(default_weight).to_bits(),
+        };
         Ok(())
     }
 
@@ -390,11 +487,31 @@ impl RustReplayBuffer {
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 impl RustReplayBuffer {
+    /// Sample a single index using rejection sampling on stored weights.
+    ///
+    /// Rejection: draw uniform index, accept with probability weight/1.0.
+    /// Max 32 attempts; falls back to accepting unconditionally to bound latency.
+    /// No heap allocations.
+    #[inline]
+    fn weighted_sample_one(&mut self) -> usize {
+        const MAX_REJECT: usize = 32;
+        for _ in 0..MAX_REJECT {
+            let idx = self.rng.gen_range(0..self.size);
+            let w = f16::from_bits(self.weights[idx]).to_f32();
+            if w >= 1.0 || self.rng.gen::<f32>() < w {
+                return idx;
+            }
+        }
+        // Fallback: accept whatever we drew last to avoid infinite loop.
+        self.rng.gen_range(0..self.size)
+    }
+
     /// Sample `batch_size` slot indices, optionally deduplicating by game_id.
+    /// Uses per-position weight-based rejection sampling.
     fn sample_indices(&mut self, batch_size: usize, use_dedup: bool) -> Vec<usize> {
         if !use_dedup {
             return (0..batch_size)
-                .map(|_| self.rng.gen_range(0..self.size))
+                .map(|_| self.weighted_sample_one())
                 .collect();
         }
 
@@ -403,7 +520,7 @@ impl RustReplayBuffer {
         const MAX_RETRIES: usize = 8;
 
         let mut indices: Vec<usize> = (0..batch_size)
-            .map(|_| self.rng.gen_range(0..self.size))
+            .map(|_| self.weighted_sample_one())
             .collect();
 
         for _ in 0..MAX_RETRIES {
@@ -417,14 +534,14 @@ impl RustReplayBuffer {
                 }
                 // Duplicate — resample this slot.
                 all_unique = false;
-                let mut candidate = self.rng.gen_range(0..self.size);
+                let mut candidate = self.weighted_sample_one();
                 // Try a few times to find a unique one; give up gracefully.
                 for _ in 0..16 {
                     let cgid = self.game_ids[candidate];
                     if cgid == -1 || !seen.contains(&cgid) {
                         break;
                     }
-                    candidate = self.rng.gen_range(0..self.size);
+                    candidate = self.weighted_sample_one();
                 }
                 *idx = candidate;
                 seen.insert(self.game_ids[candidate]);
@@ -470,6 +587,151 @@ impl RustReplayBuffer {
         }
         // Pass action (index 361) is always the identity.
         dst_policy[N_CELLS] = src_policy[N_CELLS];
+    }
+
+    /// Push a position directly from Rust (no PyO3 / numpy).
+    /// Used only by tests.
+    #[cfg(test)]
+    fn push_raw(&mut self, outcome: f32, game_length: u16) {
+        let slot = self.head;
+        // Zero state/policy (content doesn't matter for weight tests).
+        let s_start = slot * STATE_STRIDE;
+        for v in &mut self.states[s_start..s_start + STATE_STRIDE] { *v = 0; }
+        let p_start = slot * POLICY_STRIDE;
+        for v in &mut self.policies[p_start..p_start + POLICY_STRIDE] { *v = 0.0; }
+        self.outcomes[slot] = outcome;
+        self.game_ids[slot] = -1;
+        self.weights[slot] = if game_length == 0 {
+            f16::from_f32(1.0).to_bits()
+        } else {
+            self.weight_schedule.weight_for(game_length)
+        };
+        self.head = (self.head + 1) % self.capacity;
+        self.size = (self.size + 1).min(self.capacity);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Push positions from short (5 moves), medium (15), and long (40) games,
+    /// sample 10,000 times, and verify short-game positions appear ~0.15x as
+    /// often as long-game positions.
+    #[test]
+    fn test_weighted_sampling_distribution() {
+        let default_w = f16::from_f32(1.0).to_bits();
+        let mut buf = RustReplayBuffer {
+            capacity: 300,
+            size: 0,
+            head: 0,
+            states:   vec![0u16; 300 * STATE_STRIDE],
+            policies: vec![0.0f32; 300 * POLICY_STRIDE],
+            outcomes: vec![0.0f32; 300],
+            game_ids: vec![-1i64; 300],
+            weights:  vec![default_w; 300],
+            sym_tables: SymTables::new(),
+            weight_schedule: WeightSchedule::uniform(),
+            next_game_id: 0,
+            rng: StdRng::seed_from_u64(42),
+        };
+
+        // Configure schedule: <10 → 0.15, <25 → 0.50, ≥25 → 1.0
+        buf.weight_schedule = WeightSchedule {
+            brackets: vec![
+                WeightBracket { max_moves: 10, weight: f16::from_f32(0.15).to_bits() },
+                WeightBracket { max_moves: 25, weight: f16::from_f32(0.50).to_bits() },
+            ],
+            default_weight: f16::from_f32(1.0).to_bits(),
+        };
+
+        // Push 100 positions from each category with distinct outcomes for identification.
+        // Short games (length 5) → outcome = 1.0
+        for _ in 0..100 { buf.push_raw(1.0, 5); }
+        // Medium games (length 15) → outcome = 2.0
+        for _ in 0..100 { buf.push_raw(2.0, 15); }
+        // Long games (length 40) → outcome = 3.0
+        for _ in 0..100 { buf.push_raw(3.0, 40); }
+
+        assert_eq!(buf.size, 300);
+
+        // Sample 10,000 indices and count by category.
+        let n_samples = 10_000;
+        let mut count_short: usize = 0;
+        let mut count_medium: usize = 0;
+        let mut count_long: usize = 0;
+
+        for _ in 0..n_samples {
+            let idx = buf.weighted_sample_one();
+            match buf.outcomes[idx] as u32 {
+                1 => count_short += 1,
+                2 => count_medium += 1,
+                3 => count_long += 1,
+                _ => panic!("unexpected outcome"),
+            }
+        }
+
+        // With equal counts in buffer (100 each), expected sampling ratios:
+        //   short : long  ≈ 0.15 : 1.0
+        //   medium : long ≈ 0.50 : 1.0
+        // Allow generous tolerance (factor of 2) for statistical noise.
+        let ratio_short_long = count_short as f64 / count_long as f64;
+        let ratio_medium_long = count_medium as f64 / count_long as f64;
+
+        assert!(
+            ratio_short_long < 0.30,
+            "short/long ratio {:.3} should be < 0.30 (expected ~0.15)",
+            ratio_short_long
+        );
+        assert!(
+            ratio_short_long > 0.05,
+            "short/long ratio {:.3} should be > 0.05 (expected ~0.15)",
+            ratio_short_long
+        );
+        assert!(
+            ratio_medium_long < 0.80,
+            "medium/long ratio {:.3} should be < 0.80 (expected ~0.50)",
+            ratio_medium_long
+        );
+        assert!(
+            ratio_medium_long > 0.25,
+            "medium/long ratio {:.3} should be > 0.25 (expected ~0.50)",
+            ratio_medium_long
+        );
+    }
+
+    /// Verify that weight_for returns the correct bracket.
+    #[test]
+    fn test_weight_schedule_lookup() {
+        let schedule = WeightSchedule {
+            brackets: vec![
+                WeightBracket { max_moves: 10, weight: f16::from_f32(0.15).to_bits() },
+                WeightBracket { max_moves: 25, weight: f16::from_f32(0.50).to_bits() },
+            ],
+            default_weight: f16::from_f32(1.0).to_bits(),
+        };
+
+        let w5  = f16::from_bits(schedule.weight_for(5)).to_f32();
+        let w10 = f16::from_bits(schedule.weight_for(10)).to_f32();
+        let w15 = f16::from_bits(schedule.weight_for(15)).to_f32();
+        let w25 = f16::from_bits(schedule.weight_for(25)).to_f32();
+        let w40 = f16::from_bits(schedule.weight_for(40)).to_f32();
+
+        assert!((w5 - 0.15).abs() < 0.01, "game_length=5 → {w5}");
+        assert!((w10 - 0.50).abs() < 0.01, "game_length=10 → {w10}");
+        assert!((w15 - 0.50).abs() < 0.01, "game_length=15 → {w15}");
+        assert!((w25 - 1.0).abs() < 0.01, "game_length=25 → {w25}");
+        assert!((w40 - 1.0).abs() < 0.01, "game_length=40 → {w40}");
+    }
+
+    /// Uniform schedule (default) must accept all positions equally.
+    #[test]
+    fn test_uniform_schedule_all_weight_one() {
+        let schedule = WeightSchedule::uniform();
+        let w = f16::from_bits(schedule.weight_for(5)).to_f32();
+        assert!((w - 1.0).abs() < 0.01);
+        let w = f16::from_bits(schedule.weight_for(100)).to_f32();
+        assert!((w - 1.0).abs() < 0.01);
     }
 }
 
