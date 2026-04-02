@@ -121,6 +121,7 @@ class DataStore:
         self.current_elo: float = 1000.0
         self.total_samples: int = 0
         self.workers: int = multiprocessing.cpu_count()
+        self.pretrained_weight: Optional[float] = None
         # Per-iteration accumulators
         self._iter_wins = [0, 0, 0]  # p0, p1, draw
         self._iter_lengths: List[int] = []
@@ -207,6 +208,8 @@ class DataStore:
                 })
             if "workers" in m:
                 self.workers = m["workers"]
+            if "pretrained_weight" in m and m["pretrained_weight"] is not None:
+                self.pretrained_weight = float(m["pretrained_weight"])
             # Reset per-iteration accumulators on new iteration
             self._iter_wins = [0, 0, 0]
             self._iter_lengths = []
@@ -236,6 +239,7 @@ class DataStore:
                 "buffer_size": latest.get("buffer_size", 0),
                 "self_play_time": latest.get("self_play_time", 0),
                 "game_length_median": self._game_length_median,
+                "pretrained_weight": self.pretrained_weight,
             }
 
     def record_game_length(self, compound_moves: int) -> None:
@@ -618,6 +622,8 @@ footer{border-top:2px solid #000;font:11px 'SF Mono','Courier New',monospace;fle
     <span>Buffer <b id="s-fill">—</b></span>
     <span class="sep">·</span>
     <span>Pos/hr <b id="s-poshr">—</b></span>
+    <span class="sep">·</span>
+    <span>Corpus mix <b id="s-pmix">—</b></span>
   </div>
   <div class="frow">
     <span class="fgroup-label">Games</span>
@@ -993,6 +999,13 @@ socket.on('stats_update', d => {
     if (d.latest_policy_loss != null) el('s-ploss').textContent = parseFloat(d.latest_policy_loss).toFixed(4);
     if (d.latest_value_loss  != null) el('s-vloss').textContent = parseFloat(d.latest_value_loss).toFixed(4);
     if (d.fill_pct != null)    el('s-fill').textContent  = parseFloat(d.fill_pct).toFixed(1) + '%';
+    if (d.pretrained_weight != null) {
+      const pw = parseFloat(d.pretrained_weight);
+      const sp = Math.max(0, 1.0 - pw);
+      const filled = Math.round(pw * 20);
+      const bar = '█'.repeat(filled) + '░'.repeat(20 - filled);
+      el('s-pmix').textContent = '[' + bar + '] pre=' + pw.toFixed(2) + ' sp=' + sp.toFixed(2);
+    }
     if (d.positions_hr != null) {
       const p = d.positions_hr;
       el('s-poshr').textContent = p >= 1e6 ? (p/1e6).toFixed(1)+'M' : Math.round(p).toLocaleString();
@@ -1321,6 +1334,7 @@ class LogPoller:
             buffer_size=entry.get("buffer_size", 0),
             games=gph,
             self_play_time=3600.0 if gph else 0.0,
+            pretrained_weight=entry.get("pretrained_weight"),
         )
         return True
 
