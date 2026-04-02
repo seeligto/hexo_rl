@@ -131,8 +131,8 @@ def main() -> None:
     args = parse_args()
 
     # ── Load config ──
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
+    from python.utils.config import load_config
+    config = load_config(args.config)
 
     # ── Logging ──
     log = configure_logging(log_dir=args.log_dir, run_name=args.run_name)
@@ -268,8 +268,7 @@ def main() -> None:
     eval_yaml_path = Path("configs/eval.yaml")
     eval_pipeline: EvalPipeline | None = None
     if eval_yaml_path.exists():
-        with open(eval_yaml_path) as f:
-            eval_ext_config = yaml.safe_load(f)
+        eval_ext_config = load_config(str(eval_yaml_path))
         ep_cfg = eval_ext_config.get("eval_pipeline", {})
         if ep_cfg.get("enabled", False):
             eval_pipeline = EvalPipeline(eval_ext_config, device)

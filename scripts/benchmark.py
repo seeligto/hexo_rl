@@ -679,8 +679,8 @@ def main() -> None:
         torch.set_float32_matmul_precision('high')
         torch.backends.cudnn.benchmark = True
 
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
+    from python.utils.config import load_config
+    config = load_config(args.config)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     console.print(f"[bold]Benchmarking on {device} | mode={args.mode} | n={n_runs}[/bold]")

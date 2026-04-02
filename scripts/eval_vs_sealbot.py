@@ -79,8 +79,8 @@ def main() -> None:
 
     args = parse_args()
 
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    from python.utils.config import load_config
+    cfg = load_config(args.config)
 
     cfg.setdefault("evaluation", {})
     cfg["evaluation"]["sealbot_model_sims"] = int(args.model_sims)

@@ -495,8 +495,8 @@ def compute_quality_scores(records: List[GameRecord],
     bot_elo_components = {"bot_d4": 0.6, "bot_d6": 0.75}
 
     if config_path.exists():
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f) or {}
+        from python.utils.config import load_config
+        cfg = load_config(str(config_path))
         qw = cfg.get("quality_weights", {})
         weights["w_elo"] = qw.get("w_elo", weights["w_elo"])
         weights["w_len"] = qw.get("w_len", weights["w_len"])
