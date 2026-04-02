@@ -95,6 +95,8 @@ class _LogReader:
         self.policy_entropies: deque[float] = deque(maxlen=loss_window)
 
         self.current_step: int = 0
+        self.pretrained_weight: Optional[float] = None
+        self.games_per_hour: Optional[float] = None
 
         self._log_path: Optional[Path] = None
         self._log_fh:   Any = None  # open file handle
@@ -201,6 +203,10 @@ class _LogReader:
                 self.total_losses.append(float(v))
             if (v := entry.get("policy_entropy")) is not None:
                 self.policy_entropies.append(float(v))
+            if (v := entry.get("pretrained_weight")) is not None:
+                self.pretrained_weight = float(v)
+            if (v := entry.get("games_per_hour")) is not None:
+                self.games_per_hour = float(v)
 
 
 class _EvalDBReader:
@@ -516,39 +522,86 @@ def _build_buffer_panel(
     return Panel(table, title="Buffer Health", border_style=eff_color)
 
 
-def _build_decay_panel(config: dict, current_step: int) -> Panel:
-    """Panel 5 — Pretrained Data Decay."""
+_SELF_PLAY_THRESHOLD = 0.05  # pretrained_weight below this ≈ full self-play
+
+
+def _build_decay_panel(
+    config: dict,
+    current_step: int,
+    live_weight: Optional[float] = None,
+    games_per_hour: Optional[float] = None,
+) -> Panel:
+    """Panel 5 — Pretrained Data Decay / Corpus Mix.
+
+    Args:
+        config:        Full training config dict.
+        current_step:  Current training step (from log reader).
+        live_weight:   pretrained_weight read from latest train_step log event.
+                       None = dashboard started before training (cold start).
+        games_per_hour: Latest games/hr from log, used for time estimate.
+    """
     mixing = config.get("training", {}).get("mixing", {})
-    decay_steps   = mixing.get("decay_steps", 1_000_000)
-    w_min         = mixing.get("min_pretrained_weight", 0.1)
-    w_init        = mixing.get("initial_pretrained_weight", 0.8)
+    decay_steps   = float(mixing.get("decay_steps", 1_000_000))
+    w_min         = float(mixing.get("min_pretrained_weight", 0.1))
+    w_init        = float(mixing.get("initial_pretrained_weight", 0.8))
+    steps_per_game = float(config.get("training", {}).get("training_steps_per_game", 1.0))
 
-    current_w = max(w_min, w_init * math.exp(-current_step / decay_steps))
-    frac = (current_w - w_min) / max(w_init - w_min, 1e-9)  # 1.0 at step 0, ~0 at end
+    # Use the live logged value when available; cold-start shows "–" not 0.0
+    if live_weight is not None:
+        current_w = live_weight
+        w_str = f"{current_w:.4f}"
+    else:
+        # Compute from formula so the bar is still useful even before first log
+        current_w = max(w_min, w_init * math.exp(-current_step / decay_steps))
+        w_str = "–"  # not yet confirmed by a log event
 
-    bar_width = 30
+    # Decay bar: fraction of the curve remaining (1.0 at start, 0.0 at w_min)
+    frac = (current_w - w_min) / max(w_init - w_min, 1e-9)
+    bar_width = 20
     filled = int(frac * bar_width)
-    bar = "[green]" + "█" * filled + "[/green][dim]" + "░" * (bar_width - filled) + "[/dim]"
+    bar_markup = (
+        "[green]" + "█" * filled + "[/green]"
+        + "[dim]" + "░" * (bar_width - filled) + "[/dim]"
+    )
+    sp_w = max(0.0, 1.0 - current_w)
+    corpus_line = (
+        f"[{bar_markup}]  pretrained={current_w:.2f}  self-play={sp_w:.2f}"
+    )
+
+    # Projection: step at which raw exponential crosses _SELF_PLAY_THRESHOLD
+    if w_init > _SELF_PLAY_THRESHOLD:
+        step_at_threshold = int(-decay_steps * math.log(_SELF_PLAY_THRESHOLD / w_init))
+    else:
+        step_at_threshold = 0
+    steps_remaining = max(0, step_at_threshold - current_step)
+
+    # Time estimate (needs games_per_hour and training_steps_per_game from config)
+    if games_per_hour is not None and games_per_hour > 0 and steps_per_game > 0:
+        steps_per_hour = games_per_hour * steps_per_game
+        hours_remaining = steps_remaining / steps_per_hour
+        h = int(hours_remaining)
+        m = int((hours_remaining - h) * 60)
+        time_est = f"est. {h}h {m}m"
+    else:
+        time_est = "–"
+
+    if steps_remaining > 0:
+        transition_str = f"step ~{step_at_threshold:,}  ({time_est})"
+    else:
+        transition_str = "[green]reached[/green]"
 
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column("Label", style="dim", width=28)
     table.add_column("Value", justify="right")
 
-    table.add_row("Current pretrained_weight", f"{current_w:.4f}")
+    table.add_row("pretrained_weight (live)", w_str)
+    table.add_row("Corpus mix", Text.from_markup(corpus_line))
     table.add_row(
-        f"Decay curve ({w_init:.1f}→{w_min:.1f})",
-        Text.from_markup(bar),
+        f"Transitions to self-play (<{_SELF_PLAY_THRESHOLD})",
+        Text.from_markup(transition_str),
     )
-    table.add_row("Decay steps", f"{decay_steps:,}")
+    table.add_row("Decay steps", f"{decay_steps:,.0f}")
     table.add_row("Current step", f"{current_step:,}")
-    steps_to_min = max(
-        0,
-        int(-decay_steps * math.log(w_min / w_init)) - current_step,
-    )
-    table.add_row(
-        "Steps to min weight",
-        f"{steps_to_min:,}" if steps_to_min > 0 else "[green]reached[/green]",
-    )
 
     return Panel(table, title="Pretrained Data Decay", border_style="magenta")
 
@@ -705,7 +758,12 @@ class Phase40Dashboard:
             _build_buffer_panel(self._buffer, self._config, step)
         )
         self._layout["bot_left"].update(
-            _build_decay_panel(self._config, step)
+            _build_decay_panel(
+                self._config,
+                step,
+                live_weight=self._log_reader.pretrained_weight,
+                games_per_hour=self._log_reader.games_per_hour,
+            )
         )
         self._layout["bot_right"].update(
             _build_eval_panel(self._eval_reader)
@@ -844,6 +902,18 @@ class TrainingDashboard:
         table.add_row("Iteration",    str(metrics.get("iteration", metrics.get("step", "-"))))
         table.add_row("Policy loss",  fmt_float("policy_loss"))
         table.add_row("Value loss",   fmt_float("value_loss"))
+
+        # Corpus mix bar
+        pw = metrics.get("pretrained_weight")
+        if pw is not None:
+            bar_width = 20
+            filled = int(float(pw) * bar_width)
+            bar = "█" * filled + "░" * (bar_width - filled)
+            sp = round(1.0 - float(pw), 2)
+            table.add_row("Corpus mix", f"[{bar}]  pre={float(pw):.2f}  sp={sp:.2f}")
+        else:
+            table.add_row("Corpus mix", "–")
+
         table.add_row("X win rate",   fmt_float("x_winrate", ".3f"))
         table.add_row("O win rate",   fmt_float("o_winrate", ".3f"))
         table.add_row("Elo (latest)", fmt_int("elo"))
