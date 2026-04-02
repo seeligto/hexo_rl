@@ -584,11 +584,11 @@ def pretrain() -> None:
 
     # Model
     model = HexTacToeNet(
-        board_size=int(model_cfg["board_size"]),
-        in_channels=int(model_cfg["in_channels"]),
-        filters=int(model_cfg["filters"]),
-        res_blocks=int(model_cfg["res_blocks"]),
-        se_reduction_ratio=int(model_cfg.get("se_reduction_ratio", 4)),
+        board_size=int(config["board_size"]),
+        in_channels=int(config["in_channels"]),
+        filters=int(config["filters"]),
+        res_blocks=int(config["res_blocks"]),
+        se_reduction_ratio=int(config.get("se_reduction_ratio", 4)),
     )
     use_compile = (
         config.get("torch_compile", True)
