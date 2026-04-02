@@ -113,12 +113,13 @@ bench.baseline: ## Run bench.full and save as dated baseline report
 bench.mcts: ## Dedicated Rust MCTS micro-benchmark
 	$(PY) scripts/benchmark_mcts.py
 
-DASHBOARD_PORT ?= 5001
-DASHBOARD_URL  ?= http://localhost:$(DASHBOARD_PORT)
+DASHBOARD_PORT    ?= 5001
+DASHBOARD_URL     ?= http://localhost:$(DASHBOARD_PORT)
+DASHBOARD_LOG_DIR ?= logs
 
 .PHONY: dashboard
-dashboard: ## Start the web dashboard server (DASHBOARD_PORT=5001 by default)
-	$(PY) dashboard.py $(DASHBOARD_PORT)
+dashboard: ## Start the web dashboard (reads logs/ automatically; DASHBOARD_PORT=5001)
+	$(PY) dashboard.py $(DASHBOARD_PORT) --log-dir $(DASHBOARD_LOG_DIR)
 
 .PHONY: train.lite
 train.lite: ## Fast debug training — short run, no dashboard

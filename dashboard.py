@@ -18,10 +18,12 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import threading
 import time
 from datetime import datetime as _dt
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import psutil
@@ -1193,25 +1195,146 @@ def get_dashboard(port: int = 5001) -> Dashboard:
 
 
 # ---------------------------------------------------------------------------
+# Log file poller — feeds DataStore from structlog JSONL without push
+# ---------------------------------------------------------------------------
+
+class LogPoller:
+    """Tail-reads structlog JSONL log files and feeds DataStore.
+
+    On startup, backfills the full latest log silently (no per-record WebSocket
+    events), then emits one refresh. Afterwards polls every `interval` seconds
+    and emits live stats updates.
+
+    Only `train_step` events are consumed — game_complete events lack move data
+    needed for game replay, and win stats are already embedded in train_step.
+    """
+
+    def __init__(
+        self,
+        log_dir: str,
+        dashboard: "Dashboard",
+        interval: float = 2.0,
+    ) -> None:
+        self._log_dir = Path(log_dir)
+        self._dash = dashboard
+        self._interval = interval
+        self._log_path: Optional[Path] = None
+        self._log_fh = None
+        self._log_pos: int = 0
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name="log-poller"
+        )
+        self._thread.start()
+
+    def _loop(self) -> None:
+        # Backfill silently
+        self._poll(emit=False)
+        step = self._dash.store.current_iteration
+        ts = _dt.now().strftime("%H:%M:%S")
+        print(f"[{ts}] Log backfill complete — latest step {step}")
+        self._dash.socketio.emit("stats_update", self._dash.store.get_stats())
+        # Live polling
+        while True:
+            time.sleep(self._interval)
+            self._poll(emit=True)
+
+    def _find_latest(self) -> Optional[Path]:
+        try:
+            logs = list(self._log_dir.glob("*.jsonl"))
+        except OSError:
+            return None
+        return max(logs, key=lambda p: p.stat().st_mtime) if logs else None
+
+    def _poll(self, emit: bool) -> None:
+        latest = self._find_latest()
+        if latest is None:
+            return
+        if latest != self._log_path:
+            if self._log_fh is not None:
+                self._log_fh.close()
+            try:
+                self._log_fh = latest.open("r", errors="replace")
+                self._log_path = latest
+                self._log_pos = 0
+            except OSError:
+                return
+        self._log_fh.seek(self._log_pos)
+        new_data = False
+        for raw in self._log_fh:
+            self._log_pos += len(raw.encode("utf-8", errors="replace"))
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                ingested = self._ingest(json.loads(line))
+                if ingested:
+                    new_data = True
+            except (json.JSONDecodeError, KeyError):
+                pass
+        if emit and new_data:
+            self._dash.socketio.emit("stats_update", self._dash.store.get_stats())
+
+    def _ingest(self, entry: dict) -> bool:
+        if entry.get("event") != "train_step":
+            return False
+        step = entry.get("step", 0)
+        wins = [
+            entry.get("x_wins", 0),
+            entry.get("o_wins", 0),
+            entry.get("draws", 0),
+        ]
+        # Pass games_per_hour as games/self_play_time so speed chart shows
+        # games/sec correctly (games_per_sec = gph / 3600).
+        gph = entry.get("games_per_hour", 0.0)
+        self._dash.store.add_metric(
+            iteration=step,
+            loss=entry.get("total_loss"),
+            policy_loss=entry.get("policy_loss"),
+            value_loss=entry.get("value_loss"),
+            wins=wins,
+            buffer_size=entry.get("buffer_size", 0),
+            games=gph,
+            self_play_time=3600.0 if gph else 0.0,
+        )
+        return True
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import argparse
     import sys
 
-    port = 5001
-    if len(sys.argv) > 1:
-        try:
-            port = int(sys.argv[1])
-        except ValueError:
-            pass
+    parser = argparse.ArgumentParser(description="HEX BOT Training Dashboard")
+    parser.add_argument("port", nargs="?", type=int, default=5001,
+                        help="Port to listen on (default: 5001)")
+    parser.add_argument("--log-dir", default="logs",
+                        help="Directory containing structlog JSONL files (default: logs)")
+    args = parser.parse_args()
+
+    port = args.port
+    log_dir = args.log_dir
 
     dash = get_dashboard(port)
     dash.resource_monitor.start()
 
+    # Start log poller so dashboard works even without --web-dashboard on train.py
+    log_path = Path(log_dir)
+    if log_path.is_dir():
+        poller = LogPoller(log_dir=log_dir, dashboard=dash, interval=2.0)
+        poller.start()
+    else:
+        print(f"[WARN] --log-dir '{log_dir}' not found — log polling disabled")
+
     ts = _dt.now().strftime("%H:%M:%S")
     print(f"[{ts}] HEX BOT -- Clean Training Dashboard")
     print(f"[{ts}] CPU cores: {multiprocessing.cpu_count()}")
+    print(f"[{ts}] Log dir: {log_dir}")
     print(f"[{ts}] Open http://localhost:{port}")
 
     import logging
