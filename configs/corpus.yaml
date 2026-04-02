@@ -19,6 +19,10 @@ quality_weights:              # quality score formula weights
     bot_d4: 0.6               # stronger than average human
     bot_d6: 0.75              # strong bot play
 
+use_human_seeding: true        # seed bot openings from human midgame positions
+human_seeding_min_move: 10     # earliest move to truncate human game at
+human_seeding_max_move: 25     # latest move to truncate human game at
+
 flags:
   p1_win_rate_concern: true   # bot_d4 shows 62.5% P1 win rate
   low_opening_diversity: true # bot_d6 dupe rate 50.3% (> 50% threshold)
