@@ -1,7 +1,5 @@
 /// Node, TTEntry, and pool constants for the MCTS tree.
 
-use fxhash::FxHashMap;
-
 /// Pre-allocated pool size. 200 k nodes ~ 6.4 MB.
 pub const MAX_NODES: usize = 200_000;
 
