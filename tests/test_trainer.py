@@ -258,7 +258,8 @@ def test_normalize_state_dict_adds_tower_aliases():
         "_orig_mod.module.policy_fc.weight": torch.randn(10, 20),
     }
 
-    normalized = Trainer._normalize_model_state_dict_keys(state)
+    from python.training.checkpoints import normalize_model_state_dict_keys
+    normalized = normalize_model_state_dict_keys(state)
 
     assert "trunk.tower.0.conv1.weight" in normalized
     assert "tower.0.conv1.weight" in normalized

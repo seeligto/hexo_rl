@@ -35,11 +35,15 @@ from python.bootstrap.dataset import replay_game_to_triples
 from python.bootstrap.generate_corpus import BOT_GAMES_DIR, RAW_HUMAN_DIR
 from python.env.game_state import GameState
 from python.model.network import HexTacToeNet, compile_model
+from python.training.losses import (
+    compute_policy_loss, compute_value_loss, compute_aux_loss,
+    compute_total_loss, fp16_backward_step,
+)
+from python.training.checkpoints import save_full_checkpoint, save_inference_weights
+from python.utils.constants import BOARD_SIZE
 
 log = structlog.get_logger()
 console = Console()
-
-from python.utils.constants import BOARD_SIZE
 
 POLICY_SIZE = BOARD_SIZE * BOARD_SIZE + 1
 
@@ -380,41 +384,13 @@ class BootstrapTrainer:
             ):
                 log_policy, _value, v_logit, opp_reply = self.model(states, aux=True)
 
-                # Policy loss — mask zero-policy rows (value-only positions)
                 policy_valid = policies.sum(dim=1) > 1e-6
-                if policy_valid.any():
-                    policy_loss = -(
-                        policies[policy_valid] * log_policy[policy_valid]
-                    ).sum(dim=1).mean()
-                else:
-                    policy_loss = torch.zeros(1, device=self.device).squeeze()
+                policy_loss = compute_policy_loss(log_policy, policies, policy_valid, self.device)
+                value_loss = compute_value_loss(v_logit, outcomes)
+                opp_reply_loss = compute_aux_loss(opp_reply, policies, policy_valid, self.device)
+                loss = compute_total_loss(policy_loss, value_loss, opp_reply_loss, aux_weight)
 
-                # Value loss: BCE on raw logit, {-1,+1} → {0,1}
-                value_target = (outcomes + 1.0) / 2.0
-                value_loss = nn.functional.binary_cross_entropy_with_logits(
-                    v_logit.squeeze(1), value_target
-                )
-
-                # Aux: opponent-reply loss (same masking as policy)
-                if policy_valid.any():
-                    opp_reply_loss = -(
-                        policies[policy_valid] * opp_reply[policy_valid]
-                    ).sum(dim=1).mean()
-                else:
-                    opp_reply_loss = torch.zeros(1, device=self.device).squeeze()
-
-                loss = policy_loss + value_loss + aux_weight * opp_reply_loss
-
-            if self.fp16:
-                self.scaler.scale(loss).backward()
-                self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                self.optimizer.step()
+            fp16_backward_step(loss, self.optimizer, self.scaler, self.model, self.fp16)
 
             self.scheduler.step()
             self.step += 1
@@ -444,28 +420,16 @@ class BootstrapTrainer:
     def save_checkpoint(self) -> Path:
         """Save full checkpoint in self-play-compatible format.
 
-        Format matches Trainer.save_checkpoint():
-        {step, model_state, optimizer_state, scaler_state, scheduler_state, config}
-
         Also writes checkpoints/bootstrap_model.pt (weights only) for the
         eval pipeline.
         """
-        base_model = getattr(self.model, "_orig_mod", self.model)
         ckpt_path = self.checkpoint_dir / f"pretrain_{self.step:08d}.pt"
-        torch.save(
-            {
-                "step":            self.step,
-                "model_state":     base_model.state_dict(),
-                "optimizer_state": self.optimizer.state_dict(),
-                "scaler_state":    self.scaler.state_dict(),
-                "scheduler_state": self.scheduler.state_dict(),
-                "config":          self.config,
-            },
-            ckpt_path,
+        save_full_checkpoint(
+            self.model, self.optimizer, self.scaler, self.scheduler,
+            self.step, self.config, ckpt_path,
         )
         inf_path = Path("checkpoints") / "bootstrap_model.pt"
-        inf_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(base_model.state_dict(), inf_path)
+        save_inference_weights(self.model, inf_path)
         log.info("checkpoint_saved", path=str(ckpt_path), inference=str(inf_path))
         return ckpt_path
 
