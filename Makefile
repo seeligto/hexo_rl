@@ -206,3 +206,7 @@ corpus.manifest: ## Update data/corpus/manifest.json (scans human + bot dirs)
 corpus.analysis: corpus.manifest ## Run corpus analysis on human + bot games
 	$(PY) -m python.bootstrap.corpus_analysis --include-bot-games
 
+.PHONY: corpus.npz
+corpus.npz: ## Export corpus to data/bootstrap_corpus.npz for mixed training
+	$(PY) scripts/export_corpus_npz.py
+

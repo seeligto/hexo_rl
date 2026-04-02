@@ -56,6 +56,9 @@ deploy/
 *~
 .DS_Store
 
+# Generated corpus export (large, rebuild with make corpus.npz)
+data/bootstrap_corpus.npz
+
 # Benchmark output
 native_core/benches/*.html
 criterion/
