@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import statistics
 import time
 from collections import deque
 from contextlib import contextmanager
@@ -77,6 +78,14 @@ class _LogReader:
 
         # Game-length history (in plies; convert to compound moves for display)
         self.game_lengths: deque[int] = deque(maxlen=game_window)
+
+        # Rolling window of compound move counts (maxlen=200) for median/percentile/trend.
+        # Updated on every game_complete ingest; cached stats avoid re-sorting at render time.
+        self.game_length_moves: deque[int] = deque(maxlen=200)
+        self._gl_median: Optional[float] = None
+        self._gl_p10:    Optional[int]   = None
+        self._gl_p90:    Optional[int]   = None
+        self._gl_trend:  str             = "→"
 
         # Loss / entropy rolling windows
         self.policy_losses:    deque[float] = deque(maxlen=loss_window)
@@ -137,6 +146,30 @@ class _LogReader:
             return None
         return max(logs, key=lambda p: p.stat().st_mtime)
 
+    def _update_game_length_stats(self) -> None:
+        """Recompute cached median/p10/p90/trend from game_length_moves.
+
+        Called on every ingest — O(n log n) for n ≤ 200, well under 1 ms.
+        """
+        data = sorted(self.game_length_moves)
+        n = len(data)
+        if n == 0:
+            return
+        self._gl_median = statistics.median(data)
+        self._gl_p10    = data[max(0, int(0.1 * (n - 1)))]
+        self._gl_p90    = data[min(n - 1, int(0.9 * (n - 1)))]
+        # Trend: compare median of most-recent 50 games vs the 50 before that.
+        recent = list(self.game_length_moves)
+        if len(recent) >= 100:
+            cur_med  = statistics.median(recent[-50:])
+            prev_med = statistics.median(recent[-100:-50])
+            if cur_med > prev_med * 1.05:
+                self._gl_trend = "↑"
+            elif cur_med < prev_med * 0.95:
+                self._gl_trend = "↓"
+            else:
+                self._gl_trend = "→"
+
     def _ingest(self, entry: dict[str, Any]) -> None:
         event = entry.get("event", "")
 
@@ -144,6 +177,13 @@ class _LogReader:
             plies = entry.get("plies", 0)
             if plies > 0:
                 self.game_lengths.append(plies)
+            # Compound move count: prefer explicit game_length, else derive from plies.
+            gl = entry.get("game_length")
+            if gl is None and plies > 0:
+                gl = (plies + 1) // 2
+            if gl and gl > 0:
+                self.game_length_moves.append(int(gl))
+                self._update_game_length_stats()
 
         elif event == "train_step":
             # train.py logs the step as "step"; accept "iteration" too for
@@ -313,6 +353,16 @@ def _build_game_length_panel(reader: _LogReader) -> Panel:
         "Rolling avg (last 100)",
         Text(f"{avg_compound:.1f} compound moves{alert}", style=color),
     )
+
+    # Rolling median / percentiles (pre-computed at ingest time)
+    if reader._gl_median is not None:
+        med_str = (
+            f"median={reader._gl_median:.0f}"
+            f"  (p10={reader._gl_p10} / p90={reader._gl_p90})"
+            f"  {reader._gl_trend}"
+        )
+        table.add_row("Game length", Text(med_str, style=color))
+
     table.add_row("Total games observed", str(total))
     table.add_row("", "")
     table.add_row(

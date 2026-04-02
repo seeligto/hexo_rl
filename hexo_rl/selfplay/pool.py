@@ -126,7 +126,8 @@ class WorkerPool:
             # Phase40Dashboard._LogReader can populate the game-length panel.
             for plies, winner_code, move_history in self._runner.drain_game_results():
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
-                log.info("game_complete", plies=plies, winner=winner)
+                game_length = (plies + 1) // 2  # compound moves
+                log.info("game_complete", plies=plies, winner=winner, game_length=game_length)
                 self._recorder.maybe_record(
                     moves=move_history,
                     winner_code=winner_code,
