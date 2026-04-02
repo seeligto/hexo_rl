@@ -241,10 +241,18 @@ class Trainer:
 
         self.step += 1
 
+        # Policy entropy: H = -Σ π log π  (nats). Computed outside autocast to
+        # avoid fp16 underflow for near-zero probabilities; detached from graph.
+        with torch.no_grad():
+            policy_entropy = (
+                -(log_policy.exp() * log_policy).sum(dim=-1).mean()
+            ).float().item()
+
         result = {
-            "loss":        loss.item(),
-            "policy_loss": policy_loss.item(),
-            "value_loss":  value_loss.item(),
+            "loss":           loss.item(),
+            "policy_loss":    policy_loss.item(),
+            "value_loss":     value_loss.item(),
+            "policy_entropy": policy_entropy,
         }
         if use_aux:
             result["opp_reply_loss"] = opp_reply_loss.item()

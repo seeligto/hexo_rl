@@ -539,6 +539,8 @@ def main() -> None:
                         policy_loss=round(float(loss_info["policy_loss"]), 4),
                         value_loss=round(float(loss_info["value_loss"]), 4),
                         total_loss=round(float(loss_info["loss"]), 4),
+                        aux_opp_reply_loss=round(float(loss_info.get("opp_reply_loss", 0.0)), 4),
+                        policy_entropy=round(float(loss_info.get("policy_entropy", 0.0)), 4),
                         buffer_size=buffer.size,
                         buffer_capacity=buffer.capacity,
                         pretrained_weight=round(w_pre, 4),
