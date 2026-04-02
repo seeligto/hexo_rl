@@ -47,6 +47,8 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeEl
 from rich.table import Table
 from rich.text import Text
 
+from hexo_rl.monitoring.game_browser import GameBrowser, SOURCE_SELF_PLAY
+
 
 # ── Bucket metadata exposed to Python ────────────────────────────────────────
 
@@ -537,6 +539,47 @@ def _build_eval_panel(eval_reader: _EvalDBReader) -> Panel:
     return Panel(table, title=title, border_style="green")
 
 
+def _build_game_browser_panel(browser: "GameBrowser") -> Panel:
+    """Panel 7 — Game Browser: longest / shortest self-play + corpus sample."""
+    try:
+        longest_sp  = browser.list_games(source=SOURCE_SELF_PLAY, sort_by="length",     limit=5)
+        shortest_sp = browser.list_games(source=SOURCE_SELF_PLAY, sort_by="length_asc", limit=5, min_length=1)
+        corpus_sample = browser.list_games(source="all",          sort_by="random",     limit=5,
+                                           outcome="all")
+        # Only show corpus games (exclude self-play from the random sample)
+        corpus_sample = [g for g in corpus_sample if g.source != SOURCE_SELF_PLAY]
+        if not corpus_sample:
+            corpus_sample = browser.list_games(source="human", sort_by="random", limit=5)
+    except Exception:
+        return Panel(_waiting("error reading game index"), title="Game Browser", border_style="dim")
+
+    if not longest_sp and not shortest_sp and not corpus_sample:
+        return Panel(_waiting("no games indexed yet"), title="Game Browser", border_style="dim")
+
+    table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
+    table.add_column("Game ID",   style="dim", no_wrap=True, max_width=30)
+    table.add_column("Source",    width=10)
+    table.add_column("Len",       justify="right", width=5)
+    table.add_column("Outcome",   width=8)
+    table.add_column("Quality",   justify="right", width=7)
+
+    def _add_section(title: str, games: list) -> None:
+        table.add_row(Text(title, style="bold yellow"), "", "", "", "")
+        if not games:
+            table.add_row(Text("  (none)", style="dim italic"), "", "", "", "")
+        for g in games:
+            qs = f"{g.quality_score:.3f}" if g.quality_score else "  —  "
+            table.add_row(g.game_id[-28:], g.source, str(g.length), g.outcome, qs)
+
+    _add_section("Top 5 longest self-play", longest_sp)
+    _add_section("Top 5 shortest self-play", shortest_sp)
+    _add_section("5 random corpus games", corpus_sample)
+
+    sp_total = len(browser.list_games(source=SOURCE_SELF_PLAY, limit=9999))
+    title = f"Game Browser  (self-play: {sp_total})"
+    return Panel(table, title=title, border_style="dim cyan")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase40Dashboard — passive observer
 # ─────────────────────────────────────────────────────────────────────────────
@@ -561,12 +604,18 @@ class Phase40Dashboard:
         config: Optional[dict] = None,
         buffer: Any = None,
         refresh_interval: float = 5.0,
+        corpus_dir: str | Path = "data/corpus",
+        replay_dir: str | Path = "logs/replays",
     ) -> None:
         self._log_reader  = _LogReader(log_dir)
         self._eval_reader = _EvalDBReader(eval_db_path)
         self._config      = config or {}
         self._buffer      = buffer
         self._refresh_sec = refresh_interval
+        self._game_browser = GameBrowser(
+            corpus_dir=str(corpus_dir),
+            replay_dir=str(replay_dir),
+        )
         self.console      = Console()
 
     # ── Public interface ──────────────────────────────────────────────────────
@@ -611,6 +660,9 @@ class Phase40Dashboard:
         self._layout["bot_right"].update(
             _build_eval_panel(self._eval_reader)
         )
+        self._layout["browser"].update(
+            _build_game_browser_panel(self._game_browser)
+        )
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -618,9 +670,10 @@ class Phase40Dashboard:
     def _make_layout() -> Layout:
         layout = Layout()
         layout.split_column(
-            Layout(name="top", size=14),
-            Layout(name="mid", size=14),
-            Layout(name="bot", size=13),
+            Layout(name="top",     size=14),
+            Layout(name="mid",     size=14),
+            Layout(name="bot",     size=13),
+            Layout(name="browser", size=20),
         )
         layout["top"].split_row(
             Layout(name="top_left"),
@@ -635,7 +688,8 @@ class Phase40Dashboard:
             Layout(name="bot_right"),
         )
         # Seed every panel with a placeholder so cold-start renders correctly.
-        for name in ("top_left", "top_right", "mid_left", "mid_right", "bot_left", "bot_right"):
+        for name in ("top_left", "top_right", "mid_left", "mid_right",
+                     "bot_left", "bot_right", "browser"):
             layout[name].update(_waiting())
         return layout
 
