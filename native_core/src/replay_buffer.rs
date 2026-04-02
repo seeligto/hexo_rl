@@ -26,6 +26,7 @@ use half::f16;
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // ── Weight schedule ──────────────────────────────────────────────────────────
 
@@ -166,6 +167,17 @@ pub struct RustReplayBuffer {
     weight_schedule: WeightSchedule,
     next_game_id:    i64,
     rng:             StdRng,
+
+    /// Lock-free weight histogram for O(1) dashboard stats.
+    ///
+    /// Bucket boundaries (f32 weight):
+    ///   [0] < 0.30  → short-game tier  (~0.15)
+    ///   [1] 0.30–0.75 → medium-game tier (~0.50)
+    ///   [2] ≥ 0.75  → full-weight tier  (~1.0)
+    ///
+    /// Incremented on push, decremented on overwrite.
+    /// Read with Relaxed ordering — approximate counts for display only.
+    weight_buckets: [AtomicU64; 3],
 }
 
 #[pymethods]
@@ -189,7 +201,24 @@ impl RustReplayBuffer {
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
             rng: StdRng::from_entropy(),
+            weight_buckets: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
         }
+    }
+
+    // ── Dashboard stats ───────────────────────────────────────────────────────
+
+    /// Return (size, capacity, weight_histogram) for dashboard display.
+    ///
+    /// `weight_histogram` is a length-3 list: counts of positions in each
+    /// weight tier (low/medium/full).  Reads lock-free atomic counters — O(1),
+    /// never blocks push() or sample_batch().
+    pub fn get_buffer_stats(&self) -> (usize, usize, Vec<u64>) {
+        let histogram = vec![
+            self.weight_buckets[0].load(Ordering::Relaxed),
+            self.weight_buckets[1].load(Ordering::Relaxed),
+            self.weight_buckets[2].load(Ordering::Relaxed),
+        ];
+        (self.size, self.capacity, histogram)
     }
 
     // ── Monotonic ID counter ──────────────────────────────────────────────────
@@ -242,6 +271,12 @@ impl RustReplayBuffer {
 
         let slot = self.head;
 
+        // If overwriting a valid slot, decrement its bucket before we clobber it.
+        if self.size == self.capacity {
+            let old_bucket = Self::weight_bucket(self.weights[slot]);
+            self.weight_buckets[old_bucket].fetch_sub(1, Ordering::Relaxed);
+        }
+
         // Copy state as raw f16 bits.
         let dst = &mut self.states[slot * STATE_STRIDE..(slot + 1) * STATE_STRIDE];
         for (d, s) in dst.iter_mut().zip(state_slice.iter()) {
@@ -257,6 +292,10 @@ impl RustReplayBuffer {
         } else {
             self.weight_schedule.weight_for(game_length)
         };
+
+        // Increment the new position's bucket.
+        let new_bucket = Self::weight_bucket(self.weights[slot]);
+        self.weight_buckets[new_bucket].fetch_add(1, Ordering::Relaxed);
 
         self.head = (self.head + 1) % self.capacity;
         self.size  = (self.size + 1).min(self.capacity);
@@ -300,9 +339,20 @@ impl RustReplayBuffer {
         } else {
             self.weight_schedule.weight_for(game_length)
         };
+        let new_bucket = Self::weight_bucket(w);
+
+        // Number of available (empty) slots before we start writing.
+        // Positions i >= available are overwrites of previously valid slots.
+        let available = self.capacity.saturating_sub(self.size);
 
         for i in 0..t {
             let slot = (self.head + i) % self.capacity;
+
+            // Decrement old bucket if this slot held valid data.
+            if i >= available {
+                let old_bucket = Self::weight_bucket(self.weights[slot]);
+                self.weight_buckets[old_bucket].fetch_sub(1, Ordering::Relaxed);
+            }
 
             // State: convert f16 → u16 bits
             let src_state = &states_s[i * STATE_STRIDE..(i + 1) * STATE_STRIDE];
@@ -319,6 +369,9 @@ impl RustReplayBuffer {
             self.outcomes[slot] = outcomes_s[i];
             self.game_ids[slot] = game_id;
             self.weights[slot]  = w;
+
+            // Increment new bucket.
+            self.weight_buckets[new_bucket].fetch_add(1, Ordering::Relaxed);
         }
 
         self.head = (self.head + t) % self.capacity;
@@ -487,6 +540,18 @@ impl RustReplayBuffer {
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 impl RustReplayBuffer {
+    /// Map an f16 weight (stored as bits) to a histogram bucket index.
+    ///
+    /// Bucket 0: weight < 0.30  (short-game tier, ~0.15)
+    /// Bucket 1: 0.30 ≤ w < 0.75 (medium-game tier, ~0.50)
+    /// Bucket 2: weight ≥ 0.75  (full-weight tier, ~1.0)
+    #[inline]
+    fn weight_bucket(w_bits: u16) -> usize {
+        let w = f16::from_bits(w_bits).to_f32();
+        if w < 0.30 { 0 }
+        else if w < 0.75 { 1 }
+        else { 2 }
+    }
     /// Sample a single index using rejection sampling on stored weights.
     ///
     /// Rejection: draw uniform index, accept with probability weight/1.0.
@@ -594,6 +659,13 @@ impl RustReplayBuffer {
     #[cfg(test)]
     fn push_raw(&mut self, outcome: f32, game_length: u16) {
         let slot = self.head;
+
+        // Decrement old bucket if overwriting.
+        if self.size == self.capacity {
+            let old_bucket = Self::weight_bucket(self.weights[slot]);
+            self.weight_buckets[old_bucket].fetch_sub(1, Ordering::Relaxed);
+        }
+
         // Zero state/policy (content doesn't matter for weight tests).
         let s_start = slot * STATE_STRIDE;
         for v in &mut self.states[s_start..s_start + STATE_STRIDE] { *v = 0; }
@@ -606,6 +678,10 @@ impl RustReplayBuffer {
         } else {
             self.weight_schedule.weight_for(game_length)
         };
+
+        let new_bucket = Self::weight_bucket(self.weights[slot]);
+        self.weight_buckets[new_bucket].fetch_add(1, Ordering::Relaxed);
+
         self.head = (self.head + 1) % self.capacity;
         self.size = (self.size + 1).min(self.capacity);
     }
@@ -634,6 +710,7 @@ mod tests {
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
             rng: StdRng::seed_from_u64(42),
+            weight_buckets: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
         };
 
         // Configure schedule: <10 → 0.15, <25 → 0.50, ≥25 → 1.0
