@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from native_core import RustReplayBuffer
+from engine import RustReplayBuffer
 from python.model.network import HexTacToeNet
 from python.training.trainer import Trainer, prune_policy_targets
 

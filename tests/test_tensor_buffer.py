@@ -270,7 +270,7 @@ class TestTensorBufferRegressionGuards:
         This test fails if the 'double evaluation' bug is re-introduced — i.e. if
         Python code calls get_cluster_views twice for the same board state.
         """
-        from native_core import Board as NativeBoard
+        from engine import Board as NativeBoard
 
         class _BoardSpy:
             """Wraps a native Board and counts get_cluster_views calls."""
@@ -302,7 +302,7 @@ class TestTensorBufferRegressionGuards:
         The views are cached in GameState.views when from_board() is called.
         to_tensor() must read from that cache, never crossing the PyO3 boundary again.
         """
-        from native_core import Board as NativeBoard
+        from engine import Board as NativeBoard
 
         class _BoardSpy:
             def __init__(self, board: NativeBoard) -> None:

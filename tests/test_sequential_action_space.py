@@ -14,7 +14,7 @@ Player encoding: P1 = 1, P2 = -1.
 """
 from __future__ import annotations
 
-from native_core import Board
+from engine import Board
 
 P1 = 1
 P2 = -1

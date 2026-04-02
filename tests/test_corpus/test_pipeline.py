@@ -3,7 +3,7 @@
 from typing import Iterator
 
 import pytest
-from native_core import RustReplayBuffer
+from engine import RustReplayBuffer
 from python.corpus.sources.base import CorpusSource, GameRecord
 from python.corpus.pipeline import CorpusPipeline, _game_hash
 from python.corpus.metrics import CorpusMetrics

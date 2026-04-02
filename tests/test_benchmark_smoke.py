@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 
 from python.model.network import HexTacToeNet
-from native_core import RustReplayBuffer
+from engine import RustReplayBuffer
 from scripts.benchmark import benchmark_replay_buffer, benchmark_worker_pool
 
 

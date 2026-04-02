@@ -19,7 +19,7 @@ from typing import List, Tuple
 
 import structlog
 
-from native_core import Board
+from engine import Board
 from python.bootstrap.bot_protocol import BotProtocol
 from python.env.game_state import GameState
 

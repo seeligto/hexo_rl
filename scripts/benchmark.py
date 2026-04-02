@@ -41,7 +41,7 @@ if str(ROOT) not in sys.path:
 
 if TYPE_CHECKING:
     from python.model.network import HexTacToeNet
-    from native_core import RustReplayBuffer
+    from engine import RustReplayBuffer
 
 console = Console()
 
@@ -115,7 +115,7 @@ def benchmark_mcts(n_simulations: int = 50_000, sims_per_move: int = 800,
     tree reset between each, rather than a single monolithic search.  A single
     large tree exceeds L2 cache and underreports real self-play throughput.
     """
-    from native_core import Board, MCTSTree  # type: ignore[attr-defined]
+    from engine import Board, MCTSTree  # type: ignore[attr-defined]
 
     board = Board()
     tree = MCTSTree(c_puct=1.5)
@@ -349,7 +349,7 @@ def benchmark_worker_pool(
 ) -> Dict[str, Any]:
     """Measure end-to-end self-play throughput in the multiprocess pool."""
     from python.selfplay.pool import WorkerPool
-    from native_core import RustReplayBuffer
+    from engine import RustReplayBuffer
 
     if quick:
         duration_sec = min(duration_sec, 5)
@@ -686,7 +686,7 @@ def main() -> None:
     console.print(f"[bold]Benchmarking on {device} | mode={args.mode} | n={n_runs}[/bold]")
 
     from python.model.network import HexTacToeNet, compile_model
-    from native_core import RustReplayBuffer
+    from engine import RustReplayBuffer
 
     # Build model
     model = HexTacToeNet(

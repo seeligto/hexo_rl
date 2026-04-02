@@ -57,7 +57,7 @@ def _seed_everything():
 @pytest.fixture
 def empty_board():
     """A freshly constructed, empty Board."""
-    from native_core import Board
+    from engine import Board
     return Board()
 
 
@@ -72,7 +72,7 @@ def mid_game_board():
       ply 3: P1 @ (2,0)   — P1 first of pair
       ply 4: P1 @ (2,1)   — P1 second, turn passes
     """
-    from native_core import Board
+    from engine import Board
     b = Board()
     b.apply_move(0, 0)   # P1 ply 0 → turn passes to P2
     b.apply_move(1, 0)   # P2 ply 1
@@ -87,7 +87,7 @@ def mid_game_board():
 @pytest.fixture
 def game_state_empty():
     """A GameState wrapping a freshly constructed empty board."""
-    from native_core import Board
+    from engine import Board
     from python.env.game_state import GameState
     return GameState.from_board(Board())
 
@@ -103,7 +103,7 @@ def game_state_after_3_moves():
       P2 @ (1,0)  — P2 first
       P2 @ (1,1)  — P2 second, turn passes (current state is P1's turn)
     """
-    from native_core import Board
+    from engine import Board
     from python.env.game_state import GameState
     b = Board()
     b.apply_move(0, 0)              # P1 ply 0

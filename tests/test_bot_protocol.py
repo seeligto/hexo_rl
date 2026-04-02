@@ -6,7 +6,7 @@ checkpoint.
 """
 
 import pytest
-from native_core import Board
+from engine import Board
 from python.env import GameState
 from python.bootstrap.bot_protocol import BotProtocol
 from python.bootstrap.bots.random_bot import RandomBot

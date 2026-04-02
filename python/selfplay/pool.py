@@ -13,11 +13,11 @@ from typing import Any, Dict, Optional
 import numpy as np
 import structlog
 import torch
-from native_core import RustSelfPlayRunner  # type: ignore[attr-defined]
+from engine import RustSelfPlayRunner  # type: ignore[attr-defined]
 
 from python.model.network import HexTacToeNet
 from python.selfplay.inference_server import InferenceServer
-from native_core import RustReplayBuffer
+from engine import RustReplayBuffer
 
 log = structlog.get_logger()
 

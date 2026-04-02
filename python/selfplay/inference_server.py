@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 
-from native_core import RustInferenceBatcher  # type: ignore[attr-defined]
+from engine import RustInferenceBatcher  # type: ignore[attr-defined]
 from python.model.network import HexTacToeNet
 
 

@@ -23,13 +23,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from native_core import Board, MCTSTree
+from engine import Board, MCTSTree
 from python.env.game_state import GameState
 from python.model.network import HexTacToeNet
 from python.selfplay.inference import LocalInferenceEngine
 from python.selfplay.policy_projection import project_global_policy_to_local
 from python.selfplay.tensor_buffer import TensorBuffer
-from native_core import RustReplayBuffer
+from engine import RustReplayBuffer
 from python.selfplay.utils import BOARD_SIZE, N_ACTIONS, get_temperature  # noqa: F401 (re-exported)
 
 # Backward-compat: callers that do `from python.selfplay.worker import get_temperature`

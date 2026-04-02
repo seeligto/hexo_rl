@@ -13,11 +13,11 @@ import numpy as np
 import pytest
 import torch
 
-from native_core import RustInferenceBatcher, RustSelfPlayRunner
+from engine import RustInferenceBatcher, RustSelfPlayRunner
 from python.model.network import HexTacToeNet
 from python.selfplay.inference_server import InferenceServer
 from python.selfplay.pool import WorkerPool
-from native_core import RustReplayBuffer
+from engine import RustReplayBuffer
 
 
 @pytest.mark.timeout(30)
