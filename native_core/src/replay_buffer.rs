@@ -200,7 +200,7 @@ impl RustReplayBuffer {
             sym_tables: SymTables::new(),
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
-            rng: StdRng::from_entropy(),
+            rng: StdRng::from_os_rng(),
             weight_buckets: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
         }
     }
@@ -421,7 +421,7 @@ impl RustReplayBuffer {
 
         // ── Fill output ───────────────────────────────────────────────────────
         for (b, &idx) in indices.iter().enumerate() {
-            let sym_idx = if augment { self.rng.gen_range(0..N_SYMS) } else { 0 };
+            let sym_idx = if augment { self.rng.random_range(0..N_SYMS) } else { 0 };
 
             let src_state  = &self.states  [idx * STATE_STRIDE ..(idx + 1) * STATE_STRIDE];
             let src_policy = &self.policies[idx * POLICY_STRIDE..(idx + 1) * POLICY_STRIDE];
@@ -561,14 +561,14 @@ impl RustReplayBuffer {
     fn weighted_sample_one(&mut self) -> usize {
         const MAX_REJECT: usize = 32;
         for _ in 0..MAX_REJECT {
-            let idx = self.rng.gen_range(0..self.size);
+            let idx = self.rng.random_range(0..self.size);
             let w = f16::from_bits(self.weights[idx]).to_f32();
-            if w >= 1.0 || self.rng.gen::<f32>() < w {
+            if w >= 1.0 || self.rng.random::<f32>() < w {
                 return idx;
             }
         }
         // Fallback: accept whatever we drew last to avoid infinite loop.
-        self.rng.gen_range(0..self.size)
+        self.rng.random_range(0..self.size)
     }
 
     /// Sample `batch_size` slot indices, optionally deduplicating by game_id.

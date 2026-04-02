@@ -303,7 +303,7 @@ impl RustInferenceBatcher {
         py: Python<'_>,
         features: Vec<f32>,
     ) -> PyResult<(Vec<f32>, f32)> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.inner
                 .submit_and_wait(features, self.feature_len, self.policy_len)
         })
@@ -354,7 +354,7 @@ impl RustInferenceBatcher {
             return Err(PyValueError::new_err("batch_size must be > 0"));
         }
 
-        let pulled = py.allow_threads(|| self.inner.pop_batch_blocking(batch_size, max_wait_ms));
+        let pulled = py.detach(|| self.inner.pop_batch_blocking(batch_size, max_wait_ms));
 
         if pulled.is_empty() {
             // Return an explicit 0xfeature_len tensor for timeout/no-work polls.

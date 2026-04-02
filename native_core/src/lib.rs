@@ -302,7 +302,7 @@ impl PyMCTSTree {
     /// Always call `expand_and_backup` with the same number of results
     /// before the next call to `select_leaves`.
     pub fn select_leaves(&mut self, py: Python<'_>, n: usize) -> PyResult<Vec<Py<PyBoard>>> {
-        let boards = py.allow_threads(|| self.inner.select_leaves(n));
+        let boards = py.detach(|| self.inner.select_leaves(n));
         boards
             .into_iter()
             .map(|b| Py::new(py, PyBoard::from_inner(b)))
@@ -322,7 +322,7 @@ impl PyMCTSTree {
         policies: Vec<Vec<f32>>,
         values: Vec<f32>,
     ) -> PyResult<()> {
-        py.allow_threads(|| self.inner.expand_and_backup(&policies, &values));
+        py.detach(|| self.inner.expand_and_backup(&policies, &values));
         Ok(())
     }
 

@@ -7,8 +7,8 @@ use pyo3::prelude::*;
 use crate::board::{Board, BOARD_SIZE, HALF};
 use crate::mcts::MCTSTree;
 use crate::inference_bridge::RustInferenceBatcher;
-use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::prelude::IndexedRandom;
+use rand::rng;
 
 /// One recorded position from a self-play game.
 #[derive(Clone)]
@@ -109,14 +109,14 @@ impl RustSelfPlayRunner {
 
             let handle = thread::spawn(move || {
                 let mut tree = MCTSTree::new(c_puct);
-                let mut rng = thread_rng();
+                let mut rng = rng();
 
                 while running.load(Ordering::SeqCst) {
                     let mut board = Board::new();
                     let mut records = Vec::new();
 
                     // KataGo-style playout cap randomisation.
-                    let is_fast_game = fast_prob > 0.0 && rand::Rng::gen::<f32>(&mut rng) < fast_prob;
+                    let is_fast_game = fast_prob > 0.0 && rand::Rng::random::<f32>(&mut rng) < fast_prob;
                     let game_sims = if is_fast_game { fast_sims } else { standard_sims };
 
                     for _ in 0..max_moves {
@@ -444,8 +444,8 @@ impl RustSelfPlayRunner {
             return None;
         }
 
-        let mut rng = thread_rng();
-        let mut r: f32 = rand::Rng::gen(&mut rng);
+        let mut rng = rng();
+        let mut r: f32 = rand::Rng::random(&mut rng);
         r *= sum;
 
         let mut current = 0.0;
