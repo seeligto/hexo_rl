@@ -26,7 +26,7 @@ class BotProtocol(ABC):
 
         Args:
             state:      Immutable GameState snapshot.
-            rust_board: Live native_core.Board — caller owns it and has NOT
+            rust_board: Live engine.Board — caller owns it and has NOT
                         yet applied the returned move.
 
         Returns:

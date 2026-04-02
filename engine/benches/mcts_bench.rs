@@ -5,7 +5,7 @@
 ///   cargo bench --bench mcts_bench -- --output-format html
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use native_core::{board::Board, mcts::MCTSTree};
+use engine::{board::Board, mcts::MCTSTree};
 
 fn bench_win_detection(c: &mut Criterion) {
     // Place 5 stones in a row (no win) to make the check non-trivial.

@@ -1,6 +1,6 @@
 """Rust-driven batched GPU inference server.
 
-Rust owns request concurrency via `RustInferenceBatcher`. Python only runs a
+Rust owns request concurrency via `InferenceBatcher`. Python only runs a
 thin `while True` loop: fetch fused batch from Rust, execute model forward,
 submit policy/value outputs back to Rust, and wake blocked game threads.
 """
@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 
-from engine import RustInferenceBatcher  # type: ignore[attr-defined]
+from engine import InferenceBatcher  # type: ignore[attr-defined]
 from hexo_rl.model.network import HexTacToeNet
 
 
@@ -27,7 +27,7 @@ class InferenceServer(threading.Thread):
         model: HexTacToeNet,
         device: torch.device,
         config: Dict[str, Any],
-        batcher: Optional[RustInferenceBatcher] = None,
+        batcher: Optional[InferenceBatcher] = None,
     ) -> None:
         super().__init__(daemon=True, name="inference-server")
         self.model = model
@@ -43,7 +43,7 @@ class InferenceServer(threading.Thread):
         self._feature_len = in_channels * board_size * board_size
         self._shape = (in_channels, board_size, board_size)
 
-        self._batcher = batcher or RustInferenceBatcher(
+        self._batcher = batcher or InferenceBatcher(
             feature_len=self._feature_len,
             policy_len=self._policy_len,
         )
@@ -52,7 +52,7 @@ class InferenceServer(threading.Thread):
         self._total_requests = 0
 
     @property
-    def batcher(self) -> RustInferenceBatcher:
+    def batcher(self) -> InferenceBatcher:
         return self._batcher
 
     def stop(self) -> None:

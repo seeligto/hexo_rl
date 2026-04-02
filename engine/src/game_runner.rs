@@ -6,7 +6,7 @@ use std::thread::{self, JoinHandle};
 use pyo3::prelude::*;
 use crate::board::{Board, BOARD_SIZE, HALF};
 use crate::mcts::MCTSTree;
-use crate::inference_bridge::RustInferenceBatcher;
+use crate::inference_bridge::InferenceBatcher;
 use rand::prelude::IndexedRandom;
 use rand::rng;
 
@@ -18,9 +18,9 @@ pub struct Position {
     pub player: i8,
 }
 
-#[pyclass(name = "RustSelfPlayRunner")]
-pub struct RustSelfPlayRunner {
-    batcher: RustInferenceBatcher,
+#[pyclass(name = "SelfPlayRunner")]
+pub struct SelfPlayRunner {
+    batcher: InferenceBatcher,
     n_workers: usize,
     max_moves_per_game: usize,
     leaf_batch_size: usize,
@@ -43,7 +43,7 @@ pub struct RustSelfPlayRunner {
 }
 
 #[pymethods]
-impl RustSelfPlayRunner {
+impl SelfPlayRunner {
     #[new]
     #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15))]
     pub fn new(
@@ -62,7 +62,7 @@ impl RustSelfPlayRunner {
         // If standard_sims is 0, fall back to n_simulations.
         let effective_standard = if standard_sims == 0 { n_simulations } else { standard_sims };
         Self {
-            batcher: RustInferenceBatcher::new(feature_len, policy_len),
+            batcher: InferenceBatcher::new(feature_len, policy_len),
             n_workers,
             max_moves_per_game,
             leaf_batch_size,
@@ -311,7 +311,7 @@ impl RustSelfPlayRunner {
     }
 
     #[getter]
-    pub fn batcher(&self) -> RustInferenceBatcher {
+    pub fn batcher(&self) -> InferenceBatcher {
         self.batcher.clone()
     }
 
@@ -358,7 +358,7 @@ impl RustSelfPlayRunner {
     }
 }
 
-impl RustSelfPlayRunner {
+impl SelfPlayRunner {
     fn aggregate_policy(board: &Board, centers: &[(i32, i32)], cluster_policies: &[Vec<f32>]) -> Vec<f32> {
         let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
         let mut global_policy = vec![0.0; n_actions];
@@ -459,7 +459,7 @@ impl RustSelfPlayRunner {
     }
 }
 
-impl Drop for RustSelfPlayRunner {
+impl Drop for SelfPlayRunner {
     fn drop(&mut self) {
         self.stop();
     }

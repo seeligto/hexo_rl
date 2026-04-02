@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import torch
 
-from engine import RustReplayBuffer
+from engine import ReplayBuffer
 
 CHANNELS = 18
 BOARD_SIZE = 19
@@ -25,7 +25,7 @@ def _make_model(device: torch.device):
     return HexTacToeNet(board_size=BOARD_SIZE, res_blocks=2, filters=32).to(device)
 
 
-def _fill_buffer(buf: RustReplayBuffer, n: int, value_only_frac: float = 0.0) -> None:
+def _fill_buffer(buf: ReplayBuffer, n: int, value_only_frac: float = 0.0) -> None:
     """Push n random entries. A fraction have zero-policy (value-only)."""
     for i in range(n):
         state = np.random.randn(CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
@@ -59,11 +59,11 @@ def test_mixed_buffer_training_10_steps():
     trainer = Trainer(model, config, checkpoint_dir="/tmp/test_phase4_ckpt", device=device)
 
     # Pretrained buffer (static).
-    pretrained_buf = RustReplayBuffer(capacity=100)
+    pretrained_buf = ReplayBuffer(capacity=100)
     _fill_buffer(pretrained_buf, 100)
 
     # Self-play buffer (with some value-only entries from fast games).
-    selfplay_buf = RustReplayBuffer(capacity=200)
+    selfplay_buf = ReplayBuffer(capacity=200)
     _fill_buffer(selfplay_buf, 200, value_only_frac=0.25)
 
     batch_size = config["batch_size"]
@@ -139,7 +139,7 @@ def test_buffer_resize_during_training():
     }
     trainer = Trainer(model, config, checkpoint_dir="/tmp/test_phase4_resize", device=device)
 
-    buf = RustReplayBuffer(capacity=50)
+    buf = ReplayBuffer(capacity=50)
     _fill_buffer(buf, 50)
 
     # Train 3 steps.
@@ -184,13 +184,13 @@ def test_pretrained_weight_schedule():
         prev = cur
 
 
-# ── Test: RustSelfPlayRunner accepts playout cap params ──────────────────────
+# ── Test: SelfPlayRunner accepts playout cap params ──────────────────────
 
 def test_runner_accepts_playout_cap_params():
-    """RustSelfPlayRunner constructor accepts the new playout cap kwargs."""
-    from engine import RustSelfPlayRunner
+    """SelfPlayRunner constructor accepts the new playout cap kwargs."""
+    from engine import SelfPlayRunner
 
-    runner = RustSelfPlayRunner(
+    runner = SelfPlayRunner(
         n_workers=1,
         n_simulations=50,
         fast_prob=0.25,

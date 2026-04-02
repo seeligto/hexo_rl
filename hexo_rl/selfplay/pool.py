@@ -1,7 +1,7 @@
 """In-process self-play worker pool.
 
 Phase 3.5 migration removed Python multiprocessing request/response queues.
-Concurrency is now managed by Rust-owned worker threads via RustSelfPlayRunner.
+Concurrency is now managed by Rust-owned worker threads via SelfPlayRunner.
 """
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ from typing import Any, Dict, Optional
 import numpy as np
 import structlog
 import torch
-from engine import RustSelfPlayRunner  # type: ignore[attr-defined]
+from engine import SelfPlayRunner  # type: ignore[attr-defined]
 
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference_server import InferenceServer
-from engine import RustReplayBuffer
+from engine import ReplayBuffer
 
 log = structlog.get_logger()
 
@@ -30,7 +30,7 @@ class WorkerPool:
         model: HexTacToeNet,
         config: Dict[str, Any],
         device: torch.device,
-        replay_buffer: "RustReplayBuffer",
+        replay_buffer: "ReplayBuffer",
         n_workers: Optional[int] = None,
     ) -> None:
         self.model = model
@@ -50,7 +50,7 @@ class WorkerPool:
 
         pc = sp.get("playout_cap", config.get("playout_cap", {}))
 
-        self._runner = RustSelfPlayRunner(
+        self._runner = SelfPlayRunner(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_moves_per_game", 128)),
             n_simulations=self.n_simulations,

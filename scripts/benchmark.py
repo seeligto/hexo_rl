@@ -41,7 +41,7 @@ if str(ROOT) not in sys.path:
 
 if TYPE_CHECKING:
     from hexo_rl.model.network import HexTacToeNet
-    from engine import RustReplayBuffer
+    from engine import ReplayBuffer
 
 console = Console()
 
@@ -232,7 +232,7 @@ def benchmark_inference_latency(model: "HexTacToeNet", n_runs: int = 5,
     }
 
 
-def benchmark_replay_buffer(buffer: "RustReplayBuffer", n_runs: int = 5,
+def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
                             warmup_sec: float = 2.0) -> Dict[str, Any]:
     """Replay buffer push + sample speed."""
     BATCH = 256
@@ -349,7 +349,7 @@ def benchmark_worker_pool(
 ) -> Dict[str, Any]:
     """Measure end-to-end self-play throughput in the multiprocess pool."""
     from hexo_rl.selfplay.pool import WorkerPool
-    from engine import RustReplayBuffer
+    from engine import ReplayBuffer
 
     if quick:
         duration_sec = min(duration_sec, 5)
@@ -370,7 +370,7 @@ def benchmark_worker_pool(
 
     def run_pool(run_duration: int) -> tuple[float, float, float]:
         """Run a single pool session, return (games/hr, pos/hr, batch_sat%)."""
-        replay = RustReplayBuffer(capacity=25_000)
+        replay = ReplayBuffer(capacity=25_000)
         try:
             pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
         except Exception as exc:
@@ -686,7 +686,7 @@ def main() -> None:
     console.print(f"[bold]Benchmarking on {device} | mode={args.mode} | n={n_runs}[/bold]")
 
     from hexo_rl.model.network import HexTacToeNet, compile_model
-    from engine import RustReplayBuffer
+    from engine import ReplayBuffer
 
     # Build model
     model = HexTacToeNet(
@@ -700,7 +700,7 @@ def main() -> None:
         model = compile_model(model)
 
     # Fill replay buffer with dummy data
-    buffer = RustReplayBuffer(capacity=100_000)
+    buffer = ReplayBuffer(capacity=100_000)
     for _ in range(10_000):
         buffer.push(
             np.zeros((18, 19, 19), dtype=np.float16),

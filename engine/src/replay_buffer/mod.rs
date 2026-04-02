@@ -1,4 +1,4 @@
-//! RustReplayBuffer — pre-allocated ring buffer with vectorized 12-fold hex augmentation.
+//! ReplayBuffer — pre-allocated ring buffer with vectorized 12-fold hex augmentation.
 //!
 //! Stores (state, policy, outcome) tuples from self-play.  On `sample_batch` the data
 //! is scatter-augmented in Rust and returned as owned numpy arrays (zero extra copy).
@@ -32,15 +32,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use sym_tables::*;
 
-// ── RustReplayBuffer ──────────────────────────────────────────────────────────
+// ── ReplayBuffer ──────────────────────────────────────────────────────────
 
 /// Ring-buffer replay buffer with 12-fold hexagonal augmentation, exposed to Python.
 ///
 /// Drop-in replacement for `python/training/replay_buffer.py::ReplayBuffer`.
 ///
 /// Construction pre-allocates all storage.  No heap allocation happens after `__new__`.
-#[pyclass(name = "RustReplayBuffer")]
-pub struct RustReplayBuffer {
+#[pyclass(name = "ReplayBuffer")]
+pub struct ReplayBuffer {
     pub(crate) capacity:     usize,
     pub(crate) size:         usize,
     pub(crate) head:         usize, // next write slot
@@ -69,14 +69,14 @@ pub struct RustReplayBuffer {
 }
 
 #[pymethods]
-impl RustReplayBuffer {
+impl ReplayBuffer {
     /// Create a new buffer with the given `capacity` (number of positions).
     ///
     /// Pre-allocates all storage.  Building the symmetry tables is O(N_CELLS × N_SYMS) ≈ 4 µs.
     #[new]
     pub fn new(capacity: usize) -> Self {
         let default_w = f16::from_f32(1.0).to_bits();
-        RustReplayBuffer {
+        ReplayBuffer {
             capacity,
             size: 0,
             head: 0,
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn test_weighted_sampling_distribution() {
         let default_w = f16::from_f32(1.0).to_bits();
-        let mut buf = RustReplayBuffer {
+        let mut buf = ReplayBuffer {
             capacity: 300,
             size: 0,
             head: 0,

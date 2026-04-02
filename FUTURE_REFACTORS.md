@@ -1,15 +1,9 @@
 # Future Refactors — Not In This Pass
 
-The following refactors were considered during the 2026-04-02 cleanup audit
-but deferred because they would break imports across the codebase without
-functional benefit at this stage.
+No deferred renames remain from the 2026-04-02 cleanup audit.
+The following were completed on 2026-04-02:
 
-- **Do NOT rename `python/` → `hexo/`** — every import path in scripts/,
-  tests/, and configs references `python.`. Renaming is pure churn until
-  the package is published or the namespace conflicts.
-
-- **Do NOT rename `native_core/` → `engine/`** — maturin, Cargo.toml, and
-  PyO3 module registration all reference `native_core`. Renaming touches
-  build config, CI, and every `from native_core import` line.
-
-Both can be revisited when the project reaches packaging/distribution phase.
+- **Renamed `native_core/` → `engine/`** — including PyO3 module name
+- **Renamed `python/` → `hexo_rl/`** — all import paths updated
+- **Renamed `hexo_rl/logging/` → `hexo_rl/monitoring/`** — `setup.py` → `configure.py`
+- **Removed `Rust` prefix from exported types** — `ReplayBuffer`, `SelfPlayRunner`, `InferenceBatcher`

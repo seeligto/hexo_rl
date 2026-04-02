@@ -1,9 +1,9 @@
-"""Tests for CorpusPipeline — uses mock source and real RustReplayBuffer."""
+"""Tests for CorpusPipeline — uses mock source and real ReplayBuffer."""
 
 from typing import Iterator
 
 import pytest
-from engine import RustReplayBuffer
+from engine import ReplayBuffer
 from hexo_rl.corpus.sources.base import CorpusSource, GameRecord
 from hexo_rl.corpus.pipeline import CorpusPipeline, _game_hash
 from hexo_rl.corpus.metrics import CorpusMetrics
@@ -63,7 +63,7 @@ class TestGameHash:
 class TestCorpusPipelineBasic:
     def test_positions_pushed_to_buffer(self):
         src = _make_source([_real_game_record()])
-        buf = RustReplayBuffer(capacity=1000)
+        buf = ReplayBuffer(capacity=1000)
         pipe = CorpusPipeline([src], buf)
         pipe.run()
         assert buf.size > 0
@@ -74,7 +74,7 @@ class TestCorpusPipelineBasic:
             _real_game_record("g1", offset=5),
             _real_game_record("g2", offset=10),
         ])
-        buf = RustReplayBuffer(capacity=1000)
+        buf = ReplayBuffer(capacity=1000)
         pipe = CorpusPipeline([src], buf)
         pipe.run()
         assert pipe._next_game_id == 3
@@ -85,14 +85,14 @@ class TestCorpusPipelineBasic:
             _real_game_record("g1", offset=5),
             _real_game_record("g2", offset=10),
         ])
-        buf = RustReplayBuffer(capacity=1000)
+        buf = ReplayBuffer(capacity=1000)
         pipe = CorpusPipeline([src], buf)
         pipe.run(max_games=1)
         assert pipe._next_game_id == 1
 
     def test_empty_source_does_nothing(self):
         src = _make_source([])
-        buf = RustReplayBuffer(capacity=1000)
+        buf = ReplayBuffer(capacity=1000)
         pipe = CorpusPipeline([src], buf)
         pipe.run()
         assert buf.size == 0
@@ -104,7 +104,7 @@ class TestCorpusPipelineDedup:
         rec = _real_game_record("g0")
         # Same record yielded twice from the same source.
         src = _make_source([rec, rec])
-        buf = RustReplayBuffer(capacity=1000)
+        buf = ReplayBuffer(capacity=1000)
         metrics = CorpusMetrics()
         pipe = CorpusPipeline([src], buf, metrics=metrics)
         pipe.run()
@@ -116,7 +116,7 @@ class TestCorpusPipelineDedup:
         rec = _real_game_record("g0")
         src_a = _make_source([rec], name="src_a")
         src_b = _make_source([rec], name="src_b")
-        buf = RustReplayBuffer(capacity=1000)
+        buf = ReplayBuffer(capacity=1000)
         pipe = CorpusPipeline([src_a, src_b], buf)
         pipe.run()
         # Cross-source dedup is NOT applied (Q1) — both should be pushed.
@@ -126,7 +126,7 @@ class TestCorpusPipelineDedup:
 class TestCorpusPipelineMetrics:
     def test_positions_counted(self):
         src = _make_source([_real_game_record("g0", offset=0), _real_game_record("g1", offset=5)])
-        buf = RustReplayBuffer(capacity=1000)
+        buf = ReplayBuffer(capacity=1000)
         metrics = CorpusMetrics()
         pipe = CorpusPipeline([src], buf, metrics=metrics)
         pipe.run()
@@ -138,7 +138,7 @@ class TestCorpusPipelineMetrics:
         rec = _real_game_record("g0")
         rec.metadata["colony_bug_at_handoff"] = True
         src = _make_source([rec])
-        buf = RustReplayBuffer(capacity=1000)
+        buf = ReplayBuffer(capacity=1000)
         metrics = CorpusMetrics()
         pipe = CorpusPipeline([src], buf, metrics=metrics)
         pipe.run()
@@ -148,7 +148,7 @@ class TestCorpusPipelineMetrics:
         rec = _real_game_record("g0", winner=1)
         rec.metadata["human_winner"] = -1  # flip: human says P2 won, hybrid says P1
         src = _make_source([rec])
-        buf = RustReplayBuffer(capacity=1000)
+        buf = ReplayBuffer(capacity=1000)
         metrics = CorpusMetrics()
         pipe = CorpusPipeline([src], buf, metrics=metrics)
         pipe.run()

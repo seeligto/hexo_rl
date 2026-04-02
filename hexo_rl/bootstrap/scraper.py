@@ -154,7 +154,7 @@ def scrape_hexo_did(
                     if not game_details.get('gameOptions', {}).get('rated'):
                         continue
                     if 'moves' in game_details:
-                        # site (x,y) == native_core (q,r) — pointy-top axial, no conversion
+                        # site (x,y) == engine (q,r) — pointy-top axial, no conversion
                         moves = [(m['x'], m['y']) for m in game_details['moves']]
                         all_game_moves.append(moves)
                         cached_count += 1
@@ -194,7 +194,7 @@ def scrape_hexo_did(
             game_id = game['id']
             game_details = scraper.fetch_game_details(game_id)
             if game_details and 'moves' in game_details:
-                # site (x,y) == native_core (q,r) — pointy-top axial, no conversion
+                # site (x,y) == engine (q,r) — pointy-top axial, no conversion
                 moves = [(move['x'], move['y']) for move in game_details['moves']]
                 all_game_moves.append(moves)
                 fetched_ids.append(game_id)

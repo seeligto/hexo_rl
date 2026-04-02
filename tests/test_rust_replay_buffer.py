@@ -1,5 +1,5 @@
 """
-Tests and benchmark for RustReplayBuffer.
+Tests and benchmark for ReplayBuffer.
 
 Run with: pytest tests/test_rust_replay_buffer.py -v
 Benchmark: pytest tests/test_rust_replay_buffer.py -v -k benchmark -s
@@ -11,7 +11,7 @@ import time
 import numpy as np
 import pytest
 
-from engine import RustReplayBuffer
+from engine import ReplayBuffer
 
 CHANNELS   = 18
 BOARD_SIZE = 19
@@ -20,8 +20,8 @@ N_ACTIONS  = BOARD_SIZE * BOARD_SIZE + 1  # 362
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def make_buf(capacity: int = 100) -> RustReplayBuffer:
-    return RustReplayBuffer(capacity)
+def make_buf(capacity: int = 100) -> ReplayBuffer:
+    return ReplayBuffer(capacity)
 
 
 def random_state() -> np.ndarray:
@@ -38,7 +38,7 @@ def random_entry() -> tuple:
     return random_state(), random_policy(), float(np.random.choice([-1.0, 0.0, 1.0]))
 
 
-def push_n(buf: RustReplayBuffer, n: int, use_game_id: bool = False) -> None:
+def push_n(buf: ReplayBuffer, n: int, use_game_id: bool = False) -> None:
     for _ in range(n):
         gid = buf.next_game_id() if use_game_id else -1
         s, p, o = random_entry()
@@ -143,7 +143,7 @@ def test_sample_no_augment_content_roundtrip():
 
 def test_identity_symmetry_preserves_data():
     """Symmetry 0 (identity) must return the exact original values."""
-    buf = RustReplayBuffer(10)
+    buf = ReplayBuffer(10)
 
     # Place a known state: all zeros except plane 0, cell (0,0) = 1.0
     state = np.zeros((CHANNELS, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
@@ -161,7 +161,7 @@ def test_identity_symmetry_preserves_data():
 
 def test_pass_action_invariant_under_augmentation():
     """The pass action (index 361) must be unchanged by every symmetry."""
-    buf = RustReplayBuffer(50)
+    buf = ReplayBuffer(50)
     rng = np.random.default_rng(42)
 
     for _ in range(20):
@@ -180,7 +180,7 @@ def test_pass_action_invariant_under_augmentation():
 
 def test_policy_sum_preserved_under_augmentation():
     """Spatial policy logits must sum to the same value before and after augmentation."""
-    buf = RustReplayBuffer(50)
+    buf = ReplayBuffer(50)
     rng = np.random.default_rng(0)
 
     original_sums = []
@@ -202,7 +202,7 @@ def test_policy_sum_preserved_under_augmentation():
 
 def test_correlation_guard_no_duplicate_game_ids():
     """With enough distinct positions, no batch should contain two entries from the same position."""
-    buf = RustReplayBuffer(2000)
+    buf = ReplayBuffer(2000)
     # Push 500 positions, each with 3 clusters (same game_id).
     for _ in range(500):
         gid = buf.next_game_id()
@@ -300,7 +300,7 @@ def test_resize_full_head_zero():
 
 def test_resize_content_roundtrip():
     """Verify specific outcomes survive resize through wrap-around."""
-    buf = RustReplayBuffer(5)
+    buf = ReplayBuffer(5)
     # Push outcomes 0..7. Entries 0-2 overwritten by 5-7.
     for i in range(8):
         s = random_state()
@@ -332,7 +332,7 @@ def test_benchmark_sample_latency(capsys):
     WARMUP     = 10
     N_ITERS    = 200
 
-    rust_buf = RustReplayBuffer(CAPACITY)
+    rust_buf = ReplayBuffer(CAPACITY)
     batch_s  = np.random.randn(1000, CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
     batch_p  = np.abs(np.random.randn(1000, N_ACTIONS).astype(np.float32))
     batch_p /= batch_p.sum(axis=1, keepdims=True)
@@ -351,7 +351,7 @@ def test_benchmark_sample_latency(capsys):
 
     with capsys.disabled():
         print(f"\n{'─'*56}")
-        print(f"  RustReplayBuffer sample_batch benchmark  (batch={BATCH})")
+        print(f"  ReplayBuffer sample_batch benchmark  (batch={BATCH})")
         print(f"{'─'*56}")
         print(f"  {rust_ms:.3f} ms/batch  ({rust_ms/BATCH*1000:.2f} µs/sample)")
         print(f"{'─'*56}\n")
