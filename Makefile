@@ -21,6 +21,28 @@ SEALBOT_SIMS ?= 128
 help: ## Show all useful commands
 	@grep -E '^[a-zA-Z0-9_.-]+:.*##' Makefile | sort | awk 'BEGIN {FS = ":.*## "; printf "\nUsage: make <target>\n\nTargets:\n"} {printf "  %-30s %s\n", $$1, $$2}'; echo
 
+.PHONY: install
+install: ## Full first-time setup: venv → deps → submodules → SealBot → native_core → test.all
+	@echo "==> Creating virtualenv..."
+	python3 -m venv .venv
+	@echo "==> Upgrading pip and installing maturin + pybind11..."
+	$(PIP) install --upgrade pip maturin pybind11
+	@echo "==> Installing Python dependencies..."
+	$(PIP) install -r requirements.txt
+	@echo "==> Initialising git submodules..."
+	git submodule update --init --recursive
+	@echo "==> Building SealBot C++ extensions..."
+	cd vendor/bots/sealbot/best    && $(PY) setup.py build_ext --inplace --quiet
+	cd vendor/bots/sealbot/current && $(PY) setup.py build_ext --inplace --quiet
+	@echo "==> Building native_core Rust extension..."
+	$(MATURIN) develop --release -m native_core/Cargo.toml
+	@echo "==> Verifying environment..."
+	$(MAKE) env.check
+	@echo "==> Running full test suite..."
+	$(MAKE) test.all
+	@echo ""
+	@echo "Install complete. Run 'make corpus.scrape' to fetch the latest games."
+
 .PHONY: env.check
 env.check: ## Check virtualenv/python/native_core availability
 	@test -x "$(PY)" || (echo "Missing $(PY). Create venv first." && exit 1)
@@ -186,6 +208,10 @@ pretrain.full: ## Full bootstrap pretrain (15 epochs)
 
 CORPUS_DEPTH4_N ?= 2000
 CORPUS_DEPTH6_N ?= 1000
+
+.PHONY: corpus.scrape
+corpus.scrape: ## Scrape latest human games from [site-redacted] and update manifest
+	bash scripts/scrape_daily.sh
 
 .PHONY: corpus.d4
 corpus.d4: ## Generate SealBot depth-4 self-play corpus (CORPUS_DEPTH4_N=2000)
