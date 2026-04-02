@@ -36,12 +36,19 @@ def _play_one_game(
     game_idx: int,
     rng_seed: int = 0,
     n_random_opening: int = 1,
+    use_human_seeding: bool = False,
+    human_corpus_dir: str | None = None,
+    human_seeding_min_move: int = 10,
+    human_seeding_max_move: int = 25,
 ) -> dict | None:
     """Play one self-play game using bot for both sides.
 
     To ensure opening diversity (deterministic bots like SealBot at fixed
     depth always play the same game otherwise), the first n_random_opening
     moves are random.  The bot takes over after that.
+
+    When use_human_seeding=True, the opening is instead drawn from a real
+    human game mid-position via sample_human_midgame_position().
 
     Returns a dict with keys: moves, winner, plies, bot_name.
     Returns None if the game ends without a winner (capped).
@@ -54,14 +61,41 @@ def _play_one_game(
 
     rng = random.Random(rng_seed + game_idx)
 
-    # Random opening moves for diversity
-    for _ in range(n_random_opening):
-        legal = board.legal_moves()
-        if not legal or board.check_win():
-            break
-        q, r = rng.choice(legal)
-        state = state.apply_move(board, q, r)
-        moves.append((q, r))
+    if use_human_seeding and human_corpus_dir:
+        # Try human-seeded opening; fall back to random on failure
+        try:
+            from hexo_rl.bootstrap.human_seeding import sample_human_midgame_position
+
+            opening_moves = sample_human_midgame_position(
+                corpus_dir=human_corpus_dir,
+                min_move=human_seeding_min_move,
+                max_move=human_seeding_max_move,
+                rng=rng,
+            )
+            for q, r in opening_moves:
+                if board.check_win() or board.legal_move_count() == 0:
+                    break
+                state = state.apply_move(board, q, r)
+                moves.append((q, r))
+        except (ValueError, Exception) as exc:
+            log.warning(
+                "human_seeding_fallback",
+                game=game_idx,
+                error=str(exc),
+                fallback="random_opening",
+            )
+            # Fall through to random opening below
+            use_human_seeding = False
+
+    if not use_human_seeding or not moves:
+        # Random opening moves for diversity (original behaviour)
+        for _ in range(n_random_opening):
+            legal = board.legal_moves()
+            if not legal or board.check_win():
+                break
+            q, r = rng.choice(legal)
+            state = state.apply_move(board, q, r)
+            moves.append((q, r))
 
     while not board.check_win() and board.legal_move_count() > 0 and len(moves) < MAX_MOVES_PER_GAME:
         try:
@@ -96,6 +130,10 @@ def generate_bot_games(
     output_dir: Path,
     rng_seed: int = 42,
     n_random_opening: int = 1,
+    use_human_seeding: bool = False,
+    human_corpus_dir: str | None = None,
+    human_seeding_min_move: int = 10,
+    human_seeding_max_move: int = 25,
 ) -> int:
     """Generate n_games unique self-play games and save to output_dir.
 
@@ -113,8 +151,14 @@ def generate_bot_games(
     t0 = time.monotonic()
 
     for i in range(n_games):
-        result = _play_one_game(bot, i, rng_seed=rng_seed,
-                                n_random_opening=n_random_opening)
+        result = _play_one_game(
+            bot, i, rng_seed=rng_seed,
+            n_random_opening=n_random_opening,
+            use_human_seeding=use_human_seeding,
+            human_corpus_dir=human_corpus_dir,
+            human_seeding_min_move=human_seeding_min_move,
+            human_seeding_max_move=human_seeding_max_move,
+        )
         if result is None:
             log.info("game_no_winner", game=i, status="skipped")
             continue
@@ -189,6 +233,17 @@ def _make_bot(bot_name: str, depth: int | None, time_limit: float | None) -> Bot
         raise ValueError(f"Unknown bot: {bot_name}")
 
 
+def _load_corpus_config() -> dict:
+    """Load corpus.yaml config, returning empty dict on failure."""
+    import yaml
+
+    config_path = Path("configs/corpus.yaml")
+    if config_path.exists():
+        with open(config_path) as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate bot self-play corpus")
     parser.add_argument("--bot", type=str, default="sealbot",
@@ -206,7 +261,13 @@ def main() -> None:
                         help="Random opening moves for diversity (default: auto by depth)")
     parser.add_argument("--seed", type=int, default=42,
                         help="RNG seed")
+    parser.add_argument("--human-seeding", action="store_true", default=None,
+                        help="Use human game positions as openings (overrides config)")
+    parser.add_argument("--no-human-seeding", action="store_true", default=False,
+                        help="Disable human seeding (overrides config)")
     args = parser.parse_args()
+
+    cfg = _load_corpus_config()
 
     bot = _make_bot(args.bot, args.depth, args.time_limit)
 
@@ -218,8 +279,21 @@ def main() -> None:
     else:
         n_random = 3  # d6 also needs 3 random moves to avoid dupe games
 
+    # Human seeding: CLI flags override config
+    if args.no_human_seeding:
+        use_human_seeding = False
+    elif args.human_seeding is not None:
+        use_human_seeding = args.human_seeding
+    else:
+        use_human_seeding = cfg.get("use_human_seeding", False)
+
+    human_corpus_dir = str(RAW_HUMAN_DIR)
+    human_seeding_min_move = cfg.get("human_seeding_min_move", 10)
+    human_seeding_max_move = cfg.get("human_seeding_max_move", 25)
+
     log.info("bot_created", name=bot.name(), depth=args.depth,
-             time_limit=args.time_limit, random_opening=n_random)
+             time_limit=args.time_limit, random_opening=n_random,
+             human_seeding=use_human_seeding)
 
     if args.output:
         output = Path(args.output)
@@ -227,8 +301,14 @@ def main() -> None:
         suffix = f"d{args.depth}" if args.depth else f"t{args.time_limit or 'default'}"
         output = BOT_GAMES_DIR / f"{args.bot}_{suffix}"
 
-    generate_bot_games(bot, args.n_games, output, rng_seed=args.seed,
-                       n_random_opening=n_random)
+    generate_bot_games(
+        bot, args.n_games, output, rng_seed=args.seed,
+        n_random_opening=n_random,
+        use_human_seeding=use_human_seeding,
+        human_corpus_dir=human_corpus_dir,
+        human_seeding_min_move=human_seeding_min_move,
+        human_seeding_max_move=human_seeding_max_move,
+    )
 
 
 if __name__ == "__main__":
