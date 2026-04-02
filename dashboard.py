@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import statistics
 import threading
 import time
+from collections import deque
 from datetime import datetime as _dt
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -111,6 +113,9 @@ class DataStore:
         self.gamelength_history: List[dict] = []
         # Speed history
         self.speed_history: List[dict] = []
+        # Rolling game-length deque (compound moves, maxlen=200) for median
+        self._game_length_deque: deque = deque(maxlen=200)
+        self._game_length_median: Optional[int] = None
         # Aggregate stats
         self.current_iteration: int = 0
         self.current_elo: float = 1000.0
@@ -230,7 +235,15 @@ class DataStore:
                 "positions_hr": latest.get("positions_hr"),
                 "buffer_size": latest.get("buffer_size", 0),
                 "self_play_time": latest.get("self_play_time", 0),
+                "game_length_median": self._game_length_median,
             }
+
+    def record_game_length(self, compound_moves: int) -> None:
+        """Thread-safe: append a compound move count and refresh cached median."""
+        with self._lock:
+            self._game_length_deque.append(compound_moves)
+            data = sorted(self._game_length_deque)
+            self._game_length_median = int(statistics.median(data)) if data else None
 
     def get_elo_history(self) -> List[dict]:
         with self._lock:
@@ -1278,7 +1291,17 @@ class LogPoller:
             self._dash.socketio.emit("stats_update", self._dash.store.get_stats())
 
     def _ingest(self, entry: dict) -> bool:
-        if entry.get("event") != "train_step":
+        event = entry.get("event")
+        if event == "game_complete":
+            gl = entry.get("game_length")
+            if gl is None:
+                plies = entry.get("plies", 0)
+                if plies > 0:
+                    gl = (plies + 1) // 2
+            if gl and gl > 0:
+                self._dash.store.record_game_length(int(gl))
+            return True
+        if event != "train_step":
             return False
         step = entry.get("step", 0)
         wins = [
