@@ -31,6 +31,7 @@ from hexo_rl.monitoring.dashboard import (
     Phase40Dashboard,
     _EvalDBReader,
     _LogReader,
+    _SELF_PLAY_THRESHOLD,
     _build_buffer_panel,
     _build_decay_panel,
     _build_eval_panel,
@@ -298,7 +299,51 @@ def test_eval_panel_no_db(tmp_path: Path) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_decay_panel_formula() -> None:
-    """Decay panel must display the correct pretrained_weight at step 0 and 1M."""
+    """Decay panel must display the correct pretrained_weight when live_weight provided."""
+    config = {
+        "training": {
+            "mixing": {
+                "decay_steps": 1_000_000,
+                "min_pretrained_weight": 0.1,
+                "initial_pretrained_weight": 0.8,
+            }
+        }
+    }
+
+    # Provide live_weight=0.8 explicitly → should appear in rendered output
+    panel_0 = _build_decay_panel(config, current_step=0, live_weight=0.8)
+    rendered_0 = _render(panel_0)
+    assert "0.8000" in rendered_0
+
+    # Provide live_weight at ~step 1M value
+    import math
+    expected = max(0.1, 0.8 * math.exp(-1.0))
+    panel_1m = _build_decay_panel(config, current_step=1_000_000, live_weight=expected)
+    rendered_1m = _render(panel_1m)
+    assert f"{expected:.4f}" in rendered_1m
+
+
+def test_decay_panel_cold_start_shows_dash() -> None:
+    """When live_weight is None (cold start), panel must show '–' not 0.0000."""
+    config = {
+        "training": {
+            "mixing": {
+                "decay_steps": 1_000_000,
+                "min_pretrained_weight": 0.1,
+                "initial_pretrained_weight": 0.8,
+            }
+        }
+    }
+    # No live_weight → cold start
+    panel = _build_decay_panel(config, current_step=0)
+    rendered = _render(panel)
+    # Must show "–" for the live value, not "0.0000"
+    assert "–" in rendered
+    assert "0.0000" not in rendered
+
+
+def test_decay_panel_projection_formula() -> None:
+    """Projection step must match the analytic formula for the 0.05 threshold."""
     import math
 
     config = {
@@ -310,17 +355,60 @@ def test_decay_panel_formula() -> None:
             }
         }
     }
+    # Expected step: -1e6 * ln(0.05 / 0.8) = -1e6 * ln(0.0625) ≈ 2_772_589
+    expected_step = int(-1_000_000 * math.log(_SELF_PLAY_THRESHOLD / 0.8))
 
-    # Step 0: weight = 0.8
-    panel_0 = _build_decay_panel(config, current_step=0)
-    rendered_0 = _render(panel_0)
-    assert "0.8000" in rendered_0
+    panel = _build_decay_panel(config, current_step=0, live_weight=0.8)
+    rendered = _render(panel)
+    # The projected step should appear in the rendered output
+    assert str(expected_step) in rendered.replace(",", "")
 
-    # Step 1_000_000: weight ≈ max(0.1, 0.8 * exp(-1)) ≈ 0.2943
-    expected = max(0.1, 0.8 * math.exp(-1.0))
-    panel_1m = _build_decay_panel(config, current_step=1_000_000)
-    rendered_1m = _render(panel_1m)
-    assert f"{expected:.4f}" in rendered_1m
+
+def test_log_reader_captures_pretrained_weight(tmp_path: Path) -> None:
+    """_LogReader must capture pretrained_weight and games_per_hour from train_step."""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+
+    entries = [
+        {
+            "event": "train_step",
+            "step": 1000,
+            "policy_loss": 0.4,
+            "value_loss": 0.1,
+            "pretrained_weight": 0.7654,
+            "games_per_hour": 12345.6,
+        },
+    ]
+    _write_log(log_dir, entries)
+
+    reader = _LogReader(log_dir)
+    reader.poll()
+
+    assert reader.pretrained_weight is not None
+    assert abs(reader.pretrained_weight - 0.7654) < 1e-6
+    assert reader.games_per_hour is not None
+    assert abs(reader.games_per_hour - 12345.6) < 0.1
+
+
+def test_decay_panel_time_estimate(tmp_path: Path) -> None:
+    """When games_per_hour is provided, panel should show a time estimate."""
+    config = {
+        "training": {
+            "mixing": {
+                "decay_steps": 1_000_000,
+                "min_pretrained_weight": 0.1,
+                "initial_pretrained_weight": 0.8,
+            },
+            "training_steps_per_game": 2.0,
+        }
+    }
+    # 10_000 games/hr × 2 steps/game = 20_000 steps/hr
+    panel = _build_decay_panel(
+        config, current_step=0, live_weight=0.8, games_per_hour=10_000.0
+    )
+    rendered = _render(panel)
+    # Time estimate must appear and NOT be "–"
+    assert "h " in rendered and "m" in rendered
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -606,6 +606,7 @@ def main() -> None:
                             gpu_util=gpu_monitor.gpu_util_pct,
                             x_winrate=round(float(pool.x_winrate), 3),
                             o_winrate=round(float(pool.o_winrate), 3),
+                            pretrained_weight=round(w_pre, 4),
                         )
 
                     if dashboard is not None:
