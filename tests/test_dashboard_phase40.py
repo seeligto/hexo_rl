@@ -26,7 +26,7 @@ import numpy as np
 import pytest
 from rich.console import Console
 
-from hexo_rl.logging.dashboard import (
+from hexo_rl.monitoring.dashboard import (
     BUCKET_WEIGHTS,
     Phase40Dashboard,
     _EvalDBReader,
