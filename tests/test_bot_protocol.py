@@ -7,10 +7,10 @@ checkpoint.
 
 import pytest
 from engine import Board
-from python.env import GameState
-from python.bootstrap.bot_protocol import BotProtocol
-from python.bootstrap.bots.random_bot import RandomBot
-from python.bootstrap.bots.sealbot_bot import SealBotBot
+from hexo_rl.env import GameState
+from hexo_rl.bootstrap.bot_protocol import BotProtocol
+from hexo_rl.bootstrap.bots.random_bot import RandomBot
+from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
 
 
 # ── BotProtocol ABC ───────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ Run with: .venv/bin/pytest tests/test_network.py -v
 """
 import pytest
 import torch
-from python.model.network import HexTacToeNet, compile_model
+from hexo_rl.model.network import HexTacToeNet, compile_model
 
 
 def make_net(board_size: int = 9, filters: int = 32, res_blocks: int = 2) -> HexTacToeNet:

@@ -18,8 +18,8 @@ import numpy as np
 import pytest
 import torch
 
-from python.model.network import HexTacToeNet
-from python.selfplay.inference_server import InferenceServer
+from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.selfplay.inference_server import InferenceServer
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

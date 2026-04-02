@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Iterator
 
 import pytest
-from python.corpus.sources.base import CorpusSource, GameRecord
-from python.corpus.sources.hybrid_game_source import HybridGameSource
-from python.bootstrap.bots.random_bot import RandomBot
+from hexo_rl.corpus.sources.base import CorpusSource, GameRecord
+from hexo_rl.corpus.sources.hybrid_game_source import HybridGameSource
+from hexo_rl.bootstrap.bots.random_bot import RandomBot
 
 
 # ---------------------------------------------------------------------------

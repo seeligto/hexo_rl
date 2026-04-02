@@ -6,14 +6,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from python.eval.colony_detection import (
+from hexo_rl.eval.colony_detection import (
     _axial_distance,
     _connected_components,
     is_colony_win,
 )
-from python.eval.eval_pipeline import EvalPipeline, _binomial_ci
-from python.eval.evaluator import EvalResult
-from python.eval.results_db import ResultsDB
+from hexo_rl.eval.eval_pipeline import EvalPipeline, _binomial_ci
+from hexo_rl.eval.evaluator import EvalResult
+from hexo_rl.eval.results_db import ResultsDB
 
 
 # ── Binomial CI ──────────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ def test_pipeline_db_created(pipeline: EvalPipeline, tmp_path: Path) -> None:
     assert Path(pipeline.db._conn.execute("PRAGMA database_list").fetchone()[2]).exists()
 
 
-@patch("python.eval.eval_pipeline.Evaluator")
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
 def test_run_evaluation_stores_results(
     mock_evaluator_cls: MagicMock,
     pipeline: EvalPipeline,
@@ -105,7 +105,7 @@ def test_run_evaluation_stores_results(
     assert len(pairs) >= 2  # random + best
 
 
-@patch("python.eval.eval_pipeline.Evaluator")
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
 def test_no_promotion_below_threshold(
     mock_evaluator_cls: MagicMock,
     pipeline: EvalPipeline,
@@ -119,7 +119,7 @@ def test_no_promotion_below_threshold(
     assert result["promoted"] is False
 
 
-@patch("python.eval.eval_pipeline.Evaluator")
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
 def test_ratings_computed_after_eval(
     mock_evaluator_cls: MagicMock,
     pipeline: EvalPipeline,
@@ -134,7 +134,7 @@ def test_ratings_computed_after_eval(
     assert len(result["ratings"]) >= 2
 
 
-@patch("python.eval.eval_pipeline.Evaluator")
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
 def test_no_best_model_skips_gating(
     mock_evaluator_cls: MagicMock,
     pipeline: EvalPipeline,

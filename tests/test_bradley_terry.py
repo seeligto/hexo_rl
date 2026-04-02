@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from python.eval.bradley_terry import compute_ratings
+from hexo_rl.eval.bradley_terry import compute_ratings
 
 
 def test_empty_pairwise_returns_empty() -> None:

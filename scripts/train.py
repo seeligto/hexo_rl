@@ -39,13 +39,13 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from python.logging.dashboard import TrainingDashboard
-from python.logging.gpu_monitor import GPUMonitor
-from python.logging.setup import configure_logging
-from python.model.network import HexTacToeNet
+from hexo_rl.logging.dashboard import TrainingDashboard
+from hexo_rl.logging.gpu_monitor import GPUMonitor
+from hexo_rl.logging.setup import configure_logging
+from hexo_rl.model.network import HexTacToeNet
 from engine import RustReplayBuffer
-from python.training.trainer import Trainer
-from python.training.dashboard_utils import DashboardClient
+from hexo_rl.training.trainer import Trainer
+from hexo_rl.training.dashboard_utils import DashboardClient
 
 
 # ── Seeding ───────────────────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ def main() -> None:
     args = parse_args()
 
     # ── Load config ──
-    from python.utils.config import load_config
+    from hexo_rl.utils.config import load_config
     config = load_config(args.config)
 
     # ── Logging ──
@@ -259,8 +259,8 @@ def main() -> None:
         return max(mixing_min_w, mixing_initial_w * math.exp(-step / mixing_decay_steps))
 
     # ── Self-play pool ──
-    from python.selfplay.pool import WorkerPool
-    from python.eval.eval_pipeline import EvalPipeline
+    from hexo_rl.selfplay.pool import WorkerPool
+    from hexo_rl.eval.eval_pipeline import EvalPipeline
 
     pool = WorkerPool(trainer.model, config, device, buffer)
 

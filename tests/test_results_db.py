@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from python.eval.results_db import ResultsDB
+from hexo_rl.eval.results_db import ResultsDB
 
 
 @pytest.fixture
