@@ -4,7 +4,7 @@ Structlog configuration for Hex Tac Toe AlphaZero.
 Phase 2: JSON logs to file + pretty console output via rich.
 
 Usage:
-    from hexo_rl.logging.setup import configure_logging
+    from hexo_rl.monitoring.configure import configure_logging
     log = configure_logging(log_dir="logs", run_name="phase2_train")
     log.info("train_step", iteration=1, policy_loss=0.4, value_loss=0.1)
 """
