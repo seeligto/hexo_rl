@@ -29,7 +29,7 @@ mkdir -p "${CACHE_DIR}"
 before=$(find "${CACHE_DIR}" -maxdepth 1 -name "*.json" | wc -l)
 
 # Run scraper; structlog JSON goes to stderr, summary line goes to stdout
-scraper_output=$(python python/bootstrap/scraper.py --pages 5 --page-size 99 2>/dev/null)
+scraper_output=$(python -m hexo_rl.bootstrap.scraper --pages 5 --page-size 99 2>/dev/null)
 
 # Count cached UUIDs after run
 after=$(find "${CACHE_DIR}" -maxdepth 1 -name "*.json" | wc -l)
