@@ -303,6 +303,8 @@ class Dashboard:
         self._replay_poller = GameReplayPoller(
             replay_dir="logs/replays", poll_interval_s=30.0, cache_cap=50
         )
+        self._corpus_cache: List[dict] = []
+        self._corpus_lock = threading.Lock()
         self._server_thread: Optional[threading.Thread] = None
         self._setup_routes()
         self._setup_socket_events()
@@ -458,6 +460,65 @@ class Dashboard:
             d = request.get_json(force=True)
             self.add_metric(**d)
             return jsonify({"ok": True})
+
+        # --- Corpus preview endpoints ---
+
+        @app.route("/api/reload-corpus", methods=["POST"])
+        def api_reload_corpus():
+            corpus_path = Path("/tmp/hexo_corpus_preview.jsonl")
+            if not corpus_path.exists():
+                return jsonify({"loaded": 0})
+            entries = []
+            for line in corpus_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+                if len(entries) >= 100:
+                    break
+            with self._corpus_lock:
+                self._corpus_cache = entries
+            return jsonify({"loaded": len(entries)})
+
+        @app.route("/api/corpus-replays")
+        def api_corpus_replays():
+            with self._corpus_lock:
+                games = list(self._corpus_cache)
+            return jsonify([
+                {
+                    "key": f"corpus:{g.get('game_id', i)}",
+                    "game_id": g.get("game_id", ""),
+                    "game_length": g.get("game_length", 0),
+                    "winner": g.get("outcome", "unknown"),
+                    "timestamp": g.get("timestamp", ""),
+                    "source": g.get("source", ""),
+                    "num_moves": len(g.get("moves", [])),
+                }
+                for i, g in enumerate(games)
+            ])
+
+        @app.route("/api/corpus-replays/<path:key>")
+        def api_corpus_replay_detail(key: str):
+            game_id = key.replace("corpus:", "", 1)
+            with self._corpus_lock:
+                match = next(
+                    (g for g in self._corpus_cache
+                     if g.get("game_id") == game_id),
+                    None,
+                )
+            if match is None:
+                return jsonify({"error": "not found"}), 404
+            return jsonify({
+                "game_id": match.get("game_id", ""),
+                "game_length": match.get("game_length", 0),
+                "winner": match.get("outcome", "unknown"),
+                "timestamp": match.get("timestamp", ""),
+                "source": match.get("source", ""),
+                "moves": match.get("moves", []),
+            })
 
     # -- Socket events --
 
@@ -650,6 +711,14 @@ footer{border-top:2px solid #000;font:11px 'SF Mono','Courier New',monospace;fle
       </div>
       <div class="chart-body" id="body-replays">
         <div id="replay-list" style="font-family:monospace;font-size:13px;padding:8px;max-height:200px;overflow-y:auto;">Loading...</div>
+      </div>
+    </div>
+    <div class="chart-box" id="box-corpus" style="display:none">
+      <div class="chart-header" onclick="toggleChart('corpus')">
+        <span class="toggle" id="tog-corpus">&#9660;</span> Corpus Games
+      </div>
+      <div class="chart-body" id="body-corpus">
+        <div id="corpus-list" style="font-family:monospace;font-size:13px;padding:8px;max-height:200px;overflow-y:auto;">No corpus games loaded</div>
       </div>
     </div>
   </div>
@@ -1277,6 +1346,35 @@ function viewReplay(key) {
 }
 fetchReplays();
 setInterval(fetchReplays, 30000);
+
+// ---------------------------------------------------------------------------
+// Corpus games polling
+// ---------------------------------------------------------------------------
+function fetchCorpusReplays() {
+  fetch('/api/corpus-replays').then(r => r.json()).then(games => {
+    const box = el('corpus-list');
+    const container = el('box-corpus');
+    if (!games.length) { container.style.display = 'none'; return; }
+    container.style.display = '';
+    box.innerHTML = games.map(g =>
+      '<div style="padding:2px 0;cursor:pointer" onclick="viewCorpusReplay(\'' + g.key + '\')">' +
+      (g.winner === 'x_win' ? 'X won' : g.winner === 'o_win' ? 'O won' : g.winner === 'draw' ? 'Draw' : '?') +
+      '  ' + g.game_length + ' moves' +
+      (g.source ? '  [' + g.source + ']' : '') +
+      '  ' + timeAgo(g.timestamp) +
+      '</div>'
+    ).join('');
+  }).catch(() => {});
+}
+function viewCorpusReplay(key) {
+  fetch('/api/corpus-replays/' + encodeURIComponent(key)).then(r => r.json()).then(g => {
+    if (g.error) { alert(g.error); return; }
+    const moves = (g.moves || []).map((m, i) => (i + 1) + '. (' + m[0] + ',' + m[1] + ')').join('\n');
+    alert(g.winner + ' in ' + g.game_length + ' moves [' + (g.source || '') + ']\n\n' + moves);
+  }).catch(() => {});
+}
+fetchCorpusReplays();
+setInterval(fetchCorpusReplays, 30000);
 </script>
 </body>
 </html>
