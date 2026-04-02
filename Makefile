@@ -31,8 +31,19 @@ deps.install: ## Install python deps into .venv
 	$(PIP) install -r requirements.txt
 
 .PHONY: native.build
-native.build: ## Build/install Rust extension via maturin
-	RUSTFLAGS="-C target-cpu=native" $(MATURIN) develop --release -m native_core/Cargo.toml
+native.build: ## Build/install Rust extension via maturin (LTO + native CPU — see .cargo/config.toml)
+	$(MATURIN) develop --release -m native_core/Cargo.toml
+
+.PHONY: clean
+clean: ## Remove all Rust build artifacts and Python caches
+	cargo clean
+	rm -rf .venv/lib/python*/site-packages/native_core*
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	@echo "Clean complete. Run 'make native.build' to rebuild."
+
+.PHONY: rebuild
+rebuild: clean native.build ## Full clean + optimized rebuild
+	@echo "Rebuild complete."
 
 .PHONY: test.py
 test.py: ## Run python test suite

@@ -1,3 +1,12 @@
 [workspace]
 members = ["native_core"]
 resolver = "2"
+
+[profile.release]
+lto = "fat"           # Full cross-crate LTO. MCTS calls board logic calls
+                      # Zobrist hashing across module boundaries — LTO inlines all of it.
+codegen-units = 1     # Single codegen unit = better optimization at cost of
+                      # compile time. We rebuild rarely.
+opt-level = 3         # Explicit; already default for release.
+panic = "abort"       # No unwinding overhead in the MCTS hot path.
+strip = "symbols"     # Smaller binary, slightly faster load. No debug info needed.

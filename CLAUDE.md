@@ -378,20 +378,20 @@ tests. Full training runs must always use `augment=True` (the default).
 > Run `make bench.full` to reproduce.
 > Full results: reports/benchmarks/
 
-Run `make bench.full`. Latest baseline (2026-04-01, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin):
+Run `make bench.full`. Latest baseline (2026-04-02, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU):
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 176,963 sim/s | ≥ 160,000 sim/s | Per-move throughput (800 sims/move × 62 iters), IQR 2.1% |
-| NN inference (batch=64) | 10,064 pos/s | ≥ 8,500 pos/s | GPU-bound, stable (IQR 0.2%) |
-| NN latency (batch=1, mean) | 1.50 ms | ≤ 2 ms | Stable (IQR ±0.04 ms) |
-| Replay buffer push | 745,523 pos/sec | ≥ 630,000 pos/sec | IQR ±94k (12.6%) |
-| Replay buffer sample raw (batch=256) | 1,040 µs/batch | ≤ 1,200 µs | Stable (IQR ±26 µs) |
-| Replay buffer sample augmented (batch=256) | 1,001 µs/batch | ≤ 1,200 µs | Stable (IQR ±35 µs) |
+| MCTS (CPU only, no NN) | 189,656 sim/s | ≥ 160,000 sim/s | Per-move throughput (800 sims/move × 62 iters), IQR 0.5% |
+| NN inference (batch=64) | 10,080 pos/s | ≥ 8,500 pos/s | GPU-bound, stable (IQR 0.1%) |
+| NN latency (batch=1, mean) | 1.52 ms | ≤ 2 ms | Stable (IQR ±0.02 ms) |
+| Replay buffer push | 905,697 pos/sec | ≥ 630,000 pos/sec | IQR ±33k (3.7%) |
+| Replay buffer sample raw (batch=256) | 1,000 µs/batch | ≤ 1,200 µs | Stable (IQR ±3 µs) |
+| Replay buffer sample augmented (batch=256) | 949 µs/batch | ≤ 1,200 µs | Stable (IQR ±27 µs) |
 | GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
-| VRAM usage | 0.77 GB / 8.6 GB | ≤ 80% | Kept |
-| Worker throughput | 1,522,127 pos/hr | ≥ 1,290,000 pos/hr | Stable (IQR ±21k, 1.4%) |
-| Batch fill % | 99.4% | ≥ 84% | Stable (IQR ±0.01%) |
+| VRAM usage | 0.78 GB / 8.6 GB | ≤ 80% | Kept |
+| Worker throughput | 1,177,745 pos/hr | ≥ 1,000,000 pos/hr | IQR ±12k (1.0%); ~23% lower than Apr-01 baseline due to forced-win detection removal (fc9eb6f) — intentional correctness fix |
+| Batch fill % | 99.82% | ≥ 84% | Stable (IQR ±0.01%) |
 
 Historical variance note: before the warm-up/n=5/pinning methodology, single-run
 benchmarks showed ±50% swings due to LLVM codegen lottery and AMD boost clocks.
