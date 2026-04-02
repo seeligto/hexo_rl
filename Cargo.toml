@@ -1,5 +1,5 @@
 [workspace]
-members = ["native_core"]
+members = ["engine"]
 resolver = "2"
 
 [profile.release]

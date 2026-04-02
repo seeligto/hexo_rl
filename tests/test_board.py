@@ -5,7 +5,7 @@ Run with: pytest tests/test_board.py -v
 """
 import pytest
 import numpy as np
-from native_core import Board
+from engine import Board
 
 
 # ── Basic construction ────────────────────────────────────────────────────────

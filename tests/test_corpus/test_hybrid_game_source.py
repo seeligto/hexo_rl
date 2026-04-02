@@ -47,7 +47,7 @@ def _long_game_moves(n: int = 60) -> list[tuple[int, int]]:
     Uses the 1-2-2 turn structure: P1 opens with 1 move, then both players play 2
     per turn, spiralling outwards from (0,0).
     """
-    from native_core import Board
+    from engine import Board
     board = Board()
     moves = []
     coords = [(q, r) for q in range(-5, 6) for r in range(-5, 6) if (q, r) != (0, 0)]

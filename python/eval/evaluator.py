@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
-from native_core import Board, MCTSTree
+from engine import Board, MCTSTree
 from python.bootstrap.bot_protocol import BotProtocol
 from python.env.game_state import GameState
 from python.eval.colony_detection import is_colony_win

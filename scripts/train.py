@@ -43,7 +43,7 @@ from python.logging.dashboard import TrainingDashboard
 from python.logging.gpu_monitor import GPUMonitor
 from python.logging.setup import configure_logging
 from python.model.network import HexTacToeNet
-from native_core import RustReplayBuffer
+from engine import RustReplayBuffer
 from python.training.trainer import Trainer
 from python.training.dashboard_utils import DashboardClient
 

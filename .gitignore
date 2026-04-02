@@ -16,7 +16,7 @@ venv/
 *.dylib
 
 # Maturin / PyO3 build outputs
-native_core/target/
+engine/target/
 *.pyi.bak
 
 # Rust
@@ -60,6 +60,6 @@ deploy/
 data/bootstrap_corpus.npz
 
 # Benchmark output
-native_core/benches/*.html
+engine/benches/*.html
 criterion/
 .torchinductor-cache/

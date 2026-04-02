@@ -8,7 +8,7 @@ from typing import List, Tuple
 import numpy as np
 import torch
 
-from native_core import Board
+from engine import Board
 from python.env.game_state import GameState
 from python.model.network import HexTacToeNet
 from python.selfplay.utils import BOARD_SIZE, N_ACTIONS

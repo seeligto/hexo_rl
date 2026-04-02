@@ -11,7 +11,7 @@ import time
 import numpy as np
 import pytest
 
-from native_core import RustReplayBuffer
+from engine import RustReplayBuffer
 
 CHANNELS   = 18
 BOARD_SIZE = 19

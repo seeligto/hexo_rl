@@ -5,7 +5,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque, List, Optional, Tuple
 import numpy as np
-from native_core import Board
+from engine import Board
 from python.utils.constants import BOARD_SIZE
 HISTORY_LEN: int = 8  # AlphaZero uses 8 timesteps (current + 7 prior)
 

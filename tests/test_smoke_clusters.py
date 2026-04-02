@@ -11,7 +11,7 @@ import torch
 import numpy as np
 from python.model.network import HexTacToeNet
 from python.env.game_state import GameState
-from native_core import Board
+from engine import Board
 
 
 @pytest.fixture

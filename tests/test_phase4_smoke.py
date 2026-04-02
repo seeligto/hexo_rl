@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import torch
 
-from native_core import RustReplayBuffer
+from engine import RustReplayBuffer
 
 CHANNELS = 18
 BOARD_SIZE = 19
@@ -188,7 +188,7 @@ def test_pretrained_weight_schedule():
 
 def test_runner_accepts_playout_cap_params():
     """RustSelfPlayRunner constructor accepts the new playout cap kwargs."""
-    from native_core import RustSelfPlayRunner
+    from engine import RustSelfPlayRunner
 
     runner = RustSelfPlayRunner(
         n_workers=1,

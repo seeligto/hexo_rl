@@ -1,6 +1,6 @@
 """Smoke tests for SealBotBot — no network access required."""
 
-from native_core import Board
+from engine import Board
 from python.env.game_state import GameState
 from python.bootstrap.bots.sealbot_bot import SealBotBot
 

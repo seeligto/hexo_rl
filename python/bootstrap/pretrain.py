@@ -30,7 +30,7 @@ import yaml
 import structlog
 from rich.console import Console
 
-from native_core import Board
+from engine import Board
 from python.bootstrap.dataset import replay_game_to_triples
 from python.bootstrap.generate_corpus import BOT_GAMES_DIR, RAW_HUMAN_DIR
 from python.env.game_state import GameState

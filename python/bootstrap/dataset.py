@@ -9,7 +9,7 @@ import torch
 import structlog
 from tqdm import tqdm
 
-from native_core import Board
+from engine import Board
 from python.env.game_state import GameState, BOARD_SIZE
 
 log = structlog.get_logger()

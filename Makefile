@@ -22,7 +22,7 @@ help: ## Show all useful commands
 	@grep -E '^[a-zA-Z0-9_.-]+:.*##' Makefile | sort | awk 'BEGIN {FS = ":.*## "; printf "\nUsage: make <target>\n\nTargets:\n"} {printf "  %-30s %s\n", $$1, $$2}'; echo
 
 .PHONY: install
-install: ## Full first-time setup: venv → deps → submodules → SealBot → native_core → test.all
+install: ## Full first-time setup: venv → deps → submodules → SealBot → engine → test.all
 	@echo "==> Creating virtualenv..."
 	python3 -m venv .venv
 	@echo "==> Upgrading pip and installing maturin + pybind11..."
@@ -34,8 +34,8 @@ install: ## Full first-time setup: venv → deps → submodules → SealBot → 
 	@echo "==> Building SealBot C++ extensions..."
 	cd vendor/bots/sealbot/best    && $(PY) setup.py build_ext --inplace --quiet
 	cd vendor/bots/sealbot/current && $(PY) setup.py build_ext --inplace --quiet
-	@echo "==> Building native_core Rust extension..."
-	$(MATURIN) develop --release -m native_core/Cargo.toml
+	@echo "==> Building engine Rust extension..."
+	$(MATURIN) develop --release -m engine/Cargo.toml
 	@echo "==> Verifying environment..."
 	$(MAKE) env.check
 	@echo "==> Running full test suite..."
@@ -44,9 +44,9 @@ install: ## Full first-time setup: venv → deps → submodules → SealBot → 
 	@echo "Install complete. Run 'make corpus.scrape' to fetch the latest games."
 
 .PHONY: env.check
-env.check: ## Check virtualenv/python/native_core availability
+env.check: ## Check virtualenv/python/engine availability
 	@test -x "$(PY)" || (echo "Missing $(PY). Create venv first." && exit 1)
-	@$(PY) -c "from native_core import Board, MCTSTree; print('native_core ok')"
+	@$(PY) -c "from engine import Board, MCTSTree; print('engine ok')"
 
 .PHONY: deps.install
 deps.install: ## Install python deps into .venv
@@ -54,12 +54,12 @@ deps.install: ## Install python deps into .venv
 
 .PHONY: native.build
 native.build: ## Build/install Rust extension via maturin (LTO + native CPU — see .cargo/config.toml)
-	$(MATURIN) develop --release -m native_core/Cargo.toml
+	$(MATURIN) develop --release -m engine/Cargo.toml
 
 .PHONY: clean
 clean: ## Remove all Rust build artifacts and Python caches
 	cargo clean
-	rm -rf .venv/lib/python*/site-packages/native_core*
+	rm -rf .venv/lib/python*/site-packages/engine*
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	@echo "Clean complete. Run 'make native.build' to rebuild."
 

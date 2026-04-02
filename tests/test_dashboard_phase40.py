@@ -324,12 +324,12 @@ def test_decay_panel_formula() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test 9 — get_buffer_stats via PyO3 round-trip (requires native_core build)
+# Test 9 — get_buffer_stats via PyO3 round-trip (requires engine build)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_get_buffer_stats_via_pyo3() -> None:
     """RustReplayBuffer.get_buffer_stats() must return the correct tuple."""
-    from native_core import RustReplayBuffer
+    from engine import RustReplayBuffer
 
     buf = RustReplayBuffer(capacity=500)
     size, capacity, histogram = buf.get_buffer_stats()
@@ -362,7 +362,7 @@ def test_get_buffer_stats_via_pyo3() -> None:
 
 def test_get_buffer_stats_with_weight_schedule() -> None:
     """Bucket counts must reflect the weight schedule after set_weight_schedule()."""
-    from native_core import RustReplayBuffer
+    from engine import RustReplayBuffer
 
     buf = RustReplayBuffer(capacity=500)
     buf.set_weight_schedule(
@@ -399,7 +399,7 @@ def test_get_buffer_stats_with_weight_schedule() -> None:
 
 def test_get_buffer_stats_overwrite_updates_buckets() -> None:
     """When the ring wraps, overwritten positions must be removed from histogram."""
-    from native_core import RustReplayBuffer
+    from engine import RustReplayBuffer
 
     buf = RustReplayBuffer(capacity=4)
     buf.set_weight_schedule(

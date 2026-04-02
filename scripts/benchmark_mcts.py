@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
 import torch
 import time
 import numpy as np
-from native_core import Board
+from engine import Board
 from python.model.network import HexTacToeNet
 from python.selfplay.worker import SelfPlayWorker
 

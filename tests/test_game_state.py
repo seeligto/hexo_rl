@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from native_core import Board
+from engine import Board
 from python.env.game_state import GameState
 
 def test_from_board_initial():

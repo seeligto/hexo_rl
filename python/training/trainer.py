@@ -40,7 +40,7 @@ from python.training.checkpoints import (
     save_full_checkpoint, save_inference_weights, prune_checkpoints,
     normalize_model_state_dict_keys, get_base_model,
 )
-from native_core import RustReplayBuffer
+from engine import RustReplayBuffer
 
 log = structlog.get_logger()
 

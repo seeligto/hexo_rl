@@ -33,7 +33,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
-from native_core import Board
+from engine import Board
 from python.corpus.sources.base import GameRecord
 from python.corpus.sources.human_game_source import HumanGameSource
 from python.env.game_state import GameState
