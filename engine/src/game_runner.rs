@@ -36,9 +36,10 @@ pub struct SelfPlayRunner {
     o_wins: Arc<AtomicU64>,
     draws: Arc<AtomicU64>,
     results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32)>>>,
-    /// Ring-buffer of recent (plies, winner_code) pairs for Python logging.
+    /// Ring-buffer of recent (plies, winner_code, move_history) triples for Python logging.
     /// winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
-    recent_game_results: Arc<Mutex<VecDeque<(usize, u8)>>>,
+    /// move_history: sequence of (q, r) coordinates in play order.
+    recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>)>>>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
@@ -114,6 +115,7 @@ impl SelfPlayRunner {
                 while running.load(Ordering::SeqCst) {
                     let mut board = Board::new();
                     let mut records = Vec::new();
+                    let mut move_history: Vec<(i32, i32)> = Vec::new();
 
                     // KataGo-style playout cap randomisation.
                     let is_fast_game = fast_prob > 0.0 && rand::Rng::random::<f32>(&mut rng) < fast_prob;
@@ -239,6 +241,7 @@ impl SelfPlayRunner {
                         if board.apply_move(move_idx.0, move_idx.1).is_err() {
                             break;
                         }
+                        move_history.push((move_idx.0, move_idx.1));
                         positions_generated.fetch_add(1, Ordering::SeqCst);
                     }
 
@@ -264,10 +267,10 @@ impl SelfPlayRunner {
                         Some(_)                         => { o_wins.fetch_add(1, Ordering::Relaxed); }
                         None                            => { draws.fetch_add(1, Ordering::Relaxed); }
                     }
-                    // Record (plies, winner_code) for Python game_complete logging.
+                    // Record (plies, winner_code, move_history) for Python game_complete logging.
                     {
                         let mut rg = recent_game_results.lock().expect("recent_game_results lock poisoned");
-                        rg.push_back((plies, winner_code));
+                        rg.push_back((plies, winner_code, move_history));
                         // Cap at 2000 entries to avoid unbounded growth if Python is slow.
                         if rg.len() > 2000 {
                             rg.pop_front();
@@ -348,13 +351,13 @@ impl SelfPlayRunner {
         )
     }
 
-    /// Drain and return all buffered (plies, winner_code) pairs since the last call.
+    /// Drain and return all buffered (plies, winner_code, move_history) triples since the last call.
     /// winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
-    /// Called by Python pool._stats_loop() to emit game_complete structlog events.
-    pub fn drain_game_results(&self) -> Vec<(usize, u8)> {
+    /// move_history: sequence of (q, r) stone placements in play order.
+    /// Called by Python pool._stats_loop() to emit game_complete structlog events and record replays.
+    pub fn drain_game_results(&self) -> Vec<(usize, u8, Vec<(i32, i32)>)> {
         let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
-        let out: Vec<(usize, u8)> = rg.drain(..).collect();
-        out
+        rg.drain(..).collect()
     }
 }
 

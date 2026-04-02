@@ -16,6 +16,7 @@ import torch
 from engine import SelfPlayRunner  # type: ignore[attr-defined]
 
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.monitoring.game_recorder import GameRecorder
 from hexo_rl.selfplay.inference_server import InferenceServer
 from engine import ReplayBuffer
 
@@ -75,6 +76,13 @@ class WorkerPool:
         self.o_wins = 0
         self.draws = 0
 
+        gr_cfg = config.get("game_replay", {})
+        self._recorder = GameRecorder(
+            output_dir=gr_cfg.get("output_dir", "logs/replays"),
+            sample_rate=int(gr_cfg.get("sample_rate", 50)),
+            enabled=bool(gr_cfg.get("enabled", True)),
+        )
+
     @property
     def x_winrate(self) -> float:
         with self._lock:
@@ -91,6 +99,10 @@ class WorkerPool:
         with self._lock:
             self.model.load_state_dict(state_dict)
             self.model.eval()
+
+    def update_checkpoint_step(self, step: int) -> None:
+        """Forward the current training step to the game recorder."""
+        self._recorder.set_step(step)
 
     _WINNER_NAMES = ("draw", "x", "o")
 
@@ -112,9 +124,14 @@ class WorkerPool:
 
             # Emit one structlog game_complete event per completed game so
             # Phase40Dashboard._LogReader can populate the game-length panel.
-            for plies, winner_code in self._runner.drain_game_results():
+            for plies, winner_code, move_history in self._runner.drain_game_results():
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
                 log.info("game_complete", plies=plies, winner=winner)
+                self._recorder.maybe_record(
+                    moves=move_history,
+                    winner_code=winner_code,
+                    game_length=plies,
+                )
 
             time.sleep(0.1)
 
@@ -149,3 +166,5 @@ class WorkerPool:
         if self._stats_thread is not None:
             self._stats_thread.join(timeout=5.0)
             self._stats_thread = None
+
+        self._recorder.stop()

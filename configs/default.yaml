@@ -99,5 +99,13 @@ bootstrap:
   human_games_rated_only: true
   sealbot_time_mix: {0.03: 0.7, 0.1: 0.3}
 
+# Game replay recording
+game_replay:
+  enabled: true
+  sample_rate: 50       # record 1 in 50 games
+  output_dir: logs/replays
+  include_mcts_visits: false    # not yet implemented — requires Rust visit tracking
+  include_value_estimates: false  # not yet implemented — requires per-move root value export
+
 # Seed
 seed: 42
