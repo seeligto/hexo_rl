@@ -210,7 +210,7 @@ Main process
   │       ids, fused = batcher.next_inference_batch(B, wait_ms)
   │       log_policy, value = model(fused)
   │       batcher.submit_inference_results(ids, log_policy.exp(), value)
-  ├── RustSelfPlayRunner (N Rust threads)
+  ├── SelfPlayRunner (N Rust threads)
   │     Each worker thread:
   │       loop:
   │         game = new_game()
@@ -227,10 +227,10 @@ Main process
 
 The hot-path concurrency is Rust-owned (not Python multiprocessing). Python is responsible for the NN forward pass only, while Rust owns game-thread scheduling, request blocking, and wake-up semantics.
 
-### Replay buffer (Rust — RustReplayBuffer)
+### Replay buffer (Rust — ReplayBuffer)
 
 The replay buffer lives entirely in Rust and is exposed to Python via PyO3.
-The Python `ReplayBuffer` class has been deleted; `RustReplayBuffer` is the only buffer.
+The Python `ReplayBuffer` class has been deleted; `ReplayBuffer` (from `engine`) is the only buffer.
 
 **Storage layout:**
 
@@ -248,9 +248,9 @@ The Python `ReplayBuffer` class has been deleted; `RustReplayBuffer` is the only
 **Python API:**
 
 ```python
-from native_core import RustReplayBuffer
+from engine import ReplayBuffer
 
-buf = RustReplayBuffer(capacity=500_000)
+buf = ReplayBuffer(capacity=500_000)
 buf.push(state_f16, policy_f32, outcome_f32, game_id)        # single position
 buf.push_game(states_f16, policies_f32, outcomes_f32, game_id)  # full game batch
 states, policies, outcomes = buf.sample_batch(batch_size, augment=True)
@@ -330,7 +330,7 @@ As Elo grows, periodically generate games against community members (via exporte
 ### Exposed API
 
 ```python
-from native_core import Board, MCTSTree, GameBenchmarks
+from engine import Board, MCTSTree
 
 # Board
 b = Board(size=19)
@@ -355,7 +355,7 @@ stats = GameBenchmarks.run_mcts_throughput(n_simulations=10_000)
 ### Build
 
 ```bash
-cd native_core
+cd engine
 cargo build --release
-maturin develop --release  # installs into current Python env
+maturin develop --release -m engine/Cargo.toml  # installs into current Python env
 ```

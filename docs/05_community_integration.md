@@ -272,7 +272,7 @@ FORMATION_REWARDS = {
 ### Formation detection in Rust
 
 ```rust
-// native_core/src/formations.rs
+// engine/src/formations/mod.rs
 // Called after each move — incremental scan from new piece only (community-confirmed pattern)
 
 pub struct FormationDetector;

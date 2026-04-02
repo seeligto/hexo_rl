@@ -19,18 +19,18 @@ There is an active human community with existing openings and strategies. The in
 ## Repository map
 
 ```txt
-hex_tac_toe_az/
-├── native_core/        Rust crate — MCTS tree, board logic, bitboards (hot paths)
-├── python/
+hexo_rl/
+├── engine/             Rust crate — MCTS tree, board logic, replay buffer (hot paths)
+├── hexo_rl/
 │   ├── model/          PyTorch ResNet + dual heads (policy + value)
 │   ├── selfplay/       Worker pool, batched GPU inference queue
-│   ├── training/       Training loop, NumPy replay buffer, loss functions
-│   ├── eval/           Tournament runner, Elo ladder
-│   ├── bootstrap/      Minimax bot integration, supervised pretraining
-│   ├── logging/        Structlog config, metrics writers, TensorBoard hooks
-│   └── bench/          Benchmarking harness (MCTS, inference, end-to-end)
+│   ├── training/       Training loop, loss functions, checkpoints
+│   ├── eval/           Tournament runner, Bradley-Terry Elo ladder
+│   ├── bootstrap/      Bot integration, supervised pretraining, scraper
+│   ├── monitoring/     Structlog config, metrics writers, GPU monitor
+│   └── corpus/         Corpus pipeline and metrics
 ├── configs/            YAML hyperparameter configs
-├── scripts/            CLI entrypoints (train.py, benchmark.py, watch_game.py)
+├── scripts/            CLI entrypoints (train.py, benchmark.py, eval_vs_sealbot.py)
 ├── docs/               These markdown files
 └── tests/
 ```
@@ -43,12 +43,12 @@ hex_tac_toe_az/
 |---|---|---|
 | MCTS tree traversal | **Rust** | Sequential pointer-chasing loop — Python is 30-100× too slow |
 | Board logic + win detection | **Rust** | Bitboard ops + 128-bit Zobrist hashing at call frequency of millions/sec |
-| Replay buffer | **Rust** (RustReplayBuffer) | f16-as-u16 ring buffer, 12-fold hex augmentation, zero-copy PyO3 transfer |
+| Replay buffer | **Rust** (ReplayBuffer) | f16-as-u16 ring buffer, 12-fold hex augmentation, zero-copy PyO3 transfer |
 | Neural network | **Python + PyTorch CUDA** | Already native speed via CUDA kernels — never rewrite |
 | Temporal tensor assembly | **Python + NumPy** | Stacks 2-plane cluster snapshots + `move_history` into `(18, 19, 19)` tensors |
 | Orchestration, training loop | **Python** | Runs ~once per second — Python speed is irrelevant here |
 
-Rust exposes its API to Python via **PyO3**. Import as: `from native_core import MCTSTree, Board, RustReplayBuffer`.
+Rust exposes its API to Python via **PyO3**. Import as: `from engine import MCTSTree, Board, ReplayBuffer, SelfPlayRunner, InferenceBatcher`.
 
 ---
 
@@ -78,7 +78,7 @@ Rust exposes its API to Python via **PyO3**. Import as: `from native_core import
 
 | File | Read when you need to... |
 |---|---|
-| `01_ARCHITECTURE.md` | Understand the full technical design of each component |
-| `02_ROADMAP.md` | Know which phase we're in and what the next milestone is |
-| `03_TOOLING.md` | Set up logging, benchmarking, progress display, dev environment |
-| `04_BOOTSTRAP_STRATEGY.md` | Understand the minimax pretraining pipeline and why it exists |
+| `01_architecture.md` | Understand the full technical design of each component |
+| `02_roadmap.md` | Know which phase we're in and what the next milestone is |
+| `03_tooling.md` | Set up logging, benchmarking, progress display, dev environment |
+| `04_bootstrap_strategy.md` | Understand the minimax pretraining pipeline and why it exists |

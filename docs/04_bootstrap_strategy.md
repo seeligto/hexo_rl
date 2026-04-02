@@ -44,7 +44,7 @@ This means any community bot implementing the API spec can be plugged into corpu
 or evaluation without additional code.
 
 ```python
-# python/bootstrap/bot_protocol.py
+# hexo_rl/bootstrap/bot_protocol.py
 from abc import ABC, abstractmethod
 
 class BotProtocol(ABC):
@@ -155,7 +155,7 @@ See `05_COMMUNITY_INTEGRATION.md` section 2 for the `SealBotBot` wrapper and rec
 The minimax evaluation function scores a board from the perspective of the current player:
 
 ```python
-# python/bootstrap/heuristic.py
+# hexo_rl/bootstrap/heuristic.py
 
 OPEN_RUN_SCORES = {
     # (run_length, open_ends): score
@@ -193,7 +193,7 @@ def find_runs(board, player: int, direction) -> list[tuple[int, int]]:
 ### Alpha-beta minimax
 
 ```python
-# python/bootstrap/minimax.py
+# hexo_rl/bootstrap/minimax.py
 import math
 
 class MinimaxBot:
@@ -264,7 +264,7 @@ Use a **mix**: 70% depth-3 games (quantity) + 30% depth-5 games (quality).
 ## Corpus generation
 
 ```python
-# python/bootstrap/generate_corpus.py
+# hexo_rl/bootstrap/generate_corpus.py
 import multiprocessing as mp
 from pathlib import Path
 import numpy as np
@@ -346,7 +346,7 @@ def generate_corpus(
 ## Supervised pretraining
 
 ```python
-# python/bootstrap/pretrain.py
+# hexo_rl/bootstrap/pretrain.py
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
@@ -454,9 +454,9 @@ The transition from pretraining to self-play is automatic:
 
 ```python
 # scripts/train.py (simplified)
-from python.bootstrap.pretrain import pretrain, validate_pretrained
-from python.bootstrap.generate_corpus import generate_corpus
-from python.training.trainer import Trainer
+from hexo_rl.bootstrap.pretrain import pretrain, validate_pretrained
+from hexo_rl.bootstrap.generate_corpus import generate_corpus
+from hexo_rl.training.trainer import Trainer
 
 cfg = load_config("configs/default.yaml")
 model = HexTacToeNet(**cfg["model"]).cuda()
@@ -513,7 +513,7 @@ If the Hex Tac Toe community already has bots with known strength:
 If the community bots export in a standard format (PGN, SGF), write a parser:
 
 ```python
-# python/bootstrap/import_sgf.py
+# hexo_rl/bootstrap/import_sgf.py
 def parse_sgf_game(sgf_text: str) -> list[dict]:
     """Convert an SGF game record to a list of (state, move, outcome) dicts."""
     ...

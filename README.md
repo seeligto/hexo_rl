@@ -1,142 +1,78 @@
 # Hex Tac Toe AlphaZero
 
-Welcome to the Hex Tac Toe AlphaZero project. This project implements an AlphaZero-style reinforcement learning agent to play Hex Tac Toe on an infinite hexagonal grid.
+An AlphaZero-style self-learning AI for **Hex Tac Toe** — a community game on an infinite hexagonal grid where the goal is 6 stones in a row. Player 1 opens with 1 stone, then both players alternate placing 2 stones per turn.
 
-## Project Introduction
+The high-performance core is written in Rust (`engine/`) and exposed to Python via PyO3. A PyTorch neural network is trained via self-play using MCTS-guided game generation. See `CLAUDE.md` for full project context.
 
-Hex Tac Toe is played on an infinite hexagonal grid. This repository contains the core Rust engine for high-performance board representation and Monte Carlo Tree Search (MCTS), bound to a Python environment where a PyTorch-based neural network is trained via self-play.
+## Prerequisites
 
-We employ a "Multi-Window Cluster-Based Approach" to handle the infinite board: the Rust core dynamically clusters active stones into distinct colonies and returns K distinct 2-plane (19×19) cluster snapshots per colony. Python's `GameState.to_tensor()` stacks these snapshots with `move_history` to assemble the full 18-plane temporal tensor. These are evaluated as a batch by a single sliding-window ResNet, resolving Attention Hijacking while maintaining high performance.
+- Python 3.11+
+- Rust 1.75+ (`rustup`)
+- CUDA 12.x + an NVIDIA GPU (RTX 3070 or better recommended)
+- `maturin` (installed automatically by `make install`)
 
-## Setup Instructions
-
-1. **Python Virtual Environment:**
-   Ensure you have Python 3.11+ installed. Create and activate a virtual environment:
-
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   ```
-
-   Install dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Rust Core:**
-   The high-performance core is written in Rust. Build the Python bindings using Maturin:
-
-   ```bash
-   pip install maturin
-   maturin develop --release -m native_core/Cargo.toml
-   ```
-
-3. **Git Submodules:**
-   Initialize and update required submodules (for baseline bots, SealBot engine, etc.):
-
-   ```bash
-   git submodule update --init --recursive
-   ```
-
-4. **Verify Core Build and Imports:**
-
-   ```bash
-   .venv/bin/maturin develop --release -m native_core/Cargo.toml
-   .venv/bin/python -c "from native_core import Board, MCTSTree; print('native_core ok')"
-   ```
-
-## Roadmap
-
-* **Phase 1: Foundation** - Basic board representation, game state, and neural network architecture. [DONE]
-* **Phase 2: MCTS** - Monte Carlo Tree Search implementation in Rust with PyO3 bindings. [DONE]
-* **Phase 3: Bootstrap** - Integration of baseline bots and community engines. [DONE]
-* **Phase 3.5: Foveated Vision & Hybrid Windowing** - Dual-Resolution CNN and Attention-Anchored Windowing to prevent attention hijacking. [DONE]
-* **Phase 3C: Supervised Pretraining** - Training model on expert corpus (Minimax/Human). [COMPLETE/VALIDATING]
-* **Phase 4.0: Self-Play RL** - Initializing the AlphaZero self-play loop (CURRENT).
-* **Phase 5: Evaluation** - Benchmarking against state-of-the-art bots.
-
-## Training Workflow
-
-The training process is divided into three main stages:
-
-### 1. Corpus Generation (Bootstrap)
-
-Generate a dataset of expert-level games using the SealBot engine and human games scraped from the community archive.
+## Quick start
 
 ```bash
-# Generate 500 bot games and 50 pages of human games
-python python/bootstrap/generate_corpus.py --bot-games 500 --human-pages 50
+git clone --recursive <url>
+cd hexo_rl
+
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+make native.build        # build Rust engine extension
+make test.all            # run Rust + Python test suites
+
+make corpus.scrape       # fetch latest human games
+make corpus.npz          # export corpus to data/bootstrap_corpus.npz
+make pretrain.full       # supervised pretrain on corpus
+
+python scripts/train.py --config configs/default.yaml \
+    --checkpoint checkpoints/pretrain/pretrain_00000100.pt
 ```
 
-### 2. Pre-training (Imitation Learning)
-
-Train the model to imitate the expert play from the corpus. This gives the model a "head start" before self-play begins.
+## Make targets
 
 ```bash
-# Train for 15 epochs and save to checkpoints/bootstrap_model.pt
-python -m python.bootstrap.pretrain --force-regenerate --epochs 15
+make env.check           # verify .venv + engine import
+make native.build        # build/install Rust extension (LTO + native CPU)
+make clean               # remove Rust artifacts and Python caches
+make rebuild             # full clean + rebuild
+
+make test.rust           # Rust tests
+make test.py             # Python tests
+make test.all            # both
+
+make bench.lite          # quick benchmark (n=3)
+make bench.full          # standard benchmark gate (n=5)
+
+make corpus.scrape       # scrape latest human games
+make corpus.d4           # SealBot depth-4 corpus (2,000 games)
+make corpus.d6           # SealBot depth-6 corpus (1,000 games)
+make corpus.npz          # export to data/bootstrap_corpus.npz
+
+make pretrain.lite       # pretrain smoke test (100 steps)
+make pretrain.full       # full pretrain (15 epochs)
+
+make train.full          # RL training from bootstrap checkpoint
+make dashboard           # start web dashboard on port 5001
 ```
 
-### 3. Full Reinforcement Learning (Self-Play)
+## Performance baseline (2026-04-02, Ryzen 7 3700x + RTX 3070)
 
-Start the AlphaZero-style loop where the bot improves by playing against itself.
-
-```bash
-# Start RL training from the bootstrap checkpoint
-python scripts/train.py --config configs/default.yaml --checkpoint checkpoints/bootstrap_model.pt
-```
-
-## Useful Commands
-
-### Focused Performance/Concurrency Tests
-
-```bash
-.venv/bin/python -m pytest -q tests/test_inference_server.py tests/test_worker_pool.py tests/test_benchmark_smoke.py
-```
-
-### Core Project Tests (without vendor bot test tree)
-
-```bash
-.venv/bin/python -m pytest -q tests
-```
-
-### Fast Benchmark Pass (quick local check)
-
-```bash
-.venv/bin/python scripts/benchmark.py --config configs/fast_debug.yaml --no-compile --mcts-sims 2000 --pool-workers 1 --pool-duration 10
-```
-
-### Full Benchmark Pass (higher confidence)
-
-```bash
-.venv/bin/python scripts/benchmark.py --config configs/default.yaml --mcts-sims 50000 --pool-workers 6 --pool-duration 30
-```
-
-### Short Debug Training Run
-
-```bash
-.venv/bin/python scripts/train.py --config configs/fast_debug.yaml --iterations 50 --no-dashboard --no-compile
-```
-
-Notes:
-
-* The primary worker throughput metric is **positions/hour** (games/hour is also reported). Very short durations can show 0 positions/hour — increase `--pool-duration` for representative numbers.
-* Warnings about pynvml deprecation are emitted by third-party dependencies and do not indicate a training or benchmark failure.
-
-## Performance (March 2026 Baseline)
-
-Measured 2026-03-31, Ryzen 7 3700x + RTX 3070, 16 workers, `make bench.full`. The Rust core uses a Transposition Table (FxHashMap + **128-bit Zobrist hashing**, splitmix128) — 128-bit keys eliminate collision risk at sustained >150k sim/s throughput.
-
-| Metric | Measured |
+| Metric | Value |
 |---|---|
-| MCTS (CPU only) | 160,882 sim/s |
-| NN inference (batch=64) | 11,479 pos/s |
-| NN latency (batch=1, mean) | 0.74 ms (p99: 2.57 ms) |
-| Replay buffer push | 219,444 pos/sec |
-| Replay buffer sample (aug, batch=256) | 936 µs/batch (3.66 µs/pos) |
-| Worker throughput | 4,134 games/hr / **1,734,003 pos/hr** |
-| GPU utilization | 95.4% |
-| Batch fill % | 99.8% |
+| MCTS (CPU only) | 189,656 sim/s |
+| NN inference (batch=64) | 10,080 pos/s |
+| NN latency (batch=1, mean) | 1.52 ms |
+| Replay buffer push | 905,697 pos/s |
+| Worker throughput | 1,177,745 pos/hr |
+| GPU utilization | 100% |
 
-This project uses **Batched MCTS Inferences**, providing a ~15x speedup on NVIDIA GPUs.
+## Architecture overview
+
+- **Rust (`engine/`)**: MCTS tree, board logic, replay buffer, self-play runner, inference batcher
+- **Python (`hexo_rl/`)**: neural network (ResNet-12 × 128ch + SE), training loop, evaluation, corpus pipeline
+- **PyO3 bridge**: `from engine import Board, MCTSTree, ReplayBuffer, SelfPlayRunner, InferenceBatcher`
+
+See `CLAUDE.md` for complete context, working rules, and session protocols.

@@ -10,7 +10,7 @@ new session to avoid re-litigating resolved decisions.
 ## What was built this sprint (in order)
 
 ### 1. SE blocks + value head overhaul + auxiliary loss
-**Files:** `python/model/network.py`, `python/training/trainer.py`,
+**Files:** `hexo_rl/model/network.py`, `hexo_rl/training/trainer.py`,
 `configs/model.yaml`, `configs/training.yaml`
 
 - Added `SEBlock` (squeeze-and-excitation) to every residual block.
@@ -31,11 +31,11 @@ binary outcomes. Global pooling value head is board-size-independent.
 ---
 
 ### 2. Growing replay buffer + mixed data streams + playout cap randomisation
-**Files:** `native_core/src/replay_buffer.rs`, `native_core/src/game_runner.rs`,
-`python/training/trainer.py`, `python/selfplay/pool.py`, `scripts/train.py`,
+**Files:** `engine/src/replay_buffer/mod.rs`, `engine/src/game_runner.rs`,
+`hexo_rl/training/trainer.py`, `hexo_rl/selfplay/pool.py`, `scripts/train.py`,
 `configs/default.yaml`, `configs/training.yaml`
 
-- `RustReplayBuffer.resize()` implemented in Rust: linearizes ring buffer
+- `ReplayBuffer.resize()` implemented in Rust: linearizes ring buffer
   in-place via rotate_left, extends backing vecs, updates head/capacity.
 - Buffer growth schedule (configs):
   - Step 0:       250,000 samples
@@ -54,7 +54,7 @@ Playout cap decouples data volume from data quality (KataGo finding).
 ---
 
 ### 3. FP16 AMP + torch.compile + policy target pruning
-**Files:** `python/training/trainer.py`, `configs/training.yaml`, `scripts/train.py`
+**Files:** `hexo_rl/training/trainer.py`, `configs/training.yaml`, `scripts/train.py`
 
 - `torch.cuda.amp.GradScaler` + `autocast` wrapping forward + loss.
   Config: `fp16: true`. Auto-disabled with warning on CPU.
@@ -71,8 +71,8 @@ adds 10–20% on top. Pruning reduces effective policy loss noise in early self-
 ---
 
 ### 4. Phase 4.0 evaluation pipeline
-**Files:** `python/eval/results_db.py`, `python/eval/bradley_terry.py`,
-`python/eval/display.py`, `python/eval/eval_pipeline.py`,
+**Files:** `hexo_rl/eval/results_db.py`, `hexo_rl/eval/bradley_terry.py`,
+`hexo_rl/eval/display.py`, `hexo_rl/eval/eval_pipeline.py`,
 `scripts/train.py`, `configs/eval.yaml`
 
 - Bradley-Terry MLE (not incremental Elo). scipy L-BFGS-B with analytical
@@ -95,9 +95,9 @@ Bradley-Terry is path-independent and requires no K-factor tuning.
 ---
 
 ### 5. Corpus generation pipeline
-**Files:** `python/bootstrap/generate_corpus.py`, `scripts/update_manifest.py`,
-`python/bootstrap/corpus_analysis.py` (--include-bot-games flag),
-`python/bootstrap/bots/sealbot_bot.py` (max_depth parameter), Makefile
+**Files:** `hexo_rl/bootstrap/generate_corpus.py`, `scripts/update_manifest.py`,
+`hexo_rl/bootstrap/corpus_analysis.py` (--include-bot-games flag),
+`hexo_rl/bootstrap/bots/sealbot_bot.py` (max_depth parameter), Makefile
 
 - `generate_corpus.py` CLI: SealBot self-play with hash-based filenames
   (SHA-256 of move sequence) for deduplication and idempotent re-runs.
@@ -289,6 +289,42 @@ eval_interval: 1000       # training steps
 eval_n_games: 200
 promotion_threshold: 0.55
 ```
+
+---
+
+## Post-sprint cleanup (2026-04-02)
+
+### First training run findings (before cleanup)
+
+Running `python scripts/train.py` revealed 5 issues:
+1. `pretrained_weight` stuck at 0.0 — config key missing from training.yaml (only in default.yaml)
+2. Checkpoint spam — saving every step instead of every N steps
+3. GPU underutilisation during early training — batch fill low when buffer was cold
+4. Broken stats logging — `positions_per_hour` always 0 in dashboard
+5. `monitoring/configure.py` not called on startup — structlog outputting to stderr
+
+All 5 fixed and verified in follow-up commits.
+
+### Codebase cleanup
+
+537 lines deleted, 11 files removed, 6 modules refactored across:
+
+**Directory renames:**
+- `engine/` — PyO3 module name updated to match: `from engine import ...`
+- `hexo_rl/`
+- `hexo_rl/monitoring/` — `setup.py` → `configure.py`
+
+**Class renames — `Rust` prefix removed from all PyO3 exports:**
+- `ReplayBuffer`
+- `SelfPlayRunner`
+- `InferenceBatcher`
+
+**Files removed:** dead shims, duplicate helpers, unused bootstrap scripts
+
+### Benchmark re-confirmation
+
+All 10 Phase 4.5 gate metrics pass with no regressions after the cleanup.
+Test counts: 63 Rust + 301 Python (all passing).
 
 ---
 

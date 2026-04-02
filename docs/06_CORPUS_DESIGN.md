@@ -41,7 +41,7 @@ python/corpus/
 `python/bootstrap/` is stable and phase-complete. Putting the new pipeline there would
 conflate the scraping / minimax-pretraining concern with the ongoing corpus generation
 concern. `python/corpus/` has a different job: it is a long-running, incremental feeder
-that pushes positions into `RustReplayBuffer` during Phase 4+. These are different
+that pushes positions into `ReplayBuffer` during Phase 4+. These are different
 lifecycles.
 
 ---
@@ -213,7 +213,7 @@ to maximise variation across continuations. Tag the seed index as
 ```
 CorpusPipeline(
     sources: list[CorpusSource],
-    buffer:  RustReplayBuffer,
+    buffer:  ReplayBuffer,
     metrics: CorpusMetrics,
 )
 ```
@@ -227,7 +227,7 @@ CorpusPipeline(
    logic — do not duplicate it).
 4. **Assign game_id**: a monotonic `int64` counter maintained by the pipeline. This is
    the `game_id` passed to `buf.push_game()`. It must never be −1.
-5. **Push** to `RustReplayBuffer` via `buf.push_game(states, policies, outcomes, game_id)`.
+5. **Push** to `ReplayBuffer` via `buf.push_game(states, policies, outcomes, game_id)`.
 6. **Emit metrics** to `CorpusMetrics` after each game.
 
 ### Dedup hash
@@ -246,7 +246,7 @@ the buffer's ring-buffer semantics already handle position-level redundancy grac
 
 The pipeline holds a `next_game_id: int` counter initialised to 0 at startup.
 Each successfully pushed game increments the counter by 1. The counter is not
-persisted across runs — this is fine because the `RustReplayBuffer` itself is rebuilt
+persisted across runs — this is fine because the `ReplayBuffer` itself is rebuilt
 each training session. The monotonic property within a run is all that is needed to
 prevent positions from the same game from appearing in a single training batch.
 
