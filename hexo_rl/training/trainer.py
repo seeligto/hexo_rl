@@ -362,6 +362,12 @@ class Trainer:
             self.config.get("max_checkpoints_kept"),
         )
 
+        log.info(
+            "checkpoint_saved",
+            step=self.step,
+            checkpoint_path=str(ckpt_path),
+        )
+
         return ckpt_path
 
     @classmethod

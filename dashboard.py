@@ -32,6 +32,8 @@ import psutil
 from flask import Flask, Response, jsonify, request
 from flask_socketio import SocketIO
 
+from hexo_rl.monitoring.replay_poller import GameReplayPoller
+
 
 # ---------------------------------------------------------------------------
 # Resource monitor
@@ -240,6 +242,7 @@ class DataStore:
                 "self_play_time": latest.get("self_play_time", 0),
                 "game_length_median": self._game_length_median,
                 "pretrained_weight": self.pretrained_weight,
+                "sims_per_sec": latest.get("sims_per_sec"),
             }
 
     def record_game_length(self, compound_moves: int) -> None:
@@ -297,6 +300,9 @@ class Dashboard:
         self.socketio = SocketIO(
             self.app, cors_allowed_origins="*", async_mode="threading"
         )
+        self._replay_poller = GameReplayPoller(
+            replay_dir="logs/replays", poll_interval_s=30.0, cache_cap=50
+        )
         self._server_thread: Optional[threading.Thread] = None
         self._setup_routes()
         self._setup_socket_events()
@@ -306,6 +312,7 @@ class Dashboard:
     def start(self) -> None:
         """Start dashboard server in a background thread."""
         self.resource_monitor.start()
+        self._replay_poller.start()
         self._server_thread = threading.Thread(target=self._run, daemon=True)
         self._server_thread.start()
         ts = _dt.now().strftime("%H:%M:%S")
@@ -403,6 +410,37 @@ class Dashboard:
         @app.route("/api/gamelength")
         def api_gamelength():
             return jsonify(store.get_gamelength_history())
+
+        @app.route("/api/replays")
+        def api_replays():
+            n = request.args.get("n", 10, type=int)
+            games = self._replay_poller.get_recent(n=n)
+            return jsonify([
+                {
+                    "key": f"{g.filename}:{i}",
+                    "filename": g.filename,
+                    "game_length": g.game_length,
+                    "winner": g.winner,
+                    "timestamp": g.timestamp,
+                    "checkpoint_step": g.checkpoint_step,
+                    "num_moves": len(g.move_sequence),
+                }
+                for i, g in enumerate(games)
+            ])
+
+        @app.route("/api/replays/<path:key>")
+        def api_replay_detail(key: str):
+            game = self._replay_poller.get_game(key)
+            if game is None:
+                return jsonify({"error": "not found"}), 404
+            return jsonify({
+                "filename": game.filename,
+                "game_length": game.game_length,
+                "winner": game.winner,
+                "timestamp": game.timestamp,
+                "checkpoint_step": game.checkpoint_step,
+                "moves": game.move_sequence,
+            })
 
         # --- POST endpoints ---
 
@@ -604,6 +642,14 @@ footer{border-top:2px solid #000;font:11px 'SF Mono','Courier New',monospace;fle
       </div>
       <div class="chart-body" id="body-speed">
         <div class="canvas-wrap"><canvas id="speed-chart"></canvas></div>
+      </div>
+    </div>
+    <div class="chart-box" id="box-replays">
+      <div class="chart-header" onclick="toggleChart('replays')">
+        <span class="toggle" id="tog-replays">&#9660;</span> Recent Self-Play Games
+      </div>
+      <div class="chart-body" id="body-replays">
+        <div id="replay-list" style="font-family:monospace;font-size:13px;padding:8px;max-height:200px;overflow-y:auto;">Loading...</div>
       </div>
     </div>
   </div>
@@ -1199,6 +1245,38 @@ fetch('/api/stats').then(r => r.json()).then(s => {
   el('s-games').textContent = s.total_games;
   el('s-elo').textContent = Math.round(s.current_elo);
 }).catch(() => {});
+
+// ---------------------------------------------------------------------------
+// Recent self-play replays polling
+// ---------------------------------------------------------------------------
+function timeAgo(ts) {
+  if (!ts) return '';
+  const diff = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (diff < 60) return Math.round(diff) + 's ago';
+  if (diff < 3600) return Math.round(diff / 60) + 'm ago';
+  return Math.round(diff / 3600) + 'h ago';
+}
+function fetchReplays() {
+  fetch('/api/replays?n=5').then(r => r.json()).then(games => {
+    const box = el('replay-list');
+    if (!games.length) { box.textContent = 'No replays yet'; return; }
+    box.innerHTML = games.map(g =>
+      '<div style="padding:2px 0;cursor:pointer" onclick="viewReplay(\'' + g.key + '\')">' +
+      (g.winner === 'x_win' ? 'X won' : g.winner === 'o_win' ? 'O won' : 'Draw') +
+      '  ' + g.game_length + ' moves  ' + timeAgo(g.timestamp) +
+      '  (ckpt ' + g.checkpoint_step + ')</div>'
+    ).join('');
+  }).catch(() => {});
+}
+function viewReplay(key) {
+  fetch('/api/replays/' + encodeURIComponent(key)).then(r => r.json()).then(g => {
+    if (g.error) { alert(g.error); return; }
+    const moves = (g.moves || []).map((m, i) => (i + 1) + '. (' + m[0] + ',' + m[1] + ')').join('\n');
+    alert(g.winner + ' in ' + g.game_length + ' moves\n\n' + moves);
+  }).catch(() => {});
+}
+fetchReplays();
+setInterval(fetchReplays, 30000);
 </script>
 </body>
 </html>

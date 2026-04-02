@@ -72,9 +72,12 @@ class WorkerPool:
         self._lock = threading.Lock()
         self.games_completed = 0
         self.positions_pushed = 0
+        self.self_play_positions_pushed = 0
         self.x_wins = 0
         self.o_wins = 0
         self.draws = 0
+        self._sims_per_sec: Optional[float] = None
+        self._last_drain_time: float = time.monotonic()
 
         gr_cfg = config.get("game_replay", {})
         self._recorder = GameRecorder(
@@ -94,6 +97,10 @@ class WorkerPool:
         with self._lock:
             total = self.games_completed
             return (self.o_wins / total) if total > 0 else 0.0
+
+    @property
+    def sims_per_sec(self) -> Optional[float]:
+        return self._sims_per_sec
 
     def load_weights(self, state_dict: Dict[str, torch.Tensor]) -> None:
         with self._lock:
@@ -115,6 +122,7 @@ class WorkerPool:
                 self.replay_buffer.push(feat_np, pol_np, float(outcome))
                 with self._lock:
                     self.positions_pushed += 1
+                    self.self_play_positions_pushed += 1
 
             with self._lock:
                 self.games_completed = int(self._runner.games_completed)
@@ -124,10 +132,26 @@ class WorkerPool:
 
             # Emit one structlog game_complete event per completed game so
             # Phase40Dashboard._LogReader can populate the game-length panel.
-            for plies, winner_code, move_history in self._runner.drain_game_results():
+            games_batch = self._runner.drain_game_results()
+
+            # Compute sims/sec from elapsed time and known n_simulations per game.
+            now = time.monotonic()
+            elapsed = now - self._last_drain_time
+            self._last_drain_time = now
+            if elapsed > 1.0 and games_batch:
+                sims = self.n_simulations * len(games_batch)
+                self._sims_per_sec = sims / elapsed
+
+            for plies, winner_code, move_history in games_batch:
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
                 game_length = (plies + 1) // 2  # compound moves
-                log.info("game_complete", plies=plies, winner=winner, game_length=game_length)
+                log.info(
+                    "game_complete",
+                    plies=plies,
+                    winner=winner,
+                    game_length=game_length,
+                    sims_per_sec=self._sims_per_sec,
+                )
                 self._recorder.maybe_record(
                     moves=move_history,
                     winner_code=winner_code,
