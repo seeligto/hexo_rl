@@ -216,7 +216,7 @@ def main() -> None:
     elif args.depth is not None and args.depth <= 4:
         n_random = 3  # d4 converges fast — need 3 random moves
     else:
-        n_random = 1  # d6+ has natural diversity
+        n_random = 3  # d6 also needs 3 random moves to avoid dupe games
 
     log.info("bot_created", name=bot.name(), depth=args.depth,
              time_limit=args.time_limit, random_opening=n_random)
