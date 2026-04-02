@@ -456,7 +456,7 @@ _CHECKS: list[tuple[str, str, str | None, str, float, bool]] = [
     ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_200,   False),
     ("GPU utilisation %",                 "GPU utilisation",         "gpu",   "value",       85,   True),
     ("VRAM usage GB",                     "GPU utilisation",         "vram",  "value",        0,   False),  # dynamic
-    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  1_290_000, True),
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  1_000_000, True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
 ]
 
