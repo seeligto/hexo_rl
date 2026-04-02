@@ -35,8 +35,8 @@ def main() -> None:
     out_path = ROOT / "data" / "bootstrap_corpus.npz"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(ROOT / "configs" / "corpus_filter.yaml") as f:
-        corpus_cfg = yaml.safe_load(f)
+    from python.utils.config import load_config
+    corpus_cfg = load_config(str(ROOT / "configs" / "corpus_filter.yaml"))
     source_weights: dict = corpus_cfg.get("source_weights", {})
 
     quality_path = ROOT / "data" / "corpus" / "quality_scores.json"

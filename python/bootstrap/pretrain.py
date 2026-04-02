@@ -39,7 +39,8 @@ from python.model.network import HexTacToeNet, compile_model
 log = structlog.get_logger()
 console = Console()
 
-BOARD_SIZE = 19
+from python.utils.constants import BOARD_SIZE
+
 POLICY_SIZE = BOARD_SIZE * BOARD_SIZE + 1
 
 # ── Hex augmentation ──────────────────────────────────────────────────────────
@@ -564,14 +565,9 @@ def pretrain() -> None:
     args = parser.parse_args()
 
     # Load configs
-    with open("configs/model.yaml") as f:
-        model_cfg: Dict = yaml.safe_load(f)
-    with open("configs/training.yaml") as f:
-        training_cfg: Dict = yaml.safe_load(f)
-    with open("configs/corpus_filter.yaml") as f:
-        corpus_cfg: Dict = yaml.safe_load(f)
-
-    config: Dict = {**training_cfg, **model_cfg}
+    from python.utils.config import load_config
+    config: Dict = load_config("configs/training.yaml", "configs/model.yaml")
+    corpus_cfg: Dict = load_config("configs/corpus_filter.yaml")
     if args.batch_size:
         config["batch_size"] = args.batch_size
     batch_size = int(config.get("batch_size", 512))

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Tuple
 
-# Board is always 19×19 (BOARD_SIZE from native_core)
-BOARD_SIZE: int = 19
+from python.utils.constants import BOARD_SIZE
+
 N_ACTIONS: int = BOARD_SIZE * BOARD_SIZE + 1  # 362
 
 
