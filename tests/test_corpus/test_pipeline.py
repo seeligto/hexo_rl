@@ -4,9 +4,9 @@ from typing import Iterator
 
 import pytest
 from engine import RustReplayBuffer
-from python.corpus.sources.base import CorpusSource, GameRecord
-from python.corpus.pipeline import CorpusPipeline, _game_hash
-from python.corpus.metrics import CorpusMetrics
+from hexo_rl.corpus.sources.base import CorpusSource, GameRecord
+from hexo_rl.corpus.pipeline import CorpusPipeline, _game_hash
+from hexo_rl.corpus.metrics import CorpusMetrics
 
 
 # ---------------------------------------------------------------------------

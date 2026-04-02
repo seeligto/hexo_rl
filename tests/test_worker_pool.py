@@ -14,9 +14,9 @@ import pytest
 import torch
 
 from engine import RustInferenceBatcher, RustSelfPlayRunner
-from python.model.network import HexTacToeNet
-from python.selfplay.inference_server import InferenceServer
-from python.selfplay.pool import WorkerPool
+from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.selfplay.inference_server import InferenceServer
+from hexo_rl.selfplay.pool import WorkerPool
 from engine import RustReplayBuffer
 
 

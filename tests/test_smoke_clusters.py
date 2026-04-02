@@ -9,8 +9,8 @@ Migrated from scripts/smoke_test_clusters.py (completed milestone check).
 import pytest
 import torch
 import numpy as np
-from python.model.network import HexTacToeNet
-from python.env.game_state import GameState
+from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.env.game_state import GameState
 from engine import Board
 
 

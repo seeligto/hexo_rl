@@ -88,7 +88,7 @@ def mid_game_board():
 def game_state_empty():
     """A GameState wrapping a freshly constructed empty board."""
     from engine import Board
-    from python.env.game_state import GameState
+    from hexo_rl.env.game_state import GameState
     return GameState.from_board(Board())
 
 
@@ -104,7 +104,7 @@ def game_state_after_3_moves():
       P2 @ (1,1)  — P2 second, turn passes (current state is P1's turn)
     """
     from engine import Board
-    from python.env.game_state import GameState
+    from hexo_rl.env.game_state import GameState
     b = Board()
     b.apply_move(0, 0)              # P1 ply 0
     state = GameState.from_board(b)

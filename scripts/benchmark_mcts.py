@@ -10,8 +10,8 @@ import torch
 import time
 import numpy as np
 from engine import Board
-from python.model.network import HexTacToeNet
-from python.selfplay.worker import SelfPlayWorker
+from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.selfplay.worker import SelfPlayWorker
 
 def benchmark_mcts():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -15,8 +15,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from python.env.game_state import GameState, HISTORY_LEN
-from python.selfplay.tensor_buffer import TensorBuffer
+from hexo_rl.env.game_state import GameState, HISTORY_LEN
+from hexo_rl.selfplay.tensor_buffer import TensorBuffer
 
 BOARD_SIZE = 19
 

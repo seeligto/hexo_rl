@@ -40,7 +40,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 if TYPE_CHECKING:
-    from python.model.network import HexTacToeNet
+    from hexo_rl.model.network import HexTacToeNet
     from engine import RustReplayBuffer
 
 console = Console()
@@ -348,7 +348,7 @@ def benchmark_worker_pool(
     warmup_sec: float = 10.0,
 ) -> Dict[str, Any]:
     """Measure end-to-end self-play throughput in the multiprocess pool."""
-    from python.selfplay.pool import WorkerPool
+    from hexo_rl.selfplay.pool import WorkerPool
     from engine import RustReplayBuffer
 
     if quick:
@@ -679,13 +679,13 @@ def main() -> None:
         torch.set_float32_matmul_precision('high')
         torch.backends.cudnn.benchmark = True
 
-    from python.utils.config import load_config
+    from hexo_rl.utils.config import load_config
     config = load_config(args.config)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     console.print(f"[bold]Benchmarking on {device} | mode={args.mode} | n={n_runs}[/bold]")
 
-    from python.model.network import HexTacToeNet, compile_model
+    from hexo_rl.model.network import HexTacToeNet, compile_model
     from engine import RustReplayBuffer
 
     # Build model

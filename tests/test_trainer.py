@@ -10,8 +10,8 @@ import numpy as np
 import torch
 
 from engine import RustReplayBuffer
-from python.model.network import HexTacToeNet
-from python.training.trainer import Trainer, prune_policy_targets
+from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.training.trainer import Trainer, prune_policy_targets
 
 
 FAST_CONFIG = {
@@ -258,7 +258,7 @@ def test_normalize_state_dict_adds_tower_aliases():
         "_orig_mod.module.policy_fc.weight": torch.randn(10, 20),
     }
 
-    from python.training.checkpoints import normalize_model_state_dict_keys
+    from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
     normalized = normalize_model_state_dict_keys(state)
 
     assert "trunk.tower.0.conv1.weight" in normalized

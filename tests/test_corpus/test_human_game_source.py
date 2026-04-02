@@ -5,8 +5,8 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from python.corpus.sources.human_game_source import HumanGameSource
-from python.corpus.sources.base import GameRecord
+from hexo_rl.corpus.sources.human_game_source import HumanGameSource
+from hexo_rl.corpus.sources.base import GameRecord
 
 RAW_DIR = Path("data/corpus/raw_human")
 

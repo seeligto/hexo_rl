@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from python.model.network import HexTacToeNet
+from hexo_rl.model.network import HexTacToeNet
 from engine import RustReplayBuffer
 from scripts.benchmark import benchmark_replay_buffer, benchmark_worker_pool
 

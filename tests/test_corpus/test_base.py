@@ -1,7 +1,7 @@
 """Tests for python/corpus/sources/base.py — GameRecord and CorpusSource."""
 
 import pytest
-from python.corpus.sources.base import GameRecord, CorpusSource
+from hexo_rl.corpus.sources.base import GameRecord, CorpusSource
 
 
 class TestGameRecord:

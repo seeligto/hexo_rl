@@ -21,7 +21,7 @@ N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1  # 362
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _make_model(device: torch.device):
-    from python.model.network import HexTacToeNet
+    from hexo_rl.model.network import HexTacToeNet
     return HexTacToeNet(board_size=BOARD_SIZE, res_blocks=2, filters=32).to(device)
 
 
@@ -42,7 +42,7 @@ def _fill_buffer(buf: RustReplayBuffer, n: int, value_only_frac: float = 0.0) ->
 
 def test_mixed_buffer_training_10_steps():
     """10 training steps with mixed pretrained + self-play buffers complete without error."""
-    from python.training.trainer import Trainer
+    from hexo_rl.training.trainer import Trainer
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = _make_model(device)
@@ -95,7 +95,7 @@ def test_mixed_buffer_training_10_steps():
 
 def test_value_only_batch_does_not_crash():
     """A batch of all-zero policies (value-only) should not crash training."""
-    from python.training.trainer import Trainer
+    from hexo_rl.training.trainer import Trainer
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = _make_model(device)
@@ -124,7 +124,7 @@ def test_value_only_batch_does_not_crash():
 
 def test_buffer_resize_during_training():
     """Resize mid-training: push, resize, push more, sample, train."""
-    from python.training.trainer import Trainer
+    from hexo_rl.training.trainer import Trainer
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = _make_model(device)

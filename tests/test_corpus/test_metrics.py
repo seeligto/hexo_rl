@@ -4,7 +4,7 @@ import time
 import unittest.mock as mock
 
 import pytest
-from python.corpus.metrics import CorpusMetrics, SourceMetrics
+from hexo_rl.corpus.metrics import CorpusMetrics, SourceMetrics
 
 
 class TestSourceMetrics:
@@ -77,7 +77,7 @@ class TestCorpusMetrics:
 
     def test_flush_interval_triggers_log(self):
         cm = CorpusMetrics(flush_interval=5)
-        with mock.patch("python.corpus.metrics.log") as mock_log:
+        with mock.patch("hexo_rl.corpus.metrics.log") as mock_log:
             for _ in range(5):
                 cm.record_game("human", n_positions=10)
             mock_log.info.assert_called_once()
@@ -88,7 +88,7 @@ class TestCorpusMetrics:
         cm = CorpusMetrics(flush_interval=1000)  # won't auto-flush
         cm.record_game("human", n_positions=10)
         cm.record_game("hybrid", n_positions=20)
-        with mock.patch("python.corpus.metrics.log") as mock_log:
+        with mock.patch("hexo_rl.corpus.metrics.log") as mock_log:
             cm.flush()
             # Should emit one event per source.
             assert mock_log.info.call_count == 2
@@ -97,7 +97,7 @@ class TestCorpusMetrics:
         cm = CorpusMetrics(flush_interval=1000)
         cm.record_game("human", n_positions=10)
         cm.record_game("hybrid", n_positions=20)
-        with mock.patch("python.corpus.metrics.log") as mock_log:
+        with mock.patch("hexo_rl.corpus.metrics.log") as mock_log:
             cm.flush(source="human")
             assert mock_log.info.call_count == 1
 

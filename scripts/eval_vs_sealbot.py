@@ -74,12 +74,12 @@ def resolve_checkpoints(args: argparse.Namespace) -> list[Path]:
 
 
 def main() -> None:
-    from python.eval.evaluator import Evaluator
-    from python.training.trainer import Trainer
+    from hexo_rl.eval.evaluator import Evaluator
+    from hexo_rl.training.trainer import Trainer
 
     args = parse_args()
 
-    from python.utils.config import load_config
+    from hexo_rl.utils.config import load_config
     cfg = load_config(args.config)
 
     cfg.setdefault("evaluation", {})

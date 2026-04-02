@@ -1,8 +1,8 @@
 """Smoke tests for SealBotBot — no network access required."""
 
 from engine import Board
-from python.env.game_state import GameState
-from python.bootstrap.bots.sealbot_bot import SealBotBot
+from hexo_rl.env.game_state import GameState
+from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
 
 
 def test_sealbot_bot_returns_legal_move_on_fresh_board():

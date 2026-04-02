@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export the bootstrap corpus to data/bootstrap_corpus.npz.
 
-Calls load_corpus() from python.bootstrap.pretrain, applies quality-score and
+Calls load_corpus() from hexo_rl.bootstrap.pretrain, applies quality-score and
 source weighting, and writes a .npz that scripts/train.py can load directly.
 
 Arrays saved:
@@ -28,14 +28,14 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from python.bootstrap.pretrain import load_corpus
+from hexo_rl.bootstrap.pretrain import load_corpus
 
 
 def main() -> None:
     out_path = ROOT / "data" / "bootstrap_corpus.npz"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    from python.utils.config import load_config
+    from hexo_rl.utils.config import load_config
     corpus_cfg = load_config(str(ROOT / "configs" / "corpus_filter.yaml"))
     source_weights: dict = corpus_cfg.get("source_weights", {})
 

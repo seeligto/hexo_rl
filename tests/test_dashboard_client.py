@@ -8,7 +8,7 @@ from __future__ import annotations
 import queue
 import time
 
-from python.training.dashboard_utils import DashboardClient
+from hexo_rl.training.dashboard_utils import DashboardClient
 
 
 def _make_client(url: str = "http://localhost:59998") -> DashboardClient:

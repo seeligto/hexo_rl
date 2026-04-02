@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from engine import Board
-from python.env.game_state import GameState
+from hexo_rl.env.game_state import GameState
 
 def test_from_board_initial():
     b = Board()

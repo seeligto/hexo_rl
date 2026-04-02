@@ -194,15 +194,15 @@ eval.sealbot.full: ## Full SealBot eval (100 games)
 
 .PHONY: pretrain
 pretrain: ## Bootstrap pretrain (5 epochs, default)
-	$(PY) -m python.bootstrap.pretrain --epochs 5
+	$(PY) -m hexo_rl.bootstrap.pretrain --epochs 5
 
 .PHONY: pretrain.lite
 pretrain.lite: ## Bootstrap pretrain smoke test (100 steps)
-	$(PY) -m python.bootstrap.pretrain --steps 100
+	$(PY) -m hexo_rl.bootstrap.pretrain --steps 100
 
 .PHONY: pretrain.full
 pretrain.full: ## Full bootstrap pretrain (15 epochs)
-	$(PY) -m python.bootstrap.pretrain --epochs 15
+	$(PY) -m hexo_rl.bootstrap.pretrain --epochs 15
 
 # ── Corpus generation ────────────────────────────────────────────────────────
 
@@ -215,11 +215,11 @@ corpus.scrape: ## Scrape latest human games from hexo.did.science and update man
 
 .PHONY: corpus.d4
 corpus.d4: ## Generate SealBot depth-4 self-play corpus (CORPUS_DEPTH4_N=2000)
-	$(PY) -m python.bootstrap.generate_corpus --bot sealbot --depth 4 --n-games $(CORPUS_DEPTH4_N) --output data/corpus/bot_games/sealbot_d4
+	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --depth 4 --n-games $(CORPUS_DEPTH4_N) --output data/corpus/bot_games/sealbot_d4
 
 .PHONY: corpus.d6
 corpus.d6: ## Generate SealBot depth-6 self-play corpus (CORPUS_DEPTH6_N=1000)
-	$(PY) -m python.bootstrap.generate_corpus --bot sealbot --depth 6 --n-games $(CORPUS_DEPTH6_N) --output data/corpus/bot_games/sealbot_d6
+	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --depth 6 --n-games $(CORPUS_DEPTH6_N) --output data/corpus/bot_games/sealbot_d6
 
 .PHONY: corpus.all
 corpus.all: corpus.d4 corpus.d6 corpus.manifest ## Generate both d4 and d6 corpora
@@ -230,7 +230,7 @@ corpus.manifest: ## Update data/corpus/manifest.json (scans human + bot dirs)
 
 .PHONY: corpus.analysis
 corpus.analysis: corpus.manifest ## Run corpus analysis on human + bot games
-	$(PY) -m python.bootstrap.corpus_analysis --include-bot-games
+	$(PY) -m hexo_rl.bootstrap.corpus_analysis --include-bot-games
 
 .PHONY: corpus.npz
 corpus.npz: ## Export corpus to data/bootstrap_corpus.npz for mixed training
