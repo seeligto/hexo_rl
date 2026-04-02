@@ -170,13 +170,17 @@ eval.sealbot.quick: ## Quick SealBot eval (10 games)
 eval.sealbot.full: ## Full SealBot eval (100 games)
 	$(MAKE) eval.sealbot.latest SEALBOT_N=100 SEALBOT_TIME=0.03 SEALBOT_SIMS=128
 
+.PHONY: pretrain
+pretrain: ## Bootstrap pretrain (5 epochs, default)
+	$(PY) -m python.bootstrap.pretrain --epochs 5
+
 .PHONY: pretrain.lite
-pretrain.lite: ## Short bootstrap pretrain
-	$(PY) -m python.bootstrap.pretrain --epochs 5 --use-cache
+pretrain.lite: ## Bootstrap pretrain smoke test (100 steps)
+	$(PY) -m python.bootstrap.pretrain --steps 100
 
 .PHONY: pretrain.full
-pretrain.full: ## Full bootstrap pretrain
-	$(PY) -m python.bootstrap.pretrain --epochs 15 --force-regenerate
+pretrain.full: ## Full bootstrap pretrain (15 epochs)
+	$(PY) -m python.bootstrap.pretrain --epochs 15
 
 # ── Corpus generation ────────────────────────────────────────────────────────
 
