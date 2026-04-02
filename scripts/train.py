@@ -555,6 +555,11 @@ def main() -> None:
                         **eval_metrics
                     }
 
+                    # Buffer composition: self-play positions as fraction of total
+                    _buf_total = max(buffer.size, 1)
+                    _sp_pushed = pool.self_play_positions_pushed
+                    _buf_sp_pct = round(min(_sp_pushed / _buf_total, 1.0), 4)
+
                     log.info(
                         "train_step",
                         step=train_step,
@@ -567,8 +572,10 @@ def main() -> None:
                         buffer_capacity=buffer.capacity,
                         pretrained_weight=round(w_pre, 4),
                         selfplay_weight=round(1.0 - w_pre, 4),
+                        buffer_self_play_pct=_buf_sp_pct,
                         games_played=games_played,
                         games_per_hour=round(float(games_per_hour), 1),
+                        sims_per_sec=pool.sims_per_sec,
                         x_wins=pool.x_wins,
                         o_wins=pool.o_wins,
                         draws=pool.draws,
@@ -607,6 +614,7 @@ def main() -> None:
                             x_winrate=round(float(pool.x_winrate), 3),
                             o_winrate=round(float(pool.o_winrate), 3),
                             pretrained_weight=round(w_pre, 4),
+                            sims_per_sec=pool.sims_per_sec,
                         )
 
                     if dashboard is not None:

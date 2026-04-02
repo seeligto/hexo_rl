@@ -94,13 +94,26 @@ class _LogReader:
         self.total_losses:     deque[float] = deque(maxlen=loss_window)
         self.policy_entropies: deque[float] = deque(maxlen=loss_window)
 
+        # Sims/sec rolling window (from game_complete events)
+        self.sims_per_sec_values: deque[float] = deque(maxlen=50)
+
         self.current_step: int = 0
         self.pretrained_weight: Optional[float] = None
         self.games_per_hour: Optional[float] = None
+        self.buffer_self_play_pct: Optional[float] = None
+        self.latest_checkpoint_step: Optional[int] = None
 
         self._log_path: Optional[Path] = None
         self._log_fh:   Any = None  # open file handle
         self._log_pos:  int = 0     # byte offset
+
+    # ── Properties ──────────────────────────────────────────────────────────
+
+    @property
+    def sims_per_sec_median(self) -> Optional[float]:
+        if not self.sims_per_sec_values:
+            return None
+        return statistics.median(self.sims_per_sec_values)
 
     # ── Public ──────────────────────────────────────────────────────────────
 
@@ -186,6 +199,8 @@ class _LogReader:
             if gl and gl > 0:
                 self.game_length_moves.append(int(gl))
                 self._update_game_length_stats()
+            if (v := entry.get("sims_per_sec")) is not None:
+                self.sims_per_sec_values.append(float(v))
 
         elif event == "train_step":
             # train.py logs the step as "step"; accept "iteration" too for
@@ -207,16 +222,26 @@ class _LogReader:
                 self.pretrained_weight = float(v)
             if (v := entry.get("games_per_hour")) is not None:
                 self.games_per_hour = float(v)
+            if (v := entry.get("buffer_self_play_pct")) is not None:
+                self.buffer_self_play_pct = float(v)
+
+        elif event == "checkpoint_saved":
+            if (v := entry.get("step")) is not None:
+                self.latest_checkpoint_step = int(v)
 
 
 class _EvalDBReader:
     """Read-only queries against the Phase 4.0 eval SQLite DB (WAL mode).
 
     Opens a fresh connection per call so the dashboard never holds a lock.
+    Results are cached for ``poll_interval_s`` seconds to avoid hammering the DB.
     """
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, poll_interval_s: float = 60.0) -> None:
         self._db_path = Path(db_path)
+        self._poll_interval = poll_interval_s
+        self._cache: Dict[str, Any] = {}
+        self._cache_time: float = 0.0
 
     # ── Public ──────────────────────────────────────────────────────────────
 
@@ -231,6 +256,7 @@ class _EvalDBReader:
             ORDER  BY r.rating DESC
             """,
             row_fn=lambda r: (r[0], r[1], r[2], r[3]),
+            cache_key="latest_ratings",
         )
 
     def get_sealbot_winrate(
@@ -280,6 +306,28 @@ class _EvalDBReader:
             row_fn=lambda r: (r[0], r[1], int(r[2] or 0), int(r[3] or 0), int(r[4] or 0)),
         )
 
+    def get_per_opponent_records(
+        self,
+    ) -> List[Tuple[str, int, int, int, int]]:
+        """Return [(opponent_name, wins, losses, draws, n_games)] at latest eval step.
+
+        'wins' is from our model's perspective (the newest checkpoint).
+        """
+        return self._query(
+            """
+            SELECT p_b.name,
+                   m.wins_a, m.wins_b, m.draws, m.n_games,
+                   p_a.name AS our_name
+            FROM   matches m
+            JOIN   players p_a ON p_a.id = m.player_a_id
+            JOIN   players p_b ON p_b.id = m.player_b_id
+            WHERE  m.eval_step = (SELECT MAX(eval_step) FROM matches)
+            ORDER  BY p_b.name
+            """,
+            row_fn=lambda r: r,
+            cache_key="per_opponent",
+        )
+
     def get_latest_eval_step(self) -> Optional[int]:
         rows = self._query(
             "SELECT MAX(eval_step) FROM matches",
@@ -289,17 +337,31 @@ class _EvalDBReader:
 
     # ── Internal ─────────────────────────────────────────────────────────────
 
-    def _query(self, sql: str, row_fn: Any) -> list:
+    def _maybe_refresh_cache(self) -> bool:
+        """Return True if the cache is stale and should be refreshed."""
+        now = time.monotonic()
+        if now - self._cache_time >= self._poll_interval:
+            self._cache.clear()
+            self._cache_time = now
+            return True
+        return False
+
+    def _query(self, sql: str, row_fn: Any, cache_key: Optional[str] = None) -> list:
+        # Check cache before hitting the filesystem
+        self._maybe_refresh_cache()
+        if cache_key and cache_key in self._cache:
+            return self._cache[cache_key]
         if not self._db_path.exists():
             return []
         try:
             conn = sqlite3.connect(
                 f"file:{self._db_path}?mode=ro", uri=True, check_same_thread=False
             )
-            conn.execute("PRAGMA journal_mode=WAL")
             cur = conn.execute(sql)
             result = [row_fn(r) for r in cur.fetchall()]
             conn.close()
+            if cache_key:
+                self._cache[cache_key] = result
             return result
         except Exception:
             return []
@@ -370,6 +432,15 @@ def _build_game_length_panel(reader: _LogReader) -> Panel:
         table.add_row("Game length", Text(med_str, style=color))
 
     table.add_row("Total games observed", str(total))
+
+    # Self-play throughput metrics
+    sps = reader.sims_per_sec_median
+    if sps is not None:
+        table.add_row("Sims/sec", f"{sps:,.0f} (median, {len(reader.sims_per_sec_values)} games)")
+    gph = reader.games_per_hour
+    if gph is not None:
+        table.add_row("Games/hr", f"{gph:,.0f}")
+
     table.add_row("", "")
     table.add_row(
         Text("Distribution (last 500)", style="bold"),
@@ -381,38 +452,62 @@ def _build_game_length_panel(reader: _LogReader) -> Panel:
         bar = "█" * int(frac * bar_width) + "░" * (bar_width - int(frac * bar_width))
         table.add_row(f"  {label} mv", f"{count:4d}  [{color}]{bar}[/{color}]")
 
-    return Panel(table, title="Game Length Health", border_style=color)
+    return Panel(table, title="Self-Play Health", border_style=color)
+
+
+def _trend_symbol(current: float, avg: float, threshold: float = 0.02) -> str:
+    """Return ↓ ↑ or → based on whether current deviates from avg."""
+    if avg < current - threshold:
+        return "↓"
+    if avg > current + threshold:
+        return "↑"
+    return "→"
+
+
+def _fmt_loss_with_trend(q: deque) -> str:
+    """Format a loss deque as 'current  (avg X.XXXXX ↓)'."""
+    if not q:
+        return "-"
+    current = q[-1]
+    avg = sum(q) / len(q)
+    trend = _trend_symbol(current, avg)
+    return f"{current:.5f}  (avg {avg:.5f} {trend})"
 
 
 def _build_loss_panel(reader: _LogReader) -> Panel:
-    """Panel 2 — Training Loss Curves (rolling averages)."""
+    """Panel 2 — Training Loss Curves (rolling averages + trend)."""
     no_data = not any([
         reader.policy_losses, reader.value_losses,
         reader.aux_losses, reader.total_losses, reader.policy_entropies,
     ])
     if no_data:
-        return Panel(_waiting(), title="Training Losses", border_style="dim")
+        return Panel(_waiting(), title="Training Health", border_style="dim")
 
     table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 1))
-    table.add_column("Loss", style="dim", width=28)
-    table.add_column("Avg (last 100 steps)", justify="right")
+    table.add_column("Metric", style="dim", width=28)
+    table.add_column("Value  (trailing avg + trend)", justify="right")
 
-    def fmt(q: deque) -> str:
-        v = _avg(q)
-        return f"{v:.5f}" if v is not None else "-"
-
-    table.add_row("Policy loss",           fmt(reader.policy_losses))
-    table.add_row("Value loss",            fmt(reader.value_losses))
-    table.add_row("Aux opp-reply loss",    fmt(reader.aux_losses))
-    table.add_row("Total loss",            fmt(reader.total_losses))
+    table.add_row("Policy loss",        _fmt_loss_with_trend(reader.policy_losses))
+    table.add_row("Value loss",         _fmt_loss_with_trend(reader.value_losses))
+    table.add_row("Aux opp-reply loss", _fmt_loss_with_trend(reader.aux_losses))
+    table.add_row("Total loss",         _fmt_loss_with_trend(reader.total_losses))
     table.add_row("", "")
 
     entropy_avg = _avg(reader.policy_entropies)
     if entropy_avg is not None:
-        if entropy_avg < 1.0:
-            entropy_str = Text(f"{entropy_avg:.4f}  [red][MODE COLLAPSE RISK][/red]", style="red")
+        current_entropy = reader.policy_entropies[-1]
+        trend = _trend_symbol(current_entropy, entropy_avg)
+        if entropy_avg < 1.5:
+            entropy_str = Text(
+                f"{current_entropy:.4f} nats  (avg {entropy_avg:.4f} {trend})"
+                "  [MODE COLLAPSE RISK]",
+                style="red",
+            )
         else:
-            entropy_str = Text(f"{entropy_avg:.4f}", style="green")
+            entropy_str = Text(
+                f"{current_entropy:.4f} nats  (avg {entropy_avg:.4f} {trend})",
+                style="green",
+            )
     else:
         entropy_str = Text("-", style="dim")
 
@@ -422,7 +517,7 @@ def _build_loss_panel(reader: _LogReader) -> Panel:
         Text("Step", style="dim"), str(reader.current_step) if reader.current_step else "-"
     )
 
-    return Panel(table, title="Training Losses", border_style="blue")
+    return Panel(table, title="Training Health", border_style="blue")
 
 
 def _build_colony_panel(eval_reader: _EvalDBReader) -> Panel:
@@ -460,6 +555,7 @@ def _build_buffer_panel(
     buffer: Any,  # ReplayBuffer | None
     config: dict,
     current_step: int,
+    buffer_self_play_pct: Optional[float] = None,
 ) -> Panel:
     """Panel 4 — Buffer Health."""
     if buffer is None:
@@ -499,6 +595,24 @@ def _build_buffer_panel(
     fill_frac = size / capacity if capacity else 0.0
     fill_bar = "█" * int(fill_frac * bar_width) + "░" * (bar_width - int(fill_frac * bar_width))
     table.add_row("Fill", f"[cyan]{fill_bar}[/cyan] {fill_frac*100:.1f}%")
+
+    # Buffer composition mix bar (self-play vs corpus)
+    if buffer_self_play_pct is not None:
+        sp_pct = buffer_self_play_pct
+        corpus_pct = 1.0 - sp_pct
+        sp_filled = int(sp_pct * bar_width)
+        mix_bar = (
+            "[green]" + "█" * sp_filled + "[/green]"
+            + "[dim]" + "░" * (bar_width - sp_filled) + "[/dim]"
+        )
+        table.add_row(
+            "Buffer mix",
+            Text.from_markup(
+                f"[{mix_bar}]  self-play={sp_pct*100:.0f}%  corpus={corpus_pct*100:.0f}%"
+                f"  (total: {size:,})"
+            ),
+        )
+
     table.add_row("", "")
     table.add_row(Text("Weight distribution", style="bold"), "")
     for i, (label, count) in enumerate(zip(BUCKET_LABELS, [h0, h1, h2])):
@@ -607,10 +721,10 @@ def _build_decay_panel(
 
 
 def _build_eval_panel(eval_reader: _EvalDBReader) -> Panel:
-    """Panel 6 — Eval Summary (Bradley-Terry ratings + gating)."""
+    """Panel 6 — Eval / Strength (Bradley-Terry ratings + per-opponent W/L/D)."""
     ratings = eval_reader.get_latest_ratings()
     if not ratings:
-        return Panel(_waiting("waiting for eval data…"), title="Eval Summary", border_style="dim")
+        return Panel(_waiting("waiting for eval data…"), title="Eval / Strength", border_style="dim")
 
     win_rate, eval_step, _ = eval_reader.get_sealbot_winrate()
 
@@ -627,18 +741,34 @@ def _build_eval_panel(eval_reader: _EvalDBReader) -> Panel:
         )
         table.add_row(name[:22], f"{rating:.0f}", ci_str)
 
+    # Per-opponent W/L/D breakdown
     table.add_row("", "", "")
-    if win_rate is not None:
+    per_opp = eval_reader.get_per_opponent_records()
+    if per_opp:
+        for row in per_opp:
+            opp_name, wins_a, wins_b, draws, n_games, our_name = row
+            # Determine which side is "ours" — the checkpoint player
+            if "checkpoint" in our_name.lower():
+                our_w, our_l = wins_a, wins_b
+            else:
+                our_w, our_l = wins_b, wins_a
+                opp_name = our_name  # swap if we're player_b
+            wr = our_w / max(n_games, 1)
+            wr_color = "green" if wr >= 0.55 else ("yellow" if wr >= 0.45 else "red")
+            table.add_row(
+                f"vs {opp_name[:20]}",
+                Text(f"W {our_w}  L {our_l}  D {draws}", style=wr_color),
+                f"({n_games} games)",
+            )
+    elif win_rate is not None:
         wr_color = "green" if win_rate >= 0.55 else ("yellow" if win_rate >= 0.45 else "red")
         table.add_row(
             "Win rate vs SealBot",
             Text(f"{win_rate*100:.1f}%", style=wr_color),
             "",
         )
-    else:
-        table.add_row("Win rate vs SealBot", "-", "")
 
-    title = f"Eval Summary (step {eval_step})" if eval_step is not None else "Eval Summary"
+    title = f"Eval / Strength (step {eval_step})" if eval_step is not None else "Eval / Strength"
     return Panel(table, title=title, border_style="green")
 
 
@@ -683,6 +813,51 @@ def _build_game_browser_panel(browser: "GameBrowser") -> Panel:
     return Panel(table, title=title, border_style="dim cyan")
 
 
+def _build_ops_footer(
+    reader: _LogReader,
+    config: dict,
+    start_time: float,
+) -> Panel:
+    """Ops footer — checkpoint counter, ETA, uptime."""
+    checkpoint_interval = int(
+        config.get("training", {}).get("checkpoint_interval", 500)
+    )
+    step = reader.current_step
+
+    # Checkpoint number and steps to next
+    if reader.latest_checkpoint_step is not None:
+        ckpt_num = reader.latest_checkpoint_step // checkpoint_interval
+        ckpt_str = f"#{ckpt_num}"
+    else:
+        ckpt_str = "–"
+
+    steps_to_next = checkpoint_interval - (step % checkpoint_interval) if step > 0 else checkpoint_interval
+
+    # ETA from games_per_hour
+    steps_per_game = float(config.get("training", {}).get("training_steps_per_game", 1.0))
+    gph = reader.games_per_hour
+    if gph is not None and gph > 0 and steps_per_game > 0:
+        steps_per_hour = gph * steps_per_game
+        minutes_to_next = (steps_to_next / steps_per_hour) * 60
+        eta_str = f"~{minutes_to_next:.0f}m"
+    else:
+        eta_str = "–"
+
+    # Uptime
+    uptime_s = time.monotonic() - start_time
+    uptime_h = int(uptime_s // 3600)
+    uptime_m = int((uptime_s % 3600) // 60)
+
+    parts = [
+        f"step {step:,}" if step else "step –",
+        f"Checkpoint {ckpt_str}",
+        f"next in {steps_to_next} steps ({eta_str})",
+        f"uptime {uptime_h}h {uptime_m}m",
+    ]
+    text = "  ·  ".join(parts)
+    return Panel(Text(text, style="dim"), title="Ops", border_style="dim", height=3)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase40Dashboard — passive observer
 # ─────────────────────────────────────────────────────────────────────────────
@@ -719,6 +894,7 @@ class Phase40Dashboard:
             corpus_dir=str(corpus_dir),
             replay_dir=str(replay_dir),
         )
+        self._start_time  = time.monotonic()
         self.console      = Console()
 
     # ── Public interface ──────────────────────────────────────────────────────
@@ -755,7 +931,10 @@ class Phase40Dashboard:
             _build_colony_panel(self._eval_reader)
         )
         self._layout["mid_right"].update(
-            _build_buffer_panel(self._buffer, self._config, step)
+            _build_buffer_panel(
+                self._buffer, self._config, step,
+                buffer_self_play_pct=self._log_reader.buffer_self_play_pct,
+            )
         )
         self._layout["bot_left"].update(
             _build_decay_panel(
@@ -771,6 +950,9 @@ class Phase40Dashboard:
         self._layout["browser"].update(
             _build_game_browser_panel(self._game_browser)
         )
+        self._layout["ops"].update(
+            _build_ops_footer(self._log_reader, self._config, self._start_time)
+        )
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -782,6 +964,7 @@ class Phase40Dashboard:
             Layout(name="mid",     size=14),
             Layout(name="bot",     size=13),
             Layout(name="browser", size=20),
+            Layout(name="ops",     size=3),
         )
         layout["top"].split_row(
             Layout(name="top_left"),
@@ -797,7 +980,7 @@ class Phase40Dashboard:
         )
         # Seed every panel with a placeholder so cold-start renders correctly.
         for name in ("top_left", "top_right", "mid_left", "mid_right",
-                     "bot_left", "bot_right", "browser"):
+                     "bot_left", "bot_right", "browser", "ops"):
             layout[name].update(_waiting())
         return layout
 
