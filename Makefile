@@ -12,6 +12,7 @@ CONFIG_MULTI ?= configs/long_run_balanced.yaml
 
 CHECKPOINT_BOOTSTRAP ?= checkpoints/bootstrap_model.pt
 CHECKPOINT_LATEST ?= $(shell ls -1 checkpoints/checkpoint_*.pt 2>/dev/null | tail -n 1)
+PRETRAIN_CKPT ?= $(shell ls -1 checkpoints/pretrain/pretrain_*.pt 2>/dev/null | tail -n 1)
 
 SEALBOT_N ?= 100
 SEALBOT_TIME ?= 0.03
@@ -148,6 +149,33 @@ train.multi.dashboard: ## Multi-hour training with web dashboard
 	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_BOOTSTRAP) \
 	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
 
+.PHONY: train
+train: ## Self-play training (auto-finds latest pretrain checkpoint)
+	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
+	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
+	    exit 1; \
+	fi
+	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
+	$(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT)
+
+.PHONY: train.dashboard
+train.dashboard: ## Self-play training + web dashboard (training in background, dashboard in foreground)
+	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
+	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
+	    exit 1; \
+	fi
+	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
+	$(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) & sleep 3 && $(MAKE) dashboard
+
+.PHONY: train.smoke
+train.smoke: ## 200-step smoke test to verify training end-to-end
+	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
+	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
+	    exit 1; \
+	fi
+	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
+	$(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 200
+
 .PHONY: train.resume
 train.resume: ## Resume multi-hour training from latest checkpoint
 	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
@@ -237,4 +265,16 @@ corpus.analysis: corpus.manifest ## Run corpus analysis on human + bot games
 .PHONY: corpus.npz
 corpus.npz: ## Export corpus to data/bootstrap_corpus.npz for mixed training
 	$(PY) scripts/export_corpus_npz.py
+
+.PHONY: help.train
+help.train: ## List all training-related targets
+	@echo "Training targets:"
+	@echo "  make pretrain.lite     — 100-step pretrain smoke test"
+	@echo "  make pretrain          — 5-epoch pretrain"
+	@echo "  make pretrain.full     — 15-epoch pretrain"
+	@echo "  make train             — self-play training (auto-finds pretrain checkpoint)"
+	@echo "  make train.dashboard   — self-play + web dashboard"
+	@echo "  make train.resume      — resume from latest self-play checkpoint"
+	@echo "  make train.smoke       — 200-step smoke test"
+	@echo "  make dashboard         — launch web dashboard (reads logs)"
 
