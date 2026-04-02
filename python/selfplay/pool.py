@@ -104,6 +104,9 @@ class WorkerPool:
 
             with self._lock:
                 self.games_completed = int(self._runner.games_completed)
+                self.x_wins = int(self._runner.x_wins)
+                self.o_wins = int(self._runner.o_wins)
+                self.draws = int(self._runner.draws)
             time.sleep(0.1)
 
     def start(self) -> None:
