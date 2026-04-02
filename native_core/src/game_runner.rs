@@ -1,5 +1,5 @@
 use std::collections::{VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
@@ -32,6 +32,9 @@ pub struct RustSelfPlayRunner {
     running: Arc<AtomicBool>,
     games_completed: Arc<AtomicUsize>,
     positions_generated: Arc<AtomicUsize>,
+    x_wins: Arc<AtomicU64>,
+    o_wins: Arc<AtomicU64>,
+    draws: Arc<AtomicU64>,
     results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32)>>>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
@@ -68,6 +71,9 @@ impl RustSelfPlayRunner {
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
             positions_generated: Arc::new(AtomicUsize::new(0)),
+            x_wins: Arc::new(AtomicU64::new(0)),
+            o_wins: Arc::new(AtomicU64::new(0)),
+            draws: Arc::new(AtomicU64::new(0)),
             results: Arc::new(Mutex::new(VecDeque::new())),
             handles: Arc::new(Mutex::new(Vec::new())),
         }
@@ -83,6 +89,9 @@ impl RustSelfPlayRunner {
             let running = self.running.clone();
             let games_completed = self.games_completed.clone();
             let positions_generated = self.positions_generated.clone();
+            let x_wins = self.x_wins.clone();
+            let o_wins = self.o_wins.clone();
+            let draws = self.draws.clone();
             let batcher = self.batcher.clone();
             let max_moves = self.max_moves_per_game;
             let leaf_batch_size = self.leaf_batch_size;
@@ -238,8 +247,13 @@ impl RustSelfPlayRunner {
                         };
                         games_results.push_back((feat, pol, outcome));
                     }
-                    games_completed.fetch_add(1, Ordering::SeqCst);
-                    
+                    games_completed.fetch_add(1, Ordering::Relaxed);
+                    match winner {
+                        Some(crate::board::Player::One) => { x_wins.fetch_add(1, Ordering::Relaxed); }
+                        Some(_)                         => { o_wins.fetch_add(1, Ordering::Relaxed); }
+                        None                            => { draws.fetch_add(1, Ordering::Relaxed); }
+                    }
+
                     // Cap the results queue to avoid memory explosion if Python is slow
                     if games_results.len() > 10000 {
                         let to_drop = games_results.len() - 10000;
@@ -283,12 +297,35 @@ impl RustSelfPlayRunner {
 
     #[getter]
     pub fn games_completed(&self) -> usize {
-        self.games_completed.load(Ordering::SeqCst)
+        self.games_completed.load(Ordering::Relaxed)
     }
 
     #[getter]
     pub fn positions_generated(&self) -> usize {
-        self.positions_generated.load(Ordering::SeqCst)
+        self.positions_generated.load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    pub fn x_wins(&self) -> u64 {
+        self.x_wins.load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    pub fn o_wins(&self) -> u64 {
+        self.o_wins.load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    pub fn draws(&self) -> u64 {
+        self.draws.load(Ordering::Relaxed)
+    }
+
+    pub fn get_win_stats(&self) -> (u64, u64, u64) {
+        (
+            self.x_wins.load(Ordering::Relaxed),
+            self.o_wins.load(Ordering::Relaxed),
+            self.draws.load(Ordering::Relaxed),
+        )
     }
 }
 
