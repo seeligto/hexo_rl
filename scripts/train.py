@@ -212,6 +212,13 @@ def main() -> None:
         )
         log.info("new_run", model_params=sum(p.numel() for p in model.parameters()))
 
+    # Re-read architecture from the trainer — load_checkpoint infers these from
+    # the state dict, so they may differ from the CLI config (e.g. resuming a
+    # 12-block/128-filter pretrain checkpoint while fast_debug.yaml says 4/64).
+    board_size = int(trainer.config.get("board_size", board_size))
+    res_blocks = int(trainer.config.get("res_blocks", res_blocks))
+    filters    = int(trainer.config.get("filters",    filters))
+
     # ── Replay buffer with growth schedule ──
     buffer_schedule_raw = train_cfg.get("buffer_schedule", config.get("buffer_schedule", []))
     buffer_schedule = sorted(
