@@ -92,6 +92,8 @@ class WorkerPool:
             self.model.load_state_dict(state_dict)
             self.model.eval()
 
+    _WINNER_NAMES = ("draw", "x", "o")
+
     def _stats_loop(self) -> None:
         while not self._stop_event.is_set():
             data = self._runner.collect_data()
@@ -107,6 +109,13 @@ class WorkerPool:
                 self.x_wins = int(self._runner.x_wins)
                 self.o_wins = int(self._runner.o_wins)
                 self.draws = int(self._runner.draws)
+
+            # Emit one structlog game_complete event per completed game so
+            # Phase40Dashboard._LogReader can populate the game-length panel.
+            for plies, winner_code in self._runner.drain_game_results():
+                winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
+                log.info("game_complete", plies=plies, winner=winner)
+
             time.sleep(0.1)
 
     def start(self) -> None:

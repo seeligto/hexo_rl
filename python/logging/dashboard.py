@@ -144,7 +144,9 @@ class _LogReader:
                 self.game_lengths.append(plies)
 
         elif event == "train_step":
-            step = entry.get("iteration", self.current_step)
+            # train.py logs the step as "step"; accept "iteration" too for
+            # compatibility with any older log files.
+            step = entry.get("step", entry.get("iteration", self.current_step))
             self.current_step = step
             if (v := entry.get("policy_loss")) is not None:
                 self.policy_losses.append(float(v))

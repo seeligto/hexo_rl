@@ -36,6 +36,9 @@ pub struct RustSelfPlayRunner {
     o_wins: Arc<AtomicU64>,
     draws: Arc<AtomicU64>,
     results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32)>>>,
+    /// Ring-buffer of recent (plies, winner_code) pairs for Python logging.
+    /// winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
+    recent_game_results: Arc<Mutex<VecDeque<(usize, u8)>>>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
@@ -75,6 +78,7 @@ impl RustSelfPlayRunner {
             o_wins: Arc::new(AtomicU64::new(0)),
             draws: Arc::new(AtomicU64::new(0)),
             results: Arc::new(Mutex::new(VecDeque::new())),
+            recent_game_results: Arc::new(Mutex::new(VecDeque::new())),
             handles: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -101,6 +105,7 @@ impl RustSelfPlayRunner {
             let standard_sims = self.standard_sims;
             let temp_threshold = self.temp_threshold_compound_moves;
             let results_queue = self.results.clone();
+            let recent_game_results = self.recent_game_results.clone();
 
             let handle = thread::spawn(move || {
                 let mut tree = MCTSTree::new(c_puct);
@@ -239,6 +244,12 @@ impl RustSelfPlayRunner {
 
                     // ── Game End: determine outcome ──
                     let winner = board.winner();
+                    let plies = board.ply as usize;
+                    let winner_code: u8 = match winner {
+                        Some(crate::board::Player::One) => 1,
+                        Some(_)                         => 2,
+                        None                            => 0,
+                    };
                     let mut games_results = results_queue.lock().expect("results lock poisoned");
                     for (feat, pol, player) in records {
                         let outcome = match winner {
@@ -252,6 +263,15 @@ impl RustSelfPlayRunner {
                         Some(crate::board::Player::One) => { x_wins.fetch_add(1, Ordering::Relaxed); }
                         Some(_)                         => { o_wins.fetch_add(1, Ordering::Relaxed); }
                         None                            => { draws.fetch_add(1, Ordering::Relaxed); }
+                    }
+                    // Record (plies, winner_code) for Python game_complete logging.
+                    {
+                        let mut rg = recent_game_results.lock().expect("recent_game_results lock poisoned");
+                        rg.push_back((plies, winner_code));
+                        // Cap at 2000 entries to avoid unbounded growth if Python is slow.
+                        if rg.len() > 2000 {
+                            rg.pop_front();
+                        }
                     }
 
                     // Cap the results queue to avoid memory explosion if Python is slow
@@ -326,6 +346,15 @@ impl RustSelfPlayRunner {
             self.o_wins.load(Ordering::Relaxed),
             self.draws.load(Ordering::Relaxed),
         )
+    }
+
+    /// Drain and return all buffered (plies, winner_code) pairs since the last call.
+    /// winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
+    /// Called by Python pool._stats_loop() to emit game_complete structlog events.
+    pub fn drain_game_results(&self) -> Vec<(usize, u8)> {
+        let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
+        let out: Vec<(usize, u8)> = rg.drain(..).collect();
+        out
     }
 }
 
