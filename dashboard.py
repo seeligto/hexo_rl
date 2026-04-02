@@ -1339,9 +1339,11 @@ function fetchReplays() {
 }
 function viewReplay(key) {
   fetch('/api/replays/' + encodeURIComponent(key)).then(r => r.json()).then(g => {
-    if (g.error) { alert(g.error); return; }
-    const moves = (g.moves || []).map((m, i) => (i + 1) + '. (' + m[0] + ',' + m[1] + ')').join('\n');
-    alert(g.winner + ' in ' + g.game_length + ' moves\n\n' + moves);
+    if (g.error) return;
+    const result = g.winner === 'x_win' ? 1.0 : g.winner === 'o_win' ? -1.0 : 0.0;
+    const label = 'ckpt-' + g.checkpoint_step;
+    replayPaused = false;
+    replayGame({ game_idx: label, moves: g.moves || [], result: result });
   }).catch(() => {});
 }
 fetchReplays();
@@ -1368,9 +1370,11 @@ function fetchCorpusReplays() {
 }
 function viewCorpusReplay(key) {
   fetch('/api/corpus-replays/' + encodeURIComponent(key)).then(r => r.json()).then(g => {
-    if (g.error) { alert(g.error); return; }
-    const moves = (g.moves || []).map((m, i) => (i + 1) + '. (' + m[0] + ',' + m[1] + ')').join('\n');
-    alert(g.winner + ' in ' + g.game_length + ' moves [' + (g.source || '') + ']\n\n' + moves);
+    if (g.error) return;
+    const result = g.winner === 'x_win' ? 1.0 : g.winner === 'o_win' ? -1.0 : 0.0;
+    const label = (g.source ? '[' + g.source + '] ' : '') + g.game_id;
+    replayPaused = false;
+    replayGame({ game_idx: label, moves: g.moves || [], result: result });
   }).catch(() => {});
 }
 fetchCorpusReplays();
