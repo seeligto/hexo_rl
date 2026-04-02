@@ -28,7 +28,7 @@
 
 ### 5. Coordinate System
 - **Pass.** Uses axial `(q, r)` as `Coord = tuple[int, int]`.
-- Matches our `native_core` representation.
+- Matches our `engine` representation.
 
 ## Decision Rule
 Integrate `hexo` for:
@@ -36,4 +36,4 @@ Integrate `hexo` for:
 - Managing game state during corpus conversion.
 - Serializing/Deserializing games to JSON.
 
-We will keep our `native_core` Rust board for performance-critical MCTS and training, but use `hexo` for Python orchestration.
+We will keep our `engine` Rust board for performance-critical MCTS and training, but use `hexo` for Python orchestration.

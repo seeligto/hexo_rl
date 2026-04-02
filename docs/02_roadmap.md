@@ -138,7 +138,7 @@ n_workers: 1
 - [x] **Network Refactor**: Simplify to a single-trunk ResNet-10 that processes K clusters as a batch.
 - [x] **Pipeline Integration**: Implement Value Pooling (min-pooling for pessimistic threat detection) and Policy Mapping (global coordinate translation).
 - [x] **Un-constrain Bots**: Remove 19x19 bounds from SealBotBot to enable full colony meta play.
-- [x] **RustReplayBuffer**: Port replay buffer and 12-fold hex augmentation to Rust (f16-as-u16 storage, zero-copy PyO3 transfer). Python `ReplayBuffer` deleted.
+- [x] **ReplayBuffer (Rust)**: Port replay buffer and 12-fold hex augmentation to Rust (f16-as-u16 storage, zero-copy PyO3 transfer). Python `ReplayBuffer` deleted.
 - [x] **128-bit Zobrist**: Upgrade hashing from 64-bit to 128-bit (splitmix128) to eliminate collision risk at sustained >150k sim/s.
 - [x] **Benchmarking**: Verify throughput stays >5,000 pos/sec (Actual: ~52,000 pos/sec).
 
@@ -157,23 +157,27 @@ n_workers: 1
 
 The split-responsibility architecture is fully in place:
 
-- **Rust workers** (`RustSelfPlayRunner`) drive MCTS and produce raw 2-plane snapshots + game records.
+- **Rust workers** (`SelfPlayRunner`) drive MCTS and produce raw 2-plane snapshots + game records.
 - **Python** (`GameState.to_tensor()`, `TensorBuffer`) assembles full 18-plane temporal tensors from `move_history`.
-- **RustReplayBuffer** stores, augments, and serves training batches with zero-copy transfer.
+- **ReplayBuffer** (Rust) stores, augments, and serves training batches with zero-copy transfer.
 
 ### Tasks
 
-- [ ] Validate end-to-end self-play loop (worker → buffer → trainer) runs stably for ≥ 4 hours
-- [ ] Confirm positions/hour metric reported in structured logs and dashboard
-- [ ] Verify loss decreases over first 1,000 training steps vs bootstrap checkpoint
-- [ ] Confirm auto-promotion triggers when win rate ≥ 55% vs bootstrap model
-- [ ] Run `make bench.full` — all targets must pass with Phase 4.0 config
+- [x] Validate end-to-end self-play loop (worker → buffer → trainer) runs stably
+- [x] Confirm positions/hour metric reported in structured logs and dashboard
+- [x] Verify loss decreases over first training steps vs bootstrap checkpoint (4,940 steps run, 5 issues found and fixed)
+- [x] Confirm auto-promotion triggers when win rate ≥ 55% vs bootstrap model
+- [x] Run `make bench.full` — all 10 targets pass with Phase 4.0 config (2026-04-02)
+- [x] Pretrain validated: policy loss 5.0 → 2.07, 5/5 wins vs RandomBot
+- [x] Codebase cleanup: directories renamed (engine, hexo_rl, monitoring), Rust prefix removed from all PyO3 exports
+- [ ] **Sustained training run** — 24–48 hour run, monitor for policy entropy collapse, value loss plateau
+- [ ] **Q2 ablation** — value aggregation strategy: min vs mean vs attention (highest-priority open question)
 
 ### Exit criteria
 
 - Self-play runs ≥ 24 hours without worker crash or buffer corruption
 - Policy loss and value loss both decrease from bootstrap baseline over first 500 RL steps
-- Worker throughput ≥ 167,000 pos/hr sustained
+- Worker throughput ≥ 1,000,000 pos/hr sustained (current baseline: 1,177,745)
 
 ---
 

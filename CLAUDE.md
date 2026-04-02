@@ -14,18 +14,18 @@ Target hardware: AMD Ryzen 7 3700x + RTX 3070 + 48GB RAM.
 
 Full context is in `docs/`. Read them in order before starting any task:
 
-- `docs/00_AGENT_CONTEXT.md` — orientation, language boundary, key decisions
-- `docs/01_ARCHITECTURE.md` — full technical spec
-- `docs/02_ROADMAP.md` — phases with entry/exit criteria (always check current phase)
-- `docs/03_TOOLING.md` — logging, benchmarking, progress display conventions
-- `docs/04_BOOTSTRAP_STRATEGY.md` — minimax corpus generation and pretraining
-- `docs/05_COMMUNITY_INTEGRATION.md` — community bot, API, notation, formations
+- `docs/00_agent_context.md` — orientation, language boundary, key decisions
+- `docs/01_architecture.md` — full technical spec
+- `docs/02_roadmap.md` — phases with entry/exit criteria (always check current phase)
+- `docs/03_tooling.md` — logging, benchmarking, progress display conventions
+- `docs/04_bootstrap_strategy.md` — minimax corpus generation and pretraining
+- `docs/05_community_integration.md` — community bot, API, notation, formations
 
 ---
 
 ## Prime Directive
 
-**Context first, benchmarking mandatory.** Never suggest an architectural change without first reading the relevant `docs/` and `native_core` source. Never commit a performance-sensitive change (MCTS, NN, Buffer) without running `make bench.full` and verifying no regressions against the baseline.
+**Context first, benchmarking mandatory.** Never suggest an architectural change without first reading the relevant `docs/` and `engine` source. Never commit a performance-sensitive change (MCTS, NN, Buffer) without running `make bench.full` and verifying no regressions against the baseline.
 
 ---
 
@@ -71,8 +71,10 @@ After each commit, confirm tests still pass before starting the next task.
 Always check `docs/02_ROADMAP.md` for the current phase before starting work.
 
 **Current Status:** Phase 4.0 Self-Play RL loop is **Active**.
-Blockers cleared: pytest hang, action space verification, bot corpus.
-Next milestone: Phase 4.5 (benchmark gate — see docs/02_ROADMAP.md).
+- Pretrain validated: policy loss 5.0 → 2.07, 5/5 wins vs RandomBot.
+- First self-play run: 4,940 steps, found 5 issues, all fixed.
+- Ready for sustained training run.
+Next milestone: Phase 4.5 (benchmark gate — see docs/02_roadmap.md).
 
 Each phase has explicit exit criteria — do not advance until they are met.
 If you are unsure what phase we are in, check git log for the most recent feat commits.
@@ -90,6 +92,19 @@ make test.py
 ```
 
 Fallback (if Makefile is unavailable): run `cargo test` and `pytest` directly.
+
+### Config override discipline
+
+When a value exists in both `configs/default.yaml` and `configs/training.yaml`,
+**both must be updated**. Verify with:
+
+```bash
+grep -r 'key_name' configs/
+```
+
+Never assume a key in one config file is the effective value — `train.py` merges
+them with training.yaml taking precedence, so a stale value in either file will
+override the other.
 
 ### Session start protocol
 
@@ -125,29 +140,31 @@ Before ending any session or when asked to stop:
 
 | Layer | Language | Notes |
 |---|---|---|
-| MCTS tree, board logic, win detection | **Rust** | Build with `maturin develop --release`. Concurrency via Rust-native Game-Level Parallelism (Phase 3.5). |
-| Replay buffer | **Rust** (RustReplayBuffer) | f16-as-u16 ring buffer, 12-fold hex augmentation, zero-copy PyO3 transfer. |
+| MCTS tree, board logic, win detection | **Rust** | Build with `maturin develop --release -m engine/Cargo.toml`. Concurrency via Rust-native Game-Level Parallelism (Phase 3.5). |
+| Replay buffer | **Rust** (ReplayBuffer) | f16-as-u16 ring buffer, 12-fold hex augmentation, zero-copy PyO3 transfer. |
 | Neural network, training loop | **Python + PyTorch** | CUDA, FP16, TF32 enabled, torch.compile. InferenceServer bridges Rust worker threads. |
 | Temporal tensor assembly | **Python + NumPy** | Stacks 2-plane cluster snapshots + `move_history` into `(18, 19, 19)` tensors. |
-| Orchestration, config, logging | **Python** | structlog (JSON) + rich (console) |
+| Orchestration, config, monitoring | **Python** | structlog (JSON) + rich (console) |
 
-PyO3 exposes Rust to Python. Import as: `from native_core import Board, MCTSTree, RustReplayBuffer`
+PyO3 exposes Rust to Python. Import as: `from engine import Board, MCTSTree, ReplayBuffer, SelfPlayRunner, InferenceBatcher`
 
 Build commands:
 
 ```bash
-cd native_core && cargo build --release   # Rust only
-maturin develop --release                 # builds + installs Python extension
-pytest tests/                             # Python tests
-cargo test                                # Rust tests
-cargo bench                               # Rust micro-benchmarks
+cd engine && cargo build --release               # Rust only
+maturin develop --release -m engine/Cargo.toml  # builds + installs Python extension
+pytest tests/                                    # Python tests
+cargo test                                       # Rust tests
+cargo bench                                      # Rust micro-benchmarks
 ```
 
 Make commands (preferred):
 
 ```bash
-make env.check        # verify .venv + native_core import
+make env.check        # verify .venv + engine import
 make native.build     # build/install Rust extension via maturin
+make clean            # remove Rust build artifacts and Python caches
+make rebuild          # full clean + optimized rebuild
 make test.rust        # Rust tests
 make test.py          # Python tests (tests/ only)
 make test.all         # Rust + Python tests
@@ -157,7 +174,10 @@ make bench.stress     # heavy 5-min stability test
 make corpus.d4        # generate SealBot depth-4 self-play corpus (2,000 games)
 make corpus.d6        # generate SealBot depth-6 self-play corpus (1,000 games)
 make corpus.all       # generate both d4 and d6 corpora
+make corpus.npz       # export corpus to data/bootstrap_corpus.npz
 make corpus.analysis  # run corpus analysis on human + bot games
+make pretrain.lite    # bootstrap pretrain smoke test (100 steps)
+make pretrain.full    # full bootstrap pretrain (15 epochs)
 ```
 
 ---
@@ -194,7 +214,7 @@ git add vendor/bots/sealbot && git commit -m "chore(vendor): update sealbot to l
 1. Add as submodule (above)
 2. Read its source — understand the interface, build system, and move format
 3. Check for known bugs (SealBot has a documented colony-bug risk — see docs/05_COMMUNITY_INTEGRATION.md)
-4. Write a `BotProtocol` wrapper in `python/bootstrap/bots/`
+4. Write a `BotProtocol` wrapper in `hexo_rl/bootstrap/bots/`
 5. Add a build step to `scripts/build_vendor.sh` if it needs compilation
 6. Write a smoke test: bot returns a legal move on a fresh board
 7. Commit: `feat(bootstrap): add <botname> wrapper`
@@ -212,7 +232,7 @@ HexTacToeBots repo and the community Discord periodically for new entries.
 ### Bot compilation
 
 SealBot uses pybind11 and is imported directly as a Python module — no separate
-compilation step is needed. The wrapper at `python/bootstrap/bots/sealbot_bot.py`
+compilation step is needed. The wrapper at `hexo_rl/bootstrap/bots/sealbot_bot.py`
 adds `vendor/bots/sealbot` to `sys.path` and imports `minimax_cpp.MinimaxBot`.
 
 The agent must read the actual README/build instructions in the submodule
@@ -222,7 +242,7 @@ before writing the build command — do not guess.
 
 ## Bot protocol — all bots are interchangeable
 
-Every game source implements `BotProtocol` (python/bootstrap/bot_protocol.py).
+Every game source implements `BotProtocol` (hexo_rl/bootstrap/bot_protocol.py).
 This makes all bots swappable for corpus generation and evaluation.
 
 ```python
@@ -232,7 +252,7 @@ class BotProtocol(ABC):
     @abstractmethod
     def name(self) -> str: ...
 
-# Wrappers live in python/bootstrap/bots/:
+# Wrappers live in hexo_rl/bootstrap/bots/:
 #   sealbot_bot.py       — wraps SealBot pybind11 minimax engine
 #   our_model_bot.py     — wraps our checkpoint + MCTS
 #   random_bot.py        — uniform random (baseline)
@@ -251,7 +271,7 @@ Never hardcode which bots generate corpus games — drive from config.
 
 URL: <https://[site-redacted]/games>
 Paginated listing of all community games. Filter: rated games, moves > 20.
-Scraper: python/bootstrap/scraper.py — see docs/04_BOOTSTRAP_STRATEGY.md.
+Scraper: hexo_rl/bootstrap/scraper.py — see docs/04_bootstrap_strategy.md.
 **Before implementing the scraper:** fetch one game page, inspect the actual HTML
 structure, then implement. Do not guess selectors.
 
@@ -279,30 +299,32 @@ Read before implementing the BKE parser.
 
 ---
 
-## Repository layout (target)
+## Repository layout (current)
 
 ```
-hex_tac_toe_az/
+hexo_rl/
 ├── CLAUDE.md
 ├── docs/
-│   ├── 00_AGENT_CONTEXT.md
-│   ├── 01_ARCHITECTURE.md
-│   ├── 02_ROADMAP.md
-│   ├── 03_TOOLING.md
-│   ├── 04_BOOTSTRAP_STRATEGY.md
-│   ├── 05_COMMUNITY_INTEGRATION.md
+│   ├── 00_agent_context.md
+│   ├── 01_architecture.md
+│   ├── 02_roadmap.md
+│   ├── 03_tooling.md
+│   ├── 04_bootstrap_strategy.md
+│   ├── 05_community_integration.md
+│   ├── 06_OPEN_QUESTIONS.md
+│   ├── 07_PHASE4_SPRINT_LOG.md
 │   └── reference/                   ← downloaded specs (git-ignored)
-├── native_core/
+├── engine/
 │   ├── src/
 │   │   ├── board/                   ← sparse HashMap board, axial coords, win detection
 │   │   ├── mcts/                    ← PUCT tree, node pool, virtual loss
 │   │   ├── formations/              ← incremental formation detection
+│   │   ├── replay_buffer/           ← f16-as-u16 ring buffer, 12-fold augmentation
+│   │   ├── game_runner.rs           ← SelfPlayRunner (Rust worker threads)
+│   │   ├── inference_bridge.rs      ← InferenceBatcher (Rust→Python GPU queue)
 │   │   └── lib.rs
 │   └── Cargo.toml
-├── python/
-│   ├── model/
-│   ├── selfplay/
-│   ├── training/
+├── hexo_rl/
 │   ├── bootstrap/
 │   │   ├── bot_protocol.py          ← BotProtocol ABC
 │   │   ├── bots/
@@ -312,16 +334,26 @@ hex_tac_toe_az/
 │   │   │   └── community_api_bot.py ← CommunityAPIBot (HTTP)
 │   │   ├── scraper.py               ← [site-redacted] scraper
 │   │   ├── generate_corpus.py       ← orchestrates all corpus sources
+│   │   ├── corpus_analysis.py       ← corpus quality analysis
 │   │   └── pretrain.py
-│   ├── eval/
-│   ├── opening_book/
-│   ├── api/
-│   └── logging/
+│   ├── corpus/                      ← corpus pipeline and metrics
+│   ├── env/                         ← GameState, tensor assembly
+│   ├── eval/                        ← Bradley-Terry, eval pipeline, results DB
+│   ├── model/                       ← HexTacToeNet
+│   ├── monitoring/                  ← structlog setup, GPU monitor, metrics writer
+│   ├── opening_book/                ← game record parser
+│   ├── selfplay/                    ← inference server, worker pool, policy projection
+│   ├── training/                    ← Trainer, checkpoints, losses
+│   └── utils/                       ← config loader, constants
 ├── configs/
 ├── scripts/
-│   ├── build_vendor.sh              ← compiles C++ bots after submodule init
+│   ├── train.py
+│   ├── benchmark.py
+│   ├── eval_vs_sealbot.py
+│   ├── scrape_daily.sh
 │   └── ...
 ├── tests/
+├── dashboard.py                     ← Flask+SocketIO web dashboard
 ├── vendor/
 │   └── bots/                        ← git submodules
 │       ├── sealbot/                 ← Ramora0/SealBot

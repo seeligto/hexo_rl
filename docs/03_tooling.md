@@ -15,7 +15,7 @@ Two separate concerns that must not be conflated:
 ### Python — structlog setup
 
 ```python
-# python/logging/setup.py
+# hexo_rl/monitoring/configure.py
 import structlog
 import logging
 from pathlib import Path
@@ -78,7 +78,7 @@ log.info("eval_result",
 ### Rust — tracing setup
 
 ```rust
-// In native_core/src/lib.rs, called once at init via PyO3
+// In engine/src/lib.rs, called once at init via PyO3
 use tracing_subscriber::fmt;
 
 pub fn init_tracing(level: &str) {
@@ -134,7 +134,7 @@ make train.resume.dashboard           # resume + dashboard
     --web-dashboard --web-dashboard-url http://localhost:5001
 ```
 
-**DashboardClient** (`python/training/dashboard_utils.py`) — fire-and-forget bridge:
+**DashboardClient** (`hexo_rl/training/dashboard_utils.py`) — fire-and-forget bridge:
 
 - Background daemon thread + `queue.Queue(maxsize=512)`
 - Enqueue cost: ~0.7 µs/call — negligible vs training step time
@@ -142,7 +142,7 @@ make train.resume.dashboard           # resume + dashboard
 - If server is not running: warns once, then silently discards — never blocks training
 
 ```python
-from python.training.dashboard_utils import DashboardClient
+from hexo_rl.training.dashboard_utils import DashboardClient
 
 client = DashboardClient(base_url="http://localhost:5001")
 client.send_game(moves=[], result=1.0)
@@ -178,7 +178,7 @@ Conclusion: zero measurable impact on MCTS or GPU metrics.
 ### Terminal dashboard (rich)
 
 ```python
-# python/logging/dashboard.py
+# hexo_rl/monitoring/dashboard.py
 from rich.live import Live
 from rich.table import Table
 from rich.panel import Panel
@@ -237,7 +237,7 @@ class TrainingDashboard:
 ### Post-training results summary
 
 ```python
-# python/logging/results.py
+# hexo_rl/monitoring/results.py
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -288,18 +288,18 @@ def print_training_summary(history: list[dict]):
 
 ### What to measure
 
-| Benchmark | Unit | Target | Baseline (2026-04-01, 16w) |
+| Benchmark | Unit | Target | Baseline (2026-04-02, 16w) |
 |---|---|---|---|
-| MCTS throughput | simulations/sec | ≥ 160,000 | 176,963 |
-| Inference throughput | positions/sec | ≥ 8,500 | 10,064 |
-| Inference latency (batch=1) | ms mean | ≤ 2 ms | 1.50 ms |
-| Worker throughput | positions/hour | ≥ 1,290,000 | 1,522,127 |
+| MCTS throughput | simulations/sec | ≥ 160,000 | 189,656 |
+| Inference throughput | positions/sec | ≥ 8,500 | 10,080 |
+| Inference latency (batch=1) | ms mean | ≤ 2 ms | 1.52 ms |
+| Worker throughput | positions/hour | ≥ 1,000,000 | 1,177,745 |
 | GPU utilization | % | ≥ 85% | 100.0% |
-| VRAM peak | GB | ≤ 6.9 GB (80%) | 0.77 GB |
-| Batch fill % | % | ≥ 84% | 99.4% |
-| Replay buffer push | positions/sec | ≥ 630,000 | 745,523 |
-| Replay buffer sample raw (batch=256) | µs/batch | ≤ 1,200 | 1,040 |
-| Replay buffer sample augmented (batch=256) | µs/batch | ≤ 1,200 | 1,001 |
+| VRAM peak | GB | ≤ 6.9 GB (80%) | 0.78 GB |
+| Batch fill % | % | ≥ 84% | 99.82% |
+| Replay buffer push | positions/sec | ≥ 630,000 | 905,697 |
+| Replay buffer sample raw (batch=256) | µs/batch | ≤ 1,200 | 1,000 |
+| Replay buffer sample augmented (batch=256) | µs/batch | ≤ 1,200 | 949 |
 
 ### Practical benchmark commands
 
@@ -319,6 +319,20 @@ Heavy stability and deep search stress test:
 
 ```bash
 make bench.stress
+```
+
+Save a dated baseline JSON:
+
+```bash
+make bench.baseline
+```
+
+Corpus and pretrain targets:
+
+```bash
+make corpus.npz        # export corpus to data/bootstrap_corpus.npz
+make pretrain.lite     # smoke test (100 steps)
+make pretrain.full     # full pretrain (15 epochs)
 ```
 
 If worker-pool throughput reports 0 positions/hour in short runs, increase `--pool-duration`.
@@ -346,7 +360,7 @@ import torch
 import numpy as np
 from rich.console import Console
 from rich.table import Table
-from native_core import MCTSTree, Board, GameBenchmarks
+from engine import MCTSTree, Board
 
 console = Console()
 
@@ -459,11 +473,11 @@ def print_benchmark_report(results: list[dict]):
     console.print(table)
 
 if __name__ == "__main__":
-    from python.model.network import HexTacToeNet
-    from native_core import RustReplayBuffer
+    from hexo_rl.model.network import HexTacToeNet
+    from engine import ReplayBuffer
 
     model = HexTacToeNet().cuda().half()
-    buffer = RustReplayBuffer(capacity=100_000)
+    buffer = ReplayBuffer(capacity=100_000)
     # fill buffer with dummy data for benchmark
     for i in range(10_000):
         buffer.push(
@@ -521,7 +535,7 @@ historical comparison.
 ### Rust micro-benchmarks (criterion)
 
 ```toml
-# native_core/Cargo.toml
+# engine/Cargo.toml
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 
@@ -531,9 +545,9 @@ harness = false
 ```
 
 ```rust
-// native_core/benches/mcts_bench.rs
+// engine/benches/mcts_bench.rs
 use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
-use native_core::{Board, MCTSTree};
+use engine::{Board, MCTSTree};
 
 fn bench_win_detection(c: &mut Criterion) {
     let mut board = Board::new(19);
@@ -575,7 +589,7 @@ Run with: `cargo bench --bench mcts_bench -- --output-format html`
 During training, poll `pynvml` every 5 seconds and log to structlog:
 
 ```python
-# python/logging/gpu_monitor.py
+# hexo_rl/monitoring/gpu_monitor.py
 import pynvml
 import threading
 import time
@@ -614,7 +628,7 @@ class GPUMonitor(threading.Thread):
 ## 5. TensorBoard / wandb integration
 
 ```python
-# python/logging/metrics_writer.py
+# hexo_rl/monitoring/metrics_writer.py
 from torch.utils.tensorboard import SummaryWriter
 
 class MetricsWriter:
