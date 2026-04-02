@@ -478,12 +478,86 @@ def analyse_cluster_counts(records: List[GameRecord],
 
 
 # ---------------------------------------------------------------------------
+# Analysis (f): Ply coverage
+# ---------------------------------------------------------------------------
+
+def analyse_ply_coverage(records: List[GameRecord], label: str = "all") -> dict:
+    """Count training positions at each ply depth.
+
+    Flags late-game underrepresentation when < 10 % of positions fall at
+    ply >= 40.
+
+    Returns:
+        total_positions:    Total stone placements across all games.
+        late_game_positions: Count of positions at ply >= 40.
+        late_game_fraction: late_game_positions / total_positions.
+        late_game_flag:     True if late_game_fraction < 0.10.
+        ply_histogram:      Dict of bucket label → position count (buckets of 10).
+    """
+    if not records:
+        return {
+            "total_positions": 0,
+            "late_game_positions": 0,
+            "late_game_fraction": 0.0,
+            "late_game_flag": False,
+            "ply_histogram": {},
+        }
+
+    ply_counts: dict[int, int] = {}
+    for r in records:
+        for ply in range(len(r.moves)):
+            ply_counts[ply] = ply_counts.get(ply, 0) + 1
+
+    total = sum(ply_counts.values())
+    late_game = sum(v for k, v in ply_counts.items() if k >= 40)
+    late_frac = late_game / total if total else 0.0
+
+    # Bucket histogram (bins of 10 plies)
+    hist: dict[str, int] = {}
+    for ply, count in ply_counts.items():
+        lo = (ply // 10) * 10
+        key = f"{lo}-{lo + 9}"
+        hist[key] = hist.get(key, 0) + count
+
+    # Plot
+    if ply_counts:
+        max_ply = max(ply_counts)
+        plies_range = list(range(max_ply + 1))
+        counts_arr = [ply_counts.get(p, 0) for p in plies_range]
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(12, 4))
+        ax.bar(plies_range, counts_arr, width=1.0, edgecolor="none", alpha=0.75,
+               color="#4C72B0")
+        ax.axvline(40, color="red", linestyle="--", linewidth=1.5,
+                   label="Ply 40 (late-game threshold)")
+        ax.set_xlabel("Ply depth")
+        ax.set_ylabel("Training positions")
+        ax.set_title(
+            f"Positions per Ply ({SOURCE_LABELS.get(label, label)}) — "
+            f"ply≥40: {late_frac:.1%}"
+            + (" [UNDERREPRESENTED]" if late_frac < 0.10 else "")
+        )
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(REPORT_DIR / f"ply_coverage_{label}.png", dpi=150)
+        plt.close(fig)
+
+    return {
+        "total_positions":    total,
+        "late_game_positions": late_game,
+        "late_game_fraction": round(late_frac, 4),
+        "late_game_flag":     late_frac < 0.10,
+        "ply_histogram":      dict(sorted(hist.items())),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Quality scores (Task 3)
 # ---------------------------------------------------------------------------
 
 def compute_quality_scores(records: List[GameRecord],
                            entropy_by_game: Dict[str, float],
-                           config_path: Path = Path("configs/corpus_filter.yaml"),
+                           config_path: Path = Path("configs/corpus.yaml"),
                            ) -> Dict[str, dict]:
     """Compute per-game quality scores and write to sidecar file.
 
@@ -646,6 +720,11 @@ def run_analysis(records: List[GameRecord], label: str = "all",
     log.info("cluster_counts_done", label=label,
              median=cluster_stats["median_cluster_count"])
 
+    ply_stats = analyse_ply_coverage(records, label)
+    log.info("ply_coverage_done", label=label,
+             late_game_fraction=ply_stats["late_game_fraction"],
+             flag=ply_stats["late_game_flag"])
+
     return {
         "game_count": len(records),
         "total_positions": sum(len(r.moves) for r in records),
@@ -654,6 +733,7 @@ def run_analysis(records: List[GameRecord], label: str = "all",
         "move_entropy": entropy_stats,
         "opening_diversity": diversity_stats,
         "cluster_counts": cluster_stats,
+        "ply_coverage": ply_stats,
     }
 
 
@@ -696,6 +776,14 @@ def _print_summary_table(results: dict, label: str) -> None:
     table.add_row("Median K (clusters)", str(cc["median_cluster_count"]), "")
     table.add_row("Frac K > 2", f"{cc['frac_k_gt2']:.1%}", "")
     table.add_row("Max K", str(cc["max_cluster_count"]), "")
+
+    pc = results.get("ply_coverage", {})
+    if pc:
+        late_frac = pc.get("late_game_fraction", 0.0)
+        late_flag = pc.get("late_game_flag", False)
+        late_str = f"{late_frac:.1%}"
+        pc_flag = "[red]< 10% (underrepresented)[/red]" if late_flag else "[green]OK[/green]"
+        table.add_row("Positions at ply ≥ 40", late_str, pc_flag)
 
     console.print(table)
 

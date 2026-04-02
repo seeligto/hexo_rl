@@ -1,5 +1,6 @@
 # model.yaml — model architecture hyperparameters
-# These are also present in default.yaml; this file exists for standalone reference.
+# Single source of truth for all architecture dimensions.
+# Never override these in other config files.
 
 board_size: 19
 in_channels: 18

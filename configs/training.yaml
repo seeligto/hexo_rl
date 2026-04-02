@@ -1,5 +1,5 @@
-# training.yaml — training hyperparameters
-# These are also present in default.yaml; this file exists for standalone reference.
+# training.yaml — training loop hyperparameters
+# Single source of truth for all training settings.
 
 fp16: true
 torch_compile: false   # reduce-overhead CUDA graphs are thread-local; inference+train share one model → crash
@@ -14,7 +14,7 @@ lr_schedule: cosine
 eval_interval: 500
 checkpoint_interval: 500
 max_checkpoints_kept: 10
-log_interval: 10
+log_interval: 10        # also controls web-dashboard send frequency
 aux_opp_reply_weight: 0.15
 
 game_length_weights:
@@ -32,3 +32,5 @@ mixing:
   decay_steps: 1_000_000
   min_pretrained_weight: 0.1
   initial_pretrained_weight: 0.8
+
+seed: 42

@@ -530,8 +530,8 @@ def pretrain() -> None:
 
     # Load configs
     from hexo_rl.utils.config import load_config
-    config: Dict = load_config("configs/training.yaml", "configs/model.yaml")
-    corpus_cfg: Dict = load_config("configs/corpus_filter.yaml")
+    config: Dict = load_config("configs/model.yaml", "configs/training.yaml")
+    corpus_cfg: Dict = load_config("configs/corpus.yaml")
     if args.batch_size:
         config["batch_size"] = args.batch_size
     batch_size = int(config.get("batch_size", 512))

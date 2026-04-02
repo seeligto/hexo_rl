@@ -1,30 +1,13 @@
-# fast_debug.yaml — tiny config for pipeline validation (Phase 1)
-# Use this config to verify the end-to-end loop runs without crashing.
-# Not intended to produce a strong model.
+# fast_debug.yaml — quick smoke-test overrides
+# Applied on top of base configs (model.yaml + training.yaml + selfplay.yaml).
+# NEVER override architecture here (res_blocks, filters, board_size).
 
-board_size: 19         # Rust board is fixed 19x19; speed comes from smaller network
-res_blocks: 4          # shallow network
-filters: 64            # narrow network
-se_reduction_ratio: 4  # SE block bottleneck ratio
-n_simulations: 50      # tiny MCTS search
-batch_size: 64         # training batch size
-n_workers: 1           # single self-play process
+training:
+  max_steps: 100
+  batch_size: 32
 
-# Replay buffer
-buffer_capacity: 50000
-min_buffer_size: 512   # start training once buffer has this many positions
+selfplay:
+  n_workers: 2
 
-# Training
-lr: 2.0e-3
-weight_decay: 1.0e-4
-checkpoint_interval: 100   # save every N training steps
-log_interval: 10           # log loss every N training steps
-
-# Self-play
-temperature_threshold_ply: 30   # use temp=1.0 before this ply, 0.1 after
-c_puct: 1.5
-dirichlet_alpha: 0.3
-dirichlet_epsilon: 0.25
-
-# Seed
-seed: 42
+eval_pipeline:
+  eval_interval: 9999999  # disable eval in smoke tests

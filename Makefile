@@ -5,8 +5,9 @@ PY ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 MATURIN ?= .venv/bin/maturin
 
+# Override config files — applied on top of base configs (model+training+selfplay).
+# Omit --config to use base configs unmodified (production settings).
 CONFIG_LITE ?= configs/fast_debug.yaml
-CONFIG_FULL ?= configs/default.yaml
 CONFIG_MULTI ?= configs/long_run_balanced.yaml
 
 CHECKPOINT_BOOTSTRAP ?= checkpoints/bootstrap_model.pt
@@ -97,16 +98,16 @@ N_CORES ?= $(shell python3 -c "import os; print(os.cpu_count() or 4)")
 
 .PHONY: bench.full
 bench.full: ## Higher-confidence benchmark (n=5, CPU pin attempted, warm-up)
-	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full
+	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full
 
 .PHONY: bench.stress
 bench.stress: ## Heavy stress test (n=10, CPU pin required, 5-min pool runs)
-	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 100000 --pool-workers $(N_CORES) --pool-duration 300 --mcts-search-sims 800 --mode stress
+	$(PY) scripts/benchmark.py --mcts-sims 100000 --pool-workers $(N_CORES) --pool-duration 300 --mcts-search-sims 800 --mode stress
 
 .PHONY: bench.baseline
 bench.baseline: ## Run bench.full and save as dated baseline report
 	mkdir -p reports/benchmarks
-	$(PY) scripts/benchmark.py --config $(CONFIG_FULL) --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full 2>&1 | tee reports/benchmarks/$$(date +%Y-%m-%d)_baseline.log
+	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full 2>&1 | tee reports/benchmarks/$$(date +%Y-%m-%d)_baseline.log
 
 .PHONY: bench.mcts
 bench.mcts: ## Dedicated Rust MCTS micro-benchmark
@@ -130,11 +131,11 @@ train.lite.dashboard: ## Fast debug training with web dashboard (start dashboard
 
 .PHONY: train.full
 train.full: ## Standard training from bootstrap checkpoint, no dashboard
-	$(PY) scripts/train.py --config $(CONFIG_FULL) --checkpoint $(CHECKPOINT_BOOTSTRAP)
+	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP)
 
 .PHONY: train.full.dashboard
 train.full.dashboard: ## Standard training with web dashboard (start dashboard separately first)
-	$(PY) scripts/train.py --config $(CONFIG_FULL) --checkpoint $(CHECKPOINT_BOOTSTRAP) \
+	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) \
 	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
 
 .PHONY: train.multi
@@ -149,12 +150,12 @@ train.multi.dashboard: ## Multi-hour training with web dashboard
 .PHONY: train.resume
 train.resume: ## Resume multi-hour training from latest checkpoint
 	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
-	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_LATEST)
+	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST)
 
 .PHONY: train.resume.dashboard
 train.resume.dashboard: ## Resume training from latest checkpoint with web dashboard
 	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
-	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_LATEST) \
+	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST) \
 	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
 
 .PHONY: plot.train.latest

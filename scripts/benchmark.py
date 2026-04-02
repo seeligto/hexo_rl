@@ -619,7 +619,8 @@ def parse_args() -> argparse.Namespace:
     import os
     default_workers = os.cpu_count() or 4
     p = argparse.ArgumentParser(description="Phase 3.5 / 4 benchmark harness")
-    p.add_argument("--config", default="configs/fast_debug.yaml")
+    p.add_argument("--config", default=None,
+                   help="Optional override config applied on top of base configs")
     p.add_argument("--no-compile", action="store_true",
                    help="Skip torch.compile (faster startup for quick checks)")
     p.add_argument("--mcts-sims", type=int, default=50_000,
@@ -680,7 +681,15 @@ def main() -> None:
         torch.backends.cudnn.benchmark = True
 
     from hexo_rl.utils.config import load_config
-    config = load_config(args.config)
+    _BASE_CONFIGS = [
+        "configs/model.yaml",
+        "configs/training.yaml",
+        "configs/selfplay.yaml",
+    ]
+    if args.config:
+        config = load_config(*_BASE_CONFIGS, args.config)
+    else:
+        config = load_config(*_BASE_CONFIGS)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     console.print(f"[bold]Benchmarking on {device} | mode={args.mode} | n={n_runs}[/bold]")
@@ -688,12 +697,13 @@ def main() -> None:
     from hexo_rl.model.network import HexTacToeNet, compile_model
     from engine import ReplayBuffer
 
-    # Build model
+    # Build model — read from nested model section (new style) with flat fallback
+    model_cfg = config.get("model", {})
     model = HexTacToeNet(
-        board_size=int(config.get("board_size", 19)),
+        board_size=int(model_cfg.get("board_size", config.get("board_size", 19))),
         in_channels=18,
-        filters=int(config.get("filters", 128)),
-        res_blocks=int(config.get("res_blocks", 10)),
+        filters=int(model_cfg.get("filters", config.get("filters", 128))),
+        res_blocks=int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
     ).to(device)
 
     if not args.no_compile:

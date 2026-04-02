@@ -1,0 +1,23 @@
+# selfplay.yaml — self-play and MCTS configuration
+
+mcts:
+  n_simulations: 800
+  c_puct: 1.5
+  dirichlet_alpha: 0.3
+  epsilon: 0.25
+  temperature_threshold_ply: 30
+
+selfplay:
+  n_workers: 12
+  n_simulations: 80
+  inference_batch_size: 64
+  inference_max_wait_ms: 12.0
+  dispatch_wait_ms: 2.0
+  leaf_batch_size: 16
+  replay_buffer_capacity: 500000
+
+  playout_cap:
+    fast_prob: 0.25
+    fast_sims: 50
+    standard_sims: 400
+    temperature_threshold_compound_moves: 15

@@ -26,7 +26,8 @@ if str(REPO_ROOT) not in sys.path:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Evaluate checkpoints vs SealBot")
-    p.add_argument("--config", default="configs/default.yaml", help="Config path")
+    p.add_argument("--config", default=None,
+                   help="Optional override config applied on top of base configs")
     p.add_argument("--checkpoint", default=None, help="Specific checkpoint path")
     p.add_argument("--latest", action="store_true", help="Use latest checkpoint")
     p.add_argument("--all-checkpoints", action="store_true", help="Evaluate a series of checkpoints")
@@ -80,7 +81,15 @@ def main() -> None:
     args = parse_args()
 
     from hexo_rl.utils.config import load_config
-    cfg = load_config(args.config)
+    _BASE_CONFIGS = [
+        "configs/model.yaml",
+        "configs/training.yaml",
+        "configs/selfplay.yaml",
+    ]
+    if args.config:
+        cfg = load_config(*_BASE_CONFIGS, args.config)
+    else:
+        cfg = load_config(*_BASE_CONFIGS)
 
     cfg.setdefault("evaluation", {})
     cfg["evaluation"]["sealbot_model_sims"] = int(args.model_sims)

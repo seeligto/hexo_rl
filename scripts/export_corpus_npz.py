@@ -36,7 +36,7 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     from hexo_rl.utils.config import load_config
-    corpus_cfg = load_config(str(ROOT / "configs" / "corpus_filter.yaml"))
+    corpus_cfg = load_config(str(ROOT / "configs" / "corpus.yaml"))
     source_weights: dict = corpus_cfg.get("source_weights", {})
 
     quality_path = ROOT / "data" / "corpus" / "quality_scores.json"
