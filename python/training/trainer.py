@@ -32,6 +32,14 @@ from torch.amp import GradScaler, autocast  # type: ignore[attr-defined]
 import structlog
 
 from python.model.network import HexTacToeNet
+from python.training.losses import (
+    compute_policy_loss, compute_value_loss, compute_aux_loss,
+    compute_total_loss, fp16_backward_step,
+)
+from python.training.checkpoints import (
+    save_full_checkpoint, save_inference_weights, prune_checkpoints,
+    normalize_model_state_dict_keys, get_base_model,
+)
 from native_core import RustReplayBuffer
 
 log = structlog.get_logger()
@@ -201,40 +209,17 @@ class Trainer:
             else:
                 log_policy, value, v_logit = self.model(states_t)
 
-            # Policy loss: cross-entropy with MCTS visit distribution.
-            # Mask out value-only positions (zero-policy from fast playout games).
             policy_valid = policies_t.sum(dim=1) > 1e-6
-            if policy_valid.any():
-                policy_loss = -(policies_t[policy_valid] * log_policy[policy_valid]).sum(dim=1).mean()
-            else:
-                policy_loss = torch.zeros(1, device=self.device, dtype=torch.float32).squeeze()
+            policy_loss = compute_policy_loss(log_policy, policies_t, policy_valid, self.device)
+            value_loss = compute_value_loss(v_logit, outcomes_t)
 
-            # Value loss: BCE on pre-tanh logit, target mapped from {-1,+1} to {0,1}.
-            value_target = (outcomes_t + 1.0) / 2.0  # {-1,+1} → {0,1}
-            value_loss = nn.functional.binary_cross_entropy_with_logits(
-                v_logit.squeeze(1), value_target
-            )
-
-            loss = policy_loss + value_loss
-
+            opp_reply_loss = None
             if use_aux:
-                # Opponent reply auxiliary loss: same masking as policy loss.
-                if policy_valid.any():
-                    opp_reply_loss = -(policies_t[policy_valid] * opp_reply[policy_valid]).sum(dim=1).mean()
-                else:
-                    opp_reply_loss = torch.zeros(1, device=self.device, dtype=torch.float32).squeeze()
-                loss = loss + aux_weight * opp_reply_loss
+                opp_reply_loss = compute_aux_loss(opp_reply, policies_t, policy_valid, self.device)
 
-        if self.fp16:
-            self.scaler.scale(loss).backward()
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-        else:
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.optimizer.step()
+            loss = compute_total_loss(policy_loss, value_loss, opp_reply_loss, aux_weight)
+
+        fp16_backward_step(loss, self.optimizer, self.scaler, self.model, self.fp16)
 
         if self.scheduler is not None:
             self.scheduler.step()
@@ -264,44 +249,6 @@ class Trainer:
         return result
 
     # ── Checkpoint I/O ────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _normalize_model_state_dict_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Normalize model state dict keys across save variants.
-
-        Handles:
-            - ``_orig_mod.`` prefix from torch.compile wrappers
-            - ``module.`` prefix from DataParallel/DDP wrappers
-            - ``tower.`` vs ``trunk.tower.`` aliasing
-        """
-        if not state_dict:
-            return state_dict
-
-        prefixes = ("_orig_mod.", "module.")
-        normalized: Dict[str, torch.Tensor] = {}
-        for key, value in state_dict.items():
-            norm_key = key
-            changed = True
-            while changed:
-                changed = False
-                for prefix in prefixes:
-                    if norm_key.startswith(prefix):
-                        norm_key = norm_key[len(prefix):]
-                        changed = True
-            normalized[norm_key] = value
-
-        has_tower = any(k.startswith("tower.") for k in normalized.keys())
-        has_trunk_tower = any(k.startswith("trunk.tower.") for k in normalized.keys())
-        if has_tower and not has_trunk_tower:
-            for key, value in list(normalized.items()):
-                if key.startswith("tower."):
-                    normalized.setdefault(f"trunk.{key}", value)
-        elif has_trunk_tower and not has_tower:
-            for key, value in list(normalized.items()):
-                if key.startswith("trunk.tower."):
-                    normalized.setdefault(key[len("trunk."):], value)
-
-        return normalized
 
     @staticmethod
     def _infer_res_blocks_from_state_dict(state_dict: Dict[str, torch.Tensor]) -> Optional[int]:
@@ -391,25 +338,15 @@ class Trainer:
 
         Returns path to the checkpoint file.
         """
-        base_model = getattr(self.model, "_orig_mod", self.model)
-        model_state = base_model.state_dict()
-
         ckpt_path = self.checkpoint_dir / f"checkpoint_{self.step:08d}.pt"
-        torch.save(
-            {
-                "step":            self.step,
-                "model_state":     model_state,
-                "optimizer_state": self.optimizer.state_dict(),
-                "scaler_state":    self.scaler.state_dict(),
-                "scheduler_state": self.scheduler.state_dict() if self.scheduler is not None else None,
-                "config":          self.config,
-            },
-            ckpt_path,
+        save_full_checkpoint(
+            self.model, self.optimizer, self.scaler, self.scheduler,
+            self.step, self.config, ckpt_path,
         )
 
         # Inference-only copy (weights only, no optimizer state).
         inf_path = self.checkpoint_dir / "inference_only.pt"
-        torch.save(model_state, inf_path)
+        save_inference_weights(self.model, inf_path)
 
         # Update log.
         entry: Dict[str, Any] = {"step": self.step}
@@ -420,36 +357,12 @@ class Trainer:
             json.dump(self.checkpoint_log, f, indent=2)
 
         # Prune old checkpoints if max_checkpoints_kept is set.
-        self._prune_checkpoints()
+        prune_checkpoints(
+            self.checkpoint_dir,
+            self.config.get("max_checkpoints_kept"),
+        )
 
         return ckpt_path
-
-    def _prune_checkpoints(self) -> None:
-        """Delete old checkpoint files beyond max_checkpoints_kept.
-
-        Keeps the N most recent checkpoints by step number.
-        Files that don't match the checkpoint_XXXXXXXX.pt pattern are left alone.
-        """
-        max_kept = self.config.get("max_checkpoints_kept")
-        if max_kept is None:
-            return
-        max_kept = int(max_kept)
-
-        pattern = re.compile(r"^checkpoint_(\d+)\.pt$")
-        candidates = []
-        for p in self.checkpoint_dir.iterdir():
-            m = pattern.match(p.name)
-            if m:
-                candidates.append((int(m.group(1)), p))
-
-        candidates.sort(key=lambda x: x[0])
-        to_delete = candidates[:-max_kept] if len(candidates) > max_kept else []
-        for _, p in to_delete:
-            try:
-                p.unlink()
-                log.info("checkpoint_pruned", path=str(p))
-            except OSError as exc:
-                log.warning("checkpoint_prune_failed", path=str(p), error=str(exc))
 
     @classmethod
     def load_checkpoint(
@@ -492,7 +405,7 @@ class Trainer:
         if config_overrides:
             config.update(config_overrides)
 
-        model_state = cls._normalize_model_state_dict_keys(model_state)
+        model_state = normalize_model_state_dict_keys(model_state)
 
         model_hparams = cls._resolve_model_hparams(config, model_state)
 
