@@ -411,7 +411,37 @@ class Trainer:
         with open(self.checkpoint_dir / "checkpoint_log.json", "w") as f:
             json.dump(self.checkpoint_log, f, indent=2)
 
+        # Prune old checkpoints if max_checkpoints_kept is set.
+        self._prune_checkpoints()
+
         return ckpt_path
+
+    def _prune_checkpoints(self) -> None:
+        """Delete old checkpoint files beyond max_checkpoints_kept.
+
+        Keeps the N most recent checkpoints by step number.
+        Files that don't match the checkpoint_XXXXXXXX.pt pattern are left alone.
+        """
+        max_kept = self.config.get("max_checkpoints_kept")
+        if max_kept is None:
+            return
+        max_kept = int(max_kept)
+
+        pattern = re.compile(r"^checkpoint_(\d+)\.pt$")
+        candidates = []
+        for p in self.checkpoint_dir.iterdir():
+            m = pattern.match(p.name)
+            if m:
+                candidates.append((int(m.group(1)), p))
+
+        candidates.sort(key=lambda x: x[0])
+        to_delete = candidates[:-max_kept] if len(candidates) > max_kept else []
+        for _, p in to_delete:
+            try:
+                p.unlink()
+                log.info("checkpoint_pruned", path=str(p))
+            except OSError as exc:
+                log.warning("checkpoint_prune_failed", path=str(p), error=str(exc))
 
     @classmethod
     def load_checkpoint(

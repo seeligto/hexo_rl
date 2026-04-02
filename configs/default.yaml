@@ -19,7 +19,7 @@ mcts:
 
 # Self-play
 selfplay:
-  n_workers: 6
+  n_workers: 12
   n_simulations: 80
   inference_batch_size: 64
   inference_max_wait_ms: 12.0
@@ -44,7 +44,8 @@ training:
   lr_schedule: cosine
   torch_compile: false   # reduce-overhead CUDA graphs are thread-local; inference+train share one model → crash
   eval_interval: 500
-  checkpoint_interval: 50
+  checkpoint_interval: 500
+  max_checkpoints_kept: 10
   log_interval: 10        # also controls web-dashboard send frequency
   aux_opp_reply_weight: 0.15
 
