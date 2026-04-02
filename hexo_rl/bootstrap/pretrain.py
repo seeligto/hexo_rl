@@ -55,7 +55,7 @@ _HEX_SYMS: Optional[List[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]]
 def _precompute_hex_syms(board_size: int = BOARD_SIZE) -> List[Tuple]:
     """Build 12 hexagonal symmetry scatter tables (one per symmetry).
 
-    Mirrors the Rust SymTables in native_core/src/replay_buffer.rs:
+    Mirrors the Rust SymTables in engine/src/replay_buffer.rs:
       - 6 rotations of 60° each:  (q,r) → (−r, q+r)
       - 2 reflections (with/without): (q,r) → (r,q) applied first
 

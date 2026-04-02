@@ -1,7 +1,7 @@
 """Tests for Phase 3.5 self-play concurrency interfaces.
 
 Legacy multiprocessing queue tests were removed. These tests validate:
-1) RustInferenceBatcher block/batch/unblock behavior.
+1) InferenceBatcher block/batch/unblock behavior.
 2) WorkerPool basic in-process threaded self-play smoke path.
 """
 
@@ -13,11 +13,11 @@ import numpy as np
 import pytest
 import torch
 
-from engine import RustInferenceBatcher, RustSelfPlayRunner
+from engine import InferenceBatcher, SelfPlayRunner
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference_server import InferenceServer
 from hexo_rl.selfplay.pool import WorkerPool
-from engine import RustReplayBuffer
+from engine import ReplayBuffer
 
 
 @pytest.mark.timeout(30)
@@ -25,7 +25,7 @@ def test_rust_batcher_blocks_batches_and_unblocks():
     feature_len = 18 * 19 * 19
     policy_len = 19 * 19 + 1
 
-    batcher = RustInferenceBatcher(feature_len=feature_len, policy_len=policy_len)
+    batcher = InferenceBatcher(feature_len=feature_len, policy_len=policy_len)
     try:
         batcher.spawn_mock_games(10)
 
@@ -67,7 +67,7 @@ def test_rust_batcher_blocks_batches_and_unblocks():
 def test_worker_pool_produces_positions_threaded_smoke():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
-    buffer = RustReplayBuffer(capacity=10_000)
+    buffer = ReplayBuffer(capacity=10_000)
 
     config = {
         "mcts": {
@@ -101,7 +101,7 @@ def test_rust_runner_with_inference_server_generates_positions():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
 
-    runner = RustSelfPlayRunner(n_workers=2, max_moves_per_game=16, n_simulations=1, leaf_batch_size=1)
+    runner = SelfPlayRunner(n_workers=2, max_moves_per_game=16, n_simulations=1, leaf_batch_size=1)
     server = InferenceServer(
         model,
         device,
@@ -131,7 +131,7 @@ def test_rust_runner_collect_data_format():
     model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
     
     # Run with 1 worker and 1 simulation for speed
-    runner = RustSelfPlayRunner(n_workers=1, max_moves_per_game=4, n_simulations=1, leaf_batch_size=1)
+    runner = SelfPlayRunner(n_workers=1, max_moves_per_game=4, n_simulations=1, leaf_batch_size=1)
     server = InferenceServer(
         model,
         device,

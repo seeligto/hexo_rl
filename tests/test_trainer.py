@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from engine import RustReplayBuffer
+from engine import ReplayBuffer
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.trainer import Trainer, prune_policy_targets
 
@@ -32,8 +32,8 @@ def make_trainer(tmp_path: Path) -> Trainer:
     return Trainer(model, FAST_CONFIG, checkpoint_dir=tmp_path)
 
 
-def fill_buffer(size: int = 32) -> RustReplayBuffer:
-    buf = RustReplayBuffer(capacity=200)
+def fill_buffer(size: int = 32) -> ReplayBuffer:
+    buf = ReplayBuffer(capacity=200)
     rng = np.random.default_rng(0)
     for _ in range(size):
         state   = rng.random((18, 19, 19), dtype=np.float32).astype(np.float16)

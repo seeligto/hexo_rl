@@ -141,9 +141,9 @@ impl Inner {
 /// Worker threads call `submit_request_and_wait`, which enqueues features and
 /// blocks. Python calls `next_inference_batch` to fetch a fused batch tensor,
 /// runs the model, then calls `submit_inference_results` to wake waiters.
-#[pyclass(name = "RustInferenceBatcher")]
+#[pyclass(name = "InferenceBatcher", skip_from_py_object)]
 #[derive(Clone)]
-pub struct RustInferenceBatcher {
+pub struct InferenceBatcher {
     inner: Arc<Inner>,
     feature_len: usize,
     policy_len: usize,
@@ -152,7 +152,7 @@ pub struct RustInferenceBatcher {
 }
 
 #[allow(dead_code)]
-impl RustInferenceBatcher {
+impl InferenceBatcher {
     pub(crate) fn submit_request_and_wait_rust(
         &self,
         features: Vec<f32>,
@@ -278,7 +278,7 @@ impl RustInferenceBatcher {
 }
 
 #[pymethods]
-impl RustInferenceBatcher {
+impl InferenceBatcher {
     #[new]
     #[pyo3(signature = (feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1))]
     pub fn new(feature_len: usize, policy_len: usize) -> Self {

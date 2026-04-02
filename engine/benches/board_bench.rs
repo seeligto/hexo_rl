@@ -9,7 +9,7 @@
 ///   cargo bench --bench board_bench
 ///   cargo bench --bench board_bench -- --output-format html
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use native_core::board::{bitboard::Bitboard, Board, BOARD_SIZE, HALF};
+use engine::board::{bitboard::Bitboard, Board, BOARD_SIZE, HALF};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -31,7 +31,7 @@ fn board_with_n_stones(n_stones: usize) -> Board {
 ///
 /// Uses window-relative flat indices (same as the Bitboard's coordinate system).
 fn bitboard_from_board_p1(board: &Board) -> Bitboard {
-    use native_core::board::Cell;
+    use engine::board::Cell;
     let mut bb = Bitboard::empty();
     let (cq, cr) = board.window_center();
     for (&(q, r), &cell) in board.cells_iter() {

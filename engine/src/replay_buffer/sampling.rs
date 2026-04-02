@@ -1,13 +1,13 @@
-//! Weighted sampling and symmetry application for `RustReplayBuffer`.
+//! Weighted sampling and symmetry application for `ReplayBuffer`.
 
 use half::f16;
 use rand::Rng;
 use std::collections::HashSet;
 
-use super::RustReplayBuffer;
+use super::ReplayBuffer;
 use super::sym_tables::*;
 
-impl RustReplayBuffer {
+impl ReplayBuffer {
     /// Map an f16 weight (stored as bits) to a histogram bucket index.
     ///
     /// Bucket 0: weight < 0.30  (short-game tier, ~0.15)

@@ -43,7 +43,7 @@ from hexo_rl.monitoring.dashboard import TrainingDashboard
 from hexo_rl.monitoring.gpu_monitor import GPUMonitor
 from hexo_rl.monitoring.configure import configure_logging
 from hexo_rl.model.network import HexTacToeNet
-from engine import RustReplayBuffer
+from engine import ReplayBuffer
 from hexo_rl.training.trainer import Trainer
 from hexo_rl.training.dashboard_utils import DashboardClient
 
@@ -230,7 +230,7 @@ def main() -> None:
         min_buf_size = int(configured_min_buf)
     else:
         min_buf_size = max(128, min(512, int(train_cfg.get("batch_size", config.get("batch_size", 256)))))
-    buffer = RustReplayBuffer(capacity=capacity)
+    buffer = ReplayBuffer(capacity=capacity)
     schedule_idx = 1  # first entry already applied at construction
     log.info("buffer_init", capacity=capacity, min_buffer_size=min_buf_size,
              schedule_entries=len(buffer_schedule))
@@ -244,7 +244,7 @@ def main() -> None:
         pre_states = data["states"]       # (T, 18, 19, 19) float16
         pre_policies = data["policies"]   # (T, 362) float32
         pre_outcomes = data["outcomes"]   # (T,) float32
-        pretrained_buffer = RustReplayBuffer(capacity=len(pre_outcomes))
+        pretrained_buffer = ReplayBuffer(capacity=len(pre_outcomes))
         pretrained_buffer.push_game(pre_states, pre_policies, pre_outcomes)
         log.info("pretrained_buffer_loaded", path=pretrained_path,
                  size=pretrained_buffer.size)

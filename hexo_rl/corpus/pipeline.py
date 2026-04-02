@@ -1,4 +1,4 @@
-"""CorpusPipeline — dedup, convert, and push GameRecords to RustReplayBuffer."""
+"""CorpusPipeline — dedup, convert, and push GameRecords to ReplayBuffer."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ log = structlog.get_logger()
 class CorpusPipeline:
     """Consumes :class:`~python.corpus.sources.base.GameRecord` objects from one or
     more :class:`~python.corpus.sources.base.CorpusSource` instances, converts each
-    to training arrays, and pushes them into a ``RustReplayBuffer``.
+    to training arrays, and pushes them into a ``ReplayBuffer``.
 
     Responsibilities:
     1. Per-source in-memory deduplication by ordered SHA-256 move hash (Q1, Q6).
@@ -32,7 +32,7 @@ class CorpusPipeline:
 
     Args:
         sources: Ordered list of corpus sources. Consumed left-to-right.
-        buffer:  ``RustReplayBuffer`` instance to push positions into.
+        buffer:  ``ReplayBuffer`` instance to push positions into.
         metrics: Optional :class:`~python.corpus.metrics.CorpusMetrics` for
                  per-source counters and throughput logging. A default instance
                  is created if not provided.

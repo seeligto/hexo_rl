@@ -15,9 +15,9 @@ use pyo3::exceptions::PyValueError;
 use numpy::{PyArray1, PyArray3, PyArrayMethods};
 
 use board::{Board as RustBoard, Player, BOARD_SIZE};
-use game_runner::RustSelfPlayRunner;
-use inference_bridge::RustInferenceBatcher;
-use replay_buffer::RustReplayBuffer;
+use game_runner::SelfPlayRunner;
+use inference_bridge::InferenceBatcher;
+use replay_buffer::ReplayBuffer;
 
 // ── Python-visible Board wrapper ──────────────────────────────────────────────
 
@@ -387,8 +387,8 @@ impl PyMCTSTree {
 fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoard>()?;
     m.add_class::<PyMCTSTree>()?;
-    m.add_class::<RustInferenceBatcher>()?;
-    m.add_class::<RustSelfPlayRunner>()?;
-    m.add_class::<RustReplayBuffer>()?;
+    m.add_class::<InferenceBatcher>()?;
+    m.add_class::<SelfPlayRunner>()?;
+    m.add_class::<ReplayBuffer>()?;
     Ok(())
 }

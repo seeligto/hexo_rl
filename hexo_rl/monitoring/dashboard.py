@@ -7,7 +7,7 @@ Two classes:
   Phase40Dashboard   — passive observer for Phase 4.0.  Reads data from:
                          * structlog JSONL log files
                          * eval SQLite DB (WAL mode, read-only)
-                         * RustReplayBuffer.get_buffer_stats() (lock-free atomics)
+                         * ReplayBuffer.get_buffer_stats() (lock-free atomics)
                          * training config YAML (buffer schedule, decay params)
 
 Passive observer contract:
@@ -21,7 +21,7 @@ Usage (Phase40Dashboard):
         log_dir="logs",
         eval_db_path="data/eval.db",
         config=cfg,           # loaded YAML dict
-        buffer=replay_buf,    # RustReplayBuffer (optional, for live stats)
+        buffer=replay_buf,    # ReplayBuffer (optional, for live stats)
         refresh_interval=5.0,
     )
     with db.live():
@@ -399,7 +399,7 @@ def _build_colony_panel(eval_reader: _EvalDBReader) -> Panel:
 
 
 def _build_buffer_panel(
-    buffer: Any,  # RustReplayBuffer | None
+    buffer: Any,  # ReplayBuffer | None
     config: dict,
     current_step: int,
 ) -> Panel:
@@ -550,7 +550,7 @@ class Phase40Dashboard:
         log_dir:          Directory containing structlog *.jsonl files.
         eval_db_path:     Path to the eval SQLite DB.
         config:           Training config dict (loaded from default.yaml etc.).
-        buffer:           Live RustReplayBuffer reference (optional).
+        buffer:           Live ReplayBuffer reference (optional).
         refresh_interval: Seconds between data polls (default 5.0).
     """
 

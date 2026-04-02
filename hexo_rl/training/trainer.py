@@ -40,7 +40,7 @@ from hexo_rl.training.checkpoints import (
     save_full_checkpoint, save_inference_weights, prune_checkpoints,
     normalize_model_state_dict_keys, get_base_model,
 )
-from engine import RustReplayBuffer
+from engine import ReplayBuffer
 
 log = structlog.get_logger()
 
@@ -148,7 +148,7 @@ class Trainer:
     # ── Training step ─────────────────────────────────────────────────────────
 
     def train_step(
-        self, buffer: "RustReplayBuffer", augment: bool = True
+        self, buffer: "ReplayBuffer", augment: bool = True
     ) -> Dict[str, float]:
         """Sample a batch from `buffer` and perform one gradient update.
 
