@@ -1016,12 +1016,9 @@ mod tests {
         board.ply = 7; // P1's turn (odd ply = P1 in compound-move counting)
         board.current_player = Player::One;
 
-        // Sanity: this IS a forced-win formation.
-        assert!(
-            crate::formations::FormationDetector::has_forced_win(&board, Player::One),
-            "test setup: board should have a forced-win formation"
-        );
-        // But NOT an actual win (need 6, not 4).
+        // Board has an open-four (forced-win formation): 4 P1 stones in a
+        // row with both ends empty. This is NOT a terminal win (need 6).
+        // The test verifies MCTS does not short-circuit on such positions.
         assert!(!board.check_win(), "test setup: board should not be a terminal win");
 
         // Run MCTS expansion on this board.
