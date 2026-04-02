@@ -177,6 +177,41 @@ Methodology: median n=5, 3s warm-up, realistic MCTS workload, CPU unpinned.
 
 ---
 
+## Post-baseline changes and re-baseline (2026-04-02)
+
+**Worker throughput regression analysis:**
+
+After the Phase 4.0 baseline was set (1,522,127 pos/hr), two changes caused regression:
+
+1. **SealBot mixed opponent schedule** (`b9b140b`) — Python daemon threads caused 3.3× GIL contention regression (1.52M → 464k). Reverted in `c9f39de`.
+
+2. **Forced-win detection removal** (`fc9eb6f`) — `FormationDetector::has_forced_win()` was bypassing NN inference for near-win positions, making MCTS faster but hurting training quality (network didn't learn to evaluate these positions). Intentionally removed. This adds ~30% more NN calls per game (batch fill improved 99.4% → 99.82%), making each game take longer and reducing pos/hr by ~23%.
+
+**Build optimisations added** (`perf(build)` commit):
+- `.cargo/config.toml`: `target-cpu=native` — enables AVX2/FMA/BMI2
+- `Cargo.toml` (workspace): `[profile.release]` with `lto=fat`, `codegen-units=1`, `panic=abort`, `strip=symbols`
+- MCTS throughput improved 7% (176,963 → 189,656 sim/s)
+- Compile time: ~12s (up from ~8s due to LTO)
+
+**Re-baselined (2026-04-02, 16 workers, LTO + native CPU):**
+
+| Metric | New Baseline | Target | Status |
+|---|---|---|---|
+| MCTS sim/s | 189,656 | ≥ 160,000 | ✅ |
+| NN inference batch=64 pos/s | 10,080 | ≥ 8,500 | ✅ |
+| NN latency batch=1 mean ms | 1.52 | ≤ 2 ms | ✅ |
+| Buffer push pos/s | 905,697 | ≥ 630,000 | ✅ |
+| Buffer sample raw µs/batch | 1,000 | ≤ 1,200 | ✅ |
+| Buffer sample augmented µs/batch | 949 | ≤ 1,200 | ✅ |
+| GPU utilisation % | 100.0 | ≥ 85% | ✅ |
+| VRAM usage GB | 0.78 | ≤ 80% | ✅ |
+| Worker throughput pos/hr | 1,177,745 | ≥ 1,000,000 | ✅ |
+| Batch fill % | 99.82 | ≥ 84% | ✅ |
+
+All 10 metrics pass. Test counts: 63 Rust + 294 Python.
+
+---
+
 ## Test counts at sprint close
 
 | Suite | Count | Status |
