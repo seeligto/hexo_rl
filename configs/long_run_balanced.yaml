@@ -1,10 +1,8 @@
-# long_run_balanced.yaml — multi-hour training profile for stable throughput
+# long_run_balanced.yaml — multi-hour training profile
+# Override on top of base configs (model.yaml + training.yaml + selfplay.yaml).
 
 model:
-  board_size: 19
-  in_channels: 18
-  res_blocks: 10
-  filters: 128
+  res_blocks: 10          # slightly smaller than production 12-block for throughput
 
 mcts:
   n_simulations: 800
@@ -15,21 +13,16 @@ mcts:
 
 selfplay:
   n_workers: 6
-  # Explicit self-play override so we do not inherit heavy mcts.n_simulations.
   n_simulations: 160
   inference_batch_size: 64
   inference_max_wait_ms: 8.0
   dispatch_wait_ms: 2.0
   leaf_batch_size: 8
-  fast_playout_prob: 0.5
-  fast_sims_min: 32
-  fast_sims_max: 56
   replay_buffer_capacity: 500000
 
 training:
   batch_size: 256
   min_buffer_size: 256
-  # Keep updates/game moderate to reduce overfitting to fresh buffer slices.
   training_steps_per_game: 1.0
   max_train_burst: 8
   lr: 0.002
@@ -39,35 +32,3 @@ training:
   total_steps: 50000
   eval_interval: 200
   checkpoint_interval: 100
-
-evaluation:
-  enabled: true
-  progress_every: 1
-  random_n_games: 10
-  sealbot_n_games: 8
-  sealbot_time_limit: 0.03
-  random_model_sims: 96
-  sealbot_model_sims: 128
-  enable_best_arena: false
-  best_n_games: 24
-  best_promotion_winrate: 0.55
-  best_current_model_sims: 128
-  best_opponent_model_sims: 128
-  best_model_path: checkpoints/best_model.pt
-
-rewards:
-  shaped_decay_steps: 500
-
-analysis:
-  track_winrate_by_side: true
-  expected_o_winrate: 0.52
-
-bootstrap:
-  enabled: true
-  corpus_path: "data/bootstrap_corpus.npz"
-  n_games: 20000
-  human_games_min_moves: 20
-  human_games_rated_only: true
-  sealbot_time_mix: {0.03: 0.7, 0.1: 0.3}
-
-seed: 42

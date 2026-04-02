@@ -12,11 +12,13 @@ Phase 2 design:
   7. Stop after --iterations steps (default: runs until Ctrl-C).
 
 Usage:
+    # Standard run — loads base configs automatically
+    .venv/bin/python scripts/train.py
+    # Override for smoke testing
     .venv/bin/python scripts/train.py --config configs/fast_debug.yaml
+    # Resume from checkpoint with override
     .venv/bin/python scripts/train.py --config configs/fast_debug.yaml \\
-        --checkpoint checkpoints/checkpoint_00000100.pt
-    .venv/bin/python scripts/train.py --config configs/fast_debug.yaml \\
-        --iterations 500 --no-dashboard
+        --checkpoint checkpoints/pretrain/pretrain_00016980.pt --iterations 1
 """
 
 from __future__ import annotations
@@ -63,8 +65,12 @@ def seed_everything(seed: int) -> None:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Phase 1 training loop")
     p.add_argument(
-        "--config", default="configs/fast_debug.yaml",
-        help="Path to YAML config (default: configs/fast_debug.yaml)"
+        "--config", default=None,
+        help=(
+            "Optional override config applied on top of base configs "
+            "(configs/model.yaml + configs/training.yaml + configs/selfplay.yaml + "
+            "configs/game_replay.yaml). Example: --config configs/fast_debug.yaml"
+        ),
     )
     p.add_argument(
         "--checkpoint", default=None,
@@ -131,8 +137,18 @@ def main() -> None:
     args = parse_args()
 
     # ── Load config ──
+    # Base configs are always loaded; --config (if given) is an override on top.
     from hexo_rl.utils.config import load_config
-    config = load_config(args.config)
+    _BASE_CONFIGS = [
+        "configs/model.yaml",
+        "configs/training.yaml",
+        "configs/selfplay.yaml",
+        "configs/game_replay.yaml",
+    ]
+    if args.config:
+        config = load_config(*_BASE_CONFIGS, args.config)
+    else:
+        config = load_config(*_BASE_CONFIGS)
 
     # ── Logging ──
     log = configure_logging(log_dir=args.log_dir, run_name=args.run_name)
@@ -148,20 +164,20 @@ def main() -> None:
     log.info("device", device=str(device))
 
     # ── Model + Trainer ──
-    # Handle both nested (default.yaml) and flat (fast_debug.yaml) configs
+    # Base configs use nested sections (model:, training:, selfplay:, mcts:).
+    # Flatten into one dict for Trainer/MCTS/SelfPlay usage, with nested
+    # sections taking precedence over any top-level keys.
     model_config = config.get("model", {})
     train_config = config.get("training", {})
     mcts_config  = config.get("mcts", {})
     self_config  = config.get("selfplay", {})
-    
-    # Merge all into one flat dict for Trainer/MCTS/SelfPlay usage
-    # If the config is flat (like fast_debug.yaml), 'config' itself has the keys.
+
     combined_config = {
-        **config,        # Base level (for flat configs)
-        **model_config,  # Overrides from nested model section
-        **train_config,  # Overrides from nested training section
-        **mcts_config,   # Overrides from nested mcts section
-        **self_config,   # Overrides from nested selfplay section
+        **config,        # top-level keys (seed, etc.)
+        **model_config,  # model section overrides
+        **train_config,  # training section overrides
+        **mcts_config,   # mcts section overrides
+        **self_config,   # selfplay section overrides
     }
     train_cfg = config.get("training", config)
 

@@ -1,0 +1,8 @@
+# game_replay.yaml — game replay recorder settings
+
+game_replay:
+  enabled: true
+  sample_rate: 50       # record 1 in 50 games
+  output_dir: logs/replays
+  include_mcts_visits: false    # not yet implemented
+  include_value_estimates: false  # not yet implemented
