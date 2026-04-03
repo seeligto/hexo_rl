@@ -724,6 +724,137 @@ def analyse_quality_distribution(scores: Dict[str, dict], label: str = "all") ->
 
 
 # ---------------------------------------------------------------------------
+# Analysis (g): Elo-stratified human game breakdown
+# ---------------------------------------------------------------------------
+
+# Manifest-style Elo band boundaries (different from ELO_BANDS above which
+# are used for P1 win-rate analysis via average Elo).
+MANIFEST_ELO_BANDS = {
+    "sub_1000":  (0, 1000),
+    "1000_1200": (1000, 1200),
+    "1200_1400": (1200, 1400),
+    "1400_plus": (1400, 999999),
+    "unrated":   None,
+}
+
+MANIFEST_BAND_ORDER = ["sub_1000", "1000_1200", "1200_1400", "1400_plus", "unrated"]
+
+
+def _manifest_elo_band(elo: Optional[int]) -> str:
+    """Assign a single Elo value to a manifest-style band key."""
+    if elo is None:
+        return "unrated"
+    if elo < 1000:
+        return "sub_1000"
+    if elo < 1200:
+        return "1000_1200"
+    if elo < 1400:
+        return "1200_1400"
+    return "1400_plus"
+
+
+def _game_max_elo(r: GameRecord) -> Optional[int]:
+    """Return max(elo_p1, elo_p2) as the game quality proxy, or None."""
+    elo_p1 = r.metadata.get("elo_p1")
+    elo_p2 = r.metadata.get("elo_p2")
+    vals = [v for v in (elo_p1, elo_p2) if v is not None]
+    return max(vals) if vals else None
+
+
+def _compound_move_count(moves: list) -> int:
+    """Convert raw stone placements to compound move count.
+
+    Turn structure: P1 plays 1, then alternating 2-stone turns.
+    """
+    if not moves:
+        return 0
+    remaining = len(moves) - 1  # first stone is turn 1 (1 placement)
+    return 1 + (remaining + 1) // 2  # each subsequent turn = 2 placements
+
+
+def _opening_key(moves: list, n_compound: int = 3) -> Optional[tuple]:
+    """Extract the first n_compound compound moves as a hashable tuple.
+
+    Returns None if the game is too short.
+    """
+    # First compound move: 1 placement. Next: 2 each.
+    # Total stones for 3 compound moves: 1 + 2 + 2 = 5
+    stones_needed = 1 + 2 * (n_compound - 1) if n_compound > 0 else 0
+    if len(moves) < stones_needed:
+        return None
+    return tuple(moves[:stones_needed])
+
+
+def analyse_elo_stratified(records: List[GameRecord]) -> dict:
+    """Produce Elo-band breakdown for human games.
+
+    For each band: game count, median game length (compound moves),
+    top 5 most common openings (first 3 compound moves).
+    """
+    # Bucket records by band
+    buckets: Dict[str, List[GameRecord]] = {b: [] for b in MANIFEST_BAND_ORDER}
+    for r in records:
+        if r.source != "human":
+            continue
+        max_elo = _game_max_elo(r)
+        band = _manifest_elo_band(max_elo)
+        buckets[band].append(r)
+
+    result: Dict[str, dict] = {}
+    for band in MANIFEST_BAND_ORDER:
+        recs = buckets[band]
+        if not recs:
+            result[band] = {"game_count": 0, "median_compound_moves": 0, "top_openings": []}
+            continue
+
+        compound_lengths = [_compound_move_count(r.moves) for r in recs]
+        median_len = int(np.median(compound_lengths))
+
+        opening_counter: Counter = Counter()
+        for r in recs:
+            key = _opening_key(r.moves, n_compound=3)
+            if key is not None:
+                opening_counter[key] += 1
+
+        top_5 = opening_counter.most_common(5)
+        top_openings = [
+            {"moves": list(k), "count": c}
+            for k, c in top_5
+        ]
+
+        result[band] = {
+            "game_count": len(recs),
+            "median_compound_moves": median_len,
+            "top_openings": top_openings,
+        }
+
+    return result
+
+
+def _print_elo_stratified_table(elo_data: dict) -> None:
+    """Print Elo-stratified breakdown as a rich table."""
+    table = Table(title="Human Games — Elo-Stratified Breakdown", show_header=True)
+    table.add_column("Elo Band", style="bold")
+    table.add_column("Games", justify="right")
+    table.add_column("Median Length", justify="right")
+    table.add_column("Top Opening (count)", justify="left")
+
+    for band in MANIFEST_BAND_ORDER:
+        data = elo_data.get(band, {})
+        count = data.get("game_count", 0)
+        median = data.get("median_compound_moves", 0)
+        top = data.get("top_openings", [])
+        top_str = ""
+        if top:
+            first = top[0]
+            moves_str = " ".join(f"({q},{r})" for q, r in first["moves"][:5])
+            top_str = f"{moves_str}... ({first['count']})"
+        table.add_row(band, str(count), str(median), top_str)
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
 # Run analysis for a single stratum
 # ---------------------------------------------------------------------------
 
@@ -831,6 +962,8 @@ def main() -> None:
                         help="Produce separate statistics for human / bot_fast / bot_strong")
     parser.add_argument("--compute-quality-scores", action="store_true",
                         help="Compute per-game quality scores and write sidecar file")
+    parser.add_argument("--include-human-games", action="store_true",
+                        help="Add Elo-stratified breakdown for human games")
     args = parser.parse_args()
 
     log.info("corpus_analysis_start", include_bot_games=args.include_bot_games,
@@ -864,6 +997,13 @@ def main() -> None:
             rate_str = f"{rate:.1%}" if rate is not None else "N/A"
             band_table.add_row(bl, str(n), rate_str)
         console.print(band_table)
+
+    # Elo-stratified human game breakdown
+    elo_stratified: dict = {}
+    if args.include_human_games:
+        console.rule("[bold]Elo-Stratified Human Games")
+        elo_stratified = analyse_elo_stratified(records)
+        _print_elo_stratified_table(elo_stratified)
 
     # Stratified analysis
     strata_results: Dict[str, dict] = {}
@@ -914,6 +1054,7 @@ def main() -> None:
         "combined": combined_results,
         "strata": strata_results,
         "quality_stats": quality_stats,
+        "elo_stratified": elo_stratified,
     }
     suffix = "stratified" if args.stratify_by_source else (
         "combined_summary" if args.include_bot_games else "summary")
