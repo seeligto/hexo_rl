@@ -1,8 +1,8 @@
 # Dashboard Specification — HeXO Training Monitor
 # docs/08_DASHBOARD_SPEC.md
 
-**Status:** Authoritative spec. All dashboard code must conform to this document.
-**Scope:** Training monitor only. Game replay/analysis is a separate future sprint (`/viewer`).
+**Status:** Authoritative spec. Implementation complete as of 2026-04-03.
+**Scope:** Training monitor. Game viewer is implemented separately — see `docs/09_VIEWER_SPEC.md`.
 **Last updated:** 2026-04-03
 
 ---
@@ -283,7 +283,7 @@ Secondary row (three equal columns):
 Event log (full width):
 - Last 20 events, newest first
 - Shows: game_complete (winner, moves, worker), eval_complete, run_start/end
-- Each game_complete row has a `view →` link (disabled for now, will link to /viewer)
+- Each game_complete row has a `view →` link to `/viewer/game/<game_id>`
 
 ### 5.3 Chart data retention
 
@@ -323,11 +323,9 @@ Gate status shown as a small badge: `PASSED` (green) or `FAILED` (red).
 
 ---
 
-## 6. Metrics not in scope for this sprint
+## 6. Deferred items
 
-The following are explicitly deferred to later sprints:
-
-- Game replay viewer (separate `/viewer` endpoint, separate sprint)
+- Game replay viewer — **implemented** in separate sprint, see `docs/09_VIEWER_SPEC.md`
 - Historical run comparison (separate tooling)
 - Alerts via email/Discord webhook (post Phase-4.5)
 - Mobile-responsive layout (desktop-only for now)
@@ -336,7 +334,7 @@ The following are explicitly deferred to later sprints:
 
 ## 7. Config keys
 
-All monitoring config lives under `monitoring:` in `configs/default.yaml`.
+All monitoring config lives under `monitoring:` in `configs/monitoring.yaml`.
 Do not hardcode any of these values.
 
 ```yaml
@@ -354,28 +352,29 @@ monitoring:
 
 ---
 
-## 8. Files to create
+## 8. Implementation files
 
 ```
 hexo_rl/monitoring/
-├── events.py                  ← NEW: emit_event, register_renderer
-├── terminal_dashboard.py      ← NEW: replaces old rich dashboard code
-├── web_dashboard.py           ← NEW: replaces root dashboard.py
+├── events.py                  ← emit_event, register_renderer
+├── terminal_dashboard.py      ← Rich Live renderer
+├── web_dashboard.py           ← Flask+SocketIO renderer
 └── static/
-    └── index.html             ← NEW: single-file SPA
+    ├── index.html             ← dashboard SPA
+    └── viewer.html            ← game viewer SPA (see 09_VIEWER_SPEC.md)
 ```
 
-## 9. Files to delete / clean up
+## 9. Completed cleanup (2026-04-03)
+
+The following files/references were deleted as part of the dashboard rebuild:
 
 | File | Action |
 |---|---|
-| `dashboard.py` (root) | Delete entirely |
-| Any `phase40dashboard*` in `hexo_rl/monitoring/` | Delete |
-| Any `phase4_dashboard*` in `hexo_rl/monitoring/` | Delete |
-| Old `WebDashboard` class imports in `train.py` | Remove |
-| Old `web_dash.*` calls in `train.py` | Replace with `emit_event()` calls |
-| Old `web_dash.*` calls in `pool.py` | Replace with `emit_event()` calls |
-| Progress bar code using `total=None` | Remove entirely |
+| `dashboard.py` (root) | Deleted |
+| `phase40dashboard*`, `phase4_dashboard*` in `hexo_rl/monitoring/` | Deleted |
+| Old `WebDashboard` class imports in `train.py` | Removed |
+| Old `web_dash.*` calls in `train.py` and `pool.py` | Replaced with `emit_event()` calls |
+| Progress bar code using `total=None` | Removed |
 
 ## 10. Testing requirements
 
