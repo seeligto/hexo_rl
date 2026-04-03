@@ -2,19 +2,31 @@ import requests
 import time
 import json
 import hashlib
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Set, Tuple
 import structlog
 from pathlib import Path
 from abc import ABC, abstractmethod
+
+import yaml
 
 log = structlog.get_logger()
 
 # Default storage for raw human games
 RAW_HUMAN_DIR = Path("data/corpus/raw_human")
 
-# ~480 most recent games accessible unauthenticated; full archive requires
-# WolverinDEV export — see memory note
-UNAUTHENTICATED_GAME_LIMIT = 480
+# 500 most recent games accessible unauthenticated (confirmed from source:
+# apiQueryService.ts line 68-70 — page * pageSize >= 500 returns 401)
+UNAUTHENTICATED_GAME_LIMIT = 500
+
+
+def _load_scraper_config() -> Dict[str, Any]:
+    """Load scraper defaults from configs/corpus.yaml."""
+    config_path = Path("configs/corpus.yaml")
+    if config_path.exists():
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        return cfg.get("scraper", {})
+    return {}
 
 
 class GameArchiveScraper(ABC):
@@ -22,7 +34,7 @@ class GameArchiveScraper(ABC):
         self.base_url = base_url.rstrip('/')
         self.api_prefix = api_prefix.rstrip('/')
         self.headers = {
-            'User-Agent': 'HexTacToe-AZ-Scraper/0.1.0'
+            'User-Agent': 'HexTacToe-AZ-Scraper/0.2.0'
         }
         self.storage_dir = storage_dir
         self.storage_dir.mkdir(parents=True, exist_ok=True)
@@ -62,8 +74,9 @@ class HexoDidScraper(GameArchiveScraper):
         url = f"{self.base_url}{self.api_prefix}/finished-games"
         params: Dict[str, Any] = {'page': page, 'pageSize': page_size}
         if base_timestamp is not None:
-            params['before'] = base_timestamp
+            params['baseTimestamp'] = base_timestamp
         try:
+            log.debug("http_request", url=url, params=params)
             resp = requests.get(url, params=params, headers=self.headers, timeout=10)
             if resp.status_code == 200:
                 return resp.json().get('games', [])
@@ -78,6 +91,7 @@ class HexoDidScraper(GameArchiveScraper):
 
         url = f"{self.base_url}{self.api_prefix}/finished-games/{game_id}"
         try:
+            log.debug("http_request", url=url)
             resp = requests.get(url, headers=self.headers, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
@@ -86,6 +100,18 @@ class HexoDidScraper(GameArchiveScraper):
         except Exception as e:
             log.error("fetch_error", url=url, error=str(e))
         return None
+
+    def fetch_leaderboard(self) -> List[Dict[str, Any]]:
+        """Fetch the current leaderboard from /api/leaderboard."""
+        url = f"{self.base_url}{self.api_prefix}/leaderboard"
+        try:
+            log.debug("http_request", url=url)
+            resp = requests.get(url, headers=self.headers, timeout=10)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception as e:
+            log.error("fetch_leaderboard_error", url=url, error=str(e))
+        return []
 
 
 class HexoComScraper(GameArchiveScraper):
@@ -125,6 +151,66 @@ def _passes_filter(game: Dict[str, Any]) -> bool:
     return True
 
 
+def _extract_player_elos(game_details: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+    """Extract player Elo values from a full game record.
+
+    Returns (player_black_elo, player_white_elo) where black=players[0],
+    white=players[1] per the API schema.  Returns None for missing/null values.
+    """
+    players = game_details.get('players', [])
+    elo_black = None
+    elo_white = None
+    if len(players) >= 1:
+        elo_val = players[0].get('elo')
+        if elo_val is not None:
+            elo_black = int(elo_val)
+    if len(players) >= 2:
+        elo_val = players[1].get('elo')
+        if elo_val is not None:
+            elo_white = int(elo_val)
+    return elo_black, elo_white
+
+
+def _enrich_with_elo(game_details: Dict[str, Any]) -> Dict[str, Any]:
+    """Add player_black_elo and player_white_elo fields to a game record."""
+    elo_black, elo_white = _extract_player_elos(game_details)
+    game_details['player_black_elo'] = elo_black
+    game_details['player_white_elo'] = elo_white
+    return game_details
+
+
+def _passes_elo_filter(game_details: Dict[str, Any], min_elo: int) -> bool:
+    """Return True if both players meet the minimum Elo threshold.
+
+    Games with missing Elo (unrated/null) are excluded when min_elo > 0.
+    """
+    if min_elo <= 0:
+        return True
+    elo_black = game_details.get('player_black_elo')
+    elo_white = game_details.get('player_white_elo')
+    if elo_black is None or elo_white is None:
+        return False
+    return elo_black >= min_elo and elo_white >= min_elo
+
+
+def _get_player_profile_ids(game_details: Dict[str, Any]) -> Set[str]:
+    """Extract profileId values from a game record's players list."""
+    ids: Set[str] = set()
+    for player in game_details.get('players', []):
+        pid = player.get('profileId')
+        if pid:
+            ids.add(pid)
+    return ids
+
+
+def _passes_top_players_filter(game_details: Dict[str, Any], top_player_ids: Set[str]) -> bool:
+    """Return True if at least one player is in the top-player set."""
+    if not top_player_ids:
+        return True
+    game_pids = _get_player_profile_ids(game_details)
+    return bool(game_pids & top_player_ids)
+
+
 def deduplicate_games(games: List[List[Tuple[int, int]]]) -> List[List[Tuple[int, int]]]:
     seen = set()
     unique_games = []
@@ -141,9 +227,24 @@ def scrape_hexo_did(
     max_pages: int = 10,
     page_size: int = 20,
     use_cache: bool = True,
-) -> List[List[Tuple[int, int]]]:
+    min_elo: int = 0,
+    top_players_only: bool = False,
+    top_n: int = 20,
+    req_delay: float = 1.0,
+) -> Tuple[List[List[Tuple[int, int]]], List[str]]:
     scraper = HexoDidScraper()
-    all_game_moves = []
+    all_game_moves: List[List[Tuple[int, int]]] = []
+
+    # Resolve top-player IDs if requested
+    top_player_ids: Set[str] = set()
+    if top_players_only:
+        leaderboard = scraper.fetch_leaderboard()
+        for entry in leaderboard[:top_n]:
+            pid = entry.get('profileId')
+            if pid:
+                top_player_ids.add(pid)
+        log.info("top_players_resolved", count=len(top_player_ids), top_n=top_n)
+        time.sleep(req_delay)
 
     if use_cache:
         cached_count = 0
@@ -166,7 +267,8 @@ def scrape_hexo_did(
     # Fix baseTimestamp at scrape-run start to prevent pagination drift from new games added mid-run
     import time as _time
     base_timestamp = int(_time.time() * 1000)
-    log.info("scrape_start", base_timestamp=base_timestamp, max_pages=max_pages, page_size=page_size)
+    log.info("scrape_start", base_timestamp=base_timestamp, max_pages=max_pages,
+             page_size=page_size, min_elo=min_elo, top_players_only=top_players_only)
 
     fetched_ids: List[str] = []
 
@@ -193,15 +295,30 @@ def scrape_hexo_did(
 
             game_id = game['id']
             game_details = scraper.fetch_game_details(game_id)
-            if game_details and 'moves' in game_details:
-                # site (x,y) == engine (q,r) — pointy-top axial, no conversion
-                moves = [(move['x'], move['y']) for move in game_details['moves']]
-                all_game_moves.append(moves)
-                fetched_ids.append(game_id)
+            if not game_details or 'moves' not in game_details:
+                time.sleep(req_delay)
+                continue
 
-            time.sleep(0.1)  # Be polite
+            # Enrich with Elo fields
+            _enrich_with_elo(game_details)
 
-        time.sleep(0.5)  # Be polite
+            # Apply post-fetch filters
+            if not _passes_elo_filter(game_details, min_elo):
+                time.sleep(req_delay)
+                continue
+            if top_players_only and not _passes_top_players_filter(game_details, top_player_ids):
+                time.sleep(req_delay)
+                continue
+
+            # Re-save with Elo enrichment
+            scraper.save_to_cache(game_id, game_details)
+
+            # site (x,y) == engine (q,r) — pointy-top axial, no conversion
+            moves = [(move['x'], move['y']) for move in game_details['moves']]
+            all_game_moves.append(moves)
+            fetched_ids.append(game_id)
+
+            time.sleep(req_delay)
 
     log.info("scraping_complete", raw_count=len(all_game_moves))
     unique_moves = deduplicate_games(all_game_moves)
@@ -211,16 +328,36 @@ def scrape_hexo_did(
 
 if __name__ == "__main__":
     import argparse
+
+    # Load config defaults
+    scraper_cfg = _load_scraper_config()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--pages", type=int, default=1)
     parser.add_argument("--page-size", type=int, default=20)
     parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--min-elo", type=int,
+                        default=scraper_cfg.get("min_elo", 0),
+                        help="Skip games where either player's Elo is below threshold")
+    parser.add_argument("--top-players-only", action="store_true",
+                        default=scraper_cfg.get("top_players_only", False),
+                        help="Only keep games with at least one top-N leaderboard player")
+    parser.add_argument("--top-n", type=int,
+                        default=scraper_cfg.get("top_n", 20),
+                        help="Number of top leaderboard players to include (default 20)")
+    parser.add_argument("--req-delay", type=float,
+                        default=scraper_cfg.get("req_delay", 1.0),
+                        help="Seconds between API requests (default 1.0)")
     args = parser.parse_args()
 
     games, ids = scrape_hexo_did(
         max_pages=args.pages,
         page_size=args.page_size,
         use_cache=not args.no_cache,
+        min_elo=args.min_elo,
+        top_players_only=args.top_players_only,
+        top_n=args.top_n,
+        req_delay=args.req_delay,
     )
     print(f"Scraped {len(games)} unique games.")
     if ids:
