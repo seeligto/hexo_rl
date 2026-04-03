@@ -27,7 +27,8 @@ hexo_rl/
 │   ├── training/       Training loop, loss functions, checkpoints
 │   ├── eval/           Tournament runner, Bradley-Terry Elo ladder
 │   ├── bootstrap/      Bot integration, supervised pretraining, scraper
-│   ├── monitoring/     Structlog config, metrics writers, GPU monitor
+│   ├── monitoring/     Event-driven monitoring — events.py fan-out, terminal+web dashboards, GPU monitor, game recorder
+│   ├── viewer/         Game viewer engine and play-against-model interface
 │   └── corpus/         Corpus pipeline and metrics
 ├── configs/            YAML hyperparameter configs
 ├── scripts/            CLI entrypoints (train.py, benchmark.py, eval_vs_sealbot.py)
@@ -56,11 +57,13 @@ Rust exposes its API to Python via **PyO3**. Import as: `from engine import MCTS
 
 - **Board representation**: axial (cube) hex coordinates internally; offset 2D array for tensor input
 - **State tensor**: 18 channels — 2×8 history planes (current/opponent stones) + 2 meta planes (moves remaining, turn parity)
-- **Network**: ResNet-10 with 128 filters; policy head → `board_size² + 1` logits; value head → scalar in `[-1, 1]`
+- **Network**: ResNet-12 with 128 filters, SE blocks on every residual block (reduction ratio 4); policy head → `board_size² + 1` logits; value head → dual-pooling (global avg+max → FC), BCE loss
+- **Auxiliary loss**: opponent reply prediction head (weight 0.15)
 - **MCTS**: batched leaf evaluation — leaves queued across N parallel games, single GPU forward pass per batch
 - **Turn structure**: `moves_remaining` field in game state (1 or 2); encoded as feature plane so network learns the difference
 - **Reward**: terminal only by default (+1/-1); optional shaped intermediate rewards that decay to zero over training
 - **Bootstrap phase**: supervised pretraining from minimax-generated games before self-play begins (see `04_BOOTSTRAP_STRATEGY.md`)
+- **Monitoring**: event-driven fan-out (events.py → passive renderers). Dashboards never block training. Terminal (Rich, 4Hz max) and web (Flask+SocketIO on :5001) renderers consume identical event stream. Viewer is isolated — `hexo_rl/viewer/` is never imported by training path.
 
 ---
 
@@ -70,7 +73,7 @@ Rust exposes its API to Python via **PyO3**. Import as: `from engine import MCTS
 - Opening book analysis mode: query what the model thinks of any position
 - Training fully automated: run `python scripts/train.py` and walk away
 - Reproducible: configs + seeds produce the same training run
-- Benchmarks pass: MCTS ≥ 10,000 sim/sec, GPU util ≥ 80% during training
+- Benchmarks pass: MCTS ≥ 140,000 sim/s, GPU util ≥ 85% during training
 
 ---
 
@@ -82,3 +85,8 @@ Rust exposes its API to Python via **PyO3**. Import as: `from engine import MCTS
 | `02_roadmap.md` | Know which phase we're in and what the next milestone is |
 | `03_tooling.md` | Set up logging, benchmarking, progress display, dev environment |
 | `04_bootstrap_strategy.md` | Understand the minimax pretraining pipeline and why it exists |
+| `05_community_integration.md` | Community bot integration, API, notation, formations |
+| `06_OPEN_QUESTIONS.md` | Active research questions and ablation plans |
+| `07_PHASE4_SPRINT_LOG.md` | Phase 4.0 sprint changelog — most current record of changes |
+| `08_DASHBOARD_SPEC.md` | Monitoring event schema and dashboard specification |
+| `09_VIEWER_SPEC.md` | Game viewer, threat overlay, and play-against-model spec |
