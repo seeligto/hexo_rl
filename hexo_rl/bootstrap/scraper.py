@@ -108,7 +108,11 @@ class HexoDidScraper(GameArchiveScraper):
             log.debug("http_request", url=url)
             resp = requests.get(url, headers=self.headers, timeout=10)
             if resp.status_code == 200:
-                return resp.json()
+                data = resp.json()
+                # Response is {"players": [...], "generatedAt": ..., ...}
+                if isinstance(data, dict):
+                    return data.get('players', [])
+                return data
         except Exception as e:
             log.error("fetch_leaderboard_error", url=url, error=str(e))
         return []
