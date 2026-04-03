@@ -10,13 +10,13 @@ Each phase has clear entry criteria, exit criteria, and a set of deliverables. D
 
 ### Tasks
 
-- [ ] Implement `Board` in Rust: axial coordinates, legal move generation, move application
-- [ ] Implement bitboard win detection in all 3 hex directions
-- [ ] Implement Zobrist hashing (incremental update per move)
-- [ ] Expose via PyO3 — verify `Board` usable from Python
-- [ ] Implement turn structure: 1 move on ply 0, 2 moves per player thereafter
-- [ ] Implement `GameState` Python dataclass wrapping the Rust board
-- [ ] Write comprehensive tests:
+- [x] Implement `Board` in Rust: axial coordinates, legal move generation, move application
+- [x] Implement bitboard win detection in all 3 hex directions
+- [x] Implement Zobrist hashing (incremental update per move)
+- [x] Expose via PyO3 — verify `Board` usable from Python
+- [x] Implement turn structure: 1 move on ply 0, 2 moves per player thereafter
+- [x] Implement `GameState` Python dataclass wrapping the Rust board
+- [x] Write comprehensive tests:
   - All winning patterns (E, NE, NW directions, at edges, at corners)
   - Legal move generation at various board states
   - Zobrist hash collision test (hash distinct positions, check uniqueness)
@@ -37,14 +37,14 @@ Each phase has clear entry criteria, exit criteria, and a set of deliverables. D
 
 ### Tasks
 
-- [ ] Implement `HexTacToeNet` (ResNet-10, 128 filters, dual heads)
-- [ ] Implement `MCTSTree` in Rust (PUCT, single-threaded, no batching yet)
-- [ ] Implement single-process self-play (no worker pool yet)
-- [ ] Implement `ReplayBuffer` (NumPy ring arrays)
-- [ ] Implement training step (FP16, GradScaler, AdamW)
-- [ ] Implement basic checkpoint save/load
-- [ ] Implement basic console logging (loss, games played, buffer size)
-- [ ] Wire everything together: self-play → buffer → train → repeat
+- [x] Implement `HexTacToeNet` (ResNet-12, 128 filters, dual heads)
+- [x] Implement `MCTSTree` in Rust (PUCT, single-threaded, no batching yet)
+- [x] Implement single-process self-play (no worker pool yet)
+- [x] Implement `ReplayBuffer` (NumPy ring arrays) (later replaced by Rust ReplayBuffer in Phase 3.5)
+- [x] Implement training step (FP16, GradScaler, AdamW)
+- [x] Implement basic checkpoint save/load
+- [x] Implement basic console logging (loss, games played, buffer size)
+- [x] Wire everything together: self-play → buffer → train → repeat
 
 ### Configuration (fast_debug.yaml)
 
@@ -94,6 +94,8 @@ n_workers: 1
 | VRAM usage | ≤ 80% Total VRAM | **PASS** (9%) |
 | Batch fill % | ≥ 50% | **PASS** (99.8%) |
 
+> These are Phase 3.5 exit baselines. See CLAUDE.md § Benchmarks for current Phase 4.0 baselines (2026-04-03).
+
 ### Exit criteria
 
 - All Phase 3.5 throughput targets met (verified by benchmark harness)
@@ -135,7 +137,7 @@ n_workers: 1
 ### Tasks
 
 - [x] **Rust Core Update**: Implement dynamic stone clustering (distance ≤ 8) and multi-window 2-plane snapshot generation (K × 19×19 per cluster). Rust returns 2-plane views; Python assembles 18-plane tensors.
-- [x] **Network Refactor**: Simplify to a single-trunk ResNet-10 that processes K clusters as a batch.
+- [x] **Network Refactor**: Simplify to a single-trunk ResNet-12 that processes K clusters as a batch.
 - [x] **Pipeline Integration**: Implement Value Pooling (min-pooling for pessimistic threat detection) and Policy Mapping (global coordinate translation).
 - [x] **Un-constrain Bots**: Remove 19x19 bounds from SealBotBot to enable full colony meta play.
 - [x] **ReplayBuffer (Rust)**: Port replay buffer and 12-fold hex augmentation to Rust (f16-as-u16 storage, zero-copy PyO3 transfer). Python `ReplayBuffer` deleted.
@@ -170,6 +172,10 @@ The split-responsibility architecture is fully in place:
 - [x] Run `make bench.full` — all 10 targets pass with Phase 4.0 config (2026-04-02)
 - [x] Pretrain validated: policy loss 5.0 → 2.07, 5/5 wins vs RandomBot
 - [x] Codebase cleanup: directories renamed (engine, hexo_rl, monitoring), Rust prefix removed from all PyO3 exports
+- [x] Dashboard rebuilt — event fan-out pattern (events.py → terminal + web renderers)
+- [x] Game viewer implemented — `/viewer` endpoint, threat overlay, replay scrubber, play-against-model
+- [x] Threat detection in Rust — `Board.get_threats()`, `engine/src/board/threats.rs`
+- [x] Benchmark rebaselined — 2026-04-03, correct 12-block × 128-channel model, all 10 metrics PASS
 - [ ] **Sustained training run** — 24–48 hour run, monitor for policy entropy collapse, value loss plateau
 - [ ] **Q2 ablation** — value aggregation strategy: min vs mean vs attention (highest-priority open question)
 
