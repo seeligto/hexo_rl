@@ -540,10 +540,10 @@ git commit -m "chore(data): update corpus manifest (N games)"
 Do not commit raw game JSON files. Do not wait for the scrape to finish
 before starting other work.
 
-**Note:** `scrape_daily.sh` runs two passes: a standard incremental pull
-followed by a `--top-players-only --top-n 20` pass targeting high-Elo games.
-Per-game Elo is now stored in the game JSON (`player_black_elo`,
+**Note:** Per-game Elo is now stored in the game JSON (`player_black_elo`,
 `player_white_elo`) and the manifest includes an `elo_bands` breakdown.
+For curated top-player harvesting, use `make corpus.human.top` separately
+(the daily scrape already covers the full 500-game public API window).
 
 ---
 
