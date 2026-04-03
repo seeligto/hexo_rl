@@ -114,8 +114,23 @@ bench.baseline: ## Run bench.full and save as dated baseline report
 bench.mcts: ## Dedicated Rust MCTS micro-benchmark
 	$(PY) scripts/benchmark_mcts.py
 
-# Dashboard targets will be re-added when renderers are built (Prompt 2).
-# For now, train.py emits events to registered renderers via emit_event().
+.PHONY: train.web
+train.web: ## Train with web dashboard (default config)
+	$(PY) scripts/train.py --config configs/training.yaml
+
+.PHONY: train.nodash
+train.nodash: ## Train without dashboard
+	$(PY) scripts/train.py --config configs/training.yaml --no-dashboard
+
+.PHONY: dash.open
+dash.open: ## Open web dashboard in browser
+	open http://localhost:5001
+
+.PHONY: train.bg
+train.bg: ## Train in background, log to logs/
+	nohup $(PY) scripts/train.py --config configs/training.yaml \
+		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 &
+	@echo "Training running in background. Logs in logs/"
 
 .PHONY: train.lite
 train.lite: ## Fast debug training — short run, no dashboard
@@ -237,11 +252,15 @@ help.train: ## List all training-related targets
 	@echo "Training targets:"
 	@echo "  ─────────────────────────────────────────────────────────────"
 	@echo "  make train               self-play from pretrain ckpt"
+	@echo "  make train.web           train with web dashboard"
+	@echo "  make train.nodash        train without dashboard"
+	@echo "  make train.bg            train in background (logs/)"
 	@echo "  make train.resume        resume from latest checkpoint"
 	@echo "  make train.smoke         200-step smoke test"
 	@echo "  make train.lite          fast debug (100 steps)"
 	@echo "  make train.full          from bootstrap checkpoint"
 	@echo "  make train.multi         multi-hour profile"
+	@echo "  make dash.open           open web dashboard in browser"
 	@echo "  ─────────────────────────────────────────────────────────────"
 	@echo "  make pretrain.lite       100-step pretrain smoke test"
 	@echo "  make pretrain            5-epoch pretrain"
