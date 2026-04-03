@@ -349,13 +349,17 @@ def test_prune_policy_targets_batch():
 
 
 def test_train_step_returns_grad_norm(tmp_path: Path):
-    """train_step must return a finite, non-NaN grad_norm."""
+    """train_step must return a non-negative, non-NaN grad_norm.
+
+    Note: grad_norm may be inf when FP16 GradScaler detects overflow and
+    skips the optimizer step — this is correct diagnostic behaviour.
+    """
     trainer = make_trainer(tmp_path)
     buf = fill_buffer()
     result = trainer.train_step(buf)
     assert "grad_norm" in result
-    assert np.isfinite(result["grad_norm"]), f"grad_norm = {result['grad_norm']}"
     assert result["grad_norm"] >= 0.0
+    assert not np.isnan(result["grad_norm"]), f"grad_norm = {result['grad_norm']}"
 
 
 def test_train_step_returns_value_accuracy(tmp_path: Path):

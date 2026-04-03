@@ -758,3 +758,23 @@ that upgrades our existing scraper from black-box to informed operation.
 - Whether to backfill Elo on existing pre-upgrade game files. Currently
   classified as `unrated`. Would require re-fetching from API (games within
   the 500-game window) or accepting partial coverage. Deferred.
+
+---
+
+### 22. Fix flaky test_train_step_returns_grad_norm (2026-04-04)
+**Files:** `tests/test_trainer.py`
+
+**Root cause:** The test asserted `np.isfinite(grad_norm)`, but with FP16
+training (GradScaler enabled), random test data can produce gradients that
+overflow after `scaler.unscale_()`. In that case `clip_grad_norm_()` correctly
+returns `inf` as the pre-clip norm, and GradScaler skips the optimizer step.
+This is expected FP16 behaviour — not a bug in the training code.
+
+**Fix:** Changed assertion from `np.isfinite()` to `not np.isnan()` and
+`>= 0.0`, matching the sibling test `test_grad_norm_uses_config_grad_clip`
+which already handled this correctly.
+
+**Impact on actual training:** None. The `fp16_backward_step()` implementation
+has correct ordering (unscale → clip → step → update) since §14. Grad clipping
+worked correctly during the 4,940-step self-play run. Only the test assertion
+was too strict.
