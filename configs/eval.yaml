@@ -16,7 +16,8 @@ eval_pipeline:
     sealbot:
       enabled: true
       n_games: 50
-      time_limit: 0.03
+      think_time_strong: 0.5   # eval gating — stronger play, slower
+      think_time_fast: 0.1     # corpus generation — faster, still non-trivial
       model_sims: 128
     random:
       enabled: true

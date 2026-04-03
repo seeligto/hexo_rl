@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--every", type=int, default=1, help="Evaluate every Nth checkpoint when using --all-checkpoints")
     p.add_argument("--max-checkpoints", type=int, default=0, help="Limit number of checkpoints (0 = all)")
     p.add_argument("--n-games", type=int, default=10, help="Number of games per checkpoint (recommend 10+; 100 for stronger estimate)")
-    p.add_argument("--time-limit", type=float, default=0.03, help="SealBot think time per move in seconds")
+    p.add_argument("--time-limit", type=float, default=0.5, help="SealBot think time per move in seconds (default: 0.5 = strong)")
     p.add_argument("--model-sims", type=int, default=96, help="Model MCTS simulations per move")
     p.add_argument("--out", default=None, help="Optional output JSONL path")
     return p.parse_args()
