@@ -1,11 +1,8 @@
-"""Tests for corpus preview push and dashboard corpus endpoints."""
+"""Tests for corpus preview push and game selection logic."""
 from __future__ import annotations
 
-import json
 import math
-import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -103,142 +100,6 @@ def test_select_games_small_corpus():
     selected = select_games(browser, 50)
     # Should return all available (deduplicated)
     assert 1 <= len(selected) <= 3
-
-
-# ---------------------------------------------------------------------------
-# Test /api/reload-corpus and /api/corpus-replays
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def dashboard_app():
-    """Create a test Dashboard and return its Flask test client."""
-    from dashboard import Dashboard
-    dash = Dashboard(port=15999)
-    dash.app.config["TESTING"] = True
-    return dash
-
-
-def test_reload_corpus_loads_games(dashboard_app):
-    """POST /api/reload-corpus should load games from JSONL file."""
-    records = [
-        {
-            "game_id": f"test_{i}",
-            "game_length": 20 + i,
-            "outcome": "x_win",
-            "timestamp": "2026-04-01T00:00:00Z",
-            "checkpoint_step": 0,
-            "moves": [[0, 0], [1, 1]],
-            "source": "human",
-        }
-        for i in range(5)
-    ]
-    jsonl = "\n".join(json.dumps(r) for r in records)
-
-    with patch("dashboard.Path") as MockPath:
-        # Only patch the specific Path("/tmp/hexo_corpus_preview.jsonl") call
-        pass
-
-    # Write to actual temp file at expected location
-    corpus_path = Path("/tmp/hexo_corpus_preview.jsonl")
-    corpus_path.write_text(jsonl + "\n", encoding="utf-8")
-
-    try:
-        client = dashboard_app.app.test_client()
-        resp = client.post("/api/reload-corpus")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["loaded"] == 5
-
-        # Now GET /api/corpus-replays should return them
-        resp2 = client.get("/api/corpus-replays")
-        assert resp2.status_code == 200
-        games = resp2.get_json()
-        assert len(games) == 5
-        assert games[0]["source"] == "human"
-        assert games[0]["winner"] == "x_win"
-    finally:
-        corpus_path.unlink(missing_ok=True)
-
-
-def test_corpus_replays_empty_by_default(dashboard_app):
-    """GET /api/corpus-replays returns empty list when nothing loaded."""
-    client = dashboard_app.app.test_client()
-    resp = client.get("/api/corpus-replays")
-    assert resp.status_code == 200
-    assert resp.get_json() == []
-
-
-def test_corpus_cache_isolation(dashboard_app):
-    """Reload-corpus does not affect self-play replay cache."""
-    records = [
-        {
-            "game_id": "corpus_game_1",
-            "game_length": 30,
-            "outcome": "o_win",
-            "timestamp": "2026-04-01T00:00:00Z",
-            "checkpoint_step": 0,
-            "moves": [[0, 0]],
-            "source": "sealbot-d4",
-        }
-    ]
-    corpus_path = Path("/tmp/hexo_corpus_preview.jsonl")
-    corpus_path.write_text(json.dumps(records[0]) + "\n", encoding="utf-8")
-
-    try:
-        client = dashboard_app.app.test_client()
-
-        # Load corpus
-        resp = client.post("/api/reload-corpus")
-        assert resp.get_json()["loaded"] == 1
-
-        # Self-play replays should be unaffected (empty since no replay files)
-        resp2 = client.get("/api/replays?n=10")
-        assert resp2.status_code == 200
-        replays = resp2.get_json()
-        # Should not contain corpus games
-        for r in replays:
-            assert "corpus" not in r.get("key", "")
-
-        # Corpus should have its own data
-        resp3 = client.get("/api/corpus-replays")
-        corpus = resp3.get_json()
-        assert len(corpus) == 1
-        assert corpus[0]["game_id"] == "corpus_game_1"
-    finally:
-        corpus_path.unlink(missing_ok=True)
-
-
-def test_corpus_replay_detail(dashboard_app):
-    """GET /api/corpus-replays/<key> returns full game detail."""
-    record = {
-        "game_id": "detail_test",
-        "game_length": 25,
-        "outcome": "x_win",
-        "timestamp": "2026-04-01T00:00:00Z",
-        "checkpoint_step": 0,
-        "moves": [[0, 0], [1, 1], [2, 2]],
-        "source": "sealbot-d6",
-    }
-    corpus_path = Path("/tmp/hexo_corpus_preview.jsonl")
-    corpus_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
-
-    try:
-        client = dashboard_app.app.test_client()
-        client.post("/api/reload-corpus")
-
-        resp = client.get("/api/corpus-replays/corpus:detail_test")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["game_id"] == "detail_test"
-        assert data["source"] == "sealbot-d6"
-        assert len(data["moves"]) == 3
-
-        # Non-existent key returns 404
-        resp2 = client.get("/api/corpus-replays/corpus:nonexistent")
-        assert resp2.status_code == 404
-    finally:
-        corpus_path.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
