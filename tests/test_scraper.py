@@ -116,21 +116,26 @@ class TestTopPlayersFilter:
         assert _passes_top_players_filter(game, set())
 
     @patch.object(HexoDidScraper, "fetch_leaderboard")
+    @patch.object(HexoDidScraper, "fetch_profile_games")
     @patch.object(HexoDidScraper, "fetch_games_list")
     @patch.object(HexoDidScraper, "fetch_game_details")
-    def test_scrape_top_players_filters(self, mock_details, mock_list, mock_lb):
-        """Integration: only games with a top player appear in results."""
-        top_game = _make_game("top", 1500, 1400, profile_ids=("top_1", "other"))
-        other_game = _make_game("other", 1100, 1000, profile_ids=("nobody", "also_nobody"))
+    def test_scrape_top_players_uses_profile_endpoint(self, mock_details, mock_list, mock_profile, mock_lb):
+        """Integration: top-player mode fetches via per-profile endpoint,
+        can find games outside the standard 500-game window."""
+        # Standard pagination returns nothing interesting
+        mock_list.return_value = []
 
+        # But the profile endpoint surfaces a game
+        profile_game = _make_game("profile_only", 1500, 1400, profile_ids=("top_1", "other"))
         mock_lb.return_value = LEADERBOARD
-        mock_list.return_value = [
-            {"id": "top", "gameOptions": {"rated": True}, "moveCount": 30,
-             "gameResult": {"reason": "six-in-a-row"}},
-            {"id": "other", "gameOptions": {"rated": True}, "moveCount": 30,
-             "gameResult": {"reason": "six-in-a-row"}},
-        ]
-        mock_details.side_effect = lambda gid: {"top": top_game, "other": other_game}[gid]
+        mock_profile.side_effect = lambda pid: {
+            "top_1": [
+                {"id": "profile_only", "gameOptions": {"rated": True}, "moveCount": 30,
+                 "gameResult": {"reason": "six-in-a-row"}},
+            ],
+            "top_2": [],
+        }.get(pid, [])
+        mock_details.return_value = profile_game
 
         with tempfile.TemporaryDirectory() as td:
             with patch("hexo_rl.bootstrap.scraper.RAW_HUMAN_DIR", Path(td)):
@@ -138,8 +143,7 @@ class TestTopPlayersFilter:
                     max_pages=1, page_size=20, use_cache=False,
                     top_players_only=True, top_n=2, req_delay=0.0,
                 )
-        assert "top" in ids
-        assert "other" not in ids
+        assert "profile_only" in ids
 
 
 # ---------------------------------------------------------------------------

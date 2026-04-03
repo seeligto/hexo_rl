@@ -113,6 +113,26 @@ class HexoDidScraper(GameArchiveScraper):
             log.error("fetch_leaderboard_error", url=url, error=str(e))
         return []
 
+    def fetch_profile_games(self, profile_id: str) -> List[Dict[str, Any]]:
+        """Fetch up to 10 recent games for a player profile.
+
+        This endpoint is independent of the 500-game public finished-games
+        cap, so it can surface games outside that window.
+        """
+        url = f"{self.base_url}{self.api_prefix}/profiles/{profile_id}/games"
+        try:
+            log.debug("http_request", url=url)
+            resp = requests.get(url, headers=self.headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                # Response may be a list or a dict with a 'games' key
+                if isinstance(data, list):
+                    return data
+                return data.get('games', [])
+        except Exception as e:
+            log.error("fetch_profile_games_error", profile_id=profile_id, error=str(e))
+        return []
+
 
 class HexoComScraper(GameArchiveScraper):
     def __init__(self, storage_dir: Path = RAW_HUMAN_DIR):
@@ -235,17 +255,6 @@ def scrape_hexo_did(
     scraper = HexoDidScraper()
     all_game_moves: List[List[Tuple[int, int]]] = []
 
-    # Resolve top-player IDs if requested
-    top_player_ids: Set[str] = set()
-    if top_players_only:
-        leaderboard = scraper.fetch_leaderboard()
-        for entry in leaderboard[:top_n]:
-            pid = entry.get('profileId')
-            if pid:
-                top_player_ids.add(pid)
-        log.info("top_players_resolved", count=len(top_player_ids), top_n=top_n)
-        time.sleep(req_delay)
-
     if use_cache:
         cached_count = 0
         for p in scraper.storage_dir.glob("*.json"):
@@ -264,13 +273,13 @@ def scrape_hexo_did(
         if cached_count > 0:
             log.info("loaded_from_cache", count=cached_count)
 
-    # Fix baseTimestamp at scrape-run start to prevent pagination drift from new games added mid-run
+    fetched_ids: List[str] = []
+
+    # --- Standard paginated scrape (up to 500-game public window) ---
     import time as _time
     base_timestamp = int(_time.time() * 1000)
     log.info("scrape_start", base_timestamp=base_timestamp, max_pages=max_pages,
              page_size=page_size, min_elo=min_elo, top_players_only=top_players_only)
-
-    fetched_ids: List[str] = []
 
     for page in range(1, max_pages + 1):
         # Hard stop before hitting the unauthenticated API wall
@@ -306,19 +315,58 @@ def scrape_hexo_did(
             if not _passes_elo_filter(game_details, min_elo):
                 time.sleep(req_delay)
                 continue
-            if top_players_only and not _passes_top_players_filter(game_details, top_player_ids):
-                time.sleep(req_delay)
-                continue
 
             # Re-save with Elo enrichment
             scraper.save_to_cache(game_id, game_details)
 
-            # site (x,y) == engine (q,r) — pointy-top axial, no conversion
             moves = [(move['x'], move['y']) for move in game_details['moves']]
             all_game_moves.append(moves)
             fetched_ids.append(game_id)
 
             time.sleep(req_delay)
+
+    # --- Top-player profile scrape (reaches beyond the 500-game window) ---
+    if top_players_only:
+        leaderboard = scraper.fetch_leaderboard()
+        top_profile_ids = []
+        for entry in leaderboard[:top_n]:
+            pid = entry.get('profileId')
+            if pid:
+                top_profile_ids.append(pid)
+        log.info("top_players_resolved", count=len(top_profile_ids), top_n=top_n)
+        time.sleep(req_delay)
+
+        for profile_id in top_profile_ids:
+            profile_games = scraper.fetch_profile_games(profile_id)
+            log.info("profile_games_fetched", profile_id=profile_id, count=len(profile_games))
+            time.sleep(req_delay)
+
+            for game in profile_games:
+                if not _passes_filter(game):
+                    continue
+
+                game_id = game.get('id')
+                if not game_id:
+                    continue
+
+                game_details = scraper.fetch_game_details(game_id)
+                if not game_details or 'moves' not in game_details:
+                    time.sleep(req_delay)
+                    continue
+
+                _enrich_with_elo(game_details)
+
+                if not _passes_elo_filter(game_details, min_elo):
+                    time.sleep(req_delay)
+                    continue
+
+                scraper.save_to_cache(game_id, game_details)
+
+                moves = [(move['x'], move['y']) for move in game_details['moves']]
+                all_game_moves.append(moves)
+                fetched_ids.append(game_id)
+
+                time.sleep(req_delay)
 
     log.info("scraping_complete", raw_count=len(all_game_moves))
     unique_moves = deduplicate_games(all_game_moves)

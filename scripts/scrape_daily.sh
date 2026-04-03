@@ -4,14 +4,13 @@
 # Usage:   ./scripts/scrape_daily.sh
 # Cron:    0 9 * * * /path/to/scripts/scrape_daily.sh
 #
-# Deduplication is handled by the scraper itself: game UUIDs that already have
-# a .json file in data/corpus/raw_human/ are never re-fetched.  New games is
-# measured as the change in that file count.
+# Two passes:
+#   1. Standard: paginate /api/finished-games (500-game public window)
+#   2. Top-player: fetch /api/leaderboard → /api/profiles/:id/games
+#      (up to 10 games per player, can surface games OUTSIDE the 500 window)
 #
-# Note: the top-player scrape (--top-players-only) is NOT run here because it
-# hits the same 500-game public API window and returns a strict subset of the
-# standard scrape. Use `make corpus.human.top` separately when you want a
-# curated high-Elo dataset for analysis.
+# Deduplication is handled by the scraper: game UUIDs that already have
+# a .json file in data/corpus/raw_human/ are never re-fetched.
 
 set -euo pipefail
 
@@ -29,28 +28,33 @@ if [[ -f "${VENV}/bin/activate" ]]; then
     source "${VENV}/bin/activate"
 fi
 
-# Count cached UUIDs before run
 mkdir -p "${CACHE_DIR}"
+mkdir -p "$(dirname "${LOG_FILE}")"
+date_str=$(date '+%Y-%m-%d')
+
+# --- Pass 1: standard incremental scrape (500-game public window) ---
 before=$(find "${CACHE_DIR}" -maxdepth 1 -name "*.json" | wc -l)
 
-# Run scraper; structlog JSON goes to stderr, summary line goes to stdout
 scraper_output=$(python -m hexo_rl.bootstrap.scraper --pages 5 --page-size 99 2>/dev/null)
 
-# Count cached UUIDs after run
-after=$(find "${CACHE_DIR}" -maxdepth 1 -name "*.json" | wc -l)
-
-# Parse total unique games passing quality filter from scraper stdout
-# Expected format: "Scraped N unique games."
+after_pass1=$(find "${CACHE_DIR}" -maxdepth 1 -name "*.json" | wc -l)
 passed=$(printf '%s' "${scraper_output}" | grep -oE 'Scraped [0-9]+' | grep -oE '[0-9]+' || echo "?")
+new_standard=$(( after_pass1 - before ))
 
-new_games=$(( after - before ))
-date_str=$(date '+%Y-%m-%d')
-summary="[${date_str}] New games: ${new_games} | Total cached: ${after} | Passed filter: ${passed}"
+summary_std="[${date_str}] [standard] New games: ${new_standard} | Total cached: ${after_pass1} | Passed filter: ${passed}"
+echo "${summary_std}"
+echo "${summary_std}" >> "${LOG_FILE}"
 
-echo "${summary}"
+# --- Pass 2: top-player profile scrape (bypasses 500-game window) ---
+top_output=$(python -m hexo_rl.bootstrap.scraper --pages 0 --top-players-only --top-n 20 2>/dev/null)
 
-mkdir -p "$(dirname "${LOG_FILE}")"
-echo "${summary}" >> "${LOG_FILE}"
+after_pass2=$(find "${CACHE_DIR}" -maxdepth 1 -name "*.json" | wc -l)
+top_passed=$(printf '%s' "${top_output}" | grep -oE 'Scraped [0-9]+' | grep -oE '[0-9]+' || echo "?")
+new_top=$(( after_pass2 - after_pass1 ))
+
+summary_top="[${date_str}] [top-player] New games: ${new_top} | Total cached: ${after_pass2} | Passed filter: ${top_passed}"
+echo "${summary_top}"
+echo "${summary_top}" >> "${LOG_FILE}"
 
 # Update manifest.json — scans all corpus dirs (human + bot), atomic write
 python "${REPO_ROOT}/scripts/update_manifest.py"
