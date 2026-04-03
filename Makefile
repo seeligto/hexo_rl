@@ -114,80 +114,20 @@ bench.baseline: ## Run bench.full and save as dated baseline report
 bench.mcts: ## Dedicated Rust MCTS micro-benchmark
 	$(PY) scripts/benchmark_mcts.py
 
-DASHBOARD_PORT    ?= 5001
-DASHBOARD_URL     ?= http://localhost:$(DASHBOARD_PORT)
-DASHBOARD_LOG_DIR ?= logs
-
-.PHONY: dashboard
-dashboard: ## Start the web dashboard (reads logs/ automatically; DASHBOARD_PORT=5001)
-	$(PY) dashboard.py $(DASHBOARD_PORT) --log-dir $(DASHBOARD_LOG_DIR)
-
-.PHONY: dash.web
-dash.web: ## Start only the web dashboard (no training) for browsing replays/corpus
-	$(PY) dashboard.py $(DASHBOARD_PORT) --log-dir $(DASHBOARD_LOG_DIR)
-
-.PHONY: dash.stop
-dash.stop: ## Kill any running web dashboard process
-	@pkill -f 'python.*dashboard.py' 2>/dev/null && echo "Dashboard stopped." || \
-	    (fuser -k $(DASHBOARD_PORT)/tcp 2>/dev/null && echo "Dashboard stopped." || \
-	    echo "No dashboard running.")
+# Dashboard targets will be re-added when renderers are built (Prompt 2).
+# For now, train.py emits events to registered renderers via emit_event().
 
 .PHONY: train.lite
 train.lite: ## Fast debug training — short run, no dashboard
 	$(PY) scripts/train.py --config $(CONFIG_LITE) --iterations 100 --no-dashboard --no-compile
 
-.PHONY: train.lite.web
-train.lite.web: ## Fast debug training + web dashboard in background
-	@bash scripts/train_with_dashboard.sh web \
-	    $(PY) scripts/train.py --config $(CONFIG_LITE) --iterations 100 --no-compile
-
-.PHONY: train.lite.rich
-train.lite.rich: ## Fast debug training with Rich terminal dashboard
-	@bash scripts/train_with_dashboard.sh rich \
-	    $(PY) scripts/train.py --config $(CONFIG_LITE) --iterations 100 --no-compile
-
-.PHONY: train.lite.dashboard
-train.lite.dashboard: ## Fast debug training with web dashboard (start dashboard separately first)
-	$(PY) scripts/train.py --config $(CONFIG_LITE) --iterations 100 --no-compile \
-	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
-
 .PHONY: train.full
-train.full: ## Standard training from bootstrap checkpoint, no dashboard
+train.full: ## Standard training from bootstrap checkpoint
 	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP)
-
-.PHONY: train.full.web
-train.full.web: ## Standard training + web dashboard in background
-	@bash scripts/train_with_dashboard.sh web \
-	    $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP)
-
-.PHONY: train.full.rich
-train.full.rich: ## Standard training with Rich terminal dashboard
-	@bash scripts/train_with_dashboard.sh rich \
-	    $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP)
-
-.PHONY: train.full.dashboard
-train.full.dashboard: ## Standard training with web dashboard (start dashboard separately first)
-	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) \
-	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
 
 .PHONY: train.multi
 train.multi: ## Multi-hour training profile from bootstrap checkpoint
 	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_BOOTSTRAP)
-
-.PHONY: train.multi.web
-train.multi.web: ## Multi-hour training + web dashboard in background
-	@bash scripts/train_with_dashboard.sh web \
-	    $(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_BOOTSTRAP)
-
-.PHONY: train.multi.rich
-train.multi.rich: ## Multi-hour training with Rich terminal dashboard
-	@bash scripts/train_with_dashboard.sh rich \
-	    $(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_BOOTSTRAP)
-
-.PHONY: train.multi.dashboard
-train.multi.dashboard: ## Multi-hour training with web dashboard
-	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_BOOTSTRAP) \
-	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
 
 .PHONY: train
 train: ## Self-play training (auto-finds latest pretrain checkpoint)
@@ -198,35 +138,6 @@ train: ## Self-play training (auto-finds latest pretrain checkpoint)
 	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
 	$(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT)
 
-.PHONY: train.web
-train.web: ## Self-play training + web dashboard in background
-	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
-	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
-	    exit 1; \
-	fi
-	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
-	@bash scripts/train_with_dashboard.sh web \
-	    $(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT)
-
-.PHONY: train.rich
-train.rich: ## Self-play training with Rich terminal dashboard
-	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
-	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
-	    exit 1; \
-	fi
-	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
-	@bash scripts/train_with_dashboard.sh rich \
-	    $(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT)
-
-.PHONY: train.dashboard
-train.dashboard: ## Self-play training + web dashboard (training in background, dashboard in foreground)
-	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
-	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
-	    exit 1; \
-	fi
-	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
-	$(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) & sleep 3 && $(MAKE) dashboard
-
 .PHONY: train.smoke
 train.smoke: ## 200-step smoke test to verify training end-to-end
 	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
@@ -236,48 +147,10 @@ train.smoke: ## 200-step smoke test to verify training end-to-end
 	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
 	$(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 200
 
-.PHONY: train.smoke.web
-train.smoke.web: ## 200-step smoke test + web dashboard in background
-	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
-	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
-	    exit 1; \
-	fi
-	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
-	@bash scripts/train_with_dashboard.sh web \
-	    $(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 200
-
-.PHONY: train.smoke.rich
-train.smoke.rich: ## 200-step smoke test with Rich terminal dashboard
-	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
-	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
-	    exit 1; \
-	fi
-	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
-	@bash scripts/train_with_dashboard.sh rich \
-	    $(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 200
-
 .PHONY: train.resume
-train.resume: ## Resume multi-hour training from latest checkpoint
+train.resume: ## Resume training from latest checkpoint
 	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
 	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST)
-
-.PHONY: train.resume.web
-train.resume.web: ## Resume training + web dashboard in background
-	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
-	@bash scripts/train_with_dashboard.sh web \
-	    $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST)
-
-.PHONY: train.resume.rich
-train.resume.rich: ## Resume training with Rich terminal dashboard
-	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
-	@bash scripts/train_with_dashboard.sh rich \
-	    $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST)
-
-.PHONY: train.resume.dashboard
-train.resume.dashboard: ## Resume training from latest checkpoint with web dashboard
-	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
-	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST) \
-	    --web-dashboard --web-dashboard-url $(DASHBOARD_URL)
 
 .PHONY: plot.train.latest
 plot.train.latest: ## Plot latest training log
@@ -354,12 +227,6 @@ corpus.manifest: ## Update data/corpus/manifest.json (scans human + bot dirs)
 corpus.analysis: corpus.manifest ## Run corpus analysis on human + bot games
 	$(PY) -m hexo_rl.bootstrap.corpus_analysis --include-bot-games
 
-CORPUS_PREVIEW_N ?= 50
-
-.PHONY: corpus.push-to-dashboard
-corpus.push-to-dashboard: ## Push N corpus games to web dashboard (N=50)
-	$(PY) scripts/push_corpus_preview.py --n $(CORPUS_PREVIEW_N)
-
 .PHONY: corpus.npz
 corpus.npz: ## Export corpus to data/bootstrap_corpus.npz for mixed training
 	$(PY) scripts/export_corpus_npz.py
@@ -367,33 +234,17 @@ corpus.npz: ## Export corpus to data/bootstrap_corpus.npz for mixed training
 .PHONY: help.train
 help.train: ## List all training-related targets
 	@echo ""
-	@echo "Training targets (plain / .web / .rich):"
+	@echo "Training targets:"
 	@echo "  ─────────────────────────────────────────────────────────────"
 	@echo "  make train               self-play from pretrain ckpt"
-	@echo "  make train.web           + web dashboard (background)"
-	@echo "  make train.rich          + Rich terminal dashboard"
 	@echo "  make train.resume        resume from latest checkpoint"
-	@echo "  make train.resume.web    + web dashboard (background)"
-	@echo "  make train.resume.rich   + Rich terminal dashboard"
 	@echo "  make train.smoke         200-step smoke test"
-	@echo "  make train.smoke.web     + web dashboard (background)"
-	@echo "  make train.smoke.rich    + Rich terminal dashboard"
 	@echo "  make train.lite          fast debug (100 steps)"
-	@echo "  make train.lite.web      + web dashboard (background)"
-	@echo "  make train.lite.rich     + Rich terminal dashboard"
 	@echo "  make train.full          from bootstrap checkpoint"
-	@echo "  make train.full.web      + web dashboard (background)"
-	@echo "  make train.full.rich     + Rich terminal dashboard"
 	@echo "  make train.multi         multi-hour profile"
-	@echo "  make train.multi.web     + web dashboard (background)"
-	@echo "  make train.multi.rich    + Rich terminal dashboard"
 	@echo "  ─────────────────────────────────────────────────────────────"
 	@echo "  make pretrain.lite       100-step pretrain smoke test"
 	@echo "  make pretrain            5-epoch pretrain"
 	@echo "  make pretrain.full       15-epoch pretrain"
-	@echo "  ─────────────────────────────────────────────────────────────"
-	@echo "  make dash.web            web dashboard only (no training)"
-	@echo "  make dash.stop           kill running web dashboard"
-	@echo "  make corpus.push-to-dashboard  push corpus to dashboard"
 	@echo ""
 
