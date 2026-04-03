@@ -20,6 +20,10 @@ Full context is in `docs/`. Read them in order before starting any task:
 - `docs/03_tooling.md` — logging, benchmarking, progress display conventions
 - `docs/04_bootstrap_strategy.md` — minimax corpus generation and pretraining
 - `docs/05_community_integration.md` — community bot, API, notation, formations
+- `docs/06_OPEN_QUESTIONS.md` — active research questions and ablation plans
+- `docs/07_PHASE4_SPRINT_LOG.md` — Phase 4.0 sprint changelog (most current record)
+- `docs/08_DASHBOARD_SPEC.md` — monitoring event schema and dashboard spec
+- `docs/09_VIEWER_SPEC.md` — game viewer and threat overlay spec
 
 ---
 
@@ -73,7 +77,11 @@ Always check `docs/02_ROADMAP.md` for the current phase before starting work.
 **Current Status:** Phase 4.0 Self-Play RL loop is **Active**.
 - Pretrain validated: policy loss 5.0 → 2.07, 5/5 wins vs RandomBot.
 - First self-play run: 4,940 steps, found 5 issues, all fixed.
-- Ready for sustained training run.
+- Dashboard rebuilt: event-driven fan-out (terminal + web at :5001).
+- Game viewer live at `/viewer` with threat overlay and replay controls.
+- Threat detection implemented in Rust (`Board.get_threats()`).
+- Benchmark rebaselined 2026-04-03 (correct 12-block model). All 10 metrics PASS.
+- Ready for sustained 24–48hr training run (Phase 4.0 exit criterion).
 Next milestone: Phase 4.5 (benchmark gate — see docs/02_roadmap.md).
 
 Each phase has explicit exit criteria — do not advance until they are met.
@@ -95,16 +103,19 @@ Fallback (if Makefile is unavailable): run `cargo test` and `pytest` directly.
 
 ### Config override discipline
 
-When a value exists in both `configs/default.yaml` and `configs/training.yaml`,
-**both must be updated**. Verify with:
+Configs are split by concern: `configs/model.yaml`, `configs/training.yaml`,
+`configs/selfplay.yaml`, `configs/monitoring.yaml` (plus `eval.yaml`, `corpus.yaml`
+for those subsystems). `train.py` deep-merges all base configs — later files win
+on overlapping keys. If a hyperparameter appears in multiple files, **all must be
+updated**. Verify with:
 
 ```bash
 grep -r 'key_name' configs/
 ```
 
-Never assume a key in one config file is the effective value — `train.py` merges
-them with training.yaml taking precedence, so a stale value in either file will
-override the other.
+Never assume a key in one config file is the effective value — `load_config()`
+merges them and logs warnings on key overlap, but a stale value in any file can
+silently override.
 
 ### Session start protocol
 
@@ -144,7 +155,7 @@ Before ending any session or when asked to stop:
 | Replay buffer | **Rust** (ReplayBuffer) | f16-as-u16 ring buffer, 12-fold hex augmentation, zero-copy PyO3 transfer. |
 | Neural network, training loop | **Python + PyTorch** | CUDA, FP16, TF32 enabled, torch.compile. InferenceServer bridges Rust worker threads. |
 | Temporal tensor assembly | **Python + NumPy** | Stacks 2-plane cluster snapshots + `move_history` into `(18, 19, 19)` tensors. |
-| Orchestration, config, monitoring | **Python** | structlog (JSON) + rich (console) |
+| Orchestration, config, monitoring | **Python** | Event-driven fan-out (events.py → terminal/web renderers), structlog (JSON), rich (console) |
 
 PyO3 exposes Rust to Python. Import as: `from engine import Board, MCTSTree, ReplayBuffer, SelfPlayRunner, InferenceBatcher`
 
@@ -161,24 +172,58 @@ cargo bench                                      # Rust micro-benchmarks
 Make commands (preferred):
 
 ```bash
+# Core
 make env.check        # verify .venv + engine import
 make native.build     # build/install Rust extension via maturin
 make clean            # remove Rust build artifacts and Python caches
 make rebuild          # full clean + optimized rebuild
+
+# Testing
 make test.rust        # Rust tests
 make test.py          # Python tests (tests/ only)
 make test.all         # Rust + Python tests
-make bench.lite       # quick benchmark pass
-make bench.full       # higher-confidence benchmark pass
+make test.focus       # buffer/inference/pool smoke tests
+make ci               # full pre-push gate (all tests + quick benchmark)
+
+# Benchmarks
+make bench.quick      # 30s sanity check
+make bench.lite       # quick benchmark (n=3)
+make bench.full       # higher-confidence benchmark (n=5, warm-up)
 make bench.stress     # heavy 5-min stability test
-make corpus.fast      # generate SealBot fast self-play corpus (0.1s, 2,000 games)
-make corpus.strong    # generate SealBot strong self-play corpus (0.5s, 1,000 games)
-make corpus.all       # generate both d4 and d6 corpora
+make bench.baseline   # save bench.full to reports/benchmarks/
+make bench.mcts       # Rust MCTS micro-benchmark
+
+# Training
+make train            # train with web + terminal dashboard (default)
+make train.nodash     # train without dashboard
+make train.bg         # background training (logs to logs/)
+make train.stop       # stop background training
+make train.status     # check if running, show recent log
+make train.resume     # resume from latest checkpoint
+make train.smoke      # 200-step smoke test
+make dash.open        # open web dashboard in browser
+
+# Eval
+make eval.sealbot.quick   # quick eval (10 games, 0.1s, 64 sims)
+make eval.sealbot.full    # full eval (100 games, 0.5s, 128 sims)
+make eval.sealbot.latest  # eval latest checkpoint vs SealBot
+
+# Plotting
+make plot.train.latest    # plot latest training log
+make plot.sealbot.latest  # plot latest SealBot eval
+make plot.sealbot.all     # plot SealBot trend
+
+# Corpus & pretrain
+make corpus.fast      # generate SealBot fast corpus (0.1s, 5,000 games)
+make corpus.strong    # generate SealBot strong corpus (0.5s, 2,500 games)
+make corpus.all       # generate both fast + strong
 make corpus.npz       # export corpus to data/bootstrap_corpus.npz
 make corpus.analysis  # run corpus analysis on human + bot games
 make pretrain.lite    # bootstrap pretrain smoke test (100 steps)
 make pretrain.full    # full bootstrap pretrain (15 epochs)
 ```
+
+Run `make help` for the complete list of targets.
 
 ---
 
@@ -313,10 +358,13 @@ hexo_rl/
 │   ├── 05_community_integration.md
 │   ├── 06_OPEN_QUESTIONS.md
 │   ├── 07_PHASE4_SPRINT_LOG.md
+│   ├── 08_DASHBOARD_SPEC.md
+│   ├── 09_VIEWER_SPEC.md
 │   └── reference/                   ← downloaded specs (git-ignored)
 ├── engine/
 │   ├── src/
 │   │   ├── board/                   ← sparse HashMap board, axial coords, win detection
+│   │   │   └── threats.rs           ← threat detection (3 hex axes, sliding window)
 │   │   ├── mcts/                    ← PUCT tree, node pool, virtual loss
 │   │   ├── formations/              ← incremental formation detection
 │   │   ├── replay_buffer/           ← f16-as-u16 ring buffer, 12-fold augmentation
@@ -335,17 +383,39 @@ hexo_rl/
 │   │   ├── scraper.py               ← [site-redacted] scraper
 │   │   ├── generate_corpus.py       ← orchestrates all corpus sources
 │   │   ├── corpus_analysis.py       ← corpus quality analysis
+│   │   ├── injection.py             ← human-seed bot-continuation injection
+│   │   ├── opening_classifier.py    ← opening pattern classifier
+│   │   ├── human_seeding.py         ← human game seeding for bot games
 │   │   └── pretrain.py
 │   ├── corpus/                      ← corpus pipeline and metrics
+│   │   └── sources/                 ← pluggable corpus sources (human, hybrid)
 │   ├── env/                         ← GameState, tensor assembly
-│   ├── eval/                        ← Bradley-Terry, eval pipeline, results DB
-│   ├── model/                       ← HexTacToeNet
-│   ├── monitoring/                  ← structlog setup, GPU monitor, metrics writer
+│   ├── eval/                        ← Bradley-Terry, eval pipeline, results DB, colony detection
+│   ├── model/                       ← HexTacToeNet (ResNet-12, SE blocks, dual-pool value head)
+│   ├── monitoring/                  ← event-driven monitoring fan-out
+│   │   ├── events.py                ← register_renderer(), emit_event() dispatcher
+│   │   ├── terminal_dashboard.py    ← Rich Live renderer (4Hz max)
+│   │   ├── web_dashboard.py         ← Flask+SocketIO server (:5001)
+│   │   ├── gpu_monitor.py           ← GPU utilization daemon thread
+│   │   ├── game_recorder.py         ← game persistence
+│   │   ├── game_browser.py          ← game index/browser
+│   │   ├── replay_poller.py         ← game replay analysis
+│   │   ├── metrics_writer.py        ← metrics persistence
+│   │   ├── configure.py             ← structlog/logging setup
+│   │   └── static/                  ← index.html (dashboard SPA), viewer.html (game viewer SPA)
 │   ├── opening_book/                ← game record parser
 │   ├── selfplay/                    ← inference server, worker pool, policy projection
 │   ├── training/                    ← Trainer, checkpoints, losses
-│   └── utils/                       ← config loader, constants
+│   ├── utils/                       ← config loader, constants
+│   └── viewer/                      ← game viewer engine
+│       └── engine.py                ← ViewerEngine (enrich_game, play_response)
 ├── configs/
+│   ├── model.yaml                   ← network architecture (res_blocks, channels, SE)
+│   ├── training.yaml                ← optimizer, scheduler, buffer, mixing
+│   ├── selfplay.yaml                ← MCTS sims, workers, playout cap
+│   ├── monitoring.yaml              ← dashboard enable/disable, alerts, web port
+│   ├── eval.yaml                    ← eval pipeline, SealBot gate
+│   └── corpus.yaml                  ← corpus generation settings
 ├── scripts/
 │   ├── train.py
 │   ├── benchmark.py
@@ -353,7 +423,6 @@ hexo_rl/
 │   ├── scrape_daily.sh
 │   └── ...
 ├── tests/
-├── dashboard.py                     ← Flask+SocketIO web dashboard
 ├── vendor/
 │   └── bots/                        ← git submodules
 │       ├── sealbot/                 ← Ramora0/SealBot
@@ -404,7 +473,7 @@ tests. Full training runs must always use `augment=True` (the default).
 
 > **Methodology:** median of n=5 runs, 3s warm-up per metric.
 > MCTS uses realistic workload: 800 sims/move × 62 iterations with
-> tree reset between moves (matches default.yaml mcts.n_simulations).
+> tree reset between moves (matches selfplay.yaml mcts.n_simulations).
 > CPU frequency unpinned (cpupower unavailable on this system).
 > Targets set at 85% of observed median unless otherwise noted.
 > Run `make bench.full` to reproduce.
@@ -437,7 +506,7 @@ also corrected from pynvml global to torch.cuda.max_memory_allocated().
 
 Starting config for self-play RL (do not exceed without benchmarking):
 - Network: 12 residual blocks × 128 channels, SE blocks on every block
-- Value head: global avg + max pooling → FC → cross-entropy loss
+- Value head: global avg + max pooling → FC → BCE loss (binary cross-entropy on sigmoid)
 - Auxiliary loss: opponent reply prediction (weight 0.15)
 - Replay buffer: start at 250K samples, grow toward 1M as training stabilises
 - ELO benchmark target: SealBot (replaces Ramora0 as external reference)
