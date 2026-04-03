@@ -270,7 +270,9 @@ states, policies, outcomes = buf.sample_batch(batch_size, augment=True)
 | Outcome | Reward for winner | Reward for loser |
 |---|---|---|
 | Win by 6-in-a-row | +1.0 | -1.0 |
-| Draw (if applicable) | 0.0 | 0.0 |
+| Draw (if applicable) | +0.01 | +0.01 |
+
+Small positive draw reward following SealBot/KraktenBot developer practice — ensures draw is strictly preferred over loss in the value head.
 
 ### Optional shaped rewards (decay to zero)
 
