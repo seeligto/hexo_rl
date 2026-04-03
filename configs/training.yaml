@@ -19,6 +19,11 @@ log_interval: 10        # also controls web-dashboard send frequency
 aux_opp_reply_weight: 0.15
 
 game_length_weights:
+  # Thresholds are in compound moves (player turns), not plies.
+  # Each turn = 2 stones placed (except player 1's opening move).
+  # < 10 turns ~ < 20 plies  (very short games)
+  # 10-24 turns ~ 20-48 plies (mid-length games)
+  # >= 25 turns ~ >= 50 plies (full games, weight 1.0)
   thresholds: [10, 25]
   weights: [0.15, 0.50]
   default_weight: 1.0
