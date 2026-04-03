@@ -274,6 +274,7 @@ def scrape_hexo_did(
             log.info("loaded_from_cache", count=cached_count)
 
     fetched_ids: List[str] = []
+    empty_streak = 0
 
     # --- Standard paginated scrape (up to 500-game public window) ---
     import time as _time
@@ -298,6 +299,7 @@ def scrape_hexo_did(
             log.info("empty_page_stop", page=page)
             break
 
+        page_fetched = 0
         for game in games:
             if not _passes_filter(game):
                 continue
@@ -322,8 +324,17 @@ def scrape_hexo_did(
             moves = [(move['x'], move['y']) for move in game_details['moves']]
             all_game_moves.append(moves)
             fetched_ids.append(game_id)
+            page_fetched += 1
 
             time.sleep(req_delay)
+
+        if page_fetched == 0:
+            empty_streak += 1
+            if empty_streak >= 3:
+                log.info("no_qualifying_games_stop", consecutive_empty_pages=empty_streak)
+                break
+        else:
+            empty_streak = 0
 
     # --- Top-player profile scrape (reaches beyond the 500-game window) ---
     if top_players_only:
