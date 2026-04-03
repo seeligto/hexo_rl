@@ -96,7 +96,7 @@ bench.quick: ## Fast sanity benchmark — did I break anything? (~30s)
 bench.lite: ## Quick benchmark (n=3, no CPU pin, warm-up)
 	$(PY) scripts/benchmark.py --config $(CONFIG_LITE) --no-compile --mcts-sims 2000 --pool-workers $(N_CORES) --pool-duration 10 --mode lite
 
-N_CORES ?= $(shell python3 -c "import os; print(os.cpu_count() or 4)")
+N_CORES ?= $(shell $(PY) -c "import os; print(os.cpu_count() or 4)")
 
 .PHONY: bench.full
 bench.full: ## Higher-confidence benchmark (n=5, CPU pin attempted, warm-up)
@@ -119,16 +119,16 @@ bench.mcts: ## Dedicated Rust MCTS micro-benchmark
 
 .PHONY: train
 train: ## Train with web dashboard (default config)
-	python scripts/train.py --config configs/training.yaml
+	$(PY) scripts/train.py --config configs/training.yaml
 
 .PHONY: train.nodash
 train.nodash: ## Train without dashboard
-	python scripts/train.py --config configs/training.yaml --no-dashboard
+	$(PY) scripts/train.py --config configs/training.yaml --no-dashboard
 
 .PHONY: train.bg
 train.bg: ## Train in background, log to logs/
 	@mkdir -p logs
-	nohup python scripts/train.py --config configs/training.yaml \
+	nohup $(PY) scripts/train.py --config configs/training.yaml \
 		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 & \
 		echo $$! > logs/train.pid
 	@echo "Training started (PID $$(cat logs/train.pid))"
@@ -160,12 +160,12 @@ train.status: ## Check background training status
 .PHONY: dash.open
 dash.open: ## Open web dashboard in browser
 	@echo "Opening http://localhost:5001"
-	@python -c "import webbrowser; webbrowser.open('http://localhost:5001')" \
+	@$(PY) -c "import webbrowser; webbrowser.open('http://localhost:5001')" \
 		|| echo "Open manually: http://localhost:5001"
 
 .PHONY: train.pretrain
 train.pretrain: ## Train in pretrain mode
-	python scripts/train.py --config configs/training.yaml \
+	$(PY) scripts/train.py --config configs/training.yaml \
 		--override training.mode=pretrain
 
 .PHONY: train.lite
