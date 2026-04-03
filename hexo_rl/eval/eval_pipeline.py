@@ -66,7 +66,8 @@ class EvalPipeline:
         self.bt_cfg = cfg.get("bradley_terry", {})
 
         # Persistent player IDs for SealBot and Random
-        tl = self.sealbot_cfg.get("time_limit", 0.03)
+        tl = self.sealbot_cfg.get("think_time_strong",
+                                   self.sealbot_cfg.get("time_limit", 0.5))
         self._sealbot_pid = self.db.get_or_create_player(
             f"SealBot(t={tl})", "sealbot", {"time_limit": tl},
         )
@@ -133,7 +134,8 @@ class EvalPipeline:
         # ── vs SealBot ───────────────────────────────────────────────
         if self.sealbot_cfg.get("enabled", True):
             n = int(self.sealbot_cfg.get("n_games", 50))
-            tl = float(self.sealbot_cfg.get("time_limit", 0.03))
+            tl = float(self.sealbot_cfg.get("think_time_strong",
+                                            self.sealbot_cfg.get("time_limit", 0.5)))
             sims = self.sealbot_cfg.get("model_sims")
             er = evaluator.evaluate_vs_sealbot(n_games=n, time_limit=tl, model_sims=sims)
             ci_lo, ci_hi = _binomial_ci(er.win_count, n)

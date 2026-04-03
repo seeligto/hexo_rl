@@ -15,8 +15,9 @@ CHECKPOINT_LATEST ?= $(shell ls -1 checkpoints/checkpoint_*.pt 2>/dev/null | tai
 PRETRAIN_CKPT ?= $(shell ls -1 checkpoints/pretrain/pretrain_*.pt 2>/dev/null | tail -n 1)
 
 SEALBOT_N ?= 100
-SEALBOT_TIME ?= 0.03
+SEALBOT_TIME ?= 0.5
 SEALBOT_SIMS ?= 128
+CORPUS_TIME ?= 0.1
 
 
 .PHONY: help
@@ -196,11 +197,11 @@ eval.sealbot: ## Evaluate specific checkpoint vs SealBot (CKPT=...)
 
 .PHONY: eval.sealbot.quick
 eval.sealbot.quick: ## Quick SealBot eval (10 games)
-	$(MAKE) eval.sealbot.latest SEALBOT_N=10 SEALBOT_TIME=0.01 SEALBOT_SIMS=64
+	$(MAKE) eval.sealbot.latest SEALBOT_N=10 SEALBOT_TIME=0.1 SEALBOT_SIMS=64
 
 .PHONY: eval.sealbot.full
 eval.sealbot.full: ## Full SealBot eval (100 games)
-	$(MAKE) eval.sealbot.latest SEALBOT_N=100 SEALBOT_TIME=0.03 SEALBOT_SIMS=128
+	$(MAKE) eval.sealbot.latest SEALBOT_N=100 SEALBOT_TIME=0.5 SEALBOT_SIMS=128
 
 .PHONY: pretrain
 pretrain: ## Bootstrap pretrain (5 epochs, default)
@@ -223,16 +224,21 @@ CORPUS_DEPTH6_N ?= 1000
 corpus.scrape: ## Scrape latest human games from hexo.did.science and update manifest
 	bash scripts/scrape_daily.sh
 
-.PHONY: corpus.d4
-corpus.d4: ## Generate SealBot depth-4 self-play corpus (CORPUS_DEPTH4_N=2000)
-	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --depth 4 --n-games $(CORPUS_DEPTH4_N) --output data/corpus/bot_games/sealbot_d4
+.PHONY: corpus.fast
+corpus.fast: ## Generate SealBot fast self-play corpus (think_time=0.1s)
+	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit $(CORPUS_TIME) --n-games $(CORPUS_DEPTH4_N) --output data/corpus/bot_games/sealbot_fast
 
-.PHONY: corpus.d6
-corpus.d6: ## Generate SealBot depth-6 self-play corpus (CORPUS_DEPTH6_N=1000)
-	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --depth 6 --n-games $(CORPUS_DEPTH6_N) --output data/corpus/bot_games/sealbot_d6
+.PHONY: corpus.strong
+corpus.strong: ## Generate SealBot strong self-play corpus (think_time=0.5s)
+	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit 0.5 --n-games $(CORPUS_DEPTH6_N) --output data/corpus/bot_games/sealbot_strong
 
 .PHONY: corpus.all
-corpus.all: corpus.d4 corpus.d6 corpus.manifest ## Generate both d4 and d6 corpora
+corpus.all: corpus.fast corpus.strong corpus.manifest ## Generate both fast and strong corpora
+
+# Legacy aliases (deprecated — use corpus.fast / corpus.strong)
+.PHONY: corpus.d4 corpus.d6
+corpus.d4: corpus.fast
+corpus.d6: corpus.strong
 
 .PHONY: corpus.manifest
 corpus.manifest: ## Update data/corpus/manifest.json (scans human + bot dirs)
