@@ -778,3 +778,14 @@ which already handled this correctly.
 has correct ordering (unscale → clip → step → update) since §14. Grad clipping
 worked correctly during the 4,940-step self-play run. Only the test assertion
 was too strict.
+
+---
+
+### 23. Diagnostic findings — GPU utilisation and colony detection (2026-04-04)
+
+GPU burst-idle pattern is structural (CPU MCTS + GPU inference interleaving),
+not a bug. 12ms timeout fallback is working. 45% median GPU util is expected
+at 12 workers with 400 sims/move. Checkpoint_500 100% colony win rate against
+pretrained model is a colony detection miscategorisation artefact, not evidence
+of colony strategy. Honest benchmark: 10% win rate vs SealBot at step 500
+(5/50 games).
