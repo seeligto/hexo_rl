@@ -243,8 +243,8 @@ pretrain.full: ## Full bootstrap pretrain (15 epochs)
 
 # ── Corpus generation ────────────────────────────────────────────────────────
 
-CORPUS_FAST_N ?= 2000
-CORPUS_STRONG_N ?= 1000
+CORPUS_FAST_N ?= 5000
+CORPUS_STRONG_N ?= 2500
 
 .PHONY: corpus.scrape
 corpus.scrape: ## Scrape latest human games from [site-redacted] and update manifest
