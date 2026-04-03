@@ -151,11 +151,13 @@ def test_rust_runner_collect_data_format():
         data = runner.collect_data()
         assert len(data) > 0
         
-        feat, pol, outcome = data[0]
+        feat, pol, outcome, plies = data[0]
         assert len(feat) == 18 * 19 * 19
         assert len(pol) == 19 * 19 + 1
         assert isinstance(outcome, float)
         assert outcome in [-1.0, 0.0, 1.0]
+        assert isinstance(plies, int)
+        assert plies >= 0
         
         # Check that we can reshape and use as numpy
         feat_np = np.array(feat).reshape(18, 19, 19)

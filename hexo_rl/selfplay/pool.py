@@ -126,10 +126,11 @@ class WorkerPool:
     def _stats_loop(self) -> None:
         while not self._stop_event.is_set():
             data = self._runner.collect_data()
-            for feat, pol, outcome in data:
+            for feat, pol, outcome, plies in data:
                 feat_np = np.array(feat, dtype=np.float16).reshape(18, 19, 19)
                 pol_np = np.array(pol, dtype=np.float32)
-                self.replay_buffer.push(feat_np, pol_np, float(outcome))
+                game_length = (plies + 1) // 2  # compound moves
+                self.replay_buffer.push(feat_np, pol_np, float(outcome), game_length=game_length)
                 with self._lock:
                     self.positions_pushed += 1
                     self.self_play_positions_pushed += 1

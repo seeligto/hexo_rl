@@ -35,7 +35,7 @@ pub struct SelfPlayRunner {
     x_wins: Arc<AtomicU64>,
     o_wins: Arc<AtomicU64>,
     draws: Arc<AtomicU64>,
-    results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32)>>>,
+    results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32, usize)>>>,
     /// Ring-buffer of recent (plies, winner_code, move_history) triples for Python logging.
     /// winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
     /// move_history: sequence of (q, r) coordinates in play order.
@@ -259,7 +259,7 @@ impl SelfPlayRunner {
                             Some(p) => if p as i8 == player as i8 { 1.0 } else { -1.0 },
                             None => 0.0,
                         };
-                        games_results.push_back((feat, pol, outcome));
+                        games_results.push_back((feat, pol, outcome, plies));
                     }
                     games_completed.fetch_add(1, Ordering::Relaxed);
                     match winner {
@@ -290,7 +290,7 @@ impl SelfPlayRunner {
         }
     }
 
-    pub fn collect_data(&self) -> Vec<(Vec<f32>, Vec<f32>, f32)> {
+    pub fn collect_data(&self) -> Vec<(Vec<f32>, Vec<f32>, f32, usize)> {
         let mut results = self.results.lock().expect("results lock poisoned");
         let mut out = Vec::with_capacity(results.len());
         while let Some(data) = results.pop_front() {
