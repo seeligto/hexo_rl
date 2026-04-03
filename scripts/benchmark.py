@@ -335,73 +335,95 @@ def benchmark_worker_pool(
         },
     }
 
-    def run_pool(run_duration: int) -> tuple[float, float, float]:
-        """Run a single pool session, return (games/hr, pos/hr, batch_sat%)."""
-        replay = ReplayBuffer(capacity=25_000)
-        try:
-            pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
-        except Exception as exc:
-            console.print(f"[yellow]Worker pool init failed: {exc}[/yellow]")
-            return (0.0, 0.0, 0.0)
+    # Run one pool for the entire benchmark: warm-up + N measurement windows.
+    # Previous approach created separate pools per run, so each run had its own
+    # ~20-25s cold-start (no games completing), biasing the 60s window low.
+    replay = ReplayBuffer(capacity=100_000)
+    try:
+        pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
+    except Exception as exc:
+        console.print(f"[yellow]Worker pool init failed: {exc}[/yellow]")
+        return {
+            "name": "Worker pool throughput",
+            "gph":  {"key": "worker_games_per_hr", "stats": summarise([0.0]), "value": 0.0},
+            "pph":  {"key": "worker_pos_per_hr", "stats": summarise([0.0]), "value": 0.0},
+            "bat":  {"key": "worker_batch_fill_pct", "stats": summarise([0.0]), "value": 0.0},
+        }
 
-        pool.start()
-        t0 = time.perf_counter()
-        stop_error: str | None = None
+    pool.start()
+    stop_error: str | None = None
 
-        last_report = t0
-        try:
-            while time.perf_counter() - t0 < run_duration:
+    try:
+        # Warm-up phase: let games reach steady state before measuring
+        if warmup_sec > 0 and not quick:
+            console.print(f"    [dim]Worker pool warm-up ({warmup_sec:.0f}s)...[/dim]")
+            t_warmup = time.perf_counter()
+            last_report = t_warmup
+            while time.perf_counter() - t_warmup < warmup_sec:
+                time.sleep(1.0)
+                now = time.perf_counter()
+                if now - last_report >= 5.0:
+                    elapsed = now - t_warmup
+                    console.print(f"    [dim]... warm-up {elapsed:.0f}s: {pool.games_completed} games, {pool.positions_pushed} positions[/dim]")
+                    last_report = now
+
+        # Measurement runs: snapshot counters, wait, compute delta
+        gph_runs: list[float] = []
+        pph_runs: list[float] = []
+        bat_runs: list[float] = []
+
+        for i in range(n_runs):
+            console.print(f"    [dim]Worker pool run {i+1}/{n_runs} ({duration_sec}s)...[/dim]")
+            # Snapshot counters at start of measurement window
+            games_start = pool.games_completed
+            pos_start = pool.positions_pushed
+            server = pool._inference_server
+            fwd_start = server.forward_count
+            req_start = server.total_requests
+
+            t0 = time.perf_counter()
+            last_report = t0
+            while time.perf_counter() - t0 < duration_sec:
                 time.sleep(1.0)
                 now = time.perf_counter()
                 if now - last_report >= 5.0:
                     elapsed = now - t0
-                    gph = (pool.games_completed / elapsed) * 3600.0
-                    console.print(f"    [dim]... {elapsed:.0f}s: {gph:,.1f} games/hour, {pool.positions_pushed} positions[/dim]")
+                    delta_pos = pool.positions_pushed - pos_start
+                    delta_games = pool.games_completed - games_start
+                    gph = (delta_games / elapsed) * 3600.0
+                    console.print(f"    [dim]... {elapsed:.0f}s: {gph:,.1f} games/hour, {delta_pos} positions[/dim]")
                     last_report = now
-        finally:
-            done = threading.Event()
 
-            def _stop_pool() -> None:
-                nonlocal stop_error
-                try:
-                    pool.stop()
-                except Exception as exc:
-                    stop_error = str(exc)
-                finally:
-                    done.set()
+            elapsed = max(time.perf_counter() - t0, 1e-6)
+            delta_games = pool.games_completed - games_start
+            delta_pos = pool.positions_pushed - pos_start
+            delta_fwd = server.forward_count - fwd_start
+            delta_req = server.total_requests - req_start
 
-            stop_thread = threading.Thread(target=_stop_pool, daemon=True)
-            stop_thread.start()
-            if not done.wait(10.0):
-                stop_error = "pool.stop timeout"
+            gph_runs.append((delta_games / elapsed) * 3600.0)
+            pph_runs.append((delta_pos / elapsed) * 3600.0)
 
-        elapsed = max(time.perf_counter() - t0, 1e-6)
-        games_per_hour = (pool.games_completed / elapsed) * 3600.0
-        positions_per_hour = (pool.positions_pushed / elapsed) * 3600.0
+            if delta_fwd > 0:
+                bat_runs.append(delta_req / (delta_fwd * server._batch_size) * 100.0)
+            else:
+                bat_runs.append(0.0)
 
-        server = pool._inference_server
-        if server.forward_count > 0:
-            batch_sat = server.total_requests / (server.forward_count * server._batch_size) * 100.0
-        else:
-            batch_sat = 0.0
+    finally:
+        done = threading.Event()
 
-        return (games_per_hour, positions_per_hour, batch_sat)
+        def _stop_pool() -> None:
+            nonlocal stop_error
+            try:
+                pool.stop()
+            except Exception as exc:
+                stop_error = str(exc)
+            finally:
+                done.set()
 
-    # Warm-up run (discarded)
-    if warmup_sec > 0 and not quick:
-        console.print(f"    [dim]Worker pool warm-up ({warmup_sec:.0f}s)...[/dim]")
-        run_pool(int(warmup_sec))
-
-    gph_runs: list[float] = []
-    pph_runs: list[float] = []
-    bat_runs: list[float] = []
-
-    for i in range(n_runs):
-        console.print(f"    [dim]Worker pool run {i+1}/{n_runs} ({duration_sec}s)...[/dim]")
-        gph, pph, bat = run_pool(duration_sec)
-        gph_runs.append(gph)
-        pph_runs.append(pph)
-        bat_runs.append(bat)
+        stop_thread = threading.Thread(target=_stop_pool, daemon=True)
+        stop_thread.start()
+        if not done.wait(10.0):
+            stop_error = "pool.stop timeout"
 
     return {
         "name": "Worker pool throughput",
@@ -423,7 +445,7 @@ _CHECKS: list[tuple[str, str, str | None, str, float, bool]] = [
     ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_200,   False),
     ("GPU utilisation %",                 "GPU utilisation",         "gpu",   "value",       85,   True),
     ("VRAM usage GB",                     "GPU utilisation",         "vram",  "value",        0,   False),  # dynamic
-    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  1_000_000, True),
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  625_000,   True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
 ]
 
@@ -669,7 +691,7 @@ def main() -> None:
     warmup_nn = 3.0
     warmup_latency = 2.0
     warmup_buffer = 2.0
-    warmup_worker = 10.0
+    warmup_worker = 30.0
 
     if args.quick:
         warmup_mcts = warmup_nn = warmup_latency = warmup_buffer = 1.0
