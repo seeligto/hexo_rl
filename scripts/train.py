@@ -30,6 +30,7 @@ import signal
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -41,13 +42,12 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from hexo_rl.monitoring.dashboard import TrainingDashboard
+from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.gpu_monitor import GPUMonitor
 from hexo_rl.monitoring.configure import configure_logging
 from hexo_rl.model.network import HexTacToeNet
 from engine import ReplayBuffer
 from hexo_rl.training.trainer import Trainer
-from hexo_rl.training.dashboard_utils import DashboardClient
 
 
 # ── Seeding ───────────────────────────────────────────────────────────────────
@@ -101,15 +101,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--no-dashboard", action="store_true",
-        help="Disable rich live dashboard (useful in CI or non-interactive mode)"
-    )
-    p.add_argument(
-        "--web-dashboard", action="store_true",
-        help="Push game/metric data to a running dashboard.py server",
-    )
-    p.add_argument(
-        "--web-dashboard-url", default="http://localhost:5001",
-        help="Base URL of the dashboard server (default: http://localhost:5001)",
+        help="Disable live dashboard renderers (useful in CI or non-interactive mode)"
     )
     p.add_argument(
         "--no-compile", action="store_true",
@@ -342,9 +334,6 @@ def main() -> None:
     gpu_monitor = GPUMonitor(interval_sec=5)
     gpu_monitor.start()
 
-    # ── Web dashboard client (fire-and-forget) ──
-    web_dash = DashboardClient(base_url=args.web_dashboard_url) if args.web_dashboard else None
-
     # ── Graceful shutdown ──
     _running = [True]
     def _stop(sig, frame):
@@ -364,68 +353,63 @@ def main() -> None:
     initial_policy_loss: float | None = None
     last_loss_info: dict[str, float] = {}
 
-    dashboard = TrainingDashboard() if not args.no_dashboard else None
-    total_steps = args.iterations or 0
-    
+    # ── Run ID and emit run_start ──
+    run_id = uuid.uuid4().hex
+    log.info("run_id", run_id=run_id)
+
+    emit_event({
+        "event": "run_start",
+        "step": train_step,
+        "run_id": run_id,
+        "config_summary": {
+            "n_blocks": int(combined_config.get("res_blocks", 12)),
+            "channels": int(combined_config.get("filters", 128)),
+            "n_sims": int(mcts_config.get("n_simulations", 800)),
+            "buffer_capacity": capacity,
+        },
+    })
+
     # Start multiprocess self-play
     pool.start()
     log.info("selfplay_pool_started", n_workers=pool.n_workers)
+
+    # ── Iteration stats accumulator ──
+    _iter_games_window: list[tuple[float, int]] = []  # (timestamp, game_count)
+    _iter_window_sec = 60.0
+
+    def _games_per_hour_rolling() -> float:
+        """Compute games/hr over a 60s rolling window."""
+        now = time.time()
+        _iter_games_window.append((now, games_played))
+        # Trim old entries
+        cutoff = now - _iter_window_sec
+        while _iter_games_window and _iter_games_window[0][0] < cutoff:
+            _iter_games_window.pop(0)
+        if len(_iter_games_window) < 2:
+            elapsed = max(now - t_start, 1e-6)
+            return games_played / elapsed * 3600
+        dt = _iter_games_window[-1][0] - _iter_games_window[0][0]
+        dg = _iter_games_window[-1][1] - _iter_games_window[0][1]
+        return (dg / max(dt, 1e-6)) * 3600
 
     def _run_loop() -> None:
         nonlocal train_step, games_played, initial_policy_loss, last_loss_info
         nonlocal _eval_thread, best_model, best_model_step
 
         last_train_game_count = 0
-        last_ui_refresh = 0.0
-        last_web_games = 0
-        last_x_wins = 0
-        last_o_wins = 0
-        last_draws = 0
-        ui_refresh_sec = 1.0
         last_warmup_log = 0.0
+        last_iter_games = 0
 
-        def _refresh_dashboard(eval_metrics: dict | None = None) -> None:
-            if dashboard is None:
-                return
-            nonlocal last_ui_refresh
-            now = time.time()
-            if now - last_ui_refresh < ui_refresh_sec:
-                return
-            elapsed = max(now - t_start, 1e-6)
-            metrics = {
-                "iteration": train_step,
-                "policy_loss": last_loss_info.get("policy_loss") if last_loss_info else None,
-                "value_loss": last_loss_info.get("value_loss") if last_loss_info else None,
-                "buffer_size": buffer.size,
-                "games_total": games_played,
-                "games_per_hour": games_played / elapsed * 3600,
-                "gpu_util": gpu_monitor.gpu_util_pct,
-                "vram_gb": gpu_monitor.vram_used_gb,
-                "x_winrate": pool.x_winrate,
-                "o_winrate": pool.o_winrate,
-                "draw_rate": (pool.draws / games_played) if games_played > 0 else 0.0,
-                "x_wins": pool.x_wins,
-                "o_wins": pool.o_wins,
-                "draws": pool.draws,
-            }
-            if eval_metrics:
-                metrics.update(eval_metrics)
-            dashboard.update(train_step, total_steps, metrics)
-            last_ui_refresh = now
-        
         while _running[0]:
             if args.iterations and train_step >= args.iterations:
                 log.info("iteration_limit_reached", iterations=args.iterations)
                 break
 
             # ── Training Throttling ──
-            # Only train if we have enough data and we haven't already trained 
-            # for the current batch of games.
             games_played = pool.games_completed
-            _refresh_dashboard()
-            
+
             if buffer.size < min_buf_size:
-                if dashboard is None and (time.time() - last_warmup_log) >= 5.0:
+                if (time.time() - last_warmup_log) >= 5.0:
                     print(
                         f"[warmup] buffer={buffer.size}/{min_buf_size} games={games_played} "
                         f"gpu={gpu_monitor.gpu_util_pct:.0f}%",
@@ -434,17 +418,17 @@ def main() -> None:
                     last_warmup_log = time.time()
                 time.sleep(1.0)
                 continue
-                
+
             new_games = games_played - last_train_game_count
             if new_games <= 0:
-                if dashboard is None and (time.time() - last_warmup_log) >= 5.0:
+                if (time.time() - last_warmup_log) >= 5.0:
                     print(
                         f"[waiting] games={games_played} trained_games={last_train_game_count} "
                         f"buffer={buffer.size}",
                         flush=True,
                     )
                     last_warmup_log = time.time()
-                time.sleep(0.1) # Wait for workers
+                time.sleep(0.1)
                 continue
 
             steps_budget = max(1, int(round(new_games * training_steps_per_game)))
@@ -485,18 +469,27 @@ def main() -> None:
                 last_loss_info = loss_info
 
                 # ── Evaluation (non-blocking via background thread) ──
-                eval_metrics = {}
                 if eval_pipeline is not None and train_step > 0 and train_step % eval_interval == 0:
                     # Harvest previous eval result if ready
                     if _eval_thread is not None and not _eval_thread.is_alive():
                         prev = _eval_result[0]
-                        if prev is not None and prev.get("promoted"):
-                            base_model = getattr(trainer.model, "_orig_mod", trainer.model)
-                            best_model.load_state_dict(base_model.state_dict())
-                            best_model.eval()
-                            torch.save(best_model.state_dict(), best_model_path)
-                            best_model_step = train_step
-                            log.info("best_model_promoted", step=train_step, path=str(best_model_path))
+                        if prev is not None:
+                            # Emit eval_complete event
+                            emit_event({
+                                "event": "eval_complete",
+                                "step": prev.get("step", train_step),
+                                "elo_estimate": prev.get("elo_estimate"),
+                                "win_rate_vs_sealbot": prev.get("wr_sealbot", 0.0),
+                                "eval_games": prev.get("eval_games", 0),
+                                "gate_passed": prev.get("promoted", False),
+                            })
+                            if prev.get("promoted"):
+                                base_model = getattr(trainer.model, "_orig_mod", trainer.model)
+                                best_model.load_state_dict(base_model.state_dict())
+                                best_model.eval()
+                                torch.save(best_model.state_dict(), best_model_path)
+                                best_model_step = train_step
+                                log.info("best_model_promoted", step=train_step, path=str(best_model_path))
                         _eval_result[0] = None
                         _eval_thread = None
 
@@ -521,44 +514,78 @@ def main() -> None:
                             _cfg: dict = config,
                         ) -> None:
                             try:
-                                _eval_result[0] = eval_pipeline.run_evaluation(
+                                result = eval_pipeline.run_evaluation(
                                     _model, _step, _best, full_config=_cfg,
                                 )
+                                result["step"] = _step
+                                _eval_result[0] = result
                             except Exception:
                                 import traceback
                                 log.info("evaluation_error", step=_step, tb=traceback.format_exc())
-                                _eval_result[0] = {"promoted": False, "error": True}
+                                _eval_result[0] = {"promoted": False, "error": True, "step": _step}
 
                         _eval_thread = threading.Thread(target=_run_eval, daemon=True)
                         _eval_thread.start()
                     else:
                         log.info("eval_skipped_still_running", step=train_step)
 
+                # ── Emit training_step event ──
                 if train_step % log_interval == 0:
                     elapsed = time.time() - t_start
-                    games_per_hour = games_played / elapsed * 3600 if elapsed > 0 else 0.0
 
-                    metrics = {
-                        "iteration":     train_step,
-                        "policy_loss":   loss_info["policy_loss"],
-                        "value_loss":    loss_info["value_loss"],
-                        "buffer_size":   buffer.size,
-                        "buffer_capacity": buffer.capacity,
-                        "pretrained_weight": round(w_pre, 4),
-                        "selfplay_weight": round(1.0 - w_pre, 4),
-                        "games_total":   games_played,
-                        "games_per_hour": games_per_hour,
-                        "gpu_util":      gpu_monitor.gpu_util_pct,
-                        "vram_gb":       gpu_monitor.vram_used_gb,
-                        "x_winrate":     pool.x_winrate,
-                        "o_winrate":     pool.o_winrate,
-                        **eval_metrics
-                    }
+                    # Policy entropy: -sum(p * log(p + eps)) averaged over batch
+                    policy_entropy = float(loss_info.get("policy_entropy", 0.0))
+
+                    # Value accuracy: fraction where sign(pred) == sign(target)
+                    value_accuracy = float(loss_info.get("value_accuracy", 0.0))
+
+                    # Gradient norm (NaN if not computed)
+                    grad_norm = float(loss_info.get("grad_norm", float("nan")))
+
+                    # Current LR
+                    lr = float(loss_info.get("lr", 0.0))
+
+                    emit_event({
+                        "event": "training_step",
+                        "step": train_step,
+                        "loss_total": float(loss_info["loss"]),
+                        "loss_policy": float(loss_info["policy_loss"]),
+                        "loss_value": float(loss_info["value_loss"]),
+                        "loss_aux": float(loss_info.get("opp_reply_loss", 0.0)),
+                        "policy_entropy": policy_entropy,
+                        "value_accuracy": value_accuracy,
+                        "lr": lr,
+                        "grad_norm": grad_norm,
+                    })
 
                     # Buffer composition: self-play positions as fraction of total
                     _buf_total = max(buffer.size, 1)
                     _sp_pushed = pool.self_play_positions_pushed
                     _buf_sp_pct = round(min(_sp_pushed / _buf_total, 1.0), 4)
+
+                    # Compute iteration stats
+                    games_this_iter = games_played - last_iter_games
+                    last_iter_games = games_played
+                    gph = _games_per_hour_rolling()
+                    avg_gl = pool.avg_game_length if hasattr(pool, "avg_game_length") else 0.0
+                    pph = gph * avg_gl if avg_gl > 0 else 0.0
+
+                    emit_event({
+                        "event": "iteration_complete",
+                        "step": train_step,
+                        "games_total": games_played,
+                        "games_this_iter": games_this_iter,
+                        "games_per_hour": round(gph, 1),
+                        "positions_per_hour": round(pph, 1),
+                        "avg_game_length": round(avg_gl, 1),
+                        "win_rate_p0": round(float(pool.x_winrate), 4),
+                        "win_rate_p1": round(float(pool.o_winrate), 4),
+                        "draw_rate": round(float(pool.draws / games_played), 4) if games_played > 0 else 0.0,
+                        "sims_per_sec": pool.sims_per_sec or 0.0,
+                        "buffer_size": buffer.size,
+                        "buffer_capacity": buffer.capacity,
+                        "corpus_selfplay_frac": _buf_sp_pct,
+                    })
 
                     log.info(
                         "train_step",
@@ -567,14 +594,14 @@ def main() -> None:
                         value_loss=round(float(loss_info["value_loss"]), 4),
                         total_loss=round(float(loss_info["loss"]), 4),
                         aux_opp_reply_loss=round(float(loss_info.get("opp_reply_loss", 0.0)), 4),
-                        policy_entropy=round(float(loss_info.get("policy_entropy", 0.0)), 4),
+                        policy_entropy=round(policy_entropy, 4),
                         buffer_size=buffer.size,
                         buffer_capacity=buffer.capacity,
                         pretrained_weight=round(w_pre, 4),
                         selfplay_weight=round(1.0 - w_pre, 4),
                         buffer_self_play_pct=_buf_sp_pct,
                         games_played=games_played,
-                        games_per_hour=round(float(games_per_hour), 1),
+                        games_per_hour=round(gph, 1),
                         sims_per_sec=pool.sims_per_sec,
                         x_wins=pool.x_wins,
                         o_wins=pool.o_wins,
@@ -584,53 +611,13 @@ def main() -> None:
                         draw_rate=round(float(pool.draws / games_played), 3) if games_played > 0 else 0.0,
                         gpu_util=round(float(gpu_monitor.gpu_util_pct), 1),
                         vram_gb=round(float(gpu_monitor.vram_used_gb), 2),
-                        **eval_metrics,
                     )
 
-                    if web_dash is not None:
-                        new_web_games = games_played - last_web_games
-                        if new_web_games > 0:
-                            dx  = pool.x_wins - last_x_wins
-                            do_ = pool.o_wins - last_o_wins
-                            dd  = pool.draws  - last_draws
-                            for _ in range(dx):
-                                web_dash.send_game(moves=[], result=1.0)
-                            for _ in range(do_):
-                                web_dash.send_game(moves=[], result=-1.0)
-                            for _ in range(dd):
-                                web_dash.send_game(moves=[], result=0.0)
-                            last_web_games = games_played
-                            last_x_wins = pool.x_wins
-                            last_o_wins = pool.o_wins
-                            last_draws  = pool.draws
-                        web_dash.send_metrics(
-                            iteration=train_step,
-                            loss=float(loss_info["loss"]),
-                            elo=eval_metrics.get("wr_sealbot"),
-                            policy_loss=float(loss_info["policy_loss"]),
-                            value_loss=float(loss_info["value_loss"]),
-                            games_total=games_played,
-                            gpu_util=gpu_monitor.gpu_util_pct,
-                            x_winrate=round(float(pool.x_winrate), 3),
-                            o_winrate=round(float(pool.o_winrate), 3),
-                            pretrained_weight=round(w_pre, 4),
-                            sims_per_sec=pool.sims_per_sec,
-                        )
-
-                    if dashboard is not None:
-                        dashboard.update(train_step, total_steps, metrics)
-                        last_ui_refresh = time.time()
-
     try:
-        if dashboard is not None:
-            with dashboard.live():
-                _run_loop()
-        else:
-            _run_loop()
+        _run_loop()
     finally:
+        emit_event({"event": "run_end", "step": train_step})
         pool.stop()
-        if web_dash is not None:
-            web_dash.stop()
         gpu_monitor.stop()
         gpu_monitor.join(timeout=2.0)
 
