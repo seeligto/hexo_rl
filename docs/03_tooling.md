@@ -108,131 +108,47 @@ tracing::info!(
 
 ## 2. Progress display — rich
 
-### Web dashboard (dashboard.py)
+### Monitoring system (event-driven fan-out)
 
-A Flask + SocketIO live dashboard based on saiki77's hexbot training dashboard.
-Pure data sink — no game-engine imports. Accepts training data via REST or WebSocket.
+Training emits structured events via `emit_event()` (`hexo_rl/monitoring/events.py`).
+Registered renderers receive every event — they are passive observers and never
+block the training loop. Two built-in renderers:
 
-**Start the server** (run in a separate terminal before training):
+**Terminal dashboard** (`hexo_rl/monitoring/terminal_dashboard.py`):
+- Rich Live panel, max 4Hz refresh
+- Shows loss/throughput/buffer/system stats
+- Alert line for: entropy collapse (< 1.0), grad spikes (norm > 10),
+  consecutive loss increases, eval gate failures
+- Responds to `training_step` and `iteration_complete` events
+
+**Web dashboard** (`hexo_rl/monitoring/web_dashboard.py`):
+- Flask+SocketIO on localhost:5001
+- Chart.js loss curves, win rate bars, system stats
+- Event history replay on browser reconnect (last 500 events)
+- Routes: `/` (dashboard), `/viewer` (game viewer),
+  `/viewer/game/<id>`, `/viewer/recent`, `/viewer/play` (POST)
+
+**How to start:**
 
 ```bash
-make dashboard                        # port 5001 (default)
-make dashboard DASHBOARD_PORT=5002    # custom port
-# or directly:
-.venv/bin/python dashboard.py 5001
+make train           # both dashboards enabled by default
+make train.nodash    # training only, no dashboard
+make train.bg        # background with PID tracking
+make train.stop      # kill background run
+make train.status    # check if running, show recent log
+make dash.open       # open web dashboard in browser
 ```
 
-Then open `http://localhost:5001` in a browser.
+**Event types** (see `docs/08_DASHBOARD_SPEC.md` for full schema):
+- `run_start`, `run_end` — bookend events with run_id
+- `training_step` — loss, entropy, grad_norm, lr every N steps
+- `iteration_complete` — throughput, games/hr, buffer state
+- `game_complete` — winner, move count, move sequence
+- `eval_complete` — Elo, win rate vs SealBot, gate status
+- `system_stats` — GPU util, VRAM, worker count
 
-**Wire training to the dashboard:**
-
-```bash
-make train.full.dashboard             # full run + dashboard
-make train.resume.dashboard           # resume + dashboard
-# or pass flags directly:
-.venv/bin/python scripts/train.py --config configs/default.yaml \
-    --web-dashboard --web-dashboard-url http://localhost:5001
-```
-
-**DashboardClient** (`hexo_rl/training/dashboard_utils.py`) — fire-and-forget bridge:
-
-- Background daemon thread + `queue.Queue(maxsize=512)`
-- Enqueue cost: ~0.7 µs/call — negligible vs training step time
-- Data is sent every `log_interval` training steps (default: 10)
-- If server is not running: warns once, then silently discards — never blocks training
-
-```python
-from hexo_rl.training.dashboard_utils import DashboardClient
-
-client = DashboardClient(base_url="http://localhost:5001")
-client.send_game(moves=[], result=1.0)
-client.send_metrics(iteration=100, loss=0.31, elo=1055.0, gpu_util=89.5)
-client.stop()
-```
-
-**REST endpoints** (can be called directly or via DashboardClient):
-
-| Method | Endpoint | Body |
-|---|---|---|
-| POST | `/api/game` | `{"moves": [[q,r],...], "result": ±1.0}` |
-| POST | `/api/metric` | `{"iteration": N, "loss": F, "elo": F, ...}` |
-| GET  | `/api/stats` | — current aggregate stats |
-| GET  | `/api/losses` | — loss history |
-| GET  | `/api/elo` | — ELO history |
-| GET  | `/api/winrates` | — win-rate history |
-| GET  | `/api/resources` | — CPU/RAM history |
-
-**Performance validation (2026-03-31):**
-
-| Metric | Without dashboard | With dashboard | Delta |
-|---|---|---|---|
-| MCTS sim/s | 160,590 | 159,347 | −0.77% (run noise) |
-| Positions/hr | 1,359,008 | 1,480,651 | +8.9% (run noise) |
-| GPU utilization | 89.8% | 89.2% | −0.6% (run noise) |
-| Batch saturation | 99.1% | 99.9% | +0.8% |
-
-Conclusion: zero measurable impact on MCTS or GPU metrics.
-
----
-
-### Terminal dashboard (rich)
-
-```python
-# hexo_rl/monitoring/dashboard.py
-from rich.live import Live
-from rich.table import Table
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
-from rich.layout import Layout
-from rich.console import Console
-import time
-
-class TrainingDashboard:
-    def __init__(self):
-        self.console = Console()
-        self.progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=30),
-            TextColumn("{task.completed}/{task.total}"),
-            TextColumn("•"),
-            TimeElapsedColumn(),
-        )
-        self.train_task = self.progress.add_task("Training steps", total=None)
-        self.game_task  = self.progress.add_task("Self-play games", total=None)
-
-    def make_metrics_table(self, metrics: dict) -> Table:
-        table = Table(show_header=True, header_style="bold cyan", box=None)
-        table.add_column("Metric", style="dim", width=24)
-        table.add_column("Value", justify="right")
-
-        table.add_row("Iteration",        str(metrics.get("iteration", "-")))
-        table.add_row("Policy loss",      f"{metrics.get('policy_loss', 0):.4f}")
-        table.add_row("Value loss",       f"{metrics.get('value_loss', 0):.4f}")
-        table.add_row("Elo (latest)",     str(metrics.get("elo", "-")))
-        table.add_row("Buffer size",      f"{metrics.get('buffer_size', 0):,}")
-        table.add_row("Positions/hour",    f"{metrics.get('positions_per_hour', 0):.0f}")
-        table.add_row("Sims/sec",         f"{metrics.get('sims_per_sec', 0):,.0f}")
-        table.add_row("GPU util",         f"{metrics.get('gpu_util', 0):.0f}%")
-        table.add_row("VRAM used",        f"{metrics.get('vram_gb', 0):.1f} GB")
-        return table
-
-    def run(self, train_fn, total_steps: int):
-        """Context manager — call update(metrics) inside train_fn."""
-        layout = Layout()
-        layout.split_column(
-            Layout(name="progress", size=5),
-            Layout(name="metrics", size=14),
-        )
-        with Live(layout, console=self.console, refresh_per_second=2):
-            for step, metrics in train_fn():
-                self.progress.update(self.train_task, completed=step, total=total_steps)
-                self.progress.update(self.game_task,  completed=metrics.get("games_total", 0))
-                layout["progress"].update(Panel(self.progress, title="Progress"))
-                layout["metrics"].update(
-                    Panel(self.make_metrics_table(metrics), title=f"[bold]Training — step {step}")
-                )
-```
+**Config:** `configs/monitoring.yaml` controls enable/disable, web port,
+alert thresholds, and event log maxlen.
 
 ### Post-training results summary
 
@@ -288,18 +204,21 @@ def print_training_summary(history: list[dict]):
 
 ### What to measure
 
-| Benchmark | Unit | Target | Baseline (2026-04-02, 16w) |
+See CLAUDE.md § "Benchmarks — must pass before Phase 4.5" for the canonical
+benchmark table (2026-04-03 baseline, correct 12-block × 128-channel model).
+
+| Benchmark | Unit | Target | Baseline (2026-04-03, 16w) |
 |---|---|---|---|
-| MCTS throughput | simulations/sec | ≥ 160,000 | 189,656 |
-| Inference throughput | positions/sec | ≥ 8,500 | 10,080 |
-| Inference latency (batch=1) | ms mean | ≤ 2 ms | 1.52 ms |
-| Worker throughput | positions/hour | ≥ 1,000,000 | 1,177,745 |
+| MCTS throughput | simulations/sec | ≥ 140,000 | 164,946 |
+| Inference throughput | positions/sec | ≥ 8,500 | 10,201 |
+| Inference latency (batch=1) | ms mean | ≤ 3.5 ms | 2.82 ms |
+| Worker throughput | positions/hour | ≥ 450,000 | 530,526 |
 | GPU utilization | % | ≥ 85% | 100.0% |
-| VRAM peak | GB | ≤ 6.9 GB (80%) | 0.78 GB |
-| Batch fill % | % | ≥ 84% | 99.82% |
-| Replay buffer push | positions/sec | ≥ 630,000 | 905,697 |
-| Replay buffer sample raw (batch=256) | µs/batch | ≤ 1,200 | 1,000 |
-| Replay buffer sample augmented (batch=256) | µs/batch | ≤ 1,200 | 949 |
+| VRAM peak | GB | ≤ 80% (6.9 GB) | 0.10 GB |
+| Batch fill % | % | ≥ 80% | 95.2% |
+| Replay buffer push | positions/sec | ≥ 640,000 | 755,880 |
+| Replay buffer sample raw (batch=256) | µs/batch | ≤ 1,500 | 1,237.6 |
+| Replay buffer sample augmented (batch=256) | µs/batch | ≤ 1,400 | 1,177 |
 
 ### Practical benchmark commands
 
@@ -353,8 +272,12 @@ This pair is the fastest signal for deadlocks and queue handoff regressions.
 
 ### Python benchmark runner
 
+> **Note:** The code below is a simplified illustration. The actual `scripts/benchmark.py`
+> implements the full n=5 median + IQR methodology described above. See that file for the
+> current implementation.
+
 ```python
-# scripts/benchmark.py
+# scripts/benchmark.py (simplified)
 import time
 import torch
 import numpy as np
@@ -510,7 +433,7 @@ to <10% IQR on all metrics. Key changes:
 - **Warm-up phase**: Each metric runs its operation for 2-10 seconds before timing
   begins, evicting cold-cache effects and stabilising boost clocks.
 - **Realistic MCTS workload**: MCTS throughput is measured using 800 sims/move
-  (matching `default.yaml` `mcts.n_simulations`) with tree reset between each move,
+  (matching `selfplay.yaml` `mcts.n_simulations`) with tree reset between each move,
   rather than a single monolithic 50k-sim search.  A single oversized tree exceeds
   L2 cache and underreports real self-play throughput by ~15%.
 - **Multiple runs**: n=5 (full) or n=10 (stress). Median is reported instead of
@@ -666,50 +589,46 @@ class MetricsWriter:
 
 All hyperparameters live in YAML. Never hardcode values in source files.
 
+Configs are split by concern. `train.py` deep-merges them via `load_config()`:
+
 ```yaml
-# configs/default.yaml
+# configs/model.yaml          — network architecture
+model:
+  board_size: 19
+  in_channels: 18
+  res_blocks: 12
+  filters: 128
+  se_reduction_ratio: 4
+
+# configs/training.yaml        — optimizer, scheduler, buffer
 training:
   batch_size: 256
   lr: 0.002
   weight_decay: 0.0001
   lr_schedule: cosine
-  eval_interval: 100
-  checkpoint_interval: 50
 
+# configs/selfplay.yaml        — MCTS, workers
 mcts:
   n_simulations: 800
   c_puct: 1.5
-  dirichlet_alpha: 0.3
-  epsilon: 0.25
-  temperature_threshold_ply: 30
-
-model:
-  board_size: 19
-  in_channels: 18
-  res_blocks: 10
-  filters: 128
-
 selfplay:
-  n_workers: 6
+  n_workers: 16
   inference_batch_size: 64
-  replay_buffer_capacity: 500000
 
-rewards:
-  shaped_decay_steps: 500
-  shaped_4_in_a_row: 0.05
-  shaped_5_in_a_row: 0.10
-  shaped_block_4: 0.03
-  shaped_block_5: 0.08
+# configs/monitoring.yaml      — dashboards, alerts
+monitoring:
+  enabled: true
+  terminal_dashboard: true
+  web_dashboard: true
+  web_port: 5001
 ```
 
 Load with:
 
 ```python
-import yaml
-from dataclasses import dataclass
-
-with open("configs/default.yaml") as f:
-    cfg = yaml.safe_load(f)
+from hexo_rl.utils.config import load_config
+config = load_config("configs/model.yaml", "configs/training.yaml",
+                     "configs/selfplay.yaml", "configs/monitoring.yaml")
 ```
 
 ### Reproducibility
