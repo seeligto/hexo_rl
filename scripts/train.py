@@ -250,6 +250,18 @@ def main() -> None:
         min_buf_size = max(128, min(512, int(train_cfg.get("batch_size", config.get("batch_size", 256)))))
     buffer = ReplayBuffer(capacity=capacity)
     schedule_idx = 1  # first entry already applied at construction
+
+    # ── Game-length weight schedule ──
+    glw = train_cfg.get("game_length_weights", config.get("game_length_weights", {}))
+    if glw:
+        glw_thresholds = [int(t) for t in glw["thresholds"]]
+        glw_weights = [float(w) for w in glw["weights"]]
+        glw_default = float(glw.get("default_weight", 1.0))
+        buffer.set_weight_schedule(glw_thresholds, glw_weights, glw_default)
+        log.info("replay_buffer.weight_schedule_set",
+                 thresholds=glw_thresholds, weights=glw_weights,
+                 default_weight=glw_default)
+
     log.info("buffer_init", capacity=capacity, min_buffer_size=min_buf_size,
              schedule_entries=len(buffer_schedule))
 
