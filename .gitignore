@@ -61,4 +61,4 @@ data/bootstrap_corpus.npz
 engine/benches/*.html
 criterion/
 .torchinductor-cache/
-data/corpus/injected*/*
+data/corpus/injected*/*.env
