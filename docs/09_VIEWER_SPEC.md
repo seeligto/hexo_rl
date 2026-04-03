@@ -1,7 +1,7 @@
 # Game Viewer Specification — HeXO /viewer
 # docs/09_VIEWER_SPEC.md
 
-**Status:** Authoritative spec. Implement against this document.
+**Status:** Authoritative spec. Implementation complete as of 2026-04-03. Deferred items listed in §10.
 **Scope:** Standalone game viewer and play-against-model interface.
 **Depends on:** docs/08_DASHBOARD_SPEC.md (event schema, web_dashboard.py server)
 **Last updated:** 2026-04-03
@@ -362,20 +362,19 @@ On load, GET /viewer/recent?n=20. Scrollable sidebar list. Click to load.
 
 ---
 
-## 7. Files to create/modify
+## 7. Implementation files
 
-Create:
+Created:
 - hexo_rl/viewer/__init__.py
 - hexo_rl/viewer/engine.py
 - hexo_rl/monitoring/static/viewer.html
-- engine/src/board/threats.rs (or inline)
+- engine/src/board/threats.rs
 - tests/test_viewer.py
 
-Modify:
+Modified:
 - hexo_rl/monitoring/web_dashboard.py — 4 new routes + engine init
-- hexo_rl/selfplay/pool.py — capture moves_detail + value_trace
-- engine/src/lib.rs — export get_threats
-- configs/default.yaml — add monitoring.capture_game_detail: true
+- engine/src/lib.rs — export get_threats, get_top_visits, root_value
+- configs/monitoring.yaml — monitoring.capture_game_detail: true
 
 ---
 
@@ -404,3 +403,19 @@ tests/test_viewer.py must include:
 - Multiplayer / spectating
 - Full MCTS tree visualization
 - Mobile layout
+
+---
+
+## 10. Deferred items
+
+These require Rust-side changes and are deferred to a future sprint:
+
+- **Per-move MCTS detail in game records**: `moves_detail` and `value_trace` fields
+  in `game_complete` events are currently `None`. Capturing `get_top_visits()` and
+  `root_value()` at each move requires changes to `game_runner.rs` to store MCTS
+  results before the tree is reset.
+- **Per-worker ID in game_complete**: `worker_id` is included but currently set from
+  the Python pool layer. True per-worker attribution requires a Rust-side worker ID.
+- **Play mode gating on eval gate passage**: play-against-model should only serve
+  the model after it has passed at least one eval gate (win rate ≥ 55% vs SealBot).
+  Currently serves from the latest checkpoint unconditionally.
