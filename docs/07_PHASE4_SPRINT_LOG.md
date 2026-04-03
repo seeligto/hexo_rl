@@ -531,3 +531,58 @@ Change requested by user.
 `--config configs/training.yaml` caused `training.yaml` to be merged with itself
 because it was already in `_BASE_CONFIGS`. Fixed by resolving paths and deduplicating
 before calling `load_config()`.
+
+---
+
+### 17. Community Discord intelligence review (2026-04-03)
+
+**Source:** Bot dev Discord, messages from 2026-03-31 and 2026-04-01.
+**Participants referenced:** Vladdy Daddy, Phoenix, Kubuxu, imaseal, Charlie, Rise.
+
+Reviewed community discussions for architectural risks and validation of our
+current approach. Seven findings, two requiring immediate action.
+
+**Findings:**
+
+1. **MCTS sim count during self-play — OPEN RISK.**
+   Vladdy Daddy runs 1,200 sims/move and sees consistent generation-over-generation
+   improvement. Our benchmark config uses 800 sims (evaluation only). Self-play
+   worker sim count requires explicit audit — if set below ~400, policy signal will
+   be too noisy for reliable learning. See Prompt 1 audit output.
+
+2. **Short-game buffer poisoning — KNOWN RISK, MITIGATED.**
+   Phoenix and Vladdy both confirmed that <30-move games filling the buffer is a
+   primary failure mode. Kubuxu's nuance: short games are acceptable if game lengths
+   trend longer over generations. Our game-length weighted sampling directly addresses
+   this. Aggressiveness of the weight function requires audit (see Prompt 2).
+
+3. **Replay buffer size — CURRENT APPROACH VALIDATED.**
+   Community consensus: buffer collapse from too-small buffers is worse than any
+   cost from a large buffer. Vladdy recommends 100K+ minimum; KataGo started at
+   250K. Our 250K → 1M growth schedule is well-grounded. No change.
+
+4. **Augmentation implementation — CURRENT APPROACH VALIDATED.**
+   Kubuxu explicitly: do not store 12 copies; pick one symmetry at sample load time.
+   This is exactly what our Rust ReplayBuffer scatter tables do. No change needed.
+
+5. **Light SealBot classical mix — CONCEPT VALIDATED, IMPLEMENTATION DEFERRED.**
+   Vladdy confirmed that mixing classical bot games into self-play catches obvious
+   mistakes the NN otherwise ignores. Recommends non-deterministic bot to prevent
+   cheesing. Our SealBot wrapper supports this. Deferred until stable Phase 4.5
+   baseline — the prior throughput regression was an implementation issue, not a
+   conceptual one.
+
+6. **KL-divergence weighted buffer writes — NEW OPEN QUESTION (Q9).**
+   Kubuxu confirmed KataGo uses this (in repo, not paper). Adds significant training
+   efficiency by concentrating writes on high-uncertainty positions. Filed in
+   `docs/06_OPEN_QUESTIONS.md`. Prerequisite: Phase 4.5 baseline checkpoint.
+
+7. **Torus board encoding — WATCH ITEM.**
+   imaseal experimenting with torus/circular padding for full rotational symmetry.
+   Incompatible with current attention-anchored windowing. Phoenix interested but
+   noted wrap-around artifact risk. Filed as watch item in `docs/06_OPEN_QUESTIONS.md`
+   pending imaseal's results.
+
+**Immediate actions required (pre-overnight run):**
+- [ ] Confirm self-play worker sim count (Prompt 1 output)
+- [ ] Confirm game-length weight ratio is >3× between short and long games (Prompt 2 output)
