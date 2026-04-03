@@ -25,7 +25,7 @@ All three sources are fed into a single pretrain dataset. They are complementary
 
 **Priority order**: human games first, then SealBot, then random to fill gaps. Human games are the most valuable signal — they contain opening theory, formation recognition, and endgame technique that minimax won't generate.
 
-Corpus generation is configured in `configs/default.yaml`:
+Corpus generation is configured in `configs/corpus.yaml`:
 
 ```yaml
 bootstrap:
@@ -458,7 +458,7 @@ from hexo_rl.bootstrap.pretrain import pretrain, validate_pretrained
 from hexo_rl.bootstrap.generate_corpus import generate_corpus
 from hexo_rl.training.trainer import Trainer
 
-cfg = load_config("configs/default.yaml")
+cfg = load_config("configs/model.yaml", "configs/training.yaml")
 model = HexTacToeNet(**cfg["model"]).cuda()
 
 if cfg["bootstrap"]["enabled"]:
