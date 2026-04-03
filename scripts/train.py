@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from hexo_rl.monitoring.events import emit_event
+from hexo_rl.monitoring.events import emit_event, register_renderer
 from hexo_rl.monitoring.gpu_monitor import GPUMonitor
 from hexo_rl.monitoring.configure import configure_logging
 from hexo_rl.model.network import HexTacToeNet
@@ -135,6 +135,7 @@ def main() -> None:
         "configs/training.yaml",
         "configs/selfplay.yaml",
         "configs/game_replay.yaml",
+        "configs/monitoring.yaml",
     ]
     if args.config:
         config = load_config(*_BASE_CONFIGS, args.config)
@@ -332,6 +333,24 @@ def main() -> None:
     # ── GPU monitor ──
     gpu_monitor = GPUMonitor(interval_sec=5)
     gpu_monitor.start()
+
+    # ── Dashboard renderers ──
+    dashboards: list = []
+    mon_cfg = config.get("monitoring", {})
+    if mon_cfg.get("enabled", True) and not args.no_dashboard:
+        if mon_cfg.get("terminal_dashboard", True):
+            from hexo_rl.monitoring.terminal_dashboard import TerminalDashboard
+            td = TerminalDashboard(config)
+            td.start()
+            register_renderer(td)
+            dashboards.append(td)
+
+        if mon_cfg.get("web_dashboard", True):
+            from hexo_rl.monitoring.web_dashboard import WebDashboard
+            wd = WebDashboard(config)
+            wd.start()
+            register_renderer(wd)
+            dashboards.append(wd)
 
     # ── Graceful shutdown ──
     _running = [True]
@@ -619,6 +638,11 @@ def main() -> None:
         pool.stop()
         gpu_monitor.stop()
         gpu_monitor.join(timeout=2.0)
+        for d in dashboards:
+            try:
+                d.stop()
+            except Exception:
+                pass
 
     # ── Session end: save final checkpoint and log summary ──
     final_ckpt = trainer.save_checkpoint(last_loss_info if last_loss_info else None)
