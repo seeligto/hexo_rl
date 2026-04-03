@@ -10,6 +10,7 @@ training_steps_per_game: 2.0
 max_train_burst: 8
 lr: 0.002
 weight_decay: 0.0001
+grad_clip: 1.0
 lr_schedule: cosine
 eval_interval: 500
 checkpoint_interval: 500

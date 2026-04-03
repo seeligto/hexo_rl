@@ -219,25 +219,40 @@ class Trainer:
 
             loss = compute_total_loss(policy_loss, value_loss, opp_reply_loss, aux_weight)
 
-        fp16_backward_step(loss, self.optimizer, self.scaler, self.model, self.fp16)
+        max_grad_norm = float(self.config.get("grad_clip", 1.0))
+        grad_norm = fp16_backward_step(
+            loss, self.optimizer, self.scaler, self.model, self.fp16,
+            max_grad_norm=max_grad_norm,
+        )
 
         if self.scheduler is not None:
             self.scheduler.step()
 
         self.step += 1
 
-        # Policy entropy: H = -Σ π log π  (nats). Computed outside autocast to
-        # avoid fp16 underflow for near-zero probabilities; detached from graph.
         with torch.no_grad():
+            # Policy entropy: H = -Σ π log π  (nats). Computed outside autocast
+            # to avoid fp16 underflow for near-zero probabilities.
             policy_entropy = (
                 -(log_policy.exp() * log_policy).sum(dim=-1).mean()
             ).float().item()
+
+            # Value accuracy: fraction where predicted winner matches actual.
+            # v_logit > 0 → predict win (outcome > 0), v_logit ≤ 0 → predict loss.
+            pred_win = (v_logit.squeeze(1) > 0).float()
+            target_win = (outcomes_t > 0).float()
+            value_accuracy = (pred_win == target_win).float().mean().item()
+
+        lr = self.optimizer.param_groups[0]["lr"]
 
         result = {
             "loss":           loss.item(),
             "policy_loss":    policy_loss.item(),
             "value_loss":     value_loss.item(),
             "policy_entropy": policy_entropy,
+            "grad_norm":      grad_norm,
+            "value_accuracy": value_accuracy,
+            "lr":             lr,
         }
         if use_aux:
             result["opp_reply_loss"] = opp_reply_loss.item()
