@@ -103,9 +103,9 @@ Input:
   `GameState.to_tensor()` assembles the full 18-plane tensor (see "Tensor
   encoding" above).
 
-Backbone (Single ResNet-10 Trunk):
+Backbone (Single ResNet-12 Trunk):
 
-- Processes the `K` tensors as a single batch (effective batch size = batch_size * K) through a highly optimized 19×19 ResNet-10.
+- Processes the `K` tensors as a single batch (effective batch size = batch_size * K) through a 19×19 ResNet-12 with Squeeze-and-Excitation (SE) blocks on every residual block (reduction ratio 4).
 
 Value Aggregation (Pooling):
 
@@ -117,19 +117,22 @@ Policy Mapping:
 - The local 19×19 coordinates of each distribution are mapped back to the absolute global `(q,r)` coordinates using the respective cluster centers provided by the Rust core.
 - The aggregated legal moves are unified via a final softmax to form a single global policy vector for MCTS.
 
-Value head:
-  Conv2d(128 → 1, 1×1) → BN → ReLU → Flatten → Linear(361 → 256) → ReLU → Linear(256 → 1) → Tanh
-  Output: scalar in [-1, 1] — win probability for current player
+Value head (dual-pooling):
+  Global avg pool(128) → (128,) | Global max pool(128) → (128,)
+  Concat → (256,) → FC(256 → 256) → ReLU → FC(256 → 1) → Tanh
+  Output: scalar in [-1, 1] — win probability for current player.
+  Loss uses pre-tanh logit: BCE(sigmoid(v_logit), (z+1)/2) where z ∈ {-1, +1}.
 
 ### Training details
 
 - Optimizer: AdamW, lr=2e-3, weight_decay=1e-4
 - LR schedule: cosine decay over training, restarts every 200 iterations
-- Loss: `L = L_policy + L_value + λ·L2_reg`
+- Loss: `L = L_policy + L_value + w_aux · L_opp_reply`
   - `L_policy = -sum(π_mcts · log π_net)` (cross-entropy with MCTS visit distribution)
-  - `L_value = MSE(v_net, z)` where z ∈ {-1, 0, +1} is the game outcome
+  - `L_value = BCE(sigmoid(v_logit), (z+1)/2)` where z ∈ {-1, +1} is the game outcome
+  - `L_opp_reply = -sum(π_opp · log π_opp_net)` (auxiliary opponent reply prediction, weight 0.15)
 - Mixed precision: `torch.cuda.amp.autocast()` + `GradScaler`
-- `torch.compile()`: applied at startup, ~20-30% throughput gain
+- `torch.compile()`: currently disabled (CUDA graph thread-local conflict with shared inference+training model). Re-enable when architecture allows separate models.
 - Batch size: 256 (fits in RTX 3070 8GB with FP16)
 
 ### Checkpointing
@@ -352,6 +355,21 @@ stats = GameBenchmarks.run_mcts_throughput(n_simulations=10_000)
 # -> {"simulations_per_sec": float, "tree_depth_avg": float, ...}
 ```
 
+### Viewer / analysis exports
+
+```python
+# Threat detection (viewer-only — never called from MCTS or training)
+threats = b.get_threats()  # -> list[(q, r, level, player)]
+# Scans all 3 hex axes with a sliding window of width 6.
+# A threat is a window where one player has N stones (N≥3) and the rest are empty.
+# Returns the EMPTY cells within threatening windows, not the stone cells.
+# Levels: 3=warning, 4=forced, 5=critical.
+
+# MCTS tree introspection (used by viewer play-against-model)
+top = tree.get_top_visits(n=5)  # -> list[(coord_str, visits, prior)]
+v = tree.root_value()           # -> float (value at root for current player)
+```
+
 ### Build
 
 ```bash
@@ -359,3 +377,26 @@ cd engine
 cargo build --release
 maturin develop --release -m engine/Cargo.toml  # installs into current Python env
 ```
+
+---
+
+## 8. Monitoring
+
+Event-driven fan-out. `train.py` calls `emit_event(payload)` which dispatches
+to all registered renderers. Two built-in renderers:
+
+- **Terminal dashboard** (`hexo_rl/monitoring/terminal_dashboard.py`): Rich Live
+  panel, updates at max 4Hz. Shows loss/throughput/buffer/system stats. Alert
+  line for mode collapse (entropy < 1.0), grad spikes (norm > 10), loss increase
+  runs, eval gate failures.
+
+- **Web dashboard** (`hexo_rl/monitoring/web_dashboard.py`): Flask+SocketIO on
+  localhost:5001. Serves `index.html` SPA. Event history replay on browser
+  reconnect (last 500 events). Routes: `/` (dashboard), `/viewer` (game viewer),
+  `/viewer/game/<id>`, `/viewer/recent`, `/viewer/play`.
+
+**Invariant:** no renderer is imported by training, selfplay, or engine code.
+Renderers are passive observers that receive events via `register_renderer()`.
+
+See `docs/08_DASHBOARD_SPEC.md` for the full event schema and
+`docs/09_VIEWER_SPEC.md` for the game viewer specification.
