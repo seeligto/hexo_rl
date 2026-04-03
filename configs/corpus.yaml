@@ -8,22 +8,22 @@ elo_weight_exponent: 2        # sampling weight proportional to elo^exponent
 
 source_weights:               # relative sampling weight per source
   human: 1.0
-  bot_d4: 0.8
-  bot_d6: 1.0                 # d6 is higher quality per game
+  bot_fast: 0.8
+  bot_strong: 1.0             # strong (0.5s) is higher quality per game
 
 quality_weights:              # quality score formula weights
   w_elo: 0.4
   w_len: 0.3
   w_ent: 0.3
   bot_elo_components:
-    bot_d4: 0.6               # stronger than average human
-    bot_d6: 0.75              # strong bot play
+    bot_fast: 0.6             # stronger than average human
+    bot_strong: 0.75          # strong bot play
 
 use_human_seeding: true        # seed bot openings from human midgame positions
 human_seeding_min_move: 10     # earliest move to truncate human game at
 human_seeding_max_move: 25     # latest move to truncate human game at
 
 flags:
-  p1_win_rate_concern: true   # bot_d4 shows 62.5% P1 win rate
-  low_opening_diversity: true # bot_d6 dupe rate 50.3% (> 50% threshold)
+  p1_win_rate_concern: true   # bot_fast shows 62.5% P1 win rate
+  low_opening_diversity: true # bot_strong dupe rate 50.3% (> 50% threshold)
   single_window_corpus: true  # median K = 1 across all sources

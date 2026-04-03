@@ -10,8 +10,8 @@ from hexo_rl.monitoring.game_browser import (
     GameBrowser,
     GameDetail,
     GameSummary,
-    SOURCE_BOT_D4,
-    SOURCE_BOT_D6,
+    SOURCE_BOT_FAST,
+    SOURCE_BOT_STRONG,
     SOURCE_HUMAN,
     SOURCE_SELF_PLAY,
 )
@@ -83,8 +83,8 @@ def _write_replay_line(path: Path, moves: list, outcome: str = "x_win",
 @pytest.fixture()
 def corpus_dir(tmp_path: Path) -> Path:
     (tmp_path / "raw_human").mkdir()
-    (tmp_path / "bot_games" / "sealbot_d4").mkdir(parents=True)
-    (tmp_path / "bot_games" / "sealbot_d6").mkdir(parents=True)
+    (tmp_path / "bot_games" / "sealbot_fast").mkdir(parents=True)
+    (tmp_path / "bot_games" / "sealbot_strong").mkdir(parents=True)
     return tmp_path
 
 
@@ -125,31 +125,31 @@ def test_indexes_human_games(corpus_dir: Path, replay_dir: Path) -> None:
     assert g.outcome == "p1_win"
 
 
-def test_indexes_bot_d4_games(corpus_dir: Path, replay_dir: Path) -> None:
+def test_indexes_bot_fast_games(corpus_dir: Path, replay_dir: Path) -> None:
     _write_bot_game(
-        corpus_dir / "bot_games" / "sealbot_d4" / "bot001.json",
+        corpus_dir / "bot_games" / "sealbot_fast" / "bot001.json",
         moves=[(0, 0), (1, 0), (0, 1)],
         winner=2,
     )
     browser = GameBrowser(str(corpus_dir), str(replay_dir))
-    games = browser.list_games(source=SOURCE_BOT_D4)
+    games = browser.list_games(source=SOURCE_BOT_FAST)
     assert len(games) == 1
-    assert games[0].source == SOURCE_BOT_D4
+    assert games[0].source == SOURCE_BOT_FAST
     assert games[0].outcome == "p2_win"
     assert games[0].length == 3
 
 
-def test_indexes_bot_d6_games(corpus_dir: Path, replay_dir: Path) -> None:
+def test_indexes_bot_strong_games(corpus_dir: Path, replay_dir: Path) -> None:
     _write_bot_game(
-        corpus_dir / "bot_games" / "sealbot_d6" / "bot002.json",
+        corpus_dir / "bot_games" / "sealbot_strong" / "bot002.json",
         moves=[(0, 0), (1, 0)],
         winner=1,
-        depth="d6",
+        depth="strong",
     )
     browser = GameBrowser(str(corpus_dir), str(replay_dir))
-    games = browser.list_games(source=SOURCE_BOT_D6)
+    games = browser.list_games(source=SOURCE_BOT_STRONG)
     assert len(games) == 1
-    assert games[0].source == SOURCE_BOT_D6
+    assert games[0].source == SOURCE_BOT_STRONG
     assert games[0].outcome == "p1_win"
 
 
@@ -203,12 +203,12 @@ def test_quality_scores_joined(corpus_dir: Path, replay_dir: Path) -> None:
 
 def test_filter_by_source(corpus_dir: Path, replay_dir: Path) -> None:
     _write_human_game(corpus_dir / "raw_human" / "h1.json", "h1", [(0, 0)] * 5)
-    _write_bot_game(corpus_dir / "bot_games" / "sealbot_d4" / "b1.json", [(0, 0)] * 3)
+    _write_bot_game(corpus_dir / "bot_games" / "sealbot_fast" / "b1.json", [(0, 0)] * 3)
     _write_replay_line(replay_dir / "games_test.jsonl", [(0, 0)] * 4, outcome="x_win", game_length=4)
 
     browser = GameBrowser(str(corpus_dir), str(replay_dir))
     assert len(browser.list_games(source=SOURCE_HUMAN)) == 1
-    assert len(browser.list_games(source=SOURCE_BOT_D4)) == 1
+    assert len(browser.list_games(source=SOURCE_BOT_FAST)) == 1
     assert len(browser.list_games(source=SOURCE_SELF_PLAY)) == 1
     assert len(browser.list_games(source="all")) == 3
 
@@ -301,12 +301,12 @@ def test_load_game_not_found(corpus_dir: Path, replay_dir: Path) -> None:
 def test_load_game_bot(corpus_dir: Path, replay_dir: Path) -> None:
     moves = [(1, 0), (0, 1), (2, -1)]
     _write_bot_game(
-        corpus_dir / "bot_games" / "sealbot_d4" / "testbot.json", moves, winner=1
+        corpus_dir / "bot_games" / "sealbot_fast" / "testbot.json", moves, winner=1
     )
     browser = GameBrowser(str(corpus_dir), str(replay_dir))
     detail = browser.load_game("testbot")
     assert detail.moves == moves
-    assert detail.source == SOURCE_BOT_D4
+    assert detail.source == SOURCE_BOT_FAST
 
 
 # ── Cache / re-scan ───────────────────────────────────────────────────────────

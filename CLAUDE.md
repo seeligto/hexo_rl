@@ -171,8 +171,8 @@ make test.all         # Rust + Python tests
 make bench.lite       # quick benchmark pass
 make bench.full       # higher-confidence benchmark pass
 make bench.stress     # heavy 5-min stability test
-make corpus.d4        # generate SealBot depth-4 self-play corpus (2,000 games)
-make corpus.d6        # generate SealBot depth-6 self-play corpus (1,000 games)
+make corpus.fast      # generate SealBot fast self-play corpus (0.1s, 2,000 games)
+make corpus.strong    # generate SealBot strong self-play corpus (0.5s, 1,000 games)
 make corpus.all       # generate both d4 and d6 corpora
 make corpus.npz       # export corpus to data/bootstrap_corpus.npz
 make corpus.analysis  # run corpus analysis on human + bot games

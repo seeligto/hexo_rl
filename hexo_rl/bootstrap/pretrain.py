@@ -246,11 +246,11 @@ def load_corpus(
             continue
     log.info("loaded_human_games", count=human_ok)
 
-    # Bot d4
-    d4_ok = 0
-    d4_dir = BOT_GAMES_DIR / "sealbot_d4"
-    if d4_dir.exists():
-        for path in sorted(d4_dir.glob("*.json")):
+    # Bot fast (0.1s think time)
+    fast_ok = 0
+    fast_dir = BOT_GAMES_DIR / "sealbot_fast"
+    if fast_dir.exists():
+        for path in sorted(fast_dir.glob("*.json")):
             try:
                 with open(path) as f:
                     d = json.load(f)
@@ -258,17 +258,17 @@ def load_corpus(
                 winner = int(d["winner"]) if "winner" in d else _game_winner_from_replay(moves)
                 if winner is None or winner == 0:
                     continue
-                _add_game(moves, winner, path.stem, "bot_d4")
-                d4_ok += 1
+                _add_game(moves, winner, path.stem, "bot_fast")
+                fast_ok += 1
             except Exception:
                 continue
-    log.info("loaded_d4_games", count=d4_ok)
+    log.info("loaded_bot_fast_games", count=fast_ok)
 
-    # Bot d6
-    d6_ok = 0
-    d6_dir = BOT_GAMES_DIR / "sealbot_d6"
-    if d6_dir.exists():
-        for path in sorted(d6_dir.glob("*.json")):
+    # Bot strong (0.5s think time)
+    strong_ok = 0
+    strong_dir = BOT_GAMES_DIR / "sealbot_strong"
+    if strong_dir.exists():
+        for path in sorted(strong_dir.glob("*.json")):
             try:
                 with open(path) as f:
                     d = json.load(f)
@@ -276,11 +276,11 @@ def load_corpus(
                 winner = int(d["winner"]) if "winner" in d else _game_winner_from_replay(moves)
                 if winner is None or winner == 0:
                     continue
-                _add_game(moves, winner, path.stem, "bot_d6")
-                d6_ok += 1
+                _add_game(moves, winner, path.stem, "bot_strong")
+                strong_ok += 1
             except Exception:
                 continue
-    log.info("loaded_d6_games", count=d6_ok)
+    log.info("loaded_bot_strong_games", count=strong_ok)
 
     if not all_s:
         return (

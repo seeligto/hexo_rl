@@ -7,7 +7,7 @@ Characterises the game corpus along five dimensions:
   d. Opening diversity (unique hashes at move 5, 10, 20)
   e. Cluster count distribution (sampled)
 
-Supports --stratify-by-source to break down by human / bot_d4 / bot_d6.
+Supports --stratify-by-source to break down by human / bot_fast / bot_strong.
 Supports --compute-quality-scores to write per-game quality scores.
 
 Usage:
@@ -52,10 +52,10 @@ CLUSTER_SAMPLE_SIZE = 500  # per source when stratified
 
 # Source labels
 SOURCE_HUMAN = "human"
-SOURCE_BOT_D4 = "bot_d4"
-SOURCE_BOT_D6 = "bot_d6"
-ALL_SOURCES = [SOURCE_HUMAN, SOURCE_BOT_D4, SOURCE_BOT_D6]
-SOURCE_LABELS = {"human": "Human", "bot_d4": "Bot d4", "bot_d6": "Bot d6"}
+SOURCE_BOT_FAST = "bot_fast"
+SOURCE_BOT_STRONG = "bot_strong"
+ALL_SOURCES = [SOURCE_HUMAN, SOURCE_BOT_FAST, SOURCE_BOT_STRONG]
+SOURCE_LABELS = {"human": "Human", "bot_fast": "Bot fast", "bot_strong": "Bot strong"}
 
 
 def load_all_games(include_bot_games: bool = False) -> List[GameRecord]:
@@ -79,11 +79,11 @@ def load_all_games(include_bot_games: bool = False) -> List[GameRecord]:
 
     human_total = len(records)
 
-    # Bot games — distinguish d4 and d6 by directory
+    # Bot games — distinguish fast and strong by directory
     if include_bot_games:
         bot_dir = Path("data/corpus/bot_games")
-        for depth_dir in ["sealbot_d4", "sealbot_d6"]:
-            source_label = "bot_d4" if "d4" in depth_dir else "bot_d6"
+        for depth_dir in ["sealbot_fast", "sealbot_strong"]:
+            source_label = "bot_fast" if "fast" in depth_dir else "bot_strong"
             sub_dir = bot_dir / depth_dir
             if not sub_dir.exists():
                 continue
@@ -566,7 +566,7 @@ def compute_quality_scores(records: List[GameRecord],
     """
     # Load weights from config or use defaults
     weights = {"w_elo": 0.4, "w_len": 0.3, "w_ent": 0.3}
-    bot_elo_components = {"bot_d4": 0.6, "bot_d6": 0.75}
+    bot_elo_components = {"bot_fast": 0.6, "bot_strong": 0.75}
 
     if config_path.exists():
         from hexo_rl.utils.config import load_config
@@ -576,8 +576,8 @@ def compute_quality_scores(records: List[GameRecord],
         weights["w_len"] = qw.get("w_len", weights["w_len"])
         weights["w_ent"] = qw.get("w_ent", weights["w_ent"])
         bot_elo = qw.get("bot_elo_components", {})
-        bot_elo_components["bot_d4"] = bot_elo.get("bot_d4", 0.6)
-        bot_elo_components["bot_d6"] = bot_elo.get("bot_d6", 0.75)
+        bot_elo_components["bot_fast"] = bot_elo.get("bot_fast", 0.6)
+        bot_elo_components["bot_strong"] = bot_elo.get("bot_strong", 0.75)
 
     scores: Dict[str, dict] = {}
     for r in records:
@@ -798,7 +798,7 @@ def main() -> None:
     parser.add_argument("--include-bot-games", action="store_true",
                         help="Include bot self-play games from data/corpus/bot_games/")
     parser.add_argument("--stratify-by-source", action="store_true",
-                        help="Produce separate statistics for human / bot_d4 / bot_d6")
+                        help="Produce separate statistics for human / bot_fast / bot_strong")
     parser.add_argument("--compute-quality-scores", action="store_true",
                         help="Compute per-game quality scores and write sidecar file")
     args = parser.parse_args()
