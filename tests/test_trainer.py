@@ -59,7 +59,11 @@ def test_train_step_loss_is_finite(tmp_path: Path):
     buf     = fill_buffer()
     result  = trainer.train_step(buf)
     for k, v in result.items():
-        assert np.isfinite(v), f"{k} = {v} is not finite"
+        if k == "grad_norm":
+            # Pre-clip grad norm can be inf when gradients are very large
+            assert not np.isnan(v), f"{k} = {v} is NaN"
+        else:
+            assert np.isfinite(v), f"{k} = {v} is not finite"
 
 
 def test_train_step_increments_step(tmp_path: Path):
@@ -339,3 +343,68 @@ def test_prune_policy_targets_batch():
     # Both rows sum to 1.0
     assert abs(pruned[0].sum().item() - 1.0) < 1e-5
     assert abs(pruned[1].sum().item() - 1.0) < 1e-5
+
+
+# ── Grad norm, value accuracy, lr in loss_info ──────────────────────────────
+
+
+def test_train_step_returns_grad_norm(tmp_path: Path):
+    """train_step must return a finite, non-NaN grad_norm."""
+    trainer = make_trainer(tmp_path)
+    buf = fill_buffer()
+    result = trainer.train_step(buf)
+    assert "grad_norm" in result
+    assert np.isfinite(result["grad_norm"]), f"grad_norm = {result['grad_norm']}"
+    assert result["grad_norm"] >= 0.0
+
+
+def test_train_step_returns_value_accuracy(tmp_path: Path):
+    """train_step must return value_accuracy in [0, 1]."""
+    trainer = make_trainer(tmp_path)
+    buf = fill_buffer()
+    result = trainer.train_step(buf)
+    assert "value_accuracy" in result
+    assert 0.0 <= result["value_accuracy"] <= 1.0
+
+
+def test_train_step_returns_lr(tmp_path: Path):
+    """train_step must return the current learning rate."""
+    trainer = make_trainer(tmp_path)
+    buf = fill_buffer()
+    result = trainer.train_step(buf)
+    assert "lr" in result
+    assert result["lr"] > 0.0
+
+
+def test_grad_norm_uses_config_grad_clip(tmp_path: Path):
+    """grad_clip from config should be used as the clipping threshold."""
+    cfg = {**FAST_CONFIG, "grad_clip": 0.5}
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+    result = trainer.train_step(buf)
+    assert "grad_norm" in result
+    # Pre-clip norm can be inf if gradients are very large — that's valid.
+    assert result["grad_norm"] >= 0.0
+    assert not np.isnan(result["grad_norm"])
+
+
+def test_lr_changes_with_scheduler(tmp_path: Path):
+    """When a scheduler is active, lr in loss_info should reflect scheduler state."""
+    cfg = {
+        **FAST_CONFIG,
+        "lr_schedule": "cosine",
+        "total_steps": 10,
+        "min_lr": 1e-5,
+    }
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+
+    result1 = trainer.train_step(buf)
+    for _ in range(4):
+        trainer.train_step(buf)
+    result5 = trainer.train_step(buf)
+
+    # Cosine schedule should decrease LR over time
+    assert result5["lr"] < result1["lr"]

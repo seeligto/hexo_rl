@@ -79,15 +79,19 @@ def fp16_backward_step(
     model: nn.Module,
     fp16: bool,
     max_grad_norm: float = 1.0,
-) -> None:
-    """Backward pass with optional FP16 gradient scaling and clipping."""
+) -> float:
+    """Backward pass with optional FP16 gradient scaling and clipping.
+
+    Returns the pre-clip gradient norm (the diagnostic signal).
+    """
     if fp16:
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm).item()
         scaler.step(optimizer)
         scaler.update()
     else:
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm).item()
         optimizer.step()
+    return grad_norm
