@@ -682,3 +682,79 @@ win rate as low as ~48% (binomial CI). 100 games gives meaningful signal:
 95% CI width is ±~10% at p=0.5.
 
 User-specified change.
+
+---
+
+### 21. Scraper upgrade with white-box API knowledge (2026-04-03)
+**Files:** `hexo_rl/bootstrap/scraper.py`, `scripts/update_manifest.py`,
+`hexo_rl/bootstrap/corpus_analysis.py`, `scripts/scrape_daily.sh`,
+`configs/corpus.yaml`, `Makefile`, `tests/test_scraper.py`,
+`docs/04_bootstrap_strategy.md`, `CLAUDE.md`
+
+**Context:** Analysis of the WolverinDEV/infhex-tic-tac-toe repository
+confirmed it is the source code for hexo.did.science — the site we already
+scrape. This is not a new data source; the value is white-box API knowledge
+that upgrades our existing scraper from black-box to informed operation.
+
+**What was changed (scraper upgrade, not new integration):**
+
+1. **Scraper enhancements:**
+   - `--min-elo` flag: post-fetch filter skipping games where either player's
+     Elo is below threshold. API does not support server-side Elo filtering.
+   - `--top-players-only` + `--top-n`: calls `/api/leaderboard` to get top-N
+     player profileIds, then filters to games with at least one top player.
+   - `--req-delay` flag: enforces 1 req/s minimum between requests (courtesy
+     to the community-run single-instance server).
+   - Per-game Elo passthrough: `player_black_elo` and `player_white_elo`
+     fields stored in saved game JSON (from `DatabaseGamePlayer.elo`).
+   - Fixed `baseTimestamp` param name (was incorrectly `before`).
+   - Updated `UNAUTHENTICATED_GAME_LIMIT` from 480 to 500 (confirmed from
+     source: `apiQueryService.ts:68-70`).
+   - All new flags configurable via `configs/corpus.yaml` `scraper:` section.
+
+2. **Manifest Elo band breakdown:**
+   Manifest now includes `elo_bands` section bucketing human games by
+   `max(player_black_elo, player_white_elo)`:
+   `sub_1000`, `1000_1200`, `1200_1400`, `1400_plus`, `unrated`.
+   Existing games without Elo fields classified as `unrated` (no backfill).
+
+3. **Corpus analysis Elo stratification:**
+   `--include-human-games` flag adds per-band breakdown: game count,
+   median compound move length, top 5 openings (first 3 compound moves).
+
+4. **scrape_daily.sh dual-pass:**
+   Standard incremental pull + `--top-players-only --top-n 20` pass.
+   Log entries distinguish `[standard]` vs `[top-player]` passes.
+
+5. **Makefile targets:** `corpus.human.top`, `corpus.human.rated`.
+
+6. **22 new tests** covering Elo filter, top-player mode, Elo passthrough,
+   and manifest band bucketing.
+
+**White-box API findings that drove each decision:**
+
+- Elo fields already in `DatabaseGamePlayer` → passthrough, not computation.
+- `/api/leaderboard` exists and is unauthenticated → top-player mode.
+- No rate-limit middleware in source → but single-instance server, so 1 req/s
+  politeness policy.
+- `baseTimestamp` is the correct param name (not `before`) → fixed.
+- 500 is the exact public cap (page * pageSize >= 500 → 401) → updated limit.
+- Coordinates are direct axial (q=x, r=y) → no translation needed (confirmed).
+
+**Elo band manifest schema:**
+```json
+{
+  "elo_bands": {
+    "sub_1000": 42,
+    "1000_1200": 156,
+    "1200_1400": 89,
+    "1400_plus": 23,
+    "unrated": 589
+  }
+}
+```
+
+**Open questions:**
+- Whether to backfill Elo on existing pre-upgrade game files. Currently
+  classified as `unrated`. Would require re-fetching from API (games within
+  the 500-game window) or accepting partial coverage. Deferred.

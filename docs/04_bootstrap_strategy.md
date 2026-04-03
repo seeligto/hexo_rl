@@ -140,6 +140,49 @@ def scrape_corpus(output_path: str = "data/human_games.npz", **kwargs):
 
 **Rate limiting:** The site is community-run. Use `delay_sec=0.5` minimum between requests. Check for `robots.txt` before scraping. If the site adds rate limiting or asks to stop, respect it.
 
+### API white-box notes (from source review)
+
+The source code for hexo.did.science is WolverinDEV/infhex-tic-tac-toe (GPL-3.0).
+Analysing the source confirmed the following (2026-04-03):
+
+**Confirmed endpoint paths:**
+
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| GET | `/api/finished-games?page=N&pageSize=N&baseTimestamp=N` | No | Summaries (no moves). `baseTimestamp` pins pagination snapshot. |
+| GET | `/api/finished-games/:id` | No | Full game record with moves. |
+| GET | `/api/leaderboard` | No | Players with Elo, games played/won. |
+| GET | `/api/profiles/:profileId` | No | Public profile. |
+| GET | `/api/profiles/:profileId/statistics` | No | Elo history, game stats. |
+| GET | `/api/profiles/:profileId/games` | No | First 10 games for profile. |
+
+**500-game public cap (hardcoded):** `apiQueryService.ts:68-70` —
+`page * pageSize >= 500` returns 401 for non-admin. Our VPS cron job
+scrapes every few hours to stay ahead of the production rate. As of
+2026-04-01: 899 human games archived.
+
+**Elo fields in response schema:** Each `DatabaseGamePlayer` includes
+`elo: number | null` (player's Elo at game time) and
+`eloChange: number | null` (delta applied after). Both are null for
+unrated games. The `gameOptions.rated` boolean distinguishes rated games.
+Elo system: default 1000, K=30 (first 10 games), K=15 thereafter, min 100.
+
+**Leaderboard endpoint:** Returns `{ profileId, displayName, elo,
+gamesPlayed, gamesWon }[]`. Used by our `--top-players-only` scraper mode
+to identify high-quality games.
+
+**Coordinate system:** Direct axial `(x, y)` where `q = x`, `r = y`.
+No translation needed — 1:1 match with our engine's `(q, r)` system.
+First move forced to `(0, 0)`. Placement radius of 8 hexes from any
+existing stone (not in our rules but doesn't invalidate training data).
+
+**Rate limiting policy:** No rate-limit middleware in the source code.
+Server logs all requests with User-Agent and timing. We enforce 1 req/s
+minimum as a courtesy to this community-run single-instance server.
+
+**Schema version:** Currently version 3 (`DatabaseGame.version`).
+Migration infrastructure exists — monitor the repo for schema changes.
+
 ---
 
 ## Minimax bot — use SealBot, don't build from scratch
