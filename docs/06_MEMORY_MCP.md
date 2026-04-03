@@ -14,7 +14,7 @@
 - **Checklist Complete**:
   - [x] Rust core dynamic stone clustering (distance <= 8).
   - [x] Multi-window tensor generation (K tensors per state).
-  - [x] ResNet-10 single-trunk batching (K clusters evaluated as one batch).
+  - [x] ResNet-12 single-trunk batching (K clusters evaluated as one batch).
   - [x] Value min-pooling for pessimistic threat detection across colonies.
   - [x] Global Policy Mapping for infinite board coordination.
   - [x] SealBotBot bounds constraint removed.
