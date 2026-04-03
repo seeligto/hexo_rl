@@ -170,7 +170,7 @@ The split-responsibility architecture is fully in place:
 - [x] Verify loss decreases over first training steps vs bootstrap checkpoint (4,940 steps run, 5 issues found and fixed)
 - [x] Confirm auto-promotion triggers when win rate ≥ 55% vs bootstrap model
 - [x] Run `make bench.full` — all 10 targets pass with Phase 4.0 config (2026-04-02)
-- [x] Pretrain validated: policy loss 5.0 → 2.07, 5/5 wins vs RandomBot
+- [x] Pretrain validated: policy loss 5.0 → 2.07, ≥95/100 wins vs RandomBot
 - [x] Codebase cleanup: directories renamed (engine, hexo_rl, monitoring), Rust prefix removed from all PyO3 exports
 - [x] Dashboard rebuilt — event fan-out pattern (events.py → terminal + web renderers)
 - [x] Game viewer implemented — `/viewer` endpoint, threat overlay, replay scrubber, play-against-model

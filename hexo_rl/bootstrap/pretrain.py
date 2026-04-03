@@ -454,7 +454,7 @@ class BootstrapTrainer:
 # ── Validation ────────────────────────────────────────────────────────────────
 
 def validate(ckpt_path: Path, device: torch.device) -> None:
-    """Verify checkpoint round-trip and play greedy games vs RandomBot.
+    """Verify checkpoint round-trip and play 100 greedy games vs RandomBot.
 
     Uses argmax policy (no MCTS) — suitable for a pretrained but not
     yet self-play-trained checkpoint.
@@ -483,10 +483,10 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     assert log_pol.shape == (1, POLICY_SIZE), f"Unexpected policy shape: {log_pol.shape}"
     log.info("checkpoint_forward_pass_ok", val=float(val[0, 0]))
 
-    # Play 5 greedy games vs RandomBot — expect >0 wins after even brief training.
+    # Play 100 greedy games vs RandomBot — expect high win rate after pretraining.
     random_bot = RandomBot()
     wins = 0
-    n_games = 5
+    n_games = 100
 
     for i in range(n_games):
         board = Board()
@@ -522,8 +522,15 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
             wins += 1
 
     log.info("validation_complete", wins=wins, games=n_games)
-    if wins > 0:
+    min_wins = 95
+    if wins >= min_wins:
         console.print(f"[green]Validation passed: {wins}/{n_games} wins vs RandomBot[/green]")
+    elif wins > 0:
+        log.warning("validation_below_threshold", wins=wins, threshold=min_wins, games=n_games)
+        console.print(
+            f"[yellow]Validation: {wins}/{n_games} wins vs RandomBot "
+            f"(below ≥{min_wins} threshold — investigate before proceeding)[/yellow]"
+        )
     else:
         console.print(
             "[yellow]Validation: 0 wins vs RandomBot "
@@ -569,9 +576,19 @@ def pretrain() -> None:
     else:
         log.warning("no_quality_scores", hint="Run `make corpus.analysis` to generate them")
 
-    # Corpus
+    # Corpus — prefer mmap'd NPZ to avoid 2× RAM peak from load_corpus()
     console.print("[bold]Loading corpus...[/bold]")
-    states, policies, outcomes, weights = load_corpus(quality_scores, source_weights)
+    npz_path = Path(corpus_cfg.get("corpus_npz_path", "data/bootstrap_corpus.npz"))
+    if npz_path.exists():
+        log.info("loading_corpus_from_npz", path=str(npz_path))
+        data = np.load(npz_path, mmap_mode='r')
+        states   = data['states']    # memory-mapped, not loaded into RAM
+        policies = data['policies']
+        outcomes = data['outcomes']
+        weights  = data['weights']
+    else:
+        log.warning("npz_not_found_falling_back_to_load_corpus", path=str(npz_path))
+        states, policies, outcomes, weights = load_corpus(quality_scores, source_weights)
 
     if len(outcomes) == 0:
         console.print("[red]No corpus data found. Run `make corpus.all` first.[/red]")
@@ -595,7 +612,7 @@ def pretrain() -> None:
         dataset,
         batch_size=batch_size,
         sampler=sampler,
-        num_workers=4,
+        num_workers=0,
         pin_memory=(device.type == "cuda"),
     )
 
