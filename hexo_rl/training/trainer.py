@@ -229,7 +229,10 @@ class Trainer:
 
         # Step scheduler AFTER optimizer.step() (inside fp16_backward_step)
         # and after self.step increment so counters stay in sync.
-        if self.scheduler is not None:
+        # Guard: when GradScaler detects inf/nan grads it skips optimizer.step(),
+        # so scheduler must also skip to keep the two in sync and avoid the
+        # "lr_scheduler.step() before optimizer.step()" warning.
+        if self.scheduler is not None and math.isfinite(grad_norm):
             self.scheduler.step()
 
         with torch.no_grad():
