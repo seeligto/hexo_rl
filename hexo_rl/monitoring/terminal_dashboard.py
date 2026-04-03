@@ -101,8 +101,13 @@ class TerminalDashboard:
         }
 
     def start(self) -> None:
-        """Start the rich Live context."""
-        self._live = Live(self._build_panel(), refresh_per_second=4)
+        """Start the rich Live context.
+
+        Auto-refresh is set to a near-zero rate to prevent blank
+        intermediate frames when auto-refresh races with explicit updates.
+        Frames are pushed explicitly via update(refresh=True) in on_event().
+        """
+        self._live = Live(self._build_panel(), refresh_per_second=0.1)
         self._live.start()
 
     def stop(self) -> None:
@@ -232,7 +237,7 @@ class TerminalDashboard:
 
         try:
             panel = self._build_panel()
-            self._live.update(panel)
+            self._live.update(panel, refresh=True)
         except Exception:
             pass  # Never let rendering crash the training loop
 

@@ -280,9 +280,12 @@ def main() -> None:
         log.info("pretrained_buffer_loaded", path=pretrained_path,
                  size=pretrained_buffer.size)
     elif pretrained_path:
-        log.warning("pretrained_buffer_missing", path=pretrained_path)
+        log.error("pretrained_buffer_missing", path=pretrained_path,
+                  hint="Run 'make corpus.npz' to generate the pretrained corpus")
 
     mixing_decay_steps = float(mixing_cfg.get("decay_steps", 1_000_000))
+    if mixing_decay_steps <= 0:
+        raise ValueError(f"mixing.decay_steps must be > 0, got {mixing_decay_steps}")
     mixing_min_w = float(mixing_cfg.get("min_pretrained_weight", 0.1))
     mixing_initial_w = float(mixing_cfg.get("initial_pretrained_weight", 0.8))
 
@@ -382,6 +385,8 @@ def main() -> None:
     training_steps_per_game = float(train_cfg.get("training_steps_per_game", 1.0))
     max_train_burst = int(train_cfg.get("max_train_burst", 8))
     train_step    = trainer.step
+    # --iterations is relative to the starting step
+    stop_step = (trainer.step + args.iterations) if args.iterations else None
     games_played  = 0
     t_start       = time.time()
     initial_policy_loss: float | None = None
@@ -435,7 +440,7 @@ def main() -> None:
         last_iter_games = 0
 
         while _running[0]:
-            if args.iterations and train_step >= args.iterations:
+            if stop_step is not None and train_step >= stop_step:
                 log.info("iteration_limit_reached", iterations=args.iterations)
                 break
 
@@ -473,7 +478,7 @@ def main() -> None:
             last_train_game_count = games_played
 
             for _ in range(steps_budget):
-                if args.iterations and train_step >= args.iterations:
+                if stop_step is not None and train_step >= stop_step:
                     break
 
                 # ── Buffer growth schedule ──

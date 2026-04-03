@@ -13,11 +13,17 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import logging
+
 import structlog
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 
 log = structlog.get_logger()
+
+# Suppress Flask/Werkzeug startup banners — they corrupt Rich Live's
+# in-place terminal rendering by flushing stdout mid-escape-sequence.
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 
 def _find_latest_checkpoint(config: dict) -> str | None:
@@ -171,12 +177,17 @@ class WebDashboard:
         app = self._app
 
         def _run():
+            # Suppress Flask/Werkzeug startup banner — it writes to stdout
+            # via click.echo and corrupts Rich Live's in-place rendering.
+            import flask.cli
+            flask.cli.show_server_banner = lambda *a, **kw: None
             socketio.run(
                 app,
                 host="127.0.0.1",
                 port=port,
                 allow_unsafe_werkzeug=True,
                 log_output=False,
+                use_reloader=False,
             )
 
         self._thread = threading.Thread(target=_run, daemon=True)
