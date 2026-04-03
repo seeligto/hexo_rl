@@ -79,6 +79,9 @@ class GPUMonitor(threading.Thread):
     def run(self) -> None:
         if self._handle is None:
             return  # no GPU or nvml init failed — silently exit
+
+        from hexo_rl.monitoring.events import emit_event
+
         pynvml = _get_pynvml()
         while not self._stop.wait(self.interval):
             try:
@@ -100,6 +103,13 @@ class GPUMonitor(threading.Thread):
                     vram_total_gb = self.vram_total_gb,
                     temp_c        = self.temp_c,
                 )
+
+                emit_event({
+                    "event":        "system_stats",
+                    "gpu_util_pct": self.gpu_util_pct,
+                    "vram_used_gb": self.vram_used_gb,
+                    "vram_total_gb": self.vram_total_gb,
+                })
             except Exception as exc:
                 log.warning("gpu_monitor_poll_error", error=str(exc))
 
