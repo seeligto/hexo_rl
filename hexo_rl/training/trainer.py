@@ -225,10 +225,12 @@ class Trainer:
             max_grad_norm=max_grad_norm,
         )
 
+        self.step += 1
+
+        # Step scheduler AFTER optimizer.step() (inside fp16_backward_step)
+        # and after self.step increment so counters stay in sync.
         if self.scheduler is not None:
             self.scheduler.step()
-
-        self.step += 1
 
         with torch.no_grad():
             # Policy entropy: H = -Σ π log π  (nats). Computed outside autocast
