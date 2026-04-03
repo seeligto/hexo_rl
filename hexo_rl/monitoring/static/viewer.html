@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HeXO Game Viewer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* ── Left panel: board ────────────────────────────────────── */
+#board-panel {
+    flex: 0 0 70%;
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+}
+#board-canvas {
+    flex: 1;
+    background: #16213e;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+/* ── Bottom bar ───────────────────────────────────────────── */
+#controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    flex-shrink: 0;
+}
+#controls button {
+    background: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #1a4080;
+    border-radius: 4px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 14px;
+}
+#controls button:hover { background: #1a4080; }
+#controls button.active { background: #e94560; border-color: #e94560; }
+#scrubber {
+    flex: 1;
+    accent-color: #e94560;
+}
+#move-label { font-size: 13px; color: #aaa; min-width: 80px; }
+
+/* Overlay toggles */
+#overlay-toggles {
+    display: flex;
+    gap: 6px;
+    margin-left: 12px;
+}
+#overlay-toggles label {
+    font-size: 12px;
+    color: #aaa;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+/* ── Value sparkline ──────────────────────────────────────── */
+#sparkline-container {
+    height: 120px;
+    flex-shrink: 0;
+    position: relative;
+}
+#sparkline-canvas {
+    width: 100%;
+    height: 100%;
+    background: #16213e;
+    border-radius: 6px;
+    cursor: pointer;
+}
+#sparkline-label {
+    position: absolute;
+    top: 4px;
+    left: 8px;
+    font-size: 11px;
+    color: #666;
+}
+
+/* ── Right panel: sidebar ─────────────────────────────────── */
+#sidebar {
+    flex: 0 0 30%;
+    display: flex;
+    flex-direction: column;
+    padding: 12px 12px 12px 0;
+    gap: 10px;
+    overflow: hidden;
+}
+#nav-link { font-size: 13px; color: #5588cc; text-decoration: none; }
+#nav-link:hover { text-decoration: underline; }
+
+/* Mode toggle */
+#mode-toggle {
+    display: flex;
+    gap: 0;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid #1a4080;
+}
+#mode-toggle button {
+    flex: 1;
+    background: #0f3460;
+    color: #aaa;
+    border: none;
+    padding: 6px 0;
+    cursor: pointer;
+    font-size: 13px;
+}
+#mode-toggle button.active { background: #e94560; color: #fff; }
+
+/* Legend */
+#legend {
+    font-size: 12px;
+    line-height: 1.8;
+    padding: 8px;
+    background: #16213e;
+    border-radius: 6px;
+}
+.legend-row { display: flex; align-items: center; gap: 6px; }
+.legend-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+/* Position stats */
+#pos-stats {
+    font-size: 12px;
+    padding: 8px;
+    background: #16213e;
+    border-radius: 6px;
+    line-height: 1.6;
+}
+
+/* Game list */
+#game-list-container {
+    flex: 1;
+    overflow-y: auto;
+    background: #16213e;
+    border-radius: 6px;
+}
+#game-list-container h3 {
+    padding: 8px;
+    font-size: 13px;
+    color: #888;
+    border-bottom: 1px solid #1a4080;
+    position: sticky;
+    top: 0;
+    background: #16213e;
+}
+.game-item {
+    padding: 6px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #0d1b30;
+    display: flex;
+    justify-content: space-between;
+}
+.game-item:hover { background: #1a3050; }
+.game-item.active { background: #1a4080; }
+.game-winner-0 { color: #378ADD; }
+.game-winner-1 { color: #D85A30; }
+.game-winner-draw { color: #888; }
+
+/* Play mode status */
+#play-status {
+    font-size: 13px;
+    padding: 8px;
+    background: #16213e;
+    border-radius: 6px;
+    min-height: 40px;
+    display: none;
+}
+</style>
+</head>
+<body>
+
+<div id="board-panel">
+    <canvas id="board-canvas"></canvas>
+    <div id="controls">
+        <button id="btn-start" title="First move">&#x23EE;</button>
+        <button id="btn-prev" title="Previous">&#x25C0;</button>
+        <button id="btn-play" title="Play/Pause">&#x25B6;</button>
+        <button id="btn-next" title="Next">&#x25B6;</button>
+        <button id="btn-end" title="Last move">&#x23ED;</button>
+        <input type="range" id="scrubber" min="0" max="0" value="0">
+        <span id="move-label">Move 0/0</span>
+        <div id="overlay-toggles">
+            <label><input type="checkbox" id="toggle-threats" checked> threats</label>
+            <label id="heat-toggle-label"><input type="checkbox" id="toggle-heat"> mcts heat</label>
+        </div>
+    </div>
+    <div id="sparkline-container">
+        <canvas id="sparkline-canvas"></canvas>
+        <span id="sparkline-label">value</span>
+    </div>
+</div>
+
+<div id="sidebar">
+    <a id="nav-link" href="/">&larr; dashboard</a>
+
+    <div id="mode-toggle">
+        <button id="mode-replay" class="active">Replay</button>
+        <button id="mode-play">Play</button>
+    </div>
+
+    <div id="legend">
+        <div class="legend-row"><span class="legend-dot" style="background:#378ADD"></span> Player 0 (Blue)</div>
+        <div class="legend-row"><span class="legend-dot" style="background:#D85A30"></span> Player 1 (Coral)</div>
+        <div class="legend-row"><span class="legend-dot" style="background:#639922;border:2px solid #639922"></span> Last placed</div>
+        <div class="legend-row"><span class="legend-dot" style="border:2px dashed #E24B4A;background:transparent"></span> Forced/Critical threat</div>
+        <div class="legend-row"><span class="legend-dot" style="border:2px dashed #EF9F27;background:transparent"></span> Warning threat</div>
+    </div>
+
+    <div id="pos-stats">
+        <div>Player to move: <span id="stat-player">—</span></div>
+        <div>Value estimate: <span id="stat-value">—</span></div>
+        <div>Threats: <span id="stat-threats">—</span></div>
+    </div>
+
+    <div id="play-status"></div>
+
+    <div id="game-list-container">
+        <h3>Recent Games</h3>
+        <div id="game-list"></div>
+    </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+
+let gameData = null;       // enriched game record from /viewer/game/<id>
+let moveIdx = 0;           // current position index (-1 = before first move)
+let mode = 'replay';       // 'replay' or 'play'
+let playInterval = null;
+let showThreats = true;
+let showHeat = false;
+
+// Play mode state
+let playMoves = [];        // moves played so far in play mode
+let humanPending = null;   // first click coordinate (waiting for second)
+let modelThinking = false;
+
+// ── Hex geometry ─────────────────────────────────────────────────────────────
+
+const HEX_SIZE = 22;
+const P0_COLOR = '#378ADD';
+const P1_COLOR = '#D85A30';
+const LAST_RING = '#639922';
+
+function hexToPixel(q, r, size, offX, offY) {
+    return [
+        offX + size * Math.sqrt(3) * (q + r / 2),
+        offY + size * 1.5 * r
+    ];
+}
+
+function pixelToHex(px, py, size, offX, offY) {
+    const x = px - offX;
+    const y = py - offY;
+    const q = (x * Math.sqrt(3)/3 - y / 3) / size;
+    const r = (y * 2/3) / size;
+    // Round to nearest hex
+    let rq = Math.round(q), rr = Math.round(r);
+    const rs = Math.round(-q - r);
+    const dq = Math.abs(rq - q), dr = Math.abs(rr - r), ds = Math.abs(rs - (-q - r));
+    if (dq > dr && dq > ds) rq = -rr - rs;
+    else if (dr > ds) rr = -rq - rs;
+    return [rq, rr];
+}
+
+function drawHex(ctx, cx, cy, size) {
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+        const angle = Math.PI / 180 * (60 * i - 30); // pointy-top
+        const hx = cx + size * Math.cos(angle);
+        const hy = cy + size * Math.sin(angle);
+        if (i === 0) ctx.moveTo(hx, hy);
+        else ctx.lineTo(hx, hy);
+    }
+    ctx.closePath();
+}
+
+// ── Board rendering ──────────────────────────────────────────────────────────
+
+function renderBoard() {
+    const canvas = document.getElementById('board-canvas');
+    const ctx = canvas.getContext('2d');
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const sparkH = document.getElementById('sparkline-container').offsetHeight;
+    const controlsH = document.getElementById('controls').offsetHeight;
+    canvas.width = rect.width - 24;
+    canvas.height = rect.height - sparkH - controlsH - 48;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (!gameData) {
+        ctx.fillStyle = '#444';
+        ctx.font = '16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Select a game from the list', canvas.width/2, canvas.height/2);
+        return;
+    }
+
+    // Gather all stones up to current moveIdx
+    const stones = [];
+    const moves = gameData.moves_list || [];
+    const limit = mode === 'play' ? playMoves.length : (moveIdx + 1);
+    const moveList = mode === 'play' ? playMoves : moves;
+
+    // Turn tracking: P1 opens with 1, then alternating 2-move turns
+    let currentPlayer = 0; // P0 = 0 (Player One)
+    let movesRemaining = 1; // First turn is 1 move
+
+    for (let i = 0; i < limit && i < moveList.length; i++) {
+        const [q, r] = parseAxial(moveList[i]);
+        stones.push({ q, r, player: currentPlayer, idx: i });
+        movesRemaining--;
+        if (movesRemaining === 0) {
+            currentPlayer = 1 - currentPlayer;
+            movesRemaining = 2;
+        }
+    }
+
+    // Compute viewport: center on centroid, auto-scale
+    let minQ = 0, maxQ = 0, minR = 0, maxR = 0;
+    if (stones.length > 0) {
+        minQ = Math.min(...stones.map(s => s.q));
+        maxQ = Math.max(...stones.map(s => s.q));
+        minR = Math.min(...stones.map(s => s.r));
+        maxR = Math.max(...stones.map(s => s.r));
+    }
+    // Add margin for threats and grid
+    minQ -= 3; maxQ += 3;
+    minR -= 3; maxR += 3;
+
+    // Compute pixel bounds to determine scale
+    const testSize = 20;
+    let pxMinX = Infinity, pxMaxX = -Infinity, pxMinY = Infinity, pxMaxY = -Infinity;
+    for (let q = minQ; q <= maxQ; q++) {
+        for (let r = minR; r <= maxR; r++) {
+            const [px, py] = hexToPixel(q, r, testSize, 0, 0);
+            pxMinX = Math.min(pxMinX, px); pxMaxX = Math.max(pxMaxX, px);
+            pxMinY = Math.min(pxMinY, py); pxMaxY = Math.max(pxMaxY, py);
+        }
+    }
+
+    const pw = pxMaxX - pxMinX + testSize * 4;
+    const ph = pxMaxY - pxMinY + testSize * 4;
+    const scaleX = canvas.width * 0.9 / pw;
+    const scaleY = canvas.height * 0.9 / ph;
+    const scale = Math.min(scaleX, scaleY, 1.5);
+    const size = testSize * scale;
+
+    const centerQ = (minQ + maxQ) / 2;
+    const centerR = (minR + maxR) / 2;
+    const [ccx, ccy] = hexToPixel(centerQ, centerR, size, 0, 0);
+    const offX = canvas.width / 2 - ccx;
+    const offY = canvas.height / 2 - ccy;
+
+    // Store for click detection
+    canvas._hexSize = size;
+    canvas._offX = offX;
+    canvas._offY = offY;
+
+    // Draw empty grid hexes
+    const stoneSet = new Set(stones.map(s => `${s.q},${s.r}`));
+    ctx.strokeStyle = '#1a3050';
+    ctx.lineWidth = 0.5;
+    for (let q = minQ; q <= maxQ; q++) {
+        for (let r = minR; r <= maxR; r++) {
+            if (stoneSet.has(`${q},${r}`)) continue;
+            const [cx, cy] = hexToPixel(q, r, size, offX, offY);
+            drawHex(ctx, cx, cy, size - 1);
+            ctx.stroke();
+        }
+    }
+
+    // Draw MCTS heat overlay
+    if (showHeat && mode === 'replay' && gameData.positions && moveIdx >= 0 && moveIdx < gameData.positions.length) {
+        const pos = gameData.positions[moveIdx];
+        if (pos && pos.top_visits) {
+            const maxVisits = Math.max(...pos.top_visits.map(v => v.visits), 1);
+            for (const tv of pos.top_visits) {
+                const [tq, tr] = parseAxial(tv.coord);
+                if (stoneSet.has(`${tq},${tr}`)) continue;
+                const norm = tv.visits / maxVisits;
+                const [cx, cy] = hexToPixel(tq, tr, size, offX, offY);
+                drawHex(ctx, cx, cy, size - 1);
+                ctx.fillStyle = `rgba(55, 138, 221, ${norm * 0.55})`;
+                ctx.fill();
+            }
+        }
+    }
+
+    // Draw threat overlay
+    if (showThreats && mode === 'replay' && gameData.positions && moveIdx >= 0 && moveIdx < gameData.positions.length) {
+        const pos = gameData.positions[moveIdx];
+        if (pos && pos.threats) {
+            for (const t of pos.threats) {
+                // Only draw on empty cells
+                if (stoneSet.has(`${t.q},${t.r}`)) continue;
+                const [cx, cy] = hexToPixel(t.q, t.r, size, offX, offY);
+                const color = t.level >= 4 ? '#E24B4A' : '#EF9F27';
+                ctx.beginPath();
+                ctx.arc(cx, cy, size - 3, 0, Math.PI * 2);
+                ctx.strokeStyle = color;
+                ctx.lineWidth = t.level === 5 ? 3 : 2;
+                ctx.setLineDash(t.level === 5 ? [] : (t.level === 4 ? [] : [4, 3]));
+                ctx.stroke();
+                ctx.setLineDash([]);
+                if (t.level === 5) {
+                    ctx.fillStyle = 'rgba(226, 75, 74, 0.15)';
+                    ctx.fill();
+                }
+            }
+        }
+    }
+
+    // Draw stones
+    const lastTwoIdx = stones.length > 0 ? [stones.length - 1] : [];
+    if (stones.length >= 2) lastTwoIdx.push(stones.length - 2);
+
+    for (const s of stones) {
+        const [cx, cy] = hexToPixel(s.q, s.r, size, offX, offY);
+        drawHex(ctx, cx, cy, size - 2);
+        ctx.fillStyle = s.player === 0 ? P0_COLOR : P1_COLOR;
+        ctx.fill();
+        ctx.strokeStyle = '#0a0a1a';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Last placed ring
+        if (lastTwoIdx.includes(s.idx)) {
+            ctx.beginPath();
+            ctx.arc(cx, cy, size - 4, 0, Math.PI * 2);
+            ctx.strokeStyle = LAST_RING;
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+        }
+    }
+
+    // Draw pending human move in play mode
+    if (mode === 'play' && humanPending) {
+        const [cx, cy] = hexToPixel(humanPending[0], humanPending[1], size, offX, offY);
+        drawHex(ctx, cx, cy, size - 2);
+        // Semi-transparent stone
+        const pColor = getPlayModePlayer();
+        ctx.fillStyle = pColor === 0 ? 'rgba(55,138,221,0.5)' : 'rgba(216,90,48,0.5)';
+        ctx.fill();
+    }
+
+    // Update stats
+    updateStats(stones, currentPlayer, movesRemaining);
+}
+
+function getPlayModePlayer() {
+    // Determine whose turn it is in play mode
+    let player = 0, remaining = 1;
+    for (let i = 0; i < playMoves.length; i++) {
+        remaining--;
+        if (remaining === 0) { player = 1 - player; remaining = 2; }
+    }
+    return player;
+}
+
+function getPlayModeMovesRemaining() {
+    let player = 0, remaining = 1;
+    for (let i = 0; i < playMoves.length; i++) {
+        remaining--;
+        if (remaining === 0) { player = 1 - player; remaining = 2; }
+    }
+    return remaining;
+}
+
+function parseAxial(s) {
+    const m = s.match(/\(?\s*(-?\d+)\s*,\s*(-?\d+)\s*\)?/);
+    return m ? [parseInt(m[1]), parseInt(m[2])] : [0, 0];
+}
+
+function updateStats(stones, currentPlayer, movesRemaining) {
+    document.getElementById('stat-player').textContent =
+        stones.length === 0 ? 'P0 (Blue)' :
+        `P${currentPlayer} (${currentPlayer === 0 ? 'Blue' : 'Coral'})`;
+
+    if (mode === 'replay' && gameData && gameData.positions && moveIdx >= 0 && moveIdx < gameData.positions.length) {
+        const pos = gameData.positions[moveIdx];
+        document.getElementById('stat-value').textContent =
+            pos.value_est != null ? pos.value_est.toFixed(3) : '—';
+        const nThreats = pos.threats ? pos.threats.length : 0;
+        const critical = pos.threats ? pos.threats.filter(t => t.level === 5).length : 0;
+        const forced = pos.threats ? pos.threats.filter(t => t.level === 4).length : 0;
+        document.getElementById('stat-threats').textContent =
+            nThreats === 0 ? 'none' : `${nThreats} (${critical} crit, ${forced} forced)`;
+    } else {
+        document.getElementById('stat-value').textContent = '—';
+        document.getElementById('stat-threats').textContent = '—';
+    }
+}
+
+// ── Value sparkline ──────────────────────────────────────────────────────────
+
+function renderSparkline() {
+    const canvas = document.getElementById('sparkline-canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = canvas.parentElement.offsetWidth;
+    canvas.height = 120;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (!gameData || !gameData.positions) {
+        ctx.fillStyle = '#444';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('no value data', canvas.width / 2, canvas.height / 2);
+        return;
+    }
+
+    const values = gameData.positions.map(p => p.value_est);
+    const hasValues = values.some(v => v != null);
+    if (!hasValues) {
+        ctx.fillStyle = '#444';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('no value data', canvas.width / 2, canvas.height / 2);
+        return;
+    }
+
+    const pad = 10;
+    const w = canvas.width - pad * 2;
+    const h = canvas.height - pad * 2;
+    const mid = pad + h / 2;
+
+    // Center line
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(pad, mid);
+    ctx.lineTo(pad + w, mid);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Value line
+    ctx.strokeStyle = '#e94560';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < values.length; i++) {
+        if (values[i] == null) continue;
+        const x = pad + (i / Math.max(values.length - 1, 1)) * w;
+        const y = mid - values[i] * (h / 2);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Current position marker
+    if (mode === 'replay' && moveIdx >= 0 && moveIdx < values.length) {
+        const x = pad + (moveIdx / Math.max(values.length - 1, 1)) * w;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, pad);
+        ctx.lineTo(x, pad + h);
+        ctx.stroke();
+    }
+
+    // Labels
+    ctx.fillStyle = '#666';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('P0', 2, pad + 4);
+    ctx.fillText('P1', 2, pad + h);
+}
+
+// ── Game list ────────────────────────────────────────────────────────────────
+
+function loadGameList() {
+    fetch('/viewer/recent?n=20')
+        .then(r => r.json())
+        .then(games => {
+            const list = document.getElementById('game-list');
+            list.innerHTML = '';
+            if (games.length === 0) {
+                list.innerHTML = '<div style="padding:12px;color:#666;font-size:12px">No games yet. Start training to see games here.</div>';
+                return;
+            }
+            for (const g of games) {
+                const div = document.createElement('div');
+                div.className = 'game-item';
+                const winClass = g.winner === 0 ? 'game-winner-0' : g.winner === 1 ? 'game-winner-1' : 'game-winner-draw';
+                const winText = g.winner === 0 ? 'P0 wins' : g.winner === 1 ? 'P1 wins' : 'draw';
+                const ago = timeAgo(g.ts);
+                div.innerHTML = `
+                    <span>${g.game_id.slice(0, 8)}... <span class="${winClass}">${winText}</span> (${g.moves} moves)</span>
+                    <span style="color:#666">${ago}</span>
+                `;
+                div.onclick = () => loadGame(g.game_id);
+                list.appendChild(div);
+            }
+        })
+        .catch(() => {});
+}
+
+function timeAgo(ts) {
+    const diff = Date.now() / 1000 - ts;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+}
+
+function loadGame(gameId) {
+    fetch(`/viewer/game/${gameId}`)
+        .then(r => {
+            if (!r.ok) throw new Error('not found');
+            return r.json();
+        })
+        .then(data => {
+            gameData = data;
+            moveIdx = -1;
+            const moves = data.moves_list || [];
+            const scrubber = document.getElementById('scrubber');
+            scrubber.max = moves.length - 1;
+            scrubber.value = -1;
+
+            // Hide heat toggle if no top_visits data
+            const hasDetail = data.positions && data.positions.some(p => p.top_visits);
+            document.getElementById('heat-toggle-label').style.display = hasDetail ? '' : 'none';
+
+            // Highlight active game in list
+            document.querySelectorAll('.game-item').forEach(el => el.classList.remove('active'));
+            const items = document.querySelectorAll('.game-item');
+            for (const item of items) {
+                if (item.textContent.includes(gameId.slice(0, 8))) {
+                    item.classList.add('active');
+                    break;
+                }
+            }
+
+            if (mode === 'play') {
+                switchToReplay();
+            }
+            renderBoard();
+            renderSparkline();
+        })
+        .catch(err => console.error('Failed to load game:', err));
+}
+
+// ── Scrubber & controls ──────────────────────────────────────────────────────
+
+function updateMoveLabel() {
+    const total = gameData ? (gameData.moves_list || []).length : 0;
+    document.getElementById('move-label').textContent = `Move ${moveIdx + 1}/${total}`;
+}
+
+function seekTo(idx) {
+    if (!gameData) return;
+    const max = (gameData.moves_list || []).length - 1;
+    moveIdx = Math.max(-1, Math.min(idx, max));
+    document.getElementById('scrubber').value = moveIdx;
+    updateMoveLabel();
+    renderBoard();
+    renderSparkline();
+}
+
+document.getElementById('btn-start').onclick = () => seekTo(-1);
+document.getElementById('btn-end').onclick = () => seekTo(gameData ? (gameData.moves_list || []).length - 1 : 0);
+document.getElementById('btn-prev').onclick = () => seekTo(moveIdx - 1);
+document.getElementById('btn-next').onclick = () => seekTo(moveIdx + 1);
+
+document.getElementById('btn-play').onclick = function() {
+    if (playInterval) {
+        clearInterval(playInterval);
+        playInterval = null;
+        this.textContent = '\u25B6';
+    } else {
+        this.textContent = '\u23F8';
+        playInterval = setInterval(() => {
+            const max = gameData ? (gameData.moves_list || []).length - 1 : 0;
+            if (moveIdx >= max) {
+                clearInterval(playInterval);
+                playInterval = null;
+                document.getElementById('btn-play').textContent = '\u25B6';
+                return;
+            }
+            seekTo(moveIdx + 1);
+        }, 300);
+    }
+};
+
+document.getElementById('scrubber').oninput = function() {
+    seekTo(parseInt(this.value));
+};
+
+// Sparkline click to seek
+document.getElementById('sparkline-canvas').onclick = function(e) {
+    if (!gameData || mode !== 'replay') return;
+    const rect = this.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const total = (gameData.moves_list || []).length;
+    if (total === 0) return;
+    const pad = 10;
+    const w = this.width - pad * 2;
+    const idx = Math.round(((x - pad) / w) * (total - 1));
+    seekTo(idx);
+};
+
+// Overlay toggles
+document.getElementById('toggle-threats').onchange = function() {
+    showThreats = this.checked;
+    renderBoard();
+};
+document.getElementById('toggle-heat').onchange = function() {
+    showHeat = this.checked;
+    renderBoard();
+};
+
+// ── Mode switching ───────────────────────────────────────────────────────────
+
+document.getElementById('mode-replay').onclick = () => switchToReplay();
+document.getElementById('mode-play').onclick = () => switchToPlay();
+
+function switchToReplay() {
+    mode = 'replay';
+    document.getElementById('mode-replay').classList.add('active');
+    document.getElementById('mode-play').classList.remove('active');
+    document.getElementById('play-status').style.display = 'none';
+    document.getElementById('controls').style.display = 'flex';
+    humanPending = null;
+    modelThinking = false;
+    renderBoard();
+    renderSparkline();
+}
+
+function switchToPlay() {
+    mode = 'play';
+    document.getElementById('mode-play').classList.add('active');
+    document.getElementById('mode-replay').classList.remove('active');
+    document.getElementById('play-status').style.display = 'block';
+    document.getElementById('controls').style.display = 'none';
+    playMoves = [];
+    humanPending = null;
+    modelThinking = false;
+    updatePlayStatus('Click a hex to place your first stone (P0)');
+    renderBoard();
+}
+
+function updatePlayStatus(msg) {
+    document.getElementById('play-status').textContent = msg;
+}
+
+// ── Board click (play mode) ──────────────────────────────────────────────────
+
+document.getElementById('board-canvas').onclick = function(e) {
+    if (mode !== 'play' || modelThinking) return;
+
+    const canvas = this;
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+
+    if (!canvas._hexSize) return;
+    const [q, r] = pixelToHex(px, py, canvas._hexSize, canvas._offX, canvas._offY);
+
+    // Check if cell is occupied
+    const occupied = new Set(playMoves.map(m => {
+        const [mq, mr] = parseAxial(m);
+        return `${mq},${mr}`;
+    }));
+    if (occupied.has(`${q},${r}`)) return;
+
+    const movesRemaining = getPlayModeMovesRemaining();
+    const player = getPlayModePlayer();
+    const isHumanTurn = player === 0; // Human plays as P0
+
+    if (!isHumanTurn) return; // Not human's turn
+
+    if (movesRemaining === 1 || (playMoves.length === 0)) {
+        // Single move needed (first move or second stone of turn)
+        if (humanPending) {
+            // This is the second click
+            if (humanPending[0] === q && humanPending[1] === r) return; // same hex, ignore
+            playMoves.push(`(${humanPending[0]},${humanPending[1]})`);
+            playMoves.push(`(${q},${r})`);
+            humanPending = null;
+            renderBoard();
+            submitPlayMoves();
+        } else {
+            // First move with single remaining — submit directly
+            playMoves.push(`(${q},${r})`);
+            humanPending = null;
+            renderBoard();
+            submitPlayMoves();
+        }
+    } else {
+        // Two moves remaining
+        if (!humanPending) {
+            // First click
+            humanPending = [q, r];
+            updatePlayStatus(`First stone at (${q},${r}). Click second hex.`);
+            renderBoard();
+        } else {
+            // Second click
+            if (humanPending[0] === q && humanPending[1] === r) return; // same hex
+            playMoves.push(`(${humanPending[0]},${humanPending[1]})`);
+            playMoves.push(`(${q},${r})`);
+            humanPending = null;
+            renderBoard();
+            submitPlayMoves();
+        }
+    }
+};
+
+function submitPlayMoves() {
+    modelThinking = true;
+    updatePlayStatus('Model thinking...');
+
+    // The human just finished their turn. Now ask model to play.
+    fetch('/viewer/play', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            moves_so_far: [],
+            human_moves: playMoves,
+        })
+    })
+    .then(r => {
+        if (r.status === 503) {
+            updatePlayStatus('No model loaded yet (training must complete first)');
+            modelThinking = false;
+            return null;
+        }
+        return r.json();
+    })
+    .then(data => {
+        if (!data) return;
+        if (data.error) {
+            updatePlayStatus('Error: ' + data.error);
+            modelThinking = false;
+            return;
+        }
+        // Add model's moves
+        for (const m of (data.moves || [])) {
+            playMoves.push(m);
+        }
+        modelThinking = false;
+        if (data.winner != null) {
+            const w = data.winner === 1 ? 'P0 (Blue)' : data.winner === -1 ? 'P1 (Coral)' : null;
+            if (w) {
+                updatePlayStatus(`Game over! ${w} wins!`);
+            } else {
+                updatePlayStatus('Your turn. Click a hex.');
+            }
+        } else {
+            updatePlayStatus('Your turn. Click a hex.');
+        }
+        renderBoard();
+    })
+    .catch(err => {
+        updatePlayStatus('Network error: ' + err.message);
+        modelThinking = false;
+    });
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+loadGameList();
+setInterval(loadGameList, 10000);
+
+// Handle resize
+window.addEventListener('resize', () => {
+    renderBoard();
+    renderSparkline();
+});
+
+// Initial render
+renderBoard();
+renderSparkline();
+</script>
+</body>
+</html>
