@@ -435,3 +435,10 @@ emitter/schema tests).
 - ELO sparkline (needs 3+ eval_complete events — wired in SPA, no data yet)
 - `view →` links in event log (greyed out, pending `/viewer` sprint)
 - `moves_list` forwarded through SocketIO for future game viewer consumption
+
+### 11. Config loader self-merge bug fix
+**File:** `scripts/train.py`
+
+`--config configs/training.yaml` caused `training.yaml` to be merged with itself
+because it was already in `_BASE_CONFIGS`. Fixed by resolving paths and deduplicating
+before calling `load_config()`.

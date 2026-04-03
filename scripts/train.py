@@ -138,7 +138,9 @@ def main() -> None:
         "configs/monitoring.yaml",
     ]
     if args.config:
-        config = load_config(*_BASE_CONFIGS, args.config)
+        override = str(Path(args.config).resolve())
+        base = [p for p in _BASE_CONFIGS if str(Path(p).resolve()) != override]
+        config = load_config(*base, args.config)
     else:
         config = load_config(*_BASE_CONFIGS)
 
