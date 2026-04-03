@@ -75,7 +75,7 @@ After each commit, confirm tests still pass before starting the next task.
 Always check `docs/02_ROADMAP.md` for the current phase before starting work.
 
 **Current Status:** Phase 4.0 Self-Play RL loop is **Active**.
-- Pretrain validated: policy loss 5.0 → 2.07, 5/5 wins vs RandomBot.
+- Pretrain validated: policy loss 5.0 → 2.07, ≥95/100 wins vs RandomBot.
 - First self-play run: 4,940 steps, found 5 issues, all fixed.
 - Dashboard rebuilt: event-driven fan-out (terminal + web at :5001).
 - Game viewer live at `/viewer` with threat overlay and replay controls.
