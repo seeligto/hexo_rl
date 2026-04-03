@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import structlog
@@ -39,12 +40,19 @@ log = structlog.get_logger()
 
 DEFAULT_OUTPUT_DIR = Path("data/corpus/injected")
 
+# Preset time limits for named bot variants
+_BOT_TIME_LIMITS = {
+    "sealbot_fast": 0.1,
+    "sealbot_strong": 0.5,
+}
+
 
 def _make_bot(name: str, time_limit: float) -> BotProtocol:
     """Create a bot by name."""
-    if name == "sealbot":
+    if name in ("sealbot", "sealbot_fast", "sealbot_strong"):
         from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
-        return SealBotBot(time_limit=time_limit)
+        effective_time = _BOT_TIME_LIMITS.get(name, time_limit)
+        return SealBotBot(time_limit=effective_time)
     elif name == "random":
         from hexo_rl.bootstrap.bots.random_bot import RandomBot
         return RandomBot()
@@ -73,6 +81,78 @@ def _find_eligible_games(
     return eligible
 
 
+def _process_one_game(
+    game_path: str,
+    inject_at: int,
+    n_games: int,
+    bot_name: str,
+    time_limit: float,
+    output_dir: str,
+) -> int:
+    """Worker function for parallel injection (runs in subprocess)."""
+    bot_p1 = _make_bot(bot_name, time_limit)
+    bot_p2 = _make_bot(bot_name, time_limit)
+    saved = run_injections(
+        game_path=Path(game_path),
+        inject_at=inject_at,
+        n_games=n_games,
+        bot_p1=bot_p1,
+        bot_p2=bot_p2,
+        output_dir=Path(output_dir),
+    )
+    return len(saved)
+
+
+def _run_parallel(
+    games: list[Path],
+    args: argparse.Namespace,
+) -> tuple[int, int, int]:
+    """Run injection across multiple worker processes."""
+    total_saved = 0
+    total_skipped = 0
+    total_dupes = 0
+    completed = 0
+
+    with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        futures = {
+            executor.submit(
+                _process_one_game,
+                str(game_path),
+                args.inject_at,
+                args.games,
+                args.bot,
+                args.time_limit,
+                str(args.output),
+            ): game_path
+            for game_path in games
+        }
+
+        for future in as_completed(futures):
+            completed += 1
+            try:
+                n_saved = future.result()
+                total_saved += n_saved
+                if n_saved == 0:
+                    total_skipped += 1
+            except Exception as exc:
+                log.warning(
+                    "injection_worker_error",
+                    game=futures[future].name,
+                    error=str(exc),
+                )
+                total_skipped += 1
+
+            if completed % 50 == 0:
+                log.info(
+                    "injection_progress",
+                    processed=completed,
+                    total=len(games),
+                    saved=total_saved,
+                )
+
+    return total_saved, total_skipped, total_dupes
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate bot-continuation games from human seeds"
@@ -91,12 +171,17 @@ def main() -> None:
         help="Move number to inject bots at (default: 15)",
     )
     parser.add_argument(
-        "--games", type=int, default=5,
+        "--games", "--games-per-seed", type=int, default=5,
+        dest="games",
         help="Number of bot continuations per human game (default: 5)",
     )
     parser.add_argument(
+        "--n-seeds", type=int, default=None,
+        help="Limit number of seed games to process (default: all eligible)",
+    )
+    parser.add_argument(
         "--bot", type=str, default="sealbot",
-        choices=["sealbot", "random"],
+        choices=["sealbot", "sealbot_fast", "sealbot_strong", "random"],
         help="Bot to use for continuation (default: sealbot)",
     )
     parser.add_argument(
@@ -104,17 +189,19 @@ def main() -> None:
         help="Bot time limit per move in seconds (default: 0.1)",
     )
     parser.add_argument(
-        "--output", type=Path, default=DEFAULT_OUTPUT_DIR,
+        "--output", "--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR,
+        dest="output",
         help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
     )
     parser.add_argument(
         "--min-moves", type=int, default=30,
         help="Minimum moves in human game to be eligible (default: 30)",
     )
+    parser.add_argument(
+        "--workers", type=int, default=1,
+        help="Number of parallel worker processes (default: 1)",
+    )
     args = parser.parse_args()
-
-    bot_p1 = _make_bot(args.bot, args.time_limit)
-    bot_p2 = _make_bot(args.bot, args.time_limit)
 
     log.info(
         "injection_config",
@@ -122,6 +209,8 @@ def main() -> None:
         time_limit=args.time_limit,
         inject_at=args.inject_at,
         games_per_seed=args.games,
+        n_seeds=args.n_seeds,
+        workers=args.workers,
         output=str(args.output),
     )
 
@@ -131,21 +220,41 @@ def main() -> None:
         games = _find_eligible_games(args.human_dir, args.min_moves, args.inject_at)
         log.info("eligible_games_found", count=len(games), dir=str(args.human_dir))
 
+    if args.n_seeds is not None:
+        games = games[: args.n_seeds]
+        log.info("n_seeds_limit_applied", kept=len(games))
+
     total_saved = 0
-    for game_path in games:
-        saved = run_injections(
-            game_path=game_path,
-            inject_at=args.inject_at,
-            n_games=args.games,
-            bot_p1=bot_p1,
-            bot_p2=bot_p2,
-            output_dir=args.output,
+    total_skipped = 0
+    total_dupes = 0
+
+    if args.workers > 1:
+        # Parallel: each worker gets its own bot instances
+        total_saved, total_skipped, total_dupes = _run_parallel(
+            games, args,
         )
-        total_saved += len(saved)
+    else:
+        bot_p1 = _make_bot(args.bot, args.time_limit)
+        bot_p2 = _make_bot(args.bot, args.time_limit)
+        for i, game_path in enumerate(games):
+            saved = run_injections(
+                game_path=game_path,
+                inject_at=args.inject_at,
+                n_games=args.games,
+                bot_p1=bot_p1,
+                bot_p2=bot_p2,
+                output_dir=args.output,
+            )
+            total_saved += len(saved)
+            if not saved:
+                total_skipped += 1
+            if (i + 1) % 50 == 0:
+                log.info("injection_progress", processed=i + 1, total=len(games), saved=total_saved)
 
     log.info(
         "injection_complete",
         total_saved=total_saved,
+        total_skipped=total_skipped,
         human_games_processed=len(games),
     )
 
