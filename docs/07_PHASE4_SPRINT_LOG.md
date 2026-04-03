@@ -474,6 +474,45 @@ config grad_clip, lr changes with scheduler). Total: 373 Python tests passing.
 
 ---
 
+### 15. Game viewer implementation (2026-04-03)
+**Files:**
+- `engine/src/board/threats.rs` — sliding-window threat detection (3 hex axes)
+- `engine/src/board/mod.rs` — module declaration
+- `engine/src/mcts/mod.rs` — `get_top_visits()`, `root_value()` exports
+- `engine/src/lib.rs` — PyO3 exports for Board.get_threats(), MCTSTree.get_top_visits/root_value
+- `hexo_rl/viewer/__init__.py`, `hexo_rl/viewer/engine.py` — ViewerEngine
+- `hexo_rl/monitoring/web_dashboard.py` — 4 new routes (/viewer, /viewer/recent, /viewer/game, /viewer/play)
+- `hexo_rl/monitoring/static/viewer.html` — single-file SPA
+- `hexo_rl/selfplay/pool.py` — moves_detail/value_trace fields (None for now)
+- `configs/monitoring.yaml` — capture_game_detail key
+- `tests/test_viewer.py` — 10 tests
+
+**Summary:**
+Game viewer for replaying self-play games with threat detection overlay. Threats
+are EMPTY cells within 6-cell windows where one player has N≥3 stones (levels:
+5=critical, 4=forced, 3=warning). Algorithm validated: test_threats_highlight_empty_cells_not_stones
+passes — threat cells never overlap with occupied cells.
+
+Viewer features: hex board canvas (pointy-top), threat overlay with color coding,
+MCTS visit heatmap (toggle), value sparkline with seek, scrubber with play/pause,
+game list with auto-refresh, play-against-model mode (POST /viewer/play).
+
+**Benchmark delta:** 0% on MCTS sim/s, buffer push, GPU util — viewer code is
+completely isolated from the training path. get_threats() is viewer-only, never
+called from MCTS or training.
+
+**Deferred items:**
+- Per-move MCTS detail (moves_detail, value_trace): requires Rust game_runner to
+  store top_visits/root_value per move in drain_game_results(). Fields are None
+  for now; SPA handles gracefully (hides heat toggle, shows "no value data").
+- Per-worker ID in game_complete events (existing TODO).
+
+**Viewer URL:** http://localhost:5001/viewer (during training)
+
+**Test counts:** 71 Rust + 383 Python, all passing.
+
+---
+
 ### 11. Config loader self-merge bug fix
 **File:** `scripts/train.py`
 
