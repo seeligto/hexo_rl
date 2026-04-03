@@ -1,6 +1,7 @@
 # corpus.yaml — corpus quality filtering and source weighting
 # Generated defaults can be overridden manually.
 
+corpus_npz_path: data/bootstrap_corpus.npz  # primary load path for pretrain (mmap'd)
 min_game_length: 22           # P10 of combined distribution
 min_quality_score: 0.0        # set > 0 to hard-filter low-quality games
 label_smoothing_default: 0.05 # raise to 0.1 when human corpus > 2000
