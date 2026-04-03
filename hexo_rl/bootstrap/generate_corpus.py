@@ -3,9 +3,9 @@
 Provides:
   - ``load_cached_bot_games()``: returns cached bot games as move sequences
   - ``RAW_HUMAN_DIR``: path to scraped human game JSON files
-  - CLI: ``python -m python.bootstrap.generate_corpus --bot sealbot --depth 4 --n-games 100``
+  - CLI: ``python -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit 0.1 --n-games 100``
 
-Games are saved as JSON files to data/corpus/bot_games/<bot>_d<depth>/
+Games are saved as JSON files to data/corpus/bot_games/<bot>_<tier>/
 """
 
 from __future__ import annotations

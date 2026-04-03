@@ -47,8 +47,8 @@ make bench.lite          # quick benchmark (n=3)
 make bench.full          # standard benchmark gate (n=5)
 
 make corpus.scrape       # scrape latest human games
-make corpus.d4           # SealBot depth-4 corpus (2,000 games)
-make corpus.d6           # SealBot depth-6 corpus (1,000 games)
+make corpus.fast         # SealBot fast corpus (0.1s, 2,000 games)
+make corpus.strong       # SealBot strong corpus (0.5s, 1,000 games)
 make corpus.npz          # export to data/bootstrap_corpus.npz
 
 make pretrain.lite       # pretrain smoke test (100 steps)

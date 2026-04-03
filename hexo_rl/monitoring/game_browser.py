@@ -44,8 +44,6 @@ GameDetail = namedtuple(
 # ── Source constants ───────────────────────────────────────────────────────────
 
 SOURCE_HUMAN = "human"
-SOURCE_BOT_D4 = "bot_d4"
-SOURCE_BOT_D6 = "bot_d6"
 SOURCE_BOT_FAST = "bot_fast"
 SOURCE_BOT_STRONG = "bot_strong"
 SOURCE_SELF_PLAY = "self_play"
@@ -72,10 +70,10 @@ class GameBrowser:
     """Read-only index and loader for corpus and self-play replay games.
 
     Data sources:
-        Human:     ``<corpus_dir>/raw_human/*.json``
-        Bot d4:    ``<corpus_dir>/bot_games/sealbot_d4/*.json``
-        Bot d6:    ``<corpus_dir>/bot_games/sealbot_d6/*.json``
-        Self-play: ``<replay_dir>/games_*.jsonl``
+        Human:      ``<corpus_dir>/raw_human/*.json``
+        Bot fast:   ``<corpus_dir>/bot_games/sealbot_fast/*.json``
+        Bot strong: ``<corpus_dir>/bot_games/sealbot_strong/*.json``
+        Self-play:  ``<replay_dir>/games_*.jsonl``
 
     Quality scores are joined from ``<corpus_dir>/quality_scores.json``.
     """
@@ -101,7 +99,7 @@ class GameBrowser:
         """Filter and sort available games.
 
         Args:
-            source:     ``"all"`` | ``"human"`` | ``"bot_d4"`` | ``"bot_d6"`` |
+            source:     ``"all"`` | ``"human"`` | ``"bot_fast"`` | ``"bot_strong"`` |
                         ``"self_play"``
             sort_by:    ``"length"`` (desc) | ``"length_asc"`` | ``"quality"`` |
                         ``"timestamp"`` (most-recent-first) | ``"random"``
@@ -169,8 +167,7 @@ class GameBrowser:
     def _current_fingerprint(self) -> dict:
         fp: dict = {}
 
-        for subdir in ["raw_human", "bot_games/sealbot_d4", "bot_games/sealbot_d6",
-                       "bot_games/sealbot_fast", "bot_games/sealbot_strong"]:
+        for subdir in ["raw_human", "bot_games/sealbot_fast", "bot_games/sealbot_strong"]:
             d = self._corpus_dir / subdir
             if d.exists():
                 try:
@@ -203,8 +200,6 @@ class GameBrowser:
 
         entries: List[_IndexEntry] = []
         entries.extend(_index_human_games(self._corpus_dir, quality_scores))
-        entries.extend(_index_bot_games(self._corpus_dir, "sealbot_d4", SOURCE_BOT_D4, quality_scores))
-        entries.extend(_index_bot_games(self._corpus_dir, "sealbot_d6", SOURCE_BOT_D6, quality_scores))
         entries.extend(_index_bot_games(self._corpus_dir, "sealbot_fast", SOURCE_BOT_FAST, quality_scores))
         entries.extend(_index_bot_games(self._corpus_dir, "sealbot_strong", SOURCE_BOT_STRONG, quality_scores))
         entries.extend(_index_replay_games(self._replay_dir))
@@ -497,7 +492,7 @@ def main() -> None:
     parser.add_argument("--corpus-dir",  default="data/corpus",  help="Corpus directory")
     parser.add_argument("--replay-dir",  default="logs/replays", help="Self-play replay directory")
     parser.add_argument("--source",      default="all",
-                        choices=["all", "human", "bot_d4", "bot_d6", "self_play"])
+                        choices=["all", "human", "bot_fast", "bot_strong", "self_play"])
     parser.add_argument("--game-id",        help="Show full move sequence for a specific game")
     parser.add_argument("--latest-selfplay", type=int, metavar="N",
                         help="Show N most-recent self-play games")

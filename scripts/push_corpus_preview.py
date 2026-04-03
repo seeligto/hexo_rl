@@ -45,7 +45,7 @@ def select_games(browser: GameBrowser, n: int) -> List[GameSummary]:
     n_recent = n - n_longest - n_random  # remainder = 20%
 
     # Only corpus games — exclude self-play
-    corpus_sources = ["human", "bot_d4", "bot_d6"]
+    corpus_sources = ["human", "bot_fast", "bot_strong"]
 
     longest: List[GameSummary] = []
     for src in corpus_sources:
@@ -90,8 +90,8 @@ def _source_label(source: str) -> str:
     """Map GameBrowser source to human-readable label."""
     return {
         "human": "human",
-        "bot_d4": "sealbot-d4",
-        "bot_d6": "sealbot-d6",
+        "bot_fast": "sealbot-fast",
+        "bot_strong": "sealbot-strong",
     }.get(source, source)
 
 

@@ -29,7 +29,7 @@ def _make_corpus(n: int = 20):
     """Return 20 synthetic games with known lengths and timestamps."""
     games = []
     for i in range(n):
-        source = "human" if i % 3 == 0 else ("bot_d4" if i % 3 == 1 else "bot_d6")
+        source = "human" if i % 3 == 0 else ("bot_fast" if i % 3 == 1 else "bot_strong")
         games.append(_make_game(
             game_id=f"game_{i:04d}",
             source=source,
