@@ -1,0 +1,12 @@
+# monitoring.yaml — dashboard and alerting settings
+
+monitoring:
+  enabled: true
+  terminal_dashboard: true
+  web_dashboard: true
+  web_port: 5001
+  log_interval: 10
+  event_log_maxlen: 500
+  alert_entropy_min: 1.0
+  alert_grad_norm_max: 10.0
+  alert_loss_increase_window: 3
