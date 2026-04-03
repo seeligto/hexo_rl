@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
+from collections import deque
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -16,6 +18,7 @@ import torch
 from engine import SelfPlayRunner  # type: ignore[attr-defined]
 
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
 from hexo_rl.selfplay.inference_server import InferenceServer
 from engine import ReplayBuffer
@@ -76,8 +79,11 @@ class WorkerPool:
         self.x_wins = 0
         self.o_wins = 0
         self.draws = 0
-        self._sims_per_sec: Optional[float] = None
+        self._sims_per_sec: float = 0.0
         self._last_drain_time: float = time.monotonic()
+        self._total_sims: int = 0
+        self._game_lengths: deque[int] = deque(maxlen=200)
+        self._avg_game_length: float = 0.0
 
         gr_cfg = config.get("game_replay", {})
         self._recorder = GameRecorder(
@@ -99,8 +105,12 @@ class WorkerPool:
             return (self.o_wins / total) if total > 0 else 0.0
 
     @property
-    def sims_per_sec(self) -> Optional[float]:
+    def sims_per_sec(self) -> float:
         return self._sims_per_sec
+
+    @property
+    def avg_game_length(self) -> float:
+        return self._avg_game_length
 
     def load_weights(self, state_dict: Dict[str, torch.Tensor]) -> None:
         with self._lock:
@@ -130,21 +140,39 @@ class WorkerPool:
                 self.o_wins = int(self._runner.o_wins)
                 self.draws = int(self._runner.draws)
 
-            # Emit one structlog game_complete event per completed game so
-            # Phase40Dashboard._LogReader can populate the game-length panel.
             games_batch = self._runner.drain_game_results()
 
             # Compute sims/sec from elapsed time and known n_simulations per game.
             now = time.monotonic()
             elapsed = now - self._last_drain_time
             self._last_drain_time = now
-            if elapsed > 1.0 and games_batch:
+            if games_batch:
                 sims = self.n_simulations * len(games_batch)
-                self._sims_per_sec = sims / elapsed
+                self._total_sims += sims
+                if elapsed > 0:
+                    self._sims_per_sec = sims / elapsed
 
             for plies, winner_code, move_history in games_batch:
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
                 game_length = (plies + 1) // 2  # compound moves
+                self._game_lengths.append(game_length)
+                self._avg_game_length = sum(self._game_lengths) / len(self._game_lengths)
+
+                # Map winner_code to spec: 0=P0, 1=P1, -1=draw
+                winner_int = {0: -1, 1: 0, 2: 1}.get(winner_code, -1)
+
+                # Format moves as axial coordinate strings
+                moves_list = [f"({q},{r})" for q, r in move_history] if move_history else []
+
+                emit_event({
+                    "event": "game_complete",
+                    "game_id": uuid.uuid4().hex,
+                    "winner": winner_int,
+                    "moves": plies,
+                    "moves_list": moves_list,
+                    "worker_id": 0,  # TODO: add per-worker ID when Rust exposes it
+                })
+
                 log.info(
                     "game_complete",
                     plies=plies,
