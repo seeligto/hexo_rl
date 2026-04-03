@@ -389,14 +389,14 @@ Total: 356 Python tests passing.
 
 ### TODOs for Prompt 2 (renderer implementation)
 
-- `hexo_rl/monitoring/terminal_dashboard.py` — rich renderer (reads events)
-- `hexo_rl/monitoring/web_dashboard.py` — Flask+SocketIO renderer
-- `hexo_rl/monitoring/static/index.html` — single-file SPA
-- Wire `GPUMonitor` to emit `system_stats` events via `emit_event()`
-- Add `monitoring:` config block to `configs/default.yaml`
-- Compute `value_accuracy` in `trainer.py` and include in loss_info
-- Compute `grad_norm` in `trainer.py` (before clip) and include in loss_info
-- Include `lr` from scheduler in loss_info
+- ~~`hexo_rl/monitoring/terminal_dashboard.py` — rich renderer (reads events)~~ ✅ Done (§12)
+- ~~`hexo_rl/monitoring/web_dashboard.py` — Flask+SocketIO renderer~~ ✅ Done (§12)
+- ~~`hexo_rl/monitoring/static/index.html` — single-file SPA~~ ✅ Done (§12)
+- ~~Wire `GPUMonitor` to emit `system_stats` events via `emit_event()`~~ ✅ Done (§14)
+- ~~Add `monitoring:` config block to `configs/default.yaml`~~ ✅ Done (§12)
+- ~~Compute `value_accuracy` in `trainer.py` and include in loss_info~~ ✅ Done (§14)
+- ~~Compute `grad_norm` in `trainer.py` (before clip) and include in loss_info~~ ✅ Done (§14)
+- ~~Include `lr` from scheduler in loss_info~~ ✅ Done (§14)
 - Add per-worker ID to `game_complete` events (requires Rust change)
 
 ### Notes
@@ -449,6 +449,28 @@ or `/api/*` fetch calls exist. The 404s reported in server logs were from
 a previous version or stale browser cache, not the current SPA code.
 
 **Test results:** 368 Python tests passing, no regressions.
+
+---
+
+### 14. Wire grad_norm, value_accuracy, lr, and GPUMonitor (2026-04-03)
+**Files:** `hexo_rl/training/losses.py`, `hexo_rl/training/trainer.py`,
+`hexo_rl/monitoring/gpu_monitor.py`, `configs/training.yaml`,
+`tests/test_trainer.py`
+
+Closed the remaining TODOs from the dashboard migration:
+
+- **grad_norm:** `fp16_backward_step()` now returns the pre-clip gradient norm
+  from `clip_grad_norm_()`. Trainer captures it and includes it in `loss_info`.
+  Clipping threshold configurable via `grad_clip` in training.yaml (default 1.0).
+- **value_accuracy:** Computed in `_train_on_batch()` as the fraction of samples
+  where `sign(v_logit) == sign(outcome)`. Included in `loss_info`.
+- **lr:** Read from `optimizer.param_groups[0]["lr"]` after each step, so it
+  reflects scheduler state. Included in `loss_info`.
+- **GPUMonitor → system_stats:** GPUMonitor polling loop now calls `emit_event()`
+  with `system_stats` payload on each poll cycle, matching the existing interval.
+
+**Tests:** 5 new tests in `test_trainer.py` (grad_norm, value_accuracy, lr,
+config grad_clip, lr changes with scheduler). Total: 373 Python tests passing.
 
 ---
 
