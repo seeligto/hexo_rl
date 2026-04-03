@@ -27,8 +27,7 @@ make corpus.scrape       # fetch latest human games
 make corpus.npz          # export corpus to data/bootstrap_corpus.npz
 make pretrain.full       # supervised pretrain on corpus
 
-python scripts/train.py --config configs/default.yaml \
-    --checkpoint checkpoints/pretrain/pretrain_00000100.pt
+make train               # self-play RL with dashboard
 ```
 
 ## Make targets

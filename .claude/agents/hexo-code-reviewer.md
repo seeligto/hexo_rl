@@ -31,7 +31,7 @@ Check each of the following areas explicitly and note "N/A — not in changeset"
 - **Win detection**: Any change touching `board/`, win detection, or colony logic must be flagged for test coverage verification. Missing tests = Critical Issue.
 - **Zobrist hashing**: 128-bit keys (splitmix128) must be preserved. Any reduction to 64-bit is a correctness regression at >150k sim/s throughput.
 - **Augmentation guard**: Any test that asserts on loss values decreasing over N steps must pass `augment=False` to `trainer.train_step()`. A convergence test without this guard is a correctness defect — flag as Critical.
-- **Config layering**: Verify that `default.yaml` values are not silently overridden by `training.yaml`. The known regression vector is `checkpoint_interval`. Run `grep -r '<key>' configs/` mentally for any key touched in the diff.
+- **Config layering**: Verify that config values are not silently overridden across split config files (model.yaml, training.yaml, selfplay.yaml, monitoring.yaml). The known regression vector is `checkpoint_interval`. Run `grep -r '<key>' configs/` mentally for any key touched in the diff.
 
 ### Performance — Boundary Discipline
 - **Rust hot paths** (MCTS inner loop, replay buffer push/sample): Flag any heap allocation, `Vec` reallocation, or `.clone()` that was not present before the change.
@@ -118,7 +118,7 @@ If no performance-sensitive subsystem was touched: write `N/A — no performance
 - [ ] No forced-win short-circuit reintroduced (or N/A)
 - [ ] Zero-copy PyO3 transfer preserved (or N/A)
 - [ ] No hardcoded hyperparameters in source
-- [ ] Config layering verified (default.yaml + training.yaml both updated if needed)
+- [ ] Config layering verified (split configs both updated if needed)
 - [ ] Benchmark targets identified (or N/A)
 - [ ] Sprint log updated or flagged for update
 - [ ] Open questions logged or N/A
@@ -133,7 +133,7 @@ For each checked item, add a one-line justification.
 **Update your agent memory** as you discover recurring patterns, known fragile areas, and architectural decisions in this codebase. This builds institutional knowledge across review sessions.
 
 Examples of what to record:
-- Files or subsystems that are frequently the source of regressions (e.g., config layering between `default.yaml` and `training.yaml`)
+- Files or subsystems that are frequently the source of regressions (e.g., config layering across split YAML files)
 - Test patterns that are consistently missing or incorrectly written (e.g., augment=False guard)
 - PyO3 boundary touchpoints that are high-risk for copy introduction
 - Known past regressions and their root causes (e.g., forced-win short-circuit removal at fc9eb6f, checkpoint_interval override regression)
