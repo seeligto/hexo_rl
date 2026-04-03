@@ -632,3 +632,53 @@ Target set to ≥625,000 pos/hr (85% of median).
 Note: gap vs bench.stress (1.09M) is expected — 5-min windows better amortize
 game-completion burstiness than 60s bench.full windows. Both are correct for
 their methodology; bench.full measures conservative steady-state.
+
+---
+
+### 19. Pretrain OOM fix — mmap corpus loading (2026-04-03)
+**Files:** `hexo_rl/bootstrap/pretrain.py`, `scripts/train.py`,
+`configs/corpus.yaml`, `docs/07_PHASE4_SPRINT_LOG.md`
+
+**Root cause:** `load_corpus()` in `pretrain.py` builds per-game lists and calls
+`np.concatenate()` on 906k positions, transiently doubling the ~13 GB corpus in
+RAM (~26 GB peak). Combined with system load, this exceeds the 47 GB + 4 GB zram
+ceiling and triggers a system freeze during `make pretrain.full`.
+
+**Fix (3 changes):**
+
+1. **NPZ mmap load path in pretrain.py:** Before calling `load_corpus()`, check
+   for `data/bootstrap_corpus.npz` (configurable via `corpus_npz_path` in
+   `configs/corpus.yaml`). If it exists, load with `np.load(mmap_mode='r')`.
+   Memory-mapped arrays are file-backed and page in on demand — no upfront
+   13 GB allocation. The `load_corpus()` fallback is retained for when the NPZ
+   hasn't been exported yet.
+
+2. **DataLoader num_workers=0 in pretrain.py:** With mmap'd file-backed arrays,
+   multi-process workers provide no throughput benefit (GPU is the bottleneck,
+   not CPU data prep). `num_workers=0` runs `__getitem__` in the main process,
+   eliminating fork() COW page dirtying that would defeat the mmap savings.
+
+3. **NPZ mmap in train.py:** The pretrained corpus load at line ~273 changed
+   from `np.load(path)` to `np.load(path, mmap_mode='r')`. Arrays are immediately
+   consumed by `ReplayBuffer.push_game()` which copies into Rust-owned memory.
+   `del data` added after the push loop to release the mmap handle promptly.
+
+**Memory model:** mmap'd arrays are backed by the OS page cache. Only pages
+actually accessed during training are paged in. The Rust ReplayBuffer copies
+data out immediately during `push_game()`, so the mmap can be released after.
+
+**Warning for future corpus growth:** if `bootstrap_corpus.npz` is regenerated
+and the `load_corpus()` fallback is used (NPZ missing), the double-allocation
+risk returns. Always run `make corpus.npz` before `make pretrain.full`.
+
+---
+
+### 20. Validation game count increased to 100 (2026-04-03)
+**Files:** `hexo_rl/bootstrap/pretrain.py`, `CLAUDE.md`, `docs/02_roadmap.md`
+
+Changed pretrain validation from 5 to 100 greedy games vs RandomBot. 5 games
+provided no statistical confidence — a model winning 5/5 could still have a true
+win rate as low as ~48% (binomial CI). 100 games gives meaningful signal:
+95% CI width is ±~10% at p=0.5.
+
+User-specified change.
