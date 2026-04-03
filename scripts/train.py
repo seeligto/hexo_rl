@@ -270,12 +270,13 @@ def main() -> None:
     pretrained_buffer = None
     pretrained_path = mixing_cfg.get("pretrained_buffer_path")
     if pretrained_path and Path(pretrained_path).exists():
-        data = np.load(pretrained_path)
+        data = np.load(pretrained_path, mmap_mode='r')
         pre_states = data["states"]       # (T, 18, 19, 19) float16
         pre_policies = data["policies"]   # (T, 362) float32
         pre_outcomes = data["outcomes"]   # (T,) float32
         pretrained_buffer = ReplayBuffer(capacity=len(pre_outcomes))
         pretrained_buffer.push_game(pre_states, pre_policies, pre_outcomes)
+        del data
         log.info("pretrained_buffer_loaded", path=pretrained_path,
                  size=pretrained_buffer.size)
     elif pretrained_path:
