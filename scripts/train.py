@@ -599,6 +599,8 @@ def main() -> None:
                     _buf_total = max(buffer.size, 1)
                     _sp_pushed = pool.self_play_positions_pushed
                     _buf_sp_pct = round(min(_sp_pushed / _buf_total, 1.0), 4)
+                    # Actual batch mix: fraction of each batch from self-play vs pretrained
+                    _batch_selfplay_frac = round(1.0 - w_pre, 4)
 
                     # Compute iteration stats
                     games_this_iter = games_played - last_iter_games
@@ -621,7 +623,7 @@ def main() -> None:
                         "sims_per_sec": pool.sims_per_sec or 0.0,
                         "buffer_size": buffer.size,
                         "buffer_capacity": buffer.capacity,
-                        "corpus_selfplay_frac": _buf_sp_pct,
+                        "corpus_selfplay_frac": _batch_selfplay_frac,
                     })
 
                     log.info(
