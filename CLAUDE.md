@@ -491,7 +491,7 @@ Run `make bench.full`. Latest baseline (2026-04-03, Ryzen 7 3700x + RTX 3070, 16
 | Replay buffer sample augmented (batch=256) | 1,177 µs/batch | ≤ 1,400 µs | IQR ±27 µs |
 | GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
 | VRAM usage (process) | 0.10 GB / 8.6 GB | ≤ 80% | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |
-| Worker throughput | 530,526 pos/hr | ≥ 450,000 pos/hr | IQR ±145k (27%); higher variance due to GIL contention with 16 workers |
+| Worker throughput | 735,777 pos/hr | ≥ 625,000 pos/hr | IQR ±11k (1.5%); single-pool warm-up methodology (2026-04-03) |
 | Batch fill % | 95.2% | ≥ 80% | IQR ±0.4% |
 
 Historical variance note: before the warm-up/n=5/pinning methodology, single-run

@@ -612,3 +612,23 @@ bench.full (2026-04-03_19-22): worker 1,094,976 ±1.7% — clean.
 Two target updates applied (NN latency ≤3.5ms, buffer raw ≤1,500µs)
 — both were stale targets set against undersized model.
 game_length_weights units clarified to compound moves in training.yaml.
+
+### Benchmark methodology fix (2026-04-03)
+
+Worker pool warm-up extended from 10s to 30s and restructured to keep a single
+pool instance across warm-up + measurement runs. Cold-start bench.full was
+showing ~530k pos/hr (IQR ±27%) because each measurement run created a separate
+WorkerPool, so every 60-second window included ~20s of no-output cold-start.
+bench.stress correctly showed ~1.09M pos/hr (5-min window amortizes startup).
+
+Fix: keep one pool alive for the entire benchmark. Run 30s warm-up to let at
+least one full game cycle complete on all workers (~20-25s at 400 sims/move ×
+64 compound moves). Then take N measurement windows using counter snapshots
+(delta-based) from the already-warm pool.
+
+Post-fix baseline: 735,777 pos/hr (median, n=5), IQR ±11k (1.5%).
+Target set to ≥625,000 pos/hr (85% of median).
+
+Note: gap vs bench.stress (1.09M) is expected — 5-min windows better amortize
+game-completion burstiness than 60s bench.full windows. Both are correct for
+their methodology; bench.full measures conservative steady-state.
