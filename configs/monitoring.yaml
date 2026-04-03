@@ -10,3 +10,4 @@ monitoring:
   alert_entropy_min: 1.0
   alert_grad_norm_max: 10.0
   alert_loss_increase_window: 3
+  capture_game_detail: true

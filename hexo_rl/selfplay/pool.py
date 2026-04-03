@@ -171,6 +171,10 @@ class WorkerPool:
                     "moves": plies,
                     "moves_list": moves_list,
                     "worker_id": 0,  # TODO: add per-worker ID when Rust exposes it
+                    # Per-move MCTS detail: None until Rust game_runner stores
+                    # top_visits/root_value per move in drain_game_results().
+                    "moves_detail": None,
+                    "value_trace": None,
                 })
 
                 log.info(
