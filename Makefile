@@ -118,17 +118,17 @@ bench.mcts: ## Dedicated Rust MCTS micro-benchmark
 ## Training
 
 .PHONY: train
-train: ## Train with web dashboard (default config)
-	$(PY) scripts/train.py --config configs/training.yaml
+train: ## Self-play RL from bootstrap checkpoint + corpus (production default)
+	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP)
 
 .PHONY: train.nodash
-train.nodash: ## Train without dashboard
-	$(PY) scripts/train.py --config configs/training.yaml --no-dashboard
+train.nodash: ## Self-play RL from bootstrap checkpoint, no dashboard
+	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) --no-dashboard
 
 .PHONY: train.bg
-train.bg: ## Train in background, log to logs/
+train.bg: ## Self-play RL from bootstrap checkpoint, background (logs/)
 	@mkdir -p logs
-	nohup $(PY) scripts/train.py --config configs/training.yaml \
+	nohup $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) \
 		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 & \
 		echo $$! > logs/train.pid
 	@echo "Training started (PID $$(cat logs/train.pid))"
@@ -172,8 +172,12 @@ train.pretrain: ## Train in pretrain mode
 train.lite: ## Fast debug training — short run, no dashboard
 	$(PY) scripts/train.py --config $(CONFIG_LITE) --iterations 100 --no-dashboard --no-compile
 
+.PHONY: train.raw
+train.raw: ## Raw self-play from random init — no pretrain checkpoint (ablation only)
+	$(PY) scripts/train.py
+
 .PHONY: train.full
-train.full: ## Standard training from bootstrap checkpoint
+train.full: ## Standard training from bootstrap checkpoint (alias for train)
 	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP)
 
 .PHONY: train.multi
@@ -286,16 +290,17 @@ help.train: ## List all training-related targets
 	@echo ""
 	@echo "Training targets:"
 	@echo "  ─────────────────────────────────────────────────────────────"
-	@echo "  make train               train with web dashboard"
-	@echo "  make train.nodash        train without dashboard"
-	@echo "  make train.bg            train in background (logs/)"
+	@echo "  make train               self-play RL from bootstrap checkpoint (default)"
+	@echo "  make train.nodash        same, no dashboard"
+	@echo "  make train.bg            same, background (logs/)"
 	@echo "  make train.stop          stop background training"
 	@echo "  make train.status        check background training status"
-	@echo "  make train.pretrain      train in pretrain mode"
+	@echo "  make train.raw           self-play from random init (ablation only)"
+	@echo "  make train.pretrain      pretrain mode"
 	@echo "  make train.resume        resume from latest checkpoint"
 	@echo "  make train.smoke         200-step smoke test"
 	@echo "  make train.lite          fast debug (100 steps)"
-	@echo "  make train.full          from bootstrap checkpoint"
+	@echo "  make train.full          from bootstrap checkpoint (alias for train)"
 	@echo "  make train.multi         multi-hour profile"
 	@echo "  make dash.open           open web dashboard in browser"
 	@echo "  ─────────────────────────────────────────────────────────────"
