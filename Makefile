@@ -115,23 +115,58 @@ bench.baseline: ## Run bench.full and save as dated baseline report
 bench.mcts: ## Dedicated Rust MCTS micro-benchmark
 	$(PY) scripts/benchmark_mcts.py
 
-.PHONY: train.web
-train.web: ## Train with web dashboard (default config)
-	$(PY) scripts/train.py --config configs/training.yaml
+## Training
+
+.PHONY: train
+train: ## Train with web dashboard (default config)
+	python scripts/train.py --config configs/training.yaml
 
 .PHONY: train.nodash
 train.nodash: ## Train without dashboard
-	$(PY) scripts/train.py --config configs/training.yaml --no-dashboard
-
-.PHONY: dash.open
-dash.open: ## Open web dashboard in browser
-	open http://localhost:5001
+	python scripts/train.py --config configs/training.yaml --no-dashboard
 
 .PHONY: train.bg
 train.bg: ## Train in background, log to logs/
-	nohup $(PY) scripts/train.py --config configs/training.yaml \
-		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 &
-	@echo "Training running in background. Logs in logs/"
+	@mkdir -p logs
+	nohup python scripts/train.py --config configs/training.yaml \
+		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 & \
+		echo $$! > logs/train.pid
+	@echo "Training started (PID $$(cat logs/train.pid))"
+	@echo "Logs: logs/train_*.log"
+	@echo "Dashboard: http://localhost:5001"
+
+.PHONY: train.stop
+train.stop: ## Stop background training
+	@if [ -f logs/train.pid ]; then \
+		kill $$(cat logs/train.pid) && rm logs/train.pid && echo "Training stopped"; \
+	else \
+		echo "No train.pid found — use 'ps aux | grep train.py' to find the process"; \
+	fi
+
+.PHONY: train.status
+train.status: ## Check background training status
+	@if [ -f logs/train.pid ]; then \
+		PID=$$(cat logs/train.pid); \
+		if kill -0 $$PID 2>/dev/null; then \
+			echo "Training running (PID $$PID)"; \
+			tail -5 $$(ls -t logs/train_*.log 2>/dev/null | head -1); \
+		else \
+			echo "PID $$PID not running (stale train.pid)"; \
+		fi \
+	else \
+		echo "Not running (no train.pid)"; \
+	fi
+
+.PHONY: dash.open
+dash.open: ## Open web dashboard in browser
+	@echo "Opening http://localhost:5001"
+	@python -c "import webbrowser; webbrowser.open('http://localhost:5001')" \
+		|| echo "Open manually: http://localhost:5001"
+
+.PHONY: train.pretrain
+train.pretrain: ## Train in pretrain mode
+	python scripts/train.py --config configs/training.yaml \
+		--override training.mode=pretrain
 
 .PHONY: train.lite
 train.lite: ## Fast debug training — short run, no dashboard
@@ -144,15 +179,6 @@ train.full: ## Standard training from bootstrap checkpoint
 .PHONY: train.multi
 train.multi: ## Multi-hour training profile from bootstrap checkpoint
 	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_BOOTSTRAP)
-
-.PHONY: train
-train: ## Self-play training (auto-finds latest pretrain checkpoint)
-	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
-	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
-	    exit 1; \
-	fi
-	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
-	$(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT)
 
 .PHONY: train.smoke
 train.smoke: ## 200-step smoke test to verify training end-to-end
@@ -217,8 +243,8 @@ pretrain.full: ## Full bootstrap pretrain (15 epochs)
 
 # ── Corpus generation ────────────────────────────────────────────────────────
 
-CORPUS_DEPTH4_N ?= 2000
-CORPUS_DEPTH6_N ?= 1000
+CORPUS_FAST_N ?= 2000
+CORPUS_STRONG_N ?= 1000
 
 .PHONY: corpus.scrape
 corpus.scrape: ## Scrape latest human games from hexo.did.science and update manifest
@@ -226,19 +252,14 @@ corpus.scrape: ## Scrape latest human games from hexo.did.science and update man
 
 .PHONY: corpus.fast
 corpus.fast: ## Generate SealBot fast self-play corpus (think_time=0.1s)
-	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit $(CORPUS_TIME) --n-games $(CORPUS_DEPTH4_N) --output data/corpus/bot_games/sealbot_fast
+	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit $(CORPUS_TIME) --n-games $(CORPUS_FAST_N) --output data/corpus/bot_games/sealbot_fast
 
 .PHONY: corpus.strong
 corpus.strong: ## Generate SealBot strong self-play corpus (think_time=0.5s)
-	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit 0.5 --n-games $(CORPUS_DEPTH6_N) --output data/corpus/bot_games/sealbot_strong
+	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit 0.5 --n-games $(CORPUS_STRONG_N) --output data/corpus/bot_games/sealbot_strong
 
 .PHONY: corpus.all
 corpus.all: corpus.fast corpus.strong corpus.manifest ## Generate both fast and strong corpora
-
-# Legacy aliases (deprecated — use corpus.fast / corpus.strong)
-.PHONY: corpus.d4 corpus.d6
-corpus.d4: corpus.fast
-corpus.d6: corpus.strong
 
 .PHONY: corpus.manifest
 corpus.manifest: ## Update data/corpus/manifest.json (scans human + bot dirs)
@@ -257,10 +278,12 @@ help.train: ## List all training-related targets
 	@echo ""
 	@echo "Training targets:"
 	@echo "  ─────────────────────────────────────────────────────────────"
-	@echo "  make train               self-play from pretrain ckpt"
-	@echo "  make train.web           train with web dashboard"
+	@echo "  make train               train with web dashboard"
 	@echo "  make train.nodash        train without dashboard"
 	@echo "  make train.bg            train in background (logs/)"
+	@echo "  make train.stop          stop background training"
+	@echo "  make train.status        check background training status"
+	@echo "  make train.pretrain      train in pretrain mode"
 	@echo "  make train.resume        resume from latest checkpoint"
 	@echo "  make train.smoke         200-step smoke test"
 	@echo "  make train.lite          fast debug (100 steps)"
