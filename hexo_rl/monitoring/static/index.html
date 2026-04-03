@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HeXO Training Dashboard</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #1a1a1a;
+    color: #e0e0e0;
+    font-family: 'Fira Code', monospace;
+    font-size: 13px;
+    padding: 16px;
+  }
+
+  /* ── Header ──────────────────────────────────────── */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 12px 16px;
+    border-bottom: 1px solid #2a2a2a;
+    margin-bottom: 16px;
+  }
+  .header h1 { font-size: 18px; font-weight: 600; color: #e0e0e0; }
+  .header .meta { color: #888; font-size: 12px; }
+  .status-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #F4664A;
+    margin-right: 4px;
+    animation: pulse 2s infinite;
+  }
+  .status-dot.connected { background: #5DCAA5; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  /* ── Cards ───────────────────────────────────────── */
+  .stat-cards {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .card {
+    background: #222;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    padding: 12px 14px;
+  }
+  .card .label { color: #888; font-size: 11px; margin-bottom: 4px; }
+  .card .value { font-size: 20px; font-weight: 600; }
+
+  /* ── Main row ────────────────────────────────────── */
+  .main-row {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .chart-card {
+    background: #222;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    padding: 14px;
+  }
+  .chart-card h3 { color: #888; font-size: 12px; margin-bottom: 8px; }
+  .right-stack { display: flex; flex-direction: column; gap: 12px; }
+
+  .buffer-bar-wrap {
+    background: #1a1a1a;
+    border-radius: 3px;
+    height: 14px;
+    margin-top: 6px;
+    overflow: hidden;
+  }
+  .buffer-bar {
+    height: 100%;
+    background: #5DCAA5;
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+
+  /* ── Secondary row ───────────────────────────────── */
+  .secondary-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .sys-row { display: flex; justify-content: space-between; padding: 3px 0; }
+  .sys-label { color: #888; }
+
+  /* ── Event log ───────────────────────────────────── */
+  .event-log {
+    background: #222;
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    padding: 14px;
+  }
+  .event-log h3 { color: #888; font-size: 12px; margin-bottom: 8px; }
+  .log-scroll {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .log-entry {
+    padding: 4px 0;
+    border-bottom: 1px solid #2a2a2a;
+    font-size: 12px;
+    display: flex;
+    gap: 12px;
+  }
+  .log-entry .ts { color: #666; flex-shrink: 0; }
+  .log-entry .msg { flex: 1; }
+  .log-entry .view-link { color: #555; cursor: default; }
+  .log-entry .view-link:hover::after { content: ' viewer coming soon'; font-size: 10px; color: #666; }
+
+  .winner-p0 { color: #5B8FF9; }
+  .winner-p1 { color: #F4664A; }
+  .winner-draw { color: #888; }
+  .gate-passed { color: #5DCAA5; font-weight: 600; }
+  .gate-failed { color: #F4664A; font-weight: 600; }
+
+  /* ── ELO badge ───────────────────────────────────── */
+  .elo-badge { font-size: 11px; margin-top: 2px; }
+
+  canvas { max-height: 260px; }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <h1>HeXO Training</h1>
+  <span class="meta" id="phase">phase 4.0</span>
+  <span class="meta">run: <span id="run-id">&mdash;</span></span>
+  <span class="meta"><span class="status-dot" id="status-dot"></span><span id="status-text">disconnected</span></span>
+</div>
+
+<!-- Stat cards -->
+<div class="stat-cards">
+  <div class="card">
+    <div class="label">Step</div>
+    <div class="value" id="card-step">&mdash;</div>
+  </div>
+  <div class="card">
+    <div class="label">Total Loss</div>
+    <div class="value" id="card-loss" style="color:#FAC775">&mdash;</div>
+  </div>
+  <div class="card">
+    <div class="label">Games/hr</div>
+    <div class="value" id="card-gph">&mdash;</div>
+  </div>
+  <div class="card">
+    <div class="label">Pos/hr</div>
+    <div class="value" id="card-pph">&mdash;</div>
+  </div>
+  <div class="card">
+    <div class="label">ELO vs SealBot</div>
+    <div class="value" id="card-elo">&mdash;</div>
+    <div class="elo-badge" id="elo-badge"></div>
+  </div>
+  <div class="card">
+    <div class="label">GPU Util</div>
+    <div class="value" id="card-gpu">&mdash;</div>
+  </div>
+</div>
+
+<!-- Main row -->
+<div class="main-row">
+  <div class="chart-card">
+    <h3>Loss Curves (last 500 steps)</h3>
+    <canvas id="loss-chart"></canvas>
+  </div>
+  <div class="right-stack">
+    <div class="card">
+      <div class="label">Buffer</div>
+      <div class="value" id="buffer-text">&mdash;</div>
+      <div class="buffer-bar-wrap"><div class="buffer-bar" id="buffer-bar" style="width:0%"></div></div>
+    </div>
+    <div class="card">
+      <div class="label">Corpus Mix</div>
+      <div id="corpus-mix" style="margin-top:4px">
+        <div>pretrain&nbsp; <span id="mix-pre">&mdash;</span></div>
+        <div>self-play <span id="mix-sp">&mdash;</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Secondary row -->
+<div class="secondary-row">
+  <div class="chart-card">
+    <h3>Win Rates (last 100 games)</h3>
+    <canvas id="winrate-chart"></canvas>
+    <div style="margin-top:6px; font-size:12px">
+      <span class="winner-p0">P0 <span id="wr-p0">&mdash;</span></span>&nbsp;&nbsp;
+      <span class="winner-p1">P1 <span id="wr-p1">&mdash;</span></span>&nbsp;&nbsp;
+      <span class="winner-draw">draw <span id="wr-draw">&mdash;</span></span>
+    </div>
+  </div>
+  <div class="chart-card">
+    <h3>Avg Game Length (last 100 iters)</h3>
+    <canvas id="gamelen-chart"></canvas>
+  </div>
+  <div class="card">
+    <div class="label">System</div>
+    <div style="margin-top:6px">
+      <div class="sys-row"><span class="sys-label">GPU util</span><span id="sys-gpu">&mdash;</span></div>
+      <div class="sys-row"><span class="sys-label">VRAM</span><span id="sys-vram">&mdash;</span></div>
+      <div class="sys-row"><span class="sys-label">Workers</span><span id="sys-workers">&mdash;</span></div>
+      <div class="sys-row"><span class="sys-label">Sims/sec</span><span id="sys-sims">&mdash;</span></div>
+      <div class="sys-row"><span class="sys-label">Policy entropy</span><span id="sys-entropy">&mdash;</span></div>
+      <div class="sys-row"><span class="sys-label">Value accuracy</span><span id="sys-valacc">&mdash;</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Event log -->
+<div class="event-log">
+  <h3>Event Log</h3>
+  <div class="log-scroll" id="log-scroll"></div>
+</div>
+
+<script>
+// ── Number formatting ──────────────────────────────────────────────
+const DASH = '\u2014';
+
+function fmtLoss(v) { return v == null ? DASH : v.toFixed(4); }
+function fmtPct(v)  { return v == null ? DASH : (v * 100).toFixed(1) + '%'; }
+function fmtInt(v)  { return v == null ? DASH : v.toLocaleString(); }
+function fmtRate(v) {
+  if (v == null) return DASH;
+  return v >= 1000 ? Math.round(v / 1000).toLocaleString() + 'K' : v.toFixed(1);
+}
+
+// ── State ──────────────────────────────────────────────────────────
+const lossData   = { steps: [], policy: [], value: [], aux: [], total: [] };
+const gameResults = [];  // last 100: {winner}
+const gameLenData = { steps: [], lengths: [] };
+const eloHistory  = [];  // {step, elo}
+const MAX_LOSS = 500;
+const MAX_GAMES = 100;
+const MAX_GAMELEN = 100;
+
+let latestStep = null;
+let latestEntropy = null;
+let latestValAcc = null;
+
+// ── Charts ─────────────────────────────────────────────────────────
+const chartDefaults = {
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: { duration: 0 },
+  plugins: { legend: { labels: { color: '#888', font: { family: 'Fira Code', size: 10 } } } },
+  scales: {
+    x: { ticks: { color: '#666', font: { size: 9 } }, grid: { color: '#2a2a2a' } },
+    y: { ticks: { color: '#666', font: { size: 9 } }, grid: { color: '#2a2a2a' } },
+  }
+};
+
+const lossChart = new Chart(document.getElementById('loss-chart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'total',  data: [], borderColor: '#FAC775', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+      { label: 'policy', data: [], borderColor: '#F0997B', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+      { label: 'value',  data: [], borderColor: '#5DCAA5', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+      { label: 'aux',    data: [], borderColor: '#5B8FF9', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+    ]
+  },
+  options: { ...chartDefaults }
+});
+
+const winrateChart = new Chart(document.getElementById('winrate-chart'), {
+  type: 'bar',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'P0', data: [], backgroundColor: '#5B8FF9' },
+      { label: 'P1', data: [], backgroundColor: '#F4664A' },
+      { label: 'Draw', data: [], backgroundColor: '#555' },
+    ]
+  },
+  options: {
+    ...chartDefaults,
+    scales: {
+      ...chartDefaults.scales,
+      x: { ...chartDefaults.scales.x, stacked: true },
+      y: { ...chartDefaults.scales.y, stacked: true, max: 1 },
+    }
+  }
+});
+
+const gamelenChart = new Chart(document.getElementById('gamelen-chart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: 'avg moves', data: [], borderColor: '#5DCAA5', borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: false },
+    ]
+  },
+  options: { ...chartDefaults, plugins: { legend: { display: false } } }
+});
+
+// ── Connection ─────────────────────────────────────────────────────
+const socket = io();
+
+function updateConnectionStatus(connected) {
+  const dot = document.getElementById('status-dot');
+  const txt = document.getElementById('status-text');
+  if (connected) {
+    dot.classList.add('connected');
+    txt.textContent = 'live';
+  } else {
+    dot.classList.remove('connected');
+    txt.textContent = 'disconnected';
+  }
+}
+
+socket.on('connect', () => updateConnectionStatus(true));
+socket.on('disconnect', () => updateConnectionStatus(false));
+
+socket.on('replay_history', (events) => {
+  resetState();
+  events.forEach(handleEvent);
+});
+
+socket.on('training_step', handleEvent);
+socket.on('iteration_complete', handleEvent);
+socket.on('game_complete', handleEvent);
+socket.on('eval_complete', handleEvent);
+socket.on('system_stats', handleEvent);
+socket.on('run_start', (e) => { resetState(); handleEvent(e); });
+socket.on('run_end', handleEvent);
+
+// ── Event dispatch ─────────────────────────────────────────────────
+function handleEvent(payload) {
+  switch (payload.event) {
+    case 'training_step':      onTrainingStep(payload); break;
+    case 'iteration_complete': onIterationComplete(payload); break;
+    case 'game_complete':      onGameComplete(payload); break;
+    case 'eval_complete':      onEvalComplete(payload); break;
+    case 'system_stats':       onSystemStats(payload); break;
+    case 'run_start':          onRunStart(payload); break;
+  }
+}
+
+function resetState() {
+  lossData.steps.length = 0;
+  lossData.policy.length = 0;
+  lossData.value.length = 0;
+  lossData.aux.length = 0;
+  lossData.total.length = 0;
+  gameResults.length = 0;
+  gameLenData.steps.length = 0;
+  gameLenData.lengths.length = 0;
+  eloHistory.length = 0;
+  latestStep = null;
+  latestEntropy = null;
+  latestValAcc = null;
+
+  // Reset cards
+  ['card-step','card-loss','card-gph','card-pph','card-elo','card-gpu'].forEach(
+    id => document.getElementById(id).textContent = DASH
+  );
+  document.getElementById('elo-badge').innerHTML = '';
+  document.getElementById('run-id').textContent = DASH;
+  document.getElementById('buffer-text').textContent = DASH;
+  document.getElementById('buffer-bar').style.width = '0%';
+  document.getElementById('mix-pre').textContent = DASH;
+  document.getElementById('mix-sp').textContent = DASH;
+  document.getElementById('wr-p0').textContent = DASH;
+  document.getElementById('wr-p1').textContent = DASH;
+  document.getElementById('wr-draw').textContent = DASH;
+  ['sys-gpu','sys-vram','sys-workers','sys-sims','sys-entropy','sys-valacc'].forEach(
+    id => document.getElementById(id).textContent = DASH
+  );
+  document.getElementById('log-scroll').innerHTML = '';
+
+  updateCharts();
+}
+
+// ── Event handlers ─────────────────────────────────────────────────
+function onRunStart(p) {
+  document.getElementById('run-id').textContent = p.run_id ? p.run_id.slice(0, 8) : DASH;
+  latestStep = p.step || 0;
+  document.getElementById('card-step').textContent = fmtInt(latestStep);
+}
+
+function onTrainingStep(p) {
+  latestStep = p.step;
+  document.getElementById('card-step').textContent = fmtInt(p.step);
+  document.getElementById('card-loss').textContent = fmtLoss(p.loss_total);
+
+  latestEntropy = p.policy_entropy;
+  latestValAcc = p.value_accuracy;
+  document.getElementById('sys-entropy').textContent = p.policy_entropy != null ? p.policy_entropy.toFixed(2) : DASH;
+  document.getElementById('sys-valacc').textContent = fmtPct(p.value_accuracy);
+
+  // Loss chart data
+  lossData.steps.push(p.step);
+  lossData.total.push(p.loss_total);
+  lossData.policy.push(p.loss_policy);
+  lossData.value.push(p.loss_value);
+  lossData.aux.push(p.loss_aux);
+
+  while (lossData.steps.length > MAX_LOSS) {
+    lossData.steps.shift();
+    lossData.total.shift();
+    lossData.policy.shift();
+    lossData.value.shift();
+    lossData.aux.shift();
+  }
+
+  updateLossChart();
+}
+
+function onIterationComplete(p) {
+  document.getElementById('card-gph').textContent = fmtRate(p.games_per_hour);
+  document.getElementById('card-pph').textContent = fmtRate(p.positions_per_hour);
+  document.getElementById('sys-sims').textContent = fmtRate(p.sims_per_sec);
+
+  // Buffer
+  if (p.buffer_size != null && p.buffer_capacity != null) {
+    const pct = (p.buffer_size / Math.max(p.buffer_capacity, 1) * 100);
+    document.getElementById('buffer-text').textContent =
+      fmtInt(p.buffer_size) + ' / ' + fmtInt(p.buffer_capacity);
+    document.getElementById('buffer-bar').style.width = pct.toFixed(0) + '%';
+  }
+
+  // Corpus mix
+  if (p.corpus_selfplay_frac != null) {
+    const sp = (p.corpus_selfplay_frac * 100).toFixed(1) + '%';
+    const pre = ((1 - p.corpus_selfplay_frac) * 100).toFixed(1) + '%';
+    document.getElementById('mix-sp').textContent = sp;
+    document.getElementById('mix-pre').textContent = pre;
+  }
+
+  // Win rates (from iteration_complete aggregates)
+  document.getElementById('wr-p0').textContent = fmtPct(p.win_rate_p0);
+  document.getElementById('wr-p1').textContent = fmtPct(p.win_rate_p1);
+  document.getElementById('wr-draw').textContent = fmtPct(p.draw_rate);
+
+  // Game length chart
+  gameLenData.steps.push(p.step);
+  gameLenData.lengths.push(p.avg_game_length);
+  while (gameLenData.steps.length > MAX_GAMELEN) {
+    gameLenData.steps.shift();
+    gameLenData.lengths.shift();
+  }
+  updateGamelenChart();
+}
+
+function onGameComplete(p) {
+  gameResults.push({ winner: p.winner });
+  while (gameResults.length > MAX_GAMES) gameResults.shift();
+  updateWinrateChart();
+  addLogEntry(p);
+}
+
+function onEvalComplete(p) {
+  const elo = p.elo_estimate;
+  document.getElementById('card-elo').textContent = elo != null ? fmtInt(Math.round(elo)) : DASH;
+
+  eloHistory.push({ step: p.step, elo: elo });
+
+  const badge = document.getElementById('elo-badge');
+  if (p.gate_passed === true) {
+    badge.innerHTML = '<span class="gate-passed">&#9650; gate passed</span>';
+  } else if (p.gate_passed === false) {
+    badge.innerHTML = '<span class="gate-failed">&#10007; gate failed</span>';
+  } else {
+    badge.innerHTML = '';
+  }
+
+  addLogEntry(p);
+}
+
+function onSystemStats(p) {
+  document.getElementById('card-gpu').textContent = p.gpu_util_pct != null ? p.gpu_util_pct.toFixed(0) + '%' : DASH;
+  document.getElementById('sys-gpu').textContent = p.gpu_util_pct != null ? p.gpu_util_pct.toFixed(0) + '%' : DASH;
+  if (p.vram_used_gb != null && p.vram_total_gb != null) {
+    document.getElementById('sys-vram').textContent = p.vram_used_gb.toFixed(1) + '/' + p.vram_total_gb.toFixed(1) + ' GB';
+  }
+  if (p.workers_active != null) {
+    const total = p.workers_total || p.workers_active;
+    document.getElementById('sys-workers').textContent = p.workers_active + '/' + total;
+  }
+}
+
+// ── Chart updates ──────────────────────────────────────────────────
+function updateCharts() {
+  updateLossChart();
+  updateWinrateChart();
+  updateGamelenChart();
+}
+
+function updateLossChart() {
+  lossChart.data.labels = lossData.steps;
+  lossChart.data.datasets[0].data = lossData.total;
+  lossChart.data.datasets[1].data = lossData.policy;
+  lossChart.data.datasets[2].data = lossData.value;
+  lossChart.data.datasets[3].data = lossData.aux;
+  lossChart.update('none');
+}
+
+function updateWinrateChart() {
+  // Bin last 100 games into 10 buckets of 10
+  const bucketSize = 10;
+  const nBuckets = Math.ceil(gameResults.length / bucketSize);
+  const labels = [];
+  const p0 = [], p1 = [], draws = [];
+
+  for (let i = 0; i < nBuckets; i++) {
+    const start = i * bucketSize;
+    const end = Math.min(start + bucketSize, gameResults.length);
+    const slice = gameResults.slice(start, end);
+    const n = slice.length;
+    labels.push((start + 1) + '-' + end);
+    p0.push(slice.filter(g => g.winner === 0).length / n);
+    p1.push(slice.filter(g => g.winner === 1).length / n);
+    draws.push(slice.filter(g => g.winner === -1).length / n);
+  }
+
+  winrateChart.data.labels = labels;
+  winrateChart.data.datasets[0].data = p0;
+  winrateChart.data.datasets[1].data = p1;
+  winrateChart.data.datasets[2].data = draws;
+  winrateChart.update('none');
+}
+
+function updateGamelenChart() {
+  gamelenChart.data.labels = gameLenData.steps;
+  gamelenChart.data.datasets[0].data = gameLenData.lengths;
+  gamelenChart.update('none');
+}
+
+// ── Event log ──────────────────────────────────────────────────────
+function addLogEntry(p) {
+  const scroll = document.getElementById('log-scroll');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+
+  const ts = p.ts ? new Date(p.ts * 1000).toLocaleTimeString() : '';
+  let msg = '';
+  let viewLink = '';
+
+  if (p.event === 'game_complete') {
+    const winnerText = p.winner === 0 ? '<span class="winner-p0">P0 wins</span>'
+      : p.winner === 1 ? '<span class="winner-p1">P1 wins</span>'
+      : '<span class="winner-draw">draw</span>';
+    msg = 'Game #' + (p.game_id || '?').slice(0, 6) + '  ' + winnerText +
+      '  in ' + (p.moves || '?') + ' moves  worker ' + (p.worker_id ?? '?');
+    viewLink = '<span class="view-link" title="viewer coming soon">view &rarr;</span>';
+  } else if (p.event === 'eval_complete') {
+    const wr = p.win_rate_vs_sealbot != null ? (p.win_rate_vs_sealbot * 100).toFixed(1) + '%' : '?';
+    const gate = p.gate_passed ? '<span class="gate-passed">gate PASSED</span>'
+      : '<span class="gate-failed">gate FAILED</span>';
+    msg = 'Eval: ' + wr + ' vs SealBot ' + DASH + ' ' + gate;
+  } else if (p.event === 'run_start') {
+    msg = 'Run started ' + DASH + ' step ' + fmtInt(p.step);
+  } else if (p.event === 'run_end') {
+    msg = 'Run ended ' + DASH + ' step ' + fmtInt(p.step);
+  } else {
+    msg = p.event;
+  }
+
+  entry.innerHTML = '<span class="ts">[' + ts + ']</span><span class="msg">' + msg + '</span>' + viewLink;
+
+  // Newest first
+  scroll.insertBefore(entry, scroll.firstChild);
+
+  // Keep max 20 visible
+  while (scroll.children.length > 20) {
+    scroll.removeChild(scroll.lastChild);
+  }
+}
+</script>
+</body>
+</html>
