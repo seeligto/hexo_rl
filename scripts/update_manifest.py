@@ -17,6 +17,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RAW_HUMAN_DIR = REPO_ROOT / "data" / "corpus" / "raw_human"
 BOT_GAMES_DIR = REPO_ROOT / "data" / "corpus" / "bot_games"
+INJECTED_DIR = REPO_ROOT / "data" / "corpus" / "injected"
 MANIFEST_PATH = REPO_ROOT / "data" / "corpus" / "manifest.json"
 
 
@@ -62,6 +63,7 @@ def main() -> None:
     human_count = _count_json(RAW_HUMAN_DIR)
     bot_breakdown = _count_json_recursive(BOT_GAMES_DIR)
     bot_total = sum(bot_breakdown.values())
+    injected_count = _count_json(INJECTED_DIR)
     oldest, newest = _human_date_range()
 
     manifest = {
@@ -69,7 +71,8 @@ def main() -> None:
         "human_games": human_count,
         "bot_games": bot_total,
         "bot_breakdown": bot_breakdown,
-        "total_games": human_count + bot_total,
+        "injected_games": injected_count,
+        "total_games": human_count + bot_total + injected_count,
         "human_date_range": {"oldest": oldest, "newest": newest},
         "filter": {"rated": True, "min_moves": 20, "reason": "six-in-a-row"},
     }
@@ -84,10 +87,11 @@ def main() -> None:
         tmp_path = Path(tmp.name)
     tmp_path.rename(MANIFEST_PATH)
 
+    total = human_count + bot_total + injected_count
     print(
         f"Manifest updated: {human_count} human, {bot_total} bot "
         f"({', '.join(f'{k}={v}' for k, v in bot_breakdown.items())}), "
-        f"{human_count + bot_total} total"
+        f"{injected_count} injected, {total} total"
     )
 
 

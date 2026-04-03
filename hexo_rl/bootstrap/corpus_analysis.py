@@ -54,8 +54,10 @@ CLUSTER_SAMPLE_SIZE = 500  # per source when stratified
 SOURCE_HUMAN = "human"
 SOURCE_BOT_FAST = "bot_fast"
 SOURCE_BOT_STRONG = "bot_strong"
-ALL_SOURCES = [SOURCE_HUMAN, SOURCE_BOT_FAST, SOURCE_BOT_STRONG]
-SOURCE_LABELS = {"human": "Human", "bot_fast": "Bot fast", "bot_strong": "Bot strong"}
+SOURCE_INJECTED = "injected"
+ALL_SOURCES = [SOURCE_HUMAN, SOURCE_BOT_FAST, SOURCE_BOT_STRONG, SOURCE_INJECTED]
+SOURCE_LABELS = {"human": "Human", "bot_fast": "Bot fast", "bot_strong": "Bot strong",
+                 "injected": "Injected"}
 
 
 def load_all_games(include_bot_games: bool = False) -> List[GameRecord]:
@@ -106,8 +108,36 @@ def load_all_games(include_bot_games: bool = False) -> List[GameRecord]:
                     continue
             log.info("loaded_bot_games", depth=depth_dir, count=bot_count)
 
+        # Injected games (human-seed bot-continuation)
+        injected_dir = Path("data/corpus/injected")
+        injected_count = 0
+        if injected_dir.exists():
+            for game_file in sorted(injected_dir.glob("*.json")):
+                try:
+                    with open(game_file) as f:
+                        data = json.load(f)
+                    moves = [(m["x"], m["y"]) for m in data["moves"]]
+                    winner = data.get("winner", 0)
+                    records.append(GameRecord(
+                        game_id_str=game_file.stem,
+                        moves=moves,
+                        winner=winner,
+                        source="injected",
+                        metadata={
+                            "bot_name": data.get("bot_name", "unknown"),
+                            "injection_point": data.get("injection_point"),
+                            "human_moves": data.get("human_moves"),
+                            "bot_moves": data.get("bot_moves"),
+                        },
+                    ))
+                    injected_count += 1
+                except Exception:
+                    continue
+            log.info("loaded_injected_games", count=injected_count)
+
     log.info("games_loaded", total=len(records), human=human_total,
-             bot=len(records) - human_total)
+             bot=len(records) - human_total - injected_count if include_bot_games else 0,
+             injected=injected_count if include_bot_games else 0)
     return records
 
 
@@ -566,7 +596,7 @@ def compute_quality_scores(records: List[GameRecord],
     """
     # Load weights from config or use defaults
     weights = {"w_elo": 0.4, "w_len": 0.3, "w_ent": 0.3}
-    bot_elo_components = {"bot_fast": 0.6, "bot_strong": 0.75}
+    bot_elo_components = {"bot_fast": 0.6, "bot_strong": 0.75, "injected": 0.65}
 
     if config_path.exists():
         from hexo_rl.utils.config import load_config
