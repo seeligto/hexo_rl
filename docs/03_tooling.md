@@ -504,12 +504,9 @@ instruction-cache alignment) combined with AMD boost clock behaviour produced
 +/-50% swings on buffer push/s and +/-49% on worker throughput. These were
 measurement artifacts, not real performance changes.
 
-The new methodology (pinned frequency via `cpupower`, warm-up per metric, n=5
-median +/- IQR) reduces variance to <10% IQR on all metrics. Key changes:
+The new methodology (warm-up per metric, n=5 median +/- IQR) reduces variance
+to <10% IQR on all metrics. Key changes:
 
-- **CPU frequency pinning**: `sudo cpupower frequency-set -g performance` before
-  timing, restored to `schedutil` after. If pinning fails (e.g. cpupower
-  unavailable on omarchy Linux), results are prefixed with `[UNCONTROLLED]`.
 - **Warm-up phase**: Each metric runs its operation for 2-10 seconds before timing
   begins, evicting cold-cache effects and stabilising boost clocks.
 - **Realistic MCTS workload**: MCTS throughput is measured using 800 sims/move
@@ -523,11 +520,11 @@ median +/- IQR) reduces variance to <10% IQR on all metrics. Key changes:
 
 Benchmark modes:
 
-| Mode | Runs | CPU pin | Use case |
-|---|---|---|---|
-| `make bench.lite` | n=3 | No | Quick local sanity check |
-| `make bench.full` | n=5 | Attempted | Standard regression gate |
-| `make bench.stress` | n=10 | Required | Pre-release confidence |
+| Mode | Runs | Use case |
+|---|---|---|
+| `make bench.lite` | n=3 | Quick local sanity check |
+| `make bench.full` | n=5 | Standard regression gate |
+| `make bench.stress` | n=10 | Pre-release confidence |
 
 JSON reports are written to `reports/benchmarks/YYYY-MM-DD_HH-MM.json` for
 historical comparison.

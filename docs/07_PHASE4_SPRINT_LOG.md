@@ -150,8 +150,8 @@ reset between each move — matching `default.yaml mcts.n_simulations = 800`.
 **New methodology:**
 - n=5 runs, median + IQR reported (not single-point mean)
 - 2–10s warm-up per metric before timing begins
-- CPU frequency pinning attempted via cpupower (graceful fallback —
-  cpupower unavailable on omarchy Linux; results marked [UNCONTROLLED])
+- CPU frequency pinning removed (sudo prompt was disruptive; n=5 median
+  averaging provides sufficient variance control without it)
 - `bench.lite` (n=3), `bench.full` (n=5), `bench.stress` (n=10, pin required)
 - `bench.baseline` target: runs bench.full + saves dated JSON
 
@@ -510,6 +510,18 @@ called from MCTS or training.
 **Viewer URL:** http://localhost:5001/viewer (during training)
 
 **Test counts:** 71 Rust + 383 Python, all passing.
+
+---
+
+### 16. Remove CPU frequency pinning from benchmark (2026-04-03)
+**Files:** `scripts/benchmark.py`, `docs/03_tooling.md`, `docs/07_PHASE4_SPRINT_LOG.md`
+
+Removed `pin_cpu_frequency()`, `restore_cpu_frequency()`, `--no-pin`, `--require-pin`
+CLI args, and all `[UNCONTROLLED]` labels from the benchmark harness. The sudo
+prompt for `cpupower` was disruptive during development. The n=5 median + IQR
+methodology already provides sufficient variance control without frequency pinning.
+
+Change requested by user.
 
 ---
 

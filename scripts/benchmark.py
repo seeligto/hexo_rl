@@ -4,12 +4,11 @@ Phase 3.5 / 4 benchmark harness.
 
 Measures the metrics that gate Phase 4.5 and prints a pass/fail table.
 Methodology: warm-up per metric, N repeated runs, median +/- IQR summary.
-Optional CPU frequency pinning via cpupower for reproducibility.
 
 Usage:
-    .venv/bin/python scripts/benchmark.py                          # default (n=5, pin attempted)
-    .venv/bin/python scripts/benchmark.py --mode lite              # n=3, no pinning
-    .venv/bin/python scripts/benchmark.py --mode stress            # n=10, pinning required
+    .venv/bin/python scripts/benchmark.py                          # default (n=5)
+    .venv/bin/python scripts/benchmark.py --mode lite              # n=3
+    .venv/bin/python scripts/benchmark.py --mode stress            # n=10
     .venv/bin/python scripts/benchmark.py --config configs/fast_debug.yaml --quick
 """
 
@@ -21,7 +20,6 @@ warnings.filterwarnings("ignore", category=FutureWarning, message=".*pynvml pack
 import argparse
 import json
 import statistics
-import subprocess
 import sys
 import time
 import threading
@@ -44,36 +42,6 @@ if TYPE_CHECKING:
     from engine import ReplayBuffer
 
 console = Console()
-
-# ── CPU frequency control ────────────────────────────────────────────────────
-
-
-def pin_cpu_frequency() -> bool:
-    """
-    Attempt to pin all cores to their base frequency via cpupower.
-    Returns True if successful, False if cpupower is unavailable
-    (e.g. running without root). In that case, print a warning but
-    do not abort -- results will be marked as 'uncontrolled'.
-    """
-    try:
-        result = subprocess.run(
-            ["sudo", "cpupower", "frequency-set", "-g", "performance"],
-            capture_output=True, timeout=5,
-        )
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-
-def restore_cpu_frequency():
-    try:
-        subprocess.run(
-            ["sudo", "cpupower", "frequency-set", "-g", "schedutil"],
-            capture_output=True, timeout=5,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
 
 # ── Statistics ───────────────────────────────────────────────────────────────
 
@@ -482,7 +450,7 @@ def _fmt_range(stats: dict) -> str:
     return f"{_short(lo)}-{_short(hi)}"
 
 
-def print_benchmark_report(results: List[Dict[str, Any]], cpu_pinned: bool,
+def print_benchmark_report(results: List[Dict[str, Any]],
                            n_runs: int, warmup_note: str) -> bool:
     """Print a rich pass/fail table. Returns True if all checks pass."""
     table = Table(title="Benchmark Report", show_lines=True)
@@ -553,8 +521,6 @@ def print_benchmark_report(results: List[Dict[str, Any]], cpu_pinned: bool,
     console.print(table)
     console.print()
 
-    pin_label = "PINNED (performance governor)" if cpu_pinned else "[UNCONTROLLED]"
-    console.print(f"  CPU frequency: {pin_label}")
     console.print(f"  Warm-up: {warmup_note} | Runs: n={n_runs} | Summary: median +/- IQR")
     console.print()
 
@@ -566,7 +532,7 @@ def print_benchmark_report(results: List[Dict[str, Any]], cpu_pinned: bool,
     return all_pass
 
 
-def write_json_report(results: List[Dict[str, Any]], cpu_pinned: bool, n_runs: int) -> Path:
+def write_json_report(results: List[Dict[str, Any]], n_runs: int) -> Path:
     """Write structured JSON report to reports/benchmarks/."""
     report_dir = ROOT / "reports" / "benchmarks"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -599,7 +565,6 @@ def write_json_report(results: List[Dict[str, Any]], cpu_pinned: bool, n_runs: i
 
     report = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "cpu_pinned": cpu_pinned,
         "n_runs": n_runs,
         "metrics": metrics,
         "targets_met": targets_met,
@@ -634,14 +599,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--quick", action="store_true",
                    help="Run shorter benchmarks for fast verification")
     p.add_argument("--mode", choices=["lite", "full", "stress"], default="full",
-                   help="Benchmark mode: lite (n=3, no pin), full (n=5, pin attempted), "
-                        "stress (n=10, pin required)")
+                   help="Benchmark mode: lite (n=3), full (n=5), stress (n=10)")
     p.add_argument("--n-runs", type=int, default=None,
                    help="Override number of runs (default depends on --mode)")
-    p.add_argument("--no-pin", action="store_true",
-                   help="Skip CPU frequency pinning attempt")
-    p.add_argument("--require-pin", action="store_true",
-                   help="Abort if CPU frequency pinning fails")
     return p.parse_args()
 
 
@@ -650,30 +610,12 @@ def main() -> None:
 
     # Mode defaults
     mode_defaults = {
-        "lite":   {"n_runs": 3, "try_pin": False, "require_pin": False},
-        "full":   {"n_runs": 5, "try_pin": True,  "require_pin": False},
-        "stress": {"n_runs": 10, "try_pin": True, "require_pin": True},
+        "lite":   {"n_runs": 3},
+        "full":   {"n_runs": 5},
+        "stress": {"n_runs": 10},
     }
     mode_cfg = mode_defaults[args.mode]
     n_runs = args.n_runs if args.n_runs is not None else mode_cfg["n_runs"]
-    try_pin = mode_cfg["try_pin"] and not args.no_pin
-    require_pin = mode_cfg["require_pin"] or args.require_pin
-
-    # CPU frequency pinning
-    cpu_pinned = False
-    if try_pin or require_pin:
-        console.print("[bold]Attempting CPU frequency pinning...[/bold]")
-        cpu_pinned = pin_cpu_frequency()
-        if cpu_pinned:
-            console.print("[green]CPU frequency pinned to performance governor.[/green]")
-        else:
-            if require_pin:
-                console.print("[bold red]CPU frequency pinning failed. bench.stress requires pinning.[/bold red]")
-                console.print("Run with sudo or install cpupower.")
-                sys.exit(1)
-            console.print("[yellow]CPU pinning failed -- results marked [UNCONTROLLED].[/yellow]")
-
-    uncontrolled = "" if cpu_pinned else "[UNCONTROLLED] "
 
     # Optimization: Enable TensorFloat32 for Ampere+ GPUs
     if torch.cuda.is_available():
@@ -733,29 +675,29 @@ def main() -> None:
         # Run benchmarks
         results: List[Dict[str, Any]] = []
 
-        with console.status(f"[bold green]{uncontrolled}MCTS throughput (n={n_runs})..."):
+        with console.status(f"[bold green]MCTS throughput (n={n_runs})..."):
             results.append(benchmark_mcts(
                 n_simulations=args.mcts_sims if not args.quick else 5000,
                 n_runs=n_runs, warmup_sec=warmup_mcts))
 
-        with console.status(f"[bold green]{uncontrolled}NN inference batch=64 (n={n_runs})..."):
+        with console.status(f"[bold green]NN inference batch=64 (n={n_runs})..."):
             results.append(benchmark_inference(
                 model, batch_size=64,
                 n_positions=20000 if not args.quick else 2000,
                 n_runs=n_runs, warmup_sec=warmup_nn))
 
-        with console.status(f"[bold green]{uncontrolled}NN latency batch=1 (n={n_runs})..."):
+        with console.status(f"[bold green]NN latency batch=1 (n={n_runs})..."):
             results.append(benchmark_inference_latency(
                 model, n_runs=n_runs, warmup_sec=warmup_latency))
 
-        with console.status(f"[bold green]{uncontrolled}Replay buffer (n={n_runs})..."):
+        with console.status(f"[bold green]Replay buffer (n={n_runs})..."):
             results.append(benchmark_replay_buffer(
                 buffer, n_runs=n_runs, warmup_sec=warmup_buffer))
 
-        with console.status(f"[bold green]{uncontrolled}GPU utilisation (n={n_runs})..."):
+        with console.status(f"[bold green]GPU utilisation (n={n_runs})..."):
             results.append(benchmark_gpu_utilisation(model, n_runs=n_runs))
 
-        with console.status(f"[bold green]{uncontrolled}Worker pool throughput (n={n_runs})..."):
+        with console.status(f"[bold green]Worker pool throughput (n={n_runs})..."):
             results.append(benchmark_worker_pool(
                 model=model,
                 config=config,
@@ -773,30 +715,28 @@ def main() -> None:
             name = r["name"]
             if "stats" in r:
                 s = r["stats"]
-                console.print(f"  [dim]{uncontrolled}{name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
+                console.print(f"  [dim]{name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
             elif "push" in r:
                 for sub_name, sub in [("push", r["push"]), ("raw", r["raw"]), ("aug", r["aug"])]:
                     s = sub["stats"]
-                    console.print(f"  [dim]{uncontrolled}{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
+                    console.print(f"  [dim]{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
             elif "gpu" in r:
                 for sub_name, sub in [("util%", r["gpu"]), ("vram", r["vram"])]:
                     if sub.get("stats"):
                         s = sub["stats"]
-                        console.print(f"  [dim]{uncontrolled}{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
+                        console.print(f"  [dim]{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
             elif "pph" in r:
                 for sub_name, sub in [("pos/hr", r["pph"]), ("games/hr", r["gph"]), ("batch%", r["bat"])]:
                     s = sub["stats"]
-                    console.print(f"  [dim]{uncontrolled}{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
+                    console.print(f"  [dim]{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
 
         warmup_note = f"{warmup_mcts:.0f}s MCTS / {warmup_nn:.0f}s NN / {warmup_buffer:.0f}s buffer / {warmup_worker:.0f}s worker"
-        all_pass = print_benchmark_report(results, cpu_pinned, n_runs, warmup_note)
-        write_json_report(results, cpu_pinned, n_runs)
+        all_pass = print_benchmark_report(results, n_runs, warmup_note)
+        write_json_report(results, n_runs)
         sys.exit(0 if all_pass else 1)
 
     finally:
-        if cpu_pinned:
-            console.print("[dim]Restoring CPU governor to schedutil...[/dim]")
-            restore_cpu_frequency()
+        pass
 
 
 if __name__ == "__main__":
