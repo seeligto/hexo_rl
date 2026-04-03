@@ -410,24 +410,28 @@ tests. Full training runs must always use `augment=True` (the default).
 > Run `make bench.full` to reproduce.
 > Full results: reports/benchmarks/
 
-Run `make bench.full`. Latest baseline (2026-04-02, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU):
+Run `make bench.full`. Latest baseline (2026-04-03, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU, correct 12-block × 128-channel production model):
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 189,656 sim/s | ≥ 160,000 sim/s | Per-move throughput (800 sims/move × 62 iters), IQR 0.5% |
-| NN inference (batch=64) | 10,080 pos/s | ≥ 8,500 pos/s | GPU-bound, stable (IQR 0.1%) |
-| NN latency (batch=1, mean) | 1.52 ms | ≤ 2 ms | Stable (IQR ±0.02 ms) |
-| Replay buffer push | 905,697 pos/sec | ≥ 630,000 pos/sec | IQR ±33k (3.7%) |
-| Replay buffer sample raw (batch=256) | 1,000 µs/batch | ≤ 1,200 µs | Stable (IQR ±3 µs) |
-| Replay buffer sample augmented (batch=256) | 949 µs/batch | ≤ 1,200 µs | Stable (IQR ±27 µs) |
+| MCTS (CPU only, no NN) | 164,946 sim/s | ≥ 140,000 sim/s | Per-move throughput (800 sims/move × 62 iters), IQR ±2,190 (1.3%) |
+| NN inference (batch=64) | 10,201 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±815) |
+| NN latency (batch=1, mean) | 2.90 ms | ≤ 3.5 ms | IQR ±0.19 ms |
+| Replay buffer push | 755,880 pos/sec | ≥ 640,000 pos/sec | IQR ±27k (3.6%) |
+| Replay buffer sample raw (batch=256) | 1,293 µs/batch | ≤ 1,500 µs | IQR ±17 µs |
+| Replay buffer sample augmented (batch=256) | 1,177 µs/batch | ≤ 1,400 µs | IQR ±27 µs |
 | GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
-| VRAM usage | 0.78 GB / 8.6 GB | ≤ 80% | Kept |
-| Worker throughput | 1,177,745 pos/hr | ≥ 1,000,000 pos/hr | IQR ±12k (1.0%); ~23% lower than Apr-01 baseline due to forced-win detection removal (fc9eb6f) — intentional correctness fix |
-| Batch fill % | 99.82% | ≥ 84% | Stable (IQR ±0.01%) |
+| VRAM usage (process) | 0.10 GB / 8.6 GB | ≤ 80% | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |
+| Worker throughput | 530,526 pos/hr | ≥ 450,000 pos/hr | IQR ±145k (27%); higher variance due to GIL contention with 16 workers |
+| Batch fill % | 95.2% | ≥ 80% | IQR ±0.4% |
 
 Historical variance note: before the warm-up/n=5/pinning methodology, single-run
 benchmarks showed ±50% swings due to LLVM codegen lottery and AMD boost clocks.
 See `docs/03_TOOLING.md` § "Benchmark variance (historical)" for details.
+2026-04-03: config parsing bug (commit 1217555) caused prior baseline to
+measure an undersized model. This run reflects the correct Phase 4.0
+production architecture (12 residual blocks × 128 channels). VRAM measurement
+also corrected from pynvml global to torch.cuda.max_memory_allocated().
 
 ## Phase 4.0 architecture baseline
 

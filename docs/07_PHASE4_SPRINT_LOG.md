@@ -586,3 +586,23 @@ current approach. Seven findings, two requiring immediate action.
 **Immediate actions required (pre-overnight run):**
 - [ ] Confirm self-play worker sim count (Prompt 1 output)
 - [ ] Confirm game-length weight ratio is >3× between short and long games (Prompt 2 output)
+
+---
+
+### 18. Benchmark baseline corrected (2026-04-03)
+
+Prior CLAUDE.md baseline was measured against an undersized model due to config
+parsing bug in benchmark.py (`config.get('res_blocks')` reading top-level instead
+of `model:` block). Fixed in commit 1217555. VRAM measurement also fixed from
+pynvml global (`nvmlDeviceGetMemoryInfo.used`) to process-specific
+`torch.cuda.max_memory_allocated()`.
+
+New baseline reflects correct 12-block × 128-channel production architecture.
+Key changes vs prior (undersized model) baseline:
+- NN latency: 1.52 → 2.90 ms (larger model = slower single inference)
+- Worker throughput: 1,177,745 → 530,526 pos/hr (cascading effect of slower inference)
+- VRAM: 0.78 → 0.10 GB (process-only measurement, not global GPU)
+- Buffer sample raw: 1,000 → 1,293 µs (higher system load from correct model)
+
+Targets recalibrated to 85% of new observed medians. See `make bench.full` output
+`reports/benchmarks/2026-04-03_19-08.json`.
