@@ -151,6 +151,41 @@ impl MCTSTree {
         }
     }
 
+    /// Top-N children of root by visit count.
+    /// Returns Vec<(coord_string, visits, prior)> sorted by visits descending.
+    pub fn get_top_visits(&self, n: usize) -> Vec<(String, u32, f32)> {
+        let root = &self.pool[0];
+        if !root.is_expanded() {
+            return Vec::new();
+        }
+        let first = root.first_child as usize;
+        let n_ch = root.n_children as usize;
+
+        let mut children: Vec<(usize, u32)> = (first..first + n_ch)
+            .map(|i| (i, self.pool[i].n_visits))
+            .collect();
+        children.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        children.truncate(n);
+
+        children.into_iter().map(|(i, visits)| {
+            let val = self.pool[i].action_idx;
+            let q = (val >> 8) as i32 - 128;
+            let r = (val & 0xFF) as i32 - 128;
+            (format!("({},{})", q, r), visits, self.pool[i].prior)
+        }).collect()
+    }
+
+    /// Value estimate at root from perspective of player to move.
+    /// Returns Q = w_value / n_visits, or 0.0 if no visits.
+    pub fn root_value(&self) -> f32 {
+        let root = &self.pool[0];
+        if root.n_visits == 0 {
+            0.0
+        } else {
+            root.w_value / root.n_visits as f32
+        }
+    }
+
     pub fn root_n_children(&self) -> usize {
         if self.pool[0].is_expanded() {
             self.pool[0].n_children as usize
