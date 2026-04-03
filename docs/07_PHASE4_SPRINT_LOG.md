@@ -345,3 +345,66 @@ Heads:
 
 Output: (log_policy, value, value_logit)  ← always 3-tuple
 ```
+
+---
+
+## Dashboard cleanup & event migration (2026-04-03)
+
+### What was done
+
+Replaced the legacy push-based dashboard system with a structured event emitter
+following the spec in `docs/08_DASHBOARD_SPEC.md`.
+
+**New file:** `hexo_rl/monitoring/events.py`
+- `emit_event(payload)` — thread-safe fan-out to registered renderers
+- `register_renderer(renderer)` — add a renderer at startup
+- Never raises; renderer failures caught and printed to stderr
+- Zero import side effects (no Flask, no rich)
+
+**train.py changes:**
+- Removed: `TrainingDashboard`, `DashboardClient`, `--web-dashboard`,
+  `--web-dashboard-url` CLI args, all `web_dash.*` calls
+- Added: `emit_event()` calls for `run_start`, `training_step`,
+  `iteration_complete`, `eval_complete`, `run_end`
+- Added: `run_id` (uuid4) for session tracking
+- Added: rolling 60s window for `games_per_hour` computation
+
+**pool.py fixes:**
+- `sims_per_sec` bug: was initialised as `None` with `elapsed > 1.0` guard
+  preventing first update. Now initialised to `0.0`, updates on every drain.
+- Added `avg_game_length` tracking via rolling deque(maxlen=200)
+- Emits `game_complete` events with `moves_list` in axial notation
+
+**Files deleted (4,098 lines removed):**
+- `dashboard.py` (root level Flask+SocketIO web dashboard)
+- `hexo_rl/monitoring/dashboard.py` (TrainingDashboard + Phase40Dashboard)
+- `hexo_rl/training/dashboard_utils.py` (DashboardClient HTTP bridge)
+- `tests/test_dashboard_client.py`
+- `tests/test_dashboard_completeness.py`
+- `tests/test_dashboard_phase40.py`
+- `tests/test_game_length_median.py`
+
+**Tests:** 14 new tests in `tests/test_dashboard_events.py`.
+Total: 356 Python tests passing.
+
+### TODOs for Prompt 2 (renderer implementation)
+
+- `hexo_rl/monitoring/terminal_dashboard.py` — rich renderer (reads events)
+- `hexo_rl/monitoring/web_dashboard.py` — Flask+SocketIO renderer
+- `hexo_rl/monitoring/static/index.html` — single-file SPA
+- Wire `GPUMonitor` to emit `system_stats` events via `emit_event()`
+- Add `monitoring:` config block to `configs/default.yaml`
+- Compute `value_accuracy` in `trainer.py` and include in loss_info
+- Compute `grad_norm` in `trainer.py` (before clip) and include in loss_info
+- Include `lr` from scheduler in loss_info
+- Add per-worker ID to `game_complete` events (requires Rust change)
+
+### Notes
+
+- `moves_list` is populated from Rust `drain_game_results()` which returns
+  `Vec<(i32, i32)>` — formatted as `"(q,r)"` strings in Python.
+- `worker_id` is hardcoded to 0 for now — Rust SelfPlayRunner doesn't expose
+  per-game worker identification yet.
+- `push_corpus_preview.py` still references the old dashboard HTTP API for
+  signaling reloads. It will silently fail (fire-and-forget). Should be
+  updated when the web dashboard renderer is built.
