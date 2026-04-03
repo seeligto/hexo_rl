@@ -257,7 +257,7 @@ impl SelfPlayRunner {
                     for (feat, pol, player) in records {
                         let outcome = match winner {
                             Some(p) => if p as i8 == player as i8 { 1.0 } else { -1.0 },
-                            None => 0.0,
+                            None => 0.01,
                         };
                         games_results.push_back((feat, pol, outcome, plies));
                     }
