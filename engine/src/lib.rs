@@ -398,6 +398,17 @@ impl PyMCTSTree {
     pub fn root_n_children(&self) -> usize {
         self.inner.root_n_children()
     }
+
+    /// Top-N children of root by visit count.
+    /// Returns list of (coord_str, visits, prior) sorted by visits descending.
+    pub fn get_top_visits(&self, n: usize) -> Vec<(String, u32, f32)> {
+        self.inner.get_top_visits(n)
+    }
+
+    /// Value estimate at root from perspective of player to move.
+    pub fn root_value(&self) -> f32 {
+        self.inner.root_value()
+    }
 }
 
 // ── Module registration ───────────────────────────────────────────────────────
