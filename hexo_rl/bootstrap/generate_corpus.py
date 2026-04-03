@@ -27,6 +27,7 @@ log = structlog.get_logger()
 
 RAW_HUMAN_DIR = Path("data/corpus/raw_human")
 BOT_GAMES_DIR = Path("data/corpus/bot_games")
+INJECTED_DIR = Path("data/corpus/injected")
 
 MAX_MOVES_PER_GAME = 500
 

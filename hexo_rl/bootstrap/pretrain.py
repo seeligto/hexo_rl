@@ -32,7 +32,7 @@ from rich.console import Console
 
 from engine import Board
 from hexo_rl.bootstrap.dataset import replay_game_to_triples
-from hexo_rl.bootstrap.generate_corpus import BOT_GAMES_DIR, RAW_HUMAN_DIR
+from hexo_rl.bootstrap.generate_corpus import BOT_GAMES_DIR, INJECTED_DIR, RAW_HUMAN_DIR
 from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet, compile_model
 from hexo_rl.training.losses import (
@@ -281,6 +281,23 @@ def load_corpus(
             except Exception:
                 continue
     log.info("loaded_bot_strong_games", count=strong_ok)
+
+    # Injected games (human-seed bot-continuation)
+    injected_ok = 0
+    if INJECTED_DIR.exists():
+        for path in sorted(INJECTED_DIR.glob("*.json")):
+            try:
+                with open(path) as f:
+                    d = json.load(f)
+                moves = [(int(m["x"]), int(m["y"])) for m in d["moves"]]
+                winner = int(d["winner"]) if "winner" in d else _game_winner_from_replay(moves)
+                if winner is None or winner == 0:
+                    continue
+                _add_game(moves, winner, path.stem, "injected")
+                injected_ok += 1
+            except Exception:
+                continue
+    log.info("loaded_injected_games", count=injected_ok)
 
     if not all_s:
         return (

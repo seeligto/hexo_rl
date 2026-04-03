@@ -10,6 +10,7 @@ source_weights:               # relative sampling weight per source
   human: 1.0
   bot_fast: 0.8
   bot_strong: 1.0             # strong (0.5s) is higher quality per game
+  injected: 0.9               # human-seed bot-continuation; hybrid quality
 
 quality_weights:              # quality score formula weights
   w_elo: 0.4
