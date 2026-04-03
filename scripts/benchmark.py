@@ -274,7 +274,6 @@ def benchmark_gpu_utilisation(model: "HexTacToeNet", n_runs: int = 5) -> Dict[st
 
         for _ in range(n_runs):
             util_samples: list[float] = []
-            torch.cuda.reset_peak_memory_stats()
             t_end = time.monotonic() + 5.0
             with torch.no_grad(), torch.autocast(device_type="cuda"):
                 while time.monotonic() < t_end:
@@ -638,6 +637,11 @@ def main() -> None:
 
     from hexo_rl.model.network import HexTacToeNet, compile_model
     from engine import ReplayBuffer
+
+    # Reset peak memory tracking before any GPU allocations so
+    # benchmark_gpu_utilisation captures the full process footprint.
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats()
 
     # Build model — read from nested model section (new style) with flat fallback
     model_cfg = config.get("model", {})
