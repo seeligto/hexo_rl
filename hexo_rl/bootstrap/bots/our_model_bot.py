@@ -14,6 +14,7 @@ from hexo_rl.bootstrap.bot_protocol import BotProtocol
 from hexo_rl.env import GameState
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.worker import SelfPlayWorker
+from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
 from hexo_rl.training.trainer import Trainer
 
 
@@ -38,7 +39,7 @@ class OurModelBot(BotProtocol):
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-        state_dict = Trainer._normalize_model_state_dict_keys(Trainer._extract_model_state(payload))
+        state_dict = normalize_model_state_dict_keys(Trainer._extract_model_state(payload))
         model_hparams = Trainer._resolve_model_hparams(dict(config), state_dict)
 
         net = HexTacToeNet(
@@ -48,7 +49,7 @@ class OurModelBot(BotProtocol):
             res_blocks=model_hparams["res_blocks"],
             se_reduction_ratio=model_hparams.get("se_reduction_ratio", 4),
         )
-        net.load_state_dict(state_dict)
+        net.load_state_dict(state_dict, strict=False)
         net.to(device)
         net.eval()
 
