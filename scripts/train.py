@@ -33,6 +33,7 @@ import uuid
 from pathlib import Path
 
 import numpy as np
+import structlog
 import torch
 import yaml
 
@@ -430,10 +431,12 @@ def main() -> None:
 
             if buffer.size < min_buf_size:
                 if (time.time() - last_warmup_log) >= 5.0:
-                    print(
-                        f"[warmup] buffer={buffer.size}/{min_buf_size} games={games_played} "
-                        f"gpu={gpu_monitor.gpu_util_pct:.0f}%",
-                        flush=True,
+                    structlog.get_logger().info(
+                        "warmup",
+                        buffer=buffer.size,
+                        target=min_buf_size,
+                        games=games_played,
+                        gpu_pct=round(gpu_monitor.gpu_util_pct, 0),
                     )
                     last_warmup_log = time.time()
                 time.sleep(1.0)
@@ -442,10 +445,11 @@ def main() -> None:
             new_games = games_played - last_train_game_count
             if new_games <= 0:
                 if (time.time() - last_warmup_log) >= 5.0:
-                    print(
-                        f"[waiting] games={games_played} trained_games={last_train_game_count} "
-                        f"buffer={buffer.size}",
-                        flush=True,
+                    structlog.get_logger().info(
+                        "waiting_for_games",
+                        games=games_played,
+                        trained_games=last_train_game_count,
+                        buffer=buffer.size,
                     )
                     last_warmup_log = time.time()
                 time.sleep(0.1)

@@ -436,6 +436,22 @@ emitter/schema tests).
 - `view →` links in event log (greyed out, pending `/viewer` sprint)
 - `moves_list` forwarded through SocketIO for future game viewer consumption
 
+### 13. Fix warmup stdout leak (2026-04-03)
+**File:** `scripts/train.py`
+
+Warmup and waiting-for-games status messages were using `print()` directly,
+bypassing structlog. This leaked `[warmup]` and `[waiting]` lines to stdout
+instead of going through the structured logging pipeline. Replaced with
+`structlog.get_logger().info(...)` calls.
+
+The web dashboard SPA (`index.html`) was confirmed clean — no REST polling
+or `/api/*` fetch calls exist. The 404s reported in server logs were from
+a previous version or stale browser cache, not the current SPA code.
+
+**Test results:** 368 Python tests passing, no regressions.
+
+---
+
 ### 11. Config loader self-merge bug fix
 **File:** `scripts/train.py`
 
