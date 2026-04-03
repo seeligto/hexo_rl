@@ -408,3 +408,30 @@ Total: 356 Python tests passing.
 - `push_corpus_preview.py` still references the old dashboard HTTP API for
   signaling reloads. It will silently fail (fire-and-forget). Should be
   updated when the web dashboard renderer is built.
+
+---
+
+### 12. Dashboard renderer implementation (2026-04-03)
+**Files:**
+- `configs/monitoring.yaml` — new config file for dashboard/alert settings
+- `hexo_rl/monitoring/terminal_dashboard.py` — rich Live terminal renderer
+- `hexo_rl/monitoring/web_dashboard.py` — Flask+SocketIO web server renderer
+- `hexo_rl/monitoring/static/index.html` — single-file browser SPA
+- `scripts/train.py` — wired up renderer registration and shutdown
+- `tests/test_dashboard_renderers.py` — 12 renderer tests
+
+**Summary:**
+Both dashboard renderers implemented per `docs/08_DASHBOARD_SPEC.md`.
+Terminal dashboard shows stat panel with loss, throughput, buffer, and system
+rows, plus configurable alert line (entropy collapse, grad norm spikes, loss
+trends, eval gate failures). Web dashboard at `http://localhost:5001` with
+Chart.js loss curves, win rate bars, game length chart, stat cards, buffer/corpus
+display, ELO tracking with gate badges, and scrollable event log.
+
+**Test results:** 368 Python tests passing (12 new renderer tests + 14 existing
+emitter/schema tests).
+
+**Deferred items:**
+- ELO sparkline (needs 3+ eval_complete events — wired in SPA, no data yet)
+- `view →` links in event log (greyed out, pending `/viewer` sprint)
+- `moves_list` forwarded through SocketIO for future game viewer consumption
