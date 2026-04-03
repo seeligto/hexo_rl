@@ -274,6 +274,7 @@ def benchmark_gpu_utilisation(model: "HexTacToeNet", n_runs: int = 5) -> Dict[st
 
         for _ in range(n_runs):
             util_samples: list[float] = []
+            torch.cuda.reset_peak_memory_stats()
             t_end = time.monotonic() + 5.0
             with torch.no_grad(), torch.autocast(device_type="cuda"):
                 while time.monotonic() < t_end:
@@ -283,8 +284,7 @@ def benchmark_gpu_utilisation(model: "HexTacToeNet", n_runs: int = 5) -> Dict[st
                     )
             torch.cuda.synchronize()
             util_runs.append(float(np.mean(util_samples)) if util_samples else 0.0)
-            mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            vram_runs.append(float(mem.used) / 1e9)
+            vram_runs.append(float(torch.cuda.max_memory_allocated()) / 1e9)
 
         vram_total = float(pynvml.nvmlDeviceGetMemoryInfo(handle).total) / 1e9
     except Exception as exc:
