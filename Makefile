@@ -250,6 +250,14 @@ CORPUS_STRONG_N ?= 2500
 corpus.scrape: ## Scrape latest human games from [site-redacted] and update manifest
 	bash scripts/scrape_daily.sh
 
+.PHONY: corpus.human.top
+corpus.human.top: ## Scrape human games from top-20 leaderboard players only
+	$(PY) -m hexo_rl.bootstrap.scraper --pages 25 --page-size 20 --top-players-only --top-n 20
+
+.PHONY: corpus.human.rated
+corpus.human.rated: ## Scrape human games with minimum Elo 1200
+	$(PY) -m hexo_rl.bootstrap.scraper --pages 25 --page-size 20 --min-elo 1200
+
 .PHONY: corpus.fast
 corpus.fast: ## Generate SealBot fast self-play corpus (think_time=0.1s)
 	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit $(CORPUS_TIME) --n-games $(CORPUS_FAST_N) --output data/corpus/bot_games/sealbot_fast
