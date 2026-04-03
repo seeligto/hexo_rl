@@ -2,11 +2,10 @@
 """
 End-to-end training loop: self-play → buffer → train → repeat.
 
-Phase 2 design:
   1. Play self-play games until the buffer has enough data.
   2. Run one training step per self-play game (interleaved).
   3. Log structured JSON to file (structlog) every event.
-  4. Display rich live dashboard in terminal.
+  4. Emit structured events via emit_event() for dashboard renderers.
   5. Monitor GPU stats every 5 s via pynvml daemon thread.
   6. Save checkpoints every checkpoint_interval steps.
   7. Stop after --iterations steps (default: runs until Ctrl-C).
