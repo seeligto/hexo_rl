@@ -24,6 +24,7 @@
 pub mod bitboard;
 pub mod zobrist;
 pub mod state;
+pub mod threats;
 mod moves;
 
 pub use state::{

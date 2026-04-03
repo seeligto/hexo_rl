@@ -171,6 +171,25 @@ impl PyBoard {
     /// Human-readable string showing the 19×19 view window (for debugging).
     
     /// Returns a list of all stones on the board as (q, r, player).
+    /// Returns threat cells as list of (q, r, level, player) tuples.
+    /// Threats are EMPTY cells within threatening windows. Viewer only.
+    pub fn get_threats(&self) -> Vec<(i32, i32, u8, u8)> {
+        let mut stones = std::collections::HashMap::new();
+        for (&(q, r), &cell) in self.inner.cells.iter() {
+            let player = match cell {
+                board::Cell::P1 => 0u8,
+                board::Cell::P2 => 1u8,
+                board::Cell::Empty => continue,
+            };
+            stones.insert((q, r), player);
+        }
+        board::threats::get_threats(&stones)
+            .into_iter()
+            .map(|t| (t.q, t.r, t.level, t.player))
+            .collect()
+    }
+
+    /// Returns a list of all stones on the board as (q, r, player).
     pub fn get_stones(&self) -> Vec<(i32, i32, i8)> {
         self.inner.cells.iter().map(|(&(q, r), &cell)| {
             let p = match cell {
