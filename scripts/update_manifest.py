@@ -59,12 +59,52 @@ def _human_date_range() -> tuple[str, str]:
     return oldest, newest
 
 
+def elo_band_key(elo: int | None) -> str:
+    """Assign an Elo value to a band key. Returns 'unrated' for None."""
+    if elo is None:
+        return "unrated"
+    if elo < 1000:
+        return "sub_1000"
+    if elo < 1200:
+        return "1000_1200"
+    if elo < 1400:
+        return "1200_1400"
+    return "1400_plus"
+
+
+def _compute_elo_bands() -> dict[str, int]:
+    """Scan human game files and bucket by max(player_black_elo, player_white_elo)."""
+    bands: dict[str, int] = {
+        "sub_1000": 0,
+        "1000_1200": 0,
+        "1200_1400": 0,
+        "1400_plus": 0,
+        "unrated": 0,
+    }
+    for p in RAW_HUMAN_DIR.glob("*.json"):
+        try:
+            with open(p) as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        elo_b = data.get("player_black_elo")
+        elo_w = data.get("player_white_elo")
+        if elo_b is None and elo_w is None:
+            bands["unrated"] += 1
+        else:
+            vals = [v for v in (elo_b, elo_w) if v is not None]
+            max_elo = max(vals) if vals else None
+            bands[elo_band_key(max_elo)] += 1
+    return bands
+
+
 def main() -> None:
     human_count = _count_json(RAW_HUMAN_DIR)
     bot_breakdown = _count_json_recursive(BOT_GAMES_DIR)
     bot_total = sum(bot_breakdown.values())
     injected_count = _count_json(INJECTED_DIR)
     oldest, newest = _human_date_range()
+    elo_bands = _compute_elo_bands()
 
     manifest = {
         "last_updated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -74,6 +114,7 @@ def main() -> None:
         "injected_games": injected_count,
         "total_games": human_count + bot_total + injected_count,
         "human_date_range": {"oldest": oldest, "newest": newest},
+        "elo_bands": elo_bands,
         "filter": {"rated": True, "min_moves": 20, "reason": "six-in-a-row"},
     }
 
@@ -88,11 +129,14 @@ def main() -> None:
     tmp_path.rename(MANIFEST_PATH)
 
     total = human_count + bot_total + injected_count
+    elo_summary = ", ".join(f"{k}={v}" for k, v in elo_bands.items() if v > 0)
     print(
         f"Manifest updated: {human_count} human, {bot_total} bot "
         f"({', '.join(f'{k}={v}' for k, v in bot_breakdown.items())}), "
         f"{injected_count} injected, {total} total"
     )
+    if elo_summary:
+        print(f"Elo bands: {elo_summary}")
 
 
 if __name__ == "__main__":
