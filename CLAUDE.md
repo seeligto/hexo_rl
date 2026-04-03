@@ -416,9 +416,9 @@ Run `make bench.full`. Latest baseline (2026-04-03, Ryzen 7 3700x + RTX 3070, 16
 |---|---|---|---|
 | MCTS (CPU only, no NN) | 164,946 sim/s | ≥ 140,000 sim/s | Per-move throughput (800 sims/move × 62 iters), IQR ±2,190 (1.3%) |
 | NN inference (batch=64) | 10,201 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±815) |
-| NN latency (batch=1, mean) | 2.90 ms | ≤ 3.5 ms | IQR ±0.19 ms |
+| NN latency (batch=1, mean) | 2.82 ms | ≤ 3.5 ms | Correct 12-block model baseline (2026-04-03) |
 | Replay buffer push | 755,880 pos/sec | ≥ 640,000 pos/sec | IQR ±27k (3.6%) |
-| Replay buffer sample raw (batch=256) | 1,293 µs/batch | ≤ 1,500 µs | IQR ±17 µs |
+| Replay buffer sample raw (batch=256) | 1,237.6 µs/batch | ≤ 1,500 µs | IQR ±8.4 µs |
 | Replay buffer sample augmented (batch=256) | 1,177 µs/batch | ≤ 1,400 µs | IQR ±27 µs |
 | GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
 | VRAM usage (process) | 0.10 GB / 8.6 GB | ≤ 80% | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |

@@ -606,3 +606,9 @@ Key changes vs prior (undersized model) baseline:
 
 Targets recalibrated to 85% of new observed medians. See `make bench.full` output
 `reports/benchmarks/2026-04-03_19-08.json`.
+
+bench.stress confirmed ±27% worker IQR was warm-up artifact.
+bench.full (2026-04-03_19-22): worker 1,094,976 ±1.7% — clean.
+Two target updates applied (NN latency ≤3.5ms, buffer raw ≤1,500µs)
+— both were stale targets set against undersized model.
+game_length_weights units clarified to compound moves in training.yaml.
