@@ -5,12 +5,20 @@ use super::MCTSTree;
 
 impl MCTSTree {
     /// PUCT score for `child_idx`, evaluated from `parent_idx`'s player perspective.
+    ///
+    /// `fpu_value`: pre-computed first-play urgency value for unvisited children.
+    /// For visited children this is ignored — their actual Q is used instead.
     #[inline]
-    pub(crate) fn puct_score(&self, child_idx: u32, parent_idx: u32, parent_n: f32) -> f32 {
+    pub(crate) fn puct_score(&self, child_idx: u32, parent_idx: u32, parent_n: f32, fpu_value: f32) -> f32 {
         let child  = &self.pool[child_idx  as usize];
         let parent = &self.pool[parent_idx as usize];
 
-        let q = if parent.moves_remaining == 1 {
+        let q = if child.n_visits == 0 && child.virtual_loss_count == 0 {
+            // Unvisited node: use dynamic FPU value.
+            // fpu_value is already negated relative to parent when moves_remaining == 1,
+            // so we use it directly (the caller computes it from the parent's Q).
+            fpu_value
+        } else if parent.moves_remaining == 1 {
             -child.q_value_vl(self.virtual_loss, self.vl_adaptive)
         } else {
             child.q_value_vl(self.virtual_loss, self.vl_adaptive)
@@ -41,10 +49,32 @@ impl MCTSTree {
             let first    = node.first_child as usize;
             let n_ch     = node.n_children  as usize;
 
+            // KataGo-style dynamic FPU: value estimate for unvisited children.
+            // explored_mass = sum of priors for all children that have been visited.
+            // fpu_value = parent_q - fpu_reduction * sqrt(explored_mass)
+            // When fpu_reduction == 0.0 this collapses to 0.0 (legacy behaviour).
+            let fpu_value = if self.fpu_reduction > 0.0 {
+                let parent_q = if node.n_visits > 0 {
+                    node.w_value / node.n_visits as f32
+                } else {
+                    0.0
+                };
+                let explored_mass: f32 = (first..first + n_ch)
+                    .filter(|&i| {
+                        let c = &self.pool[i];
+                        c.n_visits > 0 || c.virtual_loss_count > 0
+                    })
+                    .map(|i| self.pool[i].prior)
+                    .sum();
+                parent_q - self.fpu_reduction * explored_mass.sqrt()
+            } else {
+                0.0
+            };
+
             let best = (first..first + n_ch)
                 .max_by(|&a, &b| {
-                    let sa = self.puct_score(a as u32, cur, parent_n);
-                    let sb = self.puct_score(b as u32, cur, parent_n);
+                    let sa = self.puct_score(a as u32, cur, parent_n, fpu_value);
+                    let sb = self.puct_score(b as u32, cur, parent_n, fpu_value);
                     sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .unwrap() as u32;

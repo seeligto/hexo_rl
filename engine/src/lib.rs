@@ -266,15 +266,28 @@ impl PyMCTSTree {
     ///     c_puct: exploration constant (default 1.5).
     ///     virtual_loss: fixed penalty (default 1.0).
     ///     vl_adaptive: enable scaled virtual loss (default False).
+    ///     fpu_reduction: KataGo-style dynamic FPU base (default 0.25).
+    ///         FPU for unvisited children = parent_q - fpu_reduction * sqrt(explored_mass).
+    ///         Set to 0.0 to disable (classical Q=0 for unvisited).
     #[new]
-    #[pyo3(signature = (c_puct = 1.5, virtual_loss = 1.0, vl_adaptive = false))]
-    pub fn new(c_puct: f32, virtual_loss: f32, vl_adaptive: bool) -> Self {
-        let mut inner = MCTSTree::new_with_vl(c_puct, virtual_loss);
+    #[pyo3(signature = (c_puct = 1.5, virtual_loss = 1.0, vl_adaptive = false, fpu_reduction = 0.25))]
+    pub fn new(c_puct: f32, virtual_loss: f32, vl_adaptive: bool, fpu_reduction: f32) -> Self {
+        let mut inner = MCTSTree::new_full(c_puct, virtual_loss, fpu_reduction);
         inner.vl_adaptive = vl_adaptive;
         PyMCTSTree {
             inner,
             board_size: board::BOARD_SIZE,
         }
+    }
+
+    #[getter]
+    pub fn fpu_reduction(&self) -> f32 {
+        self.inner.fpu_reduction
+    }
+
+    #[setter]
+    pub fn set_fpu_reduction(&mut self, val: f32) {
+        self.inner.fpu_reduction = val;
     }
 
     #[getter]

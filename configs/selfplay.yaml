@@ -3,6 +3,13 @@
 mcts:
   n_simulations: 800
   c_puct: 1.5
+  # KataGo-style dynamic FPU (First Play Urgency).
+  # Unvisited children receive Q = parent_q - fpu_reduction * sqrt(explored_policy_mass)
+  # where explored_policy_mass = sum of priors for all already-visited children.
+  # As more children are explored the reduction grows, naturally directing search toward
+  # refining known-good moves rather than sampling every legal move uniformly.
+  # KrakenBot uses 0.25; set to 0.0 to restore the legacy Q=0 behaviour.
+  fpu_reduction: 0.25
   dirichlet_alpha: 0.3
   epsilon: 0.25
   temperature_threshold_ply: 30

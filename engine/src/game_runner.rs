@@ -25,6 +25,7 @@ pub struct SelfPlayRunner {
     max_moves_per_game: usize,
     leaf_batch_size: usize,
     c_puct: f32,
+    fpu_reduction: f32,
     fast_prob: f32,
     fast_sims: usize,
     standard_sims: usize,
@@ -47,13 +48,14 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
         n_simulations: usize,
         leaf_batch_size: usize,
         c_puct: f32,
+        fpu_reduction: f32,
         feature_len: usize,
         policy_len: usize,
         fast_prob: f32,
@@ -70,6 +72,7 @@ impl SelfPlayRunner {
             max_moves_per_game,
             leaf_batch_size,
             c_puct,
+            fpu_reduction,
             fast_prob,
             fast_sims,
             standard_sims: effective_standard,
@@ -104,6 +107,7 @@ impl SelfPlayRunner {
             let max_moves = self.max_moves_per_game;
             let leaf_batch_size = self.leaf_batch_size;
             let c_puct = self.c_puct;
+            let fpu_reduction = self.fpu_reduction;
             let fast_prob = self.fast_prob;
             let fast_sims = self.fast_sims;
             let standard_sims = self.standard_sims;
@@ -113,7 +117,7 @@ impl SelfPlayRunner {
             let recent_game_results = self.recent_game_results.clone();
 
             let handle = thread::spawn(move || {
-                let mut tree = MCTSTree::new(c_puct);
+                let mut tree = MCTSTree::new_full(c_puct, crate::mcts::VIRTUAL_LOSS_PENALTY, fpu_reduction);
                 let mut rng = rng();
 
                 while running.load(Ordering::SeqCst) {
