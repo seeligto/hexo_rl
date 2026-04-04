@@ -113,13 +113,13 @@ class Trainer:
         # GradScaler for FP16 training; no-op on CPU.
         self.scaler = GradScaler(device=self.device.type, enabled=self.fp16)
 
-        # torch.compile: reduce-overhead mode uses CUDA graphs for lower overhead.
+        # torch.compile: default mode does kernel fusion without CUDA graphs.
         if config.get("torch_compile", True) and self.device.type == "cuda":
             try:
                 self.model = torch.compile(
-                    self.model, mode="reduce-overhead", fullgraph=False
+                    self.model, mode="default", fullgraph=False
                 )
-                log.info("torch_compile_enabled", mode="reduce-overhead")
+                log.info("torch_compile_enabled", mode="default")
             except Exception as exc:
                 log.warning("torch_compile_failed", error=str(exc))
 
