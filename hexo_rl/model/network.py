@@ -132,33 +132,45 @@ class HexTacToeNet(nn.Module):
             nn.Softplus(),
         )
 
+        # Ownership head (training only — never called from InferenceServer, evaluator, or MCTS).
+        # Predicts per-cell stone affiliation: +1 = P1, -1 = P2, 0 = empty.
+        self.ownership_head = nn.Sequential(
+            nn.Conv2d(filters, 1, kernel_size=1),
+            nn.Tanh(),
+        )
+
+        # Threat head (training only — never called from InferenceServer, evaluator, or MCTS).
+        # Predicts per-cell binary winning-line membership. Returns raw logits for BCE.
+        self.threat_head = nn.Conv2d(filters, 1, kernel_size=1)
+
     @property
     def tower(self) -> nn.Sequential:
         """Backward-compatible alias for the trunk tower."""
         return self.trunk.tower
 
     def forward(
-        self, x: torch.Tensor, aux: bool = False, uncertainty: bool = False
-    ) -> Union[Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-               Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
-               Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+        self,
+        x: torch.Tensor,
+        aux: bool = False,
+        uncertainty: bool = False,
+        ownership: bool = False,
+        threat: bool = False,
+    ) -> tuple:
         """
         Args:
             x:           (B, 18, H, W) float16 tensor.
             aux:         If True, also return opponent-reply log-policy (training only).
             uncertainty: If True, also return value variance σ² (training only).
-                         Never pass True from InferenceServer, evaluator, or MCTS paths.
+            ownership:   If True, also return ownership prediction (B, 1, H, W) ∈ (-1, 1).
+            threat:      If True, also return threat logits (B, 1, H, W) raw (training only).
+            Never pass aux/uncertainty/ownership/threat=True from InferenceServer,
+            evaluator, or MCTS paths.
 
-        Returns (aux=False, uncertainty=False):   — 3-tuple, unchanged contract
+        Base return (all flags False) — 3-tuple, unchanged inference contract:
             log_policy:   (B, H*W + 1)  log-softmax probabilities
             value:        (B, 1)        tanh scalar in [-1, 1]  (for MCTS)
             value_logit:  (B, 1)        pre-tanh logit          (for BCE loss)
-        Returns (aux=True, uncertainty=False):    — 4-tuple
-            log_policy, value, value_logit, opp_reply
-        Returns (aux=False, uncertainty=True):    — 4-tuple
-            log_policy, value, value_logit, sigma2   (σ² > 0 via Softplus)
-        Returns (aux=True, uncertainty=True):     — 5-tuple
-            log_policy, value, value_logit, opp_reply, sigma2
+        Additional outputs appended in order: opp_reply, sigma2, ownership_pred, threat_pred.
         """
         out = self.trunk(x)
 
@@ -175,24 +187,26 @@ class HexTacToeNet(nn.Module):
         v_logit = self.value_fc2(v)            # (B, 1) raw logit
         value = torch.tanh(v_logit)
 
-        if aux and uncertainty:
-            o = F.relu(self.opp_reply_bn(self.opp_reply_conv(out)))
-            o = o.flatten(1)
-            opp_reply = F.log_softmax(self.opp_reply_fc(o), dim=1)
-            sigma2 = self.value_var(out)       # (B, 1), σ² > 0
-            return log_policy, value, v_logit, opp_reply, sigma2
+        # Build the base 3-tuple; optional heads are appended in order.
+        extras: list = []
 
         if aux:
             o = F.relu(self.opp_reply_bn(self.opp_reply_conv(out)))
             o = o.flatten(1)
-            opp_reply = F.log_softmax(self.opp_reply_fc(o), dim=1)
-            return log_policy, value, v_logit, opp_reply
+            extras.append(F.log_softmax(self.opp_reply_fc(o), dim=1))
 
         if uncertainty:
-            sigma2 = self.value_var(out)       # (B, 1), σ² > 0
-            return log_policy, value, v_logit, sigma2
+            extras.append(self.value_var(out))   # (B, 1), σ² > 0
 
-        return log_policy, value, v_logit
+        if ownership:
+            extras.append(self.ownership_head(out))  # (B, 1, H, W) ∈ (-1, 1)
+
+        if threat:
+            extras.append(self.threat_head(out))     # (B, 1, H, W) raw logits
+
+        if not extras:
+            return log_policy, value, v_logit
+        return (log_policy, value, v_logit, *extras)
 
 
 def compile_model(model: HexTacToeNet, mode: str = "default") -> HexTacToeNet:

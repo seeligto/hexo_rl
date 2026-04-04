@@ -198,7 +198,7 @@ def main() -> None:
         # on resume (the embedded checkpoint config would otherwise win).
         config_overrides: dict = {"torch_compile": combined_config.get("torch_compile", False)}
         # Propagate new training keys that may not exist in older checkpoints.
-        for _key in ("uncertainty_weight", "recency_weight"):
+        for _key in ("uncertainty_weight", "recency_weight", "ownership_weight", "threat_weight"):
             if _key in combined_config:
                 config_overrides[_key] = combined_config[_key]
         if args.iterations is not None and args.override_scheduler_horizon:
@@ -631,6 +631,8 @@ def main() -> None:
 
                 # ── Training step (mixed or single buffer) ──
                 batch_size = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
+                # Sample auxiliary targets from pool's recent-game ring buffer.
+                own_targets, thr_targets = pool.get_aux_targets(batch_size)
                 if pretrained_buffer is not None and pretrained_buffer.size > 0 and buffer.size > 0:
                     w_pre = compute_pretrained_weight(train_step)
                     n_pre = max(1, int(math.ceil(batch_size * w_pre)))
@@ -650,10 +652,16 @@ def main() -> None:
                     states = np.concatenate([s_pre, s_self], axis=0)
                     policies = np.concatenate([p_pre, p_self], axis=0)
                     outcomes = np.concatenate([o_pre, o_self], axis=0)
-                    loss_info = trainer.train_step_from_tensors(states, policies, outcomes)
+                    loss_info = trainer.train_step_from_tensors(
+                        states, policies, outcomes,
+                        ownership_targets=own_targets, threat_targets=thr_targets,
+                    )
                 else:
                     w_pre = 0.0
-                    loss_info = trainer.train_step(buffer, recent_buffer=recent_buffer)
+                    loss_info = trainer.train_step(
+                        buffer, recent_buffer=recent_buffer,
+                        ownership_targets=own_targets, threat_targets=thr_targets,
+                    )
                 train_step = trainer.step
                 if initial_policy_loss is None:
                     initial_policy_loss = float(loss_info["policy_loss"])
