@@ -553,29 +553,6 @@ mod tests {
 
     // ── Quiescence tests ──────────────────────────────────────────────────────
 
-    /// Helper: build a board where `player` has 5 in a row (3 open winning cells on
-    /// each end = 2 total), with `extra_threats` additional separate 5-in-a-row threats.
-    fn board_with_n_threats(extra_threats: usize) -> Board {
-        let mut board = Board::new();
-
-        // First threat: P1 stones at (0,0)..(4,0) along E axis.
-        // Cells (-1,0) and (5,0) are both winning moves.
-        for q in 0..5i32 {
-            board.cells.insert((q, 0), crate::board::Cell::P1);
-        }
-        board.has_stones = true;
-
-        // Additional independent threats along NE axis (q=10+i offset to avoid overlap).
-        for i in 0..extra_threats {
-            let base_q = 20 + (i as i32) * 20;
-            for r in 0..5i32 {
-                board.cells.insert((base_q, r), crate::board::Cell::P1);
-            }
-        }
-
-        board.cache_dirty.set(true);
-        board
-    }
 
     #[test]
     fn test_quiescence_overrides_value_for_3_winning_moves() {
