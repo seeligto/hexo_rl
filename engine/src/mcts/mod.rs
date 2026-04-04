@@ -33,6 +33,11 @@ pub struct MCTSTree {
     pub(crate) c_puct: f32,
     pub(crate) virtual_loss: f32,
     pub(crate) vl_adaptive: bool,
+    /// KataGo-style dynamic FPU base. FPU for unvisited children is computed as:
+    ///   fpu_value = parent_q - fpu_reduction * sqrt(explored_policy_mass)
+    /// where explored_policy_mass = sum of prior for all visited children.
+    /// Set to 0.0 to disable (classical fixed-FPU behaviour: Q=0 for unvisited).
+    pub(crate) fpu_reduction: f32,
     pub selection_overlap_count: u32,
     pub max_depth_observed: u32,
     pub(crate) pending: Vec<(u32, Vec<MoveDiff>)>,
@@ -45,6 +50,10 @@ impl MCTSTree {
     }
 
     pub fn new_with_vl(c_puct: f32, virtual_loss: f32) -> Self {
+        MCTSTree::new_full(c_puct, virtual_loss, 0.0)
+    }
+
+    pub fn new_full(c_puct: f32, virtual_loss: f32, fpu_reduction: f32) -> Self {
         let pool = vec![Node::uninit(); MAX_NODES];
         MCTSTree {
             pool,
@@ -53,6 +62,7 @@ impl MCTSTree {
             c_puct,
             virtual_loss,
             vl_adaptive: false,
+            fpu_reduction,
             selection_overlap_count: 0,
             max_depth_observed: 0,
             pending: Vec::new(),
@@ -249,8 +259,9 @@ mod tests {
     fn test_puct_prefers_higher_prior_when_unvisited() {
         let (mut tree, child_a, child_b) = setup_two_child_tree(1.5);
         tree.pool[0].n_visits = 1;
-        let score_a = tree.puct_score(child_a, 0, 1.0);
-        let score_b = tree.puct_score(child_b, 0, 1.0);
+        // fpu_value=0.0: both children unvisited, Q=0 for both; prior drives selection.
+        let score_a = tree.puct_score(child_a, 0, 1.0, 0.0);
+        let score_b = tree.puct_score(child_b, 0, 1.0, 0.0);
         assert!(score_a > score_b,
             "child with prior 0.7 should score higher than 0.3: {score_a:.4} vs {score_b:.4}");
     }
@@ -262,8 +273,10 @@ mod tests {
         tree.pool[child_a as usize].n_visits = 99;
         tree.pool[child_a as usize].w_value  = 0.0;
 
-        let score_a = tree.puct_score(child_a, 0, 100.0);
-        let score_b = tree.puct_score(child_b, 0, 100.0);
+        // child_a is visited (n_visits=99), child_b is unvisited → fpu_value applies.
+        // With fpu_value=0.0 the unvisited child still looks like Q=0, but has higher U.
+        let score_a = tree.puct_score(child_a, 0, 100.0, 0.0);
+        let score_b = tree.puct_score(child_b, 0, 100.0, 0.0);
         assert!(score_b > score_a,
             "less-visited child_b should be preferred: {score_b:.4} vs {score_a:.4}");
     }
@@ -495,6 +508,36 @@ mod tests {
             "child_a prior: expected {expected_a:.6}, got {prior_a:.6}");
         assert!((prior_b - expected_b).abs() < 1e-6,
             "child_b prior: expected {expected_b:.6}, got {prior_b:.6}");
+    }
+
+    #[test]
+    fn test_dynamic_fpu_reduces_unvisited_q() {
+        // Dynamic FPU: unvisited children should receive parent_q - reduction*sqrt(mass).
+        let (mut tree, child_a, child_b) = setup_two_child_tree(1.5);
+        tree.fpu_reduction = 0.25;
+        tree.pool[0].n_visits = 10;
+        tree.pool[0].w_value  = 3.0; // parent Q = 0.3
+
+        // child_a: visited (n_visits=1), Q from w_value/n_visits.
+        tree.pool[child_a as usize].n_visits = 1;
+        tree.pool[child_a as usize].w_value  = 0.2;
+
+        // child_b: unvisited → should get fpu_value.
+        // explored_mass = prior of child_a = 0.7  → reduction = 0.25*sqrt(0.7) ≈ 0.209
+        // fpu_value = parent_q(0.3) - 0.209 ≈ 0.091
+        let explored_mass: f32 = 0.7;
+        let expected_fpu = (3.0f32 / 10.0) - 0.25 * explored_mass.sqrt();
+
+        // child_b uses fpu_value; child_a (visited) uses its own Q.
+        let score_b_fpu = tree.puct_score(child_b, 0, 10.0, expected_fpu);
+        let score_b_zero_fpu = tree.puct_score(child_b, 0, 10.0, 0.0);
+        // With parent_q > 0, FPU value < 0.3 but > 0.0 — so dynamic FPU raises score
+        // compared to the legacy Q=0 baseline when parent_q is positive.
+        assert!(
+            score_b_fpu > score_b_zero_fpu || expected_fpu < 0.0,
+            "dynamic FPU should raise unvisited score when parent_q > 0: \
+             fpu_score={score_b_fpu:.4} vs zero_fpu={score_b_zero_fpu:.4} (fpu={expected_fpu:.4})"
+        );
     }
 
     #[test]

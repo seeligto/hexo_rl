@@ -50,6 +50,7 @@ class WorkerPool:
         mcts_cfg = config.get("mcts", config)
         self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
         self.c_puct = float(mcts_cfg.get("c_puct", 1.5))
+        self.fpu_reduction = float(mcts_cfg.get("fpu_reduction", 0.25))
         leaf_batch_size = int(sp.get("leaf_batch_size", 8))
 
         pc = sp.get("playout_cap", config.get("playout_cap", {}))
@@ -61,6 +62,7 @@ class WorkerPool:
             n_simulations=self.n_simulations,
             leaf_batch_size=leaf_batch_size,
             c_puct=self.c_puct,
+            fpu_reduction=self.fpu_reduction,
             feature_len=in_channels * board_size * board_size,
             policy_len=board_size * board_size + 1,
             fast_prob=float(pc.get("fast_prob", 0.0)),

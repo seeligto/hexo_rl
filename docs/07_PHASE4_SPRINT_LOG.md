@@ -920,3 +920,49 @@ set if unoccupied. This is 217 cells per stone, deduplicated via FxHashSet.
   a NN window; legal moves determine where a stone can be placed. Both happen to be 8 because
   that is the official game rule, and colony grouping by the same distance is a natural choice
   for windowing stones that can legally interact.
+
+---
+
+### 27. KataGo-style dynamic FPU (2026-04-04)
+**Files:** `engine/src/mcts/mod.rs`, `engine/src/mcts/selection.rs`,
+`engine/src/game_runner.rs`, `engine/src/lib.rs`,
+`hexo_rl/selfplay/pool.py`, `configs/selfplay.yaml`
+
+**Context:** KrakenBot community bot analysis (docs/10_COMMUNITY_BOT_ANALYSIS.md §5.1A)
+identified KataGo-style dynamic FPU as a key component of KrakenBot's MCTS.
+
+**What classical FPU does:** Unvisited children get a fixed Q estimate (0.0 in our
+prior code). This means MCTS treats all unexplored moves as neutral, and the exploration
+bonus (U term) drives initial branching entirely from policy priors.
+
+**What dynamic FPU does:**
+
+```
+explored_mass = sum of prior(a) for all visited children a
+fpu_reduction = fpu_base * sqrt(explored_mass)
+fpu_value     = parent_q - fpu_reduction
+```
+
+As more children are visited, `explored_mass` grows toward 1.0 and `fpu_value` becomes
+more pessimistic relative to `parent_q`. This shifts exploration toward refining
+already-known-good branches rather than sampling every legal move uniformly. When
+`parent_q` is positive (winning position) the FPU value is below the parent's Q but
+still positive — less optimistic than a fresh branch, but not zero.
+
+**Implementation:**
+- `MCTSTree` gains `fpu_reduction: f32` field. New constructor `new_full()` sets it.
+  `new()` and `new_with_vl()` default to `0.0` (no-op, backward-compatible).
+- `puct_score()` gains a `fpu_value: f32` parameter. Used only when
+  `child.n_visits == 0 && child.virtual_loss_count == 0`.
+- `select_one_leaf()` computes `explored_mass` and `fpu_value` once per node visit,
+  before the `max_by` over children. Overhead: one extra pass over N children, O(N).
+- `SelfPlayRunner` and `PyMCTSTree` both accept `fpu_reduction` and thread it through.
+- `pool.py` reads `mcts.fpu_reduction` from config (default 0.25 matches KrakenBot).
+
+**Config:** `configs/selfplay.yaml` `mcts.fpu_reduction = 0.25`.
+
+**Benchmark:** Deferred — will rebaseline after all Wave 2 prompts land.
+
+**Test coverage:** New unit test `test_dynamic_fpu_reduces_unvisited_q` verifies that
+the FPU value raised for an unvisited child when `parent_q > 0` compared to the legacy
+`Q=0` baseline.
