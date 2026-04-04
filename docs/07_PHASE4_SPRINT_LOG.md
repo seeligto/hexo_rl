@@ -1203,3 +1203,36 @@ Two contributing factors:
 - `fix(training): make corpus prefill optional, lower buffer threshold`
 - `feat(dashboard): show buffer fill progress during cold-start`
 - `fix(training): handle SIGINT/SIGTERM for clean shutdown`
+
+---
+
+### 32. Disable torch.compile — Python 3.14 incompatibility cascade (2026-04-04)
+
+**Background:** torch.compile has caused three consecutive blocking issues:
+
+- **§25** — `mode="reduce-overhead"`: CUDA graph TLS crash on Python 3.14. Fixed by
+  switching to `mode="default"`.
+- **§30** — `mode="default"`: Still crashes on the first forward pass in some
+  configurations.
+- **Current** — `mode="default"`: Causes a 27 GB RAM spike during Triton JIT
+  compilation and blocks all workers for 5+ minutes while the first forward pass
+  compiles. Training appears hung during this window.
+
+**Decision:** Disable torch.compile entirely. The benchmark delta was only +3%
+worker throughput — not worth the instability.
+
+**Changes:**
+- `configs/training.yaml` — `torch_compile: false`
+- `hexo_rl/training/trainer.py` — default changed to `False`; added comment
+  referencing §25 and §30
+- `scripts/train.py` — `_torch_compile_enabled` default changed to `False`;
+  inf_model block comment updated; resource_tracker suppression added at exit
+  to silence spurious "leaked semaphore" warning from Rust PyO3 OS primitives
+- `scripts/train.py` — corpus load now logs `corpus_loaded` with position count
+  and elapsed seconds so users can see how long the NPZ push takes
+
+**Re-enablement criteria:** Deferred until PyTorch stabilizes CUDA graph support
+on Python 3.14. Track upstream: https://github.com/pytorch/pytorch/issues
+
+**Commit:**
+- `fix(training): disable torch.compile (Python 3.14 compat issues)`

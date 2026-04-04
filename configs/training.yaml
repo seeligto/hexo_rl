@@ -2,7 +2,7 @@
 # Single source of truth for all training settings.
 
 fp16: true
-torch_compile: true    # split train+inf model instances — see scripts/train.py inf_model block
+torch_compile: false   # disabled — Python 3.14 CUDA graph incompatibility (see sprint §25, §30)
 policy_prune_frac: 0.02
 batch_size: 256
 min_buffer_size: 256

@@ -235,10 +235,11 @@ def main() -> None:
     # ── Inference model — separate instance owned exclusively by InferenceServer ──
     # train_model (trainer.model) stays on the main thread for gradient updates.
     # inf_model lives on the InferenceServer daemon thread for forward-only passes.
-    # Both are compiled independently when torch_compile=true so CUDA graphs
-    # (which are captured per-thread/per-stream) never cross thread boundaries.
+    # torch.compile disabled — Python 3.14 compatibility issues
+    # See sprint log §25, §30 for history
+    # Re-enable when PyTorch + Python 3.14 CUDA graph support stabilizes
     _torch_compile_enabled = (
-        trainer.config.get("torch_compile", True)
+        trainer.config.get("torch_compile", False)
         and device.type == "cuda"
     )
     inf_model = HexTacToeNet(
@@ -313,6 +314,7 @@ def main() -> None:
     if pretrained_path and Path(pretrained_path).exists():
         log.info("loading_corpus_npz", path=pretrained_path,
                  msg="copying corpus into Rust pretrained_buffer — may take minutes for large corpora")
+        t0 = time.time()
         data = np.load(pretrained_path, mmap_mode='r')
         pre_states = data["states"]       # (T, 18, 19, 19) float16
         pre_policies = data["policies"]   # (T, 362) float32
@@ -332,8 +334,7 @@ def main() -> None:
         pretrained_buffer = ReplayBuffer(capacity=T)
         pretrained_buffer.push_game(pre_states, pre_policies, pre_outcomes)
         del data
-        log.info("pretrained_buffer_loaded", path=pretrained_path,
-                 size=pretrained_buffer.size)
+        log.info("corpus_loaded", positions=T, seconds=f"{time.time()-t0:.1f}")
     elif pretrained_path:
         log.warning(
             "corpus_npz_not_found",
@@ -801,6 +802,16 @@ def main() -> None:
         decrease = initial_policy_loss - last_loss_info["policy_loss"]
         print(f"Policy loss: {initial_policy_loss:.4f} → {last_loss_info['policy_loss']:.4f} "
               f"({'↓' if decrease > 0 else '↑'}{abs(decrease):.4f})")
+
+    # Suppress spurious "leaked semaphore" warning on exit.
+    # The semaphore originates from Rust PyO3 OS primitives (SelfPlayRunner /
+    # InferenceBatcher condvars) that Python's resource_tracker cannot own or
+    # release. Silencing the tracker prevents a noisy but harmless warning.
+    try:
+        import multiprocessing.resource_tracker
+        multiprocessing.resource_tracker._resource_tracker._stop()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
