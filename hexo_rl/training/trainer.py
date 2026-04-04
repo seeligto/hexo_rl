@@ -506,7 +506,15 @@ class Trainer:
         trainer = cls(model, config, checkpoint_dir=ckpt_dir, device=device)
         
         if is_full_ckpt:
-            trainer.optimizer.load_state_dict(ckpt["optimizer_state"])
+            try:
+                trainer.optimizer.load_state_dict(ckpt["optimizer_state"])
+            except ValueError as exc:
+                log.warning(
+                    "optimizer_state_skipped",
+                    reason=str(exc),
+                    msg="Model architecture changed (new parameters added) — "
+                        "optimizer restarted from scratch for new params.",
+                )
             trainer.scaler.load_state_dict(ckpt["scaler_state"])
             if trainer.scheduler is not None and ckpt.get("scheduler_state") is not None:
                 scheduler_state = ckpt["scheduler_state"]

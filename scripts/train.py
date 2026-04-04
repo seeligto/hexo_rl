@@ -196,6 +196,10 @@ def main() -> None:
         # checkpoint saved with torch_compile=true doesn't re-enable compilation
         # on resume (the embedded checkpoint config would otherwise win).
         config_overrides: dict = {"torch_compile": combined_config.get("torch_compile", False)}
+        # Propagate new training keys that may not exist in older checkpoints.
+        for _key in ("uncertainty_weight", "recency_weight"):
+            if _key in combined_config:
+                config_overrides[_key] = combined_config[_key]
         if args.iterations is not None and args.override_scheduler_horizon:
             config_overrides["total_steps"] = int(args.iterations)
 
