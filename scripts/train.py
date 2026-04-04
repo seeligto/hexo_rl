@@ -819,6 +819,8 @@ def main() -> None:
                         draw_rate=round(float(pool.draws / games_played), 3) if games_played > 0 else 0.0,
                         gpu_util=round(float(gpu_monitor.gpu_util_pct), 1),
                         vram_gb=round(float(gpu_monitor.vram_used_gb), 2),
+                        ownership_loss=round(float(loss_info["ownership_loss"]), 4) if loss_info.get("ownership_loss") is not None else None,
+                        threat_loss=round(float(loss_info["threat_loss"]), 4) if loss_info.get("threat_loss") is not None else None,
                     )
 
     try:

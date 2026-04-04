@@ -17,7 +17,7 @@ pub struct TTEntry {
 #[derive(Clone, Copy)]
 pub struct Node {
     pub parent: u32,
-    pub action_idx: u16,
+    pub action_idx: u32,
     pub n_visits: u32,
     pub w_value: f32,
     pub prior: f32,
@@ -33,7 +33,7 @@ impl Node {
     pub fn uninit() -> Self {
         Node {
             parent: u32::MAX,
-            action_idx: u16::MAX,
+            action_idx: u32::MAX,
             n_visits: 0,
             w_value: 0.0,
             prior: 0.0,

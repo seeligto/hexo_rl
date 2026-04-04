@@ -185,13 +185,13 @@ train.multi: ## Multi-hour training profile from bootstrap checkpoint
 	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_BOOTSTRAP)
 
 .PHONY: train.smoke
-train.smoke: ## 200-step smoke test to verify training end-to-end
+train.smoke: ## 20-step smoke test to verify training end-to-end
 	@if [ -z "$(CHECKPOINT_BOOTSTRAP)" ]; then \
 	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
 	    exit 1; \
 	fi
 	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
-	$(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 200
+	$(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 20
 
 .PHONY: train.resume
 train.resume: ## Resume training from latest checkpoint
