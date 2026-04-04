@@ -54,6 +54,7 @@ class WorkerPool:
 
         pc = sp.get("playout_cap", config.get("playout_cap", {}))
 
+        training_cfg = config.get("training", config)
         self._runner = SelfPlayRunner(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_moves_per_game", 128)),
@@ -66,6 +67,7 @@ class WorkerPool:
             fast_sims=int(pc.get("fast_sims", 50)),
             standard_sims=int(pc.get("standard_sims", 0)),
             temp_threshold_compound_moves=int(pc.get("temperature_threshold_compound_moves", 15)),
+            draw_reward=float(training_cfg.get("draw_reward", -0.1)),
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 

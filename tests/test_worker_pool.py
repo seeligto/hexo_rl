@@ -155,7 +155,7 @@ def test_rust_runner_collect_data_format():
         assert len(feat) == 18 * 19 * 19
         assert len(pol) == 19 * 19 + 1
         assert isinstance(outcome, float)
-        assert outcome == -1.0 or outcome == 1.0 or abs(outcome - 0.01) < 1e-6
+        assert outcome == -1.0 or outcome == 1.0 or abs(outcome - (-0.1)) < 1e-5
         assert isinstance(plies, int)
         assert plies >= 0
         
