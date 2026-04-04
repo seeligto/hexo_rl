@@ -578,6 +578,8 @@ mod tests {
         board.has_stones = true;
         board.cache_dirty.set(true);
         board.current_player = crate::board::Player::One;
+        // ply must be ≥ 8 so the early-game ply gate does not short-circuit.
+        board.ply = 20;
 
         // Current player is P1; P1 has 1 + 2 = 3 winning cells → forced win.
         let wins = board.count_winning_moves(crate::board::Player::One);
@@ -607,6 +609,8 @@ mod tests {
         board.has_stones = true;
         board.cache_dirty.set(true);
         board.current_player = crate::board::Player::One;
+        // ply must be ≥ 8 so the early-game ply gate does not short-circuit.
+        board.ply = 20;
 
         let opp_wins = board.count_winning_moves(crate::board::Player::Two);
         assert!(opp_wins >= 3, "expected ≥3 winning moves for P2, got {opp_wins}");
@@ -630,6 +634,8 @@ mod tests {
         board.has_stones = true;
         board.cache_dirty.set(true);
         board.current_player = crate::board::Player::One;
+        // ply must be ≥ 8 so the early-game ply gate does not short-circuit.
+        board.ply = 10;
 
         let wins = board.count_winning_moves(crate::board::Player::One);
         assert_eq!(wins, 2, "unblocked 5-in-a-row should have exactly 2 winning moves");
