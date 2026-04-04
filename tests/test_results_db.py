@@ -90,3 +90,38 @@ def test_all_player_ids(db: ResultsDB) -> None:
     b = db.get_or_create_player("b", "sealbot")
     ids = db.get_all_player_ids()
     assert a in ids and b in ids
+
+
+def test_results_db_run_id_scoping(db: ResultsDB) -> None:
+    run1 = "run1"
+    run2 = "run2"
+
+    # Reference opponent (no run_id / empty run_id)
+    ref_id = db.get_or_create_player("SealBot", "sealbot", run_id="")
+
+    # Players for run1
+    p1_run1 = db.get_or_create_player("ckpt_100", "checkpoint", run_id=run1)
+
+    # Players for run2
+    p1_run2 = db.get_or_create_player("ckpt_100", "checkpoint", run_id=run2)
+
+    # Matches for run1
+    db.insert_match(100, p1_run1, ref_id, 10, 0, 0, 10, 1.0, 0.9, 1.0, run_id=run1)
+
+    # Matches for run2
+    db.insert_match(100, p1_run2, ref_id, 5, 5, 0, 10, 0.5, 0.3, 0.7, run_id=run2)
+
+    # Scoping for run1
+    pairwise1 = db.get_all_pairwise(run_id=run1)
+    # Should see p1_run1 vs ref, NOT p1_run2 vs ref
+    assert len(pairwise1) == 1
+    assert pairwise1[0][0] == p1_run1
+    assert pairwise1[0][2] == 10  # wins_a
+
+    # Scoping for run2
+    pairwise2 = db.get_all_pairwise(run_id=run2)
+    # Should see p1_run2 vs ref, NOT p1_run1 vs ref
+    assert len(pairwise2) == 1
+    assert pairwise2[0][0] == p1_run2
+    assert pairwise2[0][2] == 5  # wins_a
+

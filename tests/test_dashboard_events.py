@@ -205,6 +205,7 @@ def _make_sample_payload(event_type: str) -> dict:
             "event": "run_start",
             "step": 0,
             "run_id": "abc123def456",
+            "worker_count": 8,
             "config_summary": {"n_blocks": 12, "channels": 128},
         },
         "run_end": {

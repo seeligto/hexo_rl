@@ -46,10 +46,11 @@ def _binomial_ci(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
 class EvalPipeline:
     """Orchestrates evaluation rounds for Phase 4.0 training."""
 
-    def __init__(self, eval_config: dict[str, Any], device: torch.device) -> None:
+    def __init__(self, eval_config: dict[str, Any], device: torch.device, run_id: str | None = None) -> None:
         cfg = eval_config["eval_pipeline"]
         self.cfg = cfg
         self.device = device
+        self.run_id = run_id
 
         report_dir = Path(cfg["report_dir"])
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -187,13 +188,13 @@ class EvalPipeline:
             )
 
         # ── Bradley-Terry ratings ─────────────────────────────────────
-        pairwise = self.db.get_all_pairwise()
+        pairwise = self.db.get_all_pairwise(run_id=self.run_id)
         anchor_name = self.bt_cfg.get("anchor_player", "checkpoint_0")
         reg = float(self.bt_cfg.get("regularization", 1e-6))
 
         # Resolve anchor ID (fall back to first checkpoint if anchor not found)
         try:
-            anchor_pid = self.db.get_or_create_player(anchor_name, "checkpoint")
+            anchor_pid = self.db.get_or_create_player(anchor_name, "checkpoint", run_id=self.run_id)
         except Exception:
             anchor_pid = ckpt_pid
 
@@ -217,7 +218,7 @@ class EvalPipeline:
             }
 
             # Colony win breakdown
-            colony_stats = self.db.get_colony_win_stats()
+            colony_stats = self.db.get_colony_win_stats(run_id=self.run_id)
             print_colony_win_breakdown(colony_stats, player_names)
 
             # Plot
@@ -232,7 +233,7 @@ class EvalPipeline:
 
     def _plot_ratings_curve(self) -> None:
         """Generate ratings-vs-step plot, written atomically."""
-        history = self.db.get_ratings_history()
+        history = self.db.get_ratings_history(run_id=self.run_id)
         if not history:
             return
 
