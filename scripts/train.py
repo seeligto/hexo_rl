@@ -346,7 +346,7 @@ def main() -> None:
         eval_ext_config = load_config(str(eval_yaml_path))
         ep_cfg = eval_ext_config.get("eval_pipeline", {})
         if ep_cfg.get("enabled", False):
-            eval_pipeline = EvalPipeline(eval_ext_config, device)
+            eval_pipeline = EvalPipeline(eval_ext_config, device, run_id=run_id)
             eval_interval = int(ep_cfg.get("eval_interval", 1000))
             log.info("eval_pipeline_enabled", interval=eval_interval)
     if eval_pipeline is None:
@@ -441,6 +441,7 @@ def main() -> None:
         "event": "run_start",
         "step": train_step,
         "run_id": run_id,
+        "worker_count": pool.n_workers,
         "config_summary": {
             "n_blocks": int(combined_config.get("res_blocks", 12)),
             "channels": int(combined_config.get("filters", 128)),
@@ -448,6 +449,41 @@ def main() -> None:
             "buffer_capacity": capacity,
         },
     })
+
+    if args.checkpoint and "pretrain" in Path(args.checkpoint).name:
+        pretrain_log = Path(args.log_dir) / "pretrain.jsonl"
+        if pretrain_log.exists():
+            import json
+            replay_evs = []
+            try:
+                with open(pretrain_log, "r") as f:
+                    for line in f:
+                        try:
+                            d = json.loads(line)
+                            if d.get("event") == "train_step" and d.get("phase") == "pretrain":
+                                replay_evs.append({
+                                    "event": "training_step",
+                                    "step": d.get("step"),
+                                    "loss_total": d.get("loss"),
+                                    "loss_policy": d.get("policy_loss"),
+                                    "loss_value": d.get("value_loss"),
+                                    "loss_aux": d.get("aux_opp_reply_loss"),
+                                    "policy_entropy": d.get("policy_entropy"),
+                                    "value_accuracy": d.get("value_accuracy"),
+                                    "lr": d.get("lr"),
+                                    "grad_norm": d.get("grad_norm"),
+                                    "corpus_mix": d.get("corpus_mix", {"pretrain": 1.0, "self_play": 0.0}),
+                                    "phase": "pretrain",
+                                })
+                        except Exception:
+                            pass
+            except Exception as e:
+                log.warning("pretrain_replay_failed", error=str(e))
+                
+            if replay_evs:
+                log.info("replaying_pretrain_events", count=len(replay_evs[-500:]))
+                for ev in replay_evs[-500:]:
+                    emit_event(ev)
 
     # Start multiprocess self-play
     pool.start()

@@ -41,6 +41,7 @@ from hexo_rl.training.losses import (
 )
 from hexo_rl.training.checkpoints import save_full_checkpoint, save_inference_weights
 from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.monitoring.events import emit_event
 
 log = structlog.get_logger()
 console = Console()
@@ -407,7 +408,7 @@ class BootstrapTrainer:
                 opp_reply_loss = compute_aux_loss(opp_reply, policies, policy_valid, self.device)
                 loss = compute_total_loss(policy_loss, value_loss, opp_reply_loss, aux_weight)
 
-            fp16_backward_step(loss, self.optimizer, self.scaler, self.model, self.fp16)
+            grad_norm = fp16_backward_step(loss, self.optimizer, self.scaler, self.model, self.fp16)
 
             self.scheduler.step()
             self.step += 1
@@ -420,12 +421,39 @@ class BootstrapTrainer:
             n_batches += 1
 
             if log_interval > 0 and self.step % log_interval == 0:
+                policy_entropy = -torch.sum(torch.exp(log_policy) * log_policy, dim=1).mean().item()
+                value_accuracy = (torch.sign(v_logit.squeeze()) == torch.sign(outcomes)).float().mean().item()
+                lr = float(self.optimizer.param_groups[0]["lr"])
+
+                # Emit to dashboard
+                emit_event({
+                    "event": "training_step",
+                    "step": self.step,
+                    "loss_total": float(step_loss),
+                    "loss_policy": float(policy_loss.item()),
+                    "loss_value": float(value_loss.item()),
+                    "loss_aux": float(opp_reply_loss.item()),
+                    "policy_entropy": policy_entropy,
+                    "value_accuracy": value_accuracy,
+                    "lr": lr,
+                    "grad_norm": grad_norm,
+                    "corpus_mix": {"pretrain": 1.0, "self_play": 0.0},
+                    "phase": "pretrain",
+                })
+
                 log.info(
                     "train_step",
                     step=self.step,
+                    phase="pretrain",
                     loss=round(step_loss, 4),
                     policy_loss=round(policy_loss.item(), 4),
                     value_loss=round(value_loss.item(), 4),
+                    aux_opp_reply_loss=round(opp_reply_loss.item(), 4),
+                    policy_entropy=round(policy_entropy, 4),
+                    value_accuracy=round(value_accuracy, 4),
+                    lr=lr,
+                    grad_norm=round(grad_norm, 4),
+                    corpus_mix={"pretrain": 1.0, "self_play": 0.0},
                 )
 
             if step_budget is not None and self.step >= step_budget:
@@ -440,7 +468,7 @@ class BootstrapTrainer:
         Also writes checkpoints/bootstrap_model.pt (weights only) for the
         eval pipeline.
         """
-        ckpt_path = self.checkpoint_dir / f"pretrain_{self.step:08d}.pt"
+        ckpt_path = self.checkpoint_dir / f"pretrain_{abs(self.step):08d}.pt" if self.step < 0 else self.checkpoint_dir / f"pretrain_{self.step:08d}.pt"
         save_full_checkpoint(
             self.model, self.optimizer, self.scaler, self.scheduler,
             self.step, self.config, ckpt_path,
@@ -641,6 +669,8 @@ def pretrain() -> None:
         f"label_smooth={label_smoothing} aux_weight={aux_weight}"
     )
     step_budget = args.steps
+    total_pretrain_steps = step_budget if step_budget is not None else args.epochs * len(loader)
+    trainer.step = -total_pretrain_steps
 
     prev_loss: Optional[float] = None
     for epoch in range(1, args.epochs + 1):
