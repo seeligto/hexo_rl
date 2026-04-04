@@ -58,8 +58,12 @@ Emitted every `config.monitoring.log_interval` training steps (default: 10).
     "value_accuracy":  float,          # fraction: value head correctly predicted winner at move-20
     "lr":              float,          # current learning rate (for LR schedule visibility)
     "grad_norm":       float,          # gradient norm before clipping (NaN if not computed)
+    "phase":           str,            # "pretrain" or "self_play"
 }
 ```
+
+**Why phase:** Allows separating pretrain loss history from RL training in charts.
+Counting up from negative step indices (pretrain) to 0+ (RL).
 
 **Why policy_entropy:** Collapsing entropy before loss plateau is an early
 warning of mode collapse. Log it always; alert if it drops below 1.0.
