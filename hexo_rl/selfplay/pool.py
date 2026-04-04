@@ -161,7 +161,7 @@ class WorkerPool:
                 if elapsed > 0:
                     self._sims_per_sec = sims / elapsed
 
-            for plies, winner_code, move_history in games_batch:
+            for plies, winner_code, move_history, worker_id in games_batch:
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
                 game_length = (plies + 1) // 2  # compound moves
                 self._game_lengths.append(game_length)
@@ -179,7 +179,7 @@ class WorkerPool:
                     "winner": winner_int,
                     "moves": plies,
                     "moves_list": moves_list,
-                    "worker_id": 0,  # TODO: add per-worker ID when Rust exposes it
+                    "worker_id": worker_id,
                     # Per-move MCTS detail: None until Rust game_runner stores
                     # top_visits/root_value per move in drain_game_results().
                     "moves_detail": None,
