@@ -282,8 +282,8 @@ corpus.analysis: corpus.manifest ## Run corpus analysis on human + bot games
 	$(PY) -m hexo_rl.bootstrap.corpus_analysis --include-bot-games
 
 .PHONY: corpus.npz
-corpus.npz: ## Export corpus to data/bootstrap_corpus.npz for mixed training
-	$(PY) scripts/export_corpus_npz.py
+corpus.npz: ## Export optimized 50K-position uncompressed NPZ for buffer prefill
+	$(PY) scripts/export_corpus_npz.py --max-positions 50000 --no-compress
 
 .PHONY: help.train
 help.train: ## List all training-related targets
