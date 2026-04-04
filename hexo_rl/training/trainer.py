@@ -113,8 +113,10 @@ class Trainer:
         # GradScaler for FP16 training; no-op on CPU.
         self.scaler = GradScaler(device=self.device.type, enabled=self.fp16)
 
-        # torch.compile: default mode does kernel fusion without CUDA graphs.
-        if config.get("torch_compile", True) and self.device.type == "cuda":
+        # torch.compile disabled — Python 3.14 compatibility issues
+        # See sprint log §25, §30 for history
+        # Re-enable when PyTorch + Python 3.14 CUDA graph support stabilizes
+        if config.get("torch_compile", False) and self.device.type == "cuda":
             try:
                 self.model = torch.compile(
                     self.model, mode="default", fullgraph=False

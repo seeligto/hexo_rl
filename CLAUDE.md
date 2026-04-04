@@ -153,7 +153,7 @@ Before ending any session or when asked to stop:
 |---|---|---|
 | MCTS tree, board logic, win detection | **Rust** | Build with `maturin develop --release -m engine/Cargo.toml`. Concurrency via Rust-native Game-Level Parallelism (Phase 3.5). |
 | Replay buffer | **Rust** (ReplayBuffer) | f16-as-u16 ring buffer, 12-fold hex augmentation, zero-copy PyO3 transfer. |
-| Neural network, training loop | **Python + PyTorch** | CUDA, FP16, TF32 enabled, torch.compile. InferenceServer bridges Rust worker threads. |
+| Neural network, training loop | **Python + PyTorch** | CUDA, FP16, TF32 enabled. InferenceServer bridges Rust worker threads. |
 | Temporal tensor assembly | **Python + NumPy** | Stacks 2-plane cluster snapshots + `move_history` into `(18, 19, 19)` tensors. |
 | Orchestration, config, monitoring | **Python** | Event-driven fan-out (events.py → terminal/web renderers), structlog (JSON), rich (console) |
 
@@ -479,7 +479,7 @@ tests. Full training runs must always use `augment=True` (the default).
 > Run `make bench.full` to reproduce.
 > Full results: reports/benchmarks/
 
-Run `make bench.full`. Latest baseline (2026-04-04, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU, torch.compile ENABLED — split train/inf instances, quiescence gated behind threat pre-check):
+Run `make bench.full`. Latest baseline (2026-04-04, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU, torch.compile DISABLED — Python 3.14 CUDA graph incompatibility (see sprint §25, §30), quiescence gated behind threat pre-check):
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
@@ -501,7 +501,7 @@ See `docs/03_TOOLING.md` § "Benchmark variance (historical)" for details.
 measure an undersized model. This run reflects the correct Phase 4.0
 production architecture (12 residual blocks × 128 channels). VRAM measurement
 also corrected from pynvml global to torch.cuda.max_memory_allocated().
-2026-04-04: torch.compile re-enabled (split train/inf instances). MCTS target
+2026-04-04: torch.compile disabled (Python 3.14 CUDA graph incompatibility — see sprint §25, §30, §32). MCTS target
 rebaselined for correct hex-ball-8 legal move rule.
 2026-04-04: quiescence gate (§29) added. MCTS target rebaselined to ≥26,000
 (85% of 30,963). All 10 targets PASS.
@@ -512,9 +512,8 @@ Starting config for self-play RL (do not exceed without benchmarking):
 - Network: 12 residual blocks × 128 channels, SE blocks on every block
 - Value head: global avg + max pooling → FC → BCE loss (binary cross-entropy on sigmoid)
 - Auxiliary loss: opponent reply prediction (weight 0.15)
-- torch.compile: ENABLED — split model instances (train + inf), see scripts/train.py
-  - train_model: owned by Trainer (main thread), compiled for gradient updates
-  - inf_model: owned by InferenceServer (daemon thread), compiled for forward-only passes
+- torch.compile: DISABLED — Python 3.14 CUDA graph incompatibility (see sprint §25, §30, §32)
+  - Re-enable when PyTorch + Python 3.14 CUDA graph support stabilizes
   - Weight sync: inf_model ← train_model after every checkpoint save and model promotion
 - Replay buffer: start at 250K samples, grow toward 1M as training stabilises
 - ELO benchmark target: SealBot (replaces Ramora0 as external reference)
