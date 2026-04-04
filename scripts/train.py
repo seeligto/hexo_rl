@@ -311,18 +311,36 @@ def main() -> None:
     pretrained_buffer = None
     pretrained_path = mixing_cfg.get("pretrained_buffer_path")
     if pretrained_path and Path(pretrained_path).exists():
+        log.info("loading_corpus_npz", path=pretrained_path,
+                 msg="copying corpus into Rust pretrained_buffer — may take minutes for large corpora")
         data = np.load(pretrained_path, mmap_mode='r')
         pre_states = data["states"]       # (T, 18, 19, 19) float16
         pre_policies = data["policies"]   # (T, 362) float32
         pre_outcomes = data["outcomes"]   # (T,) float32
-        pretrained_buffer = ReplayBuffer(capacity=len(pre_outcomes))
+        T = len(pre_outcomes)
+        # push_game copies all arrays into the Rust buffer (not mmap'd).
+        # Estimate RAM: T × (18×19×19×2 + 362×4 + 4) bytes ≈ T × 14.1 KB
+        est_ram_gb = T * 14_448 / (1024 ** 3)
+        if est_ram_gb > 2.0:
+            log.warning(
+                "corpus_prefill_high_ram",
+                path=pretrained_path,
+                n_positions=T,
+                estimated_ram_gb=round(est_ram_gb, 1),
+                msg="push_game allocates full corpus in RAM — training starts after this completes",
+            )
+        pretrained_buffer = ReplayBuffer(capacity=T)
         pretrained_buffer.push_game(pre_states, pre_policies, pre_outcomes)
         del data
         log.info("pretrained_buffer_loaded", path=pretrained_path,
                  size=pretrained_buffer.size)
     elif pretrained_path:
-        log.error("pretrained_buffer_missing", path=pretrained_path,
-                  hint="Run 'make corpus.npz' to generate the pretrained corpus")
+        log.warning(
+            "corpus_npz_not_found",
+            path=pretrained_path,
+            msg="No corpus NPZ found — skipping pretrained mixing. "
+                "Buffer will fill from self-play only. Run 'make corpus.npz' to generate.",
+        )
 
     mixing_decay_steps = float(mixing_cfg.get("decay_steps", 1_000_000))
     if mixing_decay_steps <= 0:
@@ -418,9 +436,16 @@ def main() -> None:
 
     # ── Graceful shutdown ──
     _running = [True]
+    _stop_count = [0]
+
     def _stop(sig, frame):
-        log.info("shutdown_requested")
+        _stop_count[0] += 1
+        if _stop_count[0] >= 2:
+            # Second Ctrl+C — force exit immediately (e.g. pool.stop() hung)
+            sys.exit(1)
+        log.info("shutdown_requested", msg="finishing current step… press Ctrl+C again to force")
         _running[0] = False
+
     signal.signal(signal.SIGINT,  _stop)
     signal.signal(signal.SIGTERM, _stop)
 
@@ -534,8 +559,13 @@ def main() -> None:
                         games=games_played,
                         gpu_pct=round(gpu_monitor.gpu_util_pct, 0),
                     )
+                    emit_event({
+                        "event": "system_stats",
+                        "buffer_size": buffer.size,
+                        "buffer_capacity": capacity,
+                    })
                     last_warmup_log = time.time()
-                time.sleep(1.0)
+                time.sleep(0.5)
                 continue
 
             new_games = games_played - last_train_game_count
