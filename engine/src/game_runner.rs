@@ -40,10 +40,10 @@ pub struct SelfPlayRunner {
     o_wins: Arc<AtomicU64>,
     draws: Arc<AtomicU64>,
     results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32, usize)>>>,
-    /// Ring-buffer of recent (plies, winner_code, move_history) triples for Python logging.
+    /// Ring-buffer of recent (plies, winner_code, move_history, worker_id) tuples for Python logging.
     /// winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
     /// move_history: sequence of (q, r) coordinates in play order.
-    recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>)>>>,
+    recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize)>>>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
@@ -102,7 +102,7 @@ impl SelfPlayRunner {
         }
 
         let mut handles = self.handles.lock().expect("runner handles lock poisoned");
-        for _ in 0..self.n_workers {
+        for worker_id in 0..self.n_workers {
             let running = self.running.clone();
             let games_completed = self.games_completed.clone();
             let positions_generated = self.positions_generated.clone();
@@ -285,10 +285,10 @@ impl SelfPlayRunner {
                         Some(_)                         => { o_wins.fetch_add(1, Ordering::Relaxed); }
                         None                            => { draws.fetch_add(1, Ordering::Relaxed); }
                     }
-                    // Record (plies, winner_code, move_history) for Python game_complete logging.
+                    // Record (plies, winner_code, move_history, worker_id) for Python game_complete logging.
                     {
                         let mut rg = recent_game_results.lock().expect("recent_game_results lock poisoned");
-                        rg.push_back((plies, winner_code, move_history));
+                        rg.push_back((plies, winner_code, move_history, worker_id));
                         // Cap at 2000 entries to avoid unbounded growth if Python is slow.
                         if rg.len() > 2000 {
                             rg.pop_front();
@@ -369,11 +369,11 @@ impl SelfPlayRunner {
         )
     }
 
-    /// Drain and return all buffered (plies, winner_code, move_history) triples since the last call.
+    /// Drain and return all buffered (plies, winner_code, move_history, worker_id) tuples since the last call.
     /// winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
     /// move_history: sequence of (q, r) stone placements in play order.
     /// Called by Python pool._stats_loop() to emit game_complete structlog events and record replays.
-    pub fn drain_game_results(&self) -> Vec<(usize, u8, Vec<(i32, i32)>)> {
+    pub fn drain_game_results(&self) -> Vec<(usize, u8, Vec<(i32, i32)>, usize)> {
         let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
         rg.drain(..).collect()
     }
@@ -485,3 +485,36 @@ impl Drop for SelfPlayRunner {
         self.stop();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    #[test]
+    fn test_worker_id_assignment() {
+        // Run with max_moves_per_game = 0 to avoid triggering MCTS and inference server dependency
+        let runner = SelfPlayRunner::new(
+            4, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3
+        );
+        runner.start();
+        
+        let mut attempts = 0;
+        let mut completed_workers = HashSet::new();
+        
+        while completed_workers.len() < 4 && attempts < 50 {
+            let results = runner.drain_game_results();
+            for (_, _, _, worker_id) in results {
+                assert!(worker_id < 4);
+                completed_workers.insert(worker_id);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            attempts += 1;
+        }
+        
+        runner.stop();
+        assert_eq!(completed_workers.len(), 4, "Should have seen games from all 4 workers");
+    }
+}
+
