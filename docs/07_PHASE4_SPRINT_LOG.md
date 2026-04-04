@@ -1160,3 +1160,46 @@ artifact: in real self-play NN values are non-zero and FPU improves selection qu
 - `fix(training): switch torch.compile to mode=default (CUDA graph TLS fix)`
 - `fix(selfplay): increase game length cap to 200 compound moves`
 - `fix(pretrain): compute CosineAnnealingLR T_max dynamically`
+
+---
+
+### 31. Cold-start hang fix + buffer visibility + SIGINT force-exit (2026-04-04)
+
+**Root cause of cold-start hang (training stuck at step 0)**
+
+Two contributing factors:
+1. **Large corpus blocking startup.** If `data/bootstrap_corpus.npz` exists and is large
+   (e.g. 2M positions ≈ 28 GB estimated), `pretrained_buffer.push_game()` copies the
+   full dataset into the Rust buffer before `pool.start()` is ever called. The process
+   sits at 27+ GB RAM with no dashboard activity for several minutes. The mmap'd
+   `np.load(mmap_mode='r')` only defers the OS page-ins; PyO3 `push_game` triggers a
+   full copy. Existing `min_buffer_size: 256` in `configs/training.yaml` was already
+   correct — the threshold was never the bug.
+
+2. **No dashboard visibility during warmup.** The warmup loop emitted `structlog` JSON
+   only (file), so the terminal/web dashboard showed "—" for the Buffer field throughout
+   warmup. Users couldn't distinguish "waiting for 256 positions" from "hung."
+
+**Fixes applied**
+
+- `scripts/train.py` — corpus loading path: added `log.info("loading_corpus_npz")` before
+  `np.load()` and a `log.warning("corpus_prefill_high_ram")` when estimated RAM > 2 GB,
+  so the user knows why startup is slow. Changed `log.error` → `log.warning` for missing
+  NPZ (not an error — buffer fills from self-play, training proceeds normally).
+
+- `scripts/train.py` — warmup loop: now emits a `system_stats` event (with `buffer_size`
+  and `buffer_capacity`) every 5 s while waiting for the buffer threshold. Reduced
+  warmup sleep from 1.0 s → 0.5 s so Ctrl+C is handled faster.
+
+- `hexo_rl/monitoring/terminal_dashboard.py` — `system_stats` handler now also merges
+  `buffer_size` and `buffer_capacity`, so the Buffer field populates during cold-start
+  warmup before any `iteration_complete` event fires.
+
+- `scripts/train.py` — SIGINT/SIGTERM handler: added double-press force-exit. First
+  Ctrl+C sets `_running[0] = False` and logs a message. Second Ctrl+C calls
+  `sys.exit(1)` immediately, bypassing `pool.stop()` if it hangs.
+
+**Commits:**
+- `fix(training): make corpus prefill optional, lower buffer threshold`
+- `feat(dashboard): show buffer fill progress during cold-start`
+- `fix(training): handle SIGINT/SIGTERM for clean shutdown`
