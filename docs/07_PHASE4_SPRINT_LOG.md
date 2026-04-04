@@ -789,3 +789,29 @@ at 12 workers with 400 sims/move. Checkpoint_500 100% colony win rate against
 pretrained model is a colony detection miscategorisation artefact, not evidence
 of colony strategy. Honest benchmark: 10% win rate vs SealBot at step 500
 (5/50 games).
+
+---
+
+### 24. Entropy regularization + draw penalty (2026-04-04)
+
+Source: `docs/10_COMMUNITY_BOT_ANALYSIS.md` §5.1C and §5.1D (KrakenBot practice).
+
+**Entropy regularization (§5.1C)**
+**Files:** `hexo_rl/training/losses.py`, `hexo_rl/training/trainer.py`, `configs/training.yaml`
+
+- Added entropy bonus term to total loss: `L_total = L_policy + L_value + w_aux·L_aux - w_entropy·H(π)`
+- Entropy `H(π) = -Σ π log π` computed inside `autocast` block (before backward) using `log_policy` from the network forward pass.
+- Weight `entropy_reg_weight: 0.01` in `configs/training.yaml`.
+- `compute_total_loss()` in `losses.py` gains two new optional parameters: `entropy_bonus` and `entropy_weight`.
+- `policy_entropy` was already logged in `loss_info` (and fed to the entropy collapse alert at < 1.0). Now it reflects real data.
+- Expected range at a uniform 362-action policy: ~5.9 nats. In practice ~3–6 nats is healthy; < 1.0 signals collapse.
+
+**Draw penalty (§5.1D)**
+**Files:** `engine/src/game_runner.rs`, `hexo_rl/selfplay/pool.py`, `configs/training.yaml`, `tests/test_worker_pool.py`
+
+- Draw outcome value target changed from `+0.01` → `-0.1`.
+- Was hardcoded in `game_runner.rs`; now configurable via `draw_reward` field on `SelfPlayRunner` (PyO3 parameter, default `-0.1`).
+- `pool.py` reads `training.draw_reward` from merged config and passes it through.
+- Rationale: with ~51.6% P1 win rate in the corpus, draws are suboptimal for the stronger player. Negative draw reward pushes the network to press for wins rather than settle.
+
+**Why negative is correct:** The value head learns `z ∈ {-1, +1}` with draws at `-0.1`. This makes draws strictly worse than wins but also worse than a neutral 0.0, which actively discourages draw-seeking. It mirrors the KrakenBot tuning that produced stronger play in sustained self-play.
