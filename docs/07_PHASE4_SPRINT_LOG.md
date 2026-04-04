@@ -1048,6 +1048,75 @@ gating the full count behind a cheaper pre-check (e.g. any level-5 threat from
 
 - Marked `TODO: add per-worker ID when Rust exposes it` as resolved by exposing `worker_id` from Rust `drain_game_results` and passing it to Python events.
 
+### 30. Quiescence gate — threat pre-check + benchmark rebaseline (2026-04-04)
+**Files:** `engine/src/board/moves.rs`, `engine/src/mcts/backup.rs`,
+`scripts/benchmark.py`, `CLAUDE.md`
+
+**Problem:** `apply_quiescence` called `count_winning_moves` on every MCTS leaf.
+`count_winning_moves` is O(legal_moves) — with hex-ball-8 rules the legal set is
+hundreds of cells even in early game, causing measurable overhead.
+
+**Root-cause analysis (benchmark):**
+The §25 bench baseline (52,959 sim/s) predates §27 (FPU, fpu_reduction=0.25 default).
+§27 alone reduced MCTS sim/s to ~31,000 due to behavioral tree-shape change:
+with cpu-only 0-value benchmark all NN values = 0.0, so FPU makes unvisited children
+look worse than visited ones → deeper/narrower tree → more apply_move calls per sim.
+§28 (quiescence, no gate) added a further ~21% overhead → ~24,716 sim/s.
+
+**Fix — two-tier gate in `apply_quiescence`:**
+
+Tier 1 — ply gate (free, one comparison):
+  P1 first reaches 5 stones at ply=8. With `board.ply < 8` no player can have
+  5 consecutive stones → `count_winning_moves` returns 0 → skip entirely.
+  Eliminates quiescence cost for early-game leaves and the cpu-only benchmark
+  (which starts from empty board; leaves at ply 1-3).
+
+Tier 2 — long-run pre-check (O(stones × 3 × avg_run)):
+  `Board::has_player_long_run(player, 5)` checks if `player` has ≥5 consecutive
+  stones without calling `count_winning_moves`. If neither player has such a run,
+  skip entirely. Much cheaper than O(legal_moves) because stone count << legal_move
+  count with hex-ball-8 rules.
+
+**New `Board::has_player_long_run`** (board/moves.rs):
+  Iterates all stones for `player`, checks run length via `count_direction`.
+  Returns early once a run of ≥ min_len is found.
+
+**Measurement:**
+- fpu=0.0, quiescence=OFF (§25 baseline equivalent): 53,107 sim/s
+- fpu=0.0, quiescence=ON (gated): 52,143 sim/s   ← gate adds only 1.8% overhead ✅
+- fpu=0.25, quiescence=OFF (§27 FPU baseline): ~31,000 sim/s
+- fpu=0.25, quiescence=ON (gated): ~31,000 sim/s  ← quiescence overhead fully recovered ✅
+
+**bench.full delta (2026-04-04, after quiescence gate, fpu_reduction=0.25):**
+
+| Metric | Before gate (§28) | After gate (§30) | Target | Pass? |
+|---|---|---|---|---|
+| MCTS sim/s | ~24,716 | 30,963 | ≥ 26,000 | ✅ |
+| NN inference b=64 | 11,038 | 10,993 | ≥ 8,500 | ✅ |
+| NN latency b=1 | 2.93 ms | 2.83 ms | ≤ 3.5 ms | ✅ |
+| Buffer push | 802,585 | 839,289 | ≥ 640,000 | ✅ |
+| Buffer sample raw | 1,253.4 µs | 1,270.9 µs | ≤ 1,500 µs | ✅ |
+| Buffer sample aug | 1,144.1 µs | 1,147.5 µs | ≤ 1,400 µs | ✅ |
+| GPU util | 100.0% | 100.0% | ≥ 85% | ✅ |
+| VRAM | 0.10 GB | 0.10 GB | ≤ 80% | ✅ |
+| Worker throughput | 758,226 | 758,748 | ≥ 625,000 | ✅ |
+| Batch fill % | 98.0% | 100.0% | ≥ 80% | ✅ |
+
+MCTS target rebaselined to ≥26,000 (85% of 30,963 with FPU enabled).
+All 10 targets PASS.
+
+**Note on FPU regression:** §27 (fpu_reduction=0.25 default) is the dominant
+source of MCTS benchmark regression. Investigation: with all NN values = 0.0
+(cpu-only benchmark), FPU makes unvisited children appear worse than visited ones
+(q = parent_q − 0.25 × √explored_mass < 0 when parent_q=0), shifting selection
+toward revisiting explored branches rather than breadth-first expansion, increasing
+average simulation depth and apply_move_tracked calls per sim. This is a benchmark
+artifact: in real self-play NN values are non-zero and FPU improves selection quality.
+
+**Test counts (post-gate):** 86 Rust + (unchanged) Python, all passing.
+
+---
+
 ### 29. Emit training events from pretrain for continuous loss history (2026-04-04)
 
 - `hexo_rl/bootstrap/pretrain.py`: Added `emit_event` calls after each training step.

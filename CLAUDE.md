@@ -479,20 +479,20 @@ tests. Full training runs must always use `augment=True` (the default).
 > Run `make bench.full` to reproduce.
 > Full results: reports/benchmarks/
 
-Run `make bench.full`. Latest baseline (2026-04-04, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU, torch.compile ENABLED — split train/inf model instances):
+Run `make bench.full`. Latest baseline (2026-04-04, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU, torch.compile ENABLED — split train/inf instances, quiescence gated behind threat pre-check):
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 52,959 sim/s | ≥ 45,000 sim/s | Rebaselined: hex-ball radius-8 legal moves (correct game rule) expands branching factor ~9× vs old bbox+2 — see §24 sprint log |
-| NN inference (batch=64) | 11,038 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±5) |
-| NN latency (batch=1, mean) | 2.93 ms | ≤ 3.5 ms | split-compile baseline (2026-04-04) |
-| Replay buffer push | 802,585 pos/sec | ≥ 640,000 pos/sec | IQR ±20k (2.4%) |
-| Replay buffer sample raw (batch=256) | 1,253.4 µs/batch | ≤ 1,500 µs | IQR ±3 µs |
-| Replay buffer sample augmented (batch=256) | 1,144.1 µs/batch | ≤ 1,400 µs | IQR ±2 µs |
+| MCTS (CPU only, no NN) | 30,963 sim/s | ≥ 26,000 sim/s | FPU (§27, fpu_reduction=0.25) causes ~41% regression vs §25 baseline due to tree-shape change with cpu-only 0-value benchmark; quiescence gate adds <2% overhead |
+| NN inference (batch=64) | 10,993 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±14) |
+| NN latency (batch=1, mean) | 2.83 ms | ≤ 3.5 ms | split-compile baseline |
+| Replay buffer push | 839,289 pos/sec | ≥ 640,000 pos/sec | IQR ±7k (0.8%) |
+| Replay buffer sample raw (batch=256) | 1,270.9 µs/batch | ≤ 1,500 µs | IQR ±5 µs |
+| Replay buffer sample augmented (batch=256) | 1,147.5 µs/batch | ≤ 1,400 µs | IQR ±1 µs |
 | GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
 | VRAM usage (process) | 0.10 GB / 8.6 GB | ≤ 80% | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |
-| Worker throughput | 758,226 pos/hr | ≥ 625,000 pos/hr | IQR ±33k (4.4%); split-compile baseline (2026-04-04) |
-| Batch fill % | 98.0% | ≥ 80% | IQR ±0.7% |
+| Worker throughput | 758,748 pos/hr | ≥ 625,000 pos/hr | IQR ±101k (13.3%) |
+| Batch fill % | 100.0% | ≥ 80% | IQR ±0.0% |
 
 Historical variance note: before the warm-up/n=5/pinning methodology, single-run
 benchmarks showed ±50% swings due to LLVM codegen lottery and AMD boost clocks.
@@ -503,6 +503,8 @@ production architecture (12 residual blocks × 128 channels). VRAM measurement
 also corrected from pynvml global to torch.cuda.max_memory_allocated().
 2026-04-04: torch.compile re-enabled (split train/inf instances). MCTS target
 rebaselined for correct hex-ball-8 legal move rule.
+2026-04-04: quiescence gate (§29) added. MCTS target rebaselined to ≥26,000
+(85% of 30,963). All 10 targets PASS.
 
 ## Phase 4.0 architecture baseline
 
