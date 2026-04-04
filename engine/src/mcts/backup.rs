@@ -131,7 +131,7 @@ impl MCTSTree {
                 1.0 / n_ch as f32
             };
 
-            let action_encoded = (((q + 128) as u16) << 8) | ((r + 128) as u16);
+            let action_encoded = (((q + 32768) as u32) << 16) | ((r + 32768) as u32 & 0xFFFF);
 
             self.pool[ci] = Node {
                 parent:              leaf_idx,

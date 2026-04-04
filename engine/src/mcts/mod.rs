@@ -113,8 +113,8 @@ impl MCTSTree {
                 .max_by_key(|&i| self.pool[i].n_visits)
             {
                 let val = self.pool[best].action_idx;
-                let q = (val >> 8) as i32 - 128;
-                let r = (val & 0xFF) as i32 - 128;
+                let q = (val >> 16) as i32 - 32768;
+                let r = (val & 0xFFFF) as i32 - 32768;
                 let action = self.root_board.window_flat_idx(q, r);
 
                 if action < n_actions {
@@ -129,8 +129,8 @@ impl MCTSTree {
             if total > 0.0 {
                 for (j, &v) in visits.iter().enumerate() {
                     let val = self.pool[first + j].action_idx;
-                    let q = (val >> 8) as i32 - 128;
-                    let r = (val & 0xFF) as i32 - 128;
+                    let q = (val >> 16) as i32 - 32768;
+                    let r = (val & 0xFFFF) as i32 - 32768;
                     let action = self.root_board.window_flat_idx(q, r);
 
                     if action < n_actions {
@@ -190,8 +190,8 @@ impl MCTSTree {
 
         children.into_iter().map(|(i, visits)| {
             let val = self.pool[i].action_idx;
-            let q = (val >> 8) as i32 - 128;
-            let r = (val & 0xFF) as i32 - 128;
+            let q = (val >> 16) as i32 - 32768;
+            let r = (val & 0xFFFF) as i32 - 32768;
             (format!("({},{})", q, r), visits, self.pool[i].prior)
         }).collect()
     }
@@ -248,17 +248,17 @@ mod tests {
         tree.pool[0].first_child = first_child;
         tree.pool[0].n_children  = 2;
 
-        let action_a = ((0 + 128) << 8) | (0 + 128);
-        let action_b = ((0 + 128) << 8) | (1 + 128);
+        let action_a = ((0u32 + 32768) << 16) | (0u32 + 32768);
+        let action_b = ((0u32 + 32768) << 16) | (1u32 + 32768);
 
         tree.pool[1] = Node {
-            parent: 0, action_idx: action_a as u16, n_visits: 0, w_value: 0.0,
+            parent: 0, action_idx: action_a, n_visits: 0, w_value: 0.0,
             prior: 0.7, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 0,
         };
         tree.pool[2] = Node {
-            parent: 0, action_idx: action_b as u16, n_visits: 0, w_value: 0.0,
+            parent: 0, action_idx: action_b, n_visits: 0, w_value: 0.0,
             prior: 0.3, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 0,
@@ -297,13 +297,13 @@ mod tests {
         let mut tree = MCTSTree::new(1.5);
         tree.pool[0].moves_remaining = 1;
         tree.pool[1] = Node {
-            parent: 0, action_idx: ((128 << 8) | 128) as u16, n_visits: 0, w_value: 0.0,
+            parent: 0, action_idx: (32768u32 << 16) | 32768u32, n_visits: 0, w_value: 0.0,
             prior: 1.0, first_child: u32::MAX, n_children: 0,
             moves_remaining: 2, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 0,
         };
         tree.pool[2] = Node {
-            parent: 1, action_idx: ((128 << 8) | 129) as u16, n_visits: 0, w_value: 0.0,
+            parent: 1, action_idx: (32768u32 << 16) | 32769u32, n_visits: 0, w_value: 0.0,
             prior: 1.0, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 0,
@@ -325,7 +325,7 @@ mod tests {
         let mut tree = MCTSTree::new(1.5);
         tree.pool[0].moves_remaining = 1;
         tree.pool[1] = Node {
-            parent: 0, action_idx: ((128 << 8) | 128) as u16, n_visits: 0, w_value: 0.0,
+            parent: 0, action_idx: (32768u32 << 16) | 32768u32, n_visits: 0, w_value: 0.0,
             prior: 1.0, first_child: u32::MAX, n_children: 0,
             moves_remaining: 2, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 0,
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn test_virtual_loss_q_adjustment() {
         let node = Node {
-            parent: u32::MAX, action_idx: ((128 << 8) | 128) as u16,
+            parent: u32::MAX, action_idx: (32768u32 << 16) | 32768u32,
             n_visits: 4, w_value: 2.0,
             prior: 0.5, first_child: u32::MAX, n_children: 0,
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,

@@ -80,8 +80,8 @@ impl MCTSTree {
                 .unwrap() as u32;
 
             let val = self.pool[best as usize].action_idx;
-            let q = (val >> 8) as i32 - 128;
-            let r = (val & 0xFF) as i32 - 128;
+            let q = (val >> 16) as i32 - 32768;
+            let r = (val & 0xFFFF) as i32 - 32768;
 
             let diff = board
                 .apply_move_tracked(q, r)
