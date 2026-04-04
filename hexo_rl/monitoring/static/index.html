@@ -5,16 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HeXO Training Dashboard</title>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&display=swap');
-
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
     background: #1a1a1a;
     color: #e0e0e0;
-    font-family: 'Fira Code', monospace;
+    font-family: 'Fira Code', monospace, ui-monospace;
     font-size: 13px;
     padding: 16px;
   }
@@ -39,12 +37,9 @@
     animation: pulse 2s infinite;
   }
   .status-dot.connected { background: #5DCAA5; }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
-  /* ── Cards ───────────────────────────────────────── */
+  /* ── Stat cards ──────────────────────────────────── */
   .stat-cards {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
@@ -59,6 +54,16 @@
   }
   .card .label { color: #888; font-size: 11px; margin-bottom: 4px; }
   .card .value { font-size: 20px; font-weight: 600; }
+  .badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #1a1a1a;
+    font-weight: 600;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
 
   /* ── Main row ────────────────────────────────────── */
   .main-row {
@@ -72,10 +77,34 @@
     border: 1px solid #2a2a2a;
     border-radius: 6px;
     padding: 14px;
+    min-width: 0;
   }
-  .chart-card h3 { color: #888; font-size: 12px; margin-bottom: 8px; }
-  .right-stack { display: flex; flex-direction: column; gap: 12px; }
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .panel-header h3 { color: #888; font-size: 12px; }
+  .btn-toggle {
+    background: #2a2a2a;
+    border: 1px solid #3a3a3a;
+    color: #666;
+    font-family: inherit;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    margin-left: 4px;
+  }
+  .btn-toggle.active {
+    background: #333;
+    color: #ccc;
+    border-color: #555;
+  }
+  .btn-toggle:hover { border-color: #666; }
 
+  .right-stack { display: flex; flex-direction: column; gap: 12px; }
   .buffer-bar-wrap {
     background: #1a1a1a;
     border-radius: 3px;
@@ -89,16 +118,17 @@
     border-radius: 3px;
     transition: width 0.3s;
   }
+  .sys-row { display: flex; justify-content: space-between; padding: 3px 0; }
+  .sys-label { color: #888; }
 
-  /* ── Secondary row ───────────────────────────────── */
-  .secondary-row {
+  /* ── Bottom row ──────────────────────────────────── */
+  .bottom-row {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: repeat(4, 1fr);
     gap: 12px;
     margin-bottom: 16px;
   }
-  .sys-row { display: flex; justify-content: space-between; padding: 3px 0; }
-  .sys-label { color: #888; }
+  .chart-summary { margin-top: 6px; font-size: 11px; color: #888; }
 
   /* ── Event log ───────────────────────────────────── */
   .event-log {
@@ -108,10 +138,7 @@
     padding: 14px;
   }
   .event-log h3 { color: #888; font-size: 12px; margin-bottom: 8px; }
-  .log-scroll {
-    max-height: 320px;
-    overflow-y: auto;
-  }
+  .log-scroll { max-height: 320px; overflow-y: auto; }
   .log-entry {
     padding: 4px 0;
     border-bottom: 1px solid #2a2a2a;
@@ -122,7 +149,6 @@
   .log-entry .ts { color: #666; flex-shrink: 0; }
   .log-entry .msg { flex: 1; }
   .log-entry .view-link { color: #555; cursor: default; }
-  .log-entry .view-link:hover::after { content: ' viewer coming soon'; font-size: 10px; color: #666; }
 
   .winner-p0 { color: #5B8FF9; }
   .winner-p1 { color: #F4664A; }
@@ -130,10 +156,7 @@
   .gate-passed { color: #5DCAA5; font-weight: 600; }
   .gate-failed { color: #F4664A; font-weight: 600; }
 
-  /* ── ELO badge ───────────────────────────────────── */
-  .elo-badge { font-size: 11px; margin-top: 2px; }
-
-  canvas { max-height: 260px; }
+  canvas { max-height: 200px; }
 </style>
 </head>
 <body>
@@ -146,7 +169,7 @@
   <span class="meta"><span class="status-dot" id="status-dot"></span><span id="status-text">disconnected</span></span>
 </div>
 
-<!-- Stat cards -->
+<!-- Stat cards: step | total loss | policy entropy | value accuracy | pos/hr | games/hr -->
 <div class="stat-cards">
   <div class="card">
     <div class="label">Step</div>
@@ -157,71 +180,99 @@
     <div class="value" id="card-loss" style="color:#FAC775">&mdash;</div>
   </div>
   <div class="card">
-    <div class="label">Games/hr</div>
-    <div class="value" id="card-gph">&mdash;</div>
+    <div class="label">Policy Entropy</div>
+    <div>
+      <span class="value" id="card-entropy">&mdash;</span>
+      <span class="badge" id="card-entropy-badge" style="display:none"></span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="label">Value Accuracy</div>
+    <div class="value" id="card-valacc">&mdash;</div>
   </div>
   <div class="card">
     <div class="label">Pos/hr</div>
-    <div class="value" id="card-pph">&mdash;</div>
+    <div class="value" id="card-pph" style="color:#5DCAA5">&mdash;</div>
   </div>
   <div class="card">
-    <div class="label">ELO vs SealBot</div>
-    <div class="value" id="card-elo">&mdash;</div>
-    <div class="elo-badge" id="elo-badge"></div>
-  </div>
-  <div class="card">
-    <div class="label">GPU Util</div>
-    <div class="value" id="card-gpu">&mdash;</div>
+    <div class="label">Games/hr</div>
+    <div class="value" id="card-gph">&mdash;</div>
   </div>
 </div>
 
-<!-- Main row -->
+<!-- Main row: loss chart (2/3) + right stack (1/3) -->
 <div class="main-row">
   <div class="chart-card">
-    <h3>Loss Curves (last 500 steps)</h3>
+    <div class="panel-header">
+      <h3>Loss Curves (last 500 steps)</h3>
+      <div>
+        <button class="btn-toggle active" id="btn-raw" onclick="toggleRaw()">raw</button>
+        <button class="btn-toggle active" id="btn-ema" onclick="toggleEMA()">EMA</button>
+      </div>
+    </div>
     <canvas id="loss-chart"></canvas>
   </div>
+
   <div class="right-stack">
+    <!-- Buffer panel (always visible) -->
     <div class="card">
       <div class="label">Buffer</div>
       <div class="value" id="buffer-text">&mdash;</div>
       <div class="buffer-bar-wrap"><div class="buffer-bar" id="buffer-bar" style="width:0%"></div></div>
+      <div style="margin-top:8px; font-size:12px">
+        <div>self-play&nbsp; <span id="mix-sp">&mdash;</span></div>
+        <div>pretrain&nbsp;&nbsp; <span id="mix-pre">&mdash;</span></div>
+      </div>
     </div>
+
+    <!-- ELO panel (hidden until first eval_complete) -->
+    <div class="card" id="elo-panel" style="display:none">
+      <div class="label">ELO vs SealBot</div>
+      <div class="value" id="elo-value">&mdash;</div>
+      <div style="font-size:11px; color:#888; margin-top:2px" id="elo-step"></div>
+      <div id="elo-badge" style="margin-top:2px; font-size:11px"></div>
+      <canvas id="elo-line-chart" style="display:none; max-height:80px; margin-top:8px"></canvas>
+    </div>
+
+    <!-- System panel (always visible) -->
     <div class="card">
-      <div class="label">Corpus Mix</div>
-      <div id="corpus-mix" style="margin-top:4px">
-        <div>pretrain&nbsp; <span id="mix-pre">&mdash;</span></div>
-        <div>self-play <span id="mix-sp">&mdash;</span></div>
+      <div class="label">System</div>
+      <div style="margin-top:6px">
+        <div class="sys-row"><span class="sys-label">GPU util</span><span id="sys-gpu">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">VRAM</span><span id="sys-vram">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">RAM</span><span id="sys-ram">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">CPU</span><span id="sys-cpu">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">Workers</span><span id="sys-workers">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">Sims/sec</span><span id="sys-sims">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">Batch fill</span><span id="sys-batchfill">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">Grad norm</span><span id="sys-grad">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">LR</span><span id="sys-lr">&mdash;</span></div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Secondary row -->
-<div class="secondary-row">
+<!-- Bottom row: 4 panels -->
+<div class="bottom-row">
   <div class="chart-card">
-    <h3>Win Rates (last 100 games)</h3>
+    <div class="panel-header"><h3>P0 Win Rate (last 200 games)</h3></div>
     <canvas id="winrate-chart"></canvas>
-    <div style="margin-top:6px; font-size:12px">
-      <span class="winner-p0">P0 <span id="wr-p0">&mdash;</span></span>&nbsp;&nbsp;
-      <span class="winner-p1">P1 <span id="wr-p1">&mdash;</span></span>&nbsp;&nbsp;
-      <span class="winner-draw">draw <span id="wr-draw">&mdash;</span></span>
-    </div>
+    <div class="chart-summary" id="winrate-summary">&mdash;</div>
   </div>
   <div class="chart-card">
-    <h3>Avg Game Length (last 100 iters)</h3>
-    <canvas id="gamelen-chart"></canvas>
+    <div class="panel-header"><h3>Game Length Distribution (last 200)</h3></div>
+    <canvas id="histogram-chart"></canvas>
+    <div class="chart-summary" id="histogram-summary">&mdash;</div>
   </div>
-  <div class="card">
-    <div class="label">System</div>
-    <div style="margin-top:6px">
-      <div class="sys-row"><span class="sys-label">GPU util</span><span id="sys-gpu">&mdash;</span></div>
-      <div class="sys-row"><span class="sys-label">VRAM</span><span id="sys-vram">&mdash;</span></div>
-      <div class="sys-row"><span class="sys-label">Workers</span><span id="sys-workers">&mdash;</span></div>
-      <div class="sys-row"><span class="sys-label">Sims/sec</span><span id="sys-sims">&mdash;</span></div>
-      <div class="sys-row"><span class="sys-label">Policy entropy</span><span id="sys-entropy">&mdash;</span></div>
-      <div class="sys-row"><span class="sys-label">Value accuracy</span><span id="sys-valacc">&mdash;</span></div>
-    </div>
+  <div class="chart-card">
+    <div class="panel-header"><h3>Policy Entropy (last 500 steps)</h3></div>
+    <canvas id="entropy-chart"></canvas>
+    <div class="chart-summary" id="entropy-summary">&mdash;</div>
+  </div>
+  <div class="chart-card">
+    <div class="panel-header"><h3>Gradient Norm (last 500 steps)</h3></div>
+    <canvas id="grad-chart"></canvas>
+    <div class="chart-summary" id="grad-summary">&mdash;</div>
   </div>
 </div>
 
@@ -232,283 +283,481 @@
 </div>
 
 <script>
-// ── Number formatting ──────────────────────────────────────────────
-const DASH = '\u2014';
+// ── Constants ──────────────────────────────────────────────────────────────
+const DASH              = '\u2014';
+const EMA_ALPHA         = 0.06;
+const MAX_STEPS         = 500;
+const MAX_GAMES         = 200;
+const P0_TARGET_LOW     = 54;
+const P0_TARGET_HIGH    = 58;
+const ALERT_ENTROPY_MIN  = 1.0;
+const ALERT_ENTROPY_WARN = 2.0;
+const ALERT_GRAD_MAX     = 10.0;
 
-function fmtLoss(v) { return v == null ? DASH : v.toFixed(4); }
-function fmtPct(v)  { return v == null ? DASH : (v * 100).toFixed(1) + '%'; }
-function fmtInt(v)  { return v == null ? DASH : v.toLocaleString(); }
-function fmtRate(v) {
+// ── Formatting ─────────────────────────────────────────────────────────────
+function fmtLoss(v)  { return v == null ? DASH : v.toFixed(4); }
+function fmtPct(v)   { return v == null ? DASH : (v * 100).toFixed(1) + '%'; }
+function fmtInt(v)   { return v == null ? DASH : Math.round(v).toLocaleString(); }
+function fmtRate(v)  {
   if (v == null) return DASH;
   return v >= 1000 ? Math.round(v / 1000).toLocaleString() + 'K' : v.toFixed(1);
 }
+function fmtLR(v)    { return v == null ? DASH : v.toExponential(2); }
+function fmtGrad(v)  { return v == null ? DASH : (isFinite(v) ? v.toFixed(2) : 'inf'); }
 
-// ── State ──────────────────────────────────────────────────────────
-const lossData   = { steps: [], policy: [], value: [], aux: [], total: [] };
-const gameResults = [];  // last 100: {winner}
-const gameLenData = { steps: [], lengths: [] };
-const eloHistory  = [];  // {step, elo}
-const MAX_LOSS = 500;
-const MAX_GAMES = 100;
-const MAX_GAMELEN = 100;
+// ── Ring buffers & state ───────────────────────────────────────────────────
+const trainingStepHistory = [];  // max MAX_STEPS; {step, loss_total, loss_policy, loss_value, loss_aux, policy_entropy, grad_norm, lr}
+const gameHistory         = [];  // max MAX_GAMES; {winner, moves}
+const winRateSeries       = [];  // max MAX_GAMES; float (P0 win % at each game_complete)
+const eloHistory          = [];  // [{step, elo}]
 
-let latestStep = null;
-let latestEntropy = null;
-let latestValAcc = null;
+let showRaw           = true;
+let showEMA           = true;
+let eloVisible        = false;
+let eloLineChartInst  = null;
 
-// ── Charts ─────────────────────────────────────────────────────────
-const chartDefaults = {
-  responsive: true,
-  maintainAspectRatio: false,
-  animation: { duration: 0 },
-  plugins: { legend: { labels: { color: '#888', font: { family: 'Fira Code', size: 10 } } } },
-  scales: {
-    x: { ticks: { color: '#666', font: { size: 9 } }, grid: { color: '#2a2a2a' } },
-    y: { ticks: { color: '#666', font: { size: 9 } }, grid: { color: '#2a2a2a' } },
+// ── EMA computation ────────────────────────────────────────────────────────
+function computeEMA(values, alpha) {
+  const out = [];
+  let prev = null;
+  for (const v of values) {
+    if (v == null || !isFinite(v)) {
+      out.push(null);
+      prev = null;
+    } else if (prev === null) {
+      out.push(v);
+      prev = v;
+    } else {
+      prev = alpha * v + (1 - alpha) * prev;
+      out.push(prev);
+    }
+  }
+  return out;
+}
+
+// ── Chart base defaults ────────────────────────────────────────────────────
+const BASE_SCALES = {
+  x: { ticks: { color: '#666', font: { size: 9 } }, grid: { color: '#2a2a2a' } },
+  y: { ticks: { color: '#666', font: { size: 9 } }, grid: { color: '#2a2a2a' } },
+};
+const BASE_LEGEND = {
+  labels: {
+    color: '#888',
+    font: { family: 'Fira Code', size: 10 },
+    filter: (item) => item.text !== '',
   }
 };
 
+// ── Pretrain region plugin (carry-over) ────────────────────────────────────
+const pretrainPlugin = {
+  id: 'pretrainRegion',
+  beforeDraw: (chart) => {
+    const labels = chart.data.labels;
+    if (!labels || !labels.length) return;
+    let pretrainEndIdx = -1;
+    for (let i = labels.length - 1; i >= 0; i--) {
+      if (labels[i] <= 0) { pretrainEndIdx = i; break; }
+    }
+    if (pretrainEndIdx === -1) return;
+    const { ctx, chartArea: { top, bottom, left }, scales: { x } } = chart;
+    const xPos = x.getPixelForTick(pretrainEndIdx);
+    ctx.save();
+    ctx.fillStyle = 'rgba(93,202,165,0.05)';
+    ctx.fillRect(left, top, xPos - left, bottom - top);
+    ctx.beginPath();
+    ctx.setLineDash([5, 5]);
+    ctx.moveTo(xPos, top);
+    ctx.lineTo(xPos, bottom);
+    ctx.strokeStyle = 'rgba(93,202,165,0.4)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
+// ── Target band plugin (P0 win rate) ──────────────────────────────────────
+const targetBandPlugin = {
+  id: 'targetBand',
+  beforeDraw: (chart) => {
+    const { ctx, chartArea, scales: { y } } = chart;
+    if (!chartArea) return;
+    const yLow  = y.getPixelForValue(P0_TARGET_LOW);
+    const yHigh = y.getPixelForValue(P0_TARGET_HIGH);
+    ctx.save();
+    ctx.fillStyle = 'rgba(93,202,165,0.1)';
+    ctx.fillRect(chartArea.left, yHigh, chartArea.right - chartArea.left, yLow - yHigh);
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = 'rgba(93,202,165,0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(chartArea.left, yHigh); ctx.lineTo(chartArea.right, yHigh); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(chartArea.left, yLow);  ctx.lineTo(chartArea.right, yLow);  ctx.stroke();
+    ctx.restore();
+  }
+};
+
+// ── Horizontal reference line plugin factory ───────────────────────────────
+function makeRefLinePlugin(yVal, color, labelText) {
+  return {
+    id: 'refLine_' + labelText,
+    beforeDraw: (chart) => {
+      const { ctx, chartArea, scales: { y } } = chart;
+      if (!chartArea) return;
+      const yPx = y.getPixelForValue(yVal);
+      ctx.save();
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(chartArea.left, yPx);
+      ctx.lineTo(chartArea.right, yPx);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.font = '9px Fira Code, monospace';
+      const tw = ctx.measureText(labelText).width;
+      ctx.fillText(labelText, chartArea.right - tw - 4, yPx - 3);
+      ctx.restore();
+    }
+  };
+}
+
+// ── Loss chart — 8 datasets: 4 raw + 4 EMA ────────────────────────────────
 const lossChart = new Chart(document.getElementById('loss-chart'), {
   type: 'line',
   data: {
     labels: [],
     datasets: [
+      // Raw (0-3): faint, thin, no label → hidden from legend
+      { label: '', data: [], borderColor: 'rgba(250,199,117,0.2)', borderWidth: 0.7, pointRadius: 0, tension: 0.2 },
+      { label: '', data: [], borderColor: 'rgba(240,153,123,0.2)', borderWidth: 0.7, pointRadius: 0, tension: 0.2 },
+      { label: '', data: [], borderColor: 'rgba(93,202,165,0.2)',  borderWidth: 0.7, pointRadius: 0, tension: 0.2 },
+      { label: '', data: [], borderColor: 'rgba(91,143,249,0.2)',  borderWidth: 0.7, pointRadius: 0, tension: 0.2 },
+      // EMA (4-7): full opacity, labeled
       { label: 'total',  data: [], borderColor: '#FAC775', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
       { label: 'policy', data: [], borderColor: '#F0997B', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
       { label: 'value',  data: [], borderColor: '#5DCAA5', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
       { label: 'aux',    data: [], borderColor: '#5B8FF9', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
     ]
   },
-  options: { ...chartDefaults },
-  plugins: [{
-    id: 'pretrainRegion',
-    beforeDraw: (chart) => {
-      const { ctx, chartArea: { top, bottom, left, right }, scales: { x } } = chart;
-      let pretrainEndIdx = -1;
-      // Find the last index where step < 0
-      for (let i = chart.data.labels.length - 1; i >= 0; i--) {
-        if (chart.data.labels[i] <= 0) {
-          pretrainEndIdx = i;
-          break;
-        }
-      }
-      
-      if (pretrainEndIdx !== -1) {
-        let xPos = x.getPixelForTick(pretrainEndIdx);
-        // If the last visible pretrain point is 0 but there are positive points after, it separates pretrain from RL.
-        // Or if all are negative.
-        ctx.save();
-        ctx.fillStyle = 'rgba(93, 202, 165, 0.05)';
-        ctx.fillRect(left, top, xPos - left, bottom - top);
-        
-        ctx.beginPath();
-        ctx.setLineDash([5, 5]);
-        ctx.moveTo(xPos, top);
-        ctx.lineTo(xPos, bottom);
-        ctx.strokeStyle = 'rgba(93, 202, 165, 0.4)';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.restore();
-      }
-    }
-  }]
-});
-
-const winrateChart = new Chart(document.getElementById('winrate-chart'), {
-  type: 'bar',
-  data: {
-    labels: [],
-    datasets: [
-      { label: 'P0', data: [], backgroundColor: '#5B8FF9' },
-      { label: 'P1', data: [], backgroundColor: '#F4664A' },
-      { label: 'Draw', data: [], backgroundColor: '#555' },
-    ]
-  },
   options: {
-    ...chartDefaults,
-    scales: {
-      ...chartDefaults.scales,
-      x: { ...chartDefaults.scales.x, stacked: true },
-      y: { ...chartDefaults.scales.y, stacked: true, max: 1 },
-    }
-  }
+    responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+    plugins: { legend: BASE_LEGEND },
+    scales: BASE_SCALES,
+  },
+  plugins: [pretrainPlugin]
 });
 
-const gamelenChart = new Chart(document.getElementById('gamelen-chart'), {
+// ── P0 win rate line chart ─────────────────────────────────────────────────
+const winRateChart = new Chart(document.getElementById('winrate-chart'), {
   type: 'line',
   data: {
     labels: [],
     datasets: [
-      { label: 'avg moves', data: [], borderColor: '#5DCAA5', borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: false },
+      { label: 'P0 win %', data: [], borderColor: '#5B8FF9', borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: false }
     ]
   },
-  options: { ...chartDefaults, plugins: { legend: { display: false } } }
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ...BASE_SCALES.x, display: false },
+      y: { ...BASE_SCALES.y, min: 0, max: 100,
+           ticks: { color: '#666', font: { size: 9 }, callback: v => v + '%' } }
+    }
+  },
+  plugins: [targetBandPlugin]
 });
 
-// ── Connection ─────────────────────────────────────────────────────
+// ── Game length histogram ──────────────────────────────────────────────────
+const HIST_LABELS = ['0-20','20-40','40-60','60-80','80-100','100-120','120-140','140-160','160-180','180+'];
+const HIST_BREAKS = [20, 40, 60, 80, 100, 120, 140, 160, 180];
+
+const histogramChart = new Chart(document.getElementById('histogram-chart'), {
+  type: 'bar',
+  data: {
+    labels: HIST_LABELS,
+    datasets: [
+      { label: '', data: new Array(10).fill(0),
+        backgroundColor: 'rgba(91,143,249,0.55)', borderColor: '#5B8FF9', borderWidth: 1 }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ...BASE_SCALES.x, ticks: { color: '#666', font: { size: 8 } } },
+      y: { ...BASE_SCALES.y, beginAtZero: true }
+    }
+  }
+});
+
+// ── Policy entropy trend ───────────────────────────────────────────────────
+const entropyChart = new Chart(document.getElementById('entropy-chart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: '', data: [], borderColor: '#EF9F27', borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: false }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ...BASE_SCALES.x, display: false },
+      y: { ...BASE_SCALES.y, min: 0, suggestedMax: 4 }
+    }
+  },
+  plugins: [makeRefLinePlugin(ALERT_ENTROPY_MIN, '#F4664A', 'collapse')]
+});
+
+// ── Gradient norm trend ────────────────────────────────────────────────────
+const gradChart = new Chart(document.getElementById('grad-chart'), {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label: '', data: [], borderColor: '#D85A30', borderWidth: 1.5, pointRadius: 0, tension: 0.2,
+        fill: false, spanGaps: false }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ...BASE_SCALES.x, display: false },
+      y: { ...BASE_SCALES.y, min: 0, suggestedMax: 5 }
+    }
+  },
+  plugins: [makeRefLinePlugin(ALERT_GRAD_MAX, '#F4664A', 'clip')]
+});
+
+// ── Toggle handlers ────────────────────────────────────────────────────────
+function toggleRaw() {
+  showRaw = !showRaw;
+  document.getElementById('btn-raw').classList.toggle('active', showRaw);
+  for (let i = 0; i < 4; i++) lossChart.data.datasets[i].hidden = !showRaw;
+  lossChart.update('none');
+}
+
+function toggleEMA() {
+  showEMA = !showEMA;
+  document.getElementById('btn-ema').classList.toggle('active', showEMA);
+  for (let i = 4; i < 8; i++) lossChart.data.datasets[i].hidden = !showEMA;
+  lossChart.update('none');
+}
+
+// ── Socket.IO connection ───────────────────────────────────────────────────
 const socket = io();
 
-function updateConnectionStatus(connected) {
-  const dot = document.getElementById('status-dot');
-  const txt = document.getElementById('status-text');
-  if (connected) {
-    dot.classList.add('connected');
-    txt.textContent = 'live';
-  } else {
-    dot.classList.remove('connected');
-    txt.textContent = 'disconnected';
-  }
-}
+socket.on('connect',    () => setConnected(true));
+socket.on('disconnect', () => setConnected(false));
 
-socket.on('connect', () => updateConnectionStatus(true));
-socket.on('disconnect', () => updateConnectionStatus(false));
-
-socket.on('replay_history', (events) => {
-  resetState();
-  events.forEach(handleEvent);
-});
-
-socket.on('training_step', handleEvent);
+socket.on('replay_history',     (events) => { resetState(); events.forEach(handleEvent); });
+socket.on('training_step',      handleEvent);
 socket.on('iteration_complete', handleEvent);
-socket.on('game_complete', handleEvent);
-socket.on('eval_complete', handleEvent);
-socket.on('system_stats', handleEvent);
-socket.on('run_start', (e) => { resetState(); handleEvent(e); });
-socket.on('run_end', handleEvent);
+socket.on('game_complete',      handleEvent);
+socket.on('eval_complete',      handleEvent);
+socket.on('system_stats',       handleEvent);
+socket.on('run_start',  (e) => { resetState(); handleEvent(e); });
+socket.on('run_end',    handleEvent);
 
-// ── Event dispatch ─────────────────────────────────────────────────
-function handleEvent(payload) {
-  switch (payload.event) {
-    case 'training_step':      onTrainingStep(payload); break;
-    case 'iteration_complete': onIterationComplete(payload); break;
-    case 'game_complete':      onGameComplete(payload); break;
-    case 'eval_complete':      onEvalComplete(payload); break;
-    case 'system_stats':       onSystemStats(payload); break;
-    case 'run_start':          onRunStart(payload); break;
+function setConnected(ok) {
+  document.getElementById('status-dot').classList.toggle('connected', ok);
+  document.getElementById('status-text').textContent = ok ? 'live' : 'disconnected';
+}
+
+// ── Event dispatch ─────────────────────────────────────────────────────────
+function handleEvent(p) {
+  switch (p.event) {
+    case 'training_step':      onTrainingStep(p);      break;
+    case 'iteration_complete': onIterationComplete(p); break;
+    case 'game_complete':      onGameComplete(p);      break;
+    case 'eval_complete':      onEvalComplete(p);      break;
+    case 'system_stats':       onSystemStats(p);       break;
+    case 'run_start':          onRunStart(p);          break;
+    case 'run_end':            addLogEntry(p);         break;
   }
 }
 
+// ── Reset state ────────────────────────────────────────────────────────────
 function resetState() {
-  lossData.steps.length = 0;
-  lossData.policy.length = 0;
-  lossData.value.length = 0;
-  lossData.aux.length = 0;
-  lossData.total.length = 0;
-  gameResults.length = 0;
-  gameLenData.steps.length = 0;
-  gameLenData.lengths.length = 0;
-  eloHistory.length = 0;
-  latestStep = null;
-  latestEntropy = null;
-  latestValAcc = null;
+  trainingStepHistory.length = 0;
+  gameHistory.length         = 0;
+  winRateSeries.length       = 0;
+  eloHistory.length          = 0;
 
-  // Reset cards
-  ['card-step','card-loss','card-gph','card-pph','card-elo','card-gpu'].forEach(
-    id => document.getElementById(id).textContent = DASH
-  );
-  document.getElementById('elo-badge').innerHTML = '';
-  document.getElementById('run-id').textContent = DASH;
-  document.getElementById('buffer-text').textContent = DASH;
+  setText('card-step',  DASH);
+  setText('card-loss',  DASH);
+  resetEntropyCard();
+  setText('card-valacc', DASH);
+  setText('card-pph',   DASH);
+  setText('card-gph',   DASH);
+  setText('run-id',     DASH);
+  setText('buffer-text', DASH);
   document.getElementById('buffer-bar').style.width = '0%';
-  document.getElementById('mix-pre').textContent = DASH;
-  document.getElementById('mix-sp').textContent = DASH;
-  document.getElementById('wr-p0').textContent = DASH;
-  document.getElementById('wr-p1').textContent = DASH;
-  document.getElementById('wr-draw').textContent = DASH;
-  ['sys-gpu','sys-vram','sys-workers','sys-sims','sys-entropy','sys-valacc'].forEach(
-    id => document.getElementById(id).textContent = DASH
-  );
-  document.getElementById('log-scroll').innerHTML = '';
+  setText('mix-sp',  DASH);
+  setText('mix-pre', DASH);
 
-  updateCharts();
+  hideEloPanel();
+
+  ['sys-gpu','sys-vram','sys-ram','sys-cpu','sys-workers','sys-sims','sys-batchfill','sys-grad','sys-lr']
+    .forEach(id => setText(id, DASH));
+
+  setText('winrate-summary',   DASH);
+  setText('histogram-summary', DASH);
+  setText('entropy-summary',   DASH);
+  setText('grad-summary',      DASH);
+
+  document.getElementById('log-scroll').innerHTML = '';
+  updateAllCharts();
 }
 
-// ── Event handlers ─────────────────────────────────────────────────
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+function resetEntropyCard() {
+  const el    = document.getElementById('card-entropy');
+  const badge = document.getElementById('card-entropy-badge');
+  el.textContent    = DASH;
+  el.style.color    = '';
+  badge.style.display  = 'none';
+  badge.textContent = '';
+}
+
+// ── Event handlers ─────────────────────────────────────────────────────────
 function onRunStart(p) {
-  document.getElementById('run-id').textContent = p.run_id ? p.run_id.slice(0, 8) : DASH;
-  latestStep = p.step || 0;
-  document.getElementById('card-step').textContent = fmtInt(latestStep);
-  if (p.worker_count != null) {
-    document.getElementById('sys-workers').textContent = p.worker_count;
-  }
+  setText('run-id', p.run_id ? p.run_id.slice(0, 8) : DASH);
+  if (p.step != null)         setText('card-step',   fmtInt(p.step));
+  if (p.worker_count != null) setText('sys-workers', p.worker_count);
+  addLogEntry(p);
 }
 
 function onTrainingStep(p) {
-  latestStep = p.step;
-  document.getElementById('card-step').textContent = fmtInt(p.step);
-  document.getElementById('card-loss').textContent = fmtLoss(p.loss_total);
+  // Push to ring buffer
+  trainingStepHistory.push({
+    step:           p.step,
+    loss_total:     p.loss_total,
+    loss_policy:    p.loss_policy,
+    loss_value:     p.loss_value,
+    loss_aux:       p.loss_aux,
+    policy_entropy: p.policy_entropy,
+    grad_norm:      p.grad_norm,
+    lr:             p.lr,
+  });
+  if (trainingStepHistory.length > MAX_STEPS) trainingStepHistory.shift();
 
-  latestEntropy = p.policy_entropy;
-  latestValAcc = p.value_accuracy;
-  document.getElementById('sys-entropy').textContent = p.policy_entropy != null ? p.policy_entropy.toFixed(2) : DASH;
-  document.getElementById('sys-valacc').textContent = fmtPct(p.value_accuracy);
+  // Stat cards
+  setText('card-step',  fmtInt(p.step));
+  setText('card-loss',  fmtLoss(p.loss_total));
+  updateEntropyCard(p.policy_entropy);
+  setText('card-valacc', fmtPct(p.value_accuracy));
 
-  // Loss chart data
-  lossData.steps.push(p.step);
-  lossData.total.push(p.loss_total);
-  lossData.policy.push(p.loss_policy);
-  lossData.value.push(p.loss_value);
-  lossData.aux.push(p.loss_aux);
-
-  while (lossData.steps.length > MAX_LOSS) {
-    lossData.steps.shift();
-    lossData.total.shift();
-    lossData.policy.shift();
-    lossData.value.shift();
-    lossData.aux.shift();
-  }
+  // System panel — step-sourced fields
+  setText('sys-grad', fmtGrad(p.grad_norm));
+  setText('sys-lr',   fmtLR(p.lr));
 
   updateLossChart();
+  updateEntropyChart();
+  updateGradChart();
 }
 
 function onIterationComplete(p) {
-  document.getElementById('card-gph').textContent = fmtRate(p.games_per_hour);
-  document.getElementById('card-pph').textContent = fmtRate(p.positions_per_hour);
-  document.getElementById('sys-sims').textContent = fmtRate(p.sims_per_sec);
+  setText('card-gph', fmtRate(p.games_per_hour));
+  setText('card-pph', fmtRate(p.positions_per_hour));
+  setText('sys-sims', fmtRate(p.sims_per_sec));
 
-  // Buffer
+  if (p.batch_fill_pct != null) {
+    setText('sys-batchfill', p.batch_fill_pct.toFixed(1) + '%');
+  }
+
   if (p.buffer_size != null && p.buffer_capacity != null) {
-    const pct = (p.buffer_size / Math.max(p.buffer_capacity, 1) * 100);
-    document.getElementById('buffer-text').textContent =
-      fmtInt(p.buffer_size) + ' / ' + fmtInt(p.buffer_capacity);
+    const pct = p.buffer_size / Math.max(p.buffer_capacity, 1) * 100;
+    setText('buffer-text', fmtInt(p.buffer_size) + ' / ' + fmtInt(p.buffer_capacity));
     document.getElementById('buffer-bar').style.width = pct.toFixed(0) + '%';
   }
 
-  // Corpus mix
   if (p.corpus_selfplay_frac != null) {
-    const sp = (p.corpus_selfplay_frac * 100).toFixed(1) + '%';
-    const pre = ((1 - p.corpus_selfplay_frac) * 100).toFixed(1) + '%';
-    document.getElementById('mix-sp').textContent = sp;
-    document.getElementById('mix-pre').textContent = pre;
+    setText('mix-sp',  (p.corpus_selfplay_frac * 100).toFixed(1) + '%');
+    setText('mix-pre', ((1 - p.corpus_selfplay_frac) * 100).toFixed(1) + '%');
   }
-
-  // Win rates (from iteration_complete aggregates)
-  document.getElementById('wr-p0').textContent = fmtPct(p.win_rate_p0);
-  document.getElementById('wr-p1').textContent = fmtPct(p.win_rate_p1);
-  document.getElementById('wr-draw').textContent = fmtPct(p.draw_rate);
-
-  // Game length chart
-  gameLenData.steps.push(p.step);
-  gameLenData.lengths.push(p.avg_game_length);
-  while (gameLenData.steps.length > MAX_GAMELEN) {
-    gameLenData.steps.shift();
-    gameLenData.lengths.shift();
-  }
-  updateGamelenChart();
 }
 
 function onGameComplete(p) {
-  gameResults.push({ winner: p.winner });
-  while (gameResults.length > MAX_GAMES) gameResults.shift();
-  updateWinrateChart();
+  gameHistory.push({ winner: p.winner, moves: p.moves });
+  if (gameHistory.length > MAX_GAMES) gameHistory.shift();
+
+  // Rolling P0 win rate
+  const p0Count = gameHistory.filter(g => g.winner === 0).length;
+  const rate    = gameHistory.length > 0 ? (p0Count / gameHistory.length) * 100 : 0;
+  winRateSeries.push(rate);
+  if (winRateSeries.length > MAX_GAMES) winRateSeries.shift();
+
+  updateWinRateChart();
+  updateHistogramChart();
   addLogEntry(p);
 }
 
 function onEvalComplete(p) {
-  const elo = p.elo_estimate;
-  document.getElementById('card-elo').textContent = elo != null ? fmtInt(Math.round(elo)) : DASH;
+  eloHistory.push({ step: p.step, elo: p.elo_estimate });
+  showEloPanel(p);
+  addLogEntry(p);
+}
 
-  eloHistory.push({ step: p.step, elo: elo });
+function onSystemStats(p) {
+  if (p.gpu_util_pct != null) {
+    setText('sys-gpu', p.gpu_util_pct.toFixed(0) + '%');
+  }
+  if (p.vram_used_gb != null && p.vram_total_gb != null) {
+    setText('sys-vram', p.vram_used_gb.toFixed(1) + ' / ' + p.vram_total_gb.toFixed(1) + ' GB');
+  }
+  if (p.ram_used_gb != null && p.ram_total_gb != null) {
+    setText('sys-ram', p.ram_used_gb.toFixed(1) + ' / ' + p.ram_total_gb.toFixed(1) + ' GB');
+  }
+  if (p.cpu_util_pct != null) {
+    setText('sys-cpu', p.cpu_util_pct.toFixed(0) + '%');
+  }
+  if (p.workers_active != null) {
+    const total = p.workers_total || p.workers_active;
+    setText('sys-workers', p.workers_active + ' / ' + total);
+  }
+}
+
+// ── Entropy card alert states ──────────────────────────────────────────────
+function updateEntropyCard(entropy) {
+  const el    = document.getElementById('card-entropy');
+  const badge = document.getElementById('card-entropy-badge');
+  if (entropy == null) { resetEntropyCard(); return; }
+
+  el.textContent = entropy.toFixed(2);
+  if (entropy < ALERT_ENTROPY_MIN) {
+    el.style.color         = '#F4664A';
+    badge.style.display    = 'inline-block';
+    badge.style.background = '#F4664A';
+    badge.textContent      = 'collapse';
+  } else if (entropy < ALERT_ENTROPY_WARN) {
+    el.style.color         = '#EF9F27';
+    badge.style.display    = 'inline-block';
+    badge.style.background = '#EF9F27';
+    badge.textContent      = 'low';
+  } else {
+    el.style.color      = '';
+    badge.style.display = 'none';
+    badge.textContent   = '';
+  }
+}
+
+// ── ELO panel (conditional) ────────────────────────────────────────────────
+function showEloPanel(p) {
+  document.getElementById('elo-panel').style.display = 'block';
+  eloVisible = true;
+
+  const elo = p.elo_estimate;
+  setText('elo-value', elo != null ? fmtInt(Math.round(elo)) : DASH);
+  setText('elo-step',  p.step != null ? 'step ' + fmtInt(p.step) : '');
 
   const badge = document.getElementById('elo-badge');
   if (p.gate_passed === true) {
@@ -519,88 +768,179 @@ function onEvalComplete(p) {
     badge.innerHTML = '';
   }
 
-  addLogEntry(p);
+  if (eloHistory.length >= 3) {
+    const canvas = document.getElementById('elo-line-chart');
+    canvas.style.display = 'block';
+    if (!eloLineChartInst) {
+      eloLineChartInst = new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{ label: '', data: [], borderColor: '#5DCAA5', borderWidth: 1.5, pointRadius: 2, tension: 0.2 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: '#666', font: { size: 8 } }, grid: { color: '#2a2a2a' } },
+            y: { ticks: { color: '#666', font: { size: 8 } }, grid: { color: '#2a2a2a' } },
+          }
+        }
+      });
+    }
+    eloLineChartInst.data.labels             = eloHistory.map(e => fmtInt(e.step));
+    eloLineChartInst.data.datasets[0].data   = eloHistory.map(e => e.elo);
+    eloLineChartInst.update('none');
+  }
 }
 
-function onSystemStats(p) {
-  document.getElementById('card-gpu').textContent = p.gpu_util_pct != null ? p.gpu_util_pct.toFixed(0) + '%' : DASH;
-  document.getElementById('sys-gpu').textContent = p.gpu_util_pct != null ? p.gpu_util_pct.toFixed(0) + '%' : DASH;
-  if (p.vram_used_gb != null && p.vram_total_gb != null) {
-    document.getElementById('sys-vram').textContent = p.vram_used_gb.toFixed(1) + '/' + p.vram_total_gb.toFixed(1) + ' GB';
+function hideEloPanel() {
+  document.getElementById('elo-panel').style.display = 'none';
+  eloVisible = false;
+  if (eloLineChartInst) {
+    eloLineChartInst.destroy();
+    eloLineChartInst = null;
   }
-  if (p.workers_active != null) {
-    const total = p.workers_total || p.workers_active;
-    document.getElementById('sys-workers').textContent = p.workers_active + '/' + total;
-  }
+  document.getElementById('elo-line-chart').style.display = 'none';
 }
 
-// ── Chart updates ──────────────────────────────────────────────────
-function updateCharts() {
+// ── Chart updates ──────────────────────────────────────────────────────────
+function updateAllCharts() {
   updateLossChart();
-  updateWinrateChart();
-  updateGamelenChart();
+  updateWinRateChart();
+  updateHistogramChart();
+  updateEntropyChart();
+  updateGradChart();
 }
 
 function updateLossChart() {
-  lossChart.data.labels = lossData.steps;
-  lossChart.data.datasets[0].data = lossData.total;
-  lossChart.data.datasets[1].data = lossData.policy;
-  lossChart.data.datasets[2].data = lossData.value;
-  lossChart.data.datasets[3].data = lossData.aux;
+  const steps  = trainingStepHistory.map(d => d.step);
+  const totals = trainingStepHistory.map(d => d.loss_total);
+  const polics = trainingStepHistory.map(d => d.loss_policy);
+  const values = trainingStepHistory.map(d => d.loss_value);
+  const auxs   = trainingStepHistory.map(d => d.loss_aux);
+
+  lossChart.data.labels = steps;
+  // Raw
+  lossChart.data.datasets[0].data = totals;
+  lossChart.data.datasets[1].data = polics;
+  lossChart.data.datasets[2].data = values;
+  lossChart.data.datasets[3].data = auxs;
+  // EMA
+  lossChart.data.datasets[4].data = computeEMA(totals, EMA_ALPHA);
+  lossChart.data.datasets[5].data = computeEMA(polics, EMA_ALPHA);
+  lossChart.data.datasets[6].data = computeEMA(values, EMA_ALPHA);
+  lossChart.data.datasets[7].data = computeEMA(auxs,   EMA_ALPHA);
+
   lossChart.update('none');
 }
 
-function updateWinrateChart() {
-  // Bin last 100 games into 10 buckets of 10
-  const bucketSize = 10;
-  const nBuckets = Math.ceil(gameResults.length / bucketSize);
-  const labels = [];
-  const p0 = [], p1 = [], draws = [];
+function updateWinRateChart() {
+  winRateChart.data.labels             = winRateSeries.map((_, i) => i);
+  winRateChart.data.datasets[0].data   = winRateSeries;
 
-  for (let i = 0; i < nBuckets; i++) {
-    const start = i * bucketSize;
-    const end = Math.min(start + bucketSize, gameResults.length);
-    const slice = gameResults.slice(start, end);
-    const n = slice.length;
-    labels.push((start + 1) + '-' + end);
-    p0.push(slice.filter(g => g.winner === 0).length / n);
-    p1.push(slice.filter(g => g.winner === 1).length / n);
-    draws.push(slice.filter(g => g.winner === -1).length / n);
+  // Auto-zoom Y ± 15pp
+  if (winRateSeries.length > 0) {
+    const mn = Math.min(...winRateSeries);
+    const mx = Math.max(...winRateSeries);
+    winRateChart.options.scales.y.min = Math.max(0,   Math.floor(mn - 15));
+    winRateChart.options.scales.y.max = Math.min(100, Math.ceil(mx + 15));
+  } else {
+    winRateChart.options.scales.y.min = 0;
+    winRateChart.options.scales.y.max = 100;
   }
+  winRateChart.update('none');
 
-  winrateChart.data.labels = labels;
-  winrateChart.data.datasets[0].data = p0;
-  winrateChart.data.datasets[1].data = p1;
-  winrateChart.data.datasets[2].data = draws;
-  winrateChart.update('none');
+  // Summary
+  if (gameHistory.length > 0) {
+    const n    = gameHistory.length;
+    const p0   = (gameHistory.filter(g => g.winner === 0).length  / n * 100).toFixed(1);
+    const p1   = (gameHistory.filter(g => g.winner === 1).length  / n * 100).toFixed(1);
+    const draw = (gameHistory.filter(g => g.winner === -1).length / n * 100).toFixed(1);
+    setText('winrate-summary', 'P0 ' + p0 + '%  P1 ' + p1 + '%  draw ' + draw + '%');
+  } else {
+    setText('winrate-summary', DASH);
+  }
 }
 
-function updateGamelenChart() {
-  gamelenChart.data.labels = gameLenData.steps;
-  gamelenChart.data.datasets[0].data = gameLenData.lengths;
-  gamelenChart.update('none');
+function updateHistogramChart() {
+  const bins = new Array(10).fill(0);
+  for (const g of gameHistory) {
+    const m   = g.moves || 0;
+    let   idx = HIST_BREAKS.findIndex(bp => m < bp);
+    if (idx === -1) idx = 9;
+    bins[idx]++;
+  }
+  histogramChart.data.datasets[0].data = bins;
+  histogramChart.update('none');
+
+  // Summary
+  if (gameHistory.length > 0) {
+    const lengths = gameHistory.map(g => g.moves || 0).sort((a, b) => a - b);
+    const mid     = Math.floor(lengths.length / 2);
+    const median  = lengths.length % 2
+      ? lengths[mid]
+      : Math.round((lengths[mid - 1] + lengths[mid]) / 2);
+    const draws   = gameHistory.filter(g => g.winner === -1).length;
+    setText('histogram-summary', 'median ' + median + '  draws ' + draws + ' / ' + gameHistory.length);
+  } else {
+    setText('histogram-summary', DASH);
+  }
 }
 
-// ── Event log ──────────────────────────────────────────────────────
+function updateEntropyChart() {
+  const steps   = trainingStepHistory.map(d => d.step);
+  const entropy = trainingStepHistory.map(d => d.policy_entropy);
+  entropyChart.data.labels           = steps;
+  entropyChart.data.datasets[0].data = entropy;
+  entropyChart.update('none');
+
+  const last = trainingStepHistory.length
+    ? trainingStepHistory[trainingStepHistory.length - 1] : null;
+  setText('entropy-summary',
+    last && last.policy_entropy != null
+      ? 'now ' + last.policy_entropy.toFixed(2) + '  collapse at ' + ALERT_ENTROPY_MIN
+      : DASH
+  );
+}
+
+function updateGradChart() {
+  const steps    = trainingStepHistory.map(d => d.step);
+  const gradData = trainingStepHistory.map(d => isFinite(d.grad_norm) ? d.grad_norm : null);
+  gradChart.data.labels           = steps;
+  gradChart.data.datasets[0].data = gradData;
+  gradChart.update('none');
+
+  const last = trainingStepHistory.length
+    ? trainingStepHistory[trainingStepHistory.length - 1] : null;
+  setText('grad-summary',
+    last && last.grad_norm != null
+      ? 'now ' + fmtGrad(last.grad_norm) + '  clip at ' + ALERT_GRAD_MAX
+      : DASH
+  );
+}
+
+// ── Event log ──────────────────────────────────────────────────────────────
 function addLogEntry(p) {
   const scroll = document.getElementById('log-scroll');
-  const entry = document.createElement('div');
+  const entry  = document.createElement('div');
   entry.className = 'log-entry';
 
-  const ts = p.ts ? new Date(p.ts * 1000).toLocaleTimeString() : '';
-  let msg = '';
-  let viewLink = '';
+  const ts  = p.ts ? new Date(p.ts * 1000).toLocaleTimeString() : '';
+  let msg = '', viewLink = '';
 
   if (p.event === 'game_complete') {
-    const winnerText = p.winner === 0 ? '<span class="winner-p0">P0 wins</span>'
-      : p.winner === 1 ? '<span class="winner-p1">P1 wins</span>'
-      : '<span class="winner-draw">draw</span>';
-    msg = 'Game #' + (p.game_id || '?').slice(0, 6) + '  ' + winnerText +
-      '  in ' + (p.moves || '?') + ' moves  worker ' + (p.worker_id ?? '?');
-    viewLink = '<span class="view-link" title="viewer coming soon">view &rarr;</span>';
+    const w = p.winner === 0 ? '<span class="winner-p0">P0 wins</span>'
+            : p.winner === 1 ? '<span class="winner-p1">P1 wins</span>'
+            : '<span class="winner-draw">draw</span>';
+    msg      = 'Game #' + (p.game_id || '?').slice(0, 6) + '  ' + w
+             + '  in ' + (p.moves || '?') + ' moves  worker ' + (p.worker_id ?? '?');
+    viewLink = '<span class="view-link">view &rarr;</span>';
   } else if (p.event === 'eval_complete') {
-    const wr = p.win_rate_vs_sealbot != null ? (p.win_rate_vs_sealbot * 100).toFixed(1) + '%' : '?';
-    const gate = p.gate_passed ? '<span class="gate-passed">gate PASSED</span>'
+    const wr   = p.win_rate_vs_sealbot != null
+      ? (p.win_rate_vs_sealbot * 100).toFixed(1) + '%' : '?';
+    const gate = p.gate_passed
+      ? '<span class="gate-passed">gate PASSED</span>'
       : '<span class="gate-failed">gate FAILED</span>';
     msg = 'Eval: ' + wr + ' vs SealBot ' + DASH + ' ' + gate;
   } else if (p.event === 'run_start') {
@@ -611,15 +951,12 @@ function addLogEntry(p) {
     msg = p.event;
   }
 
-  entry.innerHTML = '<span class="ts">[' + ts + ']</span><span class="msg">' + msg + '</span>' + viewLink;
+  entry.innerHTML = '<span class="ts">[' + ts + ']</span>'
+    + '<span class="msg">' + msg + '</span>' + viewLink;
 
   // Newest first
   scroll.insertBefore(entry, scroll.firstChild);
-
-  // Keep max 20 visible
-  while (scroll.children.length > 20) {
-    scroll.removeChild(scroll.lastChild);
-  }
+  while (scroll.children.length > 20) scroll.removeChild(scroll.lastChild);
 }
 </script>
 </body>
