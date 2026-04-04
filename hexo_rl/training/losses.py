@@ -64,11 +64,15 @@ def compute_total_loss(
     value_loss: torch.Tensor,
     aux_loss: Optional[torch.Tensor] = None,
     aux_weight: float = 0.0,
+    entropy_bonus: Optional[torch.Tensor] = None,
+    entropy_weight: float = 0.0,
 ) -> torch.Tensor:
-    """Combine policy, value, and optional auxiliary losses."""
+    """Combine policy, value, auxiliary, and entropy regularization losses."""
     total = policy_loss + value_loss
     if aux_loss is not None and aux_weight > 0.0:
         total = total + aux_weight * aux_loss
+    if entropy_bonus is not None and entropy_weight > 0.0:
+        total = total - entropy_weight * entropy_bonus
     return total
 
 

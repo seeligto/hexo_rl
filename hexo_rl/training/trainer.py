@@ -189,8 +189,11 @@ class Trainer:
         import numpy  # noqa: F811 — deferred import for type alias above
         aux_weight = float(self.config.get("aux_opp_reply_weight", 0.0))
 
-        # Move to device; keep float16 states as-is for autocast.
-        states_t   = torch.from_numpy(states).to(self.device)       # float16
+        # Move to device. With FP16/autocast, keep float16 states for the mixed-
+        # precision path; without it, upcast to float32 to match model weights.
+        states_t = torch.from_numpy(states).to(self.device)
+        if not self.fp16:
+            states_t = states_t.float()
         policies_t = torch.from_numpy(policies).to(self.device)     # float32
         outcomes_t = torch.from_numpy(outcomes).to(self.device)     # float32
 
@@ -199,6 +202,8 @@ class Trainer:
             policies_t = prune_policy_targets(policies_t, prune_frac)
 
         self.optimizer.zero_grad()
+
+        entropy_weight = float(self.config.get("entropy_reg_weight", 0.0))
 
         with autocast(device_type=self.device.type, dtype=torch.float16,
                       enabled=self.fp16):
@@ -217,7 +222,13 @@ class Trainer:
             if use_aux:
                 opp_reply_loss = compute_aux_loss(opp_reply, policies_t, policy_valid, self.device)
 
-            loss = compute_total_loss(policy_loss, value_loss, opp_reply_loss, aux_weight)
+            # Entropy regularization: subtract entropy bonus to maximize policy entropy.
+            entropy_bonus = None
+            if entropy_weight > 0.0:
+                entropy_bonus = -(log_policy.exp() * log_policy).sum(dim=-1).mean()
+
+            loss = compute_total_loss(policy_loss, value_loss, opp_reply_loss, aux_weight,
+                                      entropy_bonus, entropy_weight)
 
         max_grad_norm = float(self.config.get("grad_clip", 1.0))
         grad_norm = fp16_backward_step(
