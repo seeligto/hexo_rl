@@ -117,20 +117,38 @@ Never assume a key in one config file is the effective value — `load_config()`
 merges them and logs warnings on key overlap, but a stale value in any file can
 silently override.
 
+### Kill running processes before starting new ones
+
+**Always kill any lingering training or benchmark processes before launching a new one.**
+Running multiple training processes simultaneously will saturate the GPU and RAM,
+freeze the machine, and corrupt checkpoint state.
+
+```bash
+# Kill before any make train.*, make bench.*, or direct scripts/train.py invocations:
+pkill -f "scripts/train.py" 2>/dev/null
+pkill -f "scripts/benchmark.py" 2>/dev/null
+sleep 1
+pgrep -fl "train.py\|benchmark.py" || echo "clear"
+```
+
+Also use `make train.stop` before starting any new training run if a background
+run may be active (check with `make train.status`).
+
 ### Session start protocol
 
 At the start of every session, in this order:
 
 1. Read this file (CLAUDE.md)
 2. Check the memory MCP for stored phase progress and notes from previous sessions
-3. Run baseline checks with Make:
+3. Kill any lingering training/benchmark processes (see above)
+4. Run baseline checks with Make:
 
 - `make env.check`
 - `make test.rust`
 - `make test.py`
 
-4. Check `git log --oneline -20` to understand what was last committed
-2. Only then begin work
+5. Check `git log --oneline -20` to understand what was last committed
+6. Only then begin work
 
 ### Session end protocol
 
