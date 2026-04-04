@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from engine import ReplayBuffer
@@ -413,3 +414,89 @@ def test_lr_changes_with_scheduler(tmp_path: Path):
 
     # Cosine schedule should decrease LR over time
     assert result5["lr"] < result1["lr"]
+
+
+# ── RecentBuffer ──────────────────────────────────────────────────────────────
+
+from hexo_rl.training.recency_buffer import RecentBuffer
+
+
+def make_recent_buffer(capacity: int = 64) -> RecentBuffer:
+    buf = RecentBuffer(capacity=capacity)
+    rng = np.random.default_rng(1)
+    for _ in range(capacity // 2):
+        buf.push(
+            rng.random((18, 19, 19), dtype=np.float32).astype(np.float16),
+            rng.dirichlet(np.ones(362)).astype(np.float32),
+            float(rng.choice([-1.0, 1.0])),
+        )
+    return buf
+
+
+def test_recent_buffer_size_tracks_pushes():
+    buf = RecentBuffer(capacity=10)
+    assert buf.size == 0
+    rng = np.random.default_rng(0)
+    for i in range(7):
+        buf.push(np.zeros((18, 19, 19), dtype=np.float16),
+                 np.ones(362, dtype=np.float32) / 362, 1.0)
+        assert buf.size == i + 1
+
+
+def test_recent_buffer_caps_at_capacity():
+    buf = RecentBuffer(capacity=4)
+    for _ in range(10):
+        buf.push(np.zeros((18, 19, 19), dtype=np.float16),
+                 np.ones(362, dtype=np.float32) / 362, 0.0)
+    assert buf.size == 4
+
+
+def test_recent_buffer_sample_shapes():
+    buf = make_recent_buffer(capacity=32)
+    states, policies, outcomes = buf.sample(8)
+    assert states.shape   == (8, 18, 19, 19)
+    assert policies.shape == (8, 362)
+    assert outcomes.shape == (8,)
+
+
+def test_recent_buffer_sample_empty_raises():
+    buf = RecentBuffer(capacity=16)
+    with pytest.raises(ValueError, match="empty"):
+        buf.sample(4)
+
+
+def test_train_step_with_recent_buffer_returns_loss_keys(tmp_path: Path):
+    cfg = {**FAST_CONFIG, "recency_weight": 0.75}
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+    recent = make_recent_buffer()
+    result = trainer.train_step(buf, augment=False, recent_buffer=recent)
+    assert "loss"        in result
+    assert "policy_loss" in result
+    assert "value_loss"  in result
+
+
+def test_train_step_recent_buffer_loss_is_finite(tmp_path: Path):
+    cfg = {**FAST_CONFIG, "recency_weight": 0.75}
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+    recent = make_recent_buffer()
+    result = trainer.train_step(buf, augment=False, recent_buffer=recent)
+    for k, v in result.items():
+        if k == "grad_norm":
+            assert not np.isnan(v), f"{k} = {v} is NaN"
+        else:
+            assert np.isfinite(v), f"{k} = {v} is not finite"
+
+
+def test_train_step_recent_buffer_zero_weight_falls_back(tmp_path: Path):
+    """recency_weight=0 should fall back to full-buffer sampling without error."""
+    cfg = {**FAST_CONFIG, "recency_weight": 0.0}
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+    recent = make_recent_buffer()
+    result = trainer.train_step(buf, augment=False, recent_buffer=recent)
+    assert "loss" in result

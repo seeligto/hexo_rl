@@ -150,22 +150,44 @@ class Trainer:
     # ── Training step ─────────────────────────────────────────────────────────
 
     def train_step(
-        self, buffer: "ReplayBuffer", augment: bool = True
+        self,
+        buffer: "ReplayBuffer",
+        augment: bool = True,
+        recent_buffer: Optional[Any] = None,
     ) -> Dict[str, float]:
         """Sample a batch from `buffer` and perform one gradient update.
 
+        When ``recent_buffer`` is provided and ``recency_weight > 0`` in config,
+        a fraction of the batch is drawn from the recent buffer (newest positions)
+        and the remainder from the full Rust buffer.  75/25 recent/uniform is the
+        default; configurable via ``recency_weight`` in training.yaml.
+
         Args:
-            buffer:  Replay buffer to sample from.
-            augment: Whether to apply 12-fold hex augmentation during sampling.
-                     Set False in tests that assert on loss convergence to
-                     eliminate RNG-dependent variance.
+            buffer:        Full Rust ReplayBuffer to sample from.
+            augment:       Apply 12-fold hex augmentation during Rust buffer sampling.
+                           Set False in convergence tests to eliminate RNG variance.
+            recent_buffer: Optional RecentBuffer for recency-weighted sampling.
 
         Returns:
             dict with keys "loss", "policy_loss", "value_loss",
             and optionally "opp_reply_loss".
         """
+        import numpy as _np  # noqa: F811
+
         batch_size = int(self.config["batch_size"])
-        states, policies, outcomes = buffer.sample_batch(batch_size, augment)
+        recency_weight = float(self.config.get("recency_weight", 0.0))
+
+        if recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0:
+            n_recent = max(1, int(round(batch_size * recency_weight)))
+            n_uniform = batch_size - n_recent
+            s_r, p_r, o_r = recent_buffer.sample(n_recent)
+            s_u, p_u, o_u = buffer.sample_batch(max(1, n_uniform), augment)
+            states   = _np.concatenate([s_r, s_u], axis=0)
+            policies = _np.concatenate([p_r, p_u], axis=0)
+            outcomes = _np.concatenate([o_r, o_u], axis=0)
+        else:
+            states, policies, outcomes = buffer.sample_batch(batch_size, augment)
+
         return self._train_on_batch(states, policies, outcomes)
 
     def train_step_from_tensors(

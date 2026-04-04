@@ -355,11 +355,24 @@ def main() -> None:
     def compute_pretrained_weight(step: int) -> float:
         return max(mixing_min_w, mixing_initial_w * math.exp(-step / mixing_decay_steps))
 
+    # ── Recent buffer for recency-weighted sampling ──
+    # Holds the newest ~50% of buffer capacity as a Python ring (no Rust changes needed).
+    # The pool stats thread will also push positions here as they arrive.
+    from hexo_rl.training.recency_buffer import RecentBuffer
+    _recency_weight = float(train_cfg.get("recency_weight", 0.0))
+    recent_buffer: RecentBuffer | None = None
+    if _recency_weight > 0.0:
+        _recent_cap = max(256, capacity // 2)
+        recent_buffer = RecentBuffer(capacity=_recent_cap)
+        log.info("recent_buffer_init", capacity=_recent_cap, recency_weight=_recency_weight)
+
     # ── Self-play pool ──
     from hexo_rl.selfplay.pool import WorkerPool
     from hexo_rl.eval.eval_pipeline import EvalPipeline
 
     pool = WorkerPool(inf_model, config, device, buffer)
+    if recent_buffer is not None:
+        pool.recent_buffer = recent_buffer
 
     # ── Run ID ──
     run_id = uuid.uuid4().hex
@@ -609,14 +622,24 @@ def main() -> None:
                     n_pre = max(1, int(math.ceil(batch_size * w_pre)))
                     n_self = batch_size - n_pre
                     s_pre, p_pre, o_pre = pretrained_buffer.sample_batch(n_pre, True)
-                    s_self, p_self, o_self = buffer.sample_batch(max(1, n_self), True)
+                    # Apply recency weighting to self-play portion of the mixed batch.
+                    if recent_buffer is not None and recent_buffer.size > 0 and _recency_weight > 0.0 and n_self > 1:
+                        n_self_recent = max(1, int(round(n_self * _recency_weight)))
+                        n_self_uniform = n_self - n_self_recent
+                        s_r, p_r, o_r = recent_buffer.sample(n_self_recent)
+                        s_u, p_u, o_u = buffer.sample_batch(max(1, n_self_uniform), True)
+                        s_self = np.concatenate([s_r, s_u], axis=0)
+                        p_self = np.concatenate([p_r, p_u], axis=0)
+                        o_self = np.concatenate([o_r, o_u], axis=0)
+                    else:
+                        s_self, p_self, o_self = buffer.sample_batch(max(1, n_self), True)
                     states = np.concatenate([s_pre, s_self], axis=0)
                     policies = np.concatenate([p_pre, p_self], axis=0)
                     outcomes = np.concatenate([o_pre, o_self], axis=0)
                     loss_info = trainer.train_step_from_tensors(states, policies, outcomes)
                 else:
                     w_pre = 0.0
-                    loss_info = trainer.train_step(buffer)
+                    loss_info = trainer.train_step(buffer, recent_buffer=recent_buffer)
                 train_step = trainer.step
                 if initial_policy_loss is None:
                     initial_policy_loss = float(loss_info["policy_loss"])
