@@ -892,3 +892,31 @@ expands branching factor ~9× → proportionally reduces sim/s. Unrelated to tor
 MCTS target rebaselined to ≥45,000 (85% of new 52,959 median). All 10 targets PASS.
 
 **Test counts:** 71 Rust + 573 Python, all passing.
+
+---
+
+### 26. Legal move margin audit — corrected to hex-ball radius 8 (2026-04-04)
+**Files:** `engine/src/board/moves.rs`, `engine/src/board/mod.rs`
+
+**Audit result:** The legal move margin was **incorrect** (bbox+2, not 8). Fixed.
+
+**Official rule:** hexo.did.science states "a new hex can be placed at most 8 cells apart
+from any other hex." KrakenBot community bot analysis (§5.5) confirmed `candidate_distance=8`.
+
+**What was wrong:** `legal_moves_set()` expanded each cluster's axis-aligned bounding box
+by 2 in each direction. This produced a rectangle approximately 5×5 around a single stone
+— nowhere near the correct radius of 8. Any empty cell within hex_distance ≤ 8 of any
+existing stone must be legal; the bbox+2 approach only covered cells within ~2 steps.
+
+**Fix:** Replaced the bbox+2 rectangle expansion with exact per-stone hex ball iteration
+(radius `LEGAL_MOVE_RADIUS = 8`). For each stone at (sq, sr), all (sq+dq, sr+dr) satisfying
+`|dq| ≤ 8, |dr| ≤ 8, |dq+dr| ≤ 8` (the standard axial hex ball) are added to the legal
+set if unoccupied. This is 217 cells per stone, deduplicated via FxHashSet.
+
+**Cluster distance vs legal move margin:**
+- `get_clusters()` uses `hex_distance ≤ 8` to group stones into colonies for NN windowing.
+- `legal_moves_set()` uses `hex_distance ≤ 8` (LEGAL_MOVE_RADIUS) to find legal moves.
+- Same numeric threshold, but independent purposes: clustering determines which stones share
+  a NN window; legal moves determine where a stone can be placed. Both happen to be 8 because
+  that is the official game rule, and colony grouping by the same distance is a natural choice
+  for windowing stones that can legally interact.
