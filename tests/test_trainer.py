@@ -500,3 +500,46 @@ def test_train_step_recent_buffer_zero_weight_falls_back(tmp_path: Path):
     recent = make_recent_buffer()
     result = trainer.train_step(buf, augment=False, recent_buffer=recent)
     assert "loss" in result
+
+
+# ── Value uncertainty head (trainer integration) ──────────────────────────────
+
+def test_uncertainty_head_appears_in_loss_info(tmp_path: Path):
+    """With uncertainty_weight > 0, loss_info must contain avg_sigma and uncertainty_loss."""
+    cfg = {**FAST_CONFIG, "uncertainty_weight": 0.05}
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+    result = trainer.train_step(buf, augment=False)
+    assert "avg_sigma" in result, "avg_sigma missing from loss_info"
+    assert "uncertainty_loss" in result, "uncertainty_loss missing from loss_info"
+    assert result["avg_sigma"] > 0.0, "avg_sigma should be positive"
+    assert np.isfinite(result["uncertainty_loss"]), "uncertainty_loss must be finite"
+    assert np.isfinite(result["avg_sigma"]), "avg_sigma must be finite"
+
+
+def test_uncertainty_head_absent_when_weight_zero(tmp_path: Path):
+    """With uncertainty_weight=0 (default), loss_info must NOT contain avg_sigma."""
+    cfg = {**FAST_CONFIG}  # no uncertainty_weight key → defaults to 0.0
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+    result = trainer.train_step(buf, augment=False)
+    assert "avg_sigma" not in result
+
+
+def test_uncertainty_loss_is_finite_with_aux(tmp_path: Path):
+    """Uncertainty head must work alongside the opp_reply aux head."""
+    cfg = {
+        **FAST_CONFIG,
+        "uncertainty_weight": 0.05,
+        "aux_opp_reply_weight": 0.15,
+    }
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+    result = trainer.train_step(buf, augment=False)
+    assert "avg_sigma" in result
+    assert "opp_reply_loss" in result
+    assert np.isfinite(result["avg_sigma"])
+    assert np.isfinite(result["uncertainty_loss"])

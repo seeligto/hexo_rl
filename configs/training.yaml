@@ -20,6 +20,7 @@ aux_opp_reply_weight: 0.15
 entropy_reg_weight: 0.01  # policy entropy regularization (KrakenBot-style, prevents policy collapse)
 draw_reward: -0.1         # draw outcome value target (was +0.01; negative = press for wins)
 recency_weight: 0.75      # fraction of each batch from the recent-position ring buffer (newest ~50% of buffer)
+uncertainty_weight: 0.05  # weight for value uncertainty head (Gaussian NLL); diagnostic only — never used in MCTS
 
 game_length_weights:
   # Thresholds are in compound moves (player turns), not plies.

@@ -135,3 +135,62 @@ def test_compile_model_fallback_on_bad_mode():
     x = torch.zeros(2, 18, 9, 9)
     log_policy, value, v_logit = result(x)
     assert log_policy.shape == (2, 9 * 9 + 1)
+
+
+# ── Value uncertainty head ────────────────────────────────────────────────────
+
+def test_uncertainty_flag_returns_four_outputs():
+    """uncertainty=True adds sigma2 as a 4th return value."""
+    net = make_net(board_size=9)
+    x = torch.randn(2, 18, 9, 9)
+    result = net(x, uncertainty=True)
+    assert len(result) == 4, f"expected 4-tuple, got {len(result)}"
+    log_policy, value, v_logit, sigma2 = result
+    assert log_policy.shape == (2, 9 * 9 + 1)
+    assert sigma2.shape == (2, 1)
+
+
+def test_uncertainty_sigma2_positive():
+    """sigma2 must be strictly positive (Softplus ensures this)."""
+    net = make_net(board_size=9)
+    x = torch.randn(4, 18, 9, 9)
+    _, _, _, sigma2 = net(x, uncertainty=True)
+    assert (sigma2 > 0).all(), "sigma2 must be strictly positive"
+
+
+def test_uncertainty_aux_returns_five_outputs():
+    """aux=True + uncertainty=True returns a 5-tuple."""
+    net = make_net(board_size=9)
+    x = torch.randn(2, 18, 9, 9)
+    result = net(x, aux=True, uncertainty=True)
+    assert len(result) == 5, f"expected 5-tuple, got {len(result)}"
+    log_policy, value, v_logit, opp_reply, sigma2 = result
+    assert opp_reply.shape == (2, 9 * 9 + 1)
+    assert sigma2.shape == (2, 1)
+
+
+def test_uncertainty_false_still_returns_three_outputs():
+    """uncertainty=False (default) must preserve the 3-tuple contract."""
+    net = make_net(board_size=9)
+    x = torch.randn(2, 18, 9, 9)
+    result = net(x)
+    assert len(result) == 3
+
+
+def test_uncertainty_head_does_not_appear_in_normal_forward():
+    """Calling forward() without uncertainty=True must not execute value_var."""
+    net = make_net(board_size=9)
+    x = torch.randn(1, 18, 9, 9)
+    # Patch value_var to raise if called
+    original_var = net.value_var
+
+    class _Sentinel(torch.nn.Module):
+        def forward(self, x):
+            raise AssertionError("value_var called unexpectedly in non-uncertainty forward")
+
+    net.value_var = _Sentinel()
+    try:
+        net(x)            # aux=False, uncertainty=False — must not raise
+        net(x, aux=True)  # aux=True, uncertainty=False — must not raise
+    finally:
+        net.value_var = original_var
