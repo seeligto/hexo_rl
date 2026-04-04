@@ -1206,6 +1206,77 @@ Two contributing factors:
 
 ---
 
+### 33. Recency-weighted replay sampling + value uncertainty head (2026-04-04)
+
+**Files:** `hexo_rl/training/recency_buffer.py` (new), `hexo_rl/selfplay/pool.py`,
+`hexo_rl/training/trainer.py`, `hexo_rl/training/losses.py`,
+`hexo_rl/model/network.py`, `scripts/train.py`, `configs/training.yaml`
+
+#### Recency-weighted replay sampling
+The Rust `ReplayBuffer.sample_batch()` has no recency API. A lightweight Python-side
+`RecentBuffer` ring (NumPy, thread-safe) mirrors the newest ~50% of buffer capacity.
+The pool stats thread pushes each position into both buffers simultaneously as data
+arrives. Training batches are split 75% recent / 25% full-Rust-buffer (augmented).
+Config: `recency_weight: 0.75` in `configs/training.yaml`. Both the single-buffer
+and pretrained+self-play mixed paths are updated. Falls back to full-buffer when
+`recency_weight=0` or the recent buffer is empty.
+
+#### Value uncertainty head (diagnostic only)
+Fifth output head on `HexTacToeNet`: trunk → `AdaptiveAvgPool2d(1)` → `Linear` →
+`Softplus` → σ² > 0. Activated only via `forward(uncertainty=True)` during training.
+Gradient is stopped before reaching the value head (`value.detach()`) so σ² does not
+influence value learning. The existing 3-tuple contract `(log_policy, value, v_logit)`
+is preserved for all InferenceServer / evaluator / MCTS callers — verified by grep.
+Loss: Gaussian NLL `0.5 * (log σ² + (z - v_detached)² / σ²)`, weight 0.05.
+`avg_sigma` (mean √σ² over batch) appears in `loss_info` and `training_step` events
+as a passive diagnostic. Dashboard alerts do not trigger on sigma values.
+Config: `uncertainty_weight: 0.05` in `configs/training.yaml`.
+
+**Key follow-up fix:** When resuming from a checkpoint that predates these features,
+`config_overrides` in `train.py` now explicitly forwards `uncertainty_weight` and
+`recency_weight` from the merged YAML so both features activate on resume.
+`Trainer.load_checkpoint` also catches `ValueError` on optimizer param-group
+mismatch (new head = new params) and restarts the optimizer from scratch with a
+warning instead of crashing.
+
+**Commits:**
+- `feat(training): recency-weighted replay sampling (75/25 recent/uniform)`
+- `feat(model): value uncertainty head (diagnostic σ², weight 0.05)`
+- `fix(training): propagate uncertainty/recency weights + graceful optimizer mismatch`
+
+---
+
+### 34. Checkpoint hygiene and RL starting point (2026-04-04)
+
+**Decision: always use `checkpoints/bootstrap_model.pt` as the RL entry point.**
+
+Do not use full pretrain checkpoints (e.g. `pretrain_00053130.pt`) as the RL start.
+Here is why, and what each checkpoint contains:
+
+| File | step | scheduler last_epoch | Type | Use |
+|---|---|---|---|---|
+| `pretrain/pretrain_00000000.pt` | 0 | 53505 | full checkpoint | **Do not use for RL** — step=0 but scheduler is stale (53K epochs exhausted). LR would be near-zero at RL start. |
+| `pretrain/pretrain_00053130.pt` | 53130 | 53130 | full checkpoint | Human-only pretrain result (bot_games.bak was active). Useful as reference only. |
+| `checkpoints/bootstrap_model.pt` | N/A | N/A | **weights-only** | **Use this for RL.** No optimizer/scheduler state. `Trainer` initialises both fresh from config → step=0, LR at initial value. |
+
+**Why `pretrain_00000000.pt` is broken as RL start:**
+The pretrain script resets `self.step = 0` when saving the final "RL-ready" checkpoint
+(so RL starts at step 0), but does NOT reset the cosine scheduler. The scheduler's
+`last_epoch` carries over from the full pretrain run (~53K steps), meaning the
+LR cosine cycle is already exhausted. RL would start with LR ≈ `eta_min` (1e-5)
+and learn almost nothing. This is a known bug in the pretrain save logic — do not fix
+it without also resetting `scheduler.last_epoch = 0`.
+
+**Why `bootstrap_model.pt` is correct:**
+It is a weights-only file. `Trainer.load_checkpoint` detects this (`is_full_ckpt=False`),
+sets `trainer.step = 0`, and constructs a fresh scheduler from config. No pretrain
+optimizer or scheduler state is inherited.
+
+**`make train` already does the right thing:** `CHECKPOINT_BOOTSTRAP` in the Makefile
+points to `checkpoints/bootstrap_model.pt`. Just run `make train`.
+
+---
+
 ### 32. Disable torch.compile — Python 3.14 incompatibility cascade (2026-04-04)
 
 **Background:** torch.compile has caused three consecutive blocking issues:
