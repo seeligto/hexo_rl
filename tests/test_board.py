@@ -75,13 +75,14 @@ def test_occupied_cell_raises():
 
 
 def test_legal_move_count_decrements():
-    # After 1 stone at (0,0): bbox+2 margin = [-2,2]×[-2,2] = 25, minus 1 = 24.
-    # After 2nd stone at (1,0): bbox=[0,1], margin=[-2,3]×[-2,2]=6×5=30, minus 2 = 28.
+    # Legal moves = all cells within hex-ball radius 8 of any stone, minus occupied cells.
+    # After 1 stone at (0,0): hex ball radius 8 = 217 cells, minus 1 occupied = 216.
+    # After 2nd stone at (1,0): union of two adjacent radius-8 balls minus 2 occupied = 232.
     b = Board()
     b.apply_move(0, 0)
-    assert b.legal_move_count() == 24
+    assert b.legal_move_count() == 216
     b.apply_move(1, 0)
-    assert b.legal_move_count() == 28
+    assert b.legal_move_count() == 232
 
 
 # ── Win detection — all three axes ───────────────────────────────────────────

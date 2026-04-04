@@ -193,6 +193,7 @@ def test_scheduler_steps_each_train_step(tmp_path: Path):
         "lr_schedule": "cosine",
         "total_steps": 20,
         "min_lr": 1e-5,
+        "fp16": False,  # FP16 overflow can skip scheduler.step() — disable for determinism
     }
     model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
     trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)

@@ -11,8 +11,9 @@
 /// placed stones.  On an empty board the window is centred at (0,0).
 /// The window slides as play drifts; it never clips stones.
 ///
-/// Legal moves: empty cells within bounding_box + 2 margin, clipped to the
-/// current 19×19 window.  On an empty board all 361 window cells are legal.
+/// Legal moves: empty cells within hex_distance ≤ 8 of any placed stone
+/// (official rule: "at most 8 cells apart").  On an empty board a 5×5
+/// starting region is used (25 cells) to bound the first move.
 ///
 /// Win condition: 6 stones of the same player in a row along one of the three
 /// hex axes (E/W, NE/SW, NW/SE).
@@ -103,8 +104,8 @@ mod tests {
         // Empty board: 5×5 init region = 25 cells (MCTS-optimised first-move).
         assert_eq!(b.legal_move_count(), 25);
         b.apply_move(0, 0).unwrap();
-        // bbox+2 margin = [-2,2]×[-2,2] = 25 cells, minus 1 occupied = 24.
-        assert_eq!(b.legal_move_count(), 24);
+        // hex ball radius 8 around (0,0) = 217 cells, minus 1 occupied = 216.
+        assert_eq!(b.legal_move_count(), 216);
     }
 
     #[test]
@@ -239,10 +240,13 @@ mod tests {
     #[test]
     fn legal_grows_with_bounding_box() {
         let mut b = Board::new();
-        b.apply_move(0, 0).unwrap(); // P1 ply0: cluster bbox+2=[-2,2]×[-2,2] → 24 legal
-        assert_eq!(b.legal_move_count(), 24);
-        b.apply_move(5, 0).unwrap(); // P2: same cluster, bbox+2=[-2,7]×[-2,2]=50-2=48
-        assert_eq!(b.legal_move_count(), 48);
+        // hex ball radius 8 around (0,0) = 217 cells, minus 1 occupied = 216.
+        b.apply_move(0, 0).unwrap();
+        assert_eq!(b.legal_move_count(), 216);
+        // hex_distance((0,0),(5,0)) = 5.  Union of two radius-8 balls: 217+217-132=302
+        // cells; minus 2 occupied = 300.
+        b.apply_move(5, 0).unwrap();
+        assert_eq!(b.legal_move_count(), 300);
     }
 
     #[test]
