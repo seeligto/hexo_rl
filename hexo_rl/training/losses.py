@@ -1,10 +1,11 @@
 """Shared loss computation for Trainer and BootstrapTrainer.
 
 Architecture spec (docs/01_architecture.md §2):
-    L = L_policy + L_value + w_aux · L_opp_reply
+    L = L_policy + L_value + w_aux · L_opp_reply + w_unc · L_uncertainty
     L_policy     = -sum(π_target · log π_net)   (cross-entropy, masked)
     L_value      = BCE(sigmoid(v_logit), (z+1)/2)
     L_opp_reply  = -sum(π_target · log π_opp_net)  (auxiliary)
+    L_uncertainty = 0.5 * (log σ² + (z - value_detached)² / σ²)  (Gaussian NLL)
 """
 
 from __future__ import annotations
@@ -59,6 +60,28 @@ def compute_aux_loss(
     return torch.zeros(1, device=device, dtype=torch.float32).squeeze()
 
 
+def compute_uncertainty_loss(
+    sigma2: torch.Tensor,
+    z_targets: torch.Tensor,
+    value_detached: torch.Tensor,
+) -> torch.Tensor:
+    """Gaussian NLL loss for the value uncertainty head.
+
+    Gradient flows only through σ² — ``value_detached`` must be .detach()'d by
+    the caller so that this head does not influence the value head's gradients.
+
+    Args:
+        sigma2:         (B, 1) predicted variance from value_var head (> 0).
+        z_targets:      (B,) game outcomes in {-1, 0, +1}.
+        value_detached: (B, 1) value head output with gradients stopped.
+
+    Returns:
+        Scalar mean Gaussian NLL.
+    """
+    z = z_targets.unsqueeze(1)          # (B, 1)
+    return 0.5 * (sigma2.log() + (z - value_detached) ** 2 / sigma2).mean()
+
+
 def compute_total_loss(
     policy_loss: torch.Tensor,
     value_loss: torch.Tensor,
@@ -66,13 +89,17 @@ def compute_total_loss(
     aux_weight: float = 0.0,
     entropy_bonus: Optional[torch.Tensor] = None,
     entropy_weight: float = 0.0,
+    uncertainty_loss: Optional[torch.Tensor] = None,
+    uncertainty_weight: float = 0.0,
 ) -> torch.Tensor:
-    """Combine policy, value, auxiliary, and entropy regularization losses."""
+    """Combine policy, value, auxiliary, entropy, and uncertainty losses."""
     total = policy_loss + value_loss
     if aux_loss is not None and aux_weight > 0.0:
         total = total + aux_weight * aux_loss
     if entropy_bonus is not None and entropy_weight > 0.0:
         total = total - entropy_weight * entropy_bonus
+    if uncertainty_loss is not None and uncertainty_weight > 0.0:
+        total = total + uncertainty_weight * uncertainty_loss
     return total
 
 

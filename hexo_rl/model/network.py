@@ -122,29 +122,43 @@ class HexTacToeNet(nn.Module):
         self.opp_reply_bn = nn.BatchNorm2d(2)
         self.opp_reply_fc = nn.Linear(2 * spatial, spatial + 1)
 
+        # Value uncertainty head (training only — diagnostic σ², never used in MCTS)
+        # Reads from the same trunk features as the value head.
+        # Softplus ensures σ² > 0.
+        self.value_var = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(filters, 1),
+            nn.Softplus(),
+        )
+
     @property
     def tower(self) -> nn.Sequential:
         """Backward-compatible alias for the trunk tower."""
         return self.trunk.tower
 
     def forward(
-        self, x: torch.Tensor, aux: bool = False
+        self, x: torch.Tensor, aux: bool = False, uncertainty: bool = False
     ) -> Union[Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-               Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+               Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+               Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         Args:
-            x:   (B, 18, H, W) float16 tensor.
-            aux: If True, also return opponent-reply log-policy (training only).
+            x:           (B, 18, H, W) float16 tensor.
+            aux:         If True, also return opponent-reply log-policy (training only).
+            uncertainty: If True, also return value variance σ² (training only).
+                         Never pass True from InferenceServer, evaluator, or MCTS paths.
 
-        Returns (aux=False):
+        Returns (aux=False, uncertainty=False):   — 3-tuple, unchanged contract
             log_policy:   (B, H*W + 1)  log-softmax probabilities
             value:        (B, 1)        tanh scalar in [-1, 1]  (for MCTS)
             value_logit:  (B, 1)        pre-tanh logit          (for BCE loss)
-        Returns (aux=True):
-            log_policy:   (B, H*W + 1)  log-softmax probabilities
-            value:        (B, 1)        tanh scalar in [-1, 1]
-            value_logit:  (B, 1)        pre-tanh logit
-            opp_reply:    (B, H*W + 1)  log-softmax
+        Returns (aux=True, uncertainty=False):    — 4-tuple
+            log_policy, value, value_logit, opp_reply
+        Returns (aux=False, uncertainty=True):    — 4-tuple
+            log_policy, value, value_logit, sigma2   (σ² > 0 via Softplus)
+        Returns (aux=True, uncertainty=True):     — 5-tuple
+            log_policy, value, value_logit, opp_reply, sigma2
         """
         out = self.trunk(x)
 
@@ -161,11 +175,22 @@ class HexTacToeNet(nn.Module):
         v_logit = self.value_fc2(v)            # (B, 1) raw logit
         value = torch.tanh(v_logit)
 
+        if aux and uncertainty:
+            o = F.relu(self.opp_reply_bn(self.opp_reply_conv(out)))
+            o = o.flatten(1)
+            opp_reply = F.log_softmax(self.opp_reply_fc(o), dim=1)
+            sigma2 = self.value_var(out)       # (B, 1), σ² > 0
+            return log_policy, value, v_logit, opp_reply, sigma2
+
         if aux:
             o = F.relu(self.opp_reply_bn(self.opp_reply_conv(out)))
             o = o.flatten(1)
             opp_reply = F.log_softmax(self.opp_reply_fc(o), dim=1)
             return log_policy, value, v_logit, opp_reply
+
+        if uncertainty:
+            sigma2 = self.value_var(out)       # (B, 1), σ² > 0
+            return log_policy, value, v_logit, sigma2
 
         return log_policy, value, v_logit
 

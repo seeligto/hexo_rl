@@ -34,7 +34,7 @@ import structlog
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_value_loss, compute_aux_loss,
-    compute_total_loss, fp16_backward_step,
+    compute_total_loss, compute_uncertainty_loss, fp16_backward_step,
 )
 from hexo_rl.training.checkpoints import (
     save_full_checkpoint, save_inference_weights, prune_checkpoints,
@@ -211,7 +211,8 @@ class Trainer:
     ) -> Dict[str, float]:
         """Core training step: forward, loss, backward, optimizer step."""
         import numpy  # noqa: F811 — deferred import for type alias above
-        aux_weight = float(self.config.get("aux_opp_reply_weight", 0.0))
+        aux_weight         = float(self.config.get("aux_opp_reply_weight", 0.0))
+        uncertainty_weight = float(self.config.get("uncertainty_weight", 0.0))
 
         # Move to device. With FP16/autocast, keep float16 states for the mixed-
         # precision path; without it, upcast to float32 to match model weights.
@@ -231,10 +232,17 @@ class Trainer:
 
         with autocast(device_type=self.device.type, dtype=torch.float16,
                       enabled=self.fp16):
-            use_aux = aux_weight > 0.0
+            use_aux         = aux_weight > 0.0
+            use_uncertainty = uncertainty_weight > 0.0
 
-            if use_aux:
+            if use_aux and use_uncertainty:
+                log_policy, value, v_logit, opp_reply, sigma2 = self.model(
+                    states_t, aux=True, uncertainty=True
+                )
+            elif use_aux:
                 log_policy, value, v_logit, opp_reply = self.model(states_t, aux=True)
+            elif use_uncertainty:
+                log_policy, value, v_logit, sigma2 = self.model(states_t, uncertainty=True)
             else:
                 log_policy, value, v_logit = self.model(states_t)
 
@@ -251,8 +259,18 @@ class Trainer:
             if entropy_weight > 0.0:
                 entropy_bonus = -(log_policy.exp() * log_policy).sum(dim=-1).mean()
 
-            loss = compute_total_loss(policy_loss, value_loss, opp_reply_loss, aux_weight,
-                                      entropy_bonus, entropy_weight)
+            # Uncertainty (Gaussian NLL): stop gradient from σ² influencing value head.
+            unc_loss = None
+            if use_uncertainty:
+                value_detached = value.detach()
+                unc_loss = compute_uncertainty_loss(sigma2, outcomes_t, value_detached)
+
+            loss = compute_total_loss(
+                policy_loss, value_loss,
+                opp_reply_loss, aux_weight,
+                entropy_bonus, entropy_weight,
+                unc_loss, uncertainty_weight,
+            )
 
         max_grad_norm = float(self.config.get("grad_clip", 1.0))
         grad_norm = fp16_backward_step(
@@ -296,6 +314,11 @@ class Trainer:
         }
         if use_aux:
             result["opp_reply_loss"] = opp_reply_loss.item()
+        if use_uncertainty:
+            with torch.no_grad():
+                avg_sigma = sigma2.float().sqrt().mean().item()
+            result["uncertainty_loss"] = unc_loss.item()
+            result["avg_sigma"] = avg_sigma
 
         interval = int(self.config.get("checkpoint_interval", 100))
         if self.step % interval == 0:
