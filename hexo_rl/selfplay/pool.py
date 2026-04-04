@@ -60,7 +60,7 @@ class WorkerPool:
         training_cfg = config.get("training", config)
         self._runner = SelfPlayRunner(
             n_workers=self.n_workers,
-            max_moves_per_game=int(sp.get("max_moves_per_game", 128)),
+            max_moves_per_game=int(sp.get("max_game_moves", sp.get("max_moves_per_game", 128))),
             n_simulations=self.n_simulations,
             leaf_batch_size=leaf_batch_size,
             c_puct=self.c_puct,
