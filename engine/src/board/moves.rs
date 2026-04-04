@@ -154,6 +154,40 @@ impl Board {
         count
     }
 
+    /// Count how many empty cells, if occupied by `player`, would give `player`
+    /// a completed 6-in-a-row (a winning move).
+    ///
+    /// Scans the legal-move set (cells within LEGAL_MOVE_RADIUS of any stone),
+    /// which is O(legal_moves).  Each cell is checked by computing the run length
+    /// through it along all three hex axes — without actually placing a stone —
+    /// using the existing `count_direction` helper.
+    ///
+    /// Used by the MCTS quiescence check: if `count >= 3` the current player has
+    /// a provably forced win because the opponent can block at most 2 per turn.
+    pub fn count_winning_moves(&self, player: Player) -> u32 {
+        let cell = match player {
+            Player::One => Cell::P1,
+            Player::Two => Cell::P2,
+        };
+
+        let legal = self.legal_moves_set();
+        let mut count = 0u32;
+
+        for &(q, r) in legal {
+            for &(dq, dr) in &HEX_AXES {
+                let run = 1
+                    + self.count_direction(q, r, dq, dr, cell)
+                    + self.count_direction(q, r, -dq, -dr, cell);
+                if run >= WIN_LENGTH {
+                    count += 1;
+                    break; // count each cell at most once
+                }
+            }
+        }
+
+        count
+    }
+
     // ── Cluster helpers ───────────────────────────────────────────────────────
 
     pub fn get_clusters(&self) -> Vec<Vec<(i32, i32)>> {
@@ -184,5 +218,106 @@ impl Board {
         }
 
         clusters
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_count_winning_moves_empty_board() {
+        let board = Board::new();
+        // No stones → no winning moves for either player.
+        assert_eq!(board.count_winning_moves(Player::One), 0);
+        assert_eq!(board.count_winning_moves(Player::Two), 0);
+    }
+
+    #[test]
+    fn test_count_winning_moves_five_in_row() {
+        // P1 has 5 stones in a row along E axis: q=0..4 at r=0.
+        // Placing at q=-1 or q=5 completes 6-in-a-row → 2 winning moves.
+        let mut board = Board::new();
+        board.apply_move(0, 0).unwrap(); // P1 ply0 (single)
+        // Place 4 more P1 stones (need P2 filler moves between each pair)
+        // P2 fillers go far away; we just need P1 to have 5 in a row.
+        board.apply_move(0, 9).unwrap(); board.apply_move(0, 8).unwrap(); // P2 turn
+        board.apply_move(1, 0).unwrap(); board.apply_move(2, 0).unwrap(); // P1 turn
+        board.apply_move(0, 7).unwrap(); board.apply_move(0, 6).unwrap(); // P2 turn
+        board.apply_move(3, 0).unwrap(); board.apply_move(4, 0).unwrap(); // P1 turn
+
+        // It's P2's turn, but we can count P1's winning moves directly.
+        let p1_wins = board.count_winning_moves(Player::One);
+        // Cells q=-1,r=0 and q=5,r=0 both complete 5-in-a-row to 6.
+        assert_eq!(p1_wins, 2, "5-in-a-row should have exactly 2 winning moves");
+    }
+
+    #[test]
+    fn test_count_winning_moves_five_blocked_one_end() {
+        // P1: 5 in a row q=0..4 at r=0.
+        // P2 blocker at q=-1,r=0 → only q=5 is a winning cell.
+        let mut board = Board::new();
+        board.apply_move(0, 0).unwrap(); // P1
+        board.apply_move(-1, 0).unwrap(); board.apply_move(0, 9).unwrap(); // P2 (blocker + filler)
+        board.apply_move(1, 0).unwrap(); board.apply_move(2, 0).unwrap(); // P1
+        board.apply_move(0, 8).unwrap(); board.apply_move(0, 7).unwrap(); // P2
+        board.apply_move(3, 0).unwrap(); board.apply_move(4, 0).unwrap(); // P1
+
+        let p1_wins = board.count_winning_moves(Player::One);
+        assert_eq!(p1_wins, 1, "one end blocked → 1 winning move");
+    }
+
+    #[test]
+    fn test_count_winning_moves_zero_when_early_game() {
+        // After a few scattered moves no one has 5-in-a-row.
+        let mut board = Board::new();
+        board.apply_move(0, 0).unwrap(); // P1
+        board.apply_move(3, 3).unwrap(); board.apply_move(4, 4).unwrap(); // P2
+        board.apply_move(0, 5).unwrap(); board.apply_move(5, 0).unwrap(); // P1
+
+        assert_eq!(board.count_winning_moves(Player::One), 0);
+        assert_eq!(board.count_winning_moves(Player::Two), 0);
+    }
+
+    #[test]
+    fn test_count_winning_moves_three_independent_winning_cells() {
+        // P1 has three separate 5-in-a-row threats, each with one open end.
+        // Axis E at r=0: stones q=0..4; winning cell at q=5 (q=-1 blocked by P2)
+        // Axis NE at q=0: stones r=0..4; winning cell at r=5 (r=-1 blocked by P2)
+        // Axis NW: stones (0,0),(-1,1),(-2,2),(-3,3),(-4,4); winning cell at (-5,5)
+
+        let mut board = Board::new();
+
+        // We'll manually insert stones to avoid dealing with turn structure.
+        // Use cells directly and set ply / player appropriately.
+        // Simpler: insert directly into the board's cells map.
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), Cell::P1);
+        }
+        // Blocker for E-axis west end
+        board.cells.insert((-1, 0), Cell::P2);
+
+        for r in 1..5i32 {  // r=0 already placed above
+            board.cells.insert((0, r), Cell::P1);
+        }
+        // Blocker for NE-axis south end
+        board.cells.insert((0, -1), Cell::P2);
+
+        for i in 1..5i32 {  // (0,0) already placed
+            board.cells.insert((-i, i), Cell::P1);
+        }
+        // Blocker for NW-axis south end
+        board.cells.insert((1, -1), Cell::P2);
+
+        // Rebuild legal cache.
+        board.has_stones = true;
+        board.cache_dirty.set(true);
+
+        let p1_wins = board.count_winning_moves(Player::One);
+        // E-axis: q=5 (1 cell); NE-axis: (0,5) (1 cell); NW-axis: (-5,5) (1 cell)
+        assert!(p1_wins >= 3,
+            "expected ≥3 winning moves for three blocked 5-in-a-row threats, got {p1_wins}");
     }
 }

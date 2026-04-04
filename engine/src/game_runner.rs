@@ -26,6 +26,8 @@ pub struct SelfPlayRunner {
     leaf_batch_size: usize,
     c_puct: f32,
     fpu_reduction: f32,
+    quiescence_enabled: bool,
+    quiescence_blend_2: f32,
     fast_prob: f32,
     fast_sims: usize,
     standard_sims: usize,
@@ -48,7 +50,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -63,6 +65,8 @@ impl SelfPlayRunner {
         standard_sims: usize,
         temp_threshold_compound_moves: usize,
         draw_reward: f32,
+        quiescence_enabled: bool,
+        quiescence_blend_2: f32,
     ) -> Self {
         // If standard_sims is 0, fall back to n_simulations.
         let effective_standard = if standard_sims == 0 { n_simulations } else { standard_sims };
@@ -73,6 +77,8 @@ impl SelfPlayRunner {
             leaf_batch_size,
             c_puct,
             fpu_reduction,
+            quiescence_enabled,
+            quiescence_blend_2,
             fast_prob,
             fast_sims,
             standard_sims: effective_standard,
@@ -108,6 +114,8 @@ impl SelfPlayRunner {
             let leaf_batch_size = self.leaf_batch_size;
             let c_puct = self.c_puct;
             let fpu_reduction = self.fpu_reduction;
+            let quiescence_enabled = self.quiescence_enabled;
+            let quiescence_blend_2 = self.quiescence_blend_2;
             let fast_prob = self.fast_prob;
             let fast_sims = self.fast_sims;
             let standard_sims = self.standard_sims;
@@ -118,6 +126,8 @@ impl SelfPlayRunner {
 
             let handle = thread::spawn(move || {
                 let mut tree = MCTSTree::new_full(c_puct, crate::mcts::VIRTUAL_LOSS_PENALTY, fpu_reduction);
+                tree.quiescence_enabled = quiescence_enabled;
+                tree.quiescence_blend_2 = quiescence_blend_2;
                 let mut rng = rng();
 
                 while running.load(Ordering::SeqCst) {

@@ -10,6 +10,15 @@ mcts:
   # refining known-good moves rather than sampling every legal move uniformly.
   # KrakenBot uses 0.25; set to 0.0 to restore the legacy Q=0 behaviour.
   fpu_reduction: 0.25
+  # Quiescence value override at leaf nodes.
+  # Game theorem: each turn places 2 stones, so the opponent can block at most 2
+  # winning cells per response.  If the current player has ≥3 winning moves the
+  # leaf value is overridden to +1.0 (forced win).  If the opponent has ≥3, to -1.0.
+  # The policy is NOT affected — the network still learns about these positions.
+  quiescence_enabled: true
+  # Value blend amount for the 2-winning-moves case (strong but unproven).
+  # NN value is nudged by ±quiescence_blend_2 toward ±1.0, clamped to [-1, 1].
+  quiescence_blend_2: 0.3
   dirichlet_alpha: 0.3
   epsilon: 0.25
   temperature_threshold_ply: 30

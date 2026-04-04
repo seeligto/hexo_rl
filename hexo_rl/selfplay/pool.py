@@ -51,6 +51,8 @@ class WorkerPool:
         self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
         self.c_puct = float(mcts_cfg.get("c_puct", 1.5))
         self.fpu_reduction = float(mcts_cfg.get("fpu_reduction", 0.25))
+        self.quiescence_enabled = bool(mcts_cfg.get("quiescence_enabled", True))
+        self.quiescence_blend_2 = float(mcts_cfg.get("quiescence_blend_2", 0.3))
         leaf_batch_size = int(sp.get("leaf_batch_size", 8))
 
         pc = sp.get("playout_cap", config.get("playout_cap", {}))
@@ -70,6 +72,8 @@ class WorkerPool:
             standard_sims=int(pc.get("standard_sims", 0)),
             temp_threshold_compound_moves=int(pc.get("temperature_threshold_compound_moves", 15)),
             draw_reward=float(training_cfg.get("draw_reward", -0.1)),
+            quiescence_enabled=self.quiescence_enabled,
+            quiescence_blend_2=self.quiescence_blend_2,
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 
