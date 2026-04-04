@@ -100,6 +100,10 @@ class WorkerPool:
             enabled=bool(gr_cfg.get("enabled", True)),
         )
 
+        # Optional recent buffer for recency-weighted sampling.
+        # Set by the training loop after construction; None = disabled.
+        self.recent_buffer: Optional[Any] = None
+
     @property
     def x_winrate(self) -> float:
         with self._lock:
@@ -139,6 +143,8 @@ class WorkerPool:
                 pol_np = np.array(pol, dtype=np.float32)
                 game_length = (plies + 1) // 2  # compound moves
                 self.replay_buffer.push(feat_np, pol_np, float(outcome), game_length=game_length)
+                if self.recent_buffer is not None:
+                    self.recent_buffer.push(feat_np, pol_np, float(outcome))
                 with self._lock:
                     self.positions_pushed += 1
                     self.self_play_positions_pushed += 1
