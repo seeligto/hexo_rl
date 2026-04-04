@@ -1126,3 +1126,37 @@ artifact: in real self-play NN values are non-zero and FPU improves selection qu
 - `hexo_rl/monitoring/static/index.html`: Loss chart now shades pretrain region and adds a vertical dashed line at step 0 to separate pretrain from RL.
 - `scripts/train.py`: Replays up to 500 events from `logs/pretrain.jsonl` when loading a pretrained checkpoint to populate the dashboard history buffer on first load.
 - Verified via `tests/test_pretrain_events.py`.
+
+---
+
+### 30. torch.compile mode=default + game length cap 200 + T_max fix (2026-04-04)
+
+**Bug: torch.compile CUDA graph TLS crash (BLOCKING)**
+- `hexo_rl/bootstrap/pretrain.py`: Changed `compile_model(model, mode="reduce-overhead")` →
+  `compile_model(model, mode="default")`. Python 3.14 incompatibility with CUDA graph
+  thread-local storage (TLS) setup causes `AssertionError: assert torch._C._is_key_in_tls(attr_name)`
+  on the first forward pass when `reduce-overhead` is used.
+- `hexo_rl/training/trainer.py` and `scripts/train.py` (inf_model) were already using
+  `mode="default"` — no change needed there.
+- `mode="default"` still applies operator fusion and kernel optimisation but does NOT
+  use CUDA graphs, avoiding the TLS issue entirely.
+
+**Bug: game length cap too low (mass draws)**
+- Added `max_game_moves: 200` to `configs/selfplay.yaml` under `selfplay:`.
+  Previous default was 128 compound moves, causing most games to end as draws
+  and filling the replay buffer with uninformative draw-reward positions.
+- Updated `hexo_rl/selfplay/pool.py` to read `max_game_moves` key (falls back to
+  `max_moves_per_game` for backwards compatibility).
+- 200 compound moves (400 plies) matches human game length distribution with ample
+  margin for exploratory self-play. Games at the cap are genuine draws.
+
+**Bug: CosineAnnealingLR T_max mismatch**
+- `hexo_rl/bootstrap/pretrain.py`: `total_pretrain_steps` is now computed before
+  `BootstrapTrainer` is created and injected into config as `pretrain_total_steps`.
+  Previously the trainer always used the fallback value of 50,000 regardless of the
+  actual run length, causing a small LR rebound at the end of longer pretrain runs.
+
+**Commits:**
+- `fix(training): switch torch.compile to mode=default (CUDA graph TLS fix)`
+- `fix(selfplay): increase game length cap to 200 compound moves`
+- `fix(pretrain): compute CosineAnnealingLR T_max dynamically`
