@@ -186,7 +186,7 @@ train.multi: ## Multi-hour training profile from bootstrap checkpoint
 
 .PHONY: train.smoke
 train.smoke: ## 200-step smoke test to verify training end-to-end
-	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
+	@if [ -z "$(CHECKPOINT_BOOTSTRAP)" ]; then \
 	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
 	    exit 1; \
 	fi
