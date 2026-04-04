@@ -30,6 +30,7 @@ selfplay:
   dispatch_wait_ms: 2.0
   leaf_batch_size: 16
   replay_buffer_capacity: 500000
+  max_game_moves: 200  # compound moves (each = 2 stones); draws beyond this cap
 
   playout_cap:
     fast_prob: 0.25
