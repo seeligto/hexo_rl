@@ -1047,3 +1047,13 @@ gating the full count behind a cheaper pre-check (e.g. any level-5 threat from
 ### 27. Add per-worker ID to game_complete events (2026-04-04)
 
 - Marked `TODO: add per-worker ID when Rust exposes it` as resolved by exposing `worker_id` from Rust `drain_game_results` and passing it to Python events.
+
+### 29. Emit training events from pretrain for continuous loss history (2026-04-04)
+
+- `hexo_rl/bootstrap/pretrain.py`: Added `emit_event` calls after each training step.
+- Pretrain steps now use negative indices counting up toward 0 (e.g. step=-5000...step=0).
+- `phase: "pretrain"` field added to `training_step` event schema.
+- `hexo_rl/monitoring/terminal_dashboard.py`: Renders `[PRETRAIN]` marker in header if phase is pretrain.
+- `hexo_rl/monitoring/static/index.html`: Loss chart now shades pretrain region and adds a vertical dashed line at step 0 to separate pretrain from RL.
+- `scripts/train.py`: Replays up to 500 events from `logs/pretrain.jsonl` when loading a pretrained checkpoint to populate the dashboard history buffer on first load.
+- Verified via `tests/test_pretrain_events.py`.
