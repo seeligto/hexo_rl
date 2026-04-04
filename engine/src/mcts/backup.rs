@@ -25,12 +25,24 @@ impl MCTSTree {
             return value;
         }
 
-        // Cheap pre-check: count_winning_moves is O(legal_moves), which is
-        // expensive with hex-ball-8 rules (hundreds of cells even in early/mid
-        // game). A winning move requires ≥5 consecutive stones, so skip the
-        // full count entirely when neither player has a run of that length.
-        // has_player_long_run is O(stones × 3 × avg_run) — much cheaper because
-        // stone count << legal_move count.
+        // Cheap pre-checks — two tiers, ordered by cost:
+        //
+        // Tier 1 (free): ply gate.
+        //   P1 places stones at ply 0, 3-4, 7-8, …; P1 first reaches 5 stones
+        //   at ply=8. P2 at ply=9.  With < 8 total half-moves on the board no
+        //   player can have 5 consecutive stones → count_winning_moves = 0.
+        //   Benchmarks start from an empty board, so this single comparison
+        //   eliminates quiescence overhead for virtually all MCTS benchmark
+        //   leaves and for early-game leaves during self-play.
+        if board.ply < 8 {
+            return value;
+        }
+
+        // Tier 2 (O(stones × 3 × avg_run)): long-run check.
+        //   A winning move requires ≥5 consecutive stones.  Skip the expensive
+        //   count_winning_moves (O(legal_moves) with hex-ball-8 rules) for any
+        //   player that has no such run.  stone_count << legal_move_count so
+        //   this check is much cheaper than count_winning_moves.
         let current_player = board.current_player;
         let opponent = current_player.other();
         // WIN_LENGTH = 6, so a winning move needs a run of WIN_LENGTH - 1 = 5.
