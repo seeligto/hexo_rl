@@ -279,7 +279,39 @@ const lossChart = new Chart(document.getElementById('loss-chart'), {
       { label: 'aux',    data: [], borderColor: '#5B8FF9', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
     ]
   },
-  options: { ...chartDefaults }
+  options: { ...chartDefaults },
+  plugins: [{
+    id: 'pretrainRegion',
+    beforeDraw: (chart) => {
+      const { ctx, chartArea: { top, bottom, left, right }, scales: { x } } = chart;
+      let pretrainEndIdx = -1;
+      // Find the last index where step < 0
+      for (let i = chart.data.labels.length - 1; i >= 0; i--) {
+        if (chart.data.labels[i] <= 0) {
+          pretrainEndIdx = i;
+          break;
+        }
+      }
+      
+      if (pretrainEndIdx !== -1) {
+        let xPos = x.getPixelForTick(pretrainEndIdx);
+        // If the last visible pretrain point is 0 but there are positive points after, it separates pretrain from RL.
+        // Or if all are negative.
+        ctx.save();
+        ctx.fillStyle = 'rgba(93, 202, 165, 0.05)';
+        ctx.fillRect(left, top, xPos - left, bottom - top);
+        
+        ctx.beginPath();
+        ctx.setLineDash([5, 5]);
+        ctx.moveTo(xPos, top);
+        ctx.lineTo(xPos, bottom);
+        ctx.strokeStyle = 'rgba(93, 202, 165, 0.4)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }]
 });
 
 const winrateChart = new Chart(document.getElementById('winrate-chart'), {
@@ -396,6 +428,9 @@ function onRunStart(p) {
   document.getElementById('run-id').textContent = p.run_id ? p.run_id.slice(0, 8) : DASH;
   latestStep = p.step || 0;
   document.getElementById('card-step').textContent = fmtInt(latestStep);
+  if (p.worker_count != null) {
+    document.getElementById('sys-workers').textContent = p.worker_count;
+  }
 }
 
 function onTrainingStep(p) {

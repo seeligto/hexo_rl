@@ -98,6 +98,8 @@ class TerminalDashboard:
             "gpu_util_pct": None,
             "vram_used_gb": None,
             "vram_total_gb": None,
+            "worker_count": None,
+            "phase": None,
         }
 
     def start(self) -> None:
@@ -139,6 +141,8 @@ class TerminalDashboard:
         if event == "run_start":
             self._state["run_id"] = payload.get("run_id")
             self._state["step"] = payload.get("step", 0)
+            if "worker_count" in payload:
+                self._state["worker_count"] = payload["worker_count"]
             return
 
         if event == "training_step":
@@ -247,7 +251,8 @@ class TerminalDashboard:
 
         # Header
         run_id = s["run_id"][:8] if s["run_id"] else _EM_DASH
-        header = f"HeXO training · phase 4.0 · run {run_id} · step {_fmt_int(s['step'])}"
+        phase_str = " [PRETRAIN]" if s["phase"] == "pretrain" else ""
+        header = f"HeXO training · phase 4.0{phase_str} · run {run_id} · step {_fmt_int(s['step'])}"
 
         # Loss row
         loss_tbl = Table(show_header=True, box=None, padding=(0, 2), expand=True)
