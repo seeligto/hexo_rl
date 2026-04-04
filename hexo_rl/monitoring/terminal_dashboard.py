@@ -58,6 +58,7 @@ class TerminalDashboard:
     def __init__(self, config: dict) -> None:
         mon = config.get("monitoring", config)
         self._alert_entropy_min = float(mon.get("alert_entropy_min", 1.0))
+        self._alert_entropy_warn = float(mon.get("alert_entropy_warn", 2.0))
         self._alert_grad_max = float(mon.get("alert_grad_norm_max", 10.0))
         self._alert_loss_window = int(mon.get("alert_loss_increase_window", 3))
 
@@ -98,6 +99,10 @@ class TerminalDashboard:
             "gpu_util_pct": None,
             "vram_used_gb": None,
             "vram_total_gb": None,
+            "ram_used_gb": None,
+            "ram_total_gb": None,
+            "cpu_util_pct": None,
+            "batch_fill_pct": None,
             "worker_count": None,
             "phase": None,
         }
@@ -160,7 +165,7 @@ class TerminalDashboard:
                 "positions_per_hour", "avg_game_length",
                 "win_rate_p0", "win_rate_p1", "draw_rate",
                 "sims_per_sec", "buffer_size", "buffer_capacity",
-                "corpus_selfplay_frac",
+                "corpus_selfplay_frac", "batch_fill_pct",
             ):
                 if key in payload:
                     self._state[key] = payload[key]
@@ -175,7 +180,8 @@ class TerminalDashboard:
 
         if event == "system_stats":
             for key in ("gpu_util_pct", "vram_used_gb", "vram_total_gb",
-                        "buffer_size", "buffer_capacity"):
+                        "buffer_size", "buffer_capacity",
+                        "ram_used_gb", "ram_total_gb", "cpu_util_pct"):
                 if key in payload:
                     self._state[key] = payload[key]
             return
@@ -260,12 +266,21 @@ class TerminalDashboard:
         for label in ("loss", "policy", "value", "aux", "entropy", "lr"):
             loss_tbl.add_column(label, justify="center")
         lr_str = _EM_DASH if s["lr"] is None else f"{s['lr']:.0e}"
+        ent = s["policy_entropy"]
+        if ent is None:
+            ent_str = _EM_DASH
+        elif ent < self._alert_entropy_min:
+            ent_str = f"{ent:.2f} !!"
+        elif ent < self._alert_entropy_warn:
+            ent_str = f"{ent:.2f} \u25b2"
+        else:
+            ent_str = f"{ent:.2f}"
         loss_tbl.add_row(
             _fmt_loss(s["loss_total"]),
             _fmt_loss(s["loss_policy"]),
             _fmt_loss(s["loss_value"]),
             _fmt_loss(s["loss_aux"]),
-            _fmt_plain(s["policy_entropy"], 2),
+            ent_str,
             lr_str,
         )
 
@@ -279,11 +294,15 @@ class TerminalDashboard:
         p0 = _fmt_pct(s["win_rate_p0"])
         p1 = _fmt_pct(s["win_rate_p1"])
         dr = _fmt_pct(s["draw_rate"])
+        bf = s["batch_fill_pct"]
+        bf_str = f"{bf:.0f}%" if bf is not None else _EM_DASH
+        gn = s["grad_norm"]
+        grad_str = f"{gn:.2f}" if gn is not None else _EM_DASH
         tp_tbl.add_row(
-            f"games/hr  {gph}  │  pos/hr  {pph}  │  sims/sec  {sps}"
+            f"games/hr  {gph}  │  pos/hr  {pph}  │  sims/sec  {sps}  │  batch fill  {bf_str}"
         )
         tp_tbl.add_row(
-            f"avg len   {avg}  │  P0 {p0}  P1 {p1}  draw {dr}"
+            f"avg len   {avg}  │  P0 {p0}  P1 {p1}  draw {dr}  │  grad  {grad_str}"
         )
 
         # Buffer row
@@ -314,7 +333,15 @@ class TerminalDashboard:
             vram_str = f"{s['vram_used_gb']:.1f}/{s['vram_total_gb']:.1f} GB"
         else:
             vram_str = _EM_DASH
-        buf_tbl.add_row(f"ELO  {elo_str}  │  gpu  {gpu_str}  │  vram  {vram_str}")
+        if s["ram_used_gb"] is not None and s["ram_total_gb"] is not None:
+            ram_str = f"{s['ram_used_gb']:.1f}/{s['ram_total_gb']:.1f} GB"
+        else:
+            ram_str = _EM_DASH
+        cpu_str = f"{s['cpu_util_pct']:.0f}%" if s["cpu_util_pct"] is not None else _EM_DASH
+        buf_tbl.add_row(
+            f"ELO  {elo_str}  │  gpu  {gpu_str}  │  vram  {vram_str}"
+            f"  │  ram  {ram_str}  │  cpu  {cpu_str}"
+        )
 
         # Assemble
         outer = Table(show_header=False, box=None, expand=True, padding=0)

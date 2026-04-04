@@ -24,6 +24,7 @@ SAMPLE_EVENTS = {
         "win_rate_p1": 0.49, "draw_rate": 0.0,
         "sims_per_sec": 189000.0, "buffer_size": 60000,
         "buffer_capacity": 250000, "corpus_selfplay_frac": 0.2,
+        "batch_fill_pct": 87.5,
     },
     "game_complete": {
         "event": "game_complete", "ts": 1234567890.0,
@@ -40,6 +41,7 @@ SAMPLE_EVENTS = {
         "event": "system_stats", "ts": 1234567890.0,
         "gpu_util_pct": 89.0, "vram_used_gb": 0.8,
         "vram_total_gb": 8.6, "workers_active": 16, "workers_total": 16,
+        "ram_used_gb": 32.1, "ram_total_gb": 48.0, "cpu_util_pct": 87.0,
     },
     "run_start": {
         "event": "run_start", "ts": 1234567890.0,
@@ -54,6 +56,7 @@ SAMPLE_EVENTS = {
 MINIMAL_CONFIG = {
     "monitoring": {
         "alert_entropy_min": 1.0,
+        "alert_entropy_warn": 2.0,
         "alert_grad_norm_max": 10.0,
         "alert_loss_increase_window": 3,
         "web_port": 5099,
@@ -171,3 +174,80 @@ def test_web_dashboard_handles_all_event_types():
 def test_web_dashboard_ignores_unknown_events():
     wd = WebDashboard(MINIMAL_CONFIG)
     wd.on_event({"event": "unknown_future_event", "ts": 1.0})
+
+
+# ── New terminal dashboard tests (§9, tests 7–10) ─────────────────────────────
+
+
+def test_terminal_handles_system_stats_new_fields():
+    """on_event with new system_stats fields must not raise."""
+    td = TerminalDashboard(MINIMAL_CONFIG)
+    td.on_event(SAMPLE_EVENTS["system_stats"])
+
+
+def test_terminal_dash_em_dash_before_events():
+    """grad_norm and batch_fill_pct render as em-dash before any events arrive."""
+    import io
+
+    from rich.console import Console
+
+    td = TerminalDashboard(MINIMAL_CONFIG)
+    console = Console(file=io.StringIO(), width=160, highlight=False)
+    console.print(td._build_panel())
+    out = console.file.getvalue()
+    assert "\u2014" in out  # em-dash present for missing fields
+
+
+def test_entropy_warn_marker():
+    """\u25b2 appears in entropy cell when entropy is in [alert_entropy_min, alert_entropy_warn)."""
+    import io
+
+    from rich.console import Console
+
+    td = TerminalDashboard(MINIMAL_CONFIG)
+    td._state["policy_entropy"] = 1.5  # between 1.0 and 2.0
+    console = Console(file=io.StringIO(), width=160, highlight=False)
+    console.print(td._build_panel())
+    out = console.file.getvalue()
+    assert "\u25b2" in out
+
+
+def test_entropy_collapse_marker():
+    """!! appears in entropy cell when entropy < alert_entropy_min (1.0)."""
+    import io
+
+    from rich.console import Console
+
+    td = TerminalDashboard(MINIMAL_CONFIG)
+    td._state["policy_entropy"] = 0.8
+    console = Console(file=io.StringIO(), width=160, highlight=False)
+    console.print(td._build_panel())
+    out = console.file.getvalue()
+    assert "!!" in out
+
+
+# ── Pool batch_fill_pct tests (§9, tests 11–12) ───────────────────────────────
+
+
+def test_pool_exposes_batch_fill_pct():
+    """WorkerPool.batch_fill_pct returns a float in [0, 100] when data is available."""
+    from unittest.mock import MagicMock
+
+    from hexo_rl.selfplay.pool import WorkerPool
+
+    pool = WorkerPool.__new__(WorkerPool)
+    pool._inference_server = MagicMock(_forward_count=10, _total_requests=512, _batch_size=64)
+    pct = pool.batch_fill_pct
+    assert isinstance(pct, float)
+    assert 0.0 <= pct <= 100.0
+
+
+def test_pool_batch_fill_pct_zero_when_no_data():
+    """batch_fill_pct is 0.0 (not None, not omitted) when no batches have been served."""
+    from unittest.mock import MagicMock
+
+    from hexo_rl.selfplay.pool import WorkerPool
+
+    pool = WorkerPool.__new__(WorkerPool)
+    pool._inference_server = MagicMock(_forward_count=0, _total_requests=0, _batch_size=64)
+    assert pool.batch_fill_pct == 0.0

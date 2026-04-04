@@ -21,6 +21,7 @@ from typing import Optional
 
 warnings.filterwarnings("ignore", category=FutureWarning, message=".*pynvml package is deprecated.*")
 
+import psutil
 import structlog
 
 log = structlog.get_logger()
@@ -95,6 +96,14 @@ class GPUMonitor(threading.Thread):
                 self.vram_total_gb = mem.total / 1e9
                 self.temp_c        = float(temp)
 
+                try:
+                    vm = psutil.virtual_memory()
+                    ram_used_gb  = vm.used  / 1e9
+                    ram_total_gb = vm.total / 1e9
+                    cpu_util_pct = psutil.cpu_percent(interval=None)
+                except Exception:
+                    ram_used_gb = ram_total_gb = cpu_util_pct = 0.0
+
                 log.info(
                     "gpu_stats",
                     gpu_util_pct  = self.gpu_util_pct,
@@ -105,10 +114,13 @@ class GPUMonitor(threading.Thread):
                 )
 
                 emit_event({
-                    "event":        "system_stats",
-                    "gpu_util_pct": self.gpu_util_pct,
-                    "vram_used_gb": self.vram_used_gb,
+                    "event":         "system_stats",
+                    "gpu_util_pct":  self.gpu_util_pct,
+                    "vram_used_gb":  self.vram_used_gb,
                     "vram_total_gb": self.vram_total_gb,
+                    "ram_used_gb":   ram_used_gb,
+                    "ram_total_gb":  ram_total_gb,
+                    "cpu_util_pct":  cpu_util_pct,
                 })
             except Exception as exc:
                 log.warning("gpu_monitor_poll_error", error=str(exc))
