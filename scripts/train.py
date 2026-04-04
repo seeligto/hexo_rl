@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import random
 import signal
 import sys
@@ -327,6 +328,15 @@ def main() -> None:
         pre_policies = data["policies"]   # (T, 362) float32
         pre_outcomes = data["outcomes"]   # (T,) float32
         T = len(pre_outcomes)
+        file_mb = os.path.getsize(pretrained_path) / 1e6
+        log.info("corpus_prefill", positions=T, file_mb=round(file_mb, 1))
+        if T > 100_000:
+            log.warning(
+                "corpus_prefill_oversized",
+                positions=T,
+                msg="NPZ has >100K positions — cold-start only needs 50K. "
+                    "Run 'make corpus.npz' to regenerate with the optimized pipeline.",
+            )
         # push_game copies all arrays into the Rust buffer (not mmap'd).
         # Estimate RAM: T × (18×19×19×2 + 362×4 + 4) bytes ≈ T × 14.1 KB
         est_ram_gb = T * 14_448 / (1024 ** 3)

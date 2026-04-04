@@ -1307,3 +1307,38 @@ on Python 3.14. Track upstream: https://github.com/pytorch/pytorch/issues
 
 **Commit:**
 - `fix(training): disable torch.compile (Python 3.14 compat issues)`
+
+---
+
+### 35. Optimized 50K-position uncompressed NPZ for buffer prefill (2026-04-04)
+
+**Problem:** The full-corpus NPZ (912K positions) was 116 MB compressed but
+decompressed to ~13 GB in RAM because `np.savez_compressed` defeats mmap.
+This caused a 36 GB+ RAM spike at training startup and system instability.
+
+**Solution:** Rewrote `scripts/export_corpus_npz.py` to produce a quality-filtered,
+position-sampled, **uncompressed** NPZ. With `np.savez` (not `savez_compressed`),
+`np.load(mmap_mode='r')` works correctly — the OS pages in data on demand and
+RAM stays near-zero until positions are actually pushed to the buffer.
+
+**Pipeline:**
+1. Load all corpus sources: human (1,944), bot-fast (5,598), bot-strong (2,804), injected (5,567)
+2. Filter: decisive games only, game length ≥ 15 plies
+3. Weight human games by Elo band (unrated 0.5×, sub-1000 0.3×, 1000-1200 0.7×, 1200-1400 1.0×, 1400+ 1.5×)
+4. Sample positions from plies 8–50 per game, weighted by `source_weight / game_length`
+5. Weighted sample 50K positions without replacement (RNG seed 42)
+6. Replay only the unique games needed (14,845 of 15,913), extract sampled positions
+7. Save uncompressed
+
+**Results:**
+- Old: 116 MB compressed, ~13 GB RAM on load, 912K positions, took minutes to push
+- New: 720 MB uncompressed, ~0.7 GB RAM when pushed to buffer, 49,878 positions, loaded in 0.9s
+- Training startup RAM reduced from 36 GB+ → < 4 GB
+
+**Changes:**
+- `scripts/export_corpus_npz.py` — rewritten with sampling pipeline and `--max-positions`/`--no-compress` flags
+- `scripts/train.py` — added `corpus_prefill` log (positions + file_mb); warning if >100K positions
+- `Makefile` — `corpus.npz` target passes `--max-positions 50000 --no-compress`
+
+**Commit:**
+- `perf(corpus): optimized 50K-position uncompressed NPZ for buffer prefill`
