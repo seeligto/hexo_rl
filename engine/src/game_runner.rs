@@ -29,6 +29,7 @@ pub struct SelfPlayRunner {
     fast_sims: usize,
     standard_sims: usize,
     temp_threshold_compound_moves: usize,
+    draw_reward: f32,
     running: Arc<AtomicBool>,
     games_completed: Arc<AtomicUsize>,
     positions_generated: Arc<AtomicUsize>,
@@ -46,7 +47,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -59,6 +60,7 @@ impl SelfPlayRunner {
         fast_sims: usize,
         standard_sims: usize,
         temp_threshold_compound_moves: usize,
+        draw_reward: f32,
     ) -> Self {
         // If standard_sims is 0, fall back to n_simulations.
         let effective_standard = if standard_sims == 0 { n_simulations } else { standard_sims };
@@ -72,6 +74,7 @@ impl SelfPlayRunner {
             fast_sims,
             standard_sims: effective_standard,
             temp_threshold_compound_moves,
+            draw_reward,
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
             positions_generated: Arc::new(AtomicUsize::new(0)),
@@ -105,6 +108,7 @@ impl SelfPlayRunner {
             let fast_sims = self.fast_sims;
             let standard_sims = self.standard_sims;
             let temp_threshold = self.temp_threshold_compound_moves;
+            let draw_reward = self.draw_reward;
             let results_queue = self.results.clone();
             let recent_game_results = self.recent_game_results.clone();
 
@@ -257,7 +261,7 @@ impl SelfPlayRunner {
                     for (feat, pol, player) in records {
                         let outcome = match winner {
                             Some(p) => if p as i8 == player as i8 { 1.0 } else { -1.0 },
-                            None => 0.01,
+                            None => draw_reward,
                         };
                         games_results.push_back((feat, pol, outcome, plies));
                     }
