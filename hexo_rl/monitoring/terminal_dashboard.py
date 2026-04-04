@@ -174,7 +174,8 @@ class TerminalDashboard:
             return
 
         if event == "system_stats":
-            for key in ("gpu_util_pct", "vram_used_gb", "vram_total_gb"):
+            for key in ("gpu_util_pct", "vram_used_gb", "vram_total_gb",
+                        "buffer_size", "buffer_capacity"):
                 if key in payload:
                     self._state[key] = payload[key]
             return
