@@ -1,17 +1,18 @@
 # Dashboard Specification — HeXO Training Monitor
 # docs/08_DASHBOARD_SPEC.md
 
-**Status:** Authoritative spec. Implementation complete as of 2026-04-03.
-**Scope:** Training monitor. Game viewer is implemented separately — see `docs/09_VIEWER_SPEC.md`.
-**Last updated:** 2026-04-03
+**Status:** Authoritative spec. Supersedes version dated 2026-04-03.
+**Scope:** Training monitor. Game viewer is separate — see `docs/09_VIEWER_SPEC.md`.
+**Last updated:** 2026-04-04
 
 ---
 
 ## 1. Architecture overview
 
-Two renderers, one event schema. The training loop (`scripts/train.py`) emits
-structured events. Both renderers consume the same events independently — they
-share no code other than the schema defined in section 2.
+Unchanged from prior spec. Two renderers, one event schema. The training loop
+(`scripts/train.py`) emits structured events via `emit_event()`. Both renderers
+consume the same events independently — they share no code other than the schema
+defined in section 2.
 
 ```
 scripts/train.py
@@ -29,11 +30,6 @@ block the training loop, never raise exceptions that propagate to train.py, and
 never write to the replay buffer or any training state. Failures are logged and
 silently swallowed.
 
-**Previous files being replaced:**
-- `dashboard.py` (root level) — delete entirely
-- Any `phase40dashboard*` or `phase4_dashboard*` files in `hexo_rl/monitoring/`
-- All `web_dash.*` or `WebDashboard` references in `train.py` and `pool.py`
-
 ---
 
 ## 2. Event schema
@@ -44,6 +40,7 @@ All events are Python dicts with a mandatory `event` string key and `ts` float
 ### 2.1 `training_step`
 
 Emitted every `config.monitoring.log_interval` training steps (default: 10).
+**No schema changes from prior spec.**
 
 ```python
 {
@@ -55,91 +52,82 @@ Emitted every `config.monitoring.log_interval` training steps (default: 10).
     "loss_value":      float,
     "loss_aux":        float,
     "policy_entropy":  float,          # mean entropy of policy distribution (nats)
-    "value_accuracy":  float,          # fraction: value head correctly predicted winner at move-20
-    "lr":              float,          # current learning rate (for LR schedule visibility)
-    "grad_norm":       float,          # gradient norm before clipping (NaN if not computed)
+    "value_accuracy":  float,          # fraction: value head correctly predicted winner
+    "lr":              float,          # current learning rate
+    "grad_norm":       float,          # gradient norm before clipping (may be inf on
+                                       # FP16 GradScaler overflow — never NaN)
     "phase":           str,            # "pretrain" or "self_play"
 }
 ```
 
-**Why phase:** Allows separating pretrain loss history from RL training in charts.
-Counting up from negative step indices (pretrain) to 0+ (RL).
-
-**Why policy_entropy:** Collapsing entropy before loss plateau is an early
-warning of mode collapse. Log it always; alert if it drops below 1.0.
-
-**Why value_accuracy:** Raw value loss is hard to interpret. % of games where
-the value head at move 20 correctly predicted the winner is a human-readable
-proxy. Compute over the last N games in the buffer (N=200 or whatever fits).
-
-**Why grad_norm:** Spikes indicate instability. Clip threshold is in config;
-norm before clip is the useful diagnostic.
-
 ### 2.2 `iteration_complete`
 
-Emitted once per training iteration (after each batch of self-play games is
-collected and a training step runs). This is the primary throughput event.
+**Changed: added `batch_fill_pct`.**
 
 ```python
 {
     "event":                  "iteration_complete",
     "ts":                     float,
     "step":                   int,
-    "games_total":            int,     # cumulative games played since run start
-    "games_this_iter":        int,     # games in this iteration
+    "games_total":            int,
+    "games_this_iter":        int,
     "games_per_hour":         float,
-    "positions_per_hour":     float,   # total positions generated/hr
-    "avg_game_length":        float,   # mean move count this iteration
-    "win_rate_p0":            float,   # fraction [0,1]
+    "positions_per_hour":     float,
+    "avg_game_length":        float,
+    "win_rate_p0":            float,
     "win_rate_p1":            float,
     "draw_rate":              float,
-    "sims_per_sec":           float,   # aggregate across all workers
+    "sims_per_sec":           float,
     "buffer_size":            int,
     "buffer_capacity":        int,
-    "corpus_selfplay_frac":   float,   # fraction of buffer that is self-play [0,1]
+    "corpus_selfplay_frac":   float,
+    "batch_fill_pct":         float,   # NEW — avg inference batch fill % this iteration
+                                       # from InferenceBatcher. 0.0 if not available.
 }
 ```
 
+**How to compute `batch_fill_pct`:** `pool.py` already tracks batch statistics
+via `InferenceBatcher`. Read the rolling batch fill average and include it in
+the `iteration_complete` payload. If the field is unavailable from the batcher,
+emit `0.0` — do not omit the key.
+
 ### 2.3 `game_complete`
 
-Emitted for every completed self-play game. The terminal renderer ignores this
-(too high frequency). The web renderer samples 1-in-N for the event log
-(N configurable, default 1 — show all, but log panel displays last 20).
+No schema changes.
 
 ```python
 {
     "event":       "game_complete",
     "ts":          float,
-    "game_id":     str,       # unique ID — use uuid4 hex
+    "game_id":     str,
     "winner":      int,       # 0 = P0, 1 = P1, -1 = draw
-    "moves":       int,       # total move count (plies)
-    "moves_list":  list[str], # move sequence in axial notation e.g. ["(0,0)","(1,0)"…]
-                              # KEEP THIS — /viewer will consume it later
+    "moves":       int,
+    "moves_list":  list[str],
     "worker_id":   int,
 }
 ```
 
 ### 2.4 `eval_complete`
 
-Emitted after a SealBot evaluation run finishes (asynchronous — may arrive
-seconds or minutes after the training step that triggered it).
+No schema changes.
 
 ```python
 {
     "event":               "eval_complete",
     "ts":                  float,
-    "step":                int,           # step at which eval was triggered
-    "elo_estimate":        float | None,  # Bradley-Terry derived ELO vs SealBot
-    "win_rate_vs_sealbot": float,         # fraction [0,1] over eval_games games
-    "eval_games":          int,           # number of games played
-    "gate_passed":         bool,          # win_rate >= 0.55
+    "step":                int,
+    "elo_estimate":        float | None,
+    "win_rate_vs_sealbot": float,
+    "eval_games":          int,
+    "gate_passed":         bool,
 }
 ```
 
 ### 2.5 `system_stats`
 
-Emitted every 5 seconds by the GPU monitor thread (already exists in
-`hexo_rl/monitoring/gpu_monitor.py` — wire it into emit_event).
+**Changed: added `ram_used_gb`, `ram_total_gb`, `cpu_util_pct`, `batch_fill_pct`.**
+
+Emitted every 5 seconds by `gpu_monitor.py`.
 
 ```python
 {
@@ -150,21 +138,30 @@ Emitted every 5 seconds by the GPU monitor thread (already exists in
     "vram_total_gb":  float,
     "workers_active": int,
     "workers_total":  int,
+    "ram_used_gb":    float,           # NEW — psutil.virtual_memory().used / 1e9
+    "ram_total_gb":   float,           # NEW — psutil.virtual_memory().total / 1e9
+    "cpu_util_pct":   float,           # NEW — psutil.cpu_percent(interval=None), aggregate
 }
 ```
 
+**Implementation notes for `gpu_monitor.py`:**
+- `psutil` is already a transitive dependency. Import it at the top of the module.
+- `psutil.cpu_percent(interval=None)` returns the percent since the last call
+  (non-blocking). Call it on every 5s poll cycle — do not use `interval=5`
+  (that would block the monitor thread).
+- RAM and CPU fields must never raise. Wrap in try/except; emit 0.0 on failure.
+
 ### 2.6 `run_start` / `run_end`
 
-Bookend events. Used by web dashboard to reset state on reconnect and by
-the event log to show session boundaries.
+No schema changes.
 
 ```python
 {
     "event":          "run_start",  # or "run_end"
     "ts":             float,
-    "step":           int,          # starting step (from checkpoint or 0)
-    "run_id":         str,          # uuid4 — stable for this run, use in log filenames
-    "config_summary": dict,         # {"n_blocks": 12, "channels": 128, "n_sims": 800, …}
+    "step":           int,
+    "run_id":         str,
+    "config_summary": dict,
 }
 ```
 
@@ -172,43 +169,7 @@ the event log to show session boundaries.
 
 ## 3. Emitter — `hexo_rl/monitoring/events.py`
 
-Single module. All of train.py calls `emit_event(payload)` — never calls
-renderers directly.
-
-```python
-# hexo_rl/monitoring/events.py
-
-import time
-import threading
-from typing import Any
-
-_renderers: list = []
-_lock = threading.Lock()
-
-def register_renderer(renderer) -> None:
-    """Call once at startup for each active renderer."""
-    with _lock:
-        _renderers.append(renderer)
-
-def emit_event(payload: dict[str, Any]) -> None:
-    """
-    Add ts, then dispatch to all registered renderers.
-    Never raises — failures are caught and logged to stderr only.
-    """
-    payload = {"ts": time.time(), **payload}
-    with _lock:
-        targets = list(_renderers)
-    for r in targets:
-        try:
-            r.on_event(payload)
-        except Exception as exc:
-            import sys
-            print(f"[dashboard] renderer {r} failed: {exc}", file=sys.stderr)
-```
-
-Renderers implement one method: `on_event(self, payload: dict) -> None`.
-The method must be non-blocking — if it needs to do I/O (e.g. SocketIO emit)
-it must do so in a background thread or async queue.
+No changes to `events.py` from prior spec. The module and its API are stable.
 
 ---
 
@@ -216,45 +177,33 @@ it must do so in a background thread or async queue.
 
 ### 4.1 Layout
 
-A single `rich.live.Live` panel updated on `training_step` and
-`iteration_complete` events. Does **not** respond to `game_complete` (too noisy).
-
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ HeXO training · phase 4.0 · run abc123 · step 5,082        │
-├──────────┬──────────┬──────────┬──────────┬──────────┬──────┤
-│ loss     │ policy   │ value    │ aux      │ entropy  │ lr   │
-│ 2.97     │ 2.13     │ 0.58     │ 0.26     │ 4.21     │3e-4  │
-├──────────┴──────────┴──────────┴──────────┴──────────┴──────┤
-│ games/hr  3,284  │  pos/hr  198K  │  sims/sec  189K        │
-│ avg len   61     │  P0 51.4%  P1 48.5%  draw 0.1%          │
-├─────────────────────────────────────────────────────────────┤
-│ buffer  60,318 / 250,000  (24%)  │  sp 20%  pre 80%        │
-│ ELO  —        │  gpu  89%  │  vram  0.8/8.6 GB            │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│ HeXO training · phase 4.0 · run abc123 · step 53,260               │
+├──────────┬──────────┬──────────┬──────────┬──────────┬─────────────┤
+│ loss     │ policy   │ value    │ aux      │ entropy  │ lr          │
+│ 2.7494   │ 1.38     │ 0.52     │ 0.11     │ 1.85 ▲  │ 1.87e-3    │
+├──────────┴──────────┴──────────┴──────────┴──────────┴─────────────┤
+│ games/hr  332  │  pos/hr  13K  │  sims/sec  7K  │  batch fill  98% │
+│ avg len   48   │  P0 54.5%  P1 43.9%  draw 1.5%  │  grad  0.42    │
+├─────────────────────────────────────────────────────────────────────┤
+│ buffer  7,755 / 250,000 (3%)  │  sp 24%  pre 76%                   │
+│ gpu 99%  │  vram 5.5/8.6 GB  │  ram 32.1/48.0 GB  │  cpu 87%      │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Rules:**
-- No progress bars with `/None` or `/0` totals — they are removed entirely.
-  Step count is shown as a plain integer; game count is shown as a plain integer.
-  Progress bars are only appropriate when there is a known finite target
-  (e.g. a fixed pretrain epoch), never for open-ended self-play.
-- No bars for corpus mix — show `sp 20% pre 80%` as plain text.
-- No bars for GPU util — show `89%` as plain text.
-- Numbers use `{:,}` formatting (thousands separators).
-- Floats: loss to 4 dp, rates to 1 dp, percentages to 1 dp.
-- `—` when a metric has never been received (never `None`, `null`, or `0`).
-- Refresh rate: 4 Hz maximum (update on event, not on timer).
+Changes from prior spec:
+- Added `grad_norm` to the throughput row (abbreviated `grad`)
+- Added `batch_fill_pct` to the throughput row (abbreviated `batch fill`)
+- Added `ram` and `cpu` to the system row
+- `▲` next to entropy when entropy < `alert_entropy_warn` (2.0); `!!` when < `alert_entropy_min` (1.0)
+
+All other rules unchanged: no bars for open-ended metrics, `—` when not yet received,
+4 Hz max refresh.
 
 ### 4.2 Alert line
 
-A single line below the main panel, initially hidden. Shown in bold red when:
-- `policy_entropy` < 1.0 (mode collapse warning)
-- `grad_norm` > 10.0 (instability warning)
-- `loss_total` increases for 3 consecutive `training_step` events
-- `eval_complete.gate_passed` is False
-
-Cleared automatically after 60 seconds or when the condition resolves.
+Conditions unchanged. Thresholds now configurable — see section 7.
 
 ---
 
@@ -262,84 +211,174 @@ Cleared automatically after 60 seconds or when the condition resolves.
 
 ### 5.1 Server
 
-Flask + Flask-SocketIO. Runs on `localhost:5001` (configurable).
-Non-blocking: started in a daemon thread from train.py, does not affect
-training even if the browser is not open.
+No changes. Flask + Flask-SocketIO on `localhost:5001`.
 
-Static files served from `hexo_rl/monitoring/static/`:
-- `index.html` — single-page app, all JS inline (no build step)
-- No external CDN dependencies during training (offline-safe)
+### 5.2 Stat cards
 
-### 5.2 Panel layout (matches mockup)
+**Changed from prior spec.** Six cards across the top:
 
-Six stat cards across the top:
-`step` | `total loss` | `games/hr` | `pos/hr` | `elo vs sealbot` | `gpu util`
-
-Main row (2/3 + 1/3 split):
-- Loss chart (policy, value, aux, total over last 500 steps)
-- Buffer panel (size / capacity fill bar) + corpus mix (two numbers, no bar)
-
-Secondary row (three equal columns):
-- Win rates (P0 / P1 / draw) — rolling bar chart, last 100 games
-- Avg game length — line chart, last 100 iterations
-- System panel (gpu util %, vram GB, workers active, sims/sec, policy entropy, value accuracy)
-
-Event log (full width):
-- Last 20 events, newest first
-- Shows: game_complete (winner, moves, worker), eval_complete, run_start/end
-- Each game_complete row has a `view →` link to `/viewer/game/<game_id>`
-
-### 5.3 Chart data retention
-
-Client-side ring buffers (no server-side storage):
-
-| Chart | Retention |
-|---|---|
-| Loss curves | last 500 `training_step` events |
-| Win rate bar | last 100 games (from `game_complete`) |
-| Game length | last 100 `iteration_complete` events |
-| System stats | latest values only (no chart, just numbers) |
-
-On browser reconnect, the server replays the last 500 events from an
-in-memory deque (maxlen=500). This means a browser refresh restores the
-last few minutes of charts without requiring persistence.
-
-### 5.4 SocketIO event names
-
-Server → client only. Client never sends events to server.
-
-| SocketIO event | Source dashboard event | Notes |
+| Card | Source field | Alert behaviour |
 |---|---|---|
-| `training_step` | `training_step` | Forwarded as-is |
-| `iteration_complete` | `iteration_complete` | Forwarded as-is |
-| `game_complete` | `game_complete` | Forwarded as-is (moves_list included for future viewer) |
-| `eval_complete` | `eval_complete` | Forwarded as-is |
-| `system_stats` | `system_stats` | Forwarded as-is |
-| `run_start` | `run_start` | Also triggers client state reset |
-| `replay_history` | — | Sent on connect: last 500 events as array |
+| `step` | `training_step.step` | — |
+| `total loss` | `training_step.loss_total` | — |
+| `policy entropy` | `training_step.policy_entropy` | amber when < 2.0; red when < 1.0 |
+| `value accuracy` | `training_step.value_accuracy` | — |
+| `pos / hr` | `iteration_complete.positions_per_hour` | green tint |
+| `games / hr` | `iteration_complete.games_per_hour` | — |
 
-### 5.5 ELO panel behaviour
+**Removed from top row (prior spec):** `gpu util` (now in system panel only),
+`elo vs sealbot` (now in right-column panel, shown only when eval data exists).
 
-When no `eval_complete` has been received: show `—`, not `1000`, not `null`.
-When received: show latest `elo_estimate` with step annotation.
-ELO is plotted over time if 3+ eval_complete events have been received.
-Gate status shown as a small badge: `PASSED` (green) or `FAILED` (red).
+**Entropy card alert states:**
+- `> 2.0`: normal colour
+- `1.0–2.0`: amber text + small amber badge reading "low"
+- `< 1.0`: red text + red badge reading "collapse"
+
+### 5.3 Main row layout (2/3 + 1/3 split)
+
+**Left — Loss chart (updated):**
+
+Line chart: policy, value, aux, total. Last 500 `training_step` events.
+
+Two toggle buttons in the panel header:
+- `raw` — show faint (20% opacity) raw loss lines
+- `EMA` — show solid EMA-smoothed lines (α = `monitoring.ema_alpha`, default 0.06)
+
+Both toggles active by default. Clicking a toggle shows/hides its dataset group.
+EMA is computed client-side from the raw ring buffer on each update — do not
+emit pre-computed EMA from the server.
+
+Legend below chart: coloured swatches for total / policy / value / aux.
+
+Pretrain region: if `training_step.phase == "pretrain"`, shade that x-axis region
+in a faint background colour and draw a dashed vertical line at step 0 (the
+pretrain→RL transition). This is carried over from the prior implementation.
+
+**Right column — three stacked panels (unchanged positions, updated content):**
+
+Panel 1 — Buffer:
+- `{buffer_size:,} / {buffer_capacity:,}` as header numbers
+- Horizontal fill bar (capacity %)
+- Corpus mix: two percentage rows (self-play / pretrain) with a segmented bar
+
+Panel 2 — ELO (conditional):
+- Hidden entirely until at least one `eval_complete` has been received.
+- When visible: latest `elo_estimate`, step annotation, gate badge (PASSED/FAILED).
+- If 3+ eval_complete events received: small line chart of ELO history.
+- When not visible: no placeholder, no "—" card. The buffer and system panels
+  expand to fill the space.
+
+Panel 3 — System stats:
+```
+GPU util      99%
+VRAM          5.5 / 8.6 GB
+RAM           32.1 / 48.0 GB      ← NEW
+CPU           87%                  ← NEW
+Workers       12
+Sims/sec      7K
+Batch fill    98%                  ← NEW (from iteration_complete.batch_fill_pct)
+Grad norm     0.42
+LR            1.87e-3
+```
+
+`Grad norm` and `LR` are sourced from `training_step` events, not `system_stats`.
+The panel merges the latest values from both event types. All fields show `—`
+until their source event is received.
+
+### 5.4 Bottom row — four panels (changed from three)
+
+**Panel 1 — P0 win rate (rolling)**
+
+Replaces the prior stacked bar chart entirely.
+
+- Line chart: P0 win rate (%) over time. One data point per `game_complete`
+  event, computed as a rolling window of the last 200 games.
+- Y-axis: 0–100%, but displayed range auto-zooms to data ± 15pp.
+- Target band: filled region between `alert_p0_target_low` (54%) and
+  `alert_p0_target_high` (58%) — faint teal fill, dashed boundary lines.
+  This is the Q8 target range for P0 advantage correction.
+- Below chart: inline summary `P0 54.5%  P1 43.9%  draw 1.5%`
+- Source: `game_complete` events (individual games, not `iteration_complete`
+  aggregates — this gives higher resolution and avoids batch-size aliasing).
+
+**Why this replaces stacked bars:** The stacked bar chart showed per-iteration
+P0/P1/draw fractions which are too granular to read trends from. The rolling
+line makes drift visible (Q8 concern: P0 advantage persisting above target).
+
+**Panel 2 — Game length histogram**
+
+Replaces the prior rolling average line chart.
+
+- Bar chart (histogram): game length distribution over the last 200 `game_complete`
+  events. Bins: 0–20, 20–40, 40–60, 60–80, 80–100, 100–120, 120–140, 140–160,
+  160–180, 180–200+. The 200+ bin captures draws (capped at `max_game_moves`).
+- X-axis: bin labels. Y-axis: game count.
+- Below chart: `median {N}  draws {D} / 200`
+- Update: rebuild histogram on every `game_complete` event (cheap client-side).
+
+**Why histogram over rolling average:** The average hides distribution shape.
+A rising average that masks a bimodal distribution (many very short games +
+many draws) would be a corpus quality problem invisible in a line chart.
+
+**Panel 3 — Policy entropy trend**
+
+New chart (previously just a number in the system panel).
+
+- Line chart: `training_step.policy_entropy` over last 500 steps.
+- Horizontal dashed red line at `alert_entropy_min` (1.0) labelled "collapse".
+- Y-axis: 0–max(data)+0.5, minimum range 0–4.
+- Colour: amber (#EF9F27).
+- Below chart: `now {entropy:.2f}  collapse at {alert_entropy_min}`
+
+**Panel 4 — Gradient norm trend**
+
+New chart (previously just a number in the system panel).
+
+- Line chart: `training_step.grad_norm` over last 500 steps.
+- Horizontal dashed red line at `alert_grad_norm_max` (10.0) labelled "clip".
+- Y-axis: 0–max(data)+1, minimum range 0–5.
+- Colour: coral (#D85A30).
+- `inf` values (FP16 GradScaler overflow skips) are rendered as gaps in the
+  line — do not connect across `inf` points. Use Chart.js `spanGaps: false`.
+- Below chart: `now {grad_norm:.2f}  clip at {alert_grad_norm_max}`
+
+### 5.5 Event log
+
+No layout change. Last 20 events, newest first. `view →` links unchanged.
+
+### 5.6 Chart data retention
+
+Updated:
+
+| Chart | Ring buffer | Source event | Notes |
+|---|---|---|---|
+| Loss curves (all 4 lines) | last 500 events | `training_step` | EMA computed client-side |
+| Policy entropy trend | last 500 events | `training_step` | shared ring buffer with loss |
+| Grad norm trend | last 500 events | `training_step` | shared ring buffer with loss |
+| P0 win rate line | last 200 games | `game_complete` | rolling window |
+| Game length histogram | last 200 games | `game_complete` | shared ring with win rate |
+| System stats | latest values | `system_stats` + `training_step` | no history |
+
+**Implementation note:** the 4 `training_step`-sourced charts (loss×4, entropy,
+grad norm) all read from a single `trainingStepHistory` ring buffer of capacity
+500. Do not create separate ring buffers per chart — slice the same array.
+
+### 5.7 SocketIO event names
+
+No changes from prior spec. Server → client only.
 
 ---
 
 ## 6. Deferred items
 
-- Game replay viewer — **implemented** in separate sprint, see `docs/09_VIEWER_SPEC.md`
-- Historical run comparison (separate tooling)
-- Alerts via email/Discord webhook (post Phase-4.5)
-- Mobile-responsive layout (desktop-only for now)
+No change from prior spec. Historical run comparison, Discord alerts, and
+mobile layout remain deferred to Phase 5+.
 
 ---
 
 ## 7. Config keys
 
-All monitoring config lives under `monitoring:` in `configs/monitoring.yaml`.
-Do not hardcode any of these values.
+Updated. All monitoring config lives under `monitoring:` in `configs/monitoring.yaml`.
 
 ```yaml
 monitoring:
@@ -347,53 +386,106 @@ monitoring:
   terminal_dashboard: true
   web_dashboard: true
   web_port: 5001
-  log_interval: 10           # emit training_step every N steps
-  event_log_maxlen: 500      # in-memory event replay buffer
-  alert_entropy_min: 1.0
-  alert_grad_norm_max: 10.0
-  alert_loss_increase_window: 3
+  log_interval: 10               # emit training_step every N steps
+  event_log_maxlen: 500          # in-memory event replay buffer
+
+  # Alert thresholds
+  alert_entropy_min: 1.0         # RED — collapse imminent
+  alert_entropy_warn: 2.0        # AMBER — entropy degrading (NEW)
+  alert_grad_norm_max: 10.0      # RED — instability
+
+  # Chart config
+  ema_alpha: 0.06                # NEW — EMA smoothing factor for loss curves
+  win_rate_window: 200           # NEW — rolling window size for P0 win rate line
+  game_length_window: 200        # NEW — histogram window (same games as win rate)
+  training_step_history: 500     # NEW — ring buffer depth for step-sourced charts
+
+  # Target bands (used in P0 win rate chart)
+  p0_win_rate_target_low: 54.0   # NEW — lower bound of target band (%)
+  p0_win_rate_target_high: 58.0  # NEW — upper bound of target band (%)
 ```
 
 ---
 
 ## 8. Implementation files
 
+No new files required. All changes are to existing files:
+
 ```
 hexo_rl/monitoring/
-├── events.py                  ← emit_event, register_renderer
-├── terminal_dashboard.py      ← Rich Live renderer
-├── web_dashboard.py           ← Flask+SocketIO renderer
+├── events.py                  ← no changes
+├── gpu_monitor.py             ← add ram_used_gb, ram_total_gb, cpu_util_pct
+├── terminal_dashboard.py      ← add grad_norm, batch_fill_pct, ram, cpu to layout
+├── web_dashboard.py           ← no changes (event forwarding unchanged)
 └── static/
-    ├── index.html             ← dashboard SPA
-    └── viewer.html            ← game viewer SPA (see 09_VIEWER_SPEC.md)
+    └── index.html             ← major rewrite — new layout per §5
+
+hexo_rl/selfplay/
+└── pool.py                    ← add batch_fill_pct to iteration_complete payload
+
+configs/
+└── monitoring.yaml            ← add new keys per §7
 ```
 
-## 9. Completed cleanup (2026-04-03)
+---
 
-The following files/references were deleted as part of the dashboard rebuild:
+## 9. Testing requirements
 
-| File | Action |
+All changes must have tests. Extend existing `tests/test_dashboard_events.py`
+and `tests/test_dashboard_renderers.py`. Do not create additional test files
+for this sprint — keep dashboard tests consolidated.
+
+**New required test cases (add to existing files):**
+
+Schema validation:
+1. `system_stats` event contains `ram_used_gb`, `ram_total_gb`, `cpu_util_pct`
+2. `iteration_complete` event contains `batch_fill_pct`
+3. `system_stats.cpu_util_pct` is a float in [0.0, 100.0]
+4. `system_stats.ram_used_gb` ≤ `system_stats.ram_total_gb`
+
+gpu_monitor:
+5. `GPUMonitor` emits `system_stats` with all 3 new fields when psutil is available
+6. `GPUMonitor` emits 0.0 for new fields (not exception) when psutil raises
+
+terminal_dashboard:
+7. Terminal renderer handles `system_stats` with new fields without error
+8. Terminal renderer renders `—` for `grad_norm` and `batch_fill_pct` before
+   any `training_step` / `iteration_complete` received
+9. Entropy `▲` marker appears when entropy < `alert_entropy_warn` (2.0)
+10. Entropy `!!` marker appears when entropy < `alert_entropy_min` (1.0)
+
+pool.py:
+11. `iteration_complete` payload from pool includes `batch_fill_pct` key
+12. `batch_fill_pct` is 0.0 when batcher has no data (not omitted, not None)
+
+**Existing tests that may break and need updating:**
+- Any test that validates the exact field set of `system_stats` — update to
+  include the 3 new fields
+- Any test that validates the exact field set of `iteration_complete` — update
+  to include `batch_fill_pct`
+- Any snapshot/equality test on terminal dashboard output format
+
+---
+
+## 10. What is NOT changing
+
+To be explicit about scope:
+
+- `events.py` — no changes
+- `web_dashboard.py` — no changes (Flask routes, SocketIO emit, event replay
+  buffer all unchanged; the layout change is entirely in `index.html`)
+- `train.py` — no changes (emit_event calls are already correct)
+- `trainer.py` — no changes (grad_norm, lr, entropy already in training_step)
+- `09_VIEWER_SPEC.md` and `viewer.html` — entirely out of scope
+
+The web dashboard layout change (§5) is implemented entirely in `index.html`.
+The Flask server is not aware of the layout — it just forwards events.
+
+---
+
+## 11. Changelog
+
+| Date | Change |
 |---|---|
-| `dashboard.py` (root) | Deleted |
-| `phase40dashboard*`, `phase4_dashboard*` in `hexo_rl/monitoring/` | Deleted |
-| Old `WebDashboard` class imports in `train.py` | Removed |
-| Old `web_dash.*` calls in `train.py` and `pool.py` | Replaced with `emit_event()` calls |
-| Progress bar code using `total=None` | Removed |
-
-## 10. Testing requirements
-
-All new monitoring code must have tests in `tests/test_dashboard.py`.
-
-Required test cases:
-1. `emit_event` dispatches to all registered renderers
-2. `emit_event` does not raise when a renderer raises
-3. `emit_event` adds `ts` key to every payload
-4. Terminal dashboard `on_event` does not raise for any valid event type
-5. Terminal dashboard `on_event` does not raise for unknown event types
-6. Terminal dashboard renders without error when all optional fields are None/missing
-7. Web dashboard `on_event` does not raise when no SocketIO client is connected
-8. All 7 event types pass schema validation (required keys present, correct types)
-9. Event replay buffer caps at `event_log_maxlen`
-
-No test should require a running Flask server or a browser.
-Use a mock SocketIO in web dashboard tests.
+| 2026-04-03 | Initial implementation — event fan-out, terminal + web renderer |
+| 2026-04-04 | **This revision** — system_stats + 3 new fields; iteration_complete + batch_fill_pct; stat card redesign; loss chart EMA toggle; bottom row → 4 panels (P0 win rate line, game length histogram, entropy trend, grad norm trend); ELO panel made conditional; system panel expanded with RAM/CPU/batch-fill/grad/LR |
