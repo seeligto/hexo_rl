@@ -154,6 +154,34 @@ impl Board {
         count
     }
 
+    /// Returns true if `player` has at least `min_len` consecutive stones along
+    /// any of the three hex axes.  Used as a cheap pre-check before the more
+    /// expensive `count_winning_moves`: a winning move requires ≥ WIN_LENGTH-1
+    /// consecutive stones, so if no such run exists the full count is unnecessary.
+    ///
+    /// O(player_stones × 3 × avg_run_length) — much cheaper than O(legal_moves)
+    /// because legal_moves grows with hex-ball-8 radius while stone count is fixed.
+    pub fn has_player_long_run(&self, player: Player, min_len: usize) -> bool {
+        let cell = match player {
+            Player::One => Cell::P1,
+            Player::Two => Cell::P2,
+        };
+        for (&(q, r), &c) in self.cells.iter() {
+            if c != cell {
+                continue;
+            }
+            for &(dq, dr) in &HEX_AXES {
+                let run = 1
+                    + self.count_direction(q, r, dq, dr, cell)
+                    + self.count_direction(q, r, -dq, -dr, cell);
+                if run >= min_len {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Count how many empty cells, if occupied by `player`, would give `player`
     /// a completed 6-in-a-row (a winning move).
     ///
@@ -319,5 +347,38 @@ mod tests {
         // E-axis: q=5 (1 cell); NE-axis: (0,5) (1 cell); NW-axis: (-5,5) (1 cell)
         assert!(p1_wins >= 3,
             "expected ≥3 winning moves for three blocked 5-in-a-row threats, got {p1_wins}");
+    }
+
+    #[test]
+    fn test_has_player_long_run_empty_board() {
+        let board = Board::new();
+        assert!(!board.has_player_long_run(Player::One, 5));
+        assert!(!board.has_player_long_run(Player::Two, 5));
+    }
+
+    #[test]
+    fn test_has_player_long_run_detects_five_in_row() {
+        let mut board = Board::new();
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), Cell::P1);
+        }
+        board.has_stones = true;
+        board.cache_dirty.set(true);
+        assert!(board.has_player_long_run(Player::One, 5),
+            "5 consecutive P1 stones should be detected");
+        assert!(!board.has_player_long_run(Player::Two, 5),
+            "P2 has no long run");
+    }
+
+    #[test]
+    fn test_has_player_long_run_returns_false_for_scattered() {
+        let mut board = Board::new();
+        // Scattered P1 stones — no run of 3 along any axis.
+        board.cells.insert((0, 0), Cell::P1);
+        board.cells.insert((5, 0), Cell::P1);
+        board.cells.insert((0, 5), Cell::P1);
+        board.has_stones = true;
+        board.cache_dirty.set(true);
+        assert!(!board.has_player_long_run(Player::One, 3));
     }
 }
