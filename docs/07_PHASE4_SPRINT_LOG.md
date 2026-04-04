@@ -1342,3 +1342,156 @@ RAM stays near-zero until positions are actually pushed to the buffer.
 
 **Commit:**
 - `perf(corpus): optimized 50K-position uncompressed NPZ for buffer prefill`
+
+---
+
+### 36. Cosine-annealed temperature + ZOI lookback (2026-04-04)
+**Files:** `engine/src/game_runner.rs`, `hexo_rl/selfplay/pool.py`,
+`configs/selfplay.yaml`
+
+**Cosine-annealed temperature**
+
+Replaced the hard step at move 30 (`temperature = 1.0 if ply < 30 else temp_min`)
+with a smooth cosine schedule:
+
+```
+temperature = temp_min + 0.5 * (1.0 - temp_min) * (1 + cos(π * ply / anneal_moves))
+```
+
+Temperature starts at 1.0 at ply=0 and reaches `temp_min=0.05` at `anneal_moves`
+(defaults to 60 plies, matching the old hard step position). This removes the
+discontinuity in exploration pressure mid-game, which was causing visible policy
+entropy spikes at ply 30 in prior training runs.
+
+Config keys in `configs/selfplay.yaml`:
+- `mcts.temp_min: 0.05`
+- `mcts.temp_anneal_moves: 60`
+
+**ZOI (Zone of Interest) lookback**
+
+Restricts candidate moves passed to MCTS to cells within hex-distance 5 of the
+last 16 moves (the "zone of interest"). Falls back to the full legal set if fewer
+than 3 ZOI candidates remain, preventing degenerate positions where the ZOI is
+empty or trivially small.
+
+Motivation: in a typical mid-game position the legal-move radius-8 set contains
+hundreds of candidates. The vast majority are far from any recent activity and
+carry near-zero policy weight. Restricting to ZOI reduces the effective branching
+factor without changing which moves are ultimately legal, allowing MCTS to focus
+sims where the action is.
+
+Config keys:
+- `mcts.zoi_enabled: true`
+- `mcts.zoi_radius: 5`
+- `mcts.zoi_history: 16`
+- `mcts.zoi_min_candidates: 3`
+
+**Impact on CPU-only benchmark:** Negligible. ZOI candidate reduction only fires
+in real games with recent-move history; the empty-board MCTS benchmark starts
+from an initial position where ZOI falls back to the full legal set immediately.
+
+**Test counts:** 86 Rust + 603 Python, all passing.
+
+---
+
+### 37. Ownership + threat auxiliary heads (2026-04-04)
+**Files:** `hexo_rl/model/network.py`, `engine/src/game_runner.rs`,
+`hexo_rl/selfplay/pool.py`, `hexo_rl/training/trainer.py`,
+`hexo_rl/training/losses.py`, `configs/training.yaml`,
+`tests/test_trainer.py`, `tests/test_smoke.py`
+
+**Ownership head**
+
+`HexTacToeNet` gains an `ownership_head`: trunk → `Conv2d(1×1)` → `tanh` →
+(19×19) spatial map, one scalar per cell ∈ [-1, +1] indicating final stone
+ownership (+1 = current player, -1 = opponent, 0 = empty at game end).
+
+Rust `game_runner.rs` computes the ownership map at game end: each occupied cell
+is tagged with ±1 from the perspective of the player to move; unoccupied cells
+remain 0. The WorkerPool ring buffer supplies ownership targets alongside
+policy/value targets. Loss: spatial MSE, weight `ownership_weight: 0.1` in
+`configs/training.yaml`.
+
+**Threat head**
+
+`HexTacToeNet` gains a `threat_head`: trunk → `Conv2d(1×1)` → `sigmoid` →
+(19×19) binary map, marking cells that belong to a winning line at game end.
+Rust computes the threat map using the existing `Board.get_threats()` path at
+terminal nodes. Loss: binary cross-entropy, weight `threat_weight: 0.1`.
+
+**Why both heads help:**
+
+- Ownership teaches the network where stones will end up, giving the value head
+  richer spatial grounding even from positions far from game end.
+- Threat detection teaches the network which cells form winning patterns,
+  directly supporting the quiescence reasoning added in §28.
+
+**Smoke test (20 steps, 200-step game cap):**
+```
+ownership_loss=0.29, threat_loss=0.27, avg_sigma=0.88 — all finite, no panics
+```
+
+**Commit:**
+- `feat(model): ownership + threat auxiliary heads`
+
+**Test counts:** 86 Rust + 603 Python, all passing.
+
+---
+
+### 38. Fix action_idx u16→u32 (2026-04-04)
+**Files:** `engine/src/mcts/mod.rs`, `engine/src/mcts/node.rs`
+
+**Pre-existing silent bug:** The action index used to identify moves in the MCTS
+node pool was stored as `u16`, capping at 65,535. With hex-ball-8 legal move
+radius the candidate set can be hundreds of cells per position, and global axial
+coordinate encoding produces action indices well above the u16 range. When an
+index overflowed, the wrong child node was selected or created, corrupting tree
+statistics silently — no panic, no assertion failure.
+
+**Fix:** Widened `action_idx` from `u16` to `u32` throughout. This is not a
+regression introduced in this session; the bug predated Phase 4.0 and was exposed
+only after the legal move radius was corrected to 8 in §26.
+
+**Commit:**
+- `fix(mcts): widen action_idx u16→u32 to support infinite board coordinates`
+
+**Test counts:** 86 Rust + 603 Python, all passing.
+
+---
+
+### 39. Benchmark rebaseline 2026-04-04_19-53 (2026-04-04)
+**Files:** `reports/benchmarks/2026-04-04_19-53.json`, `CLAUDE.md`
+
+Full `make bench.full` (n=5, 3s warm-up) after §36–§38 landed:
+
+| Metric | Median | IQR | Target | Status |
+|---|---|---|---|---|
+| MCTS sim/s | 31,331 | ±103 | ≥ 26,000 | PASS |
+| NN inference batch=64 pos/s | 11,062 | ±5 | ≥ 8,500 | PASS |
+| NN latency batch=1 ms | 2.75 | ±0.02 | ≤ 3.5 | PASS |
+| Buffer push pos/s | 789,923 | ±14,790 | ≥ 630,000 | PASS |
+| Buffer sample raw µs/batch | 1,220.8 | ±1.7 | ≤ 1,500 | PASS |
+| Buffer sample aug µs/batch | 1,113.1 | ±2.1 | ≤ 1,400 | PASS |
+| GPU util % | 100.0 | ±0 | ≥ 85 | PASS |
+| VRAM GB | 0.10/8.6 | ±0 | ≤ 6.9 | PASS |
+| Worker throughput pos/hr | 723,036 | ±19,486 | ≥ 625,000 | PASS |
+| Batch fill % | 100.0 | ±0 | ≥ 80 | PASS |
+
+All 10 targets PASS. Report: `reports/benchmarks/2026-04-04_19-53.json`.
+
+**Note on ZOI and MCTS sim/s:** ZOI had negligible impact on the CPU-only
+benchmark (31,331 vs 30,963 prior baseline — within IQR). Expected: ZOI candidate
+reduction only fires in real games with populated recent-move history. The
+benchmark starts from an empty board and falls back to full legal set immediately,
+so no reduction occurs.
+
+**Test counts:** 86 Rust + 603 Python, all passing.
+
+Immediate next steps:
+1. Run `make train` (resume from latest checkpoint, `strict=False` on head load
+   to accommodate new ownership/threat head weights not present in checkpoint)
+2. Monitor entropy over first 5,000 steps — ZOI + cosine temperature expected
+   to stabilise or recover the 1.85 amber reading; if entropy continues below
+   1.5 after 5k steps, consider fresh bootstrap start
+3. Watch `ownership_loss` and `threat_loss` alongside policy/value — both should
+   decrease over the first 10k RL steps

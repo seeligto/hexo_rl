@@ -15,6 +15,11 @@
 | Q3 | Optimal K (number of cluster windows) | Ablation K=2,3,4,6 | ~6 GPU-days | MEDIUM |
 | Q8 | First-player advantage in value training | Measure P1 win rate by Elo band; adjust value targets if >60% | ~2 GPU-days | MEDIUM |
 
+**Q2 interaction note (2026-04-04):** Ownership and threat auxiliary heads added in §37
+interact with value aggregation strategy — both heads provide spatial value grounding that
+may shift the relative advantage of min vs mean aggregation. Run Q2 ablation before and
+after head stabilisation (~10k RL steps) to avoid confounding.
+
 ## Community Watch (pending external validation)
 
 ### Q9 — KL-Divergence Weighted Buffer Writes
