@@ -499,19 +499,19 @@ tests. Full training runs must always use `augment=True` (the default).
 > Run `make bench.full` to reproduce.
 > Full results: reports/benchmarks/
 
-Run `make bench.full`. Latest baseline (2026-04-04, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU, torch.compile DISABLED — Python 3.14 CUDA graph incompatibility (see sprint §25, §30), quiescence gated behind threat pre-check):
+Run `make bench.full`. Latest baseline (2026-04-04_19-53, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU, torch.compile DISABLED — Python 3.14 CUDA graph incompatibility (see sprint §25, §30, §32), quiescence gated behind threat pre-check, ZOI lookback enabled, ownership+threat aux heads present):
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 30,963 sim/s | ≥ 26,000 sim/s | FPU (§27, fpu_reduction=0.25) causes ~41% regression vs §25 baseline due to tree-shape change with cpu-only 0-value benchmark; quiescence gate adds <2% overhead |
-| NN inference (batch=64) | 10,993 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±14) |
-| NN latency (batch=1, mean) | 2.83 ms | ≤ 3.5 ms | split-compile baseline |
-| Replay buffer push | 839,289 pos/sec | ≥ 640,000 pos/sec | IQR ±7k (0.8%) |
-| Replay buffer sample raw (batch=256) | 1,270.9 µs/batch | ≤ 1,500 µs | IQR ±5 µs |
-| Replay buffer sample augmented (batch=256) | 1,147.5 µs/batch | ≤ 1,400 µs | IQR ±1 µs |
+| MCTS (CPU only, no NN) | 31,331 sim/s | ≥ 26,000 sim/s | FPU (§27, fpu_reduction=0.25) causes ~41% regression vs §25 baseline; quiescence gate + ZOI negligible on empty-board benchmark (IQR ±103) |
+| NN inference (batch=64) | 11,062 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±5) |
+| NN latency (batch=1, mean) | 2.75 ms | ≤ 3.5 ms | IQR ±0.02 ms |
+| Replay buffer push | 789,923 pos/sec | ≥ 630,000 pos/sec | IQR ±14,790 (1.9%) |
+| Replay buffer sample raw (batch=256) | 1,220.8 µs/batch | ≤ 1,500 µs | IQR ±1.7 µs |
+| Replay buffer sample augmented (batch=256) | 1,113.1 µs/batch | ≤ 1,400 µs | IQR ±2.1 µs |
 | GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
-| VRAM usage (process) | 0.10 GB / 8.6 GB | ≤ 80% | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |
-| Worker throughput | 758,748 pos/hr | ≥ 625,000 pos/hr | IQR ±101k (13.3%) |
+| VRAM usage (process) | 0.10 GB / 8.6 GB | ≤ 6.9 GB | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |
+| Worker throughput | 723,036 pos/hr | ≥ 625,000 pos/hr | IQR ±19,486 (2.7%) |
 | Batch fill % | 100.0% | ≥ 80% | IQR ±0.0% |
 
 Historical variance note: before the warm-up/n=5/pinning methodology, single-run
@@ -523,8 +523,10 @@ production architecture (12 residual blocks × 128 channels). VRAM measurement
 also corrected from pynvml global to torch.cuda.max_memory_allocated().
 2026-04-04: torch.compile disabled (Python 3.14 CUDA graph incompatibility — see sprint §25, §30, §32). MCTS target
 rebaselined for correct hex-ball-8 legal move rule.
-2026-04-04: quiescence gate (§29) added. MCTS target rebaselined to ≥26,000
-(85% of 30,963). All 10 targets PASS.
+2026-04-04: quiescence gate (§30) added. MCTS target rebaselined to ≥26,000 (85% of 30,963).
+2026-04-04_19-53: rebaseline after §36–§38 (cosine temperature, ZOI, ownership+threat heads,
+action_idx u16→u32 fix). ZOI negligible on CPU-only benchmark. All 10 targets PASS.
+Test counts: 603 Python + 86 Rust, all passing.
 
 ## Phase 4.0 architecture baseline
 
@@ -532,6 +534,10 @@ Starting config for self-play RL (do not exceed without benchmarking):
 - Network: 12 residual blocks × 128 channels, SE blocks on every block
 - Value head: global avg + max pooling → FC → BCE loss (binary cross-entropy on sigmoid)
 - Auxiliary loss: opponent reply prediction (weight 0.15)
+- Auxiliary heads: ownership (spatial MSE, weight 0.1) + threat (BCE, weight 0.1) added alongside existing opponent reply head (weight 0.15)
+- Temperature: cosine-annealed 1.0 → 0.05 (replaces hard step at move 30)
+- ZOI: candidate moves restricted to hex-distance ≤ 5 of last 16 moves (fallback to full legal set if < 3 candidates)
+- Checkpoint loading: strict=False required when resuming — new head weights not present in pre-§37 checkpoints
 - torch.compile: DISABLED — Python 3.14 CUDA graph incompatibility (see sprint §25, §30, §32)
   - Re-enable when PyTorch + Python 3.14 CUDA graph support stabilizes
   - Weight sync: inf_model ← train_model after every checkpoint save and model promotion
