@@ -115,6 +115,16 @@ class WorkerPool:
         self._board_size = board_size
 
     @property
+    def batch_fill_pct(self) -> float:
+        srv = self._inference_server
+        fwd  = getattr(srv, "_forward_count", 0)
+        reqs = getattr(srv, "_total_requests", 0)
+        bs   = getattr(srv, "_batch_size", 1)
+        if fwd == 0:
+            return 0.0
+        return min((reqs / (fwd * max(bs, 1))) * 100.0, 100.0)
+
+    @property
     def x_winrate(self) -> float:
         with self._lock:
             total = self.games_completed

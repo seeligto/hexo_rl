@@ -11,3 +11,10 @@ monitoring:
   alert_grad_norm_max: 10.0
   alert_loss_increase_window: 3
   capture_game_detail: true
+  alert_entropy_warn: 2.0
+  ema_alpha: 0.06
+  win_rate_window: 200
+  game_length_window: 200
+  training_step_history: 500
+  p0_win_rate_target_low: 54.0
+  p0_win_rate_target_high: 58.0

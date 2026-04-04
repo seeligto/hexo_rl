@@ -792,6 +792,7 @@ def main() -> None:
                         "buffer_size": buffer.size,
                         "buffer_capacity": buffer.capacity,
                         "corpus_selfplay_frac": _batch_selfplay_frac,
+                        "batch_fill_pct": pool.batch_fill_pct,
                     })
 
                     log.info(
