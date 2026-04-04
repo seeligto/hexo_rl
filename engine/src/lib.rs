@@ -171,6 +171,21 @@ impl PyBoard {
     /// Human-readable string showing the 19×19 view window (for debugging).
     
     /// Returns a list of all stones on the board as (q, r, player).
+    /// Count how many empty cells, if occupied by `player`, would complete a 6-in-a-row.
+    ///
+    /// Used for the MCTS quiescence check: ≥3 winning moves is a forced win because
+    /// the opponent can block at most 2 cells per turn.
+    ///
+    /// `player`: 1 for player 1, -1 for player 2.  Returns 0 for an empty board.
+    pub fn count_winning_moves(&self, player: i8) -> u32 {
+        let rust_player = match player {
+            1  => board::Player::One,
+            -1 => board::Player::Two,
+            _  => return 0,
+        };
+        self.inner.count_winning_moves(rust_player)
+    }
+
     /// Returns threat cells as list of (q, r, level, player) tuples.
     /// Threats are EMPTY cells within threatening windows. Viewer only.
     pub fn get_threats(&self) -> Vec<(i32, i32, u8, u8)> {
@@ -269,11 +284,15 @@ impl PyMCTSTree {
     ///     fpu_reduction: KataGo-style dynamic FPU base (default 0.25).
     ///         FPU for unvisited children = parent_q - fpu_reduction * sqrt(explored_mass).
     ///         Set to 0.0 to disable (classical Q=0 for unvisited).
+    ///     quiescence_enabled: override leaf value when forced win/loss is proven (default True).
+    ///     quiescence_blend_2: blend amount for the 2-winning-moves case (default 0.3).
     #[new]
-    #[pyo3(signature = (c_puct = 1.5, virtual_loss = 1.0, vl_adaptive = false, fpu_reduction = 0.25))]
-    pub fn new(c_puct: f32, virtual_loss: f32, vl_adaptive: bool, fpu_reduction: f32) -> Self {
+    #[pyo3(signature = (c_puct = 1.5, virtual_loss = 1.0, vl_adaptive = false, fpu_reduction = 0.25, quiescence_enabled = true, quiescence_blend_2 = 0.3))]
+    pub fn new(c_puct: f32, virtual_loss: f32, vl_adaptive: bool, fpu_reduction: f32, quiescence_enabled: bool, quiescence_blend_2: f32) -> Self {
         let mut inner = MCTSTree::new_full(c_puct, virtual_loss, fpu_reduction);
         inner.vl_adaptive = vl_adaptive;
+        inner.quiescence_enabled = quiescence_enabled;
+        inner.quiescence_blend_2 = quiescence_blend_2;
         PyMCTSTree {
             inner,
             board_size: board::BOARD_SIZE,
@@ -288,6 +307,26 @@ impl PyMCTSTree {
     #[setter]
     pub fn set_fpu_reduction(&mut self, val: f32) {
         self.inner.fpu_reduction = val;
+    }
+
+    #[getter]
+    pub fn quiescence_enabled(&self) -> bool {
+        self.inner.quiescence_enabled
+    }
+
+    #[setter]
+    pub fn set_quiescence_enabled(&mut self, val: bool) {
+        self.inner.quiescence_enabled = val;
+    }
+
+    #[getter]
+    pub fn quiescence_blend_2(&self) -> f32 {
+        self.inner.quiescence_blend_2
+    }
+
+    #[setter]
+    pub fn set_quiescence_blend_2(&mut self, val: f32) {
+        self.inner.quiescence_blend_2 = val;
     }
 
     #[getter]

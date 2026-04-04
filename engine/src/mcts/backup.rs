@@ -5,6 +5,42 @@ use super::node::Node;
 use super::MCTSTree;
 
 impl MCTSTree {
+    /// Apply quiescence correction to a NN value at a non-terminal leaf.
+    ///
+    /// Game theorem: each turn places 2 stones, so the opponent can block at most 2
+    /// winning cells per response.  If the current player has ≥3 winning moves,
+    /// the win is forced regardless of opponent play → override to +1.0.
+    /// Conversely, if the opponent has ≥3 winning moves the current player cannot
+    /// prevent a loss on the next turn → override to -1.0.
+    ///
+    /// The 2-winning-moves case is strong but unproven; we blend the NN value
+    /// toward the win/loss boundary by `quiescence_blend_2` (clamped to ±1.0).
+    ///
+    /// This check runs ONLY at leaf evaluation (value correction only).
+    /// The NN policy is still used for MCTS expansion so the network continues
+    /// to learn about these positions.
+    #[inline]
+    pub(crate) fn apply_quiescence(&self, board: &Board, value: f32) -> f32 {
+        if !self.quiescence_enabled {
+            return value;
+        }
+        let current_wins = board.count_winning_moves(board.current_player);
+        if current_wins >= 3 {
+            return 1.0;
+        }
+        let opponent_wins = board.count_winning_moves(board.current_player.other());
+        if opponent_wins >= 3 {
+            return -1.0;
+        }
+        if current_wins == 2 {
+            return (value + self.quiescence_blend_2).min(1.0);
+        }
+        if opponent_wins == 2 {
+            return (value - self.quiescence_blend_2).max(-1.0);
+        }
+        value
+    }
+
     /// Expand a single leaf node and backup its value.
     pub(crate) fn expand_and_backup_single(&mut self, leaf_idx: u32, board: &Board, policy: &[f32], value: f32) {
         if self.pool[leaf_idx as usize].is_terminal {
@@ -13,7 +49,10 @@ impl MCTSTree {
             return;
         }
         if self.pool[leaf_idx as usize].is_expanded() {
-            self.backup(leaf_idx, value);
+            // TT-hit path: node already expanded by a previous leaf visit.
+            // Still apply quiescence so repeated TT-backed values are corrected.
+            let corrected = self.apply_quiescence(board, value);
+            self.backup(leaf_idx, corrected);
             return;
         }
 
@@ -72,7 +111,8 @@ impl MCTSTree {
             };
         }
 
-        self.backup(leaf_idx, value);
+        let corrected = self.apply_quiescence(board, value);
+        self.backup(leaf_idx, corrected);
     }
 
     /// Expand all pending leaves and backup values to the root.

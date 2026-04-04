@@ -42,6 +42,15 @@ pub struct MCTSTree {
     pub max_depth_observed: u32,
     pub(crate) pending: Vec<(u32, Vec<MoveDiff>)>,
     pub transposition_table: FxHashMap<u128, TTEntry>,
+    /// Enable quiescence value override at leaf nodes.
+    /// When true, if the current player has ≥3 winning moves the value is
+    /// overridden to +1.0 (forced win); if the opponent has ≥3, to -1.0.
+    /// This is a game-specific theorem: each turn places 2 stones, so the
+    /// opponent can block at most 2 winning cells per turn.
+    pub(crate) quiescence_enabled: bool,
+    /// Value blend amount for the 2-winning-moves case (strong but unproven).
+    /// The NN value is nudged by ±quiescence_blend_2 toward ±1.0.
+    pub(crate) quiescence_blend_2: f32,
 }
 
 impl MCTSTree {
@@ -67,6 +76,8 @@ impl MCTSTree {
             max_depth_observed: 0,
             pending: Vec::new(),
             transposition_table: FxHashMap::default(),
+            quiescence_enabled: true,
+            quiescence_blend_2: 0.3,
         }
     }
 
@@ -538,6 +549,150 @@ mod tests {
             "dynamic FPU should raise unvisited score when parent_q > 0: \
              fpu_score={score_b_fpu:.4} vs zero_fpu={score_b_zero_fpu:.4} (fpu={expected_fpu:.4})"
         );
+    }
+
+    // ── Quiescence tests ──────────────────────────────────────────────────────
+
+    /// Helper: build a board where `player` has 5 in a row (3 open winning cells on
+    /// each end = 2 total), with `extra_threats` additional separate 5-in-a-row threats.
+    fn board_with_n_threats(extra_threats: usize) -> Board {
+        let mut board = Board::new();
+
+        // First threat: P1 stones at (0,0)..(4,0) along E axis.
+        // Cells (-1,0) and (5,0) are both winning moves.
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), crate::board::Cell::P1);
+        }
+        board.has_stones = true;
+
+        // Additional independent threats along NE axis (q=10+i offset to avoid overlap).
+        for i in 0..extra_threats {
+            let base_q = 20 + (i as i32) * 20;
+            for r in 0..5i32 {
+                board.cells.insert((base_q, r), crate::board::Cell::P1);
+            }
+        }
+
+        board.cache_dirty.set(true);
+        board
+    }
+
+    #[test]
+    fn test_quiescence_overrides_value_for_3_winning_moves() {
+        // Board where P1 (current player to move next, but we'll evaluate from P1's perspective)
+        // has ≥3 winning moves → value should be overridden to 1.0.
+        let mut tree = MCTSTree::new(1.5);
+        tree.quiescence_enabled = true;
+        tree.quiescence_blend_2 = 0.3;
+
+        // Build a board where P1 has exactly 3 winning cells:
+        // Two from (0,0)..(4,0): q=-1 and q=5
+        // One from (20,0)..(24,0): q=19 (west end blocked, east end free)
+        let mut board = Board::new();
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), crate::board::Cell::P1);
+        }
+        // Block west end of first threat so it has only 1 winning cell
+        board.cells.insert((-1, 0), crate::board::Cell::P2);
+        // Second threat (unblocked both ends → 2 winning cells: q=19 and q=25)
+        for q in 20..25i32 {
+            board.cells.insert((q, 0), crate::board::Cell::P1);
+        }
+        board.has_stones = true;
+        board.cache_dirty.set(true);
+        board.current_player = crate::board::Player::One;
+
+        // Current player is P1; P1 has 1 + 2 = 3 winning cells → forced win.
+        let wins = board.count_winning_moves(crate::board::Player::One);
+        assert!(wins >= 3, "expected ≥3 winning moves for P1, got {wins}");
+
+        let corrected = tree.apply_quiescence(&board, 0.0);
+        assert_eq!(corrected, 1.0,
+            "quiescence should override to 1.0 for 3+ winning moves");
+    }
+
+    #[test]
+    fn test_quiescence_overrides_value_for_3_opponent_winning_moves() {
+        let mut tree = MCTSTree::new(1.5);
+        tree.quiescence_enabled = true;
+        tree.quiescence_blend_2 = 0.3;
+
+        // Current player is P1, but opponent (P2) has 3 winning moves → value = -1.0
+        let mut board = Board::new();
+        // P2 stones: (0,0)..(4,0) unblocked (2 cells) + (20,0)..(24,0) east-only blocked (1 cell)
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), crate::board::Cell::P2);
+        }
+        board.cells.insert((-1, 0), crate::board::Cell::P1); // block west end
+        for q in 20..25i32 {
+            board.cells.insert((q, 0), crate::board::Cell::P2);
+        }
+        board.has_stones = true;
+        board.cache_dirty.set(true);
+        board.current_player = crate::board::Player::One;
+
+        let opp_wins = board.count_winning_moves(crate::board::Player::Two);
+        assert!(opp_wins >= 3, "expected ≥3 winning moves for P2, got {opp_wins}");
+
+        let corrected = tree.apply_quiescence(&board, 0.0);
+        assert_eq!(corrected, -1.0,
+            "quiescence should override to -1.0 when opponent has 3+ winning moves");
+    }
+
+    #[test]
+    fn test_quiescence_blend_for_2_winning_moves() {
+        let mut tree = MCTSTree::new(1.5);
+        tree.quiescence_enabled = true;
+        tree.quiescence_blend_2 = 0.3;
+
+        // P1 has exactly 2 winning moves (unblocked 5-in-a-row along E axis)
+        let mut board = Board::new();
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), crate::board::Cell::P1);
+        }
+        board.has_stones = true;
+        board.cache_dirty.set(true);
+        board.current_player = crate::board::Player::One;
+
+        let wins = board.count_winning_moves(crate::board::Player::One);
+        assert_eq!(wins, 2, "unblocked 5-in-a-row should have exactly 2 winning moves");
+
+        let nn_value = 0.5f32;
+        let corrected = tree.apply_quiescence(&board, nn_value);
+        let expected = (nn_value + 0.3).min(1.0);
+        assert!((corrected - expected).abs() < 1e-6,
+            "blend for 2 winning moves: expected {expected}, got {corrected}");
+    }
+
+    #[test]
+    fn test_quiescence_disabled_does_not_change_value() {
+        let mut tree = MCTSTree::new(1.5);
+        tree.quiescence_enabled = false;
+
+        let mut board = Board::new();
+        // Give P1 a huge number of winning moves
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), crate::board::Cell::P1);
+        }
+        board.has_stones = true;
+        board.cache_dirty.set(true);
+
+        let nn_value = 0.42f32;
+        let corrected = tree.apply_quiescence(&board, nn_value);
+        assert_eq!(corrected, nn_value, "disabled quiescence must not change value");
+    }
+
+    #[test]
+    fn test_quiescence_no_override_in_early_game() {
+        let mut tree = MCTSTree::new(1.5);
+        tree.quiescence_enabled = true;
+        tree.quiescence_blend_2 = 0.3;
+
+        // Early game — no threatening formations.
+        let board = Board::new();
+        let nn_value = 0.123f32;
+        let corrected = tree.apply_quiescence(&board, nn_value);
+        assert_eq!(corrected, nn_value, "early game should not trigger quiescence");
     }
 
     #[test]

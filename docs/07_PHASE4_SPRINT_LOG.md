@@ -966,3 +966,80 @@ still positive — less optimistic than a fresh branch, but not zero.
 **Test coverage:** New unit test `test_dynamic_fpu_reduces_unvisited_q` verifies that
 the FPU value raised for an unvisited child when `parent_q > 0` compared to the legacy
 `Q=0` baseline.
+
+---
+
+### 28. Quiescence value override for forced wins at MCTS leaves (2026-04-04)
+**Files:** `engine/src/board/moves.rs`, `engine/src/mcts/backup.rs`,
+`engine/src/mcts/mod.rs`, `engine/src/game_runner.rs`, `engine/src/lib.rs`,
+`hexo_rl/selfplay/pool.py`, `configs/selfplay.yaml`
+
+**Context:** KrakenBot analysis (docs/10_COMMUNITY_BOT_ANALYSIS.md §5.1B) identified
+a quiescence check used to override the NN value when the position is provably decided.
+
+**The game-specific theorem:**
+Each turn places exactly 2 stones.  Therefore the opponent can block at most 2 winning
+cells per response.  If the current player has ≥3 empty cells where placing a stone
+would complete a 6-in-a-row, the opponent cannot block all of them — the win is
+mathematically forced.  Similarly, if the opponent has ≥3 winning cells, the current
+player cannot prevent the loss on the opponent's next turn.
+
+**Critical distinction from the removed forced-win short-circuit:**
+The earlier short-circuit (removed post-baseline, sprint §post-baseline) fired at
+MCTS expansion and marked positions as terminal, preventing the NN from evaluating
+them at all.  This new quiescence check is a VALUE OVERRIDE at leaf evaluation:
+
+- The NN still receives the position and produces (policy, value).
+- The POLICY is used unchanged for MCTS expansion → network learns fork patterns.
+- Only the VALUE is overridden with the proven result (±1.0 or a blend for 2 threats).
+
+This means the network continues to learn about forced-win positions and the moves
+that create or prevent them — which is essential for learning to build multi-threats.
+
+**What was implemented:**
+
+`Board::count_winning_moves(player: Player) -> u32` (engine/src/board/moves.rs):
+- Iterates the legal-move set; for each empty cell checks whether placing `player`'s
+  stone there would create a 6-in-a-row along any hex axis.
+- Uses `count_direction()` without placing a stone (correct: counts runs through
+  the empty cell without mutating board state).
+- O(legal_moves) — acceptable for leaf-only evaluation.
+- Exposed via PyO3: `Board.count_winning_moves(player: int) -> int`.
+
+`MCTSTree::apply_quiescence()` (engine/src/mcts/backup.rs):
+- `quiescence_enabled: bool` and `quiescence_blend_2: f32` fields on `MCTSTree`.
+- If `current_wins >= 3` → value = +1.0 (forced win).
+- If `opponent_wins >= 3` → value = -1.0 (forced loss on opponent's next turn).
+- If `current_wins == 2` → value = min(value + blend_2, 1.0) (strong, unproven).
+- If `opponent_wins == 2` → value = max(value - blend_2, -1.0).
+- Applied in `expand_and_backup_single` for both fresh expansions and TT-hit paths.
+- Terminal nodes (check_win / no legal moves) bypass quiescence — exact value used.
+
+**Config:** `configs/selfplay.yaml`:
+```yaml
+mcts:
+  quiescence_enabled: true
+  quiescence_blend_2: 0.3
+```
+
+**Python wiring:** `pool.py` reads `mcts.quiescence_enabled` and `mcts.quiescence_blend_2`
+from config and passes them to `SelfPlayRunner`.  `PyMCTSTree` also accepts them as
+constructor arguments with getters/setters.
+
+**Benchmark:** Deferred — will rebaseline after all Wave 2 prompts land.
+Note: `count_winning_moves` adds O(legal_moves) cost at every leaf evaluation.
+If MCTS sim/s drops below the 45,000 target during rebaselining, optimise by
+gating the full count behind a cheaper pre-check (e.g. any level-5 threat from
+`get_threats`).
+
+**Test coverage (82 Rust tests, all pass):**
+- `board::moves::tests::test_count_winning_moves_empty_board` — returns 0 on empty board.
+- `board::moves::tests::test_count_winning_moves_five_in_row` — 5-in-a-row → 2 winning cells.
+- `board::moves::tests::test_count_winning_moves_five_blocked_one_end` — blocked end → 1 cell.
+- `board::moves::tests::test_count_winning_moves_zero_when_early_game` — early game → 0.
+- `board::moves::tests::test_count_winning_moves_three_independent_winning_cells` — ≥3 threats → ≥3.
+- `mcts::tests::test_quiescence_overrides_value_for_3_winning_moves` — override to +1.0.
+- `mcts::tests::test_quiescence_overrides_value_for_3_opponent_winning_moves` — override to -1.0.
+- `mcts::tests::test_quiescence_blend_for_2_winning_moves` — blend applied correctly.
+- `mcts::tests::test_quiescence_disabled_does_not_change_value` — disabled → passthrough.
+- `mcts::tests::test_quiescence_no_override_in_early_game` — no threats → no override.
