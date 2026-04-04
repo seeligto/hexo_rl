@@ -192,9 +192,12 @@ def main() -> None:
     filters     = int(combined_config.get("filters",     128))
 
     if args.checkpoint:
-        config_overrides = None
+        # Always propagate torch_compile from the merged YAML config so a
+        # checkpoint saved with torch_compile=true doesn't re-enable compilation
+        # on resume (the embedded checkpoint config would otherwise win).
+        config_overrides: dict = {"torch_compile": combined_config.get("torch_compile", False)}
         if args.iterations is not None and args.override_scheduler_horizon:
-            config_overrides = {"total_steps": int(args.iterations)}
+            config_overrides["total_steps"] = int(args.iterations)
 
         trainer = Trainer.load_checkpoint(
             args.checkpoint,
