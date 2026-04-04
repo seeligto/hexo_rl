@@ -91,8 +91,12 @@ def compute_total_loss(
     entropy_weight: float = 0.0,
     uncertainty_loss: Optional[torch.Tensor] = None,
     uncertainty_weight: float = 0.0,
+    ownership_loss: Optional[torch.Tensor] = None,
+    ownership_weight: float = 0.0,
+    threat_loss: Optional[torch.Tensor] = None,
+    threat_weight: float = 0.0,
 ) -> torch.Tensor:
-    """Combine policy, value, auxiliary, entropy, and uncertainty losses."""
+    """Combine policy, value, auxiliary, entropy, uncertainty, ownership, and threat losses."""
     total = policy_loss + value_loss
     if aux_loss is not None and aux_weight > 0.0:
         total = total + aux_weight * aux_loss
@@ -100,6 +104,10 @@ def compute_total_loss(
         total = total - entropy_weight * entropy_bonus
     if uncertainty_loss is not None and uncertainty_weight > 0.0:
         total = total + uncertainty_weight * uncertainty_loss
+    if ownership_loss is not None and ownership_weight > 0.0:
+        total = total + ownership_weight * ownership_loss
+    if threat_loss is not None and threat_weight > 0.0:
+        total = total + threat_weight * threat_loss
     return total
 
 

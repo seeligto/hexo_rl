@@ -151,9 +151,11 @@ def test_rust_runner_collect_data_format():
 
         drained = runner.drain_game_results()
         assert len(drained) > 0
-        plies_drain, winner_code, move_history, worker_id = drained[0]
+        plies_drain, winner_code, move_history, worker_id, ownership_flat, winning_line_flat = drained[0]
         assert isinstance(worker_id, int)
         assert worker_id == 0
+        assert len(ownership_flat) == 19 * 19
+        assert len(winning_line_flat) == 19 * 19
         
         data = runner.collect_data()
         assert len(data) > 0

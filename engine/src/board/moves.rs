@@ -216,6 +216,34 @@ impl Board {
         count
     }
 
+    /// Returns the cells forming the winning 6-in-a-row, or an empty Vec if no win.
+    ///
+    /// Checks from the last placed stone along all three hex axes.
+    /// The returned cells are in axis order from one end to the other.
+    pub fn find_winning_line(&self) -> Vec<(i32, i32)> {
+        let (lq, lr) = match self.last_move {
+            Some(m) => m,
+            None => return vec![],
+        };
+        let cell = match self.cells.get(&(lq, lr)) {
+            Some(&c) => c,
+            None => return vec![],
+        };
+        for &(dq, dr) in &HEX_AXES {
+            let pos_count = self.count_direction(lq, lr, dq, dr, cell) as i32;
+            let neg_count = self.count_direction(lq, lr, -dq, -dr, cell) as i32;
+            let total = (1 + pos_count + neg_count) as usize;
+            if total >= WIN_LENGTH {
+                let mut line = Vec::with_capacity(total);
+                for i in -neg_count..=pos_count {
+                    line.push((lq + dq * i, lr + dr * i));
+                }
+                return line;
+            }
+        }
+        vec![]
+    }
+
     // ── Cluster helpers ───────────────────────────────────────────────────────
 
     pub fn get_clusters(&self) -> Vec<Vec<(i32, i32)>> {

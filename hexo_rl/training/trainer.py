@@ -154,6 +154,8 @@ class Trainer:
         buffer: "ReplayBuffer",
         augment: bool = True,
         recent_buffer: Optional[Any] = None,
+        ownership_targets: Optional[Any] = None,
+        threat_targets: Optional[Any] = None,
     ) -> Dict[str, float]:
         """Sample a batch from `buffer` and perform one gradient update.
 
@@ -195,24 +197,32 @@ class Trainer:
         states: "numpy.ndarray",
         policies: "numpy.ndarray",
         outcomes: "numpy.ndarray",
+        ownership_targets: Optional[Any] = None,
+        threat_targets: Optional[Any] = None,
     ) -> Dict[str, float]:
         """Perform one gradient update from pre-built numpy arrays.
 
         Used by the mixed-buffer training loop (Phase 4.0) where samples
         are drawn from pretrained + self-play buffers externally.
         """
-        return self._train_on_batch(states, policies, outcomes)
+        return self._train_on_batch(states, policies, outcomes,
+                                     ownership_targets=ownership_targets,
+                                     threat_targets=threat_targets)
 
     def _train_on_batch(
         self,
         states: "numpy.ndarray",
         policies: "numpy.ndarray",
         outcomes: "numpy.ndarray",
+        ownership_targets: Optional[Any] = None,
+        threat_targets: Optional[Any] = None,
     ) -> Dict[str, float]:
         """Core training step: forward, loss, backward, optimizer step."""
         import numpy  # noqa: F811 — deferred import for type alias above
         aux_weight         = float(self.config.get("aux_opp_reply_weight", 0.0))
         uncertainty_weight = float(self.config.get("uncertainty_weight", 0.0))
+        ownership_weight   = float(self.config.get("ownership_weight", 0.0))
+        threat_weight      = float(self.config.get("threat_weight", 0.0))
 
         # Move to device. With FP16/autocast, keep float16 states for the mixed-
         # precision path; without it, upcast to float32 to match model weights.
@@ -230,21 +240,42 @@ class Trainer:
 
         entropy_weight = float(self.config.get("entropy_reg_weight", 0.0))
 
+        # Prepare ownership/threat target tensors (if provided).
+        own_t: Optional[torch.Tensor] = None
+        thr_t: Optional[torch.Tensor] = None
+        use_ownership = ownership_weight > 0.0 and ownership_targets is not None
+        use_threat    = threat_weight > 0.0    and threat_targets    is not None
+        if use_ownership:
+            import numpy as _np_own
+            own_arr = ownership_targets if isinstance(ownership_targets, _np_own.ndarray) else _np_own.array(ownership_targets, dtype=_np_own.float32)
+            own_t = torch.from_numpy(own_arr).to(self.device)    # (B, H, W)
+        if use_threat:
+            import numpy as _np_thr
+            thr_arr = threat_targets if isinstance(threat_targets, _np_thr.ndarray) else _np_thr.array(threat_targets, dtype=_np_thr.float32)
+            thr_t = torch.from_numpy(thr_arr).to(self.device)    # (B, H, W)
+
         with autocast(device_type=self.device.type, dtype=torch.float16,
                       enabled=self.fp16):
             use_aux         = aux_weight > 0.0
             use_uncertainty = uncertainty_weight > 0.0
 
-            if use_aux and use_uncertainty:
-                log_policy, value, v_logit, opp_reply, sigma2 = self.model(
-                    states_t, aux=True, uncertainty=True
-                )
-            elif use_aux:
-                log_policy, value, v_logit, opp_reply = self.model(states_t, aux=True)
-            elif use_uncertainty:
-                log_policy, value, v_logit, sigma2 = self.model(states_t, uncertainty=True)
-            else:
-                log_policy, value, v_logit = self.model(states_t)
+            fwd_result = self.model(
+                states_t,
+                aux=use_aux,
+                uncertainty=use_uncertainty,
+                ownership=use_ownership,
+                threat=use_threat,
+            )
+            # Unpack in order: log_policy, value, v_logit, [opp_reply], [sigma2], [own_pred], [thr_pred]
+            log_policy, value, v_logit = fwd_result[0], fwd_result[1], fwd_result[2]
+            _idx = 3
+            opp_reply = fwd_result[_idx] if use_aux else None
+            if use_aux: _idx += 1
+            sigma2 = fwd_result[_idx] if use_uncertainty else None
+            if use_uncertainty: _idx += 1
+            own_pred = fwd_result[_idx] if use_ownership else None
+            if use_ownership: _idx += 1
+            thr_pred = fwd_result[_idx] if use_threat else None
 
             policy_valid = policies_t.sum(dim=1) > 1e-6
             policy_loss = compute_policy_loss(log_policy, policies_t, policy_valid, self.device)
@@ -265,11 +296,25 @@ class Trainer:
                 value_detached = value.detach()
                 unc_loss = compute_uncertainty_loss(sigma2, outcomes_t, value_detached)
 
+            # Ownership head: spatial MSE against final board stone positions.
+            own_loss = None
+            if use_ownership and own_pred is not None and own_t is not None:
+                own_loss = nn.functional.mse_loss(own_pred.squeeze(1), own_t)
+
+            # Threat head: binary BCE against winning-line cell positions.
+            thr_loss = None
+            if use_threat and thr_pred is not None and thr_t is not None:
+                thr_loss = nn.functional.binary_cross_entropy_with_logits(
+                    thr_pred.squeeze(1), thr_t
+                )
+
             loss = compute_total_loss(
                 policy_loss, value_loss,
                 opp_reply_loss, aux_weight,
                 entropy_bonus, entropy_weight,
                 unc_loss, uncertainty_weight,
+                own_loss, ownership_weight,
+                thr_loss, threat_weight,
             )
 
         max_grad_norm = float(self.config.get("grad_clip", 1.0))
@@ -319,6 +364,10 @@ class Trainer:
                 avg_sigma = sigma2.float().sqrt().mean().item()
             result["uncertainty_loss"] = unc_loss.item()
             result["avg_sigma"] = avg_sigma
+        if use_ownership and own_loss is not None:
+            result["ownership_loss"] = own_loss.item()
+        if use_threat and thr_loss is not None:
+            result["threat_loss"] = thr_loss.item()
 
         interval = int(self.config.get("checkpoint_interval", 100))
         if self.step % interval == 0:
