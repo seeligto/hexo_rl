@@ -148,6 +148,13 @@ def test_rust_runner_collect_data_format():
             time.sleep(0.1)
             
         assert runner.games_completed >= 1
+
+        drained = runner.drain_game_results()
+        assert len(drained) > 0
+        plies_drain, winner_code, move_history, worker_id = drained[0]
+        assert isinstance(worker_id, int)
+        assert worker_id == 0
+        
         data = runner.collect_data()
         assert len(data) > 0
         

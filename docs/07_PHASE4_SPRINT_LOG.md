@@ -1043,3 +1043,7 @@ gating the full count behind a cheaper pre-check (e.g. any level-5 threat from
 - `mcts::tests::test_quiescence_blend_for_2_winning_moves` — blend applied correctly.
 - `mcts::tests::test_quiescence_disabled_does_not_change_value` — disabled → passthrough.
 - `mcts::tests::test_quiescence_no_override_in_early_game` — no threats → no override.
+
+### 27. Add per-worker ID to game_complete events (2026-04-04)
+
+- Marked `TODO: add per-worker ID when Rust exposes it` as resolved by exposing `worker_id` from Rust `drain_game_results` and passing it to Python events.
