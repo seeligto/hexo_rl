@@ -658,9 +658,13 @@ def pretrain() -> None:
         and not args.no_compile
     )
     if use_compile:
-        model = compile_model(model, mode="reduce-overhead")
+        model = compile_model(model, mode="default")
 
     checkpoint_dir = Path(args.checkpoint_dir)
+    # Compute total steps before creating trainer so the scheduler T_max is exact.
+    step_budget = args.steps
+    total_pretrain_steps = step_budget if step_budget is not None else args.epochs * len(loader)
+    config["pretrain_total_steps"] = total_pretrain_steps
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)
 
     # Training loop
@@ -668,8 +672,6 @@ def pretrain() -> None:
         f"[bold]Training:[/bold] epochs={args.epochs} batch={batch_size} "
         f"label_smooth={label_smoothing} aux_weight={aux_weight}"
     )
-    step_budget = args.steps
-    total_pretrain_steps = step_budget if step_budget is not None else args.epochs * len(loader)
     trainer.step = -total_pretrain_steps
 
     prev_loss: Optional[float] = None
