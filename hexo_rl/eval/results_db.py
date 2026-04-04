@@ -15,13 +15,16 @@ from typing import Any
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS players (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    UNIQUE NOT NULL,
+    run_id      TEXT    NOT NULL DEFAULT '',
+    name        TEXT    NOT NULL,
     player_type TEXT    NOT NULL,
-    metadata    TEXT
+    metadata    TEXT,
+    UNIQUE(name, run_id)
 );
 
 CREATE TABLE IF NOT EXISTS matches (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      TEXT    NOT NULL DEFAULT '',
     eval_step   INTEGER NOT NULL,
     player_a_id INTEGER NOT NULL REFERENCES players(id),
     player_b_id INTEGER NOT NULL REFERENCES players(id),
@@ -32,8 +35,9 @@ CREATE TABLE IF NOT EXISTS matches (
     win_rate_a  REAL    NOT NULL,
     ci_lower    REAL,
     ci_upper    REAL,
+    colony_win  BOOLEAN DEFAULT 0,
     timestamp   TEXT    NOT NULL,
-    UNIQUE(eval_step, player_a_id, player_b_id)
+    UNIQUE(run_id, eval_step, player_a_id, player_b_id)
 );
 
 CREATE TABLE IF NOT EXISTS ratings (
@@ -59,7 +63,13 @@ class ResultsDB:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
         self._migrate_colony_win()
+        self._migrate_run_id()
         self._conn.commit()
+
+    @staticmethod
+    def _normalize_run_id(run_id: str | None) -> str:
+        """Normalize nullable run_id inputs to the empty-string sentinel."""
+        return run_id or ""
 
     def _migrate_colony_win(self) -> None:
         """Add colony_win column if it doesn't exist (ALTER TABLE migration)."""
@@ -70,6 +80,59 @@ class ResultsDB:
                 "ALTER TABLE matches ADD COLUMN colony_win BOOLEAN DEFAULT 0"
             )
 
+    def _migrate_run_id(self) -> None:
+        """Migrate players and matches to include run_id."""
+        cur = self._conn.execute("PRAGMA table_info(players)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "run_id" not in columns:
+            # Recreate players table
+            self._conn.execute("ALTER TABLE players RENAME TO players_old")
+            self._conn.execute("""
+            CREATE TABLE players (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id      TEXT    NOT NULL DEFAULT '',
+                name        TEXT    NOT NULL,
+                player_type TEXT    NOT NULL,
+                metadata    TEXT,
+                UNIQUE(name, run_id)
+            )
+            """)
+            self._conn.execute("""
+            INSERT INTO players (id, run_id, name, player_type, metadata)
+            SELECT id, '', name, player_type, metadata FROM players_old
+            """)
+            self._conn.execute("DROP TABLE players_old")
+
+        cur = self._conn.execute("PRAGMA table_info(matches)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "run_id" not in columns:
+            # Recreate matches table
+            self._conn.execute("ALTER TABLE matches RENAME TO matches_old")
+            self._conn.execute("""
+            CREATE TABLE matches (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id      TEXT    NOT NULL DEFAULT '',
+                eval_step   INTEGER NOT NULL,
+                player_a_id INTEGER NOT NULL REFERENCES players(id),
+                player_b_id INTEGER NOT NULL REFERENCES players(id),
+                wins_a      INTEGER NOT NULL,
+                wins_b      INTEGER NOT NULL,
+                draws       INTEGER NOT NULL DEFAULT 0,
+                n_games     INTEGER NOT NULL,
+                win_rate_a  REAL    NOT NULL,
+                ci_lower    REAL,
+                ci_upper    REAL,
+                colony_win  BOOLEAN DEFAULT 0,
+                timestamp   TEXT    NOT NULL,
+                UNIQUE(run_id, eval_step, player_a_id, player_b_id)
+            )
+            """)
+            self._conn.execute("""
+            INSERT INTO matches (id, run_id, eval_step, player_a_id, player_b_id, wins_a, wins_b, draws, n_games, win_rate_a, ci_lower, ci_upper, colony_win, timestamp)
+            SELECT id, '', eval_step, player_a_id, player_b_id, wins_a, wins_b, draws, n_games, win_rate_a, ci_lower, ci_upper, colony_win, timestamp FROM matches_old
+            """)
+            self._conn.execute("DROP TABLE matches_old")
+
     # ── Players ──────────────────────────────────────────────────────
 
     def get_or_create_player(
@@ -77,15 +140,17 @@ class ResultsDB:
         name: str,
         player_type: str,
         metadata: dict[str, Any] | None = None,
+        run_id: str | None = "",
     ) -> int:
+        run_id = self._normalize_run_id(run_id)
         meta_json = json.dumps(metadata) if metadata else None
-        cur = self._conn.execute("SELECT id FROM players WHERE name = ?", (name,))
+        cur = self._conn.execute("SELECT id FROM players WHERE name = ? AND run_id = ?", (name, run_id))
         row = cur.fetchone()
         if row is not None:
             return row[0]
         cur = self._conn.execute(
-            "INSERT INTO players (name, player_type, metadata) VALUES (?, ?, ?)",
-            (name, player_type, meta_json),
+            "INSERT INTO players (run_id, name, player_type, metadata) VALUES (?, ?, ?, ?)",
+            (run_id, name, player_type, meta_json),
         )
         self._conn.commit()
         return cur.lastrowid  # type: ignore[return-value]
@@ -117,43 +182,78 @@ class ResultsDB:
         ci_upper: float,
         colony_wins_a: int = 0,
         colony_wins_b: int = 0,
+        run_id: str | None = "",
     ) -> None:
+        run_id = self._normalize_run_id(run_id)
         ts = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """INSERT OR REPLACE INTO matches
-               (eval_step, player_a_id, player_b_id, wins_a, wins_b,
+               (run_id, eval_step, player_a_id, player_b_id, wins_a, wins_b,
                 draws, n_games, win_rate_a, ci_lower, ci_upper, colony_win, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (eval_step, player_a_id, player_b_id, wins_a, wins_b,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (run_id, eval_step, player_a_id, player_b_id, wins_a, wins_b,
              draws, n_games, win_rate_a, ci_lower, ci_upper,
              colony_wins_a + colony_wins_b, ts),
         )
         self._conn.commit()
 
-    def get_all_pairwise(self) -> list[tuple[int, int, int, int]]:
+    def get_all_pairwise(self, run_id: str | None = "") -> list[tuple[int, int, int, int]]:
         """Aggregate wins across all eval steps for each player pair.
+
+        If run_id is provided, filters matches to those where at least one
+        player belongs to the given run_id OR is a fixed reference opponent
+        (run_id == "").
 
         Returns list of (player_a_id, player_b_id, total_wins_a, total_wins_b).
         """
-        cur = self._conn.execute(
-            """SELECT player_a_id, player_b_id,
-                      SUM(wins_a), SUM(wins_b)
-               FROM matches
-               GROUP BY player_a_id, player_b_id"""
-        )
+        run_id = self._normalize_run_id(run_id)
+        if run_id == "":
+            cur = self._conn.execute(
+                """SELECT player_a_id, player_b_id,
+                          SUM(wins_a), SUM(wins_b)
+                   FROM matches
+                   GROUP BY player_a_id, player_b_id"""
+            )
+        else:
+            cur = self._conn.execute(
+                """SELECT m.player_a_id, m.player_b_id,
+                          SUM(m.wins_a), SUM(m.wins_b)
+                   FROM matches m
+                   JOIN players pa ON m.player_a_id = pa.id
+                   JOIN players pb ON m.player_b_id = pb.id
+                   WHERE pa.run_id = ? OR pb.run_id = ?
+                   GROUP BY m.player_a_id, m.player_b_id""",
+                (run_id, run_id)
+            )
         return [(r[0], r[1], r[2], r[3]) for r in cur.fetchall()]
 
-    def get_colony_win_stats(self) -> list[tuple[int, int, int, int, int]]:
+    def get_colony_win_stats(self, run_id: str | None = "") -> list[tuple[int, int, int, int, int]]:
         """Return colony win breakdown per player pair.
+
+        If run_id is provided, filters matches to those where at least one
+        player belongs to the given run_id OR is a fixed reference opponent.
 
         Returns list of (player_a_id, player_b_id, total_wins, total_colony_wins, total_games).
         """
-        cur = self._conn.execute(
-            """SELECT player_a_id, player_b_id,
-                      SUM(wins_a + wins_b), SUM(COALESCE(colony_win, 0)), SUM(n_games)
-               FROM matches
-               GROUP BY player_a_id, player_b_id"""
-        )
+        run_id = self._normalize_run_id(run_id)
+        if run_id == "":
+            cur = self._conn.execute(
+                """SELECT player_a_id, player_b_id,
+                          SUM(wins_a + wins_b), SUM(COALESCE(colony_win, 0)), SUM(n_games)
+                   FROM matches
+                   GROUP BY player_a_id, player_b_id"""
+            )
+        else:
+            cur = self._conn.execute(
+                """SELECT m.player_a_id, m.player_b_id,
+                          SUM(m.wins_a + m.wins_b), SUM(COALESCE(m.colony_win, 0)), SUM(m.n_games)
+                   FROM matches m
+                   JOIN players pa ON m.player_a_id = pa.id
+                   JOIN players pb ON m.player_b_id = pb.id
+                   WHERE pa.run_id = ? OR pb.run_id = ?
+                   GROUP BY m.player_a_id, m.player_b_id""",
+                (run_id, run_id)
+            )
         return [(r[0], r[1], r[2], r[3], r[4]) for r in cur.fetchall()]
 
     # ── Ratings ──────────────────────────────────────────────────────
@@ -177,18 +277,30 @@ class ResultsDB:
         )
         self._conn.commit()
 
-    def get_ratings_history(self) -> list[dict[str, Any]]:
+    def get_ratings_history(self, run_id: str | None = "") -> list[dict[str, Any]]:
         """Return all ratings snapshots for plotting.
 
         Each dict: {eval_step, player_name, player_type, rating, ci_lower, ci_upper}.
         """
-        cur = self._conn.execute(
-            """SELECT r.eval_step, p.name, p.player_type,
-                      r.rating, r.ci_lower, r.ci_upper
-               FROM ratings r
-               JOIN players p ON p.id = r.player_id
-               ORDER BY r.eval_step, r.rating DESC"""
-        )
+        run_id = self._normalize_run_id(run_id)
+        if run_id == "":
+            cur = self._conn.execute(
+                """SELECT r.eval_step, p.name, p.player_type,
+                          r.rating, r.ci_lower, r.ci_upper
+                   FROM ratings r
+                   JOIN players p ON p.id = r.player_id
+                   ORDER BY r.eval_step, r.rating DESC"""
+            )
+        else:
+            cur = self._conn.execute(
+                """SELECT r.eval_step, p.name, p.player_type,
+                          r.rating, r.ci_lower, r.ci_upper
+                   FROM ratings r
+                   JOIN players p ON p.id = r.player_id
+                   WHERE p.run_id = ? OR p.run_id = ''
+                   ORDER BY r.eval_step, r.rating DESC""",
+                (run_id,)
+            )
         return [
             {
                 "eval_step": row[0],

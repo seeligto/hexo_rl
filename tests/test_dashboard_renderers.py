@@ -43,7 +43,7 @@ SAMPLE_EVENTS = {
     },
     "run_start": {
         "event": "run_start", "ts": 1234567890.0,
-        "step": 0, "run_id": "abc123", "config_summary": {},
+        "step": 0, "run_id": "abc123", "worker_count": 8, "config_summary": {},
     },
     "run_end": {
         "event": "run_end", "ts": 1234567890.0,
@@ -130,6 +130,17 @@ def test_terminal_dashboard_build_panel():
     td = TerminalDashboard(MINIMAL_CONFIG)
     panel = td._build_panel()
     assert panel is not None
+
+
+def test_terminal_dashboard_worker_count():
+    """run_start should update worker_count in state."""
+    td = TerminalDashboard(MINIMAL_CONFIG)
+    td.on_event({
+        "event": "run_start", "ts": 1.0, "step": 0, "run_id": "test",
+        "worker_count": 12, "config_summary": {},
+    })
+    assert td._state["worker_count"] == 12
+
 
 
 # ── Web dashboard tests ────────────────────────────────────────────────
