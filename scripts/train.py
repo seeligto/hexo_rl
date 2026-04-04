@@ -253,8 +253,8 @@ def main() -> None:
     inf_model.eval()
     if _torch_compile_enabled:
         try:
-            inf_model = torch.compile(inf_model, mode="reduce-overhead", fullgraph=False)
-            log.info("torch_compile_inf_enabled", mode="reduce-overhead")
+            inf_model = torch.compile(inf_model, mode="default", fullgraph=False)
+            log.info("torch_compile_inf_enabled", mode="default")
         except Exception as exc:
             log.warning("torch_compile_inf_failed", error=str(exc))
 
@@ -264,8 +264,8 @@ def main() -> None:
         """Copy train_model weights → inf_model.
 
         Called after every checkpoint save and after every model promotion.
-        load_state_dict on _orig_mod updates parameters in-place, so CUDA
-        graphs in reduce-overhead mode will use the new values on next replay.
+        load_state_dict on _orig_mod updates parameters in-place; weights
+        are picked up on the next forward pass.
         """
         train_base = getattr(trainer.model, "_orig_mod", trainer.model)
         inf_base = getattr(inf_model, "_orig_mod", inf_model)
@@ -338,6 +338,10 @@ def main() -> None:
     from hexo_rl.eval.eval_pipeline import EvalPipeline
 
     pool = WorkerPool(inf_model, config, device, buffer)
+
+    # ── Run ID ──
+    run_id = uuid.uuid4().hex
+    log.info("run_id", run_id=run_id)
 
     # ── Evaluation pipeline (Phase 4.0) ──
     eval_yaml_path = Path("configs/eval.yaml")
@@ -433,10 +437,7 @@ def main() -> None:
     initial_policy_loss: float | None = None
     last_loss_info: dict[str, float] = {}
 
-    # ── Run ID and emit run_start ──
-    run_id = uuid.uuid4().hex
-    log.info("run_id", run_id=run_id)
-
+    # ── Emit run_start ──
     emit_event({
         "event": "run_start",
         "step": train_step,
