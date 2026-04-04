@@ -37,3 +37,7 @@ selfplay:
     fast_sims: 50
     standard_sims: 400
     temperature_threshold_compound_moves: 15
+    temp_min: 0.05       # floor temperature for cosine annealing (0.0 = hard argmax after threshold)
+    zoi_enabled: true    # restrict move sampling to ZOI of last N moves
+    zoi_lookback: 16     # number of recent moves used as ZOI anchors
+    zoi_margin: 5        # hex-distance threshold for ZOI inclusion

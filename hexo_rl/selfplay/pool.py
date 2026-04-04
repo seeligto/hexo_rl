@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import structlog
@@ -74,6 +74,10 @@ class WorkerPool:
             draw_reward=float(training_cfg.get("draw_reward", -0.1)),
             quiescence_enabled=self.quiescence_enabled,
             quiescence_blend_2=self.quiescence_blend_2,
+            temp_min=float(pc.get("temp_min", 0.05)),
+            zoi_enabled=bool(pc.get("zoi_enabled", False)),
+            zoi_lookback=int(pc.get("zoi_lookback", 16)),
+            zoi_margin=int(pc.get("zoi_margin", 5)),
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 
@@ -103,6 +107,12 @@ class WorkerPool:
         # Optional recent buffer for recency-weighted sampling.
         # Set by the training loop after construction; None = disabled.
         self.recent_buffer: Optional[Any] = None
+
+        # Ring buffers of recent game auxiliary targets for ownership/threat heads.
+        # Each entry: (19, 19) float32 ndarray projected to the final game window.
+        self._ownership_ring: deque[np.ndarray] = deque(maxlen=200)
+        self._threat_ring: deque[np.ndarray] = deque(maxlen=200)
+        self._board_size = board_size
 
     @property
     def x_winrate(self) -> float:
@@ -167,7 +177,16 @@ class WorkerPool:
                 if elapsed > 0:
                     self._sims_per_sec = sims / elapsed
 
-            for plies, winner_code, move_history, worker_id in games_batch:
+            for plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat in games_batch:
+                # Accumulate ownership/threat targets for auxiliary head training.
+                if ownership_flat:
+                    self._ownership_ring.append(
+                        np.array(ownership_flat, dtype=np.float32).reshape(self._board_size, self._board_size)
+                    )
+                if winning_line_flat:
+                    self._threat_ring.append(
+                        np.array(winning_line_flat, dtype=np.float32).reshape(self._board_size, self._board_size)
+                    )
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
                 game_length = (plies + 1) // 2  # compound moves
                 self._game_lengths.append(game_length)
@@ -206,6 +225,24 @@ class WorkerPool:
                 )
 
             time.sleep(0.1)
+
+    def get_aux_targets(
+        self, batch_size: int
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """Sample random ownership and threat targets from recently completed games.
+
+        Returns (ownership_targets, threat_targets) as (B, H, W) float32 arrays,
+        or (None, None) if not enough data has accumulated yet.
+        """
+        if len(self._ownership_ring) < 1 or len(self._threat_ring) < 1:
+            return None, None
+        own_list = list(self._ownership_ring)
+        thr_list = list(self._threat_ring)
+        own_idx = np.random.randint(0, len(own_list), size=batch_size)
+        thr_idx = np.random.randint(0, len(thr_list), size=batch_size)
+        own = np.stack([own_list[i] for i in own_idx], axis=0)   # (B, H, W)
+        thr = np.stack([thr_list[i] for i in thr_idx], axis=0)   # (B, H, W)
+        return own, thr
 
     def start(self) -> None:
         if self._runner.is_running():

@@ -125,8 +125,10 @@ freeze the machine, and corrupt checkpoint state.
 
 ```bash
 # Kill before any make train.*, make bench.*, or direct scripts/train.py invocations:
-pkill -f "scripts/train.py" 2>/dev/null
-pkill -f "scripts/benchmark.py" 2>/dev/null
+# IMPORTANT: pkill returns exit code 1 if no process matched. Use || true to prevent
+# this from propagating as an error and aborting subsequent commands in the same shell.
+pkill -f "scripts/train.py" 2>/dev/null || true
+pkill -f "scripts/benchmark.py" 2>/dev/null || true
 sleep 1
 pgrep -fl "train.py\|benchmark.py" || echo "clear"
 ```

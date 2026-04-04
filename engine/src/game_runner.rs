@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use pyo3::prelude::*;
-use crate::board::{Board, BOARD_SIZE, HALF};
+use crate::board::{Board, Cell, BOARD_SIZE, HALF, TOTAL_CELLS, hex_distance};
 use crate::mcts::MCTSTree;
 use crate::inference_bridge::InferenceBatcher;
 use rand::prelude::IndexedRandom;
@@ -32,7 +32,11 @@ pub struct SelfPlayRunner {
     fast_sims: usize,
     standard_sims: usize,
     temp_threshold_compound_moves: usize,
+    temp_min: f32,
     draw_reward: f32,
+    zoi_enabled: bool,
+    zoi_lookback: usize,
+    zoi_margin: i32,
     running: Arc<AtomicBool>,
     games_completed: Arc<AtomicUsize>,
     positions_generated: Arc<AtomicUsize>,
@@ -40,17 +44,20 @@ pub struct SelfPlayRunner {
     o_wins: Arc<AtomicU64>,
     draws: Arc<AtomicU64>,
     results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32, usize)>>>,
-    /// Ring-buffer of recent (plies, winner_code, move_history, worker_id) tuples for Python logging.
-    /// winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
-    /// move_history: sequence of (q, r) coordinates in play order.
-    recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize)>>>,
+    /// Ring-buffer of recent game results for Python logging and auxiliary training targets.
+    /// Tuple: (plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat)
+    ///   winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
+    ///   move_history: sequence of (q, r) coordinates in play order.
+    ///   ownership_flat: 361 floats projected to the final board window (+1.0 P1, -1.0 P2, 0.0 empty).
+    ///   winning_line_flat: 361 floats with 1.0 at winning-line cell positions, 0.0 elsewhere.
+    recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize, Vec<f32>, Vec<f32>)>>>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -67,6 +74,10 @@ impl SelfPlayRunner {
         draw_reward: f32,
         quiescence_enabled: bool,
         quiescence_blend_2: f32,
+        temp_min: f32,
+        zoi_enabled: bool,
+        zoi_lookback: usize,
+        zoi_margin: i32,
     ) -> Self {
         // If standard_sims is 0, fall back to n_simulations.
         let effective_standard = if standard_sims == 0 { n_simulations } else { standard_sims };
@@ -83,7 +94,11 @@ impl SelfPlayRunner {
             fast_sims,
             standard_sims: effective_standard,
             temp_threshold_compound_moves,
+            temp_min,
             draw_reward,
+            zoi_enabled,
+            zoi_lookback,
+            zoi_margin,
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
             positions_generated: Arc::new(AtomicUsize::new(0)),
@@ -120,7 +135,11 @@ impl SelfPlayRunner {
             let fast_sims = self.fast_sims;
             let standard_sims = self.standard_sims;
             let temp_threshold = self.temp_threshold_compound_moves;
+            let temp_min = self.temp_min;
             let draw_reward = self.draw_reward;
+            let zoi_enabled = self.zoi_enabled;
+            let zoi_lookback = self.zoi_lookback;
+            let zoi_margin = self.zoi_margin;
             let results_queue = self.results.clone();
             let recent_game_results = self.recent_game_results.clone();
 
@@ -219,20 +238,36 @@ impl SelfPlayRunner {
 
                         if !running.load(Ordering::SeqCst) { break; }
 
-                        // ── MCTS Policy with temperature schedule ──
+                        // ── MCTS Policy with cosine-annealed temperature schedule ──
                         let compound_move = if board.ply == 0 { 0 } else { (board.ply as usize + 1) / 2 };
                         let temperature = if is_fast_game {
                             1.0  // fast games: always exploratory
                         } else if compound_move < temp_threshold {
-                            1.0
+                            let progress = compound_move as f32 / temp_threshold as f32;
+                            f32::max(temp_min, (std::f32::consts::PI / 2.0 * progress).cos())
                         } else {
-                            0.0  // argmax after threshold
+                            temp_min  // settled phase: minimal exploration
                         };
                         let policy = tree.get_policy(temperature, BOARD_SIZE);
 
-                        // ── Sample and apply move ──
-                        let legal = board.legal_moves();
-                        if legal.is_empty() { break; }
+                        // ── Sample and apply move (ZOI-filtered legal set) ──
+                        let full_legal = board.legal_moves();
+                        if full_legal.is_empty() { break; }
+
+                        // ZOI filtering: restrict move sampling to cells near recent moves.
+                        let legal = if zoi_enabled && move_history.len() >= 3 {
+                            let filtered: Vec<_> = full_legal.iter()
+                                .filter(|(q, r)| {
+                                    move_history.iter().rev().take(zoi_lookback).any(|(q0, r0)| {
+                                        hex_distance(*q, *r, *q0, *r0) <= zoi_margin
+                                    })
+                                })
+                                .cloned()
+                                .collect();
+                            if filtered.len() < 3 { full_legal } else { filtered }
+                        } else {
+                            full_legal
+                        };
 
                         // Sample from policy
                         let move_idx = match Self::sample_policy(&policy, &legal, &board) {
@@ -285,10 +320,33 @@ impl SelfPlayRunner {
                         Some(_)                         => { o_wins.fetch_add(1, Ordering::Relaxed); }
                         None                            => { draws.fetch_add(1, Ordering::Relaxed); }
                     }
-                    // Record (plies, winner_code, move_history, worker_id) for Python game_complete logging.
+                    // Compute ownership_flat: 361-element window projection of final board state.
+                    // +1.0 = P1 stone, -1.0 = P2 stone, 0.0 = empty.
+                    let mut ownership_flat = vec![0.0f32; TOTAL_CELLS];
+                    for (&(q, r), &cell) in board.cells.iter() {
+                        let flat = board.window_flat_idx(q, r);
+                        if flat < TOTAL_CELLS {
+                            ownership_flat[flat] = match cell {
+                                Cell::P1 => 1.0,
+                                Cell::P2 => -1.0,
+                                Cell::Empty => 0.0,
+                            };
+                        }
+                    }
+
+                    // Compute winning_line_flat: 361-element window projection of the 6-cell winning run.
+                    let mut winning_line_flat = vec![0.0f32; TOTAL_CELLS];
+                    for (q, r) in board.find_winning_line() {
+                        let flat = board.window_flat_idx(q, r);
+                        if flat < TOTAL_CELLS {
+                            winning_line_flat[flat] = 1.0;
+                        }
+                    }
+
+                    // Record for Python game_complete logging and auxiliary training targets.
                     {
                         let mut rg = recent_game_results.lock().expect("recent_game_results lock poisoned");
-                        rg.push_back((plies, winner_code, move_history, worker_id));
+                        rg.push_back((plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat));
                         // Cap at 2000 entries to avoid unbounded growth if Python is slow.
                         if rg.len() > 2000 {
                             rg.pop_front();
@@ -369,11 +427,14 @@ impl SelfPlayRunner {
         )
     }
 
-    /// Drain and return all buffered (plies, winner_code, move_history, worker_id) tuples since the last call.
-    /// winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
-    /// move_history: sequence of (q, r) stone placements in play order.
-    /// Called by Python pool._stats_loop() to emit game_complete structlog events and record replays.
-    pub fn drain_game_results(&self) -> Vec<(usize, u8, Vec<(i32, i32)>, usize)> {
+    /// Drain and return all buffered game results since the last call.
+    ///
+    /// Each entry: (plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat)
+    ///   winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
+    ///   move_history: (q, r) stone placements in play order.
+    ///   ownership_flat: 361 floats, +1.0 P1 / -1.0 P2 / 0.0 empty, projected to final board window.
+    ///   winning_line_flat: 361 floats, 1.0 at winning-line cells, 0.0 elsewhere.
+    pub fn drain_game_results(&self) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, Vec<f32>, Vec<f32>)> {
         let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
         rg.drain(..).collect()
     }
@@ -496,7 +557,8 @@ mod tests {
     fn test_worker_id_assignment() {
         // Run with max_moves_per_game = 0 to avoid triggering MCTS and inference server dependency
         let runner = SelfPlayRunner::new(
-            4, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3
+            4, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
+            0.05, false, 16, 5,
         );
         runner.start();
         
@@ -505,7 +567,7 @@ mod tests {
         
         while completed_workers.len() < 4 && attempts < 50 {
             let results = runner.drain_game_results();
-            for (_, _, _, worker_id) in results {
+            for (_, _, _, worker_id, _, _) in results {
                 assert!(worker_id < 4);
                 completed_workers.insert(worker_id);
             }
