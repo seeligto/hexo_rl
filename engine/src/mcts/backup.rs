@@ -24,11 +24,36 @@ impl MCTSTree {
         if !self.quiescence_enabled {
             return value;
         }
-        let current_wins = board.count_winning_moves(board.current_player);
+
+        // Cheap pre-check: count_winning_moves is O(legal_moves), which is
+        // expensive with hex-ball-8 rules (hundreds of cells even in early/mid
+        // game). A winning move requires ≥5 consecutive stones, so skip the
+        // full count entirely when neither player has a run of that length.
+        // has_player_long_run is O(stones × 3 × avg_run) — much cheaper because
+        // stone count << legal_move count.
+        let current_player = board.current_player;
+        let opponent = current_player.other();
+        // WIN_LENGTH = 6, so a winning move needs a run of WIN_LENGTH - 1 = 5.
+        let current_may_threat = board.has_player_long_run(current_player, 5);
+        let opponent_may_threat = board.has_player_long_run(opponent, 5);
+
+        if !current_may_threat && !opponent_may_threat {
+            return value;
+        }
+
+        let current_wins = if current_may_threat {
+            board.count_winning_moves(current_player)
+        } else {
+            0
+        };
         if current_wins >= 3 {
             return 1.0;
         }
-        let opponent_wins = board.count_winning_moves(board.current_player.other());
+        let opponent_wins = if opponent_may_threat {
+            board.count_winning_moves(opponent)
+        } else {
+            0
+        };
         if opponent_wins >= 3 {
             return -1.0;
         }
