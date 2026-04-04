@@ -4,14 +4,18 @@ use super::state::{Board, Cell, Player, HEX_AXES, hex_distance};
 /// Stones in a row required to win.
 const WIN_LENGTH: usize = 6;
 
+/// Maximum hex distance from any existing stone at which a new stone may be
+/// placed, per the official hexo.did.science rules ("at most 8 cells apart").
+const LEGAL_MOVE_RADIUS: i32 = 8;
+
 impl Board {
     /// Zero-allocation reference to the lazily-maintained legal move set.
     ///
     /// If the cache is dirty (any `apply_move` or `undo_move` since the last
-    /// call), rebuilds using the original cluster+bbox algorithm: O(n²) cluster
-    /// detection (integer arithmetic) then one `cells.contains_key` per cell in
-    /// each cluster's bbox+2 rectangle.  This matches the cost of the original
-    /// `legal_moves()` and produces an identical result.
+    /// call), rebuilds by iterating a hex ball of radius `LEGAL_MOVE_RADIUS`
+    /// (8) centred on every existing stone and collecting unoccupied cells.
+    /// This matches the official rule: "a new hex can be placed at most 8
+    /// cells apart from any other hex."
     ///
     /// Prefer this over `legal_moves()` in MCTS expansion — it avoids a Vec
     /// allocation.  During tree traversal, `apply_move_tracked` / `undo_move`
@@ -35,29 +39,20 @@ impl Board {
                     }
                 }
             } else {
-                // Replicates the original legal_moves() algorithm:
-                // 1. Cluster stones by proximity (O(n²) arithmetic, no HashMap).
-                // 2. For each cluster, scan its bbox+2 rectangle with one
-                //    cells.contains_key per cell — simple, cache-friendly iteration.
-                //
-                // This is faster than n×24 per-stone HashMap ops for the small,
-                // compact boards typical of MCTS leaf positions (D ≤ 15).
-                let clusters = self.get_clusters();
-                for cluster in &clusters {
-                    let mut min_q = i32::MAX;
-                    let mut max_q = i32::MIN;
-                    let mut min_r = i32::MAX;
-                    let mut max_r = i32::MIN;
-                    for &(q, r) in cluster {
-                        if q < min_q { min_q = q; }
-                        if q > max_q { max_q = q; }
-                        if r < min_r { min_r = r; }
-                        if r > max_r { max_r = r; }
-                    }
-                    for q in (min_q - 2)..=(max_q + 2) {
-                        for r in (min_r - 2)..=(max_r + 2) {
-                            if !self.cells.contains_key(&(q, r)) {
-                                cache.insert((q, r));
+                // For every placed stone, emit all empty cells within
+                // LEGAL_MOVE_RADIUS hex steps (official 8-cell rule).
+                // The hex ball in axial coords is the set of (dq, dr) satisfying:
+                //   |dq| ≤ R, |dr| ≤ R, |dq + dr| ≤ R
+                // which translates to dr ∈ [max(-R, -R-dq), min(R, R-dq)].
+                let r = LEGAL_MOVE_RADIUS;
+                for &(sq, sr) in self.cells.keys() {
+                    for dq in -r..=r {
+                        let dr_min = (-r).max(-r - dq);
+                        let dr_max = r.min(r - dq);
+                        for dr in dr_min..=dr_max {
+                            let pos = (sq + dq, sr + dr);
+                            if !self.cells.contains_key(&pos) {
+                                cache.insert(pos);
                             }
                         }
                     }

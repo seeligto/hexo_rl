@@ -226,9 +226,50 @@ def main() -> None:
     # Re-read architecture from the trainer — load_checkpoint infers these from
     # the state dict, so they may differ from the CLI config (e.g. resuming a
     # 12-block/128-filter pretrain checkpoint while fast_debug.yaml says 4/64).
-    board_size = int(trainer.config.get("board_size", board_size))
-    res_blocks = int(trainer.config.get("res_blocks", res_blocks))
-    filters    = int(trainer.config.get("filters",    filters))
+    board_size         = int(trainer.config.get("board_size",         board_size))
+    res_blocks         = int(trainer.config.get("res_blocks",         res_blocks))
+    filters            = int(trainer.config.get("filters",            filters))
+    in_channels        = int(trainer.config.get("in_channels",        18))
+    se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
+
+    # ── Inference model — separate instance owned exclusively by InferenceServer ──
+    # train_model (trainer.model) stays on the main thread for gradient updates.
+    # inf_model lives on the InferenceServer daemon thread for forward-only passes.
+    # Both are compiled independently when torch_compile=true so CUDA graphs
+    # (which are captured per-thread/per-stream) never cross thread boundaries.
+    _torch_compile_enabled = (
+        trainer.config.get("torch_compile", True)
+        and device.type == "cuda"
+    )
+    inf_model = HexTacToeNet(
+        board_size=board_size,
+        in_channels=in_channels,
+        res_blocks=res_blocks,
+        filters=filters,
+        se_reduction_ratio=se_reduction_ratio,
+    ).to(device)
+    _train_base = getattr(trainer.model, "_orig_mod", trainer.model)
+    inf_model.load_state_dict(_train_base.state_dict())
+    inf_model.eval()
+    if _torch_compile_enabled:
+        try:
+            inf_model = torch.compile(inf_model, mode="reduce-overhead", fullgraph=False)
+            log.info("torch_compile_inf_enabled", mode="reduce-overhead")
+        except Exception as exc:
+            log.warning("torch_compile_inf_failed", error=str(exc))
+
+    _ckpt_interval = int(trainer.config.get("checkpoint_interval", 500))
+
+    def _sync_weights_to_inf() -> None:
+        """Copy train_model weights → inf_model.
+
+        Called after every checkpoint save and after every model promotion.
+        load_state_dict on _orig_mod updates parameters in-place, so CUDA
+        graphs in reduce-overhead mode will use the new values on next replay.
+        """
+        train_base = getattr(trainer.model, "_orig_mod", trainer.model)
+        inf_base = getattr(inf_model, "_orig_mod", inf_model)
+        inf_base.load_state_dict(train_base.state_dict())
 
     # ── Replay buffer with growth schedule ──
     buffer_schedule_raw = train_cfg.get("buffer_schedule", config.get("buffer_schedule", []))
@@ -296,7 +337,7 @@ def main() -> None:
     from hexo_rl.selfplay.pool import WorkerPool
     from hexo_rl.eval.eval_pipeline import EvalPipeline
 
-    pool = WorkerPool(trainer.model, config, device, buffer)
+    pool = WorkerPool(inf_model, config, device, buffer)
 
     # ── Evaluation pipeline (Phase 4.0) ──
     eval_yaml_path = Path("configs/eval.yaml")
@@ -510,6 +551,10 @@ def main() -> None:
                     initial_policy_loss = float(loss_info["policy_loss"])
                 last_loss_info = loss_info
 
+                # Sync inference model weights after each checkpoint save.
+                if train_step % _ckpt_interval == 0:
+                    _sync_weights_to_inf()
+
                 # ── Evaluation (non-blocking via background thread) ──
                 if eval_pipeline is not None and train_step > 0 and train_step % eval_interval == 0:
                     # Harvest previous eval result if ready
@@ -531,6 +576,7 @@ def main() -> None:
                                 best_model.eval()
                                 torch.save(best_model.state_dict(), best_model_path)
                                 best_model_step = train_step
+                                _sync_weights_to_inf()
                                 log.info("best_model_promoted", step=train_step, path=str(best_model_path))
                         _eval_result[0] = None
                         _eval_thread = None

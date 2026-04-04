@@ -479,20 +479,20 @@ tests. Full training runs must always use `augment=True` (the default).
 > Run `make bench.full` to reproduce.
 > Full results: reports/benchmarks/
 
-Run `make bench.full`. Latest baseline (2026-04-03, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU, correct 12-block × 128-channel production model):
+Run `make bench.full`. Latest baseline (2026-04-04, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU, torch.compile ENABLED — split train/inf model instances):
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 164,946 sim/s | ≥ 140,000 sim/s | Per-move throughput (800 sims/move × 62 iters), IQR ±2,190 (1.3%) |
-| NN inference (batch=64) | 10,201 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±815) |
-| NN latency (batch=1, mean) | 2.82 ms | ≤ 3.5 ms | Correct 12-block model baseline (2026-04-03) |
-| Replay buffer push | 755,880 pos/sec | ≥ 640,000 pos/sec | IQR ±27k (3.6%) |
-| Replay buffer sample raw (batch=256) | 1,237.6 µs/batch | ≤ 1,500 µs | IQR ±8.4 µs |
-| Replay buffer sample augmented (batch=256) | 1,177 µs/batch | ≤ 1,400 µs | IQR ±27 µs |
+| MCTS (CPU only, no NN) | 52,959 sim/s | ≥ 45,000 sim/s | Rebaselined: hex-ball radius-8 legal moves (correct game rule) expands branching factor ~9× vs old bbox+2 — see §24 sprint log |
+| NN inference (batch=64) | 11,038 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±5) |
+| NN latency (batch=1, mean) | 2.93 ms | ≤ 3.5 ms | split-compile baseline (2026-04-04) |
+| Replay buffer push | 802,585 pos/sec | ≥ 640,000 pos/sec | IQR ±20k (2.4%) |
+| Replay buffer sample raw (batch=256) | 1,253.4 µs/batch | ≤ 1,500 µs | IQR ±3 µs |
+| Replay buffer sample augmented (batch=256) | 1,144.1 µs/batch | ≤ 1,400 µs | IQR ±2 µs |
 | GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
 | VRAM usage (process) | 0.10 GB / 8.6 GB | ≤ 80% | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |
-| Worker throughput | 735,777 pos/hr | ≥ 625,000 pos/hr | IQR ±11k (1.5%); single-pool warm-up methodology (2026-04-03) |
-| Batch fill % | 95.2% | ≥ 80% | IQR ±0.4% |
+| Worker throughput | 758,226 pos/hr | ≥ 625,000 pos/hr | IQR ±33k (4.4%); split-compile baseline (2026-04-04) |
+| Batch fill % | 98.0% | ≥ 80% | IQR ±0.7% |
 
 Historical variance note: before the warm-up/n=5/pinning methodology, single-run
 benchmarks showed ±50% swings due to LLVM codegen lottery and AMD boost clocks.
@@ -501,6 +501,8 @@ See `docs/03_TOOLING.md` § "Benchmark variance (historical)" for details.
 measure an undersized model. This run reflects the correct Phase 4.0
 production architecture (12 residual blocks × 128 channels). VRAM measurement
 also corrected from pynvml global to torch.cuda.max_memory_allocated().
+2026-04-04: torch.compile re-enabled (split train/inf instances). MCTS target
+rebaselined for correct hex-ball-8 legal move rule.
 
 ## Phase 4.0 architecture baseline
 
@@ -508,6 +510,10 @@ Starting config for self-play RL (do not exceed without benchmarking):
 - Network: 12 residual blocks × 128 channels, SE blocks on every block
 - Value head: global avg + max pooling → FC → BCE loss (binary cross-entropy on sigmoid)
 - Auxiliary loss: opponent reply prediction (weight 0.15)
+- torch.compile: ENABLED — split model instances (train + inf), see scripts/train.py
+  - train_model: owned by Trainer (main thread), compiled for gradient updates
+  - inf_model: owned by InferenceServer (daemon thread), compiled for forward-only passes
+  - Weight sync: inf_model ← train_model after every checkpoint save and model promotion
 - Replay buffer: start at 250K samples, grow toward 1M as training stabilises
 - ELO benchmark target: SealBot (replaces Ramora0 as external reference)
 

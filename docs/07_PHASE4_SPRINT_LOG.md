@@ -815,3 +815,80 @@ Source: `docs/10_COMMUNITY_BOT_ANALYSIS.md` §5.1C and §5.1D (KrakenBot practic
 - Rationale: with ~51.6% P1 win rate in the corpus, draws are suboptimal for the stronger player. Negative draw reward pushes the network to press for wins rather than settle.
 
 **Why negative is correct:** The value head learns `z ∈ {-1, +1}` with draws at `-0.1`. This makes draws strictly worse than wins but also worse than a neutral 0.0, which actively discourages draw-seeking. It mirrors the KrakenBot tuning that produced stronger play in sustained self-play.
+
+---
+
+### 25. Re-enable torch.compile — split train/inf model instances (2026-04-04)
+**Files:** `scripts/train.py`, `configs/training.yaml`, `hexo_rl/training/trainer.py`,
+`tests/test_trainer.py`, `tests/test_board.py`
+
+**Problem:** torch.compile was disabled (`torch_compile: false` in training.yaml) because
+the same compiled model instance was shared between the Trainer (main thread) and
+InferenceServer (its own thread). CUDA graphs captured by `reduce-overhead` mode are
+bound to a specific CUDA stream and thread — sharing them across threads caused silent
+corruption or crashes.
+
+**Fix — split model instances:**
+
+- `train_model` = `trainer.model`. Compiled in `Trainer.__init__` as before.
+  Exclusively owned by the main process thread (gradient updates).
+- `inf_model` = separate `HexTacToeNet` instance created in `train.py` after
+  trainer setup. Compiled independently. Passed to `WorkerPool` (and therefore
+  `InferenceServer`) — never touches the main thread after init.
+- Both compiled with `mode="reduce-overhead", fullgraph=False`. Graceful fallback
+  on exception (log warning, continue uncompiled).
+
+**Weight synchronisation:**
+
+```python
+def _sync_weights_to_inf():
+    train_base = getattr(trainer.model, "_orig_mod", trainer.model)
+    inf_base   = getattr(inf_model,     "_orig_mod", inf_model)
+    inf_base.load_state_dict(train_base.state_dict())
+```
+
+Sync points:
+1. **Startup** — `inf_model.load_state_dict(train_base.state_dict())` immediately after
+   creation (and after `Trainer.load_checkpoint` for resume runs).
+2. **Checkpoint saves** — every `checkpoint_interval` steps (detected by
+   `train_step % _ckpt_interval == 0` after `trainer.train_step()` returns).
+3. **Model promotion** — when eval pipeline promotes current model to new best.
+
+`load_state_dict` on `_orig_mod` updates parameters in-place. CUDA graph replay in
+`reduce-overhead` mode uses the memory addresses recorded at capture time, so in-place
+weight updates are picked up on the next graph replay without recompilation.
+
+**Checkpoint save / load / export:** unchanged — `save_full_checkpoint` and
+`save_inference_weights` already use `get_base_model()` (`_orig_mod` unwrap), so they
+correctly save from `train_model` only.
+
+**Other fixes in this commit:**
+
+- `hexo_rl/training/trainer.py`: cast float16 buffer states to float32 when `fp16=False`
+  to avoid type mismatch between buffer data and model weights in test contexts.
+- `tests/test_trainer.py` `test_scheduler_steps_each_train_step`: add `fp16: False` so
+  FP16 gradient overflow cannot non-deterministically skip `scheduler.step()`.
+- `tests/test_board.py` `test_legal_move_count_decrements`: update expected counts (24→216,
+  28→232) to match the new hex-ball-radius-8 legal move rule (correct official rule).
+
+**bench.full delta (2026-04-04, torch.compile ENABLED vs prior disabled baseline):**
+
+| Metric | Before (disabled) | After (split+compile) | Delta | Pass? |
+|---|---|---|---|---|
+| MCTS sim/s | 164,946† | 52,959 | −68% (board rule change†) | ✅ ≥45,000 |
+| NN inference b=64 | 10,201 | 11,038 | +8.2% | ✅ |
+| NN latency b=1 | 2.82 ms | 2.93 ms | +3.9% (within IQR) | ✅ |
+| Buffer push | 755,880 | 802,585 | +6.2% | ✅ |
+| Buffer sample raw | 1,237.6 µs | 1,253.4 µs | +1.3% | ✅ |
+| Buffer sample aug | 1,177 µs | 1,144.1 µs | −2.8% | ✅ |
+| GPU util | 100.0% | 100.0% | 0% | ✅ |
+| VRAM | 0.10 GB | 0.10 GB | 0% | ✅ |
+| Worker throughput | 735,777 | 758,226 | +3.0% | ✅ |
+| Batch fill % | 95.2% | 98.0% | +2.8pp | ✅ |
+
+†MCTS regression is from the concurrent `board/moves.rs` change switching legal moves
+from bbox+2 margin (old, incorrect) to hex-ball radius 8 (official rule). That change
+expands branching factor ~9× → proportionally reduces sim/s. Unrelated to torch.compile.
+MCTS target rebaselined to ≥45,000 (85% of new 52,959 median). All 10 targets PASS.
+
+**Test counts:** 71 Rust + 573 Python, all passing.
