@@ -45,5 +45,7 @@ mixing:
   min_pretrained_weight: 0.1
   initial_pretrained_weight: 0.8
   pretrain_max_samples: 200_000  # cap corpus loaded into Rust buffer; limits page cache to ~2.5 GB
+  buffer_persist: true
+  buffer_persist_path: "checkpoints/replay_buffer.bin"
 
 seed: 42
