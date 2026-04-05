@@ -1680,3 +1680,29 @@ applies independently.
 **Commit:** `fix(viewer): rotate disk game files, cap at viewer_max_disk_games`
 
 **Test counts:** 603 Python, all passing.
+
+---
+
+### 45. RSS memory tracking added to system monitoring (2026-04-05)
+**Files:** `hexo_rl/monitoring/gpu_monitor.py`, `hexo_rl/monitoring/terminal_dashboard.py`,
+`hexo_rl/monitoring/static/index.html`
+
+**Problem:** Overnight run OOMed with no RSS history — impossible to tell whether
+it was a slow leak, a spike, or which component was responsible.
+
+**Fix:** Process RSS (`psutil.Process().memory_info().rss`) is now sampled on
+every gpu_monitor poll cycle and included in the `system_stats` event as `rss_gb`.
+
+- `_PROCESS = psutil.Process()` created once at module level (not per cycle).
+- Wrapped in its own `try/except`; emits `rss_gb=0.0` and logs a warning on failure —
+  never propagates (monitoring invariant preserved).
+- Terminal dashboard system row: `rss  X.X GB` added between `ram` and `cpu`.
+- Web dashboard system panel: `RSS` row added between `RAM` and `CPU`; populated
+  by `onSystemStats` JS handler when `rss_gb` is present in the event.
+
+No new config keys. No changes to events.py, web_dashboard.py, or any
+training/selfplay files. Monitoring invariant fully preserved.
+
+**Commit:** `feat(monitoring): add RSS memory tracking to system stats panel`
+
+**Test counts:** 603 Python, all passing.
