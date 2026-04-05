@@ -387,7 +387,8 @@ monitoring:
   web_dashboard: true
   web_port: 5001
   log_interval: 10               # emit training_step every N steps
-  event_log_maxlen: 500          # in-memory event replay buffer
+  event_log_maxlen: 500          # in-memory event replay buffer (non-game events + stripped game refs)
+  viewer_max_memory_games: 50    # max game refs held in _game_index; full records written to disk
 
   # Alert thresholds
   alert_entropy_min: 1.0         # RED — collapse imminent

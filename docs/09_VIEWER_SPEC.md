@@ -237,22 +237,23 @@ def viewer_page():
 
 @app.route("/viewer/recent")
 def viewer_recent():
+    # Reads lightweight refs from _game_index (maxlen=50), not _event_history.
     n = min(int(request.args.get("n", 20)), 100)
     with _history_lock:
-        games = [e for e in _event_history if e.get("event") == "game_complete"]
+        refs = list(_game_index)
     return jsonify([{
-        "game_id": g["game_id"], "winner": g["winner"],
-        "moves": g["moves"], "ts": g["ts"],
-    } for g in reversed(games[-n:])])
+        "game_id": r["game_id"], "winner": r["winner"],
+        "moves": r["moves"], "ts": r["ts"],
+    } for r in reversed(refs[-n:])])
 
 @app.route("/viewer/game/<game_id>")
 def viewer_game(game_id):
-    with _history_lock:
-        record = next((e for e in _event_history
-                       if e.get("event") == "game_complete"
-                       and e.get("game_id") == game_id), None)
-    if record is None:
+    # Loads full record from disk (runs/<run_id>/games/<game_id>.json).
+    # Falls back to glob search for games evicted from the 50-entry index.
+    path_str = _lookup_game_path(game_id)  # index → disk fallback
+    if path_str is None:
         return jsonify({"error": "game not found"}), 404
+    record = json.loads(Path(path_str).read_text())
     return jsonify(_viewer_engine.enrich_game(record))
 
 @app.route("/viewer/play", methods=["POST"])
