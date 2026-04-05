@@ -364,6 +364,11 @@ def main() -> None:
         del pre_states, pre_policies, pre_outcomes   # release mmap; Rust has the data
         del data
         log.info("corpus_loaded", positions=T, seconds=f"{time.time()-t0:.1f}")
+        emit_event({
+            "event": "system_stats",
+            "buffer_size": buffer.size,
+            "buffer_capacity": capacity,
+        })
     elif pretrained_path:
         log.warning(
             "corpus_npz_not_found",

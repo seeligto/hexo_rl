@@ -165,6 +165,7 @@ class WorkerPool:
         _pol_buf = np.empty(self._pol_len, dtype=np.float32)
         _in_ch = self._feat_len // (self._board_size * self._board_size)
         _feat_2d = _feat_buf.reshape(_in_ch, self._board_size, self._board_size)
+        _last_buf_emit = time.monotonic()
         while not self._stop_event.is_set():
             # collect_data() returns pre-built numpy arrays from Rust — no Python list
             # allocation or pymalloc arena growth. feats_np is (N, feat_len) float32,
@@ -256,6 +257,17 @@ class WorkerPool:
                     winner_code=winner_code,
                     game_length=plies,
                 )
+
+            # Emit buffer stats at ~5s resolution so dashboard stays fresh
+            # between iteration_complete events.
+            _now_buf = time.monotonic()
+            if _now_buf - _last_buf_emit >= 5.0:
+                _last_buf_emit = _now_buf
+                emit_event({
+                    "event": "system_stats",
+                    "buffer_size": self.replay_buffer.size,
+                    "buffer_capacity": self.replay_buffer.capacity,
+                })
 
             time.sleep(0.1)
 
