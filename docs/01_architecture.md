@@ -270,9 +270,9 @@ states, policies, outcomes = buf.sample_batch(batch_size, augment=True)
 | Outcome | Reward for winner | Reward for loser |
 |---|---|---|
 | Win by 6-in-a-row | +1.0 | -1.0 |
-| Draw (if applicable) | -0.1 | -0.1 |
+| Draw (if applicable) | -0.5 | -0.5 |
 
-Negative draw reward (configurable via `draw_reward` in `configs/training.yaml`). Teaches the network to press for wins rather than accept draws. In a game with ~51.6% P1 win rate, draws are suboptimal for the stronger player. Source: KrakenBot practice (docs/10_COMMUNITY_BOT_ANALYSIS.md §5.1D). Changed from +0.01 on 2026-04-04.
+Negative draw reward (configurable via `draw_reward` in `configs/training.yaml`). Teaches the network to press for wins rather than accept draws. In a game with ~51.6% P1 win rate, draws are suboptimal for the stronger player. Source: KrakenBot practice (docs/10_COMMUNITY_BOT_ANALYSIS.md §5.1D). Changed from +0.01 on 2026-04-04; raised from -0.1 to -0.5 on 2026-04-05 after first overnight self-play run produced 56% draws — at that frequency -0.1 was dominated by win/loss signal and failed to discourage draw-seeking.
 
 ### Optional shaped rewards (decay to zero)
 

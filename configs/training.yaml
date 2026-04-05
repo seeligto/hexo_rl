@@ -18,7 +18,7 @@ max_checkpoints_kept: 10
 log_interval: 10        # also controls web-dashboard send frequency
 aux_opp_reply_weight: 0.15
 entropy_reg_weight: 0.01  # policy entropy regularization (KrakenBot-style, prevents policy collapse)
-draw_reward: -0.1         # draw outcome value target (was +0.01; negative = press for wins)
+draw_reward: -0.5         # draw outcome value target (was -0.1; raised after 56% draw collapse in first overnight run)
 recency_weight: 0.75      # fraction of each batch from the recent-position ring buffer (newest ~50% of buffer)
 uncertainty_weight: 0.05  # weight for value uncertainty head (Gaussian NLL); diagnostic only — never used in MCTS
 ownership_weight: 0.1     # weight for ownership auxiliary head (spatial MSE); training only

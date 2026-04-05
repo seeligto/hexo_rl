@@ -1495,3 +1495,45 @@ Immediate next steps:
    1.5 after 5k steps, consider fresh bootstrap start
 3. Watch `ownership_loss` and `threat_loss` alongside policy/value — both should
    decrease over the first 10k RL steps
+
+---
+
+### 40. Raise draw_reward -0.1 → -0.5 (draw collapse fix) (2026-04-05)
+**Files:** `configs/training.yaml`, `docs/01_architecture.md`
+
+**Observed failure:** First overnight self-play run produced 56.6% draws, with
+nearly half of games hitting the 180-move cap. Both players scored ~20% wins.
+This is early self-play's classic failure mode: two equally weak players can't
+finish games, so everything runs to the cap and gets scored as a draw.
+
+**Root cause:** At 56% draw frequency the expected value target per position is
+`0.56 × draw_reward`. With `draw_reward = -0.1` that is only **-0.056** — far
+too weak a signal against the ±1.0 win/loss targets. The value head was training
+predominantly on draw data and learning "draws are what happens" rather than
+learning to pursue wins.
+
+**The §24 KrakenBot rationale (-0.1) assumed draws were the minority outcome.**
+That assumption was correct for a trained network where draws occur occasionally.
+At 56% frequency the incentive structure inverts: the model needs the draw penalty
+to dominate the gradient to break the equilibrium.
+
+**Fix:** `draw_reward: -0.1` → `draw_reward: -0.5`
+
+At 56% draws the expected target becomes **-0.280**, a clear gradient away from
+draw-seeking behaviour. Once draws become rare the penalty rarely fires and the
+value distribution naturally re-centres on ±1.0 outcomes. -0.5 is well within
+the [-1, +1] range and can be tuned down later if draws overcorrect to near zero.
+
+**Why not -0.4:** At 56% frequency the difference between -0.4 and -0.5 is
+0.056 per position — meaningful. -0.4 risks being too timid to break the mode
+decisively; -0.5 is the cleaner choice to force the transition.
+
+**Also applied in this session (§40b):** config reductions committed separately:
+- `buffer_schedule`: 0→100K / 150K→250K / 500K→500K (was 250K/500K/1M)
+- `playout_cap.standard_sims`: 400→200, `fast_sims`: 50→30
+- `mixing.decay_steps`: 1_000_000→300_000
+
+**Commit:**
+- `config(training): raise draw_reward -0.1→-0.5 to break draw-collapse mode`
+
+**Test counts:** 603 Python, all passing.
