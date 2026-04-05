@@ -361,3 +361,54 @@ def test_benchmark_sample_latency(capsys):
         f"sample_batch({BATCH}) took {rust_ms:.2f} ms — target < 128 ms "
         f"({rust_ms/BATCH*1000:.2f} µs/sample, target < 500 µs/sample)"
     )
+
+
+# ── Persistence (save/load) ──────────────────────────────────────────────────
+
+def test_buffer_save_load_roundtrip(tmp_path):
+    """Push N positions, save, load into fresh buffer, verify size and data."""
+    buf = make_buf(200)
+    push_n(buf, 150)
+    assert buf.size == 150
+
+    path = str(tmp_path / "buf.bin")
+    buf.save_to_path(path)
+
+    buf2 = make_buf(200)
+    n_loaded = buf2.load_from_path(path)
+    assert n_loaded == 150
+    assert buf2.size == 150
+
+    # Verify data is valid by sampling
+    states, policies, outcomes = buf2.sample_batch(10, augment=False)
+    assert states.shape == (10, CHANNELS, BOARD_SIZE, BOARD_SIZE)
+    assert policies.shape == (10, N_ACTIONS)
+    assert outcomes.shape == (10,)
+
+
+def test_buffer_load_missing_file_ok(tmp_path):
+    """load_from_path on nonexistent path returns 0, no exception."""
+    buf = make_buf(100)
+    path = str(tmp_path / "nonexistent.bin")
+    n = buf.load_from_path(path)
+    assert n == 0
+    assert buf.size == 0
+
+
+def test_buffer_load_size_mismatch(tmp_path):
+    """Save from capacity=500, load into capacity=250 → loads 250 (most recent)."""
+    buf_big = make_buf(500)
+    push_n(buf_big, 500)
+    assert buf_big.size == 500
+
+    path = str(tmp_path / "buf.bin")
+    buf_big.save_to_path(path)
+
+    buf_small = make_buf(250)
+    n_loaded = buf_small.load_from_path(path)
+    assert n_loaded == 250
+    assert buf_small.size == 250
+
+    # Verify data is valid
+    states, policies, outcomes = buf_small.sample_batch(10, augment=False)
+    assert states.shape == (10, CHANNELS, BOARD_SIZE, BOARD_SIZE)
