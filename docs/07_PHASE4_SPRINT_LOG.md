@@ -1828,3 +1828,42 @@ precision, consistent with the §47 entropy fix pattern.
 - `fix(training): guard uncertainty head against FP16 sigma2 underflow`
 
 **Test counts:** 86 Rust + 604 Python, all passing.
+
+---
+
+### 50. Batch buffer warm-up fallback + stale BCE docstring (2026-04-05)
+**Files:** `scripts/train.py`, `hexo_rl/training/losses.py`
+
+**Investigation:** The §49 session brief identified value BCE and threat BCE as
+remaining `F.binary_cross_entropy(sigmoid(x), target)` uses. Code audit found both
+were already fixed prior to §47:
+
+- `compute_value_loss()` (`losses.py:46`) already uses
+  `nn.functional.binary_cross_entropy_with_logits` — present since the value head
+  overhaul in §1.
+- Threat head (`network.py:204-205`) already returns raw logits (no sigmoid). Trainer
+  (`trainer.py:308-310`) already uses `binary_cross_entropy_with_logits` for threat
+  loss — introduced when the threat head was added in §37.
+
+The module docstring (`losses.py` line 6) and function docstring (line 44) still
+described the old `BCE(sigmoid(v_logit), ...)` form. Corrected to match the
+implementation.
+
+**Batch buffer warm-up edge case:**
+The pre-allocated `np.copyto` path added in §46 assumed sampled arrays always have
+exactly the requested number of rows. During warm-up (first ~100 K positions), the
+Rust replay buffer may have fewer entries than `n_self_uniform` and can return fewer
+rows than requested. This causes a shape mismatch crash in `np.copyto`.
+
+**Fix:** Added `n_available = n_pre + len(s_r) + len(s_u)` (recency path) and
+`n_available = n_pre + len(s_self)` (uniform path) checks after sampling. When
+`n_available < batch_size` (warm-up period), fall back to `np.concatenate` — correct
+but allocates. When the buffer fills to `batch_size`, flip `_warmup_fallback_active`
+to `False` and log one `buffer_warmup_ended` event at info level. From that point
+onward the in-place path is used permanently.
+
+**Commits:**
+- `fix(train): batch buffer warm-up fallback when buffer underfull`
+- `docs(training): correct stale BCE docstring in losses.py + sprint §50`
+
+**Test counts:** 86 Rust + 604 Python, all passing.
