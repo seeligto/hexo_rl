@@ -1742,3 +1742,47 @@ Three confirmed leak sources:
 - `fix(train): pre-allocate mixed batch arrays to eliminate heap fragmentation`
 
 **Test counts:** 86 Rust + 604 Python, all passing.
+
+### 47. Guard FP16 0×-inf NaN in aux CE and entropy (2026-04-05)
+
+**Problem:** Run `0944a606` produced NaN loss at step 590. Root cause: `0.0 × (-inf) = NaN`
+under FP16 autocast in two locations, compounded by BatchNorm running stats being poisoned
+before GradScaler could act.
+
+**Root cause chain:**
+
+1. **`compute_aux_loss` (primary source):** The opp_reply head's log-softmax produces
+   `-inf` entries under FP16 when logit spread exceeds ~17.5 nats. After `policy_prune_frac`
+   zeroes low-visit entries in the target distribution, those zero entries pair with `-inf`
+   log-probs → `0.0 × -inf = NaN` in the cross-entropy sum.
+
+2. **Entropy bonus/diagnostic:** Same pattern in the manual `-(p * log_p).sum()` computation.
+   `log_policy.exp()` underflows to 0.0 for near-zero probabilities under FP16, then
+   multiplies the corresponding `-inf` log entry.
+
+3. **BatchNorm contamination:** BN running stats (`running_mean`, `running_var`) are updated
+   during the forward pass, _before_ GradScaler can inspect or skip the step. One poisoned
+   forward pass permanently NaN's all subsequent passes regardless of whether the optimizer
+   step was skipped.
+
+**Fixes (`fix(training): guard aux CE and entropy against FP16 0×-inf NaN`):**
+
+- **`losses.py` — `compute_aux_loss`:** Clamp log-probs to `min=-100.0` before multiplying
+  by target_policy. `exp(-100) ≈ 0` preserves all meaningful gradient information.
+
+- **`trainer.py` — entropy (two sites):** Replace `-(p * log_p).sum()` with
+  `torch.special.entr(p_fp32).sum()`, which defines `0·log(0) ≡ 0` and promotes to FP32
+  before `exp()` to avoid FP16 underflow.
+
+- **`trainer.py` — NaN guard:** After `compute_total_loss()`, before `fp16_backward_step()`:
+  detect non-finite loss, reset any BN module with poisoned `running_mean`, call
+  `scaler.update()` to let loss scale decay, and return early without touching weights.
+
+**Why GradScaler alone wasn't enough:** GradScaler calls `torch.isinf()` on gradients, not
+`torch.isnan()`. A NaN-producing `0 × -inf` operation slips past the inf check entirely.
+BN stat corruption then propagates even if the optimizer step is skipped.
+
+**Commits:**
+- `fix(training): guard aux CE and entropy against FP16 0×-inf NaN`
+
+**Test counts:** 86 Rust + 604 Python, all passing.
