@@ -1604,3 +1604,35 @@ Config location: `pretrain_max_samples` lives under `mixing` in `training.yaml` 
 - `fix(pretrain): cap page cache footprint via pretrain_max_samples`
 
 **Test counts:** 603 Python, all passing.
+
+---
+
+### 42. Viewer game replays written to disk, in-memory index capped (2026-04-05)
+**Files:** `hexo_rl/monitoring/web_dashboard.py`, `configs/monitoring.yaml`
+
+**Problem:** `WebDashboard._event_history` (deque maxlen=500) accumulated full
+`game_complete` payloads — moves, moves_list, moves_detail, value_trace — consuming
+1–3 GB of RAM over a long training run.
+
+**Fix:** Full game records are now written to disk on arrival at
+`runs/<run_id>/games/<game_id>.json`. Only a lightweight ref `{game_id, path,
+winner, moves, worker_id, ts}` is kept in a separate `_game_index` deque (maxlen=50).
+`_event_history` still receives a stripped copy (moves_list/moves_detail/value_trace
+removed) for SocketIO `replay_history` replay on browser reconnect.
+
+`/viewer/recent` reads `_game_index`. `/viewer/game/<id>` loads from disk via the
+index path, with a glob fallback across `runs/*/games/` for games evicted from the
+50-entry index. Disk write failures emit `log.warning("game_persist_failed")` and
+never propagate.
+
+`run_id` is captured from the `run_start` event (uuid set in `scripts/train.py`);
+defaults to `"default"` if no run_start has arrived.
+
+New config key: `monitoring.viewer_max_memory_games: 50`.
+
+**Invariants unchanged:** events.py dispatch untouched; no training/selfplay files
+modified; public viewer API routes unchanged.
+
+**Commit:** `fix(viewer): write game replays to disk, cap in-memory index`
+
+**Test counts:** 603 Python, all passing.
