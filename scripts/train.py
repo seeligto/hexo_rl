@@ -397,6 +397,8 @@ def main() -> None:
     _states_buf   = np.empty((_batch_size_cfg, 18, 19, 19), dtype=np.float16)
     _policies_buf = np.empty((_batch_size_cfg, _N_ACTIONS), dtype=np.float32)
     _outcomes_buf = np.empty(_batch_size_cfg, dtype=np.float32)
+    # Flips to False the first step buffer is full enough to use in-place copy.
+    _warmup_fallback_active = True
 
     # ── Self-play pool ──
     from hexo_rl.selfplay.pool import WorkerPool
@@ -650,7 +652,7 @@ def main() -> None:
                     break
 
                 # ── Buffer growth schedule ──
-                nonlocal schedule_idx
+                nonlocal schedule_idx, _warmup_fallback_active
                 while schedule_idx < len(buffer_schedule) and train_step >= buffer_schedule[schedule_idx]["step"]:
                     new_cap = buffer_schedule[schedule_idx]["capacity"]
                     if new_cap > buffer.capacity:
@@ -692,24 +694,51 @@ def main() -> None:
                             n_self_uniform = n_self - n_self_recent
                             s_r, p_r, o_r = recent_buffer.sample(n_self_recent)
                             s_u, p_u, o_u = buffer.sample_batch(max(1, n_self_uniform), True)
-                            np.copyto(_states_buf[:n_pre], s_pre)
-                            np.copyto(_states_buf[n_pre:n_pre + n_self_recent], s_r)
-                            np.copyto(_states_buf[n_pre + n_self_recent:], s_u)
-                            np.copyto(_policies_buf[:n_pre], p_pre)
-                            np.copyto(_policies_buf[n_pre:n_pre + n_self_recent], p_r)
-                            np.copyto(_policies_buf[n_pre + n_self_recent:], p_u)
-                            np.copyto(_outcomes_buf[:n_pre], o_pre)
-                            np.copyto(_outcomes_buf[n_pre:n_pre + n_self_recent], o_r)
-                            np.copyto(_outcomes_buf[n_pre + n_self_recent:], o_u)
+                            n_r = len(s_r)
+                            n_u = len(s_u)
+                            n_available = n_pre + n_r + n_u
+                            if n_available < batch_size:
+                                # Warm-up: buffer returned fewer rows than requested — fall back to
+                                # concatenate (allocates, but only happens until buffers fill).
+                                states   = np.concatenate([s_pre, s_r, s_u], axis=0)
+                                policies = np.concatenate([p_pre, p_r, p_u], axis=0)
+                                outcomes = np.concatenate([o_pre, o_r, o_u], axis=0)
+                            else:
+                                if _warmup_fallback_active:
+                                    log.info("buffer_warmup_ended", step=train_step,
+                                             n_available=n_available, batch_size=batch_size)
+                                    _warmup_fallback_active = False
+                                np.copyto(_states_buf[:n_pre], s_pre)
+                                np.copyto(_states_buf[n_pre:n_pre + n_r], s_r)
+                                np.copyto(_states_buf[n_pre + n_r:], s_u)
+                                np.copyto(_policies_buf[:n_pre], p_pre)
+                                np.copyto(_policies_buf[n_pre:n_pre + n_r], p_r)
+                                np.copyto(_policies_buf[n_pre + n_r:], p_u)
+                                np.copyto(_outcomes_buf[:n_pre], o_pre)
+                                np.copyto(_outcomes_buf[n_pre:n_pre + n_r], o_r)
+                                np.copyto(_outcomes_buf[n_pre + n_r:], o_u)
+                                states, policies, outcomes = _states_buf, _policies_buf, _outcomes_buf
                         else:
                             s_self, p_self, o_self = buffer.sample_batch(max(1, n_self), True)
-                            np.copyto(_states_buf[:n_pre], s_pre)
-                            np.copyto(_states_buf[n_pre:], s_self)
-                            np.copyto(_policies_buf[:n_pre], p_pre)
-                            np.copyto(_policies_buf[n_pre:], p_self)
-                            np.copyto(_outcomes_buf[:n_pre], o_pre)
-                            np.copyto(_outcomes_buf[n_pre:], o_self)
-                        states, policies, outcomes = _states_buf, _policies_buf, _outcomes_buf
+                            n_s = len(s_self)
+                            n_available = n_pre + n_s
+                            if n_available < batch_size:
+                                # Warm-up: buffer returned fewer rows than requested — fall back.
+                                states   = np.concatenate([s_pre, s_self], axis=0)
+                                policies = np.concatenate([p_pre, p_self], axis=0)
+                                outcomes = np.concatenate([o_pre, o_self], axis=0)
+                            else:
+                                if _warmup_fallback_active:
+                                    log.info("buffer_warmup_ended", step=train_step,
+                                             n_available=n_available, batch_size=batch_size)
+                                    _warmup_fallback_active = False
+                                np.copyto(_states_buf[:n_pre], s_pre)
+                                np.copyto(_states_buf[n_pre:], s_self)
+                                np.copyto(_policies_buf[:n_pre], p_pre)
+                                np.copyto(_policies_buf[n_pre:], p_self)
+                                np.copyto(_outcomes_buf[:n_pre], o_pre)
+                                np.copyto(_outcomes_buf[n_pre:], o_self)
+                                states, policies, outcomes = _states_buf, _policies_buf, _outcomes_buf
                     loss_info = trainer.train_step_from_tensors(
                         states, policies, outcomes,
                         ownership_targets=own_targets, threat_targets=thr_targets,
