@@ -468,6 +468,7 @@ def main() -> None:
     # ── Graceful shutdown ──
     _running = [True]
     _stop_count = [0]
+    _shutdown_save = [False]  # set by signal handler; checked in loop to save before pool.stop()
 
     def _stop(sig, frame):
         _stop_count[0] += 1
@@ -475,6 +476,7 @@ def main() -> None:
             # Second Ctrl+C — force exit immediately (e.g. pool.stop() hung)
             sys.exit(1)
         log.info("shutdown_requested", msg="finishing current step… press Ctrl+C again to force")
+        _shutdown_save[0] = True
         _running[0] = False
 
     signal.signal(signal.SIGINT,  _stop)
@@ -576,6 +578,15 @@ def main() -> None:
         while _running[0]:
             if stop_step is not None and train_step >= stop_step:
                 log.info("iteration_limit_reached", iterations=args.iterations)
+                break
+
+            if _shutdown_save[0]:
+                log.info(
+                    "shutdown_signal_checkpoint",
+                    msg="Shutdown signal received — saving checkpoint before exit",
+                    step=train_step,
+                )
+                trainer.save_checkpoint(last_loss_info if last_loss_info else None)
                 break
 
             # ── Training Throttling ──
