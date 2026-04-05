@@ -1927,3 +1927,94 @@ All 10 targets PASS. Worker throughput 729,919 (+0.9% vs §39 baseline) — with
   (also contains drain_game_results fix — single file, committed together)
 
 **Test counts:** 86 Rust + 604 Python, all passing.
+
+---
+
+### §46. Buffer display fix + buffer persistence + inference autocast fix
+**Files:** `hexo_rl/selfplay/pool.py`, `scripts/train.py`,
+`engine/src/replay_buffer/mod.rs`, `configs/training.yaml`,
+`tests/test_rust_replay_buffer.py`, `hexo_rl/selfplay/inference_server.py`
+
+**Problem 1 — Dashboard buffer row goes stale:**
+Between `iteration_complete` events (every `log_interval` steps), the buffer
+display showed stale data. `gpu_monitor.py` emits `system_stats` every 5s but
+never included `buffer_size`. The pool stats thread pushed positions but emitted
+only `game_complete` events.
+
+**Fix:** Pool `_stats_loop` now emits `system_stats` with `buffer_size` /
+`buffer_capacity` every ~5s (throttled, not every 0.1s loop tick). Also emit
+after corpus loading completes to give the dashboard an initial buffer state.
+Dashboard merge logic (`terminal_dashboard.py`, `web_dashboard.py`) already
+handles partial `system_stats` updates — no renderer changes needed.
+
+**Problem 2 — Buffer lost on shutdown:**
+The Rust ReplayBuffer contents were discarded on clean shutdown, causing a
+20–65 minute cold-start penalty on `make train.resume`.
+
+**Fix — Rust persistence API:**
+Added `save_to_path(path)` and `load_from_path(path)` to ReplayBuffer.
+
+Binary format (HEXB v1, little-endian native):
+```
+[magic: u32 = 0x48455842]  // "HEXB"
+[version: u32 = 1]
+[capacity: u64]
+[size: u64]
+// Per position (oldest → newest):
+//   state:  6498 × u16   (12,996 bytes)
+//   policy: 362 × f32    (1,448 bytes)
+//   outcome: f32          (4 bytes)
+//   game_id: i64          (8 bytes)
+//   weight:  u16          (2 bytes)
+// Total: 14,458 bytes/entry
+```
+
+- `save_to_path`: linearizes ring buffer (oldest→newest), writes via BufWriter.
+- `load_from_path`: validates magic+version, loads min(saved_size, capacity)
+  most recent positions (skips oldest if saved > capacity), rebuilds weight
+  histogram. Missing file returns Ok(0) silently (first-run case).
+- File size: ~1.4 GB for 100K positions, ~7.2 GB for 500K.
+
+**Fix — Python wiring:**
+- SIGINT/SIGTERM handler: saves buffer after checkpoint save.
+- Resume path: restores buffer before pool.start(). **Skips corpus prefill**
+  when buffer was restored — stale corpus is unnecessary on top of fresh
+  self-play data.
+- Gated on `mixing.buffer_persist: true` (default) in `configs/training.yaml`.
+
+**RecentBuffer repopulation — deferred:**
+The Rust API doesn't expose a position iterator. RecentBuffer fills naturally
+from new self-play within ~30 minutes. Adding a `get_positions(start, count)`
+method to expose a slice of the ring buffer for RecentBuffer seeding is a
+clean follow-up if cold-start time matters.
+
+**Problem 3 — Inference tests fail on CPU-only environments:**
+`torch.autocast("cpu")` produces bfloat16 (vs float16 on CUDA). NumPy doesn't
+support bfloat16, so `log_policy.exp().cpu().numpy()` threw
+`TypeError: Got unsupported ScalarType BFloat16`.
+
+**Fix:** Added `.float()` before `.numpy()` and re-normalize `exp(log_policy)`
+to correct reduced-precision rounding drift (bfloat16 has only 7-bit mantissa,
+so exp() over 362 actions can drift ~1.2% from sum=1.0). The `.float()` call
+is a no-op when the tensor is already float32, so zero impact on CUDA path.
+
+**Config changes (`configs/training.yaml`):**
+```yaml
+mixing:
+  buffer_persist: true
+  buffer_persist_path: "checkpoints/replay_buffer.bin"
+```
+
+**Tests added:**
+- `test_buffer_save_load_roundtrip` — push 150 positions, save, load, verify
+- `test_buffer_load_missing_file_ok` — nonexistent path returns 0
+- `test_buffer_load_size_mismatch` — save cap=500, load into cap=250
+
+**Commits:**
+- `fix(dashboard): emit buffer_size during corpus load and from pool stats thread`
+- `feat(engine): ReplayBuffer.save_to_path / load_from_path for buffer persistence`
+- `feat(training): save and restore replay buffer on shutdown/resume`
+- `fix(inference): cast autocast output to float32 before numpy conversion`
+
+**Test counts:** 86 Rust + 596 Python passing (3 env-specific failures on
+remote server: 2 psutil not installed, 1 missing game data files).
