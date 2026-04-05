@@ -1867,3 +1867,63 @@ onward the in-place path is used permanently.
 - `docs(training): correct stale BCE docstring in losses.py + sprint §50`
 
 **Test counts:** 86 Rust + 604 Python, all passing.
+
+---
+
+### 51. collect_data/drain_game_results return numpy arrays — eliminate pymalloc RSS growth (2026-04-05)
+**Files:** `engine/src/game_runner.rs`, `hexo_rl/selfplay/pool.py`, `tests/test_worker_pool.py`
+
+**Root cause confirmed:** `collect_data()` returned `Vec<(Vec<f32>, Vec<f32>, f32, usize)>`.
+PyO3 converts each `Vec<f32>` to a Python list of Python float objects using pymalloc arenas.
+At 7 positions/sec × ~164 KB pymalloc/position ≈ 1.1 MB/sec pymalloc growth; arenas are
+never returned to the OS → ~0.15 GB/min RSS leak. Estimated 1.5–2.5 GB fragmentation over
+a 40-minute run.
+
+**Fix — `collect_data()`:** Changed return type from `Vec<(Vec<f32>, Vec<f32>, f32, usize)>`
+to `(PyArray2<f32>, PyArray2<f32>, PyArray1<f32>, PyArray1<u64>)` (shapes: (N, feat_len),
+(N, pol_len), (N,), (N,)). Implementation drains the results queue into flat Vecs
+(`extend_from_slice` — no per-element Python overhead), then wraps via `into_pyarray + reshape`.
+This is the same zero-copy pattern used in `replay_buffer/sampling.rs::sample_batch`.
+`pol_len` stored as a new field in `SelfPlayRunner` (set from the `policy_len` constructor
+param) to handle the n=0 empty-array case without GIL overhead.
+
+**Fix — `drain_game_results()`:** Changed `ownership_flat` and `winning_line_flat` from
+`Vec<f32>` to `Py<PyArray1<f32>>` in the return tuple. `into_pyarray(py).unbind()` transfers
+Vec ownership to numpy (zero copy). Rust-internal helper `drain_game_results_raw()` added
+to the non-pymethods impl block — returns raw Vecs, used by the `cargo test` suite (which
+can't link Python in extension-module mode). The pymethods version delegates to the helper.
+
+**pool.py _stats_loop update:**
+- `collect_data()` result destructured as `feats_np, pols_np, vals_np, plies_np = ...`
+- Loop iterates `for i in range(n)` over numpy rows
+- `_feat_buf[:] = feats_np[i]` — numpy view (no copy), f32→f16 at C speed, no Python floats
+- `drain_game_results()` ownership/winning_line now numpy — `if ownership_flat:` replaced with
+  `if ownership_flat.size > 0:` (numpy array bool is ambiguous for multi-element arrays)
+- `np.array(ownership_flat, ...).reshape(...)` replaced with `ownership_flat.reshape(...)`
+  (already float32 numpy — no conversion needed)
+
+**Performance:** `collect_data` is called at ~10Hz from the stats thread, not in the MCTS
+hot path. No worker throughput regression expected or observed.
+
+**Benchmark (post-fix, 2026-04-05_21-15, n=5):**
+
+| Metric | §39 Baseline | Post-fix | Target | Status |
+|---|---|---|---|---|
+| MCTS sim/s | 31,331 | 30,808 | ≥ 26,000 | PASS |
+| NN inference batch=64 | 11,062 | 10,849 | ≥ 8,500 | PASS |
+| NN latency batch=1 | 2.75 ms | 2.93 ms | ≤ 3.5 ms | PASS |
+| Buffer push pos/s | 789,923 | 806,789 | ≥ 630,000 | PASS |
+| Buffer sample raw | 1,220.8 µs | 1,247.0 µs | ≤ 1,500 µs | PASS |
+| Buffer sample aug | 1,113.1 µs | 1,137.5 µs | ≤ 1,400 µs | PASS |
+| GPU utilization | 100% | 100% | ≥ 85% | PASS |
+| VRAM | 0.10 GB | 0.10 GB | ≤ 6.9 GB | PASS |
+| Worker throughput | 723,036 | 729,919 | ≥ 625,000 | PASS |
+| Batch fill % | 100% | 100% | ≥ 80% | PASS |
+
+All 10 targets PASS. Worker throughput 729,919 (+0.9% vs §39 baseline) — within IQR variance.
+
+**Commits:**
+- `fix(engine): collect_data returns PyArray instead of Vec to eliminate pymalloc churn`
+  (also contains drain_game_results fix — single file, committed together)
+
+**Test counts:** 86 Rust + 604 Python, all passing.
