@@ -360,6 +360,7 @@ def main() -> None:
             )
         pretrained_buffer = ReplayBuffer(capacity=T)
         pretrained_buffer.push_game(pre_states, pre_policies, pre_outcomes)
+        del pre_states, pre_policies, pre_outcomes   # release mmap; Rust has the data
         del data
         log.info("corpus_loaded", positions=T, seconds=f"{time.time()-t0:.1f}")
     elif pretrained_path:
