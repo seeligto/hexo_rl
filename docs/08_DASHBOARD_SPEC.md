@@ -125,7 +125,7 @@ No schema changes.
 
 ### 2.5 `system_stats`
 
-**Changed: added `ram_used_gb`, `ram_total_gb`, `cpu_util_pct`, `batch_fill_pct`.**
+**Changed: added `ram_used_gb`, `ram_total_gb`, `cpu_util_pct`, `batch_fill_pct`, `rss_gb`.**
 
 Emitted every 5 seconds by `gpu_monitor.py`.
 
@@ -138,18 +138,20 @@ Emitted every 5 seconds by `gpu_monitor.py`.
     "vram_total_gb":  float,
     "workers_active": int,
     "workers_total":  int,
-    "ram_used_gb":    float,           # NEW — psutil.virtual_memory().used / 1e9
-    "ram_total_gb":   float,           # NEW — psutil.virtual_memory().total / 1e9
-    "cpu_util_pct":   float,           # NEW — psutil.cpu_percent(interval=None), aggregate
+    "ram_used_gb":    float,           # psutil.virtual_memory().used / 1e9
+    "ram_total_gb":   float,           # psutil.virtual_memory().total / 1e9
+    "cpu_util_pct":   float,           # psutil.cpu_percent(interval=None), aggregate
+    "rss_gb":         float,           # NEW — psutil.Process().memory_info().rss / 1e9
 }
 ```
 
 **Implementation notes for `gpu_monitor.py`:**
 - `psutil` is already a transitive dependency. Import it at the top of the module.
+- `_PROCESS = psutil.Process()` is created once at module level (not per poll cycle).
 - `psutil.cpu_percent(interval=None)` returns the percent since the last call
   (non-blocking). Call it on every 5s poll cycle — do not use `interval=5`
   (that would block the monitor thread).
-- RAM and CPU fields must never raise. Wrap in try/except; emit 0.0 on failure.
+- RAM, CPU, and RSS fields must never raise. Wrap in try/except; emit 0.0 on failure.
 
 ### 2.6 `run_start` / `run_end`
 
@@ -188,14 +190,14 @@ No changes to `events.py` from prior spec. The module and its API are stable.
 │ avg len   48   │  P0 54.5%  P1 43.9%  draw 1.5%  │  grad  0.42    │
 ├─────────────────────────────────────────────────────────────────────┤
 │ buffer  7,755 / 250,000 (3%)  │  sp 24%  pre 76%                   │
-│ gpu 99%  │  vram 5.5/8.6 GB  │  ram 32.1/48.0 GB  │  cpu 87%      │
+│ gpu 99%  │  vram 5.5/8.6 GB  │  ram 32.1/48.0 GB  │  rss  4.2 GB  │  cpu 87%      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 Changes from prior spec:
 - Added `grad_norm` to the throughput row (abbreviated `grad`)
 - Added `batch_fill_pct` to the throughput row (abbreviated `batch fill`)
-- Added `ram` and `cpu` to the system row
+- Added `ram`, `rss`, and `cpu` to the system row
 - `▲` next to entropy when entropy < `alert_entropy_warn` (2.0); `!!` when < `alert_entropy_min` (1.0)
 
 All other rules unchanged: no bars for open-ended metrics, `—` when not yet received,
@@ -272,8 +274,9 @@ Panel 3 — System stats:
 ```
 GPU util      99%
 VRAM          5.5 / 8.6 GB
-RAM           32.1 / 48.0 GB      ← NEW
-CPU           87%                  ← NEW
+RAM           32.1 / 48.0 GB      ← NEW (§5 revision)
+RSS           4.2 GB               ← NEW (§45 — process RSS for OOM diagnosis)
+CPU           87%                  ← NEW (§5 revision)
 Workers       12
 Sims/sec      7K
 Batch fill    98%                  ← NEW (from iteration_complete.batch_fill_pct)
@@ -415,8 +418,8 @@ No new files required. All changes are to existing files:
 ```
 hexo_rl/monitoring/
 ├── events.py                  ← no changes
-├── gpu_monitor.py             ← add ram_used_gb, ram_total_gb, cpu_util_pct
-├── terminal_dashboard.py      ← add grad_norm, batch_fill_pct, ram, cpu to layout
+├── gpu_monitor.py             ← add ram_used_gb, ram_total_gb, cpu_util_pct, rss_gb
+├── terminal_dashboard.py      ← add grad_norm, batch_fill_pct, ram, rss, cpu to layout
 ├── web_dashboard.py           ← no changes (event forwarding unchanged)
 └── static/
     └── index.html             ← major rewrite — new layout per §5
@@ -439,14 +442,15 @@ for this sprint — keep dashboard tests consolidated.
 **New required test cases (add to existing files):**
 
 Schema validation:
-1. `system_stats` event contains `ram_used_gb`, `ram_total_gb`, `cpu_util_pct`
+1. `system_stats` event contains `ram_used_gb`, `ram_total_gb`, `cpu_util_pct`, `rss_gb`
 2. `iteration_complete` event contains `batch_fill_pct`
 3. `system_stats.cpu_util_pct` is a float in [0.0, 100.0]
 4. `system_stats.ram_used_gb` ≤ `system_stats.ram_total_gb`
+5. `system_stats.rss_gb` is a positive float (> 0.0 when psutil is available)
 
 gpu_monitor:
-5. `GPUMonitor` emits `system_stats` with all 3 new fields when psutil is available
-6. `GPUMonitor` emits 0.0 for new fields (not exception) when psutil raises
+6. `GPUMonitor` emits `system_stats` with all new fields (incl. `rss_gb`) when psutil is available
+7. `GPUMonitor` emits 0.0 for `rss_gb` (not exception) when `memory_info()` raises
 
 terminal_dashboard:
 7. Terminal renderer handles `system_stats` with new fields without error
@@ -489,4 +493,5 @@ The Flask server is not aware of the layout — it just forwards events.
 | Date | Change |
 |---|---|
 | 2026-04-03 | Initial implementation — event fan-out, terminal + web renderer |
-| 2026-04-04 | **This revision** — system_stats + 3 new fields; iteration_complete + batch_fill_pct; stat card redesign; loss chart EMA toggle; bottom row → 4 panels (P0 win rate line, game length histogram, entropy trend, grad norm trend); ELO panel made conditional; system panel expanded with RAM/CPU/batch-fill/grad/LR |
+| 2026-04-04 | system_stats + 3 new fields; iteration_complete + batch_fill_pct; stat card redesign; loss chart EMA toggle; bottom row → 4 panels (P0 win rate line, game length histogram, entropy trend, grad norm trend); ELO panel made conditional; system panel expanded with RAM/CPU/batch-fill/grad/LR |
+| 2026-04-05 | **§45** — add `rss_gb` (process RSS) to `system_stats` event and system panels (terminal + web). Needed for OOM post-mortem — overnight run OOMed with no RSS history |
