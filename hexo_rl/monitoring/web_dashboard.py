@@ -56,6 +56,7 @@ class WebDashboard:
         self._event_history: collections.deque = collections.deque(maxlen=maxlen)
         self._history_lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._connected_sids: set = set()
 
         # Game index — lightweight refs only; full records written to disk
         max_games = int(mon.get("viewer_max_memory_games", 50))
@@ -76,6 +77,15 @@ class WebDashboard:
 
         # Routes
         self._register_routes()
+
+    def _safe_emit(self, event: str, data: dict) -> None:
+        """Emit to connected clients only; never propagate failures to the training loop."""
+        if not self._connected_sids:
+            return
+        try:
+            self._socketio.emit(event, data)
+        except Exception as e:
+            log.warning("socketio_emit_failed", event=event, error=str(e))
 
     def _init_viewer(self) -> None:
         """Initialize ViewerEngine with latest checkpoint if available."""
@@ -107,9 +117,14 @@ class WebDashboard:
 
         @socketio.on("connect")
         def on_connect():
+            dashboard._connected_sids.add(request.sid)
             with dashboard._history_lock:
                 history = list(dashboard._event_history)
             emit("replay_history", history)
+
+        @socketio.on("disconnect")
+        def on_disconnect():
+            dashboard._connected_sids.discard(request.sid)
 
         # ── Viewer routes ─────────────────────────────────────────────────
 
@@ -284,7 +299,4 @@ class WebDashboard:
             except Exception as exc:
                 log.warning("viewer_engine_reload_failed", error=str(exc))
 
-        try:
-            self._socketio.emit(event_name, payload)
-        except Exception:
-            pass  # Never propagate to training loop
+        self._safe_emit(event_name, payload)
