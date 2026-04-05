@@ -44,6 +44,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from hexo_rl.monitoring.events import emit_event, register_renderer
+from hexo_rl.selfplay.utils import N_ACTIONS as _N_ACTIONS
 from hexo_rl.monitoring.gpu_monitor import GPUMonitor
 from hexo_rl.monitoring.configure import configure_logging
 from hexo_rl.model.network import HexTacToeNet
@@ -391,6 +392,12 @@ def main() -> None:
         recent_buffer = RecentBuffer(capacity=_recent_cap)
         log.info("recent_buffer_init", capacity=_recent_cap, recency_weight=_recency_weight)
 
+    # ── Pre-allocated batch arrays — avoids large malloc/free cycling each step ──
+    _batch_size_cfg = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
+    _states_buf   = np.empty((_batch_size_cfg, 18, 19, 19), dtype=np.float16)
+    _policies_buf = np.empty((_batch_size_cfg, _N_ACTIONS), dtype=np.float32)
+    _outcomes_buf = np.empty(_batch_size_cfg, dtype=np.float32)
+
     # ── Self-play pool ──
     from hexo_rl.selfplay.pool import WorkerPool
     from hexo_rl.eval.eval_pipeline import EvalPipeline
@@ -660,20 +667,49 @@ def main() -> None:
                     n_pre = max(1, int(math.ceil(batch_size * w_pre)))
                     n_self = batch_size - n_pre
                     s_pre, p_pre, o_pre = pretrained_buffer.sample_batch(n_pre, True)
-                    # Apply recency weighting to self-play portion of the mixed batch.
-                    if recent_buffer is not None and recent_buffer.size > 0 and _recency_weight > 0.0 and n_self > 1:
-                        n_self_recent = max(1, int(round(n_self * _recency_weight)))
-                        n_self_uniform = n_self - n_self_recent
-                        s_r, p_r, o_r = recent_buffer.sample(n_self_recent)
-                        s_u, p_u, o_u = buffer.sample_batch(max(1, n_self_uniform), True)
-                        s_self = np.concatenate([s_r, s_u], axis=0)
-                        p_self = np.concatenate([p_r, p_u], axis=0)
-                        o_self = np.concatenate([o_r, o_u], axis=0)
+                    if batch_size != _batch_size_cfg:
+                        # Edge case: runtime batch size differs from pre-allocated shape.
+                        if train_step > 100:
+                            log.warning("mixed_batch_size_mismatch",
+                                        batch_size=batch_size, expected=_batch_size_cfg)
+                        if recent_buffer is not None and recent_buffer.size > 0 and _recency_weight > 0.0 and n_self > 1:
+                            n_self_recent = max(1, int(round(n_self * _recency_weight)))
+                            n_self_uniform = n_self - n_self_recent
+                            s_r, p_r, o_r = recent_buffer.sample(n_self_recent)
+                            s_u, p_u, o_u = buffer.sample_batch(max(1, n_self_uniform), True)
+                            s_self = np.concatenate([s_r, s_u], axis=0)
+                            p_self = np.concatenate([p_r, p_u], axis=0)
+                            o_self = np.concatenate([o_r, o_u], axis=0)
+                        else:
+                            s_self, p_self, o_self = buffer.sample_batch(max(1, n_self), True)
+                        states   = np.concatenate([s_pre, s_self], axis=0)
+                        policies = np.concatenate([p_pre, p_self], axis=0)
+                        outcomes = np.concatenate([o_pre, o_self], axis=0)
                     else:
-                        s_self, p_self, o_self = buffer.sample_batch(max(1, n_self), True)
-                    states = np.concatenate([s_pre, s_self], axis=0)
-                    policies = np.concatenate([p_pre, p_self], axis=0)
-                    outcomes = np.concatenate([o_pre, o_self], axis=0)
+                        # Fill pre-allocated buffers in-place — no heap churn.
+                        if recent_buffer is not None and recent_buffer.size > 0 and _recency_weight > 0.0 and n_self > 1:
+                            n_self_recent = max(1, int(round(n_self * _recency_weight)))
+                            n_self_uniform = n_self - n_self_recent
+                            s_r, p_r, o_r = recent_buffer.sample(n_self_recent)
+                            s_u, p_u, o_u = buffer.sample_batch(max(1, n_self_uniform), True)
+                            np.copyto(_states_buf[:n_pre], s_pre)
+                            np.copyto(_states_buf[n_pre:n_pre + n_self_recent], s_r)
+                            np.copyto(_states_buf[n_pre + n_self_recent:], s_u)
+                            np.copyto(_policies_buf[:n_pre], p_pre)
+                            np.copyto(_policies_buf[n_pre:n_pre + n_self_recent], p_r)
+                            np.copyto(_policies_buf[n_pre + n_self_recent:], p_u)
+                            np.copyto(_outcomes_buf[:n_pre], o_pre)
+                            np.copyto(_outcomes_buf[n_pre:n_pre + n_self_recent], o_r)
+                            np.copyto(_outcomes_buf[n_pre + n_self_recent:], o_u)
+                        else:
+                            s_self, p_self, o_self = buffer.sample_batch(max(1, n_self), True)
+                            np.copyto(_states_buf[:n_pre], s_pre)
+                            np.copyto(_states_buf[n_pre:], s_self)
+                            np.copyto(_policies_buf[:n_pre], p_pre)
+                            np.copyto(_policies_buf[n_pre:], p_self)
+                            np.copyto(_outcomes_buf[:n_pre], o_pre)
+                            np.copyto(_outcomes_buf[n_pre:], o_self)
+                        states, policies, outcomes = _states_buf, _policies_buf, _outcomes_buf
                     loss_info = trainer.train_step_from_tensors(
                         states, policies, outcomes,
                         ownership_targets=own_targets, threat_targets=thr_targets,
