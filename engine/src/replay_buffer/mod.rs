@@ -416,6 +416,214 @@ impl ReplayBuffer {
         Ok(())
     }
 
+    // ── Persistence ──────────────────────────────────────────────────────────
+
+    /// Save buffer contents to a binary file.
+    ///
+    /// Format (little-endian native):
+    ///   [magic: u32 = 0x48455842]  ("HEXB")
+    ///   [version: u32 = 1]
+    ///   [capacity: u64]
+    ///   [size: u64]
+    ///   For each of `size` positions (oldest → newest):
+    ///     state:   STATE_STRIDE × u16
+    ///     policy:  POLICY_STRIDE × f32
+    ///     outcome: f32
+    ///     game_id: i64
+    ///     weight:  u16
+    #[pyo3(text_signature = "(self, path)")]
+    pub fn save_to_path(&self, path: &str) -> PyResult<()> {
+        use std::io::{BufWriter, Write};
+
+        let file = std::fs::File::create(path)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("cannot create {path}: {e}")))?;
+        let mut w = BufWriter::new(file);
+
+        // Header
+        w.write_all(&0x4845_5842u32.to_le_bytes())
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        w.write_all(&1u32.to_le_bytes())
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        w.write_all(&(self.capacity as u64).to_le_bytes())
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        w.write_all(&(self.size as u64).to_le_bytes())
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+        // Positions in logical order (oldest → newest)
+        for i in 0..self.size {
+            let slot = (self.head + self.capacity - self.size + i) % self.capacity;
+
+            // state: u16 slice → bytes
+            let state_start = slot * STATE_STRIDE;
+            let state_bytes = unsafe {
+                std::slice::from_raw_parts(
+                    self.states[state_start..state_start + STATE_STRIDE].as_ptr() as *const u8,
+                    STATE_STRIDE * 2,
+                )
+            };
+            w.write_all(state_bytes)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+            // policy: f32 slice → bytes
+            let pol_start = slot * POLICY_STRIDE;
+            let pol_bytes = unsafe {
+                std::slice::from_raw_parts(
+                    self.policies[pol_start..pol_start + POLICY_STRIDE].as_ptr() as *const u8,
+                    POLICY_STRIDE * 4,
+                )
+            };
+            w.write_all(pol_bytes)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+            // outcome: f32
+            w.write_all(&self.outcomes[slot].to_le_bytes())
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+            // game_id: i64
+            w.write_all(&self.game_ids[slot].to_le_bytes())
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+            // weight: u16
+            w.write_all(&self.weights[slot].to_le_bytes())
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        }
+
+        w.flush().map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Load buffer contents from a binary file written by `save_to_path`.
+    ///
+    /// Returns the number of positions loaded.  If the file does not exist,
+    /// returns 0 (not an error — supports first-run case).
+    ///
+    /// If the saved buffer has more positions than `self.capacity`, only the
+    /// most recent `self.capacity` positions are loaded.
+    #[pyo3(text_signature = "(self, path)")]
+    pub fn load_from_path(&mut self, path: &str) -> PyResult<usize> {
+        use std::io::{BufReader, Read};
+
+        let file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(pyo3::exceptions::PyIOError::new_err(
+                format!("cannot open {path}: {e}")
+            )),
+        };
+        let mut r = BufReader::new(file);
+
+        // Read header
+        let mut buf4 = [0u8; 4];
+        let mut buf8 = [0u8; 8];
+
+        r.read_exact(&mut buf4)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let magic = u32::from_le_bytes(buf4);
+        if magic != 0x4845_5842 {
+            return Err(PyValueError::new_err(format!(
+                "invalid magic: expected 0x48455842 (HEXB), got 0x{magic:08X}"
+            )));
+        }
+
+        r.read_exact(&mut buf4)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let version = u32::from_le_bytes(buf4);
+        if version != 1 {
+            return Err(PyValueError::new_err(format!(
+                "unsupported version: expected 1, got {version}"
+            )));
+        }
+
+        r.read_exact(&mut buf8)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let _saved_capacity = u64::from_le_bytes(buf8) as usize;
+
+        r.read_exact(&mut buf8)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let saved_size = u64::from_le_bytes(buf8) as usize;
+
+        // How many to actually load — cap at our capacity
+        let to_load = saved_size.min(self.capacity);
+        // How many to skip if saved_size > capacity (skip oldest)
+        let to_skip = saved_size - to_load;
+
+        // Per-entry byte sizes
+        let state_bytes = STATE_STRIDE * 2;
+        let policy_bytes = POLICY_STRIDE * 4;
+        let entry_bytes = state_bytes + policy_bytes + 4 + 8 + 2; // outcome + game_id + weight
+
+        // Skip oldest entries
+        if to_skip > 0 {
+            let skip_bytes = to_skip * entry_bytes;
+            let mut remaining = skip_bytes;
+            let mut skip_buf = vec![0u8; 8192.min(skip_bytes)];
+            while remaining > 0 {
+                let chunk = remaining.min(skip_buf.len());
+                r.read_exact(&mut skip_buf[..chunk])
+                    .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+                remaining -= chunk;
+            }
+        }
+
+        // Reset weight histogram
+        for bucket in &self.weight_buckets {
+            bucket.store(0, Ordering::Relaxed);
+        }
+
+        // Read positions directly into storage
+        let mut state_buf = vec![0u8; state_bytes];
+        let mut pol_buf = vec![0u8; policy_bytes];
+
+        for i in 0..to_load {
+            let slot = i; // write sequentially from slot 0
+
+            // state
+            r.read_exact(&mut state_buf)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+            let dst_state = &mut self.states[slot * STATE_STRIDE..(slot + 1) * STATE_STRIDE];
+            // Safety: u16 and [u8; 2] have same size, and state_buf is correctly sized
+            for (j, d) in dst_state.iter_mut().enumerate() {
+                *d = u16::from_le_bytes([state_buf[j * 2], state_buf[j * 2 + 1]]);
+            }
+
+            // policy
+            r.read_exact(&mut pol_buf)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+            let dst_pol = &mut self.policies[slot * POLICY_STRIDE..(slot + 1) * POLICY_STRIDE];
+            for (j, d) in dst_pol.iter_mut().enumerate() {
+                *d = f32::from_le_bytes([
+                    pol_buf[j * 4], pol_buf[j * 4 + 1],
+                    pol_buf[j * 4 + 2], pol_buf[j * 4 + 3],
+                ]);
+            }
+
+            // outcome
+            r.read_exact(&mut buf4)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+            self.outcomes[slot] = f32::from_le_bytes(buf4);
+
+            // game_id
+            r.read_exact(&mut buf8)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+            self.game_ids[slot] = i64::from_le_bytes(buf8);
+
+            // weight
+            let mut buf2 = [0u8; 2];
+            r.read_exact(&mut buf2)
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+            let w_bits = u16::from_le_bytes(buf2);
+            self.weights[slot] = w_bits;
+
+            // Update weight histogram
+            let bucket = Self::weight_bucket(w_bits);
+            self.weight_buckets[bucket].fetch_add(1, Ordering::Relaxed);
+        }
+
+        self.size = to_load;
+        self.head = to_load % self.capacity;
+        Ok(to_load)
+    }
+
     // ── Properties ────────────────────────────────────────────────────────────
 
     #[getter]
