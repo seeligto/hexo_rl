@@ -149,28 +149,40 @@ def test_rust_runner_collect_data_format():
             
         assert runner.games_completed >= 1
 
+        # drain_game_results returns ownership_flat and winning_line_flat as numpy arrays
         drained = runner.drain_game_results()
         assert len(drained) > 0
         plies_drain, winner_code, move_history, worker_id, ownership_flat, winning_line_flat = drained[0]
         assert isinstance(worker_id, int)
         assert worker_id == 0
-        assert len(ownership_flat) == 19 * 19
-        assert len(winning_line_flat) == 19 * 19
-        
-        data = runner.collect_data()
-        assert len(data) > 0
-        
-        feat, pol, outcome, plies = data[0]
-        assert len(feat) == 18 * 19 * 19
-        assert len(pol) == 19 * 19 + 1
-        assert isinstance(outcome, float)
+        assert isinstance(ownership_flat, np.ndarray)
+        assert ownership_flat.size == 19 * 19
+        assert ownership_flat.dtype == np.float32
+        assert isinstance(winning_line_flat, np.ndarray)
+        assert winning_line_flat.size == 19 * 19
+        assert winning_line_flat.dtype == np.float32
+
+        # collect_data returns 4 numpy arrays: (feats, pols, vals, plies)
+        feats_np, pols_np, vals_np, plies_np = runner.collect_data()
+        assert isinstance(feats_np, np.ndarray)
+        assert isinstance(pols_np, np.ndarray)
+        assert isinstance(vals_np, np.ndarray)
+        assert isinstance(plies_np, np.ndarray)
+        n = len(vals_np)
+        assert n > 0
+        assert feats_np.shape == (n, 18 * 19 * 19)
+        assert pols_np.shape == (n, 19 * 19 + 1)
+        assert vals_np.shape == (n,)
+        assert plies_np.shape == (n,)
+        assert feats_np.dtype == np.float32
+        assert pols_np.dtype == np.float32
+        assert vals_np.dtype == np.float32
+        assert plies_np.dtype == np.uint64
+        outcome = float(vals_np[0])
         assert outcome == -1.0 or outcome == 1.0 or abs(outcome - (-0.1)) < 1e-5
-        assert isinstance(plies, int)
-        assert plies >= 0
-        
-        # Check that we can reshape and use as numpy
-        feat_np = np.array(feat).reshape(18, 19, 19)
-        assert feat_np.shape == (18, 19, 19)
+        # Verify features can be reshaped to (18, 19, 19) per position
+        feat_2d = feats_np[0].reshape(18, 19, 19)
+        assert feat_2d.shape == (18, 19, 19)
     finally:
         runner.stop()
         server.stop()

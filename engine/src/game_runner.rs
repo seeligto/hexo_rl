@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use pyo3::prelude::*;
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
 use crate::board::{Board, Cell, BOARD_SIZE, HALF, TOTAL_CELLS, hex_distance};
 use crate::mcts::MCTSTree;
 use crate::inference_bridge::InferenceBatcher;
@@ -21,6 +22,7 @@ pub struct Position {
 #[pyclass(name = "SelfPlayRunner")]
 pub struct SelfPlayRunner {
     batcher: InferenceBatcher,
+    pol_len: usize,
     n_workers: usize,
     max_moves_per_game: usize,
     leaf_batch_size: usize,
@@ -83,6 +85,7 @@ impl SelfPlayRunner {
         let effective_standard = if standard_sims == 0 { n_simulations } else { standard_sims };
         Self {
             batcher: InferenceBatcher::new(feature_len, policy_len),
+            pol_len: policy_len,
             n_workers,
             max_moves_per_game,
             leaf_batch_size,
@@ -366,13 +369,50 @@ impl SelfPlayRunner {
         }
     }
 
-    pub fn collect_data(&self) -> Vec<(Vec<f32>, Vec<f32>, f32, usize)> {
+    /// Drain all buffered positions and return them as numpy arrays.
+    ///
+    /// Returns (features, policies, values, plies) where each row is one position:
+    ///   features: (N, feat_len) float32
+    ///   policies: (N, pol_len) float32
+    ///   values:   (N,) float32
+    ///   plies:    (N,) uint64 — game length in plies (for game-length weighting)
+    ///
+    /// N = 0 when no positions are available (arrays have zero rows).
+    /// Returning pre-built numpy arrays eliminates Vec<f32> → Python list conversion
+    /// and the associated pymalloc arena fragmentation (~164 KB pymalloc/position).
+    pub fn collect_data<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<(
+        Bound<'py, PyArray2<f32>>,
+        Bound<'py, PyArray2<f32>>,
+        Bound<'py, PyArray1<f32>>,
+        Bound<'py, PyArray1<u64>>,
+    )> {
+        let feat_len = self.batcher.feature_len();
+        let pol_len  = self.pol_len;
+
         let mut results = self.results.lock().expect("results lock poisoned");
-        let mut out = Vec::with_capacity(results.len());
-        while let Some(data) = results.pop_front() {
-            out.push(data);
+        let n = results.len();
+
+        let mut flat_feats = Vec::with_capacity(n * feat_len);
+        let mut flat_pols  = Vec::with_capacity(n * pol_len);
+        let mut vals       = Vec::with_capacity(n);
+        let mut plies_out  = Vec::with_capacity(n);
+
+        while let Some((feat, pol, outcome, plies)) = results.pop_front() {
+            flat_feats.extend_from_slice(&feat);
+            flat_pols.extend_from_slice(&pol);
+            vals.push(outcome);
+            plies_out.push(plies as u64);
         }
-        out
+
+        let feats_np = flat_feats.into_pyarray(py).reshape([n, feat_len])?;
+        let pols_np  = flat_pols.into_pyarray(py).reshape([n, pol_len])?;
+        let vals_np  = vals.into_pyarray(py);
+        let gids_np  = plies_out.into_pyarray(py);
+
+        Ok((feats_np, pols_np, vals_np, gids_np))
     }
 
     pub fn stop(&self) {
@@ -432,15 +472,36 @@ impl SelfPlayRunner {
     /// Each entry: (plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat)
     ///   winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
     ///   move_history: (q, r) stone placements in play order.
-    ///   ownership_flat: 361 floats, +1.0 P1 / -1.0 P2 / 0.0 empty, projected to final board window.
-    ///   winning_line_flat: 361 floats, 1.0 at winning-line cells, 0.0 elsewhere.
-    pub fn drain_game_results(&self) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, Vec<f32>, Vec<f32>)> {
-        let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
-        rg.drain(..).collect()
+    ///   ownership_flat: PyArray1<f32> len 361 — +1.0 P1 / -1.0 P2 / 0.0 empty.
+    ///   winning_line_flat: PyArray1<f32> len 361 — 1.0 at winning-line cells, 0.0 elsewhere.
+    ///
+    /// ownership_flat and winning_line_flat are returned as numpy arrays to avoid
+    /// Vec<f32> → Python list conversion and the associated pymalloc arena fragmentation.
+    pub fn drain_game_results<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, Py<PyArray1<f32>>, Py<PyArray1<f32>>)> {
+        self.drain_game_results_raw()
+            .into_iter()
+            .map(|(plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat)| {
+                let own_np = ownership_flat.into_pyarray(py).unbind();
+                let win_np = winning_line_flat.into_pyarray(py).unbind();
+                (plies, winner_code, move_history, worker_id, own_np, win_np)
+            })
+            .collect()
     }
 }
 
 impl SelfPlayRunner {
+    /// Internal drain used by tests and the pymethods wrapper.
+    /// Returns raw Vecs — no Python dependency, safe to call from `cargo test`.
+    pub(crate) fn drain_game_results_raw(
+        &self,
+    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, Vec<f32>, Vec<f32>)> {
+        let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
+        rg.drain(..).collect()
+    }
+
     fn aggregate_policy(board: &Board, centers: &[(i32, i32)], cluster_policies: &[Vec<f32>]) -> Vec<f32> {
         let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
         let mut global_policy = vec![0.0; n_actions];
@@ -566,7 +627,7 @@ mod tests {
         let mut completed_workers = HashSet::new();
         
         while completed_workers.len() < 4 && attempts < 50 {
-            let results = runner.drain_game_results();
+            let results = runner.drain_game_results_raw();
             for (_, _, _, worker_id, _, _) in results {
                 assert!(worker_id < 4);
                 completed_workers.insert(worker_id);
