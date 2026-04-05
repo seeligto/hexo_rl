@@ -113,6 +113,8 @@ class WorkerPool:
         self._ownership_ring: deque[np.ndarray] = deque(maxlen=200)
         self._threat_ring: deque[np.ndarray] = deque(maxlen=200)
         self._board_size = board_size
+        self._feat_len = in_channels * board_size * board_size  # e.g. 18*19*19 = 6498
+        self._pol_len = board_size * board_size + 1              # e.g. 19*19+1 = 362
 
     @property
     def batch_fill_pct(self) -> float:
@@ -156,11 +158,20 @@ class WorkerPool:
     _WINNER_NAMES = ("draw", "x", "o")
 
     def _stats_loop(self) -> None:
+        # Pre-allocate single-position receive buffers once.
+        # replay_buffer.push() and recent_buffer.push() copy data into Rust memory,
+        # so reusing these buffers across loop iterations is safe.
+        _feat_buf = np.empty(self._feat_len, dtype=np.float16)
+        _pol_buf = np.empty(self._pol_len, dtype=np.float32)
+        _in_ch = self._feat_len // (self._board_size * self._board_size)
+        _feat_2d = _feat_buf.reshape(_in_ch, self._board_size, self._board_size)
         while not self._stop_event.is_set():
             data = self._runner.collect_data()
             for feat, pol, outcome, plies in data:
-                feat_np = np.array(feat, dtype=np.float16).reshape(18, 19, 19)
-                pol_np = np.array(pol, dtype=np.float32)
+                _feat_buf[:] = feat   # in-place write; no new array object created
+                _pol_buf[:] = pol
+                feat_np = _feat_2d    # shaped view into _feat_buf
+                pol_np = _pol_buf
                 game_length = (plies + 1) // 2  # compound moves
                 self.replay_buffer.push(feat_np, pol_np, float(outcome), game_length=game_length)
                 if self.recent_buffer is not None:
