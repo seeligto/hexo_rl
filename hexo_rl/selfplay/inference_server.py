@@ -105,9 +105,13 @@ class InferenceServer(threading.Thread):
                             with torch.autocast(device_type=self.device.type):
                                 log_policy, value, _v_logit = self.model(tensor)
                         
-                        # Ensure arrays are C-contiguous for Rust as_slice()
-                        policies = np.ascontiguousarray(log_policy.exp().cpu().numpy().astype(np.float32))
-                        values = np.ascontiguousarray(value.squeeze(-1).cpu().numpy().astype(np.float32))
+                        # .float() ensures float32 regardless of autocast dtype
+                        # (bfloat16 on CPU, float16 on CUDA — NumPy only supports float16).
+                        # Re-normalize after exp() to correct reduced-precision rounding drift.
+                        probs = log_policy.float().exp()
+                        probs = probs / probs.sum(dim=-1, keepdim=True)
+                        policies = np.ascontiguousarray(probs.cpu().numpy())
+                        values = np.ascontiguousarray(value.squeeze(-1).float().cpu().numpy())
 
                         self._batcher.submit_inference_results(
                             request_ids,
