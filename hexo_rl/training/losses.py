@@ -3,7 +3,7 @@
 Architecture spec (docs/01_architecture.md §2):
     L = L_policy + L_value + w_aux · L_opp_reply + w_unc · L_uncertainty
     L_policy     = -sum(π_target · log π_net)   (cross-entropy, masked)
-    L_value      = BCE(sigmoid(v_logit), (z+1)/2)
+    L_value      = binary_cross_entropy_with_logits(v_logit, (z+1)/2)
     L_opp_reply  = -sum(π_target · log π_opp_net)  (auxiliary)
     L_uncertainty = 0.5 * (log σ² + (z - value_detached)² / σ²)  (Gaussian NLL)
 """
@@ -41,7 +41,7 @@ def compute_value_loss(
     value_logit: torch.Tensor,
     outcome: torch.Tensor,
 ) -> torch.Tensor:
-    """BCE value loss on pre-tanh logit. Outcomes mapped {-1,+1} -> {0,1}."""
+    """Numerically stable BCE via binary_cross_entropy_with_logits. Outcomes mapped {-1,+1} -> {0,1}."""
     value_target = (outcome + 1.0) / 2.0
     return nn.functional.binary_cross_entropy_with_logits(
         value_logit.squeeze(1), value_target
