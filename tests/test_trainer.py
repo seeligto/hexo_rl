@@ -502,6 +502,49 @@ def test_train_step_recent_buffer_zero_weight_falls_back(tmp_path: Path):
     assert "loss" in result
 
 
+# ── Fast-game policy masking ──────────────────────────────────────────────────
+
+
+def test_fast_game_policy_loss_is_zero():
+    """Fast-game positions (all-zero policy) must contribute zero policy loss.
+
+    In Rust game_runner.rs:286-291, fast-game positions are stored with
+    policy = vec![0.0; n_actions] before crossing the PyO3 boundary.
+    The sum < 1e-6 mask in trainer.py:280 + losses.py:35 must fire on those
+    rows so they are excluded from the cross-entropy computation.
+    """
+    from hexo_rl.training.losses import compute_policy_loss
+
+    device = torch.device("cpu")
+    n_actions = 362
+
+    # Row 0: fast-game position — policy all zeros (as zeroed by Rust)
+    # Row 1: normal position — uniform policy
+    target_policy = torch.zeros(2, n_actions)
+    target_policy[1] = 1.0 / n_actions  # uniform
+
+    # Fake log-policy from a model (uniform log-softmax)
+    log_policy = torch.full((2, n_actions), -torch.log(torch.tensor(float(n_actions))))
+
+    valid_mask = target_policy.sum(dim=1) > 1e-6
+
+    # Mask: row 0 (fast game) must be invalid, row 1 (normal) must be valid
+    assert not valid_mask[0].item(), "fast-game row should be masked out"
+    assert valid_mask[1].item(), "normal row should be included"
+
+    loss = compute_policy_loss(log_policy, target_policy, valid_mask, device)
+
+    # fast-game row is excluded; loss is computed on the normal row only
+    assert loss.item() > 0.0, "normal-position policy loss must be non-zero"
+
+    # Verify: if ALL rows are fast-game (all zero), total policy loss is zero
+    all_fast_policy = torch.zeros(2, n_actions)
+    all_fast_mask = all_fast_policy.sum(dim=1) > 1e-6
+    assert not all_fast_mask.any(), "all-fast batch should have empty valid mask"
+    loss_all_fast = compute_policy_loss(log_policy, all_fast_policy, all_fast_mask, device)
+    assert loss_all_fast.item() == 0.0, "all-fast-game batch must produce zero policy loss"
+
+
 # ── Value uncertainty head (trainer integration) ──────────────────────────────
 
 def test_uncertainty_head_appears_in_loss_info(tmp_path: Path):
