@@ -30,6 +30,7 @@ import signal
 import sys
 import threading
 import time
+import tracemalloc
 import uuid
 from pathlib import Path
 
@@ -858,6 +859,26 @@ def main() -> None:
                     else:
                         log.info("eval_skipped_still_running", step=train_step)
 
+                # ── tracemalloc heap snapshot every 500 steps ──
+                if train_step > 0 and train_step % 500 == 0:
+                    try:
+                        snapshot = tracemalloc.take_snapshot()
+                        top_stats = snapshot.statistics("lineno")[:10]
+                        log.info(
+                            "tracemalloc_top10",
+                            step=train_step,
+                            allocators=[
+                                {
+                                    "file": str(s.traceback[0]),
+                                    "size_mb": round(s.size / 1024**2, 3),
+                                    "count": s.count,
+                                }
+                                for s in top_stats
+                            ],
+                        )
+                    except Exception as _tm_err:
+                        log.warning("tracemalloc_failed", error=str(_tm_err))
+
                 # ── Emit training_step event ──
                 if train_step % log_interval == 0:
                     elapsed = time.time() - t_start
@@ -949,9 +970,11 @@ def main() -> None:
                         threat_loss=round(float(loss_info["threat_loss"]), 4) if loss_info.get("threat_loss") is not None else None,
                     )
 
+    tracemalloc.start(nframe=3)
     try:
         _run_loop()
     finally:
+        tracemalloc.stop()
         emit_event({"event": "run_end", "step": train_step})
         pool.stop()
         gpu_monitor.stop()
