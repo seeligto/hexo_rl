@@ -56,7 +56,10 @@ def compute_aux_loss(
 ) -> torch.Tensor:
     """Opponent reply auxiliary loss (same structure as policy loss)."""
     if valid_mask.any():
-        return -(target_policy[valid_mask] * aux_logit[valid_mask]).sum(dim=1).mean()
+        valid_targets = target_policy[valid_mask]   # [N, A]
+        valid_logits  = aux_logit[valid_mask]        # [N, A]  (log-softmax)
+        safe_log = valid_logits.clamp(min=-100.0)    # -inf → 0 contribution; exp(-100)≈0
+        return -(valid_targets * safe_log).sum(dim=1).mean()
     return torch.zeros(1, device=device, dtype=torch.float32).squeeze()
 
 

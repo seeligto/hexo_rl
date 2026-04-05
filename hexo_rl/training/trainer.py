@@ -288,7 +288,8 @@ class Trainer:
             # Entropy regularization: subtract entropy bonus to maximize policy entropy.
             entropy_bonus = None
             if entropy_weight > 0.0:
-                entropy_bonus = -(log_policy.exp() * log_policy).sum(dim=-1).mean()
+                p_fp32 = torch.exp(log_policy.float())
+                entropy_bonus = torch.special.entr(p_fp32).sum(dim=-1).mean()
 
             # Uncertainty (Gaussian NLL): stop gradient from σ² influencing value head.
             unc_loss = None
@@ -317,6 +318,31 @@ class Trainer:
                 thr_loss, threat_weight,
             )
 
+        # Guard: if loss is non-finite, reset any poisoned BN stats and skip step.
+        # Fixes 1 & 2 prevent this in normal operation; this is the safety net.
+        if not torch.isfinite(loss):
+            for m in self.model.modules():
+                if isinstance(m, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d)):
+                    if not torch.isfinite(m.running_mean).all():
+                        m.reset_running_stats()
+            log.warning(
+                "nan_or_inf_loss_skipped",
+                step=self.step,
+                policy_loss=policy_loss.item() if torch.isfinite(policy_loss) else float("nan"),
+                value_loss=value_loss.item() if torch.isfinite(value_loss) else float("nan"),
+            )
+            self.optimizer.zero_grad()
+            self.scaler.update()  # let scale decay; prevents perpetual scale inflation
+            return {
+                "loss": float("nan"),
+                "policy_loss": float("nan"),
+                "value_loss": float("nan"),
+                "policy_entropy": float("nan"),
+                "grad_norm": float("nan"),
+                "value_accuracy": float("nan"),
+                "lr": self.optimizer.param_groups[0]["lr"],
+            }
+
         max_grad_norm = float(self.config.get("grad_clip", 1.0))
         grad_norm = fp16_backward_step(
             loss, self.optimizer, self.scaler, self.model, self.fp16,
@@ -336,9 +362,8 @@ class Trainer:
         with torch.no_grad():
             # Policy entropy: H = -Σ π log π  (nats). Computed outside autocast
             # to avoid fp16 underflow for near-zero probabilities.
-            policy_entropy = (
-                -(log_policy.exp() * log_policy).sum(dim=-1).mean()
-            ).float().item()
+            p_fp32 = torch.exp(log_policy.float())
+            policy_entropy = torch.special.entr(p_fp32).sum(dim=-1).mean().item()
 
             # Value accuracy: fraction where predicted winner matches actual.
             # v_logit > 0 → predict win (outcome > 0), v_logit ≤ 0 → predict loss.
