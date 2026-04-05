@@ -166,16 +166,24 @@ class WorkerPool:
         _in_ch = self._feat_len // (self._board_size * self._board_size)
         _feat_2d = _feat_buf.reshape(_in_ch, self._board_size, self._board_size)
         while not self._stop_event.is_set():
-            data = self._runner.collect_data()
-            for feat, pol, outcome, plies in data:
-                _feat_buf[:] = feat   # in-place write; no new array object created
-                _pol_buf[:] = pol
+            # collect_data() returns pre-built numpy arrays from Rust — no Python list
+            # allocation or pymalloc arena growth. feats_np is (N, feat_len) float32,
+            # pols_np is (N, pol_len) float32, vals_np and plies_np are (N,).
+            feats_np, pols_np, vals_np, plies_np = self._runner.collect_data()
+            n = len(vals_np)
+            for i in range(n):
+                # feats_np[i] is a numpy view (no copy); _feat_buf[:] = view does
+                # the f32→f16 dtype conversion at C speed with no Python objects.
+                _feat_buf[:] = feats_np[i]
+                _pol_buf[:] = pols_np[i]
                 feat_np = _feat_2d    # shaped view into _feat_buf
                 pol_np = _pol_buf
+                plies = int(plies_np[i])
+                outcome = float(vals_np[i])
                 game_length = (plies + 1) // 2  # compound moves
-                self.replay_buffer.push(feat_np, pol_np, float(outcome), game_length=game_length)
+                self.replay_buffer.push(feat_np, pol_np, outcome, game_length=game_length)
                 if self.recent_buffer is not None:
-                    self.recent_buffer.push(feat_np, pol_np, float(outcome))
+                    self.recent_buffer.push(feat_np, pol_np, outcome)
                 with self._lock:
                     self.positions_pushed += 1
                     self.self_play_positions_pushed += 1
@@ -187,6 +195,8 @@ class WorkerPool:
                 self.draws = int(self._runner.draws)
 
             # Local variable — fully consumed each iteration; no unbounded accumulation.
+            # drain_game_results() returns ownership_flat and winning_line_flat as
+            # numpy arrays (PyArray1<f32>) — no Python list allocation.
             games_batch = self._runner.drain_game_results()
 
             # Compute sims/sec from elapsed time and known n_simulations per game.
@@ -201,13 +211,14 @@ class WorkerPool:
 
             for plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat in games_batch:
                 # Accumulate ownership/threat targets for auxiliary head training.
-                if ownership_flat:
+                # ownership_flat and winning_line_flat are already numpy float32 arrays.
+                if ownership_flat.size > 0:
                     self._ownership_ring.append(
-                        np.array(ownership_flat, dtype=np.float32).reshape(self._board_size, self._board_size)
+                        ownership_flat.reshape(self._board_size, self._board_size)
                     )
-                if winning_line_flat:
+                if winning_line_flat.size > 0:
                     self._threat_ring.append(
-                        np.array(winning_line_flat, dtype=np.float32).reshape(self._board_size, self._board_size)
+                        winning_line_flat.reshape(self._board_size, self._board_size)
                     )
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
                 game_length = (plies + 1) // 2  # compound moves
