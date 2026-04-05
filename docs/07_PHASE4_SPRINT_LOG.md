@@ -2018,3 +2018,107 @@ mixing:
 
 **Test counts:** 86 Rust + 596 Python passing (3 env-specific failures on
 remote server: 2 psutil not installed, 1 missing game data files).
+
+---
+
+### 52. eval_interval 500 → 2000 (eval blocking self-play) (2026-04-06)
+**Files:** `configs/training.yaml`
+
+**Observed failure:** At `eval_interval: 500`, each eval round blocked
+self-play for ~25 minutes (20 random games + 50 SealBot games + 200
+best_arena games × ~8.8 s/game). With a cold-start buffer (first ~500
+steps after resume), this was longer than the actual training time.
+
+**Root cause:** Two conflicting `eval_interval` settings existed:
+- `configs/eval.yaml`: `eval_interval: 1000` (read at line 423 for eval
+  pipeline gating)
+- `configs/training.yaml`: `eval_interval: 500` (read at line 507 for
+  the actual loop trigger — **overwrites** the eval.yaml value)
+
+The training.yaml value won, so evals fired every 500 steps.
+
+**Fix:** `eval_interval: 500` → `eval_interval: 2000` in `configs/training.yaml`.
+At ~600 steps/hr this gives one eval every ~3.3 hours — appropriate for
+sustained RL runs where the buffer needs time to fill between evals.
+
+**Commit:** `config(training): increase eval_interval 500→2000`
+
+---
+
+### 53. Memory leak investigation — glibc arenas + Python heap (2026-04-06)
+**Files:** `Makefile`, `scripts/train.py`
+
+#### Observed RSS trajectory
+
+| Time | Step | RSS | Event |
+|---|---|---|---|
+| +10 min | ~700 | 6.34 GB | Buffer at 42k, demand-paging in progress |
+| +25 min | ~950 | 17.2 GB | Buffer hit 100k cap — all slots demand-paged |
+| +27 min | ~950 | 17.45 GB | Flat for 1 min — initial plateau |
+| +65 min | ~1480 | 22.17 GB | Still growing |
+| +75 min | ~1480 | 22.36 GB | +0.19 GB / 60s |
+| +125 min | ~1980 | 24.40 GB | +2.04 GB since plateau |
+
+Rate after plateau: **~+2 GB/hr**. At 48 GB total RAM, OOM risk within ~12 hrs.
+
+#### Investigation method
+
+`/proc/PID/smaps` segment-level snapshot taken at step ~1980, repeated 20
+minutes later. Delta compared by address.
+
+#### Culprit 1 — glibc malloc arenas (+~2.2 GB / 20 min)
+
+**35 new 64 MB `[anon]` segments** appeared in 20 minutes. glibc creates
+one arena per thread when existing arenas are contended. Sources:
+- Rust's rayon/crossbeam thread pool (SelfPlayRunner worker threads)
+- PyTorch OpenMP/MKL threads (vary with batch workload)
+
+These arenas are never returned to the OS — glibc retains them indefinitely.
+With the default `MALLOC_ARENA_MAX` (up to 128 on a 16-thread system), the
+process accumulates hundreds of 64 MB arenas over a multi-hour run.
+
+**Fix:** `MALLOC_ARENA_MAX=2` prepended to all training Makefile targets.
+Caps arena count to 2 regardless of thread count. Standard fix for Python
++ native extension workloads (TF, Gunicorn, uWSGI all recommend it).
+GPU tensor allocation is unaffected (uses CUDA's allocator, not glibc).
+
+**Why not jemalloc:** jemalloc would be marginally better (actively returns
+freed memory to OS, superior thread-local caching). However, it is not
+installed on this system and adds a system dependency. `MALLOC_ARENA_MAX=2`
+achieves 90%+ of the benefit with zero dependencies. jemalloc is the
+preferred upgrade if the arena fix proves insufficient.
+
+#### Culprit 2 — Python heap (+642 MB / 20 min)
+
+The Python heap segment grew 642 MB in the same 20-minute window. Exact
+source unknown. All bounded collections were audited and found clean:
+- All `deque`s in monitoring have `maxlen` set ✓
+- `GameRecorder` writes to disk via a queue, not memory ✓
+- Pool rings (`_ownership_ring`, `_threat_ring`, `_game_lengths`) capped at 200 ✓
+- `_iter_games_window` trimmed to 60s rolling window ✓
+- `replay_poller._file_offsets` grows but is O(log files) — negligible ✓
+
+Likely sources (unconfirmed): torch gradient buffers accumulating without
+explicit `del`; structlog context dict fragmentation; eval model clone not
+being GC'd due to reference cycles in the `_run_eval` closure.
+
+**Fix:** `tracemalloc.start(nframe=3)` before `_run_loop()`, snapshot logged
+every 500 steps as `tracemalloc_top10` event (file, size_mb, count).
+`tracemalloc.stop()` in finally block. Will identify exact file+line within
+~10 minutes of starting the next training run.
+
+#### Segment breakdown at step ~1980
+
+| Segment | Size | Identified as |
+|---|---|---|
+| 1377 MB [anon] | ~1.4 GB | Rust ReplayBuffer (100k × 13.7 KB ≈ 1.37 GB ✓) |
+| 687 MB [anon] | ~0.7 GB | PyTorch train_model weights + optimizer state |
+| 631 MB [heap] | ~0.6 GB | Python heap |
+| 620 MB [anon] | ~0.6 GB | PyTorch inf_model + compiled graph buffers |
+| 162 MB × 8+ | ~1.3 GB | glibc malloc arenas (one per active thread) |
+
+**Commits:**
+- `fix(train): cap glibc malloc arenas with MALLOC_ARENA_MAX=2 in Makefile train targets`
+- `feat(monitoring): add tracemalloc top-10 heap logging every 500 steps`
+
+**Test counts:** 86 Rust + 607 Python, all passing.
