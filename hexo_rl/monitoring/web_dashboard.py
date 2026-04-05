@@ -60,6 +60,7 @@ class WebDashboard:
         # Game index — lightweight refs only; full records written to disk
         max_games = int(mon.get("viewer_max_memory_games", 50))
         self._game_index: collections.deque = collections.deque(maxlen=max_games)
+        self._max_disk_games = int(mon.get("viewer_max_disk_games", 1000))
         self._games_base_dir = Path(mon.get("viewer_games_dir", "runs"))
         self._run_id: str = "default"
 
@@ -230,6 +231,17 @@ class WebDashboard:
             path.write_text(json.dumps(payload), encoding="utf-8")
         except Exception as exc:
             log.warning("game_persist_failed", error=str(exc), game_id=game_id)
+        # Rotate: delete oldest files if disk cap exceeded (checked after write)
+        try:
+            all_files = sorted(run_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
+            excess = len(all_files) - self._max_disk_games
+            for old_path in all_files[:excess]:
+                try:
+                    old_path.unlink()
+                except Exception as del_exc:
+                    log.warning("game_disk_rotate_delete_failed", error=str(del_exc), path=str(old_path))
+        except Exception as exc:
+            log.warning("game_disk_rotate_failed", error=str(exc), game_id=game_id)
         ref = {
             "game_id": game_id,
             "path": str(path),
