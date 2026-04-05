@@ -316,11 +316,35 @@ def main() -> None:
     log.info("buffer_init", capacity=capacity, min_buffer_size=min_buf_size,
              schedule_entries=len(buffer_schedule))
 
-    # ── Pretrained buffer (mixed data streams) ──
+    # ── Buffer restore (on resume) ──
     mixing_cfg = train_cfg.get("mixing", config.get("mixing", {}))
+    _buffer_restored = False
+    if args.checkpoint and mixing_cfg.get("buffer_persist", False):
+        _bp_resume = Path(mixing_cfg.get("buffer_persist_path", "checkpoints/replay_buffer.bin"))
+        if _bp_resume.exists():
+            try:
+                n_loaded = buffer.load_from_path(str(_bp_resume))
+                log.info("buffer_restored", path=str(_bp_resume), positions=n_loaded,
+                         capacity=buffer.capacity)
+                emit_event({
+                    "event": "system_stats",
+                    "buffer_size": buffer.size,
+                    "buffer_capacity": buffer.capacity,
+                })
+                _buffer_restored = n_loaded > 0
+            except Exception as e:
+                log.warning("buffer_restore_failed", error=str(e))
+
+    # ── Pretrained buffer (mixed data streams) ──
+    # Skip corpus prefill on resume if buffer was restored from file — no point
+    # loading stale corpus on top of a fully restored self-play buffer.
     pretrained_buffer = None
     pretrained_path = mixing_cfg.get("pretrained_buffer_path")
-    if pretrained_path and Path(pretrained_path).exists():
+    if _buffer_restored:
+        log.info("corpus_prefill_skipped",
+                 msg="buffer restored from file — skipping corpus prefill",
+                 buffer_size=buffer.size)
+    elif pretrained_path and Path(pretrained_path).exists():
         log.info("loading_corpus_npz", path=pretrained_path,
                  msg="copying corpus into Rust pretrained_buffer — may take minutes for large corpora")
         t0 = time.time()
@@ -612,6 +636,15 @@ def main() -> None:
                     step=train_step,
                 )
                 trainer.save_checkpoint(last_loss_info if last_loss_info else None)
+                # Buffer persistence on shutdown
+                _mix_cfg_sd = train_cfg.get("mixing", config.get("mixing", {}))
+                if _mix_cfg_sd.get("buffer_persist", False):
+                    _bp_sd = _mix_cfg_sd.get("buffer_persist_path", "checkpoints/replay_buffer.bin")
+                    try:
+                        buffer.save_to_path(str(_bp_sd))
+                        log.info("buffer_saved", path=str(_bp_sd), positions=buffer.size)
+                    except Exception as e:
+                        log.warning("buffer_save_failed", error=str(e))
                 break
 
             # ── Training Throttling ──
