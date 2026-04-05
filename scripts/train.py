@@ -970,7 +970,7 @@ def main() -> None:
                         threat_loss=round(float(loss_info["threat_loss"]), 4) if loss_info.get("threat_loss") is not None else None,
                     )
 
-    tracemalloc.start(nframe=3)
+    tracemalloc.start(3)
     try:
         _run_loop()
     finally:
