@@ -1537,3 +1537,70 @@ decisively; -0.5 is the cleaner choice to force the transition.
 - `config(training): raise draw_reward -0.1→-0.5 to break draw-collapse mode`
 
 **Test counts:** 603 Python, all passing.
+
+---
+
+### 41. OOM resilience: checkpoint on SIGTERM/SIGINT + corpus page-cache cap (2026-04-05)
+**Files:** `scripts/train.py`, `configs/training.yaml`
+
+**Root cause of overnight OOM loss:** Two independent failure modes combined:
+
+1. **No checkpoint saved on signal exit.** The only unconditional `trainer.save_checkpoint()`
+   call was at line 841 of `train.py`, placed *after* the `try/finally` block that calls
+   `pool.stop()`. If `pool.stop()` hangs (a known risk when worker threads are mid-inference),
+   the process blocks indefinitely and the checkpoint is never written. The signal handler
+   already set `_running[0] = False` and the periodic save inside `trainer.train_step()`
+   was correct, but those saves happen every 500 steps; any progress since the last periodic
+   save is lost on an unclean exit.
+
+2. **Page cache growth from full corpus copy.** `push_game()` copies the entire NPZ corpus
+   into the Rust `ReplayBuffer` (not mmap-resident — fully allocated). A large corpus
+   (e.g. 500K positions × ~14.1 KB/pos ≈ 7 GB) fills RAM during startup and the mmap
+   read that precedes it also warms the OS page cache. Over a long run, other page-cache
+   pressure competes with GPU/model state and can trigger OOM.
+
+**Fix 1 — Checkpoint on signal** (`scripts/train.py`):
+
+Added `_shutdown_save = [False]` flag. The existing `_stop()` handler (registered for
+both SIGTERM and SIGINT) now also sets this flag. At the top of `while _running[0]:` in
+`_run_loop()`, a new check fires before any training work:
+
+```python
+if _shutdown_save[0]:
+    log.info("shutdown_signal_checkpoint",
+             msg="Shutdown signal received — saving checkpoint before exit", step=train_step)
+    trainer.save_checkpoint(last_loss_info if last_loss_info else None)
+    break
+```
+
+This saves the checkpoint *inside the loop*, before the finally block's `pool.stop()`.
+The handler itself only sets the flag — no non-reentrant code called from signal context.
+Double Ctrl+C (`_stop_count >= 2`) still calls `sys.exit(1)` immediately.
+
+**Fix 2 — Corpus cap** (`scripts/train.py`, `configs/training.yaml`):
+
+Added `mixing.pretrain_max_samples: 200_000` to `training.yaml`. After loading the mmap'd
+NPZ and computing `T = len(pre_outcomes)`, the code now draws a sorted random subset before
+`push_game()`:
+
+```python
+max_pre = int(mixing_cfg.get("pretrain_max_samples", 0))
+if max_pre and T > max_pre:
+    subset_idx = np.sort(np.random.default_rng(seed).choice(T, size=max_pre, replace=False))
+    log.info("corpus_capped", original=T, kept=max_pre)
+    pre_states, pre_policies, pre_outcomes = (pre_states[subset_idx], ...)
+    T = max_pre
+```
+
+Sorted indices minimise random page faults during the initial mmap read. With 200K positions
+the Rust buffer allocation and page cache footprint are bounded to ~2.5 GB
+(200K × 18×19×19×2 bytes) regardless of corpus size. No-op when corpus ≤ 200K.
+
+Config location: `pretrain_max_samples` lives under `mixing` in `training.yaml` (alongside
+`pretrained_buffer_path`) rather than `corpus.yaml` (which governs corpus generation).
+
+**Commits:**
+- `fix(train): save checkpoint on SIGTERM/SIGINT before exit`
+- `fix(pretrain): cap page cache footprint via pretrain_max_samples`
+
+**Test counts:** 603 Python, all passing.
