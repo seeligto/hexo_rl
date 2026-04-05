@@ -119,16 +119,16 @@ bench.mcts: ## Dedicated Rust MCTS micro-benchmark
 
 .PHONY: train
 train: ## Self-play RL from bootstrap checkpoint + corpus (production default)
-	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP)
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP)
 
 .PHONY: train.nodash
 train.nodash: ## Self-play RL from bootstrap checkpoint, no dashboard
-	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) --no-dashboard
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) --no-dashboard
 
 .PHONY: train.bg
 train.bg: ## Self-play RL from bootstrap checkpoint, background (logs/)
 	@mkdir -p logs
-	nohup $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) \
+	nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) \
 		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 & \
 		echo $$! > logs/train.pid
 	@echo "Training started (PID $$(cat logs/train.pid))"
@@ -191,12 +191,12 @@ train.smoke: ## 20-step smoke test to verify training end-to-end
 	    exit 1; \
 	fi
 	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
-	$(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 20
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 20
 
 .PHONY: train.resume
 train.resume: ## Resume training from latest checkpoint
 	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
-	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST)
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST)
 
 .PHONY: plot.train.latest
 plot.train.latest: ## Plot latest training log
@@ -239,11 +239,11 @@ pretrain: ## Bootstrap pretrain (5 epochs, default)
 
 .PHONY: pretrain.lite
 pretrain.lite: ## Bootstrap pretrain smoke test (100 steps)
-	$(PY) -m hexo_rl.bootstrap.pretrain --steps 100
+	MALLOC_ARENA_MAX=2 $(PY) -m hexo_rl.bootstrap.pretrain --steps 100
 
 .PHONY: pretrain.full
 pretrain.full: ## Full bootstrap pretrain (15 epochs)
-	$(PY) -m hexo_rl.bootstrap.pretrain --epochs 15
+	MALLOC_ARENA_MAX=2 $(PY) -m hexo_rl.bootstrap.pretrain --epochs 15
 
 # ── Corpus generation ────────────────────────────────────────────────────────
 
