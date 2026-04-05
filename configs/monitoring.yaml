@@ -19,3 +19,4 @@ monitoring:
   p0_win_rate_target_low: 54.0
   p0_win_rate_target_high: 58.0
   viewer_max_memory_games: 50
+  viewer_max_disk_games: 1000
