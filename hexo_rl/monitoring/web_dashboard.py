@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import collections
 import glob
+import json
 import re
 import threading
 from pathlib import Path
@@ -55,6 +56,12 @@ class WebDashboard:
         self._event_history: collections.deque = collections.deque(maxlen=maxlen)
         self._history_lock = threading.Lock()
         self._thread: threading.Thread | None = None
+
+        # Game index — lightweight refs only; full records written to disk
+        max_games = int(mon.get("viewer_max_memory_games", 50))
+        self._game_index: collections.deque = collections.deque(maxlen=max_games)
+        self._games_base_dir = Path(mon.get("viewer_games_dir", "runs"))
+        self._run_id: str = "default"
 
         # Viewer engine — lazy init at start()
         self._viewer_engine: Any = None
@@ -117,18 +124,15 @@ class WebDashboard:
             try:
                 n = min(int(request.args.get("n", 20)), 100)
                 with dashboard._history_lock:
-                    games = [
-                        e for e in dashboard._event_history
-                        if e.get("event") == "game_complete"
-                    ]
+                    refs = list(dashboard._game_index)
                 return jsonify([
                     {
-                        "game_id": g["game_id"],
-                        "winner": g["winner"],
-                        "moves": g["moves"],
-                        "ts": g["ts"],
+                        "game_id": r["game_id"],
+                        "winner": r["winner"],
+                        "moves": r["moves"],
+                        "ts": r["ts"],
                     }
-                    for g in reversed(games[-n:])
+                    for r in reversed(refs[-n:])
                 ])
             except Exception as exc:
                 log.warning("viewer_recent_error", error=str(exc))
@@ -137,15 +141,33 @@ class WebDashboard:
         @app.route("/viewer/game/<game_id>")
         def viewer_game(game_id: str):
             try:
+                # Look up path from in-memory index first
+                path_str: str | None = None
                 with dashboard._history_lock:
-                    record = next(
-                        (e for e in dashboard._event_history
-                         if e.get("event") == "game_complete"
-                         and e.get("game_id") == game_id),
-                        None,
+                    for ref in dashboard._game_index:
+                        if ref["game_id"] == game_id:
+                            path_str = ref["path"]
+                            break
+
+                # Fallback: search on disk for older games not in the index
+                if path_str is None:
+                    candidates = list(
+                        dashboard._games_base_dir.glob(f"*/games/{game_id}.json")
                     )
-                if record is None:
+                    if candidates:
+                        path_str = str(candidates[0])
+
+                if path_str is None:
                     return jsonify({"error": "game not found"}), 404
+
+                try:
+                    record = json.loads(
+                        Path(path_str).read_text(encoding="utf-8")
+                    )
+                except Exception as exc:
+                    log.warning("game_load_failed", error=str(exc), game_id=game_id)
+                    return jsonify({"error": "game not found"}), 404
+
                 if dashboard._viewer_engine is None:
                     return jsonify(record)
                 return jsonify(dashboard._viewer_engine.enrich_game(record))
@@ -198,12 +220,44 @@ class WebDashboard:
         """Stop the server (best-effort — daemon thread will die with process)."""
         self._thread = None
 
+    def _persist_game(self, payload: dict) -> None:
+        """Write full game record to disk and add a lightweight ref to the index."""
+        game_id = payload.get("game_id", "unknown")
+        run_dir = self._games_base_dir / self._run_id / "games"
+        path = run_dir / f"{game_id}.json"
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        except Exception as exc:
+            log.warning("game_persist_failed", error=str(exc), game_id=game_id)
+        ref = {
+            "game_id": game_id,
+            "path": str(path),
+            "winner": payload.get("winner"),
+            "moves": payload.get("moves"),
+            "worker_id": payload.get("worker_id"),
+            "ts": payload.get("ts"),
+        }
+        with self._history_lock:
+            self._game_index.append(ref)
+
     def on_event(self, payload: dict) -> None:
         """Receive an event, store it, and forward to connected browsers."""
+        event_name = payload.get("event", "unknown")
+
+        if event_name == "run_start":
+            self._run_id = payload.get("run_id", "default")
+
+        if event_name == "game_complete":
+            # Persist full record to disk; keep only lightweight ref in memory.
+            self._persist_game(payload)
+            # Store a stripped copy in event_history so SocketIO replay_history
+            # doesn't carry heavy per-move data.
+            _STRIP_KEYS = {"moves_list", "moves_detail", "value_trace"}
+            payload = {k: v for k, v in payload.items() if k not in _STRIP_KEYS}
+
         with self._history_lock:
             self._event_history.append(payload)
-
-        event_name = payload.get("event", "unknown")
 
         # Reload viewer model on successful eval gate pass
         if event_name == "eval_complete" and payload.get("gate_passed"):
