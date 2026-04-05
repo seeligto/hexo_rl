@@ -1636,3 +1636,47 @@ modified; public viewer API routes unchanged.
 **Commit:** `fix(viewer): write game replays to disk, cap in-memory index`
 
 **Test counts:** 603 Python, all passing.
+
+---
+
+### 43. Revert fast_sims to 50 (2026-04-05)
+**Files:** `configs/selfplay.yaml`
+
+**Change:** `playout_cap.fast_sims` reverted from 30 → 50.
+
+`standard_sims` (200) and `fast_sims` serve different purposes and don't
+need to scale together. 50 sims produces meaningfully better policy signal
+for fast-game value targets; the 30-sim reduction applied in §40b was not
+justified.
+
+**Commit:** `config(selfplay): revert fast_sims to 50`
+
+**Test counts:** 603 Python, all passing.
+
+---
+
+### 44. Viewer disk rotation: cap at viewer_max_disk_games (2026-04-05)
+**Files:** `hexo_rl/monitoring/web_dashboard.py`, `configs/monitoring.yaml`
+
+**Problem:** `runs/<run_id>/games/` accumulated game JSON files without bound
+over long training runs. Only the in-memory index was capped (§42); the disk
+directory itself grew indefinitely.
+
+**Fix:** After each successful game write in `_persist_game`, all `*.json`
+files in the run's `games/` directory are listed sorted by mtime oldest-first.
+If the count exceeds `viewer_max_disk_games`, the oldest files are deleted
+until exactly `viewer_max_disk_games` remain. Individual deletion failures
+emit `log.warning("game_disk_rotate_delete_failed")` and continue; outer
+scan failures emit `log.warning("game_disk_rotate_failed")`. Neither ever
+propagates to the training path (monitoring invariant).
+
+Deletion happens **after** the new file is written, never before.
+
+New config key: `monitoring.viewer_max_disk_games: 1000`.
+
+The in-memory index cap (`viewer_max_memory_games: 50`) is unchanged and
+applies independently.
+
+**Commit:** `fix(viewer): rotate disk game files, cap at viewer_max_disk_games`
+
+**Test counts:** 603 Python, all passing.
