@@ -175,6 +175,7 @@ class WorkerPool:
                 self.o_wins = int(self._runner.o_wins)
                 self.draws = int(self._runner.draws)
 
+            # Local variable — fully consumed each iteration; no unbounded accumulation.
             games_batch = self._runner.drain_game_results()
 
             # Compute sims/sec from elapsed time and known n_simulations per game.
