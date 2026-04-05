@@ -18,3 +18,4 @@ monitoring:
   training_step_history: 500
   p0_win_rate_target_low: 54.0
   p0_win_rate_target_high: 58.0
+  viewer_max_memory_games: 50
