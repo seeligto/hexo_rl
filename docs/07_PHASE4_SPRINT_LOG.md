@@ -1706,3 +1706,39 @@ training/selfplay files. Monitoring invariant fully preserved.
 **Commit:** `feat(monitoring): add RSS memory tracking to system stats panel`
 
 **Test counts:** 603 Python, all passing.
+
+---
+
+### 46. Fix three RSS memory leaks (2026-04-05)
+**Files:** `scripts/train.py`, `hexo_rl/monitoring/web_dashboard.py`
+
+**Problem:** Run `0944a606` grew to 14.8 GB RSS by step 590 (expected ~7–8 GB).
+Three confirmed leak sources:
+
+1. **mmap views held alive after push_game (~720 MB):** `del data` only released
+   the `NpzFile` handle. The three `pre_*` array views kept the corpus mmap'd for
+   the entire process lifetime. Fixed by adding
+   `del pre_states, pre_policies, pre_outcomes` immediately after `push_game()`.
+
+2. **SocketIO send-queue buildup (0.5–1.5 GB over multi-hour runs):**
+   `self._socketio.emit()` was called unconditionally. When a browser disconnects
+   without a clean WebSocket CLOSE the server-side socket enters CLOSING state and
+   buffers messages. Fixed by tracking connected SIDs via `on_connect` /
+   `on_disconnect` handlers and replacing the bare emit with `_safe_emit()`, which
+   skips the call when `_connected_sids` is empty.
+
+3. **Heap fragmentation from np.concatenate (~3–5 GB over 590 steps):**
+   Five `np.concatenate` calls per training step each triggered a ~3.4 MB
+   malloc/free directly via glibc, bypassing pymalloc. Repeated cycles of this
+   size fragment the system heap; Python never returns fragmented arena memory to
+   the OS. Fixed by pre-allocating `_states_buf / _policies_buf / _outcomes_buf`
+   once (~3.6 MB total) before `_run_loop()` and filling them in-place with
+   `np.copyto()`. Falls back to `np.concatenate` if `batch_size` changes at
+   runtime (logs a warning after step 100).
+
+**Commits:**
+- `fix(train): release pretrain mmap references after push_game`
+- `fix(monitoring): gate socketio emits on connected clients`
+- `fix(train): pre-allocate mixed batch arrays to eliminate heap fragmentation`
+
+**Test counts:** 86 Rust + 604 Python, all passing.
