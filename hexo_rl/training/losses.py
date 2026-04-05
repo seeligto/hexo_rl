@@ -82,7 +82,15 @@ def compute_uncertainty_loss(
         Scalar mean Gaussian NLL.
     """
     z = z_targets.unsqueeze(1)          # (B, 1)
-    return 0.5 * (sigma2.log() + (z - value_detached) ** 2 / sigma2).mean()
+    # Promote to FP32 and clamp before log/divide to prevent FP16 subnormal
+    # blow-up (sigma2 near 6e-8 → inf in division → NaN in loss).
+    # clamp(min=1e-6): log(1e-6) ≈ -13.8, well within representable range;
+    # σ ≈ 0.001 is a physically meaningful minimum uncertainty.
+    sigma2_fp32 = sigma2.float().clamp(min=1e-6)
+    log_sigma2_fp32 = torch.log(sigma2_fp32)
+    z_fp32 = z.float()
+    v_det_fp32 = value_detached.float()
+    return 0.5 * (log_sigma2_fp32 + (z_fp32 - v_det_fp32).pow(2) / sigma2_fp32).mean()
 
 
 def compute_total_loss(
