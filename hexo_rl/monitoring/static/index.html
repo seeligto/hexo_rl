@@ -241,6 +241,7 @@
         <div class="sys-row"><span class="sys-label">GPU util</span><span id="sys-gpu">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">VRAM</span><span id="sys-vram">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">RAM</span><span id="sys-ram">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">RSS</span><span id="sys-rss">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">CPU</span><span id="sys-cpu">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">Workers</span><span id="sys-workers">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">Sims/sec</span><span id="sys-sims">&mdash;</span></div>
@@ -602,7 +603,7 @@ function resetState() {
 
   hideEloPanel();
 
-  ['sys-gpu','sys-vram','sys-ram','sys-cpu','sys-workers','sys-sims','sys-batchfill','sys-grad','sys-lr']
+  ['sys-gpu','sys-vram','sys-ram','sys-rss','sys-cpu','sys-workers','sys-sims','sys-batchfill','sys-grad','sys-lr']
     .forEach(id => setText(id, DASH));
 
   setText('winrate-summary',   DASH);
@@ -716,6 +717,9 @@ function onSystemStats(p) {
   }
   if (p.ram_used_gb != null && p.ram_total_gb != null) {
     setText('sys-ram', p.ram_used_gb.toFixed(1) + ' / ' + p.ram_total_gb.toFixed(1) + ' GB');
+  }
+  if (p.rss_gb != null) {
+    setText('sys-rss', p.rss_gb.toFixed(1) + ' GB');
   }
   if (p.cpu_util_pct != null) {
     setText('sys-cpu', p.cpu_util_pct.toFixed(0) + '%');

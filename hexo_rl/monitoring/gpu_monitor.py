@@ -26,6 +26,8 @@ import structlog
 
 log = structlog.get_logger()
 
+_PROCESS = psutil.Process()
+
 # Lazy import so the module can be imported even if pynvml is not installed
 # (will raise at start() time, not at import time).
 _pynvml = None
@@ -104,6 +106,12 @@ class GPUMonitor(threading.Thread):
                 except Exception:
                     ram_used_gb = ram_total_gb = cpu_util_pct = 0.0
 
+                try:
+                    rss_gb = _PROCESS.memory_info().rss / 1e9
+                except Exception as rss_exc:
+                    log.warning("gpu_monitor_rss_error", error=str(rss_exc))
+                    rss_gb = 0.0
+
                 log.info(
                     "gpu_stats",
                     gpu_util_pct  = self.gpu_util_pct,
@@ -121,6 +129,7 @@ class GPUMonitor(threading.Thread):
                     "ram_used_gb":   ram_used_gb,
                     "ram_total_gb":  ram_total_gb,
                     "cpu_util_pct":  cpu_util_pct,
+                    "rss_gb":        rss_gb,
                 })
             except Exception as exc:
                 log.warning("gpu_monitor_poll_error", error=str(exc))

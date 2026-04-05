@@ -101,6 +101,7 @@ class TerminalDashboard:
             "vram_total_gb": None,
             "ram_used_gb": None,
             "ram_total_gb": None,
+            "rss_gb": None,
             "cpu_util_pct": None,
             "batch_fill_pct": None,
             "worker_count": None,
@@ -181,7 +182,7 @@ class TerminalDashboard:
         if event == "system_stats":
             for key in ("gpu_util_pct", "vram_used_gb", "vram_total_gb",
                         "buffer_size", "buffer_capacity",
-                        "ram_used_gb", "ram_total_gb", "cpu_util_pct"):
+                        "ram_used_gb", "ram_total_gb", "rss_gb", "cpu_util_pct"):
                 if key in payload:
                     self._state[key] = payload[key]
             return
@@ -337,10 +338,11 @@ class TerminalDashboard:
             ram_str = f"{s['ram_used_gb']:.1f}/{s['ram_total_gb']:.1f} GB"
         else:
             ram_str = _EM_DASH
+        rss_str = f"{s['rss_gb']:.1f} GB" if s["rss_gb"] is not None else _EM_DASH
         cpu_str = f"{s['cpu_util_pct']:.0f}%" if s["cpu_util_pct"] is not None else _EM_DASH
         buf_tbl.add_row(
             f"ELO  {elo_str}  │  gpu  {gpu_str}  │  vram  {vram_str}"
-            f"  │  ram  {ram_str}  │  cpu  {cpu_str}"
+            f"  │  ram  {ram_str}  │  rss  {rss_str}  │  cpu  {cpu_str}"
         )
 
         # Assemble
