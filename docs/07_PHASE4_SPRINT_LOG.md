@@ -1786,3 +1786,45 @@ BN stat corruption then propagates even if the optimizer step is skipped.
 - `fix(training): guard aux CE and entropy against FP16 0×-inf NaN`
 
 **Test counts:** 86 Rust + 604 Python, all passing.
+
+### 48. Pre-allocate stats loop receive buffers to reduce heap churn (2026-04-05)
+**Files:** `hexo_rl/selfplay/pool.py`
+
+**Problem:** `_stats_loop` called `collect_data()` at ~10 Hz. Each position returned
+from Rust (as a Python list) was converted with `np.array(feat, dtype=np.float16)` and
+`np.array(pol, dtype=np.float32)`, creating and immediately discarding two numpy array
+objects per position. Python's arena allocator grows to service peak allocations but
+never returns arena memory to the OS → estimated 100–300 MB RSS creep over multi-hour runs.
+
+**Fix:** Stored `_feat_len` and `_pol_len` on `self` in `__init__`. Pre-allocate
+`_feat_buf` (float16) and `_pol_buf` (float32) once before the while loop. Replace
+`np.array(feat, ...)` / `np.array(pol, ...)` with in-place `_feat_buf[:] = feat` /
+`_pol_buf[:] = pol`. `_feat_2d` is a persistent reshaped view — no array object created
+or freed per iteration. Safe because `replay_buffer.push()` and `recent_buffer.push()`
+copy data into Rust memory before returning.
+
+**Commits:**
+- `perf(selfplay): pre-allocate stats loop receive buffers to reduce heap churn`
+
+**Test counts:** 86 Rust + 604 Python, all passing.
+
+### 49. Guard uncertainty head against FP16 sigma2 underflow (2026-04-05)
+**Files:** `hexo_rl/training/losses.py`
+
+**Problem:** `compute_uncertainty_loss` ran under `torch.autocast(dtype=float16)`.
+`sigma2 = Softplus(linear_output)` can approach the FP16 minimum (~6e-8). The
+division `(z - v)² / sigma2` blows up to `+inf` if `sigma2` enters subnormal
+territory → `0.5 * inf = inf` → NaN in subsequent ops. Same 0×-inf / overflow
+family as the §47 aux CE / entropy bugs. Didn't trigger at 20 steps but would
+manifest at longer runs as uncertainty head weights grow.
+
+**Fix:** Promote `sigma2`, `z`, and `value_detached` to FP32 before all operations.
+Clamp `sigma2_fp32` to `min=1e-6` before `log()` and division.
+`log(1e-6) ≈ -13.8` — well within FP32 range; `σ ≈ 0.001` is a physically meaningful
+minimum uncertainty. Result scalar is FP32 and combines with the total loss at full
+precision, consistent with the §47 entropy fix pattern.
+
+**Commits:**
+- `fix(training): guard uncertainty head against FP16 sigma2 underflow`
+
+**Test counts:** 86 Rust + 604 Python, all passing.
