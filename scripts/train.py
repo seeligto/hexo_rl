@@ -328,6 +328,16 @@ def main() -> None:
         pre_policies = data["policies"]   # (T, 362) float32
         pre_outcomes = data["outcomes"]   # (T,) float32
         T = len(pre_outcomes)
+        max_pre = int(mixing_cfg.get("pretrain_max_samples", 0))
+        if max_pre and T > max_pre:
+            _pre_seed = int(config.get("seed", 42))
+            _pre_rng = np.random.default_rng(_pre_seed)
+            subset_idx = np.sort(_pre_rng.choice(T, size=max_pre, replace=False))
+            log.info("corpus_capped", original=T, kept=max_pre)
+            pre_states   = pre_states[subset_idx]
+            pre_policies = pre_policies[subset_idx]
+            pre_outcomes = pre_outcomes[subset_idx]
+            T = max_pre
         file_mb = os.path.getsize(pretrained_path) / 1e6
         log.info("corpus_prefill", positions=T, file_mb=round(file_mb, 1))
         if T > 100_000:

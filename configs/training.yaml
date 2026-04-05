@@ -44,5 +44,6 @@ mixing:
   decay_steps: 300_000
   min_pretrained_weight: 0.1
   initial_pretrained_weight: 0.8
+  pretrain_max_samples: 200_000  # cap corpus loaded into Rust buffer; limits page cache to ~2.5 GB
 
 seed: 42
