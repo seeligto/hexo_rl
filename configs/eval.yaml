@@ -2,7 +2,7 @@
 
 eval_pipeline:
   enabled: true
-  eval_interval: 1000            # training steps between eval rounds
+  eval_interval: 5000            # training steps between eval rounds (training.yaml takes precedence)
   report_dir: reports/eval
   db_path: reports/eval/results.db
   ratings_plot_path: reports/eval/ratings_curve.png
