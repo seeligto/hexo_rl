@@ -162,6 +162,7 @@ impl MCTSTree {
         board_size: usize,
         c_visit: f32,
         c_scale: f32,
+        policy_prune_frac: f32,
     ) -> Vec<f32> {
         let n_actions = board_size * board_size + 1;
         let mut policy = vec![0.0f32; n_actions];
@@ -274,9 +275,9 @@ impl MCTSTree {
             }
         }
 
-        // Pruning: zero entries < 2% of max, renormalize
+        // Pruning: zero entries < prune_frac of max, renormalize
         let max_prob = policy.iter().cloned().fold(0.0f32, f32::max);
-        let threshold = 0.02 * max_prob;
+        let threshold = policy_prune_frac * max_prob;
         let mut pruned_sum = 0.0f32;
         for p in policy.iter_mut() {
             if *p < threshold {
@@ -1029,5 +1030,132 @@ mod tests {
         }
         // If forced child isn't expanded (e.g., terminal), the test still passes.
         tree.forced_root_child = None;
+    }
+
+    // ── get_improved_policy tests ────────────────────────────────────────────
+
+    /// Helper: set up a tree with N root children having specified visits, w_values, and priors.
+    /// Each child is placed at action (0, j) for j in 0..N.
+    fn setup_improved_policy_tree(
+        children: &[(u32, f32, f32)], // (visits, w_value, prior)
+    ) -> MCTSTree {
+        let mut tree = MCTSTree::new(1.5);
+        let board = Board::new();
+        tree.root_board = board;
+        let n = children.len();
+        tree.pool[0].first_child = 1;
+        tree.pool[0].n_children = n as u16;
+        tree.pool[0].moves_remaining = 2;
+
+        let mut total_visits = 0u32;
+        let mut total_w = 0.0f32;
+        for (j, &(visits, w_value, prior)) in children.iter().enumerate() {
+            let q = 0i32;
+            let r = j as i32;
+            let action_idx = ((q as u32).wrapping_add(32768) << 16) | (r as u32).wrapping_add(32768);
+            tree.pool[1 + j] = Node {
+                parent: 0,
+                action_idx,
+                n_visits: visits,
+                w_value,
+                prior,
+                first_child: u32::MAX,
+                n_children: 0,
+                moves_remaining: 1,
+                is_terminal: false,
+                terminal_value: 0.0,
+                virtual_loss_count: 0,
+            };
+            total_visits += visits;
+            total_w += w_value;
+        }
+        tree.pool[0].n_visits = total_visits;
+        tree.pool[0].w_value = total_w;
+        tree.next_free = 1 + n as u32;
+        tree
+    }
+
+    #[test]
+    fn test_improved_policy_sums_to_one() {
+        // Three children with different visits and Q values.
+        let tree = setup_improved_policy_tree(&[
+            (10, 5.0, 0.5),   // Q=0.5
+            (8, -2.0, 0.3),   // Q=-0.25
+            (2, 0.4, 0.2),    // Q=0.2
+        ]);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0, 0.02);
+        let sum: f32 = policy.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-5, "policy should sum to 1.0, got {sum}");
+    }
+
+    #[test]
+    fn test_improved_policy_no_visits_returns_prior() {
+        // All children unvisited — should return normalized priors.
+        let tree = setup_improved_policy_tree(&[
+            (0, 0.0, 0.6),
+            (0, 0.0, 0.4),
+        ]);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0, 0.0);
+        let sum: f32 = policy.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-5, "prior fallback should sum to 1.0, got {sum}");
+
+        // The two non-zero entries should roughly reflect priors.
+        let nonzero: Vec<f32> = policy.iter().copied().filter(|&p| p > 0.0).collect();
+        assert_eq!(nonzero.len(), 2);
+        assert!(nonzero[0] > nonzero[1], "higher prior should get higher prob");
+    }
+
+    #[test]
+    fn test_improved_policy_q_ordering() {
+        // Two children: one clearly winning (Q=+0.9), one losing (Q=-0.9).
+        // Equal priors — the improved policy should favor the winning child.
+        let tree = setup_improved_policy_tree(&[
+            (50, 45.0, 0.5),   // Q=+0.9
+            (50, -45.0, 0.5),  // Q=-0.9
+        ]);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0, 0.0);
+
+        // Find the two non-zero actions.
+        let (cq, cr) = tree.root_board.window_center();
+        let idx_good = Board::window_flat_idx_at(0, 0, cq, cr);
+        let idx_bad = Board::window_flat_idx_at(0, 1, cq, cr);
+
+        assert!(policy[idx_good] > policy[idx_bad],
+            "Q=+0.9 child should get more probability than Q=-0.9: {} vs {}",
+            policy[idx_good], policy[idx_bad]);
+    }
+
+    #[test]
+    fn test_improved_policy_prune_frac() {
+        // Two children with similar Q but different priors. Low c_scale to keep
+        // softmax spread moderate so both survive without pruning.
+        let tree = setup_improved_policy_tree(&[
+            (10, 2.0, 0.6),   // Q=+0.2
+            (10, 1.0, 0.4),   // Q=+0.1
+        ]);
+
+        // With no pruning, both should be non-zero.
+        let policy_no_prune = tree.get_improved_policy(BOARD_SIZE, 50.0, 0.1, 0.0);
+        let nonzero_count = policy_no_prune.iter().filter(|&&p| p > 0.0).count();
+        assert_eq!(nonzero_count, 2, "no pruning should keep both actions");
+
+        // With aggressive pruning (90%), the weaker child should be pruned.
+        let policy_pruned = tree.get_improved_policy(BOARD_SIZE, 50.0, 0.1, 0.9);
+        let nonzero_pruned: Vec<f32> = policy_pruned.iter().copied().filter(|&p| p > 0.0).collect();
+        assert_eq!(nonzero_pruned.len(), 1, "aggressive pruning should leave only 1 action");
+        assert!((nonzero_pruned[0] - 1.0).abs() < 1e-5, "sole survivor should have prob 1.0");
+    }
+
+    #[test]
+    fn test_improved_policy_illegal_actions_stay_zero() {
+        let tree = setup_improved_policy_tree(&[
+            (10, 5.0, 0.7),
+            (5, 1.0, 0.3),
+        ]);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0, 0.0);
+
+        // Only 2 actions should be non-zero out of 362.
+        let nonzero_count = policy.iter().filter(|&&p| p > 0.0).count();
+        assert_eq!(nonzero_count, 2, "only legal actions should have non-zero prob, got {nonzero_count}");
     }
 }

@@ -35,7 +35,7 @@ selfplay:
   # Replaces PUCT exploration at root with Gumbel-Top-k sampling and Sequential
   # Halving budget allocation. Non-root nodes still use PUCT + dynamic FPU.
   # Largest quality gain at low sim counts (50-sim fast games).
-  gumbel_mcts: false          # OFF by default — opt-in after validation
+  gumbel_mcts: true           # enabled for Gumbel MCTS test run
   gumbel_m: 16                # number of root candidates (paper default)
   gumbel_explore_moves: 10    # first N plies use visit-count sampling for exploration
 
@@ -48,7 +48,7 @@ selfplay:
   max_game_moves: 200  # compound moves (each = 2 stones); draws beyond this cap
 
   playout_cap:
-    fast_prob: 0.25
+    fast_prob: 0.40
     fast_sims: 50
     standard_sims: 200
     temperature_threshold_compound_moves: 15
