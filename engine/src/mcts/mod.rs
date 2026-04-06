@@ -155,14 +155,14 @@ impl MCTSTree {
     /// Compute improved policy targets using Gumbel completed Q-values
     /// (Danihelka et al., Gumbel AlphaZero, ICLR 2022 §4, Appendix D Eq. 33).
     ///
-    /// Returns a 362-dim probability distribution that incorporates MCTS Q-values
-    /// into the prior, giving useful policy signal even at low simulation counts.
+    /// Returns a `(board_size * board_size + 1)`-dim probability distribution that
+    /// incorporates MCTS Q-values into the prior, giving useful policy signal even
+    /// at low simulation counts.
     pub fn get_improved_policy(
         &self,
         board_size: usize,
         c_visit: f32,
         c_scale: f32,
-        policy_prune_frac: f32,
     ) -> Vec<f32> {
         let n_actions = board_size * board_size + 1;
         let mut policy = vec![0.0f32; n_actions];
@@ -275,22 +275,8 @@ impl MCTSTree {
             }
         }
 
-        // Pruning: zero entries < prune_frac of max, renormalize
-        let max_prob = policy.iter().cloned().fold(0.0f32, f32::max);
-        let threshold = policy_prune_frac * max_prob;
-        let mut pruned_sum = 0.0f32;
-        for p in policy.iter_mut() {
-            if *p < threshold {
-                *p = 0.0;
-            } else {
-                pruned_sum += *p;
-            }
-        }
-        if pruned_sum > 0.0 {
-            for p in policy.iter_mut() {
-                *p /= pruned_sum;
-            }
-        }
+        // Note: policy pruning is applied only in the Python training loop
+        // (prune_policy_targets in trainer.py) to avoid double-pruning.
 
         policy
     }
@@ -1083,7 +1069,7 @@ mod tests {
             (8, -2.0, 0.3),   // Q=-0.25
             (2, 0.4, 0.2),    // Q=0.2
         ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0, 0.02);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
         let sum: f32 = policy.iter().sum();
         assert!((sum - 1.0).abs() < 1e-5, "policy should sum to 1.0, got {sum}");
     }
@@ -1095,7 +1081,7 @@ mod tests {
             (0, 0.0, 0.6),
             (0, 0.0, 0.4),
         ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0, 0.0);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
         let sum: f32 = policy.iter().sum();
         assert!((sum - 1.0).abs() < 1e-5, "prior fallback should sum to 1.0, got {sum}");
 
@@ -1113,7 +1099,7 @@ mod tests {
             (50, 45.0, 0.5),   // Q=+0.9
             (50, -45.0, 0.5),  // Q=-0.9
         ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0, 0.0);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
 
         // Find the two non-zero actions.
         let (cq, cr) = tree.root_board.window_center();
@@ -1125,26 +1111,8 @@ mod tests {
             policy[idx_good], policy[idx_bad]);
     }
 
-    #[test]
-    fn test_improved_policy_prune_frac() {
-        // Two children with similar Q but different priors. Low c_scale to keep
-        // softmax spread moderate so both survive without pruning.
-        let tree = setup_improved_policy_tree(&[
-            (10, 2.0, 0.6),   // Q=+0.2
-            (10, 1.0, 0.4),   // Q=+0.1
-        ]);
-
-        // With no pruning, both should be non-zero.
-        let policy_no_prune = tree.get_improved_policy(BOARD_SIZE, 50.0, 0.1, 0.0);
-        let nonzero_count = policy_no_prune.iter().filter(|&&p| p > 0.0).count();
-        assert_eq!(nonzero_count, 2, "no pruning should keep both actions");
-
-        // With aggressive pruning (90%), the weaker child should be pruned.
-        let policy_pruned = tree.get_improved_policy(BOARD_SIZE, 50.0, 0.1, 0.9);
-        let nonzero_pruned: Vec<f32> = policy_pruned.iter().copied().filter(|&p| p > 0.0).collect();
-        assert_eq!(nonzero_pruned.len(), 1, "aggressive pruning should leave only 1 action");
-        assert!((nonzero_pruned[0] - 1.0).abs() < 1e-5, "sole survivor should have prob 1.0");
-    }
+    // Note: policy_prune_frac test removed — pruning now lives only in
+    // Python's prune_policy_targets (trainer.py) to avoid double-pruning.
 
     #[test]
     fn test_improved_policy_illegal_actions_stay_zero() {
@@ -1152,9 +1120,9 @@ mod tests {
             (10, 5.0, 0.7),
             (5, 1.0, 0.3),
         ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0, 0.0);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
 
-        // Only 2 actions should be non-zero out of 362.
+        // Only 2 actions should be non-zero out of board_size*board_size+1.
         let nonzero_count = policy.iter().filter(|&&p| p > 0.0).count();
         assert_eq!(nonzero_count, 2, "only legal actions should have non-zero prob, got {nonzero_count}");
     }

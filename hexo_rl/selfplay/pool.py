@@ -81,7 +81,6 @@ class WorkerPool:
             completed_q_values=bool(sp.get("completed_q_values", False)),
             c_visit=float(sp.get("c_visit", 50.0)),
             c_scale=float(sp.get("c_scale", 1.0)),
-            policy_prune_frac=float(config.get("policy_prune_frac", 0.02)),
             gumbel_mcts=bool(sp.get("gumbel_mcts", False)),
             gumbel_m=int(sp.get("gumbel_m", 16)),
             gumbel_explore_moves=int(sp.get("gumbel_explore_moves", 10)),
