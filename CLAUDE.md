@@ -81,7 +81,7 @@ Always check `docs/02_ROADMAP.md` for the current phase before starting work.
 - Game viewer live at `/viewer` with threat overlay and replay controls.
 - Threat detection implemented in Rust (`Board.get_threats()`).
 - Benchmark rebaselined 2026-04-03 (correct 12-block model). All 10 metrics PASS.
-- Ready for sustained 24–48hr training run (Phase 4.0 exit criterion).
+- Ready for sustained 24-48hr training run (Phase 4.0 exit criterion).
 Next milestone: Phase 4.5 (benchmark gate — see docs/02_roadmap.md).
 
 Each phase has explicit exit criteria — do not advance until they are met.
@@ -200,9 +200,10 @@ make rebuild          # full clean + optimized rebuild
 
 # Testing
 make test.rust        # Rust tests
-make test.py          # Python tests (tests/ only)
+make test.py          # Python tests (excludes slow/integration)
 make test.all         # Rust + Python tests
 make test.focus       # buffer/inference/pool smoke tests
+make test.integration # lifecycle integration test (~2-5 min, slow)
 make ci               # full pre-push gate (all tests + quick benchmark)
 
 # Benchmarks
@@ -524,9 +525,9 @@ also corrected from pynvml global to torch.cuda.max_memory_allocated().
 2026-04-04: torch.compile disabled (Python 3.14 CUDA graph incompatibility — see sprint §25, §30, §32). MCTS target
 rebaselined for correct hex-ball-8 legal move rule.
 2026-04-04: quiescence gate (§30) added. MCTS target rebaselined to ≥26,000 (85% of 30,963).
-2026-04-04_19-53: rebaseline after §36–§38 (cosine temperature, ZOI, ownership+threat heads,
+2026-04-04_19-53: rebaseline after §36-§38 (cosine temperature, ZOI, ownership+threat heads,
 action_idx u16→u32 fix). ZOI negligible on CPU-only benchmark. All 10 targets PASS.
-Test counts: 603 Python + 86 Rust, all passing.
+Test counts: 617 Python (616 unit + 1 integration) + 86 Rust, all passing.
 
 ## Phase 4.0 architecture baseline
 

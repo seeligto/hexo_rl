@@ -71,8 +71,12 @@ rebuild: clean native.build ## Full clean + optimized rebuild
 	@echo "Rebuild complete."
 
 .PHONY: test.py
-test.py: ## Run python test suite
-	$(PY) -m pytest -q tests
+test.py: ## Run python test suite (excludes slow/integration tests)
+	$(PY) -m pytest -q -m "not slow and not integration" tests
+
+.PHONY: test.integration
+test.integration: ## Run slow end-to-end lifecycle integration test (~2-5 min)
+	$(PY) -m pytest -v -m "integration" tests/test_train_lifecycle.py
 
 .PHONY: test.focus
 test.focus: ## Run focused buffer/inference/pool smoke tests
