@@ -2192,3 +2192,57 @@ the dashboard to show frozen metric values (grad_norm stuck at last-received val
 **Commit:** `fix(dashboard): bound SocketIO send queue and add client-side auto-reconnect`
 
 **Test counts:** 86 Rust + 610 Python, all passing.
+
+---
+
+### §56 — Buffer save reliability on shutdown + structlog JSONL file sink
+
+**Files:** `scripts/train.py`, `hexo_rl/monitoring/configure.py`
+**Tests:** `tests/test_buffer_shutdown.py`, `tests/test_structlog_sink.py`
+
+**Fix 1 — buffer save on shutdown signal (train.py):**
+
+The buffer save was in the post-loop cleanup block, executed after `pool.stop()`.
+If the user sends a second Ctrl+C during teardown, `sys.exit(1)` is called inside
+the signal handler and the cleanup block is skipped entirely — buffer lost.
+
+Fix: added an early save in the `_shutdown_save[0]` branch of `_run_loop()`,
+immediately after `trainer.save_checkpoint()` and before `break`. Guarded by the
+same `buffer_persist` config check that exists in the post-loop block. Wrapped in
+`try/except` so a failing save logs a `buffer_save_failed` warning and never
+prevents the process from exiting. The post-loop save remains as a fallback for
+the normal (non-signal) exit path — two save points total.
+
+**Fix 2 — structlog JSONL file sink (configure.py + train.py):**
+
+`configure_logging` creates a JSONL file via `WriteLoggerFactory(file=log_file)` but
+the file handle was never explicitly closed, risking data loss on abrupt exit. The
+filename used a raw timestamp or `--run-name`, not the training `run_id`.
+
+Changes:
+- `configure_logging` now returns `(log, log_file)` instead of just `log`. The
+  caller is responsible for closing the handle.
+- `run_id = uuid.uuid4().hex` moved to the top of `main()`, before
+  `configure_logging` is called. Log filename is `logs/train_{run_id}.jsonl`
+  (or `logs/{run_name}.jsonl` if `--run-name` is passed explicitly).
+- `_log_fh.close()` added to the `finally` block in the training-run scope.
+
+**Tests added:**
+- `test_buffer_save_on_shutdown_signal` — replicate the shutdown-signal save block,
+  assert `save_to_path` produces a non-empty file and logs `buffer_saved`.
+- `test_buffer_save_on_shutdown_signal_exception_does_not_propagate` — bad path,
+  assert `buffer_save_failed` warning emitted and exception not raised.
+- `test_buffer_save_skipped_when_persist_disabled` — assert no save when
+  `buffer_persist: false`.
+- `test_structlog_file_sink_creates_jsonl` — assert JSONL file exists and every
+  line is valid JSON with an `event` key.
+- `test_structlog_file_sink_returns_file_handle` — assert return type is a tuple
+  with a file-like second element.
+- `test_structlog_file_sink_train_prefix` — assert `run_name='train_{run_id}'` →
+  file `logs/train_{run_id}.jsonl`, with correct event content.
+
+**Commits:**
+- `fix(train): save replay buffer immediately on shutdown signal before pool teardown`
+- `feat(monitoring): add structlog JSONL file sink to logs/train_{run_id}.jsonl`
+
+**Test counts:** 86 Rust + 616 Python, all passing.
