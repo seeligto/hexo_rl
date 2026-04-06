@@ -571,6 +571,26 @@ def test_uncertainty_head_absent_when_weight_zero(tmp_path: Path):
     assert "avg_sigma" not in result
 
 
+def test_train_step_logs_grad_norm(tmp_path: Path):
+    """train_step must emit a structlog 'train_step' event with grad_norm, total_loss, and step."""
+    import structlog.testing
+
+    trainer = make_trainer(tmp_path)
+    buf = fill_buffer()
+
+    with structlog.testing.capture_logs() as captured:
+        trainer.train_step(buf, augment=False)
+
+    train_step_events = [e for e in captured if e.get("event") == "train_step"]
+    assert train_step_events, "No 'train_step' log event found"
+    evt = train_step_events[0]
+    assert "grad_norm"   in evt, "grad_norm missing from train_step log"
+    assert "total_loss"  in evt, "total_loss missing from train_step log"
+    assert "step"        in evt, "step missing from train_step log"
+    assert evt["step"] == 1
+    assert not np.isnan(evt["grad_norm"]), f"grad_norm is NaN: {evt}"
+
+
 def test_uncertainty_loss_is_finite_with_aux(tmp_path: Path):
     """Uncertainty head must work alongside the opp_reply aux head."""
     cfg = {

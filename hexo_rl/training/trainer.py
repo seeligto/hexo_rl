@@ -398,6 +398,18 @@ class Trainer:
         if self.step % interval == 0:
             self.save_checkpoint(result)
 
+        log.info(
+            "train_step",
+            step=self.step,
+            grad_norm=result["grad_norm"],
+            total_loss=result["loss"],
+            policy_loss=result["policy_loss"],
+            value_loss=result["value_loss"],
+            aux_loss=result.get("opp_reply_loss"),
+            lr=result["lr"],
+            fp16_scale=self.scaler.get_scale(),
+        )
+
         return result
 
     # ── Checkpoint I/O ────────────────────────────────────────────────────────
