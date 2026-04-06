@@ -2340,3 +2340,53 @@ which is already logged as `policy_entropy`.
 - `uncertainty_loss`, `ownership_loss`, `threat_loss` present in every train_step JSONL event.
 
 **Test counts:** 86 Rust + 616 Python unit tests, all passing.
+
+---
+
+### §59 — TT memory leak, uncertainty loss divergence, Ctrl+C shutdown crash (2026-04-06)
+
+Three bugs discovered during a sustained self-play run (step ~1,640, 800+ games, 500 min).
+
+**Bug 1 — Transposition table memory leak (28 GB RSS)**
+
+`MCTSTree::new_game()` reset the node pool (`next_free = 1`) but never called
+`self.transposition_table.clear()`. Each `TTEntry` holds a heap-allocated
+`Vec<f32>` (362-element policy). With 12 workers playing games indefinitely, the
+TT accumulated every MCTS-visited position across all games without release.
+
+Estimated scale: 12 workers × ~67 games each × ~100 moves × ~300 unique positions/move
+× ~1.5 KB/entry ≈ tens of GB. Observed: 28 GB RSS after 500 min.
+
+**Fix:** Added `self.transposition_table.clear();` to `new_game()` in
+`engine/src/mcts/mod.rs`. The TT is per-game by nature — cross-game position reuse
+is negligible and not worth the unbounded memory cost.
+
+**Bug 2 — Gaussian NLL divergence (total_loss spikes to ~394)**
+
+`uncertainty_weight: 0.05` was active. `compute_uncertainty_loss` uses
+Gaussian NLL: `0.5 * (log σ² + (z−v)²/σ²)`. When σ² collapses toward the 1e-6
+clamp floor, the `(z−v)²/σ²` term is unbounded. Observed: `uncertainty_loss: 7812`
+recurring every ~50 steps → `0.05 × 7812 ≈ 390` added to total_loss, spiking it
+to ~394 while policy/value/aux remained normal (~5.5 total).
+
+The FP16 underflow guard added in §49 clamps σ² from below (prevents NaN) but
+does not prevent the reciprocal explosion. The fix in §49 was necessary but not
+sufficient for long runs where σ² can genuinely converge toward zero.
+
+**Fix:** Set `uncertainty_weight: 0.0` in `configs/training.yaml`. The uncertainty
+head is diagnostic-only and has never been used in MCTS. Disabled until a
+proper σ² regularisation strategy (e.g. log-barrier or β-VAE-style KL term) is designed.
+
+**Bug 3 — "I/O operation on closed file" crash on Ctrl+C**
+
+The `finally` block in `scripts/train.py` closed `_log_fh` before the
+post-finally session-end code ran (`trainer.save_checkpoint()` → `log.info()`).
+One Ctrl+C triggered a clean shutdown that hit this ordering, raising
+`ValueError: I/O operation on closed file` instead of saving gracefully.
+
+**Fix:** Moved `_log_fh.close()` to after all session-end logging, at the very end
+of `main()`.
+
+**Commit:** `452397f fix(train): three shutdown/training bugs — TT leak, uncertainty spikes, closed-log crash`
+
+**Test counts:** 86 Rust + 616 Python unit tests, all passing.
