@@ -31,6 +31,14 @@ selfplay:
   c_visit: 50.0
   c_scale: 1.0
 
+  # Gumbel MCTS search (Danihelka et al., ICLR 2022 §3.3-3.4).
+  # Replaces PUCT exploration at root with Gumbel-Top-k sampling and Sequential
+  # Halving budget allocation. Non-root nodes still use PUCT + dynamic FPU.
+  # Largest quality gain at low sim counts (50-sim fast games).
+  gumbel_mcts: false          # OFF by default — opt-in after validation
+  gumbel_m: 16                # number of root candidates (paper default)
+  gumbel_explore_moves: 10    # first N plies use visit-count sampling for exploration
+
   n_workers: 12
   inference_batch_size: 64
   inference_max_wait_ms: 12.0

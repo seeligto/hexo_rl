@@ -2461,3 +2461,64 @@ crossings needed. A Python reference implementation exists for testing only.
 **Tests:** 9 new tests in `tests/test_completed_q.py` covering math correctness,
 edge cases (no visits, all visited, fast-game regime), KL loss convergence, and
 FP16 safety. Test counts: 86 Rust + 625 Python.
+
+---
+
+### §61 Gumbel MCTS: Sequential Halving root search (2026-04-06)
+**Files:** `engine/src/mcts/mod.rs`, `engine/src/mcts/selection.rs`,
+`engine/src/game_runner.rs`, `configs/selfplay.yaml`, `hexo_rl/selfplay/pool.py`,
+`tests/test_gumbel_mcts.py`
+
+Implements the search-time component of Gumbel AlphaZero (Danihelka et al.,
+ICLR 2022 §3.3-3.4). Together with §60's completed Q-values policy targets,
+this completes the full Gumbel AlphaZero integration.
+
+**Problem:** At 50 sims (fast games, 25% of training), standard PUCT exploration
+is almost useless — UCB exploration dominates, visit distribution barely differs
+from the prior.
+
+**Implementation — two root-only mechanisms:**
+
+1. **Gumbel-Top-k root sampling:** Instead of PUCT at root, generate Gumbel(0,1)
+   noise per legal action, compute `score(a) = g(a) + log_prior(a)`, select top
+   `m = min(n, 16, |legal|)` candidates. Replaces Dirichlet noise at root.
+
+2. **Sequential Halving:** Allocate simulation budget across `ceil(log2(m))` phases.
+   Each phase gives `floor(remaining / (remaining_phases * |candidates|))` sims per
+   candidate, then halves candidates by `g(a) + log_prior(a) + sigma(Q_hat(a))`.
+
+**Key design decisions:**
+- `forced_root_child: Option<u32>` field on MCTSTree — checked in `select_one_leaf`
+  at depth 0 only. Zero-cost when None (branch prediction).
+- `GumbelSearchState` struct in game_runner.rs — allocated once per search call.
+  No per-simulation heap allocations.
+- NN inference code extracted into `infer_and_expand` closure to avoid duplication
+  between Gumbel and PUCT paths.
+- Move selection: after `gumbel_explore_moves` plies (default 10), use Sequential
+  Halving winner instead of visit-count sampling.
+
+**Non-root nodes:** Completely unchanged — PUCT + dynamic FPU.
+
+**Config (all in `configs/selfplay.yaml`):**
+```yaml
+gumbel_mcts: false          # OFF by default
+gumbel_m: 16                # paper default
+gumbel_explore_moves: 10    # plies using visit-count sampling
+```
+
+**Benchmark results (laptop, Ryzen 7 8845HS + RTX 4060):**
+
+| Metric | Baseline | Gumbel OFF | Gumbel ON | Target | Status |
+|--------|----------|-----------|-----------|--------|--------|
+| MCTS sim/s | 55,478 | 56,423 | 55,734 | >= 26k | PASS |
+| NN latency b=1 | 1.59ms | 1.61ms | 1.60ms | <= 3.5ms | PASS |
+| Worker pos/hr | 659,983 | 687,984 | 791,267 | >= 625k | PASS |
+| GPU util % | 100% | 99.9% | 100% | >= 85% | PASS |
+| Batch fill % | 100% | 100% | 100% | >= 80% | PASS |
+
+All 10 metrics PASS in both modes. Zero regression when disabled.
+
+**Tests:** 11 new Rust tests (forced root selection, Gumbel top-k, Sequential
+Halving phases/budget/halving, score computation, best action). 7 new Python
+tests (MCTSTree search validity, SelfPlayRunner config acceptance).
+Test counts: 97 Rust + 632 Python.

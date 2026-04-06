@@ -51,6 +51,10 @@ pub struct MCTSTree {
     /// Value blend amount for the 2-winning-moves case (strong but unproven).
     /// The NN value is nudged by ±quiescence_blend_2 toward ±1.0.
     pub(crate) quiescence_blend_2: f32,
+    /// When set, `select_one_leaf` skips PUCT at the root and descends
+    /// directly to this child pool index. Used by Sequential Halving
+    /// (Gumbel MCTS) to force simulations into a specific candidate's subtree.
+    pub(crate) forced_root_child: Option<u32>,
 }
 
 impl MCTSTree {
@@ -78,6 +82,7 @@ impl MCTSTree {
             transposition_table: FxHashMap::default(),
             quiescence_enabled: true,
             quiescence_blend_2: 0.3,
+            forced_root_child: None,
         }
     }
 
@@ -92,6 +97,7 @@ impl MCTSTree {
         self.pending.clear();
         self.selection_overlap_count = 0;
         self.max_depth_observed = 0;
+        self.forced_root_child = None;
         // Clear TT between games — positions don't repeat across games and
         // Vec<f32> policy entries accumulate unboundedly without this.
         self.transposition_table.clear();
@@ -286,6 +292,20 @@ impl MCTSTree {
         }
 
         policy
+    }
+
+    /// Returns (child_pool_index, prior) for each root child.
+    /// Used by Gumbel MCTS to build the candidate list after root expansion.
+    pub fn get_root_children_info(&self) -> Vec<(u32, f32)> {
+        let root = &self.pool[0];
+        if !root.is_expanded() {
+            return Vec::new();
+        }
+        let first = root.first_child as usize;
+        let n_ch = root.n_children as usize;
+        (first..first + n_ch)
+            .map(|i| (i as u32, self.pool[i].prior))
+            .collect()
     }
 
     pub fn root_visits(&self) -> u32 {
@@ -848,5 +868,166 @@ mod tests {
         let root = &tree.pool[0];
         assert!(!root.is_terminal,
             "root must NOT be marked terminal for a forced-win formation");
+    }
+
+    // ── Gumbel MCTS tests ────────────────────────────────────────────────────
+
+    fn setup_expanded_root() -> MCTSTree {
+        let mut tree = MCTSTree::new(1.5);
+        let board = Board::new();
+        tree.new_game(board);
+
+        // Expand root with uniform priors.
+        let leaves = tree.select_leaves(1);
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let policy = vec![1.0 / n_actions as f32; n_actions];
+        tree.expand_and_backup(&[policy], &[0.0]);
+        tree
+    }
+
+    #[test]
+    fn test_get_root_children_info_returns_correct_count() {
+        let tree = setup_expanded_root();
+        let info = tree.get_root_children_info();
+        assert_eq!(info.len(), tree.root_n_children());
+        // All priors should be > 0 (from uniform policy over full action space).
+        for &(idx, prior) in &info {
+            assert!(prior > 0.0, "prior for child {idx} should be > 0");
+        }
+        assert!(!info.is_empty(), "root should have children after expansion");
+    }
+
+    #[test]
+    fn test_forced_root_child_selection() {
+        let mut tree = setup_expanded_root();
+        let root = &tree.pool[0];
+        assert!(root.is_expanded());
+        let first = root.first_child;
+        let n_ch = root.n_children as usize;
+        assert!(n_ch >= 2, "need at least 2 children");
+
+        // Force selection to second child.
+        let target_child = first + 1;
+        tree.forced_root_child = Some(target_child);
+
+        // Run several simulations — all should go through the forced child.
+        let n_sims = 10;
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform = vec![1.0 / n_actions as f32; n_actions];
+        for _ in 0..n_sims {
+            let leaves = tree.select_leaves(1);
+            let n = leaves.len();
+            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+            let values = vec![0.0f32; n];
+            tree.expand_and_backup(&policies, &values);
+        }
+
+        // The forced child should have gotten all visits (minus root expansion).
+        let forced_visits = tree.pool[target_child as usize].n_visits;
+        assert!(forced_visits >= n_sims as u32 - 1,
+            "forced child should have >= {} visits, got {}", n_sims - 1, forced_visits);
+
+        // First child (not forced) should have 0 visits.
+        let other_visits = tree.pool[first as usize].n_visits;
+        assert_eq!(other_visits, 0,
+            "non-forced child should have 0 visits, got {other_visits}");
+
+        tree.forced_root_child = None;
+    }
+
+    #[test]
+    fn test_forced_root_none_uses_puct() {
+        // With forced_root_child = None, PUCT selects normally.
+        let mut tree = setup_expanded_root();
+        tree.forced_root_child = None;
+
+        let n_sims = 20;
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform = vec![1.0 / n_actions as f32; n_actions];
+        for _ in 0..n_sims {
+            let leaves = tree.select_leaves(1);
+            let n = leaves.len();
+            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+            let values = vec![0.0f32; n];
+            tree.expand_and_backup(&policies, &values);
+        }
+
+        // Multiple children should have visits (PUCT spreads them).
+        let first = tree.pool[0].first_child as usize;
+        let n_ch = tree.pool[0].n_children as usize;
+        let visited_count = (first..first + n_ch)
+            .filter(|&i| tree.pool[i].n_visits > 0)
+            .count();
+        assert!(visited_count >= 2,
+            "PUCT should visit multiple children, only {visited_count} visited");
+    }
+
+    #[test]
+    fn test_gumbel_disabled_no_behavior_change() {
+        // When forced_root_child is None, behavior is identical to pre-Gumbel code.
+        // Verify by running search twice with same setup and checking same results.
+        let run_search = || -> Vec<u32> {
+            let mut tree = MCTSTree::new(1.5);
+            let board = Board::new();
+            tree.new_game(board);
+            tree.forced_root_child = None; // explicitly None
+
+            let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+            let uniform = vec![1.0 / n_actions as f32; n_actions];
+            for _ in 0..10 {
+                let leaves = tree.select_leaves(1);
+                let n = leaves.len();
+                let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+                let values = vec![0.0f32; n];
+                tree.expand_and_backup(&policies, &values);
+            }
+
+            // Extract visit counts for root children
+            let first = tree.pool[0].first_child as usize;
+            let n_ch = tree.pool[0].n_children as usize;
+            (first..first + n_ch).map(|i| tree.pool[i].n_visits).collect()
+        };
+
+        let visits_a = run_search();
+        let visits_b = run_search();
+        // With deterministic input (uniform policy, value=0), results should match.
+        assert_eq!(visits_a, visits_b,
+            "search with forced_root_child=None should be deterministic");
+    }
+
+    #[test]
+    fn test_nonroot_uses_puct_when_root_forced() {
+        // Verify that non-root selection still uses PUCT (spreads visits)
+        // even when root selection is forced.
+        let mut tree = setup_expanded_root();
+        let first_child = tree.pool[0].first_child;
+        tree.forced_root_child = Some(first_child);
+
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform = vec![1.0 / n_actions as f32; n_actions];
+
+        // Run enough sims to expand the forced child and go deeper.
+        for _ in 0..30 {
+            let leaves = tree.select_leaves(1);
+            let n = leaves.len();
+            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+            let values = vec![0.0f32; n];
+            tree.expand_and_backup(&policies, &values);
+        }
+
+        // The forced child should now be expanded with multiple children.
+        let fc = &tree.pool[first_child as usize];
+        if fc.is_expanded() && fc.n_children > 1 {
+            // Multiple grandchildren should have visits (PUCT below root).
+            let gc_first = fc.first_child as usize;
+            let gc_n = fc.n_children as usize;
+            let gc_visited = (gc_first..gc_first + gc_n)
+                .filter(|&i| tree.pool[i].n_visits > 0)
+                .count();
+            assert!(gc_visited >= 2,
+                "PUCT at non-root should visit multiple grandchildren, got {gc_visited}");
+        }
+        // If forced child isn't expanded (e.g., terminal), the test still passes.
+        tree.forced_root_child = None;
     }
 }

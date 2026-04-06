@@ -179,6 +179,12 @@ Before ending any session or when asked to stop:
 
 PyO3 exposes Rust to Python. Import as: `from engine import Board, MCTSTree, ReplayBuffer, SelfPlayRunner, InferenceBatcher`
 
+**Always use the project virtual environment (`.venv`).** The `maturin develop` command
+installs the Rust extension into `.venv`. Never copy the `.so` to the system site-packages
+or install packages outside the venv. Run Python commands via `.venv/bin/python` or
+activate the venv first (`source .venv/bin/activate`). The Makefile targets (`make test.py`,
+`make train`, etc.) already use the venv python.
+
 Build commands:
 
 ```bash
@@ -536,6 +542,12 @@ Starting config for self-play RL (do not exceed without benchmarking):
   - Weight sync: inf_model ← train_model after every checkpoint save and model promotion
 - Replay buffer: start at 250K samples, grow toward 1M as training stabilises
 - ELO benchmark target: SealBot (replaces Ramora0 as external reference)
+- Gumbel MCTS (opt-in, `gumbel_mcts: false` by default):
+  - Gumbel-Top-k root sampling replaces PUCT exploration at root (Danihelka et al., ICLR 2022)
+  - Sequential Halving budget allocation across halving phases
+  - Non-root nodes: unchanged (PUCT + dynamic FPU)
+  - Config: `gumbel_mcts`, `gumbel_m` (default 16), `gumbel_explore_moves` (default 10)
+  - Completed Q-values (`completed_q_values: true`) provides policy targets for training
 
 Resolved before Phase 4.0 launch:
 - [x] Open Question 6: sequential vs compound action space
