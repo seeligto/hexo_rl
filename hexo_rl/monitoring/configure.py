@@ -15,7 +15,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import IO, Optional, Tuple
 
 import structlog
 
@@ -25,7 +25,7 @@ def configure_logging(
     run_name: Optional[str] = None,
     level: int = logging.INFO,
     console: bool = True,
-) -> structlog.BoundLogger:
+) -> Tuple[structlog.BoundLogger, IO]:
     """Configure structlog for structured JSON logging to file.
 
     Writes one JSON object per line to ``<log_dir>/<run_name>.jsonl``.
@@ -38,7 +38,8 @@ def configure_logging(
         console:  If True, also emit pretty output to stdout.
 
     Returns:
-        A structlog bound logger ready to use.
+        A tuple of (bound_logger, file_handle). The caller is responsible
+        for calling file_handle.close() when the run ends.
     """
     run_name = run_name or datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = Path(log_dir) / f"{run_name}.jsonl"
@@ -80,4 +81,4 @@ def configure_logging(
 
     log = structlog.get_logger()
     log.info("logging_configured", log_path=str(log_path), run_name=run_name)
-    return log
+    return log, log_file
