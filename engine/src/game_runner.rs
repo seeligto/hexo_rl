@@ -171,6 +171,7 @@ pub struct SelfPlayRunner {
     completed_q_values: bool,
     c_visit: f32,
     c_scale: f32,
+    policy_prune_frac: f32,
     gumbel_mcts: bool,
     gumbel_m: usize,
     gumbel_explore_moves: usize,
@@ -194,7 +195,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, policy_prune_frac = 0.02, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -218,6 +219,7 @@ impl SelfPlayRunner {
         completed_q_values: bool,
         c_visit: f32,
         c_scale: f32,
+        policy_prune_frac: f32,
         gumbel_mcts: bool,
         gumbel_m: usize,
         gumbel_explore_moves: usize,
@@ -246,6 +248,7 @@ impl SelfPlayRunner {
             completed_q_values,
             c_visit,
             c_scale,
+            policy_prune_frac,
             gumbel_mcts,
             gumbel_m,
             gumbel_explore_moves,
@@ -293,6 +296,7 @@ impl SelfPlayRunner {
             let completed_q_values = self.completed_q_values;
             let c_visit = self.c_visit;
             let c_scale = self.c_scale;
+            let policy_prune_frac = self.policy_prune_frac;
             let gumbel_mcts = self.gumbel_mcts;
             let gumbel_m = self.gumbel_m;
             let gumbel_explore_moves = self.gumbel_explore_moves;
@@ -395,7 +399,21 @@ impl SelfPlayRunner {
                             let mut sims_used = root_sims;
 
                             // Phase 2: Gumbel-Top-k candidate selection.
+                            // Guard: if effective_m is 0 (no budget or no children),
+                            // fall back to the standard PUCT path for this move.
                             let effective_m = gumbel_m.min(game_sims).min(tree.root_n_children());
+                            if effective_m == 0 {
+                                // No candidates — use standard PUCT search instead.
+                                let mut sims_done = 0;
+                                while sims_done < game_sims {
+                                    if !running.load(Ordering::SeqCst) { break; }
+                                    let n = infer_and_expand(&mut tree, leaf_batch_size);
+                                    if n == 0 { break; }
+                                    sims_done += n;
+                                }
+                                gumbel_state = None;
+                            } else {
+
                             let mut gs = GumbelSearchState::new(
                                 &tree, effective_m, c_visit, c_scale, &mut rng,
                             );
@@ -432,6 +450,7 @@ impl SelfPlayRunner {
                             }
                             tree.forced_root_child = None;
                             gumbel_state = Some(gs);
+                            } // end effective_m > 0
                         } else {
                             // ── Standard PUCT search (unchanged) ──
                             let mut sims_done = 0;
@@ -460,7 +479,7 @@ impl SelfPlayRunner {
                         // Completed Q-values: compute improved policy for training target.
                         // Move selection still uses temperature-scaled visit counts above.
                         let target_policy = if completed_q_values {
-                            tree.get_improved_policy(BOARD_SIZE, c_visit, c_scale)
+                            tree.get_improved_policy(BOARD_SIZE, c_visit, c_scale, policy_prune_frac)
                         } else {
                             policy.clone()
                         };
@@ -853,7 +872,7 @@ mod tests {
         // Run with max_moves_per_game = 0 to avoid triggering MCTS and inference server dependency
         let runner = SelfPlayRunner::new(
             4, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
-            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10,
+            0.05, false, 16, 5, false, 50.0, 1.0, 0.02, false, 16, 10,
         );
         runner.start();
         
