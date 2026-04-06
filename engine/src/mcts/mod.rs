@@ -92,6 +92,9 @@ impl MCTSTree {
         self.pending.clear();
         self.selection_overlap_count = 0;
         self.max_depth_observed = 0;
+        // Clear TT between games — positions don't repeat across games and
+        // Vec<f32> policy entries accumulate unboundedly without this.
+        self.transposition_table.clear();
     }
 
     // ── Policy extraction ─────────────────────────────────────────────────────
