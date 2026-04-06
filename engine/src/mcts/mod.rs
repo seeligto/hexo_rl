@@ -146,6 +146,148 @@ impl MCTSTree {
         policy
     }
 
+    /// Compute improved policy targets using Gumbel completed Q-values
+    /// (Danihelka et al., Gumbel AlphaZero, ICLR 2022 §4, Appendix D Eq. 33).
+    ///
+    /// Returns a 362-dim probability distribution that incorporates MCTS Q-values
+    /// into the prior, giving useful policy signal even at low simulation counts.
+    pub fn get_improved_policy(
+        &self,
+        board_size: usize,
+        c_visit: f32,
+        c_scale: f32,
+    ) -> Vec<f32> {
+        let n_actions = board_size * board_size + 1;
+        let mut policy = vec![0.0f32; n_actions];
+
+        let root = &self.pool[0];
+        if !root.is_expanded() {
+            return policy;
+        }
+
+        let first = root.first_child as usize;
+        let n_ch = root.n_children as usize;
+
+        // Collect per-child data: (flat_action_idx, visits, prior, q_value)
+        let mut child_data: Vec<(usize, u32, f32, f32)> = Vec::with_capacity(n_ch);
+        let mut sum_n: u32 = 0;
+        let mut max_n: u32 = 0;
+        let mut visited_prior_sum: f32 = 0.0;
+        let mut policy_weighted_q: f32 = 0.0;
+
+        for j in 0..n_ch {
+            let child = &self.pool[first + j];
+            let val = child.action_idx;
+            let q = (val >> 16) as i32 - 32768;
+            let r = (val & 0xFFFF) as i32 - 32768;
+            let action = self.root_board.window_flat_idx(q, r);
+            if action >= n_actions {
+                continue;
+            }
+
+            let visits = child.n_visits;
+            let prior = child.prior;
+            let q_val = if visits > 0 {
+                child.w_value / visits as f32
+            } else {
+                0.0
+            };
+
+            sum_n += visits;
+            if visits > max_n {
+                max_n = visits;
+            }
+            if visits > 0 {
+                visited_prior_sum += prior;
+                policy_weighted_q += prior * q_val;
+            }
+
+            child_data.push((action, visits, prior, q_val));
+        }
+
+        // Edge case: no visits at all — return prior distribution
+        if sum_n == 0 {
+            let mut total_prior = 0.0f32;
+            for &(action, _, prior, _) in &child_data {
+                policy[action] = prior;
+                total_prior += prior;
+            }
+            if total_prior > 0.0 {
+                for p in policy.iter_mut() {
+                    *p /= total_prior;
+                }
+            }
+            return policy;
+        }
+
+        // v_hat: root value estimate (W/N from root node)
+        let v_hat = root.w_value / root.n_visits as f32;
+
+        // v_mix: mixed value estimate for unvisited actions (paper Eq. 33)
+        let v_mix = if visited_prior_sum > 1e-8 {
+            let sum_n_f = sum_n as f32;
+            (1.0 / (1.0 + sum_n_f))
+                * (v_hat + (sum_n_f / visited_prior_sum) * policy_weighted_q)
+        } else {
+            v_hat
+        };
+
+        // Build completed Q-values and compute pi_improved = softmax(log_prior + sigma(completedQ))
+        let sigma_scale = (c_visit + max_n as f32) * c_scale;
+        let mut logits = vec![f32::NEG_INFINITY; n_actions];
+
+        for &(action, visits, prior, q_val) in &child_data {
+            let completed_q = if visits > 0 {
+                q_val.clamp(-1.0, 1.0)
+            } else {
+                v_mix.clamp(-1.0, 1.0)
+            };
+            let log_prior = (prior.max(1e-8)).ln();
+            logits[action] = log_prior + sigma_scale * completed_q;
+        }
+
+        // Numerically stable softmax over legal actions only
+        let max_logit = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        if max_logit == f32::NEG_INFINITY {
+            return policy;
+        }
+
+        let mut sum_exp = 0.0f32;
+        for &l in &logits {
+            if l > f32::NEG_INFINITY {
+                sum_exp += (l - max_logit).exp();
+            }
+        }
+        if sum_exp <= 0.0 {
+            return policy;
+        }
+
+        for i in 0..n_actions {
+            if logits[i] > f32::NEG_INFINITY {
+                policy[i] = (logits[i] - max_logit).exp() / sum_exp;
+            }
+        }
+
+        // Pruning: zero entries < 2% of max, renormalize
+        let max_prob = policy.iter().cloned().fold(0.0f32, f32::max);
+        let threshold = 0.02 * max_prob;
+        let mut pruned_sum = 0.0f32;
+        for p in policy.iter_mut() {
+            if *p < threshold {
+                *p = 0.0;
+            } else {
+                pruned_sum += *p;
+            }
+        }
+        if pruned_sum > 0.0 {
+            for p in policy.iter_mut() {
+                *p /= pruned_sum;
+            }
+        }
+
+        policy
+    }
+
     pub fn root_visits(&self) -> u32 {
         self.pool[0].n_visits
     }

@@ -78,6 +78,9 @@ class WorkerPool:
             zoi_enabled=bool(pc.get("zoi_enabled", False)),
             zoi_lookback=int(pc.get("zoi_lookback", 16)),
             zoi_margin=int(pc.get("zoi_margin", 5)),
+            completed_q_values=bool(sp.get("completed_q_values", False)),
+            c_visit=float(sp.get("c_visit", 50.0)),
+            c_scale=float(sp.get("c_scale", 1.0)),
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 
