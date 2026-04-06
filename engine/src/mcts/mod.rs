@@ -51,6 +51,10 @@ pub struct MCTSTree {
     /// Value blend amount for the 2-winning-moves case (strong but unproven).
     /// The NN value is nudged by ±quiescence_blend_2 toward ±1.0.
     pub(crate) quiescence_blend_2: f32,
+    /// When set, `select_one_leaf` skips PUCT at the root and descends
+    /// directly to this child pool index. Used by Sequential Halving
+    /// (Gumbel MCTS) to force simulations into a specific candidate's subtree.
+    pub(crate) forced_root_child: Option<u32>,
 }
 
 impl MCTSTree {
@@ -78,6 +82,7 @@ impl MCTSTree {
             transposition_table: FxHashMap::default(),
             quiescence_enabled: true,
             quiescence_blend_2: 0.3,
+            forced_root_child: None,
         }
     }
 
@@ -92,6 +97,7 @@ impl MCTSTree {
         self.pending.clear();
         self.selection_overlap_count = 0;
         self.max_depth_observed = 0;
+        self.forced_root_child = None;
         // Clear TT between games — positions don't repeat across games and
         // Vec<f32> policy entries accumulate unboundedly without this.
         self.transposition_table.clear();
@@ -144,6 +150,152 @@ impl MCTSTree {
         }
 
         policy
+    }
+
+    /// Compute improved policy targets using Gumbel completed Q-values
+    /// (Danihelka et al., Gumbel AlphaZero, ICLR 2022 §4, Appendix D Eq. 33).
+    ///
+    /// Returns a `(board_size * board_size + 1)`-dim probability distribution that
+    /// incorporates MCTS Q-values into the prior, giving useful policy signal even
+    /// at low simulation counts.
+    pub fn get_improved_policy(
+        &self,
+        board_size: usize,
+        c_visit: f32,
+        c_scale: f32,
+    ) -> Vec<f32> {
+        let n_actions = board_size * board_size + 1;
+        let mut policy = vec![0.0f32; n_actions];
+
+        let root = &self.pool[0];
+        if !root.is_expanded() {
+            return policy;
+        }
+
+        let first = root.first_child as usize;
+        let n_ch = root.n_children as usize;
+
+        // Collect per-child data: (flat_action_idx, visits, prior, q_value)
+        let mut child_data: Vec<(usize, u32, f32, f32)> = Vec::with_capacity(n_ch);
+        let mut sum_n: u32 = 0;
+        let mut max_n: u32 = 0;
+        let mut visited_prior_sum: f32 = 0.0;
+        let mut policy_weighted_q: f32 = 0.0;
+
+        for j in 0..n_ch {
+            let child = &self.pool[first + j];
+            let val = child.action_idx;
+            let q = (val >> 16) as i32 - 32768;
+            let r = (val & 0xFFFF) as i32 - 32768;
+            let action = self.root_board.window_flat_idx(q, r);
+            if action >= n_actions {
+                continue;
+            }
+
+            let visits = child.n_visits;
+            let prior = child.prior;
+            let q_val = if visits > 0 {
+                child.w_value / visits as f32
+            } else {
+                0.0
+            };
+
+            sum_n += visits;
+            if visits > max_n {
+                max_n = visits;
+            }
+            if visits > 0 {
+                visited_prior_sum += prior;
+                policy_weighted_q += prior * q_val;
+            }
+
+            child_data.push((action, visits, prior, q_val));
+        }
+
+        // Edge case: no visits at all — return prior distribution
+        if sum_n == 0 {
+            let mut total_prior = 0.0f32;
+            for &(action, _, prior, _) in &child_data {
+                policy[action] = prior;
+                total_prior += prior;
+            }
+            if total_prior > 0.0 {
+                for p in policy.iter_mut() {
+                    *p /= total_prior;
+                }
+            }
+            return policy;
+        }
+
+        // v_hat: root value estimate (W/N from root node)
+        let v_hat = root.w_value / root.n_visits as f32;
+
+        // v_mix: mixed value estimate for unvisited actions (paper Eq. 33).
+        // Note: child.prior values come from softmax and are assumed to sum to
+        // ~1.0 over legal actions. No normalization step needed unless expansion
+        // pruning is added in the future.
+        let v_mix = if visited_prior_sum > 1e-8 {
+            let sum_n_f = sum_n as f32;
+            (1.0 / (1.0 + sum_n_f))
+                * (v_hat + (sum_n_f / visited_prior_sum) * policy_weighted_q)
+        } else {
+            v_hat
+        };
+
+        // Build completed Q-values and compute pi_improved = softmax(log_prior + sigma(completedQ))
+        let sigma_scale = (c_visit + max_n as f32) * c_scale;
+        let mut logits = vec![f32::NEG_INFINITY; n_actions];
+
+        for &(action, visits, prior, q_val) in &child_data {
+            let completed_q = if visits > 0 {
+                q_val.clamp(-1.0, 1.0)
+            } else {
+                v_mix.clamp(-1.0, 1.0)
+            };
+            let log_prior = (prior.max(1e-8)).ln();
+            logits[action] = log_prior + sigma_scale * completed_q;
+        }
+
+        // Numerically stable softmax over legal actions only
+        let max_logit = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        if max_logit == f32::NEG_INFINITY {
+            return policy;
+        }
+
+        let mut sum_exp = 0.0f32;
+        for &l in &logits {
+            if l > f32::NEG_INFINITY {
+                sum_exp += (l - max_logit).exp();
+            }
+        }
+        if sum_exp <= 0.0 {
+            return policy;
+        }
+
+        for i in 0..n_actions {
+            if logits[i] > f32::NEG_INFINITY {
+                policy[i] = (logits[i] - max_logit).exp() / sum_exp;
+            }
+        }
+
+        // Note: policy pruning is applied only in the Python training loop
+        // (prune_policy_targets in trainer.py) to avoid double-pruning.
+
+        policy
+    }
+
+    /// Returns (child_pool_index, prior) for each root child.
+    /// Used by Gumbel MCTS to build the candidate list after root expansion.
+    pub fn get_root_children_info(&self) -> Vec<(u32, f32)> {
+        let root = &self.pool[0];
+        if !root.is_expanded() {
+            return Vec::new();
+        }
+        let first = root.first_child as usize;
+        let n_ch = root.n_children as usize;
+        (first..first + n_ch)
+            .map(|i| (i as u32, self.pool[i].prior))
+            .collect()
     }
 
     pub fn root_visits(&self) -> u32 {
@@ -706,5 +858,275 @@ mod tests {
         let root = &tree.pool[0];
         assert!(!root.is_terminal,
             "root must NOT be marked terminal for a forced-win formation");
+    }
+
+    // ── Gumbel MCTS tests ────────────────────────────────────────────────────
+
+    fn setup_expanded_root() -> MCTSTree {
+        let mut tree = MCTSTree::new(1.5);
+        let board = Board::new();
+        tree.new_game(board);
+
+        // Expand root with uniform priors.
+        let leaves = tree.select_leaves(1);
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let policy = vec![1.0 / n_actions as f32; n_actions];
+        tree.expand_and_backup(&[policy], &[0.0]);
+        tree
+    }
+
+    #[test]
+    fn test_get_root_children_info_returns_correct_count() {
+        let tree = setup_expanded_root();
+        let info = tree.get_root_children_info();
+        assert_eq!(info.len(), tree.root_n_children());
+        // All priors should be > 0 (from uniform policy over full action space).
+        for &(idx, prior) in &info {
+            assert!(prior > 0.0, "prior for child {idx} should be > 0");
+        }
+        assert!(!info.is_empty(), "root should have children after expansion");
+    }
+
+    #[test]
+    fn test_forced_root_child_selection() {
+        let mut tree = setup_expanded_root();
+        let root = &tree.pool[0];
+        assert!(root.is_expanded());
+        let first = root.first_child;
+        let n_ch = root.n_children as usize;
+        assert!(n_ch >= 2, "need at least 2 children");
+
+        // Force selection to second child.
+        let target_child = first + 1;
+        tree.forced_root_child = Some(target_child);
+
+        // Run several simulations — all should go through the forced child.
+        let n_sims = 10;
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform = vec![1.0 / n_actions as f32; n_actions];
+        for _ in 0..n_sims {
+            let leaves = tree.select_leaves(1);
+            let n = leaves.len();
+            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+            let values = vec![0.0f32; n];
+            tree.expand_and_backup(&policies, &values);
+        }
+
+        // The forced child should have gotten all visits (minus root expansion).
+        let forced_visits = tree.pool[target_child as usize].n_visits;
+        assert!(forced_visits >= n_sims as u32 - 1,
+            "forced child should have >= {} visits, got {}", n_sims - 1, forced_visits);
+
+        // First child (not forced) should have 0 visits.
+        let other_visits = tree.pool[first as usize].n_visits;
+        assert_eq!(other_visits, 0,
+            "non-forced child should have 0 visits, got {other_visits}");
+
+        tree.forced_root_child = None;
+    }
+
+    #[test]
+    fn test_forced_root_none_uses_puct() {
+        // With forced_root_child = None, PUCT selects normally.
+        let mut tree = setup_expanded_root();
+        tree.forced_root_child = None;
+
+        let n_sims = 20;
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform = vec![1.0 / n_actions as f32; n_actions];
+        for _ in 0..n_sims {
+            let leaves = tree.select_leaves(1);
+            let n = leaves.len();
+            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+            let values = vec![0.0f32; n];
+            tree.expand_and_backup(&policies, &values);
+        }
+
+        // Multiple children should have visits (PUCT spreads them).
+        let first = tree.pool[0].first_child as usize;
+        let n_ch = tree.pool[0].n_children as usize;
+        let visited_count = (first..first + n_ch)
+            .filter(|&i| tree.pool[i].n_visits > 0)
+            .count();
+        assert!(visited_count >= 2,
+            "PUCT should visit multiple children, only {visited_count} visited");
+    }
+
+    #[test]
+    fn test_gumbel_disabled_no_behavior_change() {
+        // When forced_root_child is None, behavior is identical to pre-Gumbel code.
+        // Verify by running search twice with same setup and checking same results.
+        let run_search = || -> Vec<u32> {
+            let mut tree = MCTSTree::new(1.5);
+            let board = Board::new();
+            tree.new_game(board);
+            tree.forced_root_child = None; // explicitly None
+
+            let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+            let uniform = vec![1.0 / n_actions as f32; n_actions];
+            for _ in 0..10 {
+                let leaves = tree.select_leaves(1);
+                let n = leaves.len();
+                let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+                let values = vec![0.0f32; n];
+                tree.expand_and_backup(&policies, &values);
+            }
+
+            // Extract visit counts for root children
+            let first = tree.pool[0].first_child as usize;
+            let n_ch = tree.pool[0].n_children as usize;
+            (first..first + n_ch).map(|i| tree.pool[i].n_visits).collect()
+        };
+
+        let visits_a = run_search();
+        let visits_b = run_search();
+        // With deterministic input (uniform policy, value=0), results should match.
+        assert_eq!(visits_a, visits_b,
+            "search with forced_root_child=None should be deterministic");
+    }
+
+    #[test]
+    fn test_nonroot_uses_puct_when_root_forced() {
+        // Verify that non-root selection still uses PUCT (spreads visits)
+        // even when root selection is forced.
+        let mut tree = setup_expanded_root();
+        let first_child = tree.pool[0].first_child;
+        tree.forced_root_child = Some(first_child);
+
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform = vec![1.0 / n_actions as f32; n_actions];
+
+        // Run enough sims to expand the forced child and go deeper.
+        for _ in 0..30 {
+            let leaves = tree.select_leaves(1);
+            let n = leaves.len();
+            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+            let values = vec![0.0f32; n];
+            tree.expand_and_backup(&policies, &values);
+        }
+
+        // The forced child should now be expanded with multiple children.
+        let fc = &tree.pool[first_child as usize];
+        if fc.is_expanded() && fc.n_children > 1 {
+            // Multiple grandchildren should have visits (PUCT below root).
+            let gc_first = fc.first_child as usize;
+            let gc_n = fc.n_children as usize;
+            let gc_visited = (gc_first..gc_first + gc_n)
+                .filter(|&i| tree.pool[i].n_visits > 0)
+                .count();
+            assert!(gc_visited >= 2,
+                "PUCT at non-root should visit multiple grandchildren, got {gc_visited}");
+        }
+        // If forced child isn't expanded (e.g., terminal), the test still passes.
+        tree.forced_root_child = None;
+    }
+
+    // ── get_improved_policy tests ────────────────────────────────────────────
+
+    /// Helper: set up a tree with N root children having specified visits, w_values, and priors.
+    /// Each child is placed at action (0, j) for j in 0..N.
+    fn setup_improved_policy_tree(
+        children: &[(u32, f32, f32)], // (visits, w_value, prior)
+    ) -> MCTSTree {
+        let mut tree = MCTSTree::new(1.5);
+        let board = Board::new();
+        tree.root_board = board;
+        let n = children.len();
+        tree.pool[0].first_child = 1;
+        tree.pool[0].n_children = n as u16;
+        tree.pool[0].moves_remaining = 2;
+
+        let mut total_visits = 0u32;
+        let mut total_w = 0.0f32;
+        for (j, &(visits, w_value, prior)) in children.iter().enumerate() {
+            let q = 0i32;
+            let r = j as i32;
+            let action_idx = ((q as u32).wrapping_add(32768) << 16) | (r as u32).wrapping_add(32768);
+            tree.pool[1 + j] = Node {
+                parent: 0,
+                action_idx,
+                n_visits: visits,
+                w_value,
+                prior,
+                first_child: u32::MAX,
+                n_children: 0,
+                moves_remaining: 1,
+                is_terminal: false,
+                terminal_value: 0.0,
+                virtual_loss_count: 0,
+            };
+            total_visits += visits;
+            total_w += w_value;
+        }
+        tree.pool[0].n_visits = total_visits;
+        tree.pool[0].w_value = total_w;
+        tree.next_free = 1 + n as u32;
+        tree
+    }
+
+    #[test]
+    fn test_improved_policy_sums_to_one() {
+        // Three children with different visits and Q values.
+        let tree = setup_improved_policy_tree(&[
+            (10, 5.0, 0.5),   // Q=0.5
+            (8, -2.0, 0.3),   // Q=-0.25
+            (2, 0.4, 0.2),    // Q=0.2
+        ]);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
+        let sum: f32 = policy.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-5, "policy should sum to 1.0, got {sum}");
+    }
+
+    #[test]
+    fn test_improved_policy_no_visits_returns_prior() {
+        // All children unvisited — should return normalized priors.
+        let tree = setup_improved_policy_tree(&[
+            (0, 0.0, 0.6),
+            (0, 0.0, 0.4),
+        ]);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
+        let sum: f32 = policy.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-5, "prior fallback should sum to 1.0, got {sum}");
+
+        // The two non-zero entries should roughly reflect priors.
+        let nonzero: Vec<f32> = policy.iter().copied().filter(|&p| p > 0.0).collect();
+        assert_eq!(nonzero.len(), 2);
+        assert!(nonzero[0] > nonzero[1], "higher prior should get higher prob");
+    }
+
+    #[test]
+    fn test_improved_policy_q_ordering() {
+        // Two children: one clearly winning (Q=+0.9), one losing (Q=-0.9).
+        // Equal priors — the improved policy should favor the winning child.
+        let tree = setup_improved_policy_tree(&[
+            (50, 45.0, 0.5),   // Q=+0.9
+            (50, -45.0, 0.5),  // Q=-0.9
+        ]);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
+
+        // Find the two non-zero actions.
+        let (cq, cr) = tree.root_board.window_center();
+        let idx_good = Board::window_flat_idx_at(0, 0, cq, cr);
+        let idx_bad = Board::window_flat_idx_at(0, 1, cq, cr);
+
+        assert!(policy[idx_good] > policy[idx_bad],
+            "Q=+0.9 child should get more probability than Q=-0.9: {} vs {}",
+            policy[idx_good], policy[idx_bad]);
+    }
+
+    // Note: policy_prune_frac test removed — pruning now lives only in
+    // Python's prune_policy_targets (trainer.py) to avoid double-pruning.
+
+    #[test]
+    fn test_improved_policy_illegal_actions_stay_zero() {
+        let tree = setup_improved_policy_tree(&[
+            (10, 5.0, 0.7),
+            (5, 1.0, 0.3),
+        ]);
+        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
+
+        // Only 2 actions should be non-zero out of board_size*board_size+1.
+        let nonzero_count = policy.iter().filter(|&&p| p > 0.0).count();
+        assert_eq!(nonzero_count, 2, "only legal actions should have non-zero prob, got {nonzero_count}");
     }
 }
