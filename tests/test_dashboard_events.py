@@ -236,7 +236,7 @@ def test_event_schema_has_required_keys(event_type: str):
     assert dispatched["event"] == event_type
 
 
-# ── New schema validation tests (§9, tests 1–4) ─────────────────────────────
+# ── New schema validation tests (§9, tests 1-4) ─────────────────────────────
 
 
 def test_system_stats_cpu_util_in_range():
@@ -271,7 +271,7 @@ def test_system_stats_has_new_fields():
         assert key in dispatched, f"Missing '{key}' in system_stats"
 
 
-# ── gpu_monitor psutil tests (§9, tests 5–6) ────────────────────────────────
+# ── gpu_monitor psutil tests (§9, tests 5-6) ────────────────────────────────
 
 
 def test_gpu_monitor_emits_new_psutil_fields():

@@ -1,6 +1,6 @@
 # Corpus Pipeline Design — `python/corpus/`
 
-> Last updated: 2026-04-01. Q1–Q6 resolved; implementation in progress.
+> Last updated: 2026-04-01. Q1-Q6 resolved; implementation in progress.
 
 ---
 
@@ -13,7 +13,7 @@
   Filter already applied at scrape time: `rated=true, moveCount≥20, reason=six-in-a-row`.
 - **SealBotBot wrapper** complete and tested (`python/bootstrap/bots/sealbot_bot.py`).
 - **Human opening + bot continuation** strategy confirmed: N=8 move threshold (see §4).
-- **Parallelism target**: 10–12 worker processes.
+- **Parallelism target**: 10-12 worker processes.
 - **Colony bug risk**: SealBot uses a flat 140×140 board — multiple distant clusters may
   alias and corrupt its pattern evaluation. Must track and log when
   `cluster_count > 4` at handoff.
@@ -148,7 +148,7 @@ Seeds: `HumanGameSource`. Continuation: `SealBotBot`.
 | `games_per_seed` | 3 | Bot continuations generated per human opening |
 
 **`games_per_seed = 3` — justification:**
-With 203 human games, 3 continuations gives 609 hybrid games (~30,000–50,000 positions),
+With 203 human games, 3 continuations gives 609 hybrid games (~30,000-50,000 positions),
 a reasonable addition to the pretrain corpus without over-representing any single opening.
 SealBot's time-limited search is not fully deterministic across runs (wall-clock variance
 changes the search tree), so 3 continuations genuinely explore different continuations.

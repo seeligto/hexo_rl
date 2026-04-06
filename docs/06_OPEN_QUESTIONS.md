@@ -25,7 +25,7 @@ after head stabilisation (~10k RL steps) to avoid confounding.
 ### Q9 — KL-Divergence Weighted Buffer Writes
 
 **Source:** Kubuxu (bot dev Discord, 2026-04-01). Confirmed used in KataGo codebase
-(not the paper). Kubuxu's 1.1M param transformer beats his heuristic bot 310–10
+(not the paper). Kubuxu's 1.1M param transformer beats his heuristic bot 310-10
 on 8 playouts vs 5,000 heuristic playouts.
 
 **Technique:** Weight each sample written to the replay buffer by:

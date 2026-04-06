@@ -4,7 +4,7 @@ Each phase has clear entry criteria, exit criteria, and a set of deliverables. D
 
 ---
 
-## Phase 0 — Foundation (1–2 weeks)
+## Phase 0 — Foundation (1-2 weeks)
 
 **Goal**: Correct, tested game logic. Nothing else matters until the environment is bug-free.
 
@@ -31,7 +31,7 @@ Each phase has clear entry criteria, exit criteria, and a set of deliverables. D
 
 ---
 
-## Phase 1 — Minimal training loop (1–2 weeks)
+## Phase 1 — Minimal training loop (1-2 weeks)
 
 **Goal**: End-to-end pipeline that trains, even if slowly and badly.
 
@@ -105,19 +105,19 @@ n_workers: 1
 
 ---
 
-## Phase 3 — Bootstrap from minimax (1–2 weeks)
+## Phase 3 — Bootstrap from minimax (1-2 weeks)
 
 **Goal**: Pretrain the network on existing bot games so early self-play starts from a competent prior rather than random.
 
 ### Tasks
 
-- [x] Integrate or implement minimax bot (depth 3–5, α-β pruning) in Python or Rust (Implemented as SealBotBot wrapper)
+- [x] Integrate or implement minimax bot (depth 3-5, α-β pruning) in Python or Rust (Implemented as SealBotBot wrapper)
 - [x] Heuristic evaluation function for minimax: counts of open 3/4/5-in-a-rows per player (Integrated via SealBot engine)
-- [x] Generate supervised corpus: 10,000–50,000 minimax vs minimax games (Implemented via generate_corpus.py with persistent cache)
+- [x] Generate supervised corpus: 10,000-50,000 minimax vs minimax games (Implemented via generate_corpus.py with persistent cache)
 - [x] Implement `BootstrapTrainer`:
   - Policy head: behavior cloning loss (cross-entropy with minimax move distribution)
   - Value head: game outcome regression
-  - 5–10 epochs over the corpus
+  - 5-10 epochs over the corpus
 - [x] Validate: pretrained network beats random policy significantly
 - [x] Transition: warm-start self-play from pretrained weights
 - [x] Track Elo from bootstrap baseline so improvement is measurable
@@ -176,7 +176,7 @@ The split-responsibility architecture is fully in place:
 - [x] Game viewer implemented — `/viewer` endpoint, threat overlay, replay scrubber, play-against-model
 - [x] Threat detection in Rust — `Board.get_threats()`, `engine/src/board/threats.rs`
 - [x] Benchmark rebaselined — 2026-04-03, correct 12-block × 128-channel model, all 10 metrics PASS
-- [ ] **Sustained training run** — 24–48 hour run, monitor for policy entropy collapse, value loss plateau
+- [ ] **Sustained training run** — 24-48 hour run, monitor for policy entropy collapse, value loss plateau
 - [ ] **Q2 ablation** — value aggregation strategy: min vs mean vs attention (highest-priority open question)
 
 ### Exit criteria

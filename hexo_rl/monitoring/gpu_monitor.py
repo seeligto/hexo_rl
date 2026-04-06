@@ -45,8 +45,8 @@ class GPUMonitor(threading.Thread):
     """Daemon thread that periodically logs GPU stats via structlog.
 
     Emits ``gpu_stats`` events with the following fields:
-      - ``gpu_util_pct``:   GPU compute utilisation (0–100).
-      - ``mem_util_pct``:   Memory controller utilisation (0–100).
+      - ``gpu_util_pct``:   GPU compute utilisation (0-100).
+      - ``mem_util_pct``:   Memory controller utilisation (0-100).
       - ``vram_used_gb``:   VRAM used in gigabytes.
       - ``vram_total_gb``:  Total VRAM in gigabytes.
       - ``temp_c``:         GPU core temperature in °C.

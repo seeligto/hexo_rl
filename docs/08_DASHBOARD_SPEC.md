@@ -233,7 +233,7 @@ No changes. Flask + Flask-SocketIO on `localhost:5001`.
 
 **Entropy card alert states:**
 - `> 2.0`: normal colour
-- `1.0–2.0`: amber text + small amber badge reading "low"
+- `1.0-2.0`: amber text + small amber badge reading "low"
 - `< 1.0`: red text + red badge reading "collapse"
 
 ### 5.3 Main row layout (2/3 + 1/3 split)
@@ -296,7 +296,7 @@ Replaces the prior stacked bar chart entirely.
 
 - Line chart: P0 win rate (%) over time. One data point per `game_complete`
   event, computed as a rolling window of the last 200 games.
-- Y-axis: 0–100%, but displayed range auto-zooms to data ± 15pp.
+- Y-axis: 0-100%, but displayed range auto-zooms to data ± 15pp.
 - Target band: filled region between `alert_p0_target_low` (54%) and
   `alert_p0_target_high` (58%) — faint teal fill, dashed boundary lines.
   This is the Q8 target range for P0 advantage correction.
@@ -313,8 +313,8 @@ line makes drift visible (Q8 concern: P0 advantage persisting above target).
 Replaces the prior rolling average line chart.
 
 - Bar chart (histogram): game length distribution over the last 200 `game_complete`
-  events. Bins: 0–20, 20–40, 40–60, 60–80, 80–100, 100–120, 120–140, 140–160,
-  160–180, 180–200+. The 200+ bin captures draws (capped at `max_game_moves`).
+  events. Bins: 0-20, 20-40, 40-60, 60-80, 80-100, 100-120, 120-140, 140-160,
+  160-180, 180-200+. The 200+ bin captures draws (capped at `max_game_moves`).
 - X-axis: bin labels. Y-axis: game count.
 - Below chart: `median {N}  draws {D} / 200`
 - Update: rebuild histogram on every `game_complete` event (cheap client-side).
@@ -329,7 +329,7 @@ New chart (previously just a number in the system panel).
 
 - Line chart: `training_step.policy_entropy` over last 500 steps.
 - Horizontal dashed red line at `alert_entropy_min` (1.0) labelled "collapse".
-- Y-axis: 0–max(data)+0.5, minimum range 0–4.
+- Y-axis: 0-max(data)+0.5, minimum range 0-4.
 - Colour: amber (#EF9F27).
 - Below chart: `now {entropy:.2f}  collapse at {alert_entropy_min}`
 
@@ -339,7 +339,7 @@ New chart (previously just a number in the system panel).
 
 - Line chart: `training_step.grad_norm` over last 500 steps.
 - Horizontal dashed red line at `alert_grad_norm_max` (10.0) labelled "clip".
-- Y-axis: 0–max(data)+1, minimum range 0–5.
+- Y-axis: 0-max(data)+1, minimum range 0-5.
 - Colour: coral (#D85A30).
 - `inf` values (FP16 GradScaler overflow skips) are rendered as gaps in the
   line — do not connect across `inf` points. Use Chart.js `spanGaps: false`.
