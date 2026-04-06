@@ -39,7 +39,7 @@ make corpus.strong       # generate SealBot strong corpus (0.5s/move, 2,500 game
 make corpus.npz          # export combined corpus → data/bootstrap_corpus.npz
 
 # Supervised pretraining on corpus
-make pretrain.full       # 15 epochs (~2–4 hours depending on corpus size)
+make pretrain.full       # 15 epochs (~2-4 hours depending on corpus size)
 
 # Self-play RL
 make train               # self-play RL with web + terminal dashboard

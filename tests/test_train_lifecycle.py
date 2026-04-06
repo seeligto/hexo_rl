@@ -26,7 +26,7 @@ Run with::
 
     make test.integration
 
-Expected wall-clock time: 2–5 min on target hardware (Ryzen 7 3700x + RTX 3070).
+Expected wall-clock time: 2-5 min on target hardware (Ryzen 7 3700x + RTX 3070).
 """
 from __future__ import annotations
 

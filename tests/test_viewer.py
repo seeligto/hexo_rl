@@ -9,7 +9,7 @@ import pytest
 from engine import Board
 
 
-# ── Threat detection tests (1–4) ──────────────────────────────────────────────
+# ── Threat detection tests (1-4) ──────────────────────────────────────────────
 
 
 def test_threats_known_four_in_row():

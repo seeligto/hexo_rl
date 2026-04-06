@@ -62,9 +62,9 @@ class GameState:
         The 18-plane layout follows AlphaZero's 8-step history encoding:
 
           plane  0:    current player's stones at t           (views[k][0])
-          planes 1–7:  current player's stones at t-1 … t-7  (from move_history)
+          planes 1-7:  current player's stones at t-1 … t-7  (from move_history)
           plane  8:    opponent's stones at t                 (views[k][1])
-          planes 9–15: opponent's stones at t-1 … t-7        (from move_history)
+          planes 9-15: opponent's stones at t-1 … t-7        (from move_history)
           plane 16:    moves_remaining == 2 flag (0.0 or 1.0, broadcast)
           plane 17:    ply parity (ply % 2, broadcast)
 

@@ -99,8 +99,8 @@ This is KrakenBot's most distinctive architectural choice:
   get the same sign; across pair boundaries the sign flips.
 
 **Temperature schedule:**
-- Turns 0–5: T=2.5 (very exploratory)
-- Turns 6–19: T=1.0
+- Turns 0-5: T=2.5 (very exploratory)
+- Turns 6-19: T=1.0
 - Turn 20+: T=0.3
 
 **Cython acceleration:** `_mcts_cy.pyx` (18KB) and `_puct_cy.pyx` (2.3KB) accelerate
@@ -414,8 +414,8 @@ win/loss (`|value| ≥ 1.0`), returns immediately without MCTS.
 1. **MCTS** (single-threaded, standard)
 2. **BatchedMCTS** (virtual loss, batch NN eval, AB pre-check, transposition cache)
 3. **BatchedNNAlphaBeta** (three-phase: C alpha-beta collects leaves → batch NN eval →
-   re-search with cached values. 15× faster than per-leaf callbacks. Reaches depth 8–12
-   vs MCTS depth 3–5.)
+   re-search with cached values. 15× faster than per-leaf callbacks. Reaches depth 8-12
+   vs MCTS depth 3-5.)
 
 **Rollout blend:** Mixes NN priors with C engine heuristic scores. Distant play mode
 uses 0.15 weight for adjacent moves, 0.05 for far moves.
@@ -541,7 +541,7 @@ Worth watching if Mina adds search or evolutionary weight optimization.
 | **Action space** | **Compound** (joint pair logits) | Pair-move (2 cells) | **Sequential** (single-cell policy) | **Sequential** (2 MCTS plies per turn) |
 | **Value head** | avg+max pool → FC → **tanh** | N/A | flatten → FC → **tanh** | avg+max pool → FC → **BCE sigmoid** |
 | **Auxiliary heads** | Moves-left (MSE) + Chain (6ch, masked MSE) | None | Threat (4 floats, MSE) + threat-policy blend | Opponent reply prediction |
-| **MCTS sims (self-play)** | 200 / 600 (25% full) | N/A | 30–400 (curriculum) | 800 |
+| **MCTS sims (self-play)** | 200 / 600 (25% full) | N/A | 30-400 (curriculum) | 800 |
 | **PUCT C** | 1.0 | N/A | 1.5 | Config-driven |
 | **FPU** | KataGo dynamic (reduction=0.25) | N/A | Standard | Config-driven |
 | **Quiescence** | No (TODO) | No | **Yes** (3+ winning moves = forced win) | No |
@@ -634,7 +634,7 @@ than exploring many first moves.
 - **Risk:** Medium. Interacts with our sequential action space — our tree is already
   somewhat deeper than KrakenBot's because we expand 2 MCTS plies per turn.
 - **Priority:** MEDIUM. Worth ablating. Our 800 sims/move gives us more budget
-  than Orca's 200–400, so the optimal widening schedule would differ.
+  than Orca's 200-400, so the optimal widening schedule would differ.
 
 **G. Alpha-Beta Hybrid Pre-Check (from Orca)**
 
@@ -709,7 +709,7 @@ This is the fundamental architectural divergence between KrakenBot and HeXO.
 |---|---|---|
 | **Pros** | Single evaluation per position; circular padding eliminates edge artifacts; full D6 symmetry trivially preserved; simpler implementation; no value aggregation needed | Handles truly distant colonies; no phantom connectivity across seam; scales to any board size; window-centered attention | |
 | **Cons** | Phantom 6-in-a-row across torus seam (unconfirmed risk); fixed maximum board span (25×25); all distant stones share same evaluation context | Multiple NN evals per position (K windows); value aggregation strategy (Q2 still open); policy unification complexity; higher inference cost |
-| **When better** | Games stay compact (<25×25 span); self-play training (torus is fine as proxy); games with 1–2 clusters close together | Games with genuinely distant colonies (>25 cells apart); competitive play against colony-style opponents; late-game positions with scattered stones |
+| **When better** | Games stay compact (<25×25 span); self-play training (torus is fine as proxy); games with 1-2 clusters close together | Games with genuinely distant colonies (>25 cells apart); competitive play against colony-style opponents; late-game positions with scattered stones |
 
 **Our assessment:** The torus is a pragmatic shortcut that works well for self-play
 training (where the bot controls both sides and naturally keeps play compact). For

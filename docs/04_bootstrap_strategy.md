@@ -8,7 +8,7 @@ A freshly initialized AlphaZero network plays randomly. The first thousands of s
 
 Pretraining on existing games gives the network a warm start with tactical intuitions already baked in. Self-play then builds strategic depth on top of that foundation rather than rediscovering basics from scratch.
 
-**Observed effect in analogous projects**: pretraining compresses 1–3 weeks of early self-play into 1–2 hours of supervised training, and the resulting Elo trajectory is measurably steeper throughout.
+**Observed effect in analogous projects**: pretraining compresses 1-3 weeks of early self-play into 1-2 hours of supervised training, and the resulting Elo trajectory is measurably steeper throughout.
 
 ---
 

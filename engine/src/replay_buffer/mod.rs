@@ -60,7 +60,7 @@ pub struct ReplayBuffer {
     ///
     /// Bucket boundaries (f32 weight):
     ///   [0] < 0.30  → short-game tier  (~0.15)
-    ///   [1] 0.30–0.75 → medium-game tier (~0.50)
+    ///   [1] 0.30-0.75 → medium-game tier (~0.50)
     ///   [2] ≥ 0.75  → full-weight tier  (~1.0)
     ///
     /// Incremented on push, decremented on overwrite.
@@ -391,7 +391,7 @@ impl ReplayBuffer {
     ///
     /// Example (from training.yaml):
     ///     buf.set_weight_schedule([10, 25], [0.15, 0.50], 1.0)
-    ///     # game < 10 moves → 0.15, 10–24 → 0.50, 25+ → 1.0
+    ///     # game < 10 moves → 0.15, 10-24 → 0.50, 25+ → 1.0
     pub fn set_weight_schedule(
         &mut self,
         thresholds:     Vec<u16>,

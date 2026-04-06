@@ -176,7 +176,7 @@ def test_web_dashboard_ignores_unknown_events():
     wd.on_event({"event": "unknown_future_event", "ts": 1.0})
 
 
-# ── New terminal dashboard tests (§9, tests 7–10) ─────────────────────────────
+# ── New terminal dashboard tests (§9, tests 7-10) ─────────────────────────────
 
 
 def test_terminal_handles_system_stats_new_fields():
@@ -226,7 +226,7 @@ def test_entropy_collapse_marker():
     assert "!!" in out
 
 
-# ── Pool batch_fill_pct tests (§9, tests 11–12) ───────────────────────────────
+# ── Pool batch_fill_pct tests (§9, tests 11-12) ───────────────────────────────
 
 
 def test_pool_exposes_batch_fill_pct():

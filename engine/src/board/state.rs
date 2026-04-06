@@ -467,9 +467,9 @@ impl Board {
     /// # Why 2 planes, not 18?
     ///
     /// The full AlphaZero input has 18 planes:
-    ///   - planes  0–7:  current player's stones at t, t-1, … t-7
-    ///   - planes  8–15: opponent's stones        at t, t-1, … t-7
-    ///   - planes 16–17: game-state scalars (moves_remaining, ply parity)
+    ///   - planes  0-7:  current player's stones at t, t-1, … t-7
+    ///   - planes  8-15: opponent's stones        at t, t-1, … t-7
+    ///   - planes 16-17: game-state scalars (moves_remaining, ply parity)
     ///
     /// Assembling all 18 planes requires the full move history — which only
     /// Python's `GameState.move_history` possesses.  Encoding 18 planes in
@@ -483,7 +483,7 @@ impl Board {
     ///
     /// The Rust self-play hot-path (`game_runner.rs`) has no Python history.
     /// It expands the 2-plane view to 18 planes via `encode_18_planes_to_buffer`
-    /// in-place — the network receives planes 1–7 and 9–15 as zeros for
+    /// in-place — the network receives planes 1-7 and 9-15 as zeros for
     /// Rust-driven self-play, which is an acceptable approximation for the
     /// warmup / RL phases before Python-side history is plumbed in.
     ///

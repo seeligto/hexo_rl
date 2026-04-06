@@ -36,8 +36,8 @@ The state is converted to a `(C, H, W)` float16 tensor for the network:
 
 ```
 Channel layout (18 channels, 19×19):
-  0–7:   Current player's stones in last 8 board states (binary planes)
-  8–15:  Opponent's stones in last 8 board states (binary planes)
+  0-7:   Current player's stones in last 8 board states (binary planes)
+  8-15:  Opponent's stones in last 8 board states (binary planes)
   16:    moves_remaining broadcast as 0.0 (1 move left) or 1.0 (2 moves left)
   17:    turn parity — 0.0 if ply is even, 1.0 if odd
 ```
@@ -48,7 +48,7 @@ Channel layout (18 channels, 19×19):
 (plane 0 = current player's stones, plane 1 = opponent's stones — 722 floats).
 It does **not** return 18 planes because:
 
-- Planes 1–7 and 9–15 (history) require the full move sequence, which lives
+- Planes 1-7 and 9-15 (history) require the full move sequence, which lives
   only in Python's `GameState.move_history`.
 - Encoding 18 planes in Rust and crossing the PyO3 boundary with 6 498 zeros
   per cluster would be a 9× overhead for no gain.

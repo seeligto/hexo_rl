@@ -65,8 +65,8 @@ Playout cap decouples data volume from data quality (KataGo finding).
   Config: `policy_prune_frac: 0.02`. Applied before cross-entropy loss.
   Prevents policy head from fitting exploration noise on clearly bad moves.
 
-**Why:** FP16 gives 1.3–1.8× throughput on Ampere (RTX 3070). torch.compile
-adds 10–20% on top. Pruning reduces effective policy loss noise in early self-play.
+**Why:** FP16 gives 1.3-1.8× throughput on Ampere (RTX 3070). torch.compile
+adds 10-20% on top. Pruning reduces effective policy loss noise in early self-play.
 
 ---
 
@@ -149,7 +149,7 @@ reset between each move — matching `default.yaml mcts.n_simulations = 800`.
 
 **New methodology:**
 - n=5 runs, median + IQR reported (not single-point mean)
-- 2–10s warm-up per metric before timing begins
+- 2-10s warm-up per metric before timing begins
 - CPU frequency pinning removed (sudo prompt was disruptive; n=5 median
   averaging provides sufficient variance control without it)
 - `bench.lite` (n=3), `bench.full` (n=5), `bench.stress` (n=10, pin required)
@@ -229,7 +229,7 @@ All 10 metrics pass. Test counts: 63 Rust + 294 Python.
 | Q6 | Sequential vs compound action space | ✅ Resolved — sequential confirmed correct |
 | Q2 | Value aggregation: min vs mean vs attention | 🔴 Active — HIGH priority, blocks Phase 4.5 |
 | Q3 | Optimal K (number of cluster windows) | 🟡 Active — MEDIUM priority |
-| Q8 | First-player advantage in value training | 🟡 Active — MEDIUM priority (corpus shows 51.6% P1 overall, 57.1% in 1000–1200 Elo band) |
+| Q8 | First-player advantage in value training | 🟡 Active — MEDIUM priority (corpus shows 51.6% P1 overall, 57.1% in 1000-1200 Elo band) |
 | Q1, Q4, Q7 | MCTS convergence rate, augmentation equivariance, Transformer encoder | 🔵 Deferred — Phase 5+ |
 
 ---
@@ -243,7 +243,7 @@ In priority order:
    open question. Needs a baseline checkpoint from the first training run.
 
 2. **First sustained self-play training run** — all infrastructure is
-   in place. Run `python scripts/train.py` and monitor for 24–48 hours.
+   in place. Run `python scripts/train.py` and monitor for 24-48 hours.
    Watch for: policy entropy collapse, value loss plateau, pretrained_weight
    decay curve, buffer growth transitions.
 
@@ -331,8 +331,8 @@ Test counts: 63 Rust + 301 Python (all passing).
 ## Architecture summary (current state)
 ```
 Input:  (18, 19, 19) tensor
-        Planes 0–15: 8 history steps × 2 players (cluster snapshots)
-        Planes 16–17: metadata (moves_remaining, turn parity)
+        Planes 0-15: 8 history steps × 2 players (cluster snapshots)
+        Planes 16-17: metadata (moves_remaining, turn parity)
 
 Trunk:  12 × ResidualBlock(128ch, SE reduction=4)
         Pre-activation (BN → ReLU → Conv)
@@ -804,7 +804,7 @@ Source: `docs/10_COMMUNITY_BOT_ANALYSIS.md` §5.1C and §5.1D (KrakenBot practic
 - Weight `entropy_reg_weight: 0.01` in `configs/training.yaml`.
 - `compute_total_loss()` in `losses.py` gains two new optional parameters: `entropy_bonus` and `entropy_weight`.
 - `policy_entropy` was already logged in `loss_info` (and fed to the entropy collapse alert at < 1.0). Now it reflects real data.
-- Expected range at a uniform 362-action policy: ~5.9 nats. In practice ~3–6 nats is healthy; < 1.0 signals collapse.
+- Expected range at a uniform 362-action policy: ~5.9 nats. In practice ~3-6 nats is healthy; < 1.0 signals collapse.
 
 **Draw penalty (§5.1D)**
 **Files:** `engine/src/game_runner.rs`, `hexo_rl/selfplay/pool.py`, `configs/training.yaml`, `tests/test_worker_pool.py`
@@ -1325,7 +1325,7 @@ RAM stays near-zero until positions are actually pushed to the buffer.
 1. Load all corpus sources: human (1,944), bot-fast (5,598), bot-strong (2,804), injected (5,567)
 2. Filter: decisive games only, game length ≥ 15 plies
 3. Weight human games by Elo band (unrated 0.5×, sub-1000 0.3×, 1000-1200 0.7×, 1200-1400 1.0×, 1400+ 1.5×)
-4. Sample positions from plies 8–50 per game, weighted by `source_weight / game_length`
+4. Sample positions from plies 8-50 per game, weighted by `source_weight / game_length`
 5. Weighted sample 50K positions without replacement (RNG seed 42)
 6. Replay only the unique games needed (14,845 of 15,913), extract sampled positions
 7. Save uncompressed
@@ -1462,7 +1462,7 @@ only after the legal move radius was corrected to 8 in §26.
 ### 39. Benchmark rebaseline 2026-04-04_19-53 (2026-04-04)
 **Files:** `reports/benchmarks/2026-04-04_19-53.json`, `CLAUDE.md`
 
-Full `make bench.full` (n=5, 3s warm-up) after §36–§38 landed:
+Full `make bench.full` (n=5, 3s warm-up) after §36-§38 landed:
 
 | Metric | Median | IQR | Target | Status |
 |---|---|---|---|---|
@@ -1612,7 +1612,7 @@ Config location: `pretrain_max_samples` lives under `mixing` in `training.yaml` 
 
 **Problem:** `WebDashboard._event_history` (deque maxlen=500) accumulated full
 `game_complete` payloads — moves, moves_list, moves_detail, value_trace — consuming
-1–3 GB of RAM over a long training run.
+1-3 GB of RAM over a long training run.
 
 **Fix:** Full game records are now written to disk on arrival at
 `runs/<run_id>/games/<game_id>.json`. Only a lightweight ref `{game_id, path,
@@ -1712,7 +1712,7 @@ training/selfplay files. Monitoring invariant fully preserved.
 ### 46. Fix three RSS memory leaks (2026-04-05)
 **Files:** `scripts/train.py`, `hexo_rl/monitoring/web_dashboard.py`
 
-**Problem:** Run `0944a606` grew to 14.8 GB RSS by step 590 (expected ~7–8 GB).
+**Problem:** Run `0944a606` grew to 14.8 GB RSS by step 590 (expected ~7-8 GB).
 Three confirmed leak sources:
 
 1. **mmap views held alive after push_game (~720 MB):** `del data` only released
@@ -1720,14 +1720,14 @@ Three confirmed leak sources:
    the entire process lifetime. Fixed by adding
    `del pre_states, pre_policies, pre_outcomes` immediately after `push_game()`.
 
-2. **SocketIO send-queue buildup (0.5–1.5 GB over multi-hour runs):**
+2. **SocketIO send-queue buildup (0.5-1.5 GB over multi-hour runs):**
    `self._socketio.emit()` was called unconditionally. When a browser disconnects
    without a clean WebSocket CLOSE the server-side socket enters CLOSING state and
    buffers messages. Fixed by tracking connected SIDs via `on_connect` /
    `on_disconnect` handlers and replacing the bare emit with `_safe_emit()`, which
    skips the call when `_connected_sids` is empty.
 
-3. **Heap fragmentation from np.concatenate (~3–5 GB over 590 steps):**
+3. **Heap fragmentation from np.concatenate (~3-5 GB over 590 steps):**
    Five `np.concatenate` calls per training step each triggered a ~3.4 MB
    malloc/free directly via glibc, bypassing pymalloc. Repeated cycles of this
    size fragment the system heap; Python never returns fragmented arena memory to
@@ -1794,7 +1794,7 @@ BN stat corruption then propagates even if the optimizer step is skipped.
 from Rust (as a Python list) was converted with `np.array(feat, dtype=np.float16)` and
 `np.array(pol, dtype=np.float32)`, creating and immediately discarding two numpy array
 objects per position. Python's arena allocator grows to service peak allocations but
-never returns arena memory to the OS → estimated 100–300 MB RSS creep over multi-hour runs.
+never returns arena memory to the OS → estimated 100-300 MB RSS creep over multi-hour runs.
 
 **Fix:** Stored `_feat_len` and `_pol_len` on `self` in `__init__`. Pre-allocate
 `_feat_buf` (float16) and `_pol_buf` (float32) once before the while loop. Replace
@@ -1876,7 +1876,7 @@ onward the in-place path is used permanently.
 **Root cause confirmed:** `collect_data()` returned `Vec<(Vec<f32>, Vec<f32>, f32, usize)>`.
 PyO3 converts each `Vec<f32>` to a Python list of Python float objects using pymalloc arenas.
 At 7 positions/sec × ~164 KB pymalloc/position ≈ 1.1 MB/sec pymalloc growth; arenas are
-never returned to the OS → ~0.15 GB/min RSS leak. Estimated 1.5–2.5 GB fragmentation over
+never returned to the OS → ~0.15 GB/min RSS leak. Estimated 1.5-2.5 GB fragmentation over
 a 40-minute run.
 
 **Fix — `collect_data()`:** Changed return type from `Vec<(Vec<f32>, Vec<f32>, f32, usize)>`
@@ -1949,7 +1949,7 @@ handles partial `system_stats` updates — no renderer changes needed.
 
 **Problem 2 — Buffer lost on shutdown:**
 The Rust ReplayBuffer contents were discarded on clean shutdown, causing a
-20–65 minute cold-start penalty on `make train.resume`.
+20-65 minute cold-start penalty on `make train.resume`.
 
 **Fix — Rust persistence API:**
 Added `save_to_path(path)` and `load_from_path(path)` to ReplayBuffer.
@@ -2251,7 +2251,7 @@ Changes:
 
 ### §57 — Integration test: cold-start → prefill → run → SIGINT → resume lifecycle
 
-**Problem:** The buffer persistence feature (§55–§56) had no end-to-end acceptance
+**Problem:** The buffer persistence feature (§55-§56) had no end-to-end acceptance
 test. Unit tests verified individual save/load paths in isolation but could not
 catch lifecycle regressions (e.g., corpus being re-loaded on resume, buffer not
 surviving a SIGINT, or the save happening after pool teardown instead of before).
@@ -2286,7 +2286,7 @@ surviving a SIGINT, or the save happening after pool teardown instead of before)
 **Problem:** After resuming from a checkpoint at step 828, the JSONL showed:
 1. `pretrained_weight: 0.0, selfplay_weight: 1.0` — corpus mixing disabled.
 2. `buffer_restored` with only 1,770 positions still firing `corpus_prefill_skipped`.
-3. `total_loss: 393–1545` at steps 835–843 while `policy_loss/value_loss/aux_loss` were all normal (~3–7 total).
+3. `total_loss: 393-1545` at steps 835-843 while `policy_loss/value_loss/aux_loss` were all normal (~3-7 total).
 
 **Root causes:**
 

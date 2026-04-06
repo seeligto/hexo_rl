@@ -96,7 +96,7 @@ def game_state_empty():
 def game_state_after_3_moves():
     """A GameState after P1's opening move and P2's full first pair.
 
-    History deque contains 3 prior states so that history planes 1–3 are non-zero.
+    History deque contains 3 prior states so that history planes 1-3 are non-zero.
 
     Move sequence:
       P1 @ (0,0)  — single opening, turn passes
