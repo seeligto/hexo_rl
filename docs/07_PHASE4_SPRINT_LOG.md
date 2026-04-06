@@ -2122,3 +2122,34 @@ every 500 steps as `tracemalloc_top10` event (file, size_mb, count).
 - `feat(monitoring): add tracemalloc top-10 heap logging every 500 steps`
 
 **Test counts:** 86 Rust + 607 Python, all passing.
+
+---
+
+### 54. grad_norm and loss written to structured log unconditionally (2026-04-06)
+**Files:** `hexo_rl/training/trainer.py`, `tests/test_trainer.py`
+
+`grad_norm` was previously only emitted via `emit_event()` to the dashboard.
+If the dashboard was not running, the metric was invisible and could not be
+audited post-hoc from the JSONL log.
+
+Added an unconditional `log.info("train_step", ...)` call at the end of
+`_train_on_batch()`, immediately before `return result`. Fields logged:
+
+| Field | Source |
+|---|---|
+| `step` | `self.step` |
+| `grad_norm` | `result["grad_norm"]` |
+| `total_loss` | `result["loss"]` |
+| `policy_loss` | `result["policy_loss"]` |
+| `value_loss` | `result["value_loss"]` |
+| `aux_loss` | `result.get("opp_reply_loss")` (None if aux head off) |
+| `lr` | `result["lr"]` |
+| `fp16_scale` | `self.scaler.get_scale()` |
+
+`emit_event()` and all training logic unchanged. Test added:
+`test_train_step_logs_grad_norm` — uses `structlog.testing.capture_logs()`
+to assert the event is present with the required fields.
+
+**Commit:** `feat(monitoring): write grad_norm and loss to structured log independent of dashboard`
+
+**Test counts:** 86 Rust + 608 Python, all passing.
