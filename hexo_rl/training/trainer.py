@@ -33,8 +33,9 @@ import structlog
 
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.losses import (
-    compute_policy_loss, compute_value_loss, compute_aux_loss,
-    compute_total_loss, compute_uncertainty_loss, fp16_backward_step,
+    compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
+    compute_aux_loss, compute_total_loss, compute_uncertainty_loss,
+    fp16_backward_step,
 )
 from hexo_rl.training.checkpoints import (
     save_full_checkpoint, save_inference_weights, prune_checkpoints,
@@ -278,7 +279,11 @@ class Trainer:
             thr_pred = fwd_result[_idx] if use_threat else None
 
             policy_valid = policies_t.sum(dim=1) > 1e-6
-            policy_loss = compute_policy_loss(log_policy, policies_t, policy_valid, self.device)
+            use_kl = bool(self.config.get("completed_q_values", False))
+            if use_kl:
+                policy_loss = compute_kl_policy_loss(log_policy, policies_t, policy_valid, self.device)
+            else:
+                policy_loss = compute_policy_loss(log_policy, policies_t, policy_valid, self.device)
             value_loss = compute_value_loss(v_logit, outcomes_t)
 
             opp_reply_loss = None

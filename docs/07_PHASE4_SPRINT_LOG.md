@@ -2414,3 +2414,154 @@ useful signal.
 
 **Commits:**
 - `9bf3a12 config(eval): reduce eval overhead from 55% to ~9% of training time`
+
+---
+
+## Phase 4.5 preparatory changes (2026-04-06)
+
+### §61 — Gumbel completed Q-values policy targets
+
+**Files:** `engine/src/mcts/mod.rs`, `engine/src/game_runner.rs`,
+`hexo_rl/selfplay/completed_q.py` (new), `hexo_rl/selfplay/pool.py`,
+`hexo_rl/training/losses.py`, `hexo_rl/training/trainer.py`,
+`configs/selfplay.yaml`, `configs/training.yaml`
+
+Implements the "completed Q-values" improved policy target from Danihelka et al.,
+"Policy improvement by planning with Gumbel" (ICLR 2022, §4, Appendix D Eq. 33).
+
+**Problem:** Standard AlphaZero trains policy toward MCTS visit-count distributions.
+At low sim counts (50-sim fast games = 25% of training via playout cap), visit counts
+are dominated by the prior — the network learns little from these positions.
+
+**Solution:** After MCTS search, construct an improved policy target that incorporates
+Q-values from search:
+1. For visited children (N>0): use Q(a) = W(a)/N(a)
+2. For unvisited legal actions: use v_mix, a mixed value estimate interpolating
+   the root value with the policy-weighted average of visited Q-values
+3. Compute `π_improved = softmax(log π + σ(completedQ))` where
+   `σ = (c_visit + max_N) · c_scale · completedQ`
+4. Training loss becomes KL(π_improved ∥ π_model) instead of CE with visit counts
+
+**Key design decision:** Computation happens in Rust (`MCTSTree::get_improved_policy`)
+rather than Python because the MCTS tree lives inside Rust worker threads. All data
+(Q-values, visit counts, priors, root value) is local — no extra PyO3 boundary
+crossings needed. A Python reference implementation exists for testing only.
+
+**Behavioral changes:**
+- Move selection: unchanged (temperature-scaled visit counts)
+- Training targets: improved policy replaces visit-count distribution
+- Fast games: now produce policy targets (not zeros) when enabled — this is the
+  primary benefit, giving useful signal even at 50 sims
+- Policy loss: KL divergence (identical gradients to CE, more interpretable values)
+
+**Config:** `completed_q_values: true`, `c_visit: 50.0`, `c_scale: 1.0` in
+`configs/selfplay.yaml` and `configs/training.yaml`. Backward compatible — set
+`completed_q_values: false` to restore prior behavior.
+
+**Tests:** 9 new tests in `tests/test_completed_q.py` covering math correctness,
+edge cases (no visits, all visited, fast-game regime), KL loss convergence, and
+FP16 safety. Test counts: 86 Rust + 625 Python.
+
+---
+
+### §61 Gumbel MCTS: Sequential Halving root search (2026-04-06)
+**Files:** `engine/src/mcts/mod.rs`, `engine/src/mcts/selection.rs`,
+`engine/src/game_runner.rs`, `configs/selfplay.yaml`, `hexo_rl/selfplay/pool.py`,
+`tests/test_gumbel_mcts.py`
+
+Implements the search-time component of Gumbel AlphaZero (Danihelka et al.,
+ICLR 2022 §3.3-3.4). Together with §60's completed Q-values policy targets,
+this completes the full Gumbel AlphaZero integration.
+
+**Problem:** At 50 sims (fast games, 25% of training), standard PUCT exploration
+is almost useless — UCB exploration dominates, visit distribution barely differs
+from the prior.
+
+**Implementation — two root-only mechanisms:**
+
+1. **Gumbel-Top-k root sampling:** Instead of PUCT at root, generate Gumbel(0,1)
+   noise per legal action, compute `score(a) = g(a) + log_prior(a)`, select top
+   `m = min(n, 16, |legal|)` candidates. Replaces Dirichlet noise at root.
+
+2. **Sequential Halving:** Allocate simulation budget across `ceil(log2(m))` phases.
+   Each phase gives `floor(remaining / (remaining_phases * |candidates|))` sims per
+   candidate, then halves candidates by `g(a) + log_prior(a) + sigma(Q_hat(a))`.
+
+**Key design decisions:**
+- `forced_root_child: Option<u32>` field on MCTSTree — checked in `select_one_leaf`
+  at depth 0 only. Zero-cost when None (branch prediction).
+- `GumbelSearchState` struct in game_runner.rs — allocated once per search call.
+  No per-simulation heap allocations.
+- NN inference code extracted into `infer_and_expand` closure to avoid duplication
+  between Gumbel and PUCT paths.
+- Move selection: after `gumbel_explore_moves` plies (default 10), use Sequential
+  Halving winner instead of visit-count sampling.
+
+**Non-root nodes:** Completely unchanged — PUCT + dynamic FPU.
+
+**Config (all in `configs/selfplay.yaml`):**
+```yaml
+gumbel_mcts: false          # OFF by default
+gumbel_m: 16                # paper default
+gumbel_explore_moves: 10    # plies using visit-count sampling
+```
+
+**Benchmark results (laptop, Ryzen 7 8845HS + RTX 4060):**
+
+| Metric | Baseline | Gumbel OFF | Gumbel ON | Target | Status |
+|--------|----------|-----------|-----------|--------|--------|
+| MCTS sim/s | 55,478 | 56,423 | 55,734 | >= 26k | PASS |
+| NN latency b=1 | 1.59ms | 1.61ms | 1.60ms | <= 3.5ms | PASS |
+| Worker pos/hr | 659,983 | 687,984 | 791,267 | >= 625k | PASS |
+| GPU util % | 100% | 99.9% | 100% | >= 85% | PASS |
+| Batch fill % | 100% | 100% | 100% | >= 80% | PASS |
+
+All 10 metrics PASS in both modes. Zero regression when disabled.
+
+**Tests:** 11 new Rust tests (forced root selection, Gumbel top-k, Sequential
+Halving phases/budget/halving, score computation, best action). 7 new Python
+tests (MCTSTree search validity, SelfPlayRunner config acceptance).
+Test counts: 97 Rust + 632 Python.
+
+### §62 — Gumbel MCTS hardening: budget fix, score caching, double-prune removal (2026-04-06)
+
+Code-review-driven fixes to the Gumbel MCTS implementation from §61.
+
+**1. Budget off-by-one in `effective_m == 0` fallback** (`game_runner.rs`)
+
+When `effective_m == 0` (no children or zero budget), the fallback PUCT loop
+initialized `sims_done = 0` but root expansion had already consumed `root_sims`
+simulations. Total sims could reach `root_sims + game_sims` instead of `game_sims`.
+Fix: `sims_done = sims_used`.
+
+**2. Cache `max_n` in `GumbelSearchState::score`** (`game_runner.rs`)
+
+`score()` scanned all root children to compute `max_n` on every call. Since it's
+called O(candidates) times during sorting/halving, this was O(candidates × children)
+per phase. Added `cached_children: Vec<(u32, f32)>` to `GumbelSearchState`,
+`refresh_cache()` + `max_n()` methods. Cache is refreshed once per halving phase;
+`score()` takes precomputed `max_n` and reads from the cache → O(1) per call.
+
+**3. Fix "362-dim" doc comment** (`mcts/mod.rs`)
+
+`get_improved_policy` doc said "Returns a 362-dim distribution" but the actual
+size is `board_size * board_size + 1`. Updated to describe shape generically.
+
+**4. Remove double-pruning of policy targets** (`mcts/mod.rs`, `game_runner.rs`, `pool.py`)
+
+`get_improved_policy()` in Rust pruned entries below `policy_prune_frac` of max
+and renormalized. The Python training loop (`prune_policy_targets` in trainer.py)
+applied the same pruning again. After the first prune + renormalize, the second
+prune is not idempotent — it makes targets much sharper than the configured
+`policy_prune_frac` fraction would suggest. Removed `policy_prune_frac` from
+`get_improved_policy()`, `SelfPlayRunner` struct/constructor, and Python pool.py.
+Pruning now happens only in Python during training, where it was already tested.
+
+**5. Config defaults restored** (`configs/selfplay.yaml`)
+
+- `gumbel_mcts: true` → `false` — docs and PR state Gumbel is opt-in/off by
+  default; the config was left enabled from a test run.
+- `fast_prob: 0.40` → `0.25` — undocumented training-distribution change
+  (proportion of 50-sim fast games). Reverted to the Phase 4.0 baseline value.
+
+**Test counts:** 101 Rust + 632 Python (all passing).

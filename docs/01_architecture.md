@@ -128,9 +128,15 @@ Value head (dual-pooling):
 - Optimizer: AdamW, lr=2e-3, weight_decay=1e-4
 - LR schedule: cosine decay over training, restarts every 200 iterations
 - Loss: `L = L_policy + L_value + w_aux · L_opp_reply`
-  - `L_policy = -sum(π_mcts · log π_net)` (cross-entropy with MCTS visit distribution)
+  - `L_policy = KL(π_improved ∥ π_net)` when `completed_q_values: true` (Gumbel AlphaZero improved targets)
+  - `L_policy = -sum(π_mcts · log π_net)` when `completed_q_values: false` (cross-entropy with visit distribution)
   - `L_value = BCE(sigmoid(v_logit), (z+1)/2)` where z ∈ {-1, +1} is the game outcome
   - `L_opp_reply = -sum(π_opp · log π_opp_net)` (auxiliary opponent reply prediction, weight 0.15)
+- Policy targets: Gumbel completed Q-values (Danihelka et al., ICLR 2022 §4). After
+  MCTS search, the training target is `π_improved = softmax(log π + σ(completedQ))` where
+  `σ = (c_visit + max_N) · c_scale · completedQ`. Unvisited legal actions receive a mixed
+  value estimate `v_mix`. Computed in Rust (`MCTSTree::get_improved_policy`). Config:
+  `completed_q_values: true`, `c_visit: 50`, `c_scale: 1.0` in `selfplay.yaml`.
 - Mixed precision: `torch.cuda.amp.autocast()` + `GradScaler`
 - `torch.compile()`: currently disabled (CUDA graph thread-local conflict with shared inference+training model). Re-enable when architecture allows separate models.
 - Batch size: 256 (fits in RTX 3070 8GB with FP16)
