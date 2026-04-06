@@ -97,7 +97,9 @@ def compute_improved_policy(
     legal_logits[~legal_mask.astype(bool)] = -1e9
     pi_improved = softmax(legal_logits).astype(np.float32)
 
-    # Pruning: zero entries < prune_frac * max, renormalize
+    # Pruning: zero entries < prune_frac * max, renormalize.
+    # Pruning here is for unit testing only. Production pruning happens in
+    # trainer.py:prune_policy_targets().
     if prune_frac > 0:
         max_prob = pi_improved.max()
         threshold = prune_frac * max_prob

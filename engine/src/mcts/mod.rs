@@ -230,7 +230,10 @@ impl MCTSTree {
         // v_hat: root value estimate (W/N from root node)
         let v_hat = root.w_value / root.n_visits as f32;
 
-        // v_mix: mixed value estimate for unvisited actions (paper Eq. 33)
+        // v_mix: mixed value estimate for unvisited actions (paper Eq. 33).
+        // Note: child.prior values come from softmax and are assumed to sum to
+        // ~1.0 over legal actions. No normalization step needed unless expansion
+        // pruning is added in the future.
         let v_mix = if visited_prior_sum > 1e-8 {
             let sum_n_f = sum_n as f32;
             (1.0 / (1.0 + sum_n_f))
