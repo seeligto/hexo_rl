@@ -2246,3 +2246,97 @@ Changes:
 - `feat(monitoring): add structlog JSONL file sink to logs/train_{run_id}.jsonl`
 
 **Test counts:** 86 Rust + 616 Python, all passing.
+
+---
+
+### §57 — Integration test: cold-start → prefill → run → SIGINT → resume lifecycle
+
+**Problem:** The buffer persistence feature (§55–§56) had no end-to-end acceptance
+test. Unit tests verified individual save/load paths in isolation but could not
+catch lifecycle regressions (e.g., corpus being re-loaded on resume, buffer not
+surviving a SIGINT, or the save happening after pool teardown instead of before).
+
+**Changes:**
+- `tests/test_train_lifecycle.py` — new slow/integration test that exercises the
+  complete four-phase lifecycle:
+  - **Phase A** (cold start): launches `train.py` via `Popen` with a 60 K synthetic
+    corpus. Polls the structlog JSONL for `corpus_loaded` (≥ 50 K positions) and
+    asserts it precedes `selfplay_pool_started`; asserts `corpus_prefill_skipped`
+    is absent.
+  - **Phase A continued**: polls for a `train_step` event with `step ≥ 50`, records
+    buffer size N.
+  - **Phase B** (SIGINT): sends `SIGINT`, polls for `replay_buffer.bin` within 30 s,
+    asserts file size > 0.
+  - **Phase C** (resume): relaunches with `--checkpoint <latest> --iterations 5`,
+    asserts `buffer_restored` (positions ≈ N), `corpus_prefill_skipped`, and
+    `selfplay_pool_started` in the log.
+- `pytest.ini` — registered `slow` and `integration` markers.
+- `Makefile` — `test.py` now passes `-m "not slow and not integration"` so the
+  lifecycle test is excluded from the normal test loop; new `test.integration`
+  target runs it explicitly.
+- `CLAUDE.md` — added `make test.integration` to the make-commands table; updated
+  test count (617 Python = 616 unit + 1 integration).
+
+**Test counts:** 86 Rust + 617 Python (616 unit + 1 integration), all passing.
+
+---
+
+### §58 — Three resume bugs found in JSONL log (2026-04-06)
+
+**Problem:** After resuming from a checkpoint at step 828, the JSONL showed:
+1. `pretrained_weight: 0.0, selfplay_weight: 1.0` — corpus mixing disabled.
+2. `buffer_restored` with only 1,770 positions still firing `corpus_prefill_skipped`.
+3. `total_loss: 393–1545` at steps 835–843 while `policy_loss/value_loss/aux_loss` were all normal (~3–7 total).
+
+**Root causes:**
+
+**Bug 1 — pretrained stream not initialised on resume:**
+`scripts/train.py` used an `if _buffer_restored: ... elif pretrained_path ...` structure that
+prevented `pretrained_buffer` from ever being loaded when `_buffer_restored = True`.
+Since both the `corpus_prefill_skipped` log AND the `pretrained_buffer = ReplayBuffer(...)`
+init were inside the same conditional, any buffer restore (even trivially small) silently
+disabled corpus batch mixing for the entire resumed run.
+
+**Fix:** Decoupled the two concerns. `_buffer_restored` now only controls the
+`corpus_prefill_skipped` log message; `pretrained_buffer` is always initialised
+from the corpus NPZ when the file exists, regardless of `_buffer_restored`.
+`compute_pretrained_weight(train_step)` already uses the restored step counter, so
+the decay formula automatically starts from the correct position.
+
+**Bug 2 — corpus prefill skip threshold was `n_loaded > 0`:**
+Any non-zero buffer restore (even 1,770 positions, 1.7% of capacity) set
+`_buffer_restored = True` and fired `corpus_prefill_skipped`. Combined with Bug 1
+this left the buffer nearly empty with no pretrained mixing.
+
+**Fix:** Added `_MIN_BUFFER_PREFILL_SKIP = 10_000`. `_buffer_restored` is now
+`n_loaded >= 10_000`. When restored positions are below the threshold, a new
+`corpus_prefill_running` event is logged with `restored_positions` and
+`reason="buffer_too_small"` to make the decision auditable.
+
+**Bug 3 — uncertainty/ownership/threat losses not logged → apparent total_loss spikes:**
+`trainer.py`'s per-step `log.info("train_step", ...)` included `total_loss` but
+omitted `uncertainty_loss`, `ownership_loss`, and `threat_loss`.  These terms ARE
+computed and added to total_loss via `compute_total_loss()` (with weights 0.05, 0.1,
+0.1 respectively) but were invisible in the JSONL.  The uncertainty head is randomly
+initialised when resuming from a pretrain checkpoint (loaded with `strict=False`); in
+the first few steps small sigma² values (Softplus output) can produce large Gaussian
+NLL values that make total_loss appear to spike with no explainable source.
+
+**Fix:** Added `uncertainty_loss`, `ownership_loss`, and `threat_loss` to the
+trainer's `log.info("train_step", ...)` call.  Every term that feeds into total_loss
+is now individually visible.  Residual delta of ~0.018 between `total_loss` and the
+sum of the four main components is the entropy regularisation (`0.01 × policy_entropy`),
+which is already logged as `policy_entropy`.
+
+**Commits:**
+- `e54622a fix(train): initialise pretrained data stream on resume using restored step count`
+- `e54622a` also covers Bug 2 (threshold change in same code section)
+- `19fda11 fix(train): identify and fix hidden loss term causing total_loss spikes`
+
+**Verification (smoke run confirmed):**
+- `pretrained_weight: 0.8` at step 10 of fresh run; on resume it correctly decays from
+  restored step via `0.8 * exp(-step / 300_000)`.
+- `corpus_prefill_running` fires when restored_positions < 10 K.
+- `uncertainty_loss`, `ownership_loss`, `threat_loss` present in every train_step JSONL event.
+
+**Test counts:** 86 Rust + 616 Python unit tests, all passing.
