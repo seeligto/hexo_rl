@@ -2153,3 +2153,42 @@ to assert the event is present with the required fields.
 **Commit:** `feat(monitoring): write grad_norm and loss to structured log independent of dashboard`
 
 **Test counts:** 86 Rust + 608 Python, all passing.
+
+---
+
+### 55. Bounded SocketIO send queue + client-side auto-reconnect (2026-04-06)
+**Files:** `hexo_rl/monitoring/web_dashboard.py`, `hexo_rl/monitoring/static/index.html`,
+`tests/test_dashboard_renderers.py`
+
+**Problem:** Under sustained training load, `socketio.emit()` in `_safe_emit()` could
+block when the WebSocket send buffer backed up (inactive or disconnected browser tab).
+This stalled the training loop — violating the "passive observer" invariant — and caused
+the dashboard to show frozen metric values (grad_norm stuck at last-received value).
+
+**Fix 1 — bounded emit queue (web_dashboard.py):**
+- Replaced direct `socketio.emit()` in `_safe_emit()` with a `queue.Queue(maxsize=200)`.
+- Training loop calls `put_nowait()` — returns immediately; raises `queue.Full` if
+  backed up, which is caught and the event is silently dropped (newest-dropped policy:
+  stale data is worse than gaps).
+- A daemon thread (`socketio-drain`) started in `start()` drains the queue into
+  `socketio.emit()`. If emit blocks or fails, only the drain thread is affected;
+  the training loop is never touched.
+- Queue ceiling is configurable via `monitoring.emit_queue_maxsize` (default 200).
+  At ~1KB per event, worst-case footprint is ~200KB — no RAM leak risk.
+
+**Fix 2 — client-side auto-reconnect (index.html):**
+- `io()` → `io({ reconnection: true, reconnectionDelay: 2000, reconnectionAttempts: Infinity })`
+- Status indicator shows "Reconnecting…" on disconnect/reconnect_attempt (was "disconnected").
+- On successful reconnect the server's existing `on_connect` handler sends `replay_history`,
+  which calls `resetState()` + replays all buffered events — dashboard repopulates
+  immediately without any additional client-side request.
+
+**Tests added:**
+- `test_emit_does_not_block_when_no_client` — asserts `on_event()` returns in <10ms
+  with no connected client.
+- `test_queue_drops_when_full` — fills queue to maxsize, pushes one more via
+  `_safe_emit()`, asserts no exception and queue size stays at maxsize.
+
+**Commit:** `fix(dashboard): bound SocketIO send queue and add client-side auto-reconnect`
+
+**Test counts:** 86 Rust + 610 Python, all passing.
