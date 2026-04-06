@@ -637,15 +637,6 @@ def main() -> None:
                     step=train_step,
                 )
                 trainer.save_checkpoint(last_loss_info if last_loss_info else None)
-                # Buffer persistence on shutdown
-                _mix_cfg_sd = train_cfg.get("mixing", config.get("mixing", {}))
-                if _mix_cfg_sd.get("buffer_persist", False):
-                    _bp_sd = _mix_cfg_sd.get("buffer_persist_path", "checkpoints/replay_buffer.bin")
-                    try:
-                        buffer.save_to_path(str(_bp_sd))
-                        log.info("buffer_saved", path=str(_bp_sd), positions=buffer.size)
-                    except Exception as e:
-                        log.warning("buffer_save_failed", error=str(e))
                 break
 
             # ── Training Throttling ──
@@ -985,8 +976,16 @@ def main() -> None:
             except Exception:
                 pass
 
-    # ── Session end: save final checkpoint and log summary ──
+    # ── Session end: save final checkpoint and buffer, then log summary ──
     final_ckpt = trainer.save_checkpoint(last_loss_info if last_loss_info else None)
+    _mix_cfg_end = train_cfg.get("mixing", config.get("mixing", {}))
+    if _mix_cfg_end.get("buffer_persist", False):
+        _bp_end = Path(_mix_cfg_end.get("buffer_persist_path", "checkpoints/replay_buffer.bin"))
+        try:
+            buffer.save_to_path(str(_bp_end))
+            log.info("buffer_saved", path=str(_bp_end), positions=buffer.size)
+        except Exception as _bp_err:
+            log.warning("buffer_save_failed", error=str(_bp_err))
     log.info(
         "session_end",
         final_step=trainer.step,
