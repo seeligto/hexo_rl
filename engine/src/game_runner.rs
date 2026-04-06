@@ -112,6 +112,10 @@ impl GumbelSearchState {
     /// Compute the Gumbel + log_prior + sigma(Q) score for a candidate.
     /// `child_offset` is relative to `first_child`.
     /// `max_n` is the max visit count across all root children (cached per phase).
+    ///
+    /// Unvisited candidates (n_visits=0) return score = gumbel + log_prior with
+    /// no Q contribution (q_hat=0 → sigma=0). This is correct per the paper:
+    /// before any simulations, score is just the Gumbel perturbation of the prior.
     fn score(&self, child_offset: usize, max_n: u32) -> f32 {
         let child = &self.cached_children[child_offset];
         let q_hat = if child.0 > 0 {
@@ -456,7 +460,11 @@ impl SelfPlayRunner {
                                     let mut cand_sims = 0;
                                     while cand_sims < sims_per && sims_used < game_sims {
                                         if !running.load(Ordering::SeqCst) { break; }
-                                        let n = infer_and_expand(&mut tree, leaf_batch_size);
+                                        // Cap batch to remaining budget for this candidate so we
+                                        // don't overshoot sims_per (leaf_batch_size can be 8 when
+                                        // only 1-3 sims are budgeted, biasing early candidates).
+                                        let batch = leaf_batch_size.min(sims_per.saturating_sub(cand_sims));
+                                        let n = infer_and_expand(&mut tree, batch.max(1));
                                         if n == 0 { break; }
                                         cand_sims += n;
                                         sims_used += n;
@@ -525,6 +533,9 @@ impl SelfPlayRunner {
                         // Move selection: Gumbel winner or visit-count sampling.
                         // Early in the game (< gumbel_explore_moves plies), always use
                         // visit-count sampling for exploration (paper Figure 8b).
+                        // Note: threshold is in plies, not turns. With compound moves
+                        // (2 per turn after the first), ply 10 ≈ turn 6. Adjust the
+                        // gumbel_explore_moves default if more early exploration is desired.
                         let use_gumbel_winner = gumbel_state.is_some()
                             && board.ply as usize >= gumbel_explore_moves;
                         let move_idx = if use_gumbel_winner {
