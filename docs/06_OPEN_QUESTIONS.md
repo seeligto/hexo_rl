@@ -90,6 +90,83 @@ of eval metrics only. Defer until after Phase 4.0 exit criteria are met.
 
 ---
 
+### Q12 — Shaped Reward S-Ordering Correctness
+
+**Priority:** MEDIUM
+**Source:** Threat Theory document cross-reference, 2026-04-06
+
+**Question:** Does the current shaped reward table respect W/S/C Strength ordering?
+Specifically, is "Double threat created" (+0.08) correctly categorised — is it detecting
+W2×(S0) (blockable) or something higher? Is the reward magnitude ordering consistent
+with the principle that lower-S formations should always reward more than higher-S
+formations of equal Weight?
+
+**Action:** Inspect `FormationDetector` in `engine/` and map each detected formation to
+its W/S/C value using the table in `docs/10_COMMUNITY_BOT_ANALYSIS.md §7.1`. Revise
+reward table if S-ordering is violated.
+
+**Cost:** ~2 hours inspection, no GPU cost. Fix before Phase 4.5 training run.
+
+---
+
+### Q13 — Chain Length Planes as Input Tensor Augmentation
+
+**Priority:** MEDIUM (Phase 4.5 architectural decision)
+**Source:** KrakenBot chain head analysis, threat theory framework, 2026-04-06
+
+**Question:** Should we add 6 chain-length planes (per-cell, per-direction unblocked
+run length, 3 hex axes × 2 players) to the input tensor, changing from 18 to 24
+planes? These planes are the spatial substrate of W-values across the board and give
+the network geometric awareness as an inductive bias rather than learning it from
+scratch.
+
+**Implementation path:** Compute in Python `GameState.to_tensor()` — no Rust changes
+required. Pure board dict scan. Fast enough for the hot path.
+
+**Constraints:** Breaking change — requires retrain from scratch, new replay buffer
+layout, new augmentation scatter tables. Must be decided before the next sustained
+training run.
+
+**Experiment design:** Train 18-plane baseline vs 24-plane variant for 500K steps;
+compare tactical accuracy (S0 block rate) and early Elo trajectory.
+
+**Cost:** ~4 GPU-days.
+
+---
+
+### Q14 — KrakenBot MinimaxBot as Eval Ladder Opponent
+
+**Priority:** LOW (Phase 4.5 target, blocked on submodule add)
+
+**Question:** Add KrakenBot `MinimaxBot` as a third eval ladder opponent (alongside
+SealBot and RandomBot). Provides tactical diversity — pattern-based evaluation vs
+SealBot's tree search. Pure Python import, no build step.
+
+**Prerequisites:** `git submodule add vendor/bots/krakenbot`, write `BotProtocol`
+wrapper (~30 lines). See `docs/10_COMMUNITY_BOT_ANALYSIS.md §1.9`.
+
+**Note:** Do NOT use KrakenBot `MCTSBot` as a Bradley-Terry anchor — it is actively
+training, making it a moving target. SealBot stays as the primary gate.
+
+---
+
+### Q15 — Corpus Tactical Quality Filtering
+
+**Priority:** LOW (Phase 4.5 target)
+
+**Question:** Should corpus game sampling be weighted by peak tactical complexity
+(maximum threat strength reached during the game)? Positionally quiet games with no
+S1+ structures developed by either side provide weaker training signal for tactical
+pattern recognition.
+
+**Implementation:** During manifest analysis pass, compute `max_threat_strength` per
+game using `board/threats.rs`. Add field to manifest. Soft-weight buffer sampling
+toward tactically richer games.
+
+**Cost:** Low — manifest field only, no training changes.
+
+---
+
 ## Deferred (Phase 5+)
 
 | # | Question | Reason deferred |

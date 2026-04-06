@@ -204,6 +204,47 @@ distill train (--amp --epochs 3) → self-play train (--resume from distill) →
 TODO items (incomplete): quiescence search, weaker minimax opponent, checkpoint gating
 (not yet implemented), TensorRT inference.
 
+### 1.9 Newly Confirmed Capabilities (2026-04-06)
+
+**MinimaxBot position eval API (`minimax_bot.py`):**
+
+- `_eval_score: float` — live incremental position score, always current. Updated
+  incrementally on every play/undo call, no need to recompute.
+- `_move_delta(q, r, is_a) -> float` — read-only incremental eval delta for a
+  hypothetical move at `(q, r)`. No board mutation, no search. Suitable for external
+  use as a move-ordering heuristic or position oracle.
+- Static eval accessible via `_minimax(game, depth=0)` → calls `_quiescence()` →
+  returns `self._eval_score` when no threats exist.
+- Score range: ±1e8 for win/loss; smaller floats for positional eval. Relative to
+  `self._player` (whoever called `get_move`).
+- Pattern-based: N-cell sliding window encoded as base-3 integer, indexed into flat
+  array loaded from `data/pattern_values.json`. Canonical forms expanded at load time.
+
+**MCTSBot + trained checkpoint (`mcts_bot.py`):**
+
+- Trained ResNet checkpoint at `training/resnet_results/best.pt`
+  (`_DEFAULT_MODEL_PATH`). KrakenBot is actively running its own AlphaZero self-play
+  training loop.
+- Python import only. Board format identical to ours (axial, sparse dict).
+- **NOT suitable as a Bradley-Terry anchor** — `best.pt` changes as training
+  progresses, making it a moving target. Suitable as an additional eval ladder
+  opponent once a frozen snapshot is confirmed and HeXO is strong enough for the
+  matchup to be informative (Phase 4.5 target).
+
+**Self-play + distillation pipeline confirmed:**
+
+- `training/selfplay/` and `training/distill/` present in repo. KrakenBot is a direct
+  peer/competitor actively training, not just a static benchmark bot.
+
+**BotProtocol wrapping guidance:**
+
+- `MinimaxBot`: pure Python import, no build step, trivial to wrap (~30 lines).
+  Recommended submodule: `vendor/bots/krakenbot`. Priority: Phase 4.5.
+- `MCTSBot`: requires `best.pt` present at a known path. Defer to Phase 4.5 after
+  HeXO has a stable training checkpoint for meaningful comparison.
+- Add as eval ladder opponent for tactical style diversity vs SealBot's tree search.
+  **NOT as primary gate** — SealBot stays primary.
+
 ---
 
 ## 2. Hexfish (httt_collection, 2026-04-06)
@@ -241,8 +282,26 @@ bridge reusable for any future Rust bot in the collection.
 no position evaluation API. Not a candidate for BotProtocol wrapping until the binary
 exposes an eval command or a Python binding is added.
 
-**Board state:** Axial `(q, r)`, origin-normalized (first stone at `(0,0)`). Fully
-compatible with our axial system; `RustBotWrapper` handles the origin translation.
+**Board state:** `Board.moves: FxHashSet<(u8, i32, i32)>` (player, q, r). Axial `(q, r)`,
+origin-normalized (first stone at `(0,0)`). Fully compatible with our axial system;
+`RustBotWrapper` handles the origin translation.
+
+**Position evaluation:** `Engine::evaluate(&self) -> f64` is an internal Rust method, not
+exposed via subprocess protocol. Centred at 0.0 from Player 1's perspective. Terminal
+positions return ±1e12. Not accessible without a PyO3 binding or protocol extension.
+
+### 2.2 Integration Assessment
+
+**Strength:** Unknown vs SealBot. Pure minimax, no NN. **Not a candidate for eval
+benchmarking** — SealBot is a stronger minimax and is already our primary gate.
+
+**Integration value:** `rust_runner.py:RustBotWrapper` in `vendor/bots/httt_collection`
+is a clean generic subprocess bridge for any compiled Rust bot binary. The protocol
+(`go <ms>`, `move q1 r1 q2 r2`, `reset`, `quit`) maps cleanly to `BotProtocol`. Future
+Rust bots in the collection can be wrapped with minimal code by reusing this runner.
+
+**Action:** No integration now. Monitor for protocol extension (eval command or PyO3
+binding) that would make position evaluation accessible.
 
 ---
 
@@ -704,6 +763,53 @@ players place 2 stones per turn. KrakenBot handles this as follows:
 This is essentially the same approach as ours (tracking `moves_remaining` and
 adjusting MCTS behavior), but implemented through the compound action space rather
 than sequential plies.
+
+---
+
+## 7. Formation Vocabulary Mapped to Threat Theory (W/S/C)
+
+The community's Threat Theory document (read 2026-04-06) defines a 3-variable
+taxonomy for any formation:
+
+- **Weight (W):** Minimum number of moves required to block the threat (from the
+  opponent's perspective). W ≥ 3 is a **forced win** in a 2-stones-per-turn game,
+  because the opponent can play at most 2 blocking moves per turn.
+- **Strength (S):** Number of stages remaining before the formation becomes a forced
+  win. S=0 = already a forced win (if W≥3) or immediate winning threat (if W=1/2).
+  Lower S must be addressed before higher S, regardless of Weight.
+- **Cost (C):** Moves required for the owner to advance the formation to the next
+  Strength level. High C = slow to mature; low C = urgent.
+
+**Key rule:** W ≥ 3 = forced win unconditionally. W = 2 × (S=0) is blockable (opponent
+can use both moves to block). Only when there are 3+ simultaneous W=1 threats does the
+opponent run out of blocks.
+
+### 7.1 Formation → W/S/C Mapping
+
+| Formation | W/S/C | Notes |
+|---|---|---|
+| 4-in-a-row (open, both ends) | W2S0 | Blockable in 1 turn (both stones cover both ends) |
+| Double threat (two W1S0) | W2S0 × 2 | Opponent can block both — NOT a forced win |
+| Triple threat | W3S0 | Forced win — opponent cannot block all 3 in one turn |
+| Open Three (+1 tempo pre-empt) | → W3S0 | Creates a forced win in 1 move (enables triple threat) |
+| Open Two (+0 tempo) | W1S2C2 | Takes 2 more moves to activate into S1 |
+| Closed Three (+0 tempo) | W1S2 | Same tempo class as Open Two |
+| Rhombus | W3S1 | Forced win unless opponent has an S0 counter-threat |
+| Ladder | W3S1+ | Forced win class; exact S depends on ladder length |
+| Triangle | W3S1 | Forced win class — verify against FormationDetector definitions |
+
+### 7.2 Implications for HeXO
+
+**Reward ordering must respect S-ordering strictly.** Creating an S0 structure should
+always reward more than an S1 structure of equal Weight, regardless of how "impressive"
+the S1 structure looks geometrically. Verify that the shaped reward table in the
+training config matches this ordering before the Phase 4.5 reward revision.
+
+**Implication for quiescence override.** Current quiescence detects W3S0 only (3+
+immediate winning moves). W3S1 formations (Rhombus, Ladder, Triangle) are also
+theoretically forced wins unless the opponent holds an S<1 counter-threat. Extending
+quiescence to detect W3S1 is a Phase 4.5 enhancement target — see Q12 in
+`docs/06_OPEN_QUESTIONS.md`.
 
 ---
 
