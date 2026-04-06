@@ -71,13 +71,28 @@ impl MCTSTree {
                 0.0
             };
 
-            let best = (first..first + n_ch)
-                .max_by(|&a, &b| {
-                    let sa = self.puct_score(a as u32, cur, parent_n, fpu_value);
-                    let sb = self.puct_score(b as u32, cur, parent_n, fpu_value);
-                    sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .unwrap() as u32;
+            // Gumbel MCTS: at root (cur==0), skip PUCT and use the forced child.
+            let best = if cur == 0 {
+                if let Some(forced) = self.forced_root_child {
+                    forced
+                } else {
+                    (first..first + n_ch)
+                        .max_by(|&a, &b| {
+                            let sa = self.puct_score(a as u32, cur, parent_n, fpu_value);
+                            let sb = self.puct_score(b as u32, cur, parent_n, fpu_value);
+                            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .unwrap() as u32
+                }
+            } else {
+                (first..first + n_ch)
+                    .max_by(|&a, &b| {
+                        let sa = self.puct_score(a as u32, cur, parent_n, fpu_value);
+                        let sb = self.puct_score(b as u32, cur, parent_n, fpu_value);
+                        sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .unwrap() as u32
+            };
 
             let val = self.pool[best as usize].action_idx;
             let q = (val >> 16) as i32 - 32768;
