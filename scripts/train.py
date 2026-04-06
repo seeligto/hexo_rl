@@ -131,6 +131,9 @@ def main() -> None:
 
     args = parse_args()
 
+    # ── Run ID (generated early so the log filename uses it) ──
+    run_id = uuid.uuid4().hex
+
     # ── Load config ──
     # Base configs are always loaded; --config (if given) is an override on top.
     from hexo_rl.utils.config import load_config
@@ -149,7 +152,8 @@ def main() -> None:
         config = load_config(*_BASE_CONFIGS)
 
     # ── Logging ──
-    log = configure_logging(log_dir=args.log_dir, run_name=args.run_name)
+    _log_run_name = args.run_name or f"train_{run_id}"
+    log, _log_fh = configure_logging(log_dir=args.log_dir, run_name=_log_run_name)
     log.info("startup", config=config, pid=__import__("os").getpid())
 
     # ── Seed ──
@@ -438,8 +442,6 @@ def main() -> None:
     if recent_buffer is not None:
         pool.recent_buffer = recent_buffer
 
-    # ── Run ID ──
-    run_id = uuid.uuid4().hex
     log.info("run_id", run_id=run_id)
 
     # ── Evaluation pipeline (Phase 4.0) ──
@@ -985,6 +987,10 @@ def main() -> None:
                 d.stop()
             except Exception:
                 pass
+        try:
+            _log_fh.close()
+        except Exception:
+            pass
 
     # ── Session end: save final checkpoint and buffer, then log summary ──
     final_ckpt = trainer.save_checkpoint(last_loss_info if last_loss_info else None)
