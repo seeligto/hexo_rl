@@ -128,6 +128,7 @@ class Trainer:
 
         self.step = 0
         self.checkpoint_log: list = []
+        self._policy_diag_done = False  # fires once per Trainer instantiation
 
         # Load log if it already exists (resuming from checkpoint).
         log_path = self.checkpoint_dir / "checkpoint_log.json"
@@ -235,7 +236,29 @@ class Trainer:
 
         prune_frac = float(self.config.get("policy_prune_frac", 0.0))
         if prune_frac > 0.0:
+            if not self._policy_diag_done:
+                _nz_before = (policies_t > 0).float().sum(dim=-1).mean().item()
             policies_t = prune_policy_targets(policies_t, prune_frac)
+            if not self._policy_diag_done:
+                _nz_after = (policies_t > 0).float().sum(dim=-1).mean().item()
+                log.info(
+                    "policy_target_nonzero_diag",
+                    step=self.step,
+                    mean_nonzero_before_prune=round(_nz_before, 2),
+                    mean_nonzero_after_prune=round(_nz_after, 2),
+                    prune_frac=prune_frac,
+                )
+                self._policy_diag_done = True
+        else:
+            if not self._policy_diag_done:
+                _nz = (policies_t > 0).float().sum(dim=-1).mean().item()
+                log.info(
+                    "policy_target_nonzero_diag",
+                    step=self.step,
+                    mean_nonzero_no_prune=round(_nz, 2),
+                    prune_frac=0.0,
+                )
+                self._policy_diag_done = True
 
         self.optimizer.zero_grad()
 

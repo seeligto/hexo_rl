@@ -132,20 +132,28 @@ train.nodash: ## Self-play RL from bootstrap checkpoint, no dashboard
 .PHONY: train.bg
 train.bg: ## Self-play RL from bootstrap checkpoint, background (logs/)
 	@mkdir -p logs
-	nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) \
+	@nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) \
 		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 & \
-		echo $$! > logs/train.pid
-	@echo "Training started (PID $$(cat logs/train.pid))"
+		echo $$! > logs/train.pid; \
+		echo "Training started (PID $$(cat logs/train.pid))"
 	@echo "Logs: logs/train_*.log"
 	@echo "Dashboard: http://localhost:5001"
 
 .PHONY: train.stop
 train.stop: ## Stop background training
-	@if [ -f logs/train.pid ]; then \
-		kill $$(cat logs/train.pid) && rm logs/train.pid && echo "Training stopped"; \
-	else \
-		echo "No train.pid found — use 'ps aux | grep train.py' to find the process"; \
-	fi
+	@stopped=0; \
+	if [ -f logs/train.pid ]; then \
+		PID=$$(cat logs/train.pid); \
+		if kill -0 $$PID 2>/dev/null; then \
+			kill $$PID && echo "Stopped PID $$PID (from train.pid)"; \
+			stopped=1; \
+		else \
+			echo "Stale train.pid (PID $$PID not running), removing"; \
+		fi; \
+		rm -f logs/train.pid; \
+	fi; \
+	pkill -f "scripts/train.py" 2>/dev/null && { echo "Killed train.py processes via pkill"; stopped=1; } || true; \
+	if [ $$stopped -eq 0 ]; then echo "No training process found"; fi
 
 .PHONY: train.status
 train.status: ## Check background training status
