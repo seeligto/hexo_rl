@@ -323,12 +323,17 @@ def main() -> None:
 
     # ── Buffer restore (on resume) ──
     mixing_cfg = train_cfg.get("mixing", config.get("mixing", {}))
+    # Minimum restored positions required to consider the buffer "well-restored"
+    # and skip corpus prefill.  1770 positions (1.7% full) is not enough.
+    _MIN_BUFFER_PREFILL_SKIP = 10_000
     _buffer_restored = False
+    _n_buffer_restored = 0
     if args.checkpoint and mixing_cfg.get("buffer_persist", False):
         _bp_resume = Path(mixing_cfg.get("buffer_persist_path", "checkpoints/replay_buffer.bin"))
         if _bp_resume.exists():
             try:
                 n_loaded = buffer.load_from_path(str(_bp_resume))
+                _n_buffer_restored = n_loaded
                 log.info("buffer_restored", path=str(_bp_resume), positions=n_loaded,
                          capacity=buffer.capacity)
                 emit_event({
@@ -336,20 +341,31 @@ def main() -> None:
                     "buffer_size": buffer.size,
                     "buffer_capacity": buffer.capacity,
                 })
-                _buffer_restored = n_loaded > 0
+                # Only skip corpus prefill if we restored a meaningful number of positions.
+                _buffer_restored = n_loaded >= _MIN_BUFFER_PREFILL_SKIP
             except Exception as e:
                 log.warning("buffer_restore_failed", error=str(e))
 
     # ── Pretrained buffer (mixed data streams) ──
-    # Skip corpus prefill on resume if buffer was restored from file — no point
-    # loading stale corpus on top of a fully restored self-play buffer.
+    # The pretrained_buffer is ALWAYS initialised when the corpus NPZ exists — even
+    # on resume — so that batch mixing (pretrained_weight > 0) works correctly.
+    # _buffer_restored only gates the "corpus_prefill_skipped" log message; it no
+    # longer prevents pretrained_buffer from being loaded.
     pretrained_buffer = None
     pretrained_path = mixing_cfg.get("pretrained_buffer_path")
     if _buffer_restored:
         log.info("corpus_prefill_skipped",
-                 msg="buffer restored from file — skipping corpus prefill",
-                 buffer_size=buffer.size)
-    elif pretrained_path and Path(pretrained_path).exists():
+                 msg="buffer well-restored from file — corpus prefill not required",
+                 buffer_size=buffer.size,
+                 restored_positions=_n_buffer_restored)
+    elif _n_buffer_restored > 0:
+        # Buffer was partially restored but below threshold — run prefill on top.
+        log.info("corpus_prefill_running",
+                 restored_positions=_n_buffer_restored,
+                 reason="buffer_too_small",
+                 threshold=_MIN_BUFFER_PREFILL_SKIP)
+
+    if pretrained_path and Path(pretrained_path).exists():
         log.info("loading_corpus_npz", path=pretrained_path,
                  msg="copying corpus into Rust pretrained_buffer — may take minutes for large corpora")
         t0 = time.time()
