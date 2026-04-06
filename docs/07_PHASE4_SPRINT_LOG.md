@@ -2390,3 +2390,27 @@ of `main()`.
 **Commit:** `452397f fix(train): three shutdown/training bugs — TT leak, uncertainty spikes, closed-log crash`
 
 **Test counts:** 86 Rust + 616 Python unit tests, all passing.
+
+---
+
+### §60 — Eval overhead reduced from 55% to 9% of training time (2026-04-06)
+
+**Problem:** At step 2000, the eval pipeline triggered and consumed ~130 min per round:
+- vs RandomBot: 20 games × ~8s = ~2.7 min
+- vs SealBot: 50 games × ~30.5s = ~25 min
+- vs best checkpoint: **200 games × ~30.5s = ~102 min** ← main cost
+
+With `eval_interval: 2000` and training speed ~490 steps/hr, eval fired every ~4 hours
+but took 2.2 hours to complete — **55% of wall-clock time spent on eval**.
+At step 2000 the SealBot winrate was 0% (0/22 games), so frequent evals provided no
+useful signal.
+
+**Fix:**
+- `eval_interval: 2000 → 5000` in `configs/training.yaml`
+- `best_checkpoint n_games: 200 → 50` in `configs/eval.yaml`
+
+**After:** ~53 min per eval every ~10 hours = **~9% overhead**.
+50-game best-checkpoint eval is still statistically sound for 55% promotion gating.
+
+**Commits:**
+- `9bf3a12 config(eval): reduce eval overhead from 55% to ~9% of training time`
