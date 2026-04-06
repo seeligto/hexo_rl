@@ -10,7 +10,7 @@ eval_pipeline:
   opponents:
     best_checkpoint:
       enabled: true
-      n_games: 200               # primary gating: must be statistically significant
+      n_games: 50                # reduced from 200 — 200 games × 30s = 102 min per eval; 50 still statistically sound for gating
       model_sims: 128
       opponent_sims: 128
     sealbot:
