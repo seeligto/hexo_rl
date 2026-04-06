@@ -39,6 +39,9 @@ pub struct SelfPlayRunner {
     zoi_enabled: bool,
     zoi_lookback: usize,
     zoi_margin: i32,
+    completed_q_values: bool,
+    c_visit: f32,
+    c_scale: f32,
     running: Arc<AtomicBool>,
     games_completed: Arc<AtomicUsize>,
     positions_generated: Arc<AtomicUsize>,
@@ -59,7 +62,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -80,6 +83,9 @@ impl SelfPlayRunner {
         zoi_enabled: bool,
         zoi_lookback: usize,
         zoi_margin: i32,
+        completed_q_values: bool,
+        c_visit: f32,
+        c_scale: f32,
     ) -> Self {
         // If standard_sims is 0, fall back to n_simulations.
         let effective_standard = if standard_sims == 0 { n_simulations } else { standard_sims };
@@ -102,6 +108,9 @@ impl SelfPlayRunner {
             zoi_enabled,
             zoi_lookback,
             zoi_margin,
+            completed_q_values,
+            c_visit,
+            c_scale,
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
             positions_generated: Arc::new(AtomicUsize::new(0)),
@@ -143,6 +152,9 @@ impl SelfPlayRunner {
             let zoi_enabled = self.zoi_enabled;
             let zoi_lookback = self.zoi_lookback;
             let zoi_margin = self.zoi_margin;
+            let completed_q_values = self.completed_q_values;
+            let c_visit = self.c_visit;
+            let c_scale = self.c_scale;
             let results_queue = self.results.clone();
             let recent_game_results = self.recent_game_results.clone();
 
@@ -253,6 +265,14 @@ impl SelfPlayRunner {
                         };
                         let policy = tree.get_policy(temperature, BOARD_SIZE);
 
+                        // Completed Q-values: compute improved policy for training target.
+                        // Move selection still uses temperature-scaled visit counts above.
+                        let target_policy = if completed_q_values {
+                            tree.get_improved_policy(BOARD_SIZE, c_visit, c_scale)
+                        } else {
+                            policy.clone()
+                        };
+
                         // ── Sample and apply move (ZOI-filtered legal set) ──
                         let full_legal = board.legal_moves();
                         if full_legal.is_empty() { break; }
@@ -285,11 +305,12 @@ impl SelfPlayRunner {
                             let mut feat = batcher.get_feature_buffer();
                             // get_cluster_views returns 2-plane views; expand to 18 for storage.
                             board.encode_18_planes_to_buffer(&views[k], &mut feat);
-                            // Fast games: zero-policy marks value-only targets.
-                            let projected_policy = if is_fast_game {
+                            // Fast games: zero-policy marks value-only targets (unless
+                            // completed Q-values are enabled, which give signal even at 50 sims).
+                            let projected_policy = if is_fast_game && !completed_q_values {
                                 vec![0.0; n_actions]
                             } else {
-                                Self::aggregate_policy_to_local(&board, center, &policy)
+                                Self::aggregate_policy_to_local(&board, center, &target_policy)
                             };
                             records.push((feat, projected_policy, board.current_player));
                         }
@@ -619,7 +640,7 @@ mod tests {
         // Run with max_moves_per_game = 0 to avoid triggering MCTS and inference server dependency
         let runner = SelfPlayRunner::new(
             4, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
-            0.05, false, 16, 5,
+            0.05, false, 16, 5, false, 50.0, 1.0,
         );
         runner.start();
         

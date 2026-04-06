@@ -2414,3 +2414,50 @@ useful signal.
 
 **Commits:**
 - `9bf3a12 config(eval): reduce eval overhead from 55% to ~9% of training time`
+
+---
+
+## Phase 4.5 preparatory changes (2026-04-06)
+
+### §61 — Gumbel completed Q-values policy targets
+
+**Files:** `engine/src/mcts/mod.rs`, `engine/src/game_runner.rs`,
+`hexo_rl/selfplay/completed_q.py` (new), `hexo_rl/selfplay/pool.py`,
+`hexo_rl/training/losses.py`, `hexo_rl/training/trainer.py`,
+`configs/selfplay.yaml`, `configs/training.yaml`
+
+Implements the "completed Q-values" improved policy target from Danihelka et al.,
+"Policy improvement by planning with Gumbel" (ICLR 2022, §4, Appendix D Eq. 33).
+
+**Problem:** Standard AlphaZero trains policy toward MCTS visit-count distributions.
+At low sim counts (50-sim fast games = 25% of training via playout cap), visit counts
+are dominated by the prior — the network learns little from these positions.
+
+**Solution:** After MCTS search, construct an improved policy target that incorporates
+Q-values from search:
+1. For visited children (N>0): use Q(a) = W(a)/N(a)
+2. For unvisited legal actions: use v_mix, a mixed value estimate interpolating
+   the root value with the policy-weighted average of visited Q-values
+3. Compute `π_improved = softmax(log π + σ(completedQ))` where
+   `σ = (c_visit + max_N) · c_scale · completedQ`
+4. Training loss becomes KL(π_improved ∥ π_model) instead of CE with visit counts
+
+**Key design decision:** Computation happens in Rust (`MCTSTree::get_improved_policy`)
+rather than Python because the MCTS tree lives inside Rust worker threads. All data
+(Q-values, visit counts, priors, root value) is local — no extra PyO3 boundary
+crossings needed. A Python reference implementation exists for testing only.
+
+**Behavioral changes:**
+- Move selection: unchanged (temperature-scaled visit counts)
+- Training targets: improved policy replaces visit-count distribution
+- Fast games: now produce policy targets (not zeros) when enabled — this is the
+  primary benefit, giving useful signal even at 50 sims
+- Policy loss: KL divergence (identical gradients to CE, more interpretable values)
+
+**Config:** `completed_q_values: true`, `c_visit: 50.0`, `c_scale: 1.0` in
+`configs/selfplay.yaml` and `configs/training.yaml`. Backward compatible — set
+`completed_q_values: false` to restore prior behavior.
+
+**Tests:** 9 new tests in `tests/test_completed_q.py` covering math correctness,
+edge cases (no visits, all visited, fast-game regime), KL loss convergence, and
+FP16 safety. Test counts: 86 Rust + 625 Python.

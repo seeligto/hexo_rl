@@ -37,6 +37,28 @@ def compute_policy_loss(
     return torch.zeros(1, device=device, dtype=torch.float32).squeeze()
 
 
+def compute_kl_policy_loss(
+    log_policy: torch.Tensor,
+    target_policy: torch.Tensor,
+    valid_mask: torch.Tensor,
+    device: torch.device,
+) -> torch.Tensor:
+    """KL(target || model) policy loss for completed Q-value targets.
+
+    KL and CE produce identical gradients (differ by the constant entropy of
+    the target distribution). KL gives more interpretable loss values: 0 when
+    the model perfectly matches the target.
+    """
+    if valid_mask.any():
+        tgt = target_policy[valid_mask]           # (N, A)
+        log_model = log_policy[valid_mask]         # (N, A)
+        # FP16 safety: clamp log(target) to prevent -inf propagation.
+        # Same pattern as compute_aux_loss (§47 fix).
+        log_tgt = torch.log(tgt.clamp(min=1e-8)).clamp(min=-100.0)
+        return (tgt * (log_tgt - log_model)).sum(dim=1).mean()
+    return torch.zeros(1, device=device, dtype=torch.float32).squeeze()
+
+
 def compute_value_loss(
     value_logit: torch.Tensor,
     outcome: torch.Tensor,

@@ -24,6 +24,13 @@ mcts:
   temperature_threshold_ply: 30
 
 selfplay:
+  # Gumbel completed Q-values (Danihelka et al., ICLR 2022).
+  # Compute improved policy targets using MCTS Q-values instead of raw visit counts.
+  # Primary benefit: useful policy signal even at 50-sim fast games.
+  completed_q_values: true
+  c_visit: 50.0
+  c_scale: 1.0
+
   n_workers: 12
   inference_batch_size: 64
   inference_max_wait_ms: 12.0
