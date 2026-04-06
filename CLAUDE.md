@@ -500,34 +500,26 @@ tests. Full training runs must always use `augment=True` (the default).
 > Run `make bench.full` to reproduce.
 > Full results: reports/benchmarks/
 
-Run `make bench.full`. Latest baseline (2026-04-04_19-53, Ryzen 7 3700x + RTX 3070, 16 workers, no CPU pin, LTO + native CPU, torch.compile DISABLED — Python 3.14 CUDA graph incompatibility (see sprint §25, §30, §32), quiescence gated behind threat pre-check, ZOI lookback enabled, ownership+threat aux heads present):
+Run `make bench.full`. Latest baseline (2026-04-06, Ryzen 7 8845HS + RTX 4060 Laptop, 16 workers, no CPU pin, LTO + native CPU):
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 31,331 sim/s | ≥ 26,000 sim/s | FPU (§27, fpu_reduction=0.25) causes ~41% regression vs §25 baseline; quiescence gate + ZOI negligible on empty-board benchmark (IQR ±103) |
-| NN inference (batch=64) | 11,062 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±5) |
-| NN latency (batch=1, mean) | 2.75 ms | ≤ 3.5 ms | IQR ±0.02 ms |
-| Replay buffer push | 789,923 pos/sec | ≥ 630,000 pos/sec | IQR ±14,790 (1.9%) |
-| Replay buffer sample raw (batch=256) | 1,220.8 µs/batch | ≤ 1,500 µs | IQR ±1.7 µs |
-| Replay buffer sample augmented (batch=256) | 1,113.1 µs/batch | ≤ 1,400 µs | IQR ±2.1 µs |
+| MCTS (CPU only, no NN) | 55,478 sim/s | ≥ 26,000 sim/s | IQR ±400 |
+| NN inference (batch=64) | 9,810 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±1) |
+| NN latency (batch=1, mean) | 1.59 ms | ≤ 3.5 ms | IQR ±0.05 ms |
+| Replay buffer push | 762,130 pos/sec | ≥ 630,000 pos/sec | IQR ±114,320 (15%) |
+| Replay buffer sample raw (batch=256) | 1,037 µs/batch | ≤ 1,500 µs | IQR ±34 µs |
+| Replay buffer sample augmented (batch=256) | 940 µs/batch | ≤ 1,400 µs | IQR ±62 µs |
 | GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
-| VRAM usage (process) | 0.10 GB / 8.6 GB | ≤ 6.9 GB | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |
-| Worker throughput | 723,036 pos/hr | ≥ 625,000 pos/hr | IQR ±19,486 (2.7%) |
+| VRAM usage (process) | 0.05 GB / 8.0 GB | ≤ 6.4 GB | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |
+| Worker throughput | 659,983 pos/hr | ≥ 625,000 pos/hr | IQR ±56,835 (8.6%) |
 | Batch fill % | 100.0% | ≥ 80% | IQR ±0.0% |
 
 Historical variance note: before the warm-up/n=5/pinning methodology, single-run
 benchmarks showed ±50% swings due to LLVM codegen lottery and AMD boost clocks.
 See `docs/03_TOOLING.md` § "Benchmark variance (historical)" for details.
-2026-04-03: config parsing bug (commit 1217555) caused prior baseline to
-measure an undersized model. This run reflects the correct Phase 4.0
-production architecture (12 residual blocks × 128 channels). VRAM measurement
-also corrected from pynvml global to torch.cuda.max_memory_allocated().
-2026-04-04: torch.compile disabled (Python 3.14 CUDA graph incompatibility — see sprint §25, §30, §32). MCTS target
-rebaselined for correct hex-ball-8 legal move rule.
-2026-04-04: quiescence gate (§30) added. MCTS target rebaselined to ≥26,000 (85% of 30,963).
-2026-04-04_19-53: rebaseline after §36-§38 (cosine temperature, ZOI, ownership+threat heads,
-action_idx u16→u32 fix). ZOI negligible on CPU-only benchmark. All 10 targets PASS.
-Test counts: 617 Python (616 unit + 1 integration) + 86 Rust, all passing.
+2026-04-06: rebaseline on laptop (Ryzen 7 8845HS + RTX 4060). MCTS sim/s higher
+than prior desktop baseline due to faster single-thread IPC. All 10 targets PASS.
 
 ## Phase 4.0 architecture baseline
 
