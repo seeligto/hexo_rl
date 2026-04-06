@@ -1,8 +1,8 @@
 # Community Bot Architecture Analysis
 
-> Generated 2026-04-04. Sources: GitHub repos read via MCP.
-> Some files in KrakenBot and Orca were not accessible due to API rate limits —
-> gaps are noted inline.
+> Originally generated 2026-04-04; updated 2026-04-06 with full minimax_bot.py read,
+> KrakenBot submodule added, BotProtocol wrapper written, Hexfish documented.
+> Remaining Orca gaps noted inline.
 
 ---
 
@@ -146,7 +146,55 @@ permutation tables `[12, 625]` with direction-aware chain permutations.
 - `pattern_data.h` — pattern evaluation data
 - Methods: `has_instant_win()`, `has_near_threats()`, PV extraction, pickle support
 
-### 1.7 Developer Notes (scratch.txt, todo.md)
+### 1.7 Python MinimaxBot (`minimax_bot.py`) — Learned Pattern Evaluation
+
+A **separate, pure-Python** minimax bot that does NOT use `cpp/engine.h`. It uses
+iterative-deepening alpha-beta with a static evaluator backed by **learned pattern
+values** loaded from `data/pattern_values.json`.
+
+**Evaluation:**
+
+- Sliding N-cell windows along all 3 hex axes. Window length comes from model
+  metadata in the JSON (`_meta.window_length`).
+- Each window is encoded as a base-3 integer: `0=empty, 1=me, 2=opp` (perspective
+  of the bot's player, set up in `get_move()`).
+- Pattern integers index into a flat array `self._pv` (size `3^N`) loaded from
+  the JSON and scaled by `score_scale`.
+- Pattern canonicalization: `mcts/pattern_table.py` maps raw patterns to canonical
+  forms under rotation + optional piece-swap symmetry. The JSON stores only canonical
+  values; `_load_pattern_values()` expands to the full flat lookup.
+- `self._eval_score: float` — running incremental total, always in sync with the
+  board. Positive = good for `self._player`. Win = ±`_WIN_SCORE` (1e8).
+
+**Key callable APIs:**
+
+```python
+# Read incremental eval delta of placing at (q,r) — no board mutation:
+bot._move_delta(q: int, r: int, is_a: bool) -> float
+
+# Current static eval of position (valid after get_move() has been called
+# on the position, or during search):
+bot._eval_score: float
+
+# Run full iterative-deepening search:
+moves: list[tuple[int,int]] = bot.get_move(game)  # returns [(q1,r1), (q2,r2)]
+```
+
+**Can call with depth=0:** `_minimax(game, depth=0, ...)` calls `_quiescence()`
+which returns `self._eval_score` when no threats exist. Static eval only.
+
+**Move generation:**
+- Root: up to 16 candidate cells, pair combinations from `_ROOT_PAIR_MASK`
+- Inner: up to 11 candidate cells, pair combinations from `_INNER_PAIR_MASK`
+- Colony move: one random cell at `max_radius + 3` hex distance — represents
+  starting a distant group
+- Quiescence: extends through threat/block moves (max depth `_MAX_QDEPTH = 16`)
+
+**Interface:** Pure Python import — `from minimax_bot import MinimaxBot`.
+Submodule path: `vendor/bots/krakenbot`. No build step.
+**BotProtocol wrapper:** `hexo_rl/bootstrap/bots/krakenbot_bot.py`.
+
+### 1.8 Developer Notes (scratch.txt, todo.md)
 
 Pipeline command sequence:
 ```
@@ -158,7 +206,47 @@ TODO items (incomplete): quiescence search, weaker minimax opponent, checkpoint 
 
 ---
 
-## 2. Orca Architecture Summary
+## 2. Hexfish (httt_collection, 2026-04-06)
+
+**Repo:** `Ramora0/HexTacToeBots` → `bots/Hexfish/`
+**Language:** Rust, compiled to a binary, wrapped via Python subprocess
+**Status:** New — added in httt_collection commit `0553361`
+
+### 2.1 Engine
+
+Rust alpha-beta minimax with iterative deepening and time-budgeted search.
+
+| Feature | Value |
+|---|---|
+| TT | Direct-mapped array, 2²⁰ entries, 64-bit Zobrist key |
+| Move ordering | History heuristic + TT best-move front-loading |
+| Candidate moves | Top-N cells by `cell_scores`, up to `ROOT_TOP_N=25` / `NODE_TOP_N=20` |
+| Critical extension | All critical pairs searched regardless of width cap |
+| Time check | Every 1024 nodes |
+
+**Static evaluator:** Weighted sum of `x_needs[k]` − `o_needs[k]` for k=0..4, where
+`needs[k]` = count of open 6-cell windows with exactly k stones of that colour needing
+one more to reach 6. Win = ±1e12. Weights: `[1.0, 5.0, 100.0, 5000.0, 1000.0]`.
+
+**Interface:** Subprocess only. Binary `target/release/httt --bot` uses a line protocol:
+- Startup: prints `READY`
+- `go <ms>` → `MOVE <depth> q1 r1 q2 r2`
+- `move q1 r1 q2 r2` (opponent's moves)
+- `reset`, `quit`
+
+Python bridge: `vendor/bots/httt_collection/rust_runner.py::RustBotWrapper` — generic
+bridge reusable for any future Rust bot in the collection.
+
+**No static eval endpoint** over the protocol — only `go <ms>`. No Python import,
+no position evaluation API. Not a candidate for BotProtocol wrapping until the binary
+exposes an eval command or a Python binding is added.
+
+**Board state:** Axial `(q, r)`, origin-normalized (first stone at `(0,0)`). Fully
+compatible with our axial system; `RustBotWrapper` handles the origin translation.
+
+---
+
+## 3. Orca Architecture Summary
 
 **Repo:** `Saiki77/hexbot-building-framework` — by Saiki77
 **Language:** Python + C (ctypes FFI, auto-compiles on first import)
@@ -327,7 +415,7 @@ MCTS sims by 50 (capped at 400).
 
 ---
 
-## 3. Ambrosia Summary
+## 4. Ambrosia Summary
 
 **Repo:** `hex-tic-tac-toe/ambrosia` — by Mina (@trueharuu)
 **Language:** Pure Rust
@@ -375,52 +463,40 @@ Worth watching if Mina adds search or evolutionary weight optimization.
 
 ---
 
-## 4. Comparison Table
+## 5. Comparison Table
 
-| Feature | KrakenBot | Orca | HeXO (ours) |
-|---|---|---|---|
-| **Language** | Python + Cython + C++ | Python + C (ctypes) | Rust + Python |
-| **Board representation** | Python dict (sparse) | C hash map (sparse) | Rust HashMap (sparse) |
-| **Board encoding** | 25×25 torus (circular padding) | 19×19 centroid window | K × 19×19 cluster windows |
-| **Input channels** | 2 (own, opp) | 7 (own, opp, legal, player, remaining, own threats, opp threats) | 18 (8 own history, 8 opp history, moves_remaining, turn parity) |
-| **Threat planes** | None (learned implicitly) | 2 explicit threat planes + threat-policy blend | None (learned implicitly) |
-| **Network depth** | 10 res blocks | 12 res blocks | 12 res blocks |
-| **Network width** | 128 channels | 128 ch (standard) / 256 ch (hybrid) | 128 channels |
-| **Normalization** | GroupNorm (8 groups) | BatchNorm | BatchNorm |
-| **SE blocks** | None | Yes (hybrid, ratio=4) | Yes (every block) |
-| **Padding mode** | Circular (torus) / zeros (infinite) | Zeros (standard) / circular (hex-native) | N/A (cluster-based) |
-| **Hex-aware convolutions** | No (standard 3×3) | HexMaskedConv / HexNativeConv variants | No (standard 3×3) |
-| **Policy head** | Bilinear pair attention N×N | Conv→Linear (361 cells) | Per-cluster softmax, unified |
-| **Action space** | **Compound** (joint pair logits) | **Sequential** (single-cell policy) | **Sequential** (2 MCTS plies per turn) |
-| **Value head** | avg+max pool → FC → **tanh** | flatten → FC → **tanh** | avg+max pool → FC → **BCE sigmoid** |
-| **Auxiliary heads** | Moves-left (MSE) + Chain (6ch, masked MSE) | Threat (4 floats, MSE) + threat-policy blend | Opponent reply prediction |
-| **Value aggregation** | Single eval (torus = 1 window) | Single eval (1 centroid window) | **Min-pooling** across K clusters |
-| **Symmetry augmentation** | D6 × 12 transforms | 7 transforms (3 grid + 4 axial, weighted priority) | D6 × 12 transforms |
-| **MCTS sims (self-play)** | 200 / 600 (25% full) | 30–400 (curriculum) | 800 |
-| **PUCT C** | 1.0 | 1.5 | Config-driven |
-| **FPU** | KataGo dynamic (reduction=0.25) | Standard | Config-driven |
-| **Dirichlet** | α=10/n, frac=0.25 | α=0.3, ε=0.25 | Config-driven |
-| **Progressive widening** | No (all legal pairs at root) | **Yes** (6→10→16→25) | No |
-| **AB hybrid pre-check** | No | **Yes** (depth 4 before MCTS) | No |
-| **Quiescence** | No | **Yes** (3+ winning moves = forced win) | No |
-| **Replay buffer** | Parquet files on disk | 400K positions (Python) | Rust f16 ring buffer (250K→1M) |
-| **Training batch** | 256 | 1024 | Config-driven |
-| **Optimizer** | Adam (lr=1e-3, wd=1e-4) | Adam (lr=1e-3, wd=1e-4) | Config-driven |
-| **LR schedule** | Cosine annealing | CosineWarmRestarts (T₀=50, T_mult=2) | Config-driven |
-| **Grad clipping** | 50.0 | 1.0 | Config-driven |
-| **Loss: policy** | Pair CE (N² logits) | CE vs visit distribution | CE vs visit distribution |
-| **Loss: value** | MSE | MSE | BCE (sigmoid) |
-| **Loss: auxiliary** | Entropy reg (0.01) + moves-left (0.1) + chain (0.1) | Threat MSE | Opponent reply (0.15) |
-| **Distillation stage** | Yes (minimax→NN via Parquet) | Optional (SFT from game collections) | Yes (SealBot corpus → pretrain) |
-| **Curriculum** | No | **6 levels** (random→heuristic→self) | No |
-| **Endgame solver** | No | **Yes** (C AB, depth 12, persistent TT cache) | No |
-| **Checkpoint gating** | TODO (not implemented) | ELO eval every 2 iters | SealBot eval gate |
-| **C/C++ engine** | C++ minimax (pybind11, pattern eval) | C engine (ctypes, auto-compile, AB + encoding) | Rust MCTS + board + buffer |
-| **Estimated total params** | ~1.5M | ~3.9M (standard) / ~5.2M (hybrid) | ~3.5M (12 blocks, SE, 128ch) |
+| Feature | KrakenBot | Hexfish | Orca | HeXO (ours) |
+|---|---|---|---|---|
+| **Language** | Python + Cython + C++ | Rust (subprocess) | Python + C (ctypes) | Rust + Python |
+| **Search** | MCTS (NN) + Python alpha-beta (learned patterns) | Alpha-beta, iterative deepening | MCTS (NN) + C alpha-beta | MCTS (NN, Rust) |
+| **Board representation** | Python dict (sparse) | Rust FxHashSet (sparse) | C hash map (sparse) | Rust HashMap (sparse) |
+| **Board encoding** | 25×25 torus (circular padding) | N/A (no NN) | 19×19 centroid window | K × 19×19 cluster windows |
+| **Static eval** | Learned patterns (JSON, N-cell windows) | Weighted window counters (needs[0..4]) | C heuristic + NN value | NN value head |
+| **Input channels** | 2 (own, opp) | N/A | 7 (own, opp, legal, player, remaining, own threats, opp threats) | 18 (8 own history, 8 opp history, moves_remaining, turn parity) |
+| **Threat planes** | None (learned implicitly) | N/A | 2 explicit threat planes + threat-policy blend | None (learned implicitly) |
+| **Network depth** | 10 res blocks | N/A | 12 res blocks | 12 res blocks |
+| **Network width** | 128 channels | N/A | 128 ch (standard) / 256 ch (hybrid) | 128 channels |
+| **Normalization** | GroupNorm (8 groups) | N/A | BatchNorm | BatchNorm |
+| **SE blocks** | None | N/A | Yes (hybrid, ratio=4) | Yes (every block) |
+| **Policy head** | Bilinear pair attention N×N | N/A | Conv→Linear (361 cells) | Per-cluster softmax, unified |
+| **Action space** | **Compound** (joint pair logits) | Pair-move (2 cells) | **Sequential** (single-cell policy) | **Sequential** (2 MCTS plies per turn) |
+| **Value head** | avg+max pool → FC → **tanh** | N/A | flatten → FC → **tanh** | avg+max pool → FC → **BCE sigmoid** |
+| **Auxiliary heads** | Moves-left (MSE) + Chain (6ch, masked MSE) | None | Threat (4 floats, MSE) + threat-policy blend | Opponent reply prediction |
+| **MCTS sims (self-play)** | 200 / 600 (25% full) | N/A | 30–400 (curriculum) | 800 |
+| **PUCT C** | 1.0 | N/A | 1.5 | Config-driven |
+| **FPU** | KataGo dynamic (reduction=0.25) | N/A | Standard | Config-driven |
+| **Quiescence** | No (TODO) | No | **Yes** (3+ winning moves = forced win) | No |
+| **TT** | Python dict (1M cap) | Direct-mapped array 2²⁰ | Dict (100K, class-level) | FxHashMap 128-bit Zobrist |
+| **Replay buffer** | Parquet files on disk | N/A | 400K positions (Python) | Rust f16 ring buffer (250K→1M) |
+| **Distillation stage** | Yes (minimax→NN via Parquet) | N/A | Optional (SFT from game collections) | Yes (SealBot corpus → pretrain) |
+| **Curriculum** | No | N/A | **6 levels** (random→heuristic→self) | No |
+| **BotProtocol wrapper** | **Yes** (`krakenbot_bot.py`) | No (subprocess only) | No | N/A |
+| **Build step** | No (Python) or `cpp/build.sh` (C++) | `cargo build --release` | ctypes auto-compile | `maturin develop --release` |
+| **Estimated total params** | ~1.5M (NN) | N/A | ~3.9M (standard) / ~5.2M (hybrid) | ~3.5M (12 blocks, SE, 128ch) |
 
 ---
 
-## 5. Actionable Findings for HeXO
+## 6. Actionable Findings for HeXO
 
 ### 5.1 Clearly Better, Low Risk to Adopt
 
@@ -634,13 +710,14 @@ than sequential plies.
 ## Appendix: Files Not Read (Rate-Limited)
 
 ### KrakenBot
-- `cpp/engine.h` (60KB) — core minimax engine
-- `minimax_bot.py` (35KB) — Python minimax wrapper
-- `diagnostic_*.py` — debugging tools
+Files now read (2026-04-06): `minimax_bot.py`, `mcts_bot.py`, `bot.py`, `game.py`,
+`model/resnet.py`, `mcts/tree.py`, `mcts/pattern_table.py`, `todo.md`.
+Files still unread:
+- `cpp/engine.h` (60KB) — C++ minimax engine
+- `diagnostic_*.py` — debugging / tracing tools
 - `mcts/_mcts_cy.pyx`, `mcts/_puct_cy.pyx` — Cython MCTS acceleration
-- `mcts/pattern_table.py` — pattern evaluation data
+- `training/selfplay/`, `training/distill/` — training pipeline details
 - `play.py` — interactive play interface
-- `parallel_selfplay.py`, `train_loop.py` — partially read via imports
 
 ### Orca
 - `engine.c` (100KB) — C game engine (board, win detection, AB, threats, encoding)
