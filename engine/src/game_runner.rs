@@ -32,6 +32,8 @@ struct GumbelSearchState {
     c_scale: f32,
     /// Pool index of root's first child (for converting offsets to pool indices).
     first_child: u32,
+    /// Cached (n_visits, w_value) per root child, refreshed each halving phase.
+    cached_children: Vec<(u32, f32)>,
 }
 
 impl GumbelSearchState {
@@ -73,6 +75,13 @@ impl GumbelSearchState {
         let num_phases = if effective_m <= 1 { 1 } else { (effective_m as f64).log2().ceil() as usize };
 
         let first_child = tree.pool[0].first_child;
+        let n_ch = tree.pool[0].n_children as usize;
+        let cached_children: Vec<(u32, f32)> = (0..n_ch)
+            .map(|j| {
+                let c = &tree.pool[first_child as usize + j];
+                (c.n_visits, c.w_value)
+            })
+            .collect();
 
         GumbelSearchState {
             gumbel_values,
@@ -82,42 +91,53 @@ impl GumbelSearchState {
             c_visit,
             c_scale,
             first_child,
+            cached_children,
         }
+    }
+
+    /// Refresh cached child stats from the tree. Call once per halving phase.
+    fn refresh_cache(&mut self, tree: &crate::mcts::MCTSTree) {
+        let n_ch = self.cached_children.len();
+        for j in 0..n_ch {
+            let c = &tree.pool[self.first_child as usize + j];
+            self.cached_children[j] = (c.n_visits, c.w_value);
+        }
+    }
+
+    /// Max visit count across all root children (from cache).
+    fn max_n(&self) -> u32 {
+        self.cached_children.iter().map(|(n, _)| *n).max().unwrap_or(0)
     }
 
     /// Compute the Gumbel + log_prior + sigma(Q) score for a candidate.
     /// `child_offset` is relative to `first_child`.
-    fn score(&self, tree: &crate::mcts::MCTSTree, child_offset: usize) -> f32 {
-        let child = &tree.pool[self.first_child as usize + child_offset];
-        let q_hat = if child.n_visits > 0 {
-            (child.w_value / child.n_visits as f32).clamp(-1.0, 1.0)
+    /// `max_n` is the max visit count across all root children (cached per phase).
+    fn score(&self, child_offset: usize, max_n: u32) -> f32 {
+        let child = &self.cached_children[child_offset];
+        let q_hat = if child.0 > 0 {
+            (child.1 / child.0 as f32).clamp(-1.0, 1.0)
         } else {
             0.0
         };
 
         // sigma(q) = (c_visit + max_b N(b)) * c_scale * q
-        let root = &tree.pool[0];
-        let first = root.first_child as usize;
-        let n_ch = root.n_children as usize;
-        let max_n: u32 = (first..first + n_ch)
-            .map(|i| tree.pool[i].n_visits)
-            .max()
-            .unwrap_or(0);
         let sigma = (self.c_visit + max_n as f32) * self.c_scale * q_hat;
 
         self.gumbel_values[child_offset] + self.log_priors[child_offset] + sigma
     }
 
-    /// Rank candidates by score, keep top half.
+    /// Rank candidates by score, keep top half. Refreshes cache from tree first.
     fn halve_candidates(&mut self, tree: &crate::mcts::MCTSTree) {
         if self.candidates.len() <= 1 {
             return;
         }
+        self.refresh_cache(tree);
+        let max_n = self.max_n();
         // Sort by descending Gumbel+log_prior+sigma(Q) score.
         // Pre-compute into scored pairs to avoid self-borrow in sort closure.
         let mut scored: Vec<(usize, f32)> = self.candidates
             .iter()
-            .map(|&c| (c, self.score(tree, c)))
+            .map(|&c| (c, self.score(c, max_n)))
             .collect();
         scored.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         let keep = (scored.len() + 1) / 2;
@@ -126,12 +146,14 @@ impl GumbelSearchState {
     }
 
     /// Return the pool index of the best candidate (Sequential Halving winner).
-    fn best_action_pool_idx(&self, tree: &crate::mcts::MCTSTree) -> u32 {
+    fn best_action_pool_idx(&mut self, tree: &crate::mcts::MCTSTree) -> u32 {
+        self.refresh_cache(tree);
+        let max_n = self.max_n();
         let best_offset = self.candidates
             .iter()
             .max_by(|&&a, &&b| {
-                let sa = self.score(tree, a);
-                let sb = self.score(tree, b);
+                let sa = self.score(a, max_n);
+                let sb = self.score(b, max_n);
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .copied()
@@ -171,7 +193,6 @@ pub struct SelfPlayRunner {
     completed_q_values: bool,
     c_visit: f32,
     c_scale: f32,
-    policy_prune_frac: f32,
     gumbel_mcts: bool,
     gumbel_m: usize,
     gumbel_explore_moves: usize,
@@ -195,7 +216,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, policy_prune_frac = 0.02, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -219,7 +240,6 @@ impl SelfPlayRunner {
         completed_q_values: bool,
         c_visit: f32,
         c_scale: f32,
-        policy_prune_frac: f32,
         gumbel_mcts: bool,
         gumbel_m: usize,
         gumbel_explore_moves: usize,
@@ -248,7 +268,6 @@ impl SelfPlayRunner {
             completed_q_values,
             c_visit,
             c_scale,
-            policy_prune_frac,
             gumbel_mcts,
             gumbel_m,
             gumbel_explore_moves,
@@ -296,7 +315,6 @@ impl SelfPlayRunner {
             let completed_q_values = self.completed_q_values;
             let c_visit = self.c_visit;
             let c_scale = self.c_scale;
-            let policy_prune_frac = self.policy_prune_frac;
             let gumbel_mcts = self.gumbel_mcts;
             let gumbel_m = self.gumbel_m;
             let gumbel_explore_moves = self.gumbel_explore_moves;
@@ -404,7 +422,8 @@ impl SelfPlayRunner {
                             let effective_m = gumbel_m.min(game_sims).min(tree.root_n_children());
                             if effective_m == 0 {
                                 // No candidates — use standard PUCT search instead.
-                                let mut sims_done = 0;
+                                // Subtract root expansion sims already spent from budget.
+                                let mut sims_done = sims_used;
                                 while sims_done < game_sims {
                                     if !running.load(Ordering::SeqCst) { break; }
                                     let n = infer_and_expand(&mut tree, leaf_batch_size);
@@ -479,7 +498,7 @@ impl SelfPlayRunner {
                         // Completed Q-values: compute improved policy for training target.
                         // Move selection still uses temperature-scaled visit counts above.
                         let target_policy = if completed_q_values {
-                            tree.get_improved_policy(BOARD_SIZE, c_visit, c_scale, policy_prune_frac)
+                            tree.get_improved_policy(BOARD_SIZE, c_visit, c_scale)
                         } else {
                             policy.clone()
                         };
@@ -509,7 +528,7 @@ impl SelfPlayRunner {
                         let use_gumbel_winner = gumbel_state.is_some()
                             && board.ply as usize >= gumbel_explore_moves;
                         let move_idx = if use_gumbel_winner {
-                            let gs = gumbel_state.as_ref().unwrap();
+                            let gs = gumbel_state.as_mut().unwrap();
                             let best_pool = gs.best_action_pool_idx(&tree);
                             let val = tree.pool[best_pool as usize].action_idx;
                             let mq = (val >> 16) as i32 - 32768;
@@ -872,7 +891,7 @@ mod tests {
         // Run with max_moves_per_game = 0 to avoid triggering MCTS and inference server dependency
         let runner = SelfPlayRunner::new(
             4, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
-            0.05, false, 16, 5, false, 50.0, 1.0, 0.02, false, 16, 10,
+            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10,
         );
         runner.start();
         
@@ -987,7 +1006,7 @@ mod tests {
     fn test_gumbel_score_uses_sigma() {
         let mut tree = setup_tree_for_gumbel();
         let mut rng = rand::rng();
-        let gs = GumbelSearchState::new(&tree, 8, 50.0, 1.0, &mut rng);
+        let mut gs = GumbelSearchState::new(&tree, 8, 50.0, 1.0, &mut rng);
 
         let first = tree.pool[0].first_child as usize;
         let c0 = gs.candidates[0];
@@ -999,8 +1018,10 @@ mod tests {
         tree.pool[first + c1].n_visits = 10;
         tree.pool[first + c1].w_value = -8.0; // Q = -0.8
 
-        let s0 = gs.score(&tree, c0);
-        let s1 = gs.score(&tree, c1);
+        gs.refresh_cache(&tree);
+        let max_n = gs.max_n();
+        let s0 = gs.score(c0, max_n);
+        let s1 = gs.score(c1, max_n);
         // Higher Q should lead to higher score (sigma term dominates at high visit counts).
         assert!(s0 > s1, "higher Q should give higher score: {s0} vs {s1}");
     }
@@ -1009,7 +1030,7 @@ mod tests {
     fn test_best_action_pool_idx() {
         let mut tree = setup_tree_for_gumbel();
         let mut rng = rand::rng();
-        let gs = GumbelSearchState::new(&tree, 4, 50.0, 1.0, &mut rng);
+        let mut gs = GumbelSearchState::new(&tree, 4, 50.0, 1.0, &mut rng);
 
         let first = tree.pool[0].first_child;
 

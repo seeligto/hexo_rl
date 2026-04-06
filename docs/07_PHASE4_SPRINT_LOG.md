@@ -2522,3 +2522,46 @@ All 10 metrics PASS in both modes. Zero regression when disabled.
 Halving phases/budget/halving, score computation, best action). 7 new Python
 tests (MCTSTree search validity, SelfPlayRunner config acceptance).
 Test counts: 97 Rust + 632 Python.
+
+### §62 — Gumbel MCTS hardening: budget fix, score caching, double-prune removal (2026-04-06)
+
+Code-review-driven fixes to the Gumbel MCTS implementation from §61.
+
+**1. Budget off-by-one in `effective_m == 0` fallback** (`game_runner.rs`)
+
+When `effective_m == 0` (no children or zero budget), the fallback PUCT loop
+initialized `sims_done = 0` but root expansion had already consumed `root_sims`
+simulations. Total sims could reach `root_sims + game_sims` instead of `game_sims`.
+Fix: `sims_done = sims_used`.
+
+**2. Cache `max_n` in `GumbelSearchState::score`** (`game_runner.rs`)
+
+`score()` scanned all root children to compute `max_n` on every call. Since it's
+called O(candidates) times during sorting/halving, this was O(candidates × children)
+per phase. Added `cached_children: Vec<(u32, f32)>` to `GumbelSearchState`,
+`refresh_cache()` + `max_n()` methods. Cache is refreshed once per halving phase;
+`score()` takes precomputed `max_n` and reads from the cache → O(1) per call.
+
+**3. Fix "362-dim" doc comment** (`mcts/mod.rs`)
+
+`get_improved_policy` doc said "Returns a 362-dim distribution" but the actual
+size is `board_size * board_size + 1`. Updated to describe shape generically.
+
+**4. Remove double-pruning of policy targets** (`mcts/mod.rs`, `game_runner.rs`, `pool.py`)
+
+`get_improved_policy()` in Rust pruned entries below `policy_prune_frac` of max
+and renormalized. The Python training loop (`prune_policy_targets` in trainer.py)
+applied the same pruning again. After the first prune + renormalize, the second
+prune is not idempotent — it makes targets much sharper than the configured
+`policy_prune_frac` fraction would suggest. Removed `policy_prune_frac` from
+`get_improved_policy()`, `SelfPlayRunner` struct/constructor, and Python pool.py.
+Pruning now happens only in Python during training, where it was already tested.
+
+**5. Config defaults restored** (`configs/selfplay.yaml`)
+
+- `gumbel_mcts: true` → `false` — docs and PR state Gumbel is opt-in/off by
+  default; the config was left enabled from a test run.
+- `fast_prob: 0.40` → `0.25` — undocumented training-distribution change
+  (proportion of 50-sim fast games). Reverted to the Phase 4.0 baseline value.
+
+**Test counts:** 101 Rust + 632 Python (all passing).
