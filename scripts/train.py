@@ -637,6 +637,16 @@ def main() -> None:
                     step=train_step,
                 )
                 trainer.save_checkpoint(last_loss_info if last_loss_info else None)
+                # Save buffer immediately — before pool.stop() runs in the finally block.
+                # A second Ctrl+C would call sys.exit(1) and skip the post-loop block.
+                _mix_sd = train_cfg.get("mixing", config.get("mixing", {}))
+                if _mix_sd.get("buffer_persist", False):
+                    _bp_sd = Path(_mix_sd.get("buffer_persist_path", "checkpoints/replay_buffer.bin"))
+                    try:
+                        buffer.save_to_path(str(_bp_sd))
+                        log.info("buffer_saved", path=str(_bp_sd), positions=buffer.size, trigger="shutdown_signal")
+                    except Exception as _bp_exc:
+                        log.warning("buffer_save_failed", path=str(_bp_sd), error=str(_bp_exc))
                 break
 
             # ── Training Throttling ──
