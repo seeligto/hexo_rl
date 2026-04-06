@@ -1003,10 +1003,6 @@ def main() -> None:
                 d.stop()
             except Exception:
                 pass
-        try:
-            _log_fh.close()
-        except Exception:
-            pass
 
     # ── Session end: save final checkpoint and buffer, then log summary ──
     final_ckpt = trainer.save_checkpoint(last_loss_info if last_loss_info else None)
@@ -1034,6 +1030,11 @@ def main() -> None:
         decrease = initial_policy_loss - last_loss_info["policy_loss"]
         print(f"Policy loss: {initial_policy_loss:.4f} → {last_loss_info['policy_loss']:.4f} "
               f"({'↓' if decrease > 0 else '↑'}{abs(decrease):.4f})")
+
+    try:
+        _log_fh.close()
+    except Exception:
+        pass
 
     # Suppress spurious "leaked semaphore" warning on exit.
     # The semaphore originates from Rust PyO3 OS primitives (SelfPlayRunner /
