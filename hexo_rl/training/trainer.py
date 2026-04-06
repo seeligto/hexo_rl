@@ -406,6 +406,9 @@ class Trainer:
             policy_loss=result["policy_loss"],
             value_loss=result["value_loss"],
             aux_loss=result.get("opp_reply_loss"),
+            uncertainty_loss=result.get("uncertainty_loss"),
+            ownership_loss=result.get("ownership_loss"),
+            threat_loss=result.get("threat_loss"),
             lr=result["lr"],
             fp16_scale=self.scaler.get_scale(),
         )
