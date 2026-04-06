@@ -251,3 +251,33 @@ def test_pool_batch_fill_pct_zero_when_no_data():
     pool = WorkerPool.__new__(WorkerPool)
     pool._inference_server = MagicMock(_forward_count=0, _total_requests=0, _batch_size=64)
     assert pool.batch_fill_pct == 0.0
+
+
+# ── WebDashboard queue / blocking tests ───────────────────────────────────────
+
+
+def test_emit_does_not_block_when_no_client():
+    """on_event returns in <10ms when no SocketIO client is connected."""
+    import time
+    wd = WebDashboard(MINIMAL_CONFIG)
+    start = time.monotonic()
+    wd.on_event({"event": "training_step", "ts": 1.0, "step": 1, "loss_total": 2.5})
+    elapsed = time.monotonic() - start
+    assert elapsed < 0.01, f"on_event blocked for {elapsed:.3f}s with no connected client"
+
+
+def test_queue_drops_when_full():
+    """Pushing past maxsize drops the new event without raising and without growing the queue."""
+    wd = WebDashboard(MINIMAL_CONFIG)
+    wd._connected_sids.add("fake-sid")
+    maxsize = wd._emit_queue.maxsize
+
+    # Fill the queue entirely
+    for i in range(maxsize):
+        wd._emit_queue.put_nowait(("training_step", {"step": i}))
+
+    assert wd._emit_queue.qsize() == maxsize
+
+    # Push one more via _safe_emit — must not raise and must not grow the queue
+    wd._safe_emit("training_step", {"step": maxsize + 1})
+    assert wd._emit_queue.qsize() == maxsize

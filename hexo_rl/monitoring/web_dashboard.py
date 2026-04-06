@@ -9,6 +9,7 @@ from __future__ import annotations
 import collections
 import glob
 import json
+import queue
 import re
 import threading
 from pathlib import Path
@@ -58,6 +59,12 @@ class WebDashboard:
         self._thread: threading.Thread | None = None
         self._connected_sids: set = set()
 
+        # Bounded send queue: background thread drains into socketio.emit().
+        # Training loop puts with put_nowait() — if full, newest event is dropped.
+        _queue_maxsize = int(mon.get("emit_queue_maxsize", 200))
+        self._emit_queue: queue.Queue = queue.Queue(maxsize=_queue_maxsize)
+        self._drain_thread: threading.Thread | None = None
+
         # Game index — lightweight refs only; full records written to disk
         max_games = int(mon.get("viewer_max_memory_games", 50))
         self._game_index: collections.deque = collections.deque(maxlen=max_games)
@@ -79,13 +86,28 @@ class WebDashboard:
         self._register_routes()
 
     def _safe_emit(self, event: str, data: dict) -> None:
-        """Emit to connected clients only; never propagate failures to the training loop."""
+        """Enqueue event for sending; never blocks, never propagates exceptions."""
         if not self._connected_sids:
             return
         try:
-            self._socketio.emit(event, data)
-        except Exception as e:
-            log.warning("socketio_emit_failed", event=event, error=str(e))
+            self._emit_queue.put_nowait((event, data))
+        except queue.Full:
+            # Queue full — drop newest event (stale data is worse than gaps)
+            pass
+
+    def _drain_emit(self) -> None:
+        """Background thread: drain _emit_queue into socketio.emit()."""
+        while True:
+            try:
+                event, data = self._emit_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if self._connected_sids:
+                try:
+                    self._socketio.emit(event, data)
+                except Exception as exc:
+                    log.warning("socketio_emit_failed", event=event, error=str(exc))
+            self._emit_queue.task_done()
 
     def _init_viewer(self) -> None:
         """Initialize ViewerEngine with latest checkpoint if available."""
@@ -207,8 +229,13 @@ class WebDashboard:
                 return jsonify({"error": str(exc)}), 500
 
     def start(self) -> None:
-        """Start Flask server in a daemon thread."""
+        """Start Flask server and drain thread as daemon threads."""
         self._init_viewer()
+
+        self._drain_thread = threading.Thread(
+            target=self._drain_emit, daemon=True, name="socketio-drain"
+        )
+        self._drain_thread.start()
 
         port = self._port
         socketio = self._socketio

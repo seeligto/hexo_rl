@@ -550,10 +550,11 @@ function toggleEMA() {
 }
 
 // ── Socket.IO connection ───────────────────────────────────────────────────
-const socket = io();
+const socket = io({ reconnection: true, reconnectionDelay: 2000, reconnectionAttempts: Infinity });
 
-socket.on('connect',    () => setConnected(true));
-socket.on('disconnect', () => setConnected(false));
+socket.on('connect',    () => setConnected('connected'));
+socket.on('disconnect', () => setConnected('reconnecting'));
+socket.io.on('reconnect_attempt', () => setConnected('reconnecting'));
 
 socket.on('replay_history',     (events) => { resetState(); events.forEach(handleEvent); });
 socket.on('training_step',      handleEvent);
@@ -564,9 +565,13 @@ socket.on('system_stats',       handleEvent);
 socket.on('run_start',  (e) => { resetState(); handleEvent(e); });
 socket.on('run_end',    handleEvent);
 
-function setConnected(ok) {
-  document.getElementById('status-dot').classList.toggle('connected', ok);
-  document.getElementById('status-text').textContent = ok ? 'live' : 'disconnected';
+function setConnected(state) {
+  const dot  = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  dot.classList.toggle('connected', state === 'connected');
+  if (state === 'connected')    { text.textContent = 'live'; }
+  else if (state === 'reconnecting') { text.textContent = 'Reconnecting\u2026'; }
+  else                          { text.textContent = 'disconnected'; }
 }
 
 // ── Event dispatch ─────────────────────────────────────────────────────────
