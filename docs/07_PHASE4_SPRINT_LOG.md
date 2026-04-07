@@ -582,3 +582,24 @@ python scripts/train.py --checkpoint checkpoints/bootstrap_model.pt --variant gu
 ```
 
 **Restart plan:** Both hosts restart from `bootstrap_model.pt` at step 0. The dual-host run is an informal comparison of root search strategy (Gumbel vs PUCT) with policy target type held constant (`completed_q_values: true` on both). Desktop uses `gumbel_full`; laptop uses `gumbel_targets`.
+
+---
+
+### §68 — Eval DB run_id bug fix + broken-run cleanup
+
+**Problem:** `EvalPipeline` stored `self.run_id` (UUID from `train.py`) but never passed it to `db.get_or_create_player()` or `db.insert_match()` in `run_evaluation()`. All 5 call sites used the default `run_id=""`, making every run's eval results indistinguishable in the ratings DB — critical now that desktop and laptop run different variants.
+
+**Fix:** Added `run_id=self.run_id` to all 5 DB calls in `run_evaluation()`:
+- `get_or_create_player` for checkpoint player (line 115)
+- `insert_match` vs Random (line 130)
+- `insert_match` vs SealBot (line 149)
+- `get_or_create_player` for best_checkpoint (line 170)
+- `insert_match` vs Best (line 176)
+
+Reference opponents (SealBot, random_bot) intentionally keep `run_id=""` — they are shared anchors across all runs. The `get_all_pairwise(run_id=...)` and `get_ratings_history(run_id=...)` queries already filter correctly (matching the run's players plus `run_id=""` reference opponents).
+
+**Broken-run cleanup:** Archived all artifacts from the scheduler-poisoned run (§67):
+- `checkpoints.broken-202604/` — 10 checkpoints (21500–24274), best_model.pt, inference_only.pt, replay_buffer.bin (1.4 GB), checkpoint_log.json
+- `reports/eval.broken-202604/results.db` — 39 matches, all with `run_id=""`
+
+Kept in place: `bootstrap_model.pt` (verified loads clean), `checkpoints/pretrain/`, all game records in `runs/*/games/` (3,839 files), logs, corpus data.
