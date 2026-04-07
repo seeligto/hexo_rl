@@ -524,3 +524,9 @@ emit_queue_maxsize: 200
 viewer_max_memory_games: 50
 viewer_max_disk_games: 1000
 ```
+
+---
+
+### §66 — C1 bug impact assessment (amendment)
+
+The C1 bug affected only the reported loss scalar, not training dynamics. CE and KL against fixed targets share gradients, so the checkpoint is valid and the Phase 4.0 run continues uninterrupted. The fix restores correct loss reporting and interpretability for the remainder of the run.
