@@ -302,7 +302,7 @@ class Trainer:
             thr_pred = fwd_result[_idx] if use_threat else None
 
             policy_valid = policies_t.sum(dim=1) > 1e-6
-            use_kl = bool(self.config.get("completed_q_values", False))
+            use_kl = bool(self.config.get("selfplay", {}).get("completed_q_values", False))
             if use_kl:
                 policy_loss = compute_kl_policy_loss(log_policy, policies_t, policy_valid, self.device)
             else:
