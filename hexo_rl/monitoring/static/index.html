@@ -207,7 +207,7 @@
 <div class="main-row">
   <div class="chart-card">
     <div class="panel-header">
-      <h3>Loss Curves (last 2000 steps)</h3>
+      <h3 id="hdr-loss">Loss Curves (last 2000 steps)</h3>
       <div>
         <button class="btn-toggle active" id="btn-raw" onclick="toggleRaw()">raw</button>
         <button class="btn-toggle active" id="btn-ema" onclick="toggleEMA()">EMA</button>
@@ -262,22 +262,22 @@
 <!-- Bottom row: 4 panels -->
 <div class="bottom-row">
   <div class="chart-card">
-    <div class="panel-header"><h3>P0 Win Rate (last 500 games)</h3></div>
+    <div class="panel-header"><h3 id="hdr-winrate">P0 Win Rate (last 500 games)</h3></div>
     <canvas id="winrate-chart"></canvas>
     <div class="chart-summary" id="winrate-summary">&mdash;</div>
   </div>
   <div class="chart-card">
-    <div class="panel-header"><h3>Game Length Distribution (last 500)</h3></div>
+    <div class="panel-header"><h3 id="hdr-histogram">Game Length Distribution (last 500)</h3></div>
     <canvas id="histogram-chart"></canvas>
     <div class="chart-summary" id="histogram-summary">&mdash;</div>
   </div>
   <div class="chart-card">
-    <div class="panel-header"><h3>Policy Entropy (last 2000 steps)</h3></div>
+    <div class="panel-header"><h3 id="hdr-entropy">Policy Entropy (last 2000 steps)</h3></div>
     <canvas id="entropy-chart"></canvas>
     <div class="chart-summary" id="entropy-summary">&mdash;</div>
   </div>
   <div class="chart-card">
-    <div class="panel-header"><h3>Gradient Norm (last 2000 steps)</h3></div>
+    <div class="panel-header"><h3 id="hdr-grad">Gradient Norm (last 2000 steps)</h3></div>
     <canvas id="grad-chart"></canvas>
     <div class="chart-summary" id="grad-summary">&mdash;</div>
   </div>
@@ -313,6 +313,12 @@ fetch('/api/monitoring-config').then(r => r.json()).then(cfg => {
   ALERT_ENTROPY_MIN           = cfg.alert_entropy_min     ?? ALERT_ENTROPY_MIN;
   ALERT_ENTROPY_WARN          = cfg.alert_entropy_warn    ?? ALERT_ENTROPY_WARN;
   ALERT_GRAD_MAX              = cfg.alert_grad_norm_max   ?? ALERT_GRAD_MAX;
+  // Update panel headers to match server-side config values
+  document.getElementById('hdr-loss').textContent      = `Loss Curves (last ${MAX_STEPS} steps)`;
+  document.getElementById('hdr-entropy').textContent   = `Policy Entropy (last ${MAX_STEPS} steps)`;
+  document.getElementById('hdr-grad').textContent      = `Gradient Norm (last ${MAX_STEPS} steps)`;
+  document.getElementById('hdr-winrate').textContent   = `P0 Win Rate (last ${MAX_GAMES} games)`;
+  document.getElementById('hdr-histogram').textContent = `Game Length Distribution (last ${MAX_GAMES})`;
 }).catch(() => {/* keep defaults */});
 
 // ── Formatting ─────────────────────────────────────────────────────────────

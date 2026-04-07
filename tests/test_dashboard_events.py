@@ -434,7 +434,7 @@ def test_new_fields_default_to_zero_not_none():
     assert rc is not None and 0.0 <= rc <= 1.0
 
 
-def test_policy_target_entropy_only_over_valid_rows():
+def test_policy_target_entropy_only_over_valid_rows(tmp_path):
     """policy_target_entropy must be computed only over non-zero-policy rows."""
     import math
     import numpy as np
@@ -454,7 +454,7 @@ def test_policy_target_entropy_only_over_valid_rows():
         "checkpoint_interval": 9999, "log_interval": 9999,
     }
     model = HexTacToeNet(board_size=board_size, res_blocks=1, filters=16)
-    trainer = Trainer(model, config, checkpoint_dir="/tmp/hexo_test_ckpt_entropy")
+    trainer = Trainer(model, config, checkpoint_dir=str(tmp_path))
 
     rng = np.random.default_rng(42)
     buf = ReplayBuffer(capacity=200)
@@ -475,7 +475,7 @@ def test_policy_target_entropy_only_over_valid_rows():
     assert te >= 0.0
 
 
-def test_policy_target_entropy_finite_for_one_hot():
+def test_policy_target_entropy_finite_for_one_hot(tmp_path):
     """policy_target_entropy must be 0.0 (not -inf) for a one-hot policy target."""
     import math
     import numpy as np
@@ -494,7 +494,7 @@ def test_policy_target_entropy_finite_for_one_hot():
         "checkpoint_interval": 9999, "log_interval": 9999,
     }
     model = HexTacToeNet(board_size=board_size, res_blocks=1, filters=16)
-    trainer = Trainer(model, config, checkpoint_dir="/tmp/hexo_test_ckpt_onehot")
+    trainer = Trainer(model, config, checkpoint_dir=str(tmp_path))
 
     rng = np.random.default_rng(42)
     buf = ReplayBuffer(capacity=200)
