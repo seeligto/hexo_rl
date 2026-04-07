@@ -2649,3 +2649,24 @@ New `/api/monitoring-config` endpoint in `web_dashboard.py` serves these values
 as JSON so the JS client can use them without server-side template rendering.
 
 **Test counts:** 101 Rust + 643 Python (11 new: 9 event schema + 2 renderer).
+
+### §64 — §47 review fix-up: 4 minor gaps (2026-04-07)
+
+Post-review commit addressing 4 non-blocking FAILs from structured code review:
+
+- **FAIL 1 (Rust test):** Added `test_last_search_stats_bounds_after_sims` to
+  `engine/src/mcts/mod.rs` — runs 10 sims on a fresh board, calls
+  `last_search_stats()`, asserts `mean_depth >= 0.0` and
+  `root_concentration ∈ [0.0, 1.0]`.
+- **FAIL 2 (weak assertion):** `test_new_fields_default_to_zero_not_none` now
+  asserts the three keys are present in the emitted event dict (not just
+  renderer-defaulted). Emitted events updated to include `policy_target_entropy:
+  0.0` / `mcts_mean_depth: 0.0` / `mcts_root_concentration: 0.0` matching
+  train.py's emitter behaviour when source is unavailable.
+- **FAIL 3 (stale fixture):** `SAMPLE_EVENTS` in `test_dashboard_renderers.py`
+  updated with `policy_target_entropy: 1.85`, `mcts_mean_depth: 14.2`,
+  `mcts_root_concentration: 0.42` so general smoke tests exercise new paths.
+- **FAIL 4 (stale labels):** Panel header strings in `index.html` updated from
+  "last 500 steps" → "last 2000 steps" and "last 200 games" → "last 500 games".
+
+**Test counts:** 102 Rust + 643 Python (all pass).
