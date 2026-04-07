@@ -923,6 +923,7 @@ def main() -> None:
                         "loss_aux": float(loss_info.get("opp_reply_loss", 0.0)),
                         "avg_sigma": float(loss_info.get("avg_sigma", 0.0)),
                         "policy_entropy": policy_entropy,
+                        "policy_target_entropy": float(loss_info.get("policy_target_entropy", 0.0)),
                         "value_accuracy": value_accuracy,
                         "lr": lr,
                         "grad_norm": grad_norm,
@@ -958,6 +959,8 @@ def main() -> None:
                         "buffer_capacity": buffer.capacity,
                         "corpus_selfplay_frac": _batch_selfplay_frac,
                         "batch_fill_pct": pool.batch_fill_pct,
+                        "mcts_mean_depth": float(getattr(pool._runner, "mcts_mean_depth", 0.0)),
+                        "mcts_root_concentration": float(getattr(pool._runner, "mcts_mean_root_concentration", 0.0)),
                     })
 
                     log.info(

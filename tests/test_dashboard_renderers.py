@@ -281,3 +281,100 @@ def test_queue_drops_when_full():
     # Push one more via _safe_emit — must not raise and must not grow the queue
     wd._safe_emit("training_step", {"step": maxsize + 1})
     assert wd._emit_queue.qsize() == maxsize
+
+
+# ── §47 renderer tests (tests 10-12) ────────────────────────────────────────
+
+
+def _render_panel(panel) -> str:
+    """Render a Rich Panel to plain text for assertion."""
+    from rich.console import Console
+    from io import StringIO
+    buf = StringIO()
+    console = Console(file=buf, width=120, highlight=False, no_color=True)
+    console.print(panel)
+    return buf.getvalue()
+
+
+def test_terminal_value_loss_shows_ratio():
+    """Terminal renderer shows (×N.NN) next to value loss; renders without error before events."""
+    td = TerminalDashboard(MINIMAL_CONFIG)
+
+    # Before any events: renders without error
+    panel = td._build_panel()
+    assert panel is not None
+    rendered = _render_panel(panel)
+    assert rendered  # non-empty
+
+    # After a training_step with value loss 0.6931 → ratio ≈ 1.00
+    td.on_event({
+        "event": "training_step", "ts": 1.0,
+        "step": 1, "loss_total": 2.5, "loss_policy": 1.8,
+        "loss_value": 0.6931, "loss_aux": 0.1, "policy_entropy": 4.2,
+        "policy_target_entropy": 2.8,
+        "value_accuracy": 0.65, "lr": 3e-4, "grad_norm": 1.2,
+    })
+    assert td._state["loss_value"] == pytest.approx(0.6931)
+    panel = td._build_panel()
+    rendered = _render_panel(panel)
+    # Ratio annotation (×1.00) or raw value should appear
+    assert "×" in rendered or "0.6931" in rendered
+
+
+def test_terminal_mcts_depth_and_concentration_rows():
+    """Terminal renderer displays MCTS depth and Root concen values after iteration_complete."""
+    td = TerminalDashboard(MINIMAL_CONFIG)
+
+    # Before any iteration_complete: mcts fields should be None
+    assert td._state["mcts_mean_depth"] is None
+    assert td._state["mcts_root_concentration"] is None
+
+    # After iteration_complete with MCTS stats
+    td.on_event({
+        "event": "iteration_complete", "ts": 1.0,
+        "step": 1, "games_total": 10, "games_this_iter": 10,
+        "games_per_hour": 100.0, "positions_per_hour": 6000.0,
+        "avg_game_length": 60.0, "win_rate_p0": 0.5, "win_rate_p1": 0.5,
+        "draw_rate": 0.0, "sims_per_sec": 1000.0,
+        "buffer_size": 1000, "buffer_capacity": 250000,
+        "corpus_selfplay_frac": 0.5, "batch_fill_pct": 90.0,
+        "mcts_mean_depth": 8.3,
+        "mcts_root_concentration": 0.42,
+    })
+    assert td._state["mcts_mean_depth"] == pytest.approx(8.3)
+    assert td._state["mcts_root_concentration"] == pytest.approx(0.42)
+
+    panel = td._build_panel()
+    rendered = _render_panel(panel)
+    assert "8.3" in rendered
+    assert "0.42" in rendered
+
+
+def test_terminal_entropy_shows_pct_max_annotation():
+    """Terminal renderer entropy display shows (NN% max) annotation."""
+    import math
+    config = {
+        "monitoring": {
+            "num_actions_for_entropy_norm": 362,
+            "alert_entropy_min": 1.0,
+            "alert_entropy_warn": 2.0,
+            "alert_grad_norm_max": 10.0,
+        }
+    }
+    td = TerminalDashboard(config)
+    max_ent = math.log(362)
+    # Set entropy to exactly 50% of max
+    entropy_val = max_ent * 0.5
+
+    td.on_event({
+        "event": "training_step", "ts": 1.0,
+        "step": 1, "loss_total": 2.5, "loss_policy": 1.8,
+        "loss_value": 0.5, "loss_aux": 0.1,
+        "policy_entropy": entropy_val,
+        "policy_target_entropy": 2.0,
+        "value_accuracy": 0.65, "lr": 3e-4, "grad_norm": 1.2,
+    })
+    panel = td._build_panel()
+    rendered = _render_panel(panel)
+    # 50% of max should appear in the rendered output
+    assert "50% max" in rendered

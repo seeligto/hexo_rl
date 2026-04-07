@@ -54,6 +54,7 @@
   }
   .card .label { color: #888; font-size: 11px; margin-bottom: 4px; }
   .card .value { font-size: 20px; font-weight: 600; }
+  .card .card-sub { font-size: 10px; color: #666; margin-top: 2px; }
   .badge {
     display: inline-block;
     font-size: 10px;
@@ -185,10 +186,12 @@
       <span class="value" id="card-entropy">&mdash;</span>
       <span class="badge" id="card-entropy-badge" style="display:none"></span>
     </div>
+    <div class="card-sub" id="card-entropy-sub">&mdash;</div>
   </div>
   <div class="card">
     <div class="label">Value Accuracy</div>
     <div class="value" id="card-valacc">&mdash;</div>
+    <div class="card-sub" id="card-valoss-sub">&mdash;</div>
   </div>
   <div class="card">
     <div class="label">Pos/hr</div>
@@ -211,6 +214,7 @@
       </div>
     </div>
     <canvas id="loss-chart"></canvas>
+    <div id="loss-ratio-strip" style="font-size:10px; color:#666; margin-top:4px; font-family:'Fira Code',monospace">&mdash;</div>
   </div>
 
   <div class="right-stack">
@@ -246,6 +250,8 @@
         <div class="sys-row"><span class="sys-label">Workers</span><span id="sys-workers">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">Sims/sec</span><span id="sys-sims">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">Batch fill</span><span id="sys-batchfill">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">MCTS depth</span><span id="sys-mcts-depth">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">Root concen</span><span id="sys-root-conc">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">Grad norm</span><span id="sys-grad">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">LR</span><span id="sys-lr">&mdash;</span></div>
       </div>
@@ -286,14 +292,28 @@
 <script>
 // ── Constants ──────────────────────────────────────────────────────────────
 const DASH              = '\u2014';
-const EMA_ALPHA         = 0.06;
-const MAX_STEPS         = 500;
-const MAX_GAMES         = 200;
-const P0_TARGET_LOW     = 54;
-const P0_TARGET_HIGH    = 58;
-const ALERT_ENTROPY_MIN  = 1.0;
-const ALERT_ENTROPY_WARN = 2.0;
-const ALERT_GRAD_MAX     = 10.0;
+let EMA_ALPHA           = 0.06;
+let MAX_STEPS           = 2000;
+let MAX_GAMES           = 500;
+let P0_TARGET_LOW       = 54;
+let P0_TARGET_HIGH      = 58;
+let ALERT_ENTROPY_MIN   = 1.0;
+let ALERT_ENTROPY_WARN  = 2.0;
+let ALERT_GRAD_MAX      = 10.0;
+let NUM_ACTIONS_FOR_ENTROPY_NORM = 362;
+
+// Load monitoring config from server and update constants
+fetch('/api/monitoring-config').then(r => r.json()).then(cfg => {
+  MAX_STEPS                   = cfg.training_step_history ?? MAX_STEPS;
+  MAX_GAMES                   = cfg.game_history          ?? MAX_GAMES;
+  NUM_ACTIONS_FOR_ENTROPY_NORM = cfg.num_actions_for_entropy_norm ?? NUM_ACTIONS_FOR_ENTROPY_NORM;
+  EMA_ALPHA                   = cfg.ema_alpha             ?? EMA_ALPHA;
+  P0_TARGET_LOW               = cfg.p0_win_rate_target_low  ?? P0_TARGET_LOW;
+  P0_TARGET_HIGH              = cfg.p0_win_rate_target_high ?? P0_TARGET_HIGH;
+  ALERT_ENTROPY_MIN           = cfg.alert_entropy_min     ?? ALERT_ENTROPY_MIN;
+  ALERT_ENTROPY_WARN          = cfg.alert_entropy_warn    ?? ALERT_ENTROPY_WARN;
+  ALERT_GRAD_MAX              = cfg.alert_grad_norm_max   ?? ALERT_GRAD_MAX;
+}).catch(() => {/* keep defaults */});
 
 // ── Formatting ─────────────────────────────────────────────────────────────
 function fmtLoss(v)  { return v == null ? DASH : v.toFixed(4); }
@@ -645,14 +665,15 @@ function onRunStart(p) {
 function onTrainingStep(p) {
   // Push to ring buffer
   trainingStepHistory.push({
-    step:           p.step,
-    loss_total:     p.loss_total,
-    loss_policy:    p.loss_policy,
-    loss_value:     p.loss_value,
-    loss_aux:       p.loss_aux,
-    policy_entropy: p.policy_entropy,
-    grad_norm:      p.grad_norm,
-    lr:             p.lr,
+    step:                  p.step,
+    loss_total:            p.loss_total,
+    loss_policy:           p.loss_policy,
+    loss_value:            p.loss_value,
+    loss_aux:              p.loss_aux,
+    policy_entropy:        p.policy_entropy,
+    policy_target_entropy: p.policy_target_entropy ?? 0,
+    grad_norm:             p.grad_norm,
+    lr:                    p.lr,
   });
   if (trainingStepHistory.length > MAX_STEPS) trainingStepHistory.shift();
 
@@ -661,6 +682,35 @@ function onTrainingStep(p) {
   setText('card-loss',  fmtLoss(p.loss_total));
   updateEntropyCard(p.policy_entropy);
   setText('card-valacc', fmtPct(p.value_accuracy));
+
+  // Stat card subtitles
+  const maxEnt = Math.log(NUM_ACTIONS_FOR_ENTROPY_NORM);
+  if (p.policy_entropy != null && maxEnt > 0) {
+    const pct = (p.policy_entropy / maxEnt * 100).toFixed(0);
+    setText('card-entropy-sub', pct + '% of max');
+  }
+  if (p.loss_value != null) {
+    const ratio = (p.loss_value / 0.6931).toFixed(2);
+    setText('card-valoss-sub', 'loss \u00d7 ' + ratio + ' of random');
+  }
+
+  // Loss chart ratio strip
+  {
+    const parts = [];
+    if (p.loss_value != null) {
+      parts.push('value \u00d7 ' + (p.loss_value / 0.6931).toFixed(2) + ' of random');
+    } else { parts.push('value \u2014'); }
+    if (p.policy_entropy != null && maxEnt > 0) {
+      parts.push('entropy ' + (p.policy_entropy / maxEnt * 100).toFixed(0) + '% of max');
+    } else { parts.push('entropy \u2014'); }
+    const te = p.policy_target_entropy ?? null;
+    const pl = p.loss_policy ?? null;
+    if (te != null && pl != null) {
+      const excess = pl - te;
+      parts.push('policy excess ' + (excess >= 0 ? '+' : '') + excess.toFixed(2));
+    } else { parts.push('policy excess \u2014'); }
+    document.getElementById('loss-ratio-strip').textContent = parts.join('  \u2502  ');
+  }
 
   // System panel — step-sourced fields
   setText('sys-grad', fmtGrad(p.grad_norm));
@@ -678,6 +728,13 @@ function onIterationComplete(p) {
 
   if (p.batch_fill_pct != null) {
     setText('sys-batchfill', p.batch_fill_pct.toFixed(1) + '%');
+  }
+
+  if (p.mcts_mean_depth != null) {
+    setText('sys-mcts-depth', p.mcts_mean_depth.toFixed(1));
+  }
+  if (p.mcts_root_concentration != null) {
+    setText('sys-root-conc', p.mcts_root_concentration.toFixed(2));
   }
 
   if (p.buffer_size != null && p.buffer_capacity != null) {

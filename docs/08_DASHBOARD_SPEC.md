@@ -3,7 +3,7 @@
 
 **Status:** Authoritative spec. Supersedes version dated 2026-04-03.
 **Scope:** Training monitor. Game viewer is separate — see `docs/09_VIEWER_SPEC.md`.
-**Last updated:** 2026-04-04
+**Last updated:** 2026-04-07
 
 ---
 
@@ -40,56 +40,65 @@ All events are Python dicts with a mandatory `event` string key and `ts` float
 ### 2.1 `training_step`
 
 Emitted every `config.monitoring.log_interval` training steps (default: 10).
-**No schema changes from prior spec.**
+**§47 addition: `policy_target_entropy`.**
 
 ```python
 {
-    "event":           "training_step",
-    "ts":              float,          # unix timestamp — set by emit_event()
-    "step":            int,            # global training step
-    "loss_total":      float,
-    "loss_policy":     float,
-    "loss_value":      float,
-    "loss_aux":        float,
-    "policy_entropy":  float,          # mean entropy of policy distribution (nats)
-    "value_accuracy":  float,          # fraction: value head correctly predicted winner
-    "lr":              float,          # current learning rate
-    "grad_norm":       float,          # gradient norm before clipping (may be inf on
-                                       # FP16 GradScaler overflow — never NaN)
-    "phase":           str,            # "pretrain" or "self_play"
+    "event":                   "training_step",
+    "ts":                      float,    # unix timestamp — set by emit_event()
+    "step":                    int,      # global training step
+    "loss_total":              float,
+    "loss_policy":             float,
+    "loss_value":              float,
+    "loss_aux":                float,
+    "policy_entropy":          float,    # mean entropy of policy distribution (nats)
+    "policy_target_entropy":   float,    # NEW §47 — mean entropy of MCTS policy *target*
+                                         # over the batch, post-pruning+renorm, nats.
+                                         # Computed only over non-zero-policy rows.
+                                         # 0.0 if unavailable. Must not be NaN.
+    "value_accuracy":          float,    # fraction: value head correctly predicted winner
+    "lr":                      float,    # current learning rate
+    "grad_norm":               float,    # gradient norm before clipping (may be inf on
+                                         # FP16 GradScaler overflow — never NaN)
+    "phase":                   str,      # "pretrain" or "self_play"
 }
 ```
 
 ### 2.2 `iteration_complete`
 
-**Changed: added `batch_fill_pct`.**
+**§47 addition: `mcts_mean_depth`, `mcts_root_concentration`.**
 
 ```python
 {
-    "event":                  "iteration_complete",
-    "ts":                     float,
-    "step":                   int,
-    "games_total":            int,
-    "games_this_iter":        int,
-    "games_per_hour":         float,
-    "positions_per_hour":     float,
-    "avg_game_length":        float,
-    "win_rate_p0":            float,
-    "win_rate_p1":            float,
-    "draw_rate":              float,
-    "sims_per_sec":           float,
-    "buffer_size":            int,
-    "buffer_capacity":        int,
-    "corpus_selfplay_frac":   float,
-    "batch_fill_pct":         float,   # NEW — avg inference batch fill % this iteration
-                                       # from InferenceBatcher. 0.0 if not available.
+    "event":                    "iteration_complete",
+    "ts":                       float,
+    "step":                     int,
+    "games_total":              int,
+    "games_this_iter":          int,
+    "games_per_hour":           float,
+    "positions_per_hour":       float,
+    "avg_game_length":          float,
+    "win_rate_p0":              float,
+    "win_rate_p1":              float,
+    "draw_rate":                float,
+    "sims_per_sec":             float,
+    "buffer_size":              int,
+    "buffer_capacity":          int,
+    "corpus_selfplay_frac":     float,
+    "batch_fill_pct":           float,   # avg inference batch fill % this iteration.
+                                         # 0.0 if not available.
+    "mcts_mean_depth":          float,   # NEW §47 — mean leaf depth per search this
+                                         # iteration. 0.0 if unavailable.
+    "mcts_root_concentration":  float,   # NEW §47 — mean of (max_child_visits/total)
+                                         # at root, averaged over all searches.
+                                         # Range [0.0, 1.0]. 0.0 if unavailable.
 }
 ```
 
-**How to compute `batch_fill_pct`:** `pool.py` already tracks batch statistics
-via `InferenceBatcher`. Read the rolling batch fill average and include it in
-the `iteration_complete` payload. If the field is unavailable from the batcher,
-emit `0.0` — do not omit the key.
+**How to compute:** `SelfPlayRunner` accumulates `depth_accum` and `conc_accum` via
+`MCTSTree.last_search_stats()` called once per move (not inside the sim loop).
+`mcts_mean_depth` = `depth_accum / sim_count`; `mcts_root_concentration` =
+`conc_accum / sim_count`. Both exposed as Python properties on `SelfPlayRunner`.
 
 ### 2.3 `game_complete`
 
@@ -199,6 +208,10 @@ Changes from prior spec:
 - Added `batch_fill_pct` to the throughput row (abbreviated `batch fill`)
 - Added `ram`, `rss`, and `cpu` to the system row
 - `▲` next to entropy when entropy < `alert_entropy_warn` (2.0); `!!` when < `alert_entropy_min` (1.0)
+- **§47:** Value loss cell shows inline ratio: `0.6084 (×0.88)` where ratio = `loss_value / ln(2)`
+- **§47:** Entropy cell shows inline % of max: `2.35 (40% max)` where pct = `entropy / log(num_actions) * 100`
+- **§47:** Throughput row second line appends `│  MCTS depth  N.N  │  root concen  0.NN` before `grad`
+- `—` for any field not yet received.
 
 All other rules unchanged: no bars for open-ended metrics, `—` when not yet received,
 4 Hz max refresh.
@@ -225,6 +238,12 @@ No changes. Flask + Flask-SocketIO on `localhost:5001`.
 | `total loss` | `training_step.loss_total` | — |
 | `policy entropy` | `training_step.policy_entropy` | amber when < 2.0; red when < 1.0 |
 | `value accuracy` | `training_step.value_accuracy` | — |
+
+**§47 subtitle lines:** Two stat cards gain a small dim subtitle beneath the main value:
+- **Policy Entropy card:** `{pct:.0f}% of max` where `pct = entropy / log(num_actions) * 100`
+- **Value Accuracy card:** `loss × {ratio:.2f} of random` where `ratio = loss_value / 0.6931`
+
+Show `—` before any `training_step` received.
 | `pos / hr` | `iteration_complete.positions_per_hour` | green tint |
 | `games / hr` | `iteration_complete.games_per_hour` | — |
 
@@ -251,6 +270,16 @@ EMA is computed client-side from the raw ring buffer on each update — do not
 emit pre-computed EMA from the server.
 
 Legend below chart: coloured swatches for total / policy / value / aux.
+
+**§47 ratio strip:** A single dim text line below the chart legend, updated on every
+`training_step` event:
+```
+value × 0.65 of random  │  entropy 58% of max  │  policy excess +0.32
+```
+- `value` ratio = `loss_value / 0.6931`
+- `entropy` pct = `policy_entropy / log(num_actions) * 100`
+- `policy excess` = `loss_policy − policy_target_entropy` (positive = loss > target)
+- Show `—` for any missing field.
 
 Pretrain region: if `training_step.phase == "pretrain"`, shade that x-axis region
 in a faint background colour and draw a dashed vertical line at step 0 (the
@@ -280,6 +309,8 @@ CPU           87%                  ← NEW (§5 revision)
 Workers       12
 Sims/sec      7K
 Batch fill    98%                  ← NEW (from iteration_complete.batch_fill_pct)
+MCTS depth    14.2               ← NEW §47 (from iteration_complete.mcts_mean_depth)
+Root concen   0.42               ← NEW §47 (from iteration_complete.mcts_root_concentration)
 Grad norm     0.42
 LR            1.87e-3
 ```
@@ -355,16 +386,21 @@ Updated:
 
 | Chart | Ring buffer | Source event | Notes |
 |---|---|---|---|
-| Loss curves (all 4 lines) | last 500 events | `training_step` | EMA computed client-side |
-| Policy entropy trend | last 500 events | `training_step` | shared ring buffer with loss |
-| Grad norm trend | last 500 events | `training_step` | shared ring buffer with loss |
-| P0 win rate line | last 200 games | `game_complete` | rolling window |
-| Game length histogram | last 200 games | `game_complete` | shared ring with win rate |
+| Loss curves (all 4 lines) | last **2000** events | `training_step` | EMA computed client-side |
+| Policy entropy trend | last **2000** events | `training_step` | shared ring buffer with loss |
+| Grad norm trend | last **2000** events | `training_step` | shared ring buffer with loss |
+| P0 win rate line | last **500** games | `game_complete` | rolling window |
+| Game length histogram | last **500** games | `game_complete` | shared ring with win rate |
 | System stats | latest values | `system_stats` + `training_step` | no history |
 
+**§47 change:** `trainingStepHistory` capacity bumped from 500 → **2000**
+(`monitoring.training_step_history`). Game ring bumped from 200 → **500**
+(`monitoring.game_history`). Both values are server-injected via `/api/monitoring-config`
+and read by `fetch()` on page load — not hardcoded in JS.
+
 **Implementation note:** the 4 `training_step`-sourced charts (loss×4, entropy,
-grad norm) all read from a single `trainingStepHistory` ring buffer of capacity
-500. Do not create separate ring buffers per chart — slice the same array.
+grad norm) all read from a single `trainingStepHistory` ring buffer. Do not
+create separate ring buffers per chart — slice the same array.
 
 ### 5.7 SocketIO event names
 
@@ -399,15 +435,26 @@ monitoring:
   alert_grad_norm_max: 10.0      # RED — instability
 
   # Chart config
-  ema_alpha: 0.06                # NEW — EMA smoothing factor for loss curves
-  win_rate_window: 200           # NEW — rolling window size for P0 win rate line
-  game_length_window: 200        # NEW — histogram window (same games as win rate)
-  training_step_history: 500     # NEW — ring buffer depth for step-sourced charts
+  ema_alpha: 0.06                # EMA smoothing factor for loss curves
+  win_rate_window: 200           # rolling window size for P0 win rate line
+  game_length_window: 200        # histogram window (same games as win rate)
+  training_step_history: 2000    # §47 — bumped from 500; ring buffer for step-sourced charts
+  game_history: 500              # §47 NEW — replaces win_rate_window/game_length_window in JS
+  num_actions_for_entropy_norm: 362  # §47 NEW — board_size^2 + 1 for entropy % display
 
   # Target bands (used in P0 win rate chart)
-  p0_win_rate_target_low: 54.0   # NEW — lower bound of target band (%)
-  p0_win_rate_target_high: 58.0  # NEW — upper bound of target band (%)
+  p0_win_rate_target_low: 54.0   # lower bound of target band (%)
+  p0_win_rate_target_high: 58.0  # upper bound of target band (%)
 ```
+
+**§47 notes:**
+- `game_history` replaces the separate `win_rate_window` / `game_length_window` JS constants.
+  Both now read `MAX_GAMES` from the `/api/monitoring-config` endpoint.
+- `num_actions_for_entropy_norm` is passed through to the terminal renderer and web client
+  for computing `% of max` annotations. Derive from `model.board_size^2 + 1` at startup
+  if available rather than hardcoding.
+- All config values are served to JS via the `/api/monitoring-config` endpoint
+  added to `web_dashboard.py`.
 
 ---
 
@@ -463,6 +510,27 @@ pool.py:
 11. `iteration_complete` payload from pool includes `batch_fill_pct` key
 12. `batch_fill_pct` is 0.0 when batcher has no data (not omitted, not None)
 
+**§47 new test cases:**
+Schema (events):
+13. `training_step` event contains `policy_target_entropy` (float, ≥ 0.0)
+14. `iteration_complete` event contains `mcts_mean_depth` (float, ≥ 0.0)
+15. `iteration_complete` event contains `mcts_root_concentration` (float, ∈ [0.0, 1.0])
+16. All three new fields default to 0.0 (not None, not NaN, not omitted) when source unavailable
+
+Trainer:
+17. `policy_target_entropy` is computed only over non-zero-policy rows
+18. `policy_target_entropy` is finite when target is one-hot (entropy = 0, not -inf)
+
+Engine / MCTS:
+19. `mcts_mean_depth` is > 0 after at least one MCTS search
+20. `mcts_root_concentration` is in [0.0, 1.0] after at least one MCTS search
+21. `last_search_stats()` mean_depth is not unreasonably large (guard against loop-level accumulation)
+
+Renderer (terminal):
+22. Terminal renderer displays `(×N.NN)` next to value loss when received; renders without error before events
+23. Terminal renderer displays MCTS depth and root concentration values after `iteration_complete`
+24. Terminal renderer entropy display shows `(NN% max)` annotation
+
 **Existing tests that may break and need updating:**
 - Any test that validates the exact field set of `system_stats` — update to
   include the 3 new fields
@@ -495,3 +563,4 @@ The Flask server is not aware of the layout — it just forwards events.
 | 2026-04-03 | Initial implementation — event fan-out, terminal + web renderer |
 | 2026-04-04 | system_stats + 3 new fields; iteration_complete + batch_fill_pct; stat card redesign; loss chart EMA toggle; bottom row → 4 panels (P0 win rate line, game length histogram, entropy trend, grad norm trend); ELO panel made conditional; system panel expanded with RAM/CPU/batch-fill/grad/LR |
 | 2026-04-05 | **§45** — add `rss_gb` (process RSS) to `system_stats` event and system panels (terminal + web). Needed for OOM post-mortem — overnight run OOMed with no RSS history |
+| 2026-04-07 | **§47** — meaningful-ratios pass: `training_step` now emits `policy_target_entropy`; `iteration_complete` now emits `mcts_mean_depth` and `mcts_root_concentration`. Stat cards and loss chart show normalized ratios inline (no toggles). System panel adds MCTS depth and root concentration rows. Ring buffers bumped to 2000 steps / 500 games. Config-driven via `/api/monitoring-config`. 12 new tests added. |

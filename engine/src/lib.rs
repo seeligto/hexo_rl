@@ -359,6 +359,17 @@ impl PyMCTSTree {
         self.inner.max_depth_observed
     }
 
+    /// Search statistics accumulated since the last `new_game()`.
+    ///
+    /// Returns `(mean_depth, root_concentration)`:
+    /// - `mean_depth`: average leaf depth across all simulations this game/search
+    /// - `root_concentration`: max child visits / total root visits ∈ [0.0, 1.0]
+    ///
+    /// Both 0.0 before any simulations. Call after search completes, not during.
+    pub fn last_search_stats(&self) -> (f32, f32) {
+        self.inner.last_search_stats()
+    }
+
     /// Reset the tree for a new game starting from `board`.
     ///
     /// This re-uses the pre-allocated pool — no heap allocation.
