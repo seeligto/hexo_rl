@@ -142,9 +142,20 @@ class Trainer:
             return None
 
         if schedule == "cosine":
-            total_steps = int(config.get("scheduler_t_max", config.get("total_steps", 50_000)))
-            total_steps = max(1, total_steps)
-            min_lr = float(config.get("min_lr", 1e-5))
+            t_max = config.get("scheduler_t_max", config.get("total_steps"))
+            if t_max is None:
+                raise ValueError(
+                    "lr_schedule: cosine requires total_steps to be set. "
+                    "Either pass --iterations <N> on the CLI or add "
+                    "total_steps: <N> to configs/training.yaml."
+                )
+            total_steps = max(1, int(t_max))
+            min_lr_val = config.get("eta_min", config.get("min_lr"))
+            if min_lr_val is None:
+                raise ValueError(
+                    "lr_schedule: cosine requires eta_min to be set in configs/training.yaml."
+                )
+            min_lr = float(min_lr_val)
             return CosineAnnealingLR(self.optimizer, T_max=total_steps, eta_min=min_lr, last_epoch=-1)
 
         raise ValueError(f"Unsupported lr_schedule: {schedule}")

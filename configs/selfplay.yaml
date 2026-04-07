@@ -27,7 +27,8 @@ selfplay:
   # Gumbel completed Q-values (Danihelka et al., ICLR 2022).
   # Compute improved policy targets using MCTS Q-values instead of raw visit counts.
   # Primary benefit: useful policy signal even at 50-sim fast games.
-  completed_q_values: true
+  # Override via --variant gumbel_full or --variant gumbel_targets.
+  completed_q_values: false
   c_visit: 50.0
   c_scale: 1.0
 
@@ -35,7 +36,8 @@ selfplay:
   # Replaces PUCT exploration at root with Gumbel-Top-k sampling and Sequential
   # Halving budget allocation. Non-root nodes still use PUCT + dynamic FPU.
   # Largest quality gain at low sim counts (50-sim fast games).
-  gumbel_mcts: false           # opt-in; enable for Gumbel MCTS experiments
+  # Override via --variant gumbel_full.
+  gumbel_mcts: false          # baseline; enable explicitly via variant
   gumbel_m: 16                # number of root candidates (paper default)
   gumbel_explore_moves: 10    # first N plies use visit-count sampling for exploration
 

@@ -1,0 +1,6 @@
+# gumbel_full — Gumbel MCTS root search + completed Q-value targets
+# Desktop (RTX 3070) variant. Full Danihelka et al. ICLR 2022 pipeline.
+# Launch: make train VARIANT=gumbel_full
+selfplay:
+  gumbel_mcts: true
+  completed_q_values: true

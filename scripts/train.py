@@ -103,6 +103,13 @@ def parse_args() -> argparse.Namespace:
         help="Run identifier for log file name (default: timestamp)"
     )
     p.add_argument(
+        "--variant", default=None,
+        help=(
+            "Named variant from configs/variants/ (e.g. gumbel_full, gumbel_targets, "
+            "baseline_puct). Deep-merged on top of base configs after --config."
+        ),
+    )
+    p.add_argument(
         "--no-dashboard", action="store_true",
         help="Disable live dashboard renderers (useful in CI or non-interactive mode)"
     )
@@ -135,7 +142,8 @@ def main() -> None:
     run_id = uuid.uuid4().hex
 
     # ── Load config ──
-    # Base configs are always loaded; --config (if given) is an override on top.
+    # Load order: base configs → --config override → --variant override.
+    # --variant deep-merges configs/variants/<name>.yaml on top of everything else.
     from hexo_rl.utils.config import load_config
     _BASE_CONFIGS = [
         "configs/model.yaml",
@@ -144,17 +152,26 @@ def main() -> None:
         "configs/game_replay.yaml",
         "configs/monitoring.yaml",
     ]
+    load_paths: list[str] = list(_BASE_CONFIGS)
     if args.config:
         override = str(Path(args.config).resolve())
-        base = [p for p in _BASE_CONFIGS if str(Path(p).resolve()) != override]
-        config = load_config(*base, args.config)
-    else:
-        config = load_config(*_BASE_CONFIGS)
+        load_paths = [p for p in load_paths if str(Path(p).resolve()) != override]
+        load_paths.append(args.config)
+    if args.variant:
+        variant_path = Path(f"configs/variants/{args.variant}.yaml")
+        if not variant_path.exists():
+            available = sorted(p.stem for p in Path("configs/variants").glob("*.yaml"))
+            raise FileNotFoundError(
+                f"Variant '{args.variant}' not found. "
+                f"Available: {available}"
+            )
+        load_paths.append(str(variant_path))
+    config = load_config(*load_paths)
 
     # ── Logging ──
     _log_run_name = args.run_name or f"train_{run_id}"
     log, _log_fh = configure_logging(log_dir=args.log_dir, run_name=_log_run_name)
-    log.info("startup", config=config, pid=__import__("os").getpid())
+    log.info("startup", config=config, variant=args.variant, pid=__import__("os").getpid())
 
     # ── Seed ──
     seed = int(config.get("seed", 42))
