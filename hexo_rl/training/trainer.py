@@ -366,6 +366,7 @@ class Trainer:
                 "policy_loss": float("nan"),
                 "value_loss": float("nan"),
                 "policy_entropy": float("nan"),
+                "policy_target_entropy": 0.0,
                 "grad_norm": float("nan"),
                 "value_accuracy": float("nan"),
                 "lr": self.optimizer.param_groups[0]["lr"],
@@ -399,16 +400,27 @@ class Trainer:
             target_win = (outcomes_t > 0).float()
             value_accuracy = (pred_win == target_win).float().mean().item()
 
+            # Policy target entropy: mean entropy (nats) of the MCTS policy target
+            # distribution over the batch, computed only over non-zero-policy rows.
+            # Mask matches the policy loss mask for consistency.
+            if policy_valid.any():
+                _tgt = policies_t[policy_valid].float()
+                _ent = -(_tgt * _tgt.clamp_min(1e-9).log()).sum(-1).mean().item()
+                policy_target_entropy = _ent if math.isfinite(_ent) else 0.0
+            else:
+                policy_target_entropy = 0.0
+
         lr = self.optimizer.param_groups[0]["lr"]
 
         result = {
-            "loss":           loss.item(),
-            "policy_loss":    policy_loss.item(),
-            "value_loss":     value_loss.item(),
-            "policy_entropy": policy_entropy,
-            "grad_norm":      grad_norm,
-            "value_accuracy": value_accuracy,
-            "lr":             lr,
+            "loss":                   loss.item(),
+            "policy_loss":            policy_loss.item(),
+            "value_loss":             value_loss.item(),
+            "policy_entropy":         policy_entropy,
+            "policy_target_entropy":  policy_target_entropy,
+            "grad_norm":              grad_norm,
+            "value_accuracy":         value_accuracy,
+            "lr":                     lr,
         }
         if use_aux:
             result["opp_reply_loss"] = opp_reply_loss.item()

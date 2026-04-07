@@ -31,7 +31,8 @@ impl MCTSTree {
 
     /// Walk the tree via PUCT until an unexpanded (or terminal) leaf is found.
     /// Applies virtual loss to every node on the path.
-    pub(crate) fn select_one_leaf(&mut self, board: &mut Board, diffs: &mut Vec<MoveDiff>) -> u32 {
+    /// Returns `(leaf_node_index, leaf_depth)`.
+    pub(crate) fn select_one_leaf(&mut self, board: &mut Board, diffs: &mut Vec<MoveDiff>) -> (u32, u32) {
         let mut cur: u32 = 0;
         let mut depth = 0;
         loop {
@@ -42,7 +43,7 @@ impl MCTSTree {
                 if depth > self.max_depth_observed {
                     self.max_depth_observed = depth;
                 }
-                return cur;
+                return (cur, depth);
             }
 
             let parent_n = (node.n_visits + node.virtual_loss_count) as f32;
@@ -122,7 +123,9 @@ impl MCTSTree {
         while i < n && attempts < max_attempts {
             attempts += 1;
             diffs.clear();
-            let leaf_idx = self.select_one_leaf(&mut board, &mut diffs);
+            let (leaf_idx, leaf_depth) = self.select_one_leaf(&mut board, &mut diffs);
+            self.depth_accum += leaf_depth as u64;
+            self.sim_count += 1;
 
             if self.pending.iter().any(|(idx, _)| *idx == leaf_idx) {
                 self.undo_virtual_loss(leaf_idx);

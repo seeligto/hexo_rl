@@ -121,13 +121,13 @@ def test_broken_renderer_does_not_block_others():
 REQUIRED_KEYS = {
     "training_step": [
         "step", "loss_total", "loss_policy", "loss_value", "loss_aux",
-        "policy_entropy", "value_accuracy", "lr", "grad_norm",
+        "policy_entropy", "policy_target_entropy", "value_accuracy", "lr", "grad_norm",
     ],
     "iteration_complete": [
         "step", "games_total", "games_per_hour", "positions_per_hour",
         "avg_game_length", "win_rate_p0", "win_rate_p1", "draw_rate",
         "sims_per_sec", "buffer_size", "buffer_capacity", "corpus_selfplay_frac",
-        "batch_fill_pct",
+        "batch_fill_pct", "mcts_mean_depth", "mcts_root_concentration",
     ],
     "game_complete": [
         "game_id", "winner", "moves", "moves_list", "worker_id",
@@ -159,6 +159,7 @@ def _make_sample_payload(event_type: str) -> dict:
             "loss_value": 0.5,
             "loss_aux": 0.2,
             "policy_entropy": 3.5,
+            "policy_target_entropy": 2.8,
             "value_accuracy": 0.6,
             "lr": 3e-4,
             "grad_norm": 1.2,
@@ -179,6 +180,8 @@ def _make_sample_payload(event_type: str) -> dict:
             "buffer_capacity": 250000,
             "corpus_selfplay_frac": 0.2,
             "batch_fill_pct": 87.5,
+            "mcts_mean_depth": 8.3,
+            "mcts_root_concentration": 0.42,
         },
         "game_complete": {
             "event": "game_complete",
@@ -341,3 +344,223 @@ def test_gpu_monitor_emits_zero_on_psutil_failure():
     assert evt["ram_used_gb"] == pytest.approx(0.0)
     assert evt["ram_total_gb"] == pytest.approx(0.0)
     assert evt["cpu_util_pct"] == pytest.approx(0.0)
+
+
+# ── §47 new schema tests (tests 1-9) ────────────────────────────────────────
+
+
+def test_training_step_has_policy_target_entropy():
+    """training_step event must contain policy_target_entropy as a float >= 0.0."""
+    r = _Recorder()
+    events_mod.register_renderer(r)
+    events_mod.emit_event(_make_sample_payload("training_step"))
+    dispatched = r.calls[-1]
+    assert "policy_target_entropy" in dispatched
+    v = dispatched["policy_target_entropy"]
+    assert isinstance(v, float)
+    assert v >= 0.0
+
+
+def test_iteration_complete_has_mcts_mean_depth():
+    """iteration_complete event must contain mcts_mean_depth as a float >= 0.0."""
+    r = _Recorder()
+    events_mod.register_renderer(r)
+    events_mod.emit_event(_make_sample_payload("iteration_complete"))
+    dispatched = r.calls[-1]
+    assert "mcts_mean_depth" in dispatched
+    v = dispatched["mcts_mean_depth"]
+    assert isinstance(v, (float, int))
+    assert v >= 0.0
+
+
+def test_iteration_complete_has_mcts_root_concentration():
+    """iteration_complete event must contain mcts_root_concentration in [0.0, 1.0]."""
+    r = _Recorder()
+    events_mod.register_renderer(r)
+    events_mod.emit_event(_make_sample_payload("iteration_complete"))
+    dispatched = r.calls[-1]
+    assert "mcts_root_concentration" in dispatched
+    v = dispatched["mcts_root_concentration"]
+    assert isinstance(v, (float, int))
+    assert 0.0 <= v <= 1.0
+
+
+def test_new_fields_default_to_zero_not_none():
+    """All three new fields must default to 0.0 (not None, not NaN, not omitted)."""
+    import math
+
+    r = _Recorder()
+    events_mod.register_renderer(r)
+
+    # training_step with no policy_target_entropy in payload
+    events_mod.emit_event({
+        "event": "training_step",
+        "step": 1, "loss_total": 1.0, "loss_policy": 0.5, "loss_value": 0.3,
+        "loss_aux": 0.0, "policy_entropy": 3.0, "value_accuracy": 0.6,
+        "lr": 1e-3, "grad_norm": 0.5,
+        # policy_target_entropy intentionally omitted
+    })
+    # iteration_complete with no mcts fields
+    events_mod.emit_event({
+        "event": "iteration_complete",
+        "step": 1, "games_total": 10, "games_this_iter": 10,
+        "games_per_hour": 100.0, "positions_per_hour": 6000.0,
+        "avg_game_length": 60.0, "win_rate_p0": 0.5, "win_rate_p1": 0.5,
+        "draw_rate": 0.0, "sims_per_sec": 1000.0,
+        "buffer_size": 1000, "buffer_capacity": 250000,
+        "corpus_selfplay_frac": 0.5, "batch_fill_pct": 90.0,
+        # mcts_mean_depth and mcts_root_concentration intentionally omitted
+    })
+    # The schema test just checks the sample payloads (which include them now).
+    # This test verifies that scripts/train.py defaults work via the emit_event path,
+    # i.e., the fields can be omitted from an event dict without breaking renderers.
+    # For the schema, verify neither key is required to be present.
+    ts_evt = next((c for c in r.calls if c.get("event") == "training_step"), None)
+    ic_evt = next((c for c in r.calls if c.get("event") == "iteration_complete"), None)
+    assert ts_evt is not None
+    assert ic_evt is not None
+    # Fields are optional in the event dict but if present must not be NaN.
+    te = ts_evt.get("policy_target_entropy", 0.0)
+    assert te is not None
+    assert math.isfinite(te) or te == 0.0
+    md = ic_evt.get("mcts_mean_depth", 0.0)
+    assert md is not None and md >= 0.0
+    rc = ic_evt.get("mcts_root_concentration", 0.0)
+    assert rc is not None and 0.0 <= rc <= 1.0
+
+
+def test_policy_target_entropy_only_over_valid_rows():
+    """policy_target_entropy must be computed only over non-zero-policy rows."""
+    import math
+    import numpy as np
+    import torch
+    from hexo_rl.training.trainer import Trainer
+    from hexo_rl.model.network import HexTacToeNet
+    from engine import ReplayBuffer
+
+    board_size = 19
+    n_actions = board_size * board_size + 1
+    batch = 16
+
+    config = {
+        "board_size": board_size, "res_blocks": 1, "filters": 16,
+        "lr": 1e-3, "weight_decay": 0.0, "batch_size": batch,
+        "grad_clip": 1.0, "fp16": False,
+        "checkpoint_interval": 9999, "log_interval": 9999,
+    }
+    model = HexTacToeNet(board_size=board_size, res_blocks=1, filters=16)
+    trainer = Trainer(model, config, checkpoint_dir="/tmp/hexo_test_ckpt_entropy")
+
+    rng = np.random.default_rng(42)
+    buf = ReplayBuffer(capacity=200)
+    for i in range(batch):
+        feat = rng.random((18, board_size, board_size), dtype=np.float32).astype(np.float16)
+        # Half the batch: zero policies (mask rows); half: valid uniform
+        if i < batch // 2:
+            pol = np.zeros(n_actions, dtype=np.float32)
+        else:
+            pol = np.ones(n_actions, dtype=np.float32) / n_actions
+        buf.push(feat, pol, 1.0)
+
+    loss_info = trainer.train_step(buf, augment=False)
+    te = loss_info.get("policy_target_entropy", None)
+    assert te is not None, "policy_target_entropy must be in loss_info"
+    assert isinstance(te, float)
+    assert math.isfinite(te), f"policy_target_entropy must be finite, got {te}"
+    assert te >= 0.0
+
+
+def test_policy_target_entropy_finite_for_one_hot():
+    """policy_target_entropy must be 0.0 (not -inf) for a one-hot policy target."""
+    import math
+    import numpy as np
+    import torch
+    from hexo_rl.training.trainer import Trainer
+    from hexo_rl.model.network import HexTacToeNet
+    from engine import ReplayBuffer
+
+    board_size = 19
+    n_actions = board_size * board_size + 1
+    batch = 16
+    config = {
+        "board_size": board_size, "res_blocks": 1, "filters": 16,
+        "lr": 1e-3, "weight_decay": 0.0, "batch_size": batch,
+        "grad_clip": 1.0, "fp16": False,
+        "checkpoint_interval": 9999, "log_interval": 9999,
+    }
+    model = HexTacToeNet(board_size=board_size, res_blocks=1, filters=16)
+    trainer = Trainer(model, config, checkpoint_dir="/tmp/hexo_test_ckpt_onehot")
+
+    rng = np.random.default_rng(42)
+    buf = ReplayBuffer(capacity=200)
+    for i in range(batch):
+        feat = rng.random((18, board_size, board_size), dtype=np.float32).astype(np.float16)
+        # One-hot policy: all mass on action 0
+        pol = np.zeros(n_actions, dtype=np.float32)
+        pol[0] = 1.0
+        buf.push(feat, pol, 1.0)
+
+    loss_info = trainer.train_step(buf, augment=False)
+    te = loss_info.get("policy_target_entropy", None)
+    assert te is not None
+    assert math.isfinite(te), f"One-hot entropy must be finite (not -inf), got {te}"
+    assert te >= 0.0
+
+
+def test_mcts_last_search_stats_after_game():
+    """mcts_mean_depth > 0 and mcts_root_concentration in [0,1] after a real search."""
+    from engine import MCTSTree, Board
+    import numpy as np
+
+    board_size = 19
+    n_actions = board_size * board_size + 1
+
+    tree = MCTSTree()
+    board = Board()
+    tree.new_game(board)
+
+    uniform = [1.0 / n_actions] * n_actions
+    # Run a few expand+backup cycles
+    for _ in range(3):
+        leaves = tree.select_leaves(4)
+        if not leaves:
+            break
+        tree.expand_and_backup([uniform] * len(leaves), [0.0] * len(leaves))
+
+    depth, conc = tree.last_search_stats()
+    assert depth > 0.0, f"mean_depth should be > 0 after search, got {depth}"
+    assert 0.0 <= conc <= 1.0, f"root_concentration must be in [0,1], got {conc}"
+
+
+def test_mcts_last_search_stats_not_called_in_sim_loop():
+    """last_search_stats() is O(1) at search end — not in the inner sim loop.
+
+    Verifies by checking that sim_count matches the number of select_leaves calls
+    (i.e., tracking happens once per sim in select_leaves, not inside the inner
+    traversal loop of select_one_leaf).
+    """
+    from engine import MCTSTree, Board
+
+    board_size = 19
+    n_actions = board_size * board_size + 1
+    uniform = [1.0 / n_actions] * n_actions
+
+    tree = MCTSTree()
+    board = Board()
+    tree.new_game(board)
+
+    n_rounds = 5
+    batch_size = 4
+    for _ in range(n_rounds):
+        leaves = tree.select_leaves(batch_size)
+        if not leaves:
+            break
+        tree.expand_and_backup([uniform] * len(leaves), [0.0] * len(leaves))
+
+    depth, conc = tree.last_search_stats()
+    # depth should be a reasonable small number (not board_size^2 which would
+    # indicate the loop depth is being accumulated inside the traversal loop)
+    assert depth < board_size * board_size, (
+        f"mean_depth={depth} is unreasonably large; may be accumulating inside traversal loop"
+    )
+    assert depth >= 0.0

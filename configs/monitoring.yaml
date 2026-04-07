@@ -15,7 +15,9 @@ monitoring:
   ema_alpha: 0.06
   win_rate_window: 200
   game_length_window: 200
-  training_step_history: 500
+  training_step_history: 2000
+  game_history: 500
+  num_actions_for_entropy_norm: 362
   p0_win_rate_target_low: 54.0
   p0_win_rate_target_high: 58.0
   viewer_max_memory_games: 50

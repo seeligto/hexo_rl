@@ -55,6 +55,11 @@ pub struct MCTSTree {
     /// directly to this child pool index. Used by Sequential Halving
     /// (Gumbel MCTS) to force simulations into a specific candidate's subtree.
     pub(crate) forced_root_child: Option<u32>,
+    /// Accumulated leaf depth across all simulations since last `new_game()`.
+    /// Divide by `sim_count` to get mean depth per simulation.
+    pub(crate) depth_accum: u64,
+    /// Number of simulations (calls to `select_one_leaf`) since last `new_game()`.
+    pub(crate) sim_count: u32,
 }
 
 impl MCTSTree {
@@ -78,6 +83,8 @@ impl MCTSTree {
             fpu_reduction,
             selection_overlap_count: 0,
             max_depth_observed: 0,
+            depth_accum: 0,
+            sim_count: 0,
             pending: Vec::new(),
             transposition_table: FxHashMap::default(),
             quiescence_enabled: true,
@@ -97,6 +104,8 @@ impl MCTSTree {
         self.pending.clear();
         self.selection_overlap_count = 0;
         self.max_depth_observed = 0;
+        self.depth_accum = 0;
+        self.sim_count = 0;
         self.forced_root_child = None;
         // Clear TT between games — positions don't repeat across games and
         // Vec<f32> policy entries accumulate unboundedly without this.
@@ -368,6 +377,38 @@ impl MCTSTree {
         } else {
             0
         }
+    }
+
+    /// Return search statistics accumulated since the last `new_game()`.
+    ///
+    /// Returns `(mean_depth, root_concentration)`:
+    /// - `mean_depth`: average depth descended per simulation (leaf depth)
+    /// - `root_concentration`: max child visits / root total visits ∈ [0.0, 1.0]
+    ///
+    /// Both values are 0.0 when no simulations have been run.
+    /// This is a once-per-search aggregation — NOT called from the inner sim loop.
+    pub fn last_search_stats(&self) -> (f32, f32) {
+        let mean_depth = if self.sim_count > 0 {
+            self.depth_accum as f32 / self.sim_count as f32
+        } else {
+            0.0
+        };
+        let root_conc = {
+            let root = &self.pool[0];
+            let total = root.n_visits;
+            if total == 0 || !root.is_expanded() {
+                0.0
+            } else {
+                let first = root.first_child as usize;
+                let n = root.n_children as usize;
+                let max_v = (first..first + n)
+                    .map(|i| self.pool[i].n_visits)
+                    .max()
+                    .unwrap_or(0);
+                max_v as f32 / total as f32
+            }
+        };
+        (mean_depth, root_conc)
     }
 
     /// Run `n` simulations using uniform priors (no NN). For benchmarking.
