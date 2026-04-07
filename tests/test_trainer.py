@@ -5,6 +5,7 @@ Run with: .venv/bin/pytest tests/test_trainer.py -v
 """
 import json
 from pathlib import Path
+from unittest.mock import patch, call
 
 import numpy as np
 import pytest
@@ -606,3 +607,74 @@ def test_uncertainty_loss_is_finite_with_aux(tmp_path: Path):
     assert "opp_reply_loss" in result
     assert np.isfinite(result["avg_sigma"])
     assert np.isfinite(result["uncertainty_loss"])
+
+
+# ── completed_q_values: KL vs CE policy loss path (architecture review C1) ───
+
+
+def test_completed_q_values_true_uses_kl_loss(tmp_path: Path):
+    """When completed_q_values is True, trainer must call compute_kl_policy_loss."""
+    cfg = {**FAST_CONFIG, "completed_q_values": True}
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+
+    with patch(
+        "hexo_rl.training.trainer.compute_kl_policy_loss",
+        wraps=trainer.__class__.__module__ and __import__(
+            "hexo_rl.training.losses", fromlist=["compute_kl_policy_loss"]
+        ).compute_kl_policy_loss,
+    ) as mock_kl, patch(
+        "hexo_rl.training.trainer.compute_policy_loss",
+    ) as mock_ce:
+        result = trainer.train_step(buf, augment=False)
+
+    mock_kl.assert_called_once()
+    mock_ce.assert_not_called()
+    assert "policy_loss" in result
+    assert np.isfinite(result["policy_loss"])
+
+
+def test_completed_q_values_false_uses_ce_loss(tmp_path: Path):
+    """When completed_q_values is False (default), trainer must use CE policy loss."""
+    cfg = {**FAST_CONFIG, "completed_q_values": False}
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+
+    with patch(
+        "hexo_rl.training.trainer.compute_policy_loss",
+        wraps=__import__(
+            "hexo_rl.training.losses", fromlist=["compute_policy_loss"]
+        ).compute_policy_loss,
+    ) as mock_ce, patch(
+        "hexo_rl.training.trainer.compute_kl_policy_loss",
+    ) as mock_kl:
+        result = trainer.train_step(buf, augment=False)
+
+    mock_ce.assert_called_once()
+    mock_kl.assert_not_called()
+    assert "policy_loss" in result
+    assert np.isfinite(result["policy_loss"])
+
+
+def test_completed_q_values_absent_defaults_to_ce(tmp_path: Path):
+    """When completed_q_values is absent from config, trainer defaults to CE."""
+    cfg = {**FAST_CONFIG}  # no completed_q_values key
+    assert "completed_q_values" not in cfg
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+
+    with patch(
+        "hexo_rl.training.trainer.compute_policy_loss",
+        wraps=__import__(
+            "hexo_rl.training.losses", fromlist=["compute_policy_loss"]
+        ).compute_policy_loss,
+    ) as mock_ce, patch(
+        "hexo_rl.training.trainer.compute_kl_policy_loss",
+    ) as mock_kl:
+        result = trainer.train_step(buf, augment=False)
+
+    mock_ce.assert_called_once()
+    mock_kl.assert_not_called()
