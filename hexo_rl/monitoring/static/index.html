@@ -157,7 +157,8 @@
   .gate-passed { color: #5DCAA5; font-weight: 600; }
   .gate-failed { color: #F4664A; font-weight: 600; }
 
-  canvas { max-height: 200px; }
+  .chart-wrap    { position: relative; height: 220px; }
+  .chart-wrap-lg { position: relative; height: 280px; }
 </style>
 </head>
 <body>
@@ -213,7 +214,7 @@
         <button class="btn-toggle active" id="btn-ema" onclick="toggleEMA()">EMA</button>
       </div>
     </div>
-    <canvas id="loss-chart"></canvas>
+    <div class="chart-wrap-lg"><canvas id="loss-chart"></canvas></div>
     <div id="loss-ratio-strip" style="font-size:10px; color:#666; margin-top:4px; font-family:'Fira Code',monospace">&mdash;</div>
   </div>
 
@@ -235,7 +236,7 @@
       <div class="value" id="elo-value">&mdash;</div>
       <div style="font-size:11px; color:#888; margin-top:2px" id="elo-step"></div>
       <div id="elo-badge" style="margin-top:2px; font-size:11px"></div>
-      <canvas id="elo-line-chart" style="display:none; max-height:80px; margin-top:8px"></canvas>
+      <div id="elo-line-wrap" style="display:none; position:relative; height:80px; margin-top:8px"><canvas id="elo-line-chart"></canvas></div>
     </div>
 
     <!-- System panel (always visible) -->
@@ -263,22 +264,22 @@
 <div class="bottom-row">
   <div class="chart-card">
     <div class="panel-header"><h3 id="hdr-winrate">P0 Win Rate (last 500 games)</h3></div>
-    <canvas id="winrate-chart"></canvas>
+    <div class="chart-wrap"><canvas id="winrate-chart"></canvas></div>
     <div class="chart-summary" id="winrate-summary">&mdash;</div>
   </div>
   <div class="chart-card">
     <div class="panel-header"><h3 id="hdr-histogram">Game Length Distribution (last 500)</h3></div>
-    <canvas id="histogram-chart"></canvas>
+    <div class="chart-wrap"><canvas id="histogram-chart"></canvas></div>
     <div class="chart-summary" id="histogram-summary">&mdash;</div>
   </div>
   <div class="chart-card">
     <div class="panel-header"><h3 id="hdr-entropy">Policy Entropy (last 2000 steps)</h3></div>
-    <canvas id="entropy-chart"></canvas>
+    <div class="chart-wrap"><canvas id="entropy-chart"></canvas></div>
     <div class="chart-summary" id="entropy-summary">&mdash;</div>
   </div>
   <div class="chart-card">
     <div class="panel-header"><h3 id="hdr-grad">Gradient Norm (last 2000 steps)</h3></div>
-    <canvas id="grad-chart"></canvas>
+    <div class="chart-wrap"><canvas id="grad-chart"></canvas></div>
     <div class="chart-summary" id="grad-summary">&mdash;</div>
   </div>
 </div>
@@ -840,7 +841,7 @@ function showEloPanel(p) {
 
   if (eloHistory.length >= 3) {
     const canvas = document.getElementById('elo-line-chart');
-    canvas.style.display = 'block';
+    document.getElementById('elo-line-wrap').style.display = 'block';
     if (!eloLineChartInst) {
       eloLineChartInst = new Chart(canvas, {
         type: 'line',
@@ -1028,6 +1029,12 @@ function addLogEntry(p) {
   scroll.insertBefore(entry, scroll.firstChild);
   while (scroll.children.length > 20) scroll.removeChild(scroll.lastChild);
 }
+
+// Trigger chart resize on window resize (charts may initialise before flexbox resolves)
+window.addEventListener('resize', () => {
+  [lossChart, winRateChart, histogramChart, entropyChart, gradChart].forEach(c => c.resize());
+  if (eloLineChartInst) eloLineChartInst.resize();
+});
 </script>
 </body>
 </html>
