@@ -15,6 +15,7 @@ SAMPLE_EVENTS = {
         "step": 1, "loss_total": 2.5, "loss_policy": 1.8,
         "loss_value": 0.6, "loss_aux": 0.1, "policy_entropy": 4.2,
         "value_accuracy": 0.65, "lr": 3e-4, "grad_norm": 1.2,
+        "policy_target_entropy": 1.85,
     },
     "iteration_complete": {
         "event": "iteration_complete", "ts": 1234567890.0,
@@ -25,6 +26,8 @@ SAMPLE_EVENTS = {
         "sims_per_sec": 189000.0, "buffer_size": 60000,
         "buffer_capacity": 250000, "corpus_selfplay_frac": 0.2,
         "batch_fill_pct": 87.5,
+        "mcts_mean_depth": 14.2,
+        "mcts_root_concentration": 0.42,
     },
     "game_complete": {
         "event": "game_complete", "ts": 1234567890.0,
