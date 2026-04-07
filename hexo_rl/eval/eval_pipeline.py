@@ -112,6 +112,7 @@ class EvalPipeline:
         ckpt_name = f"checkpoint_{train_step}"
         ckpt_pid = self.db.get_or_create_player(
             ckpt_name, "checkpoint", {"step": train_step},
+            run_id=self.run_id,
         )
 
         results: Dict[str, Any] = {"step": train_step, "promoted": False}
@@ -126,6 +127,7 @@ class EvalPipeline:
                 train_step, ckpt_pid, self._random_pid,
                 er.win_count, n - er.win_count, 0, n, er.win_rate, ci_lo, ci_hi,
                 colony_wins_a=er.colony_wins,
+                run_id=self.run_id,
             )
             print_match_result(ckpt_name, "random_bot", er.win_count, n - er.win_count, n, ci_lo, ci_hi)
             results["wr_random"] = er.win_rate
@@ -144,6 +146,7 @@ class EvalPipeline:
                 train_step, ckpt_pid, self._sealbot_pid,
                 er.win_count, n - er.win_count, 0, n, er.win_rate, ci_lo, ci_hi,
                 colony_wins_a=er.colony_wins,
+                run_id=self.run_id,
             )
             print_match_result(ckpt_name, f"SealBot(t={tl})", er.win_count, n - er.win_count, n, ci_lo, ci_hi)
             results["wr_sealbot"] = er.win_rate
@@ -164,11 +167,13 @@ class EvalPipeline:
             # Find or create the "best" player
             best_pid = self.db.get_or_create_player(
                 "best_checkpoint", "checkpoint", {"role": "champion"},
+                run_id=self.run_id,
             )
             self.db.insert_match(
                 train_step, ckpt_pid, best_pid,
                 er.win_count, n - er.win_count, 0, n, er.win_rate, ci_lo, ci_hi,
                 colony_wins_a=er.colony_wins,
+                run_id=self.run_id,
             )
             print_match_result(ckpt_name, "best_checkpoint", er.win_count, n - er.win_count, n, ci_lo, ci_hi)
             results["wr_best"] = er.win_rate
