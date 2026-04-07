@@ -2565,3 +2565,87 @@ Pruning now happens only in Python during training, where it was already tested.
   (proportion of 50-sim fast games). Reverted to the Phase 4.0 baseline value.
 
 **Test counts:** 101 Rust + 632 Python (all passing).
+
+---
+
+### §63 — Dashboard enrichment: normalized ratios and MCTS health metrics (2026-04-07)
+
+**Branch:** `phase4.5/monitoring-ratios-mcts-health`
+
+Raw loss and entropy numbers during long training runs are not interpretable
+without external context (e.g. "is 0.52 value loss good?"). This pass adds
+three normalized ratios and two MCTS health metrics so the dashboard is
+self-explanatory during the Phase 4.5 sustained run. Ring buffers are bumped
+from 500 steps / 200 games → 2000 steps / 500 games so a multi-hour run
+remains visible in the chart history.
+
+**Schema additions (backwards-compatible, additive):**
+
+`training_step` event gains:
+- `policy_target_entropy: float` — mean entropy (nats) of the post-pruning,
+  post-renormalization MCTS policy target distribution over the training batch.
+  Computed only over non-zero-policy rows (same mask as policy loss).
+  0.0 if no valid rows. Finite-guarded. Added in `trainer.py` `_train_on_batch()`.
+
+`iteration_complete` event gains:
+- `mcts_mean_depth: float` — mean leaf depth per simulation across all moves
+  this iteration. 0.0 if unavailable.
+- `mcts_root_concentration: float` — mean of (max_child_visits / root_total_visits)
+  at the root, averaged over all moves. Range [0.0, 1.0]. 0.0 if unavailable.
+
+**Rust changes (`engine/src/mcts/`):**
+
+`MCTSTree` struct gains two new fields:
+```rust
+pub(crate) depth_accum: u64,  // sum of leaf depths per sim since new_game()
+pub(crate) sim_count: u32,    // number of sims since new_game()
+```
+`select_one_leaf()` return type changed from `u32` to `(u32, u32)` (leaf_idx,
+leaf_depth). In `select_leaves()`, after each `select_one_leaf()` call (before
+the duplicate/TT checks), the depth is added to `depth_accum` and `sim_count`
+incremented. This is **one accumulation per sim** — not inside the depth
+traversal loop.
+
+New method `MCTSTree::last_search_stats() -> (f32, f32)` — call once per move
+after search completes (never from inside the sim loop):
+- `mean_depth = depth_accum / sim_count`
+- `root_concentration = max_child_visits / root.n_visits` (iterates root children,
+  O(branching_factor) — negligible vs sim cost)
+
+`SelfPlayRunner` gains three `Arc<AtomicU64>` fields (`mcts_depth_accum`,
+`mcts_conc_accum` scaled ×1e6, `mcts_stat_count`) cloned into each worker thread.
+After `get_policy()` returns (search complete), worker calls `tree.last_search_stats()`
+and updates the atomics. Python properties `mcts_mean_depth` and
+`mcts_mean_root_concentration` read and divide on demand.
+
+Both exposed via PyO3 on `PyMCTSTree` (`last_search_stats() -> (f32, f32)`)
+and `SelfPlayRunner` (`mcts_mean_depth`, `mcts_mean_root_concentration` getters).
+
+**Renderer changes:**
+
+Terminal dashboard (`terminal_dashboard.py`):
+- Value loss cell: `0.6084 (×0.88)` — ratio vs `ln(2) = 0.6931` (random BCE baseline)
+- Entropy cell: `2.35 (40% max)` — `entropy / log(num_actions) * 100`
+- Throughput row second line: appends `│  MCTS depth  N.N  │  root concen  0.NN  │  grad  N.NN`
+- `num_actions_for_entropy_norm` read from config (default 362 = 19²+1)
+
+Web dashboard (`index.html`):
+- Policy Entropy stat card: subtitle `{pct:.0f}% of max`
+- Value Accuracy stat card: subtitle `loss × {ratio:.2f} of random`
+- Loss chart: dim ratio strip below legend: `value × 0.65 of random  │  entropy 58% of max  │  policy excess +0.32`
+  where policy excess = `loss_policy − policy_target_entropy`
+- System panel: `MCTS depth` and `Root concen` rows added before `Grad norm`
+- Ring buffer constants (`MAX_STEPS`, `MAX_GAMES`) now fetched from
+  `/api/monitoring-config` endpoint on page load instead of hardcoded
+
+**Config changes (`configs/monitoring.yaml`):**
+```yaml
+training_step_history: 2000    # was 500
+game_history: 500              # new key (replaces win_rate_window/game_length_window in JS)
+num_actions_for_entropy_norm: 362   # new key
+```
+
+New `/api/monitoring-config` endpoint in `web_dashboard.py` serves these values
+as JSON so the JS client can use them without server-side template rendering.
+
+**Test counts:** 101 Rust + 643 Python (11 new: 9 event schema + 2 renderer).
