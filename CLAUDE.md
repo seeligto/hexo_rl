@@ -510,7 +510,7 @@ Run `make bench.full`. Latest baseline (2026-04-06, Ryzen 7 8845HS + RTX 4060 La
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 55,478 sim/s | ≥ 26,000 sim/s | IQR ±400 |
+| MCTS (CPU only, no NN) | 55,478 sim/s | ≥ 26,000 sim/s | IQR ±400; **pre-Gumbel baseline — re-bench pending** (measured with `gumbel_mcts: false`) |
 | NN inference (batch=64) | 9,810 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±1) |
 | NN latency (batch=1, mean) | 1.59 ms | ≤ 3.5 ms | IQR ±0.05 ms |
 | Replay buffer push | 762,130 pos/sec | ≥ 630,000 pos/sec | IQR ±114,320 (15%) |
@@ -542,12 +542,15 @@ Starting config for self-play RL (do not exceed without benchmarking):
   - Weight sync: inf_model ← train_model after every checkpoint save and model promotion
 - Replay buffer: start at 250K samples, grow toward 1M as training stabilises
 - ELO benchmark target: SealBot (replaces Ramora0 as external reference)
-- Gumbel MCTS (opt-in, `gumbel_mcts: false` by default):
+- Gumbel MCTS (per-host override):
   - Gumbel-Top-k root sampling replaces PUCT exploration at root (Danihelka et al., ICLR 2022)
   - Sequential Halving budget allocation across halving phases
   - Non-root nodes: unchanged (PUCT + dynamic FPU)
   - Config: `gumbel_mcts`, `gumbel_m` (default 16), `gumbel_explore_moves` (default 10)
+  - **Desktop (3070):** `gumbel_mcts: true` — intentional for Phase 4.0 sustained run
+  - **Laptop / cloud:** `gumbel_mcts: false` — default until benchmarked on those hosts
   - Completed Q-values (`completed_q_values: true`) provides policy targets for training
+  - **Known issue:** `completed_q_values` KL loss path was silently dead due to nested-dict lookup bug in `trainer.py` (see architecture review C1). Fix tracked separately; prior training used CE loss instead of KL.
 
 Resolved before Phase 4.0 launch:
 - [x] Open Question 6: sequential vs compound action space
