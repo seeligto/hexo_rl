@@ -909,7 +909,7 @@ mod tests {
         tree.new_game(board);
 
         // Expand root with uniform priors.
-        let leaves = tree.select_leaves(1);
+        let _leaves = tree.select_leaves(1);
         let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
         let policy = vec![1.0 / n_actions as f32; n_actions];
         tree.expand_and_backup(&[policy], &[0.0]);
