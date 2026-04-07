@@ -6,6 +6,7 @@
 |---|---|---|---|
 | Q5 | Supervised→self-play transition schedule | Exponential decay 0.8→0.1 over 1M steps; growing buffer + mixed data streams | `a6e5a79` |
 | Q6 | Sequential vs compound action space | Sequential confirmed — 2 MCTS plies per turn, Q-flip at turn boundaries, Dirichlet skipped at intermediate plies | `5be7df7`, `9b899e9` |
+| Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically | — |
 
 ## Active (Phase 4.0)
 
@@ -90,24 +91,6 @@ of eval metrics only. Defer until after Phase 4.0 exit criteria are met.
 
 ---
 
-### Q12 — Shaped Reward S-Ordering Correctness
-
-**Priority:** MEDIUM
-**Source:** Threat Theory document cross-reference, 2026-04-06
-
-**Question:** Does the current shaped reward table respect W/S/C Strength ordering?
-Specifically, is "Double threat created" (+0.08) correctly categorised — is it detecting
-W2×(S0) (blockable) or something higher? Is the reward magnitude ordering consistent
-with the principle that lower-S formations should always reward more than higher-S
-formations of equal Weight?
-
-**Action:** Inspect `FormationDetector` in `engine/` and map each detected formation to
-its W/S/C value using the table in `docs/10_COMMUNITY_BOT_ANALYSIS.md §7.1`. Revise
-reward table if S-ordering is violated.
-
-**Cost:** ~2 hours inspection, no GPU cost. Fix before Phase 4.5 training run.
-
----
 
 ### Q13 — Chain Length Planes as Input Tensor Augmentation
 
