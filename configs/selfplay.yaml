@@ -1,7 +1,7 @@
 # selfplay.yaml — self-play and MCTS configuration
 
 mcts:
-  n_simulations: 800
+  n_simulations: 400
   c_puct: 1.5
   # KataGo-style dynamic FPU (First Play Urgency).
   # Unvisited children receive Q = parent_q - fpu_reduction * sqrt(explored_policy_mass)
