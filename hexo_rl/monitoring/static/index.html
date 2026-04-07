@@ -709,12 +709,10 @@ function onTrainingStep(p) {
     if (p.policy_entropy != null && maxEnt > 0) {
       parts.push('entropy ' + (p.policy_entropy / maxEnt * 100).toFixed(0) + '% of max');
     } else { parts.push('entropy \u2014'); }
-    const te = p.policy_target_entropy ?? null;
     const pl = p.loss_policy ?? null;
-    if (te != null && pl != null) {
-      const excess = pl - te;
-      parts.push('policy excess ' + (excess >= 0 ? '+' : '') + excess.toFixed(2));
-    } else { parts.push('policy excess \u2014'); }
+    if (pl != null) {
+      parts.push('policy KL ' + pl.toFixed(3));
+    } else { parts.push('policy KL \u2014'); }
     document.getElementById('loss-ratio-strip').textContent = parts.join('  \u2502  ');
   }
 
