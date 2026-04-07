@@ -55,6 +55,11 @@ pub struct MCTSTree {
     /// directly to this child pool index. Used by Sequential Halving
     /// (Gumbel MCTS) to force simulations into a specific candidate's subtree.
     pub(crate) forced_root_child: Option<u32>,
+    /// Accumulated leaf depth across all simulations since last `new_game()`.
+    /// Divide by `sim_count` to get mean depth per simulation.
+    pub(crate) depth_accum: u64,
+    /// Number of simulations (calls to `select_one_leaf`) since last `new_game()`.
+    pub(crate) sim_count: u32,
 }
 
 impl MCTSTree {
@@ -78,6 +83,8 @@ impl MCTSTree {
             fpu_reduction,
             selection_overlap_count: 0,
             max_depth_observed: 0,
+            depth_accum: 0,
+            sim_count: 0,
             pending: Vec::new(),
             transposition_table: FxHashMap::default(),
             quiescence_enabled: true,
@@ -97,6 +104,8 @@ impl MCTSTree {
         self.pending.clear();
         self.selection_overlap_count = 0;
         self.max_depth_observed = 0;
+        self.depth_accum = 0;
+        self.sim_count = 0;
         self.forced_root_child = None;
         // Clear TT between games — positions don't repeat across games and
         // Vec<f32> policy entries accumulate unboundedly without this.
@@ -368,6 +377,38 @@ impl MCTSTree {
         } else {
             0
         }
+    }
+
+    /// Return search statistics accumulated since the last `new_game()`.
+    ///
+    /// Returns `(mean_depth, root_concentration)`:
+    /// - `mean_depth`: average depth descended per simulation (leaf depth)
+    /// - `root_concentration`: max child visits / root total visits ∈ [0.0, 1.0]
+    ///
+    /// Both values are 0.0 when no simulations have been run.
+    /// This is a once-per-search aggregation — NOT called from the inner sim loop.
+    pub fn last_search_stats(&self) -> (f32, f32) {
+        let mean_depth = if self.sim_count > 0 {
+            self.depth_accum as f32 / self.sim_count as f32
+        } else {
+            0.0
+        };
+        let root_conc = {
+            let root = &self.pool[0];
+            let total = root.n_visits;
+            if total == 0 || !root.is_expanded() {
+                0.0
+            } else {
+                let first = root.first_child as usize;
+                let n = root.n_children as usize;
+                let max_v = (first..first + n)
+                    .map(|i| self.pool[i].n_visits)
+                    .max()
+                    .unwrap_or(0);
+                max_v as f32 / total as f32
+            }
+        };
+        (mean_depth, root_conc)
     }
 
     /// Run `n` simulations using uniform priors (no NN). For benchmarking.
@@ -1116,6 +1157,29 @@ mod tests {
 
     // Note: policy_prune_frac test removed — pruning now lives only in
     // Python's prune_policy_targets (trainer.py) to avoid double-pruning.
+
+    #[test]
+    fn test_last_search_stats_bounds_after_sims() {
+        let mut tree = MCTSTree::new(1.5);
+        tree.new_game(Board::new());
+
+        let n_sims = 10;
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform = vec![1.0 / n_actions as f32; n_actions];
+        for _ in 0..n_sims {
+            let leaves = tree.select_leaves(1);
+            let n = leaves.len();
+            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+            let values = vec![0.0f32; n];
+            tree.expand_and_backup(&policies, &values);
+        }
+
+        let (mean_depth, root_concentration) = tree.last_search_stats();
+        assert!(mean_depth >= 0.0,
+            "mean_depth must be >= 0.0, got {mean_depth}");
+        assert!(root_concentration >= 0.0 && root_concentration <= 1.0,
+            "root_concentration must be in [0.0, 1.0], got {root_concentration}");
+    }
 
     #[test]
     fn test_improved_policy_illegal_actions_stay_zero() {

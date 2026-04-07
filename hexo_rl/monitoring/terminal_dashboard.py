@@ -7,6 +7,7 @@ training loop, never raises exceptions that propagate to train.py.
 from __future__ import annotations
 
 import collections
+import math
 import threading
 import time
 from typing import Any
@@ -61,6 +62,8 @@ class TerminalDashboard:
         self._alert_entropy_warn = float(mon.get("alert_entropy_warn", 2.0))
         self._alert_grad_max = float(mon.get("alert_grad_norm_max", 10.0))
         self._alert_loss_window = int(mon.get("alert_loss_increase_window", 3))
+        num_actions = int(mon.get("num_actions_for_entropy_norm", 362))
+        self._max_entropy = math.log(num_actions) if num_actions > 1 else 1.0
 
         self._lock = threading.Lock()
         self._live: Live | None = None
@@ -106,6 +109,9 @@ class TerminalDashboard:
             "batch_fill_pct": None,
             "worker_count": None,
             "phase": None,
+            "policy_target_entropy": None,
+            "mcts_mean_depth": None,
+            "mcts_root_concentration": None,
         }
 
     def start(self) -> None:
@@ -154,7 +160,8 @@ class TerminalDashboard:
         if event == "training_step":
             for key in (
                 "step", "loss_total", "loss_policy", "loss_value",
-                "loss_aux", "policy_entropy", "lr", "grad_norm",
+                "loss_aux", "policy_entropy", "policy_target_entropy",
+                "lr", "grad_norm",
             ):
                 if key in payload:
                     self._state[key] = payload[key]
@@ -167,6 +174,7 @@ class TerminalDashboard:
                 "win_rate_p0", "win_rate_p1", "draw_rate",
                 "sims_per_sec", "buffer_size", "buffer_capacity",
                 "corpus_selfplay_frac", "batch_fill_pct",
+                "mcts_mean_depth", "mcts_root_concentration",
             ):
                 if key in payload:
                     self._state[key] = payload[key]
@@ -267,19 +275,33 @@ class TerminalDashboard:
         for label in ("loss", "policy", "value", "aux", "entropy", "lr"):
             loss_tbl.add_column(label, justify="center")
         lr_str = _EM_DASH if s["lr"] is None else f"{s['lr']:.0e}"
+
+        # Value loss with ratio relative to random baseline (H(Bernoulli(0.5)) = ln2 ≈ 0.6931)
+        val_loss = s["loss_value"]
+        if val_loss is not None:
+            val_ratio = val_loss / 0.6931
+            val_str = f"{_fmt_loss(val_loss)} (×{val_ratio:.2f})"
+        else:
+            val_str = _EM_DASH
+
+        # Entropy with % of max annotation
         ent = s["policy_entropy"]
         if ent is None:
             ent_str = _EM_DASH
-        elif ent < self._alert_entropy_min:
-            ent_str = f"{ent:.2f} !!"
-        elif ent < self._alert_entropy_warn:
-            ent_str = f"{ent:.2f} \u25b2"
         else:
-            ent_str = f"{ent:.2f}"
+            ent_pct = ent / self._max_entropy * 100
+            if ent < self._alert_entropy_min:
+                marker = " !!"
+            elif ent < self._alert_entropy_warn:
+                marker = " \u25b2"
+            else:
+                marker = ""
+            ent_str = f"{ent:.2f} ({ent_pct:.0f}% max){marker}"
+
         loss_tbl.add_row(
             _fmt_loss(s["loss_total"]),
             _fmt_loss(s["loss_policy"]),
-            _fmt_loss(s["loss_value"]),
+            val_str,
             _fmt_loss(s["loss_aux"]),
             ent_str,
             lr_str,
@@ -299,11 +321,16 @@ class TerminalDashboard:
         bf_str = f"{bf:.0f}%" if bf is not None else _EM_DASH
         gn = s["grad_norm"]
         grad_str = f"{gn:.2f}" if gn is not None else _EM_DASH
+        mcts_d = s["mcts_mean_depth"]
+        mcts_d_str = f"{mcts_d:.1f}" if mcts_d is not None else _EM_DASH
+        mcts_c = s["mcts_root_concentration"]
+        mcts_c_str = f"{mcts_c:.2f}" if mcts_c is not None else _EM_DASH
         tp_tbl.add_row(
             f"games/hr  {gph}  │  pos/hr  {pph}  │  sims/sec  {sps}  │  batch fill  {bf_str}"
         )
         tp_tbl.add_row(
-            f"avg len   {avg}  │  P0 {p0}  P1 {p1}  draw {dr}  │  grad  {grad_str}"
+            f"avg len   {avg}  │  P0 {p0}  P1 {p1}  draw {dr}"
+            f"  │  MCTS depth  {mcts_d_str}  │  root concen  {mcts_c_str}  │  grad  {grad_str}"
         )
 
         # Buffer row

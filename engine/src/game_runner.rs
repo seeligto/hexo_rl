@@ -215,6 +215,12 @@ pub struct SelfPlayRunner {
     ///   winning_line_flat: 361 floats with 1.0 at winning-line cell positions, 0.0 elsewhere.
     recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize, Vec<f32>, Vec<f32>)>>>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    /// Accumulated MCTS leaf depth across all searches (scaled by 1_000_000 to preserve fractional part).
+    mcts_depth_accum: Arc<AtomicU64>,
+    /// Accumulated root concentration * 1_000_000 across all searches.
+    mcts_conc_accum: Arc<AtomicU64>,
+    /// Number of searches (moves) contributing to the above accumulators.
+    mcts_stat_count: Arc<AtomicU64>,
 }
 
 #[pymethods]
@@ -284,6 +290,9 @@ impl SelfPlayRunner {
             results: Arc::new(Mutex::new(VecDeque::new())),
             recent_game_results: Arc::new(Mutex::new(VecDeque::new())),
             handles: Arc::new(Mutex::new(Vec::new())),
+            mcts_depth_accum: Arc::new(AtomicU64::new(0)),
+            mcts_conc_accum: Arc::new(AtomicU64::new(0)),
+            mcts_stat_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -324,6 +333,9 @@ impl SelfPlayRunner {
             let gumbel_explore_moves = self.gumbel_explore_moves;
             let results_queue = self.results.clone();
             let recent_game_results = self.recent_game_results.clone();
+            let mcts_depth_accum = self.mcts_depth_accum.clone();
+            let mcts_conc_accum = self.mcts_conc_accum.clone();
+            let mcts_stat_count = self.mcts_stat_count.clone();
 
             let handle = thread::spawn(move || {
                 let mut tree = MCTSTree::new_full(c_puct, crate::mcts::VIRTUAL_LOSS_PENALTY, fpu_reduction);
@@ -502,6 +514,14 @@ impl SelfPlayRunner {
                             temp_min  // settled phase: minimal exploration
                         };
                         let policy = tree.get_policy(temperature, BOARD_SIZE);
+
+                        // Accumulate MCTS health stats once per search (not in inner sim loop).
+                        {
+                            let (depth, conc) = tree.last_search_stats();
+                            mcts_depth_accum.fetch_add((depth * 1_000_000.0) as u64, Ordering::Relaxed);
+                            mcts_conc_accum.fetch_add((conc * 1_000_000.0) as u64, Ordering::Relaxed);
+                            mcts_stat_count.fetch_add(1, Ordering::Relaxed);
+                        }
 
                         // Completed Q-values: compute improved policy for training target.
                         // Move selection still uses temperature-scaled visit counts above.
@@ -748,6 +768,28 @@ impl SelfPlayRunner {
             self.o_wins.load(Ordering::Relaxed),
             self.draws.load(Ordering::Relaxed),
         )
+    }
+
+    /// Mean MCTS leaf depth across all searches since `start()`.
+    /// Returns 0.0 before any searches have been recorded.
+    #[getter]
+    pub fn mcts_mean_depth(&self) -> f32 {
+        let count = self.mcts_stat_count.load(Ordering::Relaxed);
+        if count == 0 {
+            return 0.0;
+        }
+        (self.mcts_depth_accum.load(Ordering::Relaxed) as f64 / (count as f64 * 1_000_000.0)) as f32
+    }
+
+    /// Mean root concentration (max child visits / total root visits) since `start()`.
+    /// Range [0.0, 1.0]. Returns 0.0 before any searches have been recorded.
+    #[getter]
+    pub fn mcts_mean_root_concentration(&self) -> f32 {
+        let count = self.mcts_stat_count.load(Ordering::Relaxed);
+        if count == 0 {
+            return 0.0;
+        }
+        self.mcts_conc_accum.load(Ordering::Relaxed) as f32 / (count as f32 * 1_000_000.0)
     }
 
     /// Drain and return all buffered game results since the last call.
