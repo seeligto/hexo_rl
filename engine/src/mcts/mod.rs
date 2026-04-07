@@ -1159,6 +1159,29 @@ mod tests {
     // Python's prune_policy_targets (trainer.py) to avoid double-pruning.
 
     #[test]
+    fn test_last_search_stats_bounds_after_sims() {
+        let mut tree = MCTSTree::new(1.5);
+        tree.new_game(Board::new());
+
+        let n_sims = 10;
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform = vec![1.0 / n_actions as f32; n_actions];
+        for _ in 0..n_sims {
+            let leaves = tree.select_leaves(1);
+            let n = leaves.len();
+            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+            let values = vec![0.0f32; n];
+            tree.expand_and_backup(&policies, &values);
+        }
+
+        let (mean_depth, root_concentration) = tree.last_search_stats();
+        assert!(mean_depth >= 0.0,
+            "mean_depth must be >= 0.0, got {mean_depth}");
+        assert!(root_concentration >= 0.0 && root_concentration <= 1.0,
+            "root_concentration must be in [0.0, 1.0], got {root_concentration}");
+    }
+
+    #[test]
     fn test_improved_policy_illegal_actions_stay_zero() {
         let tree = setup_improved_policy_tree(&[
             (10, 5.0, 0.7),

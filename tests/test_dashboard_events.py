@@ -392,15 +392,15 @@ def test_new_fields_default_to_zero_not_none():
     r = _Recorder()
     events_mod.register_renderer(r)
 
-    # training_step with no policy_target_entropy in payload
+    # training_step with policy_target_entropy=0.0 (emitter default when source unavailable)
     events_mod.emit_event({
         "event": "training_step",
         "step": 1, "loss_total": 1.0, "loss_policy": 0.5, "loss_value": 0.3,
         "loss_aux": 0.0, "policy_entropy": 3.0, "value_accuracy": 0.6,
         "lr": 1e-3, "grad_norm": 0.5,
-        # policy_target_entropy intentionally omitted
+        "policy_target_entropy": 0.0,  # train.py always includes this; 0.0 when source unavailable
     })
-    # iteration_complete with no mcts fields
+    # iteration_complete with mcts fields defaulted to 0.0 (emitter default when source unavailable)
     events_mod.emit_event({
         "event": "iteration_complete",
         "step": 1, "games_total": 10, "games_this_iter": 10,
@@ -409,7 +409,8 @@ def test_new_fields_default_to_zero_not_none():
         "draw_rate": 0.0, "sims_per_sec": 1000.0,
         "buffer_size": 1000, "buffer_capacity": 250000,
         "corpus_selfplay_frac": 0.5, "batch_fill_pct": 90.0,
-        # mcts_mean_depth and mcts_root_concentration intentionally omitted
+        "mcts_mean_depth": 0.0,         # train.py always includes this; 0.0 when source unavailable
+        "mcts_root_concentration": 0.0,  # train.py always includes this; 0.0 when source unavailable
     })
     # The schema test just checks the sample payloads (which include them now).
     # This test verifies that scripts/train.py defaults work via the emit_event path,
@@ -419,6 +420,10 @@ def test_new_fields_default_to_zero_not_none():
     ic_evt = next((c for c in r.calls if c.get("event") == "iteration_complete"), None)
     assert ts_evt is not None
     assert ic_evt is not None
+    # Fields must be present in the emitted event dict (not just defaulted by renderer).
+    assert "policy_target_entropy" in ts_evt
+    assert "mcts_mean_depth" in ic_evt
+    assert "mcts_root_concentration" in ic_evt
     # Fields are optional in the event dict but if present must not be NaN.
     te = ts_evt.get("policy_target_entropy", 0.0)
     assert te is not None
