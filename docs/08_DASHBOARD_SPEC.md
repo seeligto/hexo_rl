@@ -87,10 +87,11 @@ Emitted every `config.monitoring.log_interval` training steps (default: 10).
     "corpus_selfplay_frac":     float,
     "batch_fill_pct":           float,   # avg inference batch fill % this iteration.
                                          # 0.0 if not available.
-    "mcts_mean_depth":          float,   # NEW §47 — mean leaf depth per search this
-                                         # iteration. 0.0 if unavailable.
+    "mcts_mean_depth":          float,   # NEW §47 — mean leaf depth per search since
+                                         # SelfPlayRunner.start() (run-wide rolling mean,
+                                         # not reset per iteration). 0.0 if unavailable.
     "mcts_root_concentration":  float,   # NEW §47 — mean of (max_child_visits/total)
-                                         # at root, averaged over all searches.
+                                         # at root since SelfPlayRunner.start() (run-wide).
                                          # Range [0.0, 1.0]. 0.0 if unavailable.
 }
 ```

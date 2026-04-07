@@ -215,7 +215,7 @@ pub struct SelfPlayRunner {
     ///   winning_line_flat: 361 floats with 1.0 at winning-line cell positions, 0.0 elsewhere.
     recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize, Vec<f32>, Vec<f32>)>>>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
-    /// Accumulated MCTS leaf depth across all searches (integer units match u64).
+    /// Accumulated MCTS leaf depth across all searches (scaled by 1_000_000 to preserve fractional part).
     mcts_depth_accum: Arc<AtomicU64>,
     /// Accumulated root concentration * 1_000_000 across all searches.
     mcts_conc_accum: Arc<AtomicU64>,
@@ -518,7 +518,7 @@ impl SelfPlayRunner {
                         // Accumulate MCTS health stats once per search (not in inner sim loop).
                         {
                             let (depth, conc) = tree.last_search_stats();
-                            mcts_depth_accum.fetch_add(depth as u64, Ordering::Relaxed);
+                            mcts_depth_accum.fetch_add((depth * 1_000_000.0) as u64, Ordering::Relaxed);
                             mcts_conc_accum.fetch_add((conc * 1_000_000.0) as u64, Ordering::Relaxed);
                             mcts_stat_count.fetch_add(1, Ordering::Relaxed);
                         }
@@ -778,7 +778,7 @@ impl SelfPlayRunner {
         if count == 0 {
             return 0.0;
         }
-        self.mcts_depth_accum.load(Ordering::Relaxed) as f32 / count as f32
+        (self.mcts_depth_accum.load(Ordering::Relaxed) as f64 / (count as f64 * 1_000_000.0)) as f32
     }
 
     /// Mean root concentration (max child visits / total root visits) since `start()`.
