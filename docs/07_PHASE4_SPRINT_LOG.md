@@ -6,11 +6,11 @@ For per-day narrative see `docs/07_PHASE4_SPRINT_LOG_BACKUP.md`.
 
 ---
 
-## Classification Audit (§1–§65)
+## Classification Audit (§1–§66)
 
 | Bucket | Sections |
 |---|---|
-| KEEP-FULL | §1, §2, §4, §5, §15, §19, §21, §26, §27, §28, §33, §34, §35, §36, §37, §40, §46b, §47, §58, §59, §61, §63 |
+| KEEP-FULL | §1, §2, §4, §5, §15, §19, §21, §26, §27, §28, §33, §34, §35, §36, §37, §40, §46b, §47, §58, §59, §61, §63, §66 |
 | KEEP-CONDENSED | §6, §11, §13, §14, §16, §17, §20, §22, §23, §24, §29, §30(game-cap/T_max), §31, §38, §41–§46, §48, §50–§57 |
 | MERGE | §3+§25+§30(torch)+§32→torch.compile arc; §30(quiescence-gate)→§28; §52+§60→eval_interval; §61+§62→Gumbel; §63+§64+§65→dashboard metrics |
 | BENCHMARK-STALE | 2026-04-01 table, 2026-04-02 table, §18 corrected table, §39 table, §51 table |
@@ -374,6 +374,16 @@ Depths are accumulated as ×1e6 fixed-point in AtomicU64 (first commit had trunc
 - Game records written to `runs/<run_id>/games/<game_id>.json` on arrival. In-memory index capped at 50 entries (`monitoring.viewer_max_memory_games`). Disk rotated to `monitoring.viewer_max_disk_games: 1000` oldest-first.
 - Viewer URL: `http://localhost:5001/viewer` (during training).
 - Features: hex board canvas (pointy-top), threat overlay, MCTS visit heatmap (toggle), value sparkline, scrubber, play-against-model mode.
+
+## 9. Gumbel MCTS Activation & Training Restart (§66)
+
+**Date:** 2026-04-07
+**Files:** `configs/selfplay.yaml`, `CLAUDE.md`, `docs/reviews/2026-04_architecture_review.md`
+
+- **`gumbel_mcts: true` on desktop is intentional.** The desktop (Ryzen 7 3700x + RTX 3070) config has `gumbel_mcts: true` in `configs/selfplay.yaml` for the Phase 4.0 sustained run. Laptop and cloud configs remain `false` until benchmarked on those hosts. CLAUDE.md updated to document this per-host override rather than stating a single default.
+- **`completed_q_values` KL loss was silently disabled.** Architecture review (C1) found that `trainer.py:305` performs a nested-dict lookup (`self.config.get("selfplay", {}).get("completed_q_values", False)`) into the flattened `combined_config` dict, which always returns `False`. The intended KL policy loss was never active — all prior self-play training used CE loss instead. Fix is tracked as a separate commit (one-line change to flat key lookup).
+- **Phase 4.0 sustained run will restart from Phase 3C pretrained weights** after the C1 fix lands. The prior run (~18,750 steps) trained under CE loss instead of the intended KL loss, so those checkpoints are not valid for the Phase 4.0 exit criterion. Restart is intentional, not a regression.
+- **Benchmark baseline is pre-Gumbel.** The MCTS 55,478 sim/s figure was measured with `gumbel_mcts: false`. Gumbel Sequential Halving adds overhead at the root; re-bench is pending after the C1 fix and restart.
 
 ---
 
