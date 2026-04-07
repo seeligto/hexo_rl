@@ -1,0 +1,6 @@
+# gumbel_targets — PUCT search + completed Q-value targets (no Gumbel root)
+# Laptop / cloud variant. Improved policy targets without Gumbel search cost.
+# Launch: make train VARIANT=gumbel_targets
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true

@@ -14,6 +14,12 @@ CHECKPOINT_BOOTSTRAP ?= checkpoints/bootstrap_model.pt
 CHECKPOINT_LATEST ?= $(shell ls -1 checkpoints/checkpoint_*.pt 2>/dev/null | tail -n 1)
 PRETRAIN_CKPT ?= $(shell ls -1 checkpoints/pretrain/pretrain_*.pt 2>/dev/null | tail -n 1)
 
+# Named variant from configs/variants/ — deep-merged on top of selfplay.yaml.
+# Usage: make train VARIANT=gumbel_full   (or gumbel_targets, baseline_puct)
+# Omit to run with selfplay.yaml defaults (equivalent to baseline_puct).
+VARIANT ?=
+VARIANT_FLAG = $(if $(VARIANT),--variant $(VARIANT),)
+
 SEALBOT_N ?= 100
 SEALBOT_TIME ?= 0.5
 SEALBOT_SIMS ?= 128
@@ -122,17 +128,17 @@ bench.mcts: ## Dedicated Rust MCTS micro-benchmark
 ## Training
 
 .PHONY: train
-train: ## Self-play RL from bootstrap checkpoint + corpus (production default)
-	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP)
+train: ## Self-play RL from bootstrap checkpoint + corpus (VARIANT=gumbel_full|gumbel_targets|baseline_puct)
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) $(VARIANT_FLAG)
 
 .PHONY: train.nodash
-train.nodash: ## Self-play RL from bootstrap checkpoint, no dashboard
-	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) --no-dashboard
+train.nodash: ## Self-play RL from bootstrap checkpoint, no dashboard (VARIANT= supported)
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) --no-dashboard $(VARIANT_FLAG)
 
 .PHONY: train.bg
-train.bg: ## Self-play RL from bootstrap checkpoint, background (logs/)
+train.bg: ## Self-play RL from bootstrap checkpoint, background (VARIANT= supported)
 	@mkdir -p logs
-	@nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) \
+	@nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) $(VARIANT_FLAG) \
 		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 & \
 		echo $$! > logs/train.pid; \
 		echo "Training started (PID $$(cat logs/train.pid))"
@@ -206,9 +212,9 @@ train.smoke: ## 20-step smoke test to verify training end-to-end
 	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 20
 
 .PHONY: train.resume
-train.resume: ## Resume training from latest checkpoint
+train.resume: ## Resume training from latest checkpoint (VARIANT= supported)
 	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
-	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST)
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST) $(VARIANT_FLAG)
 
 .PHONY: plot.train.latest
 plot.train.latest: ## Plot latest training log

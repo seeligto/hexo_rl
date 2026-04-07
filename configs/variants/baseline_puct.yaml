@@ -1,0 +1,6 @@
+# baseline_puct — standard PUCT + visit-count policy targets
+# Mirrors selfplay.yaml defaults. Use when comparing against unmodified AlphaZero.
+# Launch: make train VARIANT=baseline_puct (or omit --variant entirely)
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: false
