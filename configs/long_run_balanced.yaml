@@ -4,16 +4,8 @@
 model:
   res_blocks: 10          # slightly smaller than production 12-block for throughput
 
-mcts:
-  n_simulations: 800
-  c_puct: 1.5
-  dirichlet_alpha: 0.3
-  epsilon: 0.25
-  temperature_threshold_ply: 30
-
 selfplay:
   n_workers: 6
-  n_simulations: 160
   inference_batch_size: 64
   inference_max_wait_ms: 8.0
   dispatch_wait_ms: 2.0

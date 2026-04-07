@@ -5,7 +5,6 @@ fp16: true
 torch_compile: false   # disabled — Python 3.14 CUDA graph incompatibility (see sprint §25, §30)
 policy_prune_frac: 0.02
 # Independent of gumbel_mcts search — controls policy target computation, not search algorithm
-completed_q_values: true   # use KL loss instead of CE for policy (must match selfplay)
 batch_size: 256
 min_buffer_size: 256
 training_steps_per_game: 2.0
