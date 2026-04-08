@@ -591,7 +591,8 @@ def pretrain() -> None:
     aux_weight = float(config.get("aux_opp_reply_weight", 0.15))
     source_weights: Dict[str, float] = corpus_cfg.get("source_weights", {})
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    from hexo_rl.utils.device import best_device
+    device = best_device()
     console.print(f"[bold]Pretrain — device:[/bold] {device}")
 
     # Quality scores

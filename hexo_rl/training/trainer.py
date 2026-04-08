@@ -32,6 +32,7 @@ from torch.amp import GradScaler, autocast  # type: ignore[attr-defined]
 import structlog
 
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.utils.device import best_device
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
     compute_aux_loss, compute_total_loss, compute_uncertainty_loss,
@@ -89,9 +90,7 @@ class Trainer:
         checkpoint_dir: str | Path = "checkpoints",
         device: Optional[torch.device] = None,
     ) -> None:
-        self.device = device or torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
+        self.device = device or best_device()
         self.model = model.to(self.device)
 
         fp16_requested = bool(config.get("fp16", True))

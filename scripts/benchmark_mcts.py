@@ -14,7 +14,8 @@ from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.worker import SelfPlayWorker
 
 def benchmark_mcts():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    from hexo_rl.utils.device import best_device
+    device = best_device()
     print(f"Benchmarking on: {device}")
     
     # Use a standard sized model

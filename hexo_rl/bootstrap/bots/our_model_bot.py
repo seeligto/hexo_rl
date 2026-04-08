@@ -36,7 +36,8 @@ class OurModelBot(BotProtocol):
         temperature: float = 0.0,
     ) -> None:
         if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            from hexo_rl.utils.device import best_device
+            device = best_device()
 
         payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         state_dict = normalize_model_state_dict_keys(Trainer._extract_model_state(payload))

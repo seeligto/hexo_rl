@@ -61,6 +61,8 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    if hasattr(torch, "mps") and torch.backends.mps.is_available():
+        torch.mps.manual_seed(seed)
 
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -179,7 +181,8 @@ def main() -> None:
     log.info("seeded", seed=seed)
 
     # ── Device ──
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    from hexo_rl.utils.device import best_device
+    device = best_device()
     log.info("device", device=str(device))
 
     # ── Model + Trainer ──
@@ -1007,6 +1010,9 @@ def main() -> None:
                         vram_gb=round(float(gpu_monitor.vram_used_gb), 2),
                         ownership_loss=round(float(loss_info["ownership_loss"]), 4) if loss_info.get("ownership_loss") is not None else None,
                         threat_loss=round(float(loss_info["threat_loss"]), 4) if loss_info.get("threat_loss") is not None else None,
+                        batch_fill_pct=round(pool.batch_fill_pct, 1),
+                        inf_forward_count=pool._inference_server._forward_count,
+                        inf_total_requests=pool._inference_server._total_requests,
                     )
 
     tracemalloc.start(3)
