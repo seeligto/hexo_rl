@@ -7,8 +7,8 @@ policy_prune_frac: 0.02
 # Independent of gumbel_mcts search — controls policy target computation, not search algorithm
 batch_size: 256
 min_buffer_size: 256
-training_steps_per_game: 2.0
-max_train_burst: 8
+training_steps_per_game: 4.0   # sweep P3 winner (was 2.0, see sprint §69)
+max_train_burst: 16            # sweep P3 winner (was 8, see sprint §69)
 lr: 0.002
 weight_decay: 0.0001
 grad_clip: 1.0
