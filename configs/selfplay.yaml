@@ -28,7 +28,7 @@ selfplay:
   # Compute improved policy targets using MCTS Q-values instead of raw visit counts.
   # Primary benefit: useful policy signal even at 50-sim fast games.
   # Override via --variant gumbel_full or --variant gumbel_targets.
-  completed_q_values: false
+  completed_q_values: true
   c_visit: 50.0
   c_scale: 1.0
 
