@@ -112,6 +112,10 @@ N_CORES ?= $(shell $(PY) -c "import os; print(os.cpu_count() or 4)")
 bench.full: ## Higher-confidence benchmark (n=5, CPU pin attempted, warm-up)
 	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full
 
+.PHONY: bench.macos
+bench.macos: ## macOS benchmark — same as bench.full; platform-adaptive targets auto-selected
+	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full
+
 .PHONY: bench.stress
 bench.stress: ## Heavy stress test (n=10, CPU pin required, 5-min pool runs)
 	$(PY) scripts/benchmark.py --mcts-sims 100000 --pool-workers $(N_CORES) --pool-duration 300 --mcts-search-sims 800 --mode stress

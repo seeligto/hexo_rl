@@ -95,7 +95,8 @@ def main() -> None:
     cfg["evaluation"]["sealbot_model_sims"] = int(args.model_sims)
 
     ckpts = resolve_checkpoints(args)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    from hexo_rl.utils.device import best_device
+    device = best_device()
 
     out_path = (
         Path(args.out)

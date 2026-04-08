@@ -436,7 +436,7 @@ def benchmark_worker_pool(
 # ── Report ────────────────────────────────────────────────────────────────────
 
 # (row_label, result_name, sub_key, metric_key_in_stats_or_value, target, higher_is_better)
-_CHECKS: list[tuple[str, str, str | None, str, float, bool]] = [
+_CHECKS_CUDA: list[tuple[str, str, str | None, str, float, bool]] = [
     ("MCTS sim/s (CPU, no NN)",           "MCTS (CPU only, no NN)",  None,    "value",   26_000,   True),
     ("NN inference batch=64 pos/s",       "NN inference (batch=64)", None,    "value",    8_500,   True),
     ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",      3.5,   False),
@@ -448,6 +448,42 @@ _CHECKS: list[tuple[str, str, str | None, str, float, bool]] = [
     ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  625_000,   True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
 ]
+
+_CHECKS_MPS: list[tuple[str, str, str | None, str, float, bool]] = [
+    ("MCTS sim/s (CPU, no NN)",           "MCTS (CPU only, no NN)",  None,    "value",   26_000,   True),
+    ("NN inference batch=64 pos/s",       "NN inference (batch=64)", None,    "value",    3_000,   True),
+    ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",      8.0,   False),
+    ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  630_000,   True),
+    ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_500,   False),
+    ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_400,   False),
+    # GPU util / VRAM omitted — pynvml not available on macOS; benchmark_gpu_utilisation returns None
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  200_000,   True),
+    ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
+]
+
+_CHECKS_CPU: list[tuple[str, str, str | None, str, float, bool]] = [
+    ("MCTS sim/s (CPU, no NN)",           "MCTS (CPU only, no NN)",  None,    "value",   20_000,   True),
+    ("NN inference batch=64 pos/s",       "NN inference (batch=64)", None,    "value",      800,   True),
+    ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",     20.0,   False),
+    ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  630_000,   True),
+    ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_500,   False),
+    ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_400,   False),
+    # GPU util / VRAM omitted — no GPU on CPU-only systems
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",   80_000,   True),
+    ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
+]
+
+
+def _build_checks(
+    device: "torch.device",
+) -> "list[tuple[str, str, str | None, str, float, bool]]":
+    """Return the appropriate check list for the given device type."""
+    import torch as _torch
+    if device.type == "cuda":
+        return _CHECKS_CUDA
+    if device.type == "mps":
+        return _CHECKS_MPS
+    return _CHECKS_CPU
 
 
 def _get_metric(by_name: dict, result_name: str, sub_key: str | None) -> dict | None:
@@ -472,8 +508,11 @@ def _fmt_range(stats: dict) -> str:
 
 
 def print_benchmark_report(results: List[Dict[str, Any]],
-                           n_runs: int, warmup_note: str) -> bool:
+                           n_runs: int, warmup_note: str,
+                           checks: "list[tuple] | None" = None) -> bool:
     """Print a rich pass/fail table. Returns True if all checks pass."""
+    if checks is None:
+        checks = _CHECKS_CUDA
     table = Table(title="Benchmark Report", show_lines=True)
     table.add_column("Metric", style="bold", min_width=36)
     table.add_column("Median", justify="right")
@@ -485,7 +524,7 @@ def print_benchmark_report(results: List[Dict[str, Any]],
     by_name = {r["name"]: r for r in results}
     all_pass = True
 
-    for row_label, result_name, sub_key, val_key, target, higher in _CHECKS:
+    for row_label, result_name, sub_key, val_key, target, higher in checks:
         metric = _get_metric(by_name, result_name, sub_key)
         if metric is None or metric.get("value") is None:
             table.add_row(row_label, "-", "-", "-", "SKIP", "[yellow]SKIP[/yellow]")
@@ -553,8 +592,11 @@ def print_benchmark_report(results: List[Dict[str, Any]],
     return all_pass
 
 
-def write_json_report(results: List[Dict[str, Any]], n_runs: int) -> Path:
+def write_json_report(results: List[Dict[str, Any]], n_runs: int,
+                      checks: "list[tuple] | None" = None) -> Path:
     """Write structured JSON report to reports/benchmarks/."""
+    if checks is None:
+        checks = _CHECKS_CUDA
     report_dir = ROOT / "reports" / "benchmarks"
     report_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
@@ -564,7 +606,7 @@ def write_json_report(results: List[Dict[str, Any]], n_runs: int) -> Path:
     metrics: dict[str, Any] = {}
     targets_met: dict[str, bool] = {}
 
-    for row_label, result_name, sub_key, val_key, target, higher in _CHECKS:
+    for row_label, result_name, sub_key, val_key, target, higher in checks:
         metric = _get_metric(by_name, result_name, sub_key)
         if metric is None or metric.get("value") is None:
             continue
@@ -654,7 +696,9 @@ def main() -> None:
     else:
         config = load_config(*_BASE_CONFIGS)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    from hexo_rl.utils.device import best_device
+    device = best_device()
+    checks = _build_checks(device)
     console.print(f"[bold]Benchmarking on {device} | mode={args.mode} | n={n_runs}[/bold]")
 
     from hexo_rl.model.network import HexTacToeNet, compile_model
@@ -757,8 +801,8 @@ def main() -> None:
                     console.print(f"  [dim]{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
 
         warmup_note = f"{warmup_mcts:.0f}s MCTS / {warmup_nn:.0f}s NN / {warmup_buffer:.0f}s buffer / {warmup_worker:.0f}s worker"
-        all_pass = print_benchmark_report(results, n_runs, warmup_note)
-        write_json_report(results, n_runs)
+        all_pass = print_benchmark_report(results, n_runs, warmup_note, checks=checks)
+        write_json_report(results, n_runs, checks=checks)
         sys.exit(0 if all_pass else 1)
 
     finally:
