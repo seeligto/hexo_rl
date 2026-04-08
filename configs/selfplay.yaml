@@ -28,7 +28,7 @@ selfplay:
   # Compute improved policy targets using MCTS Q-values instead of raw visit counts.
   # Primary benefit: useful policy signal even at 50-sim fast games.
   # Override via --variant gumbel_full or --variant gumbel_targets.
-  completed_q_values: true
+  completed_q_values: false
   c_visit: 50.0
   c_scale: 1.0
 
@@ -43,11 +43,11 @@ selfplay:
 
   n_workers: 14
   inference_batch_size: 64
-  inference_max_wait_ms: 12.0
+  inference_max_wait_ms: 4.0   # sweep P3 winner (was 12.0, see sprint §69)
   dispatch_wait_ms: 2.0
-  leaf_batch_size: 16
+  leaf_batch_size: 8            # sweep §69: leaf_bs=16 hurts throughput
   replay_buffer_capacity: 500000
-  max_game_moves: 200  # compound moves (each = 2 stones); draws beyond this cap
+  max_game_moves: 150  # sweep P3 winner (was 200, see sprint §69); compound moves, draws beyond cap
 
   playout_cap:
     fast_prob: 0.25
