@@ -75,6 +75,7 @@ After each commit, confirm tests still pass before starting the next task.
 Always check `docs/02_ROADMAP.md` for the current phase before starting work.
 
 **Current Status:** Phase 4.0 Self-Play RL loop is **Active**.
+
 - Pretrain validated: policy loss 5.0 → 2.07, ≥95/100 wins vs RandomBot.
 - First self-play run: 4,940 steps, found 5 issues, all fixed.
 - Dashboard rebuilt: event-driven fan-out (terminal + web at :5001).
@@ -149,8 +150,8 @@ At the start of every session, in this order:
 - `make test.rust`
 - `make test.py`
 
-5. Check `git log --oneline -20` to understand what was last committed
-6. Only then begin work
+1. Check `git log --oneline -20` to understand what was last committed
+2. Only then begin work
 
 ### Session end protocol
 
@@ -530,6 +531,7 @@ than prior desktop baseline due to faster single-thread IPC. All 10 targets PASS
 ## Phase 4.0 architecture baseline
 
 Starting config for self-play RL (do not exceed without benchmarking):
+
 - Network: 12 residual blocks × 128 channels, SE blocks on every block
 - Value head: global avg + max pooling → FC → BCE loss (binary cross-entropy on sigmoid)
 - Auxiliary loss: opponent reply prediction (weight 0.15)
@@ -547,12 +549,13 @@ Starting config for self-play RL (do not exceed without benchmarking):
   - Sequential Halving budget allocation across halving phases
   - Non-root nodes: unchanged (PUCT + dynamic FPU)
   - Config: `gumbel_mcts`, `gumbel_m` (default 16), `gumbel_explore_moves` (default 10)
-  - **Desktop (3070):** `gumbel_mcts: true` — intentional for Phase 4.0 sustained run
-  - **Laptop / cloud:** `gumbel_mcts: false` — default until benchmarked on those hosts
+  - **Desktop (3070):** `gumbel_mcts: true` — intentional for Phase 4.0 sustained run (pre-§69 defaults, not yet swept on desktop hardware)
+  - **Laptop (8845HS + 4060):** `gumbel_mcts: false`, P3 sweep winner as base config — `ratio=4, burst=16, game_moves=150, wait_ms=4, leaf_bs=8, inf_bs=64, workers=14` (see sprint log §69 for provenance)
   - Completed Q-values (`completed_q_values: true`) provides policy targets for training
   - **Known issue:** `completed_q_values` KL loss path was silently dead due to nested-dict lookup bug in `trainer.py` (see architecture review C1). Fix tracked separately; prior training used CE loss instead of KL.
 
 Resolved before Phase 4.0 launch:
+
 - [x] Open Question 6: sequential vs compound action space
 - [x] Open Question 5: supervised→self-play transition schedule
 - [ ] Open Question 2: value aggregation strategy (min/mean/attention)

@@ -150,6 +150,26 @@ toward tactically richer games.
 
 ---
 
+### Q16 — leaf_batch_size round-trip hypothesis [WATCH]
+
+**Priority:** MEDIUM (Phase 4.5 target, blocked on baseline)
+
+**Question:** Does a `game_runner.rs` refactor to coalesce Phase-i candidate
+inference across a single batch recover the theoretical `leaf_batch_size` gain?
+The §69 sweep showed `leaf_bs=16` consistently hurts throughput (−19–30% games/hr)
+and inflates draw rate (+25pp) — the opposite of the theory that larger leaf batches
+reduce inference round-trips. The suspected mechanism: current game_runner submits
+leaves per-worker, so `leaf_bs=16` just delays submission without reducing total calls
+(calls/move actually *increases*). A coalesced batch across workers might change this.
+
+**Prereq:** Phase 4.5 baseline established. Do not attempt without a reference point.
+
+**Negative result reference:** Sprint log §69.
+
+**Estimated cost:** ~2 GPU-days (implementation + A/B comparison).
+
+---
+
 ## Deferred (Phase 5+)
 
 | # | Question | Reason deferred |
