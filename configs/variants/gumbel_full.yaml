@@ -1,6 +1,12 @@
-# gumbel_full — Gumbel MCTS root search + completed Q-value targets
-# Desktop (RTX 3070) variant. Full Danihelka et al. ICLR 2022 pipeline.
+# Desktop (3070) variant. NOT swept on desktop hardware yet — knobs are the
+# pre-§69 defaults. Do not copy laptop P3 knobs here without a desktop-side
+# sweep. See sprint log §69.
 # Launch: make train VARIANT=gumbel_full
+training_steps_per_game: 2.0
+max_train_burst: 8
 selfplay:
+  max_game_moves: 200
+  inference_max_wait_ms: 12.0
   gumbel_mcts: true
+  gumbel_m: 16
   completed_q_values: true
