@@ -1,6 +1,12 @@
-# baseline_puct — standard PUCT + visit-count policy targets
-# Mirrors selfplay.yaml defaults. Use when comparing against unmodified AlphaZero.
-# Launch: make train VARIANT=baseline_puct (or omit --variant entirely)
+# PRE-§67 HISTORICAL BASELINE. Do not use for new runs.
+# Retained for reproducing pre-2026-04-07 results only.
+# Pins all values that changed in the §69 sweep so base-value
+# drift does not silently alter this variant's resolved config.
+training_steps_per_game: 2.0
+max_train_burst: 8
 selfplay:
   gumbel_mcts: false
   completed_q_values: false
+  max_game_moves: 200
+  inference_max_wait_ms: 12.0
+  leaf_batch_size: 16

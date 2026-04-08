@@ -1,5 +1,7 @@
 # gumbel_targets — PUCT search + completed Q-value targets (no Gumbel root)
-# Laptop / cloud variant. Improved policy targets without Gumbel search cost.
+# Laptop variant. P3 sweep winner knobs are in base selfplay.yaml + training.yaml;
+# this variant only enables completed_q_values on top.
+# Knob provenance: sprint log §69.
 # Launch: make train VARIANT=gumbel_targets
 selfplay:
   gumbel_mcts: false
