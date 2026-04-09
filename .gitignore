@@ -44,6 +44,10 @@ reports/verify_gumbel_2026-04-10/*
 !reports/bench_investigation_2026-04-09/
 reports/bench_investigation_2026-04-09/*
 !reports/bench_investigation_2026-04-09/verdict.md
+!reports/dirichlet_port_2026-04-10/
+reports/dirichlet_port_2026-04-10/*
+!reports/dirichlet_port_2026-04-10/verdict.md
+!reports/dirichlet_port_2026-04-10/trace.jsonl
 checkpoints/
 logs/
 logs/scrape_history.log
