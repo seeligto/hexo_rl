@@ -132,7 +132,7 @@ block the training loop. Two built-in renderers:
 
 ```bash
 make train           # both dashboards enabled by default
-make train.nodash    # training only, no dashboard
+make train DASHBOARD=0  # training only, no dashboard
 make train.bg        # background with PID tracking
 make train.stop      # kill background run
 make train.status    # check if running, show recent log
@@ -225,7 +225,7 @@ benchmark table (2026-04-03 baseline, correct 12-block × 128-channel model).
 Quick local sanity pass:
 
 ```bash
-make bench.lite
+make bench
 ```
 
 Throughput-oriented pass:
@@ -237,21 +237,20 @@ make bench.full
 Heavy stability and deep search stress test:
 
 ```bash
-make bench.stress
+make bench
 ```
 
 Save a dated baseline JSON:
 
 ```bash
-make bench.baseline
+make bench
 ```
 
 Corpus and pretrain targets:
 
 ```bash
-make corpus.npz        # export corpus to data/bootstrap_corpus.npz
-make pretrain.lite     # smoke test (100 steps)
-make pretrain.full     # full pretrain (15 epochs)
+make corpus.export     # export corpus to data/bootstrap_corpus.npz
+make pretrain          # full pretrain (15 epochs)
 ```
 
 If worker-pool throughput reports 0 positions/hour in short runs, increase `--pool-duration`.
@@ -445,9 +444,7 @@ Benchmark modes:
 
 | Mode | Runs | Use case |
 |---|---|---|
-| `make bench.lite` | n=3 | Quick local sanity check |
-| `make bench.full` | n=5 | Standard regression gate |
-| `make bench.stress` | n=10 | Pre-release confidence |
+| `make bench` | n=5 | Full benchmark gate (n=5, 3s warm-up) |
 
 JSON reports are written to `reports/benchmarks/YYYY-MM-DD_HH-MM.json` for
 historical comparison.
