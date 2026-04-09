@@ -84,6 +84,8 @@ class TerminalDashboard:
             "loss_value": None,
             "loss_aux": None,
             "policy_entropy": None,
+            "policy_entropy_pretrain": None,
+            "policy_entropy_selfplay": None,
             "lr": None,
             "grad_norm": None,
             "games_total": None,
@@ -160,7 +162,8 @@ class TerminalDashboard:
         if event == "training_step":
             for key in (
                 "step", "loss_total", "loss_policy", "loss_value",
-                "loss_aux", "policy_entropy", "policy_target_entropy",
+                "loss_aux", "policy_entropy", "policy_entropy_pretrain",
+                "policy_entropy_selfplay", "policy_target_entropy",
                 "lr", "grad_norm",
             ):
                 if key in payload:
@@ -204,11 +207,17 @@ class TerminalDashboard:
         event = payload.get("event")
 
         if event == "training_step":
-            # Entropy collapse
+            # Entropy collapse (combined)
             ent = payload.get("policy_entropy")
             if ent is not None and ent < self._alert_entropy_min:
                 self._add_alert(
                     expiry, f"policy entropy {ent:.2f} — possible mode collapse"
+                )
+            # Selfplay-stream collapse (threshold: 1.5 nats per §70)
+            ent_sp = payload.get("policy_entropy_selfplay")
+            if ent_sp is not None and math.isfinite(ent_sp) and ent_sp < 1.5:
+                self._add_alert(
+                    expiry, f"selfplay entropy {ent_sp:.2f} — selfplay mode collapse"
                 )
 
             # Grad norm spike
@@ -372,10 +381,40 @@ class TerminalDashboard:
             f"  │  ram  {ram_str}  │  rss  {rss_str}  │  cpu  {cpu_str}"
         )
 
+        # Policy entropy split row (combined / pretrain / selfplay)
+        _COLLAPSE_THRESHOLD = 1.5  # nats, per §70
+        ent_pre = s["policy_entropy_pretrain"]
+        ent_sp  = s["policy_entropy_selfplay"]
+
+        def _fmt_ent_pre(v: Any) -> str:
+            if v is None or (isinstance(v, float) and not math.isfinite(v)):
+                return _EM_DASH
+            return f"{v:.2f}"
+
+        def _fmt_ent_sp(v: Any) -> str:
+            if v is None or (isinstance(v, float) and not math.isfinite(v)):
+                return _EM_DASH
+            if v < _COLLAPSE_THRESHOLD:
+                return f"[bold red]{v:.2f} !![/bold red]"
+            elif v < self._alert_entropy_warn:
+                return f"[yellow]{v:.2f}[/yellow]"
+            else:
+                return f"[green]{v:.2f}[/green]"
+
+        ent_tbl = Table(show_header=False, box=None, padding=(0, 2), expand=True)
+        ent_tbl.add_column(justify="left")
+        ent_tbl.add_row(
+            f"entropy  combined [bold]{_fmt_plain(s['policy_entropy'], 2) if s['policy_entropy'] is not None else _EM_DASH}[/bold]"
+            f"  │  pretrain {_fmt_ent_pre(ent_pre)}"
+            f"  │  selfplay {_fmt_ent_sp(ent_sp)}"
+            f"  [dim](collapse < {_COLLAPSE_THRESHOLD:.1f} nats)[/dim]"
+        )
+
         # Assemble
         outer = Table(show_header=False, box=None, expand=True, padding=0)
         outer.add_column()
         outer.add_row(loss_tbl)
+        outer.add_row(ent_tbl)
         outer.add_row(tp_tbl)
         outer.add_row(buf_tbl)
 

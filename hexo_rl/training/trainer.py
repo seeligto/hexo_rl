@@ -211,15 +211,22 @@ class Trainer:
         outcomes: "numpy.ndarray",
         ownership_targets: Optional[Any] = None,
         threat_targets: Optional[Any] = None,
+        n_pretrain: int = 0,
     ) -> Dict[str, float]:
         """Perform one gradient update from pre-built numpy arrays.
 
         Used by the mixed-buffer training loop (Phase 4.0) where samples
         are drawn from pretrained + self-play buffers externally.
+
+        Args:
+            n_pretrain: Number of rows (from the start of the batch) that came
+                        from the pretrained corpus. Used to compute per-stream
+                        entropy. 0 means all rows are self-play.
         """
         return self._train_on_batch(states, policies, outcomes,
                                      ownership_targets=ownership_targets,
-                                     threat_targets=threat_targets)
+                                     threat_targets=threat_targets,
+                                     n_pretrain=n_pretrain)
 
     def _train_on_batch(
         self,
@@ -228,6 +235,7 @@ class Trainer:
         outcomes: "numpy.ndarray",
         ownership_targets: Optional[Any] = None,
         threat_targets: Optional[Any] = None,
+        n_pretrain: int = 0,
     ) -> Dict[str, float]:
         """Core training step: forward, loss, backward, optimizer step."""
         import numpy  # noqa: F811 — deferred import for type alias above
@@ -376,6 +384,8 @@ class Trainer:
                 "policy_loss": float("nan"),
                 "value_loss": float("nan"),
                 "policy_entropy": float("nan"),
+                "policy_entropy_pretrain": float("nan"),
+                "policy_entropy_selfplay": float("nan"),
                 "policy_target_entropy": 0.0,
                 "grad_norm": float("nan"),
                 "value_accuracy": float("nan"),
@@ -404,6 +414,19 @@ class Trainer:
             p_fp32 = torch.exp(log_policy.float())
             policy_entropy = torch.special.entr(p_fp32).sum(dim=-1).mean().item()
 
+            # Per-stream entropy split (pretrain rows first, selfplay rows after).
+            # n_pretrain=0 means all rows are self-play (single-buffer path).
+            _batch_n = p_fp32.shape[0]
+            if n_pretrain > 0 and n_pretrain < _batch_n:
+                policy_entropy_pretrain = torch.special.entr(p_fp32[:n_pretrain]).sum(dim=-1).mean().item()
+                policy_entropy_selfplay = torch.special.entr(p_fp32[n_pretrain:]).sum(dim=-1).mean().item()
+            elif n_pretrain == 0:
+                policy_entropy_pretrain = float("nan")
+                policy_entropy_selfplay = policy_entropy
+            else:  # entire batch is pretrain
+                policy_entropy_pretrain = policy_entropy
+                policy_entropy_selfplay = float("nan")
+
             # Value accuracy: fraction where predicted winner matches actual.
             # v_logit > 0 → predict win (outcome > 0), v_logit ≤ 0 → predict loss.
             pred_win = (v_logit.squeeze(1) > 0).float()
@@ -423,14 +446,16 @@ class Trainer:
         lr = self.optimizer.param_groups[0]["lr"]
 
         result = {
-            "loss":                   loss.item(),
-            "policy_loss":            policy_loss.item(),
-            "value_loss":             value_loss.item(),
-            "policy_entropy":         policy_entropy,
-            "policy_target_entropy":  policy_target_entropy,
-            "grad_norm":              grad_norm,
-            "value_accuracy":         value_accuracy,
-            "lr":                     lr,
+            "loss":                     loss.item(),
+            "policy_loss":              policy_loss.item(),
+            "value_loss":               value_loss.item(),
+            "policy_entropy":           policy_entropy,
+            "policy_entropy_pretrain":  policy_entropy_pretrain,
+            "policy_entropy_selfplay":  policy_entropy_selfplay,
+            "policy_target_entropy":    policy_target_entropy,
+            "grad_norm":                grad_norm,
+            "value_accuracy":           value_accuracy,
+            "lr":                       lr,
         }
         if use_aux:
             result["opp_reply_loss"] = opp_reply_loss.item()

@@ -300,6 +300,7 @@ let P0_TARGET_LOW       = 54;
 let P0_TARGET_HIGH      = 58;
 let ALERT_ENTROPY_MIN   = 1.0;
 let ALERT_ENTROPY_WARN  = 2.0;
+let COLLAPSE_THRESHOLD  = 1.5;
 let ALERT_GRAD_MAX      = 10.0;
 let NUM_ACTIONS_FOR_ENTROPY_NORM = 362;
 
@@ -313,6 +314,7 @@ fetch('/api/monitoring-config').then(r => r.json()).then(cfg => {
   P0_TARGET_HIGH              = cfg.p0_win_rate_target_high ?? P0_TARGET_HIGH;
   ALERT_ENTROPY_MIN           = cfg.alert_entropy_min     ?? ALERT_ENTROPY_MIN;
   ALERT_ENTROPY_WARN          = cfg.alert_entropy_warn    ?? ALERT_ENTROPY_WARN;
+  COLLAPSE_THRESHOLD          = cfg.collapse_threshold_nats ?? COLLAPSE_THRESHOLD;
   ALERT_GRAD_MAX              = cfg.alert_grad_norm_max   ?? ALERT_GRAD_MAX;
   // Update panel headers to match server-side config values
   document.getElementById('hdr-loss').textContent      = `Loss Curves (last ${MAX_STEPS} steps)`;
@@ -334,7 +336,7 @@ function fmtLR(v)    { return v == null ? DASH : v.toExponential(2); }
 function fmtGrad(v)  { return v == null ? DASH : (isFinite(v) ? v.toFixed(2) : 'inf'); }
 
 // ── Ring buffers & state ───────────────────────────────────────────────────
-const trainingStepHistory = [];  // max MAX_STEPS; {step, loss_total, loss_policy, loss_value, loss_aux, policy_entropy, grad_norm, lr}
+const trainingStepHistory = [];  // max MAX_STEPS; {step, loss_total, loss_policy, loss_value, loss_aux, policy_entropy, policy_entropy_pretrain, policy_entropy_selfplay, grad_norm, lr}
 const gameHistory         = [];  // max MAX_GAMES; {winner, moves}
 const winRateSeries       = [];  // max MAX_GAMES; float (P0 win % at each game_complete)
 const eloHistory          = [];  // [{step, elo}]
@@ -526,18 +528,26 @@ const entropyChart = new Chart(document.getElementById('entropy-chart'), {
   data: {
     labels: [],
     datasets: [
-      { label: '', data: [], borderColor: '#EF9F27', borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: false }
+      // dataset[0]: combined (headline)
+      { label: 'combined', data: [], borderColor: '#EF9F27', borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true },
+      // dataset[1]: pretrain stream
+      { label: 'pretrain', data: [], borderColor: '#5B8CFF', borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true, borderDash: [4, 3] },
+      // dataset[2]: selfplay stream
+      { label: 'selfplay', data: [], borderColor: '#F4664A', borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: false, spanGaps: true, borderDash: [6, 2] },
     ]
   },
   options: {
     responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
-    plugins: { legend: { display: false } },
+    plugins: { legend: { display: true, labels: { color: '#888', font: { size: 10 } } } },
     scales: {
       x: { ...BASE_SCALES.x, display: false },
       y: { ...BASE_SCALES.y, min: 0, suggestedMax: 4 }
     }
   },
-  plugins: [makeRefLinePlugin(ALERT_ENTROPY_MIN, '#F4664A', 'collapse')]
+  plugins: [
+    makeRefLinePlugin(ALERT_ENTROPY_MIN, '#F4664A', 'collapse'),
+    makeRefLinePlugin(COLLAPSE_THRESHOLD,  '#FFA500', 'collapse threshold'),
+  ]
 });
 
 // ── Gradient norm trend ────────────────────────────────────────────────────
@@ -672,15 +682,17 @@ function onRunStart(p) {
 function onTrainingStep(p) {
   // Push to ring buffer
   trainingStepHistory.push({
-    step:                  p.step,
-    loss_total:            p.loss_total,
-    loss_policy:           p.loss_policy,
-    loss_value:            p.loss_value,
-    loss_aux:              p.loss_aux,
-    policy_entropy:        p.policy_entropy,
-    policy_target_entropy: p.policy_target_entropy ?? 0,
-    grad_norm:             p.grad_norm,
-    lr:                    p.lr,
+    step:                     p.step,
+    loss_total:               p.loss_total,
+    loss_policy:              p.loss_policy,
+    loss_value:               p.loss_value,
+    loss_aux:                 p.loss_aux,
+    policy_entropy:           p.policy_entropy,
+    policy_entropy_pretrain:  p.policy_entropy_pretrain ?? null,
+    policy_entropy_selfplay:  p.policy_entropy_selfplay ?? null,
+    policy_target_entropy:    p.policy_target_entropy ?? 0,
+    grad_norm:                p.grad_norm,
+    lr:                       p.lr,
   });
   if (trainingStepHistory.length > MAX_STEPS) trainingStepHistory.shift();
 
@@ -962,15 +974,27 @@ function updateHistogramChart() {
 function updateEntropyChart() {
   const steps   = trainingStepHistory.map(d => d.step);
   const entropy = trainingStepHistory.map(d => d.policy_entropy);
+  const entPre  = trainingStepHistory.map(d => {
+    const v = d.policy_entropy_pretrain;
+    return (v == null || !isFinite(v)) ? null : v;
+  });
+  const entSp   = trainingStepHistory.map(d => {
+    const v = d.policy_entropy_selfplay;
+    return (v == null || !isFinite(v)) ? null : v;
+  });
   entropyChart.data.labels           = steps;
   entropyChart.data.datasets[0].data = entropy;
+  entropyChart.data.datasets[1].data = entPre;
+  entropyChart.data.datasets[2].data = entSp;
   entropyChart.update('none');
 
   const last = trainingStepHistory.length
     ? trainingStepHistory[trainingStepHistory.length - 1] : null;
+  const lastSp = last && last.policy_entropy_selfplay != null && isFinite(last.policy_entropy_selfplay)
+    ? '  sp ' + last.policy_entropy_selfplay.toFixed(2) : '';
   setText('entropy-summary',
     last && last.policy_entropy != null
-      ? 'now ' + last.policy_entropy.toFixed(2) + '  collapse at ' + ALERT_ENTROPY_MIN
+      ? 'combined ' + last.policy_entropy.toFixed(2) + lastSp + '  threshold ' + COLLAPSE_THRESHOLD.toFixed(1)
       : DASH
   );
 }

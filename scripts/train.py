@@ -820,6 +820,7 @@ def main() -> None:
                     loss_info = trainer.train_step_from_tensors(
                         states, policies, outcomes,
                         ownership_targets=own_targets, threat_targets=thr_targets,
+                        n_pretrain=n_pre,
                     )
                 else:
                     w_pre = 0.0
@@ -943,6 +944,8 @@ def main() -> None:
                         "loss_aux": float(loss_info.get("opp_reply_loss", 0.0)),
                         "avg_sigma": float(loss_info.get("avg_sigma", 0.0)),
                         "policy_entropy": policy_entropy,
+                        "policy_entropy_pretrain": float(loss_info.get("policy_entropy_pretrain", float("nan"))),
+                        "policy_entropy_selfplay": float(loss_info.get("policy_entropy_selfplay", float("nan"))),
                         "policy_target_entropy": float(loss_info.get("policy_target_entropy", 0.0)),
                         "value_accuracy": value_accuracy,
                         "lr": lr,
@@ -992,6 +995,8 @@ def main() -> None:
                         aux_opp_reply_loss=round(float(loss_info.get("opp_reply_loss", 0.0)), 4),
                         avg_sigma=round(float(loss_info.get("avg_sigma", 0.0)), 4),
                         policy_entropy=round(policy_entropy, 4),
+                        policy_entropy_pretrain=round(float(loss_info.get("policy_entropy_pretrain", float("nan"))), 4),
+                        policy_entropy_selfplay=round(float(loss_info.get("policy_entropy_selfplay", float("nan"))), 4),
                         buffer_size=buffer.size,
                         buffer_capacity=buffer.capacity,
                         pretrained_weight=round(w_pre, 4),

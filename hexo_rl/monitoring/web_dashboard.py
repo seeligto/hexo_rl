@@ -146,6 +146,7 @@ class WebDashboard:
                 "num_actions_for_entropy_norm": int(mon.get("num_actions_for_entropy_norm", 362)),
                 "alert_entropy_min": float(mon.get("alert_entropy_min", 1.0)),
                 "alert_entropy_warn": float(mon.get("alert_entropy_warn", 2.0)),
+                "collapse_threshold_nats": float(mon.get("collapse_threshold_nats", 1.5)),
                 "alert_grad_norm_max": float(mon.get("alert_grad_norm_max", 10.0)),
                 "ema_alpha": float(mon.get("ema_alpha", 0.06)),
                 "p0_win_rate_target_low": float(mon.get("p0_win_rate_target_low", 54.0)),
