@@ -3,13 +3,11 @@
 Phase 3.5 / 4 benchmark harness.
 
 Measures the metrics that gate Phase 4.5 and prints a pass/fail table.
-Methodology: warm-up per metric, N repeated runs, median +/- IQR summary.
+Methodology: warm-up per metric, n=5 repeated runs, median +/- IQR summary.
 
 Usage:
-    .venv/bin/python scripts/benchmark.py                          # default (n=5)
-    .venv/bin/python scripts/benchmark.py --mode lite              # n=3
-    .venv/bin/python scripts/benchmark.py --mode stress            # n=10
-    .venv/bin/python scripts/benchmark.py --config configs/fast_debug.yaml --quick
+    .venv/bin/python scripts/benchmark.py
+    .venv/bin/python scripts/benchmark.py --mcts-sims 50000 --pool-duration 60
 """
 
 from __future__ import annotations
@@ -310,16 +308,12 @@ def benchmark_worker_pool(
     duration_sec: int = 15,
     n_workers: int = 4,
     mcts_sims_override: Optional[int] = None,
-    quick: bool = False,
     n_runs: int = 5,
     warmup_sec: float = 10.0,
 ) -> Dict[str, Any]:
     """Measure end-to-end self-play throughput in the multiprocess pool."""
     from hexo_rl.selfplay.pool import WorkerPool
     from engine import ReplayBuffer
-
-    if quick:
-        duration_sec = min(duration_sec, 5)
 
     bench_cfg = {
         "mcts": {
@@ -355,7 +349,7 @@ def benchmark_worker_pool(
 
     try:
         # Warm-up phase: let games reach steady state before measuring
-        if warmup_sec > 0 and not quick:
+        if warmup_sec > 0:
             console.print(f"    [dim]Worker pool warm-up ({warmup_sec:.0f}s)...[/dim]")
             t_warmup = time.perf_counter()
             last_report = t_warmup
@@ -659,26 +653,12 @@ def parse_args() -> argparse.Namespace:
                    help="Duration in seconds for worker pool benchmark")
     p.add_argument("--mcts-search-sims", type=int, default=None,
                    help="Override MCTS simulations per move (default from config)")
-    p.add_argument("--quick", action="store_true",
-                   help="Run shorter benchmarks for fast verification")
-    p.add_argument("--mode", choices=["lite", "full", "stress"], default="full",
-                   help="Benchmark mode: lite (n=3), full (n=5), stress (n=10)")
-    p.add_argument("--n-runs", type=int, default=None,
-                   help="Override number of runs (default depends on --mode)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-
-    # Mode defaults
-    mode_defaults = {
-        "lite":   {"n_runs": 3},
-        "full":   {"n_runs": 5},
-        "stress": {"n_runs": 10},
-    }
-    mode_cfg = mode_defaults[args.mode]
-    n_runs = args.n_runs if args.n_runs is not None else mode_cfg["n_runs"]
+    n_runs = 5
 
     # Optimization: Enable TensorFloat32 for Ampere+ GPUs
     if torch.cuda.is_available():
@@ -699,7 +679,7 @@ def main() -> None:
     from hexo_rl.utils.device import best_device
     device = best_device()
     checks = _build_checks(device)
-    console.print(f"[bold]Benchmarking on {device} | mode={args.mode} | n={n_runs}[/bold]")
+    console.print(f"[bold]Benchmarking on {device} | n={n_runs}[/bold]")
 
     from hexo_rl.model.network import HexTacToeNet, compile_model
     from engine import ReplayBuffer
@@ -737,23 +717,19 @@ def main() -> None:
     warmup_buffer = 2.0
     warmup_worker = 30.0
 
-    if args.quick:
-        warmup_mcts = warmup_nn = warmup_latency = warmup_buffer = 1.0
-        warmup_worker = 3.0
-
     try:
         # Run benchmarks
         results: List[Dict[str, Any]] = []
 
         with console.status(f"[bold green]MCTS throughput (n={n_runs})..."):
             results.append(benchmark_mcts(
-                n_simulations=args.mcts_sims if not args.quick else 5000,
+                n_simulations=args.mcts_sims,
                 n_runs=n_runs, warmup_sec=warmup_mcts))
 
         with console.status(f"[bold green]NN inference batch=64 (n={n_runs})..."):
             results.append(benchmark_inference(
                 model, batch_size=64,
-                n_positions=20000 if not args.quick else 2000,
+                n_positions=20000,
                 n_runs=n_runs, warmup_sec=warmup_nn))
 
         with console.status(f"[bold green]NN latency batch=1 (n={n_runs})..."):
@@ -775,7 +751,6 @@ def main() -> None:
                 duration_sec=args.pool_duration,
                 n_workers=args.pool_workers,
                 mcts_sims_override=args.mcts_search_sims,
-                quick=args.quick,
                 n_runs=n_runs,
                 warmup_sec=warmup_worker,
             ))
