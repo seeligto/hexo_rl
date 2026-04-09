@@ -342,6 +342,13 @@ impl SelfPlayRunner {
                 tree.quiescence_enabled = quiescence_enabled;
                 tree.quiescence_blend_2 = quiescence_blend_2;
                 let mut rng = rng();
+                // Per-worker game counter for the debug_prior_trace feature.
+                // Increments at each game end so the trace records can be
+                // grouped by (worker_id, game_index). Not read in default
+                // builds — tracked unconditionally to avoid a cfg on every
+                // increment site.
+                #[cfg(feature = "debug_prior_trace")]
+                let mut dbg_game_idx: u32 = 0;
 
                 while running.load(Ordering::SeqCst) {
                     let mut board = Board::new();
@@ -515,6 +522,39 @@ impl SelfPlayRunner {
                         };
                         let policy = tree.get_policy(temperature, BOARD_SIZE);
 
+                        // ── debug_prior_trace: snapshot root priors + visit counts ──
+                        // Compile-time gated; zero cost in default builds. Runtime
+                        // gated a second time by HEXO_PRIOR_TRACE_PATH (see
+                        // engine/src/debug_trace.rs). Cap-enforced per site.
+                        #[cfg(feature = "debug_prior_trace")]
+                        {
+                            let root = &tree.pool[0];
+                            if root.is_expanded() {
+                                let first = root.first_child as usize;
+                                let n_ch = root.n_children as usize;
+                                let mut priors = Vec::with_capacity(n_ch);
+                                let mut visits = Vec::with_capacity(n_ch);
+                                for j in 0..n_ch {
+                                    priors.push(tree.pool[first + j].prior);
+                                    visits.push(tree.pool[first + j].n_visits);
+                                }
+                                let legal_count = board.legal_move_count() as u32;
+                                crate::debug_trace::record_game_runner(
+                                    dbg_game_idx,
+                                    worker_id as u32,
+                                    compound_move as u32,
+                                    board.ply as u32,
+                                    legal_count,
+                                    n_ch as u32,
+                                    game_sims as u32,
+                                    &priors,
+                                    &visits,
+                                    temperature,
+                                    is_fast_game,
+                                );
+                            }
+                        }
+
                         // Accumulate MCTS health stats once per search (not in inner sim loop).
                         {
                             let (depth, conc) = tree.last_search_stats();
@@ -666,6 +706,9 @@ impl SelfPlayRunner {
                             games_results.pop_front();
                         }
                     }
+
+                    #[cfg(feature = "debug_prior_trace")]
+                    { dbg_game_idx += 1; }
                 }
             });
             handles.push(handle);

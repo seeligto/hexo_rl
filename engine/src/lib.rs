@@ -4,6 +4,8 @@
 ///   from engine import Board, MCTSTree
 
 pub mod board;
+#[cfg(feature = "debug_prior_trace")]
+pub mod debug_trace;
 pub mod formations;
 pub mod game_runner;
 pub mod inference_bridge;
