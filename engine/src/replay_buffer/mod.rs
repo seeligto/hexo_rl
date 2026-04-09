@@ -26,7 +26,7 @@ use numpy::{
     PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArray4,
 };
 use half::f16;
-use rand::{Rng, SeedableRng};
+use rand::RngExt;
 use rand::rngs::StdRng;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -88,7 +88,7 @@ impl ReplayBuffer {
             sym_tables: SymTables::new(),
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
-            rng: StdRng::from_os_rng(),
+            rng: rand::make_rng(),
             weight_buckets: [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)],
         }
     }

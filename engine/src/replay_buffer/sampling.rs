@@ -1,7 +1,7 @@
 //! Weighted sampling and symmetry application for `ReplayBuffer`.
 
 use half::f16;
-use rand::Rng;
+use rand::RngExt;
 use std::collections::HashSet;
 
 use super::ReplayBuffer;
