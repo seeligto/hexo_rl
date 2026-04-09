@@ -39,27 +39,8 @@ help: ## Show all useful commands
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 .PHONY: install
-install: ## Full first-time setup: venv → deps → submodules → SealBot → engine → test
-	@echo "==> Creating virtualenv..."
-	python3 -m venv .venv
-	@echo "==> Upgrading pip and installing maturin + pybind11..."
-	$(PIP) install --upgrade pip maturin pybind11
-	@echo "==> Installing Python dependencies..."
-	$(PIP) install -r requirements.txt
-	@echo "==> Initialising git submodules..."
-	git submodule update --init --recursive
-	@echo "==> Building SealBot C++ extensions..."
-	cd vendor/bots/sealbot/best    && $(PY) setup.py build_ext --inplace --quiet
-	cd vendor/bots/sealbot/current && $(PY) setup.py build_ext --inplace --quiet
-	@echo "==> Building engine Rust extension..."
-	$(MATURIN) develop --release -m engine/Cargo.toml
-	@echo "==> Verifying environment..."
-	@test -x "$(PY)" || (echo "Missing $(PY). Create venv first." && exit 1)
-	@$(PY) -c "from engine import Board, MCTSTree; print('engine ok')"
-	@echo "==> Running full test suite..."
-	$(MAKE) test
-	@echo ""
-	@echo "Install complete. Run 'make corpus.fetch' to fetch the latest games."
+install: ## Full first-time setup: env check → deps → engine → artifacts → test
+	@bash scripts/install.sh
 
 .PHONY: build
 build: ## Build/install Rust extension via maturin (LTO + native CPU)
