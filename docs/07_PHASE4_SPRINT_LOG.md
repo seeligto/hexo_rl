@@ -10,7 +10,7 @@ For per-day narrative see `docs/07_PHASE4_SPRINT_LOG_BACKUP.md`.
 
 | Bucket | Sections |
 |---|---|
-| KEEP-FULL | §1, §2, §4, §5, §15, §19, §21, §26, §27, §28, §33, §34, §35, §36, §37, §40, §46b, §47, §58, §59, §61, §63, §66, §69 |
+| KEEP-FULL | §1, §2, §4, §5, §15, §19, §21, §26, §27, §28, §33, §34, §35, §36, §37, §40, §46b, §47, §58, §59, §61, §63, §66, §69, §70 |
 | KEEP-CONDENSED | §6, §11, §13, §14, §16, §17, §20, §22, §23, §24, §29, §30(game-cap/T_max), §31, §38, §41–§46, §48, §50–§57 |
 | MERGE | §3+§25+§30(torch)+§32→torch.compile arc; §30(quiescence-gate)→§28; §52+§60→eval_interval; §61+§62→Gumbel; §63+§64+§65→dashboard metrics |
 | BENCHMARK-STALE | 2026-04-01 table, 2026-04-02 table, §18 corrected table, §39 table, §51 table |
@@ -647,3 +647,341 @@ P3 chosen over P8b despite P8b's +23% steps/hr because P3 has +22% games/hr, 16p
 #### Open issue for overnight
 
 - `policy_entropy_mean ≈ 0.25 nats` on EVERY run (framework expected 3–6 nats). Flat over 20 min across all configs. Probably a bootstrap-concentration artifact, but if the P3 overnight hasn't crossed ~1.0 nat by the 6-hour mark, pause and investigate before running the remaining 18 hours.
+
+---
+
+### §70 — Phase 4.0 Overnight Run — Mode Collapse Diagnosis
+
+**Status:** diagnostics complete 2026-04-09, no fixes proposed. Run
+`dcf8cbba5b9f485987880055e9cb6ea7` PAUSED at
+`checkpoint_00017428.pt` pending the fix session. Full artefacts in
+`reports/diagnosis_2026-04-10/`. Tracked as **Q17** in `docs/06_OPEN_QUESTIONS.md`.
+
+#### Context
+
+The P3 overnight run started from `checkpoints/bootstrap_model.pt` and
+reached ~step 16,880 on the `gumbel_targets` variant (`gumbel_mcts: false`,
+`completed_q_values: true`). Dashboard metrics looked healthy at the time
+of inspection:
+
+- `policy_entropy` ≈ 2.54 nats on the combined pretrain+selfplay mini-batch stream
+- training loss trending down
+- 733 games/hr, 28% draws
+- no obvious deadlock or OOM
+
+Despite this, intra-run round-robins between near-current checkpoints
+exposed a hard mode collapse.
+
+#### Eval results table
+
+Three ckpt-vs-ckpt round-robins plus a RandomBot control, using
+`scripts/eval_round_robin.py` at the default 64 sims / 0.1 s settings:
+
+| Matchup | Score | Colony wins | Game length | Observation |
+|---|---|---|---|---|
+| ckpt_13000 vs ckpt_14000 | 100/0 P1 | deterministic | exactly 25 moves | carbon-copy games every rollout |
+| ckpt_13000 vs ckpt_15000 | 100/0 P1 | deterministic | exactly 25 moves | carbon-copy |
+| ckpt_14000 vs ckpt_15000 | 50/0 P1 (50 draws) | deterministic | exactly 31–33 moves | carbon-copy |
+| **ckpt_15000 vs RandomBot (control)** | **50/0 P1** | varied | **lengths 11–33** | **varied games — the network has real knowledge, the self-play equilibrium has collapsed** |
+
+The RandomBot control is the critical anchor: ckpt_15000 does know how
+to win games. The collapse is not in the policy's game-playing ability,
+it is in the self-play distribution that produces training data.
+
+#### Monitoring gap
+
+Dashboard `policy_entropy` is computed over the combined pretrain + selfplay
+mini-batch stream (`trainer.py:402-405`). With buffer mix ~63% pretrain /
+~37% selfplay (from the `pretrained_weight = max(0.1, 0.8·exp(-step / decay_steps))`
+schedule at step ~16k with `decay_steps = 70_000`), the pretrain stream's
+high entropy masked the selfplay stream's collapse. The §69 overnight open
+issue flagged `policy_entropy_mean ≈ 0.25` on every sweep run as
+"probably a bootstrap-concentration artifact" — in hindsight that was
+the early warning signal for this collapse.
+
+**Action item (follow-up, not this pass):** split `policy_entropy` into
+`policy_entropy_pretrain` and `policy_entropy_selfplay` in the
+`train_step` monitoring event so the collapse is visible on the
+dashboard next time. Tracked under Q17 remediation.
+
+#### Diagnostic A — static audit + feature-gated runtime trace
+
+**Goal:** programmatically prove or refute that `engine/src/game_runner.rs`
+calls `apply_dirichlet_to_root` on the training path.
+
+**Headline finding:** it does not. The live training path
+(`scripts/train.py` → `hexo_rl/selfplay/pool.py` → Rust
+`engine::SelfPlayRunner`) has **zero** calls to
+`apply_dirichlet_to_root`. The PyO3 method exists at
+`engine/src/lib.rs:454` and its Rust implementation at
+`engine/src/mcts/mod.rs:321-337`, but the **only** caller is the Python
+`SelfPlayWorker._run_mcts_with_sims` at
+`hexo_rl/selfplay/worker.py:138-145`, which is referenced from
+`scripts/benchmark_mcts.py`, `hexo_rl/bootstrap/bots/our_model_bot.py`,
+and `hexo_rl/eval/evaluator.py` only. `scripts/train.py` never
+constructs a `SelfPlayWorker`.
+
+**Git archaeology verdict:** *unported feature*. The commit that added
+`apply_dirichlet_to_root` to the Python path landed on 2026-03-28. The
+Phase 3.5 migration of the training path to Rust
+(`engine::SelfPlayRunner`) landed two days later on 2026-03-30 and did
+not carry Dirichlet injection across. This matters for the fix session's
+framing: it is not a regression someone rolled back by mistake, it is a
+missing port. See `reports/diagnosis_2026-04-10/diag_A_grep.txt` and
+`diag_A_static_audit.md` for the raw proof.
+
+**Runtime trace instrumentation.** To confirm the static finding at
+runtime *and* give diagnostic C its data for free, a compile-time
+feature-gated JSONL trace was added:
+
+- Cargo feature `debug_prior_trace` (empty default, opt-in via
+  `maturin develop --release -m engine/Cargo.toml --features debug_prior_trace`).
+- Activation is gated a second time at launch by the environment variable
+  `HEXO_PRIOR_TRACE_PATH`. If the feature is compiled in but the env var
+  is unset, the trace is a no-op.
+- Two capture sites: `engine/src/game_runner.rs` (post-MCTS root-prior
+  and visit-count snapshot, cap 30 records) and
+  `engine/src/mcts/mod.rs::apply_dirichlet_to_root` (pre/post priors and
+  noise vector, cap 10 records).
+- Writer uses unbuffered `write_all` + `flush` via a
+  `std::sync::LazyLock<Mutex<Option<File>>>` sink so every record is
+  durable at the moment it is written, surviving SIGINT paths that skip
+  Rust-side `Drop` chains.
+- One gated unit test (`test_dirichlet_trace_roundtrip`) asserts the
+  JSONL wrapper on the Python path produces exactly one well-formed
+  record per call.
+
+**Runtime trace result — training path.** 30 records captured from 14
+workers during a ~45-second smoke run from `checkpoint_00015000.pt` on
+the `gumbel_targets` variant. **All 30 records have `site: game_runner`;
+zero records have `site: apply_dirichlet_to_root`** — confirming the
+static audit at runtime. The first move on the empty board shows:
+
+| Metric | Value |
+|---|---|
+| root_priors[argmax] | 0.5397 (one cell out of 25 legal candidates) |
+| second/third priors | 0.1709, 0.0978 |
+| priors below 0.002 | 18 of 25 candidates (effectively unreachable even at τ=1.0) |
+| MCTS top-1 visit fraction | **0.649** (133 of 205 visits on the top prior) |
+| children receiving visits | 6 of 25 |
+| temperature | 1.0 (compound_move = 0) |
+
+Full record dump and per-field explanation in
+`reports/diagnosis_2026-04-10/diag_A_trace_summary.md`.
+
+**Runtime trace result — Python path.** 4 records from
+`scripts/benchmark_mcts.py`, all with `site: apply_dirichlet_to_root`,
+`n_children = 25`, `epsilon = 0.25`, and non-uniform Dirichlet noise
+vectors (23–25 non-zero components, peak magnitudes 0.17–0.36). The
+Python path is functionally correct; it is just dead code for training
+purposes.
+
+**Variant disclosure.** The trace was captured under `gumbel_targets`,
+the same variant as the collapsed run. The relevant behaviour (absence
+of Dirichlet injection, temperature formula, MCTS visit concentration)
+is identical between `gumbel_targets` and `baseline_puct` because both
+set `gumbel_mcts: false` — the only difference is `completed_q_values`
+(KL policy target vs CE visit target), which affects the training-loss
+shape, not the self-play path that produces root noise. A secondary run
+under `baseline_puct` is not required.
+
+#### Diagnostic B — raw policy sharpness across checkpoints
+
+**Goal:** measure whether the policy head has sharpened to near-zero
+entropy on the positions the training loop was actually training on,
+and anchor the progression against `best_model.pt` (pre-§67 reference).
+
+**Method.** 500 positions drawn with stratified sampling (early /
+mid / late phase) from the 500 recorded games in the collapsed run
+`runs/dcf8cbba5b9f485987880055e9cb6ea7/games/`. Replayed through Rust
+`Board` + Python `GameState.from_board` / `apply_move`, converted to
+`(K, 18, 19, 19)` tensors, K=0 (centroid) window taken to produce
+`(18, 19, 19)` per position. Each checkpoint was loaded via
+`Trainer._extract_model_state` + `Trainer._infer_model_hparams` +
+`HexTacToeNet.load_state_dict(strict=False)`, evaluated in `.eval()` +
+`torch.no_grad()` + `torch.autocast` on CUDA. Entropy per position:
+`torch.special.entr(exp(log_policy)).sum(dim=-1)` matching
+`trainer.py:402-405`.
+
+**K=0 caveat (must appear at top of `diag_B_sharpness.md`):** see
+`reports/diagnosis_2026-04-10/diag_B_sharpness.md`. Primary signal is
+the **progression across checkpoints on identical positions**, not the
+absolute nat values vs the §1 heuristic.
+
+**Per-checkpoint summary (500 positions, K=0):**
+
+| Checkpoint | H(π) mean | median | p10 | p90 | top-1 mean | eff. support mean |
+|---|---|---|---|---|---|---|
+| bootstrap_model.pt | 2.665 | 2.688 | 1.330 | 3.889 | 0.379 | 21.48 |
+| checkpoint_00013000.pt | 1.666 | 1.643 | 0.620 | 2.681 | 0.497 | 9.72 |
+| checkpoint_00014000.pt | 1.581 | 1.547 | 0.556 | 2.622 | 0.520 | 7.00 |
+| checkpoint_00015000.pt | 1.532 | 1.601 | 0.569 | 2.336 | 0.524 | 5.79 |
+| checkpoint_00016000.pt | 1.649 | 1.650 | 0.521 | 2.572 | 0.504 | 7.05 |
+| checkpoint_00017000.pt | 1.486 | 1.446 | 0.477 | 2.353 | 0.540 | 6.68 |
+| checkpoint_00017428.pt | 1.698 | 1.644 | 0.531 | 2.755 | 0.505 | 9.35 |
+| best_model.pt | 2.665 | 2.688 | 1.330 | 3.889 | 0.379 | 21.48 |
+
+**Phase split (mid bucket `10 ≤ cm < 25` is the worst-case window):**
+
+| Checkpoint | Early (cm<10) mean | Mid (10≤cm<25) mean | Late (cm≥25) mean |
+|---|---|---|---|
+| bootstrap_model.pt | 2.430 | 2.665 | 3.418 |
+| checkpoint_00013000.pt | 1.622 | 1.466 (p10=0.179) | 2.070 |
+| checkpoint_00014000.pt | 1.499 | 1.443 (p10=0.191) | 2.021 |
+| checkpoint_00015000.pt | 1.591 | **1.317** (p10=0.081) | 1.621 |
+| checkpoint_00016000.pt | 1.634 | 1.465 (p10=0.294) | 1.935 |
+| checkpoint_00017000.pt | 1.387 | 1.419 (p10=0.132) | 1.887 |
+| checkpoint_00017428.pt | 1.623 | 1.620 (p10=0.136) | 2.037 |
+| best_model.pt | 2.430 | 2.665 | 3.418 |
+
+**Key observations:**
+
+- `best_model.pt` produces identical statistics to `bootstrap_model.pt`
+  on this position set (same means and histograms to 3 decimals). They
+  are different files on disk (different MD5s, different mtimes) but
+  behave identically on the K=0 window of these positions. Treat them
+  as equivalent anchors until an independent investigation says
+  otherwise.
+- **The collapse is not a simple monotonic sharpening curve.** All
+  post-bootstrap checkpoints sit in a narrow 1.49–1.70 nat band. The
+  collapse does not deepen with training step — it lands in a fixed
+  point and stays there.
+- **The worst bucket is mid-game (cm 10–24)**, where p10 drops to
+  0.08–0.19 nats on every post-bootstrap checkpoint. Late-game is
+  consistently the highest-entropy bucket — the opposite of what the
+  §1 heuristic assumes about "expected range 3–6 nats".
+- The raw-policy collapse on its own is *not* catastrophic (means still
+  above 1.5 nats at K=0, effective support 5–10 children). What makes
+  it catastrophic is diagnostic C: MCTS is not adding any exploration
+  on top of that prior.
+
+**Restart candidate heuristic.** `checkpoint_00017428.pt` is the latest
+checkpoint with mean raw-policy entropy ≥ 1.5 nats across the sampled
+positions. By the rule-of-thumb threshold, restart candidates for the
+Phase 4.0 fix session are this checkpoint or earlier — but because the
+entropy curve is flat across the entire collapsed band, the real choice
+is between resuming from any of them *after* the fix lands, or starting
+fresh from `bootstrap_model.pt` / `best_model.pt`. This is a **finding,
+not a recommendation**; the fix session owns the call.
+
+#### Diagnostic C — temperature schedule + MCTS visit distribution
+
+**C.1 — temperature schedule audit.** Config values: `temperature_min
+= 0.05`, `temperature_threshold_compound_moves = 15`.
+
+Rust code (`engine/src/game_runner.rs:510-515`):
+
+```
+τ(cm) = temp_min                                 if cm ≥ threshold
+      = max(temp_min, cos(π/2 · cm / threshold)) otherwise
+```
+
+| compound_move | 0 | 5 | 10 | 14 | 15 | 16 | 20 | 30 |
+|---|---|---|---|---|---|---|---|---|
+| τ | 1.0000 | 0.8660 | 0.5000 | 0.1045 | 0.0500 | 0.0500 | 0.0500 | 0.0500 |
+
+**Temperature formula drift (separate bullet — independent finding).**
+Sprint log §36 describes the temperature schedule as:
+
+```
+τ(ply) = temp_min + 0.5·(1 − temp_min)·(1 + cos(π·ply / temp_anneal_moves))
+         with temp_anneal_moves = 60, per-ply (not per compound_move)
+```
+
+These are **different functions**:
+
+- §36 is a half-cosine *per ply* that would hold τ above 0.86 at ply 5,
+  above 0.52 at ply 30, and only reach the `temp_min` floor at ply 60.
+- The code is a quarter-cosine *per compound move* with a hard floor at
+  cm 15 (≈ply 29–30), zero further annealing after that.
+
+Under the §36 schedule a game has roughly four times as many plies with
+meaningfully stochastic sampling as the code actually provides. This is
+**not** the cause of the mode collapse on its own — no root noise is —
+but it is a live docs-vs-code drift that must be fixed in one direction
+or the other in the fix session. Documented here so it is greppable
+later. See `reports/diagnosis_2026-04-10/diag_C_temp_schedule.md` for
+the full side-by-side.
+
+**C.2 — per-move MCTS entropy from the training trace.** Parsed the 30
+records in `diag_A_trace_training.jsonl` and computed H(π_prior),
+H(π_visits), Δentropy, and top-1 visit fraction per record.
+
+| Metric | mean | median | p10 | p90 | min | max |
+|---|---|---|---|---|---|---|
+| H(π_prior) | 1.340 | 1.437 | 1.213 | 1.438 | 1.213 | 1.585 |
+| H(π_visits) | 1.213 | 1.207 | 1.199 | 1.250 | 1.169 | 1.379 |
+| Δ (prior − visits) | **0.127** | 0.178 | 0.014 | 0.230 | −0.055 | 0.333 |
+| top-1 visit fraction | 0.526 | 0.509 | 0.399 | 0.649 | 0.395 | 0.649 |
+| effective support (exp H_visits) | 3.366 | 3.345 | 3.316 | 3.490 | 3.217 | 3.972 |
+
+**Verdict.** MCTS sharpens the prior by only 0.13 nats on average. The
+effective support of the visit distribution is ~3.4 children — MCTS is
+picking between the top 3 prior candidates and rubber-stamping them.
+Combined with the temperature schedule dropping to 0.05 at cm 15 and
+the §70 diag-A finding that there is no Dirichlet perturbation at the
+root, this closes the loop: once the prior concentrates on 3 children
+there is no mechanism in the training path to make the self-play stream
+explore any other continuation. The sampling window for "not
+deterministic" self-play is compound_move 0 through ~14, and even inside
+that window the top prior gets picked >50% of the time.
+
+**Caveat:** the 30 records are all cm=0, ply=0 on the empty board
+(different games from different workers, all starting identically).
+They are 30 independent rollouts of the same position, not a sweep
+across game phases. This is a consequence of the global counter cap
+firing inside the first move because 14 workers contend for it in
+parallel. The per-game-phase variation the plan originally asked for
+is not in this data — the fix session should raise the
+`GAME_RUNNER_CAP` and/or make it per-game if that variation is needed
+for remediation decisions. For the current diagnostic pass the 30
+empty-board records are sufficient to demonstrate the rubber-stamp
+behaviour, because the empty board is where the self-play loop enters
+its deterministic attractor.
+
+#### Candidate root causes (ranked by support from A/B/C)
+
+1. **No root noise on the training path.** Strongest candidate.
+   Confirmed by diagnostic A at both static (grep + git archaeology)
+   and runtime (30 game_runner records, 0 apply_dirichlet_to_root
+   records) levels.
+2. **Policy sharpness amplified by self-referential MCTS.** Quantified
+   by diagnostic B (mean H(π) ≈ 1.5 nats on K=0, p10 ≈ 0.1 nats in the
+   mid-game bucket) and C (Δentropy ≈ 0.13 nats, effective support ≈
+   3.4 children). MCTS does not add exploration, it rubber-stamps.
+3. **Temperature schedule is weaker than §36 described.** Hard floor
+   at cm 15, quarter-cosine shape, no further annealing. Not the root
+   cause on its own but it narrows the time window in which (1) and (2)
+   could be broken by chance.
+4. **Entropy regularisation too weak** (`entropy_reg_weight = 0.01`).
+   Consistent with the late-phase p10 numbers in diagnostic B but not
+   independently proven by this diagnostic pass.
+5. **Buffer-mix interaction masking the collapse in monitoring.**
+   Independent of the root cause but explains why the collapse went
+   unnoticed for 16,880 steps. See Monitoring Gap above.
+
+#### "Known correct" reference
+
+`best_model.pt` (pre-§67 CE-loss training path, before the restart from
+`bootstrap_model.pt`) does not exhibit collapse under the same eval
+harness. In diagnostic B it produces identical raw-policy entropy
+statistics to `bootstrap_model.pt`, which on this position set is the
+reference anchor. Whatever the post-§67 KL-loss + `completed_q_values`
+path is doing differently on the self-play loop is implicated — but the
+diag A finding makes clear that the missing Dirichlet injection is the
+most likely single explanation, not the loss swap.
+
+#### Not-in-scope (fix session to decide)
+
+- Porting `apply_dirichlet_to_root` into the Rust training path
+  (`engine/src/game_runner.rs`) vs switching the laptop variant to
+  `gumbel_mcts: true` (Gumbel-Top-k provides root noise by
+  construction). Both are valid remediations; the choice is not owned
+  by this diagnostic pass.
+- Splitting `policy_entropy` into pretrain / selfplay streams in the
+  monitoring event.
+- Reconciling the §36 temperature formula with the code (either
+  direction).
+- Re-running diagnostic C with a larger `GAME_RUNNER_CAP` to cover
+  mid-game and late-game MCTS behaviour.
+- Any change to checkpoints, replay buffer, or run directory state.

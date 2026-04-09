@@ -12,9 +12,27 @@
 
 | # | Question | Experiment Design | Estimated Cost | Priority |
 |---|---|---|---|---|
-| Q2 | Value aggregation: min vs mean vs attention | Train 4 variants, compare value MSE + win rate | ~4 GPU-days | HIGH |
+| **Q17** | **Phase 4.0 self-play mode collapse — root cause and remediation** | **Diagnostics A/B/C complete — see sprint log §70. Fix session must decide between porting `apply_dirichlet_to_root` to `engine/src/game_runner.rs`, switching the laptop variant back to Gumbel-Top-k root noise, or both.** | **blocking — no GPU-day estimate until fix chosen** | **CRITICAL — BLOCKS Phase 4.0** |
+| Q2 | Value aggregation: min vs mean vs attention | Train 4 variants, compare value MSE + win rate | ~4 GPU-days | HIGH — BLOCKED on Q17 |
 | Q3 | Optimal K (number of cluster windows) | Ablation K=2,3,4,6 | ~6 GPU-days | MEDIUM |
 | Q8 | First-player advantage in value training | Measure P1 win rate by Elo band; adjust value targets if >60% | ~2 GPU-days | MEDIUM |
+
+**Q17 (2026-04-09, ACTIVE):** The P3 overnight run collapsed to
+deterministic carbon-copy self-play games between ckpt_13000 / 14000 /
+15000 despite healthy dashboard metrics. Diagnostic A proved that
+`engine/src/game_runner.rs` (the live Rust training path) has **zero**
+calls to `apply_dirichlet_to_root`; the only caller is the Python
+`SelfPlayWorker`, which is not on the training path. The PyO3 method was
+added in 2026-03-28 and the Phase 3.5 migration of the training path to
+Rust two days later did not carry it across — "unported feature" verdict.
+Diagnostic C confirmed MCTS is rubber-stamping the prior (`ΔH ≈ 0.13
+nats`, top-1 visit fraction 65% on the empty board). Full details in
+sprint log §70 and `reports/diagnosis_2026-04-10/`. No fixes proposed in
+this pass — findings only.
+
+**Q2 blocking on Q17:** Q2 requires a stable baseline to ablate value
+aggregation strategies against, but every post-bootstrap checkpoint has
+the same collapse signature. Resolve Q17 before re-running Q2.
 
 **Q2 interaction note (2026-04-04):** Ownership and threat auxiliary heads added in §37
 interact with value aggregation strategy — both heads provide spatial value grounding that
