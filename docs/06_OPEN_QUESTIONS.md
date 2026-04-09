@@ -17,18 +17,37 @@
 | Q3 | Optimal K (number of cluster windows) | Ablation K=2,3,4,6 | ~6 GPU-days | MEDIUM |
 | Q8 | First-player advantage in value training | Measure P1 win rate by Elo band; adjust value targets if >60% | ~2 GPU-days | MEDIUM |
 
-**Q17 (2026-04-09, ACTIVE):** The P3 overnight run collapsed to
-deterministic carbon-copy self-play games between ckpt_13000 / 14000 /
-15000 despite healthy dashboard metrics. Diagnostic A proved that
-`engine/src/game_runner.rs` (the live Rust training path) has **zero**
-calls to `apply_dirichlet_to_root`; the only caller is the Python
-`SelfPlayWorker`, which is not on the training path. The PyO3 method was
-added in 2026-03-28 and the Phase 3.5 migration of the training path to
-Rust two days later did not carry it across — "unported feature" verdict.
-Diagnostic C confirmed MCTS is rubber-stamping the prior (`ΔH ≈ 0.13
-nats`, top-1 visit fraction 65% on the empty board). Full details in
-sprint log §70 and `reports/diagnosis_2026-04-10/`. No fixes proposed in
-this pass — findings only.
+**Q17 (2026-04-09, ACTIVE — updated 2026-04-10):** The P3 overnight run
+collapsed to deterministic carbon-copy self-play games between
+ckpt_13000 / 14000 / 15000 despite healthy dashboard metrics.
+
+**Confirmed findings (diagnostics A/B/C + follow-up 2026-04-10):**
+
+- **Root cause:** `engine/src/game_runner.rs` (live Rust training path)
+  has zero calls to `apply_dirichlet_to_root` — unported feature since
+  2026-03-30 Phase 3.5 migration.
+- **Failure mode: stuck fixed point, not progressive collapse.** Entropy
+  oscillates in a ~1.49–1.70 nat band across ckpt_13000–17428 with no
+  downward trend. The system locked in early and maintained the fixed
+  point; subsequent training did not deepen the collapse.
+- **Temperature sampling is working.** A separate check (2026-04-10,
+  ckpt_15000 vs itself, 20 games, τ=1.0) produced 13 distinct game
+  lengths — sampling diversifies play when temperature > 0. The
+  collapse is purely the missing Dirichlet path, not a second bug.
+- **Eval identical games = argmax by design.** 100% identical round-robin
+  games are expected: `ModelPlayer` uses `temperature=0.0` (argmax).
+  Not a seeding or sampling bug.
+- **`best_model.pt` is NOT an independent reference.** Weight fingerprint
+  `ed07ecbe6a73` matches `bootstrap_model.pt` exactly — was initialised
+  from bootstrap weights at training start and never promoted. There is
+  no pre-collapse independent checkpoint in the P3 dataset.
+- **Restart point:** do not use entropy rank to choose. No checkpoint in
+  13k–17k is less collapsed than any other. Restart from
+  `bootstrap_model.pt` once the Dirichlet port is complete, or from the
+  earliest checkpoint before self-play dominated the buffer (~step 10k).
+
+Full details in sprint log §70 and `reports/diagnosis_2026-04-10/`. No
+fixes proposed in this pass — findings only.
 
 **Q2 blocking on Q17:** Q2 requires a stable baseline to ablate value
 aggregation strategies against, but every post-bootstrap checkpoint has
