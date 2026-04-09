@@ -1154,3 +1154,56 @@ Walk this checklist before launching the next Phase 4.0 sustained run:
 Three consecutive `bench.full` runs on 2026-04-09 and 2026-04-10 failed the same two §66 targets (NN inference batch=64 ~8,370 vs target 8,500; worker throughput ~541k vs target 625k). A structured three-run investigation (cold / hot / post-10min-idle) confirmed the failures are **not thermal** — cold and hot runs returned 8,393 and 8,397 pos/s respectively (0.05% apart), with the GPU staying at 49°C throughout and no boost-clock events visible in `nvidia-smi`. The step-change appeared overnight between the last passing run (2026-04-08 22:50, 9,388 pos/s) and the first failing run (2026-04-09 11:53, 8,347 pos/s) with no model or benchmark code changes in that window — the NVIDIA laptop driver's `DynamicPowerManagement=3` settled the GPU into a lower sustained boost-clock bin after a full day of workloads. NN inference latency corroborates: 1.59 ms at §66 → 1.77–1.80 ms now, a 12–13% increase consistent with a ~14% GPU clock reduction. Worker throughput failures are a secondary consequence (slower inference → stalled workers). Full investigation artifacts in `reports/bench_investigation_2026-04-09/`.
 
 **Rebaselined targets** (CLAUDE.md §66 table updated, 2026-04-09): NN inference ≥ 8,250 pos/s (was 8,500; floor from three cold-start runs: 8,327); worker throughput ≥ 500,000 pos/hr (was 625,000; floor from stable runs 1/2: ~540k, conservative target accounting for structural IQR noise in the 60s measurement window). All other eight targets unchanged. The §66 baseline column values are kept at their 2026-04-06 peak to document the original hardware capability; the targets now reflect the sustained operating floor. A reboot may restore peak numbers, but the training programme does not depend on it.
+
+---
+
+### §73 — Dirichlet Root Noise Ported to Rust Training Path — 2026-04-10
+
+**Root cause from §70 resolved.** `engine/src/game_runner.rs` now calls `apply_dirichlet_to_root` on every turn boundary in both PUCT and Gumbel branches.
+
+**Changes landed (commit `71d7e6e`):**
+
+- `engine/src/mcts/dirichlet.rs` — new Gamma-normalize sampler using `rand_distr 0.5` (compatible with `rand 0.9`). Draws `n` independent `Gamma(alpha, 1.0)` samples normalised by sum. Four unit tests: sum-to-one, non-negative, independence, sparsity at `alpha=0.3`.
+- `engine/src/game_runner.rs` — added `dirichlet_alpha` / `dirichlet_epsilon` / `dirichlet_enabled` fields to `SelfPlayRunner`. PUCT branch: root expansion separated to `batch=1` call, Dirichlet applied immediately after. Gumbel branch: Dirichlet applied after the root expansion guard. Both sites honour the intermediate-ply skip (`moves_remaining==1 && ply>0`), matching `worker.py:107-111`. Two integration tests verify the gate fires and can be disabled.
+- `configs/selfplay.yaml` — `dirichlet_enabled: true` added under `mcts:` (default active).
+- `hexo_rl/selfplay/pool.py` — wires `dirichlet_alpha` / `dirichlet_epsilon` / `dirichlet_enabled` from `mcts_cfg` to `SelfPlayRunner` constructor.
+- `engine/Cargo.toml` — adds `rand_distr = "0.5"`.
+
+**Tests:** `cargo test -p engine` (default + `debug_prior_trace`): 108/109 passing, 0 failures.  
+`make test.all`: 108 Rust + 646 Python, all pass.
+
+**Benchmark:** `make bench.full` 2026-04-10. MCTS sim/s 53,840 (target ≥ 26,000). NN inference 8,804 pos/s (target ≥ 8,250). Worker throughput 548,653 pos/hr (target ≥ 500,000). All 10 metrics pass CLAUDE.md targets. Note: benchmark script still uses pre-§72 script-hardcoded targets (625k worker, 8,500 NN) — script exit code 2 is a stale-target pre-existing issue, not a regression.
+
+**Runtime verification (commit `4a3149e`) — `reports/dirichlet_port_2026-04-10/verdict.md`:**
+
+Trace from `ckpt_15000`, variant `baseline_puct`, 90s smoke, no train step:
+
+| Site | Count | §70 count |
+|---|---|---|
+| `apply_dirichlet_to_root` | 10 | **0** |
+| `game_runner` | 30 | 30 |
+
+- 10/10 unique Dirichlet noise vectors — workers draw independent samples.
+- Top-1 prior: `0.540 → 0.412` post-noise (−12.8 pp).
+- Top-1 **visit** fraction at cm=0: **0.474** vs §70 PUCT baseline **0.65** (−17.6 pp).
+- Workers at cm=0,ply=0 span 0.33–0.55 — clearly diverging (§70: identical across all 14 workers).
+
+**Grep proof of presence:**
+```
+engine/src/game_runner.rs:465: tree.apply_dirichlet_to_root(&noise, dirichlet_epsilon);  # PUCT branch
+engine/src/game_runner.rs:550: tree.apply_dirichlet_to_root(&noise, dirichlet_epsilon);  # Gumbel branch
+```
+
+**§71 pre-run checklist status:**
+
+- [x] Dirichlet ported to `engine/src/game_runner.rs`, unit-tested
+- [x] `debug_prior_trace` re-run confirms `apply_dirichlet_to_root` records appear
+- [ ] `checkpoints/replay_buffer.bin` archived
+- [ ] Collapsed checkpoints moved to `checkpoints/collapsed_2026-04-09/`
+- [ ] `make test.all` and `make bench.full` pass (done — see above)
+- [x] `policy_entropy_pretrain/_selfplay` fields visible
+- [x] Dashboards render split entropy without error
+- [ ] 2-hour smoke from `bootstrap_model.pt` produces non-identical self-play games
+- [ ] 6-hour entropy-checkpoint plan written
+
+Q17 status: **RESOLVED — Dirichlet port shipped.** Remaining items before sustained run: walk the §71 checklist (archive buffer, move collapsed ckpts, run 2hr smoke from bootstrap, write 6hr plan).
