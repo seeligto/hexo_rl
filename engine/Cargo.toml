@@ -19,8 +19,8 @@ debug_prior_trace = []
 pyo3 = { version = "0.28", features = ["extension-module"] }
 numpy = { version = "0.28", features = ["half"] }
 half = "2"
-rand = "0.9"
-rand_distr = "0.5"
+rand = "0.10"
+rand_distr = "0.6"
 fxhash = "0.2"
 dashmap = "6.0"
 flume = "0.12.0"

@@ -9,7 +9,7 @@ use crate::board::{Board, Cell, BOARD_SIZE, HALF, TOTAL_CELLS, hex_distance};
 use crate::mcts::MCTSTree;
 use crate::inference_bridge::InferenceBatcher;
 use rand::prelude::IndexedRandom;
-use rand::rng;
+use rand::{rng, RngExt};
 
 // ── Gumbel MCTS: Sequential Halving state ────────────────────────────────────
 
@@ -368,7 +368,7 @@ impl SelfPlayRunner {
                     let mut move_history: Vec<(i32, i32)> = Vec::new();
 
                     // KataGo-style playout cap randomisation.
-                    let is_fast_game = fast_prob > 0.0 && rand::Rng::random::<f32>(&mut rng) < fast_prob;
+                    let is_fast_game = fast_prob > 0.0 && rng.random::<f32>() < fast_prob;
                     let game_sims = if is_fast_game { fast_sims } else { standard_sims };
 
                     for _ in 0..max_moves {
@@ -1008,7 +1008,7 @@ impl SelfPlayRunner {
         }
 
         let mut rng = rng();
-        let mut r: f32 = rand::Rng::random(&mut rng);
+        let mut r: f32 = rng.random();
         r *= sum;
 
         let mut current = 0.0;
