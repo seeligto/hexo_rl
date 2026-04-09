@@ -5,7 +5,9 @@
 set -euo pipefail
 
 # ── Release artifact constants ─────────────────────────────────────────────────
-RELEASE_BASE_URL="https://github.com/seeligto/hexo_rl/releases/download/v0.1-bootstrap"
+RELEASE_REPO="seeligto/hexo_rl"
+RELEASE_TAG="v0.1-bootstrap"
+RELEASE_BASE_URL="https://github.com/$RELEASE_REPO/releases/download/$RELEASE_TAG"
 BOOTSTRAP_MODEL_SHA256="01862660e4850a517f45f359db5763975341e7dd35c67f593ab21f38a73a9670"
 BOOTSTRAP_CORPUS_SHA256="678079c12c65209af1d9ce9969da0455b4c16ccee353ca214c336943758309aa"
 
@@ -46,7 +48,18 @@ download_and_verify() {
     fi
 
     echo "    Downloading $name ..."
-    curl -fL --progress-bar "$url" -o "$dest"
+    local dest_dir
+    dest_dir="$(dirname "$dest")"
+    if command -v gh &>/dev/null; then
+        # gh handles authentication for private repos
+        gh release download "$RELEASE_TAG" \
+            --repo "$RELEASE_REPO" \
+            --pattern "$name" \
+            --dir "$dest_dir" \
+            --clobber
+    else
+        curl -fL --progress-bar "$url" -o "$dest"
+    fi
 
     local actual
     actual="$(sha256 "$dest")"
@@ -65,6 +78,7 @@ if [[ ! -f "CLAUDE.md" ]]; then
     fail "Run this script from the repository root (the directory containing CLAUDE.md)."
     exit 1
 fi
+REPO_ROOT="$(pwd)"
 
 echo "========================================================"
 echo "  hexo_rl setup"
@@ -189,12 +203,12 @@ ok "Engine built"
 
 echo "    Building SealBot C++ extensions..."
 if [[ -d "vendor/bots/sealbot/best" ]]; then
-    (cd vendor/bots/sealbot/best && .venv/bin/python setup.py build_ext --inplace --quiet 2>&1) \
+    (cd vendor/bots/sealbot/best && "$REPO_ROOT/.venv/bin/python" setup.py build_ext --inplace --quiet 2>&1) \
         && ok "SealBot best built" \
         || warn "SealBot best build failed (non-fatal — only needed for eval)"
 fi
 if [[ -d "vendor/bots/sealbot/current" ]]; then
-    (cd vendor/bots/sealbot/current && .venv/bin/python setup.py build_ext --inplace --quiet 2>&1) \
+    (cd vendor/bots/sealbot/current && "$REPO_ROOT/.venv/bin/python" setup.py build_ext --inplace --quiet 2>&1) \
         && ok "SealBot current built" \
         || warn "SealBot current build failed (non-fatal — only needed for eval)"
 fi
