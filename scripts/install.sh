@@ -203,12 +203,12 @@ ok "Engine built"
 
 echo "    Building SealBot C++ extensions..."
 if [[ -d "vendor/bots/sealbot/best" ]]; then
-    (cd vendor/bots/sealbot/best && "$REPO_ROOT/.venv/bin/python" setup.py build_ext --inplace --quiet 2>&1) \
+    (cd vendor/bots/sealbot/best && CXXFLAGS="-Wno-reorder" "$REPO_ROOT/.venv/bin/python" setup.py build_ext --inplace --quiet 2>&1) \
         && ok "SealBot best built" \
         || warn "SealBot best build failed (non-fatal — only needed for eval)"
 fi
 if [[ -d "vendor/bots/sealbot/current" ]]; then
-    (cd vendor/bots/sealbot/current && "$REPO_ROOT/.venv/bin/python" setup.py build_ext --inplace --quiet 2>&1) \
+    (cd vendor/bots/sealbot/current && CXXFLAGS="-Wno-reorder" "$REPO_ROOT/.venv/bin/python" setup.py build_ext --inplace --quiet 2>&1) \
         && ok "SealBot current built" \
         || warn "SealBot current build failed (non-fatal — only needed for eval)"
 fi
