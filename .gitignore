@@ -31,8 +31,12 @@ htmlcov/
 # Data / checkpoints (large, generated)
 data/
 !data/**/.gitkeep
-reports/
+reports/*
 !reports/**/.gitkeep
+!reports/diagnosis_2026-04-10/
+reports/diagnosis_2026-04-10/*
+!reports/diagnosis_2026-04-10/diag_*
+!reports/diagnosis_2026-04-10/bench_full.txt
 checkpoints/
 logs/
 logs/scrape_history.log
