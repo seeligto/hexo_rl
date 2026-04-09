@@ -49,6 +49,17 @@ ckpt_13000 / 14000 / 15000 despite healthy dashboard metrics.
 Full details in sprint log §70 and `reports/diagnosis_2026-04-10/`. No
 fixes proposed in this pass — findings only.
 
+**2026-04-10 update (§71):** Gumbel fallback verified — static audit and
+runtime trace confirm `gumbel_mcts: true` provides functionally active root
+noise on the training path (visit concentration 0.24 vs 0.65 for PUCT;
+workers diverge in candidate selection per §71 verdict). Policy-entropy split
+monitoring landed: `policy_entropy_pretrain` and `policy_entropy_selfplay`
+now emitted separately on every `train_step` event; selfplay collapse
+threshold at 1.5 nats visible in both dashboards. Pre-run checklist
+documented in §71. **Dirichlet port is the only remaining blocker before
+restart.** A new sustained run should start from `bootstrap_model.pt` after
+the port is unit-tested and the §71 pre-run checklist is walked.
+
 **Q2 blocking on Q17:** Q2 requires a stable baseline to ablate value
 aggregation strategies against, but every post-bootstrap checkpoint has
 the same collapse signature. Resolve Q17 before re-running Q2.
