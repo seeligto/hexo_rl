@@ -37,6 +37,10 @@ reports/*
 reports/diagnosis_2026-04-10/*
 !reports/diagnosis_2026-04-10/diag_*
 !reports/diagnosis_2026-04-10/bench_full.txt
+!reports/verify_gumbel_2026-04-10/
+reports/verify_gumbel_2026-04-10/*
+!reports/verify_gumbel_2026-04-10/diag_*
+!reports/verify_gumbel_2026-04-10/verdict.md
 checkpoints/
 logs/
 logs/scrape_history.log
