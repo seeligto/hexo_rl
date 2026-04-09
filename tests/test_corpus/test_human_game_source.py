@@ -11,7 +11,10 @@ from hexo_rl.corpus.sources.base import GameRecord
 RAW_DIR = Path("data/corpus/raw_human")
 
 
-@pytest.mark.skipif(not RAW_DIR.exists(), reason="data/corpus/raw_human/ not present")
+@pytest.mark.skipif(
+    not RAW_DIR.exists() or not any(RAW_DIR.glob("*.json")),
+    reason="human game corpus not present; run `make corpus.fetch` to populate",
+)
 class TestHumanGameSourceRealData:
     def test_len_positive(self):
         src = HumanGameSource(RAW_DIR)
