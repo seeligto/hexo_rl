@@ -1,0 +1,71 @@
+Phase 4.0 mode-collapse diagnostic — verification bench run
+Date: 2026-04-09 11:53 (first) / 12:01 (master control)
+Host: laptop (Ryzen 7 8845HS + RTX 4060)
+
+This file records the `make bench.full` output used as the verification trail
+for the debug_prior_trace feature commit (per CLAUDE.md Prime Directive).
+
+=============================================================================
+Run 1 — default build WITH the debug_prior_trace source present in tree
+        (feature NOT enabled, code is cfg-gated out)
+=============================================================================
+
+  MCTS sim/s (CPU, no NN)          : 54,765   IQR +/-102.5
+  NN inference batch=64 pos/s      :  8,347.1  IQR +/-7.2      <-- below target 8,500
+  NN latency batch=1 mean ms       :     1.77  IQR +/-0.04
+  Buffer push pos/s                :  813,788  IQR +/-124,657
+  Buffer sample raw us/batch       :  1,086.6  IQR +/-14.4
+  Buffer sample augmented us/batch :  1,029.3  IQR +/-6.6
+  GPU utilisation %                :    100.0
+  Worker throughput pos/hr         :  546,830  IQR +/-32,965   <-- below target 625,000
+  Worker batch fill %              :    100.0
+
+  JSON: reports/benchmarks/2026-04-09_11-53.json
+  Result: "Some checks FAILED" — 2 of 10 metrics below target.
+
+=============================================================================
+Run 2 — clean master baseline (my changes stashed)
+        Purpose: verify the failures are NOT caused by the debug_prior_trace
+        changes. Default build on master with zero in-tree modifications.
+=============================================================================
+
+  MCTS sim/s (CPU, no NN)          : 54,478   IQR +/-343.1
+  NN inference batch=64 pos/s      :  8,393.3  IQR +/-6.8      <-- below target 8,500
+  NN latency batch=1 mean ms       :     1.78  IQR +/-0.01
+  Buffer push pos/s                :  734,434  IQR +/-24,904
+  Buffer sample raw us/batch       :  1,095.0  IQR +/-5.8
+  Buffer sample augmented us/batch :  1,037.1  IQR +/-30.2
+  GPU utilisation %                :    100.0
+  Worker throughput pos/hr         :  559,736  IQR +/-20,220   <-- below target 625,000
+  Worker batch fill %              :    100.0
+
+  JSON: reports/benchmarks/2026-04-09_12-01.json
+  Result: "Some checks FAILED" — SAME TWO metrics below target.
+
+=============================================================================
+Conclusion
+=============================================================================
+
+Both runs fail the same two metrics within noise of each other (NN inference
+~0.5% difference, worker throughput ~2% difference). The failures are NOT
+caused by the debug_prior_trace feature — they reproduce identically on
+unmodified master HEAD (e6b7603).
+
+Likely cause: environmental (thermal, scheduler background load, or AC/DC
+power state) — the laptop baseline in CLAUDE.md was taken 2026-04-06 on AC
+power, and today's runs show the same throughput drop on both modified and
+unmodified trees. The buffer push metric (813k vs 734k) varies by >10%
+between the two runs taken 8 minutes apart, which confirms the bench noise
+floor is elevated today.
+
+Verification intent satisfied:
+  1. Default build compiles cleanly with the new feature source in tree.
+  2. All 102 Rust unit tests pass under the default build (same as master).
+  3. All 646 Python unit tests pass.
+  4. `cargo test --features debug_prior_trace` adds one gated test (103 total)
+     and all tests pass under the feature build.
+  5. The bench.full regression is pre-existing on master and therefore
+     unrelated to the debug_prior_trace change.
+
+All new engine code is guarded by `#[cfg(feature = "debug_prior_trace")]`;
+the default-build artifact is functionally identical to master.

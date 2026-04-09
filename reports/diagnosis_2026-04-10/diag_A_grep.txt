@@ -1,0 +1,124 @@
+# Raw grep proofs — Diagnostic A.1 static audit
+# Date: 2026-04-10
+# Command:
+#   rg -i -n 'dirichlet|apply_dirichlet_to_root' engine/src hexo_rl scripts tests
+
+
+============================================================================
+Q1. Does engine/src/game_runner.rs contain ANY occurrence of 'dirichlet' or 'noise'?
+============================================================================
+
+$ rg -i -n 'dirichlet|noise' engine/src/game_runner.rs
+
+engine/src/game_runner.rs:22:    /// Gumbel(0,1) noise values, one per root child (indexed by child offset).
+engine/src/game_runner.rs:42:    /// Generates Gumbel(0,1) noise for all root children, computes
+
+=> ZERO matches for "dirichlet".
+=> Only occurrences of "noise" are Gumbel(0,1) noise (gated on gumbel_mcts=true).
+=> HEADLINE: the Rust training path has no Dirichlet injection whatsoever.
+
+
+============================================================================
+Q2. Where does apply_dirichlet_to_root live and who calls it?
+============================================================================
+
+engine/src/mcts/mod.rs:321:    // ── Dirichlet noise ────────────────────────
+engine/src/mcts/mod.rs:323:    pub fn apply_dirichlet_to_root(&mut self, noise: &[f32], epsilon: f32) {
+engine/src/mcts/mod.rs:692:    fn test_dirichlet_ignored_before_root_expanded() {
+engine/src/mcts/mod.rs:695:        tree.apply_dirichlet_to_root(&[0.5, 0.5], 0.25);
+engine/src/mcts/mod.rs:700:    fn test_dirichlet_mixes_priors_correctly() {
+engine/src/mcts/mod.rs:706:        tree.apply_dirichlet_to_root(&noise, epsilon);
+
+engine/src/lib.rs:444:    /// Mix Dirichlet noise into the root node's priors (self-play only).
+engine/src/lib.rs:454:    pub fn apply_dirichlet_to_root(&mut self, noise: Vec<f32>, epsilon: f32) {
+engine/src/lib.rs:455:        self.inner.apply_dirichlet_to_root(&noise, epsilon);
+
+hexo_rl/selfplay/worker.py:138:            if use_dirichlet and not dirichlet_applied:
+hexo_rl/selfplay/worker.py:141:                noise = np.random.dirichlet([self.dirichlet_alpha] * n_ch ...
+hexo_rl/selfplay/worker.py:144:                self.tree.apply_dirichlet_to_root(noise, self.dirichlet_eps)
+hexo_rl/selfplay/worker.py:145:                dirichlet_applied = True
+
+=> Only caller: hexo_rl/selfplay/worker.py  (the Python SelfPlayWorker).
+
+
+============================================================================
+Q3. Is SelfPlayWorker reachable from scripts/train.py?
+============================================================================
+
+$ rg -n 'SelfPlayWorker' hexo_rl scripts tests
+
+hexo_rl/selfplay/worker.py:14:    worker = SelfPlayWorker(model, config, device)
+hexo_rl/selfplay/worker.py:37:__all__ = ["SelfPlayWorker", "get_temperature"]
+hexo_rl/selfplay/worker.py:40:class SelfPlayWorker:
+hexo_rl/eval/evaluator.py:54:    # (comment only — does not import SelfPlayWorker)
+hexo_rl/bootstrap/bots/our_model_bot.py:16:from hexo_rl.selfplay.worker import SelfPlayWorker
+hexo_rl/bootstrap/bots/our_model_bot.py:57:        self._worker = SelfPlayWorker(model=net, config=config, device=device)
+scripts/benchmark_mcts.py:14:from hexo_rl.selfplay.worker import SelfPlayWorker
+scripts/benchmark_mcts.py:34:    worker = SelfPlayWorker(model, config, device)
+
+=> scripts/train.py: ZERO imports or references to SelfPlayWorker.
+=> SelfPlayWorker is used by: benchmark_mcts.py (micro-bench),
+   our_model_bot.py (eval wrapper). Neither is on the training path.
+
+
+============================================================================
+Q4. What does scripts/train.py use instead?
+============================================================================
+
+$ rg -n 'pool|SelfPlayRunner|SelfPlayWorker' scripts/train.py | head
+
+scripts/train.py:474:    from hexo_rl.selfplay.pool import WorkerPool
+scripts/train.py:477:    pool = WorkerPool(inf_model, config, device, buffer)
+
+$ rg -n 'SelfPlayRunner|from engine' hexo_rl/selfplay/pool.py
+
+hexo_rl/selfplay/pool.py:4:    Concurrency is now managed by Rust-owned worker threads via SelfPlayRunner.
+hexo_rl/selfplay/pool.py:18:from engine import SelfPlayRunner
+hexo_rl/selfplay/pool.py:24:from engine import ReplayBuffer
+hexo_rl/selfplay/pool.py:61:        self._runner = SelfPlayRunner(
+
+=> Training call chain:
+     scripts/train.py  →  hexo_rl/selfplay/pool.py:WorkerPool
+                        →  engine.SelfPlayRunner  (Rust game_runner.rs)
+
+=> The training path never touches SelfPlayWorker, never touches
+   apply_dirichlet_to_root, and (from Q1) game_runner.rs has no
+   Dirichlet injection of its own.
+
+
+============================================================================
+Q5. Git archaeology — regression or unported feature?
+============================================================================
+
+$ git log -S "dirichlet" -- engine/src/game_runner.rs
+(empty — zero commits ever added or removed the word "dirichlet" in this file)
+
+$ git log -S "apply_dirichlet_to_root" --all --oneline
+e709342 chore: remove old native_core/ and python/ directories
+2a17504 refactor: rename python to hexo_rl
+6862102 refactor: rename native_core to engine
+a1f4e42 refactor(mcts): split mod.rs into node, selection, backup modules
+d85cf61 refactor(mcts): split mod.rs into node, selection, backup modules
+39a8d2e feat: implement batched MCTS, C++ engine integration, and robust RL training pipeline
+397867c update
+5f59e16 feat(mcts): dirichlet noise at root for self-play exploration
+
+$ git log --all --diff-filter=A --oneline -- \
+      engine/src/game_runner.rs native_core/src/game_runner.rs
+6862102 refactor: rename native_core to engine
+7c67f4f Phase 3.5: Rust-driven game concurrency + thin Python inference layer
+
+Timeline:
+  2026-03-28  5f59e16  Dirichlet added to Python SelfPlayWorker via PyO3
+                       MCTSTree::apply_dirichlet_to_root.  Original training path.
+  2026-03-30  7c67f4f  Phase 3.5 — native_core/src/game_runner.rs CREATED
+                       (RustSelfPlayRunner) as the new Rust-owned training path.
+                       Dirichlet injection was NOT ported to this file.
+  2026-04-??  6862102  native_core → engine (rename only).
+
+=> VERDICT: UNPORTED FEATURE.
+   Two days after Dirichlet noise was added to the Python SelfPlayWorker path,
+   Phase 3.5 migrated the live training path to a new Rust worker
+   (SelfPlayRunner / game_runner.rs) without porting the Dirichlet injection
+   call. The Python SelfPlayWorker still has it and is still correct — it is
+   just no longer on the hot training path.
