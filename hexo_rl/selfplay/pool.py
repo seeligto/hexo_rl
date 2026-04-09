@@ -84,6 +84,9 @@ class WorkerPool:
             gumbel_mcts=bool(sp.get("gumbel_mcts", False)),
             gumbel_m=int(sp.get("gumbel_m", 16)),
             gumbel_explore_moves=int(sp.get("gumbel_explore_moves", 10)),
+            dirichlet_alpha=float(mcts_cfg.get("dirichlet_alpha", 0.3)),
+            dirichlet_epsilon=float(mcts_cfg.get("epsilon", 0.25)),
+            dirichlet_enabled=bool(mcts_cfg.get("dirichlet_enabled", True)),
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 
