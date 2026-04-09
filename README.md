@@ -1,229 +1,115 @@
 # Hex Tac Toe AlphaZero
 
-An AlphaZero-style self-learning AI for **Hex Tac Toe** — a community game on an
-infinite hexagonal grid where the goal is 6 stones in a row. Player 1 opens with
-1 stone, then both players alternate placing 2 stones per turn.
-
-The high-performance core is written in Rust (`engine/`) and exposed to Python via
-PyO3. A PyTorch neural network is trained via self-play using MCTS-guided game
-generation. See `CLAUDE.md` for full project context.
+An AlphaZero-style self-learning AI for [Hex Tac Toe](https://hex-tic-tac-toe.github.io/) —
+a community game played on an infinite hexagonal grid. The goal is 6 stones in a row.
+Player 1 opens with 1 stone; both players then alternate placing 2 stones per turn.
+The engine is written in Rust, exposed to Python via PyO3, and trained end-to-end via
+MCTS-guided self-play with a PyTorch neural network. The primary ELO benchmark is
+[SealBot](https://github.com/Ramora0/SealBot), the strongest public bot for the game.
 
 ---
 
-## Prerequisites
-
-- Python 3.11+ (tested on 3.14)
-- Rust 1.75+ (`rustup`)
-- CUDA 12.x + an NVIDIA GPU (RTX 3070 or better recommended)
-- `maturin` (installed automatically by `make install`)
+<!-- Add docs/assets/dashboard.png once captured (make train, then screenshot localhost:5001) -->
+<!-- ![Web dashboard](docs/assets/dashboard.png) -->
 
 ---
 
 ## Quick start
 
 ```bash
-git clone --recursive <url>
+git clone --recursive <repo-url>
 cd hexo_rl
-
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-make native.build        # build Rust engine extension
-
-make test.all            # run Rust + Python test suites (86 + 576 tests)
-
-# Generate corpus (SealBot games + human games)
-make corpus.scrape       # fetch latest human games from hexo.did.science
-make corpus.fast         # generate SealBot fast corpus (0.1s/move, 5,000 games)
-make corpus.strong       # generate SealBot strong corpus (0.5s/move, 2,500 games)
-make corpus.npz          # export combined corpus → data/bootstrap_corpus.npz
-
-# Supervised pretraining on corpus
-make pretrain.full       # 15 epochs (~2-4 hours depending on corpus size)
-
-# Self-play RL
-make train               # self-play RL with web + terminal dashboard
+make install
+make train
 ```
 
-> **Note:** `data/bootstrap_corpus.npz` must exist before running `make train`.
-> It is the mixed-data source for the pretrained buffer. If missing, training
-> runs on self-play data only (slower cold-start convergence).
+Dashboard at http://localhost:5001 — game viewer at http://localhost:5001/viewer.
+
+`make install` creates the virtualenv, installs Python dependencies, builds the
+SealBot C++ extension, builds the Rust engine via maturin, and runs the test suite.
+It prints a corpus.fetch reminder at the end; run that before the first training session
+if you want a pretrained starting point (see `make pretrain` and `make corpus.fetch`).
 
 ---
 
-## Make targets
+## What you'll see
 
-### Build & environment
-
-```bash
-make env.check           # verify .venv + engine import
-make native.build        # build/install Rust extension (LTO + native CPU)
-make clean               # remove Rust artifacts and Python caches
-make rebuild             # full clean + rebuild
-```
-
-### Testing
-
-```bash
-make test.rust           # Rust unit tests
-make test.py             # Python tests (tests/ only)
-make test.all            # Rust + Python
-make test.focus          # buffer / inference / pool smoke tests
-make ci                  # full pre-push gate: all tests + quick benchmark
-```
-
-### Benchmarks
-
-```bash
-make bench.quick         # 30s sanity check
-make bench.lite          # quick benchmark (n=3)
-make bench.full          # standard gate (n=5, 3s warm-up) — run before Phase 4.5
-make bench.stress        # heavy 5-min stability test
-make bench.baseline      # save bench.full result to reports/benchmarks/
-make bench.mcts          # Rust MCTS micro-benchmark only
-```
-
-### Corpus generation
-
-Run these in order before pretraining:
-
-```bash
-make corpus.scrape       # scrape latest human games (hexo.did.science)
-make corpus.fast         # SealBot fast corpus (0.1s think, 5,000 games)
-make corpus.strong       # SealBot strong corpus (0.5s think, 2,500 games)
-make corpus.all          # fast + strong + manifest update
-make corpus.npz          # export to data/bootstrap_corpus.npz (~140 MB)
-make corpus.analysis     # quality analysis on human + bot games
-```
-
-### Pretraining
-
-```bash
-make pretrain.lite       # smoke test — 100 steps only
-make pretrain.full       # full supervised pretrain — 15 epochs
-```
-
-Checkpoint saved to `checkpoints/pretrain/pretrain_<step>.pt`.
-
-### Self-play training
-
-```bash
-make train               # RL from bootstrap checkpoint + corpus (production default)
-make train.nodash        # same, no dashboard (useful for tmux/ssh)
-make train.bg            # background training (logs to logs/)
-make train.stop          # stop background training
-make train.status        # check if running, show recent log tail
-make train.resume        # resume from latest checkpoint
-make train.smoke         # 200-step smoke test — verifies end-to-end stack
-make train.raw           # from random init, no pretrain (ablation only)
-```
-
-The dashboard is available at `http://localhost:5001` when running `make train`.
-
-### Evaluation
-
-```bash
-make eval.sealbot.quick  # 10 games, 64 sims (fast sanity check)
-make eval.sealbot.full   # 100 games, 128 sims (full gate)
-make eval.sealbot.latest # eval latest checkpoint
-```
-
-### Plotting
-
-```bash
-make plot.train.latest   # plot latest training log
-make plot.sealbot.latest # plot latest SealBot eval result
-make plot.sealbot.all    # SealBot Elo trend over all evals
-```
+`make train` launches a terminal dashboard alongside a web UI at port 5001. The terminal
+shows live metrics: policy entropy, value loss, games/hr, worker throughput, and GPU
+utilization. The web dashboard updates in real time and includes a game viewer that
+replays every self-play game with a threat overlay — highlighting sequences that could
+lead to a 6-in-a-row win on any of the three hex axes.
 
 ---
 
-## Performance baseline
+## Architecture at a glance
 
-**Hardware:** Ryzen 7 3700x + RTX 3070, 16 workers, LTO + native CPU  
-**Date:** 2026-04-04  
-**Model:** 12 residual blocks × 128 channels, SE blocks, dual-pool value head  
-**torch.compile:** DISABLED (Python 3.14 CUDA graph incompatibility — see below)
+The codebase is split at a hard language boundary:
 
-| Metric | Baseline (median, n=5) | Target |
+```
+Rust  (engine/)     MCTS tree, board logic, replay buffer, self-play runner
+Python (hexo_rl/)   neural network, training loop, eval, monitoring, orchestration
+PyO3  bridge        zero-copy NumPy transfer between the two layers
+```
+
+The board is genuinely infinite: the Rust core uses a sparse `HashMap<(q,r), Player>`
+with 128-bit Zobrist hashing. The network receives fixed-size (18 × 19 × 19) tensors
+assembled by windowing around active stone clusters. See [docs/01_architecture.md](docs/01_architecture.md)
+for the full spec.
+
+---
+
+## Performance
+
+**Hardware:** Ryzen 7 8845HS + RTX 4060 Laptop, 16 workers, LTO + native CPU
+**Date:** 2026-04-09
+
+| Metric | Baseline (n=5 median) | Target |
 |---|---|---|
-| MCTS (CPU only, no NN) | 30,963 sim/s | ≥ 26,000 sim/s |
-| NN inference (batch=64) | 10,993 pos/s | ≥ 8,500 pos/s |
-| NN latency (batch=1, mean) | 2.83 ms | ≤ 3.5 ms |
-| Replay buffer push | 839,289 pos/s | ≥ 640,000 pos/s |
-| Replay buffer sample (batch=256) | 1,270.9 µs | ≤ 1,500 µs |
-| Replay buffer sample augmented (batch=256) | 1,147.5 µs | ≤ 1,400 µs |
+| MCTS (CPU only, no NN) | 53,840 sim/s | ≥ 26,000 sim/s |
+| NN inference (batch=64) | 8,804 pos/s | ≥ 8,250 pos/s |
+| NN latency (batch=1) | 1.60 ms | ≤ 3.5 ms |
+| Worker throughput | 548,653 pos/hr | ≥ 500,000 pos/hr |
 | GPU utilization | 100% | ≥ 85% |
-| VRAM usage | 0.10 GB / 8.6 GB | ≤ 80% |
-| Worker throughput | 758,748 pos/hr | ≥ 625,000 pos/hr |
-| Batch fill % | 100% | ≥ 80% |
 
-Run `make bench.full` to reproduce. All 10 targets pass.
-
-> **Benchmark methodology:** median of n=5 runs, 3s warm-up per metric.
-> MCTS workload: 800 sims/move × 62 iterations with tree reset between moves.
-> Targets set at 85% of observed median.
+Methodology: median of n=5 runs, 3 s warm-up. MCTS workload: 800 sims/move × 62
+iterations with tree reset between moves. Run `make bench` to reproduce. Full
+target definitions in [CLAUDE.md §Benchmarks](CLAUDE.md#benchmarks--must-pass-before-phase-45).
 
 ---
 
-## Architecture overview
-
-- **Rust (`engine/`)** — MCTS tree, board logic (infinite sparse HashMap board,
-  128-bit Zobrist hashing), replay buffer (f16-as-u16, 12-fold hex augmentation),
-  self-play runner (Rust worker threads), inference batcher
-- **Python (`hexo_rl/`)** — neural network (ResNet-12 × 128ch, SE blocks, dual-pool
-  value head, BCE loss), training loop, evaluation pipeline, corpus pipeline,
-  event-driven monitoring dashboard
-- **PyO3 bridge** — `from engine import Board, MCTSTree, ReplayBuffer, SelfPlayRunner, InferenceBatcher`
-
-### Network architecture
-
-| Component | Setting |
-|---|---|
-| Residual blocks | 12 × 128 channels |
-| Squeeze-and-excitation | Every block, reduction ratio 4 |
-| Value head | Global avg + max pool → FC(256) → FC(1) → BCE on sigmoid |
-| Policy head | Conv → flatten → log-softmax |
-| Auxiliary head | Opponent reply prediction (weight 0.15, training only) |
-| Entropy regularisation | 0.01 (prevents policy collapse) |
-
-### Known issues / current status
-
-**torch.compile disabled** — Python 3.14 has incompatibilities with PyTorch's
-CUDA graph implementation that caused three consecutive blocking failures:
-`mode="reduce-overhead"` TLS crash (§25), `mode="default"` first-pass crash (§30),
-and a 27 GB RAM spike during Triton JIT compilation that blocked workers for 5+
-minutes (§32). The benchmark delta was only +3% worker throughput. Compile support
-is disabled via `torch_compile: false` in `configs/training.yaml` and will be
-re-enabled when PyTorch stabilizes on Python 3.14.
-
-**Board is infinite** — The NN sees a fixed 19×19 window centred on active stone
-clusters (Hybrid Attention-Anchored Windowing). The Rust engine is genuinely
-unbounded (`HashMap<(q,r), Player>`).
-
----
-
-## Training workflow
+## Project layout
 
 ```
-corpus.scrape + corpus.fast/strong
-        ↓
-    corpus.npz
-        ↓
-  pretrain.full   ← supervised on corpus (~15 epochs)
-        ↓
-     train        ← self-play RL, resumes from pretrain checkpoint
-                     mixes corpus + self-play (exponential decay over 1M steps)
+engine/        Rust core (board, MCTS, replay buffer, self-play runner)
+hexo_rl/       Python training + orchestration
+configs/       All hyperparameters (model, training, selfplay, monitoring, eval, corpus)
+docs/          Architecture, roadmap, sprint log
+vendor/bots/   SealBot submodule — ELO benchmark reference
+scripts/       Entry points called by the Makefile
 ```
 
-The mixed-data schedule:
-- Step 0: 80% corpus / 20% self-play  
-- Step 1M: 10% corpus / 90% self-play (floor)
-
-Buffer grows with training: 250K → 500K (step 500K) → 1M (step 1.5M).
+Run `make help` for the full target list.
 
 ---
 
-See `CLAUDE.md` for complete context, working rules, and session protocols.
-See `docs/02_roadmap.md` for phase exit criteria.
-See `docs/07_PHASE4_SPRINT_LOG.md` for a full record of architectural decisions.
+## Documentation
+
+- [docs/00_agent_context.md](docs/00_agent_context.md) — orientation, language boundary, key decisions
+- [docs/01_architecture.md](docs/01_architecture.md) — full technical spec
+- [docs/02_roadmap.md](docs/02_roadmap.md) — phases with entry/exit criteria
+- [docs/03_tooling.md](docs/03_tooling.md) — logging, benchmarking, progress display conventions
+- [docs/04_bootstrap_strategy.md](docs/04_bootstrap_strategy.md) — minimax corpus generation and pretraining
+- [docs/05_community_integration.md](docs/05_community_integration.md) — community bot, API, notation, formations
+- [docs/06_OPEN_QUESTIONS.md](docs/06_OPEN_QUESTIONS.md) — active research questions and ablation plans
+- [docs/07_PHASE4_SPRINT_LOG.md](docs/07_PHASE4_SPRINT_LOG.md) — Phase 4.0 sprint changelog
+
+---
+
+## License and acknowledgements
+
+License: TBD — see repository for updates.
+
+Thanks to the [Hex Tac Toe community](https://hex-tic-tac-toe.github.io/) for the game,
+the public game archive at hexo.did.science, and the bot API spec. SealBot by
+[Ramora0](https://github.com/Ramora0/SealBot) is the external ELO reference for this project.
