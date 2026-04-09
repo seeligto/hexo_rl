@@ -187,6 +187,7 @@
       <span class="value" id="card-entropy">&mdash;</span>
       <span class="badge" id="card-entropy-badge" style="display:none"></span>
     </div>
+    <div class="card-sub" id="card-entropy-breakdown">&mdash;</div>
     <div class="card-sub" id="card-entropy-sub">&mdash;</div>
   </div>
   <div class="card">
@@ -669,6 +670,7 @@ function resetEntropyCard() {
   el.style.color    = '';
   badge.style.display  = 'none';
   badge.textContent = '';
+  setText('card-entropy-breakdown', DASH);
 }
 
 // ── Event handlers ─────────────────────────────────────────────────────────
@@ -707,6 +709,17 @@ function onTrainingStep(p) {
   if (p.policy_entropy != null && maxEnt > 0) {
     const pct = (p.policy_entropy / maxEnt * 100).toFixed(0);
     setText('card-entropy-sub', pct + '% of max');
+  }
+  // Entropy breakdown: pretrain vs selfplay
+  {
+    const ep = p.policy_entropy_pretrain;
+    const es = p.policy_entropy_selfplay;
+    if (ep != null || es != null) {
+      const parts = [];
+      if (ep != null) parts.push('pre\u00a0' + ep.toFixed(2));
+      if (es != null) parts.push('sp\u00a0' + es.toFixed(2));
+      setText('card-entropy-breakdown', parts.join('  \u00b7  '));
+    }
   }
   if (p.loss_value != null) {
     const ratio = (p.loss_value / 0.6931).toFixed(2);
