@@ -1,6 +1,6 @@
 """Phase 4.0 mode-collapse diagnostic — policy sharpness across checkpoints.
 
-This is Diagnostic B from `reports/diagnosis_2026-04-10/`. It loads several
+This is Diagnostic B from `archive/diagnosis_2026-04-10/`. It loads several
 checkpoints, forwards 500 board positions drawn from recent self-play game
 records, and reports the distribution of raw-policy entropy (H(π_raw)) per
 checkpoint. It also parses the diag-A training-path JSONL (if present) and
@@ -10,7 +10,7 @@ Diagnostic C.
 **Scope of changes:** this script is strictly read-only w.r.t. trainer.py,
 network.py, and the engine. It only loads checkpoints, runs forward passes
 in eval() + no_grad(), and writes markdown / JSON / CSV into
-`reports/diagnosis_2026-04-10/`. Nothing else is touched.
+`archive/diagnosis_2026-04-10/`. Nothing else is touched.
 
 **K=0 caveat.** Entropy is measured on the K=0 (centroid) cluster window
 only, not the full min-pool aggregation used by the training path.
@@ -44,7 +44,7 @@ from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
 from hexo_rl.training.trainer import Trainer
 
-DIAG_DIR = REPO_ROOT / "reports" / "diagnosis_2026-04-10"
+DIAG_DIR = REPO_ROOT / "archive" / "diagnosis_2026-04-10"
 CHECKPOINT_DIR = REPO_ROOT / "checkpoints"
 RUNS_DIR = REPO_ROOT / "runs"
 

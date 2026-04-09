@@ -529,7 +529,7 @@ See `docs/03_TOOLING.md` § "Benchmark variance (historical)" for details.
 than prior desktop baseline due to faster single-thread IPC. All 10 targets PASS.
 2026-04-09: NN inference and worker throughput targets rebaselined after a sustained
 NVIDIA driver/boost-clock shift (~14% GPU throughput reduction, persistent across
-cold/hot/idle runs, not a code regression). See `reports/bench_investigation_2026-04-09/verdict.md` and §72.
+cold/hot/idle runs, not a code regression). See `archive/bench_investigation_2026-04-09/verdict.md` and §72.
 
 ## Phase 4.0 architecture baseline
 

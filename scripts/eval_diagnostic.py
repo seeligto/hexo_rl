@@ -281,7 +281,7 @@ def main() -> None:
             print("  => VERDICT: sampling works. Collapse is due to missing Dirichlet noise only.")
 
         # Append result to diag_C_summary.md
-        diag_c = Path("reports/diagnosis_2026-04-10/diag_C_summary.md")
+        diag_c = Path("archive/diagnosis_2026-04-10/diag_C_summary.md")
         if diag_c.exists():
             with diag_c.open("a") as f:
                 f.write(f"\n---\n\n## Temperature sampling check (τ={args.temperature})\n\n")

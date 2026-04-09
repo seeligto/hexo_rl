@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 # Compile-time-gated root-prior / visit-count trace used by the Phase 4.0
-# mode collapse diagnostics (reports/diagnosis_2026-04-10/). Enable via:
+# mode collapse diagnostics (archive/diagnosis_2026-04-10/). Enable via:
 #   maturin develop --release -m engine/Cargo.toml --features debug_prior_trace
 # Activation at launch is gated a second time by HEXO_PRIOR_TRACE_PATH.
 debug_prior_trace = []
