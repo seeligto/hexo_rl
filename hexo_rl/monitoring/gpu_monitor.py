@@ -70,8 +70,8 @@ class GPUMonitor(threading.Thread):
         self.temp_c:        float = 0.0
 
     def start(self) -> None:
-        pynvml = _get_pynvml()
         try:
+            pynvml = _get_pynvml()
             pynvml.nvmlInit()
             self._handle = pynvml.nvmlDeviceGetHandleByIndex(self.device_index)
         except Exception as exc:
