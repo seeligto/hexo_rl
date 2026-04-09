@@ -330,9 +330,30 @@ impl MCTSTree {
             return;
         }
         let first = root.first_child as usize;
+
+        // Snapshot pre-priors for the debug_prior_trace feature. Compiled out
+        // in default builds; zero cost.
+        #[cfg(feature = "debug_prior_trace")]
+        let pre_priors: Vec<f32> = (0..n_ch)
+            .map(|j| self.pool[first + j].prior)
+            .collect();
+
         for j in 0..n_ch {
             let child = &mut self.pool[first + j];
             child.prior = (1.0 - epsilon) * child.prior + epsilon * noise[j];
+        }
+
+        #[cfg(feature = "debug_prior_trace")]
+        {
+            let post_priors: Vec<f32> = (0..n_ch)
+                .map(|j| self.pool[first + j].prior)
+                .collect();
+            crate::debug_trace::record_dirichlet(
+                epsilon,
+                &pre_priors,
+                &noise[..n_ch],
+                &post_priors,
+            );
         }
     }
 
@@ -690,6 +711,9 @@ mod tests {
 
     #[test]
     fn test_dirichlet_ignored_before_root_expanded() {
+        // Serialize against test_dirichlet_trace_roundtrip (see debug_trace::TEST_TRACE_LOCK).
+        #[cfg(feature = "debug_prior_trace")]
+        let _guard = crate::debug_trace::TEST_TRACE_LOCK.lock().unwrap();
         let mut tree = MCTSTree::new(1.5);
         tree.new_game(Board::new());
         tree.apply_dirichlet_to_root(&[0.5, 0.5], 0.25);
@@ -698,6 +722,9 @@ mod tests {
 
     #[test]
     fn test_dirichlet_mixes_priors_correctly() {
+        // Serialize against test_dirichlet_trace_roundtrip (see debug_trace::TEST_TRACE_LOCK).
+        #[cfg(feature = "debug_prior_trace")]
+        let _guard = crate::debug_trace::TEST_TRACE_LOCK.lock().unwrap();
         let (mut tree, child_a, child_b) = setup_two_child_tree(1.5);
         assert!(tree.pool[0].is_expanded());
 
@@ -715,6 +742,56 @@ mod tests {
             "child_a prior: expected {expected_a:.6}, got {prior_a:.6}");
         assert!((prior_b - expected_b).abs() < 1e-6,
             "child_b prior: expected {expected_b:.6}, got {prior_b:.6}");
+    }
+
+    /// Verifies the compile-time-gated JSONL trace wrapper around
+    /// `apply_dirichlet_to_root` writes exactly one well-formed record.
+    /// Only compiled with `--features debug_prior_trace`.
+    #[cfg(feature = "debug_prior_trace")]
+    #[test]
+    fn test_dirichlet_trace_roundtrip() {
+        use std::fs;
+        use std::io::{BufRead, BufReader};
+
+        // Serialize against other tests that call apply_dirichlet_to_root —
+        // they share the same global TRACE_FILE sink, so parallel execution
+        // would cause cross-test writes into our JSONL file.
+        let _guard = crate::debug_trace::TEST_TRACE_LOCK.lock().unwrap();
+
+        let path = std::env::temp_dir().join(format!(
+            "hexo_dbg_trace_{}.jsonl", std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+        let path_str = path.to_str().expect("tmp path utf8");
+
+        crate::debug_trace::set_sink_for_test(path_str);
+        crate::debug_trace::reset_counters_for_test();
+
+        let (mut tree, _, _) = setup_two_child_tree(1.5);
+        assert!(tree.pool[0].is_expanded());
+        let noise = [0.9f32, 0.1f32];
+        tree.apply_dirichlet_to_root(&noise, 0.25);
+
+        // Tear the sink down BEFORE releasing the guard so no subsequent
+        // test (from either this file or another) can write into our tmp.
+        crate::debug_trace::clear_sink_for_test();
+
+        let file = fs::File::open(&path).expect("trace file should exist");
+        let reader = BufReader::new(file);
+        let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+
+        assert_eq!(lines.len(), 1, "expected exactly one JSONL record, got {}", lines.len());
+        let record = &lines[0];
+        assert!(record.contains(r#""site":"apply_dirichlet_to_root""#),
+            "record missing site marker: {record}");
+        assert!(record.contains(r#""n_children":2"#),
+            "record missing n_children=2: {record}");
+        assert!(record.contains(r#""epsilon":0.250000"#),
+            "record missing epsilon=0.25: {record}");
+        assert!(record.contains(r#""noise":[0.900000,0.100000]"#),
+            "record missing noise vector: {record}");
+
+        let _ = fs::remove_file(&path);
     }
 
     #[test]
