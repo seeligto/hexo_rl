@@ -201,7 +201,7 @@ Make commands (preferred):
 ```bash
 # Core
 make env.check        # verify .venv + engine import
-make native.build     # build/install Rust extension via maturin
+make build            # build/install Rust extension via maturin
 make clean            # remove Rust build artifacts and Python caches
 make rebuild          # full clean + optimized rebuild
 
@@ -214,16 +214,11 @@ make test.integration # lifecycle integration test (~2-5 min, slow)
 make ci               # full pre-push gate (all tests + quick benchmark)
 
 # Benchmarks
-make bench.quick      # 30s sanity check
-make bench.lite       # quick benchmark (n=3)
-make bench.full       # higher-confidence benchmark (n=5, warm-up)
-make bench.stress     # heavy 5-min stability test
-make bench.baseline   # save bench.full to reports/benchmarks/
-make bench.mcts       # Rust MCTS micro-benchmark
+make bench            # benchmark (n=5, warm-up; full Phase 4.5 gate)
 
 # Training
 make train            # train with web + terminal dashboard (default)
-make train.nodash     # train without dashboard
+make train DASHBOARD=0  # train without dashboard
 make train.bg         # background training (logs to logs/)
 make train.stop       # stop background training
 make train.status     # check if running, show recent log
@@ -242,13 +237,9 @@ make plot.sealbot.latest  # plot latest SealBot eval
 make plot.sealbot.all     # plot SealBot trend
 
 # Corpus & pretrain
-make corpus.fast      # generate SealBot fast corpus (0.1s, 5,000 games)
-make corpus.strong    # generate SealBot strong corpus (0.5s, 2,500 games)
-make corpus.all       # generate both fast + strong
-make corpus.npz       # export corpus to data/bootstrap_corpus.npz
-make corpus.analysis  # run corpus analysis on human + bot games
-make pretrain.lite    # bootstrap pretrain smoke test (100 steps)
-make pretrain.full    # full bootstrap pretrain (15 epochs)
+make corpus.fetch     # scrape human games + generate SealBot corpus
+make corpus.export    # export corpus to data/bootstrap_corpus.npz
+make pretrain         # full bootstrap pretrain (15 epochs)
 ```
 
 Run `make help` for the complete list of targets.

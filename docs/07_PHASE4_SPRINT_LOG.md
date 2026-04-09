@@ -235,13 +235,13 @@ Dual-pass `scrape_daily.sh`: standard 500-game pull + top-20 player profile pull
 **Root cause:** `np.load()` (no mmap) + `np.concatenate()` on full corpus (~906K positions) caused ~26 GB peak RAM → system freeze.
 
 **Pattern:**
-1. `make corpus.npz` produces a 50K-position uncompressed NPZ (`np.savez`, not `savez_compressed`).
+1. `make corpus.export` produces a 50K-position uncompressed NPZ (`np.savez`, not `savez_compressed`).
    Uncompressed is required — `savez_compressed` defeats `mmap_mode='r'`.
 2. Load with `np.load(path, mmap_mode='r')` — OS pages data on demand, RAM stays near-zero.
 3. `del pre_states, pre_policies, pre_outcomes` immediately after `push_game()` releases mmap views.
    Keeping views alive for the entire process lifetime was a confirmed ~720 MB leak (§46).
 
-**Warning:** If `bootstrap_corpus.npz` is absent, `load_corpus()` fallback runs and the double-allocation risk returns. **Always run `make corpus.npz` before `make pretrain.full`.**
+**Warning:** If `bootstrap_corpus.npz` is absent, `load_corpus()` fallback runs and the double-allocation risk returns. **Always run `make corpus.export` before `make pretrain`.**
 
 Config: `corpus_npz_path` in `configs/corpus.yaml`. `mixing.pretrain_max_samples: 200_000` caps corpus even if NPZ is large.
 

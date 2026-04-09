@@ -112,7 +112,7 @@
 - **Description:** Converts numpy array to Python list of floats before passing to Rust. Full Python-object allocation (6498 elements). Used by `our_model_bot.py` and tests, not the live SelfPlayRunner path.
 - **Proposed action:** Accept contiguous float32 ndarray via PyO3 `PyReadonlyArray`.
 - **Risk:** Low
-- **Requires bench:** Yes (`make bench.mcts` after fix)
+- **Requires bench:** Yes (`make bench` after fix)
 - **Source:** Subagent 5
 
 ---
