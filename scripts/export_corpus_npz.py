@@ -17,7 +17,7 @@ Expected output: ~700 MB uncompressed, near-zero mmap RAM at training startup.
 Usage:
     python scripts/export_corpus_npz.py
     python scripts/export_corpus_npz.py --max-positions 50000 --no-compress
-    make corpus.npz
+    make corpus.export
 """
 
 from __future__ import annotations
@@ -167,7 +167,7 @@ def main() -> None:
     print(f"  total:    {len(records):>6,} qualifying games")
 
     if not records:
-        print("ERROR: No qualifying games found. Run 'make corpus.all' first.")
+        print("ERROR: No qualifying games found. Run 'make corpus.fetch' first.")
         sys.exit(1)
 
     # ── Phase 2: build weighted position index ────────────────────────────────

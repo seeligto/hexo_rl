@@ -11,8 +11,7 @@ scripts/train.py can resume from it seamlessly.
 
 Usage:
     python -m python.bootstrap.pretrain [--epochs N] [--steps N] [--batch-size N]
-    make pretrain          # 5 epochs (default)
-    make pretrain.full     # 15 epochs
+    make pretrain          # 15 epochs
 """
 
 from __future__ import annotations
@@ -620,7 +619,7 @@ def pretrain() -> None:
         states, policies, outcomes, weights = load_corpus(quality_scores, source_weights)
 
     if len(outcomes) == 0:
-        console.print("[red]No corpus data found. Run `make corpus.all` first.[/red]")
+        console.print("[red]No corpus data found. Run `make corpus.fetch` first.[/red]")
         return
 
     log.info(
