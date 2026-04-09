@@ -5,33 +5,41 @@ PY ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 MATURIN ?= .venv/bin/maturin
 
-# Override config files — applied on top of base configs (model+training+selfplay).
-# Omit --config to use base configs unmodified (production settings).
-CONFIG_LITE ?= configs/fast_debug.yaml
-CONFIG_MULTI ?= configs/long_run_balanced.yaml
-
 CHECKPOINT_BOOTSTRAP ?= checkpoints/bootstrap_model.pt
 CHECKPOINT_LATEST ?= $(shell ls -1 checkpoints/checkpoint_*.pt 2>/dev/null | tail -n 1)
 PRETRAIN_CKPT ?= $(shell ls -1 checkpoints/pretrain/pretrain_*.pt 2>/dev/null | tail -n 1)
 
 # Named variant from configs/variants/ — deep-merged on top of selfplay.yaml.
 # Usage: make train VARIANT=gumbel_full   (or gumbel_targets, baseline_puct)
-# Omit to run with selfplay.yaml defaults (equivalent to baseline_puct).
 VARIANT ?=
 VARIANT_FLAG = $(if $(VARIANT),--variant $(VARIANT),)
 
-SEALBOT_N ?= 100
-SEALBOT_TIME ?= 0.5
-SEALBOT_SIMS ?= 128
-CORPUS_TIME ?= 0.1
+# Set DASHBOARD=0 to disable the web+terminal dashboard (e.g. for scripted runs)
+DASHBOARD ?= 1
+_NODASH_FLAG = $(if $(filter 0,$(DASHBOARD)),--no-dashboard,)
+
+# Eval parameters
+CKPT ?= $(CHECKPOINT_LATEST)
+N_GAMES ?= 100
+THINK_TIME ?= 0.5
+SIMS ?= 128
+
+# Corpus parameters
+CORPUS_N ?= 2500
+MAX_POSITIONS ?= 50000
+
+N_CORES ?= $(shell $(PY) -c "import os; print(os.cpu_count() or 4)")
 
 
 .PHONY: help
 help: ## Show all useful commands
 	@grep -E '^[a-zA-Z0-9_.-]+:.*##' Makefile | sort | awk 'BEGIN {FS = ":.*## "; printf "\nUsage: make <target>\n\nTargets:\n"} {printf "  %-30s %s\n", $$1, $$2}'; echo
 
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
+
 .PHONY: install
-install: ## Full first-time setup: venv → deps → submodules → SealBot → engine → test.all
+install: ## Full first-time setup: venv → deps → submodules → SealBot → engine → test
 	@echo "==> Creating virtualenv..."
 	python3 -m venv .venv
 	@echo "==> Upgrading pip and installing maturin + pybind11..."
@@ -46,23 +54,15 @@ install: ## Full first-time setup: venv → deps → submodules → SealBot → 
 	@echo "==> Building engine Rust extension..."
 	$(MATURIN) develop --release -m engine/Cargo.toml
 	@echo "==> Verifying environment..."
-	$(MAKE) env.check
-	@echo "==> Running full test suite..."
-	$(MAKE) test.all
-	@echo ""
-	@echo "Install complete. Run 'make corpus.scrape' to fetch the latest games."
-
-.PHONY: env.check
-env.check: ## Check virtualenv/python/engine availability
 	@test -x "$(PY)" || (echo "Missing $(PY). Create venv first." && exit 1)
 	@$(PY) -c "from engine import Board, MCTSTree; print('engine ok')"
+	@echo "==> Running full test suite..."
+	$(MAKE) test
+	@echo ""
+	@echo "Install complete. Run 'make corpus.fetch' to fetch the latest games."
 
-.PHONY: deps.install
-deps.install: ## Install python deps into .venv
-	$(PIP) install -r requirements.txt
-
-.PHONY: native.build
-native.build: ## Build/install Rust extension via maturin (LTO + native CPU — see .cargo/config.toml)
+.PHONY: build
+build: ## Build/install Rust extension via maturin (LTO + native CPU)
 	$(MATURIN) develop --release -m engine/Cargo.toml
 
 .PHONY: clean
@@ -70,74 +70,42 @@ clean: ## Remove all Rust build artifacts and Python caches
 	cargo clean
 	rm -rf .venv/lib/python*/site-packages/engine*
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	@echo "Clean complete. Run 'make native.build' to rebuild."
+	@echo "Clean complete. Run 'make build' to rebuild."
 
 .PHONY: rebuild
-rebuild: clean native.build ## Full clean + optimized rebuild
+rebuild: clean build ## Full clean + optimized rebuild
 	@echo "Rebuild complete."
 
-.PHONY: test.py
-test.py: ## Run python test suite (excludes slow/integration tests)
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+.PHONY: test
+test: ## Run Rust + Python tests (excludes integration marker)
+	cargo test
 	$(PY) -m pytest -q -m "not slow and not integration" tests
 
-.PHONY: test.integration
-test.integration: ## Run slow end-to-end lifecycle integration test (~2-5 min)
+.PHONY: test.slow
+test.slow: ## Run slow/integration Python tests (~2-5 min)
 	$(PY) -m pytest -v -m "integration" tests/test_train_lifecycle.py
 
-.PHONY: test.focus
-test.focus: ## Run focused buffer/inference/pool smoke tests
-	$(PY) -m pytest -q tests/test_rust_replay_buffer.py tests/test_inference_server.py tests/test_worker_pool.py tests/test_benchmark_smoke.py
 
-.PHONY: test.rust
-test.rust: ## Run Rust tests
-	cargo test
+# ── Benchmarks ────────────────────────────────────────────────────────────────
 
-.PHONY: test.all
-test.all: test.rust test.py ## Run rust + python tests
+.PHONY: bench
+bench: ## Higher-confidence benchmark (n=5, warm-up; full Phase 4.5 gate methodology)
+	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60
 
-.PHONY: ci
-ci: test.all bench.quick ## Full pre-push gate: all tests + quick benchmark
 
-.PHONY: bench.quick
-bench.quick: ## Fast sanity benchmark — did I break anything? (~30s)
-	$(PY) scripts/benchmark.py --config $(CONFIG_LITE) --no-compile --quick --mcts-sims 2000 --pool-workers $(N_CORES) --pool-duration 10
-
-.PHONY: bench.lite
-bench.lite: ## Quick benchmark (n=3, no CPU pin, warm-up)
-	$(PY) scripts/benchmark.py --config $(CONFIG_LITE) --no-compile --mcts-sims 2000 --pool-workers $(N_CORES) --pool-duration 10 --mode lite
-
-N_CORES ?= $(shell $(PY) -c "import os; print(os.cpu_count() or 4)")
-
-.PHONY: bench.full
-bench.full: ## Higher-confidence benchmark (n=5, CPU pin attempted, warm-up)
-	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full
-
-.PHONY: bench.macos
-bench.macos: ## macOS benchmark — same as bench.full; platform-adaptive targets auto-selected
-	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full
-
-.PHONY: bench.stress
-bench.stress: ## Heavy stress test (n=10, CPU pin required, 5-min pool runs)
-	$(PY) scripts/benchmark.py --mcts-sims 100000 --pool-workers $(N_CORES) --pool-duration 300 --mcts-search-sims 800 --mode stress
-
-.PHONY: bench.baseline
-bench.baseline: ## Run bench.full and save as dated baseline report
-	mkdir -p reports/benchmarks
-	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(N_CORES) --pool-duration 60 --mode full 2>&1 | tee reports/benchmarks/$$(date +%Y-%m-%d)_baseline.log
-
-.PHONY: bench.mcts
-bench.mcts: ## Dedicated Rust MCTS micro-benchmark
-	$(PY) scripts/benchmark_mcts.py
-
-## Training
+# ── Training ──────────────────────────────────────────────────────────────────
 
 .PHONY: train
-train: ## Self-play RL from bootstrap checkpoint + corpus (VARIANT=gumbel_full|gumbel_targets|baseline_puct)
-	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) $(VARIANT_FLAG)
+train: ## Self-play RL from bootstrap checkpoint (VARIANT=..., DASHBOARD=0 to disable)
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) $(_NODASH_FLAG) $(VARIANT_FLAG)
 
-.PHONY: train.nodash
-train.nodash: ## Self-play RL from bootstrap checkpoint, no dashboard (VARIANT= supported)
-	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) --no-dashboard $(VARIANT_FLAG)
+.PHONY: train.resume
+train.resume: ## Resume training from latest checkpoint (VARIANT= supported)
+	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST) $(_NODASH_FLAG) $(VARIANT_FLAG)
 
 .PHONY: train.bg
 train.bg: ## Self-play RL from bootstrap checkpoint, background (VARIANT= supported)
@@ -179,155 +147,45 @@ train.status: ## Check background training status
 		echo "Not running (no train.pid)"; \
 	fi
 
-.PHONY: dash.open
-dash.open: ## Open web dashboard in browser
-	@echo "Opening http://localhost:5001"
-	@$(PY) -c "import webbrowser; webbrowser.open('http://localhost:5001')" \
-		|| echo "Open manually: http://localhost:5001"
-
-.PHONY: train.pretrain
-train.pretrain: ## Train in pretrain mode
-	$(PY) scripts/train.py --config configs/training.yaml \
-		--override training.mode=pretrain
-
-.PHONY: train.lite
-train.lite: ## Fast debug training — short run, no dashboard
-	$(PY) scripts/train.py --config $(CONFIG_LITE) --iterations 100 --no-dashboard --no-compile
-
-.PHONY: train.raw
-train.raw: ## Raw self-play from random init — no pretrain checkpoint (ablation only)
-	$(PY) scripts/train.py
-
-.PHONY: train.full
-train.full: ## Standard training from bootstrap checkpoint (alias for train)
-	$(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP)
-
-.PHONY: train.multi
-train.multi: ## Multi-hour training profile from bootstrap checkpoint
-	$(PY) scripts/train.py --config $(CONFIG_MULTI) --checkpoint $(CHECKPOINT_BOOTSTRAP)
-
 .PHONY: train.smoke
 train.smoke: ## 20-step smoke test to verify training end-to-end
-	@if [ -z "$(CHECKPOINT_BOOTSTRAP)" ]; then \
+	@if [ -z "$(PRETRAIN_CKPT)" ]; then \
 	    echo "Error: No pretrain checkpoint found. Run 'make pretrain' first."; \
 	    exit 1; \
 	fi
 	@echo "Using checkpoint: $(PRETRAIN_CKPT)"
 	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 20
 
-.PHONY: train.resume
-train.resume: ## Resume training from latest checkpoint (VARIANT= supported)
-	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
-	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST) $(VARIANT_FLAG)
-
-.PHONY: plot.train.latest
-plot.train.latest: ## Plot latest training log
-	$(PY) scripts/plot_training.py --latest
-
-.PHONY: plot.train
-plot.train: ## Plot a specific training log (LOG=logs/xxxx.jsonl)
-	@test -n "$(LOG)" || (echo "Usage: make plot.train LOG=logs/<file>.jsonl" && exit 1)
-	$(PY) scripts/plot_training.py --log-file "$(LOG)"
-
-.PHONY: plot.sealbot.latest
-plot.sealbot.latest: ## Plot latest SealBot eval log
-	$(PY) scripts/plot_sealbot_eval.py --latest
-
-.PHONY: plot.sealbot.all
-plot.sealbot.all: ## Plot aggregated SealBot eval trend
-	$(PY) scripts/plot_sealbot_eval.py --all
-
-.PHONY: eval.sealbot.latest
-eval.sealbot.latest: ## Evaluate latest checkpoint vs SealBot
-	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
-	$(PY) scripts/eval_vs_sealbot.py --checkpoint $(CHECKPOINT_LATEST) --n-games $(SEALBOT_N) --time-limit $(SEALBOT_TIME) --model-sims $(SEALBOT_SIMS)
-
-.PHONY: eval.sealbot
-eval.sealbot: ## Evaluate specific checkpoint vs SealBot (CKPT=...)
-	@test -n "$(CKPT)" || (echo "Usage: make eval.sealbot CKPT=checkpoints/checkpoint_XXXXXXXX.pt" && exit 1)
-	$(PY) scripts/eval_vs_sealbot.py --checkpoint "$(CKPT)" --n-games $(SEALBOT_N) --time-limit $(SEALBOT_TIME) --model-sims $(SEALBOT_SIMS)
-
-.PHONY: eval.sealbot.quick
-eval.sealbot.quick: ## Quick SealBot eval (10 games)
-	$(MAKE) eval.sealbot.latest SEALBOT_N=10 SEALBOT_TIME=0.1 SEALBOT_SIMS=64
-
-.PHONY: eval.sealbot.full
-eval.sealbot.full: ## Full SealBot eval (100 games)
-	$(MAKE) eval.sealbot.latest SEALBOT_N=100 SEALBOT_TIME=0.5 SEALBOT_SIMS=128
-
 .PHONY: pretrain
-pretrain: ## Bootstrap pretrain (5 epochs, default)
-	$(PY) -m hexo_rl.bootstrap.pretrain --epochs 5
-
-.PHONY: pretrain.lite
-pretrain.lite: ## Bootstrap pretrain smoke test (100 steps)
-	MALLOC_ARENA_MAX=2 $(PY) -m hexo_rl.bootstrap.pretrain --steps 100
-
-.PHONY: pretrain.full
-pretrain.full: ## Full bootstrap pretrain (15 epochs)
+pretrain: ## Full bootstrap pretrain (15 epochs)
 	MALLOC_ARENA_MAX=2 $(PY) -m hexo_rl.bootstrap.pretrain --epochs 15
 
-# ── Corpus generation ────────────────────────────────────────────────────────
 
-CORPUS_FAST_N ?= 5000
-CORPUS_STRONG_N ?= 2500
+# ── Eval ──────────────────────────────────────────────────────────────────────
 
-.PHONY: corpus.scrape
-corpus.scrape: ## Scrape latest human games from [site-redacted] and update manifest
+.PHONY: eval
+eval: ## Evaluate checkpoint vs SealBot (CKPT=latest, N_GAMES=100, THINK_TIME=0.5, SIMS=128)
+	@test -n "$(CKPT)" || (echo "No checkpoint found. Pass CKPT= or generate one first." && exit 1)
+	$(PY) scripts/eval_vs_sealbot.py --checkpoint "$(CKPT)" --n-games $(N_GAMES) --time-limit $(THINK_TIME) --model-sims $(SIMS)
+
+
+# ── Corpus ────────────────────────────────────────────────────────────────────
+
+.PHONY: corpus.fetch
+corpus.fetch: ## Scrape human games + generate SealBot corpus + update manifest (CORPUS_N=2500, THINK_TIME=0.5)
 	bash scripts/scrape_daily.sh
-
-.PHONY: corpus.human.top
-corpus.human.top: ## Scrape human games from top-20 leaderboard players (via profile endpoints)
-	$(PY) -m hexo_rl.bootstrap.scraper --pages 0 --top-players-only --top-n 20
-
-.PHONY: corpus.human.rated
-corpus.human.rated: ## Scrape human games with minimum Elo 1200
-	$(PY) -m hexo_rl.bootstrap.scraper --pages 25 --page-size 20 --min-elo 1200
-
-.PHONY: corpus.fast
-corpus.fast: ## Generate SealBot fast self-play corpus (think_time=0.1s)
-	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit $(CORPUS_TIME) --n-games $(CORPUS_FAST_N) --output data/corpus/bot_games/sealbot_fast
-
-.PHONY: corpus.strong
-corpus.strong: ## Generate SealBot strong self-play corpus (think_time=0.5s)
-	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit 0.5 --n-games $(CORPUS_STRONG_N) --output data/corpus/bot_games/sealbot_strong
-
-.PHONY: corpus.all
-corpus.all: corpus.fast corpus.strong corpus.manifest ## Generate both fast and strong corpora
-
-.PHONY: corpus.manifest
-corpus.manifest: ## Update data/corpus/manifest.json (scans human + bot dirs)
+	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit $(THINK_TIME) --n-games $(CORPUS_N) --output data/corpus/bot_games/sealbot_strong
 	$(PY) scripts/update_manifest.py
 
-.PHONY: corpus.analysis
-corpus.analysis: corpus.manifest ## Run corpus analysis on human + bot games
-	$(PY) -m hexo_rl.bootstrap.corpus_analysis --include-bot-games
+.PHONY: corpus.export
+corpus.export: ## Export optimized NPZ corpus for buffer prefill (MAX_POSITIONS=50000)
+	$(PY) scripts/export_corpus_npz.py --max-positions $(MAX_POSITIONS) --no-compress
 
-.PHONY: corpus.npz
-corpus.npz: ## Export optimized 50K-position uncompressed NPZ for buffer prefill
-	$(PY) scripts/export_corpus_npz.py --max-positions 50000 --no-compress
 
-.PHONY: help.train
-help.train: ## List all training-related targets
-	@echo ""
-	@echo "Training targets:"
-	@echo "  ─────────────────────────────────────────────────────────────"
-	@echo "  make train               self-play RL from bootstrap checkpoint (default)"
-	@echo "  make train.nodash        same, no dashboard"
-	@echo "  make train.bg            same, background (logs/)"
-	@echo "  make train.stop          stop background training"
-	@echo "  make train.status        check background training status"
-	@echo "  make train.raw           self-play from random init (ablation only)"
-	@echo "  make train.pretrain      pretrain mode"
-	@echo "  make train.resume        resume from latest checkpoint"
-	@echo "  make train.smoke         200-step smoke test"
-	@echo "  make train.lite          fast debug (100 steps)"
-	@echo "  make train.full          from bootstrap checkpoint (alias for train)"
-	@echo "  make train.multi         multi-hour profile"
-	@echo "  make dash.open           open web dashboard in browser"
-	@echo "  ─────────────────────────────────────────────────────────────"
-	@echo "  make pretrain.lite       100-step pretrain smoke test"
-	@echo "  make pretrain            5-epoch pretrain"
-	@echo "  make pretrain.full       15-epoch pretrain"
-	@echo ""
+# ── Dashboard ─────────────────────────────────────────────────────────────────
 
+.PHONY: dash.open
+dash.open: ## Open web dashboard in browser
+	@echo "Opening http://localhost:5001"
+	@$(PY) -c "import webbrowser; webbrowser.open('http://localhost:5001')" \
+		|| echo "Open manually: http://localhost:5001"
