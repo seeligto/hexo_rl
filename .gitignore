@@ -41,6 +41,9 @@ reports/diagnosis_2026-04-10/*
 reports/verify_gumbel_2026-04-10/*
 !reports/verify_gumbel_2026-04-10/diag_*
 !reports/verify_gumbel_2026-04-10/verdict.md
+!reports/bench_investigation_2026-04-09/
+reports/bench_investigation_2026-04-09/*
+!reports/bench_investigation_2026-04-09/verdict.md
 checkpoints/
 logs/
 logs/scrape_history.log

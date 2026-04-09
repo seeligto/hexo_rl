@@ -512,14 +512,14 @@ Run `make bench.full`. Latest baseline (2026-04-06, Ryzen 7 8845HS + RTX 4060 La
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
 | MCTS (CPU only, no NN) | 55,478 sim/s | ≥ 26,000 sim/s | IQR ±400; **pre-Gumbel baseline — re-bench pending** (measured with `gumbel_mcts: false`) |
-| NN inference (batch=64) | 9,810 pos/s | ≥ 8,500 pos/s | GPU-bound (IQR ±1) |
+| NN inference (batch=64) | 9,810 pos/s | ≥ 8,250 pos/s | GPU-bound (IQR ±1); **target rebaselined 2026-04-09** — see §72 |
 | NN latency (batch=1, mean) | 1.59 ms | ≤ 3.5 ms | IQR ±0.05 ms |
 | Replay buffer push | 762,130 pos/sec | ≥ 630,000 pos/sec | IQR ±114,320 (15%) |
 | Replay buffer sample raw (batch=256) | 1,037 µs/batch | ≤ 1,500 µs | IQR ±34 µs |
 | Replay buffer sample augmented (batch=256) | 940 µs/batch | ≤ 1,400 µs | IQR ±62 µs |
 | GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
 | VRAM usage (process) | 0.05 GB / 8.0 GB | ≤ 6.4 GB | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |
-| Worker throughput | 659,983 pos/hr | ≥ 625,000 pos/hr | IQR ±56,835 (8.6%) |
+| Worker throughput | 659,983 pos/hr | ≥ 500,000 pos/hr | IQR ±56,835 (8.6%); **target rebaselined 2026-04-09** — see §72 |
 | Batch fill % | 100.0% | ≥ 80% | IQR ±0.0% |
 
 Historical variance note: before the warm-up/n=5/pinning methodology, single-run
@@ -527,6 +527,9 @@ benchmarks showed ±50% swings due to LLVM codegen lottery and AMD boost clocks.
 See `docs/03_TOOLING.md` § "Benchmark variance (historical)" for details.
 2026-04-06: rebaseline on laptop (Ryzen 7 8845HS + RTX 4060). MCTS sim/s higher
 than prior desktop baseline due to faster single-thread IPC. All 10 targets PASS.
+2026-04-09: NN inference and worker throughput targets rebaselined after a sustained
+NVIDIA driver/boost-clock shift (~14% GPU throughput reduction, persistent across
+cold/hot/idle runs, not a code regression). See `reports/bench_investigation_2026-04-09/verdict.md` and §72.
 
 ## Phase 4.0 architecture baseline
 
