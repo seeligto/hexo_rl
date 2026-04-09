@@ -12,7 +12,7 @@ RAW_DIR = Path("data/corpus/raw_human")
 
 
 @pytest.mark.skipif(
-    not RAW_DIR.exists() or not any(RAW_DIR.glob("*.json")),
+    not RAW_DIR.exists() or not any(p for p in RAW_DIR.glob("*.json") if len(p.stem) == 36),
     reason="human game corpus not present; run `make corpus.fetch` to populate",
 )
 class TestHumanGameSourceRealData:
