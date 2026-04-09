@@ -224,11 +224,20 @@ def main() -> None:
         # on resume (the embedded checkpoint config would otherwise win).
         config_overrides: dict = {"torch_compile": combined_config.get("torch_compile", False)}
         # Propagate new training keys that may not exist in older checkpoints.
-        for _key in ("uncertainty_weight", "recency_weight", "ownership_weight", "threat_weight"):
-            if _key in combined_config:
+        # Also propagate scheduler-required keys: pretrain checkpoints embed
+        # total_steps=None / eta_min=None and cannot initialise cosine LR otherwise.
+        for _key in (
+            "uncertainty_weight", "recency_weight", "ownership_weight", "threat_weight",
+            "eta_min", "scheduler_t_max",
+        ):
+            if combined_config.get(_key) is not None:
                 config_overrides[_key] = combined_config[_key]
-        if args.iterations is not None and args.override_scheduler_horizon:
-            config_overrides["total_steps"] = int(args.iterations)
+        # Always propagate total_steps from the merged config so that checkpoints
+        # with total_steps=None (e.g. pretrain checkpoints) can initialise the
+        # cosine scheduler.  --override-scheduler-horizon is now a no-op kept
+        # for backwards compatibility.
+        if combined_config.get("total_steps") is not None:
+            config_overrides["total_steps"] = int(combined_config["total_steps"])
 
         trainer = Trainer.load_checkpoint(
             args.checkpoint,
