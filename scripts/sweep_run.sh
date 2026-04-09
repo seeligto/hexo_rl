@@ -10,7 +10,7 @@ CONFIG_DIR="/tmp/sweep_configs"
 BOOTSTRAP="${PROJ_ROOT}/checkpoints/bootstrap_model.pt"
 LOG_DIR="${PROJ_ROOT}/logs/sweep"
 CKPT_BASE="${PROJ_ROOT}/tmp/sweep_ckpt"
-REPORT_DIR="${PROJ_ROOT}/reports/sweep_2026-04-08"
+REPORT_DIR="${PROJ_ROOT}/archive/sweep_2026-04-08"
 DURATION=1200   # 20 minutes
 GATE_DURATION=300  # 5 minutes
 

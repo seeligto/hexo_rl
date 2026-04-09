@@ -599,8 +599,8 @@ python scripts/train.py --checkpoint checkpoints/bootstrap_model.pt --variant gu
 Reference opponents (SealBot, random_bot) intentionally keep `run_id=""` — they are shared anchors across all runs. The `get_all_pairwise(run_id=...)` and `get_ratings_history(run_id=...)` queries already filter correctly (matching the run's players plus `run_id=""` reference opponents).
 
 **Broken-run cleanup:** Archived all artifacts from the scheduler-poisoned run (§67):
-- `checkpoints.broken-202604/` — 10 checkpoints (21500–24274), best_model.pt, inference_only.pt, replay_buffer.bin (1.4 GB), checkpoint_log.json
-- `reports/eval.broken-202604/results.db` — 39 matches, all with `run_id=""`
+- `archive/checkpoints.broken-202604/` — 10 checkpoints (21500–24274), best_model.pt, inference_only.pt, replay_buffer.bin (1.4 GB), checkpoint_log.json
+- `archive/eval.broken-202604/results.db` — 39 matches, all with `run_id=""`
 
 Kept in place: `bootstrap_model.pt` (verified loads clean), `checkpoints/pretrain/`, all game records in `runs/*/games/` (3,839 files), logs, corpus data.
 
@@ -608,7 +608,7 @@ Kept in place: `bootstrap_model.pt` (verified loads clean), `checkpoints/pretrai
 
 ### §69 — Config Sweep 2026-04-08 — PUCT/Gumbel Knob Ranking
 
-15+1 runs on laptop (Ryzen 7 8845HS + RTX 4060), 20-min windows each, all starting fresh from `bootstrap_model.pt` with `completed_q_values=true`. The sweep varied `training_steps_per_game` (ratio), `max_train_burst`, `max_game_moves`, `inference_max_wait_ms`, `leaf_batch_size`, `inference_batch_size`, `n_workers`, and `gumbel_m` across PUCT and Gumbel arms to identify the highest-throughput config for the Phase 4.0 overnight run. Full methodology and per-run data in `reports/sweep_2026-04-08/`.
+15+1 runs on laptop (Ryzen 7 8845HS + RTX 4060), 20-min windows each, all starting fresh from `bootstrap_model.pt` with `completed_q_values=true`. The sweep varied `training_steps_per_game` (ratio), `max_train_burst`, `max_game_moves`, `inference_max_wait_ms`, `leaf_batch_size`, `inference_batch_size`, `n_workers`, and `gumbel_m` across PUCT and Gumbel arms to identify the highest-throughput config for the Phase 4.0 overnight run. Full methodology and per-run data in `archive/sweep_2026-04-08/`.
 
 **PUCT top 3:**
 
@@ -655,7 +655,7 @@ P3 chosen over P8b despite P8b's +23% steps/hr because P3 has +22% games/hr, 16p
 **Status:** diagnostics complete 2026-04-09, no fixes proposed. Run
 `dcf8cbba5b9f485987880055e9cb6ea7` PAUSED at
 `checkpoint_00017428.pt` pending the fix session. Full artefacts in
-`reports/diagnosis_2026-04-10/`. Tracked as **Q17** in `docs/06_OPEN_QUESTIONS.md`.
+`archive/diagnosis_2026-04-10/`. Tracked as **Q17** in `docs/06_OPEN_QUESTIONS.md`.
 
 #### Context
 
@@ -727,7 +727,7 @@ Phase 3.5 migration of the training path to Rust
 (`engine::SelfPlayRunner`) landed two days later on 2026-03-30 and did
 not carry Dirichlet injection across. This matters for the fix session's
 framing: it is not a regression someone rolled back by mistake, it is a
-missing port. See `reports/diagnosis_2026-04-10/diag_A_grep.txt` and
+missing port. See `archive/diagnosis_2026-04-10/diag_A_grep.txt` and
 `diag_A_static_audit.md` for the raw proof.
 
 **Runtime trace instrumentation.** To confirm the static finding at
@@ -767,7 +767,7 @@ static audit at runtime. The first move on the empty board shows:
 | temperature | 1.0 (compound_move = 0) |
 
 Full record dump and per-field explanation in
-`reports/diagnosis_2026-04-10/diag_A_trace_summary.md`.
+`archive/diagnosis_2026-04-10/diag_A_trace_summary.md`.
 
 **Runtime trace result — Python path.** 4 records from
 `scripts/benchmark_mcts.py`, all with `site: apply_dirichlet_to_root`,
@@ -804,7 +804,7 @@ mid / late phase) from the 500 recorded games in the collapsed run
 `trainer.py:402-405`.
 
 **K=0 caveat (must appear at top of `diag_B_sharpness.md`):** see
-`reports/diagnosis_2026-04-10/diag_B_sharpness.md`. Primary signal is
+`archive/diagnosis_2026-04-10/diag_B_sharpness.md`. Primary signal is
 the **progression across checkpoints on identical positions**, not the
 absolute nat values vs the §1 heuristic.
 
@@ -917,7 +917,7 @@ meaningfully stochastic sampling as the code actually provides. This is
 **not** the cause of the mode collapse on its own — no root noise is —
 but it is a live docs-vs-code drift that must be fixed in one direction
 or the other in the fix session. Documented here so it is greppable
-later. See `reports/diagnosis_2026-04-10/diag_C_temp_schedule.md` for
+later. See `archive/diagnosis_2026-04-10/diag_C_temp_schedule.md` for
 the full side-by-side.
 
 **C.2 — per-move MCTS entropy from the training trace.** Parsed the 30
@@ -1031,7 +1031,7 @@ started. Commits are: `chore(scripts)`, `feat(monitoring)`, `diag(gumbel)`,
 
 #### 1. Gumbel path verification
 
-**Static audit** (`reports/verify_gumbel_2026-04-10/diag_static.md`):
+**Static audit** (`archive/verify_gumbel_2026-04-10/diag_static.md`):
 
 Three questions answered with line-number citations from
 `engine/src/game_runner.rs`:
@@ -1051,7 +1051,7 @@ Three questions answered with line-number citations from
   `gumbel_m.min(game_sims).min(tree.root_n_children())`. Matches the
   §61/§62 spec; no hardcoded constants.
 
-**Runtime trace** (`reports/verify_gumbel_2026-04-10/diag_trace.jsonl`,
+**Runtime trace** (`archive/verify_gumbel_2026-04-10/diag_trace.jsonl`,
 `verdict.md`): 30 records captured under `gumbel_mcts: true` from
 `checkpoint_00015000.pt`.
 
@@ -1151,7 +1151,7 @@ Walk this checklist before launching the next Phase 4.0 sustained run:
 
 ### §72 — Bench Baseline Rebaseline — 2026-04-09 Driver-State Shift  <!-- KEEP-CONDENSED -->
 
-Three consecutive `bench.full` runs on 2026-04-09 and 2026-04-10 failed the same two §66 targets (NN inference batch=64 ~8,370 vs target 8,500; worker throughput ~541k vs target 625k). A structured three-run investigation (cold / hot / post-10min-idle) confirmed the failures are **not thermal** — cold and hot runs returned 8,393 and 8,397 pos/s respectively (0.05% apart), with the GPU staying at 49°C throughout and no boost-clock events visible in `nvidia-smi`. The step-change appeared overnight between the last passing run (2026-04-08 22:50, 9,388 pos/s) and the first failing run (2026-04-09 11:53, 8,347 pos/s) with no model or benchmark code changes in that window — the NVIDIA laptop driver's `DynamicPowerManagement=3` settled the GPU into a lower sustained boost-clock bin after a full day of workloads. NN inference latency corroborates: 1.59 ms at §66 → 1.77–1.80 ms now, a 12–13% increase consistent with a ~14% GPU clock reduction. Worker throughput failures are a secondary consequence (slower inference → stalled workers). Full investigation artifacts in `reports/bench_investigation_2026-04-09/`.
+Three consecutive `bench.full` runs on 2026-04-09 and 2026-04-10 failed the same two §66 targets (NN inference batch=64 ~8,370 vs target 8,500; worker throughput ~541k vs target 625k). A structured three-run investigation (cold / hot / post-10min-idle) confirmed the failures are **not thermal** — cold and hot runs returned 8,393 and 8,397 pos/s respectively (0.05% apart), with the GPU staying at 49°C throughout and no boost-clock events visible in `nvidia-smi`. The step-change appeared overnight between the last passing run (2026-04-08 22:50, 9,388 pos/s) and the first failing run (2026-04-09 11:53, 8,347 pos/s) with no model or benchmark code changes in that window — the NVIDIA laptop driver's `DynamicPowerManagement=3` settled the GPU into a lower sustained boost-clock bin after a full day of workloads. NN inference latency corroborates: 1.59 ms at §66 → 1.77–1.80 ms now, a 12–13% increase consistent with a ~14% GPU clock reduction. Worker throughput failures are a secondary consequence (slower inference → stalled workers). Full investigation artifacts in `archive/bench_investigation_2026-04-09/`.
 
 **Rebaselined targets** (CLAUDE.md §66 table updated, 2026-04-09): NN inference ≥ 8,250 pos/s (was 8,500; floor from three cold-start runs: 8,327); worker throughput ≥ 500,000 pos/hr (was 625,000; floor from stable runs 1/2: ~540k, conservative target accounting for structural IQR noise in the 60s measurement window). All other eight targets unchanged. The §66 baseline column values are kept at their 2026-04-06 peak to document the original hardware capability; the targets now reflect the sustained operating floor. A reboot may restore peak numbers, but the training programme does not depend on it.
 
@@ -1174,7 +1174,7 @@ Three consecutive `bench.full` runs on 2026-04-09 and 2026-04-10 failed the same
 
 **Benchmark:** `make bench.full` 2026-04-10. MCTS sim/s 53,840 (target ≥ 26,000). NN inference 8,804 pos/s (target ≥ 8,250). Worker throughput 548,653 pos/hr (target ≥ 500,000). All 10 metrics pass CLAUDE.md targets. Note: benchmark script still uses pre-§72 script-hardcoded targets (625k worker, 8,500 NN) — script exit code 2 is a stale-target pre-existing issue, not a regression.
 
-**Runtime verification (commit `4a3149e`) — `reports/dirichlet_port_2026-04-10/verdict.md`:**
+**Runtime verification (commit `4a3149e`) — `archive/dirichlet_port_2026-04-10/verdict.md`:**
 
 Trace from `ckpt_15000`, variant `baseline_puct`, 90s smoke, no train step:
 

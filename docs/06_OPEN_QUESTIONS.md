@@ -46,7 +46,7 @@ ckpt_13000 / 14000 / 15000 despite healthy dashboard metrics.
   `bootstrap_model.pt` once the Dirichlet port is complete, or from the
   earliest checkpoint before self-play dominated the buffer (~step 10k).
 
-Full details in sprint log §70 and `reports/diagnosis_2026-04-10/`. No
+Full details in sprint log §70 and `archive/diagnosis_2026-04-10/`. No
 fixes proposed in this pass — findings only.
 
 **2026-04-10 update (§71):** Gumbel fallback verified — static audit and
@@ -60,7 +60,7 @@ documented in §71. **Dirichlet port is the only remaining blocker before
 restart.** A new sustained run should start from `bootstrap_model.pt` after
 the port is unit-tested and the §71 pre-run checklist is walked.
 
-**2026-04-10 RESOLUTION:** Dirichlet root noise ported to `engine/src/game_runner.rs` (commit `71d7e6e`). Runtime-verified via `debug_prior_trace` smoke from `ckpt_15000`: `apply_dirichlet_to_root` records now appear (10/10 with unique noise), top-1 visit fraction drops 0.65 → 0.47. See sprint log §73 and `reports/dirichlet_port_2026-04-10/verdict.md`. Remaining blocker: §71 pre-run checklist walk (archive buffer, move collapsed ckpts, run 2hr smoke from `bootstrap_model.pt`).
+**2026-04-10 RESOLUTION:** Dirichlet root noise ported to `engine/src/game_runner.rs` (commit `71d7e6e`). Runtime-verified via `debug_prior_trace` smoke from `ckpt_15000`: `apply_dirichlet_to_root` records now appear (10/10 with unique noise), top-1 visit fraction drops 0.65 → 0.47. See sprint log §73 and `archive/dirichlet_port_2026-04-10/verdict.md`. Remaining blocker: §71 pre-run checklist walk (archive buffer, move collapsed ckpts, run 2hr smoke from `bootstrap_model.pt`).
 
 **Q2 blocking on Q17:** Q2 requires a stable baseline to ablate value
 aggregation strategies against, but every post-bootstrap checkpoint has

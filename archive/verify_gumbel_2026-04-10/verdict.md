@@ -1,6 +1,6 @@
 # Gumbel Path Runtime Trace — Verdict — 2026-04-10
 
-Trace file: `reports/verify_gumbel_2026-04-10/diag_trace.jsonl`
+Trace file: `archive/verify_gumbel_2026-04-10/diag_trace.jsonl`
 Checkpoint: `checkpoint_00015000.pt`
 Variant: `gumbel_mcts: true, gumbel_m: 16, completed_q_values: true`
 Runtime: 60s timeout, `--min-buffer-size 1000000 --iterations 1`

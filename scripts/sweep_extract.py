@@ -5,8 +5,8 @@ Usage:
     python scripts/sweep_extract.py \
         --log-dir logs/sweep \
         --config-dir /tmp/sweep_configs \
-        --output reports/sweep_2026-04-08/results.csv \
-        --summary reports/sweep_2026-04-08/summary.md \
+        --output archive/sweep_2026-04-08/results.csv \
+        --summary archive/sweep_2026-04-08/summary.md \
         --warmup-sec 90
 """
 

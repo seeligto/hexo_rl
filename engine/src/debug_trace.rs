@@ -16,7 +16,7 @@
 //! that SIGINT exit paths that skip Rust-side `Drop` chains still leave every
 //! already-written record durable on disk.
 //!
-//! See `reports/diagnosis_2026-04-10/diag_A_static_audit.md` for the
+//! See `archive/diagnosis_2026-04-10/diag_A_static_audit.md` for the
 //! diagnostic context and expected output.
 
 use std::fs::{File, OpenOptions};

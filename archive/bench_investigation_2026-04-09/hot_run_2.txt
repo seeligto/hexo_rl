@@ -1,0 +1,238 @@
+.venv/bin/python scripts/benchmark.py --mcts-sims 50000 --pool-workers 16 --pool-duration 60 --mode full
+Benchmarking on cuda | mode=full | n=5
+2026-04-09 15:23:20 [info     ] worker_pool_started            n_workers=16
+    Worker pool warm-up (30s)...
+    ... warm-up 5s: 0 games, 0 positions
+    ... warm-up 10s: 0 games, 0 positions
+    ... warm-up 15s: 0 games, 0 positions
+    ... warm-up 20s: 0 games, 0 positions
+    ... warm-up 25s: 0 games, 0 positions
+2026-04-09 15:23:46 [info     ] game_complete                  game_length=40 plies=79 sims_per_sec=271.84356615126836 winner=o
+    ... warm-up 30s: 1 games, 243 positions
+    Worker pool run 1/5 (60s)...
+2026-04-09 15:23:51 [info     ] game_complete                  game_length=47 plies=93 sims_per_sec=250.393704476785 winner=x
+    ... 5s: 719.9 games/hour, 302 positions
+    ... 10s: 359.9 games/hour, 302 positions
+2026-04-09 15:24:05 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=255.90729797274878 winner=draw
+    ... 15s: 479.9 games/hour, 727 positions
+2026-04-09 15:24:05 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=252.42201874151277 winner=draw
+2026-04-09 15:24:05 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=432.7498166263791 winner=draw
+2026-04-09 15:24:05 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=432.7498166263791 winner=draw
+2026-04-09 15:24:06 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=884.2814236758497 winner=draw
+2026-04-09 15:24:06 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=884.2814236758497 winner=draw
+2026-04-09 15:24:06 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=884.2814236758497 winner=draw
+2026-04-09 15:24:06 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=884.2814236758497 winner=draw
+2026-04-09 15:24:06 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=884.2814236758497 winner=draw
+2026-04-09 15:24:06 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=436.7029243146017 winner=draw
+2026-04-09 15:24:06 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=436.7029243146017 winner=draw
+2026-04-09 15:24:07 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=264.1119087020677 winner=draw
+2026-04-09 15:24:08 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=263.36200722220974 winner=draw
+2026-04-09 15:24:08 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=247.04424937934746 winner=draw
+    ... 20s: 2,699.5 games/hour, 6075 positions
+    ... 25s: 2,159.6 games/hour, 6075 positions
+    ... 30s: 1,799.7 games/hour, 6075 positions
+    ... 35s: 1,542.6 games/hour, 6075 positions
+2026-04-09 15:24:30 [info     ] game_complete                  game_length=39 plies=77 sims_per_sec=278.62290038084535 winner=x
+    ... 40s: 1,439.7 games/hour, 6272 positions
+2026-04-09 15:24:31 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=258.0853494118439 winner=draw
+    ... 45s: 1,359.7 games/hour, 6708 positions
+2026-04-09 15:24:35 [info     ] game_complete                  game_length=47 plies=93 sims_per_sec=270.3404174960122 winner=x
+2026-04-09 15:24:36 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=256.0960768970331 winner=draw
+    ... 50s: 1,367.7 games/hour, 7398 positions
+    ... 55s: 1,243.4 games/hour, 7398 positions
+2026-04-09 15:24:48 [info     ] game_complete                  game_length=58 plies=115 sims_per_sec=266.2382077407435 winner=o
+2026-04-09 15:24:49 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=245.51701278816537 winner=draw
+2026-04-09 15:24:49 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=261.3875762646123 winner=draw
+2026-04-09 15:24:49 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=258.7494353641066 winner=draw
+2026-04-09 15:24:50 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=259.6329335687582 winner=draw
+2026-04-09 15:24:50 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=262.9241782327174 winner=draw
+2026-04-09 15:24:50 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=262.046793325637 winner=draw
+    ... 60s: 1,559.7 games/hour, 10292 positions
+    Worker pool run 2/5 (60s)...
+2026-04-09 15:24:50 [info     ] game_complete                  game_length=61 plies=121 sims_per_sec=263.54971921298056 winner=x
+2026-04-09 15:24:51 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=265.8191595804575 winner=draw
+2026-04-09 15:24:51 [info     ] game_complete                  game_length=63 plies=125 sims_per_sec=260.65345401600916 winner=x
+2026-04-09 15:24:53 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=261.77618952801794 winner=draw
+2026-04-09 15:24:54 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=258.50480812999336 winner=draw
+    ... 5s: 3,599.7 games/hour, 2121 positions
+    ... 10s: 1,799.7 games/hour, 2121 positions
+2026-04-09 15:25:03 [info     ] game_complete                  game_length=49 plies=97 sims_per_sec=272.1963265800396 winner=x
+    ... 15s: 1,439.8 games/hour, 2430 positions
+    ... 20s: 1,079.8 games/hour, 2430 positions
+2026-04-09 15:25:15 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=268.39587334005256 winner=draw
+    ... 25s: 1,007.8 games/hour, 2797 positions
+2026-04-09 15:25:20 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=259.73768036205445 winner=draw
+    ... 30s: 959.8 games/hour, 3269 positions
+2026-04-09 15:25:21 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=259.0657154251734 winner=draw
+    ... 35s: 925.6 games/hour, 3678 positions
+2026-04-09 15:25:26 [info     ] game_complete                  game_length=53 plies=105 sims_per_sec=273.2550847814235 winner=x
+    ... 40s: 899.9 games/hour, 3963 positions
+2026-04-09 15:25:33 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=250.15903652764592 winner=draw
+2026-04-09 15:25:34 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=263.05006268727476 winner=draw
+2026-04-09 15:25:34 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=255.3369334341489 winner=draw
+2026-04-09 15:25:34 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=261.55098288686014 winner=draw
+2026-04-09 15:25:34 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=471.5750180186158 winner=draw
+2026-04-09 15:25:34 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=471.5750180186158 winner=draw
+2026-04-09 15:25:35 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=256.87834365343167 winner=draw
+2026-04-09 15:25:35 [info     ] game_complete                  game_length=63 plies=125 sims_per_sec=257.6792429581177 winner=x
+    ... 45s: 1,439.7 games/hour, 7362 positions
+2026-04-09 15:25:36 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=260.6402267411252 winner=draw
+2026-04-09 15:25:37 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=268.89327270576877 winner=draw
+2026-04-09 15:25:39 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=251.25590262268472 winner=draw
+    ... 50s: 1,511.7 games/hour, 8662 positions
+    ... 55s: 1,374.3 games/hour, 8662 positions
+2026-04-09 15:25:47 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=261.63503882045416 winner=draw
+    ... 60s: 1,319.7 games/hour, 9032 positions
+    Worker pool run 3/5 (60s)...
+    ... 5s: 0.0 games/hour, 0 positions
+    ... 10s: 0.0 games/hour, 0 positions
+2026-04-09 15:26:00 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=264.9046854890393 winner=draw
+2026-04-09 15:26:05 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=261.1242272023736 winner=draw
+    ... 15s: 479.9 games/hour, 910 positions
+    ... 20s: 359.9 games/hour, 910 positions
+2026-04-09 15:26:11 [info     ] game_complete                  game_length=55 plies=109 sims_per_sec=268.7863420102342 winner=x
+2026-04-09 15:26:12 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=260.9427721502025 winner=draw
+2026-04-09 15:26:12 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=249.80843857959354 winner=draw
+2026-04-09 15:26:15 [info     ] game_complete                  game_length=55 plies=109 sims_per_sec=267.3488935634069 winner=x
+    ... 25s: 863.8 games/hour, 2467 positions
+2026-04-09 15:26:18 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=260.4725846336396 winner=draw
+2026-04-09 15:26:18 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=259.49282265745813 winner=draw
+2026-04-09 15:26:18 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=264.48135946239705 winner=draw
+2026-04-09 15:26:18 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=255.03127177037106 winner=draw
+2026-04-09 15:26:19 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=249.08316220112872 winner=draw
+    ... 30s: 1,319.7 games/hour, 4573 positions
+2026-04-09 15:26:21 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=262.58415761574815 winner=draw
+2026-04-09 15:26:21 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=264.3566245290129 winner=draw
+2026-04-09 15:26:21 [info     ] game_complete                  game_length=64 plies=127 sims_per_sec=263.36763702826755 winner=o
+2026-04-09 15:26:23 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=264.5692509681938 winner=draw
+    ... 35s: 1,542.6 games/hour, 6166 positions
+    ... 40s: 1,349.7 games/hour, 6166 positions
+2026-04-09 15:26:30 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=262.2842970455182 winner=draw
+    ... 45s: 1,279.7 games/hour, 6603 positions
+    ... 50s: 1,151.8 games/hour, 6603 positions
+2026-04-09 15:26:45 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=262.8222430844363 winner=draw
+    ... 55s: 1,112.5 games/hour, 7022 positions
+2026-04-09 15:26:47 [info     ] game_complete                  game_length=52 plies=103 sims_per_sec=272.5291415722504 winner=o
+2026-04-09 15:26:49 [info     ] game_complete                  game_length=39 plies=77 sims_per_sec=274.4110037923216 winner=x
+2026-04-09 15:26:50 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=255.67475881596306 winner=draw
+    ... 60s: 1,199.8 games/hour, 7982 positions
+    Worker pool run 4/5 (60s)...
+2026-04-09 15:26:51 [info     ] game_complete                  game_length=50 plies=99 sims_per_sec=274.41759280006113 winner=o
+2026-04-09 15:26:53 [info     ] game_complete                  game_length=61 plies=121 sims_per_sec=259.3880713359719 winner=x
+    ... 5s: 1,439.8 games/hour, 690 positions
+2026-04-09 15:26:56 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=263.37041615496264 winner=draw
+    ... 10s: 1,079.7 games/hour, 1134 positions
+2026-04-09 15:27:01 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=252.04012404579245 winner=draw
+2026-04-09 15:27:02 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=257.918020875968 winner=draw
+2026-04-09 15:27:03 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=266.10715092856066 winner=draw
+2026-04-09 15:27:04 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=262.7420800100123 winner=draw
+2026-04-09 15:27:04 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=257.7158780772309 winner=draw
+    ... 15s: 1,919.5 games/hour, 3247 positions
+2026-04-09 15:27:05 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=263.20826676519687 winner=draw
+2026-04-09 15:27:07 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=262.28870903838066 winner=draw
+2026-04-09 15:27:08 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=262.07275716691674 winner=draw
+    ... 20s: 1,979.5 games/hour, 4519 positions
+    ... 25s: 1,583.6 games/hour, 4519 positions
+2026-04-09 15:27:16 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=258.9433933836109 winner=draw
+2026-04-09 15:27:17 [info     ] game_complete                  game_length=47 plies=93 sims_per_sec=268.0250078773964 winner=x
+    ... 30s: 1,559.6 games/hour, 5228 positions
+2026-04-09 15:27:21 [info     ] game_complete                  game_length=47 plies=93 sims_per_sec=272.124934076652 winner=x
+    ... 35s: 1,439.7 games/hour, 5493 positions
+2026-04-09 15:27:26 [info     ] game_complete                  game_length=57 plies=113 sims_per_sec=269.8406208163734 winner=x
+    ... 40s: 1,349.7 games/hour, 5803 positions
+2026-04-09 15:27:34 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=263.48721906645807 winner=draw
+2026-04-09 15:27:34 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=265.4900924594007 winner=draw
+    ... 45s: 1,359.7 games/hour, 6610 positions
+2026-04-09 15:27:37 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=266.36643260688953 winner=draw
+    ... 50s: 1,295.7 games/hour, 7007 positions
+2026-04-09 15:27:41 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=260.51942707326276 winner=draw
+2026-04-09 15:27:41 [info     ] game_complete                  game_length=49 plies=97 sims_per_sec=272.36216135598556 winner=x
+2026-04-09 15:27:45 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=254.32716692370997 winner=draw
+    ... 55s: 1,374.2 games/hour, 8227 positions
+2026-04-09 15:27:47 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=263.2555671343399 winner=draw
+2026-04-09 15:27:47 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=263.83928050412777 winner=draw
+2026-04-09 15:27:48 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=260.84607320181624 winner=draw
+2026-04-09 15:27:49 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=261.2393665457621 winner=draw
+    ... 60s: 1,499.7 games/hour, 9895 positions
+    Worker pool run 5/5 (60s)...
+2026-04-09 15:27:51 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=250.1024524158373 winner=draw
+2026-04-09 15:27:52 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=248.3763390725378 winner=draw
+    ... 5s: 1,439.9 games/hour, 854 positions
+    ... 10s: 719.9 games/hour, 854 positions
+2026-04-09 15:28:01 [info     ] game_complete                  game_length=35 plies=69 sims_per_sec=281.8383745833922 winner=x
+2026-04-09 15:28:01 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=258.7537738576411 winner=draw
+2026-04-09 15:28:04 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=262.39027661918476 winner=draw
+    ... 15s: 1,199.6 games/hour, 1876 positions
+2026-04-09 15:28:06 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=249.69267825632568 winner=draw
+2026-04-09 15:28:08 [info     ] game_complete                  game_length=34 plies=67 sims_per_sec=278.5667329350478 winner=o
+    ... 20s: 1,259.7 games/hour, 2492 positions
+2026-04-09 15:28:12 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=259.76415803783124 winner=draw
+    ... 25s: 1,151.7 games/hour, 2944 positions
+    ... 30s: 959.8 games/hour, 2944 positions
+2026-04-09 15:28:21 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=258.24182434837826 winner=draw
+2026-04-09 15:28:24 [info     ] game_complete                  game_length=57 plies=113 sims_per_sec=267.6806481564903 winner=x
+2026-04-09 15:28:24 [info     ] game_complete                  game_length=63 plies=125 sims_per_sec=259.6623385594488 winner=x
+    ... 35s: 1,131.2 games/hour, 4171 positions
+2026-04-09 15:28:26 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=262.21256552908653 winner=draw
+2026-04-09 15:28:26 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=261.5253753908526 winner=draw
+2026-04-09 15:28:28 [info     ] game_complete                  game_length=58 plies=115 sims_per_sec=258.4793259650997 winner=o
+    ... 40s: 1,259.7 games/hour, 5456 positions
+2026-04-09 15:28:31 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=263.7283646362579 winner=draw
+2026-04-09 15:28:32 [info     ] game_complete                  game_length=39 plies=77 sims_per_sec=281.16694065458955 winner=x
+2026-04-09 15:28:32 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=255.504001203668 winner=draw
+    ... 45s: 1,359.7 games/hour, 6462 positions
+2026-04-09 15:28:36 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=268.42245973943756 winner=draw
+2026-04-09 15:28:36 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=250.5908933624913 winner=draw
+    ... 50s: 1,367.7 games/hour, 7236 positions
+2026-04-09 15:28:41 [info     ] game_complete                  game_length=48 plies=95 sims_per_sec=271.8225163926107 winner=o
+2026-04-09 15:28:44 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=252.82421925259445 winner=draw
+2026-04-09 15:28:45 [info     ] game_complete                  game_length=64 plies=128 sims_per_sec=263.1874456281472 winner=draw
+    ... 55s: 1,439.7 games/hour, 8396 positions
+2026-04-09 15:28:45 [info     ] game_complete                  game_length=58 plies=115 sims_per_sec=253.2566611937022 winner=o
+    ... 60s: 1,379.7 games/hour, 8804 positions
+  MCTS (CPU only, no NN): median=54,578.9  IQR=+/-179.0  [54.0k-54.8k]  n=5
+  NN inference (batch=64): median=8,397.0  IQR=+/-7.0  [8.4k-8.4k]  n=5
+  NN latency (batch=1): median=1.8  IQR=+/-0.1  [1.7-1.8]  n=5
+  Replay buffer push: median=760,541.4  IQR=+/-27,512.2  [714.1k-865.5k]  n=5
+  Replay buffer raw: median=1,076.7  IQR=+/-11.9  [1.1k-1.1k]  n=5
+  Replay buffer aug: median=1,046.6  IQR=+/-21.0  [987.8-1.1k]  n=5
+  GPU utilisation util%: median=100.0  IQR=+/-0.1  [93.3-100.0]  n=5
+  GPU utilisation vram: median=0.0  IQR=+/-0.0  [0.0-0.0]  n=5
+  Worker pool throughput pos/hr: median=541,809.6  IQR=+/-65,439.2  
+[478.8k-617.4k]  n=5
+  Worker pool throughput games/hr: median=1,379.7  IQR=+/-179.9  [1.2k-1.6k]  
+n=5
+  Worker pool throughput batch%: median=100.0  IQR=+/-0.0  [100.0-100.0]  n=5
+
+                                          Benchmark Report                      
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━
+┃ Metric                               ┃   Median ┃       IQR ┃         Range ┃ 
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━
+│ MCTS sim/s (CPU, no NN)              │   54,579 │  +/-179.0 │   54.0k-54.8k │ 
+├──────────────────────────────────────┼──────────┼───────────┼───────────────┼─
+│ NN inference batch=64 pos/s          │  8,397.0 │   +/-6.99 │     8.4k-8.4k │ 
+├──────────────────────────────────────┼──────────┼───────────┼───────────────┼─
+│ NN latency batch=1 mean ms           │     1.80 │   +/-0.06 │       1.7-1.8 │ 
+├──────────────────────────────────────┼──────────┼───────────┼───────────────┼─
+│ Buffer push pos/s                    │  760,541 │ +/-27,512 │ 714.1k-865.5k │ 
+├──────────────────────────────────────┼──────────┼───────────┼───────────────┼─
+│ Buffer sample raw us/batch           │  1,076.7 │  +/-11.90 │     1.1k-1.1k │ 
+├──────────────────────────────────────┼──────────┼───────────┼───────────────┼─
+│ Buffer sample augmented us/batch     │  1,046.6 │  +/-20.97 │    987.8-1.1k │ 
+├──────────────────────────────────────┼──────────┼───────────┼───────────────┼─
+│ GPU utilisation %                    │    100.0 │   +/-0.10 │    93.3-100.0 │ 
+├──────────────────────────────────────┼──────────┼───────────┼───────────────┼─
+│ VRAM usage GB                        │ 0.05/8.6 │   +/-0.00 │       0.0-0.0 │ 
+├──────────────────────────────────────┼──────────┼───────────┼───────────────┼─
+│ Worker throughput pos/hr             │  541,810 │ +/-65,439 │ 478.8k-617.4k │ 
+├──────────────────────────────────────┼──────────┼───────────┼───────────────┼─
+│ Worker batch fill %                  │    100.0 │   +/-0.00 │   100.0-100.0 │ 
+└──────────────────────────────────────┴──────────┴───────────┴───────────────┴─
+
+  Warm-up: 3s MCTS / 3s NN / 2s buffer / 30s worker | Runs: n=5 | Summary: 
+median +/- IQR
+
+Some checks FAILED -- profile and optimise before Phase 4.5.
+
+  JSON report: /home/timmy/Work/hexo_rl/reports/benchmarks/2026-04-09_15-28.json
+make: *** [Makefile:113: bench.full] Error 1
