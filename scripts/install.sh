@@ -9,7 +9,7 @@ RELEASE_BASE_URL="https://github.com/seeligto/hexo_rl/releases/download/v0.1-boo
 BOOTSTRAP_MODEL_SHA256="01862660e4850a517f45f359db5763975341e7dd35c67f593ab21f38a73a9670"
 BOOTSTRAP_CORPUS_SHA256="678079c12c65209af1d9ce9969da0455b4c16ccee353ca214c336943758309aa"
 
-TOTAL_STEPS=9
+TOTAL_STEPS=10
 
 ok()   { echo "[ok] $*"; }
 fail() { echo "[!!] $*" >&2; }
@@ -129,40 +129,61 @@ if [[ "$MISSING_RUST" -eq 1 ]]; then
 fi
 ok "rustc $(rustc --version | awk '{print $2}'), cargo $(cargo --version | awk '{print $2}')"
 
-# ── [4/9] Check NVIDIA / CUDA ─────────────────────────────────────────────────
-step 4 "Checking NVIDIA / CUDA..."
-if command -v nvidia-smi &>/dev/null; then
-    GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo 'unknown')"
-    ok "GPU: $GPU_NAME"
-else
-    warn "nvidia-smi not found. Continuing in CPU-only mode."
-    warn "  Benchmarks will work but self-play training requires a CUDA GPU."
-    warn "  Install the NVIDIA driver + CUDA toolkit for full functionality."
-fi
-
-# ── [5/9] Create .venv and install Python dependencies ────────────────────────
-step 5 "Setting up Python virtual environment..."
+# ── [4/10] Create .venv ───────────────────────────────────────────────────────
+step 4 "Setting up Python virtual environment..."
 if [[ -d ".venv" ]]; then
     ok ".venv [cached]"
 else
     python3 -m venv .venv
     ok ".venv created"
 fi
-
 echo "    Upgrading pip, maturin, pybind11..."
 .venv/bin/pip install --upgrade --quiet pip maturin pybind11
+ok "pip / maturin / pybind11 up to date"
 
-echo "    Installing requirements.txt..."
+# ── [5/10] Detect CUDA and install PyTorch ────────────────────────────────────
+step 5 "Installing PyTorch..."
+CUDA_MAJOR=""
+CUDA_VERSION=""
+if command -v nvidia-smi &>/dev/null; then
+    GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo 'unknown')"
+    ok "GPU: $GPU_NAME"
+    CUDA_VERSION="$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+')" || true
+    CUDA_MAJOR="${CUDA_VERSION%%.*}"
+fi
+
+if [[ "$OS" == "macOS" ]]; then
+    ok "macOS — installing default PyPI torch (gets MPS build)"
+    .venv/bin/pip install --quiet torch
+elif [[ "$CUDA_MAJOR" == "13" ]]; then
+    ok "CUDA $CUDA_VERSION — installing torch cu130 build"
+    .venv/bin/pip install --quiet torch --index-url https://download.pytorch.org/whl/cu130
+elif [[ "$CUDA_MAJOR" == "12" ]]; then
+    ok "CUDA $CUDA_VERSION — installing torch cu121 build"
+    .venv/bin/pip install --quiet torch --index-url https://download.pytorch.org/whl/cu121
+elif [[ -n "$CUDA_MAJOR" ]]; then
+    warn "CUDA $CUDA_VERSION detected but no matching wheel — installing CPU torch build"
+    warn "  For GPU training, use CUDA 12.x or 13.x."
+    .venv/bin/pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+else
+    warn "No CUDA detected — installing CPU torch build"
+    warn "  Self-play training requires a CUDA GPU."
+    .venv/bin/pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+fi
+ok "torch installed"
+
+# ── [6/10] Install remaining Python dependencies ──────────────────────────────
+step 6 "Installing Python dependencies (requirements.txt)..."
 .venv/bin/pip install --quiet -r requirements.txt
 ok "Python dependencies installed"
 
-# ── [6/9] Git submodules ───────────────────────────────────────────────────────
-step 6 "Updating git submodules..."
+# ── [7/10] Git submodules ─────────────────────────────────────────────────────
+step 7 "Updating git submodules..."
 git submodule update --init --recursive
 ok "Submodules up to date"
 
-# ── [7/9] Build engine ────────────────────────────────────────────────────────
-step 7 "Building Rust engine extension..."
+# ── [8/10] Build engine ───────────────────────────────────────────────────────
+step 8 "Building Rust engine extension..."
 .venv/bin/maturin develop --release -m engine/Cargo.toml
 ok "Engine built"
 
@@ -178,8 +199,8 @@ if [[ -d "vendor/bots/sealbot/current" ]]; then
         || warn "SealBot current build failed (non-fatal — only needed for eval)"
 fi
 
-# ── [8/9] Download release artifacts ─────────────────────────────────────────
-step 8 "Downloading release artifacts..."
+# ── [9/10] Download release artifacts ────────────────────────────────────────
+step 9 "Downloading release artifacts..."
 mkdir -p checkpoints data
 
 download_and_verify \
@@ -192,8 +213,8 @@ download_and_verify \
     "data/bootstrap_corpus.npz" \
     "$BOOTSTRAP_CORPUS_SHA256"
 
-# ── [9/9] Smoke tests ─────────────────────────────────────────────────────────
-step 9 "Running smoke tests..."
+# ── [10/10] Smoke tests ───────────────────────────────────────────────────────
+step 10 "Running smoke tests..."
 SMOKE_OK=0
 if make test 2>&1; then
     ok "Smoke tests passed"
