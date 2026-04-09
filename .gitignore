@@ -68,3 +68,7 @@ criterion/
 data/corpus/injected*/*.env
 
 launch_claude.sh
+checkpoints.broken-202604/
+tmp/sweep_ckpt/
+nohup.out
+checkpoints/saved/
