@@ -836,16 +836,26 @@ absolute nat values vs the §1 heuristic.
 
 **Key observations:**
 
-- `best_model.pt` produces identical statistics to `bootstrap_model.pt`
-  on this position set (same means and histograms to 3 decimals). They
-  are different files on disk (different MD5s, different mtimes) but
-  behave identically on the K=0 window of these positions. Treat them
-  as equivalent anchors until an independent investigation says
-  otherwise.
-- **The collapse is not a simple monotonic sharpening curve.** All
-  post-bootstrap checkpoints sit in a narrow 1.49–1.70 nat band. The
-  collapse does not deepen with training step — it lands in a fixed
-  point and stays there.
+- **`best_model.pt` is NOT an independent reference — it IS
+  `bootstrap_model.pt`.** Weight fingerprint (SHA-256 of first conv
+  layer): `ed07ecbe6a73` for both files. `best_model.pt` is a plain
+  state dict that was seeded from `bootstrap_model.pt` weights when
+  training started (`scripts/train.py:526`) and was **never promoted
+  during training** — no challenger beat the incumbent gating eval in
+  the entire P3 run. The files differ on disk because one is a full
+  checkpoint dict and the other is a raw state dict, but the tensor
+  values are identical. The diag B table should be read as:
+  bootstrap (H≈2.67) vs. all post-bootstrap (H≈1.5–1.7 nat band).
+  There is no pre-§67 independent reference in this dataset.
+- **Stuck fixed point, not progressive collapse.** All post-bootstrap
+  checkpoints sit in a narrow 1.49–1.70 nat band with no downward
+  trend — entropy oscillates within ~0.2 nats of a stable fixed point.
+  The system found a self-consistent policy where MCTS rubber-stamps
+  the prior, training targets match network outputs, and no gradient
+  signal breaks the equilibrium. Framing this as "progressive collapse"
+  is misleading: the collapse happened fast (likely within the first
+  few thousand self-play steps), and subsequent training maintained
+  rather than deepened it.
 - **The worst bucket is mid-game (cm 10–24)**, where p10 drops to
   0.08–0.19 nats on every post-bootstrap checkpoint. Late-game is
   consistently the highest-entropy bucket — the opposite of what the
@@ -855,14 +865,21 @@ absolute nat values vs the §1 heuristic.
   it catastrophic is diagnostic C: MCTS is not adding any exploration
   on top of that prior.
 
-**Restart candidate heuristic.** `checkpoint_00017428.pt` is the latest
-checkpoint with mean raw-policy entropy ≥ 1.5 nats across the sampled
-positions. By the rule-of-thumb threshold, restart candidates for the
-Phase 4.0 fix session are this checkpoint or earlier — but because the
-entropy curve is flat across the entire collapsed band, the real choice
-is between resuming from any of them *after* the fix lands, or starting
-fresh from `bootstrap_model.pt` / `best_model.pt`. This is a **finding,
-not a recommendation**; the fix session owns the call.
+**Restart candidate heuristic.** `checkpoint_00017428.pt` has the
+highest mean H(π) in the post-bootstrap set (1.698 nats) but the band
+width is 0.21 nats — entropy rank is noise at this scale. **Do not use
+entropy ordering to select the restart point.** The honest framing:
+
+- No checkpoint in the 13k–17k range is meaningfully less collapsed
+  than any other. Picking 13000 because H=1.666 > 17000 H=1.486 is
+  spurious; both are stuck at the same fixed point.
+- Restart point selection should be based on **buffer composition**:
+  the earliest checkpoint before self-play dominated the replay buffer
+  (~step 10k, where pretrain share was still ≥70%), not on entropy rank.
+- Starting fresh from `bootstrap_model.pt` (clean pretrained weights,
+  H≈2.67) is the simplest and cleanest option once the Dirichlet port
+  is complete. This is a **finding, not a recommendation**; the fix
+  session owns the call.
 
 #### Diagnostic C — temperature schedule + MCTS visit distribution
 
@@ -960,16 +977,32 @@ its deterministic attractor.
    Independent of the root cause but explains why the collapse went
    unnoticed for 16,880 steps. See Monitoring Gap above.
 
+#### Identical eval games — expected behaviour, not a seeding bug
+
+The round-robin results showed 100% identical games between near-era
+checkpoints (ckpt_13000 vs ckpt_14000: all 25 moves, carbon-copy). This
+is **expected behaviour**: `ModelPlayer.get_move()` calls
+`tree.get_policy(temperature=0.0)` which returns a one-hot argmax policy,
+and the eval loop has no stochastic element. Any two runs of the same
+matchup will produce identical games by construction.
+
+A separate temperature sampling check (2026-04-10, `scripts/eval_diagnostic.py
+--temperature 1.0 --model_a/b ckpt_15000.pt`, 20 games) confirmed that
+with τ=1.0, games diverge normally: 13 distinct game lengths across 20
+games, P1/P2 wins roughly equal. **Temperature sampling in the Rust
+game_runner and in the eval path is functionally correct.** The collapse
+is not caused by broken temperature sampling — it is purely the missing
+Dirichlet injection on the training path.
+
 #### "Known correct" reference
 
-`best_model.pt` (pre-§67 CE-loss training path, before the restart from
-`bootstrap_model.pt`) does not exhibit collapse under the same eval
-harness. In diagnostic B it produces identical raw-policy entropy
-statistics to `bootstrap_model.pt`, which on this position set is the
-reference anchor. Whatever the post-§67 KL-loss + `completed_q_values`
-path is doing differently on the self-play loop is implicated — but the
-diag A finding makes clear that the missing Dirichlet injection is the
-most likely single explanation, not the loss swap.
+There is no independent pre-collapse reference checkpoint in the P3
+dataset. `best_model.pt` was initialised from `bootstrap_model.pt`
+weights at training start and never updated — weight fingerprint
+confirms identity (`ed07ecbe6a73`). The `bootstrap_model.pt` pretrained
+weights (H≈2.67 nats) are the only available anchor. The previous
+framing of `best_model.pt` as a "pre-§67 CE-loss reference" was
+incorrect.
 
 #### Not-in-scope (fix session to decide)
 

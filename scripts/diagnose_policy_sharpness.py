@@ -21,6 +21,7 @@ diag_B_sharpness.md header for the full caveat text.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import random
@@ -182,10 +183,23 @@ def sample_positions(n: int) -> List[Position]:
 # ---------------------------------------------------------------------------
 
 
-def _load_model(ckpt_path: Path) -> HexTacToeNet:
+def _weight_fingerprint(state: Dict) -> str:
+    """SHA-256 of the first conv weight tensor bytes — stable across save formats."""
+    stem_key = next(
+        (k for k in sorted(state) if "conv" in k and "weight" in k),
+        next(iter(state)),  # fallback: any first key
+    )
+    t = state[stem_key]
+    raw = t.numpy().tobytes() if hasattr(t, "numpy") else bytes(t)
+    return hashlib.sha256(raw).hexdigest()[:12]
+
+
+def _load_model(ckpt_path: Path) -> tuple[HexTacToeNet, str]:
+    """Load checkpoint; return (model, weight_fingerprint)."""
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state = Trainer._extract_model_state(ckpt)
     state = normalize_model_state_dict_keys(state)
+    fingerprint = _weight_fingerprint(state)
     hparams = Trainer._infer_model_hparams(state)
     model = HexTacToeNet(
         board_size=int(hparams.get("board_size", 19)),
@@ -195,7 +209,7 @@ def _load_model(ckpt_path: Path) -> HexTacToeNet:
     )
     model.load_state_dict(state, strict=False)
     model = model.to(DEVICE).eval()
-    return model
+    return model, fingerprint
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +252,7 @@ def _phase_split(compound_moves: np.ndarray, H: np.ndarray) -> Dict[str, Dict[st
 
 def evaluate_checkpoint(ckpt_path: Path, positions: List[Position]) -> Dict:
     print(f"[diag_B] evaluating {ckpt_path.name} on {len(positions)} positions...")
-    model = _load_model(ckpt_path)
+    model, fingerprint = _load_model(ckpt_path)
 
     tensors = np.stack([p.tensor for p in positions]).astype(np.float16)
     x = torch.from_numpy(tensors).to(DEVICE)
@@ -272,6 +286,7 @@ def evaluate_checkpoint(ckpt_path: Path, positions: List[Position]) -> Dict:
 
     return {
         "checkpoint": ckpt_path.name,
+        "weight_fingerprint": fingerprint,
         "n_positions": int(len(positions)),
         "entropy_stats": _entropy_stats(entropy),
         "top1_stats": _entropy_stats(top1),
@@ -419,17 +434,35 @@ def write_diag_B(results: List[Dict]) -> None:
     lines.append("")
 
     lines.append("## Per-checkpoint summary\n")
-    lines.append("| Checkpoint | H(π) mean | median | p10 | p90 | top-1 mean | eff support mean |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("| Checkpoint | weight_fp | H(π) mean | median | p10 | p90 | top-1 mean | eff support mean |")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for r in results:
         es = r["entropy_stats"]
         ts = r["top1_stats"]
+        fp = r.get("weight_fingerprint", "?")
         lines.append(
-            f"| {r['checkpoint']} | {es['mean']:.3f} | {es['median']:.3f} "
+            f"| {r['checkpoint']} | `{fp}` | {es['mean']:.3f} | {es['median']:.3f} "
             f"| {es['p10']:.3f} | {es['p90']:.3f} "
             f"| {ts['mean']:.3f} | {r['effective_support_mean']:.2f} |"
         )
     lines.append("")
+
+    # Warn if any two checkpoints share the same weight fingerprint.
+    fp_to_names: Dict[str, List[str]] = {}
+    for r in results:
+        fp = r.get("weight_fingerprint", "?")
+        fp_to_names.setdefault(fp, []).append(r["checkpoint"])
+    dupes = {fp: names for fp, names in fp_to_names.items() if len(names) > 1}
+    if dupes:
+        lines.append("### WARNING — duplicate weight fingerprints detected\n")
+        for fp, names in dupes.items():
+            lines.append(
+                f"- `{fp}`: {', '.join(f'`{n}`' for n in names)} share identical "
+                f"model weights despite being different files on disk. "
+                f"The most likely cause is that one file was initialised as a copy "
+                f"of the other and the training gating never promoted a challenger.\n"
+            )
+        lines.append("")
 
     lines.append("## Phase split — H(π) per checkpoint per phase bucket\n")
     lines.append("| Checkpoint | Phase | n | mean | median | p10 | p90 |")
@@ -458,27 +491,60 @@ def write_diag_B(results: List[Dict]) -> None:
     lines.append("")
 
     lines.append("## Restart candidate heuristic\n")
-    candidate = None
-    for r in results:
-        if r["checkpoint"] in ("bootstrap_model.pt", "best_model.pt"):
-            continue
-        if r["entropy_stats"]["mean"] >= 1.5:
-            candidate = r["checkpoint"]
-    if candidate is None:
+    # Gather post-bootstrap entropy values to detect flat-band vs. trend.
+    post_bootstrap = [
+        r for r in results
+        if r["checkpoint"] not in ("bootstrap_model.pt", "best_model.pt")
+    ]
+    if post_bootstrap:
+        h_vals = [r["entropy_stats"]["mean"] for r in post_bootstrap]
+        h_min, h_max = min(h_vals), max(h_vals)
+        band_width = h_max - h_min
+        is_flat = band_width < 0.3  # oscillation < 0.3 nats → no trend
+    else:
+        is_flat = False
+
+    if is_flat and post_bootstrap:
         lines.append(
-            "All post-bootstrap checkpoints have mean H(π) < 1.5 nats on the\n"
-            "K=0 window. Recommend the fix session restart from\n"
-            "`bootstrap_model.pt` (or `best_model.pt` if pre-§67 weights are\n"
-            "acceptable) rather than resuming from any of these collapsed\n"
-            "checkpoints."
+            f"**Entropy is FLAT across all post-bootstrap checkpoints** "
+            f"(band {h_min:.2f}–{h_max:.2f} nats, width {band_width:.2f} nats "
+            f"< 0.3 nat threshold). This is a **stuck fixed point**, not a "
+            f"progressive collapse. No checkpoint in the post-bootstrap range "
+            f"is meaningfully less collapsed than any other — do NOT use "
+            f"entropy rank to choose the restart point.\n"
+        )
+        lines.append(
+            "**Restart point selection:** choose the earliest checkpoint "
+            "before self-play dominated the replay buffer — approximately "
+            "step 10k, where the pretrain share was still ≥70%. Entropy "
+            "ordering across the 13k–17k range is noise, not signal.\n"
+        )
+        lines.append(
+            "**Restart from `bootstrap_model.pt`** (clean pretrained weights "
+            "with no self-play contamination) once the Dirichlet port is "
+            "complete. Do not use `best_model.pt` as a restart candidate "
+            "unless you have confirmed it has different weights from "
+            "`bootstrap_model.pt` (check the weight_fingerprint column above).\n"
         )
     else:
-        lines.append(
-            f"`{candidate}` is the latest checkpoint with mean raw-policy\n"
-            f"entropy >= 1.5 nats across the sampled positions. Restart\n"
-            f"candidates for the Phase 4.0 fix session are this checkpoint\n"
-            f"or earlier."
-        )
+        candidate = None
+        for r in post_bootstrap:
+            if r["entropy_stats"]["mean"] >= 1.5:
+                candidate = r["checkpoint"]
+        if candidate is None:
+            lines.append(
+                "All post-bootstrap checkpoints have mean H(π) < 1.5 nats on "
+                "the K=0 window. Recommend restart from `bootstrap_model.pt` "
+                "(clean pretrained weights). Do NOT use `best_model.pt` unless "
+                "its weight_fingerprint differs from `bootstrap_model.pt`."
+            )
+        else:
+            lines.append(
+                f"`{candidate}` is the latest checkpoint with mean raw-policy "
+                f"entropy ≥ 1.5 nats. Restart candidates for the Phase 4.0 fix "
+                f"session are this checkpoint or earlier — but see flat-band "
+                f"caveat: if band_width < 0.3, entropy rank is noise."
+            )
     lines.append("")
 
     (DIAG_DIR / "diag_B_sharpness.md").write_text("\n".join(lines))
@@ -655,7 +721,20 @@ def write_diag_C(records: Optional[List[Dict]], temp_min: float, threshold: int)
 
 
 def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="Phase 4.0 mode-collapse diagnostics")
+    parser.add_argument(
+        "--only",
+        nargs="+",
+        metavar="NAME",
+        help="Run diag B on these checkpoint names only (e.g. best_model.pt). "
+             "Writes an *appended* corrected row to the existing report.",
+    )
+    args = parser.parse_args()
+
     DIAG_DIR.mkdir(parents=True, exist_ok=True)
+
+    names_to_run = args.only if args.only else CHECKPOINT_NAMES
 
     positions = sample_positions(N_POSITIONS)
     print(f"[diag_B] sampled {len(positions)} positions; "
@@ -663,7 +742,7 @@ def main() -> None:
           f"..{max(p.compound_move for p in positions)}")
 
     results: List[Dict] = []
-    for name in CHECKPOINT_NAMES:
+    for name in names_to_run:
         path = CHECKPOINT_DIR / name
         if not path.exists():
             print(f"[diag_B] skipping missing checkpoint: {name}")
@@ -674,13 +753,40 @@ def main() -> None:
             print(f"[diag_B] ERROR on {name}: {exc!r}")
 
     if results:
-        write_diag_B(results)
+        if args.only:
+            # Append corrected rows to existing report rather than overwriting.
+            report_path = DIAG_DIR / "diag_B_sharpness.md"
+            lines: List[str] = []
+            lines.append("\n---\n")
+            lines.append("## Corrected rows (re-run with --only)\n")
+            lines.append("| Checkpoint | weight_fp | H(π) mean | median | p10 | p90 | top-1 mean | eff support mean |")
+            lines.append("|---|---|---|---|---|---|---|---|")
+            for r in results:
+                es = r["entropy_stats"]
+                ts = r["top1_stats"]
+                fp = r.get("weight_fingerprint", "?")
+                lines.append(
+                    f"| {r['checkpoint']} | `{fp}` | {es['mean']:.3f} | {es['median']:.3f} "
+                    f"| {es['p10']:.3f} | {es['p90']:.3f} "
+                    f"| {ts['mean']:.3f} | {r['effective_support_mean']:.2f} |"
+                )
+            lines.append("")
+            # Check for dupes against bootstrap (first result fingerprint is known reference).
+            for r in results:
+                fp = r.get("weight_fingerprint", "?")
+                print(f"[diag_B] {r['checkpoint']:30s}  weight_fp={fp}  H_mean={r['entropy_stats']['mean']:.3f}")
+            with report_path.open("a") as f:
+                f.write("\n".join(lines))
+            print(f"[diag_B] appended corrected rows to {report_path}")
+        else:
+            write_diag_B(results)
 
-    # Diagnostic C
-    trace_path = DIAG_DIR / "diag_A_trace_training.jsonl"
-    records = parse_training_trace(trace_path)
-    temp_min, threshold = _load_selfplay_temp_config()
-    write_diag_C(records, temp_min, threshold)
+    # Diagnostic C — only on full run, not --only partial re-runs.
+    if not args.only:
+        trace_path = DIAG_DIR / "diag_A_trace_training.jsonl"
+        records = parse_training_trace(trace_path)
+        temp_min, threshold = _load_selfplay_temp_config()
+        write_diag_C(records, temp_min, threshold)
 
 
 if __name__ == "__main__":

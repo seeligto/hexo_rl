@@ -85,3 +85,12 @@ best_model.pt                      2    7   25   48   48   57   89   61   69   6
 entropy >= 1.5 nats across the sampled positions. Restart
 candidates for the Phase 4.0 fix session are this checkpoint
 or earlier.
+
+---
+
+## Corrected rows (re-run with --only)
+
+| Checkpoint | weight_fp | H(π) mean | median | p10 | p90 | top-1 mean | eff support mean |
+|---|---|---|---|---|---|---|---|
+| best_model.pt | `ed07ecbe6a73` | 2.665 | 2.688 | 1.330 | 3.889 | 0.379 | 21.48 |
+| bootstrap_model.pt | `ed07ecbe6a73` | 2.665 | 2.688 | 1.330 | 3.889 | 0.379 | 21.48 |

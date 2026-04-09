@@ -25,3 +25,12 @@ g= 0 w= 1 cm= 0 ply= 0 H_prior=1.437 H_visits=1.207 delta=+0.230 top1=0.649 eff_
 g= 0 w= 9 cm= 0 ply= 0 H_prior=1.437 H_visits=1.207 delta=+0.230 top1=0.649 eff_support=3.34
 g= 0 w= 4 cm= 0 ply= 0 H_prior=1.437 H_visits=1.207 delta=+0.230 top1=0.649 eff_support=3.34
 ```
+---
+
+## Temperature sampling check (τ=1.0)
+
+Model A: `checkpoint_00015000.pt`  Model B: `checkpoint_00015000.pt`  N=20
+
+Move-count uniqueness: 13 distinct lengths across 20 games
+
+**VERDICT: GAMES DIVERGE** — temperature sampling works. Collapse is purely due to missing Dirichlet noise on the training path.

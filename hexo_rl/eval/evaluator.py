@@ -60,11 +60,13 @@ class ModelPlayer(BotProtocol):
         config: Dict[str, Any],
         device: torch.device,
         n_sims: int = 100,
+        temperature: float = 0.0,
     ) -> None:
         self._engine = LocalInferenceEngine(model, device)
         self._tree = MCTSTree(float(config.get("mcts", config).get("c_puct", 1.5)))
         self._n_sims = n_sims
         self._config = config
+        self._temperature = temperature
 
     def get_move(self, state: GameState, rust_board: object) -> Tuple[int, int]:
         board = rust_board
@@ -81,7 +83,7 @@ class ModelPlayer(BotProtocol):
             self._tree.expand_and_backup(policies, values)
             sims_done += current_batch
 
-        policy = self._tree.get_policy(temperature=0.0, board_size=BOARD_SIZE)
+        policy = self._tree.get_policy(temperature=self._temperature, board_size=BOARD_SIZE)
 
         legal_moves = board.legal_moves()
         legal_flat = [board.to_flat(q, r) for q, r in legal_moves]
@@ -94,7 +96,11 @@ class ModelPlayer(BotProtocol):
             probs = np.ones(len(legal_moves)) / len(legal_moves)
         else:
             probs /= total
-        idx = int(np.argmax(probs))
+        if self._temperature == 0.0:
+            idx = int(np.argmax(probs))
+            return legal_moves[idx]
+        # Temperature > 0: sample from the distribution.
+        idx = int(np.random.choice(len(legal_moves), p=probs))
         return legal_moves[idx]
 
     def name(self) -> str:
