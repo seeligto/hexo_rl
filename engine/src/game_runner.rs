@@ -200,6 +200,9 @@ pub struct SelfPlayRunner {
     gumbel_mcts: bool,
     gumbel_m: usize,
     gumbel_explore_moves: usize,
+    dirichlet_alpha: f32,
+    dirichlet_epsilon: f32,
+    dirichlet_enabled: bool,
     running: Arc<AtomicBool>,
     games_completed: Arc<AtomicUsize>,
     positions_generated: Arc<AtomicUsize>,
@@ -226,7 +229,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -253,6 +256,9 @@ impl SelfPlayRunner {
         gumbel_mcts: bool,
         gumbel_m: usize,
         gumbel_explore_moves: usize,
+        dirichlet_alpha: f32,
+        dirichlet_epsilon: f32,
+        dirichlet_enabled: bool,
     ) -> Self {
         // If standard_sims is 0, fall back to n_simulations.
         let effective_standard = if standard_sims == 0 { n_simulations } else { standard_sims };
@@ -281,6 +287,9 @@ impl SelfPlayRunner {
             gumbel_mcts,
             gumbel_m,
             gumbel_explore_moves,
+            dirichlet_alpha,
+            dirichlet_epsilon,
+            dirichlet_enabled,
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
             positions_generated: Arc::new(AtomicUsize::new(0)),
@@ -331,6 +340,9 @@ impl SelfPlayRunner {
             let gumbel_mcts = self.gumbel_mcts;
             let gumbel_m = self.gumbel_m;
             let gumbel_explore_moves = self.gumbel_explore_moves;
+            let dirichlet_alpha   = self.dirichlet_alpha;
+            let dirichlet_epsilon = self.dirichlet_epsilon;
+            let dirichlet_enabled = self.dirichlet_enabled;
             let results_queue = self.results.clone();
             let recent_game_results = self.recent_game_results.clone();
             let mcts_depth_accum = self.mcts_depth_accum.clone();
@@ -439,6 +451,21 @@ impl SelfPlayRunner {
                             }
                             let mut sims_used = root_sims;
 
+                            // Apply Dirichlet noise to root priors after expansion.
+                            // Skip at intermediate ply (second stone of compound turn) —
+                            // mirrors hexo_rl/selfplay/worker.py:107-111.
+                            // ply==0 is P1's single opening stone, which IS a turn boundary.
+                            let is_intermediate_ply = board.moves_remaining == 1 && board.ply > 0;
+                            if dirichlet_enabled && !is_intermediate_ply {
+                                let n_ch = tree.pool[0].n_children as usize;
+                                if n_ch > 0 {
+                                    let noise = crate::mcts::dirichlet::sample_dirichlet(
+                                        dirichlet_alpha, n_ch, &mut rng,
+                                    );
+                                    tree.apply_dirichlet_to_root(&noise, dirichlet_epsilon);
+                                }
+                            }
+
                             // Phase 2: Gumbel-Top-k candidate selection.
                             // Guard: if effective_m is 0 (no budget or no children),
                             // fall back to the standard PUCT path for this move.
@@ -498,8 +525,33 @@ impl SelfPlayRunner {
                             gumbel_state = Some(gs);
                             } // end effective_m > 0
                         } else {
-                            // ── Standard PUCT search (unchanged) ──
-                            let mut sims_done = 0;
+                            // ── Standard PUCT search with Dirichlet root noise ──
+                            // Expand root first so priors are available before noise injection.
+                            // Uses batch=1 to guarantee only the root leaf is processed,
+                            // matching the Gumbel branch pattern.
+                            let root_n = infer_and_expand(&mut tree, 1);
+                            if root_n == 0 {
+                                continue;
+                            }
+                            let mut sims_done = root_n;
+
+                            // Apply Dirichlet noise after root expansion, before simulation loop.
+                            // Skip at intermediate ply (second stone of compound turn) —
+                            // mirrors hexo_rl/selfplay/worker.py:107-111.
+                            // ply==0 is P1's single opening stone, which IS a turn boundary.
+                            let is_intermediate_ply = board.moves_remaining == 1 && board.ply > 0;
+                            if dirichlet_enabled && !is_intermediate_ply {
+                                if tree.pool[0].is_expanded() {
+                                    let n_ch = tree.pool[0].n_children as usize;
+                                    if n_ch > 0 {
+                                        let noise = crate::mcts::dirichlet::sample_dirichlet(
+                                            dirichlet_alpha, n_ch, &mut rng,
+                                        );
+                                        tree.apply_dirichlet_to_root(&noise, dirichlet_epsilon);
+                                    }
+                                }
+                            }
+
                             while sims_done < game_sims {
                                 if !running.load(Ordering::SeqCst) { break; }
                                 let n = infer_and_expand(&mut tree, leaf_batch_size);
@@ -987,7 +1039,7 @@ mod tests {
         // Run with max_moves_per_game = 0 to avoid triggering MCTS and inference server dependency
         let runner = SelfPlayRunner::new(
             4, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
-            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10,
+            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
         );
         runner.start();
         
@@ -1006,6 +1058,75 @@ mod tests {
         
         runner.stop();
         assert_eq!(completed_workers.len(), 4, "Should have seen games from all 4 workers");
+    }
+
+    // ── Dirichlet call-site gate tests ───────────────────────────────────────
+
+    /// Verify that Dirichlet noise modifies root priors when enabled and leaves
+    /// them unchanged when disabled.  Uses MCTSTree directly — no inference
+    /// server, no PyO3.
+    #[test]
+    fn test_dirichlet_gate_enabled_modifies_priors() {
+        let mut tree = crate::mcts::MCTSTree::new(1.5);
+        let board = crate::board::Board::new();
+        tree.new_game(board.clone());
+
+        // Expand root with uniform priors (no inference server needed).
+        let n_actions = crate::board::BOARD_SIZE * crate::board::BOARD_SIZE + 1;
+        let policy = vec![1.0 / n_actions as f32; n_actions];
+        let _leaves = tree.select_leaves(1);
+        tree.expand_and_backup(&[policy], &[0.0]);
+        assert!(tree.pool[0].is_expanded(), "root should be expanded");
+
+        // Snapshot pre-noise priors.
+        let first = tree.pool[0].first_child as usize;
+        let n_ch = tree.pool[0].n_children as usize;
+        let priors_before: Vec<f32> = (0..n_ch).map(|j| tree.pool[first + j].prior).collect();
+
+        // Apply Dirichlet noise (same call site logic as game_runner PUCT branch).
+        let alpha = 0.3f32;
+        let epsilon = 0.25f32;
+        let mut rng = rand::rng();
+        let noise = crate::mcts::dirichlet::sample_dirichlet(alpha, n_ch, &mut rng);
+        tree.apply_dirichlet_to_root(&noise, epsilon);
+
+        let priors_after: Vec<f32> = (0..n_ch).map(|j| tree.pool[first + j].prior).collect();
+
+        // With epsilon=0.25 and Dirichlet noise, priors should differ from uniform.
+        let max_diff: f32 = priors_before
+            .iter()
+            .zip(priors_after.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_diff > 1e-6,
+            "Dirichlet noise should modify root priors; max_diff={max_diff}"
+        );
+    }
+
+    #[test]
+    fn test_dirichlet_gate_disabled_preserves_priors() {
+        let mut tree = crate::mcts::MCTSTree::new(1.5);
+        let board = crate::board::Board::new();
+        tree.new_game(board);
+
+        let n_actions = crate::board::BOARD_SIZE * crate::board::BOARD_SIZE + 1;
+        let policy = vec![1.0 / n_actions as f32; n_actions];
+        let _leaves = tree.select_leaves(1);
+        tree.expand_and_backup(&[policy], &[0.0]);
+
+        let first = tree.pool[0].first_child as usize;
+        let n_ch = tree.pool[0].n_children as usize;
+        let priors_before: Vec<f32> = (0..n_ch).map(|j| tree.pool[first + j].prior).collect();
+
+        // dirichlet_enabled = false: do NOT call apply_dirichlet_to_root.
+        // Priors should be identical to pre-expansion values.
+        let priors_after: Vec<f32> = (0..n_ch).map(|j| tree.pool[first + j].prior).collect();
+
+        assert_eq!(
+            priors_before, priors_after,
+            "Disabled gate must not modify root priors"
+        );
     }
 
     // ── Gumbel MCTS tests ────────────────────────────────────────────────────

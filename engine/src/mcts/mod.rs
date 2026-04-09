@@ -15,6 +15,7 @@
 ///   `Q(s,a) + c_puct · P(s,a) · √N(s) / (1 + N(s,a))`
 ///   where Q is from the *parent's* perspective.
 
+pub mod dirichlet;
 pub mod node;
 mod selection;
 mod backup;
