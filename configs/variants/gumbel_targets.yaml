@@ -6,3 +6,9 @@
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
+  playout_cap:
+    # fast_prob=0.0: PUCT at 50 sims + τ=1.0 on infinite board produces
+    # colony-extension draws (94.4% draw rate, §75 investigation).
+    # Fast games provide no useful signal on this variant.
+    # See reports/draw_rate_investigation_2026-04-10/report.md
+    fast_prob: 0.0

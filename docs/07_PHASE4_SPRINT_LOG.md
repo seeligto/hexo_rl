@@ -1294,3 +1294,19 @@ Current `CLAUDE.md` "Gumbel MCTS (per-host override)" block:
 - **Audit §6 open question 4** — per-move wall-clock cost of `GumbelSearchState::new` + `halve_candidates` via `criterion` microbench. Not covered by the whole-pipeline benchmark in §74.2. Separately out of scope.
 
 **Status:** all three audit open items closed or explicitly deferred. No blockers for the next sustained run beyond the §71 checklist items that were already outstanding.
+
+---
+
+## §75 — Fast game disable for gumbel_targets (2026-04-10)
+
+Draw rate investigation (reports/draw_rate_investigation_2026-04-10/)
+confirmed 100% of draws are timeout draws at the 150-ply cap.
+Low-sim games (fast_prob=0.25, 50 sims, τ=1.0, PUCT) had 94.4% draw
+rate vs 3.7% for standard games. Colony-extension behavior observed in
+game viewer — both sides extend parallel lines with no engagement.
+
+Fix: fast_prob: 0.0 in configs/variants/gumbel_targets.yaml.
+gumbel_full.yaml unchanged (Gumbel SH is effective in the low-sim
+regime, §71).
+
+Resumed from checkpoint at step 25008 with VARIANT=gumbel_targets.
