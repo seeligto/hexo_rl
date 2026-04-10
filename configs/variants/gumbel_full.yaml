@@ -10,3 +10,7 @@ selfplay:
   gumbel_mcts: true
   gumbel_m: 16
   completed_q_values: true
+  playout_cap:
+    # fast_prob=0.25: Gumbel Sequential Halving shows largest gains at
+    # 30-50 sims (§71). Fast games are meaningful on this variant.
+    fast_prob: 0.25
