@@ -1310,3 +1310,14 @@ gumbel_full.yaml unchanged (Gumbel SH is effective in the low-sim
 regime, §71).
 
 Resumed from checkpoint at step 25008 with VARIANT=gumbel_targets.
+
+---
+
+### §76 — max_game_moves correction for gumbel_targets (2026-04-10)
+
+Phase A diagnostic (reports/draw_rate_investigation_2026-04-10/phase_a_postfix.md)
+confirmed max_game_moves counts plies not compound moves. gumbel_targets was the
+only variant at 150 plies (75 compound turns) — a §69 artifact for fast_prob=0.25.
+With fast_prob=0.0 (§75), 57.6% of games hit the cap. Fix: 150→200 plies to match
+other variants. Yaml comment "compound moves" was incorrect — fixed to "plies".
+Resumed from checkpoint_00025008 (the last clean checkpoint before fast_prob change).
