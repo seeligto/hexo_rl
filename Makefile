@@ -162,6 +162,10 @@ corpus.fetch: ## Scrape human games + generate SealBot corpus + update manifest 
 corpus.export: ## Export optimized NPZ corpus for buffer prefill (MAX_POSITIONS=50000)
 	$(PY) scripts/export_corpus_npz.py --max-positions $(MAX_POSITIONS) --no-compress
 
+.PHONY: corpus.export.pretrain
+corpus.export.pretrain: ## Export human-only Elo-weighted NPZ for pretrain (200K positions)
+	$(PY) scripts/export_corpus_npz.py --human-only --max-positions 200000 --no-compress
+
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
