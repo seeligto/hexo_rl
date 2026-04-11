@@ -465,14 +465,58 @@ impl PyMCTSTree {
     }
 
     /// Top-N children of root by visit count.
-    /// Returns list of (coord_str, visits, prior) sorted by visits descending.
-    pub fn get_top_visits(&self, n: usize) -> Vec<(String, u32, f32)> {
+    /// Returns list of (coord_str, visits, prior, q_value) sorted by visits descending.
+    pub fn get_top_visits(&self, n: usize) -> Vec<(String, u32, f32, f32)> {
         self.inner.get_top_visits(n)
     }
 
     /// Value estimate at root from perspective of player to move.
     pub fn root_value(&self) -> f32 {
         self.inner.root_value()
+    }
+
+    // ── Policy viewer accessors ──────────────────────────────────────────────
+
+    /// Get/set forced root child for Gumbel Sequential Halving.
+    /// Set to a child pool index to restrict select_leaves to that subtree.
+    /// Set to None to restore normal PUCT selection.
+    #[getter]
+    pub fn forced_root_child(&self) -> Option<u32> {
+        self.inner.forced_root_child
+    }
+
+    #[setter]
+    pub fn set_forced_root_child(&mut self, val: Option<u32>) {
+        self.inner.forced_root_child = val;
+    }
+
+    /// Returns list of (coord_str, pool_idx, prior, visits, q_value) for each root child.
+    /// Used by the policy viewer to drive Gumbel Sequential Halving from Python.
+    pub fn get_root_children_info(&self) -> Vec<(String, u32, f32, u32, f32)> {
+        let children = self.inner.get_root_children_info();
+        children.into_iter().map(|(pool_idx, prior)| {
+            let child = &self.inner.pool[pool_idx as usize];
+            let visits = child.n_visits;
+            let q_value = if visits > 0 { child.w_value / visits as f32 } else { 0.0 };
+            let val = child.action_idx;
+            let aq = (val >> 16) as i32 - 32768;
+            let ar = (val & 0xFFFF) as i32 - 32768;
+            (format!("({},{})", aq, ar), pool_idx, prior, visits, q_value)
+        }).collect()
+    }
+
+    /// Compute improved policy targets using Gumbel completed Q-values
+    /// (Danihelka et al., ICLR 2022). Used by the policy viewer for
+    /// Gumbel-mode analysis overlay.
+    #[pyo3(signature = (board_size = None, c_visit = 50.0, c_scale = 1.0))]
+    pub fn get_improved_policy(
+        &self,
+        board_size: Option<usize>,
+        c_visit: f32,
+        c_scale: f32,
+    ) -> Vec<f32> {
+        let bs = board_size.unwrap_or(self.board_size);
+        self.inner.get_improved_policy(bs, c_visit, c_scale)
     }
 }
 

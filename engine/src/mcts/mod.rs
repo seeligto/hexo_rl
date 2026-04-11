@@ -359,8 +359,8 @@ impl MCTSTree {
     }
 
     /// Top-N children of root by visit count.
-    /// Returns Vec<(coord_string, visits, prior)> sorted by visits descending.
-    pub fn get_top_visits(&self, n: usize) -> Vec<(String, u32, f32)> {
+    /// Returns Vec<(coord_string, visits, prior, q_value)> sorted by visits descending.
+    pub fn get_top_visits(&self, n: usize) -> Vec<(String, u32, f32, f32)> {
         let root = &self.pool[0];
         if !root.is_expanded() {
             return Vec::new();
@@ -375,10 +375,12 @@ impl MCTSTree {
         children.truncate(n);
 
         children.into_iter().map(|(i, visits)| {
-            let val = self.pool[i].action_idx;
+            let node = &self.pool[i];
+            let val = node.action_idx;
             let q = (val >> 16) as i32 - 32768;
             let r = (val & 0xFFFF) as i32 - 32768;
-            (format!("({},{})", q, r), visits, self.pool[i].prior)
+            let q_value = if visits > 0 { node.w_value / visits as f32 } else { 0.0 };
+            (format!("({},{})", q, r), visits, node.prior, q_value)
         }).collect()
     }
 

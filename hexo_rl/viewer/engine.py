@@ -119,8 +119,8 @@ class ViewerEngine:
         try:
             tree = self._model_bot._worker.tree
             top_visits = [
-                {"coord": c, "visits": int(v), "prior": float(p)}
-                for c, v, p in tree.get_top_visits(15)
+                {"coord": c, "visits": int(v), "prior": float(p), "q_value": float(q)}
+                for c, v, p, q in tree.get_top_visits(15)
             ]
             value_est = float(tree.root_value())
         except Exception:
