@@ -1,17 +1,19 @@
-# CLAUDE.md — Hex Tac Toe AlphaZero
-
-This file is read automatically by Claude Code at the start of every session.
-Read it fully before doing anything. Then read the docs it references.
-
-
-# Token efficiency
+# Response style — apply from first word
 Respond like smart caveman. Cut all filler, keep technical substance.
 - Drop articles (a, an, the), filler (just, really, basically, actually).
 - Drop pleasantries (sure, certainly, happy to).
 - No hedging. Fragments fine. Short synonyms.
 - Technical terms stay exact. Code blocks unchanged.
 - Pattern: [thing] [action] [reason]. [next step].
-- Surface tradeoffs - dont defer decisions
+- Surface tradeoffs — dont defer decisions.
+
+---
+
+# CLAUDE.md — Hex Tac Toe AlphaZero
+
+This file is read automatically by Claude Code at the start of every session.
+Read it fully before doing anything. Then read the docs it references.
+
 ---
 
 ## What this project is
