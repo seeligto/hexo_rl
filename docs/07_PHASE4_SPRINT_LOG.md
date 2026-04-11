@@ -1363,3 +1363,42 @@ ZOI-at-expansion rejected. Depth improves automatically as policy sharpens
 not tree pruning. Revisit Option B at 200K+ steps if B_eff remains above 10.
 
 No code changes. No config changes.
+
+## §78 — /analyze Policy Viewer (2026-04-11)
+
+### Motivation
+
+§70 mode collapse was invisible until 16k steps. Need interactive debugging tool
+to inspect raw network priors on arbitrary positions in seconds.
+
+### Implementation
+
+Branch `feat/policy-viewer`, 4 commits:
+
+1. **Rust PyO3**: `forced_root_child` getter/setter, `get_root_children_info()`,
+   `get_improved_policy()`, `get_top_visits` → 4-tuple (added q_value).
+2. **HexCanvas ES module**: extracted hex rendering from viewer.html into reusable
+   `hex_canvas.js` class. viewer.html ported to use it.
+3. **`/api/analyze` Blueprint**: checkpoint LRU cache (max 3, mtime stale detection),
+   Python-driven MCTS (PUCT + Gumbel SH), ThreadPoolExecutor(1) for inference.
+   `model_loader.py` loads checkpoints without importing Trainer.
+4. **`/analyze` SPA**: sidebar controls, policy heatmap overlay, MCTS visit overlay,
+   deep-link support (`?moves=<base64>&checkpoint=<path>`).
+
+### Key decisions
+
+- **Python-driven MCTS** (not Rust `analyze_position`): avoids FFI callback complexity.
+  PyMCTSTree already exposes `select_leaves`/`expand_and_backup`. Only needed 3 new
+  read-only accessors.
+- **Gumbel SH uses raw Q** (not `completed_q_values`): sufficient for interactive
+  analysis. Production SH in `engine/src/game_runner.rs` is source of truth.
+- **model_loader.py duplicates** `_extract_model_state` / `_infer_model_hparams` from
+  Trainer to avoid pulling in optimizer/scheduler imports. Sync test added.
+
+### Post-review fixes (same session)
+
+- XSS in deep-link parser: added typeof validation matching paste path
+- BOARD_SIZE threaded from checkpoint metadata (was hardcoded 19)
+- Path traversal guard on checkpoint param (must be under project root)
+- Dead `half` / `BOARD_SIZE` vars deleted from `_run_gumbel`
+- Checkpoint dir configurable via `analyze_bp.checkpoint_dir`

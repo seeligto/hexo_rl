@@ -85,6 +85,10 @@ class WebDashboard:
         # Routes
         self._register_routes()
 
+        # Analyze blueprint (policy viewer API)
+        from hexo_rl.monitoring.analyze_api import analyze_bp
+        self._app.register_blueprint(analyze_bp)
+
     def _safe_emit(self, event: str, data: dict) -> None:
         """Enqueue event for sending; never blocks, never propagates exceptions."""
         if not self._connected_sids:
@@ -163,6 +167,15 @@ class WebDashboard:
         @socketio.on("disconnect")
         def on_disconnect():
             dashboard._connected_sids.discard(request.sid)
+
+        # ── Analyze route ─────────────────────────────────────────────────
+
+        @app.route("/analyze")
+        def analyze_page():
+            try:
+                return send_from_directory("static", "analyze.html")
+            except Exception as exc:
+                return f"analyze.html not found: {exc}", 404
 
         # ── Viewer routes ─────────────────────────────────────────────────
 

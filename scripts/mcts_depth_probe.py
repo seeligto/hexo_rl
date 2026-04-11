@@ -158,14 +158,14 @@ def collect_move_metrics(
 
     # Top-5 share
     top5 = tree.get_top_visits(min(5, n_ch)) if n_ch > 0 else []
-    top5_share = sum(v for _, v, _ in top5) / max(total_v, 1)
+    top5_share = sum(v for _, v, _, _ in top5) / max(total_v, 1)
     top1_share = float(root_conc)  # already == max_child / total
 
     # Children with N > 0 — get all children visits
     # Note: get_top_visits(n_ch) returns all children sorted by visit count
     # This can be ~200+ children; acceptable for a probe script
     all_children = tree.get_top_visits(n_ch) if n_ch <= 500 else top5
-    children_visited = sum(1 for _, v, _ in all_children if v > 0)
+    children_visited = sum(1 for _, v, _, _ in all_children if v > 0)
 
     legal = board.legal_moves()
     zoi_n = zoi_count(legal, move_history_coords)
