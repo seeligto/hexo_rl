@@ -32,6 +32,9 @@ log = structlog.get_logger(__name__)
 
 analyze_bp = Blueprint("analyze", __name__)
 
+# Configurable checkpoint directory — set via analyze_bp.checkpoint_dir before registering
+analyze_bp.checkpoint_dir = Path("checkpoints")
+
 # ── Checkpoint LRU cache ─────────────────────────────────────────────────────
 
 _MAX_CACHE = 3
@@ -42,9 +45,16 @@ _cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()  # path → entry
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="analyze")
 
 
+_ALLOWED_CHECKPOINT_ROOT = Path.cwd()
+
+
 def _get_model(checkpoint_path: str) -> Tuple[Any, torch.device, dict]:
     """Load model from cache or disk. Thread-safe, LRU eviction."""
     abs_path = str(Path(checkpoint_path).resolve())
+
+    # Prevent path traversal outside project root
+    if not abs_path.startswith(str(_ALLOWED_CHECKPOINT_ROOT)):
+        raise ValueError(f"Checkpoint path outside project root: {checkpoint_path}")
 
     if not Path(abs_path).exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
@@ -79,12 +89,13 @@ def _get_model(checkpoint_path: str) -> Tuple[Any, torch.device, dict]:
     return model, device, metadata
 
 
-def _get_engine(checkpoint_path: str) -> LocalInferenceEngine:
-    """Get cached inference engine for a checkpoint."""
+def _get_engine(checkpoint_path: str) -> Tuple[LocalInferenceEngine, int]:
+    """Get cached inference engine + board_size for a checkpoint."""
     abs_path = str(Path(checkpoint_path).resolve())
-    _get_model(checkpoint_path)  # ensure loaded
+    _model, _device, metadata = _get_model(checkpoint_path)
+    board_size = metadata.get("hparams", {}).get("board_size", 19)
     with _cache_lock:
-        return _cache[abs_path]["engine"]
+        return _cache[abs_path]["engine"], board_size
 
 
 # ── Board reconstruction ─────────────────────────────────────────────────────
@@ -103,14 +114,14 @@ def _build_board(moves: List[Dict[str, Any]]) -> Board:
 def _analyze_raw(
     engine: LocalInferenceEngine,
     board: Board,
+    board_size: int = 19,
 ) -> Dict[str, Any]:
     """Run raw NN forward pass, return policy/value/entropy."""
     state = GameState.from_board(board)
     tensor, centers = state.to_tensor()
     K = len(centers)
-    BOARD_SIZE = 19
-    N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1
-    half = (BOARD_SIZE - 1) // 2
+    N_ACTIONS = board_size * board_size + 1
+    half = (board_size - 1) // 2
 
     batch = torch.from_numpy(tensor).to(engine.device)
     engine.model.eval()
@@ -140,8 +151,8 @@ def _analyze_raw(
         for k, (cq, cr) in enumerate(centers):
             wq = q - cq + half
             wr = r - cr + half
-            if 0 <= wq < BOARD_SIZE and 0 <= wr < BOARD_SIZE:
-                local_idx = wq * BOARD_SIZE + wr
+            if 0 <= wq < board_size and 0 <= wr < board_size:
+                local_idx = wq * board_size + wr
                 p = float(policies_np[k, local_idx])
                 if p > max_prob:
                     max_prob = p
@@ -269,6 +280,7 @@ def _run_gumbel(
         tree.forced_root_child = None
 
         # Halve: re-score with sigma(Q), keep top half
+        # Uses raw Q (not completed_q_values) — sufficient for interactive analysis
         if len(candidates) > 1:
             refreshed = tree.get_root_children_info()
             info_by_pool = {c[1]: c for c in refreshed}
@@ -290,8 +302,6 @@ def _run_gumbel(
 
     # Add improved policy for Gumbel mode
     improved = tree.get_improved_policy(c_visit=c_visit, c_scale=c_scale)
-    BOARD_SIZE = 19
-    half = (BOARD_SIZE - 1) // 2
     improved_entries = []
     for q, r in board.legal_moves():
         flat_idx = board.to_flat(q, r)
@@ -350,9 +360,11 @@ def analyze():
 
     def _do_analyze() -> Dict[str, Any]:
         try:
-            engine = _get_engine(checkpoint)
+            engine, board_size = _get_engine(checkpoint)
         except FileNotFoundError:
             return {"_status": 404, "error": "Checkpoint not found", "detail": str(checkpoint)}
+        except ValueError as exc:
+            return {"_status": 400, "error": "Invalid checkpoint path", "detail": str(exc)}
         except Exception as exc:
             log.error("model_load_failed", checkpoint=checkpoint, exc=str(exc))
             return {"_status": 500, "error": "Model load failed", "detail": str(exc)}
@@ -362,7 +374,7 @@ def analyze():
         except Exception as exc:
             return {"_status": 400, "error": "Invalid moves", "detail": str(exc)}
 
-        result = _analyze_raw(engine, board)
+        result = _analyze_raw(engine, board, board_size=board_size)
 
         if mcts_cfg.get("enabled"):
             mode = mcts_cfg.get("mode", "puct")
@@ -398,7 +410,7 @@ def analyze():
 @analyze_bp.route("/api/analyze/checkpoints", methods=["GET"])
 def list_checkpoints():
     """List available checkpoint files."""
-    ckpt_dir = Path("checkpoints")
+    ckpt_dir = analyze_bp.checkpoint_dir
     if not ckpt_dir.exists():
         return jsonify([])
 
