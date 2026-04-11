@@ -470,7 +470,7 @@ function updateMoveList() {
     for (let i = 0; i < moves.length; i++) {
         const m = moves[i];
         const cls = playerIdx(m.player) === 0 ? 'move-p0' : 'move-p1';
-        html += `<span class="${cls}">${i}.[${m.q},${m.r}]</span> `;
+        html += `<span class="${cls}">${i}.[${Number(m.q)},${Number(m.r)}]</span> `;
         remaining--;
         if (remaining === 0) { player = player === 1 ? -1 : 1; remaining = 2; }
     }
@@ -688,7 +688,12 @@ function parseDeepLink() {
     if (movesParam) {
         try {
             const decoded = JSON.parse(atob(movesParam));
-            if (Array.isArray(decoded)) moves = decoded;
+            if (Array.isArray(decoded)) {
+                for (const m of decoded) {
+                    if (typeof m.q !== 'number' || typeof m.r !== 'number') throw new Error('invalid move');
+                }
+                moves = decoded;
+            }
         } catch { /* ignore */ }
     }
 

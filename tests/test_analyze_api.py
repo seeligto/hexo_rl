@@ -235,3 +235,42 @@ class TestMonitoringInvariant:
                         if alias.name == prefix or alias.name.startswith(prefix + "."):
                             violations.append(alias.name)
         assert not violations, f"Forbidden imports found in analyze_api.py: {violations}"
+
+
+class TestModelLoaderSync:
+    """Verify model_loader.py stays in sync with Trainer's static methods."""
+
+    def _make_fake_state_dict(self):
+        """Build a minimal state_dict with enough keys to exercise inference."""
+        import torch
+        sd = {
+            "trunk.input_conv.weight": torch.randn(128, 18, 3, 3),
+            "policy_fc.weight": torch.randn(362, 2 * 19 * 19),
+        }
+        for i in range(6):
+            sd[f"trunk.tower.{i}.conv1.weight"] = torch.randn(128, 128, 3, 3)
+        return sd
+
+    def test_extract_model_state_matches(self):
+        from hexo_rl.training.trainer import Trainer
+        from hexo_rl.viewer.model_loader import _extract_model_state
+
+        sd = self._make_fake_state_dict()
+        for payload in [
+            {"model_state": sd},
+            {"model_state_dict": sd},
+            {"state_dict": sd},
+            sd,  # weights-only
+        ]:
+            trainer_result = Trainer._extract_model_state(payload)
+            loader_result = _extract_model_state(payload)
+            assert trainer_result.keys() == loader_result.keys()
+
+    def test_infer_model_hparams_matches(self):
+        from hexo_rl.training.trainer import Trainer
+        from hexo_rl.viewer.model_loader import _infer_model_hparams
+
+        sd = self._make_fake_state_dict()
+        trainer_hp = Trainer._infer_model_hparams(sd)
+        loader_hp = _infer_model_hparams(sd)
+        assert trainer_hp == loader_hp, f"Trainer={trainer_hp} vs loader={loader_hp}"
