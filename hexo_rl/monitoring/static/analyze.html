@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HeXO Policy Viewer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+    --player0: #378ADD;
+    --player1: #D85A30;
+    --last-ring: #c4a822;
+    --grid-stroke: #1a3050;
+    --grid-hover: #2a4a70;
+    --coord-color: #555;
+    --stone-outline: #0a0a1a;
+    --canvas-bg: #16213e;
+    --empty-text: #444;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+#sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+    gap: 8px;
+    overflow-y: auto;
+    border-right: 1px solid #1a3050;
+}
+#sidebar h2 { font-size: 15px; color: #aaa; font-weight: 600; }
+#sidebar a { font-size: 12px; color: #5588cc; text-decoration: none; }
+#sidebar a:hover { text-decoration: underline; }
+
+.control-group { display: flex; flex-direction: column; gap: 4px; }
+.control-group label { font-size: 11px; color: #888; }
+.control-group select,
+.control-group input[type="number"] {
+    background: #16213e;
+    color: #e0e0e0;
+    border: 1px solid #1a4080;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 12px;
+}
+
+.toggle-group {
+    display: flex;
+    gap: 0;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid #1a4080;
+}
+.toggle-group button {
+    flex: 1;
+    background: #0f3460;
+    color: #aaa;
+    border: none;
+    padding: 5px 0;
+    cursor: pointer;
+    font-size: 12px;
+}
+.toggle-group button.active { background: #e94560; color: #fff; }
+
+.btn {
+    background: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #1a4080;
+    border-radius: 4px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-size: 12px;
+}
+.btn:hover { background: #1a4080; }
+.btn-row { display: flex; gap: 4px; }
+
+.checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: #aaa;
+}
+
+#mcts-controls {
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    background: #0d1b30;
+    border-radius: 4px;
+}
+
+/* Results panel */
+#results {
+    font-size: 12px;
+    padding: 6px;
+    background: #16213e;
+    border-radius: 6px;
+    line-height: 1.6;
+    flex-shrink: 0;
+}
+#results .val { color: #e94560; font-weight: 600; font-family: monospace; }
+#results .label { color: #888; }
+
+#top-moves {
+    font-size: 11px;
+    line-height: 1.5;
+    max-height: 150px;
+    overflow-y: auto;
+}
+#top-moves .move-entry { font-family: monospace; color: #ccc; }
+#top-moves .move-prob { color: #4eaa6f; }
+#top-moves .move-logit { color: #888; }
+
+#mcts-results {
+    display: none;
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 6px;
+    background: #0d1b30;
+    border-radius: 4px;
+}
+
+/* Move list */
+#move-list {
+    font-size: 11px;
+    font-family: monospace;
+    line-height: 1.4;
+    color: #888;
+    max-height: 80px;
+    overflow-y: auto;
+    word-wrap: break-word;
+}
+.move-p0 { color: #378ADD; }
+.move-p1 { color: #D85A30; }
+
+#status-bar {
+    font-size: 11px;
+    color: #666;
+    min-height: 16px;
+}
+
+/* ── Main canvas ─────────────────────────────────────────── */
+#canvas-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+}
+#board-canvas {
+    flex: 1;
+    background: #16213e;
+    border-radius: 8px;
+    cursor: crosshair;
+}
+
+/* Tooltip */
+#tooltip {
+    display: none;
+    position: fixed;
+    background: rgba(15, 20, 40, 0.92);
+    color: #ddd;
+    font-size: 11px;
+    font-family: monospace;
+    padding: 4px 8px;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 100;
+    border: 1px solid #1a4080;
+}
+
+/* Loading overlay */
+#loading {
+    display: none;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 13px;
+    color: #e94560;
+}
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+    <h2>HeXO Policy Viewer</h2>
+    <div style="display:flex; gap:8px;">
+        <a href="/">&larr; dashboard</a>
+        <a href="/viewer">viewer</a>
+    </div>
+
+    <div class="control-group">
+        <label>Checkpoint</label>
+        <select id="sel-checkpoint"></select>
+    </div>
+
+    <div style="display:flex; gap:6px;">
+        <div class="control-group" style="flex:1">
+            <label>View radius</label>
+            <div style="display:flex; gap:3px;">
+                <input type="number" id="inp-radius" value="8" min="4" max="15" style="width:50px;">
+                <button class="btn" id="btn-autofit" title="Auto-fit to stones">fit</button>
+            </div>
+        </div>
+        <div class="control-group" style="flex:1">
+            <label>Max moves</label>
+            <input type="number" id="inp-maxmoves" value="40" min="1" max="200" style="width:50px;">
+        </div>
+    </div>
+
+    <label class="checkbox-row">
+        <input type="checkbox" id="chk-autoanalyze" checked>
+        Auto-analyze on click
+    </label>
+
+    <div class="toggle-group" id="overlay-toggle">
+        <button id="btn-raw" class="active">Raw policy</button>
+        <button id="btn-mcts">MCTS visits</button>
+    </div>
+
+    <div id="mcts-controls">
+        <div class="control-group">
+            <label>Search mode</label>
+            <select id="sel-mcts-mode">
+                <option value="puct">PUCT</option>
+                <option value="gumbel">Gumbel</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label>Simulations</label>
+            <select id="sel-mcts-sims">
+                <option value="50">50</option>
+                <option value="200" selected>200</option>
+                <option value="800">800</option>
+            </select>
+        </div>
+    </div>
+
+    <button class="btn" id="btn-analyze" style="width:100%">Analyze</button>
+
+    <div class="btn-row">
+        <button class="btn" id="btn-undo">Undo</button>
+        <button class="btn" id="btn-clear">Clear</button>
+        <button class="btn" id="btn-copy">Copy</button>
+        <button class="btn" id="btn-paste">Paste</button>
+    </div>
+
+    <div id="results">
+        <div><span class="label">Value:</span> <span class="val" id="res-value">—</span></div>
+        <div><span class="label">Entropy:</span> <span class="val" id="res-entropy">—</span></div>
+        <div><span class="label">Next:</span> <span id="res-next">—</span></div>
+        <div style="margin-top:4px;"><span class="label">Top moves:</span></div>
+        <div id="top-moves"></div>
+    </div>
+
+    <div id="mcts-results">
+        <div><span class="label">MCTS root value:</span> <span class="val" id="mcts-value">—</span></div>
+        <div><span class="label">Total sims:</span> <span id="mcts-sims">—</span></div>
+        <div style="margin-top:4px;"><span class="label">MCTS top visits:</span></div>
+        <div id="mcts-top-moves"></div>
+    </div>
+
+    <div id="move-list">Moves: (empty board)</div>
+    <div id="status-bar"></div>
+</div>
+
+<div id="canvas-panel" style="position:relative;">
+    <canvas id="board-canvas"></canvas>
+    <div id="loading">analyzing...</div>
+</div>
+
+<div id="tooltip"></div>
+
+<script type="module">
+import { HexCanvas } from '/static/hex_canvas.js';
+
+// ── State ────────────────────────────────────────────────────────────────────
+
+let moves = [];           // [{q, r, player}]
+let analysisResult = null;
+let mctsResult = null;
+let overlayMode = 'raw';  // 'raw' | 'mcts'
+let analyzing = false;
+
+// ── HexCanvas ────────────────────────────────────────────────────────────────
+
+const boardCanvas = document.getElementById('board-canvas');
+const hex = new HexCanvas(boardCanvas, { coordLabels: 'axial' });
+
+function getRadius() {
+    return parseInt(document.getElementById('inp-radius').value) || 8;
+}
+
+// ── Turn structure ───────────────────────────────────────────────────────────
+
+function getTurnState() {
+    // P1 opens with 1 stone (ply 0), then both players 2 stones per turn
+    let player = 1;  // P1 = 1, P0 = -1. Board uses 1/-1.
+    let remaining = 1;
+    for (let i = 0; i < moves.length; i++) {
+        remaining--;
+        if (remaining === 0) {
+            player = player === 1 ? -1 : 1;
+            remaining = 2;
+        }
+    }
+    return { player, remaining };
+}
+
+function playerLabel(p) {
+    return p === 1 ? 'P1 (Blue)' : 'P0 (Coral)';
+}
+
+function playerIdx(p) {
+    // HexCanvas uses 0/1 for player index, Board uses 1/-1
+    return p === 1 ? 0 : 1;
+}
+
+// ── Rendering ────────────────────────────────────────────────────────────────
+
+function render() {
+    const canvas = boardCanvas;
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width - 24;
+    canvas.height = rect.height - 24;
+
+    const radius = getRadius();
+    hex.setBounds({ mode: 'radius', radius });
+    hex.setCoordLabels('axial');
+
+    // Stones
+    const stones = moves.map(m => ({ q: m.q, r: m.r, player: playerIdx(m.player) }));
+    hex.setBoard(stones);
+    hex.clearAllOverlays();
+
+    // Last placed marker
+    if (moves.length > 0) {
+        const last = moves[moves.length - 1];
+        hex.setOverlay('last_placed', [{ q: last.q, r: last.r, ring: true, ringColor: '#c4a822' }]);
+    }
+
+    // Policy/MCTS overlay
+    if (overlayMode === 'raw' && analysisResult) {
+        renderPolicyOverlay(analysisResult);
+    } else if (overlayMode === 'mcts' && mctsResult) {
+        renderMCTSOverlay(mctsResult);
+    }
+
+    hex.render();
+}
+
+function renderPolicyOverlay(result) {
+    const stoneSet = new Set(moves.map(m => `${m.q},${m.r}`));
+    const policy = result.policy || [];
+    if (policy.length === 0) return;
+
+    const maxProb = Math.max(...policy.map(e => e.prob), 0.001);
+    const cells = [];
+    let labelCount = 0;
+
+    for (const entry of policy) {
+        if (stoneSet.has(`${entry.q},${entry.r}`)) continue;
+        const norm = entry.prob / maxProb;
+        if (norm < 0.02) continue;
+
+        const cell = {
+            q: entry.q, r: entry.r,
+            color: `rgba(78, 170, 111, 1)`,
+            opacity: Math.max(0.08, norm * 0.6),
+        };
+        if (labelCount < 8 && entry.prob > 0.01) {
+            cell.label = (entry.prob * 100).toFixed(1) + '%';
+            cell.labelColor = '#fff';
+            labelCount++;
+        }
+        cells.push(cell);
+    }
+    hex.setOverlay('policy', cells);
+}
+
+function renderMCTSOverlay(result) {
+    const stoneSet = new Set(moves.map(m => `${m.q},${m.r}`));
+    const visits = result.visits || [];
+    if (visits.length === 0) return;
+
+    const maxVisits = Math.max(...visits.map(v => v.visits), 1);
+    const cells = [];
+    let labelCount = 0;
+
+    for (const entry of visits) {
+        if (stoneSet.has(`${entry.q},${entry.r}`)) continue;
+        const norm = entry.visits / maxVisits;
+        if (norm < 0.02) continue;
+
+        const cell = {
+            q: entry.q, r: entry.r,
+            color: `rgba(80, 200, 220, 1)`,
+            opacity: Math.max(0.08, norm * 0.6),
+        };
+        if (labelCount < 8 && entry.visits > 0) {
+            cell.label = String(entry.visits);
+            cell.labelColor = '#fff';
+            labelCount++;
+        }
+        cells.push(cell);
+    }
+    hex.setOverlay('visits', cells);
+}
+
+// ── Results display ──────────────────────────────────────────────────────────
+
+function updateResults(result) {
+    if (!result) {
+        document.getElementById('res-value').textContent = '—';
+        document.getElementById('res-entropy').textContent = '—';
+        document.getElementById('res-next').textContent = '—';
+        document.getElementById('top-moves').innerHTML = '';
+        return;
+    }
+
+    const sign = result.next_to_move === 1 ? '+' : '';
+    document.getElementById('res-value').textContent =
+        `${sign}${result.value.toFixed(3)} (${result.next_to_move === 1 ? 'P1' : 'P0'} to move)`;
+
+    document.getElementById('res-entropy').textContent =
+        `${result.entropy_nats.toFixed(2)} nats (${(result.entropy_uniform_fraction * 100).toFixed(0)}% of uniform)`;
+
+    const { player, remaining } = getTurnState();
+    document.getElementById('res-next').textContent =
+        `${playerLabel(player)}, ${remaining} move${remaining > 1 ? 's' : ''} remaining`;
+
+    const topHTML = (result.top_k || []).slice(0, 5).map((e, i) =>
+        `<div class="move-entry">${i + 1}. (${e.q},${e.r}) <span class="move-prob">${(e.prob * 100).toFixed(1)}%</span> <span class="move-logit">[${e.logit.toFixed(2)}]</span></div>`
+    ).join('');
+    document.getElementById('top-moves').innerHTML = topHTML;
+}
+
+function updateMCTSResults(result) {
+    const panel = document.getElementById('mcts-results');
+    if (!result) {
+        panel.style.display = 'none';
+        return;
+    }
+    panel.style.display = 'block';
+    document.getElementById('mcts-value').textContent = result.root_value.toFixed(3);
+    document.getElementById('mcts-sims').textContent = String(result.total_sims);
+
+    const topHTML = (result.top_k || []).slice(0, 5).map((e, i) =>
+        `<div class="move-entry">${i + 1}. (${e.q},${e.r}) <span class="move-prob">${e.visits}v</span> <span class="move-logit">Q=${e.q_value.toFixed(3)}</span></div>`
+    ).join('');
+    document.getElementById('mcts-top-moves').innerHTML = topHTML;
+}
+
+function updateMoveList() {
+    const el = document.getElementById('move-list');
+    if (moves.length === 0) {
+        el.innerHTML = 'Moves: (empty board)';
+        return;
+    }
+    let html = 'Moves: ';
+    let player = 1, remaining = 1;
+    for (let i = 0; i < moves.length; i++) {
+        const m = moves[i];
+        const cls = playerIdx(m.player) === 0 ? 'move-p0' : 'move-p1';
+        html += `<span class="${cls}">${i}.[${Number(m.q)},${Number(m.r)}]</span> `;
+        remaining--;
+        if (remaining === 0) { player = player === 1 ? -1 : 1; remaining = 2; }
+    }
+    el.innerHTML = html;
+}
+
+function setStatus(msg) {
+    document.getElementById('status-bar').textContent = msg;
+}
+
+// ── API calls ────────────────────────────────────────────────────────────────
+
+async function fetchCheckpoints() {
+    try {
+        const resp = await fetch('/api/analyze/checkpoints');
+        const list = await resp.json();
+        const sel = document.getElementById('sel-checkpoint');
+        sel.innerHTML = '';
+        for (const entry of list) {
+            const opt = document.createElement('option');
+            opt.value = entry.path;
+            const name = entry.path.split('/').pop();
+            opt.textContent = `${name} (${entry.size_mb}MB)`;
+            sel.appendChild(opt);
+        }
+    } catch (e) {
+        setStatus('Failed to fetch checkpoints: ' + e.message);
+    }
+}
+
+async function runAnalysis() {
+    const checkpoint = document.getElementById('sel-checkpoint').value;
+    if (!checkpoint) {
+        setStatus('No checkpoint selected');
+        return;
+    }
+
+    analyzing = true;
+    document.getElementById('loading').style.display = 'block';
+    setStatus('Analyzing...');
+
+    const mctsEnabled = overlayMode === 'mcts';
+    const body = {
+        checkpoint,
+        moves: moves.map(m => ({ q: m.q, r: m.r, player: m.player })),
+    };
+    if (mctsEnabled) {
+        body.mcts = {
+            enabled: true,
+            mode: document.getElementById('sel-mcts-mode').value,
+            simulations: parseInt(document.getElementById('sel-mcts-sims').value),
+        };
+    }
+
+    try {
+        const resp = await fetch('/api/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+
+        if (resp.ok) {
+            analysisResult = data;
+            mctsResult = data.mcts || null;
+            updateResults(data);
+            updateMCTSResults(mctsResult);
+            setStatus(`Done. ${data.legal_moves_count} legal moves.`);
+        } else {
+            setStatus(`Error: ${data.error || 'unknown'}`);
+        }
+    } catch (e) {
+        setStatus('Request failed: ' + e.message);
+    }
+
+    analyzing = false;
+    document.getElementById('loading').style.display = 'none';
+    render();
+}
+
+// ── Interaction ──────────────────────────────────────────────────────────────
+
+hex.onCellClick(({ q, r }) => {
+    if (analyzing) return;
+    const maxMoves = parseInt(document.getElementById('inp-maxmoves').value) || 40;
+    if (moves.length >= maxMoves) {
+        setStatus(`Max moves (${maxMoves}) reached`);
+        return;
+    }
+
+    // Check if occupied
+    if (moves.some(m => m.q === q && m.r === r)) return;
+
+    const { player } = getTurnState();
+    moves.push({ q, r, player });
+    updateMoveList();
+    render();
+
+    if (document.getElementById('chk-autoanalyze').checked) {
+        runAnalysis();
+    }
+});
+
+// Tooltip on hover
+boardCanvas.addEventListener('mousemove', (e) => {
+    const tooltip = document.getElementById('tooltip');
+    if (hex.hexSize === 0) { tooltip.style.display = 'none'; return; }
+    const rect = boardCanvas.getBoundingClientRect();
+    const [q, r] = hex.pixelToHex(e.clientX - rect.left, e.clientY - rect.top);
+
+    let text = `(${q}, ${r})`;
+    if (analysisResult && overlayMode === 'raw') {
+        const entry = (analysisResult.policy || []).find(p => p.q === q && p.r === r);
+        if (entry) text += ` P=${(entry.prob * 100).toFixed(1)}%`;
+    }
+    if (mctsResult && overlayMode === 'mcts') {
+        const entry = (mctsResult.visits || []).find(v => v.q === q && v.r === r);
+        if (entry) text += ` V=${entry.visits} Q=${entry.q_value.toFixed(3)}`;
+    }
+
+    tooltip.textContent = text;
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 12) + 'px';
+    tooltip.style.top = (e.clientY + 12) + 'px';
+});
+
+boardCanvas.addEventListener('mouseleave', () => {
+    document.getElementById('tooltip').style.display = 'none';
+});
+
+// ── Controls ─────────────────────────────────────────────────────────────────
+
+document.getElementById('btn-analyze').onclick = () => runAnalysis();
+
+document.getElementById('btn-undo').onclick = () => {
+    if (moves.length === 0) return;
+    moves.pop();
+    updateMoveList();
+    render();
+    if (document.getElementById('chk-autoanalyze').checked) runAnalysis();
+};
+
+document.getElementById('btn-clear').onclick = () => {
+    moves = [];
+    analysisResult = null;
+    mctsResult = null;
+    updateResults(null);
+    updateMCTSResults(null);
+    updateMoveList();
+    render();
+    if (document.getElementById('chk-autoanalyze').checked) runAnalysis();
+};
+
+document.getElementById('btn-copy').onclick = () => {
+    navigator.clipboard.writeText(JSON.stringify(moves));
+    setStatus('Copied to clipboard');
+};
+
+document.getElementById('btn-paste').onclick = async () => {
+    try {
+        const text = await navigator.clipboard.readText();
+        const parsed = JSON.parse(text);
+        if (!Array.isArray(parsed)) throw new Error('not an array');
+        // Validate
+        for (const m of parsed) {
+            if (typeof m.q !== 'number' || typeof m.r !== 'number') throw new Error('invalid move');
+        }
+        moves = parsed;
+        updateMoveList();
+        render();
+        if (document.getElementById('chk-autoanalyze').checked) runAnalysis();
+        setStatus('Pasted ' + moves.length + ' moves');
+    } catch (e) {
+        setStatus('Paste failed: ' + e.message);
+    }
+};
+
+document.getElementById('btn-autofit').onclick = () => {
+    if (moves.length === 0) return;
+    const maxCoord = Math.max(
+        ...moves.map(m => Math.max(Math.abs(m.q), Math.abs(m.r), Math.abs(m.q + m.r)))
+    );
+    document.getElementById('inp-radius').value = maxCoord + 2;
+    render();
+};
+
+document.getElementById('inp-radius').onchange = () => render();
+
+// Overlay mode toggle
+document.getElementById('btn-raw').onclick = () => {
+    overlayMode = 'raw';
+    document.getElementById('btn-raw').classList.add('active');
+    document.getElementById('btn-mcts').classList.remove('active');
+    document.getElementById('mcts-controls').style.display = 'none';
+    render();
+};
+
+document.getElementById('btn-mcts').onclick = () => {
+    overlayMode = 'mcts';
+    document.getElementById('btn-mcts').classList.add('active');
+    document.getElementById('btn-raw').classList.remove('active');
+    document.getElementById('mcts-controls').style.display = 'flex';
+    // Auto-trigger MCTS analysis if we have a checkpoint
+    if (document.getElementById('chk-autoanalyze').checked) runAnalysis();
+    else render();
+};
+
+// ── Deep-link support ────────────────────────────────────────────────────────
+
+function parseDeepLink() {
+    const params = new URLSearchParams(window.location.search);
+    const movesParam = params.get('moves');
+    const ckpt = params.get('checkpoint');
+
+    if (movesParam) {
+        try {
+            const decoded = JSON.parse(atob(movesParam));
+            if (Array.isArray(decoded)) {
+                for (const m of decoded) {
+                    if (typeof m.q !== 'number' || typeof m.r !== 'number') throw new Error('invalid move');
+                }
+                moves = decoded;
+            }
+        } catch { /* ignore */ }
+    }
+
+    if (ckpt) {
+        // Wait for checkpoints to load, then select
+        setTimeout(() => {
+            const sel = document.getElementById('sel-checkpoint');
+            for (const opt of sel.options) {
+                if (opt.value === ckpt) { sel.value = ckpt; break; }
+            }
+        }, 500);
+    }
+}
+
+// ── Resize ───────────────────────────────────────────────────────────────────
+
+window.addEventListener('resize', () => render());
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+async function init() {
+    await fetchCheckpoints();
+    parseDeepLink();
+    updateMoveList();
+    render();
+
+    // Auto-analyze empty board if checkpoint available
+    if (document.getElementById('sel-checkpoint').value) {
+        runAnalysis();
+    }
+}
+
+init();
+</script>
+</body>
+</html>
