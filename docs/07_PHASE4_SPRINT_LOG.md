@@ -124,7 +124,7 @@ Net overhead: 1.8% vs no quiescence in the gated benchmark.
 
 ### ZOI (Zone of Interest) Lookback (§36)
 
-Restricts MCTS candidates to cells within hex-distance 5 of the last 16 moves. Falls back to full legal set if < 3 candidates. Reduces effective branching factor without changing legal moves.
+Restricts MCTS candidates to cells within hex-distance 5 of the last 16 moves. Falls back to full legal set if < 3 candidates. Reduces the post-search move-selection pool without changing legal moves. Does NOT reduce the MCTS branching factor — the tree expands with the full radius-8 legal set at all depths. See §77.
 
 Config: `mcts.zoi_enabled: true`, `mcts.zoi_radius: 5`, `mcts.zoi_history: 16`, `mcts.zoi_min_candidates: 3`
 
@@ -1321,3 +1321,45 @@ only variant at 150 plies (75 compound turns) — a §69 artifact for fast_prob=
 With fast_prob=0.0 (§75), 57.6% of games hit the cap. Fix: 150→200 plies to match
 other variants. Yaml comment "compound moves" was incorrect — fixed to "plies".
 Resumed from checkpoint_00025008 (the last clean checkpoint before fast_prob change).
+
+---
+
+## §77 — MCTS depth & ZOI scope investigation (2026-04-11)
+
+**Reference:** `reports/mcts_depth_investigation_2026-04-11/`
+
+### Motivation
+
+Prior sessions assumed ZOI restricted MCTS tree branching. Depth probe and
+code audit performed to verify actual behavior and measure search depth.
+
+### Findings
+
+**1. ZOI is post-search only — §36 corrected.**
+Code audit of `game_runner.rs:626–643` confirmed ZOI filtering runs *after*
+`expand_and_backup` completes, on the root visit-count vector used for move
+selection. The MCTS tree itself expands with the full radius-8 legal set at
+all depths. §36 description amended.
+
+**2. Measured branching factor.**
+Depth probe (200 sims, PUCT): 360 median root children created, 7 receiving
+visits. B_eff = 6.1. FPU and policy concentration — not ZOI — drive the low
+effective branching factor. Children past rank ~10 receive zero visits under
+200 sims.
+
+**3. Measured leaf depth.**
+Mean leaf depth 2.92 plies (PUCT, 200 sims), max depth 6–8. Top-5 visit
+share 0.97 — search is appropriately concentrated given the compute budget.
+
+**4. Depth projections.**
+Gumbel m=16 gains approximately +0.6 plies vs PUCT at 200 sims; desktop
+training logs at ~18k steps confirm ~3.5 mean depth (consistent with projection).
+ZOI-at-expansion would add only +0.16 plies over Gumbel — below measurement noise.
+
+### Decision: Option A (do nothing)
+
+ZOI-at-expansion rejected. Depth improves automatically as policy sharpens
+(lower B_eff). The correct lever for deeper search is n_sims increase (Option B),
+not tree pruning. Revisit Option B at 200K+ steps if B_eff remains above 10.
+
+No code changes. No config changes.

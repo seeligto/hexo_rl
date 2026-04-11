@@ -542,7 +542,7 @@ Starting config for self-play RL (do not exceed without benchmarking):
 - Auxiliary loss: opponent reply prediction (weight 0.15)
 - Auxiliary heads: ownership (spatial MSE, weight 0.1) + threat (BCE, weight 0.1) added alongside existing opponent reply head (weight 0.15)
 - Temperature: cosine-annealed 1.0 → 0.05 (replaces hard step at move 30)
-- ZOI: candidate moves restricted to hex-distance ≤ 5 of last 16 moves (fallback to full legal set if < 3 candidates)
+- ZOI: candidate moves restricted to hex-distance ≤ 5 of last 16 moves (fallback to full legal set if < 3 candidates) — post-search move selection only; does not reduce MCTS tree branching (see sprint log §77)
 - Checkpoint loading: strict=False required when resuming — new head weights not present in pre-§37 checkpoints
 - torch.compile: DISABLED — Python 3.14 CUDA graph incompatibility (see sprint §25, §30, §32)
   - Re-enable when PyTorch + Python 3.14 CUDA graph support stabilizes
