@@ -7,7 +7,21 @@ min_quality_score: 0.0        # set > 0 to hard-filter low-quality games
 label_smoothing_default: 0.05 # raise to 0.1 when human corpus > 2000
 elo_weight_exponent: 2        # sampling weight proportional to elo^exponent
 
-source_weights:               # relative sampling weight per source
+# Pretrain mode (make corpus.export.pretrain):
+#   Human-only corpus, all 4,044 games included (no Elo floor).
+#   Bot/injected sources disabled — human games only for this pretrain run.
+#   Elo-band sampling weights below bias toward stronger play:
+#     sub_1000=0.5, 1000_1200=1.0, 1200_1400=1.5, 1400_plus=2.0
+#   A 1200–1400 game's positions appear 3× as often as sub-1000.
+#   Baked into NPZ at export time via weighted rng.choice; all saved weights=1.0.
+pretrain_human_only: true
+pretrain_elo_band_weights:
+  sub_1000:   0.5
+  1000_1200:  1.0
+  1200_1400:  1.5
+  1400_plus:  2.0
+
+source_weights:               # relative sampling weight per source (buffer prefill)
   human: 1.0
   bot_fast: 0.8
   bot_strong: 1.0             # strong (0.5s) is higher quality per game
