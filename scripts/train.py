@@ -967,6 +967,7 @@ def main() -> None:
                         "value_accuracy": value_accuracy,
                         "lr": lr,
                         "grad_norm": grad_norm,
+                        "quiescence_fires_per_step": _qfire_delta,
                     })
 
                     # Buffer composition: self-play positions as fraction of total
