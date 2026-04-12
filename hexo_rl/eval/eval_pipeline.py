@@ -104,6 +104,9 @@ class EvalPipeline:
             "colony_centroid_threshold",
             self.cfg.get("colony_centroid_threshold", 6.0),
         )
+        eval_section.setdefault("eval_temperature", self.cfg.get("eval_temperature", 0.5))
+        eval_section.setdefault("eval_random_opening_plies", self.cfg.get("eval_random_opening_plies", 4))
+        eval_section.setdefault("eval_seed_base", self.cfg.get("eval_seed_base", 42))
         config_for_eval["evaluation"] = eval_section
 
         evaluator = Evaluator(current_model, self.device, config_for_eval)

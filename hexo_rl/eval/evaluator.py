@@ -5,6 +5,7 @@ imports concrete bot implementations directly.
 """
 
 import logging
+import random
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -121,6 +122,9 @@ class Evaluator:
         self.colony_centroid_threshold = float(
             eval_cfg.get("colony_centroid_threshold", 6.0)
         )
+        self._eval_temperature = float(eval_cfg.get("eval_temperature", 0.5))
+        self._eval_random_opening_plies = int(eval_cfg.get("eval_random_opening_plies", 4))
+        self._eval_seed_base = int(eval_cfg.get("eval_seed_base", 42))
 
     def _log_progress(self, phase: str, idx: int, total: int, start_time: float, win_count: int) -> None:
         if idx % self.progress_every != 0 and idx != total:
@@ -155,7 +159,11 @@ class Evaluator:
             model_sims: MCTS simulations per move for the model.
             phase: Label for logging.
         """
-        model_player = ModelPlayer(self.model, self.config, self.device, n_sims=model_sims)
+        model_player = ModelPlayer(
+            self.model, self.config, self.device,
+            n_sims=model_sims,
+            temperature=self._eval_temperature,
+        )
         win_count = 0
         colony_wins = 0
         t0 = time.time()
@@ -163,17 +171,23 @@ class Evaluator:
         log.info("evaluation_games_start", phase=phase, n_games=n_games, model_sims=model_sims)
 
         for i in range(n_games):
+            np.random.seed(self._eval_seed_base + i)
+            random.seed(self._eval_seed_base + i)
             board = Board()
             state = GameState.from_board(board)
             model_player_side = 1 if i % 2 == 0 else -1
+            ply = 0
 
             while not board.check_win() and board.legal_move_count() > 0:
-                if board.current_player == model_player_side:
+                if ply < self._eval_random_opening_plies:
+                    q, r = random.choice(board.legal_moves())
+                elif board.current_player == model_player_side:
                     q, r = model_player.get_move(state, board)
                 else:
                     q, r = opponent.get_move(state, board)
 
                 state = state.apply_move(board, q, r)
+                ply += 1
 
             if board.winner() == model_player_side:
                 win_count += 1
@@ -229,5 +243,6 @@ class Evaluator:
         opponent_player = ModelPlayer(
             getattr(opponent_model, "_orig_mod", opponent_model),
             self.config, self.device, n_sims=other_sims,
+            temperature=self._eval_temperature,
         )
         return self.evaluate(opponent_player, n_games, current_sims, phase="best_arena")

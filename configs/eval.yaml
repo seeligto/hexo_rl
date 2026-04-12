@@ -33,3 +33,7 @@ eval_pipeline:
   bradley_terry:
     anchor_player: "checkpoint_0"
     regularization: 1.0e-6       # small prior for perfect-record edge cases
+
+  eval_temperature: 0.5            # >0 → sample from visit dist; 0 → argmax (old deterministic)
+  eval_random_opening_plies: 4     # both players play uniform random for first N plies (2 compound moves)
+  eval_seed_base: 42               # game i uses seed (base+i); reproducible across runs, varied per game
