@@ -135,3 +135,39 @@ class TestSelfPlayRunnerGumbelConfig:
             n_simulations=10,
         )
         assert runner is not None
+
+
+class TestQuiescenceFireCount:
+    """Tests for the quiescence_fire_count FFI getter on PyMCTSTree."""
+
+    def test_getter_returns_zero_on_new_tree(self):
+        """get_quiescence_fire_count() returns 0 before any searches."""
+        tree = MCTSTree(c_puct=1.5)
+        board = Board()
+        tree.new_game(board)
+        # PyO3 #[getter] fn get_quiescence_fire_count → Python property quiescence_fire_count
+        count = tree.quiescence_fire_count
+        assert isinstance(count, int)
+        assert count == 0
+
+    def test_getter_resets_after_new_game(self):
+        """new_game() resets quiescence_fire_count to 0."""
+        tree = MCTSTree(c_puct=1.5)
+        board = Board()
+        tree.new_game(board)
+        # Run a short search — early-game boards won't fire quiescence,
+        # but the getter must still work and be non-negative.
+        for _ in range(5):
+            leaves = tree.select_leaves(1)
+            if not leaves:
+                break
+            tree.expand_and_backup(
+                [[1.0 / N_ACTIONS] * N_ACTIONS for _ in leaves],
+                [0.0] * len(leaves),
+            )
+        count_before = tree.quiescence_fire_count
+        assert count_before >= 0
+
+        # After new_game(), counter resets.
+        tree.new_game(board)
+        assert tree.quiescence_fire_count == 0

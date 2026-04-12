@@ -59,6 +59,7 @@ impl MCTSTree {
             0
         };
         if current_wins >= 3 {
+            self.quiescence_fire_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return 1.0;
         }
         let opponent_wins = if opponent_may_threat {
@@ -67,12 +68,15 @@ impl MCTSTree {
             0
         };
         if opponent_wins >= 3 {
+            self.quiescence_fire_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return -1.0;
         }
         if current_wins == 2 {
+            self.quiescence_fire_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return (value + self.quiescence_blend_2).min(1.0);
         }
         if opponent_wins == 2 {
+            self.quiescence_fire_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return (value - self.quiescence_blend_2).max(-1.0);
         }
         value

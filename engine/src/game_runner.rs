@@ -224,6 +224,8 @@ pub struct SelfPlayRunner {
     mcts_conc_accum: Arc<AtomicU64>,
     /// Number of searches (moves) contributing to the above accumulators.
     mcts_stat_count: Arc<AtomicU64>,
+    /// Cumulative quiescence fires (all 4 branches) across all searches since `start()`.
+    mcts_quiescence_fires: Arc<AtomicU64>,
 }
 
 #[pymethods]
@@ -302,6 +304,7 @@ impl SelfPlayRunner {
             mcts_depth_accum: Arc::new(AtomicU64::new(0)),
             mcts_conc_accum: Arc::new(AtomicU64::new(0)),
             mcts_stat_count: Arc::new(AtomicU64::new(0)),
+            mcts_quiescence_fires: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -348,6 +351,7 @@ impl SelfPlayRunner {
             let mcts_depth_accum = self.mcts_depth_accum.clone();
             let mcts_conc_accum = self.mcts_conc_accum.clone();
             let mcts_stat_count = self.mcts_stat_count.clone();
+            let mcts_quiescence_fires = self.mcts_quiescence_fires.clone();
 
             let handle = thread::spawn(move || {
                 let mut tree = MCTSTree::new_full(c_puct, crate::mcts::VIRTUAL_LOSS_PENALTY, fpu_reduction);
@@ -613,6 +617,12 @@ impl SelfPlayRunner {
                             mcts_depth_accum.fetch_add((depth * 1_000_000.0) as u64, Ordering::Relaxed);
                             mcts_conc_accum.fetch_add((conc * 1_000_000.0) as u64, Ordering::Relaxed);
                             mcts_stat_count.fetch_add(1, Ordering::Relaxed);
+                            // Accumulate quiescence fires for this search. tree.new_game() resets
+                            // the counter before each search, so this captures per-search fires.
+                            mcts_quiescence_fires.fetch_add(
+                                tree.quiescence_fire_count.load(Ordering::Relaxed),
+                                Ordering::Relaxed,
+                            );
                         }
 
                         // Completed Q-values: compute improved policy for training target.
@@ -885,6 +895,13 @@ impl SelfPlayRunner {
             return 0.0;
         }
         self.mcts_conc_accum.load(Ordering::Relaxed) as f32 / (count as f32 * 1_000_000.0)
+    }
+
+    /// Cumulative quiescence value override/blend count since `start()`.
+    /// Counts all 4 firing branches in `apply_quiescence()`.
+    #[getter]
+    pub fn mcts_quiescence_fires(&self) -> u64 {
+        self.mcts_quiescence_fires.load(Ordering::Relaxed)
     }
 
     /// Drain and return all buffered game results since the last call.

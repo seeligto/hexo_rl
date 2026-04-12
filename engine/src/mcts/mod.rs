@@ -24,6 +24,7 @@ pub use node::{Node, TTEntry, MAX_NODES, VIRTUAL_LOSS_PENALTY};
 
 use crate::board::{Board, MoveDiff, BOARD_SIZE};
 use fxhash::FxHashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // ── Tree ─────────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,10 @@ pub struct MCTSTree {
     pub(crate) depth_accum: u64,
     /// Number of simulations (calls to `select_one_leaf`) since last `new_game()`.
     pub(crate) sim_count: u32,
+    /// Cumulative count of quiescence value overrides/blends since last `new_game()`.
+    /// Tracks all 4 firing branches: ≥3 current wins (+1.0), ≥3 opponent wins (-1.0),
+    /// 2 current wins (blend up), 2 opponent wins (blend down).
+    pub quiescence_fire_count: AtomicU64,
 }
 
 impl MCTSTree {
@@ -91,6 +96,7 @@ impl MCTSTree {
             quiescence_enabled: true,
             quiescence_blend_2: 0.3,
             forced_root_child: None,
+            quiescence_fire_count: AtomicU64::new(0),
         }
     }
 
@@ -107,6 +113,7 @@ impl MCTSTree {
         self.max_depth_observed = 0;
         self.depth_accum = 0;
         self.sim_count = 0;
+        self.quiescence_fire_count.store(0, Ordering::Relaxed);
         self.forced_root_child = None;
         // Clear TT between games — positions don't repeat across games and
         // Vec<f32> policy entries accumulate unboundedly without this.
@@ -939,6 +946,49 @@ mod tests {
         let nn_value = 0.42f32;
         let corrected = tree.apply_quiescence(&board, nn_value);
         assert_eq!(corrected, nn_value, "disabled quiescence must not change value");
+    }
+
+    #[test]
+    fn test_quiescence_fire_count_increments_and_resets() {
+        let mut tree = MCTSTree::new_full(1.5, 0.0, 0.0);
+        tree.quiescence_enabled = true;
+        tree.quiescence_blend_2 = 0.3;
+
+        // Board setup: P1 has ≥3 winning moves (same as test_quiescence_overrides_value_for_current_wins).
+        let mut board = Board::new();
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), crate::board::Cell::P1);
+        }
+        board.cells.insert((-1, 0), crate::board::Cell::P2); // block west end of first threat
+        for q in 20..25i32 {
+            board.cells.insert((q, 0), crate::board::Cell::P1);
+        }
+        board.has_stones = true;
+        board.cache_dirty.set(true);
+        board.current_player = crate::board::Player::One;
+        board.ply = 20;
+
+        let wins = board.count_winning_moves(crate::board::Player::One);
+        assert!(wins >= 3, "expected ≥3 winning moves for P1, got {wins}");
+
+        // Counter starts at 0.
+        assert_eq!(tree.quiescence_fire_count.load(Ordering::Relaxed), 0);
+
+        // First call fires → counter = 1.
+        let result = tree.apply_quiescence(&board, 0.5);
+        assert_eq!(result, 1.0, "forced win should override to 1.0");
+        assert_eq!(tree.quiescence_fire_count.load(Ordering::Relaxed), 1,
+            "counter should be 1 after one firing call");
+
+        // Second call fires again → counter = 2.
+        tree.apply_quiescence(&board, 0.5);
+        assert_eq!(tree.quiescence_fire_count.load(Ordering::Relaxed), 2,
+            "counter should accumulate across calls");
+
+        // new_game() resets counter to 0.
+        tree.new_game(Board::new());
+        assert_eq!(tree.quiescence_fire_count.load(Ordering::Relaxed), 0,
+            "counter should reset to 0 after new_game()");
     }
 
     #[test]
