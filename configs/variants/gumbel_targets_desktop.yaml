@@ -1,0 +1,16 @@
+# Desktop override: Ryzen 7 3700x / RTX 3070. Swept 2026-04-12 (§79).
+# Laptop P3 winner (n_workers=14) caused 97% worker-idle time on desktop
+# via GIL burst stalls. D3 sweep winner: n_workers=10, wait=5ms, burst=8.
+# Sweep delta vs laptop config: 304 → 343 games/hr (+13%).
+# Derived from configs/variants/gumbel_targets.yaml; keep in sync when
+# that file changes.
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 200
+  n_workers: 10
+  inference_max_wait_ms: 5.0
+  playout_cap:
+    fast_prob: 0.0
+training:
+  max_train_burst: 8
