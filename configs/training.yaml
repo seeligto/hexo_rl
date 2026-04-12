@@ -53,9 +53,9 @@ game_length_weights:
   default_weight: 1.0
 
 buffer_schedule:
-  - {step: 0,         capacity: 100_000}
-  - {step: 150_000,   capacity: 250_000}
-  - {step: 500_000,   capacity: 500_000}
+  - {step: 0,           capacity: 250_000}
+  - {step: 300_000,     capacity: 500_000}
+  - {step: 1_000_000,   capacity: 1_000_000}
 
 mixing:
   pretrained_buffer_path: "data/bootstrap_corpus.npz"
