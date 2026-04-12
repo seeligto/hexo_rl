@@ -361,6 +361,12 @@ impl PyMCTSTree {
         self.inner.max_depth_observed
     }
 
+    /// Total quiescence value overrides/blends since last `new_game()`.
+    #[getter]
+    pub fn get_quiescence_fire_count(&self) -> u64 {
+        self.inner.quiescence_fire_count.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Search statistics accumulated since the last `new_game()`.
     ///
     /// Returns `(mean_depth, root_concentration)`:

@@ -671,6 +671,7 @@ def main() -> None:
         last_train_game_count = 0
         last_warmup_log = 0.0
         last_iter_games = 0
+        _last_quiescence_fires: int = 0
 
         while _running[0]:
             if stop_step is not None and train_step >= stop_step:
@@ -943,6 +944,11 @@ def main() -> None:
 
                     # Current LR
                     lr = float(loss_info.get("lr", 0.0))
+
+                    # Quiescence firing rate (delta since last training step)
+                    _cur_qfire = int(getattr(pool._runner, "mcts_quiescence_fires", 0))
+                    _qfire_delta = _cur_qfire - _last_quiescence_fires
+                    _last_quiescence_fires = _cur_qfire
 
                     emit_event({
                         "event": "training_step",
