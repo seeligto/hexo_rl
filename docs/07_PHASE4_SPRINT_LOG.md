@@ -1405,6 +1405,57 @@ Branch `feat/policy-viewer`, 4 commits:
 
 ---
 
+## §79 — Initial buffer increased 100K → 250K (2026-04-12)
+
+### Motivation
+
+§40b reduced initial buffer 250K→100K as a stability measure during draw-collapse
+diagnosis. Draw collapse resolved at §40. Buffer saturates at 100K with ~48%
+self-play = ~48K positions = ~600 games of context — too thin for the model to
+generalise beyond colony patterns. CLAUDE.md line "start at 250K" was already
+correct; config was the stale artifact.
+
+### Memory budget (verified)
+
+14,458 bytes/entry (Rust) + ~14,448 bytes/entry (Python RecentBuffer at 50% capacity).
+
+| Tier | Rust buffer | Python mirror | Buffers total |
+|------|-------------|---------------|---------------|
+| 250K | 3.37 GB | 1.68 GB | 5.05 GB |
+| 500K | 6.73 GB | 3.37 GB | 10.1 GB |
+| 1M | 13.47 GB | 6.73 GB | 20.2 GB |
+
+System: 32 GB RAM. At 250K initial: ~12.7 GB total process → 19.3 GB headroom. Safe.
+Delta vs 100K: +2.98 GB.
+
+### Schedule change
+
+```yaml
+# Before (§40b):
+buffer_schedule:
+  - {step: 0,       capacity: 100_000}
+  - {step: 150_000, capacity: 250_000}
+  - {step: 500_000, capacity: 500_000}
+
+# After (§79):
+buffer_schedule:
+  - {step: 0,           capacity: 250_000}
+  - {step: 300_000,     capacity: 500_000}
+  - {step: 1_000_000,   capacity: 1_000_000}
+```
+
+Growth tiers shift right because starting tier is larger. Steps 300K and 1M exceed
+`total_steps: 200_000` — apply during extended runs only.
+
+### Resume safety (verified)
+
+`load_from_path` (engine/src/replay_buffer/mod.rs:503) reads
+`min(saved_size, self.capacity)` positions into pre-allocated capacity without
+resizing the buffer. Resume from old 100K checkpoint: buffer constructed at 250K
+(from new config), then ≤100K positions loaded in — no truncation, no resize call.
+
+---
+
 ## §80 — Eval Determinism Fix: Temperature + Random Openings (2026-04-12)
 
 ### Root cause (from §70)
@@ -1467,58 +1518,7 @@ positions. Bradley-Terry CIs will reflect real checkpoint discrimination.
 
 ---
 
-## §79 — Initial buffer increased 100K → 250K (2026-04-12)
-
-### Motivation
-
-§40b reduced initial buffer 250K→100K as a stability measure during draw-collapse
-diagnosis. Draw collapse resolved at §40. Buffer saturates at 100K with ~48%
-self-play = ~48K positions = ~600 games of context — too thin for the model to
-generalise beyond colony patterns. CLAUDE.md line "start at 250K" was already
-correct; config was the stale artifact.
-
-### Memory budget (verified)
-
-14,458 bytes/entry (Rust) + ~14,448 bytes/entry (Python RecentBuffer at 50% capacity).
-
-| Tier | Rust buffer | Python mirror | Buffers total |
-|------|-------------|---------------|---------------|
-| 250K | 3.37 GB | 1.68 GB | 5.05 GB |
-| 500K | 6.73 GB | 3.37 GB | 10.1 GB |
-| 1M | 13.47 GB | 6.73 GB | 20.2 GB |
-
-System: 32 GB RAM. At 250K initial: ~12.7 GB total process → 19.3 GB headroom. Safe.
-Delta vs 100K: +2.98 GB.
-
-### Schedule change
-
-```yaml
-# Before (§40b):
-buffer_schedule:
-  - {step: 0,       capacity: 100_000}
-  - {step: 150_000, capacity: 250_000}
-  - {step: 500_000, capacity: 500_000}
-
-# After (§79):
-buffer_schedule:
-  - {step: 0,           capacity: 250_000}
-  - {step: 300_000,     capacity: 500_000}
-  - {step: 1_000_000,   capacity: 1_000_000}
-```
-
-Growth tiers shift right because starting tier is larger. Steps 300K and 1M exceed
-`total_steps: 200_000` — apply during extended runs only.
-
-### Resume safety (verified)
-
-`load_from_path` (engine/src/replay_buffer/mod.rs:503) reads
-`min(saved_size, self.capacity)` positions into pre-allocated capacity without
-resizing the buffer. Resume from old 100K checkpoint: buffer constructed at 250K
-(from new config), then ≤100K positions loaded in — no truncation, no resize call.
-
----
-
-## §80 — Desktop Worker-Count Sweep 2026-04-12
+## §81 — Desktop Worker-Count Sweep 2026-04-12
 
 ### Motivation
 
@@ -1557,3 +1557,56 @@ Proceed to sustained 24–48hr run (Phase 4.0 exit criterion).
 Buffer capacity is now 250K (§79). At sweep end: ~180K positions accumulated.
 Sustained run resumes from checkpoint_00030851 with buffer growing toward 250K.
 `schedule_idx=1` after construction; next trigger is step 300K. Clean.
+
+---
+
+## §82 — emit_event monitoring gap: ownership_loss + threat_loss (2026-04-12)
+
+### Root cause
+
+Both losses computed by `trainer.py` (result dict keys `ownership_loss`, `threat_loss`)
+and written to structlog JSONL since §58, but absent from `emit_event()` in
+`scripts/train.py`. Invisible on web and terminal dashboards for all runs prior to
+this fix. Documented in `reports/aux_quiescence_health_2026-04-12/findings_summary.md` Q2.
+
+### Fix
+
+Two lines added to the `train_step` emit_event call in `scripts/train.py`:
+
+```python
+"loss_ownership": float(loss_info.get("ownership_loss", 0.0)),
+"loss_threat":    float(loss_info.get("threat_loss", 0.0)),
+```
+
+Default to 0.0 when aux heads disabled or loss key absent — safe for old consumers.
+
+**Commit:** `d6a293e fix(monitoring): emit ownership_loss and threat_loss in train events`
+
+---
+
+## §83 — quiescence_fire_count instrumentation (2026-04-12)
+
+### Motivation
+
+No instrumentation existed to measure whether the quiescence value override actually
+fires during self-play. Structural analysis (Q5, findings_summary.md) confirmed logic
+is correct but firing rate was zero-data. Cannot answer "is quiescence doing anything?"
+without a counter.
+
+### Implementation
+
+- `engine/src/mcts/mod.rs`: `pub quiescence_fire_count: AtomicU64` on `MCTSTree`;
+  reset to 0 in `new_game()`
+- `engine/src/mcts/backup.rs`: `fetch_add(1, Ordering::Relaxed)` at all 4 firing
+  branches in `apply_quiescence` (≥3 current wins → +1.0, ≥3 opponent wins → -1.0,
+  2 current wins blend, 2 opponent wins blend)
+- `engine/src/lib.rs`: Python property `quiescence_fire_count` on `PyMCTSTree`
+- `engine/src/game_runner.rs`: `mcts_quiescence_fires Arc<AtomicU64>` accumulated
+  per-search in worker thread; exposed as Python property
+- `scripts/train.py`: `quiescence_fires_per_step` delta emitted in training event
+- `tests/test_gumbel_mcts.py`: `TestQuiescenceFireCount` validates getter + reset
+
+No performance impact — atomic relaxed load on non-critical (post-search) path.
+
+**Commits:** `4124faa feat(mcts): add quiescence_fire_count instrumentation`,
+`ad79be7 add quiescence to log`
