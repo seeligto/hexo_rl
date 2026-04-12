@@ -1515,4 +1515,45 @@ Growth tiers shift right because starting tier is larger. Steps 300K and 1M exce
 `min(saved_size, self.capacity)` positions into pre-allocated capacity without
 resizing the buffer. Resume from old 100K checkpoint: buffer constructed at 250K
 (from new config), then ≤100K positions loaded in — no truncation, no resize call.
+
+---
+
+## §80 — Desktop Worker-Count Sweep 2026-04-12
+
+### Motivation
+
+Laptop P3 winner (n_workers=14, burst=16) caused 97% worker-idle time on
+Ryzen 7 3700x via GIL burst stalls (§77). Swept D1–D5 to find desktop ceiling.
+
+### Sweep table
+
+| Run | n_workers | wait_ms | burst | gph (median last-5) | gpu_util | batch_fill | notes |
+|-----|-----------|---------|-------|---------------------|----------|------------|-------|
+| D1  | 6         | 8.0     | 8     | 247                 | ~73%     | —          | under-provisioned |
+| D2  | 8         | 6.0     | 8     | 313                 | ~78%     | —          | monotonic gain |
+| D3  | 10        | 5.0     | 8     | 334                 | ~79%     | ~78%       | **winner** |
+| D4  | 8         | 8.0     | 4     | 277                 | —        | —          | burst=4 regresses |
+| D5  | 12        | 5.0     | 8     | 307 (declining)     | ~76%     | ~90%       | overloaded GIL |
+
+### Findings
+
+- D3 (10w) peak throughput: **~334 gph** steady-state.
+- D5 (12w): throughput dropped to 307 and declining; batch_fill rose 78%→90%,
+  indicating inference server backs up. Workers saturate the GIL/callback boundary
+  before adding useful parallelism.
+- 400 gph gate from §69 is unreachable on Zen2 (Ryzen 7 3700x).
+  Laptop gate (659K pos/hr) was measured on Zen4 8845HS — do not backport.
+- Desktop ceiling: **~334 gph at 10w/5ms/burst=8**.
+
+### Decision
+
+D3 confirmed peak. `configs/variants/gumbel_targets_desktop.yaml` unchanged
+(already reflects n_workers=10 from end-of-D3 update). Sweep yaml files deleted.
+400 gph gate declared unreachable on this hardware; accept ~334 gph as desktop ceiling.
+Proceed to sustained 24–48hr run (Phase 4.0 exit criterion).
+
+### Buffer note
+
+Buffer capacity is now 250K (§79). At sweep end: ~180K positions accumulated.
+Sustained run resumes from checkpoint_00030851 with buffer growing toward 250K.
 `schedule_idx=1` after construction; next trigger is step 300K. Clean.
