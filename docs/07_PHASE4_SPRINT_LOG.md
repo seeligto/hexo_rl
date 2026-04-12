@@ -171,14 +171,14 @@ Config: `gumbel_mcts: false` (opt-in), `gumbel_m: 16`, `gumbel_explore_moves: 10
 **Files:** `engine/src/replay_buffer/`, `hexo_rl/training/recency_buffer.py`,
 `hexo_rl/selfplay/pool.py`, `configs/training.yaml`
 
-### Growing Buffer + Mixed Streams (§2 + §40b)
+### Growing Buffer + Mixed Streams (§2 + §40b + §79)
 
-Buffer growth schedule:
+Buffer growth schedule (updated §79 — reverts §40b reduction):
 ```yaml
 buffer_schedule:
-  - {step: 0,       capacity: 100_000}
-  - {step: 150_000, capacity: 250_000}
-  - {step: 500_000, capacity: 500_000}
+  - {step: 0,           capacity: 250_000}
+  - {step: 300_000,     capacity: 500_000}
+  - {step: 1_000_000,   capacity: 1_000_000}
 ```
 `ReplayBuffer.resize()` linearises ring buffer in-place via rotate_left, extends backing vecs.
 
@@ -501,10 +501,10 @@ mixing:
   pretrain_max_samples: 200_000
   buffer_persist: true
   buffer_persist_path: "checkpoints/replay_buffer.bin"
-buffer_schedule:
-  - {step: 0,       capacity: 100_000}
-  - {step: 150_000, capacity: 250_000}
-  - {step: 500_000, capacity: 500_000}
+buffer_schedule:  # updated §79
+  - {step: 0,           capacity: 250_000}
+  - {step: 300_000,     capacity: 500_000}
+  - {step: 1_000_000,   capacity: 1_000_000}
 
 # configs/model.yaml
 res_blocks: 12
@@ -1402,3 +1402,55 @@ Branch `feat/policy-viewer`, 4 commits:
 - Path traversal guard on checkpoint param (must be under project root)
 - Dead `half` / `BOARD_SIZE` vars deleted from `_run_gumbel`
 - Checkpoint dir configurable via `analyze_bp.checkpoint_dir`
+
+---
+
+## §79 — Initial buffer increased 100K → 250K (2026-04-12)
+
+### Motivation
+
+§40b reduced initial buffer 250K→100K as a stability measure during draw-collapse
+diagnosis. Draw collapse resolved at §40. Buffer saturates at 100K with ~48%
+self-play = ~48K positions = ~600 games of context — too thin for the model to
+generalise beyond colony patterns. CLAUDE.md line "start at 250K" was already
+correct; config was the stale artifact.
+
+### Memory budget (verified)
+
+14,458 bytes/entry (Rust) + ~14,448 bytes/entry (Python RecentBuffer at 50% capacity).
+
+| Tier | Rust buffer | Python mirror | Buffers total |
+|------|-------------|---------------|---------------|
+| 250K | 3.37 GB | 1.68 GB | 5.05 GB |
+| 500K | 6.73 GB | 3.37 GB | 10.1 GB |
+| 1M | 13.47 GB | 6.73 GB | 20.2 GB |
+
+System: 32 GB RAM. At 250K initial: ~12.7 GB total process → 19.3 GB headroom. Safe.
+Delta vs 100K: +2.98 GB.
+
+### Schedule change
+
+```yaml
+# Before (§40b):
+buffer_schedule:
+  - {step: 0,       capacity: 100_000}
+  - {step: 150_000, capacity: 250_000}
+  - {step: 500_000, capacity: 500_000}
+
+# After (§79):
+buffer_schedule:
+  - {step: 0,           capacity: 250_000}
+  - {step: 300_000,     capacity: 500_000}
+  - {step: 1_000_000,   capacity: 1_000_000}
+```
+
+Growth tiers shift right because starting tier is larger. Steps 300K and 1M exceed
+`total_steps: 200_000` — apply during extended runs only.
+
+### Resume safety (verified)
+
+`load_from_path` (engine/src/replay_buffer/mod.rs:503) reads
+`min(saved_size, self.capacity)` positions into pre-allocated capacity without
+resizing the buffer. Resume from old 100K checkpoint: buffer constructed at 250K
+(from new config), then ≤100K positions loaded in — no truncation, no resize call.
+`schedule_idx=1` after construction; next trigger is step 300K. Clean.
