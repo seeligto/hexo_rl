@@ -241,6 +241,7 @@ make dash.open        # open web dashboard in browser
 make eval.sealbot.quick   # quick eval (10 games, 0.1s, 64 sims)
 make eval.sealbot.full    # full eval (100 games, 0.5s, 128 sims)
 make eval.sealbot.latest  # eval latest checkpoint vs SealBot
+# Eval game diversity: eval_temperature, eval_random_opening_plies, eval_seed_base in configs/eval.yaml (§80)
 
 # Plotting
 make plot.train.latest    # plot latest training log
