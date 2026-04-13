@@ -399,7 +399,17 @@ hexo_rl/
 │   │   ├── mcts/                    ← PUCT tree, node pool, virtual loss
 │   │   ├── formations/              ← incremental formation detection
 │   │   ├── replay_buffer/           ← f16-as-u16 ring buffer, 12-fold augmentation
-│   │   ├── game_runner.rs           ← SelfPlayRunner (Rust worker threads)
+│   │   │   ├── mod.rs               ← ReplayBuffer struct + #[pymethods] facade
+│   │   │   ├── storage.rs           ← new, resize, weight schedule, dashboard stats
+│   │   │   ├── push.rs              ← push, push_game, test-only push_raw
+│   │   │   ├── sample.rs            ← sample_batch entry + weighted sample + apply_sym
+│   │   │   ├── persist.rs           ← HEXB v2 save/load
+│   │   │   └── sym_tables.rs        ← 12-fold permutation tables + WeightSchedule
+│   │   ├── game_runner/             ← SelfPlayRunner (Rust worker threads)
+│   │   │   ├── mod.rs               ← SelfPlayRunner struct + #[pymethods] facade + Drop
+│   │   │   ├── worker_loop.rs       ← start_impl — per-worker self-play main loop
+│   │   │   ├── gumbel_search.rs     ← GumbelSearchState (Sequential Halving)
+│   │   │   └── records.rs           ← policy aggregation + game-end aux reprojection
 │   │   ├── inference_bridge.rs      ← InferenceBatcher (Rust→Python GPU queue)
 │   │   └── lib.rs
 │   └── Cargo.toml

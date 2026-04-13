@@ -413,7 +413,7 @@ These require Rust-side changes and are deferred to a future sprint:
 
 - **Per-move MCTS detail in game records**: `moves_detail` and `value_trace` fields
   in `game_complete` events are currently `None`. Capturing `get_top_visits()` and
-  `root_value()` at each move requires changes to `game_runner.rs` to store MCTS
+  `root_value()` at each move requires changes to `game_runner/worker_loop.rs` to store MCTS
   results before the tree is reset.
 - **Per-worker ID in game_complete**: `worker_id` is included but currently set from
   the Python pool layer. True per-worker attribution requires a Rust-side worker ID.

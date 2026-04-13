@@ -59,7 +59,7 @@ Searched all configs and Python/Rust source:
   `threat_weight: 0.1` (auxiliary head loss weight, NOT shaped reward),
   `ownership_weight: 0.1`.
 - `configs/selfplay.yaml` — no shaped reward keys.
-- `engine/src/game_runner.rs` — outcome is purely terminal: +1.0 (win),
+- `engine/src/game_runner/worker_loop.rs` — outcome is purely terminal: +1.0 (win),
   -1.0 (loss), or `draw_reward` (configurable, default -0.5). No shaped
   reward signals are added.
 - No Python code in `hexo_rl/selfplay/` references formations or shaped rewards.
