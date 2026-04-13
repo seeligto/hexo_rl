@@ -515,6 +515,13 @@ window. This produces flaky tests even when the optimizer is converging correctl
 **Scope:** This restriction applies only to short-window convergence assertions in unit
 tests. Full training runs must always use `augment=True` (the default).
 
+### Threat-logit probe — run at step 5k and before any checkpoint promotion
+
+Run `make probe.latest` (1) at training step 5000 as the kill criterion for every
+new sustained run, and (2) before promoting any checkpoint to "best". Exit code 0 =
+PASS (ext logit mean > 0 AND contrast ≥ 0.38); code 1 = FAIL, investigate before
+continuing. See `docs/07_PHASE4_SPRINT_LOG.md` §85 and §89 for full rationale.
+
 ---
 
 ## Benchmarks — must pass before Phase 4.5
