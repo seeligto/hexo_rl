@@ -34,6 +34,7 @@ import structlog
 
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.utils.device import best_device
+from hexo_rl.training.aux_decode import decode_ownership, decode_winning_line, mask_aux_rows
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
     compute_aux_loss, compute_total_loss, compute_uncertainty_loss,
@@ -293,11 +294,9 @@ class Trainer:
 
         entropy_weight = float(self.config.get("entropy_reg_weight", 0.0))
 
-        # Prepare ownership/threat target tensors (if provided). Inputs are u8
-        # ndarrays straight from ReplayBuffer.sample_batch — ship u8 to device,
-        # then decode in fp32 there. WHY: skips a CPU fp32 intermediate (4×
-        # smaller H2D transfer) and overlaps conversion with the copy.
-        # Ownership encoding: {0=P2, 1=empty, 2=P1} → float {-1, 0, +1}.
+        # Prepare ownership/threat target tensors (if provided).
+        # Decode is delegated to aux_decode — ships u8 to device (4× smaller
+        # H2D transfer vs fp32) then converts in-place on the GPU.
         batch_n = int(states.shape[0])
         assert 0 <= n_pretrain <= batch_n, f"n_pretrain={n_pretrain} out of [0, {batch_n}]"
         own_t: Optional[torch.Tensor] = None
@@ -305,24 +304,9 @@ class Trainer:
         use_ownership = ownership_weight > 0.0 and ownership_targets is not None
         use_threat    = threat_weight > 0.0    and threat_targets    is not None
         if use_ownership:
-            own_arr = np.ascontiguousarray(ownership_targets)
-            if own_arr.ndim == 2:
-                own_arr = own_arr.reshape(-1, 19, 19)
-            own_t = (
-                torch.from_numpy(own_arr)
-                .to(self.device, non_blocking=True)
-                .float()
-                .sub_(1.0)
-            )                                                   # (B, 19, 19) f32
+            own_t = decode_ownership(ownership_targets, self.device)   # (B, 19, 19) f32
         if use_threat:
-            thr_arr = np.ascontiguousarray(threat_targets)
-            if thr_arr.ndim == 2:
-                thr_arr = thr_arr.reshape(-1, 19, 19)
-            thr_t = (
-                torch.from_numpy(thr_arr)
-                .to(self.device, non_blocking=True)
-                .float()
-            )                                                   # (B, 19, 19) f32
+            thr_t = decode_winning_line(threat_targets, self.device)   # (B, 19, 19) f32
 
         with autocast(device_type=self.device.type, dtype=torch.float16,
                       enabled=self.fp16):
@@ -376,22 +360,12 @@ class Trainer:
             aux_skip_full_pretrain = (n_pretrain >= batch_n)
             own_loss = None
             if use_ownership and own_pred is not None and own_t is not None and not aux_skip_full_pretrain:
-                if n_pretrain > 0:
-                    own_pred_m = own_pred[n_pretrain:]
-                    own_t_m = own_t[n_pretrain:]
-                else:
-                    own_pred_m = own_pred
-                    own_t_m = own_t
+                own_pred_m, own_t_m = mask_aux_rows(own_pred, own_t, n_pretrain)
                 own_loss = nn.functional.mse_loss(own_pred_m.squeeze(1), own_t_m)
 
             thr_loss = None
             if use_threat and thr_pred is not None and thr_t is not None and not aux_skip_full_pretrain:
-                if n_pretrain > 0:
-                    thr_pred_m = thr_pred[n_pretrain:]
-                    thr_t_m = thr_t[n_pretrain:]
-                else:
-                    thr_pred_m = thr_pred
-                    thr_t_m = thr_t
+                thr_pred_m, thr_t_m = mask_aux_rows(thr_pred, thr_t, n_pretrain)
                 thr_loss = nn.functional.binary_cross_entropy_with_logits(
                     thr_pred_m.squeeze(1), thr_t_m
                 )
