@@ -642,3 +642,9 @@ def seed_everything(seed: int = 42):
 ```
 
 Call at startup with seed from config. Log the seed so runs can be reproduced.
+
+TODO (low priority, not blocking): upgrade py-spy to a version
+supporting Python 3.14 CPython ABI. Re-run flame graph on live
+steady-state training. Expected to confirm Phase 1 finding that
+NN forward dominates wall-time; if it shows otherwise, reopen the
+worker parallelism hypothesis.
