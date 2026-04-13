@@ -343,6 +343,19 @@ def benchmark_worker_pool(
         },
     }
 
+    # CUDA warm-up: force PyTorch to JIT-compile autocast kernels before workers
+    # start. Without this, the first inference call triggers 90-120s of kernel
+    # compilation, causing "0 games" for the entire warm-up window. Same fix
+    # applied in training/loop.py (commit 79fd415).
+    if device.type == "cuda":
+        _board_size = int(getattr(model, "board_size", 19))
+        _in_ch = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
+        with torch.no_grad():
+            with torch.autocast(device_type="cuda"):
+                _dummy = torch.zeros(1, _in_ch, _board_size, _board_size, device=device)
+                model(_dummy)
+        torch.cuda.synchronize()
+
     # Run one pool for the entire benchmark: warm-up + N measurement windows.
     # Previous approach created separate pools per run, so each run had its own
     # ~20-25s cold-start (no games completing), biasing the 60s window low.
