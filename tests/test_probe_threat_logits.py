@@ -1,15 +1,18 @@
 """
 Tests for scripts/probe_threat_logits.py.
 
-Validates shape, dtype, and bounded-logit sanity of the threat-logit probe.
-Does NOT assert pass/fail threshold values — those are run-dependent.
+Validates shape, dtype, bounded-logit sanity, three-condition pass logic,
+and baseline JSON round-trip. Does NOT assert pass/fail threshold values —
+those are run-dependent.
 
 Skipped if checkpoints/bootstrap_model.pt is absent.
 """
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 from collections import deque
 from pathlib import Path
 from typing import List
@@ -230,8 +233,137 @@ def test_probe_aggregate_structure() -> None:
     not BOOTSTRAP_CKPT.exists(),
     reason="bootstrap_model.pt not found",
 )
+def test_probe_deterministic() -> None:
+    """Two consecutive probes of the same checkpoint produce identical results."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    from probe_threat_logits import load_model, probe_positions, aggregate, _set_determinism
+
+    device = torch.device("cpu")
+    positions = _build_synthetic_positions(n=5)
+
+    _set_determinism()
+    model1 = load_model(BOOTSTRAP_CKPT, device=device)
+    results1 = probe_positions(model1, positions, device=device)
+    agg1 = aggregate(results1)
+
+    _set_determinism()
+    model2 = load_model(BOOTSTRAP_CKPT, device=device)
+    results2 = probe_positions(model2, positions, device=device)
+    agg2 = aggregate(results2)
+
+    assert agg1["ext_logit_mean"] == agg2["ext_logit_mean"], (
+        f"ext_logit_mean not deterministic: {agg1['ext_logit_mean']} vs {agg2['ext_logit_mean']}"
+    )
+    assert agg1["contrast_mean"] == agg2["contrast_mean"], (
+        f"contrast_mean not deterministic: {agg1['contrast_mean']} vs {agg2['contrast_mean']}"
+    )
+    for r1, r2 in zip(results1, results2):
+        assert r1["ext_logit"] == r2["ext_logit"], (
+            f"Position {r1['idx']}: ext_logit varies {r1['ext_logit']} vs {r2['ext_logit']}"
+        )
+
+
+@pytest.mark.skipif(
+    not BOOTSTRAP_CKPT.exists(),
+    reason="bootstrap_model.pt not found",
+)
+def test_check_pass_three_conditions() -> None:
+    """check_pass evaluates all three conditions and returns (bool, dict)."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    from probe_threat_logits import check_pass, THRESH_CONTRAST_MEAN, THRESH_EXT_IN_TOP5_PCT, BASELINE_MARGIN
+
+    baseline = {"ext_logit_mean": -0.40}
+
+    # All three PASS
+    agg_pass = {
+        "ext_logit_mean": -0.40 + BASELINE_MARGIN,  # exactly on threshold
+        "contrast_mean": THRESH_CONTRAST_MEAN,
+        "ext_in_top5_frac": THRESH_EXT_IN_TOP5_PCT / 100.0,
+    }
+    ok, conds = check_pass(agg_pass, baseline=baseline)
+    assert ok, f"Expected PASS, got {conds}"
+    assert conds["ext_logit_vs_baseline"]
+    assert conds["contrast"]
+    assert conds["ext_in_top5"]
+
+    # C1 fails (logit too low)
+    agg_c1_fail = dict(agg_pass, ext_logit_mean=-0.40 - BASELINE_MARGIN - 0.01)
+    ok, conds = check_pass(agg_c1_fail, baseline=baseline)
+    assert not ok
+    assert not conds["ext_logit_vs_baseline"]
+    assert conds["contrast"]
+    assert conds["ext_in_top5"]
+
+    # C2 fails (contrast too low)
+    agg_c2_fail = dict(agg_pass, contrast_mean=THRESH_CONTRAST_MEAN - 0.01)
+    ok, conds = check_pass(agg_c2_fail, baseline=baseline)
+    assert not ok
+    assert not conds["contrast"]
+
+    # C3 fails (top-5 too low)
+    agg_c3_fail = dict(agg_pass, ext_in_top5_frac=(THRESH_EXT_IN_TOP5_PCT / 100.0) - 0.01)
+    ok, conds = check_pass(agg_c3_fail, baseline=baseline)
+    assert not ok
+    assert not conds["ext_in_top5"]
+
+    # No baseline → C1 always FAIL
+    ok, conds = check_pass(agg_pass, baseline=None)
+    assert not ok
+    assert not conds["ext_logit_vs_baseline"]
+
+
+def test_check_pass_no_baseline_fails() -> None:
+    """check_pass with baseline=None always fails condition 1."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    from probe_threat_logits import check_pass
+
+    agg = {"ext_logit_mean": 1.0, "contrast_mean": 1.0, "ext_in_top5_frac": 1.0}
+    ok, conds = check_pass(agg, baseline=None)
+    assert not ok
+    assert not conds["ext_logit_vs_baseline"]
+
+
+def test_baseline_json_roundtrip() -> None:
+    """save_baseline_json / load_baseline_json round-trips correctly."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    from probe_threat_logits import save_baseline_json, load_baseline_json
+
+    agg = {
+        "ext_logit_mean": -0.35, "ext_logit_std": 0.72,
+        "ctrl_logit_mean": -0.55, "ctrl_logit_std": 0.38,
+        "contrast_mean": 0.40, "contrast_std": 0.10,
+        "ext_in_top5_frac": 0.45, "n": 20,
+    }
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        tmp_path = Path(f.name)
+
+    try:
+        save_baseline_json(agg, ckpt_name="test.pt", path=tmp_path)
+        loaded = load_baseline_json(path=tmp_path)
+        assert loaded is not None
+        assert abs(loaded["ext_logit_mean"] - agg["ext_logit_mean"]) < 1e-9
+        assert abs(loaded["contrast_mean"] - agg["contrast_mean"]) < 1e-9
+        assert loaded["checkpoint"] == "test.pt"
+        assert "generated_at" in loaded
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def test_load_baseline_json_absent() -> None:
+    """load_baseline_json returns None for missing file."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    from probe_threat_logits import load_baseline_json
+
+    result = load_baseline_json(path=Path("/tmp/__nonexistent_baseline__.json"))
+    assert result is None
+
+
+@pytest.mark.skipif(
+    not BOOTSTRAP_CKPT.exists(),
+    reason="bootstrap_model.pt not found",
+)
 def test_probe_report_renders() -> None:
-    """format_report produces non-empty markdown string without crashing."""
+    """format_report produces non-empty markdown with three conditions listed."""
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
     from probe_threat_logits import load_model, probe_positions, aggregate, format_report
 
@@ -246,6 +378,10 @@ def test_probe_report_renders() -> None:
     assert len(report) > 100
     assert "bootstrap_model.pt" in report
     assert "extension cell" in report.lower()
+    # Three explicit conditions must appear
+    assert "ext_logit_mean vs baseline" in report
+    assert "contrast_mean" in report or "contrast" in report
+    assert "top-5" in report or "top5" in report.lower()
 
 
 @pytest.mark.skipif(

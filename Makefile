@@ -145,10 +145,11 @@ pretrain: ## Full bootstrap pretrain (15 epochs)
 # ── Probes ────────────────────────────────────────────────────────────────────
 
 .PHONY: probe.bootstrap
-probe.bootstrap: ## Threat-logit probe against bootstrap_model.pt; writes report to reports/probes/
+probe.bootstrap: ## Probe bootstrap_model.pt; save fixtures/threat_probe_baseline.json + report
 	@mkdir -p reports/probes
 	$(PY) scripts/probe_threat_logits.py \
 		--checkpoint checkpoints/bootstrap_model.pt \
+		--write-baseline \
 		--output "reports/probes/bootstrap_$(shell date +%Y%m%d_%H%M%S).md"; \
 	rc=$$?; [ $$rc -le 1 ] || exit $$rc
 

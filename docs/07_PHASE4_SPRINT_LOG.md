@@ -1700,11 +1700,24 @@ ckpt_19500 had a *higher* contrast than bootstrap — the symptom of the head le
 
 ### Kill criterion for next sustained run
 
-At training step **5000**, re-run the same 20-position probe. Expected:
-- extension-cell threat logit **> 0**
-- contrast (ext − rand) **≥ +0.38** (i.e. back at or above bootstrap baseline)
+At training step **5000**, re-run the 20-position probe (`make probe.latest`).
+PASS requires **all three**:
 
-If not met, the aux fix did not materially land; investigate before continuing. If met, the colony-spam loop is a separate failure mode and the threat head is free to do its job.
+1. `ext_logit_mean >= bootstrap_ext_mean − 1.0`  
+   (bootstrap baseline from `fixtures/threat_probe_baseline.json`)
+2. `contrast_mean ≥ +0.38`
+3. `ext_in_top5_pct ≥ 40%`
+
+**Note:** the original "logit > 0" threshold (§85 first draft) was based on a
+misread of the empirical table — bootstrap_model.pt itself measures around
+−0.34 to −0.60, so it would have failed its own criterion. The correct signal
+is *absolute-magnitude collapse* (bootstrap −0.14 → ckpt_19500 −3.25), not
+sign flip. The baseline-relative condition (1) catches that collapse while
+tolerating the negative starting point.
+
+If not met, the aux fix did not materially land; investigate before continuing.
+If met, the colony-spam loop is a separate failure mode and the threat head is
+free to do its job.
 
 ### Corpus aux shortcut
 
@@ -1914,45 +1927,57 @@ hexo_rl/training/
 
 ---
 
-## §89 — Threat-logit probe committed as step-5k kill criterion (2026-04-13)
+## §89 — Threat-logit probe committed as step-5k kill criterion (2026-04-13, corrected §90)
 
 **What.** Two scripts + one test module committed to make the 20-position threat-logit
 probe reproducible as a formal gate for every future sustained run.
 
-### Files added
+### Files added / updated
 
 ```
 scripts/probe_threat_logits.py          — CLI + importable probe functions
 scripts/generate_threat_probe_fixtures.py — generate fixtures/threat_probe_positions.npz
-tests/test_probe_threat_logits.py       — shape/dtype/sanity tests (skip if no bootstrap_model.pt)
+tests/test_probe_threat_logits.py       — shape/dtype/determinism/pass-logic tests
 fixtures/threat_probe_positions.npz     — 20 curated positions (generated on first run)
+fixtures/threat_probe_baseline.json     — canonical baseline (written by make probe.bootstrap)
 ```
 
-### Kill criterion (from §85)
+### Kill criterion (corrected — original "logit > 0" was wrong)
 
-At training step **5000**, run `make probe.latest`. Expected signal that the A1 aux
-alignment fix has landed:
+At training step **5000**, run `make probe.latest`. PASS requires **all three**:
 
-| threshold | condition |
-|-----------|-----------|
-| mean extension-cell threat logit | **> 0** |
-| mean contrast (ext − rand empty) | **≥ +0.38** |
+| # | condition | threshold |
+|---|-----------|-----------|
+| 1 | ext_logit_mean vs bootstrap baseline | ≥ baseline_mean − 1.0 |
+| 2 | contrast_mean (ext − ctrl) | ≥ +0.38 |
+| 3 | extension cell in policy top-5 | ≥ 40% |
 
-If either condition is missed, the aux fix did not materially land; investigate
-before continuing the run.
+**Why the original "> 0" threshold was wrong:** bootstrap_model.pt itself measures
+around −0.34 to −0.60 ext logit mean (never positive), so the baseline would have
+failed its own criterion. The true collapse signal is *absolute-magnitude drop*
+(bootstrap −0.14 → ckpt_19500 −3.25), caught by condition 1. See §85 correction note.
+
+The canonical baseline numbers live in `fixtures/threat_probe_baseline.json`, written
+once by `make probe.bootstrap` (which passes `--write-baseline` to the script).
+If that file is absent, `probe.latest` prints FAIL with
+"no baseline recorded — run make probe.bootstrap first".
 
 ### Bootstrap baseline (§85 empirical, bootstrap_model.pt)
 
 | metric | bootstrap_model.pt | ckpt_19500 (pre-A1, bad) |
 |--------|-------------------|--------------------------|
 | threat logit @ extension cell | −0.14 ± 0.74 | −3.25 ± 0.46 |
-| threat logit @ random empty cell | −0.52 ± 0.39 | −5.11 ± 1.40 |
-| contrast (extension − random empty) | **+0.38** | +1.86 (shortcut) |
+| threat logit @ control cell | −0.52 ± 0.39 | −5.11 ± 1.40 |
+| contrast (extension − control) | **+0.38** | +1.86 (shortcut) |
 
-The ckpt_19500 contrast was _higher_ than bootstrap — the head learned a
-marginal-class shortcut against stale, mis-aligned labels. The +0.38 bootstrap
-contrast is the floor: a healthy trained model should meet or exceed it while
-also pushing the extension-cell logit above 0 (which bootstrap does not yet achieve).
+ckpt_19500 contrast was *higher* than bootstrap — the head learned a marginal-class
+shortcut against stale mis-aligned labels. The +0.38 bootstrap contrast is the floor.
+
+### Determinism
+
+Probe forces FP32 (no autocast) and sets `torch.manual_seed(42)` +
+`torch.use_deterministic_algorithms(True)` at startup. Two consecutive
+`make probe.bootstrap` runs must produce byte-identical ext_logit_mean.
 
 ### Fixture schema (fixtures/threat_probe_positions.npz)
 
@@ -1964,18 +1989,17 @@ control_cell_idx: (20,) int32             — flat index of empty cell far from 
 game_phase:       (20,) U8 string         — "early" / "mid" / "late"
 ```
 
-Indexing: `flat = wq * 19 + wr` where `wq = q − cq + 9`, `(cq, cr) = centers[0]`
-from `state.to_tensor()` at generation time.
+Cell indices are loaded verbatim from NPZ — never regenerated at load time.
 
 To regenerate from game records: `make probe.fixtures`
 To regenerate synthetically (no game records required): see script `--synthetic` flag.
 
-### Makefile targets added
+### Makefile targets
 
 | target | action |
 |--------|--------|
-| `make probe.bootstrap` | Probe bootstrap_model.pt; write `reports/probes/bootstrap_<ts>.md` |
-| `make probe.latest` | Probe latest checkpoint vs bootstrap baseline; print PASS/FAIL |
+| `make probe.bootstrap` | Probe bootstrap_model.pt; write `fixtures/threat_probe_baseline.json` + `reports/probes/bootstrap_<ts>.md` |
+| `make probe.latest` | Probe latest checkpoint; three-condition PASS/FAIL against saved baseline |
 | `make probe.fixtures` | Regenerate fixture NPZ from available game records |
 
 ### Exit codes for probe_threat_logits.py
