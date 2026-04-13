@@ -90,8 +90,16 @@ class RecentBuffer:
         ownership and winning_line are returned as (n, aux_stride) u8 — caller
         reshapes to (n, 19, 19) if needed.
 
-        Fancy indexing already allocates fresh arrays — caller must not mutate
-        in place but no defensive .copy() is needed.
+        NumPy fancy indexing (`arr[index_array]`) returns a newly-allocated
+        array that is NOT aliased to the underlying ring buffer storage —
+        unlike slice indexing, which does return a view. That means:
+          - No defensive `.copy()` is needed before returning to the caller.
+          - The caller is free to mutate the returned arrays in place without
+            corrupting the ring; the buffer only sees writes that go through
+            `add()` / `add_batch()`.
+        If this function is ever switched to slice indexing in the future
+        (e.g. contiguous range reads for a dataloader), the aliasing
+        assumption reverses and the caller contract must be revisited.
 
         Raises:
             ValueError: If the buffer is empty.
