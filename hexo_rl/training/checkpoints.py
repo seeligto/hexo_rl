@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -54,10 +54,13 @@ def prune_checkpoints(
     checkpoint_dir: Path,
     max_kept: Optional[int],
     pattern_str: str = r"^checkpoint_(\d+)\.pt$",
+    preserve_predicate: Optional[Callable[[int], bool]] = None,
 ) -> None:
     """Delete old checkpoint files beyond max_kept.
 
-    Keeps the N most recent checkpoints by step number.
+    Keeps the N most recent *rolling* checkpoints by step number.
+    Steps for which preserve_predicate(step) is True are never deleted,
+    regardless of max_kept — use this to permanently retain eval checkpoints.
     """
     if max_kept is None:
         return
@@ -70,7 +73,12 @@ def prune_checkpoints(
             candidates.append((int(m.group(1)), p))
 
     candidates.sort(key=lambda x: x[0])
-    to_delete = candidates[:-max_kept] if len(candidates) > max_kept else []
+
+    rolling = [
+        (step, p) for step, p in candidates
+        if preserve_predicate is None or not preserve_predicate(step)
+    ]
+    to_delete = rolling[:-max_kept] if len(rolling) > max_kept else []
     for _, p in to_delete:
         try:
             p.unlink()
