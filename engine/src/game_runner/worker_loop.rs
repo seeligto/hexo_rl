@@ -70,6 +70,7 @@ impl SelfPlayRunner {
             let dirichlet_enabled = self.dirichlet_enabled;
             let results_queue_cap = self.results_queue_cap;
             let results_queue = self.results.clone();
+            let positions_dropped = self.positions_dropped.clone();
             let recent_game_results = self.recent_game_results.clone();
             let mcts_depth_accum = self.mcts_depth_accum.clone();
             let mcts_conc_accum = self.mcts_conc_accum.clone();
@@ -487,6 +488,7 @@ impl SelfPlayRunner {
                         for _ in 0..to_drop {
                             games_results.pop_front();
                         }
+                        positions_dropped.fetch_add(to_drop as u64, Ordering::Relaxed);
                     }
 
                     #[cfg(feature = "debug_prior_trace")]
