@@ -8,16 +8,16 @@ name = "engine"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["extension-module"]
-# `extension-module` pulls in the pyo3 flag of the same name, which is what
-# you want for the actual Python extension build (maturin). For `cargo test`
-# the extension-module flag strips Python symbols from the link, which
-# leaves every test binary with unresolved externs like PyErr_SetObject.
-# Run tests with: cargo test --no-default-features --features test-with-python
+default = []
+# `extension-module` tells pyo3 NOT to link libpython — correct for the
+# maturin cdylib build (Python loads the .so and already owns libpython).
+# Activated by maturin via pyproject.toml `features = ["extension-module"]`.
+# NOT in default so `cargo test` links libpython normally and resolves all
+# PyO3 C-API symbols without extra flags.
 extension-module = ["pyo3/extension-module"]
-# Test-only feature: link libpython directly so standalone `cargo test`
-# binaries resolve PyO3 C API symbols. Activates the pyo3 `auto-initialize`
-# feature, which bootstraps the interpreter at first use.
+# Kept for completeness (no longer needed by `make test`).  Activates
+# pyo3/auto-initialize for test binaries that acquire the GIL directly.
+# Our tests don't call Python::with_gil(), so plain `cargo test` suffices.
 test-with-python = ["pyo3/auto-initialize"]
 # Compile-time-gated root-prior / visit-count trace used by the Phase 4.0
 # mode collapse diagnostics (archive/diagnosis_2026-04-10/). Enable via:
