@@ -1,0 +1,7 @@
+# Run B — H1 as specified: inf_bs=128, wait_ms=8.0
+selfplay:
+  inference_batch_size: 128
+  inference_max_wait_ms: 8.0
+
+mixing:
+  buffer_persist: false

@@ -2011,3 +2011,110 @@ To regenerate synthetically (no game records required): see script `--synthetic`
 | 2 | Error — checkpoint load failed, shape mismatch, missing file |
 
 **Commit:** `feat(eval): commit threat-logit probe as step-5k kill criterion`
+
+---
+
+## §90 — GPU util sweep: inf_bs / wait_ms levers are exhausted (2026-04-13)
+
+**Context.** Tom reported dashboard "28% GPU util" on a gumbel_targets run. Phase 1
+(`/tmp/gpu_util_phase1.md`) reframed this: actual GPU util is **84%**, the 28% figure
+is a throughput-vs-bench ratio, and the real bottleneck is **NN forward latency**
+(12.5 ms live vs 1.6 ms bench, 7.8× worse per-forward). Phase 1 surfaced three
+hypotheses — this sprint entry records the Phase 2 narrowed sweep against H1.
+
+**Sweep design (3 runs, laptop Ryzen 7 8845HS + RTX 4060, fresh bootstrap_model.pt).**
+
+| run | inference_batch_size | inference_max_wait_ms |
+|-----|---------------------:|----------------------:|
+| A   | 64                   | 4.0                   |
+| B   | 128                  | 8.0                   |
+| C   | 128                  | 4.0                   |
+
+All runs: `gumbel_targets` variant, `standard_sims=200`, `training_steps_per_game=4`,
+`max_train_burst=16`, `n_workers=14`, `leaf_batch_size=8`, `fast_prob=0.0`,
+`dirichlet_enabled=true`, `mixing.buffer_persist=false`. 20-min windows, last 15
+min measured. Full data: `archive/sweep_2026-04-13_gpu_util/`.
+
+**Kill criterion:** `policy_entropy_selfplay` must stay ≥ 4.0 nats (Phase 1
+correction — combined entropy is polluted by pretrain sharpness and is not a
+valid collapse signal at this training stage). All three runs passed (min
+4.85 / 4.98 / 5.10).
+
+### Results (last 15 min, per-run)
+
+| metric | Run A | Run B | Run C | B vs A | C vs A |
+|---|---:|---:|---:|---:|---:|
+| games/hr | 545 | 381 | 372 | **−30.0%** | **−31.8%** |
+| pos/hr (buffer delta) | 215,527 | 200,530 | 217,535 | −7.0% | +0.9% |
+| nn_forwards/sec | 88.2 | 54.0 | 53.4 | −38.7% | −39.4% |
+| nn_mean_batch_size | 60.1 | 84.8 | 85.8 | +40.9% | +42.7% |
+| nn_pos/sec (fwd × batch) | 5,304 | 4,579 | 4,585 | **−13.7%** | **−13.6%** |
+| batch_fill_pct (mean) | 91.4 | 63.4 | 67.4 | −30.6% | −26.2% |
+| gpu_util_mean (nvidia-smi dmon) | 83.7 | 83.2 | 83.1 | −0.6% | −0.8% |
+| gpu_util_p10 / p90 | 79 / 91 | 77 / 90 | 77 / 89 | — | — |
+| policy_entropy_selfplay (final / min) | 5.18 / 4.85 | 5.14 / 4.98 | 5.47 / 5.10 | — | — |
+| steps in window | 540 | 380 | 340 | −29.6% | **−37.0%** |
+| game_len_median (plies) | 37 | 62 | 74 | +68% | +100% |
+
+### H1 falsified
+
+Raising `inference_batch_size` to 128 does grow the mean batch 60 → 85 (+42%),
+confirming the Phase 1 diagnosis that 64 is not a hard ceiling. But forwards/sec
+collapses 88.2 → 53.4 (−39%), so the product `nn_pos/sec` **drops 14%**. Workers
+cannot supply 128 leaves in the same wall-clock window they supply 64, so the
+batch fill plateaus at 63–67%, and the larger batches simply cost more per-forward
+GPU time than they save in amortization. **The live batcher is starved, not the
+GPU.**
+
+`gpu_util` is invariant at ~83% across all three runs. The sweep levers cannot
+move it. The Phase 1 finding — "GPU is busy but inefficient" — is confirmed
+downstream of this.
+
+### Why pos/hr looks neutral when games/hr halves
+
+Run C's pos/hr is +0.9% vs Run A, a coincidental wash: games/hr collapses 545 →
+372, but `game_len_median` doubles 37 → 74 plies, so each game produces roughly
+2× more training positions (longer per-move budget → fewer blunders → games run
+closer to the 200-ply cap). Training `steps_in_window` correspondingly drops
+−37%, which is a real **learning-signal regression** even though pos/hr reads
+flat. **pos/hr is not a sufficient summary statistic** when game length shifts
+this much — future sweeps should report steps/hr alongside.
+
+### Config decision
+
+**No change.** Run C is +0.9% pos/hr (below the +5% threshold) at the cost of
+−37% steps/hr. Run B is a net loss on every metric except mean batch size. The
+`inference_batch_size=64, inference_max_wait_ms=4.0` baseline stays as the
+laptop live config for Phase 4.0.
+
+### Next lever (not in this sprint)
+
+The remaining 12.5 ms NN forward latency is **architectural, not configurable**:
+
+- **CUDA stream separation.** Training gradient kernels and inference forward
+  kernels share the default stream, so training step kernels evict inference
+  kernel state and autocast caches. A separate inference stream would let the
+  inference server run continuously without training-step pollution.
+- **Process split.** Run the Python training loop in a second process, leaving
+  the inference server + worker pool in the primary. Trades IPC + duplicate
+  weight hosting for zero cross-contamination.
+- **`torch.compile` re-enable.** Blocked on Python 3.14 + CUDA graph
+  compatibility (sprint §25, §30, §32). When unblocked, the compiled forward
+  should cut per-forward Python dispatch overhead substantially.
+
+Flagged as a **Phase 4.5 followup**. Not a Phase 4.0 blocker — sustained runs
+can proceed on the current config.
+
+### Desktop (3070) — not validated here
+
+The §69 G3/P3 laptop winners were not re-verified on the desktop 3070 + Zen2
+combo. If the desktop ever runs the `gumbel_targets` variant sustained, a
+single-run confirmation that `inference_batch_size=64` remains optimal on that
+hardware is worth doing before committing. No urgent action.
+
+**Artifacts:** `archive/sweep_2026-04-13_gpu_util/{run_a,run_b,run_c}/` (train.jsonl,
+dmon.log, train.log), `archive/sweep_2026-04-13_gpu_util/results.md`,
+`archive/sweep_2026-04-13_gpu_util/analyze.py`.
+
+**No commit of `configs/*.yaml`** — config is already near-optimal on the
+swept axes.
