@@ -28,6 +28,8 @@ export class HexCanvas {
    * @param {string} [options.coordLabels='none'] — 'axial' | 'none'
    * @param {string} [options.orientation='pointy-top']
    * @param {string} [options.emptyText] — text shown when no board is set
+   * @param {number} [options.minRadius=0] — auto-bounds mode: ensure grid covers at
+   *   least this many axial steps from (0,0) in all directions (useful for empty board)
    */
   constructor(containerEl, options = {}) {
     this._container = containerEl;
@@ -47,6 +49,8 @@ export class HexCanvas {
     this._coordLabels = options.coordLabels || 'none';
     this._orientation = options.orientation || 'pointy-top';
     this._emptyText = options.emptyText || null;
+    // CHANGE A: minimum radius for auto-bounds empty-board display
+    this._minRadius = options.minRadius ?? 0;
     this._clickCb = null;
     this._hoverCoord = null;
 
@@ -120,6 +124,12 @@ export class HexCanvas {
   setOrientation(orientation) {
     this._orientation = orientation;
     this._scheduleRender();
+  }
+
+  /** CHANGE C: Update minimum grid radius and re-render. @param {number} r */
+  setMinRadius(r) {
+    this._minRadius = r;
+    this.render();
   }
 
   /** @param {function({q, r, event})} cb */
@@ -201,24 +211,53 @@ export class HexCanvas {
 
   _computeBounds() {
     const b = this._bounds;
+
+    // CHANGE D: 'radius' mode is explicit. Auto-mode is the fallback for any
+    // unrecognised or absent mode (including when the caller never calls setBounds()).
     if (b.mode === 'radius') {
-      const rad = b.radius || 8;
+      let rad = b.radius || 8;
+
+      // CHANGE E: if any stone lies beyond the declared radius, expand to fit.
+      // Overflow buffer of +2 prevents stones rendering outside drawn cells.
+      for (const s of this._stones) {
+        const dist = Math.max(Math.abs(s.q), Math.abs(s.r), Math.abs(s.q + s.r));
+        if (dist > rad) rad = dist + 2;
+      }
+
       return { minQ: -rad, maxQ: rad, minR: -rad, maxR: rad };
     }
+
     if (b.mode === 'fixed') {
       return { minQ: b.minQ || 0, maxQ: b.maxQ || 0, minR: b.minR || 0, maxR: b.maxR || 0 };
     }
-    // 'auto' — fit stones + margin
+
+    // 'auto' (default) — fit stones + margin, then enforce minRadius.
+    // CHANGE B: after computing stone bounds, expand symmetrically so the grid
+    // always covers at least _minRadius axial steps from (0,0).
+    let minQ, maxQ, minR, maxR;
     if (this._stones.length === 0) {
-      return { minQ: -3, maxQ: 3, minR: -3, maxR: 3 };
+      // No stones: start from a tiny default and let minRadius expand it below.
+      minQ = -1; maxQ = 1; minR = -1; maxR = 1;
+    } else {
+      minQ = Infinity; maxQ = -Infinity; minR = Infinity; maxR = -Infinity;
+      for (const s of this._stones) {
+        minQ = Math.min(minQ, s.q); maxQ = Math.max(maxQ, s.q);
+        minR = Math.min(minR, s.r); maxR = Math.max(maxR, s.r);
+      }
+      const margin = b.margin !== undefined ? b.margin : 3;
+      minQ -= margin; maxQ += margin;
+      minR -= margin; maxR += margin;
     }
-    let minQ = Infinity, maxQ = -Infinity, minR = Infinity, maxR = -Infinity;
-    for (const s of this._stones) {
-      minQ = Math.min(minQ, s.q); maxQ = Math.max(maxQ, s.q);
-      minR = Math.min(minR, s.r); maxR = Math.max(maxR, s.r);
+
+    // Enforce minRadius: expand symmetrically from (0,0) if needed.
+    if (this._minRadius > 0) {
+      minQ = Math.min(minQ, -this._minRadius);
+      maxQ = Math.max(maxQ,  this._minRadius);
+      minR = Math.min(minR, -this._minRadius);
+      maxR = Math.max(maxR,  this._minRadius);
     }
-    const margin = b.margin !== undefined ? b.margin : 3;
-    return { minQ: minQ - margin, maxQ: maxQ + margin, minR: minR - margin, maxR: maxR + margin };
+
+    return { minQ, maxQ, minR, maxR };
   }
 
   _computeViewport(bounds, canvasW, canvasH) {
