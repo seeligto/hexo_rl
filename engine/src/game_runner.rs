@@ -209,7 +209,13 @@ pub struct SelfPlayRunner {
     x_wins: Arc<AtomicU64>,
     o_wins: Arc<AtomicU64>,
     draws: Arc<AtomicU64>,
-    results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32, usize)>>>,
+    /// Per-row training rows produced by self-play.
+    /// Tuple: (feat, policy, outcome, plies, ownership_u8, winning_line_u8)
+    ///   ownership_u8: 361 bytes encoding {0=P2, 1=empty, 2=P1}, projected to the row's
+    ///     own cluster window centre at the time the position was recorded (NOT the
+    ///     game-end bbox centroid). Aligns the aux target frame with the state frame.
+    ///   winning_line_u8: 361 bytes binary mask, same per-row reprojection. All zero on draw.
+    results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, Vec<u8>)>>>,
     /// Ring-buffer of recent game results for Python logging and auxiliary training targets.
     /// Tuple: (plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat)
     ///   winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
@@ -696,7 +702,10 @@ impl SelfPlayRunner {
                             } else {
                                 Self::aggregate_policy_to_local(&board, center, &target_policy)
                             };
-                            records.push((feat, projected_policy, board.current_player));
+                            // Capture the per-row window centre so the aux targets
+                            // (computed at game end) can be reprojected into the same
+                            // coordinate frame as this row's state planes.
+                            records.push((feat, projected_policy, board.current_player, center.0, center.1));
                         }
 
                         if board.apply_move(move_idx.0, move_idx.1).is_err() {
@@ -714,13 +723,46 @@ impl SelfPlayRunner {
                         Some(_)                         => 2,
                         None                            => 0,
                     };
+                    // Snapshot the final-board cell list and winning line once;
+                    // each row reprojects them into its own per-cluster window centre.
+                    let final_cells: Vec<((i32, i32), Cell)> = board.cells
+                        .iter()
+                        .map(|(&qr, &c)| (qr, c))
+                        .collect();
+                    let winning_cells: Vec<(i32, i32)> = board.find_winning_line();
+
                     let mut games_results = results_queue.lock().expect("results lock poisoned");
-                    for (feat, pol, player) in records {
+                    for (feat, pol, player, cq, cr) in records {
                         let outcome = match winner {
                             Some(p) => if p as i8 == player as i8 { 1.0 } else { -1.0 },
                             None => draw_reward,
                         };
-                        games_results.push_back((feat, pol, outcome, plies));
+
+                        // Per-row aux reprojection: project the FINAL board state and
+                        // winning line into the window centred on (cq, cr) — the same
+                        // centre used to encode this row's state planes. Encoding:
+                        //   ownership_u8: 0 = P2, 1 = empty, 2 = P1
+                        //   winning_line_u8: 0 / 1 binary
+                        let mut own_u8 = vec![1u8; TOTAL_CELLS];
+                        for &((q, r), cell) in &final_cells {
+                            let flat = Board::window_flat_idx_at(q, r, cq, cr);
+                            if flat < TOTAL_CELLS {
+                                own_u8[flat] = match cell {
+                                    Cell::P1    => 2,
+                                    Cell::P2    => 0,
+                                    Cell::Empty => 1,
+                                };
+                            }
+                        }
+                        let mut wl_u8 = vec![0u8; TOTAL_CELLS];
+                        for &(q, r) in &winning_cells {
+                            let flat = Board::window_flat_idx_at(q, r, cq, cr);
+                            if flat < TOTAL_CELLS {
+                                wl_u8[flat] = 1;
+                            }
+                        }
+
+                        games_results.push_back((feat, pol, outcome, plies, own_u8, wl_u8));
                     }
                     games_completed.fetch_add(1, Ordering::Relaxed);
                     match winner {
@@ -779,11 +821,18 @@ impl SelfPlayRunner {
 
     /// Drain all buffered positions and return them as numpy arrays.
     ///
-    /// Returns (features, policies, values, plies) where each row is one position:
-    ///   features: (N, feat_len) float32
-    ///   policies: (N, pol_len) float32
-    ///   values:   (N,) float32
-    ///   plies:    (N,) uint64 — game length in plies (for game-length weighting)
+    /// Returns (features, policies, values, plies, ownership, winning_line) where each
+    /// row is one position:
+    ///   features:     (N, feat_len) float32
+    ///   policies:     (N, pol_len)  float32
+    ///   values:       (N,)          float32
+    ///   plies:        (N,)          uint64 — game length in plies (game-length weighting)
+    ///   ownership:    (N, 361)      uint8  — per-row aux target {0=P2, 1=empty, 2=P1}
+    ///   winning_line: (N, 361)      uint8  — per-row binary mask of winning 6-in-a-row
+    ///
+    /// Ownership and winning_line are projected to each row's per-cluster window
+    /// centre (NOT the game-end bbox centroid). They live in the same coordinate
+    /// frame as the row's state planes — see game_runner.rs for the reprojection.
     ///
     /// N = 0 when no positions are available (arrays have zero rows).
     /// Returning pre-built numpy arrays eliminates Vec<f32> → Python list conversion
@@ -796,6 +845,8 @@ impl SelfPlayRunner {
         Bound<'py, PyArray2<f32>>,
         Bound<'py, PyArray1<f32>>,
         Bound<'py, PyArray1<u64>>,
+        Bound<'py, PyArray2<u8>>,
+        Bound<'py, PyArray2<u8>>,
     )> {
         let feat_len = self.batcher.feature_len();
         let pol_len  = self.pol_len;
@@ -807,20 +858,26 @@ impl SelfPlayRunner {
         let mut flat_pols  = Vec::with_capacity(n * pol_len);
         let mut vals       = Vec::with_capacity(n);
         let mut plies_out  = Vec::with_capacity(n);
+        let mut flat_own   = Vec::with_capacity(n * TOTAL_CELLS);
+        let mut flat_wl    = Vec::with_capacity(n * TOTAL_CELLS);
 
-        while let Some((feat, pol, outcome, plies)) = results.pop_front() {
+        while let Some((feat, pol, outcome, plies, own_u8, wl_u8)) = results.pop_front() {
             flat_feats.extend_from_slice(&feat);
             flat_pols.extend_from_slice(&pol);
             vals.push(outcome);
             plies_out.push(plies as u64);
+            flat_own.extend_from_slice(&own_u8);
+            flat_wl.extend_from_slice(&wl_u8);
         }
 
         let feats_np = flat_feats.into_pyarray(py).reshape([n, feat_len])?;
         let pols_np  = flat_pols.into_pyarray(py).reshape([n, pol_len])?;
         let vals_np  = vals.into_pyarray(py);
         let gids_np  = plies_out.into_pyarray(py);
+        let own_np   = flat_own.into_pyarray(py).reshape([n, TOTAL_CELLS])?;
+        let wl_np    = flat_wl.into_pyarray(py).reshape([n, TOTAL_CELLS])?;
 
-        Ok((feats_np, pols_np, vals_np, gids_np))
+        Ok((feats_np, pols_np, vals_np, gids_np, own_np, wl_np))
     }
 
     pub fn stop(&self) {

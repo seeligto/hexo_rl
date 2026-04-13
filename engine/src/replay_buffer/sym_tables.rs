@@ -15,6 +15,10 @@ const HALF: i32 = 9; // (BOARD_H - 1) / 2
 // State stride per buffer slot (f16 bits)
 pub(crate) const STATE_STRIDE:  usize = N_PLANES * N_CELLS;
 pub(crate) const POLICY_STRIDE: usize = N_ACTIONS;
+/// Auxiliary spatial target stride per buffer slot (single 19×19 plane, u8 lanes).
+/// Used by ownership and winning_line targets — both share the same shape and
+/// scatter table as a single state plane.
+pub(crate) const AUX_STRIDE:    usize = N_CELLS;
 
 // ── Weight schedule ──────────────────────────────────────────────────────────
 
