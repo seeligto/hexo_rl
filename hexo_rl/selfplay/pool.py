@@ -91,6 +91,7 @@ class WorkerPool:
             dirichlet_alpha=float(mcts_cfg.get("dirichlet_alpha", 0.3)),
             dirichlet_epsilon=float(mcts_cfg.get("epsilon", 0.25)),
             dirichlet_enabled=bool(mcts_cfg.get("dirichlet_enabled", True)),
+            results_queue_cap=int(sp.get("results_queue_cap", 10_000)),
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 

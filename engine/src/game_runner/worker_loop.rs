@@ -68,6 +68,7 @@ impl SelfPlayRunner {
             let dirichlet_alpha   = self.dirichlet_alpha;
             let dirichlet_epsilon = self.dirichlet_epsilon;
             let dirichlet_enabled = self.dirichlet_enabled;
+            let results_queue_cap = self.results_queue_cap;
             let results_queue = self.results.clone();
             let recent_game_results = self.recent_game_results.clone();
             let mcts_depth_accum = self.mcts_depth_accum.clone();
@@ -479,9 +480,10 @@ impl SelfPlayRunner {
                         }
                     }
 
-                    // Cap the results queue to avoid memory explosion if Python is slow
-                    if games_results.len() > 10000 {
-                        let to_drop = games_results.len() - 10000;
+                    // Cap the results queue to avoid memory explosion if Python is slow.
+                    // Drop count is tracked on `positions_dropped` for dashboard visibility.
+                    if games_results.len() > results_queue_cap {
+                        let to_drop = games_results.len() - results_queue_cap;
                         for _ in 0..to_drop {
                             games_results.pop_front();
                         }
