@@ -330,11 +330,15 @@ def benchmark_worker_pool(
             "max_moves_per_game": int(config.get("max_moves_per_game", 128)),
             # pool.py enforces playout_cap.fast_sims as a required key (no silent
             # defaults). The benchmark doesn't care about fast-game mixing — set
-            # fast_prob=0.0 so the value is never actually used.
+            # fast_prob=0.0 so fast_sims is never actually consumed, and pass
+            # standard_sims=0 so SelfPlayRunner falls back to mcts.n_simulations
+            # (the value this bench used before c915004 added the required-key
+            # check). Preserves apples-to-apples comparison against the pre-c915004
+            # worker-throughput baseline.
             "playout_cap": {
                 "fast_prob": 0.0,
                 "fast_sims": 64,
-                "standard_sims": int(config.get("n_simulations", 64)),
+                "standard_sims": 0,
             },
         },
     }
