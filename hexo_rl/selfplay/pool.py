@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import numpy as np
 import structlog
@@ -121,10 +121,6 @@ class WorkerPool:
         # Set by the training loop after construction; None = disabled.
         self.recent_buffer: Optional[Any] = None
 
-        # Ring buffers of recent game auxiliary targets for ownership/threat heads.
-        # Each entry: (19, 19) float32 ndarray projected to the final game window.
-        self._ownership_ring: deque[np.ndarray] = deque(maxlen=200)
-        self._threat_ring: deque[np.ndarray] = deque(maxlen=200)
         self._board_size = board_size
         self._feat_len = in_channels * board_size * board_size  # e.g. 18*19*19 = 6498
         self._pol_len = board_size * board_size + 1              # e.g. 19*19+1 = 362
@@ -180,10 +176,11 @@ class WorkerPool:
         _feat_2d = _feat_buf.reshape(_in_ch, self._board_size, self._board_size)
         _last_buf_emit = time.monotonic()
         while not self._stop_event.is_set():
-            # collect_data() returns pre-built numpy arrays from Rust — no Python list
-            # allocation or pymalloc arena growth. feats_np is (N, feat_len) float32,
-            # pols_np is (N, pol_len) float32, vals_np and plies_np are (N,).
-            feats_np, pols_np, vals_np, plies_np = self._runner.collect_data()
+            # collect_data() returns 6-tuple from Rust — no Python list allocation.
+            # feats_np: (N, feat_len) f32, pols_np: (N, pol_len) f32,
+            # vals_np/plies_np: (N,), own_np/wl_np: (N, 361) u8 — per-row aux
+            # already projected to each row's own cluster window centre.
+            feats_np, pols_np, vals_np, plies_np, own_np, wl_np = self._runner.collect_data()
             n = len(vals_np)
             for i in range(n):
                 # feats_np[i] is a numpy view (no copy); _feat_buf[:] = view does
@@ -192,12 +189,17 @@ class WorkerPool:
                 _pol_buf[:] = pols_np[i]
                 feat_np = _feat_2d    # shaped view into _feat_buf
                 pol_np = _pol_buf
+                own_row = own_np[i]
+                wl_row = wl_np[i]
                 plies = int(plies_np[i])
                 outcome = float(vals_np[i])
                 game_length = (plies + 1) // 2  # compound moves
-                self.replay_buffer.push(feat_np, pol_np, outcome, game_length=game_length)
+                self.replay_buffer.push(
+                    feat_np, pol_np, outcome, own_row, wl_row,
+                    game_length=game_length,
+                )
                 if self.recent_buffer is not None:
-                    self.recent_buffer.push(feat_np, pol_np, outcome)
+                    self.recent_buffer.push(feat_np, pol_np, outcome, own_row, wl_row)
                 with self._lock:
                     self.positions_pushed += 1
                     self.self_play_positions_pushed += 1
@@ -209,8 +211,9 @@ class WorkerPool:
                 self.draws = int(self._runner.draws)
 
             # Local variable — fully consumed each iteration; no unbounded accumulation.
-            # drain_game_results() returns ownership_flat and winning_line_flat as
-            # numpy arrays (PyArray1<f32>) — no Python list allocation.
+            # WHY: Rust still emits legacy game-end-frame ownership_flat/winning_line_flat;
+            # discarded here since aux targets now flow per-row via collect_data().
+            # TODO: strip from Rust drain_game_results in follow-up patch.
             games_batch = self._runner.drain_game_results()
 
             # Compute sims/sec from elapsed time and known n_simulations per game.
@@ -223,17 +226,7 @@ class WorkerPool:
                 if elapsed > 0:
                     self._sims_per_sec = sims / elapsed
 
-            for plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat in games_batch:
-                # Accumulate ownership/threat targets for auxiliary head training.
-                # ownership_flat and winning_line_flat are already numpy float32 arrays.
-                if ownership_flat.size > 0:
-                    self._ownership_ring.append(
-                        ownership_flat.reshape(self._board_size, self._board_size)
-                    )
-                if winning_line_flat.size > 0:
-                    self._threat_ring.append(
-                        winning_line_flat.reshape(self._board_size, self._board_size)
-                    )
+            for plies, winner_code, move_history, worker_id, _own_unused, _wl_unused in games_batch:
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
                 game_length = (plies + 1) // 2  # compound moves
                 self._game_lengths.append(game_length)
@@ -283,24 +276,6 @@ class WorkerPool:
                 })
 
             time.sleep(0.1)
-
-    def get_aux_targets(
-        self, batch_size: int
-    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """Sample random ownership and threat targets from recently completed games.
-
-        Returns (ownership_targets, threat_targets) as (B, H, W) float32 arrays,
-        or (None, None) if not enough data has accumulated yet.
-        """
-        if len(self._ownership_ring) < 1 or len(self._threat_ring) < 1:
-            return None, None
-        own_list = list(self._ownership_ring)
-        thr_list = list(self._threat_ring)
-        own_idx = np.random.randint(0, len(own_list), size=batch_size)
-        thr_idx = np.random.randint(0, len(thr_list), size=batch_size)
-        own = np.stack([own_list[i] for i in own_idx], axis=0)   # (B, H, W)
-        thr = np.stack([thr_list[i] for i in thr_idx], axis=0)   # (B, H, W)
-        return own, thr
 
     def start(self) -> None:
         if self._runner.is_running():

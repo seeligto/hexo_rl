@@ -37,11 +37,13 @@ def make_trainer(tmp_path: Path) -> Trainer:
 def fill_buffer(size: int = 32) -> ReplayBuffer:
     buf = ReplayBuffer(capacity=200)
     rng = np.random.default_rng(0)
+    own = np.ones(361, dtype=np.uint8)
+    wl  = np.zeros(361, dtype=np.uint8)
     for _ in range(size):
         state   = rng.random((18, 19, 19), dtype=np.float32).astype(np.float16)
         policy  = rng.dirichlet(np.ones(362)).astype(np.float32)
         outcome = float(rng.choice([-1.0, 0.0, 1.0]))
-        buf.push(state, policy, outcome)
+        buf.push(state, policy, outcome, own, wl)
     return buf
 
 
@@ -459,10 +461,14 @@ def test_recent_buffer_caps_at_capacity():
 
 def test_recent_buffer_sample_shapes():
     buf = make_recent_buffer(capacity=32)
-    states, policies, outcomes = buf.sample(8)
-    assert states.shape   == (8, 18, 19, 19)
-    assert policies.shape == (8, 362)
-    assert outcomes.shape == (8,)
+    states, policies, outcomes, ownership, winning_line = buf.sample(8)
+    assert states.shape       == (8, 18, 19, 19)
+    assert policies.shape     == (8, 362)
+    assert outcomes.shape     == (8,)
+    assert ownership.shape    == (8, 361)
+    assert winning_line.shape == (8, 361)
+    assert ownership.dtype    == np.uint8
+    assert winning_line.dtype == np.uint8
 
 
 def test_recent_buffer_sample_empty_raises():

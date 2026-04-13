@@ -77,6 +77,11 @@ def test_worker_pool_produces_positions_threaded_smoke():
         },
         "selfplay": {
             "n_workers": 1,
+            "playout_cap": {
+                "fast_sims": 1,
+                "fast_prob": 0.0,
+                "standard_sims": 1,
+            },
         },
     }
 
@@ -162,22 +167,28 @@ def test_rust_runner_collect_data_format():
         assert winning_line_flat.size == 19 * 19
         assert winning_line_flat.dtype == np.float32
 
-        # collect_data returns 4 numpy arrays: (feats, pols, vals, plies)
-        feats_np, pols_np, vals_np, plies_np = runner.collect_data()
+        # collect_data returns 6 numpy arrays: (feats, pols, vals, plies, own, wl)
+        feats_np, pols_np, vals_np, plies_np, own_np, wl_np = runner.collect_data()
         assert isinstance(feats_np, np.ndarray)
         assert isinstance(pols_np, np.ndarray)
         assert isinstance(vals_np, np.ndarray)
         assert isinstance(plies_np, np.ndarray)
+        assert isinstance(own_np, np.ndarray)
+        assert isinstance(wl_np, np.ndarray)
         n = len(vals_np)
         assert n > 0
         assert feats_np.shape == (n, 18 * 19 * 19)
         assert pols_np.shape == (n, 19 * 19 + 1)
         assert vals_np.shape == (n,)
         assert plies_np.shape == (n,)
+        assert own_np.shape == (n, 19 * 19)
+        assert wl_np.shape == (n, 19 * 19)
         assert feats_np.dtype == np.float32
         assert pols_np.dtype == np.float32
         assert vals_np.dtype == np.float32
         assert plies_np.dtype == np.uint64
+        assert own_np.dtype == np.uint8
+        assert wl_np.dtype == np.uint8
         outcome = float(vals_np[0])
         assert outcome == -1.0 or outcome == 1.0 or abs(outcome - (-0.1)) < 1e-5
         # Verify features can be reshaped to (18, 19, 19) per position

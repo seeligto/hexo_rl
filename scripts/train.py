@@ -434,8 +434,13 @@ def main() -> None:
                 msg="push_game allocates full corpus in RAM — training starts after this completes",
             )
         pretrained_buffer = ReplayBuffer(capacity=T)
-        pretrained_buffer.push_game(pre_states, pre_policies, pre_outcomes)
-        del pre_states, pre_policies, pre_outcomes   # release mmap; Rust has the data
+        # WHY: corpus NPZ has no aux columns. Pad with neutral defaults
+        # (ownership=1 → "empty", winning_line=0); aux loss masks these rows
+        # via n_pretrain row slicing in trainer._train_on_batch.
+        pre_own = np.ones((T, 361), dtype=np.uint8)
+        pre_wl  = np.zeros((T, 361), dtype=np.uint8)
+        pretrained_buffer.push_game(pre_states, pre_policies, pre_outcomes, pre_own, pre_wl)
+        del pre_states, pre_policies, pre_outcomes, pre_own, pre_wl   # release mmap; Rust has the data
         del data
         log.info("corpus_loaded", positions=T, seconds=f"{time.time()-t0:.1f}")
         emit_event({
@@ -476,6 +481,8 @@ def main() -> None:
     _states_buf   = np.empty((_batch_size_cfg, 18, 19, 19), dtype=np.float16)
     _policies_buf = np.empty((_batch_size_cfg, _N_ACTIONS), dtype=np.float32)
     _outcomes_buf = np.empty(_batch_size_cfg, dtype=np.float32)
+    _own_buf      = np.empty((_batch_size_cfg, 19, 19), dtype=np.uint8)
+    _wl_buf       = np.empty((_batch_size_cfg, 19, 19), dtype=np.uint8)
     # Flips to False the first step buffer is full enough to use in-place copy.
     _warmup_fallback_active = True
 
@@ -749,14 +756,15 @@ def main() -> None:
                     schedule_idx += 1
 
                 # ── Training step (mixed or single buffer) ──
+                # Aux targets (ownership + winning_line) flow per-row alongside
+                # state/policy/outcome from ReplayBuffer/RecentBuffer; pretrain rows
+                # carry dummy aux which trainer masks via n_pretrain row slice.
                 batch_size = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
-                # Sample auxiliary targets from pool's recent-game ring buffer.
-                own_targets, thr_targets = pool.get_aux_targets(batch_size)
                 if pretrained_buffer is not None and pretrained_buffer.size > 0 and buffer.size > 0:
                     w_pre = compute_pretrained_weight(train_step)
                     n_pre = max(1, int(math.ceil(batch_size * w_pre)))
                     n_self = batch_size - n_pre
-                    s_pre, p_pre, o_pre = pretrained_buffer.sample_batch(n_pre, True)
+                    s_pre, p_pre, o_pre, own_pre, wl_pre = pretrained_buffer.sample_batch(n_pre, True)
                     if batch_size != _batch_size_cfg:
                         # Edge case: runtime batch size differs from pre-allocated shape.
                         if train_step > 100:
@@ -765,23 +773,31 @@ def main() -> None:
                         if recent_buffer is not None and recent_buffer.size > 0 and _recency_weight > 0.0 and n_self > 1:
                             n_self_recent = max(1, int(round(n_self * _recency_weight)))
                             n_self_uniform = n_self - n_self_recent
-                            s_r, p_r, o_r = recent_buffer.sample(n_self_recent)
-                            s_u, p_u, o_u = buffer.sample_batch(max(1, n_self_uniform), True)
+                            s_r, p_r, o_r, own_r_flat, wl_r_flat = recent_buffer.sample(n_self_recent)
+                            own_r = own_r_flat.reshape(-1, 19, 19)
+                            wl_r  = wl_r_flat.reshape(-1, 19, 19)
+                            s_u, p_u, o_u, own_u, wl_u = buffer.sample_batch(max(1, n_self_uniform), True)
                             s_self = np.concatenate([s_r, s_u], axis=0)
                             p_self = np.concatenate([p_r, p_u], axis=0)
                             o_self = np.concatenate([o_r, o_u], axis=0)
+                            own_self = np.concatenate([own_r, own_u], axis=0)
+                            wl_self  = np.concatenate([wl_r, wl_u], axis=0)
                         else:
-                            s_self, p_self, o_self = buffer.sample_batch(max(1, n_self), True)
+                            s_self, p_self, o_self, own_self, wl_self = buffer.sample_batch(max(1, n_self), True)
                         states   = np.concatenate([s_pre, s_self], axis=0)
                         policies = np.concatenate([p_pre, p_self], axis=0)
                         outcomes = np.concatenate([o_pre, o_self], axis=0)
+                        ownership = np.concatenate([own_pre, own_self], axis=0)
+                        winning_line = np.concatenate([wl_pre, wl_self], axis=0)
                     else:
                         # Fill pre-allocated buffers in-place — no heap churn.
                         if recent_buffer is not None and recent_buffer.size > 0 and _recency_weight > 0.0 and n_self > 1:
                             n_self_recent = max(1, int(round(n_self * _recency_weight)))
                             n_self_uniform = n_self - n_self_recent
-                            s_r, p_r, o_r = recent_buffer.sample(n_self_recent)
-                            s_u, p_u, o_u = buffer.sample_batch(max(1, n_self_uniform), True)
+                            s_r, p_r, o_r, own_r_flat, wl_r_flat = recent_buffer.sample(n_self_recent)
+                            own_r = own_r_flat.reshape(-1, 19, 19)
+                            wl_r  = wl_r_flat.reshape(-1, 19, 19)
+                            s_u, p_u, o_u, own_u, wl_u = buffer.sample_batch(max(1, n_self_uniform), True)
                             n_r = len(s_r)
                             n_u = len(s_u)
                             n_available = n_pre + n_r + n_u
@@ -791,6 +807,8 @@ def main() -> None:
                                 states   = np.concatenate([s_pre, s_r, s_u], axis=0)
                                 policies = np.concatenate([p_pre, p_r, p_u], axis=0)
                                 outcomes = np.concatenate([o_pre, o_r, o_u], axis=0)
+                                ownership = np.concatenate([own_pre, own_r, own_u], axis=0)
+                                winning_line = np.concatenate([wl_pre, wl_r, wl_u], axis=0)
                             else:
                                 if _warmup_fallback_active:
                                     log.info("buffer_warmup_ended", step=train_step,
@@ -805,9 +823,16 @@ def main() -> None:
                                 np.copyto(_outcomes_buf[:n_pre], o_pre)
                                 np.copyto(_outcomes_buf[n_pre:n_pre + n_r], o_r)
                                 np.copyto(_outcomes_buf[n_pre + n_r:], o_u)
+                                np.copyto(_own_buf[:n_pre], own_pre)
+                                np.copyto(_own_buf[n_pre:n_pre + n_r], own_r)
+                                np.copyto(_own_buf[n_pre + n_r:], own_u)
+                                np.copyto(_wl_buf[:n_pre], wl_pre)
+                                np.copyto(_wl_buf[n_pre:n_pre + n_r], wl_r)
+                                np.copyto(_wl_buf[n_pre + n_r:], wl_u)
                                 states, policies, outcomes = _states_buf, _policies_buf, _outcomes_buf
+                                ownership, winning_line = _own_buf, _wl_buf
                         else:
-                            s_self, p_self, o_self = buffer.sample_batch(max(1, n_self), True)
+                            s_self, p_self, o_self, own_self, wl_self = buffer.sample_batch(max(1, n_self), True)
                             n_s = len(s_self)
                             n_available = n_pre + n_s
                             if n_available < batch_size:
@@ -815,6 +840,8 @@ def main() -> None:
                                 states   = np.concatenate([s_pre, s_self], axis=0)
                                 policies = np.concatenate([p_pre, p_self], axis=0)
                                 outcomes = np.concatenate([o_pre, o_self], axis=0)
+                                ownership = np.concatenate([own_pre, own_self], axis=0)
+                                winning_line = np.concatenate([wl_pre, wl_self], axis=0)
                             else:
                                 if _warmup_fallback_active:
                                     log.info("buffer_warmup_ended", step=train_step,
@@ -826,17 +853,21 @@ def main() -> None:
                                 np.copyto(_policies_buf[n_pre:], p_self)
                                 np.copyto(_outcomes_buf[:n_pre], o_pre)
                                 np.copyto(_outcomes_buf[n_pre:], o_self)
+                                np.copyto(_own_buf[:n_pre], own_pre)
+                                np.copyto(_own_buf[n_pre:], own_self)
+                                np.copyto(_wl_buf[:n_pre], wl_pre)
+                                np.copyto(_wl_buf[n_pre:], wl_self)
                                 states, policies, outcomes = _states_buf, _policies_buf, _outcomes_buf
+                                ownership, winning_line = _own_buf, _wl_buf
                     loss_info = trainer.train_step_from_tensors(
                         states, policies, outcomes,
-                        ownership_targets=own_targets, threat_targets=thr_targets,
+                        ownership_targets=ownership, threat_targets=winning_line,
                         n_pretrain=n_pre,
                     )
                 else:
                     w_pre = 0.0
                     loss_info = trainer.train_step(
                         buffer, recent_buffer=recent_buffer,
-                        ownership_targets=own_targets, threat_targets=thr_targets,
                     )
                 train_step = trainer.step
                 if initial_policy_loss is None:

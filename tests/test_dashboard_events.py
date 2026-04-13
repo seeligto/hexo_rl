@@ -465,7 +465,7 @@ def test_policy_target_entropy_only_over_valid_rows(tmp_path):
             pol = np.zeros(n_actions, dtype=np.float32)
         else:
             pol = np.ones(n_actions, dtype=np.float32) / n_actions
-        buf.push(feat, pol, 1.0)
+        buf.push(feat, pol, 1.0, np.ones(361, dtype=np.uint8), np.zeros(361, dtype=np.uint8))
 
     loss_info = trainer.train_step(buf, augment=False)
     te = loss_info.get("policy_target_entropy", None)
@@ -503,7 +503,7 @@ def test_policy_target_entropy_finite_for_one_hot(tmp_path):
         # One-hot policy: all mass on action 0
         pol = np.zeros(n_actions, dtype=np.float32)
         pol[0] = 1.0
-        buf.push(feat, pol, 1.0)
+        buf.push(feat, pol, 1.0, np.ones(361, dtype=np.uint8), np.zeros(361, dtype=np.uint8))
 
     loss_info = trainer.train_step(buf, augment=False)
     te = loss_info.get("policy_target_entropy", None)

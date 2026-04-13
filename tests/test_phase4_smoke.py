@@ -27,6 +27,8 @@ def _make_model(device: torch.device):
 
 def _fill_buffer(buf: ReplayBuffer, n: int, value_only_frac: float = 0.0) -> None:
     """Push n random entries. A fraction have zero-policy (value-only)."""
+    own = np.ones(361, dtype=np.uint8)
+    wl  = np.zeros(361, dtype=np.uint8)
     for i in range(n):
         state = np.random.randn(CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
         if np.random.random() < value_only_frac:
@@ -35,7 +37,7 @@ def _fill_buffer(buf: ReplayBuffer, n: int, value_only_frac: float = 0.0) -> Non
             policy = np.abs(np.random.randn(N_ACTIONS).astype(np.float32))
             policy /= policy.sum()
         outcome = float(np.random.choice([-1.0, 0.0, 1.0]))
-        buf.push(state, policy, outcome)
+        buf.push(state, policy, outcome, own, wl)
 
 
 # ── Test: mixed-buffer training (10 steps) ───────────────────────────────────
@@ -75,14 +77,20 @@ def test_mixed_buffer_training_10_steps():
         n_pre = max(1, int(math.ceil(batch_size * w_pre)))
         n_self = batch_size - n_pre
 
-        s_pre, p_pre, o_pre = pretrained_buf.sample_batch(n_pre, True)
-        s_self, p_self, o_self = selfplay_buf.sample_batch(max(1, n_self), True)
+        s_pre, p_pre, o_pre, own_pre, wl_pre = pretrained_buf.sample_batch(n_pre, True)
+        s_self, p_self, o_self, own_self, wl_self = selfplay_buf.sample_batch(max(1, n_self), True)
 
         states = np.concatenate([s_pre, s_self], axis=0)
         policies = np.concatenate([p_pre, p_self], axis=0)
         outcomes = np.concatenate([o_pre, o_self], axis=0)
+        ownership = np.concatenate([own_pre, own_self], axis=0)
+        winning_line = np.concatenate([wl_pre, wl_self], axis=0)
 
-        loss_info = trainer.train_step_from_tensors(states, policies, outcomes)
+        loss_info = trainer.train_step_from_tensors(
+            states, policies, outcomes,
+            ownership_targets=ownership, threat_targets=winning_line,
+            n_pretrain=n_pre,
+        )
         losses.append(loss_info["loss"])
         assert "policy_loss" in loss_info
         assert "value_loss" in loss_info
