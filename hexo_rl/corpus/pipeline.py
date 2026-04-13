@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Optional
 
+import numpy as np
 import structlog
 
 from hexo_rl.bootstrap.dataset import replay_game_to_triples
@@ -82,8 +83,15 @@ class CorpusPipeline:
                 gid = self._next_game_id
                 self._next_game_id += 1
 
+                # WHY: corpus games carry no aux signal; push neutral defaults
+                # (ownership=1 → "empty", winning_line=0). When sampled into a
+                # mixed batch, trainer masks these via n_pretrain row slice.
+                T = len(states)
+                aux_own = np.ones((T, 361), dtype=np.uint8)
+                aux_wl  = np.zeros((T, 361), dtype=np.uint8)
+
                 try:
-                    self._buffer.push_game(states, policies, outcomes, gid)
+                    self._buffer.push_game(states, policies, outcomes, aux_own, aux_wl, game_id=gid)
                 except Exception as exc:
                     log.error("corpus_push_failed",
                               source=source.name(), game_id=record.game_id_str,

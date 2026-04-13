@@ -208,9 +208,11 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
 
     dummy_state = np.zeros((18, 19, 19), dtype=np.float16)
     dummy_policy = np.ones(362, dtype=np.float32) / 362.0
+    dummy_own = np.ones(361, dtype=np.uint8)
+    dummy_wl  = np.zeros(361, dtype=np.uint8)
 
     # Warm-up push
-    warmup(lambda: buffer.push(dummy_state, dummy_policy, 0.0), warmup_sec)
+    warmup(lambda: buffer.push(dummy_state, dummy_policy, 0.0, dummy_own, dummy_wl), warmup_sec)
 
     # Warm-up sample
     warmup(lambda: buffer.sample_batch(BATCH, False), warmup_sec)
@@ -223,7 +225,7 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
         # Push throughput
         t0 = time.perf_counter()
         for _ in range(push_iters):
-            buffer.push(dummy_state, dummy_policy, 0.0)
+            buffer.push(dummy_state, dummy_policy, 0.0, dummy_own, dummy_wl)
         elapsed_push = time.perf_counter() - t0
         push_rates.append(push_iters / elapsed_push)
 
@@ -703,11 +705,14 @@ def main() -> None:
 
     # Fill replay buffer with dummy data
     buffer = ReplayBuffer(capacity=100_000)
+    _bm_own = np.ones(361, dtype=np.uint8)
+    _bm_wl  = np.zeros(361, dtype=np.uint8)
     for _ in range(10_000):
         buffer.push(
             np.zeros((18, 19, 19), dtype=np.float16),
             np.ones(362, dtype=np.float32) / 362,
             0.0,
+            _bm_own, _bm_wl,
         )
 
     # Warm-up durations

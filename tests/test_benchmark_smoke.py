@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import torch
 
 from hexo_rl.model.network import HexTacToeNet
@@ -10,11 +11,14 @@ from scripts.benchmark import benchmark_replay_buffer, benchmark_worker_pool
 def test_replay_buffer_benchmark_smoke() -> None:
     """Replay benchmark should run and return expected metrics keys."""
     replay = ReplayBuffer(capacity=1024)
+    own = np.ones(361, dtype=np.uint8)
+    wl  = np.zeros(361, dtype=np.uint8)
     for _ in range(512):
         replay.push(
             torch.zeros((18, 19, 19), dtype=torch.float16).numpy(),
             (torch.ones((362,), dtype=torch.float32) / 362.0).numpy(),
             0.0,
+            own, wl,
         )
 
     result = benchmark_replay_buffer(replay, n_runs=1, warmup_sec=0.5)
