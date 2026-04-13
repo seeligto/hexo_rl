@@ -328,6 +328,14 @@ def benchmark_worker_pool(
             "inference_batch_size": int(config.get("inference_batch_size", 32)),
             "inference_max_wait_ms": float(config.get("inference_max_wait_ms", 8.0)),
             "max_moves_per_game": int(config.get("max_moves_per_game", 128)),
+            # pool.py enforces playout_cap.fast_sims as a required key (no silent
+            # defaults). The benchmark doesn't care about fast-game mixing — set
+            # fast_prob=0.0 so the value is never actually used.
+            "playout_cap": {
+                "fast_prob": 0.0,
+                "fast_sims": 64,
+                "standard_sims": int(config.get("n_simulations", 64)),
+            },
         },
     }
 
