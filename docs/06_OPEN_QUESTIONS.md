@@ -221,6 +221,51 @@ leaves per-worker, so `leaf_bs=16` just delays submission without reducing total
 
 ---
 
+### Q18 — NN forward latency ceiling [WATCH, Phase 4.5]
+
+**Priority:** WATCH (do not touch during Phase 4.0 sustained runs)
+**Source:** Sprint log §90 / `/tmp/gpu_util_phase1.md`, 2026-04-13
+
+Live steady-state NN forward latency is 12.5 ms vs 1.6 ms in isolated bench
+(7.8×). GPU util is 84% — the GPU is busy but producing less work per unit
+time than it does in isolation. The §90 config sweep **falsified the
+`inference_batch_size` / `inference_max_wait_ms` lever**: raising batch cap
+64 → 128 grew mean batch 60 → 85 (+42%) but crashed `nn_forwards/sec`
+88 → 53 (−39%), for a net −14% `nn_pos/sec`. Headline `pos/hr` read flat
+only because game length doubled, hiding a **−37% `steps_in_window`**
+regression. The live batcher is starved, not the GPU; the remaining
+inefficiency is architectural.
+
+**Remaining levers (all architectural):**
+
+- **CUDA stream separation** — training gradient kernels and inference forward
+  kernels share the default stream; training-step kernels pollute the
+  inference kernel/autocast cache. A dedicated inference stream would let the
+  inference server run without cross-contamination.
+- **Process split** — run the Python training loop in a second process,
+  leaving the inference server + worker pool in the primary. Trades IPC and
+  duplicate weight hosting for zero kernel-cache interference.
+- **`torch.compile` re-enable** — currently disabled per §25/§30/§32 for
+  Python 3.14 CUDA graph TLS conflict. Revisit when PyTorch + Python 3.14
+  CUDA graph support stabilizes. Expected to cut per-forward Python dispatch
+  overhead substantially.
+- **Mixed-precision tuning** — BF16 vs FP16 on Ada Lovelace; FP8 speculation.
+- **py-spy flame graph on live training** — blocked on `py-spy` Python 3.14
+  support (0.4.1 fails with "Failed to find python version from target
+  process"). Re-attempt when upstream lands. Expected to confirm NN forward
+  dominates wall-time; if otherwise, reopen the worker-parallelism hypothesis.
+
+**Priority rationale:** WATCH. Don't touch during Phase 4.0 sustained runs.
+Revisit only if (a) Q2 (value aggregation) lands and throughput becomes the
+gating factor for sustained training length, or (b) py-spy with Python 3.14
+support reveals a bottleneck the §90 diagnosis missed.
+
+**Prerequisite:** Stable Phase 4.0 baseline checkpoint (shared with Q2).
+
+**Reference:** Sprint log §90, Phase 1 diagnosis in `/tmp/gpu_util_phase1.md`.
+
+---
+
 ## Deferred (Phase 5+)
 
 | # | Question | Reason deferred |

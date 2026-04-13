@@ -608,6 +608,11 @@ Kept in place: `bootstrap_model.pt` (verified loads clean), `checkpoints/pretrai
 
 ### §69 — Config Sweep 2026-04-08 — PUCT/Gumbel Knob Ranking
 
+> **Historical, superseded by §90 (2026-04-13).** §90 is now the authoritative
+> laptop `gumbel_targets` throughput baseline at HEAD (post-refactor, post-A1,
+> post-A3). §69's P3 winner config remains the live config but the surrounding
+> measurements predate the current engine state.
+
 15+1 runs on laptop (Ryzen 7 8845HS + RTX 4060), 20-min windows each, all starting fresh from `bootstrap_model.pt` with `completed_q_values=true`. The sweep varied `training_steps_per_game` (ratio), `max_train_burst`, `max_game_moves`, `inference_max_wait_ms`, `leaf_batch_size`, `inference_batch_size`, `n_workers`, and `gumbel_m` across PUCT and Gumbel arms to identify the highest-throughput config for the Phase 4.0 overnight run. Full methodology and per-run data in `archive/sweep_2026-04-08/`.
 
 **PUCT top 3:**
@@ -2118,3 +2123,9 @@ dmon.log, train.log), `archive/sweep_2026-04-13_gpu_util/results.md`,
 
 **No commit of `configs/*.yaml`** — config is already near-optimal on the
 swept axes.
+
+### Followup
+
+Architectural levers (CUDA stream separation, process split, `torch.compile`
+re-enable, mixed-precision tuning) tracked as **Q18** in
+`docs/06_OPEN_QUESTIONS.md`, deferred to Phase 4.5.

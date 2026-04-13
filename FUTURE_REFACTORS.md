@@ -58,3 +58,10 @@ sampling can weight sources differently without re-running the full export.
 `hexo_rl/eval/results_db.py` loads all historical match results into memory for
 Bradley-Terry recomputation. At 1M+ matches this will be slow. Add a windowed query
 (last N matches per pair) as an alternative computation mode.
+
+### py-spy flame graph on live training
+
+Blocked on `py-spy` Python 3.14 support (0.4.1 fails with "Failed to find python
+version from target process"). Re-attempt when upstream lands. Expected to confirm
+NN forward dominates wall-time; if otherwise, reopen the worker-parallelism
+hypothesis. Tracked as Q18 in `docs/06_OPEN_QUESTIONS.md`.
