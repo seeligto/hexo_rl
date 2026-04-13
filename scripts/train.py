@@ -990,6 +990,7 @@ def main() -> None:
                         "loss_aux": float(loss_info.get("opp_reply_loss", 0.0)),
                         "loss_ownership": float(loss_info.get("ownership_loss", 0.0)),
                         "loss_threat": float(loss_info.get("threat_loss", 0.0)),
+                        "aux_loss_rows": int(loss_info.get("aux_loss_rows", 0)),
                         "avg_sigma": float(loss_info.get("avg_sigma", 0.0)),
                         "policy_entropy": policy_entropy,
                         "policy_entropy_pretrain": float(loss_info.get("policy_entropy_pretrain", float("nan"))),

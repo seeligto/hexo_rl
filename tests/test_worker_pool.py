@@ -154,18 +154,13 @@ def test_rust_runner_collect_data_format():
             
         assert runner.games_completed >= 1
 
-        # drain_game_results returns ownership_flat and winning_line_flat as numpy arrays
+        # drain_game_results returns metadata-only 4-tuples; spatial aux flows
+        # per-row via collect_data() instead.
         drained = runner.drain_game_results()
         assert len(drained) > 0
-        plies_drain, winner_code, move_history, worker_id, ownership_flat, winning_line_flat = drained[0]
+        plies_drain, winner_code, move_history, worker_id = drained[0]
         assert isinstance(worker_id, int)
         assert worker_id == 0
-        assert isinstance(ownership_flat, np.ndarray)
-        assert ownership_flat.size == 19 * 19
-        assert ownership_flat.dtype == np.float32
-        assert isinstance(winning_line_flat, np.ndarray)
-        assert winning_line_flat.size == 19 * 19
-        assert winning_line_flat.dtype == np.float32
 
         # collect_data returns 6 numpy arrays: (feats, pols, vals, plies, own, wl)
         feats_np, pols_np, vals_np, plies_np, own_np, wl_np = runner.collect_data()

@@ -85,11 +85,6 @@ impl ReplayBuffer {
     #[new]
     pub fn new(capacity: usize) -> Self {
         let default_w = f16::from_f32(1.0).to_bits();
-        let aux_bytes = capacity * 2 * AUX_STRIDE;
-        eprintln!(
-            "[ReplayBuffer] allocated capacity={} (aux columns: ownership + winning_line, +{} bytes ≈ {:.1} MB)",
-            capacity, aux_bytes, aux_bytes as f64 / (1024.0 * 1024.0),
-        );
         ReplayBuffer {
             capacity,
             size: 0,
@@ -466,12 +461,6 @@ impl ReplayBuffer {
         self.weights.resize(new_capacity, default_w);
         self.ownership.resize(new_capacity * AUX_STRIDE, 1u8);     // 1 = empty
         self.winning_line.resize(new_capacity * AUX_STRIDE, 0u8);
-
-        let added_aux_bytes = (new_capacity - self.size) * 2 * AUX_STRIDE;
-        eprintln!(
-            "[ReplayBuffer] resized to capacity={} (aux added: +{} bytes ≈ {:.1} MB)",
-            new_capacity, added_aux_bytes, added_aux_bytes as f64 / (1024.0 * 1024.0),
-        );
 
         self.head = self.size;
         self.capacity = new_capacity;
@@ -1048,10 +1037,10 @@ mod tests {
             let idx = buf.weighted_sample_one();
             let sym_idx = rng.random_range(0..N_SYMS);
 
-            for v in &mut dst_state { *v = 0; }
-            for v in &mut dst_pol   { *v = 0.0; }
-            for v in &mut dst_own   { *v = 1; }
-            for v in &mut dst_wl    { *v = 0; }
+            dst_state.fill(0);
+            dst_pol.fill(0.0);
+            dst_own.fill(1);
+            dst_wl.fill(0);
 
             let s = idx * STATE_STRIDE;
             let p = idx * POLICY_STRIDE;
