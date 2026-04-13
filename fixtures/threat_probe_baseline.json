@@ -1,0 +1,13 @@
+{
+  "ext_logit_mean": -0.5985873519442976,
+  "ext_logit_std": 0.9885069950960164,
+  "ctrl_logit_mean": -1.100777158141136,
+  "ctrl_logit_std": 0.22565443936952123,
+  "contrast_mean": 0.5021898061968386,
+  "contrast_std": 0.9886138478446802,
+  "ext_in_top5_frac": 0.5,
+  "n": 20,
+  "checkpoint": "bootstrap_model.pt",
+  "generated_at": "2026-04-13T18:14:10.279123+00:00",
+  "margin": 1.0
+}
