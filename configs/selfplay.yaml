@@ -49,6 +49,8 @@ selfplay:
   leaf_batch_size: 8            # sweep §69: leaf_bs=16 hurts throughput
   replay_buffer_capacity: 500000
   max_game_moves: 200  # PLIES (stone placements), not compound moves. Variants override this.
+  results_queue_cap: 10000  # Rust SelfPlayRunner drops oldest when `results` VecDeque exceeds this.
+                            # Visible via positions_dropped getter; bump if dashboard shows nonzero drops.
 
   playout_cap:
     fast_prob: 0.25
