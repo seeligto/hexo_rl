@@ -1839,3 +1839,38 @@ PyO3 facade in `mod.rs`, which delegates to `save_to_path_impl` in
   — file path references updated
 
 **Commit:** `refactor(engine): split replay_buffer and game_runner into modules`
+
+## §87 — gate pyo3 extension-module behind cargo feature (2026-04-13)
+
+**What.** Removed `extension-module` from `[features] default` so plain
+`cargo test` links libpython and resolves all PyO3 C-API symbols without
+extra flags or env-var injection.
+
+**Before.**
+```
+CARGO TEST INVOCATION: cargo test --no-default-features --features test-with-python
+```
+
+**After.**
+```
+CARGO TEST INVOCATION: cargo test
+```
+
+**Changes (3 lines).**
+- `engine/Cargo.toml` — `default = ["extension-module"]` → `default = []`; comments updated.
+- `engine/pyproject.toml` — `features = ["pyo3/extension-module"]` → `features = ["extension-module"]`
+  (use the cargo feature name, not the direct pyo3 feature path).
+- `Makefile` — `test` target: dropped `--no-default-features --features test-with-python`.
+
+**Why it works.** The Rust tests never call `Python::with_gil()` — they test
+pure Rust logic. Without `extension-module`, pyo3 links libpython at link time
+(normal binary behaviour). Without `auto-initialize`, no interpreter bootstrap
+is needed. `maturin develop` reads `features = ["extension-module"]` from
+`pyproject.toml` and activates it explicitly, so the cdylib build is unaffected.
+`test-with-python` stays in Cargo.toml as a documented escape hatch for future
+tests that do acquire the GIL.
+
+**Tests.** `cargo test`: 119 passed (115 lib + 4 integration). `make test.py`:
+676 passed. `maturin develop --release`: clean build.
+
+**Commit:** `chore(build): gate pyo3 extension-module behind cargo feature`

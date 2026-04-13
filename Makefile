@@ -62,7 +62,7 @@ rebuild: clean build ## Full clean + optimized rebuild
 
 .PHONY: test
 test: ## Run Rust + Python tests (excludes integration marker)
-	cargo test --no-default-features --features test-with-python
+	cargo test
 	$(PY) -m pytest -q -m "not slow and not integration" tests
 
 .PHONY: test.slow
