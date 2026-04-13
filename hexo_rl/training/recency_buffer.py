@@ -90,6 +90,9 @@ class RecentBuffer:
         ownership and winning_line are returned as (n, aux_stride) u8 — caller
         reshapes to (n, 19, 19) if needed.
 
+        Fancy indexing already allocates fresh arrays — caller must not mutate
+        in place but no defensive .copy() is needed.
+
         Raises:
             ValueError: If the buffer is empty.
         """
@@ -98,9 +101,9 @@ class RecentBuffer:
                 raise ValueError("Cannot sample from empty RecentBuffer")
             indices = np.random.randint(0, self._size, n)
             return (
-                self._states[indices].copy(),
-                self._policies[indices].copy(),
-                self._outcomes[indices].copy(),
-                self._ownership[indices].copy(),
-                self._winning_line[indices].copy(),
+                self._states[indices],
+                self._policies[indices],
+                self._outcomes[indices],
+                self._ownership[indices],
+                self._winning_line[indices],
             )

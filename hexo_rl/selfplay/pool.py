@@ -211,9 +211,8 @@ class WorkerPool:
                 self.draws = int(self._runner.draws)
 
             # Local variable — fully consumed each iteration; no unbounded accumulation.
-            # WHY: Rust still emits legacy game-end-frame ownership_flat/winning_line_flat;
-            # discarded here since aux targets now flow per-row via collect_data().
-            # TODO: strip from Rust drain_game_results in follow-up patch.
+            # drain_game_results now returns metadata-only 4-tuples; spatial aux
+            # targets flow per-row via collect_data() above.
             games_batch = self._runner.drain_game_results()
 
             # Compute sims/sec from elapsed time and known n_simulations per game.
@@ -226,7 +225,7 @@ class WorkerPool:
                 if elapsed > 0:
                     self._sims_per_sec = sims / elapsed
 
-            for plies, winner_code, move_history, worker_id, _own_unused, _wl_unused in games_batch:
+            for plies, winner_code, move_history, worker_id in games_batch:
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
                 game_length = (plies + 1) // 2  # compound moves
                 self._game_lengths.append(game_length)

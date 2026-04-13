@@ -65,6 +65,8 @@ pub struct MCTSTree {
     /// Cumulative count of quiescence value overrides/blends since last `new_game()`.
     /// Tracks all 4 firing branches: ≥3 current wins (+1.0), ≥3 opponent wins (-1.0),
     /// 2 current wins (blend up), 2 opponent wins (blend down).
+    /// Atomic (not Cell) because MCTSTree is wrapped in `#[pyclass] PyMCTSTree`,
+    /// which requires `Send + Sync`. Cell is `!Sync` and would break the pyo3 bound.
     pub quiescence_fire_count: AtomicU64,
 }
 

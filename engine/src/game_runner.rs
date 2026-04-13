@@ -215,14 +215,16 @@ pub struct SelfPlayRunner {
     ///     own cluster window centre at the time the position was recorded (NOT the
     ///     game-end bbox centroid). Aligns the aux target frame with the state frame.
     ///   winning_line_u8: 361 bytes binary mask, same per-row reprojection. All zero on draw.
-    results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, Vec<u8>)>>>,
+    // Queue entry: (state_flat, policy_flat, outcome, plies, combined_aux_u8)
+    // combined_aux_u8 layout: first TOTAL_CELLS bytes = ownership, last TOTAL_CELLS = winning_line.
+    results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32, usize, Vec<u8>)>>>,
     /// Ring-buffer of recent game results for Python logging and auxiliary training targets.
     /// Tuple: (plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat)
     ///   winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
     ///   move_history: sequence of (q, r) coordinates in play order.
     ///   ownership_flat: 361 floats projected to the final board window (+1.0 P1, -1.0 P2, 0.0 empty).
     ///   winning_line_flat: 361 floats with 1.0 at winning-line cell positions, 0.0 elsewhere.
-    recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize, Vec<f32>, Vec<f32>)>>>,
+    recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize)>>>,
     handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     /// Accumulated MCTS leaf depth across all searches (scaled by 1_000_000 to preserve fractional part).
     mcts_depth_accum: Arc<AtomicU64>,
@@ -738,31 +740,33 @@ impl SelfPlayRunner {
                             None => draw_reward,
                         };
 
-                        // Per-row aux reprojection: project the FINAL board state and
+                        // Per-row aux reprojection: project FINAL board state and
                         // winning line into the window centred on (cq, cr) — the same
-                        // centre used to encode this row's state planes. Encoding:
-                        //   ownership_u8: 0 = P2, 1 = empty, 2 = P1
-                        //   winning_line_u8: 0 / 1 binary
-                        let mut own_u8 = vec![1u8; TOTAL_CELLS];
+                        // centre used to encode this row's state planes. WHY: combine
+                        // both planes into one 722-byte alloc (was two 361-byte allocs);
+                        // first half = ownership (default 1 = empty), second half =
+                        // winning_line (default 0).
+                        // Encoding: ownership_u8: 0 = P2, 1 = empty, 2 = P1; wl_u8: 0/1.
+                        let mut aux_u8 = vec![0u8; 2 * TOTAL_CELLS];
+                        aux_u8[..TOTAL_CELLS].fill(1);
                         for &((q, r), cell) in &final_cells {
                             let flat = Board::window_flat_idx_at(q, r, cq, cr);
                             if flat < TOTAL_CELLS {
-                                own_u8[flat] = match cell {
+                                aux_u8[flat] = match cell {
                                     Cell::P1    => 2,
                                     Cell::P2    => 0,
                                     Cell::Empty => 1,
                                 };
                             }
                         }
-                        let mut wl_u8 = vec![0u8; TOTAL_CELLS];
                         for &(q, r) in &winning_cells {
                             let flat = Board::window_flat_idx_at(q, r, cq, cr);
                             if flat < TOTAL_CELLS {
-                                wl_u8[flat] = 1;
+                                aux_u8[TOTAL_CELLS + flat] = 1;
                             }
                         }
 
-                        games_results.push_back((feat, pol, outcome, plies, own_u8, wl_u8));
+                        games_results.push_back((feat, pol, outcome, plies, aux_u8));
                     }
                     games_completed.fetch_add(1, Ordering::Relaxed);
                     match winner {
@@ -770,33 +774,12 @@ impl SelfPlayRunner {
                         Some(_)                         => { o_wins.fetch_add(1, Ordering::Relaxed); }
                         None                            => { draws.fetch_add(1, Ordering::Relaxed); }
                     }
-                    // Compute ownership_flat: 361-element window projection of final board state.
-                    // +1.0 = P1 stone, -1.0 = P2 stone, 0.0 = empty.
-                    let mut ownership_flat = vec![0.0f32; TOTAL_CELLS];
-                    for (&(q, r), &cell) in board.cells.iter() {
-                        let flat = board.window_flat_idx(q, r);
-                        if flat < TOTAL_CELLS {
-                            ownership_flat[flat] = match cell {
-                                Cell::P1 => 1.0,
-                                Cell::P2 => -1.0,
-                                Cell::Empty => 0.0,
-                            };
-                        }
-                    }
-
-                    // Compute winning_line_flat: 361-element window projection of the 6-cell winning run.
-                    let mut winning_line_flat = vec![0.0f32; TOTAL_CELLS];
-                    for (q, r) in board.find_winning_line() {
-                        let flat = board.window_flat_idx(q, r);
-                        if flat < TOTAL_CELLS {
-                            winning_line_flat[flat] = 1.0;
-                        }
-                    }
-
-                    // Record for Python game_complete logging and auxiliary training targets.
+                    // Per-row aux is already pushed into game_results above. The
+                    // game-end record here only carries metadata for Python's
+                    // game_complete logging — no spatial aux fields.
                     {
                         let mut rg = recent_game_results.lock().expect("recent_game_results lock poisoned");
-                        rg.push_back((plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat));
+                        rg.push_back((plies, winner_code, move_history, worker_id));
                         // Cap at 2000 entries to avoid unbounded growth if Python is slow.
                         if rg.len() > 2000 {
                             rg.pop_front();
@@ -861,13 +844,14 @@ impl SelfPlayRunner {
         let mut flat_own   = Vec::with_capacity(n * TOTAL_CELLS);
         let mut flat_wl    = Vec::with_capacity(n * TOTAL_CELLS);
 
-        while let Some((feat, pol, outcome, plies, own_u8, wl_u8)) = results.pop_front() {
+        while let Some((feat, pol, outcome, plies, aux_u8)) = results.pop_front() {
             flat_feats.extend_from_slice(&feat);
             flat_pols.extend_from_slice(&pol);
             vals.push(outcome);
             plies_out.push(plies as u64);
-            flat_own.extend_from_slice(&own_u8);
-            flat_wl.extend_from_slice(&wl_u8);
+            // Split combined aux: first TOTAL_CELLS = ownership, last = winning_line.
+            flat_own.extend_from_slice(&aux_u8[..TOTAL_CELLS]);
+            flat_wl.extend_from_slice(&aux_u8[TOTAL_CELLS..]);
         }
 
         let feats_np = flat_feats.into_pyarray(py).reshape([n, feat_len])?;
@@ -963,26 +947,17 @@ impl SelfPlayRunner {
 
     /// Drain and return all buffered game results since the last call.
     ///
-    /// Each entry: (plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat)
+    /// Each entry: (plies, winner_code, move_history, worker_id)
     ///   winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
     ///   move_history: (q, r) stone placements in play order.
-    ///   ownership_flat: PyArray1<f32> len 361 — +1.0 P1 / -1.0 P2 / 0.0 empty.
-    ///   winning_line_flat: PyArray1<f32> len 361 — 1.0 at winning-line cells, 0.0 elsewhere.
     ///
-    /// ownership_flat and winning_line_flat are returned as numpy arrays to avoid
-    /// Vec<f32> → Python list conversion and the associated pymalloc arena fragmentation.
-    pub fn drain_game_results<'py>(
+    /// Spatial aux targets (ownership / winning_line) live per-row in the
+    /// ReplayBuffer (see ReplayBuffer.sample_batch); they are NOT carried
+    /// here — game-end records are metadata-only.
+    pub fn drain_game_results(
         &self,
-        py: Python<'py>,
-    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, Py<PyArray1<f32>>, Py<PyArray1<f32>>)> {
+    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize)> {
         self.drain_game_results_raw()
-            .into_iter()
-            .map(|(plies, winner_code, move_history, worker_id, ownership_flat, winning_line_flat)| {
-                let own_np = ownership_flat.into_pyarray(py).unbind();
-                let win_np = winning_line_flat.into_pyarray(py).unbind();
-                (plies, winner_code, move_history, worker_id, own_np, win_np)
-            })
-            .collect()
     }
 }
 
@@ -991,7 +966,7 @@ impl SelfPlayRunner {
     /// Returns raw Vecs — no Python dependency, safe to call from `cargo test`.
     pub(crate) fn drain_game_results_raw(
         &self,
-    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, Vec<f32>, Vec<f32>)> {
+    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize)> {
         let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
         rg.drain(..).collect()
     }
@@ -1122,7 +1097,7 @@ mod tests {
         
         while completed_workers.len() < 4 && attempts < 50 {
             let results = runner.drain_game_results_raw();
-            for (_, _, _, worker_id, _, _) in results {
+            for (_, _, _, worker_id) in results {
                 assert!(worker_id < 4);
                 completed_workers.insert(worker_id);
             }

@@ -23,6 +23,7 @@ import re
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -187,8 +188,6 @@ class Trainer:
             dict with keys "loss", "policy_loss", "value_loss",
             and optionally "opp_reply_loss".
         """
-        import numpy as _np  # noqa: F811
-
         batch_size = int(self.config["batch_size"])
         recency_weight = float(self.config.get("recency_weight", 0.0))
 
@@ -200,11 +199,11 @@ class Trainer:
             own_r = own_r.reshape(-1, 19, 19)
             wl_r  = wl_r.reshape(-1, 19, 19)
             s_u, p_u, o_u, own_u, wl_u = buffer.sample_batch(max(1, n_uniform), augment)
-            states   = _np.concatenate([s_r, s_u], axis=0)
-            policies = _np.concatenate([p_r, p_u], axis=0)
-            outcomes = _np.concatenate([o_r, o_u], axis=0)
-            ownership = _np.concatenate([own_r, own_u], axis=0)
-            winning_line = _np.concatenate([wl_r, wl_u], axis=0)
+            states   = np.concatenate([s_r, s_u], axis=0)
+            policies = np.concatenate([p_r, p_u], axis=0)
+            outcomes = np.concatenate([o_r, o_u], axis=0)
+            ownership = np.concatenate([own_r, own_u], axis=0)
+            winning_line = np.concatenate([wl_r, wl_u], axis=0)
         else:
             states, policies, outcomes, ownership, winning_line = buffer.sample_batch(
                 batch_size, augment
@@ -251,7 +250,6 @@ class Trainer:
         n_pretrain: int = 0,
     ) -> Dict[str, float]:
         """Core training step: forward, loss, backward, optimizer step."""
-        import numpy  # noqa: F811 — deferred import for type alias above
         aux_weight         = float(self.config.get("aux_opp_reply_weight", 0.0))
         uncertainty_weight = float(self.config.get("uncertainty_weight", 0.0))
         ownership_weight   = float(self.config.get("ownership_weight", 0.0))
@@ -296,9 +294,10 @@ class Trainer:
         entropy_weight = float(self.config.get("entropy_reg_weight", 0.0))
 
         # Prepare ownership/threat target tensors (if provided). Inputs are u8
-        # ndarrays straight from ReplayBuffer.sample_batch — decode here.
-        # WHY: Rust encodes ownership as {0=P2, 1=empty, 2=P1}; (x - 1.0) → {-1, 0, +1}.
-        import numpy as _np_aux
+        # ndarrays straight from ReplayBuffer.sample_batch — ship u8 to device,
+        # then decode in fp32 there. WHY: skips a CPU fp32 intermediate (4×
+        # smaller H2D transfer) and overlaps conversion with the copy.
+        # Ownership encoding: {0=P2, 1=empty, 2=P1} → float {-1, 0, +1}.
         batch_n = int(states.shape[0])
         assert 0 <= n_pretrain <= batch_n, f"n_pretrain={n_pretrain} out of [0, {batch_n}]"
         own_t: Optional[torch.Tensor] = None
@@ -306,17 +305,24 @@ class Trainer:
         use_ownership = ownership_weight > 0.0 and ownership_targets is not None
         use_threat    = threat_weight > 0.0    and threat_targets    is not None
         if use_ownership:
-            own_arr = _np_aux.asarray(ownership_targets)
+            own_arr = np.ascontiguousarray(ownership_targets)
             if own_arr.ndim == 2:
                 own_arr = own_arr.reshape(-1, 19, 19)
-            own_dec = own_arr.astype(_np_aux.float32, copy=False) - 1.0
-            own_t = torch.from_numpy(own_dec).to(self.device)    # (B, 19, 19)
+            own_t = (
+                torch.from_numpy(own_arr)
+                .to(self.device, non_blocking=True)
+                .float()
+                .sub_(1.0)
+            )                                                   # (B, 19, 19) f32
         if use_threat:
-            thr_arr = _np_aux.asarray(threat_targets)
+            thr_arr = np.ascontiguousarray(threat_targets)
             if thr_arr.ndim == 2:
                 thr_arr = thr_arr.reshape(-1, 19, 19)
-            thr_dec = thr_arr.astype(_np_aux.float32, copy=False)
-            thr_t = torch.from_numpy(thr_dec).to(self.device)    # (B, 19, 19)
+            thr_t = (
+                torch.from_numpy(thr_arr)
+                .to(self.device, non_blocking=True)
+                .float()
+            )                                                   # (B, 19, 19) f32
 
         with autocast(device_type=self.device.type, dtype=torch.float16,
                       enabled=self.fp16):

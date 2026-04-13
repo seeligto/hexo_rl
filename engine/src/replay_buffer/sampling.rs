@@ -121,18 +121,18 @@ impl ReplayBuffer {
             }
         }
 
-        // Policy: scatter the 361 spatial logits.
+        // Policy + ownership + winning_line: all three scatter through the same
+        // 361-cell hex permutation table. Fuse into one loop so we iterate the
+        // (sc, dc) pair list exactly once and keep the table in cache.
         for &(sc, dc) in scatter {
-            dst_policy[dc as usize] = src_policy[sc as usize];
+            let sc_u = sc as usize;
+            let dc_u = dc as usize;
+            dst_policy[dc_u] = src_policy[sc_u];
+            dst_own   [dc_u] = src_own[sc_u];
+            dst_wl    [dc_u] = src_wl[sc_u];
         }
-        // Pass action (index 361) is always the identity.
+        // Pass action (index 361) is always the identity (policy only).
         dst_policy[N_CELLS] = src_policy[N_CELLS];
-
-        // Ownership + winning_line: single 361-cell u8 planes, same scatter table.
-        for &(sc, dc) in scatter {
-            dst_own[dc as usize] = src_own[sc as usize];
-            dst_wl [dc as usize] = src_wl [sc as usize];
-        }
     }
 
     /// Push a position directly from Rust (no PyO3 / numpy).
@@ -151,12 +151,12 @@ impl ReplayBuffer {
 
         // Zero state/policy/aux (content doesn't matter for weight tests).
         let s_start = slot * STATE_STRIDE;
-        for v in &mut self.states[s_start..s_start + STATE_STRIDE] { *v = 0; }
+        self.states[s_start..s_start + STATE_STRIDE].fill(0);
         let p_start = slot * POLICY_STRIDE;
-        for v in &mut self.policies[p_start..p_start + POLICY_STRIDE] { *v = 0.0; }
+        self.policies[p_start..p_start + POLICY_STRIDE].fill(0.0);
         let a_start = slot * AUX_STRIDE;
-        for v in &mut self.ownership   [a_start..a_start + AUX_STRIDE] { *v = 1; } // empty
-        for v in &mut self.winning_line[a_start..a_start + AUX_STRIDE] { *v = 0; }
+        self.ownership   [a_start..a_start + AUX_STRIDE].fill(1); // empty
+        self.winning_line[a_start..a_start + AUX_STRIDE].fill(0);
         self.outcomes[slot] = outcome;
         self.game_ids[slot] = -1;
         self.weights[slot] = if game_length == 0 {
