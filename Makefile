@@ -149,7 +149,8 @@ probe.bootstrap: ## Threat-logit probe against bootstrap_model.pt; writes report
 	@mkdir -p reports/probes
 	$(PY) scripts/probe_threat_logits.py \
 		--checkpoint checkpoints/bootstrap_model.pt \
-		--output "reports/probes/bootstrap_$(shell date +%Y%m%d_%H%M%S).md"
+		--output "reports/probes/bootstrap_$(shell date +%Y%m%d_%H%M%S).md"; \
+	rc=$$?; [ $$rc -le 1 ] || exit $$rc
 
 .PHONY: probe.latest
 probe.latest: ## Threat-logit probe against latest checkpoint; PASS/FAIL step-5k kill criterion
