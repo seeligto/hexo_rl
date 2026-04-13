@@ -86,10 +86,12 @@ impl ReplayBuffer {
         indices
     }
 
-    /// Apply symmetry `sym_idx` to one (state, policy) sample.
+    /// Apply symmetry `sym_idx` to one (state, policy, ownership, winning_line) sample.
     ///
-    /// Scatter-copies from `src_state` / `src_policy` into `dst_state` / `dst_policy`.
-    /// Cells that have no valid destination under the transform remain zero (caller-zeroed).
+    /// Scatter-copies from `src_*` into `dst_*`. Cells that have no valid destination
+    /// under the transform remain at the caller-zeroed default. Aux planes
+    /// (`ownership`, `winning_line`) reuse the same scatter table as state — they live
+    /// in the same window coordinate frame, just with u8 lanes.
     ///
     /// Loop order — outer = planes, inner = scatter pairs — keeps each 722-byte
     /// plane (361 × u16) resident in L1 cache during the inner scatter pass.
@@ -98,8 +100,12 @@ impl ReplayBuffer {
         sym_idx:    usize,
         src_state:  &[u16],     // f16 bits, length N_PLANES × N_CELLS
         src_policy: &[f32],     // length N_ACTIONS
+        src_own:    &[u8],      // length AUX_STRIDE (= N_CELLS)
+        src_wl:     &[u8],      // length AUX_STRIDE
         dst_state:  &mut [u16], // f16 bits, length N_PLANES × N_CELLS  (zeroed by caller)
         dst_policy: &mut [f32], // length N_ACTIONS                     (zeroed by caller)
+        dst_own:    &mut [u8],  // length AUX_STRIDE                    (caller-initialised)
+        dst_wl:     &mut [u8],  // length AUX_STRIDE                    (caller-initialised)
         tables:     &SymTables,
     ) {
         let scatter = &tables.scatter[sym_idx];
@@ -121,6 +127,12 @@ impl ReplayBuffer {
         }
         // Pass action (index 361) is always the identity.
         dst_policy[N_CELLS] = src_policy[N_CELLS];
+
+        // Ownership + winning_line: single 361-cell u8 planes, same scatter table.
+        for &(sc, dc) in scatter {
+            dst_own[dc as usize] = src_own[sc as usize];
+            dst_wl [dc as usize] = src_wl [sc as usize];
+        }
     }
 
     /// Push a position directly from Rust (no PyO3 / numpy).
@@ -137,11 +149,14 @@ impl ReplayBuffer {
             self.weight_buckets[old_bucket].fetch_sub(1, Ordering::Relaxed);
         }
 
-        // Zero state/policy (content doesn't matter for weight tests).
+        // Zero state/policy/aux (content doesn't matter for weight tests).
         let s_start = slot * STATE_STRIDE;
         for v in &mut self.states[s_start..s_start + STATE_STRIDE] { *v = 0; }
         let p_start = slot * POLICY_STRIDE;
         for v in &mut self.policies[p_start..p_start + POLICY_STRIDE] { *v = 0.0; }
+        let a_start = slot * AUX_STRIDE;
+        for v in &mut self.ownership   [a_start..a_start + AUX_STRIDE] { *v = 1; } // empty
+        for v in &mut self.winning_line[a_start..a_start + AUX_STRIDE] { *v = 0; }
         self.outcomes[slot] = outcome;
         self.game_ids[slot] = -1;
         self.weights[slot] = if game_length == 0 {

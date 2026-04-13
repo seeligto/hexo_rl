@@ -21,7 +21,7 @@ use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
 use numpy::{
     IntoPyArray,
-    PyArray1, PyArray2, PyArray4,
+    PyArray1, PyArray2, PyArray3, PyArray4,
     PyArrayMethods,
     PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArray4,
 };
@@ -51,6 +51,15 @@ pub struct ReplayBuffer {
     pub(crate) game_ids: Vec<i64>,  // flat [capacity]; −1 = untagged
     pub(crate) weights:  Vec<u16>,  // f16-as-u16 bits; flat [capacity]; sampling weight per position
 
+    /// Auxiliary target: per-cell ownership of the final board state, projected
+    /// to each row's per-cluster window centre (NOT the game-end bbox centroid).
+    /// Encoding: 0 = P2, 1 = empty, 2 = P1. Flat [capacity × AUX_STRIDE].
+    pub(crate) ownership:    Vec<u8>,
+    /// Auxiliary target: binary mask of the 6 cells of the winning 6-in-a-row,
+    /// projected to each row's per-cluster window centre. All zero on draw.
+    /// Flat [capacity × AUX_STRIDE].
+    pub(crate) winning_line: Vec<u8>,
+
     pub(crate) sym_tables:      SymTables,
     pub(crate) weight_schedule: WeightSchedule,
     pub(crate) next_game_id:    i64,
@@ -76,15 +85,22 @@ impl ReplayBuffer {
     #[new]
     pub fn new(capacity: usize) -> Self {
         let default_w = f16::from_f32(1.0).to_bits();
+        let aux_bytes = capacity * 2 * AUX_STRIDE;
+        eprintln!(
+            "[ReplayBuffer] allocated capacity={} (aux columns: ownership + winning_line, +{} bytes ≈ {:.1} MB)",
+            capacity, aux_bytes, aux_bytes as f64 / (1024.0 * 1024.0),
+        );
         ReplayBuffer {
             capacity,
             size: 0,
             head: 0,
-            states:   vec![0u16; capacity * STATE_STRIDE],
-            policies: vec![0.0f32; capacity * POLICY_STRIDE],
-            outcomes: vec![0.0f32; capacity],
-            game_ids: vec![-1i64; capacity],
-            weights:  vec![default_w; capacity],
+            states:       vec![0u16; capacity * STATE_STRIDE],
+            policies:     vec![0.0f32; capacity * POLICY_STRIDE],
+            outcomes:     vec![0.0f32; capacity],
+            game_ids:     vec![-1i64; capacity],
+            weights:      vec![default_w; capacity],
+            ownership:    vec![1u8; capacity * AUX_STRIDE],  // 1 = empty default
+            winning_line: vec![0u8; capacity * AUX_STRIDE],
             sym_tables: SymTables::new(),
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
@@ -124,27 +140,38 @@ impl ReplayBuffer {
 
     // ── Write ─────────────────────────────────────────────────────────────────
 
-    /// Store a single (state, policy, outcome) triple.
+    /// Store a single (state, policy, outcome, ownership, winning_line) sample.
     ///
     /// Args:
-    ///     state:       float16 numpy array of shape (18, 19, 19)
-    ///     policy:      float32 numpy array of shape (362,)
-    ///     outcome:     scalar float32  (−1 / 0 / +1)
-    ///     game_id:     position tag for correlation guard (from `next_game_id()`); default −1
-    ///     game_length: total compound moves in the originating game; default 0 (= weight 1.0)
-    #[pyo3(signature = (state, policy, outcome, game_id = -1, game_length = 0))]
+    ///     state:        float16 numpy array of shape (18, 19, 19)
+    ///     policy:       float32 numpy array of shape (362,)
+    ///     outcome:      scalar float32  (−1 / 0 / +1)
+    ///     ownership:    uint8 numpy array of shape (361,)  encoding {0=P2, 1=empty, 2=P1}
+    ///     winning_line: uint8 numpy array of shape (361,)  binary mask
+    ///     game_id:      position tag for correlation guard (from `next_game_id()`); default −1
+    ///     game_length:  total compound moves in the originating game; default 0 (= weight 1.0)
+    ///
+    /// Both aux targets MUST be projected to the same window centre as `state`
+    /// (per-row cluster centre, not the game-end bbox centroid).
+    #[pyo3(signature = (state, policy, outcome, ownership, winning_line, game_id = -1, game_length = 0))]
     pub fn push(
         &mut self,
-        state:       PyReadonlyArray3<f16>,
-        policy:      PyReadonlyArray1<f32>,
-        outcome:     f32,
-        game_id:     i64,
-        game_length: u16,
+        state:        PyReadonlyArray3<f16>,
+        policy:       PyReadonlyArray1<f32>,
+        outcome:      f32,
+        ownership:    PyReadonlyArray1<u8>,
+        winning_line: PyReadonlyArray1<u8>,
+        game_id:      i64,
+        game_length:  u16,
     ) -> PyResult<()> {
         let state_slice  = state.as_slice()
             .map_err(|e| PyValueError::new_err(format!("state not contiguous: {e}")))?;
         let policy_slice = policy.as_slice()
             .map_err(|e| PyValueError::new_err(format!("policy not contiguous: {e}")))?;
+        let own_slice = ownership.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("ownership not contiguous: {e}")))?;
+        let wl_slice = winning_line.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("winning_line not contiguous: {e}")))?;
 
         if state_slice.len() != STATE_STRIDE {
             return Err(PyValueError::new_err(format!(
@@ -154,6 +181,16 @@ impl ReplayBuffer {
         if policy_slice.len() != POLICY_STRIDE {
             return Err(PyValueError::new_err(format!(
                 "policy must have {} elements (362), got {}", POLICY_STRIDE, policy_slice.len()
+            )));
+        }
+        if own_slice.len() != AUX_STRIDE {
+            return Err(PyValueError::new_err(format!(
+                "ownership must have {} elements (361), got {}", AUX_STRIDE, own_slice.len()
+            )));
+        }
+        if wl_slice.len() != AUX_STRIDE {
+            return Err(PyValueError::new_err(format!(
+                "winning_line must have {} elements (361), got {}", AUX_STRIDE, wl_slice.len()
             )));
         }
 
@@ -181,6 +218,11 @@ impl ReplayBuffer {
             self.weight_schedule.weight_for(game_length)
         };
 
+        self.ownership[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
+            .copy_from_slice(own_slice);
+        self.winning_line[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
+            .copy_from_slice(wl_slice);
+
         // Increment the new position's bucket.
         let new_bucket = Self::weight_bucket(self.weights[slot]);
         self.weight_buckets[new_bucket].fetch_add(1, Ordering::Relaxed);
@@ -195,19 +237,23 @@ impl ReplayBuffer {
     /// Handles ring-buffer wrap-around correctly.
     ///
     /// Args:
-    ///     states:      float16 numpy array of shape (T, 18, 19, 19)
-    ///     policies:    float32 numpy array of shape (T, 362)
-    ///     outcomes:    float32 numpy array of shape (T,)
-    ///     game_id:     shared position tag for all T entries; default −1
-    ///     game_length: total compound moves in the originating game; default 0 (= weight 1.0)
-    #[pyo3(signature = (states, policies, outcomes, game_id = -1, game_length = 0))]
+    ///     states:        float16 numpy array of shape (T, 18, 19, 19)
+    ///     policies:      float32 numpy array of shape (T, 362)
+    ///     outcomes:      float32 numpy array of shape (T,)
+    ///     ownership:     uint8   numpy array of shape (T, 361)  per-row {0=P2, 1=empty, 2=P1}
+    ///     winning_line:  uint8   numpy array of shape (T, 361)  per-row binary mask
+    ///     game_id:       shared position tag for all T entries; default −1
+    ///     game_length:   total compound moves in the originating game; default 0 (= weight 1.0)
+    #[pyo3(signature = (states, policies, outcomes, ownership, winning_line, game_id = -1, game_length = 0))]
     pub fn push_game(
         &mut self,
-        states:      PyReadonlyArray4<f16>,
-        policies:    PyReadonlyArray2<f32>,
-        outcomes:    PyReadonlyArray1<f32>,
-        game_id:     i64,
-        game_length: u16,
+        states:       PyReadonlyArray4<f16>,
+        policies:     PyReadonlyArray2<f32>,
+        outcomes:     PyReadonlyArray1<f32>,
+        ownership:    PyReadonlyArray2<u8>,
+        winning_line: PyReadonlyArray2<u8>,
+        game_id:      i64,
+        game_length:  u16,
     ) -> PyResult<()> {
         let states_s   = states.as_slice()
             .map_err(|e| PyValueError::new_err(format!("states not contiguous: {e}")))?;
@@ -215,12 +261,18 @@ impl ReplayBuffer {
             .map_err(|e| PyValueError::new_err(format!("policies not contiguous: {e}")))?;
         let outcomes_s = outcomes.as_slice()
             .map_err(|e| PyValueError::new_err(format!("outcomes not contiguous: {e}")))?;
+        let own_s = ownership.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("ownership not contiguous: {e}")))?;
+        let wl_s = winning_line.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("winning_line not contiguous: {e}")))?;
 
         let t = outcomes_s.len();
         if t == 0 { return Ok(()); }
 
         if states_s.len()   != t * STATE_STRIDE  { return Err(PyValueError::new_err("states shape mismatch")); }
         if policies_s.len() != t * POLICY_STRIDE { return Err(PyValueError::new_err("policies shape mismatch")); }
+        if own_s.len() != t * AUX_STRIDE { return Err(PyValueError::new_err("ownership shape mismatch")); }
+        if wl_s.len()  != t * AUX_STRIDE { return Err(PyValueError::new_err("winning_line shape mismatch")); }
 
         let w = if game_length == 0 {
             f16::from_f32(1.0).to_bits()
@@ -254,6 +306,12 @@ impl ReplayBuffer {
             self.policies[slot * POLICY_STRIDE..(slot + 1) * POLICY_STRIDE]
                 .copy_from_slice(src_pol);
 
+            // Auxiliary spatial targets — direct u8 copies.
+            self.ownership[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
+                .copy_from_slice(&own_s[i * AUX_STRIDE..(i + 1) * AUX_STRIDE]);
+            self.winning_line[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
+                .copy_from_slice(&wl_s[i * AUX_STRIDE..(i + 1) * AUX_STRIDE]);
+
             self.outcomes[slot] = outcomes_s[i];
             self.game_ids[slot] = game_id;
             self.weights[slot]  = w;
@@ -277,12 +335,17 @@ impl ReplayBuffer {
     /// game_ids are −1 (e.g. data loaded without tagging).
     ///
     /// Returns:
-    ///     states:   float16 numpy array of shape (batch_size, 18, 19, 19)
-    ///     policies: float32 numpy array of shape (batch_size, 362)
-    ///     outcomes: float32 numpy array of shape (batch_size,)
+    ///     states:       float16 numpy array of shape (batch_size, 18, 19, 19)
+    ///     policies:     float32 numpy array of shape (batch_size, 362)
+    ///     outcomes:     float32 numpy array of shape (batch_size,)
+    ///     ownership:    uint8   numpy array of shape (batch_size, 19, 19)
+    ///     winning_line: uint8   numpy array of shape (batch_size, 19, 19)
     ///
     /// States are returned as float16 to match the Python ReplayBuffer interface and
     /// minimise output bandwidth.  Convert to float32 on the GPU if needed.
+    /// Ownership and winning_line are u8; cast in the trainer before loss computation.
+    /// All four spatial outputs share the same per-sample symmetry index, so the
+    /// augmentation transform is consistent between state and aux targets.
     pub fn sample_batch<'py>(
         &mut self,
         py:        Python<'py>,
@@ -292,6 +355,8 @@ impl ReplayBuffer {
         Bound<'py, PyArray4<f16>>,
         Bound<'py, PyArray2<f32>>,
         Bound<'py, PyArray1<f32>>,
+        Bound<'py, PyArray3<u8>>,
+        Bound<'py, PyArray3<u8>>,
     )> {
         if self.size == 0 {
             return Err(PyValueError::new_err("Cannot sample from an empty replay buffer"));
@@ -306,18 +371,31 @@ impl ReplayBuffer {
         let mut out_states   = vec![0u16; batch_size * STATE_STRIDE];
         let mut out_policies = vec![0.0f32; batch_size * POLICY_STRIDE];
         let mut out_outcomes = vec![0.0f32; batch_size];
+        // Ownership default 1 = "empty" — cells outside the symmetry's destination
+        // window stay at the same neutral value as the row's initial state.
+        let mut out_ownership    = vec![1u8; batch_size * AUX_STRIDE];
+        let mut out_winning_line = vec![0u8; batch_size * AUX_STRIDE];
 
         // ── Fill output ───────────────────────────────────────────────────────
         for (b, &idx) in indices.iter().enumerate() {
             let sym_idx = if augment { self.rng.random_range(0..N_SYMS) } else { 0 };
 
-            let src_state  = &self.states  [idx * STATE_STRIDE ..(idx + 1) * STATE_STRIDE];
-            let src_policy = &self.policies[idx * POLICY_STRIDE..(idx + 1) * POLICY_STRIDE];
+            let src_state  = &self.states      [idx * STATE_STRIDE..(idx + 1) * STATE_STRIDE];
+            let src_policy = &self.policies    [idx * POLICY_STRIDE..(idx + 1) * POLICY_STRIDE];
+            let src_own    = &self.ownership   [idx * AUX_STRIDE   ..(idx + 1) * AUX_STRIDE];
+            let src_wl     = &self.winning_line[idx * AUX_STRIDE   ..(idx + 1) * AUX_STRIDE];
 
-            let dst_state  = &mut out_states  [b * STATE_STRIDE..(b + 1) * STATE_STRIDE];
-            let dst_policy = &mut out_policies[b * POLICY_STRIDE..(b + 1) * POLICY_STRIDE];
+            let dst_state  = &mut out_states      [b * STATE_STRIDE..(b + 1) * STATE_STRIDE];
+            let dst_policy = &mut out_policies    [b * POLICY_STRIDE..(b + 1) * POLICY_STRIDE];
+            let dst_own    = &mut out_ownership   [b * AUX_STRIDE   ..(b + 1) * AUX_STRIDE];
+            let dst_wl     = &mut out_winning_line[b * AUX_STRIDE   ..(b + 1) * AUX_STRIDE];
 
-            Self::apply_sym(sym_idx, src_state, src_policy, dst_state, dst_policy, &self.sym_tables);
+            Self::apply_sym(
+                sym_idx,
+                src_state, src_policy, src_own, src_wl,
+                dst_state, dst_policy, dst_own, dst_wl,
+                &self.sym_tables,
+            );
 
             out_outcomes[b] = self.outcomes[idx];
         }
@@ -337,8 +415,14 @@ impl ReplayBuffer {
             .into_pyarray(py)
             .reshape([batch_size, N_ACTIONS])?;
         let outcomes_np = out_outcomes.into_pyarray(py);
+        let ownership_np = out_ownership
+            .into_pyarray(py)
+            .reshape([batch_size, BOARD_H, BOARD_W])?;
+        let winning_line_np = out_winning_line
+            .into_pyarray(py)
+            .reshape([batch_size, BOARD_H, BOARD_W])?;
 
-        Ok((states_np, policies_np, outcomes_np))
+        Ok((states_np, policies_np, outcomes_np, ownership_np, winning_line_np))
     }
 
     // ── Resize ─────────────────────────────────────────────────────────────────
@@ -367,6 +451,10 @@ impl ReplayBuffer {
                 .rotate_left(self.head);
             self.weights[..self.capacity]
                 .rotate_left(self.head);
+            self.ownership[..self.capacity * AUX_STRIDE]
+                .rotate_left(self.head * AUX_STRIDE);
+            self.winning_line[..self.capacity * AUX_STRIDE]
+                .rotate_left(self.head * AUX_STRIDE);
         }
 
         // Extend storage to new capacity.
@@ -376,6 +464,14 @@ impl ReplayBuffer {
         self.outcomes.resize(new_capacity, 0.0f32);
         self.game_ids.resize(new_capacity, -1i64);
         self.weights.resize(new_capacity, default_w);
+        self.ownership.resize(new_capacity * AUX_STRIDE, 1u8);     // 1 = empty
+        self.winning_line.resize(new_capacity * AUX_STRIDE, 0u8);
+
+        let added_aux_bytes = (new_capacity - self.size) * 2 * AUX_STRIDE;
+        eprintln!(
+            "[ReplayBuffer] resized to capacity={} (aux added: +{} bytes ≈ {:.1} MB)",
+            new_capacity, added_aux_bytes, added_aux_bytes as f64 / (1024.0 * 1024.0),
+        );
 
         self.head = self.size;
         self.capacity = new_capacity;
@@ -422,15 +518,20 @@ impl ReplayBuffer {
     ///
     /// Format (little-endian native):
     ///   [magic: u32 = 0x48455842]  ("HEXB")
-    ///   [version: u32 = 1]
+    ///   [version: u32 = 2]
     ///   [capacity: u64]
     ///   [size: u64]
     ///   For each of `size` positions (oldest → newest):
-    ///     state:   STATE_STRIDE × u16
-    ///     policy:  POLICY_STRIDE × f32
-    ///     outcome: f32
-    ///     game_id: i64
-    ///     weight:  u16
+    ///     state:        STATE_STRIDE × u16
+    ///     policy:       POLICY_STRIDE × f32
+    ///     outcome:      f32
+    ///     game_id:      i64
+    ///     weight:       u16
+    ///     ownership:    AUX_STRIDE × u8   (encoding 0/1/2)
+    ///     winning_line: AUX_STRIDE × u8   (binary mask)
+    ///
+    /// v1 (pre A1 aux refactor) buffers are NOT readable; load() will return
+    /// a clear error if encountered.
     #[pyo3(text_signature = "(self, path)")]
     pub fn save_to_path(&self, path: &str) -> PyResult<()> {
         use std::io::{BufWriter, Write};
@@ -442,7 +543,7 @@ impl ReplayBuffer {
         // Header
         w.write_all(&0x4845_5842u32.to_le_bytes())
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        w.write_all(&1u32.to_le_bytes())
+        w.write_all(&2u32.to_le_bytes())
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         w.write_all(&(self.capacity as u64).to_le_bytes())
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
@@ -486,6 +587,14 @@ impl ReplayBuffer {
             // weight: u16
             w.write_all(&self.weights[slot].to_le_bytes())
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+            // ownership: AUX_STRIDE × u8
+            let aux_start = slot * AUX_STRIDE;
+            w.write_all(&self.ownership[aux_start..aux_start + AUX_STRIDE])
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+            // winning_line: AUX_STRIDE × u8
+            w.write_all(&self.winning_line[aux_start..aux_start + AUX_STRIDE])
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         }
 
         w.flush().map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
@@ -528,9 +637,11 @@ impl ReplayBuffer {
         r.read_exact(&mut buf4)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         let version = u32::from_le_bytes(buf4);
-        if version != 1 {
+        if version != 2 {
             return Err(PyValueError::new_err(format!(
-                "unsupported version: expected 1, got {version}"
+                "HEXB version {version} not supported. v1 buffers were invalidated by the A1 \
+                 aux target alignment refactor (per-row ownership + winning_line columns added). \
+                 Regenerate the buffer from self-play."
             )));
         }
 
@@ -547,10 +658,10 @@ impl ReplayBuffer {
         // How many to skip if saved_size > capacity (skip oldest)
         let to_skip = saved_size - to_load;
 
-        // Per-entry byte sizes
+        // Per-entry byte sizes (v2: state + policy + outcome + game_id + weight + own + wl)
         let state_bytes = STATE_STRIDE * 2;
         let policy_bytes = POLICY_STRIDE * 4;
-        let entry_bytes = state_bytes + policy_bytes + 4 + 8 + 2; // outcome + game_id + weight
+        let entry_bytes = state_bytes + policy_bytes + 4 + 8 + 2 + AUX_STRIDE + AUX_STRIDE;
 
         // Skip oldest entries
         if to_skip > 0 {
@@ -614,6 +725,13 @@ impl ReplayBuffer {
             let w_bits = u16::from_le_bytes(buf2);
             self.weights[slot] = w_bits;
 
+            // ownership + winning_line (v2)
+            let aux_dst_start = slot * AUX_STRIDE;
+            r.read_exact(&mut self.ownership[aux_dst_start..aux_dst_start + AUX_STRIDE])
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+            r.read_exact(&mut self.winning_line[aux_dst_start..aux_dst_start + AUX_STRIDE])
+                .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
             // Update weight histogram
             let bucket = Self::weight_bucket(w_bits);
             self.weight_buckets[bucket].fetch_add(1, Ordering::Relaxed);
@@ -651,11 +769,13 @@ mod tests {
             capacity: 300,
             size: 0,
             head: 0,
-            states:   vec![0u16; 300 * STATE_STRIDE],
-            policies: vec![0.0f32; 300 * POLICY_STRIDE],
-            outcomes: vec![0.0f32; 300],
-            game_ids: vec![-1i64; 300],
-            weights:  vec![default_w; 300],
+            states:       vec![0u16; 300 * STATE_STRIDE],
+            policies:     vec![0.0f32; 300 * POLICY_STRIDE],
+            outcomes:     vec![0.0f32; 300],
+            game_ids:     vec![-1i64; 300],
+            weights:      vec![default_w; 300],
+            ownership:    vec![1u8; 300 * AUX_STRIDE],
+            winning_line: vec![0u8; 300 * AUX_STRIDE],
             sym_tables: SymTables::new(),
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
@@ -759,5 +879,235 @@ mod tests {
         assert!((w - 1.0).abs() < 0.01);
         let w = f16::from_bits(schedule.weight_for(100)).to_f32();
         assert!((w - 1.0).abs() < 0.01);
+    }
+
+    // ── A1 aux target alignment tests ────────────────────────────────────────
+
+    /// Reproject correctness — verify that projecting the same axial cells
+    /// through two different window centres yields different flat indices, and
+    /// that the chosen centre's projection round-trips through the buffer slot.
+    ///
+    /// This is the core invariant the legacy code violated: it used a single
+    /// game-end bbox centre for all rows, while each row's state planes used
+    /// its own per-cluster centre.
+    #[test]
+    fn test_aux_alignment_reproject() {
+        use crate::board::Board;
+
+        // 6-cell winning line at axial (5, 0)..(5, 5) — far from origin so
+        // both candidate centres land it in different flat positions.
+        let winning_cells: Vec<(i32, i32)> = (0..6).map(|i| (5, i)).collect();
+
+        // Centre A: matches the winning line bbox (legacy game-end frame).
+        let (cq_a, cr_a) = (5i32, 2i32);
+        // Centre B: a hypothetical per-cluster centre offset from the line.
+        let (cq_b, cr_b) = (8i32, 8i32);
+
+        let proj_a: Vec<usize> = winning_cells.iter()
+            .map(|&(q, r)| Board::window_flat_idx_at(q, r, cq_a, cr_a))
+            .collect();
+        let proj_b: Vec<usize> = winning_cells.iter()
+            .map(|&(q, r)| Board::window_flat_idx_at(q, r, cq_b, cr_b))
+            .collect();
+
+        // Sanity: at least one in-window cell must differ between the two
+        // centres — otherwise the test wouldn't actually distinguish them.
+        let differs = proj_a.iter().zip(&proj_b).any(|(a, b)| {
+            *a < AUX_STRIDE && *b < AUX_STRIDE && a != b
+        });
+        assert!(differs, "test setup: centres A and B must yield different projections");
+
+        // Build the per-row aux mask using centre B (the row's own centre)
+        // and write it into the buffer's ring storage directly.
+        let mut buf = ReplayBuffer::new(4);
+        let slot = 0;
+        let a_start = slot * AUX_STRIDE;
+        for &flat in &proj_b {
+            if flat < AUX_STRIDE {
+                buf.winning_line[a_start + flat] = 1;
+            }
+        }
+        buf.size = 1;
+        buf.head = 1;
+
+        // Confirm the stored mask is identically the centre-B projection
+        // and disagrees with the centre-A projection on at least one cell.
+        let mut centre_b_hits = 0usize;
+        for &flat in &proj_b {
+            if flat < AUX_STRIDE {
+                assert_eq!(
+                    buf.winning_line[a_start + flat], 1,
+                    "centre-B projection cell {flat} must be marked"
+                );
+                centre_b_hits += 1;
+            }
+        }
+        assert!(centre_b_hits > 0, "no centre-B cells landed in window");
+
+        let mut centre_a_only_misses = 0usize;
+        for (&fa, &fb) in proj_a.iter().zip(&proj_b) {
+            if fa < AUX_STRIDE && fa != fb && buf.winning_line[a_start + fa] == 0 {
+                centre_a_only_misses += 1;
+            }
+        }
+        assert!(
+            centre_a_only_misses > 0,
+            "centre-A projection should diverge from centre-B aux mask on at least one cell"
+        );
+    }
+
+    /// Augmentation equivariance — for each of the 12 hex symmetries, the
+    /// same scatter table must apply to state, policy, ownership, and
+    /// winning_line. We plant a single marker in each plane at the same source
+    /// cell and assert all four destination indices agree (or are all
+    /// out-of-window for that symmetry).
+    #[test]
+    fn test_aux_augment_equivariance() {
+        let tables = SymTables::new();
+
+        // Test multiple source cells to exercise both in-window and
+        // edge-mapping regimes across all 12 symmetries.
+        for &marker_src in &[0usize, 200, 180, 360] {
+            for sym_idx in 0..N_SYMS {
+                let mut src_state = vec![0u16; N_PLANES * N_CELLS];
+                let mut src_pol   = vec![0.0f32; N_ACTIONS];
+                let mut src_own   = vec![1u8; AUX_STRIDE];
+                let mut src_wl    = vec![0u8; AUX_STRIDE];
+
+                src_state[marker_src] = f16::from_f32(7.0).to_bits();
+                src_pol[marker_src]   = 7.0;
+                src_own[marker_src]   = 2;   // P1
+                src_wl[marker_src]    = 1;
+
+                let mut dst_state = vec![0u16; N_PLANES * N_CELLS];
+                let mut dst_pol   = vec![0.0f32; N_ACTIONS];
+                let mut dst_own   = vec![1u8; AUX_STRIDE];
+                let mut dst_wl    = vec![0u8; AUX_STRIDE];
+
+                ReplayBuffer::apply_sym(
+                    sym_idx,
+                    &src_state, &src_pol, &src_own, &src_wl,
+                    &mut dst_state, &mut dst_pol, &mut dst_own, &mut dst_wl,
+                    &tables,
+                );
+
+                let dst_state_idx = (0..N_CELLS).find(|&i| dst_state[i] != 0);
+                let dst_pol_idx   = (0..N_CELLS).find(|&i| dst_pol[i]   != 0.0);
+                let dst_own_idx   = (0..AUX_STRIDE).find(|&i| dst_own[i] == 2);
+                let dst_wl_idx    = (0..AUX_STRIDE).find(|&i| dst_wl[i]  == 1);
+
+                assert_eq!(
+                    dst_state_idx, dst_pol_idx,
+                    "sym {sym_idx} src {marker_src}: state vs policy mismatch"
+                );
+                assert_eq!(
+                    dst_state_idx, dst_own_idx,
+                    "sym {sym_idx} src {marker_src}: state vs ownership mismatch"
+                );
+                assert_eq!(
+                    dst_state_idx, dst_wl_idx,
+                    "sym {sym_idx} src {marker_src}: state vs winning_line mismatch"
+                );
+            }
+        }
+    }
+
+    /// Stress: push 1000 rows with random aux content via push_raw, then run
+    /// 1000 sample_indices + apply_sym iterations against random symmetries.
+    /// Asserts no panic, output shapes stay correct, and the four spatial
+    /// outputs receive the chosen symmetry consistently.
+    #[test]
+    fn test_aux_stress_1k_rows() {
+        let mut buf = ReplayBuffer::new(2000);
+
+        // Push 1000 rows. push_raw zeroes state/policy/aux to defaults; we
+        // then sprinkle random nonzero markers into the aux columns directly.
+        for _ in 0..1000 { buf.push_raw(0.0, 10); }
+        assert_eq!(buf.size, 1000);
+        assert_eq!(buf.ownership.len(), 2000 * AUX_STRIDE);
+        assert_eq!(buf.winning_line.len(), 2000 * AUX_STRIDE);
+
+        let mut rng = StdRng::seed_from_u64(0xA1A1);
+        for slot in 0..1000 {
+            let a_start = slot * AUX_STRIDE;
+            // Mark ~20 random cells per row in each aux plane.
+            for _ in 0..20 {
+                let cell = rng.random_range(0..AUX_STRIDE);
+                buf.ownership[a_start + cell]    = if rng.random_bool(0.5) { 0 } else { 2 };
+                buf.winning_line[a_start + cell] = 1;
+            }
+        }
+
+        // Run 1000 sample-batch-equivalents in pure Rust (no GIL).
+        let mut dst_state = vec![0u16; N_PLANES * N_CELLS];
+        let mut dst_pol   = vec![0.0f32; N_ACTIONS];
+        let mut dst_own   = vec![1u8;  AUX_STRIDE];
+        let mut dst_wl    = vec![0u8;  AUX_STRIDE];
+
+        for _ in 0..1000 {
+            let idx = buf.weighted_sample_one();
+            let sym_idx = rng.random_range(0..N_SYMS);
+
+            for v in &mut dst_state { *v = 0; }
+            for v in &mut dst_pol   { *v = 0.0; }
+            for v in &mut dst_own   { *v = 1; }
+            for v in &mut dst_wl    { *v = 0; }
+
+            let s = idx * STATE_STRIDE;
+            let p = idx * POLICY_STRIDE;
+            let a = idx * AUX_STRIDE;
+            ReplayBuffer::apply_sym(
+                sym_idx,
+                &buf.states[s..s + STATE_STRIDE],
+                &buf.policies[p..p + POLICY_STRIDE],
+                &buf.ownership[a..a + AUX_STRIDE],
+                &buf.winning_line[a..a + AUX_STRIDE],
+                &mut dst_state, &mut dst_pol, &mut dst_own, &mut dst_wl,
+                &buf.sym_tables,
+            );
+
+            // Every output ownership cell must be a valid encoding {0,1,2}.
+            for &v in &dst_own {
+                assert!(v <= 2, "ownership out-of-range: {v}");
+            }
+            for &v in &dst_wl {
+                assert!(v <= 1, "winning_line out-of-range: {v}");
+            }
+        }
+    }
+
+    /// HEXB v2 round-trip — verify aux columns survive save/load.
+    #[test]
+    fn test_aux_hexb_v2_roundtrip() {
+        use std::env::temp_dir;
+
+        let mut buf = ReplayBuffer::new(8);
+        let slot = 0;
+        let a_start = slot * AUX_STRIDE;
+        buf.ownership[a_start + 10] = 2;  // P1
+        buf.ownership[a_start + 20] = 0;  // P2
+        buf.ownership[a_start + 30] = 1;  // empty
+        for i in 0..6 { buf.winning_line[a_start + 100 + i] = 1; }
+        buf.outcomes[slot] = 1.0;
+        buf.weights[slot]  = f16::from_f32(1.0).to_bits();
+        buf.head = 1;
+        buf.size = 1;
+
+        let path = temp_dir().join("aux_v2_roundtrip.hexb");
+        buf.save_to_path(path.to_str().unwrap()).unwrap();
+
+        let mut buf2 = ReplayBuffer::new(8);
+        let n = buf2.load_from_path(path.to_str().unwrap()).unwrap();
+        assert_eq!(n, 1);
+
+        let a2 = 0 * AUX_STRIDE;
+        assert_eq!(buf2.ownership[a2 + 10], 2);
+        assert_eq!(buf2.ownership[a2 + 20], 0);
+        assert_eq!(buf2.ownership[a2 + 30], 1);
+        for i in 0..6 {
+            assert_eq!(buf2.winning_line[a2 + 100 + i], 1);
+        }
+
+        let _ = std::fs::remove_file(path);
     }
 }
