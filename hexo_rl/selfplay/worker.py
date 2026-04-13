@@ -200,7 +200,14 @@ class SelfPlayWorker:
         records: List[Tuple[np.ndarray, np.ndarray, int]] = []
 
         # Playout cap randomization: 90% fast search, 10% deep search.
-        fast_sims = np.random.randint(15, 26)
+        sp_cfg = self.config.get("selfplay", self.config)
+        pc = sp_cfg.get("playout_cap", self.config.get("playout_cap", {}))
+        if "fast_sims_min" not in pc or "fast_sims_max" not in pc:
+            raise ValueError(
+                "playout_cap.fast_sims_min and playout_cap.fast_sims_max must be set "
+                "in selfplay.yaml — no silent defaults (see CLAUDE.md config discipline)"
+            )
+        fast_sims = np.random.randint(int(pc["fast_sims_min"]), int(pc["fast_sims_max"]) + 1)
 
         while True:
             if rust_board.check_win() or rust_board.legal_move_count() == 0:

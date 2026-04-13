@@ -56,6 +56,10 @@ class WorkerPool:
         leaf_batch_size = int(sp.get("leaf_batch_size", 8))
 
         pc = sp.get("playout_cap", config.get("playout_cap", {}))
+        if "fast_sims" not in pc:
+            raise ValueError(
+                "playout_cap.fast_sims must be set in selfplay.yaml — no silent defaults"
+            )
 
         training_cfg = config.get("training", config)
         self._runner = SelfPlayRunner(
@@ -68,7 +72,7 @@ class WorkerPool:
             feature_len=in_channels * board_size * board_size,
             policy_len=board_size * board_size + 1,
             fast_prob=float(pc.get("fast_prob", 0.0)),
-            fast_sims=int(pc.get("fast_sims", 50)),
+            fast_sims=int(pc["fast_sims"]),
             standard_sims=int(pc.get("standard_sims", 0)),
             temp_threshold_compound_moves=int(pc.get("temperature_threshold_compound_moves", 15)),
             draw_reward=float(training_cfg.get("draw_reward", -0.1)),
