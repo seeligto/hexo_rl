@@ -438,6 +438,105 @@ mod tests {
         );
     }
 
+    // ── MCTS mean-depth accounting regression (A1 review L5) ────────────────
+
+    /// Verify `MCTSTree::last_search_stats()` is per-search, not cumulative.
+    ///
+    /// The post-refactor review raised a concern that the worker loop's
+    /// stats block at `worker_loop.rs` (former `game_runner.rs:622-633`)
+    /// might double-count by pushing a cumulative-since-game-start depth
+    /// into an accumulator that's then averaged by per-move count.
+    ///
+    /// The underlying claim is that `tree.depth_accum` / `tree.sim_count`
+    /// reset in `new_game()` — which the worker loop calls before every
+    /// search — so each `last_search_stats()` call reports a clean
+    /// per-search average. This test locks that contract in.
+    #[test]
+    fn test_last_search_stats_resets_across_new_game() {
+        let mut tree = crate::mcts::MCTSTree::new(1.5);
+        let n_actions = crate::board::BOARD_SIZE * crate::board::BOARD_SIZE + 1;
+        let uniform = vec![1.0 / n_actions as f32; n_actions];
+
+        // Game 1: run a handful of sims so depth_accum becomes positive.
+        tree.new_game(crate::board::Board::new());
+        for _ in 0..10 {
+            let leaves = tree.select_leaves(1);
+            let n = leaves.len();
+            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+            let values = vec![0.0f32; n];
+            tree.expand_and_backup(&policies, &values);
+        }
+        let (d1, c1) = tree.last_search_stats();
+        assert!(d1 > 0.0, "game 1: depth must be > 0 after sims, got {d1}");
+        assert!(c1 >= 0.0 && c1 <= 1.0, "game 1: root concentration out of range: {c1}");
+
+        // Game 2: reset without running any sims. Both stats must drop
+        // cleanly to 0.0 / 0.0 — confirming the per-search reset contract.
+        tree.new_game(crate::board::Board::new());
+        let (d2, c2) = tree.last_search_stats();
+        assert_eq!(d2, 0.0, "new_game must reset mean_depth, got {d2}");
+        assert_eq!(c2, 0.0, "new_game must reset root_concentration, got {c2}");
+    }
+
+    /// Verify the runner-level mean_depth getter is an arithmetic mean of
+    /// per-search means, not a biased quantity.
+    ///
+    /// Pre-conditions locked in by the test:
+    ///   * the 1_000_000 scaling factor applied in `worker_loop.rs` matches
+    ///     the divisor in `mcts_mean_depth` / `mcts_mean_root_concentration`
+    ///   * three synthetic per-search depth means {4.0, 6.0, 8.0} with equal
+    ///     weight collapse to exactly 6.0 when read via the getter
+    ///
+    /// The test manipulates the shared atomics directly (same pattern the
+    /// worker loop uses), so it exercises the getter's arithmetic without
+    /// requiring a full worker / inference-batcher spin-up.
+    #[test]
+    fn test_mcts_mean_depth_is_per_search_average() {
+        let runner = SelfPlayRunner::new(
+            1, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
+            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
+            10_000,
+        );
+
+        // Simulate three per-search stat pushes matching what the worker
+        // loop does for depth 4.0 / 6.0 / 8.0. Scaling factor = 1_000_000.
+        for &depth in &[4.0_f32, 6.0, 8.0] {
+            runner.mcts_depth_accum
+                .fetch_add((depth * 1_000_000.0) as u64, Ordering::Relaxed);
+            runner.mcts_stat_count.fetch_add(1, Ordering::Relaxed);
+        }
+
+        let mean = runner.mcts_mean_depth();
+        assert!(
+            (mean - 6.0).abs() < 1e-3,
+            "mean of per-search depths {{4, 6, 8}} must be 6.0, got {mean}"
+        );
+
+        // Same arithmetic for concentration.
+        for &conc in &[0.25_f32, 0.50, 0.75] {
+            runner.mcts_conc_accum
+                .fetch_add((conc * 1_000_000.0) as u64, Ordering::Relaxed);
+            // stat_count re-used; the getter divides by the same count.
+        }
+        // stat_count is already at 3 from the depth loop above, so the
+        // second arithmetic shares the same denominator on purpose — this
+        // mirrors worker_loop.rs where both accumulators advance together.
+        let mean_conc = runner.mcts_mean_root_concentration();
+        assert!(
+            (mean_conc - 0.50).abs() < 1e-3,
+            "mean of per-search root concentrations {{0.25, 0.50, 0.75}} must be 0.50, got {mean_conc}"
+        );
+
+        // Zero-denominator guard.
+        let empty = SelfPlayRunner::new(
+            1, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
+            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
+            10_000,
+        );
+        assert_eq!(empty.mcts_mean_depth(), 0.0);
+        assert_eq!(empty.mcts_mean_root_concentration(), 0.0);
+    }
+
     #[test]
     fn test_dirichlet_gate_disabled_preserves_priors() {
         let mut tree = crate::mcts::MCTSTree::new(1.5);
