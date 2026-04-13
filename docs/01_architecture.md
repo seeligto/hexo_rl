@@ -57,7 +57,7 @@ It does **not** return 18 planes because:
 stacking the current 2-plane snapshot with up to 7 prior snapshots from
 `move_history`. Missing history slots (early in the game) are left as zeros.
 
-The **Rust self-play hot-path** (`game_runner.rs`) has no Python history. It
+The **Rust self-play hot-path** (`game_runner/worker_loop.rs`) has no Python history. It
 calls `Board.encode_18_planes_to_buffer()` to expand each 2-plane view to
 18 planes in-place, leaving history planes as zeros. This is a valid
 approximation for the RL warmup phase; full history encoding is available on
