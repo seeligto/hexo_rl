@@ -125,6 +125,21 @@ def run_training_loop(
         inf_base   = getattr(inf_model,     "_orig_mod", inf_model)
         inf_base.load_state_dict(train_base.state_dict())
 
+    # ── CUDA warm-up ─────────────────────────────────────────────────────────
+    # Force CUDA kernel compilation now (before workers start) so the first
+    # inference call from a worker returns immediately instead of blocking for
+    # 90-120s while PyTorch JIT-compiles kernels. Without this, the warmup
+    # phase shows "games=0" for ~2 minutes on a cold start, which looks broken.
+    if device.type == "cuda":
+        log.info("cuda_warmup_start")
+        _t_warmup = time.time()
+        with torch.no_grad():
+            with torch.autocast(device_type="cuda"):
+                _dummy = torch.zeros(1, in_channels, board_size, board_size, device=device)
+                inf_model(_dummy)
+        torch.cuda.synchronize()
+        log.info("cuda_warmup_done", elapsed_sec=round(time.time() - _t_warmup, 1))
+
     # ── Worker pool ───────────────────────────────────────────────────────────
     from hexo_rl.selfplay.pool import WorkerPool
     pool = WorkerPool(inf_model, config, device, buffer)
