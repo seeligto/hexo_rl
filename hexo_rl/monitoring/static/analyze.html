@@ -2,24 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>HeXO Policy Viewer</title>
+<title>HeXO — Analyzer</title>
+<link rel="stylesheet" href="/static/hexo.css">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    display: flex;
-    height: 100vh;
-    overflow: hidden;
-    --player0: #378ADD;
-    --player1: #D85A30;
-    --last-ring: #c4a822;
+    font-family: var(--font-ui);
+    /* HexCanvas CSS custom properties */
+    --player0: var(--p0-color);
+    --player1: var(--p1-color);
+    --last-ring: var(--last-ring);
     --grid-stroke: #1a3050;
     --grid-hover: #2a4a70;
     --coord-color: #555;
     --stone-outline: #0a0a1a;
-    --canvas-bg: #16213e;
+    --canvas-bg: var(--bg-panel);
     --empty-text: #444;
 }
 
@@ -32,19 +28,17 @@ body {
     padding: 12px;
     gap: 8px;
     overflow-y: auto;
-    border-right: 1px solid #1a3050;
+    border-right: 1px solid var(--border);
 }
-#sidebar h2 { font-size: 15px; color: #aaa; font-weight: 600; }
-#sidebar a { font-size: 12px; color: #5588cc; text-decoration: none; }
-#sidebar a:hover { text-decoration: underline; }
+#sidebar h2 { font-size: 15px; color: var(--text-muted); font-weight: 600; }
 
 .control-group { display: flex; flex-direction: column; gap: 4px; }
-.control-group label { font-size: 11px; color: #888; }
+.control-group label { font-size: 11px; color: var(--text-muted); }
 .control-group select,
 .control-group input[type="number"] {
-    background: #16213e;
-    color: #e0e0e0;
-    border: 1px solid #1a4080;
+    background: var(--bg-panel);
+    color: var(--text);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 4px 6px;
     font-size: 12px;
@@ -55,29 +49,29 @@ body {
     gap: 0;
     border-radius: 6px;
     overflow: hidden;
-    border: 1px solid #1a4080;
+    border: 1px solid var(--border);
 }
 .toggle-group button {
     flex: 1;
-    background: #0f3460;
-    color: #aaa;
+    background: var(--bg-card);
+    color: var(--text-muted);
     border: none;
     padding: 5px 0;
     cursor: pointer;
     font-size: 12px;
 }
-.toggle-group button.active { background: #e94560; color: #fff; }
+.toggle-group button.active { background: var(--accent); color: #fff; }
 
 .btn {
-    background: #0f3460;
-    color: #e0e0e0;
-    border: 1px solid #1a4080;
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 5px 10px;
     cursor: pointer;
     font-size: 12px;
 }
-.btn:hover { background: #1a4080; }
+.btn:hover { background: var(--border); }
 .btn-row { display: flex; gap: 4px; }
 
 .checkbox-row {
@@ -85,7 +79,7 @@ body {
     align-items: center;
     gap: 5px;
     font-size: 12px;
-    color: #aaa;
+    color: var(--text-muted);
 }
 
 #mcts-controls {
@@ -101,13 +95,13 @@ body {
 #results {
     font-size: 12px;
     padding: 6px;
-    background: #16213e;
+    background: var(--bg-panel);
     border-radius: 6px;
     line-height: 1.6;
     flex-shrink: 0;
 }
-#results .val { color: #e94560; font-weight: 600; font-family: monospace; }
-#results .label { color: #888; }
+#results .val { color: var(--accent); font-weight: 600; font-family: var(--font-mono); }
+#results .label { color: var(--text-muted); }
 
 #top-moves {
     font-size: 11px;
@@ -115,9 +109,9 @@ body {
     max-height: 150px;
     overflow-y: auto;
 }
-#top-moves .move-entry { font-family: monospace; color: #ccc; }
+#top-moves .move-entry { font-family: var(--font-mono); color: #ccc; }
 #top-moves .move-prob { color: #4eaa6f; }
-#top-moves .move-logit { color: #888; }
+#top-moves .move-logit { color: var(--text-muted); }
 
 #mcts-results {
     display: none;
@@ -131,21 +125,75 @@ body {
 /* Move list */
 #move-list {
     font-size: 11px;
-    font-family: monospace;
+    font-family: var(--font-mono);
     line-height: 1.4;
-    color: #888;
+    color: var(--text-muted);
     max-height: 80px;
     overflow-y: auto;
     word-wrap: break-word;
 }
-.move-p0 { color: #378ADD; }
-.move-p1 { color: #D85A30; }
+.move-p0 { color: var(--p0-color); }
+.move-p1 { color: var(--p1-color); }
 
 #status-bar {
     font-size: 11px;
     color: #666;
     min-height: 16px;
 }
+
+/* ── Play section ────────────────────────────────────────── */
+#play-section {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+#play-section-header {
+    padding: 6px 8px;
+    background: var(--bg-card);
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    user-select: none;
+}
+#play-section-header:hover { background: var(--border); }
+#play-section-body {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    background: var(--bg-panel);
+}
+#play-section-body.open { display: flex; }
+
+.player-select {
+    display: flex;
+    gap: 4px;
+}
+.player-select label {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+.player-select label:hover { background: var(--border); }
+
+#play-status {
+    font-size: 12px;
+    color: var(--text-muted);
+    min-height: 16px;
+    padding: 2px 0;
+}
+
+.play-btn-row { display: flex; gap: 4px; }
 
 /* ── Main canvas ─────────────────────────────────────────── */
 #canvas-panel {
@@ -156,7 +204,7 @@ body {
 }
 #board-canvas {
     flex: 1;
-    background: #16213e;
+    background: var(--bg-panel);
     border-radius: 8px;
     cursor: crosshair;
 }
@@ -168,12 +216,12 @@ body {
     background: rgba(15, 20, 40, 0.92);
     color: #ddd;
     font-size: 11px;
-    font-family: monospace;
+    font-family: var(--font-mono);
     padding: 4px 8px;
     border-radius: 4px;
     pointer-events: none;
     z-index: 100;
-    border: 1px solid #1a4080;
+    border: 1px solid var(--border);
 }
 
 /* Loading overlay */
@@ -184,36 +232,32 @@ body {
     left: 50%;
     transform: translate(-50%, -50%);
     font-size: 13px;
-    color: #e94560;
+    color: var(--accent);
 }
 </style>
 </head>
 <body>
 
+<nav class="hexo-nav">
+    <span class="nav-brand">HeXO</span>
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/viewer" class="nav-link">Viewer</a>
+    <a href="/analyze" class="nav-link active">Analyzer</a>
+</nav>
+
+<div class="page-root">
+
 <div id="sidebar">
-    <h2>HeXO Policy Viewer</h2>
-    <div style="display:flex; gap:8px;">
-        <a href="/">&larr; dashboard</a>
-        <a href="/viewer">viewer</a>
-    </div>
+    <h2>HeXO Analyzer</h2>
 
     <div class="control-group">
         <label>Checkpoint</label>
         <select id="sel-checkpoint"></select>
     </div>
 
-    <div style="display:flex; gap:6px;">
-        <div class="control-group" style="flex:1">
-            <label>View radius</label>
-            <div style="display:flex; gap:3px;">
-                <input type="number" id="inp-radius" value="8" min="4" max="15" style="width:50px;">
-                <button class="btn" id="btn-autofit" title="Auto-fit to stones">fit</button>
-            </div>
-        </div>
-        <div class="control-group" style="flex:1">
-            <label>Max moves</label>
-            <input type="number" id="inp-maxmoves" value="40" min="1" max="200" style="width:50px;">
-        </div>
+    <div class="control-group">
+        <label>Max moves</label>
+        <input type="number" id="inp-maxmoves" value="40" min="1" max="200" style="width:60px;">
     </div>
 
     <label class="checkbox-row">
@@ -270,12 +314,33 @@ body {
 
     <div id="move-list">Moves: (empty board)</div>
     <div id="status-bar"></div>
+
+    <!-- Play section -->
+    <div id="play-section">
+        <div id="play-section-header">
+            <span>Play against model</span>
+            <span id="play-section-arrow">▶</span>
+        </div>
+        <div id="play-section-body">
+            <div class="player-select">
+                <label><input type="radio" name="human-player" value="0" checked> P0 (Blue)</label>
+                <label><input type="radio" name="human-player" value="1"> P1 (Coral)</label>
+            </div>
+            <div id="play-status">Press New Game to start</div>
+            <div class="play-btn-row">
+                <button class="btn" id="btn-new-game" style="flex:1">New Game</button>
+                <button class="btn" id="btn-stop-play" style="flex:1;display:none">Stop</button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <div id="canvas-panel" style="position:relative;">
     <canvas id="board-canvas"></canvas>
     <div id="loading">analyzing...</div>
 </div>
+
+</div><!-- .page-root -->
 
 <div id="tooltip"></div>
 
@@ -284,26 +349,29 @@ import { HexCanvas } from '/static/hex_canvas.js';
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-let moves = [];           // [{q, r, player}]
+let moves = [];           // [{q, r, player}]  player is internal 1/-1
 let analysisResult = null;
 let mctsResult = null;
 let overlayMode = 'raw';  // 'raw' | 'mcts'
 let analyzing = false;
 
+// Play mode state
+let playMode = false;
+let humanPlayer = 0;       // display: 0=P0(Blue), 1=P1(Coral)
+let modelThinking = false;
+
 // ── HexCanvas ────────────────────────────────────────────────────────────────
 
 const boardCanvas = document.getElementById('board-canvas');
-const hex = new HexCanvas(boardCanvas, { coordLabels: 'axial' });
-
-function getRadius() {
-    return parseInt(document.getElementById('inp-radius').value) || 8;
-}
+// Auto-bounds with minRadius: board starts as radius-8 hex shape and expands as stones placed
+const hex = new HexCanvas(boardCanvas, { minRadius: 8, coordLabels: 'axial' });
 
 // ── Turn structure ───────────────────────────────────────────────────────────
 
 function getTurnState() {
-    // P1 opens with 1 stone (ply 0), then both players 2 stones per turn
-    let player = 1;  // P1 = 1, P0 = -1. Board uses 1/-1.
+    // Internal: player=1 opens with 1 stone (first), then alternates 2 per turn.
+    // Display: playerIdx(1)=0 → P0 (Blue); playerIdx(-1)=1 → P1 (Coral).
+    let player = 1;
     let remaining = 1;
     for (let i = 0; i < moves.length; i++) {
         remaining--;
@@ -315,13 +383,21 @@ function getTurnState() {
     return { player, remaining };
 }
 
-function playerLabel(p) {
-    return p === 1 ? 'P1 (Blue)' : 'P0 (Coral)';
+function playerIdx(p) {
+    // HexCanvas uses 0/1 for player index; Board uses 1/-1 internally.
+    // player=1 (opens) → display P0 (Blue) → HexCanvas index 0
+    // player=-1 → display P1 (Coral) → HexCanvas index 1
+    return p === 1 ? 0 : 1;
 }
 
-function playerIdx(p) {
-    // HexCanvas uses 0/1 for player index, Board uses 1/-1
-    return p === 1 ? 0 : 1;
+function playerLabel(p) {
+    // p is internal (1 or -1). P0=Blue, P1=Coral.
+    return p === 1 ? 'P0 (Blue)' : 'P1 (Coral)';
+}
+
+function isHumanTurn() {
+    const { player } = getTurnState();
+    return playerIdx(player) === humanPlayer;
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
@@ -332,9 +408,8 @@ function render() {
     canvas.width = rect.width - 24;
     canvas.height = rect.height - 24;
 
-    const radius = getRadius();
-    hex.setBounds({ mode: 'radius', radius });
-    hex.setCoordLabels('axial');
+    // Auto-bounds: minRadius=8, expands to fit stones
+    hex.setCoordLabels(playMode ? 'none' : 'axial');
 
     // Stones
     const stones = moves.map(m => ({ q: m.q, r: m.r, player: playerIdx(m.player) }));
@@ -344,17 +419,54 @@ function render() {
     // Last placed marker
     if (moves.length > 0) {
         const last = moves[moves.length - 1];
-        hex.setOverlay('last_placed', [{ q: last.q, r: last.r, ring: true, ringColor: '#c4a822' }]);
+        hex.setOverlay('last_placed', [{ q: last.q, r: last.r, ring: true }]);
     }
 
-    // Policy/MCTS overlay
-    if (overlayMode === 'raw' && analysisResult) {
-        renderPolicyOverlay(analysisResult);
-    } else if (overlayMode === 'mcts' && mctsResult) {
-        renderMCTSOverlay(mctsResult);
+    if (!playMode) {
+        // Policy/MCTS overlay (analyze mode only)
+        if (overlayMode === 'raw' && analysisResult) {
+            renderPolicyOverlay(analysisResult);
+        } else if (overlayMode === 'mcts' && mctsResult) {
+            renderMCTSOverlay(mctsResult);
+        }
     }
 
     hex.render();
+}
+
+function renderThreatOverlay(threats) {
+    // Threats: level>=4 only (forced+critical). Level 3 suppressed.
+    if (!threats || threats.length === 0) return;
+
+    // Dedup: keep highest level per (q,r)
+    const dedupMap = new Map();
+    for (const t of threats) {
+        const key = `${t.q},${t.r}`;
+        const existing = dedupMap.get(key);
+        if (!existing || t.level > existing.level) {
+            dedupMap.set(key, t);
+        }
+    }
+
+    const threatCells = [];
+    for (const t of dedupMap.values()) {
+        if (t.level < 4) continue;
+        const isCritical = t.level >= 5;
+        threatCells.push({
+            q: t.q, r: t.r,
+            circle: true,
+            circleColor: isCritical ? '#E24B4A' : '#EF9F27',
+            circleWidth: isCritical ? 3 : 2,
+            dash: [],
+            circleFill: isCritical
+                ? 'rgba(226, 75, 74, 0.25)'
+                : 'rgba(239, 159, 39, 0.20)',
+        });
+    }
+    if (threatCells.length > 0) {
+        hex.setOverlay('threats', threatCells);
+        hex.render();
+    }
 }
 
 function renderPolicyOverlay(result) {
@@ -426,9 +538,11 @@ function updateResults(result) {
         return;
     }
 
+    // next_to_move=1 (internal) → display P0 (Blue)
+    const displayPlayer = result.next_to_move === 1 ? 'P0' : 'P1';
     const sign = result.next_to_move === 1 ? '+' : '';
     document.getElementById('res-value').textContent =
-        `${sign}${result.value.toFixed(3)} (${result.next_to_move === 1 ? 'P1' : 'P0'} to move)`;
+        `${sign}${result.value.toFixed(3)} (${displayPlayer} to move)`;
 
     document.getElementById('res-entropy').textContent =
         `${result.entropy_nats.toFixed(2)} nats (${(result.entropy_uniform_fraction * 100).toFixed(0)}% of uniform)`;
@@ -481,6 +595,10 @@ function setStatus(msg) {
     document.getElementById('status-bar').textContent = msg;
 }
 
+function setPlayStatus(msg) {
+    document.getElementById('play-status').textContent = msg;
+}
+
 // ── API calls ────────────────────────────────────────────────────────────────
 
 async function fetchCheckpoints() {
@@ -502,6 +620,7 @@ async function fetchCheckpoints() {
 }
 
 async function runAnalysis() {
+    if (playMode) return;
     const checkpoint = document.getElementById('sel-checkpoint').value;
     if (!checkpoint) {
         setStatus('No checkpoint selected');
@@ -551,9 +670,150 @@ async function runAnalysis() {
     render();
 }
 
+// ── Play mode ────────────────────────────────────────────────────────────────
+
+function enterPlayMode() {
+    playMode = true;
+    modelThinking = false;
+    moves = [];
+    analysisResult = null;
+    mctsResult = null;
+    updateMoveList();
+    updateResults(null);
+    updateMCTSResults(null);
+
+    // Disable analyze controls
+    document.getElementById('btn-analyze').disabled = true;
+    document.getElementById('btn-copy').disabled = true;
+    document.getElementById('btn-paste').disabled = true;
+    document.getElementById('sel-checkpoint').disabled = true;
+    document.getElementById('btn-stop-play').style.display = '';
+
+    setPlayStatus(isHumanTurn() ? 'Your turn. Click a hex.' : 'Model moving...');
+    render();
+
+    // If model goes first (human is P1), trigger bot move immediately
+    if (!isHumanTurn()) {
+        requestBotMove();
+    }
+}
+
+function exitPlayMode() {
+    playMode = false;
+    modelThinking = false;
+
+    document.getElementById('btn-analyze').disabled = false;
+    document.getElementById('btn-copy').disabled = false;
+    document.getElementById('btn-paste').disabled = false;
+    document.getElementById('sel-checkpoint').disabled = false;
+    document.getElementById('btn-stop-play').style.display = 'none';
+
+    setPlayStatus('Press New Game to start');
+    render();
+}
+
+async function requestBotMove() {
+    const checkpoint = document.getElementById('sel-checkpoint').value;
+    if (!checkpoint) {
+        setPlayStatus('No checkpoint loaded — cannot play');
+        return;
+    }
+
+    modelThinking = true;
+    setPlayStatus('Model thinking...');
+
+    try {
+        const resp = await fetch('/viewer/play', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                moves_so_far: moves.map(m => ({ q: m.q, r: m.r, player: m.player })),
+                human_moves: [],
+            }),
+        });
+
+        if (resp.status === 503) {
+            setPlayStatus('No model loaded yet — training must complete first');
+            modelThinking = false;
+            return;
+        }
+
+        const data = await resp.json();
+        if (data.error) {
+            setPlayStatus('Error: ' + data.error);
+            modelThinking = false;
+            return;
+        }
+
+        // Apply bot moves to board
+        for (const m of (data.moves || [])) {
+            let q, r;
+            if (typeof m === 'string') {
+                const match = m.match(/\(?\s*(-?\d+)\s*,\s*(-?\d+)\s*\)?/);
+                if (match) { q = parseInt(match[1]); r = parseInt(match[2]); }
+            } else if (typeof m === 'object') {
+                q = m.q; r = m.r;
+            }
+            if (q !== undefined) {
+                const { player } = getTurnState();
+                moves.push({ q, r, player });
+            }
+        }
+
+        modelThinking = false;
+        updateMoveList();
+        render();
+
+        // Show threat overlay from response if available
+        if (data.threats) {
+            renderThreatOverlay(data.threats);
+        }
+        // Show value estimate if available
+        if (data.value != null) {
+            const { player } = getTurnState();
+            setPlayStatus(
+                `Your turn. Value: ${data.value.toFixed(3)} (${playerLabel(player)} to move)`
+            );
+        } else if (data.winner != null) {
+            const w = data.winner === 1 ? 'P0 (Blue)' : data.winner === -1 ? 'P1 (Coral)' : null;
+            setPlayStatus(w ? `Game over! ${w} wins!` : 'Game over!');
+            return;
+        } else {
+            setPlayStatus(isHumanTurn() ? 'Your turn. Click a hex.' : 'Game over!');
+        }
+
+    } catch (err) {
+        setPlayStatus('Network error: ' + err.message);
+        modelThinking = false;
+    }
+}
+
 // ── Interaction ──────────────────────────────────────────────────────────────
 
 hex.onCellClick(({ q, r }) => {
+    if (playMode) {
+        // Play mode: only accept human moves on human's turn
+        if (modelThinking) return;
+        if (!isHumanTurn()) return;
+
+        if (moves.some(m => m.q === q && m.r === r)) return;
+
+        const { player } = getTurnState();
+        moves.push({ q, r, player });
+        updateMoveList();
+        render();
+
+        // Check if this completes human's turn
+        if (!isHumanTurn()) {
+            // Bot's turn
+            requestBotMove();
+        } else {
+            setPlayStatus('Your turn. Click a hex.');
+        }
+        return;
+    }
+
+    // Analyze mode
     if (analyzing) return;
     const maxMoves = parseInt(document.getElementById('inp-maxmoves').value) || 40;
     if (moves.length >= maxMoves) {
@@ -561,7 +821,6 @@ hex.onCellClick(({ q, r }) => {
         return;
     }
 
-    // Check if occupied
     if (moves.some(m => m.q === q && m.r === r)) return;
 
     const { player } = getTurnState();
@@ -574,10 +833,10 @@ hex.onCellClick(({ q, r }) => {
     }
 });
 
-// Tooltip on hover
+// Tooltip on hover (analyze mode only)
 boardCanvas.addEventListener('mousemove', (e) => {
     const tooltip = document.getElementById('tooltip');
-    if (hex.hexSize === 0) { tooltip.style.display = 'none'; return; }
+    if (playMode || hex.hexSize === 0) { tooltip.style.display = 'none'; return; }
     const rect = boardCanvas.getBoundingClientRect();
     const [q, r] = hex.pixelToHex(e.clientX - rect.left, e.clientY - rect.top);
 
@@ -606,7 +865,7 @@ boardCanvas.addEventListener('mouseleave', () => {
 document.getElementById('btn-analyze').onclick = () => runAnalysis();
 
 document.getElementById('btn-undo').onclick = () => {
-    if (moves.length === 0) return;
+    if (moves.length === 0 || playMode) return;
     moves.pop();
     updateMoveList();
     render();
@@ -614,6 +873,7 @@ document.getElementById('btn-undo').onclick = () => {
 };
 
 document.getElementById('btn-clear').onclick = () => {
+    if (playMode) return;
     moves = [];
     analysisResult = null;
     mctsResult = null;
@@ -630,11 +890,11 @@ document.getElementById('btn-copy').onclick = () => {
 };
 
 document.getElementById('btn-paste').onclick = async () => {
+    if (playMode) return;
     try {
         const text = await navigator.clipboard.readText();
         const parsed = JSON.parse(text);
         if (!Array.isArray(parsed)) throw new Error('not an array');
-        // Validate
         for (const m of parsed) {
             if (typeof m.q !== 'number' || typeof m.r !== 'number') throw new Error('invalid move');
         }
@@ -647,17 +907,6 @@ document.getElementById('btn-paste').onclick = async () => {
         setStatus('Paste failed: ' + e.message);
     }
 };
-
-document.getElementById('btn-autofit').onclick = () => {
-    if (moves.length === 0) return;
-    const maxCoord = Math.max(
-        ...moves.map(m => Math.max(Math.abs(m.q), Math.abs(m.r), Math.abs(m.q + m.r)))
-    );
-    document.getElementById('inp-radius').value = maxCoord + 2;
-    render();
-};
-
-document.getElementById('inp-radius').onchange = () => render();
 
 // Overlay mode toggle
 document.getElementById('btn-raw').onclick = () => {
@@ -673,10 +922,28 @@ document.getElementById('btn-mcts').onclick = () => {
     document.getElementById('btn-mcts').classList.add('active');
     document.getElementById('btn-raw').classList.remove('active');
     document.getElementById('mcts-controls').style.display = 'flex';
-    // Auto-trigger MCTS analysis if we have a checkpoint
     if (document.getElementById('chk-autoanalyze').checked) runAnalysis();
     else render();
 };
+
+// ── Play section controls ─────────────────────────────────────────────────────
+
+document.getElementById('play-section-header').onclick = () => {
+    const body = document.getElementById('play-section-body');
+    const arrow = document.getElementById('play-section-arrow');
+    const isOpen = body.classList.toggle('open');
+    arrow.textContent = isOpen ? '▼' : '▶';
+};
+
+document.getElementById('btn-new-game').onclick = () => {
+    const radios = document.querySelectorAll('input[name="human-player"]');
+    for (const r of radios) {
+        if (r.checked) { humanPlayer = parseInt(r.value); break; }
+    }
+    enterPlayMode();
+};
+
+document.getElementById('btn-stop-play').onclick = () => exitPlayMode();
 
 // ── Deep-link support ────────────────────────────────────────────────────────
 
@@ -698,7 +965,6 @@ function parseDeepLink() {
     }
 
     if (ckpt) {
-        // Wait for checkpoints to load, then select
         setTimeout(() => {
             const sel = document.getElementById('sel-checkpoint');
             for (const opt of sel.options) {
@@ -720,7 +986,6 @@ async function init() {
     updateMoveList();
     render();
 
-    // Auto-analyze empty board if checkpoint available
     if (document.getElementById('sel-checkpoint').value) {
         runAnalysis();
     }

@@ -2,23 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>HeXO Game Viewer</title>
+<title>HeXO — Viewer</title>
+<link rel="stylesheet" href="/static/hexo.css">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    display: flex;
-    height: 100vh;
-    overflow: hidden;
+    font-family: var(--font-ui);
     /* HexCanvas CSS custom properties */
-    --player0: #378ADD;
-    --player1: #D85A30;
-    --last-ring: #639922;
+    --player0: var(--p0-color);
+    --player1: var(--p1-color);
+    --last-ring: var(--last-ring);
     --grid-stroke: #1a3050;
     --stone-outline: #0a0a1a;
-    --canvas-bg: #16213e;
+    --canvas-bg: var(--bg-panel);
     --empty-text: #444;
 }
 
@@ -31,7 +26,7 @@ body {
 }
 #board-canvas {
     flex: 1;
-    background: #16213e;
+    background: var(--bg-panel);
     border-radius: 8px;
     cursor: pointer;
 }
@@ -45,21 +40,21 @@ body {
     flex-shrink: 0;
 }
 #controls button {
-    background: #0f3460;
-    color: #e0e0e0;
-    border: 1px solid #1a4080;
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
     border-radius: 4px;
     padding: 4px 10px;
     cursor: pointer;
     font-size: 14px;
 }
-#controls button:hover { background: #1a4080; }
-#controls button.active { background: #e94560; border-color: #e94560; }
+#controls button:hover { background: var(--border); }
+#controls button.active { background: var(--accent); border-color: var(--accent); }
 #scrubber {
     flex: 1;
-    accent-color: #e94560;
+    accent-color: var(--accent);
 }
-#move-label { font-size: 13px; color: #aaa; min-width: 80px; }
+#move-label { font-size: 13px; color: var(--text-muted); min-width: 80px; }
 
 /* Overlay toggles */
 #overlay-toggles {
@@ -69,7 +64,7 @@ body {
 }
 #overlay-toggles label {
     font-size: 12px;
-    color: #aaa;
+    color: var(--text-muted);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -85,7 +80,7 @@ body {
 #sparkline-canvas {
     width: 100%;
     height: 100%;
-    background: #16213e;
+    background: var(--bg-panel);
     border-radius: 6px;
     cursor: pointer;
 }
@@ -106,34 +101,13 @@ body {
     gap: 10px;
     overflow: hidden;
 }
-#nav-link { font-size: 13px; color: #5588cc; text-decoration: none; }
-#nav-link:hover { text-decoration: underline; }
-
-/* Mode toggle */
-#mode-toggle {
-    display: flex;
-    gap: 0;
-    border-radius: 6px;
-    overflow: hidden;
-    border: 1px solid #1a4080;
-}
-#mode-toggle button {
-    flex: 1;
-    background: #0f3460;
-    color: #aaa;
-    border: none;
-    padding: 6px 0;
-    cursor: pointer;
-    font-size: 13px;
-}
-#mode-toggle button.active { background: #e94560; color: #fff; }
 
 /* Legend */
 #legend {
     font-size: 12px;
     line-height: 1.8;
     padding: 8px;
-    background: #16213e;
+    background: var(--bg-panel);
     border-radius: 6px;
 }
 .legend-row { display: flex; align-items: center; gap: 6px; }
@@ -149,7 +123,7 @@ body {
 #pos-stats {
     font-size: 12px;
     padding: 8px;
-    background: #16213e;
+    background: var(--bg-panel);
     border-radius: 6px;
     line-height: 1.6;
 }
@@ -158,17 +132,17 @@ body {
 #game-list-container {
     flex: 1;
     overflow-y: auto;
-    background: #16213e;
+    background: var(--bg-panel);
     border-radius: 6px;
 }
 #game-list-container h3 {
     padding: 8px;
     font-size: 13px;
-    color: #888;
-    border-bottom: 1px solid #1a4080;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
     position: sticky;
     top: 0;
-    background: #16213e;
+    background: var(--bg-panel);
 }
 .game-item {
     padding: 6px 8px;
@@ -179,23 +153,22 @@ body {
     justify-content: space-between;
 }
 .game-item:hover { background: #1a3050; }
-.game-item.active { background: #1a4080; }
-.game-winner-0 { color: #378ADD; }
-.game-winner-1 { color: #D85A30; }
-.game-winner-draw { color: #888; }
-
-/* Play mode status */
-#play-status {
-    font-size: 13px;
-    padding: 8px;
-    background: #16213e;
-    border-radius: 6px;
-    min-height: 40px;
-    display: none;
-}
+.game-item.active { background: var(--border); }
+.game-winner-0 { color: var(--p0-color); }
+.game-winner-1 { color: var(--p1-color); }
+.game-winner-draw { color: var(--text-muted); }
 </style>
 </head>
 <body>
+
+<nav class="hexo-nav">
+    <span class="nav-brand">HeXO</span>
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/viewer" class="nav-link active">Viewer</a>
+    <a href="/analyze" class="nav-link">Analyzer</a>
+</nav>
+
+<div class="page-root">
 
 <div id="board-panel">
     <canvas id="board-canvas"></canvas>
@@ -219,19 +192,12 @@ body {
 </div>
 
 <div id="sidebar">
-    <a id="nav-link" href="/">&larr; dashboard</a>
-
-    <div id="mode-toggle">
-        <button id="mode-replay" class="active">Replay</button>
-        <button id="mode-play">Play</button>
-    </div>
-
     <div id="legend">
-        <div class="legend-row"><span class="legend-dot" style="background:#378ADD"></span> Player 0 (Blue)</div>
-        <div class="legend-row"><span class="legend-dot" style="background:#D85A30"></span> Player 1 (Coral)</div>
-        <div class="legend-row"><span class="legend-dot" style="background:#639922;border:2px solid #639922"></span> Last placed</div>
-        <div class="legend-row"><span class="legend-dot" style="border:2px dashed #E24B4A;background:transparent"></span> Forced/Critical threat</div>
-        <div class="legend-row"><span class="legend-dot" style="border:2px dashed #EF9F27;background:transparent"></span> Warning threat</div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--p0-color)"></span> P0 (Blue)</div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--p1-color)"></span> P1 (Coral)</div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--last-ring);border:2px solid var(--last-ring)"></span> Last placed</div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--threat-critical)"></span> Critical threat (lvl 5)</div>
+        <div class="legend-row"><span class="legend-dot" style="background:var(--threat-forced)"></span> Forced threat (lvl 4)</div>
     </div>
 
     <div id="pos-stats">
@@ -240,30 +206,27 @@ body {
         <div>Threats: <span id="stat-threats">—</span></div>
     </div>
 
-    <div id="play-status"></div>
-
     <div id="game-list-container">
         <h3>Recent Games</h3>
         <div id="game-list"></div>
     </div>
 </div>
 
+</div><!-- .page-root -->
+
 <script type="module">
 import { HexCanvas } from '/static/hex_canvas.js';
+
+// Viewer: replay only.
+// Play-against-bot lives in /analyze
 
 // ── State ────────────────────────────────────────────────────────────────────
 
 let gameData = null;       // enriched game record from /viewer/game/<id>
 let moveIdx = 0;           // current position index (-1 = before first move)
-let mode = 'replay';       // 'replay' or 'play'
 let playInterval = null;
 let showThreats = true;
 let showHeat = false;
-
-// Play mode state
-let playMoves = [];        // moves played so far in play mode
-let humanPending = null;   // first click coordinate (waiting for second)
-let modelThinking = false;
 
 // ── HexCanvas instance ──────────────────────────────────────────────────────
 
@@ -277,15 +240,6 @@ function parseAxial(s) {
     return m ? [parseInt(m[1]), parseInt(m[2])] : [0, 0];
 }
 
-function getPlayModeState() {
-    let player = 0, remaining = 1;
-    for (let i = 0; i < playMoves.length; i++) {
-        remaining--;
-        if (remaining === 0) { player = 1 - player; remaining = 2; }
-    }
-    return { player, remaining };
-}
-
 // ── Board rendering via HexCanvas ───────────────────────────────────────────
 
 function renderBoard() {
@@ -296,7 +250,7 @@ function renderBoard() {
     canvas.width = rect.width - 24;
     canvas.height = rect.height - sparkH - controlsH - 48;
 
-    if (!gameData && mode === 'replay') {
+    if (!gameData) {
         hex.setBoard([]);
         hex.clearAllOverlays();
         hex._emptyText = 'Select a game from the list';
@@ -307,8 +261,8 @@ function renderBoard() {
 
     // Gather stones up to current position
     const stones = [];
-    const limit = mode === 'play' ? playMoves.length : (moveIdx + 1);
-    const moveList = mode === 'play' ? playMoves : (gameData ? gameData.moves_list || [] : []);
+    const moveList = gameData.moves_list || [];
+    const limit = moveIdx + 1;
 
     let currentPlayer = 0;
     let movesRemaining = 1;
@@ -326,7 +280,7 @@ function renderBoard() {
     hex.clearAllOverlays();
 
     // MCTS heat overlay
-    if (showHeat && mode === 'replay' && gameData && gameData.positions && moveIdx >= 0 && moveIdx < gameData.positions.length) {
+    if (showHeat && gameData.positions && moveIdx >= 0 && moveIdx < gameData.positions.length) {
         const pos = gameData.positions[moveIdx];
         if (pos && pos.top_visits) {
             const maxVisits = Math.max(...pos.top_visits.map(v => v.visits), 1);
@@ -339,22 +293,38 @@ function renderBoard() {
         }
     }
 
-    // Threat overlay
-    if (showThreats && mode === 'replay' && gameData && gameData.positions && moveIdx >= 0 && moveIdx < gameData.positions.length) {
+    // Threats: level>=4 only (forced+critical). Level 3 suppressed.
+    if (showThreats && gameData.positions && moveIdx >= 0 && moveIdx < gameData.positions.length) {
         const pos = gameData.positions[moveIdx];
-        if (pos && pos.threats) {
-            const threatCells = pos.threats.map(t => {
-                const color = t.level >= 4 ? '#E24B4A' : '#EF9F27';
-                return {
+        if (pos && pos.threats && pos.threats.length > 0) {
+            // Dedup: keep highest level per (q,r)
+            const dedupMap = new Map();
+            for (const t of pos.threats) {
+                const key = `${t.q},${t.r}`;
+                const existing = dedupMap.get(key);
+                if (!existing || t.level > existing.level) {
+                    dedupMap.set(key, t);
+                }
+            }
+
+            const threatCells = [];
+            for (const t of dedupMap.values()) {
+                if (t.level < 4) continue;  // filter: level>=4 only
+                const isCritical = t.level >= 5;
+                threatCells.push({
                     q: t.q, r: t.r,
                     circle: true,
-                    circleColor: color,
-                    circleWidth: t.level === 5 ? 3 : 2,
-                    dash: t.level === 5 ? [] : (t.level === 4 ? [] : [4, 3]),
-                    circleFill: t.level === 5 ? 'rgba(226, 75, 74, 0.15)' : undefined,
-                };
-            });
-            hex.setOverlay('threats', threatCells);
+                    circleColor: isCritical ? 'var(--threat-critical)' : 'var(--threat-forced)',
+                    circleWidth: isCritical ? 3 : 2,
+                    dash: [],  // solid circles, no dashes
+                    circleFill: isCritical
+                        ? 'rgba(226, 75, 74, 0.25)'
+                        : 'rgba(239, 159, 39, 0.20)',
+                });
+            }
+            if (threatCells.length > 0) {
+                hex.setOverlay('threats', threatCells);
+            }
         }
     }
 
@@ -362,16 +332,6 @@ function renderBoard() {
     if (stones.length > 0) {
         const lastTwo = stones.slice(-2).map(s => ({ q: s.q, r: s.r, ring: true }));
         hex.setOverlay('last_placed', lastTwo);
-    }
-
-    // Pending human move in play mode
-    if (mode === 'play' && humanPending) {
-        const { player } = getPlayModeState();
-        hex.setOverlay('pending', [{
-            q: humanPending[0], r: humanPending[1],
-            color: player === 0 ? 'rgba(55,138,221,0.5)' : 'rgba(216,90,48,0.5)',
-            opacity: 1.0,
-        }]);
     }
 
     hex.render();
@@ -383,12 +343,12 @@ function updateStats(stones, currentPlayer, movesRemaining) {
         stones.length === 0 ? 'P0 (Blue)' :
         `P${currentPlayer} (${currentPlayer === 0 ? 'Blue' : 'Coral'})`;
 
-    if (mode === 'replay' && gameData && gameData.positions && moveIdx >= 0 && moveIdx < gameData.positions.length) {
+    if (gameData && gameData.positions && moveIdx >= 0 && moveIdx < gameData.positions.length) {
         const pos = gameData.positions[moveIdx];
         document.getElementById('stat-value').textContent =
             pos.value_est != null ? pos.value_est.toFixed(3) : '—';
-        const nThreats = pos.threats ? pos.threats.length : 0;
-        const critical = pos.threats ? pos.threats.filter(t => t.level === 5).length : 0;
+        const nThreats = pos.threats ? pos.threats.filter(t => t.level >= 4).length : 0;
+        const critical = pos.threats ? pos.threats.filter(t => t.level >= 5).length : 0;
         const forced = pos.threats ? pos.threats.filter(t => t.level === 4).length : 0;
         document.getElementById('stat-threats').textContent =
             nThreats === 0 ? 'none' : `${nThreats} (${critical} crit, ${forced} forced)`;
@@ -453,7 +413,7 @@ function renderSparkline() {
     }
     ctx.stroke();
 
-    if (mode === 'replay' && moveIdx >= 0 && moveIdx < values.length) {
+    if (moveIdx >= 0 && moveIdx < values.length) {
         const x = pad + (moveIdx / Math.max(values.length - 1, 1)) * w;
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 1;
@@ -533,7 +493,6 @@ function loadGame(gameId) {
                 }
             }
 
-            if (mode === 'play') switchToReplay();
             renderBoard();
             renderSparkline();
         })
@@ -587,7 +546,7 @@ document.getElementById('scrubber').oninput = function() {
 };
 
 document.getElementById('sparkline-canvas').onclick = function(e) {
-    if (!gameData || mode !== 'replay') return;
+    if (!gameData) return;
     const rect = this.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const total = (gameData.moves_list || []).length;
@@ -606,134 +565,6 @@ document.getElementById('toggle-heat').onchange = function() {
     showHeat = this.checked;
     renderBoard();
 };
-
-// ── Mode switching ───────────────────────────────────────────────────────────
-
-document.getElementById('mode-replay').onclick = () => switchToReplay();
-document.getElementById('mode-play').onclick = () => switchToPlay();
-
-function switchToReplay() {
-    mode = 'replay';
-    document.getElementById('mode-replay').classList.add('active');
-    document.getElementById('mode-play').classList.remove('active');
-    document.getElementById('play-status').style.display = 'none';
-    document.getElementById('controls').style.display = 'flex';
-    humanPending = null;
-    modelThinking = false;
-    renderBoard();
-    renderSparkline();
-}
-
-function switchToPlay() {
-    mode = 'play';
-    document.getElementById('mode-play').classList.add('active');
-    document.getElementById('mode-replay').classList.remove('active');
-    document.getElementById('play-status').style.display = 'block';
-    document.getElementById('controls').style.display = 'none';
-    playMoves = [];
-    humanPending = null;
-    modelThinking = false;
-    updatePlayStatus('Click a hex to place your first stone (P0)');
-    renderBoard();
-}
-
-function updatePlayStatus(msg) {
-    document.getElementById('play-status').textContent = msg;
-}
-
-// ── Board click (play mode) ──────────────────────────────────────────────────
-
-hex.onCellClick(({ q, r, event }) => {
-    if (mode !== 'play' || modelThinking) return;
-
-    const occupied = new Set(playMoves.map(m => {
-        const [mq, mr] = parseAxial(m);
-        return `${mq},${mr}`;
-    }));
-    if (occupied.has(`${q},${r}`)) return;
-
-    const { player, remaining } = getPlayModeState();
-    const isHumanTurn = player === 0;
-    if (!isHumanTurn) return;
-
-    if (remaining === 1 || (playMoves.length === 0)) {
-        if (humanPending) {
-            if (humanPending[0] === q && humanPending[1] === r) return;
-            playMoves.push(`(${humanPending[0]},${humanPending[1]})`);
-            playMoves.push(`(${q},${r})`);
-            humanPending = null;
-            renderBoard();
-            submitPlayMoves();
-        } else {
-            playMoves.push(`(${q},${r})`);
-            humanPending = null;
-            renderBoard();
-            submitPlayMoves();
-        }
-    } else {
-        if (!humanPending) {
-            humanPending = [q, r];
-            updatePlayStatus(`First stone at (${q},${r}). Click second hex.`);
-            renderBoard();
-        } else {
-            if (humanPending[0] === q && humanPending[1] === r) return;
-            playMoves.push(`(${humanPending[0]},${humanPending[1]})`);
-            playMoves.push(`(${q},${r})`);
-            humanPending = null;
-            renderBoard();
-            submitPlayMoves();
-        }
-    }
-});
-
-function submitPlayMoves() {
-    modelThinking = true;
-    updatePlayStatus('Model thinking...');
-
-    fetch('/viewer/play', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            moves_so_far: [],
-            human_moves: playMoves,
-        })
-    })
-    .then(r => {
-        if (r.status === 503) {
-            updatePlayStatus('No model loaded yet (training must complete first)');
-            modelThinking = false;
-            return null;
-        }
-        return r.json();
-    })
-    .then(data => {
-        if (!data) return;
-        if (data.error) {
-            updatePlayStatus('Error: ' + data.error);
-            modelThinking = false;
-            return;
-        }
-        for (const m of (data.moves || [])) {
-            playMoves.push(m);
-        }
-        modelThinking = false;
-        if (data.winner != null) {
-            const w = data.winner === 1 ? 'P0 (Blue)' : data.winner === -1 ? 'P1 (Coral)' : null;
-            if (w) {
-                updatePlayStatus(`Game over! ${w} wins!`);
-            } else {
-                updatePlayStatus('Your turn. Click a hex.');
-            }
-        } else {
-            updatePlayStatus('Your turn. Click a hex.');
-        }
-        renderBoard();
-    })
-    .catch(err => {
-        updatePlayStatus('Network error: ' + err.message);
-        modelThinking = false;
-    });
-}
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
