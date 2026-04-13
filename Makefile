@@ -162,7 +162,10 @@ probe.latest: ## Threat-logit probe against latest checkpoint; PASS/FAIL step-5k
 		--output "reports/probes/latest_$(shell date +%Y%m%d_%H%M%S).md"
 
 .PHONY: probe.fixtures
-probe.fixtures: ## Regenerate fixtures/threat_probe_positions.npz from available game records
+probe.fixtures: ## Regenerate fixtures/threat_probe_positions.npz (WARNING: invalidates bootstrap baseline — commit deliberately)
+	@echo "WARNING: this replaces the committed fixture set and invalidates the bootstrap baseline."
+	@echo "Only run if you intend to rebase the kill criterion. Commit the result explicitly."
+	@read -p "Continue? [y/N] " yn; [ "$$yn" = "y" ] || exit 1
 	$(PY) scripts/generate_threat_probe_fixtures.py \
 		--output fixtures/threat_probe_positions.npz
 
