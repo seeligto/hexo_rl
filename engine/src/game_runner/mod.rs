@@ -63,6 +63,12 @@ pub struct SelfPlayRunner {
     pub(crate) x_wins: Arc<AtomicU64>,
     pub(crate) o_wins: Arc<AtomicU64>,
     pub(crate) draws: Arc<AtomicU64>,
+    /// Positions evicted from the `results` queue by the `results_queue_cap`
+    /// backpressure drop. Always zero under a healthy consumer; any nonzero
+    /// reading means the Rust worker threads outran Python's drain rate and
+    /// the dashboard-visible throughput numbers overstate what actually
+    /// reached the replay buffer. Monotonic since `start()`.
+    pub(crate) positions_dropped: Arc<AtomicU64>,
     /// Per-row training rows produced by self-play.
     /// Tuple: (feat, policy, outcome, plies, combined_aux_u8)
     ///   combined_aux_u8 layout: first TOTAL_CELLS bytes = ownership
@@ -160,6 +166,7 @@ impl SelfPlayRunner {
             x_wins: Arc::new(AtomicU64::new(0)),
             o_wins: Arc::new(AtomicU64::new(0)),
             draws: Arc::new(AtomicU64::new(0)),
+            positions_dropped: Arc::new(AtomicU64::new(0)),
             results: Arc::new(Mutex::new(VecDeque::new())),
             recent_game_results: Arc::new(Mutex::new(VecDeque::new())),
             handles: Arc::new(Mutex::new(Vec::new())),
@@ -277,6 +284,15 @@ impl SelfPlayRunner {
     #[getter]
     pub fn draws(&self) -> u64 {
         self.draws.load(Ordering::Relaxed)
+    }
+
+    /// Positions dropped by `results_queue_cap` backpressure since `start()`.
+    /// Always 0 under a healthy consumer. Any nonzero reading means the
+    /// Rust side outran Python and the throughput numbers overstate what
+    /// actually reached the replay buffer.
+    #[getter]
+    pub fn positions_dropped(&self) -> u64 {
+        self.positions_dropped.load(Ordering::Relaxed)
     }
 
     pub fn get_win_stats(&self) -> (u64, u64, u64) {
