@@ -1911,3 +1911,79 @@ hexo_rl/training/
 - `docs/01_architecture.md` has no Python training stack file listing; no update required.
 
 **Commit:** `refactor(training): extract batch_assembly, loop, aux_decode`
+
+---
+
+## §89 — Threat-logit probe committed as step-5k kill criterion (2026-04-13)
+
+**What.** Two scripts + one test module committed to make the 20-position threat-logit
+probe reproducible as a formal gate for every future sustained run.
+
+### Files added
+
+```
+scripts/probe_threat_logits.py          — CLI + importable probe functions
+scripts/generate_threat_probe_fixtures.py — generate fixtures/threat_probe_positions.npz
+tests/test_probe_threat_logits.py       — shape/dtype/sanity tests (skip if no bootstrap_model.pt)
+fixtures/threat_probe_positions.npz     — 20 curated positions (generated on first run)
+```
+
+### Kill criterion (from §85)
+
+At training step **5000**, run `make probe.latest`. Expected signal that the A1 aux
+alignment fix has landed:
+
+| threshold | condition |
+|-----------|-----------|
+| mean extension-cell threat logit | **> 0** |
+| mean contrast (ext − rand empty) | **≥ +0.38** |
+
+If either condition is missed, the aux fix did not materially land; investigate
+before continuing the run.
+
+### Bootstrap baseline (§85 empirical, bootstrap_model.pt)
+
+| metric | bootstrap_model.pt | ckpt_19500 (pre-A1, bad) |
+|--------|-------------------|--------------------------|
+| threat logit @ extension cell | −0.14 ± 0.74 | −3.25 ± 0.46 |
+| threat logit @ random empty cell | −0.52 ± 0.39 | −5.11 ± 1.40 |
+| contrast (extension − random empty) | **+0.38** | +1.86 (shortcut) |
+
+The ckpt_19500 contrast was _higher_ than bootstrap — the head learned a
+marginal-class shortcut against stale, mis-aligned labels. The +0.38 bootstrap
+contrast is the floor: a healthy trained model should meet or exceed it while
+also pushing the extension-cell logit above 0 (which bootstrap does not yet achieve).
+
+### Fixture schema (fixtures/threat_probe_positions.npz)
+
+```
+states:           (20, 18, 19, 19) float16 — K=0 cluster window tensors
+side_to_move:     (20,) int8              — 1=P1, -1=P2 (current player)
+ext_cell_idx:     (20,) int32             — flat index [0, 361) of open extension cell
+control_cell_idx: (20,) int32             — flat index of empty cell far from stones
+game_phase:       (20,) U8 string         — "early" / "mid" / "late"
+```
+
+Indexing: `flat = wq * 19 + wr` where `wq = q − cq + 9`, `(cq, cr) = centers[0]`
+from `state.to_tensor()` at generation time.
+
+To regenerate from game records: `make probe.fixtures`
+To regenerate synthetically (no game records required): see script `--synthetic` flag.
+
+### Makefile targets added
+
+| target | action |
+|--------|--------|
+| `make probe.bootstrap` | Probe bootstrap_model.pt; write `reports/probes/bootstrap_<ts>.md` |
+| `make probe.latest` | Probe latest checkpoint vs bootstrap baseline; print PASS/FAIL |
+| `make probe.fixtures` | Regenerate fixture NPZ from available game records |
+
+### Exit codes for probe_threat_logits.py
+
+| code | meaning |
+|------|---------|
+| 0 | PASS — both thresholds met |
+| 1 | FAIL — at least one threshold missed |
+| 2 | Error — checkpoint load failed, shape mismatch, missing file |
+
+**Commit:** `feat(eval): commit threat-logit probe as step-5k kill criterion`

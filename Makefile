@@ -142,6 +142,30 @@ pretrain: ## Full bootstrap pretrain (15 epochs)
 	MALLOC_ARENA_MAX=2 $(PY) -m hexo_rl.bootstrap.pretrain --epochs 15
 
 
+# ── Probes ────────────────────────────────────────────────────────────────────
+
+.PHONY: probe.bootstrap
+probe.bootstrap: ## Threat-logit probe against bootstrap_model.pt; writes report to reports/probes/
+	@mkdir -p reports/probes
+	$(PY) scripts/probe_threat_logits.py \
+		--checkpoint checkpoints/bootstrap_model.pt \
+		--output "reports/probes/bootstrap_$(shell date +%Y%m%d_%H%M%S).md"
+
+.PHONY: probe.latest
+probe.latest: ## Threat-logit probe against latest checkpoint; PASS/FAIL step-5k kill criterion
+	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
+	@mkdir -p reports/probes
+	$(PY) scripts/probe_threat_logits.py \
+		--checkpoint "$(CHECKPOINT_LATEST)" \
+		--baseline-checkpoint checkpoints/bootstrap_model.pt \
+		--output "reports/probes/latest_$(shell date +%Y%m%d_%H%M%S).md"
+
+.PHONY: probe.fixtures
+probe.fixtures: ## Regenerate fixtures/threat_probe_positions.npz from available game records
+	$(PY) scripts/generate_threat_probe_fixtures.py \
+		--output fixtures/threat_probe_positions.npz
+
+
 # ── Eval ──────────────────────────────────────────────────────────────────────
 
 .PHONY: eval
