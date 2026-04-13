@@ -686,3 +686,49 @@ def test_completed_q_values_absent_defaults_to_ce(tmp_path: Path):
 
     mock_ce.assert_called_once()
     mock_kl.assert_not_called()
+
+# ── Checkpoint retention policy ───────────────────────────────────────────────
+
+def test_eval_checkpoints_not_pruned(tmp_path: Path):
+    """Eval-step checkpoints survive rotation; rolling window keeps 10 most recent.
+
+    Setup: eval_interval=5000, max_checkpoints_kept=10, checkpoint_interval=500.
+    Simulate 30 checkpoint files at steps 500..15000.
+    Eval steps: 5000, 10000, 15000.
+    Non-eval steps: 27 files — rotation keeps newest 10.
+    """
+    from hexo_rl.training.checkpoints import prune_checkpoints
+
+    eval_interval = 5000
+    max_kept = 10
+    all_steps = list(range(500, 15001, 500))  # 500, 1000, ..., 15000  (30 steps)
+    assert len(all_steps) == 30
+
+    eval_steps = {s for s in all_steps if s % eval_interval == 0}       # {5000, 10000, 15000}
+    rolling_steps = sorted(s for s in all_steps if s not in eval_steps)  # 27 steps
+    expected_rolling = set(rolling_steps[-max_kept:])                    # 10 newest non-eval
+
+    # Create fake checkpoint files.
+    for step in all_steps:
+        (tmp_path / f"checkpoint_{step:08d}.pt").touch()
+
+    predicate = lambda s: s > 0 and s % eval_interval == 0
+    prune_checkpoints(tmp_path, max_kept, preserve_predicate=predicate)
+
+    present = {int(p.stem.split("_")[1]) for p in tmp_path.glob("checkpoint_*.pt")}
+
+    # All eval checkpoints must survive.
+    for step in eval_steps:
+        assert step in present, f"eval checkpoint {step} was pruned"
+
+    # Newest 10 rolling checkpoints must survive.
+    for step in expected_rolling:
+        assert step in present, f"rolling checkpoint {step} (top-10) was pruned"
+
+    # Older rolling checkpoints must be gone.
+    expected_absent = set(rolling_steps[:-max_kept])
+    for step in expected_absent:
+        assert step not in present, f"old rolling checkpoint {step} should have been pruned"
+
+    # Total present = 3 eval + 10 rolling = 13.
+    assert len(present) == len(eval_steps) + max_kept

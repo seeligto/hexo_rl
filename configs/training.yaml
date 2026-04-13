@@ -33,6 +33,7 @@ eta_min: 2e-4
 eval_interval: 5000
 checkpoint_interval: 500
 max_checkpoints_kept: 10
+preserve_eval_checkpoints: true   # never prune checkpoints at eval_interval boundaries
 log_interval: 10        # also controls web-dashboard send frequency
 aux_opp_reply_weight: 0.15
 entropy_reg_weight: 0.01  # policy entropy regularization (KrakenBot-style, prevents policy collapse)

@@ -599,9 +599,16 @@ class Trainer:
             json.dump(self.checkpoint_log, f, indent=2)
 
         # Prune old checkpoints if max_checkpoints_kept is set.
+        # Eval-step checkpoints are exempt from rotation when
+        # preserve_eval_checkpoints=True (default) and eval_interval is set.
+        eval_interval: int = self.config.get("eval_interval", 0)
+        preserve_predicate = None
+        if self.config.get("preserve_eval_checkpoints", True) and eval_interval > 0:
+            preserve_predicate = lambda s: s > 0 and s % eval_interval == 0
         prune_checkpoints(
             self.checkpoint_dir,
             self.config.get("max_checkpoints_kept"),
+            preserve_predicate=preserve_predicate,
         )
 
         log.info(
