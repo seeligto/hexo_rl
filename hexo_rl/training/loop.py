@@ -665,6 +665,7 @@ def _emit_training_events(
         vram_gb=round(float(gpu_monitor.vram_used_gb), 2),
         ownership_loss=round(float(loss_info["ownership_loss"]), 4) if loss_info.get("ownership_loss") is not None else None,
         threat_loss=round(float(loss_info["threat_loss"]), 4) if loss_info.get("threat_loss") is not None else None,
+        aux_loss_rows=int(loss_info.get("aux_loss_rows", 0)),
         batch_fill_pct=round(pool.batch_fill_pct, 1),
         inf_forward_count=pool._inference_server._forward_count,
         inf_total_requests=pool._inference_server._total_requests,
