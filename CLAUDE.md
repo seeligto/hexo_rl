@@ -446,7 +446,14 @@ hexo_rl/
 │   │   └── static/                  ← index.html (dashboard SPA), viewer.html (game viewer SPA)
 │   ├── opening_book/                ← game record parser
 │   ├── selfplay/                    ← inference server, worker pool, policy projection
-│   ├── training/                    ← Trainer, checkpoints, losses
+│   ├── training/                    ← Trainer, losses, checkpoints, and helpers
+│   │   ├── trainer.py               ← Trainer: forward/backward/optim/scheduler/save/load
+│   │   ├── losses.py                ← policy, value, aux, uncertainty loss functions
+│   │   ├── checkpoints.py           ← save/load/prune checkpoint helpers
+│   │   ├── recency_buffer.py        ← Python-side recent-positions ring buffer
+│   │   ├── aux_decode.py            ← u8→fp32 ownership/winning_line decode + mask helper
+│   │   ├── batch_assembly.py        ← pre-alloc buffers, corpus load, mixed-batch concat
+│   │   └── loop.py                  ← run_training_loop: inf model, pool, dashboards, main loop
 │   ├── utils/                       ← config loader, constants
 │   └── viewer/                      ← game viewer engine
 │       └── engine.py                ← ViewerEngine (enrich_game, play_response)
@@ -458,7 +465,7 @@ hexo_rl/
 │   ├── eval.yaml                    ← eval pipeline, SealBot gate
 │   └── corpus.yaml                  ← corpus generation settings
 ├── scripts/
-│   ├── train.py
+│   ├── train.py                     ← CLI + config merge + build core objects → run_training_loop
 │   ├── benchmark.py
 │   ├── eval_vs_sealbot.py
 │   ├── scrape_daily.sh
