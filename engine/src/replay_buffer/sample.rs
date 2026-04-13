@@ -91,7 +91,14 @@ impl ReplayBuffer {
                     candidate = self.weighted_sample_one();
                 }
                 *idx = candidate;
-                seen.insert(self.game_ids[candidate]);
+                // Only real game_ids (not the -1 untagged sentinel) should
+                // enter the dedup set. Inserting -1 here poisoned `seen` so
+                // every subsequent untagged position collided against it and
+                // burned its inner 16-retry budget for nothing.
+                let cgid = self.game_ids[candidate];
+                if cgid != -1 {
+                    seen.insert(cgid);
+                }
             }
             if all_unique { break; }
         }
