@@ -4,30 +4,30 @@ use half::f16;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-pub(crate) const N_PLANES:  usize = 24;
+pub const N_PLANES:  usize = 24;
 /// Number of stone-history + scalar planes (AlphaZero-style): 8 cur + 8 opp + 2 scalar.
 /// Under augmentation they scatter via coordinate permutation only.
-pub(crate) const N_HISTORY_PLANES: usize = 18;
+pub const N_HISTORY_PLANES: usize = 18;
 /// Number of Q13 chain-length planes: 3 hex axes × 2 players. Scatter via
-/// coordinate permutation AND axis-plane remap (see `apply_sym` in sample.rs).
+/// coordinate permutation AND axis-plane remap (see `apply_symmetry_24plane`).
 #[allow(dead_code)]
-pub(crate) const N_CHAIN_PLANES: usize = 6;
+pub const N_CHAIN_PLANES: usize = 6;
 /// First plane index of the chain-length block within the 24-plane layout.
-pub(crate) const CHAIN_PLANE_OFFSET: usize = N_HISTORY_PLANES;
-pub(crate) const BOARD_H:   usize = 19;
-pub(crate) const BOARD_W:   usize = 19;
-pub(crate) const N_CELLS:   usize = BOARD_H * BOARD_W; // 361
-pub(crate) const N_ACTIONS: usize = N_CELLS + 1;       // 362 (pass move at index 361)
-pub(crate) const N_SYMS:    usize = 12;
+pub const CHAIN_PLANE_OFFSET: usize = N_HISTORY_PLANES;
+pub const BOARD_H:   usize = 19;
+pub const BOARD_W:   usize = 19;
+pub const N_CELLS:   usize = BOARD_H * BOARD_W; // 361
+pub const N_ACTIONS: usize = N_CELLS + 1;       // 362 (pass move at index 361)
+pub const N_SYMS:    usize = 12;
 const HALF: i32 = 9; // (BOARD_H - 1) / 2
 
 // State stride per buffer slot (f16 bits)
-pub(crate) const STATE_STRIDE:  usize = N_PLANES * N_CELLS;
-pub(crate) const POLICY_STRIDE: usize = N_ACTIONS;
+pub const STATE_STRIDE:  usize = N_PLANES * N_CELLS;
+pub const POLICY_STRIDE: usize = N_ACTIONS;
 /// Auxiliary spatial target stride per buffer slot (single 19×19 plane, u8 lanes).
 /// Used by ownership and winning_line targets — both share the same shape and
 /// scatter table as a single state plane.
-pub(crate) const AUX_STRIDE:    usize = N_CELLS;
+pub const AUX_STRIDE:    usize = N_CELLS;
 
 // ── Weight schedule ──────────────────────────────────────────────────────────
 
@@ -110,16 +110,16 @@ fn same_axis(a: (i32, i32), b: (i32, i32)) -> bool {
 ///
 /// The 2-plane-per-axis (current/opponent) layout means the real scatter loop
 /// iterates `(axis_perm[s][dst_j], player_off)` pairs for planes 18..23.
-pub(crate) struct SymTables {
-    pub(crate) scatter:   [Vec<(u16, u16)>; N_SYMS],
+pub struct SymTables {
+    pub scatter:   [Vec<(u16, u16)>; N_SYMS],
     /// Per-symmetry axis-plane remap for Q13 chain-length planes 18..23.
     /// `axis_perm[s][dst_j] = src_i` means destination plane for axis j reads
     /// from source plane for axis i under symmetry s.
-    pub(crate) axis_perm: [[usize; 3]; N_SYMS],
+    pub axis_perm: [[usize; 3]; N_SYMS],
 }
 
 impl SymTables {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         // Axial → flat index.  Returns None if the result is out of the 19×19 window.
         let to_flat = |q: i32, r: i32| -> Option<u16> {
             let qi = q + HALF;

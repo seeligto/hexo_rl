@@ -31,7 +31,7 @@ mod moves;
 pub use state::{
     Board, MoveDiff, Player, Cell,
     BOARD_SIZE, HALF, TOTAL_CELLS, HEX_AXES, HEX_DIRS,
-    hex_distance,
+    hex_distance, encode_chain_planes,
 };
 
 // ── Tests ──────────────────────────────────────────────────────────────────────

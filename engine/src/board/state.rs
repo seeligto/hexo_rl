@@ -754,7 +754,7 @@ fn encode_chain_plane_one(
 ///
 /// `cur_mask` and `opp_mask` are `TOTAL_CELLS`-sized f32 masks with 1.0 at
 /// stone positions and 0.0 elsewhere.
-pub(crate) fn encode_chain_planes(
+pub fn encode_chain_planes(
     cur_mask: &[f32],
     opp_mask: &[f32],
     out: &mut [f32],
