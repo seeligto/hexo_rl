@@ -1,16 +1,16 @@
 {
-  "version": 3,
-  "ext_logit_mean": 0.8145801447331905,
-  "ext_logit_std": 0.3890846399417151,
-  "ctrl_logit_mean": 1.898260897397995,
-  "ctrl_logit_std": 0.027526281927552156,
-  "contrast_mean": -1.0836807526648045,
-  "contrast_std": 0.3864010721411226,
+  "version": 4,
+  "ext_logit_mean": 0.21716017015278338,
+  "ext_logit_std": 0.2636959096432536,
+  "ctrl_logit_mean": 1.1537946045398713,
+  "ctrl_logit_std": 0.044932842830473566,
+  "contrast_mean": -0.9366344343870878,
+  "contrast_std": 0.28086760084776635,
   "ext_in_top5_frac": 0.2,
   "ext_in_top5_pct": 20.0,
   "ext_in_top10_frac": 0.2,
   "ext_in_top10_pct": 20.0,
   "n": 20,
   "checkpoint": "bootstrap_model.pt",
-  "generated_at": "2026-04-14T21:18:26.708300+00:00"
+  "generated_at": "2026-04-14T23:19:54.223533+00:00"
 }
