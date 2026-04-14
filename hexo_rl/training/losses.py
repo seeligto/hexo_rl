@@ -88,6 +88,7 @@ def compute_aux_loss(
 def compute_chain_loss(
     chain_pred: torch.Tensor,
     chain_target: torch.Tensor,
+    legal_mask: Optional[torch.Tensor] = None,
     huber_delta: float = 1.0,
 ) -> torch.Tensor:
     """Q13-aux smooth-L1 (Huber) loss on 6 chain-length planes.
@@ -98,21 +99,45 @@ def compute_chain_loss(
                       the input tensor (`input[:, 18:24]`) since the 6 Q13
                       chain-length planes are in the input feature tensor and
                       the head is asked to reproduce them from trunk features.
+        legal_mask:   Optional float mask broadcastable to (B, 6, H, W) with
+                      1.0 where the cell is on the board and its chain value
+                      is meaningful, 0.0 where the loss should be ignored.
+                      Shape (B, 1, H, W) is fine — it will broadcast across the
+                      6 chain planes. When `None`, every cell contributes
+                      equally (reduction="mean"). W2 from the Q13 review: the
+                      original brief described a masked loss; the pre-C13
+                      implementation was unconditional mean.
         huber_delta:  Transition point between L1 and L2 regions of Huber loss.
                       Defaults to 1.0, matching torch's default smooth_l1_loss.
 
     Returns:
-        Scalar mean loss over all cells of all 6 planes.
+        Scalar mean loss over the masked cells (or all cells if `legal_mask`
+        is None).
     """
     # Targets live in [0, 1] after /6.0 normalization, so values are well
     # within the Huber L2 region for typical predictions — behaves like MSE
     # near small errors and L1 for outliers.
-    return torch.nn.functional.smooth_l1_loss(
+    if legal_mask is None:
+        return torch.nn.functional.smooth_l1_loss(
+            chain_pred.float(),
+            chain_target.float(),
+            beta=huber_delta,
+            reduction="mean",
+        )
+
+    per_cell = torch.nn.functional.smooth_l1_loss(
         chain_pred.float(),
         chain_target.float(),
         beta=huber_delta,
-        reduction="mean",
+        reduction="none",
     )
+    mask = legal_mask.float()
+    # Broadcast a (B, 1, H, W) or (B, H, W) mask across the 6 chain planes.
+    if mask.dim() == per_cell.dim() - 1:
+        mask = mask.unsqueeze(1)
+    masked = per_cell * mask
+    denom = mask.sum().clamp_min(1.0) * per_cell.shape[1]  # cells × n_planes
+    return masked.sum() / denom
 
 
 def compute_uncertainty_loss(
