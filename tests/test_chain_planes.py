@@ -250,6 +250,87 @@ def test_multi_axis_intersection():
 
 
 # ---------------------------------------------------------------------------
+# Case 11b — W1: full triple-axis intersection at a single point
+# ---------------------------------------------------------------------------
+def test_triple_axis_intersection_single_point():
+    """All three hex axes run through (0,0). Each axis must independently
+    see its own 3-in-a-row; axes do not leak into each other."""
+    cur, opp = _blank()
+    # axis0 run: (-1,0), (0,0), (1,0)
+    for q in (-1, 0, 1):
+        _set_cur(cur, q, 0)
+    # axis1 run: (0,-1), (0,1) — (0,0) already set
+    _set_cur(cur, 0, -1)
+    _set_cur(cur, 0, 1)
+    # axis2 (1,-1) run: (-1,1), (1,-1) — (0,0) already set
+    _set_cur(cur, -1, 1)
+    _set_cur(cur, 1, -1)
+
+    planes = _compute_chain_planes(cur, opp)
+    # Per-axis count at the intersection must match the axis's own run length.
+    assert _at(planes[AX0_CUR], 0, 0) == 3, "axis0 should see its 3-run"
+    assert _at(planes[AX1_CUR], 0, 0) == 3, "axis1 should see its 3-run"
+    assert _at(planes[AX2_CUR], 0, 0) == 3, "axis2 should see its 3-run"
+    # The flanking cells on each axis must see 3 as well (own stone + 2 aligned).
+    assert _at(planes[AX0_CUR],  1, 0) == 3
+    assert _at(planes[AX0_CUR], -1, 0) == 3
+    assert _at(planes[AX1_CUR],  0, 1) == 3
+    assert _at(planes[AX1_CUR],  0, -1) == 3
+    assert _at(planes[AX2_CUR],  1, -1) == 3
+    assert _at(planes[AX2_CUR], -1,  1) == 3
+
+
+# ---------------------------------------------------------------------------
+# Case 11c — W1: XX.X.XX broken four — runs do NOT combine across a second gap
+# ---------------------------------------------------------------------------
+def test_broken_four_xx_dot_x_dot_xx_axis0():
+    """Layout along axis0: stones at q=0,1, empty at q=2, stone at q=3,
+    empty at q=4, stones at q=5,6.
+
+    Expected semantics (post-placement, runs terminate at first non-own):
+      - Cell q=2 (empty): pos_run walks q=3 (stone), stops at q=4 (empty)
+        → pos_run=1. neg_run walks q=1 (stone), q=0 (stone) → neg_run=2.
+        value = 1 + 1 + 2 = 4.
+      - Cell q=3 (stone): pos_run stops immediately at q=4 (empty) → 0.
+        neg_run stops at q=2 (empty) → 0. value = 1 + 0 + 0 = 1.
+      - Cell q=4 (empty): pos_run walks q=5, q=6 → 2. neg_run walks q=3
+        (stone), stops at q=2 (empty) → 1. value = 1 + 2 + 1 = 4.
+      - Cell q=0 (stone): pos_run walks q=1, stops at q=2 → 1. neg_run
+        stops at q=-1 (empty) → 0. value = 1 + 1 + 0 = 2.
+      - Cell q=1 (stone): pos_run stops at q=2 → 0. neg_run walks q=0 → 1.
+        value = 1 + 0 + 1 = 2.
+      - Cell q=5 (stone): pos_run walks q=6 → 1. neg_run stops at q=4 → 0.
+        value = 1 + 1 + 0 = 2.
+      - Cell q=6 (stone): pos_run stops at q=7 (empty) → 0. neg_run walks
+        q=5 → 1. value = 1 + 0 + 1 = 2.
+
+    Critical correctness: the cell q=4 (empty) must NOT combine both runs
+    across the q=5,6 pair AND walk backwards through the q=3 stone into
+    the q=0,1 pair — that would give 4 or 5 instead of 4. Because the
+    backward walk hits the empty q=2, it stops; only q=3 is reachable.
+    """
+    cur, opp = _blank()
+    for q in (0, 1, 3, 5, 6):
+        _set_cur(cur, q, 0)
+    planes = _compute_chain_planes(cur, opp)
+    p = planes[AX0_CUR]
+
+    expected = {
+        0: 2, 1: 2, 2: 4, 3: 1, 4: 4, 5: 2, 6: 2,
+    }
+    for q, want in expected.items():
+        assert _at(p, q, 0) == want, (
+            f"XX.X.XX axis0 cell q={q}: got {_at(p, q, 0)}, expected {want}"
+        )
+
+    # Opponent plane must be all zero (no opp stones) and other axes at
+    # these cells see value 1 (own stone, no aligned neighbours on that axis).
+    for q in (0, 1, 3, 5, 6):
+        assert _at(planes[AX1_CUR], q, 0) == 1
+        assert _at(planes[AX2_CUR], q, 0) == 1
+
+
+# ---------------------------------------------------------------------------
 # Case 12 — perspective swap: swapping (cur, opp) swaps the plane pairs
 # ---------------------------------------------------------------------------
 def test_perspective_swap():
