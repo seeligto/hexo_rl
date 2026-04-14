@@ -74,3 +74,4 @@ launch_claude.sh
 tmp/sweep_ckpt/
 nohup.out
 checkpoints/saved/
+archive/*.broken*/
