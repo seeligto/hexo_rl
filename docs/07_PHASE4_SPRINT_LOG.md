@@ -2218,6 +2218,14 @@ not block the run. The threat head's global bias shift remains an open
 question; if it persists, investigate whether BCE positive-weight scaling or
 a focal/class-balanced loss reformulation is warranted.
 
+**Open question logged.** The BCE class-imbalance hypothesis is recorded as
+**Q19 [WATCH]** in `docs/06_OPEN_QUESTIONS.md` (winning_line labels are ~1.6%
+positive → `BCEWithLogitsLoss` without `pos_weight` drives logits globally
+negative; proposed fix `pos_weight ≈ 59`, lands on next
+bootstrap-from-scratch run, not mid-run). The C4 warning path defined above
+is the monitoring hook for Q19 — drift > 8 nats, or aux loss > 4.0, or
+policy top-10 regression below bootstrap escalates Q19 from WATCH to HIGH.
+
 **Files touched.**
 
 - `scripts/probe_threat_logits.py` — thresholds, `check_pass`, new `check_warning`, `contrast_floor` helper, baseline v2 writer, top-10 extraction, console summary, markdown report.

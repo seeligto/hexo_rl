@@ -266,6 +266,38 @@ support reveals a bottleneck the §90 diagnosis missed.
 
 ---
 
+### Q19 — Threat-head BCE class imbalance [WATCH]
+
+**Priority:** WATCH (Phase 4.0+)
+**Source:** Sprint log §85, §91; ckpt_00014344 probe 2026-04-14
+
+Probe at step 14344 (§91) shows threat head logits drifted −5.6 nats from
+bootstrap baseline (ext −0.60 → −6.21) while contrast grew 8× (+0.50 → +3.94).
+Dashboard aux loss trends upward across the run. Mechanism: `winning_line`
+labels are ~1.6% positive (6/361 cells per terminal position, 0 for draws).
+`BCEWithLogitsLoss` without `pos_weight` drives all logits strongly negative;
+positive-class loss climbs while negative-class loss drops.
+
+**Effect on training:** currently not hurting. Aux weight 0.1 × 2 heads means
+trunk gradients are dominated by policy + value. Policy head top-10 IS
+improving (65% → 70% vs bootstrap), so trunk is reconciling the signals.
+
+**Proposed fix:** add `pos_weight ≈ 59` (empirical `(1−p)/p`) to threat-head
+BCE. Consider ownership head separately — stone density is 20–40%, likely
+fine without `pos_weight`.
+
+**Prereq for landing:** fresh training restart (not mid-run). Natural
+integration points: after Q2 ablation, or on the next bootstrap-from-scratch
+run.
+
+**Escalation:** WATCH → HIGH if probe drift exceeds 8 nats, or if aux loss
+starts exceeding 4.0, or if policy top-10 regresses below bootstrap.
+
+**Reference:** Sprint log §85 (aux target alignment), §91 (probe revision +
+C4 warning hook).
+
+---
+
 ## Deferred (Phase 5+)
 
 | # | Question | Reason deferred |
