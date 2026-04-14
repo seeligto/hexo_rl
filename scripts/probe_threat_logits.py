@@ -72,7 +72,7 @@ THRESH_EXT_IN_TOP5_PCT: float = 40.0     # extension cell in policy top-5 ≥ 40
 THRESH_EXT_IN_TOP10_PCT: float = 60.0    # extension cell in policy top-10 ≥ 60%
 THRESH_EXT_LOGIT_DRIFT_WARN: float = 5.0  # |Δ ext_logit_mean| > 5.0 → warning only
 
-BASELINE_SCHEMA_VERSION: int = 2
+BASELINE_SCHEMA_VERSION: int = 3
 
 # Canonical baseline file (generated once via --write-baseline).
 BASELINE_JSON_PATH: Path = REPO_ROOT / "fixtures" / "threat_probe_baseline.json"
@@ -170,9 +170,9 @@ def load_positions(npz_path: Path) -> Dict:
         raise ValueError(f"NPZ missing required arrays: {missing}")
 
     states = data["states"]  # (N, 24, 19, 19) float16
-    if states.ndim != 4 or states.shape[1:] != (18, BOARD_SIZE, BOARD_SIZE):
+    if states.ndim != 4 or states.shape[1:] != (24, BOARD_SIZE, BOARD_SIZE):
         raise ValueError(
-            f"states shape {states.shape} — expected (N, 18, {BOARD_SIZE}, {BOARD_SIZE})"
+            f"states shape {states.shape} — expected (N, 24, {BOARD_SIZE}, {BOARD_SIZE})"
         )
 
     # Load cell indices verbatim from NPZ — never regenerate at load time.
@@ -640,7 +640,23 @@ def main() -> None:
                 f"(<{THRESH_EXT_LOGIT_DRIFT_WARN:.1f}) {warn_label}",
                 file=sys.stderr,
             )
-        exit_code = 0 if overall_pass else 1
+        if args.write_baseline:
+            # Baseline-set mode: the PASS/FAIL verdict is diagnostic-only. The
+            # bootstrap's threat_head is untrained (pretrain doesn't feed
+            # winning_line targets), so its contrast is essentially random and
+            # the absolute 0.38 floor doesn't apply — future probes compare
+            # against this recorded baseline, not against an absolute floor.
+            # See sprint §92 for the Q13 landing context.
+            if not overall_pass:
+                print(
+                    "NOTE: running in --write-baseline mode; FAIL verdict is "
+                    "informational only — baseline written as v3 reference for "
+                    "future probes. Exiting 0.",
+                    file=sys.stderr,
+                )
+            exit_code = 0
+        else:
+            exit_code = 0 if overall_pass else 1
 
     except SystemExit:
         raise

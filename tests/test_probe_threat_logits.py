@@ -183,7 +183,7 @@ def test_probe_shapes_and_sanity() -> None:
     positions = _build_synthetic_positions(n=5)
 
     assert positions["states"].ndim == 4
-    assert positions["states"].shape[1:] == (18, BOARD_SIZE, BOARD_SIZE)
+    assert positions["states"].shape[1:] == (24, BOARD_SIZE, BOARD_SIZE)
     assert positions["states"].dtype == np.float16
 
     results = probe_positions(model, positions, device=device)
