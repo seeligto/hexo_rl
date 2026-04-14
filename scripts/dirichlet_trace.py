@@ -110,7 +110,7 @@ def main() -> None:
         fallback_config=combined,
     )
     board_size         = int(trainer.config.get("board_size",         19))
-    in_channels        = int(trainer.config.get("in_channels",        18))
+    in_channels        = int(trainer.config.get("in_channels",        24))
     res_blocks         = int(trainer.config.get("res_blocks",         12))
     filters            = int(trainer.config.get("filters",            128))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio",  4))

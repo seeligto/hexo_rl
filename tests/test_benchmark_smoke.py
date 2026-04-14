@@ -15,7 +15,7 @@ def test_replay_buffer_benchmark_smoke() -> None:
     wl  = np.zeros(361, dtype=np.uint8)
     for _ in range(512):
         replay.push(
-            torch.zeros((18, 19, 19), dtype=torch.float16).numpy(),
+            torch.zeros((24, 19, 19), dtype=torch.float16).numpy(),
             (torch.ones((362,), dtype=torch.float32) / 362.0).numpy(),
             0.0,
             own, wl,
@@ -31,7 +31,7 @@ def test_replay_buffer_benchmark_smoke() -> None:
 def test_worker_pool_benchmark_smoke() -> None:
     """Worker pool benchmark should execute briefly and return throughput stats."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
+    model = HexTacToeNet(board_size=19, in_channels=24, filters=32, res_blocks=2).to(device)
 
     config = {
         "n_simulations": 5,

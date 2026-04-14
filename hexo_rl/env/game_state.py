@@ -184,29 +184,33 @@ class GameState:
         return GameState.from_board(rust_board, history=new_history)
 
     def to_tensor(self) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
-        """Encode the state into K tensors of shape (18, 19, 19) float16.
+        """Encode the state into K tensors of shape (24, 19, 19) float16.
 
-        The 18-plane layout follows AlphaZero's 8-step history encoding:
+        24-plane layout:
 
-          plane  0:    current player's stones at t           (views[k][0])
-          planes 1-7:  current player's stones at t-1 … t-7  (from move_history)
-          plane  8:    opponent's stones at t                 (views[k][1])
-          planes 9-15: opponent's stones at t-1 … t-7        (from move_history)
-          plane 16:    moves_remaining == 2 flag (0.0 or 1.0, broadcast)
-          plane 17:    ply parity (ply % 2, broadcast)
+          plane  0:     current player's stones at t           (views[k][0])
+          planes 1-7:   current player's stones at t-1 … t-7   (from move_history)
+          plane  8:     opponent's stones at t                 (views[k][1])
+          planes 9-15:  opponent's stones at t-1 … t-7         (from move_history)
+          plane 16:     moves_remaining == 2 flag (broadcast)
+          plane 17:     ply parity (ply % 2, broadcast)
+          planes 18-23: Q13 chain-length planes, computed from current-step
+                        stones only (no temporal stacking). Layout
+                        [a0_cur, a0_opp, a1_cur, a1_opp, a2_cur, a2_opp],
+                        /_CHAIN_CAP-normalised so values lie in [0, 1].
 
         Planes for timesteps earlier than the start of the game are zeros.
 
         The Rust self-play loop (game_runner.rs) has no Python history, so it
-        expands 2-plane views to 18 planes via encode_18_planes_to_buffer, leaving
-        history planes as zeros.  Full history is only available on the Python path
-        (worker.py, evaluator.py, pretrain.py) which uses this method.
+        expands 2-plane views to 24 planes via encode_state_to_buffer, leaving
+        history planes as zeros. Full history is only available on the Python
+        path (worker.py, evaluator.py, pretrain.py) which uses this method.
         """
         current_views = self.views
         centers = self.centers
 
         K = len(centers)
-        tensor = np.zeros((K, 18, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+        tensor = np.zeros((K, 24, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
 
         # Scalar planes are identical across all clusters.
         mr_val = np.float16(0.0 if self.moves_remaining == 1 else 1.0)
@@ -218,8 +222,10 @@ class GameState:
 
         for k in range(K):
             # Current timestep
-            tensor[k, 0] = current_views[k][0]
-            tensor[k, 8] = current_views[k][1]
+            cur_stones = current_views[k][0]
+            opp_stones = current_views[k][1]
+            tensor[k, 0] = cur_stones
+            tensor[k, 8] = opp_stones
 
             # Historical timesteps t-1 … t-7 (deque[-1]=most recent, deque[-t]=t steps back)
             for t in range(1, HISTORY_LEN):
@@ -230,6 +236,10 @@ class GameState:
                     tensor[k, t]     = prior.views[k][0]  # prior my-stones
                     tensor[k, 8 + t] = prior.views[k][1]  # prior opp-stones
                 # if the prior state had fewer clusters, leave the planes as zero
+
+            # Q13 chain-length planes — current-step only, no temporal stacking.
+            chain_i8 = _compute_chain_planes(cur_stones, opp_stones)
+            tensor[k, 18:24] = chain_i8.astype(np.float16) / np.float16(_CHAIN_CAP)
 
         return tensor, centers
 

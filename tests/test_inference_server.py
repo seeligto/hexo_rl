@@ -23,7 +23,7 @@ from hexo_rl.selfplay.inference_server import InferenceServer
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-BOARD_CHANNELS = 18
+BOARD_CHANNELS = 24
 BOARD_SIZE     = 19
 N_ACTIONS      = BOARD_SIZE * BOARD_SIZE + 1  # 362
 

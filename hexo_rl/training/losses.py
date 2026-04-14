@@ -85,6 +85,36 @@ def compute_aux_loss(
     return torch.zeros(1, device=device, dtype=torch.float32).squeeze()
 
 
+def compute_chain_loss(
+    chain_pred: torch.Tensor,
+    chain_target: torch.Tensor,
+    huber_delta: float = 1.0,
+) -> torch.Tensor:
+    """Q13-aux smooth-L1 (Huber) loss on 6 chain-length planes.
+
+    Args:
+        chain_pred:   (B, 6, H, W) raw regression outputs from chain_head.
+        chain_target: (B, 6, H, W) target chain planes. Typically a slice of
+                      the input tensor (`input[:, 18:24]`) since the 6 Q13
+                      chain-length planes are in the input feature tensor and
+                      the head is asked to reproduce them from trunk features.
+        huber_delta:  Transition point between L1 and L2 regions of Huber loss.
+                      Defaults to 1.0, matching torch's default smooth_l1_loss.
+
+    Returns:
+        Scalar mean loss over all cells of all 6 planes.
+    """
+    # Targets live in [0, 1] after /6.0 normalization, so values are well
+    # within the Huber L2 region for typical predictions — behaves like MSE
+    # near small errors and L1 for outliers.
+    return torch.nn.functional.smooth_l1_loss(
+        chain_pred.float(),
+        chain_target.float(),
+        beta=huber_delta,
+        reduction="mean",
+    )
+
+
 def compute_uncertainty_loss(
     sigma2: torch.Tensor,
     z_targets: torch.Tensor,
@@ -128,8 +158,10 @@ def compute_total_loss(
     ownership_weight: float = 0.0,
     threat_loss: Optional[torch.Tensor] = None,
     threat_weight: float = 0.0,
+    chain_loss: Optional[torch.Tensor] = None,
+    chain_weight: float = 0.0,
 ) -> torch.Tensor:
-    """Combine policy, value, auxiliary, entropy, uncertainty, ownership, and threat losses."""
+    """Combine policy, value, auxiliary, entropy, uncertainty, ownership, threat, and chain losses."""
     total = policy_loss + value_loss
     if aux_loss is not None and aux_weight > 0.0:
         total = total + aux_weight * aux_loss
@@ -141,6 +173,8 @@ def compute_total_loss(
         total = total + ownership_weight * ownership_loss
     if threat_loss is not None and threat_weight > 0.0:
         total = total + threat_weight * threat_loss
+    if chain_loss is not None and chain_weight > 0.0:
+        total = total + chain_weight * chain_loss
     return total
 
 

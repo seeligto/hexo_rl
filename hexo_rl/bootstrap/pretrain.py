@@ -36,7 +36,7 @@ from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet, compile_model
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_value_loss, compute_aux_loss,
-    compute_total_loss, fp16_backward_step,
+    compute_chain_loss, compute_total_loss, fp16_backward_step,
 )
 from hexo_rl.training.checkpoints import save_full_checkpoint, save_inference_weights
 from hexo_rl.utils.constants import BOARD_SIZE
@@ -139,7 +139,7 @@ class AugmentedBootstrapDataset(torch.utils.data.Dataset):
     """Pretrain dataset with optional 12-fold hex augmentation per sample.
 
     Args:
-        states:   (N, 18, 19, 19) float16 array.
+        states:   (N, 24, 19, 19) float16 array.
         policies: (N, 362) float32 array.
         outcomes: (N,) float32 array, values in {-1, 0, +1}.
         augment:  If True, apply a randomly chosen hex symmetry per sample.
@@ -200,7 +200,7 @@ def load_corpus(
     """Load all corpus games and return flat per-position arrays.
 
     Returns:
-        states:   (M, 18, 19, 19) float16
+        states:   (M, 24, 19, 19) float16
         policies: (M, 362) float32
         outcomes: (M,) float32
         weights:  (M,) float32 — per-position sampling weight
@@ -362,6 +362,7 @@ class BootstrapTrainer:
         loader: torch.utils.data.DataLoader,
         label_smoothing: float = 0.05,
         aux_weight: float = 0.15,
+        chain_weight: float = 0.0,
         step_budget: Optional[int] = None,
         log_interval: int = 50,
     ) -> Dict[str, float]:
@@ -371,15 +372,17 @@ class BootstrapTrainer:
             loader:         DataLoader yielding (states, policies, outcomes).
             label_smoothing: ε for policy targets; 0 disables.
             aux_weight:     Weight for opponent-reply auxiliary loss.
+            chain_weight:   Weight for Q13-aux chain-length head (0 disables it).
             step_budget:    Stop after this many steps (for smoke tests).
 
         Returns:
-            Dict with keys loss, policy_loss, value_loss, opp_reply_loss.
+            Dict with keys loss, policy_loss, value_loss, opp_reply_loss, chain_loss.
         """
         self.model.train()
         total: Dict[str, float] = {
             "loss": 0.0, "policy_loss": 0.0,
             "value_loss": 0.0, "opp_reply_loss": 0.0,
+            "chain_loss": 0.0,
         }
         n_batches = 0
 
@@ -394,18 +397,34 @@ class BootstrapTrainer:
 
             self.optimizer.zero_grad()
 
+            use_chain = chain_weight > 0.0
             with torch.amp.autocast(
                 device_type=self.device.type,
                 dtype=torch.float16,
                 enabled=self.fp16,
             ):
-                log_policy, _value, v_logit, opp_reply = self.model(states, aux=True)
+                fwd = self.model(states, aux=True, chain=use_chain)
+                log_policy, _value, v_logit, opp_reply = fwd[0], fwd[1], fwd[2], fwd[3]
+                chain_pred = fwd[4] if use_chain else None
 
                 policy_valid = policies.sum(dim=1) > 1e-6
                 policy_loss = compute_policy_loss(log_policy, policies, policy_valid, self.device)
                 value_loss = compute_value_loss(v_logit, outcomes)
                 opp_reply_loss = compute_aux_loss(opp_reply, policies, policy_valid, self.device)
-                loss = compute_total_loss(policy_loss, value_loss, opp_reply_loss, aux_weight)
+
+                chain_loss = None
+                if use_chain and chain_pred is not None:
+                    chain_target = states[:, 18:24]
+                    chain_loss = compute_chain_loss(chain_pred, chain_target)
+
+                loss = compute_total_loss(
+                    policy_loss,
+                    value_loss,
+                    opp_reply_loss,
+                    aux_weight,
+                    chain_loss=chain_loss,
+                    chain_weight=chain_weight,
+                )
 
             grad_norm = fp16_backward_step(loss, self.optimizer, self.scaler, self.model, self.fp16)
 
@@ -417,6 +436,8 @@ class BootstrapTrainer:
             total["policy_loss"]    += policy_loss.item()
             total["value_loss"]     += value_loss.item()
             total["opp_reply_loss"] += opp_reply_loss.item()
+            if chain_loss is not None:
+                total["chain_loss"] += chain_loss.item()
             n_batches += 1
 
             if log_interval > 0 and self.step % log_interval == 0:
@@ -496,7 +517,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     cfg = ckpt["config"]
     loaded_model = HexTacToeNet(
         board_size=int(cfg.get("board_size", 19)),
-        in_channels=int(cfg.get("in_channels", 18)),
+        in_channels=int(cfg.get("in_channels", 24)),
         filters=int(cfg.get("filters", 128)),
         res_blocks=int(cfg.get("res_blocks", 12)),
         se_reduction_ratio=int(cfg.get("se_reduction_ratio", 4)),
@@ -674,12 +695,14 @@ def pretrain() -> None:
     )
     trainer.step = -total_pretrain_steps
 
+    chain_weight = float(config.get("aux_chain_weight", 0.0))
     prev_loss: Optional[float] = None
     for epoch in range(1, args.epochs + 1):
         metrics = trainer.train_epoch(
             loader,
             label_smoothing=label_smoothing,
             aux_weight=aux_weight,
+            chain_weight=chain_weight,
             step_budget=step_budget,
         )
         log.info("epoch_complete", epoch=epoch, **{k: round(v, 4) for k, v in metrics.items()})
@@ -688,7 +711,8 @@ def pretrain() -> None:
             f"loss={metrics['loss']:.4f}  "
             f"policy={metrics['policy_loss']:.4f}  "
             f"value={metrics['value_loss']:.4f}  "
-            f"aux={metrics['opp_reply_loss']:.4f}"
+            f"aux={metrics['opp_reply_loss']:.4f}  "
+            f"chain={metrics['chain_loss']:.4f}"
         )
         if step_budget is not None and trainer.step >= step_budget:
             break

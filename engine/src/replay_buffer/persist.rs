@@ -1,9 +1,10 @@
-//! HEXB v2 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
+//! HEXB v3 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
 //! `load_from_path_impl`.
 //!
 //! Format (little-endian native):
 //!   [magic: u32 = 0x48455842]  ("HEXB")
-//!   [version: u32 = 2]
+//!   [version: u32 = 3]
+//!   [n_planes: u32]            (redundant sanity field, must equal N_PLANES)
 //!   [capacity: u64]
 //!   [size: u64]
 //!   For each of `size` positions (oldest → newest):
@@ -15,9 +16,10 @@
 //!     ownership:    AUX_STRIDE × u8   (encoding 0/1/2)
 //!     winning_line: AUX_STRIDE × u8   (binary mask)
 //!
-//! v1 (pre A1 aux refactor) buffers are NOT readable; `load_from_path_impl`
-//! returns a clear error if encountered — the on-disk layout no longer
-//! matches after per-row ownership + winning_line columns were added.
+//! v1 (pre A1 aux refactor) and v2 (pre Q13 chain-plane) buffers are NOT
+//! readable; `load_from_path_impl` returns a clear error if encountered —
+//! v2 used STATE_STRIDE=18×361, v3 uses 24×361, so the on-disk byte layout
+//! differs and silent reinterpretation would corrupt training data.
 
 use std::sync::atomic::Ordering;
 
@@ -28,10 +30,10 @@ use super::sym_tables::*;
 use super::ReplayBuffer;
 
 pub(crate) const HEXB_MAGIC: u32 = 0x4845_5842; // "HEXB"
-pub(crate) const HEXB_VERSION: u32 = 2;
+pub(crate) const HEXB_VERSION: u32 = 3;
 
 impl ReplayBuffer {
-    /// Save buffer contents to a binary file in HEXB v2 format.
+    /// Save buffer contents to a binary file in HEXB v3 format.
     pub(crate) fn save_to_path_impl(&self, path: &str) -> PyResult<()> {
         use std::io::{BufWriter, Write};
 
@@ -43,6 +45,9 @@ impl ReplayBuffer {
         w.write_all(&HEXB_MAGIC.to_le_bytes())
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         w.write_all(&HEXB_VERSION.to_le_bytes())
+            .map_err(|e| PyIOError::new_err(e.to_string()))?;
+        // Redundant plane-count field for v3+ sanity checking.
+        w.write_all(&(N_PLANES as u32).to_le_bytes())
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         w.write_all(&(self.capacity as u64).to_le_bytes())
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
@@ -137,9 +142,21 @@ impl ReplayBuffer {
         let version = u32::from_le_bytes(buf4);
         if version != HEXB_VERSION {
             return Err(PyValueError::new_err(format!(
-                "HEXB version {version} not supported. v1 buffers were invalidated by the A1 \
-                 aux target alignment refactor (per-row ownership + winning_line columns added). \
+                "HEXB version {version} not supported (this build expects v{HEXB_VERSION}). \
+                 v1 was invalidated by the A1 aux target alignment refactor; v2 was \
+                 invalidated by the Q13 chain-length plane addition (18→24 planes). \
                  Regenerate the buffer from self-play."
+            )));
+        }
+
+        // v3+ redundant plane-count sanity check.
+        r.read_exact(&mut buf4)
+            .map_err(|e| PyIOError::new_err(e.to_string()))?;
+        let saved_n_planes = u32::from_le_bytes(buf4) as usize;
+        if saved_n_planes != N_PLANES {
+            return Err(PyValueError::new_err(format!(
+                "HEXB v{HEXB_VERSION} header has n_planes={saved_n_planes}, expected {}",
+                N_PLANES
             )));
         }
 
@@ -245,9 +262,9 @@ mod tests {
     use super::*;
     use half::f16;
 
-    /// HEXB v2 round-trip — verify aux columns survive save/load.
+    /// HEXB v3 round-trip — verify aux columns survive save/load.
     #[test]
-    fn test_aux_hexb_v2_roundtrip() {
+    fn test_aux_hexb_v3_roundtrip() {
         use std::env::temp_dir;
 
         let mut buf = ReplayBuffer::new(8);
@@ -262,7 +279,7 @@ mod tests {
         buf.head = 1;
         buf.size = 1;
 
-        let path = temp_dir().join("aux_v2_roundtrip.hexb");
+        let path = temp_dir().join("aux_v3_roundtrip.hexb");
         buf.save_to_path(path.to_str().unwrap()).unwrap();
 
         let mut buf2 = ReplayBuffer::new(8);

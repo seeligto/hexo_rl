@@ -43,6 +43,19 @@ uncertainty_weight: 0.0   # disabled — Gaussian NLL diverges when σ²→0 cau
 ownership_weight: 0.1     # weight for ownership auxiliary head (spatial MSE); training only
 threat_weight: 0.1        # weight for binary threat auxiliary head (winning-line BCE); training only
 
+# Q13-aux: chain-length prediction auxiliary head, smooth-L1 (Huber) loss on 6 chain planes.
+# Target is the input slice (:, 18:24) from the 24-plane tensor; aux loss forces
+# the trunk to preserve / rediscover chain-counting circuits. Starting at 1.0 (not
+# the 0.10 used for ownership/threat) because the target is /6-normalized so raw
+# smooth-L1 values sit around 0.02 — weight 1.0 gives the head a meaningful
+# gradient share. Retune after pretrain v3 loss curves.
+aux_chain_weight: 1.0
+
+# Q19: positive-class weight for threat-head BCEWithLogitsLoss.
+# Empirical (1-p)/p on winning_line labels (~1.6% positive) ≈ 59. Recomputed
+# from the corpus by scripts/compute_threat_pos_weight.py before pretrain.
+threat_pos_weight: 59.0
+
 game_length_weights:
   # Thresholds are in compound moves (player turns), not plies.
   # Each turn = 2 stones placed (except player 1's opening move).

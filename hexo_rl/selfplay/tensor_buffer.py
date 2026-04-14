@@ -13,7 +13,7 @@ _TOTAL_PLANES = 18
 
 
 class TensorBuffer:
-    """Pre-allocated rolling buffer for assembling the (K, 18, 19, 19) network input.
+    """Pre-allocated rolling buffer for assembling the (K, 24, 19, 19) network input.
 
     On first call (or when K changes), allocates and fills from scratch.
     On subsequent calls with the same K, performs an in-place circular shift
@@ -22,7 +22,7 @@ class TensorBuffer:
     """
 
     def __init__(self) -> None:
-        self._buf: Optional[np.ndarray] = None  # shape (K, 18, 19, 19) float16
+        self._buf: Optional[np.ndarray] = None  # shape (K, 24, 19, 19) float16
         self._K: int = 0
 
     def reset(self) -> None:
@@ -31,7 +31,7 @@ class TensorBuffer:
         self._K = 0
 
     def assemble(self, state: GameState) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
-        """Return the current (K, 18, 19, 19) float16 tensor and cluster centers.
+        """Return the current (K, 24, 19, 19) float16 tensor and cluster centers.
 
         The returned array is owned by this buffer and will be overwritten on
         the next call. Copy individual slices if you need to store them.

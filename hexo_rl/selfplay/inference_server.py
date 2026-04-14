@@ -38,7 +38,7 @@ class InferenceServer(threading.Thread):
         self._max_wait_ms = int(float(sp.get("inference_max_wait_ms", 10.0)))
 
         board_size = int(getattr(model, "board_size", 19))
-        in_channels = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
+        in_channels = int(config.get("in_channels", config.get("model", {}).get("in_channels", 24)))
         self._policy_len = board_size * board_size + 1
         self._feature_len = in_channels * board_size * board_size
         self._shape = (in_channels, board_size, board_size)
