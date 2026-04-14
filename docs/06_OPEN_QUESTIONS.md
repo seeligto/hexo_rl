@@ -7,6 +7,8 @@
 | Q5 | Supervised→self-play transition schedule | Exponential decay 0.8→0.1 over 1M steps; growing buffer + mixed data streams | `a6e5a79` |
 | Q6 | Sequential vs compound action space | Sequential confirmed — 2 MCTS plies per turn, Q-flip at turn boundaries, Dirichlet skipped at intermediate plies | `5be7df7`, `9b899e9` |
 | Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically | — |
+| Q13 | Chain-length planes as input tensor augmentation | 6 chain-length planes added at indices 18..23 (3 hex axes × 2 players, /6-normalised). Includes chain_head auxiliary regression loss (smooth-L1 on `input[:, 18:24]` target). Atomic 18→24 plane break with fresh pretrain v3. See sprint log §92. | `feat/q13-chain-planes` branch |
+| Q19 | Threat-head BCE class imbalance | `pos_weight = 59.0` (theoretical `(1−p)/p` at ~1.6% positive fraction) added to threat-head `BCEWithLogitsLoss`. Landed atomically with Q13 as a fresh bootstrap. `scripts/compute_threat_pos_weight.py` recomputes empirically from a replay buffer when available. §91 C4 monitoring hook stays in place. | `feat/q13-chain-planes` branch §92 |
 
 ## Active (Phase 4.0)
 
@@ -145,8 +147,13 @@ of eval metrics only. Defer until after Phase 4.0 exit criteria are met.
 
 ### Q13 — Chain Length Planes as Input Tensor Augmentation
 
-**Priority:** MEDIUM (Phase 4.5 architectural decision)
-**Source:** KrakenBot chain head analysis, threat theory framework, 2026-04-06
+**RESOLVED 2026-04-14** — sprint log §92. See the "Resolved" table at the
+top of this file. Kept inline here for historical context on the pre-
+landing design discussion.
+
+**Priority (historical):** MEDIUM (Phase 4.5 architectural decision)
+**Source:** KrakenBot chain head analysis, threat theory framework, 2026-04-06,
+plus `reports/literature_review_26_04_24/review.md`.
 
 **Question:** Should we add 6 chain-length planes (per-cell, per-direction unblocked
 run length, 3 hex axes × 2 players) to the input tensor, changing from 18 to 24
@@ -154,17 +161,21 @@ planes? These planes are the spatial substrate of W-values across the board and 
 the network geometric awareness as an inductive bias rather than learning it from
 scratch.
 
-**Implementation path:** Compute in Python `GameState.to_tensor()` — no Rust changes
-required. Pure board dict scan. Fast enough for the hot path.
+**Resolution:** yes. Implemented as a fresh-start bundle with Q19 and a
+new auxiliary `chain_head` regression loss (smooth-L1 on a slice-from-
+input target). The literature review's 1.65× KataGo expectation was
+explicitly downgraded — our aux target is an input slice, not forward
+information — so realistic uplift is 1.1–1.3× on tactical probe
+convergence, not on raw loss magnitude. The wider-window aux variant
+that matches KataGo's structure is parked as Q21.
 
-**Constraints:** Breaking change — requires retrain from scratch, new replay buffer
-layout, new augmentation scatter tables. Must be decided before the next sustained
-training run.
-
-**Experiment design:** Train 18-plane baseline vs 24-plane variant for 500K steps;
-compare tactical accuracy (S0 block rate) and early Elo trajectory.
-
-**Cost:** ~4 GPU-days.
+**Implementation actual:** Python `GameState.to_tensor()` calls a
+module-private numpy-vectorised helper (slicing + zero-pad shifts, NOT
+`np.roll`). Rust self-play path has a parity helper in
+`engine/src/board/state.rs` (`encode_chain_planes`) so the feature
+tensors from both paths are byte-exact. Replay buffer scatter kernel
+remaps plane indices 18..23 through a per-symmetry axis permutation
+table; tested byte-exact against fresh ground-truth recomputation.
 
 ---
 
@@ -266,9 +277,14 @@ support reveals a bottleneck the §90 diagnosis missed.
 
 ---
 
-### Q19 — Threat-head BCE class imbalance [WATCH]
+### Q19 — Threat-head BCE class imbalance
 
-**Priority:** WATCH (Phase 4.0+)
+**RESOLVED 2026-04-14** — sprint log §92. `pos_weight = 59.0` landed
+atomically with Q13 on the fresh pretrain-v3 bootstrap. See the
+"Resolved" table at the top of this file. Historical ticket preserved
+below.
+
+**Priority (historical):** WATCH (Phase 4.0+)
 **Source:** Sprint log §85, §91; ckpt_00014344 probe 2026-04-14
 
 Probe at step 14344 (§91) shows threat head logits drifted −5.6 nats from
@@ -278,23 +294,79 @@ labels are ~1.6% positive (6/361 cells per terminal position, 0 for draws).
 `BCEWithLogitsLoss` without `pos_weight` drives all logits strongly negative;
 positive-class loss climbs while negative-class loss drops.
 
-**Effect on training:** currently not hurting. Aux weight 0.1 × 2 heads means
-trunk gradients are dominated by policy + value. Policy head top-10 IS
+**Effect on training (pre-fix):** not directly hurting. Aux weight 0.1 × 2 heads
+means trunk gradients are dominated by policy + value. Policy head top-10 IS
 improving (65% → 70% vs bootstrap), so trunk is reconciling the signals.
 
-**Proposed fix:** add `pos_weight ≈ 59` (empirical `(1−p)/p`) to threat-head
-BCE. Consider ownership head separately — stone density is 20–40%, likely
-fine without `pos_weight`.
+**Fix as landed:** `pos_weight ≈ 59` (theoretical `(1−p)/p`) added to
+threat-head BCE. Configured via `configs/training.yaml:threat_pos_weight`
+(default 59.0) and cached once per Trainer instance in
+`self._threat_pos_weight`. `scripts/compute_threat_pos_weight.py`
+recomputes empirically from a replay buffer when one exists. Ownership
+head deliberately does NOT receive a pos_weight — stone density is
+20–40%, already balanced.
 
-**Prereq for landing:** fresh training restart (not mid-run). Natural
-integration points: after Q2 ablation, or on the next bootstrap-from-scratch
-run.
+**Prereq for landing (satisfied):** fresh training restart. Bundled with
+Q13 in the fresh bootstrap v3 cycle.
 
-**Escalation:** WATCH → HIGH if probe drift exceeds 8 nats, or if aux loss
-starts exceeding 4.0, or if policy top-10 regresses below bootstrap.
+**Escalation (post-landing):** §91 C4 `abs(Δ ext_logit_mean) < 5.0` warning
+stays active as a drift canary. If it trips on post-fix checkpoints,
+re-open and investigate.
 
 **Reference:** Sprint log §85 (aux target alignment), §91 (probe revision +
-C4 warning hook).
+C4 warning hook), §92 (Q13 + Q13-aux + Q19 atomic landing).
+
+---
+
+### Q21 — Wider-window chain-aux target for forward information injection [PARKED]
+
+**Priority:** LOW (post-baseline research question)
+**Source:** Sprint log §92; literature review §"Recommended encoding specification"
+**Status:** parked after Q13 landing, to be revisited once the 24-plane
+baseline is established.
+
+The current Q13-aux target (`chain_head` smooth-L1 loss) is a slice of
+the INPUT tensor — `states[:, 18:24]`. This gives the network
+regularization and intermediate supervision on a feature we know matters,
+but NOT forward information. The trunk can already see the chain values
+directly in its input, so the head's job is near-identity and the initial
+pretrain-v3 chain_loss drops to ~0.01 within the first epoch (basically
+just a conv-through-residual preservation task).
+
+KataGo's auxiliary targets are FUTURE information (game-end ownership,
+score, etc.) that the network cannot trivially reproduce from the current
+board state. This is where the 1.65× speedup in Wu 2019 Table 2 comes
+from — the auxiliary loss teaches the trunk to build prediction circuits
+for counterfactual information.
+
+**Proposed experiment (Q21).** Compute chain targets on a WIDER window
+than the NN input window. Concrete example: NN sees a 19×19 cluster window;
+chain target is computed on the 25×25 region centred on the same point,
+clipped back to 19×19 at the head output. Now the target values near the
+edges reflect stones that the network CANNOT see — it has to learn to
+extrapolate chain structure from partial information. This matches
+KataGo's structure and would hopefully deliver the "genuine" speedup
+the Q13-aux slice-from-input variant does not.
+
+**Complications:** the wider chain target is no longer derivable from
+the input at training time. Two options:
+- **(a) Store in replay buffer** as a separate spatial target (6 × 361 u8
+  per row, adds ~22% to state size). Requires HEXB v4 with an additional
+  column, migration path, and aux reprojection in self-play game-end.
+- **(b) Compute on-the-fly at push time** by passing the wider chain
+  values from the self-play worker (Python has access to the full board;
+  Rust has the 2-plane cluster view only). Requires a new Rust path that
+  takes a wider window for the aux target while still feeding the NN a
+  19×19 view.
+
+Option (a) is cleaner and matches the existing ownership/winning_line
+pattern. Option (b) avoids buffer-size growth but adds a Rust-side
+geometric computation.
+
+**Prereq:** Q13-aux baseline established (one sustained self-play run
+post-Q13). Measure realistic Q13 uplift before trying the harder variant.
+
+**Cost:** ~3–4 GPU-days (implementation + A/B comparison).
 
 ---
 
