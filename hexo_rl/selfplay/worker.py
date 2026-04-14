@@ -1,19 +1,18 @@
 """
-Single-process self-play worker (Phase 2).
+Single-process self-play helper — only the MCTS + policy-sampling glue used
+by `OurModelBot` for eval/bot play. The full self-play training loop lives
+in Rust (`engine.SelfPlayRunner`) driven from `hexo_rl.selfplay.pool.WorkerPool`;
+this module is NOT on the training data path.
 
-Plays one game at a time using MCTS + the current network. Each game
-position is recorded with its MCTS policy and pushed to the replay buffer
-at game end (once the outcome is known).
-
-Phase 2 additions over Phase 1:
+Phase 2 additions retained:
   - Dirichlet noise at root (self-play only, disabled for evaluation).
   - Temperature scheduling by ply (tau=1.0 early, tau=0.1 late, tau=0 eval).
   - Both controlled by config and a `use_dirichlet` flag.
 
-Usage (via scripts/train.py):
+Usage:
     worker = SelfPlayWorker(model, config, device)
-    n_positions = worker.play_game(replay_buffer)
-    n_positions = worker.play_game(replay_buffer, use_dirichlet=False)  # eval
+    policy = worker._run_mcts(board, use_dirichlet=False)
+    q, r   = worker._sample_action(policy, board.legal_moves(), board)
 """
 
 from __future__ import annotations
@@ -24,12 +23,8 @@ import numpy as np
 import torch
 
 from engine import Board, MCTSTree
-from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
-from hexo_rl.selfplay.policy_projection import project_global_policy_to_local
-from hexo_rl.selfplay.tensor_buffer import TensorBuffer
-from engine import ReplayBuffer
 from hexo_rl.selfplay.utils import BOARD_SIZE, N_ACTIONS, get_temperature  # noqa: F401 (re-exported)
 
 # Backward-compat: callers that do `from hexo_rl.selfplay.worker import get_temperature`
@@ -38,7 +33,7 @@ __all__ = ["SelfPlayWorker", "get_temperature"]
 
 
 class SelfPlayWorker:
-    """Plays self-play games and pushes data to a ReplayBuffer.
+    """MCTS + inference wrapper used by `OurModelBot`.
 
     Args:
         model:   Trained (or random) HexTacToeNet.
@@ -66,7 +61,6 @@ class SelfPlayWorker:
 
         self._engine = LocalInferenceEngine(model, device)
         self.tree    = MCTSTree(c_puct=self.c_puct)
-        self._buf    = TensorBuffer()
 
         # Keep a direct reference for callers that accessed worker.model
         self.model = model
@@ -178,72 +172,3 @@ class SelfPlayWorker:
             probs /= total
         idx = np.random.choice(len(legal_moves), p=probs)
         return legal_moves[idx]
-
-    # ── Game loop ──────────────────────────────────────────────────────────────
-
-    def play_game(
-        self, buffer: "ReplayBuffer", use_dirichlet: bool = True
-    ) -> Tuple[int, Optional[int]]:
-        """Play one complete game and push all positions to `buffer`.
-
-        Args:
-            buffer:        Target replay buffer.
-            use_dirichlet: True for self-play training games.  False for eval.
-
-        Returns:
-            (number of positions added, winner as 1/-1 or None for draw).
-        """
-        rust_board = Board()
-        state      = GameState.from_board(rust_board)
-        self._buf.reset()
-
-        records: List[Tuple[np.ndarray, np.ndarray, int]] = []
-
-        # Playout cap randomization: 90% fast search, 10% deep search.
-        sp_cfg = self.config.get("selfplay", self.config)
-        pc = sp_cfg.get("playout_cap", self.config.get("playout_cap", {}))
-        if "fast_sims_min" not in pc or "fast_sims_max" not in pc:
-            raise ValueError(
-                "playout_cap.fast_sims_min and playout_cap.fast_sims_max must be set "
-                "in selfplay.yaml — no silent defaults (see CLAUDE.md config discipline)"
-            )
-        fast_sims = np.random.randint(int(pc["fast_sims_min"]), int(pc["fast_sims_max"]) + 1)
-
-        while True:
-            if rust_board.check_win() or rust_board.legal_move_count() == 0:
-                break
-
-            current_n_sims = self.n_sims
-            if use_dirichlet and np.random.random() < 0.9:
-                current_n_sims = fast_sims
-
-            mcts_policy = self._run_mcts_with_sims(
-                rust_board, n_sims=current_n_sims, use_dirichlet=use_dirichlet,
-            )
-
-            # _buf.assemble reuses its array in-place; copy each slice before storing.
-            full_tensor, centers = self._buf.assemble(state)
-            global_policy = np.array(mcts_policy, dtype=np.float32)
-            for k, center in enumerate(centers):
-                state_tensor = full_tensor[k].copy()
-                policy_arr   = project_global_policy_to_local(
-                    rust_board, center, global_policy, board_size=BOARD_SIZE,
-                )
-                records.append((state_tensor, policy_arr, state.current_player))
-
-            legal = rust_board.legal_moves()
-            if not legal:
-                break
-            q, r  = self._sample_action(mcts_policy, legal, rust_board)
-            state = state.apply_move(rust_board, q, r)
-
-        winner = rust_board.winner()
-
-        for state_tensor, policy_arr, player in records:
-            if winner is None:
-                outcome = 0.0
-            else:
-                outcome = 1.0 if player == winner else -1.0
-            buffer.push(state_tensor, policy_arr, outcome)
-
-        return len(records), winner

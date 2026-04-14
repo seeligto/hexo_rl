@@ -55,8 +55,6 @@ selfplay:
   playout_cap:
     fast_prob: 0.25
     fast_sims: 64          # scalar used by Rust SelfPlayRunner — floor raised from 50 (A3 fix)
-    fast_sims_min: 64      # Python worker.py randint floor (A3 fix; was hardcoded 15)
-    fast_sims_max: 128     # Python worker.py randint ceiling (A3 fix; was hardcoded 25)
     standard_sims: 200
     temperature_threshold_compound_moves: 15
     temp_min: 0.05       # floor temperature for cosine annealing (0.0 = hard argmax after threshold)
