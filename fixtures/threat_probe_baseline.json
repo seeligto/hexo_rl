@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "ext_logit_mean": -0.5985873519442976,
   "ext_logit_std": 0.9885069950960164,
   "ctrl_logit_mean": -1.100777158141136,
@@ -6,8 +7,10 @@
   "contrast_mean": 0.5021898061968386,
   "contrast_std": 0.9886138478446802,
   "ext_in_top5_frac": 0.5,
+  "ext_in_top5_pct": 50.0,
+  "ext_in_top10_frac": 0.65,
+  "ext_in_top10_pct": 65.0,
   "n": 20,
   "checkpoint": "bootstrap_model.pt",
-  "generated_at": "2026-04-13T18:22:23.083988+00:00",
-  "margin": 1.0
+  "generated_at": "2026-04-14T06:49:34.951028+00:00"
 }
