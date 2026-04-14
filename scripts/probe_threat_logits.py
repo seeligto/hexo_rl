@@ -72,7 +72,7 @@ THRESH_EXT_IN_TOP5_PCT: float = 40.0     # extension cell in policy top-5 ≥ 40
 THRESH_EXT_IN_TOP10_PCT: float = 60.0    # extension cell in policy top-10 ≥ 60%
 THRESH_EXT_LOGIT_DRIFT_WARN: float = 5.0  # |Δ ext_logit_mean| > 5.0 → warning only
 
-BASELINE_SCHEMA_VERSION: int = 3
+BASELINE_SCHEMA_VERSION: int = 4
 
 # Canonical baseline file (generated once via --write-baseline).
 BASELINE_JSON_PATH: Path = REPO_ROOT / "fixtures" / "threat_probe_baseline.json"
