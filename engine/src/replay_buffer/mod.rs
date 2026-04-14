@@ -27,10 +27,10 @@
 //! Each symmetry is stored as a Vec<(u16, u16)> of valid (src_cell, dst_cell) scatter pairs
 //! (cells that map out of the 19×19 window are dropped, matching the Python implementation).
 
-mod sym_tables;
+pub mod sym_tables;
 mod storage;
 mod push;
-mod sample;
+pub mod sample;
 mod persist;
 
 use half::f16;
