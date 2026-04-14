@@ -160,7 +160,7 @@ n_workers: 1
 The split-responsibility architecture is fully in place:
 
 - **Rust workers** (`SelfPlayRunner`) drive MCTS and produce raw 2-plane snapshots + game records.
-- **Python** (`GameState.to_tensor()`, `TensorBuffer`) assembles full 18-plane temporal tensors from `move_history`.
+- **Python** (`GameState.to_tensor()`) assembles full 24-plane temporal tensors from `move_history`; Rust `encode_state_to_buffer` is the equivalent on the self-play hot path.
 - **ReplayBuffer** (Rust) stores, augments, and serves training batches with zero-copy transfer.
 
 ### Tasks
