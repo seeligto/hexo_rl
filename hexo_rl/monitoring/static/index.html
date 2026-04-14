@@ -706,6 +706,9 @@ function onTrainingStep(p) {
     loss_policy:              p.loss_policy,
     loss_value:               p.loss_value,
     loss_aux:                 p.loss_aux,
+    loss_chain:               p.loss_chain ?? null,
+    loss_ownership:           p.loss_ownership ?? null,
+    loss_threat:              p.loss_threat ?? null,
     policy_entropy:           p.policy_entropy,
     policy_entropy_pretrain:  p.policy_entropy_pretrain ?? null,
     policy_entropy_selfplay:  p.policy_entropy_selfplay ?? null,
@@ -756,6 +759,13 @@ function onTrainingStep(p) {
     if (pl != null) {
       parts.push('policy KL ' + pl.toFixed(3));
     } else { parts.push('policy KL \u2014'); }
+    // Q13/Q19 aux heads — render each as "label N.NNN" if emitted.
+    const aux_bits = [];
+    if (p.loss_aux       != null) aux_bits.push('opp '   + p.loss_aux.toFixed(3));
+    if (p.loss_chain     != null) aux_bits.push('chain ' + p.loss_chain.toFixed(3));
+    if (p.loss_ownership != null) aux_bits.push('own '   + p.loss_ownership.toFixed(3));
+    if (p.loss_threat    != null) aux_bits.push('thr '   + p.loss_threat.toFixed(3));
+    if (aux_bits.length) parts.push(aux_bits.join(' \u00b7 '));
     document.getElementById('loss-ratio-strip').textContent = parts.join('  \u2502  ');
   }
 
