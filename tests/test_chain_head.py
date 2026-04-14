@@ -82,6 +82,27 @@ def test_chain_loss_huber_large_error_falls_back_to_l1():
     assert loss.item() == pytest.approx(2.5, abs=1e-5)
 
 
+def test_chain_loss_legal_mask_zeros_masked_cells():
+    """C13/W2: with legal_mask=0 on half the cells, loss must match the
+    unmasked cells only. Uses a (B, 1, H, W) mask broadcast across planes."""
+    pred = torch.zeros(2, 6, 19, 19)
+    target = torch.ones(2, 6, 19, 19)
+    mask = torch.zeros(2, 1, 19, 19)
+    mask[:, :, :10, :] = 1.0  # first 10 rows contribute, rest masked
+    loss = compute_chain_loss(pred, target, legal_mask=mask)
+    # All contributing cells have |err|=1 → smooth_l1(1) = 0.5 (L2 region).
+    assert loss.item() == pytest.approx(0.5, abs=1e-5)
+
+
+def test_chain_loss_legal_mask_all_ones_matches_unmasked():
+    pred = torch.rand(3, 6, 19, 19)
+    target = torch.rand(3, 6, 19, 19)
+    unmasked = compute_chain_loss(pred, target)
+    mask = torch.ones(3, 1, 19, 19)
+    masked = compute_chain_loss(pred, target, legal_mask=mask)
+    assert masked.item() == pytest.approx(unmasked.item(), abs=1e-5)
+
+
 def test_chain_head_gradient_flows_through_trunk():
     """Train-step sanity: chain loss gradient must propagate into trunk weights."""
     net = _tiny_net()
