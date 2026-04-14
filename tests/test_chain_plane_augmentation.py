@@ -9,6 +9,15 @@ landed in C3 (engine/src/replay_buffer/sample.rs). Failure means the 18..23
 plane block is being scattered with the wrong source plane index and training
 data is silently corrupted on augmentation.
 
+## Intentional duplication — do NOT dedupe against the Rust SymTables
+
+`_apply_sym_to_coord` and `_transform_stones` deliberately re-derive the
+12-fold coordinate transform in pure Python. This is the INDEPENDENT ORACLE
+that proves the Rust kernel is doing the right thing. If one side drifts
+from the other, this test catches it. Replacing the Python derivation with
+a call into `engine.apply_symmetry` would remove the oracle and let the
+Rust kernel "validate itself". Keep the two implementations independent.
+
 Test positions use stones near the board origin so every hex symmetry
 transform keeps them in-window — edge-mapping asymmetry would introduce
 unrelated failure modes.
