@@ -10,6 +10,8 @@ from __future__ import annotations
 import math
 from collections import deque
 
+from hexo_rl.utils.coordinates import axial_distance as _axial_distance
+
 
 # Hex axial neighbours (6 directions)
 _HEX_DIRS = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, -1), (-1, 1)]
@@ -45,14 +47,6 @@ def _centroid(component: list[tuple[int, int]]) -> tuple[float, float]:
     sq = sum(q for q, _ in component)
     sr = sum(r for _, r in component)
     return sq / n, sr / n
-
-
-def _axial_distance(a: tuple[float, float], b: tuple[float, float]) -> float:
-    """Axial (hex Manhattan) distance between two points."""
-    dq = abs(a[0] - b[0])
-    dr = abs(a[1] - b[1])
-    ds = abs((a[0] + a[1]) - (b[0] + b[1]))  # s = -q - r
-    return max(dq, dr, ds)
 
 
 def is_colony_win(
