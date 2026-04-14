@@ -474,7 +474,8 @@ class BootstrapTrainer:
                 value_accuracy = (torch.sign(v_logit.squeeze()) == torch.sign(outcomes)).float().mean().item()
                 lr = float(self.optimizer.param_groups[0]["lr"])
 
-                # Emit to dashboard
+                # Emit to dashboard — include loss_chain so the C14 dashboard
+                # rendering surfaces the Q13-aux head during pretrain runs.
                 emit_event({
                     "event": "training_step",
                     "step": self.step,
@@ -482,6 +483,9 @@ class BootstrapTrainer:
                     "loss_policy": float(policy_loss.item()),
                     "loss_value": float(value_loss.item()),
                     "loss_aux": float(opp_reply_loss.item()),
+                    "loss_chain": float(chain_loss.item()) if chain_loss is not None else 0.0,
+                    "loss_ownership": 0.0,
+                    "loss_threat": 0.0,
                     "policy_entropy": policy_entropy,
                     "value_accuracy": value_accuracy,
                     "lr": lr,
