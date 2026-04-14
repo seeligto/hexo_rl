@@ -525,7 +525,9 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     loaded_model.load_state_dict(ckpt["model_state"])
     loaded_model.eval().to(device)
 
-    dummy = torch.zeros(1, 18, BOARD_SIZE, BOARD_SIZE, device=device)
+    dummy = torch.zeros(
+        1, int(cfg.get("in_channels", 24)), BOARD_SIZE, BOARD_SIZE, device=device,
+    )
     with torch.no_grad():
         log_pol, val, v_logit = loaded_model(dummy.float())
     assert log_pol.shape == (1, POLICY_SIZE), f"Unexpected policy shape: {log_pol.shape}"
