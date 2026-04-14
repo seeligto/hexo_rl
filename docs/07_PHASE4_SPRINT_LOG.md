@@ -2565,3 +2565,278 @@ uplift of the slice-from-input variant is measured.
 
 **Plan file:** `/home/timmy/.claude/plans/fancy-petting-tarjan.md` — kept
 after landing for the post-mortem; not checked into the repo.
+
+---
+
+## §93 — Q13 fix-up + F1 root cause + F3 dead code removed + pretrain v3b (2026-04-15)
+
+**What.** Ten-commit fix-up on the `feat/q13-chain-planes` branch:
+C8 extracted the Rust augmentation kernel and exposed it to Python via
+three PyO3 bindings (`apply_symmetry`, `apply_symmetries_batch`,
+`compute_chain_planes`); C9 landed three byte-exact parity guards for
+F1/F2/F3; C9.5 deleted the dead `TensorBuffer` assembler surfaced by the
+F3 guard; C10 routed pretrain augmentation through the Rust kernel
+(eliminating the broken `_apply_hex_sym` path that corrupted chain
+planes in pretrain v3); C11 consolidated four hex coordinate helpers
+into `hexo_rl/utils/coordinates.py` with round-trip tests; C12–C15
+landed the W1–W4 cleanups from the review (broken-four + triple-axis
+test cases, optional `legal_mask` on chain loss, dashboard wiring for
+three aux losses, `encode_planes_to_buffer` rename and 18-plane
+docstring cleanup). C16 regenerated the bootstrap from scratch via
+the corrected pipeline as pretrain v3b, and this entry (C17) records
+the outcome.
+
+**Why.** §92 landed the 24-plane break atomically as C3, and the C6
+pretrain v3 produced a working 24-plane `bootstrap_model.pt` — but the
+`reports/review_q13_q19_landing_26_04_14.md` post-landing audit caught
+F1: `hexo_rl/bootstrap/pretrain.py:55-133::_apply_hex_sym` scattered
+state tensors by pure coordinate permutation, with neither the
+`axis_perm` remap for planes 18..23 nor the `(row=q, col=r)` coordinate
+convention used by `_compute_chain_planes` and the Rust `SymTables`.
+Result: pretrain v3's 15 epochs saw chain planes that contradicted the
+stones in 11 of every 12 augmented samples, and the trunk learned
+whatever cross-axis garbage came out. Phase 4.0 self-play cannot start
+from a bootstrap whose Q13 signal is randomised.
+
+The review also drafted an F3 tensor-buffer parity guard. That guard
+caught real divergence (`TensorBuffer.assemble()` still produced
+(K, 18, 19, 19) post-§92) — but the live-path trace
+(`reports/tensor_buffer_live_path_26_04_15.md`) showed the divergence
+was in *dead code*: `SelfPlayWorker.play_game()` is the only caller and
+no production path reaches it (the live self-play loop is the Rust
+`SelfPlayRunner` via `WorkerPool`). Zero self-play checkpoints were
+corrupted through F3; C9.5 deleted the dead code outright rather than
+rewriting it. "One assembler is better than two."
+
+**Commit sequence.**
+
+- **C8** `refactor(engine): extract apply_symmetry_24plane kernel + PyO3 bridge` —
+  Pulled the inner scatter out of `ReplayBuffer::apply_sym` into a
+  pub generic `apply_symmetry_24plane<T: Copy>` kernel shared with
+  the new bindings. Three new PyO3 entry points on the
+  `engine` module: `apply_symmetry(state, sym_idx)`,
+  `apply_symmetries_batch(states, sym_indices)`,
+  `compute_chain_planes(cur_stones, opp_stones)`. Thread-local
+  `SymTables`; `SymTables` + relevant constants +
+  `encode_chain_planes` raised from `pub(crate)` to `pub`. 131 cargo
+  tests pass; maturin release build clean.
+- **C9** `test(guards): F1 pretrain-aug + F2 chain-plane Rust parity + F4 oracle note` —
+  - `tests/test_pretrain_aug.py` (F1 guard): buffer-vs-binding parity.
+    Push one (24,19,19) state into a fresh ReplayBuffer, draw 4 000
+    augmented samples, and require every unique output to match one
+    of the 12 `engine.apply_symmetry` outputs byte-exact. 3/3 PASS.
+  - `tests/test_chain_plane_rust_parity.py` (F2 guard): Python
+    `_compute_chain_planes` vs Rust `engine.compute_chain_planes`
+    across 21 positions (empty, single stone, open/blocked 3s and 4s,
+    XX.X.XX broken four, triple-axis intersection, window-edge runs
+    on both axes, multi-colony mid-games, near-win five-in-a-row).
+    21/21 PASS.
+  - `tests/test_chain_plane_augmentation.py`: header comment
+    documenting that `_apply_sym_to_coord` / `_transform_stones` are
+    the **intentional independent oracle** for the F4 byte-exact
+    invariance test and must not be dedup'd against the Rust kernel.
+- **C9.5** `chore(selfplay): delete dead TensorBuffer and SelfPlayWorker.play_game` —
+  See the live-path trace in
+  `reports/tensor_buffer_live_path_26_04_15.md`. Deleted
+  `hexo_rl/selfplay/tensor_buffer.py` (entire module),
+  `tests/test_tensor_buffer.py` (vacuous unit tests),
+  `tests/test_fast_sims_config.py` (orphaned — only tested
+  `fast_sims_min`/`max` keys read by the deleted `play_game`), and
+  `tests/test_tensor_buffer_parity.py` (F3 guard retired with the
+  implementation it guarded). `hexo_rl/selfplay/worker.py` now holds
+  the eval-only MCTS wrapper used by `OurModelBot`; all unused imports
+  removed. `configs/selfplay.yaml` lost the `fast_sims_min`/`max`
+  entries; `docs/02_roadmap.md` lost its `TensorBuffer` reference.
+  No live training was affected — all pre-§93 self-play checkpoints
+  were assembled by the Rust path (`in_channels=18` for
+  `checkpoint_00020496.pt`, confirmed by direct inspection).
+- **C10** `feat(pretrain): delete _apply_hex_sym, route through engine.apply_symmetries_batch` —
+  Eliminated `_precompute_hex_syms` / `_apply_hex_sym` /
+  `_HEX_SYMS`. `AugmentedBootstrapDataset` now yields raw triples;
+  a new `make_augmented_collate(augment)` DataLoader collate_fn
+  stacks each batch into float32, draws per-sample sym indices,
+  calls `engine.apply_symmetries_batch` once per batch, scatters the
+  per-row policy via a 12×362 index table (`_get_policy_scatters`),
+  and casts states back to float16. Pretrain `main()` prints a
+  20-batch timing probe at launch so any throughput regression is
+  visible on the console. F1 guard still 3/3 PASS (the collate path
+  is a thin wrapper around the same binding the guard exercises).
+- **C11** `refactor(utils): consolidate hex coordinate helpers + axial_distance (F5+F6)` —
+  New `hexo_rl/utils/coordinates.py` with `flat_to_axial`,
+  `axial_to_flat`, `cell_to_flat`, `axial_distance`. Window-local
+  semantics matching the Rust `SymTables::from_flat` /
+  `to_flat` convention byte-exact. 28 unit tests
+  (`tests/test_coordinates.py`): round-trip on all 361 cells, known
+  (flat, q, r) triples, cell-string parsing, error paths, 10 known
+  hex distances + float centroids. Migrated call sites:
+  `hexo_rl/eval/windowing_diagnostic.py`,
+  `scripts/generate_threat_probe_fixtures.py`,
+  `hexo_rl/eval/colony_detection.py`,
+  `scripts/mcts_depth_probe.py`,
+  `hexo_rl/bootstrap/opening_classifier.py`. Deleted the per-file
+  duplicates.
+- **C12** `test(chain): W1 broken-four XX.X.XX + triple-axis intersection` —
+  Closed the two test-coverage gaps the review flagged in Axis 1.
+  `test_triple_axis_intersection_single_point` asserts 3-in-a-row on
+  every axis at the intersection cell + all 6 flank cells.
+  `test_broken_four_xx_dot_x_dot_xx_axis0` pins per-cell post-placement
+  values for the pattern, with hand-derived expectations verifying
+  that runs stop at the first non-own cell (so the empty cells at q=2
+  and q=4 each see value 4, not 5+).
+- **C13** `fix(loss): add optional legal_mask to compute_chain_loss (W2)` —
+  Reconciles the review brief's "with legal mask" description with
+  the C3 unconditional `smooth_l1_loss(..., reduction='mean')` path.
+  Optional `legal_mask: Optional[torch.Tensor]` kwarg is broadcast
+  across the 6 chain planes and averaged over masked cells × plane
+  count; `None` preserves the pre-C13 behaviour byte-exact. Two new
+  pins in `tests/test_chain_head.py`.
+- **C14** `feat(dashboard): surface loss_chain / loss_ownership / loss_threat (W3)` —
+  The training loop's `training_step` event already carried
+  `loss_chain`, `loss_ownership`, `loss_threat` (see loop.py:611-613)
+  but both renderers only enumerated the pre-§82 set. Terminal
+  dashboard now has three new columns in its loss table; web
+  dashboard's `trainingStepHistory` entries carry the three new
+  fields and the loss-ratio strip appends
+  `opp · chain · own · thr` whenever the bits are non-null. Pretrain's
+  emission now includes `loss_chain` (the chain head IS trained from
+  pretrain) plus explicit zeros for ownership/threat (self-play only).
+- **C15** `chore(naming): encode_planes_to_buffer rename + 18-plane doc cleanup (W4)` —
+  `Board::encode_18_planes_to_buffer` → `encode_planes_to_buffer`;
+  call sites at `game_runner/worker_loop.rs:125,414` updated. The
+  `get_cluster_views` doc comment rewritten to describe the post-Q13
+  24-plane layout, citing the `_compute_chain_planes` Python path and
+  the Rust `encode_chain_planes` helper and the
+  `tests/test_chain_plane_rust_parity.py` byte-exact guard. Inline
+  comment fix in `hexo_rl/env/game_state.py:151` and the
+  tensor-assembly narrative in `docs/01_architecture.md`. Zero
+  behaviour change.
+- **C16** `chore(bootstrap): pretrain v3b + threat_probe_baseline v4` —
+  v3 artifacts archived as `bootstrap_model_v3_broken_aug.pt`
+  (byte-identical to the pre-existing `_v3_broken_aug_manual.pt`).
+  Re-ran `make pretrain` on the same 24-plane corpus NPZ (corpus is
+  valid; only the aug path was broken). See "Pretrain v3b results"
+  below. `make probe.latest` returns exit 0 post-regeneration.
+- **C17** (this entry) `docs(sprint): §93 landing summary`.
+
+**F1 fix verification.** The pre-C10 `_apply_hex_sym` had two bugs:
+(1) no axis_perm remap on planes 18..23, and (2) (col=q, row=r)
+convention in `_precompute_hex_syms` vs (row=q, col=r) in
+`_compute_chain_planes` / Rust `SymTables`. Both are eliminated by
+routing through the Rust `apply_symmetry_24plane<f32>` kernel — the
+exact same kernel the ReplayBuffer uses internally, with its
+`axis_perm` table derived from the actual hex basis transform and
+pinned by `tests/test_chain_plane_augmentation.py` (byte-exact
+invariance under all 12 symmetries).
+
+**Q19 pos_weight path unchanged.** The threat head is not trained
+during pretrain (the corpus carries no `winning_line` targets), so
+`self._threat_pos_weight` is allocated once but has zero effect until
+self-play starts feeding the aux target. Same as §92.
+
+**Pretrain v3b results.**
+
+15 epochs × 779 batches at batch_size=256, total 11 685 steps,
+~39.5 min on the RTX 3070 (00:39:41 start → 01:18:57
+validation_complete). The Rust augmentation path cost ~32.7 ms per
+batch of 256 in isolation (measured via the C10 timing probe); this is
+the end-to-end DataLoader cost including numpy stack, f16↔f32
+conversions, `engine.apply_symmetries_batch`, numpy fancy-indexed
+per-sample policy scatter, and torch tensor construction. The actual
+Rust scatter is sub-ms per batch — the rest is Python↔numpy boundary.
+
+| metric | gate | v3 (broken) | v3b (fixed) | delta |
+|---|---|---|---|---|
+| policy_loss (final)            | ≤ 2.47 | 2.1758 | **2.1758** | 0.00% |
+| value_loss  (final)            | ≤ 0.59 | 0.5021 | **0.4990** | −0.6% |
+| opp_reply_loss (final)         | —      | 2.1879 | **2.1846** | −0.2% |
+| chain_loss (final)             | ≤ 0.01 | 0.0019 | **0.0018** | −5% |
+| model params                   | —      | ~11.21 M | ~11.21 M | — |
+| 100-game RandomBot greedy wins | ≥ 95   | 100/100 | **100/100** | PASS |
+
+Per-epoch chain loss: 0.0090 → 0.0017 → 0.0016 → 0.0017 → 0.0017 →
+0.0017 → 0.0017 → 0.0017 → 0.0017 → 0.0017 → 0.0017 → 0.0018 →
+0.0018 → 0.0018 → 0.0018. Drops into the Q21-parked degenerate
+plateau in a single epoch — same as v3. The aux loss is oblivious
+to whether the input-slice it's reproducing is stones-consistent,
+so the curve shape is near-identical to v3 (both see the same corpus,
+optimiser, seeds). **The win is not in the aux loss scalar.** The
+win is that the 6 per-axis chain planes the trunk consumes are now
+byte-exactly consistent with the stones under every augmentation,
+which was the F1 root cause. That signal either helps the trunk in
+sustained self-play or the Q13 uplift is smaller than the review
+literature projected — Phase 4.0 sustained run is the test.
+
+**Threat-probe baseline v4.** `fixtures/threat_probe_baseline.json`
+regenerated against the new bootstrap; `BASELINE_SCHEMA_VERSION`
+bumped 3 → 4:
+
+```json
+{
+  "version": 4,
+  "ext_logit_mean":  +0.2172,
+  "ctrl_logit_mean": +1.1538,
+  "contrast_mean":   -0.9366,
+  "ext_in_top5_pct":  20.0,
+  "ext_in_top10_pct": 20.0,
+  "checkpoint": "bootstrap_model.pt"
+}
+```
+
+Same untrained-threat-head noise-band as v3 (§92 had contrast=-1.084).
+Not a gate on the bootstrap itself — the §91 C1 relative comparison
+against this baseline kicks in on the first post-self-play probe.
+`probe_threat_logits.py --write-baseline` returns exit 0 by
+construction (see §92 for rationale).
+
+**Archived artifacts.**
+
+- `checkpoints/bootstrap_model_v3_broken_aug.pt` (md5
+  `163649cce89f50a680c987644a705a73`, byte-identical to the pre-existing
+  `_v3_broken_aug_manual.pt` in the checkpoints dir).
+- `data/bootstrap_corpus.npz` unchanged — the corpus was never corrupt;
+  only the aug path was. v3b reuses it directly.
+- Pre-existing `bootstrap_model_18plane.pt` / `_v2_18plane.pt` /
+  `bootstrap_corpus_18plane.npz` / `_v2_18plane.npz` untouched.
+
+**Full report:** `reports/q13_fix_26_04_15.md`.
+
+**Downgraded expectations still apply.** §92's 1.1–1.3× probe
+convergence expectation is an upper bound for the slice-from-input
+aux variant; Q21 (wider-window target) is still parked. Q22
+(chain-plane Rust port, deleting the Python `_compute_chain_planes`
+and its 80 µs-per-call cost) remains parked — the F2 parity guard
+pins the two paths together in the meantime. Q23 (tensor assembler
+consolidation) is **closed** — only `GameState.to_tensor()` +
+`encode_state_to_buffer` remain, and C9.5 ensures no second path
+exists to drift.
+
+**Guards snapshot after C17.**
+
+| Guard | File | Coverage |
+|---|---|---|
+| F1 pretrain aug parity   | `tests/test_pretrain_aug.py`                | 3 positions × 12 syms via 4 000-draw buffer coverage |
+| F2 chain-plane parity    | `tests/test_chain_plane_rust_parity.py`     | 21 hand-picked positions, byte-exact |
+| F4 invariance oracle     | `tests/test_chain_plane_augmentation.py`    | 4 positions × 12 syms, independent Python oracle |
+| Policy loss convergence  | `tests/test_chain_head.py` + existing tests | unchanged |
+
+**Commits.**
+
+- `refactor(engine): extract apply_symmetry_24plane kernel + PyO3 bridge (C8)`
+- `test(guards): add F1 pretrain-aug + F2 chain-plane Rust parity guards (C9)`
+- `chore(selfplay): delete dead TensorBuffer and SelfPlayWorker.play_game (C9.5)`
+- `feat(pretrain): route augmentation through engine.apply_symmetries_batch (C10)`
+- `refactor(utils): consolidate hex coordinate helpers (C11, F5+F6)`
+- `test(chain): W1 broken-four XX.X.XX + triple-axis intersection (C12)`
+- `fix(loss): add optional legal_mask to compute_chain_loss (C13, W2)`
+- `feat(dashboard): surface loss_chain / loss_ownership / loss_threat (C14, W3)`
+- `chore(naming): encode_planes_to_buffer rename + 18-plane doc cleanup (C15, W4)`
+- `chore(bootstrap): pretrain v3b + threat_probe_baseline v4 (C16)`
+- `docs(sprint): §93 landing summary (C17)`
+
+**Reports.**
+
+- `reports/review_q13_q19_landing_26_04_14.md` — original F1-F7/W1-W4 audit.
+- `reports/tensor_buffer_live_path_26_04_15.md` — F3 live-path trace
+  + contamination assessment (zero contaminated checkpoints).
+- `reports/q13_fix_26_04_15.md` — C8–C17 landing summary + pretrain
+  v3b losses + archived artifact hashes.
