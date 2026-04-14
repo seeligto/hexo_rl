@@ -53,15 +53,20 @@ It does **not** return 18 planes because:
 - Encoding 18 planes in Rust and crossing the PyO3 boundary with 6 498 zeros
   per cluster would be a 9× overhead for no gain.
 
-`GameState.to_tensor()` (Python) assembles the final `(18, 19, 19)` tensor by
+`GameState.to_tensor()` (Python) assembles the final `(24, 19, 19)` tensor by
 stacking the current 2-plane snapshot with up to 7 prior snapshots from
-`move_history`. Missing history slots (early in the game) are left as zeros.
+`move_history` and populating planes 18..23 via `_compute_chain_planes`
+(Q13 chain-length planes, 3 hex axes × 2 players). Missing history slots
+(early in the game) are left as zeros.
 
 The **Rust self-play hot-path** (`game_runner/worker_loop.rs`) has no Python history. It
-calls `Board.encode_18_planes_to_buffer()` to expand each 2-plane view to
-18 planes in-place, leaving history planes as zeros. This is a valid
-approximation for the RL warmup phase; full history encoding is available on
-the Python path (worker.py, evaluator.py, pretrain.py).
+calls `Board.encode_planes_to_buffer()` to expand each 2-plane view to
+the full 24-plane layout in-place, leaving history planes as zeros and
+filling planes 18..23 via the Rust `encode_chain_planes` helper (byte-exact
+with the Python path, pinned by `tests/test_chain_plane_rust_parity.py`).
+This is a valid approximation for the RL warmup phase; full history
+encoding is available on the Python path (worker.py, evaluator.py,
+pretrain.py).
 
 ### Turn structure
 
