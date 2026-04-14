@@ -116,7 +116,7 @@ class TestSelfPlayRunnerGumbelConfig:
             leaf_batch_size=1,
             c_puct=1.5,
             fpu_reduction=0.25,
-            feature_len=18 * 19 * 19,
+            feature_len=24 * 19 * 19,
             policy_len=19 * 19 + 1,
             gumbel_mcts=True,
             gumbel_m=8,

@@ -4,7 +4,16 @@ use half::f16;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-pub(crate) const N_PLANES:  usize = 18;
+pub(crate) const N_PLANES:  usize = 24;
+/// Number of stone-history + scalar planes (AlphaZero-style): 8 cur + 8 opp + 2 scalar.
+/// Under augmentation they scatter via coordinate permutation only.
+pub(crate) const N_HISTORY_PLANES: usize = 18;
+/// Number of Q13 chain-length planes: 3 hex axes × 2 players. Scatter via
+/// coordinate permutation AND axis-plane remap (see `apply_sym` in sample.rs).
+#[allow(dead_code)]
+pub(crate) const N_CHAIN_PLANES: usize = 6;
+/// First plane index of the chain-length block within the 24-plane layout.
+pub(crate) const CHAIN_PLANE_OFFSET: usize = N_HISTORY_PLANES;
 pub(crate) const BOARD_H:   usize = 19;
 pub(crate) const BOARD_W:   usize = 19;
 pub(crate) const N_CELLS:   usize = BOARD_H * BOARD_W; // 361
@@ -103,9 +112,9 @@ fn same_axis(a: (i32, i32), b: (i32, i32)) -> bool {
 /// iterates `(axis_perm[s][dst_j], player_off)` pairs for planes 18..23.
 pub(crate) struct SymTables {
     pub(crate) scatter:   [Vec<(u16, u16)>; N_SYMS],
-    /// Per-symmetry axis-plane remap for Q13 chain-length planes. Populated in
-    /// C2, consumed by the plane-aware scatter in C3.
-    #[allow(dead_code)]
+    /// Per-symmetry axis-plane remap for Q13 chain-length planes 18..23.
+    /// `axis_perm[s][dst_j] = src_i` means destination plane for axis j reads
+    /// from source plane for axis i under symmetry s.
     pub(crate) axis_perm: [[usize; 3]; N_SYMS],
 }
 

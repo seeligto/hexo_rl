@@ -113,6 +113,14 @@ impl ReplayBuffer {
     /// (`ownership`, `winning_line`) reuse the same scatter table as state — they live
     /// in the same window coordinate frame, just with u8 lanes.
     ///
+    /// The 24-plane state layout splits into two blocks:
+    /// - Planes 0..18 (`N_HISTORY_PLANES`): stone history + scalar broadcast.
+    ///   Scattered by pure coordinate permutation; plane index unchanged.
+    /// - Planes 18..24 (`N_CHAIN_PLANES`, Q13 chain-length): scattered by
+    ///   coordinate permutation AND plane-axis remap via
+    ///   `tables.axis_perm[sym_idx]`. Each axis is 2 planes (cur, opp) that
+    ///   move together; player offset inside the axis pair is preserved.
+    ///
     /// Loop order — outer = planes, inner = scatter pairs — keeps each 722-byte
     /// plane (361 × u16) resident in L1 cache during the inner scatter pass.
     #[inline]
@@ -130,14 +138,34 @@ impl ReplayBuffer {
     ) {
         let scatter = &tables.scatter[sym_idx];
 
-        // State: for each plane, scatter the 361-cell slice.
-        // Plane stride = N_CELLS = 361 u16 = 722 bytes (fits in a few cache lines).
-        for p in 0..N_PLANES {
+        // Block 1 — planes 0..N_HISTORY_PLANES: pure coordinate scatter.
+        for p in 0..N_HISTORY_PLANES {
             let base = p * N_CELLS;
             let src_plane = &src_state[base..base + N_CELLS];
             let dst_plane = &mut dst_state[base..base + N_CELLS];
             for &(sc, dc) in scatter {
                 dst_plane[dc as usize] = src_plane[sc as usize];
+            }
+        }
+
+        // Block 2 — planes 18..24 (Q13 chain-length): coordinate scatter PLUS
+        // axis-plane remap. `axis_perm[sym_idx][dst_j] = src_i` means the
+        // destination plane for axis j reads its values from the source plane
+        // for axis i. Each axis holds 2 planes (cur, opp) adjacent in memory
+        // so the player offset within the pair is preserved across the remap.
+        let axis_perm = &tables.axis_perm[sym_idx];
+        for dst_axis in 0..3 {
+            let src_axis = axis_perm[dst_axis];
+            for player_off in 0..2 {
+                let src_p = CHAIN_PLANE_OFFSET + 2 * src_axis + player_off;
+                let dst_p = CHAIN_PLANE_OFFSET + 2 * dst_axis + player_off;
+                let src_base = src_p * N_CELLS;
+                let dst_base = dst_p * N_CELLS;
+                let src_plane = &src_state[src_base..src_base + N_CELLS];
+                let dst_plane = &mut dst_state[dst_base..dst_base + N_CELLS];
+                for &(sc, dc) in scatter {
+                    dst_plane[dc as usize] = src_plane[sc as usize];
+                }
             }
         }
 

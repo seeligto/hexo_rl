@@ -71,7 +71,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @dataclass
 class Position:
-    tensor: np.ndarray  # (18, 19, 19) float16 — K=0 slice only
+    tensor: np.ndarray  # (24, 19, 19) float16 — K=0 slice only
     compound_move: int
     game_id: str
     ply: int
@@ -203,7 +203,7 @@ def _load_model(ckpt_path: Path) -> tuple[HexTacToeNet, str]:
     hparams = Trainer._infer_model_hparams(state)
     model = HexTacToeNet(
         board_size=int(hparams.get("board_size", 19)),
-        in_channels=int(hparams.get("in_channels", 18)),
+        in_channels=int(hparams.get("in_channels", 24)),
         filters=int(hparams.get("filters", 128)),
         res_blocks=int(hparams.get("res_blocks", 12)),
     )

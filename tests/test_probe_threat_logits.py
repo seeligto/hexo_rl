@@ -101,7 +101,7 @@ def _build_synthetic_positions(n: int = 5) -> dict:
         if tensor.shape[0] == 0:
             continue
 
-        k0 = tensor[0]  # (18, 19, 19) float16
+        k0 = tensor[0]  # (24, 19, 19) float16
         cq, cr = centers[0]
         current = board.current_player  # should be 1 (P1) after 7 moves
 

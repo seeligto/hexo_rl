@@ -9,11 +9,12 @@
 //!   storage.rs    — resize, dashboard stats, weight schedule, monotonic id
 //!   push.rs       — single-position `push`, batched `push_game`, test-only `push_raw`
 //!   sample.rs     — `sample_batch` entry + weighted-sample + 12-fold apply_sym kernel
-//!   persist.rs    — HEXB v2 save / load
-//!   sym_tables.rs — 12-fold permutation tables, `WeightSchedule`, constants
+//!   persist.rs    — HEXB v3 save / load
+//!   sym_tables.rs — 12-fold permutation tables, axis-plane remap, constants
 //!
 //! ## Memory layout (flat, row-major)
-//!   states       : Vec<u16> — f16 bits, logical shape [capacity, 18, 361]
+//!   states       : Vec<u16> — f16 bits, logical shape [capacity, 24, 361]
+//!                            (18 history/scalar planes + 6 Q13 chain-length planes)
 //!   policies     : Vec<f32> — logical shape [capacity, 362]
 //!   outcomes     : Vec<f32> — logical shape [capacity]
 //!   game_ids     : Vec<i64> — logical shape [capacity]; -1 = untagged
@@ -165,7 +166,7 @@ impl ReplayBuffer {
     /// Sample `batch_size` entries, optionally with 12-fold hex augmentation.
     ///
     /// Returns:
-    ///     states:       float16 numpy array of shape (batch_size, 18, 19, 19)
+    ///     states:       float16 numpy array of shape (batch_size, 24, 19, 19)
     ///     policies:     float32 numpy array of shape (batch_size, 362)
     ///     outcomes:     float32 numpy array of shape (batch_size,)
     ///     ownership:    uint8   numpy array of shape (batch_size, 19, 19)
