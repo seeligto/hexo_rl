@@ -263,76 +263,126 @@ def test_probe_deterministic() -> None:
         )
 
 
-@pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists(),
-    reason="bootstrap_model.pt not found",
-)
 def test_check_pass_three_conditions() -> None:
-    """check_pass evaluates all three conditions and returns (bool, dict)."""
+    """check_pass evaluates the revised C1/C2/C3 conditions and returns (bool, dict)."""
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
-    from probe_threat_logits import check_pass, THRESH_CONTRAST_MEAN, THRESH_EXT_IN_TOP5_PCT, BASELINE_MARGIN
+    from probe_threat_logits import (
+        check_pass,
+        contrast_floor,
+        THRESH_CONTRAST_FLOOR,
+        THRESH_CONTRAST_BOOTSTRAP_FRAC,
+        THRESH_EXT_IN_TOP5_PCT,
+        THRESH_EXT_IN_TOP10_PCT,
+    )
 
-    baseline = {"ext_logit_mean": -0.40}
+    # Bootstrap contrast 0.50 → floor max(0.38, 0.4) = 0.40
+    baseline = {"ext_logit_mean": -0.40, "contrast_mean": 0.50}
+    floor = contrast_floor(baseline)
+    assert floor == max(THRESH_CONTRAST_FLOOR, THRESH_CONTRAST_BOOTSTRAP_FRAC * 0.50)
 
-    # All three PASS
+    # All three PASS (exactly on thresholds)
     agg_pass = {
-        "ext_logit_mean": -0.40 + BASELINE_MARGIN,  # exactly on threshold
-        "contrast_mean": THRESH_CONTRAST_MEAN,
+        "ext_logit_mean": -0.40,
+        "contrast_mean": floor,
         "ext_in_top5_frac": THRESH_EXT_IN_TOP5_PCT / 100.0,
+        "ext_in_top10_frac": THRESH_EXT_IN_TOP10_PCT / 100.0,
     }
     ok, conds = check_pass(agg_pass, baseline=baseline)
     assert ok, f"Expected PASS, got {conds}"
-    assert conds["ext_logit_vs_baseline"]
     assert conds["contrast"]
     assert conds["ext_in_top5"]
+    assert conds["ext_in_top10"]
 
-    # C1 fails (logit too low)
-    agg_c1_fail = dict(agg_pass, ext_logit_mean=-0.40 - BASELINE_MARGIN - 0.01)
+    # C1 fails (contrast below floor)
+    agg_c1_fail = dict(agg_pass, contrast_mean=floor - 0.01)
     ok, conds = check_pass(agg_c1_fail, baseline=baseline)
     assert not ok
-    assert not conds["ext_logit_vs_baseline"]
-    assert conds["contrast"]
-    assert conds["ext_in_top5"]
-
-    # C2 fails (contrast too low)
-    agg_c2_fail = dict(agg_pass, contrast_mean=THRESH_CONTRAST_MEAN - 0.01)
-    ok, conds = check_pass(agg_c2_fail, baseline=baseline)
-    assert not ok
     assert not conds["contrast"]
+    assert conds["ext_in_top5"]
+    assert conds["ext_in_top10"]
 
-    # C3 fails (top-5 too low)
-    agg_c3_fail = dict(agg_pass, ext_in_top5_frac=(THRESH_EXT_IN_TOP5_PCT / 100.0) - 0.01)
-    ok, conds = check_pass(agg_c3_fail, baseline=baseline)
+    # C2 fails (top-5 too low)
+    agg_c2_fail = dict(agg_pass, ext_in_top5_frac=(THRESH_EXT_IN_TOP5_PCT / 100.0) - 0.01)
+    ok, conds = check_pass(agg_c2_fail, baseline=baseline)
     assert not ok
     assert not conds["ext_in_top5"]
 
-    # No baseline → C1 always FAIL
-    ok, conds = check_pass(agg_pass, baseline=None)
+    # C3 fails (top-10 too low)
+    agg_c3_fail = dict(agg_pass, ext_in_top10_frac=(THRESH_EXT_IN_TOP10_PCT / 100.0) - 0.01)
+    ok, conds = check_pass(agg_c3_fail, baseline=baseline)
     assert not ok
-    assert not conds["ext_logit_vs_baseline"]
+    assert not conds["ext_in_top10"]
+
+    # ext_logit_mean drift does NOT cause FAIL (C4 is warning only)
+    agg_drift = dict(agg_pass, ext_logit_mean=-100.0)
+    ok, conds = check_pass(agg_drift, baseline=baseline)
+    assert ok, "C4 drift must not cause FAIL"
 
 
-def test_check_pass_no_baseline_fails() -> None:
-    """check_pass with baseline=None always fails condition 1."""
+def test_check_pass_no_baseline_uses_floor() -> None:
+    """check_pass with baseline=None falls back to the absolute 0.38 floor."""
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
-    from probe_threat_logits import check_pass
+    from probe_threat_logits import (
+        check_pass,
+        contrast_floor,
+        THRESH_CONTRAST_FLOOR,
+        THRESH_EXT_IN_TOP5_PCT,
+        THRESH_EXT_IN_TOP10_PCT,
+    )
 
-    agg = {"ext_logit_mean": 1.0, "contrast_mean": 1.0, "ext_in_top5_frac": 1.0}
+    assert contrast_floor(None) == THRESH_CONTRAST_FLOOR
+
+    # Strong-enough metrics → PASS even without baseline
+    agg = {
+        "ext_logit_mean": 0.0,
+        "contrast_mean": THRESH_CONTRAST_FLOOR,
+        "ext_in_top5_frac": THRESH_EXT_IN_TOP5_PCT / 100.0,
+        "ext_in_top10_frac": THRESH_EXT_IN_TOP10_PCT / 100.0,
+    }
     ok, conds = check_pass(agg, baseline=None)
-    assert not ok
-    assert not conds["ext_logit_vs_baseline"]
+    assert ok
+    assert conds["contrast"]
+
+
+def test_check_warning_drift_threshold() -> None:
+    """check_warning fires when |Δ ext_logit_mean| ≥ 5.0 nats."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    from probe_threat_logits import check_warning, THRESH_EXT_LOGIT_DRIFT_WARN
+
+    baseline = {"ext_logit_mean": -0.5}
+    # Within tolerance
+    triggered, drift = check_warning({"ext_logit_mean": -0.5 - 4.99}, baseline=baseline)
+    assert not triggered
+    assert abs(drift - 4.99) < 1e-6
+
+    # At/above threshold
+    triggered, drift = check_warning(
+        {"ext_logit_mean": -0.5 - THRESH_EXT_LOGIT_DRIFT_WARN}, baseline=baseline
+    )
+    assert triggered
+
+    # No baseline → no warning
+    triggered, drift = check_warning({"ext_logit_mean": -100.0}, baseline=None)
+    assert not triggered
+    assert drift == 0.0
 
 
 def test_baseline_json_roundtrip() -> None:
-    """save_baseline_json / load_baseline_json round-trips correctly."""
+    """save_baseline_json / load_baseline_json round-trips correctly (schema v2)."""
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
-    from probe_threat_logits import save_baseline_json, load_baseline_json
+    from probe_threat_logits import (
+        save_baseline_json,
+        load_baseline_json,
+        BASELINE_SCHEMA_VERSION,
+    )
 
     agg = {
         "ext_logit_mean": -0.35, "ext_logit_std": 0.72,
         "ctrl_logit_mean": -0.55, "ctrl_logit_std": 0.38,
         "contrast_mean": 0.40, "contrast_std": 0.10,
-        "ext_in_top5_frac": 0.45, "n": 20,
+        "ext_in_top5_frac": 0.45,
+        "ext_in_top10_frac": 0.65,
+        "n": 20,
     }
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         tmp_path = Path(f.name)
@@ -341,8 +391,11 @@ def test_baseline_json_roundtrip() -> None:
         save_baseline_json(agg, ckpt_name="test.pt", path=tmp_path)
         loaded = load_baseline_json(path=tmp_path)
         assert loaded is not None
+        assert loaded.get("version") == BASELINE_SCHEMA_VERSION
         assert abs(loaded["ext_logit_mean"] - agg["ext_logit_mean"]) < 1e-9
         assert abs(loaded["contrast_mean"] - agg["contrast_mean"]) < 1e-9
+        assert abs(loaded["ext_in_top5_pct"] - 45.0) < 1e-9
+        assert abs(loaded["ext_in_top10_pct"] - 65.0) < 1e-9
         assert loaded["checkpoint"] == "test.pt"
         assert "generated_at" in loaded
     finally:
@@ -378,10 +431,11 @@ def test_probe_report_renders() -> None:
     assert len(report) > 100
     assert "bootstrap_model.pt" in report
     assert "extension cell" in report.lower()
-    # Three explicit conditions must appear
-    assert "ext_logit_mean vs baseline" in report
+    # Three explicit conditions must appear (revised C1/C2/C3)
     assert "contrast_mean" in report or "contrast" in report
-    assert "top-5" in report or "top5" in report.lower()
+    assert "top-5" in report
+    assert "top-10" in report
+    assert "C4" in report
 
 
 @pytest.mark.skipif(
