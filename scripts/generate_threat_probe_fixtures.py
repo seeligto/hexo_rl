@@ -47,6 +47,7 @@ if str(REPO_ROOT) not in sys.path:
 from engine import Board
 from hexo_rl.env.game_state import GameState, HISTORY_LEN
 from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.utils.coordinates import axial_distance, axial_to_flat
 
 HALF: int = (BOARD_SIZE - 1) // 2  # 9
 
@@ -54,16 +55,12 @@ HALF: int = (BOARD_SIZE - 1) // 2  # 9
 
 
 def hex_dist(q1: int, r1: int, q2: int, r2: int) -> int:
-    return max(abs(q1 - q2), abs(r1 - r2), abs((q1 + r1) - (q2 + r2)))
+    return axial_distance((q1, r1), (q2, r2))
 
 
 def cell_to_flat(q: int, r: int, cq: int, cr: int) -> Optional[int]:
     """Convert axial (q, r) → window flat index given cluster centre (cq, cr)."""
-    wq = q - cq + HALF
-    wr = r - cr + HALF
-    if 0 <= wq < BOARD_SIZE and 0 <= wr < BOARD_SIZE:
-        return wq * BOARD_SIZE + wr
-    return None
+    return axial_to_flat(q - cq, r - cr, BOARD_SIZE)
 
 
 def find_control_cell(

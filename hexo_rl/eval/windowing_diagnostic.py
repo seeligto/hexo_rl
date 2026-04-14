@@ -13,6 +13,12 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from hexo_rl.utils.coordinates import (
+    axial_distance,
+    flat_to_axial as _local_flat_to_axial,
+    axial_to_flat as _local_axial_to_flat,
+)
+
 BOARD_SIZE: int = 19
 HALF: int = (BOARD_SIZE - 1) // 2  # 9
 SENTINEL: int = -32768  # padding value in moves arrays
@@ -21,7 +27,7 @@ SENTINEL: int = -32768  # padding value in moves arrays
 # ── Geometry helpers ───────────────────────────────────────────────────────────
 
 def hex_dist(q1: int, r1: int, q2: int, r2: int) -> int:
-    return (abs(q1 - q2) + abs(q1 + r1 - q2 - r2) + abs(r1 - r2)) // 2
+    return axial_distance((q1, r1), (q2, r2))
 
 
 def cell_in_any_window(q: int, r: int, centers: List[Tuple[int, int]]) -> bool:
@@ -36,18 +42,13 @@ def window_bbox(cq: int, cr: int) -> Tuple[int, int, int, int]:
 
 def flat_to_axial(flat: int, cq: int, cr: int) -> Tuple[int, int]:
     """Convert window-flat index → global axial (q, r) given cluster centre (cq, cr)."""
-    wq = flat // BOARD_SIZE
-    wr = flat % BOARD_SIZE
-    return wq - HALF + cq, wr - HALF + cr
+    q, r = _local_flat_to_axial(flat, BOARD_SIZE)
+    return q + cq, r + cr
 
 
 def axial_to_flat(q: int, r: int, cq: int, cr: int) -> Optional[int]:
     """Global axial (q, r) → window-flat index. None if outside window."""
-    wq = q - cq + HALF
-    wr = r - cr + HALF
-    if 0 <= wq < BOARD_SIZE and 0 <= wr < BOARD_SIZE:
-        return wq * BOARD_SIZE + wr
-    return None
+    return _local_axial_to_flat(q - cq, r - cr, BOARD_SIZE)
 
 
 # ── Board replay ───────────────────────────────────────────────────────────────
