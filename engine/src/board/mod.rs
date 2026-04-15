@@ -31,7 +31,7 @@ mod moves;
 pub use state::{
     Board, MoveDiff, Player, Cell,
     BOARD_SIZE, HALF, TOTAL_CELLS, HEX_AXES, HEX_DIRS,
-    hex_distance,
+    hex_distance, encode_chain_planes,
 };
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -208,12 +208,13 @@ mod tests {
     // ── New sliding-window tests ───────────────────────────────────────────────
 
     #[test]
-    // Tests the Rust hot-path `to_planes()` method (single-window, 18-plane encoding).
+    // Tests the Rust hot-path `to_planes()` method (single-window, 24-plane encoding:
+    // 18 AlphaZero history/scalar planes + 6 Q13 chain-length planes).
     // This is NOT the Python-side split-responsibility path (get_cluster_views returns 2 planes).
     fn to_planes_empty_board_all_zeros() {
         let b = Board::new();
         let planes = b.to_planes();
-        assert_eq!(planes.len(), 18 * TOTAL_CELLS);
+        assert_eq!(planes.len(), 24 * TOTAL_CELLS);
         assert!(planes.iter().all(|x| *x == 0.0), "empty board planes must be all zero");
     }
 

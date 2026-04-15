@@ -83,6 +83,9 @@ class TerminalDashboard:
             "loss_policy": None,
             "loss_value": None,
             "loss_aux": None,
+            "loss_chain": None,
+            "loss_ownership": None,
+            "loss_threat": None,
             "policy_entropy": None,
             "policy_entropy_pretrain": None,
             "policy_entropy_selfplay": None,
@@ -162,7 +165,8 @@ class TerminalDashboard:
         if event == "training_step":
             for key in (
                 "step", "loss_total", "loss_policy", "loss_value",
-                "loss_aux", "policy_entropy", "policy_entropy_pretrain",
+                "loss_aux", "loss_chain", "loss_ownership", "loss_threat",
+                "policy_entropy", "policy_entropy_pretrain",
                 "policy_entropy_selfplay", "policy_target_entropy",
                 "lr", "grad_norm",
             ):
@@ -281,7 +285,7 @@ class TerminalDashboard:
 
         # Loss row
         loss_tbl = Table(show_header=True, box=None, padding=(0, 2), expand=True)
-        for label in ("loss", "policy", "value", "aux", "entropy", "lr"):
+        for label in ("loss", "policy", "value", "aux", "chain", "own", "thr", "entropy", "lr"):
             loss_tbl.add_column(label, justify="center")
         lr_str = _EM_DASH if s["lr"] is None else f"{s['lr']:.0e}"
 
@@ -312,6 +316,9 @@ class TerminalDashboard:
             _fmt_loss(s["loss_policy"]),
             val_str,
             _fmt_loss(s["loss_aux"]),
+            _fmt_loss(s["loss_chain"]),
+            _fmt_loss(s["loss_ownership"]),
+            _fmt_loss(s["loss_threat"]),
             ent_str,
             lr_str,
         )

@@ -6,10 +6,12 @@ set -euo pipefail
 
 # ── Release artifact constants ─────────────────────────────────────────────────
 RELEASE_REPO="seeligto/hexo_rl"
-RELEASE_TAG="v0.1-bootstrap"
+RELEASE_TAG="v0.4.0"
 RELEASE_BASE_URL="https://github.com/$RELEASE_REPO/releases/download/$RELEASE_TAG"
-BOOTSTRAP_MODEL_SHA256="01862660e4850a517f45f359db5763975341e7dd35c67f593ab21f38a73a9670"
-BOOTSTRAP_CORPUS_SHA256="678079c12c65209af1d9ce9969da0455b4c16ccee353ca214c336943758309aa"
+# v0.4.0 — 24-plane Q13 chain-length bootstrap (see docs/releases/v0.4.0.md)
+BOOTSTRAP_MODEL_SHA256="06271362daa257be11a7be16c87fee592fbcf04b3c3a647c0bbcd4d54bf607ab"
+BOOTSTRAP_CORPUS_SHA256="c9087b09b3db529702f3177afb450e0cc9cb3bb239758f9ec405a3031dd58790"
+THREAT_PROBE_BASELINE_SHA256="79b99f3f127fe1834e177c17af4fc83d2da91201317175d2a7f34c2c604be155"
 
 TOTAL_STEPS=10
 
@@ -214,6 +216,8 @@ if [[ -d "vendor/bots/sealbot/current" ]]; then
 fi
 
 # ── [9/10] Download release artifacts ────────────────────────────────────────
+# Large binaries not tracked in git. fixtures/threat_probe_baseline.json is
+# committed alongside the pretrained bootstrap and does NOT need a download.
 step 9 "Downloading release artifacts..."
 mkdir -p checkpoints data
 
@@ -226,6 +230,19 @@ download_and_verify \
     "$RELEASE_BASE_URL/bootstrap_corpus.npz" \
     "data/bootstrap_corpus.npz" \
     "$BOOTSTRAP_CORPUS_SHA256"
+
+# Sanity check: the git-tracked threat_probe_baseline.json must match the
+# release build so make probe.bootstrap produces deterministic v4 output.
+if [[ -f fixtures/threat_probe_baseline.json ]]; then
+    actual="$(sha256 fixtures/threat_probe_baseline.json)"
+    if [[ "$actual" == "$THREAT_PROBE_BASELINE_SHA256" ]]; then
+        ok "threat_probe_baseline.json [git-tracked]"
+    else
+        warn "threat_probe_baseline.json hash mismatch (got $actual)"
+        warn "  expected: $THREAT_PROBE_BASELINE_SHA256"
+        warn "  this is fatal only if you need deterministic §91 C1 gating"
+    fi
+fi
 
 # ── [10/10] Smoke tests ───────────────────────────────────────────────────────
 step 10 "Running smoke tests..."

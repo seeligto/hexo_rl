@@ -13,7 +13,7 @@ import torch
 
 from engine import ReplayBuffer
 
-CHANNELS = 18
+CHANNELS = 24
 BOARD_SIZE = 19
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1  # 362
 

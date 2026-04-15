@@ -40,7 +40,7 @@ def fill_buffer(size: int = 32) -> ReplayBuffer:
     own = np.ones(361, dtype=np.uint8)
     wl  = np.zeros(361, dtype=np.uint8)
     for _ in range(size):
-        state   = rng.random((18, 19, 19), dtype=np.float32).astype(np.float16)
+        state   = rng.random((24, 19, 19), dtype=np.float32).astype(np.float16)
         policy  = rng.dirichlet(np.ones(362)).astype(np.float32)
         outcome = float(rng.choice([-1.0, 0.0, 1.0]))
         buf.push(state, policy, outcome, own, wl)
@@ -158,7 +158,7 @@ def test_checkpoint_round_trip(tmp_path: Path):
     assert ckpt_path.exists()
 
     # Record model outputs before reload.
-    x = torch.zeros(1, 18, 19, 19, device=trainer.device)
+    x = torch.zeros(1, 24, 19, 19, device=trainer.device)
     trainer.model.eval()
     with torch.no_grad():
         log_p_before, v_before, _ = trainer.model(x)
@@ -167,7 +167,7 @@ def test_checkpoint_round_trip(tmp_path: Path):
     restored = Trainer.load_checkpoint(ckpt_path, checkpoint_dir=tmp_path)
     assert restored.step == 5
 
-    x_r = torch.zeros(1, 18, 19, 19, device=restored.device)
+    x_r = torch.zeros(1, 24, 19, 19, device=restored.device)
     restored.model.eval()
     with torch.no_grad():
         log_p_after, v_after, _ = restored.model(x_r)
@@ -281,7 +281,7 @@ def test_normalize_state_dict_adds_tower_aliases():
 
 
 def test_load_weights_only_checkpoint_infers_architecture(tmp_path: Path):
-    base = HexTacToeNet(board_size=9, in_channels=18, res_blocks=2, filters=32)
+    base = HexTacToeNet(board_size=9, in_channels=24, res_blocks=2, filters=32)
     base_state = base.state_dict()
 
     # Simulate a bootstrap-style checkpoint that only has trunk.* keys.
@@ -299,7 +299,7 @@ def test_load_weights_only_checkpoint_infers_architecture(tmp_path: Path):
         "board_size": 19,
         "res_blocks": 1,
         "filters": 16,
-        "in_channels": 18,
+        "in_channels": 24,
         "batch_size": 8,
         "lr": 2e-3,
         "weight_decay": 1e-4,
@@ -434,7 +434,7 @@ def make_recent_buffer(capacity: int = 64) -> RecentBuffer:
     rng = np.random.default_rng(1)
     for _ in range(capacity // 2):
         buf.push(
-            rng.random((18, 19, 19), dtype=np.float32).astype(np.float16),
+            rng.random((24, 19, 19), dtype=np.float32).astype(np.float16),
             rng.dirichlet(np.ones(362)).astype(np.float32),
             float(rng.choice([-1.0, 1.0])),
         )
@@ -446,7 +446,7 @@ def test_recent_buffer_size_tracks_pushes():
     assert buf.size == 0
     rng = np.random.default_rng(0)
     for i in range(7):
-        buf.push(np.zeros((18, 19, 19), dtype=np.float16),
+        buf.push(np.zeros((24, 19, 19), dtype=np.float16),
                  np.ones(362, dtype=np.float32) / 362, 1.0)
         assert buf.size == i + 1
 
@@ -454,7 +454,7 @@ def test_recent_buffer_size_tracks_pushes():
 def test_recent_buffer_caps_at_capacity():
     buf = RecentBuffer(capacity=4)
     for _ in range(10):
-        buf.push(np.zeros((18, 19, 19), dtype=np.float16),
+        buf.push(np.zeros((24, 19, 19), dtype=np.float16),
                  np.ones(362, dtype=np.float32) / 362, 0.0)
     assert buf.size == 4
 
@@ -462,7 +462,7 @@ def test_recent_buffer_caps_at_capacity():
 def test_recent_buffer_sample_shapes():
     buf = make_recent_buffer(capacity=32)
     states, policies, outcomes, ownership, winning_line = buf.sample(8)
-    assert states.shape       == (8, 18, 19, 19)
+    assert states.shape       == (8, 24, 19, 19)
     assert policies.shape     == (8, 362)
     assert outcomes.shape     == (8,)
     assert ownership.shape    == (8, 361)

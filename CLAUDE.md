@@ -589,6 +589,11 @@ Resolved before Phase 4.0 launch:
 - [x] Open Question 6: sequential vs compound action space
 - [x] Open Question 5: supervised→self-play transition schedule
 - [ ] Open Question 2: value aggregation strategy (min/mean/attention)
+- [x] Q19: threat-head BCE class imbalance — `threat_pos_weight` applied in Trainer (`pos_weight ≈ 59`); shipped in `v0.4.0` (see `docs/06_OPEN_QUESTIONS.md` Q19, sprint log §85 / §91)
+
+Active Phase 4.0+ open questions:
+
+- None currently tracked here.
 
 ---
 

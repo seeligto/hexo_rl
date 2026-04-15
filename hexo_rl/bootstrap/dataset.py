@@ -28,12 +28,12 @@ def replay_game_to_triples(
         winner: +1 if player 1 won, -1 if player 2 won.
 
     Returns:
-        states:   float16 array of shape (T, 18, 19, 19)
+        states:   float16 array of shape (T, 24, 19, 19)
         policies: float32 array of shape (T, 362)  — one-hot on move played
         outcomes: float32 array of shape (T,)       — ±1 from current player's POV
     """
     max_len = len(moves)
-    states   = np.zeros((max_len, 18, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+    states   = np.zeros((max_len, 24, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
     policies = np.zeros((max_len, _POLICY_SIZE),               dtype=np.float32)
     outcomes = np.zeros(max_len,                               dtype=np.float32)
     t = 0
@@ -42,7 +42,7 @@ def replay_game_to_triples(
     state = GameState.from_board(board)
 
     for q, r in moves:
-        tensor, centers = state.to_tensor()  # (K, 18, 19, 19) float16
+        tensor, centers = state.to_tensor()  # (K, 24, 19, 19) float16
         target_k = target_idx = -1
         for k, (cq, cr) in enumerate(centers):
             wq = q - cq + 9

@@ -13,7 +13,7 @@ import pytest
 
 from engine import ReplayBuffer
 
-CHANNELS   = 18
+CHANNELS   = 24  # 18 history/scalar planes + 6 Q13 chain-length planes
 BOARD_SIZE = 19
 N_ACTIONS  = BOARD_SIZE * BOARD_SIZE + 1  # 362
 AUX_STRIDE = BOARD_SIZE * BOARD_SIZE      # 361

@@ -27,6 +27,64 @@ log = structlog.get_logger()
 # in-place terminal rendering by flushing stdout mid-escape-sequence.
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
+# engineio/socketio raise `KeyError('Session is disconnected')` from
+# `engineio.base_server._get_socket` when a browser tab closes mid-stream
+# while a writer/handler thread is still emitting. The training loop is
+# unaffected, but the unhandled traceback pollutes stdout/stderr and
+# corrupts Rich Live rendering. We install a one-shot threading.excepthook
+# that swallows that specific exception (KeyError from the engineio module)
+# and delegates everything else to the previous handler.
+
+_NOISY_ENGINEIO_MODULES: tuple[str, ...] = (
+    "engineio.base_server",
+    "engineio.server",
+    "engineio.socket",
+    "socketio.server",
+    "socketio.manager",
+)
+
+_NOISY_KEYERROR_MESSAGES: tuple[str, ...] = (
+    "Session is disconnected",
+    "Session not found",
+)
+
+
+def _is_engineio_disconnect_noise(exc_type: type, exc_value: BaseException, tb) -> bool:
+    """Return True if the exception is a known-benign engineio disconnect race."""
+    if exc_type is not KeyError:
+        return False
+    msg = str(exc_value).strip("'\"")
+    if not any(noise in msg for noise in _NOISY_KEYERROR_MESSAGES):
+        return False
+    # Walk the traceback looking for an engineio/socketio frame.
+    cur = tb
+    while cur is not None:
+        module = cur.tb_frame.f_globals.get("__name__", "")
+        if any(module.startswith(m) for m in _NOISY_ENGINEIO_MODULES):
+            return True
+        cur = cur.tb_next
+    return False
+
+
+_excepthook_installed = False
+
+
+def _install_engineio_excepthook() -> None:
+    """Install a threading.excepthook that drops engineio disconnect KeyErrors."""
+    global _excepthook_installed
+    if _excepthook_installed:
+        return
+    _excepthook_installed = True
+
+    previous = threading.excepthook
+
+    def _hook(args: threading.ExceptHookArgs) -> None:
+        if _is_engineio_disconnect_noise(args.exc_type, args.exc_value, args.exc_traceback):
+            return  # swallow silently — known benign race during tab close
+        previous(args)
+
+    threading.excepthook = _hook
+
 
 def _find_latest_checkpoint(config: dict) -> str | None:
     """Find the latest checkpoint_*.pt file in the checkpoint directory."""
@@ -109,6 +167,10 @@ class WebDashboard:
             if self._connected_sids:
                 try:
                     self._socketio.emit(event, data)
+                except KeyError as exc:
+                    # Known race: client tab closed mid-emit. Drop silently.
+                    if not any(noise in str(exc) for noise in _NOISY_KEYERROR_MESSAGES):
+                        log.warning("socketio_emit_keyerror", event=event, error=str(exc))
                 except Exception as exc:
                     log.warning("socketio_emit_failed", event=event, error=str(exc))
             self._emit_queue.task_done()
@@ -259,6 +321,7 @@ class WebDashboard:
 
     def start(self) -> None:
         """Start Flask server and drain thread as daemon threads."""
+        _install_engineio_excepthook()
         self._init_viewer()
 
         self._drain_thread = threading.Thread(

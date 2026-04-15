@@ -94,7 +94,7 @@ def run_training_loop(
     board_size         = int(trainer.config.get("board_size",         19))
     res_blocks         = int(trainer.config.get("res_blocks",         12))
     filters            = int(trainer.config.get("filters",            128))
-    in_channels        = int(trainer.config.get("in_channels",        18))
+    in_channels        = int(trainer.config.get("in_channels",        24))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
 
     _torch_compile_enabled = (
@@ -610,6 +610,7 @@ def _emit_training_events(
         "loss_aux":                float(loss_info.get("opp_reply_loss", 0.0)),
         "loss_ownership":          float(loss_info.get("ownership_loss", 0.0)),
         "loss_threat":             float(loss_info.get("threat_loss", 0.0)),
+        "loss_chain":              float(loss_info.get("chain_loss", 0.0)),
         "aux_loss_rows":           int(loss_info.get("aux_loss_rows", 0)),
         "avg_sigma":               float(loss_info.get("avg_sigma", 0.0)),
         "policy_entropy":          policy_entropy,

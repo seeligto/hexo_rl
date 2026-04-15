@@ -45,7 +45,7 @@ class WorkerPool:
         sp = config.get("selfplay", config)
         self.n_workers = int(n_workers if n_workers is not None else sp.get("n_workers", 1))
         board_size = int(getattr(model, "board_size", 19))
-        in_channels = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
+        in_channels = int(config.get("in_channels", config.get("model", {}).get("in_channels", 24)))
 
         mcts_cfg = config.get("mcts", config)
         self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
@@ -123,7 +123,7 @@ class WorkerPool:
         self.recent_buffer: Optional[Any] = None
 
         self._board_size = board_size
-        self._feat_len = in_channels * board_size * board_size  # e.g. 18*19*19 = 6498
+        self._feat_len = in_channels * board_size * board_size  # 24*19*19 = 8664 for 24-plane layout
         self._pol_len = board_size * board_size + 1              # e.g. 19*19+1 = 362
 
     @property

@@ -38,7 +38,7 @@ from hexo_rl.training.aux_decode import decode_ownership, decode_winning_line, m
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
     compute_aux_loss, compute_total_loss, compute_uncertainty_loss,
-    fp16_backward_step,
+    compute_chain_loss, fp16_backward_step,
 )
 from hexo_rl.training.checkpoints import (
     save_full_checkpoint, save_inference_weights, prune_checkpoints,
@@ -130,6 +130,16 @@ class Trainer:
         self.step = 0
         self.checkpoint_log: list = []
         self._policy_diag_done = False  # fires once per Trainer instantiation
+
+        # Q19: threat-head BCE positive-class weight. Allocated once per trainer
+        # instance so we do not rebuild the tensor every forward pass. Device
+        # placement matches `self.device` so autocast does not cross devices.
+        _pos_weight_val = float(config.get("threat_pos_weight", 1.0))
+        self._threat_pos_weight: Optional[torch.Tensor] = None
+        if _pos_weight_val != 1.0:
+            self._threat_pos_weight = torch.tensor(
+                _pos_weight_val, dtype=torch.float32, device=self.device
+            )
 
         # Load log if it already exists (resuming from checkpoint).
         log_path = self.checkpoint_dir / "checkpoint_log.json"
@@ -255,6 +265,7 @@ class Trainer:
         uncertainty_weight = float(self.config.get("uncertainty_weight", 0.0))
         ownership_weight   = float(self.config.get("ownership_weight", 0.0))
         threat_weight      = float(self.config.get("threat_weight", 0.0))
+        chain_weight       = float(self.config.get("aux_chain_weight", 0.0))
 
         # Move to device. With FP16/autocast, keep float16 states for the mixed-
         # precision path; without it, upcast to float32 to match model weights.
@@ -312,6 +323,7 @@ class Trainer:
                       enabled=self.fp16):
             use_aux         = aux_weight > 0.0
             use_uncertainty = uncertainty_weight > 0.0
+            use_chain       = chain_weight > 0.0
 
             fwd_result = self.model(
                 states_t,
@@ -319,8 +331,9 @@ class Trainer:
                 uncertainty=use_uncertainty,
                 ownership=use_ownership,
                 threat=use_threat,
+                chain=use_chain,
             )
-            # Unpack in order: log_policy, value, v_logit, [opp_reply], [sigma2], [own_pred], [thr_pred]
+            # Unpack in order: log_policy, value, v_logit, [opp_reply], [sigma2], [own_pred], [thr_pred], [chain_pred]
             log_policy, value, v_logit = fwd_result[0], fwd_result[1], fwd_result[2]
             _idx = 3
             opp_reply = fwd_result[_idx] if use_aux else None
@@ -330,6 +343,8 @@ class Trainer:
             own_pred = fwd_result[_idx] if use_ownership else None
             if use_ownership: _idx += 1
             thr_pred = fwd_result[_idx] if use_threat else None
+            if use_threat: _idx += 1
+            chain_pred = fwd_result[_idx] if use_chain else None
 
             policy_valid = policies_t.sum(dim=1) > 1e-6
             use_kl = bool(self.config.get("completed_q_values", False))
@@ -367,8 +382,19 @@ class Trainer:
             if use_threat and thr_pred is not None and thr_t is not None and not aux_skip_full_pretrain:
                 thr_pred_m, thr_t_m = mask_aux_rows(thr_pred, thr_t, n_pretrain)
                 thr_loss = nn.functional.binary_cross_entropy_with_logits(
-                    thr_pred_m.squeeze(1), thr_t_m
+                    thr_pred_m.squeeze(1), thr_t_m,
+                    pos_weight=self._threat_pos_weight,
                 )
+
+            # Q13-aux chain loss: target is the 6-plane slice from the input
+            # tensor (since the chain planes are an input feature, not a
+            # separately-stored target). Computed on ALL batch rows — the target
+            # is deterministic from stones and carries no pretrain/selfplay
+            # divergence, so we do not apply `mask_aux_rows`.
+            chain_loss = None
+            if use_chain and chain_pred is not None:
+                chain_target = states_t[:, 18:24]
+                chain_loss = compute_chain_loss(chain_pred, chain_target)
 
             loss = compute_total_loss(
                 policy_loss, value_loss,
@@ -377,6 +403,7 @@ class Trainer:
                 unc_loss, uncertainty_weight,
                 own_loss, ownership_weight,
                 thr_loss, threat_weight,
+                chain_loss, chain_weight,
             )
 
         # Guard: if loss is non-finite, reset any poisoned BN stats and skip step.
@@ -483,6 +510,8 @@ class Trainer:
             result["ownership_loss"] = own_loss.item()
         if use_threat and thr_loss is not None:
             result["threat_loss"] = thr_loss.item()
+        if use_chain and chain_loss is not None:
+            result["chain_loss"] = chain_loss.item()
         if use_ownership or use_threat:
             result["aux_loss_rows"] = max(0, batch_n - n_pretrain)
 
@@ -501,6 +530,7 @@ class Trainer:
             uncertainty_loss=result.get("uncertainty_loss"),
             ownership_loss=result.get("ownership_loss"),
             threat_loss=result.get("threat_loss"),
+            chain_loss=result.get("chain_loss"),
             lr=result["lr"],
             fp16_scale=self.scaler.get_scale(),
         )
@@ -572,7 +602,7 @@ class Trainer:
             "board_size": int(model_cfg.get("board_size", config.get("board_size", 19))),
             "res_blocks": int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
             "filters": int(model_cfg.get("filters", config.get("filters", 128))),
-            "in_channels": int(model_cfg.get("in_channels", config.get("in_channels", 18))),
+            "in_channels": int(model_cfg.get("in_channels", config.get("in_channels", 24))),
             "se_reduction_ratio": int(model_cfg.get("se_reduction_ratio", config.get("se_reduction_ratio", 4))),
         }
 

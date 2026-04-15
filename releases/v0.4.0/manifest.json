@@ -1,0 +1,46 @@
+{
+  "version": "0.4.0",
+  "release_date": "2026-04-15",
+  "source_branch": "feat/q13-chain-planes",
+  "source_commit": "cd28431a3e508db34cb46854be8096459030c39c",
+  "bootstrap_model": {
+    "filename": "bootstrap_model.pt",
+    "dest_path": "checkpoints/bootstrap_model.pt",
+    "sha256": "06271362daa257be11a7be16c87fee592fbcf04b3c3a647c0bbcd4d54bf607ab",
+    "size_bytes": 17161671,
+    "planes": 24,
+    "params_millions": 11.21,
+    "pretrain_epochs": 15,
+    "pretrain_steps": 11685,
+    "source_branch": "feat/q13-chain-planes",
+    "source_commit": "cd28431a3e508db34cb46854be8096459030c39c"
+  },
+  "bootstrap_corpus": {
+    "filename": "bootstrap_corpus.npz",
+    "dest_path": "data/bootstrap_corpus.npz",
+    "sha256": "c9087b09b3db529702f3177afb450e0cc9cb3bb239758f9ec405a3031dd58790",
+    "size_bytes": 3746845620,
+    "positions": 199470,
+    "planes": 24,
+    "state_dtype": "float16",
+    "state_shape": [199470, 24, 19, 19],
+    "source": "human-only Elo-weighted export"
+  },
+  "threat_probe_baseline": {
+    "filename": "threat_probe_baseline.json",
+    "dest_path": "fixtures/threat_probe_baseline.json",
+    "schema_version": 4,
+    "sha256": "79b99f3f127fe1834e177c17af4fc83d2da91201317175d2a7f34c2c604be155",
+    "size_bytes": 473
+  },
+  "format_versions": {
+    "hexb_replay_buffer": 3,
+    "threat_probe_baseline_schema": 4
+  },
+  "incompatible_with": [
+    "HEXB replay buffer v2 (pre-v0.4.0)",
+    "checkpoint input_conv.weight shape (128, 18, 3, 3)",
+    "corpus NPZ states shape (N, 18, 19, 19)",
+    "threat_probe_baseline.json schema v2 and v3"
+  ]
+}

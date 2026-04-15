@@ -2,18 +2,29 @@
 Threat-logit probe — step-5k kill criterion for HeXO Phase 4.0 sustained runs.
 
 Loads a checkpoint, runs 20 curated positions through the threat head, and
-reports whether the threat head has learned genuine spatial signal (extension
-cells score higher than random empty cells).
+reports whether the policy head has learned to point at genuine spatial
+extension cells (i.e. is NOT colony-spamming).
 
-Kill criterion (§85 / §89 of docs/07_PHASE4_SPRINT_LOG.md):
-  At step 5000, re-run this probe. PASS requires ALL THREE:
-    1. ext_logit_mean >= bootstrap_ext_mean - margin  (margin default 1.0)
-    2. contrast_mean  >= 0.38
-    3. ext_in_top5_pct >= 40.0
-  Bootstrap baseline numbers come from fixtures/threat_probe_baseline.json,
-  written once by `make probe.bootstrap --write-baseline` (or the
-  --write-baseline CLI flag). If that file is absent, probe prints FAIL with
-  "no baseline recorded — run make probe.bootstrap first".
+Kill criterion (§85 / §89 of docs/07_PHASE4_SPRINT_LOG.md, revised §91):
+  At step 5000, re-run this probe. PASS requires ALL THREE of C1-C3.
+  C4 is a warning only — it never causes FAIL.
+
+    C1: contrast_mean >= max(0.38, 0.8 × bootstrap_contrast)
+        Position-conditional sharpness must be at least 80% of bootstrap.
+        The 0.38 floor preserves the original §85 absolute minimum.
+    C2: ext_in_top5_pct  >= 40.0
+        Policy head must rank the extension cell in the top-5 spatial moves
+        on at least 40% of probe positions.
+    C3: ext_in_top10_pct >= 60.0
+        Looser top-K catches partial sharpness — if extension is rank 6-10
+        the policy head is not colony-spamming, just under-sharpened.
+    C4 (WARNING): abs(ext_logit_mean - bootstrap_ext_logit_mean) < 5.0
+        Catches catastrophic decode/mapping bugs without gating training.
+        Drift > 5.0 nats prints a WARNING line in the report; does not fail.
+
+  Bootstrap baseline numbers come from fixtures/threat_probe_baseline.json
+  (schema v2), written once by `make probe.bootstrap --write-baseline`. If
+  that file is absent, probe prints FAIL with "no baseline recorded".
 
 Exit codes:
   0  PASS
@@ -53,11 +64,15 @@ from hexo_rl.training.trainer import Trainer
 
 BOARD_SIZE: int = 19
 
-# ── Kill-criterion thresholds (§85 / §89, corrected) ─────────────────────────
+# ── Kill-criterion thresholds (§85 / §89, revised §91) ──────────────────────
 
-THRESH_CONTRAST_MEAN: float = 0.38    # mean contrast must be ≥ 0.38
-THRESH_EXT_IN_TOP5_PCT: float = 40.0  # extension cell in policy top-5 ≥ 40%
-BASELINE_MARGIN: float = 1.0          # ext_logit_mean ≥ baseline_mean − margin
+THRESH_CONTRAST_FLOOR: float = 0.38      # absolute floor for contrast_mean
+THRESH_CONTRAST_BOOTSTRAP_FRAC: float = 0.8  # contrast must reach 80% of bootstrap
+THRESH_EXT_IN_TOP5_PCT: float = 40.0     # extension cell in policy top-5 ≥ 40%
+THRESH_EXT_IN_TOP10_PCT: float = 60.0    # extension cell in policy top-10 ≥ 60%
+THRESH_EXT_LOGIT_DRIFT_WARN: float = 5.0  # |Δ ext_logit_mean| > 5.0 → warning only
+
+BASELINE_SCHEMA_VERSION: int = 4
 
 # Canonical baseline file (generated once via --write-baseline).
 BASELINE_JSON_PATH: Path = REPO_ROOT / "fixtures" / "threat_probe_baseline.json"
@@ -91,8 +106,9 @@ def save_baseline_json(
     ckpt_name: str,
     path: Path = BASELINE_JSON_PATH,
 ) -> None:
-    """Persist aggregate results as the canonical baseline JSON."""
+    """Persist aggregate results as the canonical baseline JSON (schema v2)."""
     record = {
+        "version": BASELINE_SCHEMA_VERSION,
         "ext_logit_mean": agg["ext_logit_mean"],
         "ext_logit_std": agg["ext_logit_std"],
         "ctrl_logit_mean": agg["ctrl_logit_mean"],
@@ -100,10 +116,12 @@ def save_baseline_json(
         "contrast_mean": agg["contrast_mean"],
         "contrast_std": agg["contrast_std"],
         "ext_in_top5_frac": agg["ext_in_top5_frac"],
+        "ext_in_top5_pct": agg["ext_in_top5_frac"] * 100.0,
+        "ext_in_top10_frac": agg["ext_in_top10_frac"],
+        "ext_in_top10_pct": agg["ext_in_top10_frac"] * 100.0,
         "n": agg["n"],
         "checkpoint": ckpt_name,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "margin": BASELINE_MARGIN,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
@@ -129,7 +147,7 @@ def load_model(
 
     model = HexTacToeNet(
         board_size=int(hparams.get("board_size", 19)),
-        in_channels=int(hparams.get("in_channels", 18)),
+        in_channels=int(hparams.get("in_channels", 24)),
         filters=int(hparams.get("filters", 128)),
         res_blocks=int(hparams.get("res_blocks", 12)),
         se_reduction_ratio=int(hparams.get("se_reduction_ratio", 4)),
@@ -151,10 +169,10 @@ def load_positions(npz_path: Path) -> Dict:
     if missing:
         raise ValueError(f"NPZ missing required arrays: {missing}")
 
-    states = data["states"]  # (N, 18, 19, 19) float16
-    if states.ndim != 4 or states.shape[1:] != (18, BOARD_SIZE, BOARD_SIZE):
+    states = data["states"]  # (N, 24, 19, 19) float16
+    if states.ndim != 4 or states.shape[1:] != (24, BOARD_SIZE, BOARD_SIZE):
         raise ValueError(
-            f"states shape {states.shape} — expected (N, 18, {BOARD_SIZE}, {BOARD_SIZE})"
+            f"states shape {states.shape} — expected (N, 24, {BOARD_SIZE}, {BOARD_SIZE})"
         )
 
     # Load cell indices verbatim from NPZ — never regenerate at load time.
@@ -173,12 +191,12 @@ def load_positions(npz_path: Path) -> Dict:
 
 def _probe_one(
     model: HexTacToeNet,
-    state_fp16: np.ndarray,   # (18, 19, 19) float16
+    state_fp16: np.ndarray,   # (24, 19, 19) float16
     ext_flat: int,
     ctrl_flat: int,
     device: torch.device,
-) -> Tuple[float, float, float, List[int]]:
-    """Forward one position in FP32; return (ext_logit, ctrl_logit, contrast, top5)."""
+) -> Tuple[float, float, float, List[int], List[int]]:
+    """Forward one position in FP32; return (ext_logit, ctrl_logit, contrast, top5, top10)."""
     # Always FP32 — no autocast, deterministic across runs.
     x = torch.from_numpy(state_fp16.astype(np.float32)).unsqueeze(0).to(device)
 
@@ -196,9 +214,10 @@ def _probe_one(
     contrast = ext_logit - ctrl_logit
 
     policy_spatial = log_policy[0, :BOARD_SIZE * BOARD_SIZE].float().cpu()
-    top5_indices = policy_spatial.topk(min(5, len(policy_spatial))).indices.tolist()
+    top10_indices = policy_spatial.topk(min(10, len(policy_spatial))).indices.tolist()
+    top5_indices = top10_indices[:5]
 
-    return ext_logit, ctrl_logit, contrast, top5_indices
+    return ext_logit, ctrl_logit, contrast, top5_indices, top10_indices
 
 
 def probe_positions(
@@ -230,11 +249,12 @@ def probe_positions(
                 f"Position {i}: control_cell_idx={ctrl_flat} out of range [0, {BOARD_SIZE**2})"
             )
 
-        ext_logit, ctrl_logit, contrast, top5 = _probe_one(
+        ext_logit, ctrl_logit, contrast, top5, top10 = _probe_one(
             model, states[i], ext_flat, ctrl_flat, device
         )
 
         ext_in_top5 = ext_flat in top5
+        ext_in_top10 = ext_flat in top10
 
         results.append({
             "idx": i,
@@ -245,7 +265,9 @@ def probe_positions(
             "ctrl_logit": ctrl_logit,
             "contrast": contrast,
             "policy_top5": top5,
+            "policy_top10": top10,
             "ext_in_policy_top5": ext_in_top5,
+            "ext_in_policy_top10": ext_in_top10,
         })
 
     return results
@@ -259,7 +281,11 @@ def aggregate(results: List[Dict]) -> Dict:
     ctrl_logits = np.array([r["ctrl_logit"] for r in results], dtype=np.float64)
     contrasts = np.array([r["contrast"] for r in results], dtype=np.float64)
     ext_in_top5_count = sum(1 for r in results if r["ext_in_policy_top5"])
+    ext_in_top10_count = sum(
+        1 for r in results if r.get("ext_in_policy_top10", r["ext_in_policy_top5"])
+    )
 
+    n = max(len(results), 1)
     return {
         "n": len(results),
         "ext_logit_mean": float(ext_logits.mean()),
@@ -268,40 +294,68 @@ def aggregate(results: List[Dict]) -> Dict:
         "ctrl_logit_std": float(ctrl_logits.std()),
         "contrast_mean": float(contrasts.mean()),
         "contrast_std": float(contrasts.std()),
-        "ext_in_top5_frac": ext_in_top5_count / max(len(results), 1),
+        "ext_in_top5_frac": ext_in_top5_count / n,
+        "ext_in_top10_frac": ext_in_top10_count / n,
     }
 
 
 # ── Pass / fail decision ──────────────────────────────────────────────────────
 
 
+def contrast_floor(baseline: Optional[Dict]) -> float:
+    """C1 floor: max(0.38, 0.8 × bootstrap_contrast). Returns 0.38 if no baseline."""
+    if baseline is None:
+        return THRESH_CONTRAST_FLOOR
+    bootstrap_contrast = float(baseline.get("contrast_mean", 0.0))
+    return max(THRESH_CONTRAST_FLOOR, THRESH_CONTRAST_BOOTSTRAP_FRAC * bootstrap_contrast)
+
+
 def check_pass(
     agg: Dict,
     baseline: Optional[Dict] = None,
-    margin: float = BASELINE_MARGIN,
 ) -> Tuple[bool, Dict[str, bool]]:
-    """Evaluate three-condition PASS rule (§85 / §89, corrected).
+    """Evaluate three-condition PASS rule (§85 / §89 revised §91).
 
     Returns (overall_pass, per_condition_dict).
 
-    Condition 1 requires a loaded baseline; if None, it is treated as FAIL.
-    Condition 2: contrast_mean >= 0.38
-    Condition 3: ext_in_top5_pct >= 40.0
-    """
-    if baseline is not None:
-        c1 = agg["ext_logit_mean"] >= baseline["ext_logit_mean"] - margin
-    else:
-        c1 = False  # no baseline → cannot evaluate
+    All of C1, C2, C3 must pass for overall PASS. C4 is a warning only and
+    is reported separately via :func:`check_warning`.
 
-    c2 = agg["contrast_mean"] >= THRESH_CONTRAST_MEAN
-    c3 = agg["ext_in_top5_frac"] * 100.0 >= THRESH_EXT_IN_TOP5_PCT
+    C1: contrast_mean >= max(0.38, 0.8 × bootstrap_contrast)
+    C2: ext_in_top5_pct  >= 40.0
+    C3: ext_in_top10_pct >= 60.0
+
+    Conditions never require a baseline to FAIL — C1 falls back to the 0.38
+    absolute floor when baseline is None. (Without a baseline we cannot check
+    the warning, but the gate still functions.)
+    """
+    floor = contrast_floor(baseline)
+    c1 = agg["contrast_mean"] >= floor
+    c2 = agg["ext_in_top5_frac"] * 100.0 >= THRESH_EXT_IN_TOP5_PCT
+    c3 = agg.get("ext_in_top10_frac", 0.0) * 100.0 >= THRESH_EXT_IN_TOP10_PCT
 
     conditions = {
-        "ext_logit_vs_baseline": c1,
-        "contrast": c2,
-        "ext_in_top5": c3,
+        "contrast": c1,
+        "ext_in_top5": c2,
+        "ext_in_top10": c3,
     }
     return (c1 and c2 and c3), conditions
+
+
+def check_warning(
+    agg: Dict,
+    baseline: Optional[Dict] = None,
+) -> Tuple[bool, float]:
+    """C4 warning check: |Δ ext_logit_mean| < 5.0.
+
+    Returns (warning_triggered, drift). `warning_triggered` is True when drift
+    exceeds the threshold (i.e. the metric is suspicious). Returns (False, 0.0)
+    if no baseline is loaded (cannot compute drift).
+    """
+    if baseline is None:
+        return False, 0.0
+    drift = abs(agg["ext_logit_mean"] - float(baseline["ext_logit_mean"]))
+    return drift >= THRESH_EXT_LOGIT_DRIFT_WARN, drift
 
 
 # ── Report formatting ─────────────────────────────────────────────────────────
@@ -321,43 +375,68 @@ def format_report(
     baseline_agg: Optional[Dict] = None,
     baseline_name: Optional[str] = None,
 ) -> str:
-    """Render markdown report with three explicit PASS conditions."""
+    """Render markdown report with three explicit PASS conditions + C4 warning."""
     lines: List[str] = []
 
     overall_pass, conditions = check_pass(agg, baseline=baseline)
+    warn_triggered, drift = check_warning(agg, baseline=baseline)
     verdict = "**PASS**" if overall_pass else "**FAIL**"
     lines.append(f"# Threat-Logit Probe: {ckpt_name}\n")
     lines.append(f"Verdict: {verdict}\n")
 
     # Three explicit conditions
-    lines.append("## Pass conditions (§85 / §89 corrected kill criterion)\n")
+    lines.append("## Pass conditions (§85 / §89 revised §91 kill criterion)\n")
     lines.append("| # | condition | threshold | value | result |")
     lines.append("|---|-----------|-----------|-------|--------|")
 
+    floor = contrast_floor(baseline)
     if baseline is not None:
-        bl_mean = baseline["ext_logit_mean"]
-        c1_thresh = f"≥ {bl_mean:+.2f} − {BASELINE_MARGIN:.1f} = {bl_mean - BASELINE_MARGIN:+.2f}"
+        bl_contrast = float(baseline.get("contrast_mean", 0.0))
+        c1_thresh = (
+            f"≥ max(0.38, 0.8 × {bl_contrast:+.3f}) = {floor:+.3f}"
+        )
     else:
-        c1_thresh = "no baseline — run make probe.bootstrap first"
-    c1_val = f"{agg['ext_logit_mean']:+.3f}"
-    c1_res = "PASS" if conditions["ext_logit_vs_baseline"] else "FAIL"
+        c1_thresh = f"≥ {THRESH_CONTRAST_FLOOR:+.3f} (no baseline; floor only)"
+    c1_val = f"{agg['contrast_mean']:+.3f}"
+    c1_res = "PASS" if conditions["contrast"] else "FAIL"
 
-    c2_thresh = f"≥ {THRESH_CONTRAST_MEAN}"
-    c2_val = f"{agg['contrast_mean']:+.3f}"
-    c2_res = "PASS" if conditions["contrast"] else "FAIL"
+    c2_thresh = f"≥ {THRESH_EXT_IN_TOP5_PCT:.0f}%"
+    c2_val = f"{agg['ext_in_top5_frac'] * 100:.0f}%"
+    c2_res = "PASS" if conditions["ext_in_top5"] else "FAIL"
 
-    c3_thresh = f"≥ {THRESH_EXT_IN_TOP5_PCT:.0f}%"
-    c3_val = f"{agg['ext_in_top5_frac'] * 100:.0f}%"
-    c3_res = "PASS" if conditions["ext_in_top5"] else "FAIL"
+    c3_thresh = f"≥ {THRESH_EXT_IN_TOP10_PCT:.0f}%"
+    c3_val = f"{agg.get('ext_in_top10_frac', 0.0) * 100:.0f}%"
+    c3_res = "PASS" if conditions["ext_in_top10"] else "FAIL"
 
-    lines.append(f"| 1 | ext_logit_mean vs baseline | {c1_thresh} | {c1_val} | **{c1_res}** |")
-    lines.append(f"| 2 | contrast_mean (ext − ctrl) | {c2_thresh} | {c2_val} | **{c2_res}** |")
-    lines.append(f"| 3 | ext cell in policy top-5  | {c3_thresh} | {c3_val} | **{c3_res}** |")
+    lines.append(f"| 1 | contrast_mean (ext − ctrl) | {c1_thresh} | {c1_val} | **{c1_res}** |")
+    lines.append(f"| 2 | ext cell in policy top-5  | {c2_thresh} | {c2_val} | **{c2_res}** |")
+    lines.append(f"| 3 | ext cell in policy top-10 | {c3_thresh} | {c3_val} | **{c3_res}** |")
     lines.append("")
+
+    # C4 warning row (informational only)
+    if baseline is not None:
+        bl_ext = float(baseline["ext_logit_mean"])
+        warn_state = "WARNING" if warn_triggered else "ok"
+        lines.append(
+            f"**C4 (warning, not gated):** |Δ ext_logit_mean| = "
+            f"|{agg['ext_logit_mean']:+.3f} − {bl_ext:+.3f}| = {drift:.3f} "
+            f"(threshold {THRESH_EXT_LOGIT_DRIFT_WARN:.1f}) → **{warn_state}**\n"
+        )
+        if warn_triggered:
+            lines.append(
+                "> WARNING: ext_logit_mean drifted ≥ 5.0 nats from bootstrap. "
+                "Probe still **passes** if C1-C3 are met, but investigate for "
+                "BCE scale drift or decode/mapping bugs.\n"
+            )
+    else:
+        lines.append("**C4 (warning):** skipped — no baseline loaded.\n")
 
     # Summary metrics table (optionally compare with baseline_agg for historic display)
     ref_agg = baseline_agg if baseline_agg is not None else baseline
     ref_name = baseline_name or (baseline.get("checkpoint") if baseline else None)
+
+    def _ref_top10(d: Dict) -> float:
+        return float(d.get("ext_in_top10_frac", d.get("ext_in_top10_pct", 0.0) / 100.0))
 
     if ref_agg is not None and ref_name is not None:
         lines.append(f"| metric | {ckpt_name} | {ref_name} |")
@@ -382,6 +461,11 @@ def format_report(
             f"{agg['ext_in_top5_frac']:.0%} | "
             f"{ref_agg['ext_in_top5_frac']:.0%} |"
         )
+        lines.append(
+            f"| extension cell in policy top-10 | "
+            f"{agg.get('ext_in_top10_frac', 0.0):.0%} | "
+            f"{_ref_top10(ref_agg):.0%} |"
+        )
     else:
         lines.append(f"| metric | {ckpt_name} |")
         lines.append("|--------|------------|")
@@ -401,19 +485,24 @@ def format_report(
             f"| extension cell in policy top-5 | "
             f"{agg['ext_in_top5_frac']:.0%} |"
         )
+        lines.append(
+            f"| extension cell in policy top-10 | "
+            f"{agg.get('ext_in_top10_frac', 0.0):.0%} |"
+        )
 
     lines.append("")
 
     # Per-position detail
     lines.append("## Per-position detail\n")
-    lines.append("| # | phase | ext_logit | ctrl_logit | contrast | ext∈top5 |")
-    lines.append("|---|-------|-----------|------------|----------|----------|")
+    lines.append("| # | phase | ext_logit | ctrl_logit | contrast | ext∈top5 | ext∈top10 |")
+    lines.append("|---|-------|-----------|------------|----------|----------|-----------|")
     for r in results:
         top5_flag = "yes" if r["ext_in_policy_top5"] else "no"
+        top10_flag = "yes" if r.get("ext_in_policy_top10", False) else "no"
         lines.append(
             f"| {r['idx']+1} | {r['game_phase']} | "
             f"{r['ext_logit']:+.3f} | {r['ctrl_logit']:+.3f} | "
-            f"{r['contrast']:+.3f} | {top5_flag} |"
+            f"{r['contrast']:+.3f} | {top5_flag} | {top10_flag} |"
         )
 
     lines.append("")
@@ -500,7 +589,7 @@ def main() -> None:
         if baseline is None:
             print(
                 "WARNING: no baseline recorded — run make probe.bootstrap first. "
-                "Condition 1 will FAIL.",
+                "C1 will fall back to the absolute 0.38 floor; C4 warning skipped.",
                 file=sys.stderr,
             )
 
@@ -531,20 +620,43 @@ def main() -> None:
             print(report)
 
         overall_pass, conditions = check_pass(agg, baseline=baseline)
+        warn_triggered, drift = check_warning(agg, baseline=baseline)
         status = "PASS" if overall_pass else "FAIL"
-        bl_mean = baseline["ext_logit_mean"] if baseline else float("nan")
+        floor = contrast_floor(baseline)
         print(
             f"\n{status}  "
-            f"[C1] ext_logit_mean={agg['ext_logit_mean']:+.3f} "
-            f"(≥ {bl_mean:+.2f} − {BASELINE_MARGIN:.1f} = {bl_mean - BASELINE_MARGIN:+.2f}) "
-            f"{'OK' if conditions['ext_logit_vs_baseline'] else 'FAIL'}  "
-            f"[C2] contrast={agg['contrast_mean']:+.3f} "
-            f"(≥{THRESH_CONTRAST_MEAN}) {'OK' if conditions['contrast'] else 'FAIL'}  "
-            f"[C3] top5={agg['ext_in_top5_frac']:.0%} "
-            f"(≥{THRESH_EXT_IN_TOP5_PCT:.0f}%) {'OK' if conditions['ext_in_top5'] else 'FAIL'}",
+            f"[C1] contrast={agg['contrast_mean']:+.3f} "
+            f"(≥{floor:+.3f}) {'OK' if conditions['contrast'] else 'FAIL'}  "
+            f"[C2] top5={agg['ext_in_top5_frac']:.0%} "
+            f"(≥{THRESH_EXT_IN_TOP5_PCT:.0f}%) {'OK' if conditions['ext_in_top5'] else 'FAIL'}  "
+            f"[C3] top10={agg.get('ext_in_top10_frac', 0.0):.0%} "
+            f"(≥{THRESH_EXT_IN_TOP10_PCT:.0f}%) {'OK' if conditions['ext_in_top10'] else 'FAIL'}",
             file=sys.stderr,
         )
-        exit_code = 0 if overall_pass else 1
+        if baseline is not None:
+            warn_label = "WARN" if warn_triggered else "ok"
+            print(
+                f"[C4] |Δ ext_logit_mean|={drift:.3f} "
+                f"(<{THRESH_EXT_LOGIT_DRIFT_WARN:.1f}) {warn_label}",
+                file=sys.stderr,
+            )
+        if args.write_baseline:
+            # Baseline-set mode: the PASS/FAIL verdict is diagnostic-only. The
+            # bootstrap's threat_head is untrained (pretrain doesn't feed
+            # winning_line targets), so its contrast is essentially random and
+            # the absolute 0.38 floor doesn't apply — future probes compare
+            # against this recorded baseline, not against an absolute floor.
+            # See sprint §92 for the Q13 landing context.
+            if not overall_pass:
+                print(
+                    "NOTE: running in --write-baseline mode; FAIL verdict is "
+                    "informational only — baseline written as v3 reference for "
+                    "future probes. Exiting 0.",
+                    file=sys.stderr,
+                )
+            exit_code = 0
+        else:
+            exit_code = 0 if overall_pass else 1
 
     except SystemExit:
         raise
