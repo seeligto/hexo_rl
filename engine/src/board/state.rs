@@ -439,6 +439,12 @@ impl Board {
         let cur_mask = &planes_2[0..TOTAL_CELLS];
         let opp_mask = &planes_2[TOTAL_CELLS..2 * TOTAL_CELLS];
         encode_chain_planes(cur_mask, opp_mask, &mut out[18 * TOTAL_CELLS..24 * TOTAL_CELLS]);
+        debug_assert_eq!(
+            out.len(),
+            24 * TOTAL_CELLS,
+            "encode_state_to_buffer output length mismatch — expected 24 planes × {} cells",
+            TOTAL_CELLS
+        );
     }
 
     /// Public alias for `encode_state_to_buffer`. Preserved as a named entry
