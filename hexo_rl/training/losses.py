@@ -132,12 +132,12 @@ def compute_chain_loss(
         reduction="none",
     )
     mask = legal_mask.float()
-    # Broadcast a (B, 1, H, W) or (B, H, W) mask across the 6 chain planes.
+    # Normalise (B, H, W) → (B, 1, H, W) before expand so all three shapes
+    # ((B,H,W), (B,1,H,W), (B,6,H,W)) broadcast identically to per_cell.
     if mask.dim() == per_cell.dim() - 1:
         mask = mask.unsqueeze(1)
-    masked = per_cell * mask
-    denom = mask.sum().clamp_min(1.0) * per_cell.shape[1]  # cells × n_planes
-    return masked.sum() / denom
+    mask_b = mask.expand_as(per_cell)
+    return (per_cell * mask_b).sum() / mask_b.sum().clamp_min(1.0)
 
 
 def compute_uncertainty_loss(
