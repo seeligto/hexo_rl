@@ -75,7 +75,7 @@ class WorkerPool:
             fast_sims=int(pc["fast_sims"]),
             standard_sims=int(pc.get("standard_sims", 0)),
             temp_threshold_compound_moves=int(pc.get("temperature_threshold_compound_moves", 15)),
-            draw_reward=float(training_cfg.get("draw_reward", -0.1)),
+            draw_reward=float(training_cfg.get("draw_value", -0.5)),
             quiescence_enabled=self.quiescence_enabled,
             quiescence_blend_2=self.quiescence_blend_2,
             temp_min=float(pc.get("temp_min", 0.05)),
