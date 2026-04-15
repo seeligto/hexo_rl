@@ -37,7 +37,7 @@ preserve_eval_checkpoints: true   # never prune checkpoints at eval_interval bou
 log_interval: 10        # also controls web-dashboard send frequency
 aux_opp_reply_weight: 0.15
 entropy_reg_weight: 0.01  # policy entropy regularization (KrakenBot-style, prevents policy collapse)
-draw_value: -0.75         # draw outcome value target (was -0.5; raised after 44.7% draw rate at step 5k in smoke_v3b)
+draw_value: -0.5          # draw outcome value target (reverted from -0.75 for experiment A; isolate chain aux kill)
 recency_weight: 0.75      # fraction of each batch from the recent-position ring buffer (newest ~50% of buffer)
 uncertainty_weight: 0.0   # disabled — Gaussian NLL diverges when σ²→0 causing total_loss spikes to ~394
 ownership_weight: 0.1     # weight for ownership auxiliary head (spatial MSE); training only
@@ -49,7 +49,7 @@ threat_weight: 0.1        # weight for binary threat auxiliary head (winning-lin
 # the 0.10 used for ownership/threat) because the target is /6-normalized so raw
 # smooth-L1 values sit around 0.02 — weight 1.0 gives the head a meaningful
 # gradient share. Retune after pretrain v3 loss curves.
-aux_chain_weight: 1.0  # Q21: currently degenerate (aux_target = input slice); revisit with wider-window target
+aux_chain_weight: 0.0  # Q21: degenerate target (aux_target = input slice) biases trunk toward colony-extension; killed for experiment A
 
 # Q19: positive-class weight for threat-head BCEWithLogitsLoss.
 # Empirical (1-p)/p on winning_line labels (~1.6% positive) ≈ 59. Recomputed
