@@ -7,7 +7,7 @@
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
-  max_game_moves: 200
+  max_game_moves: 300
   n_workers: 10
   inference_max_wait_ms: 5.0
   playout_cap:
