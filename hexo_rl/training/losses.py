@@ -85,6 +85,61 @@ def compute_aux_loss(
     return torch.zeros(1, device=device, dtype=torch.float32).squeeze()
 
 
+def compute_chain_loss(
+    chain_pred: torch.Tensor,
+    chain_target: torch.Tensor,
+    legal_mask: Optional[torch.Tensor] = None,
+    huber_delta: float = 1.0,
+) -> torch.Tensor:
+    """Q13-aux smooth-L1 (Huber) loss on 6 chain-length planes.
+
+    Args:
+        chain_pred:   (B, 6, H, W) raw regression outputs from chain_head.
+        chain_target: (B, 6, H, W) target chain planes. Typically a slice of
+                      the input tensor (`input[:, 18:24]`) since the 6 Q13
+                      chain-length planes are in the input feature tensor and
+                      the head is asked to reproduce them from trunk features.
+        legal_mask:   Optional float mask broadcastable to (B, 6, H, W) with
+                      1.0 where the cell is on the board and its chain value
+                      is meaningful, 0.0 where the loss should be ignored.
+                      Shape (B, 1, H, W) is fine — it will broadcast across the
+                      6 chain planes. When `None`, every cell contributes
+                      equally (reduction="mean"). W2 from the Q13 review: the
+                      original brief described a masked loss; the pre-C13
+                      implementation was unconditional mean.
+        huber_delta:  Transition point between L1 and L2 regions of Huber loss.
+                      Defaults to 1.0, matching torch's default smooth_l1_loss.
+
+    Returns:
+        Scalar mean loss over the masked cells (or all cells if `legal_mask`
+        is None).
+    """
+    # Targets live in [0, 1] after /6.0 normalization, so values are well
+    # within the Huber L2 region for typical predictions — behaves like MSE
+    # near small errors and L1 for outliers.
+    if legal_mask is None:
+        return torch.nn.functional.smooth_l1_loss(
+            chain_pred.float(),
+            chain_target.float(),
+            beta=huber_delta,
+            reduction="mean",
+        )
+
+    per_cell = torch.nn.functional.smooth_l1_loss(
+        chain_pred.float(),
+        chain_target.float(),
+        beta=huber_delta,
+        reduction="none",
+    )
+    mask = legal_mask.float()
+    # Normalise (B, H, W) → (B, 1, H, W) before expand so all three shapes
+    # ((B,H,W), (B,1,H,W), (B,6,H,W)) broadcast identically to per_cell.
+    if mask.dim() == per_cell.dim() - 1:
+        mask = mask.unsqueeze(1)
+    mask_b = mask.expand_as(per_cell)
+    return (per_cell * mask_b).sum() / mask_b.sum().clamp_min(1.0)
+
+
 def compute_uncertainty_loss(
     sigma2: torch.Tensor,
     z_targets: torch.Tensor,
@@ -128,8 +183,10 @@ def compute_total_loss(
     ownership_weight: float = 0.0,
     threat_loss: Optional[torch.Tensor] = None,
     threat_weight: float = 0.0,
+    chain_loss: Optional[torch.Tensor] = None,
+    chain_weight: float = 0.0,
 ) -> torch.Tensor:
-    """Combine policy, value, auxiliary, entropy, uncertainty, ownership, and threat losses."""
+    """Combine policy, value, auxiliary, entropy, uncertainty, ownership, threat, and chain losses."""
     total = policy_loss + value_loss
     if aux_loss is not None and aux_weight > 0.0:
         total = total + aux_weight * aux_loss
@@ -141,6 +198,8 @@ def compute_total_loss(
         total = total + ownership_weight * ownership_loss
     if threat_loss is not None and threat_weight > 0.0:
         total = total + threat_weight * threat_loss
+    if chain_loss is not None and chain_weight > 0.0:
+        total = total + chain_weight * chain_loss
     return total
 
 

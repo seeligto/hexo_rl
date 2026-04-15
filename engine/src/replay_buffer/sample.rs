@@ -20,6 +20,44 @@ use rand::RngExt;
 use super::sym_tables::*;
 use super::ReplayBuffer;
 
+/// Apply symmetry `sym_idx` to one 24-plane state tensor.
+///
+/// Generic over the element type `T: Copy` — callable with `f32` for the
+/// Python-facing bindings and with `u16` (f16 bits) for the internal buffer
+/// sampling path. Pure scatter; caller zeroes `dst` before invocation.
+///
+/// Layout: planes 0..N_HISTORY_PLANES scatter by pure coordinate permutation.
+/// Planes N_HISTORY_PLANES..N_PLANES (Q13 chain-length planes) scatter by
+/// coordinate permutation PLUS axis-plane remap via `tables.axis_perm[sym_idx]`.
+#[inline]
+pub fn apply_symmetry_24plane<T: Copy>(
+    src: &[T],
+    dst: &mut [T],
+    sym_idx: usize,
+    sym_tables: &SymTables,
+) {
+    debug_assert_eq!(src.len(), N_PLANES * N_CELLS);
+    debug_assert_eq!(dst.len(), N_PLANES * N_CELLS);
+    debug_assert!(sym_idx < N_SYMS);
+
+    let scatter   = &sym_tables.scatter[sym_idx];
+    let src_plane_lookup = &sym_tables.src_plane_lookup[sym_idx];
+
+    // Single loop over all N_PLANES planes — no branch on plane index.
+    // src_plane_lookup[dst_p] encodes the identity for planes 0..N_HISTORY_PLANES
+    // and the axis-perm remap for planes N_HISTORY_PLANES..N_PLANES.
+    for dst_p in 0..N_PLANES {
+        let src_p = src_plane_lookup[dst_p];
+        let src_base = src_p * N_CELLS;
+        let dst_base = dst_p * N_CELLS;
+        let src_plane = &src[src_base..src_base + N_CELLS];
+        let dst_plane = &mut dst[dst_base..dst_base + N_CELLS];
+        for &(sc, dc) in scatter {
+            dst_plane[dc as usize] = src_plane[sc as usize];
+        }
+    }
+}
+
 impl ReplayBuffer {
     /// Map an f16 weight (stored as bits) to a histogram bucket index.
     ///
@@ -113,8 +151,12 @@ impl ReplayBuffer {
     /// (`ownership`, `winning_line`) reuse the same scatter table as state — they live
     /// in the same window coordinate frame, just with u8 lanes.
     ///
-    /// Loop order — outer = planes, inner = scatter pairs — keeps each 722-byte
-    /// plane (361 × u16) resident in L1 cache during the inner scatter pass.
+    /// The 24-plane state layout is scattered by the shared
+    /// `apply_symmetry_24plane` kernel (generic over element type); policy +
+    /// ownership + winning_line are scattered inline below via the same coord
+    /// scatter table. See `apply_symmetry_24plane` for the split between
+    /// history+scalar planes (pure coord scatter) and Q13 chain-length planes
+    /// (coord scatter + axis-plane remap).
     #[inline]
     pub(crate) fn apply_sym(
         sym_idx:    usize,
@@ -128,18 +170,10 @@ impl ReplayBuffer {
         dst_wl:     &mut [u8],  // length AUX_STRIDE                    (caller-initialised)
         tables:     &SymTables,
     ) {
-        let scatter = &tables.scatter[sym_idx];
+        // State planes: delegate to the shared 24-plane kernel (u16 = f16 bits).
+        apply_symmetry_24plane::<u16>(src_state, dst_state, sym_idx, tables);
 
-        // State: for each plane, scatter the 361-cell slice.
-        // Plane stride = N_CELLS = 361 u16 = 722 bytes (fits in a few cache lines).
-        for p in 0..N_PLANES {
-            let base = p * N_CELLS;
-            let src_plane = &src_state[base..base + N_CELLS];
-            let dst_plane = &mut dst_state[base..base + N_CELLS];
-            for &(sc, dc) in scatter {
-                dst_plane[dc as usize] = src_plane[sc as usize];
-            }
-        }
+        let scatter = &tables.scatter[sym_idx];
 
         // Policy + ownership + winning_line: all three scatter through the same
         // 361-cell hex permutation table. Fuse into one loop so we iterate the

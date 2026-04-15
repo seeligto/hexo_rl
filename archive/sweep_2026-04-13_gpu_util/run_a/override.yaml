@@ -1,0 +1,8 @@
+# Run A — baseline (live HEAD config)
+# inf_bs=64, wait_ms=4.0 — matches configs/selfplay.yaml defaults.
+selfplay:
+  inference_batch_size: 64
+  inference_max_wait_ms: 4.0
+
+mixing:
+  buffer_persist: false

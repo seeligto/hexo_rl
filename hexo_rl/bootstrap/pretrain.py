@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -29,6 +30,7 @@ import yaml
 import structlog
 from rich.console import Console
 
+import engine
 from engine import Board
 from hexo_rl.bootstrap.dataset import replay_game_to_triples
 from hexo_rl.bootstrap.generate_corpus import BOT_GAMES_DIR, INJECTED_DIR, RAW_HUMAN_DIR
@@ -36,7 +38,7 @@ from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet, compile_model
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_value_loss, compute_aux_loss,
-    compute_total_loss, fp16_backward_step,
+    compute_chain_loss, compute_total_loss, fp16_backward_step,
 )
 from hexo_rl.training.checkpoints import save_full_checkpoint, save_inference_weights
 from hexo_rl.utils.constants import BOARD_SIZE
@@ -48,101 +50,89 @@ console = Console()
 POLICY_SIZE = BOARD_SIZE * BOARD_SIZE + 1
 
 # ── Hex augmentation ──────────────────────────────────────────────────────────
+#
+# Q13 chain planes live at state[18..24] and require an axis-plane remap under
+# augmentation in addition to the coordinate scatter — see
+# `engine/src/replay_buffer/sample.rs::apply_symmetry_24plane` + the
+# `axis_perm[sym_idx]` table in `sym_tables.rs`. The pre-Q13 pretrain path
+# replicated the coord scatter in Python but had two bugs:
+#   (1) no axis_perm remap, so chain planes contradicted the stones in 11/12
+#       augmented samples (§92/§93 F1);
+#   (2) (col, row) vs (row, col) coordinate convention mismatch with the
+#       Rust SymTables / _compute_chain_planes.
+# Both bugs are eliminated by routing through the Rust `apply_symmetries_batch`
+# binding — the same kernel ReplayBuffer.sample_batch uses, guaranteed to
+# match byte-exact via `tests/test_pretrain_aug.py` (F1 guard).
+#
+# Policies are scattered in numpy via a once-computed per-sym index map — they
+# have no chain-plane structure and the 12 tables fit in ~17 KB.
 
-_HEX_SYMS: Optional[List[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]] = None
+_POLICY_SCATTERS: Optional[List[np.ndarray]] = None
 
 
-def _precompute_hex_syms(board_size: int = BOARD_SIZE) -> List[Tuple]:
-    """Build 12 hexagonal symmetry scatter tables (one per symmetry).
+def _get_policy_scatters(board_size: int = BOARD_SIZE) -> List[np.ndarray]:
+    """Build 12 policy-scatter index arrays, each of length board_size**2 + 1.
 
-    Mirrors the Rust SymTables in engine/src/replay_buffer.rs:
-      - 6 rotations of 60° each:  (q,r) → (−r, q+r)
-      - 2 reflections (with/without): (q,r) → (r,q) applied first
-
-    Each entry is (src_rows, src_cols, dst_rows, dst_cols) — int32 arrays of
-    valid cell pairs. Cells that map outside the 19×19 window are dropped.
+    `scatter[dst_flat] = src_flat` — after apply, `new_policy = policy[scatter]`.
+    Cells whose source cell maps out of the window under symmetry s get
+    `src_flat = board_size**2 - 1` (a safe, zero-value cell); since pretrain
+    corpus policies are effectively localised per-position, the drops are
+    consistent with the Rust sample-batch behaviour (caller-initialised
+    destination = 0 for uncovered cells). Pass move (index 361) is invariant.
     """
-    center = board_size // 2
+    global _POLICY_SCATTERS
+    if _POLICY_SCATTERS is not None:
+        return _POLICY_SCATTERS
+
     N = board_size
-    syms: List[Tuple] = []
+    half = (N - 1) // 2
+    n_cells = N * N
+    n_actions = n_cells + 1
+    scatters: List[np.ndarray] = []
 
     for sym_idx in range(12):
-        do_reflect = sym_idx >= 6
+        reflect = sym_idx >= 6
         n_rot = sym_idx % 6
+        # Inverse-scatter table: for each dst cell, find which src cell scatters
+        # there under this sym. Match Rust SymTables::new() convention: axial
+        # (q, r) with q = flat // N - half, r = flat % N - half; reflect first
+        # (q, r) → (r, q); then rotate n_rot × 60°: (q, r) → (−r, q+r).
+        scatter = np.full(n_actions, n_cells - 1, dtype=np.int64)
+        scatter[n_cells] = n_cells  # pass
+        for src in range(n_cells):
+            q = src // N - half
+            r = src % N - half
+            if reflect:
+                q, r = r, q
+            for _ in range(n_rot):
+                q, r = -r, q + r
+            dq = q + half
+            dr = r + half
+            if 0 <= dq < N and 0 <= dr < N:
+                scatter[dq * N + dr] = src
+        scatters.append(scatter)
 
-        src_rs: List[int] = []
-        src_cs: List[int] = []
-        dst_rs: List[int] = []
-        dst_cs: List[int] = []
-
-        for src_row in range(N):
-            for src_col in range(N):
-                q, r = src_col - center, src_row - center
-                if do_reflect:
-                    q, r = r, q
-                for _ in range(n_rot):
-                    q, r = -r, q + r
-                dst_row = r + center
-                dst_col = q + center
-                if 0 <= dst_row < N and 0 <= dst_col < N:
-                    src_rs.append(src_row)
-                    src_cs.append(src_col)
-                    dst_rs.append(dst_row)
-                    dst_cs.append(dst_col)
-
-        syms.append((
-            np.array(src_rs, dtype=np.int32),
-            np.array(src_cs, dtype=np.int32),
-            np.array(dst_rs, dtype=np.int32),
-            np.array(dst_cs, dtype=np.int32),
-        ))
-    return syms
-
-
-def _get_hex_syms() -> List[Tuple]:
-    global _HEX_SYMS
-    if _HEX_SYMS is None:
-        _HEX_SYMS = _precompute_hex_syms()
-    return _HEX_SYMS
-
-
-def _apply_hex_sym(
-    state: np.ndarray,
-    policy: np.ndarray,
-    sym: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Apply one hex symmetry to a (state, policy) pair.
-
-    Args:
-        state:  (18, N, N) float16 array.
-        policy: (N*N+1,) float32 array.
-        sym:    (src_rows, src_cols, dst_rows, dst_cols)
-
-    Returns new (state, policy) arrays — same dtypes as inputs.
-    """
-    src_rs, src_cs, dst_rs, dst_cs = sym
-    N = state.shape[-1]
-
-    new_state = np.zeros_like(state)
-    new_state[:, dst_rs, dst_cs] = state[:, src_rs, src_cs]
-
-    new_policy = np.zeros_like(policy)
-    new_policy[dst_rs * N + dst_cs] = policy[src_rs * N + src_cs]
-    new_policy[N * N] = policy[N * N]   # pass move is invariant under all symmetries
-
-    return new_state, new_policy
+    _POLICY_SCATTERS = scatters
+    return scatters
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
 
 class AugmentedBootstrapDataset(torch.utils.data.Dataset):
-    """Pretrain dataset with optional 12-fold hex augmentation per sample.
+    """Pretrain dataset that yields raw (state, policy, outcome) triples.
+
+    The 12-fold hex augmentation is applied in `augmented_collate` via the
+    Rust `engine.apply_symmetries_batch` binding — this is the same scatter
+    kernel the ReplayBuffer uses at sample time, guaranteed byte-exact via
+    the F1 parity test (`tests/test_pretrain_aug.py`). Moving augmentation
+    to collate amortises the PyO3 boundary over an entire batch and
+    eliminates the Python `_apply_hex_sym` path that was corrupting Q13
+    chain planes in pretrain v3.
 
     Args:
-        states:   (N, 18, 19, 19) float16 array.
+        states:   (N, 24, 19, 19) float16 array (mmap-compatible).
         policies: (N, 362) float32 array.
         outcomes: (N,) float32 array, values in {-1, 0, +1}.
-        augment:  If True, apply a randomly chosen hex symmetry per sample.
     """
 
     def __init__(
@@ -150,33 +140,72 @@ class AugmentedBootstrapDataset(torch.utils.data.Dataset):
         states: np.ndarray,
         policies: np.ndarray,
         outcomes: np.ndarray,
-        augment: bool = True,
     ) -> None:
         self.states = states
         self.policies = policies
         self.outcomes = outcomes
-        self.augment = augment
-        self.syms = _get_hex_syms() if augment else None
 
     def __len__(self) -> int:
         return len(self.outcomes)
 
     def __getitem__(
         self, idx: int
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        s = self.states[idx].copy()
-        p = self.policies[idx].copy()
-        v = float(self.outcomes[idx])
+    ) -> Tuple[np.ndarray, np.ndarray, float]:
+        # Copy out of the (possibly mmapped) backing store so downstream
+        # collate can batch-concat without aliasing.
+        return (
+            self.states[idx].copy(),
+            self.policies[idx].copy(),
+            float(self.outcomes[idx]),
+        )
 
-        if self.augment and self.syms is not None:
-            sym = self.syms[np.random.randint(12)]
-            s, p = _apply_hex_sym(s, p, sym)
+
+def make_augmented_collate(augment: bool, board_size: int = BOARD_SIZE):
+    """Return a collate_fn that batches triples and applies hex augmentation
+    via the Rust `engine.apply_symmetries_batch` kernel.
+
+    With `augment=True`:
+      - Stack the batch of raw states into an (N, 24, 19, 19) float32 array
+        (upcast from the f16 dataset copies — the Rust binding takes f32).
+      - Draw N uniform sym indices in [0, 12).
+      - Call `engine.apply_symmetries_batch(states_f32, sym_indices)` →
+        (N, 24, 19, 19) f32 augmented states (one PyO3 hop per batch).
+      - Scatter the per-sample policies via the precomputed numpy index
+        tables (`_get_policy_scatters`).
+      - Cast states back to float16 (matches the pre-rewrite tensor dtype).
+
+    With `augment=False`:
+      - Stack as-is, no Rust hop, no policy scatter.
+    """
+    scatters_np = _get_policy_scatters(board_size) if augment else None
+
+    def _collate(
+        batch: List[Tuple[np.ndarray, np.ndarray, float]],
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        n = len(batch)
+        states = np.stack([b[0] for b in batch], axis=0)          # f16 (N,24,19,19)
+        policies = np.stack([b[1] for b in batch], axis=0)        # f32 (N, 362)
+        outcomes = np.asarray([b[2] for b in batch], dtype=np.float32)
+
+        if augment and scatters_np is not None:
+            states_f32 = states.astype(np.float32, copy=False)
+            sym_indices = np.random.randint(0, 12, size=n).astype(np.uint64)
+            states_f32 = engine.apply_symmetries_batch(states_f32, sym_indices.tolist())
+            # Policy scatter per row via numpy fancy indexing. Each sym has its
+            # own permutation index table; build one (N, 362) dst-from-src map.
+            scattered = np.empty_like(policies)
+            for i in range(n):
+                scattered[i] = policies[i][scatters_np[int(sym_indices[i])]]
+            policies = scattered
+            states = states_f32.astype(np.float16, copy=False)
 
         return (
-            torch.from_numpy(s),                        # float16
-            torch.from_numpy(p),                        # float32
-            torch.tensor(v, dtype=torch.float32),
+            torch.from_numpy(states),
+            torch.from_numpy(policies),
+            torch.from_numpy(outcomes),
         )
+
+    return _collate
 
 
 # ── Corpus loading ────────────────────────────────────────────────────────────
@@ -200,7 +229,7 @@ def load_corpus(
     """Load all corpus games and return flat per-position arrays.
 
     Returns:
-        states:   (M, 18, 19, 19) float16
+        states:   (M, 24, 19, 19) float16
         policies: (M, 362) float32
         outcomes: (M,) float32
         weights:  (M,) float32 — per-position sampling weight
@@ -362,6 +391,7 @@ class BootstrapTrainer:
         loader: torch.utils.data.DataLoader,
         label_smoothing: float = 0.05,
         aux_weight: float = 0.15,
+        chain_weight: float = 0.0,
         step_budget: Optional[int] = None,
         log_interval: int = 50,
     ) -> Dict[str, float]:
@@ -371,15 +401,17 @@ class BootstrapTrainer:
             loader:         DataLoader yielding (states, policies, outcomes).
             label_smoothing: ε for policy targets; 0 disables.
             aux_weight:     Weight for opponent-reply auxiliary loss.
+            chain_weight:   Weight for Q13-aux chain-length head (0 disables it).
             step_budget:    Stop after this many steps (for smoke tests).
 
         Returns:
-            Dict with keys loss, policy_loss, value_loss, opp_reply_loss.
+            Dict with keys loss, policy_loss, value_loss, opp_reply_loss, chain_loss.
         """
         self.model.train()
         total: Dict[str, float] = {
             "loss": 0.0, "policy_loss": 0.0,
             "value_loss": 0.0, "opp_reply_loss": 0.0,
+            "chain_loss": 0.0,
         }
         n_batches = 0
 
@@ -394,18 +426,34 @@ class BootstrapTrainer:
 
             self.optimizer.zero_grad()
 
+            use_chain = chain_weight > 0.0
             with torch.amp.autocast(
                 device_type=self.device.type,
                 dtype=torch.float16,
                 enabled=self.fp16,
             ):
-                log_policy, _value, v_logit, opp_reply = self.model(states, aux=True)
+                fwd = self.model(states, aux=True, chain=use_chain)
+                log_policy, _value, v_logit, opp_reply = fwd[0], fwd[1], fwd[2], fwd[3]
+                chain_pred = fwd[4] if use_chain else None
 
                 policy_valid = policies.sum(dim=1) > 1e-6
                 policy_loss = compute_policy_loss(log_policy, policies, policy_valid, self.device)
                 value_loss = compute_value_loss(v_logit, outcomes)
                 opp_reply_loss = compute_aux_loss(opp_reply, policies, policy_valid, self.device)
-                loss = compute_total_loss(policy_loss, value_loss, opp_reply_loss, aux_weight)
+
+                chain_loss = None
+                if use_chain and chain_pred is not None:
+                    chain_target = states[:, 18:24]
+                    chain_loss = compute_chain_loss(chain_pred, chain_target)
+
+                loss = compute_total_loss(
+                    policy_loss,
+                    value_loss,
+                    opp_reply_loss,
+                    aux_weight,
+                    chain_loss=chain_loss,
+                    chain_weight=chain_weight,
+                )
 
             grad_norm = fp16_backward_step(loss, self.optimizer, self.scaler, self.model, self.fp16)
 
@@ -417,6 +465,8 @@ class BootstrapTrainer:
             total["policy_loss"]    += policy_loss.item()
             total["value_loss"]     += value_loss.item()
             total["opp_reply_loss"] += opp_reply_loss.item()
+            if chain_loss is not None:
+                total["chain_loss"] += chain_loss.item()
             n_batches += 1
 
             if log_interval > 0 and self.step % log_interval == 0:
@@ -424,7 +474,8 @@ class BootstrapTrainer:
                 value_accuracy = (torch.sign(v_logit.squeeze()) == torch.sign(outcomes)).float().mean().item()
                 lr = float(self.optimizer.param_groups[0]["lr"])
 
-                # Emit to dashboard
+                # Emit to dashboard — include loss_chain so the C14 dashboard
+                # rendering surfaces the Q13-aux head during pretrain runs.
                 emit_event({
                     "event": "training_step",
                     "step": self.step,
@@ -432,6 +483,9 @@ class BootstrapTrainer:
                     "loss_policy": float(policy_loss.item()),
                     "loss_value": float(value_loss.item()),
                     "loss_aux": float(opp_reply_loss.item()),
+                    "loss_chain": float(chain_loss.item()) if chain_loss is not None else 0.0,
+                    "loss_ownership": 0.0,
+                    "loss_threat": 0.0,
                     "policy_entropy": policy_entropy,
                     "value_accuracy": value_accuracy,
                     "lr": lr,
@@ -496,7 +550,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     cfg = ckpt["config"]
     loaded_model = HexTacToeNet(
         board_size=int(cfg.get("board_size", 19)),
-        in_channels=int(cfg.get("in_channels", 18)),
+        in_channels=int(cfg.get("in_channels", 24)),
         filters=int(cfg.get("filters", 128)),
         res_blocks=int(cfg.get("res_blocks", 12)),
         se_reduction_ratio=int(cfg.get("se_reduction_ratio", 4)),
@@ -504,7 +558,9 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     loaded_model.load_state_dict(ckpt["model_state"])
     loaded_model.eval().to(device)
 
-    dummy = torch.zeros(1, 18, BOARD_SIZE, BOARD_SIZE, device=device)
+    dummy = torch.zeros(
+        1, int(cfg.get("in_channels", 24)), BOARD_SIZE, BOARD_SIZE, device=device,
+    )
     with torch.no_grad():
         log_pol, val, v_logit = loaded_model(dummy.float())
     assert log_pol.shape == (1, POLICY_SIZE), f"Unexpected policy shape: {log_pol.shape}"
@@ -630,7 +686,7 @@ def pretrain() -> None:
     )
     console.print(f"Dataset: {len(outcomes):,} positions")
 
-    dataset = AugmentedBootstrapDataset(states, policies, outcomes, augment=True)
+    dataset = AugmentedBootstrapDataset(states, policies, outcomes)
     sampler = torch.utils.data.WeightedRandomSampler(
         weights=torch.from_numpy(weights).double(),
         num_samples=len(dataset),
@@ -642,6 +698,21 @@ def pretrain() -> None:
         sampler=sampler,
         num_workers=0,
         pin_memory=(device.type == "cuda"),
+        collate_fn=make_augmented_collate(augment=True),
+    )
+
+    # One-off timing of the Rust aug path so any throughput regression vs the
+    # pre-Q13 Python _apply_hex_sym path is visible in the pretrain console log.
+    _t0 = time.perf_counter()
+    _probe_batches = min(20, len(loader))
+    _it = iter(loader)
+    for _ in range(_probe_batches):
+        next(_it)
+    _dt = time.perf_counter() - _t0
+    console.print(
+        f"[bold]Aug-path probe:[/bold] {_probe_batches} batches of "
+        f"{batch_size} via Rust apply_symmetries_batch = {_dt*1000:.1f} ms "
+        f"({(_dt/_probe_batches)*1000:.2f} ms/batch)"
     )
 
     # Model
@@ -674,12 +745,14 @@ def pretrain() -> None:
     )
     trainer.step = -total_pretrain_steps
 
+    chain_weight = float(config.get("aux_chain_weight", 0.0))
     prev_loss: Optional[float] = None
     for epoch in range(1, args.epochs + 1):
         metrics = trainer.train_epoch(
             loader,
             label_smoothing=label_smoothing,
             aux_weight=aux_weight,
+            chain_weight=chain_weight,
             step_budget=step_budget,
         )
         log.info("epoch_complete", epoch=epoch, **{k: round(v, 4) for k, v in metrics.items()})
@@ -688,7 +761,8 @@ def pretrain() -> None:
             f"loss={metrics['loss']:.4f}  "
             f"policy={metrics['policy_loss']:.4f}  "
             f"value={metrics['value_loss']:.4f}  "
-            f"aux={metrics['opp_reply_loss']:.4f}"
+            f"aux={metrics['opp_reply_loss']:.4f}  "
+            f"chain={metrics['chain_loss']:.4f}"
         )
         if step_budget is not None and trainer.step >= step_budget:
             break

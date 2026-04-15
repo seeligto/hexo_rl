@@ -28,6 +28,7 @@ Split only when their scope makes navigation painful — not before.
 ### Deduplicate Python / Rust symmetry tables
 
 The 12-fold hex augmentation symmetry tables are defined in both:
+
 - Rust: `engine/src/replay_buffer/sym_tables.rs`
 - Python: `hexo_rl/selfplay/policy_projection.py` (for policy mapping back to global coords)
 
@@ -39,6 +40,7 @@ tables are small and tested independently.
 
 Currently self-play games are processed into (state, policy, outcome) triples and discarded.
 No full game record is kept. This blocks:
+
 - Post-hoc review of interesting games
 - Opening book construction from self-play data
 - Debugging value estimation errors on specific positions
@@ -58,3 +60,10 @@ sampling can weight sources differently without re-running the full export.
 `hexo_rl/eval/results_db.py` loads all historical match results into memory for
 Bradley-Terry recomputation. At 1M+ matches this will be slow. Add a windowed query
 (last N matches per pair) as an alternative computation mode.
+
+### py-spy flame graph on live training
+
+Blocked on `py-spy` Python 3.14 support (0.4.1 fails with "Failed to find python
+version from target process"). Re-attempt when upstream lands. Expected to confirm
+NN forward dominates wall-time; if otherwise, reopen the worker-parallelism
+hypothesis. Tracked as Q18 in `docs/06_OPEN_QUESTIONS.md`.

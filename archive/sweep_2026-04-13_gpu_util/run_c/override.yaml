@@ -1,0 +1,7 @@
+# Run C — isolate batch_size lever: inf_bs=128, wait_ms=4.0
+selfplay:
+  inference_batch_size: 128
+  inference_max_wait_ms: 4.0
+
+mixing:
+  buffer_persist: false

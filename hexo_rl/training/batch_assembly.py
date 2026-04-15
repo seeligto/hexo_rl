@@ -37,7 +37,7 @@ class BatchBuffers:
     ``warmup_active`` is flipped to False the first time all sources return
     the expected row count (a side-effect of :func:`assemble_mixed_batch`).
     """
-    states: np.ndarray        # (B, 18, 19, 19) float16
+    states: np.ndarray        # (B, 24, 19, 19) float16
     policies: np.ndarray      # (B, N_ACTIONS) float32
     outcomes: np.ndarray      # (B,) float32
     ownership: np.ndarray     # (B, 19, 19) uint8
@@ -56,7 +56,7 @@ def allocate_batch_buffers(batch_size: int, n_actions: int) -> BatchBuffers:
         A :class:`BatchBuffers` instance with all arrays zeroed.
     """
     return BatchBuffers(
-        states=np.empty((batch_size, 18, 19, 19), dtype=np.float16),
+        states=np.empty((batch_size, 24, 19, 19), dtype=np.float16),
         policies=np.empty((batch_size, n_actions), dtype=np.float32),
         outcomes=np.empty(batch_size, dtype=np.float32),
         ownership=np.empty((batch_size, 19, 19), dtype=np.uint8),
@@ -113,7 +113,7 @@ def load_pretrained_buffer(
     )
     t0 = time.time()
     data = np.load(pretrained_path, mmap_mode="r")
-    pre_states   = data["states"]    # (T, 18, 19, 19) float16
+    pre_states   = data["states"]    # (T, 24, 19, 19) float16
     pre_policies = data["policies"]  # (T, 362) float32
     pre_outcomes = data["outcomes"]  # (T,) float32
     T = len(pre_outcomes)

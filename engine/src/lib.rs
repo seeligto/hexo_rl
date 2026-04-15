@@ -14,12 +14,17 @@ pub mod replay_buffer;
 
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
-use numpy::{PyArray1, PyArray3, PyArrayMethods};
+use numpy::{
+    IntoPyArray, PyArray1, PyArray3, PyArray4, PyArrayMethods,
+    PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArray4, PyUntypedArrayMethods,
+};
 
-use board::{Board as RustBoard, Player, BOARD_SIZE};
+use board::{Board as RustBoard, Player, BOARD_SIZE, encode_chain_planes as rust_encode_chain_planes, TOTAL_CELLS};
 use game_runner::SelfPlayRunner;
 use inference_bridge::InferenceBatcher;
 use replay_buffer::ReplayBuffer;
+use replay_buffer::sample::apply_symmetry_24plane;
+use replay_buffer::sym_tables::{SymTables, N_PLANES, N_SYMS};
 
 // ── Python-visible Board wrapper ──────────────────────────────────────────────
 
@@ -107,14 +112,15 @@ impl PyBoard {
         self.inner.zobrist_hash
     }
 
-    /// Encode the board as a flat list of floats for the 18 tensor planes
-    /// (shape conceptually [18, 19, 19], returned as a flat list of length 18×361=6498):
+    /// Encode the board as a flat list of floats for the 24 tensor planes
+    /// (shape conceptually [24, 19, 19], returned as a flat list of length 24×361=8664):
     ///   plane 0: current player's stones
     ///   plane 8: opponent's stones
     ///   plane 16: moves_remaining == 2 ? 1.0 : 0.0
     ///   plane 17: ply % 2
+    ///   planes 18..23: Q13 chain-length planes, 3 hex axes × 2 players, /6.0-normalized.
     ///
-    /// Use numpy.array(board.to_tensor(), dtype=numpy.float32).reshape(18, 19, 19).
+    /// Use numpy.array(board.to_tensor(), dtype=numpy.float32).reshape(24, 19, 19).
     pub fn to_tensor(&self) -> Vec<f32> {
         self.inner.to_planes()
     }
@@ -526,6 +532,134 @@ impl PyMCTSTree {
     }
 }
 
+// ── Symmetry + chain-plane bindings (Q13 pretrain parity) ────────────────────
+//
+// These expose the exact Rust kernels used by the ReplayBuffer sampling path
+// and by `Board.to_tensor()` so Python callers (pretrain collate, parity
+// tests) can never diverge. Thread-local SymTables avoids per-call allocation.
+
+thread_local! {
+    static SYM_TABLES_TLS: SymTables = SymTables::new();
+}
+
+/// Apply 12-fold hex symmetry `sym_idx` to one (24, 19, 19) state tensor.
+///
+/// Scatters both the 18 history/scalar planes (pure coordinate permutation)
+/// and the 6 Q13 chain-length planes (coordinate permutation + axis-plane
+/// remap). Byte-exact with the ReplayBuffer sampling kernel.
+///
+/// Args:
+///     state:   (24, 19, 19) float32 numpy array. **Must be C-contiguous.**
+///              If the array may be non-contiguous (e.g. a slice or transposed
+///              view), call `np.ascontiguousarray(state)` before passing it in.
+///     sym_idx: integer in [0, 12).
+///
+/// Returns a newly-allocated (24, 19, 19) float32 numpy array.
+#[pyfunction]
+fn apply_symmetry<'py>(
+    py: Python<'py>,
+    state: PyReadonlyArray3<'py, f32>,
+    sym_idx: usize,
+) -> PyResult<Bound<'py, PyArray3<f32>>> {
+    if sym_idx >= N_SYMS {
+        return Err(PyValueError::new_err(format!(
+            "sym_idx out of range: {} (expected 0..{})",
+            sym_idx, N_SYMS
+        )));
+    }
+    let shape = state.shape();
+    if shape.len() != 3 || shape[0] != N_PLANES || shape[1] != BOARD_SIZE || shape[2] != BOARD_SIZE {
+        return Err(PyValueError::new_err(format!(
+            "expected state shape ({}, {}, {}); got {:?}",
+            N_PLANES, BOARD_SIZE, BOARD_SIZE, shape
+        )));
+    }
+    let src = state.as_slice()?;
+    let mut dst = vec![0.0f32; N_PLANES * BOARD_SIZE * BOARD_SIZE];
+    SYM_TABLES_TLS.with(|tables| {
+        apply_symmetry_24plane::<f32>(src, &mut dst, sym_idx, tables);
+    });
+    dst.into_pyarray(py).reshape([N_PLANES, BOARD_SIZE, BOARD_SIZE])
+}
+
+/// Batched version of `apply_symmetry`.
+///
+/// Args:
+///     states:      (N, 24, 19, 19) float32 numpy array.
+///     sym_indices: (N,) integer sym_idx per state, values in [0, 12).
+///
+/// Returns a newly-allocated (N, 24, 19, 19) float32 numpy array.
+#[pyfunction]
+fn apply_symmetries_batch<'py>(
+    py: Python<'py>,
+    states: PyReadonlyArray4<'py, f32>,
+    sym_indices: Vec<usize>,
+) -> PyResult<Bound<'py, PyArray4<f32>>> {
+    let shape = states.shape();
+    if shape.len() != 4 || shape[1] != N_PLANES || shape[2] != BOARD_SIZE || shape[3] != BOARD_SIZE {
+        return Err(PyValueError::new_err(format!(
+            "expected states shape (N, {}, {}, {}); got {:?}",
+            N_PLANES, BOARD_SIZE, BOARD_SIZE, shape
+        )));
+    }
+    let n = shape[0];
+    if sym_indices.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "sym_indices length {} != batch size {}",
+            sym_indices.len(), n
+        )));
+    }
+    for (i, &s) in sym_indices.iter().enumerate() {
+        if s >= N_SYMS {
+            return Err(PyValueError::new_err(format!(
+                "sym_indices[{}] = {} out of range (expected 0..{})",
+                i, s, N_SYMS
+            )));
+        }
+    }
+    let stride = N_PLANES * BOARD_SIZE * BOARD_SIZE;
+    let src = states.as_slice()?;
+    let mut dst = vec![0.0f32; n * stride];
+    SYM_TABLES_TLS.with(|tables| {
+        for b in 0..n {
+            let src_b = &src[b * stride..(b + 1) * stride];
+            let dst_b = &mut dst[b * stride..(b + 1) * stride];
+            apply_symmetry_24plane::<f32>(src_b, dst_b, sym_indices[b], tables);
+        }
+    });
+    dst.into_pyarray(py).reshape([n, N_PLANES, BOARD_SIZE, BOARD_SIZE])
+}
+
+/// Compute the 6 Q13 chain-length planes from (cur, opp) stone masks.
+///
+/// Args:
+///     cur_stones: (19, 19) float32 mask, 1.0 at current-player stones else 0.0.
+///     opp_stones: (19, 19) float32 mask, 1.0 at opponent stones else 0.0.
+///
+/// Returns a (6, 19, 19) float32 numpy array of /6-normalised chain values.
+/// Plane order: [axis0_cur, axis0_opp, axis1_cur, axis1_opp, axis2_cur, axis2_opp].
+#[pyfunction]
+fn compute_chain_planes<'py>(
+    py: Python<'py>,
+    cur_stones: PyReadonlyArray2<'py, f32>,
+    opp_stones: PyReadonlyArray2<'py, f32>,
+) -> PyResult<Bound<'py, PyArray3<f32>>> {
+    for (name, arr) in [("cur_stones", &cur_stones), ("opp_stones", &opp_stones)] {
+        let shape = arr.shape();
+        if shape.len() != 2 || shape[0] != BOARD_SIZE || shape[1] != BOARD_SIZE {
+            return Err(PyValueError::new_err(format!(
+                "{} shape must be ({}, {}); got {:?}",
+                name, BOARD_SIZE, BOARD_SIZE, shape
+            )));
+        }
+    }
+    let cur = cur_stones.as_slice()?;
+    let opp = opp_stones.as_slice()?;
+    let mut out = vec![0.0f32; 6 * TOTAL_CELLS];
+    rust_encode_chain_planes(cur, opp, &mut out);
+    out.into_pyarray(py).reshape([6usize, BOARD_SIZE, BOARD_SIZE])
+}
+
 // ── Module registration ───────────────────────────────────────────────────────
 
 #[pymodule]
@@ -535,5 +669,8 @@ fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<InferenceBatcher>()?;
     m.add_class::<SelfPlayRunner>()?;
     m.add_class::<ReplayBuffer>()?;
+    m.add_function(wrap_pyfunction!(apply_symmetry, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_symmetries_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(compute_chain_planes, m)?)?;
     Ok(())
 }

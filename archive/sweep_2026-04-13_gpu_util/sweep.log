@@ -1,0 +1,19 @@
+=== Run a starting at 2026-04-13T19:28:31Z ===
+dmon pid: 16620
+train pid: 16621
+sleeping 1200s...
+=== Run a killing at 2026-04-13T19:48:31Z ===
+=== Run a done at 2026-04-13T19:48:33Z ===
+=== Run b starting at 2026-04-13T19:48:38Z ===
+dmon pid: 19951
+train pid: 19952
+sleeping 1200s...
+=== Run b killing at 2026-04-13T20:08:38Z ===
+=== Run b done at 2026-04-13T20:08:41Z ===
+=== Run c starting at 2026-04-13T20:08:46Z ===
+dmon pid: 21909
+train pid: 21910
+sleeping 1200s...
+=== Run c killing at 2026-04-13T20:28:46Z ===
+=== Run c done at 2026-04-13T20:28:48Z ===
+=== SWEEP COMPLETE 2026-04-13T20:28:48Z ===

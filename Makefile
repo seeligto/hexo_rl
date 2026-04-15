@@ -170,6 +170,16 @@ probe.fixtures: ## Regenerate fixtures/threat_probe_positions.npz (WARNING: inva
 	$(PY) scripts/generate_threat_probe_fixtures.py \
 		--output fixtures/threat_probe_positions.npz
 
+WINDOWING_CKPT ?= checkpoints/checkpoint_00020496.pt
+
+.PHONY: probe.windowing
+probe.windowing: ## Windowing diagnostic probe (Q_cov, Q_anchor, Q_stability) on checkpoint_00020496.pt
+	@mkdir -p reports/probes
+	$(PY) scripts/probe_windowing.py \
+		--checkpoint "$(WINDOWING_CKPT)" \
+		--fixture fixtures/windowing_probe_positions.npz \
+		--output "reports/probes/windowing_$(shell date +%Y%m%d_%H%M%S).md"
+
 
 # ── Eval ──────────────────────────────────────────────────────────────────────
 

@@ -53,9 +53,10 @@ PyO3  bridge        zero-copy NumPy transfer between the two layers
 ```
 
 The board is genuinely infinite: the Rust core uses a sparse `HashMap<(q,r), Player>`
-with 128-bit Zobrist hashing. The network receives fixed-size (18 × 19 × 19) tensors
-assembled by windowing around active stone clusters. See [docs/01_architecture.md](docs/01_architecture.md)
-for the full spec.
+with 128-bit Zobrist hashing. The network receives fixed-size (24 × 19 × 19) tensors
+assembled by windowing around active stone clusters — 18 AlphaZero history/scalar
+planes plus 6 Q13 chain-length planes (one per hex axis direction, pre/post). See
+[docs/01_architecture.md](docs/01_architecture.md) for the full spec.
 
 ---
 

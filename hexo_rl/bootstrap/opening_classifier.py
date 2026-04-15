@@ -25,14 +25,14 @@ from __future__ import annotations
 import math
 from typing import Sequence
 
+from hexo_rl.utils.coordinates import axial_distance
+
 
 # -- Hex geometry helpers ---------------------------------------------------
 
 def hex_dist(q1: int, r1: int, q2: int, r2: int) -> int:
     """Hex (axial) distance between two cells."""
-    dq = q1 - q2
-    dr = r1 - r2
-    return max(abs(dq), abs(dr), abs(dq + dr))
+    return axial_distance((q1, r1), (q2, r2))
 
 
 def _hex_angle(q: int, r: int) -> float:

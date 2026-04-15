@@ -19,7 +19,7 @@ impl ReplayBuffer {
     /// Store a single `(state, policy, outcome, ownership, winning_line)` sample.
     ///
     /// Args:
-    ///     state:        float16 numpy array of shape (18, 19, 19)
+    ///     state:        float16 numpy array of shape (24, 19, 19)
     ///     policy:       float32 numpy array of shape (362,)
     ///     outcome:      scalar float32  (−1 / 0 / +1)
     ///     ownership:    uint8 numpy array of shape (361,)  encoding {0=P2, 1=empty, 2=P1}
@@ -27,8 +27,10 @@ impl ReplayBuffer {
     ///     game_id:      position tag for correlation guard (from `next_game_id()`); default −1
     ///     game_length:  total compound moves in the originating game; default 0 (= weight 1.0)
     ///
-    /// Both aux targets MUST be projected to the same window centre as `state`
-    /// (per-row cluster centre, not the game-end bbox centroid).
+    /// State layout: 18 AlphaZero-style history+scalar planes + 6 Q13 chain-length
+    /// planes ([a0_cur, a0_opp, a1_cur, a1_opp, a2_cur, a2_opp]). Both aux targets
+    /// MUST be projected to the same window centre as `state` (per-row cluster
+    /// centre, not the game-end bbox centroid).
     pub(crate) fn push_impl(
         &mut self,
         state:        PyReadonlyArray3<f16>,
@@ -50,7 +52,7 @@ impl ReplayBuffer {
 
         if state_slice.len() != STATE_STRIDE {
             return Err(PyValueError::new_err(format!(
-                "state must have {} elements (18×19×19), got {}", STATE_STRIDE, state_slice.len()
+                "state must have {} elements (24×19×19), got {}", STATE_STRIDE, state_slice.len()
             )));
         }
         if policy_slice.len() != POLICY_STRIDE {
@@ -112,7 +114,7 @@ impl ReplayBuffer {
     /// Handles ring-buffer wrap-around correctly.
     ///
     /// Args:
-    ///     states:        float16 numpy array of shape (T, 18, 19, 19)
+    ///     states:        float16 numpy array of shape (T, 24, 19, 19)
     ///     policies:      float32 numpy array of shape (T, 362)
     ///     outcomes:      float32 numpy array of shape (T,)
     ///     ownership:     uint8   numpy array of shape (T, 361)  per-row {0=P2, 1=empty, 2=P1}

@@ -7,6 +7,8 @@
 | Q5 | Supervised→self-play transition schedule | Exponential decay 0.8→0.1 over 1M steps; growing buffer + mixed data streams | `a6e5a79` |
 | Q6 | Sequential vs compound action space | Sequential confirmed — 2 MCTS plies per turn, Q-flip at turn boundaries, Dirichlet skipped at intermediate plies | `5be7df7`, `9b899e9` |
 | Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically | — |
+| Q13 | Chain-length planes as input tensor augmentation | 6 chain-length planes added at indices 18..23 (3 hex axes × 2 players, /6-normalised). Includes chain_head auxiliary regression loss (smooth-L1 on `input[:, 18:24]` target). Atomic 18→24 plane break with fresh pretrain v3. See sprint log §92. | `feat/q13-chain-planes` branch |
+| Q19 | Threat-head BCE class imbalance | `pos_weight = 59.0` (theoretical `(1−p)/p` at ~1.6% positive fraction) added to threat-head `BCEWithLogitsLoss`. Landed atomically with Q13 as a fresh bootstrap. `scripts/compute_threat_pos_weight.py` recomputes empirically from a replay buffer when available. §91 C4 monitoring hook stays in place. | `feat/q13-chain-planes` branch §92 |
 
 ## Active (Phase 4.0)
 
@@ -16,6 +18,7 @@
 | Q2 | Value aggregation: min vs mean vs attention | Train 4 variants, compare value MSE + win rate | ~4 GPU-days | HIGH — unblocked now Q17 resolved |
 | Q3 | Optimal K (number of cluster windows) | Ablation K=2,3,4,6 | ~6 GPU-days | MEDIUM |
 | Q8 | First-player advantage in value training | Measure P1 win rate by Elo band; adjust value targets if >60% | ~2 GPU-days | MEDIUM |
+| Q25 | Worker throughput variance: 24-plane NN latency + IQR spike | Re-bench n=10 after cooling; profile InferenceBatcher queue + live NN latency | ~1 hr diagnosis | **HIGH — blocks sustained self-play** |
 
 **Q17 (2026-04-09, RESOLVED 2026-04-10):** The P3 overnight run
 collapsed to deterministic carbon-copy self-play games between
@@ -145,8 +148,13 @@ of eval metrics only. Defer until after Phase 4.0 exit criteria are met.
 
 ### Q13 — Chain Length Planes as Input Tensor Augmentation
 
-**Priority:** MEDIUM (Phase 4.5 architectural decision)
-**Source:** KrakenBot chain head analysis, threat theory framework, 2026-04-06
+**RESOLVED 2026-04-14** — sprint log §92. See the "Resolved" table at the
+top of this file. Kept inline here for historical context on the pre-
+landing design discussion.
+
+**Priority (historical):** MEDIUM (Phase 4.5 architectural decision)
+**Source:** KrakenBot chain head analysis, threat theory framework, 2026-04-06,
+plus `reports/literature_review_26_04_24/review.md`.
 
 **Question:** Should we add 6 chain-length planes (per-cell, per-direction unblocked
 run length, 3 hex axes × 2 players) to the input tensor, changing from 18 to 24
@@ -154,17 +162,21 @@ planes? These planes are the spatial substrate of W-values across the board and 
 the network geometric awareness as an inductive bias rather than learning it from
 scratch.
 
-**Implementation path:** Compute in Python `GameState.to_tensor()` — no Rust changes
-required. Pure board dict scan. Fast enough for the hot path.
+**Resolution:** yes. Implemented as a fresh-start bundle with Q19 and a
+new auxiliary `chain_head` regression loss (smooth-L1 on a slice-from-
+input target). The literature review's 1.65× KataGo expectation was
+explicitly downgraded — our aux target is an input slice, not forward
+information — so realistic uplift is 1.1–1.3× on tactical probe
+convergence, not on raw loss magnitude. The wider-window aux variant
+that matches KataGo's structure is parked as Q21.
 
-**Constraints:** Breaking change — requires retrain from scratch, new replay buffer
-layout, new augmentation scatter tables. Must be decided before the next sustained
-training run.
-
-**Experiment design:** Train 18-plane baseline vs 24-plane variant for 500K steps;
-compare tactical accuracy (S0 block rate) and early Elo trajectory.
-
-**Cost:** ~4 GPU-days.
+**Implementation actual:** Python `GameState.to_tensor()` calls a
+module-private numpy-vectorised helper (slicing + zero-pad shifts, NOT
+`np.roll`). Rust self-play path has a parity helper in
+`engine/src/board/state.rs` (`encode_chain_planes`) so the feature
+tensors from both paths are byte-exact. Replay buffer scatter kernel
+remaps plane indices 18..23 through a per-symmetry axis permutation
+table; tested byte-exact against fresh ground-truth recomputation.
 
 ---
 
@@ -218,6 +230,209 @@ leaves per-worker, so `leaf_bs=16` just delays submission without reducing total
 **Negative result reference:** Sprint log §69.
 
 **Estimated cost:** ~2 GPU-days (implementation + A/B comparison).
+
+---
+
+### Q18 — NN forward latency ceiling [WATCH, Phase 4.5]
+
+**Priority:** WATCH (do not touch during Phase 4.0 sustained runs)
+**Source:** Sprint log §90 / `/tmp/gpu_util_phase1.md`, 2026-04-13
+
+Live steady-state NN forward latency is 12.5 ms vs 1.6 ms in isolated bench
+(7.8×). GPU util is 84% — the GPU is busy but producing less work per unit
+time than it does in isolation. The §90 config sweep **falsified the
+`inference_batch_size` / `inference_max_wait_ms` lever**: raising batch cap
+64 → 128 grew mean batch 60 → 85 (+42%) but crashed `nn_forwards/sec`
+88 → 53 (−39%), for a net −14% `nn_pos/sec`. Headline `pos/hr` read flat
+only because game length doubled, hiding a **−37% `steps_in_window`**
+regression. The live batcher is starved, not the GPU; the remaining
+inefficiency is architectural.
+
+**Remaining levers (all architectural):**
+
+- **CUDA stream separation** — training gradient kernels and inference forward
+  kernels share the default stream; training-step kernels pollute the
+  inference kernel/autocast cache. A dedicated inference stream would let the
+  inference server run without cross-contamination.
+- **Process split** — run the Python training loop in a second process,
+  leaving the inference server + worker pool in the primary. Trades IPC and
+  duplicate weight hosting for zero kernel-cache interference.
+- **`torch.compile` re-enable** — currently disabled per §25/§30/§32 for
+  Python 3.14 CUDA graph TLS conflict. Revisit when PyTorch + Python 3.14
+  CUDA graph support stabilizes. Expected to cut per-forward Python dispatch
+  overhead substantially.
+- **Mixed-precision tuning** — BF16 vs FP16 on Ada Lovelace; FP8 speculation.
+- **py-spy flame graph on live training** — blocked on `py-spy` Python 3.14
+  support (0.4.1 fails with "Failed to find python version from target
+  process"). Re-attempt when upstream lands. Expected to confirm NN forward
+  dominates wall-time; if otherwise, reopen the worker-parallelism hypothesis.
+
+**Priority rationale:** WATCH. Don't touch during Phase 4.0 sustained runs.
+Revisit only if (a) Q2 (value aggregation) lands and throughput becomes the
+gating factor for sustained training length, or (b) py-spy with Python 3.14
+support reveals a bottleneck the §90 diagnosis missed.
+
+**Prerequisite:** Stable Phase 4.0 baseline checkpoint (shared with Q2).
+
+**Reference:** Sprint log §90, Phase 1 diagnosis in `/tmp/gpu_util_phase1.md`.
+
+---
+
+### Q19 — Threat-head BCE class imbalance
+
+**RESOLVED 2026-04-14** — sprint log §92. `pos_weight = 59.0` landed
+atomically with Q13 on the fresh pretrain-v3 bootstrap. See the
+"Resolved" table at the top of this file. Historical ticket preserved
+below.
+
+**Priority (historical):** WATCH (Phase 4.0+)
+**Source:** Sprint log §85, §91; ckpt_00014344 probe 2026-04-14
+
+Probe at step 14344 (§91) shows threat head logits drifted −5.6 nats from
+bootstrap baseline (ext −0.60 → −6.21) while contrast grew 8× (+0.50 → +3.94).
+Dashboard aux loss trends upward across the run. Mechanism: `winning_line`
+labels are ~1.6% positive (6/361 cells per terminal position, 0 for draws).
+`BCEWithLogitsLoss` without `pos_weight` drives all logits strongly negative;
+positive-class loss climbs while negative-class loss drops.
+
+**Effect on training (pre-fix):** not directly hurting. Aux weight 0.1 × 2 heads
+means trunk gradients are dominated by policy + value. Policy head top-10 IS
+improving (65% → 70% vs bootstrap), so trunk is reconciling the signals.
+
+**Fix as landed:** `pos_weight ≈ 59` (theoretical `(1−p)/p`) added to
+threat-head BCE. Configured via `configs/training.yaml:threat_pos_weight`
+(default 59.0) and cached once per Trainer instance in
+`self._threat_pos_weight`. `scripts/compute_threat_pos_weight.py`
+recomputes empirically from a replay buffer when one exists. Ownership
+head deliberately does NOT receive a pos_weight — stone density is
+20–40%, already balanced.
+
+**Prereq for landing (satisfied):** fresh training restart. Bundled with
+Q13 in the fresh bootstrap v3 cycle.
+
+**Escalation (post-landing):** §91 C4 `abs(Δ ext_logit_mean) < 5.0` warning
+stays active as a drift canary. If it trips on post-fix checkpoints,
+re-open and investigate.
+
+**Reference:** Sprint log §85 (aux target alignment), §91 (probe revision +
+C4 warning hook), §92 (Q13 + Q13-aux + Q19 atomic landing).
+
+---
+
+### Q21 — Wider-window chain-aux target for forward information injection [PARKED]
+
+**Priority:** LOW (post-baseline research question)
+**Source:** Sprint log §92; literature review §"Recommended encoding specification"
+**Status:** parked after Q13 landing, to be revisited once the 24-plane
+baseline is established.
+
+The current Q13-aux target (`chain_head` smooth-L1 loss) is a slice of
+the INPUT tensor — `states[:, 18:24]`. This gives the network
+regularization and intermediate supervision on a feature we know matters,
+but NOT forward information. The trunk can already see the chain values
+directly in its input, so the head's job is near-identity and the initial
+pretrain-v3 chain_loss drops to ~0.01 within the first epoch (basically
+just a conv-through-residual preservation task).
+
+KataGo's auxiliary targets are FUTURE information (game-end ownership,
+score, etc.) that the network cannot trivially reproduce from the current
+board state. This is where the 1.65× speedup in Wu 2019 Table 2 comes
+from — the auxiliary loss teaches the trunk to build prediction circuits
+for counterfactual information.
+
+**Proposed experiment (Q21).** Compute chain targets on a WIDER window
+than the NN input window. Concrete example: NN sees a 19×19 cluster window;
+chain target is computed on the 25×25 region centred on the same point,
+clipped back to 19×19 at the head output. Now the target values near the
+edges reflect stones that the network CANNOT see — it has to learn to
+extrapolate chain structure from partial information. This matches
+KataGo's structure and would hopefully deliver the "genuine" speedup
+the Q13-aux slice-from-input variant does not.
+
+**Complications:** the wider chain target is no longer derivable from
+the input at training time. Two options:
+- **(a) Store in replay buffer** as a separate spatial target (6 × 361 u8
+  per row, adds ~22% to state size). Requires HEXB v4 with an additional
+  column, migration path, and aux reprojection in self-play game-end.
+- **(b) Compute on-the-fly at push time** by passing the wider chain
+  values from the self-play worker (Python has access to the full board;
+  Rust has the 2-plane cluster view only). Requires a new Rust path that
+  takes a wider window for the aux target while still feeding the NN a
+  19×19 view.
+
+Option (a) is cleaner and matches the existing ownership/winning_line
+pattern. Option (b) avoids buffer-size growth but adds a Rust-side
+geometric computation.
+
+**Prereq:** Q13-aux baseline established (one sustained self-play run
+post-Q13). Measure realistic Q13 uplift before trying the harder variant.
+
+**Cost:** ~3–4 GPU-days (implementation + A/B comparison).
+
+---
+
+### Q25 — Worker throughput variance: 24-plane payload + NN latency in live worker path [HIGH]
+
+**Priority:** HIGH — blocks sustained self-play launch
+**Source:** `make bench` 2026-04-15 (post-Q13, chore/post-q13-cleanup)
+**Status:** OPEN — do NOT launch sustained self-play until IQR is diagnosed
+
+**Observed.** n=5 bench on the current 24-plane build:
+
+| metric | median | IQR | range |
+|---|---|---|---|
+| Worker throughput pos/hr | 463,201 | ±241,194 | 428.6k–781.2k |
+| IQR % | — | **52%** | — |
+
+Prior baseline (18-plane, 2026-04-06): median 659,983 pos/hr, IQR ±8.6%.
+Two simultaneous regressions: (1) median dropped ~30% (428k–660k was
+already noted as expected post-Q13 due to 24-plane NN payload growth),
+and (2) IQR exploded from ±8.6% to ±52% — a 4.8× variance increase that
+is NOT explained by the 24-plane change alone.
+
+**Hypotheses (priority order).**
+
+1. **Thermal drift within the 5-run bench window.** RTX 3070 on the
+   desktop (no active cooling monitoring) may boost-then-throttle across
+   the ~10-minute worker bench. Symptoms: high-variance runs correlate
+   with wall-clock position, later runs systematically lower.
+2. **24-plane NN payload adds per-batch latency in the live inference
+   path.** Isolated `NN inference batch=64` bench runs on a fixed pre-
+   allocated tensor; the live worker path assembles 24-plane states on
+   the fly and ships them over the InferenceBatcher queue. If the
+   extra-6-plane assembly adds queue-fill jitter, median throughput falls
+   AND IQR grows.
+3. **InferenceBatcher queue interaction with larger state bytes.** The
+   shared-memory or channel buffer between Rust workers and Python
+   InferenceBatcher was sized for 18-plane states. 24-plane states are
+   33% larger per position; if the queue hits capacity under load, workers
+   stall non-uniformly, producing burst-and-wait oscillation (bimodal
+   throughput = high IQR).
+4. **Q18 interaction.** The §90 findings already showed 7.8× live vs
+   isolated NN latency at 18 planes. The 24-plane bump likely worsened
+   the same CUDA stream / kernel-cache contamination that Q18 flagged.
+   The 52% IQR could be the 7.8× overhead compounding with thermal
+   variance.
+
+**Diagnosis sequence (before next sustained run).**
+
+1. Re-bench after machine cools (≥30 min from last GPU workload). Record
+   GPU temp at start and end via `nvidia-smi -q -d TEMPERATURE`.
+2. Run `python scripts/benchmark.py` with n=10 (not n=5) — report
+   median, IQR, range, per-run wall-clock to detect drift within the run.
+3. If IQR ≤ 15%: thermal was the cause. Note; proceed.
+4. If IQR > 15%: profile InferenceBatcher queue depth and NN latency
+   IN THE LIVE WORKER PATH using py-spy or structlog timing probes.
+   Compare against isolated bench. If live latency ≥ 3× isolated →
+   hypothesis 3 or 4; investigate queue sizing and CUDA stream allocation.
+
+**Interaction with Q18:** Q18 is currently WATCH (do not touch during
+sustained runs). If Q25 diagnosis implicates Q18's CUDA stream / kernel-
+cache contamination, escalate Q18 to HIGH and investigate together.
+
+**Gate:** do not launch the Phase 4.0 sustained 24–48 hr run until
+Q25 diagnosis is complete and IQR ≤ 15% OR a root cause is understood
+and accepted as tolerable.
 
 ---
 

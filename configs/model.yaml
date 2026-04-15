@@ -3,7 +3,9 @@
 # Never override these in other config files.
 
 board_size: 19
-in_channels: 18
+# 24 = 18 AlphaZero history/scalar planes + 6 Q13 chain-length planes
+# (3 hex axes × 2 players, /6.0-normalized). See docs/06_OPEN_QUESTIONS.md Q13.
+in_channels: 24
 res_blocks: 12
 filters: 128
 se_reduction_ratio: 4

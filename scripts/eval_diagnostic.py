@@ -121,7 +121,7 @@ def load_model(path: Path, config: dict) -> HexTacToeNet:
     model_cfg = config if "board_size" in config else config.get("model", config)
     model = HexTacToeNet(
         board_size=int(model_cfg.get("board_size", 19)),
-        in_channels=int(model_cfg.get("in_channels", 18)),
+        in_channels=int(model_cfg.get("in_channels", 24)),
         res_blocks=int(model_cfg.get("res_blocks", 12)),
         filters=int(model_cfg.get("filters", 128)),
         se_reduction_ratio=int(model_cfg.get("se_reduction_ratio", 4)),

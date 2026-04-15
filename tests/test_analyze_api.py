@@ -10,12 +10,45 @@ from unittest.mock import patch
 
 import pytest
 
-# Find any checkpoint to test with
+# Find any checkpoint to test with. Skip archived 18-plane checkpoints: after
+# the Q13 24-plane break, feeding a 24-channel tensor into an 18-channel trunk
+# crashes with a conv shape mismatch. Only checkpoints whose first input conv
+# has in_channels == 24 are runnable against the current GameState.to_tensor()
+# path. C6 (pretrain v3) produces a fresh 24-plane bootstrap.
 CKPT_DIR = Path("checkpoints")
-AVAILABLE_CKPTS = sorted(CKPT_DIR.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True) if CKPT_DIR.exists() else []
+_EXPECTED_IN_CHANNELS = 24
+
+
+def _checkpoint_in_channels(path: Path) -> int | None:
+    """Return the input-conv in_channels for a checkpoint, or None if unknown."""
+    try:
+        import torch
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+        for key in ("model_state", "model_state_dict", "state_dict"):
+            if isinstance(payload, dict) and key in payload and isinstance(payload[key], dict):
+                payload = payload[key]
+                break
+        if not isinstance(payload, dict):
+            return None
+        for k in ("trunk.input_conv.weight", "input_conv.weight"):
+            if k in payload:
+                return int(payload[k].shape[1])
+        return None
+    except Exception:
+        return None
+
+
+_all_ckpts = sorted(CKPT_DIR.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True) if CKPT_DIR.exists() else []
+AVAILABLE_CKPTS = [p for p in _all_ckpts if _checkpoint_in_channels(p) == _EXPECTED_IN_CHANNELS]
 TEST_CKPT = str(AVAILABLE_CKPTS[0]) if AVAILABLE_CKPTS else None
 
-needs_checkpoint = pytest.mark.skipif(TEST_CKPT is None, reason="No checkpoint available")
+needs_checkpoint = pytest.mark.skipif(
+    TEST_CKPT is None,
+    reason=(
+        f"No {_EXPECTED_IN_CHANNELS}-plane checkpoint available "
+        f"(post-Q13 landing; archived 18-plane checkpoints are not loadable)"
+    ),
+)
 
 
 @pytest.fixture(scope="module")
@@ -244,7 +277,7 @@ class TestModelLoaderSync:
         """Build a minimal state_dict with enough keys to exercise inference."""
         import torch
         sd = {
-            "trunk.input_conv.weight": torch.randn(128, 18, 3, 3),
+            "trunk.input_conv.weight": torch.randn(128, 24, 3, 3),
             "policy_fc.weight": torch.randn(362, 2 * 19 * 19),
         }
         for i in range(6):

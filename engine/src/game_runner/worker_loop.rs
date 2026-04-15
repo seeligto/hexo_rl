@@ -122,7 +122,7 @@ impl SelfPlayRunner {
                                 leaf_metadata.push((k, centers));
                                 for view in views {
                                     let mut buffer = batcher.get_feature_buffer();
-                                    leaf.encode_18_planes_to_buffer(&view, &mut buffer);
+                                    leaf.encode_planes_to_buffer(&view, &mut buffer);
                                     all_batch_features.push(buffer);
                                 }
                             }
@@ -411,7 +411,7 @@ impl SelfPlayRunner {
                         for (k, center) in centers.iter().enumerate() {
                             let mut feat = batcher.get_feature_buffer();
                             // get_cluster_views returns 2-plane views; expand to 18 for storage.
-                            board.encode_18_planes_to_buffer(&views[k], &mut feat);
+                            board.encode_planes_to_buffer(&views[k], &mut feat);
                             // Fast games: zero-policy marks value-only targets (unless
                             // completed Q-values are enabled, which give signal even at 50 sims).
                             let projected_policy = if is_fast_game && !completed_q_values {

@@ -36,14 +36,14 @@ if str(REPO_ROOT) not in sys.path:
 from engine import Board, MCTSTree  # type: ignore[attr-defined]
 from hexo_rl.selfplay.inference import LocalInferenceEngine
 from hexo_rl.training.trainer import Trainer
+from hexo_rl.utils.coordinates import axial_distance
 from hexo_rl.utils.device import best_device
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def hex_dist(q1: int, r1: int, q2: int, r2: int) -> int:
-    dq, dr = q1 - q2, r1 - r2
-    return (abs(dq) + abs(dr) + abs(dq + dr)) // 2
+    return axial_distance((q1, r1), (q2, r2))
 
 
 def zoi_count(
