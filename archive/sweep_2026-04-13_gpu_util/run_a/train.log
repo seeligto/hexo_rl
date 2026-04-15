@@ -1,9 +1,0 @@
-/home/timmy/Work/hexo_rl/.venv/lib/python3.14/site-packages/torch/cuda/__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
-  import pynvml  # type: ignore[import]
-config_key_overlap: key 'selfplay' appears in both 'configs/selfplay.yaml' and 'archive/sweep_2026-04-13_gpu_util/run_a/override.yaml' — 'archive/sweep_2026-04-13_gpu_util/run_a/override.yaml' wins
-config_key_overlap: key 'mixing' appears in both 'configs/training.yaml' and 'archive/sweep_2026-04-13_gpu_util/run_a/override.yaml' — 'archive/sweep_2026-04-13_gpu_util/run_a/override.yaml' wins
-config_key_overlap: key 'selfplay' appears in both 'configs/selfplay.yaml' and 'configs/variants/gumbel_targets.yaml' — 'configs/variants/gumbel_targets.yaml' wins
-
-Saved checkpoint: archive/sweep_2026-04-13_gpu_util/run_a/ckpt/checkpoint_00000680.pt
-Games: 173  Steps: 680  Buffer: 68105
-Policy loss: 2.5150 → 2.0046 (↓0.5104)
