@@ -368,7 +368,12 @@ def test_check_warning_drift_threshold() -> None:
 
 
 def test_baseline_json_roundtrip() -> None:
-    """save_baseline_json / load_baseline_json round-trips correctly (schema v2)."""
+    """save_baseline_json / load_baseline_json round-trips correctly.
+
+    Asserts against BASELINE_SCHEMA_VERSION (currently v4 per §92/§93) — the
+    constant lives in probe_threat_logits.py, so this test stays in sync
+    automatically.
+    """
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
     from probe_threat_logits import (
         save_baseline_json,
