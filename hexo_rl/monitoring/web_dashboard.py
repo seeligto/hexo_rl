@@ -110,9 +110,13 @@ class WebDashboard:
         mon = config.get("monitoring", config)
         self._port = int(mon.get("web_port", 5001))
         maxlen = int(mon.get("event_log_maxlen", 500))
+        training_step_maxlen = int(mon.get("training_step_history", 2000))
         self._config = config
 
+        # Shared history for all non-training_step events (run_start, game_complete, etc.)
         self._event_history: collections.deque = collections.deque(maxlen=maxlen)
+        # Dedicated history for training_step events — must not be evicted by game_complete flood.
+        self._training_step_history: collections.deque = collections.deque(maxlen=training_step_maxlen)
         self._history_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._connected_sids: set = set()
@@ -223,7 +227,12 @@ class WebDashboard:
         def on_connect():
             dashboard._connected_sids.add(request.sid)
             with dashboard._history_lock:
-                history = list(dashboard._event_history)
+                # Merge training_step history with other events, sorted by ts so
+                # the client replays them in chronological order.
+                history = sorted(
+                    list(dashboard._event_history) + list(dashboard._training_step_history),
+                    key=lambda e: e.get("ts", 0),
+                )
             emit("replay_history", history)
 
         @socketio.on("disconnect")
@@ -403,7 +412,10 @@ class WebDashboard:
             payload = {k: v for k, v in payload.items() if k not in _STRIP_KEYS}
 
         with self._history_lock:
-            self._event_history.append(payload)
+            if event_name == "training_step":
+                self._training_step_history.append(payload)
+            else:
+                self._event_history.append(payload)
 
         # Reload viewer model on successful eval gate pass
         if event_name == "eval_complete" and payload.get("gate_passed"):

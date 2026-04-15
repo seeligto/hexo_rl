@@ -617,7 +617,7 @@ socket.on('iteration_complete', handleEvent);
 socket.on('game_complete',      handleEvent);
 socket.on('eval_complete',      handleEvent);
 socket.on('system_stats',       handleEvent);
-socket.on('run_start',  (e) => { resetState(); handleEvent(e); });
+socket.on('run_start',  handleEvent);
 socket.on('run_end',    handleEvent);
 
 function setConnected(state) {

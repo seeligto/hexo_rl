@@ -160,18 +160,25 @@ def test_web_dashboard_handles_events_without_clients():
 
 
 def test_replay_buffer_caps_at_maxlen():
-    config = {"monitoring": {"web_port": 5098, "event_log_maxlen": 10}}
+    # training_step events go into the dedicated _training_step_history deque,
+    # not _event_history; cap is controlled by training_step_history config key.
+    config = {"monitoring": {"web_port": 5098, "training_step_history": 10}}
     wd = WebDashboard(config)
     for i in range(20):
         wd.on_event({"event": "training_step", "ts": float(i), "step": i})
-    assert len(wd._event_history) == 10
+    assert len(wd._training_step_history) == 10
+    assert len(wd._event_history) == 0  # non-training_step events go here
 
 
 def test_web_dashboard_handles_all_event_types():
     wd = WebDashboard(MINIMAL_CONFIG)
     for event_type, payload in SAMPLE_EVENTS.items():
         wd.on_event(payload)
-    assert len(wd._event_history) == len(SAMPLE_EVENTS)
+    # training_step events are routed to _training_step_history; all others to _event_history
+    n_training_step = sum(1 for p in SAMPLE_EVENTS.values() if p.get("event") == "training_step")
+    n_other = len(SAMPLE_EVENTS) - n_training_step
+    assert len(wd._training_step_history) == n_training_step
+    assert len(wd._event_history) == n_other
 
 
 def test_web_dashboard_ignores_unknown_events():
