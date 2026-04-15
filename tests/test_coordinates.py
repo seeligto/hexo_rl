@@ -117,3 +117,50 @@ def test_axial_distance_accepts_float_centroids():
     # gotchas because both coords are integer anyway.
     assert axial_distance((0.5, 0.5), (3.5, 0.5)) == 3
     assert axial_distance((-2.0, 1.0), (2.0, -1.0)) == 4
+
+
+def test_axial_distance_float_inputs_return_float():
+    """Float inputs must produce a float result, not an int (no int() cast)."""
+    result = axial_distance((0.0, 0.0), (1.5, 0.0))
+    assert isinstance(result, float), f"expected float, got {type(result)}"
+
+    result2 = axial_distance((0.5, 0.5), (3.5, 0.5))
+    assert isinstance(result2, float), f"expected float, got {type(result2)}"
+
+    result3 = axial_distance((-2.0, 1.0), (2.0, -1.0))
+    assert isinstance(result3, float), f"expected float, got {type(result3)}"
+
+
+def test_axial_distance_float_non_integer_values():
+    """Non-integer float distances are returned exactly, not floored.
+
+    (0,0) → (3.0, 2.9): dq=3.0, dr=2.9, ds=5.9 → distance=5.9.
+    Old int() cast would floor to 5, breaking threshold checks in
+    colony_detection that compare against float thresholds.
+    """
+    d = axial_distance((0.0, 0.0), (3.0, 2.9))
+    assert d == pytest.approx(5.9), f"expected 5.9, got {d}"
+    assert d != 5, "distance must not be floored to 5 (old int() cast behaviour)"
+
+    d2 = axial_distance((1.0, 0.0), (1.0, 4.5))
+    # dq=0, dr=4.5, ds=4.5 → distance=4.5
+    assert d2 == pytest.approx(4.5), f"expected 4.5, got {d2}"
+
+
+def test_axial_distance_float_threshold_boundary():
+    """Two pairs that differ below and above a threshold of 6.0.
+
+    Under the old int() floor: 5.999 would compare as 5 (below threshold).
+    Under the new exact return: 5.999 compares as 5.999 (still below).
+    The critical case is that 5.999 does NOT equal 6.0 and IS below 6.0.
+    """
+    # (0,0) → (3.0, 2.999): dq=3.0, dr=2.999, ds=5.999 → 5.999
+    d_just_below = axial_distance((0.0, 0.0), (3.0, 2.999))
+    assert d_just_below == pytest.approx(5.999, abs=1e-9)
+    assert d_just_below < 6.0, "5.999 must be below threshold 6.0"
+    assert d_just_below != 5, "5.999 must NOT be floored to 5 (old bug)"
+
+    # (0,0) → (3.0, 3.001): dq=3.0, dr=3.001, ds=6.001 → 6.001
+    d_just_above = axial_distance((0.0, 0.0), (3.0, 3.001))
+    assert d_just_above == pytest.approx(6.001, abs=1e-9)
+    assert d_just_above > 6.0, "6.001 must be above threshold 6.0"
