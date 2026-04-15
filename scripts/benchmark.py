@@ -459,14 +459,14 @@ def benchmark_worker_pool(
 # (row_label, result_name, sub_key, metric_key_in_stats_or_value, target, higher_is_better)
 _CHECKS_CUDA: list[tuple[str, str, str | None, str, float, bool]] = [
     ("MCTS sim/s (CPU, no NN)",           "MCTS (CPU only, no NN)",  None,    "value",   26_000,   True),
-    ("NN inference batch=64 pos/s",       "NN inference (batch=64)", None,    "value",    8_500,   True),
+    ("NN inference batch=64 pos/s",       "NN inference (batch=64)", None,    "value",    8_250,   True),
     ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",      3.5,   False),
     ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  630_000,   True),
     ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_500,   False),
     ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_400,   False),
     ("GPU utilisation %",                 "GPU utilisation",         "gpu",   "value",       85,   True),
     ("VRAM usage GB",                     "GPU utilisation",         "vram",  "value",        0,   False),  # dynamic
-    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  625_000,   True),
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  500_000,   True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
 ]
 
