@@ -49,7 +49,7 @@ build: ## Build/install Rust extension via maturin (LTO + native CPU)
 .PHONY: clean
 clean: ## Remove all Rust build artifacts and Python caches
 	cargo clean
-	rm -rf .venv/lib/python*/site-packages/engine*
+	rm -rf .venv/lib/python*/site-packages/engine .venv/lib/python*/site-packages/engine-*.dist-info
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	@echo "Clean complete. Run 'make build' to rebuild."
 
