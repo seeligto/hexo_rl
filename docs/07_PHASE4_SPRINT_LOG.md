@@ -2840,3 +2840,81 @@ exists to drift.
   + contamination assessment (zero contaminated checkpoints).
 - `reports/q13_fix_26_04_15.md` — C8–C17 landing summary + pretrain
   v3b losses + archived artifact hashes.
+
+---
+
+## §94 — Experiment A: aux_chain_weight=0 fresh run (2026-04-15)
+
+### Motivation
+
+Smoke run v3b (§93 bootstrap, `gumbel_targets` variant, 5003 steps) hit
+44.7% draw rate at step 5003. The monotonic draw_rate climb (25% → 44.7%)
+and declining X winrate (40% → 32%) are consistent with the model learning
+that long games / draws are viable rather than finding decisive tactics.
+
+**Hypothesis (Q21 investigation):** `aux_chain_weight=1.0` on a degenerate
+target (chain_target = input slice [:, 18:24]) biases the trunk toward
+colony-extension patterns. The aux head drives the trunk to preserve chain
+planes through the residual tower; gradient pressure at weight=1.0 may
+reinforce colony-extension as the "safe" policy rather than tactical threat
+response. Killing the chain aux removes this gradient component and gives
+the policy head a cleaner signal from the Q-value targets.
+
+### Config diffs vs smoke_v3b
+
+| Key | smoke_v3b | Experiment A |
+|-----|-----------|--------------|
+| `training.yaml aux_chain_weight` | 1.0 | **0.0** |
+| `training.yaml draw_value` | −0.5 | −0.5 (unchanged — already reverted in §93) |
+| `selfplay.yaml max_game_moves` | 200 | 200 (unchanged) |
+| Variant | gumbel_targets | gumbel_targets |
+| Starting checkpoint | bootstrap_model.pt | bootstrap_model.pt (fresh, NOT from ckpt_5000) |
+
+Fresh start from `bootstrap_model.pt` (24-plane v3b, §93) — clean A/B
+comparison against smoke_v3b's identical starting point.
+
+No code changes. Config-only.
+
+### Probe thresholds (§91, softened at commit 925d6be)
+
+| # | Condition | Threshold | Notes |
+|---|-----------|-----------|-------|
+| C1 | contrast_mean (ext − ctrl) | ≥ max(0.38, 0.8 × bootstrap = −0.937) = +0.380 | absolute floor only (bootstrap negative) |
+| C2 | ext cell in policy top-5 | ≥ 40% | softened from 40% |
+| C3 | ext cell in policy top-10 | ≥ 60% | softened from 60% |
+| C4 | \|Δ ext_logit_mean\| | < 5.0 | warning only |
+
+### Success criteria at step 5000
+
+- **PRIMARY:** draw_rate < 35% (smoke was 44.7%)
+- **SECONDARY:** draw_rate trend flat or declining (smoke was monotonic climb)
+- **TERTIARY:** probe C2 ≥ 25%, C3 ≥ 40% (further softened vs official gate)
+- **BONUS:** X winrate stable or rising (smoke had X declining 40% → 32%)
+
+**Interpretation:**
+- draw_rate < 35% → chain aux confirmed as culprit. Continue to 15k.
+  Q21 escalated to CONFIRMED HARMFUL until non-degenerate wider-window
+  target (Q21 parked variant) is implemented.
+- draw_rate > 40% → chain aux not the primary cause. Buffer dilution
+  (hypothesis B: 74.5% bootstrap at step 5k) becomes prime suspect.
+  Stop and reassess.
+
+### Cross-references
+
+- Smoke run report: `reports/smoke_v3b_5k_26_04_15.md`
+- Q21 (parked wider-window chain target): `docs/06_OPEN_QUESTIONS.md`
+- Prior chain aux weight rationale: §92 (weight=1.0, degenerate target)
+
+### Monitoring
+
+Script: `scripts/monitor_experiment_a.sh <jsonl_path>`
+Prints structured snapshot with comparison row vs smoke_v3b reference table.
+
+**Schedule:**
+- Steps 0–1000: every 30 min (~250 steps at observed throughput)
+- Steps 1000–5000: every 1 hr
+- Step 5000: `make probe.latest` — full probe comparison
+
+**Commits:**
+- `feat(scripts): experiment A monitoring script with smoke_v3b comparison`
+- `docs(sprint): §94 experiment A launch`
