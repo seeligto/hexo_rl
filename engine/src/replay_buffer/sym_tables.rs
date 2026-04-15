@@ -116,6 +116,12 @@ pub struct SymTables {
     /// `axis_perm[s][dst_j] = src_i` means destination plane for axis j reads
     /// from source plane for axis i under symmetry s.
     pub axis_perm: [[usize; 3]; N_SYMS],
+    /// Fused per-symmetry source-plane lookup for all N_PLANES planes.
+    /// `src_plane_lookup[s][dst_p] = src_p`: under symmetry `s`, destination
+    /// plane `dst_p` reads its cells from source plane `src_p`.
+    /// Planes 0..N_HISTORY_PLANES are identity (src_p == dst_p).
+    /// Planes N_HISTORY_PLANES..N_PLANES carry the axis-perm remap.
+    pub src_plane_lookup: [[usize; N_PLANES]; N_SYMS],
 }
 
 impl SymTables {
@@ -210,7 +216,24 @@ impl SymTables {
             axis_perm[sym_idx] = perm;
         }
 
-        SymTables { scatter, axis_perm }
+        // Build fused src_plane_lookup from the completed scatter + axis_perm tables.
+        let mut src_plane_lookup = [[0usize; N_PLANES]; N_SYMS];
+        for s in 0..N_SYMS {
+            // Planes 0..N_HISTORY_PLANES: identity (pure coordinate scatter, no plane remap).
+            for p in 0..N_HISTORY_PLANES {
+                src_plane_lookup[s][p] = p;
+            }
+            // Planes N_HISTORY_PLANES..N_PLANES: axis-perm remap.
+            for dst_axis in 0..3 {
+                let src_axis = axis_perm[s][dst_axis];
+                for player_off in 0..2 {
+                    src_plane_lookup[s][CHAIN_PLANE_OFFSET + 2 * dst_axis + player_off] =
+                        CHAIN_PLANE_OFFSET + 2 * src_axis + player_off;
+                }
+            }
+        }
+
+        SymTables { scatter, axis_perm, src_plane_lookup }
     }
 }
 
