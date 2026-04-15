@@ -49,7 +49,7 @@ threat_weight: 0.1        # weight for binary threat auxiliary head (winning-lin
 # the 0.10 used for ownership/threat) because the target is /6-normalized so raw
 # smooth-L1 values sit around 0.02 — weight 1.0 gives the head a meaningful
 # gradient share. Retune after pretrain v3 loss curves.
-aux_chain_weight: 1.0
+aux_chain_weight: 1.0  # Q21: currently degenerate (aux_target = input slice); revisit with wider-window target
 
 # Q19: positive-class weight for threat-head BCEWithLogitsLoss.
 # Empirical (1-p)/p on winning_line labels (~1.6% positive) ≈ 59. Recomputed
