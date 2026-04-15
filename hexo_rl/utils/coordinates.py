@@ -86,9 +86,7 @@ def cell_to_flat(cell_str: str, board_size: int) -> int:
     return flat
 
 
-def axial_distance(
-    a: Tuple[float, float], b: Tuple[float, float]
-) -> int:
+def axial_distance(a: Tuple[float, float], b: Tuple[float, float]):
     """Hex Manhattan distance between two axial points.
 
     Equivalent to `max(|dq|, |dr|, |dq + dr|)` — this is the three-axis
@@ -96,11 +94,12 @@ def axial_distance(
     `engine/src/board/state.rs::hex_distance` (which uses the
     `(|dq| + |dr| + |ds|) / 2` identity form).
 
-    Accepts `int` or `float` tuples; returns an `int`. For float inputs
-    the result is the ceiling of the exact distance — callers that need
-    sub-unit precision should compute `max(|dq|, |dr|, |dq + dr|)` directly.
+    Accepts `int` or `float` tuples. Returns `int` for integer inputs,
+    `float` for float inputs — Python's `max` preserves the input type.
+    Callers using float centroids (e.g. `colony_detection`) get the exact
+    sub-unit distance without flooring.
     """
     dq = abs(a[0] - b[0])
     dr = abs(a[1] - b[1])
     ds = abs((a[0] + a[1]) - (b[0] + b[1]))
-    return int(max(dq, dr, ds))
+    return max(dq, dr, ds)
