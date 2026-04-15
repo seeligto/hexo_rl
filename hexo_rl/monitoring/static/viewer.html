@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <title>HeXO — Viewer</title>
 <link rel="stylesheet" href="/static/hexo.css">
+<!-- socket.io for socket.connected check in setInterval (N5) -->
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <style>
 body {
     font-family: var(--font-ui);
@@ -218,7 +220,9 @@ body {
 import { HexCanvas } from '/static/hex_canvas.js';
 
 // Viewer: replay only.
-// Play-against-bot lives in /analyze
+
+// ── Socket — used only for connected check in setInterval (N5) ───────────────
+const socket = io({ reconnection: true, reconnectionDelay: 2000, reconnectionAttempts: Infinity });
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -478,8 +482,9 @@ function loadGame(gameId) {
             moveIdx = -1;
             const moves = data.moves_list || [];
             const scrubber = document.getElementById('scrubber');
+            scrubber.min = -1;             // S2 Option B: -1 = before first move
             scrubber.max = moves.length - 1;
-            scrubber.value = -1;
+            scrubber.value = -1;           // browser clamps to min without the line above
 
             const hasDetail = data.positions && data.positions.some(p => p.top_visits);
             document.getElementById('heat-toggle-label').style.display = hasDetail ? '' : 'none';
@@ -508,6 +513,7 @@ function updateMoveLabel() {
 
 function seekTo(idx) {
     if (!gameData) return;
+    // S2: idx=-1 means "before first move" — renderBoard handles it via limit=moveIdx+1=0
     const max = (gameData.moves_list || []).length - 1;
     moveIdx = Math.max(-1, Math.min(idx, max));
     document.getElementById('scrubber').value = moveIdx;
@@ -569,7 +575,8 @@ document.getElementById('toggle-heat').onchange = function() {
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 loadGameList();
-setInterval(loadGameList, 10000);
+// N5: skip polling while socket is disconnected — list won't change in standalone/offline mode
+setInterval(() => { if (socket.connected) loadGameList(); }, 10000);
 
 window.addEventListener('resize', () => {
     renderBoard();
