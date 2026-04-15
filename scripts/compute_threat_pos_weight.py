@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import struct
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +33,38 @@ DEFAULT_BUFFER_PATH = Path("checkpoints/replay_buffer.bin")
 # cells × ~75% non-draw rate ≈ 1.25% positive → (1−p)/p ≈ 79. Rounded to match
 # the §91 field note (~59, computed before the draw-rate correction).
 _THEORETICAL_POS_WEIGHT = 59.0
+
+# HEXB v3 header constants (little-endian): magic(4) + version(4) + n_planes(4)
+# + capacity(8) + size(8) = 28 bytes total.
+_HEXB_MAGIC = 0x4845_5842  # "HEXB"
+_HEXB_VERSION = 3
+_HEXB_HEADER_FMT = "<IIIQQ"  # magic, version, n_planes, capacity, size
+_HEXB_HEADER_SIZE = struct.calcsize(_HEXB_HEADER_FMT)  # 28
+
+# Cap allocation to match the bootstrap corpus ceiling (~200K rows) with
+# headroom. load_from_path truncates to the most recent rows per loader
+# contract, so this is always safe.
+_MAX_ALLOC_ROWS = 250_000
+
+
+def _read_hexb_row_count(path: Path) -> int:
+    """Return the saved row count from a HEXB v3 header, or 0 on any error.
+
+    Reads only the 28-byte header — no row data is touched. Validation is
+    minimal: wrong magic or wrong version returns 0 (caller falls back to the
+    theoretical constant anyway).
+    """
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(_HEXB_HEADER_SIZE)
+        if len(raw) < _HEXB_HEADER_SIZE:
+            return 0
+        magic, version, _n_planes, _capacity, size = struct.unpack(_HEXB_HEADER_FMT, raw)
+        if magic != _HEXB_MAGIC or version != _HEXB_VERSION:
+            return 0
+        return int(size)
+    except OSError:
+        return 0
 
 
 def from_buffer(buffer_path: Path, sample_n: int = 10_000) -> Optional[float]:
@@ -49,7 +82,9 @@ def from_buffer(buffer_path: Path, sample_n: int = 10_000) -> Optional[float]:
         print(f"[warn] engine extension not importable; falling back to theoretical")
         return None
 
-    buf = ReplayBuffer(1_000_000)
+    row_count = _read_hexb_row_count(buffer_path)
+    alloc = max(1, min(row_count, _MAX_ALLOC_ROWS))
+    buf = ReplayBuffer(alloc)
     try:
         n = buf.load_from_path(str(buffer_path))
     except Exception as exc:
