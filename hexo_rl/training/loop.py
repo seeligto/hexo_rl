@@ -392,6 +392,8 @@ def run_training_loop(
 
                 if train_step % _ckpt_interval == 0:
                     _sync_weights_to_inf()
+                    if train_step > 0:
+                        _try_save_buffer(buffer, mixing_cfg, "checkpoint_interval")
 
                 # ── Eval (non-blocking background thread) ─────────────────────
                 if eval_pipeline is not None and train_step > 0 and train_step % eval_interval == 0:
