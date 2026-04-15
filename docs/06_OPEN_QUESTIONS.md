@@ -18,6 +18,7 @@
 | Q2 | Value aggregation: min vs mean vs attention | Train 4 variants, compare value MSE + win rate | ~4 GPU-days | HIGH — unblocked now Q17 resolved |
 | Q3 | Optimal K (number of cluster windows) | Ablation K=2,3,4,6 | ~6 GPU-days | MEDIUM |
 | Q8 | First-player advantage in value training | Measure P1 win rate by Elo band; adjust value targets if >60% | ~2 GPU-days | MEDIUM |
+| Q25 | Worker throughput variance: 24-plane NN latency + IQR spike | Re-bench n=10 after cooling; profile InferenceBatcher queue + live NN latency | ~1 hr diagnosis | **HIGH — blocks sustained self-play** |
 
 **Q17 (2026-04-09, RESOLVED 2026-04-10):** The P3 overnight run
 collapsed to deterministic carbon-copy self-play games between
@@ -367,6 +368,71 @@ geometric computation.
 post-Q13). Measure realistic Q13 uplift before trying the harder variant.
 
 **Cost:** ~3–4 GPU-days (implementation + A/B comparison).
+
+---
+
+### Q25 — Worker throughput variance: 24-plane payload + NN latency in live worker path [HIGH]
+
+**Priority:** HIGH — blocks sustained self-play launch
+**Source:** `make bench` 2026-04-15 (post-Q13, chore/post-q13-cleanup)
+**Status:** OPEN — do NOT launch sustained self-play until IQR is diagnosed
+
+**Observed.** n=5 bench on the current 24-plane build:
+
+| metric | median | IQR | range |
+|---|---|---|---|
+| Worker throughput pos/hr | 463,201 | ±241,194 | 428.6k–781.2k |
+| IQR % | — | **52%** | — |
+
+Prior baseline (18-plane, 2026-04-06): median 659,983 pos/hr, IQR ±8.6%.
+Two simultaneous regressions: (1) median dropped ~30% (428k–660k was
+already noted as expected post-Q13 due to 24-plane NN payload growth),
+and (2) IQR exploded from ±8.6% to ±52% — a 4.8× variance increase that
+is NOT explained by the 24-plane change alone.
+
+**Hypotheses (priority order).**
+
+1. **Thermal drift within the 5-run bench window.** RTX 3070 on the
+   desktop (no active cooling monitoring) may boost-then-throttle across
+   the ~10-minute worker bench. Symptoms: high-variance runs correlate
+   with wall-clock position, later runs systematically lower.
+2. **24-plane NN payload adds per-batch latency in the live inference
+   path.** Isolated `NN inference batch=64` bench runs on a fixed pre-
+   allocated tensor; the live worker path assembles 24-plane states on
+   the fly and ships them over the InferenceBatcher queue. If the
+   extra-6-plane assembly adds queue-fill jitter, median throughput falls
+   AND IQR grows.
+3. **InferenceBatcher queue interaction with larger state bytes.** The
+   shared-memory or channel buffer between Rust workers and Python
+   InferenceBatcher was sized for 18-plane states. 24-plane states are
+   33% larger per position; if the queue hits capacity under load, workers
+   stall non-uniformly, producing burst-and-wait oscillation (bimodal
+   throughput = high IQR).
+4. **Q18 interaction.** The §90 findings already showed 7.8× live vs
+   isolated NN latency at 18 planes. The 24-plane bump likely worsened
+   the same CUDA stream / kernel-cache contamination that Q18 flagged.
+   The 52% IQR could be the 7.8× overhead compounding with thermal
+   variance.
+
+**Diagnosis sequence (before next sustained run).**
+
+1. Re-bench after machine cools (≥30 min from last GPU workload). Record
+   GPU temp at start and end via `nvidia-smi -q -d TEMPERATURE`.
+2. Run `python scripts/benchmark.py` with n=10 (not n=5) — report
+   median, IQR, range, per-run wall-clock to detect drift within the run.
+3. If IQR ≤ 15%: thermal was the cause. Note; proceed.
+4. If IQR > 15%: profile InferenceBatcher queue depth and NN latency
+   IN THE LIVE WORKER PATH using py-spy or structlog timing probes.
+   Compare against isolated bench. If live latency ≥ 3× isolated →
+   hypothesis 3 or 4; investigate queue sizing and CUDA stream allocation.
+
+**Interaction with Q18:** Q18 is currently WATCH (do not touch during
+sustained runs). If Q25 diagnosis implicates Q18's CUDA stream / kernel-
+cache contamination, escalate Q18 to HIGH and investigate together.
+
+**Gate:** do not launch the Phase 4.0 sustained 24–48 hr run until
+Q25 diagnosis is complete and IQR ≤ 15% OR a root cause is understood
+and accepted as tolerable.
 
 ---
 
