@@ -10,7 +10,7 @@ selfplay:
   # moves. 200 plies ≈ 100 compound turns. Set to match gumbel_full and
   # baseline_puct. 150 was a §69 sweep artifact for fast_prob=0.25 which
   # no longer applies (fast_prob=0.0 since §75).
-  max_game_moves: 200
+  max_game_moves: 300
   playout_cap:
     # fast_prob=0.0: PUCT at 50 sims + τ=1.0 on infinite board produces
     # colony-extension draws (94.4% draw rate, §75 investigation).
