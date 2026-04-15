@@ -362,7 +362,8 @@ class WebDashboard:
                     data = json.load(fh)
                 game_id = data.get("game_id", file_path.stem)
                 winner = data.get("winner")
-                move_count = len(data.get("moves", []))
+                moves_raw = data.get("moves", 0)
+                move_count = moves_raw if isinstance(moves_raw, int) else len(moves_raw) if hasattr(moves_raw, "__len__") else 0
                 ts = data.get("ts") or file_path.stat().st_mtime
                 ref = {
                     "game_id": game_id,
