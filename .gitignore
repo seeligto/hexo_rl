@@ -75,5 +75,9 @@ tmp/sweep_ckpt/
 nohup.out
 checkpoints/saved/
 archive/*.broken*/
+/reports/mcts_depth_*/
+/archive/**/*.jsonl
+/archive/**/*.log
+/archive/**/*.txt
 .nvimlog
 launch_claude_danger.sh
