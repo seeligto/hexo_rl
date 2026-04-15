@@ -40,32 +40,20 @@ pub fn apply_symmetry_24plane<T: Copy>(
     debug_assert_eq!(dst.len(), N_PLANES * N_CELLS);
     debug_assert!(sym_idx < N_SYMS);
 
-    let scatter = &sym_tables.scatter[sym_idx];
+    let scatter   = &sym_tables.scatter[sym_idx];
+    let src_plane_lookup = &sym_tables.src_plane_lookup[sym_idx];
 
-    // Block 1 — planes 0..N_HISTORY_PLANES: pure coordinate scatter.
-    for p in 0..N_HISTORY_PLANES {
-        let base = p * N_CELLS;
-        let src_plane = &src[base..base + N_CELLS];
-        let dst_plane = &mut dst[base..base + N_CELLS];
+    // Single loop over all N_PLANES planes — no branch on plane index.
+    // src_plane_lookup[dst_p] encodes the identity for planes 0..N_HISTORY_PLANES
+    // and the axis-perm remap for planes N_HISTORY_PLANES..N_PLANES.
+    for dst_p in 0..N_PLANES {
+        let src_p = src_plane_lookup[dst_p];
+        let src_base = src_p * N_CELLS;
+        let dst_base = dst_p * N_CELLS;
+        let src_plane = &src[src_base..src_base + N_CELLS];
+        let dst_plane = &mut dst[dst_base..dst_base + N_CELLS];
         for &(sc, dc) in scatter {
             dst_plane[dc as usize] = src_plane[sc as usize];
-        }
-    }
-
-    // Block 2 — Q13 chain-length planes: coordinate scatter + axis-plane remap.
-    let axis_perm = &sym_tables.axis_perm[sym_idx];
-    for dst_axis in 0..3 {
-        let src_axis = axis_perm[dst_axis];
-        for player_off in 0..2 {
-            let src_p = CHAIN_PLANE_OFFSET + 2 * src_axis + player_off;
-            let dst_p = CHAIN_PLANE_OFFSET + 2 * dst_axis + player_off;
-            let src_base = src_p * N_CELLS;
-            let dst_base = dst_p * N_CELLS;
-            let src_plane = &src[src_base..src_base + N_CELLS];
-            let dst_plane = &mut dst[dst_base..dst_base + N_CELLS];
-            for &(sc, dc) in scatter {
-                dst_plane[dc as usize] = src_plane[sc as usize];
-            }
         }
     }
 }
