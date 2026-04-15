@@ -103,6 +103,33 @@ def test_chain_loss_legal_mask_all_ones_matches_unmasked():
     assert masked.item() == pytest.approx(unmasked.item(), abs=1e-5)
 
 
+def test_chain_loss_mask_shapes_all_produce_identical_loss():
+    """(B,H,W), (B,1,H,W), and (B,6,H,W) masks with the same cell selection
+    must yield the same loss. Guards against the pre-fix over-division bug
+    where (B,6,H,W) divided by n_planes a second time."""
+    torch.manual_seed(0)
+    pred = torch.rand(2, 6, 19, 19)
+    target = torch.rand(2, 6, 19, 19)
+
+    # Select first 10 rows of the board.
+    mask_bhw = torch.zeros(2, 19, 19)
+    mask_bhw[:, :10, :] = 1.0
+
+    mask_b1hw = mask_bhw.unsqueeze(1)                           # (2,1,19,19)
+    mask_b6hw = mask_bhw.unsqueeze(1).expand(2, 6, 19, 19).clone()  # (2,6,19,19)
+
+    loss_bhw = compute_chain_loss(pred, target, legal_mask=mask_bhw)
+    loss_b1hw = compute_chain_loss(pred, target, legal_mask=mask_b1hw)
+    loss_b6hw = compute_chain_loss(pred, target, legal_mask=mask_b6hw)
+
+    assert loss_b1hw.item() == pytest.approx(loss_bhw.item(), abs=1e-5), (
+        f"(B,1,H,W) loss {loss_b1hw.item():.6f} != (B,H,W) loss {loss_bhw.item():.6f}"
+    )
+    assert loss_b6hw.item() == pytest.approx(loss_bhw.item(), abs=1e-5), (
+        f"(B,6,H,W) loss {loss_b6hw.item():.6f} != (B,H,W) loss {loss_bhw.item():.6f}"
+    )
+
+
 def test_chain_head_gradient_flows_through_trunk():
     """Train-step sanity: chain loss gradient must propagate into trunk weights."""
     net = _tiny_net()
