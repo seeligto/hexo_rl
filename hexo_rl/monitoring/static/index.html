@@ -354,6 +354,8 @@ function fmtLR(v)    { return v == null ? DASH : v.toExponential(2); }
 function fmtGrad(v)  { return v == null ? DASH : (isFinite(v) ? v.toFixed(2) : 'inf'); }
 
 // ── Ring buffers & state ───────────────────────────────────────────────────
+// N1: O(n) shift() is acceptable here — event rate is ≤1/step so max ~2000 ops/step.
+// Typed ring buffer deferred (low priority at current event rates).
 const trainingStepHistory = [];  // max MAX_STEPS; {step, loss_total, loss_policy, loss_value, loss_aux, policy_entropy, policy_entropy_pretrain, policy_entropy_selfplay, grad_norm, lr}
 const gameHistory         = [];  // max MAX_GAMES; {winner, moves}
 const winRateSeries       = [];  // max MAX_GAMES; float (P0 win % at each game_complete)
@@ -363,6 +365,7 @@ let showRaw           = true;
 let showEMA           = true;
 let eloVisible        = false;
 let eloLineChartInst  = null;
+let offlineTimer      = null;  // S4: set on connect, cleared by first event
 
 // ── EMA computation ────────────────────────────────────────────────────────
 function computeEMA(values, alpha) {
@@ -607,8 +610,22 @@ function toggleEMA() {
 // ── Socket.IO connection ───────────────────────────────────────────────────
 const socket = io({ reconnection: true, reconnectionDelay: 2000, reconnectionAttempts: Infinity });
 
-socket.on('connect',    () => setConnected('connected'));
-socket.on('disconnect', () => setConnected('reconnecting'));
+socket.on('connect', () => {
+  setConnected('connected');
+  // S4: if no training event arrives within 5s, show offline indicator
+  if (offlineTimer !== null) clearTimeout(offlineTimer);
+  offlineTimer = setTimeout(() => {
+    const dot  = document.getElementById('status-dot');
+    const text = document.getElementById('status-text');
+    dot.classList.remove('connected');
+    dot.style.background = '#888';
+    text.textContent = 'Offline \u2014 no active training run';
+  }, 5000);
+});
+socket.on('disconnect', () => {
+  if (offlineTimer !== null) { clearTimeout(offlineTimer); offlineTimer = null; }
+  setConnected('reconnecting');
+});
 socket.io.on('reconnect_attempt', () => setConnected('reconnecting'));
 
 socket.on('replay_history',     (events) => { resetState(); events.forEach(handleEvent); });
@@ -631,6 +648,15 @@ function setConnected(state) {
 
 // ── Event dispatch ─────────────────────────────────────────────────────────
 function handleEvent(p) {
+  // S4: first event after connect cancels the offline indicator timer
+  if (offlineTimer !== null) {
+    clearTimeout(offlineTimer);
+    offlineTimer = null;
+    // Restore dot appearance in case the timer had already fired
+    const dot = document.getElementById('status-dot');
+    dot.style.background = '';
+    dot.classList.add('connected');
+  }
   switch (p.event) {
     case 'training_step':      onTrainingStep(p);      break;
     case 'iteration_complete': onIterationComplete(p); break;
@@ -706,7 +732,7 @@ function onTrainingStep(p) {
     loss_policy:              p.loss_policy,
     loss_value:               p.loss_value,
     loss_aux:                 p.loss_aux,
-    loss_chain:               p.loss_chain ?? null,
+    // N2: loss_chain removed — aux chain head was killed in config, field dead
     loss_ownership:           p.loss_ownership ?? null,
     loss_threat:              p.loss_threat ?? null,
     policy_entropy:           p.policy_entropy,
@@ -762,7 +788,7 @@ function onTrainingStep(p) {
     // Q13/Q19 aux heads — render each as "label N.NNN" if emitted.
     const aux_bits = [];
     if (p.loss_aux       != null) aux_bits.push('opp '   + p.loss_aux.toFixed(3));
-    if (p.loss_chain     != null) aux_bits.push('chain ' + p.loss_chain.toFixed(3));
+    // N2: loss_chain removed — aux chain head killed in config
     if (p.loss_ownership != null) aux_bits.push('own '   + p.loss_ownership.toFixed(3));
     if (p.loss_threat    != null) aux_bits.push('thr '   + p.loss_threat.toFixed(3));
     if (aux_bits.length) parts.push(aux_bits.join(' \u00b7 '));
@@ -924,7 +950,8 @@ function hideEloPanel() {
     eloLineChartInst.destroy();
     eloLineChartInst = null;
   }
-  document.getElementById('elo-line-chart').style.display = 'none';
+  // S1: do NOT hide the canvas — Chart.js needs the element visible to re-render
+  // when elo-line-wrap is shown again. Only hide the wrapper div above.
 }
 
 // ── Chart updates ──────────────────────────────────────────────────────────
@@ -1056,38 +1083,58 @@ function updateGradChart() {
 }
 
 // ── Event log ──────────────────────────────────────────────────────────────
+// N3: all server-sourced values (game_id, worker_id) go through textContent/createTextNode.
+// S6: game_complete view link is clickable and navigates to /viewer?game=<id>.
 function addLogEntry(p) {
   const scroll = document.getElementById('log-scroll');
   const entry  = document.createElement('div');
   entry.className = 'log-entry';
 
-  const ts  = p.ts ? new Date(p.ts * 1000).toLocaleTimeString() : '';
-  let msg = '', viewLink = '';
+  const ts = p.ts ? new Date(p.ts * 1000).toLocaleTimeString() : '';
+  const tsSpan = document.createElement('span');
+  tsSpan.className = 'ts';
+  tsSpan.textContent = '[' + ts + ']';
+  entry.appendChild(tsSpan);
+
+  const msgSpan = document.createElement('span');
+  msgSpan.className = 'msg';
 
   if (p.event === 'game_complete') {
-    const w = p.winner === 0 ? '<span class="winner-p0">P0 wins</span>'
-            : p.winner === 1 ? '<span class="winner-p1">P1 wins</span>'
-            : '<span class="winner-draw">draw</span>';
-    msg      = 'Game #' + (p.game_id || '?').slice(0, 6) + '  ' + w
-             + '  in ' + (p.moves || '?') + ' moves  worker ' + (p.worker_id ?? '?');
-    viewLink = '<span class="view-link">view &rarr;</span>';
+    const gameId    = String(p.game_id || '?');
+    const workerStr = String(p.worker_id ?? '?');
+    msgSpan.appendChild(document.createTextNode('Game #' + gameId.slice(0, 6) + '  '));
+    const wSpan = document.createElement('span');
+    wSpan.className  = p.winner === 0 ? 'winner-p0' : p.winner === 1 ? 'winner-p1' : 'winner-draw';
+    wSpan.textContent = p.winner === 0 ? 'P0 wins' : p.winner === 1 ? 'P1 wins' : 'draw';
+    msgSpan.appendChild(wSpan);
+    msgSpan.appendChild(document.createTextNode('  in ' + (p.moves || '?') + ' moves  worker ' + workerStr));
+    entry.appendChild(msgSpan);
+    // S6: clickable view link navigates to /viewer?game=<id>
+    const viewSpan = document.createElement('span');
+    viewSpan.className    = 'view-link';
+    viewSpan.style.cursor = 'pointer';
+    viewSpan.textContent  = 'view \u2192';
+    viewSpan.onclick = () => { window.location.href = '/viewer?game=' + encodeURIComponent(gameId); };
+    entry.appendChild(viewSpan);
   } else if (p.event === 'eval_complete') {
-    const wr   = p.win_rate_vs_sealbot != null
+    const wr = p.win_rate_vs_sealbot != null
       ? (p.win_rate_vs_sealbot * 100).toFixed(1) + '%' : '?';
-    const gate = p.gate_passed
-      ? '<span class="gate-passed">gate PASSED</span>'
-      : '<span class="gate-failed">gate FAILED</span>';
-    msg = 'Eval: ' + wr + ' vs SealBot ' + DASH + ' ' + gate;
+    msgSpan.appendChild(document.createTextNode('Eval: ' + wr + ' vs SealBot \u2014 '));
+    const gateSpan = document.createElement('span');
+    gateSpan.className    = p.gate_passed ? 'gate-passed' : 'gate-failed';
+    gateSpan.textContent  = p.gate_passed ? 'gate PASSED' : 'gate FAILED';
+    msgSpan.appendChild(gateSpan);
+    entry.appendChild(msgSpan);
   } else if (p.event === 'run_start') {
-    msg = 'Run started ' + DASH + ' step ' + fmtInt(p.step);
+    msgSpan.textContent = 'Run started \u2014 step ' + fmtInt(p.step);
+    entry.appendChild(msgSpan);
   } else if (p.event === 'run_end') {
-    msg = 'Run ended ' + DASH + ' step ' + fmtInt(p.step);
+    msgSpan.textContent = 'Run ended \u2014 step ' + fmtInt(p.step);
+    entry.appendChild(msgSpan);
   } else {
-    msg = p.event;
+    msgSpan.textContent = p.event;
+    entry.appendChild(msgSpan);
   }
-
-  entry.innerHTML = '<span class="ts">[' + ts + ']</span>'
-    + '<span class="msg">' + msg + '</span>' + viewLink;
 
   // Newest first
   scroll.insertBefore(entry, scroll.firstChild);

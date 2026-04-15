@@ -551,10 +551,24 @@ function updateResults(result) {
     document.getElementById('res-next').textContent =
         `${playerLabel(player)}, ${remaining} move${remaining > 1 ? 's' : ''} remaining`;
 
-    const topHTML = (result.top_k || []).slice(0, 5).map((e, i) =>
-        `<div class="move-entry">${i + 1}. (${e.q},${e.r}) <span class="move-prob">${(e.prob * 100).toFixed(1)}%</span> <span class="move-logit">[${e.logit.toFixed(2)}]</span></div>`
-    ).join('');
-    document.getElementById('top-moves').innerHTML = topHTML;
+    // N4: safe DOM construction — no innerHTML with server-sourced coord/logit values
+    const topMoves = document.getElementById('top-moves');
+    topMoves.innerHTML = '';
+    (result.top_k || []).slice(0, 5).forEach((e, i) => {
+        const div = document.createElement('div');
+        div.className = 'move-entry';
+        div.appendChild(document.createTextNode(`${i + 1}. (${Number(e.q)},${Number(e.r)}) `));
+        const probSpan = document.createElement('span');
+        probSpan.className = 'move-prob';
+        probSpan.textContent = (e.prob * 100).toFixed(1) + '%';
+        div.appendChild(probSpan);
+        div.appendChild(document.createTextNode(' '));
+        const logitSpan = document.createElement('span');
+        logitSpan.className = 'move-logit';
+        logitSpan.textContent = '[' + e.logit.toFixed(2) + ']';
+        div.appendChild(logitSpan);
+        topMoves.appendChild(div);
+    });
 }
 
 function updateMCTSResults(result) {
@@ -567,10 +581,24 @@ function updateMCTSResults(result) {
     document.getElementById('mcts-value').textContent = result.root_value.toFixed(3);
     document.getElementById('mcts-sims').textContent = String(result.total_sims);
 
-    const topHTML = (result.top_k || []).slice(0, 5).map((e, i) =>
-        `<div class="move-entry">${i + 1}. (${e.q},${e.r}) <span class="move-prob">${e.visits}v</span> <span class="move-logit">Q=${e.q_value.toFixed(3)}</span></div>`
-    ).join('');
-    document.getElementById('mcts-top-moves').innerHTML = topHTML;
+    // N4: safe DOM construction — no innerHTML with server-sourced coord/q_value values
+    const mctsTop = document.getElementById('mcts-top-moves');
+    mctsTop.innerHTML = '';
+    (result.top_k || []).slice(0, 5).forEach((e, i) => {
+        const div = document.createElement('div');
+        div.className = 'move-entry';
+        div.appendChild(document.createTextNode(`${i + 1}. (${Number(e.q)},${Number(e.r)}) `));
+        const visSpan = document.createElement('span');
+        visSpan.className = 'move-prob';
+        visSpan.textContent = String(e.visits) + 'v';
+        div.appendChild(visSpan);
+        div.appendChild(document.createTextNode(' '));
+        const qSpan = document.createElement('span');
+        qSpan.className = 'move-logit';
+        qSpan.textContent = 'Q=' + e.q_value.toFixed(3);
+        div.appendChild(qSpan);
+        mctsTop.appendChild(div);
+    });
 }
 
 function updateMoveList() {
@@ -715,7 +743,7 @@ function exitPlayMode() {
 async function requestBotMove() {
     const checkpoint = document.getElementById('sel-checkpoint').value;
     if (!checkpoint) {
-        setPlayStatus('No checkpoint loaded — cannot play');
+        setPlayStatus('Select a checkpoint first');
         return;
     }
 
@@ -727,13 +755,15 @@ async function requestBotMove() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                moves_so_far: moves.map(m => ({ q: m.q, r: m.r, player: m.player })),
+                // M2: ViewerEngine.play_response() expects "(q,r)" strings; parse_axial() crashes on objects
+                moves_so_far: moves.map(m => `(${m.q},${m.r})`),
                 human_moves: [],
             }),
         });
 
         if (resp.status === 503) {
-            setPlayStatus('No model loaded yet — training must complete first');
+            // S5: checkpoint selected but server failed to load it
+            setPlayStatus('Model failed to load \u2014 check checkpoint path');
             modelThinking = false;
             return;
         }
@@ -775,6 +805,8 @@ async function requestBotMove() {
                 `Your turn. Value: ${data.value.toFixed(3)} (${playerLabel(player)} to move)`
             );
         } else if (data.winner != null) {
+            // S3 verified: Rust Board.winner() → PyO3 → JSON: Player::One=1 (P0/Blue),
+            // Player::Two=-1 (P1/Coral), no winner=null. Mapping below is correct.
             const w = data.winner === 1 ? 'P0 (Blue)' : data.winner === -1 ? 'P1 (Coral)' : null;
             setPlayStatus(w ? `Game over! ${w} wins!` : 'Game over!');
             return;
