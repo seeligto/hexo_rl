@@ -28,6 +28,7 @@ Split only when their scope makes navigation painful — not before.
 ### Deduplicate Python / Rust symmetry tables
 
 The 12-fold hex augmentation symmetry tables are defined in both:
+
 - Rust: `engine/src/replay_buffer/sym_tables.rs`
 - Python: `hexo_rl/selfplay/policy_projection.py` (for policy mapping back to global coords)
 
@@ -39,6 +40,7 @@ tables are small and tested independently.
 
 Currently self-play games are processed into (state, policy, outcome) triples and discarded.
 No full game record is kept. This blocks:
+
 - Post-hoc review of interesting games
 - Opening book construction from self-play data
 - Debugging value estimation errors on specific positions
