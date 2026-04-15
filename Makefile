@@ -208,6 +208,13 @@ corpus.export.pretrain: ## Export human-only Elo-weighted NPZ for pretrain (200K
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
+.PHONY: dashboard
+dashboard: ## Serve dashboard without training (VARIANT=gumbel_full by default)
+	@$(PY) scripts/serve_dashboard.py \
+		--run-dir runs/$(VARIANT) \
+		--checkpoint-dir checkpoints/$(VARIANT) \
+		--port 5001
+
 .PHONY: dash.open
 dash.open: ## Open web dashboard in browser
 	@echo "Opening http://localhost:5001"

@@ -134,6 +134,8 @@ class WebDashboard:
         self._games_base_dir = Path(mon.get("viewer_games_dir", "runs"))
         self._run_id: str = "default"
 
+        self._host = str(mon.get("web_host", "127.0.0.1"))
+
         # Viewer engine — lazy init at start()
         self._viewer_engine: Any = None
 
@@ -328,10 +330,61 @@ class WebDashboard:
                 log.warning("viewer_play_error", error=str(exc))
                 return jsonify({"error": str(exc)}), 500
 
+    def _load_existing_games(self, run_dir: Path) -> None:
+        """Scan run_dir/*/games/*.json and pre-populate _game_index.
+
+        Called once from start() before Flask begins serving.
+        Caps to self._game_index.maxlen most-recent by mtime.
+        """
+        if not run_dir.exists():
+            log.info("load_existing_games_skip", reason="run_dir_missing", path=str(run_dir))
+            return
+
+        matched = list(run_dir.glob("*/games/*.json"))
+        if not matched:
+            log.info("load_existing_games_skip", reason="no_files", path=str(run_dir))
+            return
+
+        max_games = self._game_index.maxlen or 50
+        # Sort descending by mtime — most-recent first — then cap.
+        try:
+            matched.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        except OSError:
+            pass
+        matched = matched[:max_games]
+        # Re-sort ascending so the deque ordering matches live-training (oldest→newest).
+        matched.reverse()
+
+        loaded = 0
+        for file_path in matched:
+            try:
+                with open(file_path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                game_id = data.get("game_id", file_path.stem)
+                winner = data.get("winner")
+                move_count = len(data.get("moves", []))
+                ts = data.get("ts") or file_path.stat().st_mtime
+                ref = {
+                    "game_id": game_id,
+                    "path": str(file_path),
+                    "winner": winner,
+                    "moves": move_count,
+                    "worker_id": data.get("worker_id"),
+                    "ts": ts,
+                }
+                with self._history_lock:
+                    self._game_index.append(ref)
+                loaded += 1
+            except (json.JSONDecodeError, OSError) as exc:
+                log.warning("load_existing_game_failed", path=str(file_path), error=str(exc))
+
+        log.info("load_existing_games_done", loaded=loaded, path=str(run_dir))
+
     def start(self) -> None:
         """Start Flask server and drain thread as daemon threads."""
         _install_engineio_excepthook()
         self._init_viewer()
+        self._load_existing_games(self._games_base_dir)
 
         self._drain_thread = threading.Thread(
             target=self._drain_emit, daemon=True, name="socketio-drain"
@@ -342,6 +395,8 @@ class WebDashboard:
         socketio = self._socketio
         app = self._app
 
+        host = self._host
+
         def _run():
             # Suppress Flask/Werkzeug startup banner — it writes to stdout
             # via click.echo and corrupts Rich Live's in-place rendering.
@@ -349,7 +404,7 @@ class WebDashboard:
             flask.cli.show_server_banner = lambda *a, **kw: None
             socketio.run(
                 app,
-                host="127.0.0.1",
+                host=host,
                 port=port,
                 allow_unsafe_werkzeug=True,
                 log_output=False,

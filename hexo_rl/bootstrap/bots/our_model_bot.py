@@ -15,7 +15,7 @@ from hexo_rl.env import GameState
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.worker import SelfPlayWorker
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
-from hexo_rl.training.trainer import Trainer
+from hexo_rl.viewer.model_loader import _extract_model_state, _infer_model_hparams
 
 
 class OurModelBot(BotProtocol):
@@ -40,15 +40,22 @@ class OurModelBot(BotProtocol):
             device = best_device()
 
         payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-        state_dict = normalize_model_state_dict_keys(Trainer._extract_model_state(payload))
-        model_hparams = Trainer._resolve_model_hparams(dict(config), state_dict)
+        state_dict = normalize_model_state_dict_keys(_extract_model_state(payload))
+        model_hparams = _infer_model_hparams(state_dict)
+        # Fall back to config values for any dims not recoverable from weights.
+        model_cfg = config.get("model", {}) if isinstance(config.get("model"), dict) else {}
+        board_size = int(model_hparams.get("board_size", model_cfg.get("board_size", config.get("board_size", 19))))
+        in_channels = int(model_hparams.get("in_channels", model_cfg.get("in_channels", config.get("in_channels", 24))))
+        filters = int(model_hparams.get("filters", model_cfg.get("filters", config.get("filters", 128))))
+        res_blocks = int(model_hparams.get("res_blocks", model_cfg.get("res_blocks", config.get("res_blocks", 12))))
+        se_reduction_ratio = int(model_hparams.get("se_reduction_ratio", model_cfg.get("se_reduction_ratio", config.get("se_reduction_ratio", 4))))
 
         net = HexTacToeNet(
-            board_size=model_hparams["board_size"],
-            in_channels=model_hparams["in_channels"],
-            filters=model_hparams["filters"],
-            res_blocks=model_hparams["res_blocks"],
-            se_reduction_ratio=model_hparams.get("se_reduction_ratio", 4),
+            board_size=board_size,
+            in_channels=in_channels,
+            filters=filters,
+            res_blocks=res_blocks,
+            se_reduction_ratio=se_reduction_ratio,
         )
         net.load_state_dict(state_dict, strict=False)
         net.to(device)
