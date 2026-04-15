@@ -29,9 +29,12 @@ import numpy as np
 
 CONFIG_PATH = Path("configs/training.yaml")
 DEFAULT_BUFFER_PATH = Path("checkpoints/replay_buffer.bin")
-# §91 theoretical baseline: 6 positive cells per game-end winning_line over 361
-# cells × ~75% non-draw rate ≈ 1.25% positive → (1−p)/p ≈ 79. Rounded to match
-# the §91 field note (~59, computed before the draw-rate correction).
+# §91 field value: 59.0 was set empirically from early buffer samples before the
+# draw-rate correction was applied. The stricter theoretical derivation gives
+# 6 / (361 × 0.75) ≈ 1.25% positive → (1−p)/p ≈ 79, but the empirical buffer
+# sampled during §91 yielded p ≈ 1.67% → (1−p)/p ≈ 59. We keep 59.0 as the
+# fallback constant to match the §91 sprint note; run --write against a real
+# buffer to get an up-to-date empirical estimate.
 _THEORETICAL_POS_WEIGHT = 59.0
 
 # HEXB v3 header constants (little-endian): magic(4) + version(4) + n_planes(4)
@@ -83,7 +86,7 @@ def from_buffer(buffer_path: Path, sample_n: int = 10_000) -> Optional[float]:
         return None
 
     row_count = _read_hexb_row_count(buffer_path)
-    alloc = max(1, min(row_count, _MAX_ALLOC_ROWS))
+    alloc = max(1, min(row_count, sample_n, _MAX_ALLOC_ROWS))
     buf = ReplayBuffer(alloc)
     try:
         n = buf.load_from_path(str(buffer_path))

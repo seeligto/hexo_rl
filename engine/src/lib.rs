@@ -549,7 +549,9 @@ thread_local! {
 /// remap). Byte-exact with the ReplayBuffer sampling kernel.
 ///
 /// Args:
-///     state:   (24, 19, 19) float32 numpy array (will be contiguous-copied if not).
+///     state:   (24, 19, 19) float32 numpy array. **Must be C-contiguous.**
+///              If the array may be non-contiguous (e.g. a slice or transposed
+///              view), call `np.ascontiguousarray(state)` before passing it in.
 ///     sym_idx: integer in [0, 12).
 ///
 /// Returns a newly-allocated (24, 19, 19) float32 numpy array.
