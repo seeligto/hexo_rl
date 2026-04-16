@@ -550,6 +550,15 @@ def main() -> None:
         default=None,
         help="Write markdown report to this path instead of stdout.",
     )
+    parser.add_argument(
+        "--zero-chain-planes",
+        action="store_true",
+        default=False,
+        help=(
+            "Experiment C ablation: zero input planes 18-23 (chain-length planes) "
+            "before running inference. Use with Experiment C checkpoints."
+        ),
+    )
     args = parser.parse_args()
 
     exit_code = 0
@@ -577,6 +586,14 @@ def main() -> None:
         print(f"Loading positions: {args.positions}", file=sys.stderr)
         positions = load_positions(args.positions)
         print(f"  {positions['n']} positions", file=sys.stderr)
+
+        # Experiment C: zero chain-length input planes before inference.
+        if args.zero_chain_planes:
+            positions = dict(positions)
+            states_zeroed = positions["states"].copy()
+            states_zeroed[:, 18:24] = 0
+            positions["states"] = states_zeroed
+            print("  [Experiment C] planes 18-23 zeroed", file=sys.stderr)
 
         print("Probing...", file=sys.stderr)
         results = probe_positions(model, positions, device=device)
