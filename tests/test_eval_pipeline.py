@@ -148,6 +148,73 @@ def test_no_best_model_skips_gating(
     assert "wr_best" not in result
 
 
+# ── Stride gating (graduation cadence split) ───────────────────────────────
+
+
+@pytest.fixture
+def eval_config_with_strides(tmp_path: Path) -> dict:
+    # base_interval=100, sealbot stride=4 → runs at steps 0,400,800,...; skipped elsewhere
+    return {
+        "eval_pipeline": {
+            "enabled": True,
+            "eval_interval": 100,
+            "report_dir": str(tmp_path / "eval"),
+            "db_path": str(tmp_path / "eval" / "results.db"),
+            "ratings_plot_path": str(tmp_path / "eval" / "ratings_curve.png"),
+            "opponents": {
+                "best_checkpoint": {
+                    "enabled": True, "stride": 1,
+                    "n_games": 10, "model_sims": 8, "opponent_sims": 8,
+                },
+                "sealbot": {"enabled": True, "stride": 4, "n_games": 10},
+                "random": {"enabled": True, "stride": 1, "n_games": 10, "model_sims": 8},
+            },
+            "gating": {"promotion_winrate": 0.55, "best_model_path": str(tmp_path / "best.pt")},
+            "bradley_terry": {"anchor_player": "checkpoint_0", "regularization": 1e-6},
+        }
+    }
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_stride_skips_sealbot_off_cadence(
+    mock_evaluator_cls: MagicMock,
+    eval_config_with_strides: dict,
+) -> None:
+    import torch
+    pipeline = EvalPipeline(eval_config_with_strides, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.7, win_count=7, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0)
+    mock_evaluator_cls.return_value = mock_eval
+
+    # step=100 → round_idx=1 → sealbot stride=4, 1%4 != 0 → skipped
+    result = pipeline.run_evaluation(MagicMock(), 100, MagicMock())
+    mock_eval.evaluate_vs_sealbot.assert_not_called()
+    assert "wr_sealbot" not in result
+    # random + best still ran
+    assert result["wr_random"] == 0.7
+    assert result["wr_best"] == 0.6
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_stride_runs_sealbot_on_cadence(
+    mock_evaluator_cls: MagicMock,
+    eval_config_with_strides: dict,
+) -> None:
+    import torch
+    pipeline = EvalPipeline(eval_config_with_strides, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.7, win_count=7, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_sealbot.return_value = EvalResult(win_rate=0.4, win_count=4, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0)
+    mock_evaluator_cls.return_value = mock_eval
+
+    # step=400 → round_idx=4 → sealbot stride=4, 4%4 == 0 → runs
+    result = pipeline.run_evaluation(MagicMock(), 400, MagicMock())
+    mock_eval.evaluate_vs_sealbot.assert_called_once()
+    assert result["wr_sealbot"] == 0.4
+
+
 # ── Colony detection ───────────────────────────────────────────────────────
 
 

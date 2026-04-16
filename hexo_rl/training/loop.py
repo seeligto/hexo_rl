@@ -186,6 +186,10 @@ def run_training_loop(
             best_model = best_ref.model
             best_model.eval()
             best_model_step = best_ref.step
+            # Graduation gate: self-play consumes anchor weights, not trainer.model.
+            # Sync inf_model to the loaded anchor before workers start.
+            _inf_base = getattr(inf_model, "_orig_mod", inf_model)
+            _inf_base.load_state_dict(best_model.state_dict())
             log.info("best_model_loaded", path=str(best_model_path), step=best_model_step)
         else:
             base_model = getattr(trainer.model, "_orig_mod", trainer.model)
@@ -399,7 +403,9 @@ def run_training_loop(
                 last_loss_info = loss_info
 
                 if train_step % _ckpt_interval == 0:
-                    _sync_weights_to_inf()
+                    # Graduation gate: inf_model is the anchor, not a mirror of
+                    # trainer.model. Do NOT sync on checkpoint cadence — sync only
+                    # when a new model beats the anchor (promotion branch below).
                     if train_step > 0:
                         _try_save_buffer(buffer, mixing_cfg, "checkpoint_interval")
 
@@ -423,7 +429,13 @@ def run_training_loop(
                                 torch.save(best_model.state_dict(), best_model_path)
                                 best_model_step = train_step
                                 _sync_weights_to_inf()
-                                log.info("best_model_promoted", step=train_step, path=str(best_model_path))
+                                log.info(
+                                    "best_model_promoted",
+                                    step=train_step,
+                                    path=str(best_model_path),
+                                    graduated=True,
+                                    wr_best=prev.get("wr_best"),
+                                )
                         _eval_result[0] = None
                         _eval_thread = None
 

@@ -3371,3 +3371,78 @@ HEXB v5 writes 1 extra byte per slot (`is_full_search`). v4 buffers still load
 - `compute_policy_loss` returns a `zeros(1)` scalar when the intersected mask
   is empty; indistinguishable from a genuine 0.0 loss without a separate
   counter.
+
+## §101 — Graduation gate with anchor model (2026-04-16)
+
+**Motivation:** Self-play workers were consuming `inf_model` weights that
+re-synced from `trainer.model` every `checkpoint_interval` (500) steps —
+effectively the current-training model, warts and all. Transient optimizer
+regressions fed directly into the data stream. KrakenBot-style graduation:
+new model must beat the current anchor at a configurable win rate before
+replacing it; workers keep using the anchor between promotions. Monotonic
+data quality.
+
+**Gap analysis:** 90% of the infrastructure was already live. `EvalPipeline`
+plays candidate vs `best_model` with a `promotion_winrate` gate
+(eval_pipeline.py:188-190). `best_model.pt` is saved on promotion
+(loop.py:419-426). `ResultsDB` logs matches + Bradley-Terry ratings. The
+missing piece was routing: `best_model` was never used by self-play.
+
+### Changes (branch `feat/graduation-gate`)
+
+**`hexo_rl/training/loop.py`:**
+- Removed the unconditional `_sync_weights_to_inf()` call in the
+  `train_step % _ckpt_interval == 0` branch. Buffer save retained.
+- On startup when `best_model.pt` exists and is loaded: `inf_model` is
+  re-synced from `best_model` (not from `trainer.model`). This makes the
+  anchor the source of truth for workers across restarts.
+- `best_model_promoted` log line gains `graduated=True` and `wr_best` fields
+  for dashboard / grep clarity. The sync to `inf_model` inside the promotion
+  branch is unchanged (now the only sync path outside startup).
+
+**`hexo_rl/eval/eval_pipeline.py`:**
+- Per-opponent `stride` gating. Each opponent block is skipped when
+  `(train_step // base_interval) % stride != 0`. Default `stride=1`
+  preserves prior behaviour.
+- `EvalPipeline.__init__` caches `self._base_interval`.
+
+**`configs/eval.yaml`:**
+- `eval_interval: 5000 → 2500` (anchor eval cadence).
+- `opponents.best_checkpoint.n_games: 50 → 200` (tighter gating CI).
+- `opponents.best_checkpoint.stride: 1` (every 2500 steps).
+- `opponents.sealbot.stride: 4` (every 10000 steps — external benchmark,
+  expensive, not a training signal).
+- `opponents.random.stride: 1` (sanity floor, cheap).
+
+### Behavioural invariants
+
+- Between graduations, `inf_model` weights are frozen.
+- On graduation: `best_model ← trainer.model`, `inf_model ← trainer.model`,
+  both persisted (`best_model.pt`) and logged with `graduated=True`.
+- First eval after a cold start with no `best_model.pt`: `best_model`
+  is cloned from the initial `trainer.model` and saved. Candidate vs
+  clone → ~50% win rate → no spurious promotion. Acceptable.
+
+### Threshold & cadence
+
+- `promotion_winrate: 0.55` (unchanged default) — conservative entry point
+  vs KrakenBot's 0.76 — tune up once graduations happen regularly.
+- `n_games: 200` — binomial 95% CI at p=0.55 is ±~7%, enough to separate a
+  true 0.55 winner from 0.50 chance.
+- Anchor eval every 2500 steps; SealBot every 10000 steps.
+
+### Tests
+
+- `tests/test_eval_pipeline.py` adds two stride tests:
+  - `test_stride_skips_sealbot_off_cadence` — step=100, sealbot stride=4,
+    round_idx=1%4≠0 → `evaluate_vs_sealbot` not called.
+  - `test_stride_runs_sealbot_on_cadence` — step=400, round_idx=4%4==0 → runs.
+- Existing trainer / phase4 smoke / eval_pipeline tests all pass unchanged.
+
+### Known follow-ups (not blocking)
+
+- Schema extension: add a `graduation` boolean column to
+  `ResultsDB.matches` so promotions are queryable directly rather than via
+  the structlog stream.
+- Optional `skip_first_eval` flag to save the 200-game cost on the
+  guaranteed-neutral first eval round.

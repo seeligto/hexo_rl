@@ -574,6 +574,10 @@ Starting config for self-play RL (do not exceed without benchmarking):
   - Re-enable when PyTorch + Python 3.14 CUDA graph support stabilizes
   - Weight sync: inf_model ← train_model after every checkpoint save and model promotion
 - Replay buffer: start at 250K samples, grow toward 1M as training stabilises
+- Graduation gate (§101): self-play workers consume `inf_model` weights, which
+  track the `best_model` anchor (not `trainer.model`). Sync fires only on
+  graduation (win rate ≥ `promotion_winrate`, default 0.55 over 200 games).
+  Eval cadence split: anchor every 2500 steps, SealBot every 10000.
 - ELO benchmark target: SealBot (replaces Ramora0 as external reference)
 - Gumbel MCTS (per-host override):
   - Gumbel-Top-k root sampling replaces PUCT exploration at root (Danihelka et al., ICLR 2022)
