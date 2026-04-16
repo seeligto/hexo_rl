@@ -87,13 +87,17 @@ Always check `docs/02_ROADMAP.md` for the current phase before starting work.
 
 **Current Status:** Phase 4.0 Self-Play RL loop is **Active**.
 
-- Pretrain validated: policy loss 5.0 → 2.07, ≥95/100 wins vs RandomBot.
-- First self-play run: 4,940 steps, found 5 issues, all fixed.
-- Dashboard rebuilt: event-driven fan-out (terminal + web at :5001).
-- Game viewer live at `/viewer` with threat overlay and replay controls.
-- Threat detection implemented in Rust (`Board.get_threats()`).
-- Benchmark rebaselined 2026-04-03 (correct 12-block model). All 10 metrics PASS.
-- Ready for sustained 24-48hr training run (Phase 4.0 exit criterion).
+- Pretrain v3b validated: 18-plane trunk, final policy_loss ≈ 2.18, ≥95/100 wins vs RandomBot (§93).
+- Dirichlet root noise ported to Rust training path (§73, commit `71d7e6e`). Resolves Q17 mode-collapse.
+- Named variants live: `gumbel_full`, `gumbel_targets`, `baseline_puct`, `gumbel_targets_desktop` in `configs/variants/` (§67, §81, §96).
+- Input layout: 18 planes. Chain-length planes (Q13) moved out of input to replay-buffer aux sub-buffer (§97).
+- Normalization: GroupNorm(8) throughout trunk; BatchNorm removed (§99). Pre-§99 checkpoints refuse to load.
+- Playout cap: move-level selective policy loss active (`full_search_prob: 0.25`, `n_sims_quick: 100`, `n_sims_full: 600`). Game-level `fast_prob` disabled; mutex enforced at pool init (§100).
+- Graduation gate: `best_model` anchor; promotion requires `wr_best ≥ 0.55` AND `ci_lo > 0.5` over 200 games (§101, §101.a).
+- Dashboard rebuilt: event-driven fan-out (terminal + web at :5001). `loss_chain/ownership/threat` surfaced (§82, §93 C14).
+- Game viewer live at `/viewer` with threat overlay; `/analyze` endpoint for interactive policy inspection (§78).
+- Benchmark rebaselined 2026-04-16 post-18ch migration (§98). 8/10 metrics PASS; worker-throughput target recalibrated to ≥250K pos/hr with warmup-artifact caveat.
+- In flight: laptop `gumbel_targets` exp D + desktop `gumbel_full` exp E (§96). Sustained 24-48hr run gated on graduation fire-rate confirmation.
 Next milestone: Phase 4.5 (benchmark gate — see docs/02_roadmap.md).
 
 Each phase has explicit exit criteria — do not advance until they are met.
@@ -403,7 +407,7 @@ hexo_rl/
 │   │   │   ├── storage.rs           ← new, resize, weight schedule, dashboard stats
 │   │   │   ├── push.rs              ← push, push_game, test-only push_raw
 │   │   │   ├── sample.rs            ← sample_batch entry + weighted sample + apply_sym
-│   │   │   ├── persist.rs           ← HEXB v2 save/load
+│   │   │   ├── persist.rs           ← HEXB v5 save/load (v4 legacy read)
 │   │   │   └── sym_tables.rs        ← 12-fold permutation tables + WeightSchedule
 │   │   ├── game_runner/             ← SelfPlayRunner (Rust worker threads)
 │   │   │   ├── mod.rs               ← SelfPlayRunner struct + #[pymethods] facade + Drop
@@ -519,8 +523,18 @@ tests. Full training runs must always use `augment=True` (the default).
 
 Run `make probe.latest` (1) at training step 5000 as the kill criterion for every
 new sustained run, and (2) before promoting any checkpoint to "best". Exit code 0 =
-PASS (ext logit mean > 0 AND contrast ≥ 0.38); code 1 = FAIL, investigate before
-continuing. See `docs/07_PHASE4_SPRINT_LOG.md` §85 and §89 for full rationale.
+PASS; code 1 = FAIL; code 2 = error.
+
+Current criterion (§91, revised from §85/§89):
+
+- C1: `contrast_mean ≥ max(0.38, 0.8 × bootstrap_contrast)`
+- C2: `ext_in_top5_pct ≥ 40`
+- C3: `ext_in_top10_pct ≥ 60`
+- C4 (warning only, does not gate): `abs(ext_logit_mean − bootstrap_ext_logit_mean) < 5.0`
+
+C1–C3 must all PASS. C4 prints a `WARNING` line; it is a BCE-drift canary
+(Q19 monitoring hook) and never flips the exit code. Full rationale in
+§91. Baseline JSON lives at `fixtures/threat_probe_baseline.json` (v4 post-§93).
 
 ---
 
@@ -534,11 +548,11 @@ continuing. See `docs/07_PHASE4_SPRINT_LOG.md` §85 and §89 for full rationale.
 > Run `make bench.full` to reproduce.
 > Full results: reports/benchmarks/
 
-Run `make bench.full`. Latest baseline (2026-04-06, Ryzen 7 8845HS + RTX 4060 Laptop, 16 workers, no CPU pin, LTO + native CPU):
+Run `make bench.full`. Latest baseline (laptop Ryzen 7 8845HS + RTX 4060, 16 workers, no CPU pin, LTO + native CPU). Headline rows are 2026-04-06; worker-throughput and buffer-sample-augmented rebaselined 2026-04-16 post-18ch migration per §98 — see inline notes:
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 55,478 sim/s | ≥ 26,000 sim/s | IQR ±400; **pre-Gumbel baseline — re-bench pending** (measured with `gumbel_mcts: false`) |
+| MCTS (CPU only, no NN) | 55,478 sim/s | ≥ 26,000 sim/s | IQR ±400; Gumbel vs PUCT parity confirmed at `+1.4%` (§74.2) |
 | NN inference (batch=64) | 9,810 pos/s | ≥ 8,250 pos/s | GPU-bound (IQR ±1); **target rebaselined 2026-04-09** — see §72 |
 | NN latency (batch=1, mean) | 1.59 ms | ≤ 3.5 ms | IQR ±0.05 ms |
 | Replay buffer push | 762,130 pos/sec | ≥ 630,000 pos/sec | IQR ±114,320 (15%) |
@@ -563,47 +577,78 @@ cold/hot/idle runs, not a code regression). See `archive/bench_investigation_202
 
 Starting config for self-play RL (do not exceed without benchmarking):
 
-- Network: 12 residual blocks × 128 channels, SE blocks on every block
-- Value head: global avg + max pooling → FC → BCE loss (binary cross-entropy on sigmoid)
-- Auxiliary loss: opponent reply prediction (weight 0.15)
-- Auxiliary heads: ownership (spatial MSE, weight 0.1) + threat (BCE, weight 0.1) added alongside existing opponent reply head (weight 0.15)
-- Temperature: cosine-annealed 1.0 → 0.05 (replaces hard step at move 30)
-- ZOI: candidate moves restricted to hex-distance ≤ 5 of last 16 moves (fallback to full legal set if < 3 candidates) — post-search move selection only; does not reduce MCTS tree branching (see sprint log §77)
-- Checkpoint loading: strict=False required when resuming — new head weights not present in pre-§37 checkpoints
-- torch.compile: DISABLED — Python 3.14 CUDA graph incompatibility (see sprint §25, §30, §32)
-  - Re-enable when PyTorch + Python 3.14 CUDA graph support stabilizes
-  - Weight sync: inf_model ← train_model after every checkpoint save and model promotion
-- Replay buffer: start at 250K samples, grow toward 1M as training stabilises
+- Network: 12 residual blocks × 128 channels, GroupNorm(8), SE blocks on every block (§99).
+- Input: 18 planes (§97). Chain-length planes (Q13) stored in ReplayBuffer
+  `chain_planes` sub-buffer, not in the input tensor.
+- Value head: global avg + max pooling → Linear(2C → 256) → ReLU → Linear(256 → 1) → tanh.
+  Loss: BCE on the pre-tanh logit against `(z+1)/2`.
+- Auxiliary heads (training only — never called from InferenceServer / evaluator / MCTS):
+  - opp_reply — mirror of policy head, cross-entropy, weight 0.15.
+  - ownership — Conv(1×1) → tanh → (19×19), spatial MSE, weight 0.1.
+  - threat — Conv(1×1) → raw logit → (19×19), BCEWithLogitsLoss with
+    `pos_weight = threat_pos_weight` (default 59.0, Q19), weight 0.1.
+  - chain_head — Conv(1×1) → (6, 19, 19), smooth-L1 (Huber), weight
+    `aux_chain_weight: 1.0` (§92; target comes from the replay-buffer
+    chain sub-buffer post-§97, not from the input slice).
+- Temperature: per-compound-move quarter-cosine schedule with hard
+  `temp_min: 0.05` floor at compound_move ≥ 15 (Rust:
+  `engine/src/game_runner/worker_loop.rs:510-515`). **Docs-vs-code drift
+  vs §36 half-cosine-per-ply flagged in §70 C.1 — unresolved.**
+- ZOI: candidate moves restricted to hex-distance ≤ 5 of last 16 moves
+  (fallback to full legal set if < 3 candidates) — post-search move
+  selection only; does not reduce MCTS tree branching (§77).
+- Checkpoint loading: pre-§99 (BatchNorm) checkpoints refuse to load —
+  `normalize_model_state_dict_keys` raises `RuntimeError` rather than
+  silently corrupting trunk weights via `strict=False`. Retrain from
+  `bootstrap_model.pt` when crossing §99.
+- torch.compile: DISABLED — Python 3.14 CUDA graph incompatibility
+  (sprint §25, §30, §32). Re-enable when PyTorch + Python 3.14 CUDA
+  graph support stabilizes.
+- Replay buffer: start at 250K samples, grow toward 1M as training
+  stabilises (§79). HEXB v5 on-disk format (v4 legacy read).
 - Graduation gate (§101, §101.a): self-play workers consume `inf_model`
-  weights, which track the `best_model` anchor (not `trainer.model`). Sync
-  fires only on graduation. Gate is two-part: `wr_best ≥ promotion_winrate`
-  (default 0.55 over 200 games) AND `ci_lo > 0.5` (binomial 95% CI). The CI
-  guard cuts the false-positive rate at n=200 from ~9% to <1% under null.
-  Promotion copies weights from the `eval_model` snapshot, not from
-  drifted `trainer.model`. Eval cadence split via per-opponent `stride`:
-  anchor every 2500 steps, SealBot every 10000. `eval_interval` in
-  training.yaml takes precedence at both trigger and stride-math time.
-- ELO benchmark target: SealBot (replaces Ramora0 as external reference)
-- Gumbel MCTS (per-host override):
-  - Gumbel-Top-k root sampling replaces PUCT exploration at root (Danihelka et al., ICLR 2022)
-  - Sequential Halving budget allocation across halving phases
-  - Non-root nodes: unchanged (PUCT + dynamic FPU)
-  - Config: `gumbel_mcts`, `gumbel_m` (default 16), `gumbel_explore_moves` (default 10)
-  - **Desktop (3070):** `gumbel_mcts: true` — intentional for Phase 4.0 sustained run (pre-§69 defaults, not yet swept on desktop hardware)
-  - **Laptop (8845HS + 4060):** `gumbel_mcts: false`, P3 sweep winner as base config — `ratio=4, burst=16, game_moves=150, wait_ms=4, leaf_bs=8, inf_bs=64, workers=14` (see sprint log §69 for provenance)
-  - Completed Q-values (`completed_q_values: true`) provides policy targets for training
-  - **Known issue:** `completed_q_values` KL loss path was silently dead due to nested-dict lookup bug in `trainer.py` (see architecture review C1). Fix tracked separately; prior training used CE loss instead of KL.
+  weights, which track the `best_model` anchor (not `trainer.model`).
+  Sync fires only on graduation or on cold-start load. Gate is
+  two-part: `wr_best ≥ promotion_winrate` (default 0.55 over 200 games)
+  AND `ci_lo > 0.5` (binomial 95% CI). CI guard cuts false-positive
+  rate at n=200 from ~9% to <1% under null. Promotion copies from the
+  `eval_model` snapshot (the one that was actually scored), not from
+  drifted `trainer.model`. Eval cadence split via per-opponent
+  `stride`: best_checkpoint every 2500 steps (`stride: 1`), SealBot
+  every 10000 (`stride: 4`), random every 2500 (`stride: 1`).
+  `eval_interval` in training.yaml takes precedence at both trigger
+  and stride-math time (§101 H1).
+- Selective policy loss (§100): per-move coin-flip chooses full-search
+  (600 sims) vs quick-search (100 sims). Policy / opp_reply losses
+  gated on `is_full_search=1`; value / chain / ownership / threat
+  losses apply to all rows. Mutex with game-level `fast_prob` enforced
+  at pool init (`fast_prob: 0.0` base; `full_search_prob: 0.25`).
+- ELO benchmark target: SealBot (replaces Ramora0 as external reference).
+- Gumbel MCTS (per-variant, not per-host). `configs/selfplay.yaml` base
+  is `gumbel_mcts: false, completed_q_values: false`; enable via
+  `--variant`:
+  - `gumbel_full` — Gumbel root search + completed-Q targets. Desktop
+    Phase 4.0 sustained run (`gumbel_full`, n_workers=10 per §81 D3).
+  - `gumbel_targets` — PUCT search + completed-Q targets (P3 sweep
+    winner per §69; `max_game_moves: 200` post-§76; `inf_bs=64,
+    wait_ms=4` post-§90).
+  - `baseline_puct` — PUCT + CE visit targets. Ablation baseline.
+  Gumbel provides root noise by construction; Dirichlet is additionally
+  applied post-§73 in both branches.
 
-Resolved before Phase 4.0 launch:
+Resolved before / during Phase 4.0:
 
 - [x] Open Question 6: sequential vs compound action space
 - [x] Open Question 5: supervised→self-play transition schedule
-- [ ] Open Question 2: value aggregation strategy (min/mean/attention)
-- [x] Q19: threat-head BCE class imbalance — `threat_pos_weight` applied in Trainer (`pos_weight ≈ 59`); shipped in `v0.4.0` (see `docs/06_OPEN_QUESTIONS.md` Q19, sprint log §85 / §91)
-
-Active Phase 4.0+ open questions:
-
-- None currently tracked here.
+- [x] Q13: chain-length planes (§92 landed as input, §97 moved to aux
+      sub-buffer)
+- [x] Q17: self-play mode collapse (Dirichlet port §73, commit `71d7e6e`)
+- [x] Q19: threat-head BCE class imbalance (`threat_pos_weight = 59.0`;
+      §92 landing)
+- [x] Q25: 24-plane throughput variance (reverted by §97; the 24-plane
+      payload no longer exists)
+- [ ] Open Question 2: value aggregation strategy (min/mean/attention) — HIGH
+- [ ] Q3, Q8, Q9, Q10, Q15, Q16, Q18, Q21 — see `docs/06_OPEN_QUESTIONS.md`
 
 ---
 
