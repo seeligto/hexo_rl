@@ -21,13 +21,17 @@ lr_schedule: cosine
 # Current design (200K run):
 #   total_steps : 200_000  — full run length; sets CosineAnnealingLR T_max
 #   eta_min     :   2e-4   — LR floor (~10% of peak lr=0.002)
-#   decay_steps :  70_000  — pretrain_weight decays to min_pretrained_weight
-#                            at step ~70K, leaving ~130K of self-play-dominant
-#                            training before the LR hits eta_min at step 200K
+#   decay_steps :  20_000  — pretrain_weight decays to min_pretrained_weight
+#                            at step ~41.5K (floor ≈0.108 at 40K), leaving
+#                            ~160K of self-play-dominant training before the
+#                            LR hits eta_min at step 200K.
+#                            Accelerated from 70K post exp A/C: buffer dilution
+#                            (74% bootstrap at 5K) was the real draw culprit —
+#                            self-play must dominate sooner to let draw penalty
+#                            propagate. Rule of thumb changed: decay_steps ~ 0.10
+#                            * total_steps (was 0.35).
 #
 # Do not change decay_steps without adjusting total_steps (and vice versa).
-# Rule of thumb: decay_steps ~ 0.35 * total_steps gives a 35% bootstrap
-# phase and a 65% self-play phase.
 total_steps: 200_000
 eta_min: 2e-4
 eval_interval: 5000
@@ -49,7 +53,10 @@ threat_weight: 0.1        # weight for binary threat auxiliary head (winning-lin
 # the 0.10 used for ownership/threat) because the target is /6-normalized so raw
 # smooth-L1 values sit around 0.02 — weight 1.0 gives the head a meaningful
 # gradient share. Retune after pretrain v3 loss curves.
-aux_chain_weight: 0.0  # Q21: degenerate target (aux_target = input slice) biases trunk toward colony-extension; killed for experiment A
+# Exp A (§94) set this to 0.0 to test draw rate impact — result was marginal.
+# Exp C (§95) zeroed chain planes instead — draw rate worsened (+35pp). Chain planes essential.
+# Reverted to 1.0 post exp A/C. See TODO §95 for full ablation record.
+aux_chain_weight: 1.0
 
 # Experiment C ablation: zero planes 18-23 at inference+training time while keeping 24ch architecture.
 # Default false. Set true in configs/variants/gumbel_targets.yaml for Experiment C only.
@@ -80,7 +87,7 @@ buffer_schedule:
 
 mixing:
   pretrained_buffer_path: "data/bootstrap_corpus.npz"
-  decay_steps: 70_000
+  decay_steps: 20_000
   min_pretrained_weight: 0.1
   initial_pretrained_weight: 0.8
   pretrain_max_samples: 200_000  # cap corpus loaded into Rust buffer; limits page cache to ~2.5 GB
