@@ -121,7 +121,7 @@ def sgn(v):
 
 # --- Print ---
 print()
-print(f"=== Experiment A Snapshot @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+print(f"=== Self-play Snapshot @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
 print(f"Step: {current_step}  |  Games: {games if games is not None else 'N/A'}  |  "
       f"Buffer: {buf_size if buf_size is not None else 'N/A'}/{buf_cap if buf_cap is not None else 'N/A'}")
 
@@ -132,7 +132,17 @@ print(f"Losses:  policy={fmt(policy_loss)}  value={fmt(value_loss)}  "
 draw_str  = f"{draw_pct:.1f}%" if draw_pct is not None else "N/A"
 x_str     = pct(x_winrate)
 o_str     = pct(o_winrate)
+# X/(X+O) balance ignoring draws — approaches 50/50 as game becomes fair
+x_raw = float(x_winrate) if x_winrate is not None else None
+o_raw = float(o_winrate) if o_winrate is not None else None
+if x_raw is not None and o_raw is not None and (x_raw + o_raw) > 0:
+    decisive_total = x_raw + o_raw
+    x_of_decisive = x_raw / decisive_total * 100
+    balance_str = f"{x_of_decisive:.1f}% X / {100-x_of_decisive:.1f}% O (ex-draws)"
+else:
+    balance_str = "N/A"
 print(f"Self-play:  draw_rate={draw_str}  x_win={x_str}  o_win={o_str}")
+print(f"Balance:    {balance_str}")
 
 games_hr_str = f"{float(games_hr):.0f}" if games_hr is not None else "N/A"
 gpu_str      = f"{float(gpu_util):.0f}%" if gpu_util is not None else "N/A"
@@ -148,15 +158,30 @@ cur_pol_str  = fmt(policy_loss)
 delta_draw_str = (f"{sgn(delta_draw)}{delta_draw:.1f}pp" if delta_draw is not None else "N/A")
 delta_pol_str  = (f"{sgn(delta_pol)}{delta_pol:.3f}"    if delta_pol  is not None else "N/A")
 
+ref_x = ref["x_win"]
+ref_o = ref["o_win"]
+if ref_x is not None and ref_o is not None and (ref_x + ref_o) > 0:
+    ref_balance = f"{ref_x/(ref_x+ref_o)*100:.1f}% X / {ref_o/(ref_x+ref_o)*100:.1f}% O"
+else:
+    ref_balance = "N/A"
+
 print(f"smoke draw_rate @ step {ref_step}: {ref_draw_str}  |  current: {cur_draw_str}  |  delta: {delta_draw_str}")
 print(f"smoke policy    @ step {ref_step}: {ref_pol_str}   |  current: {cur_pol_str}   |  delta: {delta_pol_str}")
+print(f"smoke balance   @ step {ref_step}: {ref_balance}  |  current: {balance_str}")
 print()
 
 # Flags
+# Kill threshold rationale (§95 post-exp review): §40 showed 56% draws recover with
+# -0.5 penalty. Killing at 50% aborts basin traversal prematurely. 70% is the actual
+# catastrophe threshold (draw penalty fully overwhelmed, no recovery path).
+# Hard kill requires 70% SUSTAINED over 500+ games AND not declining for 2k steps —
+# snapshot can only flag; operator decides kill.
 flags = []
 if draw_pct is not None:
-    if draw_pct > 50.0:
-        flags.append("WARNING: draw_rate > 50% — approaching kill threshold")
+    if draw_pct > 70.0:
+        flags.append("CRITICAL: draw_rate > 70% — catastrophe threshold; kill if sustained 500+ games and not declining")
+    elif draw_pct > 55.0:
+        flags.append("WARNING: draw_rate > 55% — monitor closely; kill only if > 70% sustained")
     elif draw_pct < 35.0 and current_step >= 5000:
         flags.append("SUCCESS (primary): draw_rate < 35% at step 5000+")
     if delta_draw is not None and delta_draw < -3.0:

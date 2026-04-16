@@ -4,11 +4,9 @@
 # Knob provenance: sprint log §69.
 # Launch: make train VARIANT=gumbel_targets
 #
-# Experiment C (§95): chain-plane input ablation.
-# zero_chain_planes: true zeroes planes 18-23 at inference+training time.
-# aux_chain_weight: 0.0 already set in training.yaml (from Exp A).
-training:
-  zero_chain_planes: true
+# Experiment C (§95) REVERTED: zero_chain_planes ablation showed chain planes
+# are essential — draw rate was +35pp worse vs smoke_v3b. zero_chain_planes flag
+# remains available in training.yaml (default false) for future tests.
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
