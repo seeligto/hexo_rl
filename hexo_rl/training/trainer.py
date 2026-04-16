@@ -272,6 +272,12 @@ class Trainer:
         states_t = torch.from_numpy(states).to(self.device)
         if not self.fp16:
             states_t = states_t.float()
+
+        # Experiment C ablation: zero chain-length input planes 18-23.
+        # Architecture stays 24ch; planes zeroed after H2D transfer so the
+        # stored buffer values are untouched.
+        if self.config.get("zero_chain_planes", False):
+            states_t[:, 18:24] = 0.0
         policies_t = torch.from_numpy(policies).to(self.device)     # float32
         outcomes_t = torch.from_numpy(outcomes).to(self.device)     # float32
 

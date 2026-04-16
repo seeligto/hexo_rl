@@ -51,6 +51,13 @@ threat_weight: 0.1        # weight for binary threat auxiliary head (winning-lin
 # gradient share. Retune after pretrain v3 loss curves.
 aux_chain_weight: 0.0  # Q21: degenerate target (aux_target = input slice) biases trunk toward colony-extension; killed for experiment A
 
+# Experiment C ablation: zero planes 18-23 at inference+training time while keeping 24ch architecture.
+# Default false. Set true in configs/variants/gumbel_targets.yaml for Experiment C only.
+# Chain planes ARE stored in the replay buffer (computed at encode time by encode_state_to_buffer,
+# NOT recomputed at sample time). Zeroing at the point of use (trainer + inference server) is sufficient;
+# the symmetry augmentation path is moot because zeroed planes transform to zeroed planes.
+zero_chain_planes: false
+
 # Q19: positive-class weight for threat-head BCEWithLogitsLoss.
 # Empirical (1-p)/p on winning_line labels (~1.6% positive) ≈ 59. Recomputed
 # from the corpus by scripts/compute_threat_pos_weight.py before pretrain.

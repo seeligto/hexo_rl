@@ -50,6 +50,8 @@ class InferenceServer(threading.Thread):
         self._stop_event = threading.Event()
         self._forward_count = 0
         self._total_requests = 0
+        # Experiment C: zero chain-length input planes 18-23 before inference.
+        self._zero_chain_planes: bool = bool(config.get("zero_chain_planes", False))
 
     @property
     def batcher(self) -> InferenceBatcher:
@@ -98,6 +100,10 @@ class InferenceServer(threading.Thread):
                     # out-of-window indices are zeroed before reaching this fused batch.
                     batch_np = np.ascontiguousarray(batch, dtype=np.float32)
                     tensor = torch.from_numpy(batch_np).to(self.device).reshape(len(request_ids), *self._shape)
+
+                    # Experiment C: zero chain-length planes 18-23 before model call.
+                    if self._zero_chain_planes:
+                        tensor[:, 18:24] = 0.0
 
                     try:
                         self.model.eval()

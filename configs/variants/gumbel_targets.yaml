@@ -3,6 +3,12 @@
 # this variant only enables completed_q_values on top.
 # Knob provenance: sprint log §69.
 # Launch: make train VARIANT=gumbel_targets
+#
+# Experiment C (§95): chain-plane input ablation.
+# zero_chain_planes: true zeroes planes 18-23 at inference+training time.
+# aux_chain_weight: 0.0 already set in training.yaml (from Exp A).
+training:
+  zero_chain_planes: true
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
