@@ -1,4 +1,4 @@
-# Corpus Pipeline Design — `python/corpus/`
+# Corpus Pipeline Design — `hexo_rl/corpus/`
 
 > Last updated: 2026-04-01. Q1-Q6 resolved; implementation in progress.
 
@@ -11,7 +11,7 @@
   Each move: `{moveNumber, playerId, x, y, timestamp}` — `x`/`y` are already axial
   `(q, r)` coordinates, no conversion needed.
   Filter already applied at scrape time: `rated=true, moveCount≥20, reason=six-in-a-row`.
-- **SealBotBot wrapper** complete and tested (`python/bootstrap/bots/sealbot_bot.py`).
+- **SealBotBot wrapper** complete and tested (`hexo_rl/bootstrap/bots/sealbot_bot.py`).
 - **Human opening + bot continuation** strategy confirmed: N=8 move threshold (see §4).
 - **Parallelism target**: 10-12 worker processes.
 - **Colony bug risk**: SealBot uses a flat 140×140 board — multiple distant clusters may
@@ -22,11 +22,11 @@
 
 ## 1. Directory Layout
 
-`python/corpus/` is the new orchestration layer. It sits **above** `python/bootstrap/`
+`hexo_rl/corpus/` is the new orchestration layer. It sits **above** `hexo_rl/bootstrap/`
 and imports from it; it never replaces it.
 
 ```
-python/corpus/
+hexo_rl/corpus/
 ├── __init__.py
 ├── sources/
 │   ├── __init__.py
@@ -38,9 +38,9 @@ python/corpus/
 ```
 
 **Rationale for separation:**
-`python/bootstrap/` is stable and phase-complete. Putting the new pipeline there would
+`hexo_rl/bootstrap/` is stable and phase-complete. Putting the new pipeline there would
 conflate the scraping / minimax-pretraining concern with the ongoing corpus generation
-concern. `python/corpus/` has a different job: it is a long-running, incremental feeder
+concern. `hexo_rl/corpus/` has a different job: it is a long-running, incremental feeder
 that pushes positions into `ReplayBuffer` during Phase 4+. These are different
 lifecycles.
 
