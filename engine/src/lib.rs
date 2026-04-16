@@ -23,7 +23,7 @@ use board::{Board as RustBoard, Player, BOARD_SIZE, encode_chain_planes as rust_
 use game_runner::SelfPlayRunner;
 use inference_bridge::InferenceBatcher;
 use replay_buffer::ReplayBuffer;
-use replay_buffer::sample::apply_symmetry_24plane;
+use replay_buffer::sample::apply_symmetry_state;
 use replay_buffer::sym_tables::{SymTables, N_PLANES, N_SYMS};
 
 // ── Python-visible Board wrapper ──────────────────────────────────────────────
@@ -554,7 +554,7 @@ thread_local! {
 ///              view), call `np.ascontiguousarray(state)` before passing it in.
 ///     sym_idx: integer in [0, 12).
 ///
-/// Returns a newly-allocated (24, 19, 19) float32 numpy array.
+/// Returns a newly-allocated (18, 19, 19) float32 numpy array.
 #[pyfunction]
 fn apply_symmetry<'py>(
     py: Python<'py>,
@@ -577,7 +577,7 @@ fn apply_symmetry<'py>(
     let src = state.as_slice()?;
     let mut dst = vec![0.0f32; N_PLANES * BOARD_SIZE * BOARD_SIZE];
     SYM_TABLES_TLS.with(|tables| {
-        apply_symmetry_24plane::<f32>(src, &mut dst, sym_idx, tables);
+        apply_symmetry_state::<f32>(src, &mut dst, sym_idx, tables);
     });
     dst.into_pyarray(py).reshape([N_PLANES, BOARD_SIZE, BOARD_SIZE])
 }
@@ -585,10 +585,10 @@ fn apply_symmetry<'py>(
 /// Batched version of `apply_symmetry`.
 ///
 /// Args:
-///     states:      (N, 24, 19, 19) float32 numpy array.
+///     states:      (N, 18, 19, 19) float32 numpy array.
 ///     sym_indices: (N,) integer sym_idx per state, values in [0, 12).
 ///
-/// Returns a newly-allocated (N, 24, 19, 19) float32 numpy array.
+/// Returns a newly-allocated (N, 18, 19, 19) float32 numpy array.
 #[pyfunction]
 fn apply_symmetries_batch<'py>(
     py: Python<'py>,
@@ -624,7 +624,7 @@ fn apply_symmetries_batch<'py>(
         for b in 0..n {
             let src_b = &src[b * stride..(b + 1) * stride];
             let dst_b = &mut dst[b * stride..(b + 1) * stride];
-            apply_symmetry_24plane::<f32>(src_b, dst_b, sym_indices[b], tables);
+            apply_symmetry_state::<f32>(src_b, dst_b, sym_indices[b], tables);
         }
     });
     dst.into_pyarray(py).reshape([n, N_PLANES, BOARD_SIZE, BOARD_SIZE])

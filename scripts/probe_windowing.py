@@ -64,7 +64,7 @@ def load_model(ckpt_path: Path, device: torch.device) -> HexTacToeNet:
 
     model = HexTacToeNet(
         board_size=int(hparams.get("board_size", 19)),
-        in_channels=int(hparams.get("in_channels", 24)),
+        in_channels=int(hparams.get("in_channels", 18)),
         filters=int(hparams.get("filters", 128)),
         res_blocks=int(hparams.get("res_blocks", 12)),
         se_reduction_ratio=int(hparams.get("se_reduction_ratio", 4)),

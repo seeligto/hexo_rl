@@ -246,7 +246,7 @@ def load_corpus(
         game_id: str,
         source: str,
     ) -> None:
-        s, p, o = replay_game_to_triples(moves, winner)
+        s, _chain, p, o = replay_game_to_triples(moves, winner)
         if len(o) == 0:
             return
         q_score = quality_scores.get(game_id, {}).get("quality_score", 0.5)
@@ -550,7 +550,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     cfg = ckpt["config"]
     loaded_model = HexTacToeNet(
         board_size=int(cfg.get("board_size", 19)),
-        in_channels=int(cfg.get("in_channels", 24)),
+        in_channels=int(cfg.get("in_channels", 18)),
         filters=int(cfg.get("filters", 128)),
         res_blocks=int(cfg.get("res_blocks", 12)),
         se_reduction_ratio=int(cfg.get("se_reduction_ratio", 4)),
@@ -559,7 +559,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     loaded_model.eval().to(device)
 
     dummy = torch.zeros(
-        1, int(cfg.get("in_channels", 24)), BOARD_SIZE, BOARD_SIZE, device=device,
+        1, int(cfg.get("in_channels", 18)), BOARD_SIZE, BOARD_SIZE, device=device,
     )
     with torch.no_grad():
         log_pol, val, v_logit = loaded_model(dummy.float())

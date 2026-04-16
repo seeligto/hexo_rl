@@ -10,13 +10,10 @@ from unittest.mock import patch
 
 import pytest
 
-# Find any checkpoint to test with. Skip archived 18-plane checkpoints: after
-# the Q13 24-plane break, feeding a 24-channel tensor into an 18-channel trunk
-# crashes with a conv shape mismatch. Only checkpoints whose first input conv
-# has in_channels == 24 are runnable against the current GameState.to_tensor()
-# path. C6 (pretrain v3) produces a fresh 24-plane bootstrap.
+# Find any checkpoint to test with. Only 18-channel checkpoints are runnable
+# against the current 18-plane GameState.to_tensor() path.
 CKPT_DIR = Path("checkpoints")
-_EXPECTED_IN_CHANNELS = 24
+_EXPECTED_IN_CHANNELS = 18
 
 
 def _checkpoint_in_channels(path: Path) -> int | None:
@@ -44,10 +41,7 @@ TEST_CKPT = str(AVAILABLE_CKPTS[0]) if AVAILABLE_CKPTS else None
 
 needs_checkpoint = pytest.mark.skipif(
     TEST_CKPT is None,
-    reason=(
-        f"No {_EXPECTED_IN_CHANNELS}-plane checkpoint available "
-        f"(post-Q13 landing; archived 18-plane checkpoints are not loadable)"
-    ),
+    reason=f"No {_EXPECTED_IN_CHANNELS}-plane checkpoint available",
 )
 
 
@@ -277,7 +271,7 @@ class TestModelLoaderSync:
         """Build a minimal state_dict with enough keys to exercise inference."""
         import torch
         sd = {
-            "trunk.input_conv.weight": torch.randn(128, 24, 3, 3),
+            "trunk.input_conv.weight": torch.randn(128, 18, 3, 3),
             "policy_fc.weight": torch.randn(362, 2 * 19 * 19),
         }
         for i in range(6):

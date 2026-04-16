@@ -1,14 +1,15 @@
-//! HEXB v3 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
+//! HEXB v4 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
 //! `load_from_path_impl`.
 //!
 //! Format (little-endian native):
 //!   [magic: u32 = 0x48455842]  ("HEXB")
-//!   [version: u32 = 3]
-//!   [n_planes: u32]            (redundant sanity field, must equal N_PLANES)
+//!   [version: u32 = 4]
+//!   [n_planes: u32]            (redundant sanity field, must equal N_PLANES = 18)
 //!   [capacity: u64]
 //!   [size: u64]
 //!   For each of `size` positions (oldest → newest):
-//!     state:        STATE_STRIDE × u16
+//!     state:        STATE_STRIDE × u16    (18 planes × 361 cells)
+//!     chain_planes: CHAIN_STRIDE × u16    (6 planes × 361 cells)
 //!     policy:       POLICY_STRIDE × f32
 //!     outcome:      f32
 //!     game_id:      i64
@@ -16,10 +17,9 @@
 //!     ownership:    AUX_STRIDE × u8   (encoding 0/1/2)
 //!     winning_line: AUX_STRIDE × u8   (binary mask)
 //!
-//! v1 (pre A1 aux refactor) and v2 (pre Q13 chain-plane) buffers are NOT
-//! readable; `load_from_path_impl` returns a clear error if encountered —
-//! v2 used STATE_STRIDE=18×361, v3 uses 24×361, so the on-disk byte layout
-//! differs and silent reinterpretation would corrupt training data.
+//! v1–v3 buffers are NOT readable — `load_from_path_impl` returns a clear
+//! error if encountered. v3 used STATE_STRIDE=24×361 (chain planes embedded
+//! in state); v4 separates them into a dedicated chain sub-buffer.
 
 use std::sync::atomic::Ordering;
 
@@ -30,7 +30,7 @@ use super::sym_tables::*;
 use super::ReplayBuffer;
 
 pub(crate) const HEXB_MAGIC: u32 = 0x4845_5842; // "HEXB"
-pub(crate) const HEXB_VERSION: u32 = 3;
+pub(crate) const HEXB_VERSION: u32 = 4;
 
 impl ReplayBuffer {
     /// Save buffer contents to a binary file in HEXB v3 format.
@@ -67,6 +67,17 @@ impl ReplayBuffer {
                 )
             };
             w.write_all(state_bytes)
+                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+
+            // chain_planes: u16 slice → bytes
+            let chain_start = slot * CHAIN_STRIDE;
+            let chain_bytes = unsafe {
+                std::slice::from_raw_parts(
+                    self.chain_planes[chain_start..chain_start + CHAIN_STRIDE].as_ptr() as *const u8,
+                    CHAIN_STRIDE * 2,
+                )
+            };
+            w.write_all(chain_bytes)
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
 
             // policy: f32 slice → bytes
@@ -143,8 +154,8 @@ impl ReplayBuffer {
         if version != HEXB_VERSION {
             return Err(PyValueError::new_err(format!(
                 "HEXB version {version} not supported (this build expects v{HEXB_VERSION}). \
-                 v1 was invalidated by the A1 aux target alignment refactor; v2 was \
-                 invalidated by the Q13 chain-length plane addition (18→24 planes). \
+                 v1–v2 were invalidated by aux/chain refactors; v3 embedded chain planes in \
+                 the state buffer (24 planes); v4 stores them separately (18 state + 6 chain). \
                  Regenerate the buffer from self-play."
             )));
         }
@@ -173,10 +184,11 @@ impl ReplayBuffer {
         // How many to skip if saved_size > capacity (skip oldest)
         let to_skip = saved_size - to_load;
 
-        // Per-entry byte sizes (v2: state + policy + outcome + game_id + weight + own + wl)
+        // Per-entry byte sizes (v4: state + chain + policy + outcome + game_id + weight + own + wl)
         let state_bytes = STATE_STRIDE * 2;
+        let chain_bytes = CHAIN_STRIDE * 2;
         let policy_bytes = POLICY_STRIDE * 4;
-        let entry_bytes = state_bytes + policy_bytes + 4 + 8 + 2 + AUX_STRIDE + AUX_STRIDE;
+        let entry_bytes = state_bytes + chain_bytes + policy_bytes + 4 + 8 + 2 + AUX_STRIDE + AUX_STRIDE;
 
         // Skip oldest entries
         if to_skip > 0 {
@@ -198,6 +210,7 @@ impl ReplayBuffer {
 
         // Read positions directly into storage
         let mut state_buf = vec![0u8; state_bytes];
+        let mut chain_buf = vec![0u8; chain_bytes];
         let mut pol_buf = vec![0u8; policy_bytes];
 
         for i in 0..to_load {
@@ -209,6 +222,14 @@ impl ReplayBuffer {
             let dst_state = &mut self.states[slot * STATE_STRIDE..(slot + 1) * STATE_STRIDE];
             for (j, d) in dst_state.iter_mut().enumerate() {
                 *d = u16::from_le_bytes([state_buf[j * 2], state_buf[j * 2 + 1]]);
+            }
+
+            // chain_planes
+            r.read_exact(&mut chain_buf)
+                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+            let dst_chain = &mut self.chain_planes[slot * CHAIN_STRIDE..(slot + 1) * CHAIN_STRIDE];
+            for (j, d) in dst_chain.iter_mut().enumerate() {
+                *d = u16::from_le_bytes([chain_buf[j * 2], chain_buf[j * 2 + 1]]);
             }
 
             // policy
@@ -239,7 +260,7 @@ impl ReplayBuffer {
             let w_bits = u16::from_le_bytes(buf2);
             self.weights[slot] = w_bits;
 
-            // ownership + winning_line (v2)
+            // ownership + winning_line (v4)
             let aux_dst_start = slot * AUX_STRIDE;
             r.read_exact(&mut self.ownership[aux_dst_start..aux_dst_start + AUX_STRIDE])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
@@ -262,9 +283,9 @@ mod tests {
     use super::*;
     use half::f16;
 
-    /// HEXB v3 round-trip — verify aux columns survive save/load.
+    /// HEXB v4 round-trip — verify aux columns survive save/load.
     #[test]
-    fn test_aux_hexb_v3_roundtrip() {
+    fn test_aux_hexb_v4_roundtrip() {
         use std::env::temp_dir;
 
         let mut buf = ReplayBuffer::new(8);
@@ -279,7 +300,7 @@ mod tests {
         buf.head = 1;
         buf.size = 1;
 
-        let path = temp_dir().join("aux_v3_roundtrip.hexb");
+        let path = temp_dir().join("aux_v4_roundtrip.hexb");
         buf.save_to_path(path.to_str().unwrap()).unwrap();
 
         let mut buf2 = ReplayBuffer::new(8);

@@ -7,7 +7,7 @@ from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.losses import compute_chain_loss
 
 
-def _tiny_net(in_channels: int = 24) -> HexTacToeNet:
+def _tiny_net(in_channels: int = 18) -> HexTacToeNet:
     # Small tower to keep tests fast; same in_channels as production.
     return HexTacToeNet(
         board_size=19,
@@ -20,7 +20,7 @@ def _tiny_net(in_channels: int = 24) -> HexTacToeNet:
 
 def test_forward_base_tuple_unchanged_without_chain_flag():
     net = _tiny_net()
-    x = torch.zeros(2, 24, 19, 19)
+    x = torch.zeros(2, 18, 19, 19)
     out = net(x)
     assert isinstance(out, tuple)
     assert len(out) == 3
@@ -32,7 +32,7 @@ def test_forward_base_tuple_unchanged_without_chain_flag():
 
 def test_forward_with_chain_flag_appends_chain_pred():
     net = _tiny_net()
-    x = torch.zeros(2, 24, 19, 19)
+    x = torch.zeros(2, 18, 19, 19)
     out = net(x, chain=True)
     assert len(out) == 4
     chain_pred = out[-1]
@@ -41,7 +41,7 @@ def test_forward_with_chain_flag_appends_chain_pred():
 
 def test_forward_all_flags_preserves_order():
     net = _tiny_net()
-    x = torch.zeros(1, 24, 19, 19)
+    x = torch.zeros(1, 18, 19, 19)
     out = net(
         x,
         aux=True,
@@ -134,12 +134,12 @@ def test_chain_head_gradient_flows_through_trunk():
     """Train-step sanity: chain loss gradient must propagate into trunk weights."""
     net = _tiny_net()
     net.train()
-    # Input with the chain block as a non-trivial target; policy/value paths
-    # are zeroed out so the only gradient is from chain_loss.
-    x = torch.randn(2, 24, 19, 19, requires_grad=False)
+    # 18-plane input; chain target is a separate random tensor (no longer sliced
+    # from input since chain planes were removed from the state tensor in Q13).
+    x = torch.randn(2, 18, 19, 19, requires_grad=False)
     out = net(x, chain=True)
     chain_pred = out[-1]
-    chain_target = x[:, 18:24]
+    chain_target = torch.rand(2, 6, 19, 19)
     loss = compute_chain_loss(chain_pred, chain_target)
     loss.backward()
     # Every trunk and chain_head param must have a gradient.
@@ -149,15 +149,15 @@ def test_chain_head_gradient_flows_through_trunk():
         assert torch.isfinite(named[key].grad).all(), f"non-finite grad on {key}"
 
 
-def test_chain_head_target_slice_from_input_does_not_leak_gradient_to_input():
-    """The chain target is `input[:, 18:24]` — this must be a no-gradient tensor.
-    In the trainer, `states_t` is constructed from numpy with no requires_grad,
-    so the slice also has no grad. This test pins that contract."""
-    x = torch.zeros(2, 24, 19, 19, requires_grad=False)
-    target = x[:, 18:24]
+def test_chain_target_from_numpy_has_no_gradient():
+    """Chain target comes from numpy (via torch.from_numpy) — must have no grad.
+    In the trainer, chain_planes is a numpy array H2D-transferred without
+    requires_grad, so the chain loss only back-props through chain_pred."""
+    import numpy as np
+    chain_np = np.zeros((2, 6, 19, 19), dtype=np.float32)
+    target = torch.from_numpy(chain_np).float()
     assert target.requires_grad is False
-    # Build a fake pred that DOES require grad and verify loss gradient only
-    # flows through pred, not through target.
+    # Build a fake pred that DOES require grad; verify grad flows through pred only.
     pred = torch.zeros(2, 6, 19, 19, requires_grad=True)
     loss = compute_chain_loss(pred, target)
     loss.backward()
