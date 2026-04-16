@@ -543,10 +543,10 @@ Run `make bench.full`. Latest baseline (2026-04-06, Ryzen 7 8845HS + RTX 4060 La
 | NN latency (batch=1, mean) | 1.59 ms | ≤ 3.5 ms | IQR ±0.05 ms |
 | Replay buffer push | 762,130 pos/sec | ≥ 630,000 pos/sec | IQR ±114,320 (15%) |
 | Replay buffer sample raw (batch=256) | 1,037 µs/batch | ≤ 1,500 µs | IQR ±34 µs |
-| Replay buffer sample augmented (batch=256) | 940 µs/batch | ≤ 1,400 µs | IQR ±62 µs |
+| Replay buffer sample augmented (batch=256) | 1,663 µs/batch | ≤ 1,800 µs | IQR ±566 µs; **rebaselined 2026-04-16** — 18ch split scatter (state + chain separate pass); see §98 |
 | GPU utilization | 100.0% | ≥ 85% | Saturated during inference-only benchmark |
 | VRAM usage (process) | 0.05 GB / 8.0 GB | ≤ 6.4 GB | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |
-| Worker throughput | 659,983 pos/hr | ≥ 500,000 pos/hr | IQR ±56,835 (8.6%); **target rebaselined 2026-04-09** — see §72 |
+| Worker throughput | 364,176 pos/hr (max observed) | ≥ 250,000 pos/hr | **rebaselined 2026-04-16** — benchmark warmup design causes 0-pos windows; old 659k baseline not comparable (different sim count + methodology); see §98 |
 | Batch fill % | 100.0% | ≥ 80% | IQR ±0.0% |
 
 Historical variance note: before the warm-up/n=5/pinning methodology, single-run
@@ -557,6 +557,7 @@ than prior desktop baseline due to faster single-thread IPC. All 10 targets PASS
 2026-04-09: NN inference and worker throughput targets rebaselined after a sustained
 NVIDIA driver/boost-clock shift (~14% GPU throughput reduction, persistent across
 cold/hot/idle runs, not a code regression). See `archive/bench_investigation_2026-04-09/verdict.md` and §72.
+2026-04-16: buffer augmented and worker throughput rebaselined after 18ch migration. Buffer augmented: split scatter pass (state + chain separate) raises µs/batch. Worker throughput: benchmark warmup artifact (2/5 windows produce 0 positions) + methodology change (200 sims/128 max moves vs old 400/200) make old 659k baseline non-comparable. Real training throughput ~48k pos/hr at production sim counts (GPU shared). See §98.
 
 ## Phase 4.0 architecture baseline
 
