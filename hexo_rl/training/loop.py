@@ -119,12 +119,6 @@ def run_training_loop(
 
     _ckpt_interval = int(trainer.config.get("checkpoint_interval", 500))
 
-    def _sync_weights_to_inf() -> None:
-        """Copy train_model weights → inf_model (called after each checkpoint)."""
-        train_base = getattr(trainer.model, "_orig_mod", trainer.model)
-        inf_base   = getattr(inf_model,     "_orig_mod", inf_model)
-        inf_base.load_state_dict(train_base.state_dict())
-
     # ── CUDA warm-up ─────────────────────────────────────────────────────────
     # Force CUDA kernel compilation now (before workers start) so the first
     # inference call from a worker returns immediately instead of blocking for
@@ -191,6 +185,21 @@ def run_training_loop(
             _inf_base = getattr(inf_model, "_orig_mod", inf_model)
             _inf_base.load_state_dict(best_model.state_dict())
             log.info("best_model_loaded", path=str(best_model_path), step=best_model_step)
+            # M2: warn if resumed trainer.model and loaded anchor diverge on step.
+            # Either side may legitimately be ahead (anchor rollback, or training
+            # continued past last promotion) but a silent mismatch can produce a
+            # trivially-promoted first eval that wipes a hand-picked anchor.
+            if best_model_step is not None and trainer.step != best_model_step:
+                log.warning(
+                    "resume_anchor_step_mismatch",
+                    trainer_step=trainer.step,
+                    best_model_step=best_model_step,
+                    msg=(
+                        "trainer.model and best_model.pt were loaded from different "
+                        "training steps. First eval will compare the current trainer "
+                        "weights against this anchor; confirm this is intended."
+                    ),
+                )
         else:
             base_model = getattr(trainer.model, "_orig_mod", trainer.model)
             best_model = HexTacToeNet(
@@ -204,6 +213,21 @@ def run_training_loop(
 
     _eval_thread: threading.Thread | None = None
     _eval_result: list[dict | None] = [None]
+
+    # L1: allocate the eval-side model once and reuse across rounds. Reallocating
+    # every 2500 steps churned ~30 MB of CUDA activations per round on 12-block
+    # × 128-ch and leaned on the allocator for no benefit.
+    # C1: this model is also the source of truth for what weights get promoted.
+    # We drain the previous eval's result BEFORE overwriting eval_model for the
+    # next round, so holding a reference here is safe — the weights still in
+    # eval_model when `promoted=True` is drained are the weights that actually
+    # passed the gate, not whatever trainer.model has drifted to since.
+    eval_model: HexTacToeNet | None = None
+    if eval_pipeline is not None:
+        eval_model = HexTacToeNet(
+            board_size=board_size, res_blocks=res_blocks, filters=filters,
+        ).to(device)
+        eval_model.eval()
 
     # ── GPU monitor ───────────────────────────────────────────────────────────
     gpu_monitor = GPUMonitor(interval_sec=5)
@@ -414,24 +438,33 @@ def run_training_loop(
                     if _eval_thread is not None and not _eval_thread.is_alive():
                         prev = _eval_result[0]
                         if prev is not None:
+                            # L2: use None (not 0.0) so skipped-opponent rounds
+                            # don't render as "0% vs SealBot" on the dashboard.
                             emit_event({
                                 "event": "eval_complete",
                                 "step": prev.get("step", train_step),
                                 "elo_estimate": prev.get("elo_estimate"),
-                                "win_rate_vs_sealbot": prev.get("wr_sealbot", 0.0),
+                                "win_rate_vs_sealbot": prev.get("wr_sealbot"),
                                 "eval_games": prev.get("eval_games", 0),
                                 "gate_passed": prev.get("promoted", False),
                             })
                             if prev.get("promoted"):
-                                base_model = getattr(trainer.model, "_orig_mod", trainer.model)
-                                best_model.load_state_dict(base_model.state_dict())
+                                # C1: promote the weights that actually passed
+                                # the gate (eval_model at time of kickoff), NOT
+                                # trainer.model, which has drifted forward by
+                                # eval_interval steps during the background eval.
+                                assert eval_model is not None
+                                eval_base = getattr(eval_model, "_orig_mod", eval_model)
+                                best_model.load_state_dict(eval_base.state_dict())
                                 best_model.eval()
                                 torch.save(best_model.state_dict(), best_model_path)
-                                best_model_step = train_step
-                                _sync_weights_to_inf()
+                                best_model_step = prev.get("step", train_step)
+                                _inf_base = getattr(inf_model, "_orig_mod", inf_model)
+                                _inf_base.load_state_dict(eval_base.state_dict())
                                 log.info(
                                     "best_model_promoted",
                                     step=train_step,
+                                    eval_step=best_model_step,
                                     path=str(best_model_path),
                                     graduated=True,
                                     wr_best=prev.get("wr_best"),
@@ -441,11 +474,9 @@ def run_training_loop(
 
                     if _eval_thread is None or not _eval_thread.is_alive():
                         base_model = getattr(trainer.model, "_orig_mod", trainer.model)
-                        eval_model = HexTacToeNet(
-                            board_size=board_size, res_blocks=res_blocks, filters=filters,
-                        ).to(device)
-                        eval_model.load_state_dict(base_model.state_dict())
-                        eval_model.eval()
+                        assert eval_model is not None
+                        _eval_base = getattr(eval_model, "_orig_mod", eval_model)
+                        _eval_base.load_state_dict(base_model.state_dict())
                         step_snapshot = train_step
                         log.info("evaluation_start", step=step_snapshot)
 
@@ -456,10 +487,11 @@ def run_training_loop(
                             _cfg: dict = config,
                         ) -> None:
                             try:
+                                # L4: run_evaluation sets result["step"] itself;
+                                # the post-hoc assignment here was dead code.
                                 result = eval_pipeline.run_evaluation(
                                     _model, _step, _best, full_config=_cfg,
                                 )
-                                result["step"] = _step
                                 _eval_result[0] = result
                             except Exception:
                                 import traceback

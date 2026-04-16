@@ -34,7 +34,10 @@ lr_schedule: cosine
 # Do not change decay_steps without adjusting total_steps (and vice versa).
 total_steps: 200_000
 eta_min: 2e-4
-eval_interval: 5000
+eval_interval: 5000            # overrides eval.yaml's eval_interval at trigger time.
+                               # §101: EvalPipeline stride math reads this same value
+                               # via full_config; keep the two in sync (or set only here)
+                               # to keep anchor/sealbot cadences aligned with strides.
 checkpoint_interval: 500
 max_checkpoints_kept: 10
 preserve_eval_checkpoints: true   # never prune checkpoints at eval_interval boundaries

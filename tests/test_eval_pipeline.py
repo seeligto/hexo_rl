@@ -85,10 +85,11 @@ def test_run_evaluation_stores_results(
     mock_evaluator_cls: MagicMock,
     pipeline: EvalPipeline,
 ) -> None:
-    # Mock the evaluator to return fixed EvalResults
+    # Mock the evaluator to return fixed EvalResults. Best win_rate=0.9 at n=10
+    # clears both the point threshold (>= 0.55) and the M1 CI guard (ci_lo > 0.5).
     mock_eval = MagicMock()
     mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.8, win_count=8, n_games=10, colony_wins=1)
-    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.9, win_count=9, n_games=10, colony_wins=0)
     mock_evaluator_cls.return_value = mock_eval
 
     mock_model = MagicMock()
@@ -97,8 +98,8 @@ def test_run_evaluation_stores_results(
     result = pipeline.run_evaluation(mock_model, 1000, mock_best)
 
     assert result["wr_random"] == 0.8
-    assert result["wr_best"] == 0.6
-    assert result["promoted"] is True  # 0.6 >= 0.55
+    assert result["wr_best"] == 0.9
+    assert result["promoted"] is True
 
     # DB should have match records
     pairs = pipeline.db.get_all_pairwise()
@@ -213,6 +214,107 @@ def test_stride_runs_sealbot_on_cadence(
     result = pipeline.run_evaluation(MagicMock(), 400, MagicMock())
     mock_eval.evaluate_vs_sealbot.assert_called_once()
     assert result["wr_sealbot"] == 0.4
+
+
+def test_stride_zero_rejected_at_init(tmp_path: Path) -> None:
+    """M4: stride=0 (user intending to disable) must raise, not silently run every round."""
+    import torch
+    cfg = {
+        "eval_pipeline": {
+            "enabled": True,
+            "eval_interval": 100,
+            "report_dir": str(tmp_path / "eval"),
+            "db_path": str(tmp_path / "eval" / "results.db"),
+            "ratings_plot_path": str(tmp_path / "eval" / "ratings_curve.png"),
+            "opponents": {
+                "best_checkpoint": {"enabled": True, "n_games": 10},
+                "sealbot": {"enabled": True, "stride": 0, "n_games": 10},
+                "random": {"enabled": True, "n_games": 10},
+            },
+            "gating": {"promotion_winrate": 0.55, "best_model_path": str(tmp_path / "best.pt")},
+            "bradley_terry": {"anchor_player": "checkpoint_0", "regularization": 1e-6},
+        }
+    }
+    with pytest.raises(ValueError, match="stride must be int >= 1"):
+        EvalPipeline(cfg, torch.device("cpu"))
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_ci_guard_blocks_marginal_promotion(
+    mock_evaluator_cls: MagicMock,
+    eval_config: dict,
+) -> None:
+    """M1: wr above threshold but CI lower bound <= 0.5 must not promote."""
+    import torch
+    pipeline = EvalPipeline(eval_config, torch.device("cpu"))
+    # 6/10 wins: p_hat=0.6 >= 0.55 (old gate passes), but ci_lo ≈ 0.30 (new gate blocks).
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.8, win_count=8, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0)
+    mock_evaluator_cls.return_value = mock_eval
+
+    result = pipeline.run_evaluation(MagicMock(), 1000, MagicMock())
+    assert result["wr_best"] == 0.6
+    assert result["promoted"] is False
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_ci_guard_disabled_allows_marginal_promotion(
+    mock_evaluator_cls: MagicMock,
+    eval_config: dict,
+) -> None:
+    """M1: require_ci_above_half=false restores old point-threshold semantics."""
+    import torch
+    eval_config["eval_pipeline"]["gating"]["require_ci_above_half"] = False
+    pipeline = EvalPipeline(eval_config, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.8, win_count=8, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0)
+    mock_evaluator_cls.return_value = mock_eval
+
+    result = pipeline.run_evaluation(MagicMock(), 1000, MagicMock())
+    assert result["promoted"] is True
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_eval_games_reflects_opponents_run(
+    mock_evaluator_cls: MagicMock,
+    eval_config_with_strides: dict,
+) -> None:
+    """M3: eval_games sums only opponents actually played this round."""
+    import torch
+    pipeline = EvalPipeline(eval_config_with_strides, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.7, win_count=7, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0)
+    mock_evaluator_cls.return_value = mock_eval
+
+    # step=100 → sealbot (stride=4) skipped; random + best run → 10 + 10 = 20
+    result = pipeline.run_evaluation(MagicMock(), 100, MagicMock())
+    assert result["eval_games"] == 20
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_effective_eval_interval_override(
+    mock_evaluator_cls: MagicMock,
+    eval_config_with_strides: dict,
+) -> None:
+    """H1: pipeline stride math honours full_config.eval_interval override."""
+    import torch
+    pipeline = EvalPipeline(eval_config_with_strides, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.7, win_count=7, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_sealbot.return_value = EvalResult(win_rate=0.4, win_count=4, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0)
+    mock_evaluator_cls.return_value = mock_eval
+
+    # base_interval=100 in config; override says 200 is the true trigger cadence.
+    # step=800 with base=200 → round_idx=4 → sealbot stride=4 runs.
+    result = pipeline.run_evaluation(
+        MagicMock(), 800, MagicMock(), full_config={"eval_interval": 200}
+    )
+    mock_eval.evaluate_vs_sealbot.assert_called_once()
+    assert "wr_sealbot" in result
 
 
 # ── Colony detection ───────────────────────────────────────────────────────
