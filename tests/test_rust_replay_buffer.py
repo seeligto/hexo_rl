@@ -13,10 +13,11 @@ import pytest
 
 from engine import ReplayBuffer
 
-CHANNELS   = 24  # 18 history/scalar planes + 6 Q13 chain-length planes
-BOARD_SIZE = 19
-N_ACTIONS  = BOARD_SIZE * BOARD_SIZE + 1  # 362
-AUX_STRIDE = BOARD_SIZE * BOARD_SIZE      # 361
+CHANNELS      = 18  # 18 state planes (chain planes stored separately)
+N_CHAIN_PLANES = 6
+BOARD_SIZE    = 19
+N_ACTIONS     = BOARD_SIZE * BOARD_SIZE + 1  # 362
+AUX_STRIDE    = BOARD_SIZE * BOARD_SIZE      # 361
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -27,6 +28,10 @@ def make_buf(capacity: int = 100) -> ReplayBuffer:
 
 def random_state() -> np.ndarray:
     return np.random.randn(CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
+
+
+def random_chain() -> np.ndarray:
+    return np.zeros((N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
 
 
 def random_policy() -> np.ndarray:
@@ -46,6 +51,7 @@ def empty_wl() -> np.ndarray:
 def random_entry() -> tuple:
     return (
         random_state(),
+        random_chain(),
         random_policy(),
         float(np.random.choice([-1.0, 0.0, 1.0])),
         empty_own(),
@@ -56,8 +62,8 @@ def random_entry() -> tuple:
 def push_n(buf: ReplayBuffer, n: int, use_game_id: bool = False) -> None:
     for _ in range(n):
         gid = buf.next_game_id() if use_game_id else -1
-        s, p, o, own, wl = random_entry()
-        buf.push(s, p, o, own, wl, game_id=gid)
+        s, c, p, o, own, wl = random_entry()
+        buf.push(s, c, p, o, own, wl, game_id=gid)
 
 
 # ── Initial state ─────────────────────────────────────────────────────────────
@@ -73,16 +79,16 @@ def test_initial_size_zero():
 def test_push_increments_size():
     buf = make_buf(capacity=10)
     for i in range(5):
-        s, p, o, own, wl = random_entry()
-        buf.push(s, p, o, own, wl)
+        s, c, p, o, own, wl = random_entry()
+        buf.push(s, c, p, o, own, wl)
         assert buf.size == i + 1
 
 
 def test_push_caps_at_capacity():
     buf = make_buf(capacity=5)
     for _ in range(12):
-        s, p, o, own, wl = random_entry()
-        buf.push(s, p, o, own, wl)
+        s, c, p, o, own, wl = random_entry()
+        buf.push(s, c, p, o, own, wl)
     assert buf.size == 5
 
 
@@ -96,13 +102,17 @@ def _zeros_wl_batch(t: int) -> np.ndarray:
     return np.zeros((t, AUX_STRIDE), dtype=np.uint8)
 
 
+def _zeros_chain_batch(t: int) -> np.ndarray:
+    return np.zeros((t, N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+
+
 def test_push_game_no_wrap():
     buf = make_buf(capacity=20)
     t = 7
     states   = np.random.randn(t, CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
     policies = np.abs(np.random.randn(t, N_ACTIONS).astype(np.float32))
     outcomes = np.array([1.0, -1.0, 0.0, 1.0, -1.0, 1.0, 0.0], dtype=np.float32)
-    buf.push_game(states, policies, outcomes, _ones_own_batch(t), _zeros_wl_batch(t))
+    buf.push_game(states, _zeros_chain_batch(t), policies, outcomes, _ones_own_batch(t), _zeros_wl_batch(t))
     assert buf.size == t
 
 
@@ -112,14 +122,14 @@ def test_push_game_with_wrap():
     s1 = np.ones((t1, CHANNELS, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
     p1 = np.ones((t1, N_ACTIONS), dtype=np.float32) / N_ACTIONS
     o1 = np.zeros(t1, dtype=np.float32)
-    buf.push_game(s1, p1, o1, _ones_own_batch(t1), _zeros_wl_batch(t1))
+    buf.push_game(s1, _zeros_chain_batch(t1), p1, o1, _ones_own_batch(t1), _zeros_wl_batch(t1))
     assert buf.size == t1
 
     t2 = 4
     s2 = np.ones((t2, CHANNELS, BOARD_SIZE, BOARD_SIZE), dtype=np.float16) * 2.0
     p2 = np.ones((t2, N_ACTIONS), dtype=np.float32) / N_ACTIONS
     o2 = np.ones(t2, dtype=np.float32)
-    buf.push_game(s2, p2, o2, _ones_own_batch(t2), _zeros_wl_batch(t2))
+    buf.push_game(s2, _zeros_chain_batch(t2), p2, o2, _ones_own_batch(t2), _zeros_wl_batch(t2))
     assert buf.size == 7  # capped at capacity
 
 
@@ -134,23 +144,25 @@ def test_sample_raises_on_empty():
 def test_sample_returns_correct_shapes():
     buf = make_buf(capacity=200)
     push_n(buf, 100)
-    s, p, o, own, wl = buf.sample_batch(16, augment=True)
-    assert s.shape == (16, CHANNELS, BOARD_SIZE, BOARD_SIZE)
-    assert p.shape == (16, N_ACTIONS)
-    assert o.shape == (16,)
+    s, c, p, o, own, wl = buf.sample_batch(16, augment=True)
+    assert s.shape   == (16, CHANNELS, BOARD_SIZE, BOARD_SIZE)
+    assert c.shape   == (16, N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE)
+    assert p.shape   == (16, N_ACTIONS)
+    assert o.shape   == (16,)
     assert own.shape == (16, BOARD_SIZE, BOARD_SIZE)
-    assert wl.shape == (16, BOARD_SIZE, BOARD_SIZE)
+    assert wl.shape  == (16, BOARD_SIZE, BOARD_SIZE)
 
 
 def test_sample_returns_correct_dtypes():
     buf = make_buf(capacity=100)
     push_n(buf, 50)
-    s, p, o, own, wl = buf.sample_batch(8, augment=True)
-    assert s.dtype == np.float16, f"states should be float16, got {s.dtype}"
-    assert p.dtype == np.float32, f"policies should be float32, got {p.dtype}"
-    assert o.dtype == np.float32, f"outcomes should be float32, got {o.dtype}"
-    assert own.dtype == np.uint8, f"ownership should be uint8, got {own.dtype}"
-    assert wl.dtype == np.uint8, f"winning_line should be uint8, got {wl.dtype}"
+    s, c, p, o, own, wl = buf.sample_batch(8, augment=True)
+    assert s.dtype   == np.float16, f"states should be float16, got {s.dtype}"
+    assert c.dtype   == np.float16, f"chain_planes should be float16, got {c.dtype}"
+    assert p.dtype   == np.float32, f"policies should be float32, got {p.dtype}"
+    assert o.dtype   == np.float32, f"outcomes should be float32, got {o.dtype}"
+    assert own.dtype == np.uint8,   f"ownership should be uint8, got {own.dtype}"
+    assert wl.dtype  == np.uint8,   f"winning_line should be uint8, got {wl.dtype}"
 
 
 def test_sample_no_augment_content_roundtrip():
@@ -158,10 +170,10 @@ def test_sample_no_augment_content_roundtrip():
     buf = make_buf(capacity=50)
     # Push entries with a unique, easily-verifiable outcome per slot.
     for i in range(20):
-        s, p, _, own, wl = random_entry()
-        buf.push(s, p, float(i), own, wl)
+        s, c, p, _, own, wl = random_entry()
+        buf.push(s, c, p, float(i), own, wl)
 
-    _, _, outcomes, _, _ = buf.sample_batch(200, augment=False)
+    _, _, _, outcomes, _, _ = buf.sample_batch(200, augment=False)
     # All returned outcomes must be one of 0..19.
     assert all(int(round(o)) in range(20) for o in outcomes)
 
@@ -175,12 +187,13 @@ def test_identity_symmetry_preserves_data():
     # Place a known state: all zeros except plane 0, cell (0,0) = 1.0
     state = np.zeros((CHANNELS, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
     state[0, 0, 0] = 1.0
+    chain = np.zeros((N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
     policy = np.zeros(N_ACTIONS, dtype=np.float32)
     policy[0] = 1.0
-    buf.push(state, policy, 1.0, empty_own(), empty_wl())
+    buf.push(state, chain, policy, 1.0, empty_own(), empty_wl())
 
     # sample_batch with augment=False always uses symmetry 0.
-    sampled_s, sampled_p, sampled_o, _, _ = buf.sample_batch(1, augment=False)
+    sampled_s, _c, sampled_p, sampled_o, _, _ = buf.sample_batch(1, augment=False)
     assert sampled_s[0, 0, 0, 0] == pytest.approx(1.0, abs=1e-3)
     assert sampled_p[0, 0]        == pytest.approx(1.0, abs=1e-3)
     assert sampled_o[0]            == pytest.approx(1.0, abs=1e-3)
@@ -196,13 +209,14 @@ def test_pass_action_invariant_under_augmentation():
         p /= p.sum()
         buf.push(
             rng.standard_normal((CHANNELS, BOARD_SIZE, BOARD_SIZE)).astype(np.float16),
+            np.zeros((N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float16),
             p, 0.0, empty_own(), empty_wl(),
         )
 
     for _ in range(10):
         # We can't control which symmetry is chosen, but the pass logit (index -1)
         # must always match some pushed pass logit — check it's in a plausible range.
-        _, policies, _, _, _ = buf.sample_batch(32, augment=True)
+        _, _c, policies, _, _, _ = buf.sample_batch(32, augment=True)
         pass_logits = policies[:, -1]
         assert (pass_logits >= 0.0).all(), "pass logit must be non-negative"
         assert (pass_logits <= 1.0).all(), "pass logit must be ≤ 1 (it's a probability)"
@@ -219,12 +233,13 @@ def test_policy_sum_preserved_under_augmentation():
         original_sums.append(p[:-1].sum())  # sum of spatial logits only
         buf.push(
             rng.standard_normal((CHANNELS, BOARD_SIZE, BOARD_SIZE)).astype(np.float16),
+            np.zeros((N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float16),
             p, 0.0, empty_own(), empty_wl(),
         )
 
     # Some cells fall outside the window under certain rotations, so sum can decrease slightly.
     # It must never increase (no mass created) and stay within a small tolerance.
-    _, policies, _, _, _ = buf.sample_batch(30, augment=True)
+    _, _c, policies, _, _, _ = buf.sample_batch(30, augment=True)
     aug_sums = policies[:, :-1].sum(axis=1)
     # At most the sum of the original (some cells may be clipped to 0).
     max_original = max(original_sums)
@@ -240,13 +255,13 @@ def test_correlation_guard_no_duplicate_game_ids():
     for _ in range(500):
         gid = buf.next_game_id()
         for _ in range(3):
-            s, p, o, own, wl = random_entry()
-            buf.push(s, p, o, own, wl, game_id=gid)
+            s, c, p, o, own, wl = random_entry()
+            buf.push(s, c, p, o, own, wl, game_id=gid)
 
     assert buf.size == 1500
 
     for _ in range(20):
-        _, _, _, _, _ = buf.sample_batch(64, augment=False)
+        _, _, _, _, _, _ = buf.sample_batch(64, augment=False)
         # If we had access to game_ids we'd check here; since sample_batch doesn't
         # return them, we verify the guard doesn't crash and the shapes are correct.
         # Full dedup verification would require exposing indices — see benchmark below.
@@ -274,7 +289,7 @@ def test_resize_basic():
     assert buf.size == 5
 
     # Can sample after resize.
-    s, p, o, _, _ = buf.sample_batch(5, augment=False)
+    s, _c, p, o, _, _ = buf.sample_batch(5, augment=False)
     assert s.shape[0] == 5
 
 
@@ -298,7 +313,7 @@ def test_resize_preserves_data_after_wrap():
     assert buf.size == 10
 
     # Sample and verify shapes.
-    s, p, o, _, _ = buf.sample_batch(10, augment=False)
+    s, _c, p, o, _, _ = buf.sample_batch(10, augment=False)
     assert s.shape == (10, CHANNELS, BOARD_SIZE, BOARD_SIZE)
 
 
@@ -312,7 +327,7 @@ def test_resize_then_push():
     push_n(buf, 3)
     assert buf.size == 8
 
-    s, p, o, _, _ = buf.sample_batch(8, augment=False)
+    s, _c, p, o, _, _ = buf.sample_batch(8, augment=False)
     assert s.shape[0] == 8
 
 
@@ -337,8 +352,9 @@ def test_resize_content_roundtrip():
     # Push outcomes 0..7. Entries 0-2 overwritten by 5-7.
     for i in range(8):
         s = random_state()
+        c = random_chain()
         p = random_policy()
-        buf.push(s, p, float(i), empty_own(), empty_wl())
+        buf.push(s, c, p, float(i), empty_own(), empty_wl())
 
     # Buffer now contains outcomes [5, 6, 7, 3, 4] (head=3, oldest at slot 3→outcome 3).
     # Actually ring buffer: pushed 8 into cap 5, head=3, outcomes at slots:
@@ -349,7 +365,7 @@ def test_resize_content_roundtrip():
     # Sample all 5 entries many times to collect outcomes.
     seen = set()
     for _ in range(50):
-        _, _, outcomes, _, _ = buf.sample_batch(5, augment=False)
+        _, _, _, outcomes, _, _ = buf.sample_batch(5, augment=False)
         for o in outcomes:
             seen.add(int(round(o)))
     assert seen == {3, 4, 5, 6, 7}, f"Expected {{3,4,5,6,7}}, got {seen}"
@@ -365,17 +381,18 @@ def test_benchmark_sample_latency(capsys):
     WARMUP     = 10
     N_ITERS    = 200
 
-    rust_buf = ReplayBuffer(CAPACITY)
-    batch_s  = np.random.randn(1000, CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
-    batch_p  = np.abs(np.random.randn(1000, N_ACTIONS).astype(np.float32))
-    batch_p /= batch_p.sum(axis=1, keepdims=True)
-    batch_o  = np.zeros(1000, dtype=np.float32)
+    rust_buf  = ReplayBuffer(CAPACITY)
+    batch_s   = np.random.randn(1000, CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
+    batch_c   = np.zeros((1000, N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+    batch_p   = np.abs(np.random.randn(1000, N_ACTIONS).astype(np.float32))
+    batch_p  /= batch_p.sum(axis=1, keepdims=True)
+    batch_o   = np.zeros(1000, dtype=np.float32)
 
     batch_own = np.ones((1000, AUX_STRIDE), dtype=np.uint8)
     batch_wl  = np.zeros((1000, AUX_STRIDE), dtype=np.uint8)
     for _ in range(FILL // 1000):
         rust_buf.push_game(
-            batch_s, batch_p, batch_o, batch_own, batch_wl,
+            batch_s, batch_c, batch_p, batch_o, batch_own, batch_wl,
             game_id=rust_buf.next_game_id(),
         )
 
@@ -418,7 +435,7 @@ def test_buffer_save_load_roundtrip(tmp_path):
     assert buf2.size == 150
 
     # Verify data is valid by sampling
-    states, policies, outcomes, _, _ = buf2.sample_batch(10, augment=False)
+    states, _c, policies, outcomes, _, _ = buf2.sample_batch(10, augment=False)
     assert states.shape == (10, CHANNELS, BOARD_SIZE, BOARD_SIZE)
     assert policies.shape == (10, N_ACTIONS)
     assert outcomes.shape == (10,)
@@ -448,5 +465,5 @@ def test_buffer_load_size_mismatch(tmp_path):
     assert buf_small.size == 250
 
     # Verify data is valid
-    states, policies, outcomes, _, _ = buf_small.sample_batch(10, augment=False)
+    states, _c, policies, outcomes, _, _ = buf_small.sample_batch(10, augment=False)
     assert states.shape == (10, CHANNELS, BOARD_SIZE, BOARD_SIZE)

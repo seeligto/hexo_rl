@@ -72,7 +72,7 @@ class CorpusPipeline:
                     continue
                 seen_hashes.add(h)
 
-                states, policies, outcomes = replay_game_to_triples(
+                states, chain_planes, policies, outcomes = replay_game_to_triples(
                     record.moves, record.winner
                 )
                 if len(states) == 0:
@@ -91,7 +91,7 @@ class CorpusPipeline:
                 aux_wl  = np.zeros((T, 361), dtype=np.uint8)
 
                 try:
-                    self._buffer.push_game(states, policies, outcomes, aux_own, aux_wl, game_id=gid)
+                    self._buffer.push_game(states, chain_planes, policies, outcomes, aux_own, aux_wl, game_id=gid)
                 except Exception as exc:
                     log.error("corpus_push_failed",
                               source=source.name(), game_id=record.game_id_str,

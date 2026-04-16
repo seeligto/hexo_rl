@@ -456,16 +456,17 @@ def test_policy_target_entropy_only_over_valid_rows(tmp_path):
     model = HexTacToeNet(board_size=board_size, res_blocks=1, filters=16)
     trainer = Trainer(model, config, checkpoint_dir=str(tmp_path))
 
-    rng = np.random.default_rng(42)
-    buf = ReplayBuffer(capacity=200)
+    rng   = np.random.default_rng(42)
+    buf   = ReplayBuffer(capacity=200)
+    chain = np.zeros((6, board_size, board_size), dtype=np.float16)
     for i in range(batch):
-        feat = rng.random((24, board_size, board_size), dtype=np.float32).astype(np.float16)
+        feat = rng.random((18, board_size, board_size), dtype=np.float32).astype(np.float16)
         # Half the batch: zero policies (mask rows); half: valid uniform
         if i < batch // 2:
             pol = np.zeros(n_actions, dtype=np.float32)
         else:
             pol = np.ones(n_actions, dtype=np.float32) / n_actions
-        buf.push(feat, pol, 1.0, np.ones(361, dtype=np.uint8), np.zeros(361, dtype=np.uint8))
+        buf.push(feat, chain, pol, 1.0, np.ones(361, dtype=np.uint8), np.zeros(361, dtype=np.uint8))
 
     loss_info = trainer.train_step(buf, augment=False)
     te = loss_info.get("policy_target_entropy", None)
@@ -496,14 +497,15 @@ def test_policy_target_entropy_finite_for_one_hot(tmp_path):
     model = HexTacToeNet(board_size=board_size, res_blocks=1, filters=16)
     trainer = Trainer(model, config, checkpoint_dir=str(tmp_path))
 
-    rng = np.random.default_rng(42)
-    buf = ReplayBuffer(capacity=200)
+    rng   = np.random.default_rng(42)
+    buf   = ReplayBuffer(capacity=200)
+    chain = np.zeros((6, board_size, board_size), dtype=np.float16)
     for i in range(batch):
-        feat = rng.random((24, board_size, board_size), dtype=np.float32).astype(np.float16)
+        feat = rng.random((18, board_size, board_size), dtype=np.float32).astype(np.float16)
         # One-hot policy: all mass on action 0
         pol = np.zeros(n_actions, dtype=np.float32)
         pol[0] = 1.0
-        buf.push(feat, pol, 1.0, np.ones(361, dtype=np.uint8), np.zeros(361, dtype=np.uint8))
+        buf.push(feat, chain, pol, 1.0, np.ones(361, dtype=np.uint8), np.zeros(361, dtype=np.uint8))
 
     loss_info = trainer.train_step(buf, augment=False)
     te = loss_info.get("policy_target_entropy", None)

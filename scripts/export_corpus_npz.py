@@ -261,7 +261,7 @@ def main() -> None:
 
     print(f"Replaying {len(game_to_plies):,} unique games...")
 
-    states_buf = np.empty((n_sample, 24, 19, 19), dtype=np.float16)
+    states_buf = np.empty((n_sample, 18, 19, 19), dtype=np.float16)
     policies_buf = np.empty((n_sample, 362), dtype=np.float32)
     outcomes_buf = np.empty(n_sample, dtype=np.float32)
     out_idx = 0
@@ -269,7 +269,7 @@ def main() -> None:
 
     for gi, ply_indices in sorted(game_to_plies.items()):
         g = records[gi]
-        s, p, o = replay_game_to_triples(g["moves"], g["winner"])
+        s, _chain, p, o = replay_game_to_triples(g["moves"], g["winner"])
         if g["winner"] == 1:
             p1_wins += 1
         for pi in sorted(ply_indices):

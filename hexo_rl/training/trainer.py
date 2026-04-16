@@ -205,23 +205,25 @@ class Trainer:
         if recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0:
             n_recent = max(1, int(round(batch_size * recency_weight)))
             n_uniform = batch_size - n_recent
-            s_r, p_r, o_r, own_r, wl_r = recent_buffer.sample(n_recent)
+            s_r, c_r, p_r, o_r, own_r, wl_r = recent_buffer.sample(n_recent)
             # WHY: RecentBuffer stores aux flat (n, 361); reshape to (n, 19, 19) view
             own_r = own_r.reshape(-1, 19, 19)
             wl_r  = wl_r.reshape(-1, 19, 19)
-            s_u, p_u, o_u, own_u, wl_u = buffer.sample_batch(max(1, n_uniform), augment)
-            states   = np.concatenate([s_r, s_u], axis=0)
-            policies = np.concatenate([p_r, p_u], axis=0)
-            outcomes = np.concatenate([o_r, o_u], axis=0)
-            ownership = np.concatenate([own_r, own_u], axis=0)
+            s_u, c_u, p_u, o_u, own_u, wl_u = buffer.sample_batch(max(1, n_uniform), augment)
+            states       = np.concatenate([s_r, s_u],   axis=0)
+            chain_planes = np.concatenate([c_r, c_u],   axis=0)
+            policies     = np.concatenate([p_r, p_u],   axis=0)
+            outcomes     = np.concatenate([o_r, o_u],   axis=0)
+            ownership    = np.concatenate([own_r, own_u], axis=0)
             winning_line = np.concatenate([wl_r, wl_u], axis=0)
         else:
-            states, policies, outcomes, ownership, winning_line = buffer.sample_batch(
+            states, chain_planes, policies, outcomes, ownership, winning_line = buffer.sample_batch(
                 batch_size, augment
             )
 
         return self._train_on_batch(
             states, policies, outcomes,
+            chain_planes=chain_planes,
             ownership_targets=ownership,
             threat_targets=winning_line,
             n_pretrain=0,
@@ -232,6 +234,7 @@ class Trainer:
         states: "numpy.ndarray",
         policies: "numpy.ndarray",
         outcomes: "numpy.ndarray",
+        chain_planes: Optional[Any] = None,
         ownership_targets: Optional[Any] = None,
         threat_targets: Optional[Any] = None,
         n_pretrain: int = 0,
@@ -242,11 +245,15 @@ class Trainer:
         are drawn from pretrained + self-play buffers externally.
 
         Args:
+            chain_planes: (B, 6, 19, 19) float16 array of Q13 chain-length planes,
+                          stored separately from state since the 18-plane input
+                          no longer includes chain as input channels.
             n_pretrain: Number of rows (from the start of the batch) that came
                         from the pretrained corpus. Used to compute per-stream
                         entropy. 0 means all rows are self-play.
         """
         return self._train_on_batch(states, policies, outcomes,
+                                     chain_planes=chain_planes,
                                      ownership_targets=ownership_targets,
                                      threat_targets=threat_targets,
                                      n_pretrain=n_pretrain)
@@ -256,6 +263,7 @@ class Trainer:
         states: "numpy.ndarray",
         policies: "numpy.ndarray",
         outcomes: "numpy.ndarray",
+        chain_planes: Optional[Any] = None,
         ownership_targets: Optional[Any] = None,
         threat_targets: Optional[Any] = None,
         n_pretrain: int = 0,
@@ -273,11 +281,6 @@ class Trainer:
         if not self.fp16:
             states_t = states_t.float()
 
-        # Experiment C ablation: zero chain-length input planes 18-23.
-        # Architecture stays 24ch; planes zeroed after H2D transfer so the
-        # stored buffer values are untouched.
-        if self.config.get("zero_chain_planes", False):
-            states_t[:, 18:24] = 0.0
         policies_t = torch.from_numpy(policies).to(self.device)     # float32
         outcomes_t = torch.from_numpy(outcomes).to(self.device)     # float32
 
@@ -392,14 +395,13 @@ class Trainer:
                     pos_weight=self._threat_pos_weight,
                 )
 
-            # Q13-aux chain loss: target is the 6-plane slice from the input
-            # tensor (since the chain planes are an input feature, not a
-            # separately-stored target). Computed on ALL batch rows — the target
-            # is deterministic from stones and carries no pretrain/selfplay
-            # divergence, so we do not apply `mask_aux_rows`.
+            # Q13-aux chain loss: target is the separately-stored chain_planes
+            # sub-buffer (6 planes per position, float16 normalized by /6.0).
+            # Computed on ALL batch rows — target is deterministic from board
+            # stones, no pretrain/selfplay divergence, so mask_aux_rows not needed.
             chain_loss = None
-            if use_chain and chain_pred is not None:
-                chain_target = states_t[:, 18:24]
+            if use_chain and chain_pred is not None and chain_planes is not None:
+                chain_target = torch.from_numpy(chain_planes).to(self.device).float()
                 chain_loss = compute_chain_loss(chain_pred, chain_target)
 
             loss = compute_total_loss(
@@ -608,7 +610,7 @@ class Trainer:
             "board_size": int(model_cfg.get("board_size", config.get("board_size", 19))),
             "res_blocks": int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
             "filters": int(model_cfg.get("filters", config.get("filters", 128))),
-            "in_channels": int(model_cfg.get("in_channels", config.get("in_channels", 24))),
+            "in_channels": int(model_cfg.get("in_channels", config.get("in_channels", 18))),
             "se_reduction_ratio": int(model_cfg.get("se_reduction_ratio", config.get("se_reduction_ratio", 4))),
         }
 

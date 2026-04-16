@@ -14,7 +14,8 @@ use std::thread;
 use rand::prelude::IndexedRandom;
 use rand::{rng, RngExt};
 
-use crate::board::{Board, BOARD_SIZE, hex_distance};
+use crate::board::{Board, BOARD_SIZE, TOTAL_CELLS, hex_distance};
+use crate::board::encode_chain_planes;
 use crate::mcts::MCTSTree;
 
 use super::SelfPlayRunner;
@@ -412,6 +413,13 @@ impl SelfPlayRunner {
                             let mut feat = batcher.get_feature_buffer();
                             // get_cluster_views returns 2-plane views; expand to 18 for storage.
                             board.encode_planes_to_buffer(&views[k], &mut feat);
+                            // Compute Q13 chain-length planes separately (not in state).
+                            let mut chain = vec![0.0f32; 6 * TOTAL_CELLS];
+                            encode_chain_planes(
+                                &views[k][..TOTAL_CELLS],
+                                &views[k][TOTAL_CELLS..2 * TOTAL_CELLS],
+                                &mut chain,
+                            );
                             // Fast games: zero-policy marks value-only targets (unless
                             // completed Q-values are enabled, which give signal even at 50 sims).
                             let projected_policy = if is_fast_game && !completed_q_values {
@@ -422,7 +430,7 @@ impl SelfPlayRunner {
                             // Capture the per-row window centre so the aux targets
                             // (computed at game end) can be reprojected into the same
                             // coordinate frame as this row's state planes.
-                            records_vec.push((feat, projected_policy, board.current_player, center.0, center.1));
+                            records_vec.push((feat, chain, projected_policy, board.current_player, center.0, center.1));
                         }
 
                         if board.apply_move(move_idx.0, move_idx.1).is_err() {
@@ -449,7 +457,7 @@ impl SelfPlayRunner {
                     let winning_cells: Vec<(i32, i32)> = board.find_winning_line();
 
                     let mut games_results = results_queue.lock().expect("results lock poisoned");
-                    for (feat, pol, player, cq, cr) in records_vec {
+                    for (feat, chain, pol, player, cq, cr) in records_vec {
                         let outcome = match winner {
                             Some(p) => if p as i8 == player as i8 { 1.0 } else { -1.0 },
                             None => draw_reward,
@@ -461,7 +469,7 @@ impl SelfPlayRunner {
                             &final_cells, &winning_cells, cq, cr,
                         );
 
-                        games_results.push_back((feat, pol, outcome, plies, aux_u8));
+                        games_results.push_back((feat, chain, pol, outcome, plies, aux_u8));
                     }
                     games_completed.fetch_add(1, Ordering::Relaxed);
                     match winner {

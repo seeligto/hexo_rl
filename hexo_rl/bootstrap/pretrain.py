@@ -34,7 +34,7 @@ import engine
 from engine import Board
 from hexo_rl.bootstrap.dataset import replay_game_to_triples
 from hexo_rl.bootstrap.generate_corpus import BOT_GAMES_DIR, INJECTED_DIR, RAW_HUMAN_DIR
-from hexo_rl.env.game_state import GameState
+from hexo_rl.env.game_state import GameState, _compute_chain_planes
 from hexo_rl.model.network import HexTacToeNet, compile_model
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_value_loss, compute_aux_loss,
@@ -129,8 +129,12 @@ class AugmentedBootstrapDataset(torch.utils.data.Dataset):
     eliminates the Python `_apply_hex_sym` path that was corrupting Q13
     chain planes in pretrain v3.
 
+    Chain planes (6 planes, aux head target) are computed in collate from
+    the augmented stone planes (0=cur, 8=opp) — recomputing post-augment
+    avoids the axis-perm remap and is self-consistent.
+
     Args:
-        states:   (N, 24, 19, 19) float16 array (mmap-compatible).
+        states:   (N, 18, 19, 19) float16 array (mmap-compatible).
         policies: (N, 362) float32 array.
         outcomes: (N,) float32 array, values in {-1, 0, +1}.
     """
@@ -165,25 +169,27 @@ def make_augmented_collate(augment: bool, board_size: int = BOARD_SIZE):
     via the Rust `engine.apply_symmetries_batch` kernel.
 
     With `augment=True`:
-      - Stack the batch of raw states into an (N, 24, 19, 19) float32 array
+      - Stack the batch of raw states into an (N, 18, 19, 19) float32 array
         (upcast from the f16 dataset copies — the Rust binding takes f32).
       - Draw N uniform sym indices in [0, 12).
       - Call `engine.apply_symmetries_batch(states_f32, sym_indices)` →
-        (N, 24, 19, 19) f32 augmented states (one PyO3 hop per batch).
+        (N, 18, 19, 19) f32 augmented states (one PyO3 hop per batch).
       - Scatter the per-sample policies via the precomputed numpy index
         tables (`_get_policy_scatters`).
       - Cast states back to float16 (matches the pre-rewrite tensor dtype).
+      - Compute chain_planes from augmented stone planes 0 (cur) and 8 (opp).
 
     With `augment=False`:
       - Stack as-is, no Rust hop, no policy scatter.
+      - Compute chain_planes from raw stone planes.
     """
     scatters_np = _get_policy_scatters(board_size) if augment else None
 
     def _collate(
         batch: List[Tuple[np.ndarray, np.ndarray, float]],
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         n = len(batch)
-        states = np.stack([b[0] for b in batch], axis=0)          # f16 (N,24,19,19)
+        states = np.stack([b[0] for b in batch], axis=0)          # f16 (N,18,19,19)
         policies = np.stack([b[1] for b in batch], axis=0)        # f32 (N, 362)
         outcomes = np.asarray([b[2] for b in batch], dtype=np.float32)
 
@@ -199,8 +205,19 @@ def make_augmented_collate(augment: bool, board_size: int = BOARD_SIZE):
             policies = scattered
             states = states_f32.astype(np.float16, copy=False)
 
+        # Compute chain planes from stone planes post-augmentation.
+        # Recomputing from augmented stones is self-consistent with the chain
+        # head supervision — no axis-perm remap required.
+        chain_np = np.zeros((n, 6, board_size, board_size), dtype=np.float16)
+        for i in range(n):
+            chain_np[i] = _compute_chain_planes(
+                states[i, 0].astype(np.float32),
+                states[i, 8].astype(np.float32),
+            ).astype(np.float16) / 6.0
+
         return (
             torch.from_numpy(states),
+            torch.from_numpy(chain_np),
             torch.from_numpy(policies),
             torch.from_numpy(outcomes),
         )
@@ -246,7 +263,7 @@ def load_corpus(
         game_id: str,
         source: str,
     ) -> None:
-        s, p, o = replay_game_to_triples(moves, winner)
+        s, _chain, p, o = replay_game_to_triples(moves, winner)
         if len(o) == 0:
             return
         q_score = quality_scores.get(game_id, {}).get("quality_score", 0.5)
@@ -398,7 +415,7 @@ class BootstrapTrainer:
         """One full pass over the dataloader.
 
         Args:
-            loader:         DataLoader yielding (states, policies, outcomes).
+            loader:         DataLoader yielding (states, chain_planes, policies, outcomes).
             label_smoothing: ε for policy targets; 0 disables.
             aux_weight:     Weight for opponent-reply auxiliary loss.
             chain_weight:   Weight for Q13-aux chain-length head (0 disables it).
@@ -415,10 +432,11 @@ class BootstrapTrainer:
         }
         n_batches = 0
 
-        for states, policies, outcomes in loader:
-            states   = states.to(self.device)
-            policies = policies.to(self.device)
-            outcomes = outcomes.to(self.device)
+        for states, chain_planes, policies, outcomes in loader:
+            states       = states.to(self.device)
+            chain_planes = chain_planes.to(self.device)
+            policies     = policies.to(self.device)
+            outcomes     = outcomes.to(self.device)
 
             if label_smoothing > 0.0:
                 n_actions = policies.shape[1]
@@ -443,8 +461,7 @@ class BootstrapTrainer:
 
                 chain_loss = None
                 if use_chain and chain_pred is not None:
-                    chain_target = states[:, 18:24]
-                    chain_loss = compute_chain_loss(chain_pred, chain_target)
+                    chain_loss = compute_chain_loss(chain_pred, chain_planes.float())
 
                 loss = compute_total_loss(
                     policy_loss,
@@ -550,7 +567,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     cfg = ckpt["config"]
     loaded_model = HexTacToeNet(
         board_size=int(cfg.get("board_size", 19)),
-        in_channels=int(cfg.get("in_channels", 24)),
+        in_channels=int(cfg.get("in_channels", 18)),
         filters=int(cfg.get("filters", 128)),
         res_blocks=int(cfg.get("res_blocks", 12)),
         se_reduction_ratio=int(cfg.get("se_reduction_ratio", 4)),
@@ -559,7 +576,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     loaded_model.eval().to(device)
 
     dummy = torch.zeros(
-        1, int(cfg.get("in_channels", 24)), BOARD_SIZE, BOARD_SIZE, device=device,
+        1, int(cfg.get("in_channels", 18)), BOARD_SIZE, BOARD_SIZE, device=device,
     )
     with torch.no_grad():
         log_pol, val, v_logit = loaded_model(dummy.float())

@@ -13,7 +13,7 @@ import torch
 
 from engine import ReplayBuffer
 
-CHANNELS = 24
+CHANNELS = 18
 BOARD_SIZE = 19
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1  # 362
 
@@ -27,8 +27,9 @@ def _make_model(device: torch.device):
 
 def _fill_buffer(buf: ReplayBuffer, n: int, value_only_frac: float = 0.0) -> None:
     """Push n random entries. A fraction have zero-policy (value-only)."""
-    own = np.ones(361, dtype=np.uint8)
-    wl  = np.zeros(361, dtype=np.uint8)
+    own   = np.ones(361, dtype=np.uint8)
+    wl    = np.zeros(361, dtype=np.uint8)
+    chain = np.zeros((6, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
     for i in range(n):
         state = np.random.randn(CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
         if np.random.random() < value_only_frac:
@@ -37,7 +38,7 @@ def _fill_buffer(buf: ReplayBuffer, n: int, value_only_frac: float = 0.0) -> Non
             policy = np.abs(np.random.randn(N_ACTIONS).astype(np.float32))
             policy /= policy.sum()
         outcome = float(np.random.choice([-1.0, 0.0, 1.0]))
-        buf.push(state, policy, outcome, own, wl)
+        buf.push(state, chain, policy, outcome, own, wl)
 
 
 # ── Test: mixed-buffer training (10 steps) ───────────────────────────────────
@@ -77,10 +78,11 @@ def test_mixed_buffer_training_10_steps():
         n_pre = max(1, int(math.ceil(batch_size * w_pre)))
         n_self = batch_size - n_pre
 
-        s_pre, p_pre, o_pre, own_pre, wl_pre = pretrained_buf.sample_batch(n_pre, True)
-        s_self, p_self, o_self, own_self, wl_self = selfplay_buf.sample_batch(max(1, n_self), True)
+        s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre = pretrained_buf.sample_batch(n_pre, True)
+        s_self, c_self, p_self, o_self, own_self, wl_self = selfplay_buf.sample_batch(max(1, n_self), True)
 
         states = np.concatenate([s_pre, s_self], axis=0)
+        chain_planes = np.concatenate([c_pre, c_self], axis=0)
         policies = np.concatenate([p_pre, p_self], axis=0)
         outcomes = np.concatenate([o_pre, o_self], axis=0)
         ownership = np.concatenate([own_pre, own_self], axis=0)
@@ -88,6 +90,7 @@ def test_mixed_buffer_training_10_steps():
 
         loss_info = trainer.train_step_from_tensors(
             states, policies, outcomes,
+            chain_planes=chain_planes,
             ownership_targets=ownership, threat_targets=winning_line,
             n_pretrain=n_pre,
         )

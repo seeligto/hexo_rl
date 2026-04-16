@@ -7,7 +7,7 @@ used inside `ReplayBuffer.sample_batch`. This test is the byte-exact guard
 against anyone re-introducing a divergent Python augmentation path.
 
 Strategy:
-  1. Build a known (24, 19, 19) state tensor via `to_tensor()` for a few
+  1. Build a known (18, 19, 19) state tensor via `to_tensor()` for a few
      hand-picked positions.
   2. For each of the 12 hex symmetries:
        - Compute `engine.apply_symmetry(state, sym_idx)`.
@@ -26,14 +26,14 @@ from engine import Board, ReplayBuffer
 from hexo_rl.env.game_state import GameState
 from hexo_rl.utils.constants import BOARD_SIZE
 
-CHANNELS = 24
+CHANNELS = 18
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1
 AUX_STRIDE = BOARD_SIZE * BOARD_SIZE
 HALF = (BOARD_SIZE - 1) // 2
 
 
 def _state_from_moves(moves: list[tuple[int, int]]) -> np.ndarray:
-    """Play `moves` into a fresh Board and return the (24, 19, 19) tensor for
+    """Play `moves` into a fresh Board and return the (18, 19, 19) tensor for
     cluster 0. Float32 copy of the f16 to_tensor output."""
     board = Board()
     state = GameState.from_board(board)
@@ -59,19 +59,20 @@ POSITION_MOVES: list[tuple[str, list[tuple[int, int]]]] = [
 
 def _collect_buffer_unique_outputs(state: np.ndarray, n_draws: int = 4000) -> set[bytes]:
     """Push `state` into a fresh buffer and draw `n_draws` augmented samples.
-    Return the set of unique (24, 19, 19) f16-byte keys observed.
-    """
-    buf = ReplayBuffer(4)
-    s16 = state.astype(np.float16)
+    Return the set of unique (18, 19, 19) f16-byte keys observed."""
+    buf    = ReplayBuffer(4)
+    s16    = state.astype(np.float16)
+    chain  = np.zeros((6, 19, 19), dtype=np.float16)
     policy = np.zeros(N_ACTIONS, dtype=np.float32)
     policy[0] = 1.0
     own = np.ones(AUX_STRIDE, dtype=np.uint8)
-    wl = np.zeros(AUX_STRIDE, dtype=np.uint8)
-    buf.push(s16, policy, 0.0, own, wl)
+    wl  = np.zeros(AUX_STRIDE, dtype=np.uint8)
+    buf.push(s16, chain, policy, 0.0, own, wl)
 
     seen: set[bytes] = set()
     for _ in range(n_draws):
-        states_out, _, _, _, _ = buf.sample_batch(1, augment=True)
+        # sample_batch returns 6-tuple: (states, chain_planes, policies, outcomes, own, wl)
+        states_out, _, _, _, _, _ = buf.sample_batch(1, augment=True)
         sampled = np.asarray(states_out[0]).astype(np.float16)
         seen.add(sampled.tobytes())
     return seen
