@@ -65,6 +65,7 @@ class EvalPipeline:
 
         self.gating_cfg = cfg.get("gating", {})
         self.bt_cfg = cfg.get("bradley_terry", {})
+        self._base_interval = int(cfg.get("eval_interval", 2500))
 
         # Persistent player IDs for SealBot and Random
         tl = self.sealbot_cfg.get("think_time_strong",
@@ -120,8 +121,15 @@ class EvalPipeline:
 
         results: Dict[str, Any] = {"step": train_step, "promoted": False}
 
+        def _stride_active(opp_cfg: dict[str, Any]) -> bool:
+            stride = int(opp_cfg.get("stride", 1))
+            if stride <= 1:
+                return True
+            round_idx = train_step // max(self._base_interval, 1)
+            return round_idx % stride == 0
+
         # ── vs Random ────────────────────────────────────────────────
-        if self.random_cfg.get("enabled", True):
+        if self.random_cfg.get("enabled", True) and _stride_active(self.random_cfg):
             n = int(self.random_cfg.get("n_games", 20))
             sims = self.random_cfg.get("model_sims")
             er = evaluator.evaluate_vs_random(n_games=n, model_sims=sims)
@@ -138,7 +146,7 @@ class EvalPipeline:
             results["colony_wins_random"] = er.colony_wins
 
         # ── vs SealBot ───────────────────────────────────────────────
-        if self.sealbot_cfg.get("enabled", True):
+        if self.sealbot_cfg.get("enabled", True) and _stride_active(self.sealbot_cfg):
             n = int(self.sealbot_cfg.get("n_games", 50))
             tl = float(self.sealbot_cfg.get("think_time_strong",
                                             self.sealbot_cfg.get("time_limit", 0.5)))
@@ -158,7 +166,11 @@ class EvalPipeline:
 
         # ── vs Best Checkpoint ────────────────────────────────────────
         wr_best = None
-        if self.best_cfg.get("enabled", True) and best_model is not None:
+        if (
+            self.best_cfg.get("enabled", True)
+            and best_model is not None
+            and _stride_active(self.best_cfg)
+        ):
             n = int(self.best_cfg.get("n_games", 200))
             sims = self.best_cfg.get("model_sims")
             opp_sims = self.best_cfg.get("opponent_sims")
