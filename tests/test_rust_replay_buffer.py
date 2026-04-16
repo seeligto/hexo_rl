@@ -144,7 +144,7 @@ def test_sample_raises_on_empty():
 def test_sample_returns_correct_shapes():
     buf = make_buf(capacity=200)
     push_n(buf, 100)
-    s, c, p, o, own, wl = buf.sample_batch(16, augment=True)
+    s, c, p, o, own, wl, _ifs = buf.sample_batch(16, augment=True)
     assert s.shape   == (16, CHANNELS, BOARD_SIZE, BOARD_SIZE)
     assert c.shape   == (16, N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE)
     assert p.shape   == (16, N_ACTIONS)
@@ -156,7 +156,7 @@ def test_sample_returns_correct_shapes():
 def test_sample_returns_correct_dtypes():
     buf = make_buf(capacity=100)
     push_n(buf, 50)
-    s, c, p, o, own, wl = buf.sample_batch(8, augment=True)
+    s, c, p, o, own, wl, _ifs = buf.sample_batch(8, augment=True)
     assert s.dtype   == np.float16, f"states should be float16, got {s.dtype}"
     assert c.dtype   == np.float16, f"chain_planes should be float16, got {c.dtype}"
     assert p.dtype   == np.float32, f"policies should be float32, got {p.dtype}"
@@ -173,7 +173,7 @@ def test_sample_no_augment_content_roundtrip():
         s, c, p, _, own, wl = random_entry()
         buf.push(s, c, p, float(i), own, wl)
 
-    _, _, _, outcomes, _, _ = buf.sample_batch(200, augment=False)
+    _, _, _, outcomes, _, _, _ = buf.sample_batch(200, augment=False)
     # All returned outcomes must be one of 0..19.
     assert all(int(round(o)) in range(20) for o in outcomes)
 
@@ -193,7 +193,7 @@ def test_identity_symmetry_preserves_data():
     buf.push(state, chain, policy, 1.0, empty_own(), empty_wl())
 
     # sample_batch with augment=False always uses symmetry 0.
-    sampled_s, _c, sampled_p, sampled_o, _, _ = buf.sample_batch(1, augment=False)
+    sampled_s, _c, sampled_p, sampled_o, _, _, _ = buf.sample_batch(1, augment=False)
     assert sampled_s[0, 0, 0, 0] == pytest.approx(1.0, abs=1e-3)
     assert sampled_p[0, 0]        == pytest.approx(1.0, abs=1e-3)
     assert sampled_o[0]            == pytest.approx(1.0, abs=1e-3)
@@ -216,7 +216,7 @@ def test_pass_action_invariant_under_augmentation():
     for _ in range(10):
         # We can't control which symmetry is chosen, but the pass logit (index -1)
         # must always match some pushed pass logit — check it's in a plausible range.
-        _, _c, policies, _, _, _ = buf.sample_batch(32, augment=True)
+        _, _c, policies, _, _, _, _ = buf.sample_batch(32, augment=True)
         pass_logits = policies[:, -1]
         assert (pass_logits >= 0.0).all(), "pass logit must be non-negative"
         assert (pass_logits <= 1.0).all(), "pass logit must be ≤ 1 (it's a probability)"
@@ -239,7 +239,7 @@ def test_policy_sum_preserved_under_augmentation():
 
     # Some cells fall outside the window under certain rotations, so sum can decrease slightly.
     # It must never increase (no mass created) and stay within a small tolerance.
-    _, _c, policies, _, _, _ = buf.sample_batch(30, augment=True)
+    _, _c, policies, _, _, _, _ = buf.sample_batch(30, augment=True)
     aug_sums = policies[:, :-1].sum(axis=1)
     # At most the sum of the original (some cells may be clipped to 0).
     max_original = max(original_sums)
@@ -261,7 +261,7 @@ def test_correlation_guard_no_duplicate_game_ids():
     assert buf.size == 1500
 
     for _ in range(20):
-        _, _, _, _, _, _ = buf.sample_batch(64, augment=False)
+        _, _, _, _, _, _, _ = buf.sample_batch(64, augment=False)
         # If we had access to game_ids we'd check here; since sample_batch doesn't
         # return them, we verify the guard doesn't crash and the shapes are correct.
         # Full dedup verification would require exposing indices — see benchmark below.
@@ -289,7 +289,7 @@ def test_resize_basic():
     assert buf.size == 5
 
     # Can sample after resize.
-    s, _c, p, o, _, _ = buf.sample_batch(5, augment=False)
+    s, _c, p, o, _, _, _ = buf.sample_batch(5, augment=False)
     assert s.shape[0] == 5
 
 
@@ -313,7 +313,7 @@ def test_resize_preserves_data_after_wrap():
     assert buf.size == 10
 
     # Sample and verify shapes.
-    s, _c, p, o, _, _ = buf.sample_batch(10, augment=False)
+    s, _c, p, o, _, _, _ = buf.sample_batch(10, augment=False)
     assert s.shape == (10, CHANNELS, BOARD_SIZE, BOARD_SIZE)
 
 
@@ -327,7 +327,7 @@ def test_resize_then_push():
     push_n(buf, 3)
     assert buf.size == 8
 
-    s, _c, p, o, _, _ = buf.sample_batch(8, augment=False)
+    s, _c, p, o, _, _, _ = buf.sample_batch(8, augment=False)
     assert s.shape[0] == 8
 
 
@@ -365,7 +365,7 @@ def test_resize_content_roundtrip():
     # Sample all 5 entries many times to collect outcomes.
     seen = set()
     for _ in range(50):
-        _, _, _, outcomes, _, _ = buf.sample_batch(5, augment=False)
+        _, _, _, outcomes, _, _, _ = buf.sample_batch(5, augment=False)
         for o in outcomes:
             seen.add(int(round(o)))
     assert seen == {3, 4, 5, 6, 7}, f"Expected {{3,4,5,6,7}}, got {seen}"
@@ -435,7 +435,7 @@ def test_buffer_save_load_roundtrip(tmp_path):
     assert buf2.size == 150
 
     # Verify data is valid by sampling
-    states, _c, policies, outcomes, _, _ = buf2.sample_batch(10, augment=False)
+    states, _c, policies, outcomes, _, _, _ = buf2.sample_batch(10, augment=False)
     assert states.shape == (10, CHANNELS, BOARD_SIZE, BOARD_SIZE)
     assert policies.shape == (10, N_ACTIONS)
     assert outcomes.shape == (10,)
@@ -465,5 +465,5 @@ def test_buffer_load_size_mismatch(tmp_path):
     assert buf_small.size == 250
 
     # Verify data is valid
-    states, _c, policies, outcomes, _, _ = buf_small.sample_batch(10, augment=False)
+    states, _c, policies, outcomes, _, _, _ = buf_small.sample_batch(10, augment=False)
     assert states.shape == (10, CHANNELS, BOARD_SIZE, BOARD_SIZE)

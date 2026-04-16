@@ -3260,3 +3260,114 @@ Note: benchmark methodology changed (§98 action items resolved) — runtime is
 now 2 min with 90 s warmup, making results more representative of real
 throughput. Prior baselines (1 min / shorter warmup) are not directly
 comparable. Fresh `make bench` on this branch establishes the new GN baseline.
+
+## §100 — Selective policy loss (move-level playout cap) (2026-04-16)
+
+**Motivation:** KrakenBot-inspired. Low-sim MCTS visit distributions
+(quick-search positions) carry noisy policy targets. Training the policy head
+on them adds gradient variance without useful signal. Fix: randomise sim count
+per move, tag each position with `is_full_search`, gate policy loss on that
+flag in Python so quick-search rows only contribute to value/chain/aux losses.
+
+This is an **orthogonal** mechanism to the pre-existing game-level
+`fast_prob`/`fast_sims`/`standard_sims` cap (which makes whole games
+fast/standard and zeroes the policy vector for fast-game positions — already
+filtered by the `policy_valid = policies.sum(dim=1) > 1e-6` mask). The two
+caps are now enforced as mutually exclusive at pool init (see §100.c below).
+
+### Changes (branch `feat/selective-policy-loss`)
+
+**Rust:**
+- `engine/src/game_runner/mod.rs` — `SelfPlayRunner` adds 3 fields
+  (`full_search_prob`, `n_sims_quick`, `n_sims_full`); results-queue tuple
+  extended with `bool` for `is_full_search`; `collect_data()` returns an
+  additional `PyArray1<u8>` (8-tuple total).
+- `engine/src/game_runner/worker_loop.rs` — per-move coin-flip selects sim
+  count: `full = rng < full_search_prob ? n_sims_full : n_sims_quick`. Tag
+  flows into `records_vec` and then into the results queue.
+- `engine/src/replay_buffer/*` — `is_full_search: Vec<u8>` column added to
+  `push`, `push_game`, `sample_batch`, ring rotation in `storage.rs`, and
+  HEXB format bumped to v5 (v4 still loads with default `is_full_search=1`).
+  The flag is **not** transformed under 12-fold hex symmetry (it's per-position
+  metadata, not spatial).
+
+**Python:**
+- `hexo_rl/selfplay/pool.py` — passes the 3 new params through to
+  `SelfPlayRunner`; per-row `is_full_search` unpacked from the 8-tuple and
+  forwarded to both `replay_buffer.push(...)` and `recent_buffer.push(...)`.
+- `hexo_rl/training/recency_buffer.py` — gains an `is_full_search` column
+  (same default=1 for unpopulated slots). `sample()` is now a 7-tuple.
+- `hexo_rl/training/batch_assembly.py` — `BatchBuffers` gains the field;
+  `assemble_mixed_batch` wires it through concat path and in-place copy path;
+  corpus/pretrained rows default `is_full_search=1` (full policy loss applies).
+- `hexo_rl/training/losses.py` — `compute_policy_loss`, `compute_kl_policy_loss`,
+  and `compute_aux_loss` (opp_reply — policy-like head, same noisy targets)
+  all accept an optional `full_search_mask` and intersect it with `valid_mask`.
+- `hexo_rl/training/trainer.py` — constructs `full_search_mask_t` on device,
+  passes to all three policy-shaped losses, and logs `full_search_frac` as the
+  fraction of rows where *both* `policy_valid` and `full_search_mask` are
+  True (i.e. rows that actually contributed to policy loss this step).
+
+### §100.c — Review fixes (applied before merge)
+
+Review caught four issues addressed on the same branch:
+
+**H1 — RecentBuffer bypass.** The first draft synthesised `ifs_r = np.ones(...)`
+in both `assemble_mixed_batch` and `Trainer.train_step` because `RecentBuffer`
+had no `is_full_search` column. With `recency_weight: 0.75 × full_search_prob:
+0.25`, roughly 56% of each batch (the recent-buffer slice) was silently tagged
+full-search and flowed into policy loss as quick-search positions, defeating
+the feature. Fix: `RecentBuffer.push()` and `RecentBuffer.sample()` now carry
+the flag through, and the synthesis sites read the real value.
+
+**H2 — BN→GN scope creep.** A BN→GN auto-migration was briefly added to
+`checkpoints.py` to silence failures from pre-§99 test fixtures. That change
+transferred BN affine params (computed against batch stats) into GN slots
+(applied against group stats) — not numerically equivalent — and weakened
+the §99 "refuse pre-GN checkpoints" safety rail. Reverted; the
+`RuntimeError` is back. Migration belongs on its own branch if wanted.
+
+**M1/M2 — Config validation.** `WorkerPool.__init__` now raises when
+`fast_prob > 0` AND `full_search_prob > 0` (mutually exclusive — move-level
+cap overrides game-level cap silently otherwise), and also when
+`full_search_prob > 0` AND either `n_sims_quick <= 0` or `n_sims_full <= 0`
+(foot-gun: omitting the sim counts gives every move 0 post-root sims →
+random play). `configs/selfplay.yaml` updated to `fast_prob: 0.0` so the
+new feature is the active one.
+
+**M3 — opp_reply gating.** Opp-reply head is trained on the same MCTS
+visit distribution that drives the policy head. It's policy-shaped, so the
+selectivity argument applies identically. `compute_aux_loss` now accepts
+`full_search_mask` and gates the same way; documented in the docstring.
+
+### Config change summary (`configs/selfplay.yaml`)
+
+```yaml
+playout_cap:
+  fast_prob: 0.0            # was 0.25 — disabled; mutex with full_search_prob
+  fast_sims: 64             # unchanged, retained for future toggle
+  standard_sims: 200        # unchanged, retained for future toggle
+  # ...
+  n_sims_quick: 100         # NEW — sim budget for quick-search moves
+  n_sims_full: 600          # NEW — sim budget for full-search moves
+  full_search_prob: 0.25    # NEW — per-move P(full search)
+```
+
+Effective avg sims/move shifts from ≈98 (0.75·64+0.25·200, game-level cap) to
+≈225 (0.75·100+0.25·600, move-level cap) — ~2.3× compute per move. Budget
+was chosen to match KrakenBot; re-bench after merge.
+
+### Persistence compatibility
+
+HEXB v5 writes 1 extra byte per slot (`is_full_search`). v4 buffers still load
+(default `is_full_search=1`). No other code path changes.
+
+### Known follow-ups (not blocking merge)
+
+- MCTS depth / root-concentration stats now average across 100-sim and 600-sim
+  moves. Split by `is_full_search` for interpretability.
+- No frozen v4 fixture test — round-trip is exercised only via the live save
+  path.
+- `compute_policy_loss` returns a `zeros(1)` scalar when the intersected mask
+  is empty; indistinguishable from a genuine 0.0 loss without a separate
+  counter.

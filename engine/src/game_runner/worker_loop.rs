@@ -70,6 +70,9 @@ impl SelfPlayRunner {
             let dirichlet_epsilon = self.dirichlet_epsilon;
             let dirichlet_enabled = self.dirichlet_enabled;
             let results_queue_cap = self.results_queue_cap;
+            let full_search_prob  = self.full_search_prob;
+            let n_sims_quick      = self.n_sims_quick;
+            let n_sims_full       = self.n_sims_full;
             let results_queue = self.results.clone();
             let positions_dropped = self.positions_dropped.clone();
             let recent_game_results = self.recent_game_results.clone();
@@ -104,6 +107,19 @@ impl SelfPlayRunner {
                         if !running.load(Ordering::SeqCst) || board.check_win() || board.legal_move_count() == 0 {
                             break;
                         }
+
+                        // Move-level playout cap (orthogonal to game-level fast_prob above).
+                        // When full_search_prob > 0.0, each move independently draws full or quick
+                        // search. is_full_search tags the position so Python can gate policy loss.
+                        // When disabled (full_search_prob == 0.0), all moves use game_sims and are
+                        // tagged as full-search so the downstream mask is a no-op.
+                        let (move_is_full_search, move_sims) = if full_search_prob > 0.0 {
+                            let full = rng.random::<f32>() < full_search_prob;
+                            let sims = if full { n_sims_full } else { n_sims_quick };
+                            (full, sims)
+                        } else {
+                            (true, game_sims)
+                        };
 
                         // ── MCTS Search ──
                         tree.new_game(board.clone());
@@ -198,12 +214,12 @@ impl SelfPlayRunner {
                             // Phase 2: Gumbel-Top-k candidate selection.
                             // Guard: if effective_m is 0 (no budget or no children),
                             // fall back to the standard PUCT path for this move.
-                            let effective_m = gumbel_m.min(game_sims).min(tree.root_n_children());
+                            let effective_m = gumbel_m.min(move_sims).min(tree.root_n_children());
                             if effective_m == 0 {
                                 // No candidates — use standard PUCT search instead.
                                 // Subtract root expansion sims already spent from budget.
                                 let mut sims_done = sims_used;
-                                while sims_done < game_sims {
+                                while sims_done < move_sims {
                                     if !running.load(Ordering::SeqCst) { break; }
                                     let n = infer_and_expand(&mut tree, leaf_batch_size);
                                     if n == 0 { break; }
@@ -219,21 +235,21 @@ impl SelfPlayRunner {
                             // Phase 3: Sequential Halving — allocate budget across phases.
                             let num_phases = gs.num_phases;
                             for phase in 0..num_phases {
-                                if sims_used >= game_sims { break; }
-                                let remaining_budget = game_sims.saturating_sub(sims_used);
+                                if sims_used >= move_sims { break; }
+                                let remaining_budget = move_sims.saturating_sub(sims_used);
                                 let remaining_phases = num_phases - phase;
                                 let sims_per = (remaining_budget / (remaining_phases * gs.candidates.len())).max(1);
 
                                 let cands = gs.candidates.clone();
                                 for &cand_offset in &cands {
-                                    if sims_used >= game_sims { break; }
+                                    if sims_used >= move_sims { break; }
                                     if !running.load(Ordering::SeqCst) { break; }
 
                                     let child_pool_idx = gs.first_child + cand_offset as u32;
                                     tree.forced_root_child = Some(child_pool_idx);
 
                                     let mut cand_sims = 0;
-                                    while cand_sims < sims_per && sims_used < game_sims {
+                                    while cand_sims < sims_per && sims_used < move_sims {
                                         if !running.load(Ordering::SeqCst) { break; }
                                         // Cap batch to remaining budget for this candidate so we
                                         // don't overshoot sims_per (leaf_batch_size can be 8 when
@@ -281,7 +297,7 @@ impl SelfPlayRunner {
                                 }
                             }
 
-                            while sims_done < game_sims {
+                            while sims_done < move_sims {
                                 if !running.load(Ordering::SeqCst) { break; }
                                 let n = infer_and_expand(&mut tree, leaf_batch_size);
                                 if n == 0 { break; }
@@ -430,7 +446,7 @@ impl SelfPlayRunner {
                             // Capture the per-row window centre so the aux targets
                             // (computed at game end) can be reprojected into the same
                             // coordinate frame as this row's state planes.
-                            records_vec.push((feat, chain, projected_policy, board.current_player, center.0, center.1));
+                            records_vec.push((feat, chain, projected_policy, board.current_player, center.0, center.1, move_is_full_search));
                         }
 
                         if board.apply_move(move_idx.0, move_idx.1).is_err() {
@@ -457,7 +473,7 @@ impl SelfPlayRunner {
                     let winning_cells: Vec<(i32, i32)> = board.find_winning_line();
 
                     let mut games_results = results_queue.lock().expect("results lock poisoned");
-                    for (feat, chain, pol, player, cq, cr) in records_vec {
+                    for (feat, chain, pol, player, cq, cr, is_full_search) in records_vec {
                         let outcome = match winner {
                             Some(p) => if p as i8 == player as i8 { 1.0 } else { -1.0 },
                             None => draw_reward,
@@ -469,7 +485,7 @@ impl SelfPlayRunner {
                             &final_cells, &winning_cells, cq, cr,
                         );
 
-                        games_results.push_back((feat, chain, pol, outcome, plies, aux_u8));
+                        games_results.push_back((feat, chain, pol, outcome, plies, aux_u8, is_full_search));
                     }
                     games_completed.fetch_add(1, Ordering::Relaxed);
                     match winner {

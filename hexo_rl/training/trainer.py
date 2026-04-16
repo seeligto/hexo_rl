@@ -205,27 +205,28 @@ class Trainer:
         if recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0:
             n_recent = max(1, int(round(batch_size * recency_weight)))
             n_uniform = batch_size - n_recent
-            s_r, c_r, p_r, o_r, own_r, wl_r = recent_buffer.sample(n_recent)
+            s_r, c_r, p_r, o_r, own_r, wl_r, ifs_r = recent_buffer.sample(n_recent)
             # WHY: RecentBuffer stores aux flat (n, 361); reshape to (n, 19, 19) view
             own_r = own_r.reshape(-1, 19, 19)
             wl_r  = wl_r.reshape(-1, 19, 19)
-            s_u, c_u, p_u, o_u, own_u, wl_u = buffer.sample_batch(max(1, n_uniform), augment)
-            states       = np.concatenate([s_r, s_u],   axis=0)
-            chain_planes = np.concatenate([c_r, c_u],   axis=0)
-            policies     = np.concatenate([p_r, p_u],   axis=0)
-            outcomes     = np.concatenate([o_r, o_u],   axis=0)
-            ownership    = np.concatenate([own_r, own_u], axis=0)
-            winning_line = np.concatenate([wl_r, wl_u], axis=0)
+            s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), augment)
+            states          = np.concatenate([s_r, s_u],     axis=0)
+            chain_planes    = np.concatenate([c_r, c_u],     axis=0)
+            policies        = np.concatenate([p_r, p_u],     axis=0)
+            outcomes        = np.concatenate([o_r, o_u],     axis=0)
+            ownership       = np.concatenate([own_r, own_u], axis=0)
+            winning_line    = np.concatenate([wl_r, wl_u],   axis=0)
+            is_full_search  = np.concatenate([ifs_r, ifs_u], axis=0)
         else:
-            states, chain_planes, policies, outcomes, ownership, winning_line = buffer.sample_batch(
-                batch_size, augment
-            )
+            states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search = \
+                buffer.sample_batch(batch_size, augment)
 
         return self._train_on_batch(
             states, policies, outcomes,
             chain_planes=chain_planes,
             ownership_targets=ownership,
             threat_targets=winning_line,
+            is_full_search=is_full_search,
             n_pretrain=0,
         )
 
@@ -237,6 +238,7 @@ class Trainer:
         chain_planes: Optional[Any] = None,
         ownership_targets: Optional[Any] = None,
         threat_targets: Optional[Any] = None,
+        is_full_search: Optional[Any] = None,
         n_pretrain: int = 0,
     ) -> Dict[str, float]:
         """Perform one gradient update from pre-built numpy arrays.
@@ -248,6 +250,9 @@ class Trainer:
             chain_planes: (B, 6, 19, 19) float16 array of Q13 chain-length planes,
                           stored separately from state since the 18-plane input
                           no longer includes chain as input channels.
+            is_full_search: Optional (B,) uint8 array — 1 = full-search (apply policy
+                          loss), 0 = quick-search (value/chain only). None means all
+                          positions are treated as full-search (legacy behaviour).
             n_pretrain: Number of rows (from the start of the batch) that came
                         from the pretrained corpus. Used to compute per-stream
                         entropy. 0 means all rows are self-play.
@@ -256,6 +261,7 @@ class Trainer:
                                      chain_planes=chain_planes,
                                      ownership_targets=ownership_targets,
                                      threat_targets=threat_targets,
+                                     is_full_search=is_full_search,
                                      n_pretrain=n_pretrain)
 
     def _train_on_batch(
@@ -266,6 +272,7 @@ class Trainer:
         chain_planes: Optional[Any] = None,
         ownership_targets: Optional[Any] = None,
         threat_targets: Optional[Any] = None,
+        is_full_search: Optional[Any] = None,
         n_pretrain: int = 0,
     ) -> Dict[str, float]:
         """Core training step: forward, loss, backward, optimizer step."""
@@ -283,6 +290,12 @@ class Trainer:
 
         policies_t = torch.from_numpy(policies).to(self.device)     # float32
         outcomes_t = torch.from_numpy(outcomes).to(self.device)     # float32
+        # is_full_search: (B,) uint8 → bool tensor. None = all positions full-search.
+        full_search_mask_t: Optional[torch.Tensor] = None
+        if is_full_search is not None:
+            full_search_mask_t = torch.from_numpy(
+                np.asarray(is_full_search, dtype=np.uint8)
+            ).to(self.device).bool()
 
         prune_frac = float(self.config.get("policy_prune_frac", 0.0))
         if prune_frac > 0.0:
@@ -358,14 +371,23 @@ class Trainer:
             policy_valid = policies_t.sum(dim=1) > 1e-6
             use_kl = bool(self.config.get("completed_q_values", False))
             if use_kl:
-                policy_loss = compute_kl_policy_loss(log_policy, policies_t, policy_valid, self.device)
+                policy_loss = compute_kl_policy_loss(
+                    log_policy, policies_t, policy_valid, self.device,
+                    full_search_mask=full_search_mask_t,
+                )
             else:
-                policy_loss = compute_policy_loss(log_policy, policies_t, policy_valid, self.device)
+                policy_loss = compute_policy_loss(
+                    log_policy, policies_t, policy_valid, self.device,
+                    full_search_mask=full_search_mask_t,
+                )
             value_loss = compute_value_loss(v_logit, outcomes_t)
 
             opp_reply_loss = None
             if use_aux:
-                opp_reply_loss = compute_aux_loss(opp_reply, policies_t, policy_valid, self.device)
+                opp_reply_loss = compute_aux_loss(
+                    opp_reply, policies_t, policy_valid, self.device,
+                    full_search_mask=full_search_mask_t,
+                )
 
             # Entropy regularization: subtract entropy bonus to maximize policy entropy.
             entropy_bonus = None
@@ -490,6 +512,15 @@ class Trainer:
 
         lr = self.optimizer.param_groups[0]["lr"]
 
+        # Fraction of batch positions that actually contributed to policy loss
+        # (valid_mask & full_search_mask). 1.0 when full_search_prob=0.0
+        # (feature disabled) and all rows have valid policy targets.
+        if full_search_mask_t is not None:
+            combined_mask = policy_valid & full_search_mask_t.bool()
+            full_search_frac = combined_mask.float().mean().item()
+        else:
+            full_search_frac = policy_valid.float().mean().item()
+
         result = {
             "loss":                     loss.item(),
             "policy_loss":              policy_loss.item(),
@@ -501,6 +532,7 @@ class Trainer:
             "grad_norm":                grad_norm,
             "value_accuracy":           value_accuracy,
             "lr":                       lr,
+            "full_search_frac":         full_search_frac,
         }
         if use_aux:
             result["opp_reply_loss"] = opp_reply_loss.item()
@@ -534,6 +566,7 @@ class Trainer:
             ownership_loss=result.get("ownership_loss"),
             threat_loss=result.get("threat_loss"),
             chain_loss=result.get("chain_loss"),
+            full_search_frac=result["full_search_frac"],
             lr=result["lr"],
             fp16_scale=self.scaler.get_scale(),
         )

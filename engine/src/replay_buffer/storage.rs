@@ -69,6 +69,8 @@ impl ReplayBuffer {
                 .rotate_left(self.head * AUX_STRIDE);
             self.winning_line[..self.capacity * AUX_STRIDE]
                 .rotate_left(self.head * AUX_STRIDE);
+            self.is_full_search[..self.capacity]
+                .rotate_left(self.head);
         }
 
         // Extend storage to new capacity.
@@ -81,6 +83,7 @@ impl ReplayBuffer {
         self.weights.resize(new_capacity, default_w);
         self.ownership.resize(new_capacity * AUX_STRIDE, 1u8);     // 1 = empty
         self.winning_line.resize(new_capacity * AUX_STRIDE, 0u8);
+        self.is_full_search.resize(new_capacity, 1u8);  // 1 = full-search default
 
         self.head = self.size;
         self.capacity = new_capacity;

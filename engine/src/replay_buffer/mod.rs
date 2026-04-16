@@ -77,6 +77,11 @@ pub struct ReplayBuffer {
     /// Flat [capacity × AUX_STRIDE].
     pub(crate) winning_line: Vec<u8>,
 
+    /// Move-level playout cap flag: 1 = full-search (policy loss applies),
+    /// 0 = quick-search (value/chain/aux losses only). Flat [capacity].
+    /// Defaults to 1 so corpus and legacy positions always contribute to policy.
+    pub(crate) is_full_search: Vec<u8>,
+
     pub(crate) sym_tables:      SymTables,
     pub(crate) weight_schedule: WeightSchedule,
     pub(crate) next_game_id:    i64,
@@ -113,14 +118,15 @@ impl ReplayBuffer {
             capacity,
             size: 0,
             head: 0,
-            states:       vec![0u16; capacity * STATE_STRIDE],
-            chain_planes: vec![0u16; capacity * CHAIN_STRIDE],
-            policies:     vec![0.0f32; capacity * POLICY_STRIDE],
-            outcomes:     vec![0.0f32; capacity],
-            game_ids:     vec![-1i64; capacity],
-            weights:      vec![default_w; capacity],
-            ownership:    vec![1u8; capacity * AUX_STRIDE],  // 1 = empty default
-            winning_line: vec![0u8; capacity * AUX_STRIDE],
+            states:         vec![0u16; capacity * STATE_STRIDE],
+            chain_planes:   vec![0u16; capacity * CHAIN_STRIDE],
+            policies:       vec![0.0f32; capacity * POLICY_STRIDE],
+            outcomes:       vec![0.0f32; capacity],
+            game_ids:       vec![-1i64; capacity],
+            weights:        vec![default_w; capacity],
+            ownership:      vec![1u8; capacity * AUX_STRIDE],  // 1 = empty default
+            winning_line:   vec![0u8; capacity * AUX_STRIDE],
+            is_full_search: vec![1u8; capacity],  // 1 = full-search default (legacy compat)
             sym_tables: SymTables::new(),
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
@@ -140,46 +146,49 @@ impl ReplayBuffer {
     }
 
     /// Store a single (state, chain_planes, policy, outcome, ownership, winning_line) sample.
-    #[pyo3(signature = (state, chain_planes, policy, outcome, ownership, winning_line, game_id = -1, game_length = 0))]
+    #[pyo3(signature = (state, chain_planes, policy, outcome, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = true))]
     pub fn push(
         &mut self,
-        state:        PyReadonlyArray3<f16>,
-        chain_planes: PyReadonlyArray3<f16>,
-        policy:       PyReadonlyArray1<f32>,
-        outcome:      f32,
-        ownership:    PyReadonlyArray1<u8>,
-        winning_line: PyReadonlyArray1<u8>,
-        game_id:      i64,
-        game_length:  u16,
+        state:          PyReadonlyArray3<f16>,
+        chain_planes:   PyReadonlyArray3<f16>,
+        policy:         PyReadonlyArray1<f32>,
+        outcome:        f32,
+        ownership:      PyReadonlyArray1<u8>,
+        winning_line:   PyReadonlyArray1<u8>,
+        game_id:        i64,
+        game_length:    u16,
+        is_full_search: bool,
     ) -> PyResult<()> {
-        self.push_impl(state, chain_planes, policy, outcome, ownership, winning_line, game_id, game_length)
+        self.push_impl(state, chain_planes, policy, outcome, ownership, winning_line, game_id, game_length, is_full_search)
     }
 
     /// Store all positions from a completed game efficiently.
-    #[pyo3(signature = (states, chain_planes, policies, outcomes, ownership, winning_line, game_id = -1, game_length = 0))]
+    #[pyo3(signature = (states, chain_planes, policies, outcomes, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = None))]
     pub fn push_game(
         &mut self,
-        states:       PyReadonlyArray4<f16>,
-        chain_planes: PyReadonlyArray4<f16>,
-        policies:     PyReadonlyArray2<f32>,
-        outcomes:     PyReadonlyArray1<f32>,
-        ownership:    PyReadonlyArray2<u8>,
-        winning_line: PyReadonlyArray2<u8>,
-        game_id:      i64,
-        game_length:  u16,
+        states:         PyReadonlyArray4<f16>,
+        chain_planes:   PyReadonlyArray4<f16>,
+        policies:       PyReadonlyArray2<f32>,
+        outcomes:       PyReadonlyArray1<f32>,
+        ownership:      PyReadonlyArray2<u8>,
+        winning_line:   PyReadonlyArray2<u8>,
+        game_id:        i64,
+        game_length:    u16,
+        is_full_search: Option<PyReadonlyArray1<u8>>,
     ) -> PyResult<()> {
-        self.push_game_impl(states, chain_planes, policies, outcomes, ownership, winning_line, game_id, game_length)
+        self.push_game_impl(states, chain_planes, policies, outcomes, ownership, winning_line, game_id, game_length, is_full_search)
     }
 
     /// Sample `batch_size` entries, optionally with 12-fold hex augmentation.
     ///
     /// Returns:
-    ///     states:       float16 numpy array of shape (batch_size, 18, 19, 19)
-    ///     chain_planes: float16 numpy array of shape (batch_size, 6, 19, 19)
-    ///     policies:     float32 numpy array of shape (batch_size, 362)
-    ///     outcomes:     float32 numpy array of shape (batch_size,)
-    ///     ownership:    uint8   numpy array of shape (batch_size, 19, 19)
-    ///     winning_line: uint8   numpy array of shape (batch_size, 19, 19)
+    ///     states:          float16 numpy array of shape (batch_size, 18, 19, 19)
+    ///     chain_planes:    float16 numpy array of shape (batch_size, 6, 19, 19)
+    ///     policies:        float32 numpy array of shape (batch_size, 362)
+    ///     outcomes:        float32 numpy array of shape (batch_size,)
+    ///     ownership:       uint8   numpy array of shape (batch_size, 19, 19)
+    ///     winning_line:    uint8   numpy array of shape (batch_size, 19, 19)
+    ///     is_full_search:  uint8   numpy array of shape (batch_size,)
     pub fn sample_batch<'py>(
         &mut self,
         py:        Python<'py>,
@@ -192,6 +201,7 @@ impl ReplayBuffer {
         Bound<'py, PyArray1<f32>>,
         Bound<'py, PyArray3<u8>>,
         Bound<'py, PyArray3<u8>>,
+        Bound<'py, PyArray1<u8>>,
     )> {
         self.sample_batch_impl(py, batch_size, augment)
     }

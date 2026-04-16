@@ -17,8 +17,9 @@ Exercises the complete replay-buffer persistence path end-to-end:
   Phase C  (resume)
     • Relaunches train.py with --checkpoint <latest> and --iterations 5.
     • Asserts buffer_restored fires with positions ≈ N.
-    • Asserts corpus_prefill_skipped fires (buffer-persist path active).
-    • Asserts corpus_loaded does NOT fire.
+    • Asserts corpus_prefill_skipped fires (buffer-persist path active — self-play
+      buffer restored from disk). corpus_loaded also fires by design (§58): the
+      pretrained_buffer for batch mixing always initialises from NPZ.
     • Asserts selfplay_pool_started fires (no cold-start delay).
 
 Marked ``slow`` and ``integration`` — excluded from ``make test.py``.
@@ -31,6 +32,7 @@ Expected wall-clock time: 2-5 min on target hardware (Ryzen 7 3700x + RTX 3070).
 from __future__ import annotations
 
 import json
+import os
 import signal
 import subprocess
 import time
@@ -126,6 +128,11 @@ def _write_config(
     """Write a minimal override config that keeps the training loop fast."""
     persist_path = checkpoint_dir / "replay_buffer.bin"
     # Use absolute paths so train.py finds them regardless of cwd.
+    # Scale workers with host CPUs so 1-worker inference batch-underfill doesn't
+    # starve training (single-worker baseline missed the 300 s step-50 budget
+    # after the §99 GN migration).
+    n_workers = max(2, (os.cpu_count() or 4) - 2)
+
     path.write_text(
         f"""\
 # Lifecycle integration-test overrides.
@@ -156,11 +163,19 @@ mcts:
   quiescence_enabled: false
 
 selfplay:
-  n_workers: 1
-  inference_batch_size: 4
-  inference_max_wait_ms: 50.0
+  n_workers: {n_workers}
+  inference_batch_size: 16
+  inference_max_wait_ms: 10.0
+  # Disable move-level playout cap; lifecycle test is not exercising the feature
+  # and 600 sims/move would make the 300 s step-50 budget unreachable.
+  playout_cap:
+    full_search_prob: 0.0
+    fast_prob: 0.0
+    fast_sims: 4
+    standard_sims: 4
 
 eval_pipeline:
+  enabled: false
   eval_interval: 9999999
 """
     )
@@ -245,9 +260,15 @@ def test_train_lifecycle(tmp_path: Path) -> None:
 
         # ── Step 2: wait for ≥ 50 training steps, record buffer size ─────────
         def _has_50_steps(evs: list[dict]) -> dict | None:
+            # Two train_step variants fire: a lightweight per-step event
+            # (loss / grad_norm / lr) and a richer periodic summary that
+            # carries ``buffer_size``. Only the rich one is usable here — the
+            # test must read ``buffer_size_before_shutdown`` off of it.
             train_evs = _all_events(evs, "train_step")
-            # log_interval=10 by default, so train_step events fire at 10,20,...50
-            hits = [e for e in train_evs if e.get("step", 0) >= 50]
+            hits = [
+                e for e in train_evs
+                if e.get("step", 0) >= 50 and "buffer_size" in e
+            ]
             return hits[-1] if hits else None
 
         step50_ev = _poll_until(log_path, _has_50_steps, timeout=300, poll_interval=2.0)
@@ -332,12 +353,14 @@ def test_train_lifecycle(tmp_path: Path) -> None:
     )
 
     # ── Step 4b: corpus prefill must be skipped on resume ─────────────────────
+    # §58: the two events now serve distinct roles. `corpus_prefill_skipped`
+    # signals that the self-play replay buffer was restored from disk and the
+    # corpus does not need to re-seed it. `corpus_loaded` still fires because
+    # the pretrained_buffer (used for batch mixing) is always (re)initialised
+    # from NPZ when the file exists. Both events firing on resume is correct.
     assert _first_event(events_resume, "corpus_prefill_skipped") is not None, (
         "corpus_prefill_skipped not found on resume — "
         "corpus was re-loaded unnecessarily instead of using the restored buffer"
-    )
-    assert _first_event(events_resume, "corpus_loaded") is None, (
-        "corpus_loaded fired on resume — corpus prefill was not skipped"
     )
 
     # ── Step 4c: self-play started immediately (no cold-start warmup wait) ────

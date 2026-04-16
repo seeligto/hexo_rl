@@ -37,12 +37,13 @@ class BatchBuffers:
     ``warmup_active`` is flipped to False the first time all sources return
     the expected row count (a side-effect of :func:`assemble_mixed_batch`).
     """
-    states: np.ndarray        # (B, 18, 19, 19) float16
-    chain_planes: np.ndarray  # (B, 6, 19, 19)  float16
-    policies: np.ndarray      # (B, N_ACTIONS) float32
-    outcomes: np.ndarray      # (B,) float32
-    ownership: np.ndarray     # (B, 19, 19) uint8
-    winning_line: np.ndarray  # (B, 19, 19) uint8
+    states: np.ndarray          # (B, 18, 19, 19) float16
+    chain_planes: np.ndarray    # (B, 6, 19, 19)  float16
+    policies: np.ndarray        # (B, N_ACTIONS) float32
+    outcomes: np.ndarray        # (B,) float32
+    ownership: np.ndarray       # (B, 19, 19) uint8
+    winning_line: np.ndarray    # (B, 19, 19) uint8
+    is_full_search: np.ndarray  # (B,) uint8 — 1=full-search, 0=quick-search
     warmup_active: bool = field(default=True)
 
 
@@ -63,6 +64,7 @@ def allocate_batch_buffers(batch_size: int, n_actions: int) -> BatchBuffers:
         outcomes=np.empty(batch_size, dtype=np.float32),
         ownership=np.empty((batch_size, 19, 19), dtype=np.uint8),
         winning_line=np.empty((batch_size, 19, 19), dtype=np.uint8),
+        is_full_search=np.ones(batch_size, dtype=np.uint8),  # default full-search
     )
 
 
@@ -188,7 +190,7 @@ def assemble_mixed_batch(
     recency_weight: float,
     bufs: BatchBuffers,
     train_step: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Assemble one mixed batch from pretrain + self-play (+ optional recent) buffers.
 
     During warm-up (buffers partially filled), falls back to ``np.concatenate``
@@ -210,16 +212,17 @@ def assemble_mixed_batch(
         train_step:        Current step index (for log messages only).
 
     Returns:
-        Six arrays ``(states, chain_planes, policies, outcomes, ownership, winning_line)``
-        — views into ``bufs`` in steady-state, freshly allocated during warm-up.
+        Seven arrays ``(states, chain_planes, policies, outcomes, ownership, winning_line,
+        is_full_search)`` — views into ``bufs`` in steady-state, freshly allocated during
+        warm-up.  Corpus positions always have ``is_full_search=1`` (apply full policy loss).
     """
-    s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre = pretrained_buffer.sample_batch(n_pre, True)
+    s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre = pretrained_buffer.sample_batch(n_pre, True)
 
     if batch_size != batch_size_cfg:
         # Edge case: runtime batch size diverged from pre-allocated shape.
         if train_step > 100:
             log.warning("mixed_batch_size_mismatch", batch_size=batch_size, expected=batch_size_cfg)
-        s_self, c_self, p_self, o_self, own_self, wl_self = _sample_selfplay(
+        s_self, c_self, p_self, o_self, own_self, wl_self, ifs_self = _sample_selfplay(
             buffer, recent_buffer, n_self, recency_weight
         )
         return (
@@ -229,6 +232,7 @@ def assemble_mixed_batch(
             np.concatenate([o_pre, o_self], axis=0),
             np.concatenate([own_pre, own_self], axis=0),
             np.concatenate([wl_pre, wl_self], axis=0),
+            np.concatenate([ifs_pre, ifs_self], axis=0),
         )
 
     # ── Normal path: try in-place fill into bufs ──────────────────────────────
@@ -242,18 +246,18 @@ def assemble_mixed_batch(
     if use_recent:
         n_recent   = max(1, int(round(n_self * recency_weight)))
         n_uniform  = n_self - n_recent
-        s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat = recent_buffer.sample(n_recent)
+        s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_recent)
         own_r = own_r_flat.reshape(-1, 19, 19)
         wl_r  = wl_r_flat.reshape(-1, 19, 19)
-        s_u, c_u, p_u, o_u, own_u, wl_u = buffer.sample_batch(max(1, n_uniform), True)
-        pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre),
-                     (s_r,   c_r,   p_r,   o_r,   own_r,   wl_r),
-                     (s_u,   c_u,   p_u,   o_u,   own_u,   wl_u)]
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), True)
+        pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre),
+                     (s_r,   c_r,   p_r,   o_r,   own_r,   wl_r,   ifs_r),
+                     (s_u,   c_u,   p_u,   o_u,   own_u,   wl_u,   ifs_u)]
         n_avail   = n_pre + len(s_r) + len(s_u)
     else:
-        s_u, c_u, p_u, o_u, own_u, wl_u = buffer.sample_batch(max(1, n_self), True)
-        pieces  = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre),
-                   (s_u,   c_u,   p_u,   o_u,   own_u,   wl_u)]
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_self), True)
+        pieces  = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre),
+                   (s_u,   c_u,   p_u,   o_u,   own_u,   wl_u,   ifs_u)]
         n_avail = n_pre + len(s_u)
 
     if n_avail < batch_size:
@@ -265,6 +269,7 @@ def assemble_mixed_batch(
             np.concatenate([p[3] for p in pieces], axis=0),
             np.concatenate([p[4] for p in pieces], axis=0),
             np.concatenate([p[5] for p in pieces], axis=0),
+            np.concatenate([p[6] for p in pieces], axis=0),
         )
 
     # Steady-state: in-place copy, no heap allocation.
@@ -273,17 +278,19 @@ def assemble_mixed_batch(
         bufs.warmup_active = False
 
     offset = 0
-    for s, c, p, o, own, wl in pieces:
+    for s, c, p, o, own, wl, ifs in pieces:
         n = len(s)
-        np.copyto(bufs.states[offset:offset + n],       s)
-        np.copyto(bufs.chain_planes[offset:offset + n], c)
-        np.copyto(bufs.policies[offset:offset + n],     p)
-        np.copyto(bufs.outcomes[offset:offset + n],     o)
-        np.copyto(bufs.ownership[offset:offset + n],    own)
-        np.copyto(bufs.winning_line[offset:offset + n], wl)
+        np.copyto(bufs.states[offset:offset + n],          s)
+        np.copyto(bufs.chain_planes[offset:offset + n],    c)
+        np.copyto(bufs.policies[offset:offset + n],        p)
+        np.copyto(bufs.outcomes[offset:offset + n],        o)
+        np.copyto(bufs.ownership[offset:offset + n],       own)
+        np.copyto(bufs.winning_line[offset:offset + n],    wl)
+        np.copyto(bufs.is_full_search[offset:offset + n],  ifs)
         offset += n
 
-    return bufs.states, bufs.chain_planes, bufs.policies, bufs.outcomes, bufs.ownership, bufs.winning_line
+    return (bufs.states, bufs.chain_planes, bufs.policies, bufs.outcomes,
+            bufs.ownership, bufs.winning_line, bufs.is_full_search)
 
 
 def _sample_selfplay(
@@ -291,16 +298,16 @@ def _sample_selfplay(
     recent_buffer: Optional[Any],
     n_self: int,
     recency_weight: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Sample self-play rows, blending recent + uniform when recency_weight > 0."""
     if (recent_buffer is not None and recent_buffer.size > 0
             and recency_weight > 0.0 and n_self > 1):
         n_r = max(1, int(round(n_self * recency_weight)))
         n_u = n_self - n_r
-        s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat = recent_buffer.sample(n_r)
+        s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_r)
         own_r = own_r_flat.reshape(-1, 19, 19)
         wl_r  = wl_r_flat.reshape(-1, 19, 19)
-        s_u, c_u, p_u, o_u, own_u, wl_u = buffer.sample_batch(max(1, n_u), True)
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_u), True)
         return (
             np.concatenate([s_r, s_u], axis=0),
             np.concatenate([c_r, c_u], axis=0),
@@ -308,5 +315,6 @@ def _sample_selfplay(
             np.concatenate([o_r, o_u], axis=0),
             np.concatenate([own_r, own_u], axis=0),
             np.concatenate([wl_r, wl_u], axis=0),
+            np.concatenate([ifs_r, ifs_u], axis=0),
         )
     return buffer.sample_batch(max(1, n_self), True)

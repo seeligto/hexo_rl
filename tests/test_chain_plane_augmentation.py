@@ -184,12 +184,12 @@ def test_chain_plane_augmentation_byte_exact(pos_name, pos_fn):
     buf.push(state, chain, policy, 0.0, own, wl)
 
     # Sample many times with augment=True, collect which syms appear.
-    # sample_batch returns 6-tuple: (states, chain_planes, policies, outcomes, own, wl)
+    # sample_batch returns 7-tuple: (states, chain_planes, policies, outcomes, own, wl, is_full_search)
     seen_syms: set[int] = set()
     unknown_keys: list[bytes] = []
     N_SAMPLES = 400
     for _ in range(N_SAMPLES):
-        _, chain_out, _, _, _, _ = buf.sample_batch(1, augment=True)
+        _, chain_out, _, _, _, _, _ = buf.sample_batch(1, augment=True)
         sampled = _decode_chain_planes(np.asarray(chain_out[0]))
         key = sampled.tobytes()
         if key in expected_chain_by_key:

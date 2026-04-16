@@ -1,25 +1,26 @@
-//! HEXB v4 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
+//! HEXB v5 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
 //! `load_from_path_impl`.
 //!
 //! Format (little-endian native):
 //!   [magic: u32 = 0x48455842]  ("HEXB")
-//!   [version: u32 = 4]
+//!   [version: u32 = 5]
 //!   [n_planes: u32]            (redundant sanity field, must equal N_PLANES = 18)
 //!   [capacity: u64]
 //!   [size: u64]
 //!   For each of `size` positions (oldest → newest):
-//!     state:        STATE_STRIDE × u16    (18 planes × 361 cells)
-//!     chain_planes: CHAIN_STRIDE × u16    (6 planes × 361 cells)
-//!     policy:       POLICY_STRIDE × f32
-//!     outcome:      f32
-//!     game_id:      i64
-//!     weight:       u16
-//!     ownership:    AUX_STRIDE × u8   (encoding 0/1/2)
-//!     winning_line: AUX_STRIDE × u8   (binary mask)
+//!     state:          STATE_STRIDE × u16    (18 planes × 361 cells)
+//!     chain_planes:   CHAIN_STRIDE × u16    (6 planes × 361 cells)
+//!     policy:         POLICY_STRIDE × f32
+//!     outcome:        f32
+//!     game_id:        i64
+//!     weight:         u16
+//!     ownership:      AUX_STRIDE × u8   (encoding 0/1/2)
+//!     winning_line:   AUX_STRIDE × u8   (binary mask)
+//!     is_full_search: u8                (1 = full-search, 0 = quick-search)
 //!
-//! v1–v3 buffers are NOT readable — `load_from_path_impl` returns a clear
-//! error if encountered. v3 used STATE_STRIDE=24×361 (chain planes embedded
-//! in state); v4 separates them into a dedicated chain sub-buffer.
+//! v4 buffers are readable — `load_from_path_impl` defaults `is_full_search = 1`
+//! for all positions (treat legacy positions as full-search for training compat).
+//! v1–v3 buffers are NOT readable.
 
 use std::sync::atomic::Ordering;
 
@@ -30,10 +31,11 @@ use super::sym_tables::*;
 use super::ReplayBuffer;
 
 pub(crate) const HEXB_MAGIC: u32 = 0x4845_5842; // "HEXB"
-pub(crate) const HEXB_VERSION: u32 = 4;
+pub(crate) const HEXB_VERSION: u32 = 5;
+pub(crate) const HEXB_VERSION_V4: u32 = 4; // readable legacy version
 
 impl ReplayBuffer {
-    /// Save buffer contents to a binary file in HEXB v3 format.
+    /// Save buffer contents to a binary file in HEXB v5 format.
     pub(crate) fn save_to_path_impl(&self, path: &str) -> PyResult<()> {
         use std::io::{BufWriter, Write};
 
@@ -110,6 +112,9 @@ impl ReplayBuffer {
             // winning_line: AUX_STRIDE × u8
             w.write_all(&self.winning_line[aux_start..aux_start + AUX_STRIDE])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
+            // is_full_search: u8 (v5)
+            w.write_all(&[self.is_full_search[slot]])
+                .map_err(|e| PyIOError::new_err(e.to_string()))?;
         }
 
         w.flush().map_err(|e| PyIOError::new_err(e.to_string()))?;
@@ -151,11 +156,13 @@ impl ReplayBuffer {
         r.read_exact(&mut buf4)
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         let version = u32::from_le_bytes(buf4);
-        if version != HEXB_VERSION {
+        let has_is_full_search = version == HEXB_VERSION;
+        if version != HEXB_VERSION && version != HEXB_VERSION_V4 {
             return Err(PyValueError::new_err(format!(
-                "HEXB version {version} not supported (this build expects v{HEXB_VERSION}). \
+                "HEXB version {version} not supported (this build can read v4 and v{HEXB_VERSION}). \
                  v1–v2 were invalidated by aux/chain refactors; v3 embedded chain planes in \
-                 the state buffer (24 planes); v4 stores them separately (18 state + 6 chain). \
+                 the state buffer (24 planes); v4 separates them (18 state + 6 chain, no \
+                 is_full_search); v5 adds is_full_search per position. \
                  Regenerate the buffer from self-play."
             )));
         }
@@ -184,11 +191,14 @@ impl ReplayBuffer {
         // How many to skip if saved_size > capacity (skip oldest)
         let to_skip = saved_size - to_load;
 
-        // Per-entry byte sizes (v4: state + chain + policy + outcome + game_id + weight + own + wl)
+        // Per-entry byte sizes. v4 = state+chain+policy+outcome+game_id+weight+own+wl.
+        // v5 adds one extra byte per entry for is_full_search.
         let state_bytes = STATE_STRIDE * 2;
         let chain_bytes = CHAIN_STRIDE * 2;
         let policy_bytes = POLICY_STRIDE * 4;
-        let entry_bytes = state_bytes + chain_bytes + policy_bytes + 4 + 8 + 2 + AUX_STRIDE + AUX_STRIDE;
+        let entry_bytes = state_bytes + chain_bytes + policy_bytes + 4 + 8 + 2
+            + AUX_STRIDE + AUX_STRIDE
+            + if has_is_full_search { 1 } else { 0 };
 
         // Skip oldest entries
         if to_skip > 0 {
@@ -260,12 +270,22 @@ impl ReplayBuffer {
             let w_bits = u16::from_le_bytes(buf2);
             self.weights[slot] = w_bits;
 
-            // ownership + winning_line (v4)
+            // ownership + winning_line (v4+)
             let aux_dst_start = slot * AUX_STRIDE;
             r.read_exact(&mut self.ownership[aux_dst_start..aux_dst_start + AUX_STRIDE])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
             r.read_exact(&mut self.winning_line[aux_dst_start..aux_dst_start + AUX_STRIDE])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
+
+            // is_full_search: u8 (v5 only; default to 1 for v4 legacy buffers)
+            self.is_full_search[slot] = if has_is_full_search {
+                let mut buf1 = [0u8; 1];
+                r.read_exact(&mut buf1)
+                    .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                buf1[0]
+            } else {
+                1u8 // v4: treat all positions as full-search
+            };
 
             // Update weight histogram
             let bucket = Self::weight_bucket(w_bits);
@@ -283,9 +303,9 @@ mod tests {
     use super::*;
     use half::f16;
 
-    /// HEXB v4 round-trip — verify aux columns (ownership, winning_line, chain_planes) survive save/load.
+    /// HEXB v5 round-trip — verify aux columns (ownership, winning_line, chain_planes, is_full_search) survive save/load.
     #[test]
-    fn test_aux_hexb_v4_roundtrip() {
+    fn test_aux_hexb_v5_roundtrip() {
         use super::super::sym_tables::CHAIN_STRIDE;
         use std::env::temp_dir;
 
@@ -301,12 +321,13 @@ mod tests {
         buf.chain_planes[c_start + 0]   = f16::from_f32(0.5).to_bits();
         buf.chain_planes[c_start + 100] = f16::from_f32(1.0).to_bits();
         buf.chain_planes[c_start + 361] = f16::from_f32(0.25).to_bits();  // plane 1
-        buf.outcomes[slot] = 1.0;
-        buf.weights[slot]  = f16::from_f32(1.0).to_bits();
+        buf.outcomes[slot]       = 1.0;
+        buf.weights[slot]        = f16::from_f32(1.0).to_bits();
+        buf.is_full_search[slot] = 0;  // quick-search — test the non-default value
         buf.head = 1;
         buf.size = 1;
 
-        let path = temp_dir().join("aux_v4_roundtrip.hexb");
+        let path = temp_dir().join("aux_v5_roundtrip.hexb");
         buf.save_to_path(path.to_str().unwrap()).unwrap();
 
         let mut buf2 = ReplayBuffer::new(8);
@@ -324,6 +345,7 @@ mod tests {
         assert_eq!(buf2.chain_planes[c2 + 0],   f16::from_f32(0.5).to_bits());
         assert_eq!(buf2.chain_planes[c2 + 100], f16::from_f32(1.0).to_bits());
         assert_eq!(buf2.chain_planes[c2 + 361], f16::from_f32(0.25).to_bits());
+        assert_eq!(buf2.is_full_search[0], 0, "is_full_search must survive round-trip");
 
         let _ = std::fs::remove_file(path);
     }

@@ -45,6 +45,9 @@ class RecentBuffer:
         # so unset slots decode to harmless aux targets if ever sampled.
         self._ownership    = np.ones((capacity, aux_stride),  dtype=np.uint8)
         self._winning_line = np.zeros((capacity, aux_stride), dtype=np.uint8)
+        # Default is_full_search=1 so an unpopulated slot is never mistakenly
+        # masked out of policy loss if ever sampled before being written.
+        self._is_full_search = np.ones(capacity, dtype=np.uint8)
         self._head = 0
         self._size = 0
         self._lock = threading.Lock()
@@ -62,11 +65,14 @@ class RecentBuffer:
         outcome:      float = 0.0,
         ownership:    Optional[np.ndarray] = None,
         winning_line: Optional[np.ndarray] = None,
+        is_full_search: bool = True,
     ) -> None:
         """Add one position; overwrites oldest when full.
 
         chain_planes, ownership, and winning_line default to None which leaves
-        the pre-allocated zeros/ones in place.
+        the pre-allocated zeros/ones in place. ``is_full_search`` defaults to
+        True so callers that haven't been updated keep old semantics (all rows
+        contribute to policy loss).
         """
         with self._lock:
             self._states[self._head] = state
@@ -75,17 +81,19 @@ class RecentBuffer:
             self._outcomes[self._head]     = float(outcome)
             self._ownership[self._head]    = ownership    if ownership    is not None else 1  # "empty"
             self._winning_line[self._head] = winning_line if winning_line is not None else 0
+            self._is_full_search[self._head] = 1 if is_full_search else 0
             self._head = (self._head + 1) % self.capacity
             self._size = min(self._size + 1, self.capacity)
 
     def sample(
         self, n: int
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Uniform random sample of ``n`` positions from the stored recent window.
 
-        Returns 6-tuple (states, chain_planes, policies, outcomes, ownership, winning_line).
-        ownership and winning_line are returned as (n, aux_stride) u8 — caller
-        reshapes to (n, 19, 19) if needed.
+        Returns 7-tuple (states, chain_planes, policies, outcomes, ownership,
+        winning_line, is_full_search). ownership and winning_line are returned
+        as (n, aux_stride) u8 — caller reshapes to (n, 19, 19) if needed.
+        is_full_search is (n,) u8.
 
         NumPy fancy indexing (`arr[index_array]`) returns a newly-allocated
         array that is NOT aliased to the underlying ring buffer storage —
@@ -112,4 +120,5 @@ class RecentBuffer:
                 self._outcomes[indices],
                 self._ownership[indices],
                 self._winning_line[indices],
+                self._is_full_search[indices],
             )

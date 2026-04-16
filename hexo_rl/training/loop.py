@@ -157,6 +157,11 @@ def run_training_loop(
         from hexo_rl.utils.config import load_config as _load_config
         eval_ext_config = _load_config(str(eval_yaml_path))
         ep_cfg = eval_ext_config.get("eval_pipeline", {})
+        # Allow the main training config to override eval.yaml's enabled flag
+        # (test configs disable the pipeline to skip best_model.pt load).
+        main_ep_override = config.get("eval_pipeline", {})
+        if "enabled" in main_ep_override:
+            ep_cfg = {**ep_cfg, "enabled": bool(main_ep_override["enabled"])}
         if ep_cfg.get("enabled", False):
             eval_pipeline = EvalPipeline(eval_ext_config, device, run_id=run_id)
             _eval_interval_cfg = int(ep_cfg.get("eval_interval", 1000))
@@ -371,7 +376,8 @@ def run_training_loop(
                     w_pre  = compute_pretrained_weight(train_step)
                     n_pre  = max(1, int(math.ceil(batch_size * w_pre)))
                     n_self = batch_size - n_pre
-                    states, chain_planes, policies, outcomes, ownership, winning_line = assemble_mixed_batch(
+                    (states, chain_planes, policies, outcomes,
+                     ownership, winning_line, is_full_search) = assemble_mixed_batch(
                         pretrained_buffer, buffer, recent_buffer,
                         n_pre, n_self, batch_size, batch_size_cfg,
                         recency_weight, bufs, train_step,
@@ -380,6 +386,7 @@ def run_training_loop(
                         states, policies, outcomes,
                         chain_planes=chain_planes,
                         ownership_targets=ownership, threat_targets=winning_line,
+                        is_full_search=is_full_search,
                         n_pretrain=n_pre,
                     )
                 else:
