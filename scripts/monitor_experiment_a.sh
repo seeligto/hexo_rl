@@ -107,6 +107,8 @@ value_loss  = get(latest_train, "value_loss")  or get(latest_losses, "value_loss
 threat_loss = get(latest_losses, "threat_loss")
 chain_loss  = get(latest_losses, "chain_loss")
 grad_norm   = get(latest_losses, "grad_norm")
+mcts_depth  = get(latest_train, "mcts_mean_depth")
+mcts_conc   = get(latest_train, "mcts_root_concentration")
 
 # --- Comparison row ---
 ref_step = nearest_ref(current_step)
@@ -128,6 +130,9 @@ print(f"Step: {current_step}  |  Games: {games if games is not None else 'N/A'} 
 chain_str = fmt(chain_loss, ".5f") if chain_loss is not None else "N/A"
 print(f"Losses:  policy={fmt(policy_loss)}  value={fmt(value_loss)}  "
       f"threat={fmt(threat_loss)}  chain={chain_str}  grad_norm={fmt(grad_norm)}")
+depth_str = fmt(mcts_depth, ".2f") if mcts_depth is not None else "N/A"
+conc_str  = fmt(mcts_conc,  ".3f") if mcts_conc  is not None else "N/A"
+print(f"MCTS:    mean_depth={depth_str}  root_concentration={conc_str}")
 
 draw_str  = f"{draw_pct:.1f}%" if draw_pct is not None else "N/A"
 x_str     = pct(x_winrate)

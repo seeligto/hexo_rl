@@ -687,6 +687,8 @@ def _emit_training_events(
         batch_fill_pct=round(pool.batch_fill_pct, 1),
         inf_forward_count=pool._inference_server._forward_count,
         inf_total_requests=pool._inference_server._total_requests,
+        mcts_mean_depth=round(float(getattr(_runner, "mcts_mean_depth", 0.0)), 3),
+        mcts_root_concentration=round(float(getattr(_runner, "mcts_mean_root_concentration", 0.0)), 3),
     )
 
 
