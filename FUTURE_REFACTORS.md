@@ -7,6 +7,16 @@
 - **Renamed `hexo_rl/logging/` → `hexo_rl/monitoring/`** — `setup.py` → `configure.py`
 - **Removed `Rust` prefix from exported types** — `ReplayBuffer`, `SelfPlayRunner`, `InferenceBatcher`
 
+## Completed on 2026-04-13 (§86 / §87 / §88 / §93)
+
+- **Split `engine/src/replay_buffer/` into `mod` + `storage` + `push` + `sample` + `persist` + `sym_tables`** (§86). Old `sampling.rs` merged into `sample.rs`.
+- **Split `engine/src/game_runner.rs` into `game_runner/{mod, worker_loop, gumbel_search, records}.rs`** (§86).
+- **Gated `pyo3/extension-module` behind a Cargo feature** so `cargo test` links libpython without `--no-default-features` (§87).
+- **Split `scripts/train.py` into `scripts/train.py` + `hexo_rl/training/{loop, batch_assembly, aux_decode}.py`** (§88). `scripts/train.py` dropped from 1,132 to 319 lines.
+- **Extracted the 12-fold augmentation kernel into Rust (`apply_symmetry_24plane`)** and exposed via PyO3 (`engine.apply_symmetry`, `apply_symmetries_batch`, `compute_chain_planes`) (§93 C8/C10). Pretrain augmentation now routes through the Rust kernel; Python `_apply_hex_sym` deleted.
+- **Deleted dead `TensorBuffer` and `SelfPlayWorker.play_game()`** (§93 C9.5) after confirming no live path referenced them.
+- **Consolidated hex coordinate helpers into `hexo_rl/utils/coordinates.py`** (`flat_to_axial`, `axial_to_flat`, `cell_to_flat`, `axial_distance`) (§93 C11).
+
 ---
 
 ## Deferred — do when the time is right
@@ -16,8 +26,8 @@
 These files have grown past a comfortable single-responsibility boundary.
 Split only when their scope makes navigation painful — not before.
 
-- `dashboard.py` (root) — Flask server, SocketIO logic, and route handlers all in one file.
-  Split into `dashboard/server.py`, `dashboard/routes.py`, `dashboard/socket_handlers.py`.
+- `hexo_rl/monitoring/web_dashboard.py` — Flask server, SocketIO logic, and route handlers in one file.
+  Split into `web_dashboard/server.py`, `web_dashboard/routes.py`, `web_dashboard/socket_handlers.py` if it keeps growing. Root-level `dashboard.py` no longer exists.
 - `hexo_rl/bootstrap/corpus_analysis.py` — analysis logic mixed with CLI argument parsing.
   Split analysis functions into a library module; keep CLI as thin wrapper.
 - `hexo_rl/bootstrap/pretrain.py` — dataset loading, training loop, and validation in one file.
@@ -25,29 +35,27 @@ Split only when their scope makes navigation painful — not before.
 - `scripts/benchmark.py` — MCTS bench, inference bench, buffer bench, and worker bench all inline.
   Extract each benchmark into `hexo_rl/benchmark/` submodules; keep `scripts/benchmark.py` as dispatcher.
 
-### Deduplicate Python / Rust symmetry tables
+### Deduplicate Python / Rust symmetry tables (partial)
 
-The 12-fold hex augmentation symmetry tables are defined in both:
+State+chain augmentation scatter: **dedup complete** per §93 C8/C10.
+`engine.apply_symmetries_batch` is the single source of truth; pretrain
+calls it via `make_augmented_collate`. `tests/test_pretrain_aug.py`
+(F1) and `tests/test_chain_plane_rust_parity.py` (F2) guard the
+dedup against drift.
 
-- Rust: `engine/src/replay_buffer/sym_tables.rs`
-- Python: `hexo_rl/selfplay/policy_projection.py` (for policy mapping back to global coords)
+Remaining duplicate: **policy-projection** symmetry table in
+`hexo_rl/selfplay/policy_projection.py` (maps local-window policy logits
+to global axial coordinates). Different concern from state scatter —
+does not currently share a table with Rust. Long-term: generate both
+from a single codegen script if a third consumer appears; not urgent.
 
-They should agree by construction, but divergence is possible. Long-term: generate both from
-a single source-of-truth (a codegen script or a shared constant file). Not urgent while both
-tables are small and tested independently.
+### Game replay storage — DONE
 
-### Game replay storage
-
-Currently self-play games are processed into (state, policy, outcome) triples and discarded.
-No full game record is kept. This blocks:
-
-- Post-hoc review of interesting games
-- Opening book construction from self-play data
-- Debugging value estimation errors on specific positions
-
-Add an optional `game_replay_path` config key. When set, serialize full move sequences
-(not tensors) to a compact binary format (e.g. one u16 per move × game length) alongside
-the replay buffer. Keep this off by default — storage cost is low but I/O adds overhead.
+Full game records are persisted to `runs/<run_id>/games/<game_id>.json`
+via `hexo_rl/monitoring/game_recorder.py`. Viewable at
+`/viewer/game/<id>` with threat overlay, MCTS visit heatmap, and
+scrubber. In-memory index capped at `viewer_max_memory_games: 50`;
+disk rotated to `viewer_max_disk_games: 1000` oldest-first.
 
 ### Corpus pipeline metadata
 
