@@ -7,7 +7,7 @@
 | Q5 | Supervised→self-play transition schedule | Exponential decay 0.8→0.1 over 1M steps; growing buffer + mixed data streams | `a6e5a79` |
 | Q6 | Sequential vs compound action space | Sequential confirmed — 2 MCTS plies per turn, Q-flip at turn boundaries, Dirichlet skipped at intermediate plies | `5be7df7`, `9b899e9` |
 | Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically | — |
-| Q13 | Chain-length planes as input tensor augmentation | 6 chain-length planes added at indices 18..23 (3 hex axes × 2 players, /6-normalised). Includes chain_head auxiliary regression loss (smooth-L1 on `input[:, 18:24]` target). Atomic 18→24 plane break with fresh pretrain v3. See sprint log §92. | `feat/q13-chain-planes` branch |
+| Q13 | Chain-length planes as input tensor augmentation | §92 landed 6 chain-length planes as input (18→24). §97 reverted: chain planes moved out of the input tensor into a dedicated `ReplayBuffer.chain_planes` sub-buffer. Input is back to 18 planes. `chain_head` aux regression loss retained (smooth-L1, `aux_chain_weight: 1.0`); target reads from the chain sub-buffer, NOT from `input[:, 18:24]`. See sprint log §92, §93, §97. | §97 on master |
 | Q19 | Threat-head BCE class imbalance | `pos_weight = 59.0` (theoretical `(1−p)/p` at ~1.6% positive fraction) added to threat-head `BCEWithLogitsLoss`. Landed atomically with Q13 as a fresh bootstrap. `scripts/compute_threat_pos_weight.py` recomputes empirically from a replay buffer when available. §91 C4 monitoring hook stays in place. | `feat/q13-chain-planes` branch §92 |
 
 ## Active (Phase 4.0)
@@ -18,7 +18,7 @@
 | Q2 | Value aggregation: min vs mean vs attention | Train 4 variants, compare value MSE + win rate | ~4 GPU-days | HIGH — unblocked now Q17 resolved |
 | Q3 | Optimal K (number of cluster windows) | Ablation K=2,3,4,6 | ~6 GPU-days | MEDIUM |
 | Q8 | First-player advantage in value training | Measure P1 win rate by Elo band; adjust value targets if >60% | ~2 GPU-days | MEDIUM |
-| Q25 | Worker throughput variance: 24-plane NN latency + IQR spike | Re-bench n=10 after cooling; profile InferenceBatcher queue + live NN latency | ~1 hr diagnosis | **HIGH — blocks sustained self-play** |
+| ~~Q25~~ | ~~Worker throughput variance: 24-plane NN latency + IQR spike~~ | **RESOLVED 2026-04-16** — §97 reverted the 24-plane payload. The 24-plane-specific variance hypothesis is moot. A separate post-§97 bench artifact (warmup-design 0-position windows) is tracked in §98 action items, not as a research question. | done | resolved |
 
 **Q17 (2026-04-09, RESOLVED 2026-04-10):** The P3 overnight run
 collapsed to deterministic carbon-copy self-play games between
@@ -148,9 +148,13 @@ of eval metrics only. Defer until after Phase 4.0 exit criteria are met.
 
 ### Q13 — Chain Length Planes as Input Tensor Augmentation
 
-**RESOLVED 2026-04-14** — sprint log §92. See the "Resolved" table at the
-top of this file. Kept inline here for historical context on the pre-
-landing design discussion.
+**RESOLVED 2026-04-14 (§92), REVISED 2026-04-16 (§97).** The initial
+landing fed 6 chain planes into the NN input (18→24); §97 then moved
+them into a dedicated `ReplayBuffer.chain_planes` sub-buffer. The input
+is back to 18 planes. The `chain_head` aux loss is retained but reads
+its target from the sub-buffer, not from an input slice. See the
+"Resolved" table at the top of this file. Kept inline below for
+historical context on the pre-landing design discussion.
 
 **Priority (historical):** MEDIUM (Phase 4.5 architectural decision)
 **Source:** KrakenBot chain head analysis, threat theory framework, 2026-04-06,
@@ -323,8 +327,11 @@ C4 warning hook), §92 (Q13 + Q13-aux + Q19 atomic landing).
 
 **Priority:** LOW (post-baseline research question)
 **Source:** Sprint log §92; literature review §"Recommended encoding specification"
-**Status:** parked after Q13 landing, to be revisited once the 24-plane
-baseline is established.
+**Status:** parked. Baseline is now the 18-plane layout with chain as an
+aux-only target read from the replay-buffer chain sub-buffer (§97);
+revisit once that baseline stabilises. Option (a) "store in replay
+buffer" mentioned in the proposal below was effectively taken for the
+same-window variant at §97 — the wider-window variant remains open.
 
 The current Q13-aux target (`chain_head` smooth-L1 loss) is a slice of
 the INPUT tensor — `states[:, 18:24]`. This gives the network
@@ -371,11 +378,17 @@ post-Q13). Measure realistic Q13 uplift before trying the harder variant.
 
 ---
 
-### Q25 — Worker throughput variance: 24-plane payload + NN latency in live worker path [HIGH]
+### Q25 — Worker throughput variance: 24-plane payload + NN latency in live worker path [RESOLVED §97]
 
-**Priority:** HIGH — blocks sustained self-play launch
+**Priority:** resolved (was HIGH)
 **Source:** `make bench` 2026-04-15 (post-Q13, chore/post-q13-cleanup)
-**Status:** OPEN — do NOT launch sustained self-play until IQR is diagnosed
+**Status:** RESOLVED 2026-04-16 by §97. The 24-plane payload that drove
+the IQR explosion no longer exists — chain planes moved out of the NN
+input. A separate, unrelated bench artifact (warmup-design 0-position
+windows) persists on the 18-plane build and is tracked in §98 action
+items, not as a research question.
+
+The historical diagnosis below is kept for forensics.
 
 **Observed.** n=5 bench on the current 24-plane build:
 
