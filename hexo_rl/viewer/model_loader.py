@@ -89,7 +89,7 @@ def load_model(
 
     net = HexTacToeNet(
         board_size=hparams.get("board_size", 19),
-        in_channels=hparams.get("in_channels", 24),
+        in_channels=hparams.get("in_channels", 18),
         filters=hparams.get("filters", 128),
         res_blocks=hparams.get("res_blocks", 12),
         se_reduction_ratio=hparams.get("se_reduction_ratio", 4),

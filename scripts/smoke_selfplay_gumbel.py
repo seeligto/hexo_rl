@@ -52,7 +52,7 @@ def main() -> int:
     mcfg = cfg.get("model", {})
     model = HexTacToeNet(
         board_size=int(mcfg.get("board_size", cfg.get("board_size", 19))),
-        in_channels=24,
+        in_channels=int(mcfg.get("in_channels", cfg.get("in_channels", 18))),
         filters=int(mcfg.get("filters", 128)),
         res_blocks=int(mcfg.get("res_blocks", 12)),
     ).to(device)

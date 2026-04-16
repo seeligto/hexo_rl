@@ -94,7 +94,7 @@ def run_training_loop(
     board_size         = int(trainer.config.get("board_size",         19))
     res_blocks         = int(trainer.config.get("res_blocks",         12))
     filters            = int(trainer.config.get("filters",            128))
-    in_channels        = int(trainer.config.get("in_channels",        24))
+    in_channels        = int(trainer.config.get("in_channels",        18))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
 
     _torch_compile_enabled = (
@@ -371,13 +371,14 @@ def run_training_loop(
                     w_pre  = compute_pretrained_weight(train_step)
                     n_pre  = max(1, int(math.ceil(batch_size * w_pre)))
                     n_self = batch_size - n_pre
-                    states, policies, outcomes, ownership, winning_line = assemble_mixed_batch(
+                    states, chain_planes, policies, outcomes, ownership, winning_line = assemble_mixed_batch(
                         pretrained_buffer, buffer, recent_buffer,
                         n_pre, n_self, batch_size, batch_size_cfg,
                         recency_weight, bufs, train_step,
                     )
                     loss_info = trainer.train_step_from_tensors(
                         states, policies, outcomes,
+                        chain_planes=chain_planes,
                         ownership_targets=ownership, threat_targets=winning_line,
                         n_pretrain=n_pre,
                     )

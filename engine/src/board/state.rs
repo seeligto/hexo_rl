@@ -407,11 +407,14 @@ impl Board {
     ///                 /6.0-normalized to [0, 1]. Layout
     ///                 [a0_cur, a0_opp, a1_cur, a1_opp, a2_cur, a2_opp].
     ///
-    /// `out` must have length `24 * TOTAL_CELLS`. Callers are responsible for
+    /// `out` must have length `18 * TOTAL_CELLS`. Callers are responsible for
     /// zero-initializing the buffer before calling; this function writes to
-    /// planes 0, 8, 16, 17, 18..23 but leaves 1..7 and 9..15 untouched so the
+    /// planes 0, 8, 16, 17 but leaves 1..7 and 9..15 untouched so the
     /// caller can rely on history planes being whatever the buffer started as
     /// (the existing self-play path zero-inits the pooled buffers).
+    /// Chain-length planes (formerly 18..23) are computed separately via
+    /// `encode_chain_planes` and stored in the replay buffer's dedicated
+    /// chain sub-buffer.
     pub fn encode_state_to_buffer(
         &self,
         planes_2: &[f32], // The 2-plane [my, opp] view
@@ -435,31 +438,25 @@ impl Board {
         for i in 0..TOTAL_CELLS {
             out[17 * TOTAL_CELLS + i] = ply_val;
         }
-        // Planes 18..23: Q13 chain-length planes. Write normalized [0, 1].
-        let cur_mask = &planes_2[0..TOTAL_CELLS];
-        let opp_mask = &planes_2[TOTAL_CELLS..2 * TOTAL_CELLS];
-        encode_chain_planes(cur_mask, opp_mask, &mut out[18 * TOTAL_CELLS..24 * TOTAL_CELLS]);
         debug_assert_eq!(
             out.len(),
-            24 * TOTAL_CELLS,
-            "encode_state_to_buffer output length mismatch — expected 24 planes × {} cells",
+            18 * TOTAL_CELLS,
+            "encode_state_to_buffer output length mismatch — expected 18 planes × {} cells",
             TOTAL_CELLS
         );
     }
 
     /// Public alias for `encode_state_to_buffer`. Preserved as a named entry
-    /// point for callers outside this module. Was formerly
-    /// `encode_18_planes_to_buffer` when the layout was 18 planes; renamed
-    /// to reflect the post-Q13 24-plane (18 history + 6 chain-length) layout.
+    /// point for callers outside this module.
     #[inline]
     pub fn encode_planes_to_buffer(&self, planes_2: &[f32], out: &mut [f32]) {
         self.encode_state_to_buffer(planes_2, out)
     }
 
-    /// Encode the board as a flat f32 array of length `24 * TOTAL_CELLS`
-    /// representing shape [24, BOARD_SIZE, BOARD_SIZE] (18 history+scalar planes +
-    /// 6 Q13 chain-length planes).
+    /// Encode the board as a flat f32 array of length `18 * TOTAL_CELLS`
+    /// representing shape [18, BOARD_SIZE, BOARD_SIZE] (18 history+scalar planes).
     ///
+    /// Chain-length planes are computed separately via `encode_chain_planes`.
     /// Stones outside the current 19×19 window are silently omitted.
     pub fn to_planes(&self) -> Vec<f32> {
         let mut planes_2 = vec![0.0f32; 2 * TOTAL_CELLS];
@@ -478,7 +475,7 @@ impl Board {
             }
         }
 
-        let mut out = vec![0.0f32; 24 * TOTAL_CELLS];
+        let mut out = vec![0.0f32; 18 * TOTAL_CELLS];
         self.encode_state_to_buffer(&planes_2, &mut out);
         out
     }

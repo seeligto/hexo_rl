@@ -121,7 +121,7 @@ def benchmark_inference(model: "HexTacToeNet", n_positions: int = 20_000,
                         warmup_sec: float = 3.0) -> Dict[str, Any]:
     """NN throughput in batched evaluation mode."""
     device = next(model.parameters()).device
-    dummy_local = torch.zeros(batch_size, 24, 19, 19, dtype=torch.float32, device=device)
+    dummy_local = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
     model.eval()
     n_batches = n_positions // batch_size
     total_positions = n_batches * batch_size
@@ -155,7 +155,7 @@ def benchmark_inference_latency(model: "HexTacToeNet", n_runs: int = 5,
                                 warmup_sec: float = 2.0) -> Dict[str, Any]:
     """Single-position latency (worst case for synchronous MCTS)."""
     device = next(model.parameters()).device
-    dummy_local = torch.zeros(1, 24, 19, 19, dtype=torch.float32, device=device)
+    dummy_local = torch.zeros(1, 18, 19, 19, dtype=torch.float32, device=device)
     model.eval()
 
     def single_inference():
@@ -206,13 +206,14 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
     aug_iters = 500
     push_iters = 10_000
 
-    dummy_state = np.zeros((24, 19, 19), dtype=np.float16)
+    dummy_state = np.zeros((18, 19, 19), dtype=np.float16)
+    dummy_chain = np.zeros((6, 19, 19), dtype=np.float16)
     dummy_policy = np.ones(362, dtype=np.float32) / 362.0
     dummy_own = np.ones(361, dtype=np.uint8)
     dummy_wl  = np.zeros(361, dtype=np.uint8)
 
     # Warm-up push
-    warmup(lambda: buffer.push(dummy_state, dummy_policy, 0.0, dummy_own, dummy_wl), warmup_sec)
+    warmup(lambda: buffer.push(dummy_state, dummy_chain, dummy_policy, 0.0, dummy_own, dummy_wl), warmup_sec)
 
     # Warm-up sample
     warmup(lambda: buffer.sample_batch(BATCH, False), warmup_sec)
@@ -225,7 +226,7 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
         # Push throughput
         t0 = time.perf_counter()
         for _ in range(push_iters):
-            buffer.push(dummy_state, dummy_policy, 0.0, dummy_own, dummy_wl)
+            buffer.push(dummy_state, dummy_chain, dummy_policy, 0.0, dummy_own, dummy_wl)
         elapsed_push = time.perf_counter() - t0
         push_rates.append(push_iters / elapsed_push)
 
@@ -267,7 +268,7 @@ def benchmark_gpu_utilisation(model: "HexTacToeNet", n_runs: int = 5) -> Dict[st
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         model.eval()
-        dummy_local = torch.zeros(64, 24, 19, 19, dtype=torch.float32, device=device)
+        dummy_local = torch.zeros(64, 18, 19, 19, dtype=torch.float32, device=device)
 
         util_runs: list[float] = []
         vram_runs: list[float] = []
@@ -366,7 +367,7 @@ def benchmark_worker_pool(
     # applied in training/loop.py (commit 79fd415).
     if device.type == "cuda":
         _board_size = int(getattr(model, "board_size", 19))
-        _in_ch = int(config.get("in_channels", config.get("model", {}).get("in_channels", 24)))
+        _in_ch = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
         with torch.no_grad():
             with torch.autocast(device_type="cuda"):
                 _dummy = torch.zeros(1, _in_ch, _board_size, _board_size, device=device)
@@ -739,7 +740,7 @@ def main() -> None:
     model_cfg = config.get("model", {})
     model = HexTacToeNet(
         board_size=int(model_cfg.get("board_size", config.get("board_size", 19))),
-        in_channels=24,
+        in_channels=int(model_cfg.get("in_channels", config.get("in_channels", 18))),
         filters=int(model_cfg.get("filters", config.get("filters", 128))),
         res_blocks=int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
     ).to(device)
@@ -751,9 +752,11 @@ def main() -> None:
     buffer = ReplayBuffer(capacity=100_000)
     _bm_own = np.ones(361, dtype=np.uint8)
     _bm_wl  = np.zeros(361, dtype=np.uint8)
+    _bm_chain = np.zeros((6, 19, 19), dtype=np.float16)
     for _ in range(10_000):
         buffer.push(
-            np.zeros((24, 19, 19), dtype=np.float16),
+            np.zeros((18, 19, 19), dtype=np.float16),
+            _bm_chain,
             np.ones(362, dtype=np.float32) / 362,
             0.0,
             _bm_own, _bm_wl,

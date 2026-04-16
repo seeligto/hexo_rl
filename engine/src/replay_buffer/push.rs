@@ -16,10 +16,11 @@ use super::sym_tables::*;
 use super::ReplayBuffer;
 
 impl ReplayBuffer {
-    /// Store a single `(state, policy, outcome, ownership, winning_line)` sample.
+    /// Store a single `(state, chain_planes, policy, outcome, ownership, winning_line)` sample.
     ///
     /// Args:
-    ///     state:        float16 numpy array of shape (24, 19, 19)
+    ///     state:        float16 numpy array of shape (18, 19, 19)
+    ///     chain_planes: float16 numpy array of shape (6, 19, 19) — Q13 chain-length planes
     ///     policy:       float32 numpy array of shape (362,)
     ///     outcome:      scalar float32  (−1 / 0 / +1)
     ///     ownership:    uint8 numpy array of shape (361,)  encoding {0=P2, 1=empty, 2=P1}
@@ -27,13 +28,12 @@ impl ReplayBuffer {
     ///     game_id:      position tag for correlation guard (from `next_game_id()`); default −1
     ///     game_length:  total compound moves in the originating game; default 0 (= weight 1.0)
     ///
-    /// State layout: 18 AlphaZero-style history+scalar planes + 6 Q13 chain-length
-    /// planes ([a0_cur, a0_opp, a1_cur, a1_opp, a2_cur, a2_opp]). Both aux targets
-    /// MUST be projected to the same window centre as `state` (per-row cluster
+    /// All aux targets MUST be projected to the same window centre as `state` (per-row cluster
     /// centre, not the game-end bbox centroid).
     pub(crate) fn push_impl(
         &mut self,
         state:        PyReadonlyArray3<f16>,
+        chain_planes: PyReadonlyArray3<f16>,
         policy:       PyReadonlyArray1<f32>,
         outcome:      f32,
         ownership:    PyReadonlyArray1<u8>,
@@ -43,6 +43,8 @@ impl ReplayBuffer {
     ) -> PyResult<()> {
         let state_slice  = state.as_slice()
             .map_err(|e| PyValueError::new_err(format!("state not contiguous: {e}")))?;
+        let chain_slice  = chain_planes.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("chain_planes not contiguous: {e}")))?;
         let policy_slice = policy.as_slice()
             .map_err(|e| PyValueError::new_err(format!("policy not contiguous: {e}")))?;
         let own_slice = ownership.as_slice()
@@ -52,7 +54,12 @@ impl ReplayBuffer {
 
         if state_slice.len() != STATE_STRIDE {
             return Err(PyValueError::new_err(format!(
-                "state must have {} elements (24×19×19), got {}", STATE_STRIDE, state_slice.len()
+                "state must have {} elements (18×19×19), got {}", STATE_STRIDE, state_slice.len()
+            )));
+        }
+        if chain_slice.len() != CHAIN_STRIDE {
+            return Err(PyValueError::new_err(format!(
+                "chain_planes must have {} elements (6×19×19), got {}", CHAIN_STRIDE, chain_slice.len()
             )));
         }
         if policy_slice.len() != POLICY_STRIDE {
@@ -85,6 +92,12 @@ impl ReplayBuffer {
             *d = s.to_bits();
         }
 
+        // Copy chain planes as raw f16 bits.
+        let dst_chain = &mut self.chain_planes[slot * CHAIN_STRIDE..(slot + 1) * CHAIN_STRIDE];
+        for (d, s) in dst_chain.iter_mut().zip(chain_slice.iter()) {
+            *d = s.to_bits();
+        }
+
         self.policies[slot * POLICY_STRIDE..(slot + 1) * POLICY_STRIDE]
             .copy_from_slice(policy_slice);
         self.outcomes[slot] = outcome;
@@ -114,7 +127,8 @@ impl ReplayBuffer {
     /// Handles ring-buffer wrap-around correctly.
     ///
     /// Args:
-    ///     states:        float16 numpy array of shape (T, 24, 19, 19)
+    ///     states:        float16 numpy array of shape (T, 18, 19, 19)
+    ///     chain_planes:  float16 numpy array of shape (T, 6, 19, 19)
     ///     policies:      float32 numpy array of shape (T, 362)
     ///     outcomes:      float32 numpy array of shape (T,)
     ///     ownership:     uint8   numpy array of shape (T, 361)  per-row {0=P2, 1=empty, 2=P1}
@@ -124,6 +138,7 @@ impl ReplayBuffer {
     pub(crate) fn push_game_impl(
         &mut self,
         states:       PyReadonlyArray4<f16>,
+        chain_planes: PyReadonlyArray4<f16>,
         policies:     PyReadonlyArray2<f32>,
         outcomes:     PyReadonlyArray1<f32>,
         ownership:    PyReadonlyArray2<u8>,
@@ -133,6 +148,8 @@ impl ReplayBuffer {
     ) -> PyResult<()> {
         let states_s   = states.as_slice()
             .map_err(|e| PyValueError::new_err(format!("states not contiguous: {e}")))?;
+        let chain_s    = chain_planes.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("chain_planes not contiguous: {e}")))?;
         let policies_s = policies.as_slice()
             .map_err(|e| PyValueError::new_err(format!("policies not contiguous: {e}")))?;
         let outcomes_s = outcomes.as_slice()
@@ -146,6 +163,7 @@ impl ReplayBuffer {
         if t == 0 { return Ok(()); }
 
         if states_s.len()   != t * STATE_STRIDE  { return Err(PyValueError::new_err("states shape mismatch")); }
+        if chain_s.len()    != t * CHAIN_STRIDE  { return Err(PyValueError::new_err("chain_planes shape mismatch")); }
         if policies_s.len() != t * POLICY_STRIDE { return Err(PyValueError::new_err("policies shape mismatch")); }
         if own_s.len() != t * AUX_STRIDE { return Err(PyValueError::new_err("ownership shape mismatch")); }
         if wl_s.len()  != t * AUX_STRIDE { return Err(PyValueError::new_err("winning_line shape mismatch")); }
@@ -174,6 +192,13 @@ impl ReplayBuffer {
             let src_state = &states_s[i * STATE_STRIDE..(i + 1) * STATE_STRIDE];
             let dst_state = &mut self.states[slot * STATE_STRIDE..(slot + 1) * STATE_STRIDE];
             for (d, s) in dst_state.iter_mut().zip(src_state.iter()) {
+                *d = s.to_bits();
+            }
+
+            // Chain planes: convert f16 → u16 bits
+            let src_chain = &chain_s[i * CHAIN_STRIDE..(i + 1) * CHAIN_STRIDE];
+            let dst_chain = &mut self.chain_planes[slot * CHAIN_STRIDE..(slot + 1) * CHAIN_STRIDE];
+            for (d, s) in dst_chain.iter_mut().zip(src_chain.iter()) {
                 *d = s.to_bits();
             }
 
@@ -216,6 +241,8 @@ impl ReplayBuffer {
         // Zero state/policy/aux (content doesn't matter for weight tests).
         let s_start = slot * STATE_STRIDE;
         self.states[s_start..s_start + STATE_STRIDE].fill(0);
+        let c_start = slot * CHAIN_STRIDE;
+        self.chain_planes[c_start..c_start + CHAIN_STRIDE].fill(0);
         let p_start = slot * POLICY_STRIDE;
         self.policies[p_start..p_start + POLICY_STRIDE].fill(0.0);
         let a_start = slot * AUX_STRIDE;
@@ -344,6 +371,7 @@ mod tests {
 
         // Run 1000 sample-batch-equivalents in pure Rust (no GIL).
         let mut dst_state = vec![0u16; N_PLANES * N_CELLS];
+        let mut dst_chain = vec![0u16; N_CHAIN_PLANES * N_CELLS];
         let mut dst_pol   = vec![0.0f32; N_ACTIONS];
         let mut dst_own   = vec![1u8;  AUX_STRIDE];
         let mut dst_wl    = vec![0u8;  AUX_STRIDE];
@@ -353,20 +381,23 @@ mod tests {
             let sym_idx = rng.random_range(0..N_SYMS);
 
             dst_state.fill(0);
+            dst_chain.fill(0);
             dst_pol.fill(0.0);
             dst_own.fill(1);
             dst_wl.fill(0);
 
             let s = idx * STATE_STRIDE;
+            let c = idx * CHAIN_STRIDE;
             let p = idx * POLICY_STRIDE;
             let a = idx * AUX_STRIDE;
             ReplayBuffer::apply_sym(
                 sym_idx,
                 &buf.states[s..s + STATE_STRIDE],
+                &buf.chain_planes[c..c + CHAIN_STRIDE],
                 &buf.policies[p..p + POLICY_STRIDE],
                 &buf.ownership[a..a + AUX_STRIDE],
                 &buf.winning_line[a..a + AUX_STRIDE],
-                &mut dst_state, &mut dst_pol, &mut dst_own, &mut dst_wl,
+                &mut dst_state, &mut dst_chain, &mut dst_pol, &mut dst_own, &mut dst_wl,
                 &buf.sym_tables,
             );
 

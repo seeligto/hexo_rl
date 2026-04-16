@@ -150,7 +150,7 @@ def load_model(
 
     model = HexTacToeNet(
         board_size=int(hparams.get("board_size", 19)),
-        in_channels=int(hparams.get("in_channels", 24)),
+        in_channels=int(hparams.get("in_channels", 18)),
         filters=int(hparams.get("filters", 128)),
         res_blocks=int(hparams.get("res_blocks", 12)),
         se_reduction_ratio=int(hparams.get("se_reduction_ratio", 4)),
@@ -172,10 +172,10 @@ def load_positions(npz_path: Path) -> Dict:
     if missing:
         raise ValueError(f"NPZ missing required arrays: {missing}")
 
-    states = data["states"]  # (N, 24, 19, 19) float16
-    if states.ndim != 4 or states.shape[1:] != (24, BOARD_SIZE, BOARD_SIZE):
+    states = data["states"]  # (N, 18, 19, 19) float16
+    if states.ndim != 4 or states.shape[1:] != (18, BOARD_SIZE, BOARD_SIZE):
         raise ValueError(
-            f"states shape {states.shape} — expected (N, 24, {BOARD_SIZE}, {BOARD_SIZE})"
+            f"states shape {states.shape} — expected (N, 18, {BOARD_SIZE}, {BOARD_SIZE})"
         )
 
     # Load cell indices verbatim from NPZ — never regenerate at load time.

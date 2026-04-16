@@ -96,7 +96,7 @@ class HexTacToeNet(nn.Module):
     def __init__(
         self,
         board_size: int = 19,
-        in_channels: int = 24,
+        in_channels: int = 18,
         filters: int = 128,
         res_blocks: int = 12,
         se_reduction_ratio: int = 4,

@@ -10,7 +10,7 @@ import pytest
 
 from engine import ReplayBuffer
 
-CHANNELS   = 24
+CHANNELS   = 18
 BOARD_SIZE = 19
 N_ACTIONS  = BOARD_SIZE * BOARD_SIZE + 1   # 362
 AUX_STRIDE = BOARD_SIZE * BOARD_SIZE       # 361
@@ -18,6 +18,10 @@ AUX_STRIDE = BOARD_SIZE * BOARD_SIZE       # 361
 
 def _make_state() -> np.ndarray:
     return np.zeros((CHANNELS, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+
+
+def _make_chain() -> np.ndarray:
+    return np.zeros((6, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
 
 
 def _make_policy() -> np.ndarray:
@@ -35,8 +39,8 @@ def test_aux_target_round_trip_no_augment():
     wl = np.zeros(AUX_STRIDE, dtype=np.uint8)
     wl[[10, 11, 12, 13, 14, 15]] = 1                     # six winning-line cells
 
-    buf.push(_make_state(), _make_policy(), 1.0, own, wl)
-    _s, _p, _o, own_b, wl_b = buf.sample_batch(1, augment=False)
+    buf.push(_make_state(), _make_chain(), _make_policy(), 1.0, own, wl)
+    _s, _chain, _p, _o, own_b, wl_b = buf.sample_batch(1, augment=False)
 
     assert own_b.shape == (1, BOARD_SIZE, BOARD_SIZE)
     assert wl_b.shape  == (1, BOARD_SIZE, BOARD_SIZE)
@@ -63,12 +67,12 @@ def test_aux_target_augmentation_equivariance():
     wl = np.zeros(AUX_STRIDE, dtype=np.uint8)
     wl[centre_idxs] = 1
 
-    buf.push(_make_state(), _make_policy(), 1.0, own, wl)
+    buf.push(_make_state(), _make_chain(), _make_policy(), 1.0, own, wl)
 
     # Sample many times under augment=True; with one row in the buffer, every
     # call exercises a fresh random symmetry on the same row.
     for _ in range(50):
-        _s, _p, _o, own_b, wl_b = buf.sample_batch(1, augment=True)
+        _s, _chain, _p, _o, own_b, wl_b = buf.sample_batch(1, augment=True)
         # Cell count is sym-invariant (centre cells stay in-window).
         assert int((own_b == 2).sum()) == 6, "ownership P1 count must survive augmentation"
         assert int(wl_b.sum()) == 6,         "winning_line count must survive augmentation"

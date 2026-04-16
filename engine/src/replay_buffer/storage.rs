@@ -55,6 +55,8 @@ impl ReplayBuffer {
         if self.size == self.capacity && self.head != 0 {
             self.states[..self.capacity * STATE_STRIDE]
                 .rotate_left(self.head * STATE_STRIDE);
+            self.chain_planes[..self.capacity * CHAIN_STRIDE]
+                .rotate_left(self.head * CHAIN_STRIDE);
             self.policies[..self.capacity * POLICY_STRIDE]
                 .rotate_left(self.head * POLICY_STRIDE);
             self.outcomes[..self.capacity]
@@ -72,6 +74,7 @@ impl ReplayBuffer {
         // Extend storage to new capacity.
         let default_w = f16::from_f32(1.0).to_bits();
         self.states.resize(new_capacity * STATE_STRIDE, 0u16);
+        self.chain_planes.resize(new_capacity * CHAIN_STRIDE, 0u16);
         self.policies.resize(new_capacity * POLICY_STRIDE, 0.0f32);
         self.outcomes.resize(new_capacity, 0.0f32);
         self.game_ids.resize(new_capacity, -1i64);

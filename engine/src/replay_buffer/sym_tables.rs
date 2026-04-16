@@ -4,16 +4,17 @@ use half::f16;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-pub const N_PLANES:  usize = 24;
-/// Number of stone-history + scalar planes (AlphaZero-style): 8 cur + 8 opp + 2 scalar.
-/// Under augmentation they scatter via coordinate permutation only.
-pub const N_HISTORY_PLANES: usize = 18;
-/// Number of Q13 chain-length planes: 3 hex axes × 2 players. Scatter via
-/// coordinate permutation AND axis-plane remap (see `apply_symmetry_24plane`).
-#[allow(dead_code)]
+/// Number of input state planes: 8 cur-history + 8 opp-history + 2 scalar = 18.
+/// Chain-length planes moved to a separate sub-buffer (output-only auxiliary).
+pub const N_PLANES:  usize = 18;
+/// Alias for N_PLANES — all 18 planes scatter via coordinate permutation only.
+pub const N_HISTORY_PLANES: usize = N_PLANES;
+/// Number of Q13 chain-length planes: 3 hex axes × 2 players.
+/// Stored separately from the state buffer; scatter via coordinate permutation
+/// AND axis-plane remap (see `apply_chain_symmetry`).
 pub const N_CHAIN_PLANES: usize = 6;
-/// First plane index of the chain-length block within the 24-plane layout.
-pub const CHAIN_PLANE_OFFSET: usize = N_HISTORY_PLANES;
+/// Offset used when building the chain_src_lookup (chains are their own buffer).
+pub const CHAIN_PLANE_OFFSET: usize = 0;
 pub const BOARD_H:   usize = 19;
 pub const BOARD_W:   usize = 19;
 pub const N_CELLS:   usize = BOARD_H * BOARD_W; // 361
@@ -21,8 +22,10 @@ pub const N_ACTIONS: usize = N_CELLS + 1;       // 362 (pass move at index 361)
 pub const N_SYMS:    usize = 12;
 const HALF: i32 = 9; // (BOARD_H - 1) / 2
 
-// State stride per buffer slot (f16 bits)
+// State stride per buffer slot (f16 bits) — 18 planes × 361 cells = 6498
 pub const STATE_STRIDE:  usize = N_PLANES * N_CELLS;
+/// Chain-plane stride per buffer slot (f16 bits) — 6 planes × 361 cells = 2166
+pub const CHAIN_STRIDE:  usize = N_CHAIN_PLANES * N_CELLS;
 pub const POLICY_STRIDE: usize = N_ACTIONS;
 /// Auxiliary spatial target stride per buffer slot (single 19×19 plane, u8 lanes).
 /// Used by ownership and winning_line targets — both share the same shape and
@@ -112,16 +115,19 @@ fn same_axis(a: (i32, i32), b: (i32, i32)) -> bool {
 /// iterates `(axis_perm[s][dst_j], player_off)` pairs for planes 18..23.
 pub struct SymTables {
     pub scatter:   [Vec<(u16, u16)>; N_SYMS],
-    /// Per-symmetry axis-plane remap for Q13 chain-length planes 18..23.
+    /// Per-symmetry axis-plane remap for Q13 chain-length planes.
     /// `axis_perm[s][dst_j] = src_i` means destination plane for axis j reads
     /// from source plane for axis i under symmetry s.
     pub axis_perm: [[usize; 3]; N_SYMS],
-    /// Fused per-symmetry source-plane lookup for all N_PLANES planes.
-    /// `src_plane_lookup[s][dst_p] = src_p`: under symmetry `s`, destination
-    /// plane `dst_p` reads its cells from source plane `src_p`.
-    /// Planes 0..N_HISTORY_PLANES are identity (src_p == dst_p).
-    /// Planes N_HISTORY_PLANES..N_PLANES carry the axis-perm remap.
+    /// Fused per-symmetry source-plane lookup for the 18 state planes.
+    /// All 18 planes are pure coordinate scatter (identity plane mapping),
+    /// so `src_plane_lookup[s][dst_p] == dst_p` for all s and p.
+    /// Kept as a lookup array so `apply_symmetry_state` can share the same
+    /// loop structure as the former 24-plane kernel.
     pub src_plane_lookup: [[usize; N_PLANES]; N_SYMS],
+    /// Fused per-symmetry source-plane lookup for the 6 chain-length planes.
+    /// `chain_src_lookup[s][dst_p] = src_p`: coordinate + axis-plane remap.
+    pub chain_src_lookup: [[usize; N_CHAIN_PLANES]; N_SYMS],
 }
 
 impl SymTables {
@@ -216,24 +222,30 @@ impl SymTables {
             axis_perm[sym_idx] = perm;
         }
 
-        // Build fused src_plane_lookup from the completed scatter + axis_perm tables.
+        // Build fused src_plane_lookup for the 18 state planes.
+        // All state planes are pure coordinate scatter — identity plane mapping.
         let mut src_plane_lookup = [[0usize; N_PLANES]; N_SYMS];
         for s in 0..N_SYMS {
-            // Planes 0..N_HISTORY_PLANES: identity (pure coordinate scatter, no plane remap).
-            for p in 0..N_HISTORY_PLANES {
+            for p in 0..N_PLANES {
                 src_plane_lookup[s][p] = p;
             }
-            // Planes N_HISTORY_PLANES..N_PLANES: axis-perm remap.
+        }
+
+        // Build chain_src_lookup for the 6 chain-length planes.
+        // Each destination axis j reads from source axis i (axis-perm remap),
+        // with current/opponent interleaved: plane index = 2*axis + player_off.
+        let mut chain_src_lookup = [[0usize; N_CHAIN_PLANES]; N_SYMS];
+        for s in 0..N_SYMS {
             for dst_axis in 0..3 {
                 let src_axis = axis_perm[s][dst_axis];
                 for player_off in 0..2 {
-                    src_plane_lookup[s][CHAIN_PLANE_OFFSET + 2 * dst_axis + player_off] =
+                    chain_src_lookup[s][2 * dst_axis + player_off] =
                         CHAIN_PLANE_OFFSET + 2 * src_axis + player_off;
                 }
             }
         }
 
-        SymTables { scatter, axis_perm, src_plane_lookup }
+        SymTables { scatter, axis_perm, src_plane_lookup, chain_src_lookup }
     }
 }
 

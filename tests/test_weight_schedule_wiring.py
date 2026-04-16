@@ -8,22 +8,23 @@ def test_weight_schedule_changes_sampling():
     buf = ReplayBuffer(capacity=200)
     buf.set_weight_schedule([10, 25], [0.15, 0.50], 1.0)
 
-    state = np.zeros((24, 19, 19), dtype=np.float16)
+    state  = np.zeros((18, 19, 19), dtype=np.float16)
+    chain  = np.zeros((6, 19, 19),  dtype=np.float16)
     policy = np.zeros(362, dtype=np.float32)
     own = np.ones(361, dtype=np.uint8)
     wl  = np.zeros(361, dtype=np.uint8)
 
     # Push 100 short-game positions (game_length=5, weight=0.15)
     for _ in range(100):
-        buf.push(state, policy, 1.0, own, wl, game_length=5)
+        buf.push(state, chain, policy, 1.0, own, wl, game_length=5)
     # Push 100 long-game positions (game_length=60, weight=1.0)
     for _ in range(100):
-        buf.push(state, policy, -1.0, own, wl, game_length=60)
+        buf.push(state, chain, policy, -1.0, own, wl, game_length=60)
 
     # Sample 2000 times and count by outcome
     short_count = sum(
         1 for _ in range(2000)
-        for (_, _, o, _, _) in [buf.sample_batch(1, False)]
+        for (_, _, _, o, _, _) in [buf.sample_batch(1, False)]
         if float(o[0]) > 0
     )
     # Short-game positions (weight 0.15) should appear much less than long (weight 1.0)
@@ -34,13 +35,14 @@ def test_push_game_length_assigns_different_weights():
     buf = ReplayBuffer(capacity=10)
     buf.set_weight_schedule([10, 25], [0.15, 0.50], 1.0)
 
-    state = np.zeros((24, 19, 19), dtype=np.float16)
+    state  = np.zeros((18, 19, 19), dtype=np.float16)
+    chain  = np.zeros((6, 19, 19),  dtype=np.float16)
     policy = np.zeros(362, dtype=np.float32)
     own = np.ones(361, dtype=np.uint8)
     wl  = np.zeros(361, dtype=np.uint8)
 
-    buf.push(state, policy, 1.0, own, wl, game_length=5)
-    buf.push(state, policy, 1.0, own, wl, game_length=60)
+    buf.push(state, chain, policy, 1.0, own, wl, game_length=5)
+    buf.push(state, chain, policy, 1.0, own, wl, game_length=60)
 
     _, _, hist = buf.get_buffer_stats()
     # game_length=5 → weight 0.15 → bucket 0; game_length=60 → weight 1.0 → bucket 2
