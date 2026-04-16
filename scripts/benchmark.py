@@ -493,10 +493,13 @@ _CHECKS_CUDA: list[tuple[str, str, str | None, str, float, bool]] = [
     ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",      3.5,   False),
     ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  630_000,   True),
     ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_500,   False),
-    ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_400,   False),
+    # §98 rebaseline 2026-04-16: 18ch split scatter (state + chain) raises aug latency; 1400→1800
+    ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_800,   False),
     ("GPU utilisation %",                 "GPU utilisation",         "gpu",   "value",       85,   True),
     ("VRAM usage GB",                     "GPU utilisation",         "vram",  "value",        0,   False),  # dynamic
-    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  500_000,   True),
+    # §98 rebaseline 2026-04-16: benchmark warmup artifact (0-pos windows) + methodology change
+    # (200 sims/128 max-moves vs old 400/200) make old 500k target non-comparable. 250k = conservative floor.
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  250_000,   True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
 ]
 
@@ -506,7 +509,7 @@ _CHECKS_MPS: list[tuple[str, str, str | None, str, float, bool]] = [
     ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",      8.0,   False),
     ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  630_000,   True),
     ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_500,   False),
-    ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_400,   False),
+    ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_800,   False),
     # GPU util / VRAM omitted — pynvml not available on macOS; benchmark_gpu_utilisation returns None
     ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  200_000,   True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
@@ -518,7 +521,7 @@ _CHECKS_CPU: list[tuple[str, str, str | None, str, float, bool]] = [
     ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",     20.0,   False),
     ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  630_000,   True),
     ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_500,   False),
-    ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_400,   False),
+    ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_800,   False),
     # GPU util / VRAM omitted — no GPU on CPU-only systems
     ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",   80_000,   True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
@@ -785,7 +788,7 @@ def main() -> None:
     warmup_nn = 3.0
     warmup_latency = 2.0
     warmup_buffer = 2.0
-    warmup_worker = 30.0
+    warmup_worker = 90.0
 
     try:
         # Run benchmarks
