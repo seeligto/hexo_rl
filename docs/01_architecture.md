@@ -111,6 +111,14 @@ Input:
 Backbone (Single ResNet-12 Trunk):
 
 - Processes the `K` tensors as a single batch (effective batch size = batch_size * K) through a 19×19 ResNet-12 with Squeeze-and-Excitation (SE) blocks on every residual block (reduction ratio 4).
+- Normalization: **GroupNorm(8, filters)** throughout (§99 replaced
+  BatchNorm; per-sample statistics make batch=1 MCTS leaf eval
+  numerically identical to batch=256 training). Stem is Conv → GN →
+  ReLU; each residual block is Conv → GN → ReLU → Conv → GN → SE →
+  (+ skip) → ReLU (post-activation).
+- Policy and opp_reply heads deliberately skip normalization — GN(8, 2)
+  fails because `num_groups > num_channels`, and the normalization has
+  negligible effect at 2 channels before flatten→linear.
 
 Value Aggregation (Pooling):
 
@@ -124,9 +132,25 @@ Policy Mapping:
 
 Value head (dual-pooling):
   Global avg pool(128) → (128,) | Global max pool(128) → (128,)
-  Concat → (256,) → FC(256 → 256) → ReLU → FC(256 → 1) → Tanh
+  Concat → (256,) → Linear(2C → 256) → ReLU → Linear(256 → 1) → Tanh
   Output: scalar in [-1, 1] — win probability for current player.
   Loss uses pre-tanh logit: BCE(sigmoid(v_logit), (z+1)/2) where z ∈ {-1, +1}.
+
+Auxiliary heads (training only — never called from InferenceServer,
+evaluator, or MCTS):
+
+- `opp_reply`: mirror of policy head. Cross-entropy, weight 0.15.
+- `ownership`: Conv(1×1) → tanh → (1, 19, 19). Spatial MSE, weight 0.1.
+  Predicts per-cell stone affiliation (+1 P1, −1 P2, 0 empty).
+  Target decoded u8→f32 from the replay buffer `ownership` column
+  (0=P2, 1=empty, 2=P1).
+- `threat`: Conv(1×1) → raw logit → (1, 19, 19). BCEWithLogitsLoss with
+  `pos_weight = 59.0` (Q19; winning_line labels are ~1.6% positive).
+  Target is the replay buffer `winning_line` column.
+- `chain_head`: Conv(1×1) → (6, 19, 19). Smooth-L1 (Huber), weight
+  `aux_chain_weight: 1.0`. Target is the replay buffer `chain_planes`
+  sub-buffer (§97 moved chain from input to separate sub-buffer;
+  target is NOT the input slice despite the §92 historical framing).
 
 ### Training details
 
@@ -137,11 +161,15 @@ Value head (dual-pooling):
   - `L_policy = -sum(π_mcts · log π_net)` when `completed_q_values: false` (cross-entropy with visit distribution)
   - `L_value = BCE(sigmoid(v_logit), (z+1)/2)` where z ∈ {-1, +1} is the game outcome
   - `L_opp_reply = -sum(π_opp · log π_opp_net)` (auxiliary opponent reply prediction, weight 0.15)
-- Policy targets: Gumbel completed Q-values (Danihelka et al., ICLR 2022 §4). After
-  MCTS search, the training target is `π_improved = softmax(log π + σ(completedQ))` where
-  `σ = (c_visit + max_N) · c_scale · completedQ`. Unvisited legal actions receive a mixed
-  value estimate `v_mix`. Computed in Rust (`MCTSTree::get_improved_policy`). Config:
-  `completed_q_values: true`, `c_visit: 50`, `c_scale: 1.0` in `selfplay.yaml`.
+- Policy targets: Gumbel completed Q-values (Danihelka et al., ICLR 2022 §4).
+  After MCTS search, the training target is
+  `π_improved = softmax(log π + σ(completedQ))` where
+  `σ = (c_visit + max_N) · c_scale · completedQ`. Unvisited legal actions
+  receive a mixed value estimate `v_mix`. Computed in Rust
+  (`MCTSTree::get_improved_policy`). **Opt-in via `--variant gumbel_full`
+  or `--variant gumbel_targets`** (§67). Base `selfplay.yaml` has
+  `completed_q_values: false` so the training loss defaults to CE against
+  visit counts. `c_visit: 50`, `c_scale: 1.0` when enabled.
 - Mixed precision: `torch.cuda.amp.autocast()` + `GradScaler`
 - `torch.compile()`: currently disabled (CUDA graph thread-local conflict with shared inference+training model). Re-enable when architecture allows separate models.
 - Batch size: 256 (fits in RTX 3070 8GB with FP16)
@@ -202,13 +230,20 @@ def get_temperature(ply: int, phase: str) -> float:
 
 ### Dirichlet noise
 
-Applied to the root node's prior during self-play (not evaluation):
+Applied to the root node's prior during self-play (not evaluation). Since
+§73 (commit `71d7e6e`) the live training path is the Rust
+implementation in `engine/src/game_runner.rs`, applied on both PUCT and
+Gumbel branches at every turn-boundary root expansion, with the
+intermediate-ply skip (`moves_remaining == 1 && ply > 0`). The Python
+implementation at `hexo_rl/selfplay/worker.py` is used only by
+eval-adjacent code paths (benchmark_mcts, our_model_bot, evaluator).
 
 ```python
 noise = np.random.dirichlet([dirichlet_alpha] * n_legal_moves)
 P_root = (1 - epsilon) * P_net + epsilon * noise
 # dirichlet_alpha = 0.3 (typical for board games)
 # epsilon = 0.25
+# dirichlet_enabled: true gates the Rust call; set false for noise-free eval.
 ```
 
 ---
@@ -246,18 +281,24 @@ The hot-path concurrency is Rust-owned (not Python multiprocessing). Python is r
 The replay buffer lives entirely in Rust and is exposed to Python via PyO3.
 The Python `ReplayBuffer` class has been deleted; `ReplayBuffer` (from `engine`) is the only buffer.
 
-**Storage layout:**
+**Storage layout (HEXB v5 on-disk format, in-memory columns):**
 
-- `states: Vec<u16>` — f16 bits stored as u16, logical shape `[capacity, 18, 19, 19]`
-- `policies: Vec<f32>` — logical shape `[capacity, 362]`
-- `outcomes: Vec<f32>` — logical shape `[capacity]`
-- `game_ids: Vec<i64>` — multi-window correlation guard (prevents clusters from the same game appearing in one training batch)
+- `states: Vec<u16>` — f16 bits as u16, logical shape `[capacity, 18, 19, 19]` (§97 — chain planes moved out).
+- `chain_planes: Vec<u16>` — f16 bits as u16, logical shape `[capacity, 6, 19, 19]` (Q13 chain-length planes; 3 axes × 2 players, /6-normalised).
+- `policies: Vec<f32>` — logical shape `[capacity, 362]`.
+- `outcomes: Vec<f32>` — logical shape `[capacity]`.
+- `game_ids: Vec<i64>` — multi-window correlation guard (prevents clusters from the same game appearing in one training batch).
+- `weights: Vec<u16>` — f16 sampling weight per position (length-weight schedule, §3 sprint log).
+- `ownership: Vec<u8>` — per-row aux target (0=P2, 1=empty, 2=P1), logical shape `[capacity, 361]` (§85).
+- `winning_line: Vec<u8>` — per-row aux target (binary mask of the 6 winning cells, all-zero on draw), logical shape `[capacity, 361]` (§85).
+- `is_full_search: Vec<u8>` — move-level playout cap flag (1 = full-search, policy loss applies; 0 = quick-search, value/chain/aux only) (§100).
 
 **Key properties:**
 
-- **12-fold hex augmentation** — applied lazily at sample time. 6 rotations × 2 (with/without reflection). Scatter-copy via pre-computed symmetry tables. Cells that fall outside the 19×19 window after transformation are left as zero.
+- **12-fold hex augmentation** — applied lazily at sample time. 6 rotations × 2 (with/without reflection). Scatter-copy via pre-computed symmetry tables. Cells that fall outside the 19×19 window after transformation are left as zero. Chain planes undergo a second scatter pass that additionally remaps the 3 hex-axis planes per symmetry (`axis_perm` table — §92 C2, §97 retained).
 - **Zero-copy transfer** — Python receives numpy arrays directly via PyO3's `IntoPyArray`; no type conversion in the hot path.
 - **f16-as-u16 storage** — states are stored as raw u16 (f16 bit-pattern) to halve VRAM footprint; reinterpreted as f16 on PyO3 return.
+- **Persistence** — HEXB v5 (`engine/src/replay_buffer/persist.rs`). v4 buffers load with `is_full_search = 1` default for legacy compatibility.
 
 **Python API:**
 
@@ -265,12 +306,13 @@ The Python `ReplayBuffer` class has been deleted; `ReplayBuffer` (from `engine`)
 from engine import ReplayBuffer
 
 buf = ReplayBuffer(capacity=500_000)
-buf.push(state_f16, policy_f32, outcome_f32, game_id)        # single position
-buf.push_game(states_f16, policies_f32, outcomes_f32, game_id)  # full game batch
-states, policies, outcomes = buf.sample_batch(batch_size, augment=True)
+# Core push signature also accepts chain_planes, ownership, winning_line,
+# is_full_search — see engine bindings for the full tuple.
+states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search = \
+    buf.sample_batch(batch_size, augment=True)
 ```
 
-**Performance (2026-03-31 baseline, 16 workers):** 219,444 pushes/sec; 936 µs/batch (3.66 µs/pos, augmented, batch=256); raw (no augmentation) 951 µs/batch.
+**Performance (2026-04-16 baseline, 16 workers, `make bench`):** 779,402 pushes/sec; 1,299 µs/batch augmented (batch=256); 1,271 µs/batch raw. See `CLAUDE.md` § Benchmarks for the authoritative current table.
 
 ---
 
@@ -315,25 +357,41 @@ Shaped rewards are returned alongside the terminal reward signal.
 
 ## 6. Evaluation
 
-### Elo ladder
+### Graduation gate + Bradley-Terry ladder
 
-Every `eval_interval` training steps, the new checkpoint plays a round-robin tournament against:
+Every `eval_interval` training steps (default 2500; `training.yaml`
+precedence over `eval.yaml`), `EvalPipeline` runs a set of opponents
+gated by per-opponent `stride` (§101). Current cadence:
 
-- Previous checkpoint
-- Best checkpoint so far
-- SealBot engine (time_limit=0.03)
-- SealBot engine (time_limit=0.10)
+- `best_checkpoint` (current anchor) — `stride: 1`, 200 games. The
+  graduation gate.
+- `sealbot` — `stride: 4` (every 10000 steps), 50 games.
+  `think_time_strong: 0.5` for gating, `think_time_fast: 0.1` for
+  corpus generation. External benchmark, expensive.
+- `random` — `stride: 1`, 20 games. Sanity floor.
 
-The **win rate vs SealBot** is the primary community benchmark. Target: ≥ 55% win rate over 100 games = meaningfully stronger than the current best public bot.
+Ratings are computed via Bradley-Terry MLE (not incremental Elo) over
+all recorded pairwise matches, persisted in `reports/eval/results.db`
+(SQLite, WAL mode). scipy L-BFGS-B with 1e-6 L2 regularisation prevents
+divergence on perfect records. Plot at `reports/eval/ratings_curve.png`.
 
-Elo is updated using standard formula:
+**Graduation rule (§101, §101.a):**
 
 ```
-E_a = 1 / (1 + 10^((R_b - R_a) / 400))
-R_a_new = R_a + K * (S_a - E_a)   # K=32, S_a ∈ {0, 0.5, 1}
+graduated = (wr_best >= promotion_winrate) AND (ci_lo > 0.5)
 ```
 
-If the new checkpoint beats the current best by a win rate ≥ 55%, it becomes the new best and self-play workers load its weights.
+`promotion_winrate: 0.55`; `require_ci_above_half: true` by default
+(drops false-promotion rate at n=200 from ~9% to <1% under null). At
+p=0.55, binomial 95% CI half-width at n=200 is ~±7%. Graduation
+promotes `best_model ← eval_model` (the snapshot that was actually
+scored, not drifted `trainer.model`) and syncs `inf_model ← best_model`.
+Self-play workers consume `inf_model` weights — monotonic data quality
+between graduations.
+
+The **win rate vs SealBot** remains the primary community benchmark
+(target ≥ 55% over 100 games). SealBot is a ratings anchor, not the
+graduation gate.
 
 ### Human-comparable benchmarks
 
