@@ -3255,3 +3255,8 @@ clear error. Retrain from scratch.
 
 **Benchmark:** Run `make bench` after this change. GN pool size differs from BN;
 verify NN inference (batch=64) and latency (batch=1) targets still pass.
+
+Note: benchmark methodology changed (§98 action items resolved) — runtime is
+now 2 min with 90 s warmup, making results more representative of real
+throughput. Prior baselines (1 min / shorter warmup) are not directly
+comparable. Fresh `make bench` on this branch establishes the new GN baseline.
