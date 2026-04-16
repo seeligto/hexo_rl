@@ -26,22 +26,32 @@ For per-day narrative see `docs/07_PHASE4_SPRINT_LOG_BACKUP.md`.
 **Files:** `hexo_rl/model/network.py`, `hexo_rl/training/trainer.py`,
 `configs/model.yaml`, `configs/training.yaml`
 
+> Forward pointers — current authority:
+>
+> - Input grew 18 → 24 at §92 and reverted 24 → 18 at §97. Current: **18 planes**; chain is an aux target in a separate replay-buffer sub-buffer.
+> - BatchNorm replaced with **GroupNorm(8)** throughout at §99. Pre-§99 checkpoints refuse to load.
+> - Selective policy loss (§100) gates policy / opp_reply losses on `is_full_search`; value / chain / ownership / threat losses apply to all rows.
+
 ```
 Input:  (18, 19, 19) tensor
         Planes 0-15: 8 history steps × 2 players (cluster snapshots)
         Planes 16-17: metadata (moves_remaining, turn parity)
 
 Trunk:  12 × ResidualBlock(128ch, SE reduction=4)
-        Pre-activation (BN → ReLU → Conv)
+        Post-activation: Conv → GN(8) → ReLU → Conv → GN(8) → SE → + skip → ReLU
         SE blocks: squeeze C→C/4→C per block (~1% FLOPs, validated in KataGo/LCZero)
 
 Heads:
-  Policy:      Conv(128→2, 1×1) → BN → ReLU → FC → log_softmax
-  Value:       GlobalAvgPool + GlobalMaxPool → concat(256) → FC(256) → FC(1) → tanh
+  Policy:      Conv(128→2, 1×1) → ReLU → Flatten → Linear → log_softmax
+               (no GN — 2 channels; selective loss gates via full_search_mask, §100)
+  Value:       GlobalAvgPool + GlobalMaxPool → concat(256) → Linear(256) → Linear(1) → tanh
                Loss: BCE(sigmoid(v_logit), (z+1)/2)   ← logit path avoids atanh NaN
-  Opp reply:   Mirror of policy, training only, weight=0.15
-  Ownership:   Conv(1×1) → tanh → (19×19), weight=0.1, spatial MSE
-  Threat:      Conv(1×1) → raw logit → (19×19), weight=0.1, BCE with logits
+  Opp reply:   Mirror of policy, training only, weight=0.15 (gated by full_search_mask per §100)
+  Ownership:   Conv(1×1) → tanh → (19×19), weight=0.1, spatial MSE (target from replay-buffer u8 column, §85)
+  Threat:      Conv(1×1) → raw logit → (19×19), weight=0.1, BCEWithLogitsLoss
+               with pos_weight = threat_pos_weight (default 59.0, Q19; §92)
+  Chain:       Conv(1×1) → (6, 19, 19), smooth-L1, weight aux_chain_weight (default 1.0);
+               target read from ReplayBuffer chain_planes sub-buffer post-§97 (not input slice)
   Uncertainty: trunk → AdaptiveAvgPool → Linear → Softplus → σ² (DISABLED — see below)
 
 Output: (log_policy, value, value_logit)  ← always 3-tuple for all inference callers
@@ -72,8 +82,18 @@ The benchmark delta for torch.compile was only +3% worker throughput — not wor
 
 ## 2. MCTS
 
-**Files:** `engine/src/mcts/`, `engine/src/board/`, `engine/src/game_runner.rs`,
+**Files:** `engine/src/mcts/`, `engine/src/board/`, `engine/src/game_runner/`,
 `configs/selfplay.yaml`, `hexo_rl/selfplay/pool.py`
+
+> Forward pointers — current authority:
+>
+> - `game_runner.rs` split into `game_runner/{mod,worker_loop,gumbel_search,records}.rs` at §86.
+> - Dirichlet root noise ported to Rust on both PUCT and Gumbel branches at §73 (commit `71d7e6e`). Resolves Q17.
+> - Gumbel flag moved from base config to named variants (`gumbel_full`, `gumbel_targets`, `baseline_puct`) at §67. Base `selfplay.yaml` has `gumbel_mcts: false, completed_q_values: false`.
+> - ZOI is post-search only — §36 text corrected at §77; tree still expands with the full radius-8 legal set at all depths.
+> - **Unresolved** docs-vs-code drift on temperature schedule — §70 C.1 showed §36 half-cosine-per-ply vs Rust quarter-cosine-per-compound-move differ. Code still wins; §36 description is aspirational until reconciled.
+> - `quiescence_fire_count` instrumentation added at §83.
+> - `get_improved_policy` is PUCT-tree-safe (§74.1) — training can use Gumbel completed-Q policy targets on PUCT-built trees.
 
 ### Legal Move Margin — corrected to hex-ball radius 8 (§26)
 
@@ -170,6 +190,15 @@ Config: `gumbel_mcts: false` (opt-in), `gumbel_m: 16`, `gumbel_explore_moves: 10
 
 **Files:** `engine/src/replay_buffer/`, `hexo_rl/training/recency_buffer.py`,
 `hexo_rl/selfplay/pool.py`, `configs/training.yaml`
+
+> Forward pointers — current authority:
+>
+> - Initial tier raised back to 250K at §79.
+> - Per-row aux target alignment (ownership + winning_line u8 columns) landed at §85.
+> - File split mod/storage/push/sample/persist/sym_tables at §86. `engine/src/replay_buffer/sample.rs` now holds `sample_batch` + `apply_sym` kernels (the old `sampling.rs` was merged in).
+> - `TensorBuffer` dead code deleted at §93 C9.5.
+> - HEXB version history: v1 (§46b) → v2 → v3 (§92, added `n_planes` header; chain inside state at 24ch) → v4 (§97, 18 state + 6 chain separate sub-buffer) → **v5 (§100, adds `is_full_search` per-row column)**. v4 buffers still load with `is_full_search=1` default.
+> - `chain_planes` augmentation scatter uses a dedicated `apply_chain_symmetry` pass with `axis_perm` remap (§92 C2, retained at §97).
 
 ### Growing Buffer + Mixed Streams (§2 + §40b + §79)
 
@@ -274,6 +303,13 @@ Pretrain validation: 100 greedy games vs RandomBot (was 5 — statistically mean
 
 **Files:** `hexo_rl/eval/`, `configs/eval.yaml`, `configs/training.yaml`
 
+> Forward pointers — current authority:
+>
+> - Eval determinism (temperature, per-game seeding, random opening plies) added at §80.
+> - Two-tier checkpoint retention (rolling + permanent eval steps) added at §84.
+> - `probe_threat_logits.py` committed as the step-5k kill criterion at §89. Revised at §91 (C1-C4: contrast + top-5 + top-10 + warning).
+> - Graduation gate landed at §101 + §101.a: per-opponent `stride`, CI guard (`ci_lo > 0.5`), 200-game gating, anchor semantics (`inf_model ← best_model`). Supersedes the "50 games vs best" framing below.
+
 - Bradley-Terry MLE (not incremental Elo). scipy L-BFGS-B with L2 regularisation 1e-6 to prevent divergence on perfect records.
 - SQLite results store (WAL mode). Full BT recomputation from all historical pairwise data after each eval round.
 - Gating rule: new checkpoint promoted if win_rate ≥ 0.55 over 50 games vs best checkpoint.
@@ -285,6 +321,14 @@ Pretrain validation: 100 greedy games vs RandomBot (was 5 — statistically mean
 ---
 
 ## 6. Training Loop & Stability
+
+> Forward pointers — current authority:
+>
+> - Scheduler bug fixed at §67; `total_steps` and `eta_min` are REQUIRED in config now — no silent 50K/1e-5 fallback. `decay_steps / total_steps ≈ 0.10` rule of thumb post exp A/C.
+> - Ownership + threat losses emitted in `training_step` events at §82; chain added at §93 C14.
+> - Training stack split into `scripts/train.py` + `hexo_rl/training/{loop, batch_assembly, aux_decode}.py` at §88.
+> - FP16 NaN guard (§47) no longer resets BN running stats — §99 replaced BN with GN (no running stats to poison). Retains the `torch.special.entr` + log-clamp fixes.
+> - Selective policy loss landed at §100: `full_search_mask` gates policy / opp_reply; value / chain / ownership / threat apply to all rows. Mutex with game-level `fast_prob` enforced at pool init.
 
 ### FP16 NaN Guard (§47) — active fix, must not revert
 
@@ -329,6 +373,13 @@ Applied during draw-collapse fix session: `buffer_schedule` reduced (100K/250K/5
 ## 7. Monitoring & Dashboard
 
 **Files:** `hexo_rl/monitoring/`, `configs/monitoring.yaml`
+
+> Forward pointers — current authority:
+>
+> - `policy_entropy_pretrain` and `policy_entropy_selfplay` split added at §71.2. Collapse threshold 1.5 nats on selfplay stream.
+> - `/analyze` policy viewer added at §78 (checkpoint LRU cache, Blueprint, `HexCanvas` ES module).
+> - `loss_chain`, `loss_ownership`, `loss_threat` surfaced in both renderers at §93 C14.
+> - engineio disconnect `KeyError` swallowed via `threading.excepthook` filter at §91.
 
 ### Architecture
 
@@ -375,15 +426,16 @@ Depths are accumulated as ×1e6 fixed-point in AtomicU64 (first commit had trunc
 - Viewer URL: `http://localhost:5001/viewer` (during training).
 - Features: hex board canvas (pointy-top), threat overlay, MCTS visit heatmap (toggle), value sparkline, scrubber, play-against-model mode.
 
-## 9. Gumbel MCTS Activation & Training Restart (§66)
+## 9. Gumbel MCTS Activation & Training Restart (§66) — SUPERSEDED
 
-**Date:** 2026-04-07
-**Files:** `configs/selfplay.yaml`, `CLAUDE.md`, `docs/reviews/2026-04_architecture_review.md`
+**Date:** 2026-04-07 (superseded by §67 + §74 + §96)
 
-- **`gumbel_mcts: true` on desktop is intentional.** The desktop (Ryzen 7 3700x + RTX 3070) config has `gumbel_mcts: true` in `configs/selfplay.yaml` for the Phase 4.0 sustained run. Laptop and cloud configs remain `false` until benchmarked on those hosts. CLAUDE.md updated to document this per-host override rather than stating a single default.
-- **`completed_q_values` KL loss was silently disabled.** Architecture review (C1) found that `trainer.py:305` performs a nested-dict lookup (`self.config.get("selfplay", {}).get("completed_q_values", False)`) into the flattened `combined_config` dict, which always returns `False`. The intended KL policy loss was never active — all prior self-play training used CE loss instead. Fix is tracked as a separate commit (one-line change to flat key lookup).
-- **Phase 4.0 sustained run will restart from Phase 3C pretrained weights** after the C1 fix lands. The prior run (~18,750 steps) trained under CE loss instead of the intended KL loss, so those checkpoints are not valid for the Phase 4.0 exit criterion. Restart is intentional, not a regression.
-- **Benchmark baseline is pre-Gumbel.** The MCTS 55,478 sim/s figure was measured with `gumbel_mcts: false`. Gumbel Sequential Halving adds overhead at the root; re-bench is pending after the C1 fix and restart.
+Historical snapshot kept for forensics. Current state:
+
+- §67 replaced the single-flag approach with named variants (`gumbel_full`, `gumbel_targets`, `baseline_puct`) in `configs/variants/`. Base `configs/selfplay.yaml` has `gumbel_mcts: false, completed_q_values: false`.
+- §66 amendment + trainer.py:372 fix: `completed_q_values` is now read from the flat merged config. The C1 KL-loss-dead bug is resolved for all runs after the amendment.
+- §74.2 confirmed Gumbel vs PUCT pipeline parity on laptop (batch fill 100% both variants, worker throughput noise-overlapping). Desktop Gumbel behaviour confirmed via §96 exp E (in flight at time of writing).
+- §98 supersedes the benchmark baseline reference.
 
 ---
 
@@ -391,7 +443,10 @@ Depths are accumulated as ×1e6 fixed-point in AtomicU64 (first commit had trunc
 
 ## Current Authoritative Benchmark Baseline
 
-**2026-04-06, Ryzen 7 8845HS + RTX 4060 Laptop, bench.full n=5, 3s warm-up, LTO+native**
+**2026-04-06 headline rows; worker-throughput + buffer-sample-augmented
+rebaselined 2026-04-16 post-§97 18ch migration (§98). Ryzen 7 8845HS +
+RTX 4060 Laptop, bench.full n=5, 3s warm-up (90s post-§98 for worker),
+LTO+native.**
 
 | Metric | Baseline (median) | Target | IQR |
 |---|---|---|---|
@@ -400,10 +455,10 @@ Depths are accumulated as ×1e6 fixed-point in AtomicU64 (first commit had trunc
 | NN latency batch=1 | 1.59 ms | ≤ 3.5 ms | ±0.05 ms |
 | Replay buffer push | 762,130 pos/sec | ≥ 630,000 pos/sec | ±114,320 |
 | Buffer sample raw (batch=256) | 1,037 µs/batch | ≤ 1,500 µs | ±34 µs |
-| Buffer sample augmented (batch=256) | 940 µs/batch | ≤ 1,400 µs | ±62 µs |
+| Buffer sample augmented (batch=256) | 1,663 µs/batch (§98) | ≤ 1,800 µs (§98 rebaseline) | ±566 µs |
 | GPU utilisation | 100.0% | ≥ 85% | ±0 |
 | VRAM usage (process) | 0.05 GB / 8.0 GB | ≤ 6.4 GB | ±0 |
-| Worker throughput | 659,983 pos/hr | ≥ 625,000 pos/hr | ±56,835 |
+| Worker throughput | 364,176 pos/hr max observed (§98) | ≥ 250,000 pos/hr (§98 rebaseline) | methodology-shift + warmup artifact per §98 |
 | Batch fill % | 100.0% | ≥ 80% | ±0 |
 
 All 10 targets PASS. Methodology: median n=5, 3s warm-up, realistic MCTS workload (800 sims/move × 62 iterations with tree reset), CPU unpinned (n=5 median provides sufficient variance control).
@@ -415,6 +470,8 @@ All 10 targets PASS. Methodology: median n=5, 3s warm-up, realistic MCTS workloa
 | 2026-04-01 | MCTS workload was burst (50K sims in one tree) — exceeded L2 cache, inflated by boost clocks | Changed to 800 sims/move × 62 iter with tree reset; n=5 median | MCTS target dropped from 160K to realistic steady-state |
 | 2026-04-03 | benchmark.py read `config.get('res_blocks')` (top-level) instead of `config['model']['res_blocks']` — measured wrong (smaller) model; VRAM used pynvml global not process-specific; single pool per measurement window included cold-start | Fixed model config path; switched to `torch.cuda.max_memory_allocated()`; keep one warm pool across all measurement windows | Worker throughput baseline corrected 1.18M→735K; NN latency 1.52ms→2.90ms; targets recalibrated |
 | 2026-04-04 | Legal move radius corrected bbox+2→radius 8 (~9× branching factor expansion) + FPU behavioral tree shape change | Both are correct behaviour changes, not regressions | MCTS target rebaselined to ≥26K (85% of new ~31K median) |
+| 2026-04-09 | NVIDIA driver/boost-clock step-change dropped NN inference and worker throughput ~14% cold/hot/idle, not a code regression | Rebaseline after structured three-run investigation (§72). | NN inference target ≥ 8,500 → ≥ 8,250 pos/s; worker throughput ≥ 625k → ≥ 500k pos/hr |
+| 2026-04-16 | 18-channel migration (§97) — chain planes moved out of NN input into a separate replay-buffer sub-buffer. Buffer sample augmented now splits scatter (18 state + 6 chain). Worker benchmark hit a warmup-design artifact (0-position measurement windows). | Rebaseline per §98. Note: real training (GPU shared with gradient steps) delivers ~48k pos/hr at production sim counts — the bench measures self-play-only capacity at reduced sims. | Buffer aug ≤ 1,400 → ≤ 1,800 µs; worker throughput ≥ 500k → ≥ 250k pos/hr |
 
 ## Regressions & Reversions
 
@@ -425,6 +482,8 @@ All 10 targets PASS. Methodology: median n=5, 3s warm-up, realistic MCTS workloa
 | draw_reward: -0.1 | §24 | Raised to -0.5 at §40 | Not a revert — a correction. -0.1 assumed draws were minority; at 56% draw rate the signal was too weak to break equilibrium. |
 | torch.compile | §3 | Disabled §32 | Python 3.14 CUDA graph incompatibility cascade (TLS crash → Triton spike). |
 | uncertainty_weight: 0.05 | §33 | Set to 0.0 at §59 | Gaussian NLL diverges when σ²→clamp floor; total_loss spiked to ~394. |
+| Chain-length planes in NN input (18→24) | §92 | Reverted to 18 at §97 | Redundant — trunk already predicts chain as aux; KrakenBot achieves top play with 2-channel input. Chain retained as aux target in a separate replay-buffer sub-buffer. |
+| BatchNorm throughout trunk | pre-§99 | Replaced with GroupNorm(8) at §99 | BN running stats drift from live distribution during self-play; batch=1 MCTS leaf eval used stale stats. GN computes per-sample statistics. |
 
 ## Key Resolved Bugs
 
@@ -435,6 +494,8 @@ All 10 targets PASS. Methodology: median n=5, 3s warm-up, realistic MCTS workloa
 | §47 | FP16 0×-inf NaN cascade | NaN total_loss, BN poisoning, training halt | Log-clamp aux CE; `torch.special.entr()` for entropy; BN reset guard |
 | §58 | Three resume bugs | Pretrained stream silently disabled on resume; hidden loss spikes | Decouple buffer-restore from corpus-load; threshold 10K; log all loss terms |
 | §59 | TT memory leak (`new_game()` did not clear TT) | 28 GB RSS after 500 min | `self.transposition_table.clear()` in `new_game()` |
+| §73 | Dirichlet root noise never fired on Rust training path (unported at Phase 3.5 migration) | Self-play mode collapse — 16,880 steps of carbon-copy games (Q17) | Port `apply_dirichlet_to_root` into `engine/src/game_runner.rs` (commit `71d7e6e`), both PUCT and Gumbel branches, with intermediate-ply skip. |
+| §101 C1 | Promoted weights ≠ evaluated weights | Every graduation committed unvalidated weights as the new anchor | `eval_model` allocated once; promotion branch loads `best_model ← eval_model` (still holding the scored snapshot). |
 
 ---
 
@@ -442,13 +503,22 @@ All 10 targets PASS. Methodology: median n=5, 3s warm-up, realistic MCTS workloa
 
 | # | Question | Status |
 |---|---|---|
-| Q5 | Supervised→self-play transition schedule | ✅ Resolved — exponential decay 0.8→0.1 over 300K steps |
+| Q5 | Supervised→self-play transition schedule | ✅ Resolved — exponential decay 0.8→0.1 over `decay_steps` (20K post exp A/C) |
 | Q6 | Sequential vs compound action space | ✅ Resolved — sequential confirmed correct |
+| Q13 | Chain-length planes | ✅ Resolved §92 landing + §97 revision (aux sub-buffer, not input) |
+| Q17 | Self-play mode collapse | ✅ Resolved §73 — Dirichlet port to Rust training path |
+| Q19 | Threat-head BCE class imbalance | ✅ Resolved §92 — `threat_pos_weight = 59.0` |
+| Q25 | 24-plane worker throughput variance | ✅ Resolved §97 — 24-plane payload reverted |
 | Q2 | Value aggregation: min vs mean vs attention | 🔴 Active — HIGH priority, blocks Phase 4.5 |
 | Q3 | Optimal K (number of cluster windows) | 🟡 Active — MEDIUM priority |
 | Q8 | First-player advantage in value training | 🟡 Active — MEDIUM priority (corpus: 51.6% P1 overall, 57.1% in 1000-1200 Elo) |
 | Q9 | KL-divergence weighted buffer writes (KataGo) | 🟡 Active — MEDIUM priority. Prerequisite: Phase 4.5 baseline checkpoint. |
 | Q10 | Torus board encoding (imaseal experiment) | 🔵 Watch — incompatible with attention-anchored windowing; pending imaseal results |
+| Q14 | KrakenBot MinimaxBot as eval-ladder opponent | 🔵 Watch — blocked on submodule add |
+| Q15 | Corpus tactical quality filtering | 🔵 Watch |
+| Q16 | leaf_batch_size round-trip hypothesis | 🔵 Watch — blocked on Phase 4.5 baseline |
+| Q18 | NN forward latency ceiling | 🔵 Watch — architectural (CUDA streams / process split / torch.compile); Phase 4.5 |
+| Q21 | Wider-window chain-aux target | 🟣 Parked — revisit post-§97 baseline |
 | Q1, Q4, Q7 | MCTS convergence rate, augmentation equivariance, Transformer encoder | 🔵 Deferred — Phase 5+ |
 
 See `docs/06_OPEN_QUESTIONS.md` for full detail.
@@ -460,61 +530,88 @@ See `docs/06_OPEN_QUESTIONS.md` for full detail.
 ```yaml
 # configs/selfplay.yaml
 mcts:
-  n_simulations: 800          # benchmark workload; ZOI reduces effective branching
+  n_simulations: 400          # §98 bench workload; ZOI trims effective branching
   fpu_reduction: 0.25         # dynamic FPU (KrakenBot baseline)
   quiescence_enabled: true
   quiescence_blend_2: 0.3
-  temp_min: 0.05
-  temp_anneal_moves: 60       # cosine anneal over 60 plies
-  zoi_enabled: true
-  zoi_radius: 5
-  zoi_history: 16
-  zoi_min_candidates: 3
-playout_cap:
-  fast_prob: 0.25
-  fast_sims: 50
-  standard_sims: 200
+  dirichlet_alpha: 0.3
+  epsilon: 0.25
+  dirichlet_enabled: true     # gates the §73 Rust Dirichlet call on the training path
+  temperature_threshold_ply: 30
 selfplay:
-  max_game_moves: 200         # compound moves; 128 caused mass draw-cap games
-gumbel_mcts: false            # opt-in; zero regression when disabled
-gumbel_m: 16
-gumbel_explore_moves: 10
-
-# configs/training.yaml
-training:
-  fp16: true
-  torch_compile: false        # DISABLED — Python 3.14 compat (§32); re-enable when stable
-  policy_prune_frac: 0.02
-  aux_opp_reply_weight: 0.15
-  entropy_reg_weight: 0.01
-  ownership_weight: 0.1
-  threat_weight: 0.1
-  uncertainty_weight: 0.0    # head exists; disabled (§59 divergence); explicit 0.0 required
-  draw_reward: -0.5
-  grad_clip: 1.0
-  eval_interval: 5000         # training steps (~10 hrs at 490 steps/hr)
-  completed_q_values: true    # Gumbel improved policy targets (no Gumbel search required)
+  completed_q_values: false   # base; opt in via --variant gumbel_full / gumbel_targets (§67)
   c_visit: 50.0
   c_scale: 1.0
+  gumbel_mcts: false          # base; opt in via --variant gumbel_full (§67, §96)
+  gumbel_m: 16
+  gumbel_explore_moves: 10
+  n_workers: 14
+  inference_batch_size: 64
+  inference_max_wait_ms: 4.0
+  leaf_batch_size: 8
+  max_game_moves: 200         # PLIES (§76 reverted 150→200 after compound/ply mix-up)
+  playout_cap:
+    fast_prob: 0.0            # §100 — disabled by default; mutex with full_search_prob
+    fast_sims: 64
+    standard_sims: 200
+    n_sims_quick: 100         # §100 move-level cap — quick search
+    n_sims_full: 600          # §100 move-level cap — full search
+    full_search_prob: 0.25    # §100 — P(full search per move)
+    temperature_threshold_compound_moves: 15
+    temp_min: 0.05
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+# configs/training.yaml
+fp16: true
+torch_compile: false          # DISABLED — Python 3.14 compat (§32)
+policy_prune_frac: 0.02
+training_steps_per_game: 4.0  # P3 winner (§69)
+max_train_burst: 16           # P3 winner (§69)
+total_steps: 200_000          # REQUIRED (§67); CosineAnnealingLR T_max
+eta_min: 2e-4                 # REQUIRED (§67); ~10% of peak lr=0.002
+eval_interval: 5000           # overrides eval.yaml; §101 uses this for stride math
+checkpoint_interval: 500
+max_checkpoints_kept: 10
+preserve_eval_checkpoints: true  # §84 two-tier retention
+aux_opp_reply_weight: 0.15
+entropy_reg_weight: 0.01
+ownership_weight: 0.1
+threat_weight: 0.1
+threat_pos_weight: 59.0       # Q19 (§92); BCE positive-class weight
+aux_chain_weight: 1.0         # Q13-aux (§92); smooth-L1; target from chain sub-buffer
+zero_chain_planes: false      # Exp C (§95) ablation — default false post §97
+uncertainty_weight: 0.0       # §59 disabled
+draw_value: -0.5
+grad_clip: 1.0
+recency_weight: 0.75
 mixing:
-  decay_steps: 300_000        # pretrained_weight decay; 50K too aggressive (§65 note)
+  decay_steps: 20_000         # accelerated post exp A/C; rule ≈ 0.10 × total_steps
   pretrain_max_samples: 200_000
   buffer_persist: true
   buffer_persist_path: "checkpoints/replay_buffer.bin"
-buffer_schedule:  # updated §79
+buffer_schedule:              # §79
   - {step: 0,           capacity: 250_000}
   - {step: 300_000,     capacity: 500_000}
   - {step: 1_000_000,   capacity: 1_000_000}
 
 # configs/model.yaml
+in_channels: 18               # §97 — chain planes moved to aux sub-buffer
 res_blocks: 12
-channels: 128
+filters: 128
 se_reduction_ratio: 4
 
 # configs/eval.yaml
-eval_n_games: 200             # total per round (RandomBot + SealBot + best_checkpoint)
-best_checkpoint_n_games: 50   # reduced from 200 (§60)
-promotion_threshold: 0.55
+eval_pipeline:
+  eval_interval: 2500         # base; per-opponent `stride` multiplies
+  opponents:
+    best_checkpoint: {stride: 1,  n_games: 200, model_sims: 128}   # §101 anchor gate
+    sealbot:         {stride: 4,  n_games: 50,  think_time_strong: 0.5}
+    random:          {stride: 1,  n_games: 20,  model_sims: 96}
+  gating:
+    promotion_winrate: 0.55   # §101 graduation threshold (wr_best AND ci_lo > 0.5)
+    require_ci_above_half: true   # §101.a M1
 
 # configs/monitoring.yaml
 training_step_history: 2000
