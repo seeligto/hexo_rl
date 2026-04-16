@@ -67,6 +67,22 @@ class EvalPipeline:
         self.bt_cfg = cfg.get("bradley_terry", {})
         self._base_interval = int(cfg.get("eval_interval", 2500))
 
+        # M4: fail fast on stride=0 / negative / bad strings — these would silently
+        # collapse to "run every round" under int()<=1 coercion, which is the
+        # opposite of what a user writing `stride: 0` to disable would expect.
+        for name, opp_cfg in (
+            ("best_checkpoint", self.best_cfg),
+            ("sealbot", self.sealbot_cfg),
+            ("random", self.random_cfg),
+        ):
+            if "stride" in opp_cfg:
+                s = opp_cfg["stride"]
+                if not isinstance(s, int) or s < 1:
+                    raise ValueError(
+                        f"eval_pipeline.opponents.{name}.stride must be int >= 1, "
+                        f"got {s!r}. Use `enabled: false` to disable an opponent."
+                    )
+
         # Persistent player IDs for SealBot and Random
         tl = self.sealbot_cfg.get("think_time_strong",
                                    self.sealbot_cfg.get("time_limit", 0.5))
@@ -97,6 +113,17 @@ class EvalPipeline:
         """
         config_for_eval = full_config or {}
 
+        # H1: stride math must use the *effective* trigger cadence. training.yaml /
+        # selfplay.yaml can override eval_interval; without this the stride round_idx
+        # is computed against eval.yaml's value while the actual trigger fires on
+        # the overridden value, desynchronising (e.g. sealbot stride=4 fires every
+        # 20k steps instead of 10k when training.yaml sets eval_interval=5000).
+        effective_interval = int(
+            config_for_eval.get("eval_interval")
+            or config_for_eval.get("training", {}).get("eval_interval")
+            or self._base_interval
+        )
+
         # Merge our eval settings into the config the Evaluator reads
         eval_section = config_for_eval.get("evaluation", {})
         eval_section.setdefault("random_model_sims", self.random_cfg.get("model_sims", 96))
@@ -119,13 +146,13 @@ class EvalPipeline:
             run_id=self.run_id,
         )
 
-        results: Dict[str, Any] = {"step": train_step, "promoted": False}
+        results: Dict[str, Any] = {"step": train_step, "promoted": False, "eval_games": 0}
 
         def _stride_active(opp_cfg: dict[str, Any]) -> bool:
             stride = int(opp_cfg.get("stride", 1))
             if stride <= 1:
                 return True
-            round_idx = train_step // max(self._base_interval, 1)
+            round_idx = train_step // max(effective_interval, 1)
             return round_idx % stride == 0
 
         # ── vs Random ────────────────────────────────────────────────
@@ -144,6 +171,7 @@ class EvalPipeline:
             results["wr_random"] = er.win_rate
             results["ci_random"] = (ci_lo, ci_hi)
             results["colony_wins_random"] = er.colony_wins
+            results["eval_games"] += n
 
         # ── vs SealBot ───────────────────────────────────────────────
         if self.sealbot_cfg.get("enabled", True) and _stride_active(self.sealbot_cfg):
@@ -163,9 +191,11 @@ class EvalPipeline:
             results["wr_sealbot"] = er.win_rate
             results["ci_sealbot"] = (ci_lo, ci_hi)
             results["colony_wins_sealbot"] = er.colony_wins
+            results["eval_games"] += n
 
         # ── vs Best Checkpoint ────────────────────────────────────────
         wr_best = None
+        ci_best_lo: float | None = None
         if (
             self.best_cfg.get("enabled", True)
             and best_model is not None
@@ -194,18 +224,36 @@ class EvalPipeline:
             results["wr_best"] = er.win_rate
             results["ci_best"] = (ci_lo, ci_hi)
             results["colony_wins_best"] = er.colony_wins
+            results["eval_games"] += n
             wr_best = er.win_rate
+            ci_best_lo = ci_lo
 
         # ── Gating ────────────────────────────────────────────────────
+        # M1: require CI lower bound > 0.5 so lucky-variance runs (true p ≈ 0.5)
+        # don't trigger promotion. At n=200, threshold=0.55, naive p_hat >= 0.55
+        # has ~9% false-positive rate under null; ci_lo > 0.5 cuts that to <1%.
+        # Uses binomial 95% normal-approx (same as CI shown in table).
         threshold = float(self.gating_cfg.get("promotion_winrate", 0.55))
+        ci_guard = bool(self.gating_cfg.get("require_ci_above_half", True))
         if wr_best is not None and wr_best >= threshold:
-            results["promoted"] = True
-            log.info(
-                "checkpoint_promoted",
-                step=train_step,
-                wr_best=wr_best,
-                threshold=threshold,
-            )
+            ci_ok = (not ci_guard) or (ci_best_lo is not None and ci_best_lo > 0.5)
+            if ci_ok:
+                results["promoted"] = True
+                log.info(
+                    "checkpoint_promoted",
+                    step=train_step,
+                    wr_best=wr_best,
+                    ci_lo=ci_best_lo,
+                    threshold=threshold,
+                )
+            else:
+                log.info(
+                    "promotion_blocked_ci",
+                    step=train_step,
+                    wr_best=wr_best,
+                    ci_lo=ci_best_lo,
+                    threshold=threshold,
+                )
 
         # ── Bradley-Terry ratings ─────────────────────────────────────
         pairwise = self.db.get_all_pairwise(run_id=self.run_id)

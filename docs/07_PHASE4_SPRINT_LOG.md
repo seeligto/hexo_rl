@@ -3446,3 +3446,79 @@ missing piece was routing: `best_model` was never used by self-play.
   the structlog stream.
 - Optional `skip_first_eval` flag to save the 200-game cost on the
   guaranteed-neutral first eval round.
+
+### §101.a — Review fixes (applied before merge)
+
+Review caught ten issues; all addressed on the same branch.
+
+**C1 — Promoted weights ≠ evaluated weights (critical).** The eval runs in
+a background thread with an `eval_model` snapshot. On promotion, the old
+code copied *current* `trainer.model` weights into `best_model` — not the
+snapshot that was actually scored. Between eval start and drain, trainer
+has advanced ~1 `eval_interval` worth of steps, so every promotion
+committed unvalidated weights as the new anchor. Fix: `eval_model` is now
+allocated once in outer scope (L1) and the promotion branch loads
+`best_model ← eval_model` (still holding the scored weights because drain
+fires before the next eval overwrites it).
+
+**H1 — Stride cadence decoupled from trigger.** Pipeline computed stride
+round_idx against `eval.yaml`'s `eval_interval`, but `training.yaml` can
+override it. If training.yaml says 5000, sealbot stride=4 fired every 20k
+steps, not the 10k the comment implied. Fix: pipeline reads
+`full_config.eval_interval` (the effective value) and falls back to
+`self._base_interval`. Documented in both config files.
+
+**M1 — False-promotion rate.** At n=200, p_true=0.5, P(X≥110) ≈ 9%. ~3-4
+false promotions per 100k-step run from pure sampling noise. Fix: added
+`gating.require_ci_above_half` (default true) — promotion requires both
+`wr_best >= threshold` AND `ci_lo > 0.5`. Drops false-positive rate below
+1% at the same threshold/game-count. Flag preserves old behaviour for
+tuning experiments.
+
+**M2 — Resume divergence warning.** On resume when `trainer.step !=
+best_model_step`, first eval compares arbitrary trainer weights against
+an anchor from a different point in time; a lucky 55% wipes the anchor.
+Fix: log a `resume_anchor_step_mismatch` warning so operators can catch
+unintended rollbacks before the first eval.
+
+**M3 — eval_games field.** `eval_complete` dashboard event always shipped
+`eval_games=0` because `run_evaluation` never wrote the key. Fix: sum
+per-opponent `n_games` actually played this round (accounting for stride
+skips) and expose as `results["eval_games"]`.
+
+**M4 — stride validation.** `stride: 0` or non-int silently collapsed to
+"run every round" under `int(s) <= 1` coercion. Fix: raise `ValueError`
+at `EvalPipeline.__init__` if any opponent's stride is not an int ≥ 1;
+disabling uses `enabled: false`.
+
+**L1 — eval_model allocation churn.** Previously reallocated per round
+(~30 MB activations + 2 MB params on 12b×128ch). Fix: allocated once
+outside the loop, `load_state_dict` each round.
+
+**L2 — None vs 0.0 for skipped opponents.** Dashboard read
+`.get("wr_sealbot", 0.0)` → stride-skipped rounds rendered as "0% vs
+SealBot". Fix: omit or use `None` in the event payload; the dashboard
+distinguishes skip (None) from lost (0.0).
+
+**L3 — Config coupling documented.** Comments in both `eval.yaml` and
+`training.yaml` now call out that `eval_interval` is shared between
+trigger and stride math, with training.yaml taking precedence.
+
+**L4 — Dead `result["step"] = _step`.** `run_evaluation` already sets
+`step`; the post-hoc assignment was redundant. Removed.
+
+**Side cleanup.** `_sync_weights_to_inf()` helper (syncs from trainer
+— wrong direction for anchor semantics) deleted; sync sites now
+explicitly copy from `best_model` or `eval_model`.
+
+### Tests added
+
+- `test_stride_zero_rejected_at_init` (M4)
+- `test_ci_guard_blocks_marginal_promotion` (M1)
+- `test_ci_guard_disabled_allows_marginal_promotion` (M1, flag off)
+- `test_eval_games_reflects_opponents_run` (M3)
+- `test_effective_eval_interval_override` (H1)
+
+`test_run_evaluation_stores_results` updated: now uses 9/10 wins so it
+clears both the point threshold and the new CI guard — demonstrates
+intended behaviour without disabling the guard.

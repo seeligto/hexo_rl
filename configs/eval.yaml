@@ -2,7 +2,11 @@
 
 eval_pipeline:
   enabled: true
-  eval_interval: 2500            # base cadence; per-opponent `stride` multiplies this (training.yaml takes precedence)
+  eval_interval: 2500            # base cadence; per-opponent `stride` multiplies this.
+                                 # IMPORTANT: training.yaml's eval_interval takes precedence
+                                 # at trigger time AND for stride math (§101 H1). If you
+                                 # override there, strides remain aligned automatically;
+                                 # this value is the fallback when training.yaml omits it.
   report_dir: reports/eval
   db_path: reports/eval/results.db
   ratings_plot_path: reports/eval/ratings_curve.png
