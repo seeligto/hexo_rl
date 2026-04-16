@@ -1,0 +1,24 @@
+# monitoring.yaml — dashboard and alerting settings
+
+monitoring:
+  enabled: true
+  terminal_dashboard: true
+  web_dashboard: true
+  web_port: 5001
+  log_interval: 10
+  event_log_maxlen: 500
+  alert_entropy_min: 1.0
+  alert_grad_norm_max: 10.0
+  alert_loss_increase_window: 3
+  capture_game_detail: true
+  alert_entropy_warn: 2.0
+  ema_alpha: 0.06
+  win_rate_window: 200
+  game_length_window: 200
+  training_step_history: 2000
+  game_history: 500
+  num_actions_for_entropy_norm: 362
+  p0_win_rate_target_low: 54.0
+  p0_win_rate_target_high: 58.0
+  viewer_max_memory_games: 50
+  viewer_max_disk_games: 1000

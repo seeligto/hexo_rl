@@ -1,0 +1,63 @@
+# selfplay.yaml — self-play and MCTS configuration
+
+mcts:
+  n_simulations: 400
+  c_puct: 1.5
+  # KataGo-style dynamic FPU (First Play Urgency).
+  # Unvisited children receive Q = parent_q - fpu_reduction * sqrt(explored_policy_mass)
+  # where explored_policy_mass = sum of priors for all already-visited children.
+  # As more children are explored the reduction grows, naturally directing search toward
+  # refining known-good moves rather than sampling every legal move uniformly.
+  # KrakenBot uses 0.25; set to 0.0 to restore the legacy Q=0 behaviour.
+  fpu_reduction: 0.25
+  # Quiescence value override at leaf nodes.
+  # Game theorem: each turn places 2 stones, so the opponent can block at most 2
+  # winning cells per response.  If the current player has ≥3 winning moves the
+  # leaf value is overridden to +1.0 (forced win).  If the opponent has ≥3, to -1.0.
+  # The policy is NOT affected — the network still learns about these positions.
+  quiescence_enabled: true
+  # Value blend amount for the 2-winning-moves case (strong but unproven).
+  # NN value is nudged by ±quiescence_blend_2 toward ±1.0, clamped to [-1, 1].
+  quiescence_blend_2: 0.3
+  dirichlet_alpha: 0.3
+  epsilon: 0.25
+  dirichlet_enabled: true   # gates Dirichlet call in Rust training path; set false for noise-free eval
+  temperature_threshold_ply: 30
+
+selfplay:
+  # Gumbel completed Q-values (Danihelka et al., ICLR 2022).
+  # Compute improved policy targets using MCTS Q-values instead of raw visit counts.
+  # Primary benefit: useful policy signal even at 50-sim fast games.
+  # Override via --variant gumbel_full or --variant gumbel_targets.
+  completed_q_values: false
+  c_visit: 50.0
+  c_scale: 1.0
+
+  # Gumbel MCTS search (Danihelka et al., ICLR 2022 §3.3-3.4).
+  # Replaces PUCT exploration at root with Gumbel-Top-k sampling and Sequential
+  # Halving budget allocation. Non-root nodes still use PUCT + dynamic FPU.
+  # Largest quality gain at low sim counts (50-sim fast games).
+  # Override via --variant gumbel_full.
+  gumbel_mcts: false          # baseline; enable explicitly via variant
+  gumbel_m: 16                # number of root candidates (paper default)
+  gumbel_explore_moves: 10    # first N plies use visit-count sampling for exploration
+
+  n_workers: 14
+  inference_batch_size: 64
+  inference_max_wait_ms: 4.0   # sweep P3 winner (was 12.0, see sprint §69)
+  dispatch_wait_ms: 2.0
+  leaf_batch_size: 8            # sweep §69: leaf_bs=16 hurts throughput
+  replay_buffer_capacity: 500000
+  max_game_moves: 200  # PLIES (stone placements) = 100 compound turns. Reverted from 300 for experiment A.
+  results_queue_cap: 10000  # Rust SelfPlayRunner drops oldest when `results` VecDeque exceeds this.
+                            # Visible via positions_dropped getter; bump if dashboard shows nonzero drops.
+
+  playout_cap:
+    fast_prob: 0.25
+    fast_sims: 64          # scalar used by Rust SelfPlayRunner — floor raised from 50 (A3 fix)
+    standard_sims: 200
+    temperature_threshold_compound_moves: 15
+    temp_min: 0.05       # floor temperature for cosine annealing (0.0 = hard argmax after threshold)
+    zoi_enabled: true    # restrict move sampling to ZOI of last N moves
+    zoi_lookback: 16     # number of recent moves used as ZOI anchors
+    zoi_margin: 5        # hex-distance threshold for ZOI inclusion

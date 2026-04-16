@@ -1,0 +1,97 @@
+# training.yaml — training loop hyperparameters
+# Single source of truth for all training settings.
+
+fp16: true
+torch_compile: false   # disabled — Python 3.14 CUDA graph incompatibility (see sprint §25, §30)
+policy_prune_frac: 0.02
+# Independent of gumbel_mcts search — controls policy target computation, not search algorithm
+batch_size: 256
+min_buffer_size: 256
+training_steps_per_game: 4.0   # sweep P3 winner (was 2.0, see sprint §69)
+max_train_burst: 16            # sweep P3 winner (was 8, see sprint §69)
+lr: 0.002
+weight_decay: 0.0001
+grad_clip: 1.0
+lr_schedule: cosine
+# total_steps and eta_min are REQUIRED when lr_schedule: cosine.
+# They are co-designed: decay_steps (mixing) should be set so the
+# pretrain-weight floor is reached well before total_steps, leaving
+# a self-play-dominant phase for the model to consolidate.
+#
+# Current design (200K run):
+#   total_steps : 200_000  — full run length; sets CosineAnnealingLR T_max
+#   eta_min     :   2e-4   — LR floor (~10% of peak lr=0.002)
+#   decay_steps :  20_000  — pretrain_weight decays to min_pretrained_weight
+#                            at step ~41.5K (floor ≈0.108 at 40K), leaving
+#                            ~160K of self-play-dominant training before the
+#                            LR hits eta_min at step 200K.
+#                            Accelerated from 70K post exp A/C: buffer dilution
+#                            (74% bootstrap at 5K) was the real draw culprit —
+#                            self-play must dominate sooner to let draw penalty
+#                            propagate. Rule of thumb changed: decay_steps ~ 0.10
+#                            * total_steps (was 0.35).
+#
+# Do not change decay_steps without adjusting total_steps (and vice versa).
+total_steps: 200_000
+eta_min: 2e-4
+eval_interval: 5000
+checkpoint_interval: 500
+max_checkpoints_kept: 10
+preserve_eval_checkpoints: true   # never prune checkpoints at eval_interval boundaries
+log_interval: 10        # also controls web-dashboard send frequency
+aux_opp_reply_weight: 0.15
+entropy_reg_weight: 0.01  # policy entropy regularization (KrakenBot-style, prevents policy collapse)
+draw_value: -0.5          # draw outcome value target (reverted from -0.75 for experiment A; isolate chain aux kill)
+recency_weight: 0.75      # fraction of each batch from the recent-position ring buffer (newest ~50% of buffer)
+uncertainty_weight: 0.0   # disabled — Gaussian NLL diverges when σ²→0 causing total_loss spikes to ~394
+ownership_weight: 0.1     # weight for ownership auxiliary head (spatial MSE); training only
+threat_weight: 0.1        # weight for binary threat auxiliary head (winning-line BCE); training only
+
+# Q13-aux: chain-length prediction auxiliary head, smooth-L1 (Huber) loss on 6 chain planes.
+# Target is the input slice (:, 18:24) from the 24-plane tensor; aux loss forces
+# the trunk to preserve / rediscover chain-counting circuits. Starting at 1.0 (not
+# the 0.10 used for ownership/threat) because the target is /6-normalized so raw
+# smooth-L1 values sit around 0.02 — weight 1.0 gives the head a meaningful
+# gradient share. Retune after pretrain v3 loss curves.
+# Exp A (§94) set this to 0.0 to test draw rate impact — result was marginal.
+# Exp C (§95) zeroed chain planes instead — draw rate worsened (+35pp). Chain planes essential.
+# Reverted to 1.0 post exp A/C. See TODO §95 for full ablation record.
+aux_chain_weight: 1.0
+
+# Experiment C ablation: zero planes 18-23 at inference+training time while keeping 24ch architecture.
+# Default false. Set true in configs/variants/gumbel_targets.yaml for Experiment C only.
+# Chain planes ARE stored in the replay buffer (computed at encode time by encode_state_to_buffer,
+# NOT recomputed at sample time). Zeroing at the point of use (trainer + inference server) is sufficient;
+# the symmetry augmentation path is moot because zeroed planes transform to zeroed planes.
+zero_chain_planes: false
+
+# Q19: positive-class weight for threat-head BCEWithLogitsLoss.
+# Empirical (1-p)/p on winning_line labels (~1.6% positive) ≈ 59. Recomputed
+# from the corpus by scripts/compute_threat_pos_weight.py before pretrain.
+threat_pos_weight: 59.0
+
+game_length_weights:
+  # Thresholds are in compound moves (player turns), not plies.
+  # Each turn = 2 stones placed (except player 1's opening move).
+  # < 10 turns ~ < 20 plies  (very short games)
+  # 10-24 turns ~ 20-48 plies (mid-length games)
+  # >= 25 turns ~ >= 50 plies (full games, weight 1.0)
+  thresholds: [10, 25]
+  weights: [0.15, 0.50]
+  default_weight: 1.0
+
+buffer_schedule:
+  - {step: 0,           capacity: 250_000}
+  - {step: 300_000,     capacity: 500_000}
+  - {step: 1_000_000,   capacity: 1_000_000}
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus.npz"
+  decay_steps: 20_000
+  min_pretrained_weight: 0.1
+  initial_pretrained_weight: 0.8
+  pretrain_max_samples: 200_000  # cap corpus loaded into Rust buffer; limits page cache to ~2.5 GB
+  buffer_persist: true
+  buffer_persist_path: "checkpoints/replay_buffer.bin"
+
+seed: 42
