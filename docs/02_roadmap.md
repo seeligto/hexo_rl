@@ -83,7 +83,7 @@ n_workers: 1
 - [x] Implement benchmark harness: MCTS throughput, GPU utilization, positions/hour
 - [x] Profile and fix bottlenecks: Enabled TF32, dynamic hardware scaling
 
-### Throughput targets (Phase 3.5 / 4)
+### Throughput targets (Phase 3.5 / 4 — historical)
 
 | Metric | Target | Status |
 |---|---|---|
@@ -94,7 +94,11 @@ n_workers: 1
 | VRAM usage | ≤ 80% Total VRAM | **PASS** (9%) |
 | Batch fill % | ≥ 50% | **PASS** (99.8%) |
 
-> These are Phase 3.5 exit baselines. See CLAUDE.md § Benchmarks for current Phase 4.0 baselines (2026-04-03).
+> These are **Phase 3.5 exit baselines** on an earlier benchmark methodology
+> (burst MCTS workload, pre-radius-8 branching, 24-plane input). They are
+> NOT comparable to the current targets. See CLAUDE.md § Benchmarks for
+> the authoritative post-§98 (2026-04-16, 18-plane, ≥ 250k worker pos/hr)
+> baselines.
 
 ### Exit criteria
 
@@ -160,7 +164,7 @@ n_workers: 1
 The split-responsibility architecture is fully in place:
 
 - **Rust workers** (`SelfPlayRunner`) drive MCTS and produce raw 2-plane snapshots + game records.
-- **Python** (`GameState.to_tensor()`) assembles full 24-plane temporal tensors from `move_history`; Rust `encode_state_to_buffer` is the equivalent on the self-play hot path.
+- **Python** (`GameState.to_tensor()`) assembles full 18-plane temporal tensors from `move_history` (§97 — chain planes moved to a separate replay-buffer sub-buffer); Rust `encode_state_to_buffer` is the equivalent on the self-play hot path.
 - **ReplayBuffer** (Rust) stores, augments, and serves training batches with zero-copy transfer.
 
 ### Tasks
@@ -183,7 +187,13 @@ The split-responsibility architecture is fully in place:
 
 - Self-play runs ≥ 24 hours without worker crash or buffer corruption
 - Policy loss and value loss both decrease from bootstrap baseline over first 500 RL steps
-- Worker throughput ≥ 1,000,000 pos/hr sustained (current baseline: 1,177,745)
+- Worker throughput ≥ 250,000 pos/hr sustained on the isolated self-play
+  benchmark (per §98 post-18ch rebaseline; real training with shared GPU
+  runs ~48k pos/hr at production sim counts — the two are not directly
+  comparable because the bench runs at reduced sim counts with no
+  gradient-step contention)
+- Graduation gate fires at least one promotion cycle end-to-end
+  (§101 anchor semantics verified in live training, not just smoke).
 
 ---
 
@@ -193,18 +203,21 @@ The split-responsibility architecture is fully in place:
 
 ### Tasks
 
-- [ ] Implement Elo ladder: each checkpoint gets an Elo rating
-- [ ] Implement tournament runner (round-robin, configurable games per pair)
-- [ ] Integrate fixed reference opponents (minimax depth 3, depth 5)
-- [ ] Auto-promote best checkpoint when win rate ≥ 55% vs previous best
-- [ ] Generate and save PGN/SGF game records from eval games for review
-- [ ] Plot Elo over training iterations (logged to TensorBoard / wandb)
+- [x] Implement Elo ladder: each checkpoint gets a Bradley-Terry rating (`hexo_rl/eval/bradley_terry.py`)
+- [x] Implement tournament runner (round-robin via `EvalPipeline`, per-opponent `n_games` and `stride` in `configs/eval.yaml`)
+- [x] Integrate fixed reference opponents (SealBot — see §50/§52 — replaces the minimax-depth plan; RandomBot as sanity floor)
+- [x] Auto-promote best checkpoint with two-gate rule: `wr_best ≥ 0.55` AND `ci_lo > 0.5` over 200 games (§101, §101.a)
+- [x] Save full game records from self-play and eval (`runs/<run_id>/games/*.json`); replay in `/viewer`
+- [ ] PGN/SGF export — not yet implemented; game records are JSON only
+- [x] Plot Elo over training iterations (`reports/eval/ratings_curve.png` produced by EvalPipeline)
 
 ### Exit criteria
 
 - Elo updates correctly and monotonically over first 500 training iterations
 - A game record from an evaluation game can be loaded and replayed
-- Auto-promotion works: new best checkpoint is loaded by workers automatically
+- Auto-promotion works: `best_model ← eval_model` on graduation; workers
+  consume `inf_model` which tracks `best_model`, not drifted
+  `trainer.model` (§101 C1 fix).
 
 ---
 
