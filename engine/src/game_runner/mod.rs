@@ -53,6 +53,13 @@ pub struct SelfPlayRunner {
     pub(crate) dirichlet_alpha: f32,
     pub(crate) dirichlet_epsilon: f32,
     pub(crate) dirichlet_enabled: bool,
+    /// Move-level playout cap: probability each move uses full search.
+    /// 0.0 = disabled (all moves use game_sims from game-level cap).
+    pub(crate) full_search_prob: f32,
+    /// Sim budget for quick-search moves (is_full_search = false).
+    pub(crate) n_sims_quick: usize,
+    /// Sim budget for full-search moves (is_full_search = true).
+    pub(crate) n_sims_full: usize,
     /// Maximum positions buffered in `results` before workers drop the oldest
     /// to avoid unbounded growth when Python consumption stalls. Tracked on
     /// `positions_dropped` when it fires.
@@ -79,7 +86,7 @@ pub struct SelfPlayRunner {
     ///     the position was recorded (NOT the game-end bbox centroid), so the
     ///     aux target frame aligns with the state frame under later symmetry
     ///     augmentation in the replay buffer.
-    pub(crate) results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>)>>>,
+    pub(crate) results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, bool)>>>,
     /// Ring-buffer of recent game results for Python logging.
     /// Tuple: (plies, winner_code, move_history, worker_id)
     ///   winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
@@ -99,7 +106,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000, full_search_prob = 0.0, n_sims_quick = 0, n_sims_full = 0))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -130,6 +137,9 @@ impl SelfPlayRunner {
         dirichlet_epsilon: f32,
         dirichlet_enabled: bool,
         results_queue_cap: usize,
+        full_search_prob: f32,
+        n_sims_quick: usize,
+        n_sims_full: usize,
     ) -> Self {
         // If standard_sims is 0, fall back to n_simulations.
         let effective_standard = if standard_sims == 0 { n_simulations } else { standard_sims };
@@ -162,6 +172,9 @@ impl SelfPlayRunner {
             dirichlet_epsilon,
             dirichlet_enabled,
             results_queue_cap,
+            full_search_prob,
+            n_sims_quick,
+            n_sims_full,
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
             positions_generated: Arc::new(AtomicUsize::new(0)),
@@ -186,14 +199,15 @@ impl SelfPlayRunner {
 
     /// Drain all buffered positions and return them as numpy arrays.
     ///
-    /// Returns (features, chain_planes, policies, values, plies, ownership, winning_line):
-    ///   features:     (N, feat_len) float32 — 18-plane state tensor
-    ///   chain_planes: (N, 6*361)    float32 — Q13 chain-length planes (flat, /6 normalized)
-    ///   policies:     (N, pol_len)  float32
-    ///   values:       (N,)          float32
-    ///   plies:        (N,)          uint64 — game length in plies (game-length weighting)
-    ///   ownership:    (N, 361)      uint8  — per-row aux target {0=P2, 1=empty, 2=P1}
-    ///   winning_line: (N, 361)      uint8  — per-row binary mask of winning 6-in-a-row
+    /// Returns (features, chain_planes, policies, values, plies, ownership, winning_line, is_full_search):
+    ///   features:        (N, feat_len) float32 — 18-plane state tensor
+    ///   chain_planes:    (N, 6*361)    float32 — Q13 chain-length planes (flat, /6 normalized)
+    ///   policies:        (N, pol_len)  float32
+    ///   values:          (N,)          float32
+    ///   plies:           (N,)          uint64 — game length in plies (game-length weighting)
+    ///   ownership:       (N, 361)      uint8  — per-row aux target {0=P2, 1=empty, 2=P1}
+    ///   winning_line:    (N, 361)      uint8  — per-row binary mask of winning 6-in-a-row
+    ///   is_full_search:  (N,)          uint8  — 1 = full-search move, 0 = quick-search move
     ///
     /// N = 0 when no positions are available (arrays have zero rows).
     pub fn collect_data<'py>(
@@ -207,6 +221,7 @@ impl SelfPlayRunner {
         Bound<'py, PyArray1<u64>>,
         Bound<'py, PyArray2<u8>>,
         Bound<'py, PyArray2<u8>>,
+        Bound<'py, PyArray1<u8>>,
     )> {
         let feat_len  = self.batcher.feature_len();
         let chain_len = 6 * TOTAL_CELLS;
@@ -215,15 +230,16 @@ impl SelfPlayRunner {
         let mut results = self.results.lock().expect("results lock poisoned");
         let n = results.len();
 
-        let mut flat_feats  = Vec::with_capacity(n * feat_len);
-        let mut flat_chain  = Vec::with_capacity(n * chain_len);
-        let mut flat_pols   = Vec::with_capacity(n * pol_len);
-        let mut vals        = Vec::with_capacity(n);
-        let mut plies_out   = Vec::with_capacity(n);
-        let mut flat_own    = Vec::with_capacity(n * TOTAL_CELLS);
-        let mut flat_wl     = Vec::with_capacity(n * TOTAL_CELLS);
+        let mut flat_feats      = Vec::with_capacity(n * feat_len);
+        let mut flat_chain      = Vec::with_capacity(n * chain_len);
+        let mut flat_pols       = Vec::with_capacity(n * pol_len);
+        let mut vals            = Vec::with_capacity(n);
+        let mut plies_out       = Vec::with_capacity(n);
+        let mut flat_own        = Vec::with_capacity(n * TOTAL_CELLS);
+        let mut flat_wl         = Vec::with_capacity(n * TOTAL_CELLS);
+        let mut is_full_search  = Vec::with_capacity(n);
 
-        while let Some((feat, chain, pol, outcome, plies, aux_u8)) = results.pop_front() {
+        while let Some((feat, chain, pol, outcome, plies, aux_u8, full_search)) = results.pop_front() {
             flat_feats.extend_from_slice(&feat);
             flat_chain.extend_from_slice(&chain);
             flat_pols.extend_from_slice(&pol);
@@ -232,6 +248,7 @@ impl SelfPlayRunner {
             // Split combined aux: first TOTAL_CELLS = ownership, last = winning_line.
             flat_own.extend_from_slice(&aux_u8[..TOTAL_CELLS]);
             flat_wl.extend_from_slice(&aux_u8[TOTAL_CELLS..]);
+            is_full_search.push(full_search as u8);
         }
 
         let feats_np  = flat_feats.into_pyarray(py).reshape([n, feat_len])?;
@@ -241,8 +258,9 @@ impl SelfPlayRunner {
         let gids_np   = plies_out.into_pyarray(py);
         let own_np    = flat_own.into_pyarray(py).reshape([n, TOTAL_CELLS])?;
         let wl_np     = flat_wl.into_pyarray(py).reshape([n, TOTAL_CELLS])?;
+        let ifs_np    = is_full_search.into_pyarray(py);
 
-        Ok((feats_np, chain_np, pols_np, vals_np, gids_np, own_np, wl_np))
+        Ok((feats_np, chain_np, pols_np, vals_np, gids_np, own_np, wl_np, ifs_np))
     }
 
     pub fn stop(&self) {
@@ -376,7 +394,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             4, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000,
+            10_000, 0.0_f32, 0_usize, 0_usize,
         );
         runner.start();
 
@@ -498,7 +516,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000,
+            10_000, 0.0_f32, 0_usize, 0_usize,
         );
 
         // Simulate three per-search stat pushes matching what the worker
@@ -534,7 +552,7 @@ mod tests {
         let empty = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000,
+            10_000, 0.0_f32, 0_usize, 0_usize,
         );
         assert_eq!(empty.mcts_mean_depth(), 0.0);
         assert_eq!(empty.mcts_mean_root_concentration(), 0.0);

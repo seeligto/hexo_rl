@@ -61,6 +61,28 @@ class WorkerPool:
                 "playout_cap.fast_sims must be set in selfplay.yaml — no silent defaults"
             )
 
+        # Move-level and game-level playout caps are mutually exclusive: move-level
+        # (full_search_prob) overrides the game-level (fast_prob/fast_sims) sim selection
+        # inside the worker loop, so running both at once silently ignores the latter.
+        fast_prob_cfg = float(pc.get("fast_prob", 0.0))
+        full_search_prob_cfg = float(pc.get("full_search_prob", 0.0))
+        n_sims_quick_cfg = int(pc.get("n_sims_quick", 0))
+        n_sims_full_cfg = int(pc.get("n_sims_full", 0))
+        if full_search_prob_cfg > 0.0 and fast_prob_cfg > 0.0:
+            raise ValueError(
+                "playout_cap: fast_prob and full_search_prob are mutually exclusive — "
+                "move-level cap (full_search_prob) overrides game-level cap (fast_prob). "
+                f"Got fast_prob={fast_prob_cfg}, full_search_prob={full_search_prob_cfg}. "
+                "Set one of them to 0 in selfplay.yaml."
+            )
+        if full_search_prob_cfg > 0.0 and (n_sims_quick_cfg <= 0 or n_sims_full_cfg <= 0):
+            raise ValueError(
+                "playout_cap: full_search_prob > 0 requires n_sims_quick > 0 AND "
+                "n_sims_full > 0. "
+                f"Got full_search_prob={full_search_prob_cfg}, "
+                f"n_sims_quick={n_sims_quick_cfg}, n_sims_full={n_sims_full_cfg}."
+            )
+
         training_cfg = config.get("training", config)
         self._runner = SelfPlayRunner(
             n_workers=self.n_workers,
@@ -92,6 +114,9 @@ class WorkerPool:
             dirichlet_epsilon=float(mcts_cfg.get("epsilon", 0.25)),
             dirichlet_enabled=bool(mcts_cfg.get("dirichlet_enabled", True)),
             results_queue_cap=int(sp.get("results_queue_cap", 10_000)),
+            full_search_prob=full_search_prob_cfg,
+            n_sims_quick=n_sims_quick_cfg,
+            n_sims_full=n_sims_full_cfg,
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 
@@ -180,11 +205,12 @@ class WorkerPool:
         _chain_3d = _chain_buf.reshape(6, self._board_size, self._board_size)
         _last_buf_emit = time.monotonic()
         while not self._stop_event.is_set():
-            # collect_data() returns 7-tuple from Rust — no Python list allocation.
+            # collect_data() returns 8-tuple from Rust — no Python list allocation.
             # feats_np: (N, feat_len) f32, chain_np: (N, chain_len) f32,
             # pols_np: (N, pol_len) f32, vals_np/plies_np: (N,),
             # own_np/wl_np: (N, 361) u8 — per-row aux projected to cluster window.
-            feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np = self._runner.collect_data()
+            # ifs_np: (N,) u8 — 1 = full-search, 0 = quick-search.
+            feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np = self._runner.collect_data()
             n = len(vals_np)
             for i in range(n):
                 # feats_np[i] is a numpy view (no copy); _feat_buf[:] = view does
@@ -200,14 +226,17 @@ class WorkerPool:
                 plies    = int(plies_np[i])
                 outcome  = float(vals_np[i])
                 game_length = (plies + 1) // 2  # compound moves
+                is_full_search = bool(ifs_np[i])
                 self.replay_buffer.push(
                     feat_np, chain_np_pos, pol_np, outcome, own_row, wl_row,
                     game_length=game_length,
+                    is_full_search=is_full_search,
                 )
                 if self.recent_buffer is not None:
                     self.recent_buffer.push(
                         feat_np, chain_planes=chain_np_pos, policy=pol_np,
                         outcome=outcome, ownership=own_row, winning_line=wl_row,
+                        is_full_search=is_full_search,
                     )
                 with self._lock:
                     self.positions_pushed += 1

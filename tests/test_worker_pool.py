@@ -162,8 +162,9 @@ def test_rust_runner_collect_data_format():
         assert isinstance(worker_id, int)
         assert worker_id == 0
 
-        # collect_data returns 7 numpy arrays: (feats, chain, pols, vals, plies, own, wl)
-        feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np = runner.collect_data()
+        # collect_data returns 8 numpy arrays:
+        # (feats, chain, pols, vals, plies, own, wl, is_full_search)
+        feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np = runner.collect_data()
         assert isinstance(feats_np, np.ndarray)
         assert isinstance(chain_np, np.ndarray)
         assert isinstance(pols_np, np.ndarray)
@@ -171,6 +172,8 @@ def test_rust_runner_collect_data_format():
         assert isinstance(plies_np, np.ndarray)
         assert isinstance(own_np, np.ndarray)
         assert isinstance(wl_np, np.ndarray)
+        assert isinstance(ifs_np, np.ndarray)
+        assert ifs_np.dtype == np.uint8
         n = len(vals_np)
         assert n > 0
         assert feats_np.shape == (n, 18 * 19 * 19)
@@ -180,6 +183,7 @@ def test_rust_runner_collect_data_format():
         assert plies_np.shape == (n,)
         assert own_np.shape == (n, 19 * 19)
         assert wl_np.shape == (n, 19 * 19)
+        assert ifs_np.shape == (n,)
         assert feats_np.dtype == np.float32
         assert chain_np.dtype == np.float32
         assert pols_np.dtype == np.float32

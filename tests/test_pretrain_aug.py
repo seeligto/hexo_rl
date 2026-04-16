@@ -71,8 +71,8 @@ def _collect_buffer_unique_outputs(state: np.ndarray, n_draws: int = 4000) -> se
 
     seen: set[bytes] = set()
     for _ in range(n_draws):
-        # sample_batch returns 6-tuple: (states, chain_planes, policies, outcomes, own, wl)
-        states_out, _, _, _, _, _ = buf.sample_batch(1, augment=True)
+        # sample_batch returns 7-tuple: (states, chain_planes, policies, outcomes, own, wl, is_full_search)
+        states_out, _, _, _, _, _, _ = buf.sample_batch(1, augment=True)
         sampled = np.asarray(states_out[0]).astype(np.float16)
         seen.add(sampled.tobytes())
     return seen

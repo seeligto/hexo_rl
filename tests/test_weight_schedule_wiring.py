@@ -24,7 +24,7 @@ def test_weight_schedule_changes_sampling():
     # Sample 2000 times and count by outcome
     short_count = sum(
         1 for _ in range(2000)
-        for (_, _, _, o, _, _) in [buf.sample_batch(1, False)]
+        for (_, _, _, o, _, _, _) in [buf.sample_batch(1, False)]
         if float(o[0]) > 0
     )
     # Short-game positions (weight 0.15) should appear much less than long (weight 1.0)

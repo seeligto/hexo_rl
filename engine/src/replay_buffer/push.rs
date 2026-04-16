@@ -32,14 +32,15 @@ impl ReplayBuffer {
     /// centre, not the game-end bbox centroid).
     pub(crate) fn push_impl(
         &mut self,
-        state:        PyReadonlyArray3<f16>,
-        chain_planes: PyReadonlyArray3<f16>,
-        policy:       PyReadonlyArray1<f32>,
-        outcome:      f32,
-        ownership:    PyReadonlyArray1<u8>,
-        winning_line: PyReadonlyArray1<u8>,
-        game_id:      i64,
-        game_length:  u16,
+        state:          PyReadonlyArray3<f16>,
+        chain_planes:   PyReadonlyArray3<f16>,
+        policy:         PyReadonlyArray1<f32>,
+        outcome:        f32,
+        ownership:      PyReadonlyArray1<u8>,
+        winning_line:   PyReadonlyArray1<u8>,
+        game_id:        i64,
+        game_length:    u16,
+        is_full_search: bool,
     ) -> PyResult<()> {
         let state_slice  = state.as_slice()
             .map_err(|e| PyValueError::new_err(format!("state not contiguous: {e}")))?;
@@ -112,6 +113,7 @@ impl ReplayBuffer {
             .copy_from_slice(own_slice);
         self.winning_line[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
             .copy_from_slice(wl_slice);
+        self.is_full_search[slot] = is_full_search as u8;
 
         // Increment the new position's bucket.
         let new_bucket = Self::weight_bucket(self.weights[slot]);
@@ -137,14 +139,15 @@ impl ReplayBuffer {
     ///     game_length:   total compound moves in the originating game; default 0 (= weight 1.0)
     pub(crate) fn push_game_impl(
         &mut self,
-        states:       PyReadonlyArray4<f16>,
-        chain_planes: PyReadonlyArray4<f16>,
-        policies:     PyReadonlyArray2<f32>,
-        outcomes:     PyReadonlyArray1<f32>,
-        ownership:    PyReadonlyArray2<u8>,
-        winning_line: PyReadonlyArray2<u8>,
-        game_id:      i64,
-        game_length:  u16,
+        states:         PyReadonlyArray4<f16>,
+        chain_planes:   PyReadonlyArray4<f16>,
+        policies:       PyReadonlyArray2<f32>,
+        outcomes:       PyReadonlyArray1<f32>,
+        ownership:      PyReadonlyArray2<u8>,
+        winning_line:   PyReadonlyArray2<u8>,
+        game_id:        i64,
+        game_length:    u16,
+        is_full_search: Option<PyReadonlyArray1<u8>>,
     ) -> PyResult<()> {
         let states_s   = states.as_slice()
             .map_err(|e| PyValueError::new_err(format!("states not contiguous: {e}")))?;
@@ -158,6 +161,16 @@ impl ReplayBuffer {
             .map_err(|e| PyValueError::new_err(format!("ownership not contiguous: {e}")))?;
         let wl_s = winning_line.as_slice()
             .map_err(|e| PyValueError::new_err(format!("winning_line not contiguous: {e}")))?;
+        // Resolve optional is_full_search slice; default 1 (full-search) when not provided.
+        let ifs_owned: Vec<u8>;
+        let ifs_s: &[u8] = if let Some(ref arr) = is_full_search {
+            arr.as_slice()
+                .map_err(|e| PyValueError::new_err(format!("is_full_search not contiguous: {e}")))?
+        } else {
+            // Allocate a temporary all-ones slice; `t` is resolved below.
+            ifs_owned = Vec::new();
+            &ifs_owned
+        };
 
         let t = outcomes_s.len();
         if t == 0 { return Ok(()); }
@@ -167,6 +180,11 @@ impl ReplayBuffer {
         if policies_s.len() != t * POLICY_STRIDE { return Err(PyValueError::new_err("policies shape mismatch")); }
         if own_s.len() != t * AUX_STRIDE { return Err(PyValueError::new_err("ownership shape mismatch")); }
         if wl_s.len()  != t * AUX_STRIDE { return Err(PyValueError::new_err("winning_line shape mismatch")); }
+        if !ifs_s.is_empty() && ifs_s.len() != t {
+            return Err(PyValueError::new_err(format!(
+                "is_full_search must have {} elements (one per position), got {}", t, ifs_s.len()
+            )));
+        }
 
         let w = if game_length == 0 {
             f16::from_f32(1.0).to_bits()
@@ -213,6 +231,9 @@ impl ReplayBuffer {
             self.winning_line[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
                 .copy_from_slice(&wl_s[i * AUX_STRIDE..(i + 1) * AUX_STRIDE]);
 
+            // is_full_search: use provided value or default to 1 (full-search).
+            self.is_full_search[slot] = if ifs_s.is_empty() { 1u8 } else { ifs_s[i] };
+
             self.outcomes[slot] = outcomes_s[i];
             self.game_ids[slot] = game_id;
             self.weights[slot]  = w;
@@ -248,6 +269,7 @@ impl ReplayBuffer {
         let a_start = slot * AUX_STRIDE;
         self.ownership   [a_start..a_start + AUX_STRIDE].fill(1); // empty
         self.winning_line[a_start..a_start + AUX_STRIDE].fill(0);
+        self.is_full_search[slot] = 1;
         self.outcomes[slot] = outcome;
         self.game_ids[slot] = -1;
         self.weights[slot] = if game_length == 0 {

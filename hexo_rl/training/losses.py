@@ -30,10 +30,24 @@ def compute_policy_loss(
     target_policy: torch.Tensor,
     valid_mask: torch.Tensor,
     device: torch.device,
+    full_search_mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Cross-entropy policy loss, masked on zero-policy rows."""
-    if valid_mask.any():
-        return -(target_policy[valid_mask] * log_policy[valid_mask]).sum(dim=1).mean()
+    """Cross-entropy policy loss, masked on zero-policy rows and quick-search positions.
+
+    Args:
+        log_policy:        (B, A) log-softmax policy from model.
+        target_policy:     (B, A) MCTS visit-count targets.
+        valid_mask:        (B,) bool — excludes zero-policy rows (fast-game zeroes).
+        device:            Target device for the zero scalar.
+        full_search_mask:  Optional (B,) bool/uint8 — 1 = full-search position (apply
+                           policy loss), 0 = quick-search (skip). When None, all valid
+                           positions contribute (legacy behaviour, full_search_prob=0.0).
+    """
+    combined = valid_mask
+    if full_search_mask is not None:
+        combined = valid_mask & full_search_mask.bool()
+    if combined.any():
+        return -(target_policy[combined] * log_policy[combined]).sum(dim=1).mean()
     return torch.zeros(1, device=device, dtype=torch.float32).squeeze()
 
 
@@ -42,16 +56,24 @@ def compute_kl_policy_loss(
     target_policy: torch.Tensor,
     valid_mask: torch.Tensor,
     device: torch.device,
+    full_search_mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """KL(target || model) policy loss for completed Q-value targets.
 
     KL and CE produce identical gradients (differ by the constant entropy of
     the target distribution). KL gives more interpretable loss values: 0 when
     the model perfectly matches the target.
+
+    Args:
+        full_search_mask:  Optional (B,) bool/uint8 — gates policy loss same as
+                           ``compute_policy_loss``.
     """
-    if valid_mask.any():
-        tgt = target_policy[valid_mask]           # (N, A)
-        log_model = log_policy[valid_mask]         # (N, A)
+    combined = valid_mask
+    if full_search_mask is not None:
+        combined = valid_mask & full_search_mask.bool()
+    if combined.any():
+        tgt = target_policy[combined]           # (N, A)
+        log_model = log_policy[combined]         # (N, A)
         # FP16 safety: clamp log(target) to prevent -inf propagation.
         # Same pattern as compute_aux_loss (§47 fix).
         log_tgt = torch.log(tgt.clamp(min=1e-8)).clamp(min=-100.0)
@@ -75,11 +97,20 @@ def compute_aux_loss(
     target_policy: torch.Tensor,
     valid_mask: torch.Tensor,
     device: torch.device,
+    full_search_mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Opponent reply auxiliary loss (same structure as policy loss)."""
-    if valid_mask.any():
-        valid_targets = target_policy[valid_mask]   # [N, A]
-        valid_logits  = aux_logit[valid_mask]        # [N, A]  (log-softmax)
+    """Opponent reply auxiliary loss (same structure as policy loss).
+
+    opp_reply is a policy-like head trained on the same noisy MCTS visit targets
+    that drive ``compute_policy_loss``. Gated with ``full_search_mask`` for the
+    same reason: quick-search positions provide low-quality policy-shaped targets.
+    """
+    combined = valid_mask
+    if full_search_mask is not None:
+        combined = valid_mask & full_search_mask.bool()
+    if combined.any():
+        valid_targets = target_policy[combined]   # [N, A]
+        valid_logits  = aux_logit[combined]        # [N, A]  (log-softmax)
         safe_log = valid_logits.clamp(min=-100.0)    # -inf → 0 contribution; exp(-100)≈0
         return -(valid_targets * safe_log).sum(dim=1).mean()
     return torch.zeros(1, device=device, dtype=torch.float32).squeeze()

@@ -78,8 +78,8 @@ def test_mixed_buffer_training_10_steps():
         n_pre = max(1, int(math.ceil(batch_size * w_pre)))
         n_self = batch_size - n_pre
 
-        s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre = pretrained_buf.sample_batch(n_pre, True)
-        s_self, c_self, p_self, o_self, own_self, wl_self = selfplay_buf.sample_batch(max(1, n_self), True)
+        s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, _ifs_pre = pretrained_buf.sample_batch(n_pre, True)
+        s_self, c_self, p_self, o_self, own_self, wl_self, _ifs_self = selfplay_buf.sample_batch(max(1, n_self), True)
 
         states = np.concatenate([s_pre, s_self], axis=0)
         chain_planes = np.concatenate([c_pre, c_self], axis=0)

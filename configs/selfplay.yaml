@@ -53,7 +53,10 @@ selfplay:
                             # Visible via positions_dropped getter; bump if dashboard shows nonzero drops.
 
   playout_cap:
-    fast_prob: 0.25
+    # Game-level playout cap (fast_prob / fast_sims / standard_sims) is mutually
+    # exclusive with the move-level cap (full_search_prob). Pool init raises if both
+    # are non-zero. Set fast_prob to 0.0 when using full_search_prob > 0.
+    fast_prob: 0.0
     fast_sims: 64          # scalar used by Rust SelfPlayRunner — floor raised from 50 (A3 fix)
     standard_sims: 200
     temperature_threshold_compound_moves: 15
@@ -61,3 +64,11 @@ selfplay:
     zoi_enabled: true    # restrict move sampling to ZOI of last N moves
     zoi_lookback: 16     # number of recent moves used as ZOI anchors
     zoi_margin: 5        # hex-distance threshold for ZOI inclusion
+
+    # Move-level playout cap for selective policy loss (KrakenBot-style).
+    # Each move independently draws full or quick search. Policy loss is applied only
+    # on full-search positions; value/chain/aux losses apply to all positions.
+    # Set full_search_prob: 0.0 to disable (all positions treated as full-search).
+    n_sims_quick: 100       # sims for quick-search moves (value/chain only)
+    n_sims_full: 600        # sims for full-search moves (all losses including policy)
+    full_search_prob: 0.25  # probability each move uses full search

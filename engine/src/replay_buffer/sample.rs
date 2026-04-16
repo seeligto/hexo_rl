@@ -232,6 +232,7 @@ impl ReplayBuffer {
         Bound<'py, PyArray1<f32>>,
         Bound<'py, PyArray3<u8>>,
         Bound<'py, PyArray3<u8>>,
+        Bound<'py, PyArray1<u8>>,
     )> {
         if self.size == 0 {
             return Err(PyValueError::new_err("Cannot sample from an empty replay buffer"));
@@ -249,8 +250,10 @@ impl ReplayBuffer {
         let mut out_outcomes    = vec![0.0f32; batch_size];
         // Ownership default 1 = "empty" — cells outside the symmetry's destination
         // window stay at the same neutral value as the row's initial state.
-        let mut out_ownership    = vec![1u8; batch_size * AUX_STRIDE];
-        let mut out_winning_line = vec![0u8; batch_size * AUX_STRIDE];
+        let mut out_ownership      = vec![1u8; batch_size * AUX_STRIDE];
+        let mut out_winning_line   = vec![0u8; batch_size * AUX_STRIDE];
+        // is_full_search is per-position metadata — no symmetry transform needed.
+        let mut out_is_full_search = vec![0u8; batch_size];
 
         // ── Fill output ───────────────────────────────────────────────────────
         for (b, &idx) in indices.iter().enumerate() {
@@ -276,6 +279,7 @@ impl ReplayBuffer {
             );
 
             out_outcomes[b] = self.outcomes[idx];
+            out_is_full_search[b] = self.is_full_search[idx];
         }
 
         // ── Transmute u16 Vecs to f16 Vecs and wrap as numpy arrays ───────────
@@ -306,8 +310,9 @@ impl ReplayBuffer {
         let winning_line_np = out_winning_line
             .into_pyarray(py)
             .reshape([batch_size, BOARD_H, BOARD_W])?;
+        let is_full_search_np = out_is_full_search.into_pyarray(py);
 
-        Ok((states_np, chain_np, policies_np, outcomes_np, ownership_np, winning_line_np))
+        Ok((states_np, chain_np, policies_np, outcomes_np, ownership_np, winning_line_np, is_full_search_np))
     }
 }
 
@@ -328,14 +333,15 @@ mod tests {
             capacity: 300,
             size: 0,
             head: 0,
-            states:       vec![0u16; 300 * STATE_STRIDE],
-            chain_planes: vec![0u16; 300 * CHAIN_STRIDE],
-            policies:     vec![0.0f32; 300 * POLICY_STRIDE],
-            outcomes:     vec![0.0f32; 300],
-            game_ids:     vec![-1i64; 300],
-            weights:      vec![default_w; 300],
-            ownership:    vec![1u8; 300 * AUX_STRIDE],
-            winning_line: vec![0u8; 300 * AUX_STRIDE],
+            states:          vec![0u16; 300 * STATE_STRIDE],
+            chain_planes:    vec![0u16; 300 * CHAIN_STRIDE],
+            policies:        vec![0.0f32; 300 * POLICY_STRIDE],
+            outcomes:        vec![0.0f32; 300],
+            game_ids:        vec![-1i64; 300],
+            weights:         vec![default_w; 300],
+            ownership:       vec![1u8; 300 * AUX_STRIDE],
+            winning_line:    vec![0u8; 300 * AUX_STRIDE],
+            is_full_search:  vec![1u8; 300],
             sym_tables: SymTables::new(),
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,

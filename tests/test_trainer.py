@@ -462,15 +462,17 @@ def test_recent_buffer_caps_at_capacity():
 
 def test_recent_buffer_sample_shapes():
     buf = make_recent_buffer(capacity=32)
-    states, chain_planes, policies, outcomes, ownership, winning_line = buf.sample(8)
-    assert states.shape       == (8, 18, 19, 19)
-    assert chain_planes.shape == (8, 6, 19, 19)
-    assert policies.shape     == (8, 362)
-    assert outcomes.shape     == (8,)
-    assert ownership.shape    == (8, 361)
-    assert winning_line.shape == (8, 361)
-    assert ownership.dtype    == np.uint8
-    assert winning_line.dtype == np.uint8
+    states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search = buf.sample(8)
+    assert states.shape         == (8, 18, 19, 19)
+    assert chain_planes.shape   == (8, 6, 19, 19)
+    assert policies.shape       == (8, 362)
+    assert outcomes.shape       == (8,)
+    assert ownership.shape      == (8, 361)
+    assert winning_line.shape   == (8, 361)
+    assert is_full_search.shape == (8,)
+    assert ownership.dtype      == np.uint8
+    assert winning_line.dtype   == np.uint8
+    assert is_full_search.dtype == np.uint8
 
 
 def test_recent_buffer_sample_empty_raises():
