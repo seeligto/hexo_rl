@@ -311,18 +311,30 @@ def benchmark_worker_pool(
     duration_sec: int = 15,
     n_workers: int = 4,
     mcts_sims_override: Optional[int] = None,
+    worker_sims: int = 200,
+    bench_max_moves: int = 128,
     n_runs: int = 5,
     warmup_sec: float = 10.0,
 ) -> Dict[str, Any]:
-    """Measure end-to-end self-play throughput in the multiprocess pool."""
+    """Measure end-to-end self-play throughput in the multiprocess pool.
+
+    ``worker_sims`` sets per-move simulation budget (default 200).
+    ``bench_max_moves`` caps game length so games complete within the bench
+    window on desktop hardware (default 100; production config uses 200+).
+    Pass --worker-sims / --bench-max-moves to override at the CLI level.
+    """
     from hexo_rl.selfplay.pool import WorkerPool
     from engine import ReplayBuffer
 
     _sp = config.get("selfplay", {})
     _mcts = config.get("mcts", {})
+    # Determine per-move sim count: explicit CLI override > bench default.
+    # Do NOT fall back to production config (400+ sims): games would not complete
+    # within the measurement window on desktop hardware.
+    effective_sims = mcts_sims_override if mcts_sims_override is not None else worker_sims
     bench_cfg = {
         "mcts": {
-            "n_simulations": mcts_sims_override if mcts_sims_override is not None else int(_mcts.get("n_simulations", config.get("n_simulations", 30))),
+            "n_simulations": effective_sims,
             "c_puct": float(_mcts.get("c_puct", config.get("c_puct", 1.5))),
             "temperature_threshold_ply": int(_mcts.get("temperature_threshold_ply", config.get("temperature_threshold_ply", 30))),
             "fpu_reduction": float(_mcts.get("fpu_reduction", 0.25)),
@@ -336,7 +348,7 @@ def benchmark_worker_pool(
             "n_workers": n_workers,
             "inference_batch_size": int(_sp.get("inference_batch_size", config.get("inference_batch_size", 32))),
             "inference_max_wait_ms": float(_sp.get("inference_max_wait_ms", config.get("inference_max_wait_ms", 8.0))),
-            "max_moves_per_game": int(_sp.get("max_game_moves", _sp.get("max_moves_per_game", config.get("max_moves_per_game", 128)))),
+            "max_moves_per_game": bench_max_moves,
             "leaf_batch_size": int(_sp.get("leaf_batch_size", 8)),
             # Forward Gumbel / completed-Q flags so the worker-pool bench
             # actually exercises the variant's root search path.
@@ -694,10 +706,16 @@ def parse_args() -> argparse.Namespace:
                    help="MCTS simulations for throughput benchmark")
     p.add_argument("--pool-workers", type=int, default=default_workers,
                    help="Worker count for self-play throughput benchmark")
-    p.add_argument("--pool-duration", type=int, default=15,
-                   help="Duration in seconds for worker pool benchmark")
+    p.add_argument("--pool-duration", type=int, default=60,
+                   help="Duration in seconds per measurement run for worker pool benchmark")
     p.add_argument("--mcts-search-sims", type=int, default=None,
-                   help="Override MCTS simulations per move (default from config)")
+                   help="Override MCTS simulations per move for MCTS CPU bench (default from config)")
+    p.add_argument("--worker-sims", type=int, default=200,
+                   help="Simulations per move for the worker-pool bench (default 200). "
+                        "Keep low enough that games complete within the bench window on target hardware.")
+    p.add_argument("--bench-max-moves", type=int, default=128,
+                   help="Max plies per game for the worker-pool bench (default 128). "
+                        "Production config uses 200; lower value ensures games finish within bench window.")
     p.add_argument("--n-runs", type=int, default=5,
                    help="Number of measurement repeats per metric (default 5)")
     return p.parse_args()
@@ -803,6 +821,8 @@ def main() -> None:
                 duration_sec=args.pool_duration,
                 n_workers=args.pool_workers,
                 mcts_sims_override=args.mcts_search_sims,
+                worker_sims=args.worker_sims,
+                bench_max_moves=args.bench_max_moves,
                 n_runs=n_runs,
                 warmup_sec=warmup_worker,
             ))

@@ -95,10 +95,9 @@ def compute_chain_loss(
 
     Args:
         chain_pred:   (B, 6, H, W) raw regression outputs from chain_head.
-        chain_target: (B, 6, H, W) target chain planes. Typically a slice of
-                      the input tensor (`input[:, 18:24]`) since the 6 Q13
-                      chain-length planes are in the input feature tensor and
-                      the head is asked to reproduce them from trunk features.
+        chain_target: (B, 6, H, W) target chain planes. Passed as a separate
+                      buffer (computed from game positions) — chain planes are
+                      no longer part of the 18-channel input tensor.
         legal_mask:   Optional float mask broadcastable to (B, 6, H, W) with
                       1.0 where the cell is on the board and its chain value
                       is meaningful, 0.0 where the loss should be ignored.

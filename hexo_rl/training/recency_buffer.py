@@ -69,22 +69,12 @@ class RecentBuffer:
         the pre-allocated zeros/ones in place.
         """
         with self._lock:
-            self._states[self._head]   = state
-            if chain_planes is not None:
-                self._chain_planes[self._head] = chain_planes
-            else:
-                self._chain_planes[self._head] = 0
-            if policy is not None:
-                self._policies[self._head] = policy
-            self._outcomes[self._head] = float(outcome)
-            if ownership is not None:
-                self._ownership[self._head] = ownership
-            else:
-                self._ownership[self._head] = 1  # "empty" encoding
-            if winning_line is not None:
-                self._winning_line[self._head] = winning_line
-            else:
-                self._winning_line[self._head] = 0
+            self._states[self._head] = state
+            self._chain_planes[self._head] = chain_planes if chain_planes is not None else 0
+            self._policies[self._head]     = policy       if policy       is not None else 0
+            self._outcomes[self._head]     = float(outcome)
+            self._ownership[self._head]    = ownership    if ownership    is not None else 1  # "empty"
+            self._winning_line[self._head] = winning_line if winning_line is not None else 0
             self._head = (self._head + 1) % self.capacity
             self._size = min(self._size + 1, self.capacity)
 
