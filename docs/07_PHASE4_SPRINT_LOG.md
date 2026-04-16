@@ -3020,3 +3020,108 @@ Fresh run from `checkpoints/bootstrap_model.pt`. Same monitoring script as Exp A
 
 - `feat(env): zero_chain_planes config flag for input ablation experiment (Exp C §95)`
 - `docs(sprint): §95 Experiment C — chain plane input ablation`
+
+---
+
+## §96 — Exp E: Gumbel MCTS desktop (A/B vs laptop exp D PUCT+completedQ) (2026-04-16)
+
+### Hypothesis
+
+Gumbel top-m + completed-Q policy targets produce better move rankings per sim → faster
+tactical convergence. Expected -5 to -15% sims/s vs PUCT but net-positive pos/hr via better
+training signal per game.
+
+### Setup
+
+- Hardware: Ryzen 7 3700x + RTX 3070 (desktop)
+- Variant: `gumbel_full` — only difference from laptop exp D is `gumbel_mcts: true`
+- Checkpoint: `checkpoints/bootstrap_model.pt` (24-plane v3b)
+- Run label: `exp_E_gumbel_full_desktop`
+- JSONL: `logs/train_86668ee1d1194479a240fec4d9531ebd.jsonl`
+- PID: 25327
+- Launched: 2026-04-16
+
+### Config diff from pre-§69 gumbel_full
+
+| Key | Before | After | Source |
+|-----|--------|-------|--------|
+| `n_workers` | 14 (inherited) | 10 | D3 sweep winner (§81) |
+| `inference_max_wait_ms` | 12.0 | 5.0 | D3 sweep winner (§81) |
+| `training_steps_per_game` | 2.0 | 4.0 | P3 / laptop exp D |
+| `max_train_burst` | 8 | 16 | P3 / laptop exp D |
+
+### Config diff from laptop exp D
+
+| Key | Laptop exp D | Desktop exp E |
+|-----|--------------|---------------|
+| `gumbel_mcts` | false (PUCT) | true (Gumbel) |
+| `n_workers` | 14 | 10 (Zen2 GIL ceiling) |
+| `inference_max_wait_ms` | 4.0 | 5.0 |
+
+All other keys identical (training_steps_per_game=4, burst=16, max_game_moves=200,
+draw_value=-0.5, decay_steps=20k, total_steps=200k).
+
+### Verified inherited keys
+
+| Key | Value | Status |
+|-----|-------|--------|
+| `draw_value` | -0.5 | VERIFIED |
+| `aux_chain_weight` | 1.0 | VERIFIED |
+| `mixing.decay_steps` | 20_000 | VERIFIED |
+| `max_game_moves` | 200 | VERIFIED |
+| `total_steps` | 200_000 | VERIFIED |
+
+### Monitoring
+
+Script: `scripts/monitor_exp_E.sh <jsonl_path>`
+
+Schedule:
+- Steps 0–1000: every 30 min
+- Steps 1000–5000: every 1 hr
+- Step 5000: `make probe.latest` — LOG result, do NOT kill on FAIL (C1 is the gate)
+- Steps 5000–15000: every 2 hr
+- Step 10000: re-probe
+- Step 15000: re-probe + full comparison to laptop exp D
+
+Gumbel-specific metrics to watch:
+- `sims_per_sec` (expect ~3400 per game from gumbel_audit smoke)
+- `pos_per_hr` (compare vs laptop exp D throughput)
+- `truncation_rate` (% games hitting 200-ply cap)
+- `policy_entropy_selfplay` (expect higher than PUCT)
+
+### Kill conditions (relaxed per exp D learnings)
+
+Kill ONLY if:
+- `draw_rate > 70%` over 500+ games AND not declining over 2k steps
+- `policy_entropy_selfplay < 1.5` for 500+ steps
+- `grad_norm > 10` for 50+ steps
+- `pos_per_hr < 35k` sustained (throughput fully broken)
+- NaN / CUDA OOM / crash
+
+Do NOT kill on probe C2/C3 FAIL at any step.
+
+### Success metrics at step 20k
+
+(a) `draw_rate` trajectory ≤ laptop exp D at same step  
+(b) `pos_per_hr` ≥ 80% of laptop exp D (throughput parity)  
+(c) C2 ≥ 30%, C3 ≥ 45% at step 15k (faster tactical coupling than laptop)
+
+---
+
+### Q26 — gumbel_targets_desktop.yaml nested training block defaults (WATCH)
+
+**Title:** Q26 — nested `training:` block in gumbel_targets_desktop.yaml  
+**Priority:** WATCH  
+**Issue:** `configs/variants/gumbel_targets_desktop.yaml` uses a nested `training:` block
+(`training: { max_train_burst: 8 }`). The config deep-merger treats top-level keys as
+atomic except for dict values. The nested `training:` key does not exist in `training.yaml`
+(which uses flat keys). Effect: `training_steps_per_game` defaults to 1.0 (training.yaml
+flat key is not overridden; nested key is merged under a new `training` sub-dict, not into
+the flat key). May explain any laptop throughput anomaly if gumbel_targets_desktop was
+ever used with training_steps_per_game expected to be >1.  
+**Action:** Audit after exp D completes. Do NOT modify until exp D is done.  
+**Scope:** gumbel_targets_desktop.yaml only. gumbel_full.yaml uses flat keys correctly.
+
+### Commits
+
+- `feat(exp E): gumbel_full D3-sweep alignment + P3 training defaults + monitoring`
