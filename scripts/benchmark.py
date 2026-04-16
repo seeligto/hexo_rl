@@ -317,17 +317,34 @@ def benchmark_worker_pool(
     from hexo_rl.selfplay.pool import WorkerPool
     from engine import ReplayBuffer
 
+    _sp = config.get("selfplay", {})
+    _mcts = config.get("mcts", {})
     bench_cfg = {
         "mcts": {
-            "n_simulations": mcts_sims_override if mcts_sims_override is not None else int(config.get("n_simulations", 30)),
-            "c_puct": float(config.get("c_puct", 1.5)),
-            "temperature_threshold_ply": int(config.get("temperature_threshold_ply", 30)),
+            "n_simulations": mcts_sims_override if mcts_sims_override is not None else int(_mcts.get("n_simulations", config.get("n_simulations", 30))),
+            "c_puct": float(_mcts.get("c_puct", config.get("c_puct", 1.5))),
+            "temperature_threshold_ply": int(_mcts.get("temperature_threshold_ply", config.get("temperature_threshold_ply", 30))),
+            "fpu_reduction": float(_mcts.get("fpu_reduction", 0.25)),
+            "quiescence_enabled": bool(_mcts.get("quiescence_enabled", True)),
+            "quiescence_blend_2": float(_mcts.get("quiescence_blend_2", 0.3)),
+            "dirichlet_alpha": float(_mcts.get("dirichlet_alpha", 0.3)),
+            "epsilon": float(_mcts.get("epsilon", 0.25)),
+            "dirichlet_enabled": bool(_mcts.get("dirichlet_enabled", True)),
         },
         "selfplay": {
             "n_workers": n_workers,
-            "inference_batch_size": int(config.get("inference_batch_size", 32)),
-            "inference_max_wait_ms": float(config.get("inference_max_wait_ms", 8.0)),
-            "max_moves_per_game": int(config.get("max_moves_per_game", 128)),
+            "inference_batch_size": int(_sp.get("inference_batch_size", config.get("inference_batch_size", 32))),
+            "inference_max_wait_ms": float(_sp.get("inference_max_wait_ms", config.get("inference_max_wait_ms", 8.0))),
+            "max_moves_per_game": int(_sp.get("max_game_moves", _sp.get("max_moves_per_game", config.get("max_moves_per_game", 128)))),
+            "leaf_batch_size": int(_sp.get("leaf_batch_size", 8)),
+            # Forward Gumbel / completed-Q flags so the worker-pool bench
+            # actually exercises the variant's root search path.
+            "gumbel_mcts": bool(_sp.get("gumbel_mcts", False)),
+            "gumbel_m": int(_sp.get("gumbel_m", 16)),
+            "gumbel_explore_moves": int(_sp.get("gumbel_explore_moves", 10)),
+            "completed_q_values": bool(_sp.get("completed_q_values", False)),
+            "c_visit": float(_sp.get("c_visit", 50.0)),
+            "c_scale": float(_sp.get("c_scale", 1.0)),
             # pool.py enforces playout_cap.fast_sims as a required key (no silent
             # defaults). The benchmark doesn't care about fast-game mixing — set
             # fast_prob=0.0 so fast_sims is never actually consumed, and pass
@@ -680,12 +697,14 @@ def parse_args() -> argparse.Namespace:
                    help="Duration in seconds for worker pool benchmark")
     p.add_argument("--mcts-search-sims", type=int, default=None,
                    help="Override MCTS simulations per move (default from config)")
+    p.add_argument("--n-runs", type=int, default=5,
+                   help="Number of measurement repeats per metric (default 5)")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    n_runs = 5
+    n_runs = int(args.n_runs)
 
     # Optimization: Enable TensorFloat32 for Ampere+ GPUs
     if torch.cuda.is_available():
