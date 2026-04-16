@@ -414,13 +414,8 @@ class Trainer:
                 chain_loss, chain_weight,
             )
 
-        # Guard: if loss is non-finite, reset any poisoned BN stats and skip step.
-        # Fixes 1 & 2 prevent this in normal operation; this is the safety net.
+        # Guard: skip step on non-finite loss (safety net for numerical instability).
         if not torch.isfinite(loss):
-            for m in self.model.modules():
-                if isinstance(m, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d)):
-                    if not torch.isfinite(m.running_mean).all():
-                        m.reset_running_stats()
             log.warning(
                 "nan_or_inf_loss_skipped",
                 step=self.step,

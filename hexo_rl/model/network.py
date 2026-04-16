@@ -7,15 +7,15 @@ Architecture (Multi-Window Cluster-Based Approach):
           (18 AlphaZero history/scalar planes + 6 Q13 chain-length planes)
 
   Backbone:
-    Conv2d(24 → filters, 3×3, padding=1) → BN → ReLU
+    Conv2d(24 → filters, 3×3, padding=1) → GN(8) → ReLU
     × res_blocks residual blocks:
-      Conv2d(filters → filters, 3×3, padding=1) → BN → ReLU
-      Conv2d(filters → filters, 3×3, padding=1) → BN
+      Conv2d(filters → filters, 3×3, padding=1) → GN(8) → ReLU
+      Conv2d(filters → filters, 3×3, padding=1) → GN(8)
       SE block: GAP → FC(C → C//r) → ReLU → FC(C//r → C) → Sigmoid → scale
       + skip → ReLU
 
   Policy head:
-    Conv2d(filters → 2, 1×1) → BN → ReLU → Flatten
+    Conv2d(filters → 2, 1×1) → ReLU → Flatten
     → Linear(2·H·W → H·W + 1)   (last logit = pass move)
     → log_softmax
 
@@ -24,7 +24,7 @@ Architecture (Multi-Window Cluster-Based Approach):
     Concat → (2C,) → FC(2C → 256) → ReLU → FC(256 → 1) → Tanh
 
   Opponent reply head (training only):
-    Conv2d(filters → 2, 1×1) → BN → ReLU → Flatten
+    Conv2d(filters → 2, 1×1) → ReLU → Flatten
     → Linear(2·H·W → H·W + 1)
     → log_softmax
 """
@@ -62,15 +62,15 @@ class ResidualBlock(nn.Module):
     def __init__(self, filters: int, se_reduction_ratio: int = 4) -> None:
         super().__init__()
         self.conv1 = nn.Conv2d(filters, filters, 3, padding=1, bias=False)
-        self.bn1   = nn.BatchNorm2d(filters)
+        self.gn1   = nn.GroupNorm(8, filters)
         self.conv2 = nn.Conv2d(filters, filters, 3, padding=1, bias=False)
-        self.bn2   = nn.BatchNorm2d(filters)
+        self.gn2   = nn.GroupNorm(8, filters)
         self.se    = SEBlock(filters, se_reduction_ratio)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
+        out = F.relu(self.gn1(self.conv1(x)))
+        out = self.gn2(self.conv2(out))
         out = self.se(out)
         return F.relu(out + residual)
 
@@ -80,13 +80,13 @@ class Trunk(nn.Module):
                  se_reduction_ratio: int = 4):
         super().__init__()
         self.input_conv = nn.Conv2d(in_channels, filters, 3, padding=1, bias=False)
-        self.input_bn   = nn.BatchNorm2d(filters)
+        self.input_gn   = nn.GroupNorm(8, filters)
         self.tower      = nn.Sequential(
             *[ResidualBlock(filters, se_reduction_ratio) for _ in range(res_blocks)]
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = F.relu(self.input_bn(self.input_conv(x)))
+        out = F.relu(self.input_gn(self.input_conv(x)))
         return self.tower(out)
 
 
@@ -111,7 +111,6 @@ class HexTacToeNet(nn.Module):
 
         # Policy head
         self.policy_conv = nn.Conv2d(filters, 2, 1)
-        self.policy_bn = nn.BatchNorm2d(2)
         self.policy_fc = nn.Linear(2 * spatial, spatial + 1)
 
         # Value head — global avg+max pooling
@@ -120,7 +119,6 @@ class HexTacToeNet(nn.Module):
 
         # Opponent reply auxiliary head (training only)
         self.opp_reply_conv = nn.Conv2d(filters, 2, 1)
-        self.opp_reply_bn = nn.BatchNorm2d(2)
         self.opp_reply_fc = nn.Linear(2 * spatial, spatial + 1)
 
         # Value uncertainty head (training only — diagnostic σ², never used in MCTS)
@@ -190,7 +188,7 @@ class HexTacToeNet(nn.Module):
         out = self.trunk(x)
 
         # Policy head
-        p = F.relu(self.policy_bn(self.policy_conv(out)))
+        p = F.relu(self.policy_conv(out))
         p = p.flatten(1)
         log_policy = F.log_softmax(self.policy_fc(p), dim=1)
 
@@ -206,7 +204,7 @@ class HexTacToeNet(nn.Module):
         extras: list = []
 
         if aux:
-            o = F.relu(self.opp_reply_bn(self.opp_reply_conv(out)))
+            o = F.relu(self.opp_reply_conv(out))
             o = o.flatten(1)
             extras.append(F.log_softmax(self.opp_reply_fc(o), dim=1))
 
