@@ -29,6 +29,7 @@ CORPUS_N ?= 2500
 MAX_POSITIONS ?= 50000
 
 N_CORES ?= $(shell $(PY) -c "import os; print(os.cpu_count() or 4)")
+BENCH_WORKERS ?= $(shell $(PY) -c "import os; print(max(1, (os.cpu_count() or 4) - 2))")
 
 
 .PHONY: help
@@ -74,7 +75,7 @@ test.slow: ## Run slow/integration Python tests (~2-5 min)
 
 .PHONY: bench
 bench: ## Higher-confidence benchmark (n=5, warm-up; full Phase 4.5 gate methodology)
-	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers 14 --pool-duration 60
+	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(BENCH_WORKERS) --pool-duration 60
 
 
 # ── Training ──────────────────────────────────────────────────────────────────
