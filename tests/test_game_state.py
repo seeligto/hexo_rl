@@ -94,7 +94,7 @@ def test_to_tensor_shape():
     b = Board()
     s = GameState.from_board(b)
     t, c = s.to_tensor()
-    assert t.shape == (1, 24, 19, 19)
+    assert t.shape == (1, 18, 19, 19)
 
 def test_to_tensor_empty_board_has_zero_stone_planes():
     b = Board()
@@ -154,7 +154,7 @@ def test_history_planes_graceful_missing():
     b = Board()
     s = GameState.from_board(b)
     t, _ = s.to_tensor()
-    assert t.shape == (1, 24, 19, 19)
+    assert t.shape == (1, 18, 19, 19)
     assert np.all(t[0, 1:8]  == 0.0), "my-stone history planes should be zero at game start"
     assert np.all(t[0, 9:16] == 0.0), "opp-stone history planes should be zero at game start"
 
@@ -169,7 +169,7 @@ def test_history_planes_are_filled():
     s3 = s2.apply_move(b, 2, 0)
 
     t, centers = s3.to_tensor()
-    assert t.shape[1] == 24
+    assert t.shape[1] == 18
 
     # plane 0 = current player's (P1) stones at t.
     # P1 placed a stone at (0,0). Window center at s3 = (1,0) (bbox [0,2]×[0,0]).
@@ -184,12 +184,12 @@ def test_history_planes_are_filled():
     assert t[0, 1].any(), "t-1 my-stones plane should be non-zero (prior position recorded)"
 
 def test_to_tensor_uses_cached_views():
-    """to_tensor() must produce (K, 24, 19, 19) with correct stone planes using cached self.views."""
+    """to_tensor() must produce (K, 18, 19, 19) with correct stone planes using cached self.views."""
     b = Board()
     b.apply_move(0, 0)   # P1 at (0,0); now P2's turn
     s = GameState.from_board(b)
     t, c = s.to_tensor()
-    assert t.shape == (1, 24, 19, 19)
+    assert t.shape == (1, 18, 19, 19)
     # Current player is P2; opponent (P1) stone at (0,0) is in tensor plane 8.
     assert t[0, 8, 9, 9] == 1.0, "opponent stone must appear in plane 8 of to_tensor output"
 

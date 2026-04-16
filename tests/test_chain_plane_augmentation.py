@@ -5,7 +5,7 @@ scatter matches a ground-truth path that transforms stones by each hex
 symmetry first and then computes fresh chain planes.
 
 This is THE load-bearing correctness test for the axis-permutation scatter
-landed in C3 (engine/src/replay_buffer/sample.rs). Failure means the 18..23
+landed in C3 (engine/src/replay_buffer/sample.rs). Failure means the chain
 plane block is being scattered with the wrong source plane index and training
 data is silently corrupted on augmentation.
 
@@ -17,6 +17,13 @@ that proves the Rust kernel is doing the right thing. If one side drifts
 from the other, this test catches it. Replacing the Python derivation with
 a call into `engine.apply_symmetry` would remove the oracle and let the
 Rust kernel "validate itself". Keep the two implementations independent.
+
+## State / chain separation (post-Q13 buffer split)
+
+State tensor is 18-plane; chain planes are stored as a separate 6-plane
+sub-buffer in the Rust ReplayBuffer.  `sample_batch(augment=True)` returns a
+6-tuple (states, chain_planes, policies, outcomes, ownership, winning_line).
+Chain planes are the second element; states no longer include them.
 
 Test positions use stones near the board origin so every hex symmetry
 transform keeps them in-window — edge-mapping asymmetry would introduce
@@ -30,10 +37,11 @@ from engine import ReplayBuffer
 from hexo_rl.env.game_state import _CHAIN_CAP, _compute_chain_planes
 from hexo_rl.utils.constants import BOARD_SIZE
 
-CHANNELS   = 24
-N_ACTIONS  = BOARD_SIZE * BOARD_SIZE + 1
-AUX_STRIDE = BOARD_SIZE * BOARD_SIZE
-HALF       = (BOARD_SIZE - 1) // 2  # 9
+N_STATE_CHANNELS = 18
+N_CHAIN_PLANES   = 6
+N_ACTIONS        = BOARD_SIZE * BOARD_SIZE + 1
+AUX_STRIDE       = BOARD_SIZE * BOARD_SIZE
+HALF             = (BOARD_SIZE - 1) // 2  # 9
 
 
 def _flat_to_axial(idx: int) -> tuple[int, int]:
@@ -77,24 +85,24 @@ def _transform_stones(stones: np.ndarray, sym_idx: int) -> np.ndarray:
 
 
 def _build_state_tensor(cur: np.ndarray, opp: np.ndarray) -> np.ndarray:
-    """Build a (24, 19, 19) float16 state tensor matching the to_tensor layout.
-    Planes 0 = cur, 8 = opp, 16/17 = scalar zero, 1..7 + 9..15 = zero,
-    18..23 = Q13 chain planes computed from cur/opp."""
-    tensor = np.zeros((CHANNELS, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+    """Build an (18, 19, 19) float16 state tensor.
+    Planes 0 = cur, 8 = opp, 16/17 = scalar zero, 1..7 + 9..15 = zero.
+    Chain planes are stored separately; not included here."""
+    tensor = np.zeros((N_STATE_CHANNELS, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
     tensor[0] = cur
     tensor[8] = opp
-    chain = _compute_chain_planes(cur.astype(np.float32), opp.astype(np.float32))
-    tensor[18:24] = chain.astype(np.float16) / np.float16(_CHAIN_CAP)
     return tensor
 
 
-def _decode_chain_planes(state_out: np.ndarray) -> np.ndarray:
-    """Extract chain planes from a sampled (24, 19, 19) state and denormalize
-    back to int8 values in [0, 6] for comparison with fresh recomputation."""
-    chain_f16 = state_out[18:24]
-    # Round-trip /6 then *6 is not byte-exact in f16, so compare values
-    # rounded to nearest integer and then cast to int8.
-    chain_f32 = chain_f16.astype(np.float32) * float(_CHAIN_CAP)
+def _build_chain_tensor(cur: np.ndarray, opp: np.ndarray) -> np.ndarray:
+    """Build a (6, 19, 19) float16 chain-plane tensor from cur/opp stones."""
+    chain = _compute_chain_planes(cur.astype(np.float32), opp.astype(np.float32))
+    return (chain.astype(np.float16) / np.float16(_CHAIN_CAP))
+
+
+def _decode_chain_planes(chain_out: np.ndarray) -> np.ndarray:
+    """Denormalize sampled (6, 19, 19) f16 chain planes back to int8 [0, 6]."""
+    chain_f32 = chain_out.astype(np.float32) * float(_CHAIN_CAP)
     return np.round(chain_f32).astype(np.int8)
 
 
@@ -167,20 +175,22 @@ def test_chain_plane_augmentation_byte_exact(pos_name, pos_fn):
 
     # Push a single original sample into a fresh buffer.
     buf = ReplayBuffer(4)
-    state = _build_state_tensor(cur, opp)
+    state  = _build_state_tensor(cur, opp)
+    chain  = _build_chain_tensor(cur, opp)
     policy = np.zeros(N_ACTIONS, dtype=np.float32)
     policy[0] = 1.0
     own = np.ones(AUX_STRIDE, dtype=np.uint8)
-    wl = np.zeros(AUX_STRIDE, dtype=np.uint8)
-    buf.push(state, policy, 0.0, own, wl)
+    wl  = np.zeros(AUX_STRIDE, dtype=np.uint8)
+    buf.push(state, chain, policy, 0.0, own, wl)
 
     # Sample many times with augment=True, collect which syms appear.
+    # sample_batch returns 6-tuple: (states, chain_planes, policies, outcomes, own, wl)
     seen_syms: set[int] = set()
     unknown_keys: list[bytes] = []
     N_SAMPLES = 400
     for _ in range(N_SAMPLES):
-        states_out, _, _, _, _ = buf.sample_batch(1, augment=True)
-        sampled = _decode_chain_planes(np.asarray(states_out[0]))
+        _, chain_out, _, _, _, _ = buf.sample_batch(1, augment=True)
+        sampled = _decode_chain_planes(np.asarray(chain_out[0]))
         key = sampled.tobytes()
         if key in expected_chain_by_key:
             seen_syms.add(expected_chain_by_key[key])

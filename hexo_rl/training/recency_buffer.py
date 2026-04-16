@@ -30,16 +30,17 @@ class RecentBuffer:
     def __init__(
         self,
         capacity: int,
-        state_shape: tuple[int, ...] = (24, 19, 19),
+        state_shape: tuple[int, ...] = (18, 19, 19),
         policy_len: int = 362,
         aux_stride: int = 361,
     ) -> None:
         if capacity < 1:
             raise ValueError(f"capacity must be >= 1, got {capacity}")
         self.capacity = capacity
-        self._states   = np.zeros((capacity, *state_shape), dtype=np.float16)
-        self._policies = np.zeros((capacity, policy_len),   dtype=np.float32)
-        self._outcomes = np.zeros(capacity,                  dtype=np.float32)
+        self._states       = np.zeros((capacity, *state_shape), dtype=np.float16)
+        self._chain_planes = np.zeros((capacity, 6, 19, 19),   dtype=np.float16)
+        self._policies     = np.zeros((capacity, policy_len),   dtype=np.float32)
+        self._outcomes     = np.zeros(capacity,                  dtype=np.float32)
         # Default ownership=1 ("empty" per Rust encoding), winning_line=0 — neutral fallback
         # so unset slots decode to harmless aux targets if ever sampled.
         self._ownership    = np.ones((capacity, aux_stride),  dtype=np.uint8)
@@ -56,37 +57,33 @@ class RecentBuffer:
     def push(
         self,
         state:        np.ndarray,
-        policy:       np.ndarray,
-        outcome:      float,
+        chain_planes: Optional[np.ndarray] = None,
+        policy:       Optional[np.ndarray] = None,
+        outcome:      float = 0.0,
         ownership:    Optional[np.ndarray] = None,
         winning_line: Optional[np.ndarray] = None,
     ) -> None:
         """Add one position; overwrites oldest when full.
 
-        ownership and winning_line default to None which leaves the pre-allocated
-        ones/zeros in place — used by tests that only exercise the (s, p, o) path.
+        chain_planes, ownership, and winning_line default to None which leaves
+        the pre-allocated zeros/ones in place.
         """
         with self._lock:
-            self._states[self._head]   = state
-            self._policies[self._head] = policy
-            self._outcomes[self._head] = float(outcome)
-            if ownership is not None:
-                self._ownership[self._head] = ownership
-            else:
-                self._ownership[self._head] = 1  # "empty" encoding
-            if winning_line is not None:
-                self._winning_line[self._head] = winning_line
-            else:
-                self._winning_line[self._head] = 0
+            self._states[self._head] = state
+            self._chain_planes[self._head] = chain_planes if chain_planes is not None else 0
+            self._policies[self._head]     = policy       if policy       is not None else 0
+            self._outcomes[self._head]     = float(outcome)
+            self._ownership[self._head]    = ownership    if ownership    is not None else 1  # "empty"
+            self._winning_line[self._head] = winning_line if winning_line is not None else 0
             self._head = (self._head + 1) % self.capacity
             self._size = min(self._size + 1, self.capacity)
 
     def sample(
         self, n: int
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Uniform random sample of ``n`` positions from the stored recent window.
 
-        Returns 5-tuple (states, policies, outcomes, ownership, winning_line).
+        Returns 6-tuple (states, chain_planes, policies, outcomes, ownership, winning_line).
         ownership and winning_line are returned as (n, aux_stride) u8 — caller
         reshapes to (n, 19, 19) if needed.
 
@@ -110,6 +107,7 @@ class RecentBuffer:
             indices = np.random.randint(0, self._size, n)
             return (
                 self._states[indices],
+                self._chain_planes[indices],
                 self._policies[indices],
                 self._outcomes[indices],
                 self._ownership[indices],

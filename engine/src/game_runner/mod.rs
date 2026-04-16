@@ -70,14 +70,16 @@ pub struct SelfPlayRunner {
     /// reached the replay buffer. Monotonic since `start()`.
     pub(crate) positions_dropped: Arc<AtomicU64>,
     /// Per-row training rows produced by self-play.
-    /// Tuple: (feat, policy, outcome, plies, combined_aux_u8)
+    /// Tuple: (feat, chain, policy, outcome, plies, combined_aux_u8)
+    ///   feat:   18-plane state (f32, flat [18 × TOTAL_CELLS])
+    ///   chain:  6-plane chain-length (f32, flat [6 × TOTAL_CELLS], normalized /6)
     ///   combined_aux_u8 layout: first TOTAL_CELLS bytes = ownership
     ///     (0=P2, 1=empty, 2=P1), last TOTAL_CELLS = winning_line binary mask.
     ///     Both projected to the row's own cluster window centre at the time
     ///     the position was recorded (NOT the game-end bbox centroid), so the
     ///     aux target frame aligns with the state frame under later symmetry
     ///     augmentation in the replay buffer.
-    pub(crate) results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, f32, usize, Vec<u8>)>>>,
+    pub(crate) results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>)>>>,
     /// Ring-buffer of recent game results for Python logging.
     /// Tuple: (plies, winner_code, move_history, worker_id)
     ///   winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
@@ -97,7 +99,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 24 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -184,18 +186,14 @@ impl SelfPlayRunner {
 
     /// Drain all buffered positions and return them as numpy arrays.
     ///
-    /// Returns (features, policies, values, plies, ownership, winning_line) where each
-    /// row is one position:
-    ///   features:     (N, feat_len) float32
+    /// Returns (features, chain_planes, policies, values, plies, ownership, winning_line):
+    ///   features:     (N, feat_len) float32 — 18-plane state tensor
+    ///   chain_planes: (N, 6*361)    float32 — Q13 chain-length planes (flat, /6 normalized)
     ///   policies:     (N, pol_len)  float32
     ///   values:       (N,)          float32
     ///   plies:        (N,)          uint64 — game length in plies (game-length weighting)
     ///   ownership:    (N, 361)      uint8  — per-row aux target {0=P2, 1=empty, 2=P1}
     ///   winning_line: (N, 361)      uint8  — per-row binary mask of winning 6-in-a-row
-    ///
-    /// Ownership and winning_line are projected to each row's per-cluster window
-    /// centre (NOT the game-end bbox centroid). They live in the same coordinate
-    /// frame as the row's state planes — see worker_loop.rs for the reprojection.
     ///
     /// N = 0 when no positions are available (arrays have zero rows).
     pub fn collect_data<'py>(
@@ -204,26 +202,30 @@ impl SelfPlayRunner {
     ) -> PyResult<(
         Bound<'py, PyArray2<f32>>,
         Bound<'py, PyArray2<f32>>,
+        Bound<'py, PyArray2<f32>>,
         Bound<'py, PyArray1<f32>>,
         Bound<'py, PyArray1<u64>>,
         Bound<'py, PyArray2<u8>>,
         Bound<'py, PyArray2<u8>>,
     )> {
-        let feat_len = self.batcher.feature_len();
-        let pol_len  = self.pol_len;
+        let feat_len  = self.batcher.feature_len();
+        let chain_len = 6 * TOTAL_CELLS;
+        let pol_len   = self.pol_len;
 
         let mut results = self.results.lock().expect("results lock poisoned");
         let n = results.len();
 
-        let mut flat_feats = Vec::with_capacity(n * feat_len);
-        let mut flat_pols  = Vec::with_capacity(n * pol_len);
-        let mut vals       = Vec::with_capacity(n);
-        let mut plies_out  = Vec::with_capacity(n);
-        let mut flat_own   = Vec::with_capacity(n * TOTAL_CELLS);
-        let mut flat_wl    = Vec::with_capacity(n * TOTAL_CELLS);
+        let mut flat_feats  = Vec::with_capacity(n * feat_len);
+        let mut flat_chain  = Vec::with_capacity(n * chain_len);
+        let mut flat_pols   = Vec::with_capacity(n * pol_len);
+        let mut vals        = Vec::with_capacity(n);
+        let mut plies_out   = Vec::with_capacity(n);
+        let mut flat_own    = Vec::with_capacity(n * TOTAL_CELLS);
+        let mut flat_wl     = Vec::with_capacity(n * TOTAL_CELLS);
 
-        while let Some((feat, pol, outcome, plies, aux_u8)) = results.pop_front() {
+        while let Some((feat, chain, pol, outcome, plies, aux_u8)) = results.pop_front() {
             flat_feats.extend_from_slice(&feat);
+            flat_chain.extend_from_slice(&chain);
             flat_pols.extend_from_slice(&pol);
             vals.push(outcome);
             plies_out.push(plies as u64);
@@ -232,14 +234,15 @@ impl SelfPlayRunner {
             flat_wl.extend_from_slice(&aux_u8[TOTAL_CELLS..]);
         }
 
-        let feats_np = flat_feats.into_pyarray(py).reshape([n, feat_len])?;
-        let pols_np  = flat_pols.into_pyarray(py).reshape([n, pol_len])?;
-        let vals_np  = vals.into_pyarray(py);
-        let gids_np  = plies_out.into_pyarray(py);
-        let own_np   = flat_own.into_pyarray(py).reshape([n, TOTAL_CELLS])?;
-        let wl_np    = flat_wl.into_pyarray(py).reshape([n, TOTAL_CELLS])?;
+        let feats_np  = flat_feats.into_pyarray(py).reshape([n, feat_len])?;
+        let chain_np  = flat_chain.into_pyarray(py).reshape([n, chain_len])?;
+        let pols_np   = flat_pols.into_pyarray(py).reshape([n, pol_len])?;
+        let vals_np   = vals.into_pyarray(py);
+        let gids_np   = plies_out.into_pyarray(py);
+        let own_np    = flat_own.into_pyarray(py).reshape([n, TOTAL_CELLS])?;
+        let wl_np     = flat_wl.into_pyarray(py).reshape([n, TOTAL_CELLS])?;
 
-        Ok((feats_np, pols_np, vals_np, gids_np, own_np, wl_np))
+        Ok((feats_np, chain_np, pols_np, vals_np, gids_np, own_np, wl_np))
     }
 
     pub fn stop(&self) {
@@ -371,7 +374,7 @@ mod tests {
     fn test_worker_id_assignment() {
         // Run with max_moves_per_game = 0 to avoid triggering MCTS and inference server dependency
         let runner = SelfPlayRunner::new(
-            4, 0, 1, 1, 1.5, 0.25, 24*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
+            4, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000,
         );
@@ -493,7 +496,7 @@ mod tests {
     #[test]
     fn test_mcts_mean_depth_is_per_search_average() {
         let runner = SelfPlayRunner::new(
-            1, 0, 1, 1, 1.5, 0.25, 24*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
+            1, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000,
         );
@@ -529,7 +532,7 @@ mod tests {
 
         // Zero-denominator guard.
         let empty = SelfPlayRunner::new(
-            1, 0, 1, 1, 1.5, 0.25, 24*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
+            1, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000,
         );

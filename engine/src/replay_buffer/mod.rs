@@ -13,8 +13,10 @@
 //!   sym_tables.rs — 12-fold permutation tables, axis-plane remap, constants
 //!
 //! ## Memory layout (flat, row-major)
-//!   states       : Vec<u16> — f16 bits, logical shape [capacity, 24, 361]
-//!                            (18 history/scalar planes + 6 Q13 chain-length planes)
+//!   states       : Vec<u16> — f16 bits, logical shape [capacity, 18, 361]
+//!                            (18 history/scalar planes; chain planes stored separately)
+//!   chain_planes : Vec<u16> — f16 bits, logical shape [capacity, 6, 361]
+//!                            (Q13 chain-length planes: 3 axes × 2 players, normalized /6)
 //!   policies     : Vec<f32> — logical shape [capacity, 362]
 //!   outcomes     : Vec<f32> — logical shape [capacity]
 //!   game_ids     : Vec<i64> — logical shape [capacity]; -1 = untagged
@@ -57,7 +59,10 @@ pub struct ReplayBuffer {
     pub(crate) size:         usize,
     pub(crate) head:         usize, // next write slot
 
-    pub(crate) states:   Vec<u16>,  // f16 bits; flat [capacity × N_PLANES × N_CELLS]
+    pub(crate) states:       Vec<u16>,  // f16 bits; flat [capacity × N_PLANES × N_CELLS]
+    /// Q13 chain-length planes stored separately from state.
+    /// Flat [capacity × CHAIN_STRIDE]. Scattered with axis-plane remap on augmentation.
+    pub(crate) chain_planes: Vec<u16>,  // f16 bits; flat [capacity × CHAIN_STRIDE]
     pub(crate) policies: Vec<f32>,  // flat [capacity × N_ACTIONS]
     pub(crate) outcomes: Vec<f32>,  // flat [capacity]
     pub(crate) game_ids: Vec<i64>,  // flat [capacity]; −1 = untagged
@@ -109,6 +114,7 @@ impl ReplayBuffer {
             size: 0,
             head: 0,
             states:       vec![0u16; capacity * STATE_STRIDE],
+            chain_planes: vec![0u16; capacity * CHAIN_STRIDE],
             policies:     vec![0.0f32; capacity * POLICY_STRIDE],
             outcomes:     vec![0.0f32; capacity],
             game_ids:     vec![-1i64; capacity],
@@ -133,11 +139,12 @@ impl ReplayBuffer {
         self.next_game_id_impl()
     }
 
-    /// Store a single (state, policy, outcome, ownership, winning_line) sample.
-    #[pyo3(signature = (state, policy, outcome, ownership, winning_line, game_id = -1, game_length = 0))]
+    /// Store a single (state, chain_planes, policy, outcome, ownership, winning_line) sample.
+    #[pyo3(signature = (state, chain_planes, policy, outcome, ownership, winning_line, game_id = -1, game_length = 0))]
     pub fn push(
         &mut self,
         state:        PyReadonlyArray3<f16>,
+        chain_planes: PyReadonlyArray3<f16>,
         policy:       PyReadonlyArray1<f32>,
         outcome:      f32,
         ownership:    PyReadonlyArray1<u8>,
@@ -145,14 +152,15 @@ impl ReplayBuffer {
         game_id:      i64,
         game_length:  u16,
     ) -> PyResult<()> {
-        self.push_impl(state, policy, outcome, ownership, winning_line, game_id, game_length)
+        self.push_impl(state, chain_planes, policy, outcome, ownership, winning_line, game_id, game_length)
     }
 
     /// Store all positions from a completed game efficiently.
-    #[pyo3(signature = (states, policies, outcomes, ownership, winning_line, game_id = -1, game_length = 0))]
+    #[pyo3(signature = (states, chain_planes, policies, outcomes, ownership, winning_line, game_id = -1, game_length = 0))]
     pub fn push_game(
         &mut self,
         states:       PyReadonlyArray4<f16>,
+        chain_planes: PyReadonlyArray4<f16>,
         policies:     PyReadonlyArray2<f32>,
         outcomes:     PyReadonlyArray1<f32>,
         ownership:    PyReadonlyArray2<u8>,
@@ -160,13 +168,14 @@ impl ReplayBuffer {
         game_id:      i64,
         game_length:  u16,
     ) -> PyResult<()> {
-        self.push_game_impl(states, policies, outcomes, ownership, winning_line, game_id, game_length)
+        self.push_game_impl(states, chain_planes, policies, outcomes, ownership, winning_line, game_id, game_length)
     }
 
     /// Sample `batch_size` entries, optionally with 12-fold hex augmentation.
     ///
     /// Returns:
-    ///     states:       float16 numpy array of shape (batch_size, 24, 19, 19)
+    ///     states:       float16 numpy array of shape (batch_size, 18, 19, 19)
+    ///     chain_planes: float16 numpy array of shape (batch_size, 6, 19, 19)
     ///     policies:     float32 numpy array of shape (batch_size, 362)
     ///     outcomes:     float32 numpy array of shape (batch_size,)
     ///     ownership:    uint8   numpy array of shape (batch_size, 19, 19)
@@ -177,6 +186,7 @@ impl ReplayBuffer {
         batch_size: usize,
         augment:    bool,
     ) -> PyResult<(
+        Bound<'py, PyArray4<f16>>,
         Bound<'py, PyArray4<f16>>,
         Bound<'py, PyArray2<f32>>,
         Bound<'py, PyArray1<f32>>,

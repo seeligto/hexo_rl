@@ -20,17 +20,15 @@ use rand::RngExt;
 use super::sym_tables::*;
 use super::ReplayBuffer;
 
-/// Apply symmetry `sym_idx` to one 24-plane state tensor.
+/// Apply symmetry `sym_idx` to one 18-plane state tensor (pure coord scatter).
 ///
 /// Generic over the element type `T: Copy` — callable with `f32` for the
 /// Python-facing bindings and with `u16` (f16 bits) for the internal buffer
 /// sampling path. Pure scatter; caller zeroes `dst` before invocation.
 ///
-/// Layout: planes 0..N_HISTORY_PLANES scatter by pure coordinate permutation.
-/// Planes N_HISTORY_PLANES..N_PLANES (Q13 chain-length planes) scatter by
-/// coordinate permutation PLUS axis-plane remap via `tables.axis_perm[sym_idx]`.
+/// All 18 planes scatter by pure coordinate permutation (identity plane mapping).
 #[inline]
-pub fn apply_symmetry_24plane<T: Copy>(
+pub fn apply_symmetry_state<T: Copy>(
     src: &[T],
     dst: &mut [T],
     sym_idx: usize,
@@ -40,14 +38,42 @@ pub fn apply_symmetry_24plane<T: Copy>(
     debug_assert_eq!(dst.len(), N_PLANES * N_CELLS);
     debug_assert!(sym_idx < N_SYMS);
 
-    let scatter   = &sym_tables.scatter[sym_idx];
+    let scatter          = &sym_tables.scatter[sym_idx];
     let src_plane_lookup = &sym_tables.src_plane_lookup[sym_idx];
 
-    // Single loop over all N_PLANES planes — no branch on plane index.
-    // src_plane_lookup[dst_p] encodes the identity for planes 0..N_HISTORY_PLANES
-    // and the axis-perm remap for planes N_HISTORY_PLANES..N_PLANES.
+    // All 18 planes: src_plane_lookup is identity, so src_p == dst_p.
     for dst_p in 0..N_PLANES {
-        let src_p = src_plane_lookup[dst_p];
+        let src_p    = src_plane_lookup[dst_p];
+        let src_base = src_p * N_CELLS;
+        let dst_base = dst_p * N_CELLS;
+        let src_plane = &src[src_base..src_base + N_CELLS];
+        let dst_plane = &mut dst[dst_base..dst_base + N_CELLS];
+        for &(sc, dc) in scatter {
+            dst_plane[dc as usize] = src_plane[sc as usize];
+        }
+    }
+}
+
+/// Apply symmetry `sym_idx` to one 6-plane chain-length tensor.
+///
+/// Generic over `T: Copy`. Uses `chain_src_lookup` for axis-plane remap plus
+/// coordinate permutation. Caller zeroes `dst` before invocation.
+#[inline]
+pub fn apply_chain_symmetry<T: Copy>(
+    src: &[T],
+    dst: &mut [T],
+    sym_idx: usize,
+    sym_tables: &SymTables,
+) {
+    debug_assert_eq!(src.len(), N_CHAIN_PLANES * N_CELLS);
+    debug_assert_eq!(dst.len(), N_CHAIN_PLANES * N_CELLS);
+    debug_assert!(sym_idx < N_SYMS);
+
+    let scatter           = &sym_tables.scatter[sym_idx];
+    let chain_src_lookup  = &sym_tables.chain_src_lookup[sym_idx];
+
+    for dst_p in 0..N_CHAIN_PLANES {
+        let src_p    = chain_src_lookup[dst_p];
         let src_base = src_p * N_CELLS;
         let dst_base = dst_p * N_CELLS;
         let src_plane = &src[src_base..src_base + N_CELLS];
@@ -144,40 +170,39 @@ impl ReplayBuffer {
         indices
     }
 
-    /// Apply symmetry `sym_idx` to one (state, policy, ownership, winning_line) sample.
+    /// Apply symmetry `sym_idx` to one (state, chain, policy, ownership, winning_line) sample.
     ///
     /// Scatter-copies from `src_*` into `dst_*`. Cells that have no valid destination
     /// under the transform remain at the caller-zeroed default. Aux planes
-    /// (`ownership`, `winning_line`) reuse the same scatter table as state — they live
-    /// in the same window coordinate frame, just with u8 lanes.
+    /// (`ownership`, `winning_line`) reuse the same scatter table as state.
     ///
-    /// The 24-plane state layout is scattered by the shared
-    /// `apply_symmetry_24plane` kernel (generic over element type); policy +
-    /// ownership + winning_line are scattered inline below via the same coord
-    /// scatter table. See `apply_symmetry_24plane` for the split between
-    /// history+scalar planes (pure coord scatter) and Q13 chain-length planes
-    /// (coord scatter + axis-plane remap).
+    /// State (18 planes): pure coordinate scatter via `apply_symmetry_state`.
+    /// Chain (6 planes): coordinate scatter + axis-plane remap via `apply_chain_symmetry`.
     #[inline]
     pub(crate) fn apply_sym(
-        sym_idx:    usize,
-        src_state:  &[u16],     // f16 bits, length N_PLANES × N_CELLS
-        src_policy: &[f32],     // length N_ACTIONS
-        src_own:    &[u8],      // length AUX_STRIDE (= N_CELLS)
-        src_wl:     &[u8],      // length AUX_STRIDE
-        dst_state:  &mut [u16], // f16 bits, length N_PLANES × N_CELLS  (zeroed by caller)
-        dst_policy: &mut [f32], // length N_ACTIONS                     (zeroed by caller)
-        dst_own:    &mut [u8],  // length AUX_STRIDE                    (caller-initialised)
-        dst_wl:     &mut [u8],  // length AUX_STRIDE                    (caller-initialised)
-        tables:     &SymTables,
+        sym_idx:      usize,
+        src_state:    &[u16],     // f16 bits, length N_PLANES × N_CELLS
+        src_chain:    &[u16],     // f16 bits, length N_CHAIN_PLANES × N_CELLS
+        src_policy:   &[f32],     // length N_ACTIONS
+        src_own:      &[u8],      // length AUX_STRIDE (= N_CELLS)
+        src_wl:       &[u8],      // length AUX_STRIDE
+        dst_state:    &mut [u16], // f16 bits, length N_PLANES × N_CELLS  (zeroed by caller)
+        dst_chain:    &mut [u16], // f16 bits, length N_CHAIN_PLANES × N_CELLS (zeroed by caller)
+        dst_policy:   &mut [f32], // length N_ACTIONS                     (zeroed by caller)
+        dst_own:      &mut [u8],  // length AUX_STRIDE                    (caller-initialised)
+        dst_wl:       &mut [u8],  // length AUX_STRIDE                    (caller-initialised)
+        tables:       &SymTables,
     ) {
-        // State planes: delegate to the shared 24-plane kernel (u16 = f16 bits).
-        apply_symmetry_24plane::<u16>(src_state, dst_state, sym_idx, tables);
+        // State planes: 18-plane coord-scatter (identity plane mapping).
+        apply_symmetry_state::<u16>(src_state, dst_state, sym_idx, tables);
+
+        // Chain planes: coord-scatter + axis-plane remap.
+        apply_chain_symmetry::<u16>(src_chain, dst_chain, sym_idx, tables);
 
         let scatter = &tables.scatter[sym_idx];
 
         // Policy + ownership + winning_line: all three scatter through the same
-        // 361-cell hex permutation table. Fuse into one loop so we iterate the
-        // (sc, dc) pair list exactly once and keep the table in cache.
+        // 361-cell hex permutation table. Fuse into one loop.
         for &(sc, dc) in scatter {
             let sc_u = sc as usize;
             let dc_u = dc as usize;
@@ -202,6 +227,7 @@ impl ReplayBuffer {
         augment:    bool,
     ) -> PyResult<(
         Bound<'py, PyArray4<f16>>,
+        Bound<'py, PyArray4<f16>>,
         Bound<'py, PyArray2<f32>>,
         Bound<'py, PyArray1<f32>>,
         Bound<'py, PyArray3<u8>>,
@@ -216,10 +242,11 @@ impl ReplayBuffer {
         let indices   = self.sample_indices(batch_size, use_dedup);
 
         // ── Allocate output arrays (owned by Python after return) ─────────────
-        // States as f16 bits (u16) — no type conversion needed during scatter.
-        let mut out_states   = vec![0u16; batch_size * STATE_STRIDE];
-        let mut out_policies = vec![0.0f32; batch_size * POLICY_STRIDE];
-        let mut out_outcomes = vec![0.0f32; batch_size];
+        // States and chain_planes as f16 bits (u16) — no type conversion during scatter.
+        let mut out_states      = vec![0u16; batch_size * STATE_STRIDE];
+        let mut out_chain       = vec![0u16; batch_size * CHAIN_STRIDE];
+        let mut out_policies    = vec![0.0f32; batch_size * POLICY_STRIDE];
+        let mut out_outcomes    = vec![0.0f32; batch_size];
         // Ownership default 1 = "empty" — cells outside the symmetry's destination
         // window stay at the same neutral value as the row's initial state.
         let mut out_ownership    = vec![1u8; batch_size * AUX_STRIDE];
@@ -230,36 +257,45 @@ impl ReplayBuffer {
             let sym_idx = if augment { self.rng.random_range(0..N_SYMS) } else { 0 };
 
             let src_state  = &self.states      [idx * STATE_STRIDE..(idx + 1) * STATE_STRIDE];
+            let src_chain  = &self.chain_planes [idx * CHAIN_STRIDE..(idx + 1) * CHAIN_STRIDE];
             let src_policy = &self.policies    [idx * POLICY_STRIDE..(idx + 1) * POLICY_STRIDE];
             let src_own    = &self.ownership   [idx * AUX_STRIDE   ..(idx + 1) * AUX_STRIDE];
             let src_wl     = &self.winning_line[idx * AUX_STRIDE   ..(idx + 1) * AUX_STRIDE];
 
             let dst_state  = &mut out_states      [b * STATE_STRIDE..(b + 1) * STATE_STRIDE];
+            let dst_chain  = &mut out_chain        [b * CHAIN_STRIDE..(b + 1) * CHAIN_STRIDE];
             let dst_policy = &mut out_policies    [b * POLICY_STRIDE..(b + 1) * POLICY_STRIDE];
             let dst_own    = &mut out_ownership   [b * AUX_STRIDE   ..(b + 1) * AUX_STRIDE];
             let dst_wl     = &mut out_winning_line[b * AUX_STRIDE   ..(b + 1) * AUX_STRIDE];
 
             Self::apply_sym(
                 sym_idx,
-                src_state, src_policy, src_own, src_wl,
-                dst_state, dst_policy, dst_own, dst_wl,
+                src_state, src_chain, src_policy, src_own, src_wl,
+                dst_state, dst_chain, dst_policy, dst_own, dst_wl,
                 &self.sym_tables,
             );
 
             out_outcomes[b] = self.outcomes[idx];
         }
 
-        // ── Transmute u16 Vec to f16 Vec and wrap as numpy arrays ─────────────
+        // ── Transmute u16 Vecs to f16 Vecs and wrap as numpy arrays ───────────
         // Safety: f16 and u16 have the same size/alignment; every bit pattern is valid for u16,
         // and we only wrote bits that came from valid f16 values stored via push().
-        let out_f16: Vec<f16> = unsafe {
+        let states_f16: Vec<f16> = unsafe {
             let mut v = std::mem::ManuallyDrop::new(out_states);
             Vec::from_raw_parts(v.as_mut_ptr() as *mut f16, v.len(), v.capacity())
         };
+        let chain_f16: Vec<f16> = unsafe {
+            let mut v = std::mem::ManuallyDrop::new(out_chain);
+            Vec::from_raw_parts(v.as_mut_ptr() as *mut f16, v.len(), v.capacity())
+        };
 
-        let states_np = out_f16
+        let states_np = states_f16
             .into_pyarray(py)
             .reshape([batch_size, N_PLANES, BOARD_H, BOARD_W])?;
+        let chain_np = chain_f16
+            .into_pyarray(py)
+            .reshape([batch_size, N_CHAIN_PLANES, BOARD_H, BOARD_W])?;
         let policies_np = out_policies
             .into_pyarray(py)
             .reshape([batch_size, N_ACTIONS])?;
@@ -271,7 +307,7 @@ impl ReplayBuffer {
             .into_pyarray(py)
             .reshape([batch_size, BOARD_H, BOARD_W])?;
 
-        Ok((states_np, policies_np, outcomes_np, ownership_np, winning_line_np))
+        Ok((states_np, chain_np, policies_np, outcomes_np, ownership_np, winning_line_np))
     }
 }
 
@@ -293,6 +329,7 @@ mod tests {
             size: 0,
             head: 0,
             states:       vec![0u16; 300 * STATE_STRIDE],
+            chain_planes: vec![0u16; 300 * CHAIN_STRIDE],
             policies:     vec![0.0f32; 300 * POLICY_STRIDE],
             outcomes:     vec![0.0f32; 300],
             game_ids:     vec![-1i64; 300],
@@ -418,6 +455,7 @@ mod tests {
         for &marker_src in &[0usize, 200, 180, 360] {
             for sym_idx in 0..N_SYMS {
                 let mut src_state = vec![0u16; N_PLANES * N_CELLS];
+                let mut src_chain = vec![0u16; N_CHAIN_PLANES * N_CELLS];
                 let mut src_pol   = vec![0.0f32; N_ACTIONS];
                 let mut src_own   = vec![1u8; AUX_STRIDE];
                 let mut src_wl    = vec![0u8; AUX_STRIDE];
@@ -428,14 +466,15 @@ mod tests {
                 src_wl[marker_src]    = 1;
 
                 let mut dst_state = vec![0u16; N_PLANES * N_CELLS];
+                let mut dst_chain = vec![0u16; N_CHAIN_PLANES * N_CELLS];
                 let mut dst_pol   = vec![0.0f32; N_ACTIONS];
                 let mut dst_own   = vec![1u8; AUX_STRIDE];
                 let mut dst_wl    = vec![0u8; AUX_STRIDE];
 
                 ReplayBuffer::apply_sym(
                     sym_idx,
-                    &src_state, &src_pol, &src_own, &src_wl,
-                    &mut dst_state, &mut dst_pol, &mut dst_own, &mut dst_wl,
+                    &src_state, &src_chain, &src_pol, &src_own, &src_wl,
+                    &mut dst_state, &mut dst_chain, &mut dst_pol, &mut dst_own, &mut dst_wl,
                     &tables,
                 );
 

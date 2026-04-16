@@ -111,7 +111,7 @@ def _make_corpus(path: Path, n: int = 60_000) -> None:
     Outcomes alternate ±1.
     """
     rng = np.random.default_rng(0)
-    states = np.zeros((n, 24, 19, 19), dtype=np.float16)
+    states = np.zeros((n, 18, 19, 19), dtype=np.float16)
     policies = np.full((n, 362), 1.0 / 362, dtype=np.float32)
     outcomes = rng.choice(np.array([-1.0, 1.0], dtype=np.float32), size=n)
     np.savez_compressed(path, states=states, policies=policies, outcomes=outcomes)

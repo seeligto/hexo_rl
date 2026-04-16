@@ -45,7 +45,7 @@ class WorkerPool:
         sp = config.get("selfplay", config)
         self.n_workers = int(n_workers if n_workers is not None else sp.get("n_workers", 1))
         board_size = int(getattr(model, "board_size", 19))
-        in_channels = int(config.get("in_channels", config.get("model", {}).get("in_channels", 24)))
+        in_channels = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
 
         mcts_cfg = config.get("mcts", config)
         self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
@@ -123,8 +123,9 @@ class WorkerPool:
         self.recent_buffer: Optional[Any] = None
 
         self._board_size = board_size
-        self._feat_len = in_channels * board_size * board_size  # 24*19*19 = 8664 for 24-plane layout
+        self._feat_len = in_channels * board_size * board_size  # 18*19*19 = 6498 for 18-plane layout
         self._pol_len = board_size * board_size + 1              # e.g. 19*19+1 = 362
+        self._chain_len = 6 * board_size * board_size            # 6*19*19 = 2166
 
     @property
     def batch_fill_pct(self) -> float:
@@ -171,36 +172,43 @@ class WorkerPool:
         # Pre-allocate single-position receive buffers once.
         # replay_buffer.push() and recent_buffer.push() copy data into Rust memory,
         # so reusing these buffers across loop iterations is safe.
-        _feat_buf = np.empty(self._feat_len, dtype=np.float16)
-        _pol_buf = np.empty(self._pol_len, dtype=np.float32)
+        _feat_buf  = np.empty(self._feat_len,  dtype=np.float16)
+        _chain_buf = np.empty(self._chain_len, dtype=np.float16)
+        _pol_buf   = np.empty(self._pol_len,   dtype=np.float32)
         _in_ch = self._feat_len // (self._board_size * self._board_size)
-        _feat_2d = _feat_buf.reshape(_in_ch, self._board_size, self._board_size)
+        _feat_2d  = _feat_buf.reshape(_in_ch, self._board_size, self._board_size)
+        _chain_3d = _chain_buf.reshape(6, self._board_size, self._board_size)
         _last_buf_emit = time.monotonic()
         while not self._stop_event.is_set():
-            # collect_data() returns 6-tuple from Rust — no Python list allocation.
-            # feats_np: (N, feat_len) f32, pols_np: (N, pol_len) f32,
-            # vals_np/plies_np: (N,), own_np/wl_np: (N, 361) u8 — per-row aux
-            # already projected to each row's own cluster window centre.
-            feats_np, pols_np, vals_np, plies_np, own_np, wl_np = self._runner.collect_data()
+            # collect_data() returns 7-tuple from Rust — no Python list allocation.
+            # feats_np: (N, feat_len) f32, chain_np: (N, chain_len) f32,
+            # pols_np: (N, pol_len) f32, vals_np/plies_np: (N,),
+            # own_np/wl_np: (N, 361) u8 — per-row aux projected to cluster window.
+            feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np = self._runner.collect_data()
             n = len(vals_np)
             for i in range(n):
                 # feats_np[i] is a numpy view (no copy); _feat_buf[:] = view does
                 # the f32→f16 dtype conversion at C speed with no Python objects.
-                _feat_buf[:] = feats_np[i]
-                _pol_buf[:] = pols_np[i]
-                feat_np = _feat_2d    # shaped view into _feat_buf
-                pol_np = _pol_buf
-                own_row = own_np[i]
-                wl_row = wl_np[i]
-                plies = int(plies_np[i])
-                outcome = float(vals_np[i])
+                _feat_buf[:]  = feats_np[i]
+                _chain_buf[:] = chain_np[i]
+                _pol_buf[:]   = pols_np[i]
+                feat_np  = _feat_2d    # shaped view into _feat_buf
+                chain_np_pos = _chain_3d  # shaped view into _chain_buf
+                pol_np   = _pol_buf
+                own_row  = own_np[i]
+                wl_row   = wl_np[i]
+                plies    = int(plies_np[i])
+                outcome  = float(vals_np[i])
                 game_length = (plies + 1) // 2  # compound moves
                 self.replay_buffer.push(
-                    feat_np, pol_np, outcome, own_row, wl_row,
+                    feat_np, chain_np_pos, pol_np, outcome, own_row, wl_row,
                     game_length=game_length,
                 )
                 if self.recent_buffer is not None:
-                    self.recent_buffer.push(feat_np, pol_np, outcome, own_row, wl_row)
+                    self.recent_buffer.push(
+                        feat_np, chain_planes=chain_np_pos, policy=pol_np,
+                        outcome=outcome, ownership=own_row, winning_line=wl_row,
+                    )
                 with self._lock:
                     self.positions_pushed += 1
                     self.self_play_positions_pushed += 1

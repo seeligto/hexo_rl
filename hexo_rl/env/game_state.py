@@ -184,9 +184,9 @@ class GameState:
         return GameState.from_board(rust_board, history=new_history)
 
     def to_tensor(self) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
-        """Encode the state into K tensors of shape (24, 19, 19) float16.
+        """Encode the state into K tensors of shape (18, 19, 19) float16.
 
-        24-plane layout:
+        18-plane layout:
 
           plane  0:     current player's stones at t           (views[k][0])
           planes 1-7:   current player's stones at t-1 … t-7   (from move_history)
@@ -194,23 +194,25 @@ class GameState:
           planes 9-15:  opponent's stones at t-1 … t-7         (from move_history)
           plane 16:     moves_remaining == 2 flag (broadcast)
           plane 17:     ply parity (ply % 2, broadcast)
-          planes 18-23: Q13 chain-length planes, computed from current-step
-                        stones only (no temporal stacking). Layout
-                        [a0_cur, a0_opp, a1_cur, a1_opp, a2_cur, a2_opp],
-                        /_CHAIN_CAP-normalised so values lie in [0, 1].
 
+        Chain-length planes (Q13) are output-only auxiliaries; they are NOT
+        part of this tensor. Use _compute_chain_planes() to generate them
+        separately when needed (e.g. for chain loss targets).
         Planes for timesteps earlier than the start of the game are zeros.
 
         The Rust self-play loop (game_runner.rs) has no Python history, so it
-        expands 2-plane views to 24 planes via encode_state_to_buffer, leaving
+        expands 2-plane views to 18 planes via encode_state_to_buffer, leaving
         history planes as zeros. Full history is only available on the Python
         path (worker.py, evaluator.py, pretrain.py) which uses this method.
+
+        Chain-length planes (Q13) are now output-only auxiliaries stored
+        separately; they are NOT included in this tensor.
         """
         current_views = self.views
         centers = self.centers
 
         K = len(centers)
-        tensor = np.zeros((K, 24, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+        tensor = np.zeros((K, 18, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
 
         # Scalar planes are identical across all clusters.
         mr_val = np.float16(0.0 if self.moves_remaining == 1 else 1.0)
@@ -236,10 +238,6 @@ class GameState:
                     tensor[k, t]     = prior.views[k][0]  # prior my-stones
                     tensor[k, 8 + t] = prior.views[k][1]  # prior opp-stones
                 # if the prior state had fewer clusters, leave the planes as zero
-
-            # Q13 chain-length planes — current-step only, no temporal stacking.
-            chain_i8 = _compute_chain_planes(cur_stones, opp_stones)
-            tensor[k, 18:24] = chain_i8.astype(np.float16) / np.float16(_CHAIN_CAP)
 
         return tensor, centers
 

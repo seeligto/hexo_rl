@@ -121,7 +121,7 @@ def benchmark_inference(model: "HexTacToeNet", n_positions: int = 20_000,
                         warmup_sec: float = 3.0) -> Dict[str, Any]:
     """NN throughput in batched evaluation mode."""
     device = next(model.parameters()).device
-    dummy_local = torch.zeros(batch_size, 24, 19, 19, dtype=torch.float32, device=device)
+    dummy_local = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
     model.eval()
     n_batches = n_positions // batch_size
     total_positions = n_batches * batch_size
@@ -155,7 +155,7 @@ def benchmark_inference_latency(model: "HexTacToeNet", n_runs: int = 5,
                                 warmup_sec: float = 2.0) -> Dict[str, Any]:
     """Single-position latency (worst case for synchronous MCTS)."""
     device = next(model.parameters()).device
-    dummy_local = torch.zeros(1, 24, 19, 19, dtype=torch.float32, device=device)
+    dummy_local = torch.zeros(1, 18, 19, 19, dtype=torch.float32, device=device)
     model.eval()
 
     def single_inference():
@@ -206,13 +206,14 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
     aug_iters = 500
     push_iters = 10_000
 
-    dummy_state = np.zeros((24, 19, 19), dtype=np.float16)
+    dummy_state = np.zeros((18, 19, 19), dtype=np.float16)
+    dummy_chain = np.zeros((6, 19, 19), dtype=np.float16)
     dummy_policy = np.ones(362, dtype=np.float32) / 362.0
     dummy_own = np.ones(361, dtype=np.uint8)
     dummy_wl  = np.zeros(361, dtype=np.uint8)
 
     # Warm-up push
-    warmup(lambda: buffer.push(dummy_state, dummy_policy, 0.0, dummy_own, dummy_wl), warmup_sec)
+    warmup(lambda: buffer.push(dummy_state, dummy_chain, dummy_policy, 0.0, dummy_own, dummy_wl), warmup_sec)
 
     # Warm-up sample
     warmup(lambda: buffer.sample_batch(BATCH, False), warmup_sec)
@@ -225,7 +226,7 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
         # Push throughput
         t0 = time.perf_counter()
         for _ in range(push_iters):
-            buffer.push(dummy_state, dummy_policy, 0.0, dummy_own, dummy_wl)
+            buffer.push(dummy_state, dummy_chain, dummy_policy, 0.0, dummy_own, dummy_wl)
         elapsed_push = time.perf_counter() - t0
         push_rates.append(push_iters / elapsed_push)
 
@@ -267,7 +268,7 @@ def benchmark_gpu_utilisation(model: "HexTacToeNet", n_runs: int = 5) -> Dict[st
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         model.eval()
-        dummy_local = torch.zeros(64, 24, 19, 19, dtype=torch.float32, device=device)
+        dummy_local = torch.zeros(64, 18, 19, 19, dtype=torch.float32, device=device)
 
         util_runs: list[float] = []
         vram_runs: list[float] = []
@@ -310,18 +311,30 @@ def benchmark_worker_pool(
     duration_sec: int = 15,
     n_workers: int = 4,
     mcts_sims_override: Optional[int] = None,
+    worker_sims: int = 200,
+    bench_max_moves: int = 128,
     n_runs: int = 5,
     warmup_sec: float = 10.0,
 ) -> Dict[str, Any]:
-    """Measure end-to-end self-play throughput in the multiprocess pool."""
+    """Measure end-to-end self-play throughput in the multiprocess pool.
+
+    ``worker_sims`` sets per-move simulation budget (default 200).
+    ``bench_max_moves`` caps game length so games complete within the bench
+    window on desktop hardware (default 100; production config uses 200+).
+    Pass --worker-sims / --bench-max-moves to override at the CLI level.
+    """
     from hexo_rl.selfplay.pool import WorkerPool
     from engine import ReplayBuffer
 
     _sp = config.get("selfplay", {})
     _mcts = config.get("mcts", {})
+    # Determine per-move sim count: explicit CLI override > bench default.
+    # Do NOT fall back to production config (400+ sims): games would not complete
+    # within the measurement window on desktop hardware.
+    effective_sims = mcts_sims_override if mcts_sims_override is not None else worker_sims
     bench_cfg = {
         "mcts": {
-            "n_simulations": mcts_sims_override if mcts_sims_override is not None else int(_mcts.get("n_simulations", config.get("n_simulations", 30))),
+            "n_simulations": effective_sims,
             "c_puct": float(_mcts.get("c_puct", config.get("c_puct", 1.5))),
             "temperature_threshold_ply": int(_mcts.get("temperature_threshold_ply", config.get("temperature_threshold_ply", 30))),
             "fpu_reduction": float(_mcts.get("fpu_reduction", 0.25)),
@@ -335,7 +348,7 @@ def benchmark_worker_pool(
             "n_workers": n_workers,
             "inference_batch_size": int(_sp.get("inference_batch_size", config.get("inference_batch_size", 32))),
             "inference_max_wait_ms": float(_sp.get("inference_max_wait_ms", config.get("inference_max_wait_ms", 8.0))),
-            "max_moves_per_game": int(_sp.get("max_game_moves", _sp.get("max_moves_per_game", config.get("max_moves_per_game", 128)))),
+            "max_moves_per_game": bench_max_moves,
             "leaf_batch_size": int(_sp.get("leaf_batch_size", 8)),
             # Forward Gumbel / completed-Q flags so the worker-pool bench
             # actually exercises the variant's root search path.
@@ -366,7 +379,7 @@ def benchmark_worker_pool(
     # applied in training/loop.py (commit 79fd415).
     if device.type == "cuda":
         _board_size = int(getattr(model, "board_size", 19))
-        _in_ch = int(config.get("in_channels", config.get("model", {}).get("in_channels", 24)))
+        _in_ch = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
         with torch.no_grad():
             with torch.autocast(device_type="cuda"):
                 _dummy = torch.zeros(1, _in_ch, _board_size, _board_size, device=device)
@@ -693,10 +706,16 @@ def parse_args() -> argparse.Namespace:
                    help="MCTS simulations for throughput benchmark")
     p.add_argument("--pool-workers", type=int, default=default_workers,
                    help="Worker count for self-play throughput benchmark")
-    p.add_argument("--pool-duration", type=int, default=15,
-                   help="Duration in seconds for worker pool benchmark")
+    p.add_argument("--pool-duration", type=int, default=60,
+                   help="Duration in seconds per measurement run for worker pool benchmark")
     p.add_argument("--mcts-search-sims", type=int, default=None,
-                   help="Override MCTS simulations per move (default from config)")
+                   help="Override MCTS simulations per move for MCTS CPU bench (default from config)")
+    p.add_argument("--worker-sims", type=int, default=200,
+                   help="Simulations per move for the worker-pool bench (default 200). "
+                        "Keep low enough that games complete within the bench window on target hardware.")
+    p.add_argument("--bench-max-moves", type=int, default=128,
+                   help="Max plies per game for the worker-pool bench (default 128). "
+                        "Production config uses 200; lower value ensures games finish within bench window.")
     p.add_argument("--n-runs", type=int, default=5,
                    help="Number of measurement repeats per metric (default 5)")
     return p.parse_args()
@@ -739,7 +758,7 @@ def main() -> None:
     model_cfg = config.get("model", {})
     model = HexTacToeNet(
         board_size=int(model_cfg.get("board_size", config.get("board_size", 19))),
-        in_channels=24,
+        in_channels=int(model_cfg.get("in_channels", config.get("in_channels", 18))),
         filters=int(model_cfg.get("filters", config.get("filters", 128))),
         res_blocks=int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
     ).to(device)
@@ -751,9 +770,11 @@ def main() -> None:
     buffer = ReplayBuffer(capacity=100_000)
     _bm_own = np.ones(361, dtype=np.uint8)
     _bm_wl  = np.zeros(361, dtype=np.uint8)
+    _bm_chain = np.zeros((6, 19, 19), dtype=np.float16)
     for _ in range(10_000):
         buffer.push(
-            np.zeros((24, 19, 19), dtype=np.float16),
+            np.zeros((18, 19, 19), dtype=np.float16),
+            _bm_chain,
             np.ones(362, dtype=np.float32) / 362,
             0.0,
             _bm_own, _bm_wl,
@@ -800,6 +821,8 @@ def main() -> None:
                 duration_sec=args.pool_duration,
                 n_workers=args.pool_workers,
                 mcts_sims_override=args.mcts_search_sims,
+                worker_sims=args.worker_sims,
+                bench_max_moves=args.bench_max_moves,
                 n_runs=n_runs,
                 warmup_sec=warmup_worker,
             ))

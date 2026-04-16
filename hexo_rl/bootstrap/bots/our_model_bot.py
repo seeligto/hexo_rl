@@ -45,7 +45,7 @@ class OurModelBot(BotProtocol):
         # Fall back to config values for any dims not recoverable from weights.
         model_cfg = config.get("model", {}) if isinstance(config.get("model"), dict) else {}
         board_size = int(model_hparams.get("board_size", model_cfg.get("board_size", config.get("board_size", 19))))
-        in_channels = int(model_hparams.get("in_channels", model_cfg.get("in_channels", config.get("in_channels", 24))))
+        in_channels = int(model_hparams.get("in_channels", model_cfg.get("in_channels", config.get("in_channels", 18))))
         filters = int(model_hparams.get("filters", model_cfg.get("filters", config.get("filters", 128))))
         res_blocks = int(model_hparams.get("res_blocks", model_cfg.get("res_blocks", config.get("res_blocks", 12))))
         se_reduction_ratio = int(model_hparams.get("se_reduction_ratio", model_cfg.get("se_reduction_ratio", config.get("se_reduction_ratio", 4))))
