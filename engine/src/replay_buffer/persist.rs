@@ -283,9 +283,10 @@ mod tests {
     use super::*;
     use half::f16;
 
-    /// HEXB v4 round-trip — verify aux columns survive save/load.
+    /// HEXB v4 round-trip — verify aux columns (ownership, winning_line, chain_planes) survive save/load.
     #[test]
     fn test_aux_hexb_v4_roundtrip() {
+        use super::super::sym_tables::CHAIN_STRIDE;
         use std::env::temp_dir;
 
         let mut buf = ReplayBuffer::new(8);
@@ -295,6 +296,11 @@ mod tests {
         buf.ownership[a_start + 20] = 0;  // P2
         buf.ownership[a_start + 30] = 1;  // empty
         for i in 0..6 { buf.winning_line[a_start + 100 + i] = 1; }
+        // Write non-zero chain_planes so the round-trip test is meaningful.
+        let c_start = slot * CHAIN_STRIDE;
+        buf.chain_planes[c_start + 0]   = f16::from_f32(0.5).to_bits();
+        buf.chain_planes[c_start + 100] = f16::from_f32(1.0).to_bits();
+        buf.chain_planes[c_start + 361] = f16::from_f32(0.25).to_bits();  // plane 1
         buf.outcomes[slot] = 1.0;
         buf.weights[slot]  = f16::from_f32(1.0).to_bits();
         buf.head = 1;
@@ -314,6 +320,10 @@ mod tests {
         for i in 0..6 {
             assert_eq!(buf2.winning_line[a2 + 100 + i], 1);
         }
+        let c2 = 0 * CHAIN_STRIDE;
+        assert_eq!(buf2.chain_planes[c2 + 0],   f16::from_f32(0.5).to_bits());
+        assert_eq!(buf2.chain_planes[c2 + 100], f16::from_f32(1.0).to_bits());
+        assert_eq!(buf2.chain_planes[c2 + 361], f16::from_f32(0.25).to_bits());
 
         let _ = std::fs::remove_file(path);
     }

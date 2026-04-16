@@ -555,8 +555,9 @@ def main() -> None:
         action="store_true",
         default=False,
         help=(
-            "Experiment C ablation: zero input planes 18-23 (chain-length planes) "
-            "before running inference. Use with Experiment C checkpoints."
+            "DEPRECATED — no-op since chain planes were removed from the 18-channel "
+            "input (feat/remove-chain-input-planes). Kept for backward-compat; "
+            "will print a warning if used."
         ),
     )
     args = parser.parse_args()
@@ -588,12 +589,23 @@ def main() -> None:
         print(f"  {positions['n']} positions", file=sys.stderr)
 
         # Experiment C: zero chain-length input planes before inference.
+        # DEPRECATED: chain planes were removed from the 18-channel input tensor.
+        # Flag is kept for backward-compat but is now a no-op.
         if args.zero_chain_planes:
-            positions = dict(positions)
-            states_zeroed = positions["states"].copy()
-            states_zeroed[:, 18:24] = 0
-            positions["states"] = states_zeroed
-            print("  [Experiment C] planes 18-23 zeroed", file=sys.stderr)
+            n_in = positions["states"].shape[1]
+            if n_in >= 24:
+                positions = dict(positions)
+                states_zeroed = positions["states"].copy()
+                states_zeroed[:, 18:24] = 0
+                positions["states"] = states_zeroed
+                print("  [Experiment C] planes 18-23 zeroed", file=sys.stderr)
+            else:
+                print(
+                    f"  [WARNING] --zero-chain-planes is a no-op: model has "
+                    f"{n_in} input channels (chain planes removed from input). "
+                    "Skipping.",
+                    file=sys.stderr,
+                )
 
         print("Probing...", file=sys.stderr)
         results = probe_positions(model, positions, device=device)
