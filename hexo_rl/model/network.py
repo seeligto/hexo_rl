@@ -58,13 +58,19 @@ class SEBlock(nn.Module):
         return x * s.view(b, c, 1, 1)       # scale
 
 
+_GN_GROUPS = 8  # GroupNorm group count; filters must be divisible by this
+
+
 class ResidualBlock(nn.Module):
     def __init__(self, filters: int, se_reduction_ratio: int = 4) -> None:
         super().__init__()
+        assert filters % _GN_GROUPS == 0, (
+            f"filters={filters} must be divisible by num_groups={_GN_GROUPS}"
+        )
         self.conv1 = nn.Conv2d(filters, filters, 3, padding=1, bias=False)
-        self.gn1   = nn.GroupNorm(8, filters)
+        self.gn1   = nn.GroupNorm(_GN_GROUPS, filters)
         self.conv2 = nn.Conv2d(filters, filters, 3, padding=1, bias=False)
-        self.gn2   = nn.GroupNorm(8, filters)
+        self.gn2   = nn.GroupNorm(_GN_GROUPS, filters)
         self.se    = SEBlock(filters, se_reduction_ratio)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -80,7 +86,7 @@ class Trunk(nn.Module):
                  se_reduction_ratio: int = 4):
         super().__init__()
         self.input_conv = nn.Conv2d(in_channels, filters, 3, padding=1, bias=False)
-        self.input_gn   = nn.GroupNorm(8, filters)
+        self.input_gn   = nn.GroupNorm(_GN_GROUPS, filters)
         self.tower      = nn.Sequential(
             *[ResidualBlock(filters, se_reduction_ratio) for _ in range(res_blocks)]
         )
@@ -109,7 +115,7 @@ class HexTacToeNet(nn.Module):
 
         self.trunk = Trunk(in_channels, filters, res_blocks, se_reduction_ratio)
 
-        # Policy head
+        # Policy head — no normalization: 2 output channels, GN(8, 2) would fail (groups > channels)
         self.policy_conv = nn.Conv2d(filters, 2, 1)
         self.policy_fc = nn.Linear(2 * spatial, spatial + 1)
 
@@ -117,7 +123,7 @@ class HexTacToeNet(nn.Module):
         self.value_fc1 = nn.Linear(2 * filters, 256)
         self.value_fc2 = nn.Linear(256, 1)
 
-        # Opponent reply auxiliary head (training only)
+        # Opponent reply auxiliary head (training only) — no normalization: same reason as policy head
         self.opp_reply_conv = nn.Conv2d(filters, 2, 1)
         self.opp_reply_fc = nn.Linear(2 * spatial, spatial + 1)
 

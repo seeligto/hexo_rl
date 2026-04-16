@@ -87,15 +87,36 @@ def prune_checkpoints(
             log.warning("checkpoint_prune_failed", path=str(p), error=str(exc))
 
 
+_BN_KEY_PATTERNS = (
+    ".input_bn.", ".bn1.", ".bn2.", ".policy_bn.", ".opp_reply_bn.",
+)
+
+
 def normalize_model_state_dict_keys(
     state_dict: Dict[str, torch.Tensor],
 ) -> Dict[str, torch.Tensor]:
     """Normalize model state dict keys across save variants.
 
     Handles _orig_mod., module. prefixes and tower/trunk.tower aliasing.
+
+    Raises RuntimeError on pre-GroupNorm checkpoints (keys containing BatchNorm
+    layer names). These checkpoints are incompatible with the current model —
+    start a fresh training run rather than silently loading random trunk weights.
     """
     if not state_dict:
         return state_dict
+
+    # Detect pre-GN checkpoints before any remapping so the error fires on raw
+    # keys too (e.g. _orig_mod.trunk.input_bn.weight).
+    bn_keys = [k for k in state_dict if any(pat in k for pat in _BN_KEY_PATTERNS)]
+    if bn_keys:
+        examples = ", ".join(bn_keys[:3])
+        raise RuntimeError(
+            "Checkpoint contains BatchNorm keys incompatible with the current "
+            "GroupNorm model (BN→GN migration, 2026-04-16). "
+            f"Example keys: {examples}. "
+            "Start a fresh training run — do not attempt to resume from a pre-GN checkpoint."
+        )
 
     prefixes = ("_orig_mod.", "module.")
     normalized: Dict[str, torch.Tensor] = {}
