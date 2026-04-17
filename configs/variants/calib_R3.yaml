@@ -1,0 +1,15 @@
+# calib_R3 — interval + decay pair ablation.
+# D1=0.55, D2=5000, D3=50000, D4=200.
+# Tests whether longer decay + coarser gate yields healthier cadence.
+# Driver: scripts/run_calibration_run.sh R3
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 200
+  playout_cap:
+    fast_prob: 0.0
+
+eval_interval: 5000
+
+mixing:
+  decay_steps: 50000

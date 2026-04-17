@@ -1,0 +1,17 @@
+# calib_R4 — sample-size ablation (400 vs 200 games per eval).
+# D1=0.55, D2=2500, D3=20000, D4=400.
+# Driver sets n_games=400 in eval.yaml before launch. Evaluates whether the
+# tighter CI (stderr ~2.5% vs 3.5% at 200 games) materially changes promotion
+# cadence in the noise-floor regime implied by completed-Q target concentration.
+# Driver: scripts/run_calibration_run.sh R4
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 200
+  playout_cap:
+    fast_prob: 0.0
+
+eval_interval: 2500
+
+mixing:
+  decay_steps: 20000
