@@ -10,3 +10,10 @@ selfplay:
   max_game_moves: 200
   inference_max_wait_ms: 12.0
   leaf_batch_size: 8
+  playout_cap:
+    # §102.b — pin move-level cap OFF so this variant keeps pre-§100
+    # semantics (no selective policy loss). Game-level fast_prob is
+    # already 0.0 via the base, so the whole playout-cap feature set is
+    # inert here — matches this file's "PRE-§67 HISTORICAL BASELINE"
+    # intent. See reports/selective_policy_audit_2026-04-18.md §4 B2.
+    full_search_prob: 0.0
