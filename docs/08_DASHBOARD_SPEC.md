@@ -56,6 +56,17 @@ Emitted every `config.monitoring.log_interval` training steps (default: 10).
                                          # over the batch, post-pruning+renorm, nats.
                                          # Computed only over non-zero-policy rows.
                                          # 0.0 if unavailable. Must not be NaN.
+    # §101 D-Gumbel / D-Zeroloss split — mean policy-target entropy and
+    # KL(target || uniform) bucketed by is_full_search. NaN when the bucket
+    # is empty; renderers must treat NaN as "no data this step" and never
+    # propagate. y-axis range [0, log(num_actions) ≈ 5.89]. frac in [0, 1].
+    "policy_target_entropy_fullsearch":    float,  # mean H over full-search rows (nats)
+    "policy_target_entropy_fastsearch":    float,  # mean H over quick-search rows (nats)
+    "policy_target_kl_uniform_fullsearch": float,  # mean KL(tgt || uniform), full (nats)
+    "policy_target_kl_uniform_fastsearch": float,  # mean KL(tgt || uniform), fast (nats)
+    "frac_fullsearch_in_batch":            float,  # n_full / B, in [0, 1]
+    "n_rows_policy_loss":                  int,    # rows that contributed to policy gradient
+    "n_rows_total":                        int,    # rows with valid policy target
     "value_accuracy":          float,    # fraction: value head correctly predicted winner
     "lr":                      float,    # current learning rate
     "grad_norm":               float,    # gradient norm before clipping (may be inf on
@@ -63,6 +74,13 @@ Emitted every `config.monitoring.log_interval` training steps (default: 10).
     "phase":                   str,      # "pretrain" or "self_play"
 }
 ```
+
+**§101 usage.** `n_rows_policy_loss == 0` ⇒ the selective gate dropped every
+row this step (zero-gradient on the policy head). `n_rows_policy_loss > 0`
+with `loss_policy == 0.0` ⇒ genuine zero loss on surviving rows. This
+disambiguates the "zero loss" case that §100 flagged as a known follow-up.
+`H_fast(CQ) ≈ H_full(CQ)` is the §101 D-Gumbel signal that quick-search
+completed-Q targets carry usable gradient.
 
 ### 2.2 `iteration_complete`
 
@@ -446,6 +464,11 @@ monitoring:
   # Target bands (used in P0 win rate chart)
   p0_win_rate_target_low: 54.0   # lower bound of target band (%)
   p0_win_rate_target_high: 58.0  # upper bound of target band (%)
+
+  # §101 — gate for the 7 policy-target-quality metrics in `training_step`.
+  # Default true. Disable via monitoring.log_policy_target_metrics: false for
+  # benchmark harnesses where even the ~200 µs/call is unwanted.
+  log_policy_target_metrics: true
 ```
 
 **§47 notes:**
@@ -565,3 +588,4 @@ The Flask server is not aware of the layout — it just forwards events.
 | 2026-04-04 | system_stats + 3 new fields; iteration_complete + batch_fill_pct; stat card redesign; loss chart EMA toggle; bottom row → 4 panels (P0 win rate line, game length histogram, entropy trend, grad norm trend); ELO panel made conditional; system panel expanded with RAM/CPU/batch-fill/grad/LR |
 | 2026-04-05 | **§45** — add `rss_gb` (process RSS) to `system_stats` event and system panels (terminal + web). Needed for OOM post-mortem — overnight run OOMed with no RSS history |
 | 2026-04-07 | **§47** — meaningful-ratios pass: `training_step` now emits `policy_target_entropy`; `iteration_complete` now emits `mcts_mean_depth` and `mcts_root_concentration`. Stat cards and loss chart show normalized ratios inline (no toggles). System panel adds MCTS depth and root concentration rows. Ring buffers bumped to 2000 steps / 500 games. Config-driven via `/api/monitoring-config`. 12 new tests added. |
+| 2026-04-18 | **§101** — D-Gumbel / D-Zeroloss instrumentation. `training_step` now emits 7 new keys: `policy_target_entropy_{full,fast}search`, `policy_target_kl_uniform_{full,fast}search`, `frac_fullsearch_in_batch`, `n_rows_policy_loss`, `n_rows_total`. NaN is a first-class signal (empty subset). Terminal dashboard adds one policy-target line; web dashboard extends the loss ratio strip. Gated by `monitoring.log_policy_target_metrics` (default true, <0.2% step cost). New `tests/test_policy_target_metrics.py` exercises the math on synthetic batches. |
