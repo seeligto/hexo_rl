@@ -22,3 +22,6 @@ monitoring:
   p0_win_rate_target_high: 58.0
   viewer_max_memory_games: 50
   viewer_max_disk_games: 1000
+  # §101 — gate D-Gumbel / D-Zeroloss instrumentation (7 policy-target metrics
+  # on training_step). <0.2% step-time cost on a 100 ms step.
+  log_policy_target_metrics: true
