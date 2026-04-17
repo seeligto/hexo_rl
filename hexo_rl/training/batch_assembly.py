@@ -128,7 +128,20 @@ def load_pretrained_buffer(
         pre_chain  = np.array(pre_states[:, 18:24], dtype=np.float16)  # (T, 6, 19, 19)
         pre_states = np.array(pre_states[:, :18],   dtype=np.float16)  # (T, 18, 19, 19)
     else:
-        pre_chain = np.zeros((T, 6, 19, 19), dtype=np.float16)
+        # §102.a: compute chain planes from stone planes at NPZ load so corpus
+        # rows carry real chain targets rather than zeros. Route through float32
+        # division (mirrors Rust `encode_chain_planes`: `(int as f32) / 6.0f32`
+        # → cast to f16) to preserve byte-exactness with the self-play
+        # replay-buffer storage. The F2 guard pins the underlying int8 planes
+        # against Rust; this path pins the final /6 f16 values.
+        from hexo_rl.env.game_state import _compute_chain_planes
+        pre_chain = np.empty((T, 6, 19, 19), dtype=np.float16)
+        if T > 0:
+            cur_all = np.asarray(pre_states[:, 0], dtype=np.float32)
+            opp_all = np.asarray(pre_states[:, 8], dtype=np.float32)
+            for k in range(T):
+                planes_f32 = _compute_chain_planes(cur_all[k], opp_all[k]).astype(np.float32) / 6.0
+                pre_chain[k] = planes_f32.astype(np.float16)
 
     max_pre = int(mixing_cfg.get("pretrain_max_samples", 0))
     if max_pre and T > max_pre:
