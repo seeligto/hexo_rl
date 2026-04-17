@@ -129,6 +129,11 @@ train.status: ## Check background training status
 		echo "Not running (no train.pid)"; \
 	fi
 
+.PHONY: calib.run
+calib.run: ## Graduation-gate calibration run (RUN=R1|R2|R3|R4, DURATION=12600s)
+	@test -n "$(RUN)" || (echo "Usage: make calib.run RUN=R1|R2|R3|R4 [DURATION=sec]" && exit 1)
+	bash scripts/run_calibration_run.sh $(RUN) $(if $(DURATION),--duration $(DURATION))
+
 .PHONY: train.smoke
 train.smoke: ## 20-step smoke test to verify training end-to-end
 	@if [ -z "$(PRETRAIN_CKPT)" ]; then \

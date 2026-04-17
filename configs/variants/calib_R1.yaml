@@ -1,0 +1,25 @@
+# calib_R1 — graduation-gate calibration baseline (prompt-8 §calib).
+# D1=0.55 threshold, D2=2500 interval, D3=20000 decay, D4=200 games.
+# This is the current production gate reproduced as a named run for
+# ablation comparison against R2 (threshold), R3 (interval+decay), R4
+# (sample size). Shares selfplay semantics with gumbel_targets.
+#
+# Driver: scripts/run_calibration_run.sh R1
+# Report: reports/graduation_calibration_2026-04-17.md
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 200
+  playout_cap:
+    fast_prob: 0.0
+
+# D2 — graduation_interval_steps. Training-level eval_interval wins per §101 H1.
+eval_interval: 2500
+
+# D3 — mixing.decay_steps.
+mixing:
+  decay_steps: 20000
+
+# Calibration-only: route log + checkpoint output to per-variant subdirs so
+# the 4 runs do not stomp each other's artifacts when the driver resets
+# best_model.pt / replay_buffer.bin between runs.
