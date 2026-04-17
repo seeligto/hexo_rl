@@ -419,8 +419,9 @@ class Trainer:
 
             # Q13-aux chain loss: target is the separately-stored chain_planes
             # sub-buffer (6 planes per position, float16 normalized by /6.0).
-            # Computed on ALL batch rows — target is deterministic from board
-            # stones, no pretrain/selfplay divergence, so mask_aux_rows not needed.
+            # Computed on ALL batch rows; corpus chain targets are computed at
+            # NPZ load (see batch_assembly.load_pretrained_buffer, §102.a) so
+            # every row carries a real board-deterministic target.
             chain_loss = None
             if use_chain and chain_pred is not None and chain_planes is not None:
                 chain_target = torch.from_numpy(chain_planes).to(self.device).float()
