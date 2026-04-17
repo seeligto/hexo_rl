@@ -2942,6 +2942,13 @@ gumbel_targets are corpus-dominated warmup (ΔH small; excluded from the
 call). `gumbel_full` not measured — mutex-blocked and `gumbel_targets`
 shares the relevant CQ target construction path.
 
+**Follow-up applied same day.** `configs/variants/gumbel_full.yaml` Option A
+landed — `fast_prob: 0.25 → 0.0`, keeping the base's `full_search_prob: 0.25`
+move-level cap. Mutex resolved at pool init; the desktop Exp E variant is
+launchable again. `tests/test_variant_configs.py::test_gumbel_full_passes_playout_cap_mutex`
+pins the resolved config so the next base-config drift cannot silently
+reintroduce the bug.
+
 **Resolves.** §100 "Known follow-ups" item 3 (distinguish empty-mask vs
 genuine 0.0 policy loss — `n_rows_policy_loss == 0` vs `> 0` does it).
 §101 gains a telemetry hook for future graduation-gate D-Gumbel validation.
