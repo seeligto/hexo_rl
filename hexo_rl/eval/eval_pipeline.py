@@ -99,6 +99,7 @@ class EvalPipeline:
         train_step: int,
         best_model: HexTacToeNet | None,
         full_config: dict[str, Any] | None = None,
+        best_model_step: int | None = None,
     ) -> Dict[str, Any]:
         """Run a full evaluation round.
 
@@ -107,6 +108,10 @@ class EvalPipeline:
             train_step: Current training step (used as checkpoint identifier).
             best_model: Previous best checkpoint model (or None on first eval).
             full_config: Full training config dict (passed through to Evaluator).
+            best_model_step: Training step the anchor was promoted at. Used
+                to identify distinct graduated anchors in the Elo DB — one
+                player row per anchor snapshot, not one row per run. Falls
+                back to legacy "best_checkpoint" when None (tests only).
 
         Returns:
             Dict with keys: promoted (bool), win_rates, ratings.
@@ -209,9 +214,21 @@ class EvalPipeline:
             )
             ci_lo, ci_hi = _binomial_ci(er.win_count, n)
 
-            # Find or create the "best" player
+            # R1 fix: anchor identity carries the promotion step so each
+            # graduated anchor is a distinct opponent to Bradley-Terry
+            # instead of a single pooled "best_checkpoint" entity whose
+            # strength would collapse across graduations.
+            if best_model_step is not None:
+                best_name = f"anchor_ckpt_{best_model_step}"
+                best_meta: Dict[str, Any] = {
+                    "role": "champion",
+                    "anchor_step": best_model_step,
+                }
+            else:
+                best_name = "best_checkpoint"
+                best_meta = {"role": "champion"}
             best_pid = self.db.get_or_create_player(
-                "best_checkpoint", "checkpoint", {"role": "champion"},
+                best_name, "checkpoint", best_meta,
                 run_id=self.run_id,
             )
             self.db.insert_match(
@@ -220,7 +237,7 @@ class EvalPipeline:
                 colony_wins_a=er.colony_wins,
                 run_id=self.run_id,
             )
-            print_match_result(ckpt_name, "best_checkpoint", er.win_count, n - er.win_count, n, ci_lo, ci_hi)
+            print_match_result(ckpt_name, best_name, er.win_count, n - er.win_count, n, ci_lo, ci_hi)
             results["wr_best"] = er.win_rate
             results["ci_best"] = (ci_lo, ci_hi)
             results["colony_wins_best"] = er.colony_wins
