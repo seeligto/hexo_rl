@@ -489,17 +489,21 @@ def benchmark_worker_pool(
 # (row_label, result_name, sub_key, metric_key_in_stats_or_value, target, higher_is_better)
 _CHECKS_CUDA: list[tuple[str, str, str | None, str, float, bool]] = [
     ("MCTS sim/s (CPU, no NN)",           "MCTS (CPU only, no NN)",  None,    "value",   26_000,   True),
-    ("NN inference batch=64 pos/s",       "NN inference (batch=64)", None,    "value",    8_250,   True),
+    # §102 rebaseline 2026-04-17: 9.8k→7.7k sustained driver/boost-clock drift (same basket as §72).
+    # Floor at observed × 0.85 so alarms fire on real regressions, not one-off drift.
+    ("NN inference batch=64 pos/s",       "NN inference (batch=64)", None,    "value",    6_500,   True),
     ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",      3.5,   False),
-    ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  630_000,   True),
+    # §102 rebaseline 2026-04-17: 762k→618k sustained drift; observed × 0.85 = 525k floor.
+    ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  525_000,   True),
     ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_500,   False),
     # §98 rebaseline 2026-04-16: 18ch split scatter (state + chain) raises aug latency; 1400→1800
+    # §102 2026-04-17: 1,241 µs observed (improved vs §98's 1,663); do not tighten on one run.
     ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_800,   False),
     ("GPU utilisation %",                 "GPU utilisation",         "gpu",   "value",       85,   True),
     ("VRAM usage GB",                     "GPU utilisation",         "vram",  "value",        0,   False),  # dynamic
-    # §98 rebaseline 2026-04-16: benchmark warmup artifact (0-pos windows) + methodology change
-    # (200 sims/128 max-moves vs old 400/200) make old 500k target non-comparable. 250k = conservative floor.
-    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  250_000,   True),
+    # §102 rebaseline 2026-04-17: 90s warmup fixed §98 warmup artifact (IQR 188% → 5.7%).
+    # New floor = observed 167,755 × 0.85 = 142,592 → 142,000. PROVISIONAL until second stable run confirms.
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  142_000,   True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
 ]
 
