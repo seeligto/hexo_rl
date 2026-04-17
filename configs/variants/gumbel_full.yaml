@@ -10,6 +10,12 @@ selfplay:
   gumbel_m: 16
   completed_q_values: true
   playout_cap:
-    # fast_prob=0.25: Gumbel Sequential Halving shows largest gains at
-    # 30-50 sims (§71). Fast games are meaningful on this variant.
-    fast_prob: 0.25
+    # §100 move-level cap inherited from base (full_search_prob=0.25,
+    # n_sims_quick=100, n_sims_full=600). Game-level fast_prob disabled —
+    # WorkerPool.__init__ enforces mutex with full_search_prob.
+    # §104 D-Gumbel verdict (reports/gumbel_target_quality_2026-04-17.md):
+    # quick-search completed-Q targets drift toward uniform (ΔH ≈ +3.5 nats),
+    # so the selective gate is discarding noise, not usable gradient —
+    # keep it. Cost: ~2.5× per-move compute vs the pre-§100 config;
+    # rebaseline games/hr on next restart.
+    fast_prob: 0.0
