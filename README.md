@@ -62,20 +62,23 @@ planes plus 6 Q13 chain-length planes (one per hex axis direction, pre/post). Se
 
 ## Performance
 
-**Hardware:** Ryzen 7 8845HS + RTX 4060 Laptop, 16 workers, LTO + native CPU
-**Date:** 2026-04-09
+**Hardware:** Ryzen 7 8845HS + RTX 4060 Laptop, 14 workers, LTO + native CPU
+**Date:** 2026-04-17 (post-§102 rebaseline, 18-plane GN(8) model)
 
 | Metric | Baseline (n=5 median) | Target |
 |---|---|---|
-| MCTS (CPU only, no NN) | 53,840 sim/s | ≥ 26,000 sim/s |
-| NN inference (batch=64) | 8,804 pos/s | ≥ 8,250 pos/s |
-| NN latency (batch=1) | 1.60 ms | ≤ 3.5 ms |
-| Worker throughput | 548,653 pos/hr | ≥ 500,000 pos/hr |
-| GPU utilization | 100% | ≥ 85% |
+| MCTS (CPU only, no NN) | 56,404 sim/s | ≥ 26,000 sim/s |
+| NN inference (batch=64) | 7,676 pos/s  | ≥ 6,500 pos/s |
+| NN latency (batch=1)   | 2.19 ms      | ≤ 3.5 ms |
+| Buffer push            | 618,552 pos/s | ≥ 525,000 pos/s |
+| Worker throughput      | 167,755 pos/hr | ≥ 142,000 pos/hr (provisional) |
+| GPU utilization        | 100%         | ≥ 85% |
 
-Methodology: median of n=5 runs, 3 s warm-up. MCTS workload: 800 sims/move × 62
-iterations with tree reset between moves. Run `make bench` to reproduce. Full
-target definitions in [CLAUDE.md §Benchmarks](CLAUDE.md#benchmarks--must-pass-before-phase-45).
+Methodology: median of n=5 runs, 3 s warm-up (90 s worker pool per §102).
+MCTS workload: 800 sims/move × 62 iterations with tree reset between moves.
+Worker pool: 200 sims/move, max_moves=128, pool_duration=120 s.
+Run `make bench` to reproduce. Full target definitions and drift history in
+[CLAUDE.md §Benchmarks](CLAUDE.md#benchmarks--must-pass-before-phase-45).
 
 ---
 

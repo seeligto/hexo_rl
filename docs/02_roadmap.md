@@ -83,7 +83,7 @@ n_workers: 1
 - [x] Implement benchmark harness: MCTS throughput, GPU utilization, positions/hour
 - [x] Profile and fix bottlenecks: Enabled TF32, dynamic hardware scaling
 
-### Throughput targets (Phase 3.5 / 4 — historical)
+### Throughput targets (Phase 3.5 / 4 — HISTORICAL, superseded)
 
 | Metric | Target | Status |
 |---|---|---|
@@ -96,9 +96,29 @@ n_workers: 1
 
 > These are **Phase 3.5 exit baselines** on an earlier benchmark methodology
 > (burst MCTS workload, pre-radius-8 branching, 24-plane input). They are
-> NOT comparable to the current targets. See CLAUDE.md § Benchmarks for
-> the authoritative post-§98 (2026-04-16, 18-plane, ≥ 250k worker pos/hr)
-> baselines.
+> NOT comparable to current targets.
+
+### Throughput targets (Phase 4.0 post-§97/§99/§102 — CURRENT)
+
+2026-04-17 rebaseline: 18-plane input (§97), GroupNorm(8) trunk (§99),
+90s worker warmup (§102). Laptop Ryzen 7 8845HS + RTX 4060, 14 workers,
+`make bench` (pool_duration=120s, worker_sims=200, max_moves=128).
+
+| Metric | Target | Latest (2026-04-17) |
+|---|---|---|
+| MCTS throughput         | ≥ 26,000 sim/s         | 56,404 sim/s   (PASS) |
+| NN inference (batch=64) | ≥ 6,500 pos/s          | 7,676.5 pos/s  (PASS) |
+| NN latency (batch=1)    | ≤ 3.5 ms               | 2.19 ms        (PASS) |
+| Buffer push             | ≥ 525,000 pos/s        | 618,552 pos/s  (PASS) |
+| Buffer sample raw       | ≤ 1,500 µs/batch       | 1,379 µs       (PASS) |
+| Buffer sample augmented | ≤ 1,800 µs/batch       | 1,241 µs       (PASS) |
+| GPU utilization         | ≥ 85%                  | 100%           (PASS) |
+| VRAM usage              | ≤ 80% total            | 0.12 / 8.6 GB  (PASS) |
+| Worker throughput       | ≥ 142,000 pos/hr *(PROVISIONAL)* | 167,755 pos/hr (PASS) |
+| Batch fill %            | ≥ 84%                  | 97.49%         (PASS) |
+
+See `CLAUDE.md § Benchmarks` for the authoritative row-by-row table
+and rationale; `docs/07_PHASE4_SPRINT_LOG.md §102` for the target-diff.
 
 ### Exit criteria
 
@@ -187,9 +207,10 @@ The split-responsibility architecture is fully in place:
 
 - Self-play runs ≥ 24 hours without worker crash or buffer corruption
 - Policy loss and value loss both decrease from bootstrap baseline over first 500 RL steps
-- Worker throughput ≥ 250,000 pos/hr sustained on the isolated self-play
-  benchmark (per §98 post-18ch rebaseline; real training with shared GPU
-  runs ~48k pos/hr at production sim counts — the two are not directly
+- Worker throughput ≥ 142,000 pos/hr sustained on the isolated self-play
+  benchmark (per §102 post-90s-warmup rebaseline — PROVISIONAL until a
+  second stable run confirms; real training with shared GPU runs
+  ~48k pos/hr at production sim counts — the two are not directly
   comparable because the bench runs at reduced sim counts with no
   gradient-step contention)
 - Graduation gate fires at least one promotion cycle end-to-end
