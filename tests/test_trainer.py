@@ -66,7 +66,13 @@ def test_train_step_loss_is_finite(tmp_path: Path):
     # policy_entropy_pretrain / _selfplay are intentionally NaN on the
     # single-buffer path (no pretrain/selfplay distinction). grad_norm
     # can be inf (pre-clip) but must not be NaN.
-    _nan_allowed = {"policy_entropy_pretrain", "policy_entropy_selfplay"}
+    # §101: fast-search target metrics are NaN when the batch carries no
+    # quick-search rows (default: full_search_mask is None ⇒ all full).
+    _nan_allowed = {
+        "policy_entropy_pretrain", "policy_entropy_selfplay",
+        "policy_target_entropy_fastsearch",
+        "policy_target_kl_uniform_fastsearch",
+    }
     for k, v in result.items():
         if k in _nan_allowed:
             continue  # NaN is correct when no split is in effect
@@ -500,7 +506,13 @@ def test_train_step_recent_buffer_loss_is_finite(tmp_path: Path):
     buf = fill_buffer()
     recent = make_recent_buffer()
     result = trainer.train_step(buf, augment=False, recent_buffer=recent)
-    _nan_allowed = {"policy_entropy_pretrain", "policy_entropy_selfplay"}
+    # §101: fast-search target metrics are NaN when the batch carries no
+    # quick-search rows (default: full_search_mask is None ⇒ all full).
+    _nan_allowed = {
+        "policy_entropy_pretrain", "policy_entropy_selfplay",
+        "policy_target_entropy_fastsearch",
+        "policy_target_kl_uniform_fastsearch",
+    }
     for k, v in result.items():
         if k in _nan_allowed:
             continue  # NaN is correct when no split is in effect
