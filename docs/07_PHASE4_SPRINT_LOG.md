@@ -2643,6 +2643,32 @@ comparable. Fresh `make bench` on this branch establishes the new GN baseline.
 
 **Known follow-ups (not blocking):** split MCTS depth / root-concentration stats by `is_full_search`; frozen v4 fixture round-trip test; distinguish empty-mask vs genuine 0.0 policy loss.
 
+### §100.d — Threat probe baseline regenerated v4 → v5 (2026-04-17)
+
+`fixtures/threat_probe_baseline.json` v4 was anchored to an older `bootstrap_model.pt` file; after GroupNorm (§99) and subsequent bootstrap refresh the live bootstrap produced different threat-head outputs than the recorded baseline, so `make probe.latest` was comparing apples to oranges.
+
+- **NPZ:** `fixtures/threat_probe_positions.npz` was 24-plane (states shape `(20, 24, 19, 19)`) from the §92 era. Planes 0–17 are bit-exact with the current `GameState.to_tensor()` layout (`current_views + history + mr_flag + ply_parity`); only planes 18–23 (chain-length) are gone post-§97. Sliced in place to `(20, 18, 19, 19)` — probe positions preserved, metadata unchanged.
+- **Baseline:** regenerated against the live `bootstrap_model.pt` (18-plane trunk, GroupNorm(8)). `BASELINE_SCHEMA_VERSION` 4 → 5.
+
+| metric | v4 (stale bootstrap) | v5 (live bootstrap) | Δ |
+|---|---|---|---|
+| `ext_logit_mean`  | +0.217 | +0.080 | −0.137 |
+| `ctrl_logit_mean` | +1.154 | +0.028 | −1.126 |
+| `contrast_mean`   | −0.937 | +0.052 | **+0.989** |
+| `ext_in_top5_pct` | 20 %   | 20 %   | 0 |
+| `ext_in_top10_pct`| 20 %   | 20 %   | 0 |
+
+**Contrast shift > ±0.3 flag (per task spec): investigated.** The shift is driven by a bootstrap-file substitution, not probe-position instability across the 24→18 migration. Evidence:
+1. `bootstrap_model.pt` mtime is 2026-04-17 10:43 — newer than the v4 commit (2026-04-16 19:40); bootstrap was refreshed between v4 and v5.
+2. `ctrl_logit_mean` collapsed by ~1.1 nats. If chain planes had been confounding the probe, we would expect ext/ctrl to shift by comparable magnitudes; instead ext_logit barely moved (−0.14) while ctrl_logit flattened. That is a weights story, not an input-layout story.
+3. Top-K policy membership (20%/20%) is invariant across versions — geometry of the fixture is stable.
+
+**C1 floor unchanged.** `max(0.38, 0.8 × 0.052) = 0.38` — absolute floor binds, same as v4 against the bootstrap (untrained threat head; §92 rationale). Future step-5k probes still gate on contrast ≥ 0.38; the baseline only feeds C4 drift-warning and the 0.8× multiplier path.
+
+**Round-trip self-test:** `make probe.bootstrap` exit 0, baseline re-written bit-identical. `make probe.latest` cannot be exercised end-to-end until a post-§99 (GroupNorm) checkpoint exists — all `checkpoints/saved/checkpoint_*.pt` are pre-§99 BN and refuse to load by design (§99 safety rail).
+
+Full report: `reports/threat_probe_v5_2026-04-18.md`.
+
 ## §101 — Graduation gate with anchor model (2026-04-16)
 
 **Motivation.** Self-play workers were consuming `inf_model` weights re-synced from `trainer.model` every `checkpoint_interval` (500 steps) — effectively the current-training model, warts and all. Transient optimizer regressions fed directly into the data stream. KrakenBot-style graduation: new model must beat the current anchor at a configurable win rate before replacing it; workers keep the anchor between promotions. Monotonic data quality.
