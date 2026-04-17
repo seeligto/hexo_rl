@@ -295,6 +295,53 @@ def test_eval_games_reflects_opponents_run(
 
 
 @patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_anchor_identity_tracks_promotion_step(
+    mock_evaluator_cls: MagicMock,
+    pipeline: EvalPipeline,
+) -> None:
+    """R1 fix: each graduated anchor registers as a distinct player row.
+
+    Two evaluations at different anchor steps must create two player rows,
+    otherwise Bradley-Terry pools pre- and post-graduation anchor matches
+    into one virtual opponent with incoherent Elo.
+    """
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.5, win_count=5, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.3, win_count=3, n_games=10, colony_wins=0)
+    mock_evaluator_cls.return_value = mock_eval
+
+    pipeline.run_evaluation(MagicMock(), 2500, MagicMock(), best_model_step=0)
+    pipeline.run_evaluation(MagicMock(), 5000, MagicMock(), best_model_step=2500)
+
+    cur = pipeline.db._conn.execute(
+        "SELECT name FROM players WHERE player_type='checkpoint' AND name LIKE 'anchor_ckpt_%'"
+    )
+    anchor_names = sorted(row[0] for row in cur.fetchall())
+    assert anchor_names == ["anchor_ckpt_0", "anchor_ckpt_2500"], anchor_names
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_anchor_same_step_reuses_row(
+    mock_evaluator_cls: MagicMock,
+    pipeline: EvalPipeline,
+) -> None:
+    """Two evals with the same best_model_step reuse the same player row
+    (anchor has not graduated between them)."""
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.5, win_count=5, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.3, win_count=3, n_games=10, colony_wins=0)
+    mock_evaluator_cls.return_value = mock_eval
+
+    pipeline.run_evaluation(MagicMock(), 2500, MagicMock(), best_model_step=0)
+    pipeline.run_evaluation(MagicMock(), 5000, MagicMock(), best_model_step=0)
+
+    cur = pipeline.db._conn.execute(
+        "SELECT COUNT(*) FROM players WHERE name='anchor_ckpt_0'"
+    )
+    assert cur.fetchone()[0] == 1
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
 def test_effective_eval_interval_override(
     mock_evaluator_cls: MagicMock,
     eval_config_with_strides: dict,

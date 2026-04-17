@@ -485,12 +485,14 @@ def run_training_loop(
                             _step: int = step_snapshot,
                             _best: HexTacToeNet | None = best_model,
                             _cfg: dict = config,
+                            _best_step: int | None = best_model_step,
                         ) -> None:
                             try:
                                 # L4: run_evaluation sets result["step"] itself;
                                 # the post-hoc assignment here was dead code.
                                 result = eval_pipeline.run_evaluation(
                                     _model, _step, _best, full_config=_cfg,
+                                    best_model_step=_best_step,
                                 )
                                 _eval_result[0] = result
                             except Exception:

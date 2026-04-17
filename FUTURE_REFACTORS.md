@@ -69,6 +69,19 @@ sampling can weight sources differently without re-running the full export.
 Bradley-Terry recomputation. At 1M+ matches this will be slow. Add a windowed query
 (last N matches per pair) as an alternative computation mode.
 
+### Anchor snapshot lineage (R4, audit 2026-04-18)
+
+`checkpoints/best_model.pt` is overwritten on each graduation and no DB row
+records the graduation event itself, so the weights that defined anchor-at-step-N
+are unrecoverable after the next promotion. Elo back-fitting and ablation replay
+cannot reconstruct the chain.
+
+Fix shape: write `checkpoints/anchors/anchor_{step}.pt` on promotion (append-only)
+and add a `graduations` table `(run_id, promoted_at_step, prev_anchor_step,
+wr_best, ci_lo, ci_hi, timestamp)`. Prune by run_id/age policy.
+
+See `reports/elo_db_anchor_audit_2026-04-18.md` for context.
+
 ### py-spy flame graph on live training
 
 Blocked on `py-spy` Python 3.14 support (0.4.1 fails with "Failed to find python
