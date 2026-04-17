@@ -115,6 +115,13 @@ class TerminalDashboard:
             "worker_count": None,
             "phase": None,
             "policy_target_entropy": None,
+            "policy_target_entropy_fullsearch":    None,
+            "policy_target_entropy_fastsearch":    None,
+            "policy_target_kl_uniform_fullsearch": None,
+            "policy_target_kl_uniform_fastsearch": None,
+            "frac_fullsearch_in_batch":            None,
+            "n_rows_policy_loss":                  None,
+            "n_rows_total":                        None,
             "mcts_mean_depth": None,
             "mcts_root_concentration": None,
         }
@@ -168,6 +175,12 @@ class TerminalDashboard:
                 "loss_aux", "loss_chain", "loss_ownership", "loss_threat",
                 "policy_entropy", "policy_entropy_pretrain",
                 "policy_entropy_selfplay", "policy_target_entropy",
+                "policy_target_entropy_fullsearch",
+                "policy_target_entropy_fastsearch",
+                "policy_target_kl_uniform_fullsearch",
+                "policy_target_kl_uniform_fastsearch",
+                "frac_fullsearch_in_batch",
+                "n_rows_policy_loss", "n_rows_total",
                 "lr", "grad_norm",
             ):
                 if key in payload:
@@ -417,11 +430,37 @@ class TerminalDashboard:
             f"  [dim](collapse < {_COLLAPSE_THRESHOLD:.1f} nats)[/dim]"
         )
 
+        # §101 policy-target quality row (D-Gumbel / D-Zeroloss split).
+        def _fmt_metric(v: Any) -> str:
+            if v is None or (isinstance(v, float) and not math.isfinite(v)):
+                return _EM_DASH
+            return f"{v:.2f}"
+
+        h_full = _fmt_metric(s.get("policy_target_entropy_fullsearch"))
+        h_fast = _fmt_metric(s.get("policy_target_entropy_fastsearch"))
+        kl_full = _fmt_metric(s.get("policy_target_kl_uniform_fullsearch"))
+        kl_fast = _fmt_metric(s.get("policy_target_kl_uniform_fastsearch"))
+        n_full = s.get("n_rows_policy_loss")
+        n_total = s.get("n_rows_total")
+        n_str = (
+            f"{int(n_full)}/{int(n_total)}"
+            if (n_full is not None and n_total is not None)
+            else _EM_DASH
+        )
+        tgt_tbl = Table(show_header=False, box=None, padding=(0, 2), expand=True)
+        tgt_tbl.add_column(justify="left")
+        tgt_tbl.add_row(
+            f"policy target  H_full={h_full}  H_fast={h_fast}"
+            f"  │  KL_u_full={kl_full}  KL_u_fast={kl_fast}"
+            f"  │  n_full={n_str}"
+        )
+
         # Assemble
         outer = Table(show_header=False, box=None, expand=True, padding=0)
         outer.add_column()
         outer.add_row(loss_tbl)
         outer.add_row(ent_tbl)
+        outer.add_row(tgt_tbl)
         outer.add_row(tp_tbl)
         outer.add_row(buf_tbl)
 

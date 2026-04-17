@@ -739,6 +739,13 @@ function onTrainingStep(p) {
     policy_entropy_pretrain:  p.policy_entropy_pretrain ?? null,
     policy_entropy_selfplay:  p.policy_entropy_selfplay ?? null,
     policy_target_entropy:    p.policy_target_entropy ?? 0,
+    policy_target_entropy_fullsearch:    p.policy_target_entropy_fullsearch ?? null,
+    policy_target_entropy_fastsearch:    p.policy_target_entropy_fastsearch ?? null,
+    policy_target_kl_uniform_fullsearch: p.policy_target_kl_uniform_fullsearch ?? null,
+    policy_target_kl_uniform_fastsearch: p.policy_target_kl_uniform_fastsearch ?? null,
+    frac_fullsearch_in_batch:            p.frac_fullsearch_in_batch ?? null,
+    n_rows_policy_loss:                  p.n_rows_policy_loss ?? null,
+    n_rows_total:                        p.n_rows_total ?? null,
     grad_norm:                p.grad_norm,
     lr:                       p.lr,
   });
@@ -792,6 +799,14 @@ function onTrainingStep(p) {
     if (p.loss_ownership != null) aux_bits.push('own '   + p.loss_ownership.toFixed(3));
     if (p.loss_threat    != null) aux_bits.push('thr '   + p.loss_threat.toFixed(3));
     if (aux_bits.length) parts.push(aux_bits.join(' \u00b7 '));
+    // §101 D-Gumbel split: quick-search vs full-search target quality.
+    const tgt_bits = [];
+    const _finite = (v) => (v != null && Number.isFinite(v));
+    if (_finite(p.policy_target_entropy_fullsearch)) tgt_bits.push('H_full ' + p.policy_target_entropy_fullsearch.toFixed(2));
+    if (_finite(p.policy_target_entropy_fastsearch)) tgt_bits.push('H_fast ' + p.policy_target_entropy_fastsearch.toFixed(2));
+    if (_finite(p.policy_target_kl_uniform_fastsearch)) tgt_bits.push('KL_u_fast ' + p.policy_target_kl_uniform_fastsearch.toFixed(2));
+    if (p.n_rows_policy_loss != null && p.n_rows_total != null) tgt_bits.push('n_full ' + p.n_rows_policy_loss + '/' + p.n_rows_total);
+    if (tgt_bits.length) parts.push(tgt_bits.join(' \u00b7 '));
     document.getElementById('loss-ratio-strip').textContent = parts.join('  \u2502  ');
   }
 

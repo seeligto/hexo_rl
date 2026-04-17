@@ -673,6 +673,15 @@ def _emit_training_events(
         "policy_entropy_pretrain": float(loss_info.get("policy_entropy_pretrain", float("nan"))),
         "policy_entropy_selfplay": float(loss_info.get("policy_entropy_selfplay", float("nan"))),
         "policy_target_entropy":   float(loss_info.get("policy_target_entropy", 0.0)),
+        # §101 — D-Gumbel / D-Zeroloss split metrics. NaN when the respective
+        # subset is empty; renderers must handle NaN + missing keys gracefully.
+        "policy_target_entropy_fullsearch":    float(loss_info.get("policy_target_entropy_fullsearch",    float("nan"))),
+        "policy_target_entropy_fastsearch":    float(loss_info.get("policy_target_entropy_fastsearch",    float("nan"))),
+        "policy_target_kl_uniform_fullsearch": float(loss_info.get("policy_target_kl_uniform_fullsearch", float("nan"))),
+        "policy_target_kl_uniform_fastsearch": float(loss_info.get("policy_target_kl_uniform_fastsearch", float("nan"))),
+        "frac_fullsearch_in_batch":            float(loss_info.get("frac_fullsearch_in_batch", 0.0)),
+        "n_rows_policy_loss":                  int(loss_info.get("n_rows_policy_loss", 0)),
+        "n_rows_total":                        int(loss_info.get("n_rows_total", 0)),
         "value_accuracy":          value_accuracy,
         "lr":                      lr,
         "grad_norm":               grad_norm,
@@ -743,6 +752,16 @@ def _emit_training_events(
         inf_total_requests=pool._inference_server._total_requests,
         mcts_mean_depth=round(float(getattr(_runner, "mcts_mean_depth", 0.0)), 3),
         mcts_root_concentration=round(float(getattr(_runner, "mcts_mean_root_concentration", 0.0)), 3),
+        # §101 — D-Gumbel / D-Zeroloss split. Persisted to JSONL so the
+        # Prompt-7 analysis can compute per-variant means without attaching a
+        # bespoke dashboard renderer.
+        pt_entropy_full=float(loss_info.get("policy_target_entropy_fullsearch", float("nan"))),
+        pt_entropy_fast=float(loss_info.get("policy_target_entropy_fastsearch", float("nan"))),
+        pt_kl_unif_full=float(loss_info.get("policy_target_kl_uniform_fullsearch", float("nan"))),
+        pt_kl_unif_fast=float(loss_info.get("policy_target_kl_uniform_fastsearch", float("nan"))),
+        frac_fullsearch_in_batch=float(loss_info.get("frac_fullsearch_in_batch", 0.0)),
+        n_rows_policy_loss=int(loss_info.get("n_rows_policy_loss", 0)),
+        n_rows_total=int(loss_info.get("n_rows_total", 0)),
     )
 
 

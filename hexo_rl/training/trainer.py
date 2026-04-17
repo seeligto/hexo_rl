@@ -73,6 +73,68 @@ def prune_policy_targets(
     return pruned / pruned.sum(dim=-1, keepdim=True).clamp(min=1e-8)
 
 
+_POLICY_TARGET_METRIC_KEYS = (
+    "policy_target_entropy_fullsearch", "policy_target_entropy_fastsearch",
+    "policy_target_kl_uniform_fullsearch", "policy_target_kl_uniform_fastsearch",
+    "frac_fullsearch_in_batch", "n_rows_policy_loss", "n_rows_total",
+)
+
+
+def compute_policy_target_metrics(
+    target_policy: torch.Tensor,
+    policy_valid: torch.Tensor,
+    full_search_mask: Optional[torch.Tensor],
+) -> Dict[str, float]:
+    """§101 D-Gumbel / D-Zeroloss: Shannon H + KL(tgt||uniform), split by is_full_search.
+
+    NaN for empty subsets (first-class signal). ``full_search_mask=None`` ⇒
+    all-full (legacy). Packs 7 scalars into one cross-device transfer.
+    """
+    with torch.no_grad():
+        p = target_policy.float()
+        H = torch.special.entr(p).sum(dim=-1)                         # (B,), nats
+        log_N = math.log(float(max(p.size(-1), 1)))
+        KL_uniform = log_N - H
+
+        pvb = policy_valid.bool()
+        if full_search_mask is not None:
+            fs = full_search_mask.bool()
+            mask_full, mask_fast = pvb & fs, pvb & (~fs)
+        else:
+            mask_full, mask_fast = pvb, torch.zeros_like(pvb)
+
+        mf, mfa, pvf = (m.to(H.dtype) for m in (mask_full, mask_fast, pvb))
+        (H_full_s, H_fast_s, KL_full_s, KL_fast_s, n_full_f, n_fast_f, n_valid_f
+         ) = torch.stack([
+            (H * mf).sum(), (H * mfa).sum(),
+            (KL_uniform * mf).sum(), (KL_uniform * mfa).sum(),
+            mf.sum(), mfa.sum(), pvf.sum(),
+        ]).cpu().tolist()
+
+        n_full, n_fast, n_valid = (int(round(x)) for x in (n_full_f, n_fast_f, n_valid_f))
+        batch_n = int(pvb.numel())
+        _div = lambda num, cnt: (float("nan") if cnt == 0 else num / cnt)
+        return {
+            "policy_target_entropy_fullsearch":    _div(H_full_s, n_full),
+            "policy_target_entropy_fastsearch":    _div(H_fast_s, n_fast),
+            "policy_target_kl_uniform_fullsearch": _div(KL_full_s, n_full),
+            "policy_target_kl_uniform_fastsearch": _div(KL_fast_s, n_fast),
+            "frac_fullsearch_in_batch":            float(n_full) / batch_n if batch_n > 0 else 0.0,
+            "n_rows_policy_loss":                  n_full,
+            "n_rows_total":                        n_valid,
+        }
+
+
+# NaN/0 defaults for the 7 metric keys — used in NaN-loss guard + gate-off.
+_ZERO_POLICY_TARGET_METRICS: Dict[str, float] = {
+    "policy_target_entropy_fullsearch":    float("nan"),
+    "policy_target_entropy_fastsearch":    float("nan"),
+    "policy_target_kl_uniform_fullsearch": float("nan"),
+    "policy_target_kl_uniform_fastsearch": float("nan"),
+    "frac_fullsearch_in_batch": 0.0, "n_rows_policy_loss": 0, "n_rows_total": 0,
+}
+
+
 class Trainer:
     """Manages one training step and checkpoint I/O.
 
@@ -140,6 +202,12 @@ class Trainer:
             self._threat_pos_weight = torch.tensor(
                 _pos_weight_val, dtype=torch.float32, device=self.device
             )
+
+        # §101: gate D-Gumbel / D-Zeroloss instrumentation (default on).
+        _mon = config.get("monitoring") if isinstance(config.get("monitoring"), dict) else {}
+        self._log_policy_target_metrics = bool(
+            _mon.get("log_policy_target_metrics", config.get("log_policy_target_metrics", True))
+        )
 
         # Load log if it already exists (resuming from checkpoint).
         log_path = self.checkpoint_dir / "checkpoint_log.json"
@@ -458,6 +526,7 @@ class Trainer:
                 "grad_norm": float("nan"),
                 "value_accuracy": float("nan"),
                 "lr": self.optimizer.param_groups[0]["lr"],
+                **_ZERO_POLICY_TARGET_METRICS,
             }
 
         max_grad_norm = float(self.config.get("grad_clip", 1.0))
@@ -522,6 +591,12 @@ class Trainer:
         else:
             full_search_frac = policy_valid.float().mean().item()
 
+        # §101: policy-target quality split by is_full_search (~<0.2% step cost).
+        policy_target_metrics = (
+            compute_policy_target_metrics(policies_t, policy_valid, full_search_mask_t)
+            if self._log_policy_target_metrics else dict(_ZERO_POLICY_TARGET_METRICS)
+        )
+
         result = {
             "loss":                     loss.item(),
             "policy_loss":              policy_loss.item(),
@@ -535,6 +610,7 @@ class Trainer:
             "lr":                       lr,
             "full_search_frac":         full_search_frac,
         }
+        result.update(policy_target_metrics)
         if use_aux:
             result["opp_reply_loss"] = opp_reply_loss.item()
         if use_uncertainty:
