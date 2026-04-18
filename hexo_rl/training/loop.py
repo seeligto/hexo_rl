@@ -204,6 +204,7 @@ def run_training_loop(
             base_model = getattr(trainer.model, "_orig_mod", trainer.model)
             best_model = HexTacToeNet(
                 board_size=board_size, res_blocks=res_blocks, filters=filters,
+                in_channels=in_channels, se_reduction_ratio=se_reduction_ratio,
             ).to(device)
             best_model.load_state_dict(base_model.state_dict())
             best_model.eval()
@@ -226,6 +227,7 @@ def run_training_loop(
     if eval_pipeline is not None:
         eval_model = HexTacToeNet(
             board_size=board_size, res_blocks=res_blocks, filters=filters,
+            in_channels=in_channels, se_reduction_ratio=se_reduction_ratio,
         ).to(device)
         eval_model.eval()
 
