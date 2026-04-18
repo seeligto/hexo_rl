@@ -1,0 +1,55 @@
+Arm: post_fix (HEAD includes e9ebbb9)
+Variant: gumbel_targets_desktop
+Start checkpoint: checkpoints/bootstrap_model.pt
+Steps: 5000
+Machine: desktop (Ryzen 7 3700x / RTX 3070)
+Date: 2026-04-18 / 2026-04-19 (crossed midnight)
+Run: restarted once at ~19:14 → 20:08 local after accidental window close
+     (run1 partial log archived as q27_post_fix_run1_partial.jsonl, reached step 450)
+Training wall-clock: ~5h (run2: 20:08 → 01:18 local)
+Games completed: 1253
+Buffer: 250000 / 250000
+Policy loss: 1.9619 → 1.6544 (Δ -0.3075)
+
+=== Threat Probe (checkpoint_00005000.pt) ===
+Exit code: 1 (FAIL)
+Report: reports/probes/latest_20260419_011839.md
+
+Verdict: FAIL
+  [C1] contrast_mean    = +3.891 (≥ +0.380)  PASS  (~10.2× threshold)
+  [C2] ext_in_top5_pct  = 20%    (≥ 25%)     FAIL
+  [C3] ext_in_top10_pct = 20%    (≥ 40%)     FAIL
+  [C4] |Δ ext_logit_mean| = 0.505 (< 5.0)    ok (warning-only)
+
+Threat logit @ ext cell: -0.42 ± 0.89 (bootstrap +0.08 ± 0.09)
+Threat logit @ ctl cell: -4.32 ± 0.17 (bootstrap +0.03 ± 0.01)
+Pattern: threat head learned extension vs control contrast strongly
+         (+3.89 vs bootstrap +0.05), but policy head fails to route
+         attention to extension cell — C2/C3 unchanged vs bootstrap
+         (both 20%). Consistent with "attention hijacking" signature:
+         value/threat knowledge present, policy ignoring it.
+
+=== Entropy at 5K ===
+5000	5.6284
+
+=== Entropy trajectory snapshots ===
+step    entropy
+10      3.4639   (bootstrap near-start, before full warmup)
+500     5.5103
+1000    5.7200
+1500    5.6471
+2000    5.7045
+2500    5.5987
+3000    5.5872
+3500    5.5858
+4000    5.6142
+4500    5.6168
+5000    5.6284
+(full trajectory in entropy_trajectory.tsv, 500 rows at step%10==0)
+
+Notes:
+  - Entropy settled near 5.6 from step 500 onward; policy remains
+    near-uniform over the ~361-cell action space (uniform ≈ 5.88).
+  - First run (partial, pre-restart) reached step 450 with similar
+    entropy (~5.66) before window close. No periodic checkpoint from
+    run1 was saved; run2 restarted from bootstrap.

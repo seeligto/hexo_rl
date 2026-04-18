@@ -1,0 +1,16 @@
+.venv/bin/python scripts/probe_threat_logits.py \
+	--checkpoint "checkpoints/checkpoint_00005000.pt" \
+	--baseline-checkpoint checkpoints/bootstrap_model.pt \
+	--output "reports/probes/latest_20260418_223903.md"
+/home/timmy/Work/hexo_rl/.venv/lib/python3.14/site-packages/torch/cuda/__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+Loading model: checkpoint_00005000.pt
+Loading positions: /home/timmy/Work/hexo_rl/fixtures/threat_probe_positions.npz
+  20 positions
+Probing...
+Loading comparison checkpoint: bootstrap_model.pt
+Report written: reports/probes/latest_20260418_223903.md
+
+FAIL  [C1] contrast=+3.665 (≥+0.380) OK  [C2] top5=20% (≥25%) FAIL  [C3] top10=20% (≥40%) FAIL
+[C4] |Δ ext_logit_mean|=0.078 (<5.0) ok
+make: *** [Makefile:166: probe.latest] Error 1
