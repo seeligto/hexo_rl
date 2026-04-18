@@ -178,6 +178,58 @@ class TestInferenceServerBatching:
 
 
 class TestInferenceServerFailureHandling:
+    def test_batch_prep_error_unblocks_workers(self, device):
+        """Regression C-003: batch-prep (np.ascontiguousarray) error must unblock workers.
+
+        Before fix, prep ran outside inner try so workers blocked forever on failure.
+        """
+        import unittest.mock as mock
+
+        class IdentityNet(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.dummy = torch.nn.Parameter(torch.zeros(1))
+
+            def forward(self, x):
+                n = x.shape[0]
+                pol = torch.ones(n, N_ACTIONS, device=x.device) / N_ACTIONS
+                val = torch.zeros(n, 1, device=x.device)
+                return pol.log(), val, val
+
+        model = IdentityNet().to(device)
+        model.eval()
+        server = InferenceServer(
+            model,
+            device,
+            {"selfplay": {"inference_batch_size": 4, "inference_max_wait_ms": 20.0}},
+        )
+        server.start()
+        try:
+            state = _random_state()
+            done = threading.Event()
+            error_caught = []
+
+            def _call() -> None:
+                try:
+                    server.infer(state)
+                except Exception as e:
+                    error_caught.append(str(e))
+                finally:
+                    done.set()
+
+            import hexo_rl.selfplay.inference_server as _is_mod
+            with mock.patch.object(_is_mod.np, "ascontiguousarray", side_effect=ValueError("bad array")):
+                t = threading.Thread(target=_call, daemon=True)
+                t.start()
+                hung = not done.wait(5.0)
+
+            t.join(timeout=2.0)
+            assert not hung, "server.infer() hung — workers not unblocked on batch-prep error"
+            assert len(error_caught) == 1, f"expected one error, got {error_caught}"
+        finally:
+            server.stop()
+            server.join(timeout=2.0)
+
     def test_infer_returns_on_model_forward_exception(self, device):
         """Regression: inference failures must not deadlock callers waiting on req.event."""
         class FailingNet(torch.nn.Module):
