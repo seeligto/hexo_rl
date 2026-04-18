@@ -9,7 +9,7 @@
 //!   gumbel_search.rs — `GumbelSearchState` (Gumbel-Top-k + Sequential Halving)
 //!   records.rs      — policy aggregation + game-end aux reprojection helpers
 
-mod gumbel_search;
+pub mod gumbel_search;
 mod records;
 mod worker_loop;
 

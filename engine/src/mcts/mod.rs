@@ -29,9 +29,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // ── Tree ─────────────────────────────────────────────────────────────────────
 
 pub struct MCTSTree {
-    pub(crate) pool: Vec<Node>,
+    pub pool: Vec<Node>,
     pub(crate) next_free: u32,
-    pub(crate) root_board: Board,
+    pub root_board: Board,
     pub(crate) c_puct: f32,
     pub(crate) virtual_loss: f32,
     pub(crate) vl_adaptive: bool,
@@ -194,6 +194,11 @@ impl MCTSTree {
         let first = root.first_child as usize;
         let n_ch = root.n_children as usize;
 
+        // Children store w_value in their own player-to-move perspective (backup.rs negamax).
+        // When root.moves_remaining==1 the children belong to the opponent, so negate their Q
+        // to bring them into root's perspective before computing completed-Q targets.
+        let q_sign: f32 = if self.pool[0].moves_remaining == 1 { -1.0 } else { 1.0 };
+
         // Collect per-child data: (flat_action_idx, visits, prior, q_value)
         let mut child_data: Vec<(usize, u32, f32, f32)> = Vec::with_capacity(n_ch);
         let mut sum_n: u32 = 0;
@@ -214,7 +219,7 @@ impl MCTSTree {
             let visits = child.n_visits;
             let prior = child.prior;
             let q_val = if visits > 0 {
-                child.w_value / visits as f32
+                q_sign * child.w_value / visits as f32
             } else {
                 0.0
             };
@@ -383,12 +388,13 @@ impl MCTSTree {
         children.sort_unstable_by(|a, b| b.1.cmp(&a.1));
         children.truncate(n);
 
+        let q_sign: f32 = if root.moves_remaining == 1 { -1.0 } else { 1.0 };
         children.into_iter().map(|(i, visits)| {
             let node = &self.pool[i];
             let val = node.action_idx;
             let q = (val >> 16) as i32 - 32768;
             let r = (val & 0xFFFF) as i32 - 32768;
-            let q_value = if visits > 0 { node.w_value / visits as f32 } else { 0.0 };
+            let q_value = if visits > 0 { q_sign * node.w_value / visits as f32 } else { 0.0 };
             (format!("({},{})", q, r), visits, node.prior, q_value)
         }).collect()
     }

@@ -11,22 +11,24 @@
 use rand::RngExt;
 
 /// Per-search state for Gumbel-Top-k + Sequential Halving.
-pub(super) struct GumbelSearchState {
+pub struct GumbelSearchState {
     /// Gumbel(0,1) noise values, one per root child (indexed by child offset).
-    pub(super) gumbel_values: Vec<f32>,
+    pub gumbel_values: Vec<f32>,
     /// Log-prior for each root child.
-    pub(super) log_priors: Vec<f32>,
+    pub log_priors: Vec<f32>,
     /// Child offsets (relative to first_child) still in the candidate set.
-    pub(super) candidates: Vec<usize>,
+    pub candidates: Vec<usize>,
     /// ceil(log2(m)) — number of halving phases.
-    pub(super) num_phases: usize,
+    pub num_phases: usize,
     /// Sigma scaling constants (same as get_improved_policy).
-    pub(super) c_visit: f32,
-    pub(super) c_scale: f32,
+    pub c_visit: f32,
+    pub c_scale: f32,
     /// Pool index of root's first child (for converting offsets to pool indices).
-    pub(super) first_child: u32,
+    pub first_child: u32,
+    /// moves_remaining of root at construction time — used to flip child Q perspective.
+    pub root_mr: u8,
     /// Cached (n_visits, w_value) per root child, refreshed each halving phase.
-    pub(super) cached_children: Vec<(u32, f32)>,
+    pub cached_children: Vec<(u32, f32)>,
 }
 
 impl GumbelSearchState {
@@ -34,7 +36,7 @@ impl GumbelSearchState {
     ///
     /// Generates Gumbel(0,1) noise for all root children, computes
     /// `g(a) + log_prior(a)` scores, and selects the top `m` candidates.
-    pub(super) fn new(
+    pub fn new(
         tree: &crate::mcts::MCTSTree,
         m: usize,
         c_visit: f32,
@@ -68,6 +70,7 @@ impl GumbelSearchState {
         let num_phases = if effective_m <= 1 { 1 } else { (effective_m as f64).log2().ceil() as usize };
 
         let first_child = tree.pool[0].first_child;
+        let root_mr = tree.pool[0].moves_remaining;
         let n_ch = tree.pool[0].n_children as usize;
         let cached_children: Vec<(u32, f32)> = (0..n_ch)
             .map(|j| {
@@ -84,12 +87,13 @@ impl GumbelSearchState {
             c_visit,
             c_scale,
             first_child,
+            root_mr,
             cached_children,
         }
     }
 
     /// Refresh cached child stats from the tree. Call once per halving phase.
-    pub(super) fn refresh_cache(&mut self, tree: &crate::mcts::MCTSTree) {
+    pub fn refresh_cache(&mut self, tree: &crate::mcts::MCTSTree) {
         let n_ch = self.cached_children.len();
         for j in 0..n_ch {
             let c = &tree.pool[self.first_child as usize + j];
@@ -98,7 +102,7 @@ impl GumbelSearchState {
     }
 
     /// Max visit count across all root children (from cache).
-    pub(super) fn max_n(&self) -> u32 {
+    pub fn max_n(&self) -> u32 {
         self.cached_children.iter().map(|(n, _)| *n).max().unwrap_or(0)
     }
 
@@ -109,10 +113,14 @@ impl GumbelSearchState {
     /// Unvisited candidates (n_visits=0) return score = gumbel + log_prior with
     /// no Q contribution (q_hat=0 → sigma=0). This is correct per the paper:
     /// before any simulations, score is just the Gumbel perturbation of the prior.
-    pub(super) fn score(&self, child_offset: usize, max_n: u32) -> f32 {
+    pub fn score(&self, child_offset: usize, max_n: u32) -> f32 {
         let child = &self.cached_children[child_offset];
         let q_hat = if child.0 > 0 {
-            (child.1 / child.0 as f32).clamp(-1.0, 1.0)
+            // child.1 is w_value in child's own perspective; negate when root is at
+            // moves_remaining==1 (children belong to the opponent).
+            let raw = child.1 / child.0 as f32;
+            let root_perspective = if self.root_mr == 1 { -raw } else { raw };
+            root_perspective.clamp(-1.0, 1.0)
         } else {
             0.0
         };
@@ -124,7 +132,7 @@ impl GumbelSearchState {
     }
 
     /// Rank candidates by score, keep top half. Refreshes cache from tree first.
-    pub(super) fn halve_candidates(&mut self, tree: &crate::mcts::MCTSTree) {
+    pub fn halve_candidates(&mut self, tree: &crate::mcts::MCTSTree) {
         if self.candidates.len() <= 1 {
             return;
         }
@@ -143,7 +151,7 @@ impl GumbelSearchState {
     }
 
     /// Return the pool index of the best candidate (Sequential Halving winner).
-    pub(super) fn best_action_pool_idx(&mut self, tree: &crate::mcts::MCTSTree) -> u32 {
+    pub fn best_action_pool_idx(&mut self, tree: &crate::mcts::MCTSTree) -> u32 {
         self.refresh_cache(tree);
         let max_n = self.max_n();
         let best_offset = self.candidates
@@ -166,7 +174,11 @@ mod tests {
 
     fn setup_tree_for_gumbel() -> crate::mcts::MCTSTree {
         let mut tree = crate::mcts::MCTSTree::new(1.5);
-        let board = Board::new();
+        // Use mr=2 (start of compound turn) so child w_values are already in
+        // root's perspective and score() applies no Q negation.
+        let mut board = Board::new();
+        board.apply_move(0, 0).expect("(0,0) must be legal on fresh board");
+        assert_eq!(board.moves_remaining, 2);
         tree.new_game(board);
 
         // Expand root with uniform priors.
