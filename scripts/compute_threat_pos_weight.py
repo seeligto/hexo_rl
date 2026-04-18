@@ -7,7 +7,7 @@ zeros for draws), which without pos_weight drives BCE logits strongly negative
 (see docs/07_PHASE4_SPRINT_LOG.md §91 and docs/06_OPEN_QUESTIONS.md Q19).
 
 This script computes `pos_weight = (1 − p) / p` from the empirical positive
-fraction `p` in the replay buffer (HEXB v3) — or falls back to the §91
+fraction `p` in the replay buffer (HEXB v4/v5) — or falls back to the §91
 theoretical value when no buffer is available — and optionally writes the
 result to configs/training.yaml:threat_pos_weight.
 
@@ -37,10 +37,10 @@ DEFAULT_BUFFER_PATH = Path("checkpoints/replay_buffer.bin")
 # buffer to get an up-to-date empirical estimate.
 _THEORETICAL_POS_WEIGHT = 59.0
 
-# HEXB v3 header constants (little-endian): magic(4) + version(4) + n_planes(4)
-# + capacity(8) + size(8) = 28 bytes total.
+# HEXB header constants (little-endian): magic(4) + version(4) + n_planes(4)
+# + capacity(8) + size(8) = 28 bytes total.  Rust engine accepts v4 and v5;
+# we only need the magic to validate and size to size the alloc.
 _HEXB_MAGIC = 0x4845_5842  # "HEXB"
-_HEXB_VERSION = 3
 _HEXB_HEADER_FMT = "<IIIQQ"  # magic, version, n_planes, capacity, size
 _HEXB_HEADER_SIZE = struct.calcsize(_HEXB_HEADER_FMT)  # 28
 
@@ -51,19 +51,19 @@ _MAX_ALLOC_ROWS = 250_000
 
 
 def _read_hexb_row_count(path: Path) -> int:
-    """Return the saved row count from a HEXB v3 header, or 0 on any error.
+    """Return the saved row count from a HEXB header, or 0 on any error.
 
-    Reads only the 28-byte header — no row data is touched. Validation is
-    minimal: wrong magic or wrong version returns 0 (caller falls back to the
-    theoretical constant anyway).
+    Reads only the 28-byte header — no row data is touched. Only the magic
+    is checked; version is not validated here because load_from_path (Rust)
+    handles v4/v5 compatibility.
     """
     try:
         with open(path, "rb") as f:
             raw = f.read(_HEXB_HEADER_SIZE)
         if len(raw) < _HEXB_HEADER_SIZE:
             return 0
-        magic, version, _n_planes, _capacity, size = struct.unpack(_HEXB_HEADER_FMT, raw)
-        if magic != _HEXB_MAGIC or version != _HEXB_VERSION:
+        magic, _version, _n_planes, _capacity, size = struct.unpack(_HEXB_HEADER_FMT, raw)
+        if magic != _HEXB_MAGIC:
             return 0
         return int(size)
     except OSError:
@@ -98,11 +98,7 @@ def from_buffer(buffer_path: Path, sample_n: int = 10_000) -> Optional[float]:
         return None
 
     batch_size = min(n, sample_n)
-    try:
-        _, _, _, _, winning_line = buf.sample_batch(batch_size, False)
-    except Exception as exc:
-        print(f"[warn] failed to sample from buffer: {exc}")
-        return None
+    _, _, _, _, _, winning_line, _ = buf.sample_batch(batch_size, False)
 
     wl = np.asarray(winning_line, dtype=np.float32)
     p = float(wl.mean())

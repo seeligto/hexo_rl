@@ -49,7 +49,7 @@ with open(sys.argv[1], "rb") as fh:
 PYEOF
 )
     echo "  $f: HEXB v$VER"
-    if [[ "$VER" -lt 3 ]]; then echo "  *** STALE — move to archive ***"; STALE=1; fi
+    if [[ "$VER" -lt 4 ]]; then echo "  *** STALE — move to archive ***"; STALE=1; fi
 done < <(find checkpoints/ data/ -name "*.hexb" -print0 2>/dev/null)
 if [[ "$STALE" -eq 0 ]]; then ok "no stale buffers"; else fail "stale HEXB v2 buffer found"; fi
 

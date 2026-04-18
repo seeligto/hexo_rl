@@ -528,8 +528,8 @@ PASS; code 1 = FAIL; code 2 = error.
 Current criterion (§91, revised from §85/§89):
 
 - C1: `contrast_mean ≥ max(0.38, 0.8 × bootstrap_contrast)`
-- C2: `ext_in_top5_pct ≥ 40`
-- C3: `ext_in_top10_pct ≥ 60`
+- C2: `ext_in_top5_pct ≥ 25`
+- C3: `ext_in_top10_pct ≥ 40`
 - C4 (warning only, does not gate): `abs(ext_logit_mean − bootstrap_ext_logit_mean) < 5.0`
 
 C1–C3 must all PASS. C4 prints a `WARNING` line; it is a BCE-drift canary

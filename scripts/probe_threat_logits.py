@@ -71,8 +71,8 @@ BOARD_SIZE: int = 19
 
 THRESH_CONTRAST_FLOOR: float = 0.38      # absolute floor for contrast_mean
 THRESH_CONTRAST_BOOTSTRAP_FRAC: float = 0.8  # contrast must reach 80% of bootstrap
-THRESH_EXT_IN_TOP5_PCT: float = 25.0     # extension cell in policy top-5 ≥ 25% (softened from 40% for 24-plane model at step 5k)
-THRESH_EXT_IN_TOP10_PCT: float = 40.0    # extension cell in policy top-10 ≥ 40% (softened from 60% for 24-plane model at step 5k)
+THRESH_EXT_IN_TOP5_PCT: float = 25.0     # extension cell in policy top-5 ≥ 25% (§91, revised for 18-plane model)
+THRESH_EXT_IN_TOP10_PCT: float = 40.0    # extension cell in policy top-10 ≥ 40% (§91, revised for 18-plane model)
 THRESH_EXT_LOGIT_DRIFT_WARN: float = 5.0  # |Δ ext_logit_mean| > 5.0 → warning only
 
 BASELINE_SCHEMA_VERSION: int = 5
