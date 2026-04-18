@@ -224,12 +224,12 @@ echo "Summary:  ${REPORT_DIR}/summary.md"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  POST-SWEEP: make bench.full                               ║"
+echo "║  POST-SWEEP: make bench                                    ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 
 kill_training
 cd "$PROJ_ROOT"
-make bench.full
+make bench
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"
