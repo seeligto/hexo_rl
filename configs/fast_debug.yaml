@@ -2,9 +2,8 @@
 # Applied on top of base configs (model.yaml + training.yaml + selfplay.yaml).
 # NEVER override architecture here (res_blocks, filters, board_size).
 
-training:
-  max_steps: 100
-  batch_size: 32
+max_steps: 100
+batch_size: 32
 
 selfplay:
   n_workers: 2

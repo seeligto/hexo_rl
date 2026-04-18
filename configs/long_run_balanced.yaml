@@ -1,8 +1,7 @@
 # long_run_balanced.yaml — multi-hour training profile
 # Override on top of base configs (model.yaml + training.yaml + selfplay.yaml).
 
-model:
-  res_blocks: 10          # slightly smaller than production 12-block for throughput
+res_blocks: 10          # slightly smaller than production 12-block for throughput
 
 selfplay:
   n_workers: 6
@@ -12,15 +11,14 @@ selfplay:
   leaf_batch_size: 8
   replay_buffer_capacity: 500000
 
-training:
-  batch_size: 256
-  min_buffer_size: 256
-  training_steps_per_game: 1.0
-  max_train_burst: 8
-  lr: 0.002
-  weight_decay: 0.0001
-  lr_schedule: cosine
-  min_lr: 0.0001
-  total_steps: 50000
-  eval_interval: 200
-  checkpoint_interval: 100
+batch_size: 256
+min_buffer_size: 256
+training_steps_per_game: 1.0
+max_train_burst: 8
+lr: 0.002
+weight_decay: 0.0001
+lr_schedule: cosine
+min_lr: 0.0001
+total_steps: 50000
+eval_interval: 200
+checkpoint_interval: 100
