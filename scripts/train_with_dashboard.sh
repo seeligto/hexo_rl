@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Usage: train_with_dashboard.sh [web|rich|none] <train_command...>
+# Usage: train_with_dashboard.sh [rich|none] <train_command...>
 #
 # Modes:
-#   web  — Start web dashboard as background process, training in foreground.
-#           On exit (Ctrl+C / TERM / natural exit), dashboard is killed.
 #   rich — Set HEXO_RICH_DASHBOARD=1, training in foreground.
 #   none — Training only, no dashboard.
+#
+# Note: web dashboard is launched by scripts/train.py itself when DASHBOARD=1
+# (see Makefile). The old `web` mode referenced a nonexistent dashboard.py
+# and has been removed; use `make dashboard` or scripts/serve_dashboard.py
+# to run the web dashboard standalone.
 
 set -euo pipefail
 
@@ -13,23 +16,12 @@ MODE="${1:-none}"
 shift
 
 TRAIN_CMD=("$@")
-DASH_PID=""
 
-cleanup() {
-    if [ -n "$DASH_PID" ]; then
-        kill "$DASH_PID" 2>/dev/null || true
-        wait "$DASH_PID" 2>/dev/null || true
-    fi
-}
-
-if [ "$MODE" = "web" ]; then
-    # Start web dashboard in background
-    python dashboard.py &
-    DASH_PID=$!
-    echo "Web dashboard started (PID $DASH_PID) -> http://localhost:5001"
-    trap cleanup INT TERM EXIT
-elif [ "$MODE" = "rich" ]; then
+if [ "$MODE" = "rich" ]; then
     export HEXO_RICH_DASHBOARD=1
+elif [ "$MODE" != "none" ]; then
+    echo "Unknown mode: $MODE (expected rich|none)" >&2
+    exit 2
 fi
 
 "${TRAIN_CMD[@]}"
