@@ -484,7 +484,7 @@ class WebDashboard:
                 self._event_history.append(payload)
 
         # Reload viewer model on successful eval gate pass
-        if event_name == "eval_complete" and payload.get("gate_passed"):
+        if event_name == "eval_complete" and payload.get("anchor_promoted"):
             try:
                 ckpt = self._best_model_path()
                 if ckpt and self._viewer_engine is not None:

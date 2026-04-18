@@ -448,7 +448,8 @@ def run_training_loop(
                                 "elo_estimate": prev.get("elo_estimate"),
                                 "win_rate_vs_sealbot": prev.get("wr_sealbot"),
                                 "eval_games": prev.get("eval_games", 0),
-                                "gate_passed": prev.get("promoted", False),
+                                "anchor_promoted": prev.get("promoted", False),
+                                "sealbot_gate_passed": prev.get("sealbot_gate_passed"),
                             })
                             if prev.get("promoted"):
                                 # C1: promote the weights that actually passed

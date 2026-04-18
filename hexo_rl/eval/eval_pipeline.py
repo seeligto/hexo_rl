@@ -168,11 +168,12 @@ class EvalPipeline:
             ci_lo, ci_hi = _binomial_ci(er.win_count, n)
             self.db.insert_match(
                 train_step, ckpt_pid, self._random_pid,
-                er.win_count, n - er.win_count, 0, n, er.win_rate, ci_lo, ci_hi,
+                er.win_count, n - er.win_count - er.draw_count, er.draw_count,
+                n, er.win_rate, ci_lo, ci_hi,
                 colony_wins_a=er.colony_wins,
                 run_id=self.run_id,
             )
-            print_match_result(ckpt_name, "random_bot", er.win_count, n - er.win_count, n, ci_lo, ci_hi)
+            print_match_result(ckpt_name, "random_bot", er.win_count, n - er.win_count - er.draw_count, n, ci_lo, ci_hi)
             results["wr_random"] = er.win_rate
             results["ci_random"] = (ci_lo, ci_hi)
             results["colony_wins_random"] = er.colony_wins
@@ -188,14 +189,16 @@ class EvalPipeline:
             ci_lo, ci_hi = _binomial_ci(er.win_count, n)
             self.db.insert_match(
                 train_step, ckpt_pid, self._sealbot_pid,
-                er.win_count, n - er.win_count, 0, n, er.win_rate, ci_lo, ci_hi,
+                er.win_count, n - er.win_count - er.draw_count, er.draw_count,
+                n, er.win_rate, ci_lo, ci_hi,
                 colony_wins_a=er.colony_wins,
                 run_id=self.run_id,
             )
-            print_match_result(ckpt_name, f"SealBot(t={tl})", er.win_count, n - er.win_count, n, ci_lo, ci_hi)
+            print_match_result(ckpt_name, f"SealBot(t={tl})", er.win_count, n - er.win_count - er.draw_count, n, ci_lo, ci_hi)
             results["wr_sealbot"] = er.win_rate
             results["ci_sealbot"] = (ci_lo, ci_hi)
             results["colony_wins_sealbot"] = er.colony_wins
+            results["sealbot_gate_passed"] = er.win_rate >= 0.5
             results["eval_games"] += n
 
         # ── vs Best Checkpoint ────────────────────────────────────────
@@ -233,7 +236,8 @@ class EvalPipeline:
             )
             self.db.insert_match(
                 train_step, ckpt_pid, best_pid,
-                er.win_count, n - er.win_count, 0, n, er.win_rate, ci_lo, ci_hi,
+                er.win_count, n - er.win_count - er.draw_count, er.draw_count,
+                n, er.win_rate, ci_lo, ci_hi,
                 colony_wins_a=er.colony_wins,
                 run_id=self.run_id,
             )
@@ -301,6 +305,9 @@ class EvalPipeline:
                 player_names.get(pid, str(pid)): {"rating": r, "ci": (lo, hi)}
                 for pid, (r, lo, hi) in ratings.items()
             }
+
+            if ckpt_pid in ratings:
+                results["elo_estimate"] = ratings[ckpt_pid][0]
 
             # Colony win breakdown
             colony_stats = self.db.get_colony_win_stats(run_id=self.run_id)

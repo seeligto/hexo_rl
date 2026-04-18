@@ -924,10 +924,10 @@ function showEloPanel(p) {
   setText('elo-step',  p.step != null ? 'step ' + fmtInt(p.step) : '');
 
   const badge = document.getElementById('elo-badge');
-  if (p.gate_passed === true) {
-    badge.innerHTML = '<span class="gate-passed">&#9650; gate passed</span>';
-  } else if (p.gate_passed === false) {
-    badge.innerHTML = '<span class="gate-failed">&#10007; gate failed</span>';
+  if (p.anchor_promoted === true) {
+    badge.innerHTML = '<span class="gate-passed">&#9650; promoted</span>';
+  } else if (p.sealbot_gate_passed === false) {
+    badge.innerHTML = '<span class="gate-failed">&#10007; sealbot failed</span>';
   } else {
     badge.innerHTML = '';
   }
@@ -1136,8 +1136,8 @@ function addLogEntry(p) {
       ? (p.win_rate_vs_sealbot * 100).toFixed(1) + '%' : '?';
     msgSpan.appendChild(document.createTextNode('Eval: ' + wr + ' vs SealBot \u2014 '));
     const gateSpan = document.createElement('span');
-    gateSpan.className    = p.gate_passed ? 'gate-passed' : 'gate-failed';
-    gateSpan.textContent  = p.gate_passed ? 'gate PASSED' : 'gate FAILED';
+    gateSpan.className    = p.anchor_promoted ? 'gate-passed' : (p.sealbot_gate_passed === false ? 'gate-failed' : '');
+    gateSpan.textContent  = p.anchor_promoted ? 'promoted' : (p.sealbot_gate_passed === false ? 'sealbot FAILED' : 'not promoted');
     msgSpan.appendChild(gateSpan);
     entry.appendChild(msgSpan);
   } else if (p.event === 'run_start') {
