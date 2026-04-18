@@ -24,9 +24,10 @@ from hexo_rl.env import GameState
 
 log = structlog.get_logger()
 
-_KRAKENBOT_ROOT = str(Path(__file__).parents[4] / "vendor" / "bots" / "krakenbot")
-if _KRAKENBOT_ROOT not in sys.path:
-    sys.path.insert(0, _KRAKENBOT_ROOT)
+_KRAKENBOT_ROOT = Path(__file__).parents[3] / "vendor" / "bots" / "krakenbot"
+assert _KRAKENBOT_ROOT.exists(), f"KrakenBot not found at {_KRAKENBOT_ROOT}"
+if str(_KRAKENBOT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_KRAKENBOT_ROOT))
 
 from minimax_bot import MinimaxBot as _MinimaxBot  # type: ignore[import]
 from game import Player as _KPlayer               # type: ignore[import]

@@ -41,18 +41,9 @@ class CommunityAPIBot(BotProtocol):
         self._timeout = timeout
 
     def get_move(self, state: GameState, rust_board: object) -> tuple[int, int]:
-        cq, cr = rust_board.window_center()
-        board_arr = state.board
-
         stones: list[dict[str, Any]] = []
-        for wq_idx in range(19):
-            for wr_idx in range(19):
-                cell = int(board_arr[wq_idx, wr_idx])
-                if cell == 0:
-                    continue
-                q = wq_idx - 9 + cq
-                r = wr_idx - 9 + cr
-                stones.append({"q": q, "r": r, "player": 1 if cell == 1 else 2})
+        for q, r, p in rust_board.get_stones():
+            stones.append({"q": q, "r": r, "player": 1 if p == 1 else 2})
 
         payload = {
             "current_player": 1 if state.current_player == 1 else 2,
