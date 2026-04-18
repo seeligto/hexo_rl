@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::board::TOTAL_CELLS;
@@ -142,10 +143,31 @@ impl SelfPlayRunner {
         full_search_prob: f32,
         n_sims_quick: usize,
         n_sims_full: usize,
-    ) -> Self {
-        // If standard_sims is 0, fall back to n_simulations.
+    ) -> PyResult<Self> {
+        // Effective standard-search sim budget: `standard_sims` wins, else
+        // `n_simulations`. Reject zero on the *effective* value — a silent
+        // zero fallback here ran workers with 0 sims per move (no search,
+        // random-policy self-play) and corrupted training data before the
+        // first dashboard read.
         let effective_standard = if standard_sims == 0 { n_simulations } else { standard_sims };
-        Self {
+        if effective_standard == 0 {
+            return Err(PyValueError::new_err(
+                "SelfPlayRunner: n_simulations (or standard_sims) must be > 0",
+            ));
+        }
+        if fast_prob > 0.0 && fast_sims == 0 {
+            return Err(PyValueError::new_err(
+                "SelfPlayRunner: fast_sims must be > 0 when fast_prob > 0",
+            ));
+        }
+        if full_search_prob > 0.0 && (n_sims_quick == 0 || n_sims_full == 0) {
+            return Err(PyValueError::new_err(format!(
+                "SelfPlayRunner: n_sims_quick and n_sims_full must both be > 0 \
+                 when full_search_prob > 0 (got n_sims_quick={}, n_sims_full={})",
+                n_sims_quick, n_sims_full,
+            )));
+        }
+        Ok(Self {
             batcher: InferenceBatcher::new(feature_len, policy_len),
             pol_len: policy_len,
             n_workers,
@@ -191,7 +213,7 @@ impl SelfPlayRunner {
             mcts_conc_accum: Arc::new(AtomicU64::new(0)),
             mcts_stat_count: Arc::new(AtomicU64::new(0)),
             mcts_quiescence_fires: Arc::new(AtomicU64::new(0)),
-        }
+        })
     }
 
     /// Spawn `n_workers` self-play threads. Idempotent.
@@ -397,7 +419,7 @@ mod tests {
             4, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000, 0.0_f32, 0_usize, 0_usize,
-        );
+        ).unwrap();
         runner.start();
 
         let mut attempts = 0;
@@ -519,7 +541,7 @@ mod tests {
             1, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000, 0.0_f32, 0_usize, 0_usize,
-        );
+        ).unwrap();
 
         // Simulate three per-search stat pushes matching what the worker
         // loop does for depth 4.0 / 6.0 / 8.0. Scaling factor = 1_000_000.
@@ -555,7 +577,7 @@ mod tests {
             1, 0, 1, 1, 1.5, 0.25, 18*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000, 0.0_f32, 0_usize, 0_usize,
-        );
+        ).unwrap();
         assert_eq!(empty.mcts_mean_depth(), 0.0);
         assert_eq!(empty.mcts_mean_root_concentration(), 0.0);
     }
