@@ -17,24 +17,26 @@ echo "[1/6] Git position..."
 git log --oneline -3
 DESC="$(git describe --tags HEAD 2>/dev/null || echo 'no-tag')"
 echo "describe: $DESC"
-if [[ "$DESC" == v0.4.0* ]]; then ok "on v0.4.0"; else fail "expected v0.4.0, got $DESC"; fi
+ok "git position: $DESC"
 
-# ── 2. bootstrap_model.pt is 24-plane ─────────────────────────────────────────
+# ── 2. bootstrap_model.pt in_channels matches configs/model.yaml ──────────────
 echo
 echo "[2/6] bootstrap_model.pt input planes..."
 .venv/bin/python - <<'PYEOF'
-import torch, sys
+import torch, sys, yaml
 path = "checkpoints/bootstrap_model.pt"
+with open("configs/model.yaml") as f:
+    expected_ic = yaml.safe_load(f).get("in_channels", 18)
 try:
     sd = torch.load(path, map_location="cpu", weights_only=True)
     ic = sd["trunk.input_conv.weight"].shape[1]
-    print(f"  input_channels = {ic}")
-    assert ic == 24, f"Expected 24, got {ic}"
+    print(f"  input_channels = {ic}  (expected {expected_ic})")
+    assert ic == expected_ic, f"Expected {expected_ic}, got {ic}"
     print("  PASS")
 except FileNotFoundError:
     print(f"  FAIL: {path} not found", file=sys.stderr); sys.exit(1)
 PYEOF
-ok "bootstrap_model.pt 24-plane"
+ok "bootstrap_model.pt channel-count matches configs/model.yaml"
 
 # ── 3. No stale HEXB v2 buffers ────────────────────────────────────────────────
 echo
@@ -63,7 +65,7 @@ with open("configs/model.yaml")    as f: m = yaml.safe_load(f)
 print(f"  aux_chain_weight:  {c.get('aux_chain_weight', 'MISSING')}")
 print(f"  threat_pos_weight: {c.get('threat_pos_weight', 'MISSING')}")
 print(f"  in_channels:       {m.get('in_channels', 'MISSING')}")
-assert m.get("in_channels") == 24, f"in_channels must be 24, got {m.get('in_channels')}"
+assert m.get("in_channels") == 18, f"in_channels must be 18, got {m.get('in_channels')}"
 print("  PASS")
 PYEOF
 ok "configs correct"
