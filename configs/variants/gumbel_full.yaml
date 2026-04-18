@@ -1,5 +1,12 @@
 # Desktop Gumbel MCTS — swept to D3 ceiling (n_workers=10, wait=5ms) 2026-04-16
 # Launch: make train VARIANT=gumbel_full
+#
+# Graduation-gate calibration (prompt-8, 2026-04-17):
+#   D1 threshold      : 0.55    (eval.yaml)            — unchanged
+#   D2 eval_interval  : 5000    (training.yaml)        — unchanged
+#   D3 decay_steps    : 20_000  (training.yaml)        — unchanged
+#   D4 n_games        : 400     (eval.yaml)            — raised 200 → 400
+# Shared with gumbel_targets.yaml. Report: reports/graduation_calibration_2026-04-17.md
 training_steps_per_game: 4.0
 max_train_burst: 16
 selfplay:

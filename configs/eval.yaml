@@ -7,8 +7,14 @@ eval_pipeline:
   opponents:
     best_checkpoint:
       enabled: true
-      stride: 1
-      n_games: 200
+      stride: 1                # gate cadence = training.yaml:eval_interval × stride
+      # n_games raised 200 → 400 per calibration 2026-04-17:
+      # at threshold 0.55, n=400 gives binomial stderr ≈ 2.5% (vs 3.5% at
+      # n=200), comfortably below the <3% target in the graduation-gate
+      # calibration report. Eval wall-cost rises from ~36 min to ~70 min
+      # per round, offset by training.yaml:eval_interval=5000.
+      # Report: reports/graduation_calibration_2026-04-17.md
+      n_games: 400
       model_sims: 128
       opponent_sims: 128
     sealbot:

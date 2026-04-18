@@ -7,6 +7,13 @@
 # Experiment C (§95) REVERTED: zero_chain_planes ablation showed chain planes
 # are essential — draw rate was +35pp worse vs smoke_v3b. zero_chain_planes flag
 # remains available in training.yaml (default false) for future tests.
+#
+# Graduation-gate calibration (prompt-8, 2026-04-17):
+#   D1 threshold      : 0.55    (eval.yaml)            — unchanged
+#   D2 eval_interval  : 5000    (training.yaml)        — unchanged (already 5000)
+#   D3 decay_steps    : 20_000  (training.yaml)        — unchanged
+#   D4 n_games        : 400     (eval.yaml)            — raised 200 → 400
+# Shared with gumbel_full.yaml. Report: reports/graduation_calibration_2026-04-17.md
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
