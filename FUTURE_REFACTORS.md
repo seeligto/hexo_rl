@@ -88,3 +88,34 @@ Blocked on `py-spy` Python 3.14 support (0.4.1 fails with "Failed to find python
 version from target process"). Re-attempt when upstream lands. Expected to confirm
 NN forward dominates wall-time; if otherwise, reopen the worker-parallelism
 hypothesis. Tracked as Q18 in `docs/06_OPEN_QUESTIONS.md`.
+
+---
+
+# Docs drift — deferred LOW/NOTE (post-W5)
+
+Findings from `reports/master_review_2026-04-18/verdict.md` Section 4. Skipped as low ROI; fix opportunistically when touching the referenced file.
+
+| ID | File | One-line claim |
+|---|---|---|
+| G-006 | CLAUDE.md bench section | References wrong baseline authority |
+| G-007 | configs/training.yaml (chain-aux comment) | 24-plane layout comment (stale post-§97) |
+| G-008 | engine/src/lib.rs (to_tensor docstring) | 24 planes mentioned (stale post-§97) |
+| G-009 | docs/01_architecture.md | MCTSTree PyO3 kwargs example wrong |
+| G-010 | docs/01_architecture.md | `Board(size=19)` + `apply_move(row, col, player)` API example wrong |
+| G-011 | docs/03_tooling.md | `buffer.push(...)` stale 4-arg signature |
+| G-012 | docs/01_architecture.md | `draw_reward` config key doesn't exist (is `draw_value`) |
+| G-013 | docs/07_PHASE4_SPRINT_LOG.md §36 | Temperature config keys don't exist |
+| G-014 | CLAUDE.md repo layout | Missing docs, krakenbot_bot.py, scripts |
+| G-015 | docs/06_OPEN_QUESTIONS.md Q14 | "Blocked on submodule add" — submodule present |
+| G-016 | docs/05_community_integration.md | Stale `python/…` path prefix |
+| G-017 | docs/05_community_integration.md | `serve_bot.py` / `bot_cli.py` don't exist |
+| G-018 | docs/08_DASHBOARD_SPEC.md | "train.py emits events" — moved to loop.py (§88) |
+| G-019 | docs/08_DASHBOARD_SPEC.md | Changelog labels 2026-04-18 as §101 — actual §104 |
+| G-020 | docs/02_roadmap.md | Phase 4.0 exit criterion wrong worker throughput number |
+| G-021 | docs/00_agent_context.md | MCTS target stale (≥140k sim/s) |
+| G-022 | docs/07_PHASE4_SPRINT_LOG.md §5 | Still references "50 games vs best" |
+| G-023 | docs/07_PHASE4_SPRINT_LOG.md §67 | decay_steps internal inconsistency |
+| G-024 | docs/07_PHASE4_SPRINT_LOG.md §73 | Grep-proof line numbers swapped (self-flagged) |
+| G-025 | docs/09_VIEWER_SPEC.md | Last-updated 2026-04-03 pre §78 /analyze |
+| G-026 | docs/07_PHASE4_SPRINT_LOG.md §3 | Replay-buffer file-split pointer slightly stale |
+| G-027 | docs/00_agent_context.md | Tensor-encoding description "8 history + 2 meta" differs from docs/01 |

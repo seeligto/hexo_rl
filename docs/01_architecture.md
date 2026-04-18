@@ -232,7 +232,7 @@ def get_temperature(ply: int, phase: str) -> float:
 
 Applied to the root node's prior during self-play (not evaluation). Since
 §73 (commit `71d7e6e`) the live training path is the Rust
-implementation in `engine/src/game_runner.rs`, applied on both PUCT and
+implementation in `engine/src/game_runner/` (post-§86 split), applied on both PUCT and
 Gumbel branches at every turn-boundary root expansion, with the
 intermediate-ply skip (`moves_remaining == 1 && ply > 0`). The Python
 implementation at `hexo_rl/selfplay/worker.py` is used only by
@@ -359,13 +359,13 @@ Shaped rewards are returned alongside the terminal reward signal.
 
 ### Graduation gate + Bradley-Terry ladder
 
-Every `eval_interval` training steps (default 2500; `training.yaml`
-precedence over `eval.yaml`), `EvalPipeline` runs a set of opponents
+Every `eval_interval` training steps (effective 5000; `training.yaml`
+overrides `eval.yaml` per §101 H1), `EvalPipeline` runs a set of opponents
 gated by per-opponent `stride` (§101). Current cadence:
 
-- `best_checkpoint` (current anchor) — `stride: 1`, 200 games. The
+- `best_checkpoint` (current anchor) — `stride: 1`, 400 games (raised 200→400 per calibration 2026-04-17). The
   graduation gate.
-- `sealbot` — `stride: 4` (every 10000 steps), 50 games.
+- `sealbot` — `stride: 4` (every 20000 steps), 50 games.
   `think_time_strong: 0.5` for gating, `think_time_fast: 0.1` for
   corpus generation. External benchmark, expensive.
 - `random` — `stride: 1`, 20 games. Sanity floor.

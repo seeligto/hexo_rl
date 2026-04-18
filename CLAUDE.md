@@ -40,7 +40,7 @@ Full context is in `docs/`. Read them in order before starting any task:
 
 ## Prime Directive
 
-**Context first, benchmarking mandatory.** Never suggest an architectural change without first reading the relevant `docs/` and `engine` source. Never commit a performance-sensitive change (MCTS, NN, Buffer) without running `make bench.full` and verifying no regressions against the baseline.
+**Context first, benchmarking mandatory.** Never suggest an architectural change without first reading the relevant `docs/` and `engine` source. Never commit a performance-sensitive change (MCTS, NN, Buffer) without running `make bench` and verifying no regressions against the baseline.
 
 ---
 
@@ -93,7 +93,7 @@ Always check `docs/02_ROADMAP.md` for the current phase before starting work.
 - Input layout: 18 planes. Chain-length planes (Q13) moved out of input to replay-buffer aux sub-buffer (§97).
 - Normalization: GroupNorm(8) throughout trunk; BatchNorm removed (§99). Pre-§99 checkpoints refuse to load.
 - Playout cap: move-level selective policy loss active (`full_search_prob: 0.25`, `n_sims_quick: 100`, `n_sims_full: 600`). Game-level `fast_prob` disabled; mutex enforced at pool init (§100).
-- Graduation gate: `best_model` anchor; promotion requires `wr_best ≥ 0.55` AND `ci_lo > 0.5` over 200 games (§101, §101.a).
+- Graduation gate: `best_model` anchor; promotion requires `wr_best ≥ 0.55` AND `ci_lo > 0.5` over 400 games (§101, §101.a; raised 200→400 per calibration 2026-04-17).
 - Dashboard rebuilt: event-driven fan-out (terminal + web at :5001). `loss_chain/ownership/threat` surfaced (§82, §93 C14).
 - Game viewer live at `/viewer` with threat overlay; `/analyze` endpoint for interactive policy inspection (§78).
 - Benchmark rebaselined 2026-04-16 post-18ch migration (§98). 8/10 metrics PASS; worker-throughput target recalibrated to ≥250K pos/hr with warmup-artifact caveat.
@@ -161,7 +161,6 @@ At the start of every session, in this order:
 3. Kill any lingering training/benchmark processes (see above)
 4. Run baseline checks with Make:
 
-- `make env.check`
 - `make test.rust`
 - `make test.py`
 
@@ -215,18 +214,14 @@ Make commands (preferred):
 
 ```bash
 # Core
-make env.check        # verify .venv + engine import
 make build            # build/install Rust extension via maturin
 make clean            # remove Rust build artifacts and Python caches
 make rebuild          # full clean + optimized rebuild
 
 # Testing
 make test.rust        # Rust tests
-make test.py          # Python tests (excludes slow/integration)
-make test.all         # Rust + Python tests
-make test.focus       # buffer/inference/pool smoke tests
-make test.integration # lifecycle integration test (~2-5 min, slow)
-make ci               # full pre-push gate (all tests + quick benchmark)
+make test.py          # Python tests (excludes slow)
+make test.slow        # slow/integration tests
 
 # Benchmarks
 make bench            # benchmark (n=5, warm-up; full Phase 4.5 gate)
@@ -242,15 +237,8 @@ make train.smoke      # 200-step smoke test
 make dash.open        # open web dashboard in browser
 
 # Eval
-make eval.sealbot.quick   # quick eval (10 games, 0.1s, 64 sims)
-make eval.sealbot.full    # full eval (100 games, 0.5s, 128 sims)
-make eval.sealbot.latest  # eval latest checkpoint vs SealBot
+make eval             # run eval pipeline (see configs/eval.yaml)
 # Eval game diversity: eval_temperature, eval_random_opening_plies, eval_seed_base in configs/eval.yaml (§80)
-
-# Plotting
-make plot.train.latest    # plot latest training log
-make plot.sealbot.latest  # plot latest SealBot eval
-make plot.sealbot.all     # plot SealBot trend
 
 # Corpus & pretrain
 make corpus.fetch     # scrape human games + generate SealBot corpus
@@ -615,15 +603,16 @@ Starting config for self-play RL (do not exceed without benchmarking):
 - Graduation gate (§101, §101.a): self-play workers consume `inf_model`
   weights, which track the `best_model` anchor (not `trainer.model`).
   Sync fires only on graduation or on cold-start load. Gate is
-  two-part: `wr_best ≥ promotion_winrate` (default 0.55 over 200 games)
+  two-part: `wr_best ≥ promotion_winrate` (default 0.55 over 400 games;
+  raised 200→400 per calibration 2026-04-17)
   AND `ci_lo > 0.5` (binomial 95% CI). CI guard cuts false-positive
-  rate at n=200 from ~9% to <1% under null. Promotion copies from the
+  rate at n=400 from ~9% to <1% under null. Promotion copies from the
   `eval_model` snapshot (the one that was actually scored), not from
   drifted `trainer.model`. Eval cadence split via per-opponent
-  `stride`: best_checkpoint every 2500 steps (`stride: 1`), SealBot
-  every 10000 (`stride: 4`), random every 2500 (`stride: 1`).
-  `eval_interval` in training.yaml takes precedence at both trigger
-  and stride-math time (§101 H1).
+  `stride`: effective eval_interval is 5000 steps (`training.yaml`
+  overrides `eval.yaml` per §101 H1); best_checkpoint every 5000
+  (`stride: 1`), SealBot every 20000 (`stride: 4`), random every 5000
+  (`stride: 1`).
 - Selective policy loss (§100): per-move coin-flip chooses full-search
   (600 sims) vs quick-search (100 sims). Policy / opp_reply losses
   gated on `is_full_search=1`; value / chain / ownership / threat
