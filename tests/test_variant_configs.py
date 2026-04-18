@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from hexo_rl.utils.config import load_config
+from hexo_rl.utils.variant_validator import validate_variant_against_bases
 
 # Match scripts/train.py::main `_BASE_CONFIGS` (minus monitoring/game_replay —
 # they do not touch selfplay.playout_cap and keep the test surface minimal).
@@ -24,6 +27,16 @@ BASE_CONFIGS = [
 def _resolve(variant: str) -> dict:
     variant_path = ROOT / "configs" / "variants" / f"{variant}.yaml"
     return load_config(*BASE_CONFIGS, str(variant_path))
+
+
+def _base_cfgs_for_validator() -> dict:
+    names = ["model", "training", "selfplay"]
+    result = {}
+    for name in names:
+        p = ROOT / "configs" / f"{name}.yaml"
+        with open(p) as f:
+            result[name] = yaml.safe_load(f) or {}
+    return result
 
 
 def test_baseline_puct_pins_pre_100_semantics() -> None:
@@ -70,3 +83,51 @@ def test_gumbel_full_passes_playout_cap_mutex() -> None:
     # Variant-defining flags must still be set.
     assert cfg["selfplay"]["gumbel_mcts"] is True
     assert cfg["selfplay"]["completed_q_values"] is True
+
+
+# ---------------------------------------------------------------------------
+# E-001 / E-018 / E-019 / Q29 regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_all_variants_have_no_nested_base_namespaces() -> None:
+    """E-001/E-018/E-019: every configs/variants/*.yaml must have no nested
+    namespace block that shadows a flat base key (silent-drop class of bugs)."""
+    base_cfgs = _base_cfgs_for_validator()
+    variant_dir = ROOT / "configs" / "variants"
+    failures: list[str] = []
+    for variant_path in sorted(variant_dir.glob("*.yaml")):
+        with open(variant_path) as f:
+            variant_cfg = yaml.safe_load(f) or {}
+        warnings = validate_variant_against_bases(variant_cfg, base_cfgs)
+        for w in warnings:
+            failures.append(f"{variant_path.name}: {w}")
+    assert not failures, "Nested namespace shadows found:\n" + "\n".join(failures)
+
+
+def test_validator_catches_nested_training_block() -> None:
+    """Q29: validator must flag a variant with training: {...} when training.yaml
+    is flat — this was the E-001 class of bug."""
+    base_cfgs = _base_cfgs_for_validator()
+    synthetic_variant = {"training": {"training_steps_per_game": 4.0}}
+    warnings = validate_variant_against_bases(synthetic_variant, base_cfgs)
+    assert warnings, (
+        "validator did not flag nested 'training:' block — "
+        "E-001 class bug would go undetected"
+    )
+    assert any("training" in w for w in warnings)
+
+
+def test_training_steps_per_game_resolves_to_variant_value_for_desktop() -> None:
+    """E-001: after flattening gumbel_targets_desktop.yaml, max_train_burst must
+    resolve to 8 at the top level (not 16 from the base). Pre-fix the nested
+    training: block silently dropped the override and desktop ran at burst=16."""
+    cfg = _resolve("gumbel_targets_desktop")
+    assert cfg["max_train_burst"] == 8, (
+        f"max_train_burst={cfg['max_train_burst']} — expected 8 from desktop D3 sweep; "
+        "nested training: block fix may be missing or broken"
+    )
+    # No nested 'training' dict should survive — flat keys only.
+    assert not isinstance(cfg.get("training"), dict), (
+        "merged config has nested 'training' dict — variant still uses wrong namespace"
+    )

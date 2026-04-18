@@ -12,5 +12,4 @@ selfplay:
   inference_max_wait_ms: 5.0
   playout_cap:
     fast_prob: 0.0
-training:
-  max_train_burst: 8
+max_train_burst: 8
