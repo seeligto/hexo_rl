@@ -61,9 +61,13 @@ rebuild: clean build ## Full clean + optimized rebuild
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
-.PHONY: test
-test: ## Run Rust + Python tests (excludes integration marker)
+.PHONY: test test.rust test.py
+test: test.rust test.py ## Run Rust + Python tests (excludes integration marker)
+
+test.rust: ## Run Rust tests (cargo test)
 	cargo test
+
+test.py: ## Run Python tests (excludes slow/integration markers)
 	$(PY) -m pytest -q -m "not slow and not integration" tests
 
 .PHONY: test.slow
