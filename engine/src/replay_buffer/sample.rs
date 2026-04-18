@@ -239,8 +239,16 @@ impl ReplayBuffer {
         }
 
         // ── Index selection (with correlation guard) ──────────────────────────
-        let use_dedup = self.game_ids[0] != -1;
-        let indices   = self.sample_indices(batch_size, use_dedup);
+        // Always run the dedup path: `sample_indices` treats the -1 untagged
+        // sentinel as "skip this slot" per-sample, so mixed buffers (some
+        // positions tagged, others not) are handled correctly.  The previous
+        // slot-0 heuristic disabled dedup for the entire batch whenever slot
+        // 0 happened to land in an untagged region, silently defeating the
+        // Multi-Window correlation guard on the rest of the batch.  Cost of
+        // dedup on a fully-untagged batch is one `HashSet` alloc plus
+        // `batch_size` skips — measured negligible vs. the rest of the
+        // scatter path.
+        let indices = self.sample_indices(batch_size, true);
 
         // ── Allocate output arrays (owned by Python after return) ─────────────
         // States and chain_planes as f16 bits (u16) — no type conversion during scatter.
