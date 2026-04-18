@@ -187,3 +187,115 @@ def test_cold_start_inf_model_synced_to_best_model(tmp_path: Path):
         f"inf_model mean={inf_mean:.4f} should match best_model BEST_VALUE={BEST_VALUE}; "
         f"if ~{TRAINER_VALUE}, cold-start sync pointed to trainer.model instead of best_model.pt"
     )
+
+
+# ── D-012: final eval promotion drains on shutdown ────────────────────────────
+
+def test_final_promotion_drains_on_shutdown(tmp_path: Path):
+    """``_drain_pending_eval`` must promote when called at shutdown with a
+    completed eval whose ``promoted=True`` never had a next-tick drain.
+
+    Without the drain call in ``run_training_loop``'s ``finally`` block,
+    ``best_model.pt`` stays stale and the graduation is silently lost on
+    restart (D-012). Exercises the exported helper directly.
+    """
+    import threading
+    from hexo_rl.training.loop import _drain_pending_eval
+
+    EVAL_VALUE = 5.0
+    INITIAL_BEST_VALUE = -1.0
+
+    best_path = tmp_path / "best_model.pt"
+    best_model = _small_model()
+    _fill_params(best_model, INITIAL_BEST_VALUE)
+    torch.save(best_model.state_dict(), best_path)
+
+    eval_model = _small_model()
+    _fill_params(eval_model, EVAL_VALUE)
+
+    class _FakeInferenceServer:
+        def __init__(self) -> None:
+            self.last_synced: dict | None = None
+
+        def load_state_dict_safe(self, sd: dict) -> None:
+            self.last_synced = sd
+
+    class _FakePool:
+        def __init__(self) -> None:
+            self._inference_server = _FakeInferenceServer()
+
+    pool = _FakePool()
+
+    # Completed eval: thread finished, result carries promoted=True.
+    done_thread = threading.Thread(target=lambda: None)
+    done_thread.start()
+    done_thread.join()
+    assert not done_thread.is_alive()
+
+    eval_result: list[dict | None] = [
+        {"promoted": True, "step": 2500, "wr_best": 0.62, "wr_sealbot": 0.5}
+    ]
+
+    new_thread, new_step = _drain_pending_eval(
+        done_thread, eval_result, eval_model, best_model,
+        best_path, best_model_step=0, pool=pool, train_step=2600,
+    )
+
+    assert new_thread is None
+    assert new_step == 2500
+    assert eval_result[0] is None
+
+    # best_model in memory reflects the promoted weights.
+    assert abs(_param_mean(best_model) - EVAL_VALUE) < 0.01
+
+    # best_model.pt on disk was overwritten — this is the invariant the
+    # shutdown drain exists to protect. Without it, the next restart would
+    # load INITIAL_BEST_VALUE and silently revert the graduation.
+    reloaded = _small_model()
+    reloaded.load_state_dict(torch.load(best_path, map_location="cpu", weights_only=True))
+    assert abs(_param_mean(reloaded) - EVAL_VALUE) < 0.01
+
+    # Inference-server sync fired: post-promotion self-play uses the anchor.
+    assert pool._inference_server.last_synced is not None
+
+
+def test_drain_noop_when_eval_thread_still_running():
+    """If the eval thread is still alive at shutdown, drain must not touch
+    best_model — draining half-complete state would poison the anchor."""
+    import threading
+    from hexo_rl.training.loop import _drain_pending_eval
+
+    # Long-running thread (simulated; we won't actually wait for it).
+    started = threading.Event()
+    stop = threading.Event()
+
+    def _worker() -> None:
+        started.set()
+        stop.wait(timeout=5.0)
+
+    t = threading.Thread(target=_worker)
+    t.start()
+    started.wait()
+
+    try:
+        best_model = _small_model()
+        _fill_params(best_model, -7.0)
+        eval_model = _small_model()
+        _fill_params(eval_model, 42.0)
+
+        class _Stub:
+            _inference_server = type("_IS", (), {"load_state_dict_safe": lambda self, sd: None})()
+
+        eval_result: list[dict | None] = [{"promoted": True, "step": 500}]
+        new_thread, new_step = _drain_pending_eval(
+            t, eval_result, eval_model, best_model,
+            Path("/nonexistent"), best_model_step=0, pool=_Stub(), train_step=500,
+        )
+        # thread is returned as-is, step unchanged, result not consumed.
+        assert new_thread is t
+        assert new_step == 0
+        assert eval_result[0] is not None
+        assert abs(_param_mean(best_model) - (-7.0)) < 0.01
+    finally:
+        stop.set()
+        t.join(timeout=2.0)

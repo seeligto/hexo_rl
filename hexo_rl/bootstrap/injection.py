@@ -115,6 +115,9 @@ def inject_bot_continuation(
     bot_moves_start = len(all_moves)
     bot_move_count = 0
 
+    bot_p1.reset()
+    bot_p2.reset()
+
     while (
         not board.check_win()
         and board.legal_move_count() > 0

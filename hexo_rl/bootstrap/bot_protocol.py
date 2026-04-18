@@ -39,5 +39,13 @@ class BotProtocol(ABC):
         """Human-readable bot identifier (used in logging and Elo tables)."""
         ...
 
+    def reset(self) -> None:
+        """Clear any per-game bot state. Called before starting a new game.
+
+        Default is a no-op; wrappers that cache compound-move second stones or
+        any other across-call state must override this to null that cache.
+        """
+        return
+
     def __str__(self) -> str:
         return self.name()

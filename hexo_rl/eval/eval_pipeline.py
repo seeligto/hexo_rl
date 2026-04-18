@@ -35,12 +35,23 @@ except ImportError:
 
 
 def _binomial_ci(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
-    """Normal-approximation binomial CI: p_hat +/- z * sqrt(p*(1-p)/n)."""
+    """Wilson score interval for binomial proportion (95% CI at z=1.96).
+
+    Wald (normal-approximation) underestimates uncertainty near p=0.5 at
+    moderate n and collapses to zero width at p=0 and p=1 — both failure
+    modes for the §101.a `ci_lo > 0.5` promotion gate. Wilson is closed-form,
+    robust at the boundaries, and strictly inside [0, 1].
+    """
     if n == 0:
         return (0.0, 1.0)
     p = wins / n
-    spread = z * math.sqrt(p * (1.0 - p) / n)
-    return (max(0.0, p - spread), min(1.0, p + spread))
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = (p + z2 / (2.0 * n)) / denom
+    spread = (z / denom) * math.sqrt(p * (1.0 - p) / n + z2 / (4.0 * n * n))
+    lo = 0.0 if wins == 0 else max(0.0, center - spread)
+    hi = 1.0 if wins == n else min(1.0, center + spread)
+    return (lo, hi)
 
 
 class EvalPipeline:
@@ -92,6 +103,12 @@ class EvalPipeline:
         self._random_pid = self.db.get_or_create_player(
             "random_bot", "random",
         )
+
+        # Queue of opponents that were stride-skipped in a prior round; each
+        # stays queued until it next runs. Prevents a train-loop-level skip
+        # from compounding with stride so SealBot (or any rare-cadence
+        # opponent) gets double-skipped. (D-010)
+        self._pending_opponents: set[str] = set()
 
     def run_evaluation(
         self,
@@ -153,15 +170,20 @@ class EvalPipeline:
 
         results: Dict[str, Any] = {"step": train_step, "promoted": False, "eval_games": 0}
 
-        def _stride_active(opp_cfg: dict[str, Any]) -> bool:
+        def _should_run(name: str, opp_cfg: dict[str, Any]) -> bool:
             stride = int(opp_cfg.get("stride", 1))
             if stride <= 1:
+                self._pending_opponents.discard(name)
                 return True
             round_idx = train_step // max(effective_interval, 1)
-            return round_idx % stride == 0
+            if round_idx % stride == 0 or name in self._pending_opponents:
+                self._pending_opponents.discard(name)
+                return True
+            self._pending_opponents.add(name)
+            return False
 
         # ── vs Random ────────────────────────────────────────────────
-        if self.random_cfg.get("enabled", True) and _stride_active(self.random_cfg):
+        if self.random_cfg.get("enabled", True) and _should_run("random", self.random_cfg):
             n = int(self.random_cfg.get("n_games", 20))
             sims = self.random_cfg.get("model_sims")
             er = evaluator.evaluate_vs_random(n_games=n, model_sims=sims)
@@ -180,7 +202,7 @@ class EvalPipeline:
             results["eval_games"] += n
 
         # ── vs SealBot ───────────────────────────────────────────────
-        if self.sealbot_cfg.get("enabled", True) and _stride_active(self.sealbot_cfg):
+        if self.sealbot_cfg.get("enabled", True) and _should_run("sealbot", self.sealbot_cfg):
             n = int(self.sealbot_cfg.get("n_games", 50))
             tl = float(self.sealbot_cfg.get("think_time_strong",
                                             self.sealbot_cfg.get("time_limit", 0.5)))
@@ -207,7 +229,7 @@ class EvalPipeline:
         if (
             self.best_cfg.get("enabled", True)
             and best_model is not None
-            and _stride_active(self.best_cfg)
+            and _should_run("best_checkpoint", self.best_cfg)
         ):
             n = int(self.best_cfg.get("n_games", 200))
             sims = self.best_cfg.get("model_sims")

@@ -105,6 +105,9 @@ class SealBotBot(BotProtocol):
         q1, r1 = result[0]
         return (q1, r1)
 
+    def reset(self) -> None:
+        self._pending_move = None
+
     def name(self) -> str:
         if self._max_depth is not None:
             return f"SealBot(d={self._max_depth})"

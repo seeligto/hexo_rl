@@ -437,42 +437,10 @@ def run_training_loop(
 
                 # ── Eval (non-blocking background thread) ─────────────────────
                 if eval_pipeline is not None and train_step > 0 and train_step % eval_interval == 0:
-                    if _eval_thread is not None and not _eval_thread.is_alive():
-                        prev = _eval_result[0]
-                        if prev is not None:
-                            # L2: use None (not 0.0) so skipped-opponent rounds
-                            # don't render as "0% vs SealBot" on the dashboard.
-                            emit_event({
-                                "event": "eval_complete",
-                                "step": prev.get("step", train_step),
-                                "elo_estimate": prev.get("elo_estimate"),
-                                "win_rate_vs_sealbot": prev.get("wr_sealbot"),
-                                "eval_games": prev.get("eval_games", 0),
-                                "anchor_promoted": prev.get("promoted", False),
-                                "sealbot_gate_passed": prev.get("sealbot_gate_passed"),
-                            })
-                            if prev.get("promoted"):
-                                # C1: promote the weights that actually passed
-                                # the gate (eval_model at time of kickoff), NOT
-                                # trainer.model, which has drifted forward by
-                                # eval_interval steps during the background eval.
-                                assert eval_model is not None
-                                eval_base = getattr(eval_model, "_orig_mod", eval_model)
-                                best_model.load_state_dict(eval_base.state_dict())
-                                best_model.eval()
-                                torch.save(best_model.state_dict(), best_model_path)
-                                best_model_step = prev.get("step", train_step)
-                                pool._inference_server.load_state_dict_safe(eval_base.state_dict())
-                                log.info(
-                                    "best_model_promoted",
-                                    step=train_step,
-                                    eval_step=best_model_step,
-                                    path=str(best_model_path),
-                                    graduated=True,
-                                    wr_best=prev.get("wr_best"),
-                                )
-                        _eval_result[0] = None
-                        _eval_thread = None
+                    _eval_thread, best_model_step = _drain_pending_eval(
+                        _eval_thread, _eval_result, eval_model, best_model,
+                        best_model_path, best_model_step, pool, train_step,
+                    )
 
                     if _eval_thread is None or not _eval_thread.is_alive():
                         base_model = getattr(trainer.model, "_orig_mod", trainer.model)
@@ -546,6 +514,17 @@ def run_training_loop(
         _run_loop()
     finally:
         tracemalloc.stop()
+        # D-012: if the last eval completed but training ended before the
+        # next tick would drain it, persist the promotion now so graduations
+        # aren't silently dropped on shutdown. pool is still up — the
+        # inference-server weight sync inside the drain needs it.
+        try:
+            _eval_thread, best_model_step = _drain_pending_eval(
+                _eval_thread, _eval_result, eval_model, best_model,
+                best_model_path, best_model_step, pool, train_step,
+            )
+        except Exception:
+            log.warning("final_eval_drain_failed", exc_info=True)
         emit_event({"event": "run_end", "step": train_step})
         pool.stop()
         gpu_monitor.stop()
@@ -583,6 +562,63 @@ def run_training_loop(
 
 
 # ── Private helpers ────────────────────────────────────────────────────────────
+
+def _drain_pending_eval(
+    eval_thread: Optional[threading.Thread],
+    eval_result: list[Optional[dict[str, Any]]],
+    eval_model: Optional[HexTacToeNet],
+    best_model: Optional[HexTacToeNet],
+    best_model_path: Path,
+    best_model_step: Optional[int],
+    pool: Any,
+    train_step: int,
+) -> tuple[Optional[threading.Thread], Optional[int]]:
+    """Drain the most recent completed eval: emit event + promote if gated.
+
+    Safe at normal eval ticks and at shutdown — the latter is the whole
+    point: without a post-``_run_loop`` drain, a promotion from the final
+    eval before Ctrl-C / ``stop_step`` never hits ``best_model.pt`` and
+    is silently lost on next restart (D-012).
+
+    Returns ``(new_eval_thread, new_best_model_step)``; callers should
+    rebind both. No-op when the thread is still running.
+    """
+    if eval_thread is None or eval_thread.is_alive():
+        return eval_thread, best_model_step
+    prev = eval_result[0]
+    if prev is None:
+        return None, best_model_step
+    emit_event({
+        "event": "eval_complete",
+        "step": prev.get("step", train_step),
+        "elo_estimate": prev.get("elo_estimate"),
+        "win_rate_vs_sealbot": prev.get("wr_sealbot"),
+        "eval_games": prev.get("eval_games", 0),
+        "anchor_promoted": prev.get("promoted", False),
+        "sealbot_gate_passed": prev.get("sealbot_gate_passed"),
+    })
+    new_best_step = best_model_step
+    if prev.get("promoted"):
+        assert eval_model is not None
+        assert best_model is not None
+        # C1: promote the snapshot that actually passed the gate.
+        eval_base = getattr(eval_model, "_orig_mod", eval_model)
+        best_model.load_state_dict(eval_base.state_dict())
+        best_model.eval()
+        torch.save(best_model.state_dict(), best_model_path)
+        new_best_step = prev.get("step", train_step)
+        pool._inference_server.load_state_dict_safe(eval_base.state_dict())
+        log.info(
+            "best_model_promoted",
+            step=train_step,
+            eval_step=new_best_step,
+            path=str(best_model_path),
+            graduated=True,
+            wr_best=prev.get("wr_best"),
+        )
+    eval_result[0] = None
+    return None, new_best_step
+
 
 def _try_save_buffer(
     buffer: Any,

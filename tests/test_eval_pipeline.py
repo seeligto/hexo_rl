@@ -198,6 +198,37 @@ def test_stride_skips_sealbot_off_cadence(
 
 
 @patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_skipped_round_retries_on_next_eligible_step(
+    mock_evaluator_cls: MagicMock,
+    eval_config_with_strides: dict,
+) -> None:
+    """D-010: stride-skipped opponent must fire on the next invocation.
+
+    Sealbot stride=4. Round at step=100 (round_idx=1) would normally skip;
+    the skipped round is queued so the very next invocation (step=200,
+    round_idx=2) fires sealbot even though stride alone would skip both.
+    """
+    import torch
+    pipeline = EvalPipeline(eval_config_with_strides, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.7, win_count=7, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_sealbot.return_value = EvalResult(win_rate=0.4, win_count=4, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0)
+    mock_evaluator_cls.return_value = mock_eval
+
+    # step=100 → round_idx=1, stride=4 not aligned → sealbot queued.
+    pipeline.run_evaluation(MagicMock(), 100, MagicMock())
+    assert mock_eval.evaluate_vs_sealbot.call_count == 0
+    assert "sealbot" in pipeline._pending_opponents
+
+    # step=200 → round_idx=2, stride=4 STILL not aligned, but pending → runs.
+    result = pipeline.run_evaluation(MagicMock(), 200, MagicMock())
+    assert mock_eval.evaluate_vs_sealbot.call_count == 1
+    assert "wr_sealbot" in result
+    assert "sealbot" not in pipeline._pending_opponents
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
 def test_stride_runs_sealbot_on_cadence(
     mock_evaluator_cls: MagicMock,
     eval_config_with_strides: dict,
