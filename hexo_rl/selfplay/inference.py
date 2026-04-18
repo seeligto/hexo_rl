@@ -17,7 +17,7 @@ from hexo_rl.selfplay.utils import BOARD_SIZE, N_ACTIONS
 class LocalInferenceEngine:
     """Wraps a HexTacToeNet and handles the full inference pipeline:
 
-    1. Build (K, 24, 19, 19) tensors for a batch of boards.
+    1. Build (K, 18, 19, 19) tensors for a batch of boards.
     2. Run a single forward pass.
     3. Map per-cluster local policy outputs → one global policy vector per board.
     4. Aggregate per-cluster values via min-pooling.

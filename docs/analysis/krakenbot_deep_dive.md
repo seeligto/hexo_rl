@@ -74,7 +74,7 @@ Applied at training sample time (`training/selfplay/train_loop.py`, lines 200–
 ### 1.5 HexaZero — Exact Tensor Spec
 
 **File:** `hexo_rl/env/game_state.py`, lines 186–244 (`to_tensor`)  
-**Shape:** `[K, 24, 19, 19]` where K = number of active clusters (typically 1–5)
+**Shape:** `[K, 18, 19, 19]` where K = number of active clusters (typically 1–5)
 
 | Plane(s) | Semantic | Encoding |
 |----------|----------|----------|
@@ -84,24 +84,24 @@ Applied at training sample time (`training/selfplay/train_loop.py`, lines 200–
 | 9–15 | Opponent stones (t-1 … t-7) | Binary float16, zeros for missing history |
 | 16 | `moves_remaining == 2` broadcast | 1.0 if 2 moves left, 0.0 if 1 |
 | 17 | Ply parity broadcast | `ply % 2` cast to float16 |
-| 18–23 | Q13 chain lengths (6 channels) | `[a0_cur, a0_opp, a1_cur, a1_opp, a2_cur, a2_opp]` ÷ 6.0 |
+| 18–23 | Q13 chain lengths (6 channels) | moved to replay-buffer aux sub-buffer post-§97; not in NN input |
 
 History: `HISTORY_LEN = 8` (line 10), stored as deque of prior `GameState` objects. Missing slots filled with zeros. Chain planes computed in Python (`_compute_chain_planes`, lines 98–137), capped at 6, normalized to [0, 1].
 
 **Board size:** 19×19 per cluster window. Flat action space: 362 (19×19 + 1 pass).
 
-**Doc vs code discrepancy:** `docs/01_architecture.md` says "18 channels"; actual code has 24 channels (18 history+scalar + 6 Q13 chain planes). Code is ground truth.
+**Post-§97:** chain-length planes moved to replay-buffer aux sub-buffer. NN input is now 18 channels (history/scalar only). Chain head trained from sub-buffer target, not input slice.
 
 ### 1.6 Input Representation — Side-by-Side
 
 | Aspect | KrakenBot | HexaZero |
 |--------|-----------|----------|
-| Shape | `(B, 2, 25, 25)` | `(B*K, 24, 19, 19)` |
+| Shape | `(B, 2, 25, 25)` | `(B*K, 18, 19, 19)` |
 | Stone channels | 2 (current + opponent) | 2 (current + opponent) |
 | History planes | **0** | 14 (7 ply × 2 players) |
 | Turn/phase planes | **0** | 2 (moves_remaining, ply parity) |
-| Chain/threat planes (input) | **0** | 6 (Q13 chain lengths) |
-| Total input channels | **2** | **24** |
+| Chain/threat planes (input) | **0** | **0** (moved to aux sub-buffer post-§97) |
+| Total input channels | **2** | **18** |
 | Board geometry | Toroidal 25×25 (self-play) | 19×19 windowed clusters |
 | Coord mapping | `q*25 + r` flat | Per-cluster offset via Rust |
 | Symmetry augmentation | D6 (12-fold), at training time | D6 (12-fold), at buffer sample time |

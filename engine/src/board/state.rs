@@ -394,7 +394,7 @@ impl Board {
 
     // ── Tensor encoding ───────────────────────────────────────────────────────
 
-    /// Encode the 24-plane state tensor into `out` from a 2-plane cluster view.
+    /// Encode the 18-plane state tensor into `out` from a 2-plane cluster view.
     ///
     /// Layout:
     ///   plane  0:    current player's stones (from `planes_2[0..TOTAL_CELLS]`)
@@ -492,38 +492,34 @@ impl Board {
     /// Plane 0 = current player's stones in this 19×19 window.
     /// Plane 1 = opponent's stones in this 19×19 window.
     ///
-    /// # Why 2 planes, not 24?
+    /// # Why 2 planes, not 18?
     ///
-    /// The full AlphaZero input is 24 planes (post-Q13):
+    /// The full AlphaZero input is 18 planes (post-§97):
     ///   - planes  0-7:  current player's stones at t, t-1, … t-7
     ///   - planes  8-15: opponent's stones        at t, t-1, … t-7
     ///   - planes 16-17: game-state scalars (moves_remaining, ply parity)
-    ///   - planes 18-23: Q13 chain-length planes (3 hex axes × 2 players)
+    ///   (Q13 chain-length planes moved to replay-buffer aux sub-buffer post-§97)
     ///
-    /// Assembling all 24 planes requires the full move history — which only
-    /// Python's `GameState.move_history` possesses.  Encoding 24 planes in
-    /// Rust would mean crossing the PyO3 boundary with 8 664 floats per
-    /// cluster (24 × 361) while 14 of them are always zero for Rust-driven
-    /// self-play (no Python-side history), a 12× overhead.
+    /// Assembling all 18 planes requires the full move history — which only
+    /// Python's `GameState.move_history` possesses.  Encoding 18 planes in
+    /// Rust would mean crossing the PyO3 boundary with 6 498 floats per
+    /// cluster (18 × 361) while 14 of them are always zero for Rust-driven
+    /// self-play (no Python-side history), a significant overhead.
     ///
     /// Instead:
     ///   - `get_cluster_views` returns the 2-plane current snapshot (722 floats).
     ///   - `GameState.to_tensor()` stacks the current snapshot with historical
-    ///     snapshots from `move_history` and then fills planes 18..24 via
-    ///     `_compute_chain_planes` to form the final (24, 19, 19) tensor.
+    ///     snapshots from `move_history` to form the final (18, 19, 19) tensor.
     ///
     /// The Rust self-play hot-path (`game_runner/worker_loop.rs`) has no
-    /// Python history. It expands the 2-plane view to the full 24-plane
+    /// Python history. It expands the 2-plane view to the full 18-plane
     /// layout via `encode_planes_to_buffer` in-place — history slots 1-7 /
-    /// 9-15 stay zero for Rust-driven self-play, and planes 18..23 are
-    /// populated by the Rust `encode_chain_planes` helper the same way
-    /// `_compute_chain_planes` does on the Python side. This matches the
-    /// current-step chain semantics and keeps the two assembler paths
-    /// byte-exact (pinned by `tests/test_chain_plane_rust_parity.py`).
+    /// 9-15 stay zero for Rust-driven self-play. Chain planes are written
+    /// separately to the replay-buffer chain sub-buffer via `encode_chain_planes`.
     ///
     /// `to_planes()` / `Board.to_tensor()` (the single-board Python binding)
     /// also uses `encode_planes_to_buffer`, so the 2-plane snapshot and the
-    /// 24-plane encoding share the same kernel.
+    /// 18-plane encoding share the same kernel.
     pub fn get_cluster_views(&self) -> (Vec<Vec<f32>>, Vec<(i32, i32)>) {
         let clusters = self.get_clusters();
         let mut final_centers = Vec::new();

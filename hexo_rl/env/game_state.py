@@ -148,7 +148,7 @@ class GameState:
     )
     # Each view is shape (2, BOARD_SIZE, BOARD_SIZE): plane 0 = current player's
     # stones, plane 1 = opponent's stones.  This is what Rust's get_cluster_views()
-    # returns — 2 planes, not 24.  to_tensor() assembles the full 24-plane tensor
+    # returns — 2 planes, not 18.  to_tensor() assembles the full 18-plane tensor
     # by stacking the current snapshot with historical snapshots.
     views: List[np.ndarray] = field(default_factory=list)
     centers: List[Tuple[int, int]] = field(default_factory=list)

@@ -14,9 +14,9 @@ Kill criterion (§85 / §89 of docs/07_PHASE4_SPRINT_LOG.md, revised §91):
         The 0.38 floor preserves the original §85 absolute minimum.
     C2: ext_in_top5_pct  >= 25.0
         Policy head must rank the extension cell in the top-5 spatial moves
-        on at least 25% of probe positions. Threshold softened from 40% for
-        24-plane model at step 5k (thresholds were calibrated against 18-plane
-        bootstrap; 24-plane model needs more steps to match sharpness).
+        on at least 25% of probe positions. Threshold softened from 40% after
+        §97 migration (thresholds calibrated against bootstrap; 18-plane model
+        needed warmup steps to match sharpness).
     C3: ext_in_top10_pct >= 40.0
         Looser top-K catches partial sharpness — if extension is rank 6-10
         the policy head is not colony-spamming, just under-sharpened.
@@ -194,7 +194,7 @@ def load_positions(npz_path: Path) -> Dict:
 
 def _probe_one(
     model: HexTacToeNet,
-    state_fp16: np.ndarray,   # (24, 19, 19) float16
+    state_fp16: np.ndarray,   # (18, 19, 19) float16
     ext_flat: int,
     ctrl_flat: int,
     device: torch.device,

@@ -294,7 +294,7 @@ def analyse_position(
     """
     import torch
 
-    tensor, centers = state.to_tensor()  # (K, 24, 19, 19) float16, [(cq,cr),...]
+    tensor, centers = state.to_tensor()  # (K, 18, 19, 19) float16, [(cq,cr),...]
 
     K = len(centers)
     bboxes = [window_bbox(cq, cr) for cq, cr in centers]
