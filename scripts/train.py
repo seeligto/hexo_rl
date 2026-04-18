@@ -76,6 +76,13 @@ def parse_args() -> argparse.Namespace:
             "checkpoint total_steps so the LR scheduler horizon follows the CLI value"
         ),
     )
+    p.add_argument(
+        "--allow-fresh-scheduler", action="store_true",
+        help=(
+            "Allow resume from a checkpoint that does not contain scheduler_state. "
+            "Default: raise. Use only for legacy checkpoints predating scheduler persistence."
+        ),
+    )
     p.add_argument("--log-dir", default="logs",
                    help="Directory for structlog JSON files (default: logs/)")
     p.add_argument("--checkpoint-dir", default="checkpoints",
@@ -183,6 +190,8 @@ def main() -> None:
                 config_overrides[_key] = combined_config[_key]
         if args.override_scheduler_horizon and combined_config.get("total_steps") is not None:
             config_overrides["total_steps"] = int(combined_config["total_steps"])
+        if args.allow_fresh_scheduler:
+            config_overrides["allow_fresh_scheduler"] = True
 
         trainer = Trainer.load_checkpoint(
             args.checkpoint,

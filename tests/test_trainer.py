@@ -303,12 +303,9 @@ def test_load_weights_only_checkpoint_infers_architecture(tmp_path: Path):
     ckpt_path = tmp_path / "bootstrap_like.pt"
     torch.save(trunk_only, ckpt_path)
 
-    # Intentionally mismatched fallback config: loader should reconcile from state_dict.
+    # Fallback config omits architecture keys so inference can populate them
+    # from the checkpoint (B-007: config must agree with ckpt or be silent).
     fallback = {
-        "board_size": 19,
-        "res_blocks": 1,
-        "filters": 16,
-        "in_channels": 18,
         "batch_size": 8,
         "lr": 2e-3,
         "weight_decay": 1e-4,
@@ -885,3 +882,137 @@ def test_selective_policy_loss_all_quick_search_returns_nan():
     assert torch.isnan(loss) or loss.item() == 0.0, (
         f"expected NaN or 0 when all rows are quick-search, got {loss.item()}"
     )
+
+
+# ── B-002: strict=False key-set guard (extended) ──────────────────────────────
+
+def test_load_checkpoint_raises_on_unknown_missing_key(tmp_path: Path):
+    """Checkpoint missing a model key (not in the BN allowlist) must fail load.
+
+    Simulates a stale checkpoint where the trunk input_conv weight was dropped
+    outside the BN migration. Silent strict=False would initialise input_conv
+    randomly and destroy trunk integrity.
+    """
+    trainer = make_trainer(tmp_path)
+    ckpt_path = trainer.save_checkpoint()
+
+    # Corrupt the checkpoint: remove a weight that is neither a BN artifact
+    # nor a tower/trunk.tower alias.
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    removed_key = "trunk.input_conv.weight"
+    assert removed_key in ckpt["model_state"], "precondition: key must be present"
+    del ckpt["model_state"][removed_key]
+    torch.save(ckpt, ckpt_path)
+
+    with pytest.raises(RuntimeError, match="Checkpoint load_state_dict mismatch"):
+        Trainer.load_checkpoint(ckpt_path, checkpoint_dir=tmp_path)
+
+
+# ── B-003: scheduler state resume guard ───────────────────────────────────────
+
+def test_missing_scheduler_state_raises(tmp_path: Path):
+    """Resume with scheduler configured but ckpt lacking scheduler_state must raise."""
+    cfg = {
+        **FAST_CONFIG,
+        "lr_schedule": "cosine",
+        "total_steps": 100,
+        "eta_min": 1e-5,
+    }
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    ckpt_path = trainer.save_checkpoint()
+
+    # Strip scheduler_state, simulating a legacy checkpoint.
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    ckpt["scheduler_state"] = None
+    torch.save(ckpt, ckpt_path)
+
+    with pytest.raises(ValueError, match="scheduler_state missing"):
+        Trainer.load_checkpoint(ckpt_path, checkpoint_dir=tmp_path)
+
+
+def test_missing_scheduler_state_allow_fresh_scheduler(tmp_path: Path):
+    """--allow-fresh-scheduler override lets load succeed with fresh scheduler."""
+    cfg = {
+        **FAST_CONFIG,
+        "lr_schedule": "cosine",
+        "total_steps": 100,
+        "eta_min": 1e-5,
+    }
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    ckpt_path = trainer.save_checkpoint()
+
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    ckpt["scheduler_state"] = None
+    torch.save(ckpt, ckpt_path)
+
+    restored = Trainer.load_checkpoint(
+        ckpt_path,
+        checkpoint_dir=tmp_path,
+        config_overrides={"allow_fresh_scheduler": True},
+    )
+    assert restored.scheduler is not None
+
+
+# ── B-004: NaN-loss GradScaler decay ──────────────────────────────────────────
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="FP16 GradScaler only enabled on CUDA")
+def test_nan_loss_decays_scale(tmp_path: Path):
+    """NaN-loss guard must decay the fp16 scale without state-machine violation.
+
+    Calling `GradScaler.update()` with no prior `step()` raises
+    'No inf checks were recorded prior to update.' The guard must use
+    `update(new_scale=)` so the scale halves (backoff_factor) cleanly.
+    """
+    cfg = {**FAST_CONFIG, "fp16": True}
+    model = HexTacToeNet(board_size=19, res_blocks=2, filters=32)
+    trainer = Trainer(model, cfg, checkpoint_dir=tmp_path)
+    buf = fill_buffer()
+
+    # One successful step initialises the scaler's internal scale tensor.
+    trainer.train_step(buf, augment=False)
+
+    scale_before = trainer.scaler.get_scale()
+    backoff = trainer.scaler.get_backoff_factor()
+
+    # Force the NaN-loss guard by replacing compute_total_loss with a NaN producer.
+    def _nan_total(*args, **kwargs):
+        return torch.tensor(float("nan"), device=trainer.device)
+
+    with patch("hexo_rl.training.trainer.compute_total_loss", side_effect=_nan_total):
+        result = trainer.train_step(buf, augment=False)
+
+    assert np.isnan(result["loss"])
+    scale_after = trainer.scaler.get_scale()
+    assert abs(scale_after - scale_before * backoff) < 1e-3, (
+        f"expected scale to halve: before={scale_before} after={scale_after} backoff={backoff}"
+    )
+
+
+# ── B-007: force-override in _infer_model_hparams ─────────────────────────────
+
+def test_hparam_mismatch_raises(tmp_path: Path):
+    """Config explicitly setting a model hparam that disagrees with the checkpoint
+    must raise ValueError rather than silently overriding.
+    """
+    base = HexTacToeNet(board_size=9, in_channels=18, res_blocks=2, filters=32)
+    base_state = base.state_dict()
+    ckpt_path = tmp_path / "weights_only.pt"
+    torch.save(base_state, ckpt_path)
+
+    # Explicit res_blocks=4 disagrees with ckpt-inferred 2.
+    fallback = {
+        "board_size": 9,
+        "in_channels": 18,
+        "res_blocks": 4,
+        "filters": 32,
+        "batch_size": 8,
+        "lr": 2e-3,
+        "weight_decay": 1e-4,
+        "checkpoint_interval": 5,
+        "log_interval": 1,
+    }
+
+    with pytest.raises(ValueError, match="res_blocks.*disagrees"):
+        Trainer.load_checkpoint(ckpt_path, checkpoint_dir=tmp_path, fallback_config=fallback)

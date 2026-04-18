@@ -514,7 +514,20 @@ class Trainer:
                 value_loss=value_loss.item() if torch.isfinite(value_loss) else float("nan"),
             )
             self.optimizer.zero_grad()
-            self.scaler.update()  # let scale decay; prevents perpetual scale inflation
+            # Manually decay the scale. We cannot call `scaler.update()` here
+            # because no `scaler.step()` / `scaler.unscale_()` fired this
+            # iteration; the internal state machine asserts
+            # "No inf checks were recorded prior to update." `update(new_scale=)`
+            # bypasses that path (see torch/amp/grad_scaler.py::update). Skip
+            # entirely when the scale tensor has not been lazy-initialised yet
+            # (NaN on the very first step — nothing to decay).
+            if (
+                self.fp16
+                and self.scaler.is_enabled()
+                and getattr(self.scaler, "_scale", None) is not None
+            ):
+                decayed = float(self.scaler.get_scale() * self.scaler.get_backoff_factor())
+                self.scaler.update(new_scale=decayed)
             return {
                 "loss": float("nan"),
                 "policy_loss": float("nan"),
@@ -691,6 +704,50 @@ class Trainer:
         return inferred
 
     @staticmethod
+    def _load_state_dict_strict(model: nn.Module, state_dict: Dict[str, torch.Tensor]) -> None:
+        """Load state_dict with explicit missing/unexpected key reporting.
+
+        normalize_model_state_dict_keys adds tower/trunk.tower aliases; one side
+        is always "unexpected" to the live model. Those are filtered. Anything
+        else missing or unexpected raises — we already reject pre-§99 BN keys
+        at normalize time (F-002), and silent drops at load time hide the same
+        class of bug (B-002).
+        """
+        load_result = model.load_state_dict(state_dict, strict=False)
+        missing_keys = list(load_result.missing_keys)
+        unexpected_keys = list(load_result.unexpected_keys)
+
+        model_key_set = set(model.state_dict().keys())
+        benign_unexpected = []
+        real_unexpected = []
+        for k in unexpected_keys:
+            if k.startswith("tower."):
+                alias = f"trunk.{k}"
+            elif k.startswith("trunk.tower."):
+                alias = k[len("trunk."):]
+            else:
+                alias = None
+            if alias is not None and alias in model_key_set:
+                benign_unexpected.append(k)
+            else:
+                real_unexpected.append(k)
+
+        if missing_keys or real_unexpected:
+            log.error(
+                "checkpoint_key_mismatch",
+                missing_count=len(missing_keys),
+                unexpected_count=len(real_unexpected),
+                missing_examples=missing_keys[:5],
+                unexpected_examples=real_unexpected[:5],
+            )
+            raise RuntimeError(
+                f"Checkpoint load_state_dict mismatch: missing={len(missing_keys)} keys, "
+                f"unexpected={len(real_unexpected)} keys (after filtering tower/trunk.tower aliases). "
+                f"Missing examples: {missing_keys[:3]}. Unexpected examples: {real_unexpected[:3]}. "
+                "If this is an intentional architecture change, retrain from bootstrap_model.pt."
+            )
+
+    @staticmethod
     def _extract_model_state(ckpt: Any) -> Dict[str, torch.Tensor]:
         """Extract the model state dict from common checkpoint payload layouts."""
         if not isinstance(ckpt, dict):
@@ -709,22 +766,50 @@ class Trainer:
 
     @staticmethod
     def _resolve_model_hparams(config: Dict[str, Any], model_state: Dict[str, torch.Tensor]) -> Dict[str, int]:
+        """Resolve model architecture hparams from config + state_dict inference.
+
+        Priority (B-007):
+          - If config explicitly sets a key AND state_dict inference yields a
+            different value → raise ValueError. Do not silently override.
+          - If inference yields a value → use it (covers weights-only resume).
+          - Otherwise fall back to explicit config, then hard default.
+        """
         model_cfg = config.get("model") if isinstance(config.get("model"), dict) else {}
 
-        resolved = {
-            "board_size": int(model_cfg.get("board_size", config.get("board_size", 19))),
-            "res_blocks": int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
-            "filters": int(model_cfg.get("filters", config.get("filters", 128))),
-            "in_channels": int(model_cfg.get("in_channels", config.get("in_channels", 18))),
-            "se_reduction_ratio": int(model_cfg.get("se_reduction_ratio", config.get("se_reduction_ratio", 4))),
+        defaults = {
+            "board_size": 19, "res_blocks": 12, "filters": 128,
+            "in_channels": 18, "se_reduction_ratio": 4,
         }
 
-        inferred = Trainer._infer_model_hparams(model_state)
-        for key, inferred_value in inferred.items():
-            if key in resolved:
-                resolved[key] = int(inferred_value)
+        def _explicit(key: str) -> Optional[int]:
+            if isinstance(model_cfg, dict) and key in model_cfg:
+                return int(model_cfg[key])
+            if key in config:
+                return int(config[key])
+            return None
 
-        # Keep top-level config aligned with inferred model dimensions.
+        inferred = Trainer._infer_model_hparams(model_state)
+
+        resolved: Dict[str, int] = {}
+        for key, default_val in defaults.items():
+            cfg_val = _explicit(key)
+            inf_val = inferred.get(key)
+
+            if cfg_val is not None and inf_val is not None and int(cfg_val) != int(inf_val):
+                raise ValueError(
+                    f"Model hparam '{key}' disagrees: config={cfg_val} vs "
+                    f"checkpoint-inferred={inf_val}. Remove '{key}' from config "
+                    f"to accept the checkpoint architecture, or load a checkpoint "
+                    f"matching the config."
+                )
+            if inf_val is not None:
+                resolved[key] = int(inf_val)
+            elif cfg_val is not None:
+                resolved[key] = int(cfg_val)
+            else:
+                resolved[key] = int(default_val)
+
+        # Keep top-level config aligned with final model dimensions.
         config["board_size"] = resolved["board_size"]
         config["res_blocks"] = resolved["res_blocks"]
         config["filters"] = resolved["filters"]
@@ -831,7 +916,7 @@ class Trainer:
             filters=model_hparams["filters"],
             se_reduction_ratio=model_hparams.get("se_reduction_ratio", 4),
         )
-        model.load_state_dict(model_state, strict=False)
+        cls._load_state_dict_strict(model, model_state)
 
         ckpt_dir = Path(checkpoint_dir) if checkpoint_dir else Path(checkpoint_path).parent
         trainer = cls(model, config, checkpoint_dir=ckpt_dir, device=device)
@@ -847,17 +932,31 @@ class Trainer:
                         "optimizer restarted from scratch for new params.",
                 )
             trainer.scaler.load_state_dict(ckpt["scaler_state"])
-            if trainer.scheduler is not None and ckpt.get("scheduler_state") is not None:
-                scheduler_state = ckpt["scheduler_state"]
-                # Optional: let explicit config overrides update scheduler horizon.
-                if config_overrides and (
-                    "scheduler_t_max" in config_overrides or "total_steps" in config_overrides
-                ):
-                    scheduler_state = dict(scheduler_state)
-                    scheduler_state["T_max"] = int(
-                        config.get("scheduler_t_max", config.get("total_steps", scheduler_state.get("T_max", 1)))
+            if trainer.scheduler is not None:
+                ckpt_scheduler_state = ckpt.get("scheduler_state")
+                if ckpt_scheduler_state is None:
+                    allow_fresh = bool((config_overrides or {}).get("allow_fresh_scheduler", False))
+                    if not allow_fresh:
+                        raise ValueError(
+                            "scheduler_state missing from checkpoint; cannot resume. "
+                            "Pass --allow-fresh-scheduler (or config_overrides['allow_fresh_scheduler']=True) "
+                            "to rebuild the scheduler from scratch."
+                        )
+                    log.warning(
+                        "scheduler_state_missing_fresh_start",
+                        schedule=trainer.config.get("lr_schedule"),
                     )
-                trainer.scheduler.load_state_dict(scheduler_state)
+                else:
+                    scheduler_state = ckpt_scheduler_state
+                    # Optional: let explicit config overrides update scheduler horizon.
+                    if config_overrides and (
+                        "scheduler_t_max" in config_overrides or "total_steps" in config_overrides
+                    ):
+                        scheduler_state = dict(scheduler_state)
+                        scheduler_state["T_max"] = int(
+                            config.get("scheduler_t_max", config.get("total_steps", scheduler_state.get("T_max", 1)))
+                        )
+                    trainer.scheduler.load_state_dict(scheduler_state)
             trainer.step = ckpt["step"]
 
         return trainer
