@@ -241,3 +241,50 @@ impl ReplayBuffer {
     #[getter]
     pub fn capacity(&self) -> usize { self.capacity }
 }
+
+/// Non-PyO3 helpers used by Rust integration tests in `engine/tests/`.
+impl ReplayBuffer {
+    /// Push a zero-filled position with the given outcome, game_length, and
+    /// is_full_search flag. Mirrors the push_raw logic but exposed `pub` so
+    /// integration tests (which cannot reach `pub(crate)` items) can populate
+    /// the buffer with known is_full_search values for save/load round-trip checks.
+    pub fn push_for_test(&mut self, outcome: f32, game_length: u16, is_full_search: bool) {
+        use std::sync::atomic::Ordering;
+        let slot = self.head;
+        if self.size == self.capacity {
+            let old_bucket = Self::weight_bucket(self.weights[slot]);
+            self.weight_buckets[old_bucket].fetch_sub(1, Ordering::Relaxed);
+        }
+        let s = slot * STATE_STRIDE;
+        self.states[s..s + STATE_STRIDE].fill(0);
+        let c = slot * CHAIN_STRIDE;
+        self.chain_planes[c..c + CHAIN_STRIDE].fill(0);
+        let p = slot * POLICY_STRIDE;
+        self.policies[p..p + POLICY_STRIDE].fill(0.0);
+        let a = slot * AUX_STRIDE;
+        self.ownership[a..a + AUX_STRIDE].fill(1);
+        self.winning_line[a..a + AUX_STRIDE].fill(0);
+        self.is_full_search[slot] = is_full_search as u8;
+        self.outcomes[slot] = outcome;
+        self.game_ids[slot] = -1;
+        self.weights[slot] = if game_length == 0 {
+            f16::from_f32(1.0).to_bits()
+        } else {
+            self.weight_schedule.weight_for(game_length)
+        };
+        let new_bucket = Self::weight_bucket(self.weights[slot]);
+        self.weight_buckets[new_bucket].fetch_add(1, Ordering::Relaxed);
+        self.head = (self.head + 1) % self.capacity;
+        self.size = (self.size + 1).min(self.capacity);
+    }
+
+    /// Return the raw `is_full_search` byte at the given buffer slot.
+    pub fn is_full_search_at(&self, slot: usize) -> u8 {
+        self.is_full_search[slot]
+    }
+
+    /// Return the sampling weight at the given buffer slot as f32.
+    pub fn weight_at_f32(&self, slot: usize) -> f32 {
+        f16::from_bits(self.weights[slot]).to_f32()
+    }
+}

@@ -200,3 +200,33 @@ def test_rust_runner_collect_data_format():
         runner.stop()
         server.stop()
         server.join(timeout=5.0)
+
+
+# ── F-004: fast_prob + full_search_prob mutex ──────────────────────────────────
+
+def test_pool_init_rejects_both_playout_caps():
+    """WorkerPool.__init__ must raise ValueError when both fast_prob and
+    full_search_prob are non-zero (§100 mutex — F-004).
+
+    This guards against refactors that drop the mutex check at pool init,
+    which would silently allow both caps to coexist — the move-level cap
+    (full_search_prob) would override the game-level cap (fast_prob) with
+    no warning, making training harder to reproduce.
+    """
+    device = torch.device("cpu")
+    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
+    buffer = ReplayBuffer(capacity=100)
+
+    bad_cfg = {
+        "selfplay": {
+            "playout_cap": {
+                "fast_sims": 50,           # required to pass the earlier guard
+                "fast_prob": 0.25,
+                "full_search_prob": 0.25,
+                "n_sims_quick": 100,
+                "n_sims_full": 600,
+            },
+        },
+    }
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        WorkerPool(model, bad_cfg, device, buffer, n_workers=1)

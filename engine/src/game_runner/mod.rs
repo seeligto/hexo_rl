@@ -13,6 +13,8 @@ pub mod gumbel_search;
 mod records;
 mod worker_loop;
 
+pub use worker_loop::compute_move_temperature;
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

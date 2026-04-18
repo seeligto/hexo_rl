@@ -8,6 +8,28 @@
 //! `records::reproject_game_end_row` so the inner loop stays under the
 //! per-file size budget.
 
+/// Quarter-cosine temperature schedule used by the self-play worker loop.
+///
+/// Returns 1.0 at compound_move=0, decays via cos(π/2·progress) toward
+/// temp_min, then clamps at temp_min for compound_move ≥ temp_threshold.
+///
+/// # Arguments
+/// * `compound_move`  — zero-indexed compound move number in the current game
+/// * `temp_threshold` — compound move at which the floor kicks in (CLAUDE.md: 15)
+/// * `temp_min`       — minimum temperature floor (CLAUDE.md: 0.05)
+pub fn compute_move_temperature(
+    compound_move: usize,
+    temp_threshold: usize,
+    temp_min: f32,
+) -> f32 {
+    if compound_move < temp_threshold {
+        let progress = compound_move as f32 / temp_threshold as f32;
+        f32::max(temp_min, (std::f32::consts::FRAC_PI_2 * progress).cos())
+    } else {
+        temp_min
+    }
+}
+
 use std::sync::atomic::Ordering;
 use std::thread;
 
@@ -311,11 +333,8 @@ impl SelfPlayRunner {
                         let compound_move = if board.ply == 0 { 0 } else { (board.ply as usize + 1) / 2 };
                         let temperature = if is_fast_game {
                             1.0  // fast games: always exploratory
-                        } else if compound_move < temp_threshold {
-                            let progress = compound_move as f32 / temp_threshold as f32;
-                            f32::max(temp_min, (std::f32::consts::PI / 2.0 * progress).cos())
                         } else {
-                            temp_min  // settled phase: minimal exploration
+                            compute_move_temperature(compound_move, temp_threshold, temp_min)
                         };
                         let policy = tree.get_policy(temperature, BOARD_SIZE);
 
