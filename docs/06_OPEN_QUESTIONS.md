@@ -19,6 +19,7 @@
 | Q3 | Optimal K (number of cluster windows) | Ablation K=2,3,4,6 | ~6 GPU-days | MEDIUM |
 | Q8 | First-player advantage in value training | Measure P1 win rate by Elo band; adjust value targets if >60% | ~2 GPU-days | MEDIUM |
 | ~~Q25~~ | ~~Worker throughput variance: 24-plane NN latency + IQR spike~~ | **RESOLVED 2026-04-16** — §97 reverted the 24-plane payload. The 24-plane-specific variance hypothesis is moot. A separate post-§97 bench artifact (warmup-design 0-position windows) is tracked in §98 action items, not as a research question. | done | resolved |
+| Q27 | Attention hijacking: policy trunk not routing top-K to threat-scalar signal even after perspective fix | Ablate value aggregation (min vs mean), sweep `aux_threat_weight`, audit ZOI reachability of probe-position extension cells | ~3–6 GPU-days per probe | HIGH — blocks C2/C3 threat-probe PASS |
 
 **Q17 (2026-04-09, RESOLVED 2026-04-10):** The P3 overnight run
 collapsed to deterministic carbon-copy self-play games between
@@ -74,6 +75,45 @@ the first sustained run from `bootstrap_model.pt` confirms stable entropy.
 interact with value aggregation strategy — both heads provide spatial value grounding that
 may shift the relative advantage of min vs mean aggregation. Run Q2 ablation before and
 after head stabilisation (~10k RL steps) to avoid confounding.
+
+**Q27 (2026-04-18, OPEN):** Threat probe at 5K from `bootstrap_model.pt`
+fails C2 (ext_in_top5_pct) and C3 (ext_in_top10_pct) at 20%/20% while
+C1 (contrast_mean) passes ~10× threshold. Pattern: the threat scalar
+head learns extension-vs-control contrast cleanly; the policy trunk
+does not route top-K attention to the extension cell.
+
+**Smoke test 2026-04-18 (sprint §105, `reports/q27_perspective_flip_smoke_2026-04-18/verdict.md`):**
+Two-machine pre/post smoke across commit `e9ebbb9` ("fix(mcts): negate
+child Q at intermediate ply"). Both arms FAIL threat probe C2/C3 at
+identical 20%/20%. W1 perspective fix is necessary on correctness
+grounds (three call sites inverted training targets at ~50% of move
+steps) but does **not** close the attention-hijacking symptom at the
+5K-step horizon. Post-fix entropy +0.255 nats vs pre-fix (closer to
+uniform), direction wrong for "W1 alone fixes it" — likely variant/
+worker-count noise; cannot discriminate at n=1 per arm.
+
+**Candidate root-cause probes (sprint §105, ranked):**
+
+1. **Value aggregation (Q2).** Min-pool over cluster windows may
+   silently discard extension-cell evidence. Ablate mean-pool at 5K.
+   Reproduces the "threat scalar learns contrast, policy ignores it"
+   signature if Q2 is the driver.
+2. **Threat head → policy gradient coupling.** BCE weight 0.1 may be
+   drowned by policy CE at the shared trunk. Sweep
+   `aux_threat_weight: 0.1 → 0.5` at fixed 5K budget.
+3. **ZOI post-search mask (§77).** If extension cells in the probe
+   positions fall outside hex-distance-5 of the last 16 moves, C2/C3
+   are capped by construction. Log ZOI reachability of probe-position
+   extension cells before running more smokes.
+
+**Interaction with Q2:** If Q2 ablation resolves Q27, Q27 closes as a
+Q2 follow-up. If Q2 ablation does not move C2/C3, probes 2 and 3 run
+in sequence. Do not commit to another 5K smoke until one of the three
+has a concrete hypothesis attached — same-machine n=3 A/B costs ~10h
+wall-clock.
+
+**Do not block on Q27 for W1 correctness.** The perspective fix
+(`e9ebbb9`) stays on master independent of this probe.
 
 ## Community Watch (pending external validation)
 
