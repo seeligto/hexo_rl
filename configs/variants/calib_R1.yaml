@@ -6,6 +6,13 @@
 #
 # Driver: scripts/run_calibration_run.sh R1
 # Report: reports/graduation_calibration_2026-04-17.md
+
+# D1 + D4 — driver reads these and patches configs/eval.yaml before launch
+# (EvalPipeline opens eval.yaml directly and does not go through load_config).
+calib:
+  threshold: 0.55
+  n_games: 200
+
 selfplay:
   gumbel_mcts: false
   completed_q_values: true

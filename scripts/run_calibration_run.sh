@@ -34,15 +34,33 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$RUN_ID" in
-    R1) THRESHOLD="0.55"; NGAMES="200" ;;
-    R2) THRESHOLD="0.52"; NGAMES="200" ;;
-    R3) THRESHOLD="0.55"; NGAMES="200" ;;
-    R4) THRESHOLD="0.55"; NGAMES="400" ;;
+    R1|R2|R3|R4) ;;
     *) echo "unknown RUN_ID: $RUN_ID (expected R1..R4)" >&2; exit 2 ;;
 esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+
+# D1 (threshold) + D4 (n_games) are declared per-run in configs/variants/calib_R*.yaml
+# under the `calib:` block. Read them here so the driver is a thin patcher and
+# does not encode sweep dimensions in its own source.
+VARIANT_YAML="configs/variants/calib_${RUN_ID}.yaml"
+read -r THRESHOLD NGAMES <<< "$(.venv/bin/python - "$VARIANT_YAML" <<'PY'
+import sys, yaml, pathlib
+cfg = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text()) or {}
+calib = cfg.get("calib", {})
+threshold = calib.get("threshold")
+n_games = calib.get("n_games")
+if threshold is None or n_games is None:
+    sys.stderr.write(f"{sys.argv[1]}: missing calib.threshold or calib.n_games\n")
+    sys.exit(1)
+print(f"{threshold} {int(n_games)}")
+PY
+)"
+if [[ -z "${THRESHOLD:-}" || -z "${NGAMES:-}" ]]; then
+    echo "failed to read calib block from $VARIANT_YAML" >&2
+    exit 1
+fi
 
 EVAL_YAML="configs/eval.yaml"
 BACKUP="${EVAL_YAML}.calib_backup"
