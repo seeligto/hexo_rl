@@ -182,11 +182,6 @@ class WorkerPool:
     def avg_game_length(self) -> float:
         return self._avg_game_length
 
-    def load_weights(self, state_dict: Dict[str, torch.Tensor]) -> None:
-        with self._lock:
-            self.model.load_state_dict(state_dict)
-            self.model.eval()
-
     def update_checkpoint_step(self, step: int) -> None:
         """Forward the current training step to the game recorder."""
         self._recorder.set_step(step)
