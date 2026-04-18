@@ -1,0 +1,35 @@
+eval_pipeline:
+  enabled: true
+  eval_interval: 2500
+  report_dir: reports/eval
+  db_path: reports/eval/results.db
+  ratings_plot_path: reports/eval/ratings_curve.png
+  opponents:
+    best_checkpoint:
+      enabled: true
+      stride: 1
+      n_games: 200
+      model_sims: 128
+      opponent_sims: 128
+    sealbot:
+      enabled: true
+      stride: 4
+      n_games: 50
+      think_time_strong: 0.5
+      think_time_fast: 0.1
+      model_sims: 128
+    random:
+      enabled: true
+      stride: 1
+      n_games: 20
+      model_sims: 96
+  gating:
+    promotion_winrate: 0.55
+    best_model_path: checkpoints/best_model.pt
+  colony_centroid_threshold: 6
+  bradley_terry:
+    anchor_player: checkpoint_0
+    regularization: 1.0e-06
+  eval_temperature: 0.5
+  eval_random_opening_plies: 4
+  eval_seed_base: 42

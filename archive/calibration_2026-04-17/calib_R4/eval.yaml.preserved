@@ -1,0 +1,46 @@
+# eval.yaml — Phase 4.0 evaluation pipeline configuration
+
+eval_pipeline:
+  enabled: true
+  eval_interval: 2500            # base cadence; per-opponent `stride` multiplies this.
+                                 # IMPORTANT: training.yaml's eval_interval takes precedence
+                                 # at trigger time AND for stride math (§101 H1). If you
+                                 # override there, strides remain aligned automatically;
+                                 # this value is the fallback when training.yaml omits it.
+  report_dir: reports/eval
+  db_path: reports/eval/results.db
+  ratings_plot_path: reports/eval/ratings_curve.png
+
+  opponents:
+    best_checkpoint:
+      enabled: true
+      stride: 1                  # every 2500 steps — graduation gate; controls self-play data quality
+      n_games: 200               # raised for tighter gating CI (binomial ±3.5% @ 0.55)
+      model_sims: 128
+      opponent_sims: 128
+    sealbot:
+      enabled: true
+      stride: 4                  # every 10000 steps — external benchmark, expensive
+      n_games: 50
+      think_time_strong: 0.5   # eval gating — stronger play, slower
+      think_time_fast: 0.1     # corpus generation — faster, still non-trivial
+      model_sims: 128
+    random:
+      enabled: true
+      stride: 1                  # every 2500 steps — cheap sanity floor
+      n_games: 20
+      model_sims: 96
+
+  gating:
+    promotion_winrate: 0.55      # graduation threshold: new model must win ≥55% to replace anchor
+    best_model_path: checkpoints/best_model.pt
+
+  colony_centroid_threshold: 6    # axial distance between component centroids for colony-win tag
+
+  bradley_terry:
+    anchor_player: "checkpoint_0"
+    regularization: 1.0e-6       # small prior for perfect-record edge cases
+
+  eval_temperature: 0.5            # >0 → sample from visit dist; 0 → argmax (old deterministic)
+  eval_random_opening_plies: 4     # both players play uniform random for first N plies (2 compound moves)
+  eval_seed_base: 42               # game i uses seed (base+i); reproducible across runs, varied per game
