@@ -22,7 +22,7 @@ class RecentBuffer:
     Args:
         capacity:    Maximum number of positions to store.  Oldest entries are
                      overwritten once full (ring semantics).
-        state_shape: Shape of one state tensor, default (24, 19, 19).
+        state_shape: Shape of one state tensor, default (18, 19, 19).
         policy_len:  Number of policy logits per position, default 362.
         aux_stride:  Flat length of one ownership/winning_line plane, default 361.
     """

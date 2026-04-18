@@ -105,14 +105,14 @@ fn same_axis(a: (i32, i32), b: (i32, i32)) -> bool {
 /// the corresponding output cells remain zero (matching the Python behaviour).
 ///
 /// `axis_perm[s]` is the per-symmetry axis-plane remap for the Q13 chain-length
-/// planes (24-plane layout, planes 18..23). `axis_perm[s][dst_j] = src_i` means:
+/// planes (chain sub-buffer, planes 0..5). `axis_perm[s][dst_j] = src_i` means:
 /// "under symmetry s, the destination plane for axis j holds values scattered
 /// from the source plane for axis i". The remap is direction-unsigned (hex runs
 /// are bi-directional) and composes reflection-then-rotation to match the same
 /// order used in the coordinate-scatter construction below.
 ///
 /// The 2-plane-per-axis (current/opponent) layout means the real scatter loop
-/// iterates `(axis_perm[s][dst_j], player_off)` pairs for planes 18..23.
+/// iterates `(axis_perm[s][dst_j], player_off)` pairs for chain planes 0..5.
 pub struct SymTables {
     pub scatter:   [Vec<(u16, u16)>; N_SYMS],
     /// Per-symmetry axis-plane remap for Q13 chain-length planes.
@@ -123,7 +123,7 @@ pub struct SymTables {
     /// All 18 planes are pure coordinate scatter (identity plane mapping),
     /// so `src_plane_lookup[s][dst_p] == dst_p` for all s and p.
     /// Kept as a lookup array so `apply_symmetry_state` can share the same
-    /// loop structure as the former 24-plane kernel.
+    /// loop structure as the former combined-plane kernel.
     pub src_plane_lookup: [[usize; N_PLANES]; N_SYMS],
     /// Fused per-symmetry source-plane lookup for the 6 chain-length planes.
     /// `chain_src_lookup[s][dst_p] = src_p`: coordinate + axis-plane remap.

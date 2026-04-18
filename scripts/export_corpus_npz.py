@@ -301,7 +301,7 @@ def main() -> None:
         np.savez(out_path, **save_kwargs)
 
     size_mb = out_path.stat().st_size / 1024 / 1024
-    est_ram_gb = out_idx * (24 * 19 * 19 * 2 + 362 * 4 + 4) / (1024 ** 3)
+    est_ram_gb = out_idx * (18 * 19 * 19 * 2 + 362 * 4 + 4) / (1024 ** 3)
     print(f"Saved: {out_path}")
     print(f"  File size : {size_mb:.0f} MB")
     print(f"  Positions : {out_idx:,}")

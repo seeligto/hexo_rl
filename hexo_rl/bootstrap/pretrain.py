@@ -246,7 +246,7 @@ def load_corpus(
     """Load all corpus games and return flat per-position arrays.
 
     Returns:
-        states:   (M, 24, 19, 19) float16
+        states:   (M, 18, 19, 19) float16
         policies: (M, 362) float32
         outcomes: (M,) float32
         weights:  (M,) float32 — per-position sampling weight
@@ -410,6 +410,7 @@ class BootstrapTrainer:
         aux_weight: float = 0.15,
         chain_weight: float = 0.0,
         step_budget: Optional[int] = None,
+        start_step: Optional[int] = None,
         log_interval: int = 50,
     ) -> Dict[str, float]:
         """One full pass over the dataloader.
@@ -420,10 +421,13 @@ class BootstrapTrainer:
             aux_weight:     Weight for opponent-reply auxiliary loss.
             chain_weight:   Weight for Q13-aux chain-length head (0 disables it).
             step_budget:    Stop after this many steps (for smoke tests).
+            start_step:     Baseline ``self.step`` when budget counting began. If
+                            None, defaults to the value of ``self.step`` on entry.
 
         Returns:
             Dict with keys loss, policy_loss, value_loss, opp_reply_loss, chain_loss.
         """
+        budget_origin = start_step if start_step is not None else self.step
         self.model.train()
         total: Dict[str, float] = {
             "loss": 0.0, "policy_loss": 0.0,
@@ -526,7 +530,7 @@ class BootstrapTrainer:
                     corpus_mix={"pretrain": 1.0, "self_play": 0.0},
                 )
 
-            if step_budget is not None and self.step >= step_budget:
+            if step_budget is not None and (self.step - budget_origin) >= step_budget:
                 break
 
         n = max(n_batches, 1)
@@ -761,6 +765,7 @@ def pretrain() -> None:
         f"label_smooth={label_smoothing} aux_weight={aux_weight}"
     )
     trainer.step = -total_pretrain_steps
+    start_step = trainer.step
 
     chain_weight = float(config.get("aux_chain_weight", 0.0))
     prev_loss: Optional[float] = None
@@ -771,6 +776,7 @@ def pretrain() -> None:
             aux_weight=aux_weight,
             chain_weight=chain_weight,
             step_budget=step_budget,
+            start_step=start_step,
         )
         log.info("epoch_complete", epoch=epoch, **{k: round(v, 4) for k, v in metrics.items()})
         console.print(
@@ -781,7 +787,7 @@ def pretrain() -> None:
             f"aux={metrics['opp_reply_loss']:.4f}  "
             f"chain={metrics['chain_loss']:.4f}"
         )
-        if step_budget is not None and trainer.step >= step_budget:
+        if step_budget is not None and (trainer.step - start_step) >= step_budget:
             break
         prev_loss = metrics["loss"]
 

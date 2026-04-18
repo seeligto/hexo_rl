@@ -56,7 +56,7 @@ ownership_weight: 0.1     # weight for ownership auxiliary head (spatial MSE); t
 threat_weight: 0.1        # weight for binary threat auxiliary head (winning-line BCE); training only
 
 # Q13-aux: chain-length prediction auxiliary head, smooth-L1 (Huber) loss on 6 chain planes.
-# Target is the input slice (:, 18:24) from the 24-plane tensor; aux loss forces
+# Target comes from the replay-buffer chain sub-buffer (post-§97; no longer input planes); aux loss forces
 # the trunk to preserve / rediscover chain-counting circuits. Starting at 1.0 (not
 # the 0.10 used for ownership/threat) because the target is /6-normalized so raw
 # smooth-L1 values sit around 0.02 — weight 1.0 gives the head a meaningful

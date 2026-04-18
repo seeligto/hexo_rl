@@ -111,15 +111,15 @@ impl PyBoard {
         self.inner.zobrist_hash
     }
 
-    /// Encode the board as a flat list of floats for the 24 tensor planes
-    /// (shape conceptually [24, 19, 19], returned as a flat list of length 24×361=8664):
+    /// Encode the board as a flat list of floats for the 18 tensor planes
+    /// (shape conceptually [18, 19, 19], returned as a flat list of length 18×361=6498):
     ///   plane 0: current player's stones
     ///   plane 8: opponent's stones
     ///   plane 16: moves_remaining == 2 ? 1.0 : 0.0
     ///   plane 17: ply % 2
-    ///   planes 18..23: Q13 chain-length planes, 3 hex axes × 2 players, /6.0-normalized.
+    ///   (chain-length planes moved to replay-buffer aux sub-buffer post-§97)
     ///
-    /// Use numpy.array(board.to_tensor(), dtype=numpy.float32).reshape(24, 19, 19).
+    /// Use numpy.array(board.to_tensor(), dtype=numpy.float32).reshape(18, 19, 19).
     pub fn to_tensor(&self) -> Vec<f32> {
         self.inner.to_planes()
     }
@@ -542,14 +542,13 @@ thread_local! {
     static SYM_TABLES_TLS: SymTables = SymTables::new();
 }
 
-/// Apply 12-fold hex symmetry `sym_idx` to one (24, 19, 19) state tensor.
+/// Apply 12-fold hex symmetry `sym_idx` to one (18, 19, 19) state tensor.
 ///
-/// Scatters both the 18 history/scalar planes (pure coordinate permutation)
-/// and the 6 Q13 chain-length planes (coordinate permutation + axis-plane
-/// remap). Byte-exact with the ReplayBuffer sampling kernel.
+/// Scatters all 18 history/scalar planes (pure coordinate permutation).
+/// Byte-exact with the ReplayBuffer sampling kernel.
 ///
 /// Args:
-///     state:   (24, 19, 19) float32 numpy array. **Must be C-contiguous.**
+///     state:   (18, 19, 19) float32 numpy array. **Must be C-contiguous.**
 ///              If the array may be non-contiguous (e.g. a slice or transposed
 ///              view), call `np.ascontiguousarray(state)` before passing it in.
 ///     sym_idx: integer in [0, 12).

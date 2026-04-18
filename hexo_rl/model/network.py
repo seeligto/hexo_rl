@@ -3,11 +3,11 @@ HexTacToeNet — ResNet backbone with SE blocks, dual-pooling value head,
 policy head, and opponent-reply auxiliary head.
 
 Architecture (Multi-Window Cluster-Based Approach):
-  Input:  (B, 24, 19, 19) float16 tensor
-          (18 AlphaZero history/scalar planes + 6 Q13 chain-length planes)
+  Input:  (B, 18, 19, 19) float16 tensor
+          (18 AlphaZero history/scalar planes; chain-length planes in aux sub-buffer post-§97)
 
   Backbone:
-    Conv2d(24 → filters, 3×3, padding=1) → GN(8) → ReLU
+    Conv2d(18 → filters, 3×3, padding=1) → GN(8) → ReLU
     × res_blocks residual blocks:
       Conv2d(filters → filters, 3×3, padding=1) → GN(8) → ReLU
       Conv2d(filters → filters, 3×3, padding=1) → GN(8)

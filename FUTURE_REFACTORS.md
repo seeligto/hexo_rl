@@ -98,8 +98,8 @@ Findings from `reports/master_review_2026-04-18/verdict.md` Section 4. Skipped a
 | ID | File | One-line claim |
 |---|---|---|
 | G-006 | CLAUDE.md bench section | References wrong baseline authority |
-| G-007 | configs/training.yaml (chain-aux comment) | 24-plane layout comment (stale post-§97) |
-| G-008 | engine/src/lib.rs (to_tensor docstring) | 24 planes mentioned (stale post-§97) |
+| ~~G-007~~ | ~~configs/training.yaml (chain-aux comment)~~ | **DONE** — swept by PROMPT20 24-plane audit |
+| ~~G-008~~ | ~~engine/src/lib.rs (to_tensor docstring)~~ | **DONE** — swept by PROMPT20 24-plane audit |
 | G-009 | docs/01_architecture.md | MCTSTree PyO3 kwargs example wrong |
 | G-010 | docs/01_architecture.md | `Board(size=19)` + `apply_move(row, col, player)` API example wrong |
 | G-011 | docs/03_tooling.md | `buffer.push(...)` stale 4-arg signature |

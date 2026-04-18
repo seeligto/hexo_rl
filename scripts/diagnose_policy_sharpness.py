@@ -71,7 +71,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @dataclass
 class Position:
-    tensor: np.ndarray  # (24, 19, 19) float16 — K=0 slice only
+    tensor: np.ndarray  # (18, 19, 19) float16 — K=0 slice only
     compound_move: int
     game_id: str
     ply: int
