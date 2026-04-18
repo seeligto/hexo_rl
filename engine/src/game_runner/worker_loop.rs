@@ -58,6 +58,20 @@ impl SelfPlayRunner {
             return;
         }
 
+        // Defense-in-depth mutex (§100): game-level (`fast_prob`) and
+        // move-level (`full_search_prob`) playout-cap randomisers must not
+        // both be active.  Python pool init raises first; this panic only
+        // fires if `SelfPlayRunner` is driven from Rust or a path that
+        // bypasses the Python validator.
+        assert!(
+            !(self.fast_prob > 0.0 && self.full_search_prob > 0.0),
+            "playout-cap mutex violated: fast_prob={} and full_search_prob={} \
+             are both > 0 (§100 — game-level and move-level caps are mutually \
+             exclusive)",
+            self.fast_prob,
+            self.full_search_prob,
+        );
+
         let mut handles = self.handles.lock().expect("runner handles lock poisoned");
         for worker_id in 0..self.n_workers {
             let running = self.running.clone();
