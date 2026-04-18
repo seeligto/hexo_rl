@@ -2,6 +2,10 @@
 # D1=0.55, D2=5000, D3=50000, D4=200.
 # Tests whether longer decay + coarser gate yields healthier cadence.
 # Driver: scripts/run_calibration_run.sh R3
+calib:
+  threshold: 0.55
+  n_games: 200
+
 selfplay:
   gumbel_mcts: false
   completed_q_values: true

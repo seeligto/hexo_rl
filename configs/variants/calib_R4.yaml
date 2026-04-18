@@ -4,6 +4,10 @@
 # tighter CI (stderr ~2.5% vs 3.5% at 200 games) materially changes promotion
 # cadence in the noise-floor regime implied by completed-Q target concentration.
 # Driver: scripts/run_calibration_run.sh R4
+calib:
+  threshold: 0.55
+  n_games: 400
+
 selfplay:
   gumbel_mcts: false
   completed_q_values: true

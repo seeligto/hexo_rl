@@ -4,6 +4,10 @@
 # promotion_winrate (D1) + n_games (D4) are patched into configs/eval.yaml by
 # the driver before launch; they live in eval_pipeline namespace which is
 # loaded by EvalPipeline directly (not merged via load_config).
+calib:
+  threshold: 0.52
+  n_games: 200
+
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
