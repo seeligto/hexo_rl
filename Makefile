@@ -116,7 +116,10 @@ train.stop: ## Stop background training
 		fi; \
 		rm -f logs/train.pid; \
 	fi; \
-	pkill -f "scripts/train.py" 2>/dev/null && { echo "Killed train.py processes via pkill"; stopped=1; } || true; \
+	pids=$$(pgrep -f '^[^ ]*python[^ ]* .*scripts/train\.py' 2>/dev/null || true); \
+	if [ -n "$$pids" ]; then \
+		echo "$$pids" | xargs -r kill && { echo "Killed train.py pids: $$pids"; stopped=1; } || true; \
+	fi; \
 	if [ $$stopped -eq 0 ]; then echo "No training process found"; fi
 
 .PHONY: train.status
