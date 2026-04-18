@@ -56,6 +56,7 @@ def _play_one_game(
     """
     import random
 
+    bot.reset()
     board = Board()
     state = GameState.from_board(board)
     moves: list[tuple[int, int]] = []

@@ -45,16 +45,18 @@ _cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()  # path → entry
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="analyze")
 
 
-_ALLOWED_CHECKPOINT_ROOT = Path.cwd()
-
-
 def _get_model(checkpoint_path: str) -> Tuple[Any, torch.device, dict]:
     """Load model from cache or disk. Thread-safe, LRU eviction."""
-    abs_path = str(Path(checkpoint_path).resolve())
-
-    # Prevent path traversal outside project root
-    if not abs_path.startswith(str(_ALLOWED_CHECKPOINT_ROOT)):
-        raise ValueError(f"Checkpoint path outside project root: {checkpoint_path}")
+    # resolve() follows symlinks; is_relative_to() catches the prefix-mimic
+    # bug (e.g. `checkpoints_evil/…` passing a `startswith("checkpoints/")`
+    # check) and escaping symlinks (their real target is outside the tree).
+    resolved = Path(checkpoint_path).resolve()
+    allowed_root = Path(analyze_bp.checkpoint_dir).resolve()
+    if not resolved.is_relative_to(allowed_root):
+        raise ValueError(
+            f"Checkpoint path outside allowed root: {checkpoint_path}"
+        )
+    abs_path = str(resolved)
 
     if not Path(abs_path).exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")

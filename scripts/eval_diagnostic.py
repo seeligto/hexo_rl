@@ -156,7 +156,7 @@ def play_match_detailed(
     config: dict,
     label: str,
     opponent_is_bot: bool = False,
-    temperature: float = 0.0,
+    temperature: float = 1.0,
 ) -> MatchReport:
     """Play games and return detailed per-game records."""
     report = MatchReport(label=label)
@@ -327,7 +327,7 @@ def main() -> None:
     print("DIAGNOSIS 1: ckpt_13000 vs ckpt_15000 (100 games, detailed)")
     print("="*60)
 
-    opp_15k = ModelPlayer(models["ckpt_15000"], config, DEVICE, n_sims=MODEL_SIMS)
+    opp_15k = ModelPlayer(models["ckpt_15000"], config, DEVICE, n_sims=MODEL_SIMS, temperature=1.0)
     report_13v15 = play_match_detailed(
         models["ckpt_13000"], opp_15k, 100, config,
         "ckpt_13000 vs ckpt_15000",
@@ -361,7 +361,7 @@ def main() -> None:
         if a_name not in models or b_name not in models:
             print(f"  SKIP {a_name} vs {b_name}: model not loaded")
             continue
-        opp = ModelPlayer(models[b_name], config, DEVICE, n_sims=MODEL_SIMS)
+        opp = ModelPlayer(models[b_name], config, DEVICE, n_sims=MODEL_SIMS, temperature=1.0)
         report = play_match_detailed(
             models[a_name], opp, 50, config,
             f"{a_name} vs {b_name}",

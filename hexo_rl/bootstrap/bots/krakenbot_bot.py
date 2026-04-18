@@ -120,5 +120,8 @@ class KrakenBotBot(BotProtocol):
         q1, r1 = result[0]
         return (q1, r1)
 
+    def reset(self) -> None:
+        self._pending_move = None
+
     def name(self) -> str:
         return f"KrakenBot(t={self._time_limit})"

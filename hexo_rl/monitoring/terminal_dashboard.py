@@ -64,6 +64,9 @@ class TerminalDashboard:
         self._alert_loss_window = int(mon.get("alert_loss_increase_window", 3))
         num_actions = int(mon.get("num_actions_for_entropy_norm", 362))
         self._max_entropy = math.log(num_actions) if num_actions > 1 else 1.0
+        # Mirror the web dashboard's knob so terminal + web agree on the
+        # selfplay-collapse threshold (§70). Default 1.5 nats.
+        self._collapse_threshold = float(mon.get("collapse_threshold_nats", 1.5))
 
         self._lock = threading.Lock()
         self._live: Live | None = None
@@ -233,9 +236,9 @@ class TerminalDashboard:
                 self._add_alert(
                     expiry, f"policy entropy {ent:.2f} — possible mode collapse"
                 )
-            # Selfplay-stream collapse (threshold: 1.5 nats per §70)
+            # Selfplay-stream collapse (threshold per §70; configurable).
             ent_sp = payload.get("policy_entropy_selfplay")
-            if ent_sp is not None and math.isfinite(ent_sp) and ent_sp < 1.5:
+            if ent_sp is not None and math.isfinite(ent_sp) and ent_sp < self._collapse_threshold:
                 self._add_alert(
                     expiry, f"selfplay entropy {ent_sp:.2f} — selfplay mode collapse"
                 )
@@ -406,7 +409,7 @@ class TerminalDashboard:
         )
 
         # Policy entropy split row (combined / pretrain / selfplay)
-        _COLLAPSE_THRESHOLD = 1.5  # nats, per §70
+        _COLLAPSE_THRESHOLD = self._collapse_threshold
         ent_pre = s["policy_entropy_pretrain"]
         ent_sp  = s["policy_entropy_selfplay"]
 
