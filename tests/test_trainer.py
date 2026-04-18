@@ -13,6 +13,8 @@ import torch
 
 from engine import ReplayBuffer
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
+from hexo_rl.training.losses import compute_policy_loss, compute_kl_policy_loss
 from hexo_rl.training.trainer import Trainer, prune_policy_targets
 
 
@@ -754,3 +756,132 @@ def test_eval_checkpoints_not_pruned(tmp_path: Path):
 
     # Total present = 3 eval + 10 rolling = 13.
     assert len(present) == len(eval_steps) + max_kept
+
+
+# ── F-002: BatchNorm checkpoint rejection ─────────────────────────────────────
+
+def test_normalize_rejects_bn_keys():
+    """normalize_model_state_dict_keys must raise RuntimeError on pre-§99 BN keys (F-002)."""
+    state = {
+        "trunk.tower.0.bn1.weight": torch.zeros(8),
+        "trunk.tower.0.bn1.running_mean": torch.zeros(8),
+    }
+    with pytest.raises(RuntimeError, match="BatchNorm"):
+        normalize_model_state_dict_keys(state)
+
+
+def test_normalize_rejects_bn_keys_with_orig_mod_prefix():
+    """BN keys prefixed with _orig_mod. must also be caught before normalisation."""
+    state = {
+        "_orig_mod.trunk.tower.0.input_bn.weight": torch.zeros(32),
+        "_orig_mod.trunk.tower.0.bn2.bias": torch.zeros(32),
+    }
+    with pytest.raises(RuntimeError, match="BatchNorm"):
+        normalize_model_state_dict_keys(state)
+
+
+def test_load_checkpoint_rejects_bn_checkpoint(tmp_path: Path):
+    """Trainer.load_checkpoint must propagate the RuntimeError on pre-§99 checkpoints (F-002)."""
+    bn_state = {
+        "trunk.tower.0.bn1.weight": torch.zeros(32),
+        "trunk.tower.0.bn1.running_mean": torch.zeros(32),
+        "trunk.tower.0.bn1.running_var": torch.ones(32),
+        "trunk.tower.0.bn1.bias": torch.zeros(32),
+    }
+    ckpt = {
+        "step": 0,
+        "model_state": bn_state,
+        "config": FAST_CONFIG,
+        "optimizer_state": {},
+        "scaler_state": {},
+    }
+    ckpt_path = tmp_path / "stale_bn.pt"
+    torch.save(ckpt, ckpt_path)
+    with pytest.raises(RuntimeError, match="BatchNorm"):
+        Trainer.load_checkpoint(ckpt_path, fallback_config=FAST_CONFIG)
+
+
+# ── F-003: strict=False key-set guard ─────────────────────────────────────────
+
+def test_load_checkpoint_no_keys_silently_dropped(tmp_path: Path):
+    """After a save→load round-trip no model key must be silently dropped by strict=False (F-003).
+
+    Uses augment=False so the fill pattern is deterministic.
+    """
+    trainer = make_trainer(tmp_path)
+    ckpt_path = trainer.save_checkpoint()
+
+    loaded = Trainer.load_checkpoint(ckpt_path)
+    expected_keys = set(trainer.model.state_dict().keys())
+    loaded_keys = set(loaded.model.state_dict().keys())
+
+    missing = expected_keys - loaded_keys
+    extra = loaded_keys - expected_keys
+    assert not missing, f"strict=False silently dropped keys: {sorted(missing)[:5]}"
+    assert not extra, f"unexpected extra keys after load: {sorted(extra)[:5]}"
+
+
+# ── F-005: selective policy loss mask ─────────────────────────────────────────
+
+def test_selective_policy_loss_drops_quick_search_rows():
+    """Policy loss computed over [full, full, quick, quick] rows must equal the loss
+    computed over just the [full, full] rows — quick-search rows must be excluded (F-005).
+
+    Tests compute_policy_loss and compute_kl_policy_loss (both used in §100) directly
+    to pin the `valid_mask & full_search_mask` logic without going through train_step.
+    """
+    torch.manual_seed(42)
+    device = torch.device("cpu")
+    B = 4
+
+    # Rows 0,1: full-search — distinct non-uniform policies.
+    # Rows 2,3: quick-search — identical uniform policies (should be ignored).
+    rng = np.random.default_rng(0)
+    log_policies = torch.from_numpy(
+        np.log(rng.dirichlet(np.ones(362), size=B).astype(np.float32) + 1e-9)
+    )
+    targets = torch.from_numpy(rng.dirichlet(np.ones(362), size=B).astype(np.float32))
+    valid_mask = torch.ones(B, dtype=torch.bool)
+    full_search_mask = torch.tensor([1, 1, 0, 0], dtype=torch.uint8)
+
+    # CE loss gated by full_search_mask.
+    loss_masked = compute_policy_loss(log_policies, targets, valid_mask, device,
+                                      full_search_mask=full_search_mask)
+    # CE loss over only the full-search rows (rows 0 and 1).
+    loss_full_only = compute_policy_loss(log_policies[:2], targets[:2],
+                                         valid_mask[:2], device,
+                                         full_search_mask=None)
+
+    assert abs(loss_masked.item() - loss_full_only.item()) < 1e-5, (
+        f"CE masked={loss_masked.item():.6f} vs full-only={loss_full_only.item():.6f}: "
+        "quick-search rows must not contribute to policy loss"
+    )
+
+    # KL loss (completed-Q path) obeys the same mask.
+    loss_kl_masked = compute_kl_policy_loss(log_policies, targets, valid_mask, device,
+                                             full_search_mask=full_search_mask)
+    loss_kl_full_only = compute_kl_policy_loss(log_policies[:2], targets[:2],
+                                                valid_mask[:2], device,
+                                                full_search_mask=None)
+    assert abs(loss_kl_masked.item() - loss_kl_full_only.item()) < 1e-5, (
+        f"KL masked={loss_kl_masked.item():.6f} vs full-only={loss_kl_full_only.item():.6f}: "
+        "quick-search rows must not contribute to KL policy loss"
+    )
+
+
+def test_selective_policy_loss_all_quick_search_returns_nan():
+    """When every row is quick-search, policy loss must be NaN (empty denominator)."""
+    device = torch.device("cpu")
+    rng = np.random.default_rng(1)
+    log_p = torch.log(torch.from_numpy(
+        rng.dirichlet(np.ones(362), size=4).astype(np.float32)
+    ) + 1e-9)
+    targets = torch.from_numpy(rng.dirichlet(np.ones(362), size=4).astype(np.float32))
+    valid_mask = torch.ones(4, dtype=torch.bool)
+    full_search_mask = torch.zeros(4, dtype=torch.uint8)  # all quick-search
+
+    loss = compute_policy_loss(log_p, targets, valid_mask, torch.device("cpu"),
+                               full_search_mask=full_search_mask)
+    assert torch.isnan(loss) or loss.item() == 0.0, (
+        f"expected NaN or 0 when all rows are quick-search, got {loss.item()}"
+    )
