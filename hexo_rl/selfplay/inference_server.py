@@ -100,13 +100,13 @@ class InferenceServer(threading.Thread):
                         continue
 
                     self._total_requests += len(request_ids)
-                    # Ensure the batch is explicitly C-contiguous for safe pointer arithmetic in Rust as_slice()
-                    # Coordinate Sentinels (usize::MAX): These are handled in the Rust core during tensor extraction;
-                    # out-of-window indices are zeroed before reaching this fused batch.
-                    batch_np = np.ascontiguousarray(batch, dtype=np.float32)
-                    tensor = torch.from_numpy(batch_np).to(self.device).reshape(len(request_ids), *self._shape)
 
                     try:
+                        # Ensure the batch is explicitly C-contiguous for safe pointer arithmetic in Rust as_slice()
+                        # Coordinate Sentinels (usize::MAX): These are handled in the Rust core during tensor extraction;
+                        # out-of-window indices are zeroed before reaching this fused batch.
+                        batch_np = np.ascontiguousarray(batch, dtype=np.float32)
+                        tensor = torch.from_numpy(batch_np).to(self.device).reshape(len(request_ids), *self._shape)
                         with self._weights_lock:
                             self.model.eval()
                             with torch.no_grad():
