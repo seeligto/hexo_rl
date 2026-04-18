@@ -48,6 +48,7 @@ class InferenceServer(threading.Thread):
             policy_len=self._policy_len,
         )
         self._stop_event = threading.Event()
+        self._weights_lock = threading.Lock()
         self._forward_count = 0
         self._total_requests = 0
 
@@ -58,6 +59,12 @@ class InferenceServer(threading.Thread):
     def stop(self) -> None:
         self._stop_event.set()
         self._batcher.close()
+
+    def load_state_dict_safe(self, state_dict: dict) -> None:
+        """Thread-safe weight swap — blocks until any in-flight forward completes."""
+        with self._weights_lock:
+            self.model.load_state_dict(state_dict)
+            self.model.eval()
 
     def submit_and_wait(self, state: np.ndarray) -> tuple[np.ndarray, float]:
         """Compatibility helper for single direct requests via Rust queue."""
@@ -100,10 +107,11 @@ class InferenceServer(threading.Thread):
                     tensor = torch.from_numpy(batch_np).to(self.device).reshape(len(request_ids), *self._shape)
 
                     try:
-                        self.model.eval()
-                        with torch.no_grad():
-                            with torch.autocast(device_type=self.device.type):
-                                log_policy, value, _v_logit = self.model(tensor)
+                        with self._weights_lock:
+                            self.model.eval()
+                            with torch.no_grad():
+                                with torch.autocast(device_type=self.device.type):
+                                    log_policy, value, _v_logit = self.model(tensor)
                         
                         # .float() ensures float32 regardless of autocast dtype
                         # (bfloat16 on CPU, float16 on CUDA — NumPy only supports float16).

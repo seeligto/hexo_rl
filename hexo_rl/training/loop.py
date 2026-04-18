@@ -461,8 +461,7 @@ def run_training_loop(
                                 best_model.eval()
                                 torch.save(best_model.state_dict(), best_model_path)
                                 best_model_step = prev.get("step", train_step)
-                                _inf_base = getattr(inf_model, "_orig_mod", inf_model)
-                                _inf_base.load_state_dict(eval_base.state_dict())
+                                pool._inference_server.load_state_dict_safe(eval_base.state_dict())
                                 log.info(
                                     "best_model_promoted",
                                     step=train_step,
