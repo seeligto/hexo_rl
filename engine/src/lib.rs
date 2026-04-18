@@ -506,10 +506,11 @@ impl PyMCTSTree {
     /// Used by the policy viewer to drive Gumbel Sequential Halving from Python.
     pub fn get_root_children_info(&self) -> Vec<(String, u32, f32, u32, f32)> {
         let children = self.inner.get_root_children_info();
+        let q_sign: f32 = if self.inner.pool[0].moves_remaining == 1 { -1.0 } else { 1.0 };
         children.into_iter().map(|(pool_idx, prior)| {
             let child = &self.inner.pool[pool_idx as usize];
             let visits = child.n_visits;
-            let q_value = if visits > 0 { child.w_value / visits as f32 } else { 0.0 };
+            let q_value = if visits > 0 { q_sign * child.w_value / visits as f32 } else { 0.0 };
             let val = child.action_idx;
             let aq = (val >> 16) as i32 - 32768;
             let ar = (val & 0xFFFF) as i32 - 32768;
