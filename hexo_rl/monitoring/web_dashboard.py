@@ -181,11 +181,21 @@ class WebDashboard:
                     log.warning("socketio_emit_failed", event=event, error=str(exc))
             self._emit_queue.task_done()
 
+    def _best_model_path(self) -> str | None:
+        """Return best_model.pt path from config; None if file absent."""
+        path_str = (
+            self._config.get("eval_pipeline", {})
+            .get("gating", {})
+            .get("best_model_path", "checkpoints/best_model.pt")
+        )
+        p = Path(path_str)
+        return str(p) if p.exists() else None
+
     def _init_viewer(self) -> None:
-        """Initialize ViewerEngine with latest checkpoint if available."""
+        """Initialize ViewerEngine with best_model.pt if available."""
         try:
             from hexo_rl.viewer.engine import ViewerEngine
-            ckpt = _find_latest_checkpoint(self._config)
+            ckpt = self._best_model_path()
             self._viewer_engine = ViewerEngine(self._config, checkpoint_path=ckpt)
             if ckpt:
                 log.info("viewer_engine_loaded", checkpoint=ckpt)
@@ -476,7 +486,7 @@ class WebDashboard:
         # Reload viewer model on successful eval gate pass
         if event_name == "eval_complete" and payload.get("gate_passed"):
             try:
-                ckpt = _find_latest_checkpoint(self._config)
+                ckpt = self._best_model_path()
                 if ckpt and self._viewer_engine is not None:
                     from hexo_rl.viewer.engine import ViewerEngine
                     self._viewer_engine = ViewerEngine(
