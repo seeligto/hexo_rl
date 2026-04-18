@@ -38,7 +38,7 @@ SAMPLE_EVENTS = {
         "event": "eval_complete", "ts": 1234567890.0,
         "step": 5000, "elo_estimate": 1200.0,
         "win_rate_vs_sealbot": 0.62, "eval_games": 200,
-        "gate_passed": True,
+        "anchor_promoted": True, "sealbot_gate_passed": True,
     },
     "system_stats": {
         "event": "system_stats", "ts": 1234567890.0,
@@ -126,7 +126,8 @@ def test_terminal_dashboard_alert_eval_failed():
     td = TerminalDashboard(MINIMAL_CONFIG)
     td.on_event({
         "event": "eval_complete", "ts": 1.0, "step": 100,
-        "gate_passed": False, "win_rate_vs_sealbot": 0.4,
+        "anchor_promoted": False, "sealbot_gate_passed": False,
+        "win_rate_vs_sealbot": 0.4,
     })
     assert any("FAILED" in m for _, m in td._alerts)
 

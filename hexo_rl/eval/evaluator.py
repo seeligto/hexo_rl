@@ -46,6 +46,7 @@ class EvalResult:
     win_count: int
     n_games: int
     colony_wins: int
+    draw_count: int = 0
 
 
 class ModelPlayer(BotProtocol):
@@ -165,6 +166,7 @@ class Evaluator:
             temperature=self._eval_temperature,
         )
         win_count = 0
+        draw_count = 0
         colony_wins = 0
         t0 = time.time()
 
@@ -189,23 +191,31 @@ class Evaluator:
                 state = state.apply_move(board, q, r)
                 ply += 1
 
-            if board.winner() == model_player_side:
+            winner = board.winner()
+            if winner == model_player_side:
                 win_count += 1
                 if is_colony_win(board.get_stones(), model_player_side, self.colony_centroid_threshold):
                     colony_wins += 1
+            elif winner is None:
+                draw_count += 1
             self._log_progress(phase, i + 1, n_games, t0, win_count)
 
-        wr = win_count / n_games
+        wr = (win_count + 0.5 * draw_count) / n_games
         log.info(
             "evaluation_games_complete",
             phase=phase,
             n_games=n_games,
             model_sims=model_sims,
             winrate=wr,
+            win_count=win_count,
+            draw_count=draw_count,
             colony_wins=colony_wins,
             elapsed_sec=round(time.time() - t0, 2),
         )
-        return EvalResult(win_rate=wr, win_count=win_count, n_games=n_games, colony_wins=colony_wins)
+        return EvalResult(
+            win_rate=wr, win_count=win_count, n_games=n_games,
+            colony_wins=colony_wins, draw_count=draw_count,
+        )
 
     def evaluate_vs_random(self, n_games: int = 20, model_sims: int | None = None, random_bot: Optional[BotProtocol] = None) -> EvalResult:
         """Play n_games against a random bot. Accepts bot via DI or creates default."""

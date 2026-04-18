@@ -103,7 +103,8 @@ class TerminalDashboard:
             "buffer_capacity": None,
             "corpus_selfplay_frac": None,
             "elo_estimate": None,
-            "gate_passed": None,
+            "anchor_promoted": None,
+            "sealbot_gate_passed": None,
             "gpu_util_pct": None,
             "vram_used_gb": None,
             "vram_total_gb": None,
@@ -203,8 +204,10 @@ class TerminalDashboard:
         if event == "eval_complete":
             if "elo_estimate" in payload:
                 self._state["elo_estimate"] = payload["elo_estimate"]
-            if "gate_passed" in payload:
-                self._state["gate_passed"] = payload["gate_passed"]
+            if "anchor_promoted" in payload:
+                self._state["anchor_promoted"] = payload["anchor_promoted"]
+            if "sealbot_gate_passed" in payload:
+                self._state["sealbot_gate_passed"] = payload["sealbot_gate_passed"]
             return
 
         if event == "system_stats":
@@ -254,10 +257,11 @@ class TerminalDashboard:
                             f"loss increased {self._alert_loss_window} consecutive steps",
                         )
 
-        if event == "eval_complete" and payload.get("gate_passed") is False:
-            wr = payload.get("win_rate_vs_sealbot", 0.0)
+        if event == "eval_complete" and payload.get("sealbot_gate_passed") is False:
+            wr = payload.get("win_rate_vs_sealbot")
+            wr_str = f"{wr:.1%}" if wr is not None else "?"
             self._add_alert(
-                expiry, f"SealBot eval FAILED — {wr:.1%} win rate"
+                expiry, f"SealBot eval FAILED — {wr_str} win rate"
             )
 
         # Expire old alerts

@@ -210,14 +210,16 @@ class ResultsDB:
         if run_id == "":
             cur = self._conn.execute(
                 """SELECT player_a_id, player_b_id,
-                          SUM(wins_a), SUM(wins_b)
+                          SUM(wins_a) + SUM(COALESCE(draws, 0)) * 0.5,
+                          SUM(wins_b) + SUM(COALESCE(draws, 0)) * 0.5
                    FROM matches
                    GROUP BY player_a_id, player_b_id"""
             )
         else:
             cur = self._conn.execute(
                 """SELECT m.player_a_id, m.player_b_id,
-                          SUM(m.wins_a), SUM(m.wins_b)
+                          SUM(m.wins_a) + SUM(COALESCE(m.draws, 0)) * 0.5,
+                          SUM(m.wins_b) + SUM(COALESCE(m.draws, 0)) * 0.5
                    FROM matches m
                    JOIN players pa ON m.player_a_id = pa.id
                    JOIN players pb ON m.player_b_id = pb.id

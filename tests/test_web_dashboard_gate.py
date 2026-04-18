@@ -50,7 +50,7 @@ class TestGatePassedReloadsFromBestModelPath:
         wd._viewer_engine = object()  # non-None sentinel, avoids FakeViewerEngine __init__
 
         with patch("hexo_rl.viewer.engine.ViewerEngine", FakeViewerEngine):
-            wd.on_event({"event": "eval_complete", "gate_passed": True})
+            wd.on_event({"event": "eval_complete", "anchor_promoted": True})
 
         assert len(captured_paths) == 1
         assert captured_paths[0] == str(best), (
@@ -73,7 +73,7 @@ class TestGatePassedReloadsFromBestModelPath:
         wd._viewer_engine = object()  # non-None sentinel
 
         with patch("hexo_rl.viewer.engine.ViewerEngine", FakeViewerEngine):
-            wd.on_event({"event": "eval_complete", "gate_passed": True})
+            wd.on_event({"event": "eval_complete", "anchor_promoted": True})
 
         assert captured_paths == [], "No reload when best_model.pt absent"
 
