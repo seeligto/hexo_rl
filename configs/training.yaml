@@ -38,6 +38,11 @@ eval_interval: 5000            # overrides eval.yaml's eval_interval at trigger 
                                # §101: EvalPipeline stride math reads this same value
                                # via full_config; keep the two in sync (or set only here)
                                # to keep anchor/sealbot cadences aligned with strides.
+                               # Calibrated 2026-04-17 (prompt-8): raised from 2500 so
+                               # that a 400-game anchor eval (~70 min wall) completes
+                               # inside one gate cycle without orphaning. At 2500 the
+                               # next eval fires before the previous finishes on laptop.
+                               # Report: reports/graduation_calibration_2026-04-17.md
 checkpoint_interval: 500
 max_checkpoints_kept: 10
 preserve_eval_checkpoints: true   # never prune checkpoints at eval_interval boundaries
