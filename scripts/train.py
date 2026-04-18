@@ -181,7 +181,7 @@ def main() -> None:
         ):
             if combined_config.get(_key) is not None:
                 config_overrides[_key] = combined_config[_key]
-        if combined_config.get("total_steps") is not None:
+        if args.override_scheduler_horizon and combined_config.get("total_steps") is not None:
             config_overrides["total_steps"] = int(combined_config["total_steps"])
 
         trainer = Trainer.load_checkpoint(
