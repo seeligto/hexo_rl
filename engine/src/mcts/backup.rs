@@ -1,8 +1,11 @@
 /// Expansion and backup for the MCTS tree.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::board::Board;
 use super::node::Node;
 use super::MCTSTree;
+
+static POOL_OVERFLOW_WARNED: AtomicBool = AtomicBool::new(false);
 
 impl MCTSTree {
     /// Apply quiescence correction to a NN value at a non-terminal leaf.
@@ -115,7 +118,14 @@ impl MCTSTree {
         let n_ch         = legal_moves.len();
         let first_child  = self.next_free;
         if first_child as usize + n_ch > self.pool.len() {
-            self.backup(leaf_idx, value);
+            if !POOL_OVERFLOW_WARNED.swap(true, Ordering::Relaxed) {
+                eprintln!("[MCTS] pool overflow: next_free={} n_ch={} pool_len={} — marking leaf terminal",
+                    first_child, n_ch, self.pool.len());
+            }
+            let corrected = self.apply_quiescence(board, value);
+            self.pool[leaf_idx as usize].is_terminal    = true;
+            self.pool[leaf_idx as usize].terminal_value = corrected;
+            self.backup(leaf_idx, corrected);
             return;
         }
         self.next_free += n_ch as u32;
