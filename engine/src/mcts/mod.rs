@@ -79,6 +79,13 @@ impl MCTSTree {
         MCTSTree::new_full(c_puct, virtual_loss, 0.0)
     }
 
+    /// Create with a custom pool capacity. Used in tests to force pool overflow.
+    pub fn new_with_capacity(c_puct: f32, pool_size: usize) -> Self {
+        let mut t = MCTSTree::new_full(c_puct, VIRTUAL_LOSS_PENALTY, 0.0);
+        t.pool = vec![Node::uninit(); pool_size];
+        t
+    }
+
     pub fn new_full(c_puct: f32, virtual_loss: f32, fpu_reduction: f32) -> Self {
         let pool = vec![Node::uninit(); MAX_NODES];
         MCTSTree {
