@@ -19,7 +19,8 @@
 | Q3 | Optimal K (number of cluster windows) | Ablation K=2,3,4,6 | ~6 GPU-days | MEDIUM |
 | Q8 | First-player advantage in value training | Measure P1 win rate by Elo band; adjust value targets if >60% | ~2 GPU-days | MEDIUM |
 | ~~Q25~~ | ~~Worker throughput variance: 24-plane NN latency + IQR spike~~ | **RESOLVED 2026-04-16** — §97 reverted the 24-plane payload. The 24-plane-specific variance hypothesis is moot. A separate post-§97 bench artifact (warmup-design 0-position windows) is tracked in §98 action items, not as a research question. | done | resolved |
-| Q27 | Attention hijacking: policy trunk not routing top-K to threat-scalar signal even after perspective fix | Ablate value aggregation (min vs mean), sweep `aux_threat_weight`, audit ZOI reachability of probe-position extension cells | ~3–6 GPU-days per probe | HIGH — blocks C2/C3 threat-probe PASS |
+| Q27 | Attention hijacking (reframed post Probe 1b): C2/C3 miss was synthetic-fixture artifact; no active regression against real-fixture baseline | Monitor sustained-run probe against v6 fixture; reopen probes 2/3 only on regression | 0 GPU-days (watch) | WATCH — reframed 2026-04-19, see §106 |
+| Q32 | Threat-scalar magnitude vs policy-ranking decoupling on bootstrap: contrast flips negative on real fixture yet policy still routes 60% top-5 | Track across sustained runs; correlate threat-head logit drift with C2/C3 on real-fixture probe | 0 GPU-days (watch) | WATCH — bookkeeping only |
 
 **Q17 (2026-04-09, RESOLVED 2026-04-10):** The P3 overnight run
 collapsed to deterministic carbon-copy self-play games between
@@ -92,28 +93,44 @@ steps) but does **not** close the attention-hijacking symptom at the
 uniform), direction wrong for "W1 alone fixes it" — likely variant/
 worker-count noise; cannot discriminate at n=1 per arm.
 
-**Candidate root-cause probes (sprint §105, ranked):**
+**Probe 1b update (2026-04-19, sprint §106,
+`reports/q27_zoi_reachability_realpositions_2026-04-19.md`):** The
+threat-probe fixture was regenerated from real mid/late self-play
+positions (ply span 9–150, per-phase quotas 7/7/6), replacing the
+synthetic ply=7 construction. On the real v6 fixture the same
+`bootstrap_model.pt` scores C2 60% / C3 65% (vs 20% / 20% on
+synthetic), and the 5K post-W1 checkpoint PASSES all three gates (C1
++3.317, C2 50%, C3 65%). The §105 "W1 necessary, not sufficient"
+verdict is superseded: the apparent C2/C3 symptom was a
+synthetic-fixture OOS artifact, not a training pathology. W1
+correctness argument is unaffected. Per-Probe-1b, one position (1/20)
+is outside ZOI — concrete instance of §77's disjoint-cluster
+truncation mode, but insufficient to carry a population-level miss.
+Kept as a note for Phase 4.5+.
 
-1. **Value aggregation (Q2).** Min-pool over cluster windows may
-   silently discard extension-cell evidence. Ablate mean-pool at 5K.
-   Reproduces the "threat scalar learns contrast, policy ignores it"
-   signature if Q2 is the driver.
-2. **Threat head → policy gradient coupling.** BCE weight 0.1 may be
-   drowned by policy CE at the shared trunk. Sweep
-   `aux_threat_weight: 0.1 → 0.5` at fixed 5K budget.
-3. **ZOI post-search mask (§77).** If extension cells in the probe
-   positions fall outside hex-distance-5 of the last 16 moves, C2/C3
-   are capped by construction. Log ZOI reachability of probe-position
-   extension cells before running more smokes.
-
-**Interaction with Q2:** If Q2 ablation resolves Q27, Q27 closes as a
-Q2 follow-up. If Q2 ablation does not move C2/C3, probes 2 and 3 run
-in sequence. Do not commit to another 5K smoke until one of the three
-has a concrete hypothesis attached — same-machine n=3 A/B costs ~10h
-wall-clock.
+**Status (post Probe 1b, 2026-04-19): reframed.** No active C2/C3
+regression. Probes 2 (threat weight sweep) and 3 (Q2 value
+aggregation) shelved pending post-5K evidence of actual
+training-trajectory regression. W1 perspective fix is in tree. Next
+evidence point: sustained training smoke from `bootstrap_model.pt`.
+Reopen if C2/C3 regress on real-fixture probe after 5K.
 
 **Do not block on Q27 for W1 correctness.** The perspective fix
 (`e9ebbb9`) stays on master independent of this probe.
+
+**Q32 (2026-04-19, WATCH):** On the v6 real-position fixture,
+`bootstrap_model.pt` has `ctrl_logit_mean` (0.061) > `ext_logit_mean`
+(0.015) — the scalar threat head fires *more* on an empty far cell
+than on the actual extension, flipping `contrast_mean` negative
+(−0.046). Yet the policy head still routes 60% of extensions into
+top-5 and 65% into top-10 on the same fixture. Threat-scalar magnitude
+and policy-ranking signal are decoupled on bootstrap. Not a bug — the
+threat head is untrained at bootstrap per §92, and policy ranking
+carries the Q27 gate regardless. Worth tracking across sustained runs:
+if the threat scalar stays inverted while policy ranking continues to
+PASS, the `aux_threat` loss is buying something other than what the
+C1 contrast metric measures. If they re-couple with training,
+close Q32 as a bootstrap-only transient.
 
 ## Community Watch (pending external validation)
 

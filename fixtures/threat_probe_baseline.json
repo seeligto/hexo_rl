@@ -12,5 +12,5 @@
   "ext_in_top10_pct": 65.0,
   "n": 20,
   "checkpoint": "bootstrap_model.pt",
-  "generated_at": "2026-04-19T00:07:22.432661+00:00"
+  "generated_at": "2026-04-19T00:11:18.687191+00:00"
 }
