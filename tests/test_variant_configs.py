@@ -128,7 +128,7 @@ def test_training_steps_per_game_per_variant() -> None:
     expected = {
         "baseline_puct": 2.0,          # pinned in file — PRE-§67 historical baseline
         "gumbel_full": 2.0,            # desktop sustained run (rebaselined post-Option-A, Prompt 16)
-        "gumbel_targets": 2.0,         # laptop
+        "gumbel_targets": 2.0,         # laptop — §107 mid-run bump 2026-04-19
         "gumbel_targets_desktop": 2.0, # laptop-semantics desktop ablation
         "calib_R1": 2.0,               # inherits base
         "calib_R2": 2.0,
