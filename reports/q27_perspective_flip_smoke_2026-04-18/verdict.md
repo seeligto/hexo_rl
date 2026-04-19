@@ -1,5 +1,15 @@
 # Q27 — Perspective-flip fix smoke test
 
+> **SUPERSEDED IN PART 2026-04-19.** The "W1 necessary, not sufficient"
+> verdict below was downstream of the v5 synthetic threat-probe
+> fixture. Probe 1b regenerated the fixture from real mid/late game
+> positions; the 5K post-W1 checkpoint PASSES all three gates (C1
+> +3.317, C2 50%, C3 65%) on the real v6 fixture. The C2/C3 failures
+> reported here were a synthetic-fixture artifact. See
+> `reports/q27_zoi_reachability_realpositions_2026-04-19.md` and
+> sprint log §106. The W1 correctness argument is unchanged. Body
+> below is retained as the record of what this smoke said at the time.
+
 **Date.** 2026-04-18 → 2026-04-19 (crossed midnight on desktop arm).
 
 **Question.** Does the W1 perspective-flip fix (commit `e9ebbb9` —

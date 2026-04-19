@@ -1,5 +1,16 @@
 # Q27 — ZOI reachability audit of threat-probe fixture positions
 
+> **SUPERSEDED 2026-04-19** by
+> `reports/q27_zoi_reachability_realpositions_2026-04-19.md` (Probe
+> 1b). The "0/20 outside ZOI on synthetic" result below was correct
+> for the synthetic fixture; its generality caveat (§3 "Caveat on
+> generality") is the real finding — the fixture could not exercise
+> §77's ply > `zoi_lookback` or disjoint-cluster truncation modes. On
+> the real mid/late Probe 1b fixture the count is 1/20 outside ZOI,
+> and bootstrap C2/C3 shifts from 20%/20% to 60%/65%. See sprint log
+> §106. Body below retained as the record of what Probe 1 (synthetic)
+> said at the time.
+
 **Date:** 2026-04-19
 **Fixture:** `fixtures/threat_probe_positions.npz` (N=20, all synthetic, phase=early, side=P1)
 **Scope:** §77 follow-up item #3 — do probe-position extension cells fall within
