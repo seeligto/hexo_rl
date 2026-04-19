@@ -198,17 +198,21 @@ def test_stride_skips_sealbot_off_cadence(
 
 
 @patch("hexo_rl.eval.eval_pipeline.Evaluator")
-def test_skipped_round_retries_on_next_eligible_step(
+@pytest.mark.parametrize("stride", [1, 2, 4, 8])
+def test_stride_cadence_sealbot(
     mock_evaluator_cls: MagicMock,
     eval_config_with_strides: dict,
+    stride: int,
 ) -> None:
-    """D-010: stride-skipped opponent must fire on the next invocation.
+    """Pure stride gating: opponent fires on rounds ``{r: r % stride == 0}``.
 
-    Sealbot stride=4. Round at step=100 (round_idx=1) would normally skip;
-    the skipped round is queued so the very next invocation (step=200,
-    round_idx=2) fires sealbot even though stride alone would skip both.
+    Q27 smoke 2026-04-19: the prior queue-based retry (D-010) compounded with
+    stride-skip so SealBot fired at round_idx=1 despite stride=4. This test
+    pins the invariant that stride alone governs cadence — a stride-skipped
+    round never retroactively triggers the next round.
     """
     import torch
+    eval_config_with_strides["eval_pipeline"]["opponents"]["sealbot"]["stride"] = stride
     pipeline = EvalPipeline(eval_config_with_strides, torch.device("cpu"))
     mock_eval = MagicMock()
     mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.7, win_count=7, n_games=10, colony_wins=0)
@@ -216,16 +220,18 @@ def test_skipped_round_retries_on_next_eligible_step(
     mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0)
     mock_evaluator_cls.return_value = mock_eval
 
-    # step=100 → round_idx=1, stride=4 not aligned → sealbot queued.
-    pipeline.run_evaluation(MagicMock(), 100, MagicMock())
-    assert mock_eval.evaluate_vs_sealbot.call_count == 0
-    assert "sealbot" in pipeline._pending_opponents
+    base_interval = 100
+    fired_rounds: list[int] = []
+    for r in range(12):
+        mock_eval.evaluate_vs_sealbot.reset_mock()
+        pipeline.run_evaluation(MagicMock(), r * base_interval, MagicMock())
+        if mock_eval.evaluate_vs_sealbot.call_count == 1:
+            fired_rounds.append(r)
 
-    # step=200 → round_idx=2, stride=4 STILL not aligned, but pending → runs.
-    result = pipeline.run_evaluation(MagicMock(), 200, MagicMock())
-    assert mock_eval.evaluate_vs_sealbot.call_count == 1
-    assert "wr_sealbot" in result
-    assert "sealbot" not in pipeline._pending_opponents
+    expected = [r for r in range(12) if r % stride == 0]
+    assert fired_rounds == expected, (
+        f"stride={stride}: fired on rounds {fired_rounds}, expected {expected}"
+    )
 
 
 @patch("hexo_rl.eval.eval_pipeline.Evaluator")
