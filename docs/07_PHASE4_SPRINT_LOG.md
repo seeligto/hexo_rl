@@ -91,7 +91,7 @@ The benchmark delta for torch.compile was only +3% worker throughput — not wor
 > - Dirichlet root noise ported to Rust on both PUCT and Gumbel branches at §73 (commit `71d7e6e`). Resolves Q17.
 > - Gumbel flag moved from base config to named variants (`gumbel_full`, `gumbel_targets`, `baseline_puct`) at §67. Base `selfplay.yaml` has `gumbel_mcts: false, completed_q_values: false`.
 > - ZOI is post-search only — §36 text corrected at §77; tree still expands with the full radius-8 legal set at all depths.
-> - **Unresolved** docs-vs-code drift on temperature schedule — §70 C.1 showed §36 half-cosine-per-ply vs Rust quarter-cosine-per-compound-move differ. Code still wins; §36 description is aspirational until reconciled.
+> - §36 temperature description reconciled to match Rust code at §70 C.1 resolution (quarter-cosine per compound_move, threshold=15, temp_min=0.05 floor). The legacy ply-based step schedule lives on only in `hexo_rl/selfplay/utils.py::get_temperature`, called from the Python `SelfPlayWorker` used by eval-adjacent paths (`our_model_bot`, `benchmark_mcts`), not on the training path.
 > - `quiescence_fire_count` instrumentation added at §83.
 > - `get_improved_policy` is PUCT-tree-safe (§74.1) — training can use Gumbel completed-Q policy targets on PUCT-built trees.
 
@@ -148,13 +148,31 @@ Restricts MCTS candidates to cells within hex-distance 5 of the last 16 moves. F
 
 Config: `mcts.zoi_enabled: true`, `mcts.zoi_radius: 5`, `mcts.zoi_history: 16`, `mcts.zoi_min_candidates: 3`
 
-### Cosine-Annealed Temperature (§36)
+### Cosine-Annealed Temperature (§36; reconciled at §70 C.1)
 
-Replaced hard step at move 30 with smooth cosine schedule:
+Replaced the hard step at move 30 with a quarter-cosine schedule. Live
+Rust implementation in `engine/src/game_runner/worker_loop.rs:20-31`
+(`compute_move_temperature`), driven off **compound move** (not ply):
+
 ```
-temperature = temp_min + 0.5 × (1 − temp_min) × (1 + cos(π × ply / anneal_moves))
+compound_move = (ply + 1) / 2  for ply > 0, else 0
+τ(cm) = max(temp_min, cos(π/2 · cm / temp_threshold))   if cm <  temp_threshold
+τ(cm) = temp_min                                        if cm >= temp_threshold
 ```
-Eliminates policy entropy spikes at ply 30. Config: `mcts.temp_min: 0.05`, `mcts.temp_anneal_moves: 60`
+
+| compound_move | 0 | 5 | 10 | 14 | 15 | 16 | 20 | 30 |
+|---|---|---|---|---|---|---|---|---|
+| τ | 1.0000 | 0.8660 | 0.5000 | 0.1045 | 0.0500 | 0.0500 | 0.0500 | 0.0500 |
+
+Config: `selfplay.playout_cap.temperature_threshold_compound_moves: 15`,
+`selfplay.playout_cap.temp_min: 0.05`. `mcts.temp_anneal_moves` /
+`mcts.temp_min` are not read by the Rust training path — the live keys
+are under `selfplay.playout_cap`. The legacy ply-based half-cosine
+formulation described earlier in this section (and the `1.0 if ply<30
+else 0.1` step schedule in `docs/01_architecture.md`) is obsolete on
+the training path; the Python `get_temperature(ply, ...)` step schedule
+in `hexo_rl/selfplay/utils.py` survives only for `SelfPlayWorker`, used
+by eval-adjacent bots.
 
 ### Transposition Table — clear on new_game (§59)
 
@@ -1051,27 +1069,20 @@ Rust code (`engine/src/game_runner.rs:510-515`):
 | τ | 1.0000 | 0.8660 | 0.5000 | 0.1045 | 0.0500 | 0.0500 | 0.0500 | 0.0500 |
 
 **Temperature formula drift (separate bullet — independent finding).**
-Sprint log §36 describes the temperature schedule as:
+Sprint log §36 originally described the schedule as a half-cosine per
+ply with `temp_anneal_moves = 60`, which disagreed with the Rust
+quarter-cosine-per-compound-move with hard floor at cm 15.
 
-```
-τ(ply) = temp_min + 0.5·(1 − temp_min)·(1 + cos(π·ply / temp_anneal_moves))
-         with temp_anneal_moves = 60, per-ply (not per compound_move)
-```
-
-These are **different functions**:
-
-- §36 is a half-cosine *per ply* that would hold τ above 0.86 at ply 5,
-  above 0.52 at ply 30, and only reach the `temp_min` floor at ply 60.
-- The code is a quarter-cosine *per compound move* with a hard floor at
-  cm 15 (≈ply 29–30), zero further annealing after that.
-
-Under the §36 schedule a game has roughly four times as many plies with
-meaningfully stochastic sampling as the code actually provides. This is
-**not** the cause of the mode collapse on its own — no root noise is —
-but it is a live docs-vs-code drift that must be fixed in one direction
-or the other in the fix session. Documented here so it is greppable
-later. See `archive/diagnosis_2026-04-10/diag_C_temp_schedule.md` for
-the full side-by-side.
+**RESOLVED 2026-04-19 (doc-only).** Doc updates to match code: the §36
+block in this file and the temperature section in
+`docs/01_architecture.md` now describe the quarter-cosine-per-compound-move
+formula and the `selfplay.playout_cap.{temperature_threshold_compound_moves,
+temp_min}` config keys. No code change. The legacy ply-based
+`get_temperature` step function in `hexo_rl/selfplay/utils.py` is retained
+because it is still exercised by `hexo_rl/selfplay/worker.py::SelfPlayWorker`
+for eval-adjacent paths (`OurModelBot`, `benchmark_mcts`) and does not
+touch the self-play training path. See `reports/c_series_doc_fixes_2026-04-19.md`
+and `archive/diagnosis_2026-04-10/diag_C_temp_schedule.md` for history.
 
 **C.2 — per-move MCTS entropy from the training trace.** Parsed the 30
 records in `diag_A_trace_training.jsonl` and computed H(π_prior),
