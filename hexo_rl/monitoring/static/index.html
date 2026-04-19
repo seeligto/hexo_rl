@@ -273,6 +273,16 @@
         <div class="sys-row"><span class="sys-label">LR</span><span id="sys-lr">&mdash;</span></div>
       </div>
     </div>
+
+    <!-- Live Investigation panel (§107) -->
+    <div class="card">
+      <div class="label">Live Investigation</div>
+      <div style="margin-top:6px">
+        <div class="sys-row"><span class="sys-label">Colony ext (rolling 50)</span><span id="inv-colony-ext">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">Cluster v std</span><span id="inv-cluster-v-std">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">Cluster pol disagree</span><span id="inv-cluster-pol-dis">&mdash;</span></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -835,6 +845,14 @@ function onIterationComplete(p) {
     setText('sys-root-conc', p.mcts_root_concentration.toFixed(2));
   }
 
+  // §107 I2 — per-cluster variance metrics (K≥2 lifetime mean).
+  if (p.cluster_value_std_mean != null) {
+    setText('inv-cluster-v-std', p.cluster_value_std_mean.toFixed(3));
+  }
+  if (p.cluster_policy_disagreement_mean != null) {
+    setText('inv-cluster-pol-dis', p.cluster_policy_disagreement_mean.toFixed(3));
+  }
+
   if (p.buffer_size != null && p.buffer_capacity != null) {
     const pct = p.buffer_size / Math.max(p.buffer_capacity, 1) * 100;
     setText('buffer-text', fmtInt(p.buffer_size) + ' / ' + fmtInt(p.buffer_capacity));
@@ -847,6 +865,11 @@ function onIterationComplete(p) {
   }
 }
 
+// §107 I1 — rolling colony-extension fraction over last 50 games.
+const colonyExtCounts = [];
+const colonyExtTotals = [];
+const COLONY_ROLL = 50;
+
 function onGameComplete(p) {
   gameHistory.push({ winner: p.winner, moves: p.moves });
   if (gameHistory.length > MAX_GAMES) gameHistory.shift();
@@ -856,6 +879,17 @@ function onGameComplete(p) {
   const rate    = gameHistory.length > 0 ? (p0Count / gameHistory.length) * 100 : 0;
   winRateSeries.push(rate);
   if (winRateSeries.length > MAX_GAMES) winRateSeries.shift();
+
+  if (p.colony_extension_stone_count != null && p.colony_extension_stone_total != null) {
+    colonyExtCounts.push(p.colony_extension_stone_count);
+    colonyExtTotals.push(p.colony_extension_stone_total);
+    if (colonyExtCounts.length > COLONY_ROLL) colonyExtCounts.shift();
+    if (colonyExtTotals.length > COLONY_ROLL) colonyExtTotals.shift();
+    const tot = colonyExtTotals.reduce((a, b) => a + b, 0);
+    const cnt = colonyExtCounts.reduce((a, b) => a + b, 0);
+    const pct = tot > 0 ? (cnt / tot) * 100 : 0;
+    setText('inv-colony-ext', pct.toFixed(1) + '%');
+  }
 
   updateWinRateChart();
   updateHistogramChart();
