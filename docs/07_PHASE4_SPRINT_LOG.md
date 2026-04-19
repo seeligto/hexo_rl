@@ -3203,3 +3203,122 @@ decoupling, WATCH).
 ### Commits
 
 - `docs(sprint): §106 Q27 Probe 1b inverted verdict — fixture artifact`
+
+## §107 — Post-W1 sustained run launch + live investigation instrumentation (2026-04-19)
+
+**Motivation.** W1 (`e9ebbb9`) landed as a correctness fix; §105
++ §106 forensics left two residual questions that archive analysis
+alone cannot decide:
+
+- **R1 (colony-extension).** Q17 bias amplification is mechanism-primary
+  for pre-fix colony spam. W1 contribution is plausible but
+  under-evidenced in archives.
+- **Q2 / Q27 (attention hijacking).** Whether the windowing path
+  produces divergent per-cluster evaluations that the min-pool
+  aggregation hides.
+
+Both need live behaviour on post-W1 self-play, not more re-reading.
+This sprint lands two narrow live metrics alongside the sustained
+run so the residuals resolve (or stay open with quantitative signal)
+without another separate experiment.
+
+**Instrumentation.**
+
+- **I1 colony-extension detector (Python).** `hexo_rl/selfplay/pool.py::_compute_colony_extension`
+  walks `move_history` at each `game_complete` emit, counts stones
+  ending at hex-distance > 6 from any opponent stone. Pure Python;
+  buffer-tuple unchanged. Fields added to `game_complete` payload:
+  `colony_extension_stone_count`, `colony_extension_stone_total`,
+  `colony_extension_fraction`. <1 ms/game.
+- **I2 per-cluster variance (Rust).** Accumulators on `SelfPlayRunner`
+  (`cluster_value_std_accum`, `cluster_policy_disagreement_accum`,
+  `cluster_variance_samples`, all `AtomicU64` fixed-point scaled by
+  1e6). Hot-path update inside `infer_and_expand` when K ≥ 2 clusters
+  for a leaf — population std of per-cluster values before min-pool
+  aggregation; `1 − (top1-majority-count/K)` for policy disagreement.
+  Getters follow `mcts_mean_depth` pattern. Python emits lifetime
+  means on `iteration_complete`. Rust-side because cluster structure
+  is consumed by the batcher before Python sees the fused batch —
+  trainer forward has no K grouping.
+- **Gating.** `monitoring.log_investigation_metrics: bool` (default
+  true). Disable on bench runs so worker/throughput numbers are not
+  perturbed by the atomic stores.
+- **Dashboards.** Web: new "Live Investigation" card, three rows
+  (rolling colony_extension_fraction over last 50 games, lifetime
+  cluster_value_std_mean, cluster_policy_disagreement_mean).
+  Terminal: one new summary line. Schema docs in §08.
+
+**Preflight — supply/demand decision (Phase 1).**
+
+Three 500-step smokes from `bootstrap_model.pt`, `gumbel_targets`:
+
+| tsp | wall_sec | n_games | idle_frac | ratio | Δpolicy_loss (500 steps) |
+|---|---|---|---|---|---|
+| 2.0 | 1724 | 250 | 0.992 | 0.18 | **+0.08 (regressing)** |
+| 1.5 | 1888 | 253 | 0.988 | 0.20 | −0.26 |
+| 1.0 | 3516 | 500 | 0.993 | 0.39 | −0.26 (2× wall time) |
+
+All three are supply-bottlenecked on laptop (14-worker rate
+≈ 0.145 games/s); the prompt's `idle < 15%` criterion is unachievable
+on this hardware at this model size. Directional tie-break:
+tsp=2.0 regresses the policy loss outright; tsp=1.0 matches
+tsp=1.5's improvement at 2× wall-clock cost. **Chose tsp=1.5** as
+the Pareto point (best progress per wall-clock hour with non-regressing
+trajectory). Report:
+`reports/supply_demand_preflight_2026-04-19.md`.
+
+**Sustained run scope.**
+
+- Variant: `gumbel_targets` (laptop).
+- `training_steps_per_game`: 1.5 (previously 2.0).
+- 50 000 steps. Projected wall time ≈ 52 h at measured 953 steps/h.
+  Prompt target was 35 GPU-hours — unreachable on this hardware at
+  tsp ≥ 1.0. Proceed with 52 h, monitor for early kill criteria.
+- All graduation-gate parameters from §101.a hold (D2=5000, D4=400).
+- Dashboards: web + terminal both active (operator request).
+- Launch command:
+  ```
+  MALLOC_ARENA_MAX=2 nohup .venv/bin/python scripts/train.py \
+    --checkpoint checkpoints/bootstrap_model.pt \
+    --variant gumbel_targets \
+    --iterations 50000 \
+    --run-name post_w1_sustained_2026-04-19 \
+    > logs/post_w1_sustained_2026-04-19.stdout 2>&1 &
+  ```
+
+**Abort conditions (hour-35 checklist, copied for reference).**
+
+- `wr_random < 0.90` for 2 consecutive evals.
+- NaN in any loss for > 10 consecutive steps.
+- `colony_extension_fraction > 0.80` for 500+ consecutive games
+  (colony spam confirmed).
+- `policy_entropy_selfplay < 1.0` for 500+ steps (collapse).
+- OOM / disk / dashboard-crash > 15 min.
+
+**Files touched.**
+
+- `engine/src/game_runner/mod.rs` — 3 atomics, 3 getters.
+- `engine/src/game_runner/worker_loop.rs` — I2 hot-path block.
+- `hexo_rl/selfplay/pool.py` — I1 detector + game_complete fields.
+- `hexo_rl/training/loop.py` — iteration_complete I2 fields.
+- `hexo_rl/monitoring/terminal_dashboard.py` — investigation line.
+- `hexo_rl/monitoring/static/index.html` — Live Investigation card.
+- `docs/08_DASHBOARD_SPEC.md` — I1 + I2 schema.
+- `configs/monitoring.yaml` — `log_investigation_metrics` flag.
+- `configs/variants/gumbel_targets.yaml` — tsp 2.0 → 1.5.
+- `tests/test_investigation_metrics.py` — 11 cases.
+- `tests/test_variant_configs.py` — tsp expectation.
+- `scripts/analyze_supply_demand_smoke.py` — preflight analyzer.
+- `reports/supply_demand_preflight_2026-04-19.md` — Phase 1 report.
+
+**Resolves.** Nothing yet — residuals R1 and Q2/Q27 remain OPEN
+pending live data from the sustained run. **Opens.** None.
+
+### Commits
+
+- `feat(monitoring): colony extension detector (§107 I1)` — 77699f1
+- `feat(monitoring): per-cluster value/policy variance (§107 I2)` — 59c0964
+- `test(monitoring): investigation metrics synthetic cases (§107)` — 914518f
+- `feat(dashboard): §107 Live Investigation panel + schema` — 17ef5ee
+- `chore(config): training_steps_per_game → 1.5 for gumbel_targets (§107)` — ed5d3b5
+- `docs(sprint): §107 post-W1 sustained run launch + live instrumentation`
