@@ -14,7 +14,9 @@ eval_pipeline:
       # calibration report. Eval wall-cost rises from ~36 min to ~70 min
       # per round, offset by training.yaml:eval_interval=5000.
       # Report: reports/graduation_calibration_2026-04-17.md
-      n_games: 400
+      # TEMP SMOKE PATCH 2026-04-19 (Q27 post-W1 smoke, variant q27_smoke_2eval):
+      # 400 → 50 to keep 2 evals inside 5h wall budget. REVERT AFTER SMOKE.
+      n_games: 50
       model_sims: 128
       opponent_sims: 128
     sealbot:

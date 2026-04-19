@@ -1,0 +1,27 @@
+# q27_smoke_2eval — post-W1 sustained smoke from bootstrap_model.pt.
+# Target: ~5h wall, >=5500 steps, 2 anchor evals to exercise graduation gate live.
+# DELETE AFTER SMOKE — not a long-running variant.
+#
+# Inherits gumbel_targets knobs via sprint-log §69 (PUCT + completed_q_values,
+# max_game_moves=200, fast_prob=0.0). The base gumbel_targets.yaml is composed
+# manually in scripts/train.py load_paths order; we repeat its keys here so this
+# file is launch-complete without a second --variant.
+#
+# Overrides:
+#   eval_interval: 2500 (from training.yaml default 5000) — fires at step 2500
+#                       and 5000, both inside the 5500-step budget. Pipeline
+#                       picks this up via full_config.eval_interval at
+#                       eval_pipeline.py:143-145.
+#
+# Companion base-config patch (REVERT AFTER SMOKE):
+#   configs/eval.yaml: eval_pipeline.opponents.best_checkpoint.n_games 400 -> 50
+#   SealBot stride=4 means first fire at step 10000 — outside 5500 budget, no
+#   explicit disable needed.
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 200
+  playout_cap:
+    fast_prob: 0.0
+
+eval_interval: 2500
