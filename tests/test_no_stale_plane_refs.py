@@ -36,6 +36,8 @@ EXCLUDE = (
     '.torchinductor-cache/',
     # agent memory files — not source, not reviewed
     '.claude/',
+    # historical fixture changelog — documents v1→v6 24-plane→18-plane migration
+    'fixtures/threat_probe_baseline.CHANGELOG.md',
 )
 
 
