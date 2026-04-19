@@ -106,7 +106,11 @@ def parse_jsonl(path: Path) -> RunSummary:
             if ev == "startup":
                 summary.config = e.get("config", {}) or {}
 
-            elif ev == "train_step":
+            elif ev in ("train_step", "train_step_summary"):
+                # Per-step ``train_step`` (trainer) + log_interval-cadence
+                # ``train_step_summary`` (loop) split since 2026-04-19;
+                # summary fields (games_per_hour, policy_entropy_selfplay,
+                # policy_target_*) live on the summary variant.
                 ts_step = TrainStep(step=int(e.get("step", 0) or 0))
                 for k in (
                     "policy_loss","value_loss","chain_loss","ownership_loss","threat_loss",

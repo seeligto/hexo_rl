@@ -56,10 +56,12 @@ def pct(v, fallback="N/A"):
     except (TypeError, ValueError):
         return fallback
 
-# Parse log: keep latest record for each event variant
-# train_step: two variants — structlog (has chain_loss) and emit_event (has draw_rate)
-latest_train = None    # emit_event variant (game stats)
-latest_losses = None   # structlog variant (loss details)
+# Parse log: keep latest record for each event variant.
+# ``train_step`` (trainer, per-step) carries chain_loss + grad_norm.
+# ``train_step_summary`` (loop, log_interval cadence) carries draw_rate + buffer.
+# Split under distinct event names since 2026-04-19 (Q27 smoke fix).
+latest_train = None    # summary variant (game stats)
+latest_losses = None   # per-step variant (loss details)
 
 with open(LOG_PATH) as f:
     for line in f:
@@ -70,11 +72,10 @@ with open(LOG_PATH) as f:
             d = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if d.get("event") != "train_step":
-            continue
-        if "draw_rate" in d:
+        ev = d.get("event")
+        if ev == "train_step_summary":
             latest_train = d
-        elif "chain_loss" in d:
+        elif ev == "train_step":
             latest_losses = d
 
 if latest_train is None and latest_losses is None:
