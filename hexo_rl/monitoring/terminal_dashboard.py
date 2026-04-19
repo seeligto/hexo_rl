@@ -128,6 +128,11 @@ class TerminalDashboard:
             "n_rows_total":                        None,
             "mcts_mean_depth": None,
             "mcts_root_concentration": None,
+            "colony_extension_fraction": None,
+            "cluster_value_std_mean": None,
+            "cluster_policy_disagreement_mean": None,
+            "_colony_ext_counts": [],
+            "_colony_ext_totals": [],
         }
 
     def start(self) -> None:
@@ -199,9 +204,28 @@ class TerminalDashboard:
                 "sims_per_sec", "buffer_size", "buffer_capacity",
                 "corpus_selfplay_frac", "batch_fill_pct",
                 "mcts_mean_depth", "mcts_root_concentration",
+                "cluster_value_std_mean", "cluster_policy_disagreement_mean",
             ):
                 if key in payload:
                     self._state[key] = payload[key]
+            return
+
+        if event == "game_complete":
+            # §107 I1 — rolling colony-extension fraction over last 50 games.
+            ct = payload.get("colony_extension_stone_count")
+            tot = payload.get("colony_extension_stone_total")
+            if isinstance(ct, int) and isinstance(tot, int):
+                cnt_list = self._state.setdefault("_colony_ext_counts", [])
+                tot_list = self._state.setdefault("_colony_ext_totals", [])
+                cnt_list.append(ct)
+                tot_list.append(tot)
+                if len(cnt_list) > 50:
+                    del cnt_list[0]
+                    del tot_list[0]
+                tt = sum(tot_list)
+                self._state["colony_extension_fraction"] = (
+                    sum(cnt_list) / tt if tt > 0 else 0.0
+                )
             return
 
         if event == "eval_complete":
@@ -367,6 +391,17 @@ class TerminalDashboard:
         tp_tbl.add_row(
             f"avg len   {avg}  │  P0 {p0}  P1 {p1}  draw {dr}"
             f"  │  MCTS depth  {mcts_d_str}  │  root concen  {mcts_c_str}  │  grad  {grad_str}"
+        )
+
+        # §107 — live investigation row (I1 colony-extension, I2 cluster variance)
+        _cex = s["colony_extension_fraction"]
+        _cex_str = f"{_cex * 100:.1f}%" if _cex is not None else _EM_DASH
+        _cvs = s["cluster_value_std_mean"]
+        _cvs_str = f"{_cvs:.3f}" if _cvs is not None else _EM_DASH
+        _cpd = s["cluster_policy_disagreement_mean"]
+        _cpd_str = f"{_cpd:.3f}" if _cpd is not None else _EM_DASH
+        tp_tbl.add_row(
+            f"colony_ext={_cex_str}  │  cluster_v_std={_cvs_str}  │  cluster_pol_dis={_cpd_str}"
         )
 
         # Buffer row

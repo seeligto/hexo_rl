@@ -111,6 +111,14 @@ completed-Q targets carry usable gradient.
     "mcts_root_concentration":  float,   # NEW §47 — mean of (max_child_visits/total)
                                          # at root since SelfPlayRunner.start() (run-wide).
                                          # Range [0.0, 1.0]. 0.0 if unavailable.
+    "cluster_value_std_mean":   float,   # NEW §107 (I2) — lifetime mean per-position
+                                         # std-dev of per-cluster values (before min-pool).
+                                         # Only K≥2 positions contribute. 0.0 if unavailable.
+    "cluster_policy_disagreement_mean": float,  # NEW §107 (I2) — lifetime mean of
+                                         # (1 − top1-majority-count/K) across K≥2 positions.
+                                         # Range [0.0, 1.0]. 0.0 = all windows agree.
+    "cluster_variance_sample_count":    int,    # NEW §107 (I2) — count of K≥2 positions
+                                         # scored; divisor for the two means above.
 }
 ```
 
@@ -132,6 +140,12 @@ No schema changes.
     "moves":       int,
     "moves_list":  list[str],
     "worker_id":   int,
+    # §107 I1 — colony-extension detector fields.  Count/total of stones placed
+    # at hex-distance > 6 from any opponent stone at game end.  Zero when
+    # monitoring.log_investigation_metrics is disabled.
+    "colony_extension_stone_count": int,
+    "colony_extension_stone_total": int,
+    "colony_extension_fraction":    float,   # count / total (0.0 if total == 0)
 }
 ```
 
