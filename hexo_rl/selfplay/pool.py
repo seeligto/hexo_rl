@@ -21,7 +21,45 @@ from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
 from hexo_rl.selfplay.inference_server import InferenceServer
+from hexo_rl.utils.coordinates import axial_distance
 from engine import ReplayBuffer
+
+# I1 colony-extension detector (§107).  Hex distance threshold above which a
+# stone is counted as "colony extension" — disjoint cluster spam behaviour
+# flagged as the primary residual mechanism for pre-W1 fast-game draw collapse
+# (W1 forensics R1, 2026-04-19).
+_COLONY_EXT_HEX_DIST = 6
+
+
+def _compute_colony_extension(move_history: list[tuple[int, int]]) -> tuple[int, int]:
+    """Return (colony_extension_count, classified_total) for a finished game.
+
+    A stone counts as "colony extension" if its minimum hex distance to ANY
+    opponent stone at game end is > ``_COLONY_EXT_HEX_DIST``.  Stones of a
+    player with no opponent stones on the board (only possible with a one-move
+    game) are excluded from both numerator and denominator.
+
+    Ply→player rule: ply 0 is P1; thereafter each player places 2 stones before
+    the turn passes (``compound_idx = (ply - 1) // 2``; P2 when even, else P1).
+    Per-game cost: O(|stones|^2); budget <1ms at typical game length.
+    """
+    if not move_history:
+        return (0, 0)
+    p1: list[tuple[int, int]] = []
+    p2: list[tuple[int, int]] = []
+    for ply, (q, r) in enumerate(move_history):
+        own_is_p1 = (ply == 0) or (((ply - 1) // 2) % 2 == 1)
+        (p1 if own_is_p1 else p2).append((q, r))
+    ext = 0
+    total = 0
+    for own, opp in ((p1, p2), (p2, p1)):
+        if not opp:
+            continue
+        for s in own:
+            total += 1
+            if min(axial_distance(s, o) for o in opp) > _COLONY_EXT_HEX_DIST:
+                ext += 1
+    return (ext, total)
 
 log = structlog.get_logger()
 
@@ -152,6 +190,12 @@ class WorkerPool:
         self._pol_len = board_size * board_size + 1              # e.g. 19*19+1 = 362
         self._chain_len = 6 * board_size * board_size            # 6*19*19 = 2166
 
+        _mon = config.get("monitoring", config)
+        self._log_investigation_metrics = bool(_mon.get(
+            "log_investigation_metrics",
+            config.get("log_investigation_metrics", True),
+        ))
+
     @property
     def batch_fill_pct(self) -> float:
         srv = self._inference_server
@@ -270,6 +314,15 @@ class WorkerPool:
                 # Format moves as axial coordinate strings
                 moves_list = [f"({q},{r})" for q, r in move_history] if move_history else []
 
+                # I1 colony-extension detector (§107) — pure Python, reads
+                # move_history already in the drain tuple. Guarded by config so
+                # bench runs stay quiet.
+                if self._log_investigation_metrics and move_history:
+                    _ext_count, _ext_total = _compute_colony_extension(move_history)
+                    _ext_frac = float(_ext_count / _ext_total) if _ext_total > 0 else 0.0
+                else:
+                    _ext_count, _ext_total, _ext_frac = 0, 0, 0.0
+
                 emit_event({
                     "event": "game_complete",
                     "game_id": uuid.uuid4().hex,
@@ -281,6 +334,11 @@ class WorkerPool:
                     # top_visits/root_value per move in drain_game_results().
                     "moves_detail": None,
                     "value_trace": None,
+                    # I1 — colony-extension: count/total/fraction of stones
+                    # placed at hex-distance > 6 from any opponent stone.
+                    "colony_extension_stone_count": _ext_count,
+                    "colony_extension_stone_total": _ext_total,
+                    "colony_extension_fraction":    _ext_frac,
                 })
 
                 log.info(
