@@ -4,7 +4,7 @@
 # Sweep delta vs laptop config: 304 → 343 games/hr (+13%).
 # Derived from configs/variants/gumbel_targets.yaml; keep in sync when
 # that file changes.
-training_steps_per_game: 1.5   # per-variant authoritative since Q27 smoke 2026-04-19
+training_steps_per_game: 2.0   # per-variant authoritative since Q27 smoke 2026-04-19
 selfplay:
   gumbel_mcts: false
   completed_q_values: true

@@ -7,7 +7,7 @@ policy_prune_frac: 0.02
 # Independent of gumbel_mcts search — controls policy target computation, not search algorithm
 batch_size: 256
 min_buffer_size: 256
-training_steps_per_game: 1.5   # laptop-fit base; desktop variants override to 4.0.
+training_steps_per_game: 2.0   # laptop-fit base; desktop variants override to 4.0.
                                # Q27 smoke 2026-04-19 measured 47% trainer idle
                                # at 14 workers with 4.0 — supply/demand 0.40.
                                # Per-variant declaration now authoritative.
