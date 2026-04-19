@@ -3203,3 +3203,124 @@ decoupling, WATCH).
 ### Commits
 
 - `docs(sprint): §106 Q27 Probe 1b inverted verdict — fixture artifact`
+
+---
+
+## §108 — Desktop post-W1 sustained launch `gumbel_full` (2026-04-19)
+
+Launch of the first post-W1 desktop sustained run. Companion to the
+laptop `gumbel_targets` run (Prompt 15). Desktop variant answers Q2:
+does Gumbel SH contribute beyond CE targets alone, controlling for
+identical W1 fix + Option A playout-cap repair + R1 anchor semantics?
+
+### Launch state
+
+- Host: archstation (Ryzen 7 3700X + RTX 3070 8GB + 48GB RAM).
+- Variant: `gumbel_full` (Gumbel root search + completed-Q targets).
+- Checkpoint: `bootstrap_model.pt` (18-plane, GroupNorm(8), §93 v3b).
+- Iterations: 50000.
+- Dashboard: web (:5001) + terminal active.
+- Run name: `post_w1_desktop_gumbel_full_20260419`.
+- Log: `logs/post_w1_desktop_gumbel_full_20260419.jsonl`.
+
+### Pre-launch decisions
+
+**SDG rebaseline 4.0 → 2.0** (`config(variants)` commit 299b4c0).
+Option A (§104) removed game-level fast_prob so every game now runs the
+§100 mixture; per-game compute up. Trainer catches up faster → SDG
+drops. Laptop recently raised 1.5 → 2.0 for same reason; desktop Zen2
+lower IPC keeps 2.0 safe either side.
+
+**Preflight A/B smokes skipped.** Prompt 16 called for SDG=2.0 vs 1.5
+smokes via `scripts/analyze_supply_demand_smoke.py` + throwaway variant
+configs. Analyzer script not in tree; `make train.smoke` is 20-step,
+no param override. Option 3 taken: launch at 2.0, monitor hour-1 gate,
+abort if idle >30% or <5%. Tradeoff: lose 1.5 vs 2.0 policy-slope
+signal.
+
+**Pre-W1 artifacts archived.** `archive/prefix_desktop_20260419_154604/`
+— 1.5 GB checkpoints + 4.6 GB replay_buffer + `checkpoints/broken/`.
+Retained only `bootstrap_model.pt` + `best_model.pt`. MANIFEST notes
+that on-disk checkpoints were actually post-W1 `q27_post_fix` probe
+output, not pre-W1 sign-inverted data; archive correct for provenance
+reasons regardless.
+
+**gumbel_full mutex fix already landed.** `fast_prob: 0.0` +
+regression test `test_gumbel_full_passes_playout_cap_mutex`
+(`tests/test_variant_configs.py:61`). Prompt 16 Phase 1 was no-op.
+
+**I1/I2 JSONL mirror landed mid-run** (commit b35de20). Pool +
+loop emitters already pushed to dashboard via `emit_event`; structlog
+log.info entries now mirror `colony_extension_fraction`,
+`cluster_value_std_mean`, `cluster_policy_disagreement_mean`,
+`cluster_variance_sample_count`. Current run keeps the pre-mirror
+gap; all future runs get durable JSONL record of the §107 cluster /
+I1 colony metrics used by Prompt 15/16 abort conditions.
+
+### First-hour telemetry
+
+| Metric | T+4min (step 138) | T+28min (step 958) | T+1h (step 1874) |
+|---|---|---|---|
+| policy_loss | 2.063 | 2.075 | 2.085 |
+| value_loss | 0.560 | 0.501 | 0.530 |
+| policy_entropy_selfplay | 2.56 | 3.82 | 3.13 |
+| games_per_hour | 1067 | 756 | 930 |
+| effective SDG | — | 2.009 | 2.000 |
+| GPU util | 59% | 80% | 65% |
+| buffer fill | 2.4k/250k | 21k/250k | 40k/250k |
+| batch_fill_pct | 50.3% | 53.3% | 53.1% |
+| pool overflow | 1 | 1 | 1 |
+| NaN | 0 | 0 | 0 |
+| idle ratio | 23% | 28% | 27% |
+
+**Read.** Policy_loss flat across the first hour (200-window Δ +0.013,
+500-window Δ +0.002). Value_loss declining (first-200 mean 0.548 →
+last-200 mean 0.530, Δ −0.018). Policy_entropy_selfplay contracting
+from initial 3.82 toward target 0.009 (policy_target_entropy_fullsearch).
+Model decompressing on value head first, policy head still decoupled
+— expected with sharp completed-Q targets on a 19×19 action space.
+
+**Games/hr surprise.** Prompt 16 estimated 130–180 games/hr on desktop;
+observed steady-state 930. Option A's per-game cost increase was
+smaller than predicted (~1.16× not ~2.5×). Not a bug — Option A ratio
+was vs pre-§100 baseline, not vs pre-Option-A. Config rationale in
+gumbel_full.yaml comment stands.
+
+**Idle ratio.** 27% `waiting_for_games` events does NOT equal 27% GPU
+idle — it is the `max_train_burst` bursting pattern. SDG ratio hits
+2.000 exactly so trainer is not starving. GPU util 65–80% healthy.
+Real starvation would show SDG << 2.0.
+
+**Pool overflow.** Single MCTS node-pool ceiling hit at startup
+(`next_free=199807, n_ch=381, pool_len=200000`). Graceful fallback
+(mark leaf terminal). No recurrence in 1h of wall clock — non-issue
+for this run. Flagged for broader MCTS review if it recurs.
+
+### Abort gates (active)
+
+- `wr_random < 0.90` for 2 consecutive evals — first eval at step 5000.
+- NaN in any loss for >10 consecutive steps.
+- `colony_extension_fraction > healthy_baseline × 2.5` for 500+ games
+  — baseline unknown until first 4h; threshold revised at hour-4 check.
+  Current run reads I1/I2 from web dashboard only (pre-mirror).
+- `policy_entropy_selfplay < 1.0` for 500+ steps.
+- OOM / disk / VRAM saturation.
+- `cluster_value_std` diverges > 2× laptop steady-state — desktop-only
+  abort, would flag novel Gumbel-SH per-cluster instability.
+
+### Next checkpoints
+
+- Step 5000: first eval round, `make probe.latest`, gate against
+  bootstrap random-bot ≥95/100.
+- Step 12k: C2/C3 probe vs real-fixture v6, cluster disagreement trend.
+- Step 24k: first graduation attempt, wr_best vs bootstrap.
+- Step 50k: run complete, cross-host `post_w1_laptop_vs_desktop` report.
+
+### Commits
+
+- `config(variants): gumbel_full SDG 4.0 → 2.0 for post-Option-A launch`
+  (299b4c0)
+- `test(variants): update gumbel_full SDG pin 4.0 → 2.0` (a797abd)
+- `feat(monitoring): mirror I1/I2 cluster + colony metrics to JSONL`
+  (b35de20)
+- `docs(sprint): §108 desktop gumbel_full sustained run launch`
