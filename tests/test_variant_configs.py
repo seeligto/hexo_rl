@@ -118,6 +118,32 @@ def test_validator_catches_nested_training_block() -> None:
     assert any("training" in w for w in warnings)
 
 
+def test_training_steps_per_game_per_variant() -> None:
+    """Q27 smoke (2026-04-19): base ``training_steps_per_game`` was 4.0, tuned
+    in §69 for a different throughput regime. Laptop 14-worker run measured
+    47% trainer idle (SUPPLY/DEMAND=0.40). Per-variant declaration is now
+    authoritative; base dropped to 1.5 (laptop-fit). Each variant pins its
+    expected value here to prevent silent drift when the base changes.
+    """
+    expected = {
+        "baseline_puct": 2.0,          # pinned in file — PRE-§67 historical baseline
+        "gumbel_full": 4.0,            # desktop sustained run
+        "gumbel_targets": 1.5,         # laptop
+        "gumbel_targets_desktop": 1.5, # laptop-semantics desktop ablation
+        "calib_R1": 1.5,               # inherits base
+        "calib_R2": 1.5,
+        "calib_R3": 1.5,
+        "calib_R4": 1.5,
+    }
+    for variant, want in expected.items():
+        cfg = _resolve(variant)
+        got = cfg.get("training_steps_per_game")
+        assert got == want, (
+            f"{variant}: training_steps_per_game resolved to {got!r}, "
+            f"expected {want!r}"
+        )
+
+
 def test_training_steps_per_game_resolves_to_variant_value_for_desktop() -> None:
     """E-001: after flattening gumbel_targets_desktop.yaml, max_train_burst must
     resolve to 8 at the top level (not 16 from the base). Pre-fix the nested

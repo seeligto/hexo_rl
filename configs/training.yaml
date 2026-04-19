@@ -7,7 +7,10 @@ policy_prune_frac: 0.02
 # Independent of gumbel_mcts search — controls policy target computation, not search algorithm
 batch_size: 256
 min_buffer_size: 256
-training_steps_per_game: 4.0   # sweep P3 winner (was 2.0, see sprint §69)
+training_steps_per_game: 1.5   # laptop-fit base; desktop variants override to 4.0.
+                               # Q27 smoke 2026-04-19 measured 47% trainer idle
+                               # at 14 workers with 4.0 — supply/demand 0.40.
+                               # Per-variant declaration now authoritative.
 max_train_burst: 16            # sweep P3 winner (was 8, see sprint §69)
 lr: 0.002
 weight_decay: 0.0001
