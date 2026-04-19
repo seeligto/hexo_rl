@@ -751,6 +751,11 @@ def _emit_training_events(
         "batch_fill_pct":     pool.batch_fill_pct,
         "mcts_mean_depth":    float(getattr(_runner, "mcts_mean_depth", 0.0)),
         "mcts_root_concentration": float(getattr(_runner, "mcts_mean_root_concentration", 0.0)),
+        # §107 I2 investigation metrics: lifetime-mean per-cluster std-dev of
+        # values and top-1 policy disagreement (K≥2 positions only).
+        "cluster_value_std_mean":      float(getattr(_runner, "cluster_value_std_mean", 0.0)),
+        "cluster_policy_disagreement_mean": float(getattr(_runner, "cluster_policy_disagreement_mean", 0.0)),
+        "cluster_variance_sample_count":    int(getattr(_runner, "cluster_variance_sample_count", 0)),
     })
 
     # Richer summary structlog entry — fires at log_interval cadence alongside

@@ -104,6 +104,14 @@ pub struct SelfPlayRunner {
     pub(crate) mcts_stat_count: Arc<AtomicU64>,
     /// Cumulative quiescence fires (all 4 branches) across all searches since `start()`.
     pub(crate) mcts_quiescence_fires: Arc<AtomicU64>,
+    /// I2 investigation metric: accumulated per-position std-dev of per-cluster
+    /// values (scaled by 1_000_000) summed across all K≥2 inferences since `start()`.
+    pub(crate) cluster_value_std_accum: Arc<AtomicU64>,
+    /// I2 investigation metric: accumulated per-position top-1 policy
+    /// disagreement (scaled by 1_000_000) summed across all K≥2 inferences since `start()`.
+    pub(crate) cluster_policy_disagreement_accum: Arc<AtomicU64>,
+    /// I2 investigation metric: count of K≥2 multi-cluster positions scored.
+    pub(crate) cluster_variance_samples: Arc<AtomicU64>,
 }
 
 #[pymethods]
@@ -213,6 +221,9 @@ impl SelfPlayRunner {
             mcts_conc_accum: Arc::new(AtomicU64::new(0)),
             mcts_stat_count: Arc::new(AtomicU64::new(0)),
             mcts_quiescence_fires: Arc::new(AtomicU64::new(0)),
+            cluster_value_std_accum: Arc::new(AtomicU64::new(0)),
+            cluster_policy_disagreement_accum: Arc::new(AtomicU64::new(0)),
+            cluster_variance_samples: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -375,6 +386,32 @@ impl SelfPlayRunner {
     #[getter]
     pub fn mcts_quiescence_fires(&self) -> u64 {
         self.mcts_quiescence_fires.load(Ordering::Relaxed)
+    }
+
+    /// I2: mean per-cluster value std-dev over K≥2 inferences since `start()`.
+    /// Range [0.0, ~1.0]. Returns 0.0 before any K≥2 sample seen.
+    #[getter]
+    pub fn cluster_value_std_mean(&self) -> f32 {
+        let count = self.cluster_variance_samples.load(Ordering::Relaxed);
+        if count == 0 { return 0.0; }
+        (self.cluster_value_std_accum.load(Ordering::Relaxed) as f64
+            / (count as f64 * 1_000_000.0)) as f32
+    }
+
+    /// I2: mean per-cluster top-1 policy-disagreement over K≥2 inferences since `start()`.
+    /// Range [0.0, 1.0]. 0.0 = all windows agree on top move; returns 0.0 if no sample.
+    #[getter]
+    pub fn cluster_policy_disagreement_mean(&self) -> f32 {
+        let count = self.cluster_variance_samples.load(Ordering::Relaxed);
+        if count == 0 { return 0.0; }
+        (self.cluster_policy_disagreement_accum.load(Ordering::Relaxed) as f64
+            / (count as f64 * 1_000_000.0)) as f32
+    }
+
+    /// I2: count of K≥2 multi-cluster positions scored since `start()`.
+    #[getter]
+    pub fn cluster_variance_sample_count(&self) -> u64 {
+        self.cluster_variance_samples.load(Ordering::Relaxed)
     }
 
     /// Drain and return all buffered game results since the last call.

@@ -116,6 +116,9 @@ impl SelfPlayRunner {
             let mcts_conc_accum = self.mcts_conc_accum.clone();
             let mcts_stat_count = self.mcts_stat_count.clone();
             let mcts_quiescence_fires = self.mcts_quiescence_fires.clone();
+            let cluster_value_std_accum = self.cluster_value_std_accum.clone();
+            let cluster_policy_disagreement_accum = self.cluster_policy_disagreement_accum.clone();
+            let cluster_variance_samples = self.cluster_variance_samples.clone();
 
             let handle = thread::spawn(move || {
                 let mut tree = MCTSTree::new_full(c_puct, crate::mcts::VIRTUAL_LOSS_PENALTY, fpu_reduction);
@@ -206,6 +209,38 @@ impl SelfPlayRunner {
                                 let leaf_policies = &all_policies[curr..curr+k];
                                 let leaf_values = &all_values[curr..curr+k];
                                 curr += k;
+
+                                // I2 investigation metric: per-cluster value/policy
+                                // variance. Attention hijacking probe (Q2, Q27). Only
+                                // meaningful when K≥2 clusters exist for this position.
+                                if *k >= 2 {
+                                    let mean_v: f32 =
+                                        leaf_values.iter().sum::<f32>() / *k as f32;
+                                    let var_v: f32 = leaf_values.iter()
+                                        .map(|&v| (v - mean_v).powi(2))
+                                        .sum::<f32>() / *k as f32;
+                                    let std_v = var_v.sqrt();
+                                    let mut top1 = Vec::with_capacity(*k);
+                                    for p in leaf_policies {
+                                        let mut bi = 0usize;
+                                        let mut bv = p[0];
+                                        for (ii, &pv) in p.iter().enumerate() {
+                                            if pv > bv { bi = ii; bv = pv; }
+                                        }
+                                        top1.push(bi);
+                                    }
+                                    let mut max_c = 1usize;
+                                    for &a in &top1 {
+                                        let c = top1.iter().filter(|&&x| x == a).count();
+                                        if c > max_c { max_c = c; }
+                                    }
+                                    let disagree = 1.0f32 - (max_c as f32 / *k as f32);
+                                    cluster_value_std_accum.fetch_add(
+                                        (std_v * 1_000_000.0) as u64, Ordering::Relaxed);
+                                    cluster_policy_disagreement_accum.fetch_add(
+                                        (disagree * 1_000_000.0) as u64, Ordering::Relaxed);
+                                    cluster_variance_samples.fetch_add(1, Ordering::Relaxed);
+                                }
 
                                 let mut min_v = leaf_values[0];
                                 for &v in leaf_values {
