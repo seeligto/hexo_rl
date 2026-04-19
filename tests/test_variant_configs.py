@@ -128,12 +128,12 @@ def test_training_steps_per_game_per_variant() -> None:
     expected = {
         "baseline_puct": 2.0,          # pinned in file — PRE-§67 historical baseline
         "gumbel_full": 4.0,            # desktop sustained run
-        "gumbel_targets": 1.5,         # laptop
-        "gumbel_targets_desktop": 1.5, # laptop-semantics desktop ablation
-        "calib_R1": 1.5,               # inherits base
-        "calib_R2": 1.5,
-        "calib_R3": 1.5,
-        "calib_R4": 1.5,
+        "gumbel_targets": 2.0,         # laptop
+        "gumbel_targets_desktop": 2.0, # laptop-semantics desktop ablation
+        "calib_R1": 2.0,               # inherits base
+        "calib_R2": 2.0,
+        "calib_R3": 2.0,
+        "calib_R4": 2.0,
     }
     for variant, want in expected.items():
         cfg = _resolve(variant)
