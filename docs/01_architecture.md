@@ -218,15 +218,32 @@ This keeps the GPU busy rather than idle between single-position evaluations.
 
 ### Temperature scheduling
 
-```python
-def get_temperature(ply: int, phase: str) -> float:
-    if phase == "training":
-        return 1.0 if ply < 30 else 0.1   # explore early, exploit late
-    elif phase == "evaluation":
-        return 0.0                          # deterministic (argmax)
-    elif phase == "bootstrap":
-        return 0.5                          # moderate exploration vs minimax data
+The live self-play training schedule is implemented in Rust
+(`engine/src/game_runner/worker_loop.rs::compute_move_temperature`) as a
+quarter-cosine over **compound moves**, with a hard floor once the
+threshold is reached. Compound move is derived from ply as
+`cm = (ply + 1) / 2` for `ply > 0`, else `0`.
+
 ```
+τ(cm) = max(temp_min, cos(π/2 · cm / temp_threshold))   if cm <  temp_threshold
+τ(cm) = temp_min                                        if cm >= temp_threshold
+```
+
+Config (live training): `selfplay.playout_cap.temperature_threshold_compound_moves:
+15`, `selfplay.playout_cap.temp_min: 0.05`. At `cm = 0` τ is 1.0; at
+`cm = 15` (ply ≈ 29) it clamps to `temp_min` for the rest of the game.
+Fast games (`fast_prob`, `fast_sims`) override this with τ = 1.0 at every
+move. Reconciled from a prior ply-based half-cosine draft at sprint §70
+C.1.
+
+Evaluation and bootstrap temperatures live in their own paths:
+`configs/eval.yaml::eval_temperature: 0.5` (with `eval_random_opening_plies`
+for diversity) and the bootstrap minimax corpus uses τ = 0.5. A legacy
+ply-based step function (`1.0 if ply < 30 else 0.1`) persists in
+`hexo_rl/selfplay/utils.py::get_temperature` and is called only from
+`hexo_rl/selfplay/worker.py::SelfPlayWorker` (used by `OurModelBot`,
+`benchmark_mcts`, `evaluator`) — it is **not** on the self-play
+training path.
 
 ### Dirichlet noise
 

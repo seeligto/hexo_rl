@@ -588,8 +588,9 @@ Starting config for self-play RL (do not exceed without benchmarking):
     chain sub-buffer post-§97, not from the input slice).
 - Temperature: per-compound-move quarter-cosine schedule with hard
   `temp_min: 0.05` floor at compound_move ≥ 15 (Rust:
-  `engine/src/game_runner/worker_loop.rs:510-515`). **Docs-vs-code drift
-  vs §36 half-cosine-per-ply flagged in §70 C.1 — unresolved.**
+  `compute_move_temperature` in `engine/src/game_runner/worker_loop.rs:20-31`;
+  call site at `worker_loop.rs:346-353`). §36 text reconciled against
+  code (see §70 C.1 resolution in `docs/07_PHASE4_SPRINT_LOG.md`).
 - ZOI: candidate moves restricted to hex-distance ≤ 5 of last 16 moves
   (fallback to full legal set if < 3 candidates) — post-search move
   selection only; does not reduce MCTS tree branching (§77).
