@@ -7,7 +7,13 @@
 #   D3 decay_steps    : 20_000  (training.yaml)        — unchanged
 #   D4 n_games        : 400     (eval.yaml)            — raised 200 → 400
 # Shared with gumbel_targets.yaml. Report: reports/graduation_calibration_2026-04-17.md
-training_steps_per_game: 4.0
+#
+# Post-Option-A rebaseline (Prompt 16, 2026-04-19): lowered 4.0 → 2.0.
+# Option A drops game-level fast_prob (no more entirely-quick games), so
+# per-game compute rises. Trainer catches up faster, so SDG ratio drops.
+# Matches laptop's recent 1.5 → 2.0 direction; desktop Zen2 has lower IPC
+# so 2.0 is safe. Revisit if hour-1 idle >30% or <5%.
+training_steps_per_game: 2.0
 max_train_burst: 16
 selfplay:
   n_workers: 10
