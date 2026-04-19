@@ -25,3 +25,7 @@ monitoring:
   # §101 — gate D-Gumbel / D-Zeroloss instrumentation (7 policy-target metrics
   # on training_step). <0.2% step-time cost on a 100 ms step.
   log_policy_target_metrics: true
+  # §107 — I1 colony-extension detector + I2 cluster variance metrics.
+  # Rust-side I2 accumulates inside hot MCTS loop; I1 is pure Python per-game.
+  # Disable on bench runs (adds <1% overhead but perturbs timing).
+  log_investigation_metrics: true
