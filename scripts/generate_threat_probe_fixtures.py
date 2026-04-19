@@ -82,9 +82,18 @@ def find_control_cell(
 
 
 def _phase(ply: int) -> str:
-    if ply < 15:
+    """Phase bucketing by compound_move = (ply + 1) // 2 when ply > 0.
+
+    Thresholds match the user-facing spec (docs/07_PHASE4_SPRINT_LOG.md
+    Q27 Probe 1b):
+      early: compound_move <  10  (ply <  19)
+      mid:   10 ≤ compound_move < 25  (19 ≤ ply < 49)
+      late:  compound_move ≥ 25  (ply ≥ 49)
+    """
+    compound = 0 if ply == 0 else (ply + 1) // 2
+    if compound < 10:
         return "early"
-    if ply < 50:
+    if compound < 25:
         return "mid"
     return "late"
 
@@ -156,15 +165,27 @@ def _sample_from_games(
     game_files: List[Path],
     n: int,
     seed: int = 42,
+    quotas: Optional[dict] = None,
 ) -> List[dict]:
+    """Walk game records and extract positions matching per-phase quotas.
+
+    quotas = {"early": int, "mid": int, "late": int}. When None, defaults to
+    an even ceiling split of `n` across the three phases.
+    """
     rng = random.Random(seed)
     rng.shuffle(game_files)
 
+    if quotas is None:
+        per = (n + 2) // 3
+        quotas = {"early": per, "mid": per, "late": per}
+
     phase_buckets: dict = {"early": [], "mid": [], "late": []}
-    n_per_phase = (n + 2) // 3  # ceiling
+
+    def full() -> bool:
+        return all(len(phase_buckets[p]) >= quotas[p] for p in phase_buckets)
 
     for gf in game_files:
-        if all(len(v) >= n_per_phase for v in phase_buckets.values()):
+        if full():
             break
         try:
             doc = json.loads(gf.read_text())
@@ -191,7 +212,7 @@ def _sample_from_games(
                 break
 
             phase = _phase(board.ply)
-            if len(phase_buckets[phase]) >= n_per_phase:
+            if len(phase_buckets[phase]) >= quotas[phase]:
                 continue
 
             pos = _extract_position(board, state)
@@ -199,8 +220,8 @@ def _sample_from_games(
                 phase_buckets[phase].append(pos)
 
     positions: List[dict] = []
-    for bucket in phase_buckets.values():
-        positions.extend(bucket[:n_per_phase])
+    for p, bucket in phase_buckets.items():
+        positions.extend(bucket[: quotas[p]])
     rng.shuffle(positions)
     return positions[:n]
 
@@ -370,8 +391,25 @@ def main() -> None:
         action="store_true",
         help="Generate positions synthetically (no game records required).",
     )
+    parser.add_argument(
+        "--n-per-phase",
+        type=int,
+        nargs=3,
+        metavar=("EARLY", "MID", "LATE"),
+        default=None,
+        help="Quotas for each phase (e.g. --n-per-phase 7 7 6). Overrides --n-positions.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+
+    quotas: Optional[dict] = None
+    if args.n_per_phase is not None:
+        quotas = {
+            "early": args.n_per_phase[0],
+            "mid": args.n_per_phase[1],
+            "late": args.n_per_phase[2],
+        }
+        args.n_positions = sum(args.n_per_phase)
 
     if args.synthetic:
         print("[generate_fixtures] synthetic mode")
@@ -391,12 +429,27 @@ def main() -> None:
             print(f"[generate_fixtures] {len(game_files)} game files across all run dirs")
 
         if game_files:
-            positions = _sample_from_games(game_files, args.n_positions, seed=args.seed)
+            positions = _sample_from_games(
+                game_files, args.n_positions, seed=args.seed, quotas=quotas
+            )
         else:
             print("[generate_fixtures] no game files found; falling back to synthetic mode")
             positions = _synthetic_positions(args.n_positions, seed=args.seed)
 
-        if len(positions) < args.n_positions:
+        if quotas is not None:
+            counts = {"early": 0, "mid": 0, "late": 0}
+            for p in positions:
+                counts[p["game_phase"]] += 1
+            print(f"[generate_fixtures] per-phase counts: {counts}  quotas: {quotas}")
+            missing = {k: quotas[k] - counts[k] for k in counts if counts[k] < quotas[k]}
+            if missing:
+                print(
+                    f"[generate_fixtures] FAIL: short by {missing} — real-game source "
+                    f"insufficient; refusing synthetic supplement to preserve fixture realism",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+        elif len(positions) < args.n_positions:
             needed = args.n_positions - len(positions)
             print(
                 f"[generate_fixtures] {len(positions)} positions from game records; "

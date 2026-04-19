@@ -1,16 +1,16 @@
 {
-  "version": 5,
-  "ext_logit_mean": 0.08003570279106498,
-  "ext_logit_std": 0.09301873037318857,
-  "ctrl_logit_mean": 0.02773177167400718,
-  "ctrl_logit_std": 0.011628216098560773,
-  "contrast_mean": 0.0523039311170578,
-  "contrast_std": 0.09710865123558958,
-  "ext_in_top5_frac": 0.2,
-  "ext_in_top5_pct": 20.0,
-  "ext_in_top10_frac": 0.2,
-  "ext_in_top10_pct": 20.0,
+  "version": 6,
+  "ext_logit_mean": 0.01505497475154698,
+  "ext_logit_std": 0.39934542310395477,
+  "ctrl_logit_mean": 0.061236916854977605,
+  "ctrl_logit_std": 0.030221241283551664,
+  "contrast_mean": -0.04618194210343063,
+  "contrast_std": 0.39607739422028737,
+  "ext_in_top5_frac": 0.6,
+  "ext_in_top5_pct": 60.0,
+  "ext_in_top10_frac": 0.65,
+  "ext_in_top10_pct": 65.0,
   "n": 20,
   "checkpoint": "bootstrap_model.pt",
-  "generated_at": "2026-04-17T08:57:08.467070+00:00"
+  "generated_at": "2026-04-19T00:07:22.432661+00:00"
 }

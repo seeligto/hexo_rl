@@ -75,7 +75,7 @@ THRESH_EXT_IN_TOP5_PCT: float = 25.0     # extension cell in policy top-5 ≥ 25
 THRESH_EXT_IN_TOP10_PCT: float = 40.0    # extension cell in policy top-10 ≥ 40% (§91, revised for 18-plane model)
 THRESH_EXT_LOGIT_DRIFT_WARN: float = 5.0  # |Δ ext_logit_mean| > 5.0 → warning only
 
-BASELINE_SCHEMA_VERSION: int = 5
+BASELINE_SCHEMA_VERSION: int = 6  # v6: fixture regenerated from real mid/late positions (§105 Q27 Probe 1b)
 
 # Canonical baseline file (generated once via --write-baseline).
 BASELINE_JSON_PATH: Path = REPO_ROOT / "fixtures" / "threat_probe_baseline.json"
