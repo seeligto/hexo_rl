@@ -805,6 +805,9 @@ def _emit_training_events(
         frac_fullsearch_in_batch=float(loss_info.get("frac_fullsearch_in_batch", 0.0)),
         n_rows_policy_loss=int(loss_info.get("n_rows_policy_loss", 0)),
         n_rows_total=int(loss_info.get("n_rows_total", 0)),
+        cluster_value_std_mean=float(getattr(_runner, "cluster_value_std_mean", 0.0)),
+        cluster_policy_disagreement_mean=float(getattr(_runner, "cluster_policy_disagreement_mean", 0.0)),
+        cluster_variance_sample_count=int(getattr(_runner, "cluster_variance_sample_count", 0)),
     )
 
 

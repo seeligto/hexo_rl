@@ -347,6 +347,9 @@ class WorkerPool:
                     winner=winner,
                     game_length=game_length,
                     sims_per_sec=self._sims_per_sec,
+                    colony_extension_stone_count=_ext_count,
+                    colony_extension_stone_total=_ext_total,
+                    colony_extension_fraction=_ext_frac,
                 )
                 self._recorder.maybe_record(
                     moves=move_history,
