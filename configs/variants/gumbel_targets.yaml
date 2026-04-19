@@ -14,7 +14,7 @@
 #   D3 decay_steps    : 20_000  (training.yaml)        — unchanged
 #   D4 n_games        : 400     (eval.yaml)            — raised 200 → 400
 # Shared with gumbel_full.yaml. Report: reports/graduation_calibration_2026-04-17.md
-training_steps_per_game: 2.0   # laptop 14-worker fit (Q27 smoke 2026-04-19)
+training_steps_per_game: 1.5   # §107 preflight decision (reports/supply_demand_preflight_2026-04-19.md)
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
