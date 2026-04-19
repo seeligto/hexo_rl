@@ -104,11 +104,12 @@ class EvalPipeline:
             "random_bot", "random",
         )
 
-        # Queue of opponents that were stride-skipped in a prior round; each
-        # stays queued until it next runs. Prevents a train-loop-level skip
-        # from compounding with stride so SealBot (or any rare-cadence
-        # opponent) gets double-skipped. (D-010)
-        self._pending_opponents: set[str] = set()
+        # Stride gating is pure ``round_idx % stride == 0``. A prior queue-based
+        # retry mechanism (D-010) caused the Q27 smoke 2026-04-19 failure where
+        # SealBot fired at round_idx=1 despite stride=4: a stride-skipped round
+        # queued the opponent, and the next round ran it via the queue rather
+        # than on the stride boundary. Net cadence degraded from stride=4 to
+        # stride=2 after the first skip. Removed.
 
     def run_evaluation(
         self,
@@ -173,14 +174,9 @@ class EvalPipeline:
         def _should_run(name: str, opp_cfg: dict[str, Any]) -> bool:
             stride = int(opp_cfg.get("stride", 1))
             if stride <= 1:
-                self._pending_opponents.discard(name)
                 return True
             round_idx = train_step // max(effective_interval, 1)
-            if round_idx % stride == 0 or name in self._pending_opponents:
-                self._pending_opponents.discard(name)
-                return True
-            self._pending_opponents.add(name)
-            return False
+            return round_idx % stride == 0
 
         # ── vs Random ────────────────────────────────────────────────
         if self.random_cfg.get("enabled", True) and _should_run("random", self.random_cfg):
