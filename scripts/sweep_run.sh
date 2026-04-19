@@ -75,12 +75,15 @@ validate_log() {
         return 1
     fi
     local count
-    count=$(grep -c '"event": "train_step"' "$logfile" 2>/dev/null || echo 0)
+    # ``train_step`` (trainer, per-step) OR ``train_step_summary`` (loop,
+    # log_interval cadence) — either proves training activity. Split under
+    # distinct event names since 2026-04-19.
+    count=$(grep -cE '"event": "train_step(_summary)?"' "$logfile" 2>/dev/null || echo 0)
     if [[ $count -lt 2 ]]; then
         echo "VALIDATION FAIL: ${name} has only ${count} train_step events (need >=2)"
         return 1
     fi
-    # Check for the new monitoring fields
+    # Monitoring fields live on train_step_summary since the rename.
     if ! grep -q '"batch_fill_pct"' "$logfile"; then
         echo "VALIDATION FAIL: ${name} missing batch_fill_pct field"
         return 1

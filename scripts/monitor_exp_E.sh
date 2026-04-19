@@ -56,8 +56,11 @@ def pct(v, fallback="N/A"):
         return fallback
 
 # Parse log
-latest_train = None    # emit_event variant (game stats)
-latest_losses = None   # structlog variant (loss details)
+# ``train_step`` (trainer, per-step) carries chain_loss + grad_norm.
+# ``train_step_summary`` (loop, log_interval cadence) carries draw_rate + buffer.
+# Split under distinct event names since 2026-04-19 (Q27 smoke fix).
+latest_train = None    # summary variant (game stats)
+latest_losses = None   # per-step variant (loss details)
 sims_per_sec_samples = []
 
 with open(LOG_PATH) as f:
@@ -69,12 +72,12 @@ with open(LOG_PATH) as f:
             d = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if d.get("event") == "train_step":
-            if "draw_rate" in d:
-                latest_train = d
-            elif "chain_loss" in d:
-                latest_losses = d
-        elif d.get("event") == "game_complete":
+        ev = d.get("event")
+        if ev == "train_step_summary":
+            latest_train = d
+        elif ev == "train_step":
+            latest_losses = d
+        elif ev == "game_complete":
             sps = d.get("sims_per_sec") or d.get("sims_per_second")
             if sps is not None:
                 sims_per_sec_samples.append(float(sps))

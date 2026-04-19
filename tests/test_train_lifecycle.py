@@ -260,11 +260,12 @@ def test_train_lifecycle(tmp_path: Path) -> None:
 
         # ── Step 2: wait for ≥ 50 training steps, record buffer size ─────────
         def _has_50_steps(evs: list[dict]) -> dict | None:
-            # Two train_step variants fire: a lightweight per-step event
-            # (loss / grad_norm / lr) and a richer periodic summary that
-            # carries ``buffer_size``. Only the rich one is usable here — the
-            # test must read ``buffer_size_before_shutdown`` off of it.
-            train_evs = _all_events(evs, "train_step")
+            # Per-step ``train_step`` is authoritative (one per trainer step, no
+            # buffer_size); ``train_step_summary`` is the log_interval-cadence
+            # richer entry carrying ``buffer_size``. Read buffer_size off the
+            # summary variant. Renamed 2026-04-19 to preserve 1:1 step/event
+            # cadence for the authoritative channel.
+            train_evs = _all_events(evs, "train_step_summary")
             hits = [
                 e for e in train_evs
                 if e.get("step", 0) >= 50 and "buffer_size" in e

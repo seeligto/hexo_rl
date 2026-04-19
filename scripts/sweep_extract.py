@@ -101,7 +101,14 @@ def extract_metrics(jsonl_path: Path, warmup_sec: float, max_game_moves: int) ->
                 continue
 
     # Separate event types
-    train_steps = [e for e in events if e.get("event") == "train_step"]
+    # ``train_step`` is the authoritative per-step structlog entry (lean fields:
+    # loss, grad_norm, lr). ``train_step_summary`` fires at log_interval cadence
+    # and carries the richer summary fields (inf_forward_count, policy_entropy,
+    # buffer_size). Renamed 2026-04-19 to preserve 1:1 step-to-event invariant.
+    train_steps = [
+        e for e in events
+        if e.get("event") in ("train_step", "train_step_summary")
+    ]
     game_completes = [e for e in events if e.get("event") == "game_complete"]
     gpu_stats = [e for e in events if e.get("event") == "gpu_stats"]
 

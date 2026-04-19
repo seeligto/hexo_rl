@@ -731,9 +731,7 @@ def _emit_training_events(
     pph    = gph * avg_gl if avg_gl > 0 else 0.0
     _runner = pool._runner
 
-    _buf_total  = max(buffer.size, 1)
-    _sp_pushed  = pool.self_play_positions_pushed
-    _buf_sp_pct = round(min(_sp_pushed / _buf_total, 1.0), 4)
+    _buf_sp_pct = round(min(pool.self_play_positions_pushed / max(buffer.size, 1), 1.0), 4)
 
     emit_event({
         "event": "iteration_complete",
@@ -755,8 +753,13 @@ def _emit_training_events(
         "mcts_root_concentration": float(getattr(_runner, "mcts_mean_root_concentration", 0.0)),
     })
 
+    # Richer summary structlog entry — fires at log_interval cadence alongside
+    # the trainer's per-step ``train_step`` log. Kept under a distinct event
+    # name to preserve the 1:1 step-to-``train_step`` invariant (Q27 smoke
+    # 2026-04-19 root cause: this entry previously emitted under the same
+    # ``train_step`` name and duplicated the trainer's per-step emission).
     log.info(
-        "train_step",
+        "train_step_summary",
         step=train_step,
         policy_loss=round(float(loss_info["policy_loss"]), 4),
         value_loss=round(float(loss_info["value_loss"]), 4),
@@ -790,10 +793,6 @@ def _emit_training_events(
         inf_total_requests=pool._inference_server._total_requests,
         mcts_mean_depth=round(float(getattr(_runner, "mcts_mean_depth", 0.0)), 3),
         mcts_root_concentration=round(float(getattr(_runner, "mcts_mean_root_concentration", 0.0)), 3),
-        # §101 — D-Gumbel / D-Zeroloss split. Use full key names so downstream
-        # `grep policy_target_entropy_fullsearch` (the prompt-7 verification
-        # command) matches. Persisted to JSONL so per-variant means can be
-        # computed without attaching a bespoke dashboard renderer.
         policy_target_entropy_fullsearch=float(loss_info.get("policy_target_entropy_fullsearch", float("nan"))),
         policy_target_entropy_fastsearch=float(loss_info.get("policy_target_entropy_fastsearch", float("nan"))),
         policy_target_kl_uniform_fullsearch=float(loss_info.get("policy_target_kl_uniform_fullsearch", float("nan"))),
