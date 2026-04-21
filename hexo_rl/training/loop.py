@@ -143,15 +143,15 @@ def run_training_loop(
         try:
             _cur = torch.cuda.current_stream(device)
             _def = torch.cuda.default_stream(device)
-            emit_event({
-                "event": "cuda_stream_audit",
-                "context": "training_thread",
-                "current_stream_ptr": int(_cur.cuda_stream),
-                "default_stream_ptr": int(_def.cuda_stream),
-                "on_default_stream": _cur.cuda_stream == _def.cuda_stream,
-            })
+            log.info(
+                "cuda_stream_audit",
+                context="training_thread",
+                current_stream_ptr=int(_cur.cuda_stream),
+                default_stream_ptr=int(_def.cuda_stream),
+                on_default_stream=_cur.cuda_stream == _def.cuda_stream,
+            )
         except Exception as exc:  # noqa: BLE001
-            emit_event({"event": "cuda_stream_audit_failed", "context": "training_thread", "error": str(exc)})
+            log.warning("cuda_stream_audit_failed", context="training_thread", error=str(exc))
 
     # ── Worker pool ───────────────────────────────────────────────────────────
     from hexo_rl.selfplay.pool import WorkerPool

@@ -93,6 +93,19 @@ Linux with nvidia-smi installed.
   event gives a good-enough Python-side view. If Phase C confirms Q18,
   a focused Rust probe can follow in a later session.
 
+## Gotcha: resume from checkpoint
+
+`Trainer.load_checkpoint(...)` uses the config baked into the checkpoint file,
+**not** the CLI-merged config. Without an explicit override, any probe flags
+set via `--config configs/diag_probes.yaml` would be ignored on a resumed run.
+`scripts/train.py` now passes `combined_config["diagnostics"]` through
+`config_overrides` so probe flags always win on resume.
+
+Symptom if you forget this: `perf_timing_enabled` fires (because probe flags
+are read at startup, before Trainer construction) but `train_step_timing` never
+appears in the JSONL — because the Trainer's `self._perf_timing` inherits from
+the stale checkpoint config.
+
 ## Zero-overhead guarantee when disabled
 
 All probes gated on `self._perf_timing` / `self._perf_sync_cuda` — cached
