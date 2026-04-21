@@ -1,0 +1,8 @@
+# Phase C diagnostic override — enables all perf probes.
+# Layered on top of base configs + any --variant. Used by Phase C runs only.
+# Do NOT ship this as a training variant.
+
+diagnostics:
+  perf_timing: true
+  perf_sync_cuda: true        # true forward-latency breakdown; adds small overhead
+  vram_probe_interval: 100    # every 100 steps
