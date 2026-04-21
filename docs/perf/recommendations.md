@@ -5,9 +5,14 @@ Inputs: `20k_gumbel_targets_characterization.md`, `static_audit.md`,
 
 **One-line summary.** The 20k reference run is trainer-idle 95% of wall
 (supply-bound, not compute-bound). Phase C1 measures NN forward live/iso
-ratio at **1.67×** — real contention, but a smaller gap than the Q18
-hypothesis implied. Stream separation + pinned H2D is still the #1 lever
-but with an expected ~20% wall-clock uplift, not the 5× Q18 magnitude.
+ratio at **1.67×** — real contention, but at 95% trainer-idle, compute-side
+optims land at ~0 wall benefit and trainer idle absorbs them. **The only
+levers that move wall clock today are those on the self-play supply path**
+(inference-side H2D, worker-facing GIL release, inference BF16/`channels_last`)
+plus supply-capacity changes (worker count, distributed self-play).
+Dedicated CUDA stream drops from #1 to #8: its 15–20% compute ceiling is
+bounded by the trainer's 5% wall window and only unlocks once supply
+catches up.
 
 **Non-goal this session.** No behaviour-changing code lands. The instrumentation
 commit (`feat(diag): add perf-timing probes behind diagnostics.perf_timing flag`)
@@ -68,52 +73,112 @@ latency more than mean throughput.
 
 ---
 
+## E1.a — Wall-clock vs compute wins — reading the rank table at `steps_per_game=2`
+
+**Regime check.** At `training_steps_per_game=2.0` (laptop & desktop current
+authoritative) the 20k reference-run characterization measured trainer idle
+~95% of wall. Trainer compute = ~5% of wall; self-play supply is 100% of
+wall (always on). **Wall-clock bottleneck is supply, full stop.** The 1.5–2
+learning-quality ratio is fixed by quality-sweep findings; it cannot be
+raised to absorb trainer idle.
+
+Per-item wall impact under this regime:
+
+| Item | Runs during | Wall impact today | Compute impact |
+|---|---|---|---|
+| Pinned H2D — **inference-side** (C1: 303 µs p50) | self-play supply (critical path) | **real** — every inference forward | yes |
+| Dedicated inference CUDA stream | contention window ≈ trainer's 5% | ≤5% of wall × contention share — **bounded** | yes, during that 5% |
+| Pinned H2D — trainer-side (C1: 4.1 ms p50) | trainer's 5% | ~0 wall (idle absorbs it) | yes |
+| Pack `.item()` syncs | trainer | ~0 wall | yes |
+| GIL release on `sample_batch` | trainer-facing | ~0 wall | yes |
+| GIL release on `_stats_loop` push drain | worker-facing (critical path) | **real** | yes |
+
+**Implication.** The E2 table below re-ranks by critical-path flag, not by raw
+µs saved. Inference-side pinned H2D is #1 unambiguously. Dedicated stream
+drops — it only helps during the 5% trainer-active window. Trainer-side items
+become "queued for when supply catches up" — they are compute-efficiency wins,
+not wall-clock wins, until `supply/demand` changes.
+
+**Primary wall lever is not in the ranked plan at all.** It is supply
+capacity itself. Things that raise supply:
+
+- **Inference hot-path throughput** — pinned H2D inference-side, possibly
+  BF16 on Ada. In scope (E2 #1).
+- **Worker count sweep.** Bucket 7 did not confirm `n_workers=14` is optimal
+  for the laptop's 16-thread 8845HS. Worth a 10/12/14/16 A/B sweep.
+- **Per-worker MCTS sim/s.** Already ~69K sim/s bench; near-ceiling — modest
+  residual upside only.
+- **Remote/distributed self-play worker** (Phase 4.5 direction). Doubles
+  supply without any single-process optim. **Probably the biggest single
+  lever available** and beats every entry in E2 for wall-clock uplift. No
+  § reference in sprint log yet; surfacing here as the implied dominant
+  option.
+
+Everything in E2 is still correct for a future regime where supply catches
+up (trainer hits its own compute ceiling). Keep the ranking — just read the
+**Critical path** column first and the **Compute uplift** column second.
+
+---
+
 ## E2 — Portable-optim candidate list
 
-Ranked by expected live pos/hr uplift × confidence. All portable across
-Ampere+ NVIDIA GPUs and modern x86 CPUs. Values go in `configs/`, never
-hardcoded in source.
+Ranked by **critical-path flag** (supply-side first), then compute uplift ×
+confidence. All portable across Ampere+ NVIDIA GPUs and modern x86 CPUs.
+Values go in `configs/`, never hardcoded in source.
 
-| # | Lever | Expected uplift | Risk | Portable? | VRAM | Prereq | Effort | Sprint/Bucket § |
-|---|---|---|---|---|---|---|---|---|
-| 1 | Pinned host H2D buffer + `non_blocking=True` | 2–5% | LOW | yes | +1 MB | — | S | Bucket 1 #5, 2 #7 |
-| 2 | Dedicated CUDA inference stream | ~15–20% | MED | yes | +0 | #1 | M | Bucket 1 #4, C2 |
-| 3 | Pack per-step `.item()` metrics (§101 pattern → losses) | 2–4% | LOW | yes | +0 | — | S | Bucket 2 #3 |
-| 4 | GIL release on `ReplayBuffer::sample_batch` (wrap in `py.detach`) | 2–5% | LOW | yes | +0 | — | S | Bucket 5 #2/#3 |
-| 5 | GIL release on `WorkerPool._stats_loop` push drain (bulk Rust push) | 2–5% | LOW | yes | +0 | Rust API | M | Bucket 5 #2 |
-| 6 | Fuse InferenceServer D2H (single `.cpu()`) | 0.5–1% | LOW | yes | +0 | — | XS | Bucket 1 #6 |
-| 7 | Async checkpoint save (background thread + CPU state_dict copy) | 0.5–2% (tail) | LOW | yes | +150 MB | — | S | Bucket 2 #4 |
-| 8 | `channels_last` on model + input (bench A/B gated) | 0–15% uncertain | MED | yes | +0 | bench | M | Bucket 1 #8, 3 #1 |
-| 9 | `amp_dtype: fp16|bf16` config knob (no-code A/B) | 0–5% arch-dependent | LOW | yes | +0 | — | S | Bucket 2 #2, 7 |
-| 10 | `inference_mode` → replace `no_grad` on inference path | 0.1–0.5% | LOW | yes | +0 | — | XS | Bucket 1 #1 |
-| 11 | Hoist `model.eval()` out of hot loop | 0.1–0.3% | LOW | yes | +0 | — | XS | Bucket 1 #2 |
-| 12 | Explicit `set_to_none=True` in zero_grad | <0.1% | LOW | yes | +0 | — | XS | Bucket 2 #1 |
-| 13 | Centralise `setup_torch()` + explicit TF32 flags | 0% perf, +correctness | LOW | yes | +0 | — | S | Bucket 4 |
-| 14 | Rayon-parallel scatter in `sample_batch` (CPU aug) | 0–2% | LOW | yes | +0 | — | M | Bucket 6 #2 |
-| 15 | Pre-allocated output `Vec`s in `sample_batch` | 0–1% | LOW | yes | +0 | — | S | Bucket 6 #7 |
-| 16 | VRAM probe + frag + `num_ooms` on live training | observability | LOW | yes | +0 | **landed §B** | — | Bucket 8 |
+Legend:
+- **Critical path**: **SUPPLY** = on self-play supply path (wall-impacting today); **TRAINER** = on trainer's 5% (wall-neutral today, absorbs into idle); **BOTH** = affects both.
+- **Wall uplift today**: realistic wall-clock gain at current 95% trainer-idle regime.
+- **Compute uplift future**: what this lever is worth once supply catches up.
+
+| # | Lever | Critical path | Wall uplift today | Compute uplift future | Risk | Portable? | VRAM | Prereq | Effort | Sprint/Bucket § |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | Pinned host H2D buffer + `non_blocking=True` — **inference-side** | **SUPPLY** | 2–5% | 2–5% | LOW | yes | +1 MB | — | S | Bucket 1 #5 |
+| 2 | GIL release on `WorkerPool._stats_loop` push drain (bulk Rust push) | **SUPPLY** (inference starvation during drain) | 2–5% | 2–5% | LOW | yes | +0 | Rust API | M | Bucket 5 #2 |
+| 3 | Fuse InferenceServer D2H (single `.cpu()`) | **SUPPLY** | 0.5–1% | 0.5–1% | LOW | yes | +0 | — | XS | Bucket 1 #6 |
+| 4 | `inference_mode` → replace `no_grad` on inference path | **SUPPLY** | 0.1–0.5% | 0.1–0.5% | LOW | yes | +0 | — | XS | Bucket 1 #1 |
+| 5 | Hoist `model.eval()` out of hot loop | **SUPPLY** | 0.1–0.3% | 0.1–0.3% | LOW | yes | +0 | — | XS | Bucket 1 #2 |
+| 6 | `amp_dtype: fp16|bf16` config knob (per-host A/B) | **SUPPLY** (inference fwd) | 0–5% arch-dep | 0–5% arch-dep | LOW | yes | +0 | — | S | Bucket 2 #2, 7 |
+| 7 | `channels_last` on model + input (bench A/B gated) | **SUPPLY** (inference fwd) | 0–15% uncertain | 0–15% uncertain | MED | yes | +0 | bench | M | Bucket 1 #8, 3 #1 |
+| 8 | Dedicated CUDA inference stream | **BOTH** (gain bounded by trainer's 5%) | ~1–2% | 15–20% | MED | yes | +0 | #1 | M | Bucket 1 #4, C2 |
+| 9 | Pinned H2D buffer — **trainer-side** | TRAINER | ~0 | 2–5% | LOW | yes | +50 MB | — | S | Bucket 2 #7 |
+| 10 | Pack per-step `.item()` metrics (§101 pattern → losses) | TRAINER | ~0 | 2–4% | LOW | yes | +0 | — | S | Bucket 2 #3 |
+| 11 | GIL release on `ReplayBuffer::sample_batch` (wrap in `py.detach`) | TRAINER | ~0 | 2–5% | LOW | yes | +0 | — | S | Bucket 5 #2/#3 |
+| 12 | Async checkpoint save (background thread + CPU state_dict copy) | TRAINER | ~0 (tail) | 0.5–2% (tail) | LOW | yes | +150 MB | — | S | Bucket 2 #4 |
+| 13 | Explicit `set_to_none=True` in zero_grad | TRAINER | ~0 | <0.1% | LOW | yes | +0 | — | XS | Bucket 2 #1 |
+| 14 | Rayon-parallel scatter in `sample_batch` (CPU aug) | TRAINER | ~0 | 0–2% | LOW | yes | +0 | — | M | Bucket 6 #2 |
+| 15 | Pre-allocated output `Vec`s in `sample_batch` | TRAINER | ~0 | 0–1% | LOW | yes | +0 | — | S | Bucket 6 #7 |
+| 16 | Centralise `setup_torch()` + explicit TF32 flags | BOTH | 0% (hygiene) | 0% (hygiene) | LOW | yes | +0 | — | S | Bucket 4 |
+| 17 | VRAM probe + frag + `num_ooms` on live training | — (observability) | — | — | LOW | yes | +0 | **landed §B** | — | Bucket 8 |
 
 Effort: XS < 30 LoC, S < 100 LoC, M < 300 LoC.
 
 ### Notes on individual items
 
-- **#2 (dedicated stream)**: required for #1 to actually benefit — without a
-  separate stream, `non_blocking=True` on default-stream H2D is essentially
-  synchronous when any prior default-stream op is pending. Integration order
-  is #1 → #2 → measure.
-- **#3 (pack metrics)**: §101's precedent in `compute_policy_target_metrics`
-  already shows the pattern — packed 7 scalars into one D2H. Applying the
-  same to loss scalars + entropy + grad_norm + value_accuracy + full_search_frac
-  replaces ~10 `.item()` with one `torch.stack([...]).cpu().tolist()`.
-- **#4 / #5 (GIL release)**: interact. #5 reduces trainer starvation during
-  worker drain; #4 reduces inference-server starvation during trainer burst.
-  Both should land together for a clean diff; measure A/B vs baseline.
-- **#8 (channels_last)**: 19×19 spatial is small for Tensor Core NHWC kernels.
+- **#1 (inference-side pinned H2D)**: standalone wall win — does NOT require
+  dedicated stream to land. `pin_memory=True` on the host staging tensor
+  makes the H2D use a DMA engine that's asynchronous with compute on the
+  default stream, so the 303 µs per inference forward reduces even without
+  stream separation. This is why it's top of the table now.
+- **#2 (GIL release on `_stats_loop`)**: when workers drain positions into
+  the ReplayBuffer, they hold the Python GIL for the entire push. During
+  that window, the Python InferenceServer thread cannot run forwards — the
+  GPU sits idle. Supply-side impact scales with drain frequency; the worse
+  the stats cadence, the larger the win.
+- **#8 (dedicated stream)**: **demoted from #2**. At 95% trainer-idle, the
+  contention window is the trainer's 5% of wall. Max uplift = 5% × 67%
+  contention = ~3.3% wall today. Reserves its full 15–20% compute ceiling
+  for the future-regime where supply catches up. Still requires #1 as a
+  code prereq (pinned H2D is cheap whether or not streams are separated).
+- **#7 (channels_last)**: 19×19 spatial is small for Tensor Core NHWC kernels.
   Could be 0% or 15%; only bench tells. Do not land without iso bench
   showing uplift AND live bench confirming.
-- **#9 (bf16)**: Ada (4060) might gain 3–5% from BF16 (no GradScaler
+- **#6 (bf16)**: Ada (4060) might gain 3–5% from BF16 (no GradScaler
   overhead); Ampere (3070) typically prefers FP16. Per-host variant
   override, not a global change.
+- **Items #9–#15 (trainer-side)**: all ~0 wall uplift today. Defer until
+  supply catches up (trainer's compute ceiling becomes visible). Cheap
+  future insurance; don't optimize ahead of the constraint.
 
 ---
 
@@ -131,39 +196,50 @@ are zero-overhead when `diagnostics.perf_timing: false` (default).
 Sustained Phase 4.0 retrain → Phase 4.0 baseline checkpoint + metrics.
 No perf-optim changes during this window.
 
-### Step 2 (post-baseline optim wave 1)
-One commit per change, each with `make bench` + 200–500-step smoke:
+### Step 2 (post-baseline — supply-side wave: wall-clock wins)
 
-1. Item #6 (fused D2H) — XS, safe warmup.
-2. Item #10 (inference_mode) — XS, safe warmup.
-3. Item #11 (hoist .eval()) — XS, safe warmup.
-4. Item #12 (set_to_none) — XS, safe warmup.
-5. Item #7 (async ckpt save) — S, bench tail latency.
+All items on the SUPPLY critical path. One commit per change, each with
+`make bench` + 200–500-step smoke and a live pos/hr check.
 
-These are ~30 min total across five commits. Expected cumulative uplift:
-<3%. They warm up the optim-commit discipline and shake out the workflow.
+1. Item #4 (`inference_mode`) — XS warmup.
+2. Item #5 (hoist `.eval()`) — XS warmup.
+3. Item #3 (fused D2H) — XS.
+4. Item #1 (pinned H2D inference-side) — S. **First real wall win.**
+5. Item #2 (GIL release on `_stats_loop` push drain) — M. Second real wall win.
+6. Item #6 (`amp_dtype` knob, per-host A/B) — S.
 
-### Step 3 (post-baseline optim wave 2 — the main event)
+Expected cumulative wall uplift: ~5–12%. Each guarded by live pos/hr A/B.
 
-6. Item #3 (pack `.item()` metrics) — S. Expected 2–4%.
-7. Item #1 (pinned H2D, inference + trainer) — S. Expected 2–5%.
-8. Item #2 (dedicated inference stream) — M. Expected 15–20%.
-9. Items #4 + #5 (GIL release) — S + M. Expected 2–5% each.
+### Step 3 (post-baseline — supply-capacity wave)
 
-Each gets its own commit + bench + smoke. Order: #3 first (safest gain),
-then #1 (prereq for #2), then #2 (primary lever), then #4/#5 (additive).
+Not in the E2 table — these change capacity, not efficiency:
 
-### Step 4 (optional, bench-gated)
+7. `n_workers` sweep on laptop (10 / 12 / 14 / 16) — config-only,
+   one overnight smoke per setting.
+8. Remote/distributed self-play worker (Phase 4.5 scope) — doubles supply;
+   dominates every efficiency lever combined.
 
-10. Item #8 (channels_last) — bench-gated. Only land if iso bench shows
+### Step 4 (compute-side wave — fire when supply catches up)
+
+Wave triggered only if `trainer_idle_pct` drops below ~60% in a sustained
+run. Until then, these land at ~0 wall benefit; save the review budget.
+
+9.  Item #10 (pack `.item()` metrics) — S.
+10. Item #9 (pinned H2D trainer-side) — S.
+11. Item #11 (GIL release on `sample_batch`) — S.
+12. Item #8 (dedicated inference stream) — M. Full 15–20% compute uplift
+    only accessible when trainer is no longer idle.
+13. Items #12 (set_to_none), #15 (pre-alloc sample_batch Vecs), #14
+    (rayon scatter) — XS/S/M.
+
+### Step 5 (optional, bench-gated)
+
+14. Item #7 (channels_last) — bench-gated. Only land if iso bench shows
     ≥5% forward speedup.
-11. Item #9 (amp_dtype knob) — per-variant A/B. Land the knob either way;
-    flip default per host empirically.
 
-### Step 5 (hygiene)
+### Step 6 (hygiene, any time)
 
-12. Items #13 (setup_torch), #14/#15 (sample_batch cleanups). No
-    behavioural impact; code health.
+15. Item #16 (`setup_torch()` + explicit TF32) — code health, zero perf.
 
 ### Out of scope this investigation
 
@@ -193,20 +269,34 @@ Settled in sprint log; do not re-propose without overriding evidence:
 
 ---
 
-## E5 — Success criteria for Wave 2 (#1 + #2 + #3 + #4 + #5 combined)
+## E5 — Success criteria
 
+### Step 2 (supply-side wave) success — wall-clock criteria
 Post-integration sustained run should exhibit:
+
+- **Games/hr up ≥5–10%** vs reference 364 (this is the wall metric).
+- Inference `h2d_us` p50 **< 150 µs** (from current 303 µs).
+- Inference `forward_us` p50 unchanged within noise (stream separation
+  is *not* in this wave).
+- No regression in loss curves, eval win-rate, or policy entropy at step
+  5k vs reference run trajectory.
+- VRAM peak (new `vram_probe`) stays **≤ 3 GB**.
+
+### Step 4 (compute-side wave) success — only meaningful after supply catches up
+Gated on trainer-idle-% dropping below ~60% first. Criteria then:
 
 - Live `inference_batch_timing.forward_us` p50 within **10%** of iso bench
   NN latency (currently 67% gap at 13.96 vs 8.37 ms).
-- Trainer idle % (from `train_step` gap analysis) **down by ≥10 percentage
-  points** vs reference run's 95%.
-- Games/hr **up ≥15%** vs reference 364.
-- VRAM peak (new `vram_probe`) stays **≤ 3 GB**.
-- No regression in loss curves, eval win-rate, or policy entropy at
-  step 5k vs reference run trajectory.
+- Trainer idle % **down by ≥10 percentage points** vs whatever the
+  post-Step-2 baseline is.
+- Games/hr **up ≥15%** over the Step-2 baseline.
 
 If any of those criteria miss, roll back the failing commit and re-root-cause.
+
+### Regime-change trigger
+After every sustained run, log the implied `trainer_idle_pct` from
+`train_step` inter-arrival gaps. When it drops below 60%, promote Step 4
+to the active wave. Until then, Step 2 + Step 3 (capacity) dominate.
 
 ---
 
