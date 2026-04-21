@@ -179,6 +179,29 @@ impl ReplayBuffer {
         self.push_game_impl(states, chain_planes, policies, outcomes, ownership, winning_line, game_id, game_length, is_full_search)
     }
 
+    /// Store N positions with per-row game_length and is_full_search in one PyO3 call.
+    ///
+    /// Replaces the per-row `push` loop in `WorkerPool._stats_loop`, avoiding N
+    /// PyO3 method-dispatch + PyRefMut acquire/release cycles. All rows are
+    /// treated as untagged (game_id = -1); use `push_game` if rows need a
+    /// shared game_id.
+    ///
+    /// Per-row `game_lengths` must be pre-computed compound-move counts
+    /// (i.e. `(plies + 1) / 2`); value 0 → default weight 1.0.
+    pub fn push_many(
+        &mut self,
+        states:         PyReadonlyArray4<f16>,
+        chain_planes:   PyReadonlyArray4<f16>,
+        policies:       PyReadonlyArray2<f32>,
+        outcomes:       PyReadonlyArray1<f32>,
+        ownership:      PyReadonlyArray2<u8>,
+        winning_line:   PyReadonlyArray2<u8>,
+        game_lengths:   PyReadonlyArray1<u16>,
+        is_full_search: PyReadonlyArray1<u8>,
+    ) -> PyResult<()> {
+        self.push_many_impl(states, chain_planes, policies, outcomes, ownership, winning_line, game_lengths, is_full_search)
+    }
+
     /// Sample `batch_size` entries, optionally with 12-fold hex augmentation.
     ///
     /// Returns:
