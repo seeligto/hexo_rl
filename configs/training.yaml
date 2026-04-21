@@ -107,3 +107,10 @@ mixing:
   buffer_persist_path: "checkpoints/replay_buffer.bin"
 
 seed: 42
+
+# Perf-investigation probes (docs/perf/instrumentation_notes.md).
+# All default off; zero overhead when disabled. Enable only for diagnostic runs.
+diagnostics:
+  perf_timing: false        # B1 train step + B2 inference batch breakdowns
+  perf_sync_cuda: false     # B2 wrap forward with torch.cuda.synchronize() for true latency
+  vram_probe_interval: 100  # log torch.cuda.max_memory_allocated every N steps (0=off)

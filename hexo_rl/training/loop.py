@@ -134,6 +134,25 @@ def run_training_loop(
         torch.cuda.synchronize()
         log.info("cuda_warmup_done", elapsed_sec=round(time.time() - _t_warmup, 1))
 
+    # ── CUDA stream audit (B4 perf probe) ─────────────────────────────────────
+    # Logged from the main (training) thread context. InferenceServer logs its
+    # own stream in run(). If both are on the same default stream pointer, no
+    # copy/compute overlap is possible — the Q18 hypothesis.
+    _diag = config.get("diagnostics") if isinstance(config.get("diagnostics"), dict) else {}
+    if bool(_diag.get("perf_timing", False)) and device.type == "cuda":
+        try:
+            _cur = torch.cuda.current_stream(device)
+            _def = torch.cuda.default_stream(device)
+            emit_event({
+                "event": "cuda_stream_audit",
+                "context": "training_thread",
+                "current_stream_ptr": int(_cur.cuda_stream),
+                "default_stream_ptr": int(_def.cuda_stream),
+                "on_default_stream": _cur.cuda_stream == _def.cuda_stream,
+            })
+        except Exception as exc:  # noqa: BLE001
+            emit_event({"event": "cuda_stream_audit_failed", "context": "training_thread", "error": str(exc)})
+
     # ── Worker pool ───────────────────────────────────────────────────────────
     from hexo_rl.selfplay.pool import WorkerPool
     pool = WorkerPool(inf_model, config, device, buffer)
