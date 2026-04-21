@@ -273,6 +273,13 @@ def run_training_loop(
     eval_interval = int(train_cfg.get("eval_interval", config.get("eval_interval", _eval_interval_cfg)))
     training_steps_per_game = float(train_cfg.get("training_steps_per_game", 1.0))
     max_train_burst          = int(train_cfg.get("max_train_burst", 8))
+    if "augment" not in train_cfg and "augment" not in config:
+        raise ValueError(
+            "training.augment missing from merged config — required key per "
+            "configs/training.yaml. Set `augment: true` for production (preserves "
+            "12-fold hex symmetry augmentation) or `augment: false` for diagnostic runs."
+        )
+    augment_cfg = bool(train_cfg.get("augment", config.get("augment")))
     train_step = trainer.step
     stop_step  = (trainer.step + args.iterations) if args.iterations else None
     games_played  = 0
@@ -411,6 +418,7 @@ def run_training_loop(
                         pretrained_buffer, buffer, recent_buffer,
                         n_pre, n_self, batch_size, batch_size_cfg,
                         recency_weight, bufs, train_step,
+                        augment=augment_cfg,
                     )
                     loss_info = trainer.train_step_from_tensors(
                         states, policies, outcomes,
@@ -421,7 +429,11 @@ def run_training_loop(
                     )
                 else:
                     w_pre = 0.0
-                    loss_info = trainer.train_step(buffer, recent_buffer=recent_buffer)
+                    loss_info = trainer.train_step(
+                        buffer,
+                        augment=augment_cfg,
+                        recent_buffer=recent_buffer,
+                    )
 
                 train_step = trainer.step
                 if initial_policy_loss is None:

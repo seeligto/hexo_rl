@@ -3,6 +3,7 @@
 
 fp16: true
 torch_compile: false   # disabled — Python 3.14 CUDA graph incompatibility (see sprint §25, §30)
+augment: true  # 12-fold hex symmetry augmentation on sample_batch; keep true in production
 policy_prune_frac: 0.02
 # Independent of gumbel_mcts search — controls policy target computation, not search algorithm
 batch_size: 256
