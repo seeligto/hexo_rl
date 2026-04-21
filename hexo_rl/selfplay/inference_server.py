@@ -14,9 +14,13 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 
+import structlog
+
 from engine import InferenceBatcher  # type: ignore[attr-defined]
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.monitoring.events import emit_event
+
+# Perf probes log via structlog so they persist to JSONL independent of dashboards.
+_perf_log = structlog.get_logger()
 
 
 # ── Server ────────────────────────────────────────────────────────────────────
@@ -105,15 +109,15 @@ class InferenceServer(threading.Thread):
             try:
                 current_stream = torch.cuda.current_stream(self.device)
                 default_stream = torch.cuda.default_stream(self.device)
-                emit_event({
-                    "event": "cuda_stream_audit",
-                    "context": "inference_server",
-                    "current_stream_ptr": int(current_stream.cuda_stream),
-                    "default_stream_ptr": int(default_stream.cuda_stream),
-                    "on_default_stream": current_stream.cuda_stream == default_stream.cuda_stream,
-                })
+                _perf_log.info(
+                    "cuda_stream_audit",
+                    context="inference_server",
+                    current_stream_ptr=int(current_stream.cuda_stream),
+                    default_stream_ptr=int(default_stream.cuda_stream),
+                    on_default_stream=current_stream.cuda_stream == default_stream.cuda_stream,
+                )
             except Exception as exc:  # noqa: BLE001
-                emit_event({"event": "cuda_stream_audit_failed", "context": "inference_server", "error": str(exc)})
+                _perf_log.warning("cuda_stream_audit_failed", context="inference_server", error=str(exc))
 
         try:
             while not self._stop_event.is_set():
@@ -165,16 +169,16 @@ class InferenceServer(threading.Thread):
                             values,
                         )
                         if _perf:
-                            emit_event({
-                                "event": "inference_batch_timing",
-                                "batch_n":        len(request_ids),
-                                "fetch_wait_us":  (_t_fetched - _t_fetch_start) * 1e6,
-                                "h2d_us":         (_t_h2d_done - _t_fetched) * 1e6,
-                                "forward_us":     (_t_forward_done - _t_h2d_done) * 1e6,
-                                "d2h_scatter_us": (_t_d2h_done - _t_forward_done) * 1e6,
-                                "sync_cuda":      _sync,
-                                "forward_count":  self._forward_count + 1,
-                            })
+                            _perf_log.info(
+                                "inference_batch_timing",
+                                batch_n=len(request_ids),
+                                fetch_wait_us=(_t_fetched - _t_fetch_start) * 1e6,
+                                h2d_us=(_t_h2d_done - _t_fetched) * 1e6,
+                                forward_us=(_t_forward_done - _t_h2d_done) * 1e6,
+                                d2h_scatter_us=(_t_d2h_done - _t_forward_done) * 1e6,
+                                sync_cuda=_sync,
+                                forward_count=self._forward_count + 1,
+                            )
                     except Exception as exc:
                         # Explicitly signal failure to Rust waiters rather than returning dummy data
                         # or failing silently. This allows Rust to handle the error properly.

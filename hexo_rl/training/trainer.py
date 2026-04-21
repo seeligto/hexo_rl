@@ -35,7 +35,8 @@ import structlog
 
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.utils.device import best_device
-from hexo_rl.monitoring.events import emit_event
+# Perf probes use structlog directly (log.info) so they persist to JSONL even
+# when --no-dashboard is set. emit_event is dashboard-renderer fan-out only.
 from hexo_rl.training.aux_decode import decode_ownership, decode_winning_line, mask_aux_rows
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
@@ -308,13 +309,13 @@ class Trainer:
                 buffer.sample_batch(batch_size, augment)
 
         if _perf:
-            emit_event({
-                "event": "buffer_sample_timing",
-                "step": self.step,
-                "sample_us": (time.perf_counter() - _t_sample_start) * 1e6,
-                "batch_n": int(states.shape[0]),
-                "used_recent": recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0,
-            })
+            log.info(
+                "buffer_sample_timing",
+                step=self.step,
+                sample_us=(time.perf_counter() - _t_sample_start) * 1e6,
+                batch_n=int(states.shape[0]),
+                used_recent=recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0,
+            )
 
         return self._train_on_batch(
             states, policies, outcomes,
@@ -707,33 +708,34 @@ class Trainer:
             fp16_scale=self.scaler.get_scale(),
         )
 
-        # Perf probes (diagnostic mode only) — emitted fire-and-forget.
+        # Perf probes (diagnostic mode only) — via structlog so they persist
+        # to JSONL independent of dashboard renderers.
         if _perf:
-            emit_event({
-                "event": "train_step_timing",
-                "step": self.step,
-                "h2d_us":      (_t_h2d - _t0) * 1e6,
-                "fwd_loss_us": (_t_forward_loss - _t_h2d) * 1e6,
-                "bwd_opt_us":  (_t_backward_opt - _t_forward_loss) * 1e6,
-                "total_us":    (_t_backward_opt - _t0) * 1e6,
-                "sync_cuda":   _sync,
-                "batch_n":     batch_n,
-            })
+            log.info(
+                "train_step_timing",
+                step=self.step,
+                h2d_us=(_t_h2d - _t0) * 1e6,
+                fwd_loss_us=(_t_forward_loss - _t_h2d) * 1e6,
+                bwd_opt_us=(_t_backward_opt - _t_forward_loss) * 1e6,
+                total_us=(_t_backward_opt - _t0) * 1e6,
+                sync_cuda=_sync,
+                batch_n=batch_n,
+            )
         if self._vram_probe_interval > 0 and self.device.type == "cuda" \
                 and self.step % self._vram_probe_interval == 0:
             stats = torch.cuda.memory_stats(self.device)
             reserved = torch.cuda.memory_reserved(self.device)
             allocated = torch.cuda.memory_allocated(self.device)
             peak = torch.cuda.max_memory_allocated(self.device)
-            emit_event({
-                "event": "vram_probe",
-                "step": self.step,
-                "vram_peak_gb":      peak / 1e9,
-                "vram_allocated_gb": allocated / 1e9,
-                "vram_reserved_gb":  reserved / 1e9,
-                "vram_frag_gb":      max(0, reserved - allocated) / 1e9,
-                "num_ooms":          int(stats.get("num_ooms", 0)),
-            })
+            log.info(
+                "vram_probe",
+                step=self.step,
+                vram_peak_gb=peak / 1e9,
+                vram_allocated_gb=allocated / 1e9,
+                vram_reserved_gb=reserved / 1e9,
+                vram_frag_gb=max(0, reserved - allocated) / 1e9,
+                num_ooms=int(stats.get("num_ooms", 0)),
+            )
             torch.cuda.reset_peak_memory_stats(self.device)
 
         return result
