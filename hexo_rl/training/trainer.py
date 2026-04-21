@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -34,6 +35,7 @@ import structlog
 
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.utils.device import best_device
+from hexo_rl.monitoring.events import emit_event
 from hexo_rl.training.aux_decode import decode_ownership, decode_winning_line, mask_aux_rows
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
@@ -209,6 +211,19 @@ class Trainer:
             _mon.get("log_policy_target_metrics", config.get("log_policy_target_metrics", True))
         )
 
+        # Perf-investigation probes (docs/perf/instrumentation_notes.md).
+        # Cached booleans so hot-path has no dict lookups when disabled.
+        _diag = config.get("diagnostics") if isinstance(config.get("diagnostics"), dict) else {}
+        self._perf_timing = bool(_diag.get("perf_timing", False))
+        self._perf_sync_cuda = bool(_diag.get("perf_sync_cuda", False))
+        self._vram_probe_interval = int(_diag.get("vram_probe_interval", 100))
+        if self._perf_timing:
+            log.info(
+                "perf_timing_enabled",
+                sync_cuda=self._perf_sync_cuda,
+                vram_probe_interval=self._vram_probe_interval,
+            )
+
         # Load log if it already exists (resuming from checkpoint).
         log_path = self.checkpoint_dir / "checkpoint_log.json"
         if log_path.exists():
@@ -270,6 +285,9 @@ class Trainer:
         batch_size = int(self.config["batch_size"])
         recency_weight = float(self.config.get("recency_weight", 0.0))
 
+        _perf = self._perf_timing
+        _t_sample_start = time.perf_counter() if _perf else 0.0
+
         if recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0:
             n_recent = max(1, int(round(batch_size * recency_weight)))
             n_uniform = batch_size - n_recent
@@ -288,6 +306,15 @@ class Trainer:
         else:
             states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search = \
                 buffer.sample_batch(batch_size, augment)
+
+        if _perf:
+            emit_event({
+                "event": "buffer_sample_timing",
+                "step": self.step,
+                "sample_us": (time.perf_counter() - _t_sample_start) * 1e6,
+                "batch_n": int(states.shape[0]),
+                "used_recent": recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0,
+            })
 
         return self._train_on_batch(
             states, policies, outcomes,
@@ -344,6 +371,10 @@ class Trainer:
         n_pretrain: int = 0,
     ) -> Dict[str, float]:
         """Core training step: forward, loss, backward, optimizer step."""
+        _perf = self._perf_timing
+        _sync = self._perf_sync_cuda
+        _t0 = time.perf_counter() if _perf else 0.0
+
         aux_weight         = float(self.config.get("aux_opp_reply_weight", 0.0))
         uncertainty_weight = float(self.config.get("uncertainty_weight", 0.0))
         ownership_weight   = float(self.config.get("ownership_weight", 0.0))
@@ -408,6 +439,11 @@ class Trainer:
             own_t = decode_ownership(ownership_targets, self.device)   # (B, 19, 19) f32
         if use_threat:
             thr_t = decode_winning_line(threat_targets, self.device)   # (B, 19, 19) f32
+
+        if _perf:
+            if _sync and self.device.type == "cuda":
+                torch.cuda.synchronize()
+            _t_h2d = time.perf_counter()
 
         with autocast(device_type=self.device.type, dtype=torch.float16,
                       enabled=self.fp16):
@@ -505,6 +541,11 @@ class Trainer:
                 chain_loss, chain_weight,
             )
 
+        if _perf:
+            if _sync and self.device.type == "cuda":
+                torch.cuda.synchronize()
+            _t_forward_loss = time.perf_counter()
+
         # Guard: skip step on non-finite loss (safety net for numerical instability).
         if not torch.isfinite(loss):
             log.warning(
@@ -547,6 +588,11 @@ class Trainer:
             loss, self.optimizer, self.scaler, self.model, self.fp16,
             max_grad_norm=max_grad_norm,
         )
+
+        if _perf:
+            if _sync and self.device.type == "cuda":
+                torch.cuda.synchronize()
+            _t_backward_opt = time.perf_counter()
 
         self.step += 1
 
@@ -660,6 +706,35 @@ class Trainer:
             lr=result["lr"],
             fp16_scale=self.scaler.get_scale(),
         )
+
+        # Perf probes (diagnostic mode only) — emitted fire-and-forget.
+        if _perf:
+            emit_event({
+                "event": "train_step_timing",
+                "step": self.step,
+                "h2d_us":      (_t_h2d - _t0) * 1e6,
+                "fwd_loss_us": (_t_forward_loss - _t_h2d) * 1e6,
+                "bwd_opt_us":  (_t_backward_opt - _t_forward_loss) * 1e6,
+                "total_us":    (_t_backward_opt - _t0) * 1e6,
+                "sync_cuda":   _sync,
+                "batch_n":     batch_n,
+            })
+        if self._vram_probe_interval > 0 and self.device.type == "cuda" \
+                and self.step % self._vram_probe_interval == 0:
+            stats = torch.cuda.memory_stats(self.device)
+            reserved = torch.cuda.memory_reserved(self.device)
+            allocated = torch.cuda.memory_allocated(self.device)
+            peak = torch.cuda.max_memory_allocated(self.device)
+            emit_event({
+                "event": "vram_probe",
+                "step": self.step,
+                "vram_peak_gb":      peak / 1e9,
+                "vram_allocated_gb": allocated / 1e9,
+                "vram_reserved_gb":  reserved / 1e9,
+                "vram_frag_gb":      max(0, reserved - allocated) / 1e9,
+                "num_ooms":          int(stats.get("num_ooms", 0)),
+            })
+            torch.cuda.reset_peak_memory_stats(self.device)
 
         return result
 

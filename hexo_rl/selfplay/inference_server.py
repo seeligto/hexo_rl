@@ -8,6 +8,7 @@ submit policy/value outputs back to Rust, and wake blocked game threads.
 from __future__ import annotations
 
 import threading
+import time
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -15,6 +16,7 @@ import torch
 
 from engine import InferenceBatcher  # type: ignore[attr-defined]
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.monitoring.events import emit_event
 
 
 # ── Server ────────────────────────────────────────────────────────────────────
@@ -51,6 +53,11 @@ class InferenceServer(threading.Thread):
         self._weights_lock = threading.Lock()
         self._forward_count = 0
         self._total_requests = 0
+
+        # Perf-investigation probes (docs/perf/instrumentation_notes.md).
+        _diag = config.get("diagnostics") if isinstance(config.get("diagnostics"), dict) else {}
+        self._perf_timing = bool(_diag.get("perf_timing", False))
+        self._perf_sync_cuda = bool(_diag.get("perf_sync_cuda", False))
 
     @property
     def batcher(self) -> InferenceBatcher:
@@ -89,15 +96,36 @@ class InferenceServer(threading.Thread):
     # ── Thread body ───────────────────────────────────────────────────────────
 
     def run(self) -> None:
+        _perf = self._perf_timing
+        _sync = self._perf_sync_cuda and self.device.type == "cuda"
+
+        # B4: log which CUDA stream we're on, once at thread start.
+        # Q18 smoking gun: if this matches trainer stream (both default), no overlap.
+        if self.device.type == "cuda":
+            try:
+                current_stream = torch.cuda.current_stream(self.device)
+                default_stream = torch.cuda.default_stream(self.device)
+                emit_event({
+                    "event": "cuda_stream_audit",
+                    "context": "inference_server",
+                    "current_stream_ptr": int(current_stream.cuda_stream),
+                    "default_stream_ptr": int(default_stream.cuda_stream),
+                    "on_default_stream": current_stream.cuda_stream == default_stream.cuda_stream,
+                })
+            except Exception as exc:  # noqa: BLE001
+                emit_event({"event": "cuda_stream_audit_failed", "context": "inference_server", "error": str(exc)})
+
         try:
             while not self._stop_event.is_set():
                 try:
+                    _t_fetch_start = time.perf_counter() if _perf else 0.0
                     request_ids, batch = self._batcher.next_inference_batch(
                         self._batch_size,
                         self._max_wait_ms,
                     )
                     if not request_ids:
                         continue
+                    _t_fetched = time.perf_counter() if _perf else 0.0
 
                     self._total_requests += len(request_ids)
 
@@ -107,12 +135,20 @@ class InferenceServer(threading.Thread):
                         # out-of-window indices are zeroed before reaching this fused batch.
                         batch_np = np.ascontiguousarray(batch, dtype=np.float32)
                         tensor = torch.from_numpy(batch_np).to(self.device).reshape(len(request_ids), *self._shape)
+                        if _perf:
+                            if _sync:
+                                torch.cuda.synchronize()
+                            _t_h2d_done = time.perf_counter()
                         with self._weights_lock:
                             self.model.eval()
                             with torch.no_grad():
                                 with torch.autocast(device_type=self.device.type):
                                     log_policy, value, _v_logit = self.model(tensor)
-                        
+                        if _perf:
+                            if _sync:
+                                torch.cuda.synchronize()
+                            _t_forward_done = time.perf_counter()
+
                         # .float() ensures float32 regardless of autocast dtype
                         # (bfloat16 on CPU, float16 on CUDA — NumPy only supports float16).
                         # Re-normalize after exp() to correct reduced-precision rounding drift.
@@ -120,12 +156,25 @@ class InferenceServer(threading.Thread):
                         probs = probs / probs.sum(dim=-1, keepdim=True)
                         policies = np.ascontiguousarray(probs.cpu().numpy())
                         values = np.ascontiguousarray(value.squeeze(-1).float().cpu().numpy())
+                        if _perf:
+                            _t_d2h_done = time.perf_counter()
 
                         self._batcher.submit_inference_results(
                             request_ids,
                             policies,
                             values,
                         )
+                        if _perf:
+                            emit_event({
+                                "event": "inference_batch_timing",
+                                "batch_n":        len(request_ids),
+                                "fetch_wait_us":  (_t_fetched - _t_fetch_start) * 1e6,
+                                "h2d_us":         (_t_h2d_done - _t_fetched) * 1e6,
+                                "forward_us":     (_t_forward_done - _t_h2d_done) * 1e6,
+                                "d2h_scatter_us": (_t_d2h_done - _t_forward_done) * 1e6,
+                                "sync_cuda":      _sync,
+                                "forward_count":  self._forward_count + 1,
+                            })
                     except Exception as exc:
                         # Explicitly signal failure to Rust waiters rather than returning dummy data
                         # or failing silently. This allows Rust to handle the error properly.
