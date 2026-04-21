@@ -52,6 +52,19 @@ from engine import ReplayBuffer
 log = structlog.get_logger()
 
 
+def _resolve_amp_dtype(config: Dict[str, Any]) -> torch.dtype:
+    """Map config ``amp_dtype`` string to a torch.dtype. Default fp16."""
+    raw = str(config.get("amp_dtype", "fp16")).lower()
+    if raw in ("fp16", "float16", "half"):
+        return torch.float16
+    if raw in ("bf16", "bfloat16"):
+        return torch.bfloat16
+    raise ValueError(
+        f"amp_dtype must be 'fp16' or 'bf16', got {raw!r}. "
+        "Set in configs/training.yaml or a variant override."
+    )
+
+
 def prune_policy_targets(
     pi: torch.Tensor, threshold_frac: float = 0.02
 ) -> torch.Tensor:
@@ -166,6 +179,13 @@ class Trainer:
             fp16_requested = False
         self.fp16 = fp16_requested
 
+        # Autocast dtype selection — fp16 vs bf16. bf16 has wider dynamic
+        # range (no GradScaler needed on Ampere+/Ada) at the cost of less
+        # mantissa precision. Default fp16 preserves legacy behaviour.
+        self.amp_dtype = _resolve_amp_dtype(config)
+        # GradScaler is only meaningful for fp16; bf16 has sufficient range.
+        scaler_enabled = self.fp16 and self.amp_dtype == torch.float16
+
         self.config = config
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -177,8 +197,9 @@ class Trainer:
         )
         self.scheduler = self._build_scheduler(config)
 
-        # GradScaler for FP16 training; no-op on CPU.
-        self.scaler = GradScaler(device=self.device.type, enabled=self.fp16)
+        # GradScaler for FP16 training; no-op on CPU or when bf16 selected.
+        self.scaler = GradScaler(device=self.device.type, enabled=scaler_enabled)
+        self._scaler_enabled = scaler_enabled
 
         # torch.compile disabled — Python 3.14 compatibility issues
         # See sprint log §25, §30 for history
@@ -446,7 +467,7 @@ class Trainer:
                 torch.cuda.synchronize()
             _t_h2d = time.perf_counter()
 
-        with autocast(device_type=self.device.type, dtype=torch.float16,
+        with autocast(device_type=self.device.type, dtype=self.amp_dtype,
                       enabled=self.fp16):
             use_aux         = aux_weight > 0.0
             use_uncertainty = uncertainty_weight > 0.0
@@ -586,7 +607,7 @@ class Trainer:
 
         max_grad_norm = float(self.config.get("grad_clip", 1.0))
         grad_norm = fp16_backward_step(
-            loss, self.optimizer, self.scaler, self.model, self.fp16,
+            loss, self.optimizer, self.scaler, self.model, self._scaler_enabled,
             max_grad_norm=max_grad_norm,
         )
 
