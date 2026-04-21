@@ -106,8 +106,13 @@ capacity itself. Things that raise supply:
   BF16 on Ada. In scope (E2 #1).
 - **Worker count sweep.** Bucket 7 did not confirm `n_workers=14` is optimal
   for the laptop's 16-thread 8845HS. Worth a 10/12/14/16 A/B sweep.
-- **Per-worker MCTS sim/s.** Already ~69K sim/s bench; near-ceiling — modest
-  residual upside only.
+- **Per-worker MCTS sim/s.** Bench reports 69K sim/s (CPU-only, no NN).
+  Whether that's near-ceiling or has material upside is **not established** —
+  no profile exists of the MCTS inner loop under live-NN conditions. Worth
+  a dedicated investigation (flamegraph + per-phase timing for selection /
+  expansion / backup / TT lookup). Could plausibly be 1.5–2× if node-pool
+  allocation, TT hash, or Zobrist key derivation dominates; could also be
+  within 10% of fundamental — unknown.
 - **Remote/distributed self-play worker** (Phase 4.5 direction). Doubles
   supply without any single-process optim. **Probably the biggest single
   lever available** and beats every entry in E2 for wall-clock uplift. No
