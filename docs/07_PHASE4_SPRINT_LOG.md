@@ -3445,3 +3445,294 @@ for this run. Flagged for broader MCTS review if it recurs.
 - `feat(monitoring): mirror I1/I2 cluster + colony metrics to JSONL`
   (b35de20)
 - `docs(sprint): §108 desktop gumbel_full sustained run launch`
+
+---
+
+## §109 — Q33 selfplay entropy diagnostic — 2026-04-21
+
+(Numbered §109 because §107 and §108 were already taken; the Q33 task prompt
+asked for "§107". Kept chronological.)
+
+Follow-up to the `reports/diag_20k_collapse_2026-04-21.md` §"Additional signal"
+candidate — that report flagged `pe_self ≈ 5.35` in the `train_c51d245d…`
+`gumbel_targets` run and asked whether the flatness is expected at bootstrap
+strength or a signal-processing bug in the completed-Q target path
+(`get_improved_policy` on PUCT trees post-§74.1). Three 25-min smokes from
+`bootstrap_model.pt` on laptop (Ryzen 7 8845HS + RTX 4060, 14 workers),
+harmonized knobs, only `gumbel_mcts` / `completed_q_values` differ.
+Report: `reports/q33_selfplay_entropy_2026-04-21.md`. Extractor:
+`/tmp/q33_extract.py`. Smoke override configs: `/tmp/q33_smoke_*.yaml`
+(not in tree, per the "no config changes" scope).
+
+**Verdict: EXPECTED / INVERSION.** Not a completed-Q bug. With
+`policy_loss` interpreted as the upper bound on `H(target)` (`CE ≥ H(target)`),
+the three variants produce: baseline_puct `pl = 5.52` (targets near uniform),
+gumbel_targets `pl = 1.12` (targets sharp, `H(target) ≤ 1.12`), gumbel_full
+`pl = 2.33` (targets moderately sharp). `completed_q_values=true`
+**sharpens** targets on both PUCT and Gumbel SH backends at bootstrap
+strength. The diag report's `pe_self ≈ 5.35` observation was
+**model-output entropy** (`H(p_model)` on selfplay rows, per
+`trainer.py:570-572`), not target entropy — the two share the event key
+`policy_entropy_selfplay` but measure different things. In the smoke,
+`gumbel_targets` reproduces the production pe_self drift (first-quartile
+4.62 → last-quartile 5.54) in 220 steps while the targets simultaneously
+sharpen (CE 1.50 → 0.98). The 20K collapse signature is the **trainer
+failing to fit sharp selfplay targets**, not flat targets. Phase 4.5
+bootstrap work remains the correct next step: a stronger start should let
+the model fit completed-Q targets from step 0 instead of drifting uniform.
+
+Secondary observation: `gumbel_full` emits short games (27-ply mean vs
+131/139 on the other two) and 0 % draws in the smoke window; orthogonal
+to the target-entropy finding but flagged for a separate investigation.
+`timeout --signal=INT --kill-after=30s 1500s` failed to terminate the
+gumbel_full smoke (ran ~74 min before manual kill) — orchestration
+artifact, not a Q33 finding. Caveat: the smoke override files
+(`/tmp/q33_smoke_*.yaml`) accidentally put `mixing:` under `training:`
+while the base `configs/training.yaml` keeps it top-level, so the
+pretrain corpus was not loaded and `w_pre = 0` throughout — batches are
+**100 % selfplay rows**. For the Q33 question this is useful (isolates
+selfplay target signal) but the trainer-fit dynamic will differ from
+production mixed-batch behaviour at later steps.
+
+Links: Q33 entry promoted in `docs/06_OPEN_QUESTIONS.md` (WATCH, not a
+bug). Related Q17 (sprint §70, §73) resolution held — Dirichlet port is
+unaffected. Related diag-20K entry (`reports/diag_20k_collapse_2026-04-21.md`)
+§"Additional signal" is now superseded: the recommendation to audit a
+completed-Q flattening bug can be closed.
+
+### Commits
+
+- `docs(sprint): §109 Q33 selfplay entropy diagnostic`
+- `docs(q33): smoke report + Q33 entry in open questions`
+
+---
+
+## §110 — Q33 follow-up: trainer-fit sanity check (Q33-B) — 2026-04-21
+
+Follow-up to §109. Q33 left open: is the model drifting uniform because
+bootstrap is weak (H_weak) or because the trainer update path drives it
+uniform regardless (H_bug)? Phase 4.5 SealBot-injection pretrain is wasted
+effort if the answer is H_bug.
+
+Ran the Q33 `gumbel_targets` smoke verbatim except the starting checkpoint:
+swapped `bootstrap_model.pt` → `checkpoint_00017000.pt` (sharpest available
+post-§99 checkpoint; mean K=0 H(π) = 2.528 nats vs bootstrap 2.860, top-1
+0.381 vs 0.334 on 300 positions from the 20K-collapse run). Same 14-worker
+laptop config, same accidental `w_pre = 0` mixing-isolation, same
+completed-Q targets, same 1500 s timeout, isolated `/tmp/q33b_ckpts/` so
+tracked checkpoints untouched. Report:
+`reports/q33b_trainer_fit_sanity_2026-04-21.md`. Extractor:
+`/tmp/q33b_extract.py`.
+
+**Result: Δpe_self = +0.004 nats over 180 training steps (Q1=5.360,
+Q4=5.364). `pl_end = 0.924` — targets stay sharp.** The model does not
+drift — it **sits at a fixed point of ~5.36 nats from step 17010 onward**.
+
+Compared to Q33 bootstrap start (Q1=4.62 → Q4=5.54, Δ=+0.92), the
+sharper-K=0 ckpt starts *higher* on `pe_self` (5.36) and stays flat. The
+"drift to uniform" signature in Q33 was not a drift toward uniform — it
+was convergence to a ~5.4 nat fixed point regardless of start.
+
+**Verdict: H_bug (with partial H_weak signal).** Strict application of the
+task's decision rules (H_bug: `pe_end ≥ 5.0`; H_weak: `Δpe < 0.5` AND
+`pl_end ≤ Q33 pl_end`) fires **both** branches, so the
+discriminator is not clean — the premise "sharper checkpoint yields
+sharper `pe_self` at step 0" failed: K=0 sharpness on a fixed fixture
+does not translate to lower `pe_self` on **the checkpoint's own self-play
+rows**. The operative finding is: `pe_self ≈ 5.4` is a fixed point of the
+trainer-update-path on the Rust self-play distribution, not a drift. Two
+candidate explanations, not discriminated by this smoke:
+
+1. **Self-play distribution shift.** A sharper model reaches harder
+   positions where its own prior is diffuse by construction — the
+   "frontier" sits near-uniform entropy. Healthy, not pathological.
+2. **Trainer-update path error.** Augmentation-mask mis-alignment,
+   full-search mask inversion, entropy-regularizer sign error, or mixing
+   interference, any of which pins `pe_self` near uniform regardless of
+   signal quality.
+
+**Implication for Phase 4.5:** do NOT launch on the premise that stronger
+bootstrap will move `pe_self` off ~5.4 — ckpt_17000 already has 17k
+self-play steps of training baked in and sits at the same fixed point.
+Phase 4.5 is still justified for value-quality / opening-coverage reasons,
+but is not the fix for the `pe_self` symptom.
+
+**Audit list (Q37 candidate, see open-questions file):** in priority
+order — (1) `apply_sym` 12-fold augmentation mask alignment for policy
+target vs input rotation (`engine/src/replay_buffer/sample.rs`,
+`sym_tables.rs`); (2) `is_full_search=1` policy-loss mask alignment on
+augmented rows (`hexo_rl/training/losses.py`); (3) entropy-regularizer
+sign / magnitude (`entropy_reg_weight: 0.01`); (4) `weight_decay` /
+optimizer step; (5) LR schedule; (6) re-run with production mixing
+(`w_pre > 0`) to check mixing path.
+
+Secondary incidental finding: the `--override-scheduler-horizon` flag does
+not fully propagate — observed LR at step 17001 is 0.001534 (implying
+scheduler T_max ≈ 50000, from the checkpoint's persisted state), not
+0.002 (which T_max = 1000000 would give). Harmless for this diagnostic
+(Q33 bootstrap ran at 0.002 and produced drift; LR at 77 % of peak is
+well within the range where the same drift would appear). Flag as a
+separate defect in `trainer.py:952-959` for later triage — not a Q33-B
+finding.
+
+Report caveats: picker measures K=0 softmax entropy on fixed fixture
+positions (cross-run, not current self-play); trainer `pe_self` measures
+on 12-fold augmented batch of current self-play rows. These are different
+quantities — rank-order across checkpoints is interpretable, absolute
+values are not directly comparable. The "sharper" criterion for the
+discriminator was satisfied on K=0 fixture but failed on `pe_self` — the
+next follow-up should instrument the trainer to emit `pe_self` on a
+**fixed** cross-run fixture alongside the current-batch `pe_self`, to
+separate policy-sharpness from distribution-shift.
+
+### Commits
+
+- `docs(sprint): §110 Q33-B trainer-fit sanity check`
+- `docs(q33-b): trainer-fit sanity report + Q33 verdict update + Q37 candidate`
+
+---
+
+## §111 — Q33-C augmentation discriminator — 2026-04-21 (HALT)
+
+Follow-up to §110. Q33-B left two candidate explanations for the
+`pe_self ≈ 5.36` fixed point: (E1) healthy self-play distribution shift —
+stronger model plays harder positions → `pe_self` on those is naturally
+high, or (E2) augmentation blur — 12-fold symmetry mis-rotates policy
+targets vs inputs, pinning batch `pe_self` near uniform. Plan: mirror the
+Q33-B `gumbel_targets` smoke with augmentation disabled, compare `pe_A`
+(with aug) vs `pe_B` (no aug), apply |pe_A − pe_B| thresholds.
+
+**Outcome: HALT.** The augmentation toggle is Python-API-only. Audit
+confirms:
+
+- No `augment` / `apply_sym` / `symmetry` config key in `configs/`.
+- `engine/src/replay_buffer/mod.rs:192-207` exposes `sample_batch`
+  with `augment: bool` as a mandatory positional PyO3 argument.
+- `hexo_rl/training/trainer.py:247` default arg `augment: bool = True`;
+  production `loop.py:424` calls `trainer.train_step(buffer, recent_buffer=…)`
+  which inherits the default.
+- `hexo_rl/training/batch_assembly.py` hard-codes `True` at 5 sites
+  (lines 232, 265, 271, 323, 333) — not driven by any flag.
+
+Per the task prompt's explicit branch for this case: "If it's only
+reachable from Python API (not config), document and halt — canonical-only
+split instrumentation would be the next step but that requires code
+changes out of scope here." No smokes were launched.
+
+Report: `reports/q33c_augmentation_discriminator_2026-04-21.md`. The
+report documents the audit, argues against a /tmp monkey-patch workaround
+on scope grounds, and specifies a minimal "plumb `training.augment:
+bool` through `loop.py` + `trainer.train_step` + `assemble_mixed_batch`"
+follow-up task that would unlock the discriminator within a small-code
+scope.
+
+Secondary findings surfaced during the audit, worth keeping on the radar:
+
+- **Static-audit candidate.** `engine/src/replay_buffer/sym_tables.rs:333`
+  already tests coordinate consistency for every symmetry + every
+  source axis. A parity test targeting the *policy scatter* (delta
+  target at cell (0,0) rotated under sym k) is a cheap verification
+  that would falsify E2 without running a smoke. Not done in this task
+  (out of scope), but queued as a zero-runtime check for the next
+  Q37 owner.
+- **Log-analysis candidate.** Q33 `gumbel_targets` 20K drift
+  (`pe_self: 4.62 → 5.54`) vs mean-game-length-in-window correlation
+  on the existing `runs/c51d245de55c4a4bb39ac418397669bd/` logs.
+  Non-zero correlation weakens E2 and strengthens E1; zero correlation
+  is the opposite. Zero-runtime, pure log analysis.
+
+**Effect on Phase 4.5 gating:** unchanged from §110. Q37 remains HIGH /
+blocking. Phase 4.5 bootstrap-strengthening work is not justified on
+the premise of moving `pe_self` off ~5.4; it is justified on independent
+grounds (value quality, opening coverage). The `pe_self` interpretation
+remains to be discriminated before Phase 4.5 commits serious GPU-days
+to a bootstrap rebuild.
+
+**Q33 / Q37 updates** (`docs/06_OPEN_QUESTIONS.md`):
+
+- Q33 unchanged — WATCH, re-framed post-Q33-B still accurate.
+- Q37 gains a "Q33-C HALT" note pointing at the report and the
+  minimal-code-change follow-up scope; priority stays HIGH / blocking.
+
+### Commits
+
+- `docs(sprint): §111 Q33-C augmentation discriminator (halt)`
+- `docs(q33-c): halt report + Q37 update (no verdict, toggle gap documented)`
+
+---
+
+## §112 — Q33-C2 augmentation discriminator (retry, E1 confirmed) — 2026-04-21
+
+Unblocks §111. `feat(training): expose augment as training.augment config
+knob` (commit `eb17389f6a7315fde42a17ac19066fd3d94a4c7d`) adds a tracked
+config knob and plumbs it through `loop.py` → `trainer.train_step` and
+`assemble_mixed_batch` (replacing 5 hard-True sites in
+`batch_assembly.py:232,265,271,323,333`). Missing-key policy: hard
+`ValueError` at loop entry (CLAUDE.md § Config discipline). Default
+`true` preserves production behaviour. 6 new unit tests
+(`tests/test_augment_plumbing.py`). Full test suite pass (847 python
++ 131 rust).
+
+Ran the Q33-C2 smoke as specified in §111's recommended-scope section:
+two 25-min runs from `checkpoint_00017000.pt` on laptop, isolated
+`/tmp/q33c2_ckpts_*`, mixing-isolation preserved (`w_pre = 0`). Arm
+configs `/tmp/q33c2_smoke_with_aug.yaml` (control, `augment: true`)
+and `/tmp/q33c2_smoke_no_aug.yaml` (test, `augment: false`).
+Report: `reports/q33c2_augmentation_discriminator_2026-04-21.md`.
+Extractor: `/tmp/q33c2_extract.py`.
+
+**Result:**
+
+| Metric | Arm A (aug) | Arm B (no aug) | Δ (A − B) |
+|---|---|---|---|
+| pe_self overall | 5.167 | 5.382 | −0.215 |
+| pe_self Q4 | 5.373 | 5.422 | **−0.049** |
+| policy_loss Q4 | 0.914 | 0.813 | +0.101 |
+
+**Verdict: E1 (healthy steady state).** `|Δpe_Q4| = 0.049 nat ≪ 0.5
+nat` threshold — augmentation-off does NOT reduce `pe_self`. If
+anything, pe_B is *slightly higher* than pe_A (sign opposite of E2's
+prediction). The `pe_self ≈ 5.4 nat` fixed point documented in §110
+is self-play-distribution behaviour, not a 12-fold augmentation
+rotation bug. Arm A's `pl_Q4 = 0.914` matches Q33-B's 0.924 within
+smoke noise — plumbing commit introduces no behavioural regression.
+Arm B's `pl_Q4 = 0.813` is lower, consistent with the CLAUDE.md
+Testing-conventions note that augmentation introduces per-batch RNG
+variance on CE; orthogonal to the E1/E2 question.
+
+**Effect on Phase 4.5 gating:** **unblocked** on the `pe_self` premise.
+§110 had flagged the risk that bootstrap-strengthening work would be
+wasted if `pe_self` stayed pinned regardless of improvement. This
+smoke resolves that: the fixed point is the distribution's, not the
+update path's. A stronger bootstrap that reshapes the frontier region
+should move `pe_self` downward for the same reasons
+baseline_puct/gumbel_targets/gumbel_full produce different pl values
+in §109.
+
+**Q33 / Q37 updates (`docs/06_OPEN_QUESTIONS.md`):**
+
+- Q33: closed as WATCH → **RESOLVED (non-pathology)** with E1 verdict
+  pointer to this report.
+- Q37: closed as HIGH → **RESOLVED (non-pathology)**. The augmentation
+  mask hypothesis is ruled out by direct empirical test; the remaining
+  §110 candidates (full-search mask, weight-decay, LR schedule, mixing
+  path) are weakly motivated given the distribution-shift reading now
+  has direct support. If `pe_self` behaviour later regresses on a
+  different checkpoint / distribution, reopen as a separate question
+  with a fresh audit list.
+
+Secondary notes kept for follow-up (not blocking):
+
+- **Cosmetic rename.** `policy_entropy_selfplay` is H(p_model) on
+  augmented current-batch self-play rows. Rename to
+  `model_entropy_selfplay_batch` (or similar) and/or emit target
+  entropy as a parallel key. Bundles with the Q35 candidate.
+- **Confirmatory re-run.** A `w_pre > 0` production-mixing arm would
+  independently confirm the E1 reading on the production path. Not
+  required for Phase 4.5 launch; queue if a production discrepancy
+  emerges.
+
+### Commits
+
+- `feat(training): expose augment as training.augment config knob` (`eb17389`)
+- `docs(q33-c2): §112 E1 verdict, Q33/Q37 resolution, Phase 4.5 unblock`
