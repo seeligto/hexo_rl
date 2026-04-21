@@ -76,6 +76,18 @@ class InferenceServer(threading.Thread):
         self._perf_timing = bool(_diag.get("perf_timing", False))
         self._perf_sync_cuda = bool(_diag.get("perf_sync_cuda", False))
 
+        # Autocast dtype — must match trainer for weight-sync consistency.
+        # Config: "fp16" (default) or "bf16". bf16 on Ampere+/Ada avoids the
+        # GradScaler overhead on the training side; inference-side just
+        # enables the same autocast target.
+        _amp_raw = str(config.get("amp_dtype", "fp16")).lower()
+        if _amp_raw in ("fp16", "float16", "half"):
+            self._amp_dtype = torch.float16
+        elif _amp_raw in ("bf16", "bfloat16"):
+            self._amp_dtype = torch.bfloat16
+        else:
+            raise ValueError(f"amp_dtype must be 'fp16' or 'bf16', got {_amp_raw!r}")
+
     @property
     def batcher(self) -> InferenceBatcher:
         return self._batcher
@@ -174,7 +186,7 @@ class InferenceServer(threading.Thread):
                             )
                         with self._weights_lock:
                             with torch.inference_mode():
-                                with torch.autocast(device_type=self.device.type):
+                                with torch.autocast(device_type=self.device.type, dtype=self._amp_dtype):
                                     log_policy, value, _v_logit = self.model(tensor)
                         if _perf:
                             if _sync:
