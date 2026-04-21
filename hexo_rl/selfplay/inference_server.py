@@ -145,7 +145,7 @@ class InferenceServer(threading.Thread):
                             _t_h2d_done = time.perf_counter()
                         with self._weights_lock:
                             self.model.eval()
-                            with torch.no_grad():
+                            with torch.inference_mode():
                                 with torch.autocast(device_type=self.device.type):
                                     log_policy, value, _v_logit = self.model(tensor)
                         if _perf:

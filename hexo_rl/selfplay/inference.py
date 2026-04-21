@@ -27,13 +27,13 @@ class LocalInferenceEngine:
         self.model = model
         self.device = device
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def infer(self, board: Board) -> Tuple[List[float], float]:
         """Single-board convenience wrapper around ``infer_batch``."""
         policies, values = self.infer_batch([board])
         return policies[0], values[0]
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def infer_batch(self, boards: List[Board]) -> Tuple[List[List[float]], List[float]]:
         """Run inference on a list of boards.
 
