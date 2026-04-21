@@ -59,6 +59,18 @@ class InferenceServer(threading.Thread):
         self._forward_count = 0
         self._total_requests = 0
 
+        # Pinned host staging buffer for async H2D (Bucket 1 #5, E2 row 1).
+        # Size: batch_size * feature_len * 4B ≈ 1 MB for default (64 * 18*19*19 * 4).
+        # Enables DMA engine copy on CUDA (non_blocking=True); no-op on CPU.
+        if self.device.type == "cuda":
+            self._h2d_staging = torch.empty(
+                (self._batch_size, in_channels, board_size, board_size),
+                dtype=torch.float32,
+                pin_memory=True,
+            )
+        else:
+            self._h2d_staging = None
+
         # Perf-investigation probes (docs/perf/instrumentation_notes.md).
         _diag = config.get("diagnostics") if isinstance(config.get("diagnostics"), dict) else {}
         self._perf_timing = bool(_diag.get("perf_timing", False))
@@ -139,7 +151,18 @@ class InferenceServer(threading.Thread):
                         # Coordinate Sentinels (usize::MAX): These are handled in the Rust core during tensor extraction;
                         # out-of-window indices are zeroed before reaching this fused batch.
                         batch_np = np.ascontiguousarray(batch, dtype=np.float32)
-                        tensor = torch.from_numpy(batch_np).to(self.device).reshape(len(request_ids), *self._shape)
+                        n = len(request_ids)
+                        if self._h2d_staging is not None:
+                            # Staged async H2D: CPU→pinned copy, then DMA to GPU.
+                            # Previous batch's H2D is already complete by this point
+                            # (prior forward + .cpu() synced default stream), so
+                            # reusing the staging buffer is safe.
+                            self._h2d_staging[:n].copy_(
+                                torch.from_numpy(batch_np).view(n, *self._shape)
+                            )
+                            tensor = self._h2d_staging[:n].to(self.device, non_blocking=True)
+                        else:
+                            tensor = torch.from_numpy(batch_np).to(self.device).reshape(n, *self._shape)
                         if _perf:
                             if _sync:
                                 torch.cuda.synchronize()
