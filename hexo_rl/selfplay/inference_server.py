@@ -37,6 +37,7 @@ class InferenceServer(threading.Thread):
     ) -> None:
         super().__init__(daemon=True, name="inference-server")
         self.model = model
+        self.model.eval()
         self.device = device
 
         sp = config.get("selfplay", config)
@@ -143,8 +144,12 @@ class InferenceServer(threading.Thread):
                             if _sync:
                                 torch.cuda.synchronize()
                             _t_h2d_done = time.perf_counter()
+                        if self._forward_count == 0:
+                            assert not self.model.training, (
+                                "InferenceServer model entered hot loop in train() mode; "
+                                "eval() should be set at __init__ and re-applied in load_state_dict_safe"
+                            )
                         with self._weights_lock:
-                            self.model.eval()
                             with torch.inference_mode():
                                 with torch.autocast(device_type=self.device.type):
                                     log_policy, value, _v_logit = self.model(tensor)
