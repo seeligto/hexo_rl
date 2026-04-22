@@ -182,6 +182,32 @@ PASS, the `aux_threat` loss is buying something other than what the
 C1 contrast metric measures. If they re-couple with training,
 close Q32 as a bootstrap-only transient.
 
+### Q35 — ReplayBuffer full GIL-release refactor [HIGH, Phase 4.5]
+
+**Priority:** HIGH once trainer_idle_pct drops below ~60% in a sustained run.
+**Source:** supply-wave session 2026-04-22 (item #2 partial landing).
+
+Item #2 of the supply-wave landed the `push_many` batching lever but
+deferred the `py.allow_threads` wrap because the current
+`ReplayBuffer` API uses `&mut self`. Full GIL release on both
+`push_many` and `sample_batch` requires refactoring to `&self` +
+interior mutability (`parking_lot::Mutex<Inner>`), ~300 LoC crate-wide.
+
+Expected additional uplift (per recommendations.md E2): 2–5% supply
+(row 2 remainder) + 2–5% trainer (row 11) — accessible once trainer
+is no longer idle-bound.
+
+**Prereq:** first sustained run post-supply-wave establishes new
+trainer_idle_pct. If still ≥60%: Q35 stays parked, Step 3 (capacity
+wave) is the bigger lever. If <60%: Q35 becomes HIGH-priority and
+lands as a standalone session.
+
+**Cost:** ~300 LoC, its own session, full Rust concurrency review.
+
+**Reference:** docs/perf/supply_wave_report.md §6 item 1.
+
+---
+
 ## Community Watch (pending external validation)
 
 ### Q9 — KL-Divergence Weighted Buffer Writes
