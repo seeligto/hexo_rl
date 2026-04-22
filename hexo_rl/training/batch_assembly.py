@@ -203,6 +203,7 @@ def assemble_mixed_batch(
     recency_weight: float,
     bufs: BatchBuffers,
     train_step: int,
+    augment: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Assemble one mixed batch from pretrain + self-play (+ optional recent) buffers.
 
@@ -223,20 +224,23 @@ def assemble_mixed_batch(
         recency_weight:    Fraction of self-play rows taken from recent_buffer.
         bufs:              Pre-allocated batch arrays (modified in-place when steady-state).
         train_step:        Current step index (for log messages only).
+        augment:           Apply 12-fold hex symmetry augmentation during Rust sample_batch.
+                           Default True preserves production behaviour; set False only for
+                           diagnostic runs (see CLAUDE.md § Testing conventions).
 
     Returns:
         Seven arrays ``(states, chain_planes, policies, outcomes, ownership, winning_line,
         is_full_search)`` — views into ``bufs`` in steady-state, freshly allocated during
         warm-up.  Corpus positions always have ``is_full_search=1`` (apply full policy loss).
     """
-    s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre = pretrained_buffer.sample_batch(n_pre, True)
+    s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre = pretrained_buffer.sample_batch(n_pre, augment)
 
     if batch_size != batch_size_cfg:
         # Edge case: runtime batch size diverged from pre-allocated shape.
         if train_step > 100:
             log.warning("mixed_batch_size_mismatch", batch_size=batch_size, expected=batch_size_cfg)
         s_self, c_self, p_self, o_self, own_self, wl_self, ifs_self = _sample_selfplay(
-            buffer, recent_buffer, n_self, recency_weight
+            buffer, recent_buffer, n_self, recency_weight, augment
         )
         return (
             np.concatenate([s_pre, s_self], axis=0),
@@ -262,13 +266,13 @@ def assemble_mixed_batch(
         s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_recent)
         own_r = own_r_flat.reshape(-1, 19, 19)
         wl_r  = wl_r_flat.reshape(-1, 19, 19)
-        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), True)
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), augment)
         pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre),
                      (s_r,   c_r,   p_r,   o_r,   own_r,   wl_r,   ifs_r),
                      (s_u,   c_u,   p_u,   o_u,   own_u,   wl_u,   ifs_u)]
         n_avail   = n_pre + len(s_r) + len(s_u)
     else:
-        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_self), True)
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_self), augment)
         pieces  = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre),
                    (s_u,   c_u,   p_u,   o_u,   own_u,   wl_u,   ifs_u)]
         n_avail = n_pre + len(s_u)
@@ -311,6 +315,7 @@ def _sample_selfplay(
     recent_buffer: Optional[Any],
     n_self: int,
     recency_weight: float,
+    augment: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Sample self-play rows, blending recent + uniform when recency_weight > 0."""
     if (recent_buffer is not None and recent_buffer.size > 0
@@ -320,7 +325,7 @@ def _sample_selfplay(
         s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_r)
         own_r = own_r_flat.reshape(-1, 19, 19)
         wl_r  = wl_r_flat.reshape(-1, 19, 19)
-        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_u), True)
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_u), augment)
         return (
             np.concatenate([s_r, s_u], axis=0),
             np.concatenate([c_r, c_u], axis=0),
@@ -330,4 +335,4 @@ def _sample_selfplay(
             np.concatenate([wl_r, wl_u], axis=0),
             np.concatenate([ifs_r, ifs_u], axis=0),
         )
-    return buffer.sample_batch(max(1, n_self), True)
+    return buffer.sample_batch(max(1, n_self), augment)

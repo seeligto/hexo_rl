@@ -467,3 +467,98 @@ def test_buffer_load_size_mismatch(tmp_path):
     # Verify data is valid
     states, _c, policies, outcomes, _, _, _ = buf_small.sample_batch(10, augment=False)
     assert states.shape == (10, CHANNELS, BOARD_SIZE, BOARD_SIZE)
+
+
+# ── push_many ─────────────────────────────────────────────────────────────────
+
+def test_push_many_basic():
+    """push_many writes N rows; subsequent sample_batch reads them back."""
+    buf = make_buf(100)
+    n = 50
+    states = np.stack([random_state() for _ in range(n)]).astype(np.float16)
+    chain = np.stack([random_chain() for _ in range(n)]).astype(np.float16)
+    policies = np.stack([random_policy() for _ in range(n)]).astype(np.float32)
+    outcomes = np.random.choice([-1.0, 0.0, 1.0], size=n).astype(np.float32)
+    ownership = np.ones((n, AUX_STRIDE), dtype=np.uint8)
+    winning_line = np.zeros((n, AUX_STRIDE), dtype=np.uint8)
+    game_lengths = np.full(n, 50, dtype=np.uint16)
+    is_full_search = np.ones(n, dtype=np.uint8)
+
+    buf.push_many(states, chain, policies, outcomes, ownership, winning_line,
+                  game_lengths, is_full_search)
+    assert buf.size == n
+
+    s, c, p, o, own, wl, ifs = buf.sample_batch(32, augment=False)
+    assert s.shape == (32, CHANNELS, BOARD_SIZE, BOARD_SIZE)
+    assert c.shape == (32, N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE)
+    assert p.shape == (32, N_ACTIONS)
+    assert o.shape == (32,)
+    assert own.shape == (32, BOARD_SIZE, BOARD_SIZE)
+    assert wl.shape == (32, BOARD_SIZE, BOARD_SIZE)
+    assert ifs.shape == (32,)
+    assert np.all(ifs == 1)
+
+
+def test_push_many_wraps_ring():
+    """N > capacity - size triggers ring overwrite; final size == capacity."""
+    buf = make_buf(50)
+    # Warm-up with 30 rows.
+    push_n(buf, 30)
+    assert buf.size == 30
+
+    n = 40  # overflows: 10 new + 30 overwrites.
+    states = np.stack([random_state() for _ in range(n)]).astype(np.float16)
+    chain = np.zeros((n, N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+    policies = np.stack([random_policy() for _ in range(n)]).astype(np.float32)
+    outcomes = np.zeros(n, dtype=np.float32)
+    ownership = np.ones((n, AUX_STRIDE), dtype=np.uint8)
+    winning_line = np.zeros((n, AUX_STRIDE), dtype=np.uint8)
+    game_lengths = np.full(n, 50, dtype=np.uint16)
+    is_full_search = np.ones(n, dtype=np.uint8)
+
+    buf.push_many(states, chain, policies, outcomes, ownership, winning_line,
+                  game_lengths, is_full_search)
+    assert buf.size == 50  # capped at capacity
+
+
+def test_push_many_mixed_is_full_search():
+    """Per-row is_full_search preserved through bulk push → sample."""
+    buf = make_buf(100)
+    n = 64
+    states = np.stack([random_state() for _ in range(n)]).astype(np.float16)
+    chain = np.zeros((n, N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+    policies = np.stack([random_policy() for _ in range(n)]).astype(np.float32)
+    outcomes = np.zeros(n, dtype=np.float32)
+    ownership = np.ones((n, AUX_STRIDE), dtype=np.uint8)
+    winning_line = np.zeros((n, AUX_STRIDE), dtype=np.uint8)
+    game_lengths = np.full(n, 50, dtype=np.uint16)
+    # Alternate full/quick search flag.
+    is_full_search = (np.arange(n) % 2).astype(np.uint8)
+
+    buf.push_many(states, chain, policies, outcomes, ownership, winning_line,
+                  game_lengths, is_full_search)
+    assert buf.size == n
+
+    # Sample the full population — should see both 0 and 1 in the ifs column.
+    _, _, _, _, _, _, ifs = buf.sample_batch(n, augment=False)
+    assert ifs.shape == (n,)
+    assert set(np.unique(ifs).tolist()) == {0, 1}
+
+
+def test_push_many_shape_mismatch_raises():
+    """Mismatched outer dimension raises a ValueError."""
+    buf = make_buf(100)
+    n = 10
+    states = np.stack([random_state() for _ in range(n)]).astype(np.float16)
+    chain = np.zeros((n, N_CHAIN_PLANES, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+    policies = np.stack([random_policy() for _ in range(n)]).astype(np.float32)
+    outcomes = np.zeros(n, dtype=np.float32)
+    ownership = np.ones((n, AUX_STRIDE), dtype=np.uint8)
+    winning_line = np.zeros((n, AUX_STRIDE), dtype=np.uint8)
+    # Wrong length — should trip the shape check.
+    game_lengths = np.full(n - 1, 50, dtype=np.uint16)
+    is_full_search = np.ones(n, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="game_lengths"):
+        buf.push_many(states, chain, policies, outcomes, ownership, winning_line,
+                      game_lengths, is_full_search)

@@ -200,6 +200,11 @@ The split-responsibility architecture is fully in place:
 - [x] Game viewer implemented — `/viewer` endpoint, threat overlay, replay scrubber, play-against-model
 - [x] Threat detection in Rust — `Board.get_threats()`, `engine/src/board/threats.rs`
 - [x] Benchmark rebaselined — 2026-04-03, correct 12-block × 128-channel model, all 10 metrics PASS
+- [x] **`pe_self` fixed-point investigation (Q33 / Q37)** — RESOLVED 2026-04-21 as
+  non-pathology via Q33-C2 augmentation discriminator (sprint §112;
+  `reports/q33c2_augmentation_discriminator_2026-04-21.md`). 5.4 nat reading is
+  distribution behaviour, not a trainer-path / augmentation bug. **Phase 4.5
+  green-light** on the `pe_self` premise.
 - [ ] **Sustained training run** — 24-48 hour run, monitor for policy entropy collapse, value loss plateau
 - [ ] **Q2 ablation** — value aggregation strategy: min vs mean vs attention (highest-priority open question)
 

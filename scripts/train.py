@@ -192,6 +192,11 @@ def main() -> None:
             config_overrides["total_steps"] = int(combined_config["total_steps"])
         if args.allow_fresh_scheduler:
             config_overrides["allow_fresh_scheduler"] = True
+        # Perf-investigation: plumb diagnostics section so --config overrides
+        # the checkpoint-baked config for probe flags. Without this, probes
+        # cannot be enabled on a resumed run (checkpoint config wins by default).
+        if isinstance(combined_config.get("diagnostics"), dict):
+            config_overrides["diagnostics"] = combined_config["diagnostics"]
 
         trainer = Trainer.load_checkpoint(
             args.checkpoint,

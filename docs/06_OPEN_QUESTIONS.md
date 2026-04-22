@@ -9,6 +9,8 @@
 | Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically | — |
 | Q13 | Chain-length planes as input tensor augmentation | §92 landed 6 chain-length planes as input (18→24). §97 reverted: chain planes moved out of the input tensor into a dedicated `ReplayBuffer.chain_planes` sub-buffer. Input is back to 18 planes. `chain_head` aux regression loss retained (smooth-L1, `aux_chain_weight: 1.0`); target reads from the chain sub-buffer, NOT from `input[:, 18:24]`. See sprint log §92, §93, §97. | §97 on master |
 | Q19 | Threat-head BCE class imbalance | `pos_weight = 59.0` (theoretical `(1−p)/p` at ~1.6% positive fraction) added to threat-head `BCEWithLogitsLoss`. Landed atomically with Q13 as a fresh bootstrap. `scripts/compute_threat_pos_weight.py` recomputes empirically from a replay buffer when available. §91 C4 monitoring hook stays in place. | `feat/q13-chain-planes` branch §92 |
+| Q33 | `pe_self ≈ 5.35` at 20K as candidate mixed-batch-noise signal | **RESOLVED 2026-04-21 (non-pathology)** — Q33-C2 augmentation discriminator (`reports/q33c2_augmentation_discriminator_2026-04-21.md`, sprint §112) confirmed E1: disabling 12-fold hex augmentation does not reduce `pe_self` (`|Δpe_Q4| = 0.049 nat ≪ 0.5` threshold). The ~5.4 nat fixed point is self-play-distribution behaviour, not an augmentation rotation bug. See sprint log §109 (initial smoke), §110 (Q33-B fixed-point characterisation), §111 (Q33-C halt, toggle gap), §112 (Q33-C2 E1 resolution). | `eb17389` + §112 |
+| Q37 | Trainer-update-path hypothesis for pinning `pe_self` at ~5.4 nat fixed point | **RESOLVED 2026-04-21 (non-pathology)** — Q33-C2 direct empirical test rules out the augmentation mask hypothesis (highest-prior item on §110's audit list). With the distribution-shift reading directly supported, the remaining §110 candidates (full-search mask, weight-decay, LR schedule, mixing path) are weakly motivated; reopen as a separate question if `pe_self` regresses on a different checkpoint / distribution. | `eb17389` + §112 |
 
 ## Active (Phase 4.0)
 
@@ -21,6 +23,54 @@
 | ~~Q25~~ | ~~Worker throughput variance: 24-plane NN latency + IQR spike~~ | **RESOLVED 2026-04-16** — §97 reverted the 24-plane payload. The 24-plane-specific variance hypothesis is moot. A separate post-§97 bench artifact (warmup-design 0-position windows) is tracked in §98 action items, not as a research question. | done | resolved |
 | Q27 | Attention hijacking (reframed post Probe 1b): C2/C3 miss was synthetic-fixture artifact; no active regression against real-fixture baseline | Monitor sustained-run probe against v6 fixture; reopen probes 2/3 only on regression | 0 GPU-days (watch) | WATCH — reframed 2026-04-19, see §106 |
 | Q32 | Threat-scalar magnitude vs policy-ranking decoupling on bootstrap: contrast flips negative on real fixture yet policy still routes 60% top-5 | Track across sustained runs; correlate threat-head logit drift with C2/C3 on real-fixture probe | 0 GPU-days (watch) | WATCH — bookkeeping only |
+| ~~Q33~~ | ~~Self-play policy-target entropy at bootstrap strength — 20K `pe_self ≈ 5.35` driving mixed-batch noise hypothesis~~ | **RESOLVED 2026-04-21 (non-pathology).** Q33-C2 (sprint §112, `reports/q33c2_augmentation_discriminator_2026-04-21.md`): disabling augmentation does not drop `pe_self`; fixed point is distribution, not augmentation. | done | resolved |
+| ~~Q37~~ | ~~Trainer-update-path hypothesis for `pe_self` fixed point~~ | **RESOLVED 2026-04-21 (non-pathology).** Q33-C2 rules out the augmentation mask branch; distribution-shift reading has direct empirical support. See sprint §112. | done | resolved |
+
+**Q33 (2026-04-21, WATCH, see sprint §109):** The diag-20K report read
+`policy_entropy_selfplay ≈ 5.35` as evidence that MCTS visit targets were
+near-uniform on `gumbel_targets`. Smoke results invert that reading: with
+`w_pre=0` (isolated selfplay batches) and identical bootstrap weights, the
+three variants produce:
+
+- `baseline_puct` (PUCT + CE visit targets): `policy_loss = 5.52` — targets
+  near uniform.
+- `gumbel_targets` (PUCT + completed-Q targets): `policy_loss = 1.12` —
+  targets **sharp** (H(target) ≤ 1.12 nats).
+- `gumbel_full` (Gumbel SH + completed-Q targets): `policy_loss = 2.33` —
+  targets moderately sharp.
+
+`policy_entropy_selfplay` is `H(p_model)` on self-play rows, **not**
+`H(p_target)` — the name in the trainer (`trainer.py:570-572`) is ambiguous.
+The 20K pe_self ≈ 5.35 was the model failing to fit sharp completed-Q
+targets, not the targets themselves being flat. Q33's completed-Q-flattening
+hypothesis is wrong; `completed_q_values=true` **sharpens** targets at
+bootstrap strength on both search backends.
+
+Status: **RESOLVED 2026-04-21 (non-pathology).** Q33-B (sprint §110,
+`reports/q33b_trainer_fit_sanity_2026-04-21.md`) re-ran the `gumbel_targets`
+smoke from `checkpoint_00017000.pt` (sharpest post-§99 ckpt, K=0 H=2.528 vs
+bootstrap 2.860). Result: model sits at `pe_self ≈ 5.36` from step 0 and
+does not move (Δpe_self = +0.004 over 180 steps) while targets stay sharp
+(`pl_end = 0.924`). The "drift to uniform" story did not survive — the
+reading is a **fixed point**, not a drift. Q33-C (sprint §111) was halted
+because the augmentation discriminator required a config-knob plumbing
+change. Q33-C2 (sprint §112, `reports/q33c2_augmentation_discriminator_2026-04-21.md`)
+ran the discriminator post-plumbing (commit `eb17389`): `|Δpe_Q4| = 0.049
+nat ≪ 0.5` threshold, sign opposite of E2 prediction (pe_B slightly
+*higher* than pe_A). Disabling 12-fold hex augmentation does not drop
+`pe_self`. The fixed point is self-play-distribution behaviour, not an
+augmentation rotation bug. Q37 closes alongside Q33 — the
+trainer-update-path hypothesis's highest-prior item (augmentation mask)
+is ruled out by direct empirical test; remaining §110 audit candidates
+are weakly motivated given the distribution-shift reading has direct
+support.
+
+**Phase 4.5 gating:** unblocked on the `pe_self` premise.
+
+Cosmetic follow-up (separate task): rename `policy_entropy_selfplay` →
+`selfplay_model_entropy_batch` and/or emit the raw per-batch
+target-entropy split (selfplay vs pretrain) so dashboards show the
+intended quantity. (Merges with Q35 candidate in the diag report.)
 
 **Q17 (2026-04-09, RESOLVED 2026-04-10):** The P3 overnight run
 collapsed to deterministic carbon-copy self-play games between
@@ -131,6 +181,32 @@ if the threat scalar stays inverted while policy ranking continues to
 PASS, the `aux_threat` loss is buying something other than what the
 C1 contrast metric measures. If they re-couple with training,
 close Q32 as a bootstrap-only transient.
+
+### Q35 — ReplayBuffer full GIL-release refactor [HIGH, Phase 4.5]
+
+**Priority:** HIGH once trainer_idle_pct drops below ~60% in a sustained run.
+**Source:** supply-wave session 2026-04-22 (item #2 partial landing).
+
+Item #2 of the supply-wave landed the `push_many` batching lever but
+deferred the `py.allow_threads` wrap because the current
+`ReplayBuffer` API uses `&mut self`. Full GIL release on both
+`push_many` and `sample_batch` requires refactoring to `&self` +
+interior mutability (`parking_lot::Mutex<Inner>`), ~300 LoC crate-wide.
+
+Expected additional uplift (per recommendations.md E2): 2–5% supply
+(row 2 remainder) + 2–5% trainer (row 11) — accessible once trainer
+is no longer idle-bound.
+
+**Prereq:** first sustained run post-supply-wave establishes new
+trainer_idle_pct. If still ≥60%: Q35 stays parked, Step 3 (capacity
+wave) is the bigger lever. If <60%: Q35 becomes HIGH-priority and
+lands as a standalone session.
+
+**Cost:** ~300 LoC, its own session, full Rust concurrency review.
+
+**Reference:** docs/perf/supply_wave_report.md §6 item 1.
+
+---
 
 ## Community Watch (pending external validation)
 

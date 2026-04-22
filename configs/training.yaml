@@ -2,7 +2,19 @@
 # Single source of truth for all training settings.
 
 fp16: true
+# Autocast dtype: "fp16" (default) or "bf16". bf16 has wider range (no
+# GradScaler needed) but less mantissa precision than fp16. Per-variant
+# override in configs/variants/*.yaml (Ada/Hopper may prefer bf16;
+# Ampere typically prefers fp16). Both inference server and trainer read
+# this knob; they must agree to keep autocast dtype consistent across
+# weight-sync boundaries.
+# amp_dtype must stay at the root of the training block — the CLI flattens
+# `training:` into the combined-config root at scripts/train.py:162–168.
+# Nesting it deeper (e.g. under amp: {dtype: ...}) will silently fail to
+# propagate to InferenceServer.
+amp_dtype: "fp16"
 torch_compile: false   # disabled — Python 3.14 CUDA graph incompatibility (see sprint §25, §30)
+augment: true  # 12-fold hex symmetry augmentation on sample_batch; keep true in production
 policy_prune_frac: 0.02
 # Independent of gumbel_mcts search — controls policy target computation, not search algorithm
 batch_size: 256
@@ -106,3 +118,10 @@ mixing:
   buffer_persist_path: "checkpoints/replay_buffer.bin"
 
 seed: 42
+
+# Perf-investigation probes (docs/perf/instrumentation_notes.md).
+# All default off; zero overhead when disabled. Enable only for diagnostic runs.
+diagnostics:
+  perf_timing: false        # B1 train step + B2 inference batch breakdowns
+  perf_sync_cuda: false     # B2 wrap forward with torch.cuda.synchronize() for true latency
+  vram_probe_interval: 100  # log torch.cuda.max_memory_allocated every N steps (0=off); only fires when perf_timing is also true

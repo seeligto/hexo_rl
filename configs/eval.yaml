@@ -14,12 +14,12 @@ eval_pipeline:
       # calibration report. Eval wall-cost rises from ~36 min to ~70 min
       # per round, offset by training.yaml:eval_interval=5000.
       # Report: reports/graduation_calibration_2026-04-17.md
-      # Raised 50 → 200 for post-W1 desktop gumbel_full sustained run (2026-04-19).
-      # 50 was a Q27 smoke patch; sustained runs need cleaner CI. At n=200 and
-      # threshold 0.55, binomial stderr ≈ 3.5% (vs 2.5% at n=400, 7% at n=50).
-      # Wall cost ≈ 35 min/round at n_workers=10 × model_sims=128 (vs 70 min at
-      # n=400). Acceptable given eval_interval=5000 × stride=1.
-      n_games: 200
+      # 200 → 100 (operator request 2026-04-19, §107 run): halve eval wall cost
+      # on laptop at the mid-run monitoring stage. At n=100, binomial stderr
+      # at threshold 0.55 is ≈ 5%. Wall cost ≈ 18 min/round (laptop 14-worker).
+      # Prior comments (200 for desktop, 400 from §101.a calibration) kept
+      # below for traceability — raise back to 200+ if gate-fire rate drifts.
+      n_games: 100
       model_sims: 128
       opponent_sims: 128
     sealbot:

@@ -167,7 +167,7 @@ impl ReplayBuffer {
             arr.as_slice()
                 .map_err(|e| PyValueError::new_err(format!("is_full_search not contiguous: {e}")))?
         } else {
-            // Allocate a temporary all-ones slice; `t` is resolved below.
+            // Empty slice; downstream per-position loop treats missing entries as 1u8 (full-search).
             ifs_owned = Vec::new();
             &ifs_owned
         };
@@ -244,6 +244,113 @@ impl ReplayBuffer {
 
         self.head = (self.head + t) % self.capacity;
         self.size  = (self.size + t).min(self.capacity);
+        Ok(())
+    }
+
+    /// Store N positions with per-row `game_length` and `is_full_search`.
+    ///
+    /// Replaces the per-row `push` loop in `WorkerPool._stats_loop`, avoiding
+    /// N PyO3 method-dispatch + PyRefMut acquire/release cycles.
+    ///
+    /// Args:
+    ///     states:         float16 numpy array of shape (N, 18, 19, 19)
+    ///     chain_planes:   float16 numpy array of shape (N, 6, 19, 19)
+    ///     policies:       float32 numpy array of shape (N, 362)
+    ///     outcomes:       float32 numpy array of shape (N,)
+    ///     ownership:      uint8   numpy array of shape (N, 361)
+    ///     winning_line:   uint8   numpy array of shape (N, 361)
+    ///     game_lengths:   uint16  numpy array of shape (N,) — compound-move counts
+    ///     is_full_search: uint8   numpy array of shape (N,)
+    pub(crate) fn push_many_impl(
+        &mut self,
+        states:         PyReadonlyArray4<f16>,
+        chain_planes:   PyReadonlyArray4<f16>,
+        policies:       PyReadonlyArray2<f32>,
+        outcomes:       PyReadonlyArray1<f32>,
+        ownership:      PyReadonlyArray2<u8>,
+        winning_line:   PyReadonlyArray2<u8>,
+        game_lengths:   PyReadonlyArray1<u16>,
+        is_full_search: PyReadonlyArray1<u8>,
+    ) -> PyResult<()> {
+        let states_s   = states.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("states not contiguous: {e}")))?;
+        let chain_s    = chain_planes.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("chain_planes not contiguous: {e}")))?;
+        let policies_s = policies.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("policies not contiguous: {e}")))?;
+        let outcomes_s = outcomes.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("outcomes not contiguous: {e}")))?;
+        let own_s = ownership.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("ownership not contiguous: {e}")))?;
+        let wl_s = winning_line.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("winning_line not contiguous: {e}")))?;
+        let gl_s = game_lengths.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("game_lengths not contiguous: {e}")))?;
+        let ifs_s = is_full_search.as_slice()
+            .map_err(|e| PyValueError::new_err(format!("is_full_search not contiguous: {e}")))?;
+
+        let t = outcomes_s.len();
+        if t == 0 { return Ok(()); }
+
+        if states_s.len()   != t * STATE_STRIDE  { return Err(PyValueError::new_err("states shape mismatch")); }
+        if chain_s.len()    != t * CHAIN_STRIDE  { return Err(PyValueError::new_err("chain_planes shape mismatch")); }
+        if policies_s.len() != t * POLICY_STRIDE { return Err(PyValueError::new_err("policies shape mismatch")); }
+        if own_s.len() != t * AUX_STRIDE { return Err(PyValueError::new_err("ownership shape mismatch")); }
+        if wl_s.len()  != t * AUX_STRIDE { return Err(PyValueError::new_err("winning_line shape mismatch")); }
+        if gl_s.len() != t {
+            return Err(PyValueError::new_err(format!("game_lengths must have {t} elements, got {}", gl_s.len())));
+        }
+        if ifs_s.len() != t {
+            return Err(PyValueError::new_err(format!("is_full_search must have {t} elements, got {}", ifs_s.len())));
+        }
+
+        let available = self.capacity.saturating_sub(self.size);
+
+        for i in 0..t {
+            let slot = (self.head + i) % self.capacity;
+
+            if i >= available {
+                let old_bucket = Self::weight_bucket(self.weights[slot]);
+                self.weight_buckets[old_bucket].fetch_sub(1, Ordering::Relaxed);
+            }
+
+            let game_length = gl_s[i];
+            let w = if game_length == 0 {
+                f16::from_f32(1.0).to_bits()
+            } else {
+                self.weight_schedule.weight_for(game_length)
+            };
+            let new_bucket = Self::weight_bucket(w);
+
+            let src_state = &states_s[i * STATE_STRIDE..(i + 1) * STATE_STRIDE];
+            let dst_state = &mut self.states[slot * STATE_STRIDE..(slot + 1) * STATE_STRIDE];
+            for (d, s) in dst_state.iter_mut().zip(src_state.iter()) {
+                *d = s.to_bits();
+            }
+
+            let src_chain = &chain_s[i * CHAIN_STRIDE..(i + 1) * CHAIN_STRIDE];
+            let dst_chain = &mut self.chain_planes[slot * CHAIN_STRIDE..(slot + 1) * CHAIN_STRIDE];
+            for (d, s) in dst_chain.iter_mut().zip(src_chain.iter()) {
+                *d = s.to_bits();
+            }
+
+            self.policies[slot * POLICY_STRIDE..(slot + 1) * POLICY_STRIDE]
+                .copy_from_slice(&policies_s[i * POLICY_STRIDE..(i + 1) * POLICY_STRIDE]);
+            self.ownership[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
+                .copy_from_slice(&own_s[i * AUX_STRIDE..(i + 1) * AUX_STRIDE]);
+            self.winning_line[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
+                .copy_from_slice(&wl_s[i * AUX_STRIDE..(i + 1) * AUX_STRIDE]);
+
+            self.is_full_search[slot] = ifs_s[i];
+            self.outcomes[slot] = outcomes_s[i];
+            self.game_ids[slot] = -1;
+            self.weights[slot]  = w;
+
+            self.weight_buckets[new_bucket].fetch_add(1, Ordering::Relaxed);
+        }
+
+        self.head = (self.head + t) % self.capacity;
+        self.size = (self.size + t).min(self.capacity);
         Ok(())
     }
 

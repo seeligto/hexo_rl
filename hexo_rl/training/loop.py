@@ -134,6 +134,25 @@ def run_training_loop(
         torch.cuda.synchronize()
         log.info("cuda_warmup_done", elapsed_sec=round(time.time() - _t_warmup, 1))
 
+    # ── CUDA stream audit (B4 perf probe) ─────────────────────────────────────
+    # Logged from the main (training) thread context. InferenceServer logs its
+    # own stream in run(). If both are on the same default stream pointer, no
+    # copy/compute overlap is possible — the Q18 hypothesis.
+    _diag = config.get("diagnostics") if isinstance(config.get("diagnostics"), dict) else {}
+    if bool(_diag.get("perf_timing", False)) and device.type == "cuda":
+        try:
+            _cur = torch.cuda.current_stream(device)
+            _def = torch.cuda.default_stream(device)
+            log.info(
+                "cuda_stream_audit",
+                context="training_thread",
+                current_stream_ptr=int(_cur.cuda_stream),
+                default_stream_ptr=int(_def.cuda_stream),
+                on_default_stream=_cur.cuda_stream == _def.cuda_stream,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cuda_stream_audit_failed", context="training_thread", error=str(exc))
+
     # ── Worker pool ───────────────────────────────────────────────────────────
     from hexo_rl.selfplay.pool import WorkerPool
     pool = WorkerPool(inf_model, config, device, buffer)
@@ -273,6 +292,13 @@ def run_training_loop(
     eval_interval = int(train_cfg.get("eval_interval", config.get("eval_interval", _eval_interval_cfg)))
     training_steps_per_game = float(train_cfg.get("training_steps_per_game", 1.0))
     max_train_burst          = int(train_cfg.get("max_train_burst", 8))
+    if "augment" not in train_cfg and "augment" not in config:
+        raise ValueError(
+            "training.augment missing from merged config — required key per "
+            "configs/training.yaml. Set `augment: true` for production (preserves "
+            "12-fold hex symmetry augmentation) or `augment: false` for diagnostic runs."
+        )
+    augment_cfg = bool(train_cfg.get("augment", config.get("augment")))
     train_step = trainer.step
     stop_step  = (trainer.step + args.iterations) if args.iterations else None
     games_played  = 0
@@ -411,6 +437,7 @@ def run_training_loop(
                         pretrained_buffer, buffer, recent_buffer,
                         n_pre, n_self, batch_size, batch_size_cfg,
                         recency_weight, bufs, train_step,
+                        augment=augment_cfg,
                     )
                     loss_info = trainer.train_step_from_tensors(
                         states, policies, outcomes,
@@ -421,7 +448,11 @@ def run_training_loop(
                     )
                 else:
                     w_pre = 0.0
-                    loss_info = trainer.train_step(buffer, recent_buffer=recent_buffer)
+                    loss_info = trainer.train_step(
+                        buffer,
+                        augment=augment_cfg,
+                        recent_buffer=recent_buffer,
+                    )
 
                 train_step = trainer.step
                 if initial_policy_loss is None:

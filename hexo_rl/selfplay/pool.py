@@ -233,15 +233,7 @@ class WorkerPool:
     _WINNER_NAMES = ("draw", "x", "o")
 
     def _stats_loop(self) -> None:
-        # Pre-allocate single-position receive buffers once.
-        # replay_buffer.push() and recent_buffer.push() copy data into Rust memory,
-        # so reusing these buffers across loop iterations is safe.
-        _feat_buf  = np.empty(self._feat_len,  dtype=np.float16)
-        _chain_buf = np.empty(self._chain_len, dtype=np.float16)
-        _pol_buf   = np.empty(self._pol_len,   dtype=np.float32)
         _in_ch = self._feat_len // (self._board_size * self._board_size)
-        _feat_2d  = _feat_buf.reshape(_in_ch, self._board_size, self._board_size)
-        _chain_3d = _chain_buf.reshape(6, self._board_size, self._board_size)
         _last_buf_emit = time.monotonic()
         while not self._stop_event.is_set():
             # collect_data() returns 8-tuple from Rust — no Python list allocation.
@@ -251,35 +243,43 @@ class WorkerPool:
             # ifs_np: (N,) u8 — 1 = full-search, 0 = quick-search.
             feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np = self._runner.collect_data()
             n = len(vals_np)
-            for i in range(n):
-                # feats_np[i] is a numpy view (no copy); _feat_buf[:] = view does
-                # the f32→f16 dtype conversion at C speed with no Python objects.
-                _feat_buf[:]  = feats_np[i]
-                _chain_buf[:] = chain_np[i]
-                _pol_buf[:]   = pols_np[i]
-                feat_np  = _feat_2d    # shaped view into _feat_buf
-                chain_np_pos = _chain_3d  # shaped view into _chain_buf
-                pol_np   = _pol_buf
-                own_row  = own_np[i]
-                wl_row   = wl_np[i]
-                plies    = int(plies_np[i])
-                outcome  = float(vals_np[i])
-                game_length = (plies + 1) // 2  # compound moves
-                is_full_search = bool(ifs_np[i])
-                self.replay_buffer.push(
-                    feat_np, chain_np_pos, pol_np, outcome, own_row, wl_row,
-                    game_length=game_length,
-                    is_full_search=is_full_search,
+            if n > 0:
+                # Bulk push: one PyO3 call instead of N per-row pushes (Bucket 5 #2).
+                # Vectorised dtype cast + reshape is much cheaper than the per-row
+                # _feat_buf[:] = feats_np[i] pattern that preceded this block.
+                feats_f16 = feats_np.astype(np.float16).reshape(
+                    n, _in_ch, self._board_size, self._board_size,
                 )
+                chain_f16 = chain_np.astype(np.float16).reshape(
+                    n, 6, self._board_size, self._board_size,
+                )
+                # Per-row compound-move count; clamp into u16 range.
+                game_lengths = np.minimum(
+                    (plies_np.astype(np.int64) + 1) // 2, 65535,
+                ).astype(np.uint16)
+                self.replay_buffer.push_many(
+                    feats_f16, chain_f16, pols_np, vals_np, own_np, wl_np,
+                    game_lengths, ifs_np,
+                )
+
+                # Recent buffer still requires per-row push (Python Lock semantics).
+                # Scope of item #2 is Rust ReplayBuffer only; recent_buffer bulk
+                # push is a separate lever (not on supply critical path).
                 if self.recent_buffer is not None:
-                    self.recent_buffer.push(
-                        feat_np, chain_planes=chain_np_pos, policy=pol_np,
-                        outcome=outcome, ownership=own_row, winning_line=wl_row,
-                        is_full_search=is_full_search,
-                    )
+                    for i in range(n):
+                        self.recent_buffer.push(
+                            feats_f16[i],
+                            chain_planes=chain_f16[i],
+                            policy=pols_np[i],
+                            outcome=float(vals_np[i]),
+                            ownership=own_np[i],
+                            winning_line=wl_np[i],
+                            is_full_search=bool(ifs_np[i]),
+                        )
+
                 with self._lock:
-                    self.positions_pushed += 1
-                    self.self_play_positions_pushed += 1
+                    self.positions_pushed += n
+                    self.self_play_positions_pushed += n
 
             with self._lock:
                 self.games_completed = int(self._runner.games_completed)
