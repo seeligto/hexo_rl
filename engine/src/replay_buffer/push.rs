@@ -167,7 +167,7 @@ impl ReplayBuffer {
             arr.as_slice()
                 .map_err(|e| PyValueError::new_err(format!("is_full_search not contiguous: {e}")))?
         } else {
-            // Allocate a temporary all-ones slice; `t` is resolved below.
+            // Empty slice; downstream per-position loop treats missing entries as 1u8 (full-search).
             ifs_owned = Vec::new();
             &ifs_owned
         };
