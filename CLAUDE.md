@@ -40,6 +40,10 @@ Topic-scoped rules under `docs/rules/` — load the file whose trigger matches y
 - `docs/rules/bot-integration.md` — submodules, BotProtocol, community URLs
 - `docs/rules/background-tasks.md` — scraper cron, manifest commit rule
 
+Workflow skills live under `.claude/skills/` and are discovered by OpenCode,
+Claude Code, and Codex via Claude-compatible skill discovery:
+`investigation-probe-smoke-verdict`, `wave-audit`, `bench-gate`.
+
 ---
 
 ## Deep-dive docs
