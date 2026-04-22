@@ -239,6 +239,12 @@ class Trainer:
         self._perf_timing = bool(_diag.get("perf_timing", False))
         self._perf_sync_cuda = bool(_diag.get("perf_sync_cuda", False))
         self._vram_probe_interval = int(_diag.get("vram_probe_interval", 100))
+        if self._perf_sync_cuda and torch.cuda.is_available():
+            log.warning(
+                "perf_sync_cuda_enabled_serialising_stream",
+                impact="expect_30_50_pct_throughput_drop",
+                remedy="unset_diagnostics.perf_sync_cuda_in_production_config",
+            )
         if self._perf_timing:
             log.info(
                 "perf_timing_enabled",
@@ -742,7 +748,8 @@ class Trainer:
                 sync_cuda=_sync,
                 batch_n=batch_n,
             )
-        if self._vram_probe_interval > 0 and self.device.type == "cuda" \
+        if self._perf_timing and self._vram_probe_interval > 0 \
+                and self.device.type == "cuda" \
                 and self.step % self._vram_probe_interval == 0:
             stats = torch.cuda.memory_stats(self.device)
             reserved = torch.cuda.memory_reserved(self.device)

@@ -7,7 +7,7 @@ this session). Raw artefacts under `reports/perf/diag_C1_*/`.
 
 - **Run ID**: diag_C1_main (see log `logs/diag_C1_main.jsonl`)
 - **Variant**: gumbel_targets
-- **Override config**: `configs/diag_probes.yaml` (perf_timing: true, perf_sync_cuda: true, vram_probe_interval: 100)
+- **Override config**: `configs/diag_probes_DO_NOT_TRAIN.yaml` (perf_timing: true, perf_sync_cuda: true, vram_probe_interval: 100)
 - **Resumed from**: `checkpoints/checkpoint_00020454.pt`
 - **Iterations**: 400 (budget-limited)
 - **Dashboard**: off
