@@ -495,7 +495,9 @@ _CHECKS_CUDA: list[tuple[str, str, str | None, str, float, bool]] = [
     ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",      3.5,   False),
     # §102 rebaseline 2026-04-17: 762k→618k sustained drift; observed × 0.85 = 525k floor.
     ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  525_000,   True),
-    ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_500,   False),
+    # §113 2026-04-22: cda9dde always-on dedup adds ~33 µs (HashSet alloc + 256 game_id lookups);
+    # correctness-required. push.rs transmute fix recovered push + aug regressions. 1_500→1_550.
+    ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_550,   False),
     # §98 rebaseline 2026-04-16: 18ch split scatter (state + chain) raises aug latency; 1400→1800
     # §102 2026-04-17: 1,241 µs observed (improved vs §98's 1,663); do not tighten on one run.
     ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_800,   False),

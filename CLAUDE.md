@@ -550,7 +550,7 @@ targets PASS:
 | NN inference (batch=64) | 7,646 pos/s | ≥ 6,500 pos/s | IQR ±0.73 (0.01%); flat vs 2026-04-17 (−0.4%) |
 | NN latency (batch=1, mean) | 1.84 ms | ≤ 3.5 ms | IQR ±0.004 (0.2%); 16% faster than 2026-04-17 (2.19 ms) |
 | Replay buffer push | 696,880 pos/sec | ≥ 525,000 pos/sec | IQR ±109,127 (15.7%); up 12.7% vs 2026-04-17 — IQR widened, watch |
-| Replay buffer sample raw (batch=256) | 1,496 µs/batch | ≤ 1,500 µs | IQR ±11 (0.7%); up 8.5% vs 2026-04-17, still under target |
+| Replay buffer sample raw (batch=256) | 1,496 µs/batch | ≤ 1,550 µs | IQR ±11 (0.7%); up 8.5% vs 2026-04-17, still under target. **§113 2026-04-22:** target recalibrated 1,500→1,550 µs — `cda9dde` always-on dedup adds one HashSet alloc + 256 game_id lookups (correctness-required); residual +33 µs confirmed after push.rs transmute fix recovered all other regressions. |
 | Replay buffer sample augmented (batch=256) | 1,654 µs/batch | ≤ 1,800 µs | IQR ±293 (17.7%); up 33% vs 2026-04-17 (1,241) — back inside §98 band, confirms §102 "do not tighten on one run" |
 | GPU utilization | 99.9% | ≥ 85% | IQR ±0.1; saturated during inference-only benchmark |
 | VRAM usage (process) | 0.08 GB / 8.6 GB | ≤ 6.88 GB (80%) | torch.cuda.max_memory_allocated (process-specific, not pynvml global) |

@@ -110,7 +110,7 @@ n_workers: 1
 | NN inference (batch=64) | ≥ 6,500 pos/s          | 7,676.5 pos/s  (PASS) |
 | NN latency (batch=1)    | ≤ 3.5 ms               | 2.19 ms        (PASS) |
 | Buffer push             | ≥ 525,000 pos/s        | 618,552 pos/s  (PASS) |
-| Buffer sample raw       | ≤ 1,500 µs/batch       | 1,379 µs       (PASS) |
+| Buffer sample raw       | ≤ 1,550 µs/batch       | 1,379 µs       (PASS) |
 | Buffer sample augmented | ≤ 1,800 µs/batch       | 1,241 µs       (PASS) |
 | GPU utilization         | ≥ 85%                  | 100%           (PASS) |
 | VRAM usage              | ≤ 80% total            | 0.12 / 8.6 GB  (PASS) |
