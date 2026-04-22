@@ -11,30 +11,14 @@ Respond like smart caveman. Cut all filler, keep technical substance.
 
 # CLAUDE.md — Hex Tac Toe AlphaZero
 
+AlphaZero-style self-learning AI for Hex Tac Toe — hexagonal grid, 6-in-a-row to win, player 1 opens with 1 move then both players alternate 2 moves per turn. Theoretically infinite board (see board-representation rule). Target hardware: AMD Ryzen 7 3700x + RTX 3070 + 48GB RAM.
+
 This file is read automatically by Claude Code at the start of every session.
-Read it fully before doing anything. Then read the docs it references.
+Read it fully before doing anything. Rule files under `docs/rules/` are topic-scoped
+— load on demand per the index below.
 
----
-
-## What this project is
-
-An AlphaZero-style self-learning AI for Hex Tac Toe — hexagonal grid, 6-in-a-row to win,
-player 1 opens with 1 move then both players alternate 2 moves per turn.
-The board is theoretically infinite — see "Board representation" below for how we handle this.
-Target hardware: AMD Ryzen 7 3700x + RTX 3070 + 48GB RAM.
-
-Full context is in `docs/`. Read them in order before starting any task:
-
-- `docs/00_agent_context.md` — orientation, language boundary, key decisions
-- `docs/01_architecture.md` — full technical spec
-- `docs/02_roadmap.md` — phases with entry/exit criteria (always check current phase)
-- `docs/03_tooling.md` — logging, benchmarking, progress display conventions
-- `docs/04_bootstrap_strategy.md` — minimax corpus generation and pretraining
-- `docs/05_community_integration.md` — community bot, API, notation, formations
-- `docs/06_OPEN_QUESTIONS.md` — active research questions and ablation plans
-- `docs/07_PHASE4_SPRINT_LOG.md` — Phase 4.0 sprint changelog (most current record)
-- `docs/08_DASHBOARD_SPEC.md` — monitoring event schema and dashboard spec
-- `docs/09_VIEWER_SPEC.md` — game viewer and threat overlay spec
+**Current phase:** Phase 4.0 — sustained run from bootstrap-v4 (§114); see
+`docs/07_PHASE4_SPRINT_LOG.md` for authoritative state.
 
 ---
 
@@ -44,47 +28,34 @@ Full context is in `docs/`. Read them in order before starting any task:
 
 ---
 
-## Board representation
+## Rule files
 
-See `docs/rules/board-representation.md` — infinite board, NN windowing, value aggregation.
+Topic-scoped rules under `docs/rules/` — load the file whose trigger matches your task:
 
----
-
-## Workflow
-
-See `docs/rules/workflow.md` — commits, phase discipline, tests, config overrides, process-kill, session start/end, coding + testing conventions, corpus/probe discipline.
-
----
-
-## Build commands
-
-See `docs/rules/build-commands.md` — toolchain, venv, make targets, repository layout.
+- `docs/rules/workflow.md` — commits, phase discipline, tests, config overrides, session hooks, process-kill, corpus/probe discipline
+- `docs/rules/build-commands.md` — language/toolchain, venv rules, make targets, repository layout
+- `docs/rules/board-representation.md` — infinite board, NN windowing, value aggregation
+- `docs/rules/phase-4-architecture.md` — network, heads, graduation gate, resolved Qs
+- `docs/rules/perf-targets.md` — 10-metric bench gate, methodology
+- `docs/rules/bot-integration.md` — submodules, BotProtocol, community URLs
+- `docs/rules/background-tasks.md` — scraper cron, manifest commit rule
 
 ---
 
-## Bot integration
+## Deep-dive docs
 
-See `docs/rules/bot-integration.md` — submodules, BotProtocol, community URLs.
+Read these when the rule file points at them or the task needs broader context:
 
----
-
----
-
----
-
-## Benchmarks — must pass before Phase 4.5
-
-See `docs/rules/perf-targets.md` — 10-metric bench gate, methodology, and run pointer.
-
-## Phase 4.0 architecture baseline
-
-See `docs/rules/phase-4-architecture.md` — network, heads, graduation gate, resolved Qs.
-
----
-
-## Background tasks
-
-See `docs/rules/background-tasks.md` — scraper cron and manifest commit rule.
+- `docs/00_agent_context.md` — orientation, language boundary, key decisions
+- `docs/01_architecture.md` — full technical spec
+- `docs/02_roadmap.md` — phases with entry/exit criteria
+- `docs/03_tooling.md` — logging, benchmarking, progress display conventions
+- `docs/04_bootstrap_strategy.md` — minimax corpus generation and pretraining
+- `docs/05_community_integration.md` — community bot, API, notation, formations
+- `docs/06_OPEN_QUESTIONS.md` — active research questions and ablation plans
+- `docs/07_PHASE4_SPRINT_LOG.md` — Phase 4.0 sprint changelog (most current record)
+- `docs/08_DASHBOARD_SPEC.md` — monitoring event schema and dashboard spec
+- `docs/09_VIEWER_SPEC.md` — game viewer and threat overlay spec
 
 ---
 
