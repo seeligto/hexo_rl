@@ -306,6 +306,11 @@ impl ReplayBuffer {
 
         let available = self.capacity.saturating_sub(self.size);
 
+        // f16 and u16 are same size/align; to_bits() is a native-endian transmute.
+        // These are compile-time truths guaranteed by the `half` crate.
+        debug_assert_eq!(std::mem::size_of::<f16>(), std::mem::size_of::<u16>());
+        debug_assert_eq!(std::mem::align_of::<f16>(), std::mem::align_of::<u16>());
+
         for i in 0..t {
             let slot = (self.head + i) % self.capacity;
 
@@ -324,15 +329,21 @@ impl ReplayBuffer {
 
             let src_state = &states_s[i * STATE_STRIDE..(i + 1) * STATE_STRIDE];
             let dst_state = &mut self.states[slot * STATE_STRIDE..(slot + 1) * STATE_STRIDE];
-            for (d, s) in dst_state.iter_mut().zip(src_state.iter()) {
-                *d = s.to_bits();
-            }
+            debug_assert_eq!(src_state.len(), dst_state.len());
+            // SAFETY: f16 and u16 same size/align; bit pattern preserved (to_bits semantics).
+            let src_bits = unsafe {
+                std::slice::from_raw_parts(src_state.as_ptr() as *const u16, src_state.len())
+            };
+            dst_state.copy_from_slice(src_bits);
 
             let src_chain = &chain_s[i * CHAIN_STRIDE..(i + 1) * CHAIN_STRIDE];
             let dst_chain = &mut self.chain_planes[slot * CHAIN_STRIDE..(slot + 1) * CHAIN_STRIDE];
-            for (d, s) in dst_chain.iter_mut().zip(src_chain.iter()) {
-                *d = s.to_bits();
-            }
+            debug_assert_eq!(src_chain.len(), dst_chain.len());
+            // SAFETY: same as above.
+            let chain_bits = unsafe {
+                std::slice::from_raw_parts(src_chain.as_ptr() as *const u16, src_chain.len())
+            };
+            dst_chain.copy_from_slice(chain_bits);
 
             self.policies[slot * POLICY_STRIDE..(slot + 1) * POLICY_STRIDE]
                 .copy_from_slice(&policies_s[i * POLICY_STRIDE..(i + 1) * POLICY_STRIDE]);
