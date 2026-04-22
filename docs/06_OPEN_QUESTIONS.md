@@ -9,6 +9,7 @@
 | Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically | — |
 | Q13 | Chain-length planes as input tensor augmentation | §92 landed 6 chain-length planes as input (18→24). §97 reverted: chain planes moved out of the input tensor into a dedicated `ReplayBuffer.chain_planes` sub-buffer. Input is back to 18 planes. `chain_head` aux regression loss retained (smooth-L1, `aux_chain_weight: 1.0`); target reads from the chain sub-buffer, NOT from `input[:, 18:24]`. See sprint log §92, §93, §97. | §97 on master |
 | Q19 | Threat-head BCE class imbalance | `pos_weight = 59.0` (theoretical `(1−p)/p` at ~1.6% positive fraction) added to threat-head `BCEWithLogitsLoss`. Landed atomically with Q13 as a fresh bootstrap. `scripts/compute_threat_pos_weight.py` recomputes empirically from a replay buffer when available. §91 C4 monitoring hook stays in place. | `feat/q13-chain-planes` branch §92 |
+| Q8 | First-player advantage in value training | **RESOLVED 2026-04-22 (auto, corpus fix)** — POSITION_END=50 truncation and broken Elo read meant pretraining corpus was biased to early/mid-game only. With both bugs fixed (`ddd408f`, `aa16624`, `8b446c5`), the full Elo-weighted corpus covers ply 8–150 and the P1 outcome distribution matches actual game statistics. No explicit adjustment of value targets needed. Sprint §114. | `ddd408f` + §114 |
 | Q33 | `pe_self ≈ 5.35` at 20K as candidate mixed-batch-noise signal | **RESOLVED 2026-04-21 (non-pathology)** — Q33-C2 augmentation discriminator (`reports/q33c2_augmentation_discriminator_2026-04-21.md`, sprint §112) confirmed E1: disabling 12-fold hex augmentation does not reduce `pe_self` (`|Δpe_Q4| = 0.049 nat ≪ 0.5` threshold). The ~5.4 nat fixed point is self-play-distribution behaviour, not an augmentation rotation bug. See sprint log §109 (initial smoke), §110 (Q33-B fixed-point characterisation), §111 (Q33-C halt, toggle gap), §112 (Q33-C2 E1 resolution). | `eb17389` + §112 |
 | Q37 | Trainer-update-path hypothesis for pinning `pe_self` at ~5.4 nat fixed point | **RESOLVED 2026-04-21 (non-pathology)** — Q33-C2 direct empirical test rules out the augmentation mask hypothesis (highest-prior item on §110's audit list). With the distribution-shift reading directly supported, the remaining §110 candidates (full-search mask, weight-decay, LR schedule, mixing path) are weakly motivated; reopen as a separate question if `pe_self` regresses on a different checkpoint / distribution. | `eb17389` + §112 |
 
@@ -19,7 +20,7 @@
 | ~~Q17~~ | ~~Phase 4.0 self-play mode collapse — root cause and remediation~~ | **RESOLVED 2026-04-10** — Dirichlet ported to `engine/src/game_runner/` (commit `71d7e6e`). Verified via `debug_prior_trace` (commit `4a3149e`). Awaiting §71 checklist walk before sustained run. See sprint log §73. | done | resolved |
 | Q2 | Value aggregation: min vs mean vs attention | Train 4 variants, compare value MSE + win rate | ~4 GPU-days | HIGH — unblocked now Q17 resolved |
 | Q3 | Optimal K (number of cluster windows) | Ablation K=2,3,4,6 | ~6 GPU-days | MEDIUM |
-| Q8 | First-player advantage in value training | Measure P1 win rate by Elo band; adjust value targets if >60% | ~2 GPU-days | MEDIUM |
+| ~~Q8~~ | ~~First-player advantage in value training~~ | **RESOLVED 2026-04-22 (auto, corpus fix)** — POSITION_END=50 + broken Elo read; fixed in §114. | done | resolved |
 | ~~Q25~~ | ~~Worker throughput variance: 24-plane NN latency + IQR spike~~ | **RESOLVED 2026-04-16** — §97 reverted the 24-plane payload. The 24-plane-specific variance hypothesis is moot. A separate post-§97 bench artifact (warmup-design 0-position windows) is tracked in §98 action items, not as a research question. | done | resolved |
 | Q27 | Attention hijacking (reframed post Probe 1b): C2/C3 miss was synthetic-fixture artifact; no active regression against real-fixture baseline | Monitor sustained-run probe against v6 fixture; reopen probes 2/3 only on regression | 0 GPU-days (watch) | WATCH — reframed 2026-04-19, see §106 |
 | Q32 | Threat-scalar magnitude vs policy-ranking decoupling on bootstrap: contrast flips negative on real fixture yet policy still routes 60% top-5 | Track across sustained runs; correlate threat-head logit drift with C2/C3 on real-fixture probe | 0 GPU-days (watch) | WATCH — bookkeeping only |
@@ -117,6 +118,8 @@ the port is unit-tested and the §71 pre-run checklist is walked.
 
 **2026-04-10 RESOLUTION:** Dirichlet root noise ported to `engine/src/game_runner/` (commit `71d7e6e`; file was later promoted to directory at §86). Runtime-verified via `debug_prior_trace` smoke from `ckpt_15000`: `apply_dirichlet_to_root` records now appear (10/10 with unique noise), top-1 visit fraction drops 0.65 → 0.47. See sprint log §73 and `archive/dirichlet_port_2026-04-10/verdict.md`. Remaining blocker: §71 pre-run checklist walk (archive buffer, move collapsed ckpts, run 2hr smoke from `bootstrap_model.pt`).
 
+**2026-04-22 RETCON (sprint §114):** The Dirichlet port was a necessary fix but not the sole cause of the collapse. A second, upstream cause was identified: `POSITION_END=50` in `export_corpus_npz.py` silently discarded all positions at ply ≥ 50 (~40%), making the bootstrap model endgame-blind. When self-play reached positions past ply 50, the model had no prior for value or policy there, creating a collapse attractor the Dirichlet noise could diversify but not resolve. The corpus fix (§114: `ddd408f`, `8b446c5`) is the structural fix. The Q17 framing blamed trainer pathology (missing Dirichlet); the upstream corpus truncation was the deeper cause. Both were independently real bugs; both needed fixing.
+
 **Q2 blocking on Q17:** Q2 requires a stable baseline to ablate value
 aggregation strategies against, but every post-bootstrap checkpoint has
 the same collapse signature. Q17 is now resolved — Q2 unblocked once
@@ -168,19 +171,17 @@ Reopen if C2/C3 regress on real-fixture probe after 5K.
 **Do not block on Q27 for W1 correctness.** The perspective fix
 (`e9ebbb9`) stays on master independent of this probe.
 
-**Q32 (2026-04-19, WATCH):** On the v6 real-position fixture,
-`bootstrap_model.pt` has `ctrl_logit_mean` (0.061) > `ext_logit_mean`
-(0.015) — the scalar threat head fires *more* on an empty far cell
-than on the actual extension, flipping `contrast_mean` negative
-(−0.046). Yet the policy head still routes 60% of extensions into
-top-5 and 65% into top-10 on the same fixture. Threat-scalar magnitude
-and policy-ranking signal are decoupled on bootstrap. Not a bug — the
-threat head is untrained at bootstrap per §92, and policy ranking
-carries the Q27 gate regardless. Worth tracking across sustained runs:
-if the threat scalar stays inverted while policy ranking continues to
-PASS, the `aux_threat` loss is buying something other than what the
-C1 contrast metric measures. If they re-couple with training,
-close Q32 as a bootstrap-only transient.
+**Q32 (2026-04-19, WATCH; updated 2026-04-22 §114):** On the v6 real-position
+fixture, bootstrap-v3c had `ctrl_logit_mean` (+0.062) > `ext_logit_mean` (+0.015),
+flipping `contrast_mean` negative (−0.046). Bootstrap-v4 (full-corpus retrain, §114)
+substantially closes this gap: `ctrl_logit_mean` = −0.152, `ext_logit_mean` = +0.212,
+`contrast_mean` = +0.360 (was −0.046). C1 is still FAIL (threshold 0.380, margin 0.020)
+but the scalar threat head is now correctly directional — extension cells score
+positive, control cells negative. The decoupling observed on bootstrap-v3c was
+partially a corpus-truncation artifact (endgame-blind bootstrap had no signal to
+train the threat head on late-game positions). Policy-ranking C2/C3 remain PASS at
+60%/60% (unchanged from v3c). Still WATCH: track whether C1 clears 0.380 after RL
+warmup, and whether the scalar-vs-ranking decoupling re-emerges on deep RL runs.
 
 ### Q35 — ReplayBuffer full GIL-release refactor [HIGH, Phase 4.5]
 

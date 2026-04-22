@@ -205,7 +205,12 @@ The split-responsibility architecture is fully in place:
   `reports/q33c2_augmentation_discriminator_2026-04-21.md`). 5.4 nat reading is
   distribution behaviour, not a trainer-path / augmentation bug. **Phase 4.5
   green-light** on the `pe_self` premise.
-- [ ] **Sustained training run** — 24-48 hour run, monitor for policy entropy collapse, value loss plateau
+- [x] **Bootstrap-v4 corpus fix (§114, 2026-04-22)** — POSITION_END=50 truncation and
+  broken Elo read fixed (`aa16624`, `ddd408f`, `8b446c5`). New bootstrap retrained on
+  285,762 positions (was 193,972). C1 contrast: −0.046 → +0.360 (+0.406). Head-to-head
+  vs old bootstrap: 67.0% WR. SealBot WR: 18.7% (128 sims, 0.5s). Phase 4.5 deferred
+  pending outcome of Phase 4.0 sustained run from bootstrap-v4.
+- [ ] **Sustained training run** — 24-48 hour run from bootstrap-v4, monitor for policy entropy collapse, value loss plateau
 - [ ] **Q2 ablation** — value aggregation strategy: min vs mean vs attention (highest-priority open question)
 
 ### Exit criteria

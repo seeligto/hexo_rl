@@ -690,6 +690,35 @@ of the 500-game public window, then (2) top-player profile scrape via
 
 ---
 
+## Key learnings & principles
+
+### Corpus filter = model quality floor (§114, 2026-04-22)
+
+Before diagnosing trainer pathology, verify the corpus is complete and correctly weighted.
+
+The POSITION_END=50 bug in `export_corpus_npz.py` silently dropped all positions at
+ply ≥ 50 (~40% of all positions). A broken Elo field read made Elo-weighted sampling
+ineffective. The result: bootstrap models were endgame-blind, and threat-head contrast
+on real late-game positions was −0.046 (inverted). A pure corpus fix — no architecture
+change, no hyperparameter tuning — moved C1 contrast from −0.046 to +0.360 (+0.406
+absolute) and produced a 67% win rate over the previous bootstrap.
+
+**Rule:** Always run `corpus.export` and inspect position counts before pretrain.
+The probe fixture (v6, real game positions ply 9–150) is the canary — if C1 contrast
+is negative or near zero on the bootstrap, check corpus completeness first.
+
+**The corpus check checklist:**
+- `grep POSITION_END scripts/export_corpus_npz.py` — verify cap is ≥150 (P95.5) or absent
+- Manifest `elo_bands` breakdown — if ≥90% of games show "unrated", Elo field read is broken
+- Run `make probe.bootstrap` immediately after any pretrain — C1 ≥ 0.38 is the gate
+
+**Interaction with Q17:** The §73 Dirichlet fix was correct but was treating a symptom.
+An endgame-blind bootstrap will produce self-play collapse regardless of diversity noise
+because value estimates degrade sharply past the training horizon. Fix corpus completeness
+first, then tune RL hyperparameters.
+
+---
+
 ## MCP tools available
 
 - **context7**: use when writing code that uses PyTorch, PyO3, maturin,

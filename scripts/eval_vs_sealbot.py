@@ -51,27 +51,24 @@ def checkpoint_step(path: Path) -> int:
 
 
 def resolve_checkpoints(args: argparse.Namespace) -> list[Path]:
-    ckpt_dir = Path("checkpoints")
-    all_ckpts = sorted(ckpt_dir.glob("checkpoint_*.pt"), key=checkpoint_step)
-    if not all_ckpts:
-        raise FileNotFoundError("No checkpoints/checkpoint_*.pt files found")
-
     if args.checkpoint:
         p = Path(args.checkpoint)
         if not p.exists():
             raise FileNotFoundError(f"Checkpoint not found: {p}")
         return [p]
 
-    if args.latest or (not args.all_checkpoints and not args.checkpoint):
+    ckpt_dir = Path("checkpoints")
+    all_ckpts = sorted(ckpt_dir.glob("checkpoint_*.pt"), key=checkpoint_step)
+    if not all_ckpts:
+        raise FileNotFoundError("No checkpoints/checkpoint_*.pt found; pass --checkpoint explicitly")
+
+    if args.latest or not args.all_checkpoints:
         return [all_ckpts[-1]]
 
-    if args.all_checkpoints:
-        selected = all_ckpts[:: max(1, args.every)]
-        if args.max_checkpoints > 0:
-            selected = selected[-args.max_checkpoints :]
-        return selected
-
-    return [all_ckpts[-1]]
+    selected = all_ckpts[:: max(1, args.every)]
+    if args.max_checkpoints > 0:
+        selected = selected[-args.max_checkpoints :]
+    return selected
 
 
 def main() -> None:
@@ -114,7 +111,7 @@ def main() -> None:
             fallback_config=cfg,
         )
         evaluator = Evaluator(trainer.model, device, cfg)
-        wr = evaluator.evaluate_vs_sealbot(
+        result = evaluator.evaluate_vs_sealbot(
             n_games=int(args.n_games),
             time_limit=float(args.time_limit),
             model_sims=int(args.model_sims),
@@ -126,7 +123,10 @@ def main() -> None:
             "n_games": int(args.n_games),
             "time_limit": float(args.time_limit),
             "model_sims": int(args.model_sims),
-            "winrate": float(wr),
+            "winrate": float(result.win_rate),
+            "win_count": int(result.win_count),
+            "draw_count": int(result.draw_count),
+            "colony_wins": int(result.colony_wins),
             "device": str(device),
             "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         }
