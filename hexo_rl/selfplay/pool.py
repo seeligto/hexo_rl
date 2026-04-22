@@ -247,10 +247,10 @@ class WorkerPool:
                 # Bulk push: one PyO3 call instead of N per-row pushes (Bucket 5 #2).
                 # Vectorised dtype cast + reshape is much cheaper than the per-row
                 # _feat_buf[:] = feats_np[i] pattern that preceded this block.
-                feats_f16 = feats_np.astype(np.float16, copy=False).reshape(
+                feats_f16 = feats_np.astype(np.float16).reshape(
                     n, _in_ch, self._board_size, self._board_size,
                 )
-                chain_f16 = chain_np.astype(np.float16, copy=False).reshape(
+                chain_f16 = chain_np.astype(np.float16).reshape(
                     n, 6, self._board_size, self._board_size,
                 )
                 # Per-row compound-move count; clamp into u16 range.

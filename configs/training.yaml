@@ -8,6 +8,10 @@ fp16: true
 # Ampere typically prefers fp16). Both inference server and trainer read
 # this knob; they must agree to keep autocast dtype consistent across
 # weight-sync boundaries.
+# amp_dtype must stay at the root of the training block — the CLI flattens
+# `training:` into the combined-config root at scripts/train.py:162–168.
+# Nesting it deeper (e.g. under amp: {dtype: ...}) will silently fail to
+# propagate to InferenceServer.
 amp_dtype: "fp16"
 torch_compile: false   # disabled — Python 3.14 CUDA graph incompatibility (see sprint §25, §30)
 augment: true  # 12-fold hex symmetry augmentation on sample_batch; keep true in production
@@ -120,4 +124,4 @@ seed: 42
 diagnostics:
   perf_timing: false        # B1 train step + B2 inference batch breakdowns
   perf_sync_cuda: false     # B2 wrap forward with torch.cuda.synchronize() for true latency
-  vram_probe_interval: 100  # log torch.cuda.max_memory_allocated every N steps (0=off)
+  vram_probe_interval: 100  # log torch.cuda.max_memory_allocated every N steps (0=off); only fires when perf_timing is also true
