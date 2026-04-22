@@ -338,7 +338,7 @@ class Trainer:
         if _perf:
             log.info(
                 "buffer_sample_timing",
-                step=self.step,
+                step=self.step + 1,  # pre-increment; +1 matches post-increment step in train_step_timing
                 sample_us=(time.perf_counter() - _t_sample_start) * 1e6,
                 batch_n=int(states.shape[0]),
                 used_recent=recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0,
