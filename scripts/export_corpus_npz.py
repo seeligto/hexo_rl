@@ -8,7 +8,7 @@ all corpus sources (human, bot-fast, bot-strong, injected).
 Quality filtering:
   - Decisive games only (skip draws / no-winner)
   - Game length >= 15 plies
-  - Positions sampled from ply range [8, 50)  (skip opening book + noisy endgame)
+  - Positions sampled from ply 8 onward (skip first 7 plies — all start at (0,0))
   - Per-position weight = source_weight * elo_band_weight / game_length
     so longer games don't dominate and weak Elo games are down-weighted
 
@@ -82,8 +82,7 @@ ELO_BAND_WEIGHTS_PRETRAIN: dict[str, float] = {
 }
 
 MIN_GAME_LENGTH = 15   # plies; games shorter than this have too little mid-game content
-POSITION_START = 8     # skip first 7 plies (opening book territory)
-POSITION_END = 50      # skip past ply 50 (noisy endgame)
+POSITION_START = 8     # skip first 7 plies (opening book territory — all start at (0,0))
 
 
 def _elo_band_weight(avg_elo: float | None, pretrain: bool = False) -> float:
@@ -119,7 +118,7 @@ def _scan_human_games(pretrain: bool = False) -> list[dict]:
             elos = [p["elo"] for p in d.get("players", []) if p.get("elo") is not None]
             avg_elo = sum(elos) / len(elos) if elos else None
             game_weight = SOURCE_WEIGHTS["human"] * _elo_band_weight(avg_elo, pretrain=pretrain)
-            n_qualifying = max(0, min(POSITION_END, len(moves)) - POSITION_START)
+            n_qualifying = max(0, len(moves) - POSITION_START)
             if n_qualifying == 0:
                 continue
             if avg_elo is None:
@@ -158,7 +157,7 @@ def _scan_bot_games(dir_path: Path, source: str) -> list[dict]:
             winner = int(d["winner"]) if "winner" in d else _game_winner_from_replay(moves)
             if winner is None or winner == 0:
                 continue
-            n_qualifying = max(0, min(POSITION_END, len(moves)) - POSITION_START)
+            n_qualifying = max(0, len(moves) - POSITION_START)
             if n_qualifying == 0:
                 continue
             records.append({
@@ -174,8 +173,8 @@ def _scan_bot_games(dir_path: Path, source: str) -> list[dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Export optimized corpus NPZ for buffer prefill")
-    parser.add_argument("--max-positions", type=int, default=50_000,
-                        help="Maximum positions to sample (default: 50000)")
+    parser.add_argument("--max-positions", type=int, default=None,
+                        help="Cap on positions to sample (default: all available, no replacement)")
     parser.add_argument("--no-compress", action="store_true",
                         help="Save uncompressed NPZ (recommended — enables mmap_mode='r')")
     parser.add_argument("--out", default=None,
@@ -220,7 +219,7 @@ def main() -> None:
     for gi, g in enumerate(records):
         pos_weight = g["weight"] / g["game_len"]
         elo_band = g.get("elo_band", "unknown")
-        for pi in range(POSITION_START, min(POSITION_END, g["game_len"])):
+        for pi in range(POSITION_START, g["game_len"]):
             all_game_indices.append(gi)
             all_ply_indices.append(pi)
             all_weights.append(pos_weight)
@@ -230,16 +229,15 @@ def main() -> None:
     w /= w.sum()
 
     n_available = len(all_game_indices)
-    # Pretrain mode uses replacement — can draw up to max_positions even when
-    # n_available < max_positions, allowing high-Elo games to appear multiple times.
-    n_sample = args.max_positions if pretrain_mode else min(args.max_positions, n_available)
+    if args.max_positions is not None and args.max_positions < n_available:
+        n_sample = args.max_positions
+        replace = False
+    else:
+        n_sample = n_available
+        replace = False
     print(f"\nQualifying positions: {n_available:,}  →  sampling {n_sample:,}")
 
     rng = np.random.default_rng(42)
-    # Pretrain mode: always replace so Elo weights actually bias the output.
-    # Without replacement when n_sample == n_available, every position appears
-    # exactly once regardless of weight — weights would have no effect.
-    replace = pretrain_mode or (n_sample > n_available)
     sampled = rng.choice(n_available, size=n_sample, replace=replace, p=w)
 
     # Band breakdown: raw vs sampled
