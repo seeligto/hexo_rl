@@ -36,9 +36,12 @@ mkdir -p "$outdir"
 # nvidia-smi presence check
 if ! command -v nvidia-smi >/dev/null 2>&1; then
   echo "nvidia-smi not found — running command without GPU telemetry" >&2
+  set +e
   "$@" > "$outdir/cmd.stdout" 2>&1
-  echo "$?" > "$outdir/cmd.status"
-  exit "$(cat "$outdir/cmd.status")"
+  rc=$?
+  set -e
+  echo "$rc" > "$outdir/cmd.status"
+  exit "$rc"
 fi
 
 # dmon fields: p=power, u=util, c=clock, v=violations, m=mem, e=ecc, t=throughput
