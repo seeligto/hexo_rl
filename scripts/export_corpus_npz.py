@@ -8,7 +8,8 @@ all corpus sources (human, bot-fast, bot-strong, injected).
 Quality filtering:
   - Decisive games only (skip draws / no-winner)
   - Game length >= 15 plies
-  - Positions sampled from ply 8 onward (skip first 7 plies — all start at (0,0))
+  - Positions sampled from ply range [8, 150) — skip opening book; cap at P95.5 to
+    exclude time-scramble noise from extreme long games (254 games exceed 150 moves)
   - Per-position weight = source_weight * elo_band_weight / game_length
     so longer games don't dominate and weak Elo games are down-weighted
 
@@ -83,6 +84,7 @@ ELO_BAND_WEIGHTS_PRETRAIN: dict[str, float] = {
 
 MIN_GAME_LENGTH = 15   # plies; games shorter than this have too little mid-game content
 POSITION_START = 8     # skip first 7 plies (opening book territory — all start at (0,0))
+POSITION_END = 150     # P95.5 of game lengths; past this is time-scramble noise
 
 
 def _elo_band_weight(avg_elo: float | None, pretrain: bool = False) -> float:
@@ -118,7 +120,7 @@ def _scan_human_games(pretrain: bool = False) -> list[dict]:
             elos = [p["elo"] for p in d.get("players", []) if p.get("elo") is not None]
             avg_elo = sum(elos) / len(elos) if elos else None
             game_weight = SOURCE_WEIGHTS["human"] * _elo_band_weight(avg_elo, pretrain=pretrain)
-            n_qualifying = max(0, len(moves) - POSITION_START)
+            n_qualifying = max(0, min(POSITION_END, len(moves)) - POSITION_START)
             if n_qualifying == 0:
                 continue
             if avg_elo is None:
@@ -157,7 +159,7 @@ def _scan_bot_games(dir_path: Path, source: str) -> list[dict]:
             winner = int(d["winner"]) if "winner" in d else _game_winner_from_replay(moves)
             if winner is None or winner == 0:
                 continue
-            n_qualifying = max(0, len(moves) - POSITION_START)
+            n_qualifying = max(0, min(POSITION_END, len(moves)) - POSITION_START)
             if n_qualifying == 0:
                 continue
             records.append({
@@ -219,7 +221,7 @@ def main() -> None:
     for gi, g in enumerate(records):
         pos_weight = g["weight"] / g["game_len"]
         elo_band = g.get("elo_band", "unknown")
-        for pi in range(POSITION_START, g["game_len"]):
+        for pi in range(POSITION_START, min(POSITION_END, g["game_len"])):
             all_game_indices.append(gi)
             all_ply_indices.append(pi)
             all_weights.append(pos_weight)
