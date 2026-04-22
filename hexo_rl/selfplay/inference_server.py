@@ -75,6 +75,13 @@ class InferenceServer(threading.Thread):
         _diag = config.get("diagnostics") if isinstance(config.get("diagnostics"), dict) else {}
         self._perf_timing = bool(_diag.get("perf_timing", False))
         self._perf_sync_cuda = bool(_diag.get("perf_sync_cuda", False))
+        if self._perf_sync_cuda and torch.cuda.is_available():
+            _perf_log.warning(
+                "perf_sync_cuda_enabled_serialising_stream",
+                context="inference_server",
+                impact="expect_30_50_pct_throughput_drop",
+                remedy="unset_diagnostics.perf_sync_cuda_in_production_config",
+            )
 
         # Autocast dtype — must match trainer for weight-sync consistency.
         # Config: "fp16" (default) or "bf16". bf16 on Ampere+/Ada avoids the
@@ -165,6 +172,11 @@ class InferenceServer(threading.Thread):
                         batch_np = np.ascontiguousarray(batch, dtype=np.float32)
                         n = len(request_ids)
                         if self._h2d_staging is not None:
+                            assert n <= self._batch_size, (
+                                f"inference batch size {n} exceeds staging capacity "
+                                f"{self._batch_size} — config divergence between "
+                                f"InferenceBatcher and InferenceServer"
+                            )
                             # Staged async H2D: CPU→pinned copy, then DMA to GPU.
                             # Previous batch's H2D is already complete by this point
                             # (prior forward + .cpu() synced default stream), so

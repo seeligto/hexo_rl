@@ -97,7 +97,7 @@ Linux with nvidia-smi installed.
 
 `Trainer.load_checkpoint(...)` uses the config baked into the checkpoint file,
 **not** the CLI-merged config. Without an explicit override, any probe flags
-set via `--config configs/diag_probes.yaml` would be ignored on a resumed run.
+set via `--config configs/diag_probes_DO_NOT_TRAIN.yaml` would be ignored on a resumed run.
 `scripts/train.py` now passes `combined_config["diagnostics"]` through
 `config_overrides` so probe flags always win on resume.
 

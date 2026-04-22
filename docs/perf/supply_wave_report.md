@@ -7,7 +7,7 @@ levers). Six items attempted on branch
 
 **Host:** laptop (Ryzen 7 8845HS + RTX 4060 Max-Q 8 GB Ada).
 **Base checkpoint:** `checkpoints/checkpoint_00020470.pt`.
-**Methodology:** 300-step smokes per item, `configs/diag_probes.yaml` overlay
+**Methodology:** 300-step smokes per item, `configs/diag_probes_DO_NOT_TRAIN.yaml` overlay
 (perf_timing=true, perf_sync_cuda=true). PRE of item N+1 chains from POST
 of item N (§3c of mission). `--override-scheduler-horizon` on every smoke.
 
