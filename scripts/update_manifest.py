@@ -73,7 +73,11 @@ def elo_band_key(elo: int | None) -> str:
 
 
 def _compute_elo_bands() -> dict[str, int]:
-    """Scan human game files and bucket by max(player_black_elo, player_white_elo)."""
+    """Scan human game files and bucket by max player Elo.
+
+    Reads from top-level player_black_elo/player_white_elo (old scraper format)
+    or from players[].elo (current format), whichever is present.
+    """
     bands: dict[str, int] = {
         "sub_1000": 0,
         "1000_1200": 0,
@@ -90,11 +94,14 @@ def _compute_elo_bands() -> dict[str, int]:
         elo_b = data.get("player_black_elo")
         elo_w = data.get("player_white_elo")
         if elo_b is None and elo_w is None:
-            bands["unrated"] += 1
+            elos = [pl["elo"] for pl in data.get("players", []) if pl.get("elo") is not None]
+            vals = elos
         else:
             vals = [v for v in (elo_b, elo_w) if v is not None]
-            max_elo = max(vals) if vals else None
-            bands[elo_band_key(max_elo)] += 1
+        if not vals:
+            bands["unrated"] += 1
+        else:
+            bands[elo_band_key(max(vals))] += 1
     return bands
 
 
