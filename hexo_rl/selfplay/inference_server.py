@@ -198,7 +198,13 @@ class InferenceServer(threading.Thread):
                             )
                         with self._weights_lock:
                             with torch.inference_mode():
-                                with torch.autocast(device_type=self.device.type, dtype=self._amp_dtype):
+                                # autocast enabled on CUDA only; CPU float16 is unsupported
+                                # (CPU autocast accepts bfloat16 only — disable entirely on CPU).
+                                with torch.autocast(
+                                    device_type=self.device.type,
+                                    dtype=self._amp_dtype,
+                                    enabled=self.device.type == "cuda",
+                                ):
                                     log_policy, value, _v_logit = self.model(tensor)
                         if _perf:
                             if _sync:
