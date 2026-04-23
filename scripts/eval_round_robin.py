@@ -84,6 +84,10 @@ def play_match(
 def main() -> None:
     config = load_config()
 
+    # Per-host TF32 configuration (§117).
+    from hexo_rl.model.tf32 import resolve_and_apply as _tf32_resolve_and_apply
+    _tf32_resolve_and_apply(config)
+
     # ── Validate checkpoints exist ──────────────────────────────────
     for name, path in CHECKPOINTS.items():
         if not path.exists():

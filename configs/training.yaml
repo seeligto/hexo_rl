@@ -119,6 +119,13 @@ mixing:
 
 seed: 42
 
+# Per-host TF32 configuration (§117).
+# `auto` resolves per GPU compute capability; `on` / `off` forces.
+# See hexo_rl/model/tf32.py and the 2026-04-23 probe report.
+gpu:
+  tf32_matmul: auto   # auto | on | off
+  tf32_cudnn:  auto   # auto | on | off
+
 # Perf-investigation probes (docs/perf/instrumentation_notes.md).
 # All default off; zero overhead when disabled. Enable only for diagnostic runs.
 diagnostics:

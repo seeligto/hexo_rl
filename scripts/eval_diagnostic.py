@@ -238,6 +238,10 @@ def main() -> None:
 
     config = load_config()
 
+    # Per-host TF32 configuration (§117).
+    from hexo_rl.model.tf32 import resolve_and_apply as _tf32_resolve_and_apply
+    _tf32_resolve_and_apply(config)
+
     print(f"Device: {DEVICE}")
     print(f"Sims per move: {MODEL_SIMS}")
     print(f"Temperature: {args.temperature}")

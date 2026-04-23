@@ -110,7 +110,6 @@ def main() -> None:
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
     if torch.cuda.is_available():
-        torch.set_float32_matmul_precision("high")
         torch.backends.cudnn.benchmark = True
 
     args   = parse_args()
@@ -153,6 +152,12 @@ def main() -> None:
     from hexo_rl.utils.device import best_device
     device = best_device()
     log.info("device", device=str(device))
+
+    # Per-host TF32 configuration (§117). Applies backend flags once; safe
+    # no-op on CPU. See hexo_rl/model/tf32.py.
+    from hexo_rl.model.tf32 import resolve_and_apply as _tf32_resolve_and_apply
+    _tf32_resolved = _tf32_resolve_and_apply(config)
+    log.info("tf32_applied", **_tf32_resolved)
 
     # ── Config flattening ─────────────────────────────────────────────────────
     model_config = config.get("model", {})

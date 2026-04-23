@@ -734,9 +734,7 @@ def main() -> None:
     args = parse_args()
     n_runs = int(args.n_runs)
 
-    # Optimization: Enable TensorFloat32 for Ampere+ GPUs
     if torch.cuda.is_available():
-        torch.set_float32_matmul_precision('high')
         torch.backends.cudnn.benchmark = True
 
     from hexo_rl.utils.config import load_config
@@ -749,6 +747,15 @@ def main() -> None:
         config = load_config(*_BASE_CONFIGS, args.config)
     else:
         config = load_config(*_BASE_CONFIGS)
+
+    # Per-host TF32 configuration (§117). Applies backend flags once.
+    from hexo_rl.model.tf32 import resolve_and_apply as _tf32_resolve_and_apply
+    _tf32_resolved = _tf32_resolve_and_apply(config)
+    console.print(
+        f"[dim]TF32: matmul={_tf32_resolved['tf32_matmul']} "
+        f"cudnn={_tf32_resolved['tf32_cudnn']} "
+        f"cap={_tf32_resolved.get('compute_capability')}[/dim]"
+    )
 
     from hexo_rl.utils.device import best_device
     device = best_device()
