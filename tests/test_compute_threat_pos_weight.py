@@ -140,24 +140,25 @@ def test_empirical_pos_weight_differs_from_theoretical():
 
 
 def test_probe_thresholds_match_claude_md():
-    """E-006: probe script thresholds must equal the values documented in CLAUDE.md §91."""
-    claude_md = (REPO_ROOT / "CLAUDE.md").read_text()
+    """E-006: probe script thresholds must equal the values documented in the
+    corpus/probe-discipline rule file (post-§115 this lives at
+    docs/rules/workflow.md; pre-§115 it was CLAUDE.md §91)."""
+    rule_text = (REPO_ROOT / "docs" / "rules" / "workflow.md").read_text()
 
-    # CLAUDE.md §91 documents: ext_in_top5_pct ≥ 40 and ext_in_top10_pct ≥ 60
-    m5 = re.search(r"ext_in_top5_pct\s*[≥>=]+\s*(\d+)", claude_md)
-    m10 = re.search(r"ext_in_top10_pct\s*[≥>=]+\s*(\d+)", claude_md)
+    m5  = re.search(r"ext_in_top5_pct\s*[≥>=]+\s*(\d+)",  rule_text)
+    m10 = re.search(r"ext_in_top10_pct\s*[≥>=]+\s*(\d+)", rule_text)
 
-    assert m5, "CLAUDE.md does not document ext_in_top5_pct threshold"
-    assert m10, "CLAUDE.md does not document ext_in_top10_pct threshold"
+    assert m5,  "docs/rules/workflow.md does not document ext_in_top5_pct threshold"
+    assert m10, "docs/rules/workflow.md does not document ext_in_top10_pct threshold"
 
-    claude_top5  = float(m5.group(1))
-    claude_top10 = float(m10.group(1))
+    rule_top5  = float(m5.group(1))
+    rule_top10 = float(m10.group(1))
 
-    assert probe.THRESH_EXT_IN_TOP5_PCT == claude_top5, (
+    assert probe.THRESH_EXT_IN_TOP5_PCT == rule_top5, (
         f"probe THRESH_EXT_IN_TOP5_PCT={probe.THRESH_EXT_IN_TOP5_PCT} "
-        f"!= CLAUDE.md value={claude_top5}"
+        f"!= rule value={rule_top5}"
     )
-    assert probe.THRESH_EXT_IN_TOP10_PCT == claude_top10, (
+    assert probe.THRESH_EXT_IN_TOP10_PCT == rule_top10, (
         f"probe THRESH_EXT_IN_TOP10_PCT={probe.THRESH_EXT_IN_TOP10_PCT} "
-        f"!= CLAUDE.md value={claude_top10}"
+        f"!= rule value={rule_top10}"
     )

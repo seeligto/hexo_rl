@@ -30,6 +30,8 @@ EXCLUDE = (
     'docs/02_roadmap.md',
     # CLAUDE.md Q25 resolved-checklist entry (historical context)
     'CLAUDE.md',
+    # §115 moved CLAUDE.md Q25 entry here (historical context preserved)
+    'docs/rules/phase-4-architecture.md',
     # FUTURE_REFACTORS.md tracks done/pending items including resolved 24-plane tasks
     'FUTURE_REFACTORS.md',
     # torchinductor compiled cache — generated, not source
