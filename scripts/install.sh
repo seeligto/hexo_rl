@@ -143,8 +143,8 @@ if [[ "$OS" == "macOS" ]]; then
     ok "macOS — installing default PyPI torch (gets MPS build)"
     .venv/bin/pip install --quiet torch
 elif [[ "$CUDA_MAJOR" == "13" ]]; then
-    ok "CUDA $CUDA_VERSION — installing torch cu130 build"
-    .venv/bin/pip install --quiet torch --index-url https://download.pytorch.org/whl/cu130
+    ok "CUDA $CUDA_VERSION — installing torch (latest PyPI build, cu130)"
+    .venv/bin/pip install --quiet torch
 elif [[ "$CUDA_MAJOR" == "12" ]]; then
     ok "CUDA $CUDA_VERSION — installing torch cu121 build"
     .venv/bin/pip install --quiet torch --index-url https://download.pytorch.org/whl/cu121
