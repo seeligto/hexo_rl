@@ -8,8 +8,9 @@ all corpus sources (human, bot-fast, bot-strong, injected).
 Quality filtering:
   - Decisive games only (skip draws / no-winner)
   - Game length >= 15 plies
-  - Positions sampled from ply range [8, 150) — skip opening book; cap at P95.5 to
-    exclude time-scramble noise from extreme long games (254 games exceed 150 moves)
+  - Positions sampled from ply range [2, 150) — skip the forced P1 opener
+    at (0,0); cap at P95.5 to exclude time-scramble noise from extreme long
+    games (254 games exceed 150 moves)
   - Per-position weight = source_weight * elo_band_weight / game_length
     so longer games don't dominate and weak Elo games are down-weighted
 
@@ -83,7 +84,7 @@ ELO_BAND_WEIGHTS_PRETRAIN: dict[str, float] = {
 }
 
 MIN_GAME_LENGTH = 15   # plies; games shorter than this have too little mid-game content
-POSITION_START = 8     # skip first 7 plies (opening book territory — all start at (0,0))
+POSITION_START = 2     # skip forced P1 opener at (0,0); ply-1 is P2's first reply
 POSITION_END = 150     # P95.5 of game lengths; past this is time-scramble noise
 
 
