@@ -109,6 +109,7 @@ impl SelfPlayRunner {
             let full_search_prob  = self.full_search_prob;
             let n_sims_quick      = self.n_sims_quick;
             let n_sims_full       = self.n_sims_full;
+            let random_opening_plies = self.random_opening_plies;
             let results_queue = self.results.clone();
             let positions_dropped = self.positions_dropped.clone();
             let recent_game_results = self.recent_game_results.clone();
@@ -145,6 +146,24 @@ impl SelfPlayRunner {
                     for _ in 0..max_moves {
                         if !running.load(Ordering::SeqCst) || board.check_win() || board.legal_move_count() == 0 {
                             break;
+                        }
+
+                        // §115 random-opening plies: skip MCTS + recording for the
+                        // first `random_opening_plies` plies of every game. Purpose
+                        // is off-canonical early-game state diversity in the
+                        // downstream self-play distribution; opening rows are
+                        // NOT pushed to the buffer (would add garbage policy
+                        // targets from random moves). Mirrors eval path
+                        // semantics (§80, `eval_random_opening_plies`).
+                        if (board.ply as u32) < random_opening_plies {
+                            let legal = board.legal_moves();
+                            if legal.is_empty() { break; }
+                            let (mq, mr) = *legal.choose(&mut rng).unwrap();
+                            if board.apply_move(mq, mr).is_err() { break; }
+                            move_history.push((mq, mr));
+                            // positions_generated NOT incremented — no training
+                            // row produced for this ply.
+                            continue;
                         }
 
                         // Move-level playout cap (orthogonal to game-level fast_prob above).

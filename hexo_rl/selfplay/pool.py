@@ -155,6 +155,7 @@ class WorkerPool:
             full_search_prob=full_search_prob_cfg,
             n_sims_quick=n_sims_quick_cfg,
             n_sims_full=n_sims_full_cfg,
+            random_opening_plies=int(sp.get("random_opening_plies", 0)),
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 

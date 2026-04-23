@@ -52,6 +52,12 @@ selfplay:
   results_queue_cap: 10000  # Rust SelfPlayRunner drops oldest when `results` VecDeque exceeds this.
                             # Visible via positions_dropped getter; bump if dashboard shows nonzero drops.
 
+  # §115: first N plies of every self-play game are random legal moves, NOT
+  # MCTS. Rows produced by these plies are skipped (no training target) —
+  # purpose is off-canonical early-game state diversity downstream.
+  # Mirrors eval.yaml:eval_random_opening_plies (§80). 0 disables.
+  random_opening_plies: 4
+
   playout_cap:
     # Game-level playout cap (fast_prob / fast_sims / standard_sims) is mutually
     # exclusive with the move-level cap (full_search_prob). Pool init raises if both

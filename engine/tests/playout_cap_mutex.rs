@@ -43,6 +43,7 @@ fn start_panics_when_both_caps_active() {
         0.25,               // full_search_prob (> 0 — mutex violation)
         50,                 // n_sims_quick
         100,                // n_sims_full
+        0_u32,              // random_opening_plies
     )
     .expect("constructor succeeds; mutex is enforced at start()");
 
