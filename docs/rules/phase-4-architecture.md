@@ -74,7 +74,7 @@ Resolved before / during Phase 4.0:
 - [x] Q17: self-play mode collapse (Dirichlet port §73, commit `71d7e6e`)
 - [x] Q19: threat-head BCE class imbalance (`threat_pos_weight = 59.0`;
       §92 landing)
-- [x] Q25: 24-plane throughput variance (reverted by §97; the 24-plane
+- [x] Q25: throughput variance from old input layout (reverted by §97; legacy
       payload no longer exists)
 - [ ] Open Question 2: value aggregation strategy (min/mean/attention) — HIGH
 - [ ] Q3, Q8, Q9, Q10, Q15, Q16, Q18, Q21 — see `docs/06_OPEN_QUESTIONS.md`

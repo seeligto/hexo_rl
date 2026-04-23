@@ -28,6 +28,18 @@ Read it fully before doing anything. Rule files under `docs/rules/` are topic-sc
 
 ---
 
+## Threat-probe kill criterion (§91, revised for 18-plane model)
+
+`scripts/probe_threat_logits.py` gates each 5k-step checkpoint. Pass requires:
+
+- C2: `ext_in_top5_pct ≥ 25` — extension cell in policy top-5 ≥ 25%
+- C3: `ext_in_top10_pct ≥ 40` — extension cell in policy top-10 ≥ 40%
+
+Thresholds calibrated against bootstrap-v4 (`bootstrap_model.pt`); lowered from
+§91 original (40/60) to match 18-plane model baseline after §97 migration.
+
+---
+
 ## Rule files
 
 Topic-scoped rules under `docs/rules/` — load the file whose trigger matches your task:
