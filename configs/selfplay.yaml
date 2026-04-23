@@ -78,4 +78,7 @@ selfplay:
     # Set full_search_prob: 0.0 to disable (all positions treated as full-search).
     n_sims_quick: 100       # sims for quick-search moves (value/chain only)
     n_sims_full: 600        # sims for full-search moves (all losses including policy)
-    full_search_prob: 0.25  # probability each move uses full search
+    full_search_prob: 0.5   # §115: 0.25 → 0.5 per Phase 3 discriminator (Smoke A supported
+                            # loss-gate; H_early dropped from 4.5+ → 3.97 at fsp=0.5 vs baseline
+                            # 5.4+ at fsp=0.25). Doubles self-play policy-gradient contribution.
+                            # Expected throughput regression ~25-30%.
