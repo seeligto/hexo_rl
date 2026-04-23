@@ -19,7 +19,8 @@ mcts:
   # Value blend amount for the 2-winning-moves case (strong but unproven).
   # NN value is nudged by ±quiescence_blend_2 toward ±1.0, clamped to [-1, 1].
   quiescence_blend_2: 0.3
-  dirichlet_alpha: 0.3
+  dirichlet_alpha: 0.05    # §115: Go-regime α for hex branching factor ~250-300 (§116 #4).
+                           # Was 0.3 (chess-regime). Noise effective-temperature too low past opening.
   epsilon: 0.25
   dirichlet_enabled: true   # gates Dirichlet call in Rust training path; set false for noise-free eval
   temperature_threshold_ply: 30
