@@ -26,6 +26,10 @@ import structlog
 import torch
 
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.monitoring.early_game_probe import (
+    EARLY_GAME_ENTROPY_WARN_THRESHOLD,
+    EarlyGameProbe,
+)
 from hexo_rl.monitoring.events import emit_event, register_renderer
 from hexo_rl.monitoring.gpu_monitor import GPUMonitor
 from hexo_rl.training.batch_assembly import BatchBuffers, assemble_mixed_batch
@@ -253,6 +257,21 @@ def run_training_loop(
     # ── GPU monitor ───────────────────────────────────────────────────────────
     gpu_monitor = GPUMonitor(interval_sec=5)
     gpu_monitor.start()
+
+    # ── Early-game policy-entropy probe (§115 monitoring signal) ──────────────
+    # Fixed 10-position fixture. One forward pass per log_interval — rides on
+    # the existing _emit_training_events cadence so probe cost is amortised.
+    early_game_probe: Optional[EarlyGameProbe]
+    try:
+        early_game_probe = EarlyGameProbe(device=device)
+        log.info(
+            "early_game_probe_init",
+            n_positions=early_game_probe.n_positions,
+            plies=early_game_probe.plies,
+        )
+    except Exception as _egp_err:
+        log.warning("early_game_probe_unavailable", error=str(_egp_err))
+        early_game_probe = None
 
     # ── Dashboard renderers ───────────────────────────────────────────────────
     dashboards: list = []
@@ -536,6 +555,8 @@ def run_training_loop(
                         last_iter_games, pool, buffer, gpu_monitor,
                         config, mcts_config, capacity,
                         _games_per_hour_rolling, _qfire_delta,
+                        early_game_probe=early_game_probe,
+                        trainer_model=trainer.model,
                     )
                     last_iter_games = games_played
 
@@ -719,6 +740,8 @@ def _emit_training_events(
     capacity: int,
     games_per_hour_fn: Any,
     qfire_delta: int,
+    early_game_probe: Optional[EarlyGameProbe] = None,
+    trainer_model: Optional[Any] = None,
 ) -> None:
     """Emit ``training_step`` + ``iteration_complete`` events and structlog entry."""
     policy_entropy = float(loss_info.get("policy_entropy", 0.0))
@@ -726,7 +749,25 @@ def _emit_training_events(
     grad_norm      = float(loss_info.get("grad_norm", float("nan")))
     lr             = float(loss_info.get("lr", 0.0))
 
-    emit_event({
+    # §115 early-game entropy probe — one forward pass on a fixed 10-position
+    # fixture. Rides on log_interval cadence.
+    probe_metrics: dict[str, Any] = {}
+    if early_game_probe is not None and trainer_model is not None:
+        try:
+            probe_metrics = early_game_probe.compute(trainer_model)
+            if probe_metrics["early_game_entropy_mean"] > EARLY_GAME_ENTROPY_WARN_THRESHOLD:
+                log.warning(
+                    "early_game_entropy_high",
+                    step=train_step,
+                    entropy_mean=round(probe_metrics["early_game_entropy_mean"], 4),
+                    threshold=EARLY_GAME_ENTROPY_WARN_THRESHOLD,
+                    entropy_by_ply=[round(x, 3) for x in probe_metrics["early_game_entropy_by_ply"]],
+                )
+        except Exception as _egp_err:
+            log.warning("early_game_probe_failed", step=train_step, error=str(_egp_err))
+            probe_metrics = {}
+
+    training_step_event: dict[str, Any] = {
         "event": "training_step",
         "step": train_step,
         "loss_total":              float(loss_info["loss"]),
@@ -755,7 +796,10 @@ def _emit_training_events(
         "lr":                      lr,
         "grad_norm":               grad_norm,
         "quiescence_fires_per_step": qfire_delta,
-    })
+    }
+    if probe_metrics:
+        training_step_event.update(probe_metrics)
+    emit_event(training_step_event)
 
     gph    = games_per_hour_fn()
     avg_gl = pool.avg_game_length if hasattr(pool, "avg_game_length") else 0.0
@@ -839,6 +883,10 @@ def _emit_training_events(
         cluster_value_std_mean=float(getattr(_runner, "cluster_value_std_mean", 0.0)),
         cluster_policy_disagreement_mean=float(getattr(_runner, "cluster_policy_disagreement_mean", 0.0)),
         cluster_variance_sample_count=int(getattr(_runner, "cluster_variance_sample_count", 0)),
+        early_game_entropy_mean=round(float(probe_metrics.get("early_game_entropy_mean", float("nan"))), 4)
+            if probe_metrics else None,
+        early_game_top1_mass_mean=round(float(probe_metrics.get("early_game_top1_mass_mean", float("nan"))), 4)
+            if probe_metrics else None,
     )
 
 
