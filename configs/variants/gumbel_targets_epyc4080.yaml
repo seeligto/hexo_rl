@@ -1,0 +1,22 @@
+# gumbel_targets — EPYC 7702 (42 vCPU) + RTX 4080 Super (16 GB) variant.
+# Starting point only; tune knobs via scripts/sweep_epyc4080.sh, then update here.
+#
+# Hardware delta vs desktop (Ryzen 7 3700x + RTX 3070 8GB):
+#   - 3-4× CPU cores available (42 vs 16 vCPU). Higher n_workers feasible.
+#   - 2× VRAM (16 vs 8 GB). Larger inference_batch_size feasible.
+#   - GPU ~2× faster (FP16 throughput). Wider batches do not bottleneck CPU.
+#   - EPYC per-core IPC < Ryzen Zen2; expect more workers needed to saturate GPU.
+#
+# Initial guesses (replace with sweep winners):
+training_steps_per_game: 2.0
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 300
+  n_workers: 32
+  inference_batch_size: 128
+  inference_max_wait_ms: 3.0
+  leaf_batch_size: 8
+  playout_cap:
+    fast_prob: 0.0
+max_train_burst: 16
