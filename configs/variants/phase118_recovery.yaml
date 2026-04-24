@@ -1,0 +1,35 @@
+# §118 RecentBuffer augmentation recovery run (from ckpt_12190).
+#
+# Purpose: 4000-step diagnostic run to measure whether enabling RecentBuffer
+# augmentation (a40f024) corrects the E-W axis bias accumulated during the
+# augmentation-gap window.
+#
+# Inherits all production settings from training.yaml + selfplay.yaml.
+# §118 wave params already in those files: dirichlet_alpha=0.05,
+# full_search_prob=0.5, random_opening_plies=4, decay_steps=20k,
+# pretrain_max_samples=0 (uncapped).
+#
+# Overrides here:
+#   eval_interval=500 — 8 eval/axis-distribution points over 4000 steps;
+#                       allows 4-consecutive-eval soft-abort check at step ~14190.
+#   checkpoint_interval=500 — dense checkpoints for post-hoc D5 trajectory scan.
+#   max_checkpoints_kept=10000 — retain all checkpoints; prune manually after analysis.
+#
+# Abort thresholds (via monitors:):
+#   soft: E-W (axis_q) > 0.55 for 4 consecutive eval points → log soft_abort_ew_flat,
+#         halt run, commit checkpoint, open §120 investigation.
+#   hard: grad_norm > 3.0 for 5 consecutive steps → halt immediately.
+#
+# Do NOT commit this file — scoped to §118 recovery wave.
+
+eval_interval: 500
+checkpoint_interval: 500
+max_checkpoints_kept: 10000
+
+monitors:
+  axis_warn:  0.45
+  axis_alert: 0.50
+  soft_abort_ew_threshold: 0.55
+  soft_abort_ew_min_points: 4
+  hard_abort_grad_norm: 3.0
+  hard_abort_grad_norm_steps: 5

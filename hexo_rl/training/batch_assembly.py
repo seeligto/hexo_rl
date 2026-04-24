@@ -256,7 +256,7 @@ def assemble_mixed_batch(
     bufs: BatchBuffers,
     train_step: int,
     augment: bool = True,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
     """Assemble one mixed batch from pretrain + self-play (+ optional recent) buffers.
 
     During warm-up (buffers partially filled), falls back to ``np.concatenate``
@@ -281,9 +281,12 @@ def assemble_mixed_batch(
                            diagnostic runs (see CLAUDE.md § Testing conventions).
 
     Returns:
-        Seven arrays ``(states, chain_planes, policies, outcomes, ownership, winning_line,
-        is_full_search)`` — views into ``bufs`` in steady-state, freshly allocated during
-        warm-up.  Corpus positions always have ``is_full_search=1`` (apply full policy loss).
+        Eight-tuple: seven arrays ``(states, chain_planes, policies, outcomes, ownership,
+        winning_line, is_full_search)`` — views into ``bufs`` in steady-state, freshly
+        allocated during warm-up — plus ``n_recent_actual`` (int): actual number of rows
+        drawn from recent_buffer (0 when recent_buffer absent or empty). Batch order is
+        ``[corpus | recent | uniform_self]``; caller uses n_pre + n_recent_actual to slice.
+        Corpus positions always have ``is_full_search=1`` (apply full policy loss).
     """
     s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre = pretrained_buffer.sample_batch(n_pre, augment)
 
@@ -294,6 +297,7 @@ def assemble_mixed_batch(
         s_self, c_self, p_self, o_self, own_self, wl_self, ifs_self = _sample_selfplay(
             buffer, recent_buffer, n_self, recency_weight, augment
         )
+        # n_recent unknown in this mismatch path — report 0 (caller disables 3-way split).
         return (
             np.concatenate([s_pre, s_self], axis=0),
             np.concatenate([c_pre, c_self], axis=0),
@@ -302,6 +306,7 @@ def assemble_mixed_batch(
             np.concatenate([own_pre, own_self], axis=0),
             np.concatenate([wl_pre, wl_self], axis=0),
             np.concatenate([ifs_pre, ifs_self], axis=0),
+            0,
         )
 
     # ── Normal path: try in-place fill into bufs ──────────────────────────────
@@ -312,16 +317,18 @@ def assemble_mixed_batch(
         and n_self > 1
     )
 
+    n_recent_actual = 0
     if use_recent:
-        n_recent   = max(1, int(round(n_self * recency_weight)))
-        n_uniform  = n_self - n_recent
-        s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_recent)
+        n_recent_req  = max(1, int(round(n_self * recency_weight)))
+        n_uniform     = n_self - n_recent_req
+        s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_recent_req)
         s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
             s_r, c_r, p_r, own_r_flat, wl_r_flat, augment
         )
         own_r = own_r_flat.reshape(-1, 19, 19)
         wl_r  = wl_r_flat.reshape(-1, 19, 19)
         s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), augment)
+        n_recent_actual = len(s_r)
         pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre),
                      (s_r,   c_r,   p_r,   o_r,   own_r,   wl_r,   ifs_r),
                      (s_u,   c_u,   p_u,   o_u,   own_u,   wl_u,   ifs_u)]
@@ -342,6 +349,7 @@ def assemble_mixed_batch(
             np.concatenate([p[4] for p in pieces], axis=0),
             np.concatenate([p[5] for p in pieces], axis=0),
             np.concatenate([p[6] for p in pieces], axis=0),
+            n_recent_actual,
         )
 
     # Steady-state: in-place copy, no heap allocation.
@@ -362,7 +370,7 @@ def assemble_mixed_batch(
         offset += n
 
     return (bufs.states, bufs.chain_planes, bufs.policies, bufs.outcomes,
-            bufs.ownership, bufs.winning_line, bufs.is_full_search)
+            bufs.ownership, bufs.winning_line, bufs.is_full_search, n_recent_actual)
 
 
 def _sample_selfplay(

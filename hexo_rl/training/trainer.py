@@ -365,6 +365,7 @@ class Trainer:
         threat_targets: Optional[Any] = None,
         is_full_search: Optional[Any] = None,
         n_pretrain: int = 0,
+        n_recent: int = 0,
     ) -> Dict[str, float]:
         """Perform one gradient update from pre-built numpy arrays.
 
@@ -378,16 +379,20 @@ class Trainer:
             is_full_search: Optional (B,) uint8 array — 1 = full-search (apply policy
                           loss), 0 = quick-search (value/chain only). None means all
                           positions are treated as full-search (legacy behaviour).
-            n_pretrain: Number of rows (from the start of the batch) that came
-                        from the pretrained corpus. Used to compute per-stream
-                        entropy. 0 means all rows are self-play.
+            n_pretrain: Number of rows (from the start of the batch) that came from
+                        the pretrained corpus (first n_pretrain rows). Used for
+                        per-stream entropy. 0 means all rows are self-play.
+            n_recent: Number of rows from the recent_buffer, immediately following the
+                      corpus rows. Batch order: [corpus | recent | uniform_self].
+                      Used to compute the 3-way entropy split. 0 = no recent slice.
         """
         return self._train_on_batch(states, policies, outcomes,
                                      chain_planes=chain_planes,
                                      ownership_targets=ownership_targets,
                                      threat_targets=threat_targets,
                                      is_full_search=is_full_search,
-                                     n_pretrain=n_pretrain)
+                                     n_pretrain=n_pretrain,
+                                     n_recent=n_recent)
 
     def _train_on_batch(
         self,
@@ -399,6 +404,7 @@ class Trainer:
         threat_targets: Optional[Any] = None,
         is_full_search: Optional[Any] = None,
         n_pretrain: int = 0,
+        n_recent: int = 0,
     ) -> Dict[str, float]:
         """Core training step: forward, loss, backward, optimizer step."""
         _perf = self._perf_timing
@@ -606,6 +612,8 @@ class Trainer:
                 "policy_entropy": float("nan"),
                 "policy_entropy_pretrain": float("nan"),
                 "policy_entropy_selfplay": float("nan"),
+                "policy_entropy_recent": float("nan"),
+                "policy_entropy_uniform_selfplay": float("nan"),
                 "policy_target_entropy": 0.0,
                 "grad_norm": float("nan"),
                 "value_accuracy": float("nan"),
@@ -640,8 +648,9 @@ class Trainer:
             p_fp32 = torch.exp(log_policy.float())
             policy_entropy = torch.special.entr(p_fp32).sum(dim=-1).mean().item()
 
-            # Per-stream entropy split (pretrain rows first, selfplay rows after).
+            # Per-stream entropy split.  Batch order: [corpus | recent | uniform_self].
             # n_pretrain=0 means all rows are self-play (single-buffer path).
+            # n_recent=0 means recent_buffer was absent or empty this step.
             _batch_n = p_fp32.shape[0]
             if n_pretrain > 0 and n_pretrain < _batch_n:
                 policy_entropy_pretrain = torch.special.entr(p_fp32[:n_pretrain]).sum(dim=-1).mean().item()
@@ -652,6 +661,22 @@ class Trainer:
             else:  # entire batch is pretrain
                 policy_entropy_pretrain = policy_entropy
                 policy_entropy_selfplay = float("nan")
+
+            # 3-way split: corpus / recent / uniform_self
+            _sp_start  = n_pretrain
+            _rec_end   = n_pretrain + n_recent
+            if n_recent > 0 and _rec_end <= _batch_n and _sp_start < _batch_n:
+                policy_entropy_recent = (
+                    torch.special.entr(p_fp32[_sp_start:_rec_end]).sum(dim=-1).mean().item()
+                    if _rec_end > _sp_start else float("nan")
+                )
+                policy_entropy_uniform_sp = (
+                    torch.special.entr(p_fp32[_rec_end:]).sum(dim=-1).mean().item()
+                    if _rec_end < _batch_n else float("nan")
+                )
+            else:
+                policy_entropy_recent    = float("nan")
+                policy_entropy_uniform_sp = policy_entropy_selfplay
 
             # Value accuracy: fraction where predicted winner matches actual.
             # v_logit > 0 → predict win (outcome > 0), v_logit ≤ 0 → predict loss.
@@ -690,9 +715,11 @@ class Trainer:
             "loss":                     loss.item(),
             "policy_loss":              policy_loss.item(),
             "value_loss":               value_loss.item(),
-            "policy_entropy":           policy_entropy,
-            "policy_entropy_pretrain":  policy_entropy_pretrain,
-            "policy_entropy_selfplay":  policy_entropy_selfplay,
+            "policy_entropy":                 policy_entropy,
+            "policy_entropy_pretrain":        policy_entropy_pretrain,
+            "policy_entropy_selfplay":        policy_entropy_selfplay,
+            "policy_entropy_recent":          policy_entropy_recent,
+            "policy_entropy_uniform_selfplay": policy_entropy_uniform_sp,
             "policy_target_entropy":    policy_target_entropy,
             "grad_norm":                grad_norm,
             "value_accuracy":           value_accuracy,

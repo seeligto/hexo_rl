@@ -352,6 +352,18 @@ def run_training_loop(
     initial_policy_loss: float | None = None
     last_loss_info: dict[str, float] = {}
 
+    # ── Abort sentinels ───────────────────────────────────────────────────────
+    import collections as _collections
+    _mon_cfg = config.get("monitors", {})
+    # Soft-abort: E-W axis (axis_q) flat above threshold for N consecutive evals.
+    _soft_ew_threshold = float(_mon_cfg.get("soft_abort_ew_threshold", 0.0))
+    _soft_ew_min_pts   = int(_mon_cfg.get("soft_abort_ew_min_points", 0))
+    _ew_history: collections.deque = _collections.deque(maxlen=max(_soft_ew_min_pts, 1))
+    # Hard-abort: gradient norm > threshold for N consecutive training steps.
+    _hard_gn_threshold  = float(_mon_cfg.get("hard_abort_grad_norm", 3.0))
+    _hard_gn_min_steps  = int(_mon_cfg.get("hard_abort_grad_norm_steps", 5))
+    _consec_high_gn     = 0
+
     def compute_pretrained_weight(step: int) -> float:
         return max(mixing_min_w, mixing_initial_w * math.exp(-step / mixing_decay_steps))
 
@@ -404,6 +416,7 @@ def run_training_loop(
         last_warmup_log        = 0.0
         last_iter_games        = 0
         _last_quiescence_fires = 0
+        nonlocal _consec_high_gn
 
         while _running[0]:
             if stop_step is not None and train_step >= stop_step:
@@ -479,7 +492,8 @@ def run_training_loop(
                     n_pre  = max(1, int(math.ceil(batch_size * w_pre)))
                     n_self = batch_size - n_pre
                     (states, chain_planes, policies, outcomes,
-                     ownership, winning_line, is_full_search) = assemble_mixed_batch(
+                     ownership, winning_line, is_full_search,
+                     n_recent_batch) = assemble_mixed_batch(
                         pretrained_buffer, buffer, recent_buffer,
                         n_pre, n_self, batch_size, batch_size_cfg,
                         recency_weight, bufs, train_step,
@@ -491,6 +505,7 @@ def run_training_loop(
                         ownership_targets=ownership, threat_targets=winning_line,
                         is_full_search=is_full_search,
                         n_pretrain=n_pre,
+                        n_recent=n_recent_batch,
                     )
                 else:
                     w_pre = 0.0
@@ -505,6 +520,23 @@ def run_training_loop(
                     initial_policy_loss = float(loss_info["policy_loss"])
                 last_loss_info = loss_info
 
+                # ── Hard-abort: sustained gradient norm ───────────────────────
+                _step_gn = float(loss_info.get("grad_norm", 0.0))
+                if math.isfinite(_step_gn) and _step_gn > _hard_gn_threshold:
+                    _consec_high_gn += 1
+                    if _consec_high_gn >= _hard_gn_min_steps:
+                        log.error(
+                            "hard_abort_grad_norm",
+                            step=train_step,
+                            consec_steps=_consec_high_gn,
+                            grad_norm=round(_step_gn, 4),
+                            threshold=_hard_gn_threshold,
+                            msg="Sustained high gradient norm — halting run. Roll back to ckpt_12190 before re-resuming.",
+                        )
+                        _running[0] = False
+                else:
+                    _consec_high_gn = 0
+
                 if train_step % _ckpt_interval == 0:
                     # Graduation gate: inf_model is the anchor, not a mirror of
                     # trainer.model. Do NOT sync on checkpoint cadence — sync only
@@ -514,9 +546,26 @@ def run_training_loop(
 
                 # ── Selfplay axis-distribution (§axis_dist) ───────────────────
                 if train_step > 0 and train_step % eval_interval == 0:
-                    _emit_axis_distribution(
+                    _axis_q_val = _emit_axis_distribution(
                         train_step, pool, config, _axis_baseline, _tb_writer,
                     )
+                    # Soft-abort: E-W fraction flat above threshold for N evals.
+                    if (_soft_ew_threshold > 0.0 and _soft_ew_min_pts > 0
+                            and _axis_q_val is not None):
+                        _ew_history.append(_axis_q_val)
+                        if (len(_ew_history) >= _soft_ew_min_pts
+                                and all(v > _soft_ew_threshold for v in _ew_history)):
+                            log.warning(
+                                "soft_abort_ew_flat",
+                                step=train_step,
+                                ew_history=[round(v, 4) for v in _ew_history],
+                                threshold=_soft_ew_threshold,
+                                msg=(
+                                    "E-W fraction flat above threshold — soft-abort. "
+                                    "Commit checkpoint and open §120 investigation."
+                                ),
+                            )
+                            _running[0] = False
 
                 # ── Eval (non-blocking background thread) ─────────────────────
                 if eval_pipeline is not None and train_step > 0 and train_step % eval_interval == 0:
@@ -773,7 +822,7 @@ def _emit_axis_distribution(
     config: dict[str, Any],
     baseline: dict[str, float],
     tb_writer: Any,
-) -> None:
+) -> Optional[float]:
     """Compute and emit selfplay axis-distribution metrics (§axis_dist).
 
     Samples the last ≤100 completed game move histories from the pool, computes
@@ -786,7 +835,7 @@ def _emit_axis_distribution(
 
     recent_games = pool.recent_move_histories
     if not recent_games:
-        return
+        return None
 
     metrics = compute_axis_fractions(recent_games)
     axis_q  = metrics["axis_q"]
@@ -858,6 +907,8 @@ def _emit_axis_distribution(
         except Exception as _tb_err:
             log.warning("axis_distribution_tb_failed", step=train_step, error=str(_tb_err))
 
+    return axis_q
+
 
 def _emit_training_events(
     train_step: int,
@@ -912,9 +963,11 @@ def _emit_training_events(
         "loss_chain":              float(loss_info.get("chain_loss", 0.0)),
         "aux_loss_rows":           int(loss_info.get("aux_loss_rows", 0)),
         "avg_sigma":               float(loss_info.get("avg_sigma", 0.0)),
-        "policy_entropy":          policy_entropy,
-        "policy_entropy_pretrain": float(loss_info.get("policy_entropy_pretrain", float("nan"))),
-        "policy_entropy_selfplay": float(loss_info.get("policy_entropy_selfplay", float("nan"))),
+        "policy_entropy":                  policy_entropy,
+        "policy_entropy_pretrain":         float(loss_info.get("policy_entropy_pretrain", float("nan"))),
+        "policy_entropy_selfplay":         float(loss_info.get("policy_entropy_selfplay", float("nan"))),
+        "policy_entropy_recent":           float(loss_info.get("policy_entropy_recent", float("nan"))),
+        "policy_entropy_uniform_selfplay": float(loss_info.get("policy_entropy_uniform_selfplay", float("nan"))),
         "policy_target_entropy":   float(loss_info.get("policy_target_entropy", 0.0)),
         # §101 — D-Gumbel / D-Zeroloss split metrics. NaN when the respective
         # subset is empty; renderers must handle NaN + missing keys gracefully.
@@ -982,6 +1035,8 @@ def _emit_training_events(
         policy_entropy=round(policy_entropy, 4),
         policy_entropy_pretrain=round(float(loss_info.get("policy_entropy_pretrain", float("nan"))), 4),
         policy_entropy_selfplay=round(float(loss_info.get("policy_entropy_selfplay", float("nan"))), 4),
+        policy_entropy_recent=round(float(loss_info.get("policy_entropy_recent", float("nan"))), 4),
+        policy_entropy_uniform_selfplay=round(float(loss_info.get("policy_entropy_uniform_selfplay", float("nan"))), 4),
         buffer_size=buffer.size,
         buffer_capacity=buffer.capacity,
         pretrained_weight=round(w_pre, 4),
