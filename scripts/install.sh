@@ -9,8 +9,8 @@ HF_MODEL_REPO="timmyburn/hexo-bootstrap-models"
 HF_CORPUS_REPO="timmyburn/hexo-bootstrap-corpus"
 MODEL_FILE="bootstrap_model.pt"
 CORPUS_FILE="bootstrap_corpus.npz"
-# Corpus repo is public; set WITH_CORPUS=1 to download.
-WITH_CORPUS="${WITH_CORPUS:-0}"
+# Corpus repo is public; set WITH_CORPUS=0 to skip download.
+WITH_CORPUS="${WITH_CORPUS:-1}"
 
 TOTAL_STEPS=10
 
@@ -189,13 +189,13 @@ if ! hf_download "$HF_MODEL_REPO" model "$MODEL_FILE" checkpoints; then
     warn "Model download failed. Check network / HF availability."
 fi
 
-# Corpus — public repo; opt-in via WITH_CORPUS=1.
+# Corpus — public repo; enabled by default, disable via WITH_CORPUS=0.
 if [[ "$WITH_CORPUS" == "1" ]]; then
     if ! hf_download "$HF_CORPUS_REPO" dataset "$CORPUS_FILE" data; then
         warn "Corpus download failed. Check network / HF availability."
     fi
 else
-    ok "Corpus download skipped (set WITH_CORPUS=1 to enable)"
+    ok "Corpus download skipped (disabled via WITH_CORPUS=0)"
 fi
 
 if [[ -f fixtures/threat_probe_baseline.json ]]; then
