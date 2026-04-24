@@ -165,7 +165,7 @@ ok "Submodules up to date"
 
 # ── [8/10] Build engine ───────────────────────────────────────────────────────
 step 8 "Building Rust engine extension..."
-.venv/bin/maturin develop --release -m engine/Cargo.toml
+VIRTUAL_ENV="$(pwd)/.venv" .venv/bin/maturin develop --release -m engine/Cargo.toml
 ok "Engine built"
 
 echo "    Building SealBot C++ extensions..."
