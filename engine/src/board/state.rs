@@ -453,6 +453,94 @@ impl Board {
         self.encode_state_to_buffer(planes_2, out)
     }
 
+    /// Encode a *subset* of the 18 wire planes selected by `channels`, in the
+    /// order given. Used by sweep variants whose model in_channels < 18.
+    ///
+    /// Plane semantics match `encode_state_to_buffer` (see header comment).
+    /// Channels 0/8 carry the only non-zero stone information on the Rust
+    /// self-play path; channels 16/17 are scalar broadcasts; 1–7 / 9–15
+    /// are zero on this path (history filled by Python tensor assembly).
+    /// `channels.iter().any(|c| c >= 18)` panics in debug; release silently
+    /// skips out-of-range entries.
+    ///
+    /// `out` must have length `channels.len() * TOTAL_CELLS`.
+    pub fn encode_state_to_buffer_channels(
+        &self,
+        planes_2: &[f32],
+        out: &mut [f32],
+        channels: &[usize],
+    ) {
+        let n = channels.len();
+        debug_assert_eq!(
+            out.len(),
+            n * TOTAL_CELLS,
+            "encode_state_to_buffer_channels output length mismatch — \
+             expected {} planes × {} cells",
+            n,
+            TOTAL_CELLS
+        );
+        let mr_val = if self.moves_remaining == 2 { 1.0 } else { 0.0 };
+        let ply_val = (self.ply % 2) as f32;
+        for (slot, &ch) in channels.iter().enumerate() {
+            let dst = &mut out[slot * TOTAL_CELLS..(slot + 1) * TOTAL_CELLS];
+            match ch {
+                0 => {
+                    dst.copy_from_slice(&planes_2[0..TOTAL_CELLS]);
+                }
+                8 => {
+                    dst.copy_from_slice(&planes_2[TOTAL_CELLS..2 * TOTAL_CELLS]);
+                }
+                16 => {
+                    for v in dst.iter_mut() {
+                        *v = mr_val;
+                    }
+                }
+                17 => {
+                    for v in dst.iter_mut() {
+                        *v = ply_val;
+                    }
+                }
+                c if c < 18 => {
+                    // History planes 1..7 / 9..15 are zero on the Rust
+                    // self-play path; clear in case caller did not zero-init.
+                    for v in dst.iter_mut() {
+                        *v = 0.0;
+                    }
+                }
+                _ => {
+                    debug_assert!(false, "channel index {} out of range [0, 18)", ch);
+                    for v in dst.iter_mut() {
+                        *v = 0.0;
+                    }
+                }
+            }
+        }
+    }
+
+    /// `to_planes` variant emitting only the listed channels, in the listed
+    /// order. Length = `channels.len() * TOTAL_CELLS`. See
+    /// `encode_state_to_buffer_channels` for plane semantics.
+    pub fn to_planes_channels(&self, channels: &[usize]) -> Vec<f32> {
+        let mut planes_2 = vec![0.0f32; 2 * TOTAL_CELLS];
+        let (my_cell, opp_cell) = match self.current_player {
+            Player::One => (Cell::P1, Cell::P2),
+            Player::Two => (Cell::P2, Cell::P1),
+        };
+        for (&(q, r), &cell) in self.cells.iter() {
+            let flat = self.window_flat_idx(q, r);
+            if flat < TOTAL_CELLS {
+                if cell == my_cell {
+                    planes_2[flat] = 1.0;
+                } else if cell == opp_cell {
+                    planes_2[TOTAL_CELLS + flat] = 1.0;
+                }
+            }
+        }
+        let mut out = vec![0.0f32; channels.len() * TOTAL_CELLS];
+        self.encode_state_to_buffer_channels(&planes_2, &mut out, channels);
+        out
+    }
+
     /// Encode the board as a flat f32 array of length `18 * TOTAL_CELLS`
     /// representing shape [18, BOARD_SIZE, BOARD_SIZE] (18 history+scalar planes).
     ///
@@ -790,6 +878,84 @@ pub fn encode_chain_planes(
             dr,
             &mut tail[0..TOTAL_CELLS],
         );
+    }
+}
+
+#[cfg(test)]
+mod channel_select_tests {
+    use super::*;
+
+    fn build_planes_2() -> Vec<f32> {
+        let mut v = vec![0.0f32; 2 * TOTAL_CELLS];
+        v[0] = 1.0;
+        v[5] = 1.0;
+        v[TOTAL_CELLS + 7] = 1.0;
+        v[TOTAL_CELLS + 11] = 1.0;
+        v
+    }
+
+    fn make_board() -> Board {
+        let mut b = Board::new();
+        // Place a couple of stones to exercise moves_remaining + ply parity.
+        b.apply_move(0, 0).unwrap();
+        b.apply_move(1, 0).unwrap();
+        b.apply_move(0, 1).unwrap();
+        b
+    }
+
+    #[test]
+    fn channel_select_matches_full_kernel_for_canonical_planes() {
+        let b = make_board();
+        let planes_2 = build_planes_2();
+
+        let mut full = vec![0.0f32; 18 * TOTAL_CELLS];
+        b.encode_state_to_buffer(&planes_2, &mut full);
+
+        let channels = [0usize, 8, 16, 17];
+        let mut sel = vec![0.0f32; channels.len() * TOTAL_CELLS];
+        b.encode_state_to_buffer_channels(&planes_2, &mut sel, &channels);
+
+        for (slot, &ch) in channels.iter().enumerate() {
+            let lhs = &full[ch * TOTAL_CELLS..(ch + 1) * TOTAL_CELLS];
+            let rhs = &sel[slot * TOTAL_CELLS..(slot + 1) * TOTAL_CELLS];
+            assert_eq!(lhs, rhs, "channel {} mismatch (slot {})", ch, slot);
+        }
+    }
+
+    #[test]
+    fn channel_select_history_planes_are_zero() {
+        let b = make_board();
+        let planes_2 = build_planes_2();
+        let channels = [0usize, 1, 8, 9];
+        let mut sel = vec![999.0f32; channels.len() * TOTAL_CELLS];
+        b.encode_state_to_buffer_channels(&planes_2, &mut sel, &channels);
+        // Slots 1 and 3 are history planes (1 and 9) — zero on Rust path.
+        for &slot in &[1usize, 3] {
+            for v in &sel[slot * TOTAL_CELLS..(slot + 1) * TOTAL_CELLS] {
+                assert_eq!(*v, 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn to_planes_channels_length_matches_request() {
+        let b = make_board();
+        let v = b.to_planes_channels(&[0, 8]);
+        assert_eq!(v.len(), 2 * TOTAL_CELLS);
+        let v6 = b.to_planes_channels(&[0, 1, 8, 9, 16, 17]);
+        assert_eq!(v6.len(), 6 * TOTAL_CELLS);
+    }
+
+    #[test]
+    fn to_planes_channels_full_18_matches_to_planes() {
+        let b = make_board();
+        let full = b.to_planes();
+        let channels: Vec<usize> = (0..18).collect();
+        let sel = b.to_planes_channels(&channels);
+        assert_eq!(full.len(), sel.len());
+        for (i, (a, c)) in full.iter().zip(sel.iter()).enumerate() {
+            assert!((a - c).abs() < 1e-7, "mismatch at index {}: {} vs {}", i, a, c);
+        }
     }
 }
 

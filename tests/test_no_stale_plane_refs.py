@@ -34,6 +34,8 @@ EXCLUDE = (
     'docs/rules/phase-4-architecture.md',
     # FUTURE_REFACTORS.md tracks done/pending items including resolved 24-plane tasks
     'FUTURE_REFACTORS.md',
+    # backward-compat corpus loader — trims legacy 24-plane NPZ to 18 at load time
+    'scripts/regen_bootstrap_corpus.py',
     # torchinductor compiled cache — generated, not source
     '.torchinductor-cache/',
     # agent memory files — not source, not reviewed

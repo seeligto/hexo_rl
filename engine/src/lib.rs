@@ -130,6 +130,25 @@ impl PyBoard {
         self.inner.to_planes()
     }
 
+    /// Encode the board as a flat list of floats covering only the listed
+    /// wire planes. `channels` selects from the canonical 18-plane layout
+    /// documented on `to_tensor`; the returned vector has length
+    /// `len(channels) * 361` and emits planes in the given order.
+    ///
+    /// Used by sweep variants whose model in_channels < 18 to avoid
+    /// allocating zero history slots (planes 1–7 / 9–15).
+    pub fn to_tensor_channels(&self, channels: Vec<usize>) -> PyResult<Vec<f32>> {
+        for (i, &c) in channels.iter().enumerate() {
+            if c >= 18 {
+                return Err(PyValueError::new_err(format!(
+                    "channels[{}] = {} out of range [0, 18)",
+                    i, c
+                )));
+            }
+        }
+        Ok(self.inner.to_planes_channels(&channels))
+    }
+
     /// Returns a tuple of (list of NumPy arrays, list of (q, r) centers) for each cluster.
     ///
     /// Each NumPy array has shape (2, 19, 19), dtype float32:

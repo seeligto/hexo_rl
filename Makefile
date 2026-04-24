@@ -68,7 +68,7 @@ rebuild: clean build ## Full clean + optimized rebuild
 test: test.rust test.py ## Run Rust + Python tests (excludes integration marker)
 
 test.rust: ## Run Rust tests (cargo test)
-	cargo test
+	LD_LIBRARY_PATH=$$($(PY) -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))"):$$LD_LIBRARY_PATH cargo test
 
 test.py: ## Run Python tests (excludes slow/integration markers)
 	$(PY) -m pytest -q -m "not slow and not integration" tests

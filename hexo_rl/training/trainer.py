@@ -318,6 +318,7 @@ class Trainer:
         _perf = self._perf_timing
         _t_sample_start = time.perf_counter() if _perf else 0.0
 
+        n_recent = 0
         if recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0:
             n_recent = max(1, int(round(batch_size * recency_weight)))
             n_uniform = batch_size - n_recent
@@ -353,6 +354,7 @@ class Trainer:
             threat_targets=winning_line,
             is_full_search=is_full_search,
             n_pretrain=0,
+            n_recent=n_recent,
         )
 
     def train_step_from_tensors(
@@ -907,8 +909,29 @@ class Trainer:
             different value → raise ValueError. Do not silently override.
           - If inference yields a value → use it (covers weights-only resume).
           - Otherwise fall back to explicit config, then hard default.
+
+        Sweep variant support: when config carries `input_channels`, the model
+        in_channels is derived from len(input_channels). The conv weight shape
+        in the checkpoint must agree.
         """
         model_cfg = config.get("model") if isinstance(config.get("model"), dict) else {}
+
+        # Resolve input_channels override before hparam reconciliation so
+        # in_channels can be derived consistently.
+        input_channels_cfg = config.get("input_channels")
+        if input_channels_cfg is None and isinstance(model_cfg, dict):
+            input_channels_cfg = model_cfg.get("input_channels")
+        if input_channels_cfg is not None:
+            from hexo_rl.model.network import validate_input_channels  # local import to avoid cycle
+            input_channels_cfg = validate_input_channels(input_channels_cfg)
+            config["input_channels"] = list(input_channels_cfg)
+            if isinstance(model_cfg, dict):
+                model_cfg["input_channels"] = list(input_channels_cfg)
+            derived_in = len(input_channels_cfg)
+            # Override config's in_channels to match the variant's plane count.
+            config["in_channels"] = derived_in
+            if isinstance(model_cfg, dict):
+                model_cfg["in_channels"] = derived_in
 
         defaults = {
             "board_size": 19, "res_blocks": 12, "filters": 128,
@@ -1049,6 +1072,7 @@ class Trainer:
             res_blocks=model_hparams["res_blocks"],
             filters=model_hparams["filters"],
             se_reduction_ratio=model_hparams.get("se_reduction_ratio", 4),
+            input_channels=config.get("input_channels"),
         )
         cls._load_state_dict_strict(model, model_state)
 

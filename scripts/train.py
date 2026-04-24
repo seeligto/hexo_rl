@@ -223,9 +223,30 @@ def main() -> None:
             configured_total_steps=trainer.config.get("total_steps"),
         )
     else:
-        model   = HexTacToeNet(board_size=board_size, res_blocks=res_blocks, filters=filters)
+        # Sweep-variant support: configs may carry `input_channels: [list]` to
+        # pick a subset of the 18 wire planes. When present, in_channels is
+        # derived from the list length; otherwise the standard 18-plane model
+        # is built.
+        input_channels_cfg = combined_config.get("input_channels")
+        if input_channels_cfg is None:
+            in_channels_arg = int(combined_config.get("in_channels", 18))
+        else:
+            in_channels_arg = len(input_channels_cfg)
+            combined_config["in_channels"] = in_channels_arg
+        model = HexTacToeNet(
+            board_size=board_size,
+            res_blocks=res_blocks,
+            filters=filters,
+            in_channels=in_channels_arg,
+            input_channels=input_channels_cfg,
+        )
         trainer = Trainer(model, combined_config, checkpoint_dir=args.checkpoint_dir, device=device)
-        log.info("new_run", model_params=sum(p.numel() for p in model.parameters()))
+        log.info(
+            "new_run",
+            model_params=sum(p.numel() for p in model.parameters()),
+            in_channels=in_channels_arg,
+            input_channels=list(input_channels_cfg) if input_channels_cfg is not None else None,
+        )
 
     log.info("run_id", run_id=run_id)
 

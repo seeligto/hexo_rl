@@ -1,0 +1,24 @@
+# §122 sweep — 4-channel variant (minimal + symmetric 1-step history).
+#
+# Channel set: {0, 1, 8, 9} — symmetric 1-ply history for both players.
+
+input_channels: [0, 1, 8, 9]
+
+seed: 12200
+run_name: sweep_4ch
+
+total_steps: 10000
+eta_min: 2e-4
+checkpoint_interval: 500
+eval_interval: 500
+max_checkpoints_kept: 1000
+preserve_eval_checkpoints: true
+
+mixing:
+  pretrained_buffer_path: data/bootstrap_corpus_sweep_4ch.npz
+  decay_steps: 2000
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  buffer_persist: false
+
+augment: true

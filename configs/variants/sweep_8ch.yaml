@@ -1,0 +1,25 @@
+# §122 sweep — 8-channel variant (2^n with 4-step symmetric history).
+#
+# Channel set: {0, 1, 2, 3, 8, 9, 10, 11} — 4-ply history symmetric across
+# both players. No scalar planes.
+
+input_channels: [0, 1, 2, 3, 8, 9, 10, 11]
+
+seed: 12200
+run_name: sweep_8ch
+
+total_steps: 10000
+eta_min: 2e-4
+checkpoint_interval: 500
+eval_interval: 500
+max_checkpoints_kept: 1000
+preserve_eval_checkpoints: true
+
+mixing:
+  pretrained_buffer_path: data/bootstrap_corpus_sweep_8ch.npz
+  decay_steps: 2000
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  buffer_persist: false
+
+augment: true

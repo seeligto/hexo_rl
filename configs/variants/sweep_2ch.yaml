@@ -1,0 +1,33 @@
+# §122 sweep — 2-channel variant (KrakenBot-style minimal input).
+#
+# Channel set: {0, 8} — current-player stones, opponent stones.
+# No history, no scalar planes (moves_remaining, ply parity).
+# Lower bound on what is sufficient to play; comparison anchor for the rest
+# of the sweep.
+#
+# Wire format stays at 18 planes (replay buffer + sym kernels unchanged).
+# HexTacToeNet's `input_channels` parameter slices x[:, [0, 8]] before the
+# trunk; trunk in_channels = 2.
+
+input_channels: [0, 8]
+
+seed: 12200
+run_name: sweep_2ch
+
+# Sweep-specific training horizon (fresh-start cosine over phase 1+2).
+total_steps: 10000
+eta_min: 2e-4
+checkpoint_interval: 500
+eval_interval: 500
+max_checkpoints_kept: 1000
+preserve_eval_checkpoints: true
+
+mixing:
+  pretrained_buffer_path: data/bootstrap_corpus_sweep_2ch.npz
+  decay_steps: 2000
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  buffer_persist: false
+
+# Sweep is fresh-start every variant — no buffer restore from earlier runs.
+augment: true

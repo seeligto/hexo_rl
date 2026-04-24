@@ -72,6 +72,8 @@ def test_train_step_loss_is_finite(tmp_path: Path):
     # quick-search rows (default: full_search_mask is None ⇒ all full).
     _nan_allowed = {
         "policy_entropy_pretrain", "policy_entropy_selfplay",
+        # no recent_buffer → n_recent=0 → recent split undefined
+        "policy_entropy_recent",
         "policy_target_entropy_fastsearch",
         "policy_target_kl_uniform_fastsearch",
     }

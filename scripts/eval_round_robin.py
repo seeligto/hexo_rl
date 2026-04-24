@@ -41,18 +41,35 @@ BEST_CHECKPOINT = Path("checkpoints/best_model.pt")
 
 
 def load_model(path: Path, config: dict) -> HexTacToeNet:
-    """Load a checkpoint into a HexTacToeNet in eval mode."""
+    """Load a checkpoint into a HexTacToeNet in eval mode.
+
+    Falls back to the checkpoint's baked config (model architecture metadata)
+    when present so reduced-channel sweep checkpoints reconstruct correctly
+    even if the runner is invoked with the default 18-plane base config.
+    """
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     state = Trainer._extract_model_state(ckpt)
     state = normalize_model_state_dict_keys(state)
 
-    model_cfg = config if "board_size" in config else config.get("model", config)
+    ckpt_cfg = ckpt.get("config") if isinstance(ckpt, dict) else None
+    if isinstance(ckpt_cfg, dict):
+        model_cfg = ckpt_cfg
+    else:
+        model_cfg = config if "board_size" in config else config.get("model", config)
+
+    input_channels_cfg = model_cfg.get("input_channels")
+    if input_channels_cfg is not None:
+        in_channels = len(input_channels_cfg)
+    else:
+        in_channels = int(model_cfg.get("in_channels", 18))
+
     model = HexTacToeNet(
         board_size=int(model_cfg.get("board_size", 19)),
-        in_channels=int(model_cfg.get("in_channels", 18)),
+        in_channels=in_channels,
         res_blocks=int(model_cfg.get("res_blocks", 12)),
         filters=int(model_cfg.get("filters", 128)),
         se_reduction_ratio=int(model_cfg.get("se_reduction_ratio", 4)),
+        input_channels=input_channels_cfg,
     )
     model.load_state_dict(state, strict=False)
     model.to(DEVICE)

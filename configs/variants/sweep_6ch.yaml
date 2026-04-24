@@ -1,0 +1,29 @@
+# §122 sweep — 6-channel variant (D17 ablation recommendation).
+#
+# Channel set: {0, 1, 8, 9, 16, 17} — minimal stones + 1-step symmetric history
+# + both scalar planes (moves_remaining, ply parity).
+# This is what scripts/diag_phase122_d17_channel_ablation.py identified at
+# inference time on ckpt_14000 as retaining model strength when other planes
+# were ablated. The sweep tests whether a fresh net trains successfully on
+# this set rather than only inheriting it from a fully-trained 18-plane net.
+
+input_channels: [0, 1, 8, 9, 16, 17]
+
+seed: 12200
+run_name: sweep_6ch
+
+total_steps: 10000
+eta_min: 2e-4
+checkpoint_interval: 500
+eval_interval: 500
+max_checkpoints_kept: 1000
+preserve_eval_checkpoints: true
+
+mixing:
+  pretrained_buffer_path: data/bootstrap_corpus_sweep_6ch.npz
+  decay_steps: 2000
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  buffer_persist: false
+
+augment: true

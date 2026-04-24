@@ -117,10 +117,35 @@ def load_pretrained_buffer(
     )
     t0 = time.time()
     data = np.load(pretrained_path, mmap_mode="r")
-    pre_states   = data["states"]    # (T, 18 or 24, 19, 19) float16
+    pre_states   = data["states"]    # (T, 18 / 24 / N, 19, 19) float16
     pre_policies = data["policies"]  # (T, 362) float32
     pre_outcomes = data["outcomes"]  # (T,) float32
     T = len(pre_outcomes)
+
+    # §122 sweep: sliced corpora (T, N, 19, 19) carry an `input_channels`
+    # sidecar key naming the 18-plane indices each slot maps to. Scatter
+    # back to the 18-plane buffer wire format with non-selected planes
+    # zeroed; the model's own input_channels slice re-selects them at
+    # forward time. Keeps the buffer/sym kernels untouched.
+    if "input_channels" in data.files and pre_states.shape[1] != 18 and pre_states.shape[1] != 24:
+        sliced_channels = [int(c) for c in np.asarray(data["input_channels"])]
+        if pre_states.shape[1] != len(sliced_channels):
+            raise ValueError(
+                f"corpus '{pretrained_path}': states.shape[1]={pre_states.shape[1]} "
+                f"disagrees with input_channels sidecar (len={len(sliced_channels)})."
+            )
+        log.info(
+            "corpus_sliced_scatter",
+            channels=sliced_channels,
+            sliced_planes=pre_states.shape[1],
+            msg="scattering sliced corpus to 18-plane wire format",
+        )
+        full = np.zeros((T, 18, 19, 19), dtype=np.float16)
+        # Channel positions are within [0, 18); validated upstream by
+        # hexo_rl/model/network.py:validate_input_channels.
+        for slot, plane_idx in enumerate(sliced_channels):
+            full[:, plane_idx] = pre_states[:, slot]
+        pre_states = full
 
     # Handle old 24-plane corpus: extract chain from planes 18:24, trim states to :18.
     if pre_states.shape[1] == 24:

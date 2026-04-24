@@ -32,13 +32,71 @@ Architecture (Multi-Window Cluster-Based Approach):
 import logging
 import os
 from pathlib import Path
-from typing import Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 _log = logging.getLogger(__name__)
+
+
+# Buffer wire-format plane count. The replay buffer, symmetry kernels, and
+# inference batch tensors are all hardcoded to 18 planes (engine/src/replay_buffer/
+# sym_tables.rs:N_PLANES). Sweep variants reduce model in_channels by selecting
+# a subset of these 18 wire planes via the `input_channels` constructor arg —
+# the Rust storage format is unchanged.
+WIRE_CHANNELS: int = 18
+
+# Required wire planes — every variant must include at least these or the model
+# has no stone information. Plane 0 = current-player stones, plane 8 = opponent
+# stones (engine/src/board/state.rs:401–408). All other planes are optional
+# scalars or history slots.
+REQUIRED_INPUT_CHANNELS: tuple = (0, 8)
+
+
+def validate_input_channels(channels) -> List[int]:
+    """Validate a variant's `input_channels` list. Fail loudly on misconfig.
+
+    Returns the canonicalised list (ints, in the order given). Raises
+    ValueError with a clear pointer to the config key if invalid. Called at
+    HexTacToeNet construction so YAML typos surface at load-time, not later
+    inside a forward pass.
+    """
+    if not isinstance(channels, (list, tuple)):
+        raise ValueError(
+            f"input_channels must be a list/tuple, got {type(channels).__name__}. "
+            f"Fix the variant YAML's `input_channels` field."
+        )
+    canon: List[int] = []
+    for i, c in enumerate(channels):
+        try:
+            ci = int(c)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"input_channels[{i}] is not an integer: {c!r}. {exc}"
+            ) from exc
+        if ci < 0 or ci >= WIRE_CHANNELS:
+            raise ValueError(
+                f"input_channels[{i}]={ci} out of range [0, {WIRE_CHANNELS}). "
+                f"Wire format has {WIRE_CHANNELS} planes; see "
+                f"hexo_rl/model/network.py:WIRE_CHANNELS."
+            )
+        if ci in canon:
+            raise ValueError(
+                f"input_channels has duplicate index {ci}; each plane must "
+                f"appear at most once."
+            )
+        canon.append(ci)
+    for required in REQUIRED_INPUT_CHANNELS:
+        if required not in canon:
+            raise ValueError(
+                f"input_channels missing required plane {required} "
+                f"(plane 0 = current stones, plane 8 = opponent stones). "
+                f"Configured: {canon}. Edit the variant YAML's "
+                f"`input_channels` field."
+            )
+    return canon
 
 
 class SEBlock(nn.Module):
@@ -106,6 +164,7 @@ class HexTacToeNet(nn.Module):
         filters: int = 128,
         res_blocks: int = 12,
         se_reduction_ratio: int = 4,
+        input_channels: Optional[List[int]] = None,
     ) -> None:
         super().__init__()
         self.board_size = board_size
@@ -113,7 +172,33 @@ class HexTacToeNet(nn.Module):
         self.res_blocks = res_blocks
         spatial = board_size * board_size
 
-        self.trunk = Trunk(in_channels, filters, res_blocks, se_reduction_ratio)
+        # Sweep variant support: when `input_channels` is provided, the trunk
+        # input conv accepts only the selected wire planes; forward() slices
+        # x[:, input_channels, :, :] before the trunk. Buffer/sym kernels stay
+        # 18-plane — slicing happens entirely model-side.
+        if input_channels is not None:
+            channels = validate_input_channels(input_channels)
+            if int(in_channels) != len(channels):
+                raise ValueError(
+                    f"in_channels={in_channels} disagrees with "
+                    f"len(input_channels)={len(channels)}; pass them consistently "
+                    f"or set in_channels=len(input_channels)."
+                )
+            self._input_channels: Optional[List[int]] = list(channels)
+            # Persist as a non-trainable buffer so the indices follow the model
+            # across .to(device) and survive state_dict round-trips for audit.
+            self.register_buffer(
+                "input_channel_index",
+                torch.tensor(channels, dtype=torch.long),
+                persistent=True,
+            )
+            self.in_channels = len(channels)
+        else:
+            self._input_channels = None
+            self.input_channel_index = None  # type: ignore[assignment]
+            self.in_channels = int(in_channels)
+
+        self.trunk = Trunk(self.in_channels, filters, res_blocks, se_reduction_ratio)
 
         # Policy head — no normalization: 2 output channels, GN(8, 2) would fail (groups > channels)
         self.policy_conv = nn.Conv2d(filters, 2, 1)
@@ -191,6 +276,8 @@ class HexTacToeNet(nn.Module):
         Additional outputs appended in order:
             opp_reply, sigma2, ownership_pred, threat_pred, chain_pred.
         """
+        if self._input_channels is not None:
+            x = x.index_select(1, self.input_channel_index)
         out = self.trunk(x)
 
         # Policy head
