@@ -106,17 +106,22 @@ train.bg: ## Self-play RL from bootstrap checkpoint, background (VARIANT= suppor
 .PHONY: train.stop
 train.stop: ## Stop background training
 	@stopped=0; \
+	killed_pid=""; \
 	if [ -f logs/train.pid ]; then \
 		PID=$$(cat logs/train.pid); \
 		if kill -0 $$PID 2>/dev/null; then \
 			kill $$PID && echo "Stopped PID $$PID (from train.pid)"; \
 			stopped=1; \
+			killed_pid=$$PID; \
 		else \
 			echo "Stale train.pid (PID $$PID not running), removing"; \
 		fi; \
 		rm -f logs/train.pid; \
 	fi; \
 	pids=$$(pgrep -f '^[^ ]*python[^ ]* .*scripts/train\.py' 2>/dev/null || true); \
+	if [ -n "$$killed_pid" ]; then \
+		pids=$$(echo "$$pids" | grep -v "^$${killed_pid}$$" || true); \
+	fi; \
 	if [ -n "$$pids" ]; then \
 		echo "$$pids" | xargs -r kill && { echo "Killed train.py pids: $$pids"; stopped=1; } || true; \
 	fi; \
