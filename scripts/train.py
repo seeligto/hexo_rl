@@ -187,6 +187,11 @@ def main() -> None:
     # ── Trainer (resume or fresh) ─────────────────────────────────────────────
     if args.checkpoint:
         config_overrides: dict = {"torch_compile": combined_config.get("torch_compile", False)}
+        # §116: torch_compile_mode must travel alongside torch_compile on resume.
+        # Without this, pre-§116 checkpoints resume at mode="default" regardless of
+        # configs/training.yaml's new reduce-overhead setting.
+        if combined_config.get("torch_compile_mode") is not None:
+            config_overrides["torch_compile_mode"] = combined_config["torch_compile_mode"]
         for _key in (
             "uncertainty_weight", "recency_weight", "ownership_weight", "threat_weight",
             "eta_min", "scheduler_t_max",

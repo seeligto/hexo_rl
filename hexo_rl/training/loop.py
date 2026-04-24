@@ -201,7 +201,11 @@ def run_training_loop(
                 device=device,
                 fallback_config=config,
             )
-            best_model = best_ref.model
+            # Unwrap torch.compile — best_model's state_dict() is consumed
+            # at multiple load_state_dict call sites below; leaving the
+            # OptimizedModule wrapper would inject `_orig_mod.*` prefixes
+            # into every subsequent state_dict() call.
+            best_model = getattr(best_ref.model, "_orig_mod", best_ref.model)
             best_model.eval()
             best_model_step = best_ref.step
             # Graduation gate: self-play consumes anchor weights, not trainer.model.
