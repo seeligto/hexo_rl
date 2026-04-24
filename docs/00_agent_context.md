@@ -26,7 +26,7 @@ hexo_rl/
 │   ├── selfplay/       Worker pool, batched GPU inference queue
 │   ├── training/       Training loop, loss functions, checkpoints
 │   ├── eval/           Tournament runner, Bradley-Terry Elo ladder
-│   ├── bootstrap/      Bot integration, supervised pretraining, scraper
+│   ├── bootstrap/      Bot integration, supervised pretraining
 │   ├── monitoring/     Event-driven monitoring — events.py fan-out, terminal+web dashboards, GPU monitor, game recorder
 │   ├── viewer/         Game viewer engine and play-against-model interface
 │   └── corpus/         Corpus pipeline and metrics
@@ -84,9 +84,7 @@ Rust exposes its API to Python via **PyO3**. Import as: `from engine import MCTS
 | `01_architecture.md` | Understand the full technical design of each component |
 | `02_roadmap.md` | Know which phase we're in and what the next milestone is |
 | `03_tooling.md` | Set up logging, benchmarking, progress display, dev environment |
-| `04_bootstrap_strategy.md` | Understand the minimax pretraining pipeline and why it exists |
 | `05_community_integration.md` | Community bot integration, API, notation, formations |
 | `06_OPEN_QUESTIONS.md` | Active research questions and ablation plans |
-| `07_PHASE4_SPRINT_LOG.md` | Phase 4.0 sprint changelog — most current record of changes |
 | `08_DASHBOARD_SPEC.md` | Monitoring event schema and dashboard specification |
 | `09_VIEWER_SPEC.md` | Game viewer, threat overlay, and play-against-model spec |

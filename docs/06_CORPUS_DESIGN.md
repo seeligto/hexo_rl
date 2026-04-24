@@ -6,11 +6,9 @@
 
 ## Context
 
-- **203 human games** on disk in `data/corpus/raw_human/` (UUID-named JSON files).
-  Format: `{id, players[], playerTiles, gameOptions, moveCount, gameResult, moves[]}`.
-  Each move: `{moveNumber, playerId, x, y, timestamp}` — `x`/`y` are already axial
-  `(q, r)` coordinates, no conversion needed.
-  Filter already applied at scrape time: `rated=true, moveCount≥20, reason=six-in-a-row`.
+- **Human games** on disk in `data/corpus/raw_human/` (UUID-named JSON files),
+  in anonymized form. Each move carries `(x, y)` axial `(q, r)` coordinates
+  (no conversion needed). Ingestion filter: rated, moveCount ≥ 20, reason = six-in-a-row.
 - **SealBotBot wrapper** complete and tested (`hexo_rl/bootstrap/bots/sealbot_bot.py`).
 - **Human opening + bot continuation** strategy confirmed: N=8 move threshold (see §4).
 - **Parallelism target**: 10-12 worker processes.
@@ -69,7 +67,7 @@ GameRecord
 ```
 
 **What the ABC does NOT specify:**
-- How the source generates games (scrape, process, play, HTTP)
+- How the source produces games (read from cache, process, play, HTTP)
 - Whether games are pre-loaded or streamed lazily
 - Anything about tensors, policies, or the replay buffer
 
@@ -79,7 +77,7 @@ triples. That conversion is the pipeline's job, not the source's.
 **Planned future sources and why the ABC fits:**
 | Source | `__iter__` behaviour |
 |---|---|
-| Second website scraper | Read from a second cache dir on disk |
+| Additional on-disk cache | Read from a second cache dir |
 | `CommunityAPIBot` source | Play games over HTTP via `BotProtocol`, yield `GameRecord` per game |
 | Full human replay (no bot) | Read JSON, replay all N moves, yield one `GameRecord` |
 
@@ -89,7 +87,7 @@ All three fit the same ABC without widening it.
 
 ## 3. `HumanGameSource`
 
-Wraps the existing scraper cache. **Does not re-scrape.** Reads whatever JSON files are
+Wraps the local on-disk human game cache. Reads whatever JSON files are
 currently in `data/corpus/raw_human/`.
 
 ### JSON → `GameRecord` conversion
@@ -115,7 +113,7 @@ Extract `(x, y)` from each entry in the `moves` array, in order. These are alrea
 `(q, r)` axial coordinates.
 
 **Filtering:**
-`HumanGameSource` re-validates the already-applied scraper filter:
+`HumanGameSource` re-validates the ingestion filter:
 - `gameOptions.rated == true`
 - `moveCount >= 20`
 - `gameResult.reason == "six-in-a-row"`

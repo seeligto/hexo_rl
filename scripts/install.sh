@@ -5,11 +5,12 @@
 set -euo pipefail
 
 # ── Release artifact constants ─────────────────────────────────────────────────
-RELEASE_REPO="seeligto/hexo_rl"
-RELEASE_TAG="v0.4.0"
-RELEASE_BASE_URL="https://github.com/$RELEASE_REPO/releases/download/$RELEASE_TAG"
-# integrity checks removed; hashes drifted after repo updates and gave false
-# positives. Use git-lfs or DVC if deterministic artifact pinning is needed.
+HF_MODEL_REPO="timmyburn/hexo-bootstrap-models"
+HF_CORPUS_REPO="timmyburn/hexo-bootstrap-corpus"
+MODEL_FILE="bootstrap_model.pt"
+CORPUS_FILE="bootstrap_corpus.npz"
+# Corpus repo is private; set WITH_CORPUS=1 and export HF_TOKEN to download.
+WITH_CORPUS="${WITH_CORPUS:-0}"
 
 TOTAL_STEPS=10
 
@@ -18,32 +19,25 @@ fail() { echo "[!!] $*" >&2; }
 warn() { echo "[--] WARNING: $*"; }
 step() { echo; echo "[$1/$TOTAL_STEPS] $2"; }
 
-# ── Download helper ────────────────────────────────────────────────────────────
-# download_artifact <url> <dest_path>
-download_artifact() {
-    local url="$1" dest="$2"
-    local name
-    name="$(basename "$dest")"
+# ── Download helper (Hugging Face) ─────────────────────────────────────────────
+# hf_download <repo_id> <repo_type> <filename> <dest_dir>
+hf_download() {
+    local repo="$1" repo_type="$2" filename="$3" dest_dir="$4"
+    local dest="$dest_dir/$filename"
 
     if [[ -f "$dest" ]]; then
-        ok "$name [cached]"
+        ok "$filename [cached]"
         return 0
     fi
 
-    echo "    Downloading $name ..."
-    local dest_dir
-    dest_dir="$(dirname "$dest")"
-    if command -v gh &>/dev/null; then
-        # gh handles authentication for private repos
-        gh release download "$RELEASE_TAG" \
-            --repo "$RELEASE_REPO" \
-            --pattern "$name" \
-            --dir "$dest_dir" \
-            --clobber
-    else
-        curl -fL --progress-bar "$url" -o "$dest"
+    echo "    Downloading $filename from $repo ..."
+    mkdir -p "$dest_dir"
+    if ! .venv/bin/hf download "$repo" "$filename" \
+            --repo-type "$repo_type" \
+            --local-dir "$dest_dir" >/dev/null 2>&1; then
+        return 1
     fi
-    ok "$name"
+    ok "$filename"
 }
 
 # ── Ensure we're running from the repo root ────────────────────────────────────
@@ -186,19 +180,28 @@ if [[ -d "vendor/bots/sealbot/current" ]]; then
         || warn "SealBot current build failed (non-fatal — only needed for eval)"
 fi
 
-# ── [9/10] Download release artifacts ────────────────────────────────────────
-# Large binaries not tracked in git. fixtures/threat_probe_baseline.json is
-# committed alongside the pretrained bootstrap and does NOT need a download.
-step 9 "Downloading release artifacts..."
+# ── [9/10] Download release artifacts from Hugging Face ──────────────────────
+step 9 "Downloading release artifacts from Hugging Face..."
 mkdir -p checkpoints data
 
-download_artifact \
-    "$RELEASE_BASE_URL/bootstrap_model.pt" \
-    "checkpoints/bootstrap_model.pt"
+# Bootstrap model — public repo, no auth required.
+if ! hf_download "$HF_MODEL_REPO" model "$MODEL_FILE" checkpoints; then
+    warn "Model download failed. Check network / HF availability."
+fi
 
-download_artifact \
-    "$RELEASE_BASE_URL/bootstrap_corpus.npz" \
-    "data/bootstrap_corpus.npz"
+# Corpus — private repo; opt-in via WITH_CORPUS=1 + HF_TOKEN.
+if [[ "$WITH_CORPUS" == "1" ]]; then
+    if [[ -z "${HF_TOKEN:-}" ]]; then
+        warn "WITH_CORPUS=1 but HF_TOKEN not set — skipping corpus download."
+        warn "  Export a HF token from https://huggingface.co/settings/tokens and retry."
+    else
+        if ! hf_download "$HF_CORPUS_REPO" dataset "$CORPUS_FILE" data; then
+            warn "Corpus download failed. Verify HF_TOKEN has access to $HF_CORPUS_REPO."
+        fi
+    fi
+else
+    ok "Corpus download skipped (set WITH_CORPUS=1 and HF_TOKEN to enable)"
+fi
 
 if [[ -f fixtures/threat_probe_baseline.json ]]; then
     ok "threat_probe_baseline.json [git-tracked]"

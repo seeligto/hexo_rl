@@ -17,8 +17,8 @@ This file is read automatically by Claude Code at the start of every session.
 Read it fully before doing anything. Rule files under `docs/rules/` are topic-scoped
 — load on demand per the index below.
 
-**Current phase:** Phase 4.0 — sustained run from bootstrap-v4 (§114); see
-`docs/07_PHASE4_SPRINT_LOG.md` for authoritative state.
+**Current phase:** Phase 4.0 — sustained run from bootstrap-v4.
+(An internal sprint log is maintained locally — not distributed.)
 
 ---
 
@@ -50,7 +50,6 @@ Topic-scoped rules under `docs/rules/` — load the file whose trigger matches y
 - `docs/rules/phase-4-architecture.md` — network, heads, graduation gate, resolved Qs
 - `docs/rules/perf-targets.md` — 10-metric bench gate, methodology
 - `docs/rules/bot-integration.md` — submodules, BotProtocol, community URLs
-- `docs/rules/background-tasks.md` — scraper cron, manifest commit rule
 
 Workflow skills live under `.claude/skills/` and are discovered by OpenCode,
 Claude Code, and Codex via Claude-compatible skill discovery:
@@ -66,10 +65,8 @@ Read these when the rule file points at them or the task needs broader context:
 - `docs/01_architecture.md` — full technical spec
 - `docs/02_roadmap.md` — phases with entry/exit criteria
 - `docs/03_tooling.md` — logging, benchmarking, progress display conventions
-- `docs/04_bootstrap_strategy.md` — minimax corpus generation and pretraining
 - `docs/05_community_integration.md` — community bot, API, notation, formations
 - `docs/06_OPEN_QUESTIONS.md` — active research questions and ablation plans
-- `docs/07_PHASE4_SPRINT_LOG.md` — Phase 4.0 sprint changelog (most current record)
 - `docs/08_DASHBOARD_SPEC.md` — monitoring event schema and dashboard spec
 - `docs/09_VIEWER_SPEC.md` — game viewer and threat overlay spec
 

@@ -224,12 +224,6 @@ eval: ## Evaluate checkpoint vs SealBot (CKPT=latest, N_GAMES=100, THINK_TIME=0.
 
 # ── Corpus ────────────────────────────────────────────────────────────────────
 
-.PHONY: corpus.fetch
-corpus.fetch: ## Scrape human games + generate SealBot corpus + update manifest (CORPUS_N=2500, THINK_TIME=0.5)
-	bash scripts/scrape_daily.sh
-	$(PY) -m hexo_rl.bootstrap.generate_corpus --bot sealbot --time-limit $(THINK_TIME) --n-games $(CORPUS_N) --output data/corpus/bot_games/sealbot_strong
-	$(PY) scripts/update_manifest.py
-
 .PHONY: corpus.export
 corpus.export: ## Export optimized NPZ corpus for buffer prefill (all positions, no cap)
 	$(PY) scripts/export_corpus_npz.py --no-compress

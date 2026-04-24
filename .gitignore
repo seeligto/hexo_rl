@@ -31,13 +31,9 @@ htmlcov/
 # Data / checkpoints (large, generated)
 data/
 !data/**/.gitkeep
-reports/*
-!reports/**/.gitkeep
-# Future dated diagnostic directories — put these in archive/ instead
-/reports/diagnosis_*/
-/reports/verify_*/
-/reports/investigation_*/
-/reports/sweep_*/
+# Investigative/local-only — never committed
+reports/
+archive/
 checkpoints/
 logs/
 logs/scrape_history.log
@@ -48,8 +44,20 @@ plots/
 vendor/*
 !vendor/bots
 
-# Deploy (VPS scraper, not ready for version control yet)
+# Deploy (VPS/Pi scraper — kept local, not published)
 deploy/
+
+# Scraper + scraper-adjacent docs — kept local per robots.txt policy
+hexo_rl/bootstrap/scraper.py
+scripts/scrape_daily.sh
+tests/test_scraper.py
+docs/rules/background-tasks.md
+docs/04_bootstrap_strategy.md
+docs/10_COMMUNITY_BOT_ANALYSIS.md
+docs/analysis/
+docs/reviews/
+# Internal sprint log (investigative — kept local)
+docs/07_PHASE4_SPRINT_LOG.md
 
 # Editor / OS
 .idea/
@@ -69,15 +77,15 @@ criterion/
 data/corpus/injected*/*.env
 
 launch_claude.sh
+launch_claude_danger.sh
 .claude/agent-memory/
 .claude/settings.local.json
-tmp/sweep_ckpt/
+.direnv/
+.envrc
+tmp/
+scratch/
 nohup.out
 checkpoints/saved/
-archive/*.broken*/
-/reports/mcts_depth_*/
-/archive/**/*.jsonl
-/archive/**/*.log
-/archive/**/*.txt
 .nvimlog
-launch_claude_danger.sh
+# Local memory system (user-specific, never committed)
+memory/

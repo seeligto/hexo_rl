@@ -39,12 +39,6 @@ use_human_seeding: true        # seed bot openings from human midgame positions
 human_seeding_min_move: 10     # earliest move to truncate human game at
 human_seeding_max_move: 25     # latest move to truncate human game at
 
-scraper:                      # [site-redacted] scraper defaults
-  min_elo: 0                  # skip games where either player Elo < threshold
-  top_players_only: false     # restrict to top-N leaderboard players
-  top_n: 20                   # how many top players when top_players_only=true
-  req_delay: 1.0              # seconds between API requests (politeness)
-
 flags:
   p1_win_rate_concern: true   # bot_fast shows 62.5% P1 win rate
   low_opening_diversity: true # bot_strong dupe rate 50.3% (> 50% threshold)

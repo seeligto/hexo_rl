@@ -14,9 +14,11 @@ This document captures everything learned from the Hex Tac Toe community Discord
 | Bot API spec (v1) | <https://github.com/hex-tic-tac-toe/htttx-bot-api> | Deploy target: <https://explore.htttx.io/> |
 | Notation standard | <https://github.com/hex-tic-tac-toe/hexagonal-tic-tac-toe-notation> | BKE — read limitations in section 3 |
 | Community GitHub org | <https://github.com/hex-tic-tac-toe> | Standards home |
-| Game archive (primary) | <https://[site-redacted]/games> | 42k+ rated games — main corpus source |
-| Game archive (secondary) | <https://[site-redacted]/games/> | Additional game hosting site |
 | Bot Dev Discord | <https://discord.gg/7P8NeXnM4> | Dedicated bot dev server — monitor for new bots |
+
+Corpus of human games is published as a Hugging Face dataset — see README
+for access (repo is private pending operator permission; contact the repo
+owner for details).
 
 ---
 
@@ -400,7 +402,7 @@ the agent must evaluate this package first.** It may already provide:
 
 If it covers these correctly, use it rather than our own implementations in the
 Python layer. Our Rust core handles the hot paths (MCTS, win detection at speed) —
-but for Python-side utilities (scraper, corpus conversion, opening book), using
+but for Python-side utilities (corpus conversion, opening book), using
 a maintained community library is strictly better than maintaining our own.
 
 **Evaluation task (Phase 3 sub-task):**

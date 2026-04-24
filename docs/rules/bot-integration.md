@@ -81,13 +81,10 @@ Never hardcode which bots generate corpus games — drive from config.
 
 ## Community resources — check live state before implementing
 
-### Human game archive (bootstrap data — 42k+ real games)
+### Human game corpus (bootstrap data)
 
-URL: <https://[site-redacted]/games>
-Paginated listing of all community games. Filter: rated games, moves > 20.
-Scraper: hexo_rl/bootstrap/scraper.py — see docs/04_bootstrap_strategy.md.
-**Before implementing the scraper:** fetch one game page, inspect the actual HTML
-structure, then implement. Do not guess selectors.
+Corpus is distributed via Hugging Face — `timmyburn/hexo-bootstrap-corpus`
+(currently private; see README for access). `make install` downloads it.
 
 ### Bot API spec — DRAFT, not final
 

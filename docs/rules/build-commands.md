@@ -59,8 +59,7 @@ make eval             # run eval pipeline (see configs/eval.yaml)
 # Eval game diversity: eval_temperature, eval_random_opening_plies, eval_seed_base in configs/eval.yaml (§80)
 
 # Corpus & pretrain
-make corpus.fetch     # scrape human games + generate SealBot corpus
-make corpus.export    # export corpus to data/bootstrap_corpus.npz
+make corpus.export    # export raw cache to data/bootstrap_corpus.npz
 make pretrain         # full bootstrap pretrain (15 epochs)
 ```
 
@@ -112,7 +111,6 @@ hexo_rl/
 │   │   │   ├── our_model_bot.py     ← OurModelBot wrapper
 │   │   │   ├── random_bot.py        ← RandomBot
 │   │   │   └── community_api_bot.py ← CommunityAPIBot (HTTP)
-│   │   ├── scraper.py               ← [site-redacted] scraper
 │   │   ├── generate_corpus.py       ← orchestrates all corpus sources
 │   │   ├── corpus_analysis.py       ← corpus quality analysis
 │   │   ├── injection.py             ← human-seed bot-continuation injection
@@ -159,12 +157,11 @@ hexo_rl/
 │   ├── train.py                     ← CLI + config merge + build core objects → run_training_loop
 │   ├── benchmark.py
 │   ├── eval_vs_sealbot.py
-│   ├── scrape_daily.sh
 │   └── ...
 ├── tests/
 ├── vendor/
 │   └── bots/                        ← git submodules
 │       ├── sealbot/                 ← Ramora0/SealBot
-│       └── httt_collection/         ← Ramora0/HexTacToeBots
+│       └── krakenbot/                ← Ramora0/KrakenBot
 └── .gitmodules                      ← submodule tracking (committed)
 ```

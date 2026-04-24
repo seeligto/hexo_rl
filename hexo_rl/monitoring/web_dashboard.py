@@ -9,8 +9,10 @@ from __future__ import annotations
 import collections
 import glob
 import json
+import os
 import queue
 import re
+import secrets
 import threading
 from pathlib import Path
 from typing import Any
@@ -141,7 +143,9 @@ class WebDashboard:
 
         # Build Flask app
         self._app = Flask(__name__, static_folder="static")
-        self._app.config["SECRET_KEY"] = "hexo-training-dashboard"
+        self._app.config["SECRET_KEY"] = os.environ.get(
+            "HEXO_DASHBOARD_SECRET_KEY", secrets.token_hex(32)
+        )
         self._socketio = SocketIO(
             self._app, cors_allowed_origins="*", async_mode="threading"
         )

@@ -816,7 +816,7 @@ def write_report(inv, q, tact, opening, filt, feasibility, bot_summary) -> None:
 
 **a) Minimum Elo threshold:** Use **≥1000** (or unrated) as the primary filter.
    - Sub-1000 games ({sub_1000} games) show the weakest tactical play and highest variance P1 win rates.
-   - Unrated games ({unrated} games) are 77% of the corpus. They passed the quality filter (rated=True filter is applied at the source level; some unrated slip through because the scraper also pulls top-player profiles).
+   - Unrated games ({unrated} games) are 77% of the corpus. They passed the rated-only filter at the source level; some unrated slip through for historical reasons.
      Recommendation: **keep unrated** — they contribute volume and pass the tactical quality filter.
      If unrated games show anomalous P1 win rates (check Step 2 table), exclude them instead.
 

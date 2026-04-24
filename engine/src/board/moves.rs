@@ -5,7 +5,7 @@ use super::state::{Board, Cell, Player, HEX_AXES, hex_distance};
 const WIN_LENGTH: usize = 6;
 
 /// Maximum hex distance from any existing stone at which a new stone may be
-/// placed, per the official [site-redacted] rules ("at most 8 cells apart").
+/// placed, per the official HTTT rules ("at most 8 cells apart").
 const LEGAL_MOVE_RADIUS: i32 = 8;
 
 impl Board {

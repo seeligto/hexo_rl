@@ -11,3 +11,4 @@ scipy
 flask
 flask-socketio
 psutil
+huggingface_hub[cli]
