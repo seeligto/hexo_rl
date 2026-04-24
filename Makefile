@@ -48,7 +48,7 @@ install: ## Full first-time setup: env check → deps → engine → artifacts �
 
 .PHONY: build
 build: ## Build/install Rust extension via maturin (LTO + native CPU)
-	VIRTUAL_ENV=$(CURDIR)/.venv $(MATURIN) develop --release -m engine/Cargo.toml
+	VIRTUAL_ENV=$(CURDIR)/.venv CONDA_PREFIX= $(MATURIN) develop --release -m engine/Cargo.toml
 
 .PHONY: clean
 clean: ## Remove all Rust build artifacts and Python caches
