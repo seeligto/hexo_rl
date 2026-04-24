@@ -9,7 +9,7 @@ HF_MODEL_REPO="timmyburn/hexo-bootstrap-models"
 HF_CORPUS_REPO="timmyburn/hexo-bootstrap-corpus"
 MODEL_FILE="bootstrap_model.pt"
 CORPUS_FILE="bootstrap_corpus.npz"
-# Corpus repo is private; set WITH_CORPUS=1 and export HF_TOKEN to download.
+# Corpus repo is public; set WITH_CORPUS=1 to download.
 WITH_CORPUS="${WITH_CORPUS:-0}"
 
 TOTAL_STEPS=10
@@ -189,14 +189,10 @@ if ! hf_download "$HF_MODEL_REPO" model "$MODEL_FILE" checkpoints; then
     warn "Model download failed. Check network / HF availability."
 fi
 
-# Corpus — private repo; opt-in via WITH_CORPUS=1.
-# Auth via either HF_TOKEN env var OR a prior `hf auth login`.
+# Corpus — public repo; opt-in via WITH_CORPUS=1.
 if [[ "$WITH_CORPUS" == "1" ]]; then
-    if [[ -z "${HF_TOKEN:-}" ]] && ! .venv/bin/hf auth whoami &>/dev/null; then
-        warn "WITH_CORPUS=1 but no HF auth. Either run '.venv/bin/hf auth login'"
-        warn "  or export HF_TOKEN=hf_xxx. See README for details. Skipping corpus."
-    elif ! hf_download "$HF_CORPUS_REPO" dataset "$CORPUS_FILE" data; then
-        warn "Corpus download failed. Verify you have access to $HF_CORPUS_REPO."
+    if ! hf_download "$HF_CORPUS_REPO" dataset "$CORPUS_FILE" data; then
+        warn "Corpus download failed. Check network / HF availability."
     fi
 else
     ok "Corpus download skipped (set WITH_CORPUS=1 to enable)"

@@ -31,16 +31,12 @@ Dashboard at http://localhost:5001; game viewer at http://localhost:5001/viewer.
 | Artifact | Repo | Filename | Access |
 |---|---|---|---|
 | Bootstrap model | [`timmyburn/hexo-bootstrap-models`](https://huggingface.co/timmyburn/hexo-bootstrap-models) | `bootstrap_model.pt` | public, no auth |
-| Bootstrap corpus | [`timmyburn/hexo-bootstrap-corpus`](https://huggingface.co/datasets/timmyburn/hexo-bootstrap-corpus) | `bootstrap_corpus.npz` | private — ask for access |
+| Bootstrap corpus | [`timmyburn/hexo-bootstrap-corpus`](https://huggingface.co/datasets/timmyburn/hexo-bootstrap-corpus) | `bootstrap_corpus.npz` | public, no auth |
 
 The model (17 MB) downloads automatically. The corpus (4.6 GB) is
 opt-in. To enable it:
 
-1. Get a Hugging Face token at <https://huggingface.co/settings/tokens> (type "Read")
-2. Authenticate, either of:
-   - `.venv/bin/hf auth login` and paste the token (persisted to `~/.cache/huggingface/`)
-   - or set `HF_TOKEN=hf_xxx` in your shell (or `.env` — see `.env.example`)
-3. Run: `make install WITH_CORPUS=1`
+1. Run: `make install WITH_CORPUS=1`
 
 Without access, you can still run `make train` using the bootstrap model —
 self-play will populate the replay buffer from scratch.
