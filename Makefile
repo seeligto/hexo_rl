@@ -103,6 +103,21 @@ train.bg: ## Self-play RL from bootstrap checkpoint, background (VARIANT= suppor
 	@echo "Logs: logs/train_*.log"
 	@echo "Dashboard: http://localhost:5001"
 
+.PHONY: train.bg.resume
+train.bg.resume: ## Resume latest checkpoint, background (VARIANT= supported)
+	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
+	@if [ -f logs/train.pid ] && kill -0 $$(cat logs/train.pid) 2>/dev/null; then \
+		echo "Refusing to launch: training already running (PID $$(cat logs/train.pid)). Use 'make train.stop' first."; \
+		exit 1; \
+	fi
+	@mkdir -p logs
+	@nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST) $(VARIANT_FLAG) \
+		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 & \
+		echo $$! > logs/train.pid; \
+		echo "Resumed from $(CHECKPOINT_LATEST) (PID $$(cat logs/train.pid))"
+	@echo "Logs: logs/train_*.log"
+	@echo "Dashboard: http://localhost:5001"
+
 .PHONY: train.stop
 train.stop: ## Stop background training
 	@stopped=0; \
