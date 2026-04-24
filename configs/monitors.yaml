@@ -1,0 +1,8 @@
+# monitors.yaml — per-metric threshold configuration
+
+monitors:
+  # Selfplay axis-distribution thresholds (§axis_dist).
+  # Fraction of adjacent same-color stone pairs along any single hex axis.
+  # Sustained excess above axis_alert may indicate a degenerate strategy.
+  axis_warn: 0.45
+  axis_alert: 0.50

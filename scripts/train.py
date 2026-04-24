@@ -123,6 +123,7 @@ def main() -> None:
         "configs/selfplay.yaml",
         "configs/game_replay.yaml",
         "configs/monitoring.yaml",
+        "configs/monitors.yaml",
     ]
     load_paths: list[str] = list(_BASE_CONFIGS)
     if args.config:

@@ -197,6 +197,10 @@ class WorkerPool:
             config.get("log_investigation_metrics", True),
         ))
 
+        # Rolling window of the last N completed game move histories for
+        # axis-distribution monitoring (§axis_dist).  Guarded by _lock.
+        self._recent_move_histories: deque[list[tuple[int, int]]] = deque(maxlen=100)
+
     @property
     def batch_fill_pct(self) -> float:
         srv = self._inference_server
@@ -226,6 +230,12 @@ class WorkerPool:
     @property
     def avg_game_length(self) -> float:
         return self._avg_game_length
+
+    @property
+    def recent_move_histories(self) -> list[list[tuple[int, int]]]:
+        """Snapshot of the last ≤100 self-play game move histories (thread-safe copy)."""
+        with self._lock:
+            return list(self._recent_move_histories)
 
     def update_checkpoint_step(self, step: int) -> None:
         """Forward the current training step to the game recorder."""
@@ -308,6 +318,9 @@ class WorkerPool:
                 game_length = (plies + 1) // 2  # compound moves
                 self._game_lengths.append(game_length)
                 self._avg_game_length = sum(self._game_lengths) / len(self._game_lengths)
+                if move_history:
+                    with self._lock:
+                        self._recent_move_histories.append(list(move_history))
 
                 # Map winner_code to spec: 0=P0, 1=P1, -1=draw
                 winner_int = {0: -1, 1: 0, 2: 1}.get(winner_code, -1)

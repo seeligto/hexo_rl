@@ -278,6 +278,28 @@ def run_training_loop(
         log.warning("early_game_probe_unavailable", error=str(_egp_err))
         early_game_probe = None
 
+    # ── Axis-distribution baseline (§axis_dist) ───────────────────────────────
+    import json as _json
+    from pathlib import Path as _Path
+    _axis_baseline: dict[str, float] = {}
+    _axis_baseline_path = _Path("reports/baselines/corpus_axis_distribution.json")
+    if _axis_baseline_path.exists():
+        try:
+            _axis_baseline = _json.loads(_axis_baseline_path.read_text())
+            log.info("axis_distribution_baseline_loaded", path=str(_axis_baseline_path), baseline=_axis_baseline)
+        except Exception as _ab_err:
+            log.warning("axis_distribution_baseline_load_failed", error=str(_ab_err))
+
+    # ── TensorBoard writer (axis-distribution metrics) ────────────────────────
+    from hexo_rl.monitoring.metrics_writer import MetricsWriter as _MetricsWriter
+    _tb_writer: Optional[_MetricsWriter] = None
+    try:
+        _tb_log_dir = str(_Path(getattr(args, "log_dir", "logs") or "logs") / "tb" / run_id)
+        _tb_writer = _MetricsWriter(_tb_log_dir)
+        log.info("tensorboard_writer_init", log_dir=_tb_log_dir)
+    except Exception as _tb_err:
+        log.warning("tensorboard_writer_unavailable", error=str(_tb_err))
+
     # ── Dashboard renderers ───────────────────────────────────────────────────
     dashboards: list = []
     mon_cfg = config.get("monitoring", {})
@@ -489,6 +511,12 @@ def run_training_loop(
                     # when a new model beats the anchor (promotion branch below).
                     if train_step > 0:
                         _try_save_buffer(buffer, mixing_cfg, "checkpoint_interval", recent_buffer)
+
+                # ── Selfplay axis-distribution (§axis_dist) ───────────────────
+                if train_step > 0 and train_step % eval_interval == 0:
+                    _emit_axis_distribution(
+                        train_step, pool, config, _axis_baseline, _tb_writer,
+                    )
 
                 # ── Eval (non-blocking background thread) ─────────────────────
                 if eval_pipeline is not None and train_step > 0 and train_step % eval_interval == 0:
@@ -737,6 +765,98 @@ def _replay_pretrain_events(args: argparse.Namespace) -> None:
         log.info("replaying_pretrain_events", count=len(replay_evs[-500:]))
         for ev in replay_evs[-500:]:
             emit_event(ev)
+
+
+def _emit_axis_distribution(
+    train_step: int,
+    pool: Any,
+    config: dict[str, Any],
+    baseline: dict[str, float],
+    tb_writer: Any,
+) -> None:
+    """Compute and emit selfplay axis-distribution metrics (§axis_dist).
+
+    Samples the last ≤100 completed game move histories from the pool, computes
+    per-axis same-color pair fractions, and logs:
+      - Absolute fractions to structlog + emit_event
+      - Deltas from corpus baseline to TensorBoard (alongside absolutes)
+      - Warn/alert thresholds from config.monitors
+    """
+    from hexo_rl.training.axis_distribution import compute_axis_fractions
+
+    recent_games = pool.recent_move_histories
+    if not recent_games:
+        return
+
+    metrics = compute_axis_fractions(recent_games)
+    axis_q  = metrics["axis_q"]
+    axis_r  = metrics["axis_r"]
+    axis_s  = metrics["axis_s"]
+    axis_max = metrics["axis_max"]
+
+    mon_cfg = config.get("monitors", {})
+    axis_warn  = float(mon_cfg.get("axis_warn",  0.45))
+    axis_alert = float(mon_cfg.get("axis_alert", 0.50))
+    max_frac = max(axis_q, axis_r, axis_s)
+
+    if max_frac >= axis_alert:
+        log.warning(
+            "axis_distribution_alert",
+            step=train_step,
+            axis_max=axis_max,
+            max_frac=round(max_frac, 4),
+            axis_q=round(axis_q, 4),
+            axis_r=round(axis_r, 4),
+            axis_s=round(axis_s, 4),
+            threshold=axis_alert,
+            n_games=len(recent_games),
+        )
+    elif max_frac >= axis_warn:
+        log.warning(
+            "axis_distribution_warn",
+            step=train_step,
+            axis_max=axis_max,
+            max_frac=round(max_frac, 4),
+            axis_q=round(axis_q, 4),
+            axis_r=round(axis_r, 4),
+            axis_s=round(axis_s, 4),
+            threshold=axis_warn,
+            n_games=len(recent_games),
+        )
+    else:
+        log.info(
+            "axis_distribution",
+            step=train_step,
+            axis_max=axis_max,
+            axis_q=round(axis_q, 4),
+            axis_r=round(axis_r, 4),
+            axis_s=round(axis_s, 4),
+            n_games=len(recent_games),
+        )
+
+    emit_event({
+        "event": "axis_distribution",
+        "step": train_step,
+        "axis_q": axis_q,
+        "axis_r": axis_r,
+        "axis_s": axis_s,
+        "axis_max": axis_max,
+        "n_games": len(recent_games),
+    })
+
+    if tb_writer is not None:
+        tb_metrics: dict[str, float] = {
+            "axis_dist/axis_q": axis_q,
+            "axis_dist/axis_r": axis_r,
+            "axis_dist/axis_s": axis_s,
+        }
+        for label in ("axis_q", "axis_r", "axis_s"):
+            if label in baseline:
+                tb_metrics[f"axis_dist_delta/{label}"] = metrics[label] - baseline[label]
+        try:
+            tb_writer.log_step(train_step, tb_metrics)
+        except Exception as _tb_err:
+            log.warning("axis_distribution_tb_failed", step=train_step, error=str(_tb_err))
 
 
 def _emit_training_events(
