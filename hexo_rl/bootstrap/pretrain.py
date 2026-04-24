@@ -43,6 +43,7 @@ from hexo_rl.training.losses import (
 from hexo_rl.training.checkpoints import save_full_checkpoint, save_inference_weights
 from hexo_rl.utils.constants import BOARD_SIZE
 from hexo_rl.monitoring.events import emit_event
+from hexo_rl.augment.luts import get_policy_scatters
 
 log = structlog.get_logger()
 console = Console()
@@ -66,55 +67,7 @@ POLICY_SIZE = BOARD_SIZE * BOARD_SIZE + 1
 #
 # Policies are scattered in numpy via a once-computed per-sym index map — they
 # have no chain-plane structure and the 12 tables fit in ~17 KB.
-
-_POLICY_SCATTERS: Optional[List[np.ndarray]] = None
-
-
-def _get_policy_scatters(board_size: int = BOARD_SIZE) -> List[np.ndarray]:
-    """Build 12 policy-scatter index arrays, each of length board_size**2 + 1.
-
-    `scatter[dst_flat] = src_flat` — after apply, `new_policy = policy[scatter]`.
-    Cells whose source cell maps out of the window under symmetry s get
-    `src_flat = board_size**2 - 1` (a safe, zero-value cell); since pretrain
-    corpus policies are effectively localised per-position, the drops are
-    consistent with the Rust sample-batch behaviour (caller-initialised
-    destination = 0 for uncovered cells). Pass move (index 361) is invariant.
-    """
-    global _POLICY_SCATTERS
-    if _POLICY_SCATTERS is not None:
-        return _POLICY_SCATTERS
-
-    N = board_size
-    half = (N - 1) // 2
-    n_cells = N * N
-    n_actions = n_cells + 1
-    scatters: List[np.ndarray] = []
-
-    for sym_idx in range(12):
-        reflect = sym_idx >= 6
-        n_rot = sym_idx % 6
-        # Inverse-scatter table: for each dst cell, find which src cell scatters
-        # there under this sym. Match Rust SymTables::new() convention: axial
-        # (q, r) with q = flat // N - half, r = flat % N - half; reflect first
-        # (q, r) → (r, q); then rotate n_rot × 60°: (q, r) → (−r, q+r).
-        scatter = np.full(n_actions, n_cells - 1, dtype=np.int64)
-        scatter[n_cells] = n_cells  # pass
-        for src in range(n_cells):
-            q = src // N - half
-            r = src % N - half
-            if reflect:
-                q, r = r, q
-            for _ in range(n_rot):
-                q, r = -r, q + r
-            dq = q + half
-            dr = r + half
-            if 0 <= dq < N and 0 <= dr < N:
-                scatter[dq * N + dr] = src
-        scatters.append(scatter)
-
-    _POLICY_SCATTERS = scatters
-    return scatters
-
+# LUTs are in hexo_rl/augment/luts.py (shared with batch_assembly).
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
 
@@ -183,7 +136,7 @@ def make_augmented_collate(augment: bool, board_size: int = BOARD_SIZE):
       - Stack as-is, no Rust hop, no policy scatter.
       - Compute chain_planes from raw stone planes.
     """
-    scatters_np = _get_policy_scatters(board_size) if augment else None
+    scatters_np = get_policy_scatters(board_size) if augment else None
 
     def _collate(
         batch: List[Tuple[np.ndarray, np.ndarray, float]],

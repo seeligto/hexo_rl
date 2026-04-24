@@ -190,6 +190,58 @@ def load_pretrained_buffer(
     return pretrained_buffer
 
 
+# ── Recent-buffer augmentation ───────────────────────────────────────────────
+
+def _augment_recent_rows(
+    s_r: np.ndarray,
+    c_r: np.ndarray,
+    p_r: np.ndarray,
+    own_r_flat: np.ndarray,
+    wl_r_flat: np.ndarray,
+    augment: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Apply 12-fold hex augmentation to a batch of RecentBuffer rows.
+
+    RecentBuffer.sample() does not go through the Rust sample_batch kernel, so
+    augmentation must be applied in Python. This mirrors make_augmented_collate
+    in pretrain.py: Rust apply_symmetries_batch for stone planes, recompute
+    chain planes from augmented stones, numpy scatter for policy/aux targets.
+
+    With augment=False returns inputs unchanged (no copies).
+    """
+    if not augment:
+        return s_r, c_r, p_r, own_r_flat, wl_r_flat
+
+    import engine as _engine
+    from hexo_rl.env.game_state import _compute_chain_planes
+    from hexo_rl.augment.luts import get_policy_scatters
+
+    n = len(s_r)
+    scatters = get_policy_scatters()
+    sym_indices = np.random.randint(0, 12, size=n)
+
+    states_f32 = s_r.astype(np.float32)
+    states_f32 = _engine.apply_symmetries_batch(states_f32, sym_indices.tolist())
+    s_r = states_f32.astype(np.float16)
+
+    c_r_aug = np.empty_like(c_r)
+    for i in range(n):
+        c_r_aug[i] = (
+            _compute_chain_planes(states_f32[i, 0], states_f32[i, 8]).astype(np.float32) / 6.0
+        ).astype(np.float16)
+
+    scattered_p   = np.empty_like(p_r)
+    scattered_own = np.empty_like(own_r_flat)
+    scattered_wl  = np.empty_like(wl_r_flat)
+    for i in range(n):
+        lut = scatters[int(sym_indices[i])]
+        scattered_p[i]   = p_r[i][lut]
+        scattered_own[i] = own_r_flat[i][lut[:361]]
+        scattered_wl[i]  = wl_r_flat[i][lut[:361]]
+
+    return s_r, c_r_aug, scattered_p, scattered_own, scattered_wl
+
+
 # ── Mixed-batch assembly ──────────────────────────────────────────────────────
 
 def assemble_mixed_batch(
@@ -264,6 +316,9 @@ def assemble_mixed_batch(
         n_recent   = max(1, int(round(n_self * recency_weight)))
         n_uniform  = n_self - n_recent
         s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_recent)
+        s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
+            s_r, c_r, p_r, own_r_flat, wl_r_flat, augment
+        )
         own_r = own_r_flat.reshape(-1, 19, 19)
         wl_r  = wl_r_flat.reshape(-1, 19, 19)
         s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), augment)
@@ -323,6 +378,9 @@ def _sample_selfplay(
         n_r = max(1, int(round(n_self * recency_weight)))
         n_u = n_self - n_r
         s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_r)
+        s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
+            s_r, c_r, p_r, own_r_flat, wl_r_flat, augment
+        )
         own_r = own_r_flat.reshape(-1, 19, 19)
         wl_r  = wl_r_flat.reshape(-1, 19, 19)
         s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_u), augment)
