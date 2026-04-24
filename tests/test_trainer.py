@@ -532,6 +532,48 @@ def test_train_step_recent_buffer_zero_weight_falls_back(tmp_path: Path):
     assert "loss" in result
 
 
+def test_recent_buffer_save_load_round_trip(tmp_path: Path):
+    buf = make_recent_buffer(capacity=64)
+    path = str(tmp_path / "recent.npz")
+    n_saved = buf.save_to_path(path)
+    assert n_saved == buf.size
+
+    restored = RecentBuffer(capacity=64)
+    n_loaded = restored.load_from_path(path)
+    assert n_loaded == n_saved
+    assert restored.size == buf.size
+
+    orig = buf.sample(32)
+    rest = restored.sample(32)
+    assert orig[0].shape == rest[0].shape  # states
+    assert orig[2].shape == rest[2].shape  # policies
+
+
+def test_recent_buffer_save_load_full_ring(tmp_path: Path):
+    """Full ring (size == capacity) preserves all entries after round-trip."""
+    buf = RecentBuffer(capacity=8)
+    rng = np.random.default_rng(42)
+    for i in range(12):  # overfill to exercise ring wraparound
+        buf.push(
+            rng.random((18, 19, 19), dtype=np.float32).astype(np.float16),
+            policy=rng.dirichlet(np.ones(362)).astype(np.float32),
+            outcome=float(rng.choice([-1.0, 1.0])),
+        )
+    assert buf.size == 8
+
+    path = str(tmp_path / "recent_full.npz")
+    buf.save_to_path(path)
+    restored = RecentBuffer(capacity=8)
+    restored.load_from_path(path)
+    assert restored.size == 8
+
+
+def test_recent_buffer_save_empty_returns_zero(tmp_path: Path):
+    buf = RecentBuffer(capacity=16)
+    n = buf.save_to_path(str(tmp_path / "empty.npz"))
+    assert n == 0
+
+
 # ── Fast-game policy masking ──────────────────────────────────────────────────
 
 

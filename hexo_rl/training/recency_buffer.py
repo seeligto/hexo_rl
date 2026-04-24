@@ -122,3 +122,41 @@ class RecentBuffer:
                 self._winning_line[indices],
                 self._is_full_search[indices],
             )
+
+    def save_to_path(self, path: str) -> int:
+        """Save valid entries to a compressed .npz file. Returns count saved."""
+        with self._lock:
+            size = self._size
+            if size == 0:
+                return 0
+            if size < self.capacity:
+                idx = np.arange(size)
+            else:
+                idx = np.arange(self._head, self._head + size) % self.capacity
+            np.savez_compressed(
+                path,
+                states=self._states[idx],
+                chain_planes=self._chain_planes[idx],
+                policies=self._policies[idx],
+                outcomes=self._outcomes[idx],
+                ownership=self._ownership[idx],
+                winning_line=self._winning_line[idx],
+                is_full_search=self._is_full_search[idx],
+            )
+            return size
+
+    def load_from_path(self, path: str) -> int:
+        """Load entries from a .npz file saved by save_to_path. Returns count loaded."""
+        data = np.load(path)
+        with self._lock:
+            n = min(len(data["states"]), self.capacity)
+            self._states[:n]         = data["states"][:n]
+            self._chain_planes[:n]   = data["chain_planes"][:n]
+            self._policies[:n]       = data["policies"][:n]
+            self._outcomes[:n]       = data["outcomes"][:n]
+            self._ownership[:n]      = data["ownership"][:n]
+            self._winning_line[:n]   = data["winning_line"][:n]
+            self._is_full_search[:n] = data["is_full_search"][:n]
+            self._head = n % self.capacity
+            self._size = n
+        return n

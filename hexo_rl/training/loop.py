@@ -395,7 +395,7 @@ def run_training_loop(
                     step=train_step,
                 )
                 trainer.save_checkpoint(last_loss_info if last_loss_info else None)
-                _try_save_buffer(buffer, mixing_cfg, "shutdown_signal")
+                _try_save_buffer(buffer, mixing_cfg, "shutdown_signal", recent_buffer)
                 break
 
             games_played = pool.games_completed
@@ -488,7 +488,7 @@ def run_training_loop(
                     # trainer.model. Do NOT sync on checkpoint cadence — sync only
                     # when a new model beats the anchor (promotion branch below).
                     if train_step > 0:
-                        _try_save_buffer(buffer, mixing_cfg, "checkpoint_interval")
+                        _try_save_buffer(buffer, mixing_cfg, "checkpoint_interval", recent_buffer)
 
                 # ── Eval (non-blocking background thread) ─────────────────────
                 if eval_pipeline is not None and train_step > 0 and train_step % eval_interval == 0:
@@ -594,7 +594,7 @@ def run_training_loop(
 
     # ── Final checkpoint + buffer save ────────────────────────────────────────
     final_ckpt = trainer.save_checkpoint(last_loss_info if last_loss_info else None)
-    _try_save_buffer(buffer, mixing_cfg, "session_end")
+    _try_save_buffer(buffer, mixing_cfg, "session_end", recent_buffer)
 
     log.info(
         "session_end",
@@ -681,8 +681,9 @@ def _try_save_buffer(
     buffer: Any,
     mixing_cfg: dict[str, Any],
     trigger: str,
+    recent_buffer: Optional[Any] = None,
 ) -> None:
-    """Save replay buffer to disk if ``buffer_persist`` is enabled in config."""
+    """Save replay buffer (and optionally recent_buffer) if buffer_persist is enabled."""
     if not mixing_cfg.get("buffer_persist", False):
         return
     bp = Path(mixing_cfg.get("buffer_persist_path", "checkpoints/replay_buffer.bin"))
@@ -691,6 +692,13 @@ def _try_save_buffer(
         log.info("buffer_saved", path=str(bp), positions=buffer.size, trigger=trigger)
     except Exception as exc:
         log.warning("buffer_save_failed", path=str(bp), error=str(exc))
+    if recent_buffer is not None and recent_buffer.size > 0:
+        rbp = Path(str(bp) + ".recent")
+        try:
+            n = recent_buffer.save_to_path(str(rbp))
+            log.info("recent_buffer_saved", path=str(rbp), positions=n, trigger=trigger)
+        except Exception as exc:
+            log.warning("recent_buffer_save_failed", path=str(rbp), error=str(exc))
 
 
 def _replay_pretrain_events(args: argparse.Namespace) -> None:

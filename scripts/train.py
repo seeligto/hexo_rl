@@ -297,6 +297,14 @@ def main() -> None:
         _recent_cap = max(256, capacity // 2)
         recent_buffer = RecentBuffer(capacity=_recent_cap)
         log.info("recent_buffer_init", capacity=_recent_cap, recency_weight=_recency_weight)
+        if _buffer_restored:
+            _rbp = Path(str(_bp) + ".recent")
+            if _rbp.exists():
+                try:
+                    _rn = recent_buffer.load_from_path(str(_rbp))
+                    log.info("recent_buffer_restored", path=str(_rbp), positions=_rn)
+                except Exception as _re:
+                    log.warning("recent_buffer_restore_failed", error=str(_re))
 
     # ── Pre-allocated batch arrays ────────────────────────────────────────────
     _batch_size_cfg = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
