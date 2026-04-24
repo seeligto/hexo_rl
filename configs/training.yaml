@@ -13,11 +13,17 @@ fp16: true
 # Nesting it deeper (e.g. under amp: {dtype: ...}) will silently fail to
 # propagate to InferenceServer.
 amp_dtype: "fp16"
-torch_compile: true    # §116 probe 2026-04-23 GO: reduce-overhead works on Py3.14.2 + PT2.11.0
-                       # (+50% throughput, +87% inference latency vs eager; 0 graph breaks).
-                       # Prior §32 blockers (Py3.14 TLS crash + 27GB Triton spike) resolved.
+torch_compile: false   # Temporarily disabled 2026-04-24 after deadlock on first resume with
+                       # reduce-overhead enabled: trainer + inference_server both try to JIT
+                       # via torch.compile concurrently; all threads ended up in futex_do_wait
+                       # post-buffer-warmup at step 6002, zero gradient steps. Code plumbing
+                       # (mode via config, OptimizedModule unwrap, config_overrides propagation)
+                       # from commits 1e2d82b + 41ffad5 kept; only the YAML flag flipped back.
+                       # Re-enable after root-causing the double-compile deadlock (likely
+                       # Triton compile-cache lock contention or Py3.14 thread-safety edge).
 torch_compile_mode: reduce-overhead   # kernel fusion; triton.cudagraphs=False in PT2.11.
                                       # Options: default | reduce-overhead | max-autotune.
+                                      # Takes effect only when torch_compile: true.
 augment: true  # 12-fold hex symmetry augmentation on sample_batch; keep true in production
 policy_prune_frac: 0.02
 # Independent of gumbel_mcts search — controls policy target computation, not search algorithm
