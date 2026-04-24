@@ -189,18 +189,17 @@ if ! hf_download "$HF_MODEL_REPO" model "$MODEL_FILE" checkpoints; then
     warn "Model download failed. Check network / HF availability."
 fi
 
-# Corpus — private repo; opt-in via WITH_CORPUS=1 + HF_TOKEN.
+# Corpus — private repo; opt-in via WITH_CORPUS=1.
+# Auth via either HF_TOKEN env var OR a prior `hf auth login`.
 if [[ "$WITH_CORPUS" == "1" ]]; then
-    if [[ -z "${HF_TOKEN:-}" ]]; then
-        warn "WITH_CORPUS=1 but HF_TOKEN not set — skipping corpus download."
-        warn "  Export a HF token from https://huggingface.co/settings/tokens and retry."
-    else
-        if ! hf_download "$HF_CORPUS_REPO" dataset "$CORPUS_FILE" data; then
-            warn "Corpus download failed. Verify HF_TOKEN has access to $HF_CORPUS_REPO."
-        fi
+    if [[ -z "${HF_TOKEN:-}" ]] && ! .venv/bin/hf auth whoami &>/dev/null; then
+        warn "WITH_CORPUS=1 but no HF auth. Either run '.venv/bin/hf auth login'"
+        warn "  or export HF_TOKEN=hf_xxx. See README for details. Skipping corpus."
+    elif ! hf_download "$HF_CORPUS_REPO" dataset "$CORPUS_FILE" data; then
+        warn "Corpus download failed. Verify you have access to $HF_CORPUS_REPO."
     fi
 else
-    ok "Corpus download skipped (set WITH_CORPUS=1 and HF_TOKEN to enable)"
+    ok "Corpus download skipped (set WITH_CORPUS=1 to enable)"
 fi
 
 if [[ -f fixtures/threat_probe_baseline.json ]]; then

@@ -14,13 +14,15 @@ MCTS-guided self-play with a PyTorch neural network. The primary ELO benchmark i
 ```bash
 git clone --recursive <repo-url>
 cd hexo_rl
+cp .env.example .env      # optional: edit to set HF_TOKEN / WITH_CORPUS
 make install
 make train
 ```
 
 `make install` creates the virtualenv, installs Python deps (including
 `huggingface_hub`), builds the Rust engine via maturin, builds the SealBot
-C++ extension, downloads the pretrained bootstrap model, and runs the test suite.
+C++ extension, downloads the pretrained bootstrap model from Hugging Face,
+and runs the test suite.
 
 Dashboard at http://localhost:5001; game viewer at http://localhost:5001/viewer.
 
@@ -28,11 +30,26 @@ Dashboard at http://localhost:5001; game viewer at http://localhost:5001/viewer.
 
 | Artifact | Repo | Filename | Access |
 |---|---|---|---|
-| Bootstrap model | `timmyburn/hexo-bootstrap-models` | `bootstrap_model.pt` | public |
-| Bootstrap corpus | `timmyburn/hexo-bootstrap-corpus` | `bootstrap_corpus.npz` | private — contact repo owner |
+| Bootstrap model | [`timmyburn/hexo-bootstrap-models`](https://huggingface.co/timmyburn/hexo-bootstrap-models) | `bootstrap_model.pt` | public, no auth |
+| Bootstrap corpus | [`timmyburn/hexo-bootstrap-corpus`](https://huggingface.co/datasets/timmyburn/hexo-bootstrap-corpus) | `bootstrap_corpus.npz` | private — ask for access |
 
-The corpus download is skipped by default. Set `HF_TOKEN=...` in your
-environment and run `make install WITH_CORPUS=1` if you have access.
+The model (17 MB) downloads automatically. The corpus (4.6 GB) is
+opt-in. To enable it:
+
+1. Get a Hugging Face token at <https://huggingface.co/settings/tokens> (type "Read")
+2. Authenticate, either of:
+   - `.venv/bin/hf auth login` and paste the token (persisted to `~/.cache/huggingface/`)
+   - or set `HF_TOKEN=hf_xxx` in your shell (or `.env` — see `.env.example`)
+3. Run: `make install WITH_CORPUS=1`
+
+Without access, you can still run `make train` using the bootstrap model —
+self-play will populate the replay buffer from scratch.
+
+### Environment variables
+
+See [`.env.example`](.env.example) for the full list. `make install` reads
+from your current shell, so either export the vars beforehand or
+`set -a; source .env; set +a` first.
 
 ---
 
