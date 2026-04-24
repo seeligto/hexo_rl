@@ -14,9 +14,12 @@ PRETRAIN_CKPT ?= $(shell ls -1 checkpoints/pretrain/pretrain_*.pt 2>/dev/null | 
 VARIANT ?=
 VARIANT_FLAG = $(if $(VARIANT),--variant $(VARIANT),)
 
-# Set DASHBOARD=0 to disable the web+terminal dashboard (e.g. for scripted runs)
-DASHBOARD ?= 1
-_NODASH_FLAG = $(if $(filter 0,$(DASHBOARD)),--no-dashboard,)
+# Dashboard is OFF by default for training — run `make dashboard` in a
+# separate terminal to attach. Set DASHBOARD=1 on the train target to force
+# the in-process dashboard (not recommended: werkzeug threaded mode produces
+# "Session is disconnected" traceback storms under websocket backpressure).
+DASHBOARD ?= 0
+_NODASH_FLAG = $(if $(filter 1,$(DASHBOARD)),,--no-dashboard)
 
 # Eval parameters
 CKPT ?= $(CHECKPOINT_LATEST)
@@ -85,7 +88,7 @@ bench: ## Higher-confidence benchmark (n=5, warm-up; full Phase 4.5 gate methodo
 # ── Training ──────────────────────────────────────────────────────────────────
 
 .PHONY: train
-train: ## Self-play RL from bootstrap checkpoint (VARIANT=..., DASHBOARD=0 to disable)
+train: ## Self-play RL from bootstrap checkpoint (VARIANT=..., DASHBOARD=1 to enable in-process dashboard)
 	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) $(_NODASH_FLAG) $(VARIANT_FLAG)
 
 .PHONY: train.resume
@@ -96,12 +99,12 @@ train.resume: ## Resume training from latest checkpoint (VARIANT= supported)
 .PHONY: train.bg
 train.bg: ## Self-play RL from bootstrap checkpoint, background (VARIANT= supported)
 	@mkdir -p logs
-	@nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) $(VARIANT_FLAG) \
+	@nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) $(_NODASH_FLAG) $(VARIANT_FLAG) \
 		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 & \
 		echo $$! > logs/train.pid; \
 		echo "Training started (PID $$(cat logs/train.pid))"
 	@echo "Logs: logs/train_*.log"
-	@echo "Dashboard: http://localhost:5001"
+	@echo "Dashboard: run 'make dashboard' in a separate terminal to attach (http://localhost:5001)"
 
 .PHONY: train.bg.resume
 train.bg.resume: ## Resume latest checkpoint, background (VARIANT= supported)
@@ -111,12 +114,12 @@ train.bg.resume: ## Resume latest checkpoint, background (VARIANT= supported)
 		exit 1; \
 	fi
 	@mkdir -p logs
-	@nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST) $(VARIANT_FLAG) \
+	@nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST) $(_NODASH_FLAG) $(VARIANT_FLAG) \
 		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 & \
 		echo $$! > logs/train.pid; \
 		echo "Resumed from $(CHECKPOINT_LATEST) (PID $$(cat logs/train.pid))"
 	@echo "Logs: logs/train_*.log"
-	@echo "Dashboard: http://localhost:5001"
+	@echo "Dashboard: run 'make dashboard' in a separate terminal to attach (http://localhost:5001)"
 
 .PHONY: train.stop
 train.stop: ## Stop background training

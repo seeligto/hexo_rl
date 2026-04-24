@@ -10,5 +10,7 @@ matplotlib
 scipy
 flask
 flask-socketio
+gevent
+gevent-websocket
 psutil
 huggingface_hub[cli]

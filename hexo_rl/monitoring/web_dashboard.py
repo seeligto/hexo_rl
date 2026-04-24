@@ -138,6 +138,12 @@ class WebDashboard:
 
         self._host = str(mon.get("web_host", "127.0.0.1"))
 
+        # async_mode: "threading" (werkzeug dev server, in-process default) or
+        # "gevent" (production WSGI, used by scripts/serve_dashboard.py).
+        # Gevent avoids the "Session is disconnected" KeyError storms that
+        # werkzeug's threaded mode produces under backpressure.
+        self._async_mode = str(mon.get("socketio_async_mode", "threading"))
+
         # Viewer engine — lazy init at start()
         self._viewer_engine: Any = None
 
@@ -147,7 +153,7 @@ class WebDashboard:
             "HEXO_DASHBOARD_SECRET_KEY", secrets.token_hex(32)
         )
         self._socketio = SocketIO(
-            self._app, cors_allowed_origins="*", async_mode="threading"
+            self._app, cors_allowed_origins="*", async_mode=self._async_mode
         )
 
         # Routes
@@ -412,19 +418,24 @@ class WebDashboard:
 
         host = self._host
 
+        async_mode = self._async_mode
+
         def _run():
             # Suppress Flask/Werkzeug startup banner — it writes to stdout
             # via click.echo and corrupts Rich Live's in-place rendering.
             import flask.cli
             flask.cli.show_server_banner = lambda *a, **kw: None
-            socketio.run(
-                app,
-                host=host,
-                port=port,
-                allow_unsafe_werkzeug=True,
-                log_output=False,
-                use_reloader=False,
-            )
+            run_kwargs: dict = {
+                "host": host,
+                "port": port,
+                "log_output": False,
+                "use_reloader": False,
+            }
+            if async_mode == "threading":
+                # Werkzeug dev server needs this opt-in flag; gevent/eventlet
+                # provide their own WSGI servers and reject it.
+                run_kwargs["allow_unsafe_werkzeug"] = True
+            socketio.run(app, **run_kwargs)
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
