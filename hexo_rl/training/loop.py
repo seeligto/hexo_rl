@@ -115,11 +115,12 @@ def run_training_loop(
     inf_model.load_state_dict(_train_base.state_dict())
     inf_model.eval()
     if _torch_compile_enabled:
+        _compile_mode = str(trainer.config.get("torch_compile_mode", "default"))
         try:
-            inf_model = torch.compile(inf_model, mode="default", fullgraph=False)
-            log.info("torch_compile_inf_enabled", mode="default")
+            inf_model = torch.compile(inf_model, mode=_compile_mode, fullgraph=False)
+            log.info("torch_compile_inf_enabled", mode=_compile_mode)
         except Exception as exc:
-            log.warning("torch_compile_inf_failed", error=str(exc))
+            log.warning("torch_compile_inf_failed", mode=_compile_mode, error=str(exc))
 
     _ckpt_interval = int(trainer.config.get("checkpoint_interval", 500))
 

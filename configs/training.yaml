@@ -13,7 +13,11 @@ fp16: true
 # Nesting it deeper (e.g. under amp: {dtype: ...}) will silently fail to
 # propagate to InferenceServer.
 amp_dtype: "fp16"
-torch_compile: false   # disabled — Python 3.14 CUDA graph incompatibility (see sprint §25, §30)
+torch_compile: true    # §116 probe 2026-04-23 GO: reduce-overhead works on Py3.14.2 + PT2.11.0
+                       # (+50% throughput, +87% inference latency vs eager; 0 graph breaks).
+                       # Prior §32 blockers (Py3.14 TLS crash + 27GB Triton spike) resolved.
+torch_compile_mode: reduce-overhead   # kernel fusion; triton.cudagraphs=False in PT2.11.
+                                      # Options: default | reduce-overhead | max-autotune.
 augment: true  # 12-fold hex symmetry augmentation on sample_batch; keep true in production
 policy_prune_frac: 0.02
 # Independent of gumbel_mcts search — controls policy target computation, not search algorithm

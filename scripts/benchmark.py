@@ -780,7 +780,8 @@ def main() -> None:
     ).to(device)
 
     if not args.no_compile:
-        model = compile_model(model)
+        _compile_mode = str(config.get("torch_compile_mode", "default"))
+        model = compile_model(model, mode=_compile_mode)
 
     # Fill replay buffer with dummy data
     buffer = ReplayBuffer(capacity=100_000)

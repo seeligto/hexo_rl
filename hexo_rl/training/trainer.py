@@ -201,17 +201,19 @@ class Trainer:
         self.scaler = GradScaler(device=self.device.type, enabled=scaler_enabled)
         self._scaler_enabled = scaler_enabled
 
-        # torch.compile disabled — Python 3.14 compatibility issues
-        # See sprint log §25, §30 for history
-        # Re-enable when PyTorch + Python 3.14 CUDA graph support stabilizes
+        # torch.compile re-enabled §116 (2026-04-23): reduce-overhead GO on
+        # Py3.14.2 + PT2.11.0. Mode is config-driven via torch_compile_mode
+        # (default | reduce-overhead | max-autotune). Old §32 blockers
+        # (Py3.14 TLS crash + 27 GB Triton JIT spike) resolved in PT2.11.
         if config.get("torch_compile", False) and self.device.type == "cuda":
+            _compile_mode = str(config.get("torch_compile_mode", "default"))
             try:
                 self.model = torch.compile(
-                    self.model, mode="default", fullgraph=False
+                    self.model, mode=_compile_mode, fullgraph=False
                 )
-                log.info("torch_compile_enabled", mode="default")
+                log.info("torch_compile_enabled", mode=_compile_mode)
             except Exception as exc:
-                log.warning("torch_compile_failed", error=str(exc))
+                log.warning("torch_compile_failed", mode=_compile_mode, error=str(exc))
 
         self.step = 0
         self.checkpoint_log: list = []
