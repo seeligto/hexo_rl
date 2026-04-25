@@ -60,13 +60,6 @@ def write_override(cell: dict) -> Path:
     sp.append("    n_sims_quick: 0")
     sp.append("    n_sims_full: 0")
     sp.append("  random_opening_plies: 0")
-    # Enable torch.compile for the sweep (reflects production training).
-    # MUST be mode="default" — selfplay workers dispatch through
-    # InferenceServer's background thread, where reduce-overhead's
-    # per-thread CUDA-graph TLS is uninitialized and deadlocks.
-    # See memory: feedback_torch_compile_threading.md
-    sp.append("torch_compile: true")
-    sp.append("torch_compile_mode: default")
     if "n_workers" in cell:
         sp.append(f"  n_workers: {cell['n_workers']}")
     if "inference_batch_size" in cell:
@@ -77,6 +70,11 @@ def write_override(cell: dict) -> Path:
         sp.append(f"  leaf_batch_size: {cell['leaf_batch_size']}")
     if "max_train_burst" in cell:
         sp.append(f"max_train_burst: {cell['max_train_burst']}")
+    # torch.compile at root level — must come after the selfplay: block.
+    # mode=default required: reduce-overhead deadlocks in InferenceServer's
+    # background thread (per-thread CUDA-graph TLS uninitialized).
+    sp.append("torch_compile: true")
+    sp.append("torch_compile_mode: default")
     sp.append("training_steps_per_game: 2.0")
     Path(path).write_text("\n".join(sp) + "\n")
     return Path(path)
