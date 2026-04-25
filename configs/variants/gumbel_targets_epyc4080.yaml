@@ -1,22 +1,33 @@
 # gumbel_targets — EPYC 7702 (42 vCPU) + RTX 4080 Super (16 GB) variant.
-# Starting point only; tune knobs via scripts/sweep_epyc4080.sh, then update here.
+# Tuned 2026-04-25 via scripts/sweep_epyc4080.sh (3-stage sweep, n=5 reps,
+# 180s/cell). Full data: reports/sweeps/sweep_{workers,batch_wait,leaf_burst}_*.csv
 #
 # Hardware delta vs desktop (Ryzen 7 3700x + RTX 3070 8GB):
-#   - 3-4× CPU cores available (42 vs 16 vCPU). Higher n_workers feasible.
-#   - 2× VRAM (16 vs 8 GB). Larger inference_batch_size feasible.
-#   - GPU ~2× faster (FP16 throughput). Wider batches do not bottleneck CPU.
-#   - EPYC per-core IPC < Ryzen Zen2; expect more workers needed to saturate GPU.
+#   - 2.5× CPU cores available (42 vs 16 vCPU). n_workers=20 (not 14) wins.
+#   - 2× VRAM (16 vs 8 GB). batch_size=192 fits comfortably.
+#   - GPU ~2× faster on FP16 — but GPU sits at 60% util across every cell,
+#     so faster GPU does NOT translate to throughput. Bottleneck is dispatch.
 #
-# Initial guesses (replace with sweep winners):
+# Sweep findings (see memory: feedback_compile_selfplay_dispatch_bound):
+#   - Workers > 20 regressed (24w gave 240k vs 20w 320k). EPYC NUMA pressure.
+#   - Larger batch + longer wait wins because *fewer dispatch ops*, not because
+#     batches were unfilled. batch%=84 at winner; GPU still only 60% util.
+#   - torch.compile=true sped up NN inference 1.45× (10.4k → 15.1k inf/s)
+#     but worker-pool throughput went DOWN (388k uncompiled-w16 → 372k best
+#     compiled-w20). Compile's per-call Python overhead eats the GPU savings
+#     for this NN size. Until NN grows or dispatch GIL is fixed, compile=off.
+#
+# Best observed: ~370k pos/hr (compile off should equal or beat).
+torch_compile: false
 training_steps_per_game: 2.0
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
   max_game_moves: 300
-  n_workers: 32
-  inference_batch_size: 128
-  inference_max_wait_ms: 3.0
+  n_workers: 20
+  inference_batch_size: 192
+  inference_max_wait_ms: 8.0
   leaf_batch_size: 8
   playout_cap:
     fast_prob: 0.0
-max_train_burst: 16
+max_train_burst: 32
