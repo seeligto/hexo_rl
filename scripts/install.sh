@@ -19,8 +19,9 @@ fail() { echo "[!!] $*" >&2; }
 warn() { echo "[--] WARNING: $*"; }
 step() { echo; echo "[$1/$TOTAL_STEPS] $2"; }
 
-# ── Download helper (Hugging Face) ─────────────────────────────────────────────
+# ── Download helper (Hugging Face, via direct curl) ───────────────────────────
 # hf_download <repo_id> <repo_type> <filename> <dest_dir>
+# repo_type: "model" | "dataset"
 hf_download() {
     local repo="$1" repo_type="$2" filename="$3" dest_dir="$4"
     local dest="$dest_dir/$filename"
@@ -30,11 +31,17 @@ hf_download() {
         return 0
     fi
 
+    local base_url
+    if [[ "$repo_type" == "dataset" ]]; then
+        base_url="https://huggingface.co/datasets/$repo/resolve/main"
+    else
+        base_url="https://huggingface.co/$repo/resolve/main"
+    fi
+
     echo "    Downloading $filename from $repo ..."
     mkdir -p "$dest_dir"
-    if ! .venv/bin/hf download "$repo" "$filename" \
-            --repo-type "$repo_type" \
-            --local-dir "$dest_dir" >/dev/null 2>&1; then
+    if ! curl -fL --progress-bar "$base_url/$filename" -o "$dest"; then
+        rm -f "$dest"  # remove partial file on failure
         return 1
     fi
     ok "$filename"
