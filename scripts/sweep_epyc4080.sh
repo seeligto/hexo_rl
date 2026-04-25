@@ -1,23 +1,45 @@
 #!/usr/bin/env bash
 # Throughput sweep for EPYC 7702 (42 vCPU) + RTX 4080 Super (16 GB).
 # Stages: n_workers -> inference_batch x wait -> leaf_batch x train_burst.
-# Each stage's winner feeds the next.
+# Each stage's stable winner (non-bimodal cells preferred) feeds the next.
 #
 # Run on the rental box:
 #   bash scripts/sweep_epyc4080.sh 2>&1 | tee reports/sweeps/sweep.log
 #
+# Defaults are calibrated from the first sweep failure (2026-04-25):
+#   - n_runs=2 produced bimodal cells; raised to 5.
+#   - pool_duration=60s wasn't long enough to wash out worker-startup
+#     races on EPYC; raised to 180s.
+#   - Worker grid trimmed to {12,16,20,24}: at >=24 workers, individual
+#     runs alternated between ~0 and ~600k pos/hr (startup race).
+#     GPU was already at ~65% util at workers=16 — wider doesn't help.
+#
+# Per-cell budget at defaults: ~12 min. Total wall: ~3.5 hr for full sweep.
+#
 # Environment knobs:
-#   POOL_DURATION (default 60)  - seconds per bench rep
-#   N_RUNS        (default 2)   - bench reps per cell
-#   NO_COMPILE    (default 1)   - skip torch.compile per cell; set to 0 only with a warm
-#                                 .torchinductor-cache (cold JIT takes 30-120s, blowing warmup)
+#   POOL_DURATION (default 180) - seconds per bench rep
+#   N_RUNS        (default 5)   - bench reps per cell
+#   NO_COMPILE    (default 1)   - skip torch.compile per cell; set to 0 only
+#                                 with a warm .torchinductor-cache (cold JIT
+#                                 takes 30-120s, blowing warmup window)
+#   WORKER_GRID   (default "12 16 20 24")
+#   BATCH_GRID    (default "64 128 192")
+#   WAIT_GRID     (default "2.0 4.0 8.0")
+#   LEAF_GRID     (default "8 16")
+#   BURST_GRID    (default "8 16 32")
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 PY=.venv/bin/python
-POOL_DURATION="${POOL_DURATION:-60}"
-N_RUNS="${N_RUNS:-2}"
+POOL_DURATION="${POOL_DURATION:-180}"
+N_RUNS="${N_RUNS:-5}"
+WORKER_GRID="${WORKER_GRID:-12 16 20 24}"
+BATCH_GRID="${BATCH_GRID:-64 128 192}"
+WAIT_GRID="${WAIT_GRID:-2.0 4.0 8.0}"
+LEAF_GRID="${LEAF_GRID:-8 16}"
+BURST_GRID="${BURST_GRID:-8 16 32}"
+
 NO_COMPILE_FLAG=""
 if [[ "${NO_COMPILE:-1}" != "0" ]]; then
   NO_COMPILE_FLAG="--no-compile"
@@ -27,83 +49,119 @@ mkdir -p reports/sweeps
 
 ts() { date +%Y-%m-%dT%H:%M:%S; }
 
-echo "[$(ts)] sweep start  pool_duration=${POOL_DURATION}s  n_runs=${N_RUNS}"
+echo "==============================================================="
+echo "  HeXO sweep — EPYC 7702 + RTX 4080 Super"
+echo "==============================================================="
+echo "[$(ts)] start"
+echo "  pool_duration=${POOL_DURATION}s   n_runs=${N_RUNS}   no_compile=${NO_COMPILE_FLAG:-(off)}"
+echo "  worker grid:  ${WORKER_GRID}"
+echo "  batch  grid:  ${BATCH_GRID}"
+echo "  wait   grid:  ${WAIT_GRID}"
+echo "  leaf   grid:  ${LEAF_GRID}"
+echo "  burst  grid:  ${BURST_GRID}"
+echo
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader || true
 echo "vCPU:  $(nproc)"
 echo "RAM:   $(free -h | awk '/^Mem:/ {print $2 " total, " $7 " avail"}')"
 echo
 
-# ── Stage 1: n_workers sweep ────────────────────────────────────────────────
+# Helper: pick stable (non-bimodal) winner from a stage CSV; fall back to
+# top-median if every cell is bimodal (and shout about it).
+pick_stable_winner() {
+  local pattern="$1"
+  shift
+  local cols="$@"
+  $PY - "$pattern" "$cols" <<'PY'
+import csv, glob, sys
+pattern, cols = sys.argv[1], sys.argv[2].split()
+files = sorted(glob.glob(pattern))
+assert files, f"no csv matched {pattern}"
+with open(files[-1]) as f:
+    rows = [r for r in csv.DictReader(f) if r.get("pos_median")]
+def keyf(r): return float(r["pos_median"])
+stable = [r for r in rows if r.get("bimodal", "False") in ("False", "false", "0", "")]
+pool = stable if stable else rows
+pool.sort(key=keyf, reverse=True)
+w = pool[0]
+print(" ".join(w[c] for c in cols))
+sys.stderr.write(
+    f"[winner] from {files[-1]}  pos/hr={float(w['pos_median']):,.0f}"
+    + ("" if stable else "  (NO STABLE CELLS — all bimodal!)")
+    + "\n"
+)
+PY
+}
+
+# ── Stage 1: n_workers ─────────────────────────────────────────────────────
 echo "[$(ts)] stage 1 / 3 — n_workers"
 $PY scripts/sweep_epyc4080.py \
     --stage workers \
-    --worker-grid 16 24 32 40 \
+    --worker-grid $WORKER_GRID \
     --pool-duration "$POOL_DURATION" \
     --n-runs "$N_RUNS" \
     $NO_COMPILE_FLAG
 
-# Pick winner from latest stage-1 CSV
-WORKERS_WINNER=$(
-  $PY - <<'PY'
-import csv, glob, os
-files = sorted(glob.glob("reports/sweeps/sweep_workers_*.csv"))
-assert files, "no stage-1 csv produced"
-with open(files[-1]) as f:
-    rows = [r for r in csv.DictReader(f) if r.get("pos_per_hr")]
-rows.sort(key=lambda r: float(r["pos_per_hr"]), reverse=True)
-print(rows[0]["n_workers"])
-PY
-)
+WORKERS_WINNER=$(pick_stable_winner "reports/sweeps/sweep_workers_*.csv" n_workers)
 echo "[$(ts)] stage 1 winner: n_workers=${WORKERS_WINNER}"
 echo
 
-# ── Stage 2: inference_batch_size x inference_max_wait_ms ───────────────────
+# ── Stage 2: inference_batch_size x inference_max_wait_ms ──────────────────
 echo "[$(ts)] stage 2 / 3 — batch x wait (workers=${WORKERS_WINNER})"
 $PY scripts/sweep_epyc4080.py \
     --stage batch_wait \
     --workers "$WORKERS_WINNER" \
-    --batch-grid 64 128 192 \
-    --wait-grid 2.0 4.0 8.0 \
+    --batch-grid $BATCH_GRID \
+    --wait-grid $WAIT_GRID \
     --pool-duration "$POOL_DURATION" \
     --n-runs "$N_RUNS" \
     $NO_COMPILE_FLAG
 
 read BATCH_WINNER WAIT_WINNER < <(
-  $PY - <<'PY'
-import csv, glob
-files = sorted(glob.glob("reports/sweeps/sweep_batch_wait_*.csv"))
-assert files, "no stage-2 csv produced"
-with open(files[-1]) as f:
-    rows = [r for r in csv.DictReader(f) if r.get("pos_per_hr")]
-rows.sort(key=lambda r: float(r["pos_per_hr"]), reverse=True)
-print(rows[0]["inference_batch_size"], rows[0]["inference_max_wait_ms"])
-PY
+  pick_stable_winner "reports/sweeps/sweep_batch_wait_*.csv" inference_batch_size inference_max_wait_ms
 )
 echo "[$(ts)] stage 2 winner: batch=${BATCH_WINNER}  wait=${WAIT_WINNER}"
 echo
 
-# ── Stage 3: leaf_batch_size x max_train_burst ──────────────────────────────
+# ── Stage 3: leaf_batch_size x max_train_burst ─────────────────────────────
 echo "[$(ts)] stage 3 / 3 — leaf x burst (workers=${WORKERS_WINNER}, batch=${BATCH_WINNER}, wait=${WAIT_WINNER})"
 $PY scripts/sweep_epyc4080.py \
     --stage leaf_burst \
     --workers "$WORKERS_WINNER" \
     --batch "$BATCH_WINNER" \
     --wait "$WAIT_WINNER" \
-    --leaf-grid 8 16 \
-    --burst-grid 8 16 32 \
+    --leaf-grid $LEAF_GRID \
+    --burst-grid $BURST_GRID \
     --pool-duration "$POOL_DURATION" \
     --n-runs "$N_RUNS" \
     $NO_COMPILE_FLAG
 
+read LEAF_WINNER BURST_WINNER < <(
+  pick_stable_winner "reports/sweeps/sweep_leaf_burst_*.csv" leaf_batch_size max_train_burst
+)
+echo "[$(ts)] stage 3 winner: leaf=${LEAF_WINNER}  burst=${BURST_WINNER}"
 echo
-echo "[$(ts)] sweep done."
-echo "Stage winners:"
+
+# ── Final summary ──────────────────────────────────────────────────────────
+echo "==============================================================="
+echo "  SWEEP DONE  $(ts)"
+echo "==============================================================="
 echo "  n_workers              = ${WORKERS_WINNER}"
 echo "  inference_batch_size   = ${BATCH_WINNER}"
 echo "  inference_max_wait_ms  = ${WAIT_WINNER}"
+echo "  leaf_batch_size        = ${LEAF_WINNER}"
+echo "  max_train_burst        = ${BURST_WINNER}"
 echo
-echo "Per-stage CSVs in reports/sweeps/sweep_{workers,batch_wait,leaf_burst}_*.csv"
-echo "Per-cell JSON reports in reports/benchmarks/*.json"
+echo "Inspect per-stage tables in this log; raw CSVs:"
+ls -1 reports/sweeps/sweep_*.csv | tail -3
 echo
-echo "Update configs/variants/gumbel_targets_epyc4080.yaml with the winners,"
-echo "then launch training:  make train VARIANT=gumbel_targets_epyc4080"
+echo "Per-cell JSON reports: reports/benchmarks/*.json"
+echo
+echo "Suggested patch to configs/variants/gumbel_targets_epyc4080.yaml:"
+echo "  selfplay:"
+echo "    n_workers: ${WORKERS_WINNER}"
+echo "    inference_batch_size: ${BATCH_WINNER}"
+echo "    inference_max_wait_ms: ${WAIT_WINNER}"
+echo "    leaf_batch_size: ${LEAF_WINNER}"
+echo "  max_train_burst: ${BURST_WINNER}"
+echo
+echo "Then launch training:  make train VARIANT=gumbel_targets_epyc4080"
