@@ -30,6 +30,13 @@
 #   WAIT_GRID     (default "2.0 4.0 8.0")
 #   LEAF_GRID     (default "8 16")
 #   BURST_GRID    (default "8 16 32")
+#   MODE          (default full) - "validate" for narrow re-sweep around prior
+#                                 winners. Use after a dispatcher change (e.g.
+#                                 trace_inference fix on 2026-04-25) when you
+#                                 only need to confirm the optimum hasn't moved
+#                                 and re-pick if it has. Cells: ~6 (~1.2 hr).
+#                                 Validate grids: workers={16,20,24}, batch=
+#                                 {128,192}, fixed wait=4.0/leaf=8/burst=16.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -37,11 +44,27 @@ cd "$(dirname "$0")/.."
 PY=.venv/bin/python
 POOL_DURATION="${POOL_DURATION:-180}"
 N_RUNS="${N_RUNS:-5}"
-WORKER_GRID="${WORKER_GRID:-12 16 20 24}"
-BATCH_GRID="${BATCH_GRID:-64 128 192}"
-WAIT_GRID="${WAIT_GRID:-2.0 4.0 8.0}"
-LEAF_GRID="${LEAF_GRID:-8 16}"
-BURST_GRID="${BURST_GRID:-8 16 32}"
+MODE="${MODE:-full}"
+
+# Tight grids for the validation re-sweep (post-dispatcher-change). Pinned
+# to the dispatch-bound optimum band: workers around the prior winner (16),
+# extended to 20/24 because the trace fix moves the bottleneck off Python
+# and may absorb more concurrent work; batch from 128 (uncompiled winner)
+# up to 192 (compiled winner). Wait/leaf/burst held at prior winners since
+# they were robust across the original sweep.
+if [[ "$MODE" == "validate" ]]; then
+  WORKER_GRID="${WORKER_GRID:-16 20 24}"
+  BATCH_GRID="${BATCH_GRID:-128 192}"
+  WAIT_GRID="${WAIT_GRID:-4.0}"
+  LEAF_GRID="${LEAF_GRID:-8}"
+  BURST_GRID="${BURST_GRID:-16}"
+else
+  WORKER_GRID="${WORKER_GRID:-12 16 20 24}"
+  BATCH_GRID="${BATCH_GRID:-64 128 192}"
+  WAIT_GRID="${WAIT_GRID:-2.0 4.0 8.0}"
+  LEAF_GRID="${LEAF_GRID:-8 16}"
+  BURST_GRID="${BURST_GRID:-8 16 32}"
+fi
 
 NO_COMPILE_FLAG=""
 if [[ "${NO_COMPILE:-0}" != "0" ]]; then
@@ -55,7 +78,7 @@ ts() { date +%Y-%m-%dT%H:%M:%S; }
 echo "==============================================================="
 echo "  HeXO sweep — EPYC 7702 + RTX 4080 Super"
 echo "==============================================================="
-echo "[$(ts)] start"
+echo "[$(ts)] start  MODE=${MODE}"
 echo "  pool_duration=${POOL_DURATION}s   n_runs=${N_RUNS}   no_compile=${NO_COMPILE_FLAG:-(off)}"
 echo "  worker grid:  ${WORKER_GRID}"
 echo "  batch  grid:  ${BATCH_GRID}"

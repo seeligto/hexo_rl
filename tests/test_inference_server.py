@@ -177,6 +177,113 @@ class TestInferenceServerBatching:
         assert server.total_requests == n_requests
 
 
+class TestInferenceServerTrace:
+    """torch.jit.trace path: parity with the untraced module + weight-swap propagation.
+
+    Locks in the dispatch optimisation from project_dispatch_pyspy_2026-04-25.md.
+    The traced ScriptModule must:
+      1. produce numerically equivalent outputs to the untraced module,
+      2. follow in-place weight mutation by load_state_dict_safe (parameters
+         are shared, not copied),
+      3. be cleanly disabled via selfplay.trace_inference=false in config.
+    """
+
+    def _server(
+        self,
+        model: HexTacToeNet,
+        device: torch.device,
+        *,
+        trace: bool,
+        batch_size: int = 4,
+    ) -> InferenceServer:
+        cfg = {
+            "selfplay": {
+                "inference_batch_size": batch_size,
+                "inference_max_wait_ms": 20.0,
+                "trace_inference": trace,
+            }
+        }
+        return InferenceServer(model, device, cfg)
+
+    def test_traced_matches_untraced(self, model, device):
+        """Trace must produce the same policy / value as the untraced module."""
+        np.random.seed(0)
+        states = [_random_state() for _ in range(6)]
+
+        s_off = self._server(model, device, trace=False)
+        s_off.start()
+        try:
+            ref = [s_off.infer(s) for s in states]
+        finally:
+            s_off.stop()
+            s_off.join(timeout=2.0)
+
+        s_on = self._server(model, device, trace=True)
+        assert s_on._traced_model is not None, "trace did not compile on the test model"
+        s_on.start()
+        try:
+            traced = [s_on.infer(s) for s in states]
+        finally:
+            s_on.stop()
+            s_on.join(timeout=2.0)
+
+        for i, ((p_ref, v_ref), (p_tr, v_tr)) in enumerate(zip(ref, traced)):
+            assert p_tr.shape == p_ref.shape, f"state {i}: policy shape mismatch"
+            # fp16 path: drift up to a few ×1e-3 on policy probs; values
+            # come from the same fp16 logits → same tolerance.
+            max_p = float(np.abs(p_tr - p_ref).max())
+            assert max_p < 5e-3, f"state {i}: policy diverged max={max_p}"
+            assert abs(v_tr - v_ref) < 5e-3, (
+                f"state {i}: value diverged tr={v_tr} ref={v_ref}"
+            )
+
+    def test_traced_follows_weight_swap(self, device):
+        """load_state_dict_safe must mutate parameters in place; trace must see new weights."""
+        net = HexTacToeNet(
+            board_size=BOARD_SIZE, in_channels=BOARD_CHANNELS, filters=64, res_blocks=2,
+        ).to(device)
+        net.eval()
+
+        server = self._server(net, device, trace=True)
+        assert server._traced_model is not None
+        server.start()
+        try:
+            np.random.seed(123)
+            state = _random_state()
+            p_before, v_before = server.infer(state)
+
+            new_sd = {k: torch.randn_like(v) if v.dtype.is_floating_point else v
+                      for k, v in net.state_dict().items()}
+            server.load_state_dict_safe(new_sd)
+
+            p_after, v_after = server.infer(state)
+        finally:
+            server.stop()
+            server.join(timeout=2.0)
+
+        diff_p = float(np.abs(p_after - p_before).max())
+        diff_v = abs(v_after - v_before)
+        assert diff_p > 1e-3, (
+            f"traced model did not pick up weight swap: policy max diff {diff_p}"
+        )
+        assert diff_v > 1e-3 or diff_p > 1e-2, (
+            f"traced model did not pick up weight swap: value diff {diff_v}"
+        )
+
+    def test_trace_disabled_via_config(self, model, device):
+        server = self._server(model, device, trace=False)
+        assert server._trace_inference is False
+        assert server._traced_model is None
+        # Smoke: still functional without the trace.
+        server.start()
+        try:
+            policy, _ = server.infer(_random_state())
+            assert policy.shape == (N_ACTIONS,)
+        finally:
+            server.stop()
+            server.join(timeout=2.0)
+
+
 class TestInferenceServerFailureHandling:
     def test_batch_prep_error_unblocks_workers(self, device):
         """Regression C-003: batch-prep (np.ascontiguousarray) error must unblock workers.

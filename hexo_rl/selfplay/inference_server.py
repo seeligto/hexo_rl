@@ -59,6 +59,41 @@ class InferenceServer(threading.Thread):
         self._forward_count = 0
         self._total_requests = 0
 
+        # TorchScript trace of the eval forward. The 2026-04-25 py-spy profile
+        # (project_dispatch_pyspy_2026-04-25.md) attributed ~33% of dispatcher
+        # wall time to L208 — pure CPython overhead iterating ~100 nn.Module
+        # _call_impl invocations per forward (12 ResBlocks × 7 modules + 7
+        # heads). Tracing collapses that into a single ScriptModule whose
+        # parameters share storage with `model`, so load_state_dict_safe's
+        # in-place tensor mutation continues to flow into the traced graph
+        # without re-tracing.
+        self._trace_inference = bool(sp.get("trace_inference", True))
+        self._traced_model: Optional[torch.jit.ScriptModule] = None
+        if self._trace_inference:
+            try:
+                self.model.requires_grad_(False)
+                with torch.inference_mode():
+                    _example = torch.zeros(
+                        self._batch_size, *self._shape, device=self.device,
+                    )
+                    self._traced_model = torch.jit.trace(
+                        self.model, _example, strict=False,
+                    )
+                _perf_log.info(
+                    "inference_trace_compiled",
+                    context="inference_server",
+                    batch_size=self._batch_size,
+                    in_channels=in_channels,
+                    board_size=board_size,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _perf_log.warning(
+                    "inference_trace_failed_falling_back",
+                    context="inference_server",
+                    error=str(exc)[:200],
+                )
+                self._traced_model = None
+
         # Pinned host staging buffer for async H2D (Bucket 1 #5, E2 row 1).
         # Size: batch_size * feature_len * 4B ≈ 1 MB for default (64 * 18*19*19 * 4).
         # Enables DMA engine copy on CUDA (non_blocking=True); no-op on CPU.
@@ -196,6 +231,10 @@ class InferenceServer(threading.Thread):
                                 "InferenceServer model entered hot loop in train() mode; "
                                 "eval() should be set at __init__ and re-applied in load_state_dict_safe"
                             )
+                        # Use the traced graph when available (the trace shares
+                        # parameter storage with self.model, so weight swaps
+                        # via load_state_dict_safe propagate without re-tracing).
+                        fwd_model = self._traced_model if self._traced_model is not None else self.model
                         with self._weights_lock:
                             with torch.inference_mode():
                                 # autocast enabled on CUDA only; CPU float16 is unsupported
@@ -205,7 +244,7 @@ class InferenceServer(threading.Thread):
                                     dtype=self._amp_dtype,
                                     enabled=self.device.type == "cuda",
                                 ):
-                                    log_policy, value, _v_logit = self.model(tensor)
+                                    log_policy, value, _v_logit = fwd_model(tensor)
                         if _perf:
                             if _sync:
                                 torch.cuda.synchronize()
@@ -216,8 +255,14 @@ class InferenceServer(threading.Thread):
                         # Re-normalize after exp() to correct reduced-precision rounding drift.
                         probs = log_policy.float().exp()
                         probs = probs / probs.sum(dim=-1, keepdim=True)
-                        policies = np.ascontiguousarray(probs.cpu().numpy())
-                        values = np.ascontiguousarray(value.squeeze(-1).float().cpu().numpy())
+                        # Merged D2H: one cudaMemcpyAsync instead of two.
+                        # Layout: [n, policy_len + 1] — last column carries the
+                        # squeezed scalar value. Splitting on host is L2-cache
+                        # cheap (~70 KB at batch=192) compared to a second D2H.
+                        v = value.squeeze(-1).float().unsqueeze(-1)
+                        host = torch.cat([probs, v], dim=-1).cpu().numpy()
+                        policies = np.ascontiguousarray(host[:, :self._policy_len])
+                        values = np.ascontiguousarray(host[:, self._policy_len])
                         if _perf:
                             _t_d2h_done = time.perf_counter()
 

@@ -48,6 +48,12 @@ selfplay:
   inference_max_wait_ms: 4.0   # sweep P3 winner (was 12.0, see sprint §69)
   dispatch_wait_ms: 2.0
   leaf_batch_size: 8            # sweep §69: leaf_bs=16 hurts throughput
+  # 2026-04-25 dispatch profile (project_dispatch_pyspy_2026-04-25.md):
+  # InferenceServer was ~33% blocked in Python module dispatch at L208 of
+  # inference_server.py. Tracing the eval-mode forward via torch.jit.trace
+  # collapses ~100 _call_impl invocations per forward into a single graph.
+  # Default ON. Falls back to the untraced module if trace fails.
+  trace_inference: true
   replay_buffer_capacity: 500000
   max_game_moves: 200  # PLIES (stone placements) = 100 compound turns. Reverted from 300 for experiment A.
   results_queue_cap: 10000  # Rust SelfPlayRunner drops oldest when `results` VecDeque exceeds this.
