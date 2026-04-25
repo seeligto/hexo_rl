@@ -89,3 +89,6 @@ checkpoints/saved/
 .nvimlog
 # Local memory system (user-specific, never committed)
 memory/
+
+.torchinductor-*/
+checkpoints_smokes/
