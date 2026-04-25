@@ -45,8 +45,17 @@ def write_override(cell: dict) -> Path:
     sp.append("  completed_q_values: true")
     sp.append("  gumbel_mcts: false")
     sp.append("  max_game_moves: 300")
+    # Disable move-level playout cap so the base config's full_search_prob=0.5
+    # doesn't survive the load_config merge and confuse any code reading the
+    # merged config. The benchmark bench_cfg also hard-codes these to 0, but
+    # belt-and-suspenders here prevents silent mismatches.
     sp.append("  playout_cap:")
     sp.append("    fast_prob: 0.0")
+    sp.append("    full_search_prob: 0.0")
+    sp.append("    n_sims_quick: 0")
+    sp.append("    n_sims_full: 0")
+    # No random opening plies in the benchmark — skipped rows deflate pos/hr.
+    sp.append("  random_opening_plies: 0")
     if "n_workers" in cell:
         sp.append(f"  n_workers: {cell['n_workers']}")
     if "inference_batch_size" in cell:
@@ -85,6 +94,9 @@ def run_cell(cell: dict, pool_duration: int, n_runs: int, no_compile: bool) -> d
     ]
     if no_compile:
         cmd.append("--no-compile")
+    # no_compile defaults to True — compile JIT on a cold cache can take
+    # 30-120s, blowing the 90s warmup window → 0 games/hr for entire cell.
+
 
     label = " ".join(f"{k}={v}" for k, v in cell.items())
     print(f"\n[cell] {label}", flush=True)
@@ -207,8 +219,14 @@ def main() -> None:
     p.add_argument("--pool-duration", type=int, default=60)
     p.add_argument("--n-runs", type=int, default=2,
                    help="bench reps per cell (2 keeps sweep cells ~3min each)")
-    p.add_argument("--no-compile", action="store_true",
-                   help="skip torch.compile per cell (faster cold start; less realistic)")
+    # Default no_compile=True: compile JIT cold-start (30-120s) races the
+    # 90s warmup window and produces 0 games/hr on cold machines.
+    # Use --compile to opt into compiled mode if the cache is already warm.
+    p.add_argument("--no-compile", action="store_true", default=True,
+                   help="skip torch.compile per cell (default: True; compile "
+                        "cold-start races the warmup window)")
+    p.add_argument("--compile", dest="no_compile", action="store_false",
+                   help="enable torch.compile per cell (warm .torchinductor-cache required)")
 
     p.add_argument("--worker-grid", type=int, nargs="+",
                    default=[16, 24, 32, 40])

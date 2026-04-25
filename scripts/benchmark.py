@@ -369,7 +369,17 @@ def benchmark_worker_pool(
                 "fast_prob": 0.0,
                 "fast_sims": 64,
                 "standard_sims": 0,
+                # Explicitly disable move-level playout cap — all benchmark
+                # positions are full-search so pos/hr measures max throughput.
+                # pool.py defaults these to 0.0/0/0 already; listed here to
+                # document intent and prevent silent mismatch if defaults change.
+                "full_search_prob": 0.0,
+                "n_sims_quick": 0,
+                "n_sims_full": 0,
             },
+            # No random opening plies: skipped rows deflate pos/hr and would
+            # make the bench metric incomparable across configs.
+            "random_opening_plies": 0,
         },
     }
 
@@ -725,6 +735,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--bench-max-moves", type=int, default=128,
                    help="Max plies per game for the worker-pool bench (default 128). "
                         "Production config uses 200; lower value ensures games finish within bench window.")
+    p.add_argument("--pool-warmup", type=float, default=90.0,
+                   help="Worker pool warm-up seconds before measurement (default 90). "
+                        "Increase to 150 if torch.compile is enabled on a cold cache.")
     p.add_argument("--n-runs", type=int, default=5,
                    help="Number of measurement repeats per metric (default 5)")
     return p.parse_args()
@@ -802,7 +815,7 @@ def main() -> None:
     warmup_nn = 3.0
     warmup_latency = 2.0
     warmup_buffer = 2.0
-    warmup_worker = 90.0
+    warmup_worker = args.pool_warmup
 
     try:
         # Run benchmarks

@@ -9,7 +9,8 @@
 # Environment knobs:
 #   POOL_DURATION (default 60)  - seconds per bench rep
 #   N_RUNS        (default 2)   - bench reps per cell
-#   NO_COMPILE    (set to 1)    - skip torch.compile per cell (faster, less realistic)
+#   NO_COMPILE    (default 1)   - skip torch.compile per cell; set to 0 only with a warm
+#                                 .torchinductor-cache (cold JIT takes 30-120s, blowing warmup)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -18,7 +19,7 @@ PY=.venv/bin/python
 POOL_DURATION="${POOL_DURATION:-60}"
 N_RUNS="${N_RUNS:-2}"
 NO_COMPILE_FLAG=""
-if [[ "${NO_COMPILE:-0}" == "1" ]]; then
+if [[ "${NO_COMPILE:-1}" != "0" ]]; then
   NO_COMPILE_FLAG="--no-compile"
 fi
 
