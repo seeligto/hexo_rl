@@ -47,7 +47,12 @@ cd "$(dirname "$0")/.."
 PY=.venv/bin/python
 POOL_DURATION="${POOL_DURATION:-180}"
 N_RUNS="${N_RUNS:-5}"
-MODE="${MODE:-full}"
+# Default is validate (§124, 2026-04-25): the full 19-cell grid was already
+# run pre-trace-fix and the optimum band is known (workers≈16, batch≈128-192).
+# Validate confirms the trace fix doesn't move the optimum; if it does, the
+# top cell from validate is the new winner. Set MODE=full only when the
+# search space has materially changed (new hardware, new arch, etc.).
+MODE="${MODE:-validate}"
 
 # Tight grids for the validation re-sweep (post-dispatcher-change). Pinned
 # to the dispatch-bound optimum band: workers around the prior winner (16),
