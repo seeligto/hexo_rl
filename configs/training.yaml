@@ -13,17 +13,32 @@ fp16: true
 # Nesting it deeper (e.g. under amp: {dtype: ...}) will silently fail to
 # propagate to InferenceServer.
 amp_dtype: "fp16"
-torch_compile: false   # Temporarily disabled 2026-04-24 after deadlock on first resume with
-                       # reduce-overhead enabled: trainer + inference_server both try to JIT
-                       # via torch.compile concurrently; all threads ended up in futex_do_wait
-                       # post-buffer-warmup at step 6002, zero gradient steps. Code plumbing
-                       # (mode via config, OptimizedModule unwrap, config_overrides propagation)
-                       # from commits 1e2d82b + 41ffad5 kept; only the YAML flag flipped back.
-                       # Re-enable after root-causing the double-compile deadlock (likely
-                       # Triton compile-cache lock contention or Py3.14 thread-safety edge).
-torch_compile_mode: reduce-overhead   # kernel fusion; triton.cudagraphs=False in PT2.11.
+torch_compile: false   # Stays disabled in training pipeline pending deeper investigation.
+                       # 2026-04-25 attempt to re-enable (with loop.py inf_model forced to
+                       # mode=default per bench c26b9b4 pattern) still deadlocks at first
+                       # train step on fast_debug smoke — both with mode=reduce-overhead and
+                       # with mode=default for trainer.model. All 57 threads land in
+                       # futex_do_wait, GPU util 0%, no Triton subprocess children alive.
+                       # Symptom matches 2026-04-24 step-6002 stall. Cross-thread inductor
+                       # state contention between trainer.model compile (main thread, first
+                       # forward+backward) and inf_model serving (InferenceServer thread)
+                       # is the suspected root cause but unproven — py-spy needs ptrace
+                       # privilege to introspect. Bench (single-process, reduce-overhead on
+                       # main thread, mode=default on background thread) does work — see
+                       # c26b9b4 + e88032b — so the loop.py defensive change (inf_model
+                       # forced to mode=default) is preserved as a precondition for any
+                       # future enable attempt. Re-enable in training requires either a
+                       # main-thread JIT pre-warmup of trainer.model BEFORE pool.start(),
+                       # or a separate device/stream for the inference server.
+torch_compile_mode: default           # kernel fusion only, no CUDA graph capture.
                                       # Options: default | reduce-overhead | max-autotune.
-                                      # Takes effect only when torch_compile: true.
+                                      # reduce-overhead deadlocks against InferenceServer
+                                      # thread (CUDA graph capture cannot share the device
+                                      # context with concurrent background-thread CUDA work
+                                      # — observed 2026-04-24 step-6002 stall and 2026-04-25
+                                      # smoke at first train step). Use default for both
+                                      # trainer.model and inf_model. Takes effect only
+                                      # when torch_compile: true.
 augment: true  # 12-fold hex symmetry augmentation on sample_batch; keep true in production
 policy_prune_frac: 0.02
 # Independent of gumbel_mcts search — controls policy target computation, not search algorithm
