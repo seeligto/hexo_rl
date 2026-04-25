@@ -577,6 +577,39 @@ def _fmt_range(stats: dict) -> str:
     return f"{_short(lo)}-{_short(hi)}"
 
 
+def compile_warmup(model: "HexTacToeNet", device: torch.device,
+                   in_channels: int, board_size: int) -> float:
+    """Trigger torch.compile JIT tracing + CUDA graph capture before any timing starts.
+
+    Runs forward passes at batch=64 and batch=1 — the two sizes benchmarked.
+    inductor tracing blocks 30-120s on a cold cache; doing it here keeps that
+    cost outside all timed windows. Mirrors the approach in training/loop.py.
+
+    Returns elapsed seconds (for the warmup_note).
+    """
+    if device.type != "cuda":
+        return 0.0
+
+    console.print("[dim]torch.compile warmup: triggering JIT tracing "
+                  "(30-120s on cold inductor cache)...[/dim]")
+    t0 = time.monotonic()
+
+    with torch.no_grad():
+        with torch.autocast(device_type="cuda"):
+            for batch_size in (64, 1):
+                dummy = torch.zeros(batch_size, in_channels, board_size, board_size,
+                                    dtype=torch.float32, device=device)
+                # reduce-overhead mode captures a CUDA graph per batch size;
+                # a handful of passes ensures graph capture completes fully.
+                for _ in range(5):
+                    model(dummy)
+    torch.cuda.synchronize()
+
+    elapsed = time.monotonic() - t0
+    console.print(f"[dim]torch.compile warmup done ({elapsed:.1f}s)[/dim]")
+    return elapsed
+
+
 def print_benchmark_report(results: List[Dict[str, Any]],
                            n_runs: int, warmup_note: str,
                            checks: "list[tuple] | None" = None) -> bool:
@@ -737,7 +770,7 @@ def parse_args() -> argparse.Namespace:
                         "Production config uses 200; lower value ensures games finish within bench window.")
     p.add_argument("--pool-warmup", type=float, default=90.0,
                    help="Worker pool warm-up seconds before measurement (default 90). "
-                        "Increase to 150 if torch.compile is enabled on a cold cache.")
+                        "torch.compile JIT cost is handled before this window starts.")
     p.add_argument("--n-runs", type=int, default=5,
                    help="Number of measurement repeats per metric (default 5)")
     return p.parse_args()
@@ -792,9 +825,13 @@ def main() -> None:
         res_blocks=int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
     ).to(device)
 
+    _compile_elapsed = 0.0
     if not args.no_compile:
         _compile_mode = str(config.get("torch_compile_mode", "default"))
         model = compile_model(model, mode=_compile_mode)
+        _board_size = int(model_cfg.get("board_size", config.get("board_size", 19)))
+        _in_ch = int(model_cfg.get("in_channels", config.get("in_channels", 18)))
+        _compile_elapsed = compile_warmup(model, device, _in_ch, _board_size)
 
     # Fill replay buffer with dummy data
     buffer = ReplayBuffer(capacity=100_000)
@@ -877,7 +914,8 @@ def main() -> None:
                     s = sub["stats"]
                     console.print(f"  [dim]{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
 
-        warmup_note = f"{warmup_mcts:.0f}s MCTS / {warmup_nn:.0f}s NN / {warmup_buffer:.0f}s buffer / {warmup_worker:.0f}s worker"
+        _compile_note = f"compile {_compile_elapsed:.0f}s / " if _compile_elapsed > 0 else ""
+        warmup_note = f"{_compile_note}{warmup_mcts:.0f}s MCTS / {warmup_nn:.0f}s NN / {warmup_buffer:.0f}s buffer / {warmup_worker:.0f}s worker"
         all_pass = print_benchmark_report(results, n_runs, warmup_note, checks=checks)
         write_json_report(results, n_runs, checks=checks)
         sys.exit(0 if all_pass else 1)
