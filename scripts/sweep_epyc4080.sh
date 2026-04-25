@@ -19,12 +19,15 @@
 # Environment knobs:
 #   POOL_DURATION (default 180) - seconds per bench rep
 #   N_RUNS        (default 5)   - bench reps per cell
-#   NO_COMPILE    (default 0)   - skip torch.compile per cell. Default OFF
-#                                 because the threading fix landed (per memory
-#                                 feedback_torch_compile_threading.md). Sweep
-#                                 forces mode="default" via YAML override —
-#                                 reduce-overhead deadlocks vs InferenceServer.
-#                                 Set NO_COMPILE=1 to skip compile entirely.
+#   NO_COMPILE    [pinned ON, §124 2026-04-25] - sweep always runs compile-off
+#                                 to match production training. The
+#                                 InferenceServer trace fix
+#                                 (selfplay.trace_inference, default true)
+#                                 collapses ~100 _call_impl calls per forward
+#                                 into one ScriptModule — same dispatch win
+#                                 as compile, no Dynamo guard cost. The env
+#                                 var is no longer read; use bench.compile
+#                                 target if you need a compile-on datum.
 #   WORKER_GRID   (default "12 16 20 24")
 #   BATCH_GRID    (default "64 128 192")
 #   WAIT_GRID     (default "2.0 4.0 8.0")
@@ -66,10 +69,9 @@ else
   BURST_GRID="${BURST_GRID:-8 16 32}"
 fi
 
-NO_COMPILE_FLAG=""
-if [[ "${NO_COMPILE:-0}" != "0" ]]; then
-  NO_COMPILE_FLAG="--no-compile"
-fi
+# Sweep always runs compile-off (§124). The python harness pins --no-compile
+# regardless of this flag; kept here for log clarity.
+NO_COMPILE_FLAG="--no-compile"
 
 mkdir -p reports/sweeps
 

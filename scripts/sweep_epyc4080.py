@@ -70,11 +70,14 @@ def write_override(cell: dict) -> Path:
         sp.append(f"  leaf_batch_size: {cell['leaf_batch_size']}")
     if "max_train_burst" in cell:
         sp.append(f"max_train_burst: {cell['max_train_burst']}")
-    # torch.compile at root level — must come after the selfplay: block.
-    # mode=default required: reduce-overhead deadlocks in InferenceServer's
-    # background thread (per-thread CUDA-graph TLS uninitialized).
-    sp.append("torch_compile: true")
-    sp.append("torch_compile_mode: default")
+    # torch.compile OFF (§124, 2026-04-25) to match production training.
+    # The InferenceServer trace fix (selfplay.trace_inference, on by default)
+    # collapses ~100 nn.Module._call_impl calls per forward into a single
+    # ScriptModule — same dispatch-overhead win as compile, without Dynamo
+    # guard cost. Compile and trace are mutually exclusive (jit.trace can't
+    # introspect FX/dynamo-wrapped functions); run the sweep on the trace
+    # path since that's what production uses.
+    sp.append("torch_compile: false")
     sp.append("training_steps_per_game: 2.0")
     Path(path).write_text("\n".join(sp) + "\n")
     return Path(path)
@@ -150,15 +153,21 @@ def run_cell(cell: dict, pool_duration: int, n_runs: int, no_compile: bool) -> d
     """Run benchmark for one sweep cell. Streams stdout live and parses sub-stats."""
     override = write_override(cell)
     workers = cell["n_workers"]
+    # Sweep always passes --no-compile (§124, 2026-04-25): production training
+    # has torch_compile=false and the InferenceServer trace fix subsumes
+    # compile's role for the dispatcher. The legacy `no_compile` arg is kept
+    # for callers but ignored — flip back to allowing compile would silently
+    # diverge sweep config from production. Set bench.compile target instead
+    # if you need an engineering datum.
     cmd = [
         PY, BENCH,
         "--config", str(override),
         "--pool-workers", str(workers),
         "--pool-duration", str(pool_duration),
         "--n-runs", str(n_runs),
+        "--no-compile",
     ]
-    if no_compile:
-        cmd.append("--no-compile")
+    _ = no_compile  # legacy flag, always treated as True now
 
     label = " ".join(f"{k}={v}" for k, v in cell.items())
     print(f"\n[cell] {label}", flush=True)

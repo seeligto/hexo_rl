@@ -81,11 +81,16 @@ test.slow: ## Run slow/integration Python tests (~2-5 min)
 # ── Benchmarks ────────────────────────────────────────────────────────────────
 
 .PHONY: bench
-bench: ## Higher-confidence benchmark (n=5, 90s warmup; torch.compile on; full Phase 4.5 gate methodology)
+bench: ## Phase 4.5 gate (n=5, 90s warmup; compile OFF — matches production training)
+	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(BENCH_WORKERS) \
+		--pool-duration 120 --no-compile
+
+.PHONY: bench.compile
+bench.compile: ## Engineering datum: same as bench but with torch.compile ON (NN-isolated only realistic — selfplay path is dispatch-bound, see §124)
 	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(BENCH_WORKERS) --pool-duration 120
 
 .PHONY: bench.fast
-bench.fast: ## Quick benchmark without torch.compile (cold-cache friendly; n=3, 60s pool)
+bench.fast: ## Quick benchmark — compile off, n=3, 60s pool (cold-cache friendly)
 	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers $(BENCH_WORKERS) \
 		--pool-duration 60 --no-compile --n-runs 3 --pool-warmup 30
 
