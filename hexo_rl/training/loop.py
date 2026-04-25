@@ -205,11 +205,15 @@ def run_training_loop(
     if eval_pipeline is not None:
         best_model_path.parent.mkdir(parents=True, exist_ok=True)
         if best_model_path.exists():
-            # Strip sweep-variant hparams from the fallback config so that an
-            # 18-channel anchor checkpoint isn't rejected by _resolve_model_hparams
-            # when a reduced-channel sweep variant is active. The anchor's own
-            # architecture (in_channels, input_channels) is inferred from its
-            # state dict or baked config; the sweep config must not override it.
+            # Load anchor without sweep-variant architecture keys. Two paths:
+            # (a) anchor has no baked config → fallback_config is used, and
+            #     we strip in_channels/input_channels so _resolve_model_hparams
+            #     infers them from the state dict.
+            # (b) anchor has a baked config (e.g. prior sweep checkpoint was
+            #     promoted) → load_checkpoint ignores fallback_config entirely
+            #     and uses the baked config; config_overrides then scrubs the
+            #     sweep-specific keys AFTER loading so HexTacToeNet is built
+            #     from the state-dict-inferred architecture, not the sweep config.
             _anchor_fallback = {
                 k: v for k, v in config.items()
                 if k not in ("in_channels", "input_channels")
@@ -219,6 +223,7 @@ def run_training_loop(
                 checkpoint_dir=args.checkpoint_dir,
                 device=device,
                 fallback_config=_anchor_fallback,
+                config_overrides={"input_channels": None, "in_channels": None},
             )
             # Unwrap torch.compile — best_model's state_dict() is consumed
             # at multiple load_state_dict call sites below; leaving the

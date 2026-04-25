@@ -940,9 +940,11 @@ class Trainer:
 
         def _explicit(key: str) -> Optional[int]:
             if isinstance(model_cfg, dict) and key in model_cfg:
-                return int(model_cfg[key])
+                v = model_cfg[key]
+                return int(v) if v is not None else None
             if key in config:
-                return int(config[key])
+                v = config[key]
+                return int(v) if v is not None else None
             return None
 
         inferred = Trainer._infer_model_hparams(model_state)
