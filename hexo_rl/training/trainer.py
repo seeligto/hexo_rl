@@ -1076,6 +1076,11 @@ class Trainer:
             se_reduction_ratio=model_hparams.get("se_reduction_ratio", 4),
             input_channels=config.get("input_channels"),
         )
+        # If input_channels was explicitly nulled (e.g. loading a sweep checkpoint
+        # as a full-18ch anchor), strip input_channel_index from the state dict so
+        # _load_state_dict_strict doesn't reject it as an unexpected key.
+        if config.get("input_channels") is None and "input_channel_index" in model_state:
+            model_state = {k: v for k, v in model_state.items() if k != "input_channel_index"}
         cls._load_state_dict_strict(model, model_state)
 
         ckpt_dir = Path(checkpoint_dir) if checkpoint_dir else Path(checkpoint_path).parent
