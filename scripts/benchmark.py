@@ -315,6 +315,7 @@ def benchmark_worker_pool(
     bench_max_moves: int = 128,
     n_runs: int = 5,
     warmup_sec: float = 10.0,
+    skip_cuda_warmup: bool = False,
 ) -> Dict[str, Any]:
     """Measure end-to-end self-play throughput in the multiprocess pool.
 
@@ -387,7 +388,12 @@ def benchmark_worker_pool(
     # start. Without this, the first inference call triggers 90-120s of kernel
     # compilation, causing "0 games" for the entire warm-up window. Same fix
     # applied in training/loop.py (commit 79fd415).
-    if device.type == "cuda":
+    #
+    # Skipped when skip_cuda_warmup=True (compile mode): pool_model uses
+    # torch.compile(mode="default") so inductor tracing was already paid by
+    # compile_warmup() on the NN bench model (shared filesystem cache).
+    # The first InferenceServer call will be fast (<1s from cache).
+    if device.type == "cuda" and not skip_cuda_warmup:
         _board_size = int(getattr(model, "board_size", 19))
         _in_ch = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
         with torch.no_grad():
@@ -578,31 +584,30 @@ def _fmt_range(stats: dict) -> str:
 
 
 def compile_warmup(model: "HexTacToeNet", device: torch.device,
-                   in_channels: int, board_size: int) -> float:
-    """Trigger torch.compile JIT tracing + CUDA graph capture before any timing starts.
+                   in_channels: int, board_size: int,
+                   batch_sizes: tuple[int, ...] = (64, 1)) -> float:
+    """Trigger torch.compile inductor JIT tracing before any timing starts.
 
-    Runs forward passes at batch=64 and batch=1 — the two sizes benchmarked.
-    inductor tracing blocks 30-120s on a cold cache; doing it here keeps that
-    cost outside all timed windows. Mirrors the approach in training/loop.py.
+    One forward pass per batch size pays the 30-120s cold-cache inductor JIT
+    cost so it doesn't corrupt the NN inference timing window. This is called
+    on the main-thread NN bench model only; pool_model uses mode="default"
+    (no CUDA graphs) so it doesn't need warmup and is thread-safe.
 
     Returns elapsed seconds (for the warmup_note).
     """
     if device.type != "cuda":
         return 0.0
 
-    console.print("[dim]torch.compile warmup: triggering JIT tracing "
-                  "(30-120s on cold inductor cache)...[/dim]")
+    console.print("[dim]torch.compile warmup: triggering inductor JIT tracing "
+                  "(30-120s on cold cache)...[/dim]")
     t0 = time.monotonic()
 
     with torch.no_grad():
         with torch.autocast(device_type="cuda"):
-            for batch_size in (64, 1):
+            for batch_size in batch_sizes:
                 dummy = torch.zeros(batch_size, in_channels, board_size, board_size,
                                     dtype=torch.float32, device=device)
-                # reduce-overhead mode captures a CUDA graph per batch size;
-                # a handful of passes ensures graph capture completes fully.
-                for _ in range(5):
-                    model(dummy)
+                model(dummy)
     torch.cuda.synchronize()
 
     elapsed = time.monotonic() - t0
@@ -826,12 +831,31 @@ def main() -> None:
     ).to(device)
 
     _compile_elapsed = 0.0
+    pool_model = model  # default: same model used when compile is off
     if not args.no_compile:
         _compile_mode = str(config.get("torch_compile_mode", "default"))
-        model = compile_model(model, mode=_compile_mode)
         _board_size = int(model_cfg.get("board_size", config.get("board_size", 19)))
         _in_ch = int(model_cfg.get("in_channels", config.get("in_channels", 18)))
-        _compile_elapsed = compile_warmup(model, device, _in_ch, _board_size)
+
+        # NN benchmarks run in the main thread — compile with production mode.
+        model = compile_model(model, mode=_compile_mode)
+        _compile_elapsed = compile_warmup(model, device, _in_ch, _board_size,
+                                          batch_sizes=(64, 1))
+
+        # Worker pool: compile with mode="default" (no CUDA graphs) regardless
+        # of _compile_mode. reduce-overhead stores cudagraph_tree state in C++
+        # dynamic TLS (per-thread); InferenceServer's thread TLS is uninitialized
+        # → AssertionError in cudagraph_trees.get_obj → 0-ply games.
+        # "default" applies inductor kernel fusion without CUDA graph capture,
+        # safe from any thread. inductor JIT cost already paid above (shared FS
+        # cache) so InferenceServer's first call is fast (<1s).
+        _pool_base = HexTacToeNet(
+            board_size=_board_size,
+            in_channels=_in_ch,
+            filters=int(model_cfg.get("filters", config.get("filters", 128))),
+            res_blocks=int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
+        ).to(device)
+        pool_model = compile_model(_pool_base, mode="default")
 
     # Fill replay buffer with dummy data
     buffer = ReplayBuffer(capacity=100_000)
@@ -882,7 +906,7 @@ def main() -> None:
 
         with console.status(f"[bold green]Worker pool throughput (n={n_runs})..."):
             results.append(benchmark_worker_pool(
-                model=model,
+                model=pool_model,
                 config=config,
                 device=device,
                 duration_sec=args.pool_duration,
@@ -892,6 +916,7 @@ def main() -> None:
                 bench_max_moves=args.bench_max_moves,
                 n_runs=n_runs,
                 warmup_sec=warmup_worker,
+                skip_cuda_warmup=not args.no_compile,
             ))
 
         # Print per-metric summaries
