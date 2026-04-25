@@ -86,7 +86,6 @@ class InferenceServer(threading.Thread):
                     "inference_trace_compiled",
                     context="inference_server",
                     batch_size=self._batch_size,
-                    in_channels=in_channels,
                     board_size=board_size,
                 )
             except Exception as exc:  # noqa: BLE001

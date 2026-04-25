@@ -22,3 +22,9 @@ mixing:
   buffer_persist: false
 
 augment: true
+
+# Fresh-start models have high grad norm in the first ~50-100 steps; the
+# default 3.0/5-step gate is too tight. Require a sustained explosion.
+monitors:
+  hard_abort_grad_norm: 15.0
+  hard_abort_grad_norm_steps: 100
