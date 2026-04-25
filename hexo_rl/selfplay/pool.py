@@ -17,7 +17,7 @@ import structlog
 import torch
 from engine import SelfPlayRunner  # type: ignore[attr-defined]
 
-from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
 from hexo_rl.selfplay.inference_server import InferenceServer
@@ -83,7 +83,8 @@ class WorkerPool:
         sp = config.get("selfplay", config)
         self.n_workers = int(n_workers if n_workers is not None else sp.get("n_workers", 1))
         board_size = int(getattr(model, "board_size", 19))
-        in_channels = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
+        # Rust workers always produce WIRE_CHANNELS (18) planes; in_channels only
+        # affects the model trunk after index_select inside model.forward().
 
         mcts_cfg = config.get("mcts", config)
         self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
@@ -129,7 +130,7 @@ class WorkerPool:
             leaf_batch_size=leaf_batch_size,
             c_puct=self.c_puct,
             fpu_reduction=self.fpu_reduction,
-            feature_len=in_channels * board_size * board_size,
+            feature_len=WIRE_CHANNELS * board_size * board_size,
             policy_len=board_size * board_size + 1,
             fast_prob=float(pc.get("fast_prob", 0.0)),
             fast_sims=int(pc["fast_sims"]),
@@ -187,7 +188,7 @@ class WorkerPool:
         self.recent_buffer: Optional[Any] = None
 
         self._board_size = board_size
-        self._feat_len = in_channels * board_size * board_size  # 18*19*19 = 6498 for 18-plane layout
+        self._feat_len = WIRE_CHANNELS * board_size * board_size  # 18*19*19 = 6498
         self._pol_len = board_size * board_size + 1              # e.g. 19*19+1 = 362
         self._chain_len = 6 * board_size * board_size            # 6*19*19 = 2166
 

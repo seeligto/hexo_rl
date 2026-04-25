@@ -100,6 +100,7 @@ def run_training_loop(
     filters            = int(trainer.config.get("filters",            128))
     in_channels        = int(trainer.config.get("in_channels",        18))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
+    input_channels     = trainer.config.get("input_channels", None)
 
     _torch_compile_enabled = (
         trainer.config.get("torch_compile", False) and device.type == "cuda"
@@ -107,6 +108,7 @@ def run_training_loop(
     inf_model = HexTacToeNet(
         board_size=board_size,
         in_channels=in_channels,
+        input_channels=input_channels,
         res_blocks=res_blocks,
         filters=filters,
         se_reduction_ratio=se_reduction_ratio,
@@ -139,7 +141,10 @@ def run_training_loop(
         _t_warmup = time.time()
         with torch.no_grad():
             with torch.autocast(device_type="cuda"):
-                _dummy = torch.zeros(1, in_channels, board_size, board_size, device=device)
+                # Warmup input must be wire-format width (18 planes) — model
+                # slices to in_channels internally via index_select.
+                from hexo_rl.model.network import WIRE_CHANNELS as _WIRE_CH
+                _dummy = torch.zeros(1, _WIRE_CH, board_size, board_size, device=device)
                 inf_model(_dummy)
         torch.cuda.synchronize()
         log.info("cuda_warmup_done", elapsed_sec=round(time.time() - _t_warmup, 1))
@@ -200,11 +205,20 @@ def run_training_loop(
     if eval_pipeline is not None:
         best_model_path.parent.mkdir(parents=True, exist_ok=True)
         if best_model_path.exists():
+            # Strip sweep-variant hparams from the fallback config so that an
+            # 18-channel anchor checkpoint isn't rejected by _resolve_model_hparams
+            # when a reduced-channel sweep variant is active. The anchor's own
+            # architecture (in_channels, input_channels) is inferred from its
+            # state dict or baked config; the sweep config must not override it.
+            _anchor_fallback = {
+                k: v for k, v in config.items()
+                if k not in ("in_channels", "input_channels")
+            }
             best_ref = Trainer.load_checkpoint(
                 best_model_path,
                 checkpoint_dir=args.checkpoint_dir,
                 device=device,
-                fallback_config=config,
+                fallback_config=_anchor_fallback,
             )
             # Unwrap torch.compile — best_model's state_dict() is consumed
             # at multiple load_state_dict call sites below; leaving the
@@ -214,9 +228,20 @@ def run_training_loop(
             best_model.eval()
             best_model_step = best_ref.step
             # Graduation gate: self-play consumes anchor weights, not trainer.model.
-            # Sync inf_model to the loaded anchor before workers start.
+            # Sync inf_model to the loaded anchor before workers start — but only
+            # when architectures match. Sweep variants train a reduced-channel model
+            # against an 18-channel anchor; syncing architectures is impossible and
+            # wrong (sweep inf_model should start from trainer.model, not the anchor).
             _inf_base = getattr(inf_model, "_orig_mod", inf_model)
-            _inf_base.load_state_dict(best_model.state_dict())
+            if _inf_base.in_channels == best_model.in_channels:
+                _inf_base.load_state_dict(best_model.state_dict())
+            else:
+                log.info(
+                    "inf_model_anchor_arch_mismatch_skip_sync",
+                    inf_in_channels=_inf_base.in_channels,
+                    anchor_in_channels=best_model.in_channels,
+                    msg="inf_model starts from trainer.model (sweep variant)",
+                )
             log.info("best_model_loaded", path=str(best_model_path), step=best_model_step)
             # M2: warn if resumed trainer.model and loaded anchor diverge on step.
             # Either side may legitimately be ahead (anchor rollback, or training
@@ -237,7 +262,8 @@ def run_training_loop(
             base_model = getattr(trainer.model, "_orig_mod", trainer.model)
             best_model = HexTacToeNet(
                 board_size=board_size, res_blocks=res_blocks, filters=filters,
-                in_channels=in_channels, se_reduction_ratio=se_reduction_ratio,
+                in_channels=in_channels, input_channels=input_channels,
+                se_reduction_ratio=se_reduction_ratio,
             ).to(device)
             best_model.load_state_dict(base_model.state_dict())
             best_model.eval()
@@ -260,7 +286,8 @@ def run_training_loop(
     if eval_pipeline is not None:
         eval_model = HexTacToeNet(
             board_size=board_size, res_blocks=res_blocks, filters=filters,
-            in_channels=in_channels, se_reduction_ratio=se_reduction_ratio,
+            in_channels=in_channels, input_channels=input_channels,
+            se_reduction_ratio=se_reduction_ratio,
         ).to(device)
         eval_model.eval()
 

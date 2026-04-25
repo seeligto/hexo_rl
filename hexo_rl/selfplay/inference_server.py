@@ -17,7 +17,7 @@ import torch
 import structlog
 
 from engine import InferenceBatcher  # type: ignore[attr-defined]
-from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 
 # Perf probes log via structlog so they persist to JSONL independent of dashboards.
 _perf_log = structlog.get_logger()
@@ -45,10 +45,13 @@ class InferenceServer(threading.Thread):
         self._max_wait_ms = int(float(sp.get("inference_max_wait_ms", 10.0)))
 
         board_size = int(getattr(model, "board_size", 19))
-        in_channels = int(config.get("in_channels", config.get("model", {}).get("in_channels", 18)))
         self._policy_len = board_size * board_size + 1
-        self._feature_len = in_channels * board_size * board_size
-        self._shape = (in_channels, board_size, board_size)
+        # Rust workers always emit WIRE_CHANNELS (18) planes — the Rust replay
+        # buffer is hardcoded to N_PLANES=18. Channel reduction happens inside
+        # model.forward() via index_select, so the InferenceBatcher and the
+        # H2D reshape must use the wire-format width, not the model's trunk width.
+        self._feature_len = WIRE_CHANNELS * board_size * board_size
+        self._shape = (WIRE_CHANNELS, board_size, board_size)
 
         self._batcher = batcher or InferenceBatcher(
             feature_len=self._feature_len,
@@ -99,7 +102,7 @@ class InferenceServer(threading.Thread):
         # Enables DMA engine copy on CUDA (non_blocking=True); no-op on CPU.
         if self.device.type == "cuda":
             self._h2d_staging = torch.empty(
-                (self._batch_size, in_channels, board_size, board_size),
+                (self._batch_size, WIRE_CHANNELS, board_size, board_size),
                 dtype=torch.float32,
                 pin_memory=True,
             )
