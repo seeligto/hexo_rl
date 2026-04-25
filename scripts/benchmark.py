@@ -847,8 +847,13 @@ def main() -> None:
         # dynamic TLS (per-thread); InferenceServer's thread TLS is uninitialized
         # → AssertionError in cudagraph_trees.get_obj → 0-ply games.
         # "default" applies inductor kernel fusion without CUDA graph capture,
-        # safe from any thread. inductor JIT cost already paid above (shared FS
-        # cache) so InferenceServer's first call is fast (<1s).
+        # safe to call from any thread including InferenceServer.
+        #
+        # JIT warmup must be done HERE (main thread) — reduce-overhead and
+        # default modes produce different compiled artifacts (different cache
+        # keys), so model's compile_warmup above does NOT pay pool_model's cost.
+        # Without this warmup, pool_model's first InferenceServer call triggers
+        # ~90s of JIT inside the pool warmup window → 0 games for 90s → huge IQR.
         _pool_base = HexTacToeNet(
             board_size=_board_size,
             in_channels=_in_ch,
@@ -856,6 +861,8 @@ def main() -> None:
             res_blocks=int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
         ).to(device)
         pool_model = compile_model(_pool_base, mode="default")
+        _compile_elapsed += compile_warmup(pool_model, device, _in_ch, _board_size,
+                                           batch_sizes=(64, 1))
 
     # Fill replay buffer with dummy data
     buffer = ReplayBuffer(capacity=100_000)
