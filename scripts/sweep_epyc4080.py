@@ -60,6 +60,13 @@ def write_override(cell: dict) -> Path:
     sp.append("    n_sims_quick: 0")
     sp.append("    n_sims_full: 0")
     sp.append("  random_opening_plies: 0")
+    # Enable torch.compile for the sweep (reflects production training).
+    # MUST be mode="default" — selfplay workers dispatch through
+    # InferenceServer's background thread, where reduce-overhead's
+    # per-thread CUDA-graph TLS is uninitialized and deadlocks.
+    # See memory: feedback_torch_compile_threading.md
+    sp.append("torch_compile: true")
+    sp.append("torch_compile_mode: default")
     if "n_workers" in cell:
         sp.append(f"  n_workers: {cell['n_workers']}")
     if "inference_batch_size" in cell:
@@ -323,11 +330,11 @@ def main() -> None:
     p.add_argument("--n-runs", type=int, default=5,
                    help="bench reps per cell (default 5, was 2 — "
                         "n=2 produced bimodal cells on the first sweep)")
-    p.add_argument("--no-compile", action="store_true", default=True,
-                   help="skip torch.compile per cell (default True; "
-                        "compile cold-start races warmup)")
-    p.add_argument("--compile", dest="no_compile", action="store_false",
-                   help="enable torch.compile (warm .torchinductor-cache required)")
+    # torch.compile defaults to ON now that the threading fix landed.
+    # The YAML override forces mode="default" (reduce-overhead deadlocks
+    # against InferenceServer's background thread).
+    p.add_argument("--no-compile", action="store_true", default=False,
+                   help="skip torch.compile per cell (default: compile ON)")
 
     # Tighter ranges based on first-sweep findings:
     #   workers >= 24 produced bimodal startup races on EPYC 7702;

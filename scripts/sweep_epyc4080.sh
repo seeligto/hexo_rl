@@ -19,9 +19,12 @@
 # Environment knobs:
 #   POOL_DURATION (default 180) - seconds per bench rep
 #   N_RUNS        (default 5)   - bench reps per cell
-#   NO_COMPILE    (default 1)   - skip torch.compile per cell; set to 0 only
-#                                 with a warm .torchinductor-cache (cold JIT
-#                                 takes 30-120s, blowing warmup window)
+#   NO_COMPILE    (default 0)   - skip torch.compile per cell. Default OFF
+#                                 because the threading fix landed (per memory
+#                                 feedback_torch_compile_threading.md). Sweep
+#                                 forces mode="default" via YAML override —
+#                                 reduce-overhead deadlocks vs InferenceServer.
+#                                 Set NO_COMPILE=1 to skip compile entirely.
 #   WORKER_GRID   (default "12 16 20 24")
 #   BATCH_GRID    (default "64 128 192")
 #   WAIT_GRID     (default "2.0 4.0 8.0")
@@ -41,7 +44,7 @@ LEAF_GRID="${LEAF_GRID:-8 16}"
 BURST_GRID="${BURST_GRID:-8 16 32}"
 
 NO_COMPILE_FLAG=""
-if [[ "${NO_COMPILE:-1}" != "0" ]]; then
+if [[ "${NO_COMPILE:-0}" != "0" ]]; then
   NO_COMPILE_FLAG="--no-compile"
 fi
 
