@@ -15,6 +15,10 @@
 #   --upload-hf <repo_id>                           # push to Hugging Face Hub (dataset repo)
 #                                                   # e.g. --upload-hf user/hexo-sweep-122
 #
+# Hardware overlay (optional, no default — omit for local desktop):
+#   --hw-overlay gumbel_targets_epyc4080   # layer hardware config on each variant
+#                                          # sets n_workers/batch_size for the box
+#
 # Box lifecycle (opt-in, NOT default):
 #   --shutdown   # poweroff after success. Requires that EITHER --archive-dir
 #                # OR --upload-hf has succeeded — refuses to power off if no
@@ -40,6 +44,7 @@ ARCHIVE_DIR=""
 UPLOAD_HF=""
 SHUTDOWN=0
 RESUME=0
+HW_OVERLAY=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,9 +57,10 @@ while [[ $# -gt 0 ]]; do
     --shutdown)       SHUTDOWN=1 ;;
     --archive-dir)    shift; ARCHIVE_DIR="$1" ;;
     --upload-hf)      shift; UPLOAD_HF="$1" ;;
+    --hw-overlay)     shift; HW_OVERLAY="$1" ;;
     --venv)           shift; VENV_PY="$1" ;;
     -h|--help)
-      sed -n '2,28p' "$0"
+      sed -n '2,32p' "$0"
       exit 0
       ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
@@ -126,16 +132,22 @@ else
   echo "==[ skip corpus regen ]=="
 fi
 
+_HW_OVERLAY_ARG=()
+if [[ -n "$HW_OVERLAY" ]]; then
+  _HW_OVERLAY_ARG=(--hw-overlay "$HW_OVERLAY")
+  echo "==[ hw overlay: $HW_OVERLAY ]=="
+fi
+
 if [[ "$SKIP_PHASE1" -eq 0 ]]; then
   echo "==[ phase 1 — 6 variants × 2,500 steps ]=="
-  "$VENV_PY" scripts/run_sweep.py --phase 1
+  "$VENV_PY" scripts/run_sweep.py --phase 1 "${_HW_OVERLAY_ARG[@]}"
 else
   echo "==[ skip phase 1 ]=="
 fi
 
 if [[ "$SKIP_PHASE2" -eq 0 ]]; then
   echo "==[ phase 2 — survivors → 10,000 steps ]=="
-  "$VENV_PY" scripts/run_sweep.py --phase 2
+  "$VENV_PY" scripts/run_sweep.py --phase 2 "${_HW_OVERLAY_ARG[@]}"
 else
   echo "==[ skip phase 2 ]=="
 fi

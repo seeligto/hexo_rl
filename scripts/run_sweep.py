@@ -191,6 +191,7 @@ def launch_train(
     target_steps: int,
     resume_checkpoint: Optional[Path],
     extra_overrides: Optional[Dict[str, Any]] = None,
+    hw_overlay: Optional[str] = None,
     log_dir: Path,
     checkpoint_dir: Path,
     dry_run: bool = False,
@@ -201,6 +202,18 @@ def launch_train(
 
     cmd = [
         PYTHON, str(REPO_ROOT / "scripts" / "train.py"),
+    ]
+    # Hardware overlay sits between base configs and the variant so it can set
+    # n_workers / batch_size etc. without clobbering sweep-specific keys
+    # (input_channels, seed, total_steps).  Load order: base → --config → --variant.
+    if hw_overlay:
+        overlay_path = REPO_ROOT / "configs" / "variants" / f"{hw_overlay}.yaml"
+        if not overlay_path.exists():
+            print(f"WARNING: hw_overlay '{hw_overlay}' not found at {overlay_path}; ignored",
+                  file=sys.stderr)
+        else:
+            cmd += ["--config", str(overlay_path)]
+    cmd += [
         "--variant", variant,
         "--checkpoint-dir", str(checkpoint_dir),
         "--log-dir", str(log_dir),
@@ -332,6 +345,7 @@ def run_phase_1(
     variants: List[str],
     *,
     state: SweepState,
+    hw_overlay: Optional[str] = None,
     dry_run: bool,
 ) -> None:
     print(f"\n=== PHASE 1: {len(variants)} variants × {PHASE1_STEPS} steps ===")
@@ -347,6 +361,7 @@ def run_phase_1(
             v,
             target_steps=PHASE1_STEPS,
             resume_checkpoint=None,
+            hw_overlay=hw_overlay,
             log_dir=LOGS_ROOT / v,
             checkpoint_dir=variant_ckpt_dir(v),
             dry_run=dry_run,
@@ -393,6 +408,7 @@ def run_phase_2(
     *,
     state: SweepState,
     anchor_metric_key: str,
+    hw_overlay: Optional[str] = None,
     dry_run: bool,
 ) -> None:
     survivors = select_phase2(state, anchor_metric_key=anchor_metric_key)
@@ -420,6 +436,7 @@ def run_phase_2(
             v,
             target_steps=PHASE2_STEPS,
             resume_checkpoint=latest[1],
+            hw_overlay=hw_overlay,
             log_dir=LOGS_ROOT / v,
             checkpoint_dir=variant_ckpt_dir(v),
             dry_run=dry_run,
@@ -494,6 +511,10 @@ def main() -> int:
                    help="Metric key produced by eval_pipeline carrying WR vs anchor")
     p.add_argument("--dry-run", action="store_true",
                    help="Print plan without launching subprocesses")
+    p.add_argument("--hw-overlay", default=None, metavar="VARIANT_STEM",
+                   help="Hardware config to layer between base configs and each sweep variant "
+                        "(e.g. gumbel_targets_epyc4080). Sets n_workers, batch_size, etc. "
+                        "for the target box without touching sweep-specific keys.")
     args = p.parse_args()
 
     LOGS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -510,9 +531,10 @@ def main() -> int:
     anchor = resolve_anchor(args.anchor_checkpoint)
 
     if args.phase in ("1", "all"):
-        run_phase_1(variants, state=state, dry_run=args.dry_run)
+        run_phase_1(variants, state=state, hw_overlay=args.hw_overlay, dry_run=args.dry_run)
     if args.phase in ("2", "all"):
-        run_phase_2(state=state, anchor_metric_key=args.anchor_metric_key, dry_run=args.dry_run)
+        run_phase_2(state=state, anchor_metric_key=args.anchor_metric_key,
+                    hw_overlay=args.hw_overlay, dry_run=args.dry_run)
     if args.phase in ("3", "all"):
         rc = run_phase_3(state=state, anchor_checkpoint=anchor, dry_run=args.dry_run)
         if rc != 0:
