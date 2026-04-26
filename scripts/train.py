@@ -30,6 +30,23 @@ import numpy as np
 import structlog
 import torch
 
+# ── Cap PyTorch inter-op thread count to match the cgroup allocation ─────────
+# PyTorch reads `OMP_NUM_THREADS` for intra-op threads but has no env hook for
+# inter-op (`torch.get_num_interop_threads()` defaults to host nproc). On a
+# rented vast.ai container with N threads allocated out of a 128-thread host,
+# the default is 128 — 3-4x oversubscription against the cgroup, manifesting
+# as 100% CPU saturation, 60% GPU util, and self-play workers starved of
+# inference dispatches. set_num_interop_threads must run BEFORE any parallel
+# torch work; doing it here keeps a single import-time call site.
+# Honoured precedence: TORCH_INTEROP_THREADS > OMP_NUM_THREADS > leave default.
+_interop = int(os.environ.get("TORCH_INTEROP_THREADS", os.environ.get("OMP_NUM_THREADS", "0")))
+if _interop > 0:
+    try:
+        torch.set_num_interop_threads(_interop)
+    except RuntimeError:
+        # Already set by an earlier import that touched the parallel runtime.
+        pass
+
 # ── Ensure project root is on sys.path when run as a script ──────────────────
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
