@@ -40,6 +40,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -63,9 +64,42 @@ ALL_VARIANTS = (
     "sweep_8ch",
     "sweep_18ch",
 )
-PHASE1_STEPS = 2500
+PHASE1_STEPS = 1500            # was 2500. Sweep selects on policy-CE slope, not
+                                # absolute strength; 1500 captures the early-train
+                                # discriminator. Override with --phase1-steps.
 PHASE2_STEPS = 10000
 ANCHOR_VARIANT = "sweep_18ch"  # always carried into phase 2 + tournament
+
+# ── Triage gate (§122 wave 2026-04-26) ─────────────────────────────────────
+# After PHASE1_TRIAGE_WINDOW_SEC each phase-1 variant is checked against:
+#
+#   1. did it reach at least PHASE1_TRIAGE_MIN_STEP in the window?
+#      → catches "process is alive but step counter is stuck" (hung pool,
+#        deadlocked inference server, etc.).
+#   2. is its latest policy_ce below the per-variant threshold?
+#      → catches catastrophic divergence (NaN, gradient blowup → CE drifts
+#        ABOVE uniform 5.89).
+#
+# The thresholds are *deliberately* near-uniform: the experiment's whole
+# point is to detect channel-adequacy signal from narrow inputs, where the
+# expected trajectory is slow CE descent over hundreds of steps. An empirical
+# laptop run on sweep_2ch sat at 5.86 at step 168 — only ~0.03 below
+# uniform — and was still legitimately learning. Setting a tight threshold
+# here would kill exactly the "real signal from minimal inputs" we want to
+# observe. Triage fires only on "policy went UP from uniform" (clear failure)
+# or "process hung" (didn't reach min_step).
+PHASE1_TRIAGE_WINDOW_SEC = 1200
+PHASE1_TRIAGE_MIN_STEP = 100
+PHASE1_TRIAGE_MAX_POLICY_CE_DEFAULT = 5.95  # uniform + small margin = catches divergence only
+PER_VARIANT_TRIAGE_MAX_POLICY_CE: Dict[str, float] = {
+    # No per-variant overrides currently — the default 5.95 is conservative
+    # enough for every variant. Add entries here only if a specific channel
+    # set demonstrably requires a different ceiling.
+}
+
+
+def triage_policy_ce_gate_for(variant: str) -> float:
+    return PER_VARIANT_TRIAGE_MAX_POLICY_CE.get(variant, PHASE1_TRIAGE_MAX_POLICY_CE_DEFAULT)
 
 # Each variant YAML pins seed: 12200 — controls Python-side stochasticity
 # (model init, batch sampling, augmentation indices). Rust self-play workers
@@ -185,6 +219,42 @@ def latest_checkpoint(variant: str) -> Optional[Tuple[int, Path]]:
 
 # ── Train.py invocation ────────────────────────────────────────────────────
 
+TRIAGE_FAIL_RC = 88  # internal sentinel: subprocess killed by triage gate.
+
+
+def _read_latest_policy_ce(log_path: Path) -> Tuple[Optional[int], Optional[float]]:
+    """Tail the variant's structlog jsonl and return the latest (step, policy_ce).
+
+    Reads only train_step / train_step_summary records and returns the highest
+    step that carries a policy_ce / policy_loss field. Returns (None, None) if
+    the file is missing or no qualifying record has been written yet. Tolerant
+    of partial JSON lines (training is still writing); malformed records are
+    skipped.
+    """
+    if not log_path.exists():
+        return None, None
+    last_step: Optional[int] = None
+    last_ce: Optional[float] = None
+    try:
+        with log_path.open() as f:
+            for line in f:
+                if '"train_step"' not in line and '"train_step_summary"' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                step = rec.get("step")
+                ce = rec.get("policy_ce", rec.get("policy_loss"))
+                if isinstance(step, int) and ce is not None:
+                    if last_step is None or step >= last_step:
+                        last_step = step
+                        last_ce = float(ce)
+    except OSError:
+        return last_step, last_ce
+    return last_step, last_ce
+
+
 def launch_train(
     variant: str,
     *,
@@ -195,8 +265,19 @@ def launch_train(
     log_dir: Path,
     checkpoint_dir: Path,
     dry_run: bool = False,
+    triage_window_sec: int = PHASE1_TRIAGE_WINDOW_SEC,
+    triage_min_step: int = PHASE1_TRIAGE_MIN_STEP,
+    triage_max_policy_ce: Optional[float] = None,
 ) -> int:
-    """Run scripts/train.py for one variant; return exit code (0 = success)."""
+    """Run scripts/train.py for one variant; return exit code (0 = success).
+
+    Triage gate: after ``triage_window_sec`` seconds, if the variant has
+    reached at least ``triage_min_step`` and its latest policy_ce exceeds
+    ``triage_max_policy_ce``, the subprocess is killed (SIGINT then SIGTERM
+    after a 30 s grace) and ``TRIAGE_FAIL_RC`` is returned. Pass
+    ``triage_max_policy_ce=None`` to disable triage (used for phase 2 and
+    any other call site that already has a stable model).
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -213,11 +294,12 @@ def launch_train(
                   file=sys.stderr)
         else:
             cmd += ["--config", str(overlay_path)]
+    run_name = f"{variant}_target{target_steps}"
     cmd += [
         "--variant", variant,
         "--checkpoint-dir", str(checkpoint_dir),
         "--log-dir", str(log_dir),
-        "--run-name", f"{variant}_target{target_steps}",
+        "--run-name", run_name,
         "--iterations", str(target_steps),
         "--no-dashboard",
     ]
@@ -232,9 +314,6 @@ def launch_train(
             "--allow-fresh-scheduler",
         ]
 
-    # Sweep abort gates (configurable via training.yaml monitoring keys; we
-    # fan out the §122 brief's thresholds here so each variant is judged
-    # against the same bar).
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
 
@@ -242,15 +321,78 @@ def launch_train(
     if dry_run:
         return 0
 
+    log_path = log_dir / f"{run_name}.jsonl"
+    triage_enabled = triage_max_policy_ce is not None and triage_window_sec > 0
+    if triage_enabled:
+        print(f"[{variant}] triage gate: kill if step >= {triage_min_step} "
+              f"and policy_ce > {triage_max_policy_ce} after {triage_window_sec}s")
+    else:
+        print(f"[{variant}] triage gate: disabled")
+
     t0 = time.time()
+    triage_done = False
     try:
-        result = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env, check=False)
+        proc = subprocess.Popen(cmd, cwd=str(REPO_ROOT), env=env)
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                elapsed = time.time() - t0
+                print(f"[{variant}] exit={rc} elapsed={elapsed:.1f}s")
+                return rc
+
+            if triage_enabled and not triage_done and (time.time() - t0) >= triage_window_sec:
+                step, ce = _read_latest_policy_ce(log_path)
+                if step is None or step < triage_min_step:
+                    print(f"[{variant}] triage FAIL: only reached step {step!r} "
+                          f"in {triage_window_sec}s (need >= {triage_min_step}). "
+                          f"Killing.", file=sys.stderr)
+                    _terminate_subprocess(proc, variant)
+                    return TRIAGE_FAIL_RC
+                if ce is not None and ce > triage_max_policy_ce:
+                    print(f"[{variant}] triage FAIL: step {step}, policy_ce={ce:.4f} "
+                          f"> threshold {triage_max_policy_ce}. "
+                          f"Channel set looks unable to extract signal. Killing.",
+                          file=sys.stderr)
+                    _terminate_subprocess(proc, variant)
+                    return TRIAGE_FAIL_RC
+                ce_str = f"{ce:.4f}" if ce is not None else "?"
+                print(f"[{variant}] triage PASS: step {step}, policy_ce={ce_str}")
+                triage_done = True
+
+            time.sleep(15)
     except KeyboardInterrupt:
         print(f"[{variant}] interrupted")
+        try:
+            proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=30)
+        except Exception:
+            pass
         raise
-    elapsed = time.time() - t0
-    print(f"[{variant}] exit={result.returncode} elapsed={elapsed:.1f}s")
-    return result.returncode
+
+
+def _terminate_subprocess(proc: "subprocess.Popen", variant: str) -> None:
+    """Send SIGINT, wait 30 s, escalate to SIGTERM, then SIGKILL as last resort."""
+    try:
+        proc.send_signal(signal.SIGINT)
+        proc.wait(timeout=30)
+        return
+    except subprocess.TimeoutExpired:
+        print(f"[{variant}] SIGINT not honoured in 30s; SIGTERM", file=sys.stderr)
+    except Exception:
+        pass
+    try:
+        proc.terminate()
+        proc.wait(timeout=10)
+        return
+    except subprocess.TimeoutExpired:
+        print(f"[{variant}] SIGTERM not honoured in 10s; SIGKILL", file=sys.stderr)
+    except Exception:
+        pass
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except Exception:
+        pass
 
 
 # ── Variant log parsing ────────────────────────────────────────────────────
@@ -355,6 +497,8 @@ def run_phase_1(
     state: SweepState,
     hw_overlay: Optional[str] = None,
     init_checkpoint: Optional[Path] = None,
+    triage_window_sec: int = PHASE1_TRIAGE_WINDOW_SEC,
+    triage_min_step: int = PHASE1_TRIAGE_MIN_STEP,
     dry_run: bool,
 ) -> None:
     print(f"\n=== PHASE 1: {len(variants)} variants × {PHASE1_STEPS} steps ===")
@@ -369,6 +513,7 @@ def run_phase_1(
             save_state(state)
             continue
 
+        triage_ce = triage_policy_ce_gate_for(v)
         rc = launch_train(
             v,
             target_steps=PHASE1_STEPS,
@@ -377,8 +522,17 @@ def run_phase_1(
             log_dir=LOGS_ROOT / v,
             checkpoint_dir=variant_ckpt_dir(v),
             dry_run=dry_run,
+            triage_window_sec=triage_window_sec,
+            triage_min_step=triage_min_step,
+            triage_max_policy_ce=triage_ce,
         )
-        if rc == 0 and is_phase1_done(v):
+        if rc == TRIAGE_FAIL_RC:
+            vs.phase1_failed = (
+                f"triage_failed (window={triage_window_sec}s "
+                f"min_step={triage_min_step} max_policy_ce={triage_ce})"
+            )
+            print(f"[{v}] phase 1 FAILED: {vs.phase1_failed}", file=sys.stderr)
+        elif rc == 0 and is_phase1_done(v):
             vs.phase1_complete = True
             metrics_at_step = parse_eval_metrics(v).get(PHASE1_STEPS, {})
             vs.phase1_metrics = dict(metrics_at_step)
@@ -391,21 +545,40 @@ def run_phase_1(
 
 
 def select_phase2(state: SweepState, *, anchor_metric_key: str) -> List[str]:
-    """Pick top 3 variants by WR vs anchor at step PHASE1_STEPS, with policy CE
-    < 4.0. Always include sweep_18ch."""
-    candidates: List[Tuple[str, float]] = []
+    """Pick top 3 variants for phase 2.
+
+    With reduced PHASE1_STEPS (1500) and random-init phase 1, absolute play
+    strength via wr_best is barely measurable — every variant is still weak.
+    Policy-CE slope (rate of policy entropy collapse) is the channel-adequacy
+    signal we actually want: variants whose policy CE drops further by the
+    end of phase 1 have extracted more signal from their input planes.
+
+    Selection priority (high → low):
+      1. Lower policy_ce at PHASE1_STEPS (primary).
+      2. If a wr-vs-anchor metric IS present, use it as a tiebreaker.
+
+    sweep_18ch is always included (reference baseline) when its phase 1
+    completed successfully.
+    """
+    candidates: List[Tuple[str, float, Optional[float]]] = []
     for name, vs in state.variants.items():
         if not vs.phase1_complete:
             continue
-        wr = vs.phase1_metrics.get(anchor_metric_key)
         ce = vs.phase1_metrics.get("policy_ce", vs.phase1_metrics.get("policy_loss"))
-        if wr is None or ce is None or ce >= 4.0:
+        wr = vs.phase1_metrics.get(anchor_metric_key)
+        if ce is None:
             continue
-        candidates.append((name, wr))
+        # Loose upper bound: a variant still > 5.7 at PHASE1_STEPS hasn't
+        # learned anything useful even by the end of phase 1.
+        if ce >= 5.7:
+            continue
+        candidates.append((name, float(ce), float(wr) if wr is not None else None))
 
-    candidates.sort(key=lambda t: t[1], reverse=True)
-    top3 = [name for name, _ in candidates[:3]]
-    if ANCHOR_VARIANT not in top3 and state.variants.get(ANCHOR_VARIANT, VariantState(name=ANCHOR_VARIANT)).phase1_complete:
+    # Sort: lower CE first; if equal, higher wr first (None < anything).
+    candidates.sort(key=lambda t: (t[1], -(t[2] if t[2] is not None else -1.0)))
+    top3 = [name for name, _, _ in candidates[:3]]
+    if (ANCHOR_VARIANT not in top3
+            and state.variants.get(ANCHOR_VARIANT, VariantState(name=ANCHOR_VARIANT)).phase1_complete):
         top3.append(ANCHOR_VARIANT)
     return top3
 
@@ -535,6 +708,16 @@ def main() -> int:
                    help="Hardware config to layer between base configs and each sweep variant "
                         "(e.g. gumbel_targets_epyc4080). Sets n_workers, batch_size, etc. "
                         "for the target box without touching sweep-specific keys.")
+    p.add_argument("--phase1-triage-window-sec", type=int, default=PHASE1_TRIAGE_WINDOW_SEC,
+                   help="Phase 1 triage window in seconds (default: 1200 = 20 min). "
+                        "After this window each variant is checked for catastrophic "
+                        "failure; survivors continue training to PHASE1_STEPS.")
+    p.add_argument("--phase1-triage-min-step", type=int, default=PHASE1_TRIAGE_MIN_STEP,
+                   help="Phase 1 triage minimum step (default: 100). A variant that "
+                        "hasn't reached this step within the triage window is killed "
+                        "as 'process hung'.")
+    p.add_argument("--no-triage", action="store_true",
+                   help="Disable phase 1 triage gate entirely (no kill-on-CE).")
     args = p.parse_args()
 
     LOGS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -568,7 +751,10 @@ def main() -> int:
         )
         run_phase_1(
             variants, state=state, hw_overlay=args.hw_overlay,
-            init_checkpoint=init_ckpt, dry_run=args.dry_run,
+            init_checkpoint=init_ckpt,
+            triage_window_sec=(0 if args.no_triage else args.phase1_triage_window_sec),
+            triage_min_step=args.phase1_triage_min_step,
+            dry_run=args.dry_run,
         )
     if args.phase in ("2", "all"):
         run_phase_2(state=state, anchor_metric_key=args.anchor_metric_key,
