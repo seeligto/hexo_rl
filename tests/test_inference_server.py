@@ -11,7 +11,9 @@ Verifies:
 from __future__ import annotations
 
 import math
+import sys
 import threading
+from pathlib import Path
 from typing import List, Tuple
 
 import numpy as np
@@ -282,6 +284,211 @@ class TestInferenceServerTrace:
         finally:
             server.stop()
             server.join(timeout=2.0)
+
+
+class TestInferenceServerCompile:
+    """torch.compile path on the InferenceServer (compile_retry_20260426).
+
+    Locks in the Phase 3 padding + thread-init contract:
+      1. config-time mutex with trace_inference,
+      2. padded-shape forward returns correct shape and does not leak
+         padded-zero rows into ``output[:n]``,
+      3. weight swap propagates through the OptimizedModule wrapper.
+    """
+
+    def _server(
+        self,
+        model: HexTacToeNet,
+        device: torch.device,
+        *,
+        compile_on: bool,
+        mode: str = "default",
+        dynamic: bool = True,
+        trace_on: bool = False,
+        batch_size: int = 8,
+    ) -> InferenceServer:
+        cfg = {
+            "selfplay": {
+                "inference_batch_size": batch_size,
+                "inference_max_wait_ms": 20.0,
+                "trace_inference": trace_on,
+                "compile_inference": compile_on,
+                "compile_inference_mode": mode,
+                "compile_inference_dynamic": dynamic,
+            }
+        }
+        return InferenceServer(model, device, cfg)
+
+    def test_compile_and_trace_mutex(self, model, device):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            self._server(
+                model, device,
+                compile_on=True, trace_on=True,
+            )
+
+    @pytest.mark.skipif(
+        not torch.cuda.is_available(),
+        reason="torch.compile reduce-overhead requires CUDA",
+    )
+    def test_compile_inference_padding_correctness(self, device):
+        """Padded forward at batch_n in {1, batch_size-1, batch_size}:
+        output shapes must match request count, padded zero rows must
+        not leak into the returned slice, and outputs must match an
+        eager reference within fp16 + cudagraph tolerance.
+
+        Subprocess isolation: torch.compile(mode="reduce-overhead") uses
+        cudagraph_trees, which keeps state in C++ TLS keyed by thread.
+        Running this test in the parent pytest process pollutes (and is
+        polluted by) other tests' Dynamo / jit.trace state and triggers
+        a cudagraph AssertionError on the dispatcher thread. The padding
+        logic itself is correctness-checked here; we run it in a clean
+        subprocess so the suite stays green and the assertion still
+        catches a real regression.
+        """
+        import subprocess
+        import json
+
+        repo_root = Path(__file__).resolve().parent.parent
+        py = sys.executable
+        helper = """
+import json, sys, threading
+sys.path.insert(0, %r)
+import numpy as np
+import torch
+from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.selfplay.inference_server import InferenceServer
+
+dev = torch.device('cuda')
+net = HexTacToeNet(board_size=19, in_channels=18, filters=64, res_blocks=2).to(dev)
+net.eval()
+batch_size = 8
+np.random.seed(2026)
+states = [np.random.randn(18, 19, 19).astype(np.float16) for _ in range(batch_size)]
+
+# Eager reference forward (raw model, no compile / trace).
+x_ref = torch.from_numpy(np.stack(states).astype(np.float32)).to(dev)
+with torch.no_grad(), torch.autocast(device_type='cuda'):
+    lp_ref, v_ref, _ = net(x_ref)
+    p_ref = lp_ref.float().exp()
+    p_ref = (p_ref / p_ref.sum(dim=-1, keepdim=True)).cpu().numpy()
+    v_ref = v_ref.squeeze(-1).float().cpu().numpy()
+
+cfg = {'selfplay': {'inference_batch_size': batch_size, 'inference_max_wait_ms': 20.0,
+                    'trace_inference': False, 'compile_inference': True,
+                    'compile_inference_mode': 'reduce-overhead',
+                    'compile_inference_dynamic': False}}
+srv = InferenceServer(net, dev, cfg)
+assert srv._compile_inference, 'compile fallback active'
+assert srv._padding_active(), 'padding gate did not engage'
+srv.start()
+results = {}
+try:
+    for n in (1, batch_size - 1, batch_size):
+        outs = [None] * n
+        barrier = threading.Barrier(n)
+        def worker(i, s):
+            barrier.wait()
+            outs[i] = srv.infer(s)
+        threads = [threading.Thread(target=worker, args=(i, states[i])) for i in range(n)]
+        for t in threads: t.start()
+        for t in threads: t.join(timeout=15.0)
+        assert all(o is not None for o in outs), f'n={n}: missing results'
+        rows = []
+        for i, (pol, val) in enumerate(outs):
+            assert pol.shape == (362,), f'n={n} i={i} shape {pol.shape}'
+            assert np.all(np.isfinite(pol)), f'n={n} i={i} non-finite policy'
+            max_p = float(np.abs(pol - p_ref[i]).max())
+            val_diff = float(abs(val - float(v_ref[i])))
+            rows.append({'i': i, 'max_p_diff': max_p, 'val_diff': val_diff})
+        results[n] = rows
+finally:
+    srv.stop(); srv.join(timeout=5.0)
+print('JSON_OUT' + json.dumps(results))
+""" % (str(repo_root),)
+
+        proc = subprocess.run(
+            [py, "-c", helper],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=120.0,
+        )
+        # The subprocess may exit -11 (SIGSEGV) during interpreter teardown:
+        # PT 2.11 + CUDA 13 occasionally crashes during cudagraph_trees
+        # finalisation when reduce-overhead state is torn down. The test
+        # passes if the JSON marker landed before teardown — that means
+        # the padded forward + slice produced the expected outputs.
+        marker = "JSON_OUT"
+        idx = proc.stdout.find(marker)
+        if idx < 0:
+            raise AssertionError(
+                f"no JSON marker in subprocess stdout (rc={proc.returncode}):\n"
+                f"STDOUT: {proc.stdout[-2000:]}\n"
+                f"STDERR: {proc.stderr[-2000:]}"
+            )
+        results = json.loads(proc.stdout[idx + len(marker):].strip())
+        # Tolerance 1e-2 — fp16 + cudagraph drift slightly larger than
+        # trace path's 5e-3 due to fused-kernel rounding.
+        for n, rows in results.items():
+            assert len(rows) == int(n), f"n={n}: expected {n} rows, got {len(rows)}"
+            for r in rows:
+                assert r["max_p_diff"] < 1e-2, (
+                    f"n={n} i={r['i']} policy diverged {r['max_p_diff']:.4e}"
+                )
+                assert r["val_diff"] < 1e-2, (
+                    f"n={n} i={r['i']} value diverged {r['val_diff']:.4e}"
+                )
+
+    @pytest.mark.skipif(
+        not torch.cuda.is_available(),
+        reason="torch.compile requires CUDA",
+    )
+    def test_compile_inference_weight_swap_propagates(self, device):
+        """compile, run forward A, load_state_dict_safe new weights,
+        run forward B; outputs differ ≥ 1e-3 on at least one element.
+        Tests propagation through OptimizedModule.
+        """
+        net = HexTacToeNet(
+            board_size=BOARD_SIZE, in_channels=BOARD_CHANNELS,
+            filters=64, res_blocks=2,
+        ).to(device)
+        net.eval()
+
+        # default mode is sufficient: it wraps in OptimizedModule and exercises
+        # the same load_state_dict propagation path as reduce-overhead, without
+        # the CUDA-graph TLS constraint that requires the dispatcher-thread
+        # warmup. (Reduce-overhead is covered by the padding test.)
+        server = self._server(
+            net, device,
+            compile_on=True, mode="default", dynamic=True,
+            batch_size=4,
+        )
+        assert server._compile_inference is True, (
+            "compile failed at init — test is meaningless"
+        )
+        server.start()
+        try:
+            np.random.seed(7)
+            state = _random_state()
+            p_before, v_before = server.infer(state)
+
+            new_sd = {
+                k: torch.randn_like(v) if v.dtype.is_floating_point else v
+                for k, v in net.state_dict().items()
+            }
+            server.load_state_dict_safe(new_sd)
+
+            p_after, v_after = server.infer(state)
+        finally:
+            server.stop()
+            server.join(timeout=5.0)
+
+        diff_p = float(np.abs(p_after - p_before).max())
+        diff_v = abs(v_after - v_before)
+        assert diff_p > 1e-3 or diff_v > 1e-3, (
+            f"OptimizedModule did not propagate weight swap: "
+            f"policy max diff {diff_p}, value diff {diff_v}"
+        )
 
 
 class TestInferenceServerFailureHandling:

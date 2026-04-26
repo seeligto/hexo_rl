@@ -381,6 +381,13 @@ def benchmark_worker_pool(
             # No random opening plies: skipped rows deflate pos/hr and would
             # make the bench metric incomparable across configs.
             "random_opening_plies": 0,
+            # InferenceServer dispatcher knobs (trace + compile_retry_20260426 Phase 2).
+            # Forwarded so bench can A/B these against the production trace path
+            # without touching variant YAMLs.
+            "trace_inference": bool(_sp.get("trace_inference", True)),
+            "compile_inference": bool(_sp.get("compile_inference", False)),
+            "compile_inference_mode": str(_sp.get("compile_inference_mode", "default")),
+            "compile_inference_dynamic": bool(_sp.get("compile_inference_dynamic", True)),
         },
     }
 

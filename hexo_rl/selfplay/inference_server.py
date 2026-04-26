@@ -96,6 +96,41 @@ class InferenceServer(threading.Thread):
                 )
                 self._traced_model = None
 
+        # torch.compile knob (compile_retry_20260426 Phase 2). Mutually
+        # exclusive with trace — both attack the same bottleneck (Python
+        # dispatch / kernel-launch overhead) and stacking them does not
+        # compose (probe arm 6 confirmed). Mode `default` is thread-safe
+        # from any caller; `reduce-overhead` requires the dispatcher
+        # thread's TLS to own the cudagraph_trees context (Phase 3 work).
+        self._compile_inference = bool(sp.get("compile_inference", False))
+        self._compile_mode = str(sp.get("compile_inference_mode", "default"))
+        self._compile_dynamic = bool(sp.get("compile_inference_dynamic", True))
+        if self._compile_inference and self._trace_inference:
+            raise ValueError(
+                "compile_inference and trace_inference are mutually exclusive; "
+                "set one to false in the selfplay config."
+            )
+        if self._compile_inference:
+            try:
+                self.model = torch.compile(
+                    self.model,
+                    mode=self._compile_mode,
+                    dynamic=self._compile_dynamic,
+                )
+                _perf_log.info(
+                    "inference_compile_enabled",
+                    context="inference_server",
+                    mode=self._compile_mode,
+                    dynamic=self._compile_dynamic,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _perf_log.warning(
+                    "inference_compile_failed_falling_back",
+                    context="inference_server",
+                    error=str(exc)[:200],
+                )
+                self._compile_inference = False
+
         # Pinned host staging buffer for async H2D (Bucket 1 #5, E2 row 1).
         # Size: batch_size * feature_len * 4B ≈ 1 MB for default (64 * 18*19*19 * 4).
         # Enables DMA engine copy on CUDA (non_blocking=True); no-op on CPU.
@@ -141,9 +176,19 @@ class InferenceServer(threading.Thread):
         self._batcher.close()
 
     def load_state_dict_safe(self, state_dict: dict) -> None:
-        """Thread-safe weight swap — blocks until any in-flight forward completes."""
+        """Thread-safe weight swap — blocks until any in-flight forward completes.
+
+        Callers pass bare (non-``_orig_mod.*``-prefixed) state_dict keys.
+        When ``self.model`` is a ``torch._dynamo.OptimizedModule`` (compile
+        path), ``load_state_dict`` would otherwise demand the prefixed keys.
+        Unwrap once here so the load targets the underlying parameters in
+        place; the OptimizedModule wrapper continues to dispatch through
+        them unchanged. Same propagation path the trace path relies on.
+        """
         with self._weights_lock:
-            self.model.load_state_dict(state_dict)
+            target = getattr(self.model, "_orig_mod", self.model)
+            target.load_state_dict(state_dict)
+            target.eval()
             self.model.eval()
 
     def submit_and_wait(self, state: np.ndarray) -> tuple[np.ndarray, float]:
@@ -168,6 +213,18 @@ class InferenceServer(threading.Thread):
 
     # ── Thread body ───────────────────────────────────────────────────────────
 
+    def _padding_active(self) -> bool:
+        """Compile-inference reduce-overhead path uses CUDA-graph replay; the
+        captured graph requires a fixed input shape, so each batch must be
+        padded up to ``self._batch_size`` and outputs sliced back to the
+        actual request count.
+        """
+        return (
+            self._compile_inference
+            and self._compile_mode == "reduce-overhead"
+            and self._h2d_staging is not None
+        )
+
     def run(self) -> None:
         _perf = self._perf_timing
         _sync = self._perf_sync_cuda and self.device.type == "cuda"
@@ -187,6 +244,50 @@ class InferenceServer(threading.Thread):
                 )
             except Exception as exc:  # noqa: BLE001
                 _perf_log.warning("cuda_stream_audit_failed", context="inference_server", error=str(exc))
+
+        # CUDA-graph TLS warmup for compile+reduce-overhead (§123). The
+        # cudagraph_trees state lives in C++ dynamic TLS — the first forward
+        # must run on this dispatcher thread so the captured graph binds here,
+        # not to the main thread that built the OptimizedModule wrapper. We
+        # also pad the warmup tensor to the production batch_size so the
+        # graph is captured for the steady-state shape, not a smaller
+        # one-off. Failures degrade to fall-back-on-first-batch behaviour.
+        if (
+            self._compile_inference
+            and self._compile_mode == "reduce-overhead"
+            and self.device.type == "cuda"
+        ):
+            try:
+                with self._weights_lock:
+                    with torch.inference_mode():
+                        with torch.autocast(
+                            device_type=self.device.type,
+                            dtype=self._amp_dtype,
+                        ):
+                            if self._h2d_staging is not None:
+                                self._h2d_staging.zero_()
+                                warmup_tensor = self._h2d_staging.to(
+                                    self.device, non_blocking=True,
+                                )
+                            else:
+                                warmup_tensor = torch.zeros(
+                                    self._batch_size, *self._shape,
+                                    device=self.device,
+                                )
+                            _ = self.model(warmup_tensor)
+                torch.cuda.synchronize()
+                _perf_log.info(
+                    "inference_compile_warmup_dispatcher",
+                    context="inference_server",
+                    batch_size=self._batch_size,
+                    mode=self._compile_mode,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _perf_log.warning(
+                    "inference_compile_warmup_failed",
+                    context="inference_server",
+                    error=str(exc)[:200],
+                )
 
         try:
             while not self._stop_event.is_set():
@@ -208,6 +309,7 @@ class InferenceServer(threading.Thread):
                         # out-of-window indices are zeroed before reaching this fused batch.
                         batch_np = np.ascontiguousarray(batch, dtype=np.float32)
                         n = len(request_ids)
+                        _pad = self._padding_active()
                         if self._h2d_staging is not None:
                             assert n <= self._batch_size, (
                                 f"inference batch size {n} exceeds staging capacity "
@@ -221,7 +323,19 @@ class InferenceServer(threading.Thread):
                             self._h2d_staging[:n].copy_(
                                 torch.from_numpy(batch_np).view(n, *self._shape)
                             )
-                            tensor = self._h2d_staging[:n].to(self.device, non_blocking=True)
+                            if _pad:
+                                # Zero padding for compile+reduce-overhead's CUDA
+                                # graph (fixed shape required). Padded rows are
+                                # discarded post-forward via host[:n] slicing.
+                                if n < self._batch_size:
+                                    self._h2d_staging[n:].zero_()
+                                tensor = self._h2d_staging.to(
+                                    self.device, non_blocking=True,
+                                )
+                            else:
+                                tensor = self._h2d_staging[:n].to(
+                                    self.device, non_blocking=True,
+                                )
                         else:
                             tensor = torch.from_numpy(batch_np).to(self.device).reshape(n, *self._shape)
                         if _perf:
@@ -258,13 +372,18 @@ class InferenceServer(threading.Thread):
                         probs = log_policy.float().exp()
                         probs = probs / probs.sum(dim=-1, keepdim=True)
                         # Merged D2H: one cudaMemcpyAsync instead of two.
-                        # Layout: [n, policy_len + 1] — last column carries the
-                        # squeezed scalar value. Splitting on host is L2-cache
-                        # cheap (~70 KB at batch=192) compared to a second D2H.
+                        # Layout: [fwd_n, policy_len + 1] — last column carries
+                        # the squeezed scalar value. Splitting on host is
+                        # L2-cache cheap (~70 KB at batch=192) compared to a
+                        # second D2H.
                         v = value.squeeze(-1).float().unsqueeze(-1)
                         host = torch.cat([probs, v], dim=-1).cpu().numpy()
-                        policies = np.ascontiguousarray(host[:, :self._policy_len])
-                        values = np.ascontiguousarray(host[:, self._policy_len])
+                        # host shape is (n, …) under the variable-shape path
+                        # and (batch_size, …) under the padded path; slice
+                        # to the actual request count either way to drop
+                        # any padded-zero rows before they reach Rust.
+                        policies = np.ascontiguousarray(host[:n, :self._policy_len])
+                        values = np.ascontiguousarray(host[:n, self._policy_len])
                         if _perf:
                             _t_d2h_done = time.perf_counter()
 
@@ -287,7 +406,18 @@ class InferenceServer(threading.Thread):
                     except Exception as exc:
                         # Explicitly signal failure to Rust waiters rather than returning dummy data
                         # or failing silently. This allows Rust to handle the error properly.
-                        error_msg = f"Model inference failed: {str(exc)}"
+                        # Format kept stable for downstream tests / log parsers.
+                        error_msg = f"Model inference failed: {exc}"
+                        import traceback as _tb
+                        # Surface the type + traceback in the log even when
+                        # str(exc) is empty (e.g. cudagraph_trees AssertionError).
+                        _perf_log.error(
+                            "inference_forward_failed",
+                            context="inference_server",
+                            error_type=type(exc).__name__,
+                            error=str(exc)[:300] or repr(exc)[:300],
+                            tb=_tb.format_exc()[:1500],
+                        )
                         self._batcher.submit_inference_failure(request_ids, error_msg)
                         # We don't raise here so the server can potentially recover for the next batch
                         continue
