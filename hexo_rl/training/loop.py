@@ -38,6 +38,147 @@ from hexo_rl.training.trainer import Trainer
 log = structlog.get_logger(__name__)
 
 
+# Bootstrap candidates tried (in order) when no usable best_model.pt exists.
+# Sweep / fresh runs should anchor against the trained 18-channel bootstrap,
+# not against a random fresh-init copy of trainer.model. Mirrors
+# scripts/run_sweep.py:DEFAULT_ANCHOR_CANDIDATES so the two stay aligned.
+_BOOTSTRAP_ANCHOR_CANDIDATES: tuple[str, ...] = (
+    "checkpoints/bootstrap_v5.pt",
+    "checkpoints/bootstrap_model.pt",
+)
+
+
+def _save_best_model_atomic(model: torch.nn.Module, path: Path) -> None:
+    """Save ``state_dict()`` to ``path`` atomically with one-revision backup.
+
+    Sequence:
+      1. write to ``path.tmp``,
+      2. verify the tmp file actually loads (catches partial writes),
+      3. rotate any existing ``path`` to ``path.bak`` (clobbers an older bak),
+      4. rename ``path.tmp`` → ``path``.
+
+    A SIGKILL between (3) and (4) leaves ``.bak`` as the recovery copy;
+    ``_load_best_model_resilient`` knows to fall through to it.
+    """
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    bak = path.with_suffix(path.suffix + ".bak")
+    sd = model.state_dict()
+    torch.save(sd, tmp)
+    # Round-trip verify — torch.save is not atomic on some filesystems and
+    # a process kill mid-write produces exactly the truncated zip we are
+    # trying to defend against.
+    torch.load(tmp, map_location="cpu", weights_only=True)
+    if path.exists():
+        path.replace(bak)
+    tmp.replace(path)
+
+
+def _quarantine_corrupt(path: Path) -> Path:
+    """Move a corrupt anchor aside with a unique suffix so it isn't overwritten
+    by the next write. Returns the destination path for logging."""
+    ts = time.strftime("%Y%m%dT%H%M%S")
+    dest = path.with_suffix(path.suffix + f".corrupt-{ts}")
+    path.replace(dest)
+    return dest
+
+
+def _try_load_anchor(
+    candidate: Path,
+    *,
+    checkpoint_dir: str,
+    device: torch.device,
+    fallback_config: dict[str, Any],
+) -> Optional[Trainer]:
+    """Attempt to load ``candidate`` as an anchor checkpoint.
+
+    Returns the loaded Trainer on success, None on any failure (corrupt zip,
+    arch mismatch in the load path, unreadable file). Failures are logged
+    but not raised — the caller decides what to fall back to.
+    """
+    if not candidate.exists():
+        return None
+    try:
+        return Trainer.load_checkpoint(
+            candidate,
+            checkpoint_dir=checkpoint_dir,
+            device=device,
+            fallback_config=fallback_config,
+            config_overrides={"input_channels": None, "in_channels": None},
+        )
+    except Exception as exc:
+        log.warning(
+            "anchor_load_failed",
+            path=str(candidate),
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return None
+
+
+def _load_best_model_resilient(
+    best_model_path: Path,
+    *,
+    checkpoint_dir: str,
+    device: torch.device,
+    config: dict[str, Any],
+) -> Optional[Trainer]:
+    """Try best_model.pt → its .bak → bootstrap candidates. None if all fail.
+
+    On corruption of ``best_model.pt`` the file is quarantined and the next
+    candidate is tried; the eventual successful candidate is then promoted
+    in-place to ``best_model.pt`` by the caller (atomic save).
+    """
+    fallback_cfg = {k: v for k, v in config.items()
+                    if k not in ("in_channels", "input_channels")}
+
+    # 1. Live anchor.
+    if best_model_path.exists():
+        ref = _try_load_anchor(
+            best_model_path,
+            checkpoint_dir=checkpoint_dir,
+            device=device,
+            fallback_config=fallback_cfg,
+        )
+        if ref is not None:
+            return ref
+        quarantined = _quarantine_corrupt(best_model_path)
+        log.warning(
+            "anchor_quarantined",
+            original=str(best_model_path),
+            quarantined=str(quarantined),
+            msg="best_model.pt was unreadable — moved aside, falling through to backup/bootstrap",
+        )
+
+    # 2. One-revision backup written by the previous atomic save.
+    bak = best_model_path.with_suffix(best_model_path.suffix + ".bak")
+    if bak.exists():
+        ref = _try_load_anchor(
+            bak,
+            checkpoint_dir=checkpoint_dir,
+            device=device,
+            fallback_config=fallback_cfg,
+        )
+        if ref is not None:
+            log.info("anchor_recovered_from_bak", path=str(bak))
+            return ref
+
+    # 3. Repo-level bootstrap candidates.
+    for rel in _BOOTSTRAP_ANCHOR_CANDIDATES:
+        cand = Path(rel)
+        ref = _try_load_anchor(
+            cand,
+            checkpoint_dir=checkpoint_dir,
+            device=device,
+            fallback_config=fallback_cfg,
+        )
+        if ref is not None:
+            log.info("anchor_loaded_from_bootstrap", path=str(cand))
+            return ref
+
+    return None
+
+
 def run_training_loop(
     trainer: Trainer,
     buffer: Any,                          # ReplayBuffer (self-play)
@@ -208,27 +349,17 @@ def run_training_loop(
     best_model_step: int | None = None
     if eval_pipeline is not None:
         best_model_path.parent.mkdir(parents=True, exist_ok=True)
-        if best_model_path.exists():
-            # Load anchor without sweep-variant architecture keys. Two paths:
-            # (a) anchor has no baked config → fallback_config is used, and
-            #     we strip in_channels/input_channels so _resolve_model_hparams
-            #     infers them from the state dict.
-            # (b) anchor has a baked config (e.g. prior sweep checkpoint was
-            #     promoted) → load_checkpoint ignores fallback_config entirely
-            #     and uses the baked config; config_overrides then scrubs the
-            #     sweep-specific keys AFTER loading so HexTacToeNet is built
-            #     from the state-dict-inferred architecture, not the sweep config.
-            _anchor_fallback = {
-                k: v for k, v in config.items()
-                if k not in ("in_channels", "input_channels")
-            }
-            best_ref = Trainer.load_checkpoint(
-                best_model_path,
-                checkpoint_dir=args.checkpoint_dir,
-                device=device,
-                fallback_config=_anchor_fallback,
-                config_overrides={"input_channels": None, "in_channels": None},
-            )
+        # Resilient anchor load: tries best_model.pt → its .bak → repo-level
+        # bootstrap candidates (bootstrap_v5.pt, bootstrap_model.pt) → fresh
+        # init from trainer.model. A corrupt best_model.pt is quarantined
+        # with a timestamp suffix instead of being silently discarded.
+        best_ref = _load_best_model_resilient(
+            best_model_path,
+            checkpoint_dir=args.checkpoint_dir,
+            device=device,
+            config=config,
+        )
+        if best_ref is not None:
             # Unwrap torch.compile — best_model's state_dict() is consumed
             # at multiple load_state_dict call sites below; leaving the
             # OptimizedModule wrapper would inject `_orig_mod.*` prefixes
@@ -236,6 +367,12 @@ def run_training_loop(
             best_model = getattr(best_ref.model, "_orig_mod", best_ref.model)
             best_model.eval()
             best_model_step = best_ref.step
+            # If best_model.pt was missing/corrupt and we recovered from a
+            # bootstrap or .bak, persist the chosen anchor as the live
+            # best_model.pt so subsequent runs find it directly.
+            if not best_model_path.exists():
+                _save_best_model_atomic(best_model, best_model_path)
+                log.info("anchor_persisted_from_fallback", path=str(best_model_path))
             # Graduation gate: self-play consumes anchor weights, not trainer.model.
             # Sync inf_model to the loaded anchor before workers start — but only
             # when architectures match. Sweep variants train a reduced-channel model
@@ -268,6 +405,16 @@ def run_training_loop(
                     ),
                 )
         else:
+            # No usable anchor anywhere — last-resort fresh init from trainer.model.
+            # On a clean run this should rarely fire: the bootstrap candidates above
+            # are the canonical first-run anchor. Reaching this branch means the box
+            # has neither best_model.pt, its .bak, nor any bootstrap_*.pt — flag it.
+            log.warning(
+                "anchor_fresh_init_no_bootstrap",
+                tried=list(_BOOTSTRAP_ANCHOR_CANDIDATES),
+                msg="No anchor or bootstrap available — initialising best_model.pt from current trainer.model. "
+                    "Drop a bootstrap_v5.pt / bootstrap_model.pt into checkpoints/ to anchor wr_best meaningfully.",
+            )
             base_model = getattr(trainer.model, "_orig_mod", trainer.model)
             best_model = HexTacToeNet(
                 board_size=board_size, res_blocks=res_blocks, filters=filters,
@@ -276,7 +423,7 @@ def run_training_loop(
             ).to(device)
             best_model.load_state_dict(base_model.state_dict())
             best_model.eval()
-            torch.save(best_model.state_dict(), best_model_path)
+            _save_best_model_atomic(best_model, best_model_path)
             best_model_step = trainer.step
             log.info("best_model_initialized", path=str(best_model_path), step=best_model_step)
 
@@ -800,7 +947,7 @@ def _drain_pending_eval(
         eval_base = getattr(eval_model, "_orig_mod", eval_model)
         best_model.load_state_dict(eval_base.state_dict())
         best_model.eval()
-        torch.save(best_model.state_dict(), best_model_path)
+        _save_best_model_atomic(best_model, best_model_path)
         new_best_step = prev.get("step", train_step)
         pool._inference_server.load_state_dict_safe(eval_base.state_dict())
         log.info(
