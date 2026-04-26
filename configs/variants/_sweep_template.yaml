@@ -1,0 +1,21 @@
+# Sweep template — layered between base configs and per-cell knob overrides
+# by scripts/sweep_harness/runner.py:_write_override.
+#
+# Pin only the settings the bench harness needs to mirror production
+# selfplay (no playout-cap selection, deterministic worker behaviour, etc.).
+# Per-host knob choices land via the registry — do NOT add n_workers /
+# inference_batch_size / inference_max_wait_ms / max_train_burst here.
+
+torch_compile: false  # §124 — production training is compile-off; sweep gate must match.
+training_steps_per_game: 2.0
+
+selfplay:
+  completed_q_values: true
+  gumbel_mcts: false
+  max_game_moves: 300
+  random_opening_plies: 0
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.0
+    n_sims_quick: 0
+    n_sims_full: 0

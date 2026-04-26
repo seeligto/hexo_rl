@@ -95,6 +95,43 @@ bench.fast: ## Quick benchmark — compile off, n=3, 60s pool (cold-cache friend
 		--pool-duration 60 --no-compile --n-runs 3 --pool-warmup 30
 
 
+# ── Sweep harness (knob registry, hardware-agnostic — §126) ───────────────────
+# Default pool_duration is 90 s (fits a 90-min wall budget for a multi-knob
+# sweep). The `.long` variants raise it to 180 s — §124/§125 stable
+# methodology, used when bench bimodality persists at 90 s or when the run
+# feeds a permanent variant config.
+
+.PHONY: sweep.detect
+sweep.detect: ## Detect host CPU/GPU/VRAM; write reports/sweeps/detected_host.json
+	bash scripts/sweep.sh detect
+
+.PHONY: sweep
+sweep: ## Full registry sweep (90s cells, ~70 min on EPYC+4080S equivalent). SWEEP_ARGS=...
+	bash scripts/sweep.sh run $(SWEEP_ARGS)
+
+.PHONY: sweep.long
+sweep.long: ## Full sweep with §124/§125 stable methodology (180s cells). Roughly 2x wall.
+	bash scripts/sweep.sh run --pool-duration 180 --max-minutes 240 $(SWEEP_ARGS)
+
+.PHONY: sweep.fast
+sweep.fast: ## Quick sweep — short cells, single knob (KNOB=n_workers default). MAX_MIN= for budget
+	bash scripts/sweep.sh run --knobs $(or $(KNOB),n_workers) --pool-duration 30 \
+		--n-runs 2 --warmup 15 --max-minutes $(or $(MAX_MIN),30) $(SWEEP_ARGS)
+
+.PHONY: sweep.workers
+sweep.workers: ## Sweep n_workers only (ternary, 90s cells). MAX_MIN= for budget
+	bash scripts/sweep.sh run --knobs n_workers --max-minutes $(or $(MAX_MIN),60) $(SWEEP_ARGS)
+
+.PHONY: sweep.workers.long
+sweep.workers.long: ## n_workers ternary with 180s stable cells. MAX_MIN= for budget
+	bash scripts/sweep.sh run --knobs n_workers --pool-duration 180 \
+		--max-minutes $(or $(MAX_MIN),120) $(SWEEP_ARGS)
+
+.PHONY: sweep.dryrun
+sweep.dryrun: ## Validate harness orchestration with synthetic eval (no bench, no GPU)
+	bash scripts/sweep.sh run --dry-run --max-minutes 240 $(SWEEP_ARGS)
+
+
 # ── Training ──────────────────────────────────────────────────────────────────
 
 .PHONY: train
