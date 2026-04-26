@@ -96,22 +96,22 @@ bench.fast: ## Quick benchmark — compile off, n=3, 60s pool (cold-cache friend
 
 
 # ── Sweep harness (knob registry, hardware-agnostic — §126) ───────────────────
-# Default pool_duration is 90 s (fits a 90-min wall budget for a multi-knob
-# sweep). The `.long` variants raise it to 180 s — §124/§125 stable
-# methodology, used when bench bimodality persists at 90 s or when the run
-# feeds a permanent variant config.
+# Budget formula: per_cell_s = pool_duration × n_runs + warmup + 60.
+# Current registry: 27 cells (n_workers=10, inf_batch=6, wait_ms=3, burst=8).
+# sweep: 27 × (90×5+90+60)/60 ≈ 270 min.  sweep.long: 27 × (180×5+90+60)/60 ≈ 472 min.
+# The `.long` variant uses 180 s cells per §124/§125 stable methodology.
 
 .PHONY: sweep.detect
 sweep.detect: ## Detect host CPU/GPU/VRAM; write reports/sweeps/detected_host.json
 	bash scripts/sweep.sh detect
 
 .PHONY: sweep
-sweep: ## Full registry sweep (90s cells, ~70 min on EPYC+4080S equivalent). SWEEP_ARGS=...
-	bash scripts/sweep.sh run $(SWEEP_ARGS)
+sweep: ## Full registry sweep (90s cells, ~270 min / 27 cells). SWEEP_ARGS=...
+	bash scripts/sweep.sh run --max-minutes 300 $(SWEEP_ARGS)
 
 .PHONY: sweep.long
-sweep.long: ## Full sweep with §124/§125 stable methodology (180s cells). Roughly 2x wall.
-	bash scripts/sweep.sh run --pool-duration 180 --max-minutes 240 $(SWEEP_ARGS)
+sweep.long: ## Full sweep with §124/§125 stable methodology (180s cells, ~472 min / 27 cells).
+	bash scripts/sweep.sh run --pool-duration 180 --max-minutes 500 $(SWEEP_ARGS)
 
 .PHONY: sweep.fast
 sweep.fast: ## Quick sweep — short cells, single knob (KNOB=n_workers default). MAX_MIN= for budget
