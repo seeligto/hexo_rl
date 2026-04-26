@@ -19,7 +19,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import math
 import os
 import random
 import signal
@@ -27,98 +26,25 @@ import sys
 import uuid
 from pathlib import Path
 
-
-# ── Auto-cap CPU thread budget BEFORE numpy/torch import ─────────────────────
-# PyTorch / NumPy / OpenBLAS / MKL all read OMP_NUM_THREADS (and sibling vars)
-# at native-runtime initialisation, which happens during their import — so the
-# env vars must be set in os.environ before `import numpy / import torch`.
-# Without this, on a rented container with N threads carved out of a M-thread
-# host (vast.ai 42-of-128, AWS Spot, etc.) every BLAS op tries to grab M
-# threads against the N-slot cgroup, manifesting as 100 % container CPU + ~60 %
-# GPU util + self-play workers starved of inference dispatches.
-#
-# Detection precedence (we take the smallest):
-#   1. os.cpu_count()                             (host nproc)
-#   2. len(os.sched_getaffinity(0))               (taskset / cpuset cgroup)
-#   3. /sys/fs/cgroup/cpu.max                     (cgroup v2 quota)
-#   4. /sys/fs/cgroup/cpu/cpu.cfs_quota_us        (cgroup v1 quota)
-#
-# Operator override: any of OMP_NUM_THREADS, MKL_NUM_THREADS,
-# OPENBLAS_NUM_THREADS, NUMEXPR_NUM_THREADS, TORCH_INTEROP_THREADS already
-# in env wins (setdefault). Set HEXO_THREAD_BUDGET=N to force a specific
-# per-lib value regardless of detection.
-def _detect_cpu_budget() -> int:
-    candidates: list[int] = []
-    n = os.cpu_count()
-    if n:
-        candidates.append(n)
-    try:
-        candidates.append(len(os.sched_getaffinity(0)))
-    except (AttributeError, OSError):
-        pass
-    try:
-        with open("/sys/fs/cgroup/cpu.max") as f:
-            parts = f.read().strip().split()
-        if parts and parts[0] != "max":
-            q, p = int(parts[0]), int(parts[1])
-            if q > 0 and p > 0:
-                candidates.append(max(1, math.ceil(q / p)))
-    except (FileNotFoundError, ValueError, IndexError, PermissionError):
-        pass
-    try:
-        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as f:
-            q = int(f.read().strip())
-        with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as f:
-            p = int(f.read().strip())
-        if q > 0 and p > 0:
-            candidates.append(max(1, math.ceil(q / p)))
-    except (FileNotFoundError, ValueError, PermissionError):
-        pass
-    return min(candidates) if candidates else 1
-
-
-if "_HEXO_THREAD_BUDGET_APPLIED" not in os.environ:
-    _budget = _detect_cpu_budget()
-    # Heuristic: leave most of the cgroup for Rust self-play workers (~1 vCPU
-    # each). Give python/torch ops a small parallel slice — enough for batch
-    # assembly + trainer backward pass to use BLAS effectively, capped at 8 so
-    # a 128-vCPU bare-metal host doesn't grant 32-thread BLAS for tiny ops.
-    _per_lib = int(os.environ.get("HEXO_THREAD_BUDGET", str(max(1, min(_budget // 4, 8)))))
-    for v in (
-        "OMP_NUM_THREADS",
-        "MKL_NUM_THREADS",
-        "OPENBLAS_NUM_THREADS",
-        "NUMEXPR_NUM_THREADS",
-        "TORCH_INTEROP_THREADS",
-    ):
-        os.environ.setdefault(v, str(_per_lib))
-    os.environ["_HEXO_THREAD_BUDGET_APPLIED"] = "1"
-    print(
-        f"[hexo_rl] cpu_budget={_budget} per_lib={_per_lib} "
-        f"omp={os.environ['OMP_NUM_THREADS']} mkl={os.environ['MKL_NUM_THREADS']} "
-        f"interop={os.environ['TORCH_INTEROP_THREADS']}",
-        file=sys.stderr,
-    )
+# ── sys.path + auto-thread-budget BEFORE numpy / torch import ───────────────
+# Project root must be importable so we can pull in hexo_rl.utils.cpu_budget
+# (stdlib-only, no torch). cpu_budget sets OMP / MKL / OPENBLAS / NUMEXPR /
+# TORCH_INTEROP_THREADS to match the cgroup allocation; without this, on a
+# rented container with N threads carved out of an M-thread host every BLAS
+# op grabs M threads against the N-slot cgroup → CPU saturation, GPU
+# starvation. Same two calls live at the top of scripts/benchmark.py.
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from hexo_rl.utils.cpu_budget import apply_auto_thread_budget, apply_torch_interop_cap
+apply_auto_thread_budget(log_prefix="[hexo_rl train]")
 
 
 import numpy as np
 import structlog
 import torch
 
-# Inter-op thread count has no env hook in PyTorch — set it programmatically.
-# Must run BEFORE any parallel torch work, so kept at module import time.
-_interop = int(os.environ.get("TORCH_INTEROP_THREADS", os.environ.get("OMP_NUM_THREADS", "0")))
-if _interop > 0:
-    try:
-        torch.set_num_interop_threads(_interop)
-    except RuntimeError:
-        # Already set by an earlier import that touched the parallel runtime.
-        pass
-
-# ── Ensure project root is on sys.path when run as a script ──────────────────
-ROOT = Path(__file__).resolve().parent.parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+apply_torch_interop_cap()
 
 from hexo_rl.monitoring.configure import configure_logging
 from hexo_rl.model.network import HexTacToeNet

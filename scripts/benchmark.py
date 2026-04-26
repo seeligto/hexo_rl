@@ -25,15 +25,25 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-import numpy as np
-import torch
-import yaml
-from rich.console import Console
-from rich.table import Table
-
+# ── sys.path + auto-thread-budget BEFORE numpy / torch import ───────────────
+# Same call sequence as scripts/train.py — see hexo_rl/utils/cpu_budget.py.
+# Bench results are dramatically affected by thread oversubscription on rented
+# containers (vast.ai 42-of-128 etc.); without this the bench numbers are not
+# comparable across boxes.
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from hexo_rl.utils.cpu_budget import apply_auto_thread_budget, apply_torch_interop_cap
+apply_auto_thread_budget(log_prefix="[hexo_rl bench]")
+
+
+import numpy as np
+import torch
+import yaml
+
+apply_torch_interop_cap()
+from rich.console import Console
+from rich.table import Table
 
 if TYPE_CHECKING:
     from hexo_rl.model.network import HexTacToeNet
