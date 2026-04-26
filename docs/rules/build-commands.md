@@ -44,6 +44,16 @@ make test.slow        # slow/integration tests
 # Benchmarks
 make bench            # benchmark (n=5, warm-up; full Phase 4.5 gate)
 
+# Throughput sweep (per-host tuning — knob registry, hardware-agnostic, §126)
+make sweep.detect     # write reports/sweeps/detected_host.json (CPU/GPU/VRAM)
+make sweep            # full registry sweep (90 s cells, ~70 min)
+make sweep.long       # §124/§125 stable methodology (180 s cells, ~2x wall)
+make sweep.workers    # n_workers ternary only (90 s cells)
+make sweep.fast KNOB=inference_max_wait_ms MAX_MIN=15  # short-cell shakeout
+make sweep.dryrun     # validate orchestration with synthetic eval (no GPU)
+# Output: reports/sweeps/<host>_<date>/{report.md,cells.csv,config.yaml}
+# Recipe for new knobs: docs/sweep_harness.md
+
 # Training
 make train            # train with web + terminal dashboard (default)
 make train DASHBOARD=0  # train without dashboard

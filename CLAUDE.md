@@ -50,6 +50,7 @@ Topic-scoped rules under `docs/rules/` — load the file whose trigger matches y
 - `docs/rules/phase-4-architecture.md` — network, heads, graduation gate, resolved Qs
 - `docs/rules/perf-targets.md` — 10-metric bench gate, methodology
 - `docs/rules/bot-integration.md` — submodules, BotProtocol, community URLs
+- `docs/sweep_harness.md` — knob-registry throughput sweep (`make sweep` / `sweep.long`); use for per-host tuning of n_workers, inference_batch_size, max_train_burst
 
 Workflow skills live under `.claude/skills/` and are discovered by OpenCode,
 Claude Code, and Codex via Claude-compatible skill discovery:

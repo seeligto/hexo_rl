@@ -93,6 +93,22 @@ planes plus 6 Q13 chain-length planes (one per hex axis direction, pre/post). Se
 
 Methodology: median of n=5 runs, 3 s warm-up. `make bench` reproduces.
 
+### Tuning a new GPU box
+
+The throughput sweep is hardware-agnostic — point it at any rented vast.ai /
+RunPod / Lambda box and it converges to a per-host config without script edits:
+
+```bash
+make sweep.detect          # write reports/sweeps/detected_host.json
+make sweep                 # full registry sweep (90 s cells, ~70 min)
+make sweep.long            # §124 stable methodology (180 s cells, ~2× wall)
+make sweep.workers         # n_workers ternary only
+```
+
+Output: `reports/sweeps/<host_id>_<date>/{report.md,cells.csv,config.yaml}`.
+The `config.yaml` is directly applicable to a `configs/variants/*.yaml`.
+Knob-registry recipe: [`docs/sweep_harness.md`](docs/sweep_harness.md).
+
 ---
 
 ## Project layout
@@ -118,6 +134,7 @@ Run `make help` for the full target list.
 - [docs/03_tooling.md](docs/03_tooling.md) — logging, benchmarking, progress display conventions
 - [docs/05_community_integration.md](docs/05_community_integration.md) — community bot, API, notation, formations
 - [docs/06_OPEN_QUESTIONS.md](docs/06_OPEN_QUESTIONS.md) — active research questions and ablation plans
+- [docs/sweep_harness.md](docs/sweep_harness.md) — knob-registry throughput sweep harness
 
 ---
 
