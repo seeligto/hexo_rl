@@ -34,7 +34,22 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from hexo_rl.utils.cpu_budget import apply_auto_thread_budget, apply_torch_interop_cap
-apply_auto_thread_budget(log_prefix="[hexo_rl bench]")
+
+
+def _peek_pool_workers() -> int | None:
+    """Partial-parse ``--pool-workers`` so the auto-tune sizes per-lib for the
+    bench worker pool. Falls through to None if the flag wasn't passed."""
+    import argparse as _a
+    try:
+        p = _a.ArgumentParser(add_help=False)
+        p.add_argument("--pool-workers", type=int, default=None)
+        early, _ignored = p.parse_known_args()
+        return early.pool_workers
+    except Exception:
+        return None
+
+
+apply_auto_thread_budget(n_workers=_peek_pool_workers(), log_prefix="[hexo_rl bench]")
 
 
 import numpy as np

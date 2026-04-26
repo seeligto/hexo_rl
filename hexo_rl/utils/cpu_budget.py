@@ -68,7 +68,38 @@ def detect_cpu_budget() -> int:
     return min(candidates) if candidates else 1
 
 
-def apply_auto_thread_budget(*, log_prefix: str = "[hexo_rl]", silent: bool = False) -> dict[str, Any]:
+def derive_per_lib(budget: int, n_workers: int | None) -> int:
+    """Return per-library thread count given detected cgroup budget + worker count.
+
+    Without ``n_workers``: ``clamp(budget // 4, 1, 8)`` — sized for a
+    trainer-only / bench workload where ~2 concurrent BLAS callers (trainer
+    + inference server) share the cgroup. Caps at 8 so a 128-vCPU bare-metal
+    host doesn't grant 32-thread BLAS for tiny ops.
+
+    With ``n_workers`` (self-play / sweep workload): ``clamp(budget //
+    (4 + n_workers // 8), 1, 8)``. Rough rule: each batch of 8 self-play
+    workers adds one more concurrent BLAS-using thread (state encoding,
+    target generation), so the slice gets smaller as the worker count rises.
+    Examples:
+
+      laptop (budget=16, n=14)       → 16 // (4 + 1) = 3
+      vast.ai (budget=41, n=24)      → 41 // (4 + 3) = 5
+      bare metal (budget=128, n=24)  → 128 // 7 = 18 → clamp 8
+      bare metal (budget=128, n=0)   → 128 // 4 = 32 → clamp 8
+    """
+    if n_workers is None or n_workers <= 0:
+        divisor = 4
+    else:
+        divisor = 4 + n_workers // 8
+    return max(1, min(budget // max(1, divisor), 8))
+
+
+def apply_auto_thread_budget(
+    *,
+    n_workers: int | None = None,
+    log_prefix: str = "[hexo_rl]",
+    silent: bool = False,
+) -> dict[str, Any]:
     """Set per-library thread caps in os.environ based on detected cgroup budget.
 
     Idempotent — guarded by ``_HEXO_THREAD_BUDGET_APPLIED``.
@@ -79,13 +110,10 @@ def apply_auto_thread_budget(*, log_prefix: str = "[hexo_rl]", silent: bool = Fa
       3. Pre-existing per-var env (e.g. ``OMP_NUM_THREADS=6``) → respected
          via ``setdefault``; only fills the vars that are NOT already set.
 
-    Default per-lib value: ``clamp(budget // 4, 1, 8)``. Leaves most of the
-    cgroup for Rust self-play workers (~1 vCPU each), gives BLAS / batch
-    assembly / trainer backward a small parallel slice, caps so a 128-vCPU
-    bare-metal host doesn't grant 32-thread BLAS for tiny ops.
-
-    Returns a dict summarising what was applied. ``log_prefix`` controls
-    the optional one-line stderr summary; pass ``silent=True`` to suppress.
+    ``n_workers`` shrinks the per-lib slice for self-play workloads where
+    many python threads are concurrently issuing BLAS calls. See
+    ``derive_per_lib`` for the heuristic. Pass ``None`` for trainer-only
+    / bench paths.
     """
     if "_HEXO_THREAD_BUDGET_APPLIED" in os.environ:
         return {
@@ -96,14 +124,15 @@ def apply_auto_thread_budget(*, log_prefix: str = "[hexo_rl]", silent: bool = Fa
 
     budget = detect_cpu_budget()
     forced = os.environ.get("HEXO_THREAD_BUDGET")
-    per_lib = int(forced) if forced else max(1, min(budget // 4, 8))
+    per_lib = int(forced) if forced else derive_per_lib(budget, n_workers)
     for v in _THREAD_ENV_VARS:
         os.environ.setdefault(v, str(per_lib))
     os.environ["_HEXO_THREAD_BUDGET_APPLIED"] = "1"
 
     if not silent:
+        nw = "n/a" if n_workers is None else str(n_workers)
         msg = (
-            f"{log_prefix} cpu_budget={budget} per_lib={per_lib} "
+            f"{log_prefix} cpu_budget={budget} n_workers={nw} per_lib={per_lib} "
             f"omp={os.environ['OMP_NUM_THREADS']} mkl={os.environ['MKL_NUM_THREADS']} "
             f"interop={os.environ['TORCH_INTEROP_THREADS']}"
         )

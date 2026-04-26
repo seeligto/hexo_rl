@@ -121,6 +121,28 @@ if [[ ! -f data/bootstrap_corpus.npz ]]; then
   exit 1
 fi
 
+# ── Clean prior sweep state when starting fresh ─────────────────────────────
+# Without --resume, a previous failed/aborted launch's logs + half-written
+# checkpoints + stale state.json will silently mix into the new run
+# (run_sweep.py reads state.json and skips variants whose phase1_complete is
+# true, even if the operator wanted a clean start). Wipe them up front.
+# --resume preserves everything for picking up where the last run left off.
+if [[ "$RESUME" -ne 1 ]]; then
+  _STALE=()
+  for p in logs/sweep/state.json logs/sweep/sweep_2ch logs/sweep/sweep_3ch \
+           logs/sweep/sweep_4ch logs/sweep/sweep_6ch logs/sweep/sweep_8ch \
+           logs/sweep/sweep_18ch logs/tb/sweep checkpoints/sweep; do
+    [[ -e "$p" ]] && _STALE+=("$p")
+  done
+  if [[ ${#_STALE[@]} -gt 0 ]]; then
+    echo "==[ clean prior sweep state (use --resume to keep) ]=="
+    for p in "${_STALE[@]}"; do
+      echo "  rm -rf $p"
+      rm -rf "$p"
+    done
+  fi
+fi
+
 if [[ "$SKIP_CORPUS" -eq 0 ]]; then
   echo "==[ corpus regen — six variants ]=="
   if [[ "$RESUME" -eq 1 ]]; then

@@ -37,7 +37,40 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from hexo_rl.utils.cpu_budget import apply_auto_thread_budget, apply_torch_interop_cap
-apply_auto_thread_budget(log_prefix="[hexo_rl train]")
+from hexo_rl.utils.config import load_config as _load_config_early
+
+
+def _peek_n_workers() -> int | None:
+    """Partial-parse ``--config`` / ``--variant`` so the auto-tune can size
+    the per-lib slice for the actual self-play worker count. Both load_config
+    and the YAML reader are torch-free, so this can run before numpy / torch.
+    Failures fall through to None (auto-tune uses the no-workers heuristic).
+    """
+    try:
+        p = argparse.ArgumentParser(add_help=False)
+        p.add_argument("--config", default=None)
+        p.add_argument("--variant", default=None)
+        early, _ = p.parse_known_args()
+        paths = [
+            "configs/model.yaml", "configs/training.yaml",
+            "configs/selfplay.yaml", "configs/game_replay.yaml",
+            "configs/monitoring.yaml", "configs/monitors.yaml",
+        ]
+        if early.config:
+            paths.append(early.config)
+        if early.variant:
+            vp = f"configs/variants/{early.variant}.yaml"
+            if Path(vp).exists():
+                paths.append(vp)
+        cfg = _load_config_early(*paths)
+        sp = cfg.get("selfplay", {})
+        n = sp.get("n_workers")
+        return int(n) if n is not None else None
+    except Exception:
+        return None
+
+
+apply_auto_thread_budget(n_workers=_peek_n_workers(), log_prefix="[hexo_rl train]")
 
 
 import numpy as np
