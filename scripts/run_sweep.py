@@ -519,6 +519,12 @@ def main() -> int:
                    help="Variant subset (default: all six)")
     p.add_argument("--anchor-checkpoint", default=None,
                    help="Anchor model for WR-based selection (default: bootstrap_v5/v4)")
+    p.add_argument("--init-checkpoint", default=None,
+                   help="Optional warm-start: phase 1 launches train.py with "
+                        "--checkpoint <path>. Default: None (random init for fair "
+                        "channel-adequacy comparison). For reduced-channel variants "
+                        "trainer.load_checkpoint slices the input conv; for "
+                        "sweep_18ch the slice is a no-op.")
     p.add_argument("--anchor-metric-key", default="wr_best",
                    help="Metric key produced by eval_pipeline carrying WR vs anchor "
                         "(eval_pipeline writes results['wr_best'] at "
@@ -545,13 +551,24 @@ def main() -> int:
     anchor = resolve_anchor(args.anchor_checkpoint)
 
     if args.phase in ("1", "all"):
-        # Warm-start phase 1 from the bootstrap (mirrors production training,
-        # which never starts from random init). For reduced-channel variants
-        # the input conv is sliced at load time; trainer.load_checkpoint
-        # handles the architecture mismatch.
+        # Phase 1 starts every variant from random init for fair comparison.
+        # Warm-starting from the bootstrap was tried (see commit f15e183 +
+        # the warm-start smoke at reports/investigations/phase122_sweep_throughput/);
+        # for reduced-channel variants the slice of the bootstrap's first conv
+        # produces features the rest of the trunk wasn't trained on, so the
+        # narrow variants get a degraded-policy head start that's neither
+        # "trained" nor "random" — noise that confuses the channel-adequacy
+        # signal. The slicing path stays in trainer.load_checkpoint as a
+        # useful capability; pass --init-checkpoint <path> on the CLI to
+        # opt in (sweep_18ch only, where slicing is a no-op, would benefit).
+        init_ckpt = (
+            getattr(args, "init_checkpoint", None)
+            and Path(args.init_checkpoint)
+            or None
+        )
         run_phase_1(
             variants, state=state, hw_overlay=args.hw_overlay,
-            init_checkpoint=anchor, dry_run=args.dry_run,
+            init_checkpoint=init_ckpt, dry_run=args.dry_run,
         )
     if args.phase in ("2", "all"):
         run_phase_2(state=state, anchor_metric_key=args.anchor_metric_key,
