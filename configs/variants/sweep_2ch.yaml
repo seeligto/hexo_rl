@@ -18,7 +18,12 @@ run_name: sweep_2ch
 total_steps: 10000
 eta_min: 2e-4
 checkpoint_interval: 500
-eval_interval: 500
+# Sweep eval cost dominates wall time at eval_interval=500: each round runs
+# 100 best_arena games × ~70s + 20 random games ≈ 134 min on a 4080S.
+# Phase 1 ends at step 2500; one eval at the end is sufficient for selection.
+# Phase 2 (10k steps) gets 3 evals at 5k/7.5k/10k.
+# See reports/investigations/phase122_sweep_throughput/memo.md.
+eval_interval: 2500
 max_checkpoints_kept: 1000
 preserve_eval_checkpoints: true
 
@@ -37,3 +42,26 @@ augment: true
 monitors:
   hard_abort_grad_norm: 15.0
   hard_abort_grad_norm_steps: 100
+
+# Sweep-mode eval profile (deep-merged onto configs/eval.yaml at load time).
+# Production eval at n=100 × ~70 sec/game ≈ 134 min/round; at eval_interval=2500
+# the final phase-1 eval would not drain before training exit. n=20 × 64 sims
+# completes in well under 5 min and gives binomial stderr ~11% — enough to
+# rank-order channel variants.
+# See reports/investigations/phase122_sweep_throughput/memo.md.
+eval_pipeline:
+  opponents:
+    best_checkpoint:
+      n_games: 20
+      model_sims: 64
+      opponent_sims: 64
+    random:
+      n_games: 10
+      model_sims: 64
+    sealbot:
+      enabled: false
+
+# Wait up to 10 min for the step-2500 eval to drain before shutdown so
+# wr_best is persisted (otherwise run_sweep.py phase-2 selection has no
+# metrics to rank by). Honoured only on stop_step exit, not Ctrl-C.
+eval_final_drain_timeout_sec: 600

@@ -182,18 +182,22 @@ def run_training_loop(
     eval_ext_config: dict[str, Any] = {}
     _eval_interval_cfg: int = int(train_cfg.get("eval_interval", config.get("eval_interval", 100)))
     if eval_yaml_path.exists():
-        from hexo_rl.utils.config import load_config as _load_config
+        from hexo_rl.utils.config import load_config as _load_config, _deep_merge
         eval_ext_config = _load_config(str(eval_yaml_path))
-        ep_cfg = eval_ext_config.get("eval_pipeline", {})
-        # Allow the main training config to override eval.yaml's enabled flag
-        # (test configs disable the pipeline to skip best_model.pt load).
+        # Sweep / variant configs may declare an `eval_pipeline:` block to
+        # override eval cost (n_games, model_sims, opponent enables, eval_interval).
+        # Deep-merge it onto the eval.yaml load so the produced EvalPipeline
+        # honours the variant. Without this, sweep mode pays the production
+        # ~134 min/round eval cost regardless of how short the sweep is.
         main_ep_override = config.get("eval_pipeline", {})
-        if "enabled" in main_ep_override:
-            ep_cfg = {**ep_cfg, "enabled": bool(main_ep_override["enabled"])}
+        if main_ep_override:
+            _deep_merge(eval_ext_config.setdefault("eval_pipeline", {}), main_ep_override)
+        ep_cfg = eval_ext_config.get("eval_pipeline", {})
         if ep_cfg.get("enabled", False):
             eval_pipeline = EvalPipeline(eval_ext_config, device, run_id=run_id)
             _eval_interval_cfg = int(ep_cfg.get("eval_interval", 1000))
-            log.info("eval_pipeline_enabled", interval=_eval_interval_cfg)
+            log.info("eval_pipeline_enabled", interval=_eval_interval_cfg,
+                     overrides_applied=bool(main_ep_override))
 
     best_model_path = Path(
         eval_ext_config.get("eval_pipeline", {}).get("gating", {}).get(
@@ -685,6 +689,26 @@ def run_training_loop(
         _run_loop()
     finally:
         tracemalloc.stop()
+        # When stop_step is reached and an eval was kicked off at the same
+        # tick (eval_interval == stop_step, common in sweep mode), the
+        # eval thread is still running here. Without this join the daemon
+        # thread is killed at process exit and wr_best never persists,
+        # which silently breaks downstream selection. Wait up to
+        # `eval_final_drain_timeout_sec` (variant override; default 0 = no
+        # wait, preserving production Ctrl-C semantics).
+        _final_drain_timeout = float(
+            train_cfg.get("eval_final_drain_timeout_sec",
+                          config.get("eval_final_drain_timeout_sec", 0.0))
+        )
+        if (_final_drain_timeout > 0.0
+                and _eval_thread is not None and _eval_thread.is_alive()
+                and not _shutdown_save[0]):
+            log.info("final_eval_drain_waiting", timeout_sec=_final_drain_timeout)
+            _eval_thread.join(timeout=_final_drain_timeout)
+            if _eval_thread.is_alive():
+                log.warning("final_eval_drain_timeout",
+                            timeout_sec=_final_drain_timeout,
+                            msg="eval still running past timeout — proceeding to shutdown")
         # D-012: if the last eval completed but training ended before the
         # next tick would drain it, persist the promotion now so graduations
         # aren't silently dropped on shutdown. pool is still up — the

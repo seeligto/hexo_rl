@@ -11,7 +11,7 @@ run_name: sweep_3ch
 total_steps: 10000
 eta_min: 2e-4
 checkpoint_interval: 500
-eval_interval: 500
+eval_interval: 2500  # see sweep_2ch.yaml + memo
 max_checkpoints_kept: 1000
 preserve_eval_checkpoints: true
 
@@ -29,3 +29,17 @@ augment: true
 monitors:
   hard_abort_grad_norm: 15.0
   hard_abort_grad_norm_steps: 100
+
+eval_pipeline:  # see sweep_2ch.yaml + memo
+  opponents:
+    best_checkpoint:
+      n_games: 20
+      model_sims: 64
+      opponent_sims: 64
+    random:
+      n_games: 10
+      model_sims: 64
+    sealbot:
+      enabled: false
+
+eval_final_drain_timeout_sec: 600  # see sweep_2ch.yaml

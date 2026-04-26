@@ -507,8 +507,10 @@ def main() -> int:
                    help="Variant subset (default: all six)")
     p.add_argument("--anchor-checkpoint", default=None,
                    help="Anchor model for WR-based selection (default: bootstrap_v5/v4)")
-    p.add_argument("--anchor-metric-key", default="wr_anchor",
-                   help="Metric key produced by eval_pipeline carrying WR vs anchor")
+    p.add_argument("--anchor-metric-key", default="wr_best",
+                   help="Metric key produced by eval_pipeline carrying WR vs anchor "
+                        "(eval_pipeline writes results['wr_best'] at "
+                        "hexo_rl/eval/eval_pipeline.py — keep these in sync)")
     p.add_argument("--dry-run", action="store_true",
                    help="Print plan without launching subprocesses")
     p.add_argument("--hw-overlay", default=None, metavar="VARIANT_STEM",
