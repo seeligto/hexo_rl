@@ -222,7 +222,15 @@ def launch_train(
         "--no-dashboard",
     ]
     if resume_checkpoint is not None:
-        cmd += ["--checkpoint", str(resume_checkpoint), "--override-scheduler-horizon"]
+        cmd += [
+            "--checkpoint", str(resume_checkpoint),
+            "--override-scheduler-horizon",
+            # Bootstrap weights-only checkpoints have no scheduler_state baked
+            # in; trainer.load_checkpoint raises unless this flag is set. Phase
+            # 2 resumes a phase-1 ckpt that DOES have scheduler_state, so the
+            # flag is harmless there (only fires if scheduler_state is missing).
+            "--allow-fresh-scheduler",
+        ]
 
     # Sweep abort gates (configurable via training.yaml monitoring keys; we
     # fan out the §122 brief's thresholds here so each variant is judged
@@ -346,9 +354,13 @@ def run_phase_1(
     *,
     state: SweepState,
     hw_overlay: Optional[str] = None,
+    init_checkpoint: Optional[Path] = None,
     dry_run: bool,
 ) -> None:
     print(f"\n=== PHASE 1: {len(variants)} variants × {PHASE1_STEPS} steps ===")
+    if init_checkpoint is not None:
+        print(f"  init weights from {init_checkpoint} "
+              f"(reduced-channel variants slice the input conv at load time)")
     for v in variants:
         vs = state.get(v)
         if is_phase1_done(v):
@@ -360,7 +372,7 @@ def run_phase_1(
         rc = launch_train(
             v,
             target_steps=PHASE1_STEPS,
-            resume_checkpoint=None,
+            resume_checkpoint=init_checkpoint,
             hw_overlay=hw_overlay,
             log_dir=LOGS_ROOT / v,
             checkpoint_dir=variant_ckpt_dir(v),
@@ -533,7 +545,14 @@ def main() -> int:
     anchor = resolve_anchor(args.anchor_checkpoint)
 
     if args.phase in ("1", "all"):
-        run_phase_1(variants, state=state, hw_overlay=args.hw_overlay, dry_run=args.dry_run)
+        # Warm-start phase 1 from the bootstrap (mirrors production training,
+        # which never starts from random init). For reduced-channel variants
+        # the input conv is sliced at load time; trainer.load_checkpoint
+        # handles the architecture mismatch.
+        run_phase_1(
+            variants, state=state, hw_overlay=args.hw_overlay,
+            init_checkpoint=anchor, dry_run=args.dry_run,
+        )
     if args.phase in ("2", "all"):
         run_phase_2(state=state, anchor_metric_key=args.anchor_metric_key,
                     hw_overlay=args.hw_overlay, dry_run=args.dry_run)

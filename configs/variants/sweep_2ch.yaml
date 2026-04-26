@@ -65,3 +65,12 @@ eval_pipeline:
 # wr_best is persisted (otherwise run_sweep.py phase-2 selection has no
 # metrics to rank by). Honoured only on stop_step exit, not Ctrl-C.
 eval_final_drain_timeout_sec: 600
+
+# Mirror production laptop self-play knobs (gumbel_targets.yaml). The EPYC
+# overlay bumps max_game_moves to 300 for throughput-bench stability; sweep
+# wants the production game-length cap (200 plies = 100 turns) so train_step
+# rate matches what an operator would see on laptop. full_search_prob /
+# n_sims_full / random_opening_plies are already the production defaults via
+# the base selfplay.yaml — kept implicit.
+selfplay:
+  max_game_moves: 200

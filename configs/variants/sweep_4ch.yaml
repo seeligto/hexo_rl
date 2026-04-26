@@ -42,3 +42,6 @@ eval_pipeline:  # see sweep_2ch.yaml + memo
       enabled: false
 
 eval_final_drain_timeout_sec: 600  # see sweep_2ch.yaml
+
+selfplay:
+  max_game_moves: 200  # see sweep_2ch.yaml

@@ -949,6 +949,15 @@ class Trainer:
 
         inferred = Trainer._infer_model_hparams(model_state)
 
+        # Sliced warm-start: when the variant pins `input_channels`, the
+        # resulting model's in_channels is len(input_channels) regardless of
+        # what the checkpoint's input-conv weight reports. The actual slicing
+        # happens later in load_checkpoint when state_dict's input_conv has
+        # WIRE_CHANNELS planes; this branch just keeps the hparam reconciler
+        # from raising on the full-vs-sliced mismatch.
+        if input_channels_cfg is not None and "in_channels" in inferred:
+            inferred["in_channels"] = len(input_channels_cfg)
+
         resolved: Dict[str, int] = {}
         for key, default_val in defaults.items():
             cfg_val = _explicit(key)
@@ -1081,6 +1090,45 @@ class Trainer:
         # _load_state_dict_strict doesn't reject it as an unexpected key.
         if config.get("input_channels") is None and "input_channel_index" in model_state:
             model_state = {k: v for k, v in model_state.items() if k != "input_channel_index"}
+
+        # Sliced warm-start: when loading a full-18ch checkpoint (e.g. bootstrap)
+        # into a sweep variant model with reduced in_channels, slice the input
+        # conv weight along the input dim to keep only the variant's channels.
+        # All other layers (after the first conv) are architecturally identical
+        # so they load directly. Without this branch, the strict load below
+        # would reject the (filters, 18, k, k) → (filters, N<18, k, k) shape
+        # mismatch. The variant model also registers an `input_channel_index`
+        # buffer (initialized in HexTacToeNet.__init__ from input_channels);
+        # full-channel checkpoints don't have it, so we copy the model's own
+        # buffer into the state dict to satisfy the strict-load missing-key
+        # check without disturbing the actual indices.
+        input_channels_cfg = config.get("input_channels")
+        if input_channels_cfg is not None:
+            from hexo_rl.model.network import WIRE_CHANNELS as _WIRE_CHANNELS
+            _conv_key = "trunk.input_conv.weight"
+            _w = model_state.get(_conv_key)
+            _state_was_modified = False
+            if (_w is not None
+                    and _w.dim() == 4
+                    and _w.shape[1] == _WIRE_CHANNELS
+                    and _w.shape[1] != len(input_channels_cfg)):
+                model_state = dict(model_state)
+                model_state[_conv_key] = _w[:, list(input_channels_cfg), :, :].contiguous()
+                _state_was_modified = True
+                log.info(
+                    "anchor_input_conv_sliced",
+                    src_channels=_WIRE_CHANNELS,
+                    dst_channels=len(input_channels_cfg),
+                    input_channels=list(input_channels_cfg),
+                    msg="warm-starting reduced-channel sweep variant from full-channel checkpoint",
+                )
+            if "input_channel_index" not in model_state and hasattr(model, "input_channel_index"):
+                _idx = model.input_channel_index
+                if isinstance(_idx, torch.Tensor):
+                    if not _state_was_modified:
+                        model_state = dict(model_state)
+                    model_state["input_channel_index"] = _idx.detach().clone()
+
         cls._load_state_dict_strict(model, model_state)
 
         ckpt_dir = Path(checkpoint_dir) if checkpoint_dir else Path(checkpoint_path).parent
