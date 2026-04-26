@@ -144,11 +144,20 @@ if [[ "$OS" == "macOS" ]]; then
     ok "macOS — installing default PyPI torch (gets MPS build)"
     .venv/bin/pip install --quiet torch
 elif [[ "$CUDA_MAJOR" == "13" ]]; then
-    ok "CUDA $CUDA_VERSION — installing torch (latest PyPI build, cu130)"
+    ok "CUDA $CUDA_VERSION — installing torch (PyPI auto-pick, cu13x)"
     .venv/bin/pip install --quiet torch
 elif [[ "$CUDA_MAJOR" == "12" ]]; then
-    ok "CUDA $CUDA_VERSION — installing torch cu121 build"
-    .venv/bin/pip install --quiet torch --index-url https://download.pytorch.org/whl/cu121
+    CUDA_MINOR="${CUDA_VERSION#*.}"
+    if   [[ "$CUDA_MINOR" -ge 8 ]]; then TORCH_CU="cu128"
+    elif [[ "$CUDA_MINOR" -ge 6 ]]; then TORCH_CU="cu126"
+    elif [[ "$CUDA_MINOR" -ge 4 ]]; then TORCH_CU="cu124"
+    else                                  TORCH_CU="cu121"
+    fi
+    ok "CUDA $CUDA_VERSION — installing torch $TORCH_CU build"
+    if ! .venv/bin/pip install --quiet torch --index-url "https://download.pytorch.org/whl/$TORCH_CU" 2>/dev/null; then
+        ok "  $TORCH_CU index miss — falling back to PyPI auto-pick"
+        .venv/bin/pip install --quiet torch
+    fi
 elif [[ -n "$CUDA_MAJOR" ]]; then
     warn "CUDA $CUDA_VERSION detected but no matching wheel — installing CPU torch build"
     warn "  For GPU training, use CUDA 12.x or 13.x."
