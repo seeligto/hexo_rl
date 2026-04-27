@@ -4,6 +4,9 @@
 # Run from the repository root.
 set -euo pipefail
 
+# Override with e.g. PYTHON=python3.14 make install
+PYTHON="${PYTHON:-python3}"
+
 # ── Release artifact constants ─────────────────────────────────────────────────
 HF_MODEL_REPO="timmyburn/hexo-bootstrap-models"
 HF_CORPUS_REPO="timmyburn/hexo-bootstrap-corpus"
@@ -78,8 +81,8 @@ ok "OS: $OS"
 
 # ── [2/9] Check Python >= 3.11 ─────────────────────────────────────────────────
 step 2 "Checking Python version..."
-if ! command -v python3 &>/dev/null; then
-    fail "python3 not found."
+if ! command -v "$PYTHON" &>/dev/null; then
+    fail "$PYTHON not found."
     if [[ "$OS" == "macOS" ]]; then
         fail "  Install with: brew install python@3.11"
     else
@@ -88,7 +91,7 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-PY_VERSION="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+PY_VERSION="$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 PY_MAJOR="${PY_VERSION%%.*}"
 PY_MINOR="${PY_VERSION#*.}"
 
@@ -122,7 +125,7 @@ step 4 "Setting up Python virtual environment..."
 if [[ -d ".venv" ]]; then
     ok ".venv [cached]"
 else
-    python3 -m venv .venv
+    "$PYTHON" -m venv .venv
     ok ".venv created"
 fi
 echo "    Upgrading pip, maturin, pybind11..."
