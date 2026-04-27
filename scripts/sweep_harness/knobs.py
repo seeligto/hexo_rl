@@ -41,7 +41,7 @@ KNOBS: dict[str, dict[str, Any]] = {
     },
     "inference_batch_size": {
         "strategy": "grid_coarse_refine",
-        "coarse": [64, 128, 192, 256, 384, 512],
+        "coarse": [256, 320, 384, 448, 512],
         "refine_window": 1,
         "refine_step": 32,
         "param_path": "selfplay.inference_batch_size",
