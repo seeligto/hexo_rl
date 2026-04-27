@@ -35,6 +35,18 @@ make sweep.workers.long                              # n_workers ternary (180 s 
 bash scripts/sweep.sh run --knobs n_workers,inference_batch_size
 bash scripts/sweep.sh run --fix n_workers=24 --knobs inference_batch_size
 bash scripts/sweep.sh run --max-minutes 60           # tighter budget; aborts if exceeded
+
+# Per-knob overrides (no registry edit required):
+bash scripts/sweep.sh run --knobs inference_batch_size --fix n_workers=55 \
+  --coarse inference_batch_size=256,384,512           # extend grid above registry default
+
+bash scripts/sweep.sh run --knobs n_workers \
+  --bounds n_workers=32:128                           # widen search bounds for >64-core hosts
+
+# RTX 5090 / high-VRAM hosts (≥24 GB): registry default tops out at 256;
+# extend the coarse grid to probe larger batches:
+make sweep SWEEP_ARGS="--knobs inference_batch_size --fix n_workers=55 \
+  --coarse inference_batch_size=256,320,384,448,512"
 ```
 
 `pool_duration` defaults to **90 s** (fits a 90-min wall budget for a

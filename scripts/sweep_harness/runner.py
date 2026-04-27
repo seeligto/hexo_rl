@@ -179,6 +179,12 @@ class SweepConfig:
     out_dir: Path = field(default_factory=lambda: Path("reports/sweeps"))
     template: Path = SWEEP_TEMPLATE
     dry_run: bool = False
+    # Per-knob registry overrides applied at search time (not persisted to
+    # knobs.py). Keys are knob names; values are dicts merged onto the
+    # registry spec. Supported keys:
+    #   "coarse": list[int|float]  — replaces spec["coarse"] or spec["values"]
+    #   "bounds": tuple[int,int]   — replaces spec["bounds"] for ternary/bisect
+    knob_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _write_override(template: Path, fixed: dict[str, Any],
@@ -368,11 +374,13 @@ def _append_cells_csv(path: Path, knob: str, value: Any, fixed: dict, cell: Cell
 
 
 def estimate_budget(knobs: list[str], pool_duration: int, warmup: float, n_runs: int,
-                    host: dict[str, Any]) -> tuple[int, int]:
+                    host: dict[str, Any],
+                    knob_overrides: "dict[str, dict[str, Any]] | None" = None) -> tuple[int, int]:
     """Return (estimated_cells, estimated_minutes)."""
+    overrides = knob_overrides or {}
     cells = 0
     for k in knobs:
-        spec = KNOBS[k]
+        spec = {**KNOBS[k], **overrides.get(k, {})}
         s = spec["strategy"]
         if s == "ternary":
             cells += 2 * spec.get("iterations", 4) + 2  # iter pairs + endpoints (cache offsets some)
@@ -407,7 +415,8 @@ def run_sweep(cfg: SweepConfig, host: dict[str, Any]) -> dict[str, Any]:
     final_results: dict[str, CellResult] = {}
 
     cells_est, mins_est = estimate_budget(knob_list, cfg.pool_duration,
-                                          cfg.warmup, cfg.n_runs, host)
+                                          cfg.warmup, cfg.n_runs, host,
+                                          cfg.knob_overrides)
     print(f"[budget] estimated cells={cells_est} wall≈{mins_est} min "
           f"(max={cfg.max_minutes} min)", flush=True)
     if not cfg.dry_run and mins_est > cfg.max_minutes:
@@ -427,7 +436,7 @@ def run_sweep(cfg: SweepConfig, host: dict[str, Any]) -> dict[str, Any]:
                 print(f"\n[skip] {k} fixed at {fixed[k]} (--fix override)", flush=True)
                 traces[k] = [{"fixed": fixed[k], "skipped": "user --fix"}]
                 continue
-            spec = KNOBS[k]
+            spec = {**KNOBS[k], **cfg.knob_overrides.get(k, {})}
             s = spec["strategy"]
 
             if s == "fixed":
@@ -438,14 +447,16 @@ def run_sweep(cfg: SweepConfig, host: dict[str, Any]) -> dict[str, Any]:
                       flush=True)
                 continue
 
-            print(f"\n========== knob: {k} ({s}) ==========", flush=True)
+            ovr_note = f" [overrides: {cfg.knob_overrides[k]}]" if k in cfg.knob_overrides else ""
+            print(f"\n========== knob: {k} ({s}){ovr_note} ==========", flush=True)
             if cfg.dry_run:
                 eval_fn = _dry_run_eval(k)
             else:
                 eval_fn = make_eval_fn(k, fixed, cfg, cells_csv, host)
 
             if s == "ternary":
-                low, high = resolve_auto_bounds(k, host)
+                low, high = (spec["bounds"] if isinstance(spec.get("bounds"), tuple)
+                             else resolve_auto_bounds(k, host))
                 best, trace = ternary_search_int(
                     eval_fn, low, high, spec["iterations"], spec["tolerance"], cmp_fn,
                 )
@@ -459,7 +470,7 @@ def run_sweep(cfg: SweepConfig, host: dict[str, Any]) -> dict[str, Any]:
             elif s == "grid":
                 best, trace = grid_search(eval_fn, list(spec["values"]), cmp_fn)
             elif s == "bisect":
-                low, high = (spec["bounds"] if spec.get("bounds") != "auto"
+                low, high = (spec["bounds"] if isinstance(spec.get("bounds"), tuple)
                              else resolve_auto_bounds(k, host))
                 best, trace = bisect_search(eval_fn, low, high, spec["iterations"], cmp_fn)
             else:

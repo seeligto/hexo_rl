@@ -45,6 +45,50 @@ def _parse_fix(items: list[str]) -> dict[str, object]:
     return out
 
 
+def _parse_knob_overrides(coarse_items: list[str] | None,
+                          bounds_items: list[str] | None) -> dict[str, dict]:
+    """Parse --coarse and --bounds into a knob_overrides dict.
+
+    --coarse inference_batch_size=256,384,512
+        → {"inference_batch_size": {"coarse": [256, 384, 512]}}
+        Also works for grid knobs (overrides "values" key).
+
+    --bounds n_workers=24:96
+        → {"n_workers": {"bounds": (24, 96)}}
+        Also works for bisect knobs.
+    """
+    out: dict[str, dict] = {}
+
+    for it in coarse_items or []:
+        if "=" not in it:
+            raise SystemExit(f"--coarse expects KNOB=v1,v2,..., got {it!r}")
+        k, vs = it.split("=", 1)
+        if k not in KNOBS:
+            raise SystemExit(f"--coarse: unknown knob {k!r}")
+        strategy = KNOBS[k]["strategy"]
+        try:
+            parsed = [int(v) if "." not in v else float(v) for v in vs.split(",")]
+        except ValueError:
+            raise SystemExit(f"--coarse: non-numeric values in {it!r}")
+        field = "values" if strategy == "grid" else "coarse"
+        out.setdefault(k, {})[field] = parsed
+
+    for it in bounds_items or []:
+        if "=" not in it or ":" not in it:
+            raise SystemExit(f"--bounds expects KNOB=lo:hi, got {it!r}")
+        k, rng = it.split("=", 1)
+        if k not in KNOBS:
+            raise SystemExit(f"--bounds: unknown knob {k!r}")
+        lo_s, hi_s = rng.split(":", 1)
+        try:
+            lo, hi = int(lo_s), int(hi_s)
+        except ValueError:
+            raise SystemExit(f"--bounds: expected integers in {it!r}")
+        out.setdefault(k, {})["bounds"] = (lo, hi)
+
+    return out
+
+
 def _cmd_detect(args: argparse.Namespace) -> int:
     host = detect_host()
     out_dir = Path(args.out_dir)
@@ -60,6 +104,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     host = detect_host()
     knobs = list(args.knobs) if args.knobs else list(KNOB_ORDER)
     fixed = _parse_fix(args.fix or [])
+    knob_overrides = _parse_knob_overrides(args.coarse or [], args.bounds or [])
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     out_dir = Path(args.out_dir) / f"{host['host_id']}_{timestamp}"
@@ -73,6 +118,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         max_minutes=args.max_minutes,
         out_dir=out_dir,
         dry_run=args.dry_run,
+        knob_overrides=knob_overrides,
     )
     print(f"[sweep] host={host['host_id']} knobs={knobs} fixed={fixed} dry_run={args.dry_run}",
           flush=True)
@@ -123,6 +169,12 @@ def main(argv: list[str] | None = None) -> int:
                        help="Parent dir; per-sweep subdir is appended (host_id + timestamp)")
     p_run.add_argument("--dry-run", action="store_true",
                        help="Use synthetic eval (no bench subprocess); for harness validation")
+    p_run.add_argument("--coarse", nargs="*", default=None, metavar="KNOB=v1,v2,...",
+                       help="Override coarse/values list for a grid or grid_coarse_refine knob. "
+                            "Example: --coarse inference_batch_size=256,384,512")
+    p_run.add_argument("--bounds", nargs="*", default=None, metavar="KNOB=lo:hi",
+                       help="Override search bounds for a ternary or bisect knob. "
+                            "Example: --bounds n_workers=32:128")
     p_run.set_defaults(func=_cmd_run)
 
     args = p.parse_args(argv)
