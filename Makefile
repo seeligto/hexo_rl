@@ -1,6 +1,7 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
 
+PYTHON ?= python3
 PY ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 MATURIN ?= .venv/bin/maturin
@@ -44,7 +45,7 @@ help: ## Show all useful commands
 
 .PHONY: install
 install: ## Full first-time setup: env check → deps → engine → artifacts → test
-	@bash scripts/install.sh
+	@PYTHON=$(PYTHON) bash scripts/install.sh
 
 .PHONY: build
 build: ## Build/install Rust extension via maturin (LTO + native CPU)
