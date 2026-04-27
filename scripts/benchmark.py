@@ -733,14 +733,19 @@ def print_benchmark_report(results: List[Dict[str, Any]],
 
 
 def write_json_report(results: List[Dict[str, Any]], n_runs: int,
-                      checks: "list[tuple] | None" = None) -> Path:
-    """Write structured JSON report to reports/benchmarks/."""
+                      checks: "list[tuple] | None" = None,
+                      output_path: "Path | None" = None) -> Path:
+    """Write structured JSON report to reports/benchmarks/ (or output_path if given)."""
     if checks is None:
         checks = _CHECKS_CUDA
-    report_dir = ROOT / "reports" / "benchmarks"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    report_path = report_dir / f"{timestamp}.json"
+    if output_path is not None:
+        report_path = Path(output_path)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        report_dir = ROOT / "reports" / "benchmarks"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        report_path = report_dir / f"{timestamp}.json"
 
     by_name = {r["name"]: r for r in results}
     metrics: dict[str, Any] = {}
@@ -810,6 +815,8 @@ def parse_args() -> argparse.Namespace:
                         "torch.compile JIT cost is handled before this window starts.")
     p.add_argument("--n-runs", type=int, default=5,
                    help="Number of measurement repeats per metric (default 5)")
+    p.add_argument("--output", type=Path, default=None,
+                   help="Write JSON report to this path (overrides default timestamped path)")
     return p.parse_args()
 
 
@@ -981,7 +988,7 @@ def main() -> None:
         _compile_note = f"compile {_compile_elapsed:.0f}s / " if _compile_elapsed > 0 else ""
         warmup_note = f"{_compile_note}{warmup_mcts:.0f}s MCTS / {warmup_nn:.0f}s NN / {warmup_buffer:.0f}s buffer / {warmup_worker:.0f}s worker"
         all_pass = print_benchmark_report(results, n_runs, warmup_note, checks=checks)
-        write_json_report(results, n_runs, checks=checks)
+        write_json_report(results, n_runs, checks=checks, output_path=args.output)
         sys.exit(0 if all_pass else 1)
 
     finally:
