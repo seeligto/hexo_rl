@@ -78,11 +78,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
           flush=True)
     print(f"[sweep] out_dir={out_dir}", flush=True)
 
-    result = run_sweep(cfg, host)
+    try:
+        result = run_sweep(cfg, host)
+    except KeyboardInterrupt:
+        print("\n[sweep] interrupted before any knob completed — nothing to save", flush=True)
+        return 1
     report_path, config_path = write_report(result)
     print(f"\n[report] {report_path}")
     print(f"[config] {config_path}")
     print(f"[csv]    {result['cells_csv']}")
+    if result.get("interrupted"):
+        print(f"\nPartial winners (interrupted): {result['winners']}")
+        print(f"Wall: {result['wall_minutes']:.1f} min")
+        return 1
     print(f"\nFinal winners: {result['winners']}")
     print(f"Wall: {result['wall_minutes']:.1f} min")
     return 0

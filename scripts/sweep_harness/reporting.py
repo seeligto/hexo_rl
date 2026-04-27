@@ -39,6 +39,10 @@ def render_report(result: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append(f"# Sweep Report — {host['host_id']} — "
                  f"{datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    if result.get("interrupted"):
+        lines.append("")
+        lines.append("> **PARTIAL RESULTS** — sweep interrupted by user. "
+                     "Only completed knobs are shown; cells.csv has the full cell log.")
     lines.append("")
     lines.append("## Host")
     lines.append(f"- CPU threads: {host['cpu_threads']}")

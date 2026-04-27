@@ -223,11 +223,22 @@ def run_bench_subprocess(override: Path, n_workers: int, pool_duration: int,
     )
     captured: list[str] = []
     assert proc.stdout is not None
-    for line in proc.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        captured.append(line)
-    proc.wait()
+    try:
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            captured.append(line)
+        proc.wait()
+    except KeyboardInterrupt:
+        # subprocess is in the same process group and already received SIGINT;
+        # terminate + force-kill as insurance (e.g. hung CUDA context).
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        raise
     return "".join(captured), proc.returncode, time.time() - t0
 
 
@@ -408,58 +419,65 @@ def run_sweep(cfg: SweepConfig, host: dict[str, Any]) -> dict[str, Any]:
 
     cmp_fn = compare_iqr
     t_start = time.time()
+    interrupted = False
 
-    for k in knob_list:
-        if k in fixed:
-            print(f"\n[skip] {k} fixed at {fixed[k]} (--fix override)", flush=True)
-            traces[k] = [{"fixed": fixed[k], "skipped": "user --fix"}]
-            continue
-        spec = KNOBS[k]
-        s = spec["strategy"]
+    try:
+        for k in knob_list:
+            if k in fixed:
+                print(f"\n[skip] {k} fixed at {fixed[k]} (--fix override)", flush=True)
+                traces[k] = [{"fixed": fixed[k], "skipped": "user --fix"}]
+                continue
+            spec = KNOBS[k]
+            s = spec["strategy"]
 
-        if s == "fixed":
-            fixed[k] = spec["value"]
-            winners[k] = spec["value"]
-            traces[k] = [{"fixed": spec["value"], "reason": spec.get("skip_reason", "")}]
-            print(f"\n[knob {k}] fixed = {spec['value']}  ({spec.get('skip_reason', '')})",
-                  flush=True)
-            continue
+            if s == "fixed":
+                fixed[k] = spec["value"]
+                winners[k] = spec["value"]
+                traces[k] = [{"fixed": spec["value"], "reason": spec.get("skip_reason", "")}]
+                print(f"\n[knob {k}] fixed = {spec['value']}  ({spec.get('skip_reason', '')})",
+                      flush=True)
+                continue
 
-        print(f"\n========== knob: {k} ({s}) ==========", flush=True)
-        if cfg.dry_run:
-            eval_fn = _dry_run_eval(k)
-        else:
-            eval_fn = make_eval_fn(k, fixed, cfg, cells_csv, host)
+            print(f"\n========== knob: {k} ({s}) ==========", flush=True)
+            if cfg.dry_run:
+                eval_fn = _dry_run_eval(k)
+            else:
+                eval_fn = make_eval_fn(k, fixed, cfg, cells_csv, host)
 
-        if s == "ternary":
-            low, high = resolve_auto_bounds(k, host)
-            best, trace = ternary_search_int(
-                eval_fn, low, high, spec["iterations"], spec["tolerance"], cmp_fn,
-            )
-        elif s == "grid_coarse_refine":
-            constraint = resolve_constraint(spec.get("constraint"), fixed)
-            best, trace = grid_coarse_refine(
-                eval_fn, list(spec["coarse"]),
-                spec.get("refine_window", 1), spec.get("refine_step", 32),
-                cmp_fn, constraint=constraint,
-            )
-        elif s == "grid":
-            best, trace = grid_search(eval_fn, list(spec["values"]), cmp_fn)
-        elif s == "bisect":
-            low, high = spec["bounds"] if spec.get("bounds") != "auto" else resolve_auto_bounds(k, host)
-            best, trace = bisect_search(eval_fn, low, high, spec["iterations"], cmp_fn)
-        else:
-            raise ValueError(f"unknown strategy {s} for knob {k}")
+            if s == "ternary":
+                low, high = resolve_auto_bounds(k, host)
+                best, trace = ternary_search_int(
+                    eval_fn, low, high, spec["iterations"], spec["tolerance"], cmp_fn,
+                )
+            elif s == "grid_coarse_refine":
+                constraint = resolve_constraint(spec.get("constraint"), fixed)
+                best, trace = grid_coarse_refine(
+                    eval_fn, list(spec["coarse"]),
+                    spec.get("refine_window", 1), spec.get("refine_step", 32),
+                    cmp_fn, constraint=constraint,
+                )
+            elif s == "grid":
+                best, trace = grid_search(eval_fn, list(spec["values"]), cmp_fn)
+            elif s == "bisect":
+                low, high = (spec["bounds"] if spec.get("bounds") != "auto"
+                             else resolve_auto_bounds(k, host))
+                best, trace = bisect_search(eval_fn, low, high, spec["iterations"], cmp_fn)
+            else:
+                raise ValueError(f"unknown strategy {s} for knob {k}")
 
-        winners[k] = best
-        fixed[k] = best
-        traces[k] = trace
-        # Record final cell result for the winner (last cached).
-        try:
-            final_results[k] = eval_fn(best)
-        except Exception:  # eval cache misses if the strategy already evaluated best
-            pass
-        print(f"[knob {k}] WINNER = {best}", flush=True)
+            winners[k] = best
+            fixed[k] = best
+            traces[k] = trace
+            # Record final cell result for the winner (last cached).
+            try:
+                final_results[k] = eval_fn(best)
+            except Exception:  # eval cache misses if the strategy already evaluated best
+                pass
+            print(f"[knob {k}] WINNER = {best}", flush=True)
+
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\n\n[interrupt] Ctrl+C — saving partial results...", flush=True)
 
     wall_minutes = (time.time() - t_start) / 60.0
     return {
@@ -471,6 +489,7 @@ def run_sweep(cfg: SweepConfig, host: dict[str, Any]) -> dict[str, Any]:
         "out_dir": cfg.out_dir,
         "cells_csv": cells_csv,
         "final_results": final_results,
+        "interrupted": interrupted,
     }
 
 
