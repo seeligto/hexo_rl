@@ -1,0 +1,27 @@
+# gumbel_targets — RTX 5090 + 96-core host (192 logical threads) variant.
+# Sweep 2026-04-26 (cpu-192t-nvidiageforcertx5090).
+# Winners: n_workers=55, inference_batch_size=256, inference_max_wait_ms=8.0,
+#           max_train_burst=8, leaf_batch_size=8
+# Full data: reports/sweeps/cpu-192t-nvidiageforcertx5090_2026-04-26_20-04/
+#
+# Hardware delta vs EPYC 7702 + RTX 4080S:
+#   - 4× CPU cores (96 phys vs 42 vCPU rented). n_workers=55 wins.
+#   - RTX 5090: substantially faster FP16 throughput than 4080S.
+#   - Larger batch (256 vs 192) saturates inference without stalling workers.
+#   - Longer wait (8.0 vs 4.0 ms) needed to fill the bigger batch — GPU is
+#     faster than workers so batch would under-fill at 4.0 ms.
+#   - Lower max_train_burst (8 vs 16): faster GPU → train step completes
+#     quickly, less burst needed to keep self-play ahead.
+torch_compile: false
+training_steps_per_game: 2.0
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 300
+  n_workers: 55
+  inference_batch_size: 256
+  inference_max_wait_ms: 8.0
+  leaf_batch_size: 8
+  playout_cap:
+    fast_prob: 0.0
+max_train_burst: 8
