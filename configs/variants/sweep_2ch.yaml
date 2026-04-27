@@ -50,6 +50,11 @@ monitors:
 # rank-order channel variants.
 # See reports/investigations/phase122_sweep_throughput/memo.md.
 eval_pipeline:
+  # Per-variant anchor path — every sweep variant has a unique in_channels
+  # count, so sharing the repo-level best_model.pt poisons the next variant's
+  # wr_best metric and triggers the arch-mismatch skip in loop.py:382.
+  gating:
+    best_model_path: checkpoints/sweep/sweep_2ch/best_model.pt
   opponents:
     best_checkpoint:
       n_games: 20

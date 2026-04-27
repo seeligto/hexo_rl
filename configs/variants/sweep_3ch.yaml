@@ -31,6 +31,8 @@ monitors:
   hard_abort_grad_norm_steps: 100
 
 eval_pipeline:  # see sweep_2ch.yaml + memo
+  gating:
+    best_model_path: checkpoints/sweep/sweep_3ch/best_model.pt
   opponents:
     best_checkpoint:
       n_games: 20
