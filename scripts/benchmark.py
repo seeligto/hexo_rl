@@ -708,12 +708,13 @@ def print_benchmark_report(results: List[Dict[str, Any]],
         iqr_str = f"+/-{_fmt_val(stats.get('iqr', 0))}" if stats else "-"
         range_str = _fmt_range(stats) if stats else "-"
 
+        target_str = f"{op} {target:,.1f}" if target != int(target) else f"{op} {int(target):,}"
         table.add_row(
             row_label,
             _fmt_val(val),
             iqr_str,
             range_str,
-            f"{op} {target:,.0f}",
+            target_str,
             status,
         )
 
