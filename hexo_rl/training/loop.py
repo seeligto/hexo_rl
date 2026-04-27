@@ -380,7 +380,15 @@ def run_training_loop(
             # wrong (sweep inf_model should start from trainer.model, not the anchor).
             _inf_base = getattr(inf_model, "_orig_mod", inf_model)
             if _inf_base.in_channels == best_model.in_channels:
-                _inf_base.load_state_dict(best_model.state_dict())
+                _best_sd = best_model.state_dict()
+                # Anchor is always loaded without input_channels (see _try_load_anchor
+                # config_overrides). If _inf_base was built with input_channels, inject
+                # its own buffer so load_state_dict sees a consistent state_dict.
+                _inf_idx = getattr(_inf_base, "input_channel_index", None)
+                if "input_channel_index" not in _best_sd and _inf_idx is not None:
+                    _best_sd = dict(_best_sd)
+                    _best_sd["input_channel_index"] = _inf_idx.detach().clone()
+                _inf_base.load_state_dict(_best_sd)
             else:
                 log.info(
                     "inf_model_anchor_arch_mismatch_skip_sync",
