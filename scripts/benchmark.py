@@ -447,29 +447,67 @@ def benchmark_worker_pool(
             "gph":  {"key": "worker_games_per_hr", "stats": summarise([0.0]), "value": 0.0},
             "pph":  {"key": "worker_pos_per_hr", "stats": summarise([0.0]), "value": 0.0},
             "bat":  {"key": "worker_batch_fill_pct", "stats": summarise([0.0]), "value": 0.0},
+            "ovr":  {"key": "mcts_pool_overflows_total", "stats": None, "value": 0, "runs": []},
         }
 
     pool.start()
     stop_error: str | None = None
 
     try:
-        # Warm-up phase: let games reach steady state before measuring
+        # Warm-up phase: let games reach steady state before measuring.
+        # Adaptive: exit when each worker has completed at least
+        # ``warm_games_per_worker`` games OR the ``warmup_sec`` ceiling is
+        # hit, whichever comes first. Replaces the fixed-time sleep that
+        # the 5090 v2 probe caught producing 3058 pos/hr in run 1
+        # (startup-race trough) — fixed time can't guarantee steady state
+        # on hosts with longer game durations.
+        warm_games_per_worker = 2  # ~2 games per worker before measurement
+        warm_target = warm_games_per_worker * n_workers
         if warmup_sec > 0:
-            console.print(f"    [dim]Worker pool warm-up ({warmup_sec:.0f}s)...[/dim]")
+            console.print(
+                f"    [dim]Worker pool warm-up "
+                f"(adaptive: target ≥{warm_target} games or {warmup_sec:.0f}s ceiling)...[/dim]"
+            )
             t_warmup = time.perf_counter()
             last_report = t_warmup
             while time.perf_counter() - t_warmup < warmup_sec:
+                if pool.games_completed >= warm_target:
+                    elapsed = time.perf_counter() - t_warmup
+                    console.print(
+                        f"    [dim]... warm-up reached {pool.games_completed} games "
+                        f"in {elapsed:.0f}s — exiting early ({elapsed:.0f}/{warmup_sec:.0f}s used)[/dim]"
+                    )
+                    break
                 time.sleep(1.0)
                 now = time.perf_counter()
                 if now - last_report >= 5.0:
                     elapsed = now - t_warmup
                     console.print(f"    [dim]... warm-up {elapsed:.0f}s: {pool.games_completed} games, {pool.positions_pushed} positions[/dim]")
                     last_report = now
+            else:
+                # Hit the ceiling without reaching the games target.
+                console.print(
+                    f"    [yellow]Warm-up ceiling ({warmup_sec:.0f}s) hit with "
+                    f"{pool.games_completed}/{warm_target} games completed — "
+                    f"measurement may include startup-race noise[/yellow]"
+                )
 
-        # Measurement runs: snapshot counters, wait, compute delta
+        # Measurement runs: snapshot counters, wait, compute delta.
+        # Per-run pool-overflow count brackets each window so contaminated
+        # runs (where the engine fabricated terminal values via the
+        # mark-leaf-terminal recovery path) can be filtered out before
+        # aggregation. See engine/src/mcts/backup.rs and the 5090 sweep
+        # analyst v2 §2.1.
+        from engine import take_mcts_pool_overflow_count  # noqa: WPS433
         gph_runs: list[float] = []
         pph_runs: list[float] = []
         bat_runs: list[float] = []
+        overflow_per_run: list[int] = []
+        # Drain any overflow that may have happened during warm-up so the
+        # first measurement window starts from 0.
+        warmup_overflow = take_mcts_pool_overflow_count()
+        if warmup_overflow:
+            console.print(f"    [yellow]Warm-up: {warmup_overflow} MCTS pool overflows ignored[/yellow]")
 
         for i in range(n_runs):
             console.print(f"    [dim]Worker pool run {i+1}/{n_runs} ({duration_sec}s)...[/dim]")
@@ -479,6 +517,8 @@ def benchmark_worker_pool(
             server = pool._inference_server
             fwd_start = server.forward_count
             req_start = server.total_requests
+            # Reset window-local overflow counter via take_*; discard prior.
+            _ = take_mcts_pool_overflow_count()
 
             t0 = time.perf_counter()
             last_report = t0
@@ -498,6 +538,8 @@ def benchmark_worker_pool(
             delta_pos = pool.positions_pushed - pos_start
             delta_fwd = server.forward_count - fwd_start
             delta_req = server.total_requests - req_start
+            overflow_count = take_mcts_pool_overflow_count()
+            overflow_per_run.append(overflow_count)
 
             gph_runs.append((delta_games / elapsed) * 3600.0)
             pph_runs.append((delta_pos / elapsed) * 3600.0)
@@ -506,6 +548,12 @@ def benchmark_worker_pool(
                 bat_runs.append(delta_req / (delta_fwd * server._batch_size) * 100.0)
             else:
                 bat_runs.append(0.0)
+
+            if overflow_count > 0:
+                console.print(
+                    f"    [yellow]Run {i+1} contaminated: {overflow_count} pool overflows — "
+                    f"will be excluded from pos/hr aggregate[/yellow]"
+                )
 
     finally:
         done = threading.Event()
@@ -524,11 +572,29 @@ def benchmark_worker_pool(
         if not done.wait(10.0):
             stop_error = "pool.stop timeout"
 
+    # Drop contaminated runs from the headline pos/hr aggregate. Keep the
+    # raw runs lists intact (with overflow_per_run alongside) so the sweep
+    # harness can audit each window independently. If every run was
+    # contaminated, fall back to the unfiltered list so the bench still
+    # reports a number — the sweep harness's bimodal flag will then trip.
+    clean_pph = [v for v, oc in zip(pph_runs, overflow_per_run) if oc == 0]
+    clean_gph = [v for v, oc in zip(gph_runs, overflow_per_run) if oc == 0]
+    if not clean_pph:
+        console.print(
+            f"    [red]All {n_runs} runs contaminated by pool overflow — "
+            f"reporting unfiltered medians (will likely trip bimodal flag).[/red]"
+        )
+        clean_pph = pph_runs
+        clean_gph = gph_runs
+    pph_stats = summarise(clean_pph)
+    gph_stats = summarise(clean_gph)
     return {
         "name": "Worker pool throughput",
-        "gph":  {"key": "worker_games_per_hr", "stats": summarise(gph_runs), "value": summarise(gph_runs)["median"], "runs": list(gph_runs)},
-        "pph":  {"key": "worker_pos_per_hr", "stats": summarise(pph_runs), "value": summarise(pph_runs)["median"], "runs": list(pph_runs)},
+        "gph":  {"key": "worker_games_per_hr", "stats": gph_stats, "value": gph_stats["median"], "runs": list(gph_runs)},
+        "pph":  {"key": "worker_pos_per_hr", "stats": pph_stats, "value": pph_stats["median"], "runs": list(pph_runs)},
         "bat":  {"key": "worker_batch_fill_pct", "stats": summarise(bat_runs), "value": summarise(bat_runs)["median"], "runs": list(bat_runs)},
+        "ovr":  {"key": "mcts_pool_overflows_total", "stats": None,
+                 "value": int(sum(overflow_per_run)), "runs": list(overflow_per_run)},
     }
 
 
@@ -772,6 +838,18 @@ def write_json_report(results: List[Dict[str, Any]], n_runs: int,
         else:
             targets_met[key] = (val >= target) if higher else (val <= target)
 
+    # Pool-overflow diagnostic — emitted unconditionally, NOT a hard target
+    # check yet (would break the 5090 bench until the root cause is fixed).
+    # Sweep harness reads it from cells.csv; production training loops can
+    # poll `engine.mcts_pool_overflow_count()` directly.
+    pool_result = by_name.get("Worker pool throughput", {})
+    ovr = pool_result.get("ovr") if pool_result else None
+    if ovr is not None:
+        metrics[ovr["key"]] = {
+            "median": ovr.get("value", 0),
+            "per_run": ovr.get("runs", []),
+        }
+
     report = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "n_runs": n_runs,
@@ -992,6 +1070,17 @@ def main() -> None:
                 pph_runs = r["pph"].get("runs")
                 if pph_runs:
                     console.print(f"  {name} raw pos/hr: {json.dumps([round(v, 1) for v in pph_runs])}")
+                # MCTS pool-overflow surface: total + per-run breakdown so the
+                # sweep harness can see whether the pos/hr aggregate dropped
+                # any contaminated runs. Format must match `_OVR_RE` in runner.py.
+                ovr = r.get("ovr")
+                if ovr:
+                    total = ovr.get("value", 0)
+                    per_run = ovr.get("runs", [])
+                    console.print(
+                        f"  [{'red' if total else 'dim'}]{name} pool overflows:[/] "
+                        f"total={total} per_run={json.dumps(per_run)}"
+                    )
 
         _compile_note = f"compile {_compile_elapsed:.0f}s / " if _compile_elapsed > 0 else ""
         warmup_note = f"{_compile_note}{warmup_mcts:.0f}s MCTS / {warmup_nn:.0f}s NN / {warmup_buffer:.0f}s buffer / {warmup_worker:.0f}s worker"

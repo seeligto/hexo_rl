@@ -678,6 +678,28 @@ fn compute_chain_planes<'py>(
     out.into_pyarray(py).reshape([6usize, BOARD_SIZE, BOARD_SIZE])
 }
 
+/// Read the process-wide MCTS pool-overflow counter without resetting.
+///
+/// Pool overflow events fabricate a terminal value at the leaf and let
+/// it propagate through `backup()`, biasing visit counts and
+/// policy/value training targets. The counter is global (all trees
+/// across all worker threads share it) — bench drops contaminated
+/// runs by reading deltas across measurement windows; production
+/// training loops should sample it periodically and alarm if it
+/// grows.
+#[pyfunction]
+fn mcts_pool_overflow_count() -> u64 {
+    mcts::pool_overflow_count()
+}
+
+/// Atomically read-and-reset the pool-overflow counter. Returns the
+/// previous value. Used by the bench harness to bracket per-run
+/// measurement windows and detect contamination.
+#[pyfunction]
+fn take_mcts_pool_overflow_count() -> u64 {
+    mcts::take_pool_overflow_count()
+}
+
 // ── Module registration ───────────────────────────────────────────────────────
 
 #[pymodule]
@@ -690,5 +712,7 @@ fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(apply_symmetry, m)?)?;
     m.add_function(wrap_pyfunction!(apply_symmetries_batch, m)?)?;
     m.add_function(wrap_pyfunction!(compute_chain_planes, m)?)?;
+    m.add_function(wrap_pyfunction!(mcts_pool_overflow_count, m)?)?;
+    m.add_function(wrap_pyfunction!(take_mcts_pool_overflow_count, m)?)?;
     Ok(())
 }

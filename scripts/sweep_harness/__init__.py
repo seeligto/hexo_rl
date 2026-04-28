@@ -9,7 +9,13 @@ an optimal config in under 90 minutes without editing the script per host.
 See docs/sweep_harness.md for the knob-recipe and __main__.py for the CLI.
 """
 
-from .compare import CellResult, bimodal_from_raw, compare_iqr
+from .compare import (
+    CellResult,
+    bimodal_from_raw,
+    bimodal_from_real_raw,
+    compare_iqr,
+    count_trough_samples,
+)
 from .knobs import KNOBS, knob_registry, resolve_auto_bounds
 from .strategies import (
     bisect_search,
@@ -22,8 +28,10 @@ __all__ = [
     "CellResult",
     "KNOBS",
     "bimodal_from_raw",
+    "bimodal_from_real_raw",
     "bisect_search",
     "compare_iqr",
+    "count_trough_samples",
     "grid_coarse_refine",
     "grid_search",
     "knob_registry",

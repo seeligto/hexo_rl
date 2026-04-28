@@ -8,7 +8,7 @@
 /// skip expansion entirely.
 
 use engine::board::Board;
-use engine::mcts::MCTSTree;
+use engine::mcts::{MCTSTree, pool_overflow_count, take_pool_overflow_count};
 
 /// Build a tiny-pool tree (root=slot0, only 10 free slots) so the first
 /// expansion attempt overflows (empty board has 25 legal moves → 25 children needed).
@@ -56,6 +56,46 @@ fn pool_overflow_subsequent_sim_skips_expansion() {
     assert_eq!(leaves2.len(), 0,
         "terminal root yields no leaves — subsequent sims skip expansion entirely");
     assert!(tree.pool[0].is_terminal, "terminal status must persist");
+}
+
+#[test]
+fn pool_overflow_counter_increments() {
+    // Counter is process-wide; other tests in this crate may concurrently
+    // run overflows, so we assert >= rather than ==. The point is just
+    // that triggering an overflow visibly bumps the counter.
+    let before = pool_overflow_count();
+
+    let mut tree = tiny_tree();
+    tree.new_game(Board::new());
+    let n_actions = 19 * 19 + 1;
+    let uniform = vec![1.0_f32 / n_actions as f32; n_actions];
+    let _leaves = tree.select_leaves(1);
+    tree.expand_and_backup(&[uniform], &[0.0]);
+
+    let after = pool_overflow_count();
+    assert!(after >= before + 1,
+        "overflow must increment counter (before={}, after={})", before, after);
+}
+
+#[test]
+fn pool_overflow_take_returns_previous_and_resets_window() {
+    // take_pool_overflow_count() returns the previous value and resets the
+    // counter to 0. Bench uses this to bracket measurement windows. We can't
+    // assert exact values because of test parallelism, but we can verify
+    // that take returns >= the increment we just caused, and that an
+    // immediate second take returns 0 IF no other test fires in between
+    // (best-effort — timing-sensitive, so we only assert the take API
+    // signature works without panicking).
+    let mut tree = tiny_tree();
+    tree.new_game(Board::new());
+    let n_actions = 19 * 19 + 1;
+    let uniform = vec![1.0_f32 / n_actions as f32; n_actions];
+    let _leaves = tree.select_leaves(1);
+    tree.expand_and_backup(&[uniform], &[0.0]);
+
+    let taken = take_pool_overflow_count();
+    assert!(taken >= 1,
+        "take must return >= the overflow we just triggered (got {})", taken);
 }
 
 #[test]

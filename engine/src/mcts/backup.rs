@@ -1,11 +1,32 @@
 /// Expansion and backup for the MCTS tree.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use crate::board::Board;
 use super::node::Node;
 use super::MCTSTree;
 
-static POOL_OVERFLOW_WARNED: AtomicBool = AtomicBool::new(false);
+/// Process-wide counter of pool-overflow events. Each overflow path
+/// `marks the leaf terminal` with a fabricated value — that propagates
+/// through `backup()` and biases visit counts + value targets. Bench
+/// reads this between measurement windows to drop contaminated runs;
+/// production should periodically log the count to detect silent
+/// training-data corruption.
+///
+/// Replaces the previous once-per-process `AtomicBool` warned-flag,
+/// which swallowed all subsequent overflows after the first.
+pub static POOL_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Read-and-reset the global overflow counter atomically. Returns the
+/// previous value. Used by bench to bracket measurement windows.
+pub fn take_pool_overflow_count() -> u64 {
+    POOL_OVERFLOW_COUNT.swap(0, Ordering::Relaxed)
+}
+
+/// Read the current overflow count without resetting. Used by training
+/// loops that want a running tally rather than a per-window delta.
+pub fn pool_overflow_count() -> u64 {
+    POOL_OVERFLOW_COUNT.load(Ordering::Relaxed)
+}
 
 impl MCTSTree {
     /// Apply quiescence correction to a NN value at a non-terminal leaf.
@@ -118,9 +139,13 @@ impl MCTSTree {
         let n_ch         = legal_moves.len();
         let first_child  = self.next_free;
         if first_child as usize + n_ch > self.pool.len() {
-            if !POOL_OVERFLOW_WARNED.swap(true, Ordering::Relaxed) {
-                eprintln!("[MCTS] pool overflow: next_free={} n_ch={} pool_len={} — marking leaf terminal",
-                    first_child, n_ch, self.pool.len());
+            // Increment the global counter; throttle the eprintln so a
+            // pathological run doesn't flood stderr but the first
+            // occurrence + every 100th still surface in logs.
+            let prev = POOL_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+            if prev == 0 || prev % 100 == 99 {
+                eprintln!("[MCTS] pool overflow #{}: next_free={} n_ch={} pool_len={} — marking leaf terminal",
+                    prev + 1, first_child, n_ch, self.pool.len());
             }
             let corrected = self.apply_quiescence(board, value);
             self.pool[leaf_idx as usize].is_terminal    = true;

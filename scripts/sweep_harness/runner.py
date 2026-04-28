@@ -41,7 +41,14 @@ try:
 except ImportError as exc:  # pragma: no cover - dep is in pyproject
     raise SystemExit("sweep_harness needs PyYAML — pip install pyyaml") from exc
 
-from .compare import CellResult, bimodal_from_raw, compare_iqr, upper_mode_filter
+from .compare import (
+    CellResult,
+    bimodal_from_raw,
+    bimodal_from_real_raw,
+    compare_iqr,
+    count_trough_samples,
+    upper_mode_filter,
+)
 from .knobs import (
     KNOB_ORDER,
     KNOBS,
@@ -84,6 +91,12 @@ _BATCH_RE = re.compile(rf"^\s*Worker pool throughput batch%:\s*median={_NUM}")
 # summary so bimodality detection can read real data instead of a 3-element
 # [min, median, max] proxy. Optional — older bench builds omit it.
 _RAW_RE = re.compile(r"^\s*Worker pool throughput raw pos/hr:\s*\[([^\]]*)\]\s*$")
+# Pool-overflow surface (Tier-1.A from the 2026-04-28 v2 analyst follow-up).
+# Bench prints `total=N per_run=[a,b,c]` so the harness can flag cells where
+# the engine fabricated terminal values via the mark-leaf-terminal recovery.
+_OVR_RE = re.compile(
+    r"^\s*Worker pool throughput pool overflows:\s*total=(\d+)\s+per_run=\[([^\]]*)\]\s*$"
+)
 
 
 def _to_float(s: str) -> float:
@@ -126,6 +139,16 @@ def parse_bench_pos(text: str) -> tuple[CellResult | None, dict]:
                     raw_runs = tuple(float(x) for x in inner.split(","))
                 except ValueError:
                     raw_runs = ()
+        elif (o := _OVR_RE.match(line)) is not None:
+            side["pool_overflows_total"] = float(o.group(1))
+            inner = o.group(2).strip()
+            if inner:
+                try:
+                    side["pool_overflows_per_run"] = json.dumps(
+                        [int(x) for x in inner.split(",")]
+                    )
+                except ValueError:
+                    side["pool_overflows_per_run"] = ""
         elif (g := _GPU_RE.match(line)) is not None:
             side["gpu_util"] = float(g.group(1).replace(",", ""))
         elif (b := _BATCH_RE.match(line)) is not None:
@@ -303,9 +326,17 @@ def make_eval_fn(knob_name: str, fixed: dict[str, Any], cfg: SweepConfig,
             retry = False
             # Prefer real raw runs from the §9 bench output; fall back to
             # the 3-element [min, median, max] proxy on older bench builds.
+            #
+            # 5090 sweep analyst v2 §2.3: with real raws, require >=2
+            # trough samples (run < 0.3 × median) before retrying. A
+            # single zero-completion run in n=3 is startup-race noise,
+            # not a second mode — retrying wastes 240 s × 8 = 32 min per
+            # cell. The proxy fallback keeps the old behaviour for
+            # legacy bench output where only [min, median, max] is known.
             def _bimodal_signal(c: CellResult) -> bool:
-                raw = c.raw if c.raw else (c.min, c.median, c.max)
-                return bimodal_from_raw(raw, c.median)
+                if c.raw:
+                    return bimodal_from_real_raw(c.raw, c.median)
+                return bimodal_from_raw((c.min, c.median, c.max), c.median)
             if cell is not None and _bimodal_signal(cell):
                 print(f"[bimodal] retry with pool_duration={RETRY_POOL_DURATION}s "
                       f"n_runs={RETRY_N_RUNS}", flush=True)
@@ -368,6 +399,11 @@ def _append_cells_csv(path: Path, knob: str, value: Any, fixed: dict, cell: Cell
         # §9: raw per-run pos/hr as JSON list. Empty on legacy bench builds
         # that pre-date the raw-runs stdout line.
         "raw_runs",
+        # Tier-1.A: pool-overflow surface. `pool_overflows_total` is the
+        # cell-wide count; `pool_overflows_per_run` is the JSON list. Both
+        # empty on legacy bench builds.
+        "pool_overflows_total",
+        "pool_overflows_per_run",
     ]
     row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -392,6 +428,9 @@ def _append_cells_csv(path: Path, knob: str, value: Any, fixed: dict, cell: Cell
         "wall_seconds": round(wall_seconds, 1),
         "exit_code": rc,
         "raw_runs": json.dumps(list(cell.raw)) if cell.raw else "",
+        "pool_overflows_total": int(side["pool_overflows_total"])
+            if "pool_overflows_total" in side else "",
+        "pool_overflows_per_run": side.get("pool_overflows_per_run", ""),
     }
     with path.open("a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)

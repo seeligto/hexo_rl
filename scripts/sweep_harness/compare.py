@@ -88,3 +88,46 @@ def upper_mode_filter(raw: Sequence[float], median: float) -> tuple[float, ...]:
     if median <= 0:
         return tuple(raw)
     return tuple(x for x in raw if x >= 0.5 * median)
+
+
+def count_trough_samples(raw: Sequence[float], median: float,
+                         threshold_ratio: float = 0.3) -> int:
+    """Count runs at < ``threshold_ratio`` × median.
+
+    The retry-tightening rule (5090 sweep analyst v2 §2.3): when real raw
+    runs are available, trigger retry only when **multiple** trough
+    samples exist — a single zero-completion run is startup-race noise,
+    not bimodality. Two or more trough samples indicate a real second
+    mode worth re-evaluating.
+    """
+    if median <= 0 or not raw:
+        return 0
+    cutoff = threshold_ratio * median
+    return sum(1 for r in raw if r < cutoff)
+
+
+def bimodal_from_real_raw(raw: Sequence[float], median: float | None = None,
+                          *, min_troughs: int = 2,
+                          threshold_ratio: float = 0.3) -> bool:
+    """Strict bimodal test for cells that have real per-run pos/hr.
+
+    Replaces the synthetic-proxy ``bimodal_from_raw`` call site in the
+    runner when ``CellResult.raw`` is populated. Requires at least
+    ``min_troughs`` runs below ``threshold_ratio × median`` — a single
+    startup-race outlier in n=3 will not trip retry.
+
+    Degenerate case: n=3 with two zero-completion runs has median 0,
+    which would make every cutoff zero. Fall back to ``max`` as the
+    upper reference when median is non-positive but at least one run
+    is healthy. Returning False on a 2-of-3 zero pattern would let a
+    truly broken cell pass undetected.
+    """
+    if not raw:
+        return False
+    med = median if median is not None else statistics.median(raw)
+    if med <= 0:
+        hi = max(raw)
+        if hi <= 0:
+            return False  # all zero — strategy will treat as a failure cell
+        med = hi
+    return count_trough_samples(raw, med, threshold_ratio) >= min_troughs

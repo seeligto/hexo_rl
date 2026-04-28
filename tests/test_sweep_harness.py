@@ -92,6 +92,34 @@ def test_bimodal_from_raw_handles_empty():
     assert bimodal_from_raw([], None) is False
 
 
+def test_bimodal_from_real_raw_requires_two_troughs():
+    """5090 v2 §2.3: single startup-race outlier should NOT trigger retry."""
+    from scripts.sweep_harness.compare import bimodal_from_real_raw
+
+    # n=3 with one zero-completion run, two healthy — burst-phase noise, not bimodal.
+    assert bimodal_from_real_raw([0.0, 380_000.0, 410_000.0]) is False
+    # n=3 with two troughs — true bimodality, retry justified.
+    assert bimodal_from_real_raw([0.0, 0.0, 410_000.0]) is True
+    # n=5 with a single trough among healthy runs — also not bimodal.
+    assert bimodal_from_real_raw(
+        [3_000.0, 380_000.0, 395_000.0, 410_000.0, 415_000.0]
+    ) is False
+    # Empty / zero median: no signal.
+    assert bimodal_from_real_raw([], 0.0) is False
+    assert bimodal_from_real_raw([0.0, 0.0, 0.0]) is False
+
+
+def test_count_trough_samples_threshold():
+    from scripts.sweep_harness.compare import count_trough_samples
+
+    raw = [0.0, 50_000.0, 380_000.0, 400_000.0, 410_000.0]
+    median = statistics.median(raw)  # 380_000
+    # 0 and 50_000 are below 0.3 × 380_000 = 114_000.
+    assert count_trough_samples(raw, median) == 2
+    assert count_trough_samples(raw, median, threshold_ratio=0.5) == 2
+    assert count_trough_samples(raw, median, threshold_ratio=0.1) == 1
+
+
 # ── ternary_search_int ───────────────────────────────────────────────────────
 
 

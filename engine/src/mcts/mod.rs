@@ -21,6 +21,7 @@ mod selection;
 mod backup;
 
 pub use node::{Node, TTEntry, MAX_NODES, VIRTUAL_LOSS_PENALTY};
+pub use backup::{pool_overflow_count, take_pool_overflow_count};
 
 use crate::board::{Board, MoveDiff, BOARD_SIZE};
 use fxhash::FxHashMap;
