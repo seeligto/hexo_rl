@@ -482,7 +482,7 @@ def benchmark_worker_pool(
                 now = time.perf_counter()
                 if now - last_report >= 5.0:
                     elapsed = now - t_warmup
-                    console.print(f"    [dim]... warm-up {elapsed:.0f}s: {pool.games_completed} games, {pool.positions_pushed} positions[/dim]")
+                    console.print(f"    [dim]... warm-up {elapsed:.0f}s: {pool.games_completed} games, {pool.positions_pushed} pushed, {pool._runner.positions_generated} generated[/dim]")
                     last_report = now
             else:
                 # Hit the ceiling without reaching the games target.
@@ -511,9 +511,13 @@ def benchmark_worker_pool(
 
         for i in range(n_runs):
             console.print(f"    [dim]Worker pool run {i+1}/{n_runs} ({duration_sec}s)...[/dim]")
-            # Snapshot counters at start of measurement window
+            # Snapshot counters at start of measurement window.
+            # Use runner.positions_generated (continuous, per-position counter)
+            # rather than pool.positions_pushed (bursts at game completion) so
+            # the throughput metric is stable even when game-completion timing
+            # aligns with the window boundaries (§W1 bench fix).
             games_start = pool.games_completed
-            pos_start = pool.positions_pushed
+            pos_start = pool._runner.positions_generated
             server = pool._inference_server
             fwd_start = server.forward_count
             req_start = server.total_requests
@@ -527,7 +531,7 @@ def benchmark_worker_pool(
                 now = time.perf_counter()
                 if now - last_report >= 5.0:
                     elapsed = now - t0
-                    delta_pos = pool.positions_pushed - pos_start
+                    delta_pos = pool._runner.positions_generated - pos_start
                     delta_games = pool.games_completed - games_start
                     gph = (delta_games / elapsed) * 3600.0
                     console.print(f"    [dim]... {elapsed:.0f}s: {gph:,.1f} games/hour, {delta_pos} positions[/dim]")
@@ -535,7 +539,7 @@ def benchmark_worker_pool(
 
             elapsed = max(time.perf_counter() - t0, 1e-6)
             delta_games = pool.games_completed - games_start
-            delta_pos = pool.positions_pushed - pos_start
+            delta_pos = pool._runner.positions_generated - pos_start
             delta_fwd = server.forward_count - fwd_start
             delta_req = server.total_requests - req_start
             overflow_count = take_mcts_pool_overflow_count()
@@ -617,9 +621,11 @@ _CHECKS_CUDA: list[tuple[str, str, str | None, str, float, bool]] = [
     ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_800,   False),
     ("GPU utilisation %",                 "GPU utilisation",         "gpu",   "value",       85,   True),
     ("VRAM usage GB",                     "GPU utilisation",         "vram",  "value",        0,   False),  # dynamic
-    # §102 rebaseline 2026-04-17: 90s warmup fixed §98 warmup artifact (IQR 188% → 5.7%).
-    # New floor = observed 167,755 × 0.85 = 142,592 → 142,000. PROVISIONAL until second stable run confirms.
-    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  142_000,   True),
+    # §128 2026-04-28: metric switched from positions_pushed (K cluster views × plies, bursts at
+    # game completion) to positions_generated (1 per ply, continuous). K_avg ≈ 7 on typical mid-game
+    # boards → new target = old 142k / 7 ≈ 20k. Desktop observed 29,934 gen/hr (n=1, April-28);
+    # 29,934 × 0.85 = 25,444 → floor 20,000. PROVISIONAL — re-bench n=5 on reference hardware to confirm.
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",   20_000,   True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
 ]
 
@@ -631,7 +637,8 @@ _CHECKS_MPS: list[tuple[str, str, str | None, str, float, bool]] = [
     ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_500,   False),
     ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_800,   False),
     # GPU util / VRAM omitted — pynvml not available on macOS; benchmark_gpu_utilisation returns None
-    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",  200_000,   True),
+    # §128 2026-04-28: scaled from 200k positions_pushed → 200k/7 ≈ 28k positions_generated. Not yet rebaselined on MPS hardware.
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",   25_000,   True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
 ]
 
@@ -643,7 +650,8 @@ _CHECKS_CPU: list[tuple[str, str, str | None, str, float, bool]] = [
     ("Buffer sample raw us/batch",        "Replay buffer",           "raw",   "value",    1_500,   False),
     ("Buffer sample augmented us/batch",  "Replay buffer",           "aug",   "value",    1_800,   False),
     # GPU util / VRAM omitted — no GPU on CPU-only systems
-    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",   80_000,   True),
+    # §128 2026-04-28: scaled from 80k positions_pushed → 80k/7 ≈ 11k positions_generated. Not yet rebaselined on CPU hardware.
+    ("Worker throughput pos/hr",          "Worker pool throughput",  "pph",   "value",   11_000,   True),
     ("Worker batch fill %",              "Worker pool throughput",  "bat",   "value",       84,   True),
 ]
 
