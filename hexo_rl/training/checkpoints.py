@@ -55,14 +55,21 @@ def prune_checkpoints(
     max_kept: Optional[int],
     pattern_str: str = r"^checkpoint_(\d+)\.pt$",
     preserve_predicate: Optional[Callable[[int], bool]] = None,
+    keep_all: bool = False,
+    anchor_every_steps: Optional[int] = None,
 ) -> None:
     """Delete old checkpoint files beyond max_kept.
 
     Keeps the N most recent *rolling* checkpoints by step number.
     Steps for which preserve_predicate(step) is True are never deleted,
     regardless of max_kept — use this to permanently retain eval checkpoints.
+
+    Args:
+        keep_all:          If True, skip all pruning (KEEP_ALL=true mode for debug runs).
+        anchor_every_steps: Also preserve steps that are exact multiples of this value.
+                           Additive with preserve_predicate. None = disabled.
     """
-    if max_kept is None:
+    if keep_all or max_kept is None:
         return
 
     pattern = re.compile(pattern_str)
@@ -74,9 +81,16 @@ def prune_checkpoints(
 
     candidates.sort(key=lambda x: x[0])
 
+    def _is_preserved(step: int) -> bool:
+        if preserve_predicate is not None and preserve_predicate(step):
+            return True
+        if anchor_every_steps and step > 0 and step % anchor_every_steps == 0:
+            return True
+        return False
+
     rolling = [
         (step, p) for step, p in candidates
-        if preserve_predicate is None or not preserve_predicate(step)
+        if not _is_preserved(step)
     ]
     to_delete = rolling[:-max_kept] if len(rolling) > max_kept else []
     for _, p in to_delete:

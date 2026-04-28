@@ -459,6 +459,18 @@ def run_training_loop(
     gpu_monitor = GPUMonitor(interval_sec=5)
     gpu_monitor.start()
 
+    # ── Disk guard ────────────────────────────────────────────────────────────
+    from hexo_rl.monitoring.disk_guard import DiskGuard
+    _dg_cfg = config.get("disk_guard", {})
+    disk_guard = DiskGuard(
+        watch_path=args.checkpoint_dir,
+        interval_sec=float(_dg_cfg.get("interval_sec", 60.0)),
+        warn_gb=float(_dg_cfg.get("warn_gb", 10.0)),
+        fail_gb=float(_dg_cfg.get("fail_gb", 5.0)),
+        keep_all=bool(_dg_cfg.get("keep_all", False)),
+    )
+    disk_guard.start()
+
     # ── Early-game policy-entropy probe (§115 monitoring signal) ──────────────
     # Fixed 10-position fixture. One forward pass per log_interval — rides on
     # the existing _emit_training_events cadence so probe cost is amortised.
@@ -921,6 +933,7 @@ def run_training_loop(
         pool.stop()
         gpu_monitor.stop()
         gpu_monitor.join(timeout=2.0)
+        disk_guard.stop()
         for d in dashboards:
             try:
                 d.stop()

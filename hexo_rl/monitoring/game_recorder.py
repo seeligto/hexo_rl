@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import queue
+import tarfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,19 +22,31 @@ class GameRecorder:
         game_length:      int (number of compound moves / plies)
         timestamp:        ISO 8601 UTC
         checkpoint_step:  int (training step at which the weights were last updated)
+
+    Archiving:
+        When total game records across all JSONL files exceeds ``max_game_records``,
+        the oldest daily file is tar-gzipped to ``<output_dir>/../archives/`` and
+        the original is deleted. Set ``keep_all=True`` to disable archiving.
     """
+
+    _ARCHIVE_CHECK_INTERVAL = 100  # check archive threshold every N records written
 
     def __init__(
         self,
         output_dir: str,
         sample_rate: int = 50,
         enabled: bool = True,
+        max_game_records: int = 1000,
+        keep_all: bool = False,
     ) -> None:
         self._output_dir = Path(output_dir)
         self._sample_rate = sample_rate
         self._enabled = enabled and sample_rate > 0
         self._counter = 0
+        self._records_written = 0
         self._checkpoint_step: int = 0
+        self._max_game_records = max_game_records
+        self._keep_all = keep_all
         # Queue items are (filepath, json_line) tuples, or None as a stop sentinel.
         self._queue: "queue.SimpleQueue[Optional[Tuple[str, str]]]" = queue.SimpleQueue()
         self._thread: Optional[threading.Thread] = None
@@ -101,5 +114,46 @@ class GameRecorder:
             try:
                 with open(path_str, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
+                self._records_written += 1
+                if (
+                    not self._keep_all
+                    and self._records_written % self._ARCHIVE_CHECK_INTERVAL == 0
+                ):
+                    self._maybe_archive()
             except OSError:
                 pass  # never let I/O errors crash the background thread
+
+    def _maybe_archive(self) -> None:
+        """Archive oldest JSONL files until total record count ≤ max_game_records."""
+        try:
+            jsonl_files = sorted(self._output_dir.glob("games_*.jsonl"))
+            if len(jsonl_files) <= 1:
+                return  # never archive the only / active file
+
+            total = sum(_count_lines(f) for f in jsonl_files)
+            if total <= self._max_game_records:
+                return
+
+            archive_dir = self._output_dir.parent / "archives"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+
+            # Archive oldest files (skip the last — active write target).
+            for oldest in jsonl_files[:-1]:
+                lines_in_file = _count_lines(oldest)
+                archive_name = archive_dir / f"{oldest.stem}.tar.gz"
+                with tarfile.open(archive_name, "w:gz") as tar:
+                    tar.add(oldest, arcname=oldest.name)
+                oldest.unlink()
+                total -= lines_in_file
+                if total <= self._max_game_records:
+                    break
+        except Exception:
+            pass  # archiving is best-effort; never crash the writer thread
+
+
+def _count_lines(path: Path) -> int:
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0

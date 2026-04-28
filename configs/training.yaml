@@ -159,3 +159,23 @@ diagnostics:
   perf_timing: false        # B1 train step + B2 inference batch breakdowns
   perf_sync_cuda: false     # B2 wrap forward with torch.cuda.synchronize() for true latency
   vram_probe_interval: 100  # log torch.cuda.max_memory_allocated every N steps (0=off); only fires when perf_timing is also true
+
+# Disk-budget guard. Monitor runs always; pruning controlled by keep_all.
+# Note: preserve_eval_checkpoints=True + eval_interval=5000 already keeps every
+# 5k-step checkpoint forever (eval anchors). anchor_every_steps adds a separate
+# permanent anchor cadence independent of eval — useful when eval is disabled.
+disk_guard:
+  warn_gb: 10.0            # log warning when free disk drops below this
+  fail_gb: 5.0             # send SIGTERM (graceful shutdown) when free drops below this
+  interval_sec: 60.0       # poll interval in seconds
+  keep_all: false          # true = disable all pruning (monitoring still runs); for debug runs
+
+# Checkpoint anchor policy (read by trainer.save_checkpoint).
+# anchor_every_steps: keep checkpoints at step multiples permanently, on top of
+# eval-interval preservation. 5000 = one anchor per 5k steps.
+# Set to 0 or null to rely solely on preserve_eval_checkpoints.
+anchor_every_steps: 5000
+
+# Game-record archiving (read by GameRecorder).
+# At 1/50 sample rate + ~270 games/hr: 10k records ≈ 3-4 weeks of history (~4 MB uncompressed).
+max_game_records: 10000
