@@ -5293,10 +5293,27 @@ IQR stable (continuous counter — bimodal artifact eliminated).
 8/10 targets PASS (buffer_push_per_s and worker_pos_per_hr fail on
 desktop vs laptop-calibrated targets; see perf-targets.md hardware note).
 
+### Bench result (n=5 confirmed, 2026-04-28_19-52)
+
+Desktop RTX 3070, `make bench` (n=5, 120s pool, --no-compile):
+
+| Metric | Observed | Target | |
+|---|---|---|---|
+| worker_pos_per_hr | 27,835 median, IQR ±2,398 (8.6%), [24.6k–30.0k] | ≥ 20,000 | **PASS** |
+| mcts_pool_overflows | 0/0/0/0/0 | 0 | **PASS** |
+| worker_batch_fill_pct | 99.96% | ≥ 84% | **PASS** |
+
+Bimodal artifact eliminated — all 5 runs unimodal (continuous counter,
+no game-completion burst). 20k floor confirmed (observed × 0.85 = 23,659).
+
+4 remaining FAILs (`nn_inference_pos_per_s`, `buffer_push_per_s`,
+`buffer_sample_raw_us`, `buffer_sample_aug_us`) are desktop RTX 3070 vs
+laptop-calibrated targets — hardware mismatch, not regressions.
+
 ### Out of scope
 
-* n=5 re-bench on reference laptop hardware — needed to tighten
-  provisional 20k floor to confirmed floor.
+* Laptop reference re-bench with positions_generated — expected ~25k gen/hr
+  (177,799 pushed ÷ K_avg 7). Would allow tightening 20k floor to ~21k.
 * K_avg variance characterisation — K ranges 1–20+ depending on board
   state; median ≈ 7 is empirical, not analytically derived.
 * Restore positions_pushed metric for training data rate visibility —

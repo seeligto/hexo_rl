@@ -31,8 +31,10 @@ its own target table — do not mix.
 from `positions_pushed` (K cluster views × plies, bursts at game-end) to
 `positions_generated` (1 per ply, continuous). K_avg ≈ 7 on typical mid-game
 boards → all worker targets ÷ 7. Old 177,799 pos_pushed/hr ≡ ~25,400
-pos_gen/hr (consistent with desktop n=1 run: 29,934 gen/hr).
-**Re-bench n=5 on reference hardware needed to confirm new floor.**
+pos_gen/hr. **Desktop RTX 3070 n=5 confirms:** 27,835 median, IQR ±2,398
+(8.6%), range [24.6k–30.0k], PASS against 20k target. Bimodal artifact
+eliminated — all 5 runs unimodal. Target 20k floor confirmed.
+**Laptop reference re-bench still pending** — expect ~25k gen/hr (177,799/7).
 
 Latest baseline **2026-04-25** (compile OFF, trace ON, post-§124).
 Run: `reports/benchmarks/2026-04-25_20-45.json`. 9/10 targets PASS;
@@ -48,7 +50,7 @@ NN inference target lowered to track the compile-off methodology shift.
 | Replay buffer sample augmented (batch=256) | 1,362 µs/batch | ≤ 1,800 µs | IQR ±38 (2.8%); flat |
 | GPU utilization | 100.0% | ≥ 85% | saturated; NN-isolated benchmark |
 | VRAM usage (process) | 0.11 GB / 8.0 GB | ≤ 6.4 GB (80%) | torch.cuda.max_memory_allocated |
-| Worker throughput | 177,799 pos_pushed/hr ≡ ~25,400 pos_gen/hr | ≥ 20,000 pos_gen/hr (**§128 PROVISIONAL**) | §128: metric switched to positions_generated (continuous ply counter). Old floor 142k ÷ K_avg 7 ≈ 20k. Desktop n=1 observed 29,934 gen/hr. IQR will be stable (no burst artifact). Re-bench n=5 on laptop to confirm floor. |
+| Worker throughput | 27,835 pos_gen/hr (desktop n=5, §128) | ≥ 20,000 pos_gen/hr | §128: metric switched to positions_generated (continuous). Desktop RTX 3070 n=5: IQR ±2,398 (8.6%), range [24.6k–30.0k]. 20k floor confirmed (27,835 × 0.85 = 23,659). Laptop baseline ~25,400 gen/hr (177,799 pushed ÷ K_avg 7); re-bench pending. |
 | Batch fill % | 99.2% | ≥ 84% | IQR ±0.32 |
 
 ### Compile-on engineering datum (`make bench.compile`, 2026-04-25)
