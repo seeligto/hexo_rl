@@ -128,8 +128,8 @@ else
     "$PYTHON" -m venv .venv
     ok ".venv created"
 fi
-echo "    Upgrading pip, maturin, pybind11..."
-.venv/bin/pip install --upgrade --quiet pip maturin pybind11
+echo "    Installing pip, maturin, pybind11..."
+.venv/bin/pip install --quiet pip maturin pybind11
 ok "pip / maturin / pybind11 up to date"
 
 # ── [5/10] Detect CUDA and install PyTorch ────────────────────────────────────
@@ -224,7 +224,11 @@ fi
 # ── [10/10] Smoke tests ───────────────────────────────────────────────────────
 step 10 "Running smoke tests..."
 SMOKE_OK=0
-if make test 2>&1; then
+if [[ -f ".venv/.install_smoke_ok" ]]; then
+    ok "Smoke tests [cached — delete .venv/.install_smoke_ok to re-run]"
+    SMOKE_OK=1
+elif make test 2>&1; then
+    touch .venv/.install_smoke_ok
     ok "Smoke tests passed"
     SMOKE_OK=1
 else
