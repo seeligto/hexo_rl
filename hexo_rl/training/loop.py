@@ -612,6 +612,16 @@ def run_training_loop(
         last_warmup_log        = 0.0
         last_iter_games        = 0
         _last_quiescence_fires = 0
+        # MCTS pool-overflow counter snapshot (Tier-1.A from 2026-04-28
+        # 5090 sweep analyst v2). Each overflow fabricates a terminal
+        # value at the leaf and propagates it through backup() — biases
+        # visit counts and policy/value training targets. Counter is
+        # global across all worker threads; sample at log cadence and
+        # warn loudly on growth so silent training-data corruption gets
+        # caught early. Math says overflow shouldn't happen with 400
+        # sims × ~80 legal moves; if delta is non-zero, that's a real
+        # engine bug (or a pathological board state) worth investigating.
+        _last_pool_overflows = 0
         nonlocal _consec_high_gn
 
         while _running[0]:
@@ -828,6 +838,38 @@ def run_training_loop(
                     _cur_qfire    = int(getattr(pool._runner, "mcts_quiescence_fires", 0))
                     _qfire_delta  = _cur_qfire - _last_quiescence_fires
                     _last_quiescence_fires = _cur_qfire
+                    # Pool-overflow surface — soft warning only, not hard-fail.
+                    # We don't know the production frequency yet; aborting
+                    # training on the first occurrence would risk killing
+                    # otherwise-healthy runs over a benign tick. Promote to
+                    # hard-fail once a threshold has been calibrated.
+                    try:
+                        from engine import mcts_pool_overflow_count
+                        _cur_pool_overflows = int(mcts_pool_overflow_count())
+                    except (ImportError, AttributeError):
+                        # Engine wheel pre-dates Tier-1.A counter — silent skip.
+                        _cur_pool_overflows = 0
+                    _pool_overflow_delta = _cur_pool_overflows - _last_pool_overflows
+                    _last_pool_overflows = _cur_pool_overflows
+                    if _pool_overflow_delta > 0:
+                        log.warning(
+                            "mcts_pool_overflow",
+                            step=train_step,
+                            delta=_pool_overflow_delta,
+                            cumulative=_cur_pool_overflows,
+                            msg=(
+                                "MCTS pool overflow — engine fabricated terminal "
+                                "values, biasing training targets. Math says this "
+                                "should never happen; investigate board state at "
+                                "next occurrence."
+                            ),
+                        )
+                        emit_event({
+                            "event": "mcts_pool_overflow",
+                            "step": train_step,
+                            "delta": _pool_overflow_delta,
+                            "cumulative": _cur_pool_overflows,
+                        })
                     _emit_training_events(
                         train_step, loss_info, w_pre, games_played,
                         last_iter_games, pool, buffer, gpu_monitor,
