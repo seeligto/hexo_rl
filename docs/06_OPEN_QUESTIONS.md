@@ -26,6 +26,7 @@
 | Q32 | Threat-scalar magnitude vs policy-ranking decoupling on bootstrap: contrast flips negative on real fixture yet policy still routes 60% top-5 | Track across sustained runs; correlate threat-head logit drift with C2/C3 on real-fixture probe | 0 GPU-days (watch) | WATCH — bookkeeping only |
 | ~~Q33~~ | ~~Self-play policy-target entropy at bootstrap strength — 20K `pe_self ≈ 5.35` driving mixed-batch noise hypothesis~~ | **RESOLVED 2026-04-21 (non-pathology).** Q33-C2 (sprint §112, `reports/q33c2_augmentation_discriminator_2026-04-21.md`): disabling augmentation does not drop `pe_self`; fixed point is distribution, not augmentation. | done | resolved |
 | ~~Q37~~ | ~~Trainer-update-path hypothesis for `pe_self` fixed point~~ | **RESOLVED 2026-04-21 (non-pathology).** Q33-C2 rules out the augmentation mask branch; distribution-shift reading has direct empirical support. See sprint §112. | done | resolved |
+| Q40 | MCTS subtree reuse: re-root vs reset per move + §100 selective-policy-loss interaction | Implement `advance_to_child` on Rust path; A/B vs current `new_game(board.clone())` baseline at fixed compute; head-to-head (b) drop §100 vs (a) clear-on-mode-switch | ~3 GPU-days impl + 2 GPU-days ablation | MEDIUM-HIGH |
 
 **Q33 (2026-04-21, WATCH, see sprint §109):** The diag-20K report read
 `policy_entropy_selfplay ≈ 5.35` as evidence that MCTS visit targets were
@@ -206,6 +207,114 @@ lands as a standalone session.
 **Cost:** ~300 LoC, its own session, full Rust concurrency review.
 
 **Reference:** docs/perf/supply_wave_report.md §6 item 1.
+
+---
+
+### Q40 — MCTS subtree reuse + §100 interaction (2026-04-28, ACTIVE)
+
+**Source:** Audit triad 2026-04-28 — see
+`reports/investigations/subtree_reuse_audit_A.md` and
+`reports/investigations/subtree_reuse_audit_B.md`.
+
+**Current behaviour:** `engine/src/game_runner/worker_loop.rs:183` calls
+`tree.new_game(board.clone())` per move. Every MCTS search starts on a
+fresh tree — accumulated visits/Q on the chosen child's subtree are
+discarded.
+
+**Audit findings:**
+
+- Top-child visit share across mid-game positions (ply 12-24, n=30,
+  100 sims): median **0.544**, mean 0.547, p25=0.31, p90=0.90. HeXO
+  retains ~54% of search work below the chosen child — higher than
+  the 25-50% band the original finding assumed.
+- TT memory bound: ~1.5 KB/entry × ~12.5k entries/game = ~18.8 MB/
+  worker uncapped (~263 MB on 14-worker laptop, ~451 MB on 24-worker
+  EPYC). LRU eviction cap = 2×N_sims trims to ~17 MB/worker total.
+  Not a blocker.
+- `new_game()` wall-clock: ~80 ns empty TT, ~30 µs with full TT.
+  Negligible (~1 ms/game).
+- Real ROI = skipped NN evals: ~7,200 evals/game/worker upper bound,
+  ~3.6 s/game/worker in dispatch-bound regime.
+- Q-flip on retained subtree: NOT needed. `w_value` stored in node's
+  own perspective; backup recomputes parent perspective at backup
+  time (`engine/src/mcts/backup.rs:232`). Re-root = set
+  `pool[new_root].parent = u32::MAX`; no traversal.
+- §73 Dirichlet skip-on-intermediate-plies invariant preserved
+  automatically — `apply_dirichlet_to_root` only fires from
+  `worker_loop.rs:293` (Gumbel) and `:377` (PUCT), guarded.
+- TT key is u128 Zobrist (position-only). Cheaper to clear TT on
+  re-root than to walk-filter; §59's cross-game leak reason does not
+  apply within-game.
+- Quiescence override (§83): bakes into ancestors' `w_value` via
+  backup. Retained subtree carries stale quiescence contributions.
+  Standard AlphaZero staleness tradeoff; accepted.
+- Python `SelfPlayWorker` (eval-only path) does NOT need porting —
+  not on the training-data path. Rust-only port. Eval/training
+  search-strength asymmetry documented but accepted.
+
+**Open: §100 selective-policy-loss interaction.** Quick-search
+(100 sims) following full-search (600 sims) inherits ~324 sims of
+accumulated work → effective N ≈ 424 instead of nominal 100.
+Selective-policy mask was designed against fresh-tree visit-target
+semantics. Three resolutions:
+
+- **(a)** Tree-clear on `is_full_search` mode switch (full→quick or
+  quick→full). Preserves §100 semantics. Halves reuse Elo (any cross-
+  mode transition discards accumulation).
+- **(b) [leading candidate]** Drop §100. Run uniform N with reuse.
+  Reuse-accumulated depth substitutes for §100's compute-saving
+  rationale. Couple-line trainer change; replay buffer keeps
+  `is_full_search` column unread → no HEXB version bump. Risk:
+  early-game policy targets (compound_move ≤ 2, no reuse yet) are
+  thin — mitigate with a 2-move policy-loss-skip guard preserving
+  §100's noise-gating intent without the full apparatus.
+- **(c)** Recalibrate sim budgets (e.g. full=400, quick=50). Composes
+  with (a) or (b). Documents reuse as the budget multiplier.
+
+(a)⊥(b) at design level (do or don't preserve §100). (c) composes
+either way.
+
+**Decision gate:** pending channel-drop investigation outcome + audit
+C (`subtree_reuse_audit_C.md` — selective policy loss code-traced
+compatibility audit, not yet run).
+
+**Implementation sketch (when ungated):**
+
+```rust
+// engine/src/mcts/tree.rs
+impl MCTSTree {
+    pub fn advance_to_child(&mut self, action: Action, new_board: Board) {
+        let new_root_idx = self.pool[self.root].children[action.0];
+        self.pool[new_root_idx].parent = u32::MAX;
+        self.root = new_root_idx;
+        self.root_board = new_board;
+        self.transposition_table.clear();
+        self.forced_root_child = None;
+        // Dirichlet handled at existing call sites (worker_loop.rs:293/:377)
+        // — guard `moves_remaining==1 && ply>0` preserved by no change there.
+    }
+}
+```
+
+Replace at `engine/src/game_runner/worker_loop.rs:183`:
+
+```rust
+// before: tree.new_game(board.clone());
+tree.advance_to_child(chosen_action, board.clone());
+// (board.clone() still required — tree owns root_board after advance)
+```
+
+Skip-conditions for re-root path (preserve, don't reuse, on these moves):
+- Random-opening-plies branch (`worker_loop.rs:158-167`)
+- Game-start (existing `new_game()` semantics retained for new games only)
+
+**Expected upside:** 30-80 self-play Elo at fixed compute (audit B
+top-child share band suggests the upper end is plausible for HeXO).
+
+**Cost:** 2-4 dev days (Rust-only port + tests + bench-before-after).
+
+**Roadmap reference:** `docs/02_roadmap.md` Phase 4.0 task list, gated on
+channel-drop verdict and audit C.
 
 ---
 
