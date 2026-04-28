@@ -164,6 +164,62 @@ def test_bisect_finds_threshold():
     assert best >= 16
 
 
+# ── resume / load_cells_csv ──────────────────────────────────────────────────
+
+
+def test_load_cells_csv_returns_cell_results(tmp_path):
+    from scripts.sweep_harness.runner import load_cells_csv
+    import csv as _csv, json as _json
+
+    csv_path = tmp_path / "cells.csv"
+    rows = [
+        {"knob": "n_workers", "value": "14", "median_pos": "29934.0",
+         "iqr_pos": "500.0", "min_pos": "29000.0", "max_pos": "31000.0",
+         "n_runs": "5", "raw_runs": _json.dumps([29000.0, 29500.0, 29934.0, 30000.0, 31000.0])},
+        {"knob": "inference_batch_size", "value": "64", "median_pos": "28000.0",
+         "iqr_pos": "300.0", "min_pos": "27500.0", "max_pos": "28500.0",
+         "n_runs": "5", "raw_runs": ""},
+    ]
+    with csv_path.open("w", newline="") as f:
+        w = _csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+
+    cache = load_cells_csv(csv_path, "n_workers")
+    assert 14.0 in cache
+    r = cache[14.0]
+    assert r.median == 29934.0
+    assert r.iqr == 500.0
+    assert len(r.raw) == 5
+
+    # Different knob returns empty.
+    assert load_cells_csv(csv_path, "max_train_burst") == {}
+    # Missing file returns empty.
+    assert load_cells_csv(tmp_path / "nonexistent.csv", "n_workers") == {}
+
+
+def test_load_cells_csv_last_row_wins(tmp_path):
+    from scripts.sweep_harness.runner import load_cells_csv
+    import csv as _csv
+
+    csv_path = tmp_path / "cells.csv"
+    rows = [
+        {"knob": "n_workers", "value": "14", "median_pos": "10000.0",
+         "iqr_pos": "0.0", "min_pos": "10000.0", "max_pos": "10000.0",
+         "n_runs": "1", "raw_runs": ""},
+        {"knob": "n_workers", "value": "14", "median_pos": "29934.0",
+         "iqr_pos": "500.0", "min_pos": "29000.0", "max_pos": "31000.0",
+         "n_runs": "5", "raw_runs": ""},
+    ]
+    with csv_path.open("w", newline="") as f:
+        w = _csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+
+    cache = load_cells_csv(csv_path, "n_workers")
+    assert cache[14.0].median == 29934.0  # last row wins
+
+
 # ── knob registry helpers ────────────────────────────────────────────────────
 
 

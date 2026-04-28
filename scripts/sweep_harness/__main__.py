@@ -25,6 +25,7 @@ from .runner import (
     detect_host,
     run_sweep,
 )
+from pathlib import Path as _Path
 
 
 def _parse_fix(items: list[str]) -> dict[str, object]:
@@ -106,6 +107,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
     fixed = _parse_fix(args.fix or [])
     knob_overrides = _parse_knob_overrides(args.coarse or [], args.bounds or [])
 
+    resume_csv = _Path(args.resume) if args.resume else None
+    if resume_csv is not None and not resume_csv.exists():
+        raise SystemExit(f"--resume: file not found: {resume_csv}")
+
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     out_dir = Path(args.out_dir) / f"{host['host_id']}_{timestamp}"
 
@@ -119,6 +124,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         out_dir=out_dir,
         dry_run=args.dry_run,
         knob_overrides=knob_overrides,
+        resume_csv=resume_csv,
     )
     print(f"[sweep] host={host['host_id']} knobs={knobs} fixed={fixed} dry_run={args.dry_run}",
           flush=True)
@@ -175,6 +181,10 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--bounds", nargs="*", default=None, metavar="KNOB=lo:hi",
                        help="Override search bounds for a ternary or bisect knob. "
                             "Example: --bounds n_workers=32:128")
+    p_run.add_argument("--resume", default=None, metavar="CELLS_CSV",
+                       help="Path to a prior sweep's cells.csv. Already-evaluated "
+                            "(knob, value) pairs are loaded from that file and skip bench. "
+                            "Example: --resume reports/sweeps/ryzen-16t-rtx3070_2026-04-28_20-00/cells.csv")
     p_run.set_defaults(func=_cmd_run)
 
     args = p.parse_args(argv)

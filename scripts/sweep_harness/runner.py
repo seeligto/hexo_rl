@@ -3,21 +3,21 @@
 Each knob in ``KNOB_ORDER`` runs its declared strategy. Earlier-knob winners
 are passed forward via ``fixed`` so downstream evals see the right config.
 
-Subprocess design (matches ``scripts/sweep_epyc4080.py``):
+Subprocess design:
 * Fresh ``python scripts/benchmark.py`` per cell — the alternative would be
   to import the bench harness in-process, but each bench creates and tears
   down a CUDA context plus a worker pool. A leaked context from a prior cell
-  has historically produced bimodal startup-race results; fresh process
-  guarantees clean state.
+  can corrupt measurements; fresh process guarantees clean state.
 * ``--no-compile`` is always passed (§124 methodology pin: production
   training has ``torch_compile=false``; bench gate must mirror it).
 * Override YAML layers ``configs/variants/_sweep_template.yaml`` + per-cell
   knob values, written to a tempfile and unlinked after the cell exits.
 
 Recoverability: every cell appends a row to ``cells.csv`` immediately after
-it finishes. A killed sweep can be resumed by a future ``--resume`` flag
-without re-running completed cells. (Resume is not wired in this revision —
-the CSV is the durable record; pulling rows out is a one-line filter.)
+it finishes. Pass ``--resume <path/to/cells.csv>`` to a new sweep invocation
+and already-evaluated (knob, value) pairs are loaded from the CSV instead of
+re-running bench. The new sweep writes its own output dir + cells.csv;
+resumed rows are NOT re-appended (they live in the source CSV only).
 """
 
 from __future__ import annotations
@@ -101,6 +101,56 @@ def _to_float(s: str) -> float:
     elif s.endswith("M"):
         mult, s = 1e6, s[:-1]
     return float(s.replace(",", "")) * mult
+
+
+def _coerce_value(s: str) -> int | float:
+    """Parse a knob value from CSV: int if no decimal point, else float."""
+    try:
+        return int(s)
+    except ValueError:
+        return float(s)
+
+
+def load_cells_csv(path: Path, knob_name: str) -> dict[float, CellResult]:
+    """Load per-value CellResults for one knob from a prior sweep's cells.csv.
+
+    Returns ``{float(value): CellResult}`` so resumed sweeps can return cached
+    results without running bench. When multiple rows exist for the same
+    (knob, value), the last row (latest write) wins.
+
+    Returns an empty dict on any read/parse error so a missing or corrupt CSV
+    never hard-fails the sweep — caller treats absence as "no resume data".
+    """
+    if not path.exists():
+        return {}
+    cache: dict[float, CellResult] = {}
+    try:
+        with path.open(newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("knob") != knob_name:
+                    continue
+                try:
+                    fv = float(_coerce_value(row["value"]))
+                    median = float(row["median_pos"])
+                    iqr = float(row["iqr_pos"])
+                    lo = float(row["min_pos"])
+                    hi = float(row["max_pos"])
+                    n = int(row["n_runs"])
+                    raw_s = row.get("raw_runs", "")
+                    raw: tuple[float, ...] = ()
+                    if raw_s:
+                        try:
+                            raw = tuple(json.loads(raw_s))
+                        except Exception:
+                            raw = ()
+                    cache[fv] = CellResult(median=median, iqr=iqr, min=lo, max=hi,
+                                           n_runs=n, raw=raw)
+                except (KeyError, ValueError):
+                    continue
+    except Exception:
+        return {}
+    return cache
 
 
 def parse_bench_pos(text: str) -> tuple[CellResult | None, dict]:
@@ -224,6 +274,9 @@ class SweepConfig:
     #   "coarse": list[int|float]  — replaces spec["coarse"] or spec["values"]
     #   "bounds": tuple[int,int]   — replaces spec["bounds"] for ternary/bisect
     knob_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Path to a prior sweep's cells.csv. (knob, value) rows are loaded into
+    # eval_fn's cache so already-evaluated cells skip bench. See load_cells_csv.
+    resume_csv: Path | None = None
 
 
 def _write_override(template: Path, fixed: dict[str, Any],
@@ -288,14 +341,29 @@ def run_bench_subprocess(override: Path, n_workers: int, pool_duration: int,
 
 
 def make_eval_fn(knob_name: str, fixed: dict[str, Any], cfg: SweepConfig,
-                 csv_path: Path, host: dict[str, Any]) -> Callable[[Any], CellResult]:
+                 csv_path: Path, host: dict[str, Any],
+                 preload: "dict[float, CellResult] | None" = None,
+                 ) -> Callable[[Any], CellResult]:
     """Build the ``eval_fn`` passed into a strategy.
 
     Resolves the worker count for this cell (from ``fixed`` or default 16),
     writes the override, runs bench, parses pos/hr.
+
+    ``preload`` is an optional {float(value): CellResult} dict loaded from a
+    prior sweep's cells.csv via ``load_cells_csv``. Pre-loaded values are
+    returned immediately without running bench; they are NOT re-appended to
+    the new cells.csv (they live in the source CSV only).
     """
+    _preload = preload or {}
 
     def eval_fn(value: Any) -> CellResult:
+        fv = float(value)
+        if fv in _preload:
+            result = _preload[fv]
+            print(f"\n[resume] knob={knob_name} value={value} "
+                  f"(loaded from CSV — median={result.median:,.0f})", flush=True)
+            return result
+
         knob_value = {knob_name: value}
         # n_workers cell needs the value as worker count; for other knobs
         # use the resolved fixed worker (raise if not yet known).
@@ -436,6 +504,16 @@ def run_sweep(cfg: SweepConfig, host: dict[str, Any]) -> dict[str, Any]:
             f"or reduce --knobs."
         )
 
+    # Load resume cache once; per-knob dicts passed into make_eval_fn.
+    resume_cache: dict[str, dict[float, CellResult]] = {}
+    if cfg.resume_csv is not None:
+        for k in knob_list:
+            loaded = load_cells_csv(cfg.resume_csv, k)
+            if loaded:
+                resume_cache[k] = loaded
+                print(f"[resume] knob={k}: {len(loaded)} cached cell(s) from {cfg.resume_csv}",
+                      flush=True)
+
     cmp_fn = compare_iqr
     t_start = time.time()
     interrupted = False
@@ -462,7 +540,8 @@ def run_sweep(cfg: SweepConfig, host: dict[str, Any]) -> dict[str, Any]:
             if cfg.dry_run:
                 eval_fn = _dry_run_eval(k)
             else:
-                eval_fn = make_eval_fn(k, fixed, cfg, cells_csv, host)
+                eval_fn = make_eval_fn(k, fixed, cfg, cells_csv, host,
+                                       preload=resume_cache.get(k))
 
             if s == "ternary":
                 low, high = (spec["bounds"] if isinstance(spec.get("bounds"), tuple)

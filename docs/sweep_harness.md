@@ -36,6 +36,10 @@ bash scripts/sweep.sh run --knobs n_workers,inference_batch_size
 bash scripts/sweep.sh run --fix n_workers=24 --knobs inference_batch_size
 bash scripts/sweep.sh run --max-minutes 60           # tighter budget; aborts if exceeded
 
+# Resume a killed sweep — already-evaluated cells skip bench:
+bash scripts/sweep.sh run \
+  --resume reports/sweeps/ryzen-16t-rtx3070_2026-04-28_20-00/cells.csv
+
 # Per-knob overrides (no registry edit required):
 bash scripts/sweep.sh run --knobs inference_batch_size --fix n_workers=55 \
   --coarse inference_batch_size=256,384,512           # extend grid above registry default
@@ -228,8 +232,25 @@ after the cell exits.
 ## Recoverability
 
 `cells.csv` is append-only and written immediately after each cell
-completes. A killed sweep can be resumed by hand by filtering the CSV;
-`--resume` is not yet wired into the CLI.
+completes. Pass `--resume <path/to/cells.csv>` to a new sweep run and
+already-evaluated `(knob, value)` pairs load from the file instead of
+re-running bench. The new sweep writes its own output dir and `cells.csv`;
+resumed rows are **not** re-appended.
+
+```sh
+# Resume an interrupted sweep from its cells.csv:
+bash scripts/sweep.sh run \
+  --resume reports/sweeps/ryzen-16t-rtx3070_2026-04-28_20-00/cells.csv \
+  --max-minutes 300
+```
+
+When a `(knob, value)` pair has **multiple rows** in the source CSV
+(e.g. a cell was re-evaluated), the **last** row wins — most recent
+measurement takes precedence.
+
+`raw_runs` column is a JSON list of per-run pos/hr values. The resume
+loader populates `CellResult.raw` from this column so IQR-aware
+comparison uses the same data as a fresh measurement.
 
 ## Related docs
 

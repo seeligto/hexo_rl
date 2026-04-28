@@ -14,6 +14,7 @@ from .compare import (
     compare_iqr,
 )
 from .knobs import KNOBS, knob_registry, resolve_auto_bounds
+from .runner import load_cells_csv
 from .strategies import (
     bisect_search,
     grid_coarse_refine,
@@ -29,6 +30,7 @@ __all__ = [
     "grid_coarse_refine",
     "grid_search",
     "knob_registry",
+    "load_cells_csv",
     "resolve_auto_bounds",
     "ternary_search_int",
 ]
