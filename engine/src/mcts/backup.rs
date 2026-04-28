@@ -1,19 +1,23 @@
 /// Expansion and backup for the MCTS tree.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use fxhash::FxHashSet;
 use crate::board::Board;
 use super::node::Node;
-use super::MCTSTree;
+use super::{MCTSTree, MAX_CHILDREN_PER_NODE};
 
-/// Process-wide counter of pool-overflow events. Each overflow path
-/// `marks the leaf terminal` with a fabricated value — that propagates
-/// through `backup()` and biases visit counts + value targets. Bench
-/// reads this between measurement windows to drop contaminated runs;
-/// production should periodically log the count to detect silent
-/// training-data corruption.
+/// Process-wide counter of pool-overflow events.
 ///
-/// Replaces the previous once-per-process `AtomicBool` warned-flag,
-/// which swallowed all subsequent overflows after the first.
+/// Should always read 0 in production: `MAX_CHILDREN_PER_NODE` caps children
+/// per node, and `MAX_NODES` is sized so `n_sims × leaf_batch × K` fits with
+/// headroom. Any non-zero value indicates either a hand-crafted small pool
+/// (test fixtures) or a configuration outside the design envelope.
+///
+/// On overflow the leaf expansion **panics** rather than fabricate a
+/// terminal value; this counter increments immediately before the panic so
+/// telemetry can attribute the crash. Earlier behaviour (silently marking
+/// the leaf terminal with a quiescence-corrected value) was removed because
+/// it corrupted training targets without surfacing the issue.
 pub static POOL_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Read-and-reset the global overflow counter atomically. Returns the
@@ -26,6 +30,82 @@ pub fn take_pool_overflow_count() -> u64 {
 /// loops that want a running tally rather than a per-window delta.
 pub fn pool_overflow_count() -> u64 {
     POOL_OVERFLOW_COUNT.load(Ordering::Relaxed)
+}
+
+/// Pick up to `MAX_CHILDREN_PER_NODE` children for a leaf expansion.
+///
+/// Returns `(chosen, sort_used)`:
+/// * `chosen` — `Vec<((q, r), prior)>`, length `min(legal_moves.len(), K)`.
+/// * `sort_used` — `true` when the slow path (sort + truncate) ran,
+///   `false` for the fast path. Exposed only so unit tests can assert
+///   the fast path is taken when `legal_moves.len() <= K`.
+///
+/// Fast path (`n_legal <= K`): emit every legal move in HashSet iteration
+/// order with its policy prior (or `1/n_ch` fallback for out-of-window
+/// cells). Identical to the pre-cap behaviour.
+///
+/// Sort path (`n_legal > K`): order by `(prior desc, window_flat_idx asc)`
+/// and take the top K. The flat-index tie-break is what makes the truncated
+/// set deterministic regardless of `FxHashSet` iteration order.
+///
+/// Out-of-window cells (`window_flat_idx == usize::MAX`) get sort prior
+/// `0.0` so they sink to the bottom of the slow path; in the fast path
+/// they keep the legacy `1/n_ch` fallback prior. Out-of-window legal cells
+/// are vanishingly rare given the centred 19×19 view + radius-8 hex ball.
+pub(crate) fn pick_topk_children(
+    legal_moves: &FxHashSet<(i32, i32)>,
+    cq: i32,
+    cr: i32,
+    policy: &[f32],
+) -> (Vec<((i32, i32), f32)>, bool) {
+    let n_legal = legal_moves.len();
+    let n_ch = n_legal.min(MAX_CHILDREN_PER_NODE);
+
+    if n_legal <= MAX_CHILDREN_PER_NODE {
+        let chosen: Vec<((i32, i32), f32)> = legal_moves
+            .iter()
+            .map(|&(q, r)| {
+                let flat = Board::window_flat_idx_at(q, r, cq, cr);
+                let prior = if flat < policy.len() {
+                    policy[flat]
+                } else {
+                    1.0 / n_ch as f32
+                };
+                ((q, r), prior)
+            })
+            .collect();
+        return (chosen, false);
+    }
+
+    let mut all: Vec<((i32, i32), f32, usize)> = legal_moves
+        .iter()
+        .map(|&(q, r)| {
+            let flat = Board::window_flat_idx_at(q, r, cq, cr);
+            let sort_prior = if flat < policy.len() { policy[flat] } else { 0.0 };
+            ((q, r), sort_prior, flat)
+        })
+        .collect();
+
+    all.sort_unstable_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.2.cmp(&b.2))
+    });
+    all.truncate(MAX_CHILDREN_PER_NODE);
+
+    let chosen: Vec<((i32, i32), f32)> = all
+        .into_iter()
+        .map(|((q, r), _sort_prior, flat)| {
+            let prior = if flat < policy.len() {
+                policy[flat]
+            } else {
+                1.0 / n_ch as f32
+            };
+            ((q, r), prior)
+        })
+        .collect();
+
+    (chosen, true)
 }
 
 impl MCTSTree {
@@ -136,22 +216,25 @@ impl MCTSTree {
             return;
         }
 
-        let n_ch         = legal_moves.len();
-        let first_child  = self.next_free;
+        // Top-K cap on leaf children (see MAX_CHILDREN_PER_NODE doc).
+        let (cq, cr) = board.window_center();
+        let (chosen, _sort_used) = pick_topk_children(legal_moves, cq, cr, policy);
+        let n_ch        = chosen.len();
+        let first_child = self.next_free;
+
         if first_child as usize + n_ch > self.pool.len() {
-            // Increment the global counter; throttle the eprintln so a
-            // pathological run doesn't flood stderr but the first
-            // occurrence + every 100th still surface in logs.
-            let prev = POOL_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-            if prev == 0 || prev % 100 == 99 {
-                eprintln!("[MCTS] pool overflow #{}: next_free={} n_ch={} pool_len={} — marking leaf terminal",
-                    prev + 1, first_child, n_ch, self.pool.len());
-            }
-            let corrected = self.apply_quiescence(board, value);
-            self.pool[leaf_idx as usize].is_terminal    = true;
-            self.pool[leaf_idx as usize].terminal_value = corrected;
-            self.backup(leaf_idx, corrected);
-            return;
+            // Should be unreachable in production: pool is sized for
+            // n_simulations × leaf_batch × MAX_CHILDREN_PER_NODE. Increment
+            // the counter for telemetry attribution, then panic — never
+            // fabricate a terminal value here, that silently corrupts
+            // training targets (the prior `is_terminal=true` shortcut).
+            POOL_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+            panic!(
+                "MCTS pool overflow: next_free={} n_ch={} pool_len={} K={}. \
+                 Pool sizing assumption violated — increase MAX_NODES or \
+                 reduce n_simulations × leaf_batch.",
+                first_child, n_ch, self.pool.len(), MAX_CHILDREN_PER_NODE
+            );
         }
         self.next_free += n_ch as u32;
 
@@ -161,15 +244,8 @@ impl MCTSTree {
         self.pool[leaf_idx as usize].first_child = first_child;
         self.pool[leaf_idx as usize].n_children  = n_ch as u16;
 
-        for (j, &(q, r)) in legal_moves.iter().enumerate() {
-            let ci          = first_child as usize + j;
-            let action_flat = board.window_flat_idx(q, r);
-            let prior = if action_flat < policy.len() {
-                policy[action_flat]
-            } else {
-                1.0 / n_ch as f32
-            };
-
+        for (j, &((q, r), prior)) in chosen.iter().enumerate() {
+            let ci             = first_child as usize + j;
             let action_encoded = (((q + 32768) as u32) << 16) | ((r + 32768) as u32 & 0xFFFF);
 
             self.pool[ci] = Node {

@@ -23,6 +23,26 @@ mod backup;
 pub use node::{Node, TTEntry, MAX_NODES, VIRTUAL_LOSS_PENALTY};
 pub use backup::{pool_overflow_count, take_pool_overflow_count};
 
+/// Maximum children created per leaf expansion.
+///
+/// Caps `expand_and_backup_single`: when the position has more than this many
+/// legal moves, only the top-K by NN policy prior are expanded (tie-break by
+/// `window_flat_idx` for determinism). Fewer-than-K positions take a fast
+/// path with no sort.
+///
+/// Bound: pool nodes consumed per search ≈ n_simulations × leaf_batch × K.
+/// At n_sims=400, leaf_batch=8, K=192 → ~614k slots, fits MAX_NODES=1M with
+/// headroom for transposition-table re-expansions and root re-rooting (Q40).
+///
+/// Captures wide-board exploration during early training (legal_moves can
+/// balloon past 1k cells once the board has 100+ stones spread out). Can drop
+/// to 128 post-training-stabilisation if threat-probe shows no regression.
+///
+/// Q40 (subtree reuse) interaction: K is per-node, not per-tree. Children are
+/// stable identity across re-roots since the chosen top-K set is determined
+/// by local policy + flat_idx, both invariant under root rotation.
+pub const MAX_CHILDREN_PER_NODE: usize = 192;
+
 use crate::board::{Board, MoveDiff, BOARD_SIZE};
 use fxhash::FxHashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -332,6 +352,13 @@ impl MCTSTree {
 
     pub fn root_visits(&self) -> u32 {
         self.pool[0].n_visits
+    }
+
+    /// First unallocated pool slot. Useful for tests/audits that want to
+    /// scan only the live portion of the node pool without iterating
+    /// `MAX_NODES` zeroed slots.
+    pub fn next_free_slot(&self) -> u32 {
+        self.next_free
     }
 
     pub fn reset(&mut self) {
@@ -1338,5 +1365,129 @@ mod tests {
         // Only 2 actions should be non-zero out of board_size*board_size+1.
         let nonzero_count = policy.iter().filter(|&&p| p > 0.0).count();
         assert_eq!(nonzero_count, 2, "only legal actions should have non-zero prob, got {nonzero_count}");
+    }
+
+    // ── Top-K leaf cap tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_topk_truncates_at_max_children() {
+        use fxhash::FxHashSet;
+        use crate::board::HALF;
+        use super::backup::pick_topk_children;
+
+        // 600 unique cells split between 200 in-window (high priors) and
+        // 400 out-of-window (sort prior 0.0). Top K will be drawn from the
+        // 200 in-window cells since out-of-window sinks under sort.
+        let mut cells: FxHashSet<(i32, i32)> = FxHashSet::default();
+        'iw: for q in -HALF..=HALF {
+            for r in -HALF..=HALF {
+                cells.insert((q, r));
+                if cells.len() == 200 { break 'iw; }
+            }
+        }
+        'ow: for q in 30..=60 {
+            for r in 30..=60 {
+                cells.insert((q, r));
+                if cells.len() == 600 { break 'ow; }
+            }
+        }
+        assert_eq!(cells.len(), 600, "test setup must produce 600 cells");
+
+        // Strictly increasing prior with flat_idx → unique priors for
+        // every in-window cell.
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let policy: Vec<f32> =
+            (0..n_actions).map(|i| (i + 1) as f32 / n_actions as f32).collect();
+
+        let (chosen, sort_used) = pick_topk_children(&cells, 0, 0, &policy);
+        assert!(sort_used, "600 > K must take sort path");
+        assert_eq!(chosen.len(), MAX_CHILDREN_PER_NODE,
+            "chosen must equal K, got {}", chosen.len());
+
+        // Top K should all be in-window since out-of-window sort_prior=0.0
+        // and 200 in-window cells with policy > 0 dominate.
+        for &((q, r), prior) in &chosen {
+            let flat = Board::window_flat_idx_at(q, r, 0, 0);
+            assert!(flat < n_actions,
+                "top-K must be drawn from in-window cells, got flat={flat} for ({q},{r})");
+            assert!(prior > 0.0,
+                "in-window cell prior must be >0 for this fixture, got {prior}");
+        }
+
+        // With all-in-window selection and priors monotonic in flat, the
+        // chosen Vec's priors must be non-increasing.
+        for w in chosen.windows(2) {
+            assert!(w[0].1 >= w[1].1,
+                "priors must be non-increasing: {} then {}", w[0].1, w[1].1);
+        }
+    }
+
+    #[test]
+    fn test_topk_tie_break_by_flat_idx() {
+        use fxhash::FxHashSet;
+        use crate::board::HALF;
+        use super::backup::pick_topk_children;
+
+        // K + 1 cells inside window with identical priors → exactly one is
+        // dropped. Tie-break = flat_idx asc, so the cell with the largest
+        // flat_idx is the one dropped.
+        let target = MAX_CHILDREN_PER_NODE + 1;
+        let mut cells: FxHashSet<(i32, i32)> = FxHashSet::default();
+        let mut flats_inserted: Vec<usize> = Vec::new();
+        'outer: for q in -HALF..=HALF {
+            for r in -HALF..=HALF {
+                let flat = Board::window_flat_idx_at(q, r, 0, 0);
+                cells.insert((q, r));
+                flats_inserted.push(flat);
+                if cells.len() == target { break 'outer; }
+            }
+        }
+        assert_eq!(cells.len(), target);
+
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform_high = vec![0.5_f32; n_actions];
+
+        let (chosen, sort_used) = pick_topk_children(&cells, 0, 0, &uniform_high);
+        assert!(sort_used);
+        assert_eq!(chosen.len(), MAX_CHILDREN_PER_NODE);
+
+        let chosen_flats: std::collections::HashSet<usize> = chosen
+            .iter()
+            .map(|&((q, r), _)| Board::window_flat_idx_at(q, r, 0, 0))
+            .collect();
+
+        let max_flat = *flats_inserted.iter().max().unwrap();
+        assert!(!chosen_flats.contains(&max_flat),
+            "highest flat_idx must be the dropped cell under tie (max_flat={max_flat})");
+        assert_eq!(chosen_flats.len(), MAX_CHILDREN_PER_NODE);
+    }
+
+    #[test]
+    fn test_topk_fast_path_keeps_all_when_under_cap() {
+        use fxhash::FxHashSet;
+        use super::backup::pick_topk_children;
+
+        // 50 cells, K=192 → fast path; all cells must appear in the output
+        // and `sort_used` is false.
+        let mut cells: FxHashSet<(i32, i32)> = FxHashSet::default();
+        'outer: for q in -3..=4 {
+            for r in -3..=4 {
+                cells.insert((q, r));
+                if cells.len() == 50 { break 'outer; }
+            }
+        }
+        assert_eq!(cells.len(), 50);
+
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let policy = vec![1.0 / n_actions as f32; n_actions];
+
+        let (chosen, sort_used) = pick_topk_children(&cells, 0, 0, &policy);
+        assert!(!sort_used, "fast path expected when n_legal <= K");
+        assert_eq!(chosen.len(), 50);
+
+        let chosen_set: std::collections::HashSet<(i32, i32)> =
+            chosen.iter().map(|&(coord, _)| coord).collect();
+        assert_eq!(chosen_set, cells.iter().copied().collect(),
+            "fast path must include every legal move");
     }
 }

@@ -1,118 +1,118 @@
-/// Regression test for A-004: pool overflow must mark node terminal, not silently backup.
-///
-/// Before fix, the overflow branch in expand_and_backup_single just called
-/// self.backup(leaf_idx, value) and returned — leaving the node unexpanded with
-/// is_terminal=false, causing every subsequent sim to retry and fail again silently.
-///
-/// After fix, the node is marked terminal so subsequent sims detect is_terminal and
-/// skip expansion entirely.
+//! Regression test: top-K leaf cap eliminates pool overflow at any board state.
+//!
+//! Background — `engine/src/mcts/backup.rs::expand_and_backup_single` previously
+//! created one child per legal move. On a sparse board with 100+ stones the
+//! legal-move set can balloon past 1k cells (radius-8 hex ball per stone), so
+//! `n_simulations × leaf_batch × n_legal` overflowed `MAX_NODES`. The earlier
+//! mitigation marked the leaf terminal with a fabricated value and silently
+//! corrupted training targets.
+//!
+//! After the §-top-K change, leaf expansion creates at most
+//! `MAX_CHILDREN_PER_NODE` children regardless of `legal_moves.len()`, so
+//! `pool_overflow_count()` must stay at zero across a normal-sized pool, and
+//! no node in the tree may exceed K children.
+//!
+//! These tests drive a pure-Rust self-play loop with uniform priors (no NN
+//! server required), advancing 200 plies with `n_simulations=400`,
+//! `leaf_batch=8` per move — well past the regime where the old code blew up.
 
-use engine::board::Board;
-use engine::mcts::{MCTSTree, pool_overflow_count, take_pool_overflow_count};
+use engine::board::{Board, BOARD_SIZE};
+use engine::mcts::{MCTSTree, MAX_CHILDREN_PER_NODE, pool_overflow_count, take_pool_overflow_count};
 
-/// Build a tiny-pool tree (root=slot0, only 10 free slots) so the first
-/// expansion attempt overflows (empty board has 25 legal moves → 25 children needed).
-fn tiny_tree() -> MCTSTree {
-    // Pool size 10: root=slot0, next_free=1, capacity=9 extra slots < 25 legal moves.
-    MCTSTree::new_with_capacity(1.5, 10)
+const N_SIMS_PER_MOVE: usize = 400;
+const LEAF_BATCH: usize = 8;
+const TARGET_PLIES: u32 = 200;
+
+/// Run `n_sims` MCTS sims on `tree` with uniform priors. No NN dependency —
+/// every leaf gets the same flat policy and value=0.0.
+fn run_uniform_search(tree: &mut MCTSTree, n_sims: usize, leaf_batch: usize) {
+    let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+    let uniform_prior = 1.0_f32 / n_actions as f32;
+    let uniform_policy = vec![uniform_prior; n_actions];
+
+    let mut completed = 0;
+    while completed < n_sims {
+        let take = leaf_batch.min(n_sims - completed);
+        let boards = tree.select_leaves(take);
+        if boards.is_empty() {
+            break;
+        }
+        let policies: Vec<Vec<f32>> = (0..boards.len()).map(|_| uniform_policy.clone()).collect();
+        let values: Vec<f32> = vec![0.0; boards.len()];
+        tree.expand_and_backup(&policies, &values);
+        completed += boards.len();
+    }
 }
 
-#[test]
-fn pool_overflow_marks_root_terminal() {
-    let mut tree = tiny_tree();
-    tree.new_game(Board::new());
-
-    let n_actions = 19 * 19 + 1;
-    let uniform = vec![1.0_f32 / n_actions as f32; n_actions];
-
-    // First sim: select leaf (root), then try to expand.
-    // Pool has 9 free slots, board has 25 legal moves → overflow.
-    let _leaves = tree.select_leaves(1);
-    tree.expand_and_backup(&[uniform.clone()], &[0.0]);
-
-    // Root node must now be marked terminal.
+/// Pick the most-visited root child and return its (q, r) action.
+fn argmax_visit_action(tree: &MCTSTree) -> Option<(i32, i32)> {
     let root = &tree.pool[0];
-    assert!(root.is_terminal,
-        "pool overflow must mark node terminal so subsequent sims skip it");
-    assert!(root.terminal_value >= -1.0 && root.terminal_value <= 1.0,
-        "terminal_value must be valid (quiescence-corrected), got {}", root.terminal_value);
+    if !root.is_expanded() {
+        return None;
+    }
+    let first = root.first_child as usize;
+    let n = root.n_children as usize;
+    let best = (first..first + n).max_by_key(|&i| tree.pool[i].n_visits)?;
+    let val = tree.pool[best].action_idx;
+    let q = (val >> 16) as i32 - 32768;
+    let r = (val & 0xFFFF) as i32 - 32768;
+    Some((q, r))
 }
 
 #[test]
-fn pool_overflow_subsequent_sim_skips_expansion() {
-    let mut tree = tiny_tree();
-    tree.new_game(Board::new());
-
-    let n_actions = 19 * 19 + 1;
-    let uniform = vec![1.0_f32 / n_actions as f32; n_actions];
-
-    // First sim: triggers overflow, marks root terminal.
-    let _leaves = tree.select_leaves(1);
-    tree.expand_and_backup(&[uniform.clone()], &[0.0]);
-    assert!(tree.pool[0].is_terminal, "pre-condition: root marked terminal after overflow");
-
-    // Second sim: root is terminal — select_leaves returns 0 leaves (nothing to expand).
-    let leaves2 = tree.select_leaves(1);
-    assert_eq!(leaves2.len(), 0,
-        "terminal root yields no leaves — subsequent sims skip expansion entirely");
-    assert!(tree.pool[0].is_terminal, "terminal status must persist");
-}
-
-#[test]
-fn pool_overflow_counter_increments() {
-    // Counter is process-wide; other tests in this crate may concurrently
-    // run overflows, so we assert >= rather than ==. The point is just
-    // that triggering an overflow visibly bumps the counter.
+fn topk_eliminates_pool_overflow_across_full_game() {
+    let _ = take_pool_overflow_count();
     let before = pool_overflow_count();
 
-    let mut tree = tiny_tree();
-    tree.new_game(Board::new());
-    let n_actions = 19 * 19 + 1;
-    let uniform = vec![1.0_f32 / n_actions as f32; n_actions];
-    let _leaves = tree.select_leaves(1);
-    tree.expand_and_backup(&[uniform], &[0.0]);
+    let mut board = Board::new();
+    let mut tree = MCTSTree::new(1.5);
+    let mut max_children_seen: u16 = 0;
+
+    for ply in 0..TARGET_PLIES {
+        if board.check_win() || board.legal_move_count() == 0 {
+            break;
+        }
+        tree.new_game(board.clone());
+        run_uniform_search(&mut tree, N_SIMS_PER_MOVE, LEAF_BATCH);
+
+        for i in 0..tree.next_free_slot() as usize {
+            let n_ch = tree.pool[i].n_children;
+            if n_ch > max_children_seen {
+                max_children_seen = n_ch;
+            }
+            assert!(n_ch as usize <= MAX_CHILDREN_PER_NODE,
+                "ply {ply}: node {i} has {n_ch} children, exceeds K={MAX_CHILDREN_PER_NODE}");
+        }
+
+        let action = match argmax_visit_action(&tree) {
+            Some(a) => a,
+            None => break,
+        };
+        if board.apply_move(action.0, action.1).is_err() {
+            break;
+        }
+    }
 
     let after = pool_overflow_count();
-    assert!(after >= before + 1,
-        "overflow must increment counter (before={}, after={})", before, after);
+    assert_eq!(after, before,
+        "pool overflow must remain zero with top-K cap (delta={})", after - before);
+    assert!(max_children_seen as usize <= MAX_CHILDREN_PER_NODE,
+        "max children observed = {max_children_seen}, K={MAX_CHILDREN_PER_NODE}");
 }
 
 #[test]
-fn pool_overflow_take_returns_previous_and_resets_window() {
-    // take_pool_overflow_count() returns the previous value and resets the
-    // counter to 0. Bench uses this to bracket measurement windows. We can't
-    // assert exact values because of test parallelism, but we can verify
-    // that take returns >= the increment we just caused, and that an
-    // immediate second take returns 0 IF no other test fires in between
-    // (best-effort — timing-sensitive, so we only assert the take API
-    // signature works without panicking).
-    let mut tree = tiny_tree();
-    tree.new_game(Board::new());
-    let n_actions = 19 * 19 + 1;
-    let uniform = vec![1.0_f32 / n_actions as f32; n_actions];
-    let _leaves = tree.select_leaves(1);
-    tree.expand_and_backup(&[uniform], &[0.0]);
-
-    let taken = take_pool_overflow_count();
-    assert!(taken >= 1,
-        "take must return >= the overflow we just triggered (got {})", taken);
-}
-
-#[test]
-fn normal_sized_pool_does_not_overflow() {
-    // Sanity: default MAX_NODES pool should never overflow on a fresh board.
+fn normal_sized_pool_does_not_overflow_on_empty_root() {
     let mut tree = MCTSTree::new(1.5);
     tree.new_game(Board::new());
 
-    let n_actions = 19 * 19 + 1;
+    let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
     let uniform = vec![1.0_f32 / n_actions as f32; n_actions];
 
     let _leaves = tree.select_leaves(1);
-    tree.expand_and_backup(&[uniform.clone()], &[0.0]);
+    tree.expand_and_backup(&[uniform], &[0.0]);
 
     let root = &tree.pool[0];
-    assert!(!root.is_terminal || tree.root_board.check_win(),
-        "default pool must expand root successfully (no overflow)");
-    assert!(root.n_children > 0 || tree.root_board.check_win(),
-        "root must have children after first expansion");
+    assert!(!root.is_terminal, "default pool must expand root, not mark terminal");
+    assert!(root.n_children > 0, "root must have children after first expansion");
+    assert!(root.n_children as usize <= MAX_CHILDREN_PER_NODE);
 }
