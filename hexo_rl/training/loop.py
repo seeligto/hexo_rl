@@ -1224,6 +1224,7 @@ def _emit_training_events(
         "policy_entropy":                  policy_entropy,
         "policy_entropy_pretrain":         float(loss_info.get("policy_entropy_pretrain", float("nan"))),
         "policy_entropy_selfplay":         float(loss_info.get("policy_entropy_selfplay", float("nan"))),
+        "selfplay_model_entropy_batch":    float(loss_info.get("selfplay_model_entropy_batch", float("nan"))),  # alias; drop 2026-05-28
         "policy_entropy_recent":           float(loss_info.get("policy_entropy_recent", float("nan"))),
         "policy_entropy_uniform_selfplay": float(loss_info.get("policy_entropy_uniform_selfplay", float("nan"))),
         "policy_target_entropy":   float(loss_info.get("policy_target_entropy", 0.0)),
@@ -1293,6 +1294,7 @@ def _emit_training_events(
         policy_entropy=round(policy_entropy, 4),
         policy_entropy_pretrain=round(float(loss_info.get("policy_entropy_pretrain", float("nan"))), 4),
         policy_entropy_selfplay=round(float(loss_info.get("policy_entropy_selfplay", float("nan"))), 4),
+        selfplay_model_entropy_batch=round(float(loss_info.get("selfplay_model_entropy_batch", float("nan"))), 4),  # alias; drop 2026-05-28
         policy_entropy_recent=round(float(loss_info.get("policy_entropy_recent", float("nan"))), 4),
         policy_entropy_uniform_selfplay=round(float(loss_info.get("policy_entropy_uniform_selfplay", float("nan"))), 4),
         buffer_size=buffer.size,

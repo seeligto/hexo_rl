@@ -165,7 +165,7 @@ def main() -> None:
         failed = True
 
     print(f"\n  {'policy_entropy_pretrain':30s} = {loss_info.get('policy_entropy_pretrain', float('nan')):.4f}")
-    print(f"  {'policy_entropy_selfplay':30s} = {loss_info.get('policy_entropy_selfplay', float('nan')):.4f}")
+    print(f"  {'selfplay_model_entropy_batch':30s} = {loss_info.get('selfplay_model_entropy_batch', loss_info.get('policy_entropy_selfplay', float('nan'))):.4f}")
     print(f"  {'policy_entropy_recent':30s} = {loss_info.get('policy_entropy_recent', float('nan')):.4f}")
     print(f"  {'policy_entropy_uniform_selfplay':30s} = {loss_info.get('policy_entropy_uniform_selfplay', float('nan')):.4f}")
 

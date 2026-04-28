@@ -366,7 +366,7 @@ function fmtGrad(v)  { return v == null ? DASH : (isFinite(v) ? v.toFixed(2) : '
 // ── Ring buffers & state ───────────────────────────────────────────────────
 // N1: O(n) shift() is acceptable here — event rate is ≤1/step so max ~2000 ops/step.
 // Typed ring buffer deferred (low priority at current event rates).
-const trainingStepHistory = [];  // max MAX_STEPS; {step, loss_total, loss_policy, loss_value, loss_aux, policy_entropy, policy_entropy_pretrain, policy_entropy_selfplay, grad_norm, lr}
+const trainingStepHistory = [];  // max MAX_STEPS; {step, loss_total, loss_policy, loss_value, loss_aux, policy_entropy, policy_entropy_pretrain, policy_entropy_selfplay (=selfplay_model_entropy_batch), grad_norm, lr}
 const gameHistory         = [];  // max MAX_GAMES; {winner, moves}
 const winRateSeries       = [];  // max MAX_GAMES; float (P0 win % at each game_complete)
 const eloHistory          = [];  // [{step, elo}]
@@ -747,7 +747,7 @@ function onTrainingStep(p) {
     loss_threat:              p.loss_threat ?? null,
     policy_entropy:           p.policy_entropy,
     policy_entropy_pretrain:  p.policy_entropy_pretrain ?? null,
-    policy_entropy_selfplay:  p.policy_entropy_selfplay ?? null,
+    policy_entropy_selfplay:  p.selfplay_model_entropy_batch ?? p.policy_entropy_selfplay ?? null,  // alias; drop old key 2026-05-28
     policy_target_entropy:    p.policy_target_entropy ?? 0,
     policy_target_entropy_fullsearch:    p.policy_target_entropy_fullsearch ?? null,
     policy_target_entropy_fastsearch:    p.policy_target_entropy_fastsearch ?? null,

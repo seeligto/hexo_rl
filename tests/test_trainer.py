@@ -72,6 +72,7 @@ def test_train_step_loss_is_finite(tmp_path: Path):
     # quick-search rows (default: full_search_mask is None ⇒ all full).
     _nan_allowed = {
         "policy_entropy_pretrain", "policy_entropy_selfplay",
+        "selfplay_model_entropy_batch",  # alias; NaN when selfplay undefined
         # no recent_buffer → n_recent=0 → recent split undefined
         "policy_entropy_recent",
         "policy_target_entropy_fastsearch",
@@ -84,6 +85,22 @@ def test_train_step_loss_is_finite(tmp_path: Path):
             assert not np.isnan(v), f"{k} = {v} is NaN"
         else:
             assert np.isfinite(v), f"{k} = {v} is not finite"
+
+
+def test_selfplay_model_entropy_batch_alias(tmp_path: Path):
+    """Both old and new key emitted with identical values during alias window."""
+    trainer = make_trainer(tmp_path)
+    buf     = fill_buffer()
+    result  = trainer.train_step(buf)
+    assert "selfplay_model_entropy_batch" in result, "new key missing"
+    assert "policy_entropy_selfplay" in result, "old alias key missing"
+    old_v = result["policy_entropy_selfplay"]
+    new_v = result["selfplay_model_entropy_batch"]
+    # both NaN or both equal finite value
+    if np.isnan(old_v):
+        assert np.isnan(new_v), f"alias mismatch: old={old_v} new={new_v}"
+    else:
+        assert old_v == new_v, f"alias mismatch: old={old_v} new={new_v}"
 
 
 def test_train_step_increments_step(tmp_path: Path):
@@ -511,6 +528,7 @@ def test_train_step_recent_buffer_loss_is_finite(tmp_path: Path):
     # quick-search rows (default: full_search_mask is None ⇒ all full).
     _nan_allowed = {
         "policy_entropy_pretrain", "policy_entropy_selfplay",
+        "selfplay_model_entropy_batch",  # alias; NaN when selfplay undefined
         "policy_target_entropy_fastsearch",
         "policy_target_kl_uniform_fastsearch",
     }

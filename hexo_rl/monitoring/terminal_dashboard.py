@@ -92,6 +92,7 @@ class TerminalDashboard:
             "policy_entropy": None,
             "policy_entropy_pretrain": None,
             "policy_entropy_selfplay": None,
+            "selfplay_model_entropy_batch": None,  # alias; drop 2026-05-28
             "lr": None,
             "grad_norm": None,
             "games_total": None,
@@ -183,7 +184,8 @@ class TerminalDashboard:
                 "step", "loss_total", "loss_policy", "loss_value",
                 "loss_aux", "loss_chain", "loss_ownership", "loss_threat",
                 "policy_entropy", "policy_entropy_pretrain",
-                "policy_entropy_selfplay", "policy_target_entropy",
+                "policy_entropy_selfplay", "selfplay_model_entropy_batch",  # alias; drop 2026-05-28
+                "policy_target_entropy",
                 "policy_target_entropy_fullsearch",
                 "policy_target_entropy_fastsearch",
                 "policy_target_kl_uniform_fullsearch",
@@ -194,6 +196,9 @@ class TerminalDashboard:
             ):
                 if key in payload:
                     self._state[key] = payload[key]
+            # backward compat: old JSONL only has old key; populate new from old
+            if self._state["selfplay_model_entropy_batch"] is None and self._state["policy_entropy_selfplay"] is not None:
+                self._state["selfplay_model_entropy_batch"] = self._state["policy_entropy_selfplay"]
             return
 
         if event == "iteration_complete":
@@ -261,7 +266,7 @@ class TerminalDashboard:
                     expiry, f"policy entropy {ent:.2f} — possible mode collapse"
                 )
             # Selfplay-stream collapse (threshold per §70; configurable).
-            ent_sp = payload.get("policy_entropy_selfplay")
+            ent_sp = payload.get("selfplay_model_entropy_batch", payload.get("policy_entropy_selfplay"))
             if ent_sp is not None and math.isfinite(ent_sp) and ent_sp < self._collapse_threshold:
                 self._add_alert(
                     expiry, f"selfplay entropy {ent_sp:.2f} — selfplay mode collapse"
@@ -446,7 +451,7 @@ class TerminalDashboard:
         # Policy entropy split row (combined / pretrain / selfplay)
         _COLLAPSE_THRESHOLD = self._collapse_threshold
         ent_pre = s["policy_entropy_pretrain"]
-        ent_sp  = s["policy_entropy_selfplay"]
+        ent_sp  = s["selfplay_model_entropy_batch"]
 
         def _fmt_ent_pre(v: Any) -> str:
             if v is None or (isinstance(v, float) and not math.isfinite(v)):

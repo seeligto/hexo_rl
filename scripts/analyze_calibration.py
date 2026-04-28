@@ -35,7 +35,8 @@ class TrainStep:
     chain_loss: float | None = None
     ownership_loss: float | None = None
     threat_loss: float | None = None
-    policy_entropy_selfplay: float | None = None
+    policy_entropy_selfplay: float | None = None  # old name; alias for selfplay_model_entropy_batch
+    selfplay_model_entropy_batch: float | None = None
     policy_target_entropy_fullsearch: float | None = None
     policy_target_entropy_fastsearch: float | None = None
     policy_target_kl_uniform_fullsearch: float | None = None
@@ -114,7 +115,7 @@ def parse_jsonl(path: Path) -> RunSummary:
                 ts_step = TrainStep(step=int(e.get("step", 0) or 0))
                 for k in (
                     "policy_loss","value_loss","chain_loss","ownership_loss","threat_loss",
-                    "policy_entropy_selfplay",
+                    "policy_entropy_selfplay", "selfplay_model_entropy_batch",
                     "policy_target_entropy_fullsearch",
                     "policy_target_entropy_fastsearch",
                     "policy_target_kl_uniform_fullsearch",
@@ -129,6 +130,9 @@ def parse_jsonl(path: Path) -> RunSummary:
                                 setattr(ts_step, k, val)
                         except Exception:
                             pass
+                # backward compat: old JSONL only has old key
+                if ts_step.selfplay_model_entropy_batch is None and ts_step.policy_entropy_selfplay is not None:
+                    ts_step.selfplay_model_entropy_batch = ts_step.policy_entropy_selfplay
                 summary.train_steps.append(ts_step)
                 summary.final_step = max(summary.final_step, ts_step.step)
 
@@ -194,7 +198,7 @@ def summarize_window(steps: list[TrainStep]) -> dict[str, Any]:
         "mean_policy_loss":  _mean([t.policy_loss for t in steps]),
         "mean_value_loss":   _mean([t.value_loss for t in steps]),
         "mean_chain_loss":   _mean([t.chain_loss for t in steps]),
-        "mean_entropy_selfplay": _mean([t.policy_entropy_selfplay for t in steps]),
+        "mean_entropy_selfplay": _mean([t.selfplay_model_entropy_batch for t in steps]),
         "mean_tgt_entropy_full": _mean([t.policy_target_entropy_fullsearch for t in steps]),
         "mean_tgt_entropy_fast": _mean([t.policy_target_entropy_fastsearch for t in steps]),
         "mean_tgt_kl_full":  _mean([t.policy_target_kl_uniform_fullsearch for t in steps]),

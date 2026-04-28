@@ -614,6 +614,7 @@ class Trainer:
                 "policy_entropy": float("nan"),
                 "policy_entropy_pretrain": float("nan"),
                 "policy_entropy_selfplay": float("nan"),
+                "selfplay_model_entropy_batch": float("nan"),  # alias; drop 2026-05-28
                 "policy_entropy_recent": float("nan"),
                 "policy_entropy_uniform_selfplay": float("nan"),
                 "policy_target_entropy": 0.0,
@@ -720,6 +721,7 @@ class Trainer:
             "policy_entropy":                 policy_entropy,
             "policy_entropy_pretrain":        policy_entropy_pretrain,
             "policy_entropy_selfplay":        policy_entropy_selfplay,
+            "selfplay_model_entropy_batch":   policy_entropy_selfplay,  # alias; drop 2026-05-28
             "policy_entropy_recent":          policy_entropy_recent,
             "policy_entropy_uniform_selfplay": policy_entropy_uniform_sp,
             "policy_target_entropy":    policy_target_entropy,
