@@ -26,7 +26,7 @@
 | Q32 | Threat-scalar magnitude vs policy-ranking decoupling on bootstrap: contrast flips negative on real fixture yet policy still routes 60% top-5 | Track across sustained runs; correlate threat-head logit drift with C2/C3 on real-fixture probe | 0 GPU-days (watch) | WATCH — bookkeeping only |
 | ~~Q33~~ | ~~Self-play policy-target entropy at bootstrap strength — 20K `pe_self ≈ 5.35` driving mixed-batch noise hypothesis~~ | **RESOLVED 2026-04-21 (non-pathology).** Q33-C2 (sprint §112, `reports/q33c2_augmentation_discriminator_2026-04-21.md`): disabling augmentation does not drop `pe_self`; fixed point is distribution, not augmentation. | done | resolved |
 | ~~Q37~~ | ~~Trainer-update-path hypothesis for `pe_self` fixed point~~ | **RESOLVED 2026-04-21 (non-pathology).** Q33-C2 rules out the augmentation mask branch; distribution-shift reading has direct empirical support. See sprint §112. | done | resolved |
-| Q40 | MCTS subtree reuse: re-root vs reset per move + §100 selective-policy-loss interaction | Implement `advance_to_child` on Rust path; A/B vs current `new_game(board.clone())` baseline at fixed compute; head-to-head (b) drop §100 vs (a) clear-on-mode-switch | ~3 GPU-days impl + 2 GPU-days ablation | MEDIUM-HIGH |
+| Q40 | MCTS subtree reuse: re-root vs reset per move | Path C phased: Phase 1 ship `advance_to_child` at current sims (full=600, quick=100), §100 preserved conservatively; Phase 2 recalibrate to full=400/quick=50 after smoke+probe pass | ~2-4 dev days (Rust port + bench) | MEDIUM — post channel-drop gate |
 
 **Q33 (2026-04-21, WATCH, see sprint §109):** The diag-20K report read
 `policy_entropy_selfplay ≈ 5.35` as evidence that MCTS visit targets were
@@ -210,88 +210,89 @@ lands as a standalone session.
 
 ---
 
-### Q40 — MCTS subtree reuse + §100 interaction (2026-04-28, ACTIVE)
+### Q40 — MCTS subtree reuse — re-root vs reset per move (2026-04-28, ACTIVE)
+
+**Status:** ACTIVE | **Priority:** MEDIUM | **Gate:** post channel-drop verdict.
+Bundle re-bootstrap with channel-drop landing if both ship before Phase 4 restart.
+Bench-before-after gate mandatory per `docs/rules/perf-targets.md`.
 
 **Source:** Audit triad 2026-04-28 — see
-`reports/investigations/subtree_reuse_audit_A.md` and
-`reports/investigations/subtree_reuse_audit_B.md`.
+`reports/investigations/subtree_reuse_audit_{A,B,C}.md`.
 
 **Current behaviour:** `engine/src/game_runner/worker_loop.rs:183` calls
 `tree.new_game(board.clone())` per move. Every MCTS search starts on a
 fresh tree — accumulated visits/Q on the chosen child's subtree are
 discarded.
 
-**Audit findings:**
+**Audit findings (A/B/C):**
 
-- Top-child visit share across mid-game positions (ply 12-24, n=30,
-  100 sims): median **0.544**, mean 0.547, p25=0.31, p90=0.90. HeXO
-  retains ~54% of search work below the chosen child — higher than
-  the 25-50% band the original finding assumed.
-- TT memory bound: ~1.5 KB/entry × ~12.5k entries/game = ~18.8 MB/
-  worker uncapped (~263 MB on 14-worker laptop, ~451 MB on 24-worker
-  EPYC). LRU eviction cap = 2×N_sims trims to ~17 MB/worker total.
+- Top-child visit share (ply 12-24, n=30, 100 sims): median **0.544**, mean
+  0.547, p25=0.31, p90=0.90. ~54% of search work retained below chosen child —
+  higher than the 25-50% band originally assumed. Reuse upside underestimated.
+- TT memory: ~1.5 KB/entry × ~12.5k entries/game ≈ 18.8 MB/worker uncapped
+  (~263 MB on 14-worker laptop). LRU eviction cap = 2×N_sims → ~17 MB/worker.
   Not a blocker.
-- `new_game()` wall-clock: ~80 ns empty TT, ~30 µs with full TT.
-  Negligible (~1 ms/game).
-- Real ROI = skipped NN evals: ~7,200 evals/game/worker upper bound,
-  ~3.6 s/game/worker in dispatch-bound regime.
-- Q-flip on retained subtree: NOT needed. `w_value` stored in node's
-  own perspective; backup recomputes parent perspective at backup
-  time (`engine/src/mcts/backup.rs:232`). Re-root = set
-  `pool[new_root].parent = u32::MAX`; no traversal.
-- §73 Dirichlet skip-on-intermediate-plies invariant preserved
-  automatically — `apply_dirichlet_to_root` only fires from
-  `worker_loop.rs:293` (Gumbel) and `:377` (PUCT), guarded.
-- TT key is u128 Zobrist (position-only). Cheaper to clear TT on
-  re-root than to walk-filter; §59's cross-game leak reason does not
-  apply within-game.
-- Quiescence override (§83): bakes into ancestors' `w_value` via
-  backup. Retained subtree carries stale quiescence contributions.
-  Standard AlphaZero staleness tradeoff; accepted.
-- Python `SelfPlayWorker` (eval-only path) does NOT need porting —
-  not on the training-data path. Rust-only port. Eval/training
-  search-strength asymmetry documented but accepted.
+- `new_game()` wall-clock: ~80 ns empty TT, ~30 µs full TT. Negligible.
+- Real ROI = skipped NN evals: ~7,200 evals/game/worker upper bound (~3.6
+  s/game/worker in dispatch-bound regime).
+- Q-flip: NOT needed. `w_value` stored in node's own perspective; backup
+  recomputes parent perspective on the fly (`engine/src/mcts/backup.rs:232`).
+  Re-root = set `pool[new_root].parent = u32::MAX`; no traversal required.
+- §73 Dirichlet: preserved automatically — `apply_dirichlet_to_root` fires
+  from `worker_loop.rs:293` (Gumbel) and `:377` (PUCT); guard unchanged.
+- TT: cheaper to clear on re-root than walk-filter; §59's cross-game leak
+  reason does not apply within-game.
+- §100 selective policy loss: full-search rows (≥654 effective sims with
+  reuse) pass the §100 min-sim guard conservatively; quick-search rows
+  correctly gated. Audit C confirms §100 semantics hold under unrestricted
+  reuse — some 424-sim rows dropped from policy training (not corrupting;
+  suboptimal, accepted).
+- Python `SelfPlayWorker` (eval/our_model_bot/benchmark_mcts): NOT ported —
+  not on training-data path. Rust-only change. Eval/training search-strength
+  asymmetry accepted.
 
-**Open: §100 selective-policy-loss interaction.** Quick-search
-(100 sims) following full-search (600 sims) inherits ~324 sims of
-accumulated work → effective N ≈ 424 instead of nominal 100.
-Selective-policy mask was designed against fresh-tree visit-target
-semantics. Three resolutions:
+**Resolution: Path C phased.**
 
-- **(a)** Tree-clear on `is_full_search` mode switch (full→quick or
-  quick→full). Preserves §100 semantics. Halves reuse Elo (any cross-
-  mode transition discards accumulation).
-- **(b) [leading candidate]** Drop §100. Run uniform N with reuse.
-  Reuse-accumulated depth substitutes for §100's compute-saving
-  rationale. Couple-line trainer change; replay buffer keeps
-  `is_full_search` column unread → no HEXB version bump. Risk:
-  early-game policy targets (compound_move ≤ 2, no reuse yet) are
-  thin — mitigate with a 2-move policy-loss-skip guard preserving
-  §100's noise-gating intent without the full apparatus.
-- **(c)** Recalibrate sim budgets (e.g. full=400, quick=50). Composes
-  with (a) or (b). Documents reuse as the budget multiplier.
+- **Phase 1** (ship now): `advance_to_child()` with current sim budgets
+  (full=600, quick=100) unchanged. §100 semantics preserved conservatively.
+- **Phase 2** (gated on Phase 1 bench data + 2000-step smoke + threat-probe
+  pass): recalibrate to full=400, quick=50. Documents reuse as compute
+  multiplier; first-move quality degrades to 400 sims (deliberate accepted
+  cost).
 
-(a)⊥(b) at design level (do or don't preserve §100). (c) composes
-either way.
+**Phase 1 implementation requirements:**
 
-**Decision gate:** pending channel-drop investigation outcome + audit
-C (`subtree_reuse_audit_C.md` — selective policy loss code-traced
-compatibility audit, not yet run).
+1. Add `advance_to_child(action, new_board)` in `engine/src/mcts/mod.rs`
+   (or `tree.rs`) replacing `new_game()` call at `worker_loop.rs:183`.
+2. Skip re-root on random-opening-plies branch (`worker_loop.rs:158-167`) —
+   call `new_game()` on first real MCTS move.
+3. Clear `forced_root_child` on re-root.
+4. Clear TT on re-root (cheaper than retain; nodes don't cache hashes).
+5. Pool-overflow safety valve: if `next_free > 0.8 × MAX_NODES`, fall back
+   to `new_game()` instead of `advance_to_child()`.
+6. Reset `last_search_stats()` accumulators (`depth_accum`, `sim_count`,
+   `quiescence_fire_count`) per `advance_to_child`.
+7. Rust path only — Python `SelfPlayWorker` stays on per-move `new_game()`.
 
-**Implementation sketch (when ungated):**
+**Implementation sketch:**
 
 ```rust
-// engine/src/mcts/tree.rs
+// engine/src/mcts/mod.rs (or tree.rs)
 impl MCTSTree {
     pub fn advance_to_child(&mut self, action: Action, new_board: Board) {
+        // Pool-overflow safety valve
+        if self.next_free > (MAX_NODES * 4 / 5) {
+            self.new_game(new_board);
+            return;
+        }
         let new_root_idx = self.pool[self.root].children[action.0];
         self.pool[new_root_idx].parent = u32::MAX;
         self.root = new_root_idx;
         self.root_board = new_board;
         self.transposition_table.clear();
         self.forced_root_child = None;
+        self.reset_search_stats();
         // Dirichlet handled at existing call sites (worker_loop.rs:293/:377)
-        // — guard `moves_remaining==1 && ply>0` preserved by no change there.
     }
 }
 ```
@@ -300,21 +301,32 @@ Replace at `engine/src/game_runner/worker_loop.rs:183`:
 
 ```rust
 // before: tree.new_game(board.clone());
-tree.advance_to_child(chosen_action, board.clone());
-// (board.clone() still required — tree owns root_board after advance)
+if ply > random_opening_plies {
+    tree.advance_to_child(chosen_action, board.clone());
+} else {
+    tree.new_game(board.clone());
+}
 ```
 
-Skip-conditions for re-root path (preserve, don't reuse, on these moves):
-- Random-opening-plies branch (`worker_loop.rs:158-167`)
-- Game-start (existing `new_game()` semantics retained for new games only)
-
-**Expected upside:** 30-80 self-play Elo at fixed compute (audit B
-top-child share band suggests the upper end is plausible for HeXO).
+**Expected upside:** 30-80 self-play Elo at fixed compute (audit B top-child
+share suggests upper end is plausible for HeXO).
 
 **Cost:** 2-4 dev days (Rust-only port + tests + bench-before-after).
 
-**Roadmap reference:** `docs/02_roadmap.md` Phase 4.0 task list, gated on
-channel-drop verdict and audit C.
+**Risks:**
+
+- Inherited prior staleness if graduation fires mid-game (low-frequency;
+  standard AlphaZero tradeoff).
+- §100 conservative-discard drops some 424-sim rows from policy training
+  (not corrupting; suboptimal).
+- Phase 2 first-move quality drops to 400 sims (deliberate accepted cost).
+
+**Cross-refs:** §59 (TT clear lifecycle), §73 (Dirichlet invariant),
+§83 (quiescence staleness), §100 (selective policy loss — conservative under
+reuse), §103 (policy_target_entropy telemetry — validation signal).
+
+**Roadmap reference:** `docs/02_roadmap.md` Phase 4.0 task list. Decoupled
+from Gumbel SH to enable ablation-isolated measurement against clean bootstrap.
 
 ---
 
