@@ -385,18 +385,16 @@ for a full architectural comparison against windowed baseline.
 
 ### Q11 — Colony win detection over-inclusion
 
-Colony detection (hexo_rl/eval/colony_detection.py) examines ALL winner's
+**RESOLVED 2026-04-28** — `_find_winning_line` locates the winning 6-in-a-row
+from the stone set; colony check now uses the winning cluster + other
+components with ≥ 2 stones only; single orphan stones are excluded.
+Commit: see `fix(eval): Q11 colony detection over-inclusion`.
+
+~~Colony detection (hexo_rl/eval/colony_detection.py) examines ALL winner's
 stones at game end, not just the winning 6-in-a-row line. A player who
 places scattered exploratory stones early but wins with a connected group
 is incorrectly flagged as a colony win if any orphaned stones exist with
-centroid distance ≥ 6.0 from the winning group.
-
-Fix: BFS from the 6 stones comprising the winning line only, not from the
-full winner stone set. Requires win-line coordinates to be passed into
-colony_detection.py from the game result.
-
-Priority: LOW. Does not affect training correctness. Affects interpretability
-of eval metrics only. Defer until after Phase 4.0 exit criteria are met.
+centroid distance ≥ 6.0 from the winning group.~~
 
 ---
 

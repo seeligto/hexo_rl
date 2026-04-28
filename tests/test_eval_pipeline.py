@@ -425,13 +425,14 @@ def test_colony_win_all_connected() -> None:
 
 def test_colony_win_two_clusters_far_apart() -> None:
     """Two clusters 8+ hexes apart → colony win."""
-    # Cluster 1 near origin, cluster 2 far away
+    # Q11 fix: added 6-in-a-row in cluster 1 so _find_winning_line can anchor the check.
+    # Cluster 1 has winning 6-in-a-row at (0,0)-(5,0); centroid (2.5, 0).
+    # Cluster 2 centroid ~(10.33, 0.33); axial distance ~8 > threshold 6.0.
     stones = [
-        (0, 0, 1), (1, 0, 1), (0, 1, 1),   # cluster centroid ~(0.33, 0.33)
-        (10, 0, 1), (11, 0, 1), (10, 1, 1), # cluster centroid ~(10.33, 0.33)
+        (0, 0, 1), (1, 0, 1), (2, 0, 1), (3, 0, 1), (4, 0, 1), (5, 0, 1),  # 6-in-a-row
+        (10, 0, 1), (11, 0, 1), (10, 1, 1),  # second cluster (intentional island)
         (5, 5, -1),  # opponent stone
     ]
-    # distance between centroids: ~10 axial
     assert is_colony_win(stones, winner=1, centroid_threshold=6.0) is True
 
 
