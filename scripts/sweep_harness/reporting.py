@@ -105,10 +105,9 @@ def render_report(result: dict[str, Any]) -> str:
         winner = winners.get(knob)
         if winner is not None and knob in fr:
             r = fr[knob]
-            flag = " ⚠ BIMODAL" if r.bimodal else ""
             lines.append("")
             lines.append(f"**Winner:** {knob}={winner}, "
-                         f"pos/hr={_fmt_num(r.median)} ± {_fmt_num(r.iqr)}{flag}.")
+                         f"pos/hr={_fmt_num(r.median)} ± {_fmt_num(r.iqr)}.")
         elif winner is not None:
             lines.append("")
             lines.append(f"**Winner:** {knob}={winner}.")

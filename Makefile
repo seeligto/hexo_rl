@@ -99,8 +99,8 @@ bench.fast: ## Quick benchmark — compile off, n=3, 60s pool (cold-cache friend
 # ── Sweep harness (knob registry, hardware-agnostic — §126) ───────────────────
 # Budget formula: per_cell_s = pool_duration × n_runs + warmup + 60.
 # Current registry: 27 cells (n_workers=10, inf_batch=6, wait_ms=3, burst=8).
+# §128: bimodality retry removed — no 240s×8 penalty. Formula is exact now.
 # sweep: 27 × (90×5+90+60)/60 ≈ 270 min.  sweep.long: 27 × (180×5+90+60)/60 ≈ 472 min.
-# The `.long` variant uses 180 s cells per §124/§125 stable methodology.
 
 .PHONY: sweep.detect
 sweep.detect: ## Detect host CPU/GPU/VRAM; write reports/sweeps/detected_host.json

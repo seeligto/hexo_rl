@@ -202,18 +202,19 @@ This addresses the §102/§124 startup-race regime where IQR routinely
 exceeds 30 % of median; without the tie band, single-run noise would
 drive the search in arbitrary directions.
 
-## Bimodality detection
+## Bimodality (historical — resolved §128)
 
-`compare.bimodal_from_raw` flags cells matching the §125 startup-race
-pattern (raw = `[0, 0, 180k, 185k, 192k]`). Triggers when **both**:
+Prior to §128 (2026-04-28), the worker throughput counter was
+`positions_pushed`, which incremented K cluster views × plies at **game
+completion** (batch write). Games take ~160s at 200 sims/move; a 90s
+measurement window would often capture zero completions → bimodal pattern
+`[0, 0, 180k, 185k, 192k]`. The runner detected this and retried at
+`pool_duration=240s, n_runs=8`.
 
-* `max(raw) > 5 * min(raw)`
-* `min(raw) < 0.2 * median(raw)`
-
-When the runner detects bimodality on first read, it re-evals the cell
-once at `pool_duration=240s, n_runs=8`. If still bimodal, it logs
-`BIMODAL` in `cells.csv` and computes IQR from the upper-mode runs only
-(`upper_mode_filter`) so the cell still contributes to the search.
+§128 switched the counter to `positions_generated` (one increment per
+ply, continuous). The startup-race burst pattern is structurally
+impossible — bimodality detection and retry logic were removed as dead
+code. `cells.csv` no longer has a `bimodal_flag` column.
 
 ## Subprocess isolation
 

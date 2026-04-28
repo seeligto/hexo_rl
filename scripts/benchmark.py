@@ -579,14 +579,13 @@ def benchmark_worker_pool(
     # Drop contaminated runs from the headline pos/hr aggregate. Keep the
     # raw runs lists intact (with overflow_per_run alongside) so the sweep
     # harness can audit each window independently. If every run was
-    # contaminated, fall back to the unfiltered list so the bench still
-    # reports a number — the sweep harness's bimodal flag will then trip.
+    # contaminated, fall back to the unfiltered list so the bench still reports.
     clean_pph = [v for v, oc in zip(pph_runs, overflow_per_run) if oc == 0]
     clean_gph = [v for v, oc in zip(gph_runs, overflow_per_run) if oc == 0]
     if not clean_pph:
         console.print(
             f"    [red]All {n_runs} runs contaminated by pool overflow — "
-            f"reporting unfiltered medians (will likely trip bimodal flag).[/red]"
+            f"reporting unfiltered medians.[/red]"
         )
         clean_pph = pph_runs
         clean_gph = gph_runs
@@ -1071,10 +1070,8 @@ def main() -> None:
                 for sub_name, sub in [("pos/hr", r["pph"]), ("games/hr", r["gph"]), ("batch%", r["bat"])]:
                     s = sub["stats"]
                     console.print(f"  [dim]{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
-                # §9 burst-aware reading: raw per-run pos/hr enables sweep
-                # harness to detect §125 bimodality from real data instead of
-                # the synthesised [min, median, max] proxy. Format must match
-                # `_RAW_RE` in scripts/sweep_harness/runner.py.
+                # §9: raw per-run pos/hr for IQR-aware comparison in sweep harness.
+                # Format must match `_RAW_RE` in scripts/sweep_harness/runner.py.
                 pph_runs = r["pph"].get("runs")
                 if pph_runs:
                     console.print(f"  {name} raw pos/hr: {json.dumps([round(v, 1) for v in pph_runs])}")

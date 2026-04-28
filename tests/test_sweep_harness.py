@@ -1,19 +1,15 @@
 """Unit tests for the sweep_harness package.
 
 Strategies are tested with mocked ``eval_fn`` callbacks so no bench
-subprocess runs. Compare logic + bimodality detection are tested against
-the §125 startup-race pattern (raw=[0, 0, 180k, 185k, 192k]).
+subprocess runs. Compare logic is tested with synthetic CellResults.
 """
 
 from __future__ import annotations
-
-import statistics
 
 import pytest
 
 from scripts.sweep_harness import (
     CellResult,
-    bimodal_from_raw,
     bisect_search,
     compare_iqr,
     grid_coarse_refine,
@@ -71,53 +67,6 @@ def test_compare_iqr_min_iqr_floor():
     b = _cell(99.5, iqr=0.1)
     assert compare_iqr(a, b) == 1  # without floor, a wins
     assert compare_iqr(a, b, min_iqr=2.0) == 0  # with floor, tie
-
-
-# ── bimodality ───────────────────────────────────────────────────────────────
-
-
-def test_bimodal_from_raw_triggers_on_startup_race():
-    """§125 pattern: raw = [0, 0, 180k, 185k, 192k]."""
-    raw = [0.0, 0.0, 180_000.0, 185_000.0, 192_000.0]
-    median = statistics.median(raw)
-    assert bimodal_from_raw(raw, median) is True
-
-
-def test_bimodal_from_raw_clean_cell():
-    raw = [180_000.0, 182_000.0, 185_000.0, 188_000.0, 190_000.0]
-    assert bimodal_from_raw(raw, statistics.median(raw)) is False
-
-
-def test_bimodal_from_raw_handles_empty():
-    assert bimodal_from_raw([], None) is False
-
-
-def test_bimodal_from_real_raw_requires_two_troughs():
-    """5090 v2 §2.3: single startup-race outlier should NOT trigger retry."""
-    from scripts.sweep_harness.compare import bimodal_from_real_raw
-
-    # n=3 with one zero-completion run, two healthy — burst-phase noise, not bimodal.
-    assert bimodal_from_real_raw([0.0, 380_000.0, 410_000.0]) is False
-    # n=3 with two troughs — true bimodality, retry justified.
-    assert bimodal_from_real_raw([0.0, 0.0, 410_000.0]) is True
-    # n=5 with a single trough among healthy runs — also not bimodal.
-    assert bimodal_from_real_raw(
-        [3_000.0, 380_000.0, 395_000.0, 410_000.0, 415_000.0]
-    ) is False
-    # Empty / zero median: no signal.
-    assert bimodal_from_real_raw([], 0.0) is False
-    assert bimodal_from_real_raw([0.0, 0.0, 0.0]) is False
-
-
-def test_count_trough_samples_threshold():
-    from scripts.sweep_harness.compare import count_trough_samples
-
-    raw = [0.0, 50_000.0, 380_000.0, 400_000.0, 410_000.0]
-    median = statistics.median(raw)  # 380_000
-    # 0 and 50_000 are below 0.3 × 380_000 = 114_000.
-    assert count_trough_samples(raw, median) == 2
-    assert count_trough_samples(raw, median, threshold_ratio=0.5) == 2
-    assert count_trough_samples(raw, median, threshold_ratio=0.1) == 1
 
 
 # ── ternary_search_int ───────────────────────────────────────────────────────

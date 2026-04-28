@@ -1,15 +1,15 @@
-"""IQR-aware comparison + bimodality detection for sweep cells.
+"""IQR-aware comparison for sweep cells.
 
 Per-cell measurement is noisy (§102/§124: pos/hr IQR can hit ±143k with 80%
-of runs in a startup-race tail). We need:
+of runs in a startup-race tail). We need ``compare_iqr(A, B)`` — a three-way
+compare that declares TIE when the median delta is smaller than the larger of
+the two IQRs. The search strategies in :mod:`strategies` interpret a tie as
+"shrink symmetrically" (ternary) or "favor cheaper" (grid/bisect).
 
-1. ``compare_iqr(A, B)`` — three-way compare that declares TIE when the
-   median delta is smaller than the larger of the two IQRs. The search
-   strategies in :mod:`strategies` interpret a tie as "shrink symmetrically"
-   (ternary) or "favor cheaper" (grid/bisect) — see their docs.
-2. ``bimodal_from_raw(raw, median)`` — flags startup-race cells where the
-   slow-tail run is far below the median. Triggers on the §125-style
-   ``[0, 0, 180k, 185k, 192k]`` pattern.
+§128 (2026-04-28): positions_generated counter is continuous (increments once
+per ply); the startup-race burst pattern ([0, 0, 180k, 185k, 192k]) that
+drove bimodality detection and retry logic cannot occur. Bimodal detection
+removed — was dead code.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ class CellResult:
     max: float
     n_runs: int
     raw: tuple[float, ...] = field(default_factory=tuple)
-    bimodal: bool = False
 
     def __post_init__(self) -> None:
         if self.raw:
@@ -53,81 +52,3 @@ def compare_iqr(a: CellResult, b: CellResult, *, min_iqr: float = 0.0) -> int:
     if abs(delta) < band:
         return 0
     return 1 if delta > 0 else -1
-
-
-def bimodal_from_raw(raw: Sequence[float], median: float | None = None) -> bool:
-    """Flag the §125 startup-race pattern.
-
-    Triggers when **both**:
-      * ``max(raw) > 5 * min(raw)`` — large dynamic range across runs
-      * ``min(raw) < 0.2 * median`` — slow-tail run is far below median
-
-    With ``min == 0`` (worker startup race produces zero-pos/hr runs) the
-    first condition is vacuously true, so the rule reduces to the
-    min/median check — exactly the §125 [0, 0, 180k, 185k, 192k] case.
-    """
-    if not raw:
-        return False
-    lo = min(raw)
-    hi = max(raw)
-    med = median if median is not None else statistics.median(raw)
-    if med <= 0:
-        return False
-    cond_range = (lo == 0) or (hi > 5 * lo)
-    cond_floor = lo < 0.2 * med
-    return cond_range and cond_floor
-
-
-def upper_mode_filter(raw: Sequence[float], median: float) -> tuple[float, ...]:
-    """For a re-evaluated bimodal cell: return only runs at >= 0.5 * median.
-
-    Matches the §125 spec: when a cell stays bimodal after a re-run,
-    treat IQR as the spread of the upper-mode runs. The runner uses this
-    to compute IQR for comparison while logging the cell as BIMODAL.
-    """
-    if median <= 0:
-        return tuple(raw)
-    return tuple(x for x in raw if x >= 0.5 * median)
-
-
-def count_trough_samples(raw: Sequence[float], median: float,
-                         threshold_ratio: float = 0.3) -> int:
-    """Count runs at < ``threshold_ratio`` × median.
-
-    The retry-tightening rule (5090 sweep analyst v2 §2.3): when real raw
-    runs are available, trigger retry only when **multiple** trough
-    samples exist — a single zero-completion run is startup-race noise,
-    not bimodality. Two or more trough samples indicate a real second
-    mode worth re-evaluating.
-    """
-    if median <= 0 or not raw:
-        return 0
-    cutoff = threshold_ratio * median
-    return sum(1 for r in raw if r < cutoff)
-
-
-def bimodal_from_real_raw(raw: Sequence[float], median: float | None = None,
-                          *, min_troughs: int = 2,
-                          threshold_ratio: float = 0.3) -> bool:
-    """Strict bimodal test for cells that have real per-run pos/hr.
-
-    Replaces the synthetic-proxy ``bimodal_from_raw`` call site in the
-    runner when ``CellResult.raw`` is populated. Requires at least
-    ``min_troughs`` runs below ``threshold_ratio × median`` — a single
-    startup-race outlier in n=3 will not trip retry.
-
-    Degenerate case: n=3 with two zero-completion runs has median 0,
-    which would make every cutoff zero. Fall back to ``max`` as the
-    upper reference when median is non-positive but at least one run
-    is healthy. Returning False on a 2-of-3 zero pattern would let a
-    truly broken cell pass undetected.
-    """
-    if not raw:
-        return False
-    med = median if median is not None else statistics.median(raw)
-    if med <= 0:
-        hi = max(raw)
-        if hi <= 0:
-            return False  # all zero — strategy will treat as a failure cell
-        med = hi
-    return count_trough_samples(raw, med, threshold_ratio) >= min_troughs

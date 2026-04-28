@@ -43,11 +43,7 @@ except ImportError as exc:  # pragma: no cover - dep is in pyproject
 
 from .compare import (
     CellResult,
-    bimodal_from_raw,
-    bimodal_from_real_raw,
     compare_iqr,
-    count_trough_samples,
-    upper_mode_filter,
 )
 from .knobs import (
     KNOB_ORDER,
@@ -70,15 +66,13 @@ BENCH = str(ROOT / "scripts" / "benchmark.py")
 SWEEP_TEMPLATE = ROOT / "configs" / "variants" / "_sweep_template.yaml"
 
 # Default measurement settings.
-# pool_duration=90 is the harness default — matches `make bench` warmup
-# baseline and fits the 90-min wall budget for a typical multi-knob sweep.
-# §124/§125's 180 s methodology is available via `make sweep.long` (or any
-# of the `sweep.*.long` variants) and `--pool-duration 180` on the CLI.
+# pool_duration=90 fits the 90-min wall budget for a typical multi-knob sweep.
+# §124/§125's 180 s methodology is available via `make sweep.long` and
+# `--pool-duration 180`. §128: bimodality retry removed — positions_generated
+# is continuous (no game-completion burst), so startup-race zeros cannot occur.
 DEFAULT_POOL_DURATION = 90
 DEFAULT_WARMUP = 90.0
 DEFAULT_N_RUNS = 5
-RETRY_POOL_DURATION = 240
-RETRY_N_RUNS = 8
 
 # Bench stdout line: "Worker pool throughput pos/hr: median=388,426  IQR=+/-143,426  [266.9k-410.3k]  n=3"
 _NUM = r"([\d,]+\.?\d*)"
@@ -112,9 +106,9 @@ def _to_float(s: str) -> float:
 def parse_bench_pos(text: str) -> tuple[CellResult | None, dict]:
     """Pull pos/hr CellResult + side metrics (gpu, batch fill) from stdout.
 
-    If bench emitted the §9 raw-runs line, attach it to ``cell.raw`` so the
-    runner's bimodality detection sees real data. Falls back to empty raw
-    on older bench builds (`_RAW_RE` simply does not match).
+    If bench emitted the §9 raw-runs line, attach it to ``cell.raw`` for
+    IQR-aware comparison. Falls back to empty raw on older bench builds
+    (`_RAW_RE` simply does not match).
     """
     cell: CellResult | None = None
     side: dict[str, float] = {}
@@ -154,12 +148,9 @@ def parse_bench_pos(text: str) -> tuple[CellResult | None, dict]:
         elif (b := _BATCH_RE.match(line)) is not None:
             side["batch_fill"] = float(b.group(1).replace(",", ""))
     if cell is not None and raw_runs:
-        # CellResult.__post_init__ overwrites n_runs from len(raw); bench n
-        # already equals len(raw_runs) in normal operation, so this is a
-        # no-op assertion in practice but keeps the invariant explicit.
         cell = CellResult(
             median=cell.median, iqr=cell.iqr, min=cell.min, max=cell.max,
-            n_runs=cell.n_runs, raw=raw_runs, bimodal=cell.bimodal,
+            n_runs=cell.n_runs, raw=raw_runs,
         )
     return cell, side
 
@@ -301,8 +292,7 @@ def make_eval_fn(knob_name: str, fixed: dict[str, Any], cfg: SweepConfig,
     """Build the ``eval_fn`` passed into a strategy.
 
     Resolves the worker count for this cell (from ``fixed`` or default 16),
-    writes the override, runs bench, parses pos/hr, retries once on
-    bimodal cells with a longer window.
+    writes the override, runs bench, parses pos/hr.
     """
 
     def eval_fn(value: Any) -> CellResult:
@@ -323,57 +313,10 @@ def make_eval_fn(knob_name: str, fixed: dict[str, Any], cfg: SweepConfig,
                 override, n_workers, cfg.pool_duration, cfg.n_runs, cfg.warmup,
             )
             cell, side = parse_bench_pos(text)
-            retry = False
-            # Prefer real raw runs from the §9 bench output; fall back to
-            # the 3-element [min, median, max] proxy on older bench builds.
-            #
-            # 5090 sweep analyst v2 §2.3: with real raws, require >=2
-            # trough samples (run < 0.3 × median) before retrying. A
-            # single zero-completion run in n=3 is startup-race noise,
-            # not a second mode — retrying wastes 240 s × 8 = 32 min per
-            # cell. The proxy fallback keeps the old behaviour for
-            # legacy bench output where only [min, median, max] is known.
-            def _bimodal_signal(c: CellResult) -> bool:
-                if c.raw:
-                    return bimodal_from_real_raw(c.raw, c.median)
-                return bimodal_from_raw((c.min, c.median, c.max), c.median)
-            if cell is not None and _bimodal_signal(cell):
-                print(f"[bimodal] retry with pool_duration={RETRY_POOL_DURATION}s "
-                      f"n_runs={RETRY_N_RUNS}", flush=True)
-                text2, rc2, elapsed2 = run_bench_subprocess(
-                    override, n_workers, RETRY_POOL_DURATION, RETRY_N_RUNS, cfg.warmup,
-                )
-                cell2, side2 = parse_bench_pos(text2)
-                if cell2 is not None:
-                    cell = cell2
-                    side = side2 or side
-                rc = rc2
-                elapsed += elapsed2
-                retry = True
             if cell is None:
                 # Failed to parse — return a sentinel zero result so the
                 # strategy can still proceed (and so cells.csv records it).
                 cell = CellResult(median=0.0, iqr=0.0, min=0.0, max=0.0, n_runs=0)
-
-            bimodal = _bimodal_signal(cell)
-            if bimodal and retry:
-                # After one retry, recompute IQR from upper-mode runs only.
-                # Use real raw runs if available (preferred); else fall
-                # back to the 3-element proxy.
-                source = list(cell.raw) if cell.raw else [cell.min, cell.median, cell.max]
-                upper = upper_mode_filter(source, cell.median)
-                if upper:
-                    cell = CellResult(
-                        median=cell.median,
-                        iqr=max(upper) - min(upper),
-                        min=cell.min, max=cell.max, n_runs=cell.n_runs,
-                        raw=cell.raw, bimodal=True,
-                    )
-                else:
-                    cell = CellResult(
-                        median=cell.median, iqr=cell.iqr, min=cell.min,
-                        max=cell.max, n_runs=cell.n_runs, raw=cell.raw, bimodal=True,
-                    )
 
             _append_cells_csv(csv_path, knob_name, value, fixed, cell, side,
                               elapsed, rc, host)
@@ -395,13 +338,12 @@ def _append_cells_csv(path: Path, knob: str, value: Any, fixed: dict, cell: Cell
         "n_workers", "inference_batch_size", "inference_max_wait_ms", "max_train_burst",
         "median_pos", "iqr_pos", "min_pos", "max_pos", "n_runs",
         "gpu_util_pct", "batch_fill_pct",
-        "bimodal_flag", "wall_seconds", "exit_code",
+        "wall_seconds", "exit_code",
         # §9: raw per-run pos/hr as JSON list. Empty on legacy bench builds
         # that pre-date the raw-runs stdout line.
         "raw_runs",
-        # Tier-1.A: pool-overflow surface. `pool_overflows_total` is the
-        # cell-wide count; `pool_overflows_per_run` is the JSON list. Both
-        # empty on legacy bench builds.
+        # pool-overflow surface. `pool_overflows_total` is the cell-wide count;
+        # `pool_overflows_per_run` is the JSON list.
         "pool_overflows_total",
         "pool_overflows_per_run",
     ]
@@ -424,7 +366,6 @@ def _append_cells_csv(path: Path, knob: str, value: Any, fixed: dict, cell: Cell
         "n_runs": cell.n_runs,
         "gpu_util_pct": side.get("gpu_util", ""),
         "batch_fill_pct": side.get("batch_fill", ""),
-        "bimodal_flag": cell.bimodal,
         "wall_seconds": round(wall_seconds, 1),
         "exit_code": rc,
         "raw_runs": json.dumps(list(cell.raw)) if cell.raw else "",
