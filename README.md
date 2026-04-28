@@ -80,18 +80,23 @@ planes plus 6 Q13 chain-length planes (one per hex axis direction, pre/post). Se
 
 ## Performance
 
-**Hardware:** Ryzen 7 8845HS + RTX 4060 Laptop, 14 workers, LTO + native CPU
+**Reference hardware:** Ryzen 7 8845HS + RTX 4060 Laptop, 14 workers, LTO + native CPU.
+Desktop RTX 3070 numbers differ — see `docs/rules/perf-targets.md`.
 
 | Metric | Baseline (n=5 median) | Target |
 |---|---|---|
-| MCTS (CPU only, no NN) | 56,404 sim/s | ≥ 26,000 sim/s |
-| NN inference (batch=64) | 7,676 pos/s  | ≥ 6,500 pos/s |
-| NN latency (batch=1)   | 2.19 ms      | ≤ 3.5 ms |
-| Buffer push            | 618,552 pos/s | ≥ 525,000 pos/s |
-| Worker throughput      | 167,755 pos/hr | ≥ 142,000 pos/hr (provisional) |
+| MCTS (CPU only, no NN) | 66,926 sim/s | ≥ 26,000 sim/s |
+| NN inference (batch=64) | 4,859 pos/s | ≥ 4,000 pos/s |
+| NN latency (batch=1)   | 2.56 ms      | ≤ 3.5 ms |
+| Buffer push            | 615,183 pos/s | ≥ 525,000 pos/s |
+| Worker throughput      | ~25,400 pos_gen/hr¹ | ≥ 20,000 pos_gen/hr |
 | GPU utilization        | 100%         | ≥ 85% |
 
-Methodology: median of n=5 runs, 3 s warm-up. `make bench` reproduces.
+¹ §128: metric is `positions_generated` (plies/hr, continuous). Old metric
+`positions_pushed` (177,799/hr) counted K≈7 cluster views × plies; divide by 7.
+Desktop n=5 confirmed: 27,835 pos_gen/hr, IQR 8.6%, no bimodal artifacts.
+
+Methodology: median of n=5 runs, 90s worker warm-up. `make bench` reproduces.
 
 ### Tuning a new GPU box
 
@@ -100,9 +105,11 @@ RunPod / Lambda box and it converges to a per-host config without script edits:
 
 ```bash
 make sweep.detect          # write reports/sweeps/detected_host.json
-make sweep                 # full registry sweep (90 s cells, ~70 min)
+make sweep                 # full registry sweep (90 s cells, ~270 min)
 make sweep.long            # §124 stable methodology (180 s cells, ~2× wall)
 make sweep.workers         # n_workers ternary only
+# Resume a killed sweep — already-evaluated cells skip bench:
+bash scripts/sweep.sh run --resume reports/sweeps/<host>_<date>/cells.csv
 ```
 
 Output: `reports/sweeps/<host_id>_<date>/{report.md,cells.csv,config.yaml}`.
