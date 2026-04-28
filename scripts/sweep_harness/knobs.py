@@ -74,7 +74,11 @@ KNOBS: dict[str, dict[str, Any]] = {
     "leaf_burst": {
         "strategy": "fixed",
         "value": 8,
-        "param_path": "selfplay.leaf_burst",
+        # Config key in selfplay.yaml is `leaf_batch_size`, not `leaf_burst`.
+        # Latent bug if this knob is ever switched off `fixed` — the runner
+        # would write to a non-existent key. Caught 2026-04-28 in 5090 sweep
+        # analysis (docs/notes/remote_reports/sweep_config_analysis_5090_96th_2026-04-28.md §6.3).
+        "param_path": "selfplay.leaf_batch_size",
         "skip_reason": "§125 marginal effect, fixed at validate winner",
     },
 }

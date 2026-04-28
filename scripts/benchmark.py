@@ -526,9 +526,9 @@ def benchmark_worker_pool(
 
     return {
         "name": "Worker pool throughput",
-        "gph":  {"key": "worker_games_per_hr", "stats": summarise(gph_runs), "value": summarise(gph_runs)["median"]},
-        "pph":  {"key": "worker_pos_per_hr", "stats": summarise(pph_runs), "value": summarise(pph_runs)["median"]},
-        "bat":  {"key": "worker_batch_fill_pct", "stats": summarise(bat_runs), "value": summarise(bat_runs)["median"]},
+        "gph":  {"key": "worker_games_per_hr", "stats": summarise(gph_runs), "value": summarise(gph_runs)["median"], "runs": list(gph_runs)},
+        "pph":  {"key": "worker_pos_per_hr", "stats": summarise(pph_runs), "value": summarise(pph_runs)["median"], "runs": list(pph_runs)},
+        "bat":  {"key": "worker_batch_fill_pct", "stats": summarise(bat_runs), "value": summarise(bat_runs)["median"], "runs": list(bat_runs)},
     }
 
 
@@ -985,6 +985,13 @@ def main() -> None:
                 for sub_name, sub in [("pos/hr", r["pph"]), ("games/hr", r["gph"]), ("batch%", r["bat"])]:
                     s = sub["stats"]
                     console.print(f"  [dim]{name} {sub_name}:[/dim] median={s['median']:,.1f}  IQR=+/-{s['iqr']:,.1f}  [{_fmt_range(s)}]  n={s['n']}")
+                # §9 burst-aware reading: raw per-run pos/hr enables sweep
+                # harness to detect §125 bimodality from real data instead of
+                # the synthesised [min, median, max] proxy. Format must match
+                # `_RAW_RE` in scripts/sweep_harness/runner.py.
+                pph_runs = r["pph"].get("runs")
+                if pph_runs:
+                    console.print(f"  {name} raw pos/hr: {json.dumps([round(v, 1) for v in pph_runs])}")
 
         _compile_note = f"compile {_compile_elapsed:.0f}s / " if _compile_elapsed > 0 else ""
         warmup_note = f"{_compile_note}{warmup_mcts:.0f}s MCTS / {warmup_nn:.0f}s NN / {warmup_buffer:.0f}s buffer / {warmup_worker:.0f}s worker"

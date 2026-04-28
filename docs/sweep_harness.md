@@ -49,6 +49,77 @@ make sweep SWEEP_ARGS="--knobs inference_batch_size --fix n_workers=55 \
   --coarse inference_batch_size=256,320,384,448,512"
 ```
 
+## RTX 5090 + 96-effective-thread host (vast.ai cpu-192t)
+
+Host quirks documented in
+`docs/notes/remote_reports/sweep_config_analysis_5090_96th_2026-04-28.md`.
+Use CLI overrides — the registry deliberately stays low-VRAM-default (see
+"Design rationale" below). Confirmed winners from sweep 2026-04-26:
+`n_workers=55, inference_batch_size=256, inference_max_wait_ms=8.0,
+max_train_burst=8, leaf_batch_size=8`.
+
+### Recommended re-sweep on this host
+
+```sh
+# Fix n_workers (already converged on this host) and probe the
+# unexplored regions reported by the 5090 analyst:
+make sweep SWEEP_ARGS="\
+  --variant gumbel_targets_5090_96th \
+  --fix n_workers=55 \
+  --knobs inference_batch_size,inference_max_wait_ms,leaf_burst,max_train_burst \
+  --coarse inference_batch_size=192,256,320,384 \
+  --values inference_max_wait_ms=1.0,2.0,4.0,8.0 \
+  --values leaf_burst=4,8,16,32 \
+  --bounds max_train_burst=8:32"
+```
+
+Why each override:
+
+* `--fix n_workers=55` — sweep 2026-04-26 converged here; re-search wastes ~4
+  cells. Auto bounds `(48, 64)` would re-test 57/59 (already shown to
+  degrade).
+* `inference_batch_size=192,256,320,384` — registry stops at 256;
+  GPU util sits at ~70 % during selfplay so 320/384 unexplored.
+* `inference_max_wait_ms=1.0,2.0,4.0,8.0` — prior sweep declared 8.0 ms but
+  every cell flagged bimodal. 1.0–2.0 ms is plausible on a 5090 (faster
+  inference → less benefit from waiting longer to fill).
+* `leaf_burst=4,8,16,32` — registry has this `fixed` at 8; faster GPU
+  shifts the dispatch/inference balance, worth re-grid.
+* `max_train_burst=8:32` — bisect converged to lowest bound. Only re-bisect
+  if you also raise `training_steps_per_game` (idle-GPU lever).
+
+### 96/192 effective-thread gap
+
+`os.cpu_count()` returns 192 on this rental but only 96 cores are
+schedulable. The harness's `auto_bounds_fn` for `n_workers` uses 192 →
+bounds `(48, 64)` are correct in absolute terms but for the wrong reason.
+Until a `HEXO_EFFECTIVE_THREADS` env var or `--effective-threads` flag is
+wired in, prefer `--fix n_workers=55` or `--bounds n_workers=50:58` to
+side-step the heuristic.
+
+### Design rationale — why CLI overrides, not registry edits
+
+The 2026-04-28 analyst report (`docs/notes/remote_reports/`) recommended
+mutating `knobs.py` directly: raise `inference_batch_size` coarse grid to
+`[192,256,320,384]`, add `1.0` to `inference_max_wait_ms`, unfix
+`leaf_burst`. We deliberately did **not** apply those:
+
+* Commit `7a843f7` ("per-knob CLI overrides") established the design that
+  the registry holds a low-VRAM-safe baseline (≤16 GB VRAM hosts) and
+  per-host high-VRAM tuning happens via `--coarse` / `--bounds` /
+  `--values` at sweep invocation time.
+* Mutating the registry for a single high-VRAM host would regress the
+  default for low-VRAM hosts (e.g. the 4080S 42-thread host) and force
+  every host-specific config back into a single shared file.
+* The variant YAML `configs/variants/gumbel_targets_5090_96th.yaml`
+  carries `TODO(5090-tuning)` annotations marking the unexplored regions,
+  so the next operator can lift the recommended invocation above without
+  re-reading the analyst report.
+
+Subset of the report that **was** applied: the `leaf_burst` param_path bug
+fix (`selfplay.leaf_burst` → `selfplay.leaf_batch_size`) is host-agnostic
+and was a latent bug — see `knobs.py` and the report's §6.3.
+
 `pool_duration` defaults to **90 s** (fits a 90-min wall budget for a
 multi-knob sweep). The `.long` Make targets raise it to **180 s** (§124
 methodology pin). Use `.long` when 90 s cells flag persistent bimodality

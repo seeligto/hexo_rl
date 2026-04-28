@@ -80,6 +80,10 @@ _LINE_RE = re.compile(
 )
 _GPU_RE = re.compile(rf"^\s*GPU utilisation util%:\s*median={_NUM}")
 _BATCH_RE = re.compile(rf"^\s*Worker pool throughput batch%:\s*median={_NUM}")
+# §9 of 5090 sweep analyst report: bench prints raw per-run pos/hr after the
+# summary so bimodality detection can read real data instead of a 3-element
+# [min, median, max] proxy. Optional — older bench builds omit it.
+_RAW_RE = re.compile(r"^\s*Worker pool throughput raw pos/hr:\s*\[([^\]]*)\]\s*$")
 
 
 def _to_float(s: str) -> float:
@@ -93,9 +97,15 @@ def _to_float(s: str) -> float:
 
 
 def parse_bench_pos(text: str) -> tuple[CellResult | None, dict]:
-    """Pull pos/hr CellResult + side metrics (gpu, batch fill) from stdout."""
+    """Pull pos/hr CellResult + side metrics (gpu, batch fill) from stdout.
+
+    If bench emitted the §9 raw-runs line, attach it to ``cell.raw`` so the
+    runner's bimodality detection sees real data. Falls back to empty raw
+    on older bench builds (`_RAW_RE` simply does not match).
+    """
     cell: CellResult | None = None
     side: dict[str, float] = {}
+    raw_runs: tuple[float, ...] = ()
     for line in text.splitlines():
         m = _LINE_RE.match(line)
         if m:
@@ -109,10 +119,25 @@ def parse_bench_pos(text: str) -> tuple[CellResult | None, dict]:
                 lo, hi = float("nan"), float("nan")
             n = int(m.group(4))
             cell = CellResult(median=median, iqr=iqr, min=lo, max=hi, n_runs=n, raw=())
+        elif (r := _RAW_RE.match(line)) is not None:
+            inner = r.group(1).strip()
+            if inner:
+                try:
+                    raw_runs = tuple(float(x) for x in inner.split(","))
+                except ValueError:
+                    raw_runs = ()
         elif (g := _GPU_RE.match(line)) is not None:
             side["gpu_util"] = float(g.group(1).replace(",", ""))
         elif (b := _BATCH_RE.match(line)) is not None:
             side["batch_fill"] = float(b.group(1).replace(",", ""))
+    if cell is not None and raw_runs:
+        # CellResult.__post_init__ overwrites n_runs from len(raw); bench n
+        # already equals len(raw_runs) in normal operation, so this is a
+        # no-op assertion in practice but keeps the invariant explicit.
+        cell = CellResult(
+            median=cell.median, iqr=cell.iqr, min=cell.min, max=cell.max,
+            n_runs=cell.n_runs, raw=raw_runs, bimodal=cell.bimodal,
+        )
     return cell, side
 
 
@@ -276,12 +301,12 @@ def make_eval_fn(knob_name: str, fixed: dict[str, Any], cfg: SweepConfig,
             )
             cell, side = parse_bench_pos(text)
             retry = False
-            if cell is not None and bimodal_from_raw(
-                # No raw runs available from stdout; synthesize a 3-element
-                # proxy [min, median, max] so bimodal_from_raw can apply
-                # the same min/median rule. Test cases use real raws.
-                (cell.min, cell.median, cell.max), cell.median
-            ):
+            # Prefer real raw runs from the §9 bench output; fall back to
+            # the 3-element [min, median, max] proxy on older bench builds.
+            def _bimodal_signal(c: CellResult) -> bool:
+                raw = c.raw if c.raw else (c.min, c.median, c.max)
+                return bimodal_from_raw(raw, c.median)
+            if cell is not None and _bimodal_signal(cell):
                 print(f"[bimodal] retry with pool_duration={RETRY_POOL_DURATION}s "
                       f"n_runs={RETRY_N_RUNS}", flush=True)
                 text2, rc2, elapsed2 = run_bench_subprocess(
@@ -299,12 +324,13 @@ def make_eval_fn(knob_name: str, fixed: dict[str, Any], cfg: SweepConfig,
                 # strategy can still proceed (and so cells.csv records it).
                 cell = CellResult(median=0.0, iqr=0.0, min=0.0, max=0.0, n_runs=0)
 
-            bimodal = bimodal_from_raw(
-                (cell.min, cell.median, cell.max), cell.median
-            )
+            bimodal = _bimodal_signal(cell)
             if bimodal and retry:
                 # After one retry, recompute IQR from upper-mode runs only.
-                upper = upper_mode_filter([cell.min, cell.median, cell.max], cell.median)
+                # Use real raw runs if available (preferred); else fall
+                # back to the 3-element proxy.
+                source = list(cell.raw) if cell.raw else [cell.min, cell.median, cell.max]
+                upper = upper_mode_filter(source, cell.median)
                 if upper:
                     cell = CellResult(
                         median=cell.median,
@@ -339,6 +365,9 @@ def _append_cells_csv(path: Path, knob: str, value: Any, fixed: dict, cell: Cell
         "median_pos", "iqr_pos", "min_pos", "max_pos", "n_runs",
         "gpu_util_pct", "batch_fill_pct",
         "bimodal_flag", "wall_seconds", "exit_code",
+        # §9: raw per-run pos/hr as JSON list. Empty on legacy bench builds
+        # that pre-date the raw-runs stdout line.
+        "raw_runs",
     ]
     row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -362,6 +391,7 @@ def _append_cells_csv(path: Path, knob: str, value: Any, fixed: dict, cell: Cell
         "bimodal_flag": cell.bimodal,
         "wall_seconds": round(wall_seconds, 1),
         "exit_code": rc,
+        "raw_runs": json.dumps(list(cell.raw)) if cell.raw else "",
     }
     with path.open("a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)

@@ -13,15 +13,29 @@
 #   - Lower max_train_burst (8 vs 16): faster GPU → train step completes
 #     quickly, less burst needed to keep self-play ahead.
 torch_compile: false
+# TODO(5090-tuning): `training_steps_per_game=2.0` plus `max_train_burst=8`
+# means trainer is not the bottleneck — GPU sits ~30 % idle during selfplay
+# (bench shows util 69–72 %, fill 100 %). Raising to 3.0–4.0 spends idle
+# cycles on more gradient steps for free quality. Sweep candidate.
 training_steps_per_game: 2.0
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
   max_game_moves: 300
   n_workers: 55
+  # TODO(5090-tuning): coarse grid stopped at 256; 320/384 unprobed on this
+  # GPU. Re-sweep with `--coarse inference_batch_size=192,256,320,384`.
   inference_batch_size: 256
+  # TODO(5090-tuning): 8.0 ms won prior sweep but every cell was bimodal.
+  # 1.0–2.0 ms unexplored on faster GPU — re-sweep with
+  # `--values inference_max_wait_ms=1.0,2.0,4.0,8.0`.
   inference_max_wait_ms: 8.0
+  # TODO(5090-tuning): leaf_batch_size pinned at 8 (§125 fixed). Faster GPU
+  # shifts dispatch/inference balance — unfix and grid [4,8,16,32].
   leaf_batch_size: 8
   playout_cap:
     fast_prob: 0.0
+# TODO(5090-tuning): bisect converged to lowest bound (8). If
+# training_steps_per_game is raised, re-bisect with `--bounds
+# max_train_burst=8:32`.
 max_train_burst: 8
