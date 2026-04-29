@@ -142,6 +142,21 @@ if command -v nvidia-smi &>/dev/null; then
     CUDA_VERSION="$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+')" || true
     CUDA_MAJOR="${CUDA_VERSION%%.*}"
 fi
+# Fallback 1: CUDA_VERSION env var set by NVIDIA container images
+if [[ -z "$CUDA_MAJOR" ]] && [[ -n "${CUDA_VERSION:-}" ]]; then
+    CUDA_MAJOR="${CUDA_VERSION%%.*}"
+    ok "CUDA $CUDA_VERSION (from env)"
+fi
+# Fallback 2: /usr/local/cuda/version.json (NVIDIA container toolkit)
+if [[ -z "$CUDA_MAJOR" ]] && [[ -f "/usr/local/cuda/version.json" ]]; then
+    _V="$(python3 -c "import json; d=json.load(open('/usr/local/cuda/version.json')); print(d.get('cuda',d.get('CUDA',{})).get('version',''))" 2>/dev/null)" || true
+    if [[ -n "$_V" ]]; then CUDA_VERSION="$_V"; CUDA_MAJOR="${CUDA_VERSION%%.*}"; ok "CUDA $CUDA_VERSION (from version.json)"; fi
+fi
+# Fallback 3: nvcc
+if [[ -z "$CUDA_MAJOR" ]] && command -v nvcc &>/dev/null; then
+    _V="$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+')" || true
+    if [[ -n "$_V" ]]; then CUDA_VERSION="$_V"; CUDA_MAJOR="${CUDA_VERSION%%.*}"; ok "CUDA $CUDA_VERSION (from nvcc)"; fi
+fi
 
 if [[ "$OS" == "macOS" ]]; then
     ok "macOS — installing default PyPI torch (gets MPS build)"
