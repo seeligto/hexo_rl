@@ -128,7 +128,11 @@ def main() -> None:
     print(f"  Log dir:     {log_dir}   (tail={'on' if enable_tail else 'off'})")
 
     dashboard = WebDashboard(config)
-    dashboard.start()
+    try:
+        dashboard.start()
+    except OSError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     tailer = None
     if enable_tail:

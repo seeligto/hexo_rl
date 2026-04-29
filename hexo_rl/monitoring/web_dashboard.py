@@ -402,23 +402,45 @@ class WebDashboard:
         log.info("load_existing_games_done", loaded=loaded, path=str(run_dir))
 
     def start(self) -> None:
-        """Start Flask server and drain thread as daemon threads."""
+        """Start Flask server and drain thread as daemon threads.
+
+        Raises OSError if (host, port) is already in use so the CLI can
+        exit cleanly instead of leaving a half-alive process where the
+        socketio thread crashed silently but the rest kept running.
+        """
         _install_engineio_excepthook()
         self._init_viewer()
         self._load_existing_games(self._games_base_dir)
+
+        port = self._port
+        host = self._host
+        async_mode = self._async_mode
+
+        # Pre-flight bind probe — fail fast on EADDRINUSE before launching
+        # the daemon thread (where exceptions would die silently).
+        import socket as _socket
+
+        _probe = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        try:
+            _probe.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+            _probe.bind((host, port))
+        except OSError as exc:
+            _probe.close()
+            raise OSError(
+                f"dashboard cannot bind {host}:{port} ({exc.strerror or exc}). "
+                "Another dashboard is likely already running — `make dashboard.stop` "
+                "or set DASHBOARD_PORT=<other> for this one."
+            ) from exc
+        finally:
+            _probe.close()
 
         self._drain_thread = threading.Thread(
             target=self._drain_emit, daemon=True, name="socketio-drain"
         )
         self._drain_thread.start()
 
-        port = self._port
         socketio = self._socketio
         app = self._app
-
-        host = self._host
-
-        async_mode = self._async_mode
 
         def _run():
             # Suppress Flask/Werkzeug startup banner — it writes to stdout

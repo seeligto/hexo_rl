@@ -24,6 +24,10 @@ DASHBOARD ?= 0
 _NODASH_FLAG = $(if $(filter 1,$(DASHBOARD)),,--no-dashboard)
 
 DASHBOARD_PORT ?= 5001
+# Bind address for the dashboard. Default 127.0.0.1 (laptop). On vast.ai or
+# any remote box where you want to reach the dashboard from another machine,
+# either use `ssh -L 5001:127.0.0.1:5001 …` or set DASHBOARD_HOST=0.0.0.0.
+DASHBOARD_HOST ?= 127.0.0.1
 
 # Eval parameters
 CKPT ?= $(CHECKPOINT_LATEST)
@@ -306,23 +310,25 @@ dashboard: ## Serve dashboard (foreground) — tails logs/events_*.jsonl for liv
 		--run-dir runs/$(VARIANT) \
 		--checkpoint-dir checkpoints/$(VARIANT) \
 		--log-dir logs \
+		--host $(DASHBOARD_HOST) \
 		--port $(DASHBOARD_PORT)
 
 .PHONY: dashboard.bg
 dashboard.bg: ## Start dashboard server in background (idempotent — skips if already up)
 	@mkdir -p logs
 	@if [ -f logs/dashboard.pid ] && kill -0 $$(cat logs/dashboard.pid) 2>/dev/null; then \
-		echo "Dashboard already running (PID $$(cat logs/dashboard.pid)) — http://localhost:$(DASHBOARD_PORT)"; \
+		echo "Dashboard already running (PID $$(cat logs/dashboard.pid)) — http://$(DASHBOARD_HOST):$(DASHBOARD_PORT)"; \
 	else \
 		rm -f logs/dashboard.pid; \
 		nohup $(PY) scripts/serve_dashboard.py \
 			--run-dir runs/$(VARIANT) \
 			--checkpoint-dir checkpoints/$(VARIANT) \
 			--log-dir logs \
+			--host $(DASHBOARD_HOST) \
 			--port $(DASHBOARD_PORT) \
 			> logs/dashboard.log 2>&1 & \
 			echo $$! > logs/dashboard.pid; \
-		echo "Dashboard started (PID $$(cat logs/dashboard.pid)) — http://localhost:$(DASHBOARD_PORT)"; \
+		echo "Dashboard started (PID $$(cat logs/dashboard.pid)) — http://$(DASHBOARD_HOST):$(DASHBOARD_PORT)"; \
 		echo "Logs: logs/dashboard.log"; \
 	fi
 
