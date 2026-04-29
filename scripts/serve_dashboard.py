@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """Serve HeXO web dashboard without active training process.
 
+Live events are picked up by tailing ``logs/events_*.jsonl`` (written by
+hexo_rl.monitoring.events.JSONLSink in scripts/train.py). The newest file
+matching the pattern is followed; if a newer run starts, the tailer
+switches automatically.
+
 Usage:
     python scripts/serve_dashboard.py [options]
 
 Options:
     --run-dir PATH        Root of runs/ tree (default: runs/)
     --checkpoint-dir PATH Checkpoint dir for analyze/play (default: checkpoints/)
+    --log-dir PATH        Where events_*.jsonl files live (default: logs/)
     --port INT            Web server port (default: 5001)
     --host STR            Bind host (default: 127.0.0.1)
     --async-mode STR      SocketIO async mode: gevent|threading (default: gevent)
+    --no-tail             Disable JSONL tailer (replay-only mode)
 """
 from __future__ import annotations
 
@@ -46,6 +53,11 @@ def _parse_args() -> argparse.Namespace:
         default="checkpoints/",
         help="Checkpoint dir for analyze/play (default: checkpoints/)",
     )
+    p.add_argument(
+        "--log-dir",
+        default="logs/",
+        help="Directory containing events_*.jsonl event streams (default: logs/)",
+    )
     p.add_argument("--port", type=int, default=5001, help="Web server port (default: 5001)")
     p.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     p.add_argument(
@@ -55,6 +67,11 @@ def _parse_args() -> argparse.Namespace:
         help="SocketIO async server (default: gevent — production-grade, "
              "avoids the 'Session is disconnected' traceback storms that "
              "werkzeug's threading mode produces under backpressure).",
+    )
+    p.add_argument(
+        "--no-tail",
+        action="store_true",
+        help="Disable events_*.jsonl tailer (replay/analyze only — no live training panel).",
     )
     return p.parse_args()
 
@@ -100,20 +117,37 @@ def main() -> None:
 
     analyze_bp.checkpoint_dir = Path(checkpoint_dir)
 
+    log_dir = args.log_dir
+    enable_tail = not args.no_tail
+
     print(f"HeXO dashboard: http://{host}:{port}   (async_mode={async_mode})")
     print(f"  Viewer:      http://{host}:{port}/viewer")
     print(f"  Analyze:     http://{host}:{port}/analyze")
     print(f"  Run dir:     {run_dir}")
     print(f"  Checkpoints: {checkpoint_dir}")
+    print(f"  Log dir:     {log_dir}   (tail={'on' if enable_tail else 'off'})")
 
     dashboard = WebDashboard(config)
     dashboard.start()
+
+    tailer = None
+    if enable_tail:
+        from hexo_rl.monitoring.events_tail import EventsTailer
+
+        tailer = EventsTailer(
+            log_dir=log_dir,
+            callback=dashboard.on_event,
+        )
+        tailer.start()
 
     # Block main thread; daemon threads keep Flask/SocketIO running.
     try:
         threading.Event().wait()
     except KeyboardInterrupt:
         pass
+    finally:
+        if tailer is not None:
+            tailer.stop()
 
 
 if __name__ == "__main__":

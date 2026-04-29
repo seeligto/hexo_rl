@@ -86,7 +86,7 @@ from hexo_rl.training.trainer import Trainer
 from hexo_rl.training.batch_assembly import allocate_batch_buffers, load_pretrained_buffer
 from hexo_rl.training.loop import run_training_loop
 from hexo_rl.selfplay.utils import N_ACTIONS as _N_ACTIONS
-from hexo_rl.monitoring.events import emit_event
+from hexo_rl.monitoring.events import emit_event, register_jsonl_sink
 
 
 def seed_everything(seed: int) -> None:
@@ -188,6 +188,14 @@ def main() -> None:
     _log_run_name = args.run_name or f"train_{run_id}"
     log, _log_fh = configure_logging(log_dir=args.log_dir, run_name=_log_run_name)
     log.info("startup", config=config, variant=args.variant, pid=os.getpid())
+
+    # Events JSONL sink — out-of-process dashboards (scripts/serve_dashboard.py
+    # via EventsTailer) tail this file to receive the live event stream.
+    # Registered unconditionally so `make dashboard` works whether or not the
+    # in-process dashboard is enabled.
+    _events_jsonl_path = Path(args.log_dir) / f"events_{run_id}.jsonl"
+    _events_sink = register_jsonl_sink(_events_jsonl_path)
+    log.info("events_jsonl_sink", path=str(_events_jsonl_path))
 
     # ── Seed + device ─────────────────────────────────────────────────────────
     seed = int(config.get("seed", 42))

@@ -15,12 +15,15 @@ PRETRAIN_CKPT ?= $(shell ls -1 checkpoints/pretrain/pretrain_*.pt 2>/dev/null | 
 VARIANT ?=
 VARIANT_FLAG = $(if $(VARIANT),--variant $(VARIANT),)
 
-# Dashboard is OFF by default for training — run `make dashboard` in a
-# separate terminal to attach. Set DASHBOARD=1 on the train target to force
-# the in-process dashboard (not recommended: werkzeug threaded mode produces
-# "Session is disconnected" traceback storms under websocket backpressure).
+# Dashboard is OFF in-process by default — train.py emits to logs/events_<run_id>.jsonl
+# regardless. Use `make dashboard` (or `make train.dashboard`) to launch the
+# out-of-process gevent server which tails that file. Set DASHBOARD=1 on the
+# train target only if you want the in-process renderer (werkzeug threaded
+# mode produces "Session is disconnected" storms under load — avoid).
 DASHBOARD ?= 0
 _NODASH_FLAG = $(if $(filter 1,$(DASHBOARD)),,--no-dashboard)
+
+DASHBOARD_PORT ?= 5001
 
 # Eval parameters
 CKPT ?= $(CHECKPOINT_LATEST)
@@ -143,6 +146,17 @@ train: ## Self-play RL from bootstrap checkpoint (VARIANT=..., DASHBOARD=1 to en
 train.resume: ## Resume training from latest checkpoint (VARIANT= supported)
 	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
 	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST) $(_NODASH_FLAG) $(VARIANT_FLAG)
+
+.PHONY: train.dashboard
+train.dashboard: ## Train + auto-launch out-of-process dashboard (VARIANT= supported)
+	@$(MAKE) --no-print-directory dashboard.bg
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) --no-dashboard $(VARIANT_FLAG)
+
+.PHONY: train.dashboard.resume
+train.dashboard.resume: ## Resume training + auto-launch out-of-process dashboard
+	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)
+	@$(MAKE) --no-print-directory dashboard.bg
+	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_LATEST) --no-dashboard $(VARIANT_FLAG)
 
 .PHONY: train.bg
 train.bg: ## Self-play RL from bootstrap checkpoint, background (VARIANT= supported)
@@ -287,14 +301,52 @@ corpus.export.pretrain: ## Export human-only Elo-weighted NPZ for pretrain (all 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
 .PHONY: dashboard
-dashboard: ## Serve dashboard without training (VARIANT=gumbel_full by default)
+dashboard: ## Serve dashboard (foreground) — tails logs/events_*.jsonl for live updates
 	@$(PY) scripts/serve_dashboard.py \
 		--run-dir runs/$(VARIANT) \
 		--checkpoint-dir checkpoints/$(VARIANT) \
-		--port 5001
+		--log-dir logs \
+		--port $(DASHBOARD_PORT)
+
+.PHONY: dashboard.bg
+dashboard.bg: ## Start dashboard server in background (idempotent — skips if already up)
+	@mkdir -p logs
+	@if [ -f logs/dashboard.pid ] && kill -0 $$(cat logs/dashboard.pid) 2>/dev/null; then \
+		echo "Dashboard already running (PID $$(cat logs/dashboard.pid)) — http://localhost:$(DASHBOARD_PORT)"; \
+	else \
+		rm -f logs/dashboard.pid; \
+		nohup $(PY) scripts/serve_dashboard.py \
+			--run-dir runs/$(VARIANT) \
+			--checkpoint-dir checkpoints/$(VARIANT) \
+			--log-dir logs \
+			--port $(DASHBOARD_PORT) \
+			> logs/dashboard.log 2>&1 & \
+			echo $$! > logs/dashboard.pid; \
+		echo "Dashboard started (PID $$(cat logs/dashboard.pid)) — http://localhost:$(DASHBOARD_PORT)"; \
+		echo "Logs: logs/dashboard.log"; \
+	fi
+
+.PHONY: dashboard.stop
+dashboard.stop: ## Stop background dashboard server
+	@if [ -f logs/dashboard.pid ]; then \
+		PID=$$(cat logs/dashboard.pid); \
+		if kill -0 $$PID 2>/dev/null; then \
+			kill $$PID && echo "Stopped dashboard (PID $$PID)"; \
+		else \
+			echo "Stale dashboard.pid (PID $$PID not running)"; \
+		fi; \
+		rm -f logs/dashboard.pid; \
+	else \
+		pids=$$(pgrep -f 'scripts/serve_dashboard\.py' 2>/dev/null || true); \
+		if [ -n "$$pids" ]; then \
+			echo "$$pids" | xargs -r kill && echo "Killed serve_dashboard pids: $$pids"; \
+		else \
+			echo "Dashboard not running"; \
+		fi; \
+	fi
 
 .PHONY: dash.open
 dash.open: ## Open web dashboard in browser
-	@echo "Opening http://localhost:5001"
-	@$(PY) -c "import webbrowser; webbrowser.open('http://localhost:5001')" \
-		|| echo "Open manually: http://localhost:5001"
+	@echo "Opening http://localhost:$(DASHBOARD_PORT)"
+	@$(PY) -c "import webbrowser; webbrowser.open('http://localhost:$(DASHBOARD_PORT)')" \
+		|| echo "Open manually: http://localhost:$(DASHBOARD_PORT)"
