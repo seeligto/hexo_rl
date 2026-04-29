@@ -1,0 +1,26 @@
+# §115 Phase 3 — Smoke B override (root-level keys).
+#
+# Corpus-dominance hypothesis: accelerate pretrain-weight decay so the
+# policy gradient is dominated by self-play earlier. At decay_steps=2500
+# and init=0.8 / min=0.1, the pretrain weight reaches ~0.11 by step 5000
+# (clamped floor).
+#
+# training.yaml keys live at the YAML ROOT — do not nest under `training:`.
+#
+# Run order:
+#   1) bootstrap_model.pt → trainer.step 0, 5000 steps total.
+#   2) buffer_persist: false → cold self-play start; corpus still loads.
+#   3) Separate checkpoint dir (checkpoints_smokes/smoke_B/).
+#
+# Do NOT commit this file. Transient — scope limited to this wave.
+
+eval_interval: 999999
+checkpoint_interval: 500
+max_checkpoints_kept: 10000
+
+mixing:
+  decay_steps: 2500              # THE variable: sunset corpus fast
+  buffer_persist: false
+
+eval_pipeline:
+  enabled: false

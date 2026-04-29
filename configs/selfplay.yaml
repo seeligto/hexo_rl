@@ -63,7 +63,7 @@ selfplay:
   # MCTS. Rows produced by these plies are skipped (no training target) —
   # purpose is off-canonical early-game state diversity downstream.
   # Mirrors eval.yaml:eval_random_opening_plies (§80). 0 disables.
-  random_opening_plies: 4
+  random_opening_plies: 1
 
   playout_cap:
     # Game-level playout cap (fast_prob / fast_sims / standard_sims) is mutually

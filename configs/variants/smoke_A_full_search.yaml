@@ -1,0 +1,35 @@
+# §115 Phase 3 — Smoke A override (retry with root-level keys).
+#
+# Loss-gate hypothesis: double the probability a self-play move contributes
+# to policy loss, from the 0.25 production baseline to 0.5.
+#
+# IMPORTANT: training.yaml keys live at the YAML ROOT (not nested under
+# `training:`). Nesting `training.mixing.buffer_persist: false` wrote a
+# SECOND mixing dict that shadowed the complete one, causing
+# `load_pretrained_buffer` to miss `pretrained_buffer_path`. Deadlocked the
+# first fsp=1.0 attempt and ran corpus-less for the first fsp=0.5 attempt.
+#
+# Run order:
+#   1) bootstrap_model.pt → trainer.step 0, 2000 steps total.
+#   2) buffer_persist: false so the live checkpoints/replay_buffer.bin
+#      stays intact for Smoke B.
+#   3) buffer_persist: false also means replay_buffer.bin is NOT loaded
+#      at startup → cold self-play start; corpus still loads normally.
+#   4) Separate checkpoint dir (checkpoints_smokes/smoke_A/).
+#
+# Do NOT commit this file. Transient — scope limited to this wave.
+
+eval_interval: 999999            # disable eval for a clean supply profile
+checkpoint_interval: 500         # sparse — still want a step-2000 snapshot
+max_checkpoints_kept: 10000      # prune-free: tiny smoke dir
+
+mixing:
+  buffer_persist: false          # do not clobber checkpoints/replay_buffer.bin
+  # pretrained_buffer_path and the rest inherited from training.yaml.
+
+selfplay:
+  playout_cap:
+    full_search_prob: 0.5        # THE variable: half the moves go full search
+
+eval_pipeline:
+  enabled: false

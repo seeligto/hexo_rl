@@ -6,7 +6,7 @@
 # Full data: reports/sweeps/epyc-192t-nvidiageforcertx5090_2026-04-28_21-02/ (remote)
 #            reports/sweeps/epyc-192t-nvidiageforcertx5090_2026-04-29_00-07/ (remote)
 # Launch: make train VARIANT=gumbel_targets_epyc5090_48t
-training_steps_per_game: 2.0
+training_steps_per_game: 4.0
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
