@@ -1,0 +1,19 @@
+# gumbel_targets — EPYC 9654 (48 vCPU alloc) + RTX 5090 (32 GB) variant.
+# Sweep 2026-04-28/29 on vast.ai (epyc-192t-nvidiageforcertx5090, 48 vCPU alloc).
+# Round 1 winners: n_workers=33, inference_batch_size=320
+# Round 2 winners: inference_max_wait_ms=16.0, max_train_burst=6
+# GPU util plateau at ~70% across all sweeps — dispatch-GIL bound (same as 4080S host).
+# Full data: reports/sweeps/epyc-192t-nvidiageforcertx5090_2026-04-28_21-02/ (remote)
+#            reports/sweeps/epyc-192t-nvidiageforcertx5090_2026-04-29_00-07/ (remote)
+# Launch: make train VARIANT=gumbel_targets_epyc5090_48t
+training_steps_per_game: 2.0
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 300
+  n_workers: 33
+  inference_batch_size: 320
+  inference_max_wait_ms: 16.0
+  playout_cap:
+    fast_prob: 0.0
+max_train_burst: 6
