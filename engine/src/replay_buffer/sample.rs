@@ -470,7 +470,7 @@ mod tests {
         for &marker_src in &[0usize, 200, 180, 360] {
             for sym_idx in 0..N_SYMS {
                 let mut src_state = vec![0u16; N_PLANES * N_CELLS];
-                let mut src_chain = vec![0u16; N_CHAIN_PLANES * N_CELLS];
+                let src_chain     = vec![0u16; N_CHAIN_PLANES * N_CELLS];
                 let mut src_pol   = vec![0.0f32; N_ACTIONS];
                 let mut src_own   = vec![1u8; AUX_STRIDE];
                 let mut src_wl    = vec![0u8; AUX_STRIDE];

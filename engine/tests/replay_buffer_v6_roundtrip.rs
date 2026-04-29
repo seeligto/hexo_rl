@@ -1,11 +1,14 @@
-//! Regression guard for HEXB v5 save/load round-trip of `is_full_search` and
+//! Regression guard for HEXB v6 save/load round-trip of `is_full_search` and
 //! `game_length`-derived weights (F-029, reports/master_review_2026-04-18/).
+//! Originally written against v5; v6 reuses the same on-disk row layout aside
+//! from the state-plane count (18 → 8 per §131), so the round-trip semantics
+//! are unchanged.
 //!
-//! The existing unit test in `persist.rs::test_aux_hexb_v5_roundtrip` manipulates
+//! The existing unit test in `persist.rs::test_aux_hexb_v6_roundtrip` manipulates
 //! internal state directly and covers a single position. This integration test:
 //!   1. Uses the public `push_for_test` API (no direct field writes).
 //!   2. Pushes N positions with mixed is_full_search values (0 and 1).
-//!   3. Saves to HEXB v5, loads into a buffer with a *larger* capacity.
+//!   3. Saves to HEXB v6, loads into a buffer with a *larger* capacity.
 //!   4. Asserts is_full_search values survive byte-exact at every slot.
 //!   5. Asserts game_length-derived weights survive (f32 round-trip within f16 precision).
 //!
@@ -19,7 +22,7 @@ use engine::replay_buffer::ReplayBuffer;
 use std::env::temp_dir;
 
 #[test]
-fn hexb_v5_is_full_search_survives_roundtrip_at_different_capacity() {
+fn hexb_v6_is_full_search_survives_roundtrip_at_different_capacity() {
     let n = 8;
     let mut buf = ReplayBuffer::new(n);
 
@@ -41,7 +44,7 @@ fn hexb_v5_is_full_search_survives_roundtrip_at_different_capacity() {
     }
 
     // Save.
-    let path = temp_dir().join("integration_v5_ifs_roundtrip.hexb");
+    let path = temp_dir().join("integration_v6_ifs_roundtrip.hexb");
     buf.save_to_path(path.to_str().unwrap()).unwrap();
 
     // Load into a fresh buffer with LARGER capacity (regression: slot mapping must be preserved).
@@ -62,7 +65,7 @@ fn hexb_v5_is_full_search_survives_roundtrip_at_different_capacity() {
 }
 
 #[test]
-fn hexb_v5_game_length_weight_survives_roundtrip() {
+fn hexb_v6_game_length_weight_survives_roundtrip() {
     // Push two groups with different game_length values; the weight schedule maps
     // them to different f16 weights. Verify the weights are preserved after save/load.
     //
@@ -80,7 +83,7 @@ fn hexb_v5_game_length_weight_survives_roundtrip() {
         buf.push_for_test(-1.0, 40, false);
     }
 
-    let path = temp_dir().join("integration_v5_weight_roundtrip.hexb");
+    let path = temp_dir().join("integration_v6_weight_roundtrip.hexb");
     buf.save_to_path(path.to_str().unwrap()).unwrap();
 
     let mut buf2 = ReplayBuffer::new(20);

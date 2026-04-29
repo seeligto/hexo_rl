@@ -96,7 +96,9 @@ pub struct SelfPlayRunner {
     pub(crate) positions_dropped: Arc<AtomicU64>,
     /// Per-row training rows produced by self-play.
     /// Tuple: (feat, chain, policy, outcome, plies, combined_aux_u8)
-    ///   feat:   18-plane state (f32, flat [18 × TOTAL_CELLS])
+    ///   feat:   8-plane state (f32, flat [8 × TOTAL_CELLS]) — HEXB v6 wire format,
+    ///           sliced from the 18-plane game-state tensor by
+    ///           `worker_loop::slice_kept_planes_18_to_8` per §131 Option X.
     ///   chain:  6-plane chain-length (f32, flat [6 × TOTAL_CELLS], normalized /6)
     ///   combined_aux_u8 layout: first TOTAL_CELLS bytes = ownership
     ///     (0=P2, 1=empty, 2=P1), last TOTAL_CELLS = winning_line binary mask.
