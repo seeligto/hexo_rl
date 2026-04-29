@@ -30,6 +30,7 @@ pub fn compute_move_temperature(
     }
 }
 
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::thread;
 
@@ -39,10 +40,71 @@ use rand::{rng, RngExt};
 use crate::board::{Board, BOARD_SIZE, TOTAL_CELLS, hex_distance};
 use crate::board::encode_chain_planes;
 use crate::mcts::MCTSTree;
+use crate::replay_buffer::sym_tables::{SymTables, N_SYMS, N_CELLS as SYM_N_CELLS};
+use crate::replay_buffer::sample::{apply_symmetry_state, apply_chain_symmetry};
 
 use super::SelfPlayRunner;
 use super::gumbel_search::GumbelSearchState;
 use super::records;
+
+/// Inverse of dihedral element `s` parameterized as reflect-then-rotate^n.
+///
+/// Pure rotations (`s ∈ 0..6`): inverse is rotation by `(6 - s) % 6`.
+/// Reflective elements (`s ∈ 6..12`): self-inverse — `F·R^n` is an involution
+/// since `F·R^n·F·R^n = R^n·F·F·R^n = R^n·R^-n = e` (using `F·R^n·F = R^-n`).
+#[inline]
+pub(crate) fn inv_sym_idx(s: usize) -> usize {
+    if s < 6 { (6 - s) % 6 } else { s }
+}
+
+/// Forward-scatter an 18-plane state buffer in place under `sym_idx`.
+///
+/// Allocates a temporary buffer; cheap relative to inference. `sym_idx == 0` is
+/// the identity scatter (the caller may short-circuit if it owns the path).
+#[inline]
+fn rotate_state_inplace(buf: &mut Vec<f32>, sym_idx: usize, tables: &SymTables) {
+    let mut tmp = vec![0.0f32; buf.len()];
+    apply_symmetry_state::<f32>(buf, &mut tmp, sym_idx, tables);
+    std::mem::swap(buf, &mut tmp);
+}
+
+/// Forward-scatter a 6-plane chain buffer in place under `sym_idx`.
+/// Includes the axis-plane remap (chain planes encode hex-axis-specific data).
+#[inline]
+fn rotate_chain_inplace(buf: &mut Vec<f32>, sym_idx: usize, tables: &SymTables) {
+    let mut tmp = vec![0.0f32; buf.len()];
+    apply_chain_symmetry::<f32>(buf, &mut tmp, sym_idx, tables);
+    std::mem::swap(buf, &mut tmp);
+}
+
+/// Forward-scatter a single 19×19 policy in place. The pass-action slot
+/// (`N_CELLS`) is a global identity — it stays at the same index.
+#[inline]
+fn rotate_policy_inplace(buf: &mut Vec<f32>, sym_idx: usize, tables: &SymTables) {
+    let mut tmp = vec![0.0f32; buf.len()];
+    let scatter = &tables.scatter[sym_idx];
+    for &(sc, dc) in scatter {
+        tmp[dc as usize] = buf[sc as usize];
+    }
+    if buf.len() > SYM_N_CELLS {
+        tmp[SYM_N_CELLS] = buf[SYM_N_CELLS];
+    }
+    std::mem::swap(buf, &mut tmp);
+}
+
+/// Forward-scatter the combined aux_u8 buffer (ownership ‖ winning_line) in place.
+/// Ownership default is 1 (empty); winning_line default is 0 (no win mask).
+#[inline]
+fn rotate_aux_inplace(buf: &mut Vec<u8>, sym_idx: usize, tables: &SymTables) {
+    let mut tmp = vec![0u8; buf.len()];
+    tmp[..TOTAL_CELLS].fill(1); // ownership default = empty
+    let scatter = &tables.scatter[sym_idx];
+    for &(sc, dc) in scatter {
+        tmp[dc as usize]               = buf[sc as usize];
+        tmp[TOTAL_CELLS + dc as usize] = buf[TOTAL_CELLS + sc as usize];
+    }
+    std::mem::swap(buf, &mut tmp);
+}
 
 impl SelfPlayRunner {
     /// Spawn `n_workers` self-play threads. Idempotent: a second call while
@@ -71,6 +133,12 @@ impl SelfPlayRunner {
             self.fast_prob,
             self.full_search_prob,
         );
+
+        // §130: build the 12-fold dihedral scatter tables once and share by Arc.
+        // SymTables construction is O(N_CELLS × N_SYMS) ≈ 4 µs; keeping a single
+        // shared instance avoids paying that per-thread (and per-game) plus the
+        // cache pressure of duplicate copies in every worker.
+        let sym_tables_arc = Arc::new(SymTables::new());
 
         let mut handles = self.handles.lock().expect("runner handles lock poisoned");
         for worker_id in 0..self.n_workers {
@@ -110,6 +178,8 @@ impl SelfPlayRunner {
             let n_sims_quick      = self.n_sims_quick;
             let n_sims_full       = self.n_sims_full;
             let random_opening_plies = self.random_opening_plies;
+            let selfplay_rotation_enabled = self.selfplay_rotation_enabled;
+            let sym_tables = sym_tables_arc.clone();
             let results_queue = self.results.clone();
             let positions_dropped = self.positions_dropped.clone();
             let recent_game_results = self.recent_game_results.clone();
@@ -138,6 +208,19 @@ impl SelfPlayRunner {
                     let mut board = Board::new();
                     let mut records_vec = Vec::new();
                     let mut move_history: Vec<(i32, i32)> = Vec::new();
+
+                    // §130: sample per-game rotation across the 12-element hex
+                    // dihedral group when self-play rotation is enabled. The
+                    // rotation is fixed for the duration of the game; eval/bot
+                    // paths construct the runner with the flag disabled and
+                    // sym_idx stays at 0 (identity — every scatter call is
+                    // short-circuited below).
+                    let sym_idx: usize = if selfplay_rotation_enabled {
+                        rng.random_range(0..N_SYMS)
+                    } else {
+                        0
+                    };
+                    let inv_idx = inv_sym_idx(sym_idx);
 
                     // KataGo-style playout cap randomisation.
                     let is_fast_game = fast_prob > 0.0 && rng.random::<f32>() < fast_prob;
@@ -198,6 +281,14 @@ impl SelfPlayRunner {
                                 for view in views {
                                     let mut buffer = batcher.get_feature_buffer();
                                     leaf.encode_planes_to_buffer(&view, &mut buffer);
+                                    // §130: forward-scatter the input planes to
+                                    // the rotated frame so the model sees a
+                                    // randomly-oriented view of this game. The
+                                    // inverse scatter on the returned policy
+                                    // (below) keeps MCTS in canonical frame.
+                                    if sym_idx != 0 {
+                                        rotate_state_inplace(&mut buffer, sym_idx, &sym_tables);
+                                    }
                                     all_batch_features.push(buffer);
                                 }
                             }
@@ -209,7 +300,13 @@ impl SelfPlayRunner {
                                 Ok(results) => {
                                     let mut ps = Vec::with_capacity(results.len());
                                     let mut vs = Vec::with_capacity(results.len());
-                                    for (p, v) in results {
+                                    for (mut p, v) in results {
+                                        // §130: inverse-scatter the policy back
+                                        // to canonical frame. Value is scalar
+                                        // and rotation-invariant — left as-is.
+                                        if sym_idx != 0 {
+                                            rotate_policy_inplace(&mut p, inv_idx, &sym_tables);
+                                        }
                                         ps.push(p);
                                         vs.push(v);
                                     }
@@ -525,11 +622,21 @@ impl SelfPlayRunner {
                             );
                             // Fast games: zero-policy marks value-only targets (unless
                             // completed Q-values are enabled, which give signal even at 50 sims).
-                            let projected_policy = if is_fast_game && !completed_q_values {
+                            let mut projected_policy = if is_fast_game && !completed_q_values {
                                 vec![0.0; BOARD_SIZE * BOARD_SIZE + 1]
                             } else {
                                 records::aggregate_policy_to_local(&board, center, &target_policy)
                             };
+                            // §130: forward-scatter the recorded state, chain, and
+                            // policy into the rotated frame so the buffer stores
+                            // the rotated frame directly. Sample-time augmentation
+                            // (12-fold scatter) still runs on top — over-augmentation
+                            // is benign because identity-element overlap is negligible.
+                            if sym_idx != 0 {
+                                rotate_state_inplace(&mut feat, sym_idx, &sym_tables);
+                                rotate_chain_inplace(&mut chain, sym_idx, &sym_tables);
+                                rotate_policy_inplace(&mut projected_policy, sym_idx, &sym_tables);
+                            }
                             // Capture the per-row window centre so the aux targets
                             // (computed at game end) can be reprojected into the same
                             // coordinate frame as this row's state planes.
@@ -568,9 +675,15 @@ impl SelfPlayRunner {
 
                         // Per-row aux reprojection (ownership + winning_line) into this
                         // row's per-cluster window centre. See records::reproject_game_end_row.
-                        let aux_u8 = records::reproject_game_end_row(
+                        let mut aux_u8 = records::reproject_game_end_row(
                             &final_cells, &winning_cells, cq, cr,
                         );
+                        // §130: forward-scatter the aux pair into the same rotated
+                        // frame as state/chain/policy. Reproject + scatter compose
+                        // because both are pure permutations on cell indices.
+                        if sym_idx != 0 {
+                            rotate_aux_inplace(&mut aux_u8, sym_idx, &sym_tables);
+                        }
 
                         games_results.push_back((feat, chain, pol, outcome, plies, aux_u8, is_full_search));
                     }

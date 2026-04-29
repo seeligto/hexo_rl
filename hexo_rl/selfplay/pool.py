@@ -157,6 +157,11 @@ class WorkerPool:
             n_sims_quick=n_sims_quick_cfg,
             n_sims_full=n_sims_full_cfg,
             random_opening_plies=int(sp.get("random_opening_plies", 0)),
+            # §130: per-game rotation port (closes §121 C1). Default true at
+            # the WorkerPool layer so the training loop opts in by config;
+            # eval/bot paths construct SelfPlayRunner directly without
+            # passing this kwarg, picking up the Rust default of false.
+            selfplay_rotation_enabled=bool(sp.get("rotation_enabled", True)),
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 

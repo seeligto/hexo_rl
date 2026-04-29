@@ -65,6 +65,17 @@ selfplay:
   # Mirrors eval.yaml:eval_random_opening_plies (§80). 0 disables.
   random_opening_plies: 1
 
+  # §130: per-game rotation across the 12-element hex dihedral group. Each
+  # self-play game samples one sym_idx ∈ [0, 12) at game start; the rotation
+  # is applied to NN inputs (forward scatter), the returned policy (inverse
+  # scatter — MCTS keeps a canonical-frame view), and to the recorded
+  # state/chain/policy/aux tensors so the buffer stores the rotated frame.
+  # Closes §121 Component 1 (within-turn directional heuristic was the
+  # rotation-equivariant component; permanent self-play rotation washes it
+  # out). Eval and bot paths construct SelfPlayRunner with this flag forced
+  # to false (default in the Rust ctor) — they play real-board games.
+  rotation_enabled: true
+
   playout_cap:
     # Game-level playout cap (fast_prob / fast_sims / standard_sims) is mutually
     # exclusive with the move-level cap (full_search_prob). Pool init raises if both
