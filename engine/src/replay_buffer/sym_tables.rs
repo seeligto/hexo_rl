@@ -4,10 +4,15 @@ use half::f16;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/// Number of input state planes: 8 cur-history + 8 opp-history + 2 scalar = 18.
-/// Chain-length planes moved to a separate sub-buffer (output-only auxiliary).
-pub const N_PLANES:  usize = 18;
-/// Alias for N_PLANES — all 18 planes scatter via coordinate permutation only.
+/// Number of state planes stored in the replay buffer (HEXB v6, post-§131).
+///
+/// Reduced from 18 → 8 per D17 ablation verdict (`reports/audits/d17_ablation_20260429.md`):
+/// only planes 0/8 are LOAD-BEARING, plane 2 is MARGINAL, all others REDUNDANT.
+/// The kept set retains both ply-0 (LOAD-BEARING) and ply-1..3 history pairs
+/// for both players (see `KEPT_PLANE_INDICES`). Scalar metadata
+/// (moves_remaining, turn_parity) and older history (ply-4..7) are dropped.
+pub const N_PLANES:  usize = 8;
+/// Alias for N_PLANES — all 8 buffer planes scatter via coordinate permutation only.
 pub const N_HISTORY_PLANES: usize = N_PLANES;
 /// Number of Q13 chain-length planes: 3 hex axes × 2 players.
 /// Stored separately from the state buffer; scatter via coordinate permutation
@@ -22,8 +27,26 @@ pub const N_ACTIONS: usize = N_CELLS + 1;       // 362 (pass move at index 361)
 pub const N_SYMS:    usize = 12;
 const HALF: i32 = 9; // (BOARD_H - 1) / 2
 
-// State stride per buffer slot (f16 bits) — 18 planes × 361 cells = 6498
+// State stride per buffer slot (f16 bits) — 8 planes × 361 cells = 2888.
 pub const STATE_STRIDE:  usize = N_PLANES * N_CELLS;
+
+/// Indices into the legacy 18-plane game-state tensor that survive the
+/// channel-drop (D17 verdict, Set A). Used by the slice-on-push path in
+/// `engine/src/game_runner/worker_loop.rs` to pack the 8 kept planes
+/// contiguously into the buffer wire format.
+///
+/// Layout after slice (output plane → source plane):
+/// ```text
+///   out 0 ← src 0   (cur ply-0; LOAD-BEARING)
+///   out 1 ← src 1   (cur ply-1; REDUNDANT but kept)
+///   out 2 ← src 2   (cur ply-2; MARGINAL — D14 anchor)
+///   out 3 ← src 3   (cur ply-3; REDUNDANT but kept)
+///   out 4 ← src 8   (opp ply-0; LOAD-BEARING)
+///   out 5 ← src 9   (opp ply-1; REDUNDANT but kept)
+///   out 6 ← src 10  (opp ply-2; D14 anchor pair)
+///   out 7 ← src 11  (opp ply-3; REDUNDANT but kept)
+/// ```
+pub const KEPT_PLANE_INDICES: [usize; N_PLANES] = [0, 1, 2, 3, 8, 9, 10, 11];
 /// Chain-plane stride per buffer slot (f16 bits) — 6 planes × 361 cells = 2166
 pub const CHAIN_STRIDE:  usize = N_CHAIN_PLANES * N_CELLS;
 pub const POLICY_STRIDE: usize = N_ACTIONS;
@@ -119,11 +142,12 @@ pub struct SymTables {
     /// `axis_perm[s][dst_j] = src_i` means destination plane for axis j reads
     /// from source plane for axis i under symmetry s.
     pub axis_perm: [[usize; 3]; N_SYMS],
-    /// Fused per-symmetry source-plane lookup for the 18 state planes.
-    /// All 18 planes are pure coordinate scatter (identity plane mapping),
-    /// so `src_plane_lookup[s][dst_p] == dst_p` for all s and p.
-    /// Kept as a lookup array so `apply_symmetry_state` can share the same
-    /// loop structure as the former combined-plane kernel.
+    /// Fused per-symmetry source-plane lookup for the N_PLANES state planes.
+    /// State planes are pure coordinate scatter (identity plane mapping), so
+    /// `src_plane_lookup[s][dst_p] == dst_p` for all s and p. `apply_symmetry_state`
+    /// no longer consumes this field (it's now plane-count-generic and uses
+    /// implicit identity mapping); retained as P4's aug-table substrate for any
+    /// future per-plane permutation use case.
     pub src_plane_lookup: [[usize; N_PLANES]; N_SYMS],
     /// Fused per-symmetry source-plane lookup for the 6 chain-length planes.
     /// `chain_src_lookup[s][dst_p] = src_p`: coordinate + axis-plane remap.

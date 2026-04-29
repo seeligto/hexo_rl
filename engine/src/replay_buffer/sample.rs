@@ -20,13 +20,17 @@ use rand::RngExt;
 use super::sym_tables::*;
 use super::ReplayBuffer;
 
-/// Apply symmetry `sym_idx` to one 18-plane state tensor (pure coord scatter).
+/// Apply symmetry `sym_idx` to a state tensor (pure coord scatter).
+///
+/// Plane-count-generic: deduces `n_planes = src.len() / N_CELLS`. Identical
+/// scatter is applied to every plane (state planes do not permute under any
+/// hex dihedral symmetry — only cell coordinates do). Callable on the 8-plane
+/// buffer wire format (HEXB v6) and the 18-plane legacy inference / corpus
+/// tensor with the same code path.
 ///
 /// Generic over the element type `T: Copy` — callable with `f32` for the
 /// Python-facing bindings and with `u16` (f16 bits) for the internal buffer
 /// sampling path. Pure scatter; caller zeroes `dst` before invocation.
-///
-/// All 18 planes scatter by pure coordinate permutation (identity plane mapping).
 #[inline]
 pub fn apply_symmetry_state<T: Copy>(
     src: &[T],
@@ -34,20 +38,17 @@ pub fn apply_symmetry_state<T: Copy>(
     sym_idx: usize,
     sym_tables: &SymTables,
 ) {
-    debug_assert_eq!(src.len(), N_PLANES * N_CELLS);
-    debug_assert_eq!(dst.len(), N_PLANES * N_CELLS);
+    debug_assert_eq!(src.len(), dst.len());
     debug_assert!(sym_idx < N_SYMS);
+    debug_assert_eq!(src.len() % N_CELLS, 0,
+        "state tensor length {} not a multiple of {} cells", src.len(), N_CELLS);
+    let n_planes = src.len() / N_CELLS;
 
-    let scatter          = &sym_tables.scatter[sym_idx];
-    let src_plane_lookup = &sym_tables.src_plane_lookup[sym_idx];
-
-    // All 18 planes: src_plane_lookup is identity, so src_p == dst_p.
-    for dst_p in 0..N_PLANES {
-        let src_p    = src_plane_lookup[dst_p];
-        let src_base = src_p * N_CELLS;
-        let dst_base = dst_p * N_CELLS;
-        let src_plane = &src[src_base..src_base + N_CELLS];
-        let dst_plane = &mut dst[dst_base..dst_base + N_CELLS];
+    let scatter = &sym_tables.scatter[sym_idx];
+    for p in 0..n_planes {
+        let base = p * N_CELLS;
+        let src_plane = &src[base..base + N_CELLS];
+        let dst_plane = &mut dst[base..base + N_CELLS];
         for &(sc, dc) in scatter {
             dst_plane[dc as usize] = src_plane[sc as usize];
         }
@@ -176,7 +177,7 @@ impl ReplayBuffer {
     /// under the transform remain at the caller-zeroed default. Aux planes
     /// (`ownership`, `winning_line`) reuse the same scatter table as state.
     ///
-    /// State (18 planes): pure coordinate scatter via `apply_symmetry_state`.
+    /// State (8 planes, HEXB v6): pure coordinate scatter via `apply_symmetry_state`.
     /// Chain (6 planes): coordinate scatter + axis-plane remap via `apply_chain_symmetry`.
     #[inline]
     pub(crate) fn apply_sym(
@@ -193,7 +194,7 @@ impl ReplayBuffer {
         dst_wl:       &mut [u8],  // length AUX_STRIDE                    (caller-initialised)
         tables:       &SymTables,
     ) {
-        // State planes: 18-plane coord-scatter (identity plane mapping).
+        // State planes: pure coordinate scatter (identity plane mapping).
         apply_symmetry_state::<u16>(src_state, dst_state, sym_idx, tables);
 
         // Chain planes: coord-scatter + axis-plane remap.

@@ -23,7 +23,7 @@ use game_runner::SelfPlayRunner;
 use inference_bridge::InferenceBatcher;
 use replay_buffer::ReplayBuffer;
 use replay_buffer::sample::apply_symmetry_state;
-use replay_buffer::sym_tables::{SymTables, N_PLANES, N_SYMS};
+use replay_buffer::sym_tables::{SymTables, N_SYMS};
 
 // ── Python-visible Board wrapper ──────────────────────────────────────────────
 
@@ -561,18 +561,20 @@ thread_local! {
     static SYM_TABLES_TLS: SymTables = SymTables::new();
 }
 
-/// Apply 12-fold hex symmetry `sym_idx` to one (18, 19, 19) state tensor.
+/// Apply 12-fold hex symmetry `sym_idx` to one (C, 19, 19) state tensor.
 ///
-/// Scatters all 18 history/scalar planes (pure coordinate permutation).
-/// Byte-exact with the ReplayBuffer sampling kernel.
+/// Plane-count-generic: any positive `C` works (8 for HEXB v6 buffer planes,
+/// 18 for the legacy inference / corpus tensor). State planes do not permute
+/// under hex dihedral symmetry — only cell coordinates do — so a single
+/// scatter table applies to any plane count.
 ///
 /// Args:
-///     state:   (18, 19, 19) float32 numpy array. **Must be C-contiguous.**
+///     state:   (C, 19, 19) float32 numpy array. **Must be C-contiguous.**
 ///              If the array may be non-contiguous (e.g. a slice or transposed
 ///              view), call `np.ascontiguousarray(state)` before passing it in.
 ///     sym_idx: integer in [0, 12).
 ///
-/// Returns a newly-allocated (18, 19, 19) float32 numpy array.
+/// Returns a newly-allocated (C, 19, 19) float32 numpy array.
 #[pyfunction]
 fn apply_symmetry<'py>(
     py: Python<'py>,
@@ -586,27 +588,31 @@ fn apply_symmetry<'py>(
         )));
     }
     let shape = state.shape();
-    if shape.len() != 3 || shape[0] != N_PLANES || shape[1] != BOARD_SIZE || shape[2] != BOARD_SIZE {
+    if shape.len() != 3 || shape[1] != BOARD_SIZE || shape[2] != BOARD_SIZE {
         return Err(PyValueError::new_err(format!(
-            "expected state shape ({}, {}, {}); got {:?}",
-            N_PLANES, BOARD_SIZE, BOARD_SIZE, shape
+            "expected state shape (C, {}, {}); got {:?}",
+            BOARD_SIZE, BOARD_SIZE, shape
         )));
     }
+    let n_planes = shape[0];
     let src = state.as_slice()?;
-    let mut dst = vec![0.0f32; N_PLANES * BOARD_SIZE * BOARD_SIZE];
+    let mut dst = vec![0.0f32; n_planes * BOARD_SIZE * BOARD_SIZE];
     SYM_TABLES_TLS.with(|tables| {
         apply_symmetry_state::<f32>(src, &mut dst, sym_idx, tables);
     });
-    dst.into_pyarray(py).reshape([N_PLANES, BOARD_SIZE, BOARD_SIZE])
+    dst.into_pyarray(py).reshape([n_planes, BOARD_SIZE, BOARD_SIZE])
 }
 
 /// Batched version of `apply_symmetry`.
 ///
+/// Plane-count-generic: any positive `C` works (8 for HEXB v6 buffer planes,
+/// 18 for legacy inference / corpus tensors).
+///
 /// Args:
-///     states:      (N, 18, 19, 19) float32 numpy array.
+///     states:      (N, C, 19, 19) float32 numpy array.
 ///     sym_indices: (N,) integer sym_idx per state, values in [0, 12).
 ///
-/// Returns a newly-allocated (N, 18, 19, 19) float32 numpy array.
+/// Returns a newly-allocated (N, C, 19, 19) float32 numpy array.
 #[pyfunction]
 fn apply_symmetries_batch<'py>(
     py: Python<'py>,
@@ -614,13 +620,14 @@ fn apply_symmetries_batch<'py>(
     sym_indices: Vec<usize>,
 ) -> PyResult<Bound<'py, PyArray4<f32>>> {
     let shape = states.shape();
-    if shape.len() != 4 || shape[1] != N_PLANES || shape[2] != BOARD_SIZE || shape[3] != BOARD_SIZE {
+    if shape.len() != 4 || shape[2] != BOARD_SIZE || shape[3] != BOARD_SIZE {
         return Err(PyValueError::new_err(format!(
-            "expected states shape (N, {}, {}, {}); got {:?}",
-            N_PLANES, BOARD_SIZE, BOARD_SIZE, shape
+            "expected states shape (N, C, {}, {}); got {:?}",
+            BOARD_SIZE, BOARD_SIZE, shape
         )));
     }
     let n = shape[0];
+    let n_planes = shape[1];
     if sym_indices.len() != n {
         return Err(PyValueError::new_err(format!(
             "sym_indices length {} != batch size {}",
@@ -635,7 +642,7 @@ fn apply_symmetries_batch<'py>(
             )));
         }
     }
-    let stride = N_PLANES * BOARD_SIZE * BOARD_SIZE;
+    let stride = n_planes * BOARD_SIZE * BOARD_SIZE;
     let src = states.as_slice()?;
     let mut dst = vec![0.0f32; n * stride];
     SYM_TABLES_TLS.with(|tables| {
@@ -645,7 +652,7 @@ fn apply_symmetries_batch<'py>(
             apply_symmetry_state::<f32>(src_b, dst_b, sym_indices[b], tables);
         }
     });
-    dst.into_pyarray(py).reshape([n, N_PLANES, BOARD_SIZE, BOARD_SIZE])
+    dst.into_pyarray(py).reshape([n, n_planes, BOARD_SIZE, BOARD_SIZE])
 }
 
 /// Compute the 6 Q13 chain-length planes from (cur, opp) stone masks.
