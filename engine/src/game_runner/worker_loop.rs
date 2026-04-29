@@ -85,6 +85,15 @@ fn rotate_state_inplace(buf: &mut Vec<f32>, sym_idx: usize, tables: &SymTables) 
 /// `ReplayBuffer::push_*`. The 18-plane source buffer is returned to the
 /// inference pool by the caller via `batcher.return_feature_buffer`, keeping
 /// pool churn neutral relative to the pre-§131 path.
+///
+/// **P3 retirement note** (`docs/notes/p3_model_migration_handoff.md`): once
+/// the model migrates to `in_channels = 8`, replace each
+/// `encode_planes_to_buffer` call site with
+/// `encode_state_to_buffer_channels(&views[k], buf, &KEPT_PLANE_INDICES)`
+/// to encode 8 planes directly. This helper, the inference-pool
+/// `return_feature_buffer` round-trip, and the `feature_len = 18 * 19 * 19`
+/// defaults across `inference_bridge.rs` + `game_runner/mod.rs` all
+/// collapse into a single 8-plane encode path.
 #[inline]
 fn slice_kept_planes_18_to_8(src_18: &[f32]) -> Vec<f32> {
     debug_assert_eq!(
