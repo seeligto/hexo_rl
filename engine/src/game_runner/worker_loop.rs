@@ -78,38 +78,6 @@ fn rotate_state_inplace(buf: &mut Vec<f32>, sym_idx: usize, tables: &SymTables) 
 /// Pack the 8 kept planes (HEXB v6 wire format) from an 18-plane game-state
 /// tensor into a freshly-allocated 8-plane buffer.
 ///
-/// Slice-on-push (Option X §131): the game runner generates the legacy
-/// 18-plane state via `Board::encode_planes_to_buffer` so the inference path
-/// (model still 18-plane pre-P3) keeps working unchanged; this helper packs
-/// the kept subset before the row enters `records_vec` → Python →
-/// `ReplayBuffer::push_*`. The 18-plane source buffer is returned to the
-/// inference pool by the caller via `batcher.return_feature_buffer`, keeping
-/// pool churn neutral relative to the pre-§131 path.
-///
-/// **P3 retirement note** (`docs/notes/p3_model_migration_handoff.md`): once
-/// the model migrates to `in_channels = 8`, replace each
-/// `encode_planes_to_buffer` call site with
-/// `encode_state_to_buffer_channels(&views[k], buf, &KEPT_PLANE_INDICES)`
-/// to encode 8 planes directly. This helper, the inference-pool
-/// `return_feature_buffer` round-trip, and the `feature_len = 18 * 19 * 19`
-/// defaults across `inference_bridge.rs` + `game_runner/mod.rs` all
-/// collapse into a single 8-plane encode path.
-#[inline]
-fn slice_kept_planes_18_to_8(src_18: &[f32]) -> Vec<f32> {
-    debug_assert_eq!(
-        src_18.len(),
-        18 * SYM_N_CELLS,
-        "slice_kept_planes_18_to_8: expected 18-plane source tensor, got {}",
-        src_18.len()
-    );
-    let mut out = Vec::with_capacity(KEPT_PLANE_INDICES.len() * SYM_N_CELLS);
-    for &p in KEPT_PLANE_INDICES.iter() {
-        let base = p * SYM_N_CELLS;
-        out.extend_from_slice(&src_18[base..base + SYM_N_CELLS]);
-    }
-    out
-}
-
 /// Forward-scatter a 6-plane chain buffer in place under `sym_idx`.
 /// Includes the axis-plane remap (chain planes encode hex-axis-specific data).
 #[inline]
@@ -322,7 +290,7 @@ impl SelfPlayRunner {
                                 leaf_metadata.push((k, centers));
                                 for view in views {
                                     let mut buffer = batcher.get_feature_buffer();
-                                    leaf.encode_planes_to_buffer(&view, &mut buffer);
+                                    leaf.encode_state_to_buffer_channels(&view, &mut buffer, &KEPT_PLANE_INDICES);
                                     // §130: forward-scatter the input planes to
                                     // the rotated frame so the model sees a
                                     // randomly-oriented view of this game. The
@@ -652,12 +620,8 @@ impl SelfPlayRunner {
                         // ── Record position ──
                         let (views, centers) = board.get_cluster_views();
                         for (k, center) in centers.iter().enumerate() {
-                            let mut feat = batcher.get_feature_buffer();
-                            // get_cluster_views returns 2-plane views; expand to 18 for the
-                            // legacy game-state representation (the model still consumes
-                            // 18 planes pre-P3 migration). The buffer-bound 8-plane slice
-                            // is taken below via slice_kept_planes_18_to_8 (§131 Option X).
-                            board.encode_planes_to_buffer(&views[k], &mut feat);
+                            let mut feat = vec![0.0f32; KEPT_PLANE_INDICES.len() * SYM_N_CELLS];
+                            board.encode_state_to_buffer_channels(&views[k], &mut feat, &KEPT_PLANE_INDICES);
                             // Compute Q13 chain-length planes separately (not in state).
                             let mut chain = vec![0.0f32; 6 * TOTAL_CELLS];
                             encode_chain_planes(
@@ -682,19 +646,10 @@ impl SelfPlayRunner {
                                 rotate_chain_inplace(&mut chain, sym_idx, &sym_tables);
                                 rotate_policy_inplace(&mut projected_policy, sym_idx, &sym_tables);
                             }
-                            // §131 slice-on-push (Option X): pack the 8 kept planes (HEXB v6
-                            // wire format) into a fresh buffer. Rotation commutes with the
-                            // slice (state planes are not permuted by hex symmetries — only
-                            // cell coordinates are), so rotate-then-slice and slice-then-
-                            // rotate produce bit-identical output. Doing the slice after
-                            // the rotate keeps the §130 boundary code untouched and lets us
-                            // return the 18-plane buffer to the inference pool.
-                            let feat_8 = slice_kept_planes_18_to_8(&feat);
-                            batcher.return_feature_buffer(feat);
                             // Capture the per-row window centre so the aux targets
                             // (computed at game end) can be reprojected into the same
                             // coordinate frame as this row's state planes.
-                            records_vec.push((feat_8, chain, projected_policy, board.current_player, center.0, center.1, move_is_full_search));
+                            records_vec.push((feat, chain, projected_policy, board.current_player, center.0, center.1, move_is_full_search));
                         }
 
                         if board.apply_move(move_idx.0, move_idx.1).is_err() {

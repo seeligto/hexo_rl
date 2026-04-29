@@ -19,7 +19,7 @@ def _make_model(cfg: dict) -> HexTacToeNet:
     board_size = int(cfg.get("board_size", 19))
     res_blocks = int(cfg.get("res_blocks", 12))
     filters = int(cfg.get("filters", 128))
-    in_channels = int(cfg.get("in_channels", 18))
+    in_channels = int(cfg.get("in_channels", 8))
     se_reduction_ratio = int(cfg.get("se_reduction_ratio", 4))
     return HexTacToeNet(
         board_size=board_size,
@@ -88,7 +88,7 @@ def test_eval_model_matches_config():
 # ── F-016: promotion copies from eval snapshot, not drifted trainer.model ─────
 
 def _small_model() -> HexTacToeNet:
-    return HexTacToeNet(board_size=9, res_blocks=1, filters=16, in_channels=18)
+    return HexTacToeNet(board_size=9, res_blocks=1, filters=16, in_channels=8)
 
 
 def _fill_params(model: HexTacToeNet, value: float) -> None:
@@ -174,7 +174,7 @@ def test_cold_start_inf_model_synced_to_best_model(tmp_path: Path):
     # Reload best_model.pt and run the cold-start sync (loop.py:173-186).
     from hexo_rl.training.trainer import Trainer
     minimal_cfg = {
-        "board_size": 9, "res_blocks": 1, "filters": 16, "in_channels": 18,
+        "board_size": 9, "res_blocks": 1, "filters": 16, "in_channels": 8,
         "lr": 1e-3, "weight_decay": 1e-4, "batch_size": 8,
     }
     best_ref = Trainer.load_checkpoint(best_path, fallback_config=minimal_cfg)

@@ -17,7 +17,7 @@ fn start_panics_when_both_caps_active() {
         1,                  // leaf_batch_size
         1.5,                // c_puct
         0.25,               // fpu_reduction
-        18 * 19 * 19,       // feature_len
+        8 * 19 * 19,        // feature_len
         19 * 19 + 1,        // policy_len
         0.5,                // fast_prob   (> 0)
         1,                  // fast_sims

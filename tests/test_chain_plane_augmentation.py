@@ -20,8 +20,8 @@ Rust kernel "validate itself". Keep the two implementations independent.
 
 ## State / chain separation (post-Q13 buffer split)
 
-State tensor is 18-plane; chain planes are stored as a separate 6-plane
-sub-buffer in the Rust ReplayBuffer.  `sample_batch(augment=True)` returns a
+State tensor is 8-plane (HEXB v6 KEPT_PLANE_INDICES); chain planes are stored
+as a separate 6-plane sub-buffer in the Rust ReplayBuffer.  `sample_batch(augment=True)` returns a
 6-tuple (states, chain_planes, policies, outcomes, ownership, winning_line).
 Chain planes are the second element; states no longer include them.
 
@@ -37,7 +37,7 @@ from engine import ReplayBuffer
 from hexo_rl.env.game_state import _CHAIN_CAP, _compute_chain_planes
 from hexo_rl.utils.constants import BOARD_SIZE
 
-N_STATE_CHANNELS = 18
+N_STATE_CHANNELS = 8   # HEXB v6: KEPT_PLANE_INDICES subset
 N_CHAIN_PLANES   = 6
 N_ACTIONS        = BOARD_SIZE * BOARD_SIZE + 1
 AUX_STRIDE       = BOARD_SIZE * BOARD_SIZE
@@ -85,12 +85,12 @@ def _transform_stones(stones: np.ndarray, sym_idx: int) -> np.ndarray:
 
 
 def _build_state_tensor(cur: np.ndarray, opp: np.ndarray) -> np.ndarray:
-    """Build an (18, 19, 19) float16 state tensor.
-    Planes 0 = cur, 8 = opp, 16/17 = scalar zero, 1..7 + 9..15 = zero.
+    """Build an (8, 19, 19) float16 state tensor — HEXB v6 KEPT_PLANE_INDICES.
+    Buffer plane 0 = cur (orig plane 0), plane 4 = opp (orig plane 8).
     Chain planes are stored separately; not included here."""
     tensor = np.zeros((N_STATE_CHANNELS, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
     tensor[0] = cur
-    tensor[8] = opp
+    tensor[4] = opp  # KEPT_PLANE_INDICES[4] = 8 → buffer index 4
     return tensor
 
 

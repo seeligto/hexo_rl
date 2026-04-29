@@ -24,9 +24,9 @@ import pytest
 import engine
 from engine import Board, ReplayBuffer
 from hexo_rl.env.game_state import GameState
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
 
-CHANNELS = 18
+CHANNELS = 18  # to_tensor() output; sliced to 8 before buffer push
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1
 AUX_STRIDE = BOARD_SIZE * BOARD_SIZE
 HALF = (BOARD_SIZE - 1) // 2
@@ -57,11 +57,11 @@ POSITION_MOVES: list[tuple[str, list[tuple[int, int]]]] = [
 ]
 
 
-def _collect_buffer_unique_outputs(state: np.ndarray, n_draws: int = 4000) -> set[bytes]:
-    """Push `state` into a fresh buffer and draw `n_draws` augmented samples.
-    Return the set of unique (18, 19, 19) f16-byte keys observed."""
+def _collect_buffer_unique_outputs(state8: np.ndarray, n_draws: int = 4000) -> set[bytes]:
+    """Push `state8` (8-plane, HEXB v6) into a fresh buffer and draw `n_draws`
+    augmented samples. Return unique (8, 19, 19) f16-byte keys observed."""
     buf    = ReplayBuffer(4)
-    s16    = state.astype(np.float16)
+    s16    = state8.astype(np.float16)
     chain  = np.zeros((6, 19, 19), dtype=np.float16)
     policy = np.zeros(N_ACTIONS, dtype=np.float32)
     policy[0] = 1.0
@@ -78,15 +78,12 @@ def _collect_buffer_unique_outputs(state: np.ndarray, n_draws: int = 4000) -> se
     return seen
 
 
-def _binding_unique_outputs(state: np.ndarray) -> dict[bytes, int]:
-    """Compute {f16 bytes → sym_idx} for all 12 syms via `engine.apply_symmetry`.
-
-    Collapses duplicates for symmetric positions — the key is the f16 byte
-    image of the output state so multiple syms that produce the same image
-    all end up under one entry."""
+def _binding_unique_outputs(state8: np.ndarray) -> dict[bytes, int]:
+    """Compute {f16 bytes → sym_idx} for all 12 syms via `engine.apply_symmetry`
+    on the 8-plane state. Collapses duplicates for symmetric positions."""
     out: dict[bytes, int] = {}
     for sym_idx in range(12):
-        result = engine.apply_symmetry(state, sym_idx).astype(np.float16)
+        result = engine.apply_symmetry(state8.astype(np.float32), sym_idx).astype(np.float16)
         key = result.tobytes()
         out.setdefault(key, sym_idx)
     return out
@@ -97,10 +94,12 @@ def test_apply_symmetry_matches_replay_buffer_path(name, moves):
     """Every unique state output produced by the buffer's augment path must
     match one of the 12 binding outputs byte-exact. P(hitting all syms in
     4000 uniform draws) > 1 − 12·(11/12)^4000, well above 1 − 1e-150."""
-    state = _state_from_moves(moves)
+    state18 = _state_from_moves(moves)
+    # HEXB v6: buffer stores 8 planes; compare on the same 8-plane slice.
+    state8 = state18[KEPT_PLANE_INDICES]
 
-    binding_keys = _binding_unique_outputs(state)
-    buffer_keys = _collect_buffer_unique_outputs(state)
+    binding_keys = _binding_unique_outputs(state8)
+    buffer_keys = _collect_buffer_unique_outputs(state8)
 
     unknown = buffer_keys - set(binding_keys.keys())
     assert not unknown, (

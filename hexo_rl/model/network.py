@@ -3,11 +3,11 @@ HexTacToeNet — ResNet backbone with SE blocks, dual-pooling value head,
 policy head, and opponent-reply auxiliary head.
 
 Architecture (Multi-Window Cluster-Based Approach):
-  Input:  (B, 18, 19, 19) float16 tensor
-          (18 AlphaZero history/scalar planes; chain-length planes in aux sub-buffer post-§97)
+  Input:  (B, 8, 19, 19) float16 tensor
+          (8 planes: cur ply-0..3, opp ply-0..3; HEXB v6 wire format)
 
   Backbone:
-    Conv2d(18 → filters, 3×3, padding=1) → GN(8) → ReLU
+    Conv2d(8 → filters, 3×3, padding=1) → GN(8) → ReLU
     × res_blocks residual blocks:
       Conv2d(filters → filters, 3×3, padding=1) → GN(8) → ReLU
       Conv2d(filters → filters, 3×3, padding=1) → GN(8)
@@ -41,18 +41,14 @@ import torch.nn.functional as F
 _log = logging.getLogger(__name__)
 
 
-# Buffer wire-format plane count. The replay buffer, symmetry kernels, and
-# inference batch tensors are all hardcoded to 18 planes (engine/src/replay_buffer/
-# sym_tables.rs:N_PLANES). Sweep variants reduce model in_channels by selecting
-# a subset of these 18 wire planes via the `input_channels` constructor arg —
-# the Rust storage format is unchanged.
-WIRE_CHANNELS: int = 18
+# Buffer wire-format plane count. Matches engine/src/replay_buffer/sym_tables.rs:N_PLANES.
+# Sweep variants reduce model in_channels by selecting a subset of these 8 wire planes
+# via the `input_channels` constructor arg — the Rust storage format is unchanged.
+WIRE_CHANNELS: int = 8
 
 # Required wire planes — every variant must include at least these or the model
-# has no stone information. Plane 0 = current-player stones, plane 8 = opponent
-# stones (engine/src/board/state.rs:401–408). All other planes are optional
-# scalars or history slots.
-REQUIRED_INPUT_CHANNELS: tuple = (0, 8)
+# has no stone information. Plane 0 = cur ply-0, plane 4 = opp ply-0 (8-plane HEXB v6).
+REQUIRED_INPUT_CHANNELS: tuple = (0, 4)
 
 
 def validate_input_channels(channels) -> List[int]:
@@ -92,7 +88,7 @@ def validate_input_channels(channels) -> List[int]:
         if required not in canon:
             raise ValueError(
                 f"input_channels missing required plane {required} "
-                f"(plane 0 = current stones, plane 8 = opponent stones). "
+                f"(plane 0 = cur ply-0, plane 4 = opp ply-0 in 8-plane HEXB v6). "
                 f"Configured: {canon}. Edit the variant YAML's "
                 f"`input_channels` field."
             )
@@ -160,7 +156,7 @@ class HexTacToeNet(nn.Module):
     def __init__(
         self,
         board_size: int = 19,
-        in_channels: int = 18,
+        in_channels: int = 8,
         filters: int = 128,
         res_blocks: int = 12,
         se_reduction_ratio: int = 4,
@@ -175,7 +171,7 @@ class HexTacToeNet(nn.Module):
         # Sweep variant support: when `input_channels` is provided, the trunk
         # input conv accepts only the selected wire planes; forward() slices
         # x[:, input_channels, :, :] before the trunk. Buffer/sym kernels stay
-        # 18-plane — slicing happens entirely model-side.
+        # 8-plane (HEXB v6) — slicing happens entirely model-side.
         if input_channels is not None:
             channels = validate_input_channels(input_channels)
             if int(in_channels) != len(channels):

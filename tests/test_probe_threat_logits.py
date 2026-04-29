@@ -30,6 +30,18 @@ BOARD_SIZE = 19
 HALF = 9
 
 
+def _bootstrap_is_pre_p3() -> bool:
+    if not BOOTSTRAP_CKPT.exists():
+        return False
+    try:
+        import torch as _torch
+        sd = _torch.load(BOOTSTRAP_CKPT, map_location="cpu", weights_only=True)
+        w = sd.get("trunk.input_conv.weight")
+        return w is not None and w.dim() == 4 and int(w.shape[1]) == 18
+    except Exception:
+        return False
+
+
 # ── Synthetic fixture builder ─────────────────────────────────────────────────
 
 
@@ -169,8 +181,8 @@ def _build_synthetic_positions(n: int = 5) -> dict:
 
 
 @pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists(),
-    reason="bootstrap_model.pt not found",
+    not BOOTSTRAP_CKPT.exists() or _bootstrap_is_pre_p3(),
+    reason="bootstrap_model.pt not found or is pre-P3 (18-plane); skip until 8-plane bootstrap trained",
 )
 def test_probe_shapes_and_sanity() -> None:
     """Probe produces correct shapes and bounded, finite logits."""
@@ -210,8 +222,8 @@ def test_probe_shapes_and_sanity() -> None:
 
 
 @pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists(),
-    reason="bootstrap_model.pt not found",
+    not BOOTSTRAP_CKPT.exists() or _bootstrap_is_pre_p3(),
+    reason="bootstrap_model.pt not found or is pre-P3 (18-plane); skip until 8-plane bootstrap trained",
 )
 def test_probe_aggregate_structure() -> None:
     """Aggregate dict has expected keys and finite values."""
@@ -241,8 +253,8 @@ def test_probe_aggregate_structure() -> None:
 
 
 @pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists(),
-    reason="bootstrap_model.pt not found",
+    not BOOTSTRAP_CKPT.exists() or _bootstrap_is_pre_p3(),
+    reason="bootstrap_model.pt not found or is pre-P3 (18-plane); skip until 8-plane bootstrap trained",
 )
 def test_probe_deterministic() -> None:
     """Two consecutive probes of the same checkpoint produce identical results."""
@@ -431,8 +443,8 @@ def test_load_baseline_json_absent() -> None:
 
 
 @pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists(),
-    reason="bootstrap_model.pt not found",
+    not BOOTSTRAP_CKPT.exists() or _bootstrap_is_pre_p3(),
+    reason="bootstrap_model.pt not found or is pre-P3 (18-plane); skip until 8-plane bootstrap trained",
 )
 def test_probe_report_renders() -> None:
     """format_report produces non-empty markdown with three conditions listed."""
@@ -461,8 +473,8 @@ def test_probe_report_renders() -> None:
 
 
 @pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists(),
-    reason="bootstrap_model.pt not found",
+    not BOOTSTRAP_CKPT.exists() or _bootstrap_is_pre_p3(),
+    reason="bootstrap_model.pt not found or is pre-P3 (18-plane); skip until 8-plane bootstrap trained",
 )
 def test_probe_baseline_comparison() -> None:
     """format_report includes baseline column when baseline_agg provided."""

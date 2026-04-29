@@ -13,7 +13,7 @@ import pytest
 
 from engine import ReplayBuffer
 
-CHANNELS      = 18  # 18 state planes (chain planes stored separately)
+CHANNELS      = 8   # HEXB v6: 8 state planes (KEPT_PLANE_INDICES subset)
 N_CHAIN_PLANES = 6
 BOARD_SIZE    = 19
 N_ACTIONS     = BOARD_SIZE * BOARD_SIZE + 1  # 362

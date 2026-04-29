@@ -42,6 +42,8 @@ EXCLUDE = (
     '.claude/',
     # historical fixture changelog — documents v1→v6 24-plane→18-plane migration
     'fixtures/threat_probe_baseline.CHANGELOG.md',
+    # P3 migration handoff — references A-003 (24-plane regression test) as historical context
+    'docs/notes/p3_model_migration_handoff.md',
 )
 
 

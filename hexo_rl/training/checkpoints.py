@@ -132,6 +132,23 @@ def normalize_model_state_dict_keys(
             "Start a fresh training run — do not attempt to resume from a pre-GN checkpoint."
         )
 
+    # Reject pre-P3 18-plane checkpoints. The P3 model has in_channels=8;
+    # silently loading an 18-plane trunk would produce garbage.
+    _conv_key = "trunk.input_conv.weight"
+    _conv_w = state_dict.get(_conv_key)
+    if _conv_w is None:
+        # Try after prefix stripping
+        for k, v in state_dict.items():
+            if k.endswith("trunk.input_conv.weight"):
+                _conv_w = v
+                break
+    if _conv_w is not None and _conv_w.dim() == 4 and _conv_w.shape[1] == 18:
+        raise RuntimeError(
+            "Checkpoint has 18-plane input conv (pre-P3 model, in_channels=18). "
+            "Current model expects in_channels=8 (HEXB v6 wire format). "
+            "Retrain from the 8-plane bootstrap — do not load a pre-P3 checkpoint."
+        )
+
     prefixes = ("_orig_mod.", "module.")
     normalized: Dict[str, torch.Tensor] = {}
     for key, value in state_dict.items():

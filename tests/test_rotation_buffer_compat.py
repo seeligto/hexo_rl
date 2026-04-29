@@ -5,7 +5,7 @@ replay buffer (per the B4 audit verdict; no schema change). This test pins:
 
   1. `ReplayBuffer.push_many` / `sample_batch` accept rotated rows without
      shape or dtype error.
-  2. Loading a HEXB v5 file written before the rotation port still succeeds
+  2. Loading a HEXB v6 file written before the rotation port still succeeds
      after the port lands — the on-disk format is unchanged.
   3. Sample-time augmentation (12-fold scatter on top of per-game rotation)
      still produces well-shaped batches with the right ply-0 stone counts.
@@ -68,7 +68,7 @@ def _spin_pool(rotation: bool, capacity: int = 256) -> ReplayBuffer:
 def test_rotation_on_buffer_push_and_sample_shapes():
     """Rotated rows push and sample without shape/dtype error.
 
-    Schema is unchanged across the port: 18 state planes, 6 chain planes,
+    Schema: 8 state planes (HEXB v6 KEPT_PLANE_INDICES), 6 chain planes,
     362 policy slots, 361 ownership/winning_line cells. We assert all of
     those at sample time so a future schema drift is caught here rather
     than at training-loop run time.
@@ -83,7 +83,7 @@ def test_rotation_on_buffer_push_and_sample_shapes():
     states_np, chain_np, pols_np, vals_np, own_np, wl_np, ifs_np = (
         buf.sample_batch(n, False)
     )
-    assert states_np.shape == (n, 18, 19, 19), states_np.shape
+    assert states_np.shape == (n, 8, 19, 19), states_np.shape
     assert chain_np.shape == (n, 6, 19, 19), chain_np.shape
     assert pols_np.shape == (n, 362), pols_np.shape
     assert vals_np.shape == (n,), vals_np.shape
@@ -119,7 +119,7 @@ def test_rotation_on_buffer_sample_with_augmentation():
         pytest.skip(f"only {buf.size} positions; smoke too short on this CPU")
     n = min(32, buf.size)
     states_np, chain_np, pols_np, *_ = buf.sample_batch(n, True)
-    assert states_np.shape == (n, 18, 19, 19)
+    assert states_np.shape == (n, 8, 19, 19)
     assert chain_np.shape == (n, 6, 19, 19)
     assert pols_np.shape == (n, 362)
     # Aug is a permutation: stone counts per row should match the un-augmented
@@ -132,7 +132,7 @@ def test_rotation_on_buffer_sample_with_augmentation():
 
 @pytest.mark.timeout(60)
 def test_rotation_on_buffer_save_load_roundtrip():
-    """The rotation port does not change the on-disk HEXB v5 format.
+    """The rotation port does not change the on-disk HEXB v6 format.
 
     Serialise a rotated buffer to a temp path, instantiate a fresh empty
     buffer, load it, and confirm size matches. This is the contract the
@@ -158,4 +158,4 @@ def test_rotation_on_buffer_save_load_roundtrip():
         # Sample shape should match across the persistence boundary.
         n = min(8, fresh.size)
         states_np, *_ = fresh.sample_batch(n, False)
-        assert states_np.shape == (n, 18, 19, 19)
+        assert states_np.shape == (n, 8, 19, 19)

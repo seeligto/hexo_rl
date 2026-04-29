@@ -280,10 +280,7 @@ impl InferenceBatcher {
 #[pymethods]
 impl InferenceBatcher {
     #[new]
-    // P3 (`docs/notes/p3_model_migration_handoff.md`): `feature_len` default
-    // flips to `8 * 19 * 19` when the model migrates to `in_channels = 8`.
-    // Mirror change in `engine/src/game_runner/mod.rs::SelfPlayRunner::new`.
-    #[pyo3(signature = (feature_len = 18 * 19 * 19, policy_len = 19 * 19 + 1))]
+    #[pyo3(signature = (feature_len = 8 * 19 * 19, policy_len = 19 * 19 + 1))]
     pub fn new(feature_len: usize, policy_len: usize) -> Self {
         let (pool_sender, pool_receiver) = flume::bounded(1024);
         for _ in 0..512 {

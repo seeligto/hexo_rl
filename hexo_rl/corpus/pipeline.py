@@ -11,6 +11,7 @@ import structlog
 from hexo_rl.bootstrap.dataset import replay_game_to_triples
 from hexo_rl.corpus.sources.base import CorpusSource, GameRecord
 from hexo_rl.corpus.metrics import CorpusMetrics
+from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 
 log = structlog.get_logger()
 
@@ -79,6 +80,8 @@ class CorpusPipeline:
                     log.warning("corpus_empty_game",
                                 source=source.name(), game_id=record.game_id_str)
                     continue
+                # HEXB v6: slice 18-plane game tensors to 8-plane buffer format.
+                states = np.ascontiguousarray(states[:, KEPT_PLANE_INDICES])
 
                 gid = self._next_game_id
                 self._next_game_id += 1

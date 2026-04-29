@@ -25,7 +25,7 @@ from hexo_rl.selfplay.inference_server import InferenceServer
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-BOARD_CHANNELS = 18
+BOARD_CHANNELS = 8
 BOARD_SIZE     = 19
 N_ACTIONS      = BOARD_SIZE * BOARD_SIZE + 1  # 362
 
@@ -359,11 +359,11 @@ from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference_server import InferenceServer
 
 dev = torch.device('cuda')
-net = HexTacToeNet(board_size=19, in_channels=18, filters=64, res_blocks=2).to(dev)
+net = HexTacToeNet(board_size=19, in_channels=8, filters=64, res_blocks=2).to(dev)
 net.eval()
 batch_size = 8
 np.random.seed(2026)
-states = [np.random.randn(18, 19, 19).astype(np.float16) for _ in range(batch_size)]
+states = [np.random.randn(8, 19, 19).astype(np.float16) for _ in range(batch_size)]
 
 # Eager reference forward (raw model, no compile / trace).
 x_ref = torch.from_numpy(np.stack(states).astype(np.float32)).to(dev)

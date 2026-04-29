@@ -23,6 +23,8 @@ from typing import Any, Callable, Optional
 import numpy as np
 import structlog
 
+from hexo_rl.utils.constants import BUFFER_CHANNELS
+
 log = structlog.get_logger(__name__)
 
 
@@ -37,7 +39,7 @@ class BatchBuffers:
     ``warmup_active`` is flipped to False the first time all sources return
     the expected row count (a side-effect of :func:`assemble_mixed_batch`).
     """
-    states: np.ndarray          # (B, 18, 19, 19) float16
+    states: np.ndarray          # (B, 8, 19, 19) float16 — HEXB v6
     chain_planes: np.ndarray    # (B, 6, 19, 19)  float16
     policies: np.ndarray        # (B, N_ACTIONS) float32
     outcomes: np.ndarray        # (B,) float32
@@ -58,7 +60,7 @@ def allocate_batch_buffers(batch_size: int, n_actions: int) -> BatchBuffers:
         A :class:`BatchBuffers` instance with all arrays zeroed.
     """
     return BatchBuffers(
-        states=np.empty((batch_size, 18, 19, 19), dtype=np.float16),
+        states=np.empty((batch_size, 8, 19, 19), dtype=np.float16),
         chain_planes=np.empty((batch_size, 6, 19, 19), dtype=np.float16),
         policies=np.empty((batch_size, n_actions), dtype=np.float32),
         outcomes=np.empty(batch_size, dtype=np.float32),
@@ -117,56 +119,27 @@ def load_pretrained_buffer(
     )
     t0 = time.time()
     data = np.load(pretrained_path, mmap_mode="r")
-    pre_states   = data["states"]    # (T, 18 / 24 / N, 19, 19) float16
+    pre_states   = data["states"]    # (T, 8, 19, 19) float16 — HEXB v6
     pre_policies = data["policies"]  # (T, 362) float32
     pre_outcomes = data["outcomes"]  # (T,) float32
     T = len(pre_outcomes)
 
-    # §122 sweep: sliced corpora (T, N, 19, 19) carry an `input_channels`
-    # sidecar key naming the 18-plane indices each slot maps to. Scatter
-    # back to the 18-plane buffer wire format with non-selected planes
-    # zeroed; the model's own input_channels slice re-selects them at
-    # forward time. Keeps the buffer/sym kernels untouched.
-    if "input_channels" in data.files and pre_states.shape[1] != 18 and pre_states.shape[1] != 24:
-        sliced_channels = [int(c) for c in np.asarray(data["input_channels"])]
-        if pre_states.shape[1] != len(sliced_channels):
-            raise ValueError(
-                f"corpus '{pretrained_path}': states.shape[1]={pre_states.shape[1]} "
-                f"disagrees with input_channels sidecar (len={len(sliced_channels)})."
-            )
-        log.info(
-            "corpus_sliced_scatter",
-            channels=sliced_channels,
-            sliced_planes=pre_states.shape[1],
-            msg="scattering sliced corpus to 18-plane wire format",
+    if pre_states.shape[1] != BUFFER_CHANNELS:
+        raise ValueError(
+            f"corpus '{pretrained_path}': states.shape[1]={pre_states.shape[1]}, "
+            f"expected {BUFFER_CHANNELS} (HEXB v6). Regenerate with "
+            f"'scripts/export_corpus_npz.py'."
         )
-        full = np.zeros((T, 18, 19, 19), dtype=np.float16)
-        # Channel positions are within [0, 18); validated upstream by
-        # hexo_rl/model/network.py:validate_input_channels.
-        for slot, plane_idx in enumerate(sliced_channels):
-            full[:, plane_idx] = pre_states[:, slot]
-        pre_states = full
 
-    # Handle old 24-plane corpus: extract chain from planes 18:24, trim states to :18.
-    if pre_states.shape[1] == 24:
-        log.info("corpus_24plane_compat", msg="24-plane NPZ detected — extracting chain planes, trimming state to 18 planes")
-        pre_chain  = np.array(pre_states[:, 18:24], dtype=np.float16)  # (T, 6, 19, 19)
-        pre_states = np.array(pre_states[:, :18],   dtype=np.float16)  # (T, 18, 19, 19)
-    else:
-        # §102.a: compute chain planes from stone planes at NPZ load so corpus
-        # rows carry real chain targets rather than zeros. Route through float32
-        # division (mirrors Rust `encode_chain_planes`: `(int as f32) / 6.0f32`
-        # → cast to f16) to preserve byte-exactness with the self-play
-        # replay-buffer storage. The F2 guard pins the underlying int8 planes
-        # against Rust; this path pins the final /6 f16 values.
-        from hexo_rl.env.game_state import _compute_chain_planes
-        pre_chain = np.empty((T, 6, 19, 19), dtype=np.float16)
-        if T > 0:
-            cur_all = np.asarray(pre_states[:, 0], dtype=np.float32)
-            opp_all = np.asarray(pre_states[:, 8], dtype=np.float32)
-            for k in range(T):
-                planes_f32 = _compute_chain_planes(cur_all[k], opp_all[k]).astype(np.float32) / 6.0
-                pre_chain[k] = planes_f32.astype(np.float16)
+    # §102.a: compute chain planes from stone planes (cur=[0], opp=[4] in 8-plane).
+    from hexo_rl.env.game_state import _compute_chain_planes
+    pre_chain = np.empty((T, 6, 19, 19), dtype=np.float16)
+    if T > 0:
+        cur_all = np.asarray(pre_states[:, 0], dtype=np.float32)
+        opp_all = np.asarray(pre_states[:, 4], dtype=np.float32)
+        for k in range(T):
+            planes_f32 = _compute_chain_planes(cur_all[k], opp_all[k]).astype(np.float32) / 6.0
+            pre_chain[k] = planes_f32.astype(np.float16)
 
     max_pre = int(mixing_cfg.get("pretrain_max_samples", 0))
     if max_pre and T > max_pre:
@@ -252,7 +225,7 @@ def _augment_recent_rows(
     c_r_aug = np.empty_like(c_r)
     for i in range(n):
         c_r_aug[i] = (
-            _compute_chain_planes(states_f32[i, 0], states_f32[i, 8]).astype(np.float32) / 6.0
+            _compute_chain_planes(states_f32[i, 0], states_f32[i, 4]).astype(np.float32) / 6.0
         ).astype(np.float16)
 
     scattered_p   = np.empty_like(p_r)

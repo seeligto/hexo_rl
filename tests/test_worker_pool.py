@@ -22,7 +22,7 @@ from engine import ReplayBuffer
 
 @pytest.mark.timeout(30)
 def test_rust_batcher_blocks_batches_and_unblocks():
-    feature_len = 18 * 19 * 19
+    feature_len = 8 * 19 * 19
     policy_len = 19 * 19 + 1
 
     batcher = InferenceBatcher(feature_len=feature_len, policy_len=policy_len)
@@ -66,7 +66,7 @@ def test_rust_batcher_blocks_batches_and_unblocks():
 @pytest.mark.timeout(60)
 def test_worker_pool_produces_positions_threaded_smoke():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
+    model = HexTacToeNet(board_size=19, in_channels=8, filters=32, res_blocks=2).to(device)
     buffer = ReplayBuffer(capacity=10_000)
 
     config = {
@@ -104,7 +104,7 @@ def test_worker_pool_produces_positions_threaded_smoke():
 @pytest.mark.timeout(30)
 def test_rust_runner_with_inference_server_generates_positions():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
+    model = HexTacToeNet(board_size=19, in_channels=8, filters=32, res_blocks=2).to(device)
 
     runner = SelfPlayRunner(n_workers=2, max_moves_per_game=16, n_simulations=1, leaf_batch_size=1)
     server = InferenceServer(
@@ -133,7 +133,7 @@ def test_rust_runner_with_inference_server_generates_positions():
 def test_rust_runner_collect_data_format():
     """Verify that collect_data returns correctly shaped tensors and policies."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
+    model = HexTacToeNet(board_size=19, in_channels=8, filters=32, res_blocks=2).to(device)
     
     # Run with 1 worker and 1 simulation for speed
     runner = SelfPlayRunner(n_workers=1, max_moves_per_game=4, n_simulations=1, leaf_batch_size=1)
@@ -176,7 +176,7 @@ def test_rust_runner_collect_data_format():
         assert ifs_np.dtype == np.uint8
         n = len(vals_np)
         assert n > 0
-        assert feats_np.shape == (n, 18 * 19 * 19)
+        assert feats_np.shape == (n, 8 * 19 * 19)
         assert chain_np.shape == (n, 6 * 19 * 19)
         assert pols_np.shape == (n, 19 * 19 + 1)
         assert vals_np.shape == (n,)
@@ -193,9 +193,9 @@ def test_rust_runner_collect_data_format():
         assert wl_np.dtype == np.uint8
         outcome = float(vals_np[0])
         assert outcome == -1.0 or outcome == 1.0 or abs(outcome - (-0.1)) < 1e-5
-        # Verify features can be reshaped to (18, 19, 19) per position
-        feat_2d = feats_np[0].reshape(18, 19, 19)
-        assert feat_2d.shape == (18, 19, 19)
+        # Verify features can be reshaped to (8, 19, 19) per position — HEXB v6
+        feat_2d = feats_np[0].reshape(8, 19, 19)
+        assert feat_2d.shape == (8, 19, 19)
     finally:
         runner.stop()
         server.stop()
@@ -214,7 +214,7 @@ def test_pool_init_rejects_both_playout_caps():
     no warning, making training harder to reproduce.
     """
     device = torch.device("cpu")
-    model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
+    model = HexTacToeNet(board_size=19, in_channels=8, filters=32, res_blocks=2).to(device)
     buffer = ReplayBuffer(capacity=100)
 
     bad_cfg = {

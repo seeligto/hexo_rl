@@ -58,10 +58,11 @@ def test_model_processes_multi_cluster_board(two_cluster_board):
     model.to(device)
     model.eval()
 
+    from hexo_rl.utils.constants import KEPT_PLANE_INDICES
     state = GameState.from_board(two_cluster_board)
     tensors, centers = state.to_tensor()
-    # Use first cluster view for forward pass
-    batch = torch.from_numpy(tensors[0:1]).float().to(device)
+    # Slice to HEXB v6 8-plane wire format (to_tensor returns 18 planes for compat)
+    batch = torch.from_numpy(tensors[0:1][:, list(KEPT_PLANE_INDICES)]).float().to(device)
 
     with torch.no_grad():
         log_policy, value, value_logit = model(batch)

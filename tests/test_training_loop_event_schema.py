@@ -39,7 +39,7 @@ def _fill_buffer(size: int = 32) -> ReplayBuffer:
     wl  = np.zeros(361, dtype=np.uint8)
     chain = np.zeros((6, 19, 19), dtype=np.float16)
     for _ in range(size):
-        state   = rng.random((18, 19, 19), dtype=np.float32).astype(np.float16)
+        state   = rng.random((8, 19, 19), dtype=np.float32).astype(np.float16)
         policy  = rng.dirichlet(np.ones(362)).astype(np.float32)
         outcome = float(rng.choice([-1.0, 0.0, 1.0]))
         buf.push(state, chain, policy, outcome, own, wl)

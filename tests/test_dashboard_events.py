@@ -460,7 +460,7 @@ def test_policy_target_entropy_only_over_valid_rows(tmp_path):
     buf   = ReplayBuffer(capacity=200)
     chain = np.zeros((6, board_size, board_size), dtype=np.float16)
     for i in range(batch):
-        feat = rng.random((18, board_size, board_size), dtype=np.float32).astype(np.float16)
+        feat = rng.random((8, board_size, board_size), dtype=np.float32).astype(np.float16)
         # Half the batch: zero policies (mask rows); half: valid uniform
         if i < batch // 2:
             pol = np.zeros(n_actions, dtype=np.float32)
@@ -501,7 +501,7 @@ def test_policy_target_entropy_finite_for_one_hot(tmp_path):
     buf   = ReplayBuffer(capacity=200)
     chain = np.zeros((6, board_size, board_size), dtype=np.float16)
     for i in range(batch):
-        feat = rng.random((18, board_size, board_size), dtype=np.float32).astype(np.float16)
+        feat = rng.random((8, board_size, board_size), dtype=np.float32).astype(np.float16)
         # One-hot policy: all mass on action 0
         pol = np.zeros(n_actions, dtype=np.float32)
         pol[0] = 1.0

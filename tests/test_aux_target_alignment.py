@@ -10,7 +10,7 @@ import pytest
 
 from engine import ReplayBuffer
 
-CHANNELS   = 18
+CHANNELS   = 8
 BOARD_SIZE = 19
 N_ACTIONS  = BOARD_SIZE * BOARD_SIZE + 1   # 362
 AUX_STRIDE = BOARD_SIZE * BOARD_SIZE       # 361

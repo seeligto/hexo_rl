@@ -28,7 +28,7 @@ from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.batch_assembly import load_pretrained_buffer
 from hexo_rl.training.losses import compute_chain_loss
 from hexo_rl.training.trainer import Trainer
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
 
 HALF = (BOARD_SIZE - 1) // 2  # 9
 
@@ -79,13 +79,19 @@ POSITIONS: list[Tuple[str, Callable[[], np.ndarray]]] = [
 ]
 
 
-def _write_corpus(path: Path, states: np.ndarray) -> None:
-    """Write an 18-plane NPZ with the keys expected by load_pretrained_buffer."""
-    T = states.shape[0]
+def _write_corpus(path: Path, states18: np.ndarray) -> None:
+    """Write an 8-plane NPZ (HEXB v6) with the keys expected by load_pretrained_buffer.
+
+    `states18` is the full 18-plane tensor from to_tensor(); we slice to 8
+    planes here so the NPZ matches the new export_corpus_npz.py output format.
+    """
+    T = states18.shape[0]
+    # Slice 18-plane → 8-plane before saving (native HEXB v6 corpus format).
+    states8 = np.ascontiguousarray(states18[:, KEPT_PLANE_INDICES])
     policies = np.zeros((T, 362), dtype=np.float32)
     policies[:, 0] = 1.0  # one-hot placeholder; parity test does not use this
     outcomes = np.zeros(T, dtype=np.float32)
-    np.savez(path, states=states, policies=policies, outcomes=outcomes)
+    np.savez(path, states=states8, policies=policies, outcomes=outcomes)
 
 
 def _load(path: Path):
@@ -128,7 +134,7 @@ def test_corpus_chain_planes_match_rust_byte_exact(tmp_path: Path) -> None:
     any_row_nonzero = False
     for i in range(len(POSITIONS)):
         cur_i = np.asarray(s_s[i, 0], dtype=np.float32)
-        opp_i = np.asarray(s_s[i, 8], dtype=np.float32)
+        opp_i = np.asarray(s_s[i, 4], dtype=np.float32)  # HEXB v6: opp at buf idx 4
         key = cur_i.tobytes() + opp_i.tobytes()
         try:
             src_idx = state_keys.index(key)

@@ -8,7 +8,7 @@ def test_weight_schedule_changes_sampling():
     buf = ReplayBuffer(capacity=200)
     buf.set_weight_schedule([10, 25], [0.15, 0.50], 1.0)
 
-    state  = np.zeros((18, 19, 19), dtype=np.float16)
+    state  = np.zeros((8, 19, 19), dtype=np.float16)
     chain  = np.zeros((6, 19, 19),  dtype=np.float16)
     policy = np.zeros(362, dtype=np.float32)
     own = np.ones(361, dtype=np.uint8)
@@ -35,7 +35,7 @@ def test_push_game_length_assigns_different_weights():
     buf = ReplayBuffer(capacity=10)
     buf.set_weight_schedule([10, 25], [0.15, 0.50], 1.0)
 
-    state  = np.zeros((18, 19, 19), dtype=np.float16)
+    state  = np.zeros((8, 19, 19), dtype=np.float16)
     chain  = np.zeros((6, 19, 19),  dtype=np.float16)
     policy = np.zeros(362, dtype=np.float32)
     own = np.ones(361, dtype=np.uint8)

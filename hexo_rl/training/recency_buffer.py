@@ -22,7 +22,7 @@ class RecentBuffer:
     Args:
         capacity:    Maximum number of positions to store.  Oldest entries are
                      overwritten once full (ring semantics).
-        state_shape: Shape of one state tensor, default (18, 19, 19).
+        state_shape: Shape of one state tensor, default (8, 19, 19) — HEXB v6.
         policy_len:  Number of policy logits per position, default 362.
         aux_stride:  Flat length of one ownership/winning_line plane, default 361.
     """
@@ -30,7 +30,7 @@ class RecentBuffer:
     def __init__(
         self,
         capacity: int,
-        state_shape: tuple[int, ...] = (18, 19, 19),
+        state_shape: tuple[int, ...] = (8, 19, 19),
         policy_len: int = 362,
         aux_stride: int = 361,
     ) -> None:

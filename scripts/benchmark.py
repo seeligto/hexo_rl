@@ -231,7 +231,7 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
     aug_iters = 500
     push_iters = 10_000
 
-    dummy_state = np.zeros((18, 19, 19), dtype=np.float16)
+    dummy_state = np.zeros((8, 19, 19), dtype=np.float16)
     dummy_chain = np.zeros((6, 19, 19), dtype=np.float16)
     dummy_policy = np.ones(362, dtype=np.float32) / 362.0
     dummy_own = np.ones(361, dtype=np.uint8)
@@ -996,7 +996,7 @@ def main() -> None:
     _bm_chain = np.zeros((6, 19, 19), dtype=np.float16)
     for _ in range(10_000):
         buffer.push(
-            np.zeros((18, 19, 19), dtype=np.float16),
+            np.zeros((8, 19, 19), dtype=np.float16),
             _bm_chain,
             np.ones(362, dtype=np.float32) / 362,
             0.0,

@@ -19,7 +19,7 @@ from hexo_rl.model.network import HexTacToeNet
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-BOARD_CHANNELS = 18
+BOARD_CHANNELS = 8
 BOARD_SIZE = 19
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1
 
@@ -158,7 +158,7 @@ class TestVramProbeGate:
         wl = np.zeros(361, dtype=np.uint8)
         chain = np.zeros((6, 19, 19), dtype=np.float16)
         for _ in range(32):
-            state = rng.random((18, 19, 19), dtype=np.float32).astype(np.float16)
+            state = rng.random((8, 19, 19), dtype=np.float32).astype(np.float16)
             policy = rng.dirichlet(np.ones(N_ACTIONS)).astype(np.float32)
             outcome = float(rng.choice([-1.0, 0.0, 1.0]))
             buf.push(state, chain, policy, outcome, own, wl)

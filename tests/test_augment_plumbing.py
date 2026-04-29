@@ -22,7 +22,7 @@ from hexo_rl.training.batch_assembly import (
 
 def _mk_sample_return(n: int) -> tuple:
     """Return a 7-tuple matching `ReplayBuffer.sample_batch` signature."""
-    states       = np.zeros((n, 18, 19, 19), dtype=np.float16)
+    states       = np.zeros((n, 8, 19, 19), dtype=np.float16)
     chain_planes = np.zeros((n, 6, 19, 19),  dtype=np.float16)
     policies     = np.zeros((n, 362),        dtype=np.float32)
     outcomes     = np.zeros(n,               dtype=np.float32)

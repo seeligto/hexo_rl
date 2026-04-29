@@ -19,9 +19,27 @@ def _expected_ic() -> int:
         return yaml.safe_load(f).get("in_channels", 18)
 
 
-@pytest.mark.skipif(not BOOTSTRAP.exists(), reason="bootstrap_model.pt not found")
+def _bootstrap_in_channels() -> int | None:
+    if not BOOTSTRAP.exists():
+        return None
+    try:
+        sd = torch.load(BOOTSTRAP, map_location="cpu", weights_only=True)
+        w = sd.get("trunk.input_conv.weight")
+        return int(w.shape[1]) if w is not None and w.dim() == 4 else None
+    except Exception:
+        return None
+
+
+@pytest.mark.skipif(
+    not BOOTSTRAP.exists(),
+    reason="bootstrap_model.pt not found",
+)
+@pytest.mark.skipif(
+    _bootstrap_in_channels() == 18,
+    reason="bootstrap_model.pt is pre-P3 (18-plane); skip until 8-plane bootstrap is trained",
+)
 def test_preflight_passes_on_current_bootstrap(tmp_path):
-    """preflight must exit 0 against the current 18-plane bootstrap checkpoint."""
+    """preflight must exit 0 against the current 8-plane bootstrap checkpoint."""
     result = subprocess.run(
         ["bash", str(PREFLIGHT)],
         capture_output=True,
@@ -66,4 +84,4 @@ assert ic == expected_ic, f"Expected {{expected_ic}}, got {{ic}}"
         text=True,
     )
     assert result.returncode != 0, "Expected failure for 24-plane ckpt but got exit 0"
-    assert "Expected 18, got 24" in result.stderr, result.stderr
+    assert "Expected 8, got 24" in result.stderr, result.stderr

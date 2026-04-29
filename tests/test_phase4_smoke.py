@@ -13,7 +13,8 @@ import torch
 
 from engine import ReplayBuffer
 
-CHANNELS = 18
+BUFFER_CHANNELS = 8   # HEXB v6: 8 planes in buffer
+WIRE_CHANNELS = 8     # HEXB v6 wire format (P3 complete)
 BOARD_SIZE = 19
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1  # 362
 
@@ -31,7 +32,7 @@ def _fill_buffer(buf: ReplayBuffer, n: int, value_only_frac: float = 0.0) -> Non
     wl    = np.zeros(361, dtype=np.uint8)
     chain = np.zeros((6, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
     for i in range(n):
-        state = np.random.randn(CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
+        state = np.random.randn(BUFFER_CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
         if np.random.random() < value_only_frac:
             policy = np.zeros(N_ACTIONS, dtype=np.float32)
         else:
@@ -122,7 +123,7 @@ def test_value_only_batch_does_not_crash():
     trainer = Trainer(model, config, checkpoint_dir="/tmp/test_phase4_vo", device=device)
 
     # All-zero policies = value-only.
-    states = np.random.randn(8, CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
+    states = np.random.randn(8, WIRE_CHANNELS, BOARD_SIZE, BOARD_SIZE).astype(np.float16)
     policies = np.zeros((8, N_ACTIONS), dtype=np.float32)
     outcomes = np.array([1.0, -1.0, 1.0, -1.0, 0.0, 1.0, -1.0, 0.0], dtype=np.float32)
 

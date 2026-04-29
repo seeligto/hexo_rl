@@ -937,7 +937,7 @@ class Trainer:
 
         defaults = {
             "board_size": 19, "res_blocks": 12, "filters": 128,
-            "in_channels": 18, "se_reduction_ratio": 4,
+            "in_channels": 8, "se_reduction_ratio": 4,
         }
 
         def _explicit(key: str) -> Optional[int]:

@@ -21,11 +21,11 @@ pathological checkpoints, masking the very signal we care about.
 
 Fixture layout (``fixtures/early_game_probe_v1.npz``):
 
-    states    : (N, 18, 19, 19)  float16  — encoded via GameState.to_tensor()
+    states    : (N, 8, 19, 19)   float16  — HEXB v6 8-plane slice of GameState.to_tensor()
     plies     : (N,)             int32    — ply index for each state (0, 1, 2, …)
     seeds     : (N,)             int32    — RNG seed used to generate each state
     legal_mask: (N, 362)         uint8    — 1 at flat-action indices that are legal
-    version   : () int32                   — fixture schema version (2)
+    version   : () int32                   — fixture schema version (3)
 
 Determinism guarantee: regenerating the fixture from a clean tree must
 produce a byte-identical file. Sequence seeding is chosen so that a single
@@ -43,7 +43,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-_FIXTURE_VERSION: int = 2
+_FIXTURE_VERSION: int = 3
 _FIXTURE_SEED: int = 42
 _FIXTURE_PLIES: Tuple[int, ...] = (0, 1, 2, 3, 4, 5, 7, 10, 15, 20)
 _N_ACTIONS: int = 19 * 19 + 1  # must match hexo_rl.selfplay.utils.N_ACTIONS
@@ -55,7 +55,7 @@ DEFAULT_FIXTURE_PATH: Path = REPO_ROOT / "fixtures" / "early_game_probe_v1.npz"
 
 @dataclass
 class _FixturePayload:
-    states:     np.ndarray  # (N, 18, 19, 19) float16
+    states:     np.ndarray  # (N, 8, 19, 19) float16 — HEXB v6 8-plane
     plies:      np.ndarray  # (N,) int32
     seeds:      np.ndarray  # (N,) int32
     legal_mask: np.ndarray  # (N, N_ACTIONS) uint8
@@ -69,14 +69,15 @@ def _generate_fixture_payload(
 
     For each target ply, seed ``(seed + ply)`` into ``random`` + ``np.random``
     and play ``ply`` uniformly-random legal moves from a fresh board. Records
-    the resulting 18-plane tensor (cluster 0, which is always present — the
-    origin window — for board histories this shallow) plus the legal-action
+    the resulting 8-plane HEXB v6 tensor (cluster 0, which is always present —
+    the origin window — for board histories this shallow) plus the legal-action
     mask at the resulting position. The mask is stored at fixture build time
     so probe evaluation does not need to touch the Rust Board.
     """
     # Deferred imports: keep the import graph cold when probe isn't used.
     from engine import Board
     from hexo_rl.env.game_state import GameState
+    from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 
     states_out: List[np.ndarray] = []
     masks_out:  List[np.ndarray] = []
@@ -97,7 +98,9 @@ def _generate_fixture_payload(
         # tensor: (K, 18, 19, 19). Cluster 0 always exists (origin window); the
         # shallow random rollouts keep every stone inside that window, so there
         # is no ambiguity about which cluster to score.
-        states_out.append(tensor[0].copy())
+        # Slice to 8-plane HEXB v6 wire format (GameState.to_tensor stays 18-plane
+        # for backwards compat — §134 will add a native 8-plane path).
+        states_out.append(tensor[0][list(KEPT_PLANE_INDICES)].copy())
 
         mask = np.zeros(_N_ACTIONS, dtype=np.uint8)
         for q, r in board.legal_moves():

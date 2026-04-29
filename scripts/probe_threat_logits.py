@@ -61,9 +61,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
 from hexo_rl.training.trainer import Trainer
+from hexo_rl.utils.constants import BUFFER_CHANNELS, KEPT_PLANE_INDICES
 
 BOARD_SIZE: int = 19
 

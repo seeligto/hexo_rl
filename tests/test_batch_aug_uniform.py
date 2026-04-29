@@ -26,7 +26,7 @@ from hexo_rl.training.batch_assembly import (
     assemble_mixed_batch,
 )
 from hexo_rl.training.recency_buffer import RecentBuffer
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
 
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1
 AUX_STRIDE = BOARD_SIZE * BOARD_SIZE
@@ -35,9 +35,9 @@ AUX_STRIDE = BOARD_SIZE * BOARD_SIZE
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _mk_buffer_return(n: int) -> tuple:
-    """Mock Rust buffer sample_batch return (ownership is (n,19,19), not flat)."""
+    """Mock Rust buffer sample_batch return — HEXB v6: 8-plane states."""
     return (
-        np.zeros((n, 18, 19, 19), dtype=np.float16),
+        np.zeros((n, 8,  19, 19), dtype=np.float16),
         np.zeros((n, 6,  19, 19), dtype=np.float16),
         np.zeros((n, N_ACTIONS),  dtype=np.float32),
         np.zeros(n,               dtype=np.float32),
@@ -58,20 +58,21 @@ def _make_asymmetric_recent_buffer(n: int, seed: int = 0) -> tuple[RecentBuffer,
 
     rng = np.random.default_rng(seed)
     buf = RecentBuffer(capacity=max(n, 32))
-    saved = np.zeros((n, 18, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+    saved = np.zeros((n, 8, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)  # HEXB v6
 
     board = Board()
     gs = GameState.from_board(board)
     for q, r in [(0, 0), (1, 0), (2, 0), (-1, 1), (-2, 2), (3, -1)]:
         gs = gs.apply_move(board, q, r)
     tensor, _ = gs.to_tensor()
-    base = tensor[0].astype(np.float16)
+    base18 = tensor[0].astype(np.float32)  # (18, 19, 19) from game engine
+    base8  = base18[KEPT_PLANE_INDICES].astype(np.float16)  # (8, 19, 19) for buffer
 
     for i in range(n):
-        s = base.copy()
+        s = base8.copy()
         saved[i] = s
-        s32 = s.astype(np.float32)
-        chain = (_compute_chain_planes(s32[0], s32[8]).astype(np.float32) / 6.0).astype(np.float16)
+        # chain from 18-plane stones 0 (cur) and 8 (opp) before slicing
+        chain = (_compute_chain_planes(base18[0], base18[8]).astype(np.float32) / 6.0).astype(np.float16)
         p = rng.uniform(0, 1, size=N_ACTIONS).astype(np.float32)
         p /= p.sum()
         own = rng.choice([0, 1, 2], size=AUX_STRIDE).astype(np.uint8)

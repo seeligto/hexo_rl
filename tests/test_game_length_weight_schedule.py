@@ -39,7 +39,7 @@ def _make_buffer() -> ReplayBuffer:
     buf = ReplayBuffer(capacity=_N_PER_BUCKET * len(_BUCKET_GL) + 50)
     buf.set_weight_schedule(_THRESHOLDS, _WEIGHTS, _DEFAULT_W)
 
-    state  = np.zeros((18, 19, 19), dtype=np.float16)
+    state  = np.zeros((8, 19, 19), dtype=np.float16)
     chain  = np.zeros((6, 19, 19),  dtype=np.float16)
     policy = np.ones(362, dtype=np.float32) / 362
     own    = np.ones(361, dtype=np.uint8)
@@ -126,7 +126,7 @@ def test_weight_schedule_active_at_buffer_init():
     """
     buf = ReplayBuffer(capacity=10)
 
-    state  = np.zeros((18, 19, 19), dtype=np.float16)
+    state  = np.zeros((8, 19, 19), dtype=np.float16)
     chain  = np.zeros((6, 19, 19),  dtype=np.float16)
     policy = np.ones(362, dtype=np.float32) / 362
     own    = np.ones(361, dtype=np.uint8)

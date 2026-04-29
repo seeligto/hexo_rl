@@ -16,7 +16,7 @@ def test_replay_buffer_benchmark_smoke() -> None:
     chain = np.zeros((6, 19, 19), dtype=np.float16)
     for _ in range(512):
         replay.push(
-            torch.zeros((18, 19, 19), dtype=torch.float16).numpy(),
+            torch.zeros((8, 19, 19), dtype=torch.float16).numpy(),
             chain,
             (torch.ones((362,), dtype=torch.float32) / 362.0).numpy(),
             0.0,

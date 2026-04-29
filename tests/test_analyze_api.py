@@ -10,10 +10,10 @@ from unittest.mock import patch
 
 import pytest
 
-# Find any checkpoint to test with. Only 18-channel checkpoints are runnable
-# against the current 18-plane GameState.to_tensor() path.
+# Find any checkpoint to test with. Only 8-channel checkpoints are runnable
+# against the current 8-plane model (HEXB v6 wire format, P3 migration).
 CKPT_DIR = Path("checkpoints")
-_EXPECTED_IN_CHANNELS = 18
+_EXPECTED_IN_CHANNELS = 8
 
 
 def _checkpoint_in_channels(path: Path) -> int | None:

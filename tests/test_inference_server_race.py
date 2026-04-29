@@ -12,7 +12,7 @@ import torch
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference_server import InferenceServer
 
-BOARD_CHANNELS = 18
+BOARD_CHANNELS = 8
 BOARD_SIZE = 19
 
 

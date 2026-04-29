@@ -18,6 +18,7 @@ import torch
 from engine import SelfPlayRunner  # type: ignore[attr-defined]
 
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
+from hexo_rl.utils.constants import BUFFER_CHANNELS
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
 from hexo_rl.selfplay.inference_server import InferenceServer
@@ -83,8 +84,8 @@ class WorkerPool:
         sp = config.get("selfplay", config)
         self.n_workers = int(n_workers if n_workers is not None else sp.get("n_workers", 1))
         board_size = int(getattr(model, "board_size", 19))
-        # Rust workers always produce WIRE_CHANNELS (18) planes; in_channels only
-        # affects the model trunk after index_select inside model.forward().
+        # Rust inference batcher uses WIRE_CHANNELS (18) planes; game runner slices
+        # to BUFFER_CHANNELS (8) before pushing to results queue (HEXB v6).
 
         mcts_cfg = config.get("mcts", config)
         self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
@@ -193,7 +194,7 @@ class WorkerPool:
         self.recent_buffer: Optional[Any] = None
 
         self._board_size = board_size
-        self._feat_len = WIRE_CHANNELS * board_size * board_size  # 18*19*19 = 6498
+        self._feat_len = BUFFER_CHANNELS * board_size * board_size  # 8*19*19 = 2888
         self._pol_len = board_size * board_size + 1              # e.g. 19*19+1 = 362
         self._chain_len = 6 * board_size * board_size            # 6*19*19 = 2166
 

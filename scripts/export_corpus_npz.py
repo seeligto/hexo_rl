@@ -50,6 +50,7 @@ if str(ROOT) not in sys.path:
 
 from hexo_rl.bootstrap.pretrain import _game_winner_from_replay
 from hexo_rl.bootstrap.dataset import replay_game_to_triples
+from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 
 BOT_GAMES_DIR = ROOT / "data" / "corpus" / "bot_games"
 RAW_HUMAN_DIR = ROOT / "data" / "corpus" / "raw_human"
@@ -262,7 +263,7 @@ def main() -> None:
 
     print(f"Replaying {len(game_to_plies):,} unique games...")
 
-    states_buf = np.empty((n_sample, 18, 19, 19), dtype=np.float16)
+    states_buf = np.empty((n_sample, 8, 19, 19), dtype=np.float16)  # HEXB v6: 8 planes
     policies_buf = np.empty((n_sample, 362), dtype=np.float32)
     outcomes_buf = np.empty(n_sample, dtype=np.float32)
     out_idx = 0
@@ -275,7 +276,7 @@ def main() -> None:
             p1_wins += 1
         for pi in sorted(ply_indices):
             if pi < len(s):
-                states_buf[out_idx] = s[pi]
+                states_buf[out_idx] = s[pi][KEPT_PLANE_INDICES]  # slice 18→8 planes
                 policies_buf[out_idx] = p[pi]
                 outcomes_buf[out_idx] = o[pi]
                 out_idx += 1
@@ -302,7 +303,7 @@ def main() -> None:
         np.savez(out_path, **save_kwargs)
 
     size_mb = out_path.stat().st_size / 1024 / 1024
-    est_ram_gb = out_idx * (18 * 19 * 19 * 2 + 362 * 4 + 4) / (1024 ** 3)
+    est_ram_gb = out_idx * (8 * 19 * 19 * 2 + 362 * 4 + 4) / (1024 ** 3)
     print(f"Saved: {out_path}")
     print(f"  File size : {size_mb:.0f} MB")
     print(f"  Positions : {out_idx:,}")

@@ -16,7 +16,7 @@ from engine import Board
 from hexo_rl.augment.luts import get_policy_scatters
 from hexo_rl.env.game_state import GameState, _compute_chain_planes
 from hexo_rl.training.batch_assembly import _augment_recent_rows
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
 
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1
 AUX_STRIDE = BOARD_SIZE * BOARD_SIZE
@@ -25,7 +25,7 @@ AUX_STRIDE = BOARD_SIZE * BOARD_SIZE
 def _make_synthetic_batch(n: int = 4, seed: int = 0) -> tuple:
     """Build a batch of n rows via Board positions for realistic stone planes."""
     rng = np.random.default_rng(seed)
-    states   = np.zeros((n, 18, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+    states   = np.zeros((n, 8, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)  # HEXB v6
     chain    = np.zeros((n, 6, BOARD_SIZE, BOARD_SIZE),  dtype=np.float16)
     policies = np.zeros((n, N_ACTIONS), dtype=np.float32)
     outcomes = rng.uniform(-1, 1, size=n).astype(np.float32)
@@ -45,10 +45,10 @@ def _make_synthetic_batch(n: int = 4, seed: int = 0) -> tuple:
         for q, r in move_seqs[i % len(move_seqs)]:
             gs = gs.apply_move(board, q, r)
         tensor, _ = gs.to_tensor()
-        states[i] = tensor[0].astype(np.float16)
-        # chain planes from stone planes 0 and 8
-        s32 = states[i].astype(np.float32)
-        chain[i] = (_compute_chain_planes(s32[0], s32[8]).astype(np.float32) / 6.0).astype(np.float16)
+        t18 = tensor[0].astype(np.float32)        # (18, 19, 19) from game engine
+        states[i] = t18[KEPT_PLANE_INDICES].astype(np.float16)  # slice to 8-plane
+        # chain planes from 18-plane stone planes 0 (cur) and 8 (opp)
+        chain[i] = (_compute_chain_planes(t18[0], t18[8]).astype(np.float32) / 6.0).astype(np.float16)
         # uniform policy with non-trivial mass
         p = rng.uniform(0, 1, size=N_ACTIONS).astype(np.float32)
         p /= p.sum()
@@ -77,7 +77,7 @@ def _force_sym(s_r, c_r, p_r, own_flat, wl_flat, sym_idx: int):
 
     c_out = np.empty_like(c_r)
     for i in range(n):
-        c_out[i] = (_ccp(states_f32[i, 0], states_f32[i, 8]).astype(np.float32) / 6.0).astype(np.float16)
+        c_out[i] = (_ccp(states_f32[i, 0], states_f32[i, 4]).astype(np.float32) / 6.0).astype(np.float16)
 
     p_out = np.empty_like(p_r)
     own_out = np.empty_like(own_flat)

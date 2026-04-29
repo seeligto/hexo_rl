@@ -65,7 +65,7 @@ with open("configs/model.yaml")    as f: m = yaml.safe_load(f)
 print(f"  aux_chain_weight:  {c.get('aux_chain_weight', 'MISSING')}")
 print(f"  threat_pos_weight: {c.get('threat_pos_weight', 'MISSING')}")
 print(f"  in_channels:       {m.get('in_channels', 'MISSING')}")
-assert m.get("in_channels") == 18, f"in_channels must be 18, got {m.get('in_channels')}"
+assert m.get("in_channels") == 8, f"in_channels must be 8, got {m.get('in_channels')}"
 print("  PASS")
 PYEOF
 ok "configs correct"

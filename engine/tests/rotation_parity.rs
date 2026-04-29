@@ -337,7 +337,7 @@ fn test_rotation_disabled_by_default_in_runner() {
         1,            // leaf_batch_size
         1.5,          // c_puct
         0.25,         // fpu_reduction
-        18 * 19 * 19, // feature_len
+        8 * 19 * 19,  // feature_len
         19 * 19 + 1,  // policy_len
         0.0,          // fast_prob
         1,            // fast_sims
@@ -371,7 +371,7 @@ fn test_rotation_disabled_by_default_in_runner() {
 
     // Explicit rotation=true must also accept (training-loop path).
     let runner_rot = SelfPlayRunner::new(
-        1, 0, 1, 1, 1.5, 0.25, 18 * 19 * 19, 19 * 19 + 1, 0.0, 1, 1, 15, -0.1, true,
+        1, 0, 1, 1, 1.5, 0.25, 8 * 19 * 19, 19 * 19 + 1, 0.0, 1, 1, 15, -0.1, true,
         0.3, 0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
         10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, true,
     )

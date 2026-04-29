@@ -3,9 +3,9 @@
 # Never override these in other config files.
 
 board_size: 19
-# 18 = 8 cur-history + 8 opp-history + 2 scalar planes.
+# 8 = cur ply-0..3 + opp ply-0..3 (HEXB v6 wire format).
 # Chain-length planes (Q13) are output-only auxiliaries; not in input.
-in_channels: 18
+in_channels: 8
 res_blocks: 12
 filters: 128
 se_reduction_ratio: 4

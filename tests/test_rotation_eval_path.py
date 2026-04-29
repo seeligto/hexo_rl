@@ -53,7 +53,7 @@ def test_eval_path_disables_rotation_default_ctor():
     accidental contamination of every eval/bot round.
     """
     device = torch.device("cpu")
-    model = HexTacToeNet(board_size=19, in_channels=18, filters=16, res_blocks=2).to(device)
+    model = HexTacToeNet(board_size=19, in_channels=8, filters=16, res_blocks=2).to(device)
 
     runner = SelfPlayRunner(
         n_workers=1, max_moves_per_game=8, n_simulations=2, leaf_batch_size=1
@@ -74,23 +74,23 @@ def test_eval_path_disables_rotation_default_ctor():
         )
         assert feats_np.shape[0] > 0
         # First plane = current-player ply-0 occupancy (most recent stone for the
-        # player to move). Reshape to (N, 18, 19, 19) and check that every row's
+        # player to move). Reshape to (N, 8, 19, 19) and check that every row's
         # ply-0 plane has at most a small number of nonzero cells (real moves
         # don't create dense planes — a rotation bug that scatters into wrong
         # planes would still show normal density, but mass loss to out-of-window
         # cells would not appear under sym=0 because scatter[0] is identity).
-        feats = np.asarray(feats_np).reshape(-1, 18, 19, 19)
+        feats = np.asarray(feats_np).reshape(-1, 8, 19, 19)  # HEXB v6: 8 planes
         # Total stones across both players' ply-0 planes is bounded by the ply
         # count at the position; under the default 8-move cap, ≤ 8 cells.
         for row in range(min(feats.shape[0], 16)):
             stone_count_0 = int(np.count_nonzero(feats[row, 0]))
-            stone_count_8 = int(np.count_nonzero(feats[row, 8]))
+            stone_count_8 = int(np.count_nonzero(feats[row, 4]))  # HEXB v6: opp at idx 4
             assert stone_count_0 <= 8, (
                 f"row {row}: cur-player ply-0 has {stone_count_0} stones (>8); "
                 "a rotation in the eval path would scatter mass to unexpected cells"
             )
             assert stone_count_8 <= 8, (
-                f"row {row}: opp-player ply-0 has {stone_count_8} stones (>8)"
+                f"row {row}: opp-player ply-0 has {stone_count_8} stones (>8)"  # stone_count_8 = feats[row,4]
             )
     finally:
         runner.stop()
@@ -117,7 +117,7 @@ def test_selfplay_path_enables_rotation_via_workerpool():
     """
     device = torch.device("cpu")
     board_size = 19
-    model = HexTacToeNet(board_size=board_size, in_channels=18, filters=16, res_blocks=2).to(
+    model = HexTacToeNet(board_size=board_size, in_channels=8, filters=16, res_blocks=2).to(
         device
     )
 
@@ -168,7 +168,7 @@ def test_selfplay_path_enables_rotation_via_workerpool():
         # per-game self-play rotation. We want to observe the *raw* per-game
         # rotation, not the buffer's scatter on top.
         states_np, *_ = buf.sample_batch(min(64, buf.size), False)
-        states = np.asarray(states_np).reshape(-1, 18, 19, 19)
+        states = np.asarray(states_np).reshape(-1, 8, 19, 19)  # HEXB v6: 8 planes
         union_cells = set()
         for row in range(states.shape[0]):
             cells = np.argwhere(states[row, 0] > 0.0)
@@ -201,7 +201,7 @@ def test_rotation_disabled_via_workerpool_config():
     stochastic input-tensor distribution check.
     """
     device = torch.device("cpu")
-    model = HexTacToeNet(board_size=19, in_channels=18, filters=16, res_blocks=2).to(device)
+    model = HexTacToeNet(board_size=19, in_channels=8, filters=16, res_blocks=2).to(device)
     config = {
         "selfplay": {
             "n_workers": 1,

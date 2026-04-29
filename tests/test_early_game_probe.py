@@ -41,7 +41,7 @@ def test_generate_fixture_is_deterministic(tmp_path: Path) -> None:
 def test_load_fixture_shape(tmp_path: Path) -> None:
     p = tmp_path / "probe.npz"
     payload = save_fixture(p)
-    assert payload.states.shape == (len(_FIXTURE_PLIES), 18, 19, 19)
+    assert payload.states.shape == (len(_FIXTURE_PLIES), 8, 19, 19)
     assert payload.states.dtype == np.float16
     assert payload.plies.tolist() == list(_FIXTURE_PLIES)
     # Re-load through the reader.
@@ -135,10 +135,14 @@ def test_bootstrap_v4_entropy_range() -> None:
 
     # Bootstrap checkpoint ships as a plain state_dict (no config blob), so
     # load it directly into a fresh HexTacToeNet with the canonical geometry.
-    from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
-
+    # Skip pre-P3 (18-plane) checkpoints — the guard rejects them.
     payload = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     state_dict = payload.get("model_state", payload) if isinstance(payload, dict) else payload
+    if isinstance(state_dict, dict):
+        _w = state_dict.get("trunk.input_conv.weight")
+        if _w is not None and _w.dim() == 4 and _w.shape[1] == 18:
+            pytest.skip("bootstrap_model.pt is a pre-P3 18-plane checkpoint; skipping until 8-plane bootstrap is trained")
+    from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
     state_dict = normalize_model_state_dict_keys(state_dict)
     net = HexTacToeNet(board_size=19, filters=128, res_blocks=12)
     net.load_state_dict(state_dict, strict=False)

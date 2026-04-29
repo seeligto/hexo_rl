@@ -39,7 +39,7 @@ probe   = _load_script("probe_threat_logits")
 # Helpers
 # ---------------------------------------------------------------------------
 
-CHANNELS       = 18
+CHANNELS       = 8
 N_CHAIN_PLANES = 6
 BOARD_SIZE     = 19
 N_ACTIONS      = BOARD_SIZE * BOARD_SIZE + 1   # 362
