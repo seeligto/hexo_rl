@@ -26,6 +26,7 @@ use pyo3::prelude::*;
 
 use crate::board::TOTAL_CELLS;
 use crate::inference_bridge::InferenceBatcher;
+use crate::replay_buffer::sym_tables::STATE_STRIDE;
 
 #[pyclass(name = "SelfPlayRunner")]
 pub struct SelfPlayRunner {
@@ -253,7 +254,11 @@ impl SelfPlayRunner {
     /// Drain all buffered positions and return them as numpy arrays.
     ///
     /// Returns (features, chain_planes, policies, values, plies, ownership, winning_line, is_full_search):
-    ///   features:        (N, feat_len) float32 — 18-plane state tensor
+    ///   features:        (N, 8*361)    float32 — HEXB v6 buffer wire format (sliced from
+    ///                                            18-plane game state via KEPT_PLANE_INDICES;
+    ///                                            §131 Option X). Reshape to (N, 8, 19, 19) on
+    ///                                            the Python side before pushing into
+    ///                                            `ReplayBuffer::push_*` / `RecentBuffer`.
     ///   chain_planes:    (N, 6*361)    float32 — Q13 chain-length planes (flat, /6 normalized)
     ///   policies:        (N, pol_len)  float32
     ///   values:          (N,)          float32
@@ -276,7 +281,13 @@ impl SelfPlayRunner {
         Bound<'py, PyArray2<u8>>,
         Bound<'py, PyArray1<u8>>,
     )> {
-        let feat_len  = self.batcher.feature_len();
+        // Buffer-bound state row width (HEXB v6 = 8 planes × 361 cells = 2888).
+        // Distinct from `self.batcher.feature_len()` (still 18 × 361 = 6498) — the
+        // inference batcher's per-leaf tensor stays at 18 planes pre-P3 model
+        // migration, while the rows that flow into `records_vec` (and through
+        // here to Python) have already been sliced to 8 planes by
+        // `slice_kept_planes_18_to_8` in worker_loop.rs.
+        let feat_len  = STATE_STRIDE;
         let chain_len = 6 * TOTAL_CELLS;
         let pol_len   = self.pol_len;
 

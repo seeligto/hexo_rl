@@ -13,8 +13,9 @@
 //!   sym_tables.rs — 12-fold permutation tables, axis-plane remap, constants
 //!
 //! ## Memory layout (flat, row-major)
-//!   states       : Vec<u16> — f16 bits, logical shape [capacity, 18, 361]
-//!                            (18 history/scalar planes; chain planes stored separately)
+//!   states       : Vec<u16> — f16 bits, logical shape [capacity, 8, 361]
+//!                            (HEXB v6: 8 buffer planes per KEPT_PLANE_INDICES; chain planes
+//!                            stored separately)
 //!   chain_planes : Vec<u16> — f16 bits, logical shape [capacity, 6, 361]
 //!                            (Q13 chain-length planes: 3 axes × 2 players, normalized /6)
 //!   policies     : Vec<f32> — logical shape [capacity, 362]
@@ -59,7 +60,7 @@ pub struct ReplayBuffer {
     pub(crate) size:         usize,
     pub(crate) head:         usize, // next write slot
 
-    pub(crate) states:       Vec<u16>,  // f16 bits; flat [capacity × N_PLANES × N_CELLS]
+    pub(crate) states:       Vec<u16>,  // f16 bits; flat [capacity × N_PLANES × N_CELLS] (HEXB v6: 8 planes)
     /// Q13 chain-length planes stored separately from state.
     /// Flat [capacity × CHAIN_STRIDE]. Scattered with axis-plane remap on augmentation.
     pub(crate) chain_planes: Vec<u16>,  // f16 bits; flat [capacity × CHAIN_STRIDE]
@@ -205,7 +206,7 @@ impl ReplayBuffer {
     /// Sample `batch_size` entries, optionally with 12-fold hex augmentation.
     ///
     /// Returns:
-    ///     states:          float16 numpy array of shape (batch_size, 18, 19, 19)
+    ///     states:          float16 numpy array of shape (batch_size, 8, 19, 19) — HEXB v6
     ///     chain_planes:    float16 numpy array of shape (batch_size, 6, 19, 19)
     ///     policies:        float32 numpy array of shape (batch_size, 362)
     ///     outcomes:        float32 numpy array of shape (batch_size,)
