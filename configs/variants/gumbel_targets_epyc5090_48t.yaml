@@ -10,7 +10,7 @@ training_steps_per_game: 2.0
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
-  max_game_moves: 300
+  max_game_moves: 200  # 2026-04-29: reverted from 300 — long-tail games dominated workers (~1k sims/s)
   n_workers: 33
   inference_batch_size: 320
   inference_max_wait_ms: 16.0
