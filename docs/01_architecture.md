@@ -35,11 +35,21 @@ class GameState:
 The state is converted to a `(C, H, W)` float16 tensor for the network:
 
 ```
-Channel layout (18 channels, 19×19):
-  0-7:   Current player's stones in last 8 board states (binary planes)
-  8-15:  Opponent's stones in last 8 board states (binary planes)
-  16:    moves_remaining broadcast as 0.0 (1 move left) or 1.0 (2 moves left)
-  17:    turn parity — 0.0 if ply is even, 1.0 if odd
+Channel layout (8 channels, 19×19) — HEXB v6 wire format (§131):
+  KEPT_PLANE_INDICES = [0,1,2,3,8,9,10,11]
+  (engine/src/replay_buffer/sym_tables.rs:49)
+
+  out 0 ← src 0   cur ply-0   LOAD-BEARING
+  out 1 ← src 1   cur ply-1   (ply-0 contrast signal)
+  out 2 ← src 2   cur ply-2   MARGINAL (D14 anchor)
+  out 3 ← src 3   cur ply-3
+  out 4 ← src 8   opp ply-0   LOAD-BEARING
+  out 5 ← src 9   opp ply-1
+  out 6 ← src 10  opp ply-2   D14 anchor pair
+  out 7 ← src 11  opp ply-3
+
+Dropped: planes 4-7 (cur ply-4..7), planes 12-15 (opp ply-4..7),
+         plane 16 (moves_remaining), plane 17 (turn parity).
 ```
 
 #### Rust / Python encoding split
@@ -50,23 +60,29 @@ It does **not** return 18 planes because:
 
 - Planes 1-7 and 9-15 (history) require the full move sequence, which lives
   only in Python's `GameState.move_history`.
-- Encoding 18 planes in Rust and crossing the PyO3 boundary with 6 498 zeros
-  per cluster would be a 9× overhead for no gain.
+- Buffer wire format is 8 planes (STATE_STRIDE = 2888 = 8 × 361,
+  `engine/src/replay_buffer/sym_tables.rs:31`); a 6498-element 18-plane
+  crossing was eliminated in §131 P1 (`8c492f3`).
 
-`GameState.to_tensor()` (Python) assembles the final `(18, 19, 19)` tensor by
-stacking the current 2-plane snapshot with up to 7 prior snapshots from
-`move_history`. Missing history slots (early in the game) are left as zeros.
+`GameState.to_tensor()` (Python / PyO3 binding) still emits an **18-plane**
+`(18, 19, 19)` tensor — it stacks the current 2-plane snapshot with up to
+7 prior snapshots from `move_history`. This is the **intentional-legacy
+bridge** retained at §131 P1 (a) for Python history-aware callers
+(evaluator, analysis API, pretrain). Consumers that need 8-plane input
+(e.g. `scripts/probe_threat_logits.py`) slice via `KEPT_PLANE_INDICES`
+after the call.
 Chain-length planes (Q13) are computed separately via `_compute_chain_planes`
 and stored in the replay buffer's chain sub-buffer — they are **not** part of
 the input tensor but serve as auxiliary output head targets.
 
-The **Rust self-play hot-path** (`game_runner/worker_loop.rs`) has no Python history. It
-calls `Board.encode_planes_to_buffer()` to expand each 2-plane view to
-the 18-plane layout in-place, leaving history planes as zeros. Chain planes
-are computed separately via `encode_chain_planes` and stored in the replay
-buffer chain sub-buffer. This is a valid approximation for the RL warmup
-phase; full history encoding is available on the Python path (worker.py,
-evaluator.py, pretrain.py).
+The **Rust self-play hot-path** (`game_runner/worker_loop.rs:293, 624`)
+calls `encode_state_to_buffer_channels(KEPT_PLANE_INDICES)` directly,
+producing 8-plane output at the source with no intermediate 18-plane
+allocation. §131 P3 commit `9bc9f37` deleted the old
+`slice_kept_planes_18_to_8` helper; both encode sites (inference
+submission path and record-push path) now call this function directly.
+Chain planes are computed separately via `encode_chain_planes` and stored
+in the replay buffer chain sub-buffer.
 
 ### Turn structure
 
@@ -102,10 +118,11 @@ To solve the "Attention Hijacking" (Colony Meta) exploit where the network becom
 
 Input:
 
-- `K` dynamic `local_map` tensors: Shape `(K, 18, 19, 19)` float16. The Rust
-  core groups active stones into K distinct clusters (distanced by max 8 cells)
-  and returns 2-plane snapshots per cluster via `get_cluster_views()`.
-  `GameState.to_tensor()` assembles the full 18-plane tensor (see "Tensor
+- `K` dynamic `local_map` tensors: Shape `(K, 8, 19, 19)` float16 (§131).
+  The Rust core groups active stones into K distinct clusters (distanced by
+  max 8 cells) and returns 2-plane snapshots per cluster via
+  `get_cluster_views()`. The hot-path encodes directly to 8 planes via
+  `encode_state_to_buffer_channels(KEPT_PLANE_INDICES)` (see "Tensor
   encoding" above).
 
 Backbone (Single ResNet-12 Trunk):
@@ -298,9 +315,10 @@ The hot-path concurrency is Rust-owned (not Python multiprocessing). Python is r
 The replay buffer lives entirely in Rust and is exposed to Python via PyO3.
 The Python `ReplayBuffer` class has been deleted; `ReplayBuffer` (from `engine`) is the only buffer.
 
-**Storage layout (HEXB v5 on-disk format, in-memory columns):**
+**Storage layout (HEXB v6 on-disk format, in-memory columns — §131 P1):**
 
-- `states: Vec<u16>` — f16 bits as u16, logical shape `[capacity, 18, 19, 19]` (§97 — chain planes moved out).
+- `states: Vec<u16>` — f16 bits as u16, logical shape `[capacity, 8, 19, 19]`
+  (§131 — 18→8 plane migration; v5 hard-rejected at load).
 - `chain_planes: Vec<u16>` — f16 bits as u16, logical shape `[capacity, 6, 19, 19]` (Q13 chain-length planes; 3 axes × 2 players, /6-normalised).
 - `policies: Vec<f32>` — logical shape `[capacity, 362]`.
 - `outcomes: Vec<f32>` — logical shape `[capacity]`.
@@ -315,7 +333,7 @@ The Python `ReplayBuffer` class has been deleted; `ReplayBuffer` (from `engine`)
 - **12-fold hex augmentation** — applied lazily at sample time. 6 rotations × 2 (with/without reflection). Scatter-copy via pre-computed symmetry tables. Cells that fall outside the 19×19 window after transformation are left as zero. Chain planes undergo a second scatter pass that additionally remaps the 3 hex-axis planes per symmetry (`axis_perm` table — §92 C2, §97 retained).
 - **Zero-copy transfer** — Python receives numpy arrays directly via PyO3's `IntoPyArray`; no type conversion in the hot path.
 - **f16-as-u16 storage** — states are stored as raw u16 (f16 bit-pattern) to halve VRAM footprint; reinterpreted as f16 on PyO3 return.
-- **Persistence** — HEXB v5 (`engine/src/replay_buffer/persist.rs`). v4 buffers load with `is_full_search = 1` default for legacy compatibility.
+- **Persistence** — HEXB v6 (`engine/src/replay_buffer/persist.rs`). v5 and v4 buffers are hard-rejected with an informative error (§131 P1 commit `480bb24`). Only v6 loads.
 
 **Python API:**
 
@@ -329,7 +347,9 @@ states, chain_planes, policies, outcomes, ownership, winning_line, is_full_searc
     buf.sample_batch(batch_size, augment=True)
 ```
 
-**Performance (2026-04-16 baseline, 16 workers, `make bench`):** 779,402 pushes/sec; 1,299 µs/batch augmented (batch=256); 1,271 µs/batch raw. See `CLAUDE.md` § Benchmarks for the authoritative current table.
+**Performance:** See `docs/rules/perf-targets.md` for the authoritative
+current bench floors (§128 metric switch + §135 8-plane baseline). Stale
+pre-§128 numbers are not reproduced here to avoid drift.
 
 ---
 
