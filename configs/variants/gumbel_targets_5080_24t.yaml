@@ -1,0 +1,17 @@
+# gumbel_targets — Ryzen 9 9900X (24t) + RTX 5080 (16 GB) variant.
+# Pre-sweep priors: scaled from EPYC-48t/5090 winner (n_workers=33, batch=320)
+# and desktop-3700x winner (n_workers=10, batch unset, wait=5ms, burst=8).
+# Worker guess: 24t * 0.67 ≈ 16 (between 16t→10 and 48t→33 data points).
+# Run sweep to confirm — see sweep command in docs/sweep_harness.md.
+# Launch: make train VARIANT=gumbel_targets_5080_24t
+training_steps_per_game: 4.0
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 200
+  n_workers: 16
+  inference_batch_size: 192
+  inference_max_wait_ms: 8.0
+  playout_cap:
+    fast_prob: 0.0
+max_train_burst: 6
