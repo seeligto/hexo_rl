@@ -50,7 +50,7 @@ NN inference target lowered to track the compile-off methodology shift.
 | Replay buffer sample augmented (batch=256) | 1,362 µs/batch | ≤ 1,800 µs | IQR ±38 (2.8%); flat |
 | GPU utilization | 100.0% | ≥ 85% | saturated; NN-isolated benchmark |
 | VRAM usage (process) | 0.11 GB / 8.0 GB | ≤ 6.4 GB (80%) | torch.cuda.max_memory_allocated |
-| Worker throughput | 27,835 pos_gen/hr (desktop n=5, §128) | ≥ 20,000 pos_gen/hr | §128: metric switched to positions_generated (continuous). Desktop RTX 3070 n=5: IQR ±2,398 (8.6%), range [24.6k–30.0k]. 20k floor confirmed (27,835 × 0.85 = 23,659). Laptop baseline ~25,400 gen/hr (177,799 pushed ÷ K_avg 7); re-bench pending. |
+| Worker throughput | 27,835 pos_gen/hr (desktop n=5, §128) | ≥ 20,000 pos_gen/hr | §128: metric switched to positions_generated (continuous). Desktop RTX 3070 n=5: IQR ±2,398 (8.6%), range [24.6k–30.0k]. 20k floor confirmed (27,835 × 0.85 = 23,659). **Laptop (Ryzen 8845HS + RTX 4060 Max-Q, 8-plane, Q44 2026-04-30): 33,174 pos_gen/hr IQR ±5.3%, range [29.1k–36.3k].** |
 | Batch fill % | 99.2% | ≥ 84% | IQR ±0.32 |
 
 ### Compile-on engineering datum (`make bench.compile`, 2026-04-25)
