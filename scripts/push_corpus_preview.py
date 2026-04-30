@@ -6,7 +6,7 @@ Selection strategy (of N total games):
   - 40% random sample
   - 20% most recent by timestamp
 
-Writes /tmp/hexo_corpus_preview.jsonl in GameReplaySummary-compatible format,
+Writes /tmp/hexo_corpus_preview.jsonl (JSONL, one game object per line),
 then optionally signals the running dashboard to reload.
 
 Usage:
@@ -82,7 +82,7 @@ def select_games(browser: GameBrowser, n: int) -> List[GameSummary]:
 
 
 def _outcome_to_winner(outcome: str) -> str:
-    """Map GameBrowser outcome to GameReplaySummary winner format."""
+    """Map GameBrowser outcome to winner string."""
     return {"p1_win": "x_win", "p2_win": "o_win", "draw": "draw"}.get(outcome, "unknown")
 
 
