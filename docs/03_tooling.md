@@ -308,7 +308,7 @@ def benchmark_mcts(n_simulations=50_000) -> dict:
 def benchmark_inference(model, n_positions=10_000, batch_size=64) -> dict:
     model.eval()
     device = next(model.parameters()).device
-    dummy  = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float16, device=device)
+    dummy  = torch.zeros(batch_size, 8, 19, 19, dtype=torch.float16, device=device)
 
     # Warm up
     with torch.no_grad(), torch.cuda.amp.autocast():
@@ -336,7 +336,7 @@ def benchmark_inference(model, n_positions=10_000, batch_size=64) -> dict:
 def benchmark_inference_latency(model) -> dict:
     """Single-position latency — worst case for synchronous inference."""
     device = next(model.parameters()).device
-    dummy  = torch.zeros(1, 18, 19, 19, dtype=torch.float16, device=device)
+    dummy  = torch.zeros(1, 8, 19, 19, dtype=torch.float16, device=device)
     model.eval()
     times = []
     with torch.no_grad(), torch.cuda.amp.autocast():
@@ -403,7 +403,7 @@ if __name__ == "__main__":
     # fill buffer with dummy data for benchmark
     for i in range(10_000):
         buffer.push(
-            np.zeros((18, 19, 19), dtype=np.float16),
+            np.zeros((8, 19, 19), dtype=np.float16),
             np.ones(362, dtype=np.float32) / 362,
             0.0,
             i,  # game_id
@@ -592,7 +592,7 @@ Configs are split by concern. `train.py` deep-merges them via `load_config()`:
 # configs/model.yaml          — network architecture
 model:
   board_size: 19
-  in_channels: 18
+  in_channels: 8
   res_blocks: 12
   filters: 128
   se_reduction_ratio: 4

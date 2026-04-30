@@ -46,7 +46,7 @@ hexo_rl/
 | Board logic + win detection | **Rust** | Bitboard ops + 128-bit Zobrist hashing at call frequency of millions/sec |
 | Replay buffer | **Rust** (ReplayBuffer) | f16-as-u16 ring buffer, 12-fold hex augmentation, zero-copy PyO3 transfer |
 | Neural network | **Python + PyTorch CUDA** | Already native speed via CUDA kernels — never rewrite |
-| Temporal tensor assembly | **Python + NumPy** | Stacks 2-plane cluster snapshots + `move_history` into `(18, 19, 19)` tensors |
+| Temporal tensor assembly | **Python + NumPy** | Stacks 2-plane cluster snapshots + `move_history` into `(8, 19, 19)` tensors |
 | Orchestration, training loop | **Python** | Runs ~once per second — Python speed is irrelevant here |
 
 Rust exposes its API to Python via **PyO3**. Import as: `from engine import MCTSTree, Board, ReplayBuffer, SelfPlayRunner, InferenceBatcher`.
@@ -56,7 +56,7 @@ Rust exposes its API to Python via **PyO3**. Import as: `from engine import MCTS
 ## Key design decisions already made
 
 - **Board representation**: axial (cube) hex coordinates internally; offset 2D array for tensor input
-- **State tensor**: 18 channels — 2×8 history planes (current/opponent stones) + 2 meta planes (moves remaining, turn parity)
+- **State tensor**: 8 channels — 2×4 history planes (post-§131; meta planes 16/17 dropped)
 - **Network**: ResNet-12 with 128 filters, SE blocks on every residual block (reduction ratio 4); policy head → `board_size² + 1` logits; value head → dual-pooling (global avg+max → FC), BCE loss
 - **Auxiliary loss**: opponent reply prediction head (weight 0.15)
 - **MCTS**: batched leaf evaluation — leaves queued across N parallel games, single GPU forward pass per batch

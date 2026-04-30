@@ -3,8 +3,7 @@
 Starting config for self-play RL (do not exceed without benchmarking):
 
 - Network: 12 residual blocks × 128 channels, GroupNorm(8), SE blocks on every block (§99).
-- Input: 18 planes (§97). Chain-length planes (Q13) stored in ReplayBuffer
-  `chain_planes` sub-buffer, not in the input tensor.
+- Input: 8 planes (§131, post §97 18-plane build). Chain-length planes (Q13) stored in ReplayBuffer `chain_planes` sub-buffer.
 - Value head: global avg + max pooling → Linear(2C → 256) → ReLU → Linear(256 → 1) → tanh.
   Loss: BCE on the pre-tanh logit against `(z+1)/2`.
 - Auxiliary heads (training only — never called from InferenceServer / evaluator / MCTS):
@@ -31,7 +30,7 @@ Starting config for self-play RL (do not exceed without benchmarking):
   (sprint §25, §30, §32). Re-enable when PyTorch + Python 3.14 CUDA
   graph support stabilizes.
 - Replay buffer: start at 250K samples, grow toward 1M as training
-  stabilises (§79). HEXB v5 on-disk format (v4 legacy read).
+  stabilises (§79). HEXB v6 on-disk format. v5 + v4 hard-rejected at load post-§131 P1(b).
   buffer_sample_raw target is ≤ 1,550 µs (§113 recalibration) — see
   `docs/rules/perf-targets.md`.
 - Graduation gate (§101, §101.a): self-play workers consume `inf_model`

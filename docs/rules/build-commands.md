@@ -7,7 +7,7 @@
 | MCTS tree, board logic, win detection | **Rust** | Build with `maturin develop --release -m engine/Cargo.toml`. Concurrency via Rust-native Game-Level Parallelism (Phase 3.5). |
 | Replay buffer | **Rust** (ReplayBuffer) | f16-as-u16 ring buffer, 12-fold hex augmentation, zero-copy PyO3 transfer. |
 | Neural network, training loop | **Python + PyTorch** | CUDA, FP16, TF32 enabled. InferenceServer bridges Rust worker threads. |
-| Temporal tensor assembly | **Python + NumPy** | Stacks 2-plane cluster snapshots + `move_history` into `(18, 19, 19)` tensors. |
+| Temporal tensor assembly | **Python + NumPy** | Stacks 2-plane cluster snapshots + `move_history` into `(8, 19, 19)` tensors. |
 | Orchestration, config, monitoring | **Python** | Event-driven fan-out (events.py → terminal/web renderers), structlog (JSON), rich (console) |
 
 PyO3 exposes Rust to Python. Import as: `from engine import Board, MCTSTree, ReplayBuffer, SelfPlayRunner, InferenceBatcher`
@@ -103,7 +103,7 @@ hexo_rl/
 │   │   │   ├── storage.rs           ← new, resize, weight schedule, dashboard stats
 │   │   │   ├── push.rs              ← push, push_game, test-only push_raw
 │   │   │   ├── sample.rs            ← sample_batch entry + weighted sample + apply_sym
-│   │   │   ├── persist.rs           ← HEXB v5 save/load (v4 legacy read)
+│   │   │   ├── persist.rs           ← HEXB v6 save/load (v5/v4 hard-rejected)
 │   │   │   └── sym_tables.rs        ← 12-fold permutation tables + WeightSchedule
 │   │   ├── game_runner/             ← SelfPlayRunner (Rust worker threads)
 │   │   │   ├── mod.rs               ← SelfPlayRunner struct + #[pymethods] facade + Drop
