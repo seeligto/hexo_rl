@@ -144,12 +144,9 @@ if [[ "$RESUME" -ne 1 ]]; then
 fi
 
 if [[ "$SKIP_CORPUS" -eq 0 ]]; then
-  echo "==[ corpus regen — six variants ]=="
-  if [[ "$RESUME" -eq 1 ]]; then
-    "$VENV_PY" scripts/regen_bootstrap_corpus.py --all
-  else
-    "$VENV_PY" scripts/regen_bootstrap_corpus.py --all --force
-  fi
+  # regen_bootstrap_corpus.py retired 2026-04-30 (§122 sweep redesign pending,
+  # HEXB v6 corpus uses scripts/export_corpus_npz.py exclusively).
+  echo "==[ corpus regen — SKIPPED (regen_bootstrap_corpus.py retired) ]=="
 else
   echo "==[ skip corpus regen ]=="
 fi
