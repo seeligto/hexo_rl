@@ -33,9 +33,7 @@ class CorpusSource(ABC):
     """Abstract base for all corpus game sources.
 
     A source yields :class:`GameRecord` objects one at a time via ``__iter__``.
-    It is responsible only for producing complete, valid game records. All
-    tensor conversion, deduplication, and buffer-pushing happen in
-    :class:`~python.corpus.pipeline.CorpusPipeline`.
+    It is responsible only for producing complete, valid game records.
     """
 
     @abstractmethod

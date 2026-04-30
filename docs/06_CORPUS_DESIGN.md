@@ -1,3 +1,5 @@
+# RETIRED 2026-04-30 — superseded by scripts/export_corpus_npz.py
+
 # Corpus Pipeline Design — `hexo_rl/corpus/`
 
 > Last updated: 2026-04-01. Q1-Q6 resolved; implementation in progress.
