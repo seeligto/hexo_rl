@@ -8,7 +8,7 @@ echo "→ Creating directory structure..."
 mkdir -p docs/reference
 mkdir -p native_core/src/{board,mcts,formations}
 mkdir -p native_core/benches
-mkdir -p python/{model,selfplay,training,bootstrap,eval,opening_book,api,logging}
+mkdir -p python/{model,selfplay,training,bootstrap,eval,logging}
 mkdir -p configs
 mkdir -p scripts
 mkdir -p tests
@@ -16,7 +16,7 @@ mkdir -p vendor
 
 # Touch __init__.py files
 touch python/__init__.py
-for dir in model selfplay training bootstrap eval opening_book api logging; do
+for dir in model selfplay training bootstrap eval logging; do
   touch python/$dir/__init__.py
 done
 
