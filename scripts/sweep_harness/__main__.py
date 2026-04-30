@@ -128,7 +128,8 @@ def _cmd_detect(args: argparse.Namespace) -> int:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     host = detect_host()
-    knobs = list(args.knobs) if args.knobs else list(KNOB_ORDER)
+    raw_knobs = args.knobs or list(KNOB_ORDER)
+    knobs = [k for item in raw_knobs for k in item.split(",") if k]
     fixed = _parse_fix(args.fix or [])
     knob_overrides = _parse_knob_overrides(args.coarse or [], args.bounds or [], args.values or [])
     template = _resolve_variant_template(getattr(args, "variant", None))
