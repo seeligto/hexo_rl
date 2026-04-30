@@ -146,7 +146,8 @@ def benchmark_inference(model: "HexTacToeNet", n_positions: int = 20_000,
                         warmup_sec: float = 3.0) -> Dict[str, Any]:
     """NN throughput in batched evaluation mode."""
     device = next(model.parameters()).device
-    dummy_local = torch.zeros(batch_size, 18, 19, 19, dtype=torch.float32, device=device)
+    _in_ch = getattr(model, "in_channels", 18)
+    dummy_local = torch.zeros(batch_size, _in_ch, 19, 19, dtype=torch.float32, device=device)
     model.eval()
     n_batches = n_positions // batch_size
     total_positions = n_batches * batch_size
@@ -180,7 +181,8 @@ def benchmark_inference_latency(model: "HexTacToeNet", n_runs: int = 5,
                                 warmup_sec: float = 2.0) -> Dict[str, Any]:
     """Single-position latency (worst case for synchronous MCTS)."""
     device = next(model.parameters()).device
-    dummy_local = torch.zeros(1, 18, 19, 19, dtype=torch.float32, device=device)
+    _in_ch = getattr(model, "in_channels", 18)
+    dummy_local = torch.zeros(1, _in_ch, 19, 19, dtype=torch.float32, device=device)
     model.eval()
 
     def single_inference():
@@ -293,7 +295,8 @@ def benchmark_gpu_utilisation(model: "HexTacToeNet", n_runs: int = 5) -> Dict[st
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         model.eval()
-        dummy_local = torch.zeros(64, 18, 19, 19, dtype=torch.float32, device=device)
+        _in_ch = getattr(model, "in_channels", 18)
+        dummy_local = torch.zeros(64, _in_ch, 19, 19, dtype=torch.float32, device=device)
 
         util_runs: list[float] = []
         vram_runs: list[float] = []
@@ -606,9 +609,9 @@ def benchmark_worker_pool(
 # (row_label, result_name, sub_key, metric_key_in_stats_or_value, target, higher_is_better)
 _CHECKS_CUDA: list[tuple[str, str, str | None, str, float, bool]] = [
     ("MCTS sim/s (CPU, no NN)",           "MCTS (CPU only, no NN)",  None,    "value",   26_000,   True),
-    # §102 rebaseline 2026-04-17: 9.8k→7.7k sustained driver/boost-clock drift (same basket as §72).
-    # Floor at observed × 0.85 so alarms fire on real regressions, not one-off drift.
-    ("NN inference batch=64 pos/s",       "NN inference (batch=64)", None,    "value",    6_500,   True),
+    # §124 2026-04-25: compile-off + trace-on methodology shift. Compile-off loses Inductor
+    # kernel fusion; observed 4,859 × 0.85 = 4,130 → floor 4,000. Matches perf-targets.md.
+    ("NN inference batch=64 pos/s",       "NN inference (batch=64)", None,    "value",    4_000,   True),
     ("NN latency batch=1 mean ms",        "NN latency (batch=1)",    None,    "value",      3.5,   False),
     # §102 rebaseline 2026-04-17: 762k→618k sustained drift; observed × 0.85 = 525k floor.
     ("Buffer push pos/s",                 "Replay buffer",           "push",  "value",  525_000,   True),
