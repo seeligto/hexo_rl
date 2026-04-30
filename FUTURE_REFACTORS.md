@@ -43,12 +43,6 @@ calls it via `make_augmented_collate`. `tests/test_pretrain_aug.py`
 (F1) and `tests/test_chain_plane_rust_parity.py` (F2) guard the
 dedup against drift.
 
-Remaining duplicate: **policy-projection** symmetry table in
-`hexo_rl/selfplay/policy_projection.py` (maps local-window policy logits
-to global axial coordinates). Different concern from state scatter —
-does not currently share a table with Rust. Long-term: generate both
-from a single codegen script if a third consumer appears; not urgent.
-
 ### Game replay storage — DONE
 
 Full game records are persisted to `runs/<run_id>/games/<game_id>.json`
