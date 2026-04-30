@@ -26,7 +26,8 @@
 | Q32 | Threat-scalar magnitude vs policy-ranking decoupling on bootstrap: contrast flips negative on real fixture yet policy still routes 60% top-5 | Track across sustained runs; correlate threat-head logit drift with C2/C3 on real-fixture probe | 0 GPU-days (watch) | WATCH — bookkeeping only |
 | ~~Q33~~ | ~~Self-play policy-target entropy at bootstrap strength — 20K `pe_self ≈ 5.35` driving mixed-batch noise hypothesis~~ | **RESOLVED 2026-04-21 (non-pathology).** Q33-C2 (sprint §112, `reports/q33c2_augmentation_discriminator_2026-04-21.md`): disabling augmentation does not drop `pe_self`; fixed point is distribution, not augmentation. | done | resolved |
 | ~~Q37~~ | ~~Trainer-update-path hypothesis for `pe_self` fixed point~~ | **RESOLVED 2026-04-21 (non-pathology).** Q33-C2 rules out the augmentation mask branch; distribution-shift reading has direct empirical support. See sprint §112. | done | resolved |
-| Q40 | MCTS subtree reuse: re-root vs reset per move | Path C phased: Phase 1 ship `advance_to_child` at current sims (full=600, quick=100), §100 preserved conservatively; Phase 2 recalibrate to full=400/quick=50 after smoke+probe pass | ~2-4 dev days (Rust port + bench) | MEDIUM — post channel-drop gate |
+| Q40 | MCTS subtree reuse: re-root vs reset per move | Path C phased: Phase 1 ship `advance_to_child` at current sims (full=600, quick=100), §100 preserved conservatively; Phase 2 recalibrate to full=400/quick=50 after smoke+probe pass | ~2-4 dev days (Rust port + bench) | MEDIUM — channel-drop gate satisfied §131/§135; gated on Q45 cost-benefit re-derivation before implementation |
+| Q45 | Subtree reuse (Q40) cost-benefit re-derivation post-§131: does smaller H2D tensor change the audit B verdict? | Re-run subtree reuse audit B sim-share measurement on bootstrap-v6 at production sim counts; recompute ROI in skipped-NN-evals. §131 NN inference uplift (+10.2%) means each skipped eval is worth ~10% less wall-time; conversely smaller tensor weakens the dispatch-bound hypothesis. | ~4 GPU-hr | MEDIUM (gates Q40 implementation) |
 
 **Q33 (2026-04-21, WATCH, see sprint §109):** The diag-20K report read
 `policy_entropy_selfplay ≈ 5.35` as evidence that MCTS visit targets were
@@ -212,7 +213,7 @@ lands as a standalone session.
 
 ### Q40 — MCTS subtree reuse — re-root vs reset per move (2026-04-28, ACTIVE)
 
-**Status:** ACTIVE | **Priority:** MEDIUM | **Gate:** post channel-drop verdict.
+**Status:** ACTIVE | **Priority:** MEDIUM | **Gate:** channel-drop gate satisfied §131/§135; gated on Q45 cost-benefit re-derivation before implementation.
 Bundle re-bootstrap with channel-drop landing if both ship before Phase 4 restart.
 Bench-before-after gate mandatory per `docs/rules/perf-targets.md`.
 
