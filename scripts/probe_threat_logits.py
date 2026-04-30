@@ -72,8 +72,8 @@ BOARD_SIZE: int = 19
 
 THRESH_CONTRAST_FLOOR: float = 0.38      # absolute floor for contrast_mean
 THRESH_CONTRAST_BOOTSTRAP_FRAC: float = 0.8  # contrast must reach 80% of bootstrap
-THRESH_EXT_IN_TOP5_PCT: float = 25.0     # extension cell in policy top-5 ≥ 25% (§91, revised for 18-plane model)
-THRESH_EXT_IN_TOP10_PCT: float = 40.0    # extension cell in policy top-10 ≥ 40% (§91, revised for 18-plane model)
+THRESH_EXT_IN_TOP5_PCT: float = 25.0     # extension cell in policy top-5 ≥ 25% (§91, revised for 8-plane model post-§131; v6 baseline C2=50/C3=60)
+THRESH_EXT_IN_TOP10_PCT: float = 40.0    # extension cell in policy top-10 ≥ 40% (§91, revised for 8-plane model post-§131; v6 baseline C2=50/C3=60)
 THRESH_EXT_LOGIT_DRIFT_WARN: float = 5.0  # |Δ ext_logit_mean| > 5.0 → warning only
 
 BASELINE_SCHEMA_VERSION: int = 6  # v6: fixture regenerated from real mid/late positions (§105 Q27 Probe 1b)
@@ -110,7 +110,7 @@ def save_baseline_json(
     ckpt_name: str,
     path: Path = BASELINE_JSON_PATH,
 ) -> None:
-    """Persist aggregate results as the canonical baseline JSON (schema v2)."""
+    """Persist aggregate results as the canonical baseline JSON (schema v6)."""
     record = {
         "version": BASELINE_SCHEMA_VERSION,
         "ext_logit_mean": agg["ext_logit_mean"],
@@ -559,8 +559,8 @@ def main() -> None:
         action="store_true",
         default=False,
         help=(
-            "DEPRECATED — no-op since chain planes were removed from the 18-channel "
-            "input (feat/remove-chain-input-planes). Kept for backward-compat; "
+            "DEPRECATED — no-op since chain planes were removed from the 8-channel "
+            "input post-§131 (feat/remove-chain-input-planes). Kept for backward-compat; "
             "will print a warning if used."
         ),
     )
@@ -593,8 +593,8 @@ def main() -> None:
         print(f"  {positions['n']} positions", file=sys.stderr)
 
         # Experiment C: zero chain-length input planes before inference.
-        # DEPRECATED: chain planes were removed from the 18-channel input tensor.
-        # Flag is kept for backward-compat but is now a no-op.
+        # DEPRECATED: chain planes were removed from the 8-channel input tensor post-§131.
+        # Flag is kept for backward-compat but is now a no-op (model is 8-plane; no planes 18-23).
         if args.zero_chain_planes:
             n_in = positions["states"].shape[1]
             if n_in >= 24:
@@ -602,11 +602,11 @@ def main() -> None:
                 states_zeroed = positions["states"].copy()
                 states_zeroed[:, 18:24] = 0
                 positions["states"] = states_zeroed
-                print("  [Experiment C] planes 18-23 zeroed", file=sys.stderr)
+                print("  [Experiment C] planes 18-23 zeroed (legacy 24-plane fixture)", file=sys.stderr)
             else:
                 print(
                     f"  [WARNING] --zero-chain-planes is a no-op: model has "
-                    f"{n_in} input channels (chain planes removed from input). "
+                    f"{n_in} input channels (8-plane post-§131; chain planes removed). "
                     "Skipping.",
                     file=sys.stderr,
                 )
