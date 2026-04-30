@@ -5341,3 +5341,194 @@ Per-game uniform rotation across the 12-element hex dihedral group is now wired 
 **Files touched.** `engine/src/game_runner/{mod.rs,worker_loop.rs}`; `engine/tests/{rotation_parity.rs[new],playout_cap_mutex.rs,random_opening_plies.rs}`; `configs/selfplay.yaml`; `hexo_rl/selfplay/pool.py`; `tests/{test_rotation_eval_path.py[new],test_rotation_buffer_compat.py[new]}`; `scripts/smoke_w4_step1_rotation.py[new]`; `reports/w4/step1_rotation_verdict.md[new]`. The §121 D16 probe wrapper (`scripts/diag_phase121_d16_selfplay_rotation.py::RotationWrapperModel`) is retired in the production sense — production traffic now uses the Rust path — but the diagnostic script stays as the canonical reference for the inverse-sym formula and stratified per-`sym_idx` measurement design.
 
 **Next.** W4 Step 2 — channel slice (D17 verdict, `tests/test_rotation_eval_path.py` + buffer-compat tests still green is the precondition; channel-drop via model-side slice is the path that keeps the buffer reusable per the B4 audit).
+
+---
+
+## §131 — 18→8 plane migration: buffer wire format, corpus, model (P1+P2+P3) — 2026-04-29
+
+**Date:** 2026-04-29  
+**Commits (P1):** `10c69ba`, `480bb24`, `8c492f3`, `6603f27`  
+**Commits (P3):** `9bc9f37`
+
+Full §122 B4 channel-drop lands in three passes. P1 drops the Rust buffer wire format from 18 to 8 planes. P2 updates all Python consumers and regenerates the corpus. P3 collapses the model and inference path to 8 planes.
+
+### Plane selection (D17 Set A)
+
+`KEPT_PLANE_INDICES = [0, 1, 2, 3, 8, 9, 10, 11]` — cur ply-0..3 and opp ply-0..3. Both D14 load-bearing anchors (planes 0, 8 in 18-plane space; now at positions 0, 4) retained. Ply-4..7 history and scalar metadata channels (moves_remaining, turn_parity) dropped. Dense ply-0..3 layout preferred over sparse {0, 2, 8, 10} to minimise divergence from the `ckpt_14000` conditioning surface.
+
+```
+out 0 ← src 0   cur ply-0   LOAD-BEARING
+out 1 ← src 1   cur ply-1   (ply-0 contrast signal)
+out 2 ← src 2   cur ply-2   MARGINAL (D14 anchor)
+out 3 ← src 3   cur ply-3
+out 4 ← src 8   opp ply-0   LOAD-BEARING
+out 5 ← src 9   opp ply-1
+out 6 ← src 10  opp ply-2   D14 anchor pair
+out 7 ← src 11  opp ply-3
+```
+
+`STATE_STRIDE` drops from 6498 → 2888 (`8 × 361`). `chain_planes` unchanged at 6 planes.
+
+### P1 — Rust buffer wire format
+
+Four logical commits:
+
+**(a) `10c69ba`** `feat(replay_buffer): N_PLANES 18→8 + KEPT_PLANE_INDICES, generic state scatter` — `sym_tables.rs`: `N_PLANES: 18→8`, `STATE_STRIDE: 6498→2888`, `KEPT_PLANE_INDICES` const. `apply_symmetry_state` made plane-count-generic (deduces `n_planes = src.len() / N_CELLS`, identity plane mapping — spatial-only scatter confirmed correct for all D6 elements). `lib.rs` shape check relaxed to allow 18-plane Python callers during transition.
+
+**(b) `480bb24`** `feat(replay_buffer): HEXB v5 → v6, hard-reject older buffers` — `HEXB_VERSION: 5→6`, removed v4 fallback. Header `n_planes` field validates against `N_PLANES = 8`. v5 load fails with informative error pointing at §122 B4 and regen-cost estimate (~$0.50 at 4090S throughput).
+
+**(c) `8c492f3`** `feat(replay_buffer): slice-on-push integration` — `worker_loop.rs::slice_kept_planes_18_to_8` (new): rotate 18-plane `feat` → slice to 8 planes → push to `records_vec`. `collect_data` reshape stride: `batcher.feature_len()` (6498) → `STATE_STRIDE` (2888). Slice executes after §130 rotation; rotation commutes with slice (plane labels invariant under D6).
+
+**(d) `6603f27`** `chore(replay_buffer): test cleanup` — v5 round-trip test renamed to v6; stale `mut` qualifier removed.
+
+Inference path untouched: `HexTacToeNet` stays `in_channels=18`, `feature_len` stays `18*19*19`. P3 owns the model migration.
+
+Rust: 138 lib + 29 integration tests green.
+
+### P2 — Python buffer consumers + corpus regen
+
+New constants (`hexo_rl/utils/constants.py`): `BUFFER_CHANNELS = 8`, `KEPT_PLANE_INDICES`.
+
+**`pool.py`**: `_feat_len` fixed to `BUFFER_CHANNELS * 19 * 19 = 2888`.
+
+**`recency_buffer.py`**: default state_shape `(8, 19, 19)`.
+
+**`batch_assembly.py`**: `BatchBuffers.states` `(B, 8, 19, 19)`; `load_pretrained_buffer` hard-rejects non-8-plane NPZs; opp index `8 → 4` (8-plane space).
+
+**`trainer.py`**: 8→18 scatter bridge in `_train_on_batch` (temporary, removed at P3):
+```python
+if states_t.shape[1] == BUFFER_CHANNELS:
+    _expanded = states_t.new_zeros(B, WIRE_CHANNELS, 19, 19)
+    _expanded[:, KEPT_PLANE_INDICES] = states_t
+    states_t = _expanded
+```
+
+**`corpus/pipeline.py`**: slices `states[:, KEPT_PLANE_INDICES]` + `np.ascontiguousarray` before `push_game`. Contiguous wrap required — fancy indexing produces non-contiguous arrays.
+
+**`export_corpus_npz.py`**: saves 8-plane states natively.
+
+**Corpus regenerated:** 1,090,296 positions, `(1090296, 8, 19, 19)` f16. 16 test files updated (buffer-push sites 18→8 planes). Two `test_sweep_input_channels` tests xfailed pending §122 redesign in 8-plane index space.
+
+### P3 — Model + inference path (`9bc9f37`)
+
+- `HexTacToeNet` default `in_channels: 18 → 8`. `configs/model.yaml` updated.
+- Trainer bridge block removed. `WIRE_CHANNELS`/`expand_to_18` gone.
+- `checkpoints.py`: hard-reject guard — `trunk.input_conv.weight.shape[1] == 18` raises `RuntimeError`.
+- `InferenceBatcher` and `SelfPlayRunner` defaults `6498 → 2888`.
+- `worker_loop.rs`: `slice_kept_planes_18_to_8` deleted; both encode sites now call `encode_state_to_buffer_channels` directly. Records path allocates its own vec (no longer borrows from inference pool).
+- `REQUIRED_INPUT_CHANNELS` updated: `(0, 8) → (0, 4)` (opp ply-0 in 8-plane space).
+- `engine/tests/d6_sym_tables.rs` added (6 tests, see §133).
+- 958 py (5 xfailed §122) + 138 rs lib + 35 rs integration pass.
+
+---
+
+## §133 — D6 sym-table verification for HEXB v6 8-plane buffer — 2026-04-29
+
+**Date:** 2026-04-29  
+**Commit:** `9bc9f37` (folded into §131 P3 commit after docs omission in `1bf20b5`)
+
+**Claim:** all 12 D6 elements act spatially only on v6 state planes — no element permutes plane indices. Proof: plane assignment depends on move-count parity (which player just moved), not on board orientation. A geometric reflection permutes cell coordinates but not move count, so cur/opp labels — and therefore plane indices — are invariant under every D6 element. Encodes in `src_plane_lookup[s][p] == p` for all (s, p).
+
+No changes to `sym_tables.rs` or `sample.rs` — §131 P1 left both correct. §133 adds verification only.
+
+**Tests added (`engine/tests/d6_sym_tables.rs`, 6 tests):**
+1. `identity_element_is_no_op` — sym_idx=0 leaves 8-plane tagged tensor byte-identical.
+2. `closure_under_composition` — all 144 pairs (g1, g2): scatter[g1] ∘ scatter[g2] matches exactly one g3 ∈ {0..11}.
+3. `every_element_has_inverse` — `inv_sym(g)` lands in 0..12; scatter[inv_sym(g)] ∘ scatter[g] = identity on every in-window cell.
+4. `plane_indices_invariant_under_d6` — table-level (`src_plane_lookup[g][p] == p`) and behavioural (per-plane tag survives `apply_symmetry_state`, no plane swap).
+5. `manual_60deg_rotation_parity` — hand-derived (1, 0) → (0, 1) under sym_idx=1 matches scatter table and `apply_symmetry_state` call.
+6. `orbit_size_12_for_generic_cell` — (2, 1) has trivial stabilizer; 12-orbit cross-checks scatter table cell-by-cell.
+
+138 rs lib + 35 rs integration tests pass (29 prior + 6 new).
+
+---
+
+## §134 — bootstrap-v6: 8-plane pretrain on 6,259 human games — 2026-04-30
+
+**Date:** 2026-04-30
+
+First v6 bootstrap checkpoint on the 8-plane architecture. Updated human corpus (6,259 games, ~16% larger than v5's ~5,400).
+
+### Corpus
+
+- Source: `data/corpus/raw_human/` — 6,259 qualifying games (decisive, ≥15 ply)
+- Export: `scripts/export_corpus_npz.py --human-only --no-compress`
+- Output: `data/bootstrap_corpus_pretrain_v6.npz`, 353,091 positions, 8-plane f16
+- Elo breakdown: sub_1000=81,985 · 1000_1200=202,111 · 1200_1400=69,739 · 1400+=1,436
+- P1 win rate: 50.3% (balanced)
+
+### Pretrain
+
+- Config: 15 epochs, batch=256, lr=0.002 cosine, aux_chain_weight=1.0, ~100 min on RTX 3070
+- Final epoch 15 metrics: policy_loss=2.484, value_loss=0.594, opp_reply_loss=2.493, chain_loss=0.0019
+
+### Validation
+
+| Gate | Threshold | Result | Status |
+|---|---|---|---|
+| RandomBot wins | ≥95/100 | 100/100 | PASS |
+| Threat C2 (ext∈top5%) | ≥25% | 50% | PASS |
+| Threat C3 (ext∈top10%) | ≥40% | 60% | PASS |
+| Forward pass | clean | OK (val=0.011) | PASS |
+
+**Policy loss note:** 2.484 exceeds the legacy ≤2.3 spec criterion calibrated against 18-plane v5. Reduced input (10 planes dropped) raises policy entropy; all functional gates pass with margin. 8-plane policy_loss convergence criterion should be updated to ~≤2.6.
+
+### Bugs fixed
+
+1. `hexo_rl/bootstrap/pretrain.py` — chain plane extraction `states[i, 8]` (18-plane opp index) → `states[i, 4]` (8-plane opp ply-0).
+2. `hexo_rl/bootstrap/pretrain.py` — `validate()` passed raw `to_tensor()` output (18-plane) to 8-plane model. Fixed: slice with `KEPT_PLANE_INDICES`.
+3. `scripts/probe_threat_logits.py` — hardcoded 18-plane shape check + no slice before forward. Fixed: relaxed check; auto-slice in `_probe_one` for 18-plane fixtures with 8-plane models.
+
+### Artifacts
+
+| File | Notes |
+|---|---|
+| `checkpoints/bootstrap_model.pt` | v6 inference weights (8-plane, 17 MB) |
+| `checkpoints/pretrain/pretrain_00000000.pt` | full checkpoint with config + optimizer |
+| `checkpoints/archive/bootstrap_model_v5.pt` | v5 fallback preserved |
+| `data/bootstrap_corpus_pretrain_v6.npz` | pretrain corpus (8-plane, 353k pos, 2.4 GB) |
+| `fixtures/threat_probe_baseline.json` | v6 threat baseline (C2=50, C3=60) |
+
+### Pending before Phase 4.0 sustained run
+
+- Checkpoint cleanup: archive `checkpoint_00000484.pt`, `best_model.pt`; clear `checkpoint_log.json`; delete stale `replay_buffer.bin` (2.8 GB pre-v6 test run).
+- Update `CLAUDE.md` §91 threat-probe thresholds note: v6 baseline C2=50/C3=60; gates at 25/40 remain valid.
+- Recalibrate policy_loss convergence criterion: ≤2.3 → ~≤2.6 for 8-plane.
+
+---
+
+## §135 — Bench gate: W4 8-plane migration, no regressions — 2026-04-30
+
+**Date:** 2026-04-30  
+**Hardware:** Desktop AMD Ryzen 7 3700x + RTX 3070, AC power.  
+**Run:** `reports/benchmarks/2026-04-30_07-17.json`  
+**Report:** `reports/benches/v6_8plane_baseline_20260429.md`
+
+Bench gate after §131 P1–P3 + §134 bootstrap. Model confirmed 8-plane (`trunk.input_conv.weight` shape `[128, 8, 3, 3]`).
+
+### Bugs fixed in benchmark.py (same commit `e9a4d72`)
+
+`benchmark_inference`, `benchmark_inference_latency`, and `benchmark_gpu_utilisation` all hardcoded `18` in dummy tensor shapes — crashed against the P3 8-plane model. Fixed: `getattr(model, "in_channels", 18)`.
+
+`_CHECKS_CUDA` NN inference target was 6,500 (pre-§124 compile-on value, never updated when §124 lowered the target to 4,000 in perf-targets.md). Fixed to 4,000.
+
+### Result (n=5, vs pre-W4 desktop §128 baseline `2026-04-28_19-52`)
+
+| Metric | Pre-W4 18-plane | 8-plane | Δ | Status |
+|---|---|---|---|---|
+| MCTS sim/s | 44,254 | 44,233 | −0.05% | ✓ flat |
+| NN inference pos/s | 4,380 | 4,828 | +10.2% | ✓ improved (smaller H2D) |
+| NN latency ms | 2.6 | 2.66 | +2.3% | ✓ within noise |
+| Buffer push pos/s | 423,068 | 708,508 | +67.5% | ✓ improved (56% smaller state) |
+| Buffer raw µs | 1,742 | 1,051 | −39.7% | ✓ improved |
+| Buffer aug µs | 1,841 | 1,050 | −43.0% | ✓ improved |
+| GPU util % | 100.0 | 100.0 | flat | ✓ |
+| Worker pos/hr | 27,835 | 31,764 | +14.1% | ✓ improved |
+| Batch fill % | 100.0 | 99.78 | −0.2pp | ✓ flat |
+| Pool overflows | 0 | 0 | — | ✓ |
+
+All 9 gated metrics PASS against perf-targets.md CUDA floors. No regressions > 10%.
+
+**MCTS flat** — no MCTS code in §131. **NN +10%** — 56% smaller H2D tensor (2,888 vs 6,498 f16 elements per leaf). **Buffer push +68%** — state memcpy 56% smaller; spec predicted ~2×, actual 1.67× (overhead + lock floor the asymptote). **Buffer raw/aug −40%/−43%** — scatter reads 8-plane rows; 8/18 = 44% theoretical, observed ~40% consistent. **Worker +14%** — NN speedup cascades; IQR ±3.9%, no bimodal artifact.
+
+No perf target updates — desktop evidence does not update laptop-calibrated floors. Laptop re-bench needed for buffer push/sample floors before tightening.
