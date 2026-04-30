@@ -10,19 +10,10 @@ Architecture spec (docs/01_architecture.md §2):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Optional
 
 import torch
 import torch.nn as nn
-
-
-@dataclass
-class LossResult:
-    total: torch.Tensor
-    policy: torch.Tensor
-    value: torch.Tensor
-    aux: Optional[torch.Tensor] = None
 
 
 def compute_policy_loss(
