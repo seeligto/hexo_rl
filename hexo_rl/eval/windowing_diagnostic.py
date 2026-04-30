@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 from hexo_rl.utils.coordinates import (
     axial_distance,
     flat_to_axial as _local_flat_to_axial,
@@ -312,7 +313,10 @@ def analyse_position(
     top5_policy: List[Tuple[int, int, bool, float]] = []
 
     if tensor is not None and K > 0:
-        x = torch.tensor(tensor.astype(np.float32), dtype=torch.float32, device=device)
+        # state.to_tensor() returns 18-plane canonical history tensor.
+        # Slice to KEPT_PLANE_INDICES (8 planes, HEXB v6) before model forward.
+        t8 = tensor[:, KEPT_PLANE_INDICES, :, :]  # (K, 8, 19, 19)
+        x = torch.tensor(t8.astype(np.float32), dtype=torch.float32, device=device)
         with torch.no_grad():
             log_pi, _v, _vl = model(x)  # (K, 362)
         log_pi_np = log_pi.cpu().numpy()  # (K, 362)
