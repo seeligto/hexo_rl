@@ -75,7 +75,6 @@ def test_sampling_distribution_matches_weight_schedule(filled_buffer: ReplayBuff
     _N_PER_BUCKET positions with weight w_k.
     """
     N_SAMPLES = 6000
-    rng = np.random.default_rng(42)
 
     observed = np.zeros(3, dtype=int)
     for _ in range(N_SAMPLES):
@@ -88,13 +87,14 @@ def test_sampling_distribution_matches_weight_schedule(filled_buffer: ReplayBuff
     expected_p = unnormed / unnormed.sum()
     expected_counts = expected_p * N_SAMPLES
 
-    # χ² test statistic.
+    # χ² test statistic. α=0.001 (crit≈13.82) — sample_batch uses an
+    # unseeded Rust RNG so α=0.01 produces ~1% spurious failures.
     stat = float(np.sum((observed - expected_counts) ** 2 / expected_counts))
     df = len(observed) - 1  # 2
-    crit = chi2.ppf(0.99, df)  # critical value at α=0.01
+    crit = chi2.ppf(0.999, df)  # critical value at α=0.001
 
     assert stat < crit, (
-        f"χ²={stat:.2f} exceeds critical value {crit:.2f} (df={df}, α=0.01). "
+        f"χ²={stat:.2f} exceeds critical value {crit:.2f} (df={df}, α=0.001). "
         f"Observed: {observed}, expected counts: {expected_counts.astype(int)}. "
         f"WeightSchedule sampling distribution does not match the schedule."
     )
