@@ -41,7 +41,7 @@ from hexo_rl.training.losses import (
     compute_chain_loss, compute_total_loss, fp16_backward_step,
 )
 from hexo_rl.training.checkpoints import save_full_checkpoint, save_inference_weights
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.augment.luts import get_policy_scatters
 
@@ -130,7 +130,7 @@ def make_augmented_collate(augment: bool, board_size: int = BOARD_SIZE):
       - Scatter the per-sample policies via the precomputed numpy index
         tables (`_get_policy_scatters`).
       - Cast states back to float16 (matches the pre-rewrite tensor dtype).
-      - Compute chain_planes from augmented stone planes 0 (cur) and 8 (opp).
+      - Compute chain_planes from augmented stone planes 0 (cur) and 4 (opp).
 
     With `augment=False`:
       - Stack as-is, no Rust hop, no policy scatter.
@@ -142,7 +142,7 @@ def make_augmented_collate(augment: bool, board_size: int = BOARD_SIZE):
         batch: List[Tuple[np.ndarray, np.ndarray, float]],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         n = len(batch)
-        states = np.stack([b[0] for b in batch], axis=0)          # f16 (N,18,19,19)
+        states = np.stack([b[0] for b in batch], axis=0)          # f16 (N,8,19,19)
         policies = np.stack([b[1] for b in batch], axis=0)        # f32 (N, 362)
         outcomes = np.asarray([b[2] for b in batch], dtype=np.float32)
 
@@ -161,11 +161,13 @@ def make_augmented_collate(augment: bool, board_size: int = BOARD_SIZE):
         # Compute chain planes from stone planes post-augmentation.
         # Recomputing from augmented stones is self-consistent with the chain
         # head supervision — no axis-perm remap required.
+        # 8-plane layout: [0,1,2,3,8,9,10,11] from original 18.
+        # Cur-player ply-0 = index 0; opp ply-0 = index 4.
         chain_np = np.zeros((n, 6, board_size, board_size), dtype=np.float16)
         for i in range(n):
             chain_np[i] = _compute_chain_planes(
                 states[i, 0].astype(np.float32),
-                states[i, 8].astype(np.float32),
+                states[i, 4].astype(np.float32),
             ).astype(np.float16) / 6.0
 
         return (
@@ -556,7 +558,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
 
             if board.current_player == model_player:
                 tensor, centers = state.to_tensor()
-                inp = torch.from_numpy(tensor[0]).unsqueeze(0).to(device).float()
+                inp = torch.from_numpy(tensor[0][KEPT_PLANE_INDICES]).unsqueeze(0).to(device).float()
                 with torch.no_grad():
                     lp, _, _ = loaded_model(inp)
                 lp_np = lp[0].cpu().numpy()

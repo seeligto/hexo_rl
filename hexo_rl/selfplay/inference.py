@@ -12,12 +12,13 @@ from engine import Board
 from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.utils import BOARD_SIZE, N_ACTIONS
+from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 
 
 class LocalInferenceEngine:
     """Wraps a HexTacToeNet and handles the full inference pipeline:
 
-    1. Build (K, 18, 19, 19) tensors for a batch of boards.
+    1. Build (K, C, 19, 19) tensors for a batch of boards (C = model.in_channels).
     2. Run a single forward pass.
     3. Map per-cluster local policy outputs → one global policy vector per board.
     4. Aggregate per-cluster values via min-pooling.
@@ -50,6 +51,8 @@ class LocalInferenceEngine:
         for board in boards:
             state = GameState.from_board(board)
             tensor, centers = state.to_tensor()
+            if tensor.shape[1] != self.model.in_channels:
+                tensor = tensor[:, KEPT_PLANE_INDICES]
             all_tensors.append(torch.from_numpy(tensor))
             board_info.append((len(centers), centers))
 

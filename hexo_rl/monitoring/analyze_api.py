@@ -26,6 +26,7 @@ from flask import Blueprint, jsonify, request
 from engine import Board, MCTSTree
 from hexo_rl.env.game_state import GameState
 from hexo_rl.selfplay.inference import LocalInferenceEngine
+from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 from hexo_rl.viewer.model_loader import load_model
 
 log = structlog.get_logger(__name__)
@@ -121,6 +122,8 @@ def _analyze_raw(
     """Run raw NN forward pass, return policy/value/entropy."""
     state = GameState.from_board(board)
     tensor, centers = state.to_tensor()
+    if tensor.shape[1] != engine.model.in_channels:
+        tensor = tensor[:, KEPT_PLANE_INDICES]
     K = len(centers)
     N_ACTIONS = board_size * board_size + 1
     half = (board_size - 1) // 2

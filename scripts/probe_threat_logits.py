@@ -173,10 +173,10 @@ def load_positions(npz_path: Path) -> Dict:
     if missing:
         raise ValueError(f"NPZ missing required arrays: {missing}")
 
-    states = data["states"]  # (N, 18, 19, 19) float16
-    if states.ndim != 4 or states.shape[1:] != (18, BOARD_SIZE, BOARD_SIZE):
+    states = data["states"]  # (N, C, 19, 19) float16; C=18 legacy or C=8 post-§131
+    if states.ndim != 4 or states.shape[2:] != (BOARD_SIZE, BOARD_SIZE):
         raise ValueError(
-            f"states shape {states.shape} — expected (N, 18, {BOARD_SIZE}, {BOARD_SIZE})"
+            f"states shape {states.shape} — expected (N, C, {BOARD_SIZE}, {BOARD_SIZE})"
         )
 
     # Load cell indices verbatim from NPZ — never regenerate at load time.
@@ -201,8 +201,11 @@ def _probe_one(
     device: torch.device,
 ) -> Tuple[float, float, float, List[int], List[int]]:
     """Forward one position in FP32; return (ext_logit, ctrl_logit, contrast, top5, top10)."""
-    # Always FP32 — no autocast, deterministic across runs.
-    x = torch.from_numpy(state_fp16.astype(np.float32)).unsqueeze(0).to(device)
+    # Slice 18→8 planes when fixture is legacy 18-plane but model expects 8-plane.
+    s = state_fp16
+    if s.shape[0] != model.in_channels and s.shape[0] == 18 and model.in_channels == 8:
+        s = s[KEPT_PLANE_INDICES]
+    x = torch.from_numpy(s.astype(np.float32)).unsqueeze(0).to(device)
 
     with torch.no_grad():
         out = model(x, threat=True)
