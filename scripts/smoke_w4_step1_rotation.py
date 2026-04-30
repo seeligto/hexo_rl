@@ -43,20 +43,32 @@ from hexo_rl.training.axis_distribution import compute_axis_fractions
 
 
 def _build_model(checkpoint: Path | None, device: torch.device) -> HexTacToeNet:
-    model = HexTacToeNet(board_size=19, in_channels=18).to(device)
     if checkpoint is not None and checkpoint.exists():
         state = torch.load(checkpoint, map_location=device, weights_only=False)
         sd = state.get("model_state_dict") if isinstance(state, dict) else None
         sd = sd or (state.get("state_dict") if isinstance(state, dict) else None)
         sd = sd or state
-        # Be defensive: allow partial loads (e.g. backbone only) for the smoke.
-        try:
-            model.load_state_dict(sd, strict=True)
-        except RuntimeError:
-            model.load_state_dict(sd, strict=False)
-        print(f"loaded checkpoint: {checkpoint}", flush=True)
+        # Read in_channels from checkpoint conv weight rather than hardcoding.
+        # trunk.input_conv.weight shape: [out_channels, in_channels, kH, kW]
+        _conv_key = "trunk.input_conv.weight"
+        _conv_w = sd.get(_conv_key)
+        if _conv_w is None:
+            for k, v in sd.items():
+                if k.endswith("trunk.input_conv.weight"):
+                    _conv_w = v
+                    break
+        if _conv_w is None:
+            raise RuntimeError(
+                f"Cannot find '{_conv_key}' in checkpoint {checkpoint}. "
+                "Ensure checkpoint contains a valid HexTacToeNet state dict."
+            )
+        in_channels = int(_conv_w.shape[1])
+        model = HexTacToeNet(board_size=19, in_channels=in_channels).to(device)
+        model.load_state_dict(sd, strict=True)
+        print(f"loaded checkpoint: {checkpoint} (in_channels={in_channels})", flush=True)
     else:
         print("WARNING: no checkpoint provided; using random init", flush=True)
+        model = HexTacToeNet(board_size=19, in_channels=8).to(device)
     model.eval()
     return model
 
