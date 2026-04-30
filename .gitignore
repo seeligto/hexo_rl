@@ -17,7 +17,7 @@ venv/
 
 # Maturin / PyO3 build outputs
 engine/target/
-*.pyi.bak
+*.bak
 
 # Rust
 target/
@@ -92,3 +92,17 @@ memory/
 
 .torchinductor-*/
 checkpoints_smokes/
+
+# Audit 2026-04-30 — recurring scratch patterns
+/print_*.py
+/debug_*.py
+/parse_*.py
+/test_*.py
+.smoke_*.json
+*.session.json
+/grep
+/sed
+/awk
+.github/pr_body_*.md
+/SSH_COMMANDS_*.md
+/scripts/profile_epyc_pyspy.sh
