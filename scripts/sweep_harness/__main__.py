@@ -46,8 +46,20 @@ def _parse_fix(items: list[str]) -> dict[str, object]:
     return out
 
 
+def _resolve_variant_template(variant: str | None) -> Path:
+    """Return the Path for --variant NAME (configs/variants/<name>.yaml), or the default template."""
+    if variant is None:
+        from .runner import SWEEP_TEMPLATE
+        return SWEEP_TEMPLATE
+    p = Path("configs") / "variants" / f"{variant}.yaml"
+    if not p.exists():
+        raise SystemExit(f"--variant: file not found: {p}")
+    return p
+
+
 def _parse_knob_overrides(coarse_items: list[str] | None,
-                          bounds_items: list[str] | None) -> dict[str, dict]:
+                          bounds_items: list[str] | None,
+                          values_items: list[str] | None = None) -> dict[str, dict]:
     """Parse --coarse and --bounds into a knob_overrides dict.
 
     --coarse inference_batch_size=256,384,512
@@ -87,6 +99,19 @@ def _parse_knob_overrides(coarse_items: list[str] | None,
             raise SystemExit(f"--bounds: expected integers in {it!r}")
         out.setdefault(k, {})["bounds"] = (lo, hi)
 
+    # --values always writes to "values" key (explicit alias for grid knobs).
+    for it in values_items or []:
+        if "=" not in it:
+            raise SystemExit(f"--values expects KNOB=v1,v2,..., got {it!r}")
+        k, vs = it.split("=", 1)
+        if k not in KNOBS:
+            raise SystemExit(f"--values: unknown knob {k!r}")
+        try:
+            parsed = [int(v) if "." not in v else float(v) for v in vs.split(",")]
+        except ValueError:
+            raise SystemExit(f"--values: non-numeric values in {it!r}")
+        out.setdefault(k, {})["values"] = parsed
+
     return out
 
 
@@ -105,7 +130,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     host = detect_host()
     knobs = list(args.knobs) if args.knobs else list(KNOB_ORDER)
     fixed = _parse_fix(args.fix or [])
-    knob_overrides = _parse_knob_overrides(args.coarse or [], args.bounds or [])
+    knob_overrides = _parse_knob_overrides(args.coarse or [], args.bounds or [], args.values or [])
+    template = _resolve_variant_template(getattr(args, "variant", None))
 
     resume_csv = _Path(args.resume) if args.resume else None
     if resume_csv is not None and not resume_csv.exists():
@@ -122,6 +148,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         n_runs=args.n_runs,
         max_minutes=args.max_minutes,
         out_dir=out_dir,
+        template=template,
         dry_run=args.dry_run,
         knob_overrides=knob_overrides,
         resume_csv=resume_csv,
@@ -175,9 +202,15 @@ def main(argv: list[str] | None = None) -> int:
                        help="Parent dir; per-sweep subdir is appended (host_id + timestamp)")
     p_run.add_argument("--dry-run", action="store_true",
                        help="Use synthetic eval (no bench subprocess); for harness validation")
+    p_run.add_argument("--variant", default=None, metavar="NAME",
+                       help="Base variant YAML to layer under knob overrides "
+                            "(configs/variants/<NAME>.yaml). Defaults to _sweep_template.yaml.")
     p_run.add_argument("--coarse", nargs="*", default=None, metavar="KNOB=v1,v2,...",
                        help="Override coarse/values list for a grid or grid_coarse_refine knob. "
                             "Example: --coarse inference_batch_size=256,384,512")
+    p_run.add_argument("--values", nargs="*", default=None, metavar="KNOB=v1,v2,...",
+                       help="Override values list for a grid knob (explicit alias for --coarse). "
+                            "Example: --values inference_max_wait_ms=1.0,2.0,4.0,8.0")
     p_run.add_argument("--bounds", nargs="*", default=None, metavar="KNOB=lo:hi",
                        help="Override search bounds for a ternary or bisect knob. "
                             "Example: --bounds n_workers=32:128")
