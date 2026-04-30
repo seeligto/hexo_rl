@@ -17,7 +17,7 @@ This file is read automatically by Claude Code at the start of every session.
 Read it fully before doing anything. Rule files under `docs/rules/` are topic-scoped
 — load on demand per the index below.
 
-**Current phase:** Phase 4.0 — sustained run from bootstrap-v4.
+**Current phase:** Phase 4.0 — sustained run from bootstrap-v6 (pending v6↔v5 H2H + SealBot v6 anchor per Q41/Q52).
 (An internal sprint log is maintained locally — not distributed.)
 
 ---
@@ -28,15 +28,14 @@ Read it fully before doing anything. Rule files under `docs/rules/` are topic-sc
 
 ---
 
-## Threat-probe kill criterion (§91, revised for 18-plane model)
+## Threat-probe kill criterion (§91, revised for 8-plane model post-§131)
 
 `scripts/probe_threat_logits.py` gates each 5k-step checkpoint. Pass requires:
 
 - C2: `ext_in_top5_pct ≥ 25` — extension cell in policy top-5 ≥ 25%
 - C3: `ext_in_top10_pct ≥ 40` — extension cell in policy top-10 ≥ 40%
 
-Thresholds calibrated against bootstrap-v4 (`bootstrap_model.pt`); lowered from
-§91 original (40/60) to match 18-plane model baseline after §97 migration.
+Thresholds calibrated against bootstrap-v6 (8-plane post-§131, §134). v6 baseline: C2=50, C3=60. Gates at 25/40 carry over from §91 §97 calibration; remain valid for 8-plane model.
 
 ---
 
