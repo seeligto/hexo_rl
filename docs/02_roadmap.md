@@ -98,27 +98,12 @@ n_workers: 1
 > (burst MCTS workload, pre-radius-8 branching, 24-plane input). They are
 > NOT comparable to current targets.
 
-### Throughput targets (Phase 4.0 post-§97/§99/§102 — CURRENT)
+### Throughput targets (Phase 4.0 — CURRENT)
 
-2026-04-17 rebaseline: 18-plane input (§97), GroupNorm(8) trunk (§99),
-90s worker warmup (§102). Laptop Ryzen 7 8845HS + RTX 4060, 14 workers,
-`make bench` (pool_duration=120s, worker_sims=200, max_moves=128).
+See `docs/rules/perf-targets.md` for current bench floors
+(§128 metric switch + §131 8-plane baseline + §135 confirmed results).
 
-| Metric | Target | Latest (2026-04-17) |
-|---|---|---|
-| MCTS throughput         | ≥ 26,000 sim/s         | 56,404 sim/s   (PASS) |
-| NN inference (batch=64) | ≥ 6,500 pos/s          | 7,676.5 pos/s  (PASS) |
-| NN latency (batch=1)    | ≤ 3.5 ms               | 2.19 ms        (PASS) |
-| Buffer push             | ≥ 525,000 pos/s        | 618,552 pos/s  (PASS) |
-| Buffer sample raw       | ≤ 1,550 µs/batch       | 1,379 µs       (PASS) |
-| Buffer sample augmented | ≤ 1,800 µs/batch       | 1,241 µs       (PASS) |
-| GPU utilization         | ≥ 85%                  | 100%           (PASS) |
-| VRAM usage              | ≤ 80% total            | 0.12 / 8.6 GB  (PASS) |
-| Worker throughput       | ≥ 142,000 pos/hr *(PROVISIONAL)* | 167,755 pos/hr (PASS) |
-| Batch fill %            | ≥ 84%                  | 97.49%         (PASS) |
-
-See `CLAUDE.md § Benchmarks` for the authoritative row-by-row table
-and rationale; `docs/07_PHASE4_SPRINT_LOG.md §102` for the target-diff.
+8-plane input (§131), GroupNorm(8) trunk (§99), 90s worker warmup (§102).
 
 ### Exit criteria
 
@@ -160,7 +145,7 @@ and rationale; `docs/07_PHASE4_SPRINT_LOG.md §102` for the target-diff.
 
 ### Tasks
 
-- [x] **Rust Core Update**: Implement dynamic stone clustering (distance ≤ 8) and multi-window 2-plane snapshot generation (K × 19×19 per cluster). Rust returns 2-plane views; Python assembles 18-plane tensors.
+- [x] **Rust Core Update**: Implement dynamic stone clustering (distance ≤ 8) and multi-window 2-plane snapshot generation (K × 19×19 per cluster). Rust hot-path produces 8-plane wire-format tensors directly via `encode_state_to_buffer_channels(KEPT_PLANE_INDICES)` (§131). `GameState.to_tensor()` still produces 18-plane tensors for the Python history-aware path (intentional-legacy, sliced at consumer call sites).
 - [x] **Network Refactor**: Simplify to a single-trunk ResNet-12 that processes K clusters as a batch.
 - [x] **Pipeline Integration**: Implement Value Pooling (min-pooling for pessimistic threat detection) and Policy Mapping (global coordinate translation).
 - [x] **Un-constrain Bots**: Remove 19x19 bounds from SealBotBot to enable full colony meta play.
@@ -184,7 +169,7 @@ and rationale; `docs/07_PHASE4_SPRINT_LOG.md §102` for the target-diff.
 The split-responsibility architecture is fully in place:
 
 - **Rust workers** (`SelfPlayRunner`) drive MCTS and produce raw 2-plane snapshots + game records.
-- **Python** (`GameState.to_tensor()`) assembles full 18-plane temporal tensors from `move_history` (§97 — chain planes moved to a separate replay-buffer sub-buffer); Rust `encode_state_to_buffer` is the equivalent on the self-play hot path.
+- **Python** (`GameState.to_tensor()`) assembles full 18-plane tensors from `move_history` for the history-aware path (intentional-legacy bridge, §131 P1(a)); consumers slice to 8-plane wire-format tensors at call sites via `KEPT_PLANE_INDICES`. The self-play hot path in Rust produces 8-plane wire-format tensors directly (§131 P3).
 - **ReplayBuffer** (Rust) stores, augments, and serves training batches with zero-copy transfer.
 
 ### Tasks
@@ -209,8 +194,8 @@ The split-responsibility architecture is fully in place:
   broken Elo read fixed (`aa16624`, `ddd408f`, `8b446c5`). New bootstrap retrained on
   285,762 positions (was 193,972). C1 contrast: −0.046 → +0.360 (+0.406). Head-to-head
   vs old bootstrap: 67.0% WR. SealBot WR: 18.7% (128 sims, 0.5s). Phase 4.5 deferred
-  pending outcome of Phase 4.0 sustained run from bootstrap-v4.
-- [ ] **Sustained training run** — 24-48 hour run from bootstrap-v4, monitor for policy entropy collapse, value loss plateau
+  pending outcome of Phase 4.0 sustained run from bootstrap-v6.
+- [ ] **Sustained training run** — 24-48 hour run from bootstrap-v6 (`checkpoints/bootstrap_model.pt`, 8-plane, §134), monitor for policy entropy collapse, value loss plateau
 - [ ] **Q2 ablation** — value aggregation strategy: min vs mean vs attention (highest-priority open question)
 - [ ] **Q40 — MCTS subtree reuse** (`docs/06_OPEN_QUESTIONS.md`).
   Re-root + §100 resolution. Gate: channel-drop verdict + audit C
@@ -221,12 +206,10 @@ The split-responsibility architecture is fully in place:
 
 - Self-play runs ≥ 24 hours without worker crash or buffer corruption
 - Policy loss and value loss both decrease from bootstrap baseline over first 500 RL steps
-- Worker throughput ≥ 142,000 pos/hr sustained on the isolated self-play
-  benchmark (per §102 post-90s-warmup rebaseline — PROVISIONAL until a
-  second stable run confirms; real training with shared GPU runs
-  ~48k pos/hr at production sim counts — the two are not directly
-  comparable because the bench runs at reduced sim counts with no
-  gradient-step contention)
+- Worker throughput passes the floor in `docs/rules/perf-targets.md`
+  (§128 metric: positions_generated ≥ 20,000/hr on the isolated
+  self-play benchmark; real training with shared GPU runs lower due to
+  gradient-step contention at production sim counts)
 - Graduation gate fires at least one promotion cycle end-to-end
   (§101 anchor semantics verified in live training, not just smoke).
 
