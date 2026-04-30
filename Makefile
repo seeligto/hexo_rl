@@ -42,6 +42,15 @@ MAX_POSITIONS ?= 50000
 N_CORES ?= $(shell $(PY) -c "import os; print(os.cpu_count() or 4)")
 BENCH_WORKERS ?= $(shell $(PY) -c "import os; print(max(1, (os.cpu_count() or 4) - 2))")
 
+# ── Remote hosts (vast.ai) ────────────────────────────────────────────────────
+# SSH key shared across all vast.ai instances. Port/host change per instance.
+_SSH_VAST = ssh -i ~/.ssh/vast_hexo -o IdentitiesOnly=yes -o ForwardAgent=no \
+            -o UserKnownHostsFile=~/.ssh/known_hosts_vast \
+            -o SetEnv=TERM=xterm-256color
+
+HOST_5080 ?= root@ssh6.vast.ai
+PORT_5080 ?= 13053
+
 
 .PHONY: help
 help: ## Show all useful commands
@@ -356,3 +365,20 @@ dash.open: ## Open web dashboard in browser
 	@echo "Opening http://localhost:$(DASHBOARD_PORT)"
 	@$(PY) -c "import webbrowser; webbrowser.open('http://localhost:$(DASHBOARD_PORT)')" \
 		|| echo "Open manually: http://localhost:$(DASHBOARD_PORT)"
+
+
+# ── Remote host targets ───────────────────────────────────────────────────────
+
+.PHONY: connect.5080
+connect.5080: ## SSH into 5080 vast.ai host (HOST_5080/PORT_5080 override as needed)
+	$(_SSH_VAST) -p $(PORT_5080) -L 8080:localhost:8080 $(HOST_5080)
+
+.PHONY: rsync.5080
+rsync.5080: ## Pull reports/sweeps/ from 5080 host into local reports/sweeps/
+	rsync -avz -e "$(_SSH_VAST) -p $(PORT_5080)" \
+		$(HOST_5080):/workspace/hexo_rl/reports/sweeps/ reports/sweeps/
+
+.PHONY: bench.5080
+bench.5080: ## Bench with 5080-optimal knobs (n_workers=18; override PORT_5080/HOST_5080 if instance changed)
+	$(PY) scripts/benchmark.py --mcts-sims 50000 --pool-workers 18 \
+		--pool-duration 120 --no-compile
