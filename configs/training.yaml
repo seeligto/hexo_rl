@@ -61,15 +61,10 @@ lr_schedule: cosine
 # Current design (200K run):
 #   total_steps : 200_000  — full run length; sets CosineAnnealingLR T_max
 #   eta_min     :   2e-4   — LR floor (~10% of peak lr=0.002)
-#   decay_steps :  20_000  — pretrain_weight decays to min_pretrained_weight
-#                            at step ~41.5K (floor ≈0.108 at 40K), leaving
-#                            ~160K of self-play-dominant training before the
-#                            LR hits eta_min at step 200K.
-#                            Accelerated from 70K post exp A/C: buffer dilution
-#                            (74% bootstrap at 5K) was the real draw culprit —
-#                            self-play must dominate sooner to let draw penalty
-#                            propagate. Rule of thumb changed: decay_steps ~ 0.10
-#                            * total_steps (was 0.35).
+#   decay_steps : 200_000  — pretrain_weight decays slowly across the full run;
+#                            floor reached near end of training. Reverted from
+#                            20K (was accelerated post exp A/C) to maintain
+#                            bootstrap corpus signal throughout Phase 4.0.
 #
 # Do not change decay_steps without adjusting total_steps (and vice versa).
 total_steps: 200_000
@@ -135,7 +130,7 @@ buffer_schedule:
 
 mixing:
   pretrained_buffer_path: "data/bootstrap_corpus.npz"
-  decay_steps: 20_000
+  decay_steps: 200_000
   min_pretrained_weight: 0.1
   initial_pretrained_weight: 0.8
   pretrain_max_samples: 0        # 0 = no cap; load full corpus. Was 200_000 — dropped ~30% of

@@ -7,7 +7,7 @@ training_steps_per_game: 4.0
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
-  max_game_moves: 200
+  max_game_moves: 100
   n_workers: 18
   inference_batch_size: 224
   inference_max_wait_ms: 8.0
