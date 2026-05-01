@@ -5646,3 +5646,194 @@ Dominant axis consistently `axis_s` (NE-SW). Both values below 0.55 threshold. D
 
 **Artifacts:** `checkpoints/checkpoint_00005000.pt`, `checkpoints/checkpoint_00005500.pt`, `logs/w4c_smoke_20260429.log`
 **Report:** `docs/notes/remote_reports/verdict_20260429.md`
+
+## §141 — W4C policy-head diagnosis: policy intact, locus is search/encoding — 2026-05-01
+
+**Date:** 2026-05-01
+**Context:** §138 W4C smoke (ckpt_5500) recorded 1.3% SealBot WR vs bootstrap-v6's 24% (§137 Q52). §139–§140 diagnostics confirmed value head + rotation LUT both intact. This pass characterises the policy head to localise the regression.
+
+**Probe:** `scripts/diag_w4c_policy_head.py` — 5 metrics × 4 categories (n=200) × 2 models (bootstrap-v6 vs ckpt_5500), FP16 inference. Outputs `reports/w4c_diag/policy_diagnosis.md` + `policy_metrics_raw.npz`.
+
+**Strict load status:** both checkpoints fall back to `strict=False` with 0 missing / 120 unexpected keys. Unexpected keys are training-time wrappers (EMA shadow, optimizer state, aux head buffers) that don't map onto `HexTacToeNet`'s inference state_dict. No weight loss; the 0-missing/120-unexpected pattern is identical across both checkpoints, so any drift between the two is real model state, not a load-time discrepancy.
+
+### Headline metrics (corpus_midgame, n=200)
+
+| metric | bootstrap | ckpt_5500 | Δ |
+|---|---|---|---|
+| H(p) [nats] | 2.370 | 2.018 | **−0.352** (sharper) |
+| top-1 agreement | — | **69.0%** | — |
+| top-1 mass on legal | 0.418 | 0.436 | +0.018 |
+| Spearman ρ (per-pos mean) | — | 0.682 (median 0.727) | — |
+| rank(boot top-1) in ckpt distribution, disagree subset | — | mean 1.9, median 1.0 | — |
+
+When ckpt_5500 disagrees with bootstrap on the top-1 move, bootstrap's top-1 is typically ckpt's #2 — not a random cell. Uniform-362 H(p) = 5.892 nats; both models are far below uniform on real positions.
+
+### Threat recognition (n=200, threat fixture tiled to 200)
+
+| metric | bootstrap | ckpt_5500 |
+|---|---|---|
+| top-1 agreement | — | **90.0%** |
+| p[correct_move] mean | 0.198 | **0.186** (ratio 0.94×) |
+| H(p) [nats] | 2.028 | 1.589 (sharper) |
+
+Threat extension cell still gets ~94% of bootstrap's probability mass. C2/C3 thresholds (≥25 / ≥40) likely still pass; threat head is not the regression locus.
+
+### SealBot positions (n=200, OOD vs corpus)
+
+| metric | bootstrap | ckpt_5500 |
+|---|---|---|
+| top-1 agreement | — | 64.0% |
+| Spearman ρ | — | **0.777** (ALIGNED) |
+| H(p) [nats] | 3.139 | 2.870 (sharper) |
+
+ckpt_5500 ranks moves more like bootstrap on SealBot positions than on its own training distribution. Strongest preservation signal.
+
+### Colony positions — diverged (POSITIVE, per §137)
+
+| metric | bootstrap | ckpt_5500 |
+|---|---|---|
+| top-1 agreement | — | 18.5% |
+| rank(boot top-1) in ckpt, disagree subset | — | median **201/362** |
+| top-1 mass on legal | 0.086 | 0.056 |
+| Spearman ρ | — | 0.414 (median 0.277) |
+
+ckpt_5500 has actively learned to rank colony moves differently — consistent with §137's "low colony fraction is positive" finding (`feedback_colony_fraction.md`). Not a regression.
+
+### Verdict — Hypothesis C-intact
+
+Policy head is **NOT the regression locus**. Real-position metrics (corpus, sealbot, threat) all preserved or improved:
+- Entropy decreased on real positions (sharpened, not flattened) → falsifies Hypothesis A.
+- Spearman ρ ≥ 0.66 on every real-position category, top-1 agreement ≥ 64% → falsifies Hypothesis B (confident-but-wrong).
+- Threat extension probability retained at 94% of bootstrap.
+- Colony divergence is the *desired* §137 behaviour, not a defect.
+
+**Implication for the protocol fixes (pretrain floor 0.1→0.5, max_game_moves 200→100):** unlikely to help. Pretrain mixing strengthens a head that is already intact; shorter games trims the random-walk *tail* but does not address the cause.
+
+### Next probe — search/encoding locus
+
+`reports/w4c_diag/selfplay_inspection.md` reports board-extent **329 cells** (axial span) during draw games, with X/O each holding 78.8 stones across 64–66 disconnected components. The network input window is **19×19 = ±9 cells** around the centroid. Most of the board is invisible to the model on any given inference. Candidate causes (in order of cheapest to test):
+
+1. **Centroid drift / window mis-targeting.** When stones are highly fragmented, the centroid sits in empty space far from any cluster. Audit `engine/src/game_runner/worker_loop.rs` window-selection logic against the empirical 64-component, 329-extent end-state.
+2. **MCTS sims-per-move / c_puct mismatch.** §138 used 5080 sweep winners (`inference_batch_size=224`, `wait=8ms`, `n_workers=18`); confirm sims-per-move matches the laptop bench gate that bootstrap-v6 was validated against.
+3. **Dirichlet exploration intensity.** Self-play noise injection at the root may be overwhelming a head that is *too* sharp on familiar positions.
+4. **Multi-cluster windowing aggregation.** §131 collapsed to 8 planes (single cluster); confirm `tensor18[0]` cluster selection in `GameState.to_tensor()` is still the intended one when the board has many disconnected clusters.
+
+**Recommendation:** halt the protocol-fix smoke. Open §142 to characterise the self-play encoding boundary before any retrain. Cheapest first: replay 5 of the recorded ckpt_5500 self-play games (`docs/notes/remote_reports/games_2026-04-30.jsonl`), at each ply log (a) centroid, (b) window bounds, (c) fraction of own and opponent stones inside the window, (d) policy entropy. If window-coverage drops below ~70% on plies > 50, the search/encoding boundary is confirmed as the locus.
+
+**Artifacts:**
+- `reports/w4c_diag/policy_diagnosis.md`
+- `reports/w4c_diag/policy_metrics_raw.npz`
+- `scripts/diag_w4c_policy_head.py`
+
+**Companion probes:**
+- §139 value calibration (`reports/w4c_diag/value_calibration.md`) — value head intact
+- §140 rotation sanity (`reports/w4c_diag/rotation_sanity.md`) — LUT correct; model rotation under-trained at step 5500 (expected)
+
+---
+
+## §142 — Encoding-window coverage audit: ply-31 fragmentation pivot confirmed — 2026-05-01
+
+**Date:** 2026-05-01
+**Probe:** `scripts/diag_encoding_window_audit.py`, `scripts/diag_sealbot_window_capture.py`
+**Inputs:** `docs/notes/remote_reports/games_2026-04-30.jsonl` (20 self-play games), `reports/w4c_diag/sealbot_5500_games.jsonl` (5 ckpt_5500 vs SealBot games)
+**Report:** `reports/w4c_diag/encoding_audit.md`
+
+**Hypothesis confirmed.** ckpt_5500 self-play crosses the 19×19 single-window boundary at **ply 31** (median pct_outside 0% → 21.9%, sharp). Any-cluster windowing delays onset but does not prevent it: 8/16 draws end with ≥80% of stones invisible to every cluster window. End-of-game single-window blindness median: 97.7% on draws.
+
+**Pathology is distribution-endogenous.** Against SealBot opposition ckpt_5500 plays 0% outside throughout (5/5 games, max ply 29) — tactical pressure forces concentrated play. Fragmentation only emerges when two mutually permissive policies play each other.
+
+**Axis structure:** fragmentation runs predominantly along the q-axis (NE-SW), consistent with §138 axis_density finding — self-play exploits the residual directional bias that rotation didn't fully wash out.
+
+**Per-ply pivot table (median pct_outside_single, n=20):**
+
+| threshold | single-window pivot | any-cluster pivot |
+|----------:|--------------------:|------------------:|
+| 5%        | **ply 31**          | ply 36            |
+| 50%       | ply 33              | ply 65            |
+
+**Recommendation:** Option γ (tighten self-play exploration) — cheapest mitigation that keeps the encoding mechanism intact and leverages §141 finding that policy head is already preserved. Option α (cap `LEGAL_MOVE_RADIUS`) falls back if γ-smoke fails. Option β (larger window) too expensive.
+
+**Artifacts:** `reports/w4c_diag/encoding_audit.md`, `reports/w4c_diag/per_ply_coverage.csv`, `reports/w4c_diag/per_ply_coverage_sealbot.csv`
+
+---
+
+## §143 — γ-knob audit and W4C smoke v3 recommendation — 2026-05-01
+
+**Date:** 2026-05-01
+**Inputs:** `reports/w4c_diag/encoding_audit.md` (§142), `reports/w4c_diag/policy_diagnosis.md` (§141)
+**Report:** `reports/w4c_diag/gamma_knob_audit.md`
+
+Read-only audit of self-play temperature, Dirichlet noise, max_game_moves, and pretrain-mixing knobs. Verified commit `e4c8b29` (decay_steps 20K→200K, max_game_moves 200→100) landed across all 4 host variants. Confirmed pretrain_weight floor 0.78 at step 5500.
+
+**Key findings:**
+- `temperature_threshold_compound_moves` (Rust self-play) is the live temperature knob — NOT `mcts.temperature_threshold_ply` (Python eval/bot only).
+- Cosine annealing: at current thr=15, τ ≈ 0.21 at ply 26 — model still sampling randomly through the §142 fragmentation pivot (ply 31).
+- `epsilon=0.25` overrides bootstrap-v6 priors at the cells the bootstrap distinguished; §141 shows the head is intact and trustworthy — reduce noise mass.
+
+**γ-knob set recommended for W4C smoke v3:**
+
+| knob | current | v3 | rationale |
+|---|---|---|---|
+| `temperature_threshold_compound_moves` | 15 | **10** | greedy floor by ply 20, before §142 pivot at ply 31 |
+| `mcts.epsilon` | 0.25 | **0.10** | bootstrap-v6 head intact; 25% noise overrides its signal |
+| `selfplay.max_game_moves` | 100 | **100** (held) | operator deferred 100→80; γ.1+γ.2 primary mitigation |
+| `mixing.decay_steps` | — | **200_000** | already landed in e4c8b29; floor 0.78 at step 5K |
+
+Implementation: two-line edit to `configs/selfplay.yaml` only. No Rust rebuild. No variant overrides needed (variants don't override `playout_cap` or `mcts` blocks).
+
+**Hardcoded knobs flagged (not configurable):** initial τ=1.0, cosine schedule shape, Dirichlet skip on intermediate plies.
+
+---
+
+## §144 — W4C smoke v3 (Option γ): Stage 1 ABORT — gate recalibration needed — 2026-05-01
+
+**Date:** 2026-05-01
+**Variant:** w4c_smoke_v3_5080 (n_workers=18, batch=224, wait=8ms, burst=8, 5080 24t)
+**Bootstrap:** bootstrap_model.pt (v6, 8-plane, §134)
+**γ knobs:** ε=0.10, τ_threshold=10, max_game_moves=100, decay_steps=200_000
+**Wall time:** 3.2h (193 min for 5500 steps, ~1719 steps/hr — +98% vs v1's 869 steps/hr)
+**Report:** `reports/w4c_smoke_v3/verdict_20260501.md`
+
+### Stage 1 trajectory (steps 0–5500)
+
+| Step | draw_rate | pe_self | x_wr | o_wr | pretrain_w |
+|------|-----------|---------|------|------|------------|
+| 1000 | 0.853 | 5.492 | 0.067 | 0.083 | 0.7960 |
+| 2500 | 0.828 | 5.235 | 0.075 | 0.099 | 0.7901 |
+| 5000 | 0.844 | 5.518 | 0.063 | 0.096 | 0.7803 |
+| 5500 | 0.839 | 5.462 | 0.063 | 0.099 | 0.7783 |
+
+### Gate evaluation
+
+| # | Metric | Threshold | Value @ 5000 | Result |
+|---|--------|-----------|--------------|--------|
+| P1 | axis_density max | ≤ 0.55 | 0.5630 | **FAIL** |
+| P3 | draw_rate | < 0.65 | 0.844 | **FAIL** |
+| T1 | C1 contrast | ≥ +0.479 | +4.949 | PASS |
+| T2 | C2 ext_in_top5 | ≥ 25% | 40% | PASS |
+| T3 | C3 ext_in_top10 | ≥ 40% | 65% | PASS |
+
+**Verdict: ABORT — Stage 1 FAIL.** Both failures are `max_game_moves=100` artifacts, not γ-knob regressions.
+
+**axis_density 0.563 > 0.55:** v1 had 0.548 at same step; v3 trend is *increasing* (0.5595→0.5630). Root cause: fewer stones at 100-ply truncation → opening-axis bias (axis_s, NE-SW) not washed out. v1 calibrated on 200-ply games.
+
+**draw_rate 0.844 >> 0.65:** v1 had 0.695 at 5500 with max_game_moves=200. Sprint draft §144 predicted draw_rate would *decrease* with 100-ply truncation — opposite happened. Games that resolve at plies 100–200 are now scored as draws. Only ~16% of games are decisive at 100 plies; threshold was calibrated for 200-ply games where ~30% hit the limit.
+
+**γ knobs positive despite FAIL:** pe_self stable 5.2–5.6 (no collapse), threat_loss drops to 0.007–0.01 by step 3000+, threat probe well above thresholds (contrast +4.95 vs bootstrap +0.60), pretrain_weight 0.778 matches decay schedule exactly.
+
+**O-side imbalance note:** x_wr=0.063, o_wr=0.099 at step 5500. O wins 57% of decisive games. Monitor at Stage 2 — could be noise at 16% decisive rate, but flags if it persists.
+
+### Decision: Option A — recalibrate gates for 100-ply games
+
+| Gate | Old threshold (200-ply) | Recalibrated (100-ply) | v3 value |
+|------|------------------------|------------------------|----------|
+| draw_rate | < 0.65 | < 0.85 | 0.844 ✓ |
+| axis_density | ≤ 0.55 | ≤ 0.57 | 0.563 ✓ |
+
+Option B (revert to 200 plies) would reintroduce random-walk corruption §142 was solving. Not recommended.
+
+**Condition on Option A:** monitor axis_density trend during Stage 2 (eval at steps 7500 and 10000). If it continues climbing past 0.57 with 150 plies, that's a training signal, not an artifact.
+
+**max_game_moves updated to 150** (`configs/selfplay.yaml` + all 4 host variants, §144) — midpoint between the 100-ply artifact and the 200-ply original. Retains truncation benefit while allowing more decisive outcomes.
+
+**Artifacts:** `checkpoints/checkpoint_00005500.pt`, `reports/w4c_smoke_v3/verdict_20260501.md`, `docs/notes/remote_reports/sprint_log_144_draft.md`

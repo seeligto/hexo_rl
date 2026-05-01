@@ -55,7 +55,7 @@ selfplay:
   # Default ON. Falls back to the untraced module if trace fails.
   trace_inference: true
   replay_buffer_capacity: 500000
-  max_game_moves: 100  # PLIES (stone placements) = 50 compound turns. Reduced from 200 for Phase 4.0.
+  max_game_moves: 150  # PLIES (stone placements) = 75 compound turns. §144: recalibrated from 100 (artifact raised draw_rate to 0.84).
   results_queue_cap: 10000  # Rust SelfPlayRunner drops oldest when `results` VecDeque exceeds this.
                             # Visible via positions_dropped getter; bump if dashboard shows nonzero drops.
 

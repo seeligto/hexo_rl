@@ -8,7 +8,7 @@ training_steps_per_game: 4.0   # W3 fix 2026-04-29: §69 P3 winner; 2.0 was unde
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
-  max_game_moves: 100
+  max_game_moves: 150
   n_workers: 10
   inference_max_wait_ms: 5.0
   playout_cap:
