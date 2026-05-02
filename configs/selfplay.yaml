@@ -21,7 +21,7 @@ mcts:
   quiescence_blend_2: 0.3
   dirichlet_alpha: 0.05    # §115: Go-regime α for hex branching factor ~250-300 (§116 #4).
                            # Was 0.3 (chess-regime). Noise effective-temperature too low past opening.
-  epsilon: 0.25
+  epsilon: 0.10            # §143 γ.2: was 0.25; bootstrap-v6 head intact, 25% noise overrides its signal
   dirichlet_enabled: true   # gates Dirichlet call in Rust training path; set false for noise-free eval
   temperature_threshold_ply: 30
 
@@ -83,7 +83,7 @@ selfplay:
     fast_prob: 0.0
     fast_sims: 64          # scalar used by Rust SelfPlayRunner — floor raised from 50 (A3 fix)
     standard_sims: 200
-    temperature_threshold_compound_moves: 15
+    temperature_threshold_compound_moves: 10  # §143 γ.1: was 15; greedy floor by ply 20, before §142 fragmentation pivot at ply 31
     temp_min: 0.05       # floor temperature for cosine annealing (0.0 = hard argmax after threshold)
     zoi_enabled: true    # restrict move sampling to ZOI of last N moves
     zoi_lookback: 16     # number of recent moves used as ZOI anchors

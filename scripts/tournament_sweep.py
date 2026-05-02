@@ -48,32 +48,21 @@ DEFAULT_MODEL_SIMS = 64    # quick-search MCTS (matches scripts/eval_round_robin
 
 
 def load_checkpoint_model(ckpt_path: Path, base_config: Dict[str, Any], device: torch.device) -> HexTacToeNet:
-    """Restore a HexTacToeNet from a checkpoint, respecting any baked variant config."""
+    """Restore a HexTacToeNet from a checkpoint using weight-shape inference."""
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     state = Trainer._extract_model_state(ckpt)
     state = normalize_model_state_dict_keys(state)
-    ckpt_cfg = ckpt.get("config") if isinstance(ckpt, dict) else None
-    if isinstance(ckpt_cfg, dict):
-        cfg = ckpt_cfg
-    else:
-        cfg = base_config
-
-    model_cfg = cfg if "board_size" in cfg else cfg.get("model", cfg)
-    input_channels = model_cfg.get("input_channels")
-    in_channels = len(input_channels) if input_channels is not None else int(model_cfg.get("in_channels", 18))
+    hparams = Trainer._infer_model_hparams(state)
 
     model = HexTacToeNet(
-        board_size=int(model_cfg.get("board_size", 19)),
-        in_channels=in_channels,
-        res_blocks=int(model_cfg.get("res_blocks", 12)),
-        filters=int(model_cfg.get("filters", 128)),
-        se_reduction_ratio=int(model_cfg.get("se_reduction_ratio", 4)),
-        input_channels=input_channels,
+        board_size=int(hparams.get("board_size", 19)),
+        in_channels=int(hparams.get("in_channels", 8)),
+        res_blocks=int(hparams.get("res_blocks", 12)),
+        filters=int(hparams.get("filters", 128)),
+        se_reduction_ratio=int(hparams.get("se_reduction_ratio", 4)),
     )
-    model.load_state_dict(state, strict=False)
-    model.to(device)
-    model.eval()
-    return model
+    Trainer._load_state_dict_strict(model, state)
+    return model.to(device).eval()
 
 
 def play_match(

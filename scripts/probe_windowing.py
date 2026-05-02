@@ -62,14 +62,17 @@ def load_model(ckpt_path: Path, device: torch.device) -> HexTacToeNet:
     state = normalize_model_state_dict_keys(state)
     hparams = Trainer._infer_model_hparams(state)
 
+    in_channels = int(hparams.get("in_channels", 8))
+    if in_channels != 8:
+        raise ValueError(f"Expected 8-channel v6 model, got in_channels={in_channels}; wrong checkpoint?")
     model = HexTacToeNet(
         board_size=int(hparams.get("board_size", 19)),
-        in_channels=int(hparams.get("in_channels", 18)),
+        in_channels=in_channels,
         filters=int(hparams.get("filters", 128)),
         res_blocks=int(hparams.get("res_blocks", 12)),
         se_reduction_ratio=int(hparams.get("se_reduction_ratio", 4)),
     )
-    model.load_state_dict(state, strict=False)
+    Trainer._load_state_dict_strict(model, state)
     return model.float().to(device).eval()
 
 

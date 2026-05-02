@@ -94,6 +94,16 @@ def load_model(
         res_blocks=hparams.get("res_blocks", 12),
         se_reduction_ratio=hparams.get("se_reduction_ratio", 4),
     )
+    # Strict-equivalent: filter tower/trunk aliases added by normalize, raise on real mismatches.
+    model_keys = set(net.state_dict().keys())
+    missing = [k for k in model_keys if k not in state_dict]
+    real_unexpected = [
+        k for k in state_dict if k not in model_keys
+        and not ((k.startswith("tower.") and f"trunk.{k}" in model_keys)
+                 or (k.startswith("trunk.tower.") and k[len("trunk."):] in model_keys))
+    ]
+    if missing or real_unexpected:
+        raise ValueError(f"Checkpoint mismatch — missing: {missing}, unexpected: {real_unexpected}")
     net.load_state_dict(state_dict, strict=False)
     net.to(device).eval()
 

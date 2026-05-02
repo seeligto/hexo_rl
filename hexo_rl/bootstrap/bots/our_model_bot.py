@@ -15,6 +15,7 @@ from hexo_rl.env import GameState
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.worker import SelfPlayWorker
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
+from hexo_rl.training.trainer import Trainer
 from hexo_rl.viewer.model_loader import _extract_model_state, _infer_model_hparams
 
 
@@ -45,7 +46,7 @@ class OurModelBot(BotProtocol):
         # Fall back to config values for any dims not recoverable from weights.
         model_cfg = config.get("model", {}) if isinstance(config.get("model"), dict) else {}
         board_size = int(model_hparams.get("board_size", model_cfg.get("board_size", config.get("board_size", 19))))
-        in_channels = int(model_hparams.get("in_channels", model_cfg.get("in_channels", config.get("in_channels", 18))))
+        in_channels = int(model_hparams.get("in_channels", model_cfg.get("in_channels", config.get("in_channels", 8))))
         filters = int(model_hparams.get("filters", model_cfg.get("filters", config.get("filters", 128))))
         res_blocks = int(model_hparams.get("res_blocks", model_cfg.get("res_blocks", config.get("res_blocks", 12))))
         se_reduction_ratio = int(model_hparams.get("se_reduction_ratio", model_cfg.get("se_reduction_ratio", config.get("se_reduction_ratio", 4))))
@@ -57,9 +58,8 @@ class OurModelBot(BotProtocol):
             res_blocks=res_blocks,
             se_reduction_ratio=se_reduction_ratio,
         )
-        net.load_state_dict(state_dict, strict=False)
-        net.to(device)
-        net.eval()
+        Trainer._load_state_dict_strict(net, state_dict)
+        net.to(device).eval()
 
         self._worker = SelfPlayWorker(model=net, config=config, device=device)
         self._temperature = temperature
