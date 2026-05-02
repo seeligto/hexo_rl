@@ -5863,7 +5863,14 @@ Test updates in `engine/src/board/mod.rs`:
 
 `cargo test --workspace`: 174 tests pass (139 engine + 35 misc), 0 failures.
 
-### Laptop smoke (bootstrap-v6, gumbel_full, 4 workers, 600 s)
+### Laptop smoke (bootstrap-v6, gumbel_full, 4 workers, 600 s) — **PRELIMINARY**
+
+> ⚠ **TMP / placeholder.** Numbers below are from a 21-game laptop run, not a
+> sustained remote run. Treat as a directional sanity check only — replace
+> with the first vast.ai pull's pos/hr, draw_rate, and ply-distribution once
+> available, and re-set the draw-rate gate against the post-α' baseline at
+> that point.
+
 
 | Metric | Pre-cap baseline | R=5 (this run) |
 |---|---|---|
@@ -5887,4 +5894,4 @@ Recent length sample: 9, 14, 8, 7, 17, 13, 18, 25, 16, 27, 16, 14, 19, 21, 16, 1
 - Threat-probe gate carries unchanged (C2 ≥ 25, C3 ≥ 40 vs bootstrap-v6).
 - Game-length distribution at scale: 21 games is a directional signal, not a characterisation. Capture the full distribution from the next remote run.
 
-**Artifacts:** `engine/src/board/moves.rs` (constant + doc), `engine/src/board/mod.rs` (tests), `/tmp/smoke_radius5.json` (laptop smoke), `/tmp/sprint_log_146_alpha_prime_radius_draft.md` (full draft).
+**Artifacts:** `engine/src/board/moves.rs` (constant + doc), `engine/src/board/mod.rs` (tests), `/tmp/smoke_radius5.json` (laptop smoke; transient — replaced by remote results).
