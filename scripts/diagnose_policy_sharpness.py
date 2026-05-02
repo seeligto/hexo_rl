@@ -203,7 +203,10 @@ def _load_model(ckpt_path: Path) -> tuple[HexTacToeNet, str]:
     hparams = Trainer._infer_model_hparams(state)
     in_channels = int(hparams.get("in_channels", 8))
     if in_channels != 8:
-        raise ValueError(f"Expected 8-channel v6 model, got in_channels={in_channels}; wrong checkpoint?")
+        raise ValueError(
+            f"diagnose_policy_sharpness: refusing to load — expected in_channels=8 (v6), "
+            f"got {in_channels}. hparams={hparams}. Wrong checkpoint?"
+        )
     model = HexTacToeNet(
         board_size=int(hparams.get("board_size", 19)),
         in_channels=in_channels,

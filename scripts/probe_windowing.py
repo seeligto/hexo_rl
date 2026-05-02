@@ -64,7 +64,10 @@ def load_model(ckpt_path: Path, device: torch.device) -> HexTacToeNet:
 
     in_channels = int(hparams.get("in_channels", 8))
     if in_channels != 8:
-        raise ValueError(f"Expected 8-channel v6 model, got in_channels={in_channels}; wrong checkpoint?")
+        raise ValueError(
+            f"probe_windowing: refusing to load — expected in_channels=8 (v6), "
+            f"got {in_channels}. hparams={hparams}. Wrong checkpoint?"
+        )
     model = HexTacToeNet(
         board_size=int(hparams.get("board_size", 19)),
         in_channels=in_channels,
