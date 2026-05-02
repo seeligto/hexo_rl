@@ -104,8 +104,8 @@ mod tests {
         // Empty board: 5×5 init region = 25 cells (MCTS-optimised first-move).
         assert_eq!(b.legal_move_count(), 25);
         b.apply_move(0, 0).unwrap();
-        // hex ball radius 8 around (0,0) = 217 cells, minus 1 occupied = 216.
-        assert_eq!(b.legal_move_count(), 216);
+        // §145 Option α': hex ball radius 5 around (0,0) = 91 cells, minus 1 occupied = 90.
+        assert_eq!(b.legal_move_count(), 90);
     }
 
     #[test]
@@ -241,13 +241,44 @@ mod tests {
     #[test]
     fn legal_grows_with_bounding_box() {
         let mut b = Board::new();
-        // hex ball radius 8 around (0,0) = 217 cells, minus 1 occupied = 216.
+        // §145 Option α': hex ball radius 5 around (0,0) = 91 cells, minus 1 occupied = 90.
         b.apply_move(0, 0).unwrap();
-        assert_eq!(b.legal_move_count(), 216);
-        // hex_distance((0,0),(5,0)) = 5.  Union of two radius-8 balls: 217+217-132=302
-        // cells; minus 2 occupied = 300.
+        assert_eq!(b.legal_move_count(), 90);
+        // hex_distance((0,0),(5,0)) = 5.  Union of two radius-5 balls: 91+91-36=146
+        // cells; minus 2 occupied = 144.
         b.apply_move(5, 0).unwrap();
-        assert_eq!(b.legal_move_count(), 300);
+        assert_eq!(b.legal_move_count(), 144);
+    }
+
+    #[test]
+    fn legal_move_radius_capped_at_5() {
+        // §145 Option α': stone at (0,0). Every cell at hex_distance ≤ 5 must
+        // be legal; every cell at hex_distance ≥ 6 must NOT be legal.
+        let mut b = Board::new();
+        b.apply_move(0, 0).unwrap();
+        let legal: std::collections::HashSet<(i32, i32)> =
+            b.legal_moves().into_iter().collect();
+
+        // Every legal cell is within hex_distance 5 of (0,0).
+        for &(q, r) in &legal {
+            assert!(super::state::hex_distance(0, 0, q, r) <= 5,
+                "legal cell ({q},{r}) has hex_distance > 5 from (0,0)");
+        }
+
+        // Spot checks on the boundary along the E axis.
+        assert!(legal.contains(&(5, 0)), "(5,0) at distance 5 must be legal");
+        assert!(!legal.contains(&(6, 0)), "(6,0) at distance 6 must NOT be legal");
+        assert!(!legal.contains(&(8, 0)), "(8,0) (old radius) must NOT be legal");
+
+        // And along the NE axis.
+        assert!(legal.contains(&(0, 5)), "(0,5) at distance 5 must be legal");
+        assert!(!legal.contains(&(0, 6)), "(0,6) at distance 6 must NOT be legal");
+
+        // Cluster-forming radius: a second stone at distance 5 still produces
+        // a single connected cluster (cluster threshold is 8, unchanged).
+        b.apply_move(5, 0).unwrap();
+        let clusters = b.get_clusters();
+        assert_eq!(clusters.len(), 1, "stones 5 apart must remain in one cluster");
     }
 
     #[test]

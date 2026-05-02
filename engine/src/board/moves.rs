@@ -5,17 +5,22 @@ use super::state::{Board, Cell, Player, HEX_AXES, hex_distance};
 const WIN_LENGTH: usize = 6;
 
 /// Maximum hex distance from any existing stone at which a new stone may be
-/// placed, per the official HTTT rules ("at most 8 cells apart").
-const LEGAL_MOVE_RADIUS: i32 = 8;
+/// placed.  Official HTTT rule is 8, but self-play with bootstrap-v6 fragments
+/// the board past the 19×19 encoding window (§142, §144 W4C); §145 Option α'
+/// caps the practical radius at 5 to bound game extent without changing the
+/// network architecture or buffer schema.  Real games (corpus + SealBot) never
+/// exceed radius 5 between consecutive plies, so the rule cap is a no-op for
+/// in-distribution play and only suppresses fragmentation in self-play.
+const LEGAL_MOVE_RADIUS: i32 = 5;
 
 impl Board {
     /// Zero-allocation reference to the lazily-maintained legal move set.
     ///
     /// If the cache is dirty (any `apply_move` or `undo_move` since the last
     /// call), rebuilds by iterating a hex ball of radius `LEGAL_MOVE_RADIUS`
-    /// (8) centred on every existing stone and collecting unoccupied cells.
-    /// This matches the official rule: "a new hex can be placed at most 8
-    /// cells apart from any other hex."
+    /// centred on every existing stone and collecting unoccupied cells.
+    /// §145 Option α' caps the radius at 5 to bound self-play game extent
+    /// (was 8 per the official HTTT rule).
     ///
     /// Prefer this over `legal_moves()` in MCTS expansion — it avoids a Vec
     /// allocation.  During tree traversal, `apply_move_tracked` / `undo_move`
@@ -40,7 +45,7 @@ impl Board {
                 }
             } else {
                 // For every placed stone, emit all empty cells within
-                // LEGAL_MOVE_RADIUS hex steps (official 8-cell rule).
+                // LEGAL_MOVE_RADIUS hex steps (capped at 5 by §145 Option α').
                 // The hex ball in axial coords is the set of (dq, dr) satisfying:
                 //   |dq| ≤ R, |dr| ≤ R, |dq + dr| ≤ R
                 // which translates to dr ∈ [max(-R, -R-dq), min(R, R-dq)].
