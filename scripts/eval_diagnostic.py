@@ -118,15 +118,19 @@ def load_model(path: Path, config: dict) -> HexTacToeNet:
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     state = Trainer._extract_model_state(ckpt)
     state = normalize_model_state_dict_keys(state)
+    # Infer dims from conv weights — channel-safe for bootstrap (weights-only) and
+    # training checkpoints. Do NOT read in_channels from config: load_config() with
+    # no args returns an empty dict, which defaults to 18 and breaks v6 8-plane models.
+    hparams = Trainer._infer_model_hparams(state)
     model_cfg = config if "board_size" in config else config.get("model", config)
     model = HexTacToeNet(
-        board_size=int(model_cfg.get("board_size", 19)),
-        in_channels=int(model_cfg.get("in_channels", 18)),
-        res_blocks=int(model_cfg.get("res_blocks", 12)),
-        filters=int(model_cfg.get("filters", 128)),
-        se_reduction_ratio=int(model_cfg.get("se_reduction_ratio", 4)),
+        board_size=int(hparams.get("board_size", model_cfg.get("board_size", 19))),
+        in_channels=int(hparams.get("in_channels", model_cfg.get("in_channels", 8))),
+        res_blocks=int(hparams.get("res_blocks", model_cfg.get("res_blocks", 12))),
+        filters=int(hparams.get("filters", model_cfg.get("filters", 128))),
+        se_reduction_ratio=int(hparams.get("se_reduction_ratio", model_cfg.get("se_reduction_ratio", 4))),
     )
-    model.load_state_dict(state, strict=False)
+    Trainer._load_state_dict_strict(model, state)
     model.to(DEVICE)
     model.eval()
     return model

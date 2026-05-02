@@ -43,35 +43,26 @@ BEST_CHECKPOINT = Path("checkpoints/best_model.pt")
 def load_model(path: Path, config: dict) -> HexTacToeNet:
     """Load a checkpoint into a HexTacToeNet in eval mode.
 
-    Falls back to the checkpoint's baked config (model architecture metadata)
-    when present so reduced-channel sweep checkpoints reconstruct correctly
-    even if the runner is invoked with the default 18-plane base config.
+    Infers in_channels directly from trunk.input_conv.weight shape so weights-only
+    checkpoints (e.g. bootstrap_model.pt with no baked config) load correctly.
     """
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     state = Trainer._extract_model_state(ckpt)
     state = normalize_model_state_dict_keys(state)
 
-    ckpt_cfg = ckpt.get("config") if isinstance(ckpt, dict) else None
-    if isinstance(ckpt_cfg, dict):
-        model_cfg = ckpt_cfg
-    else:
-        model_cfg = config if "board_size" in config else config.get("model", config)
-
-    input_channels_cfg = model_cfg.get("input_channels")
-    if input_channels_cfg is not None:
-        in_channels = len(input_channels_cfg)
-    else:
-        in_channels = int(model_cfg.get("in_channels", 18))
+    # Read dims from conv weights — channel-safe for bootstrap (weights-only) and
+    # training checkpoints. Config fallback only for dims not recoverable from weights.
+    hparams = Trainer._infer_model_hparams(state)
+    model_cfg = config if "board_size" in config else config.get("model", config)
 
     model = HexTacToeNet(
-        board_size=int(model_cfg.get("board_size", 19)),
-        in_channels=in_channels,
-        res_blocks=int(model_cfg.get("res_blocks", 12)),
-        filters=int(model_cfg.get("filters", 128)),
-        se_reduction_ratio=int(model_cfg.get("se_reduction_ratio", 4)),
-        input_channels=input_channels_cfg,
+        board_size=int(hparams.get("board_size", model_cfg.get("board_size", 19))),
+        in_channels=int(hparams.get("in_channels", model_cfg.get("in_channels", 8))),
+        res_blocks=int(hparams.get("res_blocks", model_cfg.get("res_blocks", 12))),
+        filters=int(hparams.get("filters", model_cfg.get("filters", 128))),
+        se_reduction_ratio=int(hparams.get("se_reduction_ratio", model_cfg.get("se_reduction_ratio", 4))),
     )
-    model.load_state_dict(state, strict=False)
+    Trainer._load_state_dict_strict(model, state)
     model.to(DEVICE)
     model.eval()
     return model
