@@ -274,11 +274,38 @@ mod tests {
         assert!(legal.contains(&(0, 5)), "(0,5) at distance 5 must be legal");
         assert!(!legal.contains(&(0, 6)), "(0,6) at distance 6 must NOT be legal");
 
-        // Cluster-forming radius: a second stone at distance 5 still produces
-        // a single connected cluster (cluster threshold is 8, unchanged).
+        // Cluster-forming radius: a second stone at exactly distance 5 still
+        // produces a single connected cluster (Phase B δ.c §151:
+        // CLUSTER_THRESHOLD lowered 8 → 5; the boundary is inclusive).
         b.apply_move(5, 0).unwrap();
         let clusters = b.get_clusters();
         assert_eq!(clusters.len(), 1, "stones 5 apart must remain in one cluster");
+    }
+
+    #[test]
+    fn cluster_threshold_splits_at_distance_six() {
+        // Phase B δ.c (§151): CLUSTER_THRESHOLD lowered 8 → 5.
+        // Two isolated colonies at axial distance 6 must form TWO clusters
+        // (under the old threshold of 8 they would have been one).  We seed
+        // the colonies via direct `cells` insertion to bypass the legal-move
+        // radius cap (R=5 would block placement at distance 6 from any stone).
+        let mut b = Board::new();
+        b.cells.insert((0, 0), state::Cell::P1);
+        b.cells.insert((0, 1), state::Cell::P1);
+        b.cells.insert((6, 0), state::Cell::P1);
+        b.cells.insert((6, -1), state::Cell::P1);
+        b.has_stones = true;
+        b.cache_dirty.set(true);
+        let clusters = b.get_clusters();
+        assert_eq!(
+            clusters.len(),
+            2,
+            "stones at axial distance 6 must split into 2 clusters under δ.c (was 1 under threshold=8)"
+        );
+        // Sanity: each colony has exactly the 2 stones we seeded.
+        for c in &clusters {
+            assert_eq!(c.len(), 2, "each colony has 2 stones");
+        }
     }
 
     #[test]
