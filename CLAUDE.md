@@ -17,7 +17,7 @@ This file is read automatically by Claude Code at the start of every session.
 Read it fully before doing anything. Rule files under `docs/rules/` are topic-scoped
 — load on demand per the index below.
 
-**Current phase:** Phase 4.0 — sustained run from bootstrap-v6 (pending v6↔v5 H2H + SealBot v6 anchor per Q41/Q52).
+**Current phase:** Phase 4.0 — sustained run from bootstrap-v7full (§150, 30-ep human-only Elo-weighted, SealBot WR 17.4% n=500, vs v6 z=2.70 p=0.007). v7e30, v7, v6 retained as versioned A/B baselines.
 (An internal sprint log is maintained locally — not distributed.)
 
 ---
