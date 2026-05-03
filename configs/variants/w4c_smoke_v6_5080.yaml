@@ -1,0 +1,46 @@
+# w4c_smoke_v6_5080 — Phase B δ.c smoke on Ryzen 9 9900X (24t) + RTX 5080.
+#
+# Mirrors the w4c_smoke_v5 launch shape (ABORTed §147 on bootstrap-corpus
+# contamination) with two changes:
+#   1. canonical bootstrap is now v7full (§150)   — picked up automatically
+#      via `checkpoints/bootstrap_model.pt`.
+#   2. Phase B δ.c is applied at master commit:    cluster_threshold 8 → 5
+#      (engine/src/board/moves.rs CLUSTER_THRESHOLD).
+#
+# All v5 self-play and training knobs preserved verbatim:
+#   - 5080 sweep winners (Ryzen 24t + RTX 5080, 2026-04-30 sweep):
+#       n_workers=18, batch=224, wait=8 ms, burst=8
+#   - γ knobs inherited from configs/selfplay.yaml (§143):
+#       epsilon=0.10, temperature_threshold_compound_moves=10
+#   - max_game_moves=150 inherited from configs/selfplay.yaml (§144 cap)
+#   - eval_interval=2500 (overrides training.yaml's 5000 for tighter cadence)
+#   - hard_abort_grad_norm=10.0 (R=5 compact games produce sharper gradients;
+#       the default 3.0 / 5-consec triggers on transient spikes — see
+#       smoke_v5_grad_override.yaml on the 5080 host)
+#
+# Launch (laptop or remote, standard make targets — no shell orchestration):
+#   make train.fresh VARIANT=w4c_smoke_v6_5080
+#   # for a non-default checkpoint dir, drive scripts/train.py directly:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model.pt \
+#     --variant w4c_smoke_v6_5080 \
+#     --checkpoint-dir checkpoints/w4c_smoke_v6_5080 \
+#     --no-dashboard
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+
+eval_interval: 2500
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  n_workers: 18
+  inference_batch_size: 224
+  inference_max_wait_ms: 8.0
+  playout_cap:
+    fast_prob: 0.0
+
+monitors:
+  hard_abort_grad_norm: 10.0
