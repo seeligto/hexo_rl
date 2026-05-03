@@ -194,8 +194,8 @@ def main() -> None:
     p.add_argument("--baseline", type=Path, default=BASELINE_CKPT)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--gate-strict", action="store_true",
-                   help="Use the original channel-cut BLOCK threshold (43%); "
-                        "default is the §149 4e parity-relaxed threshold (38%).")
+                   help="Use the original channel-cut BLOCK threshold (43%%); "
+                        "default is the §149 4e parity-relaxed threshold (38%%).")
     args = p.parse_args()
 
     n_games = 2 if args.dry_run else args.n_games

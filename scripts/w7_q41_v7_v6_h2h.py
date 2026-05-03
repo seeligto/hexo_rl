@@ -189,8 +189,8 @@ def main() -> None:
     p.add_argument("--temperature", type=float, default=TEMPERATURE)
     p.add_argument("--dry-run", action="store_true", help="2 games only")
     p.add_argument("--gate-strict", action="store_true",
-                   help="Use the original channel-cut BLOCK threshold (43%); "
-                        "default is the §149 4e parity-relaxed threshold (38%) "
+                   help="Use the original channel-cut BLOCK threshold (43%%); "
+                        "default is the §149 4e parity-relaxed threshold (38%%) "
                         "appropriate for corpus-rebuild scenarios where parity "
                         "is the expected outcome.")
     args = p.parse_args()
