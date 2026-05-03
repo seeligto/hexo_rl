@@ -354,8 +354,9 @@ class BootstrapTrainer:
         self.scaler = torch.amp.GradScaler(device=device.type, enabled=fp16)
 
         total_steps = int(config.get("pretrain_total_steps", 50_000))
+        eta_min = float(config.get("pretrain_eta_min", 1e-5))
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=max(1, total_steps), eta_min=1e-5,
+            self.optimizer, T_max=max(1, total_steps), eta_min=eta_min,
         )
 
     def train_epoch(
@@ -621,6 +622,11 @@ def pretrain() -> None:
                         help="Override inference-weights output path "
                              "(default: checkpoints/bootstrap_model.pt). "
                              "Use a v7e30-style filename for --resume runs.")
+    parser.add_argument("--eta-min", type=float, default=None,
+                        help="Override CosineAnnealingLR eta_min "
+                             "(default 1e-5). For 30-epoch full retrains, "
+                             "5e-5 avoids the §149-observed LR-floor stall "
+                             "in the final 3 epochs.")
     args = parser.parse_args()
 
     # Load configs
@@ -724,6 +730,8 @@ def pretrain() -> None:
     step_budget = args.steps
     total_pretrain_steps = step_budget if step_budget is not None else args.epochs * len(loader)
     config["pretrain_total_steps"] = total_pretrain_steps
+    if args.eta_min is not None:
+        config["pretrain_eta_min"] = float(args.eta_min)
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)
 
     # Resume mode: load model/optimizer/scaler from full checkpoint, restart
@@ -738,11 +746,12 @@ def pretrain() -> None:
         if resume_ckpt.get("scaler_state") is not None:
             trainer.scaler.load_state_dict(resume_ckpt["scaler_state"])
         new_peak = float(args.lr_peak) if args.lr_peak is not None else float(config.get("lr", 0.002))
+        new_eta_min = float(args.eta_min) if args.eta_min is not None else 1e-5
         for g in trainer.optimizer.param_groups:
             g["lr"] = new_peak
             g["initial_lr"] = new_peak
         trainer.scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            trainer.optimizer, T_max=max(1, total_pretrain_steps), eta_min=1e-5,
+            trainer.optimizer, T_max=max(1, total_pretrain_steps), eta_min=new_eta_min,
         )
         log.info("resume_complete", new_peak_lr=new_peak,
                  cosine_t_max=total_pretrain_steps,
