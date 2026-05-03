@@ -181,6 +181,24 @@ train.bg: ## Self-play RL from bootstrap checkpoint, background (VARIANT= suppor
 	@echo "Logs: logs/train_*.log"
 	@echo "Dashboard: run 'make dashboard' in a separate terminal to attach (http://localhost:5001)"
 
+.PHONY: train.fresh
+train.fresh: ## Fresh self-play launch: deletes replay_buffer.bin first to avoid §149 contamination (VARIANT= supported)
+	@mkdir -p logs
+	@if [ -f logs/train.pid ] && kill -0 $$(cat logs/train.pid) 2>/dev/null; then \
+		echo "Refusing to launch: training already running (PID $$(cat logs/train.pid)). Use 'make train.stop' first."; \
+		exit 1; \
+	fi
+	@if [ -f checkpoints/replay_buffer.bin ] || [ -f checkpoints/replay_buffer.bin.recent ]; then \
+		echo "[fresh] removing checkpoints/replay_buffer.bin (and .recent) — see §149 task 4c"; \
+		rm -f checkpoints/replay_buffer.bin checkpoints/replay_buffer.bin.recent; \
+	fi
+	@nohup env MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(CHECKPOINT_BOOTSTRAP) $(_NODASH_FLAG) $(VARIANT_FLAG) \
+		> logs/train_$$(date +%Y%m%d_%H%M%S).log 2>&1 & \
+		echo $$! > logs/train.pid; \
+		echo "Fresh training started (PID $$(cat logs/train.pid))"
+	@echo "Logs: logs/train_*.log"
+	@echo "Dashboard: run 'make dashboard' in a separate terminal to attach (http://localhost:5001)"
+
 .PHONY: train.bg.resume
 train.bg.resume: ## Resume latest checkpoint, background (VARIANT= supported)
 	@test -n "$(CHECKPOINT_LATEST)" || (echo "No checkpoints/checkpoint_*.pt found" && exit 1)

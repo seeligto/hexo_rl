@@ -358,6 +358,41 @@ def main() -> None:
         log.info("corpus_prefill_skipped", msg="buffer well-restored from file",
                  buffer_size=buffer.size)
 
+    # ── Buffer contamination guard (§149 task 4d) ─────────────────────────────
+    # Always emit the pre-corpus buffer size so contamination is greppable.
+    # When training is being kicked off from a bootstrap-like checkpoint (step
+    # counter near 0 — the pretrain-end value) but the on-disk buffer was
+    # populated by a prior, possibly failed, run, log a loud warning. The
+    # legitimate resume path has a meaningful trainer.step from a self-play
+    # run, so this gate only fires on fresh-from-bootstrap launches that
+    # silently inherited stale self-play data.
+    _ckpt_path_str = str(args.checkpoint) if args.checkpoint else ""
+    _looks_like_bootstrap_resume = bool(args.checkpoint) and any(
+        marker in _ckpt_path_str for marker in ("bootstrap_model", "pretrain_")
+    )
+    log.info(
+        "buffer_state_at_corpus_load",
+        buffer_size_before_corpus_load=buffer.size,
+        ckpt_step=trainer.step if args.checkpoint else None,
+        ckpt_path=_ckpt_path_str or None,
+        buffer_persist_enabled=mixing_cfg.get("buffer_persist", False),
+    )
+    if _looks_like_bootstrap_resume and buffer.size > 0 and trainer.step <= 0:
+        log.warning(
+            "buffer_contamination_suspected",
+            msg=(
+                "Bootstrap-like checkpoint (step <= 0) was loaded but the replay "
+                "buffer is non-empty before corpus load. The on-disk "
+                "replay_buffer.bin from a prior run was likely auto-restored. "
+                "Delete checkpoints/replay_buffer.bin (and *.recent) before a "
+                "fresh launch, or set training.mixing.buffer_persist=false on "
+                "the variant. See §149 task 4c/4d."
+            ),
+            buffer_size=buffer.size,
+            ckpt=_ckpt_path_str,
+            ckpt_step=trainer.step,
+        )
+
     # ── Corpus loading ────────────────────────────────────────────────────────
     pretrained_buffer = load_pretrained_buffer(
         mixing_cfg, config, emit_event, buffer.size, capacity

@@ -188,6 +188,11 @@ def main() -> None:
     p.add_argument("--sims", type=int, default=SIMS_DEFAULT)
     p.add_argument("--temperature", type=float, default=TEMPERATURE)
     p.add_argument("--dry-run", action="store_true", help="2 games only")
+    p.add_argument("--gate-strict", action="store_true",
+                   help="Use the original channel-cut BLOCK threshold (43%); "
+                        "default is the §149 4e parity-relaxed threshold (38%) "
+                        "appropriate for corpus-rebuild scenarios where parity "
+                        "is the expected outcome.")
     args = p.parse_args()
 
     n_games = 2 if args.dry_run else args.n_games
@@ -228,9 +233,10 @@ def main() -> None:
         print(f"\nDRY RUN COMPLETE — v7_wins={total_v7_wins}/{n_games}")
         return
 
+    block_threshold = 0.43 if args.gate_strict else 0.38
     if lower >= 0.48:
         verdict = "PASS"
-    elif lower >= 0.43:
+    elif lower >= block_threshold:
         verdict = "WARN"
     else:
         verdict = "BLOCK"
@@ -275,11 +281,11 @@ def main() -> None:
 | P10 game length | {np.percentile(plies, 10):.0f} |
 | P90 game length | {np.percentile(plies, 90):.0f} |
 
-## Gate logic
+## Gate logic (§149 4e: parity-relaxed by default; --gate-strict for original)
 
 - PASS: lower-CI ≥ 48% (parity or better — v7 corpus rebuild matches v6)
-- WARN: lower-CI in [43%, 48%) (near parity)
-- BLOCK: lower-CI < 43% (regression vs v6)
+- WARN: lower-CI in [{int(block_threshold*100)}%, 48%) (near parity)
+- BLOCK: lower-CI < {int(block_threshold*100)}% (regression vs v6)
 
 ## Verdict: {verdict}
 

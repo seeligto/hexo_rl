@@ -40,7 +40,7 @@ from hexo_rl.training.losses import (
     compute_policy_loss, compute_value_loss, compute_aux_loss,
     compute_chain_loss, compute_total_loss, fp16_backward_step,
 )
-from hexo_rl.training.checkpoints import save_full_checkpoint, save_inference_weights
+from hexo_rl.training.checkpoints import get_base_model, save_full_checkpoint, save_inference_weights
 from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.augment.luts import get_policy_scatters
@@ -491,18 +491,20 @@ class BootstrapTrainer:
         n = max(n_batches, 1)
         return {k: v / n for k, v in total.items()}
 
-    def save_checkpoint(self) -> Path:
+    def save_checkpoint(self, inf_out: Optional[Path] = None) -> Path:
         """Save full checkpoint in self-play-compatible format.
 
-        Also writes checkpoints/bootstrap_model.pt (weights only) for the
-        eval pipeline.
+        Also writes a weights-only file (default: checkpoints/bootstrap_model.pt)
+        for the eval pipeline. Pass ``inf_out`` to override that path — used by
+        --resume runs that should not clobber the canonical bootstrap model
+        until eval confirms uplift.
         """
         ckpt_path = self.checkpoint_dir / f"pretrain_{abs(self.step):08d}.pt" if self.step < 0 else self.checkpoint_dir / f"pretrain_{self.step:08d}.pt"
         save_full_checkpoint(
             self.model, self.optimizer, self.scaler, self.scheduler,
             self.step, self.config, ckpt_path,
         )
-        inf_path = Path("checkpoints") / "bootstrap_model.pt"
+        inf_path = inf_out if inf_out is not None else Path("checkpoints") / "bootstrap_model.pt"
         save_inference_weights(self.model, inf_path)
         log.info("checkpoint_saved", path=str(ckpt_path), inference=str(inf_path))
         return ckpt_path
@@ -609,6 +611,16 @@ def pretrain() -> None:
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints/pretrain")
     parser.add_argument("--no-compile", action="store_true",
                         help="Disable torch.compile even if config enables it")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Resume from a full pretrain checkpoint (model+optimizer+scaler state). "
+                             "Cosine LR schedule is restarted across --epochs at --lr-peak (or config default).")
+    parser.add_argument("--lr-peak", type=float, default=None,
+                        help="Override peak LR for cosine restart (used with --resume; "
+                             "lower than original 2e-3 to fine-tune without disturbing learned weights).")
+    parser.add_argument("--inference-out", type=str, default=None,
+                        help="Override inference-weights output path "
+                             "(default: checkpoints/bootstrap_model.pt). "
+                             "Use a v7e30-style filename for --resume runs.")
     args = parser.parse_args()
 
     # Load configs
@@ -714,10 +726,33 @@ def pretrain() -> None:
     config["pretrain_total_steps"] = total_pretrain_steps
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)
 
+    # Resume mode: load model/optimizer/scaler from full checkpoint, restart
+    # cosine schedule across the new --epochs window with the requested peak LR.
+    # Step counter is reset so the new cosine completes over the new run length.
+    if args.resume:
+        resume_path = Path(args.resume)
+        log.info("resume_loading", path=str(resume_path))
+        resume_ckpt = torch.load(resume_path, map_location=device, weights_only=False)
+        get_base_model(trainer.model).load_state_dict(resume_ckpt["model_state"])
+        trainer.optimizer.load_state_dict(resume_ckpt["optimizer_state"])
+        if resume_ckpt.get("scaler_state") is not None:
+            trainer.scaler.load_state_dict(resume_ckpt["scaler_state"])
+        new_peak = float(args.lr_peak) if args.lr_peak is not None else float(config.get("lr", 0.002))
+        for g in trainer.optimizer.param_groups:
+            g["lr"] = new_peak
+            g["initial_lr"] = new_peak
+        trainer.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            trainer.optimizer, T_max=max(1, total_pretrain_steps), eta_min=1e-5,
+        )
+        log.info("resume_complete", new_peak_lr=new_peak,
+                 cosine_t_max=total_pretrain_steps,
+                 prev_step=int(resume_ckpt.get("step", 0)))
+
     # Training loop
     console.print(
         f"[bold]Training:[/bold] epochs={args.epochs} batch={batch_size} "
         f"label_smooth={label_smoothing} aux_weight={aux_weight}"
+        + (f" RESUME from {args.resume} peak_lr={trainer.optimizer.param_groups[0]['lr']:.1e}" if args.resume else "")
     )
     trainer.step = -total_pretrain_steps
     start_step = trainer.step
@@ -746,7 +781,8 @@ def pretrain() -> None:
             break
         prev_loss = metrics["loss"]
 
-    ckpt_path = trainer.save_checkpoint()
+    inf_out = Path(args.inference_out) if args.inference_out else None
+    ckpt_path = trainer.save_checkpoint(inf_out=inf_out)
     console.print(f"[green]Checkpoint: {ckpt_path}[/green]")
 
     validate(ckpt_path, device)

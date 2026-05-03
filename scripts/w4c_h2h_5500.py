@@ -5,7 +5,12 @@
 Challenger = checkpoints/w4c_smoke_5080/checkpoint_00005500.pt
 Baseline   = checkpoints/bootstrap_model.pt (v6)
 
-Gate (same as Q41 revised): PASS lower-CI ≥ 48%, WARN [43%, 48%), BLOCK < 43%
+Gate (§149 4e: relaxed BLOCK from 43% to 38% — for parity-test
+scenarios like corpus-rebuild or smoke gating, lower-CI just below
+50% is statistical parity not regression. Channel-cut scenarios that
+need the strict 43% lower bound should pass --gate-strict explicitly.):
+  PASS lower-CI ≥ 48%, WARN [38%, 48%), BLOCK < 38%
+  (with --gate-strict: WARN [43%, 48%), BLOCK < 43%, original)
 
 Usage:
   .venv/bin/python scripts/w4c_h2h_5500.py
@@ -188,6 +193,9 @@ def main() -> None:
     p.add_argument("--challenger", type=Path, default=CHALLENGER_CKPT)
     p.add_argument("--baseline", type=Path, default=BASELINE_CKPT)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--gate-strict", action="store_true",
+                   help="Use the original channel-cut BLOCK threshold (43%); "
+                        "default is the §149 4e parity-relaxed threshold (38%).")
     args = p.parse_args()
 
     n_games = 2 if args.dry_run else args.n_games
@@ -227,9 +235,10 @@ def main() -> None:
         print(f"\nDRY RUN COMPLETE — challenger_wins={total_wins}/{n_games}")
         return
 
+    block_threshold = 0.43 if args.gate_strict else 0.38
     if lower >= 0.48:
         verdict = "PASS"
-    elif lower >= 0.43:
+    elif lower >= block_threshold:
         verdict = "WARN"
     else:
         verdict = "BLOCK"
