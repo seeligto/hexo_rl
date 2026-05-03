@@ -266,11 +266,13 @@ def main() -> None:
     states_buf = np.empty((n_sample, 8, 19, 19), dtype=np.float16)  # HEXB v6: 8 planes
     policies_buf = np.empty((n_sample, 362), dtype=np.float32)
     outcomes_buf = np.empty(n_sample, dtype=np.float32)
+    weights_buf = np.empty(n_sample, dtype=np.float32)
     out_idx = 0
     p1_wins = 0
 
     for gi, ply_indices in sorted(game_to_plies.items()):
         g = records[gi]
+        pos_weight = g["weight"] / g["game_len"]
         s, _chain, p, o = replay_game_to_triples(g["moves"], g["winner"])
         if g["winner"] == 1:
             p1_wins += 1
@@ -279,15 +281,21 @@ def main() -> None:
                 states_buf[out_idx] = s[pi][KEPT_PLANE_INDICES]  # slice 18→8 planes
                 policies_buf[out_idx] = p[pi]
                 outcomes_buf[out_idx] = o[pi]
+                weights_buf[out_idx] = pos_weight
                 out_idx += 1
 
     # Trim to actual count (some plies may have been out of bounds after replay)
     states_out = states_buf[:out_idx]
     policies_out = policies_buf[:out_idx]
     outcomes_out = outcomes_buf[:out_idx]
-    # Uniform weights: Elo-based sampling is already baked in via rng.choice(p=w)
-    # Saved so pretrain.py WeightedRandomSampler can load the array without crashing.
-    weights_out = np.ones(out_idx, dtype=np.float32)
+    # When subselecting (--max-positions < n_available) Elo bias is already baked
+    # in via rng.choice(p=w) and uniform weights at train time are correct.
+    # When keeping every position, rng.choice with replace=False degenerates to a
+    # permutation, so save per-position Elo-band weights for WeightedRandomSampler.
+    if args.max_positions is not None and args.max_positions < n_available:
+        weights_out = np.ones(out_idx, dtype=np.float32)
+    else:
+        weights_out = weights_buf[:out_idx].astype(np.float32)
 
     p1_rate = p1_wins / len(game_to_plies) if game_to_plies else 0.0
     print(f"P1 win rate (sampled games): {p1_rate:.1%}")
