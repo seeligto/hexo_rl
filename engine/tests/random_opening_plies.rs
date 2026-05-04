@@ -63,6 +63,7 @@ fn make_runner(
         0_usize,                            // n_sims_full
         random_opening_plies,
         false,                              // selfplay_rotation_enabled
+        false,                              // legal_move_radius_jitter
     )
     .expect("runner construction should succeed")
 }

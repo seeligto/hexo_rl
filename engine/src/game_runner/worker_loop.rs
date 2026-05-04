@@ -189,6 +189,7 @@ impl SelfPlayRunner {
             let n_sims_full       = self.n_sims_full;
             let random_opening_plies = self.random_opening_plies;
             let selfplay_rotation_enabled = self.selfplay_rotation_enabled;
+            let legal_move_radius_jitter = self.legal_move_radius_jitter;
             let sym_tables = sym_tables_arc.clone();
             let results_queue = self.results.clone();
             let positions_dropped = self.positions_dropped.clone();
@@ -225,6 +226,17 @@ impl SelfPlayRunner {
                     let mut records_vec = Vec::new();
                     let mut move_history: Vec<(i32, i32)> = Vec::new();
                     version_seen.clear();
+
+                    // Phase B' v8 §152 Q2: per-game radius jitter ∈ {4, 5, 6}.
+                    // Sample once per game from the worker-local RNG so the
+                    // value is fixed for the duration; reproducible given a
+                    // seed-derived rng() initialiser. Default radius (5) is
+                    // unchanged when the flag is off.
+                    if legal_move_radius_jitter {
+                        const JITTER_RADII: [i32; 3] = [4, 5, 6];
+                        let r = *JITTER_RADII.choose(&mut rng).unwrap();
+                        board.set_legal_move_radius(r);
+                    }
 
                     // §130: sample per-game rotation across the 12-element hex
                     // dihedral group when self-play rotation is enabled. The

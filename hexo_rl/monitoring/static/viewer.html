@@ -207,6 +207,9 @@ body {
         <div>Player to move: <span id="stat-player">—</span></div>
         <div>Value estimate: <span id="stat-value">—</span></div>
         <div>Threats: <span id="stat-threats">—</span></div>
+        <div title="§152 Class-4 — stride-5 / row-max stone tags for this game">
+            Stride-5 / row-max: <span id="stat-stride5">—</span>
+        </div>
     </div>
 
     <div id="game-list-container">
@@ -513,6 +516,19 @@ function loadGame(gameId) {
                     item.classList.add('active');
                     break;
                 }
+            }
+
+            // §152 Class-4 — per-game stride-5 / row-max tag.
+            const sr = data.stride5_run_max;
+            const rm = data.row_max_density;
+            const sEl = document.getElementById('stat-stride5');
+            if (typeof sr === 'number' && typeof rm === 'number') {
+                const flag = rm > 30 ? ' ⚠' : '';
+                sEl.textContent = `${sr} / ${rm}${flag}`;
+                sEl.style.color = rm > 30 ? '#F4664A' : (rm > 20 ? '#EF9F27' : '');
+            } else {
+                sEl.textContent = '—';
+                sEl.style.color = '';
             }
 
             renderBoard();

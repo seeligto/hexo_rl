@@ -139,6 +139,14 @@ pub struct Board {
     /// Set to true by any mutating operation (apply_move / undo_move).
     /// Cleared by `legal_moves_set()` after a full rebuild.
     pub(crate) cache_dirty: StdCell<bool>,
+    /// Per-board legal-move radius override (Phase B' v8 §152 Q2).
+    ///
+    /// `legal_moves_set()` rebuilds by hex-ball expansion at this radius.
+    /// Default is the canonical `moves::LEGAL_MOVE_RADIUS` constant (5).
+    /// `SelfPlayRunner` overrides this per game when the jitter flag is on
+    /// — sampling from {4, 5, 6} via a worker-local RNG to break the
+    /// radius-5 stride-5 fixed point identified in §152.
+    pub(crate) legal_move_radius: i32,
 }
 
 impl Board {
@@ -179,7 +187,25 @@ impl Board {
             action_anchors_count: 0,
             legal_cache: UnsafeCell::new(init_cache),
             cache_dirty: StdCell::new(false),
+            legal_move_radius: super::moves::DEFAULT_LEGAL_MOVE_RADIUS,
         }
+    }
+
+    /// Phase B' v8 (§152 Q2): override the legal-move radius for this Board.
+    ///
+    /// Marks `legal_cache` dirty so the next `legal_moves_set()` rebuilds at
+    /// the new radius.  Used by `SelfPlayRunner` when
+    /// `legal_move_radius_jitter` is enabled — caller samples r ∈ {4, 5, 6}
+    /// per game and applies it before the first move.
+    pub fn set_legal_move_radius(&mut self, radius: i32) {
+        self.legal_move_radius = radius;
+        self.cache_dirty.set(true);
+    }
+
+    /// Current legal-move radius (default 5, may be overridden via
+    /// `set_legal_move_radius`).
+    pub fn legal_move_radius(&self) -> i32 {
+        self.legal_move_radius
     }
 
     // ── Window ────────────────────────────────────────────────────────────────
@@ -1113,6 +1139,7 @@ impl Clone for Board {
             action_anchors_count: self.action_anchors_count,
             legal_cache: UnsafeCell::new(FxHashSet::with_capacity_and_hasher(cap, Default::default())),
             cache_dirty: StdCell::new(true),
+            legal_move_radius: self.legal_move_radius,
         }
     }
 }

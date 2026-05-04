@@ -1,0 +1,51 @@
+# w4c_smoke_v6_eval500_5080 — Phase B' v8 Q1 follow-up: Class-1 closure.
+#
+# Mirror of w4c_smoke_v6_instrumented_5080 with two changes:
+#   1. eval_interval = 500       → enables weight swaps so model_version
+#      atomic increments; closes the Class-1 (stale-dispatch) methodology
+#      gap from the §152 instrumented diagnosis (current_version stayed at
+#      0 throughout, no Spearman ρ computable).
+#   2. iterations target = 2500  → ~3 h walltime budget; matches the
+#      diagnosis brief §9.1 follow-up spec.
+#
+# All other knobs (n_workers=8, batch=32, max_wait=2 ms, leaf_batch=4,
+# sims=400 base + playout_cap full=0.5, draw_value=-0.5, max_game_moves=150)
+# match the instrumented variant so the only swept variable is
+# eval_interval.
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model.pt \
+#     --variant w4c_smoke_v6_eval500_5080 \
+#     --checkpoint-dir checkpoints/w4c_smoke_v6_eval500 \
+#     --no-dashboard \
+#     --iterations 2500
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+
+# §152 Q1 follow-up: weight swap every 500 steps so model_version_range
+# stops being identically zero.
+eval_interval: 500
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  n_workers: 8
+  inference_batch_size: 32
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 4
+  playout_cap:
+    fast_prob: 0.0
+
+monitors:
+  hard_abort_grad_norm: 10.0
+
+# Phase B' instrumentation — same fixture, same cadences as the parent
+# instrumented variant.
+instrumentation:
+  enabled: true
+  value_probe_interval: 250
+  composition_interval: 500
+  value_probe_fixture: fixtures/value_probe_50.npz

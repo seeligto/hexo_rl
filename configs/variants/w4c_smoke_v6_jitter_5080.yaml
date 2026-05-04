@@ -1,0 +1,57 @@
+# w4c_smoke_v6_jitter_5080 — Phase B' v8 Q2: LEGAL_MOVE_RADIUS jitter ∈ {4,5,6}.
+#
+# Targets §152 Class-4 (stride-5 east-west spam at distance-5 spacing).
+# Distance 5 is the inclusive boundary of LEGAL_MOVE_RADIUS = 5 (§146) and
+# CLUSTER_THRESHOLD = 5 (§151 δ.c); the policy fixed-points on the boundary.
+# Jittering the radius per-game ∈ {4, 5, 6} via the worker-local RNG breaks
+# the radius-5 fixed point: a third of games are at radius 4 (stride-5 not
+# legal at all from a single-stone seed) and a third at radius 6 (stride-5
+# is no longer the maximum-territory-extension move).
+#
+# Mirror of w4c_smoke_v6_instrumented_5080 with three changes:
+#   1. selfplay.legal_move_radius_jitter = true → engine sample r ∈ {4,5,6}
+#      per game from the worker's seed-derived rng()
+#   2. eval_interval = 500       → matches Q1 baseline (Class-1 closure
+#      remains active so the run produces non-zero model_version_range)
+#   3. iterations target = 2500  → ~3 h walltime
+#
+# Engine plumbing: engine/src/board/state.rs adds Board::legal_move_radius
+# field + set_legal_move_radius setter; engine/src/game_runner/worker_loop.rs
+# samples and applies per game. Default off — eval / bot / corpus replay
+# unaffected.
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model.pt \
+#     --variant w4c_smoke_v6_jitter_5080 \
+#     --checkpoint-dir checkpoints/w4c_smoke_v6_jitter \
+#     --no-dashboard \
+#     --iterations 2500
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+
+eval_interval: 500
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  n_workers: 8
+  inference_batch_size: 32
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 4
+  playout_cap:
+    fast_prob: 0.0
+  # §152 Q2: per-game LEGAL_MOVE_RADIUS jitter ∈ {4, 5, 6}. Engine reads
+  # via SelfPlayRunner kwarg; reproducible from the worker-local RNG.
+  legal_move_radius_jitter: true
+
+monitors:
+  hard_abort_grad_norm: 10.0
+
+instrumentation:
+  enabled: true
+  value_probe_interval: 250
+  composition_interval: 500
+  value_probe_fixture: fixtures/value_probe_50.npz

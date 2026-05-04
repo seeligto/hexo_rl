@@ -274,13 +274,23 @@
       </div>
     </div>
 
-    <!-- Live Investigation panel (§107) -->
+    <!-- Live Investigation panel (§107 + §152 Class-4) -->
     <div class="card">
       <div class="label">Live Investigation</div>
       <div style="margin-top:6px">
         <div class="sys-row"><span class="sys-label">Colony ext (rolling 50)</span><span id="inv-colony-ext">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">Cluster v std</span><span id="inv-cluster-v-std">&mdash;</span></div>
         <div class="sys-row"><span class="sys-label">Cluster pol disagree</span><span id="inv-cluster-pol-dis">&mdash;</span></div>
+        <div class="sys-row" title="§152 Class-4 — longest stride-5 chain on a single hex row, P90 over last 50 games">
+          <span class="sys-label">Stride-5 run P90</span>
+          <span id="inv-stride5-p90">&mdash;</span>
+          <span id="inv-stride5-spark" class="spark-thin" style="margin-left:8px">&mdash;</span>
+        </div>
+        <div class="sys-row" title="§152 Class-4 — densest hex row stone count, P90 over last 50 games (alarm > 30)">
+          <span class="sys-label">Row max P90</span>
+          <span id="inv-rowmax-p90">&mdash;</span>
+          <span id="inv-rowmax-spark" class="spark-thin" style="margin-left:8px">&mdash;</span>
+        </div>
       </div>
     </div>
 
@@ -919,6 +929,10 @@ function onIterationComplete(p) {
 const colonyExtCounts = [];
 const colonyExtTotals = [];
 const COLONY_ROLL = 50;
+// §152 Class-4 — rolling stride-5 / row-max histories (last 50 games).
+const stride5RunHistory = [];
+const rowMaxHistory = [];
+const STRIDE5_ROLL = 50;
 
 function onGameComplete(p) {
   gameHistory.push({ winner: p.winner, moves: p.moves });
@@ -939,6 +953,25 @@ function onGameComplete(p) {
     const cnt = colonyExtCounts.reduce((a, b) => a + b, 0);
     const pct = tot > 0 ? (cnt / tot) * 100 : 0;
     setText('inv-colony-ext', pct.toFixed(1) + '%');
+  }
+
+  // §152 Class-4 — stride-5 / row-max P90 over last 50 games (sparkline + alarm)
+  if (typeof p.stride5_run_max === 'number' && typeof p.row_max_density === 'number') {
+    stride5RunHistory.push(p.stride5_run_max);
+    rowMaxHistory.push(p.row_max_density);
+    if (stride5RunHistory.length > STRIDE5_ROLL) stride5RunHistory.shift();
+    if (rowMaxHistory.length > STRIDE5_ROLL) rowMaxHistory.shift();
+    const srSorted = [...stride5RunHistory].sort((a, b) => a - b);
+    const rmSorted = [...rowMaxHistory].sort((a, b) => a - b);
+    const idx = Math.max(0, Math.floor(srSorted.length * 0.9) - 1);
+    const sr_p90 = srSorted[idx];
+    const rm_p90 = rmSorted[idx];
+    setText('inv-stride5-p90', sr_p90);
+    const rmEl = document.getElementById('inv-rowmax-p90');
+    rmEl.textContent = rm_p90;
+    rmEl.style.color = rm_p90 > 30 ? '#F4664A' : (rm_p90 > 20 ? '#EF9F27' : '');
+    setText('inv-stride5-spark', _spark(stride5RunHistory));
+    setText('inv-rowmax-spark',  _spark(rowMaxHistory));
   }
 
   updateWinRateChart();

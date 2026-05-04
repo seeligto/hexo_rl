@@ -365,6 +365,7 @@ fn test_rotation_disabled_by_default_in_runner() {
         0_usize,      // n_sims_full
         0_u32,        // random_opening_plies
         false,        // selfplay_rotation_enabled (eval default)
+        false,        // legal_move_radius_jitter
     )
     .expect("runner ctor with rotation=false must succeed");
     assert!(!runner_default.is_running());
@@ -373,7 +374,7 @@ fn test_rotation_disabled_by_default_in_runner() {
     let runner_rot = SelfPlayRunner::new(
         1, 0, 1, 1, 1.5, 0.25, 8 * 19 * 19, 19 * 19 + 1, 0.0, 1, 1, 15, -0.1, true,
         0.3, 0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-        10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, true,
+        10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, true, false,
     )
     .expect("runner ctor with rotation=true must succeed");
     assert!(!runner_rot.is_running());

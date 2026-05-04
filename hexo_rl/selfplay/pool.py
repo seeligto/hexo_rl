@@ -31,6 +31,70 @@ from engine import ReplayBuffer
 # (W1 forensics R1, 2026-04-19).
 _COLONY_EXT_HEX_DIST = 6
 
+# Phase B' Class-4 stride-5 detector (§152).  Targets the q-axis stride-5
+# spam pattern (mixed-color stones at distance-5 spacing along a single hex
+# row).  Stride 5 is the inclusive boundary of LEGAL_MOVE_RADIUS = 5 (§146)
+# and CLUSTER_THRESHOLD = 5 (§151 δ.c); existing macro detectors
+# (colony_extension_fraction at hex_dist > 6, axis_distribution at
+# distance-1 adjacency) miss it by construction.
+_STRIDE5_STEP = 5
+
+
+def _compute_stride5_metrics(
+    move_history: list[tuple[int, int]],
+) -> tuple[int, int]:
+    """Phase B' Class-4 detector — return (stride5_run_max, row_max_density).
+
+    Scans all hex rows in all three axes (matching ``_HEX_AXES``):
+
+      axis_q (E-W,    dq=+1, dr= 0): row keyed by r,        position = q
+      axis_r (NW-SE,  dq= 0, dr=+1): row keyed by q,        position = r
+      axis_s (NE-SW,  dq=+1, dr=-1): row keyed by s=-q-r,   position = q
+
+    ``stride5_run_max`` is the longest chain of stones lying on a single hex
+    row whose along-row coordinates are consecutive at step 5 (e.g. q ∈
+    {3, 8, 13, 18} on the same r-row is a chain of length 4).  Color-blind:
+    we measure stone-on-row geometry, not same-color sub-runs.
+
+    ``row_max_density`` is the maximum stone count on any single hex row in
+    any of the three axes (densest row in the densest direction).
+
+    Per-game cost: O(|stones|).  Budget << 1 ms at typical game length.
+    """
+    if not move_history:
+        return (0, 0)
+
+    bucket_r: dict[int, set[int]] = {}
+    bucket_q: dict[int, set[int]] = {}
+    bucket_s: dict[int, set[int]] = {}
+    for q, r in move_history:
+        s = -q - r
+        bucket_r.setdefault(r, set()).add(q)
+        bucket_q.setdefault(q, set()).add(r)
+        bucket_s.setdefault(s, set()).add(q)
+
+    row_max = 0
+    stride5_max = 0
+    step = _STRIDE5_STEP
+    for buckets in (bucket_r, bucket_q, bucket_s):
+        for posset in buckets.values():
+            n = len(posset)
+            if n > row_max:
+                row_max = n
+            if n < 2:
+                continue
+            for p in posset:
+                if (p - step) in posset:
+                    continue  # not start of chain
+                length = 1
+                cur = p
+                while (cur + step) in posset:
+                    length += 1
+                    cur += step
+                if length > stride5_max:
+                    stride5_max = length
+    return (stride5_max, row_max)
+
 
 def _compute_colony_extension(move_history: list[tuple[int, int]]) -> tuple[int, int]:
     """Return (colony_extension_count, classified_total) for a finished game.
@@ -163,6 +227,10 @@ class WorkerPool:
             # eval/bot paths construct SelfPlayRunner directly without
             # passing this kwarg, picking up the Rust default of false.
             selfplay_rotation_enabled=bool(sp.get("rotation_enabled", True)),
+            # Phase B' v8 §152 Q2 — per-game legal-move radius jitter ∈
+            # {4, 5, 6}. Default off so eval/bot/test paths and any
+            # pre-§152 variant stay at the canonical radius 5.
+            legal_move_radius_jitter=bool(sp.get("legal_move_radius_jitter", False)),
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 
@@ -229,6 +297,11 @@ class WorkerPool:
         # Per-game model-version range archive — last 200 games. (min, max,
         # distinct, terminal_reason, winner_code).
         self._mv_range_history: deque[tuple[int, int, int, int, int]] = deque(maxlen=200)
+        # Phase B' Class-4: rolling stride5 / row-max archives — last 50 games.
+        # Bound chosen to match the diagnosis brief's "rolling last 50, P90
+        # alarm at row_max > 30".
+        self._stride5_run_history: deque[int] = deque(maxlen=50)
+        self._row_max_history: deque[int] = deque(maxlen=50)
 
     @property
     def batch_fill_pct(self) -> float:
@@ -336,6 +409,31 @@ class WorkerPool:
             "max_range": int(max_range),
             "median_distinct": int(median_distinct),
             "spearman_rho_range_vs_draw": rho,
+        }
+
+    def stride5_summary(self) -> dict[str, float]:
+        """Phase B' Class-4 — stride-5 spam summary over the last 50 games.
+
+        Returns median / P90 / max for both ``stride5_run`` (longest stride-5
+        chain in the densest hex row) and ``row_max`` (densest hex row stone
+        count).  Empty until the first game completes.
+        """
+        with self._lock:
+            sruns = list(self._stride5_run_history)
+            rmax = list(self._row_max_history)
+        if not sruns:
+            return {"n": 0}
+        n = len(sruns)
+        sruns_sorted = sorted(sruns)
+        rmax_sorted = sorted(rmax)
+        return {
+            "n": n,
+            "stride5_run_median": int(sruns_sorted[n // 2]),
+            "stride5_run_p90":    int(sruns_sorted[max(0, int(n * 0.9) - 1)]),
+            "stride5_run_max":    int(sruns_sorted[-1]),
+            "row_max_median":     int(rmax_sorted[n // 2]),
+            "row_max_p90":        int(rmax_sorted[max(0, int(n * 0.9) - 1)]),
+            "row_max_max":        int(rmax_sorted[-1]),
         }
 
     def buffer_composition(self) -> dict[str, float]:
@@ -496,6 +594,19 @@ class WorkerPool:
                 else:
                     _ext_count, _ext_total, _ext_frac = 0, 0, 0.0
 
+                # Phase B' Class-4 stride-5 detector (§152). Always computed
+                # — pure Python over move_history, O(|stones|), << 1 ms per
+                # game. Existing macro detectors (colony_extension at >6,
+                # axis_distribution at distance-1) are blind to stride-5 by
+                # construction; this metric is the only live signal.
+                if move_history:
+                    _stride5_run, _row_max = _compute_stride5_metrics(move_history)
+                else:
+                    _stride5_run, _row_max = 0, 0
+                with self._lock:
+                    self._stride5_run_history.append(int(_stride5_run))
+                    self._row_max_history.append(int(_row_max))
+
                 # Phase B': map the Rust terminal_reason u8 to the dashboard
                 # string convention used by reports/phase_b/.
                 _TR_NAMES = {0: "six_in_a_row", 1: "colony", 2: "ply_cap", 3: "other_draw"}
@@ -524,6 +635,9 @@ class WorkerPool:
                     "model_version_max":        int(mv_max),
                     "model_version_distinct":   int(mv_distinct),
                     "model_version_range_size": int(mv_max - mv_min),
+                    # Phase B' Class-4 (§152) — distance-5 row-spam metric.
+                    "stride5_run_max":   int(_stride5_run),
+                    "row_max_density":   int(_row_max),
                 }
                 emit_event(game_complete_payload)
 

@@ -283,6 +283,48 @@ mod tests {
     }
 
     #[test]
+    fn set_legal_move_radius_overrides_default() {
+        // Phase B' v8 §152 Q2: per-Board radius override should change the
+        // legal_moves_set and remain reproducible across calls.  Defaults
+        // unchanged (5); overrides honoured at 4 and 6.
+        let mut b = Board::new();
+        b.apply_move(0, 0).unwrap();
+
+        // Default radius = 5 (matches §145 Option α').
+        assert_eq!(b.legal_move_radius(), 5);
+        let legal_default: std::collections::HashSet<(i32, i32)> =
+            b.legal_moves().into_iter().collect();
+        assert!(legal_default.contains(&(5, 0)));
+        assert!(!legal_default.contains(&(6, 0)));
+
+        // Lower to 4: cell at distance 5 disappears from legal set.
+        b.set_legal_move_radius(4);
+        assert_eq!(b.legal_move_radius(), 4);
+        let legal_r4: std::collections::HashSet<(i32, i32)> =
+            b.legal_moves().into_iter().collect();
+        assert!(legal_r4.contains(&(4, 0)));
+        assert!(!legal_r4.contains(&(5, 0)),
+                "cell at distance 5 must drop out at radius 4");
+
+        // Raise to 6: cell at distance 6 becomes legal.
+        b.set_legal_move_radius(6);
+        assert_eq!(b.legal_move_radius(), 6);
+        let legal_r6: std::collections::HashSet<(i32, i32)> =
+            b.legal_moves().into_iter().collect();
+        assert!(legal_r6.contains(&(6, 0)),
+                "cell at distance 6 must enter at radius 6");
+        assert!(!legal_r6.contains(&(7, 0)),
+                "cell at distance 7 must remain illegal at radius 6");
+
+        // Clone must preserve the override.
+        let cloned = b.clone();
+        assert_eq!(cloned.legal_move_radius(), 6);
+        let legal_clone: std::collections::HashSet<(i32, i32)> =
+            cloned.legal_moves().into_iter().collect();
+        assert!(legal_clone.contains(&(6, 0)));
+    }
+
+    #[test]
     fn cluster_threshold_splits_at_distance_six() {
         // Phase B δ.c (§151): CLUSTER_THRESHOLD lowered 8 → 5.
         // Two isolated colonies at axial distance 6 must form TWO clusters

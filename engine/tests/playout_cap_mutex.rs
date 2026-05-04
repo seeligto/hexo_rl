@@ -45,6 +45,7 @@ fn start_panics_when_both_caps_active() {
         100,                // n_sims_full
         0_u32,              // random_opening_plies
         false,              // selfplay_rotation_enabled
+        false,              // legal_move_radius_jitter
     )
     .expect("constructor succeeds; mutex is enforced at start()");
 

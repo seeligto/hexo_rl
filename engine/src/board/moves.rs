@@ -4,14 +4,20 @@ use super::state::{Board, Cell, Player, HEX_AXES, hex_distance};
 /// Stones in a row required to win.
 const WIN_LENGTH: usize = 6;
 
-/// Maximum hex distance from any existing stone at which a new stone may be
-/// placed.  Official HTTT rule is 8, but self-play with bootstrap-v6 fragments
-/// the board past the 19×19 encoding window (§142, §144 W4C); §145 Option α'
-/// caps the practical radius at 5 to bound game extent without changing the
-/// network architecture or buffer schema.  Real games (corpus + SealBot) never
-/// exceed radius 5 between consecutive plies, so the rule cap is a no-op for
-/// in-distribution play and only suppresses fragmentation in self-play.
-const LEGAL_MOVE_RADIUS: i32 = 5;
+/// Default maximum hex distance from any existing stone at which a new stone
+/// may be placed.  Official HTTT rule is 8, but self-play with bootstrap-v6
+/// fragments the board past the 19×19 encoding window (§142, §144 W4C); §145
+/// Option α' caps the practical radius at 5 to bound game extent without
+/// changing the network architecture or buffer schema.  Real games (corpus +
+/// SealBot) never exceed radius 5 between consecutive plies, so the rule cap
+/// is a no-op for in-distribution play and only suppresses fragmentation in
+/// self-play.
+///
+/// Phase B' v8 (§152 Q2) introduced a per-Board override
+/// (`Board::legal_move_radius`) so `SelfPlayRunner` can jitter r ∈ {4, 5, 6}
+/// per game.  This constant remains the canonical default for fresh Boards
+/// (eval, bots, tests, corpus replay).
+pub const DEFAULT_LEGAL_MOVE_RADIUS: i32 = 5;
 
 /// Maximum hex distance between stones that share a single cluster for the
 /// `get_clusters()` partition.  Originally 8 to match the legal-move radius
@@ -56,12 +62,13 @@ impl Board {
                     }
                 }
             } else {
-                // For every placed stone, emit all empty cells within
-                // LEGAL_MOVE_RADIUS hex steps (capped at 5 by §145 Option α').
+                // For every placed stone, emit all empty cells within the
+                // Board's per-game `legal_move_radius` (default 5 from §145
+                // Option α'; jittered per game in Phase B' v8 §152 Q2).
                 // The hex ball in axial coords is the set of (dq, dr) satisfying:
                 //   |dq| ≤ R, |dr| ≤ R, |dq + dr| ≤ R
                 // which translates to dr ∈ [max(-R, -R-dq), min(R, R-dq)].
-                let r = LEGAL_MOVE_RADIUS;
+                let r = self.legal_move_radius;
                 for &(sq, sr) in self.cells.keys() {
                     for dq in -r..=r {
                         let dr_min = (-r).max(-r - dq);
