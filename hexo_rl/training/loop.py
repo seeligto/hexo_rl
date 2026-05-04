@@ -30,6 +30,7 @@ from hexo_rl.monitoring.early_game_probe import (
     EARLY_GAME_ENTROPY_WARN_THRESHOLD,
     EarlyGameProbe,
 )
+from hexo_rl.monitoring.value_probe import ValueProbe
 from hexo_rl.monitoring.events import emit_event, register_renderer
 from hexo_rl.monitoring.gpu_monitor import GPUMonitor
 from hexo_rl.training.batch_assembly import BatchBuffers, assemble_mixed_batch
@@ -486,6 +487,35 @@ def run_training_loop(
         log.warning("early_game_probe_unavailable", error=str(_egp_err))
         early_game_probe = None
 
+    # ── Phase B' Class-2 value-head drift probe ────────────────────────────────
+    # Loaded only when instrumentation is on; absent fixture → silent skip.
+    instr_cfg_main = config.get("instrumentation", {}) or {}
+    instrumentation_enabled = bool(instr_cfg_main.get("enabled", False))
+    value_probe_interval = int(instr_cfg_main.get("value_probe_interval", 250))
+    composition_interval = int(instr_cfg_main.get("composition_interval", 500))
+    value_probe: Optional[ValueProbe] = None
+    if instrumentation_enabled:
+        fixture_path = Path(instr_cfg_main.get(
+            "value_probe_fixture", "fixtures/value_probe_50.npz",
+        ))
+        try:
+            value_probe = ValueProbe(fixture_path=fixture_path, device=device)
+            log.info(
+                "value_probe_loaded",
+                path=str(fixture_path),
+                n=value_probe.n_positions,
+                n_decisive=value_probe.n_decisive,
+                n_draw=value_probe.n_draw,
+                interval=value_probe_interval,
+            )
+        except Exception as exc:
+            log.warning(
+                "value_probe_load_failed",
+                path=str(fixture_path),
+                error=str(exc),
+            )
+            value_probe = None
+
     # ── Axis-distribution baseline (§axis_dist) ───────────────────────────────
     import json as _json
     from pathlib import Path as _Path
@@ -891,6 +921,81 @@ def run_training_loop(
                         trainer_model=trainer.model,
                     )
                     last_iter_games = games_played
+
+                # ── Phase B' instrumentation events ──────────────────────────
+                # Cadenced separately from log_interval so the user can choose
+                # finer-grained probes without flooding the dashboard.
+                if instrumentation_enabled:
+                    if value_probe is not None and (train_step > 0
+                            and train_step % value_probe_interval == 0):
+                        try:
+                            vp = value_probe.compute(trainer.model)
+                            emit_event({
+                                "event": "value_probe_drift",
+                                "step": train_step,
+                                "decisive_mean": vp["decisive_mean"],
+                                "decisive_std":  vp["decisive_std"],
+                                "draw_mean":     vp["draw_mean"],
+                                "draw_std":      vp["draw_std"],
+                                "n_decisive":    vp["decisive_n"],
+                                "n_draw":        vp["draw_n"],
+                                "fixture":       value_probe.fixture_path,
+                            })
+                            log.info(
+                                "value_probe_drift",
+                                step=train_step,
+                                decisive_mean=round(vp["decisive_mean"], 4),
+                                draw_mean=round(vp["draw_mean"], 4),
+                            )
+                        except Exception as _vp_err:
+                            log.warning(
+                                "value_probe_failed", step=train_step,
+                                error=str(_vp_err),
+                            )
+
+                    if train_step > 0 and train_step % composition_interval == 0:
+                        try:
+                            comp = pool.buffer_composition()
+                            emit_event({
+                                "event": "buffer_composition",
+                                "step": train_step,
+                                **comp,
+                            })
+                            mvs = pool.model_version_summary()
+                            wdr = pool.per_worker_draw_rates()
+                            emit_event({
+                                "event": "worker_draw_rate",
+                                "step": train_step,
+                                "per_worker": {str(k): round(v, 4)
+                                               for k, v in wdr.items()},
+                                "n_workers_observed": len(wdr),
+                            })
+                            emit_event({
+                                "event": "model_version_summary",
+                                "step": train_step,
+                                **mvs,
+                                "current_version": int(
+                                    getattr(pool._runner, "model_version", 0),
+                                ),
+                            })
+                            log.info(
+                                "instrumentation_periodic",
+                                step=train_step,
+                                draw_target_fraction=comp.get("draw_target_fraction"),
+                                colony_terminal_fraction=comp.get("colony_terminal_fraction"),
+                                six_terminal_fraction=comp.get("six_terminal_fraction"),
+                                cap_terminal_fraction=comp.get("cap_terminal_fraction"),
+                                mv_median_range=mvs.get("median_range"),
+                                mv_p90_range=mvs.get("p90_range"),
+                                mv_spearman_rho=mvs.get("spearman_rho_range_vs_draw"),
+                                n_workers_observed=len(wdr),
+                            )
+                        except Exception as _instr_err:
+                            log.warning(
+                                "instrumentation_emit_failed",
+                                step=train_step,
+                                error=str(_instr_err),
+                            )
 
     # ── Run and teardown ──────────────────────────────────────────────────────
     tracemalloc.start(3)

@@ -184,12 +184,24 @@ class InferenceServer(threading.Thread):
         Unwrap once here so the load targets the underlying parameters in
         place; the OptimizedModule wrapper continues to dispatch through
         them unchanged. Same propagation path the trace path relies on.
+
+        Phase B' Class-1: bumps the InferenceBatcher's monotonic
+        `model_version` after the swap so workers can attribute each move
+        to a specific weight epoch (Class-1 stale-dispatch probe).
         """
         with self._weights_lock:
             target = getattr(self.model, "_orig_mod", self.model)
             target.load_state_dict(state_dict)
             target.eval()
             self.model.eval()
+        # Bump after release — workers reading the atomic don't gate on
+        # the lock, only on the post-swap visibility of new params.
+        new_version = self._batcher.bump_model_version()
+        _perf_log.info(
+            "inference_model_version_bump",
+            context="inference_server",
+            model_version=new_version,
+        )
 
     def submit_and_wait(self, state: np.ndarray) -> tuple[np.ndarray, float]:
         """Compatibility helper for single direct requests via Rust queue."""

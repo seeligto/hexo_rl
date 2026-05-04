@@ -208,6 +208,28 @@ class WorkerPool:
         # axis-distribution monitoring (§axis_dist).  Guarded by _lock.
         self._recent_move_histories: deque[list[tuple[int, int]]] = deque(maxlen=100)
 
+        # ── Phase B' instrumentation (default off) ──────────────────────────
+        # When `instrumentation.enabled=true`, the stats loop tracks per-worker
+        # draw_rate over the last 50 games, terminal-reason counts, and
+        # model-version range stats. Used to discriminate Class 1 (stale
+        # dispatch) / Class 2 (value-head feedback) / Class 3 (buffer
+        # composition) before touching production knobs.
+        instr_cfg = config.get("instrumentation", {}) or {}
+        self._instrumentation_enabled = bool(instr_cfg.get("enabled", False))
+        # Sample-rate guard: skip per-game joint logs when ratio < 1.0
+        # to keep instrumentation overhead under 5% of throughput at
+        # n_workers=18. Default 1.0 = log every game.
+        self._instr_log_ratio = float(instr_cfg.get("log_ratio", 1.0))
+        # Per-worker rolling last-50-game outcomes (1 = draw, 0 = decisive).
+        # Default to 4 lanes; auto-grows if worker_id ≥ len().
+        self._per_worker_draws: dict[int, deque[int]] = {}
+        # Cumulative terminal-reason counts (Phase B' Class-3 buffer
+        # composition, reason axis). 0=six 1=colony 2=cap 3=other_draw.
+        self._terminal_reason_counts: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
+        # Per-game model-version range archive — last 200 games. (min, max,
+        # distinct, terminal_reason, winner_code).
+        self._mv_range_history: deque[tuple[int, int, int, int, int]] = deque(maxlen=200)
+
     @property
     def batch_fill_pct(self) -> float:
         srv = self._inference_server
@@ -243,6 +265,117 @@ class WorkerPool:
         """Snapshot of the last ≤100 self-play game move histories (thread-safe copy)."""
         with self._lock:
             return list(self._recent_move_histories)
+
+    @property
+    def instrumentation_enabled(self) -> bool:
+        return self._instrumentation_enabled
+
+    def per_worker_draw_rates(self) -> dict[int, float]:
+        """Phase B' Class-1: rolling last-50-game draw rate per worker.
+
+        Returned snapshot is a fresh dict; safe to read without holding the
+        pool lock further. Empty workers (no completed games yet) are
+        excluded so the dashboard can show 'pending'.
+        """
+        with self._lock:
+            out: dict[int, float] = {}
+            for wid, dq in self._per_worker_draws.items():
+                if len(dq) > 0:
+                    out[wid] = sum(dq) / len(dq)
+            return out
+
+    def terminal_reason_counts(self) -> dict[str, int]:
+        """Phase B' Class-3: cumulative terminal-reason counts since pool start.
+
+        Keys: ``six_in_a_row``, ``colony``, ``ply_cap``, ``other_draw``.
+        """
+        with self._lock:
+            return {
+                "six_in_a_row": self._terminal_reason_counts.get(0, 0),
+                "colony":       self._terminal_reason_counts.get(1, 0),
+                "ply_cap":      self._terminal_reason_counts.get(2, 0),
+                "other_draw":   self._terminal_reason_counts.get(3, 0),
+            }
+
+    def model_version_summary(self) -> dict[str, float]:
+        """Phase B' Class-1: distribution stats over per-game version ranges.
+
+        Returns median / P90 / max of (mv_max - mv_min) across the last 200
+        games, plus the per-game distinct-version median. ``correlation_p``
+        is the Spearman ρ between range_size and is_draw on the same window
+        (when n ≥ 10), used by the diagnosis report.
+        """
+        with self._lock:
+            hist = list(self._mv_range_history)
+        if not hist:
+            return {"n": 0}
+        ranges = [b - a for (a, b, _, _, _) in hist]
+        distincts = [d for (_, _, d, _, _) in hist]
+        is_draw  = [1 if wc == 0 else 0 for (_, _, _, _, wc) in hist]
+        n = len(ranges)
+        ranges_sorted = sorted(ranges)
+        distincts_sorted = sorted(distincts)
+        median_range = ranges_sorted[n // 2]
+        p90_range = ranges_sorted[max(0, int(n * 0.9) - 1)]
+        max_range = ranges_sorted[-1]
+        median_distinct = distincts_sorted[n // 2]
+        rho = None
+        if n >= 10:
+            try:
+                # Spearman ρ via rankdata; fall back to None if scipy missing.
+                from scipy.stats import spearmanr
+                rho_val, p_val = spearmanr(ranges, is_draw)
+                rho = float(rho_val) if rho_val == rho_val else None  # NaN guard
+                _ = p_val
+            except Exception:
+                rho = None
+        return {
+            "n": n,
+            "median_range": int(median_range),
+            "p90_range": int(p90_range),
+            "max_range": int(max_range),
+            "median_distinct": int(median_distinct),
+            "spearman_rho_range_vs_draw": rho,
+        }
+
+    def buffer_composition(self) -> dict[str, float]:
+        """Phase B' Class-3 — composition snapshot of the live replay buffer.
+
+        Reads:
+          - ``corpus_fraction``: 1 − self_play_pushed / size (corpus = preload)
+          - ``draw_target_fraction``: outcomes ∈ [-0.6, -0.4) over size
+          - terminal-reason fractions over cumulative pushes since start
+
+        Falls back gracefully when the engine wheel pre-dates
+        ``outcome_in_range_count`` (returns NaN for that field).
+        """
+        size = max(1, int(self.replay_buffer.size))
+        sp_pushed = int(self.self_play_positions_pushed)
+        corpus_fraction = max(0.0, 1.0 - (sp_pushed / size))
+        try:
+            draws_in_buf = int(
+                self.replay_buffer.outcome_in_range_count(-0.6, -0.4)
+            )
+            draw_target_fraction = draws_in_buf / size
+        except (AttributeError, TypeError):
+            draw_target_fraction = float("nan")
+        tr = self.terminal_reason_counts()
+        total_games = max(1, sum(tr.values()))
+        return {
+            "buffer_size": int(self.replay_buffer.size),
+            "buffer_capacity": int(self.replay_buffer.capacity),
+            "corpus_fraction":      round(corpus_fraction, 6),
+            "draw_target_fraction": (
+                round(draw_target_fraction, 6)
+                if draw_target_fraction == draw_target_fraction
+                else float("nan")
+            ),
+            "six_terminal_fraction":    tr["six_in_a_row"] / total_games,
+            "colony_terminal_fraction": tr["colony"]       / total_games,
+            "cap_terminal_fraction":    tr["ply_cap"]      / total_games,
+            "other_draw_fraction":      tr["other_draw"]   / total_games,
+            "n_games_observed": sum(tr.values()),
+        }
 
     def update_checkpoint_step(self, step: int) -> None:
         """Forward the current training step to the game recorder."""
@@ -320,7 +453,12 @@ class WorkerPool:
                 if elapsed > 0:
                     self._sims_per_sec = sims / elapsed
 
-            for plies, winner_code, move_history, worker_id in games_batch:
+            for entry in games_batch:
+                # Phase B' instrumentation: drain returns 8-tuples
+                # (plies, winner_code, move_history, worker_id, terminal_reason,
+                #  mv_min, mv_max, mv_distinct).
+                (plies, winner_code, move_history, worker_id,
+                 terminal_reason, mv_min, mv_max, mv_distinct) = entry
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
                 game_length = (plies + 1) // 2  # compound moves
                 self._game_lengths.append(game_length)
@@ -328,6 +466,20 @@ class WorkerPool:
                 if move_history:
                     with self._lock:
                         self._recent_move_histories.append(list(move_history))
+
+                # Phase B' Class-1/3 telemetry. Always update counters (cheap);
+                # event emission is gated on `instrumentation.enabled`.
+                with self._lock:
+                    self._terminal_reason_counts[int(terminal_reason)] = (
+                        self._terminal_reason_counts.get(int(terminal_reason), 0) + 1
+                    )
+                    is_draw_outcome = 1 if winner_code == 0 else 0
+                    dq = self._per_worker_draws.setdefault(int(worker_id), deque(maxlen=50))
+                    dq.append(is_draw_outcome)
+                    self._mv_range_history.append(
+                        (int(mv_min), int(mv_max), int(mv_distinct),
+                         int(terminal_reason), int(winner_code))
+                    )
 
                 # Map winner_code to spec: 0=P0, 1=P1, -1=draw
                 winner_int = {0: -1, 1: 0, 2: 1}.get(winner_code, -1)
@@ -344,7 +496,11 @@ class WorkerPool:
                 else:
                     _ext_count, _ext_total, _ext_frac = 0, 0, 0.0
 
-                emit_event({
+                # Phase B': map the Rust terminal_reason u8 to the dashboard
+                # string convention used by reports/phase_b/.
+                _TR_NAMES = {0: "six_in_a_row", 1: "colony", 2: "ply_cap", 3: "other_draw"}
+                terminal_reason_name = _TR_NAMES.get(int(terminal_reason), "unknown")
+                game_complete_payload: dict[str, Any] = {
                     "event": "game_complete",
                     "game_id": uuid.uuid4().hex,
                     "winner": winner_int,
@@ -360,7 +516,16 @@ class WorkerPool:
                     "colony_extension_stone_count": _ext_count,
                     "colony_extension_stone_total": _ext_total,
                     "colony_extension_fraction":    _ext_frac,
-                })
+                    # Phase B' Class-1/3 instrumentation. Always emitted (cheap),
+                    # so dashboards/post-hoc analysis can pick them up without
+                    # re-running with the flag set.
+                    "terminal_reason":          terminal_reason_name,
+                    "model_version_min":        int(mv_min),
+                    "model_version_max":        int(mv_max),
+                    "model_version_distinct":   int(mv_distinct),
+                    "model_version_range_size": int(mv_max - mv_min),
+                }
+                emit_event(game_complete_payload)
 
                 log.info(
                     "game_complete",

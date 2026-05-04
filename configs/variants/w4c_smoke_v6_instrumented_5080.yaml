@@ -1,0 +1,58 @@
+# w4c_smoke_v6_instrumented_5080 — Phase B' Class-1/2/3 instrumented smoke.
+#
+# Mirror of w4c_smoke_v6_5080 with three changes:
+#   1. instrumentation.enabled = true       → emits value_probe_drift,
+#      buffer_composition, model_version_summary, worker_draw_rate events
+#      every 250 / 500 / 500 / 500 steps respectively.
+#   2. n_workers = 4 (down from 18)         → magnifies Class 1 (stale-model
+#      dispatch) if dominant: fewer workers = longer per-worker games per
+#      step = wider per-game model_version range.
+#   3. eval_interval = 5000                 → defer first eval to step 5k
+#      so the 5k-step diagnostic run completes without an eval cost spike.
+#
+# Run alongside (NOT replacing) the still-running Phase B Stage 4 smoke.
+# Use a separate checkpoint dir and run on a separate 5080 instance.
+#
+# Launch:
+#   make train.fresh VARIANT=w4c_smoke_v6_instrumented_5080
+#   # or, with a non-default checkpoint dir:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model.pt \
+#     --variant w4c_smoke_v6_instrumented_5080 \
+#     --checkpoint-dir checkpoints/w4c_smoke_v6_instrumented \
+#     --no-dashboard \
+#     --iterations 5000
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+
+# Single eval at step 5000 so the diagnostic run isn't interrupted.
+eval_interval: 5000
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  # Reduced from 18 → 4 to magnify Class 1 (stale dispatch). Each worker
+  # produces fewer games per training step, so weight epochs span more
+  # moves of any single game — wider per-game version range when Class 1
+  # is the dominant mechanism.
+  n_workers: 4
+  inference_batch_size: 64
+  inference_max_wait_ms: 8.0
+  playout_cap:
+    fast_prob: 0.0
+
+monitors:
+  hard_abort_grad_norm: 10.0
+
+# Phase B' instrumentation block. All four event streams are gated on
+# `enabled`; the per-stream cadence knobs control overhead.
+instrumentation:
+  enabled: true
+  # Cadence (training steps).
+  value_probe_interval: 250
+  composition_interval: 500
+  # Path to the 50-position fixture built by
+  # scripts/build_value_probe_fixture.py.
+  value_probe_fixture: fixtures/value_probe_50.npz
