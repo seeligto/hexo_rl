@@ -108,10 +108,17 @@ pub struct SelfPlayRunner {
     ///     augmentation in the replay buffer.
     pub(crate) results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, bool)>>>,
     /// Ring-buffer of recent game results for Python logging.
-    /// Tuple: (plies, winner_code, move_history, worker_id)
+    /// Tuple: (plies, winner_code, move_history, worker_id, terminal_reason,
+    ///         model_version_min, model_version_max, model_version_distinct).
     ///   winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
     ///   move_history: sequence of (q, r) coordinates in play order.
-    pub(crate) recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize)>>>,
+    ///   terminal_reason: 0 = six_in_a_row, 1 = colony, 2 = ply_cap,
+    ///                    3 = other_draw (no winner, not cap-bound).
+    ///   model_version_*: range of `InferenceBatcher::model_version` snapshots
+    ///                    seen across the moves of this game (Phase B' Class-1
+    ///                    probe). distinct = count of unique versions seen.
+    ///                    All zero when the model never swapped during the game.
+    pub(crate) recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32)>>>,
     pub(crate) handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     /// Accumulated MCTS leaf depth across all searches (scaled by 1_000_000 to preserve fractional part).
     pub(crate) mcts_depth_accum: Arc<AtomicU64>,
@@ -443,13 +450,25 @@ impl SelfPlayRunner {
 
     /// Drain and return all buffered game results since the last call.
     ///
-    /// Each entry: (plies, winner_code, move_history, worker_id)
+    /// Each entry: (plies, winner_code, move_history, worker_id,
+    ///              terminal_reason, model_version_min, model_version_max,
+    ///              model_version_distinct).
     ///   winner_code: 1 = Player One, 2 = Player Two, 0 = draw.
     ///   move_history: (q, r) stone placements in play order.
+    ///   terminal_reason: see `recent_game_results` docstring.
+    ///   model_version_*: Phase B' Class-1 instrumentation; all-zero when
+    ///                    no weight swap occurred during the game.
     pub fn drain_game_results(
         &self,
-    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize)> {
+    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32)> {
         self.drain_game_results_raw()
+    }
+
+    /// Snapshot the current InferenceBatcher model version (Phase B' Class-1).
+    /// Increments on every `InferenceServer.load_state_dict_safe()` call.
+    #[getter]
+    pub fn model_version(&self) -> u64 {
+        self.batcher.current_model_version()
     }
 }
 
@@ -458,7 +477,7 @@ impl SelfPlayRunner {
     /// Returns raw Vecs — no Python dependency, safe to call from `cargo test`.
     pub(crate) fn drain_game_results_raw(
         &self,
-    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize)> {
+    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32)> {
         let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
         rg.drain(..).collect()
     }
@@ -491,7 +510,7 @@ mod tests {
 
         while completed_workers.len() < 4 && attempts < 50 {
             let results = runner.drain_game_results_raw();
-            for (_, _, _, worker_id) in results {
+            for (_, _, _, worker_id, _, _, _, _) in results {
                 assert!(worker_id < 4);
                 completed_workers.insert(worker_id);
             }

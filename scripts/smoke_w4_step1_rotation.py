@@ -122,7 +122,14 @@ def _run_pool(
         seen_ids: set[int] = set()
         while time.monotonic() < deadline and len(games) < n_games:
             recent = pool._runner.drain_game_results()
-            for plies, _winner, move_history, worker_id in recent:
+            for entry in recent:
+                # drain_game_results is now an 8-tuple as of Phase B'
+                # instrumentation (Class-1 model_version range +
+                # terminal_reason). Keep this script tolerant of either shape.
+                if len(entry) == 8:
+                    plies, _winner, move_history, worker_id, *_rest = entry
+                else:
+                    plies, _winner, move_history, worker_id = entry
                 # Each entry is uniquely keyed by (worker_id, time-of-arrival).
                 # We don't have a clean game_id; just append everything.
                 if plies < 4:

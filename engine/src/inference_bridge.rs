@@ -28,6 +28,12 @@ struct Inner {
     next_id: AtomicU64,
     closed: AtomicBool,
     completed_mock_games: AtomicUsize,
+    /// Phase B' Class-1 instrumentation: monotonic counter incremented on
+    /// every weight swap by `InferenceServer.load_state_dict_safe()`. Workers
+    /// snapshot this once per move to bound the model-version range each
+    /// game crosses. Read with Relaxed; precision is per-move, not
+    /// per-leaf-eval (fewer atomic touches; same statistic to two sig figs).
+    model_version: AtomicU64,
 }
 
 impl Inner {
@@ -39,6 +45,7 @@ impl Inner {
             next_id: AtomicU64::new(1),
             closed: AtomicBool::new(false),
             completed_mock_games: AtomicUsize::new(0),
+            model_version: AtomicU64::new(0),
         }
     }
 
@@ -275,6 +282,11 @@ impl InferenceBatcher {
             let _ = self.pool_sender.try_send(buf);
         }
     }
+
+    /// Snapshot the current model version. Phase B' Class-1 probe.
+    pub fn current_model_version(&self) -> u64 {
+        self.inner.model_version.load(Ordering::Relaxed)
+    }
 }
 
 #[pymethods]
@@ -445,6 +457,20 @@ impl InferenceBatcher {
     /// Close the queue and wake all blocked waiters.
     pub fn close(&self) {
         self.close_rust();
+    }
+
+    /// Increment the monotonic model version. Called by Python's
+    /// `InferenceServer.load_state_dict_safe()` on every weight swap.
+    /// Phase B' Class-1 instrumentation; cheap (relaxed atomic add).
+    pub fn bump_model_version(&self) -> u64 {
+        self.inner.model_version.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Read the current model version (snapshot). Useful from Python for
+    /// dashboard / event payloads.
+    #[getter]
+    pub fn model_version(&self) -> u64 {
+        self.inner.model_version.load(Ordering::Relaxed)
     }
 
     #[getter]

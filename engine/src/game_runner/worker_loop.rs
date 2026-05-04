@@ -206,6 +206,12 @@ impl SelfPlayRunner {
                 tree.quiescence_enabled = quiescence_enabled;
                 tree.quiescence_blend_2 = quiescence_blend_2;
                 let mut rng = rng();
+                // Phase B' Class-1: per-game model-version range. Snapshot the
+                // batcher's `model_version` once per move and accumulate min /
+                // max / distinct count. Distinct count is tracked via a small
+                // `Vec<u64>` (deduplicated on insert) — typical games span 1–3
+                // versions, so linear scan beats a HashSet.
+                let mut version_seen: Vec<u64> = Vec::with_capacity(8);
                 // Per-worker game counter for the debug_prior_trace feature.
                 // Increments at each game end so the trace records can be
                 // grouped by (worker_id, game_index). Not read in default
@@ -218,6 +224,7 @@ impl SelfPlayRunner {
                     let mut board = Board::new();
                     let mut records_vec = Vec::new();
                     let mut move_history: Vec<(i32, i32)> = Vec::new();
+                    version_seen.clear();
 
                     // §130: sample per-game rotation across the 12-element hex
                     // dihedral group when self-play rotation is enabled. The
@@ -560,6 +567,16 @@ impl SelfPlayRunner {
                             );
                         }
 
+                        // Phase B' Class-1: snapshot the batcher's model_version
+                        // once per move and dedup-insert into version_seen. Read
+                        // is Relaxed; min/max/distinct accumulate per game.
+                        {
+                            let v = batcher.current_model_version();
+                            if !version_seen.contains(&v) {
+                                version_seen.push(v);
+                            }
+                        }
+
                         // Completed Q-values: compute improved policy for training target.
                         // Move selection still uses temperature-scaled visit counts above.
                         let target_policy = if completed_q_values {
@@ -675,6 +692,27 @@ impl SelfPlayRunner {
                         .collect();
                     let winning_cells: Vec<(i32, i32)> = board.find_winning_line();
 
+                    // Phase B' Class-3 (terminal_reason) — discriminator for
+                    // self-play composition tracking. Encoding mirrors
+                    // recent_game_results docstring on SelfPlayRunner.
+                    //   0 = six_in_a_row : winner exists AND winning_cells non-empty
+                    //   1 = colony       : winner exists AND no winning_line
+                    //   2 = ply_cap      : no winner AND ply == max_moves
+                    //   3 = other_draw   : no winner AND ply < max_moves
+                    let terminal_reason: u8 = match winner {
+                        Some(_) => if winning_cells.is_empty() { 1 } else { 0 },
+                        None    => if plies >= max_moves { 2 } else { 3 },
+                    };
+
+                    // Phase B' Class-1: collapse version_seen into (min, max, distinct).
+                    let (mv_min, mv_max, mv_distinct) = if version_seen.is_empty() {
+                        (0u64, 0u64, 0u32)
+                    } else {
+                        let mn = *version_seen.iter().min().unwrap();
+                        let mx = *version_seen.iter().max().unwrap();
+                        (mn, mx, version_seen.len() as u32)
+                    };
+
                     let mut games_results = results_queue.lock().expect("results lock poisoned");
                     for (feat, chain, pol, player, cq, cr, is_full_search) in records_vec {
                         let outcome = match winner {
@@ -707,7 +745,10 @@ impl SelfPlayRunner {
                     // game_complete logging — no spatial aux fields.
                     {
                         let mut rg = recent_game_results.lock().expect("recent_game_results lock poisoned");
-                        rg.push_back((plies, winner_code, move_history, worker_id));
+                        rg.push_back((
+                            plies, winner_code, move_history, worker_id,
+                            terminal_reason, mv_min, mv_max, mv_distinct,
+                        ));
                         // Cap at 2000 entries to avoid unbounded growth if Python is slow.
                         if rg.len() > 2000 {
                             rg.pop_front();

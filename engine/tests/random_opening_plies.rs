@@ -82,7 +82,7 @@ fn opening_plies_are_not_pushed_to_buffer() {
     let mut completed_workers: HashSet<usize> = HashSet::new();
     let mut attempts = 0;
     while completed_workers.len() < 2 && attempts < 100 {
-        for (_plies, _winner_code, _move_history, worker_id) in runner.drain_game_results() {
+        for (_plies, _winner_code, _move_history, worker_id, _tr, _vmin, _vmax, _vd) in runner.drain_game_results() {
             completed_workers.insert(worker_id);
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -146,7 +146,7 @@ fn opening_move_is_in_the_legal_set() {
     let mut saw_any_game = false;
     let mut attempts = 0;
     while !saw_any_game && attempts < 100 {
-        for (plies, _winner_code, move_history, _worker_id) in runner.drain_game_results() {
+        for (plies, _winner_code, move_history, _worker_id, _tr, _vmin, _vmax, _vd) in runner.drain_game_results() {
             assert_eq!(plies, 1, "game must end at ply 1 (max_moves=1)");
             assert_eq!(move_history.len(), 1);
             let (q, r) = move_history[0];

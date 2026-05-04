@@ -90,6 +90,19 @@ impl ReplayBuffer {
         Ok(())
     }
 
+    /// Phase B' Class-3 (buffer composition) — count valid outcomes in the
+    /// half-open interval `[lo, hi)`. Used to track `draw_target_fraction`
+    /// (positions whose value target landed in [-0.6, -0.4]).
+    ///
+    /// Reads only the live prefix (`self.size` slots), so capacity-padding
+    /// zeros never falsely count as draws on a partly-filled buffer.
+    pub(crate) fn outcome_in_range_count_impl(&self, lo: f32, hi: f32) -> usize {
+        self.outcomes[..self.size]
+            .iter()
+            .filter(|&&v| v >= lo && v < hi)
+            .count()
+    }
+
     /// Set the game-length weight schedule from Python config.
     ///
     /// Args:

@@ -235,6 +235,17 @@ impl ReplayBuffer {
         self.resize_impl(new_capacity)
     }
 
+    /// Phase B' Class-3 buffer composition probe — return the number of
+    /// rows in `[..self.size]` whose outcome (value target) lies in
+    /// the half-open interval `[lo, hi)`.
+    ///
+    /// `draw_target_fraction = outcome_in_range_count(-0.6, -0.4) / size`
+    /// when the production `draw_value=-0.5` config is active. Pure read
+    /// path; safe to call concurrently with non-write operations.
+    pub fn outcome_in_range_count(&self, lo: f32, hi: f32) -> usize {
+        self.outcome_in_range_count_impl(lo, hi)
+    }
+
     /// Set the game-length weight schedule from Python config.
     pub fn set_weight_schedule(
         &mut self,
