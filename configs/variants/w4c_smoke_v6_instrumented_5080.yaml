@@ -33,13 +33,19 @@ selfplay:
   gumbel_mcts: false
   completed_q_values: true
   max_game_moves: 150
-  # Reduced from 18 → 4 to magnify Class 1 (stale dispatch). Each worker
-  # produces fewer games per training step, so weight epochs span more
-  # moves of any single game — wider per-game version range when Class 1
-  # is the dominant mechanism.
-  n_workers: 4
-  inference_batch_size: 64
-  inference_max_wait_ms: 8.0
+  # Reduced from 18 → 8 to magnify Class 1 (stale dispatch). At 8 workers
+  # we still get ~2.25× the per-game version range vs production 18, but
+  # the inference batch fills enough that games actually complete (4
+  # workers stalled the batcher: 4 × leaf_batch_size 8 = 32 max vs the
+  # configured 64-wide batch — every step paid the full max_wait_ms).
+  n_workers: 8
+  # Halve the batch + waiter so the 8-worker pool keeps inference latency
+  # predictable. 8 workers × leaf_batch_size 4 = 32 fills the batch
+  # cleanly; 2 ms wait is enough headroom for batch-fill at this
+  # concurrency.
+  inference_batch_size: 32
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 4
   playout_cap:
     fast_prob: 0.0
 
