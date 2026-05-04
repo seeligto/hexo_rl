@@ -21,7 +21,7 @@ pub const DEFAULT_LEGAL_MOVE_RADIUS: i32 = 5;
 
 /// Maximum hex distance between stones that share a single cluster for the
 /// `get_clusters()` partition.  Originally 8 to match the legal-move radius
-/// (one cluster per "reachable neighborhood").  Phase B δ.c (§151) lowers
+/// (one cluster per "reachable neighborhood").  Phase B δ.c (§151) lowered
 /// this to 5 so that legal_radius == cluster_radius, removing the cluster /
 /// move-radius mismatch that produced extra-wide cluster windows under
 /// `get_cluster_views()`.  Lowering does not change the cluster planes
@@ -29,7 +29,14 @@ pub const DEFAULT_LEGAL_MOVE_RADIUS: i32 = 5;
 /// of cluster views per position.  Corpus M1 audit (`/tmp/phase_b_corpus_audit.md`,
 /// 2026-05-03): 0 / 5 772 decisive human games are colony-rule wins, so the
 /// δ.a (dual-radius) fallback is unnecessary.
-const CLUSTER_THRESHOLD: i32 = 5;
+///
+/// Phase B' v8 §152 Q3 (this branch only — `phase_b_prime_q3_cluster6`):
+/// 5 → 6 to break the legal_radius == cluster_radius == 5 boundary symmetry
+/// the Class-4 instrumented diagnosis identified as the radius-5 stride-5
+/// fixed point.  Re-opens the §147 v5 colony question; smoke is gated by
+/// colony_extension_fraction > 0.40 (Stage-1 abort) to detect a return of
+/// the v5 collapse mode.  NOT merged to master pending smoke verdict.
+const CLUSTER_THRESHOLD: i32 = 6;
 
 impl Board {
     /// Zero-allocation reference to the lazily-maintained legal move set.

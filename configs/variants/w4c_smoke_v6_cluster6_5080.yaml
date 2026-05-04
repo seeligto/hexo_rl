@@ -1,0 +1,64 @@
+# w4c_smoke_v6_cluster6_5080 — Phase B' v8 Q3: CLUSTER_THRESHOLD = 6.
+#
+# **REQUIRES BRANCH `phase_b_prime_q3_cluster6`** — engine/src/board/moves.rs
+# const CLUSTER_THRESHOLD is built-time, not runtime.  Master keeps
+# threshold=5 (§151 δ.c).  Run only after `git checkout
+# phase_b_prime_q3_cluster6 && maturin develop --release`.
+#
+# Targets §152 Class-4 (stride-5 east-west spam at distance-5 spacing).
+# At threshold=6, the legal_radius == cluster_radius boundary symmetry
+# (§151 δ.c made both 5; the policy fixed-points on that boundary) is
+# broken — cluster_radius now exceeds legal_radius, so a stride-5 chain
+# along a single row remains one cluster instead of fragmenting at every
+# stone.  Hypothesis: the policy's incentive structure for stride-5 spam
+# erodes when the cluster window centres differently.
+#
+# **Stage-1 abort criterion** (re-opens §147 v5 colony-collapse risk):
+#   colony_extension_fraction > 0.40 over rolling last 50 games at any
+#   step ≥ 1000 → abort and revert.  v5 collapsed at cef = 0.85 (step 10k);
+#   the 0.40 gate gives ample headroom while catching a colony-rule mode
+#   re-emergence early.  Track via dashboard "colony_ext (rolling 50)" row.
+#
+# Mirror of w4c_smoke_v6_instrumented_5080 with two changes:
+#   1. eval_interval = 500       → matches Q1 / Q2 baseline
+#   2. iterations target = 2500  → ~3 h walltime
+# Plus the engine constant (this branch only).
+#
+# Launch:
+#   git checkout phase_b_prime_q3_cluster6
+#   maturin develop --release --manifest-path engine/Cargo.toml
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model.pt \
+#     --variant w4c_smoke_v6_cluster6_5080 \
+#     --checkpoint-dir checkpoints/w4c_smoke_v6_cluster6 \
+#     --no-dashboard \
+#     --iterations 2500
+#   git checkout master  # restore threshold=5
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+
+eval_interval: 500
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  n_workers: 8
+  inference_batch_size: 32
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 4
+  playout_cap:
+    fast_prob: 0.0
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  # Phase B' v8 Q3 — Stage-1 abort if colony returns. v5 collapsed at
+  # cef = 0.85 (§147); 0.40 is the safe early-warning gate.
+  abort_colony_extension_fraction: 0.40
+
+instrumentation:
+  enabled: true
+  value_probe_interval: 250
+  composition_interval: 500
+  value_probe_fixture: fixtures/value_probe_50.npz

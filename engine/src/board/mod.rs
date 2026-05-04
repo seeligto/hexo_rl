@@ -325,12 +325,34 @@ mod tests {
     }
 
     #[test]
-    fn cluster_threshold_splits_at_distance_six() {
-        // Phase B δ.c (§151): CLUSTER_THRESHOLD lowered 8 → 5.
-        // Two isolated colonies at axial distance 6 must form TWO clusters
-        // (under the old threshold of 8 they would have been one).  We seed
-        // the colonies via direct `cells` insertion to bypass the legal-move
-        // radius cap (R=5 would block placement at distance 6 from any stone).
+    fn cluster_threshold_splits_at_distance_seven() {
+        // Phase B' v8 §152 Q3 (this branch): CLUSTER_THRESHOLD raised 5 → 6.
+        // Two isolated colonies at axial distance 6 are now ONE cluster
+        // (boundary inclusive); the split-point moves to distance 7.  We
+        // seed via direct `cells` insertion to bypass the legal-move radius
+        // cap (R=5 would block placement at distance ≥ 6 from any stone).
+        let mut b = Board::new();
+        b.cells.insert((0, 0), state::Cell::P1);
+        b.cells.insert((0, 1), state::Cell::P1);
+        b.cells.insert((7, 0), state::Cell::P1);
+        b.cells.insert((7, -1), state::Cell::P1);
+        b.has_stones = true;
+        b.cache_dirty.set(true);
+        let clusters = b.get_clusters();
+        assert_eq!(
+            clusters.len(),
+            2,
+            "stones at axial distance 7 must split into 2 clusters under Q3 (was 1 at distance 6 under threshold=5)"
+        );
+        for c in &clusters {
+            assert_eq!(c.len(), 2, "each colony has 2 stones");
+        }
+    }
+
+    #[test]
+    fn cluster_threshold_six_keeps_distance_six_united() {
+        // Phase B' v8 §152 Q3 sanity: at threshold=6, two stones at axial
+        // distance 6 must still be ONE cluster (boundary inclusive).
         let mut b = Board::new();
         b.cells.insert((0, 0), state::Cell::P1);
         b.cells.insert((0, 1), state::Cell::P1);
@@ -341,13 +363,9 @@ mod tests {
         let clusters = b.get_clusters();
         assert_eq!(
             clusters.len(),
-            2,
-            "stones at axial distance 6 must split into 2 clusters under δ.c (was 1 under threshold=8)"
+            1,
+            "stones at axial distance 6 must be one cluster at threshold=6"
         );
-        // Sanity: each colony has exactly the 2 stones we seeded.
-        for c in &clusters {
-            assert_eq!(c.len(), 2, "each colony has 2 stones");
-        }
     }
 
     #[test]
