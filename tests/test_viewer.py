@@ -133,6 +133,41 @@ def test_enrich_game_returns_positions():
         assert isinstance(pos["threats"], list)
 
 
+def test_enrich_game_data_capture_status():
+    """data_capture_status reports which optional channels are populated.
+
+    Spec §10 deferred items (value_trace, moves_detail) need to be visible
+    to the frontend so users understand why the sparkline / heat overlay
+    may be empty.
+    """
+    from hexo_rl.viewer.engine import ViewerEngine
+
+    engine = ViewerEngine(config={})
+
+    # Case 1: both deferred channels missing — typical of today's records.
+    record_no_detail = {
+        "moves_list": ["(0,0)", "(-5,-5)"],
+        "moves_detail": None,
+        "value_trace": None,
+    }
+    enriched = engine.enrich_game(record_no_detail)
+    status = enriched["data_capture_status"]
+    assert status["threats"] is True
+    assert status["value_trace"] is False
+    assert status["moves_detail"] is False
+    assert "deferred" in status["deferred_note"].lower()
+
+    # Case 2: a (hypothetical future) record with value_trace populated.
+    record_with_value = {
+        "moves_list": ["(0,0)", "(-5,-5)"],
+        "moves_detail": None,
+        "value_trace": [0.1, -0.2],
+    }
+    enriched2 = engine.enrich_game(record_with_value)
+    assert enriched2["data_capture_status"]["value_trace"] is True
+    assert enriched2["data_capture_status"]["moves_detail"] is False
+
+
 # ── Web route tests (6, 7, 8) ────────────────────────────────────────────────
 
 

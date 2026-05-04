@@ -44,13 +44,19 @@ class ViewerEngine:
     def enrich_game(self, game_record: dict) -> dict:
         """Replay game move-by-move, calling board.get_threats() at each position.
 
-        Returns game_record with added 'positions' field.
+        Returns game_record with added 'positions' field and a
+        'data_capture_status' field describing which optional channels are
+        populated (helps the frontend explain to users why MCTS heat / value
+        sparkline may be empty — see spec §10 deferred items).
         """
         board = Board()
         positions: list[dict] = []
         moves = game_record.get("moves_list", [])
         value_trace = game_record.get("value_trace") or [None] * len(moves)
         moves_detail = game_record.get("moves_detail") or [None] * len(moves)
+
+        has_value_trace = any(v is not None for v in value_trace)
+        has_moves_detail = any(m is not None for m in moves_detail)
 
         for i, coord_str in enumerate(moves):
             q, r = parse_axial(coord_str)
@@ -71,6 +77,17 @@ class ViewerEngine:
 
         enriched = dict(game_record)
         enriched["positions"] = positions
+        enriched["data_capture_status"] = {
+            "threats": True,                  # always computed at enrich-time
+            "value_trace": has_value_trace,   # spec §2.2 — captured by Rust if config.monitoring.capture_game_detail
+            "moves_detail": has_moves_detail, # spec §2.2 — same
+            "deferred_note": (
+                "value_trace and moves_detail are spec §10 deferred items: "
+                "they require Rust game_runner/worker_loop.rs to capture "
+                "MCTSTree.root_value() and get_top_visits() per move before "
+                "the tree is reset. Currently always None for self-play games."
+            ),
+        }
         return enriched
 
     def play_response(

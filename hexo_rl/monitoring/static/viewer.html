@@ -190,6 +190,7 @@ body {
     <div id="sparkline-container">
         <canvas id="sparkline-canvas"></canvas>
         <span id="sparkline-label">value</span>
+        <span id="capture-status" title="" style="position:absolute;top:4px;right:8px;font-size:10px;color:#888;display:none"></span>
     </div>
 </div>
 
@@ -488,6 +489,22 @@ function loadGame(gameId) {
 
             const hasDetail = data.positions && data.positions.some(p => p.top_visits);
             document.getElementById('heat-toggle-label').style.display = hasDetail ? '' : 'none';
+
+            // Surface data-capture status (spec §10 deferred items): show a
+            // small badge if value_trace / moves_detail are absent so users
+            // know why the sparkline / heat overlay may be empty.
+            const statusEl = document.getElementById('capture-status');
+            const status = data.data_capture_status;
+            if (status && (!status.value_trace || !status.moves_detail)) {
+                const missing = [];
+                if (!status.value_trace) missing.push('value');
+                if (!status.moves_detail) missing.push('mcts-heat');
+                statusEl.textContent = `no ${missing.join(', ')} (deferred)`;
+                statusEl.title = status.deferred_note || '';
+                statusEl.style.display = '';
+            } else {
+                statusEl.style.display = 'none';
+            }
 
             document.querySelectorAll('.game-item').forEach(el => el.classList.remove('active'));
             const items = document.querySelectorAll('.game-item');
