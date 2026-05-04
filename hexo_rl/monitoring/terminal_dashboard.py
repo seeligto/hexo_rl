@@ -134,6 +134,27 @@ class TerminalDashboard:
             "cluster_policy_disagreement_mean": None,
             "_colony_ext_counts": [],
             "_colony_ext_totals": [],
+            # ── Phase B' instrumentation snapshot ──────────────────────────
+            "value_probe_decisive_mean": None,
+            "value_probe_draw_mean":     None,
+            "value_probe_decisive_std":  None,
+            "value_probe_draw_std":      None,
+            "value_probe_step":          None,
+            # Sparkline buffers (last 30 readings).
+            "_value_probe_decisive_hist": collections.deque(maxlen=30),
+            "_value_probe_draw_hist":     collections.deque(maxlen=30),
+            "buffer_corpus_fraction":     None,
+            "buffer_draw_target_fraction": None,
+            "buffer_six_terminal_fraction": None,
+            "buffer_colony_terminal_fraction": None,
+            "buffer_cap_terminal_fraction": None,
+            "mv_median_range":            None,
+            "mv_p90_range":               None,
+            "mv_max_range":               None,
+            "mv_median_distinct":         None,
+            "mv_spearman_rho":            None,
+            "mv_current_version":         None,
+            "worker_draw_rates":          {},  # {worker_id: rate}
         }
 
     def start(self) -> None:
@@ -248,6 +269,50 @@ class TerminalDashboard:
                         "ram_used_gb", "ram_total_gb", "rss_gb", "cpu_util_pct"):
                 if key in payload:
                     self._state[key] = payload[key]
+            return
+
+        # ── Phase B' instrumentation events ──────────────────────────────
+        if event == "value_probe_drift":
+            self._state["value_probe_decisive_mean"] = payload.get("decisive_mean")
+            self._state["value_probe_decisive_std"]  = payload.get("decisive_std")
+            self._state["value_probe_draw_mean"]     = payload.get("draw_mean")
+            self._state["value_probe_draw_std"]      = payload.get("draw_std")
+            self._state["value_probe_step"]          = payload.get("step")
+            d = payload.get("decisive_mean")
+            if d is not None and isinstance(d, (int, float)) and math.isfinite(d):
+                self._state["_value_probe_decisive_hist"].append(float(d))
+            w = payload.get("draw_mean")
+            if w is not None and isinstance(w, (int, float)) and math.isfinite(w):
+                self._state["_value_probe_draw_hist"].append(float(w))
+            return
+
+        if event == "buffer_composition":
+            for key, dst in (
+                ("corpus_fraction",          "buffer_corpus_fraction"),
+                ("draw_target_fraction",     "buffer_draw_target_fraction"),
+                ("six_terminal_fraction",    "buffer_six_terminal_fraction"),
+                ("colony_terminal_fraction", "buffer_colony_terminal_fraction"),
+                ("cap_terminal_fraction",    "buffer_cap_terminal_fraction"),
+            ):
+                if key in payload:
+                    self._state[dst] = payload[key]
+            return
+
+        if event == "model_version_summary":
+            for key, dst in (
+                ("median_range",   "mv_median_range"),
+                ("p90_range",      "mv_p90_range"),
+                ("max_range",      "mv_max_range"),
+                ("median_distinct", "mv_median_distinct"),
+                ("spearman_rho_range_vs_draw", "mv_spearman_rho"),
+                ("current_version", "mv_current_version"),
+            ):
+                if key in payload:
+                    self._state[dst] = payload[key]
+            return
+
+        if event == "worker_draw_rate":
+            self._state["worker_draw_rates"] = dict(payload.get("per_worker", {}))
             return
 
         # Unknown events are silently ignored.
@@ -502,6 +567,115 @@ class TerminalDashboard:
             f"  │  n_full={n_str}"
         )
 
+        # ── Phase B' instrumentation row (only shown when populated) ─────
+        instr_tbl: Table | None = None
+        if (
+            s["value_probe_step"] is not None
+            or s["buffer_corpus_fraction"] is not None
+            or s["mv_median_range"] is not None
+            or s["worker_draw_rates"]
+        ):
+            instr_tbl = Table(show_header=False, box=None, padding=(0, 2), expand=True)
+            instr_tbl.add_column(justify="left")
+
+            # Value-probe row with sparkline.
+            def _spark(values: collections.deque) -> str:
+                if not values:
+                    return "—"
+                bars = "▁▂▃▄▅▆▇█"
+                lo, hi = min(values), max(values)
+                if hi - lo < 1e-6:
+                    return bars[3] * len(values)
+                return "".join(
+                    bars[int((v - lo) / (hi - lo) * (len(bars) - 1))]
+                    for v in values
+                )
+
+            d_mean = s["value_probe_decisive_mean"]
+            w_mean = s["value_probe_draw_mean"]
+            d_str = f"{d_mean:+.3f}" if isinstance(d_mean, (int, float)) and d_mean == d_mean else _EM_DASH
+            w_str = f"{w_mean:+.3f}" if isinstance(w_mean, (int, float)) and w_mean == w_mean else _EM_DASH
+            # Class-2 dominant signal: decisive drifting toward draw_value=-0.5.
+            d_alarm = isinstance(d_mean, (int, float)) and d_mean < -0.30
+            d_styled = f"[bold red]{d_str}[/bold red]" if d_alarm else d_str
+            d_spark = _spark(s["_value_probe_decisive_hist"])
+            w_spark = _spark(s["_value_probe_draw_hist"])
+            vp_step = _fmt_int(s["value_probe_step"]) if s["value_probe_step"] is not None else _EM_DASH
+            instr_tbl.add_row(
+                f"[bold]Phase B' value-probe[/bold]  "
+                f"decisive={d_styled} {d_spark}  │  "
+                f"draw={w_str} {w_spark}  │  "
+                f"step={vp_step}  [dim](class-2: decisive→-0.5 = collapse)[/dim]"
+            )
+
+            # Buffer composition row.
+            corp = s["buffer_corpus_fraction"]
+            dtf  = s["buffer_draw_target_fraction"]
+            colf = s["buffer_colony_terminal_fraction"]
+            sixf = s["buffer_six_terminal_fraction"]
+            capf = s["buffer_cap_terminal_fraction"]
+
+            def _f(v: Any, dp: int = 3) -> str:
+                if v is None or (isinstance(v, float) and not math.isfinite(v)):
+                    return _EM_DASH
+                return f"{v:.{dp}f}"
+
+            # Class-3 alarms: draw_target_fraction crossing 0.50 or
+            # colony >> six are diagnostic of replay-buffer overrun by
+            # draw-coded outcomes / colony-styled training rows.
+            dtf_styled = (
+                f"[bold red]{_f(dtf)}[/bold red]" if isinstance(dtf, (int, float)) and dtf > 0.50
+                else _f(dtf)
+            )
+            col_alarm = (
+                isinstance(colf, (int, float)) and isinstance(sixf, (int, float))
+                and colf > sixf and (colf - sixf) > 0.10
+            )
+            col_styled = (
+                f"[bold red]{_f(colf)}[/bold red]" if col_alarm else _f(colf)
+            )
+            instr_tbl.add_row(
+                f"[bold]buffer comp[/bold]  "
+                f"corpus={_f(corp)}  │  draw_target={dtf_styled}  │  "
+                f"six={_f(sixf)}  colony={col_styled}  cap={_f(capf)}"
+            )
+
+            # Model-version row.
+            mvr = s["mv_median_range"]
+            mvp = s["mv_p90_range"]
+            mvm = s["mv_max_range"]
+            mvd = s["mv_median_distinct"]
+            mvc = s["mv_current_version"]
+            rho = s["mv_spearman_rho"]
+            rho_str = (
+                f"{rho:+.2f}" if isinstance(rho, (int, float)) and rho == rho else _EM_DASH
+            )
+            # Class-1 alarm: significant Spearman ρ between version range and draw outcome.
+            rho_alarm = isinstance(rho, (int, float)) and rho == rho and abs(rho) > 0.20
+            rho_styled = f"[bold red]{rho_str}[/bold red]" if rho_alarm else rho_str
+            instr_tbl.add_row(
+                f"[bold]model-ver[/bold]  cur={_fmt_int(mvc) if mvc is not None else _EM_DASH}  │  "
+                f"per-game range med={_fmt_int(mvr) if mvr is not None else _EM_DASH}  "
+                f"P90={_fmt_int(mvp) if mvp is not None else _EM_DASH}  "
+                f"max={_fmt_int(mvm) if mvm is not None else _EM_DASH}  "
+                f"distinct_med={_fmt_int(mvd) if mvd is not None else _EM_DASH}  │  "
+                f"ρ(range,draw)={rho_styled}  [dim](class-1: ρ>0 = stale-dispatch)[/dim]"
+            )
+
+            # Per-worker draw rate row (compact, top variance).
+            wdr = s["worker_draw_rates"] or {}
+            if wdr:
+                rates_sorted = sorted(wdr.items(), key=lambda kv: kv[0])
+                rate_strs = []
+                for wid, r in rates_sorted[:8]:
+                    style = "[bold red]" if r > 0.80 else ("[yellow]" if r > 0.60 else "")
+                    suffix = "[/bold red]" if style == "[bold red]" else ("[/yellow]" if style == "[yellow]" else "")
+                    rate_strs.append(f"w{wid}={style}{r:.2f}{suffix}")
+                more = "" if len(wdr) <= 8 else f" (+{len(wdr) - 8} more)"
+                instr_tbl.add_row(
+                    f"[bold]per-worker draw[/bold] (last 50)  " + "  ".join(rate_strs) + more
+                )
+
         # Assemble
         outer = Table(show_header=False, box=None, expand=True, padding=0)
         outer.add_column()
@@ -510,6 +684,8 @@ class TerminalDashboard:
         outer.add_row(tgt_tbl)
         outer.add_row(tp_tbl)
         outer.add_row(buf_tbl)
+        if instr_tbl is not None:
+            outer.add_row(instr_tbl)
 
         panel = Panel(outer, title=header, border_style="blue")
 

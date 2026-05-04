@@ -283,6 +283,47 @@
         <div class="sys-row"><span class="sys-label">Cluster pol disagree</span><span id="inv-cluster-pol-dis">&mdash;</span></div>
       </div>
     </div>
+
+    <!-- Phase B' instrumentation panel (hidden until first event) -->
+    <div class="card" id="instr-panel" style="display:none">
+      <div class="label">Phase B' Diagnosis</div>
+      <div style="margin-top:6px">
+        <div class="sys-row" title="Class 2: drift toward draw_value=-0.5 = value-head feedback collapse">
+          <span class="sys-label">Value probe decisive</span>
+          <span id="instr-vp-decisive">&mdash;</span>
+        </div>
+        <div class="sys-row" title="Cap-bound positions; healthy ≈ -0.5">
+          <span class="sys-label">Value probe draw</span>
+          <span id="instr-vp-draw">&mdash;</span>
+        </div>
+        <div class="sys-row"><span class="sys-label">Probe step</span><span id="instr-vp-step">&mdash;</span></div>
+        <div class="sys-row" title="Class 3: corpus_fraction is the fraction of buffer rows from pretrain">
+          <span class="sys-label">Corpus fraction</span>
+          <span id="instr-corpus-frac">&mdash;</span>
+        </div>
+        <div class="sys-row" title="Class 3: rows whose value target ∈ [-0.6, -0.4)">
+          <span class="sys-label">Draw-target frac</span>
+          <span id="instr-draw-target-frac">&mdash;</span>
+        </div>
+        <div class="sys-row"><span class="sys-label">Six terminal frac</span><span id="instr-six-frac">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">Colony terminal frac</span><span id="instr-colony-frac">&mdash;</span></div>
+        <div class="sys-row"><span class="sys-label">Cap terminal frac</span><span id="instr-cap-frac">&mdash;</span></div>
+        <div class="sys-row" title="Class 1: weight epoch range each game crosses; > 0 means stale dispatch active">
+          <span class="sys-label">Model-ver range med/P90/max</span>
+          <span id="instr-mv-range">&mdash;</span>
+        </div>
+        <div class="sys-row"><span class="sys-label">Current version</span><span id="instr-mv-current">&mdash;</span></div>
+        <div class="sys-row" title="Class 1: Spearman ρ(version range, draw outcome). |ρ|>0.20 = stale dispatch contributes to draw rate">
+          <span class="sys-label">ρ(range,draw)</span>
+          <span id="instr-mv-rho">&mdash;</span>
+        </div>
+        <div class="sys-row"><span class="sys-label">Workers ≥0.80 draw</span><span id="instr-worker-hot">&mdash;</span></div>
+      </div>
+      <div id="instr-vp-spark" style="margin-top:6px; font-size:11px; color:#888; font-family:'Fira Code',monospace">
+        decisive: <span id="instr-vp-spark-decisive">&mdash;</span><br>
+        draw:&nbsp;&nbsp;&nbsp;&nbsp; <span id="instr-vp-spark-draw">&mdash;</span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -646,6 +687,11 @@ socket.on('eval_complete',      handleEvent);
 socket.on('system_stats',       handleEvent);
 socket.on('run_start',  handleEvent);
 socket.on('run_end',    handleEvent);
+// Phase B' instrumentation events.
+socket.on('value_probe_drift',     handleEvent);
+socket.on('buffer_composition',    handleEvent);
+socket.on('model_version_summary', handleEvent);
+socket.on('worker_draw_rate',      handleEvent);
 
 function setConnected(state) {
   const dot  = document.getElementById('status-dot');
@@ -675,6 +721,10 @@ function handleEvent(p) {
     case 'system_stats':       onSystemStats(p);       break;
     case 'run_start':          onRunStart(p);          break;
     case 'run_end':            addLogEntry(p);         break;
+    case 'value_probe_drift':     onValueProbeDrift(p);     break;
+    case 'buffer_composition':    onBufferComposition(p);   break;
+    case 'model_version_summary': onModelVersionSummary(p); break;
+    case 'worker_draw_rate':      onWorkerDrawRate(p);      break;
   }
 }
 
@@ -900,6 +950,104 @@ function onEvalComplete(p) {
   eloHistory.push({ step: p.step, elo: p.elo_estimate });
   showEloPanel(p);
   addLogEntry(p);
+}
+
+// ── Phase B' instrumentation handlers ──────────────────────────────────────
+const _instrShow = () => { document.getElementById('instr-panel').style.display = ''; };
+const _vpDecisiveHist = [];
+const _vpDrawHist = [];
+const _VP_HIST_MAX = 30;
+
+function _spark(values) {
+  if (!values.length) return '—';
+  const bars = '▁▂▃▄▅▆▇█';
+  let lo = Infinity, hi = -Infinity;
+  for (const v of values) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (hi - lo < 1e-6) return bars[3].repeat(values.length);
+  return values.map(v => bars[Math.min(7, Math.max(0, Math.floor((v - lo) / (hi - lo) * 7)))]).join('');
+}
+
+function onValueProbeDrift(p) {
+  _instrShow();
+  const dec = p.decisive_mean;
+  const drw = p.draw_mean;
+  if (dec != null && Number.isFinite(dec)) {
+    _vpDecisiveHist.push(dec);
+    if (_vpDecisiveHist.length > _VP_HIST_MAX) _vpDecisiveHist.shift();
+    const el = document.getElementById('instr-vp-decisive');
+    el.textContent = (dec >= 0 ? '+' : '') + dec.toFixed(3);
+    // Class-2 alarm: drift toward draw_value=-0.5.
+    el.style.color = dec < -0.30 ? '#F4664A' : (dec < -0.15 ? '#EF9F27' : '');
+  }
+  if (drw != null && Number.isFinite(drw)) {
+    _vpDrawHist.push(drw);
+    if (_vpDrawHist.length > _VP_HIST_MAX) _vpDrawHist.shift();
+    setText('instr-vp-draw', (drw >= 0 ? '+' : '') + drw.toFixed(3));
+  }
+  if (p.step != null) setText('instr-vp-step', fmtInt(p.step));
+  setText('instr-vp-spark-decisive', _spark(_vpDecisiveHist));
+  setText('instr-vp-spark-draw', _spark(_vpDrawHist));
+  addLogEntry(p);
+}
+
+function onBufferComposition(p) {
+  _instrShow();
+  if (p.corpus_fraction != null)
+    setText('instr-corpus-frac', p.corpus_fraction.toFixed(3));
+  if (p.draw_target_fraction != null && Number.isFinite(p.draw_target_fraction)) {
+    const el = document.getElementById('instr-draw-target-frac');
+    el.textContent = p.draw_target_fraction.toFixed(3);
+    // Class-3 alarm: > 50% of buffer rows are draw-coded.
+    el.style.color = p.draw_target_fraction > 0.50 ? '#F4664A' :
+                     (p.draw_target_fraction > 0.30 ? '#EF9F27' : '');
+  }
+  if (p.six_terminal_fraction != null)
+    setText('instr-six-frac', p.six_terminal_fraction.toFixed(3));
+  if (p.colony_terminal_fraction != null) {
+    const el = document.getElementById('instr-colony-frac');
+    el.textContent = p.colony_terminal_fraction.toFixed(3);
+    const six = p.six_terminal_fraction;
+    if (six != null && p.colony_terminal_fraction > six && (p.colony_terminal_fraction - six) > 0.10) {
+      el.style.color = '#F4664A';
+    } else { el.style.color = ''; }
+  }
+  if (p.cap_terminal_fraction != null)
+    setText('instr-cap-frac', p.cap_terminal_fraction.toFixed(3));
+}
+
+function onModelVersionSummary(p) {
+  _instrShow();
+  const med = p.median_range;
+  const p90 = p.p90_range;
+  const mx  = p.max_range;
+  const cur = p.current_version;
+  const rho = p.spearman_rho_range_vs_draw;
+  if (med != null && p90 != null && mx != null) {
+    setText('instr-mv-range', `${fmtInt(med)} / ${fmtInt(p90)} / ${fmtInt(mx)}`);
+  }
+  if (cur != null) setText('instr-mv-current', fmtInt(cur));
+  if (rho != null && Number.isFinite(rho)) {
+    const el = document.getElementById('instr-mv-rho');
+    el.textContent = (rho >= 0 ? '+' : '') + rho.toFixed(3);
+    // Class-1 alarm: |ρ| > 0.20 = stale dispatch correlates with draws.
+    el.style.color = Math.abs(rho) > 0.20 ? '#F4664A' :
+                     (Math.abs(rho) > 0.10 ? '#EF9F27' : '');
+  }
+}
+
+function onWorkerDrawRate(p) {
+  _instrShow();
+  const w = p.per_worker || {};
+  let hot = 0;
+  let total = 0;
+  for (const k in w) {
+    total += 1;
+    if (w[k] >= 0.80) hot += 1;
+  }
+  setText('instr-worker-hot', hot + ' / ' + total);
+  const el = document.getElementById('instr-worker-hot');
+  el.style.color = hot > total * 0.5 ? '#F4664A' :
+                   (hot > 0 ? '#EF9F27' : '');
 }
 
 function onSystemStats(p) {
