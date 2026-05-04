@@ -1,0 +1,36 @@
+{
+  "config": {
+    "n_games": 200,
+    "sims": 96,
+    "temperature": 0.5,
+    "max_game_moves": 150,
+    "random_opening_plies": 4,
+    "seed_base": 42,
+    "ckpt": "/home/timmy/Work/hexo_rl/checkpoints/bootstrap_model_v7full.pt",
+    "in_channels": 8,
+    "device": "cuda"
+  },
+  "wall_seconds": 594.4334626197815,
+  "aggregate": {
+    "n_games": 200,
+    "draws": 6,
+    "x_wins": 87,
+    "o_wins": 107,
+    "draw_rate": 0.03,
+    "draw_rate_ci_lo": 0.013820125830748327,
+    "draw_rate_ci_hi": 0.06389511973247333,
+    "mean_ply": 55.29,
+    "median_ply": 42.0,
+    "min_ply": 19,
+    "max_ply": 150,
+    "p10_ply": 27.0,
+    "p90_ply": 109.1,
+    "by_reason": {
+      "colony": 97,
+      "six_in_a_row": 97,
+      "ply_cap": 6
+    }
+  },
+  "verdict": "DRIFT",
+  "verdict_explanation": "draw_rate \u2264 0.50 \u2192 ckpt_10k drifted from v7full; training-loop bug; deeper investigation needed before Phase B'."
+}
