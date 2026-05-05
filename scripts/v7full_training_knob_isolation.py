@@ -79,12 +79,16 @@ TERMINAL_REASONS = {0: "six_in_a_row", 1: "colony", 2: "ply_cap", 3: "other_draw
 class Knobs:
     """SelfPlayRunner knob set for one variant.
 
-    Held constant across all variants:
-      sims=96, max_plies=150, draw_reward=-0.5, c_puct=1.5, fpu_reduction=0.25,
-      quiescence_enabled=True, quiescence_blend_2=0.3, completed_q_values=False,
-      gumbel_mcts=False, full_search_prob=0.0 (no move-level playout cap),
-      legal_move_radius_jitter=False, selfplay_rotation_enabled=False,
-      rotation_cadence='per_game'.
+    Held constant across all variants UNLESS overridden by an MCTS-side knob
+    (R6 = n_simulations, R7 = playout_cap, R8 = completed_q_values, R9 = R7+R8,
+    R10 = R9 + exploration knobs):
+      max_plies=150, draw_reward=-0.5, c_puct=1.5, fpu_reduction=0.25,
+      quiescence_enabled=True, quiescence_blend_2=0.3,
+      gumbel_mcts=False, legal_move_radius_jitter=False,
+      selfplay_rotation_enabled=False.
+
+    MCTS-side fields default to the T2-baseline (R0-R5) values.  R6-R10 set
+    them per the §155 follow-up isolation prompt.
     """
     n_workers: int
     dirichlet_enabled: bool
@@ -94,6 +98,12 @@ class Knobs:
     temp_min: float
     random_opening_plies: int
     description: str
+    # MCTS-side knobs (R6-R10).  Defaults preserve R0-R5 behaviour.
+    n_simulations: int = 96
+    completed_q_values: bool = False
+    full_search_prob: float = 0.0
+    n_sims_quick: int = 0
+    n_sims_full: int = 0
 
 
 VARIANTS: dict[str, Knobs] = {
@@ -153,6 +163,63 @@ VARIANTS: dict[str, Knobs] = {
         temp_threshold_compound_moves=10, temp_min=0.1,
         random_opening_plies=1,
         description="R4 with n_workers=18 (parallel)",
+    ),
+    # ─── §155 follow-up: MCTS-side knob isolation (R6-R10) ──────────────────
+    # Preserves R0-R5's exploration knobs as held-constant baseline; varies
+    # only the MCTS-side knobs that R0-R5 held constant.  Designed to bisect
+    # which sub-knob in the smoke v6 step-0 path drives the 92% draw collapse
+    # given that R0-R5 ruled out the three named exploration knobs + parallelism.
+    #
+    # R6 — R0 + n_simulations=600 (deep search alone, no move-level cap).
+    "R6": Knobs(
+        n_workers=18,
+        dirichlet_enabled=False, dirichlet_alpha=0.05, dirichlet_epsilon=0.10,
+        temp_threshold_compound_moves=0, temp_min=0.5,
+        random_opening_plies=4,
+        description="R0 + n_simulations=600 (deep search alone)",
+        n_simulations=600,
+    ),
+    # R7 — R0 + move-level playout cap (full_search_prob=0.5, sims_quick=100,
+    # sims_full=600).  Half of moves get 6× sims budget; smoke v6 default.
+    "R7": Knobs(
+        n_workers=18,
+        dirichlet_enabled=False, dirichlet_alpha=0.05, dirichlet_epsilon=0.10,
+        temp_threshold_compound_moves=0, temp_min=0.5,
+        random_opening_plies=4,
+        description="R0 + playout_cap{fsp=0.5, sims_quick=100, sims_full=600}",
+        full_search_prob=0.5, n_sims_quick=100, n_sims_full=600,
+    ),
+    # R8 — R0 + completed_q_values=True (CQV alone).  Smoke v6 default.
+    "R8": Knobs(
+        n_workers=18,
+        dirichlet_enabled=False, dirichlet_alpha=0.05, dirichlet_epsilon=0.10,
+        temp_threshold_compound_moves=0, temp_min=0.5,
+        random_opening_plies=4,
+        description="R0 + completed_q_values=True",
+        completed_q_values=True,
+    ),
+    # R9 — R7 + R8 (full smoke MCTS regime, no exploration knobs, no training).
+    "R9": Knobs(
+        n_workers=18,
+        dirichlet_enabled=False, dirichlet_alpha=0.05, dirichlet_epsilon=0.10,
+        temp_threshold_compound_moves=0, temp_min=0.5,
+        random_opening_plies=4,
+        description="R0 + playout_cap + completed_q_values (smoke MCTS regime)",
+        completed_q_values=True,
+        full_search_prob=0.5, n_sims_quick=100, n_sims_full=600,
+    ),
+    # R10 — R9 + Dirichlet + cosine temp + opening_plies=1.  Matches smoke v6
+    # step-0 self-play exactly except for trainer gradient updates and
+    # legal_move_radius_jitter (off here; v8 plumbing knob).  temp_min=0.05
+    # matches smoke v6 master selfplay.yaml exactly.
+    "R10": Knobs(
+        n_workers=18,
+        dirichlet_enabled=True, dirichlet_alpha=0.05, dirichlet_epsilon=0.10,
+        temp_threshold_compound_moves=10, temp_min=0.05,
+        random_opening_plies=1,
+        description="R9 + Dirichlet + cosine temp + opening_plies=1 (full smoke regime)",
+        completed_q_values=True,
+        full_search_prob=0.5, n_sims_quick=100, n_sims_full=600,
     ),
 }
 
@@ -257,7 +324,7 @@ def _build_runner(knobs: Knobs) -> SelfPlayRunner:
     return SelfPlayRunner(
         n_workers=knobs.n_workers,
         max_moves_per_game=MAX_PLIES,
-        n_simulations=SIMS,
+        n_simulations=knobs.n_simulations,
         leaf_batch_size=8,
         c_puct=1.5,
         fpu_reduction=0.25,
@@ -265,8 +332,8 @@ def _build_runner(knobs: Knobs) -> SelfPlayRunner:
         policy_len=19 * 19 + 1,
         # Game-level playout cap disabled.
         fast_prob=0.0,
-        fast_sims=SIMS,
-        standard_sims=SIMS,
+        fast_sims=knobs.n_simulations,
+        standard_sims=knobs.n_simulations,
         # Quarter-cosine temperature schedule from 1.0 → temp_min.
         temp_threshold_compound_moves=knobs.temp_threshold_compound_moves,
         temp_min=knobs.temp_min,
@@ -276,7 +343,7 @@ def _build_runner(knobs: Knobs) -> SelfPlayRunner:
         zoi_enabled=False,
         zoi_lookback=16,
         zoi_margin=5,
-        completed_q_values=False,
+        completed_q_values=knobs.completed_q_values,
         c_visit=50.0,
         c_scale=1.0,
         gumbel_mcts=False,
@@ -286,11 +353,11 @@ def _build_runner(knobs: Knobs) -> SelfPlayRunner:
         dirichlet_epsilon=knobs.dirichlet_epsilon,
         dirichlet_enabled=knobs.dirichlet_enabled,
         results_queue_cap=10_000,
-        # Move-level playout cap disabled (full_search_prob=0 → all moves at
-        # n_simulations).
-        full_search_prob=0.0,
-        n_sims_quick=0,
-        n_sims_full=0,
+        # Move-level playout cap.  R7/R9/R10 turn it on; R0-R6/R8 leave it off
+        # (full_search_prob=0 → all moves at n_simulations).
+        full_search_prob=knobs.full_search_prob,
+        n_sims_quick=knobs.n_sims_quick,
+        n_sims_full=knobs.n_sims_full,
         random_opening_plies=knobs.random_opening_plies,
         # Held constant: no rotation, no jitter.  ``rotation_cadence`` is a
         # v9-branch-only kwarg; master signature ends at
@@ -310,8 +377,18 @@ def run_variant(
 ) -> dict[str, Any]:
     """Drive one variant to n_games complete and aggregate metrics."""
     print(f"\n=== {name} ({knobs.description}) ===", flush=True)
-    print(f"  n_workers={knobs.n_workers}  sims={SIMS}  n_games_target={n_games}",
-          flush=True)
+    if knobs.full_search_prob > 0.0:
+        sims_str = (
+            f"playout_cap[fsp={knobs.full_search_prob:.2f},"
+            f"q={knobs.n_sims_quick},f={knobs.n_sims_full}]"
+        )
+    else:
+        sims_str = f"sims={knobs.n_simulations}"
+    print(
+        f"  n_workers={knobs.n_workers}  {sims_str}  "
+        f"cqv={knobs.completed_q_values}  n_games_target={n_games}",
+        flush=True,
+    )
 
     runner = _build_runner(knobs)
     # Tune the inference batch + wait to the worker count.  For sequential
@@ -482,7 +559,7 @@ def write_report(out_dir: Path, all_results: list[dict[str, Any]]) -> Path:
     summary = {
         "config": {
             "n_games": all_results[0]["records"] and len(all_results[0]["records"]),
-            "sims": SIMS,
+            "sims": "per-variant (see knobs)",
             "max_plies": MAX_PLIES,
             "draw_reward": DRAW_REWARD,
             "checkpoint": str(CKPT),
@@ -506,7 +583,7 @@ def write_report(out_dir: Path, all_results: list[dict[str, Any]]) -> Path:
           "",
           f"**Date:** {time.strftime('%Y-%m-%d')}",
           f"**Bootstrap:** v7full (`{CKPT.name}`)",
-          f"**Sims:** {SIMS} (held constant)  **max_plies:** {MAX_PLIES}",
+          f"**Sims:** per-variant (see knobs col)  **max_plies:** {MAX_PLIES}",
           f"**Draw reward:** {DRAW_REWARD}",
           "",
           "## Per-variant aggregate",
@@ -548,33 +625,32 @@ def write_report(out_dir: Path, all_results: list[dict[str, Any]]) -> Path:
         )
 
     # Verdict.
+    variants_run = [v["name"] for v in summary["variants"]]
     md += ["", "## Verdict", ""]
     if crossing_variant is None:
         md += [
-            "**DEEPER_INVESTIGATION_REQUIRED** — no variant in {R0..R5} crossed the "
-            f"draw_rate ≥ {DRAW_RATE_VERDICT_GATE:.0%} gate.",
+            f"**DEEPER_INVESTIGATION_REQUIRED** — no variant in {{{', '.join(variants_run)}}} "
+            f"crossed the draw_rate ≥ {DRAW_RATE_VERDICT_GATE:.0%} gate.",
             "",
-            "The three named exploration knobs (Dirichlet, temperature schedule, "
-            "random_opening_plies) — even combined and even with 18 parallel workers — "
-            "do not reproduce the 92% draw rate observed in smoke v6 step 0.",
+            "The named exploration knobs (Dirichlet, temperature schedule, "
+            "random_opening_plies) and the MCTS-side knobs tested here "
+            "(n_simulations, playout_cap, completed_q_values) — even combined "
+            "and even with 18 parallel workers — do not reproduce the 92% "
+            "draw rate observed in smoke v6 step 0.",
             "",
             "Remaining candidates that this script holds constant but smoke v6 differed on:",
             "",
-            "  * `selfplay.completed_q_values=True` (smoke default; held False here)",
-            "  * `selfplay.playout_cap.full_search_prob=0.5` + `n_sims_quick=100`/"
-            "`n_sims_full=600` (smoke move-level cap; held disabled here, all moves at "
-            f"{SIMS} sims)",
-            "  * `selfplay.draw_value` may differ — held −0.5 here, check smoke variant",
-            "  * Inference contention from 18 workers sharing a single GPU stream "
-            "(R5 partially exercises this but at sims=96)",
+            "  * `selfplay.draw_value` (held −0.5 here, check smoke variant)",
+            "  * `selfplay.legal_move_radius_jitter` (off here; v8 plumbing knob, on in smoke v6)",
+            "  * `selfplay.rotation_enabled` / `zoi_enabled` (held off here; on in smoke v6)",
             "  * The actual gradient updates from the trainer (the smoke takes batches "
             "from a fresh ReplayBuffer at step 0; first non-trivial gradient updates "
             "may be sufficient to flip the policy distribution within a few steps)",
             "",
-            "Surface to the user: the proximate cause is NOT the three knobs alone. "
-            "A follow-up smoke must re-enable the held-constant knobs one at a time, "
-            "or characterise the trainer's first 100 gradient steps under smoke "
-            "settings.",
+            "Surface to the user: the proximate cause is NOT the tested knobs. "
+            "Either inspect the remaining held-constant knobs above, or "
+            "characterise the trainer's first ~100 gradient steps under smoke "
+            "settings (the §156 deep-investigation hypothesis).",
         ]
     else:
         md += [
@@ -608,6 +684,8 @@ def main() -> None:
     p.add_argument("--only", type=str, default=None,
                    help="comma-separated subset of variant names (e.g. R0,R5)")
     p.add_argument("--out-dir", type=str, default=str(OUT_DIR))
+    p.add_argument("--n-workers", type=int, default=None,
+                   help="override Knobs.n_workers for every variant (default: per-variant)")
     p.add_argument("--dry-run", action="store_true",
                    help="run R0 only with n=4 to smoke-test the harness")
     args = p.parse_args()
@@ -634,10 +712,15 @@ def main() -> None:
     print(f"  in_channels={in_ch}, params={sum(p.numel() for p in model.parameters()):,}")
 
     print(f"\nVariants to run: {names}  (n_games={n_games} each)")
+    if args.n_workers is not None:
+        print(f"  n_workers override: {args.n_workers} (replaces per-variant default)")
     all_results = []
     overall_t0 = time.time()
     for name in names:
-        result = run_variant(name, VARIANTS[name], n_games, model, device)
+        knobs = VARIANTS[name]
+        if args.n_workers is not None:
+            knobs = Knobs(**{**knobs.__dict__, "n_workers": args.n_workers})
+        result = run_variant(name, knobs, n_games, model, device)
         all_results.append(result)
     overall_wall = time.time() - overall_t0
 
