@@ -1,6 +1,36 @@
 use std::cell::{Cell as StdCell, UnsafeCell};
+use std::sync::atomic::{AtomicBool, Ordering};
 use fxhash::{FxHashMap, FxHashSet};
 use super::zobrist::ZobristTable;
+
+// Phase B' v9 §153 T2 — corner-mask gating.
+// When CORNER_MASK_ENABLED is true, the stone planes (channels 0 / 8 in the
+// HEXB v6 wire format) are zeroed wherever the cell falls outside the central
+// regular hexagon (axial hex_dist > HALF from window centre). This restores
+// C6 symmetry to the input-plane structure on the 19×19 axial parallelogram,
+// matching the 12-fold dihedral augmentation footprint and the HexConv2d
+// trunk's hex-distance-1 receptive field.
+//
+// Default is false. Flipped from Python via `set_corner_mask_enabled(bool)`
+// at engine init. Relaxed ordering: encoder calls and the Python toggle do
+// not synchronise with anything else, and a stale read on the first call
+// after the toggle is harmless (mask state is monotonic per training run).
+static CORNER_MASK_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Set the encoder-side corner-mask flag.  Returns the previous value.
+/// Wired up to Python via the `set_corner_mask_enabled` pyfunction in
+/// `engine/src/lib.rs`; production code calls it once at startup based on
+/// `model.corner_mask` in the run config.
+pub fn set_corner_mask_enabled(enabled: bool) -> bool {
+    CORNER_MASK_ENABLED.swap(enabled, Ordering::Relaxed)
+}
+
+/// Read the encoder-side corner-mask flag.  Used by encode_state_to_buffer
+/// and encode_state_to_buffer_channels.
+#[inline]
+pub fn corner_mask_enabled() -> bool {
+    CORNER_MASK_ENABLED.load(Ordering::Relaxed)
+}
 
 // ── MoveDiff ──────────────────────────────────────────────────────────────────
 
@@ -446,13 +476,22 @@ impl Board {
         planes_2: &[f32], // The 2-plane [my, opp] view
         out: &mut [f32]
     ) {
+        // §153 T2: optionally zero stone-plane entries outside the central
+        // regular hexagon (hex_dist > HALF from window centre). Gated by
+        // `set_corner_mask_enabled` from Python. Default off.
+        let mask_on = corner_mask_enabled();
+        let mask = Self::corner_keep_mask();
         // Plane 0: my stones
         for i in 0..TOTAL_CELLS {
-            out[i] = planes_2[i];
+            out[i] = if mask_on && !mask[i] { 0.0 } else { planes_2[i] };
         }
         // Plane 8: opp stones
         for i in 0..TOTAL_CELLS {
-            out[8 * TOTAL_CELLS + i] = planes_2[TOTAL_CELLS + i];
+            out[8 * TOTAL_CELLS + i] = if mask_on && !mask[i] {
+                0.0
+            } else {
+                planes_2[TOTAL_CELLS + i]
+            };
         }
         // Plane 16: moves_remaining == 2 ? 1.0 : 0.0
         let mr_val = if self.moves_remaining == 2 { 1.0 } else { 0.0 };
@@ -477,6 +516,32 @@ impl Board {
     #[inline]
     pub fn encode_planes_to_buffer(&self, planes_2: &[f32], out: &mut [f32]) {
         self.encode_state_to_buffer(planes_2, out)
+    }
+
+    /// §153 T2 — lookup table for the regular-hexagon mask of the 19×19
+    /// axial-parallelogram window.  Cell (wq, wr) ∈ [0, BOARD_SIZE)² is
+    /// inside the central hexagon iff axial `hex_dist(wq − HALF, wr − HALF)
+    /// ≤ HALF` (= 9).  In axial coords this is `max(|q|, |r|, |q+r|) ≤ HALF`.
+    /// 271 of 361 cells survive the mask; the 90 corner cells (45 per
+    /// corner pair) are zeroed on stone planes when the toggle is on.
+    /// Computed once via `OnceLock`.
+    fn corner_keep_mask() -> &'static [bool; TOTAL_CELLS] {
+        use std::sync::OnceLock;
+        static MASK: OnceLock<[bool; TOTAL_CELLS]> = OnceLock::new();
+        MASK.get_or_init(|| {
+            let mut m = [false; TOTAL_CELLS];
+            for wq in 0..(BOARD_SIZE as i32) {
+                for wr in 0..(BOARD_SIZE as i32) {
+                    let dq = wq - HALF;
+                    let dr = wr - HALF;
+                    let ds = -dq - dr;
+                    let hex_dist = dq.abs().max(dr.abs()).max(ds.abs());
+                    let flat = (wq as usize) * BOARD_SIZE + (wr as usize);
+                    m[flat] = hex_dist <= HALF;
+                }
+            }
+            m
+        })
     }
 
     /// Encode a *subset* of the 18 wire planes selected by `channels`, in the
@@ -507,14 +572,27 @@ impl Board {
         );
         let mr_val = if self.moves_remaining == 2 { 1.0 } else { 0.0 };
         let ply_val = (self.ply % 2) as f32;
+        // §153 T2: optional corner-mask on stone planes 0 and 8.
+        let mask_on = corner_mask_enabled();
+        let mask = Self::corner_keep_mask();
         for (slot, &ch) in channels.iter().enumerate() {
             let dst = &mut out[slot * TOTAL_CELLS..(slot + 1) * TOTAL_CELLS];
             match ch {
                 0 => {
                     dst.copy_from_slice(&planes_2[0..TOTAL_CELLS]);
+                    if mask_on {
+                        for (i, v) in dst.iter_mut().enumerate() {
+                            if !mask[i] { *v = 0.0; }
+                        }
+                    }
                 }
                 8 => {
                     dst.copy_from_slice(&planes_2[TOTAL_CELLS..2 * TOTAL_CELLS]);
+                    if mask_on {
+                        for (i, v) in dst.iter_mut().enumerate() {
+                            if !mask[i] { *v = 0.0; }
+                        }
+                    }
                 }
                 16 => {
                     for v in dst.iter_mut() {
@@ -970,6 +1048,89 @@ mod channel_select_tests {
         assert_eq!(v.len(), 2 * TOTAL_CELLS);
         let v6 = b.to_planes_channels(&[0, 1, 8, 9, 16, 17]);
         assert_eq!(v6.len(), 6 * TOTAL_CELLS);
+    }
+
+    #[test]
+    fn corner_mask_zeroes_stones_outside_central_hexagon() {
+        // §153 T2 — drives the toggle and asserts behaviour on stone planes
+        // 0 and 8 in both `encode_state_to_buffer` and
+        // `encode_state_to_buffer_channels`. All sub-cases are inside one
+        // `#[test]` so cargo's parallel runner cannot race the global flag
+        // with other tests.
+        let b = make_board();
+
+        // Three sentinel cells:
+        //   centre        (9, 9)   flat 9*19 + 9 = 180  hex_dist 0  → kept
+        //   on-boundary   (0, 9)   flat 0*19 + 9 = 9    hex_dist 9  → kept
+        //   far corner    (0, 0)   flat 0          hex_dist 18 → masked
+        //   opposite corn (18,18)  flat 18*19+18 = 360  hex_dist 18 → masked
+        let mut planes_2 = vec![0.0f32; 2 * TOTAL_CELLS];
+        for &i in &[0usize, 9, 180, 360] {
+            planes_2[i] = 1.0;                   // my-plane
+            planes_2[TOTAL_CELLS + i] = 1.0;     // opp-plane
+        }
+
+        // Save current global flag so unrelated tests are unaffected.
+        let was_enabled = set_corner_mask_enabled(false);
+
+        // Mask off — encoder must mirror inputs verbatim on planes 0/8.
+        let mut full_off = vec![0.0f32; 18 * TOTAL_CELLS];
+        b.encode_state_to_buffer(&planes_2, &mut full_off);
+        for &i in &[0usize, 9, 180, 360] {
+            assert_eq!(full_off[i], 1.0, "off: my plane idx {i}");
+            assert_eq!(full_off[8 * TOTAL_CELLS + i], 1.0, "off: opp plane idx {i}");
+        }
+
+        let mut chan_off = vec![0.0f32; 2 * TOTAL_CELLS];
+        b.encode_state_to_buffer_channels(&planes_2, &mut chan_off, &[0usize, 8]);
+        for &i in &[0usize, 9, 180, 360] {
+            assert_eq!(chan_off[i], 1.0, "off chan: my idx {i}");
+            assert_eq!(chan_off[TOTAL_CELLS + i], 1.0, "off chan: opp idx {i}");
+        }
+
+        // Mask on — corners zeroed, centre and on-boundary cells preserved.
+        set_corner_mask_enabled(true);
+        assert!(corner_mask_enabled(), "flag must reflect the swap");
+
+        let mut full_on = vec![0.0f32; 18 * TOTAL_CELLS];
+        b.encode_state_to_buffer(&planes_2, &mut full_on);
+        // Centre and the on-boundary cell survive.
+        assert_eq!(full_on[180], 1.0, "on: centre kept (my)");
+        assert_eq!(full_on[8 * TOTAL_CELLS + 180], 1.0, "on: centre kept (opp)");
+        assert_eq!(full_on[9], 1.0, "on: hex_dist=9 cell kept (my)");
+        assert_eq!(full_on[8 * TOTAL_CELLS + 9], 1.0, "on: hex_dist=9 cell kept (opp)");
+        // Both corners are masked.
+        assert_eq!(full_on[0], 0.0, "on: (0,0) corner masked (my)");
+        assert_eq!(full_on[8 * TOTAL_CELLS + 0], 0.0, "on: (0,0) corner masked (opp)");
+        assert_eq!(full_on[360], 0.0, "on: (18,18) corner masked (my)");
+        assert_eq!(full_on[8 * TOTAL_CELLS + 360], 0.0, "on: (18,18) corner masked (opp)");
+
+        let mut chan_on = vec![0.0f32; 2 * TOTAL_CELLS];
+        b.encode_state_to_buffer_channels(&planes_2, &mut chan_on, &[0usize, 8]);
+        assert_eq!(chan_on[180], 1.0);
+        assert_eq!(chan_on[TOTAL_CELLS + 180], 1.0);
+        assert_eq!(chan_on[0], 0.0);
+        assert_eq!(chan_on[TOTAL_CELLS + 0], 0.0);
+        assert_eq!(chan_on[360], 0.0);
+        assert_eq!(chan_on[TOTAL_CELLS + 360], 0.0);
+
+        // Mask hits stone planes only — broadcast planes 16/17 untouched.
+        let mut chan_bcast = vec![0.0f32; 2 * TOTAL_CELLS];
+        b.encode_state_to_buffer_channels(&planes_2, &mut chan_bcast, &[16usize, 17]);
+        // moves_remaining and ply parity broadcasts are uniform across the
+        // full 19×19 grid even with the mask on — the mask must not bleed
+        // into scalar-broadcast channels.
+        let mr_expected = chan_bcast[180];
+        let ply_expected = chan_bcast[TOTAL_CELLS + 180];
+        for i in 0..TOTAL_CELLS {
+            assert_eq!(chan_bcast[i], mr_expected, "mr broadcast at {i}");
+            assert_eq!(chan_bcast[TOTAL_CELLS + i], ply_expected, "ply broadcast at {i}");
+        }
+
+        // Restore the prior global state so other tests see what they
+        // started with.
+        set_corner_mask_enabled(was_enabled);
+        assert_eq!(corner_mask_enabled(), was_enabled);
     }
 
     #[test]

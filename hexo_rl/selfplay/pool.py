@@ -151,6 +151,27 @@ class WorkerPool:
         # Rust inference batcher uses WIRE_CHANNELS (18) planes; game runner slices
         # to BUFFER_CHANNELS (8) before pushing to results queue (HEXB v6).
 
+        # Phase B' v9 §153 T2 — flip the engine-side corner-mask flag once,
+        # before any worker spins up. The Rust encoder reads this atomic
+        # via `corner_mask_enabled()` on every encode call. Default False;
+        # variants opt in by setting `model.corner_mask: true` in YAML.
+        _model_cfg = config.get("model") if isinstance(config.get("model"), dict) else {}
+        _corner_mask_on = bool(
+            _model_cfg.get("corner_mask", config.get("corner_mask", False))
+        )
+        try:
+            from engine import set_corner_mask_enabled as _set_mask  # type: ignore[attr-defined]
+            _set_mask(_corner_mask_on)
+        except (ImportError, AttributeError):
+            # Older engine builds without the toggle — no-op; the encoder
+            # itself defaults to mask-off, so behaviour is unchanged.
+            if _corner_mask_on:
+                log.warning(
+                    "corner_mask_unavailable",
+                    msg="config requested corner_mask=True but engine binding missing; "
+                        "encoder will run with mask off. Rebuild the engine.",
+                )
+
         mcts_cfg = config.get("mcts", config)
         self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
         self.c_puct = float(mcts_cfg.get("c_puct", 1.5))

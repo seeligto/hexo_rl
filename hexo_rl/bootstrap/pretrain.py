@@ -640,6 +640,23 @@ def pretrain() -> None:
     corpus_cfg: Dict = load_config("configs/corpus.yaml")
     if args.batch_size:
         config["batch_size"] = args.batch_size
+
+    # Phase B' v9 §153 T2 — flip the engine corner-mask flag so the
+    # post-train validation loop's `state.to_tensor()` calls produce
+    # tensors that match the model's input expectations. The training
+    # data itself comes pre-encoded from the .npz corpus, so corpus-side
+    # encoding mismatches are a separate concern (regenerate corpus with
+    # corner_mask=True if pretraining a hex-trunk model from scratch).
+    _model_cfg_bootstrap = config.get("model") if isinstance(config.get("model"), dict) else {}
+    _corner_mask_on_pretrain = bool(
+        _model_cfg_bootstrap.get("corner_mask", config.get("corner_mask", False))
+    )
+    try:
+        from engine import set_corner_mask_enabled as _set_mask  # type: ignore[attr-defined]
+        _set_mask(_corner_mask_on_pretrain)
+    except (ImportError, AttributeError):
+        if _corner_mask_on_pretrain:
+            log.warning("corner_mask_unavailable_pretrain")
     batch_size = int(config.get("batch_size", 512))
     label_smoothing = float(corpus_cfg.get("label_smoothing_default", 0.05))
     aux_weight = float(config.get("aux_opp_reply_weight", 0.15))
