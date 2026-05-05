@@ -89,6 +89,17 @@ pub struct SelfPlayRunner {
     /// = 5`).  Used to break the radius-5 stride-5 fixed point identified in
     /// the §152 instrumented diagnosis.
     pub(crate) legal_move_radius_jitter: bool,
+    /// Phase B' v9 §153 T3 — cadence at which the per-game / per-turn /
+    /// per-move rotation `sym_idx` is resampled within a single game.
+    /// 0 = `per_game` (current §130 behaviour, the default — sample once
+    ///     at game start, hold for the whole game).
+    /// 1 = `per_move` — sample at every recorded position.  Each row in the
+    ///     replay buffer carries its own `sym_idx`; the aux reprojection
+    ///     at game end uses each row's own value.
+    /// 2 = `per_turn` — sample at the first move of each player's turn
+    ///     (ply 0 and any subsequent ply where `moves_remaining == 2`).
+    /// Active only when `selfplay_rotation_enabled` is also true.
+    pub(crate) rotation_cadence: u8,
     pub(crate) running: Arc<AtomicBool>,
     pub(crate) games_completed: Arc<AtomicUsize>,
     pub(crate) positions_generated: Arc<AtomicUsize>,
@@ -148,7 +159,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 8 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000, full_search_prob = 0.0, n_sims_quick = 0, n_sims_full = 0, random_opening_plies = 0, selfplay_rotation_enabled = false, legal_move_radius_jitter = false))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = 8 * 19 * 19, policy_len = 19 * 19 + 1, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000, full_search_prob = 0.0, n_sims_quick = 0, n_sims_full = 0, random_opening_plies = 0, selfplay_rotation_enabled = false, legal_move_radius_jitter = false, rotation_cadence = "per_game".to_string()))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -185,7 +196,19 @@ impl SelfPlayRunner {
         random_opening_plies: u32,
         selfplay_rotation_enabled: bool,
         legal_move_radius_jitter: bool,
+        rotation_cadence: String,
     ) -> PyResult<Self> {
+        let rotation_cadence_code: u8 = match rotation_cadence.as_str() {
+            "per_game" => 0,
+            "per_move" => 1,
+            "per_turn" => 2,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "SelfPlayRunner: rotation_cadence must be one of \
+                     'per_game', 'per_move', 'per_turn'; got {other:?}"
+                )));
+            }
+        };
         // Effective standard-search sim budget: `standard_sims` wins, else
         // `n_simulations`. Reject zero on the *effective* value — a silent
         // zero fallback here ran workers with 0 sims per move (no search,
@@ -244,6 +267,7 @@ impl SelfPlayRunner {
             random_opening_plies,
             selfplay_rotation_enabled,
             legal_move_radius_jitter,
+            rotation_cadence: rotation_cadence_code,
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
             positions_generated: Arc::new(AtomicUsize::new(0)),
@@ -510,7 +534,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             4, 0, 1, 1, 1.5, 0.25, 8*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, "per_game".to_string(),
         ).unwrap();
         runner.start();
 
@@ -632,7 +656,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, 8*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, "per_game".to_string(),
         ).unwrap();
 
         // Simulate three per-search stat pushes matching what the worker
@@ -668,7 +692,7 @@ mod tests {
         let empty = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, 8*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, "per_game".to_string(),
         ).unwrap();
         assert_eq!(empty.mcts_mean_depth(), 0.0);
         assert_eq!(empty.mcts_mean_root_concentration(), 0.0);

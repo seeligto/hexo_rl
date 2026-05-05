@@ -9,6 +9,27 @@
 use crate::board::{Board, Cell, BOARD_SIZE, HALF, TOTAL_CELLS};
 use rand::{rng, RngExt};
 
+/// §153 T3 — per-move / per-turn rotation cadence helper. Returns true when
+/// the worker loop should resample `sym_idx` BEFORE running MCTS / recording
+/// for the move at the given `ply` and `moves_remaining`.
+///
+/// The initial sample at game start is the caller's responsibility — this
+/// helper only governs WITHIN-game resampling.
+///
+/// Cadence codes:
+///   * 0 (per_game): never resample within a game.
+///   * 1 (per_move): resample for every recorded move.
+///   * 2 (per_turn): resample on turn boundaries — i.e. when this is NOT
+///     the opening single move (`ply >= 1`) and the player has just started
+///     a new compound turn (`moves_remaining == 2`).
+pub(crate) fn should_resample_sym(rotation_cadence: u8, ply: u32, moves_remaining: u8) -> bool {
+    match rotation_cadence {
+        1 => true,
+        2 => ply >= 1 && moves_remaining == 2,
+        _ => false,
+    }
+}
+
 /// Fuse K cluster-local policies into one global policy in the main board's
 /// MCTS action frame.
 ///
@@ -174,4 +195,71 @@ pub(crate) fn reproject_game_end_row(
         }
     }
     aux_u8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn per_game_cadence_never_resamples_within_a_game() {
+        // The initial sample is the caller's responsibility — should_resample_sym
+        // governs only WITHIN-game resampling. per_game (code 0) must always
+        // return false regardless of (ply, moves_remaining).
+        for ply in 0u32..20 {
+            for mr in [0u8, 1, 2] {
+                assert!(!should_resample_sym(0, ply, mr),
+                    "per_game must not resample at (ply={ply}, mr={mr})");
+            }
+        }
+    }
+
+    #[test]
+    fn per_move_cadence_resamples_every_move() {
+        for ply in 0u32..20 {
+            for mr in [0u8, 1, 2] {
+                assert!(should_resample_sym(1, ply, mr),
+                    "per_move must resample at (ply={ply}, mr={mr})");
+            }
+        }
+    }
+
+    #[test]
+    fn per_turn_cadence_resamples_only_on_turn_boundaries() {
+        // Turn boundary semantics:
+        //   * ply 0 (P1's first single move): caller's initial sample stands
+        //     — should_resample_sym must return false.
+        //   * ply 1 (P2's first compound move, mr == 2): boundary.
+        //   * ply 2 (P2's second compound move, mr == 1): no boundary.
+        //   * ply 3 (P1's first compound move, mr == 2): boundary.
+        //   * ply 4 (P1's second compound move, mr == 1): no boundary.
+        //   * ply 5 (P2's first compound move, mr == 2): boundary.
+        let table: &[(u32, u8, bool)] = &[
+            (0, 1, false),
+            (1, 2, true),
+            (2, 1, false),
+            (3, 2, true),
+            (4, 1, false),
+            (5, 2, true),
+        ];
+        for &(ply, mr, expected) in table {
+            assert_eq!(
+                should_resample_sym(2, ply, mr),
+                expected,
+                "per_turn at (ply={ply}, mr={mr}) expected {expected}",
+            );
+        }
+        // Defence-in-depth: at moves_remaining == 0 (mid-apply transient,
+        // never observed in the worker loop because we read mr at start of
+        // a move) the helper still returns false.
+        assert!(!should_resample_sym(2, 5, 0));
+    }
+
+    #[test]
+    fn unknown_cadence_codes_fall_back_to_per_game() {
+        for code in [3u8, 4, 9, 255] {
+            assert!(!should_resample_sym(code, 1, 2));
+            assert!(!should_resample_sym(code, 0, 1));
+        }
+    }
 }

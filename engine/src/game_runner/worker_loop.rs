@@ -190,6 +190,7 @@ impl SelfPlayRunner {
             let random_opening_plies = self.random_opening_plies;
             let selfplay_rotation_enabled = self.selfplay_rotation_enabled;
             let legal_move_radius_jitter = self.legal_move_radius_jitter;
+            let rotation_cadence = self.rotation_cadence;
             let sym_tables = sym_tables_arc.clone();
             let results_queue = self.results.clone();
             let positions_dropped = self.positions_dropped.clone();
@@ -238,18 +239,24 @@ impl SelfPlayRunner {
                         board.set_legal_move_radius(r);
                     }
 
-                    // §130: sample per-game rotation across the 12-element hex
-                    // dihedral group when self-play rotation is enabled. The
-                    // rotation is fixed for the duration of the game; eval/bot
-                    // paths construct the runner with the flag disabled and
-                    // sym_idx stays at 0 (identity — every scatter call is
-                    // short-circuited below).
-                    let sym_idx: usize = if selfplay_rotation_enabled {
+                    // §130 / §153 T3 — sample rotation across the 12-element
+                    // hex dihedral group when self-play rotation is enabled.
+                    // `rotation_cadence` decides whether the value is fixed
+                    // for the whole game (`per_game`, default), resampled at
+                    // every recorded position (`per_move`), or resampled at
+                    // each turn boundary (`per_turn`).
+                    //
+                    // The "current" sym_idx is held in a `Cell`-style mutable
+                    // local; the move loop below reads it after applying any
+                    // cadence-driven resample, then writes back the same
+                    // value into the per-row record so the game-end aux
+                    // reprojection knows which rotation to invert per row.
+                    let mut sym_idx: usize = if selfplay_rotation_enabled {
                         rng.random_range(0..N_SYMS)
                     } else {
                         0
                     };
-                    let inv_idx = inv_sym_idx(sym_idx);
+                    let mut inv_idx = inv_sym_idx(sym_idx);
 
                     // KataGo-style playout cap randomisation.
                     let is_fast_game = fast_prob > 0.0 && rng.random::<f32>() < fast_prob;
@@ -276,6 +283,21 @@ impl SelfPlayRunner {
                             // positions_generated NOT incremented — no training
                             // row produced for this ply.
                             continue;
+                        }
+
+                        // §153 T3 — per-move / per-turn rotation cadence.
+                        // Resampling happens BEFORE the MCTS / inference path
+                        // so the closure captures the new sym_idx, and the
+                        // record below reuses the same value, keeping the
+                        // (state, chain, policy, aux) tuple internally
+                        // consistent within this row.
+                        if selfplay_rotation_enabled
+                            && records::should_resample_sym(
+                                rotation_cadence, board.ply, board.moves_remaining,
+                            )
+                        {
+                            sym_idx = rng.random_range(0..N_SYMS);
+                            inv_idx = inv_sym_idx(sym_idx);
                         }
 
                         // Move-level playout cap (orthogonal to game-level fast_prob above).
@@ -678,7 +700,15 @@ impl SelfPlayRunner {
                             // Capture the per-row window centre so the aux targets
                             // (computed at game end) can be reprojected into the same
                             // coordinate frame as this row's state planes.
-                            records_vec.push((feat, chain, projected_policy, board.current_player, center.0, center.1, move_is_full_search));
+                            //
+                            // §153 T3 — also stash the per-row `sym_idx` so the
+                            // aux reprojection at game end can scatter into the
+                            // same rotated frame this row's state was rotated to.
+                            // For `per_game` rotation this matches the original
+                            // §130 game-level value; for `per_move` and
+                            // `per_turn` this is the value sampled for THIS
+                            // move's MCTS + record.
+                            records_vec.push((feat, chain, projected_policy, board.current_player, center.0, center.1, move_is_full_search, sym_idx));
                         }
 
                         if board.apply_move(move_idx.0, move_idx.1).is_err() {
@@ -726,7 +756,7 @@ impl SelfPlayRunner {
                     };
 
                     let mut games_results = results_queue.lock().expect("results lock poisoned");
-                    for (feat, chain, pol, player, cq, cr, is_full_search) in records_vec {
+                    for (feat, chain, pol, player, cq, cr, is_full_search, row_sym_idx) in records_vec {
                         let outcome = match winner {
                             Some(p) => if p as i8 == player as i8 { 1.0 } else { -1.0 },
                             None => draw_reward,
@@ -737,11 +767,15 @@ impl SelfPlayRunner {
                         let mut aux_u8 = records::reproject_game_end_row(
                             &final_cells, &winning_cells, cq, cr,
                         );
-                        // §130: forward-scatter the aux pair into the same rotated
-                        // frame as state/chain/policy. Reproject + scatter compose
-                        // because both are pure permutations on cell indices.
-                        if sym_idx != 0 {
-                            rotate_aux_inplace(&mut aux_u8, sym_idx, &sym_tables);
+                        // §130 / §153 T3 — forward-scatter the aux pair into the
+                        // same rotated frame as the row's state/chain/policy.
+                        // Per-row `row_sym_idx` makes this correct for all three
+                        // cadences (per_game / per_turn / per_move): each row's
+                        // aux ends up in the same rotated frame as its state.
+                        // Reproject + scatter compose because both are pure
+                        // permutations on cell indices.
+                        if row_sym_idx != 0 {
+                            rotate_aux_inplace(&mut aux_u8, row_sym_idx, &sym_tables);
                         }
 
                         games_results.push_back((feat, chain, pol, outcome, plies, aux_u8, is_full_search));

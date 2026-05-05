@@ -252,6 +252,15 @@ class WorkerPool:
             # {4, 5, 6}. Default off so eval/bot/test paths and any
             # pre-§152 variant stay at the canonical radius 5.
             legal_move_radius_jitter=bool(sp.get("legal_move_radius_jitter", False)),
+            # Phase B' v9 §153 T3 — sym_idx resampling cadence within a
+            # game. "per_game" reproduces the §130 default. "per_move"
+            # samples a fresh rotation for every recorded position;
+            # "per_turn" samples on each turn boundary (ply 0 or first
+            # move of a player's compound turn). Active only when
+            # `rotation_enabled` is also true. Each row in the replay
+            # buffer carries its own sym_idx so aux targets line up
+            # with the row's rotated state.
+            rotation_cadence=str(sp.get("rotation_cadence", "per_game")),
         )
         self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
 
