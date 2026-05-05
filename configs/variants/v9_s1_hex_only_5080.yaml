@@ -1,0 +1,48 @@
+# v9_s1_hex_only_5080 — Phase B' v9 §153 T5 smoke S1.
+#
+# Hex kernel + corner-mask alone, R = 5 fixed (no Q2 jitter, no per-move
+# rotation). Isolates the hex-native trunk's contribution to Class-4
+# (stride-5 east-west spam at distance-5 spacing) on the same recipe as
+# the §152 instrumented and v8 jitter smokes.
+#
+# Bootstrap: checkpoints/bootstrap_model_v8full.pt (T4 v9 — produced by
+# either v7full warm-start or scratch fine-tune with hex_kernel +
+# corner_mask). v7full canonical is untouched.
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v8full.pt \
+#     --variant v9_s1_hex_only_5080 \
+#     --checkpoint-dir checkpoints/v9_s1_hex_only \
+#     --no-dashboard \
+#     --iterations 2500
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+eval_interval: 500
+
+model:
+  use_hex_kernel: true
+  corner_mask: true
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  n_workers: 8
+  inference_batch_size: 32
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 4
+  playout_cap:
+    fast_prob: 0.0
+  legal_move_radius_jitter: false
+  rotation_cadence: per_game
+
+monitors:
+  hard_abort_grad_norm: 10.0
+
+instrumentation:
+  enabled: true
+  value_probe_interval: 250
+  composition_interval: 500
+  value_probe_fixture: fixtures/value_probe_50.npz

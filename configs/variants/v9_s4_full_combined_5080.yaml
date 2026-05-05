@@ -1,0 +1,46 @@
+# v9_s4_full_combined_5080 — Phase B' v9 §153 T5 smoke S4.
+#
+# Hex kernel + corner-mask + Q2 LEGAL_MOVE_RADIUS jitter + per-move
+# rotation. The candidate sustained-run config: every Class-4 lever
+# stacked. Synthesis (T6) compares against S1, S2, S3 to decompose
+# the Class-4 dampening contribution from each lever.
+#
+# Bootstrap: checkpoints/bootstrap_model_v8full.pt
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v8full.pt \
+#     --variant v9_s4_full_combined_5080 \
+#     --checkpoint-dir checkpoints/v9_s4_full_combined \
+#     --no-dashboard \
+#     --iterations 2500
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+eval_interval: 500
+
+model:
+  use_hex_kernel: true
+  corner_mask: true
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  n_workers: 8
+  inference_batch_size: 32
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 4
+  playout_cap:
+    fast_prob: 0.0
+  legal_move_radius_jitter: true
+  rotation_cadence: per_move
+
+monitors:
+  hard_abort_grad_norm: 10.0
+
+instrumentation:
+  enabled: true
+  value_probe_interval: 250
+  composition_interval: 500
+  value_probe_fixture: fixtures/value_probe_50.npz
