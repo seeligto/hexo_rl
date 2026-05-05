@@ -34,9 +34,32 @@ eval_pipeline:
       stride: 1
       n_games: 20
       model_sims: 96
+    # §155 T2 — multi-anchor bootstrap floor opponent.  Frozen reference
+    # (the canonical bootstrap by default) used by the bootstrap-floor
+    # promotion gate to catch v9-style colony-attractor regressions where
+    # the trainer reaches a local optimum that beats the rotating best
+    # anchor 86–91% but loses 199/200 vs SealBot.  Default disabled —
+    # variants opt in via `enabled: true` plus `gating.bootstrap_floor`.
+    # When opting in, set ``stride`` to match best_checkpoint so a
+    # measurement is always available on promotion-eligible rounds.
+    bootstrap_anchor:
+      enabled: false
+      stride: 1
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+      path: checkpoints/bootstrap_model.pt
   gating:
     promotion_winrate: 0.55
     best_model_path: checkpoints/best_model.pt
+    # §155 T2 — promotion AND-gate against a frozen bootstrap reference.
+    # When enabled, requires `wr_bootstrap_anchor >= min_winrate` in
+    # addition to the existing best-checkpoint gates.  Missing measurement
+    # blocks promotion (defensive default).  Pair with
+    # `opponents.bootstrap_anchor.enabled: true` and matching stride.
+    bootstrap_floor:
+      enabled: false
+      min_winrate: 0.45
   colony_centroid_threshold: 6
   bradley_terry:
     anchor_player: checkpoint_0

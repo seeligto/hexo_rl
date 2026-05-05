@@ -26,6 +26,44 @@ from hexo_rl.eval.evaluator import Evaluator
 from hexo_rl.eval.results_db import ResultsDB
 from hexo_rl.model.network import HexTacToeNet
 
+
+def _load_anchor_model(path: Path, device: torch.device) -> HexTacToeNet:
+    """Load a frozen anchor checkpoint as a HexTacToeNet for eval-only play.
+
+    Strips ``_orig_mod.`` / ``module.`` prefixes (torch.compile / DDP) and
+    infers ``in_channels`` from the trunk input conv weight shape so the
+    network instance matches whatever the bootstrap was trained at.
+    """
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    state: dict = ckpt
+    for key in ("model_state", "model_state_dict", "state_dict"):
+        if isinstance(ckpt, dict) and key in ckpt and isinstance(ckpt[key], dict):
+            state = ckpt[key]
+            break
+
+    prefixes = ("_orig_mod.", "module.")
+    normalized: dict[str, torch.Tensor] = {}
+    for k, v in state.items():
+        nk = k
+        changed = True
+        while changed:
+            changed = False
+            for p in prefixes:
+                if nk.startswith(p):
+                    nk = nk[len(p):]
+                    changed = True
+        normalized[nk] = v
+
+    in_ch = int(normalized["trunk.input_conv.weight"].shape[1])
+    model = HexTacToeNet(
+        board_size=19, in_channels=in_ch, res_blocks=12, filters=128,
+        se_reduction_ratio=4,
+    )
+    model.load_state_dict(normalized, strict=True)
+    model.to(device)
+    model.eval()
+    return model
+
 try:
     import structlog
     log = structlog.get_logger()
@@ -73,10 +111,32 @@ class EvalPipeline:
         self.best_cfg = opp.get("best_checkpoint", {})
         self.sealbot_cfg = opp.get("sealbot", {})
         self.random_cfg = opp.get("random", {})
+        # §155 T2 — multi-anchor floor opponent.  A frozen reference model
+        # (typically the canonical bootstrap, e.g. v7full) that the trainer
+        # must keep beating with WR ≥ ``gating.bootstrap_floor.min_winrate``
+        # while it accumulates wins against the rotating ``best_checkpoint``
+        # anchor.  Guards against the v9 Class-5 failure mode where the
+        # trainer reaches a local optimum that beats best_checkpoint 86–91%
+        # but loses 199/200 vs SealBot — the bootstrap-floor opponent
+        # collapses with the same pathology and so blocks the promotion.
+        self.bootstrap_anchor_cfg = opp.get("bootstrap_anchor", {})
 
         self.gating_cfg = cfg.get("gating", {})
+        # §155 T2 — bootstrap-floor gate.  When enabled, promotion requires
+        # ``wr_bootstrap_anchor >= bootstrap_floor.min_winrate`` in addition
+        # to the existing best-checkpoint gates.  Default disabled for
+        # backward compat.
+        self._bootstrap_floor_cfg = self.gating_cfg.get("bootstrap_floor", {})
         self.bt_cfg = cfg.get("bradley_terry", {})
         self._base_interval = int(cfg.get("eval_interval", 2500))
+
+        # Lazy-loaded bootstrap anchor model.  Constructed on first eval round
+        # that runs the bootstrap_anchor opponent — keeps init cheap when the
+        # opponent is disabled and avoids loading a checkpoint that may be
+        # rewritten between runs (anchor is read-only from the pipeline's
+        # perspective; only the disk file matters).
+        self._bootstrap_anchor_model: HexTacToeNet | None = None
+        self._bootstrap_anchor_pid: int | None = None
 
         # M4: fail fast on stride=0 / negative / bad strings — these would silently
         # collapse to "run every round" under int()<=1 coercion, which is the
@@ -85,6 +145,7 @@ class EvalPipeline:
             ("best_checkpoint", self.best_cfg),
             ("sealbot", self.sealbot_cfg),
             ("random", self.random_cfg),
+            ("bootstrap_anchor", self.bootstrap_anchor_cfg),
         ):
             if "stride" in opp_cfg:
                 s = opp_cfg["stride"]
@@ -219,6 +280,69 @@ class EvalPipeline:
             results["sealbot_gate_passed"] = er.win_rate >= 0.5
             results["eval_games"] += n
 
+        # ── vs Bootstrap Anchor (multi-anchor floor) ──────────────────
+        # §155 T2 — frozen reference (typically the canonical bootstrap)
+        # that the trainer must keep beating with WR ≥ floor while it
+        # accumulates wins against the rotating best_checkpoint.  Promotion
+        # gate AND-combines this floor with the existing best gates when
+        # ``gating.bootstrap_floor.enabled``.
+        wr_bootstrap_anchor: float | None = None
+        if (
+            self.bootstrap_anchor_cfg.get("enabled", False)
+            and _should_run("bootstrap_anchor", self.bootstrap_anchor_cfg)
+        ):
+            anchor_path_str = self.bootstrap_anchor_cfg.get(
+                "path", "checkpoints/bootstrap_model.pt",
+            )
+            anchor_path = Path(anchor_path_str)
+            if not anchor_path.exists():
+                log.warning(
+                    "bootstrap_anchor_missing",
+                    path=str(anchor_path),
+                    msg="bootstrap_anchor opponent enabled but checkpoint not found; "
+                        "skipping this round.  Promotion gate will not block on absence "
+                        "unless `gating.bootstrap_floor.enabled` is also set.",
+                )
+            else:
+                if self._bootstrap_anchor_model is None:
+                    log.info("bootstrap_anchor_loading", path=str(anchor_path))
+                    self._bootstrap_anchor_model = _load_anchor_model(
+                        anchor_path, self.device,
+                    )
+                    # Persistent player row, keyed by checkpoint filename so
+                    # the BT-rating and colony-win histories survive across
+                    # promotion-anchor swaps (the bootstrap_anchor identity
+                    # never rotates, by design).
+                    self._bootstrap_anchor_pid = self.db.get_or_create_player(
+                        f"bootstrap_anchor:{anchor_path.name}",
+                        "checkpoint",
+                        {"role": "bootstrap_floor", "path": str(anchor_path)},
+                    )
+                n = int(self.bootstrap_anchor_cfg.get("n_games", 100))
+                sims = self.bootstrap_anchor_cfg.get("model_sims")
+                opp_sims = self.bootstrap_anchor_cfg.get("opponent_sims")
+                er = evaluator.evaluate_vs_model(
+                    self._bootstrap_anchor_model,
+                    n_games=n, model_sims=sims, opponent_sims=opp_sims,
+                )
+                ci_lo, ci_hi = _binomial_ci(er.win_count, n)
+                self.db.insert_match(
+                    train_step, ckpt_pid, self._bootstrap_anchor_pid,
+                    er.win_count, n - er.win_count - er.draw_count, er.draw_count,
+                    n, er.win_rate, ci_lo, ci_hi,
+                    colony_wins_a=er.colony_wins,
+                    run_id=self.run_id,
+                )
+                print_match_result(
+                    ckpt_name, f"bootstrap_anchor:{anchor_path.name}",
+                    er.win_count, n - er.win_count - er.draw_count, n, ci_lo, ci_hi,
+                )
+                results["wr_bootstrap_anchor"] = er.win_rate
+                results["ci_bootstrap_anchor"] = (ci_lo, ci_hi)
+                results["colony_wins_bootstrap_anchor"] = er.colony_wins
+                results["eval_games"] += n
+                wr_bootstrap_anchor = er.win_rate
+
         # ── vs Best Checkpoint ────────────────────────────────────────
         wr_best = None
         ci_best_lo: float | None = None
@@ -274,9 +398,23 @@ class EvalPipeline:
         # Uses binomial 95% normal-approx (same as CI shown in table).
         threshold = float(self.gating_cfg.get("promotion_winrate", 0.55))
         ci_guard = bool(self.gating_cfg.get("require_ci_above_half", True))
+        floor_enabled = bool(self._bootstrap_floor_cfg.get("enabled", False))
+        floor_threshold = float(self._bootstrap_floor_cfg.get("min_winrate", 0.45))
         if wr_best is not None and wr_best >= threshold:
             ci_ok = (not ci_guard) or (ci_best_lo is not None and ci_best_lo > 0.5)
-            if ci_ok:
+            # §155 T2 — bootstrap floor gate.  When enabled, promotion AND-
+            # combines with `wr_bootstrap_anchor >= min_winrate`.  Missing
+            # measurement (anchor opponent stride-skipped or checkpoint
+            # absent) is treated as failure — defensive default; callers who
+            # enable the floor are expected to align stride with
+            # best_checkpoint so a measurement is always present.
+            floor_ok = True
+            if floor_enabled:
+                floor_ok = (
+                    wr_bootstrap_anchor is not None
+                    and wr_bootstrap_anchor >= floor_threshold
+                )
+            if ci_ok and floor_ok:
                 results["promoted"] = True
                 log.info(
                     "checkpoint_promoted",
@@ -284,14 +422,25 @@ class EvalPipeline:
                     wr_best=wr_best,
                     ci_lo=ci_best_lo,
                     threshold=threshold,
+                    wr_bootstrap_anchor=wr_bootstrap_anchor,
+                    floor_enabled=floor_enabled,
+                    floor_threshold=floor_threshold if floor_enabled else None,
                 )
-            else:
+            elif not ci_ok:
                 log.info(
                     "promotion_blocked_ci",
                     step=train_step,
                     wr_best=wr_best,
                     ci_lo=ci_best_lo,
                     threshold=threshold,
+                )
+            else:
+                log.info(
+                    "promotion_blocked_bootstrap_floor",
+                    step=train_step,
+                    wr_best=wr_best,
+                    wr_bootstrap_anchor=wr_bootstrap_anchor,
+                    floor_threshold=floor_threshold,
                 )
 
         # ── Bradley-Terry ratings ─────────────────────────────────────

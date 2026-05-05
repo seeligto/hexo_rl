@@ -401,6 +401,221 @@ def test_effective_eval_interval_override(
     assert "wr_sealbot" in result
 
 
+# ── Bootstrap-floor multi-anchor gate (§155 T2) ────────────────────────────
+
+
+@pytest.fixture
+def eval_config_with_floor(tmp_path: Path) -> dict:
+    """Eval config with bootstrap_anchor opponent + bootstrap_floor gate enabled.
+
+    The anchor "checkpoint" is faked via patching `_load_anchor_model` in the
+    individual tests below so we don't need a real .pt on disk.
+    """
+    return {
+        "eval_pipeline": {
+            "enabled": True,
+            "eval_interval": 100,
+            "report_dir": str(tmp_path / "eval"),
+            "db_path": str(tmp_path / "eval" / "results.db"),
+            "ratings_plot_path": str(tmp_path / "eval" / "ratings_curve.png"),
+            "opponents": {
+                "best_checkpoint": {
+                    "enabled": True, "stride": 1,
+                    "n_games": 10, "model_sims": 8, "opponent_sims": 8,
+                },
+                "sealbot": {"enabled": False},
+                "random": {"enabled": True, "n_games": 10, "model_sims": 8},
+                "bootstrap_anchor": {
+                    "enabled": True, "stride": 1,
+                    "n_games": 10, "model_sims": 8, "opponent_sims": 8,
+                    "path": str(tmp_path / "fake_bootstrap.pt"),
+                },
+            },
+            "gating": {
+                "promotion_winrate": 0.55,
+                "best_model_path": str(tmp_path / "best.pt"),
+                "bootstrap_floor": {"enabled": True, "min_winrate": 0.45},
+            },
+            "bradley_terry": {"anchor_player": "checkpoint_0", "regularization": 1e-6},
+        }
+    }
+
+
+@patch("hexo_rl.eval.eval_pipeline._load_anchor_model")
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_bootstrap_floor_blocks_promotion_below_threshold(
+    mock_evaluator_cls: MagicMock,
+    mock_load_anchor: MagicMock,
+    eval_config_with_floor: dict,
+) -> None:
+    """§155 T2: best gate passes but bootstrap_anchor WR < min_winrate → no promote.
+
+    This is the v9 failure mode in miniature: trainer beats the rotating
+    best_checkpoint anchor 9/10 (clears wr_best≥0.55 + ci_lo>0.5) but only
+    wins 3/10 vs the frozen bootstrap (below the 0.45 floor) — a real-world
+    proxy for a colony-attractor that crushes the local anchor while
+    collapsing against an unmoving reference.
+    """
+    import torch
+    # Fake bootstrap path must exist for the load gate.
+    Path(eval_config_with_floor["eval_pipeline"]["opponents"]
+         ["bootstrap_anchor"]["path"]).touch()
+    mock_load_anchor.return_value = MagicMock()
+
+    pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(
+        win_rate=0.7, win_count=7, n_games=10, colony_wins=0,
+    )
+    # Two evaluate_vs_model invocations: the bootstrap_anchor block runs
+    # FIRST (per pipeline order), then the best_checkpoint block runs.  The
+    # side_effect returns those in order.
+    mock_eval.evaluate_vs_model.side_effect = [
+        EvalResult(win_rate=0.3, win_count=3, n_games=10, colony_wins=0),  # bootstrap_anchor
+        EvalResult(win_rate=0.9, win_count=9, n_games=10, colony_wins=0),  # best
+    ]
+    mock_evaluator_cls.return_value = mock_eval
+
+    result = pipeline.run_evaluation(MagicMock(), 1000, MagicMock())
+    assert result["wr_best"] == 0.9
+    assert result["wr_bootstrap_anchor"] == 0.3
+    assert result["promoted"] is False, (
+        "bootstrap_floor should block when wr_bootstrap_anchor < min_winrate"
+    )
+
+
+@patch("hexo_rl.eval.eval_pipeline._load_anchor_model")
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_bootstrap_floor_allows_promotion_above_threshold(
+    mock_evaluator_cls: MagicMock,
+    mock_load_anchor: MagicMock,
+    eval_config_with_floor: dict,
+) -> None:
+    """§155 T2: best gate passes AND bootstrap_anchor WR ≥ min_winrate → promote."""
+    import torch
+    Path(eval_config_with_floor["eval_pipeline"]["opponents"]
+         ["bootstrap_anchor"]["path"]).touch()
+    mock_load_anchor.return_value = MagicMock()
+
+    pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(
+        win_rate=0.7, win_count=7, n_games=10, colony_wins=0,
+    )
+    mock_eval.evaluate_vs_model.side_effect = [
+        EvalResult(win_rate=0.5, win_count=5, n_games=10, colony_wins=0),  # bootstrap_anchor (≥0.45)
+        EvalResult(win_rate=0.9, win_count=9, n_games=10, colony_wins=0),  # best
+    ]
+    mock_evaluator_cls.return_value = mock_eval
+
+    result = pipeline.run_evaluation(MagicMock(), 1000, MagicMock())
+    assert result["wr_best"] == 0.9
+    assert result["wr_bootstrap_anchor"] == 0.5
+    assert result["promoted"] is True
+
+
+@patch("hexo_rl.eval.eval_pipeline._load_anchor_model")
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_bootstrap_floor_disabled_ignores_anchor_winrate(
+    mock_evaluator_cls: MagicMock,
+    mock_load_anchor: MagicMock,
+    eval_config_with_floor: dict,
+) -> None:
+    """§155 T2: floor disabled → low bootstrap_anchor WR does NOT block promote.
+
+    The opponent still RUNS (so the WR is reported and ratings include it)
+    but it is informational only.
+    """
+    import torch
+    eval_config_with_floor["eval_pipeline"]["gating"]["bootstrap_floor"]["enabled"] = False
+    Path(eval_config_with_floor["eval_pipeline"]["opponents"]
+         ["bootstrap_anchor"]["path"]).touch()
+    mock_load_anchor.return_value = MagicMock()
+
+    pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(
+        win_rate=0.7, win_count=7, n_games=10, colony_wins=0,
+    )
+    mock_eval.evaluate_vs_model.side_effect = [
+        EvalResult(win_rate=0.1, win_count=1, n_games=10, colony_wins=0),  # bootstrap_anchor (catastrophic)
+        EvalResult(win_rate=0.9, win_count=9, n_games=10, colony_wins=0),  # best
+    ]
+    mock_evaluator_cls.return_value = mock_eval
+
+    result = pipeline.run_evaluation(MagicMock(), 1000, MagicMock())
+    assert result["wr_bootstrap_anchor"] == 0.1
+    assert result["promoted"] is True, "floor disabled → low anchor WR is informational"
+
+
+@patch("hexo_rl.eval.eval_pipeline._load_anchor_model")
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_bootstrap_floor_blocks_when_measurement_missing(
+    mock_evaluator_cls: MagicMock,
+    mock_load_anchor: MagicMock,
+    eval_config_with_floor: dict,
+) -> None:
+    """§155 T2: floor enabled but anchor opponent didn't run this round → block.
+
+    Defensive default — if the user enables the floor they must ensure the
+    bootstrap_anchor opponent runs at the same cadence.  Stride mismatch
+    produces a missing measurement; promotion is blocked rather than
+    silently allowed.
+    """
+    import torch
+    # Disable the bootstrap_anchor opponent entirely while keeping the floor
+    # gate enabled — this simulates a stride-mismatched config.
+    eval_config_with_floor["eval_pipeline"]["opponents"]["bootstrap_anchor"]["enabled"] = False
+
+    pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(
+        win_rate=0.7, win_count=7, n_games=10, colony_wins=0,
+    )
+    mock_eval.evaluate_vs_model.return_value = EvalResult(
+        win_rate=0.9, win_count=9, n_games=10, colony_wins=0,
+    )
+    mock_evaluator_cls.return_value = mock_eval
+
+    result = pipeline.run_evaluation(MagicMock(), 1000, MagicMock())
+    assert result["wr_best"] == 0.9
+    assert "wr_bootstrap_anchor" not in result
+    assert result["promoted"] is False, (
+        "missing bootstrap_anchor measurement under enabled floor must block promotion"
+    )
+    # Anchor loader was never invoked — opponent disabled.
+    mock_load_anchor.assert_not_called()
+
+
+@patch("hexo_rl.eval.eval_pipeline._load_anchor_model")
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_bootstrap_anchor_eval_games_includes_floor(
+    mock_evaluator_cls: MagicMock,
+    mock_load_anchor: MagicMock,
+    eval_config_with_floor: dict,
+) -> None:
+    """§155 T2: eval_games sum includes the bootstrap_anchor opponent's games."""
+    import torch
+    Path(eval_config_with_floor["eval_pipeline"]["opponents"]
+         ["bootstrap_anchor"]["path"]).touch()
+    mock_load_anchor.return_value = MagicMock()
+
+    pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(
+        win_rate=0.7, win_count=7, n_games=10, colony_wins=0,
+    )
+    mock_eval.evaluate_vs_model.side_effect = [
+        EvalResult(win_rate=0.5, win_count=5, n_games=10, colony_wins=0),
+        EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0),
+    ]
+    mock_evaluator_cls.return_value = mock_eval
+
+    result = pipeline.run_evaluation(MagicMock(), 1000, MagicMock())
+    # 10 (random) + 10 (bootstrap_anchor) + 10 (best) = 30
+    assert result["eval_games"] == 30
+
+
 # ── Colony detection ───────────────────────────────────────────────────────
 
 
