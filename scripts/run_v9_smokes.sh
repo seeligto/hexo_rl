@@ -75,13 +75,24 @@ should_run() {
     return 1
 }
 
-# ── Step 0: bootstrap v8full if needed ───────────────────────────────────────
-if [[ $SKIP_BOOTSTRAP -eq 0 ]] && [[ ! -f checkpoints/bootstrap_model_v8full.pt ]]; then
-    log "Step 0 — producing checkpoints/bootstrap_model_v8full.pt via warm-start"
-    log "  source: checkpoints/bootstrap_model_v7full.pt (§150 canonical)"
-    log "  recipe: --epochs 30 --eta-min 5e-5"
-    log "  model overrides: use_hex_kernel=true corner_mask=true"
+# ── Step 0: produce the v8full bootstrap (T4) ───────────────────────────────
+#
+# T4 produces TWO candidate v8full bootstraps and picks the better:
+#
+#   * v8full_warm    — warm-start from v7full's weights (clean optimizer +
+#                      scheduler, hex_kernel + corner_mask on)
+#   * v8full_scratch — fresh from-scratch 30-epoch retrain, same recipe
+#                      with hex_kernel + corner_mask on
+#
+# Comparator: threat-probe gates (C1/C2/C3) + final pretrain loss + a
+# 100-game SealBot eval (~10 min per candidate at time_limit=0.1s).
+# Winner is copied to checkpoints/bootstrap_model_v8full.pt for the
+# smoke matrix; both candidates are archived for later forensic comparison.
+#
+# Skip with --skip-bootstrap if the v8full file already exists from a
+# prior run.
 
+if [[ $SKIP_BOOTSTRAP -eq 0 ]] && [[ ! -f checkpoints/bootstrap_model_v8full.pt ]]; then
     if [[ ! -f checkpoints/bootstrap_model_v7full.pt ]]; then
         log "ERROR: checkpoints/bootstrap_model_v7full.pt missing — cannot warm-start"
         exit 1
@@ -110,39 +121,170 @@ p.write_text(yaml.safe_dump(cfg, sort_keys=False))
 print(f"patched {sys.argv[1]}: model.use_hex_kernel=True, model.corner_mask=True")
 PY
 
-    BOOTSTRAP_LOG="${LOG_DIR}/v9_bootstrap_v8full.log"
-    log "  launching pretrain (logs: $BOOTSTRAP_LOG, expected ~30-60 min)"
-    # Warm-start path: load v7full's inference weights into a fresh
-    # HexConv2d-trunk model with corner_mask on. Optimizer + scheduler
-    # start from scratch — that is exactly the §153 T4 option A recipe.
+    # ── Step 0a: warm-start ─────────────────────────────────────────────────
+    log "Step 0a — warm-start v7full → v8full_warm"
+    log "  recipe: --init-from-weights bootstrap_model_v7full.pt --epochs 30 --eta-min 5e-5"
+    WARM_LOG="${LOG_DIR}/v9_bootstrap_v8full_warm.log"
+    rm -f checkpoints/pretrain/pretrain_*.pt
     set +e
     MALLOC_ARENA_MAX=2 "$PY" -m hexo_rl.bootstrap.pretrain \
         --init-from-weights checkpoints/bootstrap_model_v7full.pt \
         --epochs 30 \
         --eta-min 5e-5 \
-        --inference-out checkpoints/bootstrap_model_v8full.pt \
-        > "$BOOTSTRAP_LOG" 2>&1
-    BOOTSTRAP_RC=$?
+        --inference-out checkpoints/bootstrap_model_v8full_warm.pt \
+        > "$WARM_LOG" 2>&1
+    WARM_RC=$?
     set -e
-
-    if [[ $BOOTSTRAP_RC -ne 0 ]]; then
-        log "ERROR: bootstrap pretrain failed RC=$BOOTSTRAP_RC — see $BOOTSTRAP_LOG"
-        exit $BOOTSTRAP_RC
+    if [[ $WARM_RC -ne 0 ]]; then
+        log "ERROR: warm-start pretrain failed RC=$WARM_RC — see $WARM_LOG"
+        exit $WARM_RC
     fi
-    log "  bootstrap done: checkpoints/bootstrap_model_v8full.pt"
+    log "  warm-start done: checkpoints/bootstrap_model_v8full_warm.pt"
 
-    # Restore model.yaml so smokes pick up their own config overrides without
-    # being shadowed by the bootstrap-time globals.
+    # ── Step 0b: from-scratch ───────────────────────────────────────────────
+    log "Step 0b — from-scratch hex+corner_mask retrain → v8full_scratch"
+    log "  recipe: --epochs 30 --eta-min 5e-5  (matches §150 v7full recipe)"
+    SCRATCH_LOG="${LOG_DIR}/v9_bootstrap_v8full_scratch.log"
+    rm -f checkpoints/pretrain/pretrain_*.pt
+    set +e
+    MALLOC_ARENA_MAX=2 "$PY" -m hexo_rl.bootstrap.pretrain \
+        --epochs 30 \
+        --eta-min 5e-5 \
+        --inference-out checkpoints/bootstrap_model_v8full_scratch.pt \
+        > "$SCRATCH_LOG" 2>&1
+    SCRATCH_RC=$?
+    set -e
+    if [[ $SCRATCH_RC -ne 0 ]]; then
+        log "ERROR: scratch pretrain failed RC=$SCRATCH_RC — see $SCRATCH_LOG"
+        exit $SCRATCH_RC
+    fi
+    log "  scratch done: checkpoints/bootstrap_model_v8full_scratch.pt"
+
+    # Restore model.yaml so smokes pick up their own per-variant overrides
+    # without being shadowed by the bootstrap-time globals (smoke variants
+    # set model.use_hex_kernel / corner_mask directly in their YAMLs).
     restore_model_yaml
     trap - EXIT
 
-    cp -f "$BOOTSTRAP_LOG" "$ARCHIVE_DIR/" 2>/dev/null || true
-    cp -f checkpoints/bootstrap_model_v8full.pt "$ARCHIVE_DIR/" 2>/dev/null || true
-fi
+    # ── Step 0c: compare candidates ─────────────────────────────────────────
+    log "Step 0c — comparing candidates (threat probe + final loss + SealBot WR)"
+    PROBE_WARM="${LOG_DIR}/v9_probe_warm.txt"
+    PROBE_SCRATCH="${LOG_DIR}/v9_probe_scratch.txt"
+    set +e
+    "$PY" scripts/probe_threat_logits.py \
+        --checkpoint checkpoints/bootstrap_model_v8full_warm.pt \
+        > "$PROBE_WARM" 2>&1
+    PROBE_WARM_RC=$?
+    "$PY" scripts/probe_threat_logits.py \
+        --checkpoint checkpoints/bootstrap_model_v8full_scratch.pt \
+        > "$PROBE_SCRATCH" 2>&1
+    PROBE_SCRATCH_RC=$?
+    set -e
+    log "  probe warm    RC=$PROBE_WARM_RC  (PASS=0)"
+    log "  probe scratch RC=$PROBE_SCRATCH_RC (PASS=0)"
 
-if [[ ! -f checkpoints/bootstrap_model_v8full.pt ]] && [[ $SKIP_BOOTSTRAP -eq 0 ]]; then
-    # Step 0 didn't run (already exists) — fine. But every S1/S2/S4 needs it.
-    :
+    SEALBOT_WARM="${LOG_DIR}/v9_sealbot_warm.jsonl"
+    SEALBOT_SCRATCH="${LOG_DIR}/v9_sealbot_scratch.jsonl"
+    log "  SealBot eval n=100 time_limit=0.1s (~10 min each)"
+    set +e
+    "$PY" scripts/eval_vs_sealbot.py \
+        --checkpoint checkpoints/bootstrap_model_v8full_warm.pt \
+        --n-games 100 --time-limit 0.1 --model-sims 96 \
+        --out "$SEALBOT_WARM" \
+        > "${LOG_DIR}/v9_sealbot_warm.log" 2>&1
+    "$PY" scripts/eval_vs_sealbot.py \
+        --checkpoint checkpoints/bootstrap_model_v8full_scratch.pt \
+        --n-games 100 --time-limit 0.1 --model-sims 96 \
+        --out "$SEALBOT_SCRATCH" \
+        > "${LOG_DIR}/v9_sealbot_scratch.log" 2>&1
+    set -e
+
+    # Pick winner — preference order:
+    #   1. Both probes pass: take the higher SealBot WR; tiebreak on lower final loss.
+    #   2. Only one probe passes: take that one.
+    #   3. Neither passes: surface an error (do NOT silently fall through).
+    "$PY" - <<PY
+import json, pathlib, re, sys
+
+def final_loss(log_path):
+    p = pathlib.Path(log_path)
+    if not p.exists():
+        return None
+    last = None
+    for line in p.read_text().splitlines():
+        if "epoch_complete" in line:
+            m = re.search(r"loss=([0-9.]+)", line)
+            if m:
+                last = float(m.group(1))
+    return last
+
+def sealbot_wr(jsonl_path):
+    p = pathlib.Path(jsonl_path)
+    if not p.exists():
+        return None
+    rec = None
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+    if rec is None:
+        return None
+    # eval_vs_sealbot writes per-checkpoint summary records with a wins/draws/losses
+    # tally; convert to WR (X+0.5*draws)/total.
+    wins = rec.get("wins", 0); draws = rec.get("draws", 0); losses = rec.get("losses", 0)
+    total = wins + draws + losses
+    return None if total == 0 else (wins + 0.5 * draws) / total
+
+warm_loss = final_loss("${WARM_LOG}")
+scratch_loss = final_loss("${SCRATCH_LOG}")
+warm_wr = sealbot_wr("${SEALBOT_WARM}")
+scratch_wr = sealbot_wr("${SEALBOT_SCRATCH}")
+warm_pass = ${PROBE_WARM_RC} == 0
+scratch_pass = ${PROBE_SCRATCH_RC} == 0
+
+print(f"warm    : probe_pass={warm_pass}  sealbot_wr={warm_wr}  final_loss={warm_loss}")
+print(f"scratch : probe_pass={scratch_pass}  sealbot_wr={scratch_wr}  final_loss={scratch_loss}")
+
+if warm_pass and not scratch_pass:
+    winner = "warm"
+elif scratch_pass and not warm_pass:
+    winner = "scratch"
+elif not warm_pass and not scratch_pass:
+    print("FATAL: neither candidate passed threat probe")
+    sys.exit(2)
+else:
+    # Both pass — use SealBot WR; tiebreak (within 1pp) on lower loss.
+    a = warm_wr if warm_wr is not None else 0.0
+    b = scratch_wr if scratch_wr is not None else 0.0
+    if abs(a - b) < 0.01:
+        winner = "warm" if (warm_loss or 9e9) <= (scratch_loss or 9e9) else "scratch"
+    else:
+        winner = "warm" if a >= b else "scratch"
+
+pathlib.Path("${LOG_DIR}/v9_bootstrap_winner").write_text(winner + "\n")
+print(f"WINNER: {winner}")
+PY
+    PICK_RC=$?
+    if [[ $PICK_RC -ne 0 ]]; then
+        log "ERROR: comparator failed (neither candidate viable)"
+        exit $PICK_RC
+    fi
+    WINNER="$(cat ${LOG_DIR}/v9_bootstrap_winner)"
+    log "  comparator picked: $WINNER"
+
+    # ── Step 0d: install the winner ─────────────────────────────────────────
+    cp -f "checkpoints/bootstrap_model_v8full_${WINNER}.pt" \
+          "checkpoints/bootstrap_model_v8full.pt"
+    log "Step 0d — installed bootstrap_model_v8full_${WINNER}.pt → bootstrap_model_v8full.pt"
+
+    cp -f "$WARM_LOG" "$SCRATCH_LOG" "$PROBE_WARM" "$PROBE_SCRATCH" \
+          "$SEALBOT_WARM" "$SEALBOT_SCRATCH" \
+          "${LOG_DIR}/v9_sealbot_warm.log" "${LOG_DIR}/v9_sealbot_scratch.log" \
+          "$ARCHIVE_DIR/" 2>/dev/null || true
+    cp -f checkpoints/bootstrap_model_v8full_warm.pt \
+          checkpoints/bootstrap_model_v8full_scratch.pt \
+          "$ARCHIVE_DIR/" 2>/dev/null || true
 fi
 
 # ── Step 1..4: run each smoke ────────────────────────────────────────────────
