@@ -221,6 +221,57 @@ VARIANTS: dict[str, Knobs] = {
         completed_q_values=True,
         full_search_prob=0.5, n_sims_quick=100, n_sims_full=600,
     ),
+    # ─── §156 R10 within-bisection (R11-R14) ────────────────────────────────
+    # Each variant matches R10 EXACTLY except for ONE knob removed.  The
+    # variant whose draw_rate drops below the 50% Wilson-LCI gate is the
+    # load-bearing knob in the R10 super-additive conjunction; that knob is
+    # what gets pinned in configs/variants/w4c_smoke_v7_5080.yaml.  Per
+    # operator instruction (§156 prompt), all four are run regardless of
+    # intermediate verdicts — full information needed for the fix decision.
+    #
+    # R11 — R10 minus Dirichlet (ε=0; α unchanged but inert).
+    "R11": Knobs(
+        n_workers=18,
+        dirichlet_enabled=False, dirichlet_alpha=0.05, dirichlet_epsilon=0.10,
+        temp_threshold_compound_moves=10, temp_min=0.05,
+        random_opening_plies=1,
+        description="R10 minus Dirichlet (dirichlet_enabled=False)",
+        completed_q_values=True,
+        full_search_prob=0.5, n_sims_quick=100, n_sims_full=600,
+    ),
+    # R12 — R10 minus cosine temp (fixed τ=0.5; threshold=0 disables schedule).
+    "R12": Knobs(
+        n_workers=18,
+        dirichlet_enabled=True, dirichlet_alpha=0.05, dirichlet_epsilon=0.10,
+        temp_threshold_compound_moves=0, temp_min=0.5,
+        random_opening_plies=1,
+        description="R10 minus cosine temp (fixed τ=0.5, threshold=0)",
+        completed_q_values=True,
+        full_search_prob=0.5, n_sims_quick=100, n_sims_full=600,
+    ),
+    # R13 — R10 minus opening_plies=1 (restore T2 baseline value 4).
+    "R13": Knobs(
+        n_workers=18,
+        dirichlet_enabled=True, dirichlet_alpha=0.05, dirichlet_epsilon=0.10,
+        temp_threshold_compound_moves=10, temp_min=0.05,
+        random_opening_plies=4,
+        description="R10 minus opening_plies=1 (random_opening_plies=4)",
+        completed_q_values=True,
+        full_search_prob=0.5, n_sims_quick=100, n_sims_full=600,
+    ),
+    # R14 — R10 minus playout cap (uniform deep search at 600 sims, no
+    # move-level fast/full split).  full_search_prob=0 collapses the cap →
+    # all moves use n_simulations.
+    "R14": Knobs(
+        n_workers=18,
+        dirichlet_enabled=True, dirichlet_alpha=0.05, dirichlet_epsilon=0.10,
+        temp_threshold_compound_moves=10, temp_min=0.05,
+        random_opening_plies=1,
+        description="R10 minus playout cap (uniform sims=600, fsp=0)",
+        completed_q_values=True,
+        n_simulations=600,
+        full_search_prob=0.0, n_sims_quick=0, n_sims_full=0,
+    ),
 }
 
 
@@ -543,7 +594,11 @@ def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
 # ─── Report writer ────────────────────────────────────────────────────────────
 
 
-def write_report(out_dir: Path, all_results: list[dict[str, Any]]) -> Path:
+def write_report(
+    out_dir: Path,
+    all_results: list[dict[str, Any]],
+    report_name: str = "results",
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Per-variant JSONL of game records.
@@ -575,7 +630,7 @@ def write_report(out_dir: Path, all_results: list[dict[str, Any]]) -> Path:
             for v in all_results
         ],
     }
-    summary_path = out_dir / "summary.json"
+    summary_path = out_dir / f"{report_name}_summary.json" if report_name != "results" else out_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2))
 
     # Markdown report.
@@ -667,7 +722,7 @@ def write_report(out_dir: Path, all_results: list[dict[str, Any]]) -> Path:
             "re-run a 1k-step laptop smoke before any 5080 sustained launch.",
         ]
 
-    md_path = out_dir / "results.md"
+    md_path = out_dir / f"{report_name}.md"
     md_path.write_text("\n".join(md) + "\n")
     print(f"\nReport: {md_path}")
     print(f"Summary: {summary_path}")
@@ -684,6 +739,8 @@ def main() -> None:
     p.add_argument("--only", type=str, default=None,
                    help="comma-separated subset of variant names (e.g. R0,R5)")
     p.add_argument("--out-dir", type=str, default=str(OUT_DIR))
+    p.add_argument("--report-name", type=str, default="results",
+                   help="basename for the markdown + summary outputs (default 'results')")
     p.add_argument("--n-workers", type=int, default=None,
                    help="override Knobs.n_workers for every variant (default: per-variant)")
     p.add_argument("--dry-run", action="store_true",
@@ -726,7 +783,7 @@ def main() -> None:
 
     print(f"\nAll variants complete in {overall_wall / 60:.1f} min")
 
-    write_report(out_dir, all_results)
+    write_report(out_dir, all_results, report_name=args.report_name)
 
 
 if __name__ == "__main__":
