@@ -199,10 +199,13 @@ PY
         > "${LOG_DIR}/v9_sealbot_scratch.log" 2>&1
     set -e
 
-    # Pick winner — preference order:
-    #   1. Both probes pass: take the higher SealBot WR; tiebreak on lower final loss.
-    #   2. Only one probe passes: take that one.
-    #   3. Neither passes: surface an error (do NOT silently fall through).
+    # Pick winner — preference order (CLAUDE.md §91 kill criterion: C2≥25, C3≥40
+    # are the project gates; probe script's C1 is informational/warning only):
+    #   1. Both pass C2+C3: take the higher SealBot WR; tiebreak on lower final loss.
+    #   2. Only one passes C2+C3: take that one.
+    #   3. Neither passes C2+C3: surface an error (do NOT silently fall through).
+    #
+    # eval_vs_sealbot.py writes a record with `winrate` (already includes draw weighting).
     "$PY" - <<PY
 import json, pathlib, re, sys
 
@@ -227,31 +230,52 @@ def sealbot_wr(jsonl_path):
         line = line.strip()
         if not line:
             continue
-        rec = json.loads(line)
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
     if rec is None:
         return None
-    # eval_vs_sealbot writes per-checkpoint summary records with a wins/draws/losses
-    # tally; convert to WR (X+0.5*draws)/total.
-    wins = rec.get("wins", 0); draws = rec.get("draws", 0); losses = rec.get("losses", 0)
+    if "winrate" in rec:
+        return float(rec["winrate"])
+    wins = rec.get("wins") or rec.get("win_count") or 0
+    draws = rec.get("draws") or rec.get("draw_count") or 0
+    losses = rec.get("losses") or rec.get("loss_count") or 0
     total = wins + draws + losses
     return None if total == 0 else (wins + 0.5 * draws) / total
+
+def probe_c2_c3_pass(probe_log):
+    """Parse the threat-probe Markdown table for C2 (top-5 ≥ 25%) and
+    C3 (top-10 ≥ 40%) gates per CLAUDE.md §91 kill criterion. Returns True
+    iff both gates show **PASS**. Probe script's overall RC also asserts C1
+    (contrast_mean against bootstrap), which is more conservative — we
+    deliberately ignore it here and surface it as informational."""
+    p = pathlib.Path(probe_log)
+    if not p.exists():
+        return False, "log missing"
+    text = p.read_text()
+    c2 = re.search(r"top-5\s*\|.*?\|.*?(PASS|FAIL)", text)
+    c3 = re.search(r"top-10\s*\|.*?\|.*?(PASS|FAIL)", text)
+    if not c2 or not c3:
+        return False, "could not parse C2/C3 lines"
+    return (c2.group(1) == "PASS" and c3.group(1) == "PASS"), f"C2={c2.group(1)} C3={c3.group(1)}"
 
 warm_loss = final_loss("${WARM_LOG}")
 scratch_loss = final_loss("${SCRATCH_LOG}")
 warm_wr = sealbot_wr("${SEALBOT_WARM}")
 scratch_wr = sealbot_wr("${SEALBOT_SCRATCH}")
-warm_pass = ${PROBE_WARM_RC} == 0
-scratch_pass = ${PROBE_SCRATCH_RC} == 0
+warm_pass, warm_why = probe_c2_c3_pass("${PROBE_WARM}")
+scratch_pass, scratch_why = probe_c2_c3_pass("${PROBE_SCRATCH}")
 
-print(f"warm    : probe_pass={warm_pass}  sealbot_wr={warm_wr}  final_loss={warm_loss}")
-print(f"scratch : probe_pass={scratch_pass}  sealbot_wr={scratch_wr}  final_loss={scratch_loss}")
+print(f"warm    : probe_pass={warm_pass} ({warm_why})  sealbot_wr={warm_wr}  final_loss={warm_loss}")
+print(f"scratch : probe_pass={scratch_pass} ({scratch_why})  sealbot_wr={scratch_wr}  final_loss={scratch_loss}")
 
 if warm_pass and not scratch_pass:
     winner = "warm"
 elif scratch_pass and not warm_pass:
     winner = "scratch"
 elif not warm_pass and not scratch_pass:
-    print("FATAL: neither candidate passed threat probe")
+    print("FATAL: neither candidate passed threat probe C2/C3 gates")
     sys.exit(2)
 else:
     # Both pass — use SealBot WR; tiebreak (within 1pp) on lower loss.
