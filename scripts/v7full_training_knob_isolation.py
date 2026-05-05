@@ -314,10 +314,22 @@ def run_variant(
           flush=True)
 
     runner = _build_runner(knobs)
+    # Tune the inference batch + wait to the worker count.  For sequential
+    # variants (n_workers=1) the batch never fills past leaf_batch_size=8,
+    # so any batch_size > 8 just adds wait_ms latency to every move; set
+    # batch=8 + wait=1ms to minimise that.  R5 (n_workers=18) needs a
+    # larger batch (~144 = 18*8) and a longer wait so the GPU sees fused
+    # batches — the §138 5080 sweep verdict numbers (batch=224, wait=8).
+    if knobs.n_workers <= 4:
+        inf_batch = max(8, knobs.n_workers * 8)
+        inf_wait = 1.0
+    else:
+        inf_batch = 224
+        inf_wait = 8.0
     server_cfg = {
         "selfplay": {
-            "inference_batch_size": max(32, knobs.n_workers * 4),
-            "inference_max_wait_ms": 5.0,
+            "inference_batch_size": inf_batch,
+            "inference_max_wait_ms": inf_wait,
             "trace_inference": False,  # avoid TS trace cost on small batches
         }
     }
