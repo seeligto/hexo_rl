@@ -38,6 +38,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from hexo_rl.model.hex_conv import HexConv2d
+
 _log = logging.getLogger(__name__)
 
 
@@ -116,14 +118,20 @@ _GN_GROUPS = 8  # GroupNorm group count; filters must be divisible by this
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, filters: int, se_reduction_ratio: int = 4) -> None:
+    def __init__(
+        self,
+        filters: int,
+        se_reduction_ratio: int = 4,
+        use_hex_kernel: bool = False,
+    ) -> None:
         super().__init__()
         assert filters % _GN_GROUPS == 0, (
             f"filters={filters} must be divisible by num_groups={_GN_GROUPS}"
         )
-        self.conv1 = nn.Conv2d(filters, filters, 3, padding=1, bias=False)
+        Conv = HexConv2d if use_hex_kernel else nn.Conv2d
+        self.conv1 = Conv(filters, filters, 3, padding=1, bias=False)
         self.gn1   = nn.GroupNorm(_GN_GROUPS, filters)
-        self.conv2 = nn.Conv2d(filters, filters, 3, padding=1, bias=False)
+        self.conv2 = Conv(filters, filters, 3, padding=1, bias=False)
         self.gn2   = nn.GroupNorm(_GN_GROUPS, filters)
         self.se    = SEBlock(filters, se_reduction_ratio)
 
@@ -136,13 +144,23 @@ class ResidualBlock(nn.Module):
 
 
 class Trunk(nn.Module):
-    def __init__(self, in_channels: int, filters: int, res_blocks: int,
-                 se_reduction_ratio: int = 4):
+    def __init__(
+        self,
+        in_channels: int,
+        filters: int,
+        res_blocks: int,
+        se_reduction_ratio: int = 4,
+        use_hex_kernel: bool = False,
+    ):
         super().__init__()
-        self.input_conv = nn.Conv2d(in_channels, filters, 3, padding=1, bias=False)
+        Conv = HexConv2d if use_hex_kernel else nn.Conv2d
+        self.input_conv = Conv(in_channels, filters, 3, padding=1, bias=False)
         self.input_gn   = nn.GroupNorm(_GN_GROUPS, filters)
         self.tower      = nn.Sequential(
-            *[ResidualBlock(filters, se_reduction_ratio) for _ in range(res_blocks)]
+            *[
+                ResidualBlock(filters, se_reduction_ratio, use_hex_kernel=use_hex_kernel)
+                for _ in range(res_blocks)
+            ]
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -161,11 +179,13 @@ class HexTacToeNet(nn.Module):
         res_blocks: int = 12,
         se_reduction_ratio: int = 4,
         input_channels: Optional[List[int]] = None,
+        use_hex_kernel: bool = False,
     ) -> None:
         super().__init__()
         self.board_size = board_size
         self.filters = filters
         self.res_blocks = res_blocks
+        self.use_hex_kernel = bool(use_hex_kernel)
         spatial = board_size * board_size
 
         # Sweep variant support: when `input_channels` is provided, the trunk
@@ -194,7 +214,13 @@ class HexTacToeNet(nn.Module):
             self.input_channel_index = None  # type: ignore[assignment]
             self.in_channels = int(in_channels)
 
-        self.trunk = Trunk(self.in_channels, filters, res_blocks, se_reduction_ratio)
+        self.trunk = Trunk(
+            self.in_channels,
+            filters,
+            res_blocks,
+            se_reduction_ratio,
+            use_hex_kernel=self.use_hex_kernel,
+        )
 
         # Policy head — no normalization: 2 output channels, GN(8, 2) would fail (groups > channels)
         self.policy_conv = nn.Conv2d(filters, 2, 1)

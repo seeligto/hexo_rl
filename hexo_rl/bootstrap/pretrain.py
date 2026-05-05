@@ -527,12 +527,17 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
         f"Checkpoint missing keys; got {list(ckpt.keys())}"
     )
     cfg = ckpt["config"]
+    _ckpt_model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    _ckpt_use_hex = bool(
+        _ckpt_model_cfg.get("use_hex_kernel", cfg.get("use_hex_kernel", False))
+    )
     loaded_model = HexTacToeNet(
         board_size=int(cfg.get("board_size", 19)),
         in_channels=int(cfg.get("in_channels", 18)),
         filters=int(cfg.get("filters", 128)),
         res_blocks=int(cfg.get("res_blocks", 12)),
         se_reduction_ratio=int(cfg.get("se_reduction_ratio", 4)),
+        use_hex_kernel=_ckpt_use_hex,
     )
     loaded_model.load_state_dict(ckpt["model_state"])
     loaded_model.eval().to(device)
@@ -710,12 +715,17 @@ def pretrain() -> None:
     )
 
     # Model
+    _model_cfg_pretrain = config.get("model") if isinstance(config.get("model"), dict) else {}
+    _use_hex_kernel_pretrain = bool(
+        _model_cfg_pretrain.get("use_hex_kernel", config.get("use_hex_kernel", False))
+    )
     model = HexTacToeNet(
         board_size=int(config["board_size"]),
         in_channels=int(config["in_channels"]),
         filters=int(config["filters"]),
         res_blocks=int(config["res_blocks"]),
         se_reduction_ratio=int(config.get("se_reduction_ratio", 4)),
+        use_hex_kernel=_use_hex_kernel_pretrain,
     )
     use_compile = (
         config.get("torch_compile", True)

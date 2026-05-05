@@ -51,12 +51,16 @@ class OurModelBot(BotProtocol):
         res_blocks = int(model_hparams.get("res_blocks", model_cfg.get("res_blocks", config.get("res_blocks", 12))))
         se_reduction_ratio = int(model_hparams.get("se_reduction_ratio", model_cfg.get("se_reduction_ratio", config.get("se_reduction_ratio", 4))))
 
+        use_hex_kernel = bool(
+            model_cfg.get("use_hex_kernel", config.get("use_hex_kernel", False))
+        )
         net = HexTacToeNet(
             board_size=board_size,
             in_channels=in_channels,
             filters=filters,
             res_blocks=res_blocks,
             se_reduction_ratio=se_reduction_ratio,
+            use_hex_kernel=use_hex_kernel,
         )
         Trainer._load_state_dict_strict(net, state_dict)
         net.to(device).eval()

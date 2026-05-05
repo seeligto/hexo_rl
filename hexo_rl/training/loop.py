@@ -243,6 +243,10 @@ def run_training_loop(
     in_channels        = int(trainer.config.get("in_channels",        18))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
     input_channels     = trainer.config.get("input_channels", None)
+    _model_cfg         = trainer.config.get("model") if isinstance(trainer.config.get("model"), dict) else {}
+    use_hex_kernel     = bool(
+        _model_cfg.get("use_hex_kernel", trainer.config.get("use_hex_kernel", False))
+    )
 
     _torch_compile_enabled = (
         trainer.config.get("torch_compile", False) and device.type == "cuda"
@@ -254,6 +258,7 @@ def run_training_loop(
         res_blocks=res_blocks,
         filters=filters,
         se_reduction_ratio=se_reduction_ratio,
+        use_hex_kernel=use_hex_kernel,
     ).to(device)
     _train_base = getattr(trainer.model, "_orig_mod", trainer.model)
     inf_model.load_state_dict(_train_base.state_dict())
@@ -429,6 +434,7 @@ def run_training_loop(
                 board_size=board_size, res_blocks=res_blocks, filters=filters,
                 in_channels=in_channels, input_channels=input_channels,
                 se_reduction_ratio=se_reduction_ratio,
+                use_hex_kernel=use_hex_kernel,
             ).to(device)
             best_model.load_state_dict(base_model.state_dict())
             best_model.eval()
@@ -453,6 +459,7 @@ def run_training_loop(
             board_size=board_size, res_blocks=res_blocks, filters=filters,
             in_channels=in_channels, input_channels=input_channels,
             se_reduction_ratio=se_reduction_ratio,
+            use_hex_kernel=use_hex_kernel,
         ).to(device)
         eval_model.eval()
 

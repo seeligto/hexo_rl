@@ -938,6 +938,11 @@ class Trainer:
         defaults = {
             "board_size": 19, "res_blocks": 12, "filters": 128,
             "in_channels": 8, "se_reduction_ratio": 4,
+            # `use_hex_kernel`: 0 = standard nn.Conv2d, 1 = HexConv2d with the
+            # 7-cell hex mask. Stored as int here so it slots into the same
+            # (config vs state-dict) reconciliation pipeline as the other
+            # numeric hparams; cast back to bool at HexTacToeNet construction.
+            "use_hex_kernel": 0,
         }
 
         def _explicit(key: str) -> Optional[int]:
@@ -1096,6 +1101,7 @@ class Trainer:
             filters=model_hparams["filters"],
             se_reduction_ratio=model_hparams.get("se_reduction_ratio", 4),
             input_channels=config.get("input_channels"),
+            use_hex_kernel=bool(model_hparams.get("use_hex_kernel", 0)),
         )
         # If input_channels was explicitly nulled (e.g. loading a sweep checkpoint
         # as a full-18ch anchor), strip input_channel_index from the state dict so
