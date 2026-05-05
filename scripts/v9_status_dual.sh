@@ -51,16 +51,72 @@ extract_laptop() {
     LATEST="$(ls -1t logs/v9_S*.log 2>/dev/null | head -n 1)"
     if [ -n "$LATEST" ]; then
         echo "active: $(basename "$LATEST")"
-        # JSON-line structlog (laptop). Latest train/game event with key fields.
-        grep -E '"event": "(train_step|game_complete|step_complete|iter_complete)"' "$LATEST" 2>/dev/null | tail -n 1 | head -c 360
-        echo
-        # Extract step / loss / draw / stride5 across last 200 lines.
-        tail -n 200 "$LATEST" 2>/dev/null \
-          | grep -oE '"(step|loss|draw_rate|stride5_run_max|grad_norm|games_completed|positions_pushed|sims_per_sec)": [0-9.eE+-]+' \
-          | sort -u | tail -n 8 | tr '\n' ' '
-        echo
+        # Latest train_step (JSON) — extract just the meaningful fields.
+        LAST_TS=$(grep -E '"event": "train_step"' "$LATEST" 2>/dev/null | tail -n 1)
+        if [ -n "$LAST_TS" ]; then
+            echo "$LAST_TS" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+    keys = ["step", "total_loss", "policy_loss", "value_loss", "grad_norm",
+            "ownership_loss", "threat_loss", "lr"]
+    print(" ".join(f"{k}={d[k]:.4g}" if isinstance(d.get(k), float) else f"{k}={d.get(k)}" for k in keys if k in d))
+except Exception as e:
+    print(f"(parse err: {e})")
+'
+        fi
+        # Latest game_complete summary (if any).
+        grep -E '"event": "game_complete"' "$LATEST" 2>/dev/null | tail -n 1 | python3 -c '
+import json, sys
+try:
+    s = sys.stdin.read().strip()
+    if s:
+        d = json.loads(s)
+        keys = ["game_length", "winner", "draw_rate", "stride5_run_max",
+                "row_max_density", "colony_extension_fraction"]
+        out = " ".join(f"{k}={d[k]}" for k in keys if k in d)
+        if out: print(f"game: {out}")
+except Exception as e:
+    print(f"(game parse err: {e})")
+' 2>/dev/null
+        # Recent count of games / iters for pace.
+        N_TS=$(grep -cE '"event": "train_step"' "$LATEST")
+        N_GC=$(grep -cE '"event": "game_complete"' "$LATEST")
+        echo "totals: train_steps=$N_TS games_completed=$N_GC"
+
+        # Stride5 / row_max (Class-4 metric) from the events.jsonl sink.
+        EVENTS_FILE="$(ls -1t logs/events_*.jsonl 2>/dev/null | head -n 1)"
+        if [ -n "$EVENTS_FILE" ]; then
+            python3 - "$EVENTS_FILE" <<'PY'
+import json, sys, statistics
+path = sys.argv[1]
+stride5, rowmax, colony, draws = [], [], [], 0
+with open(path) as f:
+    for line in f:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        if d.get("event") != "game_complete":
+            continue
+        if "stride5_run_max" in d:
+            stride5.append(d["stride5_run_max"])
+        if "row_max_density" in d:
+            rowmax.append(d["row_max_density"])
+        if "colony_extension_fraction" in d:
+            colony.append(d["colony_extension_fraction"])
+        if d.get("winner") == -1:
+            draws += 1
+n = len(stride5)
+if n:
+    p50_s = statistics.median(stride5[-100:])
+    p50_r = statistics.median(rowmax[-100:])
+    drf = draws / max(1, len(stride5))
+    print(f"class-4 (last {min(100,n)}): stride5_p50={p50_s} row_max_p50={p50_r} draw_rate={drf:.3f} colony_p50={statistics.median(colony[-100:]):.3f}")
+PY
+        fi
     fi
-    nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader 2>/dev/null | head -n 1
+    nvidia-smi --query-gpu=utilization.gpu,memory.used,temperature.gpu --format=csv,noheader 2>/dev/null | head -n 1
 }
 
 echo "=== $(date '+%H:%M:%S') ==="
