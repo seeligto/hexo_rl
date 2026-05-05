@@ -1,0 +1,115 @@
+# w4c_smoke_v7_5080 — Phase B' v10 §155 sustained-run candidate.
+#
+# Master config + the v10 supply lands:
+#   - Q2 LEGAL_MOVE_RADIUS jitter ∈ {4, 5, 6}              (§152 verdict, v8 plumbing)
+#   - bootstrap-floor multi-anchor promotion gate          (§155 T2)
+#   - [T1 exploration-knob fix]                            (§155 T1 verdict — pending)
+#
+# ## Knob-fix slot (PENDING T1 verdict)
+#
+# §155 T1 isolates which of the three exploration knobs (Dirichlet, cosine
+# temperature schedule, random_opening_plies) drives the smoke v6 step-0 92%
+# draw collapse under frozen v7full.  Once the T1 verdict identifies the
+# proximate cause, the knob fix gets pinned here.  Until then, this variant
+# inherits the smoke v6 defaults verbatim — running it pre-verdict would
+# reproduce the 92% draw collapse.
+#
+# The likely fixes (filled in after T1):
+#   - if Dirichlet → reduce ε from 0.10 → 0.025 or disable below ply 30
+#   - if temp schedule → bump temp_min from 0.05 → 0.15 or extend threshold
+#   - if opening_plies → restore opening_plies=4 (eval-style)
+#
+# ## Bootstrap-floor gate (active in this variant)
+#
+# Guards against the v9 Class-5 colony-attractor failure mode where the
+# trainer reaches wr_best ≈ 0.86–0.91 vs the rotating best_checkpoint anchor
+# while losing 199/200 vs SealBot.  The frozen v7full bootstrap is the
+# floor opponent; promotion AND-requires wr_bootstrap_anchor ≥ 0.45 in
+# addition to the existing wr_best ≥ 0.55 + ci_lo > 0.5 gates.
+#
+# ## Q2 jitter (active in this variant)
+#
+# §152 / §154 verdict: legal_move_radius jitter ∈ {4, 5, 6} per game is the
+# only confirmed lever on the Class-4 stride-5 fixed point.
+#
+# ## 1k-step laptop pre-flight gate (BEFORE 5080 launch)
+#
+# Run this variant for 1k steps on the laptop and verify:
+#   - stride5_run P90 < 30 over the run window
+#   - draw_rate < 50%
+#   - no promotion fires under bootstrap-floor without anchor WR ≥ 0.45
+# If all three hold, surface to user for 5080 sustained authorisation.
+#
+# Launch (laptop pre-flight, 1k steps):
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model.pt \
+#     --variant w4c_smoke_v7_5080 \
+#     --checkpoint-dir checkpoints/w4c_smoke_v7_preflight \
+#     --no-dashboard \
+#     --iterations 1000
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+
+eval_interval: 500   # tighter cadence so the bootstrap-floor opponent
+                     # measures every promotion-eligible round
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  n_workers: 18                 # §138 5080 sweep verdict
+  inference_batch_size: 224     # §138 5080 sweep verdict
+  inference_max_wait_ms: 8.0    # §138 5080 sweep verdict
+  leaf_batch_size: 4
+  playout_cap:
+    fast_prob: 0.0
+  # §152 Q2 — per-game LEGAL_MOVE_RADIUS jitter ∈ {4, 5, 6}.  Sole confirmed
+  # lever on the Class-4 stride-5 fixed point.
+  legal_move_radius_jitter: true
+
+# §155 T2 — bootstrap-floor multi-anchor promotion gate.  Frozen v7full as
+# the reference opponent; promotion blocks when the trainer collapses
+# below 45% WR vs the bootstrap (the v9 Class-5 colony-attractor signature).
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      enabled: true
+      stride: 1                              # match best_checkpoint cadence
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+      # Pin to v7full explicitly (not the rotating canonical) so promotion
+      # rotations on `bootstrap_model.pt` do not silently shift the floor.
+      path: checkpoints/bootstrap_model_v7full.pt
+  gating:
+    bootstrap_floor:
+      enabled: true
+      min_winrate: 0.45
+
+# ## T1-verdict-driven exploration-knob fix (PENDING)
+#
+# Once §155 T1 lands, append the proximate-cause knob fix here under
+# the appropriate config section (mcts.* for Dirichlet, selfplay.playout_cap.*
+# for temperature, selfplay.* for opening_plies).
+#
+# Example shape if Dirichlet is the cause:
+#
+# mcts:
+#   epsilon: 0.025         # was 0.10 — exploration noise reduced
+#   dirichlet_alpha: 0.05  # unchanged — α controls noise concentration
+#
+# Example shape if temperature schedule is the cause:
+#
+# selfplay:
+#   playout_cap:
+#     temperature_threshold_compound_moves: 20  # extend threshold
+#     temp_min: 0.15                             # raise floor
+
+monitors:
+  hard_abort_grad_norm: 10.0
+
+instrumentation:
+  enabled: true
+  value_probe_interval: 250
+  composition_interval: 500
