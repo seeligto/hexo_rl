@@ -24,12 +24,13 @@ model:
   corner_mask: true
 
 selfplay:
+  # 5080 sweep verdict (§138): n_workers=18, batch=224, wait=8ms, burst=8.
   gumbel_mcts: false
   completed_q_values: true
   max_game_moves: 150
-  n_workers: 8
-  inference_batch_size: 32
-  inference_max_wait_ms: 2.0
+  n_workers: 18
+  inference_batch_size: 224
+  inference_max_wait_ms: 8.0
   leaf_batch_size: 4
   playout_cap:
     fast_prob: 0.0
