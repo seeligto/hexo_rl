@@ -6560,3 +6560,210 @@ Tracked under v8 item 1.
 Commits: `ea4b4cc` (engine instrumentation), `24fb0f5` (Python hooks),
 `06f4663` (dashboard rendering), `a171d1f` (variant n_workers=8 fix),
 `9767509` (diagnosis report).
+
+## §153 — Phase B' v9 hex-native trunk: engineering complete (T1-T3) — 2026-05-05
+
+Architectural turn: `HexConv2d` 7-cell masked Conv2d + corner-mask
+encoder + per-move/per-turn rotation cadence — paired so the trunk
+respects hex geometry.  Branch `phase_b_prime_v9_hex_native` off
+`phase_b_prime_v8_plumbing`.
+
+### T1 — HexConv2d + use_hex_kernel knob (`1f23986`)
+
+`hexo_rl/model/hex_conv.py:HexConv2d` zeroes the two long-diagonal
+positions of the 3×3 kernel (`(-1,-1)` and `(+1,+1)`, axial hex_dist=2).
+Mask enforced via `register_forward_pre_hook` (zeros weight before
+forward) and a parameter gradient hook (zeros gradient at masked
+positions).  `hex_mask` is `persistent=False` — checkpoints are
+architecture-agnostic; the trunk type is selected by
+`model.use_hex_kernel` config knob.
+
+Defaults False; threaded through `Trainer._resolve_model_hparams`,
+`training/loop.py`, `bootstrap/pretrain.py`,
+`bootstrap/bots/our_model_bot.py`.  11 unit tests, all pass.
+
+### T2 — corner_mask runtime atomic (`3fd7ebd`)
+
+`engine/src/board/state.rs` `CORNER_MASK_ENABLED: AtomicBool` gates
+both `encode_state_to_buffer` and `encode_state_to_buffer_channels`.
+When on, stone planes 0 and 8 are zeroed wherever
+`hex_dist > HALF` (90 of 361 cells masked; 271 survive — the central
+regular hexagon).  Python-facing toggle:
+`engine.set_corner_mask_enabled(bool)`.  `WorkerPool.__init__` flips
+the flag once at startup based on `model.corner_mask` in YAML.
+Default off.  1 Rust test + 4 Python tests.
+
+### T3 — per-move + per-turn rotation cadence (`40be2ad`)
+
+`SelfPlayRunner` accepts `rotation_cadence: str ∈ {per_game, per_move,
+per_turn}` (default `per_game` — matches §130 bit-for-bit).
+`engine/src/game_runner/records.rs:should_resample_sym` is the pure
+helper governing within-game `sym_idx` resampling — 4 Rust unit tests.
+Each row of `records_vec` stashes its own `sym_idx` so the game-end
+aux reprojection (`reproject_game_end_row`) scatters into the same
+rotated frame as the row's state.  4 Python end-to-end tests.
+
+### Verification
+
+* `cargo test --workspace`: **146 / 146 pass**
+* `make test.py`: **969 passed, 8 skipped, 5 xfailed, 1 xpassed** in
+  ≈3 min, 0 failures (+15 new tests across `test_hex_conv.py`,
+  `test_corner_mask.py`, `test_rotation_cadence.py`,
+  `test_v9_full_stack_integration.py`)
+
+### Smoke variants ready
+
+`configs/variants/v9_s{1,2,3,4}_*_5080.yaml` wire the four
+combinations of hex_kernel / corner_mask / Q2 jitter / per-move
+rotation needed for §154 T5.
+
+### Constraints honoured
+
+* `LEGAL_MOVE_RADIUS = 5` and `CLUSTER_THRESHOLD = 5` unchanged on master.
+* `bootstrap_model_v7full.pt` (§150 canonical) untouched.
+* Viewer / dashboard JS untouched.
+* All knobs default OFF — pre-§153 callers see no behaviour change.
+
+Commits: `1f23986` (T1), `3fd7ebd` (T2), `40be2ad` (T3), `90acf99`
+(variant configs + handoff).
+
+## §154 — Phase B' v9 hex-trunk smoke verdict: FALSIFIED — 2026-05-05
+
+**Trigger:** §153 T1-T3 engineering complete; §154 covers T4 (dual
+bootstrap), T5 (S1/S2/S3 smokes; S4 cancelled), T6 (synthesis).
+
+### TL;DR — full falsification
+
+* **Hex_kernel + corner_mask trunk: catastrophic strength loss.**  S1
+  (hex alone) and S2 (hex + Q2 jitter) each promoted a colony-leaning
+  step-500 trainer that beat v8full_warm 86–91% in eval.  Those
+  promoted models win **0.5–1 game out of 200** vs SealBot.  The
+  bootstraps still win ~16-19% — quality preserved by warm-start;
+  collapse appears at promotion-time, not warm-start.
+* **Per-move rotation cadence: NULL on intrinsic policy.**  S3 (no
+  hex, per-move rotation only) trainer never beat v7full anchor (peak
+  wr_best=0.17) — all 376 self-play games came from v7full bootstrap
+  with rotation applied at inference time.  Class-4 metrics on long
+  games are bit-for-bit identical to §152 baseline (P50=30, P90=43).
+* **Q2 jitter remains the only confirmed lever.**  S2's first-100-long
+  window (pre-promotion, when v8full_warm + Q2 jitter is still the
+  data-generator) shows stride5 P50=22.5 P90=37 — even better than v8
+  Q2 jitter alone (24/39).  v8full_warm + Q2 is a viable substrate;
+  the trainer is what fails it.
+
+### Class 5 newly identified — eval-gate / colony-attractor coupling
+
+Under HexConv2d + corner_mask, 500 self-play steps converge to a
+`wr_best ≈ 0.86–0.91` local optimum that wins 16–21% of head-to-head
+games via colony pattern.  The eval gate's `wr_best ≥ 0.55` criterion
+is satisfied; promotion fires; the new anchor is ~5pp WORSE on
+SealBot than the bootstrap.  Two interpretations not discriminated by
+the smokes: (a) gate criterion too permissive vs colony-attractor
+architectures; (b) HexConv2d itself prefers colony patterns.  Either
+way, **Class 5 promotes to v10 priority 1**: add
+`colony_wins_max_fraction` (default 0.20) to
+`eval_pipeline.gating` BEFORE any future architecture-altering smoke.
+
+### Run inventory + headline metrics
+
+| run | n_long | stride5 P50/P90 | rmax P90 | draws | promoted? | SealBot WR n=200 |
+|---|---:|---:|---:|---:|---|---:|
+| §152 baseline (cap, ref) | 555 | 30 / 43 | 57 | 86.7% | n/a | (v7full ≈ 17.4%) |
+| v8 Q2 jitter (cap, ref) | 507 | 24 / 39 | — | 81.1% | n/a | n/a |
+| **S1 hex+corner_mask** | 534 | 32 / 48 | 64 | 93.6% | yes step-500 | **0.005 (1/200)** |
+| **S2 hex+jitter** | 498 | 26 / 46 | 69 | 90.4% | yes step-500 | **0.005 (1/200)** |
+| **S3 per-move alone (no hex)** | 320 | 30 / 43 | 57 | 96.6% | NO | n/a (anchor unchanged) |
+| S4 (full stack) | n/a | n/a | n/a | n/a | cancelled | n/a |
+| v7full (laptop) | — | — | — | — | — | 0.170 (34/200) |
+| v8full_warm (laptop) | — | — | — | — | — | **0.195 (39/200)** |
+| v8full_warm (remote) | — | — | — | — | — | 0.165 (33/200) |
+| S1 latest (post-step-500 trainer) | — | — | — | — | — | 0.010 (2/200) |
+| S2 latest (post-step-500 trainer) | — | — | — | — | — | **0.000 (0/200)** |
+
+### T4 dual-bootstrap result
+
+Both candidates produced — `--init-from-weights` flag added to
+`pretrain.py` (commit `be5c7ab`) so v7full's flat state_dict can be
+warm-started into a HexConv2d trunk with a fresh optimizer + scheduler.
+
+| candidate | epochs | final loss | C2 / C3 (CLAUDE.md gate) | C1 (info) | SealBot WR n=100 |
+|---|---:|---:|---|---:|---:|
+| **v8full_warm** | 30 | 3.029 | 40% / 70% PASS | +0.191 | 0.190 |
+| v8full_scratch | 30 | 3.213 | 50% / 65% PASS | -0.401 | 0.180 |
+
+C1 (contrast against v7full's +0.599 baseline) fails for both — the
+hex_kernel constraint redistributes policy weight away from v7full's
+sharp threat-pointing.  But C1 is informational per CLAUDE.md §91; the
+project gate is C2/C3 only.  Comparator (`run_v9_smokes.sh` step 0c,
+fixed in `3d3c12a` to use C2/C3 instead of probe RC) picked warm.
+
+### Self-play data-generator analysis (the dispositive insight)
+
+User flagged: **the model generating self-play games is `best_model.pt`,
+not `trainer.model`, until promotion swaps the anchor.**  This
+reframes the v9 metrics:
+
+| smoke | data-generator (most games) | metric reading actually measures |
+|---|---|---|
+| **S1** | step-500 promoted trainer (after step ~500 of 2500) | colony-leaning hex-trunk policy under self-play |
+| **S2** | step-500 promoted trainer (after step ~500 of 2500) | hex-trunk policy + Q2 jitter |
+| **S3** | v7full bootstrap (entire run; never promoted) | v7full + per-move rotation applied at inference |
+
+Drift first100 → last100 long games confirms: S1 went P50 29→32 P90 39→52, S2 went P50 22.5→26 P90 37→48; S3 stayed flat (28.5→29.5, 43→44) because S3 had no anchor swap.  S2's first-100 window beats v8 Q2 jitter — but only until promotion locks in a worse equilibrium.
+
+### Eval-gate trajectories
+
+| smoke | step | wr_best | promoted? | Elo | colony_wins_best/120 |
+|---|---:|---:|:---:|---:|---:|
+| S1 | 500 | 0.86 | ✓ | 913 | 20 (16.7%) |
+| S1 | 1000 | 0.52 | ✗ | 618 | 40 (33.3% — worse) |
+| S2 | 500 | 0.91 | ✓ | 934 | 25 (20.8%) |
+| S2 | 1000 | 0.27 | ✗ | 508 | 14 |
+| S2 | 1500 | 0.42 | ✗ | 586 | 27 |
+| S3 | 500 | 0.17 | ✗ | 701 | 13 |
+| S3 | 1000 | 0.04 | ✗ | 389 | 3 |
+
+S3's wr_best=0.17 demonstrates that a fresh trainer + per-move
+rotation cannot beat v7full anchor — confirming v8 baseline.  S1/S2's
+wr_best=0.86–0.91 against v8full_warm anchor is unprecedented; v6/v7/v8
+smokes never produced a successful promotion.
+
+### Class verdict ranking — post-v9 update
+
+| Class | §152 | v8 update | **v9 update** |
+|---|---|---|---|
+| 4 — q-axis stride-5 | DOMINANT | CONFIRMED; Q2 partial fix | **CONFIRMED dominant; hex architectural intervention falsified — Q2 jitter is the sole confirmed lever** |
+| 3 — buffer composition | STRONGLY ACTIVE | UNCHANGED | UNCHANGED |
+| 2 — value-head drift | ACTIVE | UNCHANGED | UNCHANGED |
+| 1 — stale dispatch | NOT TESTED | ELIMINATED under v7full anchor | UNCHANGED |
+| **5 — gate / colony-attractor coupling** | n/a | n/a | **NEW — under HexConv2d, gate promotes 1/200-vs-SealBot model.  Surfaces as v10 priority 1.** |
+
+### Recommendation for sustained Phase B' run (v10)
+
+* **Drop hex_kernel + corner_mask + per_move rotation entirely.**  All falsified.
+* **Sustained-run config = master + Q2 jitter** (`selfplay.legal_move_radius_jitter: true` + `rotation_cadence: per_game` default).
+* **Add `eval_pipeline.gating.colony_wins_max_fraction` (default 0.20)** — Class-5 guard.  Block promotion when colony fraction of head-to-head wins exceeds threshold.  Required before any future architecture-altering smoke.
+* **Buffer surgery (Class-3, v8 priority 2): unchanged.**  Subsample-on-push to cap `draw_target_fraction` at 0.5; ship alongside the sustained run.
+
+### Cost note (operational lesson)
+
+The original §153 runner copied `n_workers=8 / batch=32 / wait=2ms` from the §152 v8 jitter recipe, which predates the §138 5080 sweep verdict (n_workers=18 / batch=224 / wait=8ms / burst=8 = ~100k pos/hr peak).  User caught this mid-run; restarting cost ~12 min of GPU but the §138 settings ran S1/S2 at ~17 steps/min vs the previous ~10 — saving ~3h across the smoke matrix.  Codified as `feedback_smoke_use_optimal_throughput_config` memory: future variants must copy throughput knobs from `configs/variants/gumbel_targets_<HOST>.yaml`, not from older smokes.
+
+### Artifacts
+
+* `reports/phase_b_prime/v9_smokes/synthesis.md` — full synthesis (the canonical source for the v9 verdict)
+* `reports/phase_b_prime/v9_smokes/{S1,S2,S3}/` — per-smoke events.jsonl + structured logs + checkpoints
+* `archive/v9_smokes_20260505/` — bootstrap warm + scratch + per-smoke checkpoints + replay buffers + SealBot eval logs
+* `logs/sealbot_v9_*.{jsonl,log}` — six-checkpoint SealBot strength survey
+* `/tmp/phase_b_prime_targets.md` — v10 priority list
+* Engineering branch: `phase_b_prime_v9_hex_native` (off `v8_plumbing`)
+* Knobs that landed on the branch (default OFF, opt-in via YAML): `model.use_hex_kernel`, `model.corner_mask`, `selfplay.rotation_cadence`
+
+Commits: `1f23986`+`3fd7ebd`+`40be2ad` (T1+T2+T3 engineering, see §153);
+`be5c7ab` (pretrain `--init-from-weights` for warm-start);
+`5eabf4f` (T4 dual-candidate flow);
+`c46c087` (variants use §138 sweep config);
+`3d3c12a` (comparator C2/C3 gate);
+`cbcbb79`+`535612a`+`311033e` (runner + dual-host status monitor);
+`ce03c0a` (S4 conditional skip);
+`a721e2a` (post-smoke SealBot strength survey).

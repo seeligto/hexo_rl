@@ -1,6 +1,25 @@
 # Phase B' v9 hex-native trunk — engineering handoff
 
-**Status as of 2026-05-05:** T1, T2, T3 complete on
+**STATUS UPDATE 2026-05-05 evening — T4/T5/T6 COMPLETED.  v9 hex-trunk
+turn is FALSIFIED.**  Full synthesis at
+`reports/phase_b_prime/v9_smokes/synthesis.md`; sprint log §154 in
+`docs/07_PHASE4_SPRINT_LOG.md`.  Headlines:
+
+* Hex_kernel + corner_mask trained models win **0–1 game out of 200**
+  vs SealBot (vs bootstraps' ~17%).
+* Per-move rotation alone is null on intrinsic policy.
+* Q2 jitter remains the only confirmed Class-4 lever.
+* New Class-5 finding: under HexConv2d the eval gate promotes a
+  colony-attractor at step 500.  v10 priority 1 = add
+  `colony_wins_max_fraction` to gating before any future
+  architecture-altering smoke.
+
+The remainder of this document records the original engineering
+handoff at commit-time and is preserved as the audit trail.
+
+---
+
+**(Original engineering handoff, 2026-05-05 morning):** T1, T2, T3 complete on
 `phase_b_prime_v9_hex_native` branch (off `phase_b_prime_v8_plumbing`).
 T4 / T5 / T6 require GPU + walltime and are operator-driven from here.
 
