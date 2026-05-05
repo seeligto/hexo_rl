@@ -707,6 +707,23 @@ fn take_mcts_pool_overflow_count() -> u64 {
     mcts::take_pool_overflow_count()
 }
 
+/// Phase B' v9 §153 T2 — toggle the corner-mask on stone planes 0 and 8 in
+/// `Board::encode_state_to_buffer{,_channels}`.  Returns the previous
+/// value.  Production wiring: Python reads `model.corner_mask` from the
+/// run config at startup and calls this function once before the engine
+/// runs any encode.  Default off.
+#[pyfunction]
+fn set_corner_mask_enabled(enabled: bool) -> bool {
+    board::state::set_corner_mask_enabled(enabled)
+}
+
+/// Read the current corner-mask flag.  Tests / probe scripts use this to
+/// confirm the engine sees the same value as the Python config layer.
+#[pyfunction]
+fn corner_mask_enabled() -> bool {
+    board::state::corner_mask_enabled()
+}
+
 // ── Module registration ───────────────────────────────────────────────────────
 
 #[pymodule]
@@ -721,5 +738,7 @@ fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_chain_planes, m)?)?;
     m.add_function(wrap_pyfunction!(mcts_pool_overflow_count, m)?)?;
     m.add_function(wrap_pyfunction!(take_mcts_pool_overflow_count, m)?)?;
+    m.add_function(wrap_pyfunction!(set_corner_mask_enabled, m)?)?;
+    m.add_function(wrap_pyfunction!(corner_mask_enabled, m)?)?;
     Ok(())
 }
