@@ -292,10 +292,11 @@ def _build_runner(knobs: Knobs) -> SelfPlayRunner:
         n_sims_quick=0,
         n_sims_full=0,
         random_opening_plies=knobs.random_opening_plies,
-        # Held constant: no rotation, no jitter, per-game cadence (inert).
+        # Held constant: no rotation, no jitter.  ``rotation_cadence`` is a
+        # v9-branch-only kwarg; master signature ends at
+        # legal_move_radius_jitter so we omit it here.
         selfplay_rotation_enabled=False,
         legal_move_radius_jitter=False,
-        rotation_cadence="per_game",
     )
 
 
