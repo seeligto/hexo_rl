@@ -6560,3 +6560,297 @@ Tracked under v8 item 1.
 Commits: `ea4b4cc` (engine instrumentation), `24fb0f5` (Python hooks),
 `06f4663` (dashboard rendering), `a171d1f` (variant n_workers=8 fix),
 `9767509` (diagnosis report).
+
+---
+
+## §155 — Phase B' v10: training-mode knob isolation + bootstrap-floor gate — 2026-05-05
+
+**Trigger:** §154 v9 hex-trunk falsified.  Two-class signal opens v10:
+(a) which knob in the smoke v6 step-0 self-play causes 92 % draws under
+frozen v7full when the same weights produce 3 % draws at T2's
+eval-style hyperparams; (b) eval-gate Class-5 colony-attractor coupling
+needs a structural guard before any architecture-altering smoke can run
+again.
+
+### TL;DR
+
+Two structural pieces shipped on `phase_b_prime_v10_root_cause` (off
+master at `28a7892`).  T1 split into two passes — T1 (R0–R5) ruled out
+the three named exploration knobs and 18-worker parallelism; T1.1
+(R6–R10) located the cause in the **super-additive interaction**
+between the smoke MCTS regime (playout_cap + completed_q_values) and
+the exploration knobs (Dirichlet + cosine temperature + opening_plies=1).
+None of the MCTS sub-knobs alone or together (R6/R7/R8/R9 all ≤ 5.5 %
+draws) is the cause; only the conjunction in R10 produces 91 % draws.
+**Training updates are not required to reproduce the 92 %** — the
+v7full bootstrap policy under the smoke MCTS+exploration regime
+already fixes-points on Class-4 stride-5 chains.
+
+* **T1 — knob-isolation harness** (`scripts/v7full_training_knob_isolation.py`).
+  R0–R5 first pass; R6–R10 follow-up.  All variants frozen v7full both
+  sides, n=200, single code path = `SelfPlayRunner` + `InferenceServer`.
+* **T2 — bootstrap-floor multi-anchor gate**
+  (`hexo_rl/eval/eval_pipeline.py`, `configs/eval.yaml`).  Default off;
+  AND-combines `wr_bootstrap_anchor ≥ floor.min_winrate` with the
+  existing `wr_best ≥ 0.55` + `ci_lo > 0.5` gates.  Designed to block
+  the v9 Class-5 colony-attractor failure mode in any future sustained
+  run.  37 + 5 new tests on `tests/test_eval_pipeline.py` pass; all 54
+  eval-stack tests pass.
+* **T3 — branch hygiene.**  Master at `28a7892` (v8 plumbing) unchanged.
+  v9 branch retained as architecture-research substrate (knobs default
+  off; production paths unaffected).
+* **T4 — sustained-run pre-flight smoke.**  **BLOCKED.**  T1.1 verdict
+  identifies a super-additive interaction, not a single knob, so the
+  fix slot in `configs/variants/w4c_smoke_v7_5080.yaml` cannot be
+  pinned without a §156 within-R10 bisection.
+
+### T1 — first pass (R0–R5): three exploration knobs + parallelism are NULL
+
+Variant set (n=200 each, frozen v7full both sides, sims=96 held
+constant, all MCTS-side knobs at T2-baseline values):
+
+| variant | knob added vs R0 | rationale |
+|---|---|---|
+| **R0** | T2 baseline (τ=0.5 fixed, no Dirichlet, opening_plies=4) | sanity — must hit ~3 % draws |
+| **R1** | + Dirichlet (ε=0.10, α=0.05) | smoke v6 default; §143 γ.2, §115 |
+| **R2** | + cosine temp (1.0 → 0.1 over compound_move [0,10)) | smoke v6 default; §143 γ.1 |
+| **R3** | + `random_opening_plies=1` | smoke v6 default (T2 used 4) |
+| **R4** | R0 + R1 + R2 + R3 (all three) | full exploration regime |
+| **R5** | R4 with `n_workers=18` (parallel) | parallel-worker variance test |
+
+Result on 5080 vast.ai (n=200, single-batch infrence per worker count):
+
+| Variant | n | draws | draw_rate (95 % CI) | mean_ply | wall |
+|---|---:|---:|---|---:|---:|
+| R0 | 200 | 0 | 0.0 % [0.0 %, 1.9 %] | 56 | 923 s |
+| R1 | 200 | 4 | 2.0 % [0.8 %, 5.0 %] | 56 | 898 s |
+| R2 | 200 | 4 | 2.0 % [0.8 %, 5.0 %] | 54 | 888 s |
+| R3 | 200 | 7 | 3.5 % [1.7 %, 7.0 %] | 75 | 1319 s |
+| R4 | 200 | 8 | 4.0 % [2.0 %, 7.7 %] | 71 | 1285 s |
+| R5 | 200 | 6 | 3.0 % [1.4 %, 6.4 %] | 66 | 260 s |
+
+Sub-verdicts:
+* **Dirichlet alone (R1)**: NULL.  +2 draws over baseline.
+* **Cosine temp alone (R2)**: NULL.  +2 draws over baseline.
+* **opening_plies=1 alone (R3)**: small effect.  +7 draws (3.5 %),
+  +19 mean ply.  The longer games are consistent with more search-
+  deciding positions but stay well below the 50 % gate.
+* **All three combined (R4)**: NULL.  +8 draws (4.0 %).  No super-
+  additive interaction at sims=96 sequential.
+* **18 workers (R5)**: NULL.  3.0 % within R4's CI; ~5× wall speedup
+  is a clean throughput win, not a policy-distribution shift.
+
+### T1.1 — second pass (R6–R10): MCTS-side knob isolation
+
+After R0–R5 came back NULL, the held-constant MCTS-side knobs
+(`completed_q_values`, `playout_cap{full_search_prob, n_sims_quick,
+n_sims_full}`, `mcts.n_simulations`) became the candidate set.  T1.1
+adds five variants on top of R0:
+
+| variant | knob added vs R0 | rationale |
+|---|---|---|
+| **R6** | + `mcts.n_simulations: 96 → 600` | deep search alone |
+| **R7** | + playout_cap{`fsp=0.5`, `q=100`, `f=600`} | move-level cap |
+| **R8** | + `completed_q_values: True` | CQV alone |
+| **R9** | R7 + R8 | full smoke MCTS regime |
+| **R10** | R9 + Dirichlet + cosine temp + `opening_plies=1` | matches smoke v6 step-0 exactly |
+
+All variants n=200, frozen v7full both sides, n_workers=18 (smoke v6
+parallel context).  R10 differs from smoke v6 step-0 self-play only by
+not running trainer gradient updates (and `legal_move_radius_jitter`
+off — the v8 plumbing knob, off in master too).
+
+Result on 5080 vast.ai (n=200, 18 workers, 103.9 min total wall):
+
+| Variant | n | draws | draw_rate (95 % CI) | mean_ply | stride5 P50/P90 | rmax P50/P90 | colony_wins | wall |
+|---|---:|---:|---|---:|---:|---:|---:|---:|
+| R0 | 200 | 2 | 1.0 % [0.3 %, 3.6 %] | 52 | 2 / 3 | 9 / 13 | 95 | 821 s |
+| R6 | 200 | 11 | 5.5 % [3.1 %, 9.6 %] | 62 | 3 / 4 | 9 / 14 | 101 | 1219 s |
+| R7 | 200 | 1 | 0.5 % [0.1 %, 2.8 %] | 54 | 3 / 4 | 8 / 13 | 104 | 639 s |
+| R8 | 200 | 4 | 2.0 % [0.8 %, 5.0 %] | 52 | 3 / 3 | 8 / 13 | 100 | 202 s |
+| R9 | 200 | 5 | 2.5 % [1.1 %, 5.7 %] | 56 | 3 / 4 | 9 / 14 | 109 | 653 s |
+| **R10** | **200** | **182** | **91.0 % [86.2 %, 94.2 %]** | **140** | **84 / 97** | **101 / 112** | **9** | **2702 s** |
+
+Terminal-reason breakdown — every R10 draw is `ply_cap`, zero
+`other_draw`, zero engine-level colony.  `colony_wins` (the column
+counting decisive games where the *winner side* held a colony) drops
+from ~100 baseline to 9 in R10 — there are simply very few decisive
+games at all, not a colony-rule shift.
+
+### T1.2 — verdict: PROXIMATE_CAUSE_FOUND (super-additive interaction)
+
+R10 reproduces the smoke v6 step-0 92 % draw collapse under frozen
+v7full weights — **91.0 % [86.2 %, 94.2 %]** — *without any gradient
+updates*.  This rules out:
+
+* training-loop hypotheses (value-head feedback, fresh-buffer bias,
+  first-N-step gradient drift) as *required* contributors;
+* single-knob hypotheses on the MCTS side (R6/R7/R8 individually all
+  ≤ 5.5 %, well below the 50 % gate);
+* `playout_cap × CQV` interaction in the MCTS regime alone (R9 = 2.5 %).
+
+The pathology is the **conjunction** of the smoke MCTS regime
+(playout_cap + CQV at 18 workers) AND the exploration knobs (Dirichlet
++ cosine temperature + `opening_plies=1`).  T1's R4/R5 (exploration
+alone, sims=96) gave 3-4 % draws; T1.1's R9 (MCTS regime alone) gave
+2.5 % draws; only R10 (both sets at once) hits 91 %.  The 90-pp gap
+from R9 → R10 is far above what any additive model of R4/R5 + R9 would
+predict (≈ 6.5 %).
+
+The Class-4 stride-5 chain pattern (§152) is the engine.  R10's
+stride5 P90 = 97 against R0's 3 — **32× amplification**, exceeding the
+§152 instrumented-smoke 10× amplification (smoke 30 vs T2 baseline 3).
+mean_ply 140 (cap = 150) and ply_cap rate 91 % match the §152 cap-rate
+86.7 %.  Class-4 is not a property of the trained policy at step 2500;
+it is a property of v7full *evaluated under the smoke
+MCTS+exploration regime*.  Training updates merely fix-point on what
+the regime already produces at step 0.
+
+### T1 — operational lesson
+
+Both passes ran on the 5080 vast.ai (`ssh6.vast.ai:13053`) under
+`n_workers=18`, batch=224, wait=8 ms — the §138 5080 sweep verdict.
+T1.1 R10 wall was 2702 s vs R9's 653 s under the same regime — the
+4× wall increase is consistent with the 91 % cap-rate (games run to
+the 150-ply cap instead of resolving by ply 50-60).
+
+### T2 — bootstrap-floor gate: the v9 Class-5 fix
+
+(unchanged from earlier draft)
+
+Class 5 (newly identified in §154): under HexConv2d + corner_mask, 500
+self-play steps converge to a `wr_best ≈ 0.86–0.91` local optimum that
+wins via colony pattern (16-21 % of head-to-head wins).  The eval gate's
+`wr_best ≥ 0.55` criterion is satisfied; promotion fires; the new anchor
+is ~5 pp WORSE on SealBot than the bootstrap.
+
+The bootstrap-floor gate is the structural guard.  AND-combines the
+trainer's WR vs a frozen reference model (typically the canonical
+bootstrap, e.g. v7full) with the existing best-checkpoint gate.  Under
+v9's failure mode the trainer's colony-leaner would crush the rotating
+v8full_warm anchor 86–91 % (clears `wr_best`) but lose 199/200 vs
+v7full (collapses against `bootstrap_floor.min_winrate=0.45`) →
+promotion blocked.
+
+Knob surface (`configs/eval.yaml`, default off):
+
+```yaml
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      enabled: false                                # opt-in
+      stride: 1                                     # match best_checkpoint
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+      path: checkpoints/bootstrap_model.pt
+  gating:
+    bootstrap_floor:
+      enabled: false                                # opt-in
+      min_winrate: 0.45
+```
+
+Anchor model construction is lazy (first eligible eval round) and the
+anchor is never reloaded once constructed — disk-side bootstrap
+rotation between runs is ignored, so the gate threshold remains a
+constant reference.  A persistent `bootstrap_anchor:<filename>`
+Bradley-Terry player row is created so rating histories survive
+anchor-graduation swaps.
+
+Test coverage on `tests/test_eval_pipeline.py`:
+* `wr_anchor < threshold` AND `wr_best ≥ 0.55` → block promotion
+* `wr_anchor ≥ threshold` AND `wr_best ≥ 0.55` → allow promotion
+* floor disabled, low `wr_anchor` → does NOT block (informational)
+* floor enabled, `bootstrap_anchor` opponent disabled (stride mismatch)
+  → block promotion (defensive default)
+* `eval_games` sum includes the bootstrap-anchor opponent's games
+
+### T3 — branch hygiene
+
+Pre-§155: 4 phase_b_prime branches plus master.
+
+```
+master                              28a7892  v8 plumbing (already merged)
+phase_b_prime_v8_plumbing           28a7892  identical to master — redundant
+phase_b_prime_q3_cluster6           432096c  CLUSTER_THRESHOLD 5→6 (FALSIFIED §148)
+phase_b_prime_t5_corner_mask        00fc651  corner-mask encoder (FALSIFIED §148)
+phase_b_prime_v9_hex_native         4b4d507  hex-trunk + per-move (FALSIFIED §154)
+```
+
+Post-§155:
+
+```
+master                              28a7892  unchanged — v8 plumbing live, defaults preserved
+phase_b_prime_v9_hex_native         4b4d507  retained — future architecture research substrate
+phase_b_prime_v10_root_cause        3ad8cb7  this sprint
+```
+
+`origin/phase_b_prime_q3_cluster6` remains on remote (push-delete out
+of §155 prompt scope).  `phase_b_prime_v8_plumbing` local kept as a
+named marker of the merged commit (no functional weight).
+
+### T4 — sustained-run pre-flight smoke (BLOCKED — surfaces §156 scope)
+
+T1.2 verdict identifies a super-additive interaction, not a single
+knob, so the exploration-knob fix slot in
+`configs/variants/w4c_smoke_v7_5080.yaml` cannot be pinned without a
+within-R10 bisection.  The variant template is committed with the v8
+jitter + bootstrap-floor pieces wired in and a `# PENDING T1 verdict`
+slot for the exploration-knob fix.  Running it now would inherit smoke
+v6 defaults and reproduce the 91 % collapse without mitigation.
+
+**§156 next-step scope:** within-R10 bisection.  R11–R14 each remove
+one knob from R10, n=200, frozen v7full, 18 workers:
+
+| variant | knob removed from R10 | discriminator |
+|---|---|---|
+| R11 | Dirichlet (`dirichlet_enabled=False`) | does ε=0 break the 91 %? |
+| R12 | cosine temp (`temp_min=0.5`, `threshold_compound_moves=0`) | does τ=0.5 fixed break the 91 %? |
+| R13 | `random_opening_plies: 1 → 4` (T2 baseline value) | does long random opening break the 91 %? |
+| R14 | playout_cap (`full_search_prob=0.0`, `n_simulations=600`) | does the move-level cap break the 91 %? |
+
+The variant whose removal collapses the 91 % below the 50 % gate is
+the load-bearing knob for the smoke v7 fix.  Conservative interim
+option: restore *all three* exploration knobs to T2-style (Dirichlet
+ε=0, temp_min=0.5, opening_plies=4) — definitely breaks R10's super-
+additivity but loses self-play exploration entirely (§115, §143
+re-tuning required).  Not recommended without the bisection.
+
+### Class verdict ranking — post-§155 update
+
+| Class | §154 status | §155 update |
+|---|---|---|
+| 4 — q-axis stride-5 | CONFIRMED dominant; Q2 jitter is sole confirmed lever | **CONFIRMED (root cause).** R10 reproduces 32× stride-5 amplification under frozen v7full *without training*.  Class 4 is a property of v7full × smoke MCTS+exploration regime, not of trained-policy dynamics. |
+| 3 — buffer composition | UNCHANGED | downgraded — buffer signal at smoke step ≥ 250 is *consequence* of Class 4 stride-5 cap-spam at step 0, not cause |
+| 2 — value-head drift | UNCHANGED | downgraded — value-head locking at decisive_mean ≈ −0.69 (§152) is downstream of the step-0 stride-5 distribution, not an independent failure mode |
+| 1 — stale dispatch | UNCHANGED — eliminated under v7full anchor | UNCHANGED |
+| **5 — gate / colony-attractor** | NEW; v10 priority 1 | **STRUCTURAL FIX SHIPPED** — bootstrap-floor gate ready for v10 sustained-run variant.  Default off for backward compat. |
+
+### Artifacts
+
+* `scripts/v7full_training_knob_isolation.py` — T1 + T1.1 harness (R0–R10 driver)
+* `reports/phase_b_prime/training_knob_isolation/` —
+  `results.md`, `summary.json`, `R{0,6,7,8,9,10}_games.jsonl` (T1.1
+  pass), `results_R0R5.md`, `summary_R0R5.json` (T1 pass — preserved),
+  `R{1,2,3,4,5}_games.jsonl` (T1 pass JSONLs)
+* `hexo_rl/eval/eval_pipeline.py` — bootstrap-floor opponent + gate logic + lazy anchor loader
+* `configs/eval.yaml` — `bootstrap_anchor` + `bootstrap_floor` config surface (default off)
+* `tests/test_eval_pipeline.py` — 5 new tests for the floor gate paths
+* Engineering branch: `phase_b_prime_v10_root_cause`
+
+Commits: `b62a1c0` (T1 + T2 + T3), `2fd6fd6` (master compat fix —
+drop v9-only `rotation_cadence` kwarg), `bcb2613` (perf — right-size
+inference batch+wait per worker count, 3× speedup at n_workers=1),
+`e99663c` (smoke v7 5080 variant template — knob-fix slot pending),
+`3ad8cb7` (T1.1 — R6–R10 MCTS-side knob isolation).
+
+### What this sprint DOES NOT do
+
+* Does not change master config defaults (every v10 knob ships opt-in).
+* Does not regenerate v7full corpus or retrain bootstrap.
+* Does not pre-implement Phase 5+ architectural changes (hex window,
+  G-CNN, transformers).
+* Does not push-delete `origin/phase_b_prime_q3_cluster6` (out of scope).
+* Does not pin a single-knob fix in `w4c_smoke_v7_5080.yaml` — the
+  super-additive verdict needs a within-R10 bisection (§156) before
+  the smoke v7 launch can be authorised.

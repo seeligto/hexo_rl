@@ -3,21 +3,31 @@
 # Master config + the v10 supply lands:
 #   - Q2 LEGAL_MOVE_RADIUS jitter ∈ {4, 5, 6}              (§152 verdict, v8 plumbing)
 #   - bootstrap-floor multi-anchor promotion gate          (§155 T2)
-#   - [T1 exploration-knob fix]                            (§155 T1 verdict — pending)
+#   - [knob-fix slot]                                      (§155 BLOCKED — pending §156)
 #
-# ## Knob-fix slot (PENDING T1 verdict)
+# ## Knob-fix slot (BLOCKED — pending §156 R11–R14 bisection)
 #
-# §155 T1 isolates which of the three exploration knobs (Dirichlet, cosine
-# temperature schedule, random_opening_plies) drives the smoke v6 step-0 92%
-# draw collapse under frozen v7full.  Once the T1 verdict identifies the
-# proximate cause, the knob fix gets pinned here.  Until then, this variant
-# inherits the smoke v6 defaults verbatim — running it pre-verdict would
-# reproduce the 92% draw collapse.
+# §155 T1.1 verdict (`reports/phase_b_prime/training_knob_isolation/results.md`):
+# the smoke v6 step-0 92 % draw collapse under frozen v7full is a
+# super-additive interaction between (a) the smoke MCTS regime
+# (playout_cap fsp=0.5 + completed_q_values + 18 workers) and (b) the
+# exploration knobs (Dirichlet ε=0.10 + cosine temp 1.0→0.05 over
+# compound_move [0,10) + opening_plies=1).  None of R6/R7/R8/R9 cross
+# the 50 % gate alone (≤ 5.5 %).  R10 = full smoke regime hits 91 %
+# WITHOUT any training updates — it is v7full × the regime, not a
+# trained-policy failure.
 #
-# The likely fixes (filled in after T1):
-#   - if Dirichlet → reduce ε from 0.10 → 0.025 or disable below ply 30
-#   - if temp schedule → bump temp_min from 0.05 → 0.15 or extend threshold
-#   - if opening_plies → restore opening_plies=4 (eval-style)
+# §156 R11–R14 (next prompt) will bisect within R10 — each variant
+# removes ONE knob and re-tests.  The single variant whose removal
+# collapses the 91 % below the 50 % gate is the load-bearing knob and
+# is what gets pinned here.  Running this variant now (with smoke v6
+# defaults inherited) would reproduce the 91 % collapse with no
+# mitigation — DO NOT LAUNCH until §156 lands.
+#
+# Conservative interim (NOT recommended): restore all three exploration
+# knobs to T2-style values (ε=0, temp_min=0.5 with threshold=0,
+# opening_plies=4).  Definitely breaks R10's super-additivity but
+# disables self-play exploration entirely (§115, §143 re-tuning needed).
 #
 # ## Bootstrap-floor gate (active in this variant)
 #
@@ -87,24 +97,37 @@ eval_pipeline:
       enabled: true
       min_winrate: 0.45
 
-# ## T1-verdict-driven exploration-knob fix (PENDING)
+# ## §156-driven knob fix slot (BLOCKED — pending R11–R14 bisection)
 #
-# Once §155 T1 lands, append the proximate-cause knob fix here under
+# Once §156 identifies the load-bearing knob, append the fix here under
 # the appropriate config section (mcts.* for Dirichlet, selfplay.playout_cap.*
-# for temperature, selfplay.* for opening_plies).
+# for temperature, selfplay.* for opening_plies, selfplay.* for completed_q_values).
 #
-# Example shape if Dirichlet is the cause:
+# Example shape if Dirichlet is the cause (R11 collapses below 50 %):
 #
 # mcts:
 #   epsilon: 0.025         # was 0.10 — exploration noise reduced
 #   dirichlet_alpha: 0.05  # unchanged — α controls noise concentration
 #
-# Example shape if temperature schedule is the cause:
+# Example shape if temperature schedule is the cause (R12 collapses):
 #
 # selfplay:
 #   playout_cap:
 #     temperature_threshold_compound_moves: 20  # extend threshold
 #     temp_min: 0.15                             # raise floor
+#
+# Example shape if opening_plies is the cause (R13 collapses):
+#
+# selfplay:
+#   random_opening_plies: 4   # was 1; restore T2-baseline value
+#
+# Example shape if playout_cap is the cause (R14 collapses):
+#
+# selfplay:
+#   playout_cap:
+#     full_search_prob: 0.0  # disable move-level cap
+# mcts:
+#   n_simulations: 600        # use uniform deep search instead
 
 monitors:
   hard_abort_grad_norm: 10.0
