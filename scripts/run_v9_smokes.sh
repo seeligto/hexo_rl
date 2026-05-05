@@ -112,9 +112,12 @@ PY
 
     BOOTSTRAP_LOG="${LOG_DIR}/v9_bootstrap_v8full.log"
     log "  launching pretrain (logs: $BOOTSTRAP_LOG, expected ~30-60 min)"
+    # Warm-start path: load v7full's inference weights into a fresh
+    # HexConv2d-trunk model with corner_mask on. Optimizer + scheduler
+    # start from scratch — that is exactly the §153 T4 option A recipe.
     set +e
     MALLOC_ARENA_MAX=2 "$PY" -m hexo_rl.bootstrap.pretrain \
-        --resume checkpoints/bootstrap_model_v7full.pt \
+        --init-from-weights checkpoints/bootstrap_model_v7full.pt \
         --epochs 30 \
         --eta-min 5e-5 \
         --inference-out checkpoints/bootstrap_model_v8full.pt \

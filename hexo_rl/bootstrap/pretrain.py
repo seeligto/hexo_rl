@@ -620,6 +620,13 @@ def pretrain() -> None:
     parser.add_argument("--resume", type=str, default=None,
                         help="Resume from a full pretrain checkpoint (model+optimizer+scaler state). "
                              "Cosine LR schedule is restarted across --epochs at --lr-peak (or config default).")
+    parser.add_argument("--init-from-weights", type=str, default=None,
+                        help="Warm-start from an inference-weights file (e.g. "
+                             "checkpoints/bootstrap_model_v7full.pt). The state_dict is "
+                             "loaded into the freshly-constructed model BEFORE optimizer "
+                             "/ scheduler init; everything else (epochs, LR schedule, "
+                             "optimizer state) starts at iteration 0. Mutually exclusive "
+                             "with --resume. §153 T4 v7full→v8full warm-start path.")
     parser.add_argument("--lr-peak", type=float, default=None,
                         help="Override peak LR for cosine restart (used with --resume; "
                              "lower than original 2e-3 to fine-tune without disturbing learned weights).")
@@ -760,6 +767,58 @@ def pretrain() -> None:
     if args.eta_min is not None:
         config["pretrain_eta_min"] = float(args.eta_min)
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)
+
+    # Mutual exclusion: --resume and --init-from-weights both touch model
+    # state at startup. Only one can be active.
+    if args.resume and args.init_from_weights:
+        raise SystemExit(
+            "pretrain: --resume and --init-from-weights are mutually exclusive. "
+            "Pick one: --resume restores the full training state (model + "
+            "optimizer + scaler + scheduler); --init-from-weights warm-starts "
+            "from a weights-only state_dict with a fresh optimizer and schedule."
+        )
+
+    # Warm-start mode (§153 T4 v7full→v8full path): load weights only into
+    # the freshly-constructed model so the new architecture knobs (e.g.
+    # use_hex_kernel + corner_mask) apply, while every training-state field
+    # — optimizer, scheduler, scaler — starts at iteration 0. The
+    # weights-only file is a flat state_dict (the `bootstrap_model_*.pt`
+    # convention used by inference / eval).
+    if args.init_from_weights:
+        from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
+        weights_path = Path(args.init_from_weights)
+        log.info("init_from_weights", path=str(weights_path))
+        weights = torch.load(weights_path, map_location=device, weights_only=True)
+        if isinstance(weights, dict) and "model_state" in weights and isinstance(weights["model_state"], dict):
+            weights = weights["model_state"]
+        weights = normalize_model_state_dict_keys(weights)
+        base = get_base_model(trainer.model)
+        # Strict-equivalent: filter benign tower/trunk aliases. Real
+        # missing/unexpected keys must surface — silent drops would warm-
+        # start the wrong layers.
+        load_result = base.load_state_dict(weights, strict=False)
+        model_keys = set(base.state_dict().keys())
+        real_unexpected = [
+            k for k in load_result.unexpected_keys
+            if k not in model_keys
+            and not (
+                (k.startswith("tower.") and f"trunk.{k}" in model_keys)
+                or (k.startswith("trunk.tower.") and k[len("trunk."):] in model_keys)
+            )
+        ]
+        if list(load_result.missing_keys) or real_unexpected:
+            raise RuntimeError(
+                f"init-from-weights load_state_dict mismatch: "
+                f"missing={list(load_result.missing_keys)[:5]}, "
+                f"unexpected={real_unexpected[:5]}. Architecture may differ — "
+                "ensure model.use_hex_kernel / corner_mask are set so the "
+                "model matches the saved trunk shape, or use a compatible "
+                "weights file."
+            )
+        log.info(
+            "init_from_weights_complete",
+            n_loaded=len(weights), missing=len(load_result.missing_keys),
+        )
 
     # Resume mode: load model/optimizer/scaler from full checkpoint, restart
     # cosine schedule across the new --epochs window with the requested peak LR.
