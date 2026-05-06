@@ -1,0 +1,48 @@
+# P3 corner-mask probe — treatment arm.
+# Identical to p3_corner_mask_off.yaml except model.corner_mask: true.
+# WorkerPool reads model.corner_mask and toggles engine.set_corner_mask_enabled
+# at startup; bootstrap.pretrain.validate() does the same.
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+
+eval_interval: 2500
+
+model:
+  corner_mask: true   # P3 treatment
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  n_workers: 18
+  inference_batch_size: 224
+  inference_max_wait_ms: 8.0
+  leaf_batch_size: 4
+  playout_cap:
+    fast_prob: 0.0
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+  legal_move_radius_jitter: true
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      enabled: true
+      stride: 1
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+      path: checkpoints/bootstrap_model_v7full.pt
+  gating:
+    bootstrap_floor:
+      enabled: true
+      min_winrate: 0.45
+
+monitors:
+  hard_abort_grad_norm: 10.0
+
+instrumentation:
+  enabled: true
+  value_probe_interval: 250
+  composition_interval: 500
