@@ -7714,11 +7714,29 @@ Bootstrap floor (§155 T2) remains in eval_pipeline.py orchestrator.
 ### Follow-ups
 
 See /tmp/refactor_followups_§160.md:
-- `_load_anchor_model` prefix-stripping duplication with `anchor.py::_try_load_anchor` — post-§160, separate wave, decide owner location
+- `_load_anchor_model` prefix-stripping duplication with `anchor.py::_try_load_anchor` — CLOSED §160a
 
 ### Precedent
 
 FF-merge to master, same as §158, §158a, §159, §159a.
+
+---
+
+## §160a — Anchor loading dedup
+
+**Branch:** `dedup/anchor-loading`
+
+**Goal:** Close §160 follow-up — `_load_anchor_model` had an inline reimplementation of the prefix-strip loop already canonical in `checkpoints.normalize_model_state_dict_keys`.
+
+### What landed
+
+`eval_pipeline._load_anchor_model` replaced ~12 lines of inline `_orig_mod.`/`module.` prefix-strip with a single call to `normalize_model_state_dict_keys`. `anchor.py` required no changes — it already routes through `Trainer.load_checkpoint → normalize_model_state_dict_keys`. Side-effect gain: `_load_anchor_model` now inherits the BN-key and 18-plane guards. For modern checkpoints output is bit-exact; for invalid/old checkpoints, behavior changes from silent garbage load to RuntimeError.
+
++4 unit tests in `test_trainer.py` covering prefix-absent, empty-dict, module-prefix, partial-keys. 991 → 995 passed.
+
+### Precedent
+
+FF-merge to master, same as §160.
 
 ---
 
