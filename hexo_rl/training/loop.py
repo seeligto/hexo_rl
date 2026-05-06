@@ -192,29 +192,10 @@ def run_training_loop(
         pool.recent_buffer = recent_buffer
 
     # ── Eval pipeline ─────────────────────────────────────────────────────────
-    from hexo_rl.eval.eval_pipeline import EvalPipeline
-
-    eval_yaml_path = Path("configs/eval.yaml")
-    eval_pipeline: EvalPipeline | None = None
-    eval_ext_config: dict[str, Any] = {}
-    _eval_interval_cfg: int = int(train_cfg.get("eval_interval", config.get("eval_interval", 100)))
-    if eval_yaml_path.exists():
-        from hexo_rl.utils.config import load_config as _load_config, _deep_merge
-        eval_ext_config = _load_config(str(eval_yaml_path))
-        # Sweep / variant configs may declare an `eval_pipeline:` block to
-        # override eval cost (n_games, model_sims, opponent enables, eval_interval).
-        # Deep-merge it onto the eval.yaml load so the produced EvalPipeline
-        # honours the variant. Without this, sweep mode pays the production
-        # ~134 min/round eval cost regardless of how short the sweep is.
-        main_ep_override = config.get("eval_pipeline", {})
-        if main_ep_override:
-            _deep_merge(eval_ext_config.setdefault("eval_pipeline", {}), main_ep_override)
-        ep_cfg = eval_ext_config.get("eval_pipeline", {})
-        if ep_cfg.get("enabled", False):
-            eval_pipeline = EvalPipeline(eval_ext_config, device, run_id=run_id)
-            _eval_interval_cfg = int(ep_cfg.get("eval_interval", 1000))
-            log.info("eval_pipeline_enabled", interval=_eval_interval_cfg,
-                     overrides_applied=bool(main_ep_override))
+    from hexo_rl.eval.pipeline_setup import build_eval_pipeline
+    eval_pipeline, eval_ext_config, _eval_interval_cfg = build_eval_pipeline(
+        config, device, run_id, train_cfg,
+    )
 
     best_model_path = Path(
         eval_ext_config.get("eval_pipeline", {}).get("gating", {}).get(
