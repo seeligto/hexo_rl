@@ -34,10 +34,10 @@ from hexo_rl.training.lifecycle import (
     cuda_stream_audit,
     cuda_warmup,
 )
-# Orchestrator hooks — public in `hexo_rl.training.orchestrator`, aliased here so
-# the existing call sites in `run_training_loop` keep their underscore-prefixed
-# local names. Tests reach `_drain_pending_eval` from this module today; the
-# import alias preserves that surface. T7 of §159 retires the test alias.
+# Orchestrator hooks — public in `hexo_rl.training.orchestrator`, aliased here
+# so the existing call sites in `run_training_loop` keep their underscore-prefixed
+# local names. Pure-move §159 left this layer untouched; refactoring the inner
+# call sites to drop the underscores is a follow-up.
 from hexo_rl.training.orchestrator import (
     drain_pending_eval as _drain_pending_eval,
     emit_axis_distribution as _emit_axis_distribution,
