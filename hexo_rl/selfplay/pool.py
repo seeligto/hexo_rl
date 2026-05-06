@@ -2,6 +2,10 @@
 
 Phase 3.5 migration removed Python multiprocessing request/response queues.
 Concurrency is now managed by Rust-owned worker threads via SelfPlayRunner.
+
+§162: per-game telemetry extracted to instrumentation.py (PoolInstrumentation).
+This module handles orchestration: lifecycle, result drain, buffer push, and
+delegations to PoolInstrumentation for all per-game telemetry state.
 """
 
 from __future__ import annotations
