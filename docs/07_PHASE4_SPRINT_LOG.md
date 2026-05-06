@@ -7547,3 +7547,116 @@ that block.
 reviewer → code-quality reviewer. Two review cycles surfaced fixable issues
 before commit (T1 import-block placement + transient-comment annotation;
 T6 dead `config` parameter + dead imports). Spec compliance ✅ at every task.
+
+---
+
+## §159a — Refactor: StepCoordinator extraction (2026-05-06)
+
+**Audit candidate:** §159 follow-up — `loop.py` step-coordinator further
+decomposition (the headline left open at §159, see §159 follow-ups list).
+
+**Outcome:** `_run_loop` closure cut out of `hexo_rl/training/loop.py` and
+re-homed in a new `StepCoordinator` class in
+`hexo_rl/training/step_coordinator.py`. Closes Q-§159a; closes Q-§159b items
+1–14 (closure-internal coverage).
+
+| File | Pre-§159a | Post-§159a | Delta |
+|---|---|---|---|
+| `hexo_rl/training/loop.py` | 686 | 357 | -329 |
+| `hexo_rl/training/step_coordinator.py` | 0 | 893 | +893 |
+| **Total core** | **686** | **1250** | **+564** |
+
+`run_training_loop` shrunk 686 → 357 LOC (-48%); inflation is in the new
+module, not the loop. Breakdown of the +893: protocol definitions
+(~50), `StepCoordinatorConfig` + `StepOutcome` dataclasses (~50), class
+scaffolding / init / properties (~250), verbatim closure body migrated as
+`step()` (~440), `flush_pending_eval` + `request_stop` + `run_until_stopped`
+(~50), R3/R10/R16/R18/R21/R22/R25 inline contract docstrings (~50). Same
+accounting pattern as §159 (1464 → 1824).
+
+**Pure-move discipline.** Closure body migrated byte-equivalent into
+`step()`; the 18 per-step decisions (O2–O6, D0–D10) preserve identical
+ordering DAG and outcome accounting. Pre-existing smells (R5, R6, R9, R14,
+R15, R19) preserved verbatim — refactor-template's pure-move guidance.
+
+**Caller updates:** `run_training_loop` public API unchanged (signature,
+return, side-effects). 1 test touched (`tests/test_training_loop_event_schema.py::test_loop_does_not_duplicate_train_step_log`)
+— widened to scan both `loop.py` and `step_coordinator.py` since the
+`train_step` log-name guard must follow the closure body to its new home.
+
+**Tests:** `make test.py` clean — 973 passed, 8 skipped, 2 deselected.
+Pre-§159a baseline was 953/8 → +20 step-coordinator behavioural tests.
+New test files:
+- `tests/training/test_loop_helpers.py` (10) — M1 module-level helpers
+- `tests/training/test_step_coordinator_protocols.py` (8) — M2 protocol shape
+- `tests/training/test_step_coordinator_init.py` (11) — M3 init field mapping
+- `tests/training/test_step_coordinator.py` (20) — M4 decision-by-decision behavioural coverage (B#1–14)
+
+**Bench:** Skipped per `docs/refactor-template.md` L113 — orchestration, not
+hot-path.
+
+**Smoke:** 200-step smoke offloaded to vast.ai `ssh6:13053` (RTX 5080).
+Wrapper timed out at 600 s after 68 train steps + 34 self-play games; SIGINT
+exercised the full O3 (`shutdown_save`) branch end-to-end. Event order
+clean: `shutdown_signal_checkpoint` → `checkpoint_saved` → `buffer_saved` →
+`recent_buffer_saved` → `session_end`. `coordinator.flush_pending_eval()`
+ran during teardown. No tracebacks, no abort gates tripped, no log-name
+regressions. Strictly stronger evidence than the planned graceful-exit smoke.
+
+**Gates:**
+- ✓ Pre-M4 R18 logger-name audit (READ-ONLY subagent) — verdict `__name__ IS
+  SAFE` (no STRUCT consumers depend on `hexo_rl.training.loop` logger
+  name); coordinator nonetheless uses literal `"hexo_rl.training.loop"`
+  defensively.
+- ✓ `make test.py` (973/8/2 deselected).
+- ✓ Pre-commit M4 diff review (READ-ONLY subagent) — verdict `PROCEED`
+  across all 13 audit checks (instance fields, S2 ordering DAG, R3
+  default-arg snapshot, R18 literal logger, R16 `# DO NOT HOIST` comment,
+  R10/R8/R21/R22 placement, R4+R25 finally ordering, log-name parity,
+  public API unchanged, no out-of-scope edits).
+- ✓ Smoke (vast.ai) per above.
+- ✓ Coverage check (READ-ONLY subagent) — verdict `ALL COVERED` across
+  B#1–14 (arithmetic edges for B#6 + B#13 in `test_loop_helpers.py`).
+
+**M5 skipped — net commits 4 vs the planned 5.** All M5 candidates became
+moot when M4 deleted the closure outright:
+- Dead `nonlocal best_model` declaration vanished with the closure.
+- R17 `_collections.deque` annotation alias removed alongside `_ew_history`'s
+  migration into the coordinator (`step_coordinator.py` uses
+  `from collections import deque` directly).
+- `LoopSession` context manager deferred per design plan §3 M5 ("skip if M4
+  diff already large") — current 10-LOC finally-block reads cleanly with
+  inline R4 + R25 + R22 ordering comments. **Tagged: post-§159a wave.**
+  Re-evaluate when teardown ordering changes OR a second caller of
+  `run_until_stopped` emerges.
+
+**Q-§159a / Q-§159b status:**
+- **Q-§159a** (extract StepCoordinator): CLOSED.
+- **Q-§159b §B items 1–14** (closure-internal coverage): CLOSED — every item
+  has at least one targeted unit test.
+- **Q-§159b §B item 15** (`build_subsystems` / `resolve_anchor` /
+  `LoopSubsystems.teardown`): OPEN — out of scope for §159a; lands in a
+  separate §159b wave.
+
+**Constraints honored:** R1, R2, R3 (F-016 default-arg snapshot), R4, R7,
+R8, R10, R11, R12, R13, R16 (DO NOT HOIST), R18 (literal logger name), R20,
+R21, R22, R23 (`run_training_loop` signature), R24 (semaphore-leak
+suppression), R25 (teardown ordering).
+
+**Follow-ups in `/tmp/refactor_followups_§159a.md`:**
+- `LoopSession` context manager (R4 + R25 ergonomic) — re-evaluate when a
+  second caller of `run_until_stopped` emerges OR teardown ordering changes.
+
+**Commits on `refactor/step-coordinator`** (4 + this docs commit):
+1. `refactor(training): extract loop helpers to module-level + tests (§159a M1)` — `be1b84c`
+2. `refactor(training): step_coordinator protocols + config + outcome dataclass (§159a M2)` — `3f3e544`
+3. `refactor(training): step_coordinator skeleton + init tests + dead-code instantiation (§159a M3)` — `f00b6df`
+4. `refactor(training): cut _run_loop into StepCoordinator.step + 14 unit tests (§159a M4)` — `48b67ce`
+5. `docs(sprint): §159a refactor StepCoordinator landed` ← LANDS WITH USER GO
+
+**Subagent-driven execution:** M1/M2/M3 used the standard
+implementer → spec-compliance → code-quality cadence. M4 was primary-author
+only per design constraint (closure→class hard cut needed coherent author
+context); subagents bracketed M4 as READ-ONLY auditors instead (R18 audit
+pre-M4, diff review pre-commit, coverage check post-M4). All three audit
+verdicts surfaced no blocking issues.
