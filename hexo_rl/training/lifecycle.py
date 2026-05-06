@@ -45,7 +45,6 @@ class InfModelArch:
 def build_inference_model(
     trainer: Trainer,
     device: torch.device,
-    config: dict[str, Any],
 ) -> tuple[torch.nn.Module, InfModelArch]:
     # ── Inference model — separate instance owned by InferenceServer ──────────
     board_size         = int(trainer.config.get("board_size",         19))

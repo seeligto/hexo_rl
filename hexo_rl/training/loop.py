@@ -28,8 +28,6 @@ from hexo_rl.monitoring.events import emit_event
 from hexo_rl.training.anchor import resolve_anchor
 from hexo_rl.training.batch_assembly import BatchBuffers, assemble_mixed_batch
 from hexo_rl.training.lifecycle import (
-    InfModelArch,
-    LoopSubsystems,
     build_eval_model,
     build_inference_model,
     build_subsystems,
@@ -110,7 +108,7 @@ def run_training_loop(
     """
 
     # ── Inference model + arch ────────────────────────────────────────────────
-    inf_model, _arch = build_inference_model(trainer, device, config)
+    inf_model, _arch = build_inference_model(trainer, device)
     board_size = _arch.board_size
     res_blocks = _arch.res_blocks
     filters = _arch.filters
