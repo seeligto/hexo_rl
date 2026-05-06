@@ -7772,3 +7772,70 @@ test surface.
 ### Precedent
 
 FF-merge to master, same as §158–§160.
+
+---
+
+## §162 — selfplay/pool.py split
+
+**Branch:** `refactor/selfplay-pool` → FF-merged to master 2026-05-06
+
+**Goal:** Separate orchestration from per-game telemetry and the retired stride-5 abort infrastructure.
+
+### Operator decisions (locked Phase 1)
+
+| Item | Decision |
+|------|----------|
+| Stride-5 | Middle-path retire — `stride5_summary()` + alarm + `_row_max_history` removed; `_compute_stride5_metrics` kept (script imports); P90 emitted as passive `stride5_run_p90` event field |
+| Colony extension | Extracted to `instrumentation.py` with other telemetry |
+| Test file | DELETE `tests/test_stride5_metrics.py` |
+
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| M1 `c031f73` | Retire stride-5 abort path: remove `stride5_summary()`, `_row_max_history`, dashboard alarm; emit rolling P90 as passive event field; delete test file; open Q-§162a WATCH |
+| M2 `3f40cbd` | Extract `PoolInstrumentation` to `instrumentation.py`: move `_per_worker_draws`, `_terminal_reason_counts`, `_mv_range_history`, `_recent_move_histories`, `_stride5_run_history`; move `_compute_colony_extension`; add 6 unit tests |
+| M3 `1f917e7` | Update pool.py module docstring; bench gate recorded |
+
+### LOC delta
+
+| File | Before | After | Δ |
+|------|--------|-------|---|
+| `hexo_rl/selfplay/pool.py` | 705 | 539 | −166 |
+| `hexo_rl/selfplay/instrumentation.py` | 0 | 176 | +176 |
+| Net | 705 | 715 | +10 (move, not delete) |
+
+Note: target was 290-320 for pool.py alone; delta is `_compute_stride5_metrics` (59 LOC, kept for script import compatibility) plus the `__init__` SelfPlayRunner parameter block (~180 LOC, irreducible orchestration).
+
+### Bench gate (n=5, 2026-05-06, laptop 4060 Max-Q)
+
+| Metric | Pre-§162 | Post-§162 | Δ | Note |
+|--------|----------|-----------|---|------|
+| mcts_sim_per_s | 64,417 | 64,249 | −0.3% | ok |
+| nn_inference_pos_per_s | 4,873 | 4,867 | −0.1% | ok |
+| nn_latency_mean_ms | 2.79 | 2.75 | −1.5% | ok |
+| buffer_push_per_s | 623,419 | 720,349 | +15.5% | positive |
+| buffer_sample_raw_us | 1,115 | 1,107 | −0.7% | ok |
+| buffer_sample_aug_us | 1,230 | 1,123 | −8.7% | positive |
+| gpu_util_pct | 100.0 | 100.0 | 0% | ok |
+| vram_used_gb | 0.105 | 0.105 | 0% | ok |
+| worker_pos_per_hr | 34,463 | 31,825 | −7.7% | variance* |
+| worker_batch_fill_pct | 99.0 | 96.9 | −2.1% | ok |
+| all_targets_met | True | True | — | PASS |
+
+*`worker_pos_per_hr` −7.7%: post median (31,825) falls within pre P25–P75 range (31,524–34,463). Pre IQR 8.5%, post IQR 14.7%. Hot-path changes (sorted 50 ints per game, delegation overhead) negligible at <1 game/s. Accepted as variance per §102 methodology.
+
+### WorkerPoolLike Protocol
+
+All 7 members verified bit-exact: `games_completed`, `n_workers`, `start()`, `stop()`, `buffer_composition()`, `model_version_summary()`, `per_worker_draw_rates()`. `step_coordinator.py` zero changes.
+
+### Test counts
+
+- Pre-§162: 995 passed, 8 skipped
+- Post-M1: 985 passed (−10 deleted stride-5 tests)
+- Post-M2: 991 passed (+6 new instrumentation tests)
+- Post-M3: 991 passed, 8 skipped (stable)
+
+### Q-§162a
+
+Opened in `06_OPEN_QUESTIONS.md`: stride-5 abort retired, P90 retained passive. Re-enable requires recalibration tied to current encoding/radius.
