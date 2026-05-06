@@ -7,8 +7,8 @@ from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.losses import compute_chain_loss
 
 
-def _tiny_net(in_channels: int = 18) -> HexTacToeNet:
-    # Small tower to keep tests fast; same in_channels as production.
+def _tiny_net(in_channels: int = 8) -> HexTacToeNet:
+    # Small tower to keep tests fast; same in_channels as production (post-§131 P3).
     return HexTacToeNet(
         board_size=19,
         in_channels=in_channels,
@@ -20,7 +20,7 @@ def _tiny_net(in_channels: int = 18) -> HexTacToeNet:
 
 def test_forward_base_tuple_unchanged_without_chain_flag():
     net = _tiny_net()
-    x = torch.zeros(2, 18, 19, 19)
+    x = torch.zeros(2, 8, 19, 19)
     out = net(x)
     assert isinstance(out, tuple)
     assert len(out) == 3
@@ -32,7 +32,7 @@ def test_forward_base_tuple_unchanged_without_chain_flag():
 
 def test_forward_with_chain_flag_appends_chain_pred():
     net = _tiny_net()
-    x = torch.zeros(2, 18, 19, 19)
+    x = torch.zeros(2, 8, 19, 19)
     out = net(x, chain=True)
     assert len(out) == 4
     chain_pred = out[-1]
@@ -41,7 +41,7 @@ def test_forward_with_chain_flag_appends_chain_pred():
 
 def test_forward_all_flags_preserves_order():
     net = _tiny_net()
-    x = torch.zeros(1, 18, 19, 19)
+    x = torch.zeros(1, 8, 19, 19)
     out = net(
         x,
         aux=True,
@@ -134,9 +134,9 @@ def test_chain_head_gradient_flows_through_trunk():
     """Train-step sanity: chain loss gradient must propagate into trunk weights."""
     net = _tiny_net()
     net.train()
-    # 18-plane input; chain target is a separate random tensor (no longer sliced
+    # 8-plane input (post-§131 P3); chain target is a separate random tensor (no longer sliced
     # from input since chain planes were removed from the state tensor in Q13).
-    x = torch.randn(2, 18, 19, 19, requires_grad=False)
+    x = torch.randn(2, 8, 19, 19, requires_grad=False)
     out = net(x, chain=True)
     chain_pred = out[-1]
     chain_target = torch.rand(2, 6, 19, 19)

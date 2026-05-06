@@ -33,6 +33,7 @@ def test_replay_buffer_benchmark_smoke() -> None:
 def test_worker_pool_benchmark_smoke() -> None:
     """Worker pool benchmark should execute briefly and return throughput stats."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # 18-plane: worker pool benchmark feeds GameState.to_tensor() Python path output (HEXB v6 bridge, §131 P1).
     model = HexTacToeNet(board_size=19, in_channels=18, filters=32, res_blocks=2).to(device)
 
     config = {

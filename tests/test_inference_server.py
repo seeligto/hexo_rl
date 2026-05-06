@@ -289,6 +289,8 @@ class TestInferenceServerTrace:
 class TestInferenceServerCompile:
     """torch.compile path on the InferenceServer (compile_retry_20260426).
 
+    Regression guard for §116.a — class name intentional. Do not rename.
+
     Locks in the Phase 3 padding + thread-init contract:
       1. config-time mutex with trace_inference,
       2. padded-shape forward returns correct shape and does not leak
