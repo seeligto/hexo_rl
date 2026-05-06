@@ -110,7 +110,7 @@ during search — just expose it.
 - Memory: ~3KB/game × 3,000 games/hr = ~9MB/hr extra in event history. Fine.
 - No additional MCTS search or NN inference triggered.
 
-Run `make bench.full` before and after. If >1% regression, gate behind
+Run `make bench` before and after. If >1% regression, gate behind
 `capture_game_detail: false` by default and document.
 
 ---

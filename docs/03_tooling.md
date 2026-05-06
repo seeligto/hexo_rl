@@ -231,7 +231,7 @@ make bench
 Throughput-oriented pass:
 
 ```bash
-make bench.full
+make bench
 ```
 
 Heavy stability and deep search stress test:

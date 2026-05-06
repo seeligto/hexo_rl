@@ -26,7 +26,7 @@ Zero behavior change. Decompose per audit's proposed split. All callers updated.
 2. Verify TARGET LOC matches audit (`wc -l`). If >10% drift → STOP, audit stale
 3. Map every external caller. Count by file
 4. Map every test touching TARGET (direct + indirect)
-5. Identify perf-sensitive boundary: MCTS / NN forward / Buffer push or sample / SelfPlayRunner / hot-path serialization → bench gate REQUIRED. Else `make test.all` sufficient
+5. Identify perf-sensitive boundary: MCTS / NN forward / Buffer push or sample / SelfPlayRunner / hot-path serialization → bench gate REQUIRED. Else `make test.py` sufficient
 
 Output to chat: caller count, test count, perf gate yes/no + reason, confirmed split vs audit (any deviations).
 
@@ -42,7 +42,7 @@ For each new file, leaf-most first:
 1. Create new file with extracted responsibility
 2. Update TARGET to delegate
 3. Update every caller per Gate 1 inventory
-4. `make test.all` — verify pass
+4. `make test.py` — verify pass
 5. If perf-sensitive: smoke-bench (subset, ~2min) — verify no obvious regression
 6. Commit: `refactor(<scope>): extract <responsibility> to <new_file>`
 
@@ -58,7 +58,7 @@ Stop signals:
 - Hidden coupling (private fns reaching across proposed boundary) → STOP, surface
 
 ## Gate 4 — Verification
-1. Final `make test.all` — full pass
+1. Final `make test.py` — full pass
 2. Final `make bench` if perf-sensitive — diff vs Gate 2:
    - Each metric within ±5% of baseline AND in target band
    - Regression >5% or out-of-band → revert to last passing commit, surface
@@ -90,7 +90,7 @@ Final commit: `docs(sprint): §<N> refactor <scope> landed`
 
 ## Soft constraints
 - One responsibility per commit, conventional prefix `refactor(<scope>):`
-- `make test.all` after every commit
+- `make test.py` after every commit
 - Branch: `refactor/<file_short_name>` off master
 - Subagent prompts always preamble: "Read CLAUDE.md and docs/07_PHASE4_SPRINT_LOG.md first"
 
@@ -103,7 +103,7 @@ Final commit: `docs(sprint): §<N> refactor <scope> landed`
 ## Done-when
 - TARGET LOC reduced per proposed split
 - All public API consumers compile + test pass
-- `make test.all` clean
+- `make test.py` clean
 - `make bench` within ±5% if perf-sensitive
 - Sprint log draft exists, surfaced
 - Refactor branch ready to merge
