@@ -6854,3 +6854,189 @@ inference batch+wait per worker count, 3× speedup at n_workers=1),
 * Does not pin a single-knob fix in `w4c_smoke_v7_5080.yaml` — the
   super-additive verdict needs a within-R10 bisection (§156) before
   the smoke v7 launch can be authorised.
+
+## §156 — Phase B' v10: R10 within-bisection + cosine-temp fix + laptop validation — 2026-05-06
+
+### Context
+
+§155 T1.1 closed with PROXIMATE_CAUSE_FOUND: smoke v6 step-0 92% draw
+collapse under frozen v7full bootstrap is a super-additive interaction
+between the smoke MCTS regime (playout_cap fsp=0.5 + completed_q_values +
+18 workers) AND the exploration knobs (Dirichlet ε=0.10 + cosine temp
+1.0→0.05 over compound_move [0,10) + opening_plies=1).  R0–R9 each null
+(≤5.5% draws); R10 = full conjunction = 91.0% draws [86.2%, 94.2%],
+mean_ply 140 (cap 150), stride5 P90 = 97 (32× R0 baseline), 91%
+terminal_reason ply_cap.
+
+T4 (smoke v7 launch) was BLOCKED until the load-bearing knob inside R10
+was identified.  §156 = within-R10 bisection (R11–R14, each removes ONE
+knob), fix authoring, laptop validation, sustained-run authorisation
+hand-off to §157.
+
+### Gate 1 — R10 within-bisection (R11–R14)
+
+n=200 each, frozen v7full both sides, 18 workers, 5080.  Per operator
+instruction: all four variants run regardless of intermediate verdicts —
+full information needed for the fix decision.
+
+| Variant | Knob removed                   | n   | draws | draw_rate (95% CI)        | mean_ply | stride5 P50/P90 | rmax P50/P90 | colony_wins | wall  |
+|---------|--------------------------------|----:|------:|---------------------------|---------:|----------------:|-------------:|------------:|------:|
+| R10     | (none — full smoke regime)     | 200 | 182   | **91.0%** [86.2%, 94.2%]  | 140      | 84 / 97         | 101 / 112    | 9           | 2702s |
+| R11     | Dirichlet ε=0.10 → 0           | 200 | 176   | 88.0% [82.8%, 91.8%]      | 139      | 76 / 86         | 96 / 104     | 15          | 2649s |
+| **R12** | **cosine temp → fixed τ=0.5**  | 200 | 10    | **5.0%** [2.7%, 9.0%]     | 63       | **3 / 4**       | **10 / 14**  | 134         | 738s  |
+| R13     | opening_plies=1 → 4            | 200 | 170   | 85.0% [79.4%, 89.3%]      | 135      | 82 / 100        | 100 / 112    | 15          | 2620s |
+| R14     | playout cap → uniform 600      | 200 | 198   | 99.0% [96.4%, 99.7%]      | 149      | 132 / 133       | 133 / 137    | 0           | 3576s |
+
+**Verdict — LOAD_BEARING = cosine temperature schedule.**
+
+R12 is the only variant whose Wilson upper bound (9.0%) clears the 50%
+gate.  R11/R13 stay within R10's 91% baseline noise.  R14 (deeper search
+on the same exploration regime) **amplifies** to 99% — confirms playout
+cap was partially mitigating the lock; uniform 600 sims with cosine still
+on pushes the regime even harder onto the Class-4 stride-5 fixed point.
+
+#### Per-knob sub-verdict
+
+* **R11 — NULL.** ε=0 vs ε=0.10 inert once cosine + cap + CQV active;
+  Dirichlet noise dominated by τ→0.05 collapse forcing argmax-on-visits
+  at compound_move ≥ 10.
+* **R12 — LOAD-BEARING.** Cosine collapse drops draws 91→5%, mean_ply
+  140→63, stride5 P90 97→4 (back to R0 baseline 3).
+* **R13 — NULL.** Lock-in happens at compound_move ≥ 10, well past the
+  random-opening window.
+* **R14 — INVERSELY LOAD-BEARING.** Removing cap forces uniform deep
+  search → policy uses full budget to build longer Class-4 chains
+  (stride5 P90 132 vs R10's 97).
+
+#### Colony caveat for fix design
+
+R12 colony_wins = 134/200 = **67%** — the §147 v5 / §154 v9 colony-
+attractor signature.  Fixed τ=0.5 alone breaks the draw lock but lights
+up the colony failure mode.  Mitigated by the §156 mandatory pairings
+(both already in the variant):
+
+1. `selfplay.legal_move_radius_jitter: true` — Q2 §152 verdict, the only
+   confirmed Class-4 lever.
+2. `gating.bootstrap_floor.min_winrate: 0.45` — promotion AND-requires
+   wr_bootstrap_anchor ≥ 0.45 in addition to the existing wr_best ≥ 0.55,
+   ci_lo > 0.5 gates.
+
+Full bisection report:
+`reports/phase_b_prime/training_knob_isolation/r10_bisection.md`.
+
+### Gate 2 — Phase B' fix in `configs/variants/w4c_smoke_v7_5080.yaml`
+
+```yaml
+selfplay:
+  playout_cap:
+    fast_prob: 0.0
+    temperature_threshold_compound_moves: 0   # §156 R12 fix — disable cosine schedule
+    temp_min: 0.5                             # fixed τ=0.5 across the game
+  legal_move_radius_jitter: true              # §152 Q2 (mandatory pairing)
+
+eval_pipeline:
+  gating:
+    bootstrap_floor:
+      enabled: true
+      min_winrate: 0.45                        # §155 T2 (mandatory pairing)
+```
+
+Class-3 buffer surgery (`draw_target_fraction: 0.5` subsample-on-push)
+deferred per §156 prompt unless trivial in same diff.  Not applied this
+wave.
+
+Commit: `cc4fd4e` (variant fix), `01ebd29` (laptop preflight sibling
+variant).
+
+### Gate 3 — Branch hygiene
+
+* `phase_b_prime_v8_plumbing` already at master HEAD — no-op merge
+  confirmed (`git rev-list --left-right --count master...origin/phase_b_prime_v8_plumbing`
+  = `0  0`).  Local `master` carries the v8 commit (`28a7892`); origin
+  master push deferred to §157 close-out commit since master diff is
+  zero against v8_plumbing.
+* `phase_b_prime_t5_corner_mask` not present locally or on origin — no-op.
+* `phase_b_prime_q3_cluster6` (origin only) — **DELETED 2026-05-06** per
+  user authorisation in §157 prompt.  q3 unique commit (`432096c`
+  CLUSTER_THRESHOLD 5→6) was part of the §154-falsified v9 hex-native
+  experiment.
+* `phase_b_prime_v9_hex_native` retained — knobs default off, future
+  architecture research (per §156 hard constraint).
+* `phase_b_prime_v10_root_cause` merge to master DEFERRED to §157 Gate 4
+  pending 5k smoke pass on 5080.
+
+### Gate 4 — Laptop validation smoke
+
+`w4c_smoke_v7_laptop_preflight.yaml` (sibling of the 5080 variant with the
+§156 fix + Q2 jitter + bootstrap_floor; laptop-tuned n_workers=14 /
+batch=64 / wait=4ms / fresh buffer via `mixing.buffer_persist=false`).
+Run: 254 games in 1000 train iters on 4060 Max-Q, ~50 min wall.  Healthy
+throughout (grad_norm < 1.8 vs 10.0 hard-abort, policy_entropy_selfplay
+2.99–3.78).
+
+Per-game aggregates (from the run's `game_complete` events):
+
+| Window     | n   | draws | draw_rate | mean_moves | stride5 P50/P90 | rmax P50/P90 | terminals             |
+|------------|----:|------:|----------:|-----------:|----------------:|-------------:|-----------------------|
+| ALL games  | 254 | 16    | 6.3%      | 73.0       | 3 / 4           | 10 / 15      | 238 six / 16 ply_cap  |
+| LAST 100   | 100 | 4     | 4.0%      | 73.0       | 3 / 4           | 11 / 15      | 96 six / 4 ply_cap    |
+| LAST 50    | 50  | 0     | 0.0%      | 66.4       | 3 / 4           | 10 / 14      | 50 six / 0 ply_cap    |
+
+Pass criteria (last 100 games):
+* draw_rate < 50% → **PASS** (4.0%)
+* stride5_run P90 < 30 → **PASS** (4)
+* bootstrap_floor not blocking valid candidates → **PASS** (trivial:
+  laptop too slow, single eval still running at process exit; no
+  candidates evaluated to block)
+
+Colony wins: 0 / 254 — Q2 jitter mitigation working as predicted from
+R12's 67% colony rate (the §147 v5 / §154 v9 colony attractor never
+fires).  Player split last 100: 56 player-0 / 40 player-1 (58/42
+ex-draws) — within normal first-mover noise per
+`feedback_winrate_balance.md` 50/50 baseline.
+
+Note on instrumentation event semantics: `instrumentation_periodic`
+reports `draw_target_fraction` (training-side weighted target), not raw
+outcome draw rate.  Outcome draw rate is the ply_cap fraction (4/100 last
+100).
+
+### Gate 5 — Sustained-run authorisation hand-off
+
+§157 (companion sprint) opened to drive the 5k validation smoke on 5080
+with the §156 fix.  The sustained 40k run is gated by §157 Gate 4 verdict
++ user path decision (Path A sustained vs Path B encoding-migration
+pivot).  R12's colony caveat means the bootstrap-floor gate is the
+primary safety net during sustained training.
+
+### Verdict
+
+§156 work complete:
+
+* **Load-bearing knob identified:** cosine temperature schedule
+  (compound_move [0,10) cosine 1.0→0.05 with temp_min=0.05).  Single
+  knob, falsifies the v9 / v10 super-additive interaction theory in
+  favour of a cosine-schedule single-cause model.
+* **Fix shape:** disable cosine (`temperature_threshold_compound_moves: 0`)
+  and pin τ to T2 baseline (`temp_min: 0.5`).  Mandatory pairings:
+  `legal_move_radius_jitter: true` (Q2 colony mitigation),
+  `bootstrap_floor.enabled: true min_winrate: 0.45` (regression catcher).
+* **Hard-falsified as load-bearing:** R11 Dirichlet ε removal, R13
+  opening-plies extension, R14 playout-cap removal.  All three are
+  synergy partners on the cosine collapse, not drivers.
+* **Laptop validation passed** (254 games / 50 min, draw_rate 4.0% last
+  100, stride5 P90=4, colony 0/254).  Hand-off authorised to §157 for
+  5080 5k smoke under load.
+
+Commits in §156: `3ad8cb7` (R6–R10 MCTS-side isolation, §155 follow-up),
+`548da64` (R10 within-bisection harness R11–R14), `cc4fd4e` (smoke v7
+5080 variant fix), `01ebd29` (laptop preflight sibling variant).
+
+### What this sprint DOES NOT do
+
+* Does not change master-config defaults (top-level config propagation
+  is §157 Gate 5 work, separate diff).
+* Does not authorise the 40k sustained run (gated on §157 5k verdict).
+* Does not implement Class-3 buffer surgery (`draw_target_fraction`
+  subsample-on-push) — deferred unless §157 surfaces it as needed.
+* Does not push-delete `origin/phase_b_prime_v8_plumbing` (still useful
+  as the v8 lineage anchor; revisit in §157 close-out).
