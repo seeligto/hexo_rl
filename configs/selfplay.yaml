@@ -92,6 +92,23 @@ selfplay:
     fast_prob: 0.0
     fast_sims: 64          # scalar used by Rust SelfPlayRunner — floor raised from 50 (A3 fix)
     standard_sims: 200
+    # §156 R12 verdict (2026-05-06): the cosine temperature schedule
+    # below is LOAD-BEARING for the warm-start smoke regime — keeping
+    # cosine on under warm-start (frozen v7full bootstrap + smoke MCTS
+    # regime) reproduces the §155 R10 91% draw lock as a super-additive
+    # interaction with the other exploration knobs.  Disabling cosine
+    # (set `temperature_threshold_compound_moves: 0` + `temp_min: 0.5`)
+    # collapses the lock 91→5% but lights up the §147 v5 / §154 v9
+    # colony attractor (R12 = 67% colony rate).  Mitigated by
+    # `selfplay.legal_move_radius_jitter: true` (§157 PROPAGATED) +
+    # `gating.bootstrap_floor.enabled: true` (§157 PROPAGATED).
+    #
+    # Cold-start runs may genuinely benefit from cosine annealing — no
+    # discriminator data either way as of §157.  Default left at the
+    # §143 γ.1 cosine schedule (still under investigation); warm-start
+    # smokes / sustained runs from a frozen bootstrap should opt out
+    # via variant.  See `configs/variants/w4c_smoke_v7_5080.yaml` for
+    # the canonical opt-out shape.
     temperature_threshold_compound_moves: 10  # §143 γ.1: was 15; greedy floor by ply 20, before §142 fragmentation pivot at ply 31
     temp_min: 0.05       # floor temperature for cosine annealing (0.0 = hard argmax after threshold)
     zoi_enabled: true    # restrict move sampling to ZOI of last N moves

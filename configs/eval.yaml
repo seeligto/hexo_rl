@@ -43,12 +43,24 @@ eval_pipeline:
     # When opting in, set ``stride`` to match best_checkpoint so a
     # measurement is always available on promotion-eligible rounds.
     bootstrap_anchor:
-      enabled: false
+      # §157 Gate 6 — enabled by default.  Pair partner of
+      # `gating.bootstrap_floor.enabled: true` below; both must be true
+      # together (gate-only without opponent triggers missing-measurement
+      # block on every promotion).
+      enabled: true
       stride: 1
       n_games: 100
       model_sims: 128
       opponent_sims: 128
-      path: checkpoints/bootstrap_model.pt
+      # §157 Gate 6 — frozen v7full reference, NOT the rotating canonical
+      # bootstrap.  The whole point of the floor is to catch regressions
+      # against a known-good baseline; rotating self-updates the reference
+      # below v7full on the first sub-floor promotion and locks in the
+      # regression the gate was meant to catch.  Operators rolling a new
+      # bootstrap should explicitly re-pin this path to the new reference
+      # only after independently validating the new bootstrap ≥ v7full WR
+      # vs SealBot.
+      path: checkpoints/bootstrap_model_v7full.pt
   gating:
     promotion_winrate: 0.55
     best_model_path: checkpoints/best_model.pt
@@ -58,7 +70,15 @@ eval_pipeline:
     # blocks promotion (defensive default).  Pair with
     # `opponents.bootstrap_anchor.enabled: true` and matching stride.
     bootstrap_floor:
-      enabled: false
+      # §157 Gate 6 — enabled by default.  Pair partner of
+      # `opponents.bootstrap_anchor.enabled: true` (frozen v7full path)
+      # above.  Promotion AND-requires `wr_bootstrap_anchor ≥ min_winrate`
+      # in addition to the existing `wr_best ≥ promotion_winrate` and
+      # `ci_lo > 0.5` gates.  Defensive default: missing measurement =
+      # block.  §155 T2 design intent — catch the v9 Class-5 colony-
+      # attractor signature where the trainer beats its rotating best
+      # while losing to v7full.
+      enabled: true
       min_winrate: 0.45
   colony_centroid_threshold: 6
   bradley_terry:
