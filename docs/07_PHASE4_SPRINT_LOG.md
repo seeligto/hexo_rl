@@ -7839,3 +7839,131 @@ All 7 members verified bit-exact: `games_completed`, `n_workers`, `start()`, `st
 ### Q-§162a
 
 Opened in `06_OPEN_QUESTIONS.md`: stride-5 abort retired, P90 retained passive. Re-enable requires recalibration tied to current encoding/radius.
+
+---
+
+## §163 — refactor: mcts/policy.rs extraction
+
+**Branch:** `refactor/mcts-mod` → FF-merged to master 2026-05-06
+
+**Goal:** Honour `audit/rust_health.md` mcts/mod.rs row by extracting policy methods to their own file. Phase 1 verified the audit row was substantially stale (over-counted scope ~5×); only the policy split was real work.
+
+### Operator decisions (locked Phase 1)
+
+| Item | Decision |
+|------|----------|
+| Scope | Minimal split (`policy.rs` only). Skip cosmetic `tree.rs` rename and `search.rs` consolidation per design plan §4. |
+| Commit shape | Single refactor commit (M1) + sprint-log commit. No 2-commit code/test split. |
+| Test helpers | Option (a): `setup_two_child_tree` + `setup_expanded_root` stay in `mod.rs::tests` as `pub(super)`; `policy.rs::tests` reaches back via `super::super::tests::{...}`. No shared `test_helpers.rs` (defer to future sprint). |
+| Bench cadence | Single `make bench` n=5 at pre-merge. No interim smoke (cold-path only). |
+| `mod.rs` rename | NO — declared cosmetic. |
+| Pre-existing per-leaf allocs | OUT OF SCOPE — file as separate audit candidate. |
+| Q40/Q45 subtree-reuse | Orthogonal — do not piggyback. |
+| Untouched files | `selection.rs`, `backup.rs`, `dirichlet.rs`, `node.rs`, `lib.rs`, `gumbel_search.rs` (verified by pure-move subagent). |
+
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| M1 `cf3f43d` | Extract 5 policy methods + 11 paired tests + `setup_improved_policy_tree` helper into `engine/src/mcts/policy.rs`; mark cross-cutting helpers `pub(super)`; add `pub mod policy;` declaration |
+
+### Methods moved (5)
+
+| Method | Pre-LOC (mod.rs) | Concern |
+|---|---|---|
+| `get_policy` | 48 | temperature-applied visit-count policy |
+| `get_improved_policy` | 136 | Gumbel completed-Q training target |
+| `get_root_children_info` | 12 | Gumbel candidate-list feeder |
+| `apply_dirichlet_to_root` | 38 | per-move root-prior noise (cfg-gated trace) |
+| `get_top_visits` | 26 | debug/viewer telemetry |
+
+### Tests moved (11)
+
+| Test | Subject |
+|---|---|
+| `test_get_policy_proportional_to_visits` | `get_policy` |
+| `test_get_policy_argmax_temperature_zero` | `get_policy` |
+| `test_policy_sums_to_one_after_search` | `get_policy` (via select+expand) |
+| `test_dirichlet_ignored_before_root_expanded` | `apply_dirichlet_to_root` |
+| `test_dirichlet_mixes_priors_correctly` | `apply_dirichlet_to_root` |
+| `test_dirichlet_trace_roundtrip` (cfg-gated) | `apply_dirichlet_to_root` debug trace |
+| `test_get_root_children_info_returns_correct_count` | `get_root_children_info` |
+| `test_improved_policy_sums_to_one` | `get_improved_policy` |
+| `test_improved_policy_no_visits_returns_prior` | `get_improved_policy` |
+| `test_improved_policy_q_ordering` | `get_improved_policy` |
+| `test_improved_policy_illegal_actions_stay_zero` | `get_improved_policy` |
+
+### LOC delta
+
+| File | Before | After | Δ |
+|------|--------|-------|---|
+| `engine/src/mcts/mod.rs` | 1493 | 974 | −519 |
+| `engine/src/mcts/policy.rs` | 0 | 533 | +533 |
+| Net | 1493 | 1507 | +14 (file header + imports + `mod tests` declaration overhead) |
+
+### Bench gate (n=5, 2026-05-06, laptop 4060 Max-Q)
+
+| Metric | Pre-§163 | Post-§163 | Δ% | Note |
+|--------|----------|-----------|---|------|
+| mcts_sim_per_s | 63,662 | 63,711 | +0.08% | ok |
+| nn_inference_pos_per_s | 4,881.8 | 4,877.7 | −0.08% | ok |
+| nn_latency_mean_ms | 2.694 | 2.772 | +2.88% | ok (under 5%) |
+| buffer_push_per_s | 700,859 | 742,022 | +5.87% | environmental |
+| buffer_sample_raw_us | 1,146.6 | 1,041.0 | −9.21% | environmental |
+| buffer_sample_aug_us | 1,469.0 | 1,050.8 | −28.47% | environmental |
+| gpu_util_pct | 100.0 | 100.0 | 0% | ok |
+| vram_used_gb | 0.105 | 0.105 | 0% | ok |
+| worker_pos_per_hr | 29,364 | 33,173 | +12.97% | environmental |
+| worker_batch_fill_pct | 99.86 | 98.38 | −1.48% | ok |
+| mcts_pool_overflows_total | 0 | 0 | — | clean |
+| all_targets_met | True | True | — | **PASS** |
+
+Largest regression: `nn_latency_mean_ms` +2.88% — well inside ±5% gate. Outsize improvements on buffer/worker metrics are environmental noise (file cache, system load between runs); §163 touches no per-sim, buffer, or inference hot-path code so there is no plausible mechanism for a real perf gain. Per §102 methodology, treat as variance.
+
+### Audit accuracy: PARTIALLY STALE
+
+`audit/rust_health.md` mcts/mod.rs row (dated 2026-05-06) proposed a 3-file split (`tree.rs` ~700 + `search.rs` ~500 + `policy.rs` ~200 = ~1400 LOC) with effort estimate M (1–2 days). Phase 1 audit verified:
+
+- 6 of 8 listed concerns (PUCT, virtual loss, tree descent, leaf expansion, backup, quiescence) were ALREADY EXTRACTED into `selection.rs` (179 LOC) + `backup.rs` (315 LOC).
+- 988 of 1493 LOC in mod.rs (66%) were `#[cfg(test)]` tests — production code was ~495 LOC.
+- Only `policy.rs` (~232 LOC + paired tests) was real work.
+
+Pattern matches §160 (2/4 audit claims stale), §160a (duplication illusory), §162 (stride-5 retire smaller than audited). All four audit rows dated 2026-05-06 — staleness is author over-grouping, not time decay. Treat L9 audit rows in `audit/SUMMARY.md` as low-fidelity index, not verdicts.
+
+Effort revised: **S (one session, ~3h)** vs audit's M.
+
+### PyO3 surface preservation
+
+Verified bit-exact:
+- `engine/src/lib.rs` UNTOUCHED (24 `#[pymethods]` on `PyMCTSTree` continue to delegate to `inner.<method>()`; method paths `crate::mcts::MCTSTree::*` unchanged because Rust permits multiple `impl` blocks across files for the same struct)
+- `pub use node::{Node, TTEntry, MAX_NODES, VIRTUAL_LOSS_PENALTY}` and `pub use backup::{pool_overflow_count, take_pool_overflow_count}` re-exports unchanged
+- `MCTSTree.pool: Vec<Node>` field stays `pub`; gumbel_search.rs `tree.pool[i]` reads continue working
+
+### Test counts
+
+- Pre-§163 (master): 141 lib tests, 991 py + 8 skipped
+- Post-§163 (refactor branch): 141 lib tests (delta = 0, pure move), 991 py + 8 skipped + 2 deselected (delta = 0)
+
+### Pure-move verification
+
+Read-only subagent audit (`/tmp/§163_pure_move_check.md`) confirmed:
+- 5 method bodies bit-identical to master HEAD (no signature/logic edits)
+- 11 tests bit-identical (incl. cfg-gated `test_dirichlet_trace_roundtrip`)
+- All 6 sibling files (`selection.rs`, `backup.rs`, `dirichlet.rs`, `node.rs`, `lib.rs`, `gumbel_search.rs`) `git diff` = 0 lines
+- No new `unsafe`, no `#[inline]` annotations, no field visibility changes
+
+Verdict: **PROCEED**.
+
+### Follow-ups (`/tmp/refactor_followups_§163.md`)
+
+| Item | Status | Trigger |
+|---|---|---|
+| Pre-existing per-leaf allocs (`selection.rs:140,150` + `backup.rs:280,286`) | DEFERRED | Future Phase 4.5+ alloc-tightening sprint; bench-gate mandatory |
+| Mandatory post-merge correctness audit | OPEN | Spawn separate read-only sweep prompt |
+| Test helper consolidation (option-b shared `test_helpers.rs`) | DEFERRED | When 3rd mcts/* sub-module needs same helpers |
+| Q40/Q45 subtree-reuse interaction | ORTHOGONAL | Lands separately if Q45 PASS |
+| `get_top_visits` zero unit-test coverage (pre-existing gap) | OPEN | Standalone test-coverage pass |
+
+### Precedent
+
+FF-merge to master, same as §158 → §162.
