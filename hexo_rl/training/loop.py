@@ -211,6 +211,37 @@ def run_training_loop(
     _shutdown = ShutdownState()
     install_signal_handlers(_shutdown)
 
+    # ── StepCoordinatorConfig (M2 plumbing — not yet wired) ───────────────────
+    from hexo_rl.training.step_coordinator import StepCoordinatorConfig
+    _step_cfg = StepCoordinatorConfig(
+        eval_interval=eval_interval,
+        log_interval=log_interval,
+        checkpoint_interval=_ckpt_interval,
+        composition_interval=composition_interval,
+        value_probe_interval=value_probe_interval,
+        min_buf_size=min_buf_size,
+        capacity=capacity,
+        buffer_schedule=tuple(buffer_schedule),
+        training_steps_per_game=training_steps_per_game,
+        max_train_burst=max_train_burst,
+        batch_size=int(train_cfg.get("batch_size", config.get("batch_size", 256))),
+        augment=augment_cfg,
+        recency_weight=recency_weight,
+        mixing_initial_w=mixing_initial_w,
+        mixing_min_w=mixing_min_w,
+        mixing_decay_steps=mixing_decay_steps,
+        soft_ew_threshold=_soft_ew_threshold,
+        soft_ew_min_pts=_soft_ew_min_pts,
+        hard_gn_threshold=_hard_gn_threshold,
+        hard_gn_min_steps=_hard_gn_min_steps,
+        instrumentation_enabled=instrumentation_enabled,
+        stop_step=stop_step,
+        final_eval_drain_timeout_sec=float(
+            train_cfg.get("eval_final_drain_timeout_sec",
+                          config.get("eval_final_drain_timeout_sec", 0.0))
+        ),
+    )
+
     # ── Loop setup ────────────────────────────────────────────────────────────
     log_interval = int(config.get("log_interval", 10))
     eval_interval = int(train_cfg.get("eval_interval", config.get("eval_interval", _eval_interval_cfg)))
