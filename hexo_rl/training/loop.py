@@ -40,11 +40,10 @@ log = structlog.get_logger(__name__)
 
 
 # Bootstrap candidates tried (in order) when no usable best_model.pt exists.
-# Sweep / fresh runs should anchor against the trained 18-channel bootstrap,
-# not against a random fresh-init copy of trainer.model. Mirrors
-# scripts/run_sweep.py:DEFAULT_ANCHOR_CANDIDATES so the two stay aligned.
+# Fresh runs anchor against the trained bootstrap, not a random fresh-init
+# copy of trainer.model.
 _BOOTSTRAP_ANCHOR_CANDIDATES: tuple[str, ...] = (
-    "checkpoints/bootstrap_v5.pt",
+    "checkpoints/bootstrap_model_v7full.pt",
     "checkpoints/bootstrap_model.pt",
 )
 
@@ -350,10 +349,10 @@ def run_training_loop(
     best_model_step: int | None = None
     if eval_pipeline is not None:
         best_model_path.parent.mkdir(parents=True, exist_ok=True)
-        # Resilient anchor load: tries best_model.pt → its .bak → repo-level
-        # bootstrap candidates (bootstrap_v5.pt, bootstrap_model.pt) → fresh
-        # init from trainer.model. A corrupt best_model.pt is quarantined
-        # with a timestamp suffix instead of being silently discarded.
+        # Resilient anchor load: tries best_model.pt → its .bak →
+        # _BOOTSTRAP_ANCHOR_CANDIDATES → fresh init from trainer.model.
+        # A corrupt best_model.pt is quarantined with a timestamp suffix
+        # instead of being silently discarded.
         best_ref = _load_best_model_resilient(
             best_model_path,
             checkpoint_dir=args.checkpoint_dir,
@@ -422,7 +421,7 @@ def run_training_loop(
                 "anchor_fresh_init_no_bootstrap",
                 tried=list(_BOOTSTRAP_ANCHOR_CANDIDATES),
                 msg="No anchor or bootstrap available — initialising best_model.pt from current trainer.model. "
-                    "Drop a bootstrap_v5.pt / bootstrap_model.pt into checkpoints/ to anchor wr_best meaningfully.",
+                    "Drop a bootstrap_model.pt (or one of _BOOTSTRAP_ANCHOR_CANDIDATES) into checkpoints/ to anchor wr_best meaningfully.",
             )
             base_model = getattr(trainer.model, "_orig_mod", trainer.model)
             best_model = HexTacToeNet(

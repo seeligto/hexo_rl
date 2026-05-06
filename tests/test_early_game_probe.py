@@ -123,12 +123,12 @@ def test_warn_threshold_is_between_healthy_and_broken() -> None:
     assert 3.5 < EARLY_GAME_ENTROPY_WARN_THRESHOLD < 5.5
 
 
-# ── Bootstrap-v4 smoke (skipped if the checkpoint isn't present) ───────────────
+# ── Bootstrap entropy smoke (skipped if the checkpoint isn't present) ─────────
 
 
 @pytest.mark.slow
-def test_bootstrap_v4_entropy_range() -> None:
-    """On a real bootstrap-v4 checkpoint the probe should read 2.5-4.5 nats."""
+def test_bootstrap_entropy_range() -> None:
+    """On the active bootstrap checkpoint the probe should read 2.5-4.5 nats."""
     ckpt_path = Path("checkpoints/bootstrap_model.pt")
     if not ckpt_path.exists():
         pytest.skip("bootstrap_model.pt not present")
@@ -152,7 +152,7 @@ def test_bootstrap_v4_entropy_range() -> None:
     metrics = probe.compute(net)
     mean_h = metrics["early_game_entropy_mean"]
     assert 2.5 < mean_h < 4.5, (
-        f"bootstrap-v4 probe entropy {mean_h:.3f} outside expected 2.5-4.5 nat band; "
+        f"bootstrap probe entropy {mean_h:.3f} outside expected 2.5-4.5 nat band; "
         f"per-ply: {metrics['early_game_entropy_by_ply']}"
     )
 
