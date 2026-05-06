@@ -300,6 +300,28 @@ def run_training_loop(
     def _games_per_hour_rolling() -> float:
         return _rolling_gph.update(time.time(), games_played)
 
+    # ── StepCoordinator (M3 — dead-code at runtime, closure still drives) ─────
+    from hexo_rl.training.step_coordinator import StepCoordinator
+    coordinator = StepCoordinator(
+        trainer=trainer,
+        buffer=buffer,
+        pretrained_buffer=pretrained_buffer,
+        recent_buffer=recent_buffer,
+        pool=pool,
+        eval_pipeline=eval_pipeline,
+        gpu_monitor=gpu_monitor,
+        subsystems=subsys,
+        anchor_state=_anchor,
+        shutdown=_shutdown,
+        eval_model=eval_model,
+        bufs=bufs,
+        early_game_probe=early_game_probe,
+        value_probe=value_probe,
+        axis_baseline=_axis_baseline,
+        tb_writer=_tb_writer,
+        config=_step_cfg,
+    )
+
     # ── Main iteration ─────────────────────────────────────────────────────────
     schedule_idx = 1  # first schedule entry already applied at buffer construction
 
