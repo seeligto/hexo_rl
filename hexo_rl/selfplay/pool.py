@@ -297,11 +297,8 @@ class WorkerPool:
         # Per-game model-version range archive — last 200 games. (min, max,
         # distinct, terminal_reason, winner_code).
         self._mv_range_history: deque[tuple[int, int, int, int, int]] = deque(maxlen=200)
-        # Phase B' Class-4: rolling stride5 / row-max archives — last 50 games.
-        # Bound chosen to match the diagnosis brief's "rolling last 50, P90
-        # alarm at row_max > 30".
+        # Phase B' Class-4: rolling stride-5 archive for passive P90 emit (§162).
         self._stride5_run_history: deque[int] = deque(maxlen=50)
-        self._row_max_history: deque[int] = deque(maxlen=50)
 
     @property
     def batch_fill_pct(self) -> float:
@@ -409,31 +406,6 @@ class WorkerPool:
             "max_range": int(max_range),
             "median_distinct": int(median_distinct),
             "spearman_rho_range_vs_draw": rho,
-        }
-
-    def stride5_summary(self) -> dict[str, float]:
-        """Phase B' Class-4 — stride-5 spam summary over the last 50 games.
-
-        Returns median / P90 / max for both ``stride5_run`` (longest stride-5
-        chain in the densest hex row) and ``row_max`` (densest hex row stone
-        count).  Empty until the first game completes.
-        """
-        with self._lock:
-            sruns = list(self._stride5_run_history)
-            rmax = list(self._row_max_history)
-        if not sruns:
-            return {"n": 0}
-        n = len(sruns)
-        sruns_sorted = sorted(sruns)
-        rmax_sorted = sorted(rmax)
-        return {
-            "n": n,
-            "stride5_run_median": int(sruns_sorted[n // 2]),
-            "stride5_run_p90":    int(sruns_sorted[max(0, int(n * 0.9) - 1)]),
-            "stride5_run_max":    int(sruns_sorted[-1]),
-            "row_max_median":     int(rmax_sorted[n // 2]),
-            "row_max_p90":        int(rmax_sorted[max(0, int(n * 0.9) - 1)]),
-            "row_max_max":        int(rmax_sorted[-1]),
         }
 
     def buffer_composition(self) -> dict[str, float]:
@@ -594,18 +566,15 @@ class WorkerPool:
                 else:
                     _ext_count, _ext_total, _ext_frac = 0, 0, 0.0
 
-                # Phase B' Class-4 stride-5 detector (§152). Always computed
-                # — pure Python over move_history, O(|stones|), << 1 ms per
-                # game. Existing macro detectors (colony_extension at >6,
-                # axis_distribution at distance-1) are blind to stride-5 by
-                # construction; this metric is the only live signal.
+                # Phase B' Class-4 — P90 retained as passive metric (§162 M1).
                 if move_history:
-                    _stride5_run, _row_max = _compute_stride5_metrics(move_history)
+                    _stride5_run, _ = _compute_stride5_metrics(move_history)
                 else:
-                    _stride5_run, _row_max = 0, 0
+                    _stride5_run = 0
                 with self._lock:
                     self._stride5_run_history.append(int(_stride5_run))
-                    self._row_max_history.append(int(_row_max))
+                    _sr_hist = sorted(self._stride5_run_history)
+                _stride5_p90 = _sr_hist[max(0, int(len(_sr_hist) * 0.9) - 1)] if _sr_hist else 0
 
                 # Phase B': map the Rust terminal_reason u8 to the dashboard
                 # string convention used by reports/phase_b/.
@@ -635,9 +604,8 @@ class WorkerPool:
                     "model_version_max":        int(mv_max),
                     "model_version_distinct":   int(mv_distinct),
                     "model_version_range_size": int(mv_max - mv_min),
-                    # Phase B' Class-4 (§152) — distance-5 row-spam metric.
-                    "stride5_run_max":   int(_stride5_run),
-                    "row_max_density":   int(_row_max),
+                    # Phase B' — stride-5 P90 retained as passive metric (§162).
+                    "stride5_run_p90":   int(_stride5_p90),
                 }
                 emit_event(game_complete_payload)
 

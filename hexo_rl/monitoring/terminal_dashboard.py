@@ -134,11 +134,8 @@ class TerminalDashboard:
             "cluster_policy_disagreement_mean": None,
             "_colony_ext_counts": [],
             "_colony_ext_totals": [],
-            # Phase B' Class-4 (§152) — stride-5 spam metric over last 50 games.
+            # Phase B' Class-4 — stride-5 P90 passive (pre-computed by pool, §162).
             "stride5_run_p90":  None,
-            "row_max_p90":      None,
-            "_stride5_run_history": collections.deque(maxlen=50),
-            "_row_max_history":     collections.deque(maxlen=50),
             # ── Phase B' instrumentation snapshot ──────────────────────────
             "value_probe_decisive_mean": None,
             "value_probe_draw_mean":     None,
@@ -257,17 +254,10 @@ class TerminalDashboard:
                 self._state["colony_extension_fraction"] = (
                     sum(cnt_list) / tt if tt > 0 else 0.0
                 )
-            # §152 Class-4 — rolling stride5 / row-max P90 over last 50 games.
-            sr = payload.get("stride5_run_max")
-            rm = payload.get("row_max_density")
-            if isinstance(sr, int) and isinstance(rm, int):
-                self._state["_stride5_run_history"].append(sr)
-                self._state["_row_max_history"].append(rm)
-                sr_hist = sorted(self._state["_stride5_run_history"])
-                rm_hist = sorted(self._state["_row_max_history"])
-                n = len(sr_hist)
-                self._state["stride5_run_p90"] = sr_hist[max(0, int(n * 0.9) - 1)]
-                self._state["row_max_p90"]     = rm_hist[max(0, int(n * 0.9) - 1)]
+            # §162: stride-5 P90 now pre-computed by pool, consumed passively.
+            sr_p90 = payload.get("stride5_run_p90")
+            if isinstance(sr_p90, int):
+                self._state["stride5_run_p90"] = sr_p90
             return
 
         if event == "eval_complete":
@@ -500,23 +490,10 @@ class TerminalDashboard:
             f"colony_ext={_cex_str}  │  cluster_v_std={_cvs_str}  │  cluster_pol_dis={_cpd_str}"
         )
 
-        # §152 Class-4 — stride-5 spam P90 over last 50 games. Alarm at
-        # row_max P90 > 30 (the diagnosis brief threshold).
+        # §162: stride-5 alarm retired; P90 displayed passively.
         _sr_p90 = s.get("stride5_run_p90")
-        _rm_p90 = s.get("row_max_p90")
         _sr_str = f"{_sr_p90}" if isinstance(_sr_p90, int) else _EM_DASH
-        if isinstance(_rm_p90, int):
-            _rm_str = (
-                f"[bold red]{_rm_p90} !![/bold red]" if _rm_p90 > 30
-                else f"[yellow]{_rm_p90}[/yellow]" if _rm_p90 > 20
-                else f"{_rm_p90}"
-            )
-        else:
-            _rm_str = _EM_DASH
-        tp_tbl.add_row(
-            f"stride5_run_p90={_sr_str}  │  row_max_p90={_rm_str}  "
-            f"[dim](alarm row_max > 30)[/dim]"
-        )
+        tp_tbl.add_row(f"stride5_run_p90={_sr_str}  [dim](passive)[/dim]")
 
         # Buffer row
         buf_tbl = Table(show_header=False, box=None, padding=(0, 2), expand=True)
