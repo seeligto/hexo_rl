@@ -8,7 +8,7 @@ Pins the three canonical cases named in the review (D-005):
 Reference values from `scipy.stats.binomtest(...).proportion_ci(method='wilson')`.
 """
 
-from hexo_rl.eval.eval_pipeline import _binomial_ci
+from hexo_rl.eval.gate_logic import _binomial_ci
 
 
 def test_wilson_ci_at_promotion_boundary_p055_n200() -> None:

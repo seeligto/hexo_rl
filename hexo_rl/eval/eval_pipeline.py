@@ -1,28 +1,24 @@
 """Phase 4.0 evaluation pipeline orchestrator.
 
-Plays evaluation games, stores pairwise results in SQLite, computes
-Bradley-Terry MLE ratings, prints a rich table, and generates a
-ratings-vs-step plot.
+Schedules and runs evaluation games, stores pairwise results in SQLite,
+computes Bradley-Terry MLE ratings via bradley_terry.py, prints a rich
+table via display.py, evaluates the promotion gate via gate_logic.py, and
+delegates ratings-vs-step plot generation to reporting.py.
 """
 
 from __future__ import annotations
 
 import logging
-import math
-import os
-import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
 
 from hexo_rl.eval.bradley_terry import compute_ratings
 from hexo_rl.eval.display import print_colony_win_breakdown, print_match_result, print_ratings_table
 from hexo_rl.eval.evaluator import Evaluator
+from hexo_rl.eval.gate_logic import GateConfig, _binomial_ci, evaluate_gate
+from hexo_rl.eval.reporting import plot_ratings_curve
 from hexo_rl.eval.results_db import ResultsDB
 from hexo_rl.model.network import HexTacToeNet
 
@@ -70,26 +66,6 @@ try:
 except ImportError:
     logging.basicConfig(level=logging.INFO)
     log = logging.getLogger("eval_pipeline")  # type: ignore[assignment]
-
-
-def _binomial_ci(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
-    """Wilson score interval for binomial proportion (95% CI at z=1.96).
-
-    Wald (normal-approximation) underestimates uncertainty near p=0.5 at
-    moderate n and collapses to zero width at p=0 and p=1 — both failure
-    modes for the §101.a `ci_lo > 0.5` promotion gate. Wilson is closed-form,
-    robust at the boundaries, and strictly inside [0, 1].
-    """
-    if n == 0:
-        return (0.0, 1.0)
-    p = wins / n
-    z2 = z * z
-    denom = 1.0 + z2 / n
-    center = (p + z2 / (2.0 * n)) / denom
-    spread = (z / denom) * math.sqrt(p * (1.0 - p) / n + z2 / (4.0 * n * n))
-    lo = 0.0 if wins == 0 else max(0.0, center - spread)
-    hi = 1.0 if wins == n else min(1.0, center + spread)
-    return (lo, hi)
 
 
 class EvalPipeline:
@@ -345,7 +321,8 @@ class EvalPipeline:
 
         # ── vs Best Checkpoint ────────────────────────────────────────
         wr_best = None
-        ci_best_lo: float | None = None
+        wins_best: int | None = None
+        n_best: int | None = None
         if (
             self.best_cfg.get("enabled", True)
             and best_model is not None
@@ -389,19 +366,19 @@ class EvalPipeline:
             results["colony_wins_best"] = er.colony_wins
             results["eval_games"] += n
             wr_best = er.win_rate
-            ci_best_lo = ci_lo
+            wins_best = er.win_count
+            n_best = n
 
         # ── Gating ────────────────────────────────────────────────────
-        # M1: require CI lower bound > 0.5 so lucky-variance runs (true p ≈ 0.5)
-        # don't trigger promotion. At n=200, threshold=0.55, naive p_hat >= 0.55
-        # has ~9% false-positive rate under null; ci_lo > 0.5 cuts that to <1%.
-        # Uses binomial 95% normal-approx (same as CI shown in table).
         threshold = float(self.gating_cfg.get("promotion_winrate", 0.55))
-        ci_guard = bool(self.gating_cfg.get("require_ci_above_half", True))
         floor_enabled = bool(self._bootstrap_floor_cfg.get("enabled", False))
         floor_threshold = float(self._bootstrap_floor_cfg.get("min_winrate", 0.45))
         if wr_best is not None and wr_best >= threshold:
-            ci_ok = (not ci_guard) or (ci_best_lo is not None and ci_best_lo > 0.5)
+            gate_cfg = GateConfig(
+                promotion_winrate=threshold,
+                require_ci_above_half=bool(self.gating_cfg.get("require_ci_above_half", True)),
+            )
+            outcome = evaluate_gate(wr_best, n_best, wins_best, gate_cfg)  # type: ignore[arg-type]
             # §155 T2 — bootstrap floor gate.  When enabled, promotion AND-
             # combines with `wr_bootstrap_anchor >= min_winrate`.  Missing
             # measurement (anchor opponent stride-skipped or checkpoint
@@ -414,24 +391,24 @@ class EvalPipeline:
                     wr_bootstrap_anchor is not None
                     and wr_bootstrap_anchor >= floor_threshold
                 )
-            if ci_ok and floor_ok:
+            if outcome.promoted and floor_ok:
                 results["promoted"] = True
                 log.info(
                     "checkpoint_promoted",
                     step=train_step,
                     wr_best=wr_best,
-                    ci_lo=ci_best_lo,
+                    ci_lo=outcome.ci_lo,
                     threshold=threshold,
                     wr_bootstrap_anchor=wr_bootstrap_anchor,
                     floor_enabled=floor_enabled,
                     floor_threshold=floor_threshold if floor_enabled else None,
                 )
-            elif not ci_ok:
+            elif not outcome.ci_ok:
                 log.info(
                     "promotion_blocked_ci",
                     step=train_step,
                     wr_best=wr_best,
-                    ci_lo=ci_best_lo,
+                    ci_lo=outcome.ci_lo,
                     threshold=threshold,
                 )
             else:
@@ -481,7 +458,10 @@ class EvalPipeline:
             print_colony_win_breakdown(colony_stats, player_names)
 
             # Plot
-            self._plot_ratings_curve()
+            plot_ratings_curve(
+                self.db.get_ratings_history(run_id=self.run_id),
+                self.ratings_plot_path,
+            )
 
         log.info("evaluation_round_complete", **{
             k: v for k, v in results.items()
@@ -490,40 +470,3 @@ class EvalPipeline:
 
         return results
 
-    def _plot_ratings_curve(self) -> None:
-        """Generate ratings-vs-step plot, written atomically."""
-        history = self.db.get_ratings_history(run_id=self.run_id)
-        if not history:
-            return
-
-        # Group by player
-        by_player: dict[str, dict[str, list]] = {}
-        for entry in history:
-            name = entry["player_name"]
-            if name not in by_player:
-                by_player[name] = {"steps": [], "ratings": [], "type": entry["player_type"]}
-            by_player[name]["steps"].append(entry["eval_step"])
-            by_player[name]["ratings"].append(entry["rating"])
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        for name, data in sorted(by_player.items()):
-            style = "-o" if data["type"] == "checkpoint" else "--"
-            ms = 3 if data["type"] == "checkpoint" else 0
-            ax.plot(data["steps"], data["ratings"], style, label=name, markersize=ms)
-
-        ax.set_xlabel("Training Step")
-        ax.set_ylabel("Bradley-Terry Rating")
-        ax.set_title("Evaluation Ratings Over Training")
-        ax.legend(loc="best", fontsize="small")
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
-
-        # Atomic write
-        fd, tmp_path = tempfile.mkstemp(
-            suffix=".png", dir=self.ratings_plot_path.parent,
-        )
-        os.close(fd)
-        fig.savefig(tmp_path, dpi=100)
-        plt.close(fig)
-        os.replace(tmp_path, self.ratings_plot_path)

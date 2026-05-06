@@ -11,7 +11,8 @@ from hexo_rl.eval.colony_detection import (
     _connected_components,
     is_colony_win,
 )
-from hexo_rl.eval.eval_pipeline import EvalPipeline, _binomial_ci
+from hexo_rl.eval.eval_pipeline import EvalPipeline
+from hexo_rl.eval.gate_logic import _binomial_ci
 from hexo_rl.eval.evaluator import EvalResult
 from hexo_rl.eval.results_db import ResultsDB
 
