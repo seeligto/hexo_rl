@@ -24,15 +24,18 @@ import structlog
 import torch
 
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.monitoring.early_game_probe import (
-    EARLY_GAME_ENTROPY_WARN_THRESHOLD,
-    EarlyGameProbe,
-)
-from hexo_rl.monitoring.value_probe import ValueProbe
-from hexo_rl.monitoring.events import emit_event, register_renderer
-from hexo_rl.monitoring.gpu_monitor import GPUMonitor
+from hexo_rl.monitoring.events import emit_event
 from hexo_rl.training.anchor import resolve_anchor
 from hexo_rl.training.batch_assembly import BatchBuffers, assemble_mixed_batch
+from hexo_rl.training.lifecycle import (
+    InfModelArch,
+    LoopSubsystems,
+    build_eval_model,
+    build_inference_model,
+    build_subsystems,
+    cuda_stream_audit,
+    cuda_warmup,
+)
 # Orchestrator hooks — public in `hexo_rl.training.orchestrator`, aliased here so
 # the existing call sites in `run_training_loop` keep their underscore-prefixed
 # local names. Tests reach `_drain_pending_eval` from this module today; the
@@ -106,79 +109,18 @@ def run_training_loop(
         mixing_decay_steps:  Exponential decay constant for corpus weight.
     """
 
-    # ── Inference model — separate instance owned by InferenceServer ──────────
-    board_size         = int(trainer.config.get("board_size",         19))
-    res_blocks         = int(trainer.config.get("res_blocks",         12))
-    filters            = int(trainer.config.get("filters",            128))
-    in_channels        = int(trainer.config.get("in_channels",        18))
-    se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
-    input_channels     = trainer.config.get("input_channels", None)
-
-    _torch_compile_enabled = (
-        trainer.config.get("torch_compile", False) and device.type == "cuda"
-    )
-    inf_model = HexTacToeNet(
-        board_size=board_size,
-        in_channels=in_channels,
-        input_channels=input_channels,
-        res_blocks=res_blocks,
-        filters=filters,
-        se_reduction_ratio=se_reduction_ratio,
-    ).to(device)
-    _train_base = getattr(trainer.model, "_orig_mod", trainer.model)
-    inf_model.load_state_dict(_train_base.state_dict())
-    inf_model.eval()
-    if _torch_compile_enabled:
-        # inf_model runs in InferenceServer background thread. reduce-overhead's
-        # cudagraph_trees uses C++ dynamic TLS (per-thread); cross-thread entry
-        # asserts or deadlocks (configs/training.yaml:16 deadlock @ step 6002,
-        # bench fix c26b9b4). Force mode=default here — kernel fusion only,
-        # thread-safe. trainer.model keeps config-driven mode (main-thread only).
-        _compile_mode = "default"
-        try:
-            inf_model = torch.compile(inf_model, mode=_compile_mode, fullgraph=False)
-            log.info("torch_compile_inf_enabled", mode=_compile_mode)
-        except Exception as exc:
-            log.warning("torch_compile_inf_failed", mode=_compile_mode, error=str(exc))
-
+    # ── Inference model + arch ────────────────────────────────────────────────
+    inf_model, _arch = build_inference_model(trainer, device, config)
+    board_size = _arch.board_size
+    res_blocks = _arch.res_blocks
+    filters = _arch.filters
+    in_channels = _arch.in_channels
+    se_reduction_ratio = _arch.se_reduction_ratio
+    input_channels = _arch.input_channels
     _ckpt_interval = int(trainer.config.get("checkpoint_interval", 500))
 
-    # ── CUDA warm-up ─────────────────────────────────────────────────────────
-    # Force CUDA kernel compilation now (before workers start) so the first
-    # inference call from a worker returns immediately instead of blocking for
-    # 90-120s while PyTorch JIT-compiles kernels. Without this, the warmup
-    # phase shows "games=0" for ~2 minutes on a cold start, which looks broken.
-    if device.type == "cuda":
-        log.info("cuda_warmup_start")
-        _t_warmup = time.time()
-        with torch.no_grad():
-            with torch.autocast(device_type="cuda"):
-                # Warmup input must be wire-format width (18 planes) — model
-                # slices to in_channels internally via index_select.
-                from hexo_rl.model.network import WIRE_CHANNELS as _WIRE_CH
-                _dummy = torch.zeros(1, _WIRE_CH, board_size, board_size, device=device)
-                inf_model(_dummy)
-        torch.cuda.synchronize()
-        log.info("cuda_warmup_done", elapsed_sec=round(time.time() - _t_warmup, 1))
-
-    # ── CUDA stream audit (B4 perf probe) ─────────────────────────────────────
-    # Logged from the main (training) thread context. InferenceServer logs its
-    # own stream in run(). If both are on the same default stream pointer, no
-    # copy/compute overlap is possible — the Q18 hypothesis.
-    _diag = config.get("diagnostics") if isinstance(config.get("diagnostics"), dict) else {}
-    if bool(_diag.get("perf_timing", False)) and device.type == "cuda":
-        try:
-            _cur = torch.cuda.current_stream(device)
-            _def = torch.cuda.default_stream(device)
-            log.info(
-                "cuda_stream_audit",
-                context="training_thread",
-                current_stream_ptr=int(_cur.cuda_stream),
-                default_stream_ptr=int(_def.cuda_stream),
-                on_default_stream=_cur.cuda_stream == _def.cuda_stream,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("cuda_stream_audit_failed", context="training_thread", error=str(exc))
+    cuda_warmup(inf_model, device, board_size)
+    cuda_stream_audit(config, device)
 
     # ── Worker pool ───────────────────────────────────────────────────────────
     from hexo_rl.selfplay.pool import WorkerPool
@@ -225,111 +167,20 @@ def run_training_loop(
     # passed the gate, not whatever trainer.model has drifted to since.
     eval_model: HexTacToeNet | None = None
     if eval_pipeline is not None:
-        eval_model = HexTacToeNet(
-            board_size=board_size, res_blocks=res_blocks, filters=filters,
-            in_channels=in_channels, input_channels=input_channels,
-            se_reduction_ratio=se_reduction_ratio,
-        ).to(device)
-        eval_model.eval()
+        eval_model = build_eval_model(_arch, device)
 
-    # ── GPU monitor ───────────────────────────────────────────────────────────
-    gpu_monitor = GPUMonitor(interval_sec=5)
-    gpu_monitor.start()
-
-    # ── Disk guard ────────────────────────────────────────────────────────────
-    from hexo_rl.monitoring.disk_guard import DiskGuard
-    _dg_cfg = config.get("disk_guard", {})
-    disk_guard = DiskGuard(
-        watch_path=args.checkpoint_dir,
-        interval_sec=float(_dg_cfg.get("interval_sec", 60.0)),
-        warn_gb=float(_dg_cfg.get("warn_gb", 10.0)),
-        fail_gb=float(_dg_cfg.get("fail_gb", 5.0)),
-        keep_all=bool(_dg_cfg.get("keep_all", False)),
-    )
-    disk_guard.start()
-
-    # ── Early-game policy-entropy probe (§115 monitoring signal) ──────────────
-    # Fixed 10-position fixture. One forward pass per log_interval — rides on
-    # the existing _emit_training_events cadence so probe cost is amortised.
-    early_game_probe: Optional[EarlyGameProbe]
-    try:
-        early_game_probe = EarlyGameProbe(device=device)
-        log.info(
-            "early_game_probe_init",
-            n_positions=early_game_probe.n_positions,
-            plies=early_game_probe.plies,
-        )
-    except Exception as _egp_err:
-        log.warning("early_game_probe_unavailable", error=str(_egp_err))
-        early_game_probe = None
-
-    # ── Phase B' Class-2 value-head drift probe ────────────────────────────────
-    # Loaded only when instrumentation is on; absent fixture → silent skip.
-    instr_cfg_main = config.get("instrumentation", {}) or {}
-    instrumentation_enabled = bool(instr_cfg_main.get("enabled", False))
-    value_probe_interval = int(instr_cfg_main.get("value_probe_interval", 250))
-    composition_interval = int(instr_cfg_main.get("composition_interval", 500))
-    value_probe: Optional[ValueProbe] = None
-    if instrumentation_enabled:
-        fixture_path = Path(instr_cfg_main.get(
-            "value_probe_fixture", "fixtures/value_probe_50.npz",
-        ))
-        try:
-            value_probe = ValueProbe(fixture_path=fixture_path, device=device)
-            log.info(
-                "value_probe_loaded",
-                path=str(fixture_path),
-                n=value_probe.n_positions,
-                n_decisive=value_probe.n_decisive,
-                n_draw=value_probe.n_draw,
-                interval=value_probe_interval,
-            )
-        except Exception as exc:
-            log.warning(
-                "value_probe_load_failed",
-                path=str(fixture_path),
-                error=str(exc),
-            )
-            value_probe = None
-
-    # ── Axis-distribution baseline (§axis_dist) ───────────────────────────────
-    import json as _json
-    from pathlib import Path as _Path
-    _axis_baseline: dict[str, float] = {}
-    _axis_baseline_path = _Path("reports/baselines/corpus_axis_distribution.json")
-    if _axis_baseline_path.exists():
-        try:
-            _axis_baseline = _json.loads(_axis_baseline_path.read_text())
-            log.info("axis_distribution_baseline_loaded", path=str(_axis_baseline_path), baseline=_axis_baseline)
-        except Exception as _ab_err:
-            log.warning("axis_distribution_baseline_load_failed", error=str(_ab_err))
-
-    # ── TensorBoard writer (axis-distribution metrics) ────────────────────────
-    from hexo_rl.monitoring.metrics_writer import MetricsWriter as _MetricsWriter
-    _tb_writer: Optional[_MetricsWriter] = None
-    try:
-        _tb_log_dir = str(_Path(getattr(args, "log_dir", "logs") or "logs") / "tb" / run_id)
-        _tb_writer = _MetricsWriter(_tb_log_dir)
-        log.info("tensorboard_writer_init", log_dir=_tb_log_dir)
-    except Exception as _tb_err:
-        log.warning("tensorboard_writer_unavailable", error=str(_tb_err))
-
-    # ── Dashboard renderers ───────────────────────────────────────────────────
-    dashboards: list = []
-    mon_cfg = config.get("monitoring", {})
-    if mon_cfg.get("enabled", True) and not args.no_dashboard:
-        if mon_cfg.get("terminal_dashboard", True):
-            from hexo_rl.monitoring.terminal_dashboard import TerminalDashboard
-            td = TerminalDashboard(config)
-            td.start()
-            register_renderer(td)
-            dashboards.append(td)
-        if mon_cfg.get("web_dashboard", True):
-            from hexo_rl.monitoring.web_dashboard import WebDashboard
-            wd = WebDashboard(config)
-            wd.start()
-            register_renderer(wd)
-            dashboards.append(wd)
+    # ── Subsystems ───────────────────────────────────────────────────────────
+    subsys = build_subsystems(args, config, device, run_id)
+    gpu_monitor = subsys.gpu_monitor
+    disk_guard = subsys.disk_guard
+    early_game_probe = subsys.early_game_probe
+    value_probe = subsys.value_probe
+    value_probe_interval = subsys.value_probe_interval
+    composition_interval = subsys.composition_interval
+    instrumentation_enabled = subsys.instrumentation_enabled
+    _axis_baseline = subsys.axis_baseline
+    _tb_writer = subsys.tb_writer
+    dashboards = subsys.dashboards
 
     # ── Graceful shutdown ──────────────────────────────────────────────────────
     _shutdown = ShutdownState()
@@ -800,14 +651,7 @@ def run_training_loop(
             log.warning("final_eval_drain_failed", exc_info=True)
         emit_event({"event": "run_end", "step": train_step})
         pool.stop()
-        gpu_monitor.stop()
-        gpu_monitor.join(timeout=2.0)
-        disk_guard.stop()
-        for d in dashboards:
-            try:
-                d.stop()
-            except Exception:
-                pass
+        subsys.teardown()
 
     # ── Final checkpoint + buffer save ────────────────────────────────────────
     final_ckpt = trainer.save_checkpoint(last_loss_info if last_loss_info else None)
