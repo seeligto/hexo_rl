@@ -38,9 +38,8 @@ eliminated — all 5 runs unimodal. Target 20k floor confirmed.
 range [29.1k–36.3k]. +19% vs desktop; driven by 8-plane smaller tensor +
 RTX 4060 Max-Q Ada Lovelace (sm_89). Old estimate ~25k was wrong.
 
-Latest baseline **2026-04-30** (compile OFF, trace ON, 8-plane v6, Q44).
-Run: `reports/benchmarks/2026-04-30_12-48.json`. 9/10 targets PASS;
-batch_fill 78.6% < 84% = dispatch-GIL bound (Q35, Phase 4.5 item).
+Latest baseline **2026-05-06** (§156 batch_fill fix, compile OFF, trace ON, 8-plane v6, Q44).
+**10/10 targets PASS.** Report: `reports/benchmarks/2026-05-06_14-19.json`.
 
 | Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
