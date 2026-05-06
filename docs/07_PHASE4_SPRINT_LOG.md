@@ -7660,3 +7660,62 @@ only per design constraint (closure→class hard cut needed coherent author
 context); subagents bracketed M4 as READ-ONLY auditors instead (R18 audit
 pre-M4, diff review pre-commit, coverage check post-M4). All three audit
 verdicts surfaced no blocking issues.
+## §160 — refactor eval/eval_pipeline.py split
+
+**Branch:** refactor/eval-pipeline  
+**Commits:** 2 refactor + 1 sprint log  
+**Date:** 2026-05-06  
+
+### Commits
+
+- M1: `refactor(eval): extract gate_logic.py + GateConfig + tests (§160 M1)`
+- M2: `refactor(eval): extract reporting.py + smoke tests (§160 M2)`
+- (M3 trim/docstring folded into M1 during branch reset cycle for ci_confidence wiring)
+
+### LOC delta
+
+| File | Before | After | Delta |
+|---|---|---|---|
+| `hexo_rl/eval/eval_pipeline.py` | 529 | 472 | −57 |
+| `hexo_rl/eval/gate_logic.py` | 0 | 88 | +88 |
+| `hexo_rl/eval/reporting.py` | 0 | 51 | +51 |
+| Total across split | 529 | 611 | +82 |
+
+Delegation adds ~82 LOC of boilerplate (+16%). That is the expected cost: eval_pipeline.py loses orchestration complexity, two new modules gain clear single-purpose interfaces. The audit's "auditor" claim of net shrinkage was based on BT + SQLite still needing extraction — 2 of 4 audit claims were stale (those were already extracted pre-§160).
+
+### Test count delta
+
+- Baseline: 973 passed, 8 skipped
+- Post-§160: 986 passed, 8 skipped
+- Delta: +13 (11 gate + 2 reporting)
+
+### Audit verdict: 2 of 4 claims stale
+
+| Alleged entanglement | Actual status |
+|---|---|
+| Bradley-Terry MLE | Already extracted to `bradley_terry.py` pre-§160 |
+| SQLite persistence | Already extracted to `results_db.py` pre-§160 |
+| Gate logic | Extracted → `gate_logic.py` ✓ |
+| Reporting (plot) | Extracted → `reporting.py` ✓ |
+
+### Graduation gate semantics
+
+Preserved. `evaluate_gate(wr, n, wins, GateConfig())` ≡ original inline logic for all 3 test inputs (semantics-check subagent verdict: PROCEED):
+- wr=0.6, n=200, wins=120 → promoted=True, ci_lo=0.5308...
+- wr=0.55, n=200, wins=110 → promoted=False, ci_lo=0.4808...
+- wr=0.54, n=200, wins=108 → promoted=False, ci_lo=0.4708...
+
+Bootstrap floor (§155 T2) remains in eval_pipeline.py orchestrator.
+
+### GateConfig.ci_confidence — fully wired
+
+`ci_confidence: float = 0.95` wired end-to-end: `_binomial_ci` now accepts `confidence=0.95` and derives z via `scipy.stats.norm.ppf(0.5 + confidence/2)`. Replaces hardcoded z=1.96. `evaluate_gate` passes `config.ci_confidence` through. Existing pinned tests (1e-5 tolerance) remain green — norm.ppf(0.975) ≈ 1.9599... deviates from 1.96 by < 7.4e-6.
+
+### Follow-ups
+
+See /tmp/refactor_followups_§160.md:
+- `_load_anchor_model` prefix-stripping duplication with `anchor.py::_try_load_anchor` — post-§160, separate wave, decide owner location
+
+### Precedent
+
+FF-merge to master, same as §158, §158a, §159, §159a.
