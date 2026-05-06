@@ -106,3 +106,9 @@ checkpoints_smokes/
 .github/pr_body_*.md
 /SSH_COMMANDS_*.md
 /scripts/profile_epyc_pyspy.sh
+
+# §158 cleanup — working artifacts never committed
+audit/
+docs/notes/remote_reports/
+*.jsonl
+reports/phase_b_prime/instrumented/checkpoints/
