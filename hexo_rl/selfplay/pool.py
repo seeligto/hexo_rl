@@ -22,14 +22,8 @@ from hexo_rl.utils.constants import BUFFER_CHANNELS
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
 from hexo_rl.selfplay.inference_server import InferenceServer
-from hexo_rl.utils.coordinates import axial_distance
+from hexo_rl.selfplay.instrumentation import PoolInstrumentation
 from engine import ReplayBuffer
-
-# I1 colony-extension detector (§107).  Hex distance threshold above which a
-# stone is counted as "colony extension" — disjoint cluster spam behaviour
-# flagged as the primary residual mechanism for pre-W1 fast-game draw collapse
-# (W1 forensics R1, 2026-04-19).
-_COLONY_EXT_HEX_DIST = 6
 
 # Phase B' Class-4 stride-5 detector (§152).  Targets the q-axis stride-5
 # spam pattern (mixed-color stones at distance-5 spacing along a single hex
@@ -95,36 +89,6 @@ def _compute_stride5_metrics(
                     stride5_max = length
     return (stride5_max, row_max)
 
-
-def _compute_colony_extension(move_history: list[tuple[int, int]]) -> tuple[int, int]:
-    """Return (colony_extension_count, classified_total) for a finished game.
-
-    A stone counts as "colony extension" if its minimum hex distance to ANY
-    opponent stone at game end is > ``_COLONY_EXT_HEX_DIST``.  Stones of a
-    player with no opponent stones on the board (only possible with a one-move
-    game) are excluded from both numerator and denominator.
-
-    Ply→player rule: ply 0 is P1; thereafter each player places 2 stones before
-    the turn passes (``compound_idx = (ply - 1) // 2``; P2 when even, else P1).
-    Per-game cost: O(|stones|^2); budget <1ms at typical game length.
-    """
-    if not move_history:
-        return (0, 0)
-    p1: list[tuple[int, int]] = []
-    p2: list[tuple[int, int]] = []
-    for ply, (q, r) in enumerate(move_history):
-        own_is_p1 = (ply == 0) or (((ply - 1) // 2) % 2 == 1)
-        (p1 if own_is_p1 else p2).append((q, r))
-    ext = 0
-    total = 0
-    for own, opp in ((p1, p2), (p2, p1)):
-        if not opp:
-            continue
-        for s in own:
-            total += 1
-            if min(axial_distance(s, o) for o in opp) > _COLONY_EXT_HEX_DIST:
-                ext += 1
-    return (ext, total)
 
 log = structlog.get_logger()
 
@@ -272,33 +236,11 @@ class WorkerPool:
             config.get("log_investigation_metrics", True),
         ))
 
-        # Rolling window of the last N completed game move histories for
-        # axis-distribution monitoring (§axis_dist).  Guarded by _lock.
-        self._recent_move_histories: deque[list[tuple[int, int]]] = deque(maxlen=100)
-
-        # ── Phase B' instrumentation (default off) ──────────────────────────
-        # When `instrumentation.enabled=true`, the stats loop tracks per-worker
-        # draw_rate over the last 50 games, terminal-reason counts, and
-        # model-version range stats. Used to discriminate Class 1 (stale
-        # dispatch) / Class 2 (value-head feedback) / Class 3 (buffer
-        # composition) before touching production knobs.
         instr_cfg = config.get("instrumentation", {}) or {}
         self._instrumentation_enabled = bool(instr_cfg.get("enabled", False))
-        # Sample-rate guard: skip per-game joint logs when ratio < 1.0
-        # to keep instrumentation overhead under 5% of throughput at
-        # n_workers=18. Default 1.0 = log every game.
-        self._instr_log_ratio = float(instr_cfg.get("log_ratio", 1.0))
-        # Per-worker rolling last-50-game outcomes (1 = draw, 0 = decisive).
-        # Default to 4 lanes; auto-grows if worker_id ≥ len().
-        self._per_worker_draws: dict[int, deque[int]] = {}
-        # Cumulative terminal-reason counts (Phase B' Class-3 buffer
-        # composition, reason axis). 0=six 1=colony 2=cap 3=other_draw.
-        self._terminal_reason_counts: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
-        # Per-game model-version range archive — last 200 games. (min, max,
-        # distinct, terminal_reason, winner_code).
-        self._mv_range_history: deque[tuple[int, int, int, int, int]] = deque(maxlen=200)
-        # Phase B' Class-4: rolling stride-5 archive for passive P90 emit (§162).
-        self._stride5_run_history: deque[int] = deque(maxlen=50)
+        self._instrumentation = PoolInstrumentation(
+            log_investigation_metrics=self._log_investigation_metrics,
+        )
 
     @property
     def batch_fill_pct(self) -> float:
@@ -333,80 +275,23 @@ class WorkerPool:
     @property
     def recent_move_histories(self) -> list[list[tuple[int, int]]]:
         """Snapshot of the last ≤100 self-play game move histories (thread-safe copy)."""
-        with self._lock:
-            return list(self._recent_move_histories)
+        return self._instrumentation.recent_move_histories(self._lock)
 
     @property
     def instrumentation_enabled(self) -> bool:
         return self._instrumentation_enabled
 
     def per_worker_draw_rates(self) -> dict[int, float]:
-        """Phase B' Class-1: rolling last-50-game draw rate per worker.
-
-        Returned snapshot is a fresh dict; safe to read without holding the
-        pool lock further. Empty workers (no completed games yet) are
-        excluded so the dashboard can show 'pending'.
-        """
-        with self._lock:
-            out: dict[int, float] = {}
-            for wid, dq in self._per_worker_draws.items():
-                if len(dq) > 0:
-                    out[wid] = sum(dq) / len(dq)
-            return out
+        """Phase B' Class-1: rolling last-50-game draw rate per worker."""
+        return self._instrumentation.per_worker_draw_rates(self._lock)
 
     def terminal_reason_counts(self) -> dict[str, int]:
-        """Phase B' Class-3: cumulative terminal-reason counts since pool start.
-
-        Keys: ``six_in_a_row``, ``colony``, ``ply_cap``, ``other_draw``.
-        """
-        with self._lock:
-            return {
-                "six_in_a_row": self._terminal_reason_counts.get(0, 0),
-                "colony":       self._terminal_reason_counts.get(1, 0),
-                "ply_cap":      self._terminal_reason_counts.get(2, 0),
-                "other_draw":   self._terminal_reason_counts.get(3, 0),
-            }
+        """Phase B' Class-3: cumulative terminal-reason counts since pool start."""
+        return self._instrumentation.terminal_reason_counts(self._lock)
 
     def model_version_summary(self) -> dict[str, float]:
-        """Phase B' Class-1: distribution stats over per-game version ranges.
-
-        Returns median / P90 / max of (mv_max - mv_min) across the last 200
-        games, plus the per-game distinct-version median. ``correlation_p``
-        is the Spearman ρ between range_size and is_draw on the same window
-        (when n ≥ 10), used by the diagnosis report.
-        """
-        with self._lock:
-            hist = list(self._mv_range_history)
-        if not hist:
-            return {"n": 0}
-        ranges = [b - a for (a, b, _, _, _) in hist]
-        distincts = [d for (_, _, d, _, _) in hist]
-        is_draw  = [1 if wc == 0 else 0 for (_, _, _, _, wc) in hist]
-        n = len(ranges)
-        ranges_sorted = sorted(ranges)
-        distincts_sorted = sorted(distincts)
-        median_range = ranges_sorted[n // 2]
-        p90_range = ranges_sorted[max(0, int(n * 0.9) - 1)]
-        max_range = ranges_sorted[-1]
-        median_distinct = distincts_sorted[n // 2]
-        rho = None
-        if n >= 10:
-            try:
-                # Spearman ρ via rankdata; fall back to None if scipy missing.
-                from scipy.stats import spearmanr
-                rho_val, p_val = spearmanr(ranges, is_draw)
-                rho = float(rho_val) if rho_val == rho_val else None  # NaN guard
-                _ = p_val
-            except Exception:
-                rho = None
-        return {
-            "n": n,
-            "median_range": int(median_range),
-            "p90_range": int(p90_range),
-            "max_range": int(max_range),
-            "median_distinct": int(median_distinct),
-            "spearman_rho_range_vs_draw": rho,
-        }
+        """Phase B' Class-1: distribution stats over per-game version ranges."""
+        return self._instrumentation.model_version_summary(self._lock)
 
     def buffer_composition(self) -> dict[str, float]:
         """Phase B' Class-3 — composition snapshot of the live replay buffer.
@@ -533,48 +418,25 @@ class WorkerPool:
                 game_length = (plies + 1) // 2  # compound moves
                 self._game_lengths.append(game_length)
                 self._avg_game_length = sum(self._game_lengths) / len(self._game_lengths)
+                # stride-5 per-game detection (pure function; pool computes,
+                # instrumentation owns the rolling window and P90).
                 if move_history:
-                    with self._lock:
-                        self._recent_move_histories.append(list(move_history))
+                    _stride5_run, _ = _compute_stride5_metrics(move_history)
+                else:
+                    _stride5_run = 0
 
-                # Phase B' Class-1/3 telemetry. Always update counters (cheap);
-                # event emission is gated on `instrumentation.enabled`.
-                with self._lock:
-                    self._terminal_reason_counts[int(terminal_reason)] = (
-                        self._terminal_reason_counts.get(int(terminal_reason), 0) + 1
+                _ext_count, _ext_total, _ext_frac, _stride5_p90 = (
+                    self._instrumentation.on_game_complete(
+                        self._lock, winner_code, move_history, worker_id,
+                        terminal_reason, mv_min, mv_max, mv_distinct, _stride5_run,
                     )
-                    is_draw_outcome = 1 if winner_code == 0 else 0
-                    dq = self._per_worker_draws.setdefault(int(worker_id), deque(maxlen=50))
-                    dq.append(is_draw_outcome)
-                    self._mv_range_history.append(
-                        (int(mv_min), int(mv_max), int(mv_distinct),
-                         int(terminal_reason), int(winner_code))
-                    )
+                )
 
                 # Map winner_code to spec: 0=P0, 1=P1, -1=draw
                 winner_int = {0: -1, 1: 0, 2: 1}.get(winner_code, -1)
 
                 # Format moves as axial coordinate strings
                 moves_list = [f"({q},{r})" for q, r in move_history] if move_history else []
-
-                # I1 colony-extension detector (§107) — pure Python, reads
-                # move_history already in the drain tuple. Guarded by config so
-                # bench runs stay quiet.
-                if self._log_investigation_metrics and move_history:
-                    _ext_count, _ext_total = _compute_colony_extension(move_history)
-                    _ext_frac = float(_ext_count / _ext_total) if _ext_total > 0 else 0.0
-                else:
-                    _ext_count, _ext_total, _ext_frac = 0, 0, 0.0
-
-                # Phase B' Class-4 — P90 retained as passive metric (§162 M1).
-                if move_history:
-                    _stride5_run, _ = _compute_stride5_metrics(move_history)
-                else:
-                    _stride5_run = 0
-                with self._lock:
-                    self._stride5_run_history.append(int(_stride5_run))
-                    _sr_hist = sorted(self._stride5_run_history)
-                _stride5_p90 = _sr_hist[max(0, int(len(_sr_hist) * 0.9) - 1)] if _sr_hist else 0
 
                 # Phase B': map the Rust terminal_reason u8 to the dashboard
                 # string convention used by reports/phase_b/.

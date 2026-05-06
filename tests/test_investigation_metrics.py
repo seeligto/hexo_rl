@@ -14,7 +14,7 @@ import math
 
 import pytest
 
-from hexo_rl.selfplay.pool import _compute_colony_extension
+from hexo_rl.selfplay.instrumentation import _compute_colony_extension
 
 
 # ── I1 — colony-extension detector ─────────────────────────────────────────
