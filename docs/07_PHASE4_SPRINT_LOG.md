@@ -10,7 +10,7 @@ For per-day narrative see `docs/07_PHASE4_SPRINT_LOG_BACKUP.md`.
 
 | Bucket | Sections |
 |---|---|
-| KEEP-FULL | §1, §2, §4, §5, §15, §19, §21, §26, §27, §28, §33, §34, §35, §36, §37, §40, §46b, §47, §58, §59, §61, §63, §66, §67, §69, §70, §71, §73, §74, §77, §80, §84, §85, §86, §88, §89, §90, §91, §95, §97, §98, §99, §100, §101 |
+| KEEP-FULL | §1, §2, §4, §5, §15, §19, §21, §26, §27, §28, §33, §34, §35, §36, §37, §40, §46b, §47, §58, §59, §61, §63, §66, §67, §69, §70, §71, §73, §74, §77, §80, §84, §85, §86, §88, §89, §90, §91, §95, §97, §98, §99, §100, §101, §158 |
 | KEEP-CONDENSED | §6, §11, §13, §14, §16, §17, §20, §22, §23, §24, §29, §30(game-cap/T_max), §31, §38, §41–§46, §48, §50–§57, §68, §72, §75, §76, §78, §79, §81, §82, §83, §87, §92, §93, §94, §96 |
 | MERGE | §3+§25+§30(torch)+§32→torch.compile arc; §30(quiescence-gate)→§28; §52+§60→eval_interval; §61+§62→Gumbel; §63+§64+§65→dashboard metrics |
 | BENCHMARK-STALE | 2026-04-01 table, 2026-04-02 table, §18 corrected table, §39 table, §51 table |
@@ -7258,3 +7258,208 @@ Commits in §157:
   (follow-up #4 left for §158 or later).
 * Does not begin encoding-migration work itself — that opens as Phase 5+
   in a subsequent sprint context.
+
+## §158 — L3 Partial Config Retirement: L3a only — 2026-05-06
+
+### Summary
+
+L3 variant-config cleanup campaign. §158 completes **L3a only** (6 superseded
+configs retired atomically). L3b/c/d + phase118_recovery deferred to §158a
+with coordinated removal plan.
+
+### L3a — Retired (commits 98722cb + 33a324f)
+
+**Variant configs:**
+1. `smoke_A_full_search.yaml` — early diagnostic (§142)
+2. `smoke_B_decay_steps.yaml` — early diagnostic (§143)
+3. `w4c_smoke_v6_5080.yaml` — v6 baseline (superseded by v7 per §156–§157)
+4. `w4c_smoke_v6_eval500_5080.yaml` — v6 diagnostic
+5. `w4c_smoke_v6_instrumented_5080.yaml` — v6 diagnostic
+6. `w4c_smoke_v6_jitter_5080.yaml` — v6 diagnostic
+
+**Documentation:**
+1. `docs/06_CORPUS_DESIGN.md` (RETIRED marker 2026-04-30)
+2. `docs/notes/p3_model_migration_handoff.md` (P3 done §131)
+3. `docs/sweep_deployment.md` (superseded by sweep_harness.md)
+
+**Updates:**
+- `docs/perf/static_audit.md` L84: Conv2d layer refs post-§131 P3 (18→8 planes)
+- `docs/rules/perf-targets.md` L56: batch_fill 78.6%→99.76% PASS (laptop 2026-05-06)
+- `scripts/run_sweep.py` L108: doc ref sweep_deployment.md→sweep_harness.md
+- `tests/test_no_stale_plane_refs.py`: allowlist cleanup
+
+Test suite: **953 passed**, zero regressions.
+
+### L3b/c/d + phase118_recovery — Deferred to §158a
+
+All four items coordinated removal required (not surgical isolation).
+
+**L3b** — `baseline_puct.yaml`
+- **Coupled refs:** `configs/training.yaml` (used by `configs/variants/` lookups),
+  `hexo_rl/training/train.py` (hard-coded baseline in legacy code paths),
+  `scripts/analyze_calibration.py` (drift detection fixture).
+- **Removal strategy:** Coord with train.py cleanup + analysis script path override.
+
+**L3c** — `sweep_*.yaml` (6 files: `sweep_q_decay.yaml`, sweep_h_decay.yaml`, etc.)
+- **Coupled refs:** 4+ scripts reference by glob pattern;
+  `make sweep.long` harness depends on Phase-1 ablation suite.
+- **Decision req'd:** Retire Phase-1 sweep harness (user discretion — may keep
+  for reference) or migrate to Phase 5+ parametric sweep.
+
+**L3d** — `calib_R1-R4.yaml` (4 calibration run configs)
+- **Coupled ref:** `scripts/analyze_calibration.py` (hardcoded path).
+- **Removal strategy:** Inline baseline tuning or parametric variant system.
+
+**phase118_recovery.yaml** — dry-run fixture
+- **Coupled ref:** `scripts/dry_run_batch.py` hardcodes path;
+  §118 debug context now historical.
+- **Removal strategy:** Archive to `archive/configs/phase118_recovery.yaml`
+  or delete entirely (legacy diagnostic).
+
+**Cost estimate:** ~300 LoC across 4 commits (one per item, git history clarity).
+
+Commits in §158:
+* `98722cb` — `chore(configs): retire 6 superseded variants — L3a (§158)`
+* `33a324f` — `docs: retire 3 stale + update 18→8-plane refs (§158)`
+
+### What this sprint DOES
+
+* Retire L3a only — 6 variant configs + 3 docs. Coordinated removal blocks
+  L3b/c/d pending surgical audit.
+
+### What this sprint DOES NOT do
+
+* Does not retire `baseline_puct.yaml` — Makefile/train.py/analyze_calibration.py
+  coordination pending.
+* Does not retire `sweep_*.yaml` — Phase-1 harness retirement decision pending
+  user discretion.
+* Does not retire `calib_R1-R4.yaml` — `analyze_calibration.py` refactor pending.
+* Does not retire `phase118_recovery.yaml` — `dry_run_batch.py` hardcode cleanup
+  pending.
+
+## §158a — L3 Coordinated Retirement Wave: L3b/c/d + phase118 — 2026-05-06
+
+### Summary
+
+Closes Q-§158a. 4 surgical commits on `cleanup/§158a` retire 12 variant
+configs + 8 paired dead scripts/tests + coordinated reference cleanup.
+Test suite: 924 passed, zero regressions across all 4 commits.
+
+### Commits
+
+* `c1fceaf` — `chore(configs): retire phase118_recovery.yaml + dead dry_run_batch (§158a)`
+* `96f0b27` — `chore(configs): retire calib_R1-R4 + run_calibration_run + calib.run target (§158a)`
+* `f777922` — `chore(configs): retire sweep_*ch input-channel ablation harness (§158a)`
+* `f8c5ccc` — `chore(configs): retire baseline_puct + coordinated reference cleanup (§158a)`
+
+### Per-commit details
+
+**A1 — phase118_recovery.yaml + dry_run_batch.py**
+- yaml: §118 recovery dry-run fixture, falsified by §121.
+- script: hardcoded `checkpoint_00012190.pt` no longer exists. Dead.
+- Paired removal — script had no other consumer or alternative input.
+
+**A2 — calib_R{1,2,3,4}.yaml + run_calibration_run.sh + Makefile target**
+- yamls: §126 graduation-gate calibration one-shots; results archived.
+- driver `scripts/run_calibration_run.sh`: dead one-shot.
+- `make calib.run` target removed.
+- `tests/test_variant_configs.py`: 4 calib_R training_steps_per_game pins removed.
+- `scripts/analyze_calibration.py` kept — operates on archived JSONL output, not yamls.
+
+**A3 — sweep_{2,3,4,6,8,18}ch.yaml + Phase-1 harness**
+- User decision (operator confirmation in-session): full retirement.
+- yamls + harness scripts: `run_sweep.py`, `tournament_sweep.py`,
+  `sweep_launch.sh`, `diag_sweep_log.sh`, `aggregate_sweep.py`.
+- Test: `tests/test_sweep_input_channels.py` (xfail under HEXB v6 since §122).
+- `hexo_rl/training/loop.py`: `_BOOTSTRAP_ANCHOR_CANDIDATES` refreshed —
+  `bootstrap_v5.pt` (pre-§131 18-plane, unloadable post-channel-drop) →
+  `bootstrap_model_v7full.pt` (current Phase 4.0 anchor).
+- `tests/test_early_game_probe.py`: stale `test_bootstrap_v4_*` renamed
+  to version-neutral `test_bootstrap_entropy_range`.
+- Throughput sweep harness (`scripts/sweep_harness/`, `make sweep` /
+  `sweep.long`) is unrelated and unaffected.
+
+**A4 — baseline_puct.yaml**
+- yaml: pre-Gumbel PUCT+CE ablation baseline; Phase 4.0 uses
+  Gumbel exclusively (`gumbel_full` / `gumbel_targets`).
+- Updates: Makefile comment, `scripts/train.py` `--variant` help text,
+  `docs/rules/phase-4-architecture.md` named-variant list,
+  `tests/test_variant_configs.py` (drop §102.b semantics test +
+  training_steps_per_game pin).
+- Historical refs in `docs/06_OPEN_QUESTIONS.md` (Q33 §109) and
+  `docs/perf/static_audit.md` preserved as audit record.
+
+### Bench gate
+
+Pre/post on laptop (4060 Max-Q, n=5, AC). Cleanup is non-perf; bench
+is sanity only. PASS — all metrics within ±5% (worker pos/hr identical
+to within noise floor):
+
+| Metric                       | Pre      | Post     | Δ       |
+|------------------------------|----------|----------|---------|
+| Worker pos/hr (median)       | 32,605   | 32,603   | -0.0%   |
+| MCTS sim/s                   | 62,709   | 64,761   | +3.3%   |
+| NN inference batch=64 pos/s  | 4,868.9  | 4,857.5  | -0.2%   |
+| NN latency batch=1 (ms)      | 2.68     | 2.64     | -1.5%   |
+| Buffer push pos/s            | 653,283  | 729,022  | +11.6%  |
+| Worker batch fill %          | 98.44    | 99.20    | +0.8%   |
+
+Pre report: `reports/benchmarks/2026-05-06_13-48.json`.
+Post report: `reports/benchmarks/2026-05-06_14-19.json`.
+
+### Q-§158a closed.
+
+---
+
+## §158b — L8 Stage 3 Disk Reclaim: Tier 3 + Tier 5 per-item — 2026-05-06
+
+### Summary
+
+Per-item rm of audit Tier 3 (stale smokes) + Tier 5 (low-risk wrappers/sweep
+corpora). Continues L8 disk reclaim after Stage 1+2 (49 GB freed, 97G→48G).
+Stage 3 reclaimed **~9G** (48G→39G).
+
+### Decisions (10 rm, 4 keep)
+
+| ID | Path | Size | Decision |
+|----|------|------|----------|
+| T3.1 | `checkpoints/w4c_smoke_5080/` | 577M | rm (§138 ABORT) |
+| T3.2 | `checkpoints/w4c_smoke_v5_5080/` | 49M | rm (pre-§144) |
+| T3.3 | `checkpoints/w4c_smoke_v6_corner_mask/` | 163M | **keep** (§152 instrumented, May 4) |
+| T3.4 | `checkpoints/w4c_smoke_v7_laptop_preflight/` | 114M | **keep** (§156 preflight, today) |
+| T3.5 | `checkpoints_smokes/smoke_A/` | 261M | rm (pre-§138) |
+| T3.6 | `checkpoints_smokes/smoke_B/` | 359M | rm (pre-§138) |
+| T3.7 | `checkpoints_smokes/phase5/` | 66M | rm (old phase 5) |
+| T3.8 | `checkpoints_smokes/replay_buffer.pre_smoke.bin` | 4.6G | rm (Apr 23 snapshot) |
+| T5.1 | `checkpoints/inference_only.pt` | 17M | rm (orphan top-level wrapper) |
+| T5.2 | `checkpoints/bootstrap_model_8_to_50_plys.pt` | 17M | rm (Apr 17 variant) |
+| T5.3 | `checkpoints/probe_d10_h7.pt` | 17M | rm (Apr 24 diagnostic) |
+| T5.4 | `data/bootstrap_corpus_v3_human.npz` | 3.9G | rm (v7 corpus verified intact at `data/bootstrap_corpus.npz` 2.5G 8-plane 353k pos) |
+| T5.5 | `data/bootstrap_corpus_sweep_2ch.npz` | 977M | **keep** (§158a A3 sweep harness fate deferred) |
+| T5.6 | `data/bootstrap_corpus_sweep_6ch.npz` | 2.0G | **keep** (§158a A3 sweep harness fate deferred) |
+
+### Reclaim
+
+* T3 total: 5.3G
+* T5 total: ~4G
+* Workspace: 48G → 39G (~9G freed)
+
+### Hard-constraint enforcement
+
+* T3.3, T3.4: kept by default per spec (recent / today).
+* T5.5, T5.6: kept under §158a A3 sequencing block (sweep corpora needed if
+  sweep harness retained).
+* T5.4 verified safe: active corpus `data/bootstrap_corpus.npz` (May 3, 8-plane,
+  353k positions) intact before deleting v3 superseded variant.
+
+### What this sprint DOES NOT do
+
+* Does not commit deletions (workspace-only rm of generated artifacts).
+* Does not resolve §158a A3 sweep harness retirement (T5.5/T5.6 still gated).
+
+### Cumulative L8 reclaim
+
+* Stage 1+2 (prior): 49 GB (97G→48G)
+* Stage 3 (this): ~9 GB (48G→39G)
+* **L8 total: ~58 GB freed**
+

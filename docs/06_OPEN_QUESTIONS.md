@@ -704,6 +704,21 @@ and accepted as tolerable.
 
 ---
 
+---
+
+## Q-§158a — Variant config retirement L3b/c/d (§158 follow-up)
+
+**Status:** RESOLVED 2026-05-06 — see sprint log §158a.
+**Branch:** `cleanup/§158a` (4 commits: c1fceaf, 96f0b27, f777922, f8c5ccc).
+
+12 variant configs + 8 paired dead scripts/tests retired with coordinated
+reference cleanup. Test suite 924 passed, zero regressions. A3 (sweep_*ch
+input-channel ablation harness) retired in full per operator decision —
+Phase-1 ablation concluded §51, harness already broken under HEXB v6 (§122).
+Throughput sweep harness (`scripts/sweep_harness/`) unaffected.
+
+---
+
 ## Deferred (Phase 5+)
 
 | # | Question | Reason deferred |
