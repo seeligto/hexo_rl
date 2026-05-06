@@ -21,14 +21,16 @@ from hexo_rl.eval.gate_logic import GateConfig, _binomial_ci, evaluate_gate
 from hexo_rl.eval.reporting import plot_ratings_curve
 from hexo_rl.eval.results_db import ResultsDB
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
 
 
 def _load_anchor_model(path: Path, device: torch.device) -> HexTacToeNet:
     """Load a frozen anchor checkpoint as a HexTacToeNet for eval-only play.
 
-    Strips ``_orig_mod.`` / ``module.`` prefixes (torch.compile / DDP) and
-    infers ``in_channels`` from the trunk input conv weight shape so the
-    network instance matches whatever the bootstrap was trained at.
+    Strips ``_orig_mod.`` / ``module.`` prefixes (torch.compile / DDP) via
+    ``normalize_model_state_dict_keys`` and infers ``in_channels`` from the
+    trunk input conv weight shape so the network instance matches whatever the
+    bootstrap was trained at.
     """
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     state: dict = ckpt
@@ -37,18 +39,7 @@ def _load_anchor_model(path: Path, device: torch.device) -> HexTacToeNet:
             state = ckpt[key]
             break
 
-    prefixes = ("_orig_mod.", "module.")
-    normalized: dict[str, torch.Tensor] = {}
-    for k, v in state.items():
-        nk = k
-        changed = True
-        while changed:
-            changed = False
-            for p in prefixes:
-                if nk.startswith(p):
-                    nk = nk[len(p):]
-                    changed = True
-        normalized[nk] = v
+    normalized = normalize_model_state_dict_keys(state)
 
     in_ch = int(normalized["trunk.input_conv.weight"].shape[1])
     model = HexTacToeNet(

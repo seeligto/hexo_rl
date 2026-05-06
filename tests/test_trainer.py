@@ -839,6 +839,38 @@ def test_normalize_rejects_bn_keys_with_orig_mod_prefix():
         normalize_model_state_dict_keys(state)
 
 
+def test_normalize_prefix_absent():
+    """Keys with no known prefix pass through unchanged."""
+    state = {"trunk.input_conv.weight": torch.zeros(4, 8, 3, 3)}
+    result = normalize_model_state_dict_keys(state)
+    assert list(result.keys()) == ["trunk.input_conv.weight"]
+
+
+def test_normalize_empty_dict():
+    """Empty state dict returns empty dict without error."""
+    assert normalize_model_state_dict_keys({}) == {}
+
+
+def test_normalize_module_prefix():
+    """module. prefix is stripped (DDP checkpoint)."""
+    state = {"module.trunk.input_conv.weight": torch.zeros(4, 8, 3, 3)}
+    result = normalize_model_state_dict_keys(state)
+    assert "trunk.input_conv.weight" in result
+    assert "module.trunk.input_conv.weight" not in result
+
+
+def test_normalize_partial_keys():
+    """Some keys prefixed, others clean — both survive, prefixed keys stripped."""
+    state = {
+        "_orig_mod.policy_fc.weight": torch.zeros(10, 20),
+        "value_fc.bias": torch.zeros(1),
+    }
+    result = normalize_model_state_dict_keys(state)
+    assert "policy_fc.weight" in result
+    assert "value_fc.bias" in result
+    assert "_orig_mod.policy_fc.weight" not in result
+
+
 def test_load_checkpoint_rejects_bn_checkpoint(tmp_path: Path):
     """Trainer.load_checkpoint must propagate the RuntimeError on pre-§99 checkpoints (F-002)."""
     bn_state = {
