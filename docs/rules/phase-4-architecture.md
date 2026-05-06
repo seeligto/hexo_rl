@@ -19,6 +19,12 @@ Starting config for self-play RL (do not exceed without benchmarking):
   `compute_move_temperature` in `engine/src/game_runner/worker_loop.rs:20-31`;
   call site at `worker_loop.rs:346-353`). §36 text reconciled against
   code (see §70 C.1 resolution in `docs/07_PHASE4_SPRINT_LOG.md`).
+  **§156 R12 verdict (2026-05-06):** cosine schedule is the sole
+  load-bearing knob behind the §155 R10 91% draw lock under v7full
+  warm-start. Variant opt-out at `temperature_threshold_compound_moves: 0`
+  + `temp_min: 0.5` (see `configs/variants/w4c_smoke_v7_5080.yaml`).
+  Top-level default unchanged pending cold-start data — §157 Gate 5 S2
+  (variant-pinned, comment-only at top level).
 - ZOI: candidate moves restricted to hex-distance ≤ 5 of last 16 moves
   (fallback to full legal set if < 3 candidates) — post-search move
   selection only; does not reduce MCTS tree branching (§77).
@@ -26,22 +32,32 @@ Starting config for self-play RL (do not exceed without benchmarking):
   `normalize_model_state_dict_keys` raises `RuntimeError` rather than
   silently corrupting trunk weights via `strict=False`. Retrain from
   `bootstrap_model.pt` when crossing §99.
-- torch.compile: DISABLED — Python 3.14 CUDA graph incompatibility
-  (sprint §25, §30, §32). Re-enable when PyTorch + Python 3.14 CUDA
-  graph support stabilizes.
+- torch.compile: landed §116 (2026-04-24, reduce-overhead). Production
+  selfplay uses **trace** not compile per §124 (2026-04-25) — compile
+  and trace deliver same selfplay throughput within noise; trace wins
+  on simplicity (no Dynamo guard cost, no cudagraph TLS thread issue).
+  See `docs/rules/perf-targets.md` for benchmark methodology. compile
+  re-enable for selfplay gated on Q35 dispatch fix.
 - Replay buffer: start at 250K samples, grow toward 1M as training
   stabilises (§79). HEXB v6 on-disk format. v5 + v4 hard-rejected at load post-§131 P1(b).
   buffer_sample_raw target is ≤ 1,550 µs (§113 recalibration) — see
   `docs/rules/perf-targets.md`.
-- Graduation gate (§101, §101.a): self-play workers consume `inf_model`
-  weights, which track the `best_model` anchor (not `trainer.model`).
-  Sync fires only on graduation or on cold-start load. Gate is
-  two-part: `wr_best ≥ promotion_winrate` (default 0.55 over 400 games;
-  raised 200→400 per calibration 2026-04-17)
-  AND `ci_lo > 0.5` (binomial 95% CI). CI guard cuts false-positive
-  rate at n=400 from ~9% to <1% under null. Promotion copies from the
-  `eval_model` snapshot (the one that was actually scored), not from
-  drifted `trainer.model`. Eval cadence split via per-opponent
+- Graduation gate (§101, §101.a, post-§157 three-part): self-play
+  workers consume `inf_model` weights, which track the `best_model`
+  anchor (not `trainer.model`). Sync fires only on graduation or on
+  cold-start load. Gate AND-combines:
+  (1) `wr_best ≥ promotion_winrate` (default 0.55 over 400 games;
+  raised 200→400 per calibration 2026-04-17),
+  (2) `ci_lo > 0.5` (binomial 95% CI; cuts false-positive rate at
+  n=400 from ~9% to <1% under null), and
+  (3) `wr_bootstrap_anchor ≥ min_winrate` (default 0.45) when
+  `gating.bootstrap_floor.enabled = true` (default true post-§157
+  Gate 5 S1, anchored to frozen `bootstrap_model_v7full.pt`; missing
+  measurement = failure, defensive). Predicate at
+  `hexo_rl/eval/eval_pipeline.py:401-444`.
+  Promotion copies from the `eval_model` snapshot (the one that was
+  actually scored), not from drifted `trainer.model`. Eval cadence
+  split via per-opponent
   `stride`: effective eval_interval is 5000 steps (`training.yaml`
   overrides `eval.yaml` per §101 H1); best_checkpoint every 5000
   (`stride: 1`), SealBot every 20000 (`stride: 4`), random every 5000

@@ -11,13 +11,14 @@ Respond like smart caveman. Cut all filler, keep technical substance.
 
 # CLAUDE.md — Hex Tac Toe AlphaZero
 
-AlphaZero-style self-learning AI for Hex Tac Toe — hexagonal grid, 6-in-a-row to win, player 1 opens with 1 move then both players alternate 2 moves per turn. Theoretically infinite board (see board-representation rule). Target hardware: AMD Ryzen 7 3700x + RTX 3070 + 48GB RAM.
+AlphaZero-style self-learning AI for Hex Tac Toe — hexagonal grid, 6-in-a-row to win, player 1 opens with 1 move then both players alternate 2 moves per turn. Theoretically infinite board (see board-representation rule).
 
 This file is read automatically by Claude Code at the start of every session.
 Read it fully before doing anything. Rule files under `docs/rules/` are topic-scoped
 — load on demand per the index below.
 
-**Current phase:** Phase 4.0 — sustained run from bootstrap-v7full (§150, 30-ep human-only Elo-weighted, SealBot WR 17.4% n=500, vs v6 z=2.70 p=0.007). v7e30, v7, v6 retained as versioned A/B baselines.
+**Current phase:** Phase 4.0 sustained DEFERRED 2026-05-06 (§157 Path B — 5k smoke PASS at 19.0% SealBot WR; sustained 40k skipped to preserve dev cycles for the encoding migration that will obsolete the 8-plane trunk). Phase 5+ encoding migration is the active workstream. v7full (§150 anchor, 17.4% n=500 vs SealBot), v7e30, v7, v6 retained as versioned A/B baselines.
+**Reference hardware:** AMD Ryzen 7 3700x + RTX 3070 + 48 GB RAM (target). Current dev host is laptop (Ryzen 7 8845HS + RTX 4060 Max-Q); bench targets calibrated to laptop — see `docs/rules/perf-targets.md`.
 (An internal sprint log is maintained locally — not distributed.)
 
 ---
@@ -28,14 +29,9 @@ Read it fully before doing anything. Rule files under `docs/rules/` are topic-sc
 
 ---
 
-## Threat-probe kill criterion (§91, revised for 8-plane model post-§131)
+## Threat-probe kill criterion
 
-`scripts/probe_threat_logits.py` gates each 5k-step checkpoint. Pass requires:
-
-- C2: `ext_in_top5_pct ≥ 25` — extension cell in policy top-5 ≥ 25%
-- C3: `ext_in_top10_pct ≥ 40` — extension cell in policy top-10 ≥ 40%
-
-Thresholds calibrated against bootstrap-v6 (8-plane post-§131, §134). v6 baseline: C2=50, C3=60. Gates at 25/40 carry over from §91 §97 calibration; remain valid for 8-plane model.
+`scripts/probe_threat_logits.py` gates each 5k-step checkpoint and any pre-promotion checkpoint. Full C1–C4 criterion + baseline values + run cadence live in `docs/rules/workflow.md` § "Threat-logit probe". C1–C3 must all PASS; C4 is a warning-only BCE-drift canary.
 
 ---
 
@@ -49,11 +45,12 @@ Topic-scoped rules under `docs/rules/` — load the file whose trigger matches y
 - `docs/rules/phase-4-architecture.md` — network, heads, graduation gate, resolved Qs
 - `docs/rules/perf-targets.md` — 10-metric bench gate, methodology
 - `docs/rules/bot-integration.md` — submodules, BotProtocol, community URLs
+- `docs/rules/background-tasks.md` — daily scrape, manifest commit policy
 - `docs/sweep_harness.md` — knob-registry throughput sweep (`make sweep` / `sweep.long`); use for per-host tuning of n_workers, inference_batch_size, max_train_burst; `--resume <cells.csv>` to continue a killed sweep
 
 Workflow skills live under `.claude/skills/` and are discovered by OpenCode,
 Claude Code, and Codex via Claude-compatible skill discovery:
-`investigation-probe-smoke-verdict`, `wave-audit`, `bench-gate`.
+`investigation-probe-smoke-verdict`, `wave-audit`, `bench-gate`, `rsync-vast`, `hf-upload`.
 
 ---
 
@@ -93,4 +90,4 @@ Read these when the rule file points at them or the task needs broader context:
 
 - **memory**: record completed phase checklist items, benchmark results, and
   architectural decisions so they persist across sessions. Follow the session
-  start and end protocols above.
+  start/end protocols in `docs/rules/workflow.md`.
