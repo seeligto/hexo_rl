@@ -67,17 +67,22 @@ def test_no_duplicate_train_step_at_checkpoint(tmp_path: Path) -> None:
 
 
 def test_loop_does_not_duplicate_train_step_log() -> None:
-    """Static source guard: ``hexo_rl/training/loop.py`` must not call
+    """Static source guard: neither ``hexo_rl/training/loop.py`` nor
+    ``hexo_rl/training/step_coordinator.py`` may call
     ``log.info('train_step', ...)``. The authoritative cadence is
     trainer.train_step_from_tensors (one emission per real step). A
-    log_interval-gated duplicate in loop.py was the Q27 smoke root cause.
+    log_interval-gated duplicate in loop.py was the Q27 smoke root cause;
+    §159a moved the per-step body into step_coordinator.py so the guard
+    must scan both files.
     """
-    src = (Path(__file__).resolve().parents[1]
-           / "hexo_rl" / "training" / "loop.py").read_text()
-    pattern = re.compile(r"log\.info\(\s*[\"']train_step[\"']")
-    matches = pattern.findall(src)
-    assert not matches, (
-        f"hexo_rl/training/loop.py has {len(matches)} log.info('train_step', ...) "
-        "call(s); this duplicates trainer.train_step_from_tensors's per-step "
-        "emission and caused 6050 events for 5500 steps in Q27 smoke 2026-04-19."
-    )
+    pattern = re.compile(r"(?:log|self\._logger)\.info\(\s*[\"']train_step[\"']")
+    base = Path(__file__).resolve().parents[1] / "hexo_rl" / "training"
+    for fname in ("loop.py", "step_coordinator.py"):
+        src = (base / fname).read_text()
+        matches = pattern.findall(src)
+        assert not matches, (
+            f"hexo_rl/training/{fname} has {len(matches)} "
+            "log.info('train_step', ...) call(s); this duplicates "
+            "trainer.train_step_from_tensors's per-step emission and "
+            "caused 6050 events for 5500 steps in Q27 smoke 2026-04-19."
+        )
