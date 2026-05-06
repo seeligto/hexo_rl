@@ -19,6 +19,7 @@ pub mod dirichlet;
 pub mod node;
 mod selection;
 mod backup;
+pub mod policy;
 
 pub use node::{Node, TTEntry, MAX_NODES, VIRTUAL_LOSS_PENALTY};
 pub use backup::{pool_overflow_count, take_pool_overflow_count};
@@ -150,206 +151,6 @@ impl MCTSTree {
         self.transposition_table.clear();
     }
 
-    // ── Policy extraction ─────────────────────────────────────────────────────
-
-    pub fn get_policy(&self, temperature: f32, board_size: usize) -> Vec<f32> {
-        let n_actions = board_size * board_size + 1;
-        let mut policy = vec![0.0f32; n_actions];
-
-        let root = &self.pool[0];
-        if !root.is_expanded() {
-            return policy;
-        }
-
-        let first = root.first_child as usize;
-        let n_ch  = root.n_children  as usize;
-
-        if temperature == 0.0 {
-            if let Some(best) = (first..first + n_ch)
-                .max_by_key(|&i| self.pool[i].n_visits)
-            {
-                let val = self.pool[best].action_idx;
-                let q = (val >> 16) as i32 - 32768;
-                let r = (val & 0xFFFF) as i32 - 32768;
-                let action = self.root_board.window_flat_idx(q, r);
-
-                if action < n_actions {
-                    policy[action] = 1.0;
-                }
-            }
-        } else {
-            let visits: Vec<f32> = (first..first + n_ch)
-                .map(|i| (self.pool[i].n_visits as f32).powf(1.0 / temperature))
-                .collect();
-            let total: f32 = visits.iter().sum();
-            if total > 0.0 {
-                for (j, &v) in visits.iter().enumerate() {
-                    let val = self.pool[first + j].action_idx;
-                    let q = (val >> 16) as i32 - 32768;
-                    let r = (val & 0xFFFF) as i32 - 32768;
-                    let action = self.root_board.window_flat_idx(q, r);
-
-                    if action < n_actions {
-                        policy[action] = v / total;
-                    }
-                }
-            }
-        }
-
-        policy
-    }
-
-    /// Compute improved policy targets using Gumbel completed Q-values
-    /// (Danihelka et al., Gumbel AlphaZero, ICLR 2022 §4, Appendix D Eq. 33).
-    ///
-    /// Returns a `(board_size * board_size + 1)`-dim probability distribution that
-    /// incorporates MCTS Q-values into the prior, giving useful policy signal even
-    /// at low simulation counts.
-    pub fn get_improved_policy(
-        &self,
-        board_size: usize,
-        c_visit: f32,
-        c_scale: f32,
-    ) -> Vec<f32> {
-        let n_actions = board_size * board_size + 1;
-        let mut policy = vec![0.0f32; n_actions];
-
-        let root = &self.pool[0];
-        if !root.is_expanded() {
-            return policy;
-        }
-
-        let first = root.first_child as usize;
-        let n_ch = root.n_children as usize;
-
-        // Children store w_value in their own player-to-move perspective (backup.rs negamax).
-        // When root.moves_remaining==1 the children belong to the opponent, so negate their Q
-        // to bring them into root's perspective before computing completed-Q targets.
-        let q_sign: f32 = if self.pool[0].moves_remaining == 1 { -1.0 } else { 1.0 };
-
-        // Collect per-child data: (flat_action_idx, visits, prior, q_value)
-        let mut child_data: Vec<(usize, u32, f32, f32)> = Vec::with_capacity(n_ch);
-        let mut sum_n: u32 = 0;
-        let mut max_n: u32 = 0;
-        let mut visited_prior_sum: f32 = 0.0;
-        let mut policy_weighted_q: f32 = 0.0;
-
-        for j in 0..n_ch {
-            let child = &self.pool[first + j];
-            let val = child.action_idx;
-            let q = (val >> 16) as i32 - 32768;
-            let r = (val & 0xFFFF) as i32 - 32768;
-            let action = self.root_board.window_flat_idx(q, r);
-            if action >= n_actions {
-                continue;
-            }
-
-            let visits = child.n_visits;
-            let prior = child.prior;
-            let q_val = if visits > 0 {
-                q_sign * child.w_value / visits as f32
-            } else {
-                0.0
-            };
-
-            sum_n += visits;
-            if visits > max_n {
-                max_n = visits;
-            }
-            if visits > 0 {
-                visited_prior_sum += prior;
-                policy_weighted_q += prior * q_val;
-            }
-
-            child_data.push((action, visits, prior, q_val));
-        }
-
-        // Edge case: no visits at all — return prior distribution
-        if sum_n == 0 {
-            let mut total_prior = 0.0f32;
-            for &(action, _, prior, _) in &child_data {
-                policy[action] = prior;
-                total_prior += prior;
-            }
-            if total_prior > 0.0 {
-                for p in policy.iter_mut() {
-                    *p /= total_prior;
-                }
-            }
-            return policy;
-        }
-
-        // v_hat: root value estimate (W/N from root node)
-        let v_hat = root.w_value / root.n_visits as f32;
-
-        // v_mix: mixed value estimate for unvisited actions (paper Eq. 33).
-        // Note: child.prior values come from softmax and are assumed to sum to
-        // ~1.0 over legal actions. No normalization step needed unless expansion
-        // pruning is added in the future.
-        let v_mix = if visited_prior_sum > 1e-8 {
-            let sum_n_f = sum_n as f32;
-            (1.0 / (1.0 + sum_n_f))
-                * (v_hat + (sum_n_f / visited_prior_sum) * policy_weighted_q)
-        } else {
-            v_hat
-        };
-
-        // Build completed Q-values and compute pi_improved = softmax(log_prior + sigma(completedQ))
-        let sigma_scale = (c_visit + max_n as f32) * c_scale;
-        let mut logits = vec![f32::NEG_INFINITY; n_actions];
-
-        for &(action, visits, prior, q_val) in &child_data {
-            let completed_q = if visits > 0 {
-                q_val.clamp(-1.0, 1.0)
-            } else {
-                v_mix.clamp(-1.0, 1.0)
-            };
-            let log_prior = (prior.max(1e-8)).ln();
-            logits[action] = log_prior + sigma_scale * completed_q;
-        }
-
-        // Numerically stable softmax over legal actions only
-        let max_logit = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        if max_logit == f32::NEG_INFINITY {
-            return policy;
-        }
-
-        let mut sum_exp = 0.0f32;
-        for &l in &logits {
-            if l > f32::NEG_INFINITY {
-                sum_exp += (l - max_logit).exp();
-            }
-        }
-        if sum_exp <= 0.0 {
-            return policy;
-        }
-
-        for i in 0..n_actions {
-            if logits[i] > f32::NEG_INFINITY {
-                policy[i] = (logits[i] - max_logit).exp() / sum_exp;
-            }
-        }
-
-        // Note: policy pruning is applied only in the Python training loop
-        // (prune_policy_targets in trainer.py) to avoid double-pruning.
-
-        policy
-    }
-
-    /// Returns (child_pool_index, prior) for each root child.
-    /// Used by Gumbel MCTS to build the candidate list after root expansion.
-    pub fn get_root_children_info(&self) -> Vec<(u32, f32)> {
-        let root = &self.pool[0];
-        if !root.is_expanded() {
-            return Vec::new();
-        }
-        let first = root.first_child as usize;
-        let n_ch = root.n_children as usize;
-        (first..first + n_ch)
-            .map(|i| (i as u32, self.pool[i].prior))
-            .collect()
-    }
-
     pub fn root_visits(&self) -> u32 {
         self.pool[0].n_visits
     }
@@ -366,72 +167,6 @@ impl MCTSTree {
         let board = self.root_board.clone();
         self.new_game(board);
         self.pool[0].moves_remaining = mr;
-    }
-
-    // ── Dirichlet noise ───────────────────────────────────────────────────────
-
-    pub fn apply_dirichlet_to_root(&mut self, noise: &[f32], epsilon: f32) {
-        let root = &self.pool[0];
-        if !root.is_expanded() {
-            return;
-        }
-        let n_ch = root.n_children as usize;
-        if noise.len() < n_ch {
-            return;
-        }
-        let first = root.first_child as usize;
-
-        // Snapshot pre-priors for the debug_prior_trace feature. Compiled out
-        // in default builds; zero cost.
-        #[cfg(feature = "debug_prior_trace")]
-        let pre_priors: Vec<f32> = (0..n_ch)
-            .map(|j| self.pool[first + j].prior)
-            .collect();
-
-        for j in 0..n_ch {
-            let child = &mut self.pool[first + j];
-            child.prior = (1.0 - epsilon) * child.prior + epsilon * noise[j];
-        }
-
-        #[cfg(feature = "debug_prior_trace")]
-        {
-            let post_priors: Vec<f32> = (0..n_ch)
-                .map(|j| self.pool[first + j].prior)
-                .collect();
-            crate::debug_trace::record_dirichlet(
-                epsilon,
-                &pre_priors,
-                &noise[..n_ch],
-                &post_priors,
-            );
-        }
-    }
-
-    /// Top-N children of root by visit count.
-    /// Returns Vec<(coord_string, visits, prior, q_value)> sorted by visits descending.
-    pub fn get_top_visits(&self, n: usize) -> Vec<(String, u32, f32, f32)> {
-        let root = &self.pool[0];
-        if !root.is_expanded() {
-            return Vec::new();
-        }
-        let first = root.first_child as usize;
-        let n_ch = root.n_children as usize;
-
-        let mut children: Vec<(usize, u32)> = (first..first + n_ch)
-            .map(|i| (i, self.pool[i].n_visits))
-            .collect();
-        children.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-        children.truncate(n);
-
-        let q_sign: f32 = if root.moves_remaining == 1 { -1.0 } else { 1.0 };
-        children.into_iter().map(|(i, visits)| {
-            let node = &self.pool[i];
-            let val = node.action_idx;
-            let q = (val >> 16) as i32 - 32768;
-            let r = (val & 0xFFFF) as i32 - 32768;
-            let q_value = if visits > 0 { q_sign * node.w_value / visits as f32 } else { 0.0 };
-            (format!("({},{})", q, r), visits, node.prior, q_value)
-        }).collect()
     }
 
     /// Value estimate at root from perspective of player to move.
@@ -509,7 +244,7 @@ impl MCTSTree {
 mod tests {
     use super::*;
 
-    fn setup_two_child_tree(c_puct: f32) -> (MCTSTree, u32, u32) {
+    pub(super) fn setup_two_child_tree(c_puct: f32) -> (MCTSTree, u32, u32) {
         let mut tree = MCTSTree::new(c_puct);
         tree.pool[0].moves_remaining = 2;
 
@@ -610,33 +345,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_policy_proportional_to_visits() {
-        let (mut tree, child_a, child_b) = setup_two_child_tree(1.5);
-        tree.pool[0].n_visits = 10;
-        tree.pool[child_a as usize].n_visits = 7;
-        tree.pool[child_b as usize].n_visits = 3;
-
-        let policy = tree.get_policy(1.0, BOARD_SIZE);
-        let pa = policy[180];
-        let pb = policy[181];
-        assert!((pa - 0.7).abs() < 1e-5, "action 0 should get 70%: {pa}");
-        assert!((pb - 0.3).abs() < 1e-5, "action 1 should get 30%: {pb}");
-        assert!((pa + pb - 1.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn test_get_policy_argmax_temperature_zero() {
-        let (mut tree, child_a, child_b) = setup_two_child_tree(1.5);
-        tree.pool[0].n_visits = 10;
-        tree.pool[child_a as usize].n_visits = 7;
-        tree.pool[child_b as usize].n_visits = 3;
-
-        let policy = tree.get_policy(0.0, BOARD_SIZE);
-        assert_eq!(policy[180], 1.0);
-        assert_eq!(policy[181], 0.0);
-    }
-
-    #[test]
     fn test_select_leaves_returns_root_when_empty() {
         let mut tree = MCTSTree::new(1.5);
         let board = Board::new();
@@ -684,27 +392,6 @@ mod tests {
         }
 
         assert_eq!(tree.root_visits(), n_sims as u32);
-    }
-
-    #[test]
-    fn test_policy_sums_to_one_after_search() {
-        let mut tree = MCTSTree::new(1.5);
-        let board = Board::new();
-        tree.new_game(board);
-
-        let n_sims = 10;
-        let uniform = vec![1.0 / (BOARD_SIZE * BOARD_SIZE + 1) as f32; BOARD_SIZE * BOARD_SIZE + 1];
-        for _ in 0..n_sims {
-            let leaves = tree.select_leaves(1);
-            let n = leaves.len();
-            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
-            let values = vec![0.0f32; n];
-            tree.expand_and_backup(&policies, &values);
-        }
-
-        let policy = tree.get_policy(1.0, BOARD_SIZE);
-        let sum: f32 = policy.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-4, "policy should sum to 1.0, got {sum}");
     }
 
     #[test]
@@ -760,91 +447,6 @@ mod tests {
         };
         let q = node.q_value_vl(VIRTUAL_LOSS_PENALTY, false);
         assert!(q.abs() < 1e-6, "Q should be 0.0: got {q}");
-    }
-
-    #[test]
-    fn test_dirichlet_ignored_before_root_expanded() {
-        // Serialize against test_dirichlet_trace_roundtrip (see debug_trace::TEST_TRACE_LOCK).
-        #[cfg(feature = "debug_prior_trace")]
-        let _guard = crate::debug_trace::TEST_TRACE_LOCK.lock().unwrap();
-        let mut tree = MCTSTree::new(1.5);
-        tree.new_game(Board::new());
-        tree.apply_dirichlet_to_root(&[0.5, 0.5], 0.25);
-        assert_eq!(tree.root_n_children(), 0);
-    }
-
-    #[test]
-    fn test_dirichlet_mixes_priors_correctly() {
-        // Serialize against test_dirichlet_trace_roundtrip (see debug_trace::TEST_TRACE_LOCK).
-        #[cfg(feature = "debug_prior_trace")]
-        let _guard = crate::debug_trace::TEST_TRACE_LOCK.lock().unwrap();
-        let (mut tree, child_a, child_b) = setup_two_child_tree(1.5);
-        assert!(tree.pool[0].is_expanded());
-
-        let noise   = [0.9f32, 0.1f32];
-        let epsilon = 0.25f32;
-        tree.apply_dirichlet_to_root(&noise, epsilon);
-
-        let expected_a = (1.0 - epsilon) * 0.7 + epsilon * 0.9;
-        let expected_b = (1.0 - epsilon) * 0.3 + epsilon * 0.1;
-
-        let prior_a = tree.pool[child_a as usize].prior;
-        let prior_b = tree.pool[child_b as usize].prior;
-
-        assert!((prior_a - expected_a).abs() < 1e-6,
-            "child_a prior: expected {expected_a:.6}, got {prior_a:.6}");
-        assert!((prior_b - expected_b).abs() < 1e-6,
-            "child_b prior: expected {expected_b:.6}, got {prior_b:.6}");
-    }
-
-    /// Verifies the compile-time-gated JSONL trace wrapper around
-    /// `apply_dirichlet_to_root` writes exactly one well-formed record.
-    /// Only compiled with `--features debug_prior_trace`.
-    #[cfg(feature = "debug_prior_trace")]
-    #[test]
-    fn test_dirichlet_trace_roundtrip() {
-        use std::fs;
-        use std::io::{BufRead, BufReader};
-
-        // Serialize against other tests that call apply_dirichlet_to_root —
-        // they share the same global TRACE_FILE sink, so parallel execution
-        // would cause cross-test writes into our JSONL file.
-        let _guard = crate::debug_trace::TEST_TRACE_LOCK.lock().unwrap();
-
-        let path = std::env::temp_dir().join(format!(
-            "hexo_dbg_trace_{}.jsonl", std::process::id()
-        ));
-        let _ = fs::remove_file(&path);
-        let path_str = path.to_str().expect("tmp path utf8");
-
-        crate::debug_trace::set_sink_for_test(path_str);
-        crate::debug_trace::reset_counters_for_test();
-
-        let (mut tree, _, _) = setup_two_child_tree(1.5);
-        assert!(tree.pool[0].is_expanded());
-        let noise = [0.9f32, 0.1f32];
-        tree.apply_dirichlet_to_root(&noise, 0.25);
-
-        // Tear the sink down BEFORE releasing the guard so no subsequent
-        // test (from either this file or another) can write into our tmp.
-        crate::debug_trace::clear_sink_for_test();
-
-        let file = fs::File::open(&path).expect("trace file should exist");
-        let reader = BufReader::new(file);
-        let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
-
-        assert_eq!(lines.len(), 1, "expected exactly one JSONL record, got {}", lines.len());
-        let record = &lines[0];
-        assert!(record.contains(r#""site":"apply_dirichlet_to_root""#),
-            "record missing site marker: {record}");
-        assert!(record.contains(r#""n_children":2"#),
-            "record missing n_children=2: {record}");
-        assert!(record.contains(r#""epsilon":0.250000"#),
-            "record missing epsilon=0.25: {record}");
-        assert!(record.contains(r#""noise":[0.900000,0.100000]"#),
-            "record missing noise vector: {record}");
-
-        let _ = fs::remove_file(&path);
     }
 
     #[test]
@@ -1076,7 +678,7 @@ mod tests {
 
     // ── Gumbel MCTS tests ────────────────────────────────────────────────────
 
-    fn setup_expanded_root() -> MCTSTree {
+    pub(super) fn setup_expanded_root() -> MCTSTree {
         let mut tree = MCTSTree::new(1.5);
         let board = Board::new();
         tree.new_game(board);
@@ -1087,18 +689,6 @@ mod tests {
         let policy = vec![1.0 / n_actions as f32; n_actions];
         tree.expand_and_backup(&[policy], &[0.0]);
         tree
-    }
-
-    #[test]
-    fn test_get_root_children_info_returns_correct_count() {
-        let tree = setup_expanded_root();
-        let info = tree.get_root_children_info();
-        assert_eq!(info.len(), tree.root_n_children());
-        // All priors should be > 0 (from uniform policy over full action space).
-        for &(idx, prior) in &info {
-            assert!(prior > 0.0, "prior for child {idx} should be > 0");
-        }
-        assert!(!info.is_empty(), "root should have children after expansion");
     }
 
     #[test]
@@ -1235,102 +825,6 @@ mod tests {
         tree.forced_root_child = None;
     }
 
-    // ── get_improved_policy tests ────────────────────────────────────────────
-
-    /// Helper: set up a tree with N root children having specified visits, w_values, and priors.
-    /// Each child is placed at action (0, j) for j in 0..N.
-    fn setup_improved_policy_tree(
-        children: &[(u32, f32, f32)], // (visits, w_value, prior)
-    ) -> MCTSTree {
-        let mut tree = MCTSTree::new(1.5);
-        let board = Board::new();
-        tree.root_board = board;
-        let n = children.len();
-        tree.pool[0].first_child = 1;
-        tree.pool[0].n_children = n as u16;
-        tree.pool[0].moves_remaining = 2;
-
-        let mut total_visits = 0u32;
-        let mut total_w = 0.0f32;
-        for (j, &(visits, w_value, prior)) in children.iter().enumerate() {
-            let q = 0i32;
-            let r = j as i32;
-            let action_idx = ((q as u32).wrapping_add(32768) << 16) | (r as u32).wrapping_add(32768);
-            tree.pool[1 + j] = Node {
-                parent: 0,
-                action_idx,
-                n_visits: visits,
-                w_value,
-                prior,
-                first_child: u32::MAX,
-                n_children: 0,
-                moves_remaining: 1,
-                is_terminal: false,
-                terminal_value: 0.0,
-                virtual_loss_count: 0,
-            };
-            total_visits += visits;
-            total_w += w_value;
-        }
-        tree.pool[0].n_visits = total_visits;
-        tree.pool[0].w_value = total_w;
-        tree.next_free = 1 + n as u32;
-        tree
-    }
-
-    #[test]
-    fn test_improved_policy_sums_to_one() {
-        // Three children with different visits and Q values.
-        let tree = setup_improved_policy_tree(&[
-            (10, 5.0, 0.5),   // Q=0.5
-            (8, -2.0, 0.3),   // Q=-0.25
-            (2, 0.4, 0.2),    // Q=0.2
-        ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
-        let sum: f32 = policy.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5, "policy should sum to 1.0, got {sum}");
-    }
-
-    #[test]
-    fn test_improved_policy_no_visits_returns_prior() {
-        // All children unvisited — should return normalized priors.
-        let tree = setup_improved_policy_tree(&[
-            (0, 0.0, 0.6),
-            (0, 0.0, 0.4),
-        ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
-        let sum: f32 = policy.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5, "prior fallback should sum to 1.0, got {sum}");
-
-        // The two non-zero entries should roughly reflect priors.
-        let nonzero: Vec<f32> = policy.iter().copied().filter(|&p| p > 0.0).collect();
-        assert_eq!(nonzero.len(), 2);
-        assert!(nonzero[0] > nonzero[1], "higher prior should get higher prob");
-    }
-
-    #[test]
-    fn test_improved_policy_q_ordering() {
-        // Two children: one clearly winning (Q=+0.9), one losing (Q=-0.9).
-        // Equal priors — the improved policy should favor the winning child.
-        let tree = setup_improved_policy_tree(&[
-            (50, 45.0, 0.5),   // Q=+0.9
-            (50, -45.0, 0.5),  // Q=-0.9
-        ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
-
-        // Find the two non-zero actions.
-        let (cq, cr) = tree.root_board.window_center();
-        let idx_good = Board::window_flat_idx_at(0, 0, cq, cr);
-        let idx_bad = Board::window_flat_idx_at(0, 1, cq, cr);
-
-        assert!(policy[idx_good] > policy[idx_bad],
-            "Q=+0.9 child should get more probability than Q=-0.9: {} vs {}",
-            policy[idx_good], policy[idx_bad]);
-    }
-
-    // Note: policy_prune_frac test removed — pruning now lives only in
-    // Python's prune_policy_targets (trainer.py) to avoid double-pruning.
-
     #[test]
     fn test_last_search_stats_bounds_after_sims() {
         let mut tree = MCTSTree::new(1.5);
@@ -1352,19 +846,6 @@ mod tests {
             "mean_depth must be >= 0.0, got {mean_depth}");
         assert!(root_concentration >= 0.0 && root_concentration <= 1.0,
             "root_concentration must be in [0.0, 1.0], got {root_concentration}");
-    }
-
-    #[test]
-    fn test_improved_policy_illegal_actions_stay_zero() {
-        let tree = setup_improved_policy_tree(&[
-            (10, 5.0, 0.7),
-            (5, 1.0, 0.3),
-        ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
-
-        // Only 2 actions should be non-zero out of board_size*board_size+1.
-        let nonzero_count = policy.iter().filter(|&&p| p > 0.0).count();
-        assert_eq!(nonzero_count, 2, "only legal actions should have non-zero prob, got {nonzero_count}");
     }
 
     // ── Top-K leaf cap tests ─────────────────────────────────────────────────
