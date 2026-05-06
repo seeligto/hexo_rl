@@ -31,12 +31,7 @@ from hexo_rl.monitoring.early_game_probe import (
 from hexo_rl.monitoring.value_probe import ValueProbe
 from hexo_rl.monitoring.events import emit_event, register_renderer
 from hexo_rl.monitoring.gpu_monitor import GPUMonitor
-# _BOOTSTRAP_ANCHOR_CANDIDATES re-export retired by §159 Task 5 (resolve_anchor)
-from hexo_rl.training.anchor import (
-    _BOOTSTRAP_ANCHOR_CANDIDATES,
-    load_best_model_resilient as _load_best_model_resilient,
-    save_best_model_atomic as _save_best_model_atomic,
-)
+from hexo_rl.training.anchor import resolve_anchor
 from hexo_rl.training.batch_assembly import BatchBuffers, assemble_mixed_batch
 # Orchestrator hooks — public in `hexo_rl.training.orchestrator`, aliased here so
 # the existing call sites in `run_training_loop` keep their underscore-prefixed
@@ -197,100 +192,25 @@ def run_training_loop(
         config, device, run_id, train_cfg,
     )
 
-    best_model_path = Path(
-        eval_ext_config.get("eval_pipeline", {}).get("gating", {}).get(
-            "best_model_path", "checkpoints/best_model.pt"
-        )
+    # ── Anchor resolution ─────────────────────────────────────────────────────
+    _anchor = resolve_anchor(
+        eval_pipeline=eval_pipeline,
+        eval_ext_config=eval_ext_config,
+        inf_model=inf_model,
+        trainer=trainer,
+        args=args,
+        config=config,
+        device=device,
+        board_size=board_size,
+        res_blocks=res_blocks,
+        filters=filters,
+        in_channels=in_channels,
+        input_channels=input_channels,
+        se_reduction_ratio=se_reduction_ratio,
     )
-    best_model: HexTacToeNet | None = None
-    best_model_step: int | None = None
-    if eval_pipeline is not None:
-        best_model_path.parent.mkdir(parents=True, exist_ok=True)
-        # Resilient anchor load: tries best_model.pt → its .bak →
-        # _BOOTSTRAP_ANCHOR_CANDIDATES → fresh init from trainer.model.
-        # A corrupt best_model.pt is quarantined with a timestamp suffix
-        # instead of being silently discarded.
-        best_ref = _load_best_model_resilient(
-            best_model_path,
-            checkpoint_dir=args.checkpoint_dir,
-            device=device,
-            config=config,
-        )
-        if best_ref is not None:
-            # Unwrap torch.compile — best_model's state_dict() is consumed
-            # at multiple load_state_dict call sites below; leaving the
-            # OptimizedModule wrapper would inject `_orig_mod.*` prefixes
-            # into every subsequent state_dict() call.
-            best_model = getattr(best_ref.model, "_orig_mod", best_ref.model)
-            best_model.eval()
-            best_model_step = best_ref.step
-            # If best_model.pt was missing/corrupt and we recovered from a
-            # bootstrap or .bak, persist the chosen anchor as the live
-            # best_model.pt so subsequent runs find it directly.
-            if not best_model_path.exists():
-                _save_best_model_atomic(best_model, best_model_path)
-                log.info("anchor_persisted_from_fallback", path=str(best_model_path))
-            # Graduation gate: self-play consumes anchor weights, not trainer.model.
-            # Sync inf_model to the loaded anchor before workers start — but only
-            # when architectures match. Sweep variants train a reduced-channel model
-            # against an 18-channel anchor; syncing architectures is impossible and
-            # wrong (sweep inf_model should start from trainer.model, not the anchor).
-            _inf_base = getattr(inf_model, "_orig_mod", inf_model)
-            if _inf_base.in_channels == best_model.in_channels:
-                _best_sd = best_model.state_dict()
-                # Anchor is always loaded without input_channels (see _try_load_anchor
-                # config_overrides). If _inf_base was built with input_channels, inject
-                # its own buffer so load_state_dict sees a consistent state_dict.
-                _inf_idx = getattr(_inf_base, "input_channel_index", None)
-                if "input_channel_index" not in _best_sd and _inf_idx is not None:
-                    _best_sd = dict(_best_sd)
-                    _best_sd["input_channel_index"] = _inf_idx.detach().clone()
-                _inf_base.load_state_dict(_best_sd)
-            else:
-                log.info(
-                    "inf_model_anchor_arch_mismatch_skip_sync",
-                    inf_in_channels=_inf_base.in_channels,
-                    anchor_in_channels=best_model.in_channels,
-                    msg="inf_model starts from trainer.model (sweep variant)",
-                )
-            log.info("best_model_loaded", path=str(best_model_path), step=best_model_step)
-            # M2: warn if resumed trainer.model and loaded anchor diverge on step.
-            # Either side may legitimately be ahead (anchor rollback, or training
-            # continued past last promotion) but a silent mismatch can produce a
-            # trivially-promoted first eval that wipes a hand-picked anchor.
-            if best_model_step is not None and trainer.step != best_model_step:
-                log.warning(
-                    "resume_anchor_step_mismatch",
-                    trainer_step=trainer.step,
-                    best_model_step=best_model_step,
-                    msg=(
-                        "trainer.model and best_model.pt were loaded from different "
-                        "training steps. First eval will compare the current trainer "
-                        "weights against this anchor; confirm this is intended."
-                    ),
-                )
-        else:
-            # No usable anchor anywhere — last-resort fresh init from trainer.model.
-            # On a clean run this should rarely fire: the bootstrap candidates above
-            # are the canonical first-run anchor. Reaching this branch means the box
-            # has neither best_model.pt, its .bak, nor any bootstrap_*.pt — flag it.
-            log.warning(
-                "anchor_fresh_init_no_bootstrap",
-                tried=list(_BOOTSTRAP_ANCHOR_CANDIDATES),
-                msg="No anchor or bootstrap available — initialising best_model.pt from current trainer.model. "
-                    "Drop a bootstrap_model.pt (or one of _BOOTSTRAP_ANCHOR_CANDIDATES) into checkpoints/ to anchor wr_best meaningfully.",
-            )
-            base_model = getattr(trainer.model, "_orig_mod", trainer.model)
-            best_model = HexTacToeNet(
-                board_size=board_size, res_blocks=res_blocks, filters=filters,
-                in_channels=in_channels, input_channels=input_channels,
-                se_reduction_ratio=se_reduction_ratio,
-            ).to(device)
-            best_model.load_state_dict(base_model.state_dict())
-            best_model.eval()
-            _save_best_model_atomic(best_model, best_model_path)
-            best_model_step = trainer.step
-            log.info("best_model_initialized", path=str(best_model_path), step=best_model_step)
+    best_model = _anchor.best_model
+    best_model_step = _anchor.best_model_step
+    best_model_path = _anchor.best_model_path
 
     _eval_thread: threading.Thread | None = None
     _eval_result: list[dict | None] = [None]
