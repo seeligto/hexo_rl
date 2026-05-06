@@ -51,6 +51,33 @@ from hexo_rl.training.trainer import Trainer
 log = structlog.get_logger(__name__)
 
 
+def _compute_pretrained_weight(step: int, initial_w: float, min_w: float, decay_steps: float) -> float:
+    return max(min_w, initial_w * math.exp(-step / decay_steps))
+
+
+def _steps_budget(new_games: int, training_steps_per_game: float, max_train_burst: int) -> int:
+    return min(max(1, round(new_games * training_steps_per_game)), max_train_burst)
+
+
+class RollingGamesPerHour:
+    def __init__(self, t_start: float, window_seconds: float = 60.0) -> None:
+        self.t_start = t_start
+        self.window_seconds = window_seconds
+        self._window: list[tuple[float, int]] = []
+
+    def update(self, now: float, games_played: int) -> float:
+        self._window.append((now, games_played))
+        cutoff = now - self.window_seconds
+        while self._window and self._window[0][0] < cutoff:
+            self._window.pop(0)
+        if len(self._window) < 2:
+            elapsed = max(now - self.t_start, 1e-6)
+            return games_played / elapsed * 3600
+        dt = self._window[-1][0] - self._window[0][0]
+        dg = self._window[-1][1] - self._window[0][1]
+        return (dg / max(dt, 1e-6)) * 3600
+
+
 def run_training_loop(
     trainer: Trainer,
     buffer: Any,                          # ReplayBuffer (self-play)
@@ -215,9 +242,6 @@ def run_training_loop(
     _hard_gn_min_steps  = int(_mon_cfg.get("hard_abort_grad_norm_steps", 5))
     _consec_high_gn     = 0
 
-    def compute_pretrained_weight(step: int) -> float:
-        return max(mixing_min_w, mixing_initial_w * math.exp(-step / mixing_decay_steps))
-
     # ── Emit run_start ─────────────────────────────────────────────────────────
     emit_event({
         "event": "run_start",
@@ -240,21 +264,10 @@ def run_training_loop(
     log.info("selfplay_pool_started", n_workers=pool.n_workers)
 
     # ── Rolling games/hour accumulator ────────────────────────────────────────
-    _iter_games_window: list[tuple[float, int]] = []
-    _iter_window_sec = 60.0
+    _rolling_gph = RollingGamesPerHour(t_start)
 
     def _games_per_hour_rolling() -> float:
-        now = time.time()
-        _iter_games_window.append((now, games_played))
-        cutoff = now - _iter_window_sec
-        while _iter_games_window and _iter_games_window[0][0] < cutoff:
-            _iter_games_window.pop(0)
-        if len(_iter_games_window) < 2:
-            elapsed = max(now - t_start, 1e-6)
-            return games_played / elapsed * 3600
-        dt = _iter_games_window[-1][0] - _iter_games_window[0][0]
-        dg = _iter_games_window[-1][1] - _iter_games_window[0][1]
-        return (dg / max(dt, 1e-6)) * 3600
+        return _rolling_gph.update(time.time(), games_played)
 
     # ── Main iteration ─────────────────────────────────────────────────────────
     schedule_idx = 1  # first schedule entry already applied at buffer construction
@@ -327,10 +340,7 @@ def run_training_loop(
                 time.sleep(0.1)
                 continue
 
-            steps_budget = min(
-                max(1, int(round(new_games * training_steps_per_game))),
-                max_train_burst,
-            )
+            steps_budget = _steps_budget(new_games, training_steps_per_game, max_train_burst)
             last_train_game_count = games_played
 
             for _ in range(steps_budget):
@@ -349,7 +359,7 @@ def run_training_loop(
                 # ── Training step ─────────────────────────────────────────────
                 batch_size = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
                 if pretrained_buffer is not None and pretrained_buffer.size > 0 and buffer.size > 0:
-                    w_pre  = compute_pretrained_weight(train_step)
+                    w_pre  = _compute_pretrained_weight(train_step, mixing_initial_w, mixing_min_w, mixing_decay_steps)
                     n_pre  = max(1, int(math.ceil(batch_size * w_pre)))
                     n_self = batch_size - n_pre
                     (states, chain_planes, policies, outcomes,

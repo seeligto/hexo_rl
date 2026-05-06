@@ -177,21 +177,22 @@ def test_buffer_resize_during_training():
 
 def test_pretrained_weight_schedule():
     """Verify the pretrained weight formula decays correctly."""
+    from hexo_rl.training.loop import _compute_pretrained_weight
+
     min_w = 0.1
     initial_w = 0.8
     decay_steps = 1_000_000.0
 
-    def w(step):
-        return max(min_w, initial_w * math.exp(-step / decay_steps))
-
-    assert w(0) == pytest.approx(0.8, abs=1e-6)
-    assert w(1_000_000) == pytest.approx(max(0.1, 0.8 * math.exp(-1)), abs=1e-3)
+    assert _compute_pretrained_weight(0, initial_w, min_w, decay_steps) == pytest.approx(0.8, abs=1e-6)
+    assert _compute_pretrained_weight(1_000_000, initial_w, min_w, decay_steps) == pytest.approx(
+        max(0.1, 0.8 * math.exp(-1)), abs=1e-3
+    )
     # At very large step, should floor at min_w.
-    assert w(100_000_000) == pytest.approx(0.1, abs=1e-6)
+    assert _compute_pretrained_weight(100_000_000, initial_w, min_w, decay_steps) == pytest.approx(0.1, abs=1e-6)
     # Monotonically decreasing.
-    prev = w(0)
+    prev = _compute_pretrained_weight(0, initial_w, min_w, decay_steps)
     for s in range(0, 3_000_000, 100_000):
-        cur = w(s)
+        cur = _compute_pretrained_weight(s, initial_w, min_w, decay_steps)
         assert cur <= prev + 1e-9
         prev = cur
 
