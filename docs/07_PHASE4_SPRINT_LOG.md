@@ -7040,3 +7040,221 @@ Commits in §156: `3ad8cb7` (R6–R10 MCTS-side isolation, §155 follow-up),
   subsample-on-push) — deferred unless §157 surfaces it as needed.
 * Does not push-delete `origin/phase_b_prime_v8_plumbing` (still useful
   as the v8 lineage anchor; revisit in §157 close-out).
+
+## §157 — Phase B' v10: 5k validation smoke + hygiene wave — 2026-05-06
+
+### Context
+
+§156 closed with the cosine temperature schedule identified as the sole
+load-bearing knob behind R10's 91% draw lock, fix authored
+(`temperature_threshold_compound_moves: 0`, `temp_min: 0.5`) with
+Q2 jitter + bootstrap-floor mandatory pairings, laptop preflight
+(commit `01ebd29`) PASS at 4% draws / stride5 P90 = 4 / colony 0/254.
+§157 = production-scale 5k validation on the 5080 + branch hygiene +
+top-level config propagation + sustained-run authorisation hand-off.
+
+### Gate 1 — Pre-flight verification
+
+* Remote synced to `01ebd29`, bootstrap sha256 prefix `29306533…`
+  matches §150.  Stale `replay_buffer.bin.recent.npz` archived to
+  `archive/replay_buffers/`.
+* §156 fix knobs verified in `configs/variants/w4c_smoke_v7_5080.yaml`:
+  cosine off + `temp_min: 0.5` + `legal_move_radius_jitter: true` +
+  `bootstrap_floor.enabled: true min_winrate: 0.45`.
+* `bootstrap_floor` predicate verified in
+  `hexo_rl/eval/eval_pipeline.py:401-444`: AND-combines
+  `wr_best ≥ promotion_winrate (0.55)` + `ci_lo > 0.5` +
+  `wr_bootstrap_anchor ≥ min_winrate (0.45)`.  Missing measurement =
+  failure (defensive).
+* Variant already self-contained for 5080 throughput
+  (`gumbel_targets_5080_24t` knobs baked in: n_workers=18,
+  inference_batch_size=224, inference_max_wait_ms=8.0,
+  max_train_burst=8) — no overlay needed at launch.
+
+### Gate 2 — 5k smoke launch + completion
+
+Launched 2026-05-06 05:46:37 UTC on vast.ai 5080
+(`ssh6.vast.ai:13053`); ran in `tmux hexo_phase_b:smoke5k`.
+`--checkpoint bootstrap_model_v7full.pt --variant w4c_smoke_v7_5080
+--checkpoint-dir checkpoints/w4c_smoke_v7_5k --no-dashboard
+--iterations 5000`.  Completed 09:05:47 UTC; wall 11,916 s = 3h 18m 35s;
+1,256 games; 5,000 train steps; cost ~$1.20.
+
+Final ckpt: `checkpoints/w4c_smoke_v7_5k/checkpoint_00005000.pt`.
+
+### Gate 3 — Branch hygiene
+
+* `phase_b_prime_v8_plumbing` already at master HEAD (no-op merge).
+  Local master one commit ahead of origin/master pending operator
+  authorisation.
+* `phase_b_prime_q3_cluster6` deleted from origin (user-authorised
+  via §157 prompt).
+* `phase_b_prime_t5_corner_mask` not present (no-op).
+* `phase_b_prime_v9_hex_native` retained (knobs default off, future
+  architecture research).
+* `phase_b_prime_v10_root_cause` merge to master deferred to Gate 5
+  per user instruction (one bundled landing post-config-propagation).
+
+### Gate 4 — Smoke verdict
+
+**PASS on all live abort signatures, self-play health metrics, AND the
+SealBot offline eval ≥17% pass criterion (19.0% WR, n=200).**
+
+Live abort signatures (full-run, dashboard + SSH polls):
+
+| signature | end-of-run value | abort threshold | status |
+|---|---|---|---|
+| stride-5 P90 (rolling 50 games, dashboard) | 4 | 60 | ✅ |
+| row max P90 (rolling 50 games, dashboard) | 13 | 50 | ✅ |
+| colony_ext_frac max (per-game, n=1256) | 0.086 | 0.40 | ✅ |
+| colony_terminal_fraction (8 measurements) | 0.000 | — | ✅ |
+| draw_rate (last 200 games) | 7.5% | 70% (WARN-only) | ✅ |
+| grad_norm | 0.98–1.62 | 10.0 hard-abort | ✅ |
+| NaN losses | 0 | any | ✅ |
+
+Eval verdicts (3 of ~10 planned rounds completed; see follow-up #1
+for the cadence finding):
+
+| step | promoted | wr_best | wr_anchor (v7full) |
+|---:|:---:|---:|---:|
+| 500  | F | 0.34 | 0.28 |
+| 2000 | F | 0.48 | 0.42 |
+| 3500 | F | 0.39 | 0.37 |
+
+wr_anchor recovered fast (0.28 → 0.42 in 1500 steps), then sampling-noise
+dipped to 0.37 (n=100 ⇒ ±10pp 95% CI; CIs heavily overlap with round 2).
+Bootstrap-floor gate operated correctly — refused promotion on a
+sub-floor model.
+
+Self-play health (final 200-game window): draw_rate 7.5%,
+ex-draws-x/(x+o) 51.4%, plies P50/P90/mean = 65/136/76, sims/sec P50
+3,707, colony_ext_frac max 0.086.  Q2 `legal_move_radius_jitter`
+mitigation held the §156 R12 67% colony rate at trace levels.
+
+Final-checkpoint SealBot offline eval (n=200, 128 sims, time_limit 0.5):
+**winrate 0.19 (38/200, 0 draws, 1 colony win)**.  Beats the 17% pass
+gate; matches the §150 v7full baseline (17.4% n=500) within sample noise
+(95% CIs overlap, Δ +1.6pp).  Confirms §156 fix did not regress strength
+against the external benchmark.
+
+Full live-poll trajectory + per-event tables: see
+`reports/phase_b_prime/5k_smoke/results.md`.
+
+### Gate 5 — Top-level config propagation
+
+* **PROPAGATED:** `selfplay.legal_move_radius_jitter: true` added to
+  `configs/selfplay.yaml` (commit `83be4d7`).  Q2 §152 verdict, only
+  confirmed Class-4 lever, no downside in any phase.  953 py tests
+  pass post-edit.
+* **Surfaced to operator (Gate 6) — both decisions captured in commit
+  `f2e4555`:**
+  * **S1 — bootstrap-floor default-on, frozen v7full path:**
+    `gating.bootstrap_floor.enabled: true` +
+    `opponents.bootstrap_anchor.enabled: true` +
+    `opponents.bootstrap_anchor.path: checkpoints/bootstrap_model_v7full.pt`.
+    Operator rationale: rotating canonical defeats the gate's regression-
+    catching purpose by re-anchoring below v7full on the first sub-floor
+    promotion.  Frozen v7full anchors the gate to a known-good baseline
+    forever; operators rolling new bootstraps must explicitly re-pin the
+    path only after independent SealBot validation.
+  * **S2 — cosine-temp disable: NOT propagated (variant-pinned).**
+    Comment added at the cosine knobs noting §156 R12 load-bearing
+    verdict + warm-start opt-out recommendation pointing at
+    `w4c_smoke_v7_5080.yaml`.  Cold-start data unavailable; defaults
+    reflect "still under investigation".  Variant-pin preserves both
+    options.
+
+### Gate 6 — Decision hand-off
+
+Operator decisions captured 2026-05-06:
+
+* **Path B selected** — skip the sustained 40k run; preserve dev cycles
+  for the encoding migration (Phase 5+) that's about to obsolete the
+  current v6/v7 8-plane trunk.  5k smoke held the §156 fix and produced
+  no drift; sustaining 40k on encoding-about-to-die is sunk cost.
+* **S1 = yes + frozen v7full** (propagated, see Gate 5 above).
+* **S2 = no, comment-only** (variant-pinned, see Gate 5 above).
+* **Bundle merge + push:** `phase_b_prime_v10_root_cause` → `master`
+  + `master` push to origin/master in one bundled landing post-Gate 6.
+  See commit footers + branch state at sprint close.
+
+### §157 follow-ups (methodology / instrumentation)
+
+#### #1 — `eval_interval` too tight for production hardware
+
+Variant `eval_interval: 500` produced 6 `eval_skipped_still_running`
+events; only 3 of ~10 planned rounds actually fired.  Each round
+(random + best n=400 + bootstrap_anchor n=100, 128/128 sims) takes
+~21 min wall on the 5080 — cadence 500 is a guaranteed backlog.
+**Future smokes set `eval_interval ≥ 2500`** (5k smoke → 2 rounds at
+steps 2500, 5000); for tighter coverage cut `n_games`, not the
+interval.
+
+Saved as memory `feedback_smoke_eval_interval_min_2500.md`.
+
+#### #2 — stride5 / row_max metrics dashboard-only
+
+§156 v8 plumbing wired `stride5_run_max_per_game` and
+`row_max_density_per_game` as live dashboard metrics, but they are
+absent from `events_*.jsonl` payloads (verified across all 1,256
+game_complete events of this run).  SSH-poll abort gates that grep
+JSONL cannot see them — only the dashboard can.  **Mirror to
+`instrumentation_periodic` payload** (or document the dashboard-only
+metric set explicitly).
+
+#### #3 — Final eval round skipped on iteration-limit exit
+
+`--iterations 5000` exited the training process before the step-5000
+eval round could run — single `evaluation_game_progress` event then
+nothing.  Lost the most informative checkpoint's in-loop measurement.
+**Either drain the eval queue before iteration-limit exit, or always
+auto-run an offline final-checkpoint eval** as part of the smoke
+harness (the SealBot eval invoked manually for Gate 4 is exactly
+this pattern — automate it).
+
+#### #4 — `sealbot_colony_bug_risk` startup warning
+
+One emission at startup.  Per `feedback_colony_fraction.md` low
+colony in eval is positive; this guard is likely a v5-era legacy.
+Worth confirming the predicate is still meaningful or pruning.
+
+#### #5 — User feedback: draw_rate not an abort signal
+
+User inspected actual draw games during this run and confirmed model
+plays soundly — draws come from the policy missing some open-4
+threats, not pathology.  Demoted `draw_rate > 70%` from abort to
+WARN.  Saved as memory `feedback_draw_rate_not_abort_signal.md`.
+
+### Verdict
+
+**§157 PASS.**  §156 cosine-temp fix validated at 5k production scale on
+5080.  Class-4 stride-5 fixed point that defined §147 v5 / §155 R10 is
+broken under load.  Final-checkpoint SealBot WR 19.0% (n=200) clears the
+17% gate and matches the §150 v7full baseline (17.4% n=500) within sample
+noise — confirms the fix did not regress strength against the external
+benchmark.  wr_anchor trajectory (0.28 → 0.42 → 0.37) is the bootstrap-
+floor gate's intended signal: model is closing on v7full strength rather
+than diverging; gate operated correctly by refusing all sub-floor
+promotions.
+
+Path B selected — proceeding to encoding migration (Phase 5+).  No
+sustained 40k run on the v6/v7 8-plane trunk.
+
+Commits in §157:
+* `9412a38` — `docs(sprint): §156 R10 bisection + cosine-temp load-bearing verdict`
+* `83be4d7` — `chore(configs): propagate §156 legal_move_radius_jitter default to top-level`
+* `f2e4555` — `chore(configs): §157 Gate 6 — bootstrap-floor default-on + cosine verdict comment`
+* (this entry + bundled v10→master merge to follow as the close-out commits)
+
+### What this sprint DOES NOT do
+
+* Does not run the sustained 40k training run — operator selected Path B
+  (encoding migration) over Path A (sustained) at Gate 6.
+* Does not modify the v8 plumbing instrumentation event schema
+  (follow-up #2 left for §158 or later).
+* Does not change the `sealbot_eval` script behaviour to auto-run
+  on smoke completion (follow-up #3 left for §158 or later).
+* Does not prune the `sealbot_colony_bug_risk` legacy guard
+  (follow-up #4 left for §158 or later).
+* Does not begin encoding-migration work itself — that opens as Phase 5+
+  in a subsequent sprint context.
