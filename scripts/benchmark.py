@@ -906,12 +906,24 @@ def parse_args() -> argparse.Namespace:
                    help="Number of measurement repeats per metric (default 5)")
     p.add_argument("--output", type=Path, default=None,
                    help="Write JSON report to this path (overrides default timestamped path)")
+    p.add_argument("--corner-mask", action="store_true",
+                   help="Probe P3: enable engine corner-mask LUT on stone planes")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     n_runs = int(args.n_runs)
+
+    # P3 corner-mask probe: flip global engine flag once before any encode runs.
+    if args.corner_mask:
+        try:
+            from engine import set_corner_mask_enabled  # type: ignore[attr-defined]
+            set_corner_mask_enabled(True)
+            console.print("[yellow]P3 corner-mask: ON[/yellow]")
+        except (ImportError, AttributeError) as exc:
+            console.print(f"[red]corner-mask flag unavailable: {exc}[/red]")
+            raise SystemExit(2) from exc
 
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
