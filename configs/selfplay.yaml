@@ -76,6 +76,15 @@ selfplay:
   # to false (default in the Rust ctor) — they play real-board games.
   rotation_enabled: true
 
+  # §156 / Q2 — per-game LEGAL_MOVE_RADIUS jitter ∈ {4, 5, 6}.  Sole
+  # confirmed lever on the Class-4 stride-5 fixed point (§152 Q2 verdict);
+  # mitigates the §156 R12 cosine-removal colony-attractor signature
+  # (held colony fraction at trace levels in the §157 5k validation
+  # smoke).  Propagated to top-level default in §157 Gate 5 — no downside
+  # observed in any phase that ran with it on.  Set false to restore
+  # the §145 fixed radius=5 behaviour.
+  legal_move_radius_jitter: true
+
   playout_cap:
     # Game-level playout cap (fast_prob / fast_sims / standard_sims) is mutually
     # exclusive with the move-level cap (full_search_prob). Pool init raises if both
