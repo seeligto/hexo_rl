@@ -50,7 +50,7 @@ def build_inference_model(
     board_size         = int(trainer.config.get("board_size",         19))
     res_blocks         = int(trainer.config.get("res_blocks",         12))
     filters            = int(trainer.config.get("filters",            128))
-    in_channels        = int(trainer.config.get("in_channels",        18))
+    in_channels        = int(trainer.config.get("in_channels",         8))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
     input_channels     = trainer.config.get("input_channels", None)
 

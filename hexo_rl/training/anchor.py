@@ -90,7 +90,7 @@ def _try_load_anchor(
             fallback_config=fallback_config,
             config_overrides={"input_channels": None, "in_channels": None},
         )
-    except Exception as exc:
+    except Exception as exc:  # broad by design: corrupt zip, arch mismatch, CUDA OOM all fall through to next candidate
         log.warning(
             "anchor_load_failed",
             path=str(candidate),
@@ -243,7 +243,7 @@ def resolve_anchor(
         # If best_model.pt was missing/corrupt and we recovered from a
         # bootstrap or .bak, persist the chosen anchor as the live
         # best_model.pt so subsequent runs find it directly.
-        if not best_model_path.exists():
+        if not best_model_path.exists():  # True after quarantine: _quarantine_corrupt renames, not deletes
             save_best_model_atomic(best_model, best_model_path)
             log.info("anchor_persisted_from_fallback", path=str(best_model_path))
         # Graduation gate: self-play consumes anchor weights, not trainer.model.

@@ -719,6 +719,39 @@ Throughput sweep harness (`scripts/sweep_harness/`) unaffected.
 
 ---
 
+## Q-§159a — _run_loop → StepCoordinator class (§159 follow-up)
+
+**Status:** OPEN — separate wave, plan-mode pass required.
+
+`loop.py` landed at 686 LOC (floor ~600) because `_run_loop` (~250 LOC) captures
+closure state: training-step dispatch, eval triggering, instrumentation cadence,
+hard/soft-abort gates, buffer growth schedule, tracemalloc snapshots. Converting
+to a `StepCoordinator` class moves those closure captures to instance fields and
+makes `_run_loop` a method. This is a larger refactor than §159 — recommend
+Plan-mode design pass before execution to map which state is truly per-step vs
+per-run, and to identify the minimum public API for test coverage.
+
+**Scope:** `hexo_rl/training/loop.py` only. No hot-path — bench gate not required.
+**Expected outcome:** `loop.py` drops from 686 to ~430 LOC.
+
+---
+
+## Q-§159b — Unit test gaps: build_subsystems / resolve_anchor branches
+
+**Status:** OPEN — land separately, no ordering constraint vs §159a.
+
+Two coverage gaps surfaced by §159 extraction:
+
+1. `build_subsystems` ordering and `LoopSubsystems.teardown` under
+   partial-construction failure (dashboard fails to start mid-init).
+2. `resolve_anchor` branching: `eval_pipeline=None` early return, fresh-init
+   path, arch-mismatch path. Each branch has a distinct log fingerprint that
+   can be asserted cheaply.
+
+Both are in `python_health.md` row 1. Land as two commits: one per function.
+
+---
+
 ## Deferred (Phase 5+)
 
 | # | Question | Reason deferred |
