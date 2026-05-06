@@ -105,7 +105,7 @@ def triage_policy_ce_gate_for(variant: str) -> float:
 # (model init, batch sampling, augmentation indices). Rust self-play workers
 # use rand::rng() (OS-entropy thread-local) and are NOT reached by this seed;
 # self-play game outcomes have a non-deterministic component per worker. See
-# docs/sweep_deployment.md "Self-play RNG seeding" for the full discussion.
+# docs/sweep_harness.md for the full discussion.
 
 # Default anchor checkpoint for "WR vs bootstrap-v5 anchor" eval. Defined as a
 # fall-back chain — first existing path wins. Override via --anchor-checkpoint.

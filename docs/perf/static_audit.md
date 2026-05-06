@@ -81,7 +81,7 @@ Files: `hexo_rl/model/network.py` (247 lines), `__init__.py` (stub).
 - **4.** **INFO (clean).** Inference callers use bare `model(tensor)` with default flags → 3-tuple `(log_policy, value, v_logit)`. Aux heads skipped.
 - **5.** All five aux heads (opp_reply, value_var, ownership, threat, chain_head) gated on kwargs; `False` by default.
 - **6.** `torch.compile` disabled at `configs/training.yaml:5`. Helper at `network.py:234-247`. §25/§30/§32 — do not re-enable.
-- **7.** 18-plane input; `Conv2d(18, 128, 3, padding=1, bias=False)` at `network.py:88`. §97 confirmed.
+- **7.** 8-plane input; `Conv2d(8, 128, 3, padding=1, bias=False)` at `network.py:142` (post-§131 P3; was 18-plane via HEXB v6 bridge pre-P3, §97).
 - **8.** Trunk ≈ 3.64 M params; inference-path total ≈ 3.97 M. ≈ 2.57 GFLOPs/forward. At B=64 → ~164 GFLOPs → ~8 ms on RTX 3070 fp16. Matches measured 7,646 pos/s (8.37 ms/batch-64). **Near compute-bound.**
 - **9.** Value head: avg+max pool → Linear(256) → ReLU → Linear(1) → tanh. Matches §99.
 - **10.** No SDPA, no attention, no exotic ops. Pure CNN.

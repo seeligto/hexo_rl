@@ -53,7 +53,7 @@ batch_fill 78.6% < 84% = dispatch-GIL bound (Q35, Phase 4.5 item).
 | GPU utilization | 100.0% | ≥ 85% | saturated; NN-isolated benchmark |
 | VRAM usage (process) | 0.10 GB / 8.6 GB | ≤ 6.9 GB (80%) | down from 0.11/8.0 — 8-plane model; VRAM budget matches RTX 4060 Max-Q 8.6 GB |
 | Worker throughput | 33,174 pos_gen/hr (laptop n=5, Q44) | ≥ 20,000 pos_gen/hr | IQR ±5.3%, range [29.1k–36.3k]. Desktop RTX 3070 18-plane (§128): 27,835. Laptop now primary reference (Q44 2026-04-30) |
-| Batch fill % | 78.6% | ≥ 84% | IQR ±2.3%; **FAIL** — dispatch-GIL bound (Q35); was 99.2% with 18-plane/older dispatch path |
+| Batch fill % | 99.76% | ≥ 84% | IQR ±0.25; **PASS** post-§156 (laptop bench 2026-05-06). Pre-§156 was 78.6% dispatch-GIL bound (Q35). |
 
 ### Compile-on engineering datum (`make bench.compile`, 2026-04-25, 18-plane)
 
