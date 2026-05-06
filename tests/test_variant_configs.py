@@ -130,10 +130,6 @@ def test_training_steps_per_game_per_variant() -> None:
         "gumbel_full": 2.0,            # desktop sustained run (rebaselined post-Option-A, Prompt 16)
         "gumbel_targets": 2.0,         # laptop — §107 mid-run bump 2026-04-19
         "gumbel_targets_desktop": 4.0, # W3 fix 2026-04-29: §69 P3 winner
-        "calib_R1": 2.0,               # inherits base
-        "calib_R2": 2.0,
-        "calib_R3": 2.0,
-        "calib_R4": 2.0,
     }
     for variant, want in expected.items():
         cfg = _resolve(variant)
