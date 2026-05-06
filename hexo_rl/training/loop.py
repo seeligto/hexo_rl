@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import signal
-import sys
 import threading
 import time
 import tracemalloc
@@ -40,6 +38,7 @@ from hexo_rl.training.anchor import (
     save_best_model_atomic as _save_best_model_atomic,
 )
 from hexo_rl.training.batch_assembly import BatchBuffers, assemble_mixed_batch
+from hexo_rl.training.signals import ShutdownState, install_signal_handlers
 from hexo_rl.training.trainer import Trainer
 
 log = structlog.get_logger(__name__)
@@ -421,20 +420,8 @@ def run_training_loop(
             dashboards.append(wd)
 
     # ── Graceful shutdown ──────────────────────────────────────────────────────
-    _running = [True]
-    _stop_count = [0]
-    _shutdown_save = [False]
-
-    def _stop(sig: int, frame: Any) -> None:
-        _stop_count[0] += 1
-        if _stop_count[0] >= 2:
-            sys.exit(1)
-        log.info("shutdown_requested", msg="finishing current step… press Ctrl+C again to force")
-        _shutdown_save[0] = True
-        _running[0] = False
-
-    signal.signal(signal.SIGINT,  _stop)
-    signal.signal(signal.SIGTERM, _stop)
+    _shutdown = ShutdownState()
+    install_signal_handlers(_shutdown)
 
     # ── Loop setup ────────────────────────────────────────────────────────────
     log_interval = int(config.get("log_interval", 10))
@@ -531,12 +518,12 @@ def run_training_loop(
         _last_pool_overflows = 0
         nonlocal _consec_high_gn
 
-        while _running[0]:
+        while _shutdown.running:
             if stop_step is not None and train_step >= stop_step:
                 log.info("iteration_limit_reached", iterations=args.iterations)
                 break
 
-            if _shutdown_save[0]:
+            if _shutdown.shutdown_save:
                 log.info(
                     "shutdown_signal_checkpoint",
                     msg="Shutdown signal received — saving checkpoint before exit",
@@ -646,7 +633,7 @@ def run_training_loop(
                             threshold=_hard_gn_threshold,
                             msg="Sustained high gradient norm — halting run. Roll back to ckpt_12190 before re-resuming.",
                         )
-                        _running[0] = False
+                        _shutdown.running = False
                 else:
                     _consec_high_gn = 0
 
@@ -678,7 +665,7 @@ def run_training_loop(
                                     "Commit checkpoint and open §120 investigation."
                                 ),
                             )
-                            _running[0] = False
+                            _shutdown.running = False
 
                 # ── Eval (non-blocking background thread) ─────────────────────
                 if eval_pipeline is not None and train_step > 0 and train_step % eval_interval == 0:
@@ -881,7 +868,7 @@ def run_training_loop(
         )
         if (_final_drain_timeout > 0.0
                 and _eval_thread is not None and _eval_thread.is_alive()
-                and not _shutdown_save[0]):
+                and not _shutdown.shutdown_save):
             log.info("final_eval_drain_waiting", timeout_sec=_final_drain_timeout)
             _eval_thread.join(timeout=_final_drain_timeout)
             if _eval_thread.is_alive():
