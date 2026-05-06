@@ -33,17 +33,16 @@ from hexo_rl.monitoring.early_game_probe import (
 from hexo_rl.monitoring.value_probe import ValueProbe
 from hexo_rl.monitoring.events import emit_event, register_renderer
 from hexo_rl.monitoring.gpu_monitor import GPUMonitor
-from hexo_rl.training.batch_assembly import BatchBuffers, assemble_mixed_batch
-from hexo_rl.training.trainer import Trainer
-
-log = structlog.get_logger(__name__)
-
-
+# _BOOTSTRAP_ANCHOR_CANDIDATES re-export retired by §159 Task 5 (resolve_anchor)
 from hexo_rl.training.anchor import (
     _BOOTSTRAP_ANCHOR_CANDIDATES,
     load_best_model_resilient as _load_best_model_resilient,
     save_best_model_atomic as _save_best_model_atomic,
 )
+from hexo_rl.training.batch_assembly import BatchBuffers, assemble_mixed_batch
+from hexo_rl.training.trainer import Trainer
+
+log = structlog.get_logger(__name__)
 
 
 def run_training_loop(
