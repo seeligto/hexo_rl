@@ -60,7 +60,6 @@ Starting config for self-play RL (do not exceed without benchmarking):
   - `gumbel_targets` — PUCT search + completed-Q targets (P3 sweep
     winner per §69; `max_game_moves: 200` post-§76; `inf_bs=64,
     wait_ms=4` post-§90).
-  - `baseline_puct` — PUCT + CE visit targets. Ablation baseline.
   Gumbel provides root noise by construction; Dirichlet is additionally
   applied post-§73 in both branches.
 

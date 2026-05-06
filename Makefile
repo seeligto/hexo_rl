@@ -11,7 +11,7 @@ CHECKPOINT_LATEST ?= $(shell ls -1 checkpoints/checkpoint_*.pt 2>/dev/null | tai
 PRETRAIN_CKPT ?= $(shell ls -1 checkpoints/pretrain/pretrain_*.pt 2>/dev/null | tail -n 1)
 
 # Named variant from configs/variants/ — deep-merged on top of selfplay.yaml.
-# Usage: make train VARIANT=gumbel_full   (or gumbel_targets, baseline_puct)
+# Usage: make train VARIANT=gumbel_full   (or gumbel_targets)
 VARIANT ?=
 VARIANT_FLAG = $(if $(VARIANT),--variant $(VARIANT),)
 

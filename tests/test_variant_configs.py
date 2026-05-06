@@ -39,25 +39,6 @@ def _base_cfgs_for_validator() -> dict:
     return result
 
 
-def test_baseline_puct_pins_pre_100_semantics() -> None:
-    """§102.b — baseline_puct must opt out of the move-level selective policy
-    loss (§100) so it reproduces pre-§100 training semantics. Before §102.b
-    the variant silently inherited ``full_search_prob: 0.25`` from the base,
-    turning the "pre-§67 historical baseline" into a §100-selective run and
-    confounding any ablation that used this variant as an unmodified control.
-    """
-    cfg = _resolve("baseline_puct")
-    playout_cap = cfg["selfplay"]["playout_cap"]
-    assert playout_cap["full_search_prob"] == 0.0, (
-        "baseline_puct inherits selective policy loss from the base — §102.b "
-        "pin is missing; see reports/selective_policy_audit_2026-04-18.md §4 B2"
-    )
-    assert playout_cap["fast_prob"] == 0.0, (
-        "baseline_puct has fast_prob != 0.0 — pre-§100 semantics require both "
-        "playout caps OFF"
-    )
-
-
 def test_gumbel_full_passes_playout_cap_mutex() -> None:
     """§104 — gumbel_full.yaml must resolve with ``fast_prob == 0`` so it
     survives the WorkerPool mutex (``fast_prob > 0 AND full_search_prob > 0``
@@ -126,7 +107,6 @@ def test_training_steps_per_game_per_variant() -> None:
     expected value here to prevent silent drift when the base changes.
     """
     expected = {
-        "baseline_puct": 2.0,          # pinned in file — PRE-§67 historical baseline
         "gumbel_full": 2.0,            # desktop sustained run (rebaselined post-Option-A, Prompt 16)
         "gumbel_targets": 2.0,         # laptop — §107 mid-run bump 2026-04-19
         "gumbel_targets_desktop": 4.0, # W3 fix 2026-04-29: §69 P3 winner

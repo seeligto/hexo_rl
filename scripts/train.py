@@ -136,8 +136,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--variant", default=None,
         help=(
-            "Named variant from configs/variants/ (e.g. gumbel_full, gumbel_targets, "
-            "baseline_puct). Deep-merged on top of base configs after --config."
+            "Named variant from configs/variants/ (e.g. gumbel_full, gumbel_targets). "
+            "Deep-merged on top of base configs after --config."
         ),
     )
     p.add_argument("--no-dashboard", action="store_true",
