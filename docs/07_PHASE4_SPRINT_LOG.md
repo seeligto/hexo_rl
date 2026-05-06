@@ -7719,3 +7719,38 @@ See /tmp/refactor_followups_§160.md:
 ### Precedent
 
 FF-merge to master, same as §158, §158a, §159, §159a.
+
+---
+
+## §161 — Q-§159b lifecycle.py coverage (item 15)
+
+**Branch:** `q159b/lifecycle-coverage`
+
+**Goal:** Close Q-§159b §B item 15 — unit tests for the 3 closure-internal behaviors
+that lived in lifecycle.py + anchor.py and were unreachable from §159a's StepCoordinator
+test surface.
+
+### Commits
+
+- C1: `test(training): coverage for build_subsystems + resolve_anchor + teardown (Q-§159b §B 15)`
+
+### Tests added (+5)
+
+| Test | File | What it covers |
+|---|---|---|
+| `test_teardown_calls_monitor_and_guard_stop` | `test_lifecycle_coverage.py` | `gpu_monitor.stop/join` + `disk_guard.stop` ordering |
+| `test_teardown_silences_dashboard_exception` | `test_lifecycle_coverage.py` | dashboard.stop() exception swallowed, teardown completes |
+| `test_resolve_anchor_eval_pipeline_none` | `test_anchor_branches.py` | early return → AnchorState(None, None, path) |
+| `test_resolve_anchor_fresh_init_no_candidates` | `test_anchor_branches.py` | all candidates fail → fresh HexTacToeNet from trainer.model + save |
+| `test_resolve_anchor_arch_mismatch_skips_sync` | `test_anchor_branches.py` | inf_model.in_channels ≠ anchor → load_state_dict not called |
+
+### Status
+
+- Q-§159b §B items 1–14: closed in §159a (StepCoordinator.step coverage)
+- Q-§159b §B item 15: CLOSED here — full Q-§159b now CLOSED
+- No refactor (C2 not needed — test setup required no readability touchups)
+- Post-§161: 991 passed, 8 skipped
+
+### Precedent
+
+FF-merge to master, same as §158–§160.

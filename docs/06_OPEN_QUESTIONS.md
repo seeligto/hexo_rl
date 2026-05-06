@@ -738,17 +738,12 @@ per-run, and to identify the minimum public API for test coverage.
 
 ## Q-§159b — Unit test gaps: build_subsystems / resolve_anchor branches
 
-**Status:** OPEN — land separately, no ordering constraint vs §159a.
+**Status:** CLOSED — §161 (`q159b/lifecycle-coverage`, 2026-05-06).
 
-Two coverage gaps surfaced by §159 extraction:
-
-1. `build_subsystems` ordering and `LoopSubsystems.teardown` under
-   partial-construction failure (dashboard fails to start mid-init).
-2. `resolve_anchor` branching: `eval_pipeline=None` early return, fresh-init
-   path, arch-mismatch path. Each branch has a distinct log fingerprint that
-   can be asserted cheaply.
-
-Both are in `python_health.md` row 1. Land as two commits: one per function.
+5 tests added: `LoopSubsystems.teardown` stop/join ordering + dashboard exception
+silencing; `resolve_anchor` eval_pipeline=None early return, fresh-init from
+trainer.model when all candidates fail, arch-mismatch sync skip.
+Post-§161: 991 passed, 8 skipped.
 
 ---
 
