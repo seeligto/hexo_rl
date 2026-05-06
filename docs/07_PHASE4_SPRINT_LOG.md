@@ -7463,3 +7463,87 @@ Stage 3 reclaimed **~9G** (48G→39G).
 * Stage 3 (this): ~9 GB (48G→39G)
 * **L8 total: ~58 GB freed**
 
+
+
+## §159 — Refactor: training/loop.py split (2026-05-06)
+
+**Audit candidate:** `audit/SUMMARY.md` L9 #1 (CRITICAL — god module, 1464 LOC,
+6+ subsystem lifecycles).
+
+**Outcome:** `hexo_rl/training/loop.py` 1464 → 686 LOC (-53%). Five new files
+sum 1138 LOC:
+- `hexo_rl/training/anchor.py` (311) — best_model.pt I/O primitives + `resolve_anchor` + `AnchorState`
+- `hexo_rl/training/signals.py` (49) — `ShutdownState` + `install_signal_handlers`
+- `hexo_rl/training/orchestrator.py` (411) — drain_pending_eval, try_save_buffer, replay_pretrain_events, emit_axis_distribution, emit_training_events
+- `hexo_rl/training/lifecycle.py` (293) — `InfModelArch`, `build_inference_model`, `cuda_warmup`, `cuda_stream_audit`, `build_eval_model`, `LoopSubsystems`, `build_subsystems`
+- `hexo_rl/eval/pipeline_setup.py` (74) — `build_eval_pipeline`
+
+Total system: 1464 → 1824 LOC (+360, primarily docstrings + dataclass scaffolds + new imports — function bodies are byte-equivalent to pre-refactor).
+
+**Caller updates:** 1 production file (`scripts/train.py` — no edit, public API
+preserved), 1 test file (`tests/test_training_loop_graduation.py` — 2 imports
+moved from `hexo_rl.training.loop` to `hexo_rl.training.orchestrator`).
+
+**Tests:** `make test` clean — 924 passed, 8 skipped, 0 failures (matches
+baseline at every commit).
+
+**Bench:** Skipped per `docs/refactor-template.md` L113 — orchestration, not
+hot-path.
+
+**LOC budget overshoot — surface to user:**
+Plan estimated `loop.py` at ~280 LOC post-refactor; actual is 686. The inner
+`_run_loop` step-coordinator (~250 LOC) plus the surrounding setup/finally
+plumbing accounts for the gap. Realistic architectural floor with current
+design is ~600 LOC. Splitting `_run_loop` into a `StepCoordinator` class is a
+larger refactor (closure→instance state migration); recommend a separate wave.
+The 53% reduction from 1464 is still the largest single-file shrink in §158/§159.
+
+**Naming decisions:** `training/anchor.py` chosen over the kickoff's
+`training/checkpoint.py` to avoid clash with the pre-existing
+`training/checkpoints.py` (plural — Trainer state I/O). "Anchor" matches the
+existing log-event vocabulary (`anchor_loaded`, `anchor_quarantined`,
+`anchor_persisted_from_fallback`, `_BOOTSTRAP_ANCHOR_CANDIDATES`). The
+distinction is conceptually right — the anchor lifecycle (graduation gate,
+fallback chain, corruption quarantine) is not a general checkpoint.
+
+**Anchor + eval-pipeline split scope expansion:** Original plan deferred the
+anchor + eval-pipeline construction (~140 LOC) to §16x; user overrode and
+requested it in scope. Split into Tasks 4 (eval/pipeline_setup.py) +
+5 (anchor.resolve_anchor). Result: clean separation, no follow-up needed for
+that block.
+
+**Follow-ups in `/tmp/refactor_followups.md`** (25 items):
+- `loop.py` step-coordinator further decomposition (the headline)
+- `pool._inference_server.*` cross-module private access (drain + emit)
+- `InfModelArch` thread-through to `resolve_anchor` (drop the kwargs-only flat list)
+- `_try_load_anchor` bare-except + hardcoded config overrides
+- `save_best_model_atomic` fsync window
+- `resolve_anchor` dead initializers (T5 minor)
+- `replay_pretrain_events` redundant function-local `import json` (T3 minor)
+- `emit_training_events` ~170-LOC further split candidate
+- `_deep_merge` private-API consumer
+- CWD-relative `Path("configs/eval.yaml")` and `_BOOTSTRAP_ANCHOR_CANDIDATES`
+- `Optional[X]` vs `X | None` style asymmetry in pipeline_setup
+- `MetricsWriter` local-import + `tb_writer: Any` type tightening
+- `LoopSubsystems` runtime/config field mixing
+- `build_inference_model` in_channels=18 stale default (production is 8 post-§131)
+- Unit-test coverage gaps for `build_subsystems`, `LoopSubsystems.teardown`, `resolve_anchor` branches
+- `ShutdownState` immutability + `request_shutdown()` API
+- `LoopSubsystems` as a context manager for explicit teardown ordering
+
+**Commits on `refactor/training-loop-split`** (8 + this docs commit):
+1. `refactor(training): extract best-model anchor to anchor.py (§159)` — `1f75c22`
+2. `style(training): tidy anchor import block (§159)` — `ed51842` (T1 review fixup)
+3. `refactor(training): extract signal handlers to signals.py (§159)` — `af47ef3`
+4. `refactor(training): extract orchestrator hooks to orchestrator.py (§159)` — `5441f8e`
+5. `refactor(eval): extract eval-pipeline builder to pipeline_setup.py (§159)` — `b710e2f`
+6. `refactor(training): extract resolve_anchor orchestration to anchor.py (§159)` — `8c0bec1`
+7. `refactor(training): extract subsystem lifecycle to lifecycle.py (§159)` — `3f593b8`
+8. `refactor(training): drop unused config arg + dead imports from lifecycle (§159)` — `c702d5d` (T6 review fixup)
+9. `refactor(training): point tests at orchestrator module (§159)` — `012055c`
+10. `docs(sprint): §159 refactor training/loop.py landed` ← LANDS WITH USER GO
+
+**Subagent-driven execution:** every task ran fresh implementer → spec-compliance
+reviewer → code-quality reviewer. Two review cycles surfaced fixable issues
+before commit (T1 import-block placement + transient-comment annotation;
+T6 dead `config` parameter + dead imports). Spec compliance ✅ at every task.
