@@ -209,10 +209,13 @@ def replay_game_to_triples_v8(
     t = 0
     total_clipped = 0
 
-    # legal_move_radius irrelevant for replay (apply_move accepts any
-     # in-bounds cell regardless of MCTS legal-move radius). R=8 wiring lives
-     # in Bucket D self-play / eval paths, not in the corpus encoder.
+    # legal_move_radius affects MCTS legal-move generation, not apply_move
+    # itself, so v8 corpus replay is correct at any radius. We set R=8
+    # explicitly so the Board reports the v8 perception radius for any
+    # downstream introspection (Phase D self-play / eval will use the
+    # same construction pattern).
     board = Board()
+    board.set_legal_move_radius(LEGAL_MOVE_RADIUS_V8)
     history: Deque[Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]] = deque(
         maxlen=HISTORY_LEN_V8 - 1
     )

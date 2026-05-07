@@ -106,6 +106,21 @@ impl PyBoard {
         self.inner.ply
     }
 
+    /// Override the per-Board legal-move radius cap.
+    ///
+    /// Default is `DEFAULT_LEGAL_MOVE_RADIUS = 5` (v6 path; §145 Option α').
+    /// v8 callers (encoding migration §166 Path β) and per-game radius
+    /// jitter (§152 Q2) override via this setter at construction time.
+    /// HTTT rule baseline is r=8.
+    pub fn set_legal_move_radius(&mut self, radius: i32) {
+        self.inner.set_legal_move_radius(radius);
+    }
+
+    /// Read the current per-Board legal-move radius cap.
+    pub fn legal_move_radius(&self) -> i32 {
+        self.inner.legal_move_radius()
+    }
+
     /// Incremental Zobrist hash of the current position.
     pub fn zobrist_hash(&self) -> u128 {
         self.inner.zobrist_hash

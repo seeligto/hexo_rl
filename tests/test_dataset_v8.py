@@ -325,6 +325,115 @@ def test_replay_plane_8_off_window_consistent_across_plies() -> None:
         np.testing.assert_array_equal(states[t, 8], expected)
 
 
+# ── P2 hotfix-(c) perception verification at encoder level ────────────────
+
+
+def test_p2_hotfix_c_far_stones_visible_in_v8_encoder() -> None:
+    """v8 encoder MUST capture stones at hex distance 6-8 from any
+    cur-player stone (P2 hotfix-(c) substance verified at encoder level).
+
+    Probe SUMMARY §31: v7full (8-plane × 19×19 + cluster radius 5) loses
+    22% to a brain-dead far-line script because stones at hex_dist > 5
+    fall outside the K-cluster window. v8 encoder uses bbox-of-all-stones
+    + 25×25 fixed-max + dilation margin m=8, so distant stones up to hex
+    radius 8 from any existing stone always appear in the tensor.
+
+    The actual P2 probe (`tests/probes/p2_far_placement_opponent.py`)
+    requires a trained v8 model checkpoint and runs in Phase D after
+    Phase B (model architecture) + Phase C (v8 bootstrap retrain). This
+    test is the encoder-level companion gate.
+    """
+    # Cur-player stone at origin; opponent stone at hex distance 8 (the
+    # rule baseline, beyond v6's R=5 perception cap).
+    far_q, far_r = 8, 0  # axial offset (8, 0) → hex distance 8
+    tensor, (cq, cr), n_clipped = encode_position_v8(
+        board_stones=[(0, 0, 1), (far_q, far_r, -1)],
+        cur_player=1,
+        history=deque(),
+        ply=2,
+        moves_remaining=1,
+    )
+    # bbox spans q ∈ [0, 8], r ∈ [0, 0] → centroid (4, 0).
+    assert (cq, cr) == (4, 0)
+    assert n_clipped == 0, "v8 encoder must NOT clip stones at hex dist ≤ R=8"
+    # P1 stone at axial (0, 0): wq = 0 - 4 + 12 = 8, wr = 0 + 12 = 12. Visible.
+    assert tensor[0, 8, 12] == 1.0, "v8 encoder must capture origin stone"
+    # P2 stone at axial (8, 0): wq = 8 - 4 + 12 = 16, wr = 12. Visible.
+    assert tensor[4, 16, 12] == 1.0, \
+        "v8 encoder MUST capture far_line stone at hex_dist=8 (P2 hotfix-(c))"
+
+
+def test_p2_hotfix_c_all_six_axes_at_radius_8() -> None:
+    """The 6 hex axes at radius 8 each must be captured by v8 encoder.
+
+    The far-line script in P2 plays along all 6 axes at radii {6, 7, 8}.
+    v6 caps perception at R=5 — most of those stones are invisible. v8
+    perception is R=8 — every far-line stone visible.
+    """
+    HEX_DIRS = [(1, 0), (0, 1), (1, -1), (-1, 0), (0, -1), (-1, 1)]
+    for radius in (6, 7, 8):
+        for dq, dr in HEX_DIRS:
+            far_q, far_r = dq * radius, dr * radius
+            tensor, _, n_clipped = encode_position_v8(
+                board_stones=[(0, 0, 1), (far_q, far_r, -1)],
+                cur_player=1,
+                history=deque(),
+                ply=2,
+                moves_remaining=1,
+            )
+            assert n_clipped == 0, (
+                f"v8 must capture stone at axis {(dq, dr)} radius {radius} "
+                f"(hex_dist={radius}); got n_clipped={n_clipped}"
+            )
+            # Plane 4 (opp ply T) should contain the far stone projected
+            # through the bbox centroid.
+            assert tensor[4].sum() > 0, (
+                f"plane 4 empty at axis {(dq, dr)} radius {radius} "
+                f"— far stone lost in encoding"
+            )
+
+
+def test_v8_replay_board_uses_R_8_perception() -> None:
+    """v8 replay constructs a Board with R=8 (HTTT rule baseline).
+
+    Hotfix-(c) bundling: under v8 path, Board.legal_move_radius must be 8,
+    not the v6 default of 5. This is checked at the Board level via the
+    PyBoard.legal_move_radius getter (newly exposed in §166 Bucket D).
+    """
+    from engine import Board
+    b = Board()
+    assert b.legal_move_radius() == 5, "v6 default radius is 5"
+    b.set_legal_move_radius(LEGAL_MOVE_RADIUS_V8)
+    assert b.legal_move_radius() == 8, \
+        f"after setting v8 radius, getter must return 8; got {b.legal_move_radius()}"
+
+
+def test_v8_off_window_mask_includes_radius_8_inside() -> None:
+    """The off_window indicator (plane 8) must mark the entire dilated
+    hex of radius 8 as INSIDE (mask=0). This is the perception envelope
+    boundary — outside = padding cell, inside = valid cell.
+    """
+    mask = _build_off_window_mask()
+    HEX_DIRS = [(1, 0), (0, 1), (1, -1), (-1, 0), (0, -1), (-1, 1)]
+    for radius in range(0, 9):  # 0..8 inclusive (R=8 = LEGAL_MOVE_RADIUS_V8)
+        for dq, dr in HEX_DIRS:
+            wq = dq * radius + HALF_V8
+            wr = dr * radius + HALF_V8
+            assert mask[wq, wr] == 0.0, (
+                f"window-local ({wq}, {wr}) at axis {(dq, dr)} radius {radius} "
+                f"should be INSIDE the dilated hex"
+            )
+    # Radius 9 is OUTSIDE
+    for dq, dr in HEX_DIRS:
+        wq = dq * 9 + HALF_V8
+        wr = dr * 9 + HALF_V8
+        if 0 <= wq < BOARD_SIZE_V8 and 0 <= wr < BOARD_SIZE_V8:
+            assert mask[wq, wr] == 1.0, (
+                f"window-local ({wq}, {wr}) at axis {(dq, dr)} radius 9 "
+                f"should be OUTSIDE the dilated hex"
+            )
+
+
 def test_replay_plane_10_alternates_with_ply() -> None:
     """ply_parity should track ply % 2 for each emitted position."""
     states, _, _, _, _ = replay_game_to_triples_v8(
