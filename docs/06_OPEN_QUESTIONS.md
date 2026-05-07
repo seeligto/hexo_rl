@@ -4,7 +4,7 @@
 
 | # | Question | Resolution | Commit |
 |---|---|---|---|
-| Q-§164-P1 | Window-anchor index-0 picks suspected boundary bug | RESOLVED 2026-05-07 (Principled) — live MCTS + replay push K-aggregate fully: min-pool value, scatter-max policy (worker_loop.rs:299-401 + 649-682). Index-0 picks exist only at aug-only sites (pretrain RandomBot validation, early_game_probe, records.rs pass slot). Cleanup commit adds semantic clarity at each site. | pending |
+| Q-§164-P1 | Window-anchor index-0 picks suspected boundary bug | RESOLVED 2026-05-07 (Principled) — live MCTS + replay push K-aggregate fully: min-pool value, scatter-max policy (worker_loop.rs:299-401 + 649-682). Index-0 picks exist only at aug-only sites (pretrain RandomBot validation, early_game_probe, records.rs pass slot). Cleanup commit adds semantic clarity at each site. | `3cd496b` |
 | Q5 | Supervised→self-play transition schedule | Exponential decay 0.8→0.1 over 1M steps; growing buffer + mixed data streams | `a6e5a79` |
 | Q6 | Sequential vs compound action space | Sequential confirmed — 2 MCTS plies per turn, Q-flip at turn boundaries, Dirichlet skipped at intermediate plies | `5be7df7`, `9b899e9` |
 | Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically | — |
