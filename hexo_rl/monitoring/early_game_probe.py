@@ -95,12 +95,14 @@ def _generate_fixture_payload(
             q, r = random.choice(legal)
             state = state.apply_move(board, q, r)
         tensor, _centers = state.to_tensor()
-        # tensor: (K, 18, 19, 19). Cluster 0 always exists (origin window); the
-        # shallow random rollouts keep every stone inside that window, so there
-        # is no ambiguity about which cluster to score.
-        # Slice to 8-plane HEXB v6 wire format (GameState.to_tensor stays 18-plane
-        # for backwards compat — §134 will add a native 8-plane path).
-        states_out.append(tensor[0][list(KEPT_PLANE_INDICES)].copy())
+        # Aug-only K-aggregation site. Live training/inference forwards ALL K cluster
+        # views through the network: min-pool on value, scatter-max on policy
+        # (worker_loop.rs:299-401 MCTS forward, 649-682 replay push). This probe
+        # picks cluster 0 ONLY because shallow random rollouts keep every stone inside
+        # the origin window — no ambiguity about which cluster to score. Not a boundary
+        # bug. See sprint §164 P1. Slice to 8-plane HEXB v6 wire format.
+        aug_cluster = tensor[0]
+        states_out.append(aug_cluster[list(KEPT_PLANE_INDICES)].copy())
 
         mask = np.zeros(_N_ACTIONS, dtype=np.uint8)
         for q, r in board.legal_moves():

@@ -561,11 +561,18 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
 
             if board.current_player == model_player:
                 tensor, centers = state.to_tensor()
-                inp = torch.from_numpy(tensor[0][KEPT_PLANE_INDICES]).unsqueeze(0).to(device).float()
+                # Aug-only K-aggregation site. Live training/inference forwards ALL
+                # K cluster views through the network: min-pool on value, scatter-max
+                # on policy (worker_loop.rs:299-401 MCTS forward, 649-682 replay push).
+                # This site picks cluster 0 ONLY because the consumer (RandomBot
+                # validation) is an aug fixture, not a boundary path. See sprint §164 P1.
+                aug_cluster = tensor[0]
+                aug_cluster_center = centers[0]
+                inp = torch.from_numpy(aug_cluster[KEPT_PLANE_INDICES]).unsqueeze(0).to(device).float()
                 with torch.no_grad():
                     lp, _, _ = loaded_model(inp)
                 lp_np = lp[0].cpu().numpy()
-                cq, cr = centers[0]
+                cq, cr = aug_cluster_center
                 legal = board.legal_moves()
                 best_move, best_score = legal[0], -1e9
                 for q, r in legal:

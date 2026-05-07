@@ -43,10 +43,9 @@ pub(crate) fn aggregate_policy(
         global_policy[mcts_idx] = max_prob;
     }
 
-    // Pass move is always copied from the first cluster (should be consistent)
-    if !cluster_policies.is_empty() {
-        global_policy[n_actions - 1] = cluster_policies[0][n_actions - 1];
-    }
+    // Pass slot — unreachable in HTTT (no pass move). Constant 0.0 makes
+    // dead-ness explicit; prior [0] read looked like a boundary K-pick.
+    global_policy[n_actions - 1] = 0.0;
 
     let sum: f32 = global_policy.iter().sum();
     if sum > 1e-9 {
