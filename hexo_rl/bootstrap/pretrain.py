@@ -117,52 +117,84 @@ class AugmentedBootstrapDataset(torch.utils.data.Dataset):
         )
 
 
-def make_augmented_collate(augment: bool, board_size: int = BOARD_SIZE):
-    """Return a collate_fn that batches triples and applies hex augmentation
-    via the Rust `engine.apply_symmetries_batch` kernel.
+def make_augmented_collate(
+    augment: bool,
+    board_size: int = BOARD_SIZE,
+    encoding: str = "v6",
+):
+    """Return a collate_fn that batches triples and applies hex augmentation.
 
-    With `augment=True`:
-      - Stack the batch of raw states into an (N, 18, 19, 19) float32 array
-        (upcast from the f16 dataset copies — the Rust binding takes f32).
-      - Draw N uniform sym indices in [0, 12).
-      - Call `engine.apply_symmetries_batch(states_f32, sym_indices)` →
-        (N, 18, 19, 19) f32 augmented states (one PyO3 hop per batch).
-      - Scatter the per-sample policies via the precomputed numpy index
-        tables (`_get_policy_scatters`).
-      - Cast states back to float16 (matches the pre-rewrite tensor dtype).
-      - Compute chain_planes from augmented stone planes 0 (cur) and 4 (opp).
+    Two paths:
+
+    v6 (default, `encoding="v6"`, `board_size=19`):
+      - Stack states (N, 8, 19, 19) f16, upcast to f32.
+      - Rust `engine.apply_symmetries_batch` for state scatter (one PyO3 hop).
+      - Policy scatter via precomputed numpy index tables (12 × 362).
+      - Chain planes recomputed from augmented stone planes 0 (cur) / 4 (opp).
+
+    v8 (`encoding="v8"`, `board_size=25`, `has_pass=False`):
+      - Stack states (N, 11, 25, 25) f16.
+      - Pure-numpy state scatter (same hex-symmetry math as Rust kernel) —
+        the Rust `apply_symmetries_batch` PyO3 binding hardcodes BOARD_SIZE=19
+        and is v6-only. Per S2 §2.4 v8 splice spec, Phase B keeps state aug
+        in Python; the v8 PyO3 path is a Phase D concern when self-play
+        replay buffers must scatter v8 buffer rows at runtime.
+      - Policy scatter (N, 625) using `get_policy_scatters(25, has_pass=False)`.
+      - Chain planes recomputed at 25×25 (planes 8/9/10 are
+        symmetry-invariant: off_window mask is hex-symmetric and the broadcast
+        scalars are constants).
 
     With `augment=False`:
-      - Stack as-is, no Rust hop, no policy scatter.
+      - Stack as-is, no scatter.
       - Compute chain_planes from raw stone planes.
     """
-    scatters_np = get_policy_scatters(board_size) if augment else None
+    if encoding not in ("v6", "v8"):
+        raise ValueError(f"encoding={encoding!r} must be 'v6' or 'v8'")
+    has_pass = (encoding == "v6")
+    scatters_np = get_policy_scatters(board_size, has_pass=has_pass) if augment else None
 
     def _collate(
         batch: List[Tuple[np.ndarray, np.ndarray, float]],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         n = len(batch)
-        states = np.stack([b[0] for b in batch], axis=0)          # f16 (N,8,19,19)
-        policies = np.stack([b[1] for b in batch], axis=0)        # f32 (N, 362)
+        states = np.stack([b[0] for b in batch], axis=0)
+        policies = np.stack([b[1] for b in batch], axis=0)
         outcomes = np.asarray([b[2] for b in batch], dtype=np.float32)
 
         if augment and scatters_np is not None:
-            states_f32 = states.astype(np.float32, copy=False)
-            sym_indices = np.random.randint(0, 12, size=n).astype(np.uint64)
-            states_f32 = engine.apply_symmetries_batch(states_f32, sym_indices.tolist())
-            # Policy scatter per row via numpy fancy indexing. Each sym has its
-            # own permutation index table; build one (N, 362) dst-from-src map.
-            scattered = np.empty_like(policies)
-            for i in range(n):
-                scattered[i] = policies[i][scatters_np[int(sym_indices[i])]]
-            policies = scattered
-            states = states_f32.astype(np.float16, copy=False)
+            sym_indices = np.random.randint(0, 12, size=n).astype(np.int64)
 
-        # Compute chain planes from stone planes post-augmentation.
-        # Recomputing from augmented stones is self-consistent with the chain
-        # head supervision — no axis-perm remap required.
-        # 8-plane layout: [0,1,2,3,8,9,10,11] from original 18.
-        # Cur-player ply-0 = index 0; opp ply-0 = index 4.
+            if encoding == "v6":
+                states_f32 = states.astype(np.float32, copy=False)
+                states_f32 = engine.apply_symmetries_batch(
+                    states_f32, sym_indices.astype(np.uint64).tolist()
+                )
+                scattered = np.empty_like(policies)
+                for i in range(n):
+                    scattered[i] = policies[i][scatters_np[int(sym_indices[i])]]
+                policies = scattered
+                states = states_f32.astype(np.float16, copy=False)
+            else:
+                # v8 path — pure-numpy scatter, batched per-sym to avoid the
+                # per-sample take_along_axis cost.
+                C = states.shape[1]
+                spatial = board_size * board_size
+                states_flat = states.reshape(n, C, spatial)
+                augmented = np.empty_like(states_flat)
+                policy_aug = np.empty_like(policies)
+                for sym in range(12):
+                    mask_idx = np.where(sym_indices == sym)[0]
+                    if mask_idx.size == 0:
+                        continue
+                    scatter = scatters_np[sym]  # (spatial,)
+                    augmented[mask_idx] = states_flat[mask_idx][:, :, scatter]
+                    policy_aug[mask_idx] = policies[mask_idx][:, scatter]
+                states = augmented.reshape(n, C, board_size, board_size)
+                policies = policy_aug
+
+        # Chain planes — recomputed post-augmentation from stone planes.
+        # Stone plane indices: 0 = cur ply-0, 4 = opp ply-0 (v6 KEPT layout
+        # carries through to v8 wire format planes 0/4).
         chain_np = np.zeros((n, 6, board_size, board_size), dtype=np.float16)
         for i in range(n):
             chain_np[i] = _compute_chain_planes(
@@ -634,6 +666,26 @@ def pretrain() -> None:
                              "(default 1e-5). For 30-epoch full retrains, "
                              "5e-5 avoids the §149-observed LR-floor stall "
                              "in the final 3 epochs.")
+    # ── v8 / Phase B variant CLI overrides ─────────────────────────────────
+    parser.add_argument("--encoding", choices=("v6", "v8"), default=None,
+                        help="Override encoding.version from configs/model.yaml "
+                             "('v6' canonical default; 'v8' = Path β 11-plane × 25×25). "
+                             "When 'v8', the v8 corpus NPZ and v8 model heads are used.")
+    parser.add_argument("--filters", type=int, default=None,
+                        help="Override trunk channel count (model.yaml: filters).")
+    parser.add_argument("--res-blocks", type=int, default=None,
+                        help="Override trunk depth (model.yaml: res_blocks).")
+    parser.add_argument("--gpool-sites", type=str, default=None,
+                        help="Comma-separated trunk gpool indices for v8 "
+                             "(e.g. '6,10' for a 12-block trunk). Empty string "
+                             "disables trunk gpool (B0 control). v6 ignores this.")
+    parser.add_argument("--head-no-gpool", action="store_true",
+                        help="Drop the G branch from the v8 policy / opp_reply head. "
+                             "B0 control arm uses this. v6 ignores.")
+    parser.add_argument("--corpus-npz", type=str, default=None,
+                        help="Override corpus NPZ path. Defaults: v6 → "
+                             "data/bootstrap_corpus.npz, v8 → "
+                             "data/bootstrap_corpus_v8.npz.")
     args = parser.parse_args()
 
     # Load configs
@@ -646,6 +698,54 @@ def pretrain() -> None:
     label_smoothing = float(corpus_cfg.get("label_smoothing_default", 0.05))
     aux_weight = float(config.get("aux_opp_reply_weight", 0.15))
     source_weights: Dict[str, float] = corpus_cfg.get("source_weights", {})
+
+    # ── v8 / variant overrides — CLI takes precedence over model.yaml ──────
+    if args.encoding is not None:
+        config.setdefault("encoding", {})["version"] = args.encoding
+    encoding: str = str(config.get("encoding", {}).get("version", "v6"))
+    if encoding not in ("v6", "v8"):
+        raise ValueError(f"encoding.version must be 'v6' or 'v8', got {encoding!r}")
+
+    # When encoding=v8, derive board_size / in_channels / n_actions from the
+    # v8 contract (overriding model.yaml's v6 defaults of 19 / 8).
+    if encoding == "v8":
+        from hexo_rl.bootstrap.dataset_v8 import (
+            BOARD_SIZE_V8, N_PLANES_V8, N_ACTIONS_V8,
+        )
+        config["board_size"] = BOARD_SIZE_V8
+        config["in_channels"] = N_PLANES_V8
+        # Note: model.yaml's filters/res_blocks defaults stay unless --filters /
+        # --res-blocks override them below.
+        v8_n_actions = N_ACTIONS_V8
+    else:
+        v8_n_actions = None
+
+    # Variant overrides — used by Phase B B0..B4 retrains.
+    if args.filters is not None:
+        config["filters"] = int(args.filters)
+    if args.res_blocks is not None:
+        config["res_blocks"] = int(args.res_blocks)
+
+    # Parse --gpool-sites into a list of ints (or empty list if explicitly "").
+    gpool_indices: Optional[List[int]] = None
+    if args.gpool_sites is not None:
+        if args.gpool_sites.strip() == "":
+            gpool_indices = []
+        else:
+            gpool_indices = [int(s.strip()) for s in args.gpool_sites.split(",")
+                             if s.strip()]
+    head_use_gpool: bool = not args.head_no_gpool
+
+    log.info(
+        "encoding_resolved",
+        encoding=encoding,
+        board_size=int(config.get("board_size", BOARD_SIZE)),
+        in_channels=int(config.get("in_channels", 8)),
+        filters=int(config.get("filters", 128)),
+        res_blocks=int(config.get("res_blocks", 12)),
+        gpool_indices=gpool_indices,
+        head_use_gpool=head_use_gpool,
+    )
 
     from hexo_rl.utils.device import best_device
     device = best_device()
@@ -663,7 +763,12 @@ def pretrain() -> None:
 
     # Corpus — prefer mmap'd NPZ to avoid 2× RAM peak from load_corpus()
     console.print("[bold]Loading corpus...[/bold]")
-    npz_path = Path(corpus_cfg.get("corpus_npz_path", "data/bootstrap_corpus.npz"))
+    if args.corpus_npz is not None:
+        npz_path = Path(args.corpus_npz)
+    elif encoding == "v8":
+        npz_path = Path("data/bootstrap_corpus_v8.npz")
+    else:
+        npz_path = Path(corpus_cfg.get("corpus_npz_path", "data/bootstrap_corpus.npz"))
     if npz_path.exists():
         log.info("loading_corpus_from_npz", path=str(npz_path))
         data = np.load(npz_path, mmap_mode='r')
@@ -693,13 +798,18 @@ def pretrain() -> None:
         num_samples=len(dataset),
         replacement=True,
     )
+    board_size_for_collate = int(config.get("board_size", BOARD_SIZE))
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
         sampler=sampler,
         num_workers=0,
         pin_memory=(device.type == "cuda"),
-        collate_fn=make_augmented_collate(augment=True),
+        collate_fn=make_augmented_collate(
+            augment=True,
+            board_size=board_size_for_collate,
+            encoding=encoding,
+        ),
     )
 
     # One-off timing of the Rust aug path so any throughput regression vs the
@@ -716,13 +826,16 @@ def pretrain() -> None:
         f"({(_dt/_probe_batches)*1000:.2f} ms/batch)"
     )
 
-    # Model
+    # Model — encoding-aware. v8 wires gpool sites + KataGo policy head.
     model = HexTacToeNet(
         board_size=int(config["board_size"]),
         in_channels=int(config["in_channels"]),
         filters=int(config["filters"]),
         res_blocks=int(config["res_blocks"]),
         se_reduction_ratio=int(config.get("se_reduction_ratio", 4)),
+        encoding=encoding,
+        gpool_indices=gpool_indices,
+        head_use_gpool=head_use_gpool,
     )
     use_compile = (
         config.get("torch_compile", True)
@@ -739,6 +852,13 @@ def pretrain() -> None:
     config["pretrain_total_steps"] = total_pretrain_steps
     if args.eta_min is not None:
         config["pretrain_eta_min"] = float(args.eta_min)
+    # Persist v8 / variant knobs in the saved checkpoint config so post-hoc
+    # consumers (eval pipeline, threat probe, viewer) can reconstruct the model
+    # without re-deriving from CLI flags.
+    config["gpool_indices"] = gpool_indices
+    config["head_use_gpool"] = head_use_gpool
+    if v8_n_actions is not None:
+        config["n_actions"] = v8_n_actions
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)
 
     # Resume mode: load model/optimizer/scaler from full checkpoint, restart
@@ -801,7 +921,18 @@ def pretrain() -> None:
     ckpt_path = trainer.save_checkpoint(inf_out=inf_out)
     console.print(f"[green]Checkpoint: {ckpt_path}[/green]")
 
-    validate(ckpt_path, device)
+    # validate() walks GameState.to_tensor() / KEPT_PLANE_INDICES — v6 only.
+    # v8 validation is deferred to Gate 4 (SealBot WR + threat probe). The
+    # v8 retrain harness skips the RandomBot smoke pass with an info log so
+    # future v8 self-play (§168 Phase D) can re-introduce a v8-aware probe.
+    if encoding == "v8":
+        log.info(
+            "skipping_validate_v8",
+            reason="validate() is v6-only; v8 quality measured via SealBot WR / threat probe",
+            ckpt=str(ckpt_path),
+        )
+    else:
+        validate(ckpt_path, device)
 
 
 if __name__ == "__main__":
