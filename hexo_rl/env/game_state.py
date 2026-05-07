@@ -42,9 +42,11 @@ def _run_batched(
     consecutive own-layer stones at positions (q+k·dq, r+k·dr) for
     k = 1.._CHAIN_CAP−1, stopping at first non-own (including window edge).
     `scratch` is a pre-allocated (2, H, W) bool buffer.
+
+    Shape-generic: H, W are derived from the input stack so v6 (19×19) and
+    v8 (25×25) callers share the same kernel.
     """
-    H = BOARD_SIZE
-    W = BOARD_SIZE
+    _, H, W = stones.shape
     out = np.zeros((2, H, W), dtype=np.int8)
     alive = np.ones((2, H, W), dtype=bool)
     for step in range(1, _CHAIN_CAP):
@@ -75,10 +77,14 @@ def _chain_plane_for_axis(
 
     Retained as a standalone helper for unit tests; production path goes
     through the batched `_compute_chain_planes`. See docstring there.
+
+    Shape-generic: H, W derived from `own` / `opp` shapes — works at v6
+    (19×19) and v8 (25×25) board sizes uniformly.
     """
+    H, W = own.shape
     if scratch is None:
-        scratch = np.empty((2, BOARD_SIZE, BOARD_SIZE), dtype=bool)
-    stones = np.empty((2, BOARD_SIZE, BOARD_SIZE), dtype=bool)
+        scratch = np.empty((2, H, W), dtype=bool)
+    stones = np.empty((2, H, W), dtype=bool)
     stones[0] = own > 0
     stones[1] = opp > 0
 
@@ -108,13 +114,16 @@ def _compute_chain_planes(
     Batched implementation: for each of the 3 axes, compute pos/neg runs for
     both players simultaneously via a (2, H, W) stone stack. Avoids per-plane
     allocation overhead and per-step array creation.
+
+    Shape-generic: H, W derived from input planes; v6 (19×19) and v8
+    (25×25) callers share the same kernel.
     """
-    H = BOARD_SIZE
-    planes = np.zeros((6, H, H), dtype=np.int8)
-    stones = np.empty((2, H, H), dtype=bool)
+    H, W = cur_stones.shape
+    planes = np.zeros((6, H, W), dtype=np.int8)
+    stones = np.empty((2, H, W), dtype=bool)
     stones[0] = cur_stones > 0
     stones[1] = opp_stones > 0
-    scratch = np.empty((2, H, H), dtype=bool)
+    scratch = np.empty((2, H, W), dtype=bool)
     # "Opponent mask per layer" for zeroing out opponent cells at the end:
     # layer 0 (cur-chain) zeroes where stones[1] is True; layer 1 (opp-chain)
     # zeroes where stones[0] is True.

@@ -1,0 +1,338 @@
+"""Tests for hexo_rl.bootstrap.dataset_v8 — v8 corpus encoder."""
+from __future__ import annotations
+
+from collections import deque
+
+import numpy as np
+import pytest
+
+from hexo_rl.bootstrap.dataset_v8 import (
+    BOARD_SIZE_V8,
+    HALF_V8,
+    HISTORY_LEN_V8,
+    LEGAL_MOVE_RADIUS_V8,
+    MAX_MOVES_V8,
+    N_ACTIONS_V8,
+    N_PLANES_V8,
+    _build_off_window_mask,
+    _compute_bbox_centroid,
+    encode_position_v8,
+    replay_game_to_triples_v8,
+)
+
+
+# ── Constants regression guards ────────────────────────────────────────────
+
+
+def test_v8_constants_match_contract() -> None:
+    """Pin the v8 numeric constants to the values in
+    docs/designs/encoding_v8_contract.md §1.2."""
+    assert BOARD_SIZE_V8 == 25
+    assert HALF_V8 == 12
+    assert N_PLANES_V8 == 11
+    assert N_ACTIONS_V8 == 625
+    assert LEGAL_MOVE_RADIUS_V8 == 8
+    assert HISTORY_LEN_V8 == 4
+
+
+# ── Off_window mask geometry ───────────────────────────────────────────────
+
+
+def test_off_window_mask_origin_is_inside() -> None:
+    mask = _build_off_window_mask()
+    # Origin is the window centre; must be inside the dilated hex.
+    assert mask[HALF_V8, HALF_V8] == 0.0
+
+
+def test_off_window_mask_corners_are_outside() -> None:
+    mask = _build_off_window_mask()
+    # The four square corners are at hex distance > 8 from origin.
+    for wq, wr in [(0, 0), (0, 24), (24, 0), (24, 24)]:
+        assert mask[wq, wr] == 1.0, f"corner ({wq},{wr}) must be outside hex"
+
+
+def test_off_window_mask_radius_boundary() -> None:
+    mask = _build_off_window_mask()
+    # A cell at hex distance exactly 8 must be inside (≤ R=8).
+    # axial (8, 0) → window-local (8+12, 0+12) = (20, 12).
+    assert mask[HALF_V8 + 8, HALF_V8] == 0.0, "dist=8 must be inside (≤R)"
+    # A cell at hex distance 9 must be outside.
+    assert mask[HALF_V8 + 9, HALF_V8] == 1.0, "dist=9 must be outside (>R)"
+
+
+def test_off_window_mask_count_inside() -> None:
+    mask = _build_off_window_mask()
+    inside_count = int((mask == 0.0).sum())
+    # Hex of radius 8 has 1 + 6*(1+2+3+4+5+6+7+8) = 1 + 6*36 = 217 cells.
+    assert inside_count == 217
+
+
+# ── Bbox centroid ──────────────────────────────────────────────────────────
+
+
+def test_bbox_centroid_empty_board() -> None:
+    assert _compute_bbox_centroid([]) == (0, 0)
+
+
+def test_bbox_centroid_single_stone() -> None:
+    cq, cr = _compute_bbox_centroid([(3, -2, 1)])
+    assert (cq, cr) == (3, -2)
+
+
+def test_bbox_centroid_symmetric_pair() -> None:
+    cq, cr = _compute_bbox_centroid([(1, 0, 1), (-1, 0, -1)])
+    assert (cq, cr) == (0, 0)
+
+
+def test_bbox_centroid_off_origin() -> None:
+    cq, cr = _compute_bbox_centroid([(2, 4, 1), (4, 6, -1)])
+    # bbox q ∈ [2, 4], r ∈ [4, 6] → centroid (3, 5)
+    assert (cq, cr) == (3, 5)
+
+
+# ── encode_position_v8 ─────────────────────────────────────────────────────
+
+
+def test_encode_empty_board_planes() -> None:
+    tensor, (cq, cr), n_clipped = encode_position_v8(
+        board_stones=[],
+        cur_player=1,
+        history=deque(),
+        ply=0,
+        moves_remaining=1,
+    )
+    assert tensor.shape == (11, 25, 25)
+    assert tensor.dtype == np.float16
+    assert (cq, cr) == (0, 0)
+    assert n_clipped == 0
+    # Stone planes (0-7) all zero
+    assert tensor[:8].sum() == 0.0
+    # Plane 9: ply=0 → mr_normalized = (200 - 0) / 200 = 1.0
+    assert np.all(tensor[9] == np.float16(1.0))
+    # Plane 10: ply=0 → 0
+    assert np.all(tensor[10] == np.float16(0.0))
+
+
+def test_encode_single_stone_at_origin() -> None:
+    tensor, (cq, cr), n_clipped = encode_position_v8(
+        board_stones=[(0, 0, 1)],
+        cur_player=1,  # P1 just placed; now P2 to move? No — "cur_player" is who's about to move
+        history=deque(),
+        ply=1,
+        moves_remaining=2,
+    )
+    # P1 placed the stone but cur_player=1 says P1 is current, so the stone is "ours"
+    # → goes to plane 0 (cur ply-0).
+    assert tensor[0, HALF_V8, HALF_V8] == 1.0
+    # Plane 4 (opp ply-0) must be zero
+    assert tensor[4].sum() == 0.0
+    assert (cq, cr) == (0, 0)
+    assert n_clipped == 0
+
+
+def test_encode_opponent_stone_goes_to_plane_4() -> None:
+    tensor, _, _ = encode_position_v8(
+        board_stones=[(0, 0, -1)],  # P2 stone
+        cur_player=1,  # P1 to move; P2 is opponent
+        history=deque(),
+        ply=1,
+        moves_remaining=2,
+    )
+    assert tensor[4, HALF_V8, HALF_V8] == 1.0
+    assert tensor[0].sum() == 0.0  # No cur stones
+
+
+def test_encode_history_planes() -> None:
+    """History snapshot at depth 1 → plane 1 (cur) and plane 5 (opp).
+
+    Stones at (0,0), (1,1), (2,0) → bbox q∈[0,2], r∈[0,1] → centroid (1, 0).
+    Stones project to window-local (wq = sq - 1 + 12, wr = sr - 0 + 12).
+    """
+    history: deque = deque(maxlen=3)
+    history.append(([(0, 0)], [(1, 1)]))  # cur stones, opp stones at T-1
+    tensor, (cq, cr), _ = encode_position_v8(
+        board_stones=[(0, 0, 1), (1, 1, -1), (2, 0, 1)],
+        cur_player=1,
+        history=history,
+        ply=2,
+        moves_remaining=1,
+    )
+    # Centroid is (1, 0)
+    assert (cq, cr) == (1, 0)
+    # Plane 0 (cur ply T): P1 stones at (0,0)→(11,12) and (2,0)→(13,12)
+    assert tensor[0, 11, 12] == 1.0
+    assert tensor[0, 13, 12] == 1.0
+    # Plane 4 (opp ply T): P2 stone at (1,1)→(12,13)
+    assert tensor[4, 12, 13] == 1.0
+    # Plane 1 (cur ply T-1): historical cur stones at (0,0)→(11,12)
+    assert tensor[1, 11, 12] == 1.0
+    # Plane 5 (opp ply T-1): historical opp stones at (1,1)→(12,13)
+    assert tensor[5, 12, 13] == 1.0
+    # Plane 2/3/6/7 (older history): zero
+    assert tensor[2].sum() == 0.0
+    assert tensor[3].sum() == 0.0
+    assert tensor[6].sum() == 0.0
+    assert tensor[7].sum() == 0.0
+
+
+def test_encode_ply_parity() -> None:
+    for ply in [0, 1, 2, 3, 100, 101]:
+        tensor, _, _ = encode_position_v8(
+            board_stones=[],
+            cur_player=1,
+            history=deque(),
+            ply=ply,
+            moves_remaining=1,
+        )
+        assert np.all(tensor[10] == np.float16(float(ply % 2))), \
+            f"plane 10 incorrect at ply={ply}"
+
+
+def test_encode_moves_remaining_bcast() -> None:
+    """Plane 9: (MAX_MOVES - ply) / MAX_MOVES, clamped to [0, 1]."""
+    tensor, _, _ = encode_position_v8(
+        board_stones=[], cur_player=1, history=deque(),
+        ply=100, moves_remaining=1,
+    )
+    expected = np.float16((MAX_MOVES_V8 - 100) / MAX_MOVES_V8)
+    assert np.all(tensor[9] == expected)
+    # Past MAX_MOVES → clamps to 0
+    tensor, _, _ = encode_position_v8(
+        board_stones=[], cur_player=1, history=deque(),
+        ply=MAX_MOVES_V8 + 50, moves_remaining=1,
+    )
+    assert np.all(tensor[9] == np.float16(0.0))
+
+
+def test_encode_clipping_outlier_stone() -> None:
+    """Stones too far apart for the 25×25 window → all clipped (telemetry)."""
+    # Two stones at origin + one far away → bbox spans 0..50, centroid (25, 25).
+    # Window is 25×25 centred on (25, 25); window-local extent ±12.
+    # All three stones land at axial offsets > 12 from centroid → all clipped.
+    tensor, (cq, cr), n_clipped = encode_position_v8(
+        board_stones=[(0, 0, 1), (1, 0, 1), (50, 50, -1)],
+        cur_player=1,
+        history=deque(),
+        ply=3,
+        moves_remaining=2,
+    )
+    assert (cq, cr) == (25, 25)
+    # (0, 0) → wq=-13, wr=-13 → OUT
+    # (1, 0) → wq=-12, wr=-13 → OUT (wr<0)
+    # (50, 50) → wq=37, wr=37 → OUT (both >24)
+    assert n_clipped == 3
+    # All stone planes empty because every stone fell outside the window.
+    assert tensor[0].sum() == 0.0
+    assert tensor[4].sum() == 0.0
+
+
+def test_encode_one_stone_clipped_one_kept() -> None:
+    """Stone within window survives; outlier gets clipped — minimal case."""
+    # Stones at (0,0) and (15, 0). Centroid q ∈ [0,15] → 7. r ∈ [0,0] → 0.
+    # (0,0) → wq = -7 + 12 = 5, wr = 12 → IN
+    # (15,0) → wq = 8 + 12 = 20, wr = 12 → IN
+    # Both fit. Clip count = 0.
+    tensor, (cq, cr), n_clipped = encode_position_v8(
+        board_stones=[(0, 0, 1), (15, 0, -1)],
+        cur_player=1,
+        history=deque(),
+        ply=2,
+        moves_remaining=1,
+    )
+    assert (cq, cr) == (7, 0)
+    assert n_clipped == 0
+    assert tensor[0, 5, 12] == 1.0  # cur (P1)
+    assert tensor[4, 20, 12] == 1.0  # opp (P2)
+
+
+# ── replay_game_to_triples_v8 ──────────────────────────────────────────────
+
+
+def test_replay_zero_moves() -> None:
+    states, chain_planes, policies, outcomes, n_clipped = replay_game_to_triples_v8(
+        moves=[], winner=1
+    )
+    assert states.shape == (0, 11, 25, 25)
+    assert chain_planes.shape == (0, 6, 25, 25)
+    assert policies.shape == (0, 625)
+    assert outcomes.shape == (0,)
+    assert n_clipped == 0
+
+
+def test_replay_single_move() -> None:
+    states, chain_planes, policies, outcomes, n_clipped = replay_game_to_triples_v8(
+        moves=[(0, 0)], winner=1
+    )
+    assert states.shape == (1, 11, 25, 25)
+    assert chain_planes.shape == (1, 6, 25, 25)
+    assert policies.shape == (1, 625)
+    assert outcomes.shape == (1,)
+    # Target: P1 plays at (0, 0); centroid is (0, 0); window-local (12, 12);
+    # flat index 12 * 25 + 12 = 312.
+    assert policies[0].argmax() == 312
+    # P1 to move at ply 0 → cur_player = 1 = winner → outcome +1
+    assert outcomes[0] == 1.0
+
+
+def test_replay_short_game_shapes() -> None:
+    """Replay a 5-move sequence and check tensor shapes + policy correctness."""
+    moves = [(0, 0), (1, 0), (0, 1), (1, -1), (-1, 1)]
+    states, chain_planes, policies, outcomes, n_clipped = replay_game_to_triples_v8(
+        moves=moves, winner=1
+    )
+    T = states.shape[0]
+    assert T <= 5  # may drop positions if target outside window
+    assert T > 0
+    assert states.shape == (T, 11, 25, 25)
+    assert chain_planes.shape == (T, 6, 25, 25)
+    assert policies.shape == (T, 625)
+    assert outcomes.shape == (T,)
+    # Each policy row is one-hot
+    for t in range(T):
+        assert policies[t].sum() == 1.0
+        assert (policies[t] > 0).sum() == 1
+
+
+def test_replay_outcomes_alternate() -> None:
+    """Verify outcomes from current player's POV — should track P1 wins."""
+    moves = [(0, 0), (1, 0), (0, 1)]
+    _, _, _, outcomes, _ = replay_game_to_triples_v8(moves=moves, winner=1)
+    # Each outcome is +1 if cur_player_at_that_ply == winner else -1.
+    # With winner=1, plies where P1 is cur_player get +1, P2 plies get -1.
+    assert all(o in {-1.0, 1.0} for o in outcomes)
+
+
+def test_replay_dtypes() -> None:
+    states, chain_planes, policies, outcomes, _ = replay_game_to_triples_v8(
+        moves=[(0, 0), (1, 0)], winner=1
+    )
+    assert states.dtype == np.float16
+    assert chain_planes.dtype == np.float16
+    assert policies.dtype == np.float32
+    assert outcomes.dtype == np.float32
+
+
+# ── Plane semantics integration ────────────────────────────────────────────
+
+
+def test_replay_plane_8_off_window_consistent_across_plies() -> None:
+    """Plane 8 (off_window) is geometry-only — should be identical at every ply."""
+    states, _, _, _, _ = replay_game_to_triples_v8(
+        moves=[(0, 0), (1, 0), (0, 1)], winner=1
+    )
+    expected = _build_off_window_mask()
+    for t in range(states.shape[0]):
+        np.testing.assert_array_equal(states[t, 8], expected)
+
+
+def test_replay_plane_10_alternates_with_ply() -> None:
+    """ply_parity should track ply % 2 for each emitted position."""
+    states, _, _, _, _ = replay_game_to_triples_v8(
+        moves=[(0, 0), (1, 0), (0, 1), (1, -1)], winner=1
+    )
+    # Position t was encoded at ply t (since each iteration emits one record
+    # before applying the move; ply increments AFTER apply_move).
+    for t in range(states.shape[0]):
+        expected = np.float16(float(t % 2))
+        assert np.all(states[t, 10] == expected), \
+            f"ply_parity mismatch at t={t}"

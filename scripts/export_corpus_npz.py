@@ -50,6 +50,12 @@ if str(ROOT) not in sys.path:
 
 from hexo_rl.bootstrap.pretrain import _game_winner_from_replay
 from hexo_rl.bootstrap.dataset import replay_game_to_triples
+from hexo_rl.bootstrap.dataset_v8 import (
+    BOARD_SIZE_V8,
+    N_ACTIONS_V8,
+    N_PLANES_V8,
+    replay_game_to_triples_v8,
+)
 from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 
 BOT_GAMES_DIR = ROOT / "data" / "corpus" / "bot_games"
@@ -182,12 +188,25 @@ def main() -> None:
     parser.add_argument("--no-compress", action="store_true",
                         help="Save uncompressed NPZ (recommended — enables mmap_mode='r')")
     parser.add_argument("--out", default=None,
-                        help="Output path (default: data/bootstrap_corpus.npz)")
+                        help="Output path (default: data/bootstrap_corpus.npz for v6, "
+                             "data/bootstrap_corpus_v8.npz for v8)")
     parser.add_argument("--human-only", action="store_true",
                         help="Pretrain mode: human games only, Elo-weighted, saves weights array")
+    parser.add_argument(
+        "--encoding", choices=("v6", "v8"), default="v6",
+        help="Corpus encoding version: 'v6' (default; 8-plane × 19×19, 362-action "
+             "with pass slot) or 'v8' (11-plane × 25×25 bbox, 625-action no pass; "
+             "Path β per docs/designs/encoding_v8_contract.md).",
+    )
     args = parser.parse_args()
 
-    out_path = Path(args.out) if args.out else ROOT / "data" / "bootstrap_corpus.npz"
+    encoding = args.encoding
+    if args.out:
+        out_path = Path(args.out)
+    elif encoding == "v8":
+        out_path = ROOT / "data" / "bootstrap_corpus_v8.npz"
+    else:
+        out_path = ROOT / "data" / "bootstrap_corpus.npz"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     pretrain_mode = args.human_only
@@ -263,22 +282,36 @@ def main() -> None:
 
     print(f"Replaying {len(game_to_plies):,} unique games...")
 
-    states_buf = np.empty((n_sample, 8, 19, 19), dtype=np.float16)  # HEXB v6: 8 planes
-    policies_buf = np.empty((n_sample, 362), dtype=np.float32)
+    if encoding == "v8":
+        states_buf = np.empty(
+            (n_sample, N_PLANES_V8, BOARD_SIZE_V8, BOARD_SIZE_V8), dtype=np.float16
+        )
+        policies_buf = np.empty((n_sample, N_ACTIONS_V8), dtype=np.float32)
+    else:
+        states_buf = np.empty((n_sample, 8, 19, 19), dtype=np.float16)  # HEXB v6: 8 planes
+        policies_buf = np.empty((n_sample, 362), dtype=np.float32)
     outcomes_buf = np.empty(n_sample, dtype=np.float32)
     weights_buf = np.empty(n_sample, dtype=np.float32)
     out_idx = 0
     p1_wins = 0
+    total_clipped_v8 = 0  # v8 telemetry only; unused under v6
 
     for gi, ply_indices in sorted(game_to_plies.items()):
         g = records[gi]
         pos_weight = g["weight"] / g["game_len"]
-        s, _chain, p, o = replay_game_to_triples(g["moves"], g["winner"])
+        if encoding == "v8":
+            s, _chain, p, o, n_clipped = replay_game_to_triples_v8(g["moves"], g["winner"])
+            total_clipped_v8 += n_clipped
+        else:
+            s, _chain, p, o = replay_game_to_triples(g["moves"], g["winner"])
         if g["winner"] == 1:
             p1_wins += 1
         for pi in sorted(ply_indices):
             if pi < len(s):
-                states_buf[out_idx] = s[pi][KEPT_PLANE_INDICES]  # slice 18→8 planes
+                if encoding == "v8":
+                    states_buf[out_idx] = s[pi]  # already 11 planes native
+                else:
+                    states_buf[out_idx] = s[pi][KEPT_PLANE_INDICES]  # slice 18→8 planes
                 policies_buf[out_idx] = p[pi]
                 outcomes_buf[out_idx] = o[pi]
                 weights_buf[out_idx] = pos_weight
@@ -311,13 +344,21 @@ def main() -> None:
         np.savez(out_path, **save_kwargs)
 
     size_mb = out_path.stat().st_size / 1024 / 1024
-    est_ram_gb = out_idx * (8 * 19 * 19 * 2 + 362 * 4 + 4) / (1024 ** 3)
+    if encoding == "v8":
+        bytes_per_pos = N_PLANES_V8 * BOARD_SIZE_V8 * BOARD_SIZE_V8 * 2 + N_ACTIONS_V8 * 4 + 4
+    else:
+        bytes_per_pos = 8 * 19 * 19 * 2 + 362 * 4 + 4
+    est_ram_gb = out_idx * bytes_per_pos / (1024 ** 3)
     print(f"Saved: {out_path}")
+    print(f"  Encoding  : {encoding}")
     print(f"  File size : {size_mb:.0f} MB")
     print(f"  Positions : {out_idx:,}")
     print(f"  States    : {states_out.shape}  dtype={states_out.dtype}")
     print(f"  Policies  : {policies_out.shape}")
     print(f"  Est. RAM  : ~{est_ram_gb:.1f} GB when pushed to replay buffer")
+    if encoding == "v8":
+        print(f"  Clipped   : {total_clipped_v8:,} stones outside 25×25 envelope "
+              f"(bbox_clip_fired telemetry)")
     if not compress:
         print("  mmap_mode='r' will keep RAM near-zero until positions are actually used.")
 
