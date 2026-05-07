@@ -1,6 +1,14 @@
 """V8ArgmaxBot — policy-argmax player for v8 models (no MCTS).
 
-Bridges the v8 model to the BotProtocol interface used by the eval pipeline.
+⚠️ **EVAL METHOD CAVEAT (§167 Gate 4)**: This bot does NOT use MCTS. It picks
+the argmax legal move from the model's policy head. Against SealBot's
+minimax-with-lookahead, argmax-only gets crushed (Phase B observed 0%
+WR for v8 models, ALSO ~0% expected for v7full under the same setting).
+The signal is **cross-arm comparable** — all variants get the same handicap —
+but absolute WR is degenerate. Real MCTS-based eval is deferred to
+§168 Phase D (engine's Rust MCTS hardcodes BOARD_SIZE=19 / N_ACTIONS=362
+and would clip v8's 25×25 bbox edge moves through `board.to_flat`).
+
 For each call:
   1. Encode the current Rust Board state to a v8 tensor via
      `dataset_v8.encode_position_v8` (matches Phase A wire format byte-exact).
@@ -11,14 +19,6 @@ For each call:
      get score = `-inf` (rare under R=8 + 25×25, see corpus_export.log
      bbox_clip_fired telemetry).
   4. Pick the legal move with highest score.
-
-Used in Phase B Gate 4 SealBot WR eval. Rationale for argmax-over-MCTS
-(spec deviation from §167 plan): the engine's Rust MCTS hardcodes BOARD_SIZE=19
-and feature_len = 8 * 19 * 19 = 2888 (`engine/src/lib.rs:632`,
-`replay_buffer/sym_tables.rs:23-26`); a v8-aware MCTS is Phase D §168 scope.
-Argmax-only eval delivers a valid cross-arm comparison signal at the cost of
-weaker absolute WR vs. SealBot (loses MCTS's value-side disambiguation and
-exploration). All 5 arms get the same handicap so ranking holds.
 
 Optional `temperature > 0`: sample legal moves from softmax-over-scores.
 `temperature == 0` (default): argmax.

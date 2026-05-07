@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
-"""Phase B Gate 4 — v8 model SealBot WR (policy-argmax).
+"""Phase B Gate 4 — model SealBot WR (policy-argmax, v6 or v8).
 
-Per-arm script that plays N games between a v8 inference checkpoint and
-SealBot, alternating sides. Reports WR + 95% CI (Wilson score interval).
+Per-arm / per-baseline script that plays N games between an inference
+checkpoint and SealBot, alternating sides. Reports WR + 95% CI (Wilson).
 
-The v8 model uses policy-argmax (no MCTS) — see
-`hexo_rl/eval/v8_argmax_bot.py` for rationale. SealBot uses its own
-minimax C++ engine via `vendor/bots/sealbot`.
+Both v8 (Phase B variants) and v6 (e.g. v7full baseline) use policy-argmax —
+NO MCTS. Argmax-only is degenerate vs SealBot's minimax (Phase B observed
+~0% WR for v8, expect similar for v7full); the value here is **cross-encoding
+parity**: shows v8's 0% is the eval method, not the v8 architecture.
+
+`--encoding` selects the path:
+  - `v8` (default): `V8ArgmaxBot` + 11-plane × 25×25 bbox encoder.
+  - `v6`:           `V6ArgmaxBot` + 8-plane × 19×19 K-cluster window.
 
 Usage:
     python scripts/eval_v8_vs_sealbot.py \\
-        --checkpoint checkpoints/v8_variants/B1_v8full.pt \\
+        --checkpoint checkpoints/v8_variants/B1_v8full.pt --encoding v8 \\
         --n-games 200 --time-limit 0.5 \\
         --out reports/encoding_phase_b/B1_sealbot.json
+
+    python scripts/eval_v8_vs_sealbot.py \\
+        --checkpoint checkpoints/bootstrap_model_v7full.pt --encoding v6 \\
+        --n-games 200 --time-limit 0.5 \\
+        --out reports/encoding_phase_b/v7full_sealbot_argmax.json
 """
 from __future__ import annotations
 
@@ -35,7 +45,9 @@ if str(REPO_ROOT) not in sys.path:
 from engine import Board
 from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
 from hexo_rl.bootstrap.dataset_v8 import LEGAL_MOVE_RADIUS_V8
+from hexo_rl.bootstrap.bot_protocol import BotProtocol
 from hexo_rl.env.game_state import GameState
+from hexo_rl.eval.v6_argmax_bot import V6ArgmaxBot, load_v6_model_from_checkpoint
 from hexo_rl.eval.v8_argmax_bot import V8ArgmaxBot, load_v8_model_from_checkpoint
 from hexo_rl.utils.device import best_device
 
@@ -53,18 +65,19 @@ def wilson_ci(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
 
 
 def play_game(
-    model_bot: V8ArgmaxBot,
+    model_bot: BotProtocol,
     seal_bot: SealBotBot,
     model_side: int,
     eval_random_opening_plies: int,
     seed: int,
     max_moves: int = 200,
+    legal_move_radius: int = LEGAL_MOVE_RADIUS_V8,
 ) -> tuple[int | None, int]:
     """Play one game; return (winner_side, ply_count). winner_side ∈ {1,-1,None}."""
     random.seed(seed)
     np.random.seed(seed)
     board = Board()
-    board.set_legal_move_radius(LEGAL_MOVE_RADIUS_V8)
+    board.set_legal_move_radius(legal_move_radius)
     state = GameState.from_board(board)
     model_bot.reset()
     seal_bot.reset()
@@ -100,6 +113,9 @@ def main() -> int:
     parser.add_argument("--out", default=None,
                         help="Output JSON path; default reports/encoding_phase_b/<arm>_sealbot.json")
     parser.add_argument("--max-moves", type=int, default=200)
+    parser.add_argument("--encoding", choices=("v6", "v8"), default="v8",
+                        help="Model encoding: 'v8' (default; Phase B arms) or "
+                             "'v6' (HEXB 8-plane × 19×19, e.g. v7full baseline).")
     args = parser.parse_args()
 
     ckpt_path = Path(args.checkpoint).resolve()
@@ -116,14 +132,22 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     device = best_device()
-    print(f"[eval] arm={arm}  device={device}  n_games={args.n_games}  "
-          f"time_limit={args.time_limit}  temp={args.temperature}", flush=True)
+    print(f"[eval] arm={arm}  encoding={args.encoding}  device={device}  "
+          f"n_games={args.n_games}  time_limit={args.time_limit}  "
+          f"temp={args.temperature}", flush=True)
 
-    model = load_v8_model_from_checkpoint(str(ckpt_path), device)
-    print(f"[eval] model loaded — encoding=v8 filters={model.filters} "
+    if args.encoding == "v8":
+        model = load_v8_model_from_checkpoint(str(ckpt_path), device)
+        model_bot: BotProtocol = V8ArgmaxBot(model, device, temperature=args.temperature)
+        legal_radius = LEGAL_MOVE_RADIUS_V8
+    else:
+        model = load_v6_model_from_checkpoint(str(ckpt_path), device)
+        model_bot = V6ArgmaxBot(model, device, temperature=args.temperature)
+        # v6 default radius preserved (no override).
+        legal_radius = 5
+    print(f"[eval] model loaded — encoding={args.encoding} filters={model.filters} "
           f"res_blocks={model.res_blocks} n_actions={model.n_actions}", flush=True)
 
-    model_bot = V8ArgmaxBot(model, device, temperature=args.temperature)
     seal_bot = SealBotBot(time_limit=args.time_limit)
 
     wins = 0
@@ -141,6 +165,7 @@ def main() -> int:
             eval_random_opening_plies=args.random_opening_plies,
             seed=args.seed_base + i,
             max_moves=args.max_moves,
+            legal_move_radius=legal_radius,
         )
         ply_counts.append(ply)
         if winner == model_side:
@@ -163,7 +188,7 @@ def main() -> int:
     out = {
         "arm": arm,
         "checkpoint": str(ckpt_path),
-        "encoding": "v8",
+        "encoding": args.encoding,
         "n_games": args.n_games,
         "wins": wins,
         "losses": losses,
