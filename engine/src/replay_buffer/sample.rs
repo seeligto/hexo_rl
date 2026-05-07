@@ -22,11 +22,13 @@ use super::ReplayBuffer;
 
 /// Apply symmetry `sym_idx` to a state tensor (pure coord scatter).
 ///
-/// Plane-count-generic: deduces `n_planes = src.len() / N_CELLS`. Identical
-/// scatter is applied to every plane (state planes do not permute under any
-/// hex dihedral symmetry — only cell coordinates do). Callable on the 8-plane
-/// buffer wire format (HEXB v6) and the 18-plane legacy inference / corpus
-/// tensor with the same code path.
+/// Plane-count-generic: deduces `n_planes = src.len() / sym_tables.n_cells`.
+/// Identical scatter is applied to every plane (state planes do not permute
+/// under any hex dihedral symmetry — only cell coordinates do). Callable on
+/// the 8-plane buffer wire format (HEXB v6), the 18-plane legacy inference /
+/// corpus tensor, and the 11-plane v8 wire format with the same code path
+/// (the cell count is read from `sym_tables.n_cells`, not a global constant,
+/// so v6 and v8 SymTables instances dispatch to the same kernel).
 ///
 /// Generic over the element type `T: Copy` — callable with `f32` for the
 /// Python-facing bindings and with `u16` (f16 bits) for the internal buffer
@@ -40,15 +42,16 @@ pub fn apply_symmetry_state<T: Copy>(
 ) {
     debug_assert_eq!(src.len(), dst.len());
     debug_assert!(sym_idx < N_SYMS);
-    debug_assert_eq!(src.len() % N_CELLS, 0,
-        "state tensor length {} not a multiple of {} cells", src.len(), N_CELLS);
-    let n_planes = src.len() / N_CELLS;
+    let n_cells = sym_tables.n_cells;
+    debug_assert_eq!(src.len() % n_cells, 0,
+        "state tensor length {} not a multiple of {} cells", src.len(), n_cells);
+    let n_planes = src.len() / n_cells;
 
     let scatter = &sym_tables.scatter[sym_idx];
     for p in 0..n_planes {
-        let base = p * N_CELLS;
-        let src_plane = &src[base..base + N_CELLS];
-        let dst_plane = &mut dst[base..base + N_CELLS];
+        let base = p * n_cells;
+        let src_plane = &src[base..base + n_cells];
+        let dst_plane = &mut dst[base..base + n_cells];
         for &(sc, dc) in scatter {
             dst_plane[dc as usize] = src_plane[sc as usize];
         }
@@ -58,7 +61,8 @@ pub fn apply_symmetry_state<T: Copy>(
 /// Apply symmetry `sym_idx` to one 6-plane chain-length tensor.
 ///
 /// Generic over `T: Copy`. Uses `chain_src_lookup` for axis-plane remap plus
-/// coordinate permutation. Caller zeroes `dst` before invocation.
+/// coordinate permutation. Cell count is read from `sym_tables.n_cells`
+/// (v6: 361, v8: 625). Caller zeroes `dst` before invocation.
 #[inline]
 pub fn apply_chain_symmetry<T: Copy>(
     src: &[T],
@@ -66,8 +70,9 @@ pub fn apply_chain_symmetry<T: Copy>(
     sym_idx: usize,
     sym_tables: &SymTables,
 ) {
-    debug_assert_eq!(src.len(), N_CHAIN_PLANES * N_CELLS);
-    debug_assert_eq!(dst.len(), N_CHAIN_PLANES * N_CELLS);
+    let n_cells = sym_tables.n_cells;
+    debug_assert_eq!(src.len(), N_CHAIN_PLANES * n_cells);
+    debug_assert_eq!(dst.len(), N_CHAIN_PLANES * n_cells);
     debug_assert!(sym_idx < N_SYMS);
 
     let scatter           = &sym_tables.scatter[sym_idx];
@@ -75,10 +80,10 @@ pub fn apply_chain_symmetry<T: Copy>(
 
     for dst_p in 0..N_CHAIN_PLANES {
         let src_p    = chain_src_lookup[dst_p];
-        let src_base = src_p * N_CELLS;
-        let dst_base = dst_p * N_CELLS;
-        let src_plane = &src[src_base..src_base + N_CELLS];
-        let dst_plane = &mut dst[dst_base..dst_base + N_CELLS];
+        let src_base = src_p * n_cells;
+        let dst_base = dst_p * n_cells;
+        let src_plane = &src[src_base..src_base + n_cells];
+        let dst_plane = &mut dst[dst_base..dst_base + n_cells];
         for &(sc, dc) in scatter {
             dst_plane[dc as usize] = src_plane[sc as usize];
         }

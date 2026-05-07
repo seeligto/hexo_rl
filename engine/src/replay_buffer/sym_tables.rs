@@ -25,7 +25,6 @@ pub const BOARD_W:   usize = 19;
 pub const N_CELLS:   usize = BOARD_H * BOARD_W; // 361
 pub const N_ACTIONS: usize = N_CELLS + 1;       // 362 (pass move at index 361)
 pub const N_SYMS:    usize = 12;
-const HALF: i32 = 9; // (BOARD_H - 1) / 2
 
 // State stride per buffer slot (f16 bits) — 8 planes × 361 cells = 2888.
 pub const STATE_STRIDE:  usize = N_PLANES * N_CELLS;
@@ -54,6 +53,41 @@ pub const POLICY_STRIDE: usize = N_ACTIONS;
 /// Used by ownership and winning_line targets — both share the same shape and
 /// scatter table as a single state plane.
 pub const AUX_STRIDE:    usize = N_CELLS;
+
+// ── v8 constants (gated by configs/model.yaml `encoding.version: v8`) ────────
+//
+// Path β: 25×25 fixed-max bbox-of-all-stones, 11 planes (8 KEPT + off_window
+// + moves_remaining_bcast + ply_parity_bcast), R=8 perception, no pass slot,
+// K-aggregation removed. See docs/designs/encoding_v8_contract.md §1.2.
+//
+// These constants are used by `SymTables::with_shape(BOARD_SIZE_V8, N_PLANES_V8)`
+// and by future v8-aware buffer/inference paths. v6 callers do NOT see these
+// values — `SymTables::new()` and the v6 buffer wire format remain at v6
+// dimensions byte-exact.
+
+/// v8 state plane count: 8 KEPT + off_window + moves_remaining_bcast + ply_parity_bcast.
+pub const N_PLANES_V8: usize = 11;
+/// v8 bbox side (fixed-max). 12 + 12 + 1 = 25 (HALF_V8 + HALF_V8 + 1).
+pub const BOARD_H_V8: usize = 25;
+pub const BOARD_W_V8: usize = 25;
+/// v8 total cells = 25 × 25 = 625.
+pub const N_CELLS_V8: usize = BOARD_H_V8 * BOARD_W_V8;
+/// v8 spatial-only policy width = 625 (no pass slot — P1 close-out: pass dead in HTTT).
+pub const N_ACTIONS_V8: usize = N_CELLS_V8;
+/// v8 board half (bbox margin). HALF_V8 = (BOARD_H_V8 - 1) / 2 = 12.
+/// Currently unused inside this module (`SymTables::with_shape` derives
+/// half locally from `board_size`); retained as a named constant for the
+/// v8 bbox encoder and v8-aware Python callers.
+#[allow(dead_code)]
+pub(crate) const HALF_V8: i32 = 12;
+/// v8 state stride per buffer slot = 11 × 625 = 6875.
+pub const STATE_STRIDE_V8: usize = N_PLANES_V8 * N_CELLS_V8;
+/// v8 chain stride per buffer slot = 6 × 625 = 3750 (Q13 chain planes ride v8 spatial).
+pub const CHAIN_STRIDE_V8: usize = N_CHAIN_PLANES * N_CELLS_V8;
+/// v8 policy stride = 625 (spatial-only).
+pub const POLICY_STRIDE_V8: usize = N_ACTIONS_V8;
+/// v8 auxiliary stride = 625 (single-plane spatial).
+pub const AUX_STRIDE_V8: usize = N_CELLS_V8;
 
 // ── Weight schedule ──────────────────────────────────────────────────────────
 
@@ -137,31 +171,63 @@ fn same_axis(a: (i32, i32), b: (i32, i32)) -> bool {
 /// The 2-plane-per-axis (current/opponent) layout means the real scatter loop
 /// iterates `(axis_perm[s][dst_j], player_off)` pairs for chain planes 0..5.
 pub struct SymTables {
+    /// Board side length for which scatter tables were built (square boards
+    /// only). v6: 19. v8: 25.
+    pub board_size: usize,
+    /// Total cells = `board_size * board_size`. v6: 361. v8: 625.
+    pub n_cells: usize,
+    /// State plane count for which `src_plane_lookup` is sized. v6: 8. v8: 11.
+    pub n_planes: usize,
     pub scatter:   [Vec<(u16, u16)>; N_SYMS],
     /// Per-symmetry axis-plane remap for Q13 chain-length planes.
     /// `axis_perm[s][dst_j] = src_i` means destination plane for axis j reads
-    /// from source plane for axis i under symmetry s.
+    /// from source plane for axis i under symmetry s. Board-size invariant
+    /// (depends only on hex axes).
     pub axis_perm: [[usize; 3]; N_SYMS],
-    /// Fused per-symmetry source-plane lookup for the N_PLANES state planes.
+    /// Fused per-symmetry source-plane lookup for the state planes.
     /// State planes are pure coordinate scatter (identity plane mapping), so
-    /// `src_plane_lookup[s][dst_p] == dst_p` for all s and p. `apply_symmetry_state`
+    /// `src_plane_lookup[s][p] == p` for all s and p. `apply_symmetry_state`
     /// no longer consumes this field (it's now plane-count-generic and uses
     /// implicit identity mapping); retained as P4's aug-table substrate for any
     /// future per-plane permutation use case.
-    pub src_plane_lookup: [[usize; N_PLANES]; N_SYMS],
+    /// Outer length: N_SYMS=12. Inner length: `n_planes` (runtime).
+    pub src_plane_lookup: Vec<Vec<usize>>,
     /// Fused per-symmetry source-plane lookup for the 6 chain-length planes.
     /// `chain_src_lookup[s][dst_p] = src_p`: coordinate + axis-plane remap.
+    /// Inner length is the universal `N_CHAIN_PLANES = 6`.
     pub chain_src_lookup: [[usize; N_CHAIN_PLANES]; N_SYMS],
 }
 
 impl SymTables {
+    /// Build sym tables at the v6 default shape (`board_size=19, n_planes=8`).
+    /// v6 byte-exact: identical scatter LUTs and axis_perm to pre-§166 master.
     pub fn new() -> Self {
-        // Axial → flat index.  Returns None if the result is out of the 19×19 window.
+        Self::with_shape(BOARD_H, N_PLANES)
+    }
+
+    /// Build sym tables at an arbitrary square board shape and plane count.
+    ///
+    /// Used by v8 callers (`SymTables::with_shape(BOARD_H_V8, N_PLANES_V8) =
+    /// 25×25, 11 planes`) and by tests. The 12-fold scatter LUTs depend on
+    /// `board_size` (hex window dimensions); axis_perm is board-size invariant
+    /// (purely a function of the 3 hex axes); chain_src_lookup is plane-count
+    /// invariant (always 6 chain planes regardless of state plane count).
+    ///
+    /// Panics if `board_size` is even (sym scatter assumes a centred odd window).
+    pub fn with_shape(board_size: usize, n_planes: usize) -> Self {
+        assert!(
+            board_size % 2 == 1,
+            "SymTables: board_size must be odd, got {}", board_size
+        );
+        let n_cells = board_size * board_size;
+        let half = (board_size as i32 - 1) / 2;
+
+        // Axial → flat index.  Returns None if the result is out of the window.
         let to_flat = |q: i32, r: i32| -> Option<u16> {
-            let qi = q + HALF;
-            let ri = r + HALF;
-            if qi >= 0 && qi < BOARD_H as i32 && ri >= 0 && ri < BOARD_W as i32 {
-                Some((qi as usize * BOARD_W + ri as usize) as u16)
+            let qi = q + half;
+            let ri = r + half;
+            if qi >= 0 && qi < board_size as i32 && ri >= 0 && ri < board_size as i32 {
+                Some((qi as usize * board_size + ri as usize) as u16)
             } else {
                 None
             }
@@ -169,7 +235,7 @@ impl SymTables {
 
         // Flat index → axial coordinates.
         let from_flat = |flat: usize| -> (i32, i32) {
-            ((flat / BOARD_W) as i32 - HALF, (flat % BOARD_W) as i32 - HALF)
+            ((flat / board_size) as i32 - half, (flat % board_size) as i32 - half)
         };
 
         // Each symmetry gets its own Vec.  We use a const-size array with a dummy
@@ -181,9 +247,9 @@ impl SymTables {
         for sym_idx in 0..N_SYMS {
             let reflect = sym_idx >= 6;
             let n_rot   = sym_idx % 6;
-            let mut pairs: Vec<(u16, u16)> = Vec::with_capacity(N_CELLS);
+            let mut pairs: Vec<(u16, u16)> = Vec::with_capacity(n_cells);
 
-            for src in 0..N_CELLS {
+            for src in 0..n_cells {
                 let (mut q, mut r) = from_flat(src);
 
                 // Optional reflection first (swap axes).
@@ -246,13 +312,11 @@ impl SymTables {
             axis_perm[sym_idx] = perm;
         }
 
-        // Build fused src_plane_lookup for the 18 state planes.
+        // Build fused src_plane_lookup for the state planes.
         // All state planes are pure coordinate scatter — identity plane mapping.
-        let mut src_plane_lookup = [[0usize; N_PLANES]; N_SYMS];
-        for s in 0..N_SYMS {
-            for p in 0..N_PLANES {
-                src_plane_lookup[s][p] = p;
-            }
+        let mut src_plane_lookup: Vec<Vec<usize>> = Vec::with_capacity(N_SYMS);
+        for _ in 0..N_SYMS {
+            src_plane_lookup.push((0..n_planes).collect());
         }
 
         // Build chain_src_lookup for the 6 chain-length planes.
@@ -269,7 +333,15 @@ impl SymTables {
             }
         }
 
-        SymTables { scatter, axis_perm, src_plane_lookup, chain_src_lookup }
+        SymTables {
+            board_size,
+            n_cells,
+            n_planes,
+            scatter,
+            axis_perm,
+            src_plane_lookup,
+            chain_src_lookup,
+        }
     }
 }
 
@@ -412,5 +484,141 @@ mod tests {
         // axis_perm[7]: j=0 ← i=2; j=1 ← i=1; j=2 ← i=0 → [2, 1, 0]
         let tables = SymTables::new();
         assert_eq!(tables.axis_perm[7], [2, 1, 0]);
+    }
+
+    // ── v8 SymTables tests (§166 Bucket A) ──────────────────────────────────
+
+    #[test]
+    fn v8_with_shape_records_dims() {
+        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        assert_eq!(tables.board_size, 25);
+        assert_eq!(tables.n_cells, 625);
+        assert_eq!(tables.n_planes, 11);
+    }
+
+    #[test]
+    fn v8_axis_perm_matches_v6() {
+        // axis_perm depends only on the 3 hex axes, not on board size — v8
+        // and v6 must produce identical permutations.
+        let v6 = SymTables::new();
+        let v8 = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        for s in 0..N_SYMS {
+            assert_eq!(
+                v6.axis_perm[s], v8.axis_perm[s],
+                "axis_perm[{}] must be board-size invariant", s
+            );
+        }
+    }
+
+    #[test]
+    fn v8_chain_src_lookup_matches_v6() {
+        // chain_src_lookup is plane-count invariant (always 6 chain planes)
+        // and only depends on axis_perm — so v8 and v6 must agree.
+        let v6 = SymTables::new();
+        let v8 = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        for s in 0..N_SYMS {
+            assert_eq!(v6.chain_src_lookup[s], v8.chain_src_lookup[s],
+                "chain_src_lookup[{}] must be board-size invariant", s);
+        }
+    }
+
+    #[test]
+    fn v8_identity_sym_is_identity_scatter() {
+        // sym=0 (reflect=false, n_rot=0): every cell maps to itself.
+        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        let scatter = &tables.scatter[0];
+        assert_eq!(scatter.len(), 625, "v8 identity must produce 625 pairs");
+        for &(src, dst) in scatter {
+            assert_eq!(src, dst,
+                "identity sym must map every cell to itself; got {} → {}", src, dst);
+        }
+    }
+
+    #[test]
+    fn v8_scatter_indices_in_bounds() {
+        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        for s in 0..N_SYMS {
+            for &(src, dst) in &tables.scatter[s] {
+                assert!((src as usize) < 625, "v8 src out of bounds: sym {} src {}", s, src);
+                assert!((dst as usize) < 625, "v8 dst out of bounds: sym {} dst {}", s, dst);
+            }
+        }
+    }
+
+    #[test]
+    fn v8_scatter_pairs_have_unique_src_and_dst() {
+        // Square hex windows drop out-of-window destinations under non-trivial
+        // sym (matches v6 behavior — see comment at SymTables.scatter). The
+        // surviving pairs must still have unique src and unique dst (no two
+        // cells map to the same destination, no destination is reached from
+        // two sources).
+        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        for s in 0..N_SYMS {
+            let scatter = &tables.scatter[s];
+            assert!(scatter.len() <= 625, "sym {} produced too many pairs: {}", s, scatter.len());
+            let mut src_seen = vec![false; 625];
+            let mut dst_seen = vec![false; 625];
+            for &(src, dst) in scatter {
+                assert!(!src_seen[src as usize], "sym {} duplicate src {}", s, src);
+                assert!(!dst_seen[dst as usize], "sym {} duplicate dst {}", s, dst);
+                src_seen[src as usize] = true;
+                dst_seen[dst as usize] = true;
+            }
+        }
+    }
+
+    #[test]
+    fn v8_identity_and_rot180_preserve_all_cells() {
+        // sym 0 (identity) and sym 3 (rot180: (q,r)→(-q,-r)) are guaranteed
+        // bijections on a square window centred at origin — every cell's
+        // rotated image stays inside the window.
+        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        assert_eq!(tables.scatter[0].len(), 625, "v8 identity must keep all 625 cells");
+        assert_eq!(tables.scatter[3].len(), 625, "v8 rot180 must keep all 625 cells");
+    }
+
+    #[test]
+    fn v6_v8_rot180_preserve_all_cells() {
+        // Same property applies at v6 dimensions — regression guard that the
+        // refactor didn't change v6 behaviour on the bijective syms.
+        let v6 = SymTables::new();
+        assert_eq!(v6.scatter[0].len(), 361, "v6 identity must keep all 361 cells");
+        assert_eq!(v6.scatter[3].len(), 361, "v6 rot180 must keep all 361 cells");
+    }
+
+    #[test]
+    fn v8_src_plane_lookup_is_identity_at_n_planes_11() {
+        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        for s in 0..N_SYMS {
+            assert_eq!(tables.src_plane_lookup[s].len(), 11);
+            for p in 0..11 {
+                assert_eq!(tables.src_plane_lookup[s][p], p,
+                    "v8 src_plane_lookup must be identity; got [{}][{}] = {}",
+                    s, p, tables.src_plane_lookup[s][p]);
+            }
+        }
+    }
+
+    #[test]
+    fn v6_default_byte_exact() {
+        // SymTables::new() must produce v6-shape output identical to before
+        // §166. This is the v6 byte-exact regression guard.
+        let tables = SymTables::new();
+        assert_eq!(tables.board_size, 19);
+        assert_eq!(tables.n_cells, 361);
+        assert_eq!(tables.n_planes, 8);
+        // Identity sym scatter must be 361 (1, 1) → … → (361, 361) pairs.
+        assert_eq!(tables.scatter[0].len(), 361);
+        for (i, &(src, dst)) in tables.scatter[0].iter().enumerate() {
+            assert_eq!(src as usize, i);
+            assert_eq!(dst as usize, i);
+        }
+        // src_plane_lookup must still be 8-wide identity.
+        for s in 0..N_SYMS {
+            assert_eq!(tables.src_plane_lookup[s].len(), 8);
+            for p in 0..8 {
+                assert_eq!(tables.src_plane_lookup[s][p], p);
+            }
+        }
     }
 }
