@@ -196,6 +196,39 @@ def test_katagopolicyhead_offboard_logits_near_negative_inf() -> None:
     assert torch.allclose(on_board_total, torch.ones(1), atol=1e-3)
 
 
+def test_katagopolicyhead_label_smoothing_loss_bounded() -> None:
+    """Regression: with default offboard_logit_bias=-50, label-smoothed
+    cross-entropy must stay below the v6 baseline (~6.4) at uniform init,
+    not blow up to ~150+ as it did when bias was -5000.
+    """
+    import torch.nn.functional as F
+    head = KataGoPolicyHead(c_in=8, spatial=625, use_gpool=False, c_p1=8)
+    # Synthesise a v8 mask: hex disc of radius 8 inside 25×25 → 217 valid cells.
+    half = 12
+    mask = torch.zeros(1, 1, 25, 25)
+    for q in range(25):
+        for r in range(25):
+            lq, lr = q - half, r - half
+            ls = -(lq + lr)
+            if max(abs(lq), abs(lr), abs(ls)) <= 8:
+                mask[0, 0, q, r] = 1.0
+    mask_sum = mask.sum(dim=(2, 3), keepdim=True)
+    x = torch.randn(1, 8, 25, 25)
+    log_probs = head(x, mask, mask_sum)
+    # Build a label-smoothed target (one-hot at centre cell, ε=0.05).
+    target = torch.zeros(1, 625)
+    target[0, 12 * 25 + 12] = 1.0
+    eps = 0.05
+    target = target * (1.0 - eps) + eps / 625
+    nll = -(target * log_probs).sum()
+    # v6 baseline at uniform init (362 actions): ~5.9 + small smoothing overhead.
+    # v8 with bias=-50: ~5.4 (on-board NLL) + 1.6 (off-board overhead) = ~7.0
+    # max. With bias=-5000 the loss would be ~165+. The 15.0 ceiling here
+    # gives some slack for non-uniform random init.
+    assert nll.item() < 15.0, \
+        f"v8 label-smoothed init loss {nll.item():.2f} exploded — check offboard_logit_bias"
+
+
 def test_katagopolicyhead_param_count_v8_savings() -> None:
     """Verify KataGo head is much smaller than v6's FC head at v8 dims.
 

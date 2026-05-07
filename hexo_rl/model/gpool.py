@@ -164,8 +164,17 @@ class KataGoPolicyHead(nn.Module):
         broadcast-add'd into the P branch output.
     Followed by:
       - per-channel bias on c_p1, ReLU, 1×1 conv (c_p1 → 1) → spatial logits.
-    Off-board cells are biased −5000.0 before flatten so softmax assigns
-    them ≈0 probability (KataGo `model_pytorch.py:2479`).
+    Off-board cells are biased by `offboard_logit_bias` (default −50.0)
+    before log_softmax. KataGo's reference value is −5000.0
+    (`model_pytorch.py:2479`); we use −50.0 because hexo's pretrain
+    applies uniform label smoothing across all `n_actions`, including
+    off-board cells. With bias=−5000 each off-board cell contributes
+    `(ε / n_actions) × 5000 ≈ 0.4` to cross-entropy (×412 off-board cells
+    ≈ 165 added to the loss); bias=−50 caps that to ≈1.6 total — a
+    negligible constant overhead — while still driving off-board
+    probability to exp(−50)≈2e−22 so the policy is effectively zero
+    there. Tune `offboard_logit_bias` if label_smoothing changes
+    materially.
 
     Per P1 close-out the pass slot is dead in HTTT, so this head emits ONLY
     the H×W spatial logits (n_actions = H*W). The B0 control arm sets
@@ -184,7 +193,7 @@ class KataGoPolicyHead(nn.Module):
         c_p1: int = 32,
         c_g1: int = 32,
         gn_groups: int = 8,
-        offboard_logit_bias: float = -5000.0,
+        offboard_logit_bias: float = -50.0,
     ) -> None:
         super().__init__()
         self.spatial = spatial
