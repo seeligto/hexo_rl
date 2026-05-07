@@ -464,6 +464,31 @@ class BootstrapTrainer:
                     chain_weight=chain_weight,
                 )
 
+            # Defense-in-depth: skip backward+step when forward produced NaN/inf.
+            # §167 B1 retrain hit a single-batch fp16 overflow in KataConvAndGPool
+            # at step -22000 (epoch 14). The standard scaler.unscale_ +
+            # clip_grad_norm_ + scaler.step chain failed to skip — clip_grad_norm_
+            # multiplies grads by NaN clip_coef, optimizer wrote NaN to weights,
+            # and all subsequent steps spun NaN. Skipping the step entirely on
+            # non-finite forward loss prevents the cascade.
+            if not torch.isfinite(loss):
+                self.skipped_nonfinite_steps = getattr(
+                    self, "skipped_nonfinite_steps", 0
+                ) + 1
+                if self.skipped_nonfinite_steps <= 5 or self.skipped_nonfinite_steps % 50 == 0:
+                    log.warning(
+                        "skipped_nonfinite_loss",
+                        step=self.step + 1,
+                        n_skipped=self.skipped_nonfinite_steps,
+                        loss=float(loss.detach().item()),
+                        policy_loss=float(policy_loss.detach().item()),
+                        value_loss=float(value_loss.detach().item()),
+                    )
+                self.optimizer.zero_grad(set_to_none=True)
+                self.scheduler.step()
+                self.step += 1
+                continue
+
             grad_norm = fp16_backward_step(loss, self.optimizer, self.scaler, self.model, self.fp16)
 
             self.scheduler.step()
