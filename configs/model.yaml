@@ -9,3 +9,11 @@ in_channels: 8
 res_blocks: 12
 filters: 128
 se_reduction_ratio: 4
+
+# §166 v8 encoding gate. Default "v6" preserves pre-§166 behavior byte-exact.
+# Set to "v8" to route the Path β pipeline (25×25 bbox, 11 planes, R=8, no
+# K-aggregation, no pass slot). Phase A wires the v8 plumbing only; v8 model
+# architecture, corpus regen, and self-play encoding-awareness land in
+# Phases B–D. See docs/designs/encoding_v8_contract.md.
+encoding:
+  version: "v6"

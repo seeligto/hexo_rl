@@ -42,6 +42,8 @@ EXCLUDE = (
     'fixtures/threat_probe_baseline.CHANGELOG.md',
     # zero_chain_planes handler for legacy 24-plane fixtures (intentional backward-compat code path)
     'scripts/probe_threat_logits.py',
+    # gitignored research/investigation artifacts (spikes, audits) — not committed source
+    'audit/',
 )
 
 
