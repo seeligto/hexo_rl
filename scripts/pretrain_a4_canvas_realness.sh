@@ -56,7 +56,7 @@ echo "  corpus     : ${CORPUS}"              | tee -a "${LOG}"
 echo "  log        : ${LOG}"                 | tee -a "${LOG}"
 echo "  recipe     : 30 ep cosine, peak 2e-3, eta_min 5e-5, batch 256, v8 + canvas_realness + PC trunk entry" | tee -a "${LOG}"
 
-MALLOC_ARENA_MAX=2 python -m hexo_rl.bootstrap.pretrain \
+MALLOC_ARENA_MAX=2 "${PYTHON:-.venv/bin/python}" -m hexo_rl.bootstrap.pretrain \
     --epochs 30 \
     --batch-size 256 \
     --eta-min 5e-5 \
