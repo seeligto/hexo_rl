@@ -9673,3 +9673,65 @@ Wall time: ~10 s on laptop RTX 4060 Max-Q, ~30 min total including
 fixture audit + threshold pre-registration + report. Five hours of
 compute saved on a wrong §170 scope.
 
+---
+
+## §170 P0 — A4 scalar-ablation probe — 2026-05-08
+
+**Question.** §169a established A4's spatial pathway is alive (KL_S=1.53,
+E2 PASS) but a minority shareholder (KL_S/KL_R=0.27). Does zeroing the
+stone planes (0–7) on Set R cause a large policy shift (spatial features
+are decisive → distribution-shift fine-tune is worth trying) or a small
+shift (scalars dominate → fine-tune is hopeless)?
+
+**Probe.** `scripts/probe_a4_scalar_ablation.py`. Per-position symmetric
+KL between original Set R forward pass and a zeroed-planes-0-7 copy. Same
+Set R fixture as §169a (n=200, seed=20260508).
+
+Pre-registered thresholds (locked before run):
+
+- SCALAR_DOMINATED: mean(KL_zeroed_vs_original) < 0.30 nats
+- SPATIAL_RICH:     mean(KL_zeroed_vs_original) > 1.50 nats
+- AMBIGUOUS:        0.30 – 1.50 nats
+
+**Results.**
+
+| Metric | Value |
+|---|---|
+| Mean sym-KL (zeroed vs original) | **4.19 nats** |
+| Median | 4.30 nats |
+| p90 | 5.27 nats |
+| Min | 0.51 nats |
+| Argmax stable (same cell) | **0 / 200 (0.0%)** |
+
+**Verdict: SPATIAL_RICH.** Mean KL = 4.19 >> 1.50 threshold. Argmax
+changes for every single position when stone planes are removed. A4's
+spatial pathway is not only alive (§169a) — it is *load-bearing*. Stone
+planes 0–7 are decision-critical; scalars alone do not determine the top-1
+move.
+
+**Implications for §170 scoping.**
+
+1. **SCALAR_DOMINATED path closed.** Distribution-shift fine-tune is *not*
+   hopeless on the grounds of absent spatial features.
+2. **§171 fine-tune is mechanistically justified.** The spatial features
+   exist and are active; the SealBot collapse is most consistent with
+   corpus-overfitted spatial representations, not dead or absent ones.
+   Augmenting with adversarial positions addresses the right failure mode.
+3. **K-cluster line (A1) remains canonical §169 winner.** §171 is a
+   side-branch to determine whether bbox is worth pursuing; it does not
+   block or alter the A1 path.
+4. **Architectural change not warranted before §171.** Capacity and routing
+   are intact; the failure mode is training-data distribution, not model
+   structure.
+
+**Artefacts.**
+
+- `scripts/probe_a4_scalar_ablation.py` — probe script.
+- `reports/investigations/a4_scalar_ablation_20260508/probe.json` — full
+  numeric output.
+- `reports/investigations/a4_scalar_ablation_20260508/probe.log` — stdout.
+- `reports/investigations/a4_scalar_ablation_20260508/VERDICT.md` —
+  reviewer-friendly write-up.
+
+Wall time: ~10 s on laptop RTX 4060 Max-Q.
+
