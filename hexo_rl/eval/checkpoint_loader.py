@@ -174,12 +174,15 @@ def _build_v6_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         if k.startswith("trunk.tower.") and len(k.split(".")) >= 4
     })
     res_blocks = max(block_indices) + 1 if block_indices else 12
+    # §169 A2 — detect PMA pool from state dict (cluster_pool.* presence).
+    pool_type = "pma" if any(k.startswith("cluster_pool.") for k in state) else "min_max"
     model = HexTacToeNet(
         board_size=spec.board_size,
         in_channels=in_channels,
         filters=filters,
         res_blocks=res_blocks,
         encoding="v6",
+        pool_type=pool_type,
     )
     # strict=False because v6 / v6w25 checkpoints may carry tower.* duplicates
     # left over from older save formats (see eval_pipeline._load_anchor_model).

@@ -55,7 +55,7 @@ from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 
 Action = Tuple[int, int]
 
-SUPPORTED_POOLS = ("min_max",)
+SUPPORTED_POOLS = ("min_max", "pma")
 
 
 class _Node:
@@ -155,6 +155,45 @@ def _aggregate_priors(
     return (max_probs / s).tolist()
 
 
+def _aggregate_priors_pma(
+    log_policy_agg: np.ndarray,            # (1, S*S+1)
+    canonical_center: Tuple[int, int],
+    legal_moves: List[Action],
+    view_size: int,
+) -> List[float]:
+    """Read the PMA-aggregated single-cluster policy onto the legal-move set.
+
+    The PMA pool returns one log-policy in cluster-0's frame. Each legal
+    move (q, r) maps onto cluster 0 at (wq, wr) = (q-cq+half, r-cr+half).
+    Moves whose mapping falls outside the [0, view_size) window are assigned
+    a small floor (1e-6 then renormalised) — this is rare for the centermost
+    cluster but possible at board edges. ``replacing scatter-max``: the bot
+    no longer takes max-prob across K clusters; the aggregation lives inside
+    PMA's attention pool.
+    """
+    view_half = (view_size - 1) // 2
+    cq, cr = canonical_center
+    lp = log_policy_agg[0].astype(np.float64)
+    lp -= lp.max()
+    e = np.exp(lp)
+    s = e.sum()
+    probs = e / s if s > 1e-12 else np.full_like(lp, 1.0 / lp.shape[0])
+
+    n_legal = len(legal_moves)
+    raw = np.zeros(n_legal, dtype=np.float64)
+    for i, (q, r) in enumerate(legal_moves):
+        wq = q - cq + view_half
+        wr = r - cr + view_half
+        if 0 <= wq < view_size and 0 <= wr < view_size:
+            raw[i] = probs[wq * view_size + wr]
+        else:
+            raw[i] = 1e-6
+    s = raw.sum()
+    if s < 1e-12:
+        return [1.0 / n_legal] * n_legal
+    return (raw / s).tolist()
+
+
 class KClusterMCTSBot(BotProtocol):
     """PUCT MCTS over a v6 / v6w25 K-cluster NN policy + value head.
 
@@ -179,7 +218,7 @@ class KClusterMCTSBot(BotProtocol):
         n_sims: int = 64,
         c_puct: float = 1.5,
         temperature: float = 0.0,
-        pool_type: str = "min_max",
+        pool_type: Optional[str] = None,
         fpu_q: float = 0.0,
     ) -> None:
         encoding = getattr(model, "encoding", None)
@@ -187,9 +226,25 @@ class KClusterMCTSBot(BotProtocol):
             raise ValueError(
                 f"KClusterMCTSBot requires a v6/v6w25 model; got encoding={encoding!r}"
             )
+        # Default pool_type to model.pool_type if the caller didn't specify;
+        # this lets the eval dispatcher stay encoding-only and pool_type
+        # ride along on the checkpoint config.
+        if pool_type is None:
+            pool_type = getattr(model, "pool_type", "min_max")
         if pool_type not in SUPPORTED_POOLS:
             raise ValueError(
                 f"unknown pool_type={pool_type!r}; supported: {SUPPORTED_POOLS}"
+            )
+        # Cross-check: if the model says 'pma' the bot must also be 'pma' so
+        # the K-aggregation goes through model.aggregated_forward_K. A mismatch
+        # would silently apply scatter-max on top of PMA's already-aggregated
+        # output — surface it loudly.
+        model_pool = getattr(model, "pool_type", "min_max")
+        if model_pool != pool_type:
+            raise ValueError(
+                f"KClusterMCTSBot pool_type={pool_type!r} disagrees with "
+                f"model.pool_type={model_pool!r}; the bot must match the "
+                f"model so the K-aggregation site is consistent."
             )
         self.model = model.eval()
         self.device = device
@@ -252,12 +307,30 @@ class KClusterMCTSBot(BotProtocol):
         assert view_h == view_w, "KClusterMCTSBot expects square cluster window"
         view_size = view_h
 
-        log_p_K, values_K = self._forward_K(tensor)
+        if self.pool_type == "pma":
+            # PMA pool: model aggregates K cluster tokens internally and
+            # returns a single (1, n_actions) policy + (1, 1) value. The
+            # aggregated policy is emitted in cluster-0's frame (the
+            # centermost cluster — the model's natural spatial reference
+            # under v6w25 training where target_k was the move's cluster).
+            x = torch.from_numpy(tensor).float().to(self.device)
+            log_p_agg, value_agg, _ = self.model.aggregated_forward_K(x)
+            value = float(value_agg.cpu().numpy().reshape(-1)[0])
+            priors = _aggregate_priors_pma(
+                log_p_agg.cpu().numpy(),               # (1, n_actions)
+                centers[0],                             # cluster-0 frame
+                legal_moves,
+                view_size,
+            )
+        else:
+            log_p_K, values_K = self._forward_K(tensor)
+            # Pool — value: min across K (negamax-conservative); policy:
+            # scatter-max across K, renormalised over legal.
+            value = float(values_K.min())
+            priors = _aggregate_priors(
+                log_p_K, list(centers), legal_moves, view_size
+            )
 
-        # Pool — value: min across K (negamax-conservative); policy:
-        # scatter-max across K, renormalised over legal.
-        value = float(values_K.min())
-        priors = _aggregate_priors(log_p_K, list(centers), legal_moves, view_size)
         for action, p in zip(legal_moves, priors):
             node.children[action] = _Node(prior=p)
         return value

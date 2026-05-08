@@ -614,6 +614,8 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
         res_blocks=int(cfg.get("res_blocks", 12)),
         se_reduction_ratio=int(cfg.get("se_reduction_ratio", 4)),
         encoding=cfg_encoding,
+        pool_type=str(cfg.get("pool_type", "min_max")),
+        pool_attn_dropout=float(cfg.get("pool_attn_dropout", 0.1)),
     )
     loaded_model.load_state_dict(ckpt["model_state"])
     loaded_model.eval().to(device)
@@ -755,6 +757,16 @@ def pretrain() -> None:
     parser.add_argument("--head-no-gpool", action="store_true",
                         help="Drop the G branch from the v8 policy / opp_reply head. "
                              "B0 control arm uses this. v6 ignores.")
+    parser.add_argument("--pool-type", choices=("min_max", "pma"), default=None,
+                        help="K-cluster pool type for v6 / v6w25. 'min_max' "
+                             "(default) keeps existing per-cluster heads + "
+                             "bot-side scatter-max; 'pma' (§169 A2) replaces "
+                             "the value/policy heads with a Set-Transformer "
+                             "1×SAB + 2 PMA seeds aggregator. v8 ignores.")
+    parser.add_argument("--pool-attn-dropout", type=float, default=None,
+                        help="Attention dropout for PMA pool (collapse "
+                             "mitigation). Default 0.1; raise to 0.2 if "
+                             "the §169 PMA-collapse smoke fires.")
     parser.add_argument("--corpus-npz", type=str, default=None,
                         help="Override corpus NPZ path. Defaults: v6 → "
                              "data/bootstrap_corpus.npz, v8 → "
@@ -817,6 +829,18 @@ def pretrain() -> None:
                              if s.strip()]
     head_use_gpool: bool = not args.head_no_gpool
 
+    # §169 K-cluster pool selector — defaults to 'min_max' (current behavior).
+    pool_type: str = (
+        args.pool_type
+        if args.pool_type is not None
+        else str(config.get("pool_type", "min_max"))
+    )
+    pool_attn_dropout: float = (
+        float(args.pool_attn_dropout)
+        if args.pool_attn_dropout is not None
+        else float(config.get("pool_attn_dropout", 0.1))
+    )
+
     log.info(
         "encoding_resolved",
         encoding=encoding,
@@ -826,6 +850,8 @@ def pretrain() -> None:
         res_blocks=int(config.get("res_blocks", 12)),
         gpool_indices=gpool_indices,
         head_use_gpool=head_use_gpool,
+        pool_type=pool_type,
+        pool_attn_dropout=pool_attn_dropout,
     )
 
     from hexo_rl.utils.device import best_device
@@ -919,6 +945,8 @@ def pretrain() -> None:
         encoding=encoding,
         gpool_indices=gpool_indices,
         head_use_gpool=head_use_gpool,
+        pool_type=pool_type,
+        pool_attn_dropout=pool_attn_dropout,
     )
     use_compile = (
         config.get("torch_compile", True)
@@ -940,6 +968,8 @@ def pretrain() -> None:
     # without re-deriving from CLI flags.
     config["gpool_indices"] = gpool_indices
     config["head_use_gpool"] = head_use_gpool
+    config["pool_type"] = pool_type
+    config["pool_attn_dropout"] = pool_attn_dropout
     if explicit_n_actions is not None:
         config["n_actions"] = explicit_n_actions
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)

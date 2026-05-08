@@ -184,6 +184,69 @@ def test_v6w25_returns_legal_move():
     assert move in board.legal_moves()
 
 
+# ── §169 A2 — PMA pool path ─────────────────────────────────────────────
+
+
+def _tiny_v6w25_pma_model() -> HexTacToeNet:
+    torch.manual_seed(0)
+    return HexTacToeNet(
+        board_size=25,
+        in_channels=8,
+        filters=16,
+        res_blocks=2,
+        encoding="v6w25",
+        pool_type="pma",
+    ).eval()
+
+
+def test_pma_bot_returns_legal_move():
+    """PMA bot drives ``model.aggregated_forward_K`` and reads the canonical
+    cluster-0 frame to scatter logits onto legal moves. Must return a legal
+    move and not crash on K=1 boards."""
+    model = _tiny_v6w25_pma_model()
+    board = Board()
+    board.set_legal_move_radius(8)
+    board.set_cluster_threshold(8)
+    board.set_cluster_window_size(25)
+    board.apply_move(0, 0)
+    board.apply_move(1, 0)
+    board.apply_move(0, 1)
+    state = GameState.from_board(board)
+    bot = KClusterMCTSBot(model, DEVICE, n_sims=4, c_puct=1.5)
+    assert bot.pool_type == "pma", f"bot pool_type defaulted wrong: {bot.pool_type}"
+    move = bot.get_move(state, board)
+    assert move in board.legal_moves()
+
+
+def test_pma_bot_rejects_pool_mismatch():
+    """When the model is min_max but the bot is asked for pma (or vice-versa),
+    construction must fail loudly — the K-aggregation site has to be
+    consistent between model and bot."""
+    mm_model = HexTacToeNet(
+        board_size=25, in_channels=8, filters=16, res_blocks=2,
+        encoding="v6w25",
+    ).eval()
+    with pytest.raises(ValueError, match="disagrees"):
+        KClusterMCTSBot(mm_model, DEVICE, n_sims=4, pool_type="pma")
+
+
+def test_pma_state_dict_round_trips_through_network():
+    """HexTacToeNet with pool_type='pma' must save + load its cluster_pool
+    state cleanly. Asserts post-load forward output matches pre-load."""
+    src = _tiny_v6w25_pma_model()
+    dst = HexTacToeNet(
+        board_size=25, in_channels=8, filters=16, res_blocks=2,
+        encoding="v6w25", pool_type="pma",
+    ).eval()
+    x = torch.randn(2, 8, 25, 25)
+    log_p_a, val_a, _ = src(x)
+    sd = src.state_dict()
+    dst.load_state_dict(sd, strict=True)
+    log_p_b, val_b, _ = dst(x)
+    assert torch.allclose(log_p_a, log_p_b, atol=1e-6)
+    assert torch.allclose(val_a, val_b, atol=1e-6)
+
+
 # ── extra: rejects non-K-cluster encoding ───────────────────────────────
 
 

@@ -40,6 +40,11 @@ from hexo_rl.model.gpool import (
     KataGoPolicyHead,
     compute_v8_mask,
 )
+from hexo_rl.model.pooling import (
+    SUPPORTED_POOL_TYPES,
+    PMAPool,
+    build_pool,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -288,12 +293,28 @@ class HexTacToeNet(nn.Module):
         head_g_channels: int = _V8_HEAD_G_CHANNELS_DEFAULT,
         head_use_gpool: bool = True,
         off_window_plane_idx: int = _V8_OFF_WINDOW_PLANE_DEFAULT,
+        pool_type: str = "min_max",
+        pool_attn_dropout: float = 0.1,
     ) -> None:
         super().__init__()
         if encoding not in ("v6", "v6w25", "v8"):
             raise ValueError(
                 f"encoding={encoding!r} must be 'v6', 'v6w25' or 'v8'"
             )
+        if pool_type not in SUPPORTED_POOL_TYPES:
+            raise ValueError(
+                f"pool_type={pool_type!r} must be one of {SUPPORTED_POOL_TYPES}"
+            )
+        # PMA cluster pool replaces the per-cluster value/policy heads with a
+        # learned attention pool over the K cluster tokens. Only meaningful for
+        # K-cluster encodings (v6 / v6w25). Under v8 (single bbox) there is no
+        # K dimension to aggregate, so PMA is gated off.
+        if pool_type == "pma" and encoding == "v8":
+            raise ValueError(
+                "pool_type='pma' is only valid for v6/v6w25 K-cluster "
+                "encodings; v8 has a single bounding-box window (no K)."
+            )
+        self.pool_type: str = pool_type
         # v6w25 = v6 wire format (8 planes + pass slot) at 25×25 cluster
         # window. Model construction is identical to v6 — only board_size
         # differs. Persist the original label so eval/dispatch can detect it.
@@ -422,6 +443,24 @@ class HexTacToeNet(nn.Module):
         # so realistic uplift is smaller (~1.1–1.3× tactical sharpening).
         self.chain_head = nn.Conv2d(filters, 6, kernel_size=1)
 
+        # K-cluster pool — §169 A2. When pool_type='min_max' the pool is unused
+        # at the model level (the bot does scatter-max). When pool_type='pma'
+        # the pool replaces the value/policy heads; forward() routes per-cluster
+        # GAP'd trunk features through SAB + PMA seeds. At pretrain time K=1
+        # (one cluster window per training sample), so PMA's cross-cluster
+        # attention is exercised only via the duplicate-of-itself path; at
+        # inference time KClusterMCTSBot drives K>1 via aggregated_forward_K.
+        if pool_type == "pma":
+            self.cluster_pool: Optional[PMAPool] = build_pool(
+                "pma",
+                dim=filters,
+                n_actions=self.n_actions,
+                n_heads=4,
+                attn_dropout=pool_attn_dropout,
+            )
+        else:
+            self.cluster_pool = None
+
     @property
     def tower(self) -> nn.Sequential:
         """Backward-compatible alias for the trunk tower."""
@@ -470,21 +509,36 @@ class HexTacToeNet(nn.Module):
 
         out = self.trunk(x, mask=mask, mask_sum_hw=mask_sum_hw)
 
-        # Policy head — branch on encoding.
-        if self.encoding == "v8":
-            log_policy = self.policy_head(out, mask, mask_sum_hw)
+        # PMA pool path — replace value/policy heads with the K-cluster pool.
+        # At pretrain time x is (B, C, H, W) (K=1 per sample); the pool sees a
+        # single token per board. Cross-cluster attention is trained mostly
+        # through the K=1 collapse fallback — PMA-collapse risk is the §169
+        # surfacing condition. ``aggregated_forward_K`` is the K>1 inference
+        # entry point used by ``KClusterMCTSBot`` when ``pool_type='pma'``.
+        if self.pool_type == "pma":
+            assert self.cluster_pool is not None
+            cluster_tokens = out.mean(dim=(2, 3)).unsqueeze(1)   # (B, K=1, C)
+            log_policy, value, v_logit = self.cluster_pool(
+                cluster_tokens,
+                per_cluster_logits=None,
+                per_cluster_values=None,
+            )
         else:
-            p = F.relu(self.policy_conv(out))
-            p = p.flatten(1)
-            log_policy = F.log_softmax(self.policy_fc(p), dim=1)
+            # Policy head — branch on encoding.
+            if self.encoding == "v8":
+                log_policy = self.policy_head(out, mask, mask_sum_hw)
+            else:
+                p = F.relu(self.policy_conv(out))
+                p = p.flatten(1)
+                log_policy = F.log_softmax(self.policy_fc(p), dim=1)
 
-        # Value head — global avg + max pooling
-        v_avg = out.mean(dim=(2, 3))           # (B, C)
-        v_max = out.amax(dim=(2, 3))           # (B, C)
-        v = torch.cat([v_avg, v_max], dim=1)   # (B, 2C)
-        v = F.relu(self.value_fc1(v))
-        v_logit = self.value_fc2(v)            # (B, 1) raw logit
-        value = torch.tanh(v_logit)
+            # Value head — global avg + max pooling
+            v_avg = out.mean(dim=(2, 3))           # (B, C)
+            v_max = out.amax(dim=(2, 3))           # (B, C)
+            v = torch.cat([v_avg, v_max], dim=1)   # (B, 2C)
+            v = F.relu(self.value_fc1(v))
+            v_logit = self.value_fc2(v)            # (B, 1) raw logit
+            value = torch.tanh(v_logit)
 
         # Build the base 3-tuple; optional heads are appended in order.
         extras: list = []
@@ -512,6 +566,67 @@ class HexTacToeNet(nn.Module):
         if not extras:
             return log_policy, value, v_logit
         return (log_policy, value, v_logit, *extras)
+
+    @torch.no_grad()
+    def aggregated_forward_K(
+        self,
+        x_K: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """K>1 inference entry point for K-cluster encodings.
+
+        Args:
+            x_K: ``(K, in_channels, H, W)`` — the K cluster windows for a
+                 single board. The model treats them as a single sample with
+                 K cluster tokens; the cluster pool aggregates them into one
+                 ``(log_policy, value, v_logit)`` output.
+
+        Returns the standard 3-tuple but with leading dim 1 (the aggregated
+        sample). Callers (``KClusterMCTSBot``) reshape as needed.
+
+        For ``pool_type='min_max'`` this method is a thin wrapper around the
+        per-cluster forward followed by a model-internal min/max reduction,
+        kept for interface symmetry — most callers stay on the existing
+        bot-side scatter-max path.
+        """
+        if self._input_channels is not None:
+            x_K = x_K.index_select(1, self.input_channel_index)
+
+        if self.encoding == "v8":
+            raise RuntimeError(
+                "aggregated_forward_K is K-cluster only; v8 has no K dim."
+            )
+
+        out = self.trunk(x_K, mask=None, mask_sum_hw=None)        # (K, C, H, W)
+
+        if self.pool_type == "pma":
+            assert self.cluster_pool is not None
+            cluster_tokens = out.mean(dim=(2, 3)).unsqueeze(0)    # (1, K, C)
+            log_policy, value, v_logit = self.cluster_pool(
+                cluster_tokens,
+                per_cluster_logits=None,
+                per_cluster_values=None,
+            )
+            return log_policy, value, v_logit
+
+        # min_max path — run per-cluster heads, reduce on the model side via
+        # the same scatter-max-in-prob-space rule as the bot. Lifted into the
+        # model so callers can switch pool_type without reaching into bot
+        # internals.
+        from hexo_rl.model.pooling import MinMaxPool
+        per_p = F.relu(self.policy_conv(out)).flatten(1)
+        per_logp = F.log_softmax(self.policy_fc(per_p), dim=1)    # (K, A)
+        v_avg = out.mean(dim=(2, 3))
+        v_max = out.amax(dim=(2, 3))
+        v_cat = torch.cat([v_avg, v_max], dim=1)
+        per_vlogit = self.value_fc2(F.relu(self.value_fc1(v_cat)))
+        per_val = torch.tanh(per_vlogit)                          # (K, 1)
+
+        pool = MinMaxPool()
+        return pool(
+            cluster_tokens=out.mean(dim=(2, 3)).unsqueeze(0),    # (1, K, C) — unused
+            per_cluster_logits=per_logp.unsqueeze(0),             # (1, K, A)
+            per_cluster_values=per_val.unsqueeze(0),              # (1, K, 1)
+        )
 
 
 def compile_model(model: HexTacToeNet, mode: str = "default") -> HexTacToeNet:

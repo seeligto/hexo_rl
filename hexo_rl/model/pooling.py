@@ -58,7 +58,9 @@ class ClusterPool(nn.Module):
     """Base class for K-cluster pool modules.
 
     Subclasses must implement ``forward(cluster_tokens, per_cluster_logits,
-    per_cluster_values) -> (log_policy, value)``.
+    per_cluster_values) -> (log_policy, value, value_logit)``. ``value`` is
+    tanh-bounded; ``value_logit`` is the pre-tanh raw logit needed by the
+    BCE-based value loss in ``hexo_rl.training.losses.compute_value_loss``.
     """
 
     def forward(
@@ -66,7 +68,7 @@ class ClusterPool(nn.Module):
         cluster_tokens: torch.Tensor,        # (B, K, dim)
         per_cluster_logits: torch.Tensor,    # (B, K, n_actions) raw logits
         per_cluster_values: torch.Tensor,    # (B, K, 1)
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         raise NotImplementedError
 
 
@@ -78,9 +80,12 @@ class MinMaxPool(ClusterPool):
         cluster_tokens: torch.Tensor,
         per_cluster_logits: torch.Tensor,
         per_cluster_values: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Value: min over K (negamax-conservative; matches engine).
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # ``per_cluster_values`` are post-tanh in the existing model; we treat
+        # them as the value to pool and recover a pre-tanh proxy via atanh
+        # (clamped to keep gradients well-behaved).
         value = per_cluster_values.min(dim=1).values             # (B, 1)
+        value_logit = torch.atanh(value.clamp(-0.999999, 0.999999))
 
         # Policy: per-cluster softmax → max across K → renormalise → log.
         # Done in prob space so different clusters' log-prob shifts compose
@@ -90,7 +95,7 @@ class MinMaxPool(ClusterPool):
         max_probs = max_probs.clamp_min(1e-12)
         max_probs = max_probs / max_probs.sum(dim=-1, keepdim=True)
         log_policy = max_probs.log()                             # (B, A)
-        return log_policy, value
+        return log_policy, value, value_logit
 
 
 class _SAB(nn.Module):
@@ -197,7 +202,7 @@ class PMAPool(ClusterPool):
         cluster_tokens: torch.Tensor,                  # (B, K, dim)
         per_cluster_logits: Optional[torch.Tensor] = None,
         per_cluster_values: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # PMA does NOT consume per-cluster head outputs — it builds its own
         # value/policy heads on top of the SAB-aggregated tokens. The args
         # are accepted for interface parity with MinMaxPool.
@@ -211,4 +216,4 @@ class PMAPool(ClusterPool):
         value = torch.tanh(v_logit)
         p_logits = self.policy_mlp(p_pool)                        # (B, A)
         log_policy = F.log_softmax(p_logits, dim=-1)
-        return log_policy, value
+        return log_policy, value, v_logit
