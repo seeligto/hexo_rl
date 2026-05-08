@@ -9345,3 +9345,158 @@ the A2 P2 tip:
 - [x] Sprint log Results table populated; verdict line written.
 
 
+## P4 — A4 arm: v8 bbox + canvas_realness mask + PartialConv2d trunk entry
+
+**Status:** ENGINEERING LANDED, retrain PENDING (operator-fired on 5080 vast.ai).
+
+**Goal:** isolate whether the §167 B1 v8 SealBot WR collapse vs A1 v6w25
+(0% vs 14.5% argmax-only) is bad zero-padding semantics at the trunk
+entry — a cheap fix that keeps the bbox direction alive — or a structural
+loss that commits the §169 pivot to the K-cluster line. The diagnostic
+intervention is **canvas_realness mask polarity** (1 inside, 0 outside —
+inverted from off_window) **paired with PartialConv2d at the trunk
+entry** (Innamorati 2018 partial-conv-padding: zero off-canvas
+contributions on input, renormalise output by per-location valid-
+neighbour count). Same B1 architecture (128×12 + GPool {6,10} + KataGo
+policy head) and same v6w25-anchor recipe (30 ep cosine, peak 2e-3,
+eta_min 5e-5, batch 256) so the only deltas vs B1 are the encoding
+polarity + the partial-conv intervention.
+
+**Pre-flight subspike — SE × PartialConv compatibility (CRITICAL gate):**
+`audit/encoding_spikes/s4_a4_se_partial_conv.py` (local artifact —
+audit/ gitignored). Verifies on dummy 11×25×25 input:
+
+| check                                | result    |
+|--------------------------------------|-----------|
+| forward shape + finite               | (4,128,25,25) finite=True |
+| backward grad reach                  | 13/13 params with finite grads |
+| off-canvas output zero               | max\|val\|=0.000000 (1-cell canvas test) |
+| SE block on PC outputs               | finite, mean=-0.0039 |
+| latency b=1 trunk-entry-only         | A4 0.267 ms / B1 0.193 ms = +38.16% |
+| latency b=1 FULL HexTacToeNet        | A4 2.669 ms / B1 2.655 ms = **+0.51%** (sd 0.124, +0.08σ — within noise) |
+| latency b=64 FULL MODEL              | A4 35.842 ms / B1 35.716 ms = **+0.35%** |
+
+Verdict: **PASS**. SE × PartialConv2d compatible at trunk entry; full-
+model latency hit within noise at b=1, well under the 5% spec gate at
+b=64. First-pass measurement (n=100 untrimmed) read +6.03% at b=1, but
+tightened to +0.51% at n=300 with 10% tail trim. No STOP, no scope-
+simpler-A4 fallback needed.
+
+**Architecture (commits 1 + 2):**
+
+`feat(corpus): §169 A4 canvas_realness plane-8 polarity for v8`
+- `hexo_rl/bootstrap/dataset_v8.py` — `encode_position_v8(canvas_realness=False)`
+  threads through to `replay_game_to_triples_v8`. Both polarities cached
+  (`_get_plane8_mask`); hot path branch-free. Default False keeps the
+  v8/B0-B4 wire format byte-exact.
+- `scripts/export_corpus_npz.py` — `--canvas-realness` flag (v8-only);
+  auto-suffixes default output (`data/bootstrap_corpus_v8_canvas_realness.npz`).
+- `tests/test_dataset_v8.py` +5 A4 tests — polarity inversion equality,
+  spot checks, replay-loop consistency. 33 passed.
+
+`feat(model,eval): §169 A4 PartialConv2d trunk entry + canvas_realness wire`
+- `hexo_rl/model/partial_conv.py` — new `PartialConv2d(in, out, k, pad,
+  bias)` module. Math: `out = conv(x⊙mask) · (k²/count) · 1[count>0] · mask`.
+  Interior cells reduce to vanilla Conv2d (count==k², scale==1); boundary
+  cells get count<k², scale>1, off-canvas zeros suppressed. NaN-safe via
+  `count.clamp_min(1.0)`.
+- `hexo_rl/model/network.py` — `Trunk(canvas_realness=False)` swaps
+  `input_conv` for PartialConv2d when True; downstream blocks unchanged.
+  `HexTacToeNet(canvas_realness=False)` is v8-only (rejects v6/v6w25
+  loudly). Forward routes plane 8 directly as the gpool mask under
+  canvas_realness (no `1-off` inversion); pre-existing path unchanged
+  when canvas_realness=False (state-dict byte-compat with B0-B4).
+- `hexo_rl/eval/checkpoint_loader.py` + `v8_argmax_bot.py` +
+  `v8_mcts_bot.py` + `scripts/bench_v8_nn.py` — detect canvas_realness
+  from state-dict key signature (`trunk.input_conv.conv.weight` vs
+  `trunk.input_conv.weight`); rebuild + thread through encode polarity.
+- `hexo_rl/bootstrap/pretrain.py` — `--canvas-realness` CLI flag
+  (v8-only); persists into checkpoint config; default corpus path
+  shifts to canvas_realness suffix.
+- `tests/test_partial_conv.py` — 9 tests covering PartialConv2d shape /
+  finite / off-canvas zero / grad reach / interior renormalisation
+  matches vanilla Conv2d / HexTacToeNet wiring / state-dict key shift /
+  checkpoint round-trip.
+
+**Retrain wiring (commit 3):**
+
+`chore(ablation_169): A4 retrain config + pretrain script + eval matrix`
+- `configs/ablation_169_a4.yaml` — recipe + hard-stop / surface
+  conditions captured for the post-hoc audit.
+- `scripts/pretrain_a4_canvas_realness.sh` — checks corpus regen, runs
+  the 30 ep retrain. Corpus regen command in the docstring (~10 min on
+  5080 vast.ai). Prerequisite: SE×PC subspike PASS (audit/...) before
+  the script fires.
+- `scripts/eval_a4_canvas_realness.sh` — A2/A3-style eval matrix:
+  argmax @ r=8 n=200 → matched MCTS-N (default 128) n=200 → bench
+  (b=1, b=64, n=5 each) → A4_eval.json. Threat probe SKIPPED — same
+  v8 fixture gap as A2/A3, §170 follow-up.
+
+**Local smoke (laptop 4060 Max-Q, 2026-05-08):**
+
+| step                                                | result |
+|-----------------------------------------------------|--------|
+| corpus regen (5k positions, --canvas-realness)      | 76 MB NPZ, sha256 758bbe2e..., clipped 3.9M (8× per-encode × ~75 stones × 5k positions — matches B1 telemetry) |
+| 30-step pretrain (filters=64, res_blocks=4, gpool [2]) | step 0 grad_norm=5.97; final loss=13.04 (smoke baseline; actual retrain runs canonical 128×12) |
+| state-dict round-trip                               | label='v8', canvas_realness=True, input_conv=PartialConv2d (auto-detected from `.conv.weight` key) |
+| V8ArgmaxBot end-to-end on Board                     | bot picked legal move (1, -1) — encode → forward → argmax → projection back to axial coords all wired |
+
+**Hard surface conditions (per §169 A4 prompt):**
+- Subspike SE × PartialConv compatibility — gated PASS pre-retrain.
+- Final loss > 5.36 (50% above v6w25 anchor 3.57): STOP, surface, no eval.
+- NaN-skip rate > 30% even with §167 patch: STOP, retry with bf16.
+- A4 argmax > 12% vs SealBot (>80% of B1-vs-A1 14.5% gap closure):
+  SURFACE — bbox direction may live, matched MCTS-N becomes critical.
+  Do NOT STOP; keep eval running.
+
+**Pending (operator-fired on 5080 vast.ai, ~94 min for the 128×12 retrain):**
+
+| metric                          | A4 canvas_realness   | B1 (§167)              | A1 anchor (v6w25, §168) |
+|---------------------------------|----------------------|------------------------|-------------------------|
+| corpus sha256 (full)            | TBD                  | TBD                    | (v6w25 corpus, n/a)     |
+| final epoch-30 loss             | TBD                  | (v8 B1 retrain loss)   | 3.57                    |
+| NaN-skip rate                   | TBD                  | (covered by §167 patch)| 0%                      |
+| argmax @ r=8 n=200 vs SealBot   | TBD                  | 0% (§167 Gate 4)       | 14.5% [10.3%, 20.0%]    |
+| MCTS-128 n=200 vs SealBot       | TBD                  | n/a (§167 argmax-only) | n/a (§169 P1 sanity 25%) |
+| threat probe C1/C2/C3           | SKIPPED (§170 v8 fixture follow-up) | n/a    | n/a                     |
+| params (M)                      | ≈3.85 M (B1 + ~150 PC kernel scalars; PC has no extra learnable weights, just the wrapped Conv2d) | 3.85 M | 5.29 M |
+| latency b=1 / b=64 (5080, ms)   | TBD                  | TBD                    | 2.64 / 10.41            |
+
+**Verdict (pending retrain):** if A4 argmax ≥ 12% the bbox direction
+lives — bad zero-padding semantics at trunk entry was the diagnostic
+loss for B1; matched MCTS comparison on top of A1 v6w25 / B1 v8 / A4
+canvas_realness becomes the next gate. If A4 argmax ≪ 12% the loss is
+structural — §169 commits to the K-cluster line and v8 bbox is closed.
+
+**Branch state:** `encoding/four_way_ablation` — 3 mandated commits on
+top of the A3 P3 tip:
+1. `feat(corpus): §169 A4 canvas_realness plane-8 polarity for v8`
+2. `feat(model,eval): §169 A4 PartialConv2d trunk entry + canvas_realness wire`
+3. `chore(ablation_169): A4 retrain config + pretrain script + eval matrix`
+
+**Done-when checks (engineering side):**
+- [x] PartialConv2d module + tests landed (`hexo_rl/model/partial_conv.py`,
+  `tests/test_partial_conv.py` — 9 tests).
+- [x] dataset_v8 canvas_realness polarity + tests
+  (`tests/test_dataset_v8.py` +5 A4 tests).
+- [x] HexTacToeNet canvas_realness wiring + state-dict key shift +
+  checkpoint loader auto-detection.
+- [x] V8ArgmaxBot / V8MCTSBot / bench_v8_nn thread canvas_realness.
+- [x] CLI flags (`--canvas-realness` on pretrain + export_corpus_npz).
+- [x] Local smoke validates the full pipeline (5k-position corpus →
+  30-step pretrain → checkpoint load → V8ArgmaxBot → bot move).
+- [x] Pre-flight subspike PASS.
+- [x] `make test` green: 1111 passed, 8 skipped.
+- [x] Configs + retrain script + eval script landed
+  (`configs/ablation_169_a4.yaml`, `scripts/pretrain_a4_canvas_realness.sh`,
+  `scripts/eval_a4_canvas_realness.sh`).
+
+**Done-when checks (retrain side, OPERATOR-FIRED):**
+- [ ] Full v8 canvas_realness corpus regen on 5080 (~10 min).
+- [ ] 30-epoch pretrain on 5080 (~94 min — same as A2/A3).
+- [ ] argmax + MCTS-128 WR captured in `reports/ablation_169/A4_eval.json`.
+- [ ] bench appended to `reports/ablation_169/bench_per_arm.md` (A4 5080 row).
+- [ ] Sprint log Results table back-filled with the retrain numbers.
+- [ ] Verdict line: bbox direction lives vs. structural loss decision.
+
+
