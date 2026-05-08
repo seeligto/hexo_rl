@@ -328,6 +328,33 @@ def test_pma_global_rejects_v8_encoding():
         )
 
 
+def test_pma_global_bot_returns_legal_move():
+    """End-to-end: KClusterMCTSBot drives the pma_global model on a v6w25
+    board, computing the global crop from the live Board at expand time."""
+    model = _tiny_v6w25_pma_global_model()
+    board = Board()
+    board.set_legal_move_radius(8)
+    board.set_cluster_threshold(8)
+    board.set_cluster_window_size(25)
+    board.apply_move(0, 0)
+    board.apply_move(1, 0)
+    board.apply_move(0, 1)
+    state = GameState.from_board(board)
+    bot = KClusterMCTSBot(model, DEVICE, n_sims=4, c_puct=1.5)
+    assert bot.pool_type == "pma_global"
+    move = bot.get_move(state, board)
+    assert move in board.legal_moves()
+
+
+def test_pma_global_bot_pool_mismatch_rejected():
+    """If the model is pma_global but the bot is asked for pma (or vice-
+    versa), construction must fail loudly."""
+    import pytest
+    g_model = _tiny_v6w25_pma_global_model()
+    with pytest.raises(ValueError, match="disagrees"):
+        KClusterMCTSBot(g_model, DEVICE, n_sims=4, pool_type="pma")
+
+
 def test_checkpoint_loader_detects_pma_global():
     """checkpoint_loader._build_v6_model must read 'pma_global' from the
     presence of global_encoder.* + cluster_pool.global_gate in the state."""

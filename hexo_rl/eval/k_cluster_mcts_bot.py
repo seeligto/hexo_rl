@@ -51,11 +51,12 @@ from hexo_rl.bootstrap.bot_protocol import BotProtocol
 from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.utils.constants import KEPT_PLANE_INDICES
+from hexo_rl.utils.global_crop import compute_global_crop_from_board
 
 
 Action = Tuple[int, int]
 
-SUPPORTED_POOLS = ("min_max", "pma")
+SUPPORTED_POOLS = ("min_max", "pma", "pma_global")
 
 
 class _Node:
@@ -203,9 +204,10 @@ class KClusterMCTSBot(BotProtocol):
         n_sims: simulations per move.
         c_puct: PUCT exploration constant (engine default 1.5).
         temperature: 0.0 = argmax visit count; >0 = visit-count softmax.
-        pool_type: cluster-pool aggregation — currently 'min_max' (value
-            min, policy scatter-max). 'pma' / 'pma_global' reserved for
-            §169 A2 / A3.
+        pool_type: cluster-pool aggregation. 'min_max' (value min, policy
+            scatter-max), 'pma' (§169 A2 — Set-Transformer pool over the K
+            cluster tokens), or 'pma_global' (§169 A3 — pma + global summary
+            token built from a 32×32 cur/opp/canvas-mask crop).
         fpu_q: First-Play-Urgency Q for unvisited children. Default 0.0
             (classical FPU; matches V8MCTSBot). Engine uses 0.25-decayed
             dynamic FPU — set ``fpu_q`` to taste.
@@ -307,14 +309,26 @@ class KClusterMCTSBot(BotProtocol):
         assert view_h == view_w, "KClusterMCTSBot expects square cluster window"
         view_size = view_h
 
-        if self.pool_type == "pma":
+        if self.pool_type in ("pma", "pma_global"):
             # PMA pool: model aggregates K cluster tokens internally and
             # returns a single (1, n_actions) policy + (1, 1) value. The
             # aggregated policy is emitted in cluster-0's frame (the
             # centermost cluster — the model's natural spatial reference
             # under v6w25 training where target_k was the move's cluster).
+            #
+            # pma_global also feeds a (3, 32, 32) global summary crop
+            # computed from the live board's stones in the current-player's
+            # frame. The crop's canvas-mask plane carries the active-bbox
+            # indicator so the GlobalTokenEncoder's KataGo gpool ignores
+            # padding cells (T2 §E.1 pitfall 2 fix).
             x = torch.from_numpy(tensor).float().to(self.device)
-            log_p_agg, value_agg, _ = self.model.aggregated_forward_K(x)
+            agg_kwargs: Dict = {}
+            if self.pool_type == "pma_global":
+                gc_np = compute_global_crop_from_board(sim_board)   # (3, 32, 32) f16
+                agg_kwargs["global_crop"] = (
+                    torch.from_numpy(gc_np).float().to(self.device)
+                )
+            log_p_agg, value_agg, _ = self.model.aggregated_forward_K(x, **agg_kwargs)
             value = float(value_agg.cpu().numpy().reshape(-1)[0])
             priors = _aggregate_priors_pma(
                 log_p_agg.cpu().numpy(),               # (1, n_actions)
