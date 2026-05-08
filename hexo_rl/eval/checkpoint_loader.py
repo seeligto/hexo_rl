@@ -84,6 +84,12 @@ def detect_encoding_label(ckpt_path: Path, state: dict) -> str:
 
     Pure-detection helper — does not load model. Useful for tests and the
     inference-method dispatcher when only the label is needed.
+
+    Detection priority for the 8-channel (v6/v6w25) case:
+    1. Filename substring 'v6w25' or '_w25'.
+    2. State-dict shape: policy_fc out_features = 626 ⇒ v6w25 (cluster
+       window 25×25 + 1 pass slot); = 362 ⇒ v6 (19×19 + 1). Also covers
+       the §169 pma path via cluster_pool.policy_mlp output dim.
     """
     inp_w = state.get("trunk.input_conv.weight")
     if inp_w is None:
@@ -95,10 +101,19 @@ def detect_encoding_label(ckpt_path: Path, state: dict) -> str:
     if in_ch == 11:
         return "v8"
     if in_ch == 8:
-        # v6w25 disambiguated by filename only.
         name = ckpt_path.name.lower()
         if "v6w25" in name or "_w25" in name:
             return "v6w25"
+        # State-dict shape disambiguator (covers both min_max and pma paths).
+        n_actions = None
+        for k in ("policy_fc.weight", "cluster_pool.policy_mlp.2.weight"):
+            if k in state:
+                n_actions = int(state[k].shape[0])
+                break
+        if n_actions == 626:
+            return "v6w25"
+        if n_actions == 362:
+            return "v6"
         return "v6"
     raise ValueError(
         f"checkpoint {ckpt_path}: unsupported in_channels={in_ch} "
