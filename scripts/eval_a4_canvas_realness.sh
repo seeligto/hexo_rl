@@ -25,6 +25,7 @@ CKPT="checkpoints/ablation_169/A4_canvas_realness.pt"
 REPORTS="reports/ablation_169"
 MCTS_N="${MCTS_N:-128}"
 ARM_LABEL="A4"
+PYTHON="${PYTHON:-.venv/bin/python}"
 
 if [[ ! -f "${CKPT}" ]]; then
     echo "ERROR: A4 checkpoint missing: ${CKPT}" >&2
@@ -36,7 +37,7 @@ mkdir -p "${REPORTS}"
 
 # ── 1. argmax @ r=8, n=200 ─────────────────────────────────────────────
 echo "[$(date -Iseconds)] §169 A4 — argmax @ r=8, n=200 vs SealBot"
-python scripts/run_sealbot_eval.py \
+"${PYTHON}" scripts/run_sealbot_eval.py \
     --checkpoint "${CKPT}" \
     --inference argmax \
     --n-games 200 \
@@ -45,7 +46,7 @@ python scripts/run_sealbot_eval.py \
 
 # ── 2. matched MCTS-N, n=200 ───────────────────────────────────────────
 echo "[$(date -Iseconds)] §169 A4 — MCTS-${MCTS_N} @ r=8, n=200 vs SealBot"
-python scripts/run_sealbot_eval.py \
+"${PYTHON}" scripts/run_sealbot_eval.py \
     --checkpoint "${CKPT}" \
     --inference "mcts-${MCTS_N}" \
     --n-games 200 \
@@ -54,7 +55,7 @@ python scripts/run_sealbot_eval.py \
 
 # ── 3. NN latency bench (b=1, b=64) ────────────────────────────────────
 echo "[$(date -Iseconds)] §169 A4 — NN latency bench"
-python scripts/bench_v8_nn.py \
+"${PYTHON}" scripts/bench_v8_nn.py \
     --checkpoint "${CKPT}" \
     --runs 5 --warmup 20 --batches 1,64 \
     --out "${REPORTS}/${ARM_LABEL}_bench.json"
@@ -71,7 +72,7 @@ cat > "${REPORTS}/A4_threat.json" <<'JSON'
 JSON
 
 # ── 5. Combine argmax + MCTS into A4_eval.json ─────────────────────────
-python - <<PY
+"${PYTHON}" - <<PY
 import json
 from pathlib import Path
 out = Path("${REPORTS}")
