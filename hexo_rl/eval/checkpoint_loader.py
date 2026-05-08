@@ -189,8 +189,18 @@ def _build_v6_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         if k.startswith("trunk.tower.") and len(k.split(".")) >= 4
     })
     res_blocks = max(block_indices) + 1 if block_indices else 12
-    # §169 A2 — detect PMA pool from state dict (cluster_pool.* presence).
-    pool_type = "pma" if any(k.startswith("cluster_pool.") for k in state) else "min_max"
+    # §169 A2 / A3 — detect pool type from state dict.
+    #   global_encoder.* + cluster_pool.global_gate ⇒ pma_global (A3).
+    #   cluster_pool.* without global branch ⇒ pma (A2).
+    #   Otherwise ⇒ min_max (A1, default).
+    has_global_encoder = any(k.startswith("global_encoder.") for k in state)
+    has_cluster_pool = any(k.startswith("cluster_pool.") for k in state)
+    if has_global_encoder:
+        pool_type = "pma_global"
+    elif has_cluster_pool:
+        pool_type = "pma"
+    else:
+        pool_type = "min_max"
     model = HexTacToeNet(
         board_size=spec.board_size,
         in_channels=in_channels,

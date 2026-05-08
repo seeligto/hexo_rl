@@ -40,8 +40,10 @@ from hexo_rl.model.gpool import (
     KataGoPolicyHead,
     compute_v8_mask,
 )
+from hexo_rl.model.global_token import GlobalTokenEncoder
 from hexo_rl.model.pooling import (
     SUPPORTED_POOL_TYPES,
+    PMAGlobalPool,
     PMAPool,
     build_pool,
 )
@@ -305,13 +307,14 @@ class HexTacToeNet(nn.Module):
             raise ValueError(
                 f"pool_type={pool_type!r} must be one of {SUPPORTED_POOL_TYPES}"
             )
-        # PMA cluster pool replaces the per-cluster value/policy heads with a
-        # learned attention pool over the K cluster tokens. Only meaningful for
-        # K-cluster encodings (v6 / v6w25). Under v8 (single bbox) there is no
-        # K dimension to aggregate, so PMA is gated off.
-        if pool_type == "pma" and encoding == "v8":
+        # PMA / pma_global cluster pools replace the per-cluster value/policy
+        # heads with a learned attention pool over the K cluster tokens. Only
+        # meaningful for K-cluster encodings (v6 / v6w25). Under v8 (single
+        # bbox) there is no K dimension to aggregate, so the PMA family is
+        # gated off.
+        if pool_type in ("pma", "pma_global") and encoding == "v8":
             raise ValueError(
-                "pool_type='pma' is only valid for v6/v6w25 K-cluster "
+                f"pool_type={pool_type!r} is only valid for v6/v6w25 K-cluster "
                 "encodings; v8 has a single bounding-box window (no K)."
             )
         self.pool_type: str = pool_type
@@ -443,23 +446,45 @@ class HexTacToeNet(nn.Module):
         # so realistic uplift is smaller (~1.1–1.3× tactical sharpening).
         self.chain_head = nn.Conv2d(filters, 6, kernel_size=1)
 
-        # K-cluster pool — §169 A2. When pool_type='min_max' the pool is unused
-        # at the model level (the bot does scatter-max). When pool_type='pma'
-        # the pool replaces the value/policy heads; forward() routes per-cluster
-        # GAP'd trunk features through SAB + PMA seeds. At pretrain time K=1
-        # (one cluster window per training sample), so PMA's cross-cluster
-        # attention is exercised only via the duplicate-of-itself path; at
-        # inference time KClusterMCTSBot drives K>1 via aggregated_forward_K.
-        if pool_type == "pma":
-            self.cluster_pool: Optional[PMAPool] = build_pool(
-                "pma",
-                dim=filters,
-                n_actions=self.n_actions,
+        # K-cluster pool — §169 A2 / A3.
+        #   - pool_type='min_max': pool is unused at the model level (the bot
+        #     does scatter-max).
+        #   - pool_type='pma': pool replaces the value/policy heads; forward()
+        #     routes per-cluster GAP'd trunk features through SAB + PMA seeds.
+        #     At pretrain time K=1 (one cluster window per training sample),
+        #     so PMA's cross-cluster attention is exercised only via the
+        #     duplicate-of-itself path; at inference time KClusterMCTSBot
+        #     drives K>1 via aggregated_forward_K.
+        #   - pool_type='pma_global': adds a global-summary token g (built by
+        #     GlobalTokenEncoder from a 32×32 cur/opp/canvas-mask crop) as a
+        #     (K+1)st SAB element, gated by a learnable scalar (init 0.1).
+        if pool_type in ("pma", "pma_global"):
+            extra_kwargs: dict = dict(
                 n_heads=4,
                 attn_dropout=pool_attn_dropout,
             )
+            if pool_type == "pma_global":
+                extra_kwargs["gate_init"] = 0.1
+            self.cluster_pool: Optional[nn.Module] = build_pool(
+                pool_type,
+                dim=filters,
+                n_actions=self.n_actions,
+                **extra_kwargs,
+            )
         else:
             self.cluster_pool = None
+
+        # Global summary token branch — §169 A3 only. 3-channel 32×32 crop
+        # (cur stones / opp stones / canvas-realness mask) → d=filters token
+        # via 2 conv blocks + KataGo gpool + linear projection. Lives only
+        # under pool_type='pma_global'; forward(global_crop=...) routes it.
+        if pool_type == "pma_global":
+            self.global_encoder: Optional[GlobalTokenEncoder] = GlobalTokenEncoder(
+                in_channels=3,
+                out_dim=filters,
+            )
+        else:
+            self.global_encoder = None
 
     @property
     def tower(self) -> nn.Sequential:
@@ -474,6 +499,7 @@ class HexTacToeNet(nn.Module):
         ownership: bool = False,
         threat: bool = False,
         chain: bool = False,
+        global_crop: Optional[torch.Tensor] = None,
     ) -> tuple:
         """
         Args:
@@ -515,13 +541,24 @@ class HexTacToeNet(nn.Module):
         # through the K=1 collapse fallback — PMA-collapse risk is the §169
         # surfacing condition. ``aggregated_forward_K`` is the K>1 inference
         # entry point used by ``KClusterMCTSBot`` when ``pool_type='pma'``.
-        if self.pool_type == "pma":
+        if self.pool_type in ("pma", "pma_global"):
             assert self.cluster_pool is not None
             cluster_tokens = out.mean(dim=(2, 3)).unsqueeze(1)   # (B, K=1, C)
+            g_token: Optional[torch.Tensor] = None
+            if self.pool_type == "pma_global":
+                if global_crop is None:
+                    raise ValueError(
+                        "pool_type='pma_global' requires global_crop=...; got None. "
+                        "Pass the (B, 3, 32, 32) global summary tensor through the "
+                        "dataloader / inference path."
+                    )
+                assert self.global_encoder is not None
+                g_token = self.global_encoder(global_crop)        # (B, dim)
             log_policy, value, v_logit = self.cluster_pool(
                 cluster_tokens,
                 per_cluster_logits=None,
                 per_cluster_values=None,
+                global_token=g_token,
             )
         else:
             # Policy head — branch on encoding.
@@ -571,14 +608,18 @@ class HexTacToeNet(nn.Module):
     def aggregated_forward_K(
         self,
         x_K: torch.Tensor,
+        global_crop: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """K>1 inference entry point for K-cluster encodings.
 
         Args:
-            x_K: ``(K, in_channels, H, W)`` — the K cluster windows for a
-                 single board. The model treats them as a single sample with
-                 K cluster tokens; the cluster pool aggregates them into one
-                 ``(log_policy, value, v_logit)`` output.
+            x_K:        ``(K, in_channels, H, W)`` — the K cluster windows for
+                        a single board. The model treats them as a single
+                        sample with K cluster tokens; the cluster pool
+                        aggregates them into one ``(log_policy, value,
+                        v_logit)`` output.
+            global_crop: ``(3, 32, 32)`` or ``(1, 3, 32, 32)`` global summary
+                        crop. Required iff ``pool_type='pma_global'``.
 
         Returns the standard 3-tuple but with leading dim 1 (the aggregated
         sample). Callers (``KClusterMCTSBot``) reshape as needed.
@@ -598,13 +639,32 @@ class HexTacToeNet(nn.Module):
 
         out = self.trunk(x_K, mask=None, mask_sum_hw=None)        # (K, C, H, W)
 
-        if self.pool_type == "pma":
+        if self.pool_type in ("pma", "pma_global"):
             assert self.cluster_pool is not None
             cluster_tokens = out.mean(dim=(2, 3)).unsqueeze(0)    # (1, K, C)
+            g_token: Optional[torch.Tensor] = None
+            if self.pool_type == "pma_global":
+                if global_crop is None:
+                    raise ValueError(
+                        "aggregated_forward_K needs global_crop=... when "
+                        "pool_type='pma_global'. Pass the (3, 32, 32) crop "
+                        "computed by hexo_rl.utils.global_crop."
+                    )
+                gc = global_crop
+                if gc.dim() == 3:
+                    gc = gc.unsqueeze(0)                          # (1, 3, 32, 32)
+                if gc.size(0) != 1:
+                    raise ValueError(
+                        f"aggregated_forward_K expects a single board's global "
+                        f"crop (batch=1); got batch={gc.size(0)}"
+                    )
+                assert self.global_encoder is not None
+                g_token = self.global_encoder(gc)                 # (1, dim)
             log_policy, value, v_logit = self.cluster_pool(
                 cluster_tokens,
                 per_cluster_logits=None,
                 per_cluster_values=None,
+                global_token=g_token,
             )
             return log_policy, value, v_logit
 

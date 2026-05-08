@@ -247,6 +247,107 @@ def test_pma_state_dict_round_trips_through_network():
     assert torch.allclose(val_a, val_b, atol=1e-6)
 
 
+# ── §169 A3 — pma_global ────────────────────────────────────────────────
+
+
+def _tiny_v6w25_pma_global_model() -> HexTacToeNet:
+    torch.manual_seed(0)
+    return HexTacToeNet(
+        board_size=25,
+        in_channels=8,
+        filters=16,
+        res_blocks=2,
+        encoding="v6w25",
+        pool_type="pma_global",
+    ).eval()
+
+
+def test_pma_global_forward_with_global_crop_shape():
+    """forward(x, global_crop=...) must return the standard (log_p, value,
+    v_logit) tuple at K=1 pretrain shape (B, C, H, W) + (B, 3, 32, 32)."""
+    model = _tiny_v6w25_pma_global_model()
+    x = torch.randn(2, 8, 25, 25)
+    gc = torch.zeros(2, 3, 32, 32)
+    gc[:, 2, 14:18, 14:18] = 1.0  # active canvas region
+    log_p, value, v_logit = model(x, global_crop=gc)
+    assert log_p.shape == (2, 626)
+    assert value.shape == (2, 1)
+    assert v_logit.shape == (2, 1)
+    assert torch.isfinite(log_p).all()
+
+
+def test_pma_global_forward_requires_global_crop():
+    """pool_type='pma_global' without a passed global_crop must raise."""
+    import pytest
+    model = _tiny_v6w25_pma_global_model()
+    x = torch.randn(1, 8, 25, 25)
+    with pytest.raises(ValueError, match="pma_global"):
+        model(x)
+
+
+def test_pma_global_aggregated_forward_K_path():
+    """Inference path: aggregated_forward_K(x_K, global_crop=) must accept
+    a single board's K cluster windows + a (3, 32, 32) crop."""
+    model = _tiny_v6w25_pma_global_model()
+    K = 3
+    x_K = torch.randn(K, 8, 25, 25)
+    gc = torch.zeros(3, 32, 32)
+    gc[2, 12:20, 12:20] = 1.0  # canvas mask
+    log_p, value, _ = model.aggregated_forward_K(x_K, global_crop=gc)
+    assert log_p.shape == (1, 626)
+    assert value.shape == (1, 1)
+
+
+def test_pma_global_state_dict_round_trips_through_network():
+    src = _tiny_v6w25_pma_global_model()
+    dst = HexTacToeNet(
+        board_size=25, in_channels=8, filters=16, res_blocks=2,
+        encoding="v6w25", pool_type="pma_global",
+    ).eval()
+    x = torch.randn(1, 8, 25, 25)
+    gc = torch.zeros(1, 3, 32, 32)
+    gc[0, 2, 14:18, 14:18] = 1.0
+    log_p_a, _, _ = src(x, global_crop=gc)
+    sd = src.state_dict()
+    # Sanity: the state dict carries the global encoder + gate params.
+    assert any(k.startswith("global_encoder.") for k in sd)
+    assert "cluster_pool.global_gate" in sd
+    dst.load_state_dict(sd, strict=True)
+    log_p_b, _, _ = dst(x, global_crop=gc)
+    assert torch.allclose(log_p_a, log_p_b, atol=1e-6)
+
+
+def test_pma_global_rejects_v8_encoding():
+    """v8 has no K dim ⇒ pma_global is meaningless and must be rejected
+    at construction time."""
+    import pytest
+    with pytest.raises(ValueError, match="pma_global"):
+        HexTacToeNet(
+            board_size=25, in_channels=11, filters=16, res_blocks=2,
+            encoding="v8", pool_type="pma_global",
+        )
+
+
+def test_checkpoint_loader_detects_pma_global():
+    """checkpoint_loader._build_v6_model must read 'pma_global' from the
+    presence of global_encoder.* + cluster_pool.global_gate in the state."""
+    import tempfile
+    from pathlib import Path
+    from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
+
+    model = _tiny_v6w25_pma_global_model()
+    with tempfile.TemporaryDirectory() as td:
+        ckpt_path = Path(td) / "A3_pma_global.pt"
+        torch.save(
+            {"model_state": model.state_dict(),
+             "config": {"board_size": 25, "encoding": {"version": "v6w25"}}},
+            ckpt_path,
+        )
+        loaded, _spec, label = load_model_with_encoding(ckpt_path, DEVICE)
+    assert loaded.pool_type == "pma_global"
+    assert label == "v6w25"
+
+
 # ── extra: rejects non-K-cluster encoding ───────────────────────────────
 
 
