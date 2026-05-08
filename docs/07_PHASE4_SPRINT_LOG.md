@@ -9735,3 +9735,100 @@ move.
 
 Wall time: ~10 s on laptop RTX 4060 Max-Q.
 
+## §170 P1 — A3 MCTS-N curve (PMA-value-semantics hypothesis) — 2026-05-08
+
+**Question.** Does A3 (PMA + global token) win-rate decline *monotonically* with
+MCTS-N? If so, the mechanism is value-semantics compounding: PMA replaces
+min-pool's worst-subgame value signal with an optimistic aggregate, and deeper
+search amplifies the error multiplicatively across MCTS backups (§170 Bet B,
+option α). Argmax avoids the compounding because it never backs up values.
+
+**Pre-registered verdict criteria (locked before runs).**
+
+- **MONOTONIC-DECLINE**: argmax > MCTS-32 > MCTS-64 > MCTS-128 strict ordering,
+  each consecutive CI overlap ≤ 50%, Cochran-Armitage trend p < 0.10.
+- **FLAT/NON-MONOTONIC**: any ordering inversion OR max consecutive CI overlap
+  > 75%.
+
+**Setup.** A3_pma_global.pt (checkpoints/ablation_169/). n=200 each,
+seed_base=42, legal_radius=8, random_opening_plies=4, c_puct=1.5. Laptop
+RTX 4060 Max-Q. MCTS-32 and MCTS-64 run in parallel (both on CUDA).
+
+**Results.**
+
+| Method   | W  | L   | D | WR    | 95% CI         | elapsed |
+|----------|----|-----|---|-------|----------------|---------|
+| argmax   | 15 | 184 | 1 | 7.5%  | [4.6%, 12.0%]  | 820s (§169 P3) |
+| MCTS-32  |  5 | 195 | 0 | 2.5%  | [1.1%, 5.7%]   | 617s |
+| MCTS-64  |  5 | 195 | 0 | 2.5%  | [1.1%, 5.7%]   | 776s |
+| MCTS-128 |  5 | 195 | 0 | 2.5%  | [1.1%, 5.7%]   | 887s (§169 P3) |
+
+Cochran-Armitage two-sided p = 0.0277 (significant overall, driven entirely by
+the argmax vs any-MCTS split — see below).
+Max consecutive CI overlap = 100% (MCTS-32/64/128 are identical W/L).
+
+**Verdict: FLAT-NON-MONOTONIC.**
+
+The three MCTS arms produce identical results (5W/195L, same CI to four decimal
+places). There is no monotone decline within the MCTS-N range — the pattern is a
+**sharp cliff at the argmax→MCTS-32 boundary**, followed by a hard floor
+regardless of sims count.
+
+The Cochran-Armitage p = 0.0277 is statistically significant but reflects the
+single argmax-vs-MCTS split, not a trend across N. Applying the pre-registered
+criterion: FLAT-NON-MONOTONIC fires (consecutive CI overlap 100% > 75% for all
+MCTS→MCTS pairs; strict monotone ordering violated at MCTS-32 = MCTS-64).
+
+**Mechanism re-interpretation.**
+
+The monotone-compounding hypothesis (more sims → deeper value backup → larger PMA
+error) is **refuted**. The correct reading of the cliff pattern is:
+
+1. **Binary switch, not gradual amplification.** PMA corrupts value quality once
+   (during training). Argmax escapes this because it reads the policy head
+   directly, bypassing the value backup path. MCTS-32 immediately routes through
+   value-backed PUCT selection and hits the full damaged floor — additional sims
+   cannot recover from a broken value signal.
+
+2. **PMA optimistic-value bias is not search-depth-sensitive.** The error is
+   already saturated at MCTS-32 (~3 levels of backup for a ply-23 median game).
+   MCTS-64 and MCTS-128 add more backups but the value floor is already set.
+
+3. **Argmax policy quality is real.** A3 argmax = 7.5% (vs A1 argmax ~25% — a
+   real gap, but not zero). The global token does lift policy quality somewhat
+   (A2 argmax = 4.5%, A3 = 7.5%), confirming the cross-cluster policy signal
+   is working. The problem is exclusively in the value path under search.
+
+**§170 scoping implications.**
+
+1. **A1 (min_max) remains canonical.** Value semantics are the controlling factor
+   for MCTS performance. Any A3-descended variant must fix the value head
+   (not the policy head, which is already working). The cliff confirms: restoring
+   worst-subgame value semantics (min_max) immediately recovers MCTS performance.
+
+2. **"Add PMA side-channel to A1" framing (Bet B / option α) is still valid —
+   but the justification is now the argmax lift (4.5%→7.5%), not search-depth
+   robustness.** A policy-only side-channel from A3's global token could be
+   grafted onto A1 without touching the value head, capturing the 7.5%→X argmax
+   gain while preserving A1's MCTS value quality.
+
+3. **Do NOT route PMA through the value head.** If §170 tests a hybrid (A1 pool
+   + global token for policy only), the value path must remain min_max. A3's
+   failure is a clean natural experiment confirming this constraint.
+
+4. **Low-cost §170 option:** retrain A1 variant with global token in policy head
+   only (value gate=0.0 forced). Predicted: argmax approaches A3 (7–8%), MCTS
+   approaches A1 (25%). This would be the best-of-both result.
+
+**Artefacts.**
+
+- `reports/ablation_169/A3_mcts32.json` — MCTS-32 eval (5W/195L, 617s).
+- `reports/ablation_169/A3_mcts64.json` — MCTS-64 eval (5W/195L, 776s).
+- `reports/ablation_169/A3_mcts_curve.md` — 4-point curve + CA test + verdict.
+- `scripts/aggregate_a3_mcts_curve.py` — aggregation script.
+
+Wall time: 617s (MCTS-32) + 776s (MCTS-64) parallel on laptop, total wall ≈ 776s
+≈ 13 min.
+
+**Commit:** `eval(a3): MCTS-N curve on existing checkpoint` (1 commit, this §).
+
