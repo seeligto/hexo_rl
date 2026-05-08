@@ -64,6 +64,12 @@ class V6ArgmaxBot(BotProtocol):
         # validation path comment about K=0 being the aug fixture).
         cluster_tensor = tensor[0]
         cq, cr = centers[0]
+        # Spatial dims read from the tensor itself — supports v6 (19×19) and
+        # §168 v6w25 (25×25) without branching.
+        _, view_h, view_w = cluster_tensor.shape
+        assert view_h == view_w, "V6ArgmaxBot expects square cluster window"
+        view_size = view_h
+        view_half = (view_size - 1) // 2
         # Slice 18 → 8 planes (KEPT_PLANE_INDICES, HEXB v6 wire format) only
         # if the model expects 8 in_channels.
         if self.model.in_channels == 8:
@@ -72,7 +78,7 @@ class V6ArgmaxBot(BotProtocol):
             inp = cluster_tensor
         x = torch.from_numpy(inp).unsqueeze(0).float().to(self.device)
         log_policy, _value, _v_logit = self.model(x)
-        log_p = log_policy.squeeze(0).cpu().numpy()  # (362,) — last is pass
+        log_p = log_policy.squeeze(0).cpu().numpy()  # (S*S+1,) — last is pass
 
         legal_moves = rust_board.legal_moves()
         if not legal_moves:
@@ -80,10 +86,10 @@ class V6ArgmaxBot(BotProtocol):
 
         scores = np.full(len(legal_moves), -1e30, dtype=np.float64)
         for i, (q, r) in enumerate(legal_moves):
-            wq = q - cq + _HALF
-            wr = r - cr + _HALF
-            if 0 <= wq < BOARD_SIZE and 0 <= wr < BOARD_SIZE:
-                scores[i] = float(log_p[wq * BOARD_SIZE + wr])
+            wq = q - cq + view_half
+            wr = r - cr + view_half
+            if 0 <= wq < view_size and 0 <= wr < view_size:
+                scores[i] = float(log_p[wq * view_size + wr])
 
         if self.temperature == 0.0:
             idx = int(scores.argmax())

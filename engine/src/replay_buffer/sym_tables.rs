@@ -89,6 +89,37 @@ pub const POLICY_STRIDE_V8: usize = N_ACTIONS_V8;
 /// v8 auxiliary stride = 625 (single-plane spatial).
 pub const AUX_STRIDE_V8: usize = N_CELLS_V8;
 
+// ── v6w25 constants (§168 Gate 3 — K-cluster encoding at matched R=8 ───
+//    perception). Wire format = v6 (8 KEPT planes + pass slot) but
+//    cluster window grows 19 → 25, cluster threshold grows 5 → 8, and
+//    legal-move radius grows 5 → 8. Used as the matched-perception A/B
+//    baseline against v8 single-bbox (T3 §168 verdict pending).
+
+/// v6w25 cluster window side length. Same value as `BOARD_H_V8` but
+/// distinct symbol — v6w25 keeps the v6 8-plane KEPT_PLANE_INDICES wire
+/// format and pass slot, just with a larger cluster window.
+pub const BOARD_H_V6W25: usize = 25;
+pub const BOARD_W_V6W25: usize = BOARD_H_V6W25;
+/// v6w25 total cells = 25 × 25 = 625.
+pub const N_CELLS_V6W25: usize = BOARD_H_V6W25 * BOARD_W_V6W25;
+/// v6w25 plane count: same 8 KEPT planes as v6.
+pub const N_PLANES_V6W25: usize = N_PLANES;
+/// v6w25 action space: 625 cells + 1 pass slot. v6 wire format keeps the
+/// pass slot for state-dict compat with v6 / v7full / v6 model files.
+pub const N_ACTIONS_V6W25: usize = N_CELLS_V6W25 + 1;
+/// v6w25 cluster threshold (matched to perception radius).
+pub const CLUSTER_THRESHOLD_V6W25: i32 = 8;
+/// v6w25 legal-move radius (HTTT rule baseline, §168 Gate 3).
+pub const LEGAL_MOVE_RADIUS_V6W25: i32 = 8;
+/// v6w25 state stride per buffer slot = 8 × 625 = 5000.
+pub const STATE_STRIDE_V6W25: usize = N_PLANES_V6W25 * N_CELLS_V6W25;
+/// v6w25 chain stride per buffer slot = 6 × 625 = 3750.
+pub const CHAIN_STRIDE_V6W25: usize = N_CHAIN_PLANES * N_CELLS_V6W25;
+/// v6w25 policy stride = 626 (cells + pass).
+pub const POLICY_STRIDE_V6W25: usize = N_ACTIONS_V6W25;
+/// v6w25 auxiliary stride = 625.
+pub const AUX_STRIDE_V6W25: usize = N_CELLS_V6W25;
+
 // ── Weight schedule ──────────────────────────────────────────────────────────
 
 /// A single threshold bracket: games with length < `max_moves` get `weight`.

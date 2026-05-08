@@ -166,25 +166,58 @@ impl PyBoard {
 
     /// Returns a tuple of (list of NumPy arrays, list of (q, r) centers) for each cluster.
     ///
-    /// Each NumPy array has shape (2, 19, 19), dtype float32:
-    ///   plane 0 = current player's stones, plane 1 = opponent's stones.
-    ///
-    /// Arrays are created via zero-copy transfer of ownership from Rust allocations.
+    /// Each NumPy array has shape `(2, S, S)` where `S = self.cluster_window_size`
+    /// (default 19 = v6 wire format; v6w25 callers `set_cluster_window_size(25)`
+    /// per §168 Gate 3). Plane 0 = current player's stones, plane 1 = opponent's
+    /// stones.  Arrays are created via zero-copy transfer from Rust allocations.
     pub fn get_cluster_views<'py>(
         &self,
         py: Python<'py>,
     ) -> PyResult<(Vec<Py<PyArray3<f32>>>, Vec<(i32, i32)>)> {
+        let window_size = self.inner.cluster_window_size();
         let (views, centers) = self.inner.get_cluster_views();
         let py_views: PyResult<Vec<_>> = views
             .into_iter()
             .map(|v| {
-                // Transfer Vec ownership to NumPy (zero-copy), then reshape to (2, 19, 19).
+                // Transfer Vec ownership to NumPy (zero-copy), then reshape.
                 PyArray1::from_vec(py, v)
-                    .reshape([2_usize, board::BOARD_SIZE, board::BOARD_SIZE])
+                    .reshape([2_usize, window_size, window_size])
                     .map(|arr| arr.unbind())
             })
             .collect();
         Ok((py_views?, centers))
+    }
+
+    /// §168 Gate 3 — set the cluster connectivity threshold (default 5).
+    /// Used by v6w25 corpus generation to widen cluster reach to 8 in
+    /// proportion to the larger 25×25 cluster window. Affects only
+    /// `get_clusters()` / `get_cluster_views()`; legal-move expansion is
+    /// independent (controlled by `set_legal_move_radius`).
+    pub fn set_cluster_threshold(&mut self, threshold: i32) {
+        self.inner.set_cluster_threshold(threshold);
+    }
+
+    /// Current cluster threshold (default 5).
+    pub fn cluster_threshold(&self) -> i32 {
+        self.inner.cluster_threshold()
+    }
+
+    /// §168 Gate 3 — set the cluster window side length (default 19).
+    /// Used by v6w25 corpus generation to produce 25×25 cluster windows.
+    /// Caller must use an odd value >= 7. Returns ValueError on bad input.
+    pub fn set_cluster_window_size(&mut self, size: usize) -> PyResult<()> {
+        if size < 7 || size % 2 == 0 {
+            return Err(PyValueError::new_err(format!(
+                "cluster_window_size must be odd and >= 7; got {}", size
+            )));
+        }
+        self.inner.set_cluster_window_size(size);
+        Ok(())
+    }
+
+    /// Current cluster window side length (default 19).
+    pub fn cluster_window_size(&self) -> usize {
+        self.inner.cluster_window_size()
     }
 
     /// Window-relative flat index for axial (q, r).

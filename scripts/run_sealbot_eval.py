@@ -78,12 +78,18 @@ def play_game(
     seed: int,
     legal_move_radius: int,
     max_moves: int = 200,
+    cluster_threshold: int | None = None,
+    cluster_window_size: int | None = None,
 ) -> tuple[int | None, int]:
     """Play one game; return (winner_side, ply_count). winner_side ∈ {1,-1,None}."""
     random.seed(seed)
     np.random.seed(seed)
     board = Board()
     board.set_legal_move_radius(legal_move_radius)
+    if cluster_threshold is not None:
+        board.set_cluster_threshold(cluster_threshold)
+    if cluster_window_size is not None:
+        board.set_cluster_window_size(cluster_window_size)
     state = GameState.from_board(board)
     model_bot.reset()
     seal_bot.reset()
@@ -169,6 +175,10 @@ def main() -> int:
         if args.legal_radius is not None
         else _DEFAULT_LEGAL_RADIUS[encoding_label]
     )
+    # §168 Gate 3 — v6w25 needs widened cluster threshold + window for
+    # K-cluster encoding to match the v6w25 corpus. v6 / v8 use defaults.
+    cluster_threshold: int | None = 8 if encoding_label == "v6w25" else None
+    cluster_window_size: int | None = 25 if encoding_label == "v6w25" else None
 
     arm = ckpt_path.stem.replace("_v8full", "").replace("bootstrap_model_", "")
     inference_tag = args.inference.replace("/", "-")
@@ -204,6 +214,8 @@ def main() -> int:
             seed=args.seed_base + i,
             legal_move_radius=legal_radius,
             max_moves=args.max_moves,
+            cluster_threshold=cluster_threshold,
+            cluster_window_size=cluster_window_size,
         )
         ply_counts.append(ply)
         if winner == model_side:

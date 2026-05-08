@@ -60,14 +60,14 @@ def test_parse_method_zero_sims_raises():
         _parse_method("mcts-0")
 
 
-def test_v6w25_dispatch_raises_until_gate_3():
-    """v6w25 paths surface NotImplementedError until §168 Gate 3 lands."""
-    # Use a fake v6-like model spec but pass label='v6w25' to dispatch.
-    # We can't easily construct a HexTacToeNet here without imports/cost,
-    # so just verify the dispatch raises on label='v6w25' even with None
-    # model — the label check fires before the model is touched.
-    with pytest.raises(NotImplementedError, match="Gate 3"):
-        build_inference_method("argmax", None, DEVICE, "v6w25")
+def test_v6w25_mcts_dispatch_raises_pending_python_port():
+    """v6w25 MCTS path raises until a Python v6w25 MCTS port lands. Argmax
+    path returns V6ArgmaxBot (shape-aware) — exercised in the v6w25
+    encoding tests; here we assert only that the explicit MCTS request
+    surfaces a clear error so callers don't silently get wrong behavior.
+    """
+    with pytest.raises(NotImplementedError, match="v6w25"):
+        build_inference_method("mcts-128", None, DEVICE, "v6w25")
 
 
 # ── Integration checks ───────────────────────────────────────────────

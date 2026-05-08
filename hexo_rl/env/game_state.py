@@ -169,11 +169,15 @@ class GameState:
     ) -> "GameState":
         if history is None:
             history = deque(maxlen=HISTORY_LEN)
-        # get_cluster_views returns (list of (2,19,19) float32 numpy arrays, list of centers).
-        # Arrays are C-contiguous, created zero-copy in Rust via the numpy crate.
+        # get_cluster_views returns (list of (2,S,S) float32 numpy arrays, list
+        # of centers) where S = rust_board.cluster_window_size (default 19 = v6;
+        # §168 Gate 3 v6w25 sets 25). Arrays are C-contiguous, zero-copy from
+        # Rust via the numpy crate. Empty-board fallback also reads the live
+        # window size — never assume 19.
         views, centers = rust_board.get_cluster_views()
         if not views:
-            views = [np.zeros((2, BOARD_SIZE, BOARD_SIZE), dtype=np.float32)]
+            window_size = rust_board.cluster_window_size()
+            views = [np.zeros((2, window_size, window_size), dtype=np.float32)]
             centers = [(0, 0)]
 
         return GameState(
@@ -193,7 +197,9 @@ class GameState:
         return GameState.from_board(rust_board, history=new_history)
 
     def to_tensor(self) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
-        """Encode the state into K tensors of shape (18, 19, 19) float16.
+        """Encode the state into K tensors of shape (18, S, S) float16,
+        where S = the cluster window size used at construction time
+        (default 19 = v6; §168 Gate 3 v6w25 sets 25).
 
         18-plane layout:
 
@@ -221,7 +227,13 @@ class GameState:
         centers = self.centers
 
         K = len(centers)
-        tensor = np.zeros((K, 18, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
+        # Derive spatial dims from the views the Board emitted — supports v6
+        # (19×19 default) and §168 Gate 3 v6w25 (25×25) without branching.
+        if current_views:
+            _, H, W = current_views[0].shape
+        else:
+            H = W = BOARD_SIZE
+        tensor = np.zeros((K, 18, H, W), dtype=np.float16)
 
         # Scalar planes are identical across all clusters.
         mr_val = np.float16(0.0 if self.moves_remaining == 1 else 1.0)

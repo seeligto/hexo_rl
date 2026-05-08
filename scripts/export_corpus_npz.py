@@ -50,6 +50,12 @@ if str(ROOT) not in sys.path:
 
 from hexo_rl.bootstrap.pretrain import _game_winner_from_replay
 from hexo_rl.bootstrap.dataset import replay_game_to_triples
+from hexo_rl.bootstrap.dataset_v6w25 import (
+    BOARD_SIZE_V6W25,
+    N_ACTIONS_V6W25,
+    N_PLANES_V6W25,
+    replay_game_to_triples_v6w25,
+)
 from hexo_rl.bootstrap.dataset_v8 import (
     BOARD_SIZE_V8,
     N_ACTIONS_V8,
@@ -193,10 +199,12 @@ def main() -> None:
     parser.add_argument("--human-only", action="store_true",
                         help="Pretrain mode: human games only, Elo-weighted, saves weights array")
     parser.add_argument(
-        "--encoding", choices=("v6", "v8"), default="v6",
-        help="Corpus encoding version: 'v6' (default; 8-plane × 19×19, 362-action "
-             "with pass slot) or 'v8' (11-plane × 25×25 bbox, 625-action no pass; "
-             "Path β per docs/designs/encoding_v8_contract.md).",
+        "--encoding", choices=("v6", "v6w25", "v8"), default="v6",
+        help="Corpus encoding version: 'v6' (default; 8-plane × 19×19 K-cluster, "
+             "362-action with pass slot), 'v6w25' (§168 — 8-plane × 25×25 K-cluster "
+             "at matched R=8 perception, 626-action with pass slot), or 'v8' "
+             "(11-plane × 25×25 bbox, 625-action no pass; Path β per "
+             "docs/designs/encoding_v8_contract.md).",
     )
     args = parser.parse_args()
 
@@ -205,6 +213,8 @@ def main() -> None:
         out_path = Path(args.out)
     elif encoding == "v8":
         out_path = ROOT / "data" / "bootstrap_corpus_v8.npz"
+    elif encoding == "v6w25":
+        out_path = ROOT / "data" / "bootstrap_corpus_v6w25.npz"
     else:
         out_path = ROOT / "data" / "bootstrap_corpus.npz"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -287,6 +297,12 @@ def main() -> None:
             (n_sample, N_PLANES_V8, BOARD_SIZE_V8, BOARD_SIZE_V8), dtype=np.float16
         )
         policies_buf = np.empty((n_sample, N_ACTIONS_V8), dtype=np.float32)
+    elif encoding == "v6w25":
+        states_buf = np.empty(
+            (n_sample, N_PLANES_V6W25, BOARD_SIZE_V6W25, BOARD_SIZE_V6W25),
+            dtype=np.float16,
+        )
+        policies_buf = np.empty((n_sample, N_ACTIONS_V6W25), dtype=np.float32)
     else:
         states_buf = np.empty((n_sample, 8, 19, 19), dtype=np.float16)  # HEXB v6: 8 planes
         policies_buf = np.empty((n_sample, 362), dtype=np.float32)
@@ -294,7 +310,7 @@ def main() -> None:
     weights_buf = np.empty(n_sample, dtype=np.float32)
     out_idx = 0
     p1_wins = 0
-    total_clipped_v8 = 0  # v8 telemetry only; unused under v6
+    total_clipped_v8 = 0  # v8 telemetry only; unused under v6 / v6w25
 
     for gi, ply_indices in sorted(game_to_plies.items()):
         g = records[gi]
@@ -302,6 +318,8 @@ def main() -> None:
         if encoding == "v8":
             s, _chain, p, o, n_clipped = replay_game_to_triples_v8(g["moves"], g["winner"])
             total_clipped_v8 += n_clipped
+        elif encoding == "v6w25":
+            s, _chain, p, o = replay_game_to_triples_v6w25(g["moves"], g["winner"])
         else:
             s, _chain, p, o = replay_game_to_triples(g["moves"], g["winner"])
         if g["winner"] == 1:
@@ -310,6 +328,8 @@ def main() -> None:
             if pi < len(s):
                 if encoding == "v8":
                     states_buf[out_idx] = s[pi]  # already 11 planes native
+                elif encoding == "v6w25":
+                    states_buf[out_idx] = s[pi]  # already 8 planes native
                 else:
                     states_buf[out_idx] = s[pi][KEPT_PLANE_INDICES]  # slice 18→8 planes
                 policies_buf[out_idx] = p[pi]
@@ -346,6 +366,11 @@ def main() -> None:
     size_mb = out_path.stat().st_size / 1024 / 1024
     if encoding == "v8":
         bytes_per_pos = N_PLANES_V8 * BOARD_SIZE_V8 * BOARD_SIZE_V8 * 2 + N_ACTIONS_V8 * 4 + 4
+    elif encoding == "v6w25":
+        bytes_per_pos = (
+            N_PLANES_V6W25 * BOARD_SIZE_V6W25 * BOARD_SIZE_V6W25 * 2
+            + N_ACTIONS_V6W25 * 4 + 4
+        )
     else:
         bytes_per_pos = 8 * 19 * 19 * 2 + 362 * 4 + 4
     est_ram_gb = out_idx * bytes_per_pos / (1024 ** 3)

@@ -98,18 +98,19 @@ def build_inference_method(
         )
 
     if encoding_label == "v6w25":
-        # v6w25 inference paths require §168 Gate 3 (Rust runtime
-        # parameterization of CLUSTER_THRESHOLD + cluster window size).
-        # Until that lands, only argmax-via-Python encoder is feasible.
+        # v6w25 wires through V6ArgmaxBot — same K-cluster encoding as v6
+        # at runtime, just with a 25×25 cluster window. The bot is shape-
+        # aware (reads view dims from the tensor), and the script seeds
+        # the Board with set_cluster_window_size(25) + cluster_threshold(8)
+        # + legal_move_radius(8) before each game.
         if kind == "argmax":
-            # v6w25 argmax piggy-backs on V6ArgmaxBot but the encoder needs
-            # 25×25 cluster windows — wired in Gate 3+.
-            raise NotImplementedError(
-                "v6w25 argmax requires §168 Gate 3 Rust v6w25 encoder. "
-                "Run Gate 3 before evaluating v6w25 checkpoints."
-            )
+            return V6ArgmaxBot(model, device, temperature=temperature)
+        # v6w25 MCTS via Rust MCTSTree is blocked: MCTSTree hardcodes
+        # BOARD_SIZE=19 and POLICY_LEN=362 — see scripts/run_sealbot_eval.py
+        # commentary. Defer to a Python v6w25 MCTS port (post-§168).
         raise NotImplementedError(
-            f"v6w25 + {name} not yet implemented (§168 Gate 3 dependency)"
+            f"v6w25 + {name} not yet wired (Rust MCTSTree v6-locked; "
+            "Python v6w25 MCTS port deferred post-§168)."
         )
 
     raise ValueError(f"unknown encoding label {encoding_label!r}")

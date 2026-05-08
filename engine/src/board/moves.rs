@@ -19,17 +19,16 @@ const WIN_LENGTH: usize = 6;
 /// (eval, bots, tests, corpus replay).
 pub const DEFAULT_LEGAL_MOVE_RADIUS: i32 = 5;
 
-/// Maximum hex distance between stones that share a single cluster for the
-/// `get_clusters()` partition.  Originally 8 to match the legal-move radius
-/// (one cluster per "reachable neighborhood").  Phase B δ.c (§151) lowers
-/// this to 5 so that legal_radius == cluster_radius, removing the cluster /
-/// move-radius mismatch that produced extra-wide cluster windows under
-/// `get_cluster_views()`.  Lowering does not change the cluster planes
-/// themselves (binary stone presence) — only window centring and the number
-/// of cluster views per position.  Corpus M1 audit (`/tmp/phase_b_corpus_audit.md`,
-/// 2026-05-03): 0 / 5 772 decisive human games are colony-rule wins, so the
-/// δ.a (dual-radius) fallback is unnecessary.
-const CLUSTER_THRESHOLD: i32 = 5;
+/// Default maximum hex distance between stones that share a single cluster
+/// for the `get_clusters()` partition.  Originally 8 to match the legal-move
+/// radius (one cluster per "reachable neighborhood").  Phase B δ.c (§151)
+/// lowers this to 5 so that legal_radius == cluster_radius, removing the
+/// cluster / move-radius mismatch that produced extra-wide cluster windows
+/// under `get_cluster_views()`.  §168 Gate 3 (v6w25 plumbing) introduces a
+/// per-Board override `Board.cluster_threshold` so corpus generation can
+/// widen this to 8 alongside `cluster_window_size = 25` for matched-
+/// perception A/B vs v8 — without disturbing the v6 default.
+pub const DEFAULT_CLUSTER_THRESHOLD: i32 = 5;
 
 impl Board {
     /// Zero-allocation reference to the lazily-maintained legal move set.
@@ -272,8 +271,9 @@ impl Board {
 
     /// Partition all placed stones (both colours) into clusters where two
     /// stones share a cluster iff their `hex_distance` is at most
-    /// `CLUSTER_THRESHOLD` (Phase B δ.c, §151: 5; was 8).  Used by
-    /// `get_cluster_views()` to emit one 19×19 view per cluster.
+    /// `self.cluster_threshold` (default `DEFAULT_CLUSTER_THRESHOLD = 5`,
+    /// runtime-overridable via `set_cluster_threshold`).  Used by
+    /// `get_cluster_views()` to emit one window-sized view per cluster.
     pub fn get_clusters(&self) -> Vec<Vec<(i32, i32)>> {
         let mut clusters: Vec<Vec<(i32, i32)>> = Vec::new();
         if self.cells.is_empty() {
@@ -282,6 +282,7 @@ impl Board {
 
         let stones: Vec<(i32, i32)> = self.cells.keys().cloned().collect();
         let mut visited = vec![false; stones.len()];
+        let threshold = self.cluster_threshold;
 
         for i in 0..stones.len() {
             if visited[i] { continue; }
@@ -292,7 +293,7 @@ impl Board {
             while let Some(curr) = queue.pop() {
                 cluster.push(stones[curr]);
                 for j in 0..stones.len() {
-                    if !visited[j] && hex_distance(stones[curr].0, stones[curr].1, stones[j].0, stones[j].1) <= CLUSTER_THRESHOLD {
+                    if !visited[j] && hex_distance(stones[curr].0, stones[curr].1, stones[j].0, stones[j].1) <= threshold {
                         visited[j] = true;
                         queue.push(j);
                     }

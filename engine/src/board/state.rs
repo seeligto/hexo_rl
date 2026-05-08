@@ -147,6 +147,19 @@ pub struct Board {
     /// — sampling from {4, 5, 6} via a worker-local RNG to break the
     /// radius-5 stride-5 fixed point identified in §152.
     pub(crate) legal_move_radius: i32,
+    /// Per-board cluster connectivity threshold (§168 Gate 3 v6w25 plumbing).
+    ///
+    /// Two stones share a cluster iff their `hex_distance` is ≤ this value.
+    /// Default is `moves::DEFAULT_CLUSTER_THRESHOLD` (5, matching v6 wire
+    /// format). v6w25 corpus generation overrides to 8 to widen cluster
+    /// reach in proportion to the larger 25×25 cluster window.
+    pub(crate) cluster_threshold: i32,
+    /// Per-board cluster window side length (§168 Gate 3 v6w25 plumbing).
+    ///
+    /// `get_cluster_views()` emits 2-plane snapshots of this side length.
+    /// Default is `BOARD_SIZE` (19, v6 wire format). v6w25 corpus generation
+    /// overrides to 25 for matched-perception A/B vs v8.
+    pub(crate) cluster_window_size: usize,
 }
 
 impl Board {
@@ -188,7 +201,37 @@ impl Board {
             legal_cache: UnsafeCell::new(init_cache),
             cache_dirty: StdCell::new(false),
             legal_move_radius: super::moves::DEFAULT_LEGAL_MOVE_RADIUS,
+            cluster_threshold: super::moves::DEFAULT_CLUSTER_THRESHOLD,
+            cluster_window_size: BOARD_SIZE,
         }
+    }
+
+    /// §168 Gate 3 (v6w25 plumbing): override the cluster connectivity
+    /// threshold for this Board. Affects only `get_clusters()` /
+    /// `get_cluster_views()`; legal-move expansion is unchanged.
+    pub fn set_cluster_threshold(&mut self, threshold: i32) {
+        self.cluster_threshold = threshold;
+    }
+
+    /// Current cluster threshold (default 5 = v6 wire-format).
+    pub fn cluster_threshold(&self) -> i32 {
+        self.cluster_threshold
+    }
+
+    /// §168 Gate 3 (v6w25 plumbing): override the cluster window side length.
+    /// Used by `get_cluster_views()` to size the 2-plane snapshot. Caller
+    /// must use an odd value (>= 7); panic enforced by debug_assert.
+    pub fn set_cluster_window_size(&mut self, size: usize) {
+        debug_assert!(
+            size >= 7 && size % 2 == 1,
+            "cluster_window_size must be odd and >= 7; got {}", size
+        );
+        self.cluster_window_size = size;
+    }
+
+    /// Current cluster window side length (default 19 = v6 wire-format).
+    pub fn cluster_window_size(&self) -> usize {
+        self.cluster_window_size
     }
 
     /// Phase B' v8 (§152 Q2): override the legal-move radius for this Board.
@@ -635,6 +678,16 @@ impl Board {
     /// also uses `encode_planes_to_buffer`, so the 2-plane snapshot and the
     /// 18-plane encoding share the same kernel.
     pub fn get_cluster_views(&self) -> (Vec<Vec<f32>>, Vec<(i32, i32)>) {
+        // §168 Gate 3: window dimensions resolve from `self.cluster_window_size`
+        // (default 19 = v6 wire format; v6w25 callers set 25). The "small
+        // cluster" span threshold scales with the window: window − 4 leaves a
+        // 2-cell margin around the cluster bbox so the centroid window
+        // contains every stone.
+        let window_size = self.cluster_window_size;
+        let total_cells = window_size * window_size;
+        let half: i32 = (window_size as i32 - 1) / 2;
+        let span_threshold: i32 = window_size as i32 - 4;
+
         let clusters = self.get_clusters();
         let mut final_centers = Vec::new();
 
@@ -659,8 +712,8 @@ impl Board {
                 let span_q = max_q - min_q;
                 let span_r = max_r - min_r;
 
-                if span_q <= 15 && span_r <= 15 {
-                    // Small Clusters: single 19x19 window centered on geometric middle
+                if span_q <= span_threshold && span_r <= span_threshold {
+                    // Small Clusters: single window centered on geometric middle
                     final_centers.push(((min_q + max_q) / 2, (min_r + max_r) / 2));
                 } else {
                     // Massive Clusters: window centered on each Action and Threat anchor in the cluster
@@ -684,7 +737,9 @@ impl Board {
                         // Fallback if no anchors found
                         final_centers.push(((min_q + max_q) / 2, (min_r + max_r) / 2));
                     } else {
-                        // Deduplicate anchors: radius 5
+                        // Deduplicate anchors: radius matches v6 baseline (5)
+                        // regardless of cluster_window_size — this is a
+                        // dedup tolerance, not a perception radius.
                         let mut deduped: Vec<(i32, i32)> = Vec::new();
                         for &a in &cluster_anchors {
                             if !deduped.iter().any(|&d| hex_distance(a.0, a.1, d.0, d.1) <= 5) {
@@ -704,14 +759,20 @@ impl Board {
         };
 
         for &(cq, cr) in &final_centers {
-            let mut planes_2 = vec![0.0f32; 2 * TOTAL_CELLS];
+            let mut planes_2 = vec![0.0f32; 2 * total_cells];
             for (&(q, r), &cell) in self.cells.iter() {
-                let flat = Self::window_flat_idx_at(q, r, cq, cr);
-                if flat < TOTAL_CELLS {
+                let wq = q - cq + half;
+                let wr = r - cr + half;
+                if wq >= 0
+                    && wq < window_size as i32
+                    && wr >= 0
+                    && wr < window_size as i32
+                {
+                    let flat = (wq as usize) * window_size + (wr as usize);
                     if cell == my_cell {
                         planes_2[flat] = 1.0;
                     } else if cell == opp_cell {
-                        planes_2[TOTAL_CELLS + flat] = 1.0;
+                        planes_2[total_cells + flat] = 1.0;
                     }
                 }
             }
@@ -1140,6 +1201,8 @@ impl Clone for Board {
             legal_cache: UnsafeCell::new(FxHashSet::with_capacity_and_hasher(cap, Default::default())),
             cache_dirty: StdCell::new(true),
             legal_move_radius: self.legal_move_radius,
+            cluster_threshold: self.cluster_threshold,
+            cluster_window_size: self.cluster_window_size,
         }
     }
 }
