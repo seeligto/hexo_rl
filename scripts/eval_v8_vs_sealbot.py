@@ -116,6 +116,12 @@ def main() -> int:
     parser.add_argument("--encoding", choices=("v6", "v8"), default="v8",
                         help="Model encoding: 'v8' (default; Phase B arms) or "
                              "'v6' (HEXB 8-plane × 19×19, e.g. v7full baseline).")
+    parser.add_argument("--legal-radius", type=int, default=None,
+                        help="Override Board.set_legal_move_radius. Default: 5 for "
+                             "v6, 8 for v8 (LEGAL_MOVE_RADIUS_V8). Used for the "
+                             "§167 invariant tests where v7full / v6 model is "
+                             "evaluated at r=8 or r=10 to isolate the radius "
+                             "effect from the encoding effect.")
     args = parser.parse_args()
 
     ckpt_path = Path(args.checkpoint).resolve()
@@ -139,12 +145,14 @@ def main() -> int:
     if args.encoding == "v8":
         model = load_v8_model_from_checkpoint(str(ckpt_path), device)
         model_bot: BotProtocol = V8ArgmaxBot(model, device, temperature=args.temperature)
-        legal_radius = LEGAL_MOVE_RADIUS_V8
+        default_legal_radius = LEGAL_MOVE_RADIUS_V8
     else:
         model = load_v6_model_from_checkpoint(str(ckpt_path), device)
         model_bot = V6ArgmaxBot(model, device, temperature=args.temperature)
-        # v6 default radius preserved (no override).
-        legal_radius = 5
+        default_legal_radius = 5
+    legal_radius = (
+        args.legal_radius if args.legal_radius is not None else default_legal_radius
+    )
     print(f"[eval] model loaded — encoding={args.encoding} filters={model.filters} "
           f"res_blocks={model.res_blocks} n_actions={model.n_actions}", flush=True)
 
@@ -198,6 +206,7 @@ def main() -> int:
         "ci_95_high": hi,
         "time_limit": args.time_limit,
         "temperature": args.temperature,
+        "legal_radius": legal_radius,
         "random_opening_plies": args.random_opening_plies,
         "elapsed_sec": round(elapsed, 1),
         "mean_ply": float(np.mean(ply_counts)) if ply_counts else 0.0,
