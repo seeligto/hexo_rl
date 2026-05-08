@@ -346,6 +346,30 @@ def test_pma_global_bot_returns_legal_move():
     assert move in board.legal_moves()
 
 
+def test_v6_argmax_bot_threads_global_crop_under_pma_global():
+    """V6ArgmaxBot must compute and pass a global crop when the model's
+    pool_type is pma_global; otherwise the model.forward() raises
+    ValueError(`pool_type='pma_global' requires global_crop=...`)."""
+    from hexo_rl.eval.v6_argmax_bot import V6ArgmaxBot
+    model = _tiny_v6w25_pma_global_model()
+    # V6ArgmaxBot's encoding-check accepts the model only when
+    # model.encoding == 'v6'. _build_v6_model rewrites the encoding to 'v6'
+    # for v6w25 checkpoints; tiny model defaults to 'v6w25' so we mirror
+    # the loader's rewrite for this unit test.
+    model.encoding = "v6"
+    board = Board()
+    board.set_legal_move_radius(8)
+    board.set_cluster_threshold(8)
+    board.set_cluster_window_size(25)
+    board.apply_move(0, 0)
+    board.apply_move(1, 0)
+    board.apply_move(0, 1)
+    state = GameState.from_board(board)
+    bot = V6ArgmaxBot(model, DEVICE)
+    move = bot.get_move(state, board)
+    assert move in board.legal_moves()
+
+
 def test_pma_global_bot_pool_mismatch_rejected():
     """If the model is pma_global but the bot is asked for pma (or vice-
     versa), construction must fail loudly."""

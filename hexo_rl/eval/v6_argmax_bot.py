@@ -27,6 +27,7 @@ from hexo_rl.bootstrap.bot_protocol import BotProtocol
 from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
+from hexo_rl.utils.global_crop import compute_global_crop_from_board
 
 
 _HALF: int = (BOARD_SIZE - 1) // 2  # 9
@@ -77,7 +78,17 @@ class V6ArgmaxBot(BotProtocol):
         else:
             inp = cluster_tensor
         x = torch.from_numpy(inp).unsqueeze(0).float().to(self.device)
-        log_policy, _value, _v_logit = self.model(x)
+        # §169 A3 — pma_global needs a (1, 3, 32, 32) global summary crop
+        # built from the live board's stones in the current-player frame.
+        # Other pool types ignore the kwarg; we omit it to keep the v6 /
+        # v6w25-with-pma path unchanged.
+        fwd_kwargs: dict = {}
+        if getattr(self.model, "pool_type", "min_max") == "pma_global":
+            gc_np = compute_global_crop_from_board(rust_board)
+            fwd_kwargs["global_crop"] = (
+                torch.from_numpy(gc_np).unsqueeze(0).float().to(self.device)
+            )
+        log_policy, _value, _v_logit = self.model(x, **fwd_kwargs)
         log_p = log_policy.squeeze(0).cpu().numpy()  # (S*S+1,) — last is pass
 
         legal_moves = rust_board.legal_moves()
