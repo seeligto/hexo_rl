@@ -35,12 +35,20 @@ from hexo_rl.utils.device import best_device
 def _bench_one(
     model, board_size: int, in_channels: int, batch: int,
     device: torch.device, n_runs: int = 5, n_warmup: int = 20,
+    global_crop: torch.Tensor | None = None,
 ) -> dict:
     x = torch.randn(batch, in_channels, board_size, board_size, device=device)
+    fwd_kwargs: dict = {}
+    if global_crop is not None:
+        # Caller provides a single (3, 32, 32) template; broadcast it to the
+        # batch shape the bench is benchmarking. Using torch.randn for the
+        # crop adds realistic variance without adding a Board.get_stones()
+        # round-trip per call.
+        fwd_kwargs["global_crop"] = global_crop.expand(batch, -1, -1, -1).contiguous()
     # Warmup
     for _ in range(n_warmup):
         with torch.no_grad():
-            _ = model(x)
+            _ = model(x, **fwd_kwargs)
     if device.type == "cuda":
         torch.cuda.synchronize()
     times_ms: List[float] = []
@@ -49,7 +57,7 @@ def _bench_one(
             torch.cuda.synchronize()
         t0 = time.perf_counter()
         with torch.no_grad():
-            _ = model(x)
+            _ = model(x, **fwd_kwargs)
         if device.type == "cuda":
             torch.cuda.synchronize()
         times_ms.append((time.perf_counter() - t0) * 1000.0)
@@ -99,10 +107,27 @@ def main() -> int:
     )
 
     batches = [int(s.strip()) for s in args.batches.split(",") if s.strip()]
+    # §169 A3 — pma_global needs a (1, 3, 32, 32) global summary template.
+    # We build a representative non-zero crop (random stones in cur/opp,
+    # mask=1 over the active region) once and broadcast per batch in
+    # _bench_one. Latency invariant to the actual content; only shape
+    # matters for forward-pass timing.
+    global_crop_template: torch.Tensor | None = None
+    if pool_type == "pma_global":
+        from hexo_rl.utils.global_crop import (
+            CANVAS_SIZE as _C,
+            N_GLOBAL_PLANES as _N,
+        )
+        gc = torch.zeros(1, _N, _C, _C, device=device, dtype=torch.float32)
+        gc[0, 2, 8:24, 8:24] = 1.0  # active canvas mask
+        gc[0, 0, 12:16, 12:16] = 1.0  # cur stones (4×4)
+        gc[0, 1, 16:20, 16:20] = 1.0  # opp stones (4×4)
+        global_crop_template = gc
     rows: List[dict] = []
     for b in batches:
         rec = _bench_one(model, board_size, in_channels, b, device,
-                         n_runs=args.runs, n_warmup=args.warmup)
+                         n_runs=args.runs, n_warmup=args.warmup,
+                         global_crop=global_crop_template)
         rows.append(rec)
         print(
             f"[bench-v6w25]  b={b:3d}  median={rec['median_ms']:6.2f}ms  "
