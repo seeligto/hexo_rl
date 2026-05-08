@@ -560,11 +560,19 @@ class BootstrapTrainer:
                 # §169 A3 — surface the global-token gate scalar so the
                 # operator can read whether the global branch earned weight
                 # or stayed at init. None for non-pma_global runs.
+                # §170 P3 — parallel surface for the gpool-bias gate. The two
+                # gates are mutually exclusive (disjoint pool_types); separate
+                # event keys keep the dashboard schema clean.
                 base_model = get_base_model(self.model)
                 gate_val: Optional[float] = None
+                gpool_bias_gate_val: Optional[float] = None
                 cluster_pool = getattr(base_model, "cluster_pool", None)
                 if cluster_pool is not None and hasattr(cluster_pool, "gate_value"):
                     gate_val = float(cluster_pool.gate_value())
+                if hasattr(base_model, "gpool_bias_gate_value"):
+                    gbg = base_model.gpool_bias_gate_value()
+                    if gbg is not None:
+                        gpool_bias_gate_val = float(gbg)
 
                 # Emit to dashboard — include loss_chain so the C14 dashboard
                 # rendering surfaces the Q13-aux head during pretrain runs.
@@ -587,6 +595,8 @@ class BootstrapTrainer:
                 }
                 if gate_val is not None:
                     event["pool_global_gate"] = gate_val
+                if gpool_bias_gate_val is not None:
+                    event["gpool_bias_gate"] = gpool_bias_gate_val
                 emit_event(event)
 
                 log_kwargs = dict(
@@ -604,6 +614,8 @@ class BootstrapTrainer:
                 )
                 if gate_val is not None:
                     log_kwargs["pool_global_gate"] = round(gate_val, 5)
+                if gpool_bias_gate_val is not None:
+                    log_kwargs["gpool_bias_gate"] = round(gpool_bias_gate_val, 5)
                 log.info("train_step", **log_kwargs)
 
             if step_budget is not None and (self.step - budget_origin) >= step_budget:
@@ -665,6 +677,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     cfg_half = (cfg_board_size - 1) // 2
 
     cfg_pool_type = str(cfg.get("pool_type", "min_max"))
+    cfg_gpool_bias_active = bool(cfg.get("gpool_bias_active", False))
     loaded_model = HexTacToeNet(
         board_size=cfg_board_size,
         in_channels=cfg_in_channels,
@@ -674,6 +687,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
         encoding=cfg_encoding,
         pool_type=cfg_pool_type,
         pool_attn_dropout=float(cfg.get("pool_attn_dropout", 0.1)),
+        gpool_bias_active=cfg_gpool_bias_active,
     )
     loaded_model.load_state_dict(ckpt["model_state"])
     loaded_model.eval().to(device)
@@ -682,10 +696,10 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
         1, cfg_in_channels, cfg_board_size, cfg_board_size, device=device,
     )
     fwd_kwargs: Dict = {}
-    if cfg_pool_type == "pma_global":
-        # pma_global needs a global crop for the forward; a zeroed canvas is
-        # a valid empty-board input. The smoke just checks the wiring round-
-        # trips; full play-vs-RandomBot is skipped (similar to v8).
+    if cfg_pool_type == "pma_global" or cfg_gpool_bias_active:
+        # pma_global / gpool_bias_active need a global crop for the forward;
+        # a zeroed canvas is a valid empty-board input. The smoke just checks
+        # the wiring round-trips; full play-vs-RandomBot is skipped.
         from hexo_rl.utils.global_crop import (
             CANVAS_SIZE as _GLOBAL_CANVAS_SIZE,
             N_GLOBAL_PLANES as _N_GLOBAL_PLANES,
@@ -714,6 +728,14 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
         log.info(
             "validation_skipped_pma_global",
             reason="pma_global validation runs under scripts/eval_a3_pma_global.sh",
+        )
+        return
+    # §170 P3 — gpool_bias_active also needs per-position global crops via
+    # compute_global_crop_from_board. Defer to scripts/eval_gpool_bias.sh.
+    if cfg_gpool_bias_active:
+        log.info(
+            "validation_skipped_gpool_bias_active",
+            reason="gpool_bias validation runs under scripts/eval_gpool_bias.sh",
         )
         return
 
@@ -858,6 +880,12 @@ def pretrain() -> None:
                              "PartialConv2d (Innamorati 2018 partial-conv-padding) "
                              "at the trunk entry. v8-only. Requires a corpus "
                              "regenerated with --canvas-realness.")
+    parser.add_argument(
+        "--gpool-bias-active", action="store_true",
+        help="§170 P3 — A1 + gpool-bias side-branch (additive K-invariant "
+             "global-pool bias to value/policy heads). Requires --pool-type "
+             "min_max + global_crops in the corpus NPZ. v6/v6w25 only.",
+    )
     parser.add_argument("--corpus-npz", type=str, default=None,
                         help="Override corpus NPZ path. Defaults: v6 → "
                              "data/bootstrap_corpus.npz, v8 → "
@@ -940,6 +968,38 @@ def pretrain() -> None:
             f"--canvas-realness requires --encoding v8; got {encoding!r}"
         )
 
+    # §170 P3 — A1 + gpool-bias. K-cluster-only (v6/v6w25), pool_type='min_max',
+    # mutually exclusive w/ canvas_realness + trunk gpool sites. Mirror the
+    # model-constructor invariants so YAML typos fail at CLI parse, not silently
+    # mid-training. Model double-checks at construction (network.py).
+    gpool_bias_active: bool = bool(
+        args.gpool_bias_active or config.get("gpool_bias_active", False)
+    )
+    if gpool_bias_active:
+        if encoding == "v8":
+            raise ValueError(
+                "--gpool-bias-active requires K-cluster encoding (v6/v6w25); "
+                f"v8 has no K dim. Got encoding={encoding!r}."
+            )
+        if pool_type != "min_max":
+            raise ValueError(
+                "--gpool-bias-active requires --pool-type min_max; got "
+                f"pool_type={pool_type!r}. The pma / pma_global pools already "
+                "carry a global-token branch; gpool-bias is the A1-only analog."
+            )
+        if canvas_realness:
+            raise ValueError(
+                "--gpool-bias-active is incompatible with --canvas-realness "
+                "(canvas_realness is v8-only; gpool_bias is K-cluster-only)."
+            )
+        if gpool_indices:
+            raise ValueError(
+                "--gpool-bias-active is incompatible with non-empty "
+                f"--gpool-sites; got {gpool_indices!r}. Trunk gpool sites are "
+                "an in-trunk feature-mixing intervention; gpool-bias is the "
+                "additive head-level analog."
+            )
+
     log.info(
         "encoding_resolved",
         encoding=encoding,
@@ -952,6 +1012,7 @@ def pretrain() -> None:
         pool_type=pool_type,
         pool_attn_dropout=pool_attn_dropout,
         canvas_realness=canvas_realness,
+        gpool_bias_active=gpool_bias_active,
     )
 
     from hexo_rl.utils.device import best_device
@@ -995,17 +1056,22 @@ def pretrain() -> None:
         log.warning("npz_not_found_falling_back_to_load_corpus", path=str(npz_path))
         states, policies, outcomes, weights = load_corpus(quality_scores, source_weights)
 
-    if pool_type == "pma_global" and global_crops_array is None:
+    # §170 P3 — gpool_bias_active also consumes global_crops. Same NPZ as
+    # pma_global; the gate=0 init keeps A1 byte-exact at construction.
+    needs_global = (pool_type == "pma_global") or gpool_bias_active
+    if needs_global and global_crops_array is None:
         raise RuntimeError(
-            f"pool_type='pma_global' requires a corpus NPZ with global_crops; "
-            f"none found in {npz_path}. Regenerate via "
-            f"`python scripts/export_corpus_npz.py --encoding v6w25 "
+            f"pool_type='{pool_type}' / gpool_bias_active={gpool_bias_active} "
+            f"requires a corpus NPZ with global_crops; none found in {npz_path}. "
+            f"Regenerate via `python scripts/export_corpus_npz.py --encoding v6w25 "
             f"--with-global-crop --human-only --no-compress`."
         )
-    if pool_type != "pma_global" and global_crops_array is not None:
+    if not needs_global and global_crops_array is not None:
         # Don't waste IO / GPU memory; drop the unused array.
-        log.info("ignoring_global_crops_in_npz",
-                 reason="pool_type is not pma_global")
+        log.info(
+            "ignoring_global_crops_in_npz",
+            reason=f"pool_type={pool_type!r} + gpool_bias_active={gpool_bias_active}",
+        )
         global_crops_array = None
 
     if len(outcomes) == 0:
@@ -1070,6 +1136,7 @@ def pretrain() -> None:
         pool_type=pool_type,
         pool_attn_dropout=pool_attn_dropout,
         canvas_realness=canvas_realness,
+        gpool_bias_active=gpool_bias_active,
     )
     use_compile = (
         config.get("torch_compile", True)
@@ -1094,6 +1161,7 @@ def pretrain() -> None:
     config["pool_type"] = pool_type
     config["pool_attn_dropout"] = pool_attn_dropout
     config["canvas_realness"] = canvas_realness
+    config["gpool_bias_active"] = gpool_bias_active
     if explicit_n_actions is not None:
         config["n_actions"] = explicit_n_actions
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)
