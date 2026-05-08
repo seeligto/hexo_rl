@@ -86,10 +86,19 @@ class AugmentedBootstrapDataset(torch.utils.data.Dataset):
     the augmented stone planes (0=cur, 8=opp) — recomputing post-augment
     avoids the axis-perm remap and is self-consistent.
 
+    §169 A3 — when ``global_crops`` is provided, ``__getitem__`` returns
+    a 4-tuple including the per-position global summary crop. Augmentation
+    of the crop is intentionally skipped (the GlobalTokenEncoder is
+    near-rotation-invariant via KataGo gpool, so feeding the canonical-
+    orientation crop alongside augmented cluster windows is a tractable
+    approximation; documented as a known A3 simplification).
+
     Args:
-        states:   (N, 18, 19, 19) float16 array (mmap-compatible).
-        policies: (N, 362) float32 array.
-        outcomes: (N,) float32 array, values in {-1, 0, +1}.
+        states:        (N, C, H, W) float16 array (mmap-compatible).
+        policies:      (N, n_actions) float32 array.
+        outcomes:      (N,) float32 array, values in {-1, 0, +1}.
+        global_crops:  Optional (N, 3, 32, 32) float16 array. When present,
+                       __getitem__ returns a 4-tuple.
     """
 
     def __init__(
@@ -97,19 +106,26 @@ class AugmentedBootstrapDataset(torch.utils.data.Dataset):
         states: np.ndarray,
         policies: np.ndarray,
         outcomes: np.ndarray,
+        global_crops: Optional[np.ndarray] = None,
     ) -> None:
         self.states = states
         self.policies = policies
         self.outcomes = outcomes
+        self.global_crops = global_crops
 
     def __len__(self) -> int:
         return len(self.outcomes)
 
-    def __getitem__(
-        self, idx: int
-    ) -> Tuple[np.ndarray, np.ndarray, float]:
+    def __getitem__(self, idx: int):
         # Copy out of the (possibly mmapped) backing store so downstream
         # collate can batch-concat without aliasing.
+        if self.global_crops is not None:
+            return (
+                self.states[idx].copy(),
+                self.policies[idx].copy(),
+                float(self.outcomes[idx]),
+                self.global_crops[idx].copy(),
+            )
         return (
             self.states[idx].copy(),
             self.policies[idx].copy(),
@@ -121,6 +137,7 @@ def make_augmented_collate(
     augment: bool,
     board_size: int = BOARD_SIZE,
     encoding: str = "v6",
+    with_global_crop: bool = False,
 ):
     """Return a collate_fn that batches triples and applies hex augmentation.
 
@@ -154,13 +171,20 @@ def make_augmented_collate(
     has_pass = encoding in ("v6", "v6w25")
     scatters_np = get_policy_scatters(board_size, has_pass=has_pass) if augment else None
 
-    def _collate(
-        batch: List[Tuple[np.ndarray, np.ndarray, float]],
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _collate(batch):
         n = len(batch)
         states = np.stack([b[0] for b in batch], axis=0)
         policies = np.stack([b[1] for b in batch], axis=0)
         outcomes = np.asarray([b[2] for b in batch], dtype=np.float32)
+        # §169 A3 — global crop stays canonical (no per-batch sym applied).
+        # GlobalTokenEncoder ends in KataGo gpool which is near-spatially-
+        # invariant, so the orientation mismatch with augmented cluster
+        # windows is bounded; documented as an A3 simplification.
+        global_crops = (
+            np.stack([b[3] for b in batch], axis=0)
+            if with_global_crop
+            else None
+        )
 
         if augment and scatters_np is not None:
             sym_indices = np.random.randint(0, 12, size=n).astype(np.int64)
@@ -208,6 +232,14 @@ def make_augmented_collate(
                 states[i, 4].astype(np.float32),
             ).astype(np.float16) / 6.0
 
+        if global_crops is not None:
+            return (
+                torch.from_numpy(states),
+                torch.from_numpy(chain_np),
+                torch.from_numpy(policies),
+                torch.from_numpy(outcomes),
+                torch.from_numpy(global_crops),
+            )
         return (
             torch.from_numpy(states),
             torch.from_numpy(chain_np),
@@ -430,7 +462,15 @@ class BootstrapTrainer:
         }
         n_batches = 0
 
-        for states, chain_planes, policies, outcomes in loader:
+        for batch in loader:
+            # Batches are 4-tuple by default; with §169 A3 global-crop wiring
+            # the collate appends a 5th element (global_crops).
+            if len(batch) == 5:
+                states, chain_planes, policies, outcomes, global_crops = batch
+                global_crops = global_crops.to(self.device)
+            else:
+                states, chain_planes, policies, outcomes = batch
+                global_crops = None
             states       = states.to(self.device)
             chain_planes = chain_planes.to(self.device)
             policies     = policies.to(self.device)
@@ -443,12 +483,15 @@ class BootstrapTrainer:
             self.optimizer.zero_grad()
 
             use_chain = chain_weight > 0.0
+            fwd_kwargs = {"aux": True, "chain": use_chain}
+            if global_crops is not None:
+                fwd_kwargs["global_crop"] = global_crops
             with torch.amp.autocast(
                 device_type=self.device.type,
                 dtype=torch.float16,
                 enabled=self.fp16,
             ):
-                fwd = self.model(states, aux=True, chain=use_chain)
+                fwd = self.model(states, **fwd_kwargs)
                 log_policy, _value, v_logit, opp_reply = fwd[0], fwd[1], fwd[2], fwd[3]
                 chain_pred = fwd[4] if use_chain else None
 
@@ -514,9 +557,18 @@ class BootstrapTrainer:
                 value_accuracy = (torch.sign(v_logit.squeeze()) == torch.sign(outcomes)).float().mean().item()
                 lr = float(self.optimizer.param_groups[0]["lr"])
 
+                # §169 A3 — surface the global-token gate scalar so the
+                # operator can read whether the global branch earned weight
+                # or stayed at init. None for non-pma_global runs.
+                base_model = get_base_model(self.model)
+                gate_val: Optional[float] = None
+                cluster_pool = getattr(base_model, "cluster_pool", None)
+                if cluster_pool is not None and hasattr(cluster_pool, "gate_value"):
+                    gate_val = float(cluster_pool.gate_value())
+
                 # Emit to dashboard — include loss_chain so the C14 dashboard
                 # rendering surfaces the Q13-aux head during pretrain runs.
-                emit_event({
+                event = {
                     "event": "training_step",
                     "step": self.step,
                     "loss_total": float(step_loss),
@@ -532,10 +584,12 @@ class BootstrapTrainer:
                     "grad_norm": grad_norm,
                     "corpus_mix": {"pretrain": 1.0, "self_play": 0.0},
                     "phase": "pretrain",
-                })
+                }
+                if gate_val is not None:
+                    event["pool_global_gate"] = gate_val
+                emit_event(event)
 
-                log.info(
-                    "train_step",
+                log_kwargs = dict(
                     step=self.step,
                     phase="pretrain",
                     loss=round(step_loss, 4),
@@ -548,6 +602,9 @@ class BootstrapTrainer:
                     grad_norm=round(grad_norm, 4),
                     corpus_mix={"pretrain": 1.0, "self_play": 0.0},
                 )
+                if gate_val is not None:
+                    log_kwargs["pool_global_gate"] = round(gate_val, 5)
+                log.info("train_step", **log_kwargs)
 
             if step_budget is not None and (self.step - budget_origin) >= step_budget:
                 break
@@ -607,6 +664,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     cfg_n_actions = cfg_board_size * cfg_board_size + (1 if has_pass else 0)
     cfg_half = (cfg_board_size - 1) // 2
 
+    cfg_pool_type = str(cfg.get("pool_type", "min_max"))
     loaded_model = HexTacToeNet(
         board_size=cfg_board_size,
         in_channels=cfg_in_channels,
@@ -614,6 +672,8 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
         res_blocks=int(cfg.get("res_blocks", 12)),
         se_reduction_ratio=int(cfg.get("se_reduction_ratio", 4)),
         encoding=cfg_encoding,
+        pool_type=cfg_pool_type,
+        pool_attn_dropout=float(cfg.get("pool_attn_dropout", 0.1)),
     )
     loaded_model.load_state_dict(ckpt["model_state"])
     loaded_model.eval().to(device)
@@ -621,8 +681,21 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     dummy = torch.zeros(
         1, cfg_in_channels, cfg_board_size, cfg_board_size, device=device,
     )
+    fwd_kwargs: Dict = {}
+    if cfg_pool_type == "pma_global":
+        # pma_global needs a global crop for the forward; a zeroed canvas is
+        # a valid empty-board input. The smoke just checks the wiring round-
+        # trips; full play-vs-RandomBot is skipped (similar to v8).
+        from hexo_rl.utils.global_crop import (
+            CANVAS_SIZE as _GLOBAL_CANVAS_SIZE,
+            N_GLOBAL_PLANES as _N_GLOBAL_PLANES,
+        )
+        fwd_kwargs["global_crop"] = torch.zeros(
+            1, _N_GLOBAL_PLANES, _GLOBAL_CANVAS_SIZE, _GLOBAL_CANVAS_SIZE,
+            device=device,
+        )
     with torch.no_grad():
-        log_pol, val, v_logit = loaded_model(dummy.float())
+        log_pol, val, v_logit = loaded_model(dummy.float(), **fwd_kwargs)
     assert log_pol.shape == (1, cfg_n_actions), \
         f"Unexpected policy shape: {log_pol.shape} (expected (1, {cfg_n_actions}))"
     log.info("checkpoint_forward_pass_ok", val=float(val[0, 0]))
@@ -632,6 +705,16 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     # round-trip + forward-pass shape check is sufficient at this layer.
     if cfg_encoding == "v8":
         log.info("validation_skipped_v8_path", reason="v8 needs V8ArgmaxBot path")
+        return
+    # pma_global needs a per-position global crop computed from the live board.
+    # The play-100-greedy harness is K=1 cluster-based and would have to call
+    # compute_global_crop_from_board per ply; defer that to the §169 A3 eval
+    # script instead of doubling the wiring here.
+    if cfg_pool_type == "pma_global":
+        log.info(
+            "validation_skipped_pma_global",
+            reason="pma_global validation runs under scripts/eval_a3_pma_global.sh",
+        )
         return
 
     # v6 / v6w25 K-cluster windowing: configure Board with per-encoding
@@ -755,6 +838,26 @@ def pretrain() -> None:
     parser.add_argument("--head-no-gpool", action="store_true",
                         help="Drop the G branch from the v8 policy / opp_reply head. "
                              "B0 control arm uses this. v6 ignores.")
+    parser.add_argument("--pool-type", choices=("min_max", "pma", "pma_global"), default=None,
+                        help="K-cluster pool type for v6 / v6w25. 'min_max' "
+                             "(default) keeps existing per-cluster heads + "
+                             "bot-side scatter-max; 'pma' (§169 A2) replaces "
+                             "the value/policy heads with a Set-Transformer "
+                             "1×SAB + 2 PMA seeds aggregator. 'pma_global' "
+                             "(§169 A3) extends 'pma' with a global summary "
+                             "token branch (32×32 cur/opp/canvas-mask crop "
+                             "+ KataGo gpool + learned scalar gate); requires "
+                             "global_crops in the corpus NPZ. v8 ignores.")
+    parser.add_argument("--pool-attn-dropout", type=float, default=None,
+                        help="Attention dropout for PMA pool (collapse "
+                             "mitigation). Default 0.1; raise to 0.2 if "
+                             "the §169 PMA-collapse smoke fires.")
+    parser.add_argument("--canvas-realness", action="store_true",
+                        help="§169 A4 — invert v8 plane 8 polarity to "
+                             "canvas_realness (1 inside, 0 outside) and wire "
+                             "PartialConv2d (Innamorati 2018 partial-conv-padding) "
+                             "at the trunk entry. v8-only. Requires a corpus "
+                             "regenerated with --canvas-realness.")
     parser.add_argument("--corpus-npz", type=str, default=None,
                         help="Override corpus NPZ path. Defaults: v6 → "
                              "data/bootstrap_corpus.npz, v8 → "
@@ -817,6 +920,26 @@ def pretrain() -> None:
                              if s.strip()]
     head_use_gpool: bool = not args.head_no_gpool
 
+    # §169 K-cluster pool selector — defaults to 'min_max' (current behavior).
+    pool_type: str = (
+        args.pool_type
+        if args.pool_type is not None
+        else str(config.get("pool_type", "min_max"))
+    )
+    pool_attn_dropout: float = (
+        float(args.pool_attn_dropout)
+        if args.pool_attn_dropout is not None
+        else float(config.get("pool_attn_dropout", 0.1))
+    )
+
+    # §169 A4 — canvas_realness gates inverted plane-8 + PartialConv2d at
+    # trunk entry. v8-only; surfaced loudly otherwise.
+    canvas_realness: bool = bool(args.canvas_realness or config.get("canvas_realness", False))
+    if canvas_realness and encoding != "v8":
+        raise ValueError(
+            f"--canvas-realness requires --encoding v8; got {encoding!r}"
+        )
+
     log.info(
         "encoding_resolved",
         encoding=encoding,
@@ -826,6 +949,9 @@ def pretrain() -> None:
         res_blocks=int(config.get("res_blocks", 12)),
         gpool_indices=gpool_indices,
         head_use_gpool=head_use_gpool,
+        pool_type=pool_type,
+        pool_attn_dropout=pool_attn_dropout,
+        canvas_realness=canvas_realness,
     )
 
     from hexo_rl.utils.device import best_device
@@ -847,11 +973,13 @@ def pretrain() -> None:
     if args.corpus_npz is not None:
         npz_path = Path(args.corpus_npz)
     elif encoding == "v8":
-        npz_path = Path("data/bootstrap_corpus_v8.npz")
+        suffix = "_canvas_realness" if canvas_realness else ""
+        npz_path = Path(f"data/bootstrap_corpus_v8{suffix}.npz")
     elif encoding == "v6w25":
         npz_path = Path("data/bootstrap_corpus_v6w25.npz")
     else:
         npz_path = Path(corpus_cfg.get("corpus_npz_path", "data/bootstrap_corpus.npz"))
+    global_crops_array: Optional[np.ndarray] = None
     if npz_path.exists():
         log.info("loading_corpus_from_npz", path=str(npz_path))
         data = np.load(npz_path, mmap_mode='r')
@@ -859,9 +987,26 @@ def pretrain() -> None:
         policies = data['policies']
         outcomes = data['outcomes']
         weights  = data['weights']
+        # §169 A3 — opt-in global-crop array. Present iff the NPZ was built
+        # with --with-global-crop. Required when pool_type='pma_global'.
+        if 'global_crops' in data.files:
+            global_crops_array = data['global_crops']
     else:
         log.warning("npz_not_found_falling_back_to_load_corpus", path=str(npz_path))
         states, policies, outcomes, weights = load_corpus(quality_scores, source_weights)
+
+    if pool_type == "pma_global" and global_crops_array is None:
+        raise RuntimeError(
+            f"pool_type='pma_global' requires a corpus NPZ with global_crops; "
+            f"none found in {npz_path}. Regenerate via "
+            f"`python scripts/export_corpus_npz.py --encoding v6w25 "
+            f"--with-global-crop --human-only --no-compress`."
+        )
+    if pool_type != "pma_global" and global_crops_array is not None:
+        # Don't waste IO / GPU memory; drop the unused array.
+        log.info("ignoring_global_crops_in_npz",
+                 reason="pool_type is not pma_global")
+        global_crops_array = None
 
     if len(outcomes) == 0:
         console.print("[red]No corpus data found. Run `make corpus.fetch` first.[/red]")
@@ -875,7 +1020,9 @@ def pretrain() -> None:
     )
     console.print(f"Dataset: {len(outcomes):,} positions")
 
-    dataset = AugmentedBootstrapDataset(states, policies, outcomes)
+    dataset = AugmentedBootstrapDataset(
+        states, policies, outcomes, global_crops=global_crops_array,
+    )
     sampler = torch.utils.data.WeightedRandomSampler(
         weights=torch.from_numpy(weights).double(),
         num_samples=len(dataset),
@@ -892,6 +1039,7 @@ def pretrain() -> None:
             augment=True,
             board_size=board_size_for_collate,
             encoding=encoding,
+            with_global_crop=(global_crops_array is not None),
         ),
     )
 
@@ -919,6 +1067,9 @@ def pretrain() -> None:
         encoding=encoding,
         gpool_indices=gpool_indices,
         head_use_gpool=head_use_gpool,
+        pool_type=pool_type,
+        pool_attn_dropout=pool_attn_dropout,
+        canvas_realness=canvas_realness,
     )
     use_compile = (
         config.get("torch_compile", True)
@@ -940,6 +1091,9 @@ def pretrain() -> None:
     # without re-deriving from CLI flags.
     config["gpool_indices"] = gpool_indices
     config["head_use_gpool"] = head_use_gpool
+    config["pool_type"] = pool_type
+    config["pool_attn_dropout"] = pool_attn_dropout
+    config["canvas_realness"] = canvas_realness
     if explicit_n_actions is not None:
         config["n_actions"] = explicit_n_actions
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)

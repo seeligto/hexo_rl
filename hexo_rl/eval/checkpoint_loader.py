@@ -84,21 +84,40 @@ def detect_encoding_label(ckpt_path: Path, state: dict) -> str:
 
     Pure-detection helper — does not load model. Useful for tests and the
     inference-method dispatcher when only the label is needed.
+
+    Detection priority for the 8-channel (v6/v6w25) case:
+    1. Filename substring 'v6w25' or '_w25'.
+    2. State-dict shape: policy_fc out_features = 626 ⇒ v6w25 (cluster
+       window 25×25 + 1 pass slot); = 362 ⇒ v6 (19×19 + 1). Also covers
+       the §169 pma path via cluster_pool.policy_mlp output dim.
     """
-    inp_w = state.get("trunk.input_conv.weight")
+    # §169 A4 — partial-conv wrapping shifts the weight key to
+    # `trunk.input_conv.conv.weight`. Try the wrapped path first.
+    inp_w = state.get("trunk.input_conv.conv.weight")
+    if inp_w is None:
+        inp_w = state.get("trunk.input_conv.weight")
     if inp_w is None:
         raise ValueError(
-            f"checkpoint {ckpt_path} has no trunk.input_conv.weight; "
+            f"checkpoint {ckpt_path} has no trunk.input_conv(.conv)?.weight; "
             "cannot detect encoding"
         )
     in_ch = int(inp_w.shape[1])
     if in_ch == 11:
         return "v8"
     if in_ch == 8:
-        # v6w25 disambiguated by filename only.
         name = ckpt_path.name.lower()
         if "v6w25" in name or "_w25" in name:
             return "v6w25"
+        # State-dict shape disambiguator (covers both min_max and pma paths).
+        n_actions = None
+        for k in ("policy_fc.weight", "cluster_pool.policy_mlp.2.weight"):
+            if k in state:
+                n_actions = int(state[k].shape[0])
+                break
+        if n_actions == 626:
+            return "v6w25"
+        if n_actions == 362:
+            return "v6"
         return "v6"
     raise ValueError(
         f"checkpoint {ckpt_path}: unsupported in_channels={in_ch} "
@@ -134,12 +153,17 @@ def load_model_with_encoding(
     # break under aliasing — they get the lighter strip-prefixes-only path.
     inp_w = state.get("trunk.input_conv.weight")
     if inp_w is None:
+        inp_w = state.get("trunk.input_conv.conv.weight")
+    if inp_w is None:
         inp_w = state.get("_orig_mod.trunk.input_conv.weight")
+    if inp_w is None:
+        inp_w = state.get("_orig_mod.trunk.input_conv.conv.weight")
     if inp_w is None:
         # Fall back: try after light strip — may surface a v8 checkpoint
         # under a wrapper prefix.
         light = _strip_compile_prefixes(state)
-        inp_w = light.get("trunk.input_conv.weight")
+        inp_w = light.get("trunk.input_conv.weight") \
+            or light.get("trunk.input_conv.conv.weight")
     if inp_w is not None and int(inp_w.shape[1]) == 11:
         state = _strip_compile_prefixes(state)
     else:
@@ -174,12 +198,25 @@ def _build_v6_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         if k.startswith("trunk.tower.") and len(k.split(".")) >= 4
     })
     res_blocks = max(block_indices) + 1 if block_indices else 12
+    # §169 A2 / A3 — detect pool type from state dict.
+    #   global_encoder.* + cluster_pool.global_gate ⇒ pma_global (A3).
+    #   cluster_pool.* without global branch ⇒ pma (A2).
+    #   Otherwise ⇒ min_max (A1, default).
+    has_global_encoder = any(k.startswith("global_encoder.") for k in state)
+    has_cluster_pool = any(k.startswith("cluster_pool.") for k in state)
+    if has_global_encoder:
+        pool_type = "pma_global"
+    elif has_cluster_pool:
+        pool_type = "pma"
+    else:
+        pool_type = "min_max"
     model = HexTacToeNet(
         board_size=spec.board_size,
         in_channels=in_channels,
         filters=filters,
         res_blocks=res_blocks,
         encoding="v6",
+        pool_type=pool_type,
     )
     # strict=False because v6 / v6w25 checkpoints may carry tower.* duplicates
     # left over from older save formats (see eval_pipeline._load_anchor_model).
@@ -188,7 +225,16 @@ def _build_v6_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
 
 
 def _build_v8_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
-    inp_w = state["trunk.input_conv.weight"]
+    # §169 A4 — under canvas_realness the trunk-entry conv is wrapped in a
+    # PartialConv2d, so the weight key shifts from `trunk.input_conv.weight`
+    # to `trunk.input_conv.conv.weight`. Detection is unambiguous because
+    # the regular Conv2d path never has a `.conv.weight` sub-key.
+    canvas_realness = "trunk.input_conv.conv.weight" in state
+    inp_w_key = (
+        "trunk.input_conv.conv.weight" if canvas_realness
+        else "trunk.input_conv.weight"
+    )
+    inp_w = state[inp_w_key]
     filters = int(inp_w.shape[0])
     in_channels = int(inp_w.shape[1])
     if in_channels != 11:
@@ -213,6 +259,7 @@ def _build_v8_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         encoding="v8",
         gpool_indices=gpool_indices if gpool_indices else None,
         head_use_gpool=head_use_gpool,
+        canvas_realness=canvas_realness,
     )
     model.load_state_dict(state, strict=True)
     return model

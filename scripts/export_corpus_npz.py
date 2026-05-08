@@ -63,6 +63,10 @@ from hexo_rl.bootstrap.dataset_v8 import (
     replay_game_to_triples_v8,
 )
 from hexo_rl.utils.constants import KEPT_PLANE_INDICES
+from hexo_rl.utils.global_crop import (
+    CANVAS_SIZE as GLOBAL_CANVAS_SIZE,
+    N_GLOBAL_PLANES,
+)
 
 BOT_GAMES_DIR = ROOT / "data" / "corpus" / "bot_games"
 RAW_HUMAN_DIR = ROOT / "data" / "corpus" / "raw_human"
@@ -206,13 +210,32 @@ def main() -> None:
              "(11-plane × 25×25 bbox, 625-action no pass; Path β per "
              "docs/designs/encoding_v8_contract.md).",
     )
+    parser.add_argument(
+        "--with-global-crop", action="store_true",
+        help="§169 A3 — also export a per-position (3, 32, 32) global summary "
+             "crop (cur stones / opp stones / canvas-realness mask). Required "
+             "for the K-cluster + PMA + global-token branch. Only valid under "
+             "--encoding v6w25.",
+    )
+    parser.add_argument(
+        "--canvas-realness", action="store_true",
+        help="§169 A4 — invert plane 8 polarity from off_window (1=outside) to "
+             "canvas_realness (1=inside). Only valid under --encoding v8. The "
+             "A4 retrain consumes this corpus paired with a partial-conv-padding "
+             "trunk-entry — see configs/ablation_169_a4.yaml.",
+    )
     args = parser.parse_args()
+    if args.with_global_crop and args.encoding != "v6w25":
+        parser.error("--with-global-crop is only valid under --encoding v6w25")
+    if args.canvas_realness and args.encoding != "v8":
+        parser.error("--canvas-realness is only valid under --encoding v8")
 
     encoding = args.encoding
     if args.out:
         out_path = Path(args.out)
     elif encoding == "v8":
-        out_path = ROOT / "data" / "bootstrap_corpus_v8.npz"
+        suffix = "_canvas_realness" if args.canvas_realness else ""
+        out_path = ROOT / "data" / f"bootstrap_corpus_v8{suffix}.npz"
     elif encoding == "v6w25":
         out_path = ROOT / "data" / "bootstrap_corpus_v6w25.npz"
     else:
@@ -308,6 +331,12 @@ def main() -> None:
         policies_buf = np.empty((n_sample, 362), dtype=np.float32)
     outcomes_buf = np.empty(n_sample, dtype=np.float32)
     weights_buf = np.empty(n_sample, dtype=np.float32)
+    global_crops_buf: np.ndarray | None = None
+    if args.with_global_crop:
+        global_crops_buf = np.empty(
+            (n_sample, N_GLOBAL_PLANES, GLOBAL_CANVAS_SIZE, GLOBAL_CANVAS_SIZE),
+            dtype=np.float16,
+        )
     out_idx = 0
     p1_wins = 0
     total_clipped_v8 = 0  # v8 telemetry only; unused under v6 / v6w25
@@ -315,11 +344,20 @@ def main() -> None:
     for gi, ply_indices in sorted(game_to_plies.items()):
         g = records[gi]
         pos_weight = g["weight"] / g["game_len"]
+        game_global_crops: np.ndarray | None = None
         if encoding == "v8":
-            s, _chain, p, o, n_clipped = replay_game_to_triples_v8(g["moves"], g["winner"])
+            s, _chain, p, o, n_clipped = replay_game_to_triples_v8(
+                g["moves"], g["winner"],
+                canvas_realness=args.canvas_realness,
+            )
             total_clipped_v8 += n_clipped
         elif encoding == "v6w25":
-            s, _chain, p, o = replay_game_to_triples_v6w25(g["moves"], g["winner"])
+            if args.with_global_crop:
+                s, _chain, p, o, game_global_crops = replay_game_to_triples_v6w25(
+                    g["moves"], g["winner"], with_global_crop=True,
+                )
+            else:
+                s, _chain, p, o = replay_game_to_triples_v6w25(g["moves"], g["winner"])
         else:
             s, _chain, p, o = replay_game_to_triples(g["moves"], g["winner"])
         if g["winner"] == 1:
@@ -335,12 +373,15 @@ def main() -> None:
                 policies_buf[out_idx] = p[pi]
                 outcomes_buf[out_idx] = o[pi]
                 weights_buf[out_idx] = pos_weight
+                if global_crops_buf is not None and game_global_crops is not None:
+                    global_crops_buf[out_idx] = game_global_crops[pi]
                 out_idx += 1
 
     # Trim to actual count (some plies may have been out of bounds after replay)
     states_out = states_buf[:out_idx]
     policies_out = policies_buf[:out_idx]
     outcomes_out = outcomes_buf[:out_idx]
+    global_crops_out = global_crops_buf[:out_idx] if global_crops_buf is not None else None
     # When subselecting (--max-positions < n_available) Elo bias is already baked
     # in via rng.choice(p=w) and uniform weights at train time are correct.
     # When keeping every position, rng.choice with replace=False degenerates to a
@@ -358,11 +399,20 @@ def main() -> None:
     print(f"\nSaving {out_idx:,} positions to {out_path}  (compressed={compress}) ...")
     save_kwargs = dict(states=states_out, policies=policies_out,
                        outcomes=outcomes_out, weights=weights_out)
+    if global_crops_out is not None:
+        save_kwargs["global_crops"] = global_crops_out
     if compress:
         np.savez_compressed(out_path, **save_kwargs)
     else:
         np.savez(out_path, **save_kwargs)
 
+    # SHA256 — useful for run-log reproducibility on §169 A3 corpus regen.
+    import hashlib
+    h = hashlib.sha256()
+    with open(out_path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    sha256_hex = h.hexdigest()
     size_mb = out_path.stat().st_size / 1024 / 1024
     if encoding == "v8":
         bytes_per_pos = N_PLANES_V8 * BOARD_SIZE_V8 * BOARD_SIZE_V8 * 2 + N_ACTIONS_V8 * 4 + 4
@@ -377,9 +427,12 @@ def main() -> None:
     print(f"Saved: {out_path}")
     print(f"  Encoding  : {encoding}")
     print(f"  File size : {size_mb:.0f} MB")
+    print(f"  SHA256    : {sha256_hex}")
     print(f"  Positions : {out_idx:,}")
     print(f"  States    : {states_out.shape}  dtype={states_out.dtype}")
     print(f"  Policies  : {policies_out.shape}")
+    if global_crops_out is not None:
+        print(f"  GlobalCrop: {global_crops_out.shape}  dtype={global_crops_out.dtype}")
     print(f"  Est. RAM  : ~{est_ram_gb:.1f} GB when pushed to replay buffer")
     if encoding == "v8":
         print(f"  Clipped   : {total_clipped_v8:,} stones outside 25×25 envelope "

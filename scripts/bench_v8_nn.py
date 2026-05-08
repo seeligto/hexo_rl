@@ -49,16 +49,25 @@ from hexo_rl.eval.v8_argmax_bot import load_v8_model_from_checkpoint
 from hexo_rl.utils.device import best_device
 
 
-def _make_v8_input(batch: int, device: torch.device) -> torch.Tensor:
-    """Synthesise a (batch, 11, 25, 25) v8 input with valid off_window mask."""
+def _make_v8_input(
+    batch: int, device: torch.device, canvas_realness: bool = False,
+) -> torch.Tensor:
+    """Synthesise a (batch, 11, 25, 25) v8 input with valid plane-8 mask.
+
+    Plane 8 polarity follows ``canvas_realness``: False (default) → 1.0
+    OUTSIDE dilated hex (off_window); True → 1.0 INSIDE (§169 A4).
+    """
     x = torch.zeros(batch, N_PLANES_V8, BOARD_SIZE_V8, BOARD_SIZE_V8, device=device)
     for q in range(BOARD_SIZE_V8):
         for r in range(BOARD_SIZE_V8):
             lq = q - HALF_V8
             lr = r - HALF_V8
             ls = -(lq + lr)
-            if max(abs(lq), abs(lr), abs(ls)) > LEGAL_MOVE_RADIUS_V8:
-                x[:, 8, q, r] = 1.0
+            inside = max(abs(lq), abs(lr), abs(ls)) <= LEGAL_MOVE_RADIUS_V8
+            if canvas_realness:
+                x[:, 8, q, r] = 1.0 if inside else 0.0
+            else:
+                x[:, 8, q, r] = 0.0 if inside else 1.0
     # A few stones inside the hex, broadcast scalars.
     x[:, 0, HALF_V8, HALF_V8] = 1.0
     x[:, 4, HALF_V8 + 1, HALF_V8] = 1.0
@@ -75,7 +84,9 @@ def _measure_latency(
     runs: int,
     warmup: int,
 ) -> dict:
-    x = _make_v8_input(batch, device)
+    x = _make_v8_input(
+        batch, device, canvas_realness=getattr(model, "canvas_realness", False),
+    )
     # Warmup.
     for _ in range(warmup):
         _ = model(x.float())
@@ -151,6 +162,7 @@ def main() -> int:
         "host": host,
         "checkpoint": str(ckpt),
         "encoding": "v8",
+        "canvas_realness": bool(getattr(model, "canvas_realness", False)),
         "filters": int(model.filters),
         "res_blocks": int(model.res_blocks),
         "gpool_indices": list(model.trunk.gpool_indices),

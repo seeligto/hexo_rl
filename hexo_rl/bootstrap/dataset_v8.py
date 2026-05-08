@@ -3,17 +3,28 @@ tensors for v8 pretrain.
 
 v8 encoding (Path β, locked at §165 + §166):
 - 25×25 fixed-max bbox-of-all-stones spatial extent
-- 11 planes (8 stone-history + off_window + 2 broadcast scalars)
+- 11 planes (8 stone-history + off_window/canvas_realness + 2 broadcast scalars)
 - R=8 perception (legal_move_radius=8 — bundles P2 hotfix-(c))
 - N_ACTIONS=625 (no pass slot)
 - K-aggregation REMOVED (single bbox per ply replaces 1-6 cluster windows)
+
+Plane 8 polarity is gated by ``canvas_realness`` (§169 A4):
+- ``canvas_realness=False`` (default, v8/B0-B4 wire format): plane 8 = 1.0
+  OUTSIDE dilated hex (off_window — KataGo's 1-mask convention is computed
+  by gpool via ``1 - off``).
+- ``canvas_realness=True`` (§169 A4): plane 8 = 1.0 INSIDE dilated hex
+  (Innamorati 2018 partial-conv-padding convention; gpool consumes the
+  plane directly without the inversion). The trunk entry routes the same
+  plane through a partial convolution that renormalises by valid-neighbour
+  count, addressing the bbox arm's hypothesis that v8's zero-padding
+  semantics conflate "off-canvas wall" with "interior emptiness".
 
 This module is a parallel implementation of `hexo_rl.bootstrap.dataset`;
 the v6 dataset module is unchanged. Routing happens in
 `hexo_rl.bootstrap.pretrain` based on `EncodingSpec.version`.
 
 Contract: `docs/designs/encoding_v8_contract.md` §2 (plane schema), §3
-(NPZ schema v8).
+(NPZ schema v8); §169 P4 sprint log entry for the canvas_realness arm.
 """
 from __future__ import annotations
 
@@ -48,9 +59,12 @@ HISTORY_LEN_V8: int = 4
 # learns to handle. v8 contract §2 plane 9: (MAX_MOVES − ply) / MAX_MOVES.
 MAX_MOVES_V8: int = 200
 
-# Plane 8 off_window mask is precomputed once per module load (it depends only
-# on bbox-window geometry, not stone positions or ply).
+# Plane 8 mask is precomputed once per polarity per module load (it depends
+# only on bbox-window geometry, not stone positions or ply). Two cached
+# arrays keep both polarities resident — switching has zero per-position
+# cost (just a different reference).
 _OFF_WINDOW_MASK: np.ndarray = None  # type: ignore[assignment]
+_CANVAS_REALNESS_MASK: np.ndarray = None  # type: ignore[assignment]
 
 
 def _build_off_window_mask() -> np.ndarray:
@@ -69,11 +83,34 @@ def _build_off_window_mask() -> np.ndarray:
     return mask
 
 
-def _get_off_window_mask() -> np.ndarray:
-    global _OFF_WINDOW_MASK
+def _build_canvas_realness_mask() -> np.ndarray:
+    """§169 A4 — inverted polarity: 1.0 INSIDE dilated hex, 0.0 outside.
+
+    Equals ``1.0 - _build_off_window_mask()``; cached separately to keep
+    the encode hot path branch-free.
+    """
+    return (1.0 - _build_off_window_mask()).astype(np.float16)
+
+
+def _get_plane8_mask(canvas_realness: bool = False) -> np.ndarray:
+    """Return the plane-8 mask for the requested polarity (cached).
+
+    ``canvas_realness=False`` → off_window (1 outside, v8 default).
+    ``canvas_realness=True``  → canvas_realness (1 inside, §169 A4).
+    """
+    global _OFF_WINDOW_MASK, _CANVAS_REALNESS_MASK
+    if canvas_realness:
+        if _CANVAS_REALNESS_MASK is None:
+            _CANVAS_REALNESS_MASK = _build_canvas_realness_mask()
+        return _CANVAS_REALNESS_MASK
     if _OFF_WINDOW_MASK is None:
         _OFF_WINDOW_MASK = _build_off_window_mask()
     return _OFF_WINDOW_MASK
+
+
+def _get_off_window_mask() -> np.ndarray:
+    """Backwards-compat alias — returns the off_window polarity."""
+    return _get_plane8_mask(canvas_realness=False)
 
 
 def _compute_bbox_centroid(
@@ -120,6 +157,7 @@ def encode_position_v8(
     history: Deque[Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]],
     ply: int,
     moves_remaining: int,
+    canvas_realness: bool = False,
 ) -> Tuple[np.ndarray, Tuple[int, int], int]:
     """Encode one position into an (11, 25, 25) v8 tensor.
 
@@ -131,6 +169,11 @@ def encode_position_v8(
             recent right). Up to `HISTORY_LEN_V8 - 1 = 3` entries used.
         ply: current ply index (0 = pre-first-move).
         moves_remaining: `Board.moves_remaining` for plane 9 normalization.
+        canvas_realness: §169 A4 polarity flag. ``False`` (default) → plane 8
+            is the off_window indicator (1.0 OUTSIDE dilated hex). ``True``
+            → plane 8 is canvas_realness (1.0 INSIDE dilated hex), the §169
+            A4 arm's inverted polarity that pairs with partial-conv-padding
+            at trunk entry.
 
     Returns:
         `(tensor, (cq, cr), n_clipped)`:
@@ -165,8 +208,8 @@ def encode_position_v8(
         n_clipped += _scatter_stones_to_plane(tensor[depth], h_cur, cq, cr)
         n_clipped += _scatter_stones_to_plane(tensor[4 + depth], h_opp, cq, cr)
 
-    # Plane 8: off_window indicator (1.0 outside dilated hex, 0.0 inside)
-    np.copyto(tensor[8], _get_off_window_mask())
+    # Plane 8: polarity-gated mask (off_window=1-outside or canvas_realness=1-inside).
+    np.copyto(tensor[8], _get_plane8_mask(canvas_realness=canvas_realness))
 
     # Plane 9: moves_remaining_bcast (normalized scalar broadcast)
     # Contract §2 plane 9: (MAX_MOVES − ply) / MAX_MOVES, clamped to [0, 1].
@@ -182,12 +225,15 @@ def encode_position_v8(
 def replay_game_to_triples_v8(
     moves: List[Tuple[int, int]],
     winner: int,
+    canvas_realness: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
     """Replay a move sequence and return v8-encoded training arrays.
 
     Args:
         moves:  Ordered (q, r) sequence for the complete game.
         winner: +1 if player 1 won, -1 if player 2 won.
+        canvas_realness: §169 A4 polarity flag for plane 8 (see
+            ``encode_position_v8``).
 
     Returns:
         states:       float16 array of shape (T, 11, 25, 25)
@@ -227,7 +273,8 @@ def replay_game_to_triples_v8(
         moves_rem = board.moves_remaining
 
         tensor, (cq, cr), n_clipped = encode_position_v8(
-            board_stones, cur_player, history, ply, moves_rem
+            board_stones, cur_player, history, ply, moves_rem,
+            canvas_realness=canvas_realness,
         )
         total_clipped += n_clipped
 

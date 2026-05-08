@@ -95,7 +95,8 @@ class V8ArgmaxBot(BotProtocol):
         moves_rem: int = int(rust_board.moves_remaining)
 
         tensor, (cq, cr), _n_clipped = encode_position_v8(
-            board_stones, cur_player, self._history, ply, moves_rem
+            board_stones, cur_player, self._history, ply, moves_rem,
+            canvas_realness=getattr(self.model, "canvas_realness", False),
         )
         x = torch.from_numpy(tensor).unsqueeze(0).float().to(self.device)
         log_policy, _value, _v_logit = self.model(x)
@@ -149,8 +150,16 @@ def load_v8_model_from_checkpoint(
     """
     state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
 
-    # Infer trunk dims from input_conv weight: (filters, in_channels, 3, 3).
-    inp_w = state["trunk.input_conv.weight"]
+    # §169 A4 — under canvas_realness the trunk-entry conv is wrapped in
+    # PartialConv2d, so the weight key shifts to
+    # `trunk.input_conv.conv.weight`. Detection mirrors the canonical
+    # loader in `eval.checkpoint_loader._build_v8_model`.
+    canvas_realness = "trunk.input_conv.conv.weight" in state
+    inp_w_key = (
+        "trunk.input_conv.conv.weight" if canvas_realness
+        else "trunk.input_conv.weight"
+    )
+    inp_w = state[inp_w_key]
     filters = int(inp_w.shape[0])
     in_channels = int(inp_w.shape[1])
     if in_channels != 11:
@@ -180,6 +189,7 @@ def load_v8_model_from_checkpoint(
         encoding="v8",
         gpool_indices=gpool_indices if gpool_indices else None,
         head_use_gpool=head_use_gpool,
+        canvas_realness=canvas_realness,
     )
     model.load_state_dict(state)
     model.eval().to(device)
