@@ -9584,4 +9584,92 @@ the A3 P3 tip:
   A2/A3).
 - [x] Sprint log Results table back-filled, verdict line written.
 
+## §169a — A4 spatial-pathway-deadness probe (§170-pre) — 2026-05-08
+
+**Question.** §169 P4 closed with A4 at 0% argmax / 0% MCTS-128 SealBot
+WR despite training loss 3.47 (below v6w25 anchor 3.57). Operator-side
+hypothesis: A4 collapsed onto the broadcast-scalar planes (plane 9
+moves_remaining_bcast, plane 10 ply_parity_bcast) and abandoned the
+spatial stone-history pathway (planes 0-7); human-corpus moves are
+predictable enough from scalars + opening stylization that loss falls,
+play falls because no spatial reasoning. If true, the bbox direction
+is structurally falsified at the architecture level and §170 commits
+to the K-cluster line. If false, A4's failure is a distribution-shift
+issue (corpus-conditional spatial features go OOD on SealBot).
+
+Cheap (~30-min budget, ~10-s actual) two-arm KL probe before any §170
+investment.
+
+**Probe.** `scripts/probe_a4_spatial_deadness.py`, three sets:
+
+- **Set S** (n=200): random self-play replays to ply 20, encoded with
+  canvas_realness=True. By construction all positions share planes
+  8/9/10 (canvas mask, moves_remaining=180/200, parity=0); only the
+  spatial stone configuration varies.
+- **Set R** (n=200): real positions sampled from
+  `data/bootstrap_corpus_v8.npz` with plane 8 inverted off→canvas.
+  Both scalars and spatial vary.
+- **Set F** (n=8): Set S[0] replicated 8× — determinism sanity.
+
+Pre-registered thresholds (locked before run):
+
+- E1 PASS (spatial dead): mean(KL_S) < 0.10 nats AND KL_S/KL_R < 0.05
+- E2 PASS (spatial alive): mean(KL_S) > 1.00 nats OR KL_S/KL_R > 0.30
+- Otherwise: ambiguous (lean E1).
+
+**Results.**
+
+| Set | mean KL (nats) | median | p90 | argmax-distinct |
+|-----|----|----|----|----|
+| S (spatial-only) | **1.533** | 1.470 | 2.182 | 133 / 200 |
+| R (full corpus) | 5.626 | 5.643 | 7.328 | 107 / 200 |
+| F (sanity)      | 0.000 | 0.000 | 0.000 | 1 |
+
+Ratio KL_S / KL_R = **0.273**.
+
+**Verdict: E2 PASS — spatial pathway alive.** KL_S = 1.533 > 1.0 fires
+the absolute-KL trigger; argmax visits 133 distinct cells out of 200
+random plates (broad spread, top-1 cell only 2% share). The user's
+primary "spatial-dead" hypothesis is **falsified** at the architecture
+level. PartialConv2d trunk entry + canvas_realness mask propagate the
+spatial signal correctly through trunk + KataGo policy head.
+
+**Implications for §170 scoping.**
+
+1. The §169 close-out implication "encoding decides; the pool variant
+   tweaks; A1 remains the canonical path" is *unchanged on the eval
+   level* (A4 is still 0% SealBot WR); but the *mechanism* statement
+   shifts from "spatial path dead" to "spatial path alive but
+   corpus-conditional, scalar-dominated under realistic position
+   diversity." KL_S / KL_R = 0.27 means scalar variation accounts for
+   the majority of A4's policy variance under full position diversity.
+2. Live alternatives this probe surfaces:
+   - **Distribution-shift fine-tune.** Augment corpus with adversarial
+     SealBot-style positions and retrain A4. Cheap test of the
+     corpus-conditional hypothesis before pivoting.
+   - **Cross-encoding eval gap audit.** §168 v7full radius curve
+     (6.5% → 12.5% → 15%) already showed perception-radius matters;
+     match A4 against A1 under MCTS at matched perception radius
+     before declaring bbox dead.
+   - **Scalar-ablation follow-up** (~30 min): zero planes 0-7 in Set R,
+     re-run, measure policy delta. Fully discriminates "scalar-only" vs
+     "scalar-dominated."
+3. The §170 scope should NOT default to "abandon canvas_realness as
+   architecturally dead." Empirical bbox failure remains; mechanism
+   needs one more probe before scoping a fix.
+
+**Artefacts.**
+
+- `scripts/probe_a4_spatial_deadness.py` — discriminator probe with
+  pre-registered thresholds.
+- `reports/investigations/a4_spatial_deadness_20260508/probe.json` —
+  full numeric output, fixture audit, exit_code.
+- `reports/investigations/a4_spatial_deadness_20260508/probe.log` —
+  stdout.
+- `reports/investigations/a4_spatial_deadness_20260508/VERDICT.md` —
+  reviewer-friendly write-up.
+
+Wall time: ~10 s on laptop RTX 4060 Max-Q, ~30 min total including
+fixture audit + threshold pre-registration + report. Five hours of
+compute saved on a wrong §170 scope.
 
