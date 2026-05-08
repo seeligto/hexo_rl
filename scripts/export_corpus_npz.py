@@ -217,15 +217,25 @@ def main() -> None:
              "for the K-cluster + PMA + global-token branch. Only valid under "
              "--encoding v6w25.",
     )
+    parser.add_argument(
+        "--canvas-realness", action="store_true",
+        help="§169 A4 — invert plane 8 polarity from off_window (1=outside) to "
+             "canvas_realness (1=inside). Only valid under --encoding v8. The "
+             "A4 retrain consumes this corpus paired with a partial-conv-padding "
+             "trunk-entry — see configs/ablation_169_a4.yaml.",
+    )
     args = parser.parse_args()
     if args.with_global_crop and args.encoding != "v6w25":
         parser.error("--with-global-crop is only valid under --encoding v6w25")
+    if args.canvas_realness and args.encoding != "v8":
+        parser.error("--canvas-realness is only valid under --encoding v8")
 
     encoding = args.encoding
     if args.out:
         out_path = Path(args.out)
     elif encoding == "v8":
-        out_path = ROOT / "data" / "bootstrap_corpus_v8.npz"
+        suffix = "_canvas_realness" if args.canvas_realness else ""
+        out_path = ROOT / "data" / f"bootstrap_corpus_v8{suffix}.npz"
     elif encoding == "v6w25":
         out_path = ROOT / "data" / "bootstrap_corpus_v6w25.npz"
     else:
@@ -336,7 +346,10 @@ def main() -> None:
         pos_weight = g["weight"] / g["game_len"]
         game_global_crops: np.ndarray | None = None
         if encoding == "v8":
-            s, _chain, p, o, n_clipped = replay_game_to_triples_v8(g["moves"], g["winner"])
+            s, _chain, p, o, n_clipped = replay_game_to_triples_v8(
+                g["moves"], g["winner"],
+                canvas_realness=args.canvas_realness,
+            )
             total_clipped_v8 += n_clipped
         elif encoding == "v6w25":
             if args.with_global_crop:

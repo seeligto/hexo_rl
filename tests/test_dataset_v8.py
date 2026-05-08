@@ -14,8 +14,10 @@ from hexo_rl.bootstrap.dataset_v8 import (
     MAX_MOVES_V8,
     N_ACTIONS_V8,
     N_PLANES_V8,
+    _build_canvas_realness_mask,
     _build_off_window_mask,
     _compute_bbox_centroid,
+    _get_plane8_mask,
     encode_position_v8,
     replay_game_to_triples_v8,
 )
@@ -432,6 +434,69 @@ def test_v8_off_window_mask_includes_radius_8_inside() -> None:
                 f"window-local ({wq}, {wr}) at axis {(dq, dr)} radius 9 "
                 f"should be OUTSIDE the dilated hex"
             )
+
+
+def test_canvas_realness_mask_is_inverted_off_window() -> None:
+    """§169 A4 — canvas_realness polarity is exactly 1 - off_window."""
+    off = _build_off_window_mask()
+    realness = _build_canvas_realness_mask()
+    np.testing.assert_array_equal(realness, (1.0 - off).astype(np.float16))
+
+
+def test_canvas_realness_mask_origin_inside_corners_outside() -> None:
+    """§169 A4 — origin should read 1 (inside canvas), corners 0 (outside)."""
+    realness = _build_canvas_realness_mask()
+    assert realness[HALF_V8, HALF_V8] == 1.0
+    for wq, wr in [(0, 0), (0, 24), (24, 0), (24, 24)]:
+        assert realness[wq, wr] == 0.0, (
+            f"corner ({wq},{wr}) must be 0 under canvas_realness"
+        )
+
+
+def test_get_plane8_mask_polarity_dispatch() -> None:
+    """``_get_plane8_mask`` returns the requested polarity (cached)."""
+    off = _get_plane8_mask(canvas_realness=False)
+    realness = _get_plane8_mask(canvas_realness=True)
+    np.testing.assert_array_equal(off, _build_off_window_mask())
+    np.testing.assert_array_equal(realness, _build_canvas_realness_mask())
+    # Caching: second call returns identical array reference.
+    assert _get_plane8_mask(canvas_realness=False) is off
+    assert _get_plane8_mask(canvas_realness=True) is realness
+
+
+def test_encode_position_v8_canvas_realness_inverts_plane_8() -> None:
+    """§169 A4 — canvas_realness=True flips plane 8 polarity (1=inside)."""
+    args: dict = dict(
+        board_stones=[(0, 0, 1)],
+        cur_player=1,
+        history=deque(),
+        ply=1,
+        moves_remaining=2,
+    )
+    tensor_off, _, _ = encode_position_v8(canvas_realness=False, **args)
+    tensor_real, _, _ = encode_position_v8(canvas_realness=True, **args)
+    # Plane 8 differs — exactly inverted.
+    np.testing.assert_array_equal(
+        tensor_real[8], (1.0 - tensor_off[8]).astype(np.float16),
+    )
+    # All other planes unchanged.
+    for p in [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]:
+        np.testing.assert_array_equal(tensor_real[p], tensor_off[p])
+    # Spot check: origin is inside canvas (realness=1, off=0).
+    assert tensor_real[8, HALF_V8, HALF_V8] == 1.0
+    assert tensor_off[8, HALF_V8, HALF_V8] == 0.0
+
+
+def test_replay_canvas_realness_inverts_plane_8_across_plies() -> None:
+    """§169 A4 — replay with canvas_realness=True flips plane 8 at every ply."""
+    moves = [(0, 0), (1, 0), (0, 1)]
+    states_off, *_ = replay_game_to_triples_v8(moves, 1, canvas_realness=False)
+    states_real, *_ = replay_game_to_triples_v8(moves, 1, canvas_realness=True)
+    assert states_off.shape == states_real.shape
+    for t in range(states_off.shape[0]):
+        np.testing.assert_array_equal(
+            states_real[t, 8], (1.0 - states_off[t, 8]).astype(np.float16),
+        )
 
 
 def test_replay_plane_10_alternates_with_ply() -> None:
