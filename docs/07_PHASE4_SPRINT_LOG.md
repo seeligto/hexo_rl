@@ -9832,3 +9832,166 @@ Wall time: 617s (MCTS-32) + 776s (MCTS-64) parallel on laptop, total wall ≈ 77
 
 **Commit:** `eval(a3): MCTS-N curve on existing checkpoint` (1 commit, this §).
 
+## §170 P3 — A1 + gpool-bias retrain — ENGINEERING COMPLETE — 2026-05-08
+
+**Branch:** `encoding/gpool_bias_a1` (off `ec6e30b`, post-§169 A4 close-out + §169a + §170 P0/P1).
+**Status:** 4 commits landed; checkpoint + eval pending operator retrain on 5080 vast.ai.
+
+### Hypothesis
+
+Keep A1's load-bearing min/max value semantics BYTE-EXACT. Add KataGo-style
+**additive K-invariant gpool-bias side-branch** to value+policy heads (gate=0
+init → byte-exact A1 at construction; only as gradient grows the gate does
+the global summary earn weight). Predicted: argmax +2-4 pp, MCTS +3-6 pp
+over A1. Mechanism: A3 P3 confirmed canvas-level summary statistics lift
+argmax (4.5%→7.5%); §170 P1 confirmed MCTS collapse came from PMA replacing
+min-pool VALUE semantics. Gpool-bias preserves min-pool by construction —
+addition only — and adds the global signal that A1 lacks.
+
+### Architecture
+
+A1 v6w25 trunk + min/max pool BYTE-EXACT untouched. New side-branch
+(`hexo_rl/model/gpool_bias.py:GpoolBiasBranch`):
+
+  - reuses `GlobalTokenEncoder` verbatim (3 → 64 conv ×2 → KataGo gpool →
+    Linear → d=128 token; same canvas-mask plumbing as §169 A3)
+  - `value_proj: Linear(filters → 256)` projects token to value-head bias
+  - `policy_proj: Linear(filters → 626)` projects to per-cluster policy bias
+  - `gate: Parameter(tensor([0.0]))` learned scalar; init **0.0** → branch
+    contributes nothing at construction; gate=0 byte-exact A1 (enforced by
+    unit test `test_gate_zero_byte_exact_a1` against `bootstrap_model_v6w25.pt`)
+
+Bias injection sites (preserve A1 semantics):
+
+  - **value head**: `value_bias` added to `F.relu(value_fc1(...))` hidden
+    activation between `value_fc1` and `value_fc2`. K-invariant.
+  - **policy head**: `policy_bias` added to per-cluster `policy_fc` raw
+    logits BEFORE `log_softmax`. Same bias broadcast to every cluster
+    window — bot-side scatter-max-on-prob then operates on
+    `softmax(logits + bias)` per cluster, equivalent to adding the same
+    bias to every cluster.
+
+`HexTacToeNet` cross-product validation: `gpool_bias_active=True` requires
+`encoding ∈ ('v6', 'v6w25')` AND `pool_type='min_max'` AND not
+`canvas_realness` AND no `gpool_indices`. 4 distinct ValueErrors on
+misconfig.
+
+### Commits (4 on `encoding/gpool_bias_a1`)
+
+1. **`cb61a78 feat(model): GpoolBias side-branch + gate scalar (gate=0
+   byte-exact A1)`** — `hexo_rl/model/gpool_bias.py` (new, 96 LoC) +
+   `HexTacToeNet.gpool_bias_active` flag + forward/aggregated_forward_K
+   bias injection + `gpool_bias_gate_value()` accessor +
+   `checkpoint_loader._build_v6_model` auto-detect via state-dict keys.
+   7 tests: byte-exact A1 parity (loads real `bootstrap_model_v6w25.pt`,
+   `torch.equal` on log_policy/value/v_logit), zeroed-projection parity,
+   grad reach, K-invariance, state-dict round-trip, aggregated_forward_K
+   bias applied, 4 ValueError cases.
+
+2. **`641408b feat(dataset,pretrain): v6w25 corpus + 32x32 global crop
+   column for gpool-bias path`** — pretrain.py: `--gpool-bias-active` CLI
+   flag, cross-product validation (rejects v8 / pma / canvas_realness /
+   gpool_indices at parse time), corpus gate widened to accept
+   `pool_type='min_max' + gpool_bias_active=True` consumer of `global_crops`,
+   model construction passes `gpool_bias_active`, checkpoint config persists
+   it, train-step logging surfaces `gpool_bias_gate` parallel to
+   `pool_global_gate`, `validate()` smoke-forwards with zero global crop
+   then skips play-100 (same pattern as pma_global). NO changes to
+   `dataset_v6w25.py` — `with_global_crop=True` path from §169 A3 reused
+   verbatim. Corpus reused: `data/bootstrap_corpus_v6w25_with_global.npz`
+   sha256 `e2876ae5639958dac3758274b7137faeaff91713fe50df6da04ea43dfd896793`.
+   1 integration test: tiny synthetic corpus → dataset → collate (5-tuple)
+   → model.forward(global_crop=...) → backward, all params reach finite
+   grads, gate=0.0 at construction.
+
+3. **`b0f0259 feat(retrain): A1 + gpool-bias retrain config + script`** —
+   `configs/ablation_170_gpool_bias.yaml` (recipe + hard-stop /
+   soft-warn rules) + `scripts/pretrain_gpool_bias.sh` (executable). Same
+   recipe as v6w25 anchor (§168 Gate 5) + A3: 30 ep cosine, peak 2e-3,
+   eta_min 5e-5, batch 256. Only delta vs A1: `gpool_bias_active=true`.
+   Hard stops: final_loss > 5.36, NaN-skip > 30%, forward_parity_required.
+   Soft warns: gate_stalled_below 0.05 (null result), argmax_wr < 0.12
+   (failed), argmax_wr > 0.20 (BREAKTHROUGH — surface for §171 sustained).
+
+4. **`898a1d3 eval(a1-gpool-bias): argmax + matched MCTS evaluation
+   plumbing`** — `V6ArgmaxBot` + `KClusterMCTSBot` thread `global_crop`
+   when `model.gpool_bias_active=True` (auto-detect off model attribute;
+   no new `pool_type` value). `KClusterMCTSBot._forward_K(global_crop=)`
+   broadcasts (1, 3, 32, 32) to (K, ...) per leaf. `bench_v6w25_nn.py`
+   adds gpool_bias to its global_crop_template gate; markdown `pool`
+   column reads `min_max+gpool_bias` to distinguish A1 vs A1+gpool-bias.
+   `scripts/eval_gpool_bias.sh` (executable; mirrors A3 eval template
+   minus PMA-collapse smoke — gpool-bias has no collapse mode by
+   construction). 5 plumbing tests: V6ArgmaxBot threads global_crop;
+   KClusterMCTSBot threads global_crop; `_forward_K(global_crop=)` accepts
+   (3, 32, 32) and (1, 3, 32, 32) shapes; min_max without gpool_bias
+   stays canonical (no global_crop); bench `_bench_one(global_crop=)`
+   returns valid timing.
+
+### Test posture
+
+- `make test`: **1164 passed / 8 skipped / 2 deselected** (1159 pre-§170 P3
+  + 5 plumbing). **No regressions.**
+- 13 new §170 P3 tests across `test_gpool_bias.py` (7), `test_pretrain_
+  gpool_bias.py` (1), `test_gpool_bias_eval_plumbing.py` (5). All green.
+
+### Hard surface conditions (gating retrain on 5080)
+
+- **Forward parity at gate=0**: GREEN. Unit test `test_gate_zero_byte_exact_a1`
+  loads `bootstrap_model_v6w25.pt`, copies into A1+gpool_bias arch,
+  `torch.equal` on outputs across 5-position fixture. Architecture invariant
+  the user mandated.
+- **Final loss > 5.36** (50% above A1 anchor 3.57): STOP, surface (post-train).
+- **NaN-skip rate > 30%** even with §167 patch: STOP (post-train).
+- **Gate scalar at end < 0.05**: branch never earned weight → null result;
+  flag in verdict but eval still proceeds.
+- **argmax WR < 12%**: gpool-bias didn't help; surface (post-eval).
+- **argmax WR > 20%**: BREAKTHROUGH; surface for §171 sustained-run scoping.
+
+### Bench parity vs A1 (laptop, pre-train measurement)
+
+Side-branch adds ~96 + 4096 + 4096 + 80,000 + 80,000 ≈ 168k params (encoder
+~4.5k + value_proj 32,896 + policy_proj 80,896). Latency overhead at b=1
+expected < 0.5 ms (small encoder, 2 small linears). Post-train bench will
+populate `reports/gpool_bias/bench.md`.
+
+### Post-retrain done-when (operator action on 5080)
+
+The engineering portion is complete; operator drives:
+
+1. `bash scripts/pretrain_gpool_bias.sh` on 5080 (~1h 33m wall expected,
+   matches A1 anchor + A3). Captures `reports/gpool_bias/pretrain.log`
+   with per-step `gpool_bias_gate` trajectory.
+2. `bash scripts/eval_gpool_bias.sh` (default MCTS_N=64) — argmax @ r=8
+   n=200 + MCTS-64 n=200 + bench + skipped threat + combined eval.json.
+3. Pull artefacts to laptop via rsync-vast skill.
+4. Back-fill the post-train Results table below, append verdict line.
+
+### Results (back-fill post-retrain — TBD)
+
+| metric                          | A1+gpool-bias | A1 anchor (v6w25, §168) | hard-stop |
+|---------------------------------|---------------|--------------------------|-----------|
+| corpus sha256                   | `e2876ae5…` (reused from §169 A3) | n/a                  | n/a       |
+| final epoch-30 loss             | _TBD_         | 3.57                     | 5.36      |
+| NaN-skip rate                   | _TBD_         | 0%                       | 30%       |
+| `gpool_bias_gate` init / mid / final | 0.000 / _TBD_ / _TBD_ | n/a            | < 0.05 ⇒ null |
+| argmax @ r=8 n=200 vs SealBot   | _TBD_         | 14.5% [10.3%, 20.0%]    | < 12% ⇒ failed; > 20% ⇒ surface §171 |
+| MCTS-64 n=200 vs SealBot        | _TBD_         | n/a (§169 P1 sanity 25%) | n/a       |
+| threat probe C1/C2/C3           | SKIPPED (no v6w25 fixture; §170 follow-up) | n/a    | n/a       |
+| params (M)                      | A1 + ~0.17 M  | 5.29                     | n/a       |
+| latency b=1 / b=64 (5080, ms)   | _TBD_         | 2.64 / 10.41             | 3.50 (b=1 gate) |
+
+### Surface protocol after retrain
+
+- If gate stays at ~0 at epoch 30 (final < 0.05): A1 already captured the
+  global signal through SE attention; gpool-bias is a null result.
+  Continue eval but flag in verdict.
+- If gate climbs significantly (say > 0.3) AND argmax > 20%: surface as
+  **§171 sustained-run candidate** — recommend full self-play retrain.
+- If gate climbs but argmax < 14.5% (within A1 CI): the global branch
+  earned weight but didn't improve eval — surface as a learnable feature
+  the trunk can absorb, no architectural lift.
+- If parity test fails on the post-train checkpoint at gate=0 (after
+  zeroing the gate via `model.gpool_bias_branch.gate.fill_(0)`): something
+  in the training broke the byte-exact contract; STOP, audit.
+
