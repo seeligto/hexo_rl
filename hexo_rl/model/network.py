@@ -41,6 +41,7 @@ from hexo_rl.model.gpool import (
     compute_v8_mask,
 )
 from hexo_rl.model.global_token import GlobalTokenEncoder
+from hexo_rl.model.gpool_bias import GpoolBiasBranch
 from hexo_rl.model.partial_conv import PartialConv2d
 from hexo_rl.model.pooling import (
     SUPPORTED_POOL_TYPES,
@@ -323,6 +324,7 @@ class HexTacToeNet(nn.Module):
         pool_type: str = "min_max",
         pool_attn_dropout: float = 0.1,
         canvas_realness: bool = False,
+        gpool_bias_active: bool = False,
     ) -> None:
         super().__init__()
         if encoding not in ("v6", "v6w25", "v8"):
@@ -352,6 +354,39 @@ class HexTacToeNet(nn.Module):
                 "The §169 A4 arm pairs the inverted plane-8 polarity with "
                 "PartialConv2d at trunk entry — both are v8/bbox-only."
             )
+        # §170 P3 — gpool-bias side-branch is A1-only (K-cluster + min/max).
+        # Additive K-invariant bias to value_fc1 hidden + policy_fc logits;
+        # gate=0 init means byte-exact A1 at construction. Reject the cross
+        # product with v8 / pma / canvas_realness / trunk gpool sites loudly
+        # so YAML typos fail at construction, not silently in training.
+        if gpool_bias_active:
+            if canvas_realness:
+                raise ValueError(
+                    "gpool_bias_active=True is incompatible with "
+                    "canvas_realness=True (canvas_realness is v8-only and "
+                    "gpool_bias is K-cluster-only)."
+                )
+            if gpool_indices:
+                raise ValueError(
+                    "gpool_bias_active=True is incompatible with non-empty "
+                    "gpool_indices. Trunk gpool sites are a different "
+                    "intervention (in-trunk feature mixing); the gpool-bias "
+                    "branch is the additive head-level analog."
+                )
+            if encoding == "v8":
+                raise ValueError(
+                    "gpool_bias_active=True is K-cluster-only (additive over "
+                    "the K-cluster heads). v8 has a single bbox window and no "
+                    "K dim — drop gpool_bias_active under encoding='v8'."
+                )
+            if pool_type != "min_max":
+                raise ValueError(
+                    f"gpool_bias_active=True requires pool_type='min_max'; "
+                    f"got {pool_type!r}. The pma / pma_global pools already "
+                    "carry a global-token branch (PMAGlobalPool); the "
+                    "gpool-bias side-branch is the A1-only additive analog."
+                )
+        self.gpool_bias_active: bool = bool(gpool_bias_active)
         self.canvas_realness: bool = bool(canvas_realness)
         self.pool_type: str = pool_type
         # v6w25 = v6 wire format (8 planes + pass slot) at 25×25 cluster
@@ -523,10 +558,33 @@ class HexTacToeNet(nn.Module):
         else:
             self.global_encoder = None
 
+        # §170 P3 — gpool-bias side-branch. Allocated only when explicitly
+        # requested AND the (validated) A1 invariants hold (encoding=v6/v6w25,
+        # pool_type=min_max, no canvas_realness, no trunk gpool sites). Gate
+        # init=0.0 makes forward() output byte-exact A1 at construction.
+        if self.gpool_bias_active:
+            self.gpool_bias_branch: Optional[GpoolBiasBranch] = GpoolBiasBranch(
+                filters=filters,
+                n_actions=self.n_actions,
+                value_hidden=256,
+            )
+        else:
+            self.gpool_bias_branch = None
+
     @property
     def tower(self) -> nn.Sequential:
         """Backward-compatible alias for the trunk tower."""
         return self.trunk.tower
+
+    def gpool_bias_gate_value(self) -> Optional[float]:
+        """Return the §170 P3 bias gate scalar, or None if branch inactive.
+
+        For training-loop logging (mirrors the gate convention on
+        ``PMAGlobalPool.gate_value()``).
+        """
+        if self.gpool_bias_branch is None:
+            return None
+        return self.gpool_bias_branch.gate_value()
 
     def forward(
         self,
@@ -609,19 +667,54 @@ class HexTacToeNet(nn.Module):
                 global_token=g_token,
             )
         else:
+            # §170 P3 — encode the global crop ONCE per forward when the
+            # bias branch is active. Same bias is broadcast to every cluster
+            # window; the bot-side scatter-max-on-prob still produces the
+            # canonical A1 output when gate=0 (additive 0).
+            value_bias: Optional[torch.Tensor] = None
+            policy_bias: Optional[torch.Tensor] = None
+            if self.gpool_bias_active:
+                if global_crop is None:
+                    raise ValueError(
+                        "gpool_bias_active=True requires global_crop=...; "
+                        "got None. Pass the (B, 3, 32, 32) global summary "
+                        "tensor through the dataloader / inference path."
+                    )
+                assert self.gpool_bias_branch is not None
+                v_bias_raw, p_bias_raw = self.gpool_bias_branch(global_crop)
+                # Broadcast (G_B, ...) bias to x's batch dim. G_B==1 expands;
+                # G_B==B uses as-is; mismatches raise loudly.
+                xb = x.size(0)
+                gb = v_bias_raw.size(0)
+                if gb == 1 and xb > 1:
+                    v_bias_raw = v_bias_raw.expand(xb, -1)
+                    p_bias_raw = p_bias_raw.expand(xb, -1)
+                elif gb != xb:
+                    raise ValueError(
+                        f"global_crop batch={gb} disagrees with x batch={xb}; "
+                        "expected 1 (broadcast) or matching."
+                    )
+                value_bias = v_bias_raw
+                policy_bias = p_bias_raw
+
             # Policy head — branch on encoding.
             if self.encoding == "v8":
                 log_policy = self.policy_head(out, mask, mask_sum_hw)
             else:
                 p = F.relu(self.policy_conv(out))
                 p = p.flatten(1)
-                log_policy = F.log_softmax(self.policy_fc(p), dim=1)
+                p_logits = self.policy_fc(p)                       # (B, A) raw
+                if policy_bias is not None:
+                    p_logits = p_logits + policy_bias.to(p_logits.dtype)
+                log_policy = F.log_softmax(p_logits, dim=1)
 
             # Value head — global avg + max pooling
             v_avg = out.mean(dim=(2, 3))           # (B, C)
             v_max = out.amax(dim=(2, 3))           # (B, C)
             v = torch.cat([v_avg, v_max], dim=1)   # (B, 2C)
             v = F.relu(self.value_fc1(v))
+            if value_bias is not None:
+                v = v + value_bias.to(v.dtype)
             v_logit = self.value_fc2(v)            # (B, 1) raw logit
             value = torch.tanh(v_logit)
 
@@ -721,12 +814,45 @@ class HexTacToeNet(nn.Module):
         # model so callers can switch pool_type without reaching into bot
         # internals.
         from hexo_rl.model.pooling import MinMaxPool
+
+        # §170 P3 — encode global crop ONCE for this single board, then
+        # broadcast the (1, ...) biases to every cluster window before the
+        # per-cluster log_softmax / value_fc2.
+        value_bias_K: Optional[torch.Tensor] = None
+        policy_bias_K: Optional[torch.Tensor] = None
+        if self.gpool_bias_active:
+            if global_crop is None:
+                raise ValueError(
+                    "aggregated_forward_K needs global_crop=... when "
+                    "gpool_bias_active=True. Pass the (3, 32, 32) crop "
+                    "computed by hexo_rl.utils.global_crop."
+                )
+            gc = global_crop
+            if gc.dim() == 3:
+                gc = gc.unsqueeze(0)                               # (1, 3, 32, 32)
+            if gc.size(0) != 1:
+                raise ValueError(
+                    f"aggregated_forward_K expects a single board's global "
+                    f"crop (batch=1); got batch={gc.size(0)}"
+                )
+            assert self.gpool_bias_branch is not None
+            v_bias_raw, p_bias_raw = self.gpool_bias_branch(gc)
+            # Broadcast (1, ...) → (K, ...) — same bias to every cluster.
+            value_bias_K = v_bias_raw.expand(out.size(0), -1)
+            policy_bias_K = p_bias_raw.expand(out.size(0), -1)
+
         per_p = F.relu(self.policy_conv(out)).flatten(1)
-        per_logp = F.log_softmax(self.policy_fc(per_p), dim=1)    # (K, A)
+        per_logits = self.policy_fc(per_p)                        # (K, A) raw
+        if policy_bias_K is not None:
+            per_logits = per_logits + policy_bias_K.to(per_logits.dtype)
+        per_logp = F.log_softmax(per_logits, dim=1)               # (K, A)
         v_avg = out.mean(dim=(2, 3))
         v_max = out.amax(dim=(2, 3))
         v_cat = torch.cat([v_avg, v_max], dim=1)
-        per_vlogit = self.value_fc2(F.relu(self.value_fc1(v_cat)))
+        v_hidden = F.relu(self.value_fc1(v_cat))                  # (K, 256)
+        if value_bias_K is not None:
+            v_hidden = v_hidden + value_bias_K.to(v_hidden.dtype)
+        per_vlogit = self.value_fc2(v_hidden)
         per_val = torch.tanh(per_vlogit)                          # (K, 1)
 
         pool = MinMaxPool()

@@ -210,6 +210,18 @@ def _build_v6_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         pool_type = "pma"
     else:
         pool_type = "min_max"
+    # §170 P3 — detect the gpool-bias side-branch via state-dict keys. Only
+    # valid in tandem with pool_type='min_max' (the constructor enforces
+    # this); presence of `gpool_bias_branch.*` keys is the unambiguous flag.
+    gpool_bias_active = any(
+        k.startswith("gpool_bias_branch.") for k in state
+    )
+    if gpool_bias_active and pool_type != "min_max":
+        raise ValueError(
+            "checkpoint has both gpool_bias_branch.* and "
+            f"cluster_pool.* keys (pool_type={pool_type!r}); the side-branch "
+            "is A1-only (pool_type='min_max'). Inspect the checkpoint."
+        )
     model = HexTacToeNet(
         board_size=spec.board_size,
         in_channels=in_channels,
@@ -217,6 +229,7 @@ def _build_v6_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         res_blocks=res_blocks,
         encoding="v6",
         pool_type=pool_type,
+        gpool_bias_active=gpool_bias_active,
     )
     # strict=False because v6 / v6w25 checkpoints may carry tower.* duplicates
     # left over from older save formats (see eval_pipeline._load_anchor_model).
