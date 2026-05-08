@@ -35,8 +35,32 @@ def _checkpoint_in_channels(path: Path) -> int | None:
         return None
 
 
+def _checkpoint_n_actions(path: Path) -> int | None:
+    """Return policy output size (n_actions). Discriminates v6 (362) from v6w25 (626) / v8 (625)."""
+    try:
+        import torch
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+        for key in ("model_state", "model_state_dict", "state_dict"):
+            if isinstance(payload, dict) and key in payload and isinstance(payload[key], dict):
+                payload = payload[key]
+                break
+        if not isinstance(payload, dict):
+            return None
+        if "policy_fc.weight" in payload:
+            return int(payload["policy_fc.weight"].shape[0])
+        return None
+    except Exception:
+        return None
+
+
+_V6_N_ACTIONS = 19 * 19 + 1  # 362 — v6 / 19×19 board with pass slot
+
 _all_ckpts = sorted(CKPT_DIR.glob("*.pt"), key=lambda p: p.stat().st_mtime, reverse=True) if CKPT_DIR.exists() else []
-AVAILABLE_CKPTS = [p for p in _all_ckpts if _checkpoint_in_channels(p) == _EXPECTED_IN_CHANNELS]
+AVAILABLE_CKPTS = [
+    p for p in _all_ckpts
+    if _checkpoint_in_channels(p) == _EXPECTED_IN_CHANNELS
+    and _checkpoint_n_actions(p) == _V6_N_ACTIONS
+]
 TEST_CKPT = str(AVAILABLE_CKPTS[0]) if AVAILABLE_CKPTS else None
 
 needs_checkpoint = pytest.mark.skipif(

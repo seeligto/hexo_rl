@@ -90,7 +90,7 @@ def test_v6_blocks_input_channels_under_v8() -> None:
 
 
 def test_v6_invalid_encoding_rejected() -> None:
-    with pytest.raises(ValueError, match="must be 'v6' or 'v8'"):
+    with pytest.raises(ValueError, match=r"must be 'v6'"):
         HexTacToeNet(encoding="v9")
 
 
