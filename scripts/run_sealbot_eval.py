@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
-"""Phase B Gate 4 — model SealBot WR (policy-argmax, v6 or v8).
+"""Encoding-aware SealBot eval — single entry point for any (checkpoint,
+inference_method) tuple.
 
-Per-arm / per-baseline script that plays N games between an inference
-checkpoint and SealBot, alternating sides. Reports WR + 95% CI (Wilson).
+The encoding (v6 / v6w25 / v8) is auto-detected from the checkpoint via
+`hexo_rl.eval.checkpoint_loader.load_model_with_encoding`. The inference
+method is operator-selected via `--inference`:
 
-Both v8 (Phase B variants) and v6 (e.g. v7full baseline) use policy-argmax —
-NO MCTS. Argmax-only is degenerate vs SealBot's minimax (Phase B observed
-~0% WR for v8, expect similar for v7full); the value here is **cross-encoding
-parity**: shows v8's 0% is the eval method, not the v8 architecture.
-
-`--encoding` selects the path:
-  - `v8` (default): `V8ArgmaxBot` + 11-plane × 25×25 bbox encoder.
-  - `v6`:           `V6ArgmaxBot` + 8-plane × 19×19 K-cluster window.
+  - argmax        — pure policy argmax, no MCTS (degenerate vs SealBot's
+                    minimax but cross-arm-comparable; the §167 baseline).
+  - mcts-N        — Python MCTS with N sims (e.g. mcts-128, mcts-256).
+                    For v6 uses Rust MCTSTree; v8 uses
+                    `hexo_rl/eval/v8_mcts_bot.py` (Python).
+  - fast          — alias for mcts-50.
 
 Usage:
-    python scripts/eval_v8_vs_sealbot.py \\
-        --checkpoint checkpoints/v8_variants/B1_v8full.pt --encoding v8 \\
-        --n-games 200 --time-limit 0.5 \\
-        --out reports/encoding_phase_b/B1_sealbot.json
+    python scripts/run_sealbot_eval.py \\
+        --checkpoint checkpoints/v8_variants/B1_v8full.pt \\
+        --inference mcts-128 \\
+        --n-games 200 \\
+        --output reports/eval/B1_mcts128_sealbot.json
 
-    python scripts/eval_v8_vs_sealbot.py \\
-        --checkpoint checkpoints/bootstrap_model_v7full.pt --encoding v6 \\
-        --n-games 200 --time-limit 0.5 \\
-        --out reports/encoding_phase_b/v7full_sealbot_argmax.json
+    python scripts/run_sealbot_eval.py \\
+        --checkpoint checkpoints/bootstrap_model_v7full.pt \\
+        --inference argmax \\
+        --n-games 200 \\
+        --output reports/eval/v7full_argmax_sealbot.json
 """
 from __future__ import annotations
 
@@ -43,13 +45,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from engine import Board
-from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
-from hexo_rl.bootstrap.dataset_v8 import LEGAL_MOVE_RADIUS_V8
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
+from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
 from hexo_rl.env.game_state import GameState
-from hexo_rl.eval.v6_argmax_bot import V6ArgmaxBot, load_v6_model_from_checkpoint
-from hexo_rl.eval.v8_argmax_bot import V8ArgmaxBot, load_v8_model_from_checkpoint
+from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
+from hexo_rl.eval.inference_methods import build_inference_method
 from hexo_rl.utils.device import best_device
+
+
+# Default legal-move radius per encoding label. v6 default 5 matches the
+# pre-§168 corpus; v8 / v6w25 use HTTT rule baseline 8.
+_DEFAULT_LEGAL_RADIUS = {"v6": 5, "v6w25": 8, "v8": 8}
 
 
 def wilson_ci(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -70,8 +76,8 @@ def play_game(
     model_side: int,
     eval_random_opening_plies: int,
     seed: int,
+    legal_move_radius: int,
     max_moves: int = 200,
-    legal_move_radius: int = LEGAL_MOVE_RADIUS_V8,
 ) -> tuple[int | None, int]:
     """Play one game; return (winner_side, ply_count). winner_side ∈ {1,-1,None}."""
     random.seed(seed)
@@ -99,29 +105,38 @@ def play_game(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", required=True,
-                        help="v8 inference checkpoint path (e.g. checkpoints/v8_variants/B1_v8full.pt)")
+    parser = argparse.ArgumentParser(
+        description="Encoding-aware SealBot eval — works for any "
+                    "(checkpoint, inference_method) tuple.",
+    )
+    parser.add_argument(
+        "--checkpoint", required=True,
+        help="Path to model checkpoint (.pt). Encoding auto-detected.",
+    )
+    parser.add_argument(
+        "--inference", default="argmax",
+        help="Inference method: 'argmax', 'mcts-N' (e.g. mcts-128), or 'fast'.",
+    )
     parser.add_argument("--n-games", type=int, default=200)
     parser.add_argument("--time-limit", type=float, default=0.5,
-                        help="SealBot think time per move (default 0.5)")
+                        help="SealBot think time per move (default 0.5).")
     parser.add_argument("--seed-base", type=int, default=42)
     parser.add_argument("--random-opening-plies", type=int, default=4,
-                        help="Plies of random play to seed each game's diversity")
+                        help="Plies of random play to seed each game's diversity.")
     parser.add_argument("--temperature", type=float, default=0.0,
-                        help="Model temperature (0 = argmax)")
-    parser.add_argument("--out", default=None,
-                        help="Output JSON path; default reports/encoding_phase_b/<arm>_sealbot.json")
+                        help="Model temperature: 0 = argmax / argmax visit count.")
+    parser.add_argument("--c-puct", type=float, default=1.5,
+                        help="MCTS PUCT exploration constant (only for mcts-N inference).")
+    parser.add_argument(
+        "--output", "--out", dest="output", default=None,
+        help="Output JSON path (default: reports/eval/<arm>_<inference>_sealbot.json).",
+    )
     parser.add_argument("--max-moves", type=int, default=200)
-    parser.add_argument("--encoding", choices=("v6", "v8"), default="v8",
-                        help="Model encoding: 'v8' (default; Phase B arms) or "
-                             "'v6' (HEXB 8-plane × 19×19, e.g. v7full baseline).")
-    parser.add_argument("--legal-radius", type=int, default=None,
-                        help="Override Board.set_legal_move_radius. Default: 5 for "
-                             "v6, 8 for v8 (LEGAL_MOVE_RADIUS_V8). Used for the "
-                             "§167 invariant tests where v7full / v6 model is "
-                             "evaluated at r=8 or r=10 to isolate the radius "
-                             "effect from the encoding effect.")
+    parser.add_argument(
+        "--legal-radius", type=int, default=None,
+        help="Override Board.set_legal_move_radius. Default: 5 for v6, 8 for "
+             "v6w25/v8. Used by §167 cross-radius invariant tests.",
+    )
     args = parser.parse_args()
 
     ckpt_path = Path(args.checkpoint).resolve()
@@ -129,32 +144,47 @@ def main() -> int:
         print(f"FATAL: checkpoint not found: {ckpt_path}", file=sys.stderr)
         return 1
 
-    arm = ckpt_path.stem.replace("_v8full", "")
+    device = best_device()
+    print(f"[eval] device={device}  loading checkpoint…", flush=True)
+    model, spec, encoding_label = load_model_with_encoding(ckpt_path, device)
+    print(
+        f"[eval] checkpoint={ckpt_path.name}  encoding={encoding_label} "
+        f"(spec.version={spec.version}, board={spec.board_size})  "
+        f"filters={model.filters} res_blocks={model.res_blocks} "
+        f"n_actions={model.n_actions}",
+        flush=True,
+    )
+
+    try:
+        model_bot = build_inference_method(
+            args.inference, model, device, encoding_label,
+            temperature=args.temperature, c_puct=args.c_puct,
+        )
+    except NotImplementedError as e:
+        print(f"FATAL: {e}", file=sys.stderr)
+        return 2
+
+    legal_radius = (
+        args.legal_radius
+        if args.legal_radius is not None
+        else _DEFAULT_LEGAL_RADIUS[encoding_label]
+    )
+
+    arm = ckpt_path.stem.replace("_v8full", "").replace("bootstrap_model_", "")
+    inference_tag = args.inference.replace("/", "-")
     out_path = (
-        Path(args.out)
-        if args.out
-        else REPO_ROOT / "reports" / "encoding_phase_b" / f"{arm}_sealbot.json"
+        Path(args.output)
+        if args.output
+        else REPO_ROOT / "reports" / "eval" / f"{arm}_{inference_tag}_sealbot.json"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    device = best_device()
-    print(f"[eval] arm={arm}  encoding={args.encoding}  device={device}  "
-          f"n_games={args.n_games}  time_limit={args.time_limit}  "
-          f"temp={args.temperature}", flush=True)
-
-    if args.encoding == "v8":
-        model = load_v8_model_from_checkpoint(str(ckpt_path), device)
-        model_bot: BotProtocol = V8ArgmaxBot(model, device, temperature=args.temperature)
-        default_legal_radius = LEGAL_MOVE_RADIUS_V8
-    else:
-        model = load_v6_model_from_checkpoint(str(ckpt_path), device)
-        model_bot = V6ArgmaxBot(model, device, temperature=args.temperature)
-        default_legal_radius = 5
-    legal_radius = (
-        args.legal_radius if args.legal_radius is not None else default_legal_radius
+    print(
+        f"[eval] arm={arm}  inference={args.inference}  legal_radius={legal_radius}  "
+        f"n_games={args.n_games}  time_limit={args.time_limit}  "
+        f"temp={args.temperature}",
+        flush=True,
     )
-    print(f"[eval] model loaded — encoding={args.encoding} filters={model.filters} "
-          f"res_blocks={model.res_blocks} n_actions={model.n_actions}", flush=True)
 
     seal_bot = SealBotBot(time_limit=args.time_limit)
 
@@ -172,8 +202,8 @@ def main() -> int:
             model_side=model_side,
             eval_random_opening_plies=args.random_opening_plies,
             seed=args.seed_base + i,
-            max_moves=args.max_moves,
             legal_move_radius=legal_radius,
+            max_moves=args.max_moves,
         )
         ply_counts.append(ply)
         if winner == model_side:
@@ -196,7 +226,8 @@ def main() -> int:
     out = {
         "arm": arm,
         "checkpoint": str(ckpt_path),
-        "encoding": args.encoding,
+        "encoding": encoding_label,
+        "inference": args.inference,
         "n_games": args.n_games,
         "wins": wins,
         "losses": losses,
@@ -206,20 +237,23 @@ def main() -> int:
         "ci_95_high": hi,
         "time_limit": args.time_limit,
         "temperature": args.temperature,
+        "c_puct": args.c_puct,
         "legal_radius": legal_radius,
         "random_opening_plies": args.random_opening_plies,
         "elapsed_sec": round(elapsed, 1),
         "mean_ply": float(np.mean(ply_counts)) if ply_counts else 0.0,
         "median_ply": float(np.median(ply_counts)) if ply_counts else 0.0,
         "timestamp_utc": datetime.now(UTC).isoformat(),
-        "method": "policy_argmax_no_mcts",
+        "method": args.inference,
     }
 
     with out_path.open("w") as f:
         json.dump(out, f, indent=2)
     print(f"\n[eval] DONE — wrote {out_path}", flush=True)
-    print(f"[eval] arm={arm}  WR={final_wr:.1%} [{lo:.1%}, {hi:.1%}]  "
-          f"({wins}/{args.n_games}, draws={draws}, mean_ply={out['mean_ply']:.1f})", flush=True)
+    print(f"[eval] arm={arm}  inference={args.inference}  "
+          f"WR={final_wr:.1%} [{lo:.1%}, {hi:.1%}]  "
+          f"({wins}/{args.n_games}, draws={draws}, mean_ply={out['mean_ply']:.1f})",
+          flush=True)
     return 0
 
 

@@ -257,6 +257,21 @@ impl PyBoard {
         }).collect()
     }
 
+    /// Return a deep clone of this board. Used by Python-side MCTS for v8
+    /// (Rust MCTSTree is v6-only — see hexo_rl/eval/v8_mcts_bot.py).
+    pub fn clone(&self) -> PyBoard {
+        PyBoard { inner: self.inner.clone() }
+    }
+
+    /// Python copy.copy() / copy.deepcopy() support.
+    pub fn __copy__(&self) -> PyBoard {
+        PyBoard { inner: self.inner.clone() }
+    }
+
+    pub fn __deepcopy__(&self, _memo: pyo3::Py<pyo3::PyAny>) -> PyBoard {
+        PyBoard { inner: self.inner.clone() }
+    }
+
     pub fn __repr__(&self) -> String {
         let mut s = format!(
             "Board(ply={}, player={}, moves_remaining={})\n",

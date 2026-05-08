@@ -1,0 +1,115 @@
+"""Inference-method dispatcher for the encoding-aware SealBot harness.
+
+Encoding × inference are independent axes:
+- Encoding (v6 / v6w25 / v8) is detected from the checkpoint by
+  `hexo_rl.eval.checkpoint_loader.load_model_with_encoding`.
+- Inference method (argmax / mcts-N / fast) is operator-selected via the
+  `--inference` CLI flag on `scripts/run_sealbot_eval.py`.
+
+`build_inference_method(name, model, device, encoding_label)` returns a
+`BotProtocol` ready for play. Adding a new method requires editing this
+single dispatcher; harness + tests stay untouched.
+"""
+from __future__ import annotations
+
+import re
+from typing import Tuple
+
+import torch
+
+from hexo_rl.bootstrap.bot_protocol import BotProtocol
+from hexo_rl.eval.v6_argmax_bot import V6ArgmaxBot
+from hexo_rl.eval.v8_argmax_bot import V8ArgmaxBot
+from hexo_rl.eval.v8_mcts_bot import V8MCTSBot
+from hexo_rl.model.network import HexTacToeNet
+
+
+# Aliases that map to a concrete name. Single source of truth for shorthand.
+_ALIASES = {
+    "fast": "mcts-50",
+    "fast-mode": "mcts-50",
+    "mcts": "mcts-128",
+}
+
+
+def _parse_method(name: str) -> Tuple[str, int]:
+    """Return (kind, n_sims). kind ∈ {'argmax', 'mcts'}.
+
+    'argmax' → ('argmax', 0).
+    'mcts-N' → ('mcts', N) for N >= 1.
+    Aliases are resolved before parsing.
+    """
+    name = _ALIASES.get(name, name)
+    if name == "argmax":
+        return "argmax", 0
+    m = re.fullmatch(r"mcts-(\d+)", name)
+    if m:
+        n = int(m.group(1))
+        if n < 1:
+            raise ValueError(f"mcts sims must be >= 1; got {n}")
+        return "mcts", n
+    raise ValueError(
+        f"unknown inference method {name!r}; expected 'argmax', "
+        "'mcts-N', or 'fast'"
+    )
+
+
+def list_methods() -> list[str]:
+    """Return canonical method names. Used by --help text."""
+    return ["argmax", "mcts-N (e.g. mcts-128)", "fast (= mcts-50)"]
+
+
+def build_inference_method(
+    name: str,
+    model: HexTacToeNet,
+    device: torch.device,
+    encoding_label: str,
+    *,
+    temperature: float = 0.0,
+    c_puct: float = 1.5,
+) -> BotProtocol:
+    """Build a BotProtocol for the (encoding, method) tuple.
+
+    encoding_label ∈ {'v6', 'v6w25', 'v8'} — distinct from
+    `EncodingSpec.version` (which is just a state-dict-compat marker).
+
+    Raises NotImplementedError for combinations that haven't been wired
+    yet (currently: v6w25 with any method, since v6w25 inference paths
+    are gated on §168 Gate 3 Rust unification).
+    """
+    kind, n_sims = _parse_method(name)
+
+    if encoding_label == "v8":
+        if kind == "argmax":
+            return V8ArgmaxBot(model, device, temperature=temperature)
+        return V8MCTSBot(
+            model, device, n_sims=n_sims, c_puct=c_puct, temperature=temperature
+        )
+
+    if encoding_label == "v6":
+        if kind == "argmax":
+            return V6ArgmaxBot(model, device, temperature=temperature)
+        # v6 MCTS uses the Rust MCTSTree — see hexo_rl/eval/evaluator.py
+        # ModelPlayer for the canonical wiring. We import it lazily to avoid
+        # paying the import cost when only argmax is in play.
+        from hexo_rl.eval.evaluator import ModelPlayer
+        return ModelPlayer(
+            model, {}, device, n_sims=n_sims, temperature=temperature
+        )
+
+    if encoding_label == "v6w25":
+        # v6w25 inference paths require §168 Gate 3 (Rust runtime
+        # parameterization of CLUSTER_THRESHOLD + cluster window size).
+        # Until that lands, only argmax-via-Python encoder is feasible.
+        if kind == "argmax":
+            # v6w25 argmax piggy-backs on V6ArgmaxBot but the encoder needs
+            # 25×25 cluster windows — wired in Gate 3+.
+            raise NotImplementedError(
+                "v6w25 argmax requires §168 Gate 3 Rust v6w25 encoder. "
+                "Run Gate 3 before evaluating v6w25 checkpoints."
+            )
+        raise NotImplementedError(
+            f"v6w25 + {name} not yet implemented (§168 Gate 3 dependency)"
+        )
+
+    raise ValueError(f"unknown encoding label {encoding_label!r}")
