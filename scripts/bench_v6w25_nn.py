@@ -98,22 +98,32 @@ def main() -> int:
 
     n_params = sum(p.numel() for p in model.parameters())
     pool_type = getattr(model, "pool_type", "min_max")
+    gpool_bias_active = bool(getattr(model, "gpool_bias_active", False))
+    # §170 P3 — surface the side-branch in the bench markdown so operators
+    # can compare A1_gpool_bias vs A1 without confusing them under the same
+    # pool_type='min_max' key.
+    pool_label = (
+        f"{pool_type}+gpool_bias" if gpool_bias_active else pool_type
+    )
     arm = args.arm_label or ckpt.stem
     host = socket.gethostname().split(".")[0]
     print(
         f"[bench-v6w25] arm={arm} host={host} encoding={label} "
-        f"pool_type={pool_type} board={board_size} ch={in_channels} "
+        f"pool_type={pool_label} board={board_size} ch={in_channels} "
         f"params={n_params/1e6:.2f}M"
     )
 
     batches = [int(s.strip()) for s in args.batches.split(",") if s.strip()]
     # §169 A3 — pma_global needs a (1, 3, 32, 32) global summary template.
+    # §170 P3 — gpool_bias_active also needs the same template (model
+    # raises ValueError without global_crop).
     # We build a representative non-zero crop (random stones in cur/opp,
     # mask=1 over the active region) once and broadcast per batch in
     # _bench_one. Latency invariant to the actual content; only shape
     # matters for forward-pass timing.
     global_crop_template: torch.Tensor | None = None
-    if pool_type == "pma_global":
+    needs_global_crop = pool_type == "pma_global" or gpool_bias_active
+    if needs_global_crop:
         from hexo_rl.utils.global_crop import (
             CANVAS_SIZE as _C,
             N_GLOBAL_PLANES as _N,
@@ -145,7 +155,7 @@ def main() -> int:
         b1 = next((r for r in rows if r["batch"] == 1), None)
         b64 = next((r for r in rows if r["batch"] == 64), None)
         line = (
-            f"| {arm} | {host} | {label} | {pool_type} | "
+            f"| {arm} | {host} | {label} | {pool_label} | "
             f"{n_params/1e6:.2f} | "
             f"{b1['median_ms']:.2f} | [{b1['iqr_low_ms']:.2f}, {b1['iqr_high_ms']:.2f}] | "
             f"{b64['median_ms']:.2f} | [{b64['iqr_low_ms']:.2f}, {b64['iqr_high_ms']:.2f}] |\n"

@@ -267,16 +267,33 @@ class KClusterMCTSBot(BotProtocol):
 
     @torch.no_grad()
     def _forward_K(
-        self, tensor_K: np.ndarray
+        self,
+        tensor_K: np.ndarray,
+        global_crop: Optional[torch.Tensor] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Single batched forward over K cluster windows.
 
         ``tensor_K`` shape: ``(K, C, S, S)`` where C is the model's
         ``in_channels`` (8 for v6/v6w25 wire format).
+
+        ``global_crop`` (optional, §170 P3): ``(3, 32, 32)`` or
+        ``(1, 3, 32, 32)`` global summary tensor. When provided, broadcast
+        to ``(K, 3, 32, 32)`` and threaded through ``self.model(x,
+        global_crop=...)`` for the gpool-bias side-branch (additive,
+        K-invariant — same bias added to every cluster's logits/value
+        hidden state).
+
         Returns ``(log_policy_K, values_K)`` as numpy.
         """
         x = torch.from_numpy(tensor_K).float().to(self.device)
-        log_policy, value, _v_logit = self.model(x)
+        fwd_kwargs: Dict = {}
+        if global_crop is not None:
+            gc = global_crop
+            if gc.dim() == 3:
+                gc = gc.unsqueeze(0)                                  # (1, 3, 32, 32)
+            gc = gc.expand(x.size(0), -1, -1, -1).contiguous()        # (K, 3, 32, 32)
+            fwd_kwargs["global_crop"] = gc
+        log_policy, value, _v_logit = self.model(x, **fwd_kwargs)
         return (
             log_policy.cpu().numpy(),
             value.cpu().numpy().reshape(-1),
@@ -337,7 +354,14 @@ class KClusterMCTSBot(BotProtocol):
                 view_size,
             )
         else:
-            log_p_K, values_K = self._forward_K(tensor)
+            # §170 P3 — gpool-bias side-branch reads global_crop alongside
+            # K cluster windows; K-invariant additive bias preserves min/max
+            # scatter-max semantics.
+            gc_t: Optional[torch.Tensor] = None
+            if getattr(self.model, "gpool_bias_active", False):
+                gc_np = compute_global_crop_from_board(sim_board)     # (3, 32, 32) f16
+                gc_t = torch.from_numpy(gc_np).float().to(self.device)
+            log_p_K, values_K = self._forward_K(tensor, global_crop=gc_t)
             # Pool — value: min across K (negamax-conservative); policy:
             # scatter-max across K, renormalised over legal.
             value = float(values_K.min())
