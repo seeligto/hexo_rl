@@ -9169,3 +9169,154 @@ K=1-only training regime.
 - [x] `make test` green (1107 passed, 8 skipped, no regressions).
 - [x] Sprint log draft appended (this section).
 
+## P3 — A3 arm: K-cluster + PMA pool + global summary token
+
+**Goal:** layer a global-summary token g onto the A2 PMA pool to test
+whether canvas-level statistics (KataGo's gpool analog) recover the
+inter-cluster signal A2 may still bottleneck. If A3 ≥ A1 with a
+non-trivial learned gate value, global context is a tractable lift over
+fixed min/max + per-cluster scatter-max. If A3 ≤ A2, global context
+doesn't recover what PMA already loses under the K=1-pretrain regime.
+
+**Architecture (commit 2 — `feat(model): GlobalTokenEncoder + PMAGlobalPool + HexTacToeNet wire`):**
+- `hexo_rl/model/global_token.py` — `GlobalTokenEncoder`: 2 conv blocks
+  @64ch (GroupNorm + ReLU) → KataGo masked gpool (canvas-realness mask
+  reused as gpool mask, T2 §E.1 pitfall-2 fix) → Linear(3·C → d=128).
+  NaN-safe under empty-canvas inputs via `mask_sum_hw.clamp_min(1.0)`.
+- `hexo_rl/model/pooling.py` — `PMAGlobalPool`: PMA on the augmented set
+  `S = {z_1, ..., z_K, g}` (K+1 tokens). Learnable scalar
+  `global_gate` (init 0.1) multiplies g before SAB concatenation. The
+  ClusterPool base interface gains a `global_token=...` kwarg (ignored
+  by MinMax / PMA, required by PMAGlobal). `gate_value()` accessor
+  exposes the scalar for training-time logging.
+- `hexo_rl/model/network.py` — `pool_type='pma_global'` constructor wires
+  GlobalTokenEncoder + PMAGlobalPool. `forward(global_crop=)` and
+  `aggregated_forward_K(global_crop=)` accept `(B, 3, 32, 32)` /
+  `(3, 32, 32)` crops and route through encoder → pool. `v8` + `pma_global`
+  combo rejected at construction.
+- `hexo_rl/eval/checkpoint_loader.py` — `_build_v6_model` detects
+  `pma_global` from `global_encoder.*` state-dict keys; A3 checkpoints
+  deserialise without filename heuristic.
+- 21 new tests across `tests/test_global_token.py` (7),
+  `tests/test_pooling.py` (+8 A3), `tests/test_k_cluster_mcts_bot.py`
+  (+6 A3): shape parity, grad reach, gate semantics, state-dict
+  round-trip, padding-leak sensitivity, zero-gate isolation,
+  checkpoint detection round-trip, end-to-end bot path.
+
+**Corpus + retrain wiring (commits 1 + 3 — `feat(corpus,utils)` +
+`chore(ablation_169): A3 retrain config + script + KClusterMCTSBot pma_global plumb`):**
+- `hexo_rl/utils/global_crop.py` — `compute_global_crop` /
+  `_from_board`: bbox of all stones → s = ceil(side/32) downsample →
+  centered embedding into 32×32 canvas. Three planes (cur, opp,
+  canvas-realness mask). 8 unit tests cover empty / single / negative
+  coords / large-bbox / mask-vs-padding / Board partition parity.
+- `hexo_rl/bootstrap/dataset_v6w25.py` — opt-in `with_global_crop`
+  flag emits per-ply `(T, 3, 32, 32)` f16 crops aligned with the
+  cluster-window state.
+- `scripts/export_corpus_npz.py` — `--with-global-crop` flag (v6w25-
+  only); writes a `global_crops` field into the NPZ; sha256-stamps
+  the output for reproducibility.
+- `hexo_rl/bootstrap/pretrain.py` — Dataset / collate / train-loop
+  thread global_crops through `model.forward(global_crop=)`. NPZ loader
+  detects `global_crops` field; `pool_type='pma_global'` without it →
+  loud RuntimeError pointing at the export command. Per-step log emits
+  `pool_global_gate` scalar via `PMAGlobalPool.gate_value()`. CLI
+  `--pool-type` extended with `pma_global` choice. `validate()` skips
+  the play-100-greedy under pma_global (mirrors v8 skip).
+- `hexo_rl/eval/k_cluster_mcts_bot.py` — `pma_global` branch in
+  `_expand` computes `compute_global_crop_from_board(sim_board)` per
+  leaf and feeds `model.aggregated_forward_K(x_K, global_crop=)`.
+  `SUPPORTED_POOLS` extended.
+- `configs/ablation_169_a3.yaml` + `scripts/pretrain_a3_pma_global.sh`
+  — recipe matches A2 (30 ep cosine, peak 2e-3, eta_min 5e-5,
+  batch 256), only delta is `pool_type=pma_global`. Corpus path
+  `data/bootstrap_corpus_v6w25_with_global.npz` (regen ~10 min on 5080
+  via `python scripts/export_corpus_npz.py --encoding v6w25
+  --with-global-crop --human-only --no-compress --out
+  data/bootstrap_corpus_v6w25_with_global.npz`).
+
+**Eval tooling (commit 4 — `chore(ablation_169): A3 eval scripts +
+collapse-onto-global probe`):**
+- `scripts/probe_pma_collapse.py` — extended for pma_global. The
+  existing A2 cluster-collapse test (full-K vs cluster-0-only vs
+  cluster-1-only) still fires; A3 mode adds a collapse-onto-global
+  test (full-K with actual global crop vs full-K with zeroed global
+  crop AND cluster-content insensitivity). Either firing → STOP exit
+  1 with a distinct retry recommendation (`--pool-attn-dropout 0.2`
+  for cluster collapse; attention entropy reg for global collapse).
+- `scripts/eval_a3_pma_global.sh` — full eval matrix mirror of
+  `scripts/eval_a2_pma.sh`: collapse smoke → argmax @ r=8 n=200 →
+  MCTS-N (default 128) n=200 → bench → A3_eval.json combiner →
+  A3_threat.json (skipped marker, same fixture gap as A2). Soft-warn
+  surface for the padding-leak check at the script's tail; manual
+  hold-out-mask variant is the operator's call (out of §169 scope
+  unless A3 < A1).
+
+**Results — RETRAIN PENDING:** the A3 retrain itself (corpus regen
++ 30-epoch pretrain on 5080) is operator-driven and not part of this
+implementation context. Numbers TBD; expected entries:
+
+| metric                          | A3 PMA + global     | A2 PMA              | A1 anchor (v6w25)  | hard-stop |
+|---------------------------------|---------------------|---------------------|---------------------|-----------|
+| final epoch-30 loss             | TBD                 | 4.25                | 3.57                | 5.36      |
+| NaN-skip rate                   | TBD                 | 0%                  | 0%                  | 30%       |
+| PMA-collapse smoke              | TBD                 | PASS                | n/a                 | retry on collapse |
+| collapse-onto-global smoke      | TBD (A3-only)       | n/a                 | n/a                 | retry on collapse |
+| RandomBot validation            | SKIPPED (pma_global) | (not re-run)        | (skipped — 1107 tests pass) | n/a |
+| argmax @ r=8 n=200 vs SealBot   | TBD                 | 4.5% [2.4%, 8.3%]   | 14.5% [10.3%, 20.0%] | n/a       |
+| MCTS-128 n=200 vs SealBot       | TBD                 | 3.5% [1.7%, 7.0%]   | n/a (§169 P1 sanity 25%) | n/a   |
+| threat probe C1/C2/C3           | SKIPPED (no v6w25 fixture; §170) | SKIPPED (same)      | n/a               | n/a |
+| params (M)                      | TBD (A2 + global encoder + gate ≈ +0.4 M) | 6.30 (+1.01 vs A1) | 5.29 | n/a |
+| latency b=1 / b=64              | TBD                 | 2.59 / 34.04 (laptop) | 2.09 / 33.75 (laptop) | 3.50 (b=1 gate) |
+| learned `pool_global_gate` @end | TBD (init 0.1)      | n/a                 | n/a                 | gate ≈ init ⇒ global branch unused; gate ≫ init ⇒ heavy global reliance (cross-check vs collapse smoke) |
+
+**Read (anticipated, to be confirmed):** the A3 hypothesis is that
+canvas-level statistics give the K-cluster encoder the "where on the
+infinite board" context A2 lacks (the K=1-pretrain regime denies PMA
+cross-cluster contrast; a global token bypasses that bottleneck via a
+pre-aggregated single-vector summary). If A3 ≈ A2, the global token
+isn't doing useful work — likely the gate stayed near init or the
+canvas-mask channel didn't differentiate padding from real-empty.
+If A3 > A2 but < A1, the global token recovers some signal but min/max
++ scatter-max still dominate. If A3 ≥ A1, the global token gives the
+K-cluster path enough context to match the bot-side fixed-pool
+baseline — the ablation positive result.
+
+**Open items / known gaps:**
+- v6w25 threat-probe fixture (§170): same gap as A2; out of §169 scope.
+- Global-crop augmentation: skipped at the collate. Conservative
+  argument: GlobalTokenEncoder ends in KataGo gpool which is
+  near-spatially-invariant, so feeding the canonical-orientation crop
+  alongside augmented cluster windows is a tractable approximation.
+  If A3 visibly underperforms A1 on argmax, a follow-up spike applies
+  the 12-fold scatter table (`get_policy_scatters(32, has_pass=False)`)
+  to the global crop in lock-step with the cluster window.
+- Padding leak hold-out check: surface-only at eval-time. Out of §169
+  scope unless A3 < A1. Manual variant = patch GlobalTokenEncoder's
+  forward to drop the canvas-mask plane and re-run argmax @ r=8.
+- Collapse-onto-global STOP path: implemented in
+  `scripts/probe_pma_collapse.py`; A3-only. Surfaces independently
+  from the A2-style cluster-collapse signal so the operator can read
+  both.
+
+**Branch state:** `encoding/four_way_ablation` — additional commits on
+top of the A2 P2 tip:
+1. `feat(corpus,utils): §169 A3 global summary crop helper + dataset_v6w25 wiring` (commit 1)
+2. `feat(model): §169 A3 GlobalTokenEncoder + PMAGlobalPool + HexTacToeNet wire` (commit 2)
+3. `chore(ablation_169): A3 retrain config + script + KClusterMCTSBot pma_global plumb` (commit 3)
+4. `chore(ablation_169): A3 eval scripts + collapse-onto-global probe` (commit 4 — extra; mirrors A2's eval-tooling pattern)
+
+**Done-when checks (implementation phase — pre-retrain):**
+- [x] 3 mandated commits on `encoding/four_way_ablation` (corpus, model, retrain wiring) + 1 extra (eval tooling).
+- [x] `make test` green for the A3-touched modules: 98 tests pass across global_crop / pooling / global_token / k_cluster_mcts_bot / v6w25_encoding / pretrain_aug / eval_pipeline.
+- [x] Sprint log draft appended (this section).
+
+**Done-when checks (operator-driven retrain phase — TBD):**
+- [ ] Corpus regen `data/bootstrap_corpus_v6w25_with_global.npz` (capture sha256 from the export-script tail).
+- [ ] Checkpoint at `checkpoints/ablation_169/A3_pma_global.pt`.
+- [ ] argmax + MCTS-N WR in `reports/ablation_169/A3_eval.json`.
+- [ ] threat probe in `reports/ablation_169/A3_threat.json` (status=skipped per §170 follow-up).
+- [ ] bench appended to `reports/ablation_169/bench_per_arm.md` (A3 row).
+- [ ] sprint log Results table fully populated; verdict line written.
+
+
