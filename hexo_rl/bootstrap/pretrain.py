@@ -148,9 +148,10 @@ def make_augmented_collate(
       - Stack as-is, no scatter.
       - Compute chain_planes from raw stone planes.
     """
-    if encoding not in ("v6", "v8"):
-        raise ValueError(f"encoding={encoding!r} must be 'v6' or 'v8'")
-    has_pass = (encoding == "v6")
+    if encoding not in ("v6", "v6w25", "v8"):
+        raise ValueError(f"encoding={encoding!r} must be 'v6', 'v6w25' or 'v8'")
+    # v6 wire format keeps the pass slot; v6w25 inherits this; v8 drops it.
+    has_pass = encoding in ("v6", "v6w25")
     scatters_np = get_policy_scatters(board_size, has_pass=has_pass) if augment else None
 
     def _collate(
@@ -175,8 +176,10 @@ def make_augmented_collate(
                 policies = scattered
                 states = states_f32.astype(np.float16, copy=False)
             else:
-                # v8 path — pure-numpy scatter, batched per-sym to avoid the
-                # per-sample take_along_axis cost.
+                # v8 / v6w25 path — pure-numpy scatter, batched per-sym to avoid
+                # the per-sample take_along_axis cost. The Rust
+                # apply_symmetries_batch PyO3 binding hardcodes BOARD_SIZE=19;
+                # both v6w25 (25×25 K-cluster) and v8 (25×25 bbox) need numpy.
                 C = states.shape[1]
                 spatial = board_size * board_size
                 states_flat = states.reshape(n, C, spatial)
@@ -186,9 +189,12 @@ def make_augmented_collate(
                     mask_idx = np.where(sym_indices == sym)[0]
                     if mask_idx.size == 0:
                         continue
-                    scatter = scatters_np[sym]  # (spatial,)
-                    augmented[mask_idx] = states_flat[mask_idx][:, :, scatter]
-                    policy_aug[mask_idx] = policies[mask_idx][:, scatter]
+                    # For v6w25 the policy scatter is `spatial+1` long (cells
+                    # + pass). State scatter must slice to spatial-only.
+                    sc = scatters_np[sym]
+                    state_scatter = sc[:spatial] if has_pass else sc
+                    augmented[mask_idx] = states_flat[mask_idx][:, :, state_scatter]
+                    policy_aug[mask_idx] = policies[mask_idx][:, sc]
                 states = augmented.reshape(n, C, board_size, board_size)
                 policies = policy_aug
 
@@ -692,10 +698,12 @@ def pretrain() -> None:
                              "5e-5 avoids the §149-observed LR-floor stall "
                              "in the final 3 epochs.")
     # ── v8 / Phase B variant CLI overrides ─────────────────────────────────
-    parser.add_argument("--encoding", choices=("v6", "v8"), default=None,
-                        help="Override encoding.version from configs/model.yaml "
-                             "('v6' canonical default; 'v8' = Path β 11-plane × 25×25). "
-                             "When 'v8', the v8 corpus NPZ and v8 model heads are used.")
+    parser.add_argument("--encoding", choices=("v6", "v6w25", "v8"), default=None,
+                        help="Override encoding.version from configs/model.yaml: "
+                             "'v6' canonical default (8-plane × 19×19, K-cluster), "
+                             "'v6w25' (§168 — 8-plane × 25×25 K-cluster at matched R=8 "
+                             "perception), or 'v8' (Path β 11-plane × 25×25 single bbox). "
+                             "Routes corpus NPZ and model construction accordingly.")
     parser.add_argument("--filters", type=int, default=None,
                         help="Override trunk channel count (model.yaml: filters).")
     parser.add_argument("--res-blocks", type=int, default=None,
@@ -728,22 +736,30 @@ def pretrain() -> None:
     if args.encoding is not None:
         config.setdefault("encoding", {})["version"] = args.encoding
     encoding: str = str(config.get("encoding", {}).get("version", "v6"))
-    if encoding not in ("v6", "v8"):
-        raise ValueError(f"encoding.version must be 'v6' or 'v8', got {encoding!r}")
+    if encoding not in ("v6", "v6w25", "v8"):
+        raise ValueError(
+            f"encoding.version must be 'v6', 'v6w25' or 'v8', got {encoding!r}"
+        )
 
-    # When encoding=v8, derive board_size / in_channels / n_actions from the
-    # v8 contract (overriding model.yaml's v6 defaults of 19 / 8).
+    # Encoding-specific shape overrides. v6 uses model.yaml defaults (19 / 8 /
+    # 362). v6w25 keeps in_channels=8 + pass slot but grows spatial to 25×25.
+    # v8 = Path β 11-plane × 25×25 + no pass slot.
     if encoding == "v8":
         from hexo_rl.bootstrap.dataset_v8 import (
             BOARD_SIZE_V8, N_PLANES_V8, N_ACTIONS_V8,
         )
         config["board_size"] = BOARD_SIZE_V8
         config["in_channels"] = N_PLANES_V8
-        # Note: model.yaml's filters/res_blocks defaults stay unless --filters /
-        # --res-blocks override them below.
-        v8_n_actions = N_ACTIONS_V8
+        explicit_n_actions = N_ACTIONS_V8
+    elif encoding == "v6w25":
+        from hexo_rl.bootstrap.dataset_v6w25 import (
+            BOARD_SIZE_V6W25, N_PLANES_V6W25, N_ACTIONS_V6W25,
+        )
+        config["board_size"] = BOARD_SIZE_V6W25
+        config["in_channels"] = N_PLANES_V6W25
+        explicit_n_actions = N_ACTIONS_V6W25
     else:
-        v8_n_actions = None
+        explicit_n_actions = None
 
     # Variant overrides — used by Phase B B0..B4 retrains.
     if args.filters is not None:
@@ -792,6 +808,8 @@ def pretrain() -> None:
         npz_path = Path(args.corpus_npz)
     elif encoding == "v8":
         npz_path = Path("data/bootstrap_corpus_v8.npz")
+    elif encoding == "v6w25":
+        npz_path = Path("data/bootstrap_corpus_v6w25.npz")
     else:
         npz_path = Path(corpus_cfg.get("corpus_npz_path", "data/bootstrap_corpus.npz"))
     if npz_path.exists():
@@ -882,8 +900,8 @@ def pretrain() -> None:
     # without re-deriving from CLI flags.
     config["gpool_indices"] = gpool_indices
     config["head_use_gpool"] = head_use_gpool
-    if v8_n_actions is not None:
-        config["n_actions"] = v8_n_actions
+    if explicit_n_actions is not None:
+        config["n_actions"] = explicit_n_actions
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)
 
     # Resume mode: load model/optimizer/scaler from full checkpoint, restart

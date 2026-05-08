@@ -290,8 +290,13 @@ class HexTacToeNet(nn.Module):
         off_window_plane_idx: int = _V8_OFF_WINDOW_PLANE_DEFAULT,
     ) -> None:
         super().__init__()
-        if encoding not in ("v6", "v8"):
-            raise ValueError(f"encoding={encoding!r} must be 'v6' or 'v8'")
+        if encoding not in ("v6", "v6w25", "v8"):
+            raise ValueError(
+                f"encoding={encoding!r} must be 'v6', 'v6w25' or 'v8'"
+            )
+        # v6w25 = v6 wire format (8 planes + pass slot) at 25×25 cluster
+        # window. Model construction is identical to v6 — only board_size
+        # differs. Persist the original label so eval/dispatch can detect it.
         self.encoding = encoding
         self.board_size = board_size
         self.filters = filters
@@ -331,8 +336,8 @@ class HexTacToeNet(nn.Module):
             self.input_channel_index = None  # type: ignore[assignment]
             self.in_channels = int(in_channels)
 
-        # n_actions: v6 keeps the legacy pass slot (HEXB shape); v8 drops it.
-        self.has_pass: bool = (encoding == "v6")
+        # n_actions: v6 / v6w25 keep the legacy pass slot (HEXB shape); v8 drops it.
+        self.has_pass: bool = encoding in ("v6", "v6w25")
         self.n_actions: int = spatial + (1 if self.has_pass else 0)
         self.off_window_plane_idx: int = int(off_window_plane_idx)
 
