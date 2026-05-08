@@ -147,7 +147,8 @@ class V8MCTSBot(BotProtocol):
     ) -> Tuple[np.ndarray, float, Tuple[int, int]]:
         """Run one v8 NN forward; return (log_policy_625, value_scalar, centroid)."""
         tensor, (cq, cr), _ = encode_position_v8(
-            board_stones, cur_player, history, ply, moves_rem
+            board_stones, cur_player, history, ply, moves_rem,
+            canvas_realness=getattr(self.model, "canvas_realness", False),
         )
         x = torch.from_numpy(tensor).unsqueeze(0).float().to(self.device)
         log_policy, value, _v_logit = self.model(x)

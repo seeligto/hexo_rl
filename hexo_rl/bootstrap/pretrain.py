@@ -852,6 +852,12 @@ def pretrain() -> None:
                         help="Attention dropout for PMA pool (collapse "
                              "mitigation). Default 0.1; raise to 0.2 if "
                              "the §169 PMA-collapse smoke fires.")
+    parser.add_argument("--canvas-realness", action="store_true",
+                        help="§169 A4 — invert v8 plane 8 polarity to "
+                             "canvas_realness (1 inside, 0 outside) and wire "
+                             "PartialConv2d (Innamorati 2018 partial-conv-padding) "
+                             "at the trunk entry. v8-only. Requires a corpus "
+                             "regenerated with --canvas-realness.")
     parser.add_argument("--corpus-npz", type=str, default=None,
                         help="Override corpus NPZ path. Defaults: v6 → "
                              "data/bootstrap_corpus.npz, v8 → "
@@ -926,6 +932,14 @@ def pretrain() -> None:
         else float(config.get("pool_attn_dropout", 0.1))
     )
 
+    # §169 A4 — canvas_realness gates inverted plane-8 + PartialConv2d at
+    # trunk entry. v8-only; surfaced loudly otherwise.
+    canvas_realness: bool = bool(args.canvas_realness or config.get("canvas_realness", False))
+    if canvas_realness and encoding != "v8":
+        raise ValueError(
+            f"--canvas-realness requires --encoding v8; got {encoding!r}"
+        )
+
     log.info(
         "encoding_resolved",
         encoding=encoding,
@@ -937,6 +951,7 @@ def pretrain() -> None:
         head_use_gpool=head_use_gpool,
         pool_type=pool_type,
         pool_attn_dropout=pool_attn_dropout,
+        canvas_realness=canvas_realness,
     )
 
     from hexo_rl.utils.device import best_device
@@ -958,7 +973,8 @@ def pretrain() -> None:
     if args.corpus_npz is not None:
         npz_path = Path(args.corpus_npz)
     elif encoding == "v8":
-        npz_path = Path("data/bootstrap_corpus_v8.npz")
+        suffix = "_canvas_realness" if canvas_realness else ""
+        npz_path = Path(f"data/bootstrap_corpus_v8{suffix}.npz")
     elif encoding == "v6w25":
         npz_path = Path("data/bootstrap_corpus_v6w25.npz")
     else:
@@ -1053,6 +1069,7 @@ def pretrain() -> None:
         head_use_gpool=head_use_gpool,
         pool_type=pool_type,
         pool_attn_dropout=pool_attn_dropout,
+        canvas_realness=canvas_realness,
     )
     use_compile = (
         config.get("torch_compile", True)
@@ -1076,6 +1093,7 @@ def pretrain() -> None:
     config["head_use_gpool"] = head_use_gpool
     config["pool_type"] = pool_type
     config["pool_attn_dropout"] = pool_attn_dropout
+    config["canvas_realness"] = canvas_realness
     if explicit_n_actions is not None:
         config["n_actions"] = explicit_n_actions
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)

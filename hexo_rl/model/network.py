@@ -41,6 +41,7 @@ from hexo_rl.model.gpool import (
     compute_v8_mask,
 )
 from hexo_rl.model.global_token import GlobalTokenEncoder
+from hexo_rl.model.partial_conv import PartialConv2d
 from hexo_rl.model.pooling import (
     SUPPORTED_POOL_TYPES,
     PMAGlobalPool,
@@ -201,9 +202,24 @@ class Trunk(nn.Module):
         se_reduction_ratio: int = 4,
         gpool_indices: Optional[List[int]] = None,
         gpool_channels: int = 32,
+        canvas_realness: bool = False,
     ) -> None:
         super().__init__()
-        self.input_conv = nn.Conv2d(in_channels, filters, 3, padding=1, bias=False)
+        # §169 A4 — under canvas_realness, the trunk-entry conv is a
+        # PartialConv2d that masks off-canvas contributions and rescales
+        # by the per-location valid-neighbour count. The downstream
+        # blocks remain vanilla padded conv (Innamorati's intervention is
+        # localised to the input layer; deeper layers see post-norm
+        # features with off-canvas cells already at the GroupNorm bias).
+        self.canvas_realness: bool = bool(canvas_realness)
+        if self.canvas_realness:
+            self.input_conv: nn.Module = PartialConv2d(
+                in_channels, filters, 3, padding=1, bias=False,
+            )
+        else:
+            self.input_conv = nn.Conv2d(
+                in_channels, filters, 3, padding=1, bias=False,
+            )
         self.input_gn   = nn.GroupNorm(_GN_GROUPS, filters)
         gpool_indices = sorted(set(gpool_indices)) if gpool_indices else []
         self.gpool_indices: List[int] = list(gpool_indices)
@@ -238,7 +254,16 @@ class Trunk(nn.Module):
         mask: Optional[torch.Tensor] = None,
         mask_sum_hw: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        out = F.relu(self.input_gn(self.input_conv(x)))
+        if self.canvas_realness:
+            if mask is None:
+                raise RuntimeError(
+                    "Trunk(canvas_realness=True) requires mask at forward; "
+                    "ensure HexTacToeNet.forward computes the mask before "
+                    "calling the trunk."
+                )
+            out = F.relu(self.input_gn(self.input_conv(x, mask)))
+        else:
+            out = F.relu(self.input_gn(self.input_conv(x)))
         if not self._has_gpool:
             return self.tower(out)
         # Gpool blocks need (mask, mask_sum_hw); plain blocks ignore them.
@@ -297,6 +322,7 @@ class HexTacToeNet(nn.Module):
         off_window_plane_idx: int = _V8_OFF_WINDOW_PLANE_DEFAULT,
         pool_type: str = "min_max",
         pool_attn_dropout: float = 0.1,
+        canvas_realness: bool = False,
     ) -> None:
         super().__init__()
         if encoding not in ("v6", "v6w25", "v8"):
@@ -317,6 +343,16 @@ class HexTacToeNet(nn.Module):
                 f"pool_type={pool_type!r} is only valid for v6/v6w25 K-cluster "
                 "encodings; v8 has a single bounding-box window (no K)."
             )
+        # §169 A4 — canvas_realness gates the partial-conv-padding trunk
+        # entry. v8-only (the polarity inversion + partial conv only make
+        # sense under bbox encoding); v6/v6w25 raise loudly.
+        if canvas_realness and encoding != "v8":
+            raise ValueError(
+                f"canvas_realness=True requires encoding='v8'; got {encoding!r}. "
+                "The §169 A4 arm pairs the inverted plane-8 polarity with "
+                "PartialConv2d at trunk entry — both are v8/bbox-only."
+            )
+        self.canvas_realness: bool = bool(canvas_realness)
         self.pool_type: str = pool_type
         # v6w25 = v6 wire format (8 planes + pass slot) at 25×25 cluster
         # window. Model construction is identical to v6 — only board_size
@@ -373,6 +409,7 @@ class HexTacToeNet(nn.Module):
             se_reduction_ratio=se_reduction_ratio,
             gpool_indices=gpool_indices if encoding == "v8" else None,
             gpool_channels=gpool_channels,
+            canvas_realness=self.canvas_realness,
         )
 
         # Policy / opp_reply heads — branch on encoding. v6 keeps the FC head
@@ -526,9 +563,20 @@ class HexTacToeNet(nn.Module):
             x = x.index_select(1, self.input_channel_index)
 
         # v8 mask plumbing — computed once per forward pass and reused at every
-        # gpool site (trunk + policy / opp_reply heads).
+        # gpool site (trunk + policy / opp_reply heads). Under canvas_realness
+        # the plane-8 polarity is already (1 inside, 0 outside), so we read the
+        # plane directly without the off→mask inversion.
         if self.encoding == "v8":
-            mask, mask_sum_hw = compute_v8_mask(x, self.off_window_plane_idx)
+            if self.canvas_realness:
+                mask = x[
+                    :,
+                    self.off_window_plane_idx:self.off_window_plane_idx + 1,
+                    :,
+                    :,
+                ].to(x.dtype)
+                mask_sum_hw = mask.sum(dim=(2, 3), keepdim=True)
+            else:
+                mask, mask_sum_hw = compute_v8_mask(x, self.off_window_plane_idx)
         else:
             mask = None
             mask_sum_hw = None

@@ -91,10 +91,14 @@ def detect_encoding_label(ckpt_path: Path, state: dict) -> str:
        window 25×25 + 1 pass slot); = 362 ⇒ v6 (19×19 + 1). Also covers
        the §169 pma path via cluster_pool.policy_mlp output dim.
     """
-    inp_w = state.get("trunk.input_conv.weight")
+    # §169 A4 — partial-conv wrapping shifts the weight key to
+    # `trunk.input_conv.conv.weight`. Try the wrapped path first.
+    inp_w = state.get("trunk.input_conv.conv.weight")
+    if inp_w is None:
+        inp_w = state.get("trunk.input_conv.weight")
     if inp_w is None:
         raise ValueError(
-            f"checkpoint {ckpt_path} has no trunk.input_conv.weight; "
+            f"checkpoint {ckpt_path} has no trunk.input_conv(.conv)?.weight; "
             "cannot detect encoding"
         )
     in_ch = int(inp_w.shape[1])
@@ -149,12 +153,17 @@ def load_model_with_encoding(
     # break under aliasing — they get the lighter strip-prefixes-only path.
     inp_w = state.get("trunk.input_conv.weight")
     if inp_w is None:
+        inp_w = state.get("trunk.input_conv.conv.weight")
+    if inp_w is None:
         inp_w = state.get("_orig_mod.trunk.input_conv.weight")
+    if inp_w is None:
+        inp_w = state.get("_orig_mod.trunk.input_conv.conv.weight")
     if inp_w is None:
         # Fall back: try after light strip — may surface a v8 checkpoint
         # under a wrapper prefix.
         light = _strip_compile_prefixes(state)
-        inp_w = light.get("trunk.input_conv.weight")
+        inp_w = light.get("trunk.input_conv.weight") \
+            or light.get("trunk.input_conv.conv.weight")
     if inp_w is not None and int(inp_w.shape[1]) == 11:
         state = _strip_compile_prefixes(state)
     else:
@@ -216,7 +225,16 @@ def _build_v6_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
 
 
 def _build_v8_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
-    inp_w = state["trunk.input_conv.weight"]
+    # §169 A4 — under canvas_realness the trunk-entry conv is wrapped in a
+    # PartialConv2d, so the weight key shifts from `trunk.input_conv.weight`
+    # to `trunk.input_conv.conv.weight`. Detection is unambiguous because
+    # the regular Conv2d path never has a `.conv.weight` sub-key.
+    canvas_realness = "trunk.input_conv.conv.weight" in state
+    inp_w_key = (
+        "trunk.input_conv.conv.weight" if canvas_realness
+        else "trunk.input_conv.weight"
+    )
+    inp_w = state[inp_w_key]
     filters = int(inp_w.shape[0])
     in_channels = int(inp_w.shape[1])
     if in_channels != 11:
@@ -241,6 +259,7 @@ def _build_v8_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         encoding="v8",
         gpool_indices=gpool_indices if gpool_indices else None,
         head_use_gpool=head_use_gpool,
+        canvas_realness=canvas_realness,
     )
     model.load_state_dict(state, strict=True)
     return model
