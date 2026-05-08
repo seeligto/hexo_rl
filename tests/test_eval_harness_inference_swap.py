@@ -60,14 +60,43 @@ def test_parse_method_zero_sims_raises():
         _parse_method("mcts-0")
 
 
-def test_v6w25_mcts_dispatch_raises_pending_python_port():
-    """v6w25 MCTS path raises until a Python v6w25 MCTS port lands. Argmax
-    path returns V6ArgmaxBot (shape-aware) — exercised in the v6w25
-    encoding tests; here we assert only that the explicit MCTS request
-    surfaces a clear error so callers don't silently get wrong behavior.
+def test_v6w25_mcts_dispatch_returns_kcluster_mcts_bot():
+    """§169 P1 — v6w25 + mcts-N now dispatches to KClusterMCTSBot. We
+    verify the dispatch by patching HexTacToeNet's encoding attribute via
+    a tiny stub model so the bot's encoding gate accepts.
     """
-    with pytest.raises(NotImplementedError, match="v6w25"):
-        build_inference_method("mcts-128", None, DEVICE, "v6w25")
+    from hexo_rl.eval.k_cluster_mcts_bot import KClusterMCTSBot
+
+    class _StubModel:
+        encoding = "v6w25"
+        in_channels = 8
+
+        def eval(self):  # noqa: D401 — match torch.nn.Module API
+            return self
+
+    bot = build_inference_method("mcts-128", _StubModel(), DEVICE, "v6w25")
+    assert isinstance(bot, KClusterMCTSBot)
+    assert bot.n_sims == 128
+
+
+def test_v6_mcts_dispatch_returns_kcluster_mcts_bot():
+    """§169 P1 — v6 + mcts-N also routes to KClusterMCTSBot for matched-
+    MCTS comparison apples-to-apples with v6w25. (The Rust MCTSTree path
+    via evaluator.ModelPlayer remains available for callers that bypass
+    this dispatcher.)
+    """
+    from hexo_rl.eval.k_cluster_mcts_bot import KClusterMCTSBot
+
+    class _StubModel:
+        encoding = "v6"
+        in_channels = 8
+
+        def eval(self):
+            return self
+
+    bot = build_inference_method("mcts-32", _StubModel(), DEVICE, "v6")
+    assert isinstance(bot, KClusterMCTSBot)
+    assert bot.n_sims == 32
 
 
 # ── Integration checks ───────────────────────────────────────────────

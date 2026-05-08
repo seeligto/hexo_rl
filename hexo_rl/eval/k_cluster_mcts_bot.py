@@ -1,0 +1,320 @@
+"""KClusterMCTSBot — Python PUCT MCTS for v6 / v6w25 (K-cluster) models.
+
+Sister to ``V8MCTSBot``. Drives MCTS for K-cluster encodings whose action
+space (362 for v6 / 626 for v6w25) and per-position cluster count K make
+the v6-locked Rust ``MCTSTree`` (BOARD_SIZE=19, N_ACTIONS=362) unusable
+for v6w25 and any future K-cluster window > 19. v7full / v6 still has
+the option of the Rust MCTS path; this Python bot is wired in for
+v6w25 + matched-MCTS comparison work (§169 A1/A2/A3).
+
+NN forward
+----------
+For each leaf: ``rust_board.get_cluster_views()`` → ``K`` views of shape
+``(2, S, S)``; ``GameState.from_board`` + ``to_tensor`` lifts that to
+``(K, 18, S, S)`` (history planes 1-7 / 9-15 zero — same convention as
+``V6ArgmaxBot``); slice to ``KEPT_PLANE_INDICES`` for 8-plane v6 wire
+format. The K planes are batched into one model forward (single GPU call
+per leaf) so per-leaf wall is bounded by K rather than K × per-position
+forward latency.
+
+Aggregation (matches engine ``records::aggregate_policy`` and
+``worker_loop.rs:299-401`` semantics)
+- value pool: ``min`` across K clusters (negamax-conservative).
+- policy pool: scatter-max across K clusters (per-legal-move max prob),
+  renormalised over the legal set.
+
+PUCT (matches engine ``mcts/mod.rs``)
+- ``Q + c_puct · prior · √N(s) / (1 + N(s,a))``.
+- Q from parent's perspective (sign flipped at turn boundaries — HTTT
+  plays 2 stones per turn, so child shares parent's perspective when
+  ``parent.moves_remaining == 2``; flips when ``moves_remaining == 1``).
+- Virtual loss: OFF (sequential simulations — see // TODO below).
+- FPU: classical Q=0 for unvisited (configurable via ``fpu_q``).
+- Dirichlet noise: OFF (eval-only).
+
+Sequential leaf scheduling
+- // TODO(P2): leaf-batched descent with virtual loss. K-batched per
+  leaf already amortises K × NN forwards into one GPU call (typical
+  K=2-5, so ~3× over a strictly-sequential per-cluster forward), but
+  inter-leaf batching (B=8-32) would cut wall by another ~3-5× and is
+  needed if MCTS-N evals run > 12 hr at the chosen N.
+"""
+from __future__ import annotations
+
+import math
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import torch
+
+from hexo_rl.bootstrap.bot_protocol import BotProtocol
+from hexo_rl.env.game_state import GameState
+from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.utils.constants import KEPT_PLANE_INDICES
+
+
+Action = Tuple[int, int]
+
+SUPPORTED_POOLS = ("min_max",)
+
+
+class _Node:
+    __slots__ = (
+        "prior",
+        "visits",
+        "value_sum",
+        "children",
+        "is_terminal",
+        "terminal_value",
+        "child_flips",
+    )
+
+    def __init__(self, prior: float = 0.0) -> None:
+        self.prior: float = prior
+        self.visits: int = 0
+        self.value_sum: float = 0.0
+        self.children: Dict[Action, "_Node"] = {}
+        self.is_terminal: bool = False
+        self.terminal_value: float = 0.0
+        # Whether children's value perspective is opposite this node's. Set at
+        # expand time from sim_board.moves_remaining; constant for all children
+        # (HTTT turn structure makes it a node-level property).
+        self.child_flips: bool = False
+
+    def expanded(self) -> bool:
+        return bool(self.children) or self.is_terminal
+
+    def value(self) -> float:
+        return self.value_sum / self.visits if self.visits else 0.0
+
+
+def _puct_select(node: _Node, c_puct: float, fpu_q: float) -> Action:
+    """Pick the child action by max Q + U (PUCT). Q in parent's frame."""
+    sign = -1.0 if node.child_flips else 1.0
+    total = max(1, node.visits)
+    sqrt_total = math.sqrt(total)
+    best_score = -math.inf
+    best_action: Optional[Action] = None
+    for action, child in node.children.items():
+        if child.visits == 0:
+            q = fpu_q
+        else:
+            q = sign * child.value()
+        u = c_puct * child.prior * sqrt_total / (1 + child.visits)
+        score = q + u
+        if score > best_score:
+            best_score = score
+            best_action = action
+    assert best_action is not None
+    return best_action
+
+
+def _aggregate_priors(
+    log_policy_K: np.ndarray,  # (K, S*S+1)
+    centers: List[Tuple[int, int]],
+    legal_moves: List[Action],
+    view_size: int,
+) -> List[float]:
+    """Scatter-max across K cluster log-policies onto the legal-move set.
+
+    Mirrors engine ``records::aggregate_policy`` (max over clusters of
+    per-cluster softmax-prob, renormalise over legal). Done in prob space
+    so different clusters' log-prob shifts compose correctly.
+    """
+    K = log_policy_K.shape[0]
+    assert K == len(centers), "centers and policy K must match"
+    view_half = (view_size - 1) // 2
+    # Per-cluster softmax: shift by max, exp, normalise.
+    probs_K = np.empty_like(log_policy_K, dtype=np.float64)
+    for k in range(K):
+        lp = log_policy_K[k].astype(np.float64)
+        lp -= lp.max()
+        e = np.exp(lp)
+        s = e.sum()
+        if s < 1e-12:
+            probs_K[k] = 1.0 / lp.shape[0]
+        else:
+            probs_K[k] = e / s
+
+    n_legal = len(legal_moves)
+    max_probs = np.zeros(n_legal, dtype=np.float64)
+    for i, (q, r) in enumerate(legal_moves):
+        best = 0.0
+        for k, (cq, cr) in enumerate(centers):
+            wq = q - cq + view_half
+            wr = r - cr + view_half
+            if 0 <= wq < view_size and 0 <= wr < view_size:
+                p = probs_K[k][wq * view_size + wr]
+                if p > best:
+                    best = p
+        max_probs[i] = best
+
+    s = max_probs.sum()
+    if s < 1e-12:
+        return [1.0 / n_legal] * n_legal
+    return (max_probs / s).tolist()
+
+
+class KClusterMCTSBot(BotProtocol):
+    """PUCT MCTS over a v6 / v6w25 K-cluster NN policy + value head.
+
+    Args:
+        model: ``HexTacToeNet`` with encoding ∈ {'v6', 'v6w25'}.
+        device: torch device.
+        n_sims: simulations per move.
+        c_puct: PUCT exploration constant (engine default 1.5).
+        temperature: 0.0 = argmax visit count; >0 = visit-count softmax.
+        pool_type: cluster-pool aggregation — currently 'min_max' (value
+            min, policy scatter-max). 'pma' / 'pma_global' reserved for
+            §169 A2 / A3.
+        fpu_q: First-Play-Urgency Q for unvisited children. Default 0.0
+            (classical FPU; matches V8MCTSBot). Engine uses 0.25-decayed
+            dynamic FPU — set ``fpu_q`` to taste.
+    """
+
+    def __init__(
+        self,
+        model: HexTacToeNet,
+        device: torch.device,
+        n_sims: int = 64,
+        c_puct: float = 1.5,
+        temperature: float = 0.0,
+        pool_type: str = "min_max",
+        fpu_q: float = 0.0,
+    ) -> None:
+        encoding = getattr(model, "encoding", None)
+        if encoding not in ("v6", "v6w25"):
+            raise ValueError(
+                f"KClusterMCTSBot requires a v6/v6w25 model; got encoding={encoding!r}"
+            )
+        if pool_type not in SUPPORTED_POOLS:
+            raise ValueError(
+                f"unknown pool_type={pool_type!r}; supported: {SUPPORTED_POOLS}"
+            )
+        self.model = model.eval()
+        self.device = device
+        self.n_sims = int(n_sims)
+        self.c_puct = float(c_puct)
+        self.temperature = float(temperature)
+        self.pool_type = pool_type
+        self.fpu_q = float(fpu_q)
+        self._slice_to_8 = self.model.in_channels == 8
+
+    def reset(self) -> None:
+        # K-cluster v6/v6w25 models read no Python history (planes 1-7 /
+        # 9-15 stay zero in V6ArgmaxBot's path); nothing to clear.
+        return
+
+    def name(self) -> str:
+        return f"k_cluster_mcts{self.n_sims}"
+
+    @torch.no_grad()
+    def _forward_K(
+        self, tensor_K: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Single batched forward over K cluster windows.
+
+        ``tensor_K`` shape: ``(K, C, S, S)`` where C is the model's
+        ``in_channels`` (8 for v6/v6w25 wire format).
+        Returns ``(log_policy_K, values_K)`` as numpy.
+        """
+        x = torch.from_numpy(tensor_K).float().to(self.device)
+        log_policy, value, _v_logit = self.model(x)
+        return (
+            log_policy.cpu().numpy(),
+            value.cpu().numpy().reshape(-1),
+        )
+
+    def _expand(self, node: _Node, sim_board) -> float:
+        """Expand ``node`` from a leaf state via batched K-cluster NN forward.
+
+        Returns the value (from current player's perspective).
+        """
+        if sim_board.check_win():
+            # Last move was by the OTHER player; current player just lost.
+            node.is_terminal = True
+            node.terminal_value = -1.0
+            return -1.0
+
+        legal_moves = list(sim_board.legal_moves())
+        if not legal_moves:
+            node.is_terminal = True
+            node.terminal_value = 0.0
+            return 0.0
+
+        node.child_flips = (int(sim_board.moves_remaining) == 1)
+
+        state = GameState.from_board(sim_board)
+        tensor, centers = state.to_tensor()  # (K, 18, S, S) float16
+        if self._slice_to_8:
+            tensor = tensor[:, KEPT_PLANE_INDICES]
+        K, _, view_h, view_w = tensor.shape
+        assert view_h == view_w, "KClusterMCTSBot expects square cluster window"
+        view_size = view_h
+
+        log_p_K, values_K = self._forward_K(tensor)
+
+        # Pool — value: min across K (negamax-conservative); policy:
+        # scatter-max across K, renormalised over legal.
+        value = float(values_K.min())
+        priors = _aggregate_priors(log_p_K, list(centers), legal_moves, view_size)
+        for action, p in zip(legal_moves, priors):
+            node.children[action] = _Node(prior=p)
+        return value
+
+    def _simulate(self, root: _Node, root_board) -> None:
+        """One MCTS simulation: descend → expand leaf → backup with HTTT
+        turn-aware sign flipping."""
+        node = root
+        path: List[_Node] = [node]
+        # sim_board: clone the live board so this sim mutates freely.
+        sim_board = root_board.clone()
+
+        while node.expanded() and not node.is_terminal and node.children:
+            action = _puct_select(node, self.c_puct, self.fpu_q)
+            sim_board.apply_move(*action)
+            node = node.children[action]
+            path.append(node)
+
+        if node.is_terminal:
+            value = node.terminal_value
+        else:
+            value = self._expand(node, sim_board)
+
+        # Backup. ``value`` is from the leaf-current-player's perspective.
+        # Walking from path[i+1] up to path[i]: flip iff path[i].child_flips
+        # (i.e. moving across that edge changed the player-to-move).
+        for i in range(len(path) - 1, -1, -1):
+            n = path[i]
+            n.visits += 1
+            n.value_sum += value
+            if i > 0 and path[i - 1].child_flips:
+                value = -value
+
+    @torch.no_grad()
+    def get_move(self, state: GameState, rust_board) -> Action:
+        # Build root by expanding it once.
+        root = _Node(prior=0.0)
+        self._expand(root, rust_board)
+        if root.is_terminal:
+            raise RuntimeError("KClusterMCTSBot: root is terminal; no moves to make")
+
+        for _ in range(self.n_sims):
+            self._simulate(root, rust_board)
+
+        actions = list(root.children.keys())
+        visits = np.array(
+            [root.children[a].visits for a in actions], dtype=np.float64
+        )
+        if self.temperature == 0.0:
+            idx = int(visits.argmax())
+        else:
+            t = max(self.temperature, 1e-6)
+            scaled = visits ** (1.0 / t)
+            s = scaled.sum()
+            if s < 1e-12:
+                probs = np.ones(len(actions)) / len(actions)
+            else:
+                probs = scaled / s
+            idx = int(np.random.choice(len(actions), p=probs))
+        return actions[idx]

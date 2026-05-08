@@ -18,6 +18,7 @@ from typing import Tuple
 import torch
 
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
+from hexo_rl.eval.k_cluster_mcts_bot import KClusterMCTSBot
 from hexo_rl.eval.v6_argmax_bot import V6ArgmaxBot
 from hexo_rl.eval.v8_argmax_bot import V8ArgmaxBot
 from hexo_rl.eval.v8_mcts_bot import V8MCTSBot
@@ -89,28 +90,26 @@ def build_inference_method(
     if encoding_label == "v6":
         if kind == "argmax":
             return V6ArgmaxBot(model, device, temperature=temperature)
-        # v6 MCTS uses the Rust MCTSTree — see hexo_rl/eval/evaluator.py
-        # ModelPlayer for the canonical wiring. We import it lazily to avoid
-        # paying the import cost when only argmax is in play.
-        from hexo_rl.eval.evaluator import ModelPlayer
-        return ModelPlayer(
-            model, {}, device, n_sims=n_sims, temperature=temperature
+        # v6 MCTS: Python K-cluster MCTS (KClusterMCTSBot) since §169 P1.
+        # Rust MCTSTree is also available via evaluator.ModelPlayer but
+        # this dispatcher uses the Python path uniformly across v6 / v6w25
+        # for matched-MCTS comparison apples-to-apples.
+        return KClusterMCTSBot(
+            model, device, n_sims=n_sims, c_puct=c_puct, temperature=temperature
         )
 
     if encoding_label == "v6w25":
-        # v6w25 wires through V6ArgmaxBot — same K-cluster encoding as v6
-        # at runtime, just with a 25×25 cluster window. The bot is shape-
-        # aware (reads view dims from the tensor), and the script seeds
-        # the Board with set_cluster_window_size(25) + cluster_threshold(8)
-        # + legal_move_radius(8) before each game.
+        # v6w25 — same K-cluster encoding as v6 at runtime, 25×25 cluster
+        # window. The bots are shape-aware (read view dims from the tensor),
+        # and the script seeds the Board with set_cluster_window_size(25) +
+        # cluster_threshold(8) + legal_move_radius(8) before each game.
         if kind == "argmax":
             return V6ArgmaxBot(model, device, temperature=temperature)
-        # v6w25 MCTS via Rust MCTSTree is blocked: MCTSTree hardcodes
-        # BOARD_SIZE=19 and POLICY_LEN=362 — see scripts/run_sealbot_eval.py
-        # commentary. Defer to a Python v6w25 MCTS port (post-§168).
-        raise NotImplementedError(
-            f"v6w25 + {name} not yet wired (Rust MCTSTree v6-locked; "
-            "Python v6w25 MCTS port deferred post-§168)."
+        # v6w25 MCTS via Rust MCTSTree is blocked (BOARD_SIZE=19,
+        # N_ACTIONS=362 hardcoded). KClusterMCTSBot is the matched Python
+        # port — §169 P1.
+        return KClusterMCTSBot(
+            model, device, n_sims=n_sims, c_puct=c_puct, temperature=temperature
         )
 
     raise ValueError(f"unknown encoding label {encoding_label!r}")
