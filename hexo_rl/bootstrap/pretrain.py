@@ -581,6 +581,12 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
 
     Uses argmax policy (no MCTS) — suitable for a pretrained but not
     yet self-play-trained checkpoint.
+
+    Encoding-aware (§168): reads `board_size` and `encoding` from the
+    saved config and configures the Rust Board with the matching cluster
+    window size + threshold + legal-move radius. v6 default at 19×19 /
+    threshold 5 / r=5; v6w25 at 25×25 / threshold 8 / r=8; v8 path
+    skipped (encoding != "v6"-family — no K-cluster window encoder).
     """
     from hexo_rl.bootstrap.bots.random_bot import RandomBot
 
@@ -590,23 +596,54 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
         f"Checkpoint missing keys; got {list(ckpt.keys())}"
     )
     cfg = ckpt["config"]
+    enc_section = cfg.get("encoding")
+    cfg_encoding = (
+        str(enc_section.get("version", "v6"))
+        if isinstance(enc_section, dict) else "v6"
+    )
+    cfg_board_size = int(cfg.get("board_size", 19))
+    cfg_in_channels = int(cfg.get("in_channels", 18))
+    has_pass = cfg_encoding in ("v6", "v6w25")
+    cfg_n_actions = cfg_board_size * cfg_board_size + (1 if has_pass else 0)
+    cfg_half = (cfg_board_size - 1) // 2
+
     loaded_model = HexTacToeNet(
-        board_size=int(cfg.get("board_size", 19)),
-        in_channels=int(cfg.get("in_channels", 18)),
+        board_size=cfg_board_size,
+        in_channels=cfg_in_channels,
         filters=int(cfg.get("filters", 128)),
         res_blocks=int(cfg.get("res_blocks", 12)),
         se_reduction_ratio=int(cfg.get("se_reduction_ratio", 4)),
+        encoding=cfg_encoding,
     )
     loaded_model.load_state_dict(ckpt["model_state"])
     loaded_model.eval().to(device)
 
     dummy = torch.zeros(
-        1, int(cfg.get("in_channels", 18)), BOARD_SIZE, BOARD_SIZE, device=device,
+        1, cfg_in_channels, cfg_board_size, cfg_board_size, device=device,
     )
     with torch.no_grad():
         log_pol, val, v_logit = loaded_model(dummy.float())
-    assert log_pol.shape == (1, POLICY_SIZE), f"Unexpected policy shape: {log_pol.shape}"
+    assert log_pol.shape == (1, cfg_n_actions), \
+        f"Unexpected policy shape: {log_pol.shape} (expected (1, {cfg_n_actions}))"
     log.info("checkpoint_forward_pass_ok", val=float(val[0, 0]))
+
+    # v8 needs a different game loop (single-bbox encoder + V8ArgmaxBot
+    # history tracking). Skip the play-100-greedy step under v8; the
+    # round-trip + forward-pass shape check is sufficient at this layer.
+    if cfg_encoding == "v8":
+        log.info("validation_skipped_v8_path", reason="v8 needs V8ArgmaxBot path")
+        return
+
+    # v6 / v6w25 K-cluster windowing: configure Board with per-encoding
+    # cluster threshold + window size + legal radius before each game.
+    if cfg_encoding == "v6w25":
+        cluster_threshold = 8
+        cluster_window_size = 25
+        legal_radius = 8
+    else:
+        cluster_threshold = 5
+        cluster_window_size = 19
+        legal_radius = 5
 
     # Play 100 greedy games vs RandomBot — expect high win rate after pretraining.
     random_bot = RandomBot()
@@ -615,6 +652,9 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
 
     for i in range(n_games):
         board = Board()
+        board.set_legal_move_radius(legal_radius)
+        board.set_cluster_threshold(cluster_threshold)
+        board.set_cluster_window_size(cluster_window_size)
         state = GameState.from_board(board)
         model_player = 1 if i % 2 == 0 else -1
 
@@ -639,9 +679,9 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
                 legal = board.legal_moves()
                 best_move, best_score = legal[0], -1e9
                 for q, r in legal:
-                    wq, wr = q - cq + 9, r - cr + 9
-                    if 0 <= wq < BOARD_SIZE and 0 <= wr < BOARD_SIZE:
-                        score = float(lp_np[wq * BOARD_SIZE + wr])
+                    wq, wr = q - cq + cfg_half, r - cr + cfg_half
+                    if 0 <= wq < cfg_board_size and 0 <= wr < cfg_board_size:
+                        score = float(lp_np[wq * cfg_board_size + wr])
                         if score > best_score:
                             best_score, best_move = score, (q, r)
                 q, r = best_move
