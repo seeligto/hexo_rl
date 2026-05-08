@@ -9347,7 +9347,9 @@ the A2 P2 tip:
 
 ## P4 — A4 arm: v8 bbox + canvas_realness mask + PartialConv2d trunk entry
 
-**Status:** ENGINEERING LANDED, retrain PENDING (operator-fired on 5080 vast.ai).
+**Status:** CLOSED 2026-05-08 — NEGATIVE result. v8 bbox direction is
+structural, not padding semantics. §169 commits to the K-cluster line;
+A1 (v6w25 + min_max) remains canonical.
 
 **Goal:** isolate whether the §167 B1 v8 SealBot WR collapse vs A1 v6w25
 (0% vs 14.5% argmax-only) is bad zero-padding semantics at the trunk
@@ -9449,54 +9451,137 @@ simpler-A4 fallback needed.
   SURFACE — bbox direction may live, matched MCTS-N becomes critical.
   Do NOT STOP; keep eval running.
 
-**Pending (operator-fired on 5080 vast.ai, ~94 min for the 128×12 retrain):**
+**Results (5080 vast.ai, 2026-05-08 — pretrain ~107 min, eval ~25 min):**
 
-| metric                          | A4 canvas_realness   | B1 (§167)              | A1 anchor (v6w25, §168) |
-|---------------------------------|----------------------|------------------------|-------------------------|
-| corpus sha256 (full)            | TBD                  | TBD                    | (v6w25 corpus, n/a)     |
-| final epoch-30 loss             | TBD                  | (v8 B1 retrain loss)   | 3.57                    |
-| NaN-skip rate                   | TBD                  | (covered by §167 patch)| 0%                      |
-| argmax @ r=8 n=200 vs SealBot   | TBD                  | 0% (§167 Gate 4)       | 14.5% [10.3%, 20.0%]    |
-| MCTS-128 n=200 vs SealBot       | TBD                  | n/a (§167 argmax-only) | n/a (§169 P1 sanity 25%) |
-| threat probe C1/C2/C3           | SKIPPED (§170 v8 fixture follow-up) | n/a    | n/a                     |
-| params (M)                      | ≈3.85 M (B1 + ~150 PC kernel scalars; PC has no extra learnable weights, just the wrapped Conv2d) | 3.85 M | 5.29 M |
-| latency b=1 / b=64 (5080, ms)   | TBD                  | TBD                    | 2.64 / 10.41            |
+| metric                          | A4 canvas_realness            | B1 (§167)              | A1 anchor (v6w25, §168) |
+|---------------------------------|-------------------------------|------------------------|-------------------------|
+| corpus sha256                   | `110ea6b20ad3140d2791a1ca72c5c36076a75913e9fe5f9574fa3a1d45dc8cb3` (347,142 positions, 5,382 MB, ~5 min regen) | (v8 corpus, n/a)   | (v6w25 corpus, n/a)     |
+| final epoch-30 loss             | **3.4658** (BETTER than A1 anchor!) | (B1 v8 retrain, n/a tracked here) | 3.57                    |
+| NaN-skip rate                   | **0%** (clean run)            | (covered by §167 patch)| 0%                      |
+| argmax @ r=8 n=200 vs SealBot   | **0.0% [0.0%, 1.9%]** (0W/200L/0D, mean_ply 23.5) | 0% (§167 Gate 4)       | 14.5% [10.3%, 20.0%]    |
+| MCTS-128 n=200 vs SealBot       | **0.0% [0.0%, 1.9%]** (0W/200L/0D, mean_ply 23.6) | n/a (§167 argmax-only) | n/a (§169 P1 sanity 25%) |
+| threat probe C1/C2/C3           | SKIPPED (§170 v8 fixture follow-up; same gap as A2/A3) | n/a    | n/a                     |
+| params (M)                      | **3.85 M** (B1-equivalent; PartialConv2d adds zero learnable params — just renormalisation)      | 3.85 M | 5.29 M |
+| latency b=1 / b=64 (5080, ms)   | **2.77 / 11.34** (+5% / +9% vs A1)             | (B1 ~2.48 / ~11.3, similar) | 2.64 / 10.41            |
 
-**Verdict (pending retrain):** if A4 argmax ≥ 12% the bbox direction
-lives — bad zero-padding semantics at trunk entry was the diagnostic
-loss for B1; matched MCTS comparison on top of A1 v6w25 / B1 v8 / A4
-canvas_realness becomes the next gate. If A4 argmax ≪ 12% the loss is
-structural — §169 commits to the K-cluster line and v8 bbox is closed.
+**Read:** A4 closed the **training loss** gap (3.47 < 3.57 anchor — better
+than A1, in fact) and the pre-flight subspike PASSed (SE × PartialConv2d
+compatibility, full-model b=1 Δ +1.64% on 5080, +0.30% at b=64 — well
+under the 5% gate). **But SealBot WR collapsed to 0% at both argmax and
+MCTS-128**, identical to §167 B1 v8 and ≪ A1's 14.5% argmax / 25%
+MCTS-32 sanity. Mean_ply 23.5 (argmax) ≈ 23.6 (MCTS-128) — MCTS finds
+no improvement over argmax; the model has no useful policy distribution
+to search over. The padding-semantics intervention (canvas_realness mask
++ PartialConv2d at trunk entry) did NOT close the bbox-vs-K-cluster
+gap, falsifying the hypothesis that B1's 0% argmax was a fixable
+zero-padding artefact.
 
-**Branch state:** `encoding/four_way_ablation` — 3 mandated commits on
-top of the A3 P3 tip:
-1. `feat(corpus): §169 A4 canvas_realness plane-8 polarity for v8`
-2. `feat(model,eval): §169 A4 PartialConv2d trunk entry + canvas_realness wire`
-3. `chore(ablation_169): A4 retrain config + pretrain script + eval matrix`
+**Verdict: NEGATIVE — bbox direction structural, NOT padding
+semantics.** A4 trained cleanly (loss converged below A1 anchor, no
+NaN-skips, gate-passing latency) but transfers ZERO of that training
+quality to SealBot eval — same outcome as untouched B1 v8. The loss
+is structural at the encoding level: candidate mechanisms for the
+bbox failure (out of §169 scope to disambiguate further):
 
-**Done-when checks (engineering side):**
-- [x] PartialConv2d module + tests landed (`hexo_rl/model/partial_conv.py`,
+  1. **K-aggregation as cross-cluster contrast.** The K-cluster encoding
+     gives the model K windows per leaf at inference time, each
+     scattered through the bot-side scatter-max-on-prob; this is the
+     A1 v6w25 path and is what A2/A3 tried and failed to replace with
+     learned PMA. Single-window bbox forfeits this entirely; even
+     perfect padding semantics cannot reconstruct multi-window
+     contrast at inference time when the corpus serves K=1.
+  2. **Bbox-centroid frame instability.** The 625-action policy head
+     emits logits in the bbox-centroid frame, which shifts every time
+     a stone lands far from the existing bbox (centroid moves up to
+     ~m=8 cells per move). The model sees ply-T states centred on
+     centroid_T but must score ply-T+1 actions centred on
+     centroid_T+1 — there is no fixed reference frame the policy
+     converges to.
+  3. **R=8 perception expansion.** v8 bumped legal_move_radius from 5
+     to 8 (P2 hotfix-(c) bundling). Self-play opens up by ~8× more
+     legal moves per ply at any given centroid; the policy must learn
+     8× more action geometry per board state than under v6w25's
+     R=8 + cluster-mask. Pre-trained on human games (R=8 unrestricted)
+     this should be fine, but the bbox single-window may not give
+     the model enough context to discriminate the correct cell at
+     inference time.
+
+These three mechanisms each predict that adding cross-cluster
+contrast back into the bbox path (per-cluster bbox at
+CLUSTER_THRESHOLD=8 falling back to a unified bbox when stones
+merge) recovers most of the gap. That fallback was specced in
+`audit/encoding_spikes/s1_bbox_algorithm.md` §5.2 and is the
+operator's call for a §170 follow-up if Phase 5+ revisits bbox.
+
+**Pre-flight subspike on 5080 (re-run before retrain):**
+
+| check                                | result    |
+|--------------------------------------|-----------|
+| forward + backward correctness       | finite, all 13 PartialConv params reach finite grads |
+| off-canvas output zero               | max\|val\|=0.000000 |
+| SE on PC outputs                     | finite, mean=-0.0039 |
+| latency b=1 trunk-entry-only (5080)  | A4 0.177 ms / B1 0.133 ms = +33.09% |
+| latency b=1 FULL HexTacToeNet (5080) | A4 1.642 ms / B1 1.616 ms = **+1.64%** (+1.93σ) |
+| latency b=64 FULL MODEL (5080)       | A4 11.328 ms / B1 11.295 ms = **+0.30%** |
+
+5080 confirms the laptop subspike: SE × PartialConv2d compatible at
+trunk entry; full-model latency hit within budget at every batch size.
+
+**Hard-stop / surface conditions — actual outcomes:**
+- Subspike SE × PartialConv compatibility: **PASS** (gated pre-retrain
+  + re-confirmed on 5080).
+- Final loss > 5.36: **PASS** (3.47 ≪ 5.36; A4 actually undercut A1).
+- NaN-skip rate > 30%: **PASS** (0 skips across the entire 30-epoch run).
+- A4 argmax > 12% (bbox direction lives): **NOT TRIGGERED** (0%).
+  Verdict path: structural loss.
+
+**§169 close-out implication.** Four-way ablation matrix complete:
+
+| arm                                          | loss   | argmax WR vs SealBot | MCTS WR vs SealBot |
+|----------------------------------------------|--------|----------------------|--------------------|
+| A1 — K-cluster + min/max (v6w25 anchor)      | 3.57   | **14.5%**            | 25% (P1 sanity, MCTS-32 n=20) |
+| A2 — K-cluster + PMA pool                    | 4.25   | 4.5%                 | 3.5% (MCTS-128)    |
+| A3 — K-cluster + PMA + global token          | 3.62   | 7.5%                 | 2.5% (MCTS-128)    |
+| A4 — bbox + canvas_realness + PartialConv2d  | **3.47** | **0.0%**           | **0.0%** (MCTS-128) |
+
+Training loss alone is NOT a sufficient signal for SealBot WR — A4 has
+the lowest loss but zero WR; A2 has the highest loss but still beats
+A4 at argmax. **The encoding decides; the pool variant tweaks.** A1
+remains the canonical path. Phase 5+ encoding-pivot work (if it
+revisits bbox) must address the structural mechanisms above (K=1 vs
+K>1 corpus supervision, bbox-centroid frame instability, single-window
+inference-time blindness) before any further bbox arm is worth the
+GPU time.
+
+**Branch state:** `encoding/four_way_ablation` — 5 commits on top of
+the A3 P3 tip:
+1. `3d047b4 feat(corpus): §169 A4 canvas_realness plane-8 polarity for v8`
+2. `53c72aa feat(model,eval): §169 A4 PartialConv2d trunk entry + canvas_realness wire`
+3. `264c20c chore(ablation_169): A4 retrain config + pretrain script + eval matrix`
+4. `25e763d docs(sprint): §169 P4 draft` (this section, replaced post-eval)
+5. `2c58163` + `f7b17e4 fix(scripts): A4 pretrain/eval use .venv/bin/python explicitly`
+
+**Done-when checks:**
+- [x] PartialConv2d module + tests (`hexo_rl/model/partial_conv.py`,
   `tests/test_partial_conv.py` — 9 tests).
-- [x] dataset_v8 canvas_realness polarity + tests
-  (`tests/test_dataset_v8.py` +5 A4 tests).
+- [x] dataset_v8 canvas_realness polarity + tests (+5 A4 tests).
 - [x] HexTacToeNet canvas_realness wiring + state-dict key shift +
   checkpoint loader auto-detection.
 - [x] V8ArgmaxBot / V8MCTSBot / bench_v8_nn thread canvas_realness.
 - [x] CLI flags (`--canvas-realness` on pretrain + export_corpus_npz).
-- [x] Local smoke validates the full pipeline (5k-position corpus →
-  30-step pretrain → checkpoint load → V8ArgmaxBot → bot move).
-- [x] Pre-flight subspike PASS.
-- [x] `make test` green: 1111 passed, 8 skipped.
-- [x] Configs + retrain script + eval script landed
-  (`configs/ablation_169_a4.yaml`, `scripts/pretrain_a4_canvas_realness.sh`,
-  `scripts/eval_a4_canvas_realness.sh`).
-
-**Done-when checks (retrain side, OPERATOR-FIRED):**
-- [ ] Full v8 canvas_realness corpus regen on 5080 (~10 min).
-- [ ] 30-epoch pretrain on 5080 (~94 min — same as A2/A3).
-- [ ] argmax + MCTS-128 WR captured in `reports/ablation_169/A4_eval.json`.
-- [ ] bench appended to `reports/ablation_169/bench_per_arm.md` (A4 5080 row).
-- [ ] Sprint log Results table back-filled with the retrain numbers.
-- [ ] Verdict line: bbox direction lives vs. structural loss decision.
+- [x] Pre-flight subspike PASS on laptop (4060 Max-Q) + 5080.
+- [x] `make test` green: 1111 passed, 8 skipped (no regressions).
+- [x] Configs + retrain script + eval script landed.
+- [x] Full v8 canvas_realness corpus regen on 5080 (5 min wall, 5,382 MB,
+  sha256 `110ea6b2…`).
+- [x] 30-epoch pretrain on 5080 — final loss **3.4658**, 0 NaN-skips
+  (107 min wall).
+- [x] argmax + MCTS-128 WR captured in `reports/ablation_169/A4_eval.json`
+  — both **0% [0%, 1.9%]** (0/200 each).
+- [x] bench captured in `reports/ablation_169/A4_bench.json` (b=1 2.77 ms,
+  b=64 11.34 ms, params 3.85M, host 5080).
+- [x] Threat probe SKIPPED (no v8 fixture; §170 follow-up — same gap as
+  A2/A3).
+- [x] Sprint log Results table back-filled, verdict line written.
 
 
