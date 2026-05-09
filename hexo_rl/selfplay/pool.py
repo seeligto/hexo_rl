@@ -172,6 +172,17 @@ class WorkerPool:
             )
 
         training_cfg = config.get("training", config)
+        # §171 P3 A1 reopen — pass the resolved EncodingSpec through to the
+        # Rust runner so per-game `Board` construction in worker_loop.rs uses
+        # `Board::with_encoding(spec)` instead of the v6-default `Board::new()`.
+        # `to_pyo3()` is only defined for v6-family encodings (cluster window /
+        # threshold are not None); v8 self-play does not exercise this code
+        # path (no v8 sustained training surface), so we skip the conversion
+        # and let the runner default to v6 behavior.
+        if spec.cluster_window_size is not None and spec.cluster_threshold is not None:
+            runner_encoding = spec.to_pyo3()
+        else:
+            runner_encoding = None
         self._runner = SelfPlayRunner(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_game_moves", sp.get("max_moves_per_game", 128))),
@@ -215,35 +226,12 @@ class WorkerPool:
             # {4, 5, 6}. Default off so eval/bot/test paths and any
             # pre-§152 variant stay at the canonical radius 5.
             legal_move_radius_jitter=bool(sp.get("legal_move_radius_jitter", False)),
+            encoding=runner_encoding,
         )
         self._inference_server = InferenceServer(
             model, device, config, batcher=self._runner.batcher,
             encoding_spec=spec,
         )
-
-        # §171 P3 — RUST-SIDE GAP (requires A1/§172 followup):
-        # `engine.SelfPlayRunner` constructs `Board::new()` per game in Rust
-        # (see engine/src/game_runner/mod.rs lines 542/598/612/680). It has
-        # no Python-visible knob to thread `EncodingSpec` through to the
-        # Rust-owned worker threads. For v6/v8 (canonical defaults this
-        # constructor matches) self-play stays correct. For v6w25, workers
-        # will use cluster_window_size=19 / cluster_threshold=5 (v6 defaults)
-        # despite the Python-side spec being v6w25. The fix is one of:
-        #   (a) `SelfPlayRunner::new(..., encoding: Option<&PyEncodingSpec>)`
-        #       and route through `Board::with_encoding` in worker_loop.rs,
-        #   (b) per-game `set_cluster_window_size` / `set_cluster_threshold`
-        #       calls inside the Rust worker_loop just after `Board::new()`.
-        # Until that lands, log loud at startup so any v6w25 sustained launch
-        # observes the mismatch in the JSONL stream.
-        if spec.version == "v6w25":
-            log.warning(
-                "selfplay_runner_encoding_unbound",
-                resolved_encoding=spec.version,
-                cluster_window_size=spec.cluster_window_size,
-                cluster_threshold=spec.cluster_threshold,
-                rust_workers_will_use="v6_defaults_window=19_threshold=5",
-                fix="requires SelfPlayRunner Rust API extension (A1 followup)",
-            )
 
         self._stop_event = threading.Event()
         self._stats_thread: Optional[threading.Thread] = None

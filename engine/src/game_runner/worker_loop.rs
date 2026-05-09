@@ -190,6 +190,11 @@ impl SelfPlayRunner {
             let random_opening_plies = self.random_opening_plies;
             let selfplay_rotation_enabled = self.selfplay_rotation_enabled;
             let legal_move_radius_jitter = self.legal_move_radius_jitter;
+            // §171 P3 A1 reopen — Copy the EncodingSpec into each worker
+            // closure. `Option<EncodingSpec>` is `Copy` (EncodingSpec derives
+            // Copy/Clone), so each thread owns its own value with no shared
+            // state cost.
+            let encoding = self.encoding;
             let sym_tables = sym_tables_arc.clone();
             let results_queue = self.results.clone();
             let positions_dropped = self.positions_dropped.clone();
@@ -222,7 +227,14 @@ impl SelfPlayRunner {
                 let mut dbg_game_idx: u32 = 0;
 
                 while running.load(Ordering::SeqCst) {
-                    let mut board = Board::new();
+                    // §171 P3 A1 reopen — honor the runner's EncodingSpec so
+                    // v6w25 workers actually perceive a 25×25 cluster window
+                    // (threshold=8, radius=8). `None` keeps byte-exact pre-§171
+                    // v6 defaults (window=19, threshold=5, radius=5).
+                    let mut board = match encoding.as_ref() {
+                        Some(spec) => Board::with_encoding(spec),
+                        None       => Board::new(),
+                    };
                     let mut records_vec = Vec::new();
                     let mut move_history: Vec<(i32, i32)> = Vec::new();
                     version_seen.clear();

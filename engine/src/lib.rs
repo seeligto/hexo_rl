@@ -34,7 +34,7 @@ use replay_buffer::sym_tables::{SymTables, N_SYMS};
 #[pyclass(name = "EncodingSpec")]
 #[derive(Clone)]
 pub struct PyEncodingSpec {
-    inner: RustEncodingSpec,
+    pub(crate) inner: RustEncodingSpec,
 }
 
 #[pymethods]
@@ -76,6 +76,15 @@ impl PyEncodingSpec {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.inner.hash(&mut h);
         h.finish()
+    }
+}
+
+impl PyEncodingSpec {
+    /// Crate-internal accessor: copy out the underlying `RustEncodingSpec`.
+    /// Used by `SelfPlayRunner::new` (game_runner/mod.rs) to thread the
+    /// spec through to the Rust-owned worker thread Boards.
+    pub(crate) fn to_inner(&self) -> RustEncodingSpec {
+        self.inner
     }
 }
 
