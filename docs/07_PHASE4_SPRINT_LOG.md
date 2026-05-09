@@ -10114,3 +10114,338 @@ operating point AT ALL — including additive bias"**. The next ablation
 (A1+gpool-bias-policy-only) tests whether limiting injection to the
 policy head escapes this trap.
 
+---
+
+## §170 — close-out + Gate 6 operator surface — 2026-05-09
+
+**Branch:** `encoding/gpool_bias_a1` (off `ec6e30b`, post-§169 A4 close-
+out + §169a + §170 P0/P1).
+**Predecessor:** §169 four-way ablation close-out (A1 anchor canonical;
+A2/A3/A4 ablation arms ruled out for canonical pick).
+**Successor (operator-decided):** §170 P4 spike (A1 + gpool-bias-policy-
+only) and/or §171 (Phase D self-play smoke under canonical pick) — see
+Gate 6 operator surface below.
+**Status:** P0 + P1 + P3 complete. P2 (A4 MCTS-N curve) NOT RUN — see
+§3 below. Awaiting operator go on Gate 6 items (a)–(f).
+
+---
+
+### TL;DR
+
+- **Three discriminator probes ran. None promoted a new canonical;
+  one large argmax breakthrough was falsified under MCTS.** A1 anchor
+  (v6w25 K-cluster + min/max + no global routing) remains the canonical
+  bootstrap path; all global-signal variants tested in §170 (additive
+  bias + PMA-merged + scalar-ablation) failed to clear the §171
+  sustained-run candidate gate (argmax > 16% AND MCTS > 27%).
+- **§170 P0 (A4 scalar-ablation, ~10 s wall): SPATIAL_RICH.** Mean
+  symmetric KL between A4 outputs at original Set R and a stones-zeroed
+  copy = 4.19 nats; argmax STABLE 0/200 (every position's top-1 cell
+  changes). A4's spatial pathway is alive *and load-bearing*. The
+  SCALAR_DOMINATED hypothesis is closed; distribution-shift fine-tune
+  (§171 candidate) is mechanistically justified.
+- **§170 P1 (A3 MCTS-N curve, ~13 min wall): FLAT-NON-MONOTONIC.** A3
+  argmax 7.5% → MCTS-{32, 64, 128} = 2.5% / 2.5% / 2.5% (identical
+  W/L/D = 5/195/0 across all three depths; CIs identical to four
+  decimals). Cliff at argmax→MCTS boundary is a binary switch, NOT
+  monotone amplification. The PMA-value-head cliff is structural;
+  more sims cannot rescue a broken value floor.
+- **§170 P3 (A1 + gpool-bias retrain, 1h 48m pretrain + 28 min eval +
+  14 min matched-baseline): FALSIFIED.** Argmax +7.5 pp (14.5% → 22.0%)
+  was real and broke the breakthrough threshold (>20%); but the matched
+  A1-anchor MCTS-64 baseline (run post-eval to discriminate) revealed
+  A1 anchor MCTS-64 = 30.0% [24.1%, 36.7%] vs A1+gpool MCTS-64 = 15.0%
+  [10.7%, 20.6%] — a **−15.0 pp regression with disjoint CIs**.
+  Mean-ply collapses 33.8 → 29.7 under search. Final loss 2.8963 ≪
+  anchor 3.57 confirms (again) **lower training loss does not imply
+  better SealBot WR**.
+- **Mechanistic synthesis.** P1 + P3 together identify the value
+  head's *operating point* (not the routing or pool layer) as the
+  controlling factor. PMA-merged routing (A3) corrupts value once
+  during training by replacing the head; additive bias (A1+gpool)
+  corrupts value once during training by shifting the head's hidden
+  activation. Both produce the SAME argmax-up / MCTS-down failure mode
+  with different magnitudes. The §170 P4 candidate (policy-only
+  injection, value gate frozen at 0) is the surgical fix that follows.
+
+---
+
+### 1. Branch state
+
+```
+3f15a42 docs(sprint): §170 P3 FALSIFIED — A1 anchor MCTS-64 baseline reveals -15pp regression
+219208b docs(sprint): §170 P3 RESULTS — A1 + gpool-bias breakthrough (+7.5 pp argmax)
+bda723d docs(sprint): §170 P3 ENGINEERING-COMPLETE — A1 + gpool-bias retrain
+898a1d3 eval(a1-gpool-bias): argmax + matched MCTS evaluation plumbing
+b0f0259 feat(retrain): A1 + gpool-bias retrain config + script
+641408b feat(dataset,pretrain): v6w25 corpus + 32x32 global crop column for gpool-bias path
+cb61a78 feat(model): GpoolBias side-branch + gate scalar (gate=0 byte-exact A1)
+3183f60 eval(a3): MCTS-N curve on existing checkpoint              ← §170 P1
+3f54152 feat(probe): A4 scalar-ablation — discriminates spatial-feature richness  ← §170 P0
+ec6e30b Merge branch 'encoding/four_way_ablation'                  ← §169 close-out base
+d9b3c38 chore(169a): spatial deadness probe + gitignore worktrees  ← §169a (§170-pre)
+```
+
+Branch pushed to origin at `3f15a42`. This aggregation commit
+(`docs(170): aggregation + Gate 6 operator surface`) lands on top of
+`3f15a42`; no functional code changes.
+
+---
+
+### 2. Probe-by-probe summary
+
+#### §170 P0 — A4 scalar-ablation (verdict: SPATIAL_RICH)
+
+Question: is A4's residual policy variance scalar-driven or spatial-
+driven? Pre-registered thresholds (locked before run): SCALAR_DOMINATED
+(KL < 0.30 nats) vs SPATIAL_RICH (KL > 1.50 nats).
+
+Result: **mean KL = 4.19 nats, argmax STABLE 0/200**. SPATIAL_RICH
+fires by 2.8× margin over the threshold. Combined with §169a (E2 PASS,
+spatial pathway alive at KL_S = 1.53 nats), this fully discriminates
+A4's mechanism: spatial features are intact AND load-bearing AND
+*decisive* on the top-1 move. The 0% SealBot WR is therefore a
+distribution-shift problem, not an architecture problem.
+
+**Implication for §170 scoping (closed in this aggregation).**
+Distribution-shift fine-tune (§171 side-arm candidate) is
+mechanistically justified. Architectural redesign of the bbox direction
+is NOT warranted before §171 evidence. P0 verdict alone sets up
+Gate 6 item (c).
+
+Full entry: §170 P0 above (lines 9678–9736).
+
+#### §170 P1 — A3 MCTS-N curve (verdict: FLAT-NON-MONOTONIC)
+
+Question: does A3's argmax→MCTS-128 cliff (7.5% → 2.5%) reflect
+**monotone compounding** of PMA-replaced value error across MCTS
+backups, or a **binary switch** at the value-backup boundary? Pre-
+registered: MONOTONIC-DECLINE (strict argmax > MCTS-32 > MCTS-64 >
+MCTS-128 ordering, consecutive CI overlap ≤ 50%, Cochran-Armitage
+p < 0.10) vs FLAT/NON-MONOTONIC.
+
+Result: argmax 7.5% → MCTS-32 / MCTS-64 / MCTS-128 = **2.5% / 2.5% /
+2.5%** (W/L/D = 5/195/0 IDENTICAL across all three). Consecutive CI
+overlap 100% on all MCTS pairs. Cochran-Armitage p = 0.0277 (driven
+entirely by argmax→MCTS split, not the trend across N).
+
+**Verdict: FLAT-NON-MONOTONIC.** The compounding hypothesis is
+refuted. The cliff is a binary switch already saturated at MCTS-32
+(~3 backup levels for a typical median ply 23 game).
+
+**Implication for §170 scoping (closed in this aggregation).** Any A3-
+descended variant must fix the value head, not the policy head (which
+already works under argmax). The "Add PMA side-channel to A1" framing
+(Bet B / option α) is justified ONLY for the policy lift, NOT for
+search-depth robustness. The natural minimal fix is policy-only
+injection with the value path untouched (low-cost §170 option in §170
+P1 §4) — which set up the §170 P3 hypothesis.
+
+Full entry: §170 P1 above (lines 9738–9833).
+
+#### §170 P3 — A1 + gpool-bias retrain (verdict: FALSIFIED)
+
+Question: does an additive K-invariant gpool-bias side-branch lift
+both argmax (predicted +2–4 pp) and MCTS (predicted +3–6 pp) over A1
+anchor while keeping the load-bearing min/max pool byte-exact at
+gate=0? Pre-registered hard-stops: final loss > 5.36, NaN-skip > 30%,
+forward parity at gate=0 (architecture invariant).
+
+Result:
+- **Final loss 2.8963** (BETTER than A1 anchor 3.57; well below 5.36
+  hard-stop). Gate trajectory: 0.000 → 0.038 → **0.0512** (~3× growth
+  from absolute zero, just above the 0.05 soft-warn null threshold).
+  0% NaN-skips. Forward parity unit test green at gate=0.
+- **Argmax @ r=8 n=200: 22.0% [16.8%, 28.2%]** (44 W / 154 L / 2 D,
+  mean_ply 47.98). +7.5 pp over A1 anchor 14.5% — broke the >20%
+  surface-for-§171 threshold *initially*.
+- **MCTS-64 n=200: 15.0% [10.7%, 20.6%]** (30 W / 170 L / 0 D,
+  mean_ply 29.7). Matched A1-anchor MCTS-64 baseline run post-eval
+  on 5080 (839 s, 60 W / 140 L / 0 D = 30.0% [24.1%, 36.7%], mean_ply
+  33.8). **A1+gpool regresses −15.0 pp under MCTS with CIs disjoint
+  by 3.5 pp**. The +7.5 pp argmax lift does NOT transfer through
+  PUCT search.
+
+**Verdict: FALSIFIED.** Argmax-up / MCTS-down signature reproduces
+A2 PMA (4.5%/3.5%) and A3 PMA+global (7.5%/2.5%) at higher absolute
+WR but the same shape. The "additive bias preserves load-bearing
+pool" invariant holds only structurally at gate=0 — once the gate
+gains weight, the value head's hidden activation distribution shifts
+vs the gate=0 baseline, and PUCT accumulates the drift across
+simulations.
+
+**Implication.** §170 P3 lesson generalises §170 P1's: do NOT modify
+the value head's operating point AT ALL — including additive bias.
+The §170 P4 candidate (policy-only injection with value gate frozen
+at 0) is the surgical follow-up that tests whether limiting injection
+to the policy head escapes this trap. Predicted: argmax preserves
+~22%, MCTS-64 approaches A1 anchor ~30% (best-of-both).
+
+Full entry: §170 P3 above (lines 9835–10115).
+
+#### §170 P2 — A4 MCTS-N curve at matched perception (NOT RUN)
+
+The §170 P2 slot in the original probe chain (A4 alive vs dead under
+MCTS at matched perception) was **not run** in this sprint. Rationale
+(folded into the P0 verdict + §169 P4 result + §169a probe):
+
+- §169 P4 already measured A4 MCTS-128 = 0.0% [0.0%, 1.9%] (matching
+  argmax-only 0%).
+- §169a (E2 PASS): spatial pathway alive at KL_S = 1.53 nats with
+  133/200 distinct argmax cells under spatial-only variation.
+- §170 P0 (SPATIAL_RICH): spatial features load-bearing, NOT scalar-
+  dominated under realistic position diversity (KL = 4.19 nats,
+  argmax-stable 0/200 under stones-zeroed).
+
+These three observations together triangulate A4's mechanism without
+the curve: spatial features are intact, alive, and load-bearing on
+the policy top-1 — but BOTH argmax and MCTS-128 are at the noise
+floor (0.0%). MCTS depth cannot rescue a model whose underlying
+policy + value at N=1 is already at the floor; there is no signal to
+amplify. An A4 MCTS-N curve would therefore produce a flat 0% / 0% /
+0% line — adding a third 5080 run to confirm the floor with no new
+information.
+
+The mechanistic story stays: A4's failure is corpus-overfitted spatial
+representations going OOD against SealBot's adversarial style. The
+right next step is **distribution-shift fine-tune (§171 side-arm
+candidate)**, not architectural redesign — see Gate 6 item (c).
+
+If the operator wants the formal A4 MCTS-N curve completed for
+audit-trail completeness, it is a ~1 hr 5080 run (200 games × 3
+depths). The recommendation here is to skip and queue it as a Phase
+5+ artefact only if needed for paper / external review.
+
+---
+
+### 3. Comparison matrix (compact)
+
+Full matrix with CIs in `reports/gpool_bias/SUMMARY.md` §1.
+
+| arm                  | encoder        | pool                  | global routing       | argmax        | MCTS-N        | params  |
+|----------------------|----------------|-----------------------|----------------------|--------------:|--------------:|--------:|
+| **A1 anchor**        | v6w25 K-cluster| min/max               | none                 | **14.5%**     | 25% MCTS-32 (n=20); **30% MCTS-64** (n=200) | 5.29 M |
+| A2                   | v6w25 K-cluster| PMA                   | none                 | 4.5%          | 3.5% MCTS-128 | 6.30 M |
+| A3                   | v6w25 K-cluster| PMA                   | yes (PMA-merged)     | 7.5%          | 2.5% MCTS-32 / 64 / 128 (FLAT) | 6.37 M |
+| A4                   | v8 + canvas    | bbox + PartialConv2d  | n/a (canvas mask)    | 0.0%          | 0.0% MCTS-128 | 3.85 M |
+| **A1 + gpool-bias**  | v6w25 K-cluster| min/max + gpool-bias  | yes (additive bias)  | **22.0%**     | **15.0% MCTS-64** | 5.47 M |
+
+Decomposition reading + canonical-pick rationale: see
+`reports/gpool_bias/SUMMARY.md` §2–§3.
+
+---
+
+### 4. Gate 6 — operator decision packet
+
+a) **Promote A1+gpool-bias to `bootstrap_model.pt`?**
+   **Recommendation: NO, do not promote.** The promotion gate is
+   `argmax > 16% AND MCTS > 27%`. A1+gpool argmax = 22.0% (PASS) but
+   MCTS-64 = 15.0% (FAIL by 12 pp). Promotion would regress sustained-
+   run performance by ~15 pp under PUCT. A1 anchor (v6w25,
+   `bootstrap_model_v6w25.pt`, sha256 `571a82f8…`) remains canonical.
+
+b) **Open §171 (Phase D self-play smoke) under canonical pick? Which?**
+   **Recommendation: open §171 under A1 anchor (v6w25 K-cluster +
+   min/max).** A1 anchor MCTS-64 = 30.0% is the only §169 / §170 arm
+   above the §171 sustained-run candidate gate. Two side-arm scope
+   decisions are surfaced separately as items (c) and (d) and could
+   be folded into the §171 plan or run in parallel.
+
+c) **§171 distribution-shift fine-tune for A4 — open scope or defer?**
+   **Recommendation: open as a §171 SIDE-ARM (not the canonical), or
+   defer until §170 P4 verdict lands.** §170 P0 verdict SPATIAL_RICH
+   means the bbox failure mode is mechanistically tractable: corpus-
+   overfitted spatial representations going OOD on SealBot. Augmenting
+   with adversarial SealBot-style positions and fine-tuning A4 is
+   cheap (~3–4 hr on 5080) and tests the bbox direction without
+   architectural redesign. Risk: opening §171 with two parallel
+   side-arms (A1 canonical + A1+gpool-policy-only + A4 distribution-
+   shift) may dilute operator attention. Operator's call.
+
+d) **Hybrid scope — §170 P4 spike or §172 spike?**
+   **Recommendation: open §170 P4 spike (A1 + gpool-bias-policy-
+   only) BEFORE §171.** This is the single most informative next
+   experiment given the §170 P1 + P3 mechanistic synthesis (value-
+   head operating-point drift is the controlling factor). One config
+   change (`value_gate_active=False`) + one retrain + one eval ≈
+   2h 16m on 5080. If verdict matches prediction (argmax ~22%, MCTS
+   ~30%), promote to canonical for §171. If verdict reproduces the
+   MCTS regression, the §170 P3 lesson generalises further to
+   "shared-trunk gradient flow makes the value head sensitive to ANY
+   side-branch training" — a Phase 5+ research question, not a §171
+   blocker. Other hybrid scopes (Set-Transformer light-touch,
+   PMA-policy + min-value A2′) are alternative routings of the same
+   policy-only-side-channel idea; defer to Phase 5+ unless the
+   gpool-bias-policy-only spike fails.
+
+e) **v8 bench-gate finalize — replace v6 numbers with current
+   canonical?**
+   **Recommendation: DEFER.** v8's current canonical (B1 bbox +
+   canvas_realness + PartialConv2d) is at 0% SealBot WR; replacing
+   v6 bench numbers with a 0%-WR canonical premature. v6w25 / A1
+   anchor bench numbers remain authoritative for Phase D until §171
+   distribution-shift verdict (or later) clears bbox direction. Track
+   as a deferred follow-up; revisit at §171 close-out.
+
+f) **§169 + §170 architecture explorations to defer to Phase 5+?**
+   **Recommendation: defer the following list, queue for Phase 5+
+   intake review:**
+   - Set-Transformer light-touch on policy heads (alternative routing
+     to gpool-bias-policy-only).
+   - PMA-policy + min-value hybrid (A2′ — §169 P3 close-out option).
+   - bbox-direction redesign (K=1 vs K>1 corpus supervision, bbox-
+     centroid frame instability, single-window inference-time
+     blindness — §169 P4 close-out items).
+   - Threat-probe v6w25 fixture build (curated tactical positions on
+     a 25×25 board + regenerated baseline). Currently SKIPPED across
+     A1 / A2 / A3 / A1+gpool — operator-side curation work; blocks
+     C1/C2/C3 column for every v6w25 arm. Track as a §170 hangover.
+   - Formal A4 MCTS-N curve (skipped per §2 §170 P2 above) — only
+     resurrect for paper / external-review audit trail.
+
+---
+
+### 5. Outstanding for operator at Gate 6
+
+- [ ] Decide (a)–(f). Items (a), (b), (e), (f) recommended verdicts
+      above are low-controversy; items (c) and (d) are scope decisions
+      that affect the next 2–6 hours of 5080 compute.
+- [ ] If (d) is opened: scope §170 P4 (A1 + gpool-bias-policy-only)
+      in a separate context. Architecture invariant (gate=0 byte-exact
+      A1) already holds; only `value_gate_active=False` knob needs
+      exposure on `GpoolBiasBranch`.
+- [ ] If (c) is opened standalone or alongside (d): scope §171 A4
+      distribution-shift fine-tune in a separate context.
+- [ ] Either way, scope §171 (Phase D self-play smoke) under A1 anchor
+      canonical pick after §170 P4 spike resolves.
+
+---
+
+### 6. Surface-immediately tracking
+
+None fired during execution. All monitors clear at close:
+- §170 P0 + P1 + P3 hard-stops: all PASS or N/A (loss < 5.36 hard-
+  stop; NaN-skip 0%; forward parity green).
+- §170 P3 surface-for-§171 threshold (argmax > 20%): triggered, then
+  cancelled by matched A1-anchor MCTS-64 baseline (30.0% disjoint
+  CI vs 15.0%).
+- A1 anchor matched-baseline run: completed and archived
+  (`reports/gpool_bias/A1_anchor_mcts64.json`).
+
+---
+
+### 7. STOP — awaiting operator go on Gate 6
+
+Branch `encoding/gpool_bias_a1` ready at `3f15a42` + this aggregation
+commit. §170 close-out merges into master AFTER operator decision on
+items (a)–(f). No checkpoint promotion taken; no gating yaml changed;
+no §171 scope opened.
+
+**Key result: A1+gpool-bias falsified at the value-head bias injection
+site. A1 anchor remains canonical. §170 P4 (policy-only) is the
+recommended next surgical experiment.**
+
+**Next:** §170 P4 spike (operator-decided, item d) → §171 (Phase D
+self-play smoke under canonical pick, operator-decided, item b).
+
+
