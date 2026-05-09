@@ -189,6 +189,11 @@ def test_selfplay_runner_v6_default_workers_use_w19_boards():
 # ── WorkerPool path — verifies the Python wiring + warning removal ────────────
 
 
+@pytest.mark.xfail(
+    reason="§172 A4.2 multi-window selfplay blocked pending α (Phase A7)",
+    raises=NotImplementedError,
+    strict=True,
+)
 def test_pool_does_not_warn_when_encoding_wired(caplog):
     """A2 emitted a `selfplay_runner_encoding_unbound` warning under v6w25
     until the Rust side honoured encoding. After A1 reopen the warning
@@ -230,6 +235,11 @@ def test_pool_does_not_warn_when_encoding_wired(caplog):
     del pool
 
 
+@pytest.mark.xfail(
+    reason="§172 A4.2 multi-window selfplay blocked pending α (Phase A7)",
+    raises=NotImplementedError,
+    strict=True,
+)
 def test_pool_v6w25_smoke_spawns_with_runner_encoding():
     """End-to-end pool smoke under v6w25 — runner should spawn workers,
     complete at least one game, and stop cleanly. Pairs with the cargo

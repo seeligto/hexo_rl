@@ -21,13 +21,18 @@ import structlog
 import torch
 from engine import SelfPlayRunner  # type: ignore[attr-defined]
 
+from hexo_rl.encoding import EncodingSpec as RegistrySpec
+from hexo_rl.encoding import resolve_from_config as registry_resolve_from_config
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 from hexo_rl.utils.constants import BUFFER_CHANNELS
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
 from hexo_rl.selfplay.inference_server import InferenceServer
 from hexo_rl.selfplay.instrumentation import PoolInstrumentation
-from hexo_rl.utils.encoding import EncodingSpec, resolve_encoding
+# Legacy spec retained for the SelfPlayRunner Rust-kwarg `to_pyo3()` round-trip;
+# A4.2 does NOT migrate the Rust SelfPlayRunner — that's a future refactor.
+from hexo_rl.utils.encoding import EncodingSpec as LegacyEncodingSpec
+from hexo_rl.utils.encoding import resolve_encoding as legacy_resolve_encoding
 from engine import ReplayBuffer
 
 # Phase B' Class-4 stride-5 detector (§152).  Targets the q-axis stride-5
@@ -116,22 +121,66 @@ class WorkerPool:
 
         sp = config.get("selfplay", config)
         self.n_workers = int(n_workers if n_workers is not None else sp.get("n_workers", 1))
-        # §171 P3 — resolve encoding from config (default v6). spec.board_size
-        # supersedes the legacy `getattr(model, 'board_size', 19)` v6 fallback.
-        # Cross-check against the model's declared board_size so a v6w25 model
-        # paired with a v6 config (or vice-versa) fails fast instead of
-        # silently routing one encoding's planes through the other's buffers.
-        self.encoding_spec: EncodingSpec = resolve_encoding(config)
-        spec = self.encoding_spec
+        # §172 A4.2 — resolve encoding via the new `hexo_rl.encoding`
+        # registry. Multi-window and v8 selfplay are both blocked here
+        # (loud-fail) before any Rust runner construction, per design
+        # `docs/designs/encoding_registry_design.md` §4.6 / §172 A7
+        # deferral. Single-window v6 / v7full reach `to_pyo3()`.
+        registry_spec: RegistrySpec = registry_resolve_from_config(config)
+        self.encoding_spec: RegistrySpec = registry_spec
+
+        # Multi-window guard (§172 A4.2). Selfplay path under v6w25 is α
+        # territory — pretrain / eval / bot paths use LocalInferenceEngine
+        # which handles the K-cluster `centers` loop natively.
+        if registry_spec.is_multi_window:
+            raise NotImplementedError(
+                f"multi-window selfplay (encoding={registry_spec.name!r}) "
+                f"deferred to α; see docs/designs/"
+                f"encoding_alpha_multiwindow_selfplay.md (§172 Phase A7). "
+                f"For pretrain/eval/bot paths use LocalInferenceEngine; "
+                f"for selfplay use a single-window encoding (v6, v7full)."
+            )
+
+        # v8 selfplay guard (§172 A4.2). v8 has no Rust selfplay runner
+        # path today; failing loud here beats letting `to_pyo3()` raise
+        # an obscure ValueError later in __init__.
+        if registry_spec.name in ("v8", "v8_canvas_realness"):
+            raise NotImplementedError(
+                f"v8 selfplay (encoding={registry_spec.name!r}) Rust runner "
+                f"path not implemented; use v6 / v7full for selfplay or run "
+                f"pretrain via dataset_v8.py + encode_position_v8."
+            )
+
+        # spec.board_size supersedes the legacy `getattr(model, 'board_size', 19)`
+        # v6 fallback. Cross-check against the model's declared board_size so a
+        # mis-paired model+config fails fast instead of silently routing planes
+        # through wrong-shaped buffers.
+        spec = registry_spec
         model_board_size = int(getattr(model, "board_size", spec.board_size))
         if model_board_size != spec.board_size:
             raise ValueError(
                 f"WorkerPool: model.board_size={model_board_size} disagrees "
-                f"with resolved encoding {spec.version!r} (board_size="
+                f"with resolved encoding {spec.name!r} (board_size="
                 f"{spec.board_size}). Fix the variant `encoding.version` or "
                 f"the checkpoint hparam mismatch before re-launching."
             )
         board_size = spec.board_size
+
+        # Legacy spec for the SelfPlayRunner Rust kwarg round-trip — kept
+        # alive until a future refactor migrates Rust SelfPlayRunner off
+        # the 4-field PyEncodingSpec. The legacy module knows only
+        # {v6, v6w25, v8}; v7full is a registry-only label whose wire
+        # format is byte-identical to v6 (same board_size, n_planes,
+        # cluster fields, legal-move radius), so we synthesise the legacy
+        # spec from the v6 helper for that one case. v8 is already
+        # blocked above; v6w25 is already blocked above; only v6 / v7full
+        # reach here.
+        if registry_spec.name == "v7full":
+            from hexo_rl.utils.encoding import v6_spec as _legacy_v6_spec
+            legacy_spec: LegacyEncodingSpec = _legacy_v6_spec()
+        else:
+            legacy_spec = legacy_resolve_encoding(config)
+
         # Rust inference batcher uses WIRE_CHANNELS (18) planes; game runner slices
         # to BUFFER_CHANNELS (8) before pushing to results queue (HEXB v6).
 
@@ -172,15 +221,18 @@ class WorkerPool:
             )
 
         training_cfg = config.get("training", config)
-        # §171 P3 A1 reopen — pass the resolved EncodingSpec through to the
-        # Rust runner so per-game `Board` construction in worker_loop.rs uses
-        # `Board::with_encoding(spec)` instead of the v6-default `Board::new()`.
-        # `to_pyo3()` is only defined for v6-family encodings (cluster window /
-        # threshold are not None); v8 self-play does not exercise this code
-        # path (no v8 sustained training surface), so we skip the conversion
-        # and let the runner default to v6 behavior.
-        if spec.cluster_window_size is not None and spec.cluster_threshold is not None:
-            runner_encoding = spec.to_pyo3()
+        # §171 P3 A1 reopen / §172 A4.2 — pass the resolved EncodingSpec
+        # through to the Rust runner so per-game `Board` construction in
+        # worker_loop.rs uses `Board::with_encoding(spec)` instead of the
+        # v6-default `Board::new()`. After the multi-window + v8 guards
+        # above, only v6 / v7full reach this branch — both are v6-family
+        # legacy specs with cluster_window_size + cluster_threshold set,
+        # so `legacy_spec.to_pyo3()` always succeeds.
+        if (
+            legacy_spec.cluster_window_size is not None
+            and legacy_spec.cluster_threshold is not None
+        ):
+            runner_encoding = legacy_spec.to_pyo3()
         else:
             runner_encoding = None
         self._runner = SelfPlayRunner(
@@ -261,8 +313,12 @@ class WorkerPool:
         self.recent_buffer: Optional[Any] = None
 
         self._board_size = board_size
+        # §172 A4.2 — sourced from the registry spec (single source of truth).
+        # board_size, feat_len, chain_len derived from spec.board_size; pol_len
+        # uses spec.policy_logit_count which already accounts for the per-encoding
+        # pass-slot bit.
         self._feat_len = BUFFER_CHANNELS * board_size * board_size  # 8*19*19 = 2888
-        self._pol_len = board_size * board_size + 1              # e.g. 19*19+1 = 362
+        self._pol_len = registry_spec.policy_logit_count            # 362 (v6/v7full)
         self._chain_len = 6 * board_size * board_size            # 6*19*19 = 2166
 
         _mon = config.get("monitoring", config)
