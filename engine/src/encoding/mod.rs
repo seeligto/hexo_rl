@@ -6,6 +6,19 @@
 //! Note: serde derives intentionally omitted — serde is not a workspace
 //! dep on `engine`. Add behind a feature flag if Python-side YAML round-trip
 //! ever needs Rust-native (de)serialization.
+//!
+//! §172 A3 (2026-05-09): the new `RegistrySpec` (full schema, parsed from
+//! `registry.toml`) lives in `spec.rs` + `registry.rs` alongside this
+//! legacy 4-field `EncodingSpec`. A4 will migrate `Board::with_encoding`
+//! and the PyO3 boundary to read from `RegistrySpec`. Until then both
+//! types coexist; the legacy struct is what §171 plumbing on this branch
+//! still uses end-to-end.
+
+pub mod registry;
+pub mod spec;
+
+pub use registry::{all_specs, lookup, lookup_or_panic};
+pub use spec::{PolicyPool, RegistrySpec, ValuePool};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EncodingSpec {
