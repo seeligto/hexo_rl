@@ -541,6 +541,9 @@ class HexTacToeNet(nn.Module):
         #   - pool_type='pma_global': adds a global-summary token g (built by
         #     GlobalTokenEncoder from a 32×32 cur/opp/canvas-mask crop) as a
         #     (K+1)st SAB element, gated by a learnable scalar (init 0.1).
+        # §172 A4.4 — audit confirmed: cluster_pool gate is `pool_type in
+        # ("pma", "pma_global")`, encoding-blind; v6 and v6w25 both build it
+        # when pool_type requires it (the K-cluster wire format is identical).
         if pool_type in ("pma", "pma_global"):
             extra_kwargs: dict = dict(
                 n_heads=4,

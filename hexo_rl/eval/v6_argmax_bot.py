@@ -34,7 +34,14 @@ _HALF: int = (BOARD_SIZE - 1) // 2  # 9
 
 
 class V6ArgmaxBot(BotProtocol):
-    """Policy-argmax player for v6 (HEXB 8-plane × 19×19) models. No MCTS."""
+    """Policy-argmax player for v6 / v6w25 (HEXB 8-plane K-cluster) models. No MCTS.
+
+    Both v6 (19×19 cluster window) and v6w25 (25×25 cluster window) share the
+    same wire format: 8 KEPT planes + pass slot. The bot's tensor path reads
+    spatial dims from the cluster tensor itself (line `view_h, view_w = ...`)
+    so v6w25's wider window works without branching. §172 A4.4 widened the
+    encoding guard to accept both labels.
+    """
 
     def __init__(
         self,
@@ -42,13 +49,17 @@ class V6ArgmaxBot(BotProtocol):
         device: torch.device,
         temperature: float = 0.0,
     ) -> None:
-        if getattr(model, "encoding", "v6") != "v6":
+        _encoding = getattr(model, "encoding", "v6")
+        if _encoding not in ("v6", "v6w25"):
             raise ValueError(
-                f"V6ArgmaxBot requires a v6 model; got encoding={getattr(model, 'encoding', None)!r}"
+                f"V6ArgmaxBot requires a v6/v6w25 model; got encoding={_encoding!r}. "
+                f"v6w25 shares the v6 wire format (8 planes, K-cluster); the bot's "
+                f"tensor path reads spatial dims from the tensor itself."
             )
         self.model = model.eval()
         self.device = device
         self.temperature = float(temperature)
+        self._encoding_label = _encoding
 
     def reset(self) -> None:
         # v6 model's history is reconstructed from board state each call;
@@ -56,7 +67,8 @@ class V6ArgmaxBot(BotProtocol):
         pass
 
     def name(self) -> str:
-        return "v6_argmax"
+        # §172 A4.4 — distinguish v6 vs v6w25 in eval reports.
+        return f"{self._encoding_label}_argmax"
 
     @torch.no_grad()
     def get_move(self, state: GameState, rust_board: object) -> Tuple[int, int]:

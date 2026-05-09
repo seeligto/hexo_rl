@@ -27,9 +27,9 @@ from typing import Any, Tuple
 
 import torch
 
+from hexo_rl.encoding import lookup as _registry_lookup
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
-from hexo_rl.utils import constants as _c
 from hexo_rl.utils.encoding import EncodingSpec, v6_spec, v8_spec
 
 
@@ -56,27 +56,41 @@ def _strip_compile_prefixes(state: dict) -> dict:
 
 
 # v6w25 spec — same wire format as v6 but with R=8 perception and a 25×25
-# cluster window. Shares chain-plane count and 8-plane KEPT layout. Built
-# inline here (not in encoding.py) because v6w25 is a §168 concept and
-# the contract module hasn't been updated yet.
+# cluster window. Shares chain-plane count and 8-plane KEPT layout. §172 A4.4
+# migrated this off inline duplicated constants → registry-driven bridge:
+# numeric values are read from `engine/src/encoding/registry.toml`'s
+# [encodings.v6w25] entry and bridged to the legacy NamedTuple shape.
 _N_CHAIN_PLANES = 6
 
 
 def _v6w25_spec() -> EncodingSpec:
+    """Return a legacy EncodingSpec for v6w25 keyed off the §172 registry.
+
+    Bridges the new registry → legacy NamedTuple for downstream consumers
+    that still take the legacy type. The numeric values are derived from
+    `engine/src/encoding/registry.toml`'s [encodings.v6w25] entry, not
+    duplicated here.
+
+    Note: legacy `version="v6"` (not `"v6w25"`) is what existing legacy
+    code expects — wire-format-compat with v6 for state_dict purposes.
+    """
+    reg = _registry_lookup("v6w25")
+    half = (reg.board_size - 1) // 2
+    n_cells = reg.board_size * reg.board_size
     return EncodingSpec(
         version="v6",  # wire-format-compatible with v6 for state_dict purposes
-        board_size=_c.BOARD_SIZE_V8,  # 25 (matched perception)
-        half=(_c.BOARD_SIZE_V8 - 1) // 2,  # 12
-        n_cells=_c.NUM_CELLS_V8,  # 625
-        n_actions=_c.NUM_CELLS_V8 + 1,  # 626 (cells + pass; v6w25 keeps pass slot)
-        n_planes=_c.BUFFER_CHANNELS,  # 8
-        legal_move_radius=8,
-        cluster_threshold=8,
-        cluster_window_size=25,  # §171 P2 reopen — added when EncodingSpec gained the field
-        state_stride=_c.BUFFER_CHANNELS * _c.NUM_CELLS_V8,  # 5000
-        chain_stride=_N_CHAIN_PLANES * _c.NUM_CELLS_V8,  # 3750
-        policy_stride=_c.NUM_CELLS_V8 + 1,  # 626
-        aux_stride=_c.NUM_CELLS_V8,  # 625
+        board_size=reg.board_size,
+        half=half,
+        n_cells=n_cells,
+        n_actions=reg.policy_logit_count,
+        n_planes=reg.n_planes,
+        legal_move_radius=reg.legal_move_radius,
+        cluster_threshold=reg.cluster_threshold,
+        cluster_window_size=reg.cluster_window_size,
+        state_stride=reg.n_planes * n_cells,
+        chain_stride=_N_CHAIN_PLANES * n_cells,
+        policy_stride=reg.policy_logit_count,
+        aux_stride=n_cells,
     )
 
 

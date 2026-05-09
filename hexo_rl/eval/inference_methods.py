@@ -105,9 +105,11 @@ def build_inference_method(
         # cluster_threshold(8) + legal_move_radius(8) before each game.
         if kind == "argmax":
             return V6ArgmaxBot(model, device, temperature=temperature)
-        # v6w25 MCTS via Rust MCTSTree is blocked (BOARD_SIZE=19,
-        # N_ACTIONS=362 hardcoded). KClusterMCTSBot is the matched Python
-        # port — §169 P1.
+        # v6w25 native MCTS via Rust MCTSTree deferred to α (§172 Phase A7
+        # design). §172 registry: lookup("v6w25").is_multi_window=True;
+        # KClusterMCTSBot is the Python port that handles K-cluster fan-out
+        # at MCTS expansion time and is the canonical matched-MCTS path
+        # until α lands the multi-window Rust unification.
         return KClusterMCTSBot(
             model, device, n_sims=n_sims, c_puct=c_puct, temperature=temperature
         )
