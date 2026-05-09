@@ -1,0 +1,113 @@
+# sprint_171_p3_5080 — §171 P3 sustained smoke variant.
+#
+# Host: 5080 (RTX 5080 16 GB + Ryzen 9 9900X 24t).
+# Base config: gumbel_targets_5080_24t.yaml (sweep-validated 100k pos/hr at
+# n_workers=18, batch=224, wait=8ms, burst=8 — sweep §138, 2026-04-30).
+# Anchor: A1 v6w25 K-cluster + min/max pool (§170 close-out canonical;
+# 14.5 % vs SealBot at n=200 [10.3 %, 20.0 %]).
+#
+# ## §171 P3 deltas vs gumbel_targets_5080_24t base
+#
+# 1.  bootstrap_anchor switched v7full → v6w25.
+#     §157 default `eval_pipeline.opponents.bootstrap_anchor.path =
+#     checkpoints/bootstrap_model_v7full.pt` is cross-encoding nonsense for
+#     a v6w25 model (different action space — 362 vs 626 — and different
+#     plane projection).  §171 P3 trains a v6w25 model so the floor anchor
+#     must also be v6w25.  Below, we re-pin to `bootstrap_model_v6w25.pt`
+#     and INHERIT min_winrate=0.45 — apples-to-apples vs frozen v6w25 self.
+#
+#     CAVEAT (operator-noted, 2026-05-09): canonical bootstrap_floor
+#     guidance in eval.yaml warns against re-pinning unless new bootstrap
+#     ≥ v7full WR vs SealBot (v6w25 14.5 % < v7full 17.4 %).  The guard
+#     was written for SAME-ENCODING re-pins; cross-encoding migration
+#     (v7→v6w25 in §170) inherently invalidates the v7full reference
+#     regardless of WR.  Re-pin is the only coherent option.
+#
+# 2.  pretrained_buffer switched v7 → v6w25.
+#     `mixing.pretrained_buffer_path` defaults to data/bootstrap_corpus.npz
+#     (v7).  Mixing in v7 positions while training v6w25 = silent encoding
+#     mismatch in the trainer batch.
+#
+# 3.  Game-level playout cap: 25 % fast (64 sims) / 75 % slow (400 sims).
+#     Operator directive 2026-05-09.  Mutex with full_search_prob enforced
+#     at hexo_rl/selfplay/worker_pool.py:143-149 — must zero full_search_prob.
+#     Effective sims/game = 0.75×400 + 0.25×64 = 316 (vs sweep baseline 400);
+#     ~+26 % throughput floor → projected ~120-130k pos/hr on 5080.
+#
+# 4.  sealbot.stride: 1 (default 4) — eval_interval=5000 × stride=1 fires
+#     SealBot every 5k steps → 6 readings over 30k for trajectory tracking.
+#
+# 5.  hard_abort_grad_norm: 10.0 — defensive monitor (§157 Gate 5 standard).
+#
+# 6.  legal_move_radius_jitter: inherits true (§157 Gate 5 PROPAGATED).
+#
+# 7.  cosine schedule: KEEP (§143 γ.1 default).  Cold-start path; no warm
+#     bootstrap-frozen-anchor regime → R10 91 % draw lock not expected.
+#     If pre-flight 1k-step measurement reproduces R10 lock, swap to
+#     `temperature_threshold_compound_moves: 0` + `temp_min: 0.5` per
+#     §156 R12 verdict.
+#
+# ## Pre-flight gate (BEFORE 5080 sustained authorisation)
+#
+# Run 1k-step pre-flight on 5080 (NOT laptop — laptop is encoding-host
+# mismatched for v6w25 inference batch shape; pool init may diverge):
+#   stride5_run P90 < 30
+#   draw_rate < 50 % (mean over rolling 200-step window)
+#   no promotion fires under bootstrap-floor without anchor WR ≥ 0.45
+#
+# ## Launch (5080 sustained, 30k steps)
+#
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6w25.pt \
+#     --variant sprint_171_p3_5080 \
+#     --checkpoint-dir checkpoints/sprint_171_p3 \
+#     --no-dashboard \
+#     --iterations 30000
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+
+# eval_interval: 5000 inherited from training.yaml (no override).
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  n_workers: 18                 # §138 5080 sweep verdict
+  inference_batch_size: 224     # §138 5080 sweep verdict
+  inference_max_wait_ms: 8.0    # §138 5080 sweep verdict
+  # leaf_batch_size: inherits 8 from selfplay.yaml (sweep §69 winner).
+  playout_cap:
+    fast_prob: 0.25             # §171 P3 operator directive 2026-05-09
+    fast_sims: 64               # selfplay.yaml default (A3 fix floor)
+    standard_sims: 400          # §171 P3 operator directive — long games full search
+    full_search_prob: 0.0       # MUTEX REQUIRED with fast_prob > 0
+                                # (worker_pool.py:143-149 raises otherwise)
+  legal_move_radius_jitter: true  # §157 Gate 5 PROPAGATED
+
+mixing:
+  # §171 P3 — pin pretrain corpus to v6w25 K-cluster (matches A1 anchor
+  # encoding).  Default data/bootstrap_corpus.npz is v7 = encoding mismatch.
+  pretrained_buffer_path: "data/bootstrap_corpus_v6w25.npz"
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      # §171 P3 — re-pin from v7full default to v6w25 canonical.
+      # See §171 P3 deltas item 1 above for cross-encoding rationale.
+      enabled: true
+      stride: 1
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+      path: checkpoints/bootstrap_model_v6w25.pt
+    sealbot:
+      stride: 1                 # 6 readings over 30k vs default 4 → 1 reading
+      # n_games / think_time / model_sims inherit from eval.yaml.
+  gating:
+    bootstrap_floor:
+      enabled: true
+      min_winrate: 0.45         # apples-to-apples v6w25 self-vs-frozen-self
+
+monitors:
+  hard_abort_grad_norm: 10.0    # §157 Gate 5 defensive default
