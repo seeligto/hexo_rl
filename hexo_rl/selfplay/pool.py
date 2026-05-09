@@ -27,6 +27,7 @@ from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
 from hexo_rl.selfplay.inference_server import InferenceServer
 from hexo_rl.selfplay.instrumentation import PoolInstrumentation
+from hexo_rl.utils.encoding import EncodingSpec, resolve_encoding
 from engine import ReplayBuffer
 
 # Phase B' Class-4 stride-5 detector (§152).  Targets the q-axis stride-5
@@ -115,7 +116,22 @@ class WorkerPool:
 
         sp = config.get("selfplay", config)
         self.n_workers = int(n_workers if n_workers is not None else sp.get("n_workers", 1))
-        board_size = int(getattr(model, "board_size", 19))
+        # §171 P3 — resolve encoding from config (default v6). spec.board_size
+        # supersedes the legacy `getattr(model, 'board_size', 19)` v6 fallback.
+        # Cross-check against the model's declared board_size so a v6w25 model
+        # paired with a v6 config (or vice-versa) fails fast instead of
+        # silently routing one encoding's planes through the other's buffers.
+        self.encoding_spec: EncodingSpec = resolve_encoding(config)
+        spec = self.encoding_spec
+        model_board_size = int(getattr(model, "board_size", spec.board_size))
+        if model_board_size != spec.board_size:
+            raise ValueError(
+                f"WorkerPool: model.board_size={model_board_size} disagrees "
+                f"with resolved encoding {spec.version!r} (board_size="
+                f"{spec.board_size}). Fix the variant `encoding.version` or "
+                f"the checkpoint hparam mismatch before re-launching."
+            )
+        board_size = spec.board_size
         # Rust inference batcher uses WIRE_CHANNELS (18) planes; game runner slices
         # to BUFFER_CHANNELS (8) before pushing to results queue (HEXB v6).
 
@@ -200,7 +216,34 @@ class WorkerPool:
             # pre-§152 variant stay at the canonical radius 5.
             legal_move_radius_jitter=bool(sp.get("legal_move_radius_jitter", False)),
         )
-        self._inference_server = InferenceServer(model, device, config, batcher=self._runner.batcher)
+        self._inference_server = InferenceServer(
+            model, device, config, batcher=self._runner.batcher,
+            encoding_spec=spec,
+        )
+
+        # §171 P3 — RUST-SIDE GAP (requires A1/§172 followup):
+        # `engine.SelfPlayRunner` constructs `Board::new()` per game in Rust
+        # (see engine/src/game_runner/mod.rs lines 542/598/612/680). It has
+        # no Python-visible knob to thread `EncodingSpec` through to the
+        # Rust-owned worker threads. For v6/v8 (canonical defaults this
+        # constructor matches) self-play stays correct. For v6w25, workers
+        # will use cluster_window_size=19 / cluster_threshold=5 (v6 defaults)
+        # despite the Python-side spec being v6w25. The fix is one of:
+        #   (a) `SelfPlayRunner::new(..., encoding: Option<&PyEncodingSpec>)`
+        #       and route through `Board::with_encoding` in worker_loop.rs,
+        #   (b) per-game `set_cluster_window_size` / `set_cluster_threshold`
+        #       calls inside the Rust worker_loop just after `Board::new()`.
+        # Until that lands, log loud at startup so any v6w25 sustained launch
+        # observes the mismatch in the JSONL stream.
+        if spec.version == "v6w25":
+            log.warning(
+                "selfplay_runner_encoding_unbound",
+                resolved_encoding=spec.version,
+                cluster_window_size=spec.cluster_window_size,
+                cluster_threshold=spec.cluster_threshold,
+                rust_workers_will_use="v6_defaults_window=19_threshold=5",
+                fix="requires SelfPlayRunner Rust API extension (A1 followup)",
+            )
 
         self._stop_event = threading.Event()
         self._stats_thread: Optional[threading.Thread] = None

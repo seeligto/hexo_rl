@@ -18,6 +18,7 @@ import structlog
 
 from engine import InferenceBatcher  # type: ignore[attr-defined]
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
+from hexo_rl.utils.encoding import EncodingSpec, resolve_encoding
 
 # Perf probes log via structlog so they persist to JSONL independent of dashboards.
 _perf_log = structlog.get_logger()
@@ -34,6 +35,7 @@ class InferenceServer(threading.Thread):
         device: torch.device,
         config: Dict[str, Any],
         batcher: Optional[InferenceBatcher] = None,
+        encoding_spec: Optional[EncodingSpec] = None,
     ) -> None:
         super().__init__(daemon=True, name="inference-server")
         self.model = model
@@ -44,7 +46,13 @@ class InferenceServer(threading.Thread):
         self._batch_size = int(sp.get("inference_batch_size", 64))
         self._max_wait_ms = int(float(sp.get("inference_max_wait_ms", 10.0)))
 
-        board_size = int(getattr(model, "board_size", 19))
+        # §171 P3 — encoding-aware tensor shape. Caller (WorkerPool) passes
+        # the resolved spec; standalone callers fall back to resolving from
+        # config (default v6).
+        self.encoding_spec: EncodingSpec = (
+            encoding_spec if encoding_spec is not None else resolve_encoding(config)
+        )
+        board_size = self.encoding_spec.board_size
         self._policy_len = board_size * board_size + 1
         # Rust workers always emit WIRE_CHANNELS (18) planes — the Rust replay
         # buffer is hardcoded to N_PLANES=18. Channel reduction happens inside

@@ -26,6 +26,7 @@ from engine import Board, MCTSTree
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
 from hexo_rl.selfplay.utils import BOARD_SIZE, N_ACTIONS, get_temperature  # noqa: F401 (re-exported)
+from hexo_rl.utils.encoding import EncodingSpec, resolve_encoding
 
 # Backward-compat: callers that do `from hexo_rl.selfplay.worker import get_temperature`
 # continue to work without changes.
@@ -48,9 +49,19 @@ class SelfPlayWorker:
         model:  HexTacToeNet,
         config: Dict[str, Any],
         device: torch.device,
+        encoding_spec: Optional[EncodingSpec] = None,
     ) -> None:
         self.config = config
         self.device = device
+
+        # §171 P3 — resolve encoding from config (default v6). Cached at
+        # init so the hot-path `tree.get_policy(board_size=…)` call avoids
+        # re-resolving per move. Caller may pass an explicit spec to skip
+        # the config lookup (used by OurModelBot and tests).
+        self.encoding_spec: EncodingSpec = (
+            encoding_spec if encoding_spec is not None else resolve_encoding(config)
+        )
+        self._board_size: int = self.encoding_spec.board_size
 
         mcts_cfg = config.get("mcts", config)
         self.n_sims          = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
@@ -145,7 +156,10 @@ class SelfPlayWorker:
                 config=self.config,
             )
 
-        return self.tree.get_policy(temperature=temperature, board_size=BOARD_SIZE)
+        # §171 P3 — board_size sourced from encoding_spec (was BOARD_SIZE,
+        # the hardcoded v6 module-level constant). For v6/v6w25 both resolve
+        # to 19; v8 (when MCTS path supports it) resolves to 25.
+        return self.tree.get_policy(temperature=temperature, board_size=self._board_size)
 
     # ── Action sampling ────────────────────────────────────────────────────────
 
