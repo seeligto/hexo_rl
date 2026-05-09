@@ -17,11 +17,7 @@ se_reduction_ratio: 4
 # (`board_size`, `in_channels`) MUST stay consistent with the registry's
 # entry — `resolve_from_config` rejects disagreement (§172 A4.5 design §10).
 #
-# §172 A4.5 ships the scattered-key consistency check via the new resolver
-# (hexo_rl.encoding.resolve_from_config). The single-key string form
-# (`encoding: v6`) is the design-doc canonical form; the legacy mapping
-# form is retained here pending a follow-up that also teaches
-# `hexo_rl.utils.encoding.resolve_encoding` (still called from
-# selfplay/pool.py and training/trainer.py) to parse the string form.
-encoding:
-  version: "v6"
+# §172 A4.5 canonical: string form (mapping form `encoding: { version: v6 }`
+# also still accepted for backward compat by both the new resolver and the
+# legacy `hexo_rl.utils.encoding.resolve_encoding`).
+encoding: v6

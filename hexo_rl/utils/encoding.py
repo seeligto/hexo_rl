@@ -126,20 +126,24 @@ _V6W25_SPEC = EncodingSpec(
 def resolve_encoding(config: Mapping[str, Any]) -> EncodingSpec:
     """Resolve an EncodingSpec from a config mapping.
 
-    Reads `config["encoding"]["version"]`. Default: "v6". Anything other
-    than "v6" or "v8" raises ValueError.
+    Accepts BOTH forms (§172 A4.5 canonical = string form):
+      - `cfg['encoding'] = "v6w25"`           string form (preferred)
+      - `cfg['encoding'] = {'version': 'v6'}` mapping form (legacy)
 
-    Mappings without an "encoding" key resolve to v6 (canonical default
-    preserves byte-exact pre-§166 behavior).
+    Default: "v6". Anything other than "v6" / "v6w25" / "v8" raises
+    ValueError. Configs without an "encoding" key resolve to v6
+    (canonical default preserves byte-exact pre-§166 behavior).
     """
     section = config.get("encoding") if config else None
     if section is None:
         version: str = "v6"
+    elif isinstance(section, str):
+        version = section
     elif isinstance(section, Mapping):
         version = section.get("version", "v6")
     else:
         raise ValueError(
-            f"encoding section must be a mapping; got {type(section).__name__}"
+            f"encoding section must be a string or mapping; got {type(section).__name__}"
         )
 
     if version == "v6":

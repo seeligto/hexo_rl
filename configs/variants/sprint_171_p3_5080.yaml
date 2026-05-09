@@ -72,11 +72,9 @@ max_train_burst: 8
 # detects the mismatch between training.yaml's default v6 and the v6w25
 # checkpoint and refuses to silently override either direction.
 #
-# §172 A4.5 — mapping form retained until legacy resolver
-# (hexo_rl.utils.encoding.resolve_encoding, called from selfplay/pool.py and
-# training/trainer.py) is taught to accept the string form `encoding: v6w25`.
-encoding:
-  version: v6w25
+# §172 A4.5 canonical: string form. Mapping form `encoding: { version: v6w25 }`
+# also accepted (both new and legacy resolvers handle both).
+encoding: v6w25
 # §172 A4.5 — override model.yaml's board_size: 19 so the merged
 # combined_config does not trip the resolver's scattered-key consistency
 # check (v6w25 registry spec says board_size=25). The trainer derives the

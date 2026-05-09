@@ -57,9 +57,15 @@ def test_unknown_version_raises() -> None:
         resolve_encoding({"encoding": {"version": "v7"}})
 
 
-def test_non_mapping_section_raises() -> None:
-    with pytest.raises(ValueError, match="must be a mapping"):
-        resolve_encoding({"encoding": "v8"})
+def test_string_form_resolves_v8() -> None:
+    """§172 A4.5 — string form `encoding: v8` is the canonical declaration."""
+    spec = resolve_encoding({"encoding": "v8"})
+    assert spec.version == "v8"
+
+
+def test_non_string_non_mapping_section_raises() -> None:
+    with pytest.raises(ValueError, match="must be a string or mapping"):
+        resolve_encoding({"encoding": 42})
 
 
 def test_v6_v8_specs_distinct() -> None:
