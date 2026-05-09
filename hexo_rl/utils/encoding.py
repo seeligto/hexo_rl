@@ -6,6 +6,9 @@ either encoding version. v6-only call sites should keep importing
 through code that genuinely routes both paths.
 
 Contract: `docs/designs/encoding_v8_contract.md` §4.2.
+
+Note (§172 A3): hexo_rl.encoding is the new canonical registry; this module
+remains for backward compat until A4 migrates consumers.
 """
 from __future__ import annotations
 
