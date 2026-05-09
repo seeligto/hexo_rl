@@ -1,0 +1,155 @@
+# engine/src/encoding/registry.toml
+#
+# Canonical encoding registry — single source of truth for every encoding
+# the codebase supports. Both Rust (engine) and Python (hexo_rl) parse
+# this file and build immutable `EncodingSpec` records keyed by name.
+#
+# Authored 2026-05-09 per §172 Phase A3. Schema locked by §172 Phase A2:
+#   docs/designs/encoding_registry_design.md §3.1 (schema), §3.2 (worked
+#   examples — values copied verbatim into this file).
+#
+# Adding a new encoding:
+#   1. Append a `[encodings.<name>]` table with all required keys (§3.1).
+#   2. Bump `schema_version` only if the schema itself changes (a key is
+#      added/removed/renamed across all encodings).
+#   3. Run `python -m hexo_rl.encoding audit` to confirm parse + validation.
+#
+# Schema invariants (validated at parse time — see §3.3):
+#   - len(plane_layout) == n_planes
+#   - policy_logit_count == board_size * board_size + 1
+#   - is_multi_window=false ⇒ cluster_window_size="none", cluster_threshold="none",
+#                            value_pool="none", policy_pool="none"
+#   - is_multi_window=true  ⇒ cluster_window_size,cluster_threshold are ints,
+#                            value_pool ∈ {min,max,mean}, policy_pool ∈ {scatter_max,scatter_mean}
+#   - trunk_size == cluster_window_size if is_multi_window else board_size
+
+# ---------------------------------------------------------------------------
+# v6 — canonical 19×19 single-window, 8 planes (history-only).
+# Phase 1–3 anchor; pre-§150 reference.
+# ---------------------------------------------------------------------------
+[encodings.v6]
+board_size              = 19
+trunk_size              = 19
+cluster_window_size     = "none"
+cluster_threshold       = "none"
+legal_move_radius       = 5
+n_planes                = 8
+plane_layout            = [
+  # 4× current-player history (most-recent first)
+  "current_player_t0", "current_player_t-1", "current_player_t-2", "current_player_t-3",
+  # 4× opponent history (most-recent first)
+  "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
+]
+policy_logit_count      = 362            # 19*19 + 1 (last = pass)
+is_multi_window         = false
+value_pool              = "none"
+policy_pool             = "none"
+sym_table_id            = "size_19"
+schema_version          = 1
+notes                   = "v6 canonical encoding (Phase 1-3 anchor)."
+
+# ---------------------------------------------------------------------------
+# v7full — same wire format as v6, distinct variant tag for §150+ anchor.
+# 17.4% n=500 vs SealBot (§150).
+# ---------------------------------------------------------------------------
+[encodings.v7full]
+board_size              = 19
+trunk_size              = 19
+cluster_window_size     = "none"
+cluster_threshold       = "none"
+legal_move_radius       = 5
+n_planes                = 8
+plane_layout            = [
+  "current_player_t0", "current_player_t-1", "current_player_t-2", "current_player_t-3",
+  "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
+]
+policy_logit_count      = 362            # 19*19 + 1
+is_multi_window         = false
+value_pool              = "none"
+policy_pool             = "none"
+sym_table_id            = "size_19"
+schema_version          = 1
+notes                   = "§150 anchor (17.4% n=500 vs SealBot); selfplay-canonical pending α."
+
+# ---------------------------------------------------------------------------
+# v6w25 — K-cluster 25×25 windows, matched-perception variant.
+# §170 P4 P1 canonical for pretrain+eval+matched-MCTS. Selfplay deferred to α.
+# board_size widens to 25 per A2 §3.2 + A1 §6.11 (canvas semantics: canvas
+# == cluster window for K-cluster encodings).
+# ---------------------------------------------------------------------------
+[encodings.v6w25]
+board_size              = 25
+trunk_size              = 25            # = cluster_window_size for multi-window
+cluster_window_size     = 25
+cluster_threshold       = 8
+legal_move_radius       = 8
+n_planes                = 8
+plane_layout            = [
+  "current_player_t0", "current_player_t-1", "current_player_t-2", "current_player_t-3",
+  "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
+]
+policy_logit_count      = 626            # 25*25 + 1
+is_multi_window         = true
+value_pool              = "min"          # §170 P4 P1 NULL — K-invariant value head
+policy_pool             = "scatter_max"  # per-move cluster dispatch (α design Option iii)
+sym_table_id            = "size_25"
+schema_version          = 1
+notes                   = "§170 P4 P1 canonical for pretrain+eval+matched-MCTS; selfplay blocked on α."
+
+# ---------------------------------------------------------------------------
+# v8 — bbox-of-stones 25×25, 11 planes (history + 3 aux).
+# Plane-8 polarity OFF→OUTSIDE (vanilla v8 contract).
+# ---------------------------------------------------------------------------
+[encodings.v8]
+board_size              = 25
+trunk_size              = 25
+cluster_window_size     = "none"
+cluster_threshold       = "none"
+legal_move_radius       = 8
+n_planes                = 11
+plane_layout            = [
+  # 4× current-player history
+  "current_player_t0", "current_player_t-1", "current_player_t-2", "current_player_t-3",
+  # 4× opponent history
+  "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
+  # plane 8 — outside-of-window mask (vanilla polarity)
+  "off_window_mask",
+  # plane 9 — broadcast scalar (moves remaining in turn)
+  "moves_remaining_bcast",
+  # plane 10 — broadcast scalar (side to play)
+  "to_play_bcast",
+]
+policy_logit_count      = 626            # 25*25 + 1
+is_multi_window         = false
+value_pool              = "none"
+policy_pool             = "none"
+sym_table_id            = "size_25"
+schema_version          = 1
+notes                   = "v8 contract — single-bbox 25x25; plane-8 polarity OFF->OUTSIDE (vanilla)."
+
+# ---------------------------------------------------------------------------
+# v8_canvas_realness — v8 with plane-8 polarity flipped (inside→canvas).
+# §169 A4 / §170 P4 P2 variant. Pairs with PartialConv2d trunk-entry.
+# ---------------------------------------------------------------------------
+[encodings.v8_canvas_realness]
+board_size              = 25
+trunk_size              = 25
+cluster_window_size     = "none"
+cluster_threshold       = "none"
+legal_move_radius       = 8
+n_planes                = 11
+plane_layout            = [
+  "current_player_t0", "current_player_t-1", "current_player_t-2", "current_player_t-3",
+  "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
+  # plane 8 — canvas-realness mask (INSIDE->CANVAS polarity, flipped vs v8)
+  "canvas_realness",
+  "moves_remaining_bcast",
+  "to_play_bcast",
+]
+policy_logit_count      = 626            # 25*25 + 1
+is_multi_window         = false
+value_pool              = "none"
+policy_pool             = "none"
+sym_table_id            = "size_25"
+schema_version          = 1
+notes                   = "§169 A4 / §170 P4 P2 variant; plane-8 polarity INSIDE->CANVAS for PartialConv2d trunk-entry. Pair with bootstrap_corpus_v8_canvas_realness.npz (sha 110ea6b2…)."
