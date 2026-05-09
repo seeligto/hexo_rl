@@ -67,6 +67,13 @@
 training_steps_per_game: 4.0
 max_train_burst: 8
 
+# §171 P3 reopen — pin encoding to v6w25 to match the A1 anchor / bootstrap
+# checkpoint.  Without this, Trainer.load_checkpoint (post commit 63ebb9b)
+# detects the mismatch between training.yaml's default v6 and the v6w25
+# checkpoint and refuses to silently override either direction.
+encoding:
+  version: v6w25
+
 # eval_interval: 5000 inherited from training.yaml (no override).
 
 selfplay:
