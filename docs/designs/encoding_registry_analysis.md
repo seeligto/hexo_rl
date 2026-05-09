@@ -550,26 +550,45 @@ A1.
 encodings. One-line fix; ride on the same A4 commit that fixes
 `network.py:551-558` `cluster_pool` v6w25 typo.
 
-### 6.11 Trainer canvas-vs-trunk semantic
+### 6.11 Trainer canvas-vs-trunk semantic — RESOLVED 2026-05-09 (Option 3)
 
-`_model_board_size_for(spec)` returning `cluster_window_size` (25 for
-v6w25) is correct for the model trunk constructor input, wrong for
-downstream `config["board_size"]` consumers that need canvas (19 for
-v6w25). This is the single most subtle bug-vector in the codebase
-today.
+**Root cause.** Hex Tac Toe has three layers that all have a "size":
+(a) the **canvas** (logical play area; action space lives here — 19 for
+v6/v6w25, 25 for v8), (b) the **trunk input** (what the NN sees as a
+rectangle — 19 for v6, 25 for v6w25 K-cluster windows, 25 for v8 bbox),
+(c) absolute (q,r) game logic (encoding-irrelevant). For v6 and v8 the
+canvas and trunk happen to coincide; for v6w25 they differ by design
+(K-cluster windows peek past the canvas edge intentionally).
 
-A4 must:
-- Rename `_model_board_size_for` to `_trunk_board_size_for` (clarity).
-- Add `_canvas_board_size_for(spec) → spec.board_size` explicit accessor.
-- Change `_propagate_encoding_into_config` to write **both**
-  `config["trunk_board_size"]` and `config["canvas_board_size"]`,
-  retiring ambiguous `config["board_size"]`.
-- Add a config-load shim that maps legacy `config["board_size"]` to the
-  appropriate new key based on caller context (or just deprecate).
+`EncodingSpec.board_size` means **canvas** for all three encodings, but
+`_model_board_size_for(spec)` returns `cluster_window_size or board_size`
+(trunk). Trainer writes that scalar back to `config["board_size"]`, so
+the *same key* means canvas for v6 readers, trunk for v6w25 readers, and
+both for v8 readers. No naming scheme fixes a scalar that means
+different things to different consumers.
 
-This is the highest-priority load-bearing refactor in A4 because every
-selfplay/eval/inference site that reads `config["board_size"]` today is
-implicitly trusting whichever convention the trainer last wrote.
+**Decision (operator, 2026-05-09): Option 3.** Pass `EncodingSpec`
+through every encoding-aware layer; retire `config["board_size"]` as a
+load-bearing scalar.
+
+A4 plumbing:
+- Every consumer of `config["board_size"]` takes `EncodingSpec` instead.
+  Read the field by intent: `spec.board_size` (canvas, e.g. policy
+  projection / coord math), `spec.cluster_window_size or spec.board_size`
+  (trunk, e.g. model trunk ctor), `spec.n_actions` (action space).
+- `_model_board_size_for` deleted. `_propagate_encoding_into_config`
+  stops writing the scalar; logs the resolved spec for diagnostics
+  instead.
+- Backward-compat: `config["board_size"]` still readable for legacy
+  configs (resolved into a v6 spec by `resolve_encoding`); not written
+  by any code path going forward.
+- Affected call sites: ~30 in selfplay/training/eval. Mechanical
+  rewrite (`board_size = config["board_size"]` → take `spec` from the
+  caller, read the field). One commit per subsystem (trainer,
+  selfplay, eval, model). Tests follow each subsystem commit.
+
+This is the first A4 commit chain because every other load-bearing fix
+threads `spec` too.
 
 ---
 
@@ -578,7 +597,7 @@ implicitly trusting whichever convention the trainer last wrote.
 A4 plumbing should land in roughly this order (each a separate commit
 with green tests):
 
-1. **Canvas-vs-trunk rename + dual key** (§6.11) — highest-priority load-bearing.
+1. **EncodingSpec threading + retire `config["board_size"]`** (§6.11) — RESOLVED Option 3; first commit chain, one per subsystem.
 2. **Hot-path hardcode removal** — `selfplay/utils.py:N_ACTIONS`,
    `batch_assembly.py:64`, `recency_buffer.py:36`. All thread
    `encoding_spec.n_actions / board_size` through.
@@ -612,8 +631,9 @@ are cleanup that should not block P3.
 These are the design decisions that this analysis surfaces but does not
 make:
 
-1. **Canvas-vs-trunk naming** — `trunk_board_size` / `canvas_board_size`
-   vs other convention? §6.11.
+1. ~~**Canvas-vs-trunk naming**~~ — RESOLVED 2026-05-09: Option 3
+   (thread `EncodingSpec` everywhere, retire `config["board_size"]`).
+   See §6.11.
 2. **Sym table registry** — promote to runtime registry, or keep static
    per-encoding constants with prominent comments? §6.6.
 3. **`bootstrap_model_v8full_warm.pt`** — rename to v6 (if interim
