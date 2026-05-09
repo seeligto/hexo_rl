@@ -80,10 +80,16 @@ class V6ArgmaxBot(BotProtocol):
         x = torch.from_numpy(inp).unsqueeze(0).float().to(self.device)
         # §169 A3 — pma_global needs a (1, 3, 32, 32) global summary crop
         # built from the live board's stones in the current-player frame.
-        # Other pool types ignore the kwarg; we omit it to keep the v6 /
+        # §170 P3 — gpool_bias_active=True ALSO needs the global crop
+        # threaded; the model raises ValueError without it. Other pool
+        # types ignore the kwarg; we omit it to keep the v6 /
         # v6w25-with-pma path unchanged.
         fwd_kwargs: dict = {}
-        if getattr(self.model, "pool_type", "min_max") == "pma_global":
+        needs_global_crop = (
+            getattr(self.model, "pool_type", "min_max") == "pma_global"
+            or getattr(self.model, "gpool_bias_active", False)
+        )
+        if needs_global_crop:
             gc_np = compute_global_crop_from_board(rust_board)
             fwd_kwargs["global_crop"] = (
                 torch.from_numpy(gc_np).unsqueeze(0).float().to(self.device)

@@ -1,0 +1,76 @@
+# §170 P3 — A1 + gpool-bias side-branch ablation arm.
+#
+# Architecture: A1 v6w25 (K-cluster + min/max pool) + KataGo-style
+# global-pool bias side-branch. Gate scalar init 0.0 → byte-exact A1 at
+# construction; only as the gradient grows the gate does the global
+# summary earn weight.
+#
+# Hypothesis: gpool-bias > A1 by ~2-4pp argmax, ~3-6pp MCTS (preserves
+# load-bearing min-pool value semantics that A2/A3 PMA broke; adds
+# additive K-invariant global signal A1 lacks).
+
+arm: A1_gpool_bias
+description: A1 v6w25 + gpool-bias side-branch (additive K-invariant global signal)
+sprint: "§170"
+
+encoding: v6w25
+board_size: 25
+in_channels: 8
+n_actions: 626
+filters: 128
+res_blocks: 12
+se_reduction_ratio: 4
+
+pool_type: min_max
+gpool_bias_active: true
+
+# Reuses the §169 A3 v6w25-with-global-crop corpus (sha256 e2876ae5...).
+# Same per-position (3, 32, 32) cur/opp/canvas-mask crop. No regen needed
+# unless missing — see prerequisite block in scripts/pretrain_gpool_bias.sh.
+corpus_npz: data/bootstrap_corpus_v6w25_with_global.npz
+
+# Match v6w25 anchor (§168 Gate 5).
+batch_size: 256
+epochs: 30
+lr_peak: 2.0e-3
+eta_min: 5.0e-5
+label_smoothing: 0.05
+aux_opp_reply_weight: 0.15
+
+artefacts:
+  checkpoint: checkpoints/gpool_bias/A1_gpool_bias.pt
+  pretrain_log: reports/gpool_bias/pretrain.log
+  eval: reports/gpool_bias/eval.json
+  threat_probe: reports/gpool_bias/threat.json
+  bench: reports/gpool_bias/bench.md
+
+# Hard surface conditions — see scripts/pretrain_gpool_bias.sh.
+hard_stop:
+  final_loss_gt: 5.36          # 50% above A1 anchor 3.57.
+  nan_skip_pct_gt: 30          # NaN-skip rate >30% even with §167 patch.
+  forward_parity_required: true  # gate=0 → byte-exact A1 (commit-1 invariant).
+
+# Soft surface (warning, not STOP — operator decides at eval time):
+#   - Gate stays at ~0 throughout training (final < 0.05): branch never
+#     earned weight ⇒ A1 already captured global signal; null result.
+#   - argmax WR < 12% (within A1 CI): gpool-bias didn't help.
+#   - argmax WR > 20%: SURFACE — recommend §171 sustained run scoping.
+soft_warn:
+  gate_stalled_below: 0.05
+  argmax_wr_floor: 0.12
+  argmax_wr_breakthrough: 0.20
+
+eval_matrix:
+  argmax:
+    legal_radius: 8
+    n_games: 200
+  mcts_n:
+    n_games: 200
+    n_sims: operator_chosen     # default 64 per user spec.
+
+# Logged at every train_step log_interval — non-None when gpool_bias_active.
+# Useful as a learning-rate canary: gate at ~0 epoch-30 ⇒ branch unused;
+# gate growing means global signal earned weight (does not yet predict
+# eval lift — argmax/MCTS verdict required).
+training_logging:
+  gpool_bias_gate: true
