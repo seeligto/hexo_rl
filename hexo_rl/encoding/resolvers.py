@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from hexo_rl.encoding import compat
-from hexo_rl.encoding.registry import EncodingRegistryError, lookup
+from hexo_rl.encoding.registry import EncodingRegistryError, _load as _load_registry, lookup
 from hexo_rl.encoding.spec import EncodingSpec
 
 
@@ -20,33 +20,124 @@ class ShapeMismatchError(Exception):
     """Raised when state-dict shapes contradict an EncodingSpec."""
 
 
+# Scattered-key invariant (§172 A4.5 — design doc §10).
+# Map config-level scalar keys to the corresponding EncodingSpec field.
+# `in_channels` is the legacy buffer-format alias for `n_planes`.
+_SCATTERED_KEYS_TO_FIELD: dict[str, str] = {
+    "board_size": "board_size",
+    "cluster_window_size": "cluster_window_size",
+    "cluster_threshold": "cluster_threshold",
+    "legal_move_radius": "legal_move_radius",
+    "n_planes": "n_planes",
+    "in_channels": "n_planes",
+}
+
+
+def _check_scattered_keys(cfg: Mapping[str, Any], spec: EncodingSpec) -> None:
+    """Raise EncodingRegistryError if any scattered key disagrees with spec.
+
+    Consistency rule: if a key is present in the config AND the registry spec
+    has a non-None value for the corresponding field, the integers must match.
+    Keys absent from the config or with `None` registry values are skipped.
+    """
+    if not cfg:
+        return
+    disagreements: list[str] = []
+    for cfg_key, spec_field in _SCATTERED_KEYS_TO_FIELD.items():
+        cfg_val = cfg.get(cfg_key)
+        if cfg_val is None:
+            continue
+        spec_val = getattr(spec, spec_field, None)
+        if spec_val is None:
+            # Registry says "n/a" for this field on this encoding (e.g.
+            # cluster_window_size is None for v6); accept whatever the
+            # config says rather than fight legacy scaffolding.
+            continue
+        try:
+            cfg_int = int(cfg_val)
+        except (TypeError, ValueError):
+            disagreements.append(
+                f"  - {cfg_key}={cfg_val!r} (config) is not an int; "
+                f"{spec_field}={spec_val} (encoding {spec.name!r})"
+            )
+            continue
+        if cfg_int != int(spec_val):
+            disagreements.append(
+                f"  - {cfg_key}={cfg_val} (config) vs {spec_field}={spec_val} "
+                f"(encoding {spec.name!r} from registry.toml)"
+            )
+    if disagreements:
+        raise EncodingRegistryError(
+            f"variant config has scattered key(s) that disagree with the "
+            f"declared encoding {spec.name!r}:\n"
+            + "\n".join(disagreements)
+            + f"\n\nRemove the scattered key(s) and let the registry decide. "
+            f"Registered encodings: {sorted(_load_registry())}. "
+            f"Schema: docs/designs/encoding_registry_design.md §10."
+        )
+
+
 def resolve_from_config(cfg: Mapping[str, Any] | None) -> EncodingSpec:
     """Return an `EncodingSpec` from a config mapping.
 
     Accepts BOTH legacy forms:
-      - `cfg['encoding'] = "v6w25"`            (string form)
-      - `cfg['encoding'] = {'version': 'v6'}`  (mapping form, current canonical)
+      - `cfg['encoding'] = "v6w25"`            (string form, §172 A4.5 canonical)
+      - `cfg['encoding'] = {'version': 'v6'}`  (mapping form, accepted for
+                                                backward-compat)
 
     Default: `"v6"` if no encoding section present (preserves byte-exact
     pre-§166 behavior).
+
+    §172 A4.5 — scattered-key invariant: if `cfg` has an explicit `encoding`
+    key, all of the legacy scattered scalars (`board_size`, `n_planes`,
+    `in_channels`, `cluster_window_size`, `cluster_threshold`,
+    `legal_move_radius`) must equal the registry spec on the fields where
+    the spec is non-None. Disagreement raises `EncodingRegistryError`.
+    Legacy configs with NO `encoding` key downgrade the rejection to a
+    `DeprecationWarning` and resolve as v6 (silent default).
     """
     if cfg is None:
         return lookup("v6")
     section = cfg.get("encoding")
+    explicit_encoding = section is not None
+    spec: EncodingSpec
     if section is None:
-        return lookup("v6")
-    if isinstance(section, str):
-        return lookup(section)
-    if isinstance(section, Mapping):
+        spec = lookup("v6")
+    elif isinstance(section, str):
+        spec = lookup(section)
+    elif isinstance(section, Mapping):
         version = section.get("version", "v6")
         if not isinstance(version, str):
             raise EncodingRegistryError(
                 f"encoding.version must be a string; got {type(version).__name__}"
             )
-        return lookup(version)
-    raise EncodingRegistryError(
-        f"encoding section must be str or mapping; got {type(section).__name__}"
-    )
+        spec = lookup(version)
+    else:
+        raise EncodingRegistryError(
+            f"encoding section must be str or mapping; got {type(section).__name__}"
+        )
+
+    if explicit_encoding:
+        # Strict: scattered key disagreement is an error. Forces variant
+        # configs to declare the encoding once and let the registry decide
+        # everything else.
+        _check_scattered_keys(cfg, spec)
+    else:
+        # Lenient: legacy config without explicit encoding section.
+        # Accept silently if scattered keys agree with the v6 default;
+        # downgrade disagreement to DeprecationWarning so old call sites
+        # (e.g. tests, eval scripts pre-A4) keep loading.
+        try:
+            _check_scattered_keys(cfg, spec)
+        except EncodingRegistryError as e:
+            warnings.warn(
+                f"legacy config without 'encoding' key has scattered keys "
+                f"that disagree with v6 default; resolving as v6 anyway. "
+                f"Add an explicit `encoding: <name>` declaration. Detail:\n{e}",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+    return spec
 
 
 def resolve_from_checkpoint(path: str | Path) -> EncodingSpec:
