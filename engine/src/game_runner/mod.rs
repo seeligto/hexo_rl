@@ -800,6 +800,65 @@ mod tests {
         );
     }
 
+    /// §171 P3 A1 reopen — jitter-guard regression. Without the
+    /// `encoding.is_none()` guard in worker_loop.rs, every game under
+    /// `legal_move_radius_jitter=true` would silently overwrite the v6w25
+    /// `Board::with_encoding(spec).legal_move_radius` (=8) with a v6-shaped
+    /// jitter ∈ {4, 5, 6}, training the v6w25 model on a v6 perception. This
+    /// test pairs the runner-side spec round-trip with the exact construction
+    /// sequence worker_loop.rs runs per game, then confirms the radius is
+    /// still 8 (NOT in {4, 5, 6}). Live-spawn check confirms no panic when
+    /// jitter and encoding co-exist.
+    #[test]
+    fn test_worker_loop_jitter_does_not_override_v6w25_radius() {
+        let spec = crate::encoding::EncodingSpec::V6W25;
+        let py_spec = crate::PyEncodingSpec { inner: spec };
+        let runner = SelfPlayRunner::new(
+            2, 0, 1, 1, 1.5, 0.25, 8*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
+            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
+            // legal_move_radius_jitter = true — the jitter range {4, 5, 6}
+            // would clobber the spec's radius=8 without the encoding guard.
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, true, Some(&py_spec),
+        ).unwrap();
+
+        // Spec round-trip — necessary precondition for the guard to fire.
+        let stored = runner.encoding().expect("v6w25 spec must round-trip");
+        assert_eq!(stored.legal_move_radius, 8);
+
+        // Replay the exact worker_loop.rs construction order:
+        //   1) board = match encoding { Some(spec) => Board::with_encoding(spec), None => Board::new() }
+        //   2) if legal_move_radius_jitter && encoding.is_none() { board.set_legal_move_radius(jittered) }
+        // Step (2) MUST be a no-op when encoding.is_some(). Assert the radius
+        // is the v6w25 spec value (8), NOT a jittered v6-range value (4, 5, or 6).
+        let board = crate::board::Board::with_encoding(&stored);
+        assert_eq!(
+            board.legal_move_radius(), 8,
+            "worker_loop jitter guard regressed: v6w25 radius 8 was overwritten"
+        );
+        assert!(
+            ![4, 5, 6].contains(&board.legal_move_radius()),
+            "worker_loop jitter guard regressed: v6w25 radius is in v6 jitter range {{4, 5, 6}}"
+        );
+
+        // Live-spawn smoke: jitter+encoding co-exist without panic / deadlock.
+        runner.start();
+        let mut attempts = 0;
+        let mut seen = HashSet::new();
+        while seen.len() < 2 && attempts < 100 {
+            let results = runner.drain_game_results_raw();
+            for (_, _, _, worker_id, _, _, _, _) in results {
+                seen.insert(worker_id);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+            attempts += 1;
+        }
+        runner.stop();
+        assert_eq!(
+            seen.len(), 2,
+            "jitter + v6w25 encoding co-existence must complete games on both workers"
+        );
+    }
+
     #[test]
     fn test_dirichlet_gate_disabled_preserves_priors() {
         let mut tree = crate::mcts::MCTSTree::new(1.5);

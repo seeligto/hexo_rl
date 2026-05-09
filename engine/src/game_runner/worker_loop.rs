@@ -240,11 +240,11 @@ impl SelfPlayRunner {
                     version_seen.clear();
 
                     // Phase B' v8 §152 Q2: per-game radius jitter ∈ {4, 5, 6}.
-                    // Sample once per game from the worker-local RNG so the
-                    // value is fixed for the duration; reproducible given a
-                    // seed-derived rng() initialiser. Default radius (5) is
-                    // unchanged when the flag is off.
-                    if legal_move_radius_jitter {
+                    // §171 P3 A1 reopen — guard with `encoding.is_none()` so a v6w25 (or
+                    // any future v6-family encoding) Board::with_encoding(spec) radius is
+                    // not overwritten by the v6-shaped jitter range. Jitter remains active
+                    // for the bare-defaults v6 path.
+                    if legal_move_radius_jitter && encoding.is_none() {
                         const JITTER_RADII: [i32; 3] = [4, 5, 6];
                         let r = *JITTER_RADII.choose(&mut rng).unwrap();
                         board.set_legal_move_radius(r);
