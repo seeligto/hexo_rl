@@ -11454,3 +11454,118 @@ file changes; no code changes.
 opens) consumes
 `data/bootstrap_corpus_v8_canvas_realness.npz` + `data/adversarial_corpus_v8.npz`
 + `checkpoints/ablation_169/A4_canvas_realness.pt`.
+
+---
+
+## §171 P3 — BLOCKED (handed to §172 architectural sprint) — 2026-05-09
+
+### TL;DR
+
+Two-layer blocker halts v6w25 sustained self-play. Layer 1: canvas vs trunk
+`board_size` semantics inconsistency between A2.1 (trainer, trunk=25) and A2.2
+(pool guard, canvas=19). Layer 2 (load-bearing): `Board::to_planes()` is
+hardcoded to 18×19×19 regardless of `cluster_window_size`; selfplay's
+`state.to_tensor()` calls this single-window path. v6w25 pretrain worked because
+`dataset_v6w25.py` uses `get_cluster_views()` (honors `cluster_window_size=25`);
+selfplay has no equivalent multi-window path. §172 architectural sprint required
+to resolve the structural debt.
+
+Pin scope clarification: v6w25 is canonical for pretrain+eval+matched-MCTS per
+§170 P4 P1 mechanism. v7full is canonical for selfplay pending α. Neither pin is
+silently retracted; both are explicit with scope constraints documented here.
+
+α scope statement: α (multi-window K-cluster selfplay) is Phase 4.5+ scope;
+design doc lands in §172, implementation in §173+.
+
+---
+
+### §171 P3.1 — What A1+A2 delivered (correct-in-scope)
+
+Commits `9e4876f..2121069` correctly implemented encoding-awareness at the Python
+layer:
+
+- ✓ Trainer encoding-aware checkpoint reconciliation
+- ✓ Workers construct `Board::with_encoding(spec)` per game (`cluster_window_size`
+  correctly set to 25 for v6w25)
+- ✗ But planes emitted are still 19×19 — `to_planes()` ignores `cluster_window_size`
+
+This work is necessary but not sufficient. Not wasted — §172 builds on it.
+
+---
+
+### §171 P3.2 — Surface enumeration (blocker grep findings)
+
+| Site | Finding |
+|---|---|
+| `engine/src/board/state.rs:41` | `TOTAL_CELLS = 19*19 = 361` — hardcoded |
+| `engine/src/board/state.rs:641` | `Board::to_planes()` emits 18 × TOTAL_CELLS — hardcoded 19×19 |
+| `engine/src/lib.rs:217-219` | PyO3 `Board.to_tensor()` calls `inner.to_planes()` → 18×19×19 regardless of `cluster_window_size` |
+| `engine/src/lib.rs:225` | `view_window` docstring: *"`size` is ignored (always 19×19)"* |
+| `engine/src/board/state.rs:703` | `get_cluster_views()` honors `cluster_window_size` — pretrain path, not selfplay |
+| `hexo_rl/selfplay/inference.py:53` | calls `state.to_tensor()` — single-window 19×19 path |
+| `bootstrap_model_v6w25.pt` | `policy_fc.weight = (626, 1250)`: 626 = 25×25+1 (action space), 1250 = 2ch × 625 (trunk 25×25) |
+
+Inference batcher expects (B, 8, 25, 25) from the model. selfplay delivers
+(B, 8, 19, 19). Either crash or silent shape corruption.
+
+---
+
+### §171 P3.3 — Layer 1 detail (canvas vs trunk semantics)
+
+| Site | Convention |
+|---|---|
+| `_V6W25_SPEC.board_size` (encoding.py:108) | 19 (canvas) |
+| `Trainer._model_board_size_for(spec)` (trainer.py:1051) | 25 (trunk) |
+| `Trainer._propagate_encoding_into_config` writes to `config["board_size"]` | 25 (trunk) |
+| `WorkerPool` guard `model.board_size != spec.board_size` (pool.py:127) | compares against 19 (canvas) |
+| Established v6w25 ablation configs | `board_size: 25` (trunk) |
+
+A2.1 picked trunk semantics, A2.2 picked canvas semantics. No test loaded a real
+v6w25 checkpoint into a real `WorkerPool` with a real `HexTacToeNet`.
+
+---
+
+### §171 P3.4 — Options and recommendation
+
+- **(α) Multi-window K-cluster selfplay** — replicate pretrain path in selfplay.
+  Workers emit K cluster views via new Rust API. Inference batcher handles
+  K-per-position fan-out. Pool / results queue / replay buffer all need K-aware
+  batching. Large effort. Touches Rust + Python + Buffer.
+- **(β) Single-window 25×25 selfplay** — extend `to_planes()` to honor
+  `cluster_window_size`. Smaller change but changes v6w25 semantics: trains on
+  different distribution than pretrain. May invalidate the v6w25 anchor.
+- **(γ) Re-anchor §171 P3 to v7full** — v7full (`board_size=19`, v6 encoding)
+  works on existing 19×19 selfplay path. Rolls back §170 close-out canonical pin.
+- **(δ) Pivot to A4 fine-tune side-arm** — pretrain only; doesn't exercise the
+  broken selfplay plane projection.
+
+**Recommendation:** (α) is the right structural fix but multi-day effort. (γ) and
+(δ) are cheap tactical pivots. §172 architectural sprint implements (α) correctly,
+using §171 A1+A2 Python plumbing as the foundation.
+
+---
+
+### §171 P3.5 — State preserved
+
+- **5080:** workspace pulled to `2121069`, engine rebuilt clean, pre-flight tmux
+  killed, 0 GPU memory in use.
+- **Laptop:** branch `phase4/p171_selfplay_smoke` HEAD = `2121069`, pushed.
+- **Pre-flight log:** `5080:/workspace/hexo_rl/logs/sprint_171_p3_preflight/run.log`.
+- **Pre-flight ckpt-dir:** empty (crashed before first ckpt).
+- **Cross-reference:** raw report at `/tmp/p171_p3_preflight_blocker.md`.
+
+---
+
+### §171 P3.6 — Pin scope clarification
+
+- **v6w25 canonical for:** pretrain, eval, matched-MCTS (per §170 P4 P1
+  mechanism). Scope: single-window 25×25 inference from a pre-trained checkpoint.
+- **v7full canonical for:** selfplay (sustained smoke), pending α delivery.
+- Neither pin is silently retracted. Both are explicit with scope constraints.
+- **α (multi-window K-cluster selfplay)** is Phase 4.5+ scope. Design doc in §172
+  Phase A7. Implementation in §173+.
+- The §172 sprint header will document α scope formally; this entry records the
+  blocker that necessitated it.
+
+**Status:** BLOCKED → §172 architectural sprint. `phase4/encoding_registry`
+branch cut. §171 P3 will not resume on `phase4/p171_selfplay_smoke`.
