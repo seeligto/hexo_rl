@@ -9977,47 +9977,61 @@ The engineering portion is complete; operator drives:
 | NaN-skip rate                   | **0%** (clean run)                              | 0%                                     | 30%       |
 | `gpool_bias_gate` init/mid/final | **0.000 / 0.038 / 0.0512** (~3× growth from 0) | n/a                                    | < 0.05 ⇒ null |
 | argmax @ r=8 n=200 vs SealBot   | **22.0% [16.8%, 28.2%]** (44W/154L/2D, mean_ply 47.98, median 35.0) | 14.5% [10.3%, 20.0%] | < 12% ⇒ failed; > 20% ⇒ surface §171 |
-| MCTS-64 n=200 vs SealBot        | **15.0% [10.7%, 20.6%]** (30W/170L/0D, mean_ply 29.7, median 29.0) | n/a (§169 P1 sanity MCTS-32 n=20: 25% [11.2%, 46.9%]) | n/a       |
+| MCTS-64 n=200 vs SealBot        | **15.0% [10.7%, 20.6%]** (30W/170L/0D, mean_ply 29.7, median 29.0) | **30.0% [24.1%, 36.7%]** (60W/140L/0D, mean_ply 33.8, median 33.0; matched-baseline ran post-eval, 839s on 5080) | n/a — **REGRESSION** |
 | threat probe C1/C2/C3           | SKIPPED (no v6w25 fixture; §170 follow-up)      | n/a                                    | n/a       |
 | params (M)                      | **5.47** (A1 + 0.18 M for gpool-bias branch)   | 5.29                                   | n/a       |
 | latency b=1 / b=64 (5080, ms)   | **1.49 / 11.26**                               | 2.64 / 10.41                           | 3.50 (b=1 gate) |
 
 ### Verdict
 
-**POSITIVE — `argmax > 20%` BREAKTHROUGH threshold TRIGGERED.** A1+gpool-bias
-delivered **+7.5 pp argmax over A1 anchor** (22.0% vs 14.5%, n=200 each).
-CI overlap is small (overlap region 16.8–20.0 pp = 3.2 pp); two-proportion
-z-test ≈ z=1.95, p≈0.05 (marginal significance, but the direction matches
-the §170 P3 hypothesis exactly: argmax +2-4pp predicted, +7.5pp observed).
+**FALSIFIED — argmax lift does NOT survive MCTS.** Matched A1-anchor
+MCTS-64 baseline (60W/140L/0D = **30.0% [24.1%, 36.7%]**, mean_ply 33.8,
+elapsed 839s on 5080) reveals A1+gpool-bias regresses **−15.0 pp under
+MCTS** (15.0% vs A1 30.0%; CIs disjoint by 3.5 pp). The +7.5 pp argmax
+lift is real but does not transfer through PUCT search — same
+**argmax-up / MCTS-down signature** as A2 PMA (4.5% argmax, 3.5%
+MCTS-128) and A3 PMA+global (7.5% argmax, 2.5% MCTS-128). Mean_ply
+collapses under MCTS in the predicted direction:
+- A1 anchor MCTS-64: mean_ply 33.8 (median 33.0) — search holds the line.
+- A1+gpool-bias MCTS-64: mean_ply 29.7 (median 29.0) — SealBot wins faster
+  under search than against argmax (47.98 mean_ply at argmax).
 
-**Loss: 2.8963 < A1 anchor 3.57** — substantial drop, well below 5.36
-hard-stop. A4 also undercut A1's loss (3.47) and got 0% SealBot WR, so
-loss alone is not sufficient signal — **the difference here is that the
-SealBot WR moved with the loss**, not against it (A4 had loss-without-WR
-because bbox is a structural failure mode; A1+gpool-bias preserves A1's
-load-bearing K-cluster pool by construction).
+**Mechanism — additive bias on the value head still breaks MCTS value
+semantics.** The §170 P3 prompt asserted "addition only — does NOT
+perturb min-on-value" by construction. That is structurally true at
+GATE=0 (commit-1 unit test). Once gate grows during training, the
+trained value head's `value_fc2(F.relu(value_fc1(...)) + value_bias)`
+emits values whose distribution shifts vs the gate=0 baseline; the
+gradient pushes the value head to *use* the bias signal (that's the
+lift seen at argmax). MCTS then backs up these biased values across
+many simulations; the cumulative drift breaks PUCT selection in the
+same way A3's PMA-replaced value head did. **Min-pool's K-cluster
+aggregation is preserved, but the per-cluster value the model emits
+is no longer A1's value — the bias has rewired the value head's
+operating point.**
 
-**MCTS-64 inconclusive** — A1 has no matched MCTS-64 baseline. The
-§169 P1 sanity at MCTS-32 n=20 was 25% with wide CI [11.2%, 46.9%];
-A2 ran MCTS-128 (3.5%); A3 ran MCTS-128 (2.5%). **A1+gpool-bias 15.0%
-[10.7%, 20.6%] at MCTS-64** is in the same ballpark as the A1 sanity
-point estimate but the proper comparison requires a matched
-A1-anchor MCTS-64 n=200 run (~13 min on 5080) — flagged as a
-follow-up before any §171 sustained-run scoping.
+This refutes the user-stated invariant "gpool-bias preserves
+load-bearing pool by construction — bias is K-invariant, addition only,
+doesn't perturb min-on-value". K-invariance of the bias holds; what is
+NOT preserved is the per-cluster scalar value semantics under MCTS
+backup. The same way A2/A3 broke value semantics by replacing the
+head, A1+gpool-bias broke them by adding bias INTO the head's hidden.
+
+**Loss: 2.8963 < A1 anchor 3.57** — well below 5.36 hard-stop. Better
+loss + worse MCTS reproduces the §169 close-out lesson: **training
+loss alone is NOT a sufficient signal for SealBot WR; encoding +
+value-head structure decide.** Adding to A4's lesson (lowest loss,
+0% WR), A1+gpool-bias is now the second confirmed case where lower
+loss correlates with worse-under-search.
 
 **Gate trajectory** climbed from 0.0 init to 0.0512 final (≈3× from
-absolute zero, but barely above the 0.05 soft-warn null threshold).
-Modest growth — not the dramatic A3-style 6.6× lift (0.10→0.66). Two
-readings:
-1. The bias branch earned modest weight; the projection layers'
-   magnitudes carry most of the lift, gate amplifies what's already
-   non-trivial.
-2. The K-cluster trunk + min-pool already captures most of the global
-   signal via the per-cluster GAP+GMP path; the gpool-bias branch adds
-   a small additive correction that shifts the argmax distribution
-   meaningfully even at low gate scale.
-
-Either way the eval lift is real — **+7.5 pp argmax** is the headline.
+absolute zero, barely above the 0.05 soft-warn null threshold). Despite
+the modest gate magnitude the bias contribution was *enough to break
+MCTS* — argues that future side-branch ablations need to gate the
+VALUE head separately or skip the value head entirely (policy-only
+side-channel as flagged in §170 P1 §4 "Low-cost §170 option: retrain
+A1 variant with global token in policy head only (value gate=0.0
+forced)").
 
 ### Latency note
 
@@ -10030,23 +10044,30 @@ the expected modest overhead.
 
 ### Surface for §171 scoping
 
-The breakthrough threshold (`argmax > 20%`) is triggered. Recommended next
-steps before launching §171 sustained run:
+The breakthrough threshold (`argmax > 20%`) was triggered initially BUT
+the matched A1-anchor MCTS-64 baseline (run post-eval, 839s on 5080)
+falsified the under-search lift: A1 anchor MCTS-64 = 30.0% vs
+A1+gpool-bias MCTS-64 = 15.0%. **§170 P3 is NOT a §171 sustained-run
+candidate.** The hypothesis "additive K-invariant bias preserves
+load-bearing pool" is refuted at the value-head injection site.
 
-1. **Matched MCTS-64 A1 baseline run** (~13 min on 5080): rerun
-   `scripts/run_sealbot_eval.py --checkpoint checkpoints/bootstrap_model_v6w25.pt
-   --inference mcts-64 --n-games 200 --legal-radius 8 --output reports/gpool_bias/A1_anchor_mcts64.json`.
-   Discriminates whether the +7.5 pp argmax lift survives MCTS — if A1 anchor
-   MCTS-64 ≈ 25% (matching the §169 P1 n=20 sanity), gpool-bias's MCTS-64 15%
-   is a regression under search; if A1 anchor MCTS-64 ≈ 10%, gpool-bias holds
-   its argmax advantage.
-2. **Padding-leak hold-out smoke** (optional): patch `GlobalTokenEncoder` to
-   drop the canvas_mask plane and re-eval argmax; significant drop confirms
-   the model is reading the canvas-realness mask as decision signal (expected
-   for a global-context-aware branch).
-3. **Threat probe v6w25 fixture build** (the persistent §170 gap): curate
-   tactical positions on a 25×25 board + regenerate baseline. Out of §170 P3
-   scope; queue for §171 prep alongside any sustained-run scoping.
+Recommended follow-ups (in priority order):
+
+1. **A1+gpool-bias-policy-only** (§170 P4 candidate): retrain a variant
+   that forces `value_proj` to zero / freezes value gate at 0, allowing
+   only the policy_proj branch to carry the global signal. Predicted
+   per §170 P1 §4: argmax approaches A1+gpool-bias (~22%), MCTS
+   approaches A1 anchor (~30%). Best-of-both. One config + one retrain
+   on 5080 (~1h 48m). The architecture invariant (gate=0 byte-exact A1)
+   already holds; only need to expose a `value_gate_active=False` knob
+   on `GpoolBiasBranch` so the value path is permanently disabled.
+2. **Padding-leak hold-out smoke** (optional): patch `GlobalTokenEncoder`
+   to drop the canvas_mask plane and re-eval argmax; significant drop
+   confirms the model is reading the canvas-realness mask as decision
+   signal (expected for a global-context-aware branch).
+3. **Threat probe v6w25 fixture build** (the persistent §170 gap):
+   curate tactical positions on a 25×25 board + regenerate baseline.
+   Out of §170 P3 scope; queue for §171 prep.
 
 ### Done-when checks
 
@@ -10062,17 +10083,34 @@ steps before launching §171 sustained run:
 - [x] Artefacts pulled to laptop (`checkpoints/gpool_bias/A1_gpool_bias.pt`
   21.9 MB; `reports/gpool_bias/*` 552 KB total).
 
-### Surface protocol (post-eval)
+### Surface protocol (post-eval, post-baseline)
 
 - **Gate < 0.05 soft-warn**: BORDERLINE — final 0.0512 (0.0012 above
-  threshold). Modest weight earned; not a clean null result. Combined with
-  the +7.5 pp argmax lift, the global signal IS doing real work.
-- **argmax > 20% BREAKTHROUGH**: TRIGGERED (22.0%). Surface for §171
-  sustained-run candidate scoping (after the matched-MCTS-64 baseline
-  step above).
-- **argmax < 14.5% (within A1 CI)**: NOT triggered — A1+gpool-bias
-  comfortably above A1 anchor's upper CI.
+  threshold). Modest weight earned; argmax shifted +7.5 pp confirming
+  the global signal IS doing real work, but MCTS regression confirms
+  the work it does breaks under search.
+- **argmax > 20% BREAKTHROUGH**: NOT a §171 candidate. Matched A1
+  anchor MCTS-64 (30.0%) refutes the under-search lift; A1+gpool-bias
+  MCTS-64 = 15.0% is a 15 pp regression with disjoint CIs.
+- **MCTS-64 regression > 10 pp under matched A1 baseline**: TRIGGERED
+  (−15.0 pp). §170 P3 hypothesis falsified at the value-head bias
+  injection site.
 - **Forward-parity post-train**: NOT re-run — the architecture invariant
   is structural (verified at construction by the unit test), not a
-  post-train property.
+  post-train property. Holds either way.
+
+### Lesson logged
+
+The "additive bias preserves load-bearing pool" intuition is wrong if
+the bias is added INTO the value head's hidden activation. Once the
+gate gains weight during training, the value head adapts to use the
+bias signal; the value distribution shifts vs A1 anchor and PUCT
+accumulates the drift across simulations. A1's load-bearing min/max
+pool is preserved STRUCTURALLY (the K-cluster reduction still picks
+min-of-K), but the per-cluster scalar value the model emits is no
+longer A1's value. This generalises §170 P1's lesson ("Do NOT route
+PMA through the value head") to **"do not modify the value head's
+operating point AT ALL — including additive bias"**. The next ablation
+(A1+gpool-bias-policy-only) tests whether limiting injection to the
+policy head escapes this trap.
 
