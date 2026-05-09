@@ -90,7 +90,7 @@ time; missing or wrong-typed keys fail loud.
 ```toml
 [encodings.<name>]
 # Geometry
-board_size              = <int>          # canvas side; action space = board_size² + 1
+board_size              = <int>          # canvas side; action space = board_size² + (1 if has_pass_slot else 0)
 trunk_size              = <int>          # NN trunk input side (= board_size for single-window;
                                          #   = cluster_window_size for K-cluster)
 cluster_window_size     = <int> | "none" # K-cluster window side, or "none" if single-window
@@ -100,7 +100,9 @@ legal_move_radius       = <int>          # legal-move radius around stone bbox
 # Tensor shape
 n_planes                = <int>          # input channels
 plane_layout            = [<str>, ...]   # semantic plane names; len = n_planes
-policy_logit_count      = <int>          # = board_size² + 1 (last = pass)
+policy_logit_count      = <int>          # = board_size² + (1 if has_pass_slot else 0)
+has_pass_slot           = <bool>         # A3 amendment 2026-05-09 — v8/v8_canvas_realness=false (existing
+                                         #   ckpts have policy_fc.out_features=625, no pass); v6/v6w25/v7full=true
 
 # Dispatch
 is_multi_window         = <bool>         # true → workers emit K cluster views per position
@@ -131,6 +133,7 @@ plane_layout            = [
   "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
 ]
 policy_logit_count      = 362            # 19*19 + 1
+has_pass_slot           = true
 is_multi_window         = false
 value_pool              = "none"
 policy_pool             = "none"
@@ -151,6 +154,7 @@ plane_layout            = [
   "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
 ]
 policy_logit_count      = 362
+has_pass_slot           = true
 is_multi_window         = false
 value_pool              = "none"
 policy_pool             = "none"
@@ -171,6 +175,7 @@ plane_layout            = [
   "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
 ]
 policy_logit_count      = 626            # 25*25 + 1
+has_pass_slot           = true
 is_multi_window         = true
 value_pool              = "min"          # per §170 P4 P1 NULL — K-invariant value head
 policy_pool             = "scatter_max"  # per-move cluster dispatch (α design Option iii)
@@ -191,13 +196,14 @@ plane_layout            = [
   "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
   "off_window_mask", "moves_remaining_bcast", "to_play_bcast",
 ]
-policy_logit_count      = 626
+policy_logit_count      = 625            # 25*25 (no pass slot — A3 amendment)
+has_pass_slot           = false
 is_multi_window         = false
 value_pool              = "none"
 policy_pool             = "none"
 sym_table_id            = "size_25"
 schema_version          = 1
-notes                   = "v8 contract — single-bbox 25×25; plane-8 polarity OFF→OUTSIDE (vanilla)."
+notes                   = "v8 contract — single-bbox 25×25; plane-8 polarity OFF→OUTSIDE (vanilla); no pass slot (existing v8 ckpts have policy_fc.out_features=625)."
 
 # v8_canvas_realness — v8 with plane-8 polarity flipped (inside→canvas)
 [encodings.v8_canvas_realness]
@@ -212,7 +218,8 @@ plane_layout            = [
   "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
   "canvas_realness", "moves_remaining_bcast", "to_play_bcast",
 ]
-policy_logit_count      = 626
+policy_logit_count      = 625            # 25*25 (no pass slot — A3 amendment)
+has_pass_slot           = false
 is_multi_window         = false
 value_pool              = "none"
 policy_pool             = "none"
@@ -227,7 +234,9 @@ Parse-time validator (run by both Rust and Python at registry init):
 
 - All required keys present; types match.
 - `len(plane_layout) == n_planes`.
-- `policy_logit_count == board_size * board_size + 1`.
+- `policy_logit_count == board_size * board_size + (1 if has_pass_slot else 0)`
+  (A3 amendment 2026-05-09: v8 / v8_canvas_realness have no pass slot;
+  per-encoding `has_pass_slot` bit added to schema).
 - `cluster_window_size == "none"` ⇔ `cluster_threshold == "none"` ⇔
   `is_multi_window == false`.
 - `is_multi_window == true` ⇒ `value_pool ∈ {"min","max","mean"}` and
@@ -268,6 +277,7 @@ pub struct EncodingSpec {
     pub n_planes: usize,
     pub plane_layout: &'static [&'static str],
     pub policy_logit_count: usize,
+    pub has_pass_slot: bool,
     pub is_multi_window: bool,
     pub value_pool: ValuePool,
     pub policy_pool: PolicyPool,
@@ -376,6 +386,7 @@ class EncodingSpec:
     n_planes: int
     plane_layout: tuple[str, ...]
     policy_logit_count: int
+    has_pass_slot: bool
     is_multi_window: bool
     value_pool: Literal["none", "min", "max", "mean"]
     policy_pool: Literal["none", "scatter_max", "scatter_mean"]

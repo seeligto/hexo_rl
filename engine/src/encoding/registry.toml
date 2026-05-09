@@ -16,7 +16,10 @@
 #
 # Schema invariants (validated at parse time — see §3.3):
 #   - len(plane_layout) == n_planes
-#   - policy_logit_count == board_size * board_size + 1
+#   - policy_logit_count == board_size * board_size + (1 if has_pass_slot else 0)
+#     (A3 amendment: v8 / v8_canvas_realness have no pass slot; existing
+#     checkpoints have policy_fc.out_features=625, not 626. The A2 schema
+#     rule "= bs²+1" missed this. Per-encoding has_pass_slot bit added.)
 #   - is_multi_window=false ⇒ cluster_window_size="none", cluster_threshold="none",
 #                            value_pool="none", policy_pool="none"
 #   - is_multi_window=true  ⇒ cluster_window_size,cluster_threshold are ints,
@@ -41,6 +44,7 @@ plane_layout            = [
   "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
 ]
 policy_logit_count      = 362            # 19*19 + 1 (last = pass)
+has_pass_slot           = true
 is_multi_window         = false
 value_pool              = "none"
 policy_pool             = "none"
@@ -64,6 +68,7 @@ plane_layout            = [
   "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
 ]
 policy_logit_count      = 362            # 19*19 + 1
+has_pass_slot           = true
 is_multi_window         = false
 value_pool              = "none"
 policy_pool             = "none"
@@ -89,6 +94,7 @@ plane_layout            = [
   "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
 ]
 policy_logit_count      = 626            # 25*25 + 1
+has_pass_slot           = true
 is_multi_window         = true
 value_pool              = "min"          # §170 P4 P1 NULL — K-invariant value head
 policy_pool             = "scatter_max"  # per-move cluster dispatch (α design Option iii)
@@ -119,13 +125,14 @@ plane_layout            = [
   # plane 10 — broadcast scalar (side to play)
   "to_play_bcast",
 ]
-policy_logit_count      = 626            # 25*25 + 1
+policy_logit_count      = 625            # 25*25 (no pass slot — v8 contract)
+has_pass_slot           = false
 is_multi_window         = false
 value_pool              = "none"
 policy_pool             = "none"
 sym_table_id            = "size_25"
 schema_version          = 1
-notes                   = "v8 contract — single-bbox 25x25; plane-8 polarity OFF->OUTSIDE (vanilla)."
+notes                   = "v8 contract — single-bbox 25x25; plane-8 polarity OFF->OUTSIDE (vanilla); no pass slot (existing v8 ckpts have policy_fc.out_features=625)."
 
 # ---------------------------------------------------------------------------
 # v8_canvas_realness — v8 with plane-8 polarity flipped (inside→canvas).
@@ -146,7 +153,8 @@ plane_layout            = [
   "moves_remaining_bcast",
   "to_play_bcast",
 ]
-policy_logit_count      = 626            # 25*25 + 1
+policy_logit_count      = 625            # 25*25 (no pass slot — same as v8)
+has_pass_slot           = false
 is_multi_window         = false
 value_pool              = "none"
 policy_pool             = "none"
