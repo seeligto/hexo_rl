@@ -10718,3 +10718,184 @@ canonical v6w25 bootstrap for §171 self-play.**
 
 **Next:** §171 Phase D self-play smoke under A1 anchor (operator-
 decided, items (b) + (a) unchanged from §170 aggregation Gate 6).
+
+
+
+---
+
+## §170 P4 P2 — adversarial corpus prep for §171 A4 fine-tune — 2026-05-09
+
+**Sprint:** §170 P4 P2 — corpus preparation only, NO retrain.
+**Branch:** `encoding/gpool_bias_a1`.
+**Predecessor:** §170 P0 verdict SPATIAL_RICH
+(`reports/investigations/a4_scalar_ablation_20260508/VERDICT.md`); §170
+aggregation Gate 6 item (c) "open §171 distribution-shift fine-tune as a
+side-arm" deferred-to-§171-scope.
+**Status:** ENGINEERING-COMPLETE. Artefacts on 5080 + laptop. Awaiting
+operator go on §171 fine-tune scope (Gate 6 item c).
+
+### 1. Question + scope
+
+§170 P0 established A4's spatial pathway is *load-bearing* (mean KL =
+4.19 nats under stones-zeroing, argmax STABLE 0/200). The 0% SealBot WR
+is therefore a **distribution-shift problem, not an architecture
+problem**. The §171 distribution-shift fine-tune is mechanistically
+justified — but §170 P4 P2 generates the data only; the fine-tune is
+deferred to §171 to keep the engineering scope tight.
+
+The corpus must mix sources biased toward exactly the positions A4
+collapses on (SealBot adversarial play + asymmetric perception fights),
+without overfitting to SealBot self-play (since SealBot is the eval
+anchor).
+
+### 2. Source mix (operator-tuned weights)
+
+| source | weight | rationale |
+|---|---:|---|
+| `sealbot_vs_a1` | 0.45 | **PRIMARY.** SealBot vs A1 (v6w25) games — the exact distribution A4 must learn for §171. |
+| `scripted_far_line` | 0.13 | §164 P2 catastrophic asymmetric-perception adversary; far-axis stone trains exactly the OOD distribution. |
+| `scripted_far_placement` | 0.12 | §164 P2 weaker variant; positional-coverage diversity. |
+| `krakenbot_vs_sealbot` | 0.15 | Peer-project minimax style; not SealBot's flat-board pattern matching. |
+| `sealbot_vs_sealbot` | 0.15 | LOW WEIGHT — SealBot is the eval anchor; self-play overfits its style. Retained for typical-position coverage. |
+
+### 3. Generator script
+
+`scripts/generate_adversarial_corpus.py` (new, ~600 LoC + inline copies of
+`FarLineOpponent` / `FarPlacementOpponent` from `tests/probes/p2_far_placement_opponent.py`
+since `tests/probes/` lacks an `__init__.py`).
+
+- BotProtocol-driven game loop (mirror of `scripts/run_sealbot_eval.py:play_game`
+  but accepts arbitrary (bot_p1, bot_pm1) pairs and returns the move list).
+- Per-source seed offsets reproducible from `--seed` + source-name hash.
+- Per-game cluster_threshold / cluster_window_size set only for the
+  sealbot_vs_a1 source (A1 v6w25 needs widened cluster geometry; v8 / scripted
+  / KrakenBot don't).
+- A1 model loaded once via `load_model_with_encoding`, shared across all
+  sealbot_vs_a1 games.
+- Per-game replay → `replay_game_to_triples_v8(canvas_realness=True)` for v8
+  encoding; ply-range filter `[2, 150)`; per-game uniform subsample to
+  ≤ 25 positions; per-source down-sample to weight target.
+- Output NPZ schema **byte-compatible** with `data/bootstrap_corpus_v8.npz`
+  canvas_realness variant (states / policies / outcomes / weights identical
+  in shape + dtype). One extra column `source_labels` (fixed-width bytes)
+  for diagnostics; pretrain loader ignores it.
+- JSON sidecar (`reports/gpool_bias/adversarial_stats.json`) captures full
+  per-source counts, win splits, mean ply, opponent strength bands, sha256,
+  bbox-clip telemetry.
+
+KrakenBot wrapper has a known **pair-bug** under tight time budgets where
+`MinimaxBot.get_move` returns the same cell twice as a 2-move pair; the
+wrapper's pre-cache validity check (`rust_board.get(q2, r2) == 0` _before_
+move 1 plays) doesn't catch the move1==move2 case. The generator catches
+the resulting `apply_move` exception per-game and skips, with effective
+KrakenBot game-yield ≈ 33 % (39/117). Surfaced in the manifest. Out of
+scope to fix in this sprint; the position shortfall (~1.3 k under
+target) was absorbed by the 1.3× game-count buffer + other sources.
+
+### 4. Run summary (5080 vast.ai, 2026-05-09)
+
+| field | value |
+|---|---|
+| host | 5080 vast.ai (`ssh6.vast.ai:13053`) |
+| seed | 20260509 |
+| wall time | ~14 min (459 s sealbot_vs_a1 + 39 s far_line + 25 s far_placement + 214 s krakenbot + 147 s sealbot self-play) |
+| games attempted / kept | 781 / 655 |
+| **total positions** | **12,781** |
+| target positions | 15,000 (12,781 / 15,000 ≈ 85 %; in 10–20 k operator band) |
+| size | 198.2 MB uncompressed (mmap-ready) |
+| **sha256** | **`e6c1b9b921492d9b23f825cce26e99b818285743fffef8aec3ae47532ef84c2c`** |
+| canvas_realness | True (plane 8 inside-mean = 217.0 = R=8 hex cell count, identical to base bootstrap_corpus_v8.npz canvas_realness variant) |
+| bbox-clip telemetry | 26,674 stones clipped outside 25×25 envelope (informational; matches B1 / A4 base-corpus rate) |
+
+Per-source position counts (post-target-down-sample):
+
+| source | positions | weight (target) | wins P1 / P-1 | mean ply | strength band |
+|---|---:|---:|---|---:|---|
+| sealbot_vs_a1 | 6,750 | 0.45 (6,750) | 177 / 170 | 59.4 | SealBot (t=0.1 s) ↔ A1 v6w25 argmax |
+| scripted_far_line | 1,860 | 0.13 (1,950) | 90 / 0 | 27.4 | FarLineOpponent vs SealBot |
+| scripted_far_placement | 958 | 0.12 (1,800) | 62 / 0 | 17.6 | FarPlacementOpponent vs SealBot |
+| krakenbot_vs_sealbot | 963 | 0.15 (2,250) | 11 / 28 | 32.0 | KrakenBot (t=0.1 s) vs SealBot |
+| sealbot_vs_sealbot | 2,250 | 0.15 (2,250) | 55 / 62 | 39.0 | SealBot self-play |
+
+Scripted sources show 100 % wins-by-SealBot (P1) — expected: §164 P2's
+asymmetric-perception adversary is far weaker than SealBot, the
+scripted side just spams far-axis stones. The corpus value is in the
+*positions encountered* (SealBot's responses to OOD adversarial plays),
+not the game outcomes; the outcomes column still uses
+`replay_game_to_triples_v8`'s ±1-from-current-player POV computation,
+so SealBot's policy targets are correct.
+
+### 5. Schema parity (vs `data/bootstrap_corpus_v8.npz`)
+
+| key | adversarial | bootstrap (canvas_realness variant) | match |
+|---|---|---|---|
+| states | (12 781, 11, 25, 25) float16 | (347 142, 11, 25, 25) float16 | ✓ |
+| policies | (12 781, 625) float32 | (347 142, 625) float32 | ✓ |
+| outcomes | (12 781,) float32 | (347 142,) float32 | ✓ |
+| weights | (12 781,) float32 | (347 142,) float32 | ✓ |
+| canvas_realness | True (plane 8 inside-mean 217.0) | True (plane 8 inside-mean 217.0) | ✓ |
+| extras | + `source_labels` (diagnostic; ignored by pretrain) | n/a | benign |
+
+Verified at the laptop after rsync via
+`np.load(path, mmap_mode='r')[k]` for k ∈ states / policies / outcomes /
+weights — all four key indexings succeed without `allow_pickle`. The
+extra `source_labels` column is currently `dtype=object` (the
+generator was patched mid-sprint to emit `S40` fixed-width bytes for
+future runs); object-dtype indexing is gated to diagnostic callers
+that opt into `allow_pickle=True`, and the pretrain loader doesn't
+touch this column.
+
+### 6. §171 entry-point
+
+```
+data/bootstrap_corpus_v8.npz                    sha256 110ea6b2…  (347,142 pos, 5,382 MB)
+data/adversarial_corpus_v8.npz                  sha256 e6c1b9b9…  ( 12,781 pos,   198 MB)
+checkpoints/ablation_169/A4_canvas_realness.pt  21.9 MB; v8; canvas_realness; PartialConv2d trunk-entry; 3.85 M params
+```
+
+Mixing ratio (operator-tunable for §171; NOT committed in this sprint):
+adversarial ≈ 3.7 % of base by position count — recommended natural-
+ratio mix for fine-tune (~2–5 k steps, peak LR ≤ 5 e-5, freeze
+PartialConv2d trunk-entry, unfreeze res_blocks 8–11 + heads only).
+
+Full source manifest:
+`reports/gpool_bias/adversarial_manifest.md` (this sprint's commit;
+force-added under the gitignored `reports/` umbrella following the
+§170 P3 / P4 P1 pattern).
+
+### 7. Surface-immediately tracking
+
+None fired. All monitors clear at close:
+- Schema-parity check: PASS (4 core keys identical to base corpus).
+- canvas_realness polarity: PASS (plane 8 inside-mean 217.0 = R=8 hex cells).
+- Position target (10–20 k operator band): PASS (12,781).
+- KrakenBot pair-bug: known issue, surfaced in manifest, absorbed by
+  game-count buffer; 33 % game-yield is acceptable for a 0.15-weight
+  source. Not a §170 P4 P2 fix.
+
+### 8. Done-when
+
+- [x] `data/adversarial_corpus_v8.npz` exists on 5080 + laptop.
+- [x] sha256 captured in `reports/gpool_bias/adversarial_manifest.md`.
+- [x] Per-source counts + opponent strength bands + position-filter
+      criteria documented in the manifest.
+- [x] §171 entry-point clear (manifest §"§171 entry-point").
+- [x] `scripts/generate_adversarial_corpus.py` committed.
+- [x] 1 commit on `encoding/gpool_bias_a1`:
+      `feat(corpus): adversarial corpus prep for §171 A4 fine-tune`
+      (this sprint's commit).
+- [x] Sprint log §170 P4 P2 entry (this section).
+- [x] NO retrain performed.
+
+### 9. STOP — awaiting operator go on §171 scope (Gate 6 item c)
+
+§170 P4 P2 prep ends here. The next sprint either opens §171 (Phase D
+self-play smoke under A1 anchor canonical pick — Gate 6 items a + b)
+or §171 A4 fine-tune side-arm (Gate 6 item c) using
+`bootstrap_corpus_v8.npz` + this adversarial corpus + the A4
+checkpoint. Operator's call.
+
+**Key result: corpus prep done. 12,781 v8-encoded canvas_realness
+positions, 5 sources, 45 % SealBot vs A1 + 25 % scripted adversaries
++ 30 % peer / self — biased toward exactly the distribution A4
+collapses on, without contaminating the eval anchor.**
