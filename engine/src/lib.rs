@@ -20,11 +20,64 @@ use numpy::{
 };
 
 use board::{Board as RustBoard, Player, BOARD_SIZE, encode_chain_planes as rust_encode_chain_planes, TOTAL_CELLS};
+use crate::encoding::EncodingSpec as RustEncodingSpec;
 use game_runner::SelfPlayRunner;
 use inference_bridge::InferenceBatcher;
 use replay_buffer::ReplayBuffer;
 use replay_buffer::sample::apply_symmetry_state;
 use replay_buffer::sym_tables::{SymTables, N_SYMS};
+
+// ── Python-visible EncodingSpec ───────────────────────────────────────────────
+
+/// Python-visible EncodingSpec. Pass to `Board.with_encoding(spec)` to
+/// construct a Board with non-default cluster window / threshold / radius.
+#[pyclass(name = "EncodingSpec")]
+#[derive(Clone)]
+pub struct PyEncodingSpec {
+    inner: RustEncodingSpec,
+}
+
+#[pymethods]
+impl PyEncodingSpec {
+    #[new]
+    #[pyo3(signature = (*, cluster_window_size, cluster_threshold, legal_move_radius, board_size))]
+    pub fn new(
+        cluster_window_size: usize,
+        cluster_threshold: i32,
+        legal_move_radius: i32,
+        board_size: usize,
+    ) -> PyResult<Self> {
+        let inner = RustEncodingSpec {
+            cluster_window_size,
+            cluster_threshold,
+            legal_move_radius,
+            board_size,
+        };
+        inner.validate().map_err(PyValueError::new_err)?;
+        Ok(PyEncodingSpec { inner })
+    }
+
+    #[getter] pub fn cluster_window_size(&self) -> usize { self.inner.cluster_window_size }
+    #[getter] pub fn cluster_threshold(&self) -> i32 { self.inner.cluster_threshold }
+    #[getter] pub fn legal_move_radius(&self) -> i32 { self.inner.legal_move_radius }
+    #[getter] pub fn board_size(&self) -> usize { self.inner.board_size }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            "EncodingSpec(cluster_window_size={}, cluster_threshold={}, legal_move_radius={}, board_size={})",
+            self.inner.cluster_window_size, self.inner.cluster_threshold,
+            self.inner.legal_move_radius, self.inner.board_size,
+        )
+    }
+
+    pub fn __eq__(&self, other: &PyEncodingSpec) -> bool { self.inner == other.inner }
+    pub fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.inner.hash(&mut h);
+        h.finish()
+    }
+}
 
 // ── Python-visible Board wrapper ──────────────────────────────────────────────
 
@@ -46,6 +99,15 @@ impl PyBoard {
     #[new]
     pub fn new() -> Self {
         PyBoard { inner: RustBoard::new() }
+    }
+
+    /// §171 P2 reopen — construct a Board with a non-default EncodingSpec.
+    /// Equivalent to calling Board() then set_cluster_window_size /
+    /// set_cluster_threshold / set_legal_move_radius, but bundles them into a
+    /// single validated call. Used by v6w25 self-play workers.
+    #[staticmethod]
+    pub fn with_encoding(encoding: &PyEncodingSpec) -> Self {
+        PyBoard { inner: RustBoard::with_encoding(&encoding.inner) }
     }
 
     /// Place a stone at (q, r) for the current player.
@@ -776,6 +838,7 @@ fn take_mcts_pool_overflow_count() -> u64 {
 #[pymodule]
 fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoard>()?;
+    m.add_class::<PyEncodingSpec>()?;
     m.add_class::<PyMCTSTree>()?;
     m.add_class::<InferenceBatcher>()?;
     m.add_class::<SelfPlayRunner>()?;

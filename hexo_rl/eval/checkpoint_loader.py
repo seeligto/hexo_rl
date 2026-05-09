@@ -72,6 +72,7 @@ def _v6w25_spec() -> EncodingSpec:
         n_planes=_c.BUFFER_CHANNELS,  # 8
         legal_move_radius=8,
         cluster_threshold=8,
+        cluster_window_size=25,  # §171 P2 reopen — added when EncodingSpec gained the field
         state_stride=_c.BUFFER_CHANNELS * _c.NUM_CELLS_V8,  # 5000
         chain_stride=_N_CHAIN_PLANES * _c.NUM_CELLS_V8,  # 3750
         policy_stride=_c.NUM_CELLS_V8 + 1,  # 626
