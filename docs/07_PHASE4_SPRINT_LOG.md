@@ -10775,10 +10775,11 @@ since `tests/probes/` lacks an `__init__.py`).
 - Per-game replay → `replay_game_to_triples_v8(canvas_realness=True)` for v8
   encoding; ply-range filter `[2, 150)`; per-game uniform subsample to
   ≤ 25 positions; per-source down-sample to weight target.
-- Output NPZ schema **byte-compatible** with `data/bootstrap_corpus_v8.npz`
-  canvas_realness variant (states / policies / outcomes / weights identical
-  in shape + dtype). One extra column `source_labels` (fixed-width bytes)
-  for diagnostics; pretrain loader ignores it.
+- Output NPZ schema **byte-compatible** with
+  `data/bootstrap_corpus_v8_canvas_realness.npz` (states / policies /
+  outcomes / weights identical in shape + dtype). One extra column
+  `source_labels` (fixed-width bytes) for diagnostics; pretrain loader
+  ignores it.
 - JSON sidecar (`reports/gpool_bias/adversarial_stats.json`) captures full
   per-source counts, win splits, mean ply, opponent strength bands, sha256,
   bbox-clip telemetry.
@@ -10804,7 +10805,7 @@ target) was absorbed by the 1.3× game-count buffer + other sources.
 | target positions | 15,000 (12,781 / 15,000 ≈ 85 %; in 10–20 k operator band) |
 | size | 198.2 MB uncompressed (mmap-ready) |
 | **sha256** | **`e6c1b9b921492d9b23f825cce26e99b818285743fffef8aec3ae47532ef84c2c`** |
-| canvas_realness | True (plane 8 inside-mean = 217.0 = R=8 hex cell count, identical to base bootstrap_corpus_v8.npz canvas_realness variant) |
+| canvas_realness | True (plane 8 inside-mean = 217.0 = R=8 hex cell count, identical to base bootstrap_corpus_v8_canvas_realness.npz, sha `110ea6b2…`) |
 | bbox-clip telemetry | 26,674 stones clipped outside 25×25 envelope (informational; matches B1 / A4 base-corpus rate) |
 
 Per-source position counts (post-target-down-sample):
@@ -10825,7 +10826,7 @@ not the game outcomes; the outcomes column still uses
 `replay_game_to_triples_v8`'s ±1-from-current-player POV computation,
 so SealBot's policy targets are correct.
 
-### 5. Schema parity (vs `data/bootstrap_corpus_v8.npz`)
+### 5. Schema parity (vs `data/bootstrap_corpus_v8_canvas_realness.npz`)
 
 | key | adversarial | bootstrap (canvas_realness variant) | match |
 |---|---|---|---|
@@ -10848,7 +10849,7 @@ touch this column.
 ### 6. §171 entry-point
 
 ```
-data/bootstrap_corpus_v8.npz                    sha256 110ea6b2…  (347,142 pos, 5,382 MB)
+data/bootstrap_corpus_v8_canvas_realness.npz    sha256 110ea6b2…  (347,142 pos, 5,382 MB)
 data/adversarial_corpus_v8.npz                  sha256 e6c1b9b9…  ( 12,781 pos,   198 MB)
 checkpoints/ablation_169/A4_canvas_realness.pt  21.9 MB; v8; canvas_realness; PartialConv2d trunk-entry; 3.85 M params
 ```
@@ -10892,8 +10893,8 @@ None fired. All monitors clear at close:
 §170 P4 P2 prep ends here. The next sprint either opens §171 (Phase D
 self-play smoke under A1 anchor canonical pick — Gate 6 items a + b)
 or §171 A4 fine-tune side-arm (Gate 6 item c) using
-`bootstrap_corpus_v8.npz` + this adversarial corpus + the A4
-checkpoint. Operator's call.
+`bootstrap_corpus_v8_canvas_realness.npz` (sha `110ea6b2…`) + this
+adversarial corpus + the A4 checkpoint. Operator's call.
 
 **Key result: corpus prep done. 12,781 v8-encoded canvas_realness
 positions, 5 sources, 45 % SealBot vs A1 + 25 % scripted adversaries
@@ -10951,9 +10952,9 @@ Gate 6 below.
   COMPLETE.** `data/adversarial_corpus_v8.npz` (sha256 `e6c1b9b9…`,
   12,781 positions, 198.2 MB, 5 sources at operator-tuned weights)
   ready on 5080 + laptop, schema byte-compatible with
-  `bootstrap_corpus_v8.npz` canvas_realness variant. §171 A4 fine-
-  tune entry-point clear; mix and recipe NOT committed (operator-side
-  §171 scope decision).
+  `bootstrap_corpus_v8_canvas_realness.npz` (sha `110ea6b2…`). §171
+  A4 fine-tune entry-point clear; mix and recipe NOT committed
+  (operator-side §171 scope decision).
 - **Mechanistic synthesis.** P4 P1 confirms the §170 P1 + P3 reading:
   the value head's *operating point* (not the routing or pool layer)
   is the controlling factor under PUCT search. Bilateral bias (P3)
@@ -11109,9 +11110,9 @@ Result: `data/adversarial_corpus_v8.npz` (sha256
 `e6c1b9b921492d9b23f825cce26e99b818285743fffef8aec3ae47532ef84c2c`,
 12,781 positions, 198.2 MB, 5 sources at operator-tuned weights)
 generated on 5080 in ~14 min wall, schema byte-compatible with
-`bootstrap_corpus_v8.npz` canvas_realness variant (states / policies
-/ outcomes / weights identical in shape + dtype; one extra
-`source_labels` diagnostic column ignored by the pretrain loader).
+`bootstrap_corpus_v8_canvas_realness.npz` (sha `110ea6b2…`) — states /
+policies / outcomes / weights identical in shape + dtype; one extra
+`source_labels` diagnostic column ignored by the pretrain loader.
 
 Per-source: 6,750 sealbot_vs_a1 (0.45 weight, primary), 1,860
 scripted_far_line + 958 scripted_far_placement (0.13 + 0.12 weight,
@@ -11122,7 +11123,7 @@ risk). Total 12,781 / 15,000 target ≈ 85 %, in the 10–20 k operator
 band.
 
 **Implication.** Corpus prep done. §171 A4 fine-tune entry-point:
-`bootstrap_corpus_v8.npz` (sha256 `110ea6b2…`) +
+`bootstrap_corpus_v8_canvas_realness.npz` (sha256 `110ea6b2…`) +
 `adversarial_corpus_v8.npz` (sha256 `e6c1b9b9…`) +
 `checkpoints/ablation_169/A4_canvas_realness.pt`. Recommended natural-
 ratio mix per P2 manifest §"§171 entry-point": adversarial ≈ 3.7 % of
@@ -11344,7 +11345,8 @@ g) **Architecture explorations to defer to Phase 5+?**
       scope decision affecting the next 3–4 hours of 5080 compute.
 - [ ] If (c) is opened: scope §171 A4 distribution-shift fine-tune in
       a separate context, reusing `adversarial_corpus_v8.npz` (sha256
-      `e6c1b9b9…`) + `bootstrap_corpus_v8.npz` (sha256 `110ea6b2…`)
+      `e6c1b9b9…`) +
+      `bootstrap_corpus_v8_canvas_realness.npz` (sha256 `110ea6b2…`)
       + `checkpoints/ablation_169/A4_canvas_realness.pt`. Mix and
       recipe in P2 manifest §"§171 entry-point".
 - [ ] Either way, scope §171 (Phase D self-play smoke) under A1
@@ -11391,3 +11393,64 @@ if Gate 6 item (c) opens.**
 **Next:** §171 (Phase D self-play smoke under A1 anchor, operator-
 decided, items b + d) ± §171 A4 fine-tune side-arm (operator-decided,
 item c).
+
+---
+
+## §171 P0 — sprint scoping + entry-point validation — 2026-05-09
+
+**Branch:** `phase4/p171_selfplay_smoke` (off master @ `ebacabd`,
+post-§170 close-out merge).
+**Status:** P0 closeout note. P1 (variant-config commit `888064a`) +
+P2 (cold-smoke pre-flight) + P3 (sustained smoke launch) tracked in
+separate sprint-log entries / memory notes.
+
+### §171 P0.1 — corpus-sha manifest transposition correction
+
+While preparing the §171 A4 distribution-shift fine-tune side-arm
+(Gate 6 item c) the §170 P4 P2 manifest entry-point was audited
+against the on-disk corpus files. **Transposition discovered:**
+
+- §170 P4 P2 manifest + sprint-log entry cited
+  `data/bootstrap_corpus_v8.npz sha256 110ea6b2…` as the §171 A4
+  fine-tune base corpus.
+- Actual on-disk file at `data/bootstrap_corpus_v8.npz` is the
+  **vanilla v8 baseline corpus** with sha
+  `adb884122bc4744b771ca95f30419ba067764eacbae428fa27c5117db8a0dd77`
+  (plane-8 polarity off→outside; produced by §167 / §169
+  `export_corpus_npz.py` *without* `--canvas-realness`). Used by §167
+  B1 / §169 A2 / A3 retrains.
+- The sha `110ea6b2…` belongs to the **canvas_realness variant**
+  produced as `data/bootstrap_corpus_v8_canvas_realness.npz` per
+  `reports/ablation_169/A4_corpus_export.log` (5,382 MB, 347,142
+  positions, plane-8 polarity inside→canvas, used to pretrain
+  `checkpoints/ablation_169/A4_canvas_realness.pt`).
+
+**Why it matters.** `A4_canvas_realness.pt` carries a `PartialConv2d`
+trunk-entry whose plane-8 polarity invariant is canvas_realness=True.
+Resuming fine-tune from that checkpoint with the vanilla v8 corpus
+(adb88412…) flips plane-8 polarity at the trunk entry — silently
+breaking the renormalisation invariant the PartialConv2d module was
+trained under. The corrected entry-point uses
+`bootstrap_corpus_v8_canvas_realness.npz` (sha `110ea6b2…`) so plane-
+8 polarity matches the resume checkpoint.
+
+**Resolution.** This sprint corrects every §170 P4 P2 + §171 A4
+entry-point reference across `reports/gpool_bias/adversarial_manifest.md`
+and `docs/07_PHASE4_SPRINT_LOG.md` (§170 P4 P2 entry, §170 P4 close-
+out aggregation, Gate 6 item-c scope note). References to
+`bootstrap_corpus_v8.npz` as the **vanilla v8 baseline** (e.g. §169
+A4's "(v8 corpus, n/a)" matrix cell, §167 B1 retrain entries) are
+unchanged — those correctly cite the sha `adb88412…` file at that
+path.
+
+History is annotated, not rewritten: §169 P4 / §170 P3 / §170 P4 P1
+narratives stand. The §170 P4 P2 corpus-prep work itself is correct
+(adversarial_corpus_v8.npz schema-parity is canvas_realness; the
+manifest just labelled the partner file with the wrong path). No data
+file changes; no code changes.
+
+**Status:** entry-point manifest corrected on
+`phase4/p171_selfplay_smoke`. §171 A4 fine-tune (if Gate 6 item c
+opens) consumes
+`data/bootstrap_corpus_v8_canvas_realness.npz` + `data/adversarial_corpus_v8.npz`
++ `checkpoints/ablation_169/A4_canvas_realness.pt`.
