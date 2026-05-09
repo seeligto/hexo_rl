@@ -127,6 +127,26 @@ impl PyBoard {
         PyBoard { inner: RustBoard::with_encoding(&encoding.inner) }
     }
 
+    /// §172 A4.1 — registry-resolved Board ctor. Looks the encoding up by
+    /// name in `engine/src/encoding/registry.toml` and binds the resulting
+    /// `RegistrySpec` to the new Board. Preferred over `with_encoding`
+    /// (which takes the legacy 4-field struct) for new consumers — adding
+    /// a new encoding becomes a single TOML edit.
+    ///
+    /// Raises `ValueError` if `name` is not a registered encoding.
+    /// `Board.size`, `Board.to_tensor()`, and the multi-window guard at
+    /// `to_tensor` honor the registry record.
+    #[staticmethod]
+    pub fn with_encoding_name(name: &str) -> PyResult<Self> {
+        let spec = crate::encoding::lookup(name).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "unknown encoding {:?}; see engine/src/encoding/registry.toml",
+                name
+            ))
+        })?;
+        Ok(PyBoard { inner: RustBoard::with_registry_spec(spec) })
+    }
+
     /// Place a stone at (q, r) for the current player.
     /// Raises ValueError if the move is illegal.
     pub fn apply_move(&mut self, q: i32, r: i32) -> PyResult<()> {
@@ -207,20 +227,29 @@ impl PyBoard {
     }
 
     /// Encode the board as a flat list of floats for the 18 tensor planes
-    /// (shape conceptually [18, 19, 19], returned as a flat list of length 18×361=6498):
+    /// (shape conceptually [18, board_size, board_size] where board_size
+    /// comes from the encoding bound at construction — default 19 = v6,
+    /// flat length 18×361=6498; v8 = 25, flat length 18×625=11250).
     ///   plane 0: current player's stones
     ///   plane 8: opponent's stones
     ///   plane 16: moves_remaining == 2 ? 1.0 : 0.0
     ///   plane 17: ply % 2
     ///   (chain-length planes moved to replay-buffer aux sub-buffer post-§97)
     ///
-    /// Use numpy.array(board.to_tensor(), dtype=numpy.float32).reshape(18, 19, 19).
+    /// §172 A4.1: panics for multi-window encodings (v6w25 etc.); use
+    /// `get_cluster_views()` for those. Multi-window selfplay deferred to α
+    /// — see `docs/designs/encoding_alpha_multiwindow_selfplay.md`.
+    ///
+    /// Use numpy.array(board.to_tensor(), dtype=numpy.float32)
+    ///   .reshape(18, board.size, board.size).
     pub fn to_tensor(&self) -> Vec<f32> {
         self.inner.to_planes()
     }
 
     /// Same as `to_tensor` but makes the sliding-window semantics explicit.
-    /// `size` is ignored — always 19×19.
+    /// `size` is ignored; output shape comes from the Board's encoding
+    /// (default 19×19 v6). Multi-window encodings panic per `to_tensor`
+    /// (§172 A4.1).
     pub fn view_window(&self, _size: usize) -> Vec<f32> {
         self.inner.to_planes()
     }
@@ -316,10 +345,12 @@ impl PyBoard {
         self.inner.in_window(q, r)
     }
 
-    /// Board size (cells per axis = 19).
+    /// Board size (cells per axis). Default 19 (v6 wire format); honors
+    /// the encoding bound at construction via `with_encoding_name` (e.g.
+    /// 25 for v8). §172 A4.1.
     #[getter]
     pub fn size(&self) -> usize {
-        BOARD_SIZE
+        self.inner.encoding.map_or(BOARD_SIZE, |s| s.board_size)
     }
 
     /// Human-readable string showing the 19×19 view window (for debugging).

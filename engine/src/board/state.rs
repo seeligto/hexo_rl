@@ -160,6 +160,17 @@ pub struct Board {
     /// Default is `BOARD_SIZE` (19, v6 wire format). v6w25 corpus generation
     /// overrides to 25 for matched-perception A/B vs v8.
     pub(crate) cluster_window_size: usize,
+    /// §172 A4.1 — registry-resolved encoding bound to this Board.
+    ///
+    /// `None` = legacy v6 default (matches `Board::new()` / pre-A4 callers
+    /// that never set an explicit encoding). `Some(spec)` = bound by
+    /// `Board::with_registry_spec`; `to_planes` / spatial dims read
+    /// `spec.board_size`, multi-window encodings (`spec.is_multi_window`)
+    /// loud-fail at `to_planes()` per design §4.6.
+    ///
+    /// Pointer is stable for process lifetime (registry uses `Box::leak`
+    /// at parse time).
+    pub(crate) encoding: Option<&'static crate::encoding::RegistrySpec>,
 }
 
 impl Board {
@@ -203,7 +214,48 @@ impl Board {
             legal_move_radius: super::moves::DEFAULT_LEGAL_MOVE_RADIUS,
             cluster_threshold: super::moves::DEFAULT_CLUSTER_THRESHOLD,
             cluster_window_size: BOARD_SIZE,
+            encoding: None,
         }
+    }
+
+    /// §172 A4.1 — construct a Board bound to a registry-resolved encoding.
+    ///
+    /// Companion to the legacy 4-field `Board::with_encoding(&EncodingSpec)`
+    /// (kept for §171 plumbing compat). New consumers should prefer this
+    /// ctor — fields below derive directly from the registry record so
+    /// adding a new encoding means editing only `registry.toml`.
+    ///
+    /// Field mapping (per design doc §4.5):
+    ///   - `cluster_window_size` ← `spec.cluster_window_size.unwrap_or(spec.board_size)`
+    ///     (single-window encodings carry `None` in the registry; the
+    ///     Board still needs a usable window dim, so fall back to
+    ///     `board_size` to match legacy `Board::new()` semantics for v6.)
+    ///   - `cluster_threshold`   ← `spec.cluster_threshold.unwrap_or(DEFAULT_CLUSTER_THRESHOLD)`
+    ///   - `legal_move_radius`   ← `spec.legal_move_radius`
+    ///   - `encoding`            ← `Some(spec)` so `to_planes()` and the
+    ///     PyO3 surface honor `spec.board_size` and `spec.is_multi_window`.
+    ///
+    /// Marks `cache_dirty=true` (legal-cache built in `new()` is for the
+    /// default radius=5; non-default radii require a rebuild on first
+    /// `legal_moves_set()` call). Panics in debug if `spec.validate()`
+    /// returns Err — registry parser already validates, so this is
+    /// belt-and-braces.
+    pub fn with_registry_spec(spec: &'static crate::encoding::RegistrySpec) -> Board {
+        debug_assert!(
+            spec.validate().is_ok(),
+            "RegistrySpec {:?} failed validation: {:?}",
+            spec.name,
+            spec.validate()
+        );
+        let mut b = Board::new();
+        b.cluster_window_size = spec.cluster_window_size.unwrap_or(spec.board_size);
+        b.cluster_threshold = spec
+            .cluster_threshold
+            .unwrap_or(super::moves::DEFAULT_CLUSTER_THRESHOLD as usize) as i32;
+        b.legal_move_radius = spec.legal_move_radius as i32;
+        b.encoding = Some(spec);
+        b.cache_dirty.set(true);
+        b
     }
 
     /// §171 P2 reopen — construct a Board with a non-default encoding spec.
@@ -263,6 +315,16 @@ impl Board {
     /// the new radius.  Used by `SelfPlayRunner` when
     /// `legal_move_radius_jitter` is enabled — caller samples r ∈ {4, 5, 6}
     /// per game and applies it before the first move.
+    ///
+    /// **Post-mutator hazard (§171 P3 e6682f6 precedent, §172 A4.1):** if
+    /// this Board was constructed via `Board::with_registry_spec` or
+    /// `Board::with_encoding`, calling this setter silently overrides the
+    /// encoding's `legal_move_radius`. The caller (e.g. `worker_loop.rs`)
+    /// is responsible for guarding with `encoding.is_none()` or by an
+    /// explicit jitter-overrides-encoding contract. This method does not
+    /// assert because the v6 + jitter combination is the legitimate use
+    /// case; the assertion would fire on every legitimate jitter call.
+    /// See `feedback_encoding_post_mutators_audit.md`.
     pub fn set_legal_move_radius(&mut self, radius: i32) {
         self.legal_move_radius = radius;
         self.cache_dirty.set(true);
@@ -293,6 +355,11 @@ impl Board {
     /// Window-relative flat index for axial (q, r).
     ///
     /// Result is in [0, TOTAL_CELLS). Returns usize::MAX for out-of-window coords.
+    ///
+    /// v6 single-window only; v6w25 routes around via `get_cluster_views`,
+    /// v8 uses Python encoding. Constants (BOARD_SIZE / HALF / TOTAL_CELLS)
+    /// are not load-bearing for §171 P3 (`to_planes` blocker) and stay
+    /// hardcoded here (§172 A4.1).
     #[inline]
     pub fn window_flat_idx(&self, q: i32, r: i32) -> usize {
         let (cq, cr) = self.window_center();
@@ -300,6 +367,8 @@ impl Board {
     }
 
     /// Window-relative flat index for axial (q, r) at a specific center.
+    ///
+    /// v6 single-window only; see `window_flat_idx` doc-comment.
     #[inline]
     pub fn window_flat_idx_at(q: i32, r: i32, cq: i32, cr: i32) -> usize {
         let wq = q - cq + HALF;
@@ -317,6 +386,8 @@ impl Board {
     }
 
     /// Axial coordinates (q, r) from a window-relative flat index.
+    ///
+    /// v6 single-window only; see `window_flat_idx` doc-comment.
     #[inline]
     pub fn window_coords(&self, flat: usize) -> (i32, i32) {
         let (cq, cr) = self.window_center();
@@ -326,6 +397,8 @@ impl Board {
     }
 
     /// Whether (q, r) is inside the current 19×19 view window.
+    ///
+    /// v6 single-window only; see `window_flat_idx` doc-comment.
     #[inline]
     pub fn in_window(&self, q: i32, r: i32) -> bool {
         let (cq, cr) = self.window_center();
@@ -556,6 +629,13 @@ impl Board {
     /// skips out-of-range entries.
     ///
     /// `out` must have length `channels.len() * TOTAL_CELLS`.
+    ///
+    /// §172 A4.1: this kernel hardcodes `TOTAL_CELLS` (361 = 19×19 v6 wire
+    /// format). Encodings with a different `board_size` (v8 = 25×25)
+    /// resize the output buffer in `to_planes_channels`/`to_planes` but
+    /// the body of this kernel still walks the v6 19×19 layout. v8 Rust
+    /// selfplay does not exist today; §17X v8 Rust path will introduce
+    /// a separate `to_planes_v8` kernel if needed.
     pub fn encode_state_to_buffer_channels(
         &self,
         planes_2: &[f32],
@@ -610,9 +690,26 @@ impl Board {
     }
 
     /// `to_planes` variant emitting only the listed channels, in the listed
-    /// order. Length = `channels.len() * TOTAL_CELLS`. See
+    /// order. Length = `channels.len() * board_size²` where `board_size`
+    /// is the Board's encoding's `board_size` (default 19 = v6). See
     /// `encode_state_to_buffer_channels` for plane semantics.
+    ///
+    /// §172 A4.1 (multi-window guard): panics if the bound encoding is
+    /// multi-window (v6w25). Multi-window selfplay is α-deferred — see
+    /// `docs/designs/encoding_alpha_multiwindow_selfplay.md`. Use
+    /// `get_cluster_views()` instead for those encodings.
     pub fn to_planes_channels(&self, channels: &[usize]) -> Vec<f32> {
+        if let Some(spec) = self.encoding {
+            if spec.is_multi_window {
+                unimplemented!(
+                    "Board::to_planes_channels() called on multi-window encoding {:?}; \
+                     use get_cluster_views() instead. Multi-window selfplay deferred \
+                     to α — see docs/designs/encoding_alpha_multiwindow_selfplay.md \
+                     (§172 Phase A7).",
+                    spec.name
+                );
+            }
+        }
         let mut planes_2 = vec![0.0f32; 2 * TOTAL_CELLS];
         let (my_cell, opp_cell) = match self.current_player {
             Player::One => (Cell::P1, Cell::P2),
@@ -633,12 +730,49 @@ impl Board {
         out
     }
 
-    /// Encode the board as a flat f32 array of length `18 * TOTAL_CELLS`
-    /// representing shape [18, BOARD_SIZE, BOARD_SIZE] (18 history+scalar planes).
+    /// Encode the board as a flat f32 array of length
+    /// `18 * board_size * board_size` representing shape
+    /// `[18, board_size, board_size]` (18 history+scalar planes).
+    ///
+    /// `board_size` resolves from `self.encoding` (default 19 = v6 wire
+    /// format; v8 = 25 = canvas dim per registry).
     ///
     /// Chain-length planes are computed separately via `encode_chain_planes`.
     /// Stones outside the current 19×19 window are silently omitted.
+    ///
+    /// §172 A4.1 (multi-window guard, closes §171 P3 plane-export blocker):
+    /// panics if the bound encoding is multi-window (v6w25 etc.). Single-
+    /// window selfplay must route through `get_cluster_views` for those
+    /// encodings; the silent shape corruption to_planes used to produce
+    /// (always 18×19×19 regardless of encoding) was the §171 P3 blocker.
+    /// Multi-window selfplay deferred to α — see
+    /// `docs/designs/encoding_alpha_multiwindow_selfplay.md`.
+    ///
+    /// **v8 semantic mismatch caveat (out of scope today):** for
+    /// single-window encodings with `board_size != 19` (v8 = 25), this
+    /// method emits an 18-plane wire layout sized at the encoding's
+    /// `board_size` but the kernel still walks the v6 19×19 layout —
+    /// only the first 361 cells per plane carry stone data, the
+    /// remainder is zero. v8 native is 11 planes (no KEPT_PLANE_INDICES
+    /// slice) and a different stone-placement convention; Rust v8
+    /// selfplay does not exist today and §17X will introduce a dedicated
+    /// `to_planes_v8` if needed. A4.1's responsibility is bounded to
+    /// stopping the spatial-dim hardcode that blocked v6w25.
     pub fn to_planes(&self) -> Vec<f32> {
+        if let Some(spec) = self.encoding {
+            if spec.is_multi_window {
+                unimplemented!(
+                    "Board::to_planes() called on multi-window encoding {:?}; \
+                     use get_cluster_views() instead. Multi-window selfplay deferred \
+                     to α — see docs/designs/encoding_alpha_multiwindow_selfplay.md \
+                     (§172 Phase A7).",
+                    spec.name
+                );
+            }
+        }
+        let board_size = self.encoding.map_or(BOARD_SIZE, |s| s.board_size);
+        let total_cells = board_size * board_size;
+
         let mut planes_2 = vec![0.0f32; 2 * TOTAL_CELLS];
         let (my_cell, opp_cell) = match self.current_player {
             Player::One => (Cell::P1, Cell::P2),
@@ -655,13 +789,41 @@ impl Board {
             }
         }
 
-        let mut out = vec![0.0f32; 18 * TOTAL_CELLS];
-        self.encode_state_to_buffer(&planes_2, &mut out);
+        // Output buffer sized by encoding's board_size. v6 (board_size=19)
+        // is bit-identical to pre-A4.1 behavior. v8 (board_size=25) gets a
+        // larger zero-padded buffer; see method-doc caveat.
+        let mut out = vec![0.0f32; 18 * total_cells];
+        if board_size == BOARD_SIZE {
+            self.encode_state_to_buffer(&planes_2, &mut out);
+        } else {
+            // v8 single-window path: emit v6 19×19 wire layout into the
+            // top-left 361 cells of each 25×25 plane. Plane semantics
+            // differ from v8 native (11 planes); see method-doc caveat.
+            // Plane 0: my stones; Plane 8: opp stones.
+            for i in 0..TOTAL_CELLS {
+                out[0 * total_cells + i] = planes_2[i];
+                out[8 * total_cells + i] = planes_2[TOTAL_CELLS + i];
+            }
+            // Plane 16: moves_remaining == 2 broadcast over full plane.
+            let mr_val = if self.moves_remaining == 2 { 1.0 } else { 0.0 };
+            for i in 0..total_cells {
+                out[16 * total_cells + i] = mr_val;
+            }
+            // Plane 17: ply parity broadcast over full plane.
+            let ply_val = (self.ply % 2) as f32;
+            for i in 0..total_cells {
+                out[17 * total_cells + i] = ply_val;
+            }
+        }
         out
     }
 
     /// Same as `to_planes` — present to make the sliding-window semantics
-    /// explicit in the PyO3 interface.  `size` is ignored (always 19×19).
+    /// explicit in the PyO3 interface.
+    ///
+    /// `size` is ignored; output shape comes from the Board's encoding
+    /// (default 19×19 v6). Multi-window encodings panic per `to_planes`
+    /// (§172 A4.1).
     pub fn view_window(&self, _size: usize) -> Vec<f32> {
         self.to_planes()
     }
@@ -1226,6 +1388,7 @@ impl Clone for Board {
             legal_move_radius: self.legal_move_radius,
             cluster_threshold: self.cluster_threshold,
             cluster_window_size: self.cluster_window_size,
+            encoding: self.encoding,
         }
     }
 }
@@ -1290,5 +1453,93 @@ mod with_encoding_tests {
             board_size: 19,
         };
         let _ = Board::with_encoding(&bad);
+    }
+}
+
+#[cfg(test)]
+mod with_registry_spec_tests {
+    //! §172 A4.1 — Board::with_registry_spec + to_planes encoding-aware
+    //! plumbing. Closes the §171 P3 plane-export blocker (to_planes used
+    //! to silently emit 18×19×19 regardless of encoding).
+    use super::*;
+
+    #[test]
+    fn to_planes_v6_default_emits_18x361() {
+        let b = Board::new();
+        let v = b.to_planes();
+        assert_eq!(v.len(), 18 * 19 * 19); // 6498
+    }
+
+    #[test]
+    fn to_planes_after_with_registry_spec_v6_matches_default() {
+        let v6 = crate::encoding::lookup_or_panic("v6");
+        let b = Board::with_registry_spec(v6);
+        assert_eq!(b.to_planes().len(), 18 * 19 * 19);
+        // Bit-identical to Board::new().to_planes() — same shape, same
+        // body (board_size==BOARD_SIZE branch).
+        let bd = Board::new();
+        assert_eq!(b.to_planes(), bd.to_planes());
+    }
+
+    #[test]
+    #[should_panic(expected = "multi-window")]
+    fn to_planes_v6w25_panics() {
+        let v6w25 = crate::encoding::lookup_or_panic("v6w25");
+        let b = Board::with_registry_spec(v6w25);
+        let _ = b.to_planes(); // panics with α deferral message
+    }
+
+    #[test]
+    #[should_panic(expected = "multi-window")]
+    fn to_planes_channels_v6w25_panics() {
+        let v6w25 = crate::encoding::lookup_or_panic("v6w25");
+        let b = Board::with_registry_spec(v6w25);
+        let _ = b.to_planes_channels(&[0, 8]);
+    }
+
+    #[test]
+    fn to_planes_v8_emits_18x625_spatial() {
+        let v8 = crate::encoding::lookup_or_panic("v8");
+        let b = Board::with_registry_spec(v8);
+        // Wire layout: 18 planes × 25×25 = 11250. v8 native is 11 planes
+        // (no KEPT_PLANE_INDICES slice); Rust v8 selfplay does not exist
+        // today, A4.1 just stops the spatial-dim hardcode. See
+        // `to_planes` doc-comment caveat.
+        assert_eq!(b.to_planes().len(), 18 * 25 * 25);
+    }
+
+    #[test]
+    fn with_registry_spec_v6w25_propagates_fields() {
+        let v6w25 = crate::encoding::lookup_or_panic("v6w25");
+        let b = Board::with_registry_spec(v6w25);
+        assert_eq!(b.cluster_window_size(), 25);
+        assert_eq!(b.cluster_threshold(), 8);
+        assert_eq!(b.legal_move_radius(), 8);
+        assert_eq!(b.encoding.unwrap().name, "v6w25");
+    }
+
+    #[test]
+    fn with_registry_spec_v6_board_size_19() {
+        let v6 = crate::encoding::lookup_or_panic("v6");
+        let b = Board::with_registry_spec(v6);
+        assert_eq!(b.encoding.unwrap().board_size, 19);
+    }
+
+    #[test]
+    fn with_registry_spec_v8_propagates_board_size() {
+        let v8 = crate::encoding::lookup_or_panic("v8");
+        let b = Board::with_registry_spec(v8);
+        assert_eq!(b.encoding.unwrap().board_size, 25);
+        // v8 is single-window in the registry — cluster_window_size is
+        // None, so Board falls back to spec.board_size (25).
+        assert_eq!(b.cluster_window_size(), 25);
+    }
+
+    #[test]
+    fn clone_preserves_encoding_pointer() {
+        let v6w25 = crate::encoding::lookup_or_panic("v6w25");
+        let a = Board::with_registry_spec(v6w25);
+        let b = a.clone();
+        assert!(std::ptr::eq(a.encoding.unwrap(), b.encoding.unwrap()));
     }
 }
