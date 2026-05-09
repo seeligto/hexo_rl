@@ -494,20 +494,81 @@ distinctness only). Add:
 - Pool-guard cross-check: load v6w25 ckpt against v6 model config →
   expect `ValueError` from `WorkerPool` guard.
 
-### 6.6 Sym table per-encoding registration
+### 6.6 Sym table per-encoding registration — RESOLVED 2026-05-09 (EncodingMeta struct)
 
-`engine/src/replay_buffer/sym_tables.rs` defines static v6 strides
-(`N_PLANES=8, N_CHAIN_PLANES=6, N_CELLS=361`) plus v8 mirrors at lines
-69–86 (gated, not yet live). Decide in A4:
+**Decision (operator, 2026-05-09):** introduce a Rust `EncodingMeta`
+struct carrying strides + plane counts + symmetry group as fields;
+construct three named `'static` const presets (`V6_META, V6W25_META,
+V8_META`); `ReplayBuffer::new` and downstream consumers take
+`&'static EncodingMeta` and read fields. NOT a hashmap registry.
 
-- Keep static (current path) and document why each per-encoding stride
-  is hardcoded (pre-allocation perf), OR
-- Promote to a `SymTableRegistry` indexed by `EncodingName`, where each
-  registered entry carries strides + KEPT_PLANE_INDICES + symmetry
-  group. Let `ReplayBuffer::new` accept `SymTableEntry`.
+```rust
+pub struct EncodingMeta {
+    pub n_planes: usize,
+    pub n_cells: usize,
+    pub state_stride: usize,
+    pub chain_stride: usize,
+    pub policy_stride: usize,
+    pub aux_stride: usize,
+    // ... symmetry group, KEPT_PLANE_INDICES, etc.
+}
 
-The v8 mirrors at 69–86 indicate the registry direction was started but
-not finished. Pick one and finish.
+pub const V6_META: EncodingMeta = EncodingMeta { n_planes: 8, n_cells: 361, state_stride: 2888, ... };
+pub const V6W25_META: EncodingMeta = EncodingMeta { n_planes: 8, n_cells: 625, state_stride: 5000, ... };
+pub const V8_META: EncodingMeta = EncodingMeta { n_planes: 11, n_cells: 625, state_stride: 6875, ... };
+
+impl ReplayBuffer {
+    pub fn new(meta: &'static EncodingMeta, capacity: usize) -> Self { ... }
+}
+```
+
+**Why:** ReplayBuffer push/sample run once per position generated
+(~8/sec on laptop), not in the MCTS inner loop (~500–2000 sims/sec) —
+4 orders of magnitude slower than the actual hot path. The work per
+push is a 2888 f16 memcpy (5.7 KB); a struct-field load adds tens of
+ns to a microsecond memcpy. Negligible.
+
+**Why this beats a hashmap registry:** struct fields are on `self`'s
+cache line anyway. Const presets are baked into `.rodata`. Zero
+hashmap lookup. Zero allocation. Same perf as the current `pub const`.
+
+**Why this beats keep-static:** retires the v8 mirrors at sym_tables.rs
+69–86 (gated but unwired); single place to register a new encoding
+(`add a new const`); same struct reused by §173+ MCTS parameterization
+(see §6.6.1). No duplication across subsystems.
+
+A4 task: move const presets out of `replay_buffer/sym_tables.rs` into
+`engine/src/encoding/meta.rs` (new module under existing
+`engine/src/encoding/`); rewrite `ReplayBuffer::new` and any
+sym_tables-using site to take `&'static EncodingMeta`. Bench-gate per
+the `bench-gate` skill before commit.
+
+#### 6.6.1 §173+ reuse note (no new struct)
+
+α (Phase 4.5+, §173) needs Rust `MCTSTree` parameterized for v6w25 and
+v8. **Reuse `EncodingMeta` from §172.** Do NOT introduce a parallel
+`MCTSEncodingConfig` struct or similar — that would duplicate the same
+fields and create a synchronization hazard.
+
+Pattern for §173:
+
+```rust
+pub struct MCTSTree {
+    encoding: &'static EncodingMeta,
+    // ... existing fields
+}
+
+impl MCTSTree {
+    pub fn new_with_encoding(meta: &'static EncodingMeta, ...) -> Self { ... }
+}
+```
+
+If `EncodingMeta` lacks fields MCTS needs (e.g. `max_children_per_node`,
+`legal_move_radius`), add them to `EncodingMeta` in §173 (they belong
+on the canonical encoding metadata anyway). Bench-gate any addition
+that affects buffer push/sample at the same time.
+
+§173 brainstorming session opens with this constraint already recorded.
 
 ### 6.7 Plane-layout schema (semantic plane names)
 
@@ -597,56 +658,78 @@ threads `spec` too.
 A4 plumbing should land in roughly this order (each a separate commit
 with green tests):
 
-1. **EncodingSpec threading + retire `config["board_size"]`** (§6.11) — RESOLVED Option 3; first commit chain, one per subsystem.
+1. **EncodingSpec threading + retire `config["board_size"]`** (§6.11)
+   — Option 3; first commit chain, one per subsystem (trainer,
+   selfplay, eval, model). ~30 call sites, mechanical rewrite.
 2. **Hot-path hardcode removal** — `selfplay/utils.py:N_ACTIONS`,
-   `batch_assembly.py:64`, `recency_buffer.py:36`. All thread
-   `encoding_spec.n_actions / board_size` through.
+   `batch_assembly.py:64`, `recency_buffer.py:36`. All thread `spec`
+   through.
 3. **One-line bug fixes** — `v6_argmax_bot.py:45` guard,
    `network.py:551-558` v6w25 cluster_pool typo. Each ~3 LOC.
-4. **Checkpoint metadata schema** (§6.1) — at save-time only; load-time
+4. **`EncodingMeta` Rust struct** (§6.6) — new
+   `engine/src/encoding/meta.rs`; const presets `V6_META, V6W25_META,
+   V8_META`; rewrite `ReplayBuffer::new` and sym_tables consumers to
+   take `&'static EncodingMeta`. Bench-gate via `bench-gate` skill
+   (positions/hr ±2% of baseline). Retires v8 mirrors at
+   `sym_tables.rs:69–86`.
+5. **Checkpoint metadata schema** (§6.1) — at save-time only; load-time
    reads with backward-compat fallback to current shape-inference.
-5. **Corpus metadata schema** (§6.2) — at write-time only; read-time
+6. **Corpus metadata schema** (§6.2) — at write-time only; read-time
    cross-check optional behind a flag.
-6. **Audit CLI** (§6.4) — pure observability; no code paths change.
-7. **Cross-encoding round-trip tests** (§6.5) — extends test coverage,
+7. **Audit CLI** (§6.4) `python -m hexo_rl.encoding audit` — pure
+   observability; no code paths change.
+8. **Legacy artifact migration** — `scripts/migrations/2026_05_09_stamp_artifact_metadata.py`
+   (date-prefix, preserved post-run); operator-authored manifest YAML
+   (`<artifact_path>: {encoding_name, training_date_inferred,
+   archive_or_keep}`); script stamps "keep" artifacts, archives
+   "archive" ones to `hexo-archive` HF dataset (per `hf-upload`
+   skill), reports orphans. **`bootstrap_model_v8full_warm.pt`**
+   archived in this pass (operator confirmed: interim v6 ckpt
+   mislabeled).
+9. **Cross-encoding round-trip tests** (§6.5) — extends test coverage,
    no production code changes.
-8. **Doc fixes** (`encoding_migration_v8.md` §2.3 plane labels;
-   `encoding_alpha_multiwindow_selfplay.md` §1 historical-claim note;
-   `01_architecture.md` v8 section).
-9. **Sym table registry decision** (§6.6) — choose static-with-comments
-   or full registry. If registry, separate spike.
-10. **PyO3 deprecation fix** (§6.8).
-11. **Variant config schema enforcement** (§6.3).
-12. **Plane-layout schema** (§6.7) — last because it touches the most
+10. **Doc fixes** (`encoding_migration_v8.md` §2.3 plane labels;
+    `encoding_alpha_multiwindow_selfplay.md` §1 historical-claim note;
+    `01_architecture.md` v8 section).
+11. **PyO3 deprecation fix** (§6.8).
+12. **Variant config schema enforcement** (§6.3).
+13. **Plane-layout schema** (§6.7) — last because it touches the most
     files cosmetically.
 
 §172 P3 (v7full sustained smoke) requires items 1–3 minimum. Items
-4–7 unblock confidence in the smoke and Phase 4.5+ work. Items 8–12
-are cleanup that should not block P3.
+4–7 unblock confidence in the smoke and Phase 4.5+ work. Items 8 is
+operator-gated on manifest authoring (~30 min reading sprint log).
+Items 9–13 are cleanup that should not block P3.
+
+§173 (α implementation) reuses `EncodingMeta` from item 4 for native
+Rust MCTS — no duplicate struct. See §6.6.1.
 
 ---
 
-## 8. Open questions for operator before A4
+## 8. Open questions — RESOLVED 2026-05-09
 
-These are the design decisions that this analysis surfaces but does not
-make:
+All five A1 open questions answered by operator:
 
-1. ~~**Canvas-vs-trunk naming**~~ — RESOLVED 2026-05-09: Option 3
-   (thread `EncodingSpec` everywhere, retire `config["board_size"]`).
-   See §6.11.
-2. **Sym table registry** — promote to runtime registry, or keep static
-   per-encoding constants with prominent comments? §6.6.
-3. **`bootstrap_model_v8full_warm.pt`** — rename to v6 (if interim
-   artifact), retrain to v8 (if v8 was intended), or delete (if
-   abandoned)? Block: no metadata, can't tell from artifact alone.
-4. **Migration of existing 25 checkpoints + 8 corpora** — stamp with
-   metadata via one-time migration script (requires per-artifact
-   manifest), or accept that legacy artifacts forever require
-   shape-inference fallback? §6.1, §6.2.
-5. **`MCTSTree` (Rust) generalization** — is α going to need native
-   v6w25/v8 MCTS, or is Python MCTS the long-term answer? Affects
-   §5.3 gap items.
+1. ~~**Canvas-vs-trunk naming**~~ — RESOLVED: Option 3, thread
+   `EncodingSpec` everywhere, retire `config["board_size"]`. §6.11.
+2. ~~**Sym table registry**~~ — RESOLVED: `EncodingMeta` struct + named
+   `'static` const presets (`V6_META, V6W25_META, V8_META`). NOT a
+   hashmap. Reused by §173+ MCTS — no duplication. §6.6.
+3. ~~**`bootstrap_model_v8full_warm.pt`**~~ — RESOLVED: archive (move
+   to `archive/` or HF Hub `hexo-archive` dataset), remove from
+   `checkpoints/`. Folded into A4 sub-task per §6.1 / §6.4.
+4. ~~**Legacy artifact migration**~~ — RESOLVED: stamp old artifacts
+   with metadata via one-time migration script kept in
+   `scripts/migrations/2026_05_09_stamp_artifact_metadata.py` (date-
+   prefix naming, preserved post-run). Operator authors per-artifact
+   manifest; same task identifies orphans (move to archive/HF or
+   delete). §6.1 + §6.2 + §6.4 audit CLI.
+5. ~~**Rust `MCTSTree` parameterization**~~ — RESOLVED: defer to §173+.
+   §172 leaves MCTS v6-only with TODO comments pointing at the
+   `EncodingMeta` pattern from §6.6. §173 brainstorming opens with the
+   reuse constraint recorded.
 
 ---
 
-**End of A1 analysis.** Proceed to commit and surface counts to operator.
+**End of A1 analysis.** All open questions resolved; A4 plumbing is
+fully scoped. Proceed to A4 dispatch.
