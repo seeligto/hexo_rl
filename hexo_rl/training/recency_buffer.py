@@ -23,8 +23,12 @@ class RecentBuffer:
         capacity:    Maximum number of positions to store.  Oldest entries are
                      overwritten once full (ring semantics).
         state_shape: Shape of one state tensor, default (8, 19, 19) — HEXB v6.
+                     For v6w25/v8 pass (8, 25, 25) / (11, 25, 25); the chain
+                     ring derives its spatial dims from ``state_shape[1:]``
+                     so callers do not need a separate trunk_size knob.
         policy_len:  Number of policy logits per position, default 362.
         aux_stride:  Flat length of one ownership/winning_line plane, default 361.
+                     For v6w25/v8 pass 625 (= 25*25).
     """
 
     def __init__(
@@ -38,7 +42,10 @@ class RecentBuffer:
             raise ValueError(f"capacity must be >= 1, got {capacity}")
         self.capacity = capacity
         self._states       = np.zeros((capacity, *state_shape), dtype=np.float16)
-        self._chain_planes = np.zeros((capacity, 6, 19, 19),   dtype=np.float16)
+        # §172 A4.3: chain spatial dims follow state_shape so v6w25 callers
+        # passing state_shape=(8, 25, 25) get (capacity, 6, 25, 25)
+        # automatically. Channel count stays 6 (Q13 chain-plane axes).
+        self._chain_planes = np.zeros((capacity, 6, *state_shape[1:]), dtype=np.float16)
         self._policies     = np.zeros((capacity, policy_len),   dtype=np.float32)
         self._outcomes     = np.zeros(capacity,                  dtype=np.float32)
         # Default ownership=1 ("empty" per Rust encoding), winning_line=0 — neutral fallback

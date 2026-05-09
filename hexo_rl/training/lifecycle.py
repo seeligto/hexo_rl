@@ -54,6 +54,23 @@ def build_inference_model(
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
     input_channels     = trainer.config.get("input_channels", None)
 
+    # §172 A4.3: audit checkpoint — registry-resolved trunk_size must
+    # agree with the legacy `config["board_size"]` scalar that downstream
+    # readers still consume. Disagreement = silent encoding drift; A4
+    # phases will retire the scalar once every reader migrates.
+    try:
+        from hexo_rl.encoding import resolve_from_config as _registry_resolve
+        _registry_spec = _registry_resolve(trainer.config)
+        if _registry_spec.trunk_size != board_size:
+            log.warning(
+                "lifecycle_board_size_registry_mismatch",
+                legacy_board_size=board_size,
+                registry_trunk_size=_registry_spec.trunk_size,
+                registry_name=_registry_spec.name,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("lifecycle_registry_audit_skipped", error=str(exc)[:120])
+
     _torch_compile_enabled = (
         trainer.config.get("torch_compile", False) and device.type == "cuda"
     )
@@ -97,6 +114,13 @@ def cuda_warmup(
     device: torch.device,
     board_size: int,
 ) -> None:
+    """Warm up CUDA kernels with a dummy forward pass.
+
+    ``board_size`` here is the model trunk side (registry `trunk_size`,
+    e.g. 19 for v6, 25 for v6w25/v8). Callers should pass either
+    ``arch.board_size`` (post-`_propagate_encoding_into_config` it equals
+    the trunk) or ``spec.trunk_size`` directly.
+    """
     # ── CUDA warm-up ─────────────────────────────────────────────────────────
     # Force CUDA kernel compilation now (before workers start) so the first
     # inference call from a worker returns immediately instead of blocking for

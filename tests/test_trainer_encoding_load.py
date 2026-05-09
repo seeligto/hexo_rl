@@ -194,3 +194,148 @@ def test_config_propagates_resolved_encoding(tmp_path: Path) -> None:
     assert trainer.config["cluster_threshold"] == spec.cluster_threshold
     assert trainer.config["legal_move_radius"] == spec.legal_move_radius
     assert trainer.config["encoding"]["version"] == "v6w25"
+
+
+# ── §172 A4.3 — metadata-preference path ──────────────────────────────────
+
+def _make_v6_ckpt_with_metadata(tmp_path: Path, encoding_name: str = "v6") -> Path:
+    """v6 weights-only ckpt + a `metadata` dict (§172 A5 schema preview).
+
+    Mimics the artifact A5's migration script will stamp onto every
+    existing ckpt: bare state_dict + a top-level `metadata` dict whose
+    `encoding_name` keys into the registry.
+    """
+    model = HexTacToeNet(
+        board_size=19,
+        in_channels=8,
+        filters=_FAST_FILTERS,
+        res_blocks=_FAST_RES_BLOCKS,
+        encoding="v6",
+    )
+    payload = {
+        "model_state": model.state_dict(),
+        "metadata": {
+            "encoding_name": encoding_name,
+            "schema_version": 1,
+        },
+    }
+    path = tmp_path / "checkpoint_with_metadata.pt"
+    torch.save(payload, path)
+    return path
+
+
+def test_load_v6_checkpoint_prefers_metadata_when_present(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Metadata-tagged ckpt routes through the registry path (no DeprecationWarning)."""
+    import structlog.testing
+    ckpt_path = _make_v6_ckpt_with_metadata(tmp_path, encoding_name="v6")
+    cfg = {
+        **_base_train_cfg(),
+        "encoding": {"version": "v6"},
+    }
+    with structlog.testing.capture_logs() as cap_logs:
+        trainer = Trainer.load_checkpoint(
+            ckpt_path,
+            checkpoint_dir=tmp_path,
+            fallback_config=cfg,
+        )
+    assert trainer.config["board_size"] == 19
+    assert trainer.config["encoding"]["version"] == "v6"
+    # The metadata-found event must have fired and the resolved-encoding
+    # event must record source="registry_metadata".
+    events = [e.get("event") for e in cap_logs]
+    assert "checkpoint_encoding_metadata_found" in events
+    resolved_evts = [e for e in cap_logs if e.get("event") == "checkpoint_encoding_resolved"]
+    assert resolved_evts, f"no resolved event in {events}"
+    assert any(e.get("source") == "registry_metadata" for e in resolved_evts)
+
+
+def test_load_v6_checkpoint_legacy_fallback_emits_deprecation_warning(
+    tmp_path: Path,
+) -> None:
+    """Legacy ckpt with no metadata → DeprecationWarning + shape-inference path."""
+    ckpt_path = _make_v6_ckpt(tmp_path)
+    cfg = {
+        **_base_train_cfg(),
+        "encoding": {"version": "v6"},
+    }
+    with pytest.warns(DeprecationWarning, match="metadata\\['encoding_name'\\]"):
+        trainer = Trainer.load_checkpoint(
+            ckpt_path,
+            checkpoint_dir=tmp_path,
+            fallback_config=cfg,
+        )
+    assert trainer.config["board_size"] == 19
+    assert trainer.config["encoding"]["version"] == "v6"
+
+
+def test_load_v6w25_checkpoint_with_metadata_routes_via_registry(
+    tmp_path: Path,
+) -> None:
+    """v6w25 ckpt with metadata['encoding_name']='v6w25' propagates v6w25 numerics."""
+    # Build v6w25-shaped weights + metadata payload directly.
+    model = HexTacToeNet(
+        board_size=25,
+        in_channels=8,
+        filters=_FAST_FILTERS,
+        res_blocks=_FAST_RES_BLOCKS,
+        encoding="v6w25",
+    )
+    payload = {
+        "model_state": model.state_dict(),
+        "metadata": {
+            "encoding_name": "v6w25",
+            "schema_version": 1,
+        },
+    }
+    path = tmp_path / "ckpt_v6w25_with_metadata.pt"
+    torch.save(payload, path)
+    cfg = {
+        **_base_train_cfg(),
+        "encoding": {"version": "v6w25"},
+    }
+    trainer = Trainer.load_checkpoint(
+        path,
+        checkpoint_dir=tmp_path,
+        fallback_config=cfg,
+    )
+    assert trainer.config["board_size"] == 25
+    assert trainer.config["cluster_window_size"] == 25
+    assert trainer.config["cluster_threshold"] == 8
+    assert trainer.config["encoding"]["version"] == "v6w25"
+
+
+def test_load_checkpoint_metadata_with_non_string_encoding_name_falls_back(
+    tmp_path: Path,
+) -> None:
+    """Bad metadata['encoding_name'] type → DeprecationWarning + shape inference."""
+    model = HexTacToeNet(
+        board_size=19,
+        in_channels=8,
+        filters=_FAST_FILTERS,
+        res_blocks=_FAST_RES_BLOCKS,
+        encoding="v6",
+    )
+    payload = {
+        "model_state": model.state_dict(),
+        "metadata": {
+            "encoding_name": 6,  # wrong type
+            "schema_version": 1,
+        },
+    }
+    path = tmp_path / "ckpt_bad_metadata.pt"
+    torch.save(payload, path)
+    cfg = {
+        **_base_train_cfg(),
+        "encoding": {"version": "v6"},
+    }
+    with pytest.warns(DeprecationWarning, match="expected str"):
+        trainer = Trainer.load_checkpoint(
+            path,
+            checkpoint_dir=tmp_path,
+            fallback_config=cfg,
+        )
+    # Falls back through shape inference; v6 still resolves correctly.
+    assert trainer.config["board_size"] == 19
+    assert trainer.config["encoding"]["version"] == "v6"

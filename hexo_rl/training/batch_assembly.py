@@ -38,34 +38,52 @@ class BatchBuffers:
     reused each step so the training loop never triggers large malloc/free cycles.
     ``warmup_active`` is flipped to False the first time all sources return
     the expected row count (a side-effect of :func:`assemble_mixed_batch`).
+
+    Spatial shapes are encoding-derived (not v6-fixed): pass ``trunk_size``
+    to :func:`allocate_batch_buffers` to size for v6w25 (25) / v8 (25);
+    the default ``trunk_size=19`` keeps v6 behaviour for legacy callers.
     """
-    states: np.ndarray          # (B, 8, 19, 19) float16 — HEXB v6
-    chain_planes: np.ndarray    # (B, 6, 19, 19)  float16
+    states: np.ndarray          # (B, 8, T, T) float16 (T = trunk_size)
+    chain_planes: np.ndarray    # (B, 6, T, T) float16
     policies: np.ndarray        # (B, N_ACTIONS) float32
     outcomes: np.ndarray        # (B,) float32
-    ownership: np.ndarray       # (B, 19, 19) uint8
-    winning_line: np.ndarray    # (B, 19, 19) uint8
+    ownership: np.ndarray       # (B, T, T) uint8
+    winning_line: np.ndarray    # (B, T, T) uint8
     is_full_search: np.ndarray  # (B,) uint8 — 1=full-search, 0=quick-search
     warmup_active: bool = field(default=True)
 
 
-def allocate_batch_buffers(batch_size: int, n_actions: int) -> BatchBuffers:
+def allocate_batch_buffers(
+    batch_size: int,
+    n_actions: int,
+    trunk_size: int = 19,
+    aux_stride: Optional[int] = None,
+) -> BatchBuffers:
     """Allocate shared batch arrays once at startup.
 
     Args:
         batch_size: Expected batch size from training config.
         n_actions:  Number of policy logits (N_ACTIONS constant).
+        trunk_size: Spatial dim for state/chain/aux planes (v6=19,
+                    v6w25=25, v8=25). Default 19 = v6, preserves
+                    backward-compat for callers that have not migrated.
+        aux_stride: Flat length per aux plane (`trunk_size**2` unless
+                    overridden). Currently unused by the pre-allocated
+                    arrays (aux is shaped as `(B, T, T)`); reserved for
+                    future flat-aux variants.
 
     Returns:
-        A :class:`BatchBuffers` instance with all arrays zeroed.
+        A :class:`BatchBuffers` instance with all arrays empty/ones.
     """
+    if aux_stride is None:
+        aux_stride = trunk_size * trunk_size  # noqa: F841 — reserved hook
     return BatchBuffers(
-        states=np.empty((batch_size, 8, 19, 19), dtype=np.float16),
-        chain_planes=np.empty((batch_size, 6, 19, 19), dtype=np.float16),
+        states=np.empty((batch_size, 8, trunk_size, trunk_size), dtype=np.float16),
+        chain_planes=np.empty((batch_size, 6, trunk_size, trunk_size), dtype=np.float16),
         policies=np.empty((batch_size, n_actions), dtype=np.float32),
         outcomes=np.empty(batch_size, dtype=np.float32),
-        ownership=np.empty((batch_size, 19, 19), dtype=np.uint8),
-        winning_line=np.empty((batch_size, 19, 19), dtype=np.uint8),
+        ownership=np.empty((batch_size, trunk_size, trunk_size), dtype=np.uint8),
+        winning_line=np.empty((batch_size, trunk_size, trunk_size), dtype=np.uint8),
         is_full_search=np.ones(batch_size, dtype=np.uint8),  # default full-search
     )
 

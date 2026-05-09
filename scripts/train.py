@@ -233,7 +233,24 @@ def main() -> None:
         combined_config["torch_compile"] = False
         train_cfg["torch_compile"]       = False
 
-    board_size = int(combined_config.get("board_size", 19))
+    # §172 A4.3: registry is the source of truth for trunk_size. The
+    # legacy `combined_config["board_size"]` scalar is preserved for
+    # downstream readers (eval, model, selfplay) that have not yet
+    # migrated; A4 phases retire it incrementally once every reader
+    # consumes `resolve_from_config(cfg).trunk_size` directly.
+    from hexo_rl.encoding import resolve_from_config as _registry_resolve
+    _registry_spec = _registry_resolve(combined_config)
+    # Trunk size for HexTacToeNet ctor: v6=19 canvas, v6w25=25 cluster
+    # window, v8=25 bbox. Equivalent to the post-`_propagate_encoding_into_config`
+    # value of `combined_config["board_size"]`.
+    board_size = int(_registry_spec.trunk_size)
+    log.info(
+        "train_encoding_resolved",
+        encoding_name=_registry_spec.name,
+        board_size=board_size,
+        n_planes=_registry_spec.n_planes,
+        is_multi_window=_registry_spec.is_multi_window,
+    )
     res_blocks = int(combined_config.get("res_blocks", 10))
     filters    = int(combined_config.get("filters",    128))
 
@@ -284,12 +301,21 @@ def main() -> None:
                 if _enc_key in ("board_size",):
                     train_cfg[_enc_key] = trainer.config[_enc_key]
         board_size = int(combined_config.get("board_size", board_size))
+        # §172 A4.3: re-resolve registry post-load for audit clarity. Should
+        # match the encoding the trainer locked in via metadata or shape
+        # inference.
+        try:
+            _post_load_spec = _registry_resolve(combined_config)
+            _registry_name_post = _post_load_spec.name
+        except Exception:
+            _registry_name_post = None
         log.info(
             "resumed",
             checkpoint=args.checkpoint,
             step=trainer.step,
             configured_total_steps=trainer.config.get("total_steps"),
             encoding_version=(combined_config.get("encoding") or {}).get("version"),
+            registry_name=_registry_name_post,
             board_size=combined_config.get("board_size"),
             cluster_window_size=combined_config.get("cluster_window_size"),
             cluster_threshold=combined_config.get("cluster_threshold"),
@@ -436,8 +462,23 @@ def main() -> None:
                     log.warning("recent_buffer_restore_failed", error=str(_re))
 
     # ── Pre-allocated batch arrays ────────────────────────────────────────────
+    # §172 A4.3: re-resolve registry post-checkpoint-load (resume path may
+    # have rewritten encoding via metadata) and size buffers per trunk_size /
+    # policy_logit_count. Falls through to v6 defaults on legacy v6 configs.
     _batch_size_cfg = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
-    bufs = allocate_batch_buffers(_batch_size_cfg, _N_ACTIONS)
+    try:
+        _bufs_spec = _registry_resolve(combined_config)
+        _trunk_size = int(_bufs_spec.trunk_size)
+        _n_actions_spec = int(_bufs_spec.policy_logit_count)
+    except Exception as _re_err:
+        log.warning("buffer_alloc_registry_resolve_failed", error=str(_re_err)[:120])
+        _trunk_size = int(combined_config.get("board_size", 19))
+        _n_actions_spec = _N_ACTIONS
+    bufs = allocate_batch_buffers(
+        _batch_size_cfg,
+        _n_actions_spec,
+        trunk_size=_trunk_size,
+    )
 
     # ── Mixing schedule params ────────────────────────────────────────────────
     mixing_decay_steps = float(mixing_cfg.get("decay_steps", 1_000_000))

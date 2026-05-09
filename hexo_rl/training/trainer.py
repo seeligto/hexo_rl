@@ -50,7 +50,41 @@ from hexo_rl.training.checkpoints import (
 from hexo_rl.utils.encoding import (
     EncodingSpec, resolve_encoding, v6_spec, v6w25_spec, v8_spec,
 )
+# §172 A4.3: prefer registry metadata at load. Both modules coexist —
+# legacy NamedTuple stays load-bearing for replay-buffer/sym strides
+# (state_stride, chain_stride). Registry dataclass is the source of
+# truth for board_size / trunk_size / n_planes / policy_logit_count.
+from hexo_rl.encoding import (
+    EncodingSpec as RegistrySpec,
+    lookup as registry_lookup,
+    resolve_from_checkpoint as registry_resolve_ckpt,  # noqa: F401  (re-export for §172 A5)
+)
 from engine import ReplayBuffer
+
+
+def _legacy_spec_for_registry_name(name: str) -> EncodingSpec:
+    """Map a registry encoding name to a legacy NamedTuple `EncodingSpec`.
+
+    The legacy resolver (`hexo_rl.utils.encoding.resolve_encoding`) only
+    knows the historical names (v6 / v6w25 / v8). Registry-only names
+    (v7full, v8_canvas_realness) bridge to the wire-compatible legacy
+    spec so downstream consumers reading `state_stride` / `chain_stride`
+    keep working.
+
+      v7full              → v6_spec()  (same wire format, distinct anchor tag)
+      v8_canvas_realness  → v8_spec()  (same wire format, plane-8 polarity differs)
+    """
+    if name in ("v6", "v6w25", "v8"):
+        return resolve_encoding({"encoding": {"version": name}})
+    if name == "v7full":
+        return v6_spec()
+    if name == "v8_canvas_realness":
+        return v8_spec()
+    raise ValueError(
+        f"_legacy_spec_for_registry_name: no legacy bridge for registry "
+        f"encoding {name!r}. Add a mapping if the wire format matches an "
+        f"existing legacy spec."
+    )
 
 log = structlog.get_logger()
 
@@ -1217,6 +1251,12 @@ class Trainer:
         directly. After ckpt load, those must reflect the encoding the
         model was actually trained under, not whatever the variant YAML
         happened to ship with.
+
+        §172 A4.3 note: writing the scalar `config["board_size"]` is a
+        load-bearing scalar for downstream readers (eval, model, selfplay).
+        Per A1 §6.11 Option 3, this scalar is slated for retirement across
+        A4 phases incrementally — readers must migrate to
+        `resolve_from_config(cfg).trunk_size` before the writer is removed.
         """
         encoding_section = config.get("encoding")
         if not isinstance(encoding_section, dict):
@@ -1283,19 +1323,79 @@ class Trainer:
             in_memory_view.update(fallback_config)
         if config_overrides:
             in_memory_view.update(config_overrides)
-        resolved_spec = cls._resolve_checkpoint_encoding(
-            ckpt, in_memory_view, model_state, checkpoint_path,
-        )
-        if resolved_spec is not None:
+
+        # §172 A4.3: prefer ckpt['metadata']['encoding_name'] (registry
+        # source-of-truth) before falling back to shape-inference. A5 will
+        # stamp this field on every existing artifact via migration script.
+        ckpt_metadata = ckpt.get("metadata") if isinstance(ckpt, dict) else None
+        registry_spec_from_meta: Optional[RegistrySpec] = None
+        if isinstance(ckpt_metadata, dict) and "encoding_name" in ckpt_metadata:
+            enc_name = ckpt_metadata["encoding_name"]
+            if isinstance(enc_name, str):
+                registry_spec_from_meta = registry_lookup(enc_name)
+                log.info(
+                    "checkpoint_encoding_metadata_found",
+                    checkpoint_path=str(checkpoint_path),
+                    encoding_name=enc_name,
+                    source="metadata['encoding_name']",
+                )
+            else:
+                import warnings
+                warnings.warn(
+                    f"checkpoint {checkpoint_path}: metadata['encoding_name'] is "
+                    f"{type(enc_name).__name__}, expected str; falling back to "
+                    f"shape inference.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+
+        if registry_spec_from_meta is not None:
+            # Bridge to legacy NamedTuple — downstream propagation (which
+            # writes board_size / cluster_* / legal_move_radius into the
+            # in-memory config) reads `.version`, `.board_size`,
+            # `.cluster_window_size`, etc. off the legacy NamedTuple.
+            resolved_spec = _legacy_spec_for_registry_name(
+                registry_spec_from_meta.name
+            )
             cls._propagate_encoding_into_config(config, resolved_spec)
             log.info(
                 "checkpoint_encoding_resolved",
                 checkpoint_path=str(checkpoint_path),
                 encoding_version=resolved_spec.version,
+                encoding_name=registry_spec_from_meta.name,
                 board_size=config["board_size"],
                 cluster_window_size=config.get("cluster_window_size"),
                 cluster_threshold=config.get("cluster_threshold"),
+                source="registry_metadata",
             )
+        else:
+            # Backward-compat: legacy ckpts have no metadata['encoding_name'].
+            # Emit a DeprecationWarning + fall through to shape inference.
+            if isinstance(ckpt, dict) and (ckpt_metadata is None
+                                            or not isinstance(ckpt_metadata, dict)
+                                            or "encoding_name" not in ckpt_metadata):
+                import warnings
+                warnings.warn(
+                    f"checkpoint {checkpoint_path} lacks "
+                    f"metadata['encoding_name']; A5 migration script will "
+                    f"stamp existing artifacts. Using shape inference for now.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+            resolved_spec = cls._resolve_checkpoint_encoding(
+                ckpt, in_memory_view, model_state, checkpoint_path,
+            )
+            if resolved_spec is not None:
+                cls._propagate_encoding_into_config(config, resolved_spec)
+                log.info(
+                    "checkpoint_encoding_resolved",
+                    checkpoint_path=str(checkpoint_path),
+                    encoding_version=resolved_spec.version,
+                    board_size=config["board_size"],
+                    cluster_window_size=config.get("cluster_window_size"),
+                    cluster_threshold=config.get("cluster_threshold"),
+                    source="shape_inference",
+                )
 
         if config_overrides:
             config.update(config_overrides)
