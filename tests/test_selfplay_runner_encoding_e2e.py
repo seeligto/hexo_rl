@@ -109,12 +109,15 @@ def test_selfplay_runner_v6w25_workers_use_w25_boards():
     """Spawn 2 workers with the v6w25 spec wired through the runner; verify
     the runner doesn't panic and at least one game completes per worker.
 
-    Behavioural discriminator (deterministic, no model needed): construct
-    a Board with the same PyO3 spec the runner saw — its perception
-    parameters MUST be v6w25 (window=25, threshold=8, radius=8). Asserts
-    end-to-end that the spec passed to the constructor reaches the
-    underlying `Board::with_encoding` call site that worker_loop.rs:225
-    dispatches to under `Some(_)`.
+    Behavioural discriminator (deterministic, no model needed): the runner's
+    `encoding` `#[getter]` must surface the v6w25 spec values (window=25,
+    threshold=8, radius=8) — combined with the cargo unit test
+    `test_worker_loop_honors_v6w25_encoding` (which proves the same spec
+    produces a v6w25 Board via `Board::with_encoding`), this closes the
+    chain: "runner.encoding is set" + "if runner.encoding is set, worker
+    uses Board::with_encoding(spec)" ⇒ workers really do see v6w25
+    perception. Also asserts the cross-check via `Board.with_encoding(py_spec)`
+    matches the same parameters.
     """
     py_spec = v6w25_spec().to_pyo3()
     runner = SelfPlayRunner(
@@ -124,6 +127,16 @@ def test_selfplay_runner_v6w25_workers_use_w25_boards():
         leaf_batch_size=1,
         encoding=py_spec,
     )
+
+    # Direct FFI assert — runner stored the spec the wiring passed in.
+    # Without the `#[getter]` we could only observe this indirectly.
+    assert runner.encoding is not None, (
+        "runner.encoding must round-trip the spec passed at construction"
+    )
+    assert runner.encoding.cluster_window_size == 25
+    assert runner.encoding.cluster_threshold == 8
+    assert runner.encoding.legal_move_radius == 8
+
     runner.start()
     try:
         n = _drain_until_first_game(runner, timeout_s=5.0)
@@ -143,7 +156,8 @@ def test_selfplay_runner_v6w25_workers_use_w25_boards():
 def test_selfplay_runner_v6_default_workers_use_w19_boards():
     """Backward-compat regression: `encoding=None` (default) keeps every
     worker on v6 perception. Verifies that the legacy `Board::new()` path
-    (the worker_loop's `None` branch) is byte-exact unchanged."""
+    (the worker_loop's `None` branch) is byte-exact unchanged, and that
+    the Python-visible `runner.encoding` getter reports `None`."""
     runner = SelfPlayRunner(
         n_workers=2,
         max_moves_per_game=0,
@@ -151,6 +165,12 @@ def test_selfplay_runner_v6_default_workers_use_w19_boards():
         leaf_batch_size=1,
         # encoding intentionally omitted — defaults to None
     )
+
+    # Direct FFI assert — getter must report None on the bare-defaults path.
+    assert runner.encoding is None, (
+        "default constructor (no encoding kwarg) must leave runner.encoding == None"
+    )
+
     runner.start()
     try:
         n = _drain_until_first_game(runner, timeout_s=5.0)
@@ -195,9 +215,18 @@ def test_pool_does_not_warn_when_encoding_wired(caplog):
     )
 
     # Sanity — the pool's runner accepted the encoding spec the pool wired
-    # in (we cannot read the field across the FFI without a getter, so
-    # verify indirectly via successful spawn + drain).
+    # in. Read directly via the `runner.encoding` `#[getter]`: pool wired a
+    # v6w25 spec, so the runner must surface a v6w25-shaped EncodingSpec
+    # (window=25, threshold=8, radius=8) — anything else means the pool
+    # path silently dropped the spec on the way to SelfPlayRunner::new.
     assert pool._runner is not None
+    assert pool._runner.encoding is not None, (
+        "WorkerPool wired a v6w25 spec but runner.encoding is None — "
+        "the pool→runner kwarg passthrough regressed."
+    )
+    assert pool._runner.encoding.cluster_window_size == 25
+    assert pool._runner.encoding.cluster_threshold == 8
+    assert pool._runner.encoding.legal_move_radius == 8
     del pool
 
 

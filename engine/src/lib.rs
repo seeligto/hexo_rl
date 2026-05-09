@@ -34,7 +34,7 @@ use replay_buffer::sym_tables::{SymTables, N_SYMS};
 #[pyclass(name = "EncodingSpec")]
 #[derive(Clone)]
 pub struct PyEncodingSpec {
-    pub(crate) inner: RustEncodingSpec,
+    inner: RustEncodingSpec,
 }
 
 #[pymethods]
@@ -85,6 +85,14 @@ impl PyEncodingSpec {
     /// spec through to the Rust-owned worker thread Boards.
     pub(crate) fn to_inner(&self) -> RustEncodingSpec {
         self.inner
+    }
+
+    /// Crate-internal constructor: wrap a `RustEncodingSpec` in the
+    /// PyO3-visible PyEncodingSpec. Used by the `SelfPlayRunner.encoding`
+    /// `#[getter]` and by Rust-side test sites that previously poked the
+    /// (now-private) `inner` field via struct-literal construction.
+    pub(crate) fn from_inner(inner: RustEncodingSpec) -> Self {
+        PyEncodingSpec { inner }
     }
 }
 

@@ -496,6 +496,17 @@ impl SelfPlayRunner {
     pub fn model_version(&self) -> u64 {
         self.batcher.current_model_version()
     }
+
+    /// §171 P3 A1 reopen — Python-visible read of the runner's `EncodingSpec`.
+    /// `None` when no spec was passed at construction (callers asking for the
+    /// v6 default `Board::new()` path); `Some(EncodingSpec)` when an explicit
+    /// spec was wired through (e.g. v6w25). Used by the e2e Python tests to
+    /// confirm the Pool-side wiring reaches the runner without poking
+    /// internals across the FFI.
+    #[getter]
+    pub fn encoding(&self) -> Option<crate::PyEncodingSpec> {
+        self.encoding.map(crate::PyEncodingSpec::from_inner)
+    }
 }
 
 impl SelfPlayRunner {
@@ -506,17 +517,6 @@ impl SelfPlayRunner {
     ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32)> {
         let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
         rg.drain(..).collect()
-    }
-
-    /// §171 P3 A1 reopen — read-only accessor on the encoding spec wired
-    /// through `new()`. Returns `None` when no spec was passed (caller wants
-    /// the v6 default behavior). Used by tests to assert the field is
-    /// plumbed end-to-end. `allow(dead_code)` because non-test builds have
-    /// no other reader (worker_loop captures the field by value through
-    /// `self.encoding` directly in `start_impl`).
-    #[allow(dead_code)]
-    pub(crate) fn encoding(&self) -> Option<EncodingSpec> {
-        self.encoding
     }
 }
 
@@ -717,18 +717,26 @@ mod tests {
     #[test]
     fn test_worker_loop_honors_v6w25_encoding() {
         let spec = crate::encoding::EncodingSpec::V6W25;
-        let py_spec = crate::PyEncodingSpec { inner: spec };
+        let py_spec = crate::PyEncodingSpec::from_inner(spec);
         let runner = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, 8*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, Some(&py_spec),
         ).unwrap();
 
-        let stored = runner.encoding().expect("v6w25 spec must round-trip");
+        let stored = runner.encoding.expect("v6w25 spec must round-trip");
         assert_eq!(stored, spec);
         assert_eq!(stored.cluster_window_size, 25);
         assert_eq!(stored.cluster_threshold, 8);
         assert_eq!(stored.legal_move_radius, 8);
+
+        // Python-visible getter mirrors the field — the Pool-side e2e test
+        // reads `runner.encoding` over the FFI; assert here that the Rust
+        // half emits the same spec values via the `#[getter]`.
+        let py_view = runner.encoding().expect("getter must mirror field");
+        assert_eq!(py_view.cluster_window_size(), 25);
+        assert_eq!(py_view.cluster_threshold(), 8);
+        assert_eq!(py_view.legal_move_radius(), 8);
 
         // Behavioural guard — `Board::with_encoding(&spec)` (the constructor
         // worker_loop.rs:225 dispatches to under `Some(_)`) gives a Board
@@ -751,7 +759,8 @@ mod tests {
             10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None,
         ).unwrap();
 
-        assert!(runner.encoding().is_none(), "default must be None");
+        assert!(runner.encoding.is_none(), "default must be None");
+        assert!(runner.encoding().is_none(), "Python-visible getter must mirror field");
 
         // Behavioural guard — no spec ⇒ worker_loop falls through to
         // `Board::new()` whose v6 defaults are documented at
@@ -772,7 +781,7 @@ mod tests {
     #[test]
     fn test_worker_loop_spawns_with_v6w25_encoding() {
         let spec = crate::encoding::EncodingSpec::V6W25;
-        let py_spec = crate::PyEncodingSpec { inner: spec };
+        let py_spec = crate::PyEncodingSpec::from_inner(spec);
         let runner = SelfPlayRunner::new(
             2, 0, 1, 1, 1.5, 0.25, 8*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
@@ -812,7 +821,7 @@ mod tests {
     #[test]
     fn test_worker_loop_jitter_does_not_override_v6w25_radius() {
         let spec = crate::encoding::EncodingSpec::V6W25;
-        let py_spec = crate::PyEncodingSpec { inner: spec };
+        let py_spec = crate::PyEncodingSpec::from_inner(spec);
         let runner = SelfPlayRunner::new(
             2, 0, 1, 1, 1.5, 0.25, 8*19*19, 19*19+1, 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
@@ -822,7 +831,7 @@ mod tests {
         ).unwrap();
 
         // Spec round-trip — necessary precondition for the guard to fire.
-        let stored = runner.encoding().expect("v6w25 spec must round-trip");
+        let stored = runner.encoding.expect("v6w25 spec must round-trip");
         assert_eq!(stored.legal_move_radius, 8);
 
         // Replay the exact worker_loop.rs construction order:
