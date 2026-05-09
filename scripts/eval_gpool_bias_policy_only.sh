@@ -51,6 +51,7 @@ echo "[$(date -Iseconds)] §170 P4 P1 — argmax @ r=8, n=200 vs SealBot"
     --inference argmax \
     --n-games 200 \
     --legal-radius 8 \
+    --policy-only-bias \
     --output "${REPORTS}/argmax.json"
 
 # ── 2. MCTS-32, n=200 ──────────────────────────────────────────────────
@@ -60,6 +61,7 @@ echo "[$(date -Iseconds)] §170 P4 P1 — MCTS-32 @ r=8, n=200 vs SealBot"
     --inference mcts-32 \
     --n-games 200 \
     --legal-radius 8 \
+    --policy-only-bias \
     --output "${REPORTS}/mcts32.json"
 
 # ── 3. MCTS-64, n=200 ──────────────────────────────────────────────────
@@ -69,6 +71,7 @@ echo "[$(date -Iseconds)] §170 P4 P1 — MCTS-64 @ r=8, n=200 vs SealBot"
     --inference mcts-64 \
     --n-games 200 \
     --legal-radius 8 \
+    --policy-only-bias \
     --output "${REPORTS}/mcts64.json"
 
 # ── 4. MCTS-128, n=200 ─────────────────────────────────────────────────
@@ -78,6 +81,7 @@ echo "[$(date -Iseconds)] §170 P4 P1 — MCTS-128 @ r=8, n=200 vs SealBot"
     --inference mcts-128 \
     --n-games 200 \
     --legal-radius 8 \
+    --policy-only-bias \
     --output "${REPORTS}/mcts128.json"
 
 # ── 5. NN latency bench (b=1, b=64) ────────────────────────────────────

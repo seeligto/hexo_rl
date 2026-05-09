@@ -143,6 +143,16 @@ def main() -> int:
         help="Override Board.set_legal_move_radius. Default: 5 for v6, 8 for "
              "v6w25/v8. Used by §167 cross-radius invariant tests.",
     )
+    parser.add_argument(
+        "--policy-only-bias", action="store_true",
+        help="§170 P4 — force gpool-bias-policy-only inference routing. "
+             "Required when evaluating a checkpoint trained with "
+             "--policy-only-bias: the inference checkpoint state-dict shape "
+             "is identical to a P3 (bilateral) checkpoint, so the loader "
+             "cannot auto-detect this flag. Without it, value_proj at "
+             "random-init injects ~5%% noise into value head at inference "
+             "time, perturbing MCTS results (argmax is bit-exact either way).",
+    )
     args = parser.parse_args()
 
     ckpt_path = Path(args.checkpoint).resolve()
@@ -153,6 +163,21 @@ def main() -> int:
     device = best_device()
     print(f"[eval] device={device}  loading checkpoint…", flush=True)
     model, spec, encoding_label = load_model_with_encoding(ckpt_path, device)
+    if args.policy_only_bias:
+        if not getattr(model, "gpool_bias_active", False):
+            print(
+                "FATAL: --policy-only-bias requires a gpool-bias checkpoint; "
+                f"detected gpool_bias_active=False on {ckpt_path.name}",
+                file=sys.stderr,
+            )
+            return 3
+        model.policy_only_bias = True
+        model.gpool_bias_branch.policy_only = True
+        print(
+            "[eval] policy_only_bias forced — value_bias is structurally "
+            "zero; value_proj receives no input at forward time",
+            flush=True,
+        )
     print(
         f"[eval] checkpoint={ckpt_path.name}  encoding={encoding_label} "
         f"(spec.version={spec.version}, board={spec.board_size})  "
