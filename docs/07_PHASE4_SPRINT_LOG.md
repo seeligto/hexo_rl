@@ -10576,16 +10576,16 @@ delta — state-dict shape unchanged, latency unchanged.
 
 ### 5. Comparison vs A1 anchor + §170 P3
 
-| metric         | A1 anchor   | §170 P3 (bilateral) | §170 P4 P1 (policy-only) |
-|----------------|------------:|--------------------:|-------------------------:|
-| argmax WR      | 14.5 %      | 22.0 %              | **15.0 %**               |
-| MCTS-32 WR     | 25 % (n=20) | not measured        | 24.5 % (n=200)           |
-| MCTS-64 WR     | 30.0 %      | 15.0 %              | **32.5 %**               |
-| MCTS-128 WR    | not measured| not measured        | 39.5 % (n=200)           |
-| MCTS curve     | n/a         | flat-collapsed      | **monotonic-increasing** |
-| final loss     | 3.57        | 2.8963              | 3.1945                   |
-| final gate     | n/a         | 0.0512              | 0.0718                   |
-| latency b=64   | 10.41 ms    | 11.26 ms            | 11.26 ms                 |
+| metric         | A1 anchor              | §170 P3 (bilateral) | §170 P4 P1 (policy-only) |
+|----------------|-----------------------:|--------------------:|-------------------------:|
+| argmax WR      | 14.5 %                 | 22.0 %              | **15.0 %**               |
+| MCTS-32 WR     | 25 % (n=20)            | not measured        | 24.5 % (n=200)           |
+| MCTS-64 WR     | 30.0 %                 | 15.0 %              | **32.5 %**               |
+| MCTS-128 WR    | 32.5 % (n=200, +matrix-completion run) | not measured | **39.5 %** (n=200)       |
+| MCTS curve     | shallow monotonic (+2.5 pp 64→128) | flat-collapsed | **steep monotonic** (+7.0 pp 64→128) |
+| final loss     | 3.57                   | 2.8963              | 3.1945                   |
+| final gate     | n/a                    | 0.0512              | 0.0718                   |
+| latency b=64   | 10.41 ms               | 11.26 ms            | 11.26 ms                 |
 
 CIs at MCTS-64 — A1 anchor [24.1 %, 36.7 %] vs P4 P1 [26.4 %, 39.3 %]:
 overlap of 10.3 pp, point estimates differ by 2.5 pp (P4 P1 > anchor).
@@ -11141,7 +11141,7 @@ Full matrix with CIs in `reports/gpool_bias/SUMMARY.md` §1.
 
 | arm                                            | encoder         | pool                  | global routing                              |    argmax | MCTS-N WR (depth)                                           | mean_ply MCTS-64 | gate end | params                          |
 |------------------------------------------------|-----------------|-----------------------|---------------------------------------------|----------:|-------------------------------------------------------------|-----------------:|---------:|--------------------------------:|
-| **A1 anchor**                                  | v6w25 K-cluster | min/max               | none                                        | **14.5 %** | 25 % MCTS-32 (n=20 sanity); **30 % MCTS-64** (n=200)        | 33.8             | n/a      | 5.29 M                          |
+| **A1 anchor**                                  | v6w25 K-cluster | min/max               | none                                        | **14.5 %** | 25 % MCTS-32 (n=20 sanity); **30.0 % MCTS-64**; **32.5 % MCTS-128** (n=200) | 33.8             | n/a      | 5.29 M                          |
 | A2                                             | v6w25 K-cluster | PMA                   | none                                        | 4.5 %     | 3.5 % MCTS-128                                              | n/a              | n/a      | 6.30 M                          |
 | A3                                             | v6w25 K-cluster | PMA                   | yes (PMA-merged both heads)                 | 7.5 %     | 2.5 % MCTS-32 / 64 / 128 (FLAT-NON-MONOTONIC)               | 22.8             | 0.66     | 6.37 M                          |
 | A4                                             | v8 + canvas     | bbox + PartialConv2d  | n/a (canvas-mask trunk)                     | 0.0 %     | 0.0 % MCTS-128                                              | 23.6             | n/a      | 3.85 M                          |
@@ -11166,6 +11166,72 @@ Notes:
 Decomposition reading + canonical-pick rationale: see
 `reports/gpool_bias/SUMMARY.md` §2–§3 (extended with §2e and §3 P4
 verdict paragraph in this sprint's commit).
+
+#### Matrix completion — A1 anchor MCTS-128 (operator-flagged 2026-05-09; laptop run)
+
+The original §170 P4 close-out matrix had A1 anchor measured only at
+MCTS-64 (30.0 % [24.1 %, 36.7 %]). The §170 P4 P1 cell at MCTS-128
+(39.5 % [33.0 %, 46.4 %]) was the highest single MCTS WR in the entire
+encoding line, but lacked a matched-depth anchor baseline — the
+"indistinguishable from A1 anchor at MCTS-64" reading was depth-
+mismatched.
+
+Operator-flagged observation: capture A1 anchor at MCTS-128 to
+complete the record. Run on laptop (4060 Max-Q), 27 min wall (1636 s,
+8.2 s / game), matched config to all other §170 baselines (n=200,
+seed_base=42, legal_radius=8, random_opening_plies=4, c_puct=1.5,
+time_limit=0.5 s, temperature=0.0).
+
+| arm                                            | MCTS-32 | MCTS-64               | MCTS-128                | Δ (32→64) | Δ (64→128) |
+|------------------------------------------------|--------:|----------------------:|------------------------:|----------:|-----------:|
+| A1 anchor                                      | 25 %†   | **30.0 %** [24.1 %, 36.7 %] | **32.5 %** [26.4 %, 39.3 %] | +5.0 pp†  | +2.5 pp    |
+| A1 + gpool-bias-policy-only (§170 P4 P1)       | 24.5 %  | 32.5 % [26.4 %, 39.3 %] | **39.5 %** [33.0 %, 46.4 %] | +8.0 pp   | +7.0 pp    |
+
+†A1 anchor MCTS-32 is the n=20 §168 sanity run; not directly comparable to the n=200 cells.
+
+**Reading.**
+- A1 anchor's own MCTS depth scaling is **shallow**: +2.5 pp from
+  N=64 to N=128. The model does extract some additional signal from
+  doubling search, but the lift is modest.
+- A1+gpool-bias-policy-only's depth scaling is **steeper**: +7.0 pp
+  from N=64 to N=128 (and +15.0 pp end-to-end MCTS-32 → MCTS-128).
+- At MCTS-128, A1+gpool-policy-only point estimate is 39.5 % vs A1
+  anchor 32.5 % — **+7.0 pp**, the largest matched-depth gap in the
+  matrix. CIs overlap by 6.3 pp ([33.0 %, 46.4 %] vs [26.4 %,
+  39.3 %]); not statistically distinguishable at n=200.
+- A1 anchor MCTS-128 W/L/D = **65 / 135 / 0**, byte-identical W/L
+  count to A1+gpool-policy-only MCTS-64 (also 65 / 135 / 0). Neither
+  cell distinguishes from the other; per-game outcomes differ but
+  aggregate WR is identical to four decimal places. Not load-bearing
+  on the matrix — coincidence at n=200.
+- mean_ply MCTS-128: A1 anchor 35.35 (median 33.0); A1+gpool-policy-
+  only 38.93 (median 35.0). Both are healthy depth-deepens-mean-ply
+  curves; gpool-policy-only's longer mean reflects more games where
+  it pushes SealBot into deeper play before resolution.
+
+**Implication for verdict.** Does NOT change Gate 6 (a) — A1+gpool-
+policy-only's argmax 15.0 % still fails the 16 % gate; joint
+promotion gate FAILS regardless of the MCTS-128 cell. **Does refine
+the NULL reading**: the §170 P4 P1 NULL verdict held that policy-
+only "is captured by the SE / min-max trunk OR is genuinely
+uninformative". The matched MCTS-128 baseline weakens the
+"genuinely uninformative" branch — at n=200 the point estimate
+suggests the global signal *is* doing something at higher search
+depth that the trunk does NOT extract. The hypothesis "global signal
+becomes measurably informative at higher PUCT depth" is open at
+n=200 and would need n=400+ at MCTS-128 to discriminate.
+
+**Implication for §171 / Phase 5+.** Surface as a Phase 5+ question
+(operator-confirmed Gate 6 (g) deferral list extended): does the
+gpool-bias-policy-only side-branch produce a statistically
+distinguishable lift at MCTS-128+ given a corpus or distribution
+that exercises the global signal more, OR an n=400+ measurement at
+the current corpus? Not a §171 blocker; cleanly deferred. The
+operator-promised "doesn't change Gate 6 (a)" reading is preserved;
+the matrix is now complete with no orphan cells.
+
+Artefact: `reports/gpool_bias/A1_anchor_mcts128.json` (laptop run);
+outer log `reports/gpool_bias/A1_anchor_mcts128.outer.log`.
 
 ---
 

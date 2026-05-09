@@ -19,7 +19,7 @@ SKIPPED across all v6w25 / v8 arms — fixture gap tracked as §170 follow-up.
 
 | arm                                   | encoder        | pool                    | global routing            | argmax WR (CI95)              | MCTS-N WR (CI95)                       | threat C2/C3 | params  | source                           |
 |---------------------------------------|----------------|-------------------------|---------------------------|-------------------------------|----------------------------------------|--------------|---------|----------------------------------|
-| **A1 anchor** (v6w25)                 | v6w25 K-cluster| min/max                 | none                      | **14.5%** [10.3%, 20.0%]      | 25.0% MCTS-32 (n=20 sanity); **30.0% MCTS-64** [24.1%, 36.7%] (n=200, matched baseline) | SKIPPED      | 5.29 M  | §168 Gate 5 + §170 P3 baseline   |
+| **A1 anchor** (v6w25)                 | v6w25 K-cluster| min/max                 | none                      | **14.5%** [10.3%, 20.0%]      | 25.0% MCTS-32 (n=20 sanity); **30.0% MCTS-64** [24.1%, 36.7%] (n=200, matched baseline); **32.5% MCTS-128** [26.4%, 39.3%] (n=200, matrix-completion 2026-05-09) | SKIPPED      | 5.29 M  | §168 Gate 5 + §170 P3 baseline + §170 P4 matrix-completion |
 | A2                                    | v6w25 K-cluster| PMA                     | none                      | 4.5% [2.4%, 8.3%]             | 3.5% MCTS-128                          | SKIPPED      | 6.30 M  | §169 P2                          |
 | A3                                    | v6w25 K-cluster| PMA                     | yes (PMA-merged)          | 7.5% [4.6%, 12.0%]            | 2.5% MCTS-32 / 2.5% MCTS-64 / 2.5% MCTS-128 (FLAT) | SKIPPED      | 6.37 M  | §169 P3 + §170 P1                |
 | A4                                    | v8 + canvas    | bbox + PartialConv2d    | n/a (canvas-mask trunk)   | 0.0% [0.0%, 1.9%]             | 0.0% MCTS-128 [0.0%, 1.9%]             | SKIPPED      | 3.85 M  | §169 P4 (+ §169a + §170 P0 mech) |
@@ -186,17 +186,18 @@ value gate frozen at zero** is the §170 P4 candidate.
 
 ### 2e. A1 + gpool-bias-policy-only vs A1 anchor + §170 P3 — does value-head freeze restore MCTS without forfeiting the argmax lift?
 
-| metric              | A1 anchor   | §170 P3 (bilateral) | §170 P4 P1 (policy-only) |
-|---------------------|------------:|--------------------:|-------------------------:|
-| argmax WR           | 14.5 %      | 22.0 %              | **15.0 %**               |
-| MCTS-32 WR          | 25 % (n=20) | not measured        | 24.5 % (n=200)           |
-| MCTS-64 WR          | 30.0 %      | 15.0 %              | **32.5 %**               |
-| MCTS-128 WR         | not measured| not measured        | 39.5 % (n=200)           |
-| MCTS curve shape    | n/a         | flat-collapsed      | **monotonic-increasing** |
-| mean_ply MCTS-64    | 33.8        | 29.7                | **37.36**                |
-| final loss          | 3.57        | 2.8963              | 3.1945                   |
-| final gate          | n/a         | 0.0512              | 0.0718                   |
-| latency b=64        | 10.41 ms    | 11.26 ms            | 11.26 ms                 |
+| metric              | A1 anchor                 | §170 P3 (bilateral) | §170 P4 P1 (policy-only) |
+|---------------------|--------------------------:|--------------------:|-------------------------:|
+| argmax WR           | 14.5 %                    | 22.0 %              | **15.0 %**               |
+| MCTS-32 WR          | 25 % (n=20 sanity)        | not measured        | 24.5 % (n=200)           |
+| MCTS-64 WR          | 30.0 %                    | 15.0 %              | **32.5 %**               |
+| MCTS-128 WR         | 32.5 % (matrix-completion run, 2026-05-09 laptop) | not measured | **39.5 %** (n=200) |
+| MCTS curve (64→128) | shallow monotonic (+2.5 pp) | flat-collapsed    | **steep monotonic** (+7.0 pp) |
+| mean_ply MCTS-64    | 33.8                      | 29.7                | **37.36**                |
+| mean_ply MCTS-128   | 35.35                     | not measured        | 38.93                    |
+| final loss          | 3.57                      | 2.8963              | 3.1945                   |
+| final gate          | n/a                       | 0.0512              | 0.0718                   |
+| latency b=64        | 10.41 ms                  | 11.26 ms            | 11.26 ms                 |
 
 **Reading.** Two §170 P4 prompt branches fire simultaneously:
 - **policy_only > P3 on MCTS axis: CONFIRMED** (15.0 % → 32.5 % at
@@ -232,11 +233,27 @@ healthy value heads independently of WR.
 
 **Closes the gpool-bias line.** Bilateral routing breaks MCTS via
 value drift (P3 FALSIFIED). Policy-only routing produces no
-measurable signal (P4 P1 NULL). No third routing mode is on the table
-within the gpool-bias side-branch design space; the K-invariant global
-signal does NOT add actionable signal beyond what the K-cluster +
-min/max trunk already extracts on the v6w25 + SealBot adversarial-
-play distribution.
+measurable signal at MCTS-64 (P4 P1 NULL). No third routing mode is
+on the table within the gpool-bias side-branch design space; the
+K-invariant global signal does NOT add actionable signal beyond what
+the K-cluster + min/max trunk already extracts on the v6w25 +
+SealBot adversarial-play distribution at the measured operating
+point.
+
+**MCTS-128 matrix-completion observation (operator-flagged 2026-05-09).**
+A1 anchor at MCTS-128 = 32.5 % [26.4 %, 39.3 %] (n=200, laptop run);
+A1+gpool-policy-only at MCTS-128 = 39.5 % [33.0 %, 46.4 %] — point
+estimate gap **+7.0 pp**, the largest matched-depth gap in the
+encoding line. CIs overlap by 6.3 pp; not statistically
+distinguishable at n=200. A1 anchor's own MCTS depth scaling is
+shallow (+2.5 pp 64→128); A1+gpool-policy-only's is steep (+7.0 pp
+64→128, +15.0 pp end-to-end MCTS-32 → MCTS-128). This nuances the
+NULL reading: the global signal is not "genuinely uninformative" —
+at higher PUCT depth there is a non-trivial point-estimate lift the
+trunk does NOT extract. Discriminating this from sampling noise
+would need n=400+ at MCTS-128. Surfaced as Phase 5+ question; does
+NOT change Gate 6 (a) (argmax 15.0 % still fails the 16 % gate;
+joint promotion gate FAILS regardless of MCTS-128).
 
 ---
 
@@ -325,6 +342,8 @@ reports/gpool_bias/
   argmax.json                                        554 B    (§170 P3)
   mcts64.json                                        564 B    (§170 P3)
   A1_anchor_mcts64.json                              554 B    (§170 P3 matched baseline)
+  A1_anchor_mcts128.json                             553 B    (§170 P4 close-out matrix-completion, laptop)
+  A1_anchor_mcts128.outer.log                        ~5 KB    (§170 P4 close-out matrix-completion, laptop)
   threat.json                                        434 B    (§170 P3; status=skipped)
   bench.md                                           259 B
   eval.json                                          1.86 KB  (§170 P3 combined)
