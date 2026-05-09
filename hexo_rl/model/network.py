@@ -325,6 +325,7 @@ class HexTacToeNet(nn.Module):
         pool_attn_dropout: float = 0.1,
         canvas_realness: bool = False,
         gpool_bias_active: bool = False,
+        policy_only_bias: bool = False,
     ) -> None:
         super().__init__()
         if encoding not in ("v6", "v6w25", "v8"):
@@ -386,7 +387,17 @@ class HexTacToeNet(nn.Module):
                     "carry a global-token branch (PMAGlobalPool); the "
                     "gpool-bias side-branch is the A1-only additive analog."
                 )
+        # §170 P4 — policy_only_bias requires gpool_bias_active=True; on its
+        # own it has no consumer. Surface as a loud construction error so
+        # YAML / CLI typos fail at load-time, not silently mid-training.
+        if policy_only_bias and not gpool_bias_active:
+            raise ValueError(
+                "policy_only_bias=True requires gpool_bias_active=True; the "
+                "policy-only knob configures the GpoolBiasBranch and has no "
+                "effect without the branch being active."
+            )
         self.gpool_bias_active: bool = bool(gpool_bias_active)
+        self.policy_only_bias: bool = bool(policy_only_bias)
         self.canvas_realness: bool = bool(canvas_realness)
         self.pool_type: str = pool_type
         # v6w25 = v6 wire format (8 planes + pass slot) at 25×25 cluster
@@ -562,11 +573,15 @@ class HexTacToeNet(nn.Module):
         # requested AND the (validated) A1 invariants hold (encoding=v6/v6w25,
         # pool_type=min_max, no canvas_realness, no trunk gpool sites). Gate
         # init=0.0 makes forward() output byte-exact A1 at construction.
+        # §170 P4 — policy_only_bias forwards into the branch so the value
+        # head's bias is structurally zero (state-dict shape is unchanged;
+        # value_proj remains for round-trip with §170 P3 checkpoints).
         if self.gpool_bias_active:
             self.gpool_bias_branch: Optional[GpoolBiasBranch] = GpoolBiasBranch(
                 filters=filters,
                 n_actions=self.n_actions,
                 value_hidden=256,
+                policy_only=self.policy_only_bias,
             )
         else:
             self.gpool_bias_branch = None

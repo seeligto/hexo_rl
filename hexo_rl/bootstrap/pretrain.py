@@ -886,6 +886,14 @@ def pretrain() -> None:
              "global-pool bias to value/policy heads). Requires --pool-type "
              "min_max + global_crops in the corpus NPZ. v6/v6w25 only.",
     )
+    parser.add_argument(
+        "--policy-only-bias", action="store_true",
+        help="§170 P4 — confine the gpool-bias side-branch to the policy "
+             "head (value head structurally frozen at A1: value_bias = 0, "
+             "no gradient through value_proj). Requires --gpool-bias-active. "
+             "Discriminates whether the §170 P3 MCTS regression is caused by "
+             "value-head bias drift specifically.",
+    )
     parser.add_argument("--corpus-npz", type=str, default=None,
                         help="Override corpus NPZ path. Defaults: v6 → "
                              "data/bootstrap_corpus.npz, v8 → "
@@ -975,6 +983,15 @@ def pretrain() -> None:
     gpool_bias_active: bool = bool(
         args.gpool_bias_active or config.get("gpool_bias_active", False)
     )
+    policy_only_bias: bool = bool(
+        args.policy_only_bias or config.get("policy_only_bias", False)
+    )
+    if policy_only_bias and not gpool_bias_active:
+        raise ValueError(
+            "--policy-only-bias requires --gpool-bias-active; the policy-only "
+            "knob configures the GpoolBiasBranch and has no effect without "
+            "the branch being active."
+        )
     if gpool_bias_active:
         if encoding == "v8":
             raise ValueError(
@@ -1013,6 +1030,7 @@ def pretrain() -> None:
         pool_attn_dropout=pool_attn_dropout,
         canvas_realness=canvas_realness,
         gpool_bias_active=gpool_bias_active,
+        policy_only_bias=policy_only_bias,
     )
 
     from hexo_rl.utils.device import best_device
@@ -1137,6 +1155,7 @@ def pretrain() -> None:
         pool_attn_dropout=pool_attn_dropout,
         canvas_realness=canvas_realness,
         gpool_bias_active=gpool_bias_active,
+        policy_only_bias=policy_only_bias,
     )
     use_compile = (
         config.get("torch_compile", True)
@@ -1162,6 +1181,7 @@ def pretrain() -> None:
     config["pool_attn_dropout"] = pool_attn_dropout
     config["canvas_realness"] = canvas_realness
     config["gpool_bias_active"] = gpool_bias_active
+    config["policy_only_bias"] = policy_only_bias
     if explicit_n_actions is not None:
         config["n_actions"] = explicit_n_actions
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)
