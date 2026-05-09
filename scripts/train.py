@@ -268,11 +268,31 @@ def main() -> None:
             fallback_config=combined_config,
             config_overrides=config_overrides,
         )
+        # Propagate the ckpt-resolved encoding back into the local config
+        # dicts so downstream selfplay surfaces (pool, worker, lifecycle,
+        # eval) read the encoding the model was actually trained under
+        # rather than the variant YAML's default. Without this, a v6w25
+        # bootstrap loaded against a v6-default variant would route
+        # correctly inside the trainer but feed v6 plane geometry into
+        # the self-play workers (§171 P3 blocker).
+        for _enc_key in (
+            "board_size", "cluster_window_size", "cluster_threshold",
+            "legal_move_radius", "encoding",
+        ):
+            if _enc_key in trainer.config:
+                combined_config[_enc_key] = trainer.config[_enc_key]
+                if _enc_key in ("board_size",):
+                    train_cfg[_enc_key] = trainer.config[_enc_key]
+        board_size = int(combined_config.get("board_size", board_size))
         log.info(
             "resumed",
             checkpoint=args.checkpoint,
             step=trainer.step,
             configured_total_steps=trainer.config.get("total_steps"),
+            encoding_version=(combined_config.get("encoding") or {}).get("version"),
+            board_size=combined_config.get("board_size"),
+            cluster_window_size=combined_config.get("cluster_window_size"),
+            cluster_threshold=combined_config.get("cluster_threshold"),
         )
     else:
         # Sweep-variant support: configs may carry `input_channels: [list]` to
