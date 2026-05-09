@@ -206,6 +206,29 @@ impl Board {
         }
     }
 
+    /// §171 P2 reopen — construct a Board with a non-default encoding spec.
+    ///
+    /// Equivalent to `Board::new()` followed by the three setters
+    /// (`set_cluster_window_size`, `set_cluster_threshold`,
+    /// `set_legal_move_radius`), but performs spec validation eagerly and
+    /// returns a single Board. Used by self-play workers under v6w25 and
+    /// future encoding variants (§168 Gate 3 plumbing).
+    ///
+    /// Panics if `enc.validate()` fails. Callers that may receive untrusted
+    /// input should call `enc.validate()` first.
+    pub fn with_encoding(enc: &crate::encoding::EncodingSpec) -> Board {
+        enc.validate().expect("EncodingSpec validation failed");
+        let mut b = Board::new();
+        b.cluster_window_size = enc.cluster_window_size;
+        b.cluster_threshold = enc.cluster_threshold;
+        b.legal_move_radius = enc.legal_move_radius;
+        // legal_cache built in `new()` is for radius=2 (init_cache); larger radius
+        // requires rebuild on next legal_moves_set() call. set_legal_move_radius
+        // marks cache dirty; replicate that here:
+        b.cache_dirty.set(true);
+        b
+    }
+
     /// §168 Gate 3 (v6w25 plumbing): override the cluster connectivity
     /// threshold for this Board. Affects only `get_clusters()` /
     /// `get_cluster_views()`; legal-move expansion is unchanged.
@@ -1210,3 +1233,62 @@ impl Clone for Board {
 // SAFETY: `Board` is always accessed by a single thread (MCTS worker or Python GIL).
 // The `UnsafeCell` / `Cell` fields are never reached concurrently via shared references.
 unsafe impl Sync for Board {}
+
+#[cfg(test)]
+mod with_encoding_tests {
+    use super::*;
+    use crate::encoding::EncodingSpec;
+
+    #[test]
+    fn test_with_encoding_v6w25() {
+        let b = Board::with_encoding(&EncodingSpec::V6W25);
+        assert_eq!(b.cluster_window_size(), 25);
+        assert_eq!(b.cluster_threshold(), 8);
+        assert_eq!(b.legal_move_radius(), 8);
+    }
+
+    #[test]
+    fn test_with_encoding_v6_matches_default() {
+        let b_with = Board::with_encoding(&EncodingSpec::V6);
+        let b_new = Board::new();
+        assert_eq!(b_with.cluster_window_size(), b_new.cluster_window_size());
+        assert_eq!(b_with.cluster_threshold(), b_new.cluster_threshold());
+        assert_eq!(b_with.legal_move_radius(), b_new.legal_move_radius());
+    }
+
+    #[test]
+    #[should_panic(expected = "cluster_window_size")]
+    fn test_with_encoding_window_lt_threshold_panics() {
+        let bad = EncodingSpec {
+            cluster_window_size: 7,
+            cluster_threshold: 9,
+            legal_move_radius: 5,
+            board_size: 19,
+        };
+        let _ = Board::with_encoding(&bad);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_with_encoding_zero_radius_panics() {
+        let bad = EncodingSpec {
+            cluster_window_size: 19,
+            cluster_threshold: 5,
+            legal_move_radius: 0,
+            board_size: 19,
+        };
+        let _ = Board::with_encoding(&bad);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_with_encoding_even_window_panics() {
+        let bad = EncodingSpec {
+            cluster_window_size: 20,
+            cluster_threshold: 5,
+            legal_move_radius: 5,
+            board_size: 19,
+        };
+        let _ = Board::with_encoding(&bad);
+    }
+}
