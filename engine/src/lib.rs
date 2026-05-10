@@ -32,6 +32,13 @@ use replay_buffer::sym_tables::{SymTables, N_SYMS};
 
 /// Python-visible EncodingSpec. Pass to `Board.with_encoding(spec)` to
 /// construct a Board with non-default cluster window / threshold / radius.
+//
+// TODO(post-§172): pyo3 0.28 deprecated automatic `FromPyObject` derivation
+// for `#[pyclass]` types implementing `Clone`. Build emits one warning here
+// and at PyRegistrySpec below; both will become hard errors on pyo3 1.0.
+// Migration is mechanical: add `#[pyclass(from_py_object)]` to opt-in OR
+// `#[pyclass(skip_from_py_object)]` to skip. No timeline — gated by pyo3
+// upgrade prioritization. See engine/src/lib.rs:115 for the second site.
 #[pyclass(name = "EncodingSpec")]
 #[derive(Clone)]
 pub struct PyEncodingSpec {
