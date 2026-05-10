@@ -193,7 +193,7 @@ def load_corpus(
     if not sidecar.exists():
         warnings.warn(
             f"{npz_path} has no metadata sidecar; "
-            f"run scripts/backfill_corpus_metadata.py",
+            f"run python -m scripts.migrations.2026_05_09_stamp_artifact_metadata corpora",
             DeprecationWarning,
             stacklevel=2,
         )

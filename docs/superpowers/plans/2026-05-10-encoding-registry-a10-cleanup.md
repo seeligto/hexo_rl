@@ -155,8 +155,8 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Create: `scripts/migrations/__init__.py` (empty)
-- Move: `scripts/backfill_checkpoint_metadata.py` → `scripts/migrations/2026_05_09_stamp_artifact_metadata.py`
-- Move: `scripts/backfill_corpus_metadata.py` → consolidate into the same file (it has both flows)
+- Moved: `scripts/backfill_checkpoint_metadata.py` → `scripts/migrations/2026_05_09_stamp_artifact_metadata.py` (checkpoints subcommand)
+- Moved: `scripts/backfill_corpus_metadata.py` → consolidated into same file (corpora subcommand) [DONE]
 - Modify: any docs/sprint log entries referencing the old paths
 
 - [ ] **Step 1: Confirm scripts exist + read their current shape**
