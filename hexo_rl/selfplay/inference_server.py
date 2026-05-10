@@ -22,7 +22,6 @@ from hexo_rl.encoding import lookup as registry_lookup
 from hexo_rl.encoding import resolve_from_config as registry_resolve_from_config
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 from hexo_rl.utils.encoding import EncodingSpec as LegacyEncodingSpec
-from hexo_rl.utils.encoding import resolve_encoding  # noqa: F401  (legacy compat)
 
 # Perf probes log via structlog so they persist to JSONL independent of dashboards.
 _perf_log = structlog.get_logger()

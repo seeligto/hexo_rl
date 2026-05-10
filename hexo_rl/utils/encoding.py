@@ -12,6 +12,7 @@ remains for backward compat until A4 migrates consumers.
 """
 from __future__ import annotations
 
+import warnings
 from typing import Any, Literal, Mapping, NamedTuple, Optional
 
 from hexo_rl.utils import constants as _c
@@ -133,7 +134,16 @@ def resolve_encoding(config: Mapping[str, Any]) -> EncodingSpec:
     Default: "v6". Anything other than "v6" / "v6w25" / "v8" raises
     ValueError. Configs without an "encoding" key resolve to v6
     (canonical default preserves byte-exact pre-§166 behavior).
+
+    .. deprecated::
+        Use ``hexo_rl.encoding.resolve_from_config(config)`` instead.
     """
+    warnings.warn(
+        "hexo_rl.utils.encoding.resolve_encoding is deprecated; use "
+        "hexo_rl.encoding.resolve_from_config(config) instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     section = config.get("encoding") if config else None
     if section is None:
         version: str = "v6"
@@ -158,15 +168,45 @@ def resolve_encoding(config: Mapping[str, Any]) -> EncodingSpec:
 
 
 def v6_spec() -> EncodingSpec:
-    """Return the v6 spec without consulting any config (test helper)."""
+    """Return the v6 spec without consulting any config (test helper).
+
+    .. deprecated::
+        Use ``hexo_rl.encoding.lookup('v6')`` instead.
+    """
+    warnings.warn(
+        "hexo_rl.utils.encoding.v6_spec is deprecated; use "
+        "hexo_rl.encoding.lookup('v6') from the registry instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return _V6_SPEC
 
 
 def v6w25_spec() -> EncodingSpec:
-    """Return the v6w25 spec without consulting any config (test helper)."""
+    """Return the v6w25 spec without consulting any config (test helper).
+
+    .. deprecated::
+        Use ``hexo_rl.encoding.lookup('v6w25')`` instead.
+    """
+    warnings.warn(
+        "hexo_rl.utils.encoding.v6w25_spec is deprecated; use "
+        "hexo_rl.encoding.lookup('v6w25') from the registry instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return _V6W25_SPEC
 
 
 def v8_spec() -> EncodingSpec:
-    """Return the v8 spec without consulting any config (test helper)."""
+    """Return the v8 spec without consulting any config (test helper).
+
+    .. deprecated::
+        Use ``hexo_rl.encoding.lookup('v8')`` instead.
+    """
+    warnings.warn(
+        "hexo_rl.utils.encoding.v8_spec is deprecated; use "
+        "hexo_rl.encoding.lookup('v8') from the registry instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return _V8_SPEC

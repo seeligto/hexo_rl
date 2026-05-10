@@ -36,7 +36,6 @@ from hexo_rl.encoding import lookup, resolve_from_config
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
 from hexo_rl.selfplay.utils import get_temperature  # noqa: F401 (re-exported)
-from hexo_rl.utils.encoding import EncodingSpec as LegacyEncodingSpec
 
 # Backward-compat: callers that do `from hexo_rl.selfplay.worker import get_temperature`
 # continue to work without changes.
@@ -44,7 +43,7 @@ __all__ = ["SelfPlayWorker", "get_temperature"]
 
 
 def _to_registry_spec(
-    spec: Union[RegistrySpec, LegacyEncodingSpec],
+    spec: Union[RegistrySpec, Any],
 ) -> RegistrySpec:
     """§172 A4.2 adapter — accept either legacy NamedTuple or new dataclass.
 
@@ -82,7 +81,7 @@ class SelfPlayWorker:
         model:  HexTacToeNet,
         config: Dict[str, Any],
         device: torch.device,
-        encoding_spec: Optional[Union[RegistrySpec, LegacyEncodingSpec]] = None,
+        encoding_spec: Optional[Union[RegistrySpec, Any]] = None,
     ) -> None:
         self.config = config
         self.device = device

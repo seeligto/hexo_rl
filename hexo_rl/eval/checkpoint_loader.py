@@ -27,10 +27,9 @@ from typing import Any, Tuple
 
 import torch
 
-from hexo_rl.encoding import lookup as _registry_lookup
+from hexo_rl.encoding import EncodingSpec, lookup as _registry_lookup
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
-from hexo_rl.utils.encoding import EncodingSpec, v6_spec, v8_spec
 
 
 def _strip_compile_prefixes(state: dict) -> dict:
@@ -54,44 +53,6 @@ def _strip_compile_prefixes(state: dict) -> dict:
         out[norm_key] = value
     return out
 
-
-# v6w25 spec — same wire format as v6 but with R=8 perception and a 25×25
-# cluster window. Shares chain-plane count and 8-plane KEPT layout. §172 A4.4
-# migrated this off inline duplicated constants → registry-driven bridge:
-# numeric values are read from `engine/src/encoding/registry.toml`'s
-# [encodings.v6w25] entry and bridged to the legacy NamedTuple shape.
-_N_CHAIN_PLANES = 6
-
-
-def _v6w25_spec() -> EncodingSpec:
-    """Return a legacy EncodingSpec for v6w25 keyed off the §172 registry.
-
-    Bridges the new registry → legacy NamedTuple for downstream consumers
-    that still take the legacy type. The numeric values are derived from
-    `engine/src/encoding/registry.toml`'s [encodings.v6w25] entry, not
-    duplicated here.
-
-    Note: legacy `version="v6"` (not `"v6w25"`) is what existing legacy
-    code expects — wire-format-compat with v6 for state_dict purposes.
-    """
-    reg = _registry_lookup("v6w25")
-    half = (reg.board_size - 1) // 2
-    n_cells = reg.board_size * reg.board_size
-    return EncodingSpec(
-        version="v6",  # wire-format-compatible with v6 for state_dict purposes
-        board_size=reg.board_size,
-        half=half,
-        n_cells=n_cells,
-        n_actions=reg.policy_logit_count,
-        n_planes=reg.n_planes,
-        legal_move_radius=reg.legal_move_radius,
-        cluster_threshold=reg.cluster_threshold,
-        cluster_window_size=reg.cluster_window_size,
-        state_stride=reg.n_planes * n_cells,
-        chain_stride=_N_CHAIN_PLANES * n_cells,
-        policy_stride=reg.policy_logit_count,
-        aux_stride=n_cells,
-    )
 
 
 def detect_encoding_label(ckpt_path: Path, state: dict) -> str:
@@ -146,10 +107,8 @@ def load_model_with_encoding(
 ) -> Tuple[HexTacToeNet, EncodingSpec, str]:
     """Load checkpoint, detect encoding, return (model, spec, label).
 
-    The label is one of {'v6', 'v6w25', 'v8'} — distinct from
-    `spec.version` (which is just the state-dict-compat marker, 'v6' or
-    'v8'). Use the label to drive bot dispatch; use the spec for numeric
-    constants.
+    The label is one of {'v6', 'v6w25', 'v8'} and matches ``spec.name``.
+    Use the label to drive bot dispatch; use the spec for numeric constants.
     """
     ckpt_path = Path(ckpt_path)
     raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -190,13 +149,13 @@ def load_model_with_encoding(
         )
 
     if label == "v8":
-        spec = v8_spec()
+        spec = _registry_lookup("v8")
         model = _build_v8_model(state, spec)
     elif label == "v6w25":
-        spec = _v6w25_spec()
+        spec = _registry_lookup("v6w25")
         model = _build_v6_model(state, spec)
     else:
-        spec = v6_spec()
+        spec = _registry_lookup("v6")
         model = _build_v6_model(state, spec)
 
     model.to(device)
