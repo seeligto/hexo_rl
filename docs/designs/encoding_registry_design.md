@@ -586,7 +586,11 @@ New mandatory `metadata` field at every checkpoint save site:
         "train_config_path": str,
         "corpus_sha256": str | None,
         "model_architecture": str,       # e.g. "HexTacToeNet_v8"
-        "model_variant": str | None,
+        "model_variant": str | None,     # sub-arch tag — e.g. "B1_128x12_GPool6_10",
+                                         # "PMA_global", "min_max"; None when no
+                                         # ablation arm. Not load-bearing for shape
+                                         # inference; differentiator for audit + ablation
+                                         # bookkeeping. Stamp `None` if no variant.
         "schema_version": int,           # = 1 for this design
     },
 }
@@ -651,25 +655,36 @@ existing corpora from operator manifest.
 encoding: v6w25                # MANDATORY if differing from base default
 ```
 
-**Rejected (raises `ConfigSchemaError` at load time):**
+**Scattered-key semantics (A8 amend, 2026-05-10) — consistency-not-equality:**
 
-```yaml
-board_size: 25                 # rejected — set `encoding: <name>` instead
-cluster_window_size: 25        # rejected — registry decides
-cluster_threshold: 8           # rejected — registry decides
-n_planes: 8                    # rejected — registry decides
-in_channels: 8                 # rejected — registry decides
+Scattered encoding-derived keys (`board_size`, `cluster_window_size`,
+`cluster_threshold`, `n_planes`, `in_channels`) are accepted **iff they
+agree with the registry value implied by `encoding:`**. Disagreement
+raises `EncodingRegistryError` at load.
+
+This is a deliberate relaxation of the original "always reject" rule.
+Rationale:
+- Variant configs inherit from `configs/model.yaml:5` which carries
+  `board_size: 19` for v6 base defaults. Forcing literal-rejection would
+  require either rewriting every base config or deleting `board_size`
+  from `model.yaml` entirely (breaks any non-registry consumer).
+- Consistency-checked acceptance preserves the inheritance flow while
+  catching real mismatches (e.g. `encoding: v6w25` + `board_size: 19`
+  fails loud).
+
+Validator message on disagreement:
+
+```
+EncodingRegistryError: variant 'sprint_171_p3_5080' declares
+'encoding: v6w25' but also sets 'board_size: 19'. Registry says v6w25
+has board_size=25. Either remove the scattered key or correct it to 25.
+Registered encodings: v6, v6w25, v7full, v8, v8_canvas_realness.
 ```
 
-Validator message:
-
-```
-ConfigSchemaError: variant 'sprint_171_p3_5080' overrides 'board_size: 25'
-directly. Encoding-derived values must come from the registry. Set
-'encoding: v6w25' (or another registered name) at the variant root and
-remove the scattered key. Registered encodings: v6, v6w25, v7full, v8,
-v8_canvas_realness.
-```
+A4 retires this relaxation transitively via Option 3 (full
+`config["board_size"]` retirement — see §14): once no consumer reads
+the legacy scalar, the scattered keys can be stripped from configs.
+Until then, consistency-not-equality is the contract.
 
 `resolve_corpus_path(spec)` and `resolve_anchor_path(spec)` helpers
 remove the need for variants to spell out corpus + bootstrap_anchor
@@ -706,9 +721,21 @@ $ python -m hexo_rl.encoding audit [--strict] [--checkpoints-dir DIR]
    load-bearing list + A1 §5.1 +A1 §5.2) for `19`, `25`, `361`, `5`,
    `8` literals not paired with a `spec.<field>` reference. Flag any
    not justified by a comment pointing at the registry.
-6. **Cross-table consistency:** which corpora are compatible with which
-   checkpoints (`encoding_name` match, `n_planes` match, sha
-   reconciliation if both sides have it).
+6. **Cross-table consistency** (A4 amend, 2026-05-10): joins §2
+   checkpoints to §3 corpora via `metadata.corpus_sha256` ↔ corpus
+   sidecar `sha256`. Per-checkpoint verdict in `{OK, ENC-MISMATCH,
+   ORPHAN-SHA, NO-CORPUS-SHA, NO-META}`. Plus orphan-corpus pass: any
+   corpus sha not referenced by any stamped ckpt is reported (info by
+   default; warn under `--strict`). Severity matrix:
+   - `error` — ckpt + corpus both stamped, encodings disagree (INV-1).
+   - `error` — ckpt has `corpus_sha256` but no corpus matches (INV-2).
+   - `warn` — ckpt stamped but `corpus_sha256 is None` (INV-3).
+   - `warn` — ckpt has no metadata at all (INV-4).
+   - `info` — clean match (INV-5) or orphan corpus (INV-6).
+
+   Skip rule: when `corpora_dir` is empty AND any ckpt carries
+   `corpus_sha256`, emit one section-level warn ("§6 skipped — no
+   corpora to join against") and produce no per-row findings.
 
 **Exit codes:**
 
