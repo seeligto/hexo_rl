@@ -100,7 +100,7 @@ selfplay:
 mixing:
   # §171 P3 — pin pretrain corpus to v6w25 K-cluster (matches A1 anchor
   # encoding).  Default data/bootstrap_corpus.npz is v7 = encoding mismatch.
-  pretrained_buffer_path: "data/bootstrap_corpus_v6w25.npz"
+  pretrained_buffer_path: "<auto>"  # §172 T9: resolved from encoding registry
 
 eval_pipeline:
   opponents:
@@ -112,7 +112,7 @@ eval_pipeline:
       n_games: 100
       model_sims: 128
       opponent_sims: 128
-      path: checkpoints/bootstrap_model_v6w25.pt
+      path: "<auto>"  # §172 T9: resolved from encoding registry
     sealbot:
       stride: 1                 # 6 readings over 30k vs default 4 → 1 reading
       # n_games / think_time / model_sims inherit from eval.yaml.

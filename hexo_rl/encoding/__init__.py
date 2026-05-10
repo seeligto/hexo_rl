@@ -25,6 +25,9 @@ from hexo_rl.encoding.registry import (
 )
 from hexo_rl.encoding.resolvers import (
     ShapeMismatchError,
+    expand_auto_paths,
+    resolve_anchor_path,
+    resolve_corpus_path,
     resolve_from_checkpoint,
     resolve_from_config,
     validate_against_state_dict,
@@ -36,7 +39,10 @@ __all__ = [
     "EncodingRegistryError",
     "ShapeMismatchError",
     "all_specs",
+    "expand_auto_paths",
     "lookup",
+    "resolve_anchor_path",
+    "resolve_corpus_path",
     "resolve_from_checkpoint",
     "resolve_from_config",
     "validate_against_state_dict",

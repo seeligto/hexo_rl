@@ -23,6 +23,9 @@ class ShapeMismatchError(Exception):
 # Scattered-key invariant (§172 A4.5 — design doc §10).
 # Map config-level scalar keys to the corresponding EncodingSpec field.
 # `in_channels` is the legacy buffer-format alias for `n_planes`.
+# Sentinel value used by expand_auto_paths to detect unresolved artifact paths.
+_AUTO = "<auto>"
+
 _SCATTERED_KEYS_TO_FIELD: dict[str, str] = {
     "board_size": "board_size",
     "cluster_window_size": "cluster_window_size",
@@ -75,6 +78,108 @@ def _check_scattered_keys(cfg: Mapping[str, Any], spec: EncodingSpec) -> None:
             f"Registered encodings: {sorted(_load_registry())}. "
             f"Schema: docs/designs/encoding_registry_design.md §10."
         )
+
+
+# ---------------------------------------------------------------------------
+# Canonical artifact paths per encoding name.
+# Operator-curated; bump when a new encoding ships corpora/anchors.
+# Paths are repo-relative (no leading slash).
+# ---------------------------------------------------------------------------
+
+_CORPUS_PATHS: dict[str, str] = {
+    "v6":                 "data/bootstrap_corpus.npz",
+    "v6w25":              "data/bootstrap_corpus_v6w25.npz",
+    "v7full":             "data/bootstrap_corpus.npz",   # shared with v6 (§150)
+    "v8":                 "data/bootstrap_corpus_v8.npz",
+    "v8_canvas_realness": "data/bootstrap_corpus_v8_canvas_realness.npz",
+}
+
+_ANCHOR_PATHS: dict[str, str] = {
+    "v6":                 "checkpoints/bootstrap_model_v6.pt",
+    "v6w25":              "checkpoints/bootstrap_model_v6w25.pt",
+    "v7full":             "checkpoints/bootstrap_model_v7full.pt",
+    "v8":                 "checkpoints/bootstrap_model_v8full_warm.pt",
+    "v8_canvas_realness": "checkpoints/v8_variants/A4_canvas_realness.pt",
+}
+
+
+def resolve_corpus_path(spec: Any) -> Path:
+    """Canonical corpus npz for an encoding.
+
+    Args:
+        spec: Any object with a `.name` attribute (EncodingSpec or compatible).
+
+    Returns:
+        Repo-relative Path to the corpus npz.
+
+    Raises:
+        EncodingRegistryError: if no canonical path is registered for spec.name.
+    """
+    p = _CORPUS_PATHS.get(spec.name)
+    if p is None:
+        raise EncodingRegistryError(
+            f"No canonical corpus path registered for encoding {spec.name!r}. "
+            "Add an entry to _CORPUS_PATHS in hexo_rl/encoding/resolvers.py."
+        )
+    return Path(p)
+
+
+def resolve_anchor_path(spec: Any) -> Path:
+    """Canonical bootstrap anchor checkpoint for an encoding.
+
+    Args:
+        spec: Any object with a `.name` attribute (EncodingSpec or compatible).
+
+    Returns:
+        Repo-relative Path to the checkpoint.
+
+    Raises:
+        EncodingRegistryError: if no canonical path is registered for spec.name.
+    """
+    p = _ANCHOR_PATHS.get(spec.name)
+    if p is None:
+        raise EncodingRegistryError(
+            f"No canonical anchor path registered for encoding {spec.name!r}. "
+            "Add an entry to _ANCHOR_PATHS in hexo_rl/encoding/resolvers.py."
+        )
+    return Path(p)
+
+
+def expand_auto_paths(config: dict[str, Any], spec: Any) -> None:
+    """Expand ``<auto>`` literals in *config* using the canonical artifact paths.
+
+    Mutates *config* in-place. Handles both flat top-level keys and the nested
+    keys present in variant YAML files.
+
+    Flat keys expanded:
+      - ``corpus_npz``       → resolve_corpus_path(spec)
+      - ``bootstrap_anchor`` → resolve_anchor_path(spec)
+
+    Nested keys expanded:
+      - ``mixing.pretrained_buffer_path``                → resolve_corpus_path(spec)
+      - ``eval_pipeline.opponents.bootstrap_anchor.path`` → resolve_anchor_path(spec)
+
+    Only expands when the current value is the literal string ``"<auto>"``.
+    """
+    # Flat top-level keys (task description canonical form).
+    if config.get("corpus_npz") == _AUTO:
+        config["corpus_npz"] = str(resolve_corpus_path(spec))
+    if config.get("bootstrap_anchor") == _AUTO:
+        config["bootstrap_anchor"] = str(resolve_anchor_path(spec))
+
+    # Nested: mixing.pretrained_buffer_path
+    mixing = config.get("mixing")
+    if isinstance(mixing, dict) and mixing.get("pretrained_buffer_path") == _AUTO:
+        mixing["pretrained_buffer_path"] = str(resolve_corpus_path(spec))
+
+    # Nested: eval_pipeline.opponents.bootstrap_anchor.path
+    eval_cfg = config.get("eval_pipeline")
+    if isinstance(eval_cfg, dict):
+        opponents = eval_cfg.get("opponents")
+        if isinstance(opponents, dict):
+            anchor_cfg = opponents.get("bootstrap_anchor")
+            if isinstance(anchor_cfg, dict) and anchor_cfg.get("path") == _AUTO:
+                anchor_cfg["path"] = str(resolve_anchor_path(spec))
 
 
 def resolve_from_config(cfg: Mapping[str, Any] | None) -> EncodingSpec:

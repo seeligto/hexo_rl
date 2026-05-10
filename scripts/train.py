@@ -236,8 +236,12 @@ def main() -> None:
     # §172 A10: registry is the sole source of truth for trunk_size;
     # `combined_config["board_size"]` scalar retired. All downstream readers
     # (eval, model, selfplay) consume `resolve_from_config(cfg).trunk_size`.
-    from hexo_rl.encoding import resolve_from_config as _registry_resolve
+    from hexo_rl.encoding import expand_auto_paths, resolve_from_config as _registry_resolve
     _registry_spec = _registry_resolve(combined_config)
+    # §172 A10 / T9: expand <auto> corpus/anchor path literals now that the
+    # encoding spec is resolved. Mutates combined_config in-place so all
+    # downstream readers (batch_assembly, eval_pipeline) see the real paths.
+    expand_auto_paths(combined_config, _registry_spec)
     # Trunk size for HexTacToeNet ctor: v6=19 canvas, v6w25=25 cluster
     # window, v8=25 bbox.
     board_size = _registry_spec.trunk_size
