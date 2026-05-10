@@ -3,7 +3,7 @@
 
 Design reference: docs/designs/encoding_registry_design.md §8.
 
-Two subcommands:
+Three subcommands:
 
   checkpoints   Stamp legacy `.pt` checkpoints with encoding metadata.
                 For each .pt file under --dir:
@@ -18,7 +18,12 @@ Two subcommands:
                 §172 Phase A5.2 — one-shot helper to bring pre-registry corpora
                 into the sidecar regime defined by design §9.
 
-Both subcommands accept `--dry-run` (report only; write nothing) and are
+  model-variant Backfill `model_variant: None` on stamped checkpoints that carry
+                metadata (encoding_name present) but lack the model_variant key.
+                §172 A10 close-out — brings stamped ckpts to the full 8-key schema.
+                Skips ckpts without metadata entirely (A5 backfill responsibility).
+
+All subcommands accept `--dry-run` (report only; write nothing) and are
 idempotent (second run on already-stamped artifacts is a no-op).
 
 Operator-driven — NOT auto-run during tests or commits.
@@ -28,6 +33,8 @@ Examples:
     python -m scripts.migrations.2026_05_09_stamp_artifact_metadata checkpoints --dir checkpoints/
     python -m scripts.migrations.2026_05_09_stamp_artifact_metadata corpora --dir data/ --dry-run
     python -m scripts.migrations.2026_05_09_stamp_artifact_metadata corpora --dir data/ --manifest manifest.yaml
+    python -m scripts.migrations.2026_05_09_stamp_artifact_metadata model-variant --dir checkpoints/ --dry-run
+    python -m scripts.migrations.2026_05_09_stamp_artifact_metadata model-variant --dir checkpoints/
 """
 from __future__ import annotations
 
@@ -342,6 +349,72 @@ def _cmd_corpora(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: model-variant
+# ---------------------------------------------------------------------------
+
+def _cmd_model_variant(args: argparse.Namespace) -> int:
+    """Add 'model_variant: None' to any stamped ckpt missing the field.
+
+    Idempotent — skips ckpts that already have the key OR lack metadata
+    entirely (those are the A5 backfill's responsibility, not ours).
+    """
+    import torch
+
+    root = pathlib.Path(args.dir)
+    if not root.exists():
+        print(f"error: {root} does not exist", file=sys.stderr)
+        return 2
+
+    n_stamped = 0
+    n_skipped_already = 0
+    n_skipped_no_meta = 0
+    n_failed = 0
+
+    for path in sorted(root.rglob("*.pt")):
+        try:
+            ck = torch.load(path, map_location="cpu", weights_only=False)
+        except Exception as exc:
+            print(f"[ERR] {path}: load failed: {exc}")
+            n_failed += 1
+            continue
+
+        if not isinstance(ck, dict):
+            n_skipped_no_meta += 1
+            continue
+
+        meta = ck.get("metadata")
+        if not isinstance(meta, dict):
+            n_skipped_no_meta += 1
+            continue
+
+        # Only act on ckpts that are already stamped (encoding_name present).
+        # Un-stamped ckpts are A5's responsibility.
+        if not isinstance(meta.get("encoding_name"), str):
+            n_skipped_no_meta += 1
+            continue
+
+        if "model_variant" in meta:
+            n_skipped_already += 1
+            continue
+
+        meta["model_variant"] = None
+        if args.dry_run:
+            print(f"[DRY] would stamp model_variant=None on {path}")
+        else:
+            torch.save(ck, path)
+            print(f"[OK]  stamped model_variant=None on {path}")
+        n_stamped += 1
+
+    print(
+        f"\nSummary: stamped={n_stamped}, "
+        f"skipped_already_has={n_skipped_already}, "
+        f"skipped_no_meta={n_skipped_no_meta}, "
+        f"failed={n_failed}"
+    )
+    return 0 if n_failed == 0 else 1
+
+
+# ---------------------------------------------------------------------------
 # Top-level parser
 # ---------------------------------------------------------------------------
 
@@ -404,6 +477,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="overwrite existing sidecars",
     )
 
+    # -- model-variant subcommand --
+    p_mv = sub.add_parser(
+        "model-variant",
+        help="Backfill 'model_variant: None' on stamped ckpts missing the field",
+        description=(
+            "For each .pt file under --dir that already has metadata "
+            "(encoding_name present) but lacks model_variant, stamps "
+            "model_variant=None. Idempotent. Skips un-stamped ckpts "
+            "(A5 backfill responsibility). §172 A10 close-out."
+        ),
+    )
+    p_mv.add_argument(
+        "--dir",
+        type=pathlib.Path,
+        default=pathlib.Path("checkpoints"),
+        help="directory to scan recursively for .pt files (default: ./checkpoints)",
+    )
+    p_mv.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report only; do not rewrite any files",
+    )
+
     return parser
 
 
@@ -415,6 +511,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_checkpoints(args)
     if args.subcommand == "corpora":
         return _cmd_corpora(args)
+    if args.subcommand == "model-variant":
+        return _cmd_model_variant(args)
 
     parser.print_help()
     return 2
