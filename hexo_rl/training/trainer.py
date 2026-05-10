@@ -1050,6 +1050,7 @@ class Trainer:
             encoding_name=_enc_name,
             train_config_path=self.config.get("_config_path"),
             corpus_sha256=self.config.get("corpus_sha256"),
+            model_variant=self.config.get("model_variant"),
         )
 
         # Inference-only copy (weights only, no optimizer state).

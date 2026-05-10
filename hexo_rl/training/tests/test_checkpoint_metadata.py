@@ -74,7 +74,7 @@ def test_build_checkpoint_metadata_keys_and_types() -> None:
     expected_keys = {
         "encoding_name", "commit_sha", "training_date",
         "train_config_path", "corpus_sha256", "model_architecture",
-        "schema_version",
+        "model_variant", "schema_version",
     }
     assert set(meta) == expected_keys
     assert meta["encoding_name"] == "v6"
@@ -189,3 +189,19 @@ def test_load_checkpoint_legacy_v8_shape_inference(tmp_path: Path) -> None:
     assert spec.policy_logit_count == 625
     deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
     assert len(deprecations) >= 1
+
+
+def test_build_checkpoint_metadata_model_variant_default_none():
+    from hexo_rl.training.checkpoints import build_checkpoint_metadata
+    meta = build_checkpoint_metadata(encoding_name="v6w25")
+    assert "model_variant" in meta
+    assert meta["model_variant"] is None
+
+
+def test_build_checkpoint_metadata_model_variant_explicit():
+    from hexo_rl.training.checkpoints import build_checkpoint_metadata
+    meta = build_checkpoint_metadata(
+        encoding_name="v8",
+        model_variant="B1_128x12_GPool6_10",
+    )
+    assert meta["model_variant"] == "B1_128x12_GPool6_10"

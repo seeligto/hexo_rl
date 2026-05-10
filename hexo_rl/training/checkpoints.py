@@ -54,6 +54,7 @@ def build_checkpoint_metadata(
     train_config_path: Optional[str | Path] = None,
     corpus_sha256: Optional[str] = None,
     model_architecture: str = "HexTacToeNet",
+    model_variant: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Construct the §172 A2 §8 checkpoint metadata dict.
 
@@ -77,6 +78,7 @@ def build_checkpoint_metadata(
         "train_config_path": str(train_config_path) if train_config_path is not None else None,
         "corpus_sha256": corpus_sha256,
         "model_architecture": model_architecture,
+        "model_variant": model_variant,
         "schema_version": CHECKPOINT_METADATA_SCHEMA_VERSION,
     }
 
@@ -94,6 +96,7 @@ def save_full_checkpoint(
     train_config_path: Optional[str | Path] = None,
     corpus_sha256: Optional[str] = None,
     model_architecture: str = "HexTacToeNet",
+    model_variant: Optional[str] = None,
 ) -> None:
     """Save a full training checkpoint (model + optimizer + meta).
 
@@ -117,6 +120,7 @@ def save_full_checkpoint(
             train_config_path=train_config_path,
             corpus_sha256=corpus_sha256,
             model_architecture=model_architecture,
+            model_variant=model_variant,
         )
     else:
         # Legacy call site — metadata absent, load path will fall back to
