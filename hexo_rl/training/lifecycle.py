@@ -47,29 +47,13 @@ def build_inference_model(
     device: torch.device,
 ) -> tuple[torch.nn.Module, InfModelArch]:
     # ── Inference model — separate instance owned by InferenceServer ──────────
-    board_size         = int(trainer.config.get("board_size",         19))
+    from hexo_rl.encoding import resolve_from_config as _registry_resolve
+    board_size         = _registry_resolve(trainer.config).trunk_size
     res_blocks         = int(trainer.config.get("res_blocks",         12))
     filters            = int(trainer.config.get("filters",            128))
     in_channels        = int(trainer.config.get("in_channels",         8))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
     input_channels     = trainer.config.get("input_channels", None)
-
-    # §172 A4.3: audit checkpoint — registry-resolved trunk_size must
-    # agree with the legacy `config["board_size"]` scalar that downstream
-    # readers still consume. Disagreement = silent encoding drift; A4
-    # phases will retire the scalar once every reader migrates.
-    try:
-        from hexo_rl.encoding import resolve_from_config as _registry_resolve
-        _registry_spec = _registry_resolve(trainer.config)
-        if _registry_spec.trunk_size != board_size:
-            log.warning(
-                "lifecycle_board_size_registry_mismatch",
-                legacy_board_size=board_size,
-                registry_trunk_size=_registry_spec.trunk_size,
-                registry_name=_registry_spec.name,
-            )
-    except Exception as exc:  # noqa: BLE001
-        log.debug("lifecycle_registry_audit_skipped", error=str(exc)[:120])
 
     _torch_compile_enabled = (
         trainer.config.get("torch_compile", False) and device.type == "cuda"

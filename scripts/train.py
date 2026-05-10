@@ -233,17 +233,14 @@ def main() -> None:
         combined_config["torch_compile"] = False
         train_cfg["torch_compile"]       = False
 
-    # §172 A4.3: registry is the source of truth for trunk_size. The
-    # legacy `combined_config["board_size"]` scalar is preserved for
-    # downstream readers (eval, model, selfplay) that have not yet
-    # migrated; A4 phases retire it incrementally once every reader
-    # consumes `resolve_from_config(cfg).trunk_size` directly.
+    # §172 A10: registry is the sole source of truth for trunk_size;
+    # `combined_config["board_size"]` scalar retired. All downstream readers
+    # (eval, model, selfplay) consume `resolve_from_config(cfg).trunk_size`.
     from hexo_rl.encoding import resolve_from_config as _registry_resolve
     _registry_spec = _registry_resolve(combined_config)
     # Trunk size for HexTacToeNet ctor: v6=19 canvas, v6w25=25 cluster
-    # window, v8=25 bbox. Equivalent to the post-`_propagate_encoding_into_config`
-    # value of `combined_config["board_size"]`.
-    board_size = int(_registry_spec.trunk_size)
+    # window, v8=25 bbox.
+    board_size = _registry_spec.trunk_size
     log.info(
         "train_encoding_resolved",
         encoding_name=_registry_spec.name,
@@ -293,20 +290,16 @@ def main() -> None:
         # correctly inside the trainer but feed v6 plane geometry into
         # the self-play workers (§171 P3 blocker).
         for _enc_key in (
-            "board_size", "cluster_window_size", "cluster_threshold",
+            "cluster_window_size", "cluster_threshold",
             "legal_move_radius", "encoding",
         ):
             if _enc_key in trainer.config:
                 combined_config[_enc_key] = trainer.config[_enc_key]
-                if _enc_key in ("board_size",):
-                    train_cfg[_enc_key] = trainer.config[_enc_key]
-        board_size = int(combined_config.get("board_size", board_size))
-        # §172 A4.3: re-resolve registry post-load for audit clarity. Should
-        # match the encoding the trainer locked in via metadata or shape
-        # inference.
+        # §172 A10: board_size retired — re-resolve trunk_size from registry.
         try:
             _post_load_spec = _registry_resolve(combined_config)
             _registry_name_post = _post_load_spec.name
+            board_size = _post_load_spec.trunk_size
         except Exception:
             _registry_name_post = None
         log.info(
@@ -316,7 +309,7 @@ def main() -> None:
             configured_total_steps=trainer.config.get("total_steps"),
             encoding_version=(combined_config.get("encoding") or {}).get("version"),
             registry_name=_registry_name_post,
-            board_size=combined_config.get("board_size"),
+            board_size=board_size,
             cluster_window_size=combined_config.get("cluster_window_size"),
             cluster_threshold=combined_config.get("cluster_threshold"),
         )
@@ -472,7 +465,7 @@ def main() -> None:
         _n_actions_spec = int(_bufs_spec.policy_logit_count)
     except Exception as _re_err:
         log.warning("buffer_alloc_registry_resolve_failed", error=str(_re_err)[:120])
-        _trunk_size = int(combined_config.get("board_size", 19))
+        _trunk_size = 19  # v6 default fallback (registry unavailable)
         _n_actions_spec = _N_ACTIONS
     bufs = allocate_batch_buffers(
         _batch_size_cfg,

@@ -77,11 +77,7 @@ max_train_burst: 8
 encoding: v6w25
 # §172 A4.5 — override model.yaml's board_size: 19 so the merged
 # combined_config does not trip the resolver's scattered-key consistency
-# check (v6w25 registry spec says board_size=25). The trainer derives the
-# actual trunk size from `resolve_from_config(cfg).trunk_size`; this scalar
-# exists only to keep legacy `combined_config["board_size"]` readers happy
-# until the §172 A1 §6.11 retirement lands.
-board_size: 25
+# §172 A10: board_size scalar retired; trunk_size from registry.
 
 # eval_interval: 5000 inherited from training.yaml (no override).
 

@@ -16,6 +16,7 @@ from typing import Tuple
 import pytest
 import torch
 
+from hexo_rl.encoding import resolve_from_config
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.trainer import Trainer
 from hexo_rl.utils.encoding import v6_spec, v6w25_spec
@@ -86,7 +87,7 @@ def test_load_v6w25_checkpoint_resolves_to_v6w25(tmp_path: Path) -> None:
         checkpoint_dir=tmp_path,
         fallback_config=cfg,
     )
-    assert trainer.config["board_size"] == 25
+    assert resolve_from_config(trainer.config).trunk_size == 25
     assert trainer.config["cluster_window_size"] == 25
     assert trainer.config["cluster_threshold"] == 8
     assert trainer.config["encoding"]["version"] == "v6w25"
@@ -110,7 +111,7 @@ def test_load_v6_checkpoint_resolves_to_v6(tmp_path: Path) -> None:
         checkpoint_dir=tmp_path,
         fallback_config=cfg,
     )
-    assert trainer.config["board_size"] == 19
+    assert resolve_from_config(trainer.config).trunk_size == 19
     assert trainer.config["cluster_window_size"] == 19
     assert trainer.config["cluster_threshold"] == 5
     assert trainer.config["encoding"]["version"] == "v6"
@@ -131,7 +132,7 @@ def test_load_v6_checkpoint_with_no_encoding_section_backward_compat(tmp_path: P
         checkpoint_dir=tmp_path,
         fallback_config=cfg,
     )
-    assert trainer.config["board_size"] == 19
+    assert resolve_from_config(trainer.config).trunk_size == 19
     assert trainer.config["encoding"]["version"] == "v6"
 
 
@@ -189,7 +190,7 @@ def test_config_propagates_resolved_encoding(tmp_path: Path) -> None:
     )
     spec = v6w25_spec()
     # All fields the §171 P3 selfplay surfaces depend on must be present.
-    assert trainer.config["board_size"] == 25  # model trunk dimension
+    assert resolve_from_config(trainer.config).trunk_size == 25  # model trunk dimension
     assert trainer.config["cluster_window_size"] == spec.cluster_window_size
     assert trainer.config["cluster_threshold"] == spec.cluster_threshold
     assert trainer.config["legal_move_radius"] == spec.legal_move_radius
@@ -240,7 +241,7 @@ def test_load_v6_checkpoint_prefers_metadata_when_present(
             checkpoint_dir=tmp_path,
             fallback_config=cfg,
         )
-    assert trainer.config["board_size"] == 19
+    assert resolve_from_config(trainer.config).trunk_size == 19
     assert trainer.config["encoding"]["version"] == "v6"
     # The metadata-found event must have fired and the resolved-encoding
     # event must record source="registry_metadata".
@@ -266,7 +267,7 @@ def test_load_v6_checkpoint_legacy_fallback_emits_deprecation_warning(
             checkpoint_dir=tmp_path,
             fallback_config=cfg,
         )
-    assert trainer.config["board_size"] == 19
+    assert resolve_from_config(trainer.config).trunk_size == 19
     assert trainer.config["encoding"]["version"] == "v6"
 
 
@@ -300,7 +301,7 @@ def test_load_v6w25_checkpoint_with_metadata_routes_via_registry(
         checkpoint_dir=tmp_path,
         fallback_config=cfg,
     )
-    assert trainer.config["board_size"] == 25
+    assert resolve_from_config(trainer.config).trunk_size == 25
     assert trainer.config["cluster_window_size"] == 25
     assert trainer.config["cluster_threshold"] == 8
     assert trainer.config["encoding"]["version"] == "v6w25"
@@ -337,5 +338,5 @@ def test_load_checkpoint_metadata_with_non_string_encoding_name_falls_back(
             fallback_config=cfg,
         )
     # Falls back through shape inference; v6 still resolves correctly.
-    assert trainer.config["board_size"] == 19
+    assert resolve_from_config(trainer.config).trunk_size == 19
     assert trainer.config["encoding"]["version"] == "v6"

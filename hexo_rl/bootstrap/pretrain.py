@@ -41,6 +41,7 @@ from hexo_rl.training.losses import (
     compute_chain_loss, compute_total_loss, fp16_backward_step,
 )
 from hexo_rl.training.checkpoints import get_base_model, save_full_checkpoint, save_inference_weights
+from hexo_rl.encoding import resolve_from_config as _registry_resolve_cfg
 from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.augment.luts import get_policy_scatters
@@ -670,7 +671,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
         str(enc_section.get("version", "v6"))
         if isinstance(enc_section, dict) else "v6"
     )
-    cfg_board_size = int(cfg.get("board_size", 19))
+    cfg_board_size = _registry_resolve_cfg(cfg).trunk_size
     cfg_in_channels = int(cfg.get("in_channels", 18))
     has_pass = cfg_encoding in ("v6", "v6w25")
     cfg_n_actions = cfg_board_size * cfg_board_size + (1 if has_pass else 0)
@@ -925,16 +926,16 @@ def pretrain() -> None:
     # v8 = Path β 11-plane × 25×25 + no pass slot.
     if encoding == "v8":
         from hexo_rl.bootstrap.dataset_v8 import (
-            BOARD_SIZE_V8, N_PLANES_V8, N_ACTIONS_V8,
+            N_PLANES_V8, N_ACTIONS_V8,
         )
-        config["board_size"] = BOARD_SIZE_V8
+        # board_size scalar retired (§172 A10); trunk_size from registry.
         config["in_channels"] = N_PLANES_V8
         explicit_n_actions = N_ACTIONS_V8
     elif encoding == "v6w25":
         from hexo_rl.bootstrap.dataset_v6w25 import (
-            BOARD_SIZE_V6W25, N_PLANES_V6W25, N_ACTIONS_V6W25,
+            N_PLANES_V6W25, N_ACTIONS_V6W25,
         )
-        config["board_size"] = BOARD_SIZE_V6W25
+        # board_size scalar retired (§172 A10); trunk_size from registry.
         config["in_channels"] = N_PLANES_V6W25
         explicit_n_actions = N_ACTIONS_V6W25
     else:
@@ -1020,7 +1021,7 @@ def pretrain() -> None:
     log.info(
         "encoding_resolved",
         encoding=encoding,
-        board_size=int(config.get("board_size", BOARD_SIZE)),
+        board_size=_registry_resolve_cfg(config).trunk_size,
         in_channels=int(config.get("in_channels", 8)),
         filters=int(config.get("filters", 128)),
         res_blocks=int(config.get("res_blocks", 12)),
@@ -1112,7 +1113,7 @@ def pretrain() -> None:
         num_samples=len(dataset),
         replacement=True,
     )
-    board_size_for_collate = int(config.get("board_size", BOARD_SIZE))
+    board_size_for_collate = _registry_resolve_cfg(config).trunk_size
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
@@ -1143,7 +1144,7 @@ def pretrain() -> None:
 
     # Model — encoding-aware. v8 wires gpool sites + KataGo policy head.
     model = HexTacToeNet(
-        board_size=int(config["board_size"]),
+        board_size=_registry_resolve_cfg(config).trunk_size,
         in_channels=int(config["in_channels"]),
         filters=int(config["filters"]),
         res_blocks=int(config["res_blocks"]),

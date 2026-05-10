@@ -11,6 +11,7 @@ from typing import Any, Dict
 import torch
 
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
+from hexo_rl.encoding import EncodingRegistryError, resolve_from_config
 from hexo_rl.env import GameState
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.worker import SelfPlayWorker
@@ -45,7 +46,14 @@ class OurModelBot(BotProtocol):
         model_hparams = _infer_model_hparams(state_dict)
         # Fall back to config values for any dims not recoverable from weights.
         model_cfg = config.get("model", {}) if isinstance(config.get("model"), dict) else {}
-        board_size = int(model_hparams.get("board_size", model_cfg.get("board_size", config.get("board_size", 19))))
+        hp_bs = model_hparams.get("board_size") if model_hparams else None
+        if hp_bs is not None:
+            board_size = int(hp_bs)
+        else:
+            try:
+                board_size = resolve_from_config(model_cfg or config).trunk_size
+            except EncodingRegistryError:
+                board_size = int(config.get("board_size", 19))
         in_channels = int(model_hparams.get("in_channels", model_cfg.get("in_channels", config.get("in_channels", 8))))
         filters = int(model_hparams.get("filters", model_cfg.get("filters", config.get("filters", 128))))
         res_blocks = int(model_hparams.get("res_blocks", model_cfg.get("res_blocks", config.get("res_blocks", 12))))

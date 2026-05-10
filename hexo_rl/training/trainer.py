@@ -58,6 +58,7 @@ from hexo_rl.encoding import (
     EncodingSpec as RegistrySpec,
     lookup as registry_lookup,
     resolve_from_checkpoint as registry_resolve_ckpt,  # noqa: F401  (re-export for §172 A5)
+    resolve_from_config as registry_resolve_config,
 )
 from engine import ReplayBuffer
 
@@ -1017,7 +1018,7 @@ class Trainer:
                 resolved[key] = int(default_val)
 
         # Keep top-level config aligned with final model dimensions.
-        config["board_size"] = resolved["board_size"]
+        # board_size scalar retired (§172 A10) — readers use resolve_from_config(cfg).trunk_size.
         config["res_blocks"] = resolved["res_blocks"]
         config["filters"] = resolved["filters"]
         config["in_channels"] = resolved["in_channels"]
@@ -1095,19 +1096,6 @@ class Trainer:
         )
 
         return ckpt_path
-
-    @staticmethod
-    def _model_board_size_for(spec: EncodingSpec) -> int:
-        """Effective model trunk board size for an EncodingSpec.
-
-        v6w25 keeps the v6 canvas (board_size=19) but the model trunk runs
-        on the 25×25 perception window. Treat cluster_window_size as the
-        model board size when it differs from the canvas; otherwise use
-        spec.board_size (v6, v8).
-        """
-        if spec.cluster_window_size is not None and spec.cluster_window_size != spec.board_size:
-            return int(spec.cluster_window_size)
-        return int(spec.board_size)
 
     @staticmethod
     def _detect_encoding_from_state_dict(
@@ -1233,10 +1221,9 @@ class Trainer:
 
         # Even when versions match, refuse to silently disagree on
         # numeric pins (board_size / cluster_window_size / cluster_threshold).
-        ckpt_model_bs = Trainer._model_board_size_for(ckpt_spec)
         for key, cfg_val in explicit_pins.items():
             if key == "board_size":
-                ckpt_val: Optional[int] = ckpt_model_bs
+                ckpt_val: Optional[int] = registry_lookup(ckpt_spec.version).trunk_size
             elif key == "cluster_window_size":
                 ckpt_val = ckpt_spec.cluster_window_size
             elif key == "cluster_threshold":
@@ -1262,16 +1249,13 @@ class Trainer:
         """Write the resolved encoding fields into the in-memory config.
 
         Downstream selfplay surfaces (pool, worker, lifecycle) read
-        ``config['board_size']`` / ``cluster_window_size`` / ``cluster_threshold``
+        ``cluster_window_size`` / ``cluster_threshold`` / ``legal_move_radius``
         directly. After ckpt load, those must reflect the encoding the
         model was actually trained under, not whatever the variant YAML
         happened to ship with.
 
-        §172 A4.3 note: writing the scalar `config["board_size"]` is a
-        load-bearing scalar for downstream readers (eval, model, selfplay).
-        Per A1 §6.11 Option 3, this scalar is slated for retirement across
-        A4 phases incrementally — readers must migrate to
-        `resolve_from_config(cfg).trunk_size` before the writer is removed.
+        §172 A10: `config["board_size"]` scalar retired. Readers use
+        `resolve_from_config(cfg).trunk_size` instead.
         """
         encoding_section = config.get("encoding")
         if not isinstance(encoding_section, dict):
@@ -1279,7 +1263,7 @@ class Trainer:
         encoding_section["version"] = spec.version
         config["encoding"] = encoding_section
 
-        config["board_size"] = Trainer._model_board_size_for(spec)
+        # board_size scalar retired — §172 A10.
         if spec.cluster_window_size is not None:
             config["cluster_window_size"] = int(spec.cluster_window_size)
         if spec.cluster_threshold is not None:
@@ -1378,7 +1362,7 @@ class Trainer:
                 checkpoint_path=str(checkpoint_path),
                 encoding_version=resolved_spec.version,
                 encoding_name=registry_spec_from_meta.name,
-                board_size=config["board_size"],
+                board_size=registry_resolve_config(config).trunk_size,
                 cluster_window_size=config.get("cluster_window_size"),
                 cluster_threshold=config.get("cluster_threshold"),
                 source="registry_metadata",
@@ -1406,7 +1390,7 @@ class Trainer:
                     "checkpoint_encoding_resolved",
                     checkpoint_path=str(checkpoint_path),
                     encoding_version=resolved_spec.version,
-                    board_size=config["board_size"],
+                    board_size=registry_resolve_config(config).trunk_size,
                     cluster_window_size=config.get("cluster_window_size"),
                     cluster_threshold=config.get("cluster_threshold"),
                     source="shape_inference",

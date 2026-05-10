@@ -11,7 +11,6 @@ description: K-cluster encoder + PMA pool + global summary token (gated)
 sprint: "§169"
 
 encoding: v6w25
-board_size: 25
 in_channels: 8
 n_actions: 626
 filters: 128
