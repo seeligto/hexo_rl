@@ -1033,9 +1033,23 @@ class Trainer:
         Returns path to the checkpoint file.
         """
         ckpt_path = self.checkpoint_dir / f"checkpoint_{self.step:08d}.pt"
+        # §172 A5.1: stamp encoding metadata at every save site. Resolve via
+        # the registry so renames (v6w25 → ...) propagate uniformly.
+        try:
+            from hexo_rl.encoding.resolvers import resolve_from_config
+            _enc_name = resolve_from_config(self.config).name
+        except Exception as exc:
+            # Resolver failure is itself a bug — surface it loudly. Save still
+            # proceeds without metadata so the run isn't lost; load path will
+            # fall back to shape inference.
+            log.error("checkpoint_encoding_resolve_failed", error=str(exc))
+            _enc_name = None
         save_full_checkpoint(
             self.model, self.optimizer, self.scaler, self.scheduler,
             self.step, self.config, ckpt_path,
+            encoding_name=_enc_name,
+            train_config_path=self.config.get("_config_path"),
+            corpus_sha256=self.config.get("corpus_sha256"),
         )
 
         # Inference-only copy (weights only, no optimizer state).

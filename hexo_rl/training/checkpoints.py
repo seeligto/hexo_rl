@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import datetime as _datetime
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -14,9 +16,69 @@ import structlog
 log = structlog.get_logger()
 
 
+# §172 A5.1 metadata schema version. Bump if a metadata key is renamed/removed.
+CHECKPOINT_METADATA_SCHEMA_VERSION = 1
+
+
 def get_base_model(model: nn.Module) -> nn.Module:
     """Unwrap torch.compile / DataParallel wrapper to get the raw model."""
     return getattr(model, "_orig_mod", model)
+
+
+def _resolve_commit_sha() -> str:
+    """`git rev-parse HEAD` — best-effort.
+
+    Returns "unknown" outside a git checkout (e.g. wheel install, CI fixture
+    sandbox). Never raises; metadata write must not be blocked by VCS state.
+    """
+    try:
+        out = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            cwd=Path(__file__).resolve().parent,
+            timeout=2.0,
+        )
+        return out.decode("ascii", errors="replace").strip() or "unknown"
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+        OSError,
+    ):
+        return "unknown"
+
+
+def build_checkpoint_metadata(
+    *,
+    encoding_name: str,
+    train_config_path: Optional[str | Path] = None,
+    corpus_sha256: Optional[str] = None,
+    model_architecture: str = "HexTacToeNet",
+) -> Dict[str, Any]:
+    """Construct the §172 A2 §8 checkpoint metadata dict.
+
+    `encoding_name` MANDATORY. Caller is responsible for resolving it from
+    the active EncodingSpec (e.g. spec.name) or via
+    `hexo_rl.encoding.resolve_from_config(self.config).name`.
+    """
+    if not encoding_name or not isinstance(encoding_name, str):
+        raise ValueError(
+            f"encoding_name must be a non-empty str; got {encoding_name!r}. "
+            "Resolve via hexo_rl.encoding.resolve_from_config(cfg).name."
+        )
+    return {
+        "encoding_name": encoding_name,
+        "commit_sha": _resolve_commit_sha(),
+        # Timezone-aware UTC; suffix 'Z' kept for ISO 8601 readability.
+        "training_date": _datetime.datetime.now(_datetime.timezone.utc)
+            .replace(tzinfo=None)
+            .isoformat()
+            + "Z",
+        "train_config_path": str(train_config_path) if train_config_path is not None else None,
+        "corpus_sha256": corpus_sha256,
+        "model_architecture": model_architecture,
+        "schema_version": CHECKPOINT_METADATA_SCHEMA_VERSION,
+    }
 
 
 def save_full_checkpoint(
@@ -27,20 +89,47 @@ def save_full_checkpoint(
     step: int,
     config: Dict[str, Any],
     path: Path,
+    *,
+    encoding_name: Optional[str] = None,
+    train_config_path: Optional[str | Path] = None,
+    corpus_sha256: Optional[str] = None,
+    model_architecture: str = "HexTacToeNet",
 ) -> None:
-    """Save a full training checkpoint (model + optimizer + meta)."""
+    """Save a full training checkpoint (model + optimizer + meta).
+
+    §172 A5.1: writes a top-level `metadata` dict per design §8. All new
+    callers MUST pass `encoding_name`; legacy callers (no kwarg) get a
+    DeprecationWarning and the metadata block is omitted — the resulting
+    ckpt resolves via `compat.infer_encoding_from_state_dict` on load.
+    """
     base_model = get_base_model(model)
-    torch.save(
-        {
-            "step": step,
-            "model_state": base_model.state_dict(),
-            "optimizer_state": optimizer.state_dict(),
-            "scaler_state": scaler.state_dict(),
-            "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
-            "config": config,
-        },
-        path,
-    )
+    payload: Dict[str, Any] = {
+        "step": step,
+        "model_state": base_model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "scaler_state": scaler.state_dict(),
+        "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
+        "config": config,
+    }
+    if encoding_name is not None:
+        payload["metadata"] = build_checkpoint_metadata(
+            encoding_name=encoding_name,
+            train_config_path=train_config_path,
+            corpus_sha256=corpus_sha256,
+            model_architecture=model_architecture,
+        )
+    else:
+        # Legacy call site — metadata absent, load path will fall back to
+        # shape inference. Logged so operator can grep for unstamped saves.
+        log.warning(
+            "checkpoint_save_no_encoding_name",
+            path=str(path),
+            msg=(
+                "save_full_checkpoint called without encoding_name; "
+                "metadata block omitted. Update caller per §172 A5.1."
+            ),
+        )
+    torch.save(payload, path)
 
 
 def save_inference_weights(model: nn.Module, path: Path) -> None:
