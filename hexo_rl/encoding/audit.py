@@ -578,6 +578,53 @@ _TEST_FILE_HINTS: tuple[str, ...] = ("test", "fixtures", "fixture")
 # Patterns that look like version tokens or in-string literals; allow.
 _VERSION_RE = re.compile(r"v\d+\b")
 
+# ---------------------------------------------------------------------------
+# New allowlist constants (rules 1–10)
+# ---------------------------------------------------------------------------
+
+# Rule 5 — tunable hyperparameter tokens: skip any line containing these names.
+_TUNABLE_TOKENS: frozenset[str] = frozenset({
+    "c_puct", "fpu_reduction", "dirichlet_alpha", "dirichlet_epsilon",
+    "temp_min", "eta_min", "timeout", "interval", "poll_interval",
+    "figsize", "linewidth", "weight_for",
+})
+# Guard: if a line also contains these tokens, do NOT suppress even if _TUNABLE_TOKENS hit.
+# These are high-risk encoding constants that must still flag.
+_TUNABLE_SKIP_GUARD_TOKENS: frozenset[str] = frozenset({
+    "feature_len", "policy_len",
+})
+
+# Rule 2 — float tolerances like 1e-5, 1e-8, 2.5e-4.
+_FLOAT_TOL_RE = re.compile(r"\d+(?:\.\d+)?[eE]-\d+")
+
+# Rule 4 — range bounds like `0..5`, `0..=8`, `0..19`.
+_RANGE_BOUND_RE = re.compile(r"\b\d+\s*\.\.\s*=?\s*\d+\b")
+
+# Rule 9 — whole-file allowlist (these ARE the sources of truth).
+_FULL_FILE_ALLOWLIST: frozenset[str] = frozenset({
+    "hexo_rl/utils/constants.py",
+})
+
+# Rule 3 — coordinate-call patterns; strip the match before scanning.
+_COORD_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"\bapply_move\s*\(\s*-?\d+\s*,\s*-?\d+\s*\)"),
+    re.compile(r"\bcells\.insert\s*\(\s*\("),
+    re.compile(r"\bset_(?:row|col|diag)_\w+\s*\("),
+    re.compile(r"\(\s*-?\d+\s*,\s*-?\d+\s*\)\.into\(\)"),
+)
+
+# Rule 8 — canonical-define lines are the source of truth; skip them.
+# Matches both `BOARD_SIZE: usize = 19` (no prefix) and `pub const BOARD_SIZE: usize = 19`
+_CANONICAL_DEFINE_RE = re.compile(
+    r"^\s*(?:pub\s+(?:const\s+)?|const\s+)?"
+    r"(BOARD_SIZE|NUM_CELLS|BUFFER_CHANNELS|N_ACTIONS|MARGIN_M|HISTORY_LEN"
+    r"|N_PLANES|N_CHAIN_PLANES|BOARD_H|BOARD_W|TOTAL_CELLS)\s*[:=]"
+)
+
+# Rule 7 — trailing comment patterns.
+_RUST_LINE_COMMENT_RE = re.compile(r"//.*$")
+_PYTHON_LINE_COMMENT_RE = re.compile(r"#.*$")
+
 
 def _is_test_path(path: Path) -> bool:
     parts = [p.lower() for p in path.parts]
@@ -616,6 +663,145 @@ def _hits_outside_strings(line: str) -> list[str]:
     return _NUM_PATTERN.findall(cleaned)
 
 
+# ---------------------------------------------------------------------------
+# Rule 1 — test-range helpers
+# ---------------------------------------------------------------------------
+
+
+def _test_ranges_rust(lines: list[str]) -> frozenset[int]:
+    """Return 1-based line numbers inside #[cfg(test)] mod tests { ... } blocks."""
+    in_test = False
+    brace_depth = 0
+    skip: set[int] = set()
+    for i, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not in_test:
+            if stripped in ("#[cfg(test)]", "#[cfg(test)]") or "mod tests" in stripped:
+                in_test = True
+                brace_depth = stripped.count("{") - stripped.count("}")
+                skip.add(i)
+                continue
+        if in_test:
+            skip.add(i)
+            brace_depth += stripped.count("{") - stripped.count("}")
+            if brace_depth <= 0:
+                in_test = False
+                brace_depth = 0
+    return frozenset(skip)
+
+
+def _test_and_docstring_ranges_python(lines: list[str]) -> frozenset[int]:
+    """Return 1-based line numbers inside class Test*/def test_* bodies and docstrings."""
+    skip: set[int] = set()
+    in_docstring = False
+    in_test_block = False
+    test_indent: Optional[int] = None
+
+    for i, line in enumerate(lines, start=1):
+        stripped = line.strip()
+
+        # --- docstring tracking (rule 6) ---
+        if not in_docstring:
+            if '"""' in stripped:
+                count = stripped.count('"""')
+                if count >= 2:
+                    # Opened and closed on same line — skip just this line.
+                    skip.add(i)
+                else:
+                    in_docstring = True
+                    skip.add(i)
+            elif "'''" in stripped:
+                count = stripped.count("'''")
+                if count >= 2:
+                    skip.add(i)
+                else:
+                    in_docstring = True
+                    skip.add(i)
+        else:
+            skip.add(i)
+            if '"""' in stripped or "'''" in stripped:
+                in_docstring = False
+            continue  # inside docstring — no further analysis needed
+
+        # --- test-block tracking (rule 1) ---
+        if stripped.startswith("class Test") or stripped.startswith("def test_"):
+            # Measure indent of this header line.
+            leading = len(line) - len(line.lstrip())
+            in_test_block = True
+            test_indent = leading
+            skip.add(i)
+        elif in_test_block:
+            current_indent = len(line) - len(line.lstrip()) if stripped else test_indent + 1  # type: ignore[operator]
+            if stripped == "" or current_indent > test_indent:  # type: ignore[operator]
+                skip.add(i)
+            else:
+                in_test_block = False
+                test_indent = None
+
+    return frozenset(skip)
+
+
+# ---------------------------------------------------------------------------
+# Line-level transform helpers (rules 2, 3, 4, 7)
+# ---------------------------------------------------------------------------
+
+
+def _strip_trailing_comment_rust(line: str) -> str:
+    """Remove `// ...` comment from a Rust line (not inside strings)."""
+    # Find `//` that is NOT preceded by a string-open. Simple heuristic:
+    # walk left-to-right tracking string state.
+    in_str = False
+    str_char = ""
+    for idx in range(len(line) - 1):
+        ch = line[idx]
+        if not in_str:
+            if ch in ('"', "'"):
+                in_str = True
+                str_char = ch
+            elif ch == "/" and line[idx + 1] == "/":
+                return line[:idx]
+        else:
+            if ch == str_char and (idx == 0 or line[idx - 1] != "\\"):
+                in_str = False
+    return line
+
+
+def _strip_trailing_comment_python(line: str) -> str:
+    """Remove `# ...` comment from a Python line (not inside strings)."""
+    in_str = False
+    str_char = ""
+    for idx, ch in enumerate(line):
+        if not in_str:
+            if ch in ('"', "'"):
+                in_str = True
+                str_char = ch
+            elif ch == "#":
+                return line[:idx]
+        else:
+            if ch == str_char and (idx == 0 or line[idx - 1] != "\\"):
+                in_str = False
+    return line
+
+
+def _line_has_coord_pattern(line: str) -> bool:
+    """Return True if line contains any coordinate-call pattern (rule 3)."""
+    return any(pat.search(line) for pat in _COORD_PATTERNS)
+
+
+def _apply_line_transforms(line: str, suffix: str) -> str:
+    """Apply strip transforms to reduce false positives before scanning."""
+    # Rule 7: strip trailing comments.
+    if suffix == ".rs":
+        line = _strip_trailing_comment_rust(line)
+    elif suffix == ".py":
+        line = _strip_trailing_comment_python(line)
+    # Rule 2: strip float tolerance patterns.
+    line = _FLOAT_TOL_RE.sub("", line)
+    # Rule 4: strip range bounds.
+    line = _RANGE_BOUND_RE.sub("", line)
+    return line
+
+
 def _scan_file(path: Path) -> list[tuple[int, str, list[str]]]:
     """Return [(lineno, line, hits)] for unjustified hits in `path`."""
     suffix = path.suffix
@@ -623,11 +809,38 @@ def _scan_file(path: Path) -> list[tuple[int, str, list[str]]]:
         text = path.read_text(errors="replace")
     except OSError:
         return []
+    lines = text.splitlines()
+
+    # Pre-compute skip ranges (rule 1).
+    if suffix == ".rs":
+        skip_linenos = _test_ranges_rust(lines)
+    elif suffix == ".py":
+        skip_linenos = _test_and_docstring_ranges_python(lines)
+    else:
+        skip_linenos = frozenset()
+
     out: list[tuple[int, str, list[str]]] = []
-    for i, line in enumerate(text.splitlines(), start=1):
+    for i, line in enumerate(lines, start=1):
+        # Rule 1: skip test/docstring ranges.
+        if i in skip_linenos:
+            continue
+        # Existing allowlist checks (spec., EncodingSpec, comment-only lines).
         if _line_is_allowlisted(line, suffix):
             continue
-        hits = _hits_outside_strings(line)
+        # Rule 5: skip lines with tunable tokens (unless guard tokens also present).
+        if (any(tok in line for tok in _TUNABLE_TOKENS)
+                and not any(g in line for g in _TUNABLE_SKIP_GUARD_TOKENS)):
+            continue
+        # Rule 8: skip canonical-define lines in Rust only (Python canonical source is
+        # constants.py, already handled by rule 9 whole-file allowlist).
+        if suffix == ".rs" and _CANONICAL_DEFINE_RE.match(line):
+            continue
+        # Rule 3: skip lines containing coordinate-call patterns.
+        if _line_has_coord_pattern(line):
+            continue
+        # Apply strip transforms (rules 2, 4, 7).
+        transformed = _apply_line_transforms(line, suffix)
+        hits = _hits_outside_strings(transformed)
         if hits:
             out.append((i, line.rstrip(), hits))
     return out
@@ -655,6 +868,11 @@ def _section_hardcode(report: AuditReport, repo_root: Path) -> None:
             if any(part in _SKIP_DIRS for part in p.parts):
                 continue
             if _is_test_path(p):
+                continue
+            # Rule 9: whole-file allowlist.
+            rel_str = str(p.relative_to(repo_root) if p.is_relative_to(repo_root) else p)
+            # Normalise to forward-slash for cross-platform matching.
+            if rel_str.replace("\\", "/") in _FULL_FILE_ALLOWLIST:
                 continue
             hits = _scan_file(p)
             if hits:
