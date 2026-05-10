@@ -11569,3 +11569,75 @@ using §171 A1+A2 Python plumbing as the foundation.
 
 **Status:** BLOCKED → §172 architectural sprint. `phase4/encoding_registry`
 branch cut. §171 P3 will not resume on `phase4/p171_selfplay_smoke`.
+
+---
+
+## §172 — Encoding Registry Single-Source-of-Truth (architectural sprint)
+
+**Trigger:** §171 P3 plane-export blocker — `Board::to_planes` hard-coded `BOARD_SIZE = 19` even when `Board::with_encoding(v6w25_spec)` set `cluster_window_size = 25`. Symptom: silent shape corruption on v6w25 selfplay. Root cause: scattered encoding state across 23 load-bearing surfaces (engine + Python). Fix: make the registry the single canonical authority.
+
+**Branch:** `phase4/encoding_registry` (cut from `phase4/p171_selfplay_smoke` 2026-05-09).
+
+**Scope:** A1 analysis → A2 design → A3 registry impl → A4 plumbing pass → A5 metadata → A6 round-trip test → A7 α design doc → A8 doc cleanup → A9 review → A10 close-out (this section).
+
+### A1–A9 timeline (2026-05-09 → 2026-05-10)
+
+- **A1** (analysis): 23 load-bearing surfaces inventoried; cleanup inventory captured. Commits 4406f38, e600e61, 2c4c9d8.
+- **A2** (design): single TOML at `engine/src/encoding/registry.toml` is canonical; Lazy `&'static` lookup. Commit f6e38e9.
+- **A3** (registry impl): TOML + Rust `RegistrySpec` + Python `hexo_rl.encoding` module. 4 commits 138768a..8ba6060.
+- **A4** (plumbing): `Board::to_planes` honors spec.board_size; worker dispatch threads EncodingSpec; Python pool/inference/training/eval consume registry; multi-window selfplay BLOCKED at WorkerPool init pending α. 6 commits 756189b..c9d66dc.
+- **A5** (metadata): ckpt + corpus sidecar schemas + audit CLI + backfill helpers. 3 commits 14839dc..7290bf3.
+- **A6** (round-trip): cross-encoding parameterized test (5 nodes PASS). Commit 49a5ced.
+- **A7** (α design doc): `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`. Commit 8ad4011.
+- **A8** (doc cleanup): README + CLAUDE.md + docs tree. 3 commits b96a980..82215c0.
+- **A9** (review): 3 parallel review subagents — load-bearing / design drift / regression. Commit 70f6e8d. Verdict PASS — Phase B unblocked.
+
+### A10 — close-out (2026-05-10)
+
+A9 surfaced 6 deferred items + 1 substantive design drift (§10 scattered-key) + 3 HIGH-RISK silent-corruption hazards in §5 audit. A10 closes all of them via 13 commits.
+
+**Design amend** (`f687602`):
+- §10 amended to consistency-not-equality (operator-confirmed; lets sprint_171_p3_5080.yaml inherit `board_size: 25` from model.yaml without crashing while still catching real mismatches).
+- §11.6 cross-table consistency: 6 invariants joined on `corpus_sha256`.
+- §8 `model_variant` clarified as nullable sub-arch tag.
+
+**Implementation plan** (`36f1d5e`): `docs/superpowers/plans/2026-05-10-encoding-registry-a10-cleanup.md` — 12 bite-sized tasks across 7 phases.
+
+**Implementation commits** (12, all on `phase4/encoding_registry`):
+
+| Commit | Task | Summary |
+|---|---|---|
+| ab760ae | T1 | Stamp `model_variant: None` in `build_checkpoint_metadata` (§8 closure) |
+| ae97525 | T2 | Consolidate migrations under `scripts/migrations/2026_05_09_stamp_artifact_metadata.py` |
+| a133d52 | T3 | Per-function `DeprecationWarning` on `hexo_rl.utils.encoding`; drop dead imports; migrate `eval/checkpoint_loader.py` to registry spec |
+| 2dc086f | T4 | `RegistrySpec` accessors (`n_cells`, `state_stride`, `chain_stride`, `aux_stride`, `policy_stride`, `half`) — replaces deferred `meta.rs` |
+| 1262e0c | T5 | Retire sym_tables `*_V8` const presets (8 test sites migrated; 0 hot-path consumers) |
+| 823e241 | T6 | Option 3 — retire `config["board_size"]`: ~20 readers migrated, 4 writers deleted, variants stripped |
+| e2a73f5 | T7 | Audit §6 cross-table consistency (INV-1..6 joined on `corpus_sha256`) |
+| e83e78a | T8a | §5 allowlist tightened (881 → 201 hits, 77% noise reduction) |
+| f7c2bc8 | T8b | **HIGH-RISK** pyo3 default-kwarg silent v6 fallback fixed in `game_runner/mod.rs` + `inference_bridge.rs`; `N_ACTIONS` v6-scoped |
+| 47b7f17 | T9 | `resolve_corpus_path` / `resolve_anchor_path` helpers + `<auto>` config form |
+| 1595008 | T10 | `model-variant` backfill subcommand on migration script (operator-gated) |
+| 576f69d | T11 | pyo3 `from_py_object` deprecation inline TODO (deferred to pyo3 1.0 upgrade) |
+
+**Bench:**
+- Pre-T6 baseline: MCTS 65,945; NN bs=64 4,887; Worker pos/hr 30,235 (n=5).
+- Post-T6 v1: MCTS 65,006 (-1.4%); NN 4,863 (-0.5%); Worker 26,185 (variance — 28% IQR).
+- Post-T8b: MCTS 60,325 (laptop CPU thermal throttle after 5 benches in 90 min; T8b touches no MCTS code; NN stable to ±0.01% confirms CPU-only effect); NN 4,864 (+0.0%); Worker pos/hr **31,225** (best in sprint, integrated metric).
+- Bench harness gate (Phase 4.5 exit criteria): **PASS** on the post-T8b run.
+
+**HIGH-RISK silent-corruption hazards retired:**
+1. `engine/src/game_runner/mod.rs:159` `SelfPlayRunner::new` — was `feature_len = 8 * 19 * 19, policy_len = 19 * 19 + 1` defaults; now derives from `spec.state_stride()` / `spec.policy_stride()` when encoding provided. Backward-compat for legacy callers.
+2. `engine/src/inference_bridge.rs:295` `InferenceBatcher::new` — same pattern, added `encoding_spec` kwarg.
+3. `engine/src/replay_buffer/sym_tables.rs:26` `N_ACTIONS = 362` — audit confirmed all consumers v6-only; doc comment + Rust unit test pin v8 to `spec.policy_stride() = 625`.
+
+**PyO3 surface change:** added `PyRegistrySpec` class (`engine/src/lib.rs`) exposing the full registry record (`policy_logit_count`, `n_planes`, `state_stride`, `policy_stride`) since legacy 4-field `PyEncodingSpec` lacks those fields. Returned by `EncodingSpec.from_registry(name)`.
+
+**Tests:** Python 1306 passed (was 1266 pre-A10 — +40 new tests across T1/T3/T7/T8a/T8b/T9). Rust 223 passed.
+
+**Operator follow-ups (non-blocking, deferred):**
+- pyo3 0.28 `from_py_object` deprecation (T11): documented in-source; gated by future pyo3 upgrade.
+- Operator runs T10 backfill once: `python -m scripts.migrations.2026_05_09_stamp_artifact_metadata model-variant --root checkpoints/`. Idempotent, dry-runnable.
+- pool.py `to_pyo3()` chain + trainer.py `_legacy_spec_for_registry_name` bridge still call legacy shim (gated by Rust SelfPlayRunner migration to registry spec — out of A10 scope).
+
+**Status:** §172 CLOSED. Phase B unblocked. Next: v7full sustained smoke OR §173 α multi-window engineering, operator's call.
