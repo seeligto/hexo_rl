@@ -6,6 +6,19 @@ Date: 2026-05-09
 
 ---
 
+> **SUPERSEDED 2026-05-09 by [`encoding_alpha_multiwindow_selfplay_design.md`](encoding_alpha_multiwindow_selfplay_design.md)** (§172 A7 full design).
+>
+> Preserved as historical record. The full design corrects two points in
+> this scope memo: (1) MCTS architectural choice (Option iii) is already
+> production code in `engine/src/game_runner/worker_loop.rs:319-411`, not
+> a new design — α is a constants-parameterization pass, not an MCTS
+> redesign; (2) buffer schema is Option a (store K rows per position),
+> not Option b (store board state, recompute K on read) — the as-
+> implemented choice favors trainer GPU saturation over storage size and
+> α inherits it. See full design §1.2 + §3.2 for the corrected picture.
+
+---
+
 ### 1. Why α exists
 
 §171 P3 pre-flight surfaced that v6w25 sustained selfplay is blocked at the Rust plane-projection layer. `Board::to_planes()` (engine/src/board/state.rs:641) hardcodes 18×19×19 output regardless of `cluster_window_size`. v6w25 pretrain works via `get_cluster_views()` (state.rs:703, honors cluster_window_size=25); selfplay calls `state.to_tensor()` (inference.py:53), the 19×19 single-window path only.
