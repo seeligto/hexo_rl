@@ -84,6 +84,51 @@ submission path and record-push path) now call this function directly.
 Chain planes are computed separately via `encode_chain_planes` and stored
 in the replay buffer chain sub-buffer.
 
+These v6 conventions are now codified in the registry; see
+`### Encoding system` below for the parameterized API.
+
+### Encoding system
+
+`engine/src/encoding/registry.toml` is the single source of truth for
+every encoding the codebase supports. Both Rust
+(`engine/src/encoding/`) and Python (`hexo_rl/encoding/`) parse the same
+file and build immutable `EncodingSpec` records keyed by name. Consumers
+read fields off the spec (`spec.board_size`, `spec.n_planes`,
+`spec.cluster_window_size`, `spec.is_multi_window`, `spec.value_pool`,
+`spec.policy_pool`, ...) — module constants no longer carry encoding
+semantics. Variant configs override only `encoding: <name>`; the
+resolver looks up the rest.
+
+Five encodings registered today:
+
+- `v6` — Phase 1–3 anchor. 19×19, 8 planes, single-window, history-only.
+- `v7full` — §150 anchor (17.4% n=500 vs SealBot). Same 19×19 8-plane
+  wire as v6, distinct variant tag.
+- `v6w25` — multi-window K-cluster, 25×25, `cluster_threshold = 8`,
+  `value_pool = "min"`, `policy_pool = "scatter_max"`. Pretrain + eval +
+  matched MCTS canonical (§170 P4 P1); sustained selfplay gated on
+  §173+ α.
+- `v8` — single-bbox 25×25, 11 planes (history + 3 aux), no pass slot
+  (`policy_logit_count = 625`).
+- `v8_canvas_realness` — v8 variant with `canvas_realness` plane
+  appended (§169 A4).
+
+Multi-window dispatch is already production code in the Rust hot path
+(`worker_loop.rs:319-411` — K cluster views per leaf, min-pool value,
+scatter-max policy) and in `hexo_rl/selfplay/inference.py`
+(`LocalInferenceEngine`, used by eval + `OurModelBot`). Sustained
+selfplay for v6w25 / future K-cluster encodings is gated on §173+ α,
+which parameterizes the replay buffer strides + Python trainer paths
+that still hardcode v6 constants.
+
+Audit CLI: `python -m hexo_rl.encoding audit` walks the registry,
+checks Rust/Python parity, and reports drift.
+
+Cross-references: `docs/designs/encoding_registry_design.md` (full §172
+A2 contract — schema, Rust/Python API, ckpt + corpus metadata, audit
+utility, round-trip test). `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`
+(α scope — buffer + trainer parameterization, §173+).
+
 ### Turn structure
 
 Turn 0: player 1 places 1 stone.

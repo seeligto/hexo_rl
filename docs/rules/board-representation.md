@@ -1,5 +1,14 @@
 # Board representation — infinite board strategy
 
+**Registry-aware update (§172):** encoding-derived constants
+(`board_size`, `n_planes`, `cluster_window_size`, `plane_layout`,
+`legal_move_radius`, `value_pool`, `policy_pool`, ...) now live in
+`engine/src/encoding/registry.toml` and are accessed via
+`hexo_rl.encoding.lookup(name)` /
+`engine::encoding::lookup_or_panic(name)`. The conventions described
+below remain accurate for v6 / v6w25 but are no longer hardcoded — see
+`docs/designs/encoding_registry_design.md`.
+
 The board is infinite. The NN requires fixed-size tensors. We resolve this as follows:
 
 **Internal storage (Rust):** `HashMap<(q,r), Player>` — sparse, genuinely unbounded.
