@@ -35,6 +35,14 @@ Read it fully before doing anything. Rule files under `docs/rules/` are topic-sc
 
 ---
 
+## Encoding registry
+
+`engine/src/encoding/registry.toml` is canonical single source of truth for every encoding (v6, v6w25, v7full, v8, v8_canvas_realness, …). Encoding-aware code: check registry first. Lookup via `hexo_rl.encoding.lookup(name)` (Python) or `engine::encoding::lookup_or_panic(name)` (Rust) — don't reinvent fields, don't hardcode plane counts.
+
+New encoding: add 1 TOML entry, run `python -m hexo_rl.encoding audit` to verify Rust/Python parity + invariants. No factory functions, no scattered constants — both parsers read the same TOML at load. Variant configs use `encoding: <name>` only; overrides like `board_size:`, `n_planes:`, `cluster_window_size:` rejected at load. Forward pointers: `docs/designs/encoding_registry_design.md` (registry spec, field semantics, migration policy), `docs/designs/encoding_alpha_multiwindow_selfplay_design.md` (α multi-window K-cluster selfplay, §173+).
+
+---
+
 ## Rule files
 
 Topic-scoped rules under `docs/rules/` — load the file whose trigger matches your task:
@@ -43,6 +51,7 @@ Topic-scoped rules under `docs/rules/` — load the file whose trigger matches y
 - `docs/rules/build-commands.md` — language/toolchain, venv rules, make targets, repository layout
 - `docs/rules/board-representation.md` — infinite board, NN windowing, value aggregation
 - `docs/rules/phase-4-architecture.md` — network, heads, graduation gate, resolved Qs
+- `docs/designs/encoding_registry_design.md` — encoding registry spec: canonical TOML at `engine/src/encoding/registry.toml`, new encodings go in TOML (not factory functions), α multi-window selfplay in `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`
 - `docs/rules/perf-targets.md` — 10-metric bench gate, methodology
 - `docs/rules/bot-integration.md` — submodules, BotProtocol, community URLs
 - `docs/rules/background-tasks.md` — daily scrape, manifest commit policy
