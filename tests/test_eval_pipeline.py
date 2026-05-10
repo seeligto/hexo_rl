@@ -11,10 +11,17 @@ from hexo_rl.eval.colony_detection import (
     _connected_components,
     is_colony_win,
 )
+from hexo_rl.encoding import lookup as _registry_lookup
 from hexo_rl.eval.eval_pipeline import EvalPipeline
 from hexo_rl.eval.gate_logic import _binomial_ci
 from hexo_rl.eval.evaluator import EvalResult
 from hexo_rl.eval.results_db import ResultsDB
+
+# §172 B1 fix — _load_anchor_model now returns (model, spec, label).
+# Mock sites that previously set ``return_value = MagicMock()`` must
+# match the new tuple shape; this fixture spec mirrors the v6 / v7full
+# wire format used by all bootstrap anchors in §150+.
+_FAKE_ANCHOR_RETURN = (MagicMock(), _registry_lookup("v6"), "v6")
 
 
 # ── Binomial CI ──────────────────────────────────────────────────────────────
@@ -461,7 +468,7 @@ def test_bootstrap_floor_blocks_promotion_below_threshold(
     # Fake bootstrap path must exist for the load gate.
     Path(eval_config_with_floor["eval_pipeline"]["opponents"]
          ["bootstrap_anchor"]["path"]).touch()
-    mock_load_anchor.return_value = MagicMock()
+    mock_load_anchor.return_value = _FAKE_ANCHOR_RETURN
 
     pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
     mock_eval = MagicMock()
@@ -496,7 +503,7 @@ def test_bootstrap_floor_allows_promotion_above_threshold(
     import torch
     Path(eval_config_with_floor["eval_pipeline"]["opponents"]
          ["bootstrap_anchor"]["path"]).touch()
-    mock_load_anchor.return_value = MagicMock()
+    mock_load_anchor.return_value = _FAKE_ANCHOR_RETURN
 
     pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
     mock_eval = MagicMock()
@@ -531,7 +538,7 @@ def test_bootstrap_floor_disabled_ignores_anchor_winrate(
     eval_config_with_floor["eval_pipeline"]["gating"]["bootstrap_floor"]["enabled"] = False
     Path(eval_config_with_floor["eval_pipeline"]["opponents"]
          ["bootstrap_anchor"]["path"]).touch()
-    mock_load_anchor.return_value = MagicMock()
+    mock_load_anchor.return_value = _FAKE_ANCHOR_RETURN
 
     pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
     mock_eval = MagicMock()
@@ -599,7 +606,7 @@ def test_bootstrap_anchor_eval_games_includes_floor(
     import torch
     Path(eval_config_with_floor["eval_pipeline"]["opponents"]
          ["bootstrap_anchor"]["path"]).touch()
-    mock_load_anchor.return_value = MagicMock()
+    mock_load_anchor.return_value = _FAKE_ANCHOR_RETURN
 
     pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
     mock_eval = MagicMock()

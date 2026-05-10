@@ -14,42 +14,36 @@ from typing import Any, Dict
 
 import torch
 
+from hexo_rl.encoding import EncodingSpec
 from hexo_rl.eval.bradley_terry import compute_ratings
+from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
 from hexo_rl.eval.display import print_colony_win_breakdown, print_match_result, print_ratings_table
 from hexo_rl.eval.evaluator import Evaluator
 from hexo_rl.eval.gate_logic import GateConfig, _binomial_ci, evaluate_gate
 from hexo_rl.eval.reporting import plot_ratings_curve
 from hexo_rl.eval.results_db import ResultsDB
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
 
 
-def _load_anchor_model(path: Path, device: torch.device) -> HexTacToeNet:
-    """Load a frozen anchor checkpoint as a HexTacToeNet for eval-only play.
+def _load_anchor_model(
+    path: Path, device: torch.device,
+) -> tuple[HexTacToeNet, EncodingSpec, str]:
+    """Load a frozen anchor checkpoint for eval-only play.
 
-    Strips ``_orig_mod.`` / ``module.`` prefixes (torch.compile / DDP) via
-    ``normalize_model_state_dict_keys`` and infers ``in_channels`` from the
-    trunk input conv weight shape so the network instance matches whatever the
-    bootstrap was trained at.
+    Delegates to ``load_model_with_encoding`` (checkpoint_loader), which
+    branches between the full ``normalize_model_state_dict_keys`` path
+    (v6/v6w25/v7full) and the lighter strip-prefix path (v8) so the
+    ``tower.*`` ↔ ``trunk.tower.*`` aliases injected by the v6 normalizer
+    do not break ``strict=True`` loads against the current ``HexTacToeNet``.
+
+    Returns ``(model, spec, label)`` so the caller can log + verify the
+    detected encoding. Cross-encoding anchors are NOT auto-rejected —
+    §171 P3 precedent has the operator deliberately re-pinning the anchor
+    across encoding migrations — but the caller MUST log the label so
+    silent drift is observable. See ``project_171_p2_complete`` for the
+    cross-encoding caveat semantics.
     """
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    state: dict = ckpt
-    for key in ("model_state", "model_state_dict", "state_dict"):
-        if isinstance(ckpt, dict) and key in ckpt and isinstance(ckpt[key], dict):
-            state = ckpt[key]
-            break
-
-    normalized = normalize_model_state_dict_keys(state)
-
-    in_ch = int(normalized["trunk.input_conv.weight"].shape[1])
-    model = HexTacToeNet(
-        board_size=19, in_channels=in_ch, res_blocks=12, filters=128,
-        se_reduction_ratio=4,
-    )
-    model.load_state_dict(normalized, strict=True)
-    model.to(device)
-    model.eval()
-    return model
+    return load_model_with_encoding(path, device)
 
 try:
     import structlog
@@ -273,8 +267,18 @@ class EvalPipeline:
             else:
                 if self._bootstrap_anchor_model is None:
                     log.info("bootstrap_anchor_loading", path=str(anchor_path))
-                    self._bootstrap_anchor_model = _load_anchor_model(
+                    anchor_model, anchor_spec, anchor_label = _load_anchor_model(
                         anchor_path, self.device,
+                    )
+                    self._bootstrap_anchor_model = anchor_model
+                    log.info(
+                        "bootstrap_anchor_loaded",
+                        path=str(anchor_path),
+                        encoding_label=anchor_label,
+                        encoding_name=anchor_spec.name,
+                        n_planes=anchor_spec.n_planes,
+                        board_size=anchor_spec.board_size,
+                        policy_logit_count=anchor_spec.policy_logit_count,
                     )
                     # Persistent player row, keyed by checkpoint filename so
                     # the BT-rating and colony-win histories survive across
