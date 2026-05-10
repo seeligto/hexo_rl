@@ -37,22 +37,32 @@ def _make_legacy_ckpt(path: Path) -> None:
     torch.save(_v6_state_dict(), path)
 
 
-def _make_stamped_ckpt(path: Path, encoding_name: str = "v6") -> None:
+def _make_stamped_ckpt(
+    path: Path,
+    encoding_name: str = "v6",
+    corpus_sha256: str | None = None,
+) -> None:
     """Write a checkpoint with metadata + model_state."""
+    meta: dict = {
+        "encoding_name": encoding_name,
+        "schema_version": 1,
+    }
+    if corpus_sha256 is not None:
+        meta["corpus_sha256"] = corpus_sha256
     ckpt = {
         "model_state": _v6_state_dict(),
-        "metadata": {
-            "encoding_name": encoding_name,
-            "schema_version": 1,
-        },
+        "metadata": meta,
     }
     torch.save(ckpt, path)
 
 
 def _make_corpus_with_sidecar(
     npz_path: Path, encoding_name: str = "v6"
-) -> None:
-    """Write a tiny .npz + matching sidecar with correct sha256."""
+) -> str:
+    """Write a tiny .npz + matching sidecar with correct sha256.
+
+    Returns the sha256 hex string of the npz so callers can stamp ckpts.
+    """
     import numpy as np
 
     np.savez(npz_path, x=np.zeros((2, 3), dtype=np.float32))
@@ -68,6 +78,7 @@ def _make_corpus_with_sidecar(
             }
         )
     )
+    return sha
 
 
 def _make_variant(yaml_path: Path, encoding_name: str = "v6") -> None:
@@ -101,8 +112,8 @@ def test_audit_clean_returns_0(tmp_path: Path):
     corpora.mkdir()
     variants.mkdir()
 
-    _make_stamped_ckpt(ckpts / "bootstrap_v6.pt", encoding_name="v6")
-    _make_corpus_with_sidecar(corpora / "bootstrap_corpus_v6.npz", encoding_name="v6")
+    corpus_sha = _make_corpus_with_sidecar(corpora / "bootstrap_corpus_v6.npz", encoding_name="v6")
+    _make_stamped_ckpt(ckpts / "bootstrap_v6.pt", encoding_name="v6", corpus_sha256=corpus_sha)
     _make_variant(variants / "clean_v6.yaml", encoding_name="v6")
 
     rep = audit(ckpts, corpora, variants, repo_root=src_root)
@@ -190,8 +201,8 @@ def test_audit_main_cli_exit_code(tmp_path: Path, capsys):
     corpora.mkdir()
     variants.mkdir()
 
-    _make_stamped_ckpt(ckpts / "bootstrap_v6.pt", encoding_name="v6")
-    _make_corpus_with_sidecar(corpora / "bootstrap_corpus_v6.npz", encoding_name="v6")
+    corpus_sha = _make_corpus_with_sidecar(corpora / "bootstrap_corpus_v6.npz", encoding_name="v6")
+    _make_stamped_ckpt(ckpts / "bootstrap_v6.pt", encoding_name="v6", corpus_sha256=corpus_sha)
     _make_variant(variants / "clean_v6.yaml", encoding_name="v6")
 
     code = main(

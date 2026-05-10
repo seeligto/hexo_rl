@@ -33,7 +33,7 @@ import warnings
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal, Optional, Sequence
 
 from hexo_rl.encoding import (
     EncodingRegistryError,
@@ -122,6 +122,22 @@ class AuditReport:
         return "\n".join(out)
 
 
+@dataclass(frozen=True)
+class CheckpointEntry:
+    path: Path
+    encoding_name: Optional[str]   # from metadata block
+    corpus_sha256: Optional[str]   # from metadata block
+    has_metadata: bool
+
+
+@dataclass(frozen=True)
+class CorpusEntry:
+    path: Path
+    encoding_name: Optional[str]   # from sidecar
+    sha256: Optional[str]          # actual file sha (computed)
+    has_sidecar: bool
+
+
 def _render_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
     if not rows:
         return "  (empty)"
@@ -200,7 +216,11 @@ def _extract_state_dict(obj: object) -> dict | None:
     return None
 
 
-def _section_checkpoints(report: AuditReport, ckpt_dir: Path) -> None:
+def _section_checkpoints(
+    report: AuditReport,
+    ckpt_dir: Path,
+    out_entries: list["CheckpointEntry"],
+) -> None:
     sect = AuditSection(
         title="§2 Checkpoints",
         headers=("path", "declared", "inferred", "status"),
@@ -240,8 +260,23 @@ def _section_checkpoints(report: AuditReport, ckpt_dir: Path) -> None:
             continue
 
         meta = obj.get("metadata") if isinstance(obj, dict) else None
-        if isinstance(meta, dict) and isinstance(meta.get("encoding_name"), str):
-            declared = meta["encoding_name"]
+        enc_name: Optional[str] = None
+        corpus_sha: Optional[str] = None
+        has_meta = isinstance(meta, dict)
+        if has_meta:
+            enc_name = meta.get("encoding_name") if isinstance(meta.get("encoding_name"), str) else None  # type: ignore[union-attr]
+            corpus_sha = meta.get("corpus_sha256") if isinstance(meta.get("corpus_sha256"), str) else None  # type: ignore[union-attr]
+            if enc_name:
+                declared = enc_name
+
+        out_entries.append(
+            CheckpointEntry(
+                path=p,
+                encoding_name=enc_name,
+                corpus_sha256=corpus_sha,
+                has_metadata=has_meta,
+            )
+        )
 
         sd = _extract_state_dict(obj) or {}
         try:
@@ -321,7 +356,11 @@ def _sha256_of_file(p: Path, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
-def _section_corpora(report: AuditReport, corpora_dir: Path) -> None:
+def _section_corpora(
+    report: AuditReport,
+    corpora_dir: Path,
+    out_entries: list["CorpusEntry"],
+) -> None:
     sect = AuditSection(
         title="§3 Corpora",
         headers=("path", "declared", "inferred", "sha", "status"),
@@ -344,7 +383,10 @@ def _section_corpora(report: AuditReport, corpora_dir: Path) -> None:
         declared = "-"
         sha_status = "no-sidecar"
         registered = sorted(_load_registry())
-        if sidecar.is_file():
+        actual_sha: Optional[str] = None
+        sidecar_enc: Optional[str] = None
+        has_sidecar = sidecar.is_file()
+        if has_sidecar:
             try:
                 meta = json.loads(sidecar.read_text())
                 if not isinstance(meta, dict):
@@ -352,10 +394,11 @@ def _section_corpora(report: AuditReport, corpora_dir: Path) -> None:
                 if "encoding_name" not in meta:
                     raise ValueError("missing encoding_name")
                 declared = str(meta["encoding_name"])
+                sidecar_enc = declared
                 expected_sha = meta.get("sha256")
                 if isinstance(expected_sha, str):
-                    actual = _sha256_of_file(p)
-                    if actual == expected_sha:
+                    actual_sha = _sha256_of_file(p)
+                    if actual_sha == expected_sha:
                         sha_status = "OK"
                     else:
                         sha_status = "MISMATCH"
@@ -363,10 +406,12 @@ def _section_corpora(report: AuditReport, corpora_dir: Path) -> None:
                             "error",
                             "§3",
                             f"{rel}: sidecar sha256={expected_sha[:12]}… "
-                            f"actual={actual[:12]}…",
+                            f"actual={actual_sha[:12]}…",
                         )
                 else:
                     sha_status = "no-sha-in-sidecar"
+                    # Still compute actual sha for cross-table joins.
+                    actual_sha = _sha256_of_file(p)
                     report.add_finding(
                         "warn",
                         "§3",
@@ -388,11 +433,22 @@ def _section_corpora(report: AuditReport, corpora_dir: Path) -> None:
                 declared = "PARSE-ERR"
                 sha_status = "?"
         else:
+            # No sidecar — still compute sha for cross-table join.
+            actual_sha = _sha256_of_file(p)
             report.add_finding(
                 "warn",
                 "§3",
                 f"{rel}: no sidecar (.metadata.json); stamp via §172 A5",
             )
+
+        out_entries.append(
+            CorpusEntry(
+                path=p,
+                encoding_name=sidecar_enc,
+                sha256=actual_sha,
+                has_sidecar=has_sidecar,
+            )
+        )
 
         inferred = _infer_corpus_from_filename(p.name)
         if declared not in ("-", "PARSE-ERR") and inferred != declared:
@@ -643,6 +699,131 @@ def _section_hardcode(report: AuditReport, repo_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Section 6 — Cross-table consistency (ckpts ↔ corpora via sha256)
+# ---------------------------------------------------------------------------
+
+
+def _section_cross_table(
+    report: AuditReport,
+    ckpts: list[CheckpointEntry],
+    corpora: list[CorpusEntry],
+    corpora_dir: Path,
+) -> None:
+    """INV-1..6 per amended design §11.6.
+
+    Joins ckpt.corpus_sha256 → corpus.sha256 (actual file hash).
+    Emits per-row findings plus an INV-6 sweep for orphan corpora.
+    """
+    sect = AuditSection(
+        title="§6 Cross-table consistency",
+        headers=("checkpoint", "ckpt_enc", "corpus_sha", "corpus_enc", "status"),
+    )
+
+    # Skip rule: corpora_dir directory is empty (no entries at all) AND at
+    # least one ckpt cites a corpus_sha256.  An empty dir means there is
+    # genuinely nothing to join against; a dir that has files but no .npz
+    # is a different situation (sha simply resolves to nothing — INV-2).
+    _dir_empty = corpora_dir.is_dir() and not any(corpora_dir.iterdir())
+    if _dir_empty and any(ck.corpus_sha256 for ck in ckpts):
+        report.add_finding(
+            "warn",
+            "§6",
+            "§6 skipped — no corpora under --corpora-dir to join against",
+        )
+        report.sections["§6"] = sect
+        return
+
+    by_sha: dict[str, CorpusEntry] = {
+        c.sha256: c for c in corpora if c.sha256 is not None
+    }
+
+    referenced_shas: set[str] = set()
+
+    for ck in ckpts:
+        # Use path stem as display name (keep short).
+        rel = ck.path.name
+
+        if not ck.has_metadata:  # INV-4
+            sect.rows.append([rel, "-", "-", "-", "NO-META"])
+            report.add_finding(
+                "warn",
+                "§6",
+                f"{rel}: no metadata — cannot cross-reference corpus",
+            )
+            continue
+
+        if ck.corpus_sha256 is None:  # INV-3
+            sect.rows.append(
+                [rel, ck.encoding_name or "-", "-", "-", "NO-CORPUS-SHA"]
+            )
+            report.add_finding(
+                "warn",
+                "§6",
+                f"{rel}: metadata lacks corpus_sha256",
+            )
+            continue
+
+        match = by_sha.get(ck.corpus_sha256)
+        if match is None:  # INV-2
+            sha_short = ck.corpus_sha256[:12] + "…"
+            sect.rows.append(
+                [rel, ck.encoding_name or "-", sha_short, "?", "ORPHAN-SHA"]
+            )
+            report.add_finding(
+                "error",
+                "§6",
+                f"{rel}: corpus_sha256={sha_short} matches no corpus",
+            )
+            continue
+
+        referenced_shas.add(match.sha256)  # type: ignore[arg-type]
+        sha_short = match.sha256[:12] + "…"  # type: ignore[index]
+
+        if match.encoding_name != ck.encoding_name:  # INV-1
+            sect.rows.append(
+                [
+                    rel,
+                    ck.encoding_name or "-",
+                    sha_short,
+                    match.encoding_name or "-",
+                    "ENC-MISMATCH",
+                ]
+            )
+            report.add_finding(
+                "error",
+                "§6",
+                f"{rel}: ckpt encoding={ck.encoding_name!r} but corpus encoding={match.encoding_name!r}",
+            )
+        else:  # INV-5
+            sect.rows.append(
+                [
+                    rel,
+                    ck.encoding_name or "-",
+                    sha_short,
+                    match.encoding_name or "-",
+                    "OK",
+                ]
+            )
+            report.add_finding(
+                "info",
+                "§6",
+                f"{rel} ↔ {match.path.name}: {ck.encoding_name}",
+            )
+
+    # INV-6 — orphan corpora (sha unreferenced by any stamped ckpt).
+    for co in corpora:
+        if co.sha256 is not None and co.sha256 not in referenced_shas:
+            sev: Severity = "warn" if report.strict else "info"
+            report.add_finding(
+                sev,
+                "§6",
+                f"{co.path.name}: orphan corpus — unused by any stamped checkpoint",
+            )
+
+    report.sections["§6"] = sect
+
+
+# ---------------------------------------------------------------------------
 # Top-level audit + CLI
 # ---------------------------------------------------------------------------
 
@@ -659,18 +840,28 @@ def _repo_root() -> Path:
 def audit(
     checkpoints_dir: Path,
     corpora_dir: Path,
-    variants_dir: Path,
+    variants_dir: Optional[Path] = None,
     *,
     strict: bool = False,
     repo_root: Path | None = None,
 ) -> AuditReport:
-    """Run the full 5-section audit; return AuditReport."""
+    """Run the full 6-section audit; return AuditReport."""
     report = AuditReport(strict=strict)
     _section_registered(report)
-    _section_checkpoints(report, checkpoints_dir)
-    _section_corpora(report, corpora_dir)
-    _section_variants(report, variants_dir)
+    ckpt_entries: list[CheckpointEntry] = []
+    corpus_entries: list[CorpusEntry] = []
+    _section_checkpoints(report, checkpoints_dir, ckpt_entries)
+    _section_corpora(report, corpora_dir, corpus_entries)
+    if variants_dir is None:
+        # Try repo-root-relative default; fall back gracefully to a non-existent path
+        # (§4 skips cleanly when dir missing).
+        _rroot = repo_root or _repo_root()
+        _effective_variants = _rroot / "configs" / "variants"
+    else:
+        _effective_variants = variants_dir
+    _section_variants(report, _effective_variants)
     _section_hardcode(report, repo_root or _repo_root())
+    _section_cross_table(report, ckpt_entries, corpus_entries, corpora_dir)
     return report
 
 
