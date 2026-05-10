@@ -67,8 +67,12 @@ encoding: v7full
 training_steps_per_game: 4.0
 max_train_burst: 8
 
-# Tighten eval so at least one round fires inside this 1200-step smoke.
-eval_interval: 1000
+# §172 B2 sustained — 5K cadence.  B1-redo SMOKE used 1000 to fire ≥1 round
+# inside the 1200-step budget; carrying that over to a 30K-step sustained
+# would burn 30 eval rounds × ~45 min = 22.5 hr just in eval mode (eval
+# pauses the selfplay pool).  Flat 5K → 6 rounds total = ~4.5 hr eval.
+# First round at step 5K aligns with the §170 milestone-bin schedule.
+eval_interval: 5000
 
 selfplay:
   gumbel_mcts: false
@@ -108,6 +112,10 @@ eval_pipeline:
       stride: 1
       n_games: 20               # smoke: trim
     argmax_n:
+      # §170 P4 P1 DRIFT detector arm.  Now wired (§172 B2 prep) — was
+      # silently ignored prior because eval_pipeline did not parse the
+      # opponent name.  Model plays with n_sims=1 (≈ policy argmax);
+      # SealBot uses time_limit inherited from sealbot_cfg unless overridden.
       enabled: true
       stride: 1
       n_games: 20

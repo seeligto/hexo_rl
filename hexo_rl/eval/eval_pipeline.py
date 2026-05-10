@@ -82,6 +82,12 @@ class EvalPipeline:
         # collapses with the same pathology and so blocks the promotion.
         self.bootstrap_anchor_cfg = opp.get("bootstrap_anchor", {})
 
+        # §170 P4 P1 DRIFT detector — argmax-only (single-sim) WR vs SealBot.
+        # Compared against MCTS-128 WR (e.g. bootstrap_anchor) the divergence
+        # signals value-head failure with intact policy head.  Default off
+        # for backward compat; variants opt in via ``argmax_n.enabled: true``.
+        self.argmax_n_cfg = opp.get("argmax_n", {})
+
         self.gating_cfg = cfg.get("gating", {})
         # §155 T2 — bootstrap-floor gate.  When enabled, promotion requires
         # ``wr_bootstrap_anchor >= bootstrap_floor.min_winrate`` in addition
@@ -107,6 +113,7 @@ class EvalPipeline:
             ("sealbot", self.sealbot_cfg),
             ("random", self.random_cfg),
             ("bootstrap_anchor", self.bootstrap_anchor_cfg),
+            ("argmax_n", self.argmax_n_cfg),
         ):
             if "stride" in opp_cfg:
                 s = opp_cfg["stride"]
@@ -124,6 +131,15 @@ class EvalPipeline:
         )
         self._random_pid = self.db.get_or_create_player(
             "random_bot", "random",
+        )
+        # Persistent player row for argmax_n (SealBot-vs-argmax-only).  Time
+        # limit defaults to sealbot_cfg's so the comparison is fair.
+        argmax_tl = self.argmax_n_cfg.get(
+            "time_limit", self.sealbot_cfg.get("time_limit", 0.5),
+        )
+        self._argmax_n_pid = self.db.get_or_create_player(
+            f"SealBot_argmax(t={argmax_tl})", "argmax_n",
+            {"time_limit": argmax_tl, "model_sims": 1},
         )
 
         # Stride gating is pure ``round_idx % stride == 0``. A prior queue-based
@@ -239,6 +255,39 @@ class EvalPipeline:
             results["ci_sealbot"] = (ci_lo, ci_hi)
             results["colony_wins_sealbot"] = er.colony_wins
             results["sealbot_gate_passed"] = er.win_rate >= 0.5
+            results["eval_games"] += n
+
+        # ── vs SealBot (argmax-only) ──────────────────────────────────
+        # §170 P4 P1 DRIFT detector.  Model plays with n_sims=1 (≈ policy
+        # argmax); SealBot plays at the same time_limit as the regular
+        # sealbot opponent.  When wr_argmax_n rises above ~18% but the
+        # MCTS-128 floor (wr_bootstrap_anchor) falls below ~28% the policy
+        # head is over-fitting while the value head is broken — halt the
+        # run before promotion damage.
+        if (
+            self.argmax_n_cfg.get("enabled", False)
+            and _should_run("argmax_n", self.argmax_n_cfg)
+        ):
+            n = int(self.argmax_n_cfg.get("n_games", 20))
+            tl = float(self.argmax_n_cfg.get(
+                "time_limit", self.sealbot_cfg.get("time_limit", 0.5),
+            ))
+            er = evaluator.evaluate_vs_argmax_sealbot(n_games=n, time_limit=tl)
+            ci_lo, ci_hi = _binomial_ci(er.win_count, n)
+            self.db.insert_match(
+                train_step, ckpt_pid, self._argmax_n_pid,
+                er.win_count, n - er.win_count - er.draw_count, er.draw_count,
+                n, er.win_rate, ci_lo, ci_hi,
+                colony_wins_a=er.colony_wins,
+                run_id=self.run_id,
+            )
+            print_match_result(
+                ckpt_name, f"SealBot_argmax(t={tl})",
+                er.win_count, n - er.win_count - er.draw_count, n, ci_lo, ci_hi,
+            )
+            results["wr_argmax_n"] = er.win_rate
+            results["ci_argmax_n"] = (ci_lo, ci_hi)
+            results["colony_wins_argmax_n"] = er.colony_wins
             results["eval_games"] += n
 
         # ── vs Bootstrap Anchor (multi-anchor floor) ──────────────────

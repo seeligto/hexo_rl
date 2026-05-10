@@ -239,6 +239,26 @@ class Evaluator:
         sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
         return self.evaluate(sealbot, n_games, sims, phase="sealbot")
 
+    def evaluate_vs_argmax_sealbot(
+        self,
+        n_games: int = 20,
+        time_limit: float = 0.5,
+        sealbot: Optional[BotProtocol] = None,
+    ) -> EvalResult:
+        """Argmax-only model vs SealBot — n_sims=1 collapses MCTS to prior-argmax.
+
+        §170 P4 P1 DRIFT detector arm. With n_sims=1 the PUCT loop visits
+        exactly one root child (the unvisited action with the largest prior),
+        so ``best_action`` returns approximately ``argmax(policy_head)``.
+        Compared against full-MCTS WR (e.g. bootstrap_anchor MCTS-128) this
+        isolates policy-head behaviour from value-head behaviour — divergence
+        between the two is the §170 value-drift signature.
+        """
+        if sealbot is None:
+            from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
+            sealbot = SealBotBot(time_limit=time_limit)
+        return self.evaluate(sealbot, n_games, model_sims=1, phase="argmax_n")
+
     def evaluate_vs_model(
         self,
         opponent_model: HexTacToeNet,
