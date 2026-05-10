@@ -21,6 +21,7 @@ use numpy::{
 
 use board::{Board as RustBoard, Player, BOARD_SIZE, encode_chain_planes as rust_encode_chain_planes, TOTAL_CELLS};
 use crate::encoding::EncodingSpec as RustEncodingSpec;
+use crate::encoding::RegistrySpec as RustRegistrySpec;
 use game_runner::SelfPlayRunner;
 use inference_bridge::InferenceBatcher;
 use replay_buffer::ReplayBuffer;
@@ -76,6 +77,75 @@ impl PyEncodingSpec {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.inner.hash(&mut h);
         h.finish()
+    }
+
+    /// §172 A10 T8b — registry-backed lookup. Returns a `PyRegistrySpec`
+    /// (full-schema record incl. policy_logit_count + n_planes) so v8 callers
+    /// can derive feature_len / policy_len at the PyO3 boundary without
+    /// re-implementing the Python-side schema. The legacy 4-field
+    /// `EncodingSpec(...)` constructor cannot represent v8 (no cluster
+    /// window), so `from_registry("v8")` is the v8 entry point.
+    #[classmethod]
+    pub fn from_registry(_cls: &Bound<'_, pyo3::types::PyType>, name: &str) -> PyResult<PyRegistrySpec> {
+        match crate::encoding::lookup(name) {
+            Some(spec) => Ok(PyRegistrySpec { inner: spec }),
+            None => {
+                let mut known: Vec<&str> =
+                    crate::encoding::all_specs().map(|s| s.name).collect();
+                known.sort();
+                Err(PyValueError::new_err(format!(
+                    "EncodingSpec.from_registry: unknown encoding {:?}; registered: {:?}",
+                    name, known
+                )))
+            }
+        }
+    }
+}
+
+// ── Python-visible RegistrySpec (read-only registry record) ───────────────────
+
+/// Python-visible RegistrySpec — wraps `&'static crate::encoding::RegistrySpec`.
+/// Returned by `EncodingSpec.from_registry(name)`. Carries derived shape
+/// accessors (`state_stride()`, `policy_stride()`) so PyO3 callers
+/// constructing `SelfPlayRunner` / `InferenceBatcher` can derive
+/// `feature_len` / `policy_len` from the canonical registry instead of
+/// duplicating the per-encoding shape table.
+///
+/// Read-only — clone is `Copy` (just the &'static pointer).
+#[pyclass(name = "RegistrySpec")]
+#[derive(Clone, Copy)]
+pub struct PyRegistrySpec {
+    inner: &'static RustRegistrySpec,
+}
+
+#[pymethods]
+impl PyRegistrySpec {
+    #[getter] pub fn name(&self) -> &'static str { self.inner.name }
+    #[getter] pub fn board_size(&self) -> usize { self.inner.board_size }
+    #[getter] pub fn n_planes(&self) -> usize { self.inner.n_planes }
+    #[getter] pub fn policy_logit_count(&self) -> usize { self.inner.policy_logit_count }
+    #[getter] pub fn has_pass_slot(&self) -> bool { self.inner.has_pass_slot }
+    #[getter] pub fn is_multi_window(&self) -> bool { self.inner.is_multi_window }
+
+    /// State plane stride = n_planes × board_size².
+    pub fn state_stride(&self) -> usize { self.inner.state_stride() }
+    /// Policy logit count = `policy_logit_count` (mirror of the field).
+    pub fn policy_stride(&self) -> usize { self.inner.policy_stride() }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            "RegistrySpec(name={:?}, board_size={}, n_planes={}, policy_logit_count={}, is_multi_window={})",
+            self.inner.name, self.inner.board_size, self.inner.n_planes,
+            self.inner.policy_logit_count, self.inner.is_multi_window,
+        )
+    }
+}
+
+impl PyRegistrySpec {
+    /// Crate-internal accessor — used by `SelfPlayRunner::new` /
+    /// `InferenceBatcher::new` to read the static pointer.
+    pub(crate) fn inner(&self) -> &'static RustRegistrySpec {
+        self.inner
     }
 }
 
@@ -887,6 +957,7 @@ fn take_mcts_pool_overflow_count() -> u64 {
 fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoard>()?;
     m.add_class::<PyEncodingSpec>()?;
+    m.add_class::<PyRegistrySpec>()?;
     m.add_class::<PyMCTSTree>()?;
     m.add_class::<InferenceBatcher>()?;
     m.add_class::<SelfPlayRunner>()?;

@@ -337,8 +337,8 @@ fn test_rotation_disabled_by_default_in_runner() {
         1,            // leaf_batch_size
         1.5,          // c_puct
         0.25,         // fpu_reduction
-        8 * 19 * 19,  // feature_len
-        19 * 19 + 1,  // policy_len
+        Some(8 * 19 * 19),  // feature_len
+        Some(19 * 19 + 1),  // policy_len
         0.0,          // fast_prob
         1,            // fast_sims
         1,            // standard_sims
@@ -367,15 +367,16 @@ fn test_rotation_disabled_by_default_in_runner() {
         false,        // selfplay_rotation_enabled (eval default)
         false,        // legal_move_radius_jitter
         None,         // encoding (§171 P3 A1: v6 default)
+        None,         // encoding_spec (§172 A10 T8b)
     )
     .expect("runner ctor with rotation=false must succeed");
     assert!(!runner_default.is_running());
 
     // Explicit rotation=true must also accept (training-loop path).
     let runner_rot = SelfPlayRunner::new(
-        1, 0, 1, 1, 1.5, 0.25, 8 * 19 * 19, 19 * 19 + 1, 0.0, 1, 1, 15, -0.1, true,
+        1, 0, 1, 1, 1.5, 0.25, Some(8 * 19 * 19), Some(19 * 19 + 1), 0.0, 1, 1, 15, -0.1, true,
         0.3, 0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-        10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, true, false, None,
+        10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, true, false, None, None,
     )
     .expect("runner ctor with rotation=true must succeed");
     assert!(!runner_rot.is_running());

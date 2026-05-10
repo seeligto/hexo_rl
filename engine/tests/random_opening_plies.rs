@@ -35,8 +35,8 @@ fn make_runner(
         1,                                  // leaf_batch_size
         1.5,                                // c_puct
         0.25,                               // fpu_reduction
-        18 * BOARD_SIZE * BOARD_SIZE,       // feature_len
-        BOARD_SIZE * BOARD_SIZE + 1,        // policy_len
+        Some(18 * BOARD_SIZE * BOARD_SIZE), // feature_len
+        Some(BOARD_SIZE * BOARD_SIZE + 1),  // policy_len
         0.0,                                // fast_prob (mutex)
         1,                                  // fast_sims
         1,                                  // standard_sims
@@ -65,6 +65,7 @@ fn make_runner(
         false,                              // selfplay_rotation_enabled
         false,                              // legal_move_radius_jitter
         None,                               // encoding (§171 P3 A1: v6 default)
+        None,                               // encoding_spec (§172 A10 T8b)
     )
     .expect("runner construction should succeed")
 }

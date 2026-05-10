@@ -23,7 +23,20 @@ pub const CHAIN_PLANE_OFFSET: usize = 0;
 pub const BOARD_H:   usize = 19;
 pub const BOARD_W:   usize = 19;
 pub const N_CELLS:   usize = BOARD_H * BOARD_W; // 361
-pub const N_ACTIONS: usize = N_CELLS + 1;       // 362 (pass move at index 361)
+/// **v6-specific** policy length (361 cells + 1 pass slot).
+///
+/// §172 A10 T8b — DO NOT use this const on v8 / v6w25 / canvas-realness paths.
+/// v8 has a 25×25 board with NO pass slot (625 logits), v6w25 has 626. Using
+/// `N_ACTIONS` outside the legacy v6 replay-buffer codepaths produces silent
+/// shape divergence (v8 caller writes 362-wide policy buffer into a 625-wide
+/// scatter destination → either truncation or out-of-bounds depending on the
+/// codepath).
+///
+/// All in-tree callers as of T8b are v6-bound (`replay_buffer::push`,
+/// `replay_buffer::sample`, `replay_buffer::mod`). v8 callers MUST derive
+/// from `crate::encoding::RegistrySpec::policy_logit_count` /
+/// `policy_stride()` instead.
+pub const N_ACTIONS: usize = N_CELLS + 1;       // 362 (pass move at index 361; v6 only)
 pub const N_SYMS:    usize = 12;
 
 // State stride per buffer slot (f16 bits) — 8 planes × 361 cells = 2888.
@@ -624,5 +637,26 @@ mod tests {
                 assert_eq!(tables.src_plane_lookup[s][p], p);
             }
         }
+    }
+
+    /// §172 A10 T8b HIGH-3 — pin v8 path uses spec.policy_stride() (625),
+    /// NOT the v6-specific `N_ACTIONS` const (362). Regression: any
+    /// out-of-replay-buffer path that imports `N_ACTIONS` for v8 silently
+    /// truncates the 25×25 policy → 19×19+1.
+    #[test]
+    fn test_v8_policy_stride_not_n_actions() {
+        let s = crate::encoding::registry::lookup_or_panic("v8");
+        assert_eq!(s.policy_stride(), 625);
+        assert_ne!(
+            s.policy_stride(),
+            N_ACTIONS,
+            "v8 must not silently use v6 N_ACTIONS=362"
+        );
+    }
+
+    #[test]
+    fn test_v6_policy_stride_matches_n_actions() {
+        let s = crate::encoding::registry::lookup_or_panic("v6");
+        assert_eq!(s.policy_stride(), N_ACTIONS);
     }
 }
