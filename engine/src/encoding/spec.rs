@@ -229,6 +229,39 @@ impl RegistrySpec {
     }
 }
 
+impl RegistrySpec {
+    /// Total cells = board_size².
+    pub fn n_cells(&self) -> usize {
+        self.board_size * self.board_size
+    }
+
+    /// (board_size − 1) / 2 — board half-extent for axial→canvas mapping.
+    pub fn half(&self) -> i32 {
+        (self.board_size as i32 - 1) / 2
+    }
+
+    /// State plane stride = n_planes × n_cells.
+    pub fn state_stride(&self) -> usize {
+        self.n_planes * self.n_cells()
+    }
+
+    /// Chain plane stride = N_CHAIN_PLANES × n_cells.
+    pub fn chain_stride(&self) -> usize {
+        crate::replay_buffer::sym_tables::N_CHAIN_PLANES * self.n_cells()
+    }
+
+    /// Aux plane stride = n_cells (single aux plane).
+    pub fn aux_stride(&self) -> usize {
+        self.n_cells()
+    }
+
+    /// Policy stride is `policy_logit_count` (already a struct field — provided as
+    /// accessor for parity with the strides above).
+    pub fn policy_stride(&self) -> usize {
+        self.policy_logit_count
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +339,25 @@ mod tests {
         );
         assert_eq!(PolicyPool::parse("none").unwrap(), PolicyPool::None);
         assert!(PolicyPool::parse("bogus").is_err());
+    }
+
+    #[test]
+    fn test_v8_accessors() {
+        let s = crate::encoding::registry::lookup_or_panic("v8");
+        assert_eq!(s.n_cells(), 625);
+        assert_eq!(s.half(), 12);
+        assert_eq!(s.state_stride(), 11 * 625);
+        assert_eq!(s.chain_stride(), 6 * 625);
+        assert_eq!(s.aux_stride(), 625);
+        assert_eq!(s.policy_stride(), 625);
+    }
+
+    #[test]
+    fn test_v6_accessors() {
+        let s = crate::encoding::registry::lookup_or_panic("v6");
+        assert_eq!(s.n_cells(), 361);
+        assert_eq!(s.half(), 9);
+        assert_eq!(s.state_stride(), 8 * 361);
+        assert_eq!(s.policy_stride(), 362);
     }
 }
