@@ -35,10 +35,13 @@ Examples:
     python -m scripts.migrations.2026_05_09_stamp_artifact_metadata corpora --dir data/ --manifest manifest.yaml
     python -m scripts.migrations.2026_05_09_stamp_artifact_metadata model-variant --dir checkpoints/ --dry-run
     python -m scripts.migrations.2026_05_09_stamp_artifact_metadata model-variant --dir checkpoints/
+    python -m scripts.migrations.2026_05_09_stamp_artifact_metadata model-variant --dir checkpoints/ --manifest manifest.json --dry-run
+    python -m scripts.migrations.2026_05_09_stamp_artifact_metadata model-variant --dir checkpoints/ --manifest manifest.json
 """
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import pathlib
 import sys
@@ -48,6 +51,62 @@ from typing import Any, Mapping
 _ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+# Dead checkpoint directories deliberately left unstamped (§173 T10 post-close).
+_DEAD_DIR_PATTERNS: tuple[str, ...] = (
+    "checkpoints/broken/*",
+    "checkpoints/collapsed_*/*",
+    "checkpoints/olod_20k/*",
+    "checkpoints/chain_planes*/*",
+    "checkpoints/v9_s3/*",
+    "checkpoints/pretrain/*",
+    "checkpoints/w4c_smoke_v7_laptop_preflight/*",
+)
+
+
+def _is_dead_dir(path: pathlib.Path) -> bool:
+    """Return True if `path` lives under a deliberately-unstamped dead dir."""
+    parts = [p.lower() for p in path.parts]
+    return (
+        "broken" in parts
+        or any(p.startswith("collapsed_") for p in parts)
+        or "olod_20k" in parts
+        or any(p.startswith("chain_planes") for p in parts)
+        or "v9_s3" in parts
+        or "pretrain" in parts
+        or "w4c_smoke_v7_laptop_preflight" in parts
+    )
+
+
+def _load_manifest_json(path: pathlib.Path) -> dict[str, str]:
+    """Read {<checkpoint_path>: <encoding_name>} mapping from JSON.
+
+    Validates every encoding name against the registry at load time.
+    """
+    raw = json.loads(path.read_text())
+    if not isinstance(raw, dict):
+        raise SystemExit(f"manifest root must be a JSON object: {path}")
+    from hexo_rl.encoding import lookup as _registry_lookup
+    from hexo_rl.encoding.registry import EncodingRegistryError
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if not isinstance(k, str) or not isinstance(v, str):
+            raise SystemExit(
+                f"manifest entries must be str:str — got {k!r}:{v!r}"
+            )
+        try:
+            _registry_lookup(v)
+        except EncodingRegistryError as exc:
+            raise SystemExit(
+                f"manifest references unknown encoding {v!r} for path {k!r}: {exc}"
+            )
+        out[k] = v
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -355,22 +414,39 @@ def _cmd_corpora(args: argparse.Namespace) -> int:
 def _cmd_model_variant(args: argparse.Namespace) -> int:
     """Add 'model_variant: None' to any stamped ckpt missing the field.
 
-    Idempotent — skips ckpts that already have the key OR lack metadata
-    entirely (those are the A5 backfill's responsibility, not ours).
+    With --manifest, also stamps un-stamped checkpoints whose encoding is
+    declared explicitly (manifest > filename glob > shape probe).
+
+    Idempotent — skips ckpts that already have the key; skips dead dirs.
     """
     import torch
+    from hexo_rl.encoding import compat
+    from hexo_rl.encoding.registry import EncodingRegistryError
+    from hexo_rl.training.checkpoints import build_checkpoint_metadata
 
     root = pathlib.Path(args.dir)
     if not root.exists():
         print(f"error: {root} does not exist", file=sys.stderr)
         return 2
 
+    manifest_provided = args.manifest is not None
+    manifest: dict[str, str] = {}
+    if manifest_provided:
+        manifest = _load_manifest_json(pathlib.Path(args.manifest))
+
     n_stamped = 0
+    n_stamped_full = 0
     n_skipped_already = 0
+    n_skipped_dead = 0
     n_skipped_no_meta = 0
     n_failed = 0
 
     for path in sorted(root.rglob("*.pt")):
+        if _is_dead_dir(path):
+            print(f"[SKIP] {path}: dead dir allowlist")
+            n_skipped_dead += 1
+            continue
+
         try:
             ck = torch.load(path, map_location="cpu", weights_only=False)
         except Exception as exc:
@@ -378,36 +454,80 @@ def _cmd_model_variant(args: argparse.Namespace) -> int:
             n_failed += 1
             continue
 
-        if not isinstance(ck, dict):
+        # Case A: already stamped with encoding_name.
+        if isinstance(ck, dict):
+            meta = ck.get("metadata")
+            if isinstance(meta, dict) and isinstance(meta.get("encoding_name"), str):
+                if "model_variant" in meta:
+                    n_skipped_already += 1
+                    continue
+                meta["model_variant"] = None
+                if args.dry_run:
+                    print(f"[DRY] would stamp model_variant=None on {path}")
+                else:
+                    torch.save(ck, path)
+                    print(f"[OK]  stamped model_variant=None on {path}")
+                n_stamped += 1
+                continue
+
+        # Case B: un-stamped (no metadata or no encoding_name).
+        # Only attempt full backfill when --manifest is supplied.
+        if not manifest_provided:
             n_skipped_no_meta += 1
             continue
 
-        meta = ck.get("metadata")
-        if not isinstance(meta, dict):
-            n_skipped_no_meta += 1
-            continue
-
-        # Only act on ckpts that are already stamped (encoding_name present).
-        # Un-stamped ckpts are A5's responsibility.
-        if not isinstance(meta.get("encoding_name"), str):
-            n_skipped_no_meta += 1
-            continue
-
-        if "model_variant" in meta:
-            n_skipped_already += 1
-            continue
-
-        meta["model_variant"] = None
-        if args.dry_run:
-            print(f"[DRY] would stamp model_variant=None on {path}")
+        # Resolve encoding: manifest > filename > shape.
+        enc_name: str | None = None
+        source = "manifest"
+        path_key = str(path)
+        if path_key in manifest:
+            enc_name = manifest[path_key]
         else:
-            torch.save(ck, path)
-            print(f"[OK]  stamped model_variant=None on {path}")
-        n_stamped += 1
+            sd = _ckpt_extract_state_dict(ck)
+            if sd is not None:
+                try:
+                    enc_name = compat.infer_encoding_from_state_dict(sd, str(path))
+                    source = "inferred"
+                except EncodingRegistryError:
+                    enc_name = None
+
+        if enc_name is None:
+            print(f"[ERR] {path}: no metadata, no manifest, no inference — encoding indeterminate")
+            n_failed += 1
+            continue
+
+        if args.dry_run:
+            print(f"[DRY] would stamp full metadata ({source}) {enc_name} on {path}")
+            n_stamped_full += 1
+            continue
+
+        # Build full metadata block.
+        new_meta = build_checkpoint_metadata(encoding_name=enc_name)
+        new_meta["model_variant"] = None
+
+        if isinstance(ck, dict) and "model_state" in ck:
+            out: dict[str, Any] = dict(ck)
+            out["metadata"] = new_meta
+        else:
+            sd = _ckpt_extract_state_dict(ck) or {}
+            out = {
+                "step": None,
+                "model_state": dict(sd) if isinstance(sd, Mapping) else sd,
+                "optimizer_state": None,
+                "scaler_state": None,
+                "scheduler_state": None,
+                "config": None,
+                "metadata": new_meta,
+            }
+        torch.save(out, path)
+        print(f"[OK]  stamped full metadata ({source}) {enc_name} on {path}")
+        n_stamped_full += 1
 
     print(
         f"\nSummary: stamped={n_stamped}, "
+        f"stamped_full={n_stamped_full}, "
         f"skipped_already_has={n_skipped_already}, "
+        f"skipped_dead={n_skipped_dead}, "
         f"skipped_no_meta={n_skipped_no_meta}, "
         f"failed={n_failed}"
     )
@@ -484,15 +604,23 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "For each .pt file under --dir that already has metadata "
             "(encoding_name present) but lacks model_variant, stamps "
-            "model_variant=None. Idempotent. Skips un-stamped ckpts "
-            "(A5 backfill responsibility). §172 A10 close-out."
+            "model_variant=None. Idempotent.\n\n"
+            "With --manifest, also stamps un-stamped checkpoints whose "
+            "encoding is declared explicitly (manifest > filename glob > "
+            "shape probe). Skips dead training dirs per internal allowlist."
         ),
     )
     p_mv.add_argument(
-        "--dir",
+        "--dir", "--root",
         type=pathlib.Path,
         default=pathlib.Path("checkpoints"),
+        dest="dir",
         help="directory to scan recursively for .pt files (default: ./checkpoints)",
+    )
+    p_mv.add_argument(
+        "--manifest",
+        default=None,
+        help="optional JSON with {<checkpoint_path>: <encoding_name>}",
     )
     p_mv.add_argument(
         "--dry-run",
