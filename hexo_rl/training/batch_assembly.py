@@ -238,12 +238,33 @@ def _augment_recent_rows(
     n = len(s_r)
     board_size = int(s_r.shape[-1])
     n_cells = board_size * board_size
-    scatters = get_policy_scatters(board_size)
+    has_pass = p_r.shape[1] == n_cells + 1
+    scatters = get_policy_scatters(board_size, has_pass=has_pass)
     sym_indices = np.random.randint(0, 12, size=n)
 
     states_f32 = s_r.astype(np.float32)
-    states_f32 = _engine.apply_symmetries_batch(states_f32, sym_indices.tolist())
-    s_r = states_f32.astype(np.float16)
+    if board_size == 19:
+        # v6 fast path — Rust kernel is hardcoded to 19×19.
+        states_f32 = _engine.apply_symmetries_batch(states_f32, sym_indices.tolist())
+        s_r = states_f32.astype(np.float16)
+    else:
+        # v6w25 / v8 pure-numpy scatter (Rust apply_symmetries_batch is v6-only).
+        C = states_f32.shape[1]
+        spatial = n_cells
+        states_flat = states_f32.reshape(n, C, spatial)
+        augmented = np.empty_like(states_flat)
+        policy_aug = np.empty_like(p_r)
+        for sym in range(12):
+            mask_idx = np.where(sym_indices == sym)[0]
+            if mask_idx.size == 0:
+                continue
+            sc = scatters[sym]
+            state_scatter = sc[:spatial] if has_pass else sc
+            augmented[mask_idx] = states_flat[mask_idx][:, :, state_scatter]
+            policy_aug[mask_idx] = p_r[mask_idx][:, sc]
+        states_f32 = augmented.reshape(n, C, board_size, board_size)
+        s_r = states_f32.astype(np.float16)
+        # chain_planes recomputed below (same for both paths)
 
     c_r_aug = np.empty_like(c_r)
     for i in range(n):
