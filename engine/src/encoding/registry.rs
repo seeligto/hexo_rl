@@ -381,6 +381,28 @@ mod tests {
     }
 
     #[test]
+    fn test_registry_loads_v7() {
+        let s = lookup("v7").expect("v7 present");
+        assert_eq!(s.board_size, 19);
+        assert_eq!(s.n_planes, 8);
+        assert_eq!(s.policy_logit_count, 362);
+        assert!(!s.is_multi_window);
+        assert!(s.has_pass_slot);
+        assert_eq!(s.schema_version, 2);
+    }
+
+    #[test]
+    fn test_registry_loads_v7e30() {
+        let s = lookup("v7e30").expect("v7e30 present");
+        assert_eq!(s.board_size, 19);
+        assert_eq!(s.n_planes, 8);
+        assert_eq!(s.policy_logit_count, 362);
+        assert!(!s.is_multi_window);
+        assert!(s.has_pass_slot);
+        assert_eq!(s.schema_version, 2);
+    }
+
+    #[test]
     fn test_registry_loads_v8() {
         let s = lookup("v8").expect("v8 present");
         assert_eq!(s.board_size, 25);
@@ -407,7 +429,7 @@ mod tests {
     #[test]
     fn test_registry_loads_all_known_encodings() {
         let names: Vec<&str> = all_specs().map(|s| s.name).collect();
-        for expected in ["v6", "v6w25", "v7full", "v8", "v8_canvas_realness"] {
+        for expected in ["v6", "v6w25", "v7full", "v7", "v7e30", "v8", "v8_canvas_realness"] {
             assert!(
                 names.contains(&expected),
                 "missing {:?} in {:?}",
@@ -417,8 +439,8 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            5,
-            "expected exactly 5 encodings, got {:?}",
+            7,
+            "expected exactly 7 encodings, got {:?}",
             names
         );
     }
@@ -455,9 +477,9 @@ mod tests {
     }
 
     #[test]
-    fn test_all_specs_includes_all_5() {
+    fn test_all_specs_includes_all_7() {
         let count = all_specs().count();
-        assert_eq!(count, 5);
+        assert_eq!(count, 7);
     }
 
     #[test]

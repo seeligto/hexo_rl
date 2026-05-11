@@ -103,6 +103,59 @@ schema_version          = 2
 notes                   = "§150 anchor (17.4% n=500 vs SealBot); selfplay-canonical pending α."
 
 # ---------------------------------------------------------------------------
+# v7 — pre-v7full pretrain anchor, 8 planes, 19×19, single-window.
+# §150 predecessor; identical wire format to v6/v7full.
+# ---------------------------------------------------------------------------
+[encodings.v7]
+board_size              = 19
+trunk_size              = 19
+cluster_window_size     = "none"
+cluster_threshold       = "none"
+legal_move_radius       = 5
+n_planes                = 8
+plane_layout            = [
+  "current_player_t0", "current_player_t-1", "current_player_t-2", "current_player_t-3",
+  "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
+]
+policy_logit_count      = 362            # 19*19 + 1
+has_pass_slot           = true
+is_multi_window         = false
+value_pool              = "none"
+policy_pool             = "none"
+sym_table_id            = "size_19"
+# kept_plane_indices: canonical X+history, O+history (see header comment).
+kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
+n_source_planes         = 18
+schema_version          = 2
+notes                   = "§150 predecessor anchor; pre-v7full pretrain. Wire format identical to v6."
+
+# ---------------------------------------------------------------------------
+# v7e30 — §150 30-epoch v7 retrain, identical schema to v7.
+# ---------------------------------------------------------------------------
+[encodings.v7e30]
+board_size              = 19
+trunk_size              = 19
+cluster_window_size     = "none"
+cluster_threshold       = "none"
+legal_move_radius       = 5
+n_planes                = 8
+plane_layout            = [
+  "current_player_t0", "current_player_t-1", "current_player_t-2", "current_player_t-3",
+  "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
+]
+policy_logit_count      = 362            # 19*19 + 1
+has_pass_slot           = true
+is_multi_window         = false
+value_pool              = "none"
+policy_pool             = "none"
+sym_table_id            = "size_19"
+# kept_plane_indices: canonical X+history, O+history (see header comment).
+kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
+n_source_planes         = 18
+schema_version          = 2
+notes                   = "§150 30-epoch v7 retrain; identical wire format to v7/v7full."
+
+# ---------------------------------------------------------------------------
 # v6w25 — K-cluster 25×25 windows, matched-perception variant.
 # §170 P4 P1 canonical for pretrain+eval+matched-MCTS. Selfplay deferred to α.
 # board_size widens to 25 per A2 §3.2 + A1 §6.11 (canvas semantics: canvas
