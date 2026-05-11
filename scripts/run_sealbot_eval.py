@@ -180,7 +180,7 @@ def main() -> int:
         )
     print(
         f"[eval] checkpoint={ckpt_path.name}  encoding={encoding_label} "
-        f"(spec.version={spec.version}, board={spec.board_size})  "
+        f"(spec.name={spec.name}, board={spec.board_size})  "
         f"filters={model.filters} res_blocks={model.res_blocks} "
         f"n_actions={model.n_actions}",
         flush=True,
