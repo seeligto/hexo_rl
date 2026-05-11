@@ -144,7 +144,8 @@ def main() -> None:
 
     own_t = None
     if use_own:
-        own_t = decode_ownership(own_raw, device)
+        _board_size = int(combined_config.get("board_size", 19))
+        own_t = decode_ownership(own_raw, device, board_size=_board_size)
 
     with autocast(device_type=device.type, dtype=amp_dtype, enabled=fp16):
         fwd = trainer.model(states_t, ownership=use_own, chain=chain_weight > 0.0)

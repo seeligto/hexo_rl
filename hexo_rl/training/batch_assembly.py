@@ -236,7 +236,9 @@ def _augment_recent_rows(
     from hexo_rl.augment.luts import get_policy_scatters
 
     n = len(s_r)
-    scatters = get_policy_scatters()
+    board_size = int(s_r.shape[-1])
+    n_cells = board_size * board_size
+    scatters = get_policy_scatters(board_size)
     sym_indices = np.random.randint(0, 12, size=n)
 
     states_f32 = s_r.astype(np.float32)
@@ -255,8 +257,8 @@ def _augment_recent_rows(
     for i in range(n):
         lut = scatters[int(sym_indices[i])]
         scattered_p[i]   = p_r[i][lut]
-        scattered_own[i] = own_r_flat[i][lut[:361]]
-        scattered_wl[i]  = wl_r_flat[i][lut[:361]]
+        scattered_own[i] = own_r_flat[i][lut[:n_cells]]
+        scattered_wl[i]  = wl_r_flat[i][lut[:n_cells]]
 
     return s_r, c_r_aug, scattered_p, scattered_own, scattered_wl
 
@@ -344,8 +346,9 @@ def assemble_mixed_batch(
         s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
             s_r, c_r, p_r, own_r_flat, wl_r_flat, augment
         )
-        own_r = own_r_flat.reshape(-1, 19, 19)
-        wl_r  = wl_r_flat.reshape(-1, 19, 19)
+        _bs = int(s_r.shape[-1])
+        own_r = own_r_flat.reshape(-1, _bs, _bs)
+        wl_r  = wl_r_flat.reshape(-1, _bs, _bs)
         s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), augment)
         n_recent_actual = len(s_r)
         pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre),
@@ -408,8 +411,9 @@ def _sample_selfplay(
         s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
             s_r, c_r, p_r, own_r_flat, wl_r_flat, augment
         )
-        own_r = own_r_flat.reshape(-1, 19, 19)
-        wl_r  = wl_r_flat.reshape(-1, 19, 19)
+        _bs = int(s_r.shape[-1])
+        own_r = own_r_flat.reshape(-1, _bs, _bs)
+        wl_r  = wl_r_flat.reshape(-1, _bs, _bs)
         s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_u), augment)
         return (
             np.concatenate([s_r, s_u], axis=0),

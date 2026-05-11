@@ -80,7 +80,6 @@ board_size: 25
 
 training_steps_per_game: 4.0
 max_train_burst: 8
-recency_weight: 0.0      # disable RecentBuffer for A8 smoke — hardcoded 19×19 shapes in Python path
 
 # Single end-of-smoke eval at step 5000. Per
 # feedback_smoke_eval_interval_min_2500 — eval_interval ≥ 2500. Setting at
