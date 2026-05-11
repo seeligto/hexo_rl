@@ -106,20 +106,19 @@ Five encodings registered today:
   wire as v6, distinct variant tag.
 - `v6w25` — multi-window K-cluster, 25×25, `cluster_threshold = 8`,
   `value_pool = "min"`, `policy_pool = "scatter_max"`. Pretrain + eval +
-  matched MCTS canonical (§170 P4 P1); sustained selfplay gated on
-  §173+ α.
+  matched MCTS + selfplay canonical (§170 P4 P1; α operational post-§173).
 - `v8` — single-bbox 25×25, 11 planes (history + 3 aux), no pass slot
   (`policy_logit_count = 625`).
 - `v8_canvas_realness` — v8 variant with `canvas_realness` plane
   appended (§169 A4).
 
-Multi-window dispatch is already production code in the Rust hot path
+Multi-window dispatch is production code in the Rust hot path
 (`worker_loop.rs:319-411` — K cluster views per leaf, min-pool value,
 scatter-max policy) and in `hexo_rl/selfplay/inference.py`
-(`LocalInferenceEngine`, used by eval + `OurModelBot`). Sustained
-selfplay for v6w25 / future K-cluster encodings is gated on §173+ α,
-which parameterizes the replay buffer strides + Python trainer paths
-that still hardcode v6 constants.
+(`LocalInferenceEngine`, used by eval + `OurModelBot`). Post-§173 α,
+all buffer strides and trainer paths read geometry from `EncodingSpec`;
+v6w25 sustained selfplay is operational. See §173 sprint log entry for
+bench gate results and §174 prerequisites.
 
 Audit CLI: `python -m hexo_rl.encoding audit` walks the registry,
 checks Rust/Python parity, and reports drift.
