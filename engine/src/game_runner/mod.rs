@@ -218,9 +218,10 @@ impl SelfPlayRunner {
             (None, None, Some(spec)) => (spec.state_stride(), spec.policy_stride()),
             (Some(f), None, Some(spec)) => (f, spec.policy_stride()),
             (None, Some(p), Some(spec)) => (spec.state_stride(), p),
-            (None, None, None) => (8 * 19 * 19, 19 * 19 + 1),
-            (Some(f), None, None) => (f, 19 * 19 + 1),
-            (None, Some(p), None) => (8 * 19 * 19, p),
+            // LEGACY: v6 fallback for backward-compat PyO3 callers without explicit encoding. See §172 A10 + §173 A7. // audit: legacy-v6-fallback
+            (None, None, None) => (8 * 19 * 19, 19 * 19 + 1), // audit: legacy-v6-fallback
+            (Some(f), None, None) => (f, 19 * 19 + 1), // audit: legacy-v6-fallback
+            (None, Some(p), None) => (8 * 19 * 19, p), // audit: legacy-v6-fallback
         };
         // Effective standard-search sim budget: `standard_sims` wins, else
         // `n_simulations`. Reject zero on the *effective* value — a silent
