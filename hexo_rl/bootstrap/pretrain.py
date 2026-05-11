@@ -644,6 +644,62 @@ class BootstrapTrainer:
         return ckpt_path
 
 
+# ── Fine-tune freeze (§171 A4 P2-reopen C) ────────────────────────────────────
+
+def _apply_finetune_freeze(
+    base_model,
+    *,
+    freeze_trunk_entry: bool,
+    unfreeze_blocks: Optional[set],
+) -> Dict[str, int]:
+    """Apply §171 A4 fine-tune freeze pattern.
+
+    - `freeze_trunk_entry=True`: requires_grad=False on `trunk.input_conv`
+      (PartialConv2d under canvas_realness) + `trunk.input_gn`.
+    - `unfreeze_blocks={i,...}`: requires_grad=False on every
+      `trunk.tower[k]` where k not in the set. Heads (policy_head /
+      opp_reply_head / value_fc1 / value_fc2 / value_var) left
+      trainable — they are not touched by this function so their
+      requires_grad stays at whatever the model construction set
+      (True for KataGo head + linear value, never frozen here).
+
+    Returns counts for logging. AdamW weight_decay drift on frozen params
+    is bounded by exp(-lr * wd * steps); at lr=5e-5, wd=1e-4, 3000 steps
+    that is ~1.5e-5 — negligible. Optimizer state is not rebuilt; frozen
+    params receive zero-gradient Adam updates (m_hat, v_hat → 0).
+    """
+    trunk = base_model.trunk
+    tower = trunk.tower
+
+    if freeze_trunk_entry:
+        for p in trunk.input_conv.parameters():
+            p.requires_grad = False
+        for p in trunk.input_gn.parameters():
+            p.requires_grad = False
+
+    if unfreeze_blocks is not None:
+        n_blocks = len(tower)
+        for idx in unfreeze_blocks:
+            if not (0 <= idx < n_blocks):
+                raise ValueError(
+                    f"--unfreeze-blocks entry {idx} out of [0, {n_blocks}); "
+                    f"trunk has {n_blocks} blocks"
+                )
+        for i, block in enumerate(tower):
+            keep = i in unfreeze_blocks
+            for p in block.parameters():
+                p.requires_grad = keep
+
+    total = sum(p.numel() for p in base_model.parameters())
+    trainable = sum(p.numel() for p in base_model.parameters() if p.requires_grad)
+    return {
+        "freeze_trunk_entry": int(bool(freeze_trunk_entry)),
+        "unfreeze_blocks": sorted(unfreeze_blocks) if unfreeze_blocks else [],
+        "total_params": int(total),
+        "trainable_params": int(trainable),
+    }
+
+
 # ── Validation ────────────────────────────────────────────────────────────────
 
 def validate(ckpt_path: Path, device: torch.device) -> None:
@@ -899,6 +955,19 @@ def pretrain() -> None:
                         help="Override corpus NPZ path. Defaults: v6 → "
                              "data/bootstrap_corpus.npz, v8 → "
                              "data/bootstrap_corpus_v8.npz.")
+    parser.add_argument(
+        "--freeze-trunk-entry", action="store_true",
+        help="§171 A4 fine-tune — freeze trunk.input_conv (PartialConv2d when "
+             "canvas_realness) + trunk.input_gn so the trunk-entry stays at the "
+             "weights learned during canvas_realness pretraining.",
+    )
+    parser.add_argument(
+        "--unfreeze-blocks", type=str, default=None,
+        help="§171 A4 fine-tune — CSV indices of trunk.tower blocks to keep "
+             "trainable (e.g. '8,9,10,11'). All other blocks freeze; heads "
+             "(policy/opp_reply/value/value_var) stay trainable. Unset = all "
+             "blocks remain trainable.",
+    )
     args = parser.parse_args()
 
     # Load configs
@@ -914,11 +983,26 @@ def pretrain() -> None:
 
     # ── v8 / variant overrides — CLI takes precedence over model.yaml ──────
     if args.encoding is not None:
-        config.setdefault("encoding", {})["version"] = args.encoding
-    encoding: str = str(config.get("encoding", {}).get("version", "v6"))
+        config["encoding"] = args.encoding
+        # §172 A10 T6 — `board_size` / `in_channels` were retired from configs in
+        # favor of registry lookup, but `configs/model.yaml` still carries the v6
+        # defaults so legacy code paths keep working. CLI override means the
+        # registry is canonical; drop scattered keys so resolve_from_config does
+        # not raise on the now-stale model.yaml values.
+        for stale_key in ("board_size", "in_channels", "n_planes",
+                          "cluster_window_size", "cluster_threshold",
+                          "legal_move_radius"):
+            config.pop(stale_key, None)
+    enc_section = config.get("encoding")
+    if isinstance(enc_section, str):
+        encoding = enc_section
+    elif isinstance(enc_section, dict):
+        encoding = str(enc_section.get("version", "v6"))
+    else:
+        encoding = "v6"
     if encoding not in ("v6", "v6w25", "v8"):
         raise ValueError(
-            f"encoding.version must be 'v6', 'v6w25' or 'v8', got {encoding!r}"
+            f"encoding must be 'v6', 'v6w25' or 'v8', got {encoding!r}"
         )
 
     # Encoding-specific shape overrides. v6 uses model.yaml defaults (19 / 8 /
@@ -1194,10 +1278,15 @@ def pretrain() -> None:
         resume_path = Path(args.resume)
         log.info("resume_loading", path=str(resume_path))
         resume_ckpt = torch.load(resume_path, map_location=device, weights_only=False)
-        get_base_model(trainer.model).load_state_dict(resume_ckpt["model_state"])
-        trainer.optimizer.load_state_dict(resume_ckpt["optimizer_state"])
-        if resume_ckpt.get("scaler_state") is not None:
-            trainer.scaler.load_state_dict(resume_ckpt["scaler_state"])
+        weights_only = isinstance(resume_ckpt, dict) and "model_state" not in resume_ckpt
+        if weights_only:
+            log.info("resume_weights_only_mode", reason="ckpt has no model_state key — treating as inference state_dict; optimizer/scaler reset")
+            get_base_model(trainer.model).load_state_dict(resume_ckpt)
+        else:
+            get_base_model(trainer.model).load_state_dict(resume_ckpt["model_state"])
+            trainer.optimizer.load_state_dict(resume_ckpt["optimizer_state"])
+            if resume_ckpt.get("scaler_state") is not None:
+                trainer.scaler.load_state_dict(resume_ckpt["scaler_state"])
         new_peak = float(args.lr_peak) if args.lr_peak is not None else float(config.get("lr", 0.002))
         new_eta_min = float(args.eta_min) if args.eta_min is not None else 1e-5
         for g in trainer.optimizer.param_groups:
@@ -1208,7 +1297,25 @@ def pretrain() -> None:
         )
         log.info("resume_complete", new_peak_lr=new_peak,
                  cosine_t_max=total_pretrain_steps,
-                 prev_step=int(resume_ckpt.get("step", 0)))
+                 prev_step=int(resume_ckpt.get("step", 0)) if not weights_only else 0,
+                 weights_only=weights_only)
+
+    if args.freeze_trunk_entry or args.unfreeze_blocks is not None:
+        unfreeze_set: Optional[set[int]] = None
+        if args.unfreeze_blocks is not None:
+            unfreeze_set = {int(s) for s in args.unfreeze_blocks.split(",") if s.strip()}
+        freeze_report = _apply_finetune_freeze(
+            get_base_model(trainer.model),
+            freeze_trunk_entry=args.freeze_trunk_entry,
+            unfreeze_blocks=unfreeze_set,
+        )
+        log.info("finetune_freeze_applied", **freeze_report)
+        console.print(
+            f"[yellow]§171 fine-tune freeze:[/yellow] "
+            f"trainable_params={freeze_report['trainable_params']:,} / "
+            f"{freeze_report['total_params']:,} "
+            f"({100.0 * freeze_report['trainable_params'] / freeze_report['total_params']:.1f}%)"
+        )
 
     # Training loop
     console.print(
