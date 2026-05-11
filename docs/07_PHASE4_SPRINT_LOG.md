@@ -11641,3 +11641,83 @@ A9 surfaced 6 deferred items + 1 substantive design drift (§10 scattered-key) +
 - pool.py `to_pyo3()` chain + trainer.py `_legacy_spec_for_registry_name` bridge still call legacy shim (gated by Rust SelfPlayRunner migration to registry spec — out of A10 scope).
 
 **Status:** §172 CLOSED. Phase B unblocked. Next: v7full sustained smoke OR §173 α multi-window engineering, operator's call.
+
+---
+
+## §171 A4 P2-reopen C — distribution-shift fine-tune side-arm — 2026-05-11
+
+**Branch:** `phase4/encoding_registry`
+**Verdict:** **DEAD** (E2 confirmed cleanly).
+**Investigation report:** `reports/investigations/sprint_171_a4_finetune_p2reopen_2026-05-11.md` (gitignored — local-only per project convention; pre-registered hypotheses + thresholds locked before launch).
+
+### Pre-registered scope (locked 2026-05-11 before launch)
+
+- **Hypothesis E1 (ALIVE):** the §169 P0 SPATIAL_RICH reframing is correct; the matched-MCTS collapse is a head-calibration problem that a small adversarial-mix fine-tune can fix. Threshold: MCTS-64 WR > 8% AND Wilson-95 lower > 5%.
+- **Hypothesis E2 (DEAD):** spatial features ARE the bottleneck; head + top-4-block fine-tune cannot recover MCTS signal. Threshold: MCTS-64 WR ≤ 2% AND Wilson-95 upper < 4%.
+- **MARGINAL bin:** WR in [2%, 8%]; would require deeper unfreeze before condemning A4.
+
+### Recipe
+
+| Knob | Value |
+|---|---|
+| Resume ckpt | `checkpoints/ablation_169/A4_canvas_realness.pt` (inference state-dict; new weights-only resume path) |
+| Mixed corpus | 95% bootstrap_v8_canvas_realness (347,142) + 5% adversarial_v8 (12,781) via `WeightedRandomSampler` rescale (no physical replication; `scale_adv = 0.022712`); n=359,923 |
+| Steps | 3000 (--epochs 3, --steps caps before epoch 3 ends) |
+| Batch | 256 |
+| LR | peak 5e-5, eta_min 5e-6 (cosine restart), AdamW fresh state |
+| Freeze | trunk.input_conv (PartialConv2d) + trunk.input_gn + trunk.tower[0..7]; **trainable: trunk.tower[8,9,10,11] + policy/opp_reply/value heads** = 1,354,316 / 3,846,668 (35.2%) |
+| compile | OFF (consistency with local 30-step smoke) |
+
+Implementation: 3 commits on `phase4/encoding_registry`:
+- `ee8032a` — `scripts/build_mixed_corpus_a4.py`, `--freeze-trunk-entry`/`--unfreeze-blocks` CLI, weights-only `--resume` mode, `tests/test_pretrain_finetune_freeze.py` (4 unit tests).
+- `47c2f29` — `scripts/eval_sprint_171_a4.sh` with the verdict-bin classifier.
+- `000f6ac` — fix(eval): `spec.version → spec.name` (unrelated §172 A10 stale attr surfaced at eval boot).
+
+### Smoke evidence (laptop, 30 steps)
+
+- Trainable: 1,354,316 / 3,846,668 (35.2%, matches §169 P4 model size).
+- Loss: 3.84 → 3.47 over 30 steps (decreasing, finite).
+- Frozen-surface invariant: `trunk.input_conv` + `tower[0..7]` max|Δ|=0 pre/post — bit-identical.
+- Trainable-surface deltas: `tower[8/9/11]`, `policy_head`, `value_fc1` show ~7e-4 max|Δ|.
+
+### Vast 5080 results
+
+| Metric | Value | §169 P4 baseline | Δ |
+|---|---|---|---|
+| Fine-tune wall | 5 min 20 s | — | — |
+| Final loss | 3.50 (epoch 3 early-cut at step 3000) | 3.47 baseline (post-pretrain) | flat |
+| argmax @ r=8 n=200 | **0/200 = 0.0%** [0.000%, 1.88%] | 22.0% [16.8%, 28.2%] | **−22 pp** |
+| argmax mean ply | 23.26 | 47.98 | −24.7 |
+| MCTS-64 @ r=8 n=200 | **0/200 = 0.0%** [0.000%, 1.88%] | (MCTS-128 ~0% pre-fine-tune) | consistent |
+| Eval wall | argmax 397 s + MCTS-64 674 s = 17.9 min | — | — |
+
+### Verdict — DEAD
+
+```
+MCTS-64 WR = 0.0000   Wilson95 = [0.0000, 0.0188]   n=200
+DEAD threshold:  WR <= 0.02 AND Wilson upper < 0.04
+                 0.0  ≤ 0.02 ✓    0.0188 < 0.04 ✓
+```
+
+**Stronger than DEAD predicted:** fine-tune also collapsed the pre-existing argmax sharpness (22% → 0%, mean ply 48 → 23). The freeze pattern broke head-trunk feature calibration in addition to failing the MCTS recovery test. Rules out a "more steps" interpretation — the fine-tune actively damaged a working argmax bot.
+
+### Implication
+
+The §169 P0 SPATIAL_RICH framing — "matched-MCTS collapse is a distribution-shift problem, not an architecture problem" — is **FALSIFIED** by this side-arm. Distribution-shift fine-tune over a 5% adversarial corpus, with the trunk-entry + lower trunk frozen, cannot re-tune the policy/value heads onto an MCTS-recoverable manifold; the limitation is structural to the v8 + canvas_realness + frozen-spine configuration.
+
+Closes the §171 A4 fine-tune line as a candidate Phase 4.0 unblocker. v6w25 K-cluster (§169 A1 anchor) and v7full (§172 B2 sustained — closed without graduation per `project_172_b2_complete`) remain the two tested anchors.
+
+### Next
+
+**Recommendation:** proceed to §173 α multi-window K-cluster selfplay (the structural fix identified in §171 P3.4 option α; design doc at `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`).
+
+Cheaper alternative (low-prior given the argmax collapse): re-run A4 fine-tune with a different freeze recipe (fully unfrozen, or peak ≤ 1e-5) and a value-head probe before any full re-train. NOT recommended without prior evidence.
+
+### Artefacts
+
+- `checkpoints/sprint_171_a4/A4_finetune_p2reopen.pt` (vast)
+- `reports/sprint_171_a4/A4_finetune_argmax.json`
+- `reports/sprint_171_a4/A4_finetune_mcts64.json`
+- `reports/sprint_171_a4/A4_finetune_eval.json` (combined + verdict)
+- `logs/sprint_171_a4/finetune.log`, `logs/sprint_171_a4/eval.log`
+- Investigation report: `reports/investigations/sprint_171_a4_finetune_p2reopen_2026-05-11.md`
