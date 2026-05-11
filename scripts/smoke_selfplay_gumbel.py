@@ -49,9 +49,10 @@ def main() -> int:
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
 
+    from hexo_rl.encoding import resolve_from_config as _rfc
     mcfg = cfg.get("model", {})
     model = HexTacToeNet(
-        board_size=int(mcfg.get("board_size", cfg.get("board_size", 19))),
+        board_size=_rfc(mcfg or cfg).trunk_size,
         in_channels=int(mcfg.get("in_channels", cfg.get("in_channels", 18))),
         filters=int(mcfg.get("filters", 128)),
         res_blocks=int(mcfg.get("res_blocks", 12)),

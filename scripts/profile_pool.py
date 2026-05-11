@@ -55,9 +55,11 @@ def main() -> None:
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
 
+    from hexo_rl.encoding import resolve_from_config as _rfc
     mcfg = cfg.get("model", {})
+    _trunk_sz = _rfc(mcfg or cfg).trunk_size
     model = HexTacToeNet(
-        board_size=int(mcfg.get("board_size", 19)),
+        board_size=_trunk_sz,
         in_channels=int(mcfg.get("in_channels", 18)),
         filters=int(mcfg.get("filters", 128)),
         res_blocks=int(mcfg.get("res_blocks", 12)),
@@ -67,8 +69,7 @@ def main() -> None:
     if device.type == "cuda":
         with torch.no_grad(), torch.autocast(device_type="cuda"):
             dummy = torch.zeros(1, int(mcfg.get("in_channels", 18)),
-                                int(mcfg.get("board_size", 19)),
-                                int(mcfg.get("board_size", 19)), device=device)
+                                _trunk_sz, _trunk_sz, device=device)
             model(dummy)
         torch.cuda.synchronize()
 

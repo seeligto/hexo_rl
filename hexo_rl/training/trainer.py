@@ -47,7 +47,45 @@ from hexo_rl.training.checkpoints import (
     save_full_checkpoint, save_inference_weights, prune_checkpoints,
     normalize_model_state_dict_keys, get_base_model,
 )
+from hexo_rl.utils.encoding import (
+    EncodingSpec, resolve_encoding, v6_spec, v6w25_spec, v8_spec,
+)
+# §172 A4.3: prefer registry metadata at load. Both modules coexist —
+# legacy NamedTuple stays load-bearing for replay-buffer/sym strides
+# (state_stride, chain_stride). Registry dataclass is the source of
+# truth for board_size / trunk_size / n_planes / policy_logit_count.
+from hexo_rl.encoding import (
+    EncodingSpec as RegistrySpec,
+    lookup as registry_lookup,
+    resolve_from_checkpoint as registry_resolve_ckpt,  # noqa: F401  (re-export for §172 A5)
+    resolve_from_config as registry_resolve_config,
+)
 from engine import ReplayBuffer
+
+
+def _legacy_spec_for_registry_name(name: str) -> EncodingSpec:
+    """Map a registry encoding name to a legacy NamedTuple `EncodingSpec`.
+
+    The legacy resolver (`hexo_rl.utils.encoding.resolve_encoding`) only
+    knows the historical names (v6 / v6w25 / v8). Registry-only names
+    (v7full, v8_canvas_realness) bridge to the wire-compatible legacy
+    spec so downstream consumers reading `state_stride` / `chain_stride`
+    keep working.
+
+      v7full              → v6_spec()  (same wire format, distinct anchor tag)
+      v8_canvas_realness  → v8_spec()  (same wire format, plane-8 polarity differs)
+    """
+    if name in ("v6", "v6w25", "v8"):
+        return resolve_encoding({"encoding": {"version": name}})
+    if name == "v7full":
+        return v6_spec()
+    if name == "v8_canvas_realness":
+        return v8_spec()
+    raise ValueError(
+        f"_legacy_spec_for_registry_name: no legacy bridge for registry "
+        f"encoding {name!r}. Add a mapping if the wire format matches an "
+        f"existing legacy spec."
+    )
 
 log = structlog.get_logger()
 
@@ -980,7 +1018,7 @@ class Trainer:
                 resolved[key] = int(default_val)
 
         # Keep top-level config aligned with final model dimensions.
-        config["board_size"] = resolved["board_size"]
+        # board_size scalar retired (§172 A10) — readers use resolve_from_config(cfg).trunk_size.
         config["res_blocks"] = resolved["res_blocks"]
         config["filters"] = resolved["filters"]
         config["in_channels"] = resolved["in_channels"]
@@ -996,9 +1034,24 @@ class Trainer:
         Returns path to the checkpoint file.
         """
         ckpt_path = self.checkpoint_dir / f"checkpoint_{self.step:08d}.pt"
+        # §172 A5.1: stamp encoding metadata at every save site. Resolve via
+        # the registry so renames (v6w25 → ...) propagate uniformly.
+        try:
+            from hexo_rl.encoding.resolvers import resolve_from_config
+            _enc_name = resolve_from_config(self.config).name
+        except Exception as exc:
+            # Resolver failure is itself a bug — surface it loudly. Save still
+            # proceeds without metadata so the run isn't lost; load path will
+            # fall back to shape inference.
+            log.error("checkpoint_encoding_resolve_failed", error=str(exc))
+            _enc_name = None
         save_full_checkpoint(
             self.model, self.optimizer, self.scaler, self.scheduler,
             self.step, self.config, ckpt_path,
+            encoding_name=_enc_name,
+            train_config_path=self.config.get("_config_path"),
+            corpus_sha256=self.config.get("corpus_sha256"),
+            model_variant=self.config.get("model_variant"),
         )
 
         # Inference-only copy (weights only, no optimizer state).
@@ -1044,6 +1097,180 @@ class Trainer:
 
         return ckpt_path
 
+    @staticmethod
+    def _detect_encoding_from_state_dict(
+        state_dict: Dict[str, torch.Tensor], ckpt_label: str,
+    ) -> Optional[EncodingSpec]:
+        """Infer an EncodingSpec from a bare model state_dict.
+
+        Used for weights-only checkpoints (e.g. bootstrap_model_v6w25.pt)
+        that carry no `config` payload. Mirrors the dispatch in
+        hexo_rl.eval.checkpoint_loader.detect_encoding_label but returns
+        a full EncodingSpec the trainer can act on.
+
+        Returns ``None`` when the state-dict shape does not match a
+        canonical (v6 / v6w25 / v8) encoding — the caller should then
+        fall through to legacy `_resolve_model_hparams` inference. This
+        keeps backward compat for non-canonical test fixtures (e.g. a
+        9×9 trainer round-trip).
+
+        ``ckpt_label`` is a short identifier (e.g. the checkpoint filename)
+        used for the v6 vs v6w25 filename disambiguator.
+        """
+        inp_w = state_dict.get("trunk.input_conv.weight")
+        if inp_w is None:
+            inp_w = state_dict.get("trunk.input_conv.conv.weight")
+        if inp_w is None or inp_w.dim() != 4:
+            return None
+        in_ch = int(inp_w.shape[1])
+        # Read the policy-head action count to disambiguate canonical encodings
+        # from non-canonical (e.g. 9×9 test) shapes. A canonical match must
+        # carry one of the well-known action counts (v6=362, v6w25=626, v8=625).
+        n_actions: Optional[int] = None
+        for k in ("policy_fc.weight", "cluster_pool.policy_mlp.2.weight"):
+            w = state_dict.get(k)
+            if w is not None and w.dim() == 2:
+                n_actions = int(w.shape[0])
+                break
+        label = ckpt_label.lower()
+        if in_ch == 11 and n_actions == 625:
+            return v8_spec()
+        if in_ch == 8:
+            if n_actions == 626 or "v6w25" in label or "_w25" in label:
+                # Filename hint can override action-count when the head is a
+                # PMA variant whose output dim differs; in that case we trust
+                # the operator's filename labeling.
+                return v6w25_spec()
+            if n_actions == 362:
+                return v6_spec()
+        return None
+
+    @staticmethod
+    def _resolve_checkpoint_encoding(
+        ckpt: Dict[str, Any],
+        in_memory_config: Optional[Dict[str, Any]],
+        model_state: Dict[str, torch.Tensor],
+        checkpoint_path: Any,
+    ) -> Optional[EncodingSpec]:
+        """Reconcile checkpoint encoding with the in-memory config encoding.
+
+        Resolution rules:
+          - Checkpoint encoding: prefer ckpt['config']['encoding'] (full
+            ckpt). Otherwise infer from state_dict shape + filename.
+          - In-memory encoding: read `in_memory_config['encoding']`. If
+            absent, defaults to v6 via resolve_encoding.
+          - Disagreement on version → ValueError naming both sources.
+          - In-memory config also pinning board_size / cluster_window_size /
+            cluster_threshold that contradict the ckpt-resolved spec → also
+            ValueError.
+
+        Returns the ckpt-resolved EncodingSpec on success.
+        """
+        # Step 1 — resolve the ckpt-side encoding.
+        ckpt_cfg = ckpt.get("config") if isinstance(ckpt, dict) else None
+        ckpt_source: str
+        ckpt_spec: Optional[EncodingSpec]
+        if isinstance(ckpt_cfg, dict) and ckpt_cfg.get("encoding") is not None:
+            ckpt_spec = resolve_encoding(ckpt_cfg)
+            ckpt_source = f"checkpoint {checkpoint_path!s} config['encoding']"
+        else:
+            ckpt_spec = Trainer._detect_encoding_from_state_dict(
+                model_state, str(checkpoint_path),
+            )
+            ckpt_source = f"checkpoint {checkpoint_path!s} state_dict shape"
+        if ckpt_spec is None:
+            # Non-canonical state-dict shape (e.g. test fixture). Defer to
+            # the legacy _resolve_model_hparams path entirely.
+            return None
+
+        # Step 2 — resolve the in-memory side. If the config carries no
+        # explicit `encoding` section AND no explicit board_size/cluster_*
+        # pin, treat the in-memory side as "unspecified" and accept the ckpt
+        # spec without raising. This preserves backward compat for v6 ckpts
+        # loaded against minimal configs.
+        if in_memory_config is None:
+            in_memory_config = {}
+        explicit_encoding = isinstance(in_memory_config.get("encoding"), dict)
+        explicit_pins: Dict[str, Any] = {}
+        for key in ("board_size", "cluster_window_size", "cluster_threshold"):
+            if in_memory_config.get(key) is not None:
+                explicit_pins[key] = in_memory_config[key]
+
+        if not explicit_encoding and not explicit_pins:
+            return ckpt_spec
+
+        # In-memory side has at least one pin — reconcile.
+        if explicit_encoding:
+            cfg_spec = resolve_encoding(in_memory_config)
+            cfg_source = "in-memory config['encoding']"
+        else:
+            # No encoding section but explicit pins → derive a v6/v6w25-ish
+            # comparison spec from the pins themselves.
+            cfg_spec = ckpt_spec  # start from ckpt; override with pins for compare
+            cfg_source = "in-memory config (pins)"
+
+        if cfg_spec.version != ckpt_spec.version:
+            raise ValueError(
+                f"Encoding version disagrees: "
+                f"{cfg_source}.version={cfg_spec.version!r} vs "
+                f"{ckpt_source}.version={ckpt_spec.version!r}. "
+                "Update the variant config to match the checkpoint encoding "
+                "(or load a checkpoint matching the config). Refusing to "
+                "silently override either direction."
+            )
+
+        # Even when versions match, refuse to silently disagree on
+        # numeric pins (board_size / cluster_window_size / cluster_threshold).
+        for key, cfg_val in explicit_pins.items():
+            if key == "board_size":
+                ckpt_val: Optional[int] = registry_lookup(ckpt_spec.version).trunk_size
+            elif key == "cluster_window_size":
+                ckpt_val = ckpt_spec.cluster_window_size
+            elif key == "cluster_threshold":
+                ckpt_val = ckpt_spec.cluster_threshold
+            else:
+                ckpt_val = None
+            if ckpt_val is not None and int(cfg_val) != int(ckpt_val):
+                raise ValueError(
+                    f"Encoding pin {key!r} disagrees: "
+                    f"in-memory config {key}={cfg_val} vs "
+                    f"{ckpt_source} {key}={ckpt_val} "
+                    f"(checkpoint encoding={ckpt_spec.version!r}). "
+                    "Remove the explicit pin from the config or load a "
+                    "matching checkpoint; refusing to silently override."
+                )
+
+        return ckpt_spec
+
+    @staticmethod
+    def _propagate_encoding_into_config(
+        config: Dict[str, Any], spec: EncodingSpec,
+    ) -> None:
+        """Write the resolved encoding fields into the in-memory config.
+
+        Downstream selfplay surfaces (pool, worker, lifecycle) read
+        ``cluster_window_size`` / ``cluster_threshold`` / ``legal_move_radius``
+        directly. After ckpt load, those must reflect the encoding the
+        model was actually trained under, not whatever the variant YAML
+        happened to ship with.
+
+        §172 A10: `config["board_size"]` scalar retired. Readers use
+        `resolve_from_config(cfg).trunk_size` instead.
+        """
+        encoding_section = config.get("encoding")
+        if not isinstance(encoding_section, dict):
+            encoding_section = {}
+        encoding_section["version"] = spec.version
+        config["encoding"] = encoding_section
+
+        # board_size scalar retired — §172 A10.
+        if spec.cluster_window_size is not None:
+            config["cluster_window_size"] = int(spec.cluster_window_size)
+        if spec.cluster_threshold is not None:
+            config["cluster_threshold"] = int(spec.cluster_threshold)
+        # legal_move_radius rides along — used by selfplay legal-mask jitter.
+        config["legal_move_radius"] = int(spec.legal_move_radius)
+
     @classmethod
     def load_checkpoint(
         cls,
@@ -1081,11 +1308,102 @@ class Trainer:
             )
 
         model_state = cls._extract_model_state(ckpt)
+        model_state = normalize_model_state_dict_keys(model_state)
+
+        # Reconcile encoding (board_size / cluster window / threshold) BEFORE
+        # _resolve_model_hparams so the trainer fails loudly with both source
+        # values when the variant YAML and the checkpoint disagree (§171 P3
+        # blocker: bootstrap_model_v6w25.pt vs v6-default variant config).
+        # The in-memory side is whatever the user explicitly passed via
+        # fallback_config / config_overrides — separate from the ckpt-baked
+        # config that already populates `config` above.
+        in_memory_view: Dict[str, Any] = {}
+        if fallback_config is not None:
+            in_memory_view.update(fallback_config)
+        if config_overrides:
+            in_memory_view.update(config_overrides)
+
+        # §172 A4.3: prefer ckpt['metadata']['encoding_name'] (registry
+        # source-of-truth) before falling back to shape-inference. A5 will
+        # stamp this field on every existing artifact via migration script.
+        ckpt_metadata = ckpt.get("metadata") if isinstance(ckpt, dict) else None
+        registry_spec_from_meta: Optional[RegistrySpec] = None
+        if isinstance(ckpt_metadata, dict) and "encoding_name" in ckpt_metadata:
+            enc_name = ckpt_metadata["encoding_name"]
+            if isinstance(enc_name, str):
+                registry_spec_from_meta = registry_lookup(enc_name)
+                log.info(
+                    "checkpoint_encoding_metadata_found",
+                    checkpoint_path=str(checkpoint_path),
+                    encoding_name=enc_name,
+                    source="metadata['encoding_name']",
+                )
+            else:
+                import warnings
+                warnings.warn(
+                    f"checkpoint {checkpoint_path}: metadata['encoding_name'] is "
+                    f"{type(enc_name).__name__}, expected str; falling back to "
+                    f"shape inference.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+
+        if registry_spec_from_meta is not None:
+            # Bridge to legacy NamedTuple — downstream propagation (which
+            # writes board_size / cluster_* / legal_move_radius into the
+            # in-memory config) reads `.version`, `.board_size`,
+            # `.cluster_window_size`, etc. off the legacy NamedTuple.
+            resolved_spec = _legacy_spec_for_registry_name(
+                registry_spec_from_meta.name
+            )
+            cls._propagate_encoding_into_config(config, resolved_spec)
+            log.info(
+                "checkpoint_encoding_resolved",
+                checkpoint_path=str(checkpoint_path),
+                encoding_version=resolved_spec.version,
+                encoding_name=registry_spec_from_meta.name,
+                board_size=registry_resolve_config(config).trunk_size,
+                cluster_window_size=config.get("cluster_window_size"),
+                cluster_threshold=config.get("cluster_threshold"),
+                source="registry_metadata",
+            )
+        else:
+            # Backward-compat: legacy ckpts have no metadata['encoding_name'].
+            # Emit a DeprecationWarning + fall through to shape inference.
+            if isinstance(ckpt, dict) and (ckpt_metadata is None
+                                            or not isinstance(ckpt_metadata, dict)
+                                            or "encoding_name" not in ckpt_metadata):
+                import warnings
+                warnings.warn(
+                    f"checkpoint {checkpoint_path} lacks "
+                    f"metadata['encoding_name']; A5 migration script will "
+                    f"stamp existing artifacts. Using shape inference for now.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+            resolved_spec = cls._resolve_checkpoint_encoding(
+                ckpt, in_memory_view, model_state, checkpoint_path,
+            )
+            if resolved_spec is not None:
+                cls._propagate_encoding_into_config(config, resolved_spec)
+                log.info(
+                    "checkpoint_encoding_resolved",
+                    checkpoint_path=str(checkpoint_path),
+                    encoding_version=resolved_spec.version,
+                    board_size=registry_resolve_config(config).trunk_size,
+                    cluster_window_size=config.get("cluster_window_size"),
+                    cluster_threshold=config.get("cluster_threshold"),
+                    source="shape_inference",
+                )
 
         if config_overrides:
             config.update(config_overrides)
-
-        model_state = normalize_model_state_dict_keys(model_state)
+            if resolved_spec is not None:
+                # config_overrides won the merge above — re-propagate spec so
+                # the encoding pins survive (overrides shouldn't silently
+                # re-introduce stale board_size etc.). Spec propagation is
+                # idempotent.
+                cls._propagate_encoding_into_config(config, resolved_spec)
 
         model_hparams = cls._resolve_model_hparams(config, model_state)
 

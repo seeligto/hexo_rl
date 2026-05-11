@@ -11,10 +11,17 @@ from hexo_rl.eval.colony_detection import (
     _connected_components,
     is_colony_win,
 )
+from hexo_rl.encoding import lookup as _registry_lookup
 from hexo_rl.eval.eval_pipeline import EvalPipeline
 from hexo_rl.eval.gate_logic import _binomial_ci
 from hexo_rl.eval.evaluator import EvalResult
 from hexo_rl.eval.results_db import ResultsDB
+
+# §172 B1 fix — _load_anchor_model now returns (model, spec, label).
+# Mock sites that previously set ``return_value = MagicMock()`` must
+# match the new tuple shape; this fixture spec mirrors the v6 / v7full
+# wire format used by all bootstrap anchors in §150+.
+_FAKE_ANCHOR_RETURN = (MagicMock(), _registry_lookup("v6"), "v6")
 
 
 # ── Binomial CI ──────────────────────────────────────────────────────────────
@@ -148,6 +155,76 @@ def test_no_best_model_skips_gating(
     result = pipeline.run_evaluation(MagicMock(), 1000, best_model=None)
     assert result["promoted"] is False
     assert "wr_best" not in result
+
+
+# ── argmax_n (§170 P4 P1 DRIFT detector) ────────────────────────────────────
+
+@pytest.fixture
+def eval_config_with_argmax_n(tmp_path: Path) -> dict:
+    return {
+        "eval_pipeline": {
+            "enabled": True,
+            "eval_interval": 100,
+            "report_dir": str(tmp_path / "eval"),
+            "db_path": str(tmp_path / "eval" / "results.db"),
+            "ratings_plot_path": str(tmp_path / "eval" / "ratings_curve.png"),
+            "opponents": {
+                "best_checkpoint": {"enabled": False},
+                "sealbot": {"enabled": False, "time_limit": 0.5},
+                "random": {"enabled": False},
+                "argmax_n": {"enabled": True, "stride": 1, "n_games": 4},
+            },
+            "gating": {"promotion_winrate": 0.55, "best_model_path": str(tmp_path / "best.pt")},
+            "bradley_terry": {"anchor_player": "checkpoint_0", "regularization": 1e-6},
+        }
+    }
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_argmax_n_dispatched_when_enabled(
+    mock_evaluator_cls: MagicMock,
+    eval_config_with_argmax_n: dict,
+) -> None:
+    import torch
+    pipeline = EvalPipeline(eval_config_with_argmax_n, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_argmax_sealbot.return_value = EvalResult(
+        win_rate=0.25, win_count=1, n_games=4, colony_wins=0,
+    )
+    mock_evaluator_cls.return_value = mock_eval
+
+    result = pipeline.run_evaluation(MagicMock(), 1000, best_model=None)
+
+    mock_eval.evaluate_vs_argmax_sealbot.assert_called_once()
+    call_kwargs = mock_eval.evaluate_vs_argmax_sealbot.call_args.kwargs
+    assert call_kwargs["n_games"] == 4
+    assert call_kwargs["time_limit"] == 0.5
+    assert result["wr_argmax_n"] == 0.25
+    assert "ci_argmax_n" in result
+    assert result["colony_wins_argmax_n"] == 0
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_argmax_n_skipped_when_disabled(
+    mock_evaluator_cls: MagicMock,
+    eval_config: dict,
+) -> None:
+    """eval_config fixture has no argmax_n key — must be silently skipped."""
+    import torch
+    pipeline = EvalPipeline(eval_config, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(
+        win_rate=0.5, win_count=5, n_games=10, colony_wins=0,
+    )
+    mock_eval.evaluate_vs_model.return_value = EvalResult(
+        win_rate=0.5, win_count=5, n_games=10, colony_wins=0,
+    )
+    mock_evaluator_cls.return_value = mock_eval
+
+    result = pipeline.run_evaluation(MagicMock(), 1000, MagicMock())
+
+    mock_eval.evaluate_vs_argmax_sealbot.assert_not_called()
+    assert "wr_argmax_n" not in result
 
 
 # ── Stride gating (graduation cadence split) ───────────────────────────────
@@ -461,7 +538,7 @@ def test_bootstrap_floor_blocks_promotion_below_threshold(
     # Fake bootstrap path must exist for the load gate.
     Path(eval_config_with_floor["eval_pipeline"]["opponents"]
          ["bootstrap_anchor"]["path"]).touch()
-    mock_load_anchor.return_value = MagicMock()
+    mock_load_anchor.return_value = _FAKE_ANCHOR_RETURN
 
     pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
     mock_eval = MagicMock()
@@ -496,7 +573,7 @@ def test_bootstrap_floor_allows_promotion_above_threshold(
     import torch
     Path(eval_config_with_floor["eval_pipeline"]["opponents"]
          ["bootstrap_anchor"]["path"]).touch()
-    mock_load_anchor.return_value = MagicMock()
+    mock_load_anchor.return_value = _FAKE_ANCHOR_RETURN
 
     pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
     mock_eval = MagicMock()
@@ -531,7 +608,7 @@ def test_bootstrap_floor_disabled_ignores_anchor_winrate(
     eval_config_with_floor["eval_pipeline"]["gating"]["bootstrap_floor"]["enabled"] = False
     Path(eval_config_with_floor["eval_pipeline"]["opponents"]
          ["bootstrap_anchor"]["path"]).touch()
-    mock_load_anchor.return_value = MagicMock()
+    mock_load_anchor.return_value = _FAKE_ANCHOR_RETURN
 
     pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
     mock_eval = MagicMock()
@@ -599,7 +676,7 @@ def test_bootstrap_anchor_eval_games_includes_floor(
     import torch
     Path(eval_config_with_floor["eval_pipeline"]["opponents"]
          ["bootstrap_anchor"]["path"]).touch()
-    mock_load_anchor.return_value = MagicMock()
+    mock_load_anchor.return_value = _FAKE_ANCHOR_RETURN
 
     pipeline = EvalPipeline(eval_config_with_floor, torch.device("cpu"))
     mock_eval = MagicMock()

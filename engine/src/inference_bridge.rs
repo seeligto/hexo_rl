@@ -269,6 +269,13 @@ impl InferenceBatcher {
         self.feature_len
     }
 
+    /// §172 A10 T8b — Rust-only mirror of the Python-visible `policy_len_py`
+    /// getter, kept for symmetry with `feature_len()` (cargo-test consumers).
+    /// Python callers use `batcher.policy_len_py` (the `#[getter]` below).
+    pub fn policy_len(&self) -> usize {
+        self.policy_len
+    }
+
     pub fn get_feature_buffer(&self) -> Vec<f32> {
         self.pool_receiver.try_recv().unwrap_or_else(|_| {
             vec![0.0f32; self.feature_len]
@@ -292,8 +299,29 @@ impl InferenceBatcher {
 #[pymethods]
 impl InferenceBatcher {
     #[new]
-    #[pyo3(signature = (feature_len = 8 * 19 * 19, policy_len = 19 * 19 + 1))]
-    pub fn new(feature_len: usize, policy_len: usize) -> Self {
+    #[pyo3(signature = (encoding_spec = None, feature_len = None, policy_len = None))]
+    pub fn new(
+        encoding_spec: Option<crate::PyRegistrySpec>,
+        feature_len: Option<usize>,
+        policy_len: Option<usize>,
+    ) -> Self {
+        // §172 A10 T8b — derive feature_len / policy_len from `encoding_spec`
+        // (registry record) when explicit kwargs are omitted. Pre-T8b
+        // defaults silently gave v6 geometry (2888 / 362) to v8 callers
+        // — a HIGH-RISK silent-corruption hazard.
+        //
+        // Precedence: explicit kwargs > encoding_spec derivation > legacy v6 default.
+        let spec_static = encoding_spec.as_ref().map(|s| s.inner());
+        let (feature_len, policy_len) = match (feature_len, policy_len, spec_static) {
+            (Some(f), Some(p), _) => (f, p),
+            (None, None, Some(spec)) => (spec.state_stride(), spec.policy_stride()),
+            (Some(f), None, Some(spec)) => (f, spec.policy_stride()),
+            (None, Some(p), Some(spec)) => (spec.state_stride(), p),
+            (None, None, None) => (8 * 19 * 19, 19 * 19 + 1),
+            (Some(f), None, None) => (f, 19 * 19 + 1),
+            (None, Some(p), None) => (8 * 19 * 19, p),
+        };
+
         let (pool_sender, pool_receiver) = flume::bounded(1024);
         for _ in 0..512 {
             let _ = pool_sender.send(vec![0.0f32; feature_len]);

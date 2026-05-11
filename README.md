@@ -77,6 +77,75 @@ assembled by windowing around active stone clusters — 8 planes: 2 players × 4
 
 ---
 
+## Encoding system
+
+Single source of truth: [`engine/src/encoding/registry.toml`](engine/src/encoding/registry.toml).
+Both Rust (`engine/src/encoding/`) and Python (`hexo_rl/encoding/`) parse
+this file once at startup — Rust via `Lazy` + `include_str!`, Python via
+`functools.cache` + path traversal. Every encoding-aware surface
+(board, model, training, selfplay, eval, replay buffer) reads from the
+resulting `EncodingSpec`. Variant configs override only `encoding: <name>`;
+the resolver looks up everything else (`board_size`, `n_planes`,
+`policy_logit_count`, cluster geometry, pool rules). Five encodings ship
+today: `v6`, `v6w25`, `v7full`, `v8`, `v8_canvas_realness`.
+
+### Add a new encoding
+
+1. Append `[encodings.<name>]` to `engine/src/encoding/registry.toml`.
+   Schema lives in
+   [docs/designs/encoding_registry_design.md §3.1](docs/designs/encoding_registry_design.md);
+   parse-time validator fails loud on missing or wrong-typed keys.
+2. Single-window encodings (`is_multi_window = false`) work out of the
+   box. Multi-window K-cluster encodings currently `unimplemented!()`
+   at every dispatch site — implement the dispatch path per §173+ α
+   (see [docs/designs/encoding_alpha_multiwindow_selfplay_design.md](docs/designs/encoding_alpha_multiwindow_selfplay_design.md)).
+3. Run `python -m hexo_rl.encoding audit` — confirms parse, validation,
+   cross-table compatibility.
+4. `tests/test_encoding_round_trip.py` parameterizes over the registry.
+   New entries are covered automatically (Board ctor, tensor shape,
+   network forward, MCTS one-sim smoke).
+5. Train a checkpoint. Save path stamps `metadata["encoding_name"]`
+   automatically; load path resolves it via the registry.
+
+### Inspect current state
+
+```bash
+python -m hexo_rl.encoding audit [--strict] [--checkpoints-dir DIR] \
+                                 [--corpora-dir DIR] [--variants-dir DIR]
+```
+
+Reports registered encodings, per-checkpoint declared-vs-inferred
+encoding, per-corpus sidecar status, variant config posture,
+hardcoded-literal grep, and cross-table compatibility. Exit codes:
+`0` clean / `1` warnings / `2` errors. Run before any sustained launch.
+
+### Loading checkpoints
+
+`Trainer.load_checkpoint` reads `ckpt["metadata"]["encoding_name"]` and
+resolves through the registry. Legacy checkpoints without metadata fall
+back to shape inference via `hexo_rl/encoding/compat.py`, emitting a
+`DeprecationWarning`. Operator overrides the inferred name via CLI flag
+when the inference is ambiguous (e.g., `bootstrap_model_v8full_warm.pt`).
+
+### Loading corpora
+
+Each `<corpus>.npz` ships a sidecar `<corpus>.metadata.json` with
+`encoding_name`, `sha256`, `n_positions`, `schema_version`, and a
+`created_by_commit` SHA. Loader validates sidecar `encoding_name`
+against the config-resolved spec — mismatch raises
+`EncodingMismatchError`. Legacy corpora without sidecar fall back to
+filename-inferred encoding + `DeprecationWarning`.
+
+### See also
+
+- [docs/designs/encoding_registry_design.md](docs/designs/encoding_registry_design.md)
+  — §172 A2 design (registry schema, metadata schemas, audit CLI,
+  surface plumbing pass).
+- [docs/designs/encoding_alpha_multiwindow_selfplay_design.md](docs/designs/encoding_alpha_multiwindow_selfplay_design.md)
+  — α scope for multi-window K-cluster selfplay (§173+).
+
+---
+
 ## Performance
 
 **Reference hardware:** Ryzen 7 8845HS + RTX 4060 Laptop, 14 workers, LTO + native CPU.
@@ -141,6 +210,7 @@ Run `make help` for the full target list.
 - [docs/05_community_integration.md](docs/05_community_integration.md) — community bot, API, notation, formations
 - [docs/06_OPEN_QUESTIONS.md](docs/06_OPEN_QUESTIONS.md) — active research questions and ablation plans
 - [docs/sweep_harness.md](docs/sweep_harness.md) — knob-registry throughput sweep harness
+- [docs/designs/encoding_registry_design.md](docs/designs/encoding_registry_design.md) — §172 A2 encoding-registry single-source-of-truth design
 
 ---
 

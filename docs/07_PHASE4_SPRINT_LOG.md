@@ -10775,10 +10775,11 @@ since `tests/probes/` lacks an `__init__.py`).
 - Per-game replay → `replay_game_to_triples_v8(canvas_realness=True)` for v8
   encoding; ply-range filter `[2, 150)`; per-game uniform subsample to
   ≤ 25 positions; per-source down-sample to weight target.
-- Output NPZ schema **byte-compatible** with `data/bootstrap_corpus_v8.npz`
-  canvas_realness variant (states / policies / outcomes / weights identical
-  in shape + dtype). One extra column `source_labels` (fixed-width bytes)
-  for diagnostics; pretrain loader ignores it.
+- Output NPZ schema **byte-compatible** with
+  `data/bootstrap_corpus_v8_canvas_realness.npz` (states / policies /
+  outcomes / weights identical in shape + dtype). One extra column
+  `source_labels` (fixed-width bytes) for diagnostics; pretrain loader
+  ignores it.
 - JSON sidecar (`reports/gpool_bias/adversarial_stats.json`) captures full
   per-source counts, win splits, mean ply, opponent strength bands, sha256,
   bbox-clip telemetry.
@@ -10804,7 +10805,7 @@ target) was absorbed by the 1.3× game-count buffer + other sources.
 | target positions | 15,000 (12,781 / 15,000 ≈ 85 %; in 10–20 k operator band) |
 | size | 198.2 MB uncompressed (mmap-ready) |
 | **sha256** | **`e6c1b9b921492d9b23f825cce26e99b818285743fffef8aec3ae47532ef84c2c`** |
-| canvas_realness | True (plane 8 inside-mean = 217.0 = R=8 hex cell count, identical to base bootstrap_corpus_v8.npz canvas_realness variant) |
+| canvas_realness | True (plane 8 inside-mean = 217.0 = R=8 hex cell count, identical to base bootstrap_corpus_v8_canvas_realness.npz, sha `110ea6b2…`) |
 | bbox-clip telemetry | 26,674 stones clipped outside 25×25 envelope (informational; matches B1 / A4 base-corpus rate) |
 
 Per-source position counts (post-target-down-sample):
@@ -10825,7 +10826,7 @@ not the game outcomes; the outcomes column still uses
 `replay_game_to_triples_v8`'s ±1-from-current-player POV computation,
 so SealBot's policy targets are correct.
 
-### 5. Schema parity (vs `data/bootstrap_corpus_v8.npz`)
+### 5. Schema parity (vs `data/bootstrap_corpus_v8_canvas_realness.npz`)
 
 | key | adversarial | bootstrap (canvas_realness variant) | match |
 |---|---|---|---|
@@ -10848,7 +10849,7 @@ touch this column.
 ### 6. §171 entry-point
 
 ```
-data/bootstrap_corpus_v8.npz                    sha256 110ea6b2…  (347,142 pos, 5,382 MB)
+data/bootstrap_corpus_v8_canvas_realness.npz    sha256 110ea6b2…  (347,142 pos, 5,382 MB)
 data/adversarial_corpus_v8.npz                  sha256 e6c1b9b9…  ( 12,781 pos,   198 MB)
 checkpoints/ablation_169/A4_canvas_realness.pt  21.9 MB; v8; canvas_realness; PartialConv2d trunk-entry; 3.85 M params
 ```
@@ -10892,8 +10893,8 @@ None fired. All monitors clear at close:
 §170 P4 P2 prep ends here. The next sprint either opens §171 (Phase D
 self-play smoke under A1 anchor canonical pick — Gate 6 items a + b)
 or §171 A4 fine-tune side-arm (Gate 6 item c) using
-`bootstrap_corpus_v8.npz` + this adversarial corpus + the A4
-checkpoint. Operator's call.
+`bootstrap_corpus_v8_canvas_realness.npz` (sha `110ea6b2…`) + this
+adversarial corpus + the A4 checkpoint. Operator's call.
 
 **Key result: corpus prep done. 12,781 v8-encoded canvas_realness
 positions, 5 sources, 45 % SealBot vs A1 + 25 % scripted adversaries
@@ -10951,9 +10952,9 @@ Gate 6 below.
   COMPLETE.** `data/adversarial_corpus_v8.npz` (sha256 `e6c1b9b9…`,
   12,781 positions, 198.2 MB, 5 sources at operator-tuned weights)
   ready on 5080 + laptop, schema byte-compatible with
-  `bootstrap_corpus_v8.npz` canvas_realness variant. §171 A4 fine-
-  tune entry-point clear; mix and recipe NOT committed (operator-side
-  §171 scope decision).
+  `bootstrap_corpus_v8_canvas_realness.npz` (sha `110ea6b2…`). §171
+  A4 fine-tune entry-point clear; mix and recipe NOT committed
+  (operator-side §171 scope decision).
 - **Mechanistic synthesis.** P4 P1 confirms the §170 P1 + P3 reading:
   the value head's *operating point* (not the routing or pool layer)
   is the controlling factor under PUCT search. Bilateral bias (P3)
@@ -11109,9 +11110,9 @@ Result: `data/adversarial_corpus_v8.npz` (sha256
 `e6c1b9b921492d9b23f825cce26e99b818285743fffef8aec3ae47532ef84c2c`,
 12,781 positions, 198.2 MB, 5 sources at operator-tuned weights)
 generated on 5080 in ~14 min wall, schema byte-compatible with
-`bootstrap_corpus_v8.npz` canvas_realness variant (states / policies
-/ outcomes / weights identical in shape + dtype; one extra
-`source_labels` diagnostic column ignored by the pretrain loader).
+`bootstrap_corpus_v8_canvas_realness.npz` (sha `110ea6b2…`) — states /
+policies / outcomes / weights identical in shape + dtype; one extra
+`source_labels` diagnostic column ignored by the pretrain loader.
 
 Per-source: 6,750 sealbot_vs_a1 (0.45 weight, primary), 1,860
 scripted_far_line + 958 scripted_far_placement (0.13 + 0.12 weight,
@@ -11122,7 +11123,7 @@ risk). Total 12,781 / 15,000 target ≈ 85 %, in the 10–20 k operator
 band.
 
 **Implication.** Corpus prep done. §171 A4 fine-tune entry-point:
-`bootstrap_corpus_v8.npz` (sha256 `110ea6b2…`) +
+`bootstrap_corpus_v8_canvas_realness.npz` (sha256 `110ea6b2…`) +
 `adversarial_corpus_v8.npz` (sha256 `e6c1b9b9…`) +
 `checkpoints/ablation_169/A4_canvas_realness.pt`. Recommended natural-
 ratio mix per P2 manifest §"§171 entry-point": adversarial ≈ 3.7 % of
@@ -11344,7 +11345,8 @@ g) **Architecture explorations to defer to Phase 5+?**
       scope decision affecting the next 3–4 hours of 5080 compute.
 - [ ] If (c) is opened: scope §171 A4 distribution-shift fine-tune in
       a separate context, reusing `adversarial_corpus_v8.npz` (sha256
-      `e6c1b9b9…`) + `bootstrap_corpus_v8.npz` (sha256 `110ea6b2…`)
+      `e6c1b9b9…`) +
+      `bootstrap_corpus_v8_canvas_realness.npz` (sha256 `110ea6b2…`)
       + `checkpoints/ablation_169/A4_canvas_realness.pt`. Mix and
       recipe in P2 manifest §"§171 entry-point".
 - [ ] Either way, scope §171 (Phase D self-play smoke) under A1
@@ -11391,3 +11393,413 @@ if Gate 6 item (c) opens.**
 **Next:** §171 (Phase D self-play smoke under A1 anchor, operator-
 decided, items b + d) ± §171 A4 fine-tune side-arm (operator-decided,
 item c).
+
+---
+
+## §171 P0 — sprint scoping + entry-point validation — 2026-05-09
+
+**Branch:** `phase4/p171_selfplay_smoke` (off master @ `ebacabd`,
+post-§170 close-out merge).
+**Status:** P0 closeout note. P1 (variant-config commit `888064a`) +
+P2 (cold-smoke pre-flight) + P3 (sustained smoke launch) tracked in
+separate sprint-log entries / memory notes.
+
+### §171 P0.1 — corpus-sha manifest transposition correction
+
+While preparing the §171 A4 distribution-shift fine-tune side-arm
+(Gate 6 item c) the §170 P4 P2 manifest entry-point was audited
+against the on-disk corpus files. **Transposition discovered:**
+
+- §170 P4 P2 manifest + sprint-log entry cited
+  `data/bootstrap_corpus_v8.npz sha256 110ea6b2…` as the §171 A4
+  fine-tune base corpus.
+- Actual on-disk file at `data/bootstrap_corpus_v8.npz` is the
+  **vanilla v8 baseline corpus** with sha
+  `adb884122bc4744b771ca95f30419ba067764eacbae428fa27c5117db8a0dd77`
+  (plane-8 polarity off→outside; produced by §167 / §169
+  `export_corpus_npz.py` *without* `--canvas-realness`). Used by §167
+  B1 / §169 A2 / A3 retrains.
+- The sha `110ea6b2…` belongs to the **canvas_realness variant**
+  produced as `data/bootstrap_corpus_v8_canvas_realness.npz` per
+  `reports/ablation_169/A4_corpus_export.log` (5,382 MB, 347,142
+  positions, plane-8 polarity inside→canvas, used to pretrain
+  `checkpoints/ablation_169/A4_canvas_realness.pt`).
+
+**Why it matters.** `A4_canvas_realness.pt` carries a `PartialConv2d`
+trunk-entry whose plane-8 polarity invariant is canvas_realness=True.
+Resuming fine-tune from that checkpoint with the vanilla v8 corpus
+(adb88412…) flips plane-8 polarity at the trunk entry — silently
+breaking the renormalisation invariant the PartialConv2d module was
+trained under. The corrected entry-point uses
+`bootstrap_corpus_v8_canvas_realness.npz` (sha `110ea6b2…`) so plane-
+8 polarity matches the resume checkpoint.
+
+**Resolution.** This sprint corrects every §170 P4 P2 + §171 A4
+entry-point reference across `reports/gpool_bias/adversarial_manifest.md`
+and `docs/07_PHASE4_SPRINT_LOG.md` (§170 P4 P2 entry, §170 P4 close-
+out aggregation, Gate 6 item-c scope note). References to
+`bootstrap_corpus_v8.npz` as the **vanilla v8 baseline** (e.g. §169
+A4's "(v8 corpus, n/a)" matrix cell, §167 B1 retrain entries) are
+unchanged — those correctly cite the sha `adb88412…` file at that
+path.
+
+History is annotated, not rewritten: §169 P4 / §170 P3 / §170 P4 P1
+narratives stand. The §170 P4 P2 corpus-prep work itself is correct
+(adversarial_corpus_v8.npz schema-parity is canvas_realness; the
+manifest just labelled the partner file with the wrong path). No data
+file changes; no code changes.
+
+**Status:** entry-point manifest corrected on
+`phase4/p171_selfplay_smoke`. §171 A4 fine-tune (if Gate 6 item c
+opens) consumes
+`data/bootstrap_corpus_v8_canvas_realness.npz` + `data/adversarial_corpus_v8.npz`
++ `checkpoints/ablation_169/A4_canvas_realness.pt`.
+
+---
+
+## §171 P3 — BLOCKED (handed to §172 architectural sprint) — 2026-05-09
+
+### TL;DR
+
+Two-layer blocker halts v6w25 sustained self-play. Layer 1: canvas vs trunk
+`board_size` semantics inconsistency between A2.1 (trainer, trunk=25) and A2.2
+(pool guard, canvas=19). Layer 2 (load-bearing): `Board::to_planes()` is
+hardcoded to 18×19×19 regardless of `cluster_window_size`; selfplay's
+`state.to_tensor()` calls this single-window path. v6w25 pretrain worked because
+`dataset_v6w25.py` uses `get_cluster_views()` (honors `cluster_window_size=25`);
+selfplay has no equivalent multi-window path. §172 architectural sprint required
+to resolve the structural debt.
+
+Pin scope clarification: v6w25 is canonical for pretrain+eval+matched-MCTS per
+§170 P4 P1 mechanism. v7full is canonical for selfplay pending α. Neither pin is
+silently retracted; both are explicit with scope constraints documented here.
+
+α scope statement: α (multi-window K-cluster selfplay) is Phase 4.5+ scope;
+design doc lands in §172, implementation in §173+.
+
+---
+
+### §171 P3.1 — What A1+A2 delivered (correct-in-scope)
+
+Commits `9e4876f..2121069` correctly implemented encoding-awareness at the Python
+layer:
+
+- ✓ Trainer encoding-aware checkpoint reconciliation
+- ✓ Workers construct `Board::with_encoding(spec)` per game (`cluster_window_size`
+  correctly set to 25 for v6w25)
+- ✗ But planes emitted are still 19×19 — `to_planes()` ignores `cluster_window_size`
+
+This work is necessary but not sufficient. Not wasted — §172 builds on it.
+
+---
+
+### §171 P3.2 — Surface enumeration (blocker grep findings)
+
+| Site | Finding |
+|---|---|
+| `engine/src/board/state.rs:41` | `TOTAL_CELLS = 19*19 = 361` — hardcoded |
+| `engine/src/board/state.rs:641` | `Board::to_planes()` emits 18 × TOTAL_CELLS — hardcoded 19×19 |
+| `engine/src/lib.rs:217-219` | PyO3 `Board.to_tensor()` calls `inner.to_planes()` → 18×19×19 regardless of `cluster_window_size` |
+| `engine/src/lib.rs:225` | `view_window` docstring: *"`size` is ignored (always 19×19)"* |
+| `engine/src/board/state.rs:703` | `get_cluster_views()` honors `cluster_window_size` — pretrain path, not selfplay |
+| `hexo_rl/selfplay/inference.py:53` | calls `state.to_tensor()` — single-window 19×19 path |
+| `bootstrap_model_v6w25.pt` | `policy_fc.weight = (626, 1250)`: 626 = 25×25+1 (action space), 1250 = 2ch × 625 (trunk 25×25) |
+
+Inference batcher expects (B, 8, 25, 25) from the model. selfplay delivers
+(B, 8, 19, 19). Either crash or silent shape corruption.
+
+---
+
+### §171 P3.3 — Layer 1 detail (canvas vs trunk semantics)
+
+| Site | Convention |
+|---|---|
+| `_V6W25_SPEC.board_size` (encoding.py:108) | 19 (canvas) |
+| `Trainer._model_board_size_for(spec)` (trainer.py:1051) | 25 (trunk) |
+| `Trainer._propagate_encoding_into_config` writes to `config["board_size"]` | 25 (trunk) |
+| `WorkerPool` guard `model.board_size != spec.board_size` (pool.py:127) | compares against 19 (canvas) |
+| Established v6w25 ablation configs | `board_size: 25` (trunk) |
+
+A2.1 picked trunk semantics, A2.2 picked canvas semantics. No test loaded a real
+v6w25 checkpoint into a real `WorkerPool` with a real `HexTacToeNet`.
+
+---
+
+### §171 P3.4 — Options and recommendation
+
+- **(α) Multi-window K-cluster selfplay** — replicate pretrain path in selfplay.
+  Workers emit K cluster views via new Rust API. Inference batcher handles
+  K-per-position fan-out. Pool / results queue / replay buffer all need K-aware
+  batching. Large effort. Touches Rust + Python + Buffer.
+- **(β) Single-window 25×25 selfplay** — extend `to_planes()` to honor
+  `cluster_window_size`. Smaller change but changes v6w25 semantics: trains on
+  different distribution than pretrain. May invalidate the v6w25 anchor.
+- **(γ) Re-anchor §171 P3 to v7full** — v7full (`board_size=19`, v6 encoding)
+  works on existing 19×19 selfplay path. Rolls back §170 close-out canonical pin.
+- **(δ) Pivot to A4 fine-tune side-arm** — pretrain only; doesn't exercise the
+  broken selfplay plane projection.
+
+**Recommendation:** (α) is the right structural fix but multi-day effort. (γ) and
+(δ) are cheap tactical pivots. §172 architectural sprint implements (α) correctly,
+using §171 A1+A2 Python plumbing as the foundation.
+
+---
+
+### §171 P3.5 — State preserved
+
+- **5080:** workspace pulled to `2121069`, engine rebuilt clean, pre-flight tmux
+  killed, 0 GPU memory in use.
+- **Laptop:** branch `phase4/p171_selfplay_smoke` HEAD = `2121069`, pushed.
+- **Pre-flight log:** `5080:/workspace/hexo_rl/logs/sprint_171_p3_preflight/run.log`.
+- **Pre-flight ckpt-dir:** empty (crashed before first ckpt).
+- **Cross-reference:** raw report at `/tmp/p171_p3_preflight_blocker.md`.
+
+---
+
+### §171 P3.6 — Pin scope clarification
+
+- **v6w25 canonical for:** pretrain, eval, matched-MCTS (per §170 P4 P1
+  mechanism). Scope: single-window 25×25 inference from a pre-trained checkpoint.
+- **v7full canonical for:** selfplay (sustained smoke), pending α delivery.
+- Neither pin is silently retracted. Both are explicit with scope constraints.
+- **α (multi-window K-cluster selfplay)** is Phase 4.5+ scope. Design doc in §172
+  Phase A7. Implementation in §173+.
+- The §172 sprint header will document α scope formally; this entry records the
+  blocker that necessitated it.
+
+**Status:** BLOCKED → §172 architectural sprint. `phase4/encoding_registry`
+branch cut. §171 P3 will not resume on `phase4/p171_selfplay_smoke`.
+
+---
+
+## §172 — Encoding Registry Single-Source-of-Truth (architectural sprint)
+
+**Trigger:** §171 P3 plane-export blocker — `Board::to_planes` hard-coded `BOARD_SIZE = 19` even when `Board::with_encoding(v6w25_spec)` set `cluster_window_size = 25`. Symptom: silent shape corruption on v6w25 selfplay. Root cause: scattered encoding state across 23 load-bearing surfaces (engine + Python). Fix: make the registry the single canonical authority.
+
+**Branch:** `phase4/encoding_registry` (cut from `phase4/p171_selfplay_smoke` 2026-05-09).
+
+**Scope:** A1 analysis → A2 design → A3 registry impl → A4 plumbing pass → A5 metadata → A6 round-trip test → A7 α design doc → A8 doc cleanup → A9 review → A10 close-out (this section).
+
+### A1–A9 timeline (2026-05-09 → 2026-05-10)
+
+- **A1** (analysis): 23 load-bearing surfaces inventoried; cleanup inventory captured. Commits 4406f38, e600e61, 2c4c9d8.
+- **A2** (design): single TOML at `engine/src/encoding/registry.toml` is canonical; Lazy `&'static` lookup. Commit f6e38e9.
+- **A3** (registry impl): TOML + Rust `RegistrySpec` + Python `hexo_rl.encoding` module. 4 commits 138768a..8ba6060.
+- **A4** (plumbing): `Board::to_planes` honors spec.board_size; worker dispatch threads EncodingSpec; Python pool/inference/training/eval consume registry; multi-window selfplay BLOCKED at WorkerPool init pending α. 6 commits 756189b..c9d66dc.
+- **A5** (metadata): ckpt + corpus sidecar schemas + audit CLI + backfill helpers. 3 commits 14839dc..7290bf3.
+- **A6** (round-trip): cross-encoding parameterized test (5 nodes PASS). Commit 49a5ced.
+- **A7** (α design doc): `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`. Commit 8ad4011.
+- **A8** (doc cleanup): README + CLAUDE.md + docs tree. 3 commits b96a980..82215c0.
+- **A9** (review): 3 parallel review subagents — load-bearing / design drift / regression. Commit 70f6e8d. Verdict PASS — Phase B unblocked.
+
+### A10 — close-out (2026-05-10)
+
+A9 surfaced 6 deferred items + 1 substantive design drift (§10 scattered-key) + 3 HIGH-RISK silent-corruption hazards in §5 audit. A10 closes all of them via 13 commits.
+
+**Design amend** (`f687602`):
+- §10 amended to consistency-not-equality (operator-confirmed; lets sprint_171_p3_5080.yaml inherit `board_size: 25` from model.yaml without crashing while still catching real mismatches).
+- §11.6 cross-table consistency: 6 invariants joined on `corpus_sha256`.
+- §8 `model_variant` clarified as nullable sub-arch tag.
+
+**Implementation plan** (`36f1d5e`): `docs/superpowers/plans/2026-05-10-encoding-registry-a10-cleanup.md` — 12 bite-sized tasks across 7 phases.
+
+**Implementation commits** (12, all on `phase4/encoding_registry`):
+
+| Commit | Task | Summary |
+|---|---|---|
+| ab760ae | T1 | Stamp `model_variant: None` in `build_checkpoint_metadata` (§8 closure) |
+| ae97525 | T2 | Consolidate migrations under `scripts/migrations/2026_05_09_stamp_artifact_metadata.py` |
+| a133d52 | T3 | Per-function `DeprecationWarning` on `hexo_rl.utils.encoding`; drop dead imports; migrate `eval/checkpoint_loader.py` to registry spec |
+| 2dc086f | T4 | `RegistrySpec` accessors (`n_cells`, `state_stride`, `chain_stride`, `aux_stride`, `policy_stride`, `half`) — replaces deferred `meta.rs` |
+| 1262e0c | T5 | Retire sym_tables `*_V8` const presets (8 test sites migrated; 0 hot-path consumers) |
+| 823e241 | T6 | Option 3 — retire `config["board_size"]`: ~20 readers migrated, 4 writers deleted, variants stripped |
+| e2a73f5 | T7 | Audit §6 cross-table consistency (INV-1..6 joined on `corpus_sha256`) |
+| e83e78a | T8a | §5 allowlist tightened (881 → 201 hits, 77% noise reduction) |
+| f7c2bc8 | T8b | **HIGH-RISK** pyo3 default-kwarg silent v6 fallback fixed in `game_runner/mod.rs` + `inference_bridge.rs`; `N_ACTIONS` v6-scoped |
+| 47b7f17 | T9 | `resolve_corpus_path` / `resolve_anchor_path` helpers + `<auto>` config form |
+| 1595008 | T10 | `model-variant` backfill subcommand on migration script (operator-gated) |
+| 576f69d | T11 | pyo3 `from_py_object` deprecation inline TODO (deferred to pyo3 1.0 upgrade) |
+
+**Bench:**
+- Pre-T6 baseline: MCTS 65,945; NN bs=64 4,887; Worker pos/hr 30,235 (n=5).
+- Post-T6 v1: MCTS 65,006 (-1.4%); NN 4,863 (-0.5%); Worker 26,185 (variance — 28% IQR).
+- Post-T8b: MCTS 60,325 (laptop CPU thermal throttle after 5 benches in 90 min; T8b touches no MCTS code; NN stable to ±0.01% confirms CPU-only effect); NN 4,864 (+0.0%); Worker pos/hr **31,225** (best in sprint, integrated metric).
+- Bench harness gate (Phase 4.5 exit criteria): **PASS** on the post-T8b run.
+
+**HIGH-RISK silent-corruption hazards retired:**
+1. `engine/src/game_runner/mod.rs:159` `SelfPlayRunner::new` — was `feature_len = 8 * 19 * 19, policy_len = 19 * 19 + 1` defaults; now derives from `spec.state_stride()` / `spec.policy_stride()` when encoding provided. Backward-compat for legacy callers.
+2. `engine/src/inference_bridge.rs:295` `InferenceBatcher::new` — same pattern, added `encoding_spec` kwarg.
+3. `engine/src/replay_buffer/sym_tables.rs:26` `N_ACTIONS = 362` — audit confirmed all consumers v6-only; doc comment + Rust unit test pin v8 to `spec.policy_stride() = 625`.
+
+**PyO3 surface change:** added `PyRegistrySpec` class (`engine/src/lib.rs`) exposing the full registry record (`policy_logit_count`, `n_planes`, `state_stride`, `policy_stride`) since legacy 4-field `PyEncodingSpec` lacks those fields. Returned by `EncodingSpec.from_registry(name)`.
+
+**Tests:** Python 1306 passed (was 1266 pre-A10 — +40 new tests across T1/T3/T7/T8a/T8b/T9). Rust 223 passed.
+
+**Operator follow-ups (non-blocking, deferred):**
+- pyo3 0.28 `from_py_object` deprecation (T11): documented in-source; gated by future pyo3 upgrade.
+- Operator runs T10 backfill once: `python -m scripts.migrations.2026_05_09_stamp_artifact_metadata model-variant --root checkpoints/`. Idempotent, dry-runnable.
+- pool.py `to_pyo3()` chain + trainer.py `_legacy_spec_for_registry_name` bridge still call legacy shim (gated by Rust SelfPlayRunner migration to registry spec — out of A10 scope).
+
+**Status:** §172 CLOSED. Phase B unblocked. Next: v7full sustained smoke OR §173 α multi-window engineering, operator's call.
+
+---
+
+## §171 A4 P2-reopen C — distribution-shift fine-tune side-arm — 2026-05-11
+
+**Branch:** `phase4/encoding_registry`
+**Verdict:** **DEAD** (E2 confirmed cleanly).
+**Investigation report:** `reports/investigations/sprint_171_a4_finetune_p2reopen_2026-05-11.md` (gitignored — local-only per project convention; pre-registered hypotheses + thresholds locked before launch).
+
+### Pre-registered scope (locked 2026-05-11 before launch)
+
+- **Hypothesis E1 (ALIVE):** the §169 P0 SPATIAL_RICH reframing is correct; the matched-MCTS collapse is a head-calibration problem that a small adversarial-mix fine-tune can fix. Threshold: MCTS-64 WR > 8% AND Wilson-95 lower > 5%.
+- **Hypothesis E2 (DEAD):** spatial features ARE the bottleneck; head + top-4-block fine-tune cannot recover MCTS signal. Threshold: MCTS-64 WR ≤ 2% AND Wilson-95 upper < 4%.
+- **MARGINAL bin:** WR in [2%, 8%]; would require deeper unfreeze before condemning A4.
+
+### Recipe
+
+| Knob | Value |
+|---|---|
+| Resume ckpt | `checkpoints/ablation_169/A4_canvas_realness.pt` (inference state-dict; new weights-only resume path) |
+| Mixed corpus | 95% bootstrap_v8_canvas_realness (347,142) + 5% adversarial_v8 (12,781) via `WeightedRandomSampler` rescale (no physical replication; `scale_adv = 0.022712`); n=359,923 |
+| Steps | 3000 (--epochs 3, --steps caps before epoch 3 ends) |
+| Batch | 256 |
+| LR | peak 5e-5, eta_min 5e-6 (cosine restart), AdamW fresh state |
+| Freeze | trunk.input_conv (PartialConv2d) + trunk.input_gn + trunk.tower[0..7]; **trainable: trunk.tower[8,9,10,11] + policy/opp_reply/value heads** = 1,354,316 / 3,846,668 (35.2%) |
+| compile | OFF (consistency with local 30-step smoke) |
+
+Implementation: 3 commits on `phase4/encoding_registry`:
+- `ee8032a` — `scripts/build_mixed_corpus_a4.py`, `--freeze-trunk-entry`/`--unfreeze-blocks` CLI, weights-only `--resume` mode, `tests/test_pretrain_finetune_freeze.py` (4 unit tests).
+- `47c2f29` — `scripts/eval_sprint_171_a4.sh` with the verdict-bin classifier.
+- `000f6ac` — fix(eval): `spec.version → spec.name` (unrelated §172 A10 stale attr surfaced at eval boot).
+
+### Smoke evidence (laptop, 30 steps)
+
+- Trainable: 1,354,316 / 3,846,668 (35.2%, matches §169 P4 model size).
+- Loss: 3.84 → 3.47 over 30 steps (decreasing, finite).
+- Frozen-surface invariant: `trunk.input_conv` + `tower[0..7]` max|Δ|=0 pre/post — bit-identical.
+- Trainable-surface deltas: `tower[8/9/11]`, `policy_head`, `value_fc1` show ~7e-4 max|Δ|.
+
+### Vast 5080 results
+
+| Metric | Value | §169 P4 baseline | Δ |
+|---|---|---|---|
+| Fine-tune wall | 5 min 20 s | — | — |
+| Final loss | 3.50 (epoch 3 early-cut at step 3000) | 3.47 baseline (post-pretrain) | flat |
+| argmax @ r=8 n=200 | **0/200 = 0.0%** [0.000%, 1.88%], mean ply 23.3 | 0/200 = 0.0% [0.0%, 1.88%], mean ply 23.5 (`reports/ablation_169/A4_eval.json`, 2026-05-08) | no change |
+| MCTS-64 @ r=8 n=200 | **0/200 = 0.0%** [0.000%, 1.88%] | MCTS-128 ~0% pre-fine-tune | consistent |
+| Eval wall | argmax 397 s + MCTS-64 674 s = 17.9 min | — | — |
+
+**Correction (2026-05-11, post-bootstrap-argmax-checkup):** the original close-out of this entry compared the fine-tune argmax (0%) against a 22% baseline and claimed the freeze pattern "collapsed argmax sharpness". That 22% was misattributed — it belongs to **§170 P3 A1+gpool-bias** (v6w25 K-cluster + gpool-bias side-branch; sprint log L9979/L10154/L10259/L10331), not A4 canvas_realness. The actual §169 P4 A4 argmax baseline was already 0/200 (per `reports/ablation_169/A4_eval.json` and sprint log L9535 — "A4 argmax > 12% (bbox direction lives): NOT TRIGGERED (0%)"). Confirmed by re-running A4 argmax n=20 at pre-§172 commit `cedaec3`: 0/20, mean ply 23.2 — identical to HEAD. **A4 was never above 0% argmax at this radius — the fine-tune did not damage anything new, and the DEAD verdict stands strictly on the MCTS-64 axis.**
+
+### Verdict — DEAD
+
+```
+MCTS-64 WR = 0.0000   Wilson95 = [0.0000, 0.0188]   n=200
+DEAD threshold:  WR <= 0.02 AND Wilson upper < 0.04
+                 0.0  ≤ 0.02 ✓    0.0188 < 0.04 ✓
+```
+
+**WITHDRAWN (2026-05-11 amend):** an earlier version of this paragraph claimed the fine-tune "collapsed argmax sharpness 22% → 0% (mean ply 48 → 23)". That comparison was based on a misattributed baseline — the 22% number belongs to §170 P3 A1+gpool-bias, NOT A4 canvas_realness. The §169 P4 A4 baseline was already 0.0% argmax at this radius (`reports/ablation_169/A4_eval.json`, sprint log L9535). Confirmed by re-running argmax n=20 at pre-§172 commit `cedaec3`: 0/20, mean ply 23.2 — identical to HEAD. **The fine-tune did not damage anything new; argmax was already at floor pre-fine-tune. The DEAD verdict rests strictly on the MCTS-64 axis.**
+
+### Implication
+
+The §169 P0 SPATIAL_RICH framing — "matched-MCTS collapse is a distribution-shift problem, not an architecture problem" — is **FALSIFIED** by this side-arm. Distribution-shift fine-tune over a 5% adversarial corpus, with the trunk-entry + lower trunk frozen, cannot re-tune the policy/value heads onto an MCTS-recoverable manifold; the limitation is structural to the v8 + canvas_realness + frozen-spine configuration.
+
+Closes the §171 A4 fine-tune line as a candidate Phase 4.0 unblocker. v6w25 K-cluster (§169 A1 anchor) and v7full (§172 B2 sustained — closed without graduation per `project_172_b2_complete`) remain the two tested anchors.
+
+### Next
+
+**Recommendation:** proceed to §173 α multi-window K-cluster selfplay (the structural fix identified in §171 P3.4 option α; design doc at `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`).
+
+Cheaper alternative (low-prior given the argmax collapse): re-run A4 fine-tune with a different freeze recipe (fully unfrozen, or peak ≤ 1e-5) and a value-head probe before any full re-train. NOT recommended without prior evidence.
+
+### Artefacts
+
+- `checkpoints/sprint_171_a4/A4_finetune_p2reopen.pt` (vast)
+- `reports/sprint_171_a4/A4_finetune_argmax.json`
+- `reports/sprint_171_a4/A4_finetune_mcts64.json`
+- `reports/sprint_171_a4/A4_finetune_eval.json` (combined + verdict)
+- `logs/sprint_171_a4/finetune.log`, `logs/sprint_171_a4/eval.log`
+- Investigation report: `reports/investigations/sprint_171_a4_finetune_p2reopen_2026-05-11.md`
+
+---
+
+## §172 Phase B — v7full sustained smoke + Gate decision packet — 2026-05-11
+
+**Branch:** `phase4/encoding_registry`
+**Aggregation report:** `reports/sprint_172_summary.md` (Phase A recap + Phase B detail + δ + mechanism statement + full Gate packet).
+**Phase A recap:** A1 → A10 closed `phase4/encoding_registry` registry contract end-to-end. §171 P3 plane-export blocker (Board::to_planes silent corruption under v6w25) resolved. 1306 py / 223 rs tests pass; bench-gate PASS post-T8b. 3 HIGH-RISK silent-corruption hazards retired (pyo3 default-kwarg v6 fallback in game_runner + inference_bridge; N_ACTIONS v6-scoped). See §172 entry above for the full A1-A10 detail.
+
+### B-arc selection rationale
+
+Phase B targeted v7full sustained selfplay (not v6w25) because v6w25 sustained selfplay still requires α multi-window engineering (per §171 P3.4 / §172 A7). v7full sits on existing single-window 19×19 path and was the §150 anchor (17.4% SealBot WR n=500). v6w25 sustained is reserved for §173.
+
+### B1 → B1-redo — cold-smoke G1 + G2 fixes
+
+B1 first launch (`sprint_172_p3_v7full` variant, commit 480e675) surfaced two issues — (G1) `bootstrap_anchor` strict-load failure on `tower.*` ↔ `trunk.tower.*` aliases (BLOCKER for promotion gate); (G2) inherited cosine schedule produced 92.3% draw rate.
+
+B1-redo (`sprint_172_p3_v7full_r12.yaml` + commit `cf73390`) added R12 cosine disable (`temperature_threshold_compound_moves: 0` + `temp_min: 0.5`) and migrated `_load_anchor_model` to delegate to `hexo_rl.eval.checkpoint_loader.load_model_with_encoding`, returning `(model, spec, label)` with a new `bootstrap_anchor_loaded` log event for cross-encoding observability. 5080 1200-step smoke 26 min (vs B1 71 min — 3× speedup as decisive games replace 150-ply draws). **PASS 8/8** — draw_rate 0.923 → 0.040 (23×); colony_extension_fraction = 0.0 every game; bootstrap_anchor LOADED via new delegate.
+
+Tests after B1-redo: 1313 py / 223 rs (+7 covering anchor loader regressions). B2 unblocked.
+
+### B2 — 30K v7full sustained
+
+Variant `sprint_172_p3_v7full_r12.yaml` + `--iterations 30000` on 5080. Mid-run fix commit `e90e49d` wired `argmax_n` DRIFT-detector eval (silently UNWIRED in `eval_pipeline.py` — DRIFT gate had been dead) and bumped `eval_interval` 1000 → 5000 (~22.5 hr → ~4.5 hr eval cost over 30K).
+
+Run timeline: launch 16:21 → SIGINT step 4084 (18:04) for fix → resume 18:06 from `checkpoint_00004084.pt` → final SIGINT step 33024 (`--iterations` is LR-schedule denominator NOT step-stop — ran 3024 over). Final ckpt `checkpoints/sprint_172_p3_b2_sustained/checkpoint_00033024.pt`. Replay buffer 3.1 GB persisted.
+
+Milestone curve (post-fix; n=20 each unless noted):
+
+| Step | sealbot | bootstrap_anchor | best_arena (n=100) | argmax_n | elo | promoted |
+|---|---|---|---|---|---|---|
+| 5K  | 0.100 | 0.350 | 0.410 | 0.000 | -94.2 | F |
+| 10K | 0.200 | 0.600 | 0.570 | 0.000 | +50.5 | F (CI block) |
+| 15K | 0.050 | 0.650 | 0.500 | 0.000 |  -9.4 | F |
+| 20K | 0.050 | 0.650 | **0.610** | 0.000 | +34.0 | **T** ← only promotion |
+| 25K | 0.050 | 0.500 | 0.560 | 0.000 | -63.2 | F (CI block) |
+| 30K | 0.050 | 0.600 | 0.550 | 0.000 | -36.3 | F (CI block) |
+
+§150 v7full anchor: SealBot WR **17.4% n=500**. B2 finished sealbot at **0.050 n=20 (Wilson95 [0.009, 0.236])** — fell short of anchor by 12.4 pp on point estimate. UB 0.236 covers anchor LB 0.143 so REGRESSION gate did not fire. STOP-gates audit: REGRESSION never fired; DRIFT never fired (argmax_n 0/20 across all 6); colony_fraction 0.0 throughout. Run completed clean.
+
+Per-opponent: sealbot **STALLED** four consecutive rounds at 0.050 (15K/20K/25K/30K); bootstrap_anchor **LIFTED then OSCILLATED** 0.35 → 0.65 → 0.50 → 0.60; best_arena **post-promotion parity** at 0.55-0.56; argmax_n **DRIFT-COLD** 0/20 across all 6; elo **OSCILLATING** with BT-rating sparsity (5 player rows).
+
+### B verdict — no v7full graduation
+
+Self-play improving (best_arena 0.61 peak, bootstrap_anchor 0.65 peak) while SealBot stalled at 0.05. **External-opponent transfer gap is the headline negative result**: the model is strong vs self, stagnant vs the rule-based external benchmark. Single promotion at step-20K (best_arena 0.610, CI LB 0.512) was the only snapshot to clear the CI-above-half guard.
+
+### Mechanism statement
+
+**Did v7full self-play generate signal?** PARTIAL — YES vs self, NO vs external benchmark. best_arena climbed 0.41 → 0.61 (5K → 20K) and bootstrap_anchor climbed 0.35 → 0.65; sealbot stalled at 0.05 across four consecutive snapshots. Self-play distribution overfit: the v7full single-window 19×19 selfplay path generates positions the model learns to play well *against itself* but does not exercise the threat structures (open-4s, stride-5 lines) that SealBot exploits at radius=8. Matches the §171 P3.4 hypothesis that single-window v7full selfplay is a tactical pivot, not the structural fix.
+
+**Encoder-agnostic value-drift fingerprint observed?** NO. argmax_n DRIFT detector (fires when argmax > 0.18 AND anchor < 0.28 — §170 P4 P1 over-confident-policy fingerprint) was 0/20 across all 6 rounds. Threat-logit C1-C4 probe not run on B2 ckpts (B3 follow-up). colony_fraction stayed 0.0 throughout. **No value-collapse signature.** The transfer gap appears **encoder-specific** (single-window v7full selfplay cannot generate the threat structure SealBot exploits), not a value-drift pathology. This separation matters for §173 framing — the fix is structural at the encoder level, not head-recalibration.
+
+### δ — §171 A4 P2-reopen C verdict — DEAD
+
+See §"§171 A4 P2-reopen C — distribution-shift fine-tune side-arm" above. MCTS-64 0/200 vs SealBot, Wilson95 [0.000%, 1.88%] — DEAD bin met cleanly. §169 P0 SPATIAL_RICH framing FALSIFIED for the frozen-spine fine-tune class. **Closes the bbox + canvas_realness + frozen-spine line.**
+
+(Correction 2026-05-11: an earlier draft of this aggregation cited a "22% → 0%" argmax collapse. That 22% was misattributed (§170 P3 A1+gpool-bias, not A4 baseline). The actual A4 argmax baseline @ n=200 from `reports/ablation_169/A4_eval.json` was already 0.0% — confirmed by re-running argmax n=20 at pre-§172 commit `cedaec3` (0/20, mean ply 23.2, identical to HEAD). The DEAD verdict on the fine-tune is unchanged and rests on the MCTS-64 axis alone.)
+
+### Gate decision packet (operator decides — STOP, awaiting go)
+
+| # | Question | Recommendation | Reasoning |
+|---|---|---|---|
+| (a) | Promote v7full P3 final-step ckpt? | **NO** | sealbot 0.05 n=20 vs §150 anchor 17.4% n=500 — 12.4 pp short. No argmax/MCTS lift over §150. Save `checkpoint_00020000.pt` as B3 anchor candidate (only promoted snapshot) but do NOT graduate to canonical. |
+| (b) | Open §173 (α implementation) under design doc? | **YES** | v7full transfer gap AND δ DEAD verdict point to encoder-structural fix as the only remaining lever. Design doc ready (A7 `8ad4011`; refined `cedaec3`). |
+| (c) | δ A4 verdict resolved? | **DEAD — close bbox direction.** | MCTS-64 WR ≤ 2% AND Wilson UB < 4% met. §173 should NOT include A4 extended-fine-tune side-arm. Frozen-spine v8+canvas_realness class structurally exhausted. |
+| (d) | Merge `phase4/encoding_registry` → `phase4/p171_selfplay_smoke`? | **SKIP intermediate; merge directly to master.** | `phase4/p171_selfplay_smoke` is the older intermediate that handed off to §172. Encoding registry is the canonical close-out for §171 P3 + §172. Direct master merge is cleanest. (If operator prefers two-step, both branches will fast-forward.) |
+| (e) | Merge → master with `sprint-172-close` tag? | **YES** | Tag at the §172 close commit (this aggregation commit). §173 work resumes on a fresh branch cut from the tag. |
+| (f) | Phase 5+ deferral updates: architectural reopens given §172 findings? | **NO new reopens.** | §173 α addresses encoder-structural transfer gap directly. v6 / v7full / v8 anchors settled. No new bbox / canvas / fine-tune side-arms warranted. Operator follow-ups from A10 (T10 backfill, pyo3 1.0 upgrade, Rust SelfPlayRunner registry migration, v8full archival) remain non-blocking and are not architectural reopens. |
+
+### B-side operator follow-ups
+
+1. Save `checkpoint_00020000.pt` as B3 anchor candidate.
+2. B3 prep (if pursued before §173 α): re-run with sealbot n=100 starting at step 10K for 4-5σ statistical power. Current Wilson half-width at n=20 is 0.10 — too wide to call lift below ~5 pp.
+3. `--iterations` semantics: it sets `total_steps` for LR cosine denominator, NOT a step-stop. Variant docs should warn. Cosine LR schedule wired for total_steps=200000 in B2; LR barely decayed (0.002 → 0.00024 final). Short-run variants should override total_steps.
+4. Bootstrap anchor encoding-label cosmetic mismatch — checkpoints stamped `encoding_name='v6'` (shape-inferred fallback) for v7full models. A5 backfill pending.
+
+### Status
+
+**§172 CLOSED. Phase A + Phase B + δ aggregated. Branch ready for merge — operator decision pending on Gate (a)–(f). STOP, awaiting go.**
+
+Forward: §173 α multi-window K-cluster selfplay (design `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`).

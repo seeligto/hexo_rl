@@ -190,6 +190,11 @@ impl SelfPlayRunner {
             let random_opening_plies = self.random_opening_plies;
             let selfplay_rotation_enabled = self.selfplay_rotation_enabled;
             let legal_move_radius_jitter = self.legal_move_radius_jitter;
+            // §171 P3 A1 reopen — Copy the EncodingSpec into each worker
+            // closure. `Option<EncodingSpec>` is `Copy` (EncodingSpec derives
+            // Copy/Clone), so each thread owns its own value with no shared
+            // state cost.
+            let encoding = self.encoding;
             let sym_tables = sym_tables_arc.clone();
             let results_queue = self.results.clone();
             let positions_dropped = self.positions_dropped.clone();
@@ -222,17 +227,24 @@ impl SelfPlayRunner {
                 let mut dbg_game_idx: u32 = 0;
 
                 while running.load(Ordering::SeqCst) {
-                    let mut board = Board::new();
+                    // §171 P3 A1 reopen — honor the runner's EncodingSpec so
+                    // v6w25 workers actually perceive a 25×25 cluster window
+                    // (threshold=8, radius=8). `None` keeps byte-exact pre-§171
+                    // v6 defaults (window=19, threshold=5, radius=5).
+                    let mut board = match encoding.as_ref() {
+                        Some(spec) => Board::with_encoding(spec),
+                        None       => Board::new(),
+                    };
                     let mut records_vec = Vec::new();
                     let mut move_history: Vec<(i32, i32)> = Vec::new();
                     version_seen.clear();
 
                     // Phase B' v8 §152 Q2: per-game radius jitter ∈ {4, 5, 6}.
-                    // Sample once per game from the worker-local RNG so the
-                    // value is fixed for the duration; reproducible given a
-                    // seed-derived rng() initialiser. Default radius (5) is
-                    // unchanged when the flag is off.
-                    if legal_move_radius_jitter {
+                    // §171 P3 A1 reopen — guard with `encoding.is_none()` so a v6w25 (or
+                    // any future v6-family encoding) Board::with_encoding(spec) radius is
+                    // not overwritten by the v6-shaped jitter range. Jitter remains active
+                    // for the bare-defaults v6 path.
+                    if legal_move_radius_jitter && encoding.is_none() {
                         const JITTER_RADII: [i32; 3] = [4, 5, 6];
                         let r = *JITTER_RADII.choose(&mut rng).unwrap();
                         board.set_legal_move_radius(r);

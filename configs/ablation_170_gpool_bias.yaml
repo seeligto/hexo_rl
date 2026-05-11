@@ -14,7 +14,6 @@ description: A1 v6w25 + gpool-bias side-branch (additive K-invariant global sign
 sprint: "§170"
 
 encoding: v6w25
-board_size: 25
 in_channels: 8
 n_actions: 626
 filters: 128

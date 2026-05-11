@@ -19,7 +19,6 @@ description: v8 bbox encoding + canvas_realness mask + PartialConv2d trunk entry
 sprint: "§169"
 
 encoding: v8
-board_size: 25
 in_channels: 11
 n_actions: 625
 filters: 128

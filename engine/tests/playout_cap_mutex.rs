@@ -17,8 +17,8 @@ fn start_panics_when_both_caps_active() {
         1,                  // leaf_batch_size
         1.5,                // c_puct
         0.25,               // fpu_reduction
-        8 * 19 * 19,        // feature_len
-        19 * 19 + 1,        // policy_len
+        Some(8 * 19 * 19),  // feature_len
+        Some(19 * 19 + 1),  // policy_len
         0.5,                // fast_prob   (> 0)
         1,                  // fast_sims
         1,                  // standard_sims
@@ -46,6 +46,8 @@ fn start_panics_when_both_caps_active() {
         0_u32,              // random_opening_plies
         false,              // selfplay_rotation_enabled
         false,              // legal_move_radius_jitter
+        None,               // encoding (§171 P3 A1: v6 default)
+        None,               // encoding_spec (§172 A10 T8b: v6 default)
     )
     .expect("constructor succeeds; mutex is enforced at start()");
 

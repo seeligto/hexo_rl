@@ -27,10 +27,9 @@ from typing import Any, Tuple
 
 import torch
 
+from hexo_rl.encoding import EncodingSpec, lookup as _registry_lookup
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
-from hexo_rl.utils import constants as _c
-from hexo_rl.utils.encoding import EncodingSpec, v6_spec, v8_spec
 
 
 def _strip_compile_prefixes(state: dict) -> dict:
@@ -54,29 +53,6 @@ def _strip_compile_prefixes(state: dict) -> dict:
         out[norm_key] = value
     return out
 
-
-# v6w25 spec — same wire format as v6 but with R=8 perception and a 25×25
-# cluster window. Shares chain-plane count and 8-plane KEPT layout. Built
-# inline here (not in encoding.py) because v6w25 is a §168 concept and
-# the contract module hasn't been updated yet.
-_N_CHAIN_PLANES = 6
-
-
-def _v6w25_spec() -> EncodingSpec:
-    return EncodingSpec(
-        version="v6",  # wire-format-compatible with v6 for state_dict purposes
-        board_size=_c.BOARD_SIZE_V8,  # 25 (matched perception)
-        half=(_c.BOARD_SIZE_V8 - 1) // 2,  # 12
-        n_cells=_c.NUM_CELLS_V8,  # 625
-        n_actions=_c.NUM_CELLS_V8 + 1,  # 626 (cells + pass; v6w25 keeps pass slot)
-        n_planes=_c.BUFFER_CHANNELS,  # 8
-        legal_move_radius=8,
-        cluster_threshold=8,
-        state_stride=_c.BUFFER_CHANNELS * _c.NUM_CELLS_V8,  # 5000
-        chain_stride=_N_CHAIN_PLANES * _c.NUM_CELLS_V8,  # 3750
-        policy_stride=_c.NUM_CELLS_V8 + 1,  # 626
-        aux_stride=_c.NUM_CELLS_V8,  # 625
-    )
 
 
 def detect_encoding_label(ckpt_path: Path, state: dict) -> str:
@@ -131,10 +107,8 @@ def load_model_with_encoding(
 ) -> Tuple[HexTacToeNet, EncodingSpec, str]:
     """Load checkpoint, detect encoding, return (model, spec, label).
 
-    The label is one of {'v6', 'v6w25', 'v8'} — distinct from
-    `spec.version` (which is just the state-dict-compat marker, 'v6' or
-    'v8'). Use the label to drive bot dispatch; use the spec for numeric
-    constants.
+    The label is one of {'v6', 'v6w25', 'v8'} and matches ``spec.name``.
+    Use the label to drive bot dispatch; use the spec for numeric constants.
     """
     ckpt_path = Path(ckpt_path)
     raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -175,13 +149,13 @@ def load_model_with_encoding(
         )
 
     if label == "v8":
-        spec = v8_spec()
+        spec = _registry_lookup("v8")
         model = _build_v8_model(state, spec)
     elif label == "v6w25":
-        spec = _v6w25_spec()
+        spec = _registry_lookup("v6w25")
         model = _build_v6_model(state, spec)
     else:
-        spec = v6_spec()
+        spec = _registry_lookup("v6")
         model = _build_v6_model(state, spec)
 
     model.to(device)

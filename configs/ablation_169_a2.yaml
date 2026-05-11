@@ -10,7 +10,6 @@ description: K-cluster encoder with Set Transformer PMA pool replacing fixed min
 sprint: "§169"
 
 encoding: v6w25
-board_size: 25
 in_channels: 8
 n_actions: 626
 filters: 128

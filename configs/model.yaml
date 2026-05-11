@@ -11,9 +11,13 @@ filters: 128
 se_reduction_ratio: 4
 
 # §166 v8 encoding gate. Default "v6" preserves pre-§166 behavior byte-exact.
-# Set to "v8" to route the Path β pipeline (25×25 bbox, 11 planes, R=8, no
-# K-aggregation, no pass slot). Phase A wires the v8 plumbing only; v8 model
-# architecture, corpus regen, and self-play encoding-awareness land in
-# Phases B–D. See docs/designs/encoding_v8_contract.md.
-encoding:
-  version: "v6"
+# Set to "v8" / "v6w25" / etc. to route a different encoding pipeline. The
+# registry (engine/src/encoding/registry.toml) is the source of truth for
+# board_size, n_planes, cluster geometry, etc.; the scattered scalars above
+# (`board_size`, `in_channels`) MUST stay consistent with the registry's
+# entry — `resolve_from_config` rejects disagreement (§172 A4.5 design §10).
+#
+# §172 A4.5 canonical: string form (mapping form `encoding: { version: v6 }`
+# also still accepted for backward compat by both the new resolver and the
+# legacy `hexo_rl.utils.encoding.resolve_encoding`).
+encoding: v6

@@ -84,7 +84,8 @@ def main() -> None:
     # ── Load self-play buffer ─────────────────────────────────────────────────
     from engine import ReplayBuffer
     capacity  = int(combined_config.get("buffer_capacity", 500_000))
-    buf_size  = int(combined_config.get("board_size", 19))
+    from hexo_rl.encoding import resolve_from_config as _rfc
+    buf_size  = _rfc(combined_config).trunk_size
     n_planes  = int(combined_config.get("n_input_planes", 18))
     n_actions = 19 * 19 + 1  # 362
     buffer = ReplayBuffer(capacity=capacity)

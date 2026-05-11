@@ -26,6 +26,8 @@ import numpy as np
 import structlog
 import torch
 
+from hexo_rl.encoding import EncodingRegistryError, resolve_from_config
+
 log = structlog.get_logger(__name__)
 
 
@@ -59,7 +61,11 @@ class ValueProbe:
                 config = {}
         # Post-§131: production buffer wire format = 8 planes natively.
         self._wire_planes = int(config.get("wire_planes", 8))
-        self._board_size = int(config.get("board_size", 19))
+        # RISK: config from npz fixture may lack 'encoding' key (old fixtures).
+        try:
+            self._board_size = resolve_from_config(config).trunk_size
+        except EncodingRegistryError:
+            self._board_size = int(config.get("board_size", 19))
         self.fixture_path = str(path)
 
         self._device = device if device is not None else torch.device("cpu")

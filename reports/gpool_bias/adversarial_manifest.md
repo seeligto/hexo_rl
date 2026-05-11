@@ -18,12 +18,27 @@ this sprint).
 (`/home/timmy/Work/hexo_rl/data/`)** at sha256
 `e6c1b9b921492d9b23f825cce26e99b818285743fffef8aec3ae47532ef84c2c`.
 12,781 positions across 5 sources, 198 MB uncompressed NPZ, schema
-byte-compatible with `data/bootstrap_corpus_v8.npz` (canvas_realness=True
-variant). NO RETRAIN performed in this sprint — corpus prep only.
+byte-compatible with `data/bootstrap_corpus_v8_canvas_realness.npz`
+(canvas_realness=True variant). NO RETRAIN performed in this sprint —
+corpus prep only.
 
-§171 A4 fine-tune entry-point: `data/bootstrap_corpus_v8.npz` (base v8
-canvas_realness corpus, sha256 `110ea6b2…`) + this adversarial corpus →
-A4 fine-tune resume from `checkpoints/ablation_169/A4_canvas_realness.pt`.
+§171 A4 fine-tune entry-point:
+`data/bootstrap_corpus_v8_canvas_realness.npz` (base v8 canvas_realness
+corpus, sha256 `110ea6b2…`) + this adversarial corpus → A4 fine-tune
+resume from `checkpoints/ablation_169/A4_canvas_realness.pt`.
+
+> **Correction (§171 P0.1, 2026-05-09):** original draft of this manifest
+> cited `data/bootstrap_corpus_v8.npz` with sha `110ea6b2…` as the §171
+> A4 entry-point. That was a path/sha transposition: the file at
+> `data/bootstrap_corpus_v8.npz` is the **vanilla v8 baseline corpus**
+> (sha `adb88412…`, plane-8 polarity off→outside, used by §167 B1 / §169
+> A2 / A3 retrain). The §171 A4 fine-tune trains from
+> `A4_canvas_realness.pt`, which was pretrained on the canvas_realness
+> variant `data/bootstrap_corpus_v8_canvas_realness.npz` (sha
+> `110ea6b2…`, plane-8 polarity inside→canvas, per
+> `reports/ablation_169/A4_corpus_export.log`). The corrected entry-
+> point uses the canvas_realness file to preserve plane-8 polarity match
+> with the resume checkpoint.
 
 ---
 
@@ -40,7 +55,7 @@ A4 fine-tune resume from `checkpoints/ablation_169/A4_canvas_realness.pt`.
 | host | 5080 vast.ai (`ssh6.vast.ai:13053`, `/workspace/hexo_rl`) |
 | wall time | ~14 min (459 s sealbot_vs_a1 + 39 s far_line + 25 s far_placement + 214 s krakenbot + 147 s sealbot self-play) |
 
-### NPZ schema (column-by-column parity with bootstrap_corpus_v8.npz)
+### NPZ schema (column-by-column parity with bootstrap_corpus_v8_canvas_realness.npz)
 
 | key | shape | dtype | notes |
 |---|---|---|---|
@@ -79,8 +94,9 @@ Notes per source:
 
 ## Position filter criteria
 
-Identical to `bootstrap_corpus_v8.npz` (`scripts/export_corpus_npz.py`) for
-training-loop schema compatibility:
+Identical to `bootstrap_corpus_v8_canvas_realness.npz`
+(`scripts/export_corpus_npz.py --canvas-realness`) for training-loop
+schema compatibility:
 
 - Drop draws / no-winner games (`board.winner() is None`).
 - Drop games shorter than 15 plies (`min_game_plies=15`).
@@ -91,7 +107,8 @@ training-loop schema compatibility:
   game_seed).
 - Plane-8 polarity is `canvas_realness=True` (1 inside, 0 outside) — required
   by `A4_canvas_realness.pt` PartialConv2d trunk entry; matches base
-  bootstrap_corpus_v8.npz canvas_realness variant.
+  `bootstrap_corpus_v8_canvas_realness.npz` (canvas_realness variant, sha
+  `110ea6b2…`).
 - `legal_move_radius=8` on every Board (matches v6w25 / v8 perception);
   `cluster_threshold=8` and `cluster_window_size=25` set on the Board only
   for the sealbot_vs_a1 source (A1's V6ArgmaxBot reads the v6w25 cluster
@@ -105,7 +122,7 @@ training-loop schema compatibility:
 
 ```bash
 # §171 A4 fine-tune corpus inputs (base + adversarial):
-data/bootstrap_corpus_v8.npz                    sha256 110ea6b20ad3140d2791a1ca72c5c36076a75913e9fe5f9574fa3a1d45dc8cb3  (347,142 pos)
+data/bootstrap_corpus_v8_canvas_realness.npz    sha256 110ea6b20ad3140d2791a1ca72c5c36076a75913e9fe5f9574fa3a1d45dc8cb3  (347,142 pos)
 data/adversarial_corpus_v8.npz                  sha256 e6c1b9b921492d9b23f825cce26e99b818285743fffef8aec3ae47532ef84c2c  ( 12,781 pos)
 
 # §171 A4 fine-tune resume base (frozen architecture from §169 P4):

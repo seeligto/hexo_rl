@@ -239,6 +239,27 @@ The split-responsibility architecture is fully in place:
 
 ---
 
+## Phase 4.5+ — Encoding migration
+
+**Goal:** retire scattered v6 hardcoded constants; lift sustained
+selfplay onto multi-window K-cluster encodings (v6w25 + future).
+
+- [x] **§172 architectural sprint** — encoding registry as single
+  source of truth. Closed on `phase4/encoding_registry` (2026-05-09 →
+  2026-05-10). `engine/src/encoding/registry.toml` declares every
+  encoding; both Rust + Python parse it; `EncodingSpec` threads
+  through `Board::with_encoding` → worker_loop → InferenceServer →
+  trainer. Audit CLI: `python -m hexo_rl.encoding audit`. Full
+  contract: `docs/designs/encoding_registry_design.md`.
+- [ ] **§173+ α — multi-window K-cluster selfplay** — gating sprint
+  for sustained v6w25 and future K-cluster training. Parameterizes
+  replay buffer strides + Python trainer over `EncodingSpec` (Rust
+  MCTS hot path already runs the multi-window contract — α is
+  buffer/trainer routing, not new MCTS architecture). Full design:
+  `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`.
+
+---
+
 ## Phase 5 — Long-run training (ongoing)
 
 **Goal**: Train to human-competitive strength.

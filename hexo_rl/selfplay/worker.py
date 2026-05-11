@@ -9,27 +9,58 @@ Phase 2 additions retained:
   - Temperature scheduling by ply (tau=1.0 early, tau=0.1 late, tau=0 eval).
   - Both controlled by config and a `use_dirichlet` flag.
 
+§172 A4.2: encoding spec sourced from the new `hexo_rl.encoding` registry.
+Accepts both legacy `hexo_rl.utils.encoding.EncodingSpec` (NamedTuple) and
+new `hexo_rl.encoding.EncodingSpec` (dataclass) via `_to_registry_spec`
+adapter for backward compat with `OurModelBot` callers that still hold
+the legacy spec.
+
 Usage:
     worker = SelfPlayWorker(model, config, device)
     policy = worker._run_mcts(board, use_dirichlet=False)
     q, r   = worker._sample_action(policy, board.legal_moves(), board)
+       # ^ since §172 A4.2, _sample_action is a bound method (was staticmethod);
+       #   reads spec.policy_logit_count from self._n_actions cache.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
 from engine import Board, MCTSTree
+from hexo_rl.encoding import EncodingSpec as RegistrySpec
+from hexo_rl.encoding import lookup, resolve_from_config
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
-from hexo_rl.selfplay.utils import BOARD_SIZE, N_ACTIONS, get_temperature  # noqa: F401 (re-exported)
+from hexo_rl.selfplay.utils import get_temperature  # noqa: F401 (re-exported)
 
 # Backward-compat: callers that do `from hexo_rl.selfplay.worker import get_temperature`
 # continue to work without changes.
 __all__ = ["SelfPlayWorker", "get_temperature"]
+
+
+def _to_registry_spec(
+    spec: Union[RegistrySpec, Any],
+) -> RegistrySpec:
+    """§172 A4.2 adapter — accept either legacy NamedTuple or new dataclass.
+
+    Returns the new registry-form `EncodingSpec`. Looks up by `.version`
+    (legacy NamedTuple) or `.name` (new dataclass).
+    """
+    if isinstance(spec, RegistrySpec):
+        return spec
+    if hasattr(spec, "version"):
+        return lookup(spec.version)
+    if hasattr(spec, "name"):
+        return lookup(spec.name)
+    raise TypeError(
+        f"_to_registry_spec: cannot adapt {type(spec).__name__!r}; "
+        "expected hexo_rl.encoding.EncodingSpec or "
+        "hexo_rl.utils.encoding.EncodingSpec"
+    )
 
 
 class SelfPlayWorker:
@@ -41,6 +72,8 @@ class SelfPlayWorker:
                      n_simulations, c_puct, temperature_threshold_ply,
                      board_size (must match network input).
         device:  torch.device.
+        encoding_spec: Optional explicit spec (legacy NamedTuple or new
+                       dataclass). If omitted, resolved from config.
     """
 
     def __init__(
@@ -48,9 +81,20 @@ class SelfPlayWorker:
         model:  HexTacToeNet,
         config: Dict[str, Any],
         device: torch.device,
+        encoding_spec: Optional[Union[RegistrySpec, Any]] = None,
     ) -> None:
         self.config = config
         self.device = device
+
+        # §172 A4.2 — resolve via the new registry. Legacy specs round-trip
+        # through `_to_registry_spec` so OurModelBot / tests that hold the
+        # NamedTuple form continue to work.
+        if encoding_spec is None:
+            self.encoding_spec: RegistrySpec = resolve_from_config(config)
+        else:
+            self.encoding_spec = _to_registry_spec(encoding_spec)
+        self._board_size: int = self.encoding_spec.board_size
+        self._n_actions: int = self.encoding_spec.policy_logit_count
 
         mcts_cfg = config.get("mcts", config)
         self.n_sims          = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
@@ -59,7 +103,12 @@ class SelfPlayWorker:
         self.dirichlet_alpha = float(mcts_cfg.get("dirichlet_alpha", 0.3))
         self.dirichlet_eps   = float(mcts_cfg.get("epsilon", 0.25))
 
-        self._engine = LocalInferenceEngine(model, device)
+        # Pass the resolved registry spec into LocalInferenceEngine so the
+        # Python-side fallback path (multi-window aggregation) sizes its
+        # global-policy vector from spec.policy_logit_count.
+        self._engine = LocalInferenceEngine(
+            model, device, encoding_spec=self.encoding_spec,
+        )
         self.tree    = MCTSTree(c_puct=self.c_puct)
 
         # Keep a direct reference for callers that accessed worker.model
@@ -145,12 +194,14 @@ class SelfPlayWorker:
                 config=self.config,
             )
 
-        return self.tree.get_policy(temperature=temperature, board_size=BOARD_SIZE)
+        # §172 A4.2 — board_size sourced from registry spec via cached
+        # `_board_size`. v6/v7full → 19; v6w25/v8 → 25.
+        return self.tree.get_policy(temperature=temperature, board_size=self._board_size)
 
     # ── Action sampling ────────────────────────────────────────────────────────
 
-    @staticmethod
     def _sample_action(
+        self,
         policy: List[float],
         legal_moves: List[Tuple[int, int]],
         board: Board,
@@ -159,10 +210,18 @@ class SelfPlayWorker:
 
         Falls back to uniform sampling if MCTS assigns zero probability to all
         legal moves (degenerate case).
+
+        §172 A4.2 — converted from staticmethod to bound method so the
+        method reads `self._n_actions` from the registry-resolved encoding
+        spec. Previously hard-coded the v6-only module-level
+        `N_ACTIONS=362` constant. Callers (incl. `OurModelBot`) already
+        invoke as `self._worker._sample_action(...)`, so the bind transition
+        is source-compatible.
         """
+        n_actions = self._n_actions
         legal_flat = [board.to_flat(q, r) for q, r in legal_moves]
         probs = np.array(
-            [policy[i] if i < N_ACTIONS else 0.0 for i in legal_flat],
+            [policy[i] if i < n_actions else 0.0 for i in legal_flat],
             dtype=np.float64,
         )
         total = probs.sum()

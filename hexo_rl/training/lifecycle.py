@@ -47,7 +47,8 @@ def build_inference_model(
     device: torch.device,
 ) -> tuple[torch.nn.Module, InfModelArch]:
     # ── Inference model — separate instance owned by InferenceServer ──────────
-    board_size         = int(trainer.config.get("board_size",         19))
+    from hexo_rl.encoding import resolve_from_config as _registry_resolve
+    board_size         = _registry_resolve(trainer.config).trunk_size
     res_blocks         = int(trainer.config.get("res_blocks",         12))
     filters            = int(trainer.config.get("filters",            128))
     in_channels        = int(trainer.config.get("in_channels",         8))
@@ -97,6 +98,13 @@ def cuda_warmup(
     device: torch.device,
     board_size: int,
 ) -> None:
+    """Warm up CUDA kernels with a dummy forward pass.
+
+    ``board_size`` here is the model trunk side (registry `trunk_size`,
+    e.g. 19 for v6, 25 for v6w25/v8). Callers should pass either
+    ``arch.board_size`` (post-`_propagate_encoding_into_config` it equals
+    the trunk) or ``spec.trunk_size`` directly.
+    """
     # ── CUDA warm-up ─────────────────────────────────────────────────────────
     # Force CUDA kernel compilation now (before workers start) so the first
     # inference call from a worker returns immediately instead of blocking for

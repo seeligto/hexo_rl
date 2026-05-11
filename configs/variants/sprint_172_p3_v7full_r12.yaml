@@ -1,0 +1,124 @@
+# sprint_172_p3_v7full_r12 — §172 Phase B cold smoke + §156 R12 cosine fix.
+#
+# Host: 5080 (RTX 5080 16 GB + Ryzen 9 9900X 24t).
+# Encoding: v7full (§150 anchor; 17.4 % n=500 vs SealBot).
+#
+# ## Purpose
+#
+# Variant of `sprint_172_p3_v7full` that applies the §156 R12 cosine fix to
+# break the R10 91 % draw lock observed in B1 (2026-05-10): final
+# `draw_rate=0.923`, x_winrate=0.037, o_winrate=0.040 over 300 games.
+#
+# Composes the §172 A4 registry-driven plumbing (validated PASS in B1)
+# with the §156 R12 verdict (cosine schedule disable) so the B1-redo
+# smoke exercises both fixes in one run:
+#
+#   1. eval_pipeline._load_anchor_model migrated to load_model_with_encoding
+#      (commit on phase4/encoding_registry; this run is the first to verify
+#      bootstrap_anchor floor opponent loads cleanly).
+#   2. R12 cosine disable (`temperature_threshold_compound_moves: 0` +
+#      `temp_min: 0.5`) — collapses R10 91 % draws to ~5 % per
+#      `reports/phase_b_prime/training_knob_isolation/r10_bisection.md`.
+#
+# ## §156 R12 caveat — colony attractor risk
+#
+# The R12 fix lit up the v9 / §147 colony failure mode in §156's bisection
+# (67 % colony wins under fixed τ=0.5).  Mitigations active in this variant:
+#
+#   - `legal_move_radius_jitter: true` (§152 / §157 PROPAGATED) — sole
+#     confirmed lever on the Class-4 stride-5 fixed point.
+#   - `bootstrap_floor.min_winrate: 0.45` — promotion blocks if WR vs the
+#     frozen v7full anchor falls below the floor (the v9 Class-5 signature).
+#     Active because B1 unblocked the bootstrap_anchor loader.
+#
+# Pre-flight abort policy: if 1k-step pre-flight observes
+# `colony_extension_fraction` > 50 % rolling, kill the run and fall back
+# to the cosine-on baseline (`sprint_172_p3_v7full`) per
+# `feedback_draw_rate_not_abort_signal`.
+#
+# ## Pre-registered pass criteria (B1 redo)
+#
+#   - C1 workers spawn + encoding logs match v7full.
+#   - C2 ≥ 100 selfplay games complete.
+#   - C3 buffer fills with v7full-shaped tensors (19×19 / 8 planes).
+#   - C4 200+ training steps execute, loss finite.
+#   - C5 eval n=20 fired across argmax + sealbot + bootstrap_anchor;
+#     bootstrap_anchor LOADS WITHOUT state_dict error (G1 fix verification).
+#   - C6 pos/hr ≥ 5K (smoke shape).
+#   - C7 (NEW) draw_rate < 50 % (R12 verification; B1 baseline 92.3 %).
+#   - C8 (NEW) colony_extension_fraction < 50 % rolling (R12 colony guard).
+#
+# Hard surface: engine panic / tensor-shape mismatch / worker-spawn
+# timeout / `evaluation_error` on bootstrap_anchor / colony_fraction > 50 %
+# all STOP the smoke.
+#
+# ## Launch (5080)
+#
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v7full.pt \
+#     --variant sprint_172_p3_v7full_r12 \
+#     --checkpoint-dir checkpoints/sprint_172_p3_smoke_r12 \
+#     --no-dashboard \
+#     --iterations 1200
+
+# §172 A4.5 canonical — registry resolves all encoding-derived fields.
+encoding: v7full
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+
+# §172 B2 sustained — 5K cadence.  B1-redo SMOKE used 1000 to fire ≥1 round
+# inside the 1200-step budget; carrying that over to a 30K-step sustained
+# would burn 30 eval rounds × ~45 min = 22.5 hr just in eval mode (eval
+# pauses the selfplay pool).  Flat 5K → 6 rounds total = ~4.5 hr eval.
+# First round at step 5K aligns with the §170 milestone-bin schedule.
+eval_interval: 5000
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  n_workers: 18                 # §138 5080 sweep verdict
+  inference_batch_size: 224     # §138 5080 sweep verdict
+  inference_max_wait_ms: 8.0    # §138 5080 sweep verdict
+  playout_cap:
+    fast_prob: 0.0              # smoke: full search every game
+    # §156 R12 — disable the cosine schedule that drove B1's 92.3 % draw
+    # lock.  threshold=0 collapses the schedule so τ always equals temp_min;
+    # temp_min=0.5 is the §156 T2 baseline value.  Bisection collapsed
+    # draws 91 %→5 % under this swap (R12 winrate Wilson upper bound 9.0 %
+    # is the only variant clearing the 50 % gate).
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+  legal_move_radius_jitter: true  # §157 Gate 5 PROPAGATED + §156 R12 colony mitigation
+
+mixing:
+  # §172 T9 — corpus path resolved by encoding registry (v7full → data/bootstrap_corpus.npz).
+  pretrained_buffer_path: "<auto>"
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      # Same-encoding (v7full ↔ v7full) — guard semantics standard.
+      # B1 fix unblocks the strict-load path: load_model_with_encoding
+      # delegate handles the `tower.*` ↔ `trunk.tower.*` alias hazard.
+      enabled: true
+      stride: 1
+      n_games: 20               # smoke: trim from 100 → 20 for fast round
+      model_sims: 128
+      opponent_sims: 128
+      path: "<auto>"            # resolves to checkpoints/bootstrap_model_v7full.pt
+    sealbot:
+      stride: 1
+      n_games: 20               # smoke: trim
+    argmax_n:
+      # §170 P4 P1 DRIFT detector arm.  Now wired (§172 B2 prep) — was
+      # silently ignored prior because eval_pipeline did not parse the
+      # opponent name.  Model plays with n_sims=1 (≈ policy argmax);
+      # SealBot uses time_limit inherited from sealbot_cfg unless overridden.
+      enabled: true
+      stride: 1
+      n_games: 20
+
+monitors:
+  hard_abort_grad_norm: 10.0    # §157 Gate 5 defensive default

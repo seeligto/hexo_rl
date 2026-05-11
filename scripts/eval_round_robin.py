@@ -52,15 +52,17 @@ def load_model(path: Path, config: dict) -> HexTacToeNet:
 
     # Read dims from conv weights — channel-safe for bootstrap (weights-only) and
     # training checkpoints. Config fallback only for dims not recoverable from weights.
+    from hexo_rl.encoding import resolve_from_config as _rfc
     hparams = Trainer._infer_model_hparams(state)
-    model_cfg = config if "board_size" in config else config.get("model", config)
+    _hp_bs = hparams.get("board_size")
+    _cfg_bs = _rfc(config).trunk_size if _hp_bs is None else _hp_bs
 
     model = HexTacToeNet(
-        board_size=int(hparams.get("board_size", model_cfg.get("board_size", 19))),
-        in_channels=int(hparams.get("in_channels", model_cfg.get("in_channels", 8))),
-        res_blocks=int(hparams.get("res_blocks", model_cfg.get("res_blocks", 12))),
-        filters=int(hparams.get("filters", model_cfg.get("filters", 128))),
-        se_reduction_ratio=int(hparams.get("se_reduction_ratio", model_cfg.get("se_reduction_ratio", 4))),
+        board_size=int(_hp_bs if _hp_bs is not None else _cfg_bs),
+        in_channels=int(hparams.get("in_channels", config.get("in_channels", 8))),
+        res_blocks=int(hparams.get("res_blocks", config.get("res_blocks", 12))),
+        filters=int(hparams.get("filters", config.get("filters", 128))),
+        se_reduction_ratio=int(hparams.get("se_reduction_ratio", config.get("se_reduction_ratio", 4))),
     )
     Trainer._load_state_dict_strict(model, state)
     model.to(DEVICE)

@@ -109,7 +109,8 @@ def main() -> None:
         device=device,
         fallback_config=combined,
     )
-    board_size         = int(trainer.config.get("board_size",         19))
+    from hexo_rl.encoding import resolve_from_config as _rfc
+    board_size         = _rfc(trainer.config).trunk_size
     in_channels        = int(trainer.config.get("in_channels",        18))
     res_blocks         = int(trainer.config.get("res_blocks",         12))
     filters            = int(trainer.config.get("filters",            128))

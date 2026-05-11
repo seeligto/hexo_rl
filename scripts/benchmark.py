@@ -950,9 +950,11 @@ def main() -> None:
         torch.cuda.reset_peak_memory_stats()
 
     # Build model — read from nested model section (new style) with flat fallback
+    from hexo_rl.encoding import resolve_from_config as _rfc
     model_cfg = config.get("model", {})
+    _trunk_sz = _rfc(model_cfg or config).trunk_size
     model = HexTacToeNet(
-        board_size=int(model_cfg.get("board_size", config.get("board_size", 19))),
+        board_size=_trunk_sz,
         in_channels=int(model_cfg.get("in_channels", config.get("in_channels", 18))),
         filters=int(model_cfg.get("filters", config.get("filters", 128))),
         res_blocks=int(model_cfg.get("res_blocks", config.get("res_blocks", 12))),
@@ -962,7 +964,7 @@ def main() -> None:
     pool_model = model  # default: same model used when compile is off
     if not args.no_compile:
         _compile_mode = str(config.get("torch_compile_mode", "default"))
-        _board_size = int(model_cfg.get("board_size", config.get("board_size", 19)))
+        _board_size = _trunk_sz
         _in_ch = int(model_cfg.get("in_channels", config.get("in_channels", 18)))
 
         # NN benchmarks run in the main thread — compile with production mode.

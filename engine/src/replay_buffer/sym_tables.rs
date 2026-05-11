@@ -23,7 +23,20 @@ pub const CHAIN_PLANE_OFFSET: usize = 0;
 pub const BOARD_H:   usize = 19;
 pub const BOARD_W:   usize = 19;
 pub const N_CELLS:   usize = BOARD_H * BOARD_W; // 361
-pub const N_ACTIONS: usize = N_CELLS + 1;       // 362 (pass move at index 361)
+/// **v6-specific** policy length (361 cells + 1 pass slot).
+///
+/// §172 A10 T8b — DO NOT use this const on v8 / v6w25 / canvas-realness paths.
+/// v8 has a 25×25 board with NO pass slot (625 logits), v6w25 has 626. Using
+/// `N_ACTIONS` outside the legacy v6 replay-buffer codepaths produces silent
+/// shape divergence (v8 caller writes 362-wide policy buffer into a 625-wide
+/// scatter destination → either truncation or out-of-bounds depending on the
+/// codepath).
+///
+/// All in-tree callers as of T8b are v6-bound (`replay_buffer::push`,
+/// `replay_buffer::sample`, `replay_buffer::mod`). v8 callers MUST derive
+/// from `crate::encoding::RegistrySpec::policy_logit_count` /
+/// `policy_stride()` instead.
+pub const N_ACTIONS: usize = N_CELLS + 1;       // 362 (pass move at index 361; v6 only)
 pub const N_SYMS:    usize = 12;
 
 // State stride per buffer slot (f16 bits) — 8 planes × 361 cells = 2888.
@@ -54,49 +67,14 @@ pub const POLICY_STRIDE: usize = N_ACTIONS;
 /// scatter table as a single state plane.
 pub const AUX_STRIDE:    usize = N_CELLS;
 
-// ── v8 constants (gated by configs/model.yaml `encoding.version: v8`) ────────
-//
-// Path β: 25×25 fixed-max bbox-of-all-stones, 11 planes (8 KEPT + off_window
-// + moves_remaining_bcast + ply_parity_bcast), R=8 perception, no pass slot,
-// K-aggregation removed. See docs/designs/encoding_v8_contract.md §1.2.
-//
-// These constants are used by `SymTables::with_shape(BOARD_SIZE_V8, N_PLANES_V8)`
-// and by future v8-aware buffer/inference paths. v6 callers do NOT see these
-// values — `SymTables::new()` and the v6 buffer wire format remain at v6
-// dimensions byte-exact.
-
-/// v8 state plane count: 8 KEPT + off_window + moves_remaining_bcast + ply_parity_bcast.
-pub const N_PLANES_V8: usize = 11;
-/// v8 bbox side (fixed-max). 12 + 12 + 1 = 25 (HALF_V8 + HALF_V8 + 1).
-pub const BOARD_H_V8: usize = 25;
-pub const BOARD_W_V8: usize = 25;
-/// v8 total cells = 25 × 25 = 625.
-pub const N_CELLS_V8: usize = BOARD_H_V8 * BOARD_W_V8;
-/// v8 spatial-only policy width = 625 (no pass slot — P1 close-out: pass dead in HTTT).
-pub const N_ACTIONS_V8: usize = N_CELLS_V8;
-/// v8 board half (bbox margin). HALF_V8 = (BOARD_H_V8 - 1) / 2 = 12.
-/// Currently unused inside this module (`SymTables::with_shape` derives
-/// half locally from `board_size`); retained as a named constant for the
-/// v8 bbox encoder and v8-aware Python callers.
-#[allow(dead_code)]
-pub(crate) const HALF_V8: i32 = 12;
-/// v8 state stride per buffer slot = 11 × 625 = 6875.
-pub const STATE_STRIDE_V8: usize = N_PLANES_V8 * N_CELLS_V8;
-/// v8 chain stride per buffer slot = 6 × 625 = 3750 (Q13 chain planes ride v8 spatial).
-pub const CHAIN_STRIDE_V8: usize = N_CHAIN_PLANES * N_CELLS_V8;
-/// v8 policy stride = 625 (spatial-only).
-pub const POLICY_STRIDE_V8: usize = N_ACTIONS_V8;
-/// v8 auxiliary stride = 625 (single-plane spatial).
-pub const AUX_STRIDE_V8: usize = N_CELLS_V8;
-
 // ── v6w25 constants (§168 Gate 3 — K-cluster encoding at matched R=8 ───
 //    perception). Wire format = v6 (8 KEPT planes + pass slot) but
 //    cluster window grows 19 → 25, cluster threshold grows 5 → 8, and
 //    legal-move radius grows 5 → 8. Used as the matched-perception A/B
 //    baseline against v8 single-bbox (T3 §168 verdict pending).
 
-/// v6w25 cluster window side length. Same value as `BOARD_H_V8` but
-/// distinct symbol — v6w25 keeps the v6 8-plane KEPT_PLANE_INDICES wire
+/// v6w25 cluster window side length. Numerically 25 (matching v8 bbox side)
+/// but distinct symbol — v6w25 keeps the v6 8-plane KEPT_PLANE_INDICES wire
 /// format and pass slot, just with a larger cluster window.
 pub const BOARD_H_V6W25: usize = 25;
 pub const BOARD_W_V6W25: usize = BOARD_H_V6W25;
@@ -238,11 +216,11 @@ impl SymTables {
 
     /// Build sym tables at an arbitrary square board shape and plane count.
     ///
-    /// Used by v8 callers (`SymTables::with_shape(BOARD_H_V8, N_PLANES_V8) =
-    /// 25×25, 11 planes`) and by tests. The 12-fold scatter LUTs depend on
-    /// `board_size` (hex window dimensions); axis_perm is board-size invariant
-    /// (purely a function of the 3 hex axes); chain_src_lookup is plane-count
-    /// invariant (always 6 chain planes regardless of state plane count).
+    /// Used by v8 callers (e.g. `SymTables::with_shape(25, 11)`) and by tests.
+    /// The 12-fold scatter LUTs depend on `board_size` (hex window dimensions);
+    /// axis_perm is board-size invariant (purely a function of the 3 hex axes);
+    /// chain_src_lookup is plane-count invariant (always 6 chain planes
+    /// regardless of state plane count).
     ///
     /// Panics if `board_size` is even (sym scatter assumes a centred odd window).
     pub fn with_shape(board_size: usize, n_planes: usize) -> Self {
@@ -521,7 +499,8 @@ mod tests {
 
     #[test]
     fn v8_with_shape_records_dims() {
-        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        let s = crate::encoding::registry::lookup_or_panic("v8");
+        let tables = SymTables::with_shape(s.board_size, s.n_planes);
         assert_eq!(tables.board_size, 25);
         assert_eq!(tables.n_cells, 625);
         assert_eq!(tables.n_planes, 11);
@@ -531,8 +510,9 @@ mod tests {
     fn v8_axis_perm_matches_v6() {
         // axis_perm depends only on the 3 hex axes, not on board size — v8
         // and v6 must produce identical permutations.
+        let spec = crate::encoding::registry::lookup_or_panic("v8");
         let v6 = SymTables::new();
-        let v8 = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        let v8 = SymTables::with_shape(spec.board_size, spec.n_planes);
         for s in 0..N_SYMS {
             assert_eq!(
                 v6.axis_perm[s], v8.axis_perm[s],
@@ -545,8 +525,9 @@ mod tests {
     fn v8_chain_src_lookup_matches_v6() {
         // chain_src_lookup is plane-count invariant (always 6 chain planes)
         // and only depends on axis_perm — so v8 and v6 must agree.
+        let spec = crate::encoding::registry::lookup_or_panic("v8");
         let v6 = SymTables::new();
-        let v8 = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        let v8 = SymTables::with_shape(spec.board_size, spec.n_planes);
         for s in 0..N_SYMS {
             assert_eq!(v6.chain_src_lookup[s], v8.chain_src_lookup[s],
                 "chain_src_lookup[{}] must be board-size invariant", s);
@@ -556,7 +537,8 @@ mod tests {
     #[test]
     fn v8_identity_sym_is_identity_scatter() {
         // sym=0 (reflect=false, n_rot=0): every cell maps to itself.
-        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        let spec = crate::encoding::registry::lookup_or_panic("v8");
+        let tables = SymTables::with_shape(spec.board_size, spec.n_planes);
         let scatter = &tables.scatter[0];
         assert_eq!(scatter.len(), 625, "v8 identity must produce 625 pairs");
         for &(src, dst) in scatter {
@@ -567,7 +549,8 @@ mod tests {
 
     #[test]
     fn v8_scatter_indices_in_bounds() {
-        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        let spec = crate::encoding::registry::lookup_or_panic("v8");
+        let tables = SymTables::with_shape(spec.board_size, spec.n_planes);
         for s in 0..N_SYMS {
             for &(src, dst) in &tables.scatter[s] {
                 assert!((src as usize) < 625, "v8 src out of bounds: sym {} src {}", s, src);
@@ -583,7 +566,8 @@ mod tests {
         // surviving pairs must still have unique src and unique dst (no two
         // cells map to the same destination, no destination is reached from
         // two sources).
-        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        let spec = crate::encoding::registry::lookup_or_panic("v8");
+        let tables = SymTables::with_shape(spec.board_size, spec.n_planes);
         for s in 0..N_SYMS {
             let scatter = &tables.scatter[s];
             assert!(scatter.len() <= 625, "sym {} produced too many pairs: {}", s, scatter.len());
@@ -603,7 +587,8 @@ mod tests {
         // sym 0 (identity) and sym 3 (rot180: (q,r)→(-q,-r)) are guaranteed
         // bijections on a square window centred at origin — every cell's
         // rotated image stays inside the window.
-        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        let spec = crate::encoding::registry::lookup_or_panic("v8");
+        let tables = SymTables::with_shape(spec.board_size, spec.n_planes);
         assert_eq!(tables.scatter[0].len(), 625, "v8 identity must keep all 625 cells");
         assert_eq!(tables.scatter[3].len(), 625, "v8 rot180 must keep all 625 cells");
     }
@@ -619,7 +604,8 @@ mod tests {
 
     #[test]
     fn v8_src_plane_lookup_is_identity_at_n_planes_11() {
-        let tables = SymTables::with_shape(BOARD_H_V8, N_PLANES_V8);
+        let spec = crate::encoding::registry::lookup_or_panic("v8");
+        let tables = SymTables::with_shape(spec.board_size, spec.n_planes);
         for s in 0..N_SYMS {
             assert_eq!(tables.src_plane_lookup[s].len(), 11);
             for p in 0..11 {
@@ -651,5 +637,26 @@ mod tests {
                 assert_eq!(tables.src_plane_lookup[s][p], p);
             }
         }
+    }
+
+    /// §172 A10 T8b HIGH-3 — pin v8 path uses spec.policy_stride() (625),
+    /// NOT the v6-specific `N_ACTIONS` const (362). Regression: any
+    /// out-of-replay-buffer path that imports `N_ACTIONS` for v8 silently
+    /// truncates the 25×25 policy → 19×19+1.
+    #[test]
+    fn test_v8_policy_stride_not_n_actions() {
+        let s = crate::encoding::registry::lookup_or_panic("v8");
+        assert_eq!(s.policy_stride(), 625);
+        assert_ne!(
+            s.policy_stride(),
+            N_ACTIONS,
+            "v8 must not silently use v6 N_ACTIONS=362"
+        );
+    }
+
+    #[test]
+    fn test_v6_policy_stride_matches_n_actions() {
+        let s = crate::encoding::registry::lookup_or_panic("v6");
+        assert_eq!(s.policy_stride(), N_ACTIONS);
     }
 }
