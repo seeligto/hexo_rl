@@ -37,11 +37,16 @@ use std::thread;
 use rand::prelude::IndexedRandom;
 use rand::{rng, RngExt};
 
-use crate::board::{Board, BOARD_SIZE, TOTAL_CELLS, hex_distance};
+use crate::board::{Board, BOARD_SIZE, hex_distance};
+// TOTAL_CELLS import removed §173 A5a — all call sites now use spec-derived n_cells.
 use crate::board::encode_chain_planes;
 use crate::mcts::MCTSTree;
 use crate::replay_buffer::sym_tables::{
-    SymTables, N_SYMS, N_CELLS as SYM_N_CELLS, KEPT_PLANE_INDICES,
+    SymTables, N_SYMS,
+    // §173 A5a: SYM_N_CELLS (= N_CELLS = 361) and KEPT_PLANE_INDICES removed from
+    // import — replaced by runtime spec.n_cells() and spec.kept_plane_indices at
+    // all call sites (H1-α, H2-α, H3-α). sym_tables_for not imported here;
+    // start_impl uses SymTables::with_shape(spec.trunk_size, spec.n_planes) directly.
 };
 use crate::replay_buffer::sample::{apply_symmetry_state, apply_chain_symmetry};
 
@@ -87,31 +92,37 @@ fn rotate_chain_inplace(buf: &mut Vec<f32>, sym_idx: usize, tables: &SymTables) 
     std::mem::swap(buf, &mut tmp);
 }
 
-/// Forward-scatter a single 19×19 policy in place. The pass-action slot
-/// (`N_CELLS`) is a global identity — it stays at the same index.
+/// Forward-scatter a single policy buffer in place. The pass-action slot
+/// (at index `n_cells`) is a global identity — it stays at the same index.
+///
+/// §173 A5a (H2-α): `n_cells` replaces the hardcoded `SYM_N_CELLS = 361`
+/// constant so the pass-slot guard works correctly for v6w25 (n_cells=625).
 #[inline]
-fn rotate_policy_inplace(buf: &mut Vec<f32>, sym_idx: usize, tables: &SymTables) {
+fn rotate_policy_inplace(buf: &mut Vec<f32>, sym_idx: usize, tables: &SymTables, n_cells: usize) {
     let mut tmp = vec![0.0f32; buf.len()];
     let scatter = &tables.scatter[sym_idx];
     for &(sc, dc) in scatter {
         tmp[dc as usize] = buf[sc as usize];
     }
-    if buf.len() > SYM_N_CELLS {
-        tmp[SYM_N_CELLS] = buf[SYM_N_CELLS];
+    if buf.len() > n_cells {
+        tmp[n_cells] = buf[n_cells];
     }
     std::mem::swap(buf, &mut tmp);
 }
 
 /// Forward-scatter the combined aux_u8 buffer (ownership ‖ winning_line) in place.
 /// Ownership default is 1 (empty); winning_line default is 0 (no win mask).
+///
+/// §173 A5a (H3-α): `n_cells` replaces hardcoded `TOTAL_CELLS = 361` so the
+/// ownership/winning-line split point is correct for v6w25 (625 cells per half).
 #[inline]
-fn rotate_aux_inplace(buf: &mut Vec<u8>, sym_idx: usize, tables: &SymTables) {
+fn rotate_aux_inplace(buf: &mut Vec<u8>, sym_idx: usize, tables: &SymTables, n_cells: usize) {
     let mut tmp = vec![0u8; buf.len()];
-    tmp[..TOTAL_CELLS].fill(1); // ownership default = empty
+    tmp[..n_cells].fill(1); // ownership default = empty
     let scatter = &tables.scatter[sym_idx];
     for &(sc, dc) in scatter {
-        tmp[dc as usize]               = buf[sc as usize];
-        tmp[TOTAL_CELLS + dc as usize] = buf[TOTAL_CELLS + sc as usize];
+        tmp[dc as usize]            = buf[sc as usize];
+        tmp[n_cells + dc as usize]  = buf[n_cells + sc as usize];
     }
     std::mem::swap(buf, &mut tmp);
 }
@@ -148,7 +159,18 @@ impl SelfPlayRunner {
         // SymTables construction is O(N_CELLS × N_SYMS) ≈ 4 µs; keeping a single
         // shared instance avoids paying that per-thread (and per-game) plus the
         // cache pressure of duplicate copies in every worker.
-        let sym_tables_arc = Arc::new(SymTables::new());
+        //
+        // §173 A5a (H1-α): when a registry spec is present, build the sym tables
+        // at the spec's board geometry (trunk_size × trunk_size) so v6w25 runners
+        // get 25×25 scatter tables instead of the default v6 19×19 tables.
+        // sym_tables_for() returns a &'static reference to a lazily-initialised
+        // singleton; we call SymTables::with_shape to get an owned instance for
+        // the Arc — this is a one-time ≈ 4–7 µs cost at runner start, not hot.
+        // Callers without encoding_spec fall back to SymTables::new() (v6 byte-exact).
+        let sym_tables_arc: Arc<SymTables> = match self.registry_spec {
+            Some(spec) => Arc::new(SymTables::with_shape(spec.trunk_size, spec.n_planes)),
+            None       => Arc::new(SymTables::new()),
+        };
 
         let mut handles = self.handles.lock().expect("runner handles lock poisoned");
         for worker_id in 0..self.n_workers {
@@ -195,6 +217,25 @@ impl SelfPlayRunner {
             // Copy/Clone), so each thread owns its own value with no shared
             // state cost.
             let encoding = self.encoding;
+            // §173 A5a (H2-α, H3-α): per-spec geometry captured once before
+            // the thread spawn so workers don't re-derive on every hot iteration.
+            // `n_cells` = trunk_size² (cluster window cells per view); used to
+            // replace hardcoded SYM_N_CELLS=361 and TOTAL_CELLS=361 in rotation
+            // helpers and buffer sizing. Falls back to v6 default (361) for
+            // legacy runners that don't supply encoding_spec.
+            // `kept_planes` = &'static slice of source-plane indices retained by
+            // this encoding; replaces the hardcoded KEPT_PLANE_INDICES import.
+            // Falls back to the v6 constant (len=8, [0,1,2,3,8,9,10,11]).
+            let (n_cells, kept_planes): (usize, &'static [usize]) = match self.registry_spec {
+                Some(spec) => (spec.n_cells(), spec.kept_plane_indices),
+                None => {
+                    use crate::replay_buffer::sym_tables::N_CELLS;
+                    // KEPT_PLANE_INDICES is a `const` array — &KEPT_PLANE_INDICES
+                    // promotes to &'static [usize] via const-to-static coercion.
+                    const KPI: &[usize] = &crate::replay_buffer::sym_tables::KEPT_PLANE_INDICES;
+                    (N_CELLS, KPI)
+                }
+            };
             let sym_tables = sym_tables_arc.clone();
             let results_queue = self.results.clone();
             let positions_dropped = self.positions_dropped.clone();
@@ -321,7 +362,7 @@ impl SelfPlayRunner {
                                 leaf_metadata.push((k, centers));
                                 for view in views {
                                     let mut buffer = batcher.get_feature_buffer();
-                                    leaf.encode_state_to_buffer_channels(&view, &mut buffer, &KEPT_PLANE_INDICES);
+                                    leaf.encode_state_to_buffer_channels(&view, &mut buffer, kept_planes);
                                     // §130: forward-scatter the input planes to
                                     // the rotated frame so the model sees a
                                     // randomly-oriented view of this game. The
@@ -346,7 +387,7 @@ impl SelfPlayRunner {
                                         // to canonical frame. Value is scalar
                                         // and rotation-invariant — left as-is.
                                         if sym_idx != 0 {
-                                            rotate_policy_inplace(&mut p, inv_idx, &sym_tables);
+                                            rotate_policy_inplace(&mut p, inv_idx, &sym_tables, n_cells);
                                         }
                                         ps.push(p);
                                         vs.push(v);
@@ -661,13 +702,15 @@ impl SelfPlayRunner {
                         // ── Record position ──
                         let (views, centers) = board.get_cluster_views();
                         for (k, center) in centers.iter().enumerate() {
-                            let mut feat = vec![0.0f32; KEPT_PLANE_INDICES.len() * SYM_N_CELLS];
-                            board.encode_state_to_buffer_channels(&views[k], &mut feat, &KEPT_PLANE_INDICES);
+                            // §173 A5a (H2-α, H3-α): kept_planes and n_cells are
+                            // spec-derived; replace KEPT_PLANE_INDICES/SYM_N_CELLS/TOTAL_CELLS.
+                            let mut feat = vec![0.0f32; kept_planes.len() * n_cells];
+                            board.encode_state_to_buffer_channels(&views[k], &mut feat, kept_planes);
                             // Compute Q13 chain-length planes separately (not in state).
-                            let mut chain = vec![0.0f32; 6 * TOTAL_CELLS];
+                            let mut chain = vec![0.0f32; 6 * n_cells];
                             encode_chain_planes(
-                                &views[k][..TOTAL_CELLS],
-                                &views[k][TOTAL_CELLS..2 * TOTAL_CELLS],
+                                &views[k][..n_cells],
+                                &views[k][n_cells..2 * n_cells],
                                 &mut chain,
                             );
                             // Fast games: zero-policy marks value-only targets (unless
@@ -685,7 +728,7 @@ impl SelfPlayRunner {
                             if sym_idx != 0 {
                                 rotate_state_inplace(&mut feat, sym_idx, &sym_tables);
                                 rotate_chain_inplace(&mut chain, sym_idx, &sym_tables);
-                                rotate_policy_inplace(&mut projected_policy, sym_idx, &sym_tables);
+                                rotate_policy_inplace(&mut projected_policy, sym_idx, &sym_tables, n_cells);
                             }
                             // Capture the per-row window centre so the aux targets
                             // (computed at game end) can be reprojected into the same
@@ -753,7 +796,7 @@ impl SelfPlayRunner {
                         // frame as state/chain/policy. Reproject + scatter compose
                         // because both are pure permutations on cell indices.
                         if sym_idx != 0 {
-                            rotate_aux_inplace(&mut aux_u8, sym_idx, &sym_tables);
+                            rotate_aux_inplace(&mut aux_u8, sym_idx, &sym_tables, n_cells);
                         }
 
                         games_results.push_back((feat, chain, pol, outcome, plies, aux_u8, is_full_search));

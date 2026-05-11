@@ -27,7 +27,8 @@ use pyo3::prelude::*;
 use crate::board::TOTAL_CELLS;
 use crate::encoding::EncodingSpec;
 use crate::inference_bridge::InferenceBatcher;
-use crate::replay_buffer::sym_tables::STATE_STRIDE;
+// §173 A5a: STATE_STRIDE import removed — collect_data now uses batcher.feature_len() (H6-α).
+// use crate::replay_buffer::sym_tables::STATE_STRIDE;
 
 #[pyclass(name = "SelfPlayRunner")]
 pub struct SelfPlayRunner {
@@ -97,6 +98,13 @@ pub struct SelfPlayRunner {
     /// workers actually perceive a 25×25 cluster window with threshold=8 and
     /// legal-move radius=8. Cross-encoding silent-corruption guard.
     pub(crate) encoding: Option<EncodingSpec>,
+    /// §173 A5a — full registry record for the active encoding; `None` for
+    /// legacy callers that don't provide `encoding_spec`. Used by worker_loop
+    /// to call `sym_tables_for(spec)` (H1-α) and to derive per-spec geometry
+    /// constants (`n_cells`, `kept_plane_indices`) replacing hardcoded v6
+    /// literals (H2-α, H3-α, H6-α). When `None`, worker_loop falls back to
+    /// the v6 compile-time defaults (byte-exact for bare v6 runners).
+    pub(crate) registry_spec: Option<&'static crate::encoding::RegistrySpec>,
     pub(crate) running: Arc<AtomicBool>,
     pub(crate) games_completed: Arc<AtomicUsize>,
     pub(crate) positions_generated: Arc<AtomicUsize>,
@@ -282,6 +290,7 @@ impl SelfPlayRunner {
             selfplay_rotation_enabled,
             legal_move_radius_jitter,
             encoding,
+            registry_spec: spec_static,
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
             positions_generated: Arc::new(AtomicUsize::new(0)),
@@ -337,10 +346,14 @@ impl SelfPlayRunner {
         Bound<'py, PyArray2<u8>>,
         Bound<'py, PyArray1<u8>>,
     )> {
-        // Buffer-bound state row width (HEXB v6 = 8 planes × 361 cells = 2888).
-        // Matches batcher.feature_len() — both are STATE_STRIDE post-P3.
-        let feat_len  = STATE_STRIDE;
-        let chain_len = 6 * TOTAL_CELLS;
+        // §173 A5a (H6-α): use batcher.feature_len() instead of the v6-hardcoded
+        // STATE_STRIDE constant. batcher carries the spec-derived value set at
+        // construction time (§172 A10 T8b), so this is always encoding-correct.
+        let feat_len  = self.batcher.feature_len();
+        // n_cells: per-spec cluster window cell count. Falls back to v6 TOTAL_CELLS
+        // (361) for legacy runners that don't provide encoding_spec.
+        let n_cells   = self.registry_spec.map(|s| s.n_cells()).unwrap_or(TOTAL_CELLS);
+        let chain_len = 6 * n_cells;
         let pol_len   = self.pol_len;
 
         let mut results = self.results.lock().expect("results lock poisoned");
@@ -351,8 +364,8 @@ impl SelfPlayRunner {
         let mut flat_pols       = Vec::with_capacity(n * pol_len);
         let mut vals            = Vec::with_capacity(n);
         let mut plies_out       = Vec::with_capacity(n);
-        let mut flat_own        = Vec::with_capacity(n * TOTAL_CELLS);
-        let mut flat_wl         = Vec::with_capacity(n * TOTAL_CELLS);
+        let mut flat_own        = Vec::with_capacity(n * n_cells);
+        let mut flat_wl         = Vec::with_capacity(n * n_cells);
         let mut is_full_search  = Vec::with_capacity(n);
 
         while let Some((feat, chain, pol, outcome, plies, aux_u8, full_search)) = results.pop_front() {
@@ -361,9 +374,10 @@ impl SelfPlayRunner {
             flat_pols.extend_from_slice(&pol);
             vals.push(outcome);
             plies_out.push(plies as u64);
-            // Split combined aux: first TOTAL_CELLS = ownership, last = winning_line.
-            flat_own.extend_from_slice(&aux_u8[..TOTAL_CELLS]);
-            flat_wl.extend_from_slice(&aux_u8[TOTAL_CELLS..]);
+            // Split combined aux: first n_cells = ownership, last = winning_line.
+            // §173 A5a (H6-α): n_cells is spec-derived; replaces TOTAL_CELLS=361 literal.
+            flat_own.extend_from_slice(&aux_u8[..n_cells]);
+            flat_wl.extend_from_slice(&aux_u8[n_cells..]);
             is_full_search.push(full_search as u8);
         }
 
@@ -372,8 +386,8 @@ impl SelfPlayRunner {
         let pols_np   = flat_pols.into_pyarray(py).reshape([n, pol_len])?;
         let vals_np   = vals.into_pyarray(py);
         let gids_np   = plies_out.into_pyarray(py);
-        let own_np    = flat_own.into_pyarray(py).reshape([n, TOTAL_CELLS])?;
-        let wl_np     = flat_wl.into_pyarray(py).reshape([n, TOTAL_CELLS])?;
+        let own_np    = flat_own.into_pyarray(py).reshape([n, n_cells])?;
+        let wl_np     = flat_wl.into_pyarray(py).reshape([n, n_cells])?;
         let ifs_np    = is_full_search.into_pyarray(py);
 
         Ok((feats_np, chain_np, pols_np, vals_np, gids_np, own_np, wl_np, ifs_np))

@@ -167,6 +167,14 @@ impl PyRegistrySpec {
     pub(crate) fn inner(&self) -> &'static RustRegistrySpec {
         self.inner
     }
+
+    /// §173 A5a — test helper: construct from a `&'static RegistrySpec`
+    /// reference (e.g. returned by `lookup_or_panic`). Allows Rust integration
+    /// tests to pass a `PyRegistrySpec` to `SelfPlayRunner::new` without
+    /// going through the Python boundary.
+    pub fn from_static(spec: &'static RustRegistrySpec) -> Self {
+        PyRegistrySpec { inner: spec }
+    }
 }
 
 impl PyEncodingSpec {
