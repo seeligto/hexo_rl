@@ -29,7 +29,6 @@ use std::sync::atomic::Ordering;
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 
-use super::sym_tables::*;
 use super::ReplayBuffer;
 
 pub(crate) const HEXB_MAGIC: u32 = 0x4845_5842; // "HEXB"
@@ -50,45 +49,50 @@ impl ReplayBuffer {
         w.write_all(&HEXB_VERSION.to_le_bytes())
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         // Redundant plane-count field for v3+ sanity checking.
-        w.write_all(&(N_PLANES as u32).to_le_bytes())
+        w.write_all(&(self.encoding.n_planes as u32).to_le_bytes())
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         w.write_all(&(self.capacity as u64).to_le_bytes())
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         w.write_all(&(self.size as u64).to_le_bytes())
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
 
+        let state_stride  = self.encoding.state_stride();
+        let chain_stride  = self.encoding.chain_stride();
+        let policy_stride = self.encoding.policy_stride();
+        let aux_stride    = self.encoding.aux_stride();
+
         // Positions in logical order (oldest → newest)
         for i in 0..self.size {
             let slot = (self.head + self.capacity - self.size + i) % self.capacity;
 
             // state: u16 slice → bytes
-            let state_start = slot * STATE_STRIDE;
+            let state_start = slot * state_stride;
             let state_bytes = unsafe {
                 std::slice::from_raw_parts(
-                    self.states[state_start..state_start + STATE_STRIDE].as_ptr() as *const u8,
-                    STATE_STRIDE * 2,
+                    self.states[state_start..state_start + state_stride].as_ptr() as *const u8,
+                    state_stride * 2,
                 )
             };
             w.write_all(state_bytes)
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
 
             // chain_planes: u16 slice → bytes
-            let chain_start = slot * CHAIN_STRIDE;
+            let chain_start = slot * chain_stride;
             let chain_bytes = unsafe {
                 std::slice::from_raw_parts(
-                    self.chain_planes[chain_start..chain_start + CHAIN_STRIDE].as_ptr() as *const u8,
-                    CHAIN_STRIDE * 2,
+                    self.chain_planes[chain_start..chain_start + chain_stride].as_ptr() as *const u8,
+                    chain_stride * 2,
                 )
             };
             w.write_all(chain_bytes)
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
 
             // policy: f32 slice → bytes
-            let pol_start = slot * POLICY_STRIDE;
+            let pol_start = slot * policy_stride;
             let pol_bytes = unsafe {
                 std::slice::from_raw_parts(
-                    self.policies[pol_start..pol_start + POLICY_STRIDE].as_ptr() as *const u8,
-                    POLICY_STRIDE * 4,
+                    self.policies[pol_start..pol_start + policy_stride].as_ptr() as *const u8,
+                    policy_stride * 4,
                 )
             };
             w.write_all(pol_bytes)
@@ -106,12 +110,12 @@ impl ReplayBuffer {
             w.write_all(&self.weights[slot].to_le_bytes())
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
 
-            // ownership: AUX_STRIDE × u8
-            let aux_start = slot * AUX_STRIDE;
-            w.write_all(&self.ownership[aux_start..aux_start + AUX_STRIDE])
+            // ownership: aux_stride × u8
+            let aux_start = slot * aux_stride;
+            w.write_all(&self.ownership[aux_start..aux_start + aux_stride])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
-            // winning_line: AUX_STRIDE × u8
-            w.write_all(&self.winning_line[aux_start..aux_start + AUX_STRIDE])
+            // winning_line: aux_stride × u8
+            w.write_all(&self.winning_line[aux_start..aux_start + aux_stride])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
             // is_full_search: u8 (v5)
             w.write_all(&[self.is_full_search[slot]])
@@ -171,10 +175,11 @@ impl ReplayBuffer {
         r.read_exact(&mut buf4)
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         let saved_n_planes = u32::from_le_bytes(buf4) as usize;
-        if saved_n_planes != N_PLANES {
+        if saved_n_planes != self.encoding.n_planes {
             return Err(PyValueError::new_err(format!(
-                "HEXB v{HEXB_VERSION} header has n_planes={saved_n_planes}, expected {}",
-                N_PLANES
+                "HEXB v{HEXB_VERSION} header has n_planes={saved_n_planes}, expected {} \
+                 (encoding {:?})",
+                self.encoding.n_planes, self.encoding.name
             )));
         }
 
@@ -191,13 +196,18 @@ impl ReplayBuffer {
         // How many to skip if saved_size > capacity (skip oldest)
         let to_skip = saved_size - to_load;
 
+        let state_stride  = self.encoding.state_stride();
+        let chain_stride  = self.encoding.chain_stride();
+        let policy_stride = self.encoding.policy_stride();
+        let aux_stride    = self.encoding.aux_stride();
+
         // Per-entry byte sizes. v6 layout = state+chain+policy+outcome+game_id+
         // weight+own+wl+is_full_search.
-        let state_bytes = STATE_STRIDE * 2;
-        let chain_bytes = CHAIN_STRIDE * 2;
-        let policy_bytes = POLICY_STRIDE * 4;
+        let state_bytes = state_stride * 2;
+        let chain_bytes = chain_stride * 2;
+        let policy_bytes = policy_stride * 4;
         let entry_bytes = state_bytes + chain_bytes + policy_bytes + 4 + 8 + 2
-            + AUX_STRIDE + AUX_STRIDE + 1;
+            + aux_stride + aux_stride + 1;
 
         // Skip oldest entries
         if to_skip > 0 {
@@ -228,7 +238,7 @@ impl ReplayBuffer {
             // state
             r.read_exact(&mut state_buf)
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
-            let dst_state = &mut self.states[slot * STATE_STRIDE..(slot + 1) * STATE_STRIDE];
+            let dst_state = &mut self.states[slot * state_stride..(slot + 1) * state_stride];
             for (j, d) in dst_state.iter_mut().enumerate() {
                 *d = u16::from_le_bytes([state_buf[j * 2], state_buf[j * 2 + 1]]);
             }
@@ -236,7 +246,7 @@ impl ReplayBuffer {
             // chain_planes
             r.read_exact(&mut chain_buf)
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
-            let dst_chain = &mut self.chain_planes[slot * CHAIN_STRIDE..(slot + 1) * CHAIN_STRIDE];
+            let dst_chain = &mut self.chain_planes[slot * chain_stride..(slot + 1) * chain_stride];
             for (j, d) in dst_chain.iter_mut().enumerate() {
                 *d = u16::from_le_bytes([chain_buf[j * 2], chain_buf[j * 2 + 1]]);
             }
@@ -244,7 +254,7 @@ impl ReplayBuffer {
             // policy
             r.read_exact(&mut pol_buf)
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
-            let dst_pol = &mut self.policies[slot * POLICY_STRIDE..(slot + 1) * POLICY_STRIDE];
+            let dst_pol = &mut self.policies[slot * policy_stride..(slot + 1) * policy_stride];
             for (j, d) in dst_pol.iter_mut().enumerate() {
                 *d = f32::from_le_bytes([
                     pol_buf[j * 4], pol_buf[j * 4 + 1],
@@ -270,10 +280,10 @@ impl ReplayBuffer {
             self.weights[slot] = w_bits;
 
             // ownership + winning_line
-            let aux_dst_start = slot * AUX_STRIDE;
-            r.read_exact(&mut self.ownership[aux_dst_start..aux_dst_start + AUX_STRIDE])
+            let aux_dst_start = slot * aux_stride;
+            r.read_exact(&mut self.ownership[aux_dst_start..aux_dst_start + aux_stride])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
-            r.read_exact(&mut self.winning_line[aux_dst_start..aux_dst_start + AUX_STRIDE])
+            r.read_exact(&mut self.winning_line[aux_dst_start..aux_dst_start + aux_stride])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
 
             // is_full_search: u8
@@ -301,21 +311,22 @@ mod tests {
     /// HEXB v6 round-trip — verify aux columns (ownership, winning_line, chain_planes, is_full_search) survive save/load.
     #[test]
     fn test_aux_hexb_v6_roundtrip() {
-        use super::super::sym_tables::CHAIN_STRIDE;
         use std::env::temp_dir;
 
-        let mut buf = ReplayBuffer::new(8);
+        let mut buf = ReplayBuffer::new(8, "v6");
         let slot = 0;
-        let a_start = slot * AUX_STRIDE;
+        let aux_stride   = buf.encoding.aux_stride();
+        let chain_stride = buf.encoding.chain_stride();
+        let a_start = slot * aux_stride;
         buf.ownership[a_start + 10] = 2;  // P1
         buf.ownership[a_start + 20] = 0;  // P2
         buf.ownership[a_start + 30] = 1;  // empty
         for i in 0..6 { buf.winning_line[a_start + 100 + i] = 1; }
         // Write non-zero chain_planes so the round-trip test is meaningful.
-        let c_start = slot * CHAIN_STRIDE;
+        let c_start = slot * chain_stride;
         buf.chain_planes[c_start + 0]   = f16::from_f32(0.5).to_bits();
         buf.chain_planes[c_start + 100] = f16::from_f32(1.0).to_bits();
-        buf.chain_planes[c_start + 361] = f16::from_f32(0.25).to_bits();  // plane 1
+        buf.chain_planes[c_start + buf.encoding.n_cells()] = f16::from_f32(0.25).to_bits();  // plane 1 (offset = n_cells)
         buf.outcomes[slot]       = 1.0;
         buf.weights[slot]        = f16::from_f32(1.0).to_bits();
         buf.is_full_search[slot] = 0;  // quick-search — test the non-default value
@@ -325,21 +336,23 @@ mod tests {
         let path = temp_dir().join("aux_v6_roundtrip.hexb");
         buf.save_to_path(path.to_str().unwrap()).unwrap();
 
-        let mut buf2 = ReplayBuffer::new(8);
+        let mut buf2 = ReplayBuffer::new(8, "v6");
         let n = buf2.load_from_path(path.to_str().unwrap()).unwrap();
         assert_eq!(n, 1);
 
-        let a2 = 0 * AUX_STRIDE;
+        let aux_stride2   = buf2.encoding.aux_stride();
+        let chain_stride2 = buf2.encoding.chain_stride();
+        let a2 = 0 * aux_stride2;
         assert_eq!(buf2.ownership[a2 + 10], 2);
         assert_eq!(buf2.ownership[a2 + 20], 0);
         assert_eq!(buf2.ownership[a2 + 30], 1);
         for i in 0..6 {
             assert_eq!(buf2.winning_line[a2 + 100 + i], 1);
         }
-        let c2 = 0 * CHAIN_STRIDE;
+        let c2 = 0 * chain_stride2;
         assert_eq!(buf2.chain_planes[c2 + 0],   f16::from_f32(0.5).to_bits());
         assert_eq!(buf2.chain_planes[c2 + 100], f16::from_f32(1.0).to_bits());
-        assert_eq!(buf2.chain_planes[c2 + 361], f16::from_f32(0.25).to_bits());
+        assert_eq!(buf2.chain_planes[c2 + buf2.encoding.n_cells()], f16::from_f32(0.25).to_bits());
         assert_eq!(buf2.is_full_search[0], 0, "is_full_search must survive round-trip");
 
         let _ = std::fs::remove_file(path);

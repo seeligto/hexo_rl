@@ -45,6 +45,7 @@ use pyo3::prelude::*;
 use rand::rngs::StdRng;
 use std::sync::atomic::AtomicU64;
 
+use crate::encoding::RegistrySpec;
 use sym_tables::*;
 
 // ── ReplayBuffer ──────────────────────────────────────────────────────────
@@ -60,22 +61,27 @@ pub struct ReplayBuffer {
     pub(crate) size:         usize,
     pub(crate) head:         usize, // next write slot
 
-    pub(crate) states:       Vec<u16>,  // f16 bits; flat [capacity × N_PLANES × N_CELLS] (HEXB v6: 8 planes)
+    /// Encoding spec — drives all stride / cell-count calculations.
+    /// Looked up from registry at construction time via `encoding` kwarg (default "v6").
+    /// §173 A4: replaces scattered const references in push/sample/storage/persist.
+    pub(crate) encoding: &'static RegistrySpec,
+
+    pub(crate) states:       Vec<u16>,  // f16 bits; flat [capacity × encoding.state_stride()]
     /// Q13 chain-length planes stored separately from state.
-    /// Flat [capacity × CHAIN_STRIDE]. Scattered with axis-plane remap on augmentation.
-    pub(crate) chain_planes: Vec<u16>,  // f16 bits; flat [capacity × CHAIN_STRIDE]
-    pub(crate) policies: Vec<f32>,  // flat [capacity × N_ACTIONS]
+    /// Flat [capacity × encoding.chain_stride()]. Scattered with axis-plane remap on augmentation.
+    pub(crate) chain_planes: Vec<u16>,  // f16 bits; flat [capacity × encoding.chain_stride()]
+    pub(crate) policies: Vec<f32>,  // flat [capacity × encoding.policy_stride()]
     pub(crate) outcomes: Vec<f32>,  // flat [capacity]
     pub(crate) game_ids: Vec<i64>,  // flat [capacity]; −1 = untagged
     pub(crate) weights:  Vec<u16>,  // f16-as-u16 bits; flat [capacity]; sampling weight per position
 
     /// Auxiliary target: per-cell ownership of the final board state, projected
     /// to each row's per-cluster window centre (NOT the game-end bbox centroid).
-    /// Encoding: 0 = P2, 1 = empty, 2 = P1. Flat [capacity × AUX_STRIDE].
+    /// Encoding: 0 = P2, 1 = empty, 2 = P1. Flat [capacity × encoding.aux_stride()].
     pub(crate) ownership:    Vec<u8>,
     /// Auxiliary target: binary mask of the 6 cells of the winning 6-in-a-row,
     /// projected to each row's per-cluster window centre. All zero on draw.
-    /// Flat [capacity × AUX_STRIDE].
+    /// Flat [capacity × encoding.aux_stride()].
     pub(crate) winning_line: Vec<u8>,
 
     /// Move-level playout cap flag: 1 = full-search (policy loss applies),
@@ -83,7 +89,9 @@ pub struct ReplayBuffer {
     /// Defaults to 1 so corpus and legacy positions always contribute to policy.
     pub(crate) is_full_search: Vec<u8>,
 
-    pub(crate) sym_tables:      SymTables,
+    /// Static sym tables for this buffer's encoding. Shared across all buffers
+    /// of the same encoding via `sym_tables_for()`. §173 A4.
+    pub(crate) sym_tables:      &'static SymTables,
     pub(crate) weight_schedule: WeightSchedule,
     pub(crate) next_game_id:    i64,
     pub(crate) rng:             StdRng,
@@ -112,23 +120,31 @@ impl ReplayBuffer {
     /// Create a new buffer with the given `capacity` (number of positions).
     ///
     /// Pre-allocates all storage.  Building the symmetry tables is O(N_CELLS × N_SYMS) ≈ 4 µs.
+    ///
+    /// `encoding` — encoding name from `engine/src/encoding/registry.toml`.
+    /// Defaults to `"v6"` for backward compatibility with legacy callers that
+    /// do not pass this kwarg. A deprecation warning will be added in A6 once
+    /// all callsites are migrated. §173 A4.
     #[new]
-    pub fn new(capacity: usize) -> Self {
+    #[pyo3(signature = (capacity, encoding = "v6"))]
+    pub fn new(capacity: usize, encoding: &str) -> Self {
+        let spec = crate::encoding::registry::lookup_or_panic(encoding);
         let default_w = f16::from_f32(1.0).to_bits();
         ReplayBuffer {
             capacity,
             size: 0,
             head: 0,
-            states:         vec![0u16; capacity * STATE_STRIDE],
-            chain_planes:   vec![0u16; capacity * CHAIN_STRIDE],
-            policies:       vec![0.0f32; capacity * POLICY_STRIDE],
+            encoding: spec,
+            states:         vec![0u16; capacity * spec.state_stride()],
+            chain_planes:   vec![0u16; capacity * spec.chain_stride()],
+            policies:       vec![0.0f32; capacity * spec.policy_stride()],
             outcomes:       vec![0.0f32; capacity],
             game_ids:       vec![-1i64; capacity],
             weights:        vec![default_w; capacity],
-            ownership:      vec![1u8; capacity * AUX_STRIDE],  // 1 = empty default
-            winning_line:   vec![0u8; capacity * AUX_STRIDE],
+            ownership:      vec![1u8; capacity * spec.aux_stride()],  // 1 = empty default
+            winning_line:   vec![0u8; capacity * spec.aux_stride()],
             is_full_search: vec![1u8; capacity],  // 1 = full-search default (legacy compat)
-            sym_tables: SymTables::new(),
+            sym_tables: sym_tables_for(spec),
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
             rng: rand::make_rng(),
@@ -285,20 +301,24 @@ impl ReplayBuffer {
     /// the buffer with known is_full_search values for save/load round-trip checks.
     pub fn push_for_test(&mut self, outcome: f32, game_length: u16, is_full_search: bool) {
         use std::sync::atomic::Ordering;
+        let state_stride  = self.encoding.state_stride();
+        let chain_stride  = self.encoding.chain_stride();
+        let policy_stride = self.encoding.policy_stride();
+        let aux_stride    = self.encoding.aux_stride();
         let slot = self.head;
         if self.size == self.capacity {
             let old_bucket = Self::weight_bucket(self.weights[slot]);
             self.weight_buckets[old_bucket].fetch_sub(1, Ordering::Relaxed);
         }
-        let s = slot * STATE_STRIDE;
-        self.states[s..s + STATE_STRIDE].fill(0);
-        let c = slot * CHAIN_STRIDE;
-        self.chain_planes[c..c + CHAIN_STRIDE].fill(0);
-        let p = slot * POLICY_STRIDE;
-        self.policies[p..p + POLICY_STRIDE].fill(0.0);
-        let a = slot * AUX_STRIDE;
-        self.ownership[a..a + AUX_STRIDE].fill(1);
-        self.winning_line[a..a + AUX_STRIDE].fill(0);
+        let s = slot * state_stride;
+        self.states[s..s + state_stride].fill(0);
+        let c = slot * chain_stride;
+        self.chain_planes[c..c + chain_stride].fill(0);
+        let p = slot * policy_stride;
+        self.policies[p..p + policy_stride].fill(0.0);
+        let a = slot * aux_stride;
+        self.ownership[a..a + aux_stride].fill(1);
+        self.winning_line[a..a + aux_stride].fill(0);
         self.is_full_search[slot] = is_full_search as u8;
         self.outcomes[slot] = outcome;
         self.game_ids[slot] = -1;

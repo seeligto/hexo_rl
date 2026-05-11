@@ -24,7 +24,7 @@ use std::env::temp_dir;
 #[test]
 fn hexb_v6_is_full_search_survives_roundtrip_at_different_capacity() {
     let n = 8;
-    let mut buf = ReplayBuffer::new(n);
+    let mut buf = ReplayBuffer::new(n, "v6");
 
     // Push positions with alternating is_full_search: even=1 (full), odd=0 (quick).
     // Use outcome as an identity tag so we can cross-check after load.
@@ -48,7 +48,7 @@ fn hexb_v6_is_full_search_survives_roundtrip_at_different_capacity() {
     buf.save_to_path(path.to_str().unwrap()).unwrap();
 
     // Load into a fresh buffer with LARGER capacity (regression: slot mapping must be preserved).
-    let mut buf2 = ReplayBuffer::new(n * 2);
+    let mut buf2 = ReplayBuffer::new(n * 2, "v6");
     let loaded = buf2.load_from_path(path.to_str().unwrap()).unwrap();
     assert_eq!(loaded, n, "wrong position count after load");
     assert_eq!(buf2.size(), n);
@@ -70,7 +70,7 @@ fn hexb_v6_game_length_weight_survives_roundtrip() {
     // them to different f16 weights. Verify the weights are preserved after save/load.
     //
     // Weights are stored as f16 bits, so round-trip precision is f16.
-    let mut buf = ReplayBuffer::new(10);
+    let mut buf = ReplayBuffer::new(10, "v6");
     buf.set_weight_schedule(vec![10, 25], vec![0.15, 0.50], 1.0)
         .unwrap();
 
@@ -86,7 +86,7 @@ fn hexb_v6_game_length_weight_survives_roundtrip() {
     let path = temp_dir().join("integration_v6_weight_roundtrip.hexb");
     buf.save_to_path(path.to_str().unwrap()).unwrap();
 
-    let mut buf2 = ReplayBuffer::new(20);
+    let mut buf2 = ReplayBuffer::new(20, "v6");
     buf2.set_weight_schedule(vec![10, 25], vec![0.15, 0.50], 1.0)
         .unwrap();
     let loaded = buf2.load_from_path(path.to_str().unwrap()).unwrap();
