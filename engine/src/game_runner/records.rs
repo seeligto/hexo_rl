@@ -6,22 +6,37 @@
 //! window centre. All functions are pure (no worker state) and free so the
 //! worker loop can call them without holding `self`.
 
-use crate::board::{Board, Cell, BOARD_SIZE, HALF, TOTAL_CELLS};
+use crate::board::{Board, Cell, TOTAL_CELLS};
 use rand::{rng, RngExt};
 
 /// Fuse K cluster-local policies into one global policy in the main board's
 /// MCTS action frame.
 ///
+/// §173 A5b: encoding geometry is passed as pre-extracted integers so the
+/// caller's hot loop avoids copying the full `RegistrySpec` struct (~174 B)
+/// on every call. Caller derives these once from spec before entering the
+/// per-sim loop:
+///   - `n_actions` = `spec.policy_stride()` (362 for v6/v7full, 626 for v6w25)
+///   - `trunk_sz`  = `spec.trunk_size as i32` (19 for v6, 25 for v6w25)
+///
+/// Scatter-max semantics UNCHANGED (α design §3.1): for each legal move m,
+/// locate all clusters k that cover m, take max probability across them,
+/// assign to `global_policy[mcts_idx(m)]`.
+///
 /// For each legal move, takes the max probability across clusters that cover
-/// it. The pass move (index n_actions - 1) is copied from cluster 0. The
-/// result is renormalised to sum to 1; if every entry is ~0 we fall back to
-/// a uniform distribution to avoid division by zero downstream.
-pub(crate) fn aggregate_policy(
+/// it. The pass move (index n_actions - 1) is set to 0.0. The result is
+/// renormalised to sum to 1; if every entry is ~0 we fall back to a uniform
+/// distribution to avoid division by zero downstream.
+#[inline]
+pub fn aggregate_policy(
+    n_actions: usize,
+    trunk_sz: i32,
     board: &Board,
     centers: &[(i32, i32)],
     cluster_policies: &[Vec<f32>],
 ) -> Vec<f32> {
-    let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+    let half = (trunk_sz - 1) / 2;
+
     let mut global_policy = vec![0.0; n_actions];
     let legal = board.legal_moves();
 
@@ -31,10 +46,10 @@ pub(crate) fn aggregate_policy(
 
         let mut max_prob = 0.0;
         for (k, &(cq, cr)) in centers.iter().enumerate() {
-            let wq = q - cq + HALF;
-            let wr = r - cr + HALF;
-            if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
-                let local_idx = wq as usize * BOARD_SIZE + wr as usize;
+            let wq = q - cq + half;
+            let wr = r - cr + half;
+            if wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz {
+                let local_idx = wq as usize * trunk_sz as usize + wr as usize;
                 if cluster_policies[k][local_idx] > max_prob {
                     max_prob = cluster_policies[k][local_idx];
                 }
@@ -59,26 +74,41 @@ pub(crate) fn aggregate_policy(
 
 /// Project a global policy into the cluster-local window centred on `center`.
 ///
+/// §173 A5b: encoding geometry is passed as pre-extracted integers so the
+/// caller's hot loop avoids copying the full `RegistrySpec` struct (~174 B)
+/// on every call. Caller derives these once from spec before entering the
+/// per-move loop:
+///   - `n_actions` = `spec.policy_stride()` (362 for v6/v7full, 626 for v6w25)
+///   - `trunk_sz`  = `spec.trunk_size as i32` (19 for v6, 25 for v6w25)
+///
+/// Per-window local-frame projection UNCHANGED: for each legal move m, project
+/// from the global MCTS index to local window coordinates via
+/// `(q - cq + half, r - cr + half)`. Pass move copied verbatim from global.
+///
 /// Inverse of `aggregate_policy` for a single cluster: used at record time
 /// to stash a cluster-local policy next to the row's 2-plane state snapshot
 /// so that each row is self-consistent under later symmetry augmentation.
 /// The pass move is copied verbatim from the global policy; the result is
 /// renormalised, with a uniform fallback for the zero-mass case.
-pub(crate) fn aggregate_policy_to_local(
+#[inline]
+pub fn aggregate_policy_to_local(
+    n_actions: usize,
+    trunk_sz: i32,
     board: &Board,
     center: &(i32, i32),
     global_policy: &[f32],
 ) -> Vec<f32> {
     let (cq, cr) = *center;
-    let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+    let half = (trunk_sz - 1) / 2;
+
     let mut local_policy = vec![0.0; n_actions];
     let legal = board.legal_moves();
 
     for &(q, r) in &legal {
-        let wq = q - cq + HALF;
-        let wr = r - cr + HALF;
-        if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
-            let local_idx = wq as usize * BOARD_SIZE + wr as usize;
+        let wq = q - cq + half;
+        let wr = r - cr + half;
+        if wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz {
+            let local_idx = wq as usize * trunk_sz as usize + wr as usize;
             let mcts_idx = board.window_flat_idx(q, r);
             if mcts_idx < global_policy.len() {
                 local_policy[local_idx] = global_policy[mcts_idx];

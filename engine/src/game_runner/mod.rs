@@ -10,7 +10,8 @@
 //!   records.rs      — policy aggregation + game-end aux reprojection helpers
 
 pub mod gumbel_search;
-mod records;
+// §173 A5b: `pub mod` so integration tests can call aggregate_policy* directly.
+pub mod records;
 mod worker_loop;
 
 pub use worker_loop::compute_move_temperature;

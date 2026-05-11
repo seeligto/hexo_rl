@@ -236,6 +236,19 @@ impl SelfPlayRunner {
                     (N_CELLS, KPI)
                 }
             };
+            // §173 A5b (H4-α): encoding geometry pre-extracted once before thread
+            // spawn so per-sim hot path passes cheap integer pairs instead of
+            // copying the full RegistrySpec struct (~174 B) on every
+            // aggregate_policy* call. `policy_stride` = n_actions per call site;
+            // `agg_trunk_sz` = trunk_size as i32 for window-bound arithmetic.
+            let policy_stride: usize = match self.registry_spec {
+                Some(ref s) => s.policy_stride(),
+                None => BOARD_SIZE * BOARD_SIZE + 1,
+            };
+            let agg_trunk_sz: i32 = match self.registry_spec {
+                Some(ref s) => s.trunk_size as i32,
+                None => BOARD_SIZE as i32,
+            };
             let sym_tables = sym_tables_arc.clone();
             let results_queue = self.results.clone();
             let positions_dropped = self.positions_dropped.clone();
@@ -445,7 +458,9 @@ impl SelfPlayRunner {
                                     if v < min_v { min_v = v; }
                                 }
                                 aggregated_values.push(min_v);
-                                aggregated_policies.push(records::aggregate_policy(&leaves[i], centers, leaf_policies));
+                                // §173 A5b: pass pre-extracted (policy_stride, agg_trunk_sz)
+                                // instead of copying full RegistrySpec on every sim call.
+                                aggregated_policies.push(records::aggregate_policy(policy_stride, agg_trunk_sz, &leaves[i], centers, leaf_policies));
                             }
 
                             let n = leaves.len();
@@ -715,10 +730,12 @@ impl SelfPlayRunner {
                             );
                             // Fast games: zero-policy marks value-only targets (unless
                             // completed Q-values are enabled, which give signal even at 50 sims).
+                            // §173 A5b: policy_stride and agg_trunk_sz pre-extracted once;
+                            // passing integers instead of copying full RegistrySpec per call.
                             let mut projected_policy = if is_fast_game && !completed_q_values {
-                                vec![0.0; BOARD_SIZE * BOARD_SIZE + 1]
+                                vec![0.0; policy_stride]
                             } else {
-                                records::aggregate_policy_to_local(&board, center, &target_policy)
+                                records::aggregate_policy_to_local(policy_stride, agg_trunk_sz, &board, center, &target_policy)
                             };
                             // §130: forward-scatter the recorded state, chain, and
                             // policy into the rotated frame so the buffer stores

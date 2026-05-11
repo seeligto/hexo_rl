@@ -289,32 +289,38 @@ impl RegistrySpec {
     /// equal, but future canvas-larger-than-trunk encodings must use `trunk_size`.
     /// §173 A3 semantic fix: was `board_size²` (wrong for multi-window). Now
     /// `trunk_size²` — matches Rust intent and Python parity.
+    #[inline]
     pub fn n_cells(&self) -> usize {
         self.trunk_size * self.trunk_size
     }
 
     /// (board_size − 1) / 2 — board half-extent for axial→canvas mapping.
+    #[inline]
     pub fn half(&self) -> i32 {
         (self.board_size as i32 - 1) / 2
     }
 
     /// State plane stride = n_planes × n_cells.
+    #[inline]
     pub fn state_stride(&self) -> usize {
         self.n_planes * self.n_cells()
     }
 
     /// Chain plane stride = N_CHAIN_PLANES × n_cells.
+    #[inline]
     pub fn chain_stride(&self) -> usize {
         crate::replay_buffer::sym_tables::N_CHAIN_PLANES * self.n_cells()
     }
 
     /// Aux plane stride = n_cells (single aux plane).
+    #[inline]
     pub fn aux_stride(&self) -> usize {
         self.n_cells()
     }
 
     /// Policy stride is `policy_logit_count` (already a struct field — provided as
     /// accessor for parity with the strides above).
+    #[inline]
     pub fn policy_stride(&self) -> usize {
         self.policy_logit_count
     }
