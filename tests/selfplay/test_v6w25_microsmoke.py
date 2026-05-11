@@ -66,31 +66,20 @@ def _v6w25_microsmoke_cfg() -> Dict[str, Any]:
     }
 
 
-@pytest.mark.xfail(
-    reason=(
-        "§173 A8' surfaced Rust-side α gaps. Two known blockers in the "
-        "multi-window selfplay path:\n"
-        "  (1) engine/src/game_runner/records.rs::reproject_game_end_row "
-        "allocates aux_u8 of length 2*TOTAL_CELLS (v6 hardcoded 722); "
-        "collect_data() then slices [..n_cells=625] / [n_cells..=97] for "
-        "v6w25, so flat_wl gets 97 bytes/row but reshape expects "
-        "(N, 625) → ValueError. Fix: thread spec.n_cells() through "
-        "reproject_game_end_row (and the rotate_aux_inplace call site).\n"
-        "  (2) engine/src/board/state.rs::window_flat_idx hardcodes "
-        "BOARD_SIZE=19 + HALF=9 so mcts_idx maps into the 19×19 grid; "
-        "aggregate_policy_to_local then lays out 25×25 local windows from "
-        "a 19-cell source, producing positionally misaligned policy rows. "
-        "Fix: spec-thread window_flat_idx geometry the same way as A5a/b.\n"
-        "Both are Rust-side α implementation, out of scope for this "
-        "Python guard-lift / geometry refactor commit. Once both land, "
-        "remove this xfail and the test asserts the v6w25 end-to-end loop."
-    ),
-    strict=False,
-    raises=(AssertionError, ValueError),
-)
 @pytest.mark.timeout(60)
 def test_v6w25_pool_smoke_no_nan_correct_shapes():
-    """Construct + run a v6w25 WorkerPool for a handful of games."""
+    """§173 A8'' closed the two Rust α gaps surfaced by A8':
+      (1) records.rs::reproject_game_end_row now takes a spec-derived
+          n_cells param (replaces TOTAL_CELLS=361 hardcode); aux buffer
+          sized to 2 × n_cells matches collect_data's reshape.
+      (2) board/state.rs::window_flat_idx now dispatches via
+          Board::cluster_window_size (= spec.trunk_size) so the policy
+          index map honours the v6w25 25×25 frame, not the v6 19×19.
+    The xfail marker is gone — this test now asserts end-to-end v6w25
+    multi-window selfplay (Python pool + Rust worker_loop + ReplayBuffer).
+
+    Constructs + runs a v6w25 WorkerPool for a handful of games.
+    """
     device = torch.device("cpu")
     # Random-init net — model + buffer shape parity is what's under test;
     # quality of play is out of scope.
@@ -98,7 +87,11 @@ def test_v6w25_pool_smoke_no_nan_correct_shapes():
         board_size=25, in_channels=8, filters=8, res_blocks=1,
         encoding="v6w25",
     ).to(device)
-    buf = ReplayBuffer(capacity=2048)
+    # §173 A8'': pool pushes v6w25-shaped rows (8 × 25 × 25); buffer must
+    # be initialised with the matching encoding so state_stride / aux_stride
+    # align. Default `ReplayBuffer(capacity)` keeps v6 (8 × 19 × 19) which
+    # would loud-fail at push_many.
+    buf = ReplayBuffer(capacity=2048, encoding="v6w25")
     cfg = _v6w25_microsmoke_cfg()
 
     pool = WorkerPool(model, cfg, device, buf, n_workers=2)

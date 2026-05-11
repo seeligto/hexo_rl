@@ -598,7 +598,11 @@ impl SelfPlayRunner {
                         } else {
                             compute_move_temperature(compound_move, temp_threshold, temp_min)
                         };
-                        let policy = tree.get_policy(temperature, BOARD_SIZE);
+                        // §173 A8'': use spec-derived trunk_sz (= NN-input frame side
+                        // length), not the BOARD_SIZE=19 hardcode. agg_trunk_sz is
+                        // already pre-extracted by the §173 A5b boundary; convert
+                        // back to usize for the get_policy(.., board_size) signature.
+                        let policy = tree.get_policy(temperature, agg_trunk_sz as usize);
 
                         // ── debug_prior_trace: snapshot root priors + visit counts ──
                         // Compile-time gated; zero cost in default builds. Runtime
@@ -660,7 +664,9 @@ impl SelfPlayRunner {
                         // Completed Q-values: compute improved policy for training target.
                         // Move selection still uses temperature-scaled visit counts above.
                         let target_policy = if completed_q_values {
-                            tree.get_improved_policy(BOARD_SIZE, c_visit, c_scale)
+                            // §173 A8'': use spec-derived trunk_sz (= NN-input frame
+                            // side length); see comment on the get_policy call above.
+                            tree.get_improved_policy(agg_trunk_sz as usize, c_visit, c_scale)
                         } else {
                             policy.clone()
                         };
@@ -702,13 +708,15 @@ impl SelfPlayRunner {
                             if legal.contains(&(mq, mr)) {
                                 (mq, mr)
                             } else {
-                                match records::sample_policy(&policy, &legal, &board) {
+                                // §173 A8'': sample_policy now takes spec-derived trunk_sz.
+                                match records::sample_policy(&policy, &legal, &board, agg_trunk_sz) {
                                     Some(idx) => idx,
                                     None => *legal.choose(&mut rng).unwrap(),
                                 }
                             }
                         } else {
-                            match records::sample_policy(&policy, &legal, &board) {
+                            // §173 A8'': sample_policy now takes spec-derived trunk_sz.
+                            match records::sample_policy(&policy, &legal, &board, agg_trunk_sz) {
                                 Some(idx) => idx,
                                 None => *legal.choose(&mut rng).unwrap(),
                             }
@@ -806,8 +814,10 @@ impl SelfPlayRunner {
 
                         // Per-row aux reprojection (ownership + winning_line) into this
                         // row's per-cluster window centre. See records::reproject_game_end_row.
+                        // §173 A8'': n_cells (= trunk_sz²) replaces hardcoded TOTAL_CELLS=361
+                        // so the aux buffer is sized for v6w25 (1250 B = 2×625) not v6 (722 B).
                         let mut aux_u8 = records::reproject_game_end_row(
-                            &final_cells, &winning_cells, cq, cr,
+                            &final_cells, &winning_cells, cq, cr, n_cells,
                         );
                         // §130: forward-scatter the aux pair into the same rotated
                         // frame as state/chain/policy. Reproject + scatter compose

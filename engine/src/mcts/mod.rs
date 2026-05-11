@@ -880,7 +880,7 @@ mod tests {
         let policy: Vec<f32> =
             (0..n_actions).map(|i| (i + 1) as f32 / n_actions as f32).collect();
 
-        let (chosen, sort_used) = pick_topk_children(&cells, 0, 0, &policy);
+        let (chosen, sort_used) = pick_topk_children(&cells, 0, 0, &policy, BOARD_SIZE as i32, HALF);
         assert!(sort_used, "600 > K must take sort path");
         assert_eq!(chosen.len(), MAX_CHILDREN_PER_NODE,
             "chosen must equal K, got {}", chosen.len());
@@ -928,7 +928,7 @@ mod tests {
         let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
         let uniform_high = vec![0.5_f32; n_actions];
 
-        let (chosen, sort_used) = pick_topk_children(&cells, 0, 0, &uniform_high);
+        let (chosen, sort_used) = pick_topk_children(&cells, 0, 0, &uniform_high, BOARD_SIZE as i32, HALF);
         assert!(sort_used);
         assert_eq!(chosen.len(), MAX_CHILDREN_PER_NODE);
 
@@ -946,6 +946,7 @@ mod tests {
     #[test]
     fn test_topk_fast_path_keeps_all_when_under_cap() {
         use fxhash::FxHashSet;
+        use crate::board::HALF;
         use super::backup::pick_topk_children;
 
         // 50 cells, K=192 → fast path; all cells must appear in the output
@@ -962,7 +963,7 @@ mod tests {
         let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
         let policy = vec![1.0 / n_actions as f32; n_actions];
 
-        let (chosen, sort_used) = pick_topk_children(&cells, 0, 0, &policy);
+        let (chosen, sort_used) = pick_topk_children(&cells, 0, 0, &policy, BOARD_SIZE as i32, HALF);
         assert!(!sort_used, "fast path expected when n_legal <= K");
         assert_eq!(chosen.len(), 50);
 

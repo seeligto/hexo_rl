@@ -6,7 +6,7 @@
 //! window centre. All functions are pure (no worker state) and free so the
 //! worker loop can call them without holding `self`.
 
-use crate::board::{Board, Cell, TOTAL_CELLS};
+use crate::board::{Board, Cell};
 use rand::{rng, RngExt};
 
 /// Fuse K cluster-local policies into one global policy in the main board's
@@ -36,12 +36,17 @@ pub fn aggregate_policy(
     cluster_policies: &[Vec<f32>],
 ) -> Vec<f32> {
     let half = (trunk_sz - 1) / 2;
+    // §173 A8'': MCTS-frame index map must use spec-derived trunk_sz, not the
+    // BOARD_SIZE=19 default baked into `Board::window_flat_idx_at`. Use the
+    // inline `window_flat_idx_at_geom` kernel with the same (trunk_sz, half)
+    // already pre-extracted by the worker_loop boundary.
+    let (bcq, bcr) = board.window_center();
 
     let mut global_policy = vec![0.0; n_actions];
     let legal = board.legal_moves();
 
     for &(q, r) in &legal {
-        let mcts_idx = board.window_flat_idx(q, r);
+        let mcts_idx = Board::window_flat_idx_at_geom(q, r, bcq, bcr, trunk_sz, half);
         if mcts_idx >= n_actions - 1 { continue; }
 
         let mut max_prob = 0.0;
@@ -100,6 +105,9 @@ pub fn aggregate_policy_to_local(
 ) -> Vec<f32> {
     let (cq, cr) = *center;
     let half = (trunk_sz - 1) / 2;
+    // §173 A8'': MCTS-frame index map must use spec-derived trunk_sz.
+    // See aggregate_policy doc-comment.
+    let (bcq, bcr) = board.window_center();
 
     let mut local_policy = vec![0.0; n_actions];
     let legal = board.legal_moves();
@@ -109,7 +117,7 @@ pub fn aggregate_policy_to_local(
         let wr = r - cr + half;
         if wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz {
             let local_idx = wq as usize * trunk_sz as usize + wr as usize;
-            let mcts_idx = board.window_flat_idx(q, r);
+            let mcts_idx = Board::window_flat_idx_at_geom(q, r, bcq, bcr, trunk_sz, half);
             if mcts_idx < global_policy.len() {
                 local_policy[local_idx] = global_policy[mcts_idx];
             }
@@ -134,17 +142,26 @@ pub fn aggregate_policy_to_local(
 /// Sample a move from `legal_moves` proportional to the policy mass at each
 /// move's global action index.
 ///
+/// §173 A8'': accepts `trunk_sz` (spec-derived NN-input frame side length)
+/// so the MCTS-frame index map matches the policy array's geometry under
+/// v6w25 + future multi-window encodings. Caller pre-extracts trunk_sz
+/// at the worker_loop boundary (`agg_trunk_sz as i32`).
+///
 /// Returns `None` when the total probability mass over the legal set is
 /// ~zero (caller falls back to uniform choice). Uses a thread-local RNG.
 pub(crate) fn sample_policy(
     policy: &[f32],
     legal_moves: &[(i32, i32)],
     board: &Board,
+    trunk_sz: i32,
 ) -> Option<(i32, i32)> {
+    let half = (trunk_sz - 1) / 2;
+    let (bcq, bcr) = board.window_center();
+
     let mut probs = Vec::with_capacity(legal_moves.len());
     let mut sum = 0.0;
     for &(q, r) in legal_moves {
-        let idx = board.window_flat_idx(q, r);
+        let idx = Board::window_flat_idx_at_geom(q, r, bcq, bcr, trunk_sz, half);
         let p = if idx < policy.len() { policy[idx] } else { 0.0 };
         probs.push(p);
         sum += p;
@@ -171,9 +188,16 @@ pub(crate) fn sample_policy(
 /// Project the final board state and winning-line cell list into a single
 /// per-row combined aux buffer, using `(cq, cr)` as the window centre.
 ///
-/// The returned Vec has layout `[ownership u8 × TOTAL_CELLS || winning_line u8 × TOTAL_CELLS]`:
+/// The returned Vec has layout `[ownership u8 × n_cells || winning_line u8 × n_cells]`:
 ///   * ownership encoding: 0 = P2, 1 = empty, 2 = P1 (default 1 outside footprint)
 ///   * winning_line encoding: binary 0/1 mask over the same window
+///
+/// §173 A8'': `n_cells` is spec-derived (`spec.n_cells()` = trunk_size²).
+/// Pre-A8'' this allocated `2 * TOTAL_CELLS = 722` bytes, hardcoding v6
+/// geometry — under v6w25 the buffer was 722 B but `collect_data` sliced
+/// `aux_u8[..625]` / `aux_u8[625..]` (only 97 B of winning-line, reshape
+/// failed). Caller (worker_loop.rs) passes `n_cells` already pre-extracted
+/// from the registry spec (§173 A5a `let n_cells = ...`).
 ///
 /// Each row owns its own centre so that the aux targets align with the row's
 /// state planes under later 12-fold hex augmentation in the replay buffer.
@@ -183,12 +207,23 @@ pub(crate) fn reproject_game_end_row(
     winning_cells: &[(i32, i32)],
     cq: i32,
     cr: i32,
+    n_cells: usize,
 ) -> Vec<u8> {
-    let mut aux_u8 = vec![0u8; 2 * TOTAL_CELLS];
-    aux_u8[..TOTAL_CELLS].fill(1);
+    // §173 A8'': derive trunk_sz from n_cells (= trunk_sz²). Both u8 (n_cells
+    // ≤ 625 for current encodings, fits easily in i32). Per-game-end call
+    // (not per-sim) — no perf concern, no #[inline] needed.
+    let trunk_sz = (n_cells as f64).sqrt() as i32;
+    debug_assert_eq!(
+        (trunk_sz as usize) * (trunk_sz as usize), n_cells,
+        "reproject_game_end_row: n_cells {} is not a perfect square — trunk_sz²", n_cells
+    );
+    let half = (trunk_sz - 1) / 2;
+
+    let mut aux_u8 = vec![0u8; 2 * n_cells];
+    aux_u8[..n_cells].fill(1);
     for &((q, r), cell) in final_cells {
-        let flat = Board::window_flat_idx_at(q, r, cq, cr);
-        if flat < TOTAL_CELLS {
+        let flat = Board::window_flat_idx_at_geom(q, r, cq, cr, trunk_sz, half);
+        if flat < n_cells {
             aux_u8[flat] = match cell {
                 Cell::P1    => 2,
                 Cell::P2    => 0,
@@ -197,9 +232,9 @@ pub(crate) fn reproject_game_end_row(
         }
     }
     for &(q, r) in winning_cells {
-        let flat = Board::window_flat_idx_at(q, r, cq, cr);
-        if flat < TOTAL_CELLS {
-            aux_u8[TOTAL_CELLS + flat] = 1;
+        let flat = Board::window_flat_idx_at_geom(q, r, cq, cr, trunk_sz, half);
+        if flat < n_cells {
+            aux_u8[n_cells + flat] = 1;
         }
     }
     aux_u8

@@ -352,29 +352,60 @@ impl Board {
         (cq, cr)
     }
 
-    /// Window-relative flat index for axial (q, r).
+    /// Window-relative flat index for axial (q, r) — spec-aware.
     ///
-    /// Result is in [0, TOTAL_CELLS). Returns usize::MAX for out-of-window coords.
+    /// Result is in [0, trunk_sz²). Returns usize::MAX for out-of-window coords.
     ///
-    /// v6 single-window only; v6w25 routes around via `get_cluster_views`,
-    /// v8 uses Python encoding. Constants (BOARD_SIZE / HALF / TOTAL_CELLS)
-    /// are not load-bearing for §171 P3 (`to_planes` blocker) and stay
-    /// hardcoded here (§172 A4.1).
+    /// §173 A8'': dispatches via `self.cluster_window_size` (set at Board
+    /// construction from `spec.cluster_window_size` for multi-window
+    /// encodings, falls back to `spec.board_size` / `BOARD_SIZE` otherwise).
+    /// `cluster_window_size` is the NN-input frame geometry (= `trunk_size`
+    /// in the registry spec); the window indexing should use it, not the
+    /// canvas `board_size`. For v6/v7full/v8 single-window this is 19/19/25
+    /// and matches the canvas; for v6w25 it's 25 (vs canvas 25 too —
+    /// coincides today; correct by design for a future infinite-canvas +
+    /// fixed-window encoding).
     #[inline]
     pub fn window_flat_idx(&self, q: i32, r: i32) -> usize {
         let (cq, cr) = self.window_center();
-        Self::window_flat_idx_at(q, r, cq, cr)
+        let trunk_sz = self.cluster_window_size as i32;
+        let half = (trunk_sz - 1) / 2;
+        Self::window_flat_idx_at_geom(q, r, cq, cr, trunk_sz, half)
     }
 
-    /// Window-relative flat index for axial (q, r) at a specific center.
+    /// Window-relative flat index for axial (q, r) at a specific center —
+    /// legacy v6-default associated fn.
     ///
-    /// v6 single-window only; see `window_flat_idx` doc-comment.
+    /// Callers that need v6w25 (or any non-19 trunk) geometry must use
+    /// `window_flat_idx_at_geom` and thread `(trunk_sz, half)` from
+    /// spec-extracted scalars at the boundary (§173 A8'' design). This
+    /// wrapper keeps byte-exact behaviour for the ~30 existing v6 call
+    /// sites in tests + MCTS root setup that don't need to dispatch.
     #[inline]
     pub fn window_flat_idx_at(q: i32, r: i32, cq: i32, cr: i32) -> usize {
-        let wq = q - cq + HALF;
-        let wr = r - cr + HALF;
-        if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
-            (wq as usize * BOARD_SIZE) + wr as usize
+        Self::window_flat_idx_at_geom(q, r, cq, cr, BOARD_SIZE as i32, HALF)
+    }
+
+    /// Window-relative flat index kernel — spec-threaded geometry.
+    ///
+    /// §173 A8'': scalar-only API matching the §173 A5b lesson — every
+    /// per-MCTS-sim caller pre-extracts `(trunk_sz, half)` once from
+    /// `RegistrySpec` at the worker_loop boundary and passes the integer
+    /// pair into the per-sim hot loop. Marked `#[inline]` so the compiler
+    /// can fold the bounds check + index math into the caller and avoid
+    /// the cost of a real function call.
+    ///
+    /// `trunk_sz`: per-cluster NN input side length (= `RegistrySpec::trunk_size`,
+    ///   = `Board::cluster_window_size` cached on Board for self-dispatch).
+    /// `half`:     `(trunk_sz - 1) / 2` — pre-computed by caller.
+    #[inline]
+    pub fn window_flat_idx_at_geom(
+        q: i32, r: i32, cq: i32, cr: i32, trunk_sz: i32, half: i32,
+    ) -> usize {
+        let wq = q - cq + half;
+        let wr = r - cr + half;
+        if wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz {
+            (wq as usize * trunk_sz as usize) + wr as usize
         } else {
             usize::MAX
         }
@@ -387,24 +418,30 @@ impl Board {
 
     /// Axial coordinates (q, r) from a window-relative flat index.
     ///
-    /// v6 single-window only; see `window_flat_idx` doc-comment.
+    /// §173 A8'': dispatches via `self.cluster_window_size` so v6w25
+    /// (25×25) and any future multi-window encoding decode correctly.
     #[inline]
     pub fn window_coords(&self, flat: usize) -> (i32, i32) {
         let (cq, cr) = self.window_center();
-        let wq = (flat / BOARD_SIZE) as i32;
-        let wr = (flat % BOARD_SIZE) as i32;
-        (wq - HALF + cq, wr - HALF + cr)
+        let trunk_sz = self.cluster_window_size;
+        let half = ((trunk_sz as i32) - 1) / 2;
+        let wq = (flat / trunk_sz) as i32;
+        let wr = (flat % trunk_sz) as i32;
+        (wq - half + cq, wr - half + cr)
     }
 
-    /// Whether (q, r) is inside the current 19×19 view window.
+    /// Whether (q, r) is inside the current trunk-sized view window.
     ///
-    /// v6 single-window only; see `window_flat_idx` doc-comment.
+    /// §173 A8'': dispatches via `self.cluster_window_size` (25 for v6w25,
+    /// 19 for v6, etc.).
     #[inline]
     pub fn in_window(&self, q: i32, r: i32) -> bool {
         let (cq, cr) = self.window_center();
-        let wq = q - cq + HALF;
-        let wr = r - cr + HALF;
-        wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32
+        let trunk_sz = self.cluster_window_size as i32;
+        let half = (trunk_sz - 1) / 2;
+        let wq = q - cq + half;
+        let wr = r - cr + half;
+        wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz
     }
 
     // ── Queries ───────────────────────────────────────────────────────────────
