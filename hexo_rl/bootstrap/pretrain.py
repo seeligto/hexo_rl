@@ -42,7 +42,7 @@ from hexo_rl.training.losses import (
 )
 from hexo_rl.training.checkpoints import get_base_model, save_full_checkpoint, save_inference_weights
 from hexo_rl.encoding import resolve_from_config as _registry_resolve_cfg
-from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
+from hexo_rl.utils.constants import BOARD_SIZE
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.augment.luts import get_policy_scatters
 
@@ -727,7 +727,9 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
         str(enc_section.get("version", "v6"))
         if isinstance(enc_section, dict) else "v6"
     )
-    cfg_board_size = _registry_resolve_cfg(cfg).trunk_size
+    from hexo_rl.encoding import lookup as _encoding_lookup
+    _enc_spec = _encoding_lookup(cfg_encoding)
+    cfg_board_size = _enc_spec.trunk_size
     cfg_in_channels = int(cfg.get("in_channels", 18))
     has_pass = cfg_encoding in ("v6", "v6w25")
     cfg_n_actions = cfg_board_size * cfg_board_size + (1 if has_pass else 0)
@@ -796,27 +798,16 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
         )
         return
 
-    # v6 / v6w25 K-cluster windowing: configure Board with per-encoding
-    # cluster threshold + window size + legal radius before each game.
-    if cfg_encoding == "v6w25":
-        cluster_threshold = 8
-        cluster_window_size = 25
-        legal_radius = 8
-    else:
-        cluster_threshold = 5
-        cluster_window_size = 19
-        legal_radius = 5
-
     # Play 100 greedy games vs RandomBot — expect high win rate after pretraining.
+    # §173 A6: Board constructed via registry (Board.with_encoding_name) — no
+    # triple-setter. Encoding params (radius, cluster window/threshold) come
+    # from the registry entry for cfg_encoding.
     random_bot = RandomBot()
     wins = 0
     n_games = 100
 
     for i in range(n_games):
-        board = Board()
-        board.set_legal_move_radius(legal_radius)
-        board.set_cluster_threshold(cluster_threshold)
-        board.set_cluster_window_size(cluster_window_size)
+        board = Board.with_encoding_name(cfg_encoding)
         state = GameState.from_board(board)
         model_player = 1 if i % 2 == 0 else -1
 
@@ -833,7 +824,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
                 # validation) is an aug fixture, not a boundary path. See sprint §164 P1.
                 aug_cluster = tensor[0]
                 aug_cluster_center = centers[0]
-                inp = torch.from_numpy(aug_cluster[KEPT_PLANE_INDICES]).unsqueeze(0).to(device).float()
+                inp = torch.from_numpy(aug_cluster[list(_enc_spec.kept_plane_indices)]).unsqueeze(0).to(device).float()
                 with torch.no_grad():
                     lp, _, _ = loaded_model(inp)
                 lp_np = lp[0].cpu().numpy()

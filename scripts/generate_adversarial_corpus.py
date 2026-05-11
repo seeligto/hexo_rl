@@ -242,22 +242,19 @@ def _play_game(
     bot_p1: BotProtocol,
     bot_pm1: BotProtocol,
     seed: int,
-    legal_radius: int,
-    cluster_threshold: Optional[int],
-    cluster_window_size: Optional[int],
+    encoding_name: str,
     random_opening_plies: int,
     max_moves: int,
 ) -> Tuple[Optional[int], List[Tuple[int, int]]]:
     """Play a single game; return (winner_side, move_list). Winner is +1 / -1
-    / None (draw or hit move cap). Move list is in play order."""
+    / None (draw or hit move cap). Move list is in play order.
+
+    §173 A6: Board constructed via registry (Board.with_encoding_name) instead
+    of Board() + conditional setters. Closes B4-R3.
+    """
     random.seed(seed)
     np.random.seed(seed)
-    board = Board()
-    board.set_legal_move_radius(legal_radius)
-    if cluster_threshold is not None:
-        board.set_cluster_threshold(cluster_threshold)
-    if cluster_window_size is not None:
-        board.set_cluster_window_size(cluster_window_size)
+    board = Board.with_encoding_name(encoding_name)
     state = GameState.from_board(board)
     bot_p1.reset()
     bot_pm1.reset()
@@ -285,9 +282,7 @@ def _play_game(
 class SourceConfig:
     name: str
     weight: float
-    legal_radius: int
-    cluster_threshold: Optional[int]
-    cluster_window_size: Optional[int]
+    encoding_name: str  # §173 A6: registry key; replaces legal_radius/cluster params.
     # build_bots(seed) → (bot_p1, bot_pm1, opponent_strength_band)
     build_bots: Callable[[int], Tuple[BotProtocol, BotProtocol, str]]
     # which side the "interesting" bot is on; just for naming
@@ -329,9 +324,7 @@ def _build_source_configs(
         configs.append(SourceConfig(
             name="sealbot_vs_a1",
             weight=float(weights["sealbot_vs_a1"]),
-            legal_radius=8,
-            cluster_threshold=8,        # v6w25 needs widened threshold
-            cluster_window_size=25,     # v6w25 needs widened window
+            encoding_name="v6w25",      # §173 A6: registry-sourced (r=8, window=25, threshold=8)
             build_bots=_build_sva1,
             description="SealBot (minimax, t={}) vs A1 v6w25 argmax".format(
                 sealbot_time_limit
@@ -354,9 +347,7 @@ def _build_source_configs(
         configs.append(SourceConfig(
             name="scripted_far_line",
             weight=float(weights["scripted_far_line"]),
-            legal_radius=8,
-            cluster_threshold=None,
-            cluster_window_size=None,
+            encoding_name="v8",  # §173 A6: r=8, no cluster widening (v8 game board)
             build_bots=_build_far_line,
             description="FarLineOpponent (§164 P2) vs SealBot (t={})".format(
                 sealbot_time_limit
@@ -375,9 +366,7 @@ def _build_source_configs(
         configs.append(SourceConfig(
             name="scripted_far_placement",
             weight=float(weights["scripted_far_placement"]),
-            legal_radius=8,
-            cluster_threshold=None,
-            cluster_window_size=None,
+            encoding_name="v8",  # §173 A6: r=8, no cluster widening (v8 game board)
             build_bots=_build_far_place,
             description="FarPlacementOpponent (§164 P2) vs SealBot (t={})".format(
                 sealbot_time_limit
@@ -397,9 +386,7 @@ def _build_source_configs(
         configs.append(SourceConfig(
             name="krakenbot_vs_sealbot",
             weight=float(weights["krakenbot_vs_sealbot"]),
-            legal_radius=8,
-            cluster_threshold=None,
-            cluster_window_size=None,
+            encoding_name="v8",  # §173 A6: r=8, no cluster widening (v8 game board)
             build_bots=_build_kvs,
             description=(
                 f"KrakenBot (t={krakenbot_time_limit}) vs SealBot "
@@ -419,9 +406,7 @@ def _build_source_configs(
         configs.append(SourceConfig(
             name="sealbot_vs_sealbot",
             weight=float(weights["sealbot_vs_sealbot"]),
-            legal_radius=8,
-            cluster_threshold=None,
-            cluster_window_size=None,
+            encoding_name="v8",  # §173 A6: r=8, no cluster widening (v8 game board)
             build_bots=_build_svs,
             description=f"SealBot self-play (t={sealbot_time_limit})",
         ))
@@ -605,9 +590,7 @@ def main() -> int:
                     bot_p1=bot_p1,
                     bot_pm1=bot_pm1,
                     seed=seed,
-                    legal_radius=src.legal_radius,
-                    cluster_threshold=src.cluster_threshold,
-                    cluster_window_size=src.cluster_window_size,
+                    encoding_name=src.encoding_name,
                     random_opening_plies=args.random_opening_plies,
                     max_moves=args.max_moves,
                 )

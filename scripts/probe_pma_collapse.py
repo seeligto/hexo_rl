@@ -51,7 +51,7 @@ if str(REPO_ROOT) not in sys.path:
 from engine import Board
 from hexo_rl.env.game_state import GameState
 from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
-from hexo_rl.utils.constants import KEPT_PLANE_INDICES
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.utils.global_crop import (
     CANVAS_SIZE as GLOBAL_CANVAS_SIZE,
     N_GLOBAL_PLANES,
@@ -67,11 +67,10 @@ def _build_two_cluster_v6w25_board() -> Board:
     and another at (12, -8) creates two clusters with non-overlapping centers.
     Cluster threshold = 8 ⇒ stones separated by >threshold cells go in
     distinct clusters.
+
+    §173 A6: migrated from triple-setter to Board.with_encoding_name("v6w25").
     """
-    b = Board()
-    b.set_legal_move_radius(8)
-    b.set_cluster_threshold(8)
-    b.set_cluster_window_size(25)
+    b = Board.with_encoding_name("v6w25")
     # Region A — close cluster of 4 stones.
     b.apply_move(0, 0)
     b.apply_move(1, 0)
@@ -107,7 +106,7 @@ def _argmax_move(
     state = GameState.from_board(board)
     tensor, centers = state.to_tensor()                             # (K, 18, 25, 25)
     if model.in_channels == 8:
-        tensor = tensor[:, KEPT_PLANE_INDICES]
+        tensor = tensor[:, list(_lookup_encoding("v6w25").kept_plane_indices)]
     if use_clusters is not None:
         tensor = tensor[use_clusters]
 

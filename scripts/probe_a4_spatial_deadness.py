@@ -93,9 +93,9 @@ def _play_random_to_ply(target_ply: int, rng: random.Random) -> Board:
     termination rate is well below 1%.
     """
     while True:
-        b = Board()
-        b.set_legal_move_radius(LEGAL_MOVE_RADIUS_V8)
-        b.set_cluster_window_size(BOARD_SIZE_V8)
+        # §173 A6: registry-sourced construction (v8: r=8, cluster_window=25
+        # via board_size fallback in with_registry_spec).
+        b = Board.with_encoding_name("v8")
         ok = True
         for _ in range(target_ply):
             if b.winner() is not None:

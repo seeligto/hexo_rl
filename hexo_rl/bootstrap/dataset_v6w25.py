@@ -1,14 +1,14 @@
 """Bootstrap dataset (v6w25 encoding): K-cluster windows at matched-perception
 R=8 perception + 25×25 cluster windows + cluster_threshold=8.
 
-Wire format identical to v6 (8 KEPT_PLANE_INDICES planes + pass-slot policy)
+Wire format identical to v6 (8 spec.kept_plane_indices planes + pass-slot policy)
 but spatial extent is 25×25 instead of 19×19. Used as the matched-perception
 A/B baseline against v8 single-bbox in §168 T3.
 
-Replays raw human game moves on a Rust Board configured for v6w25
-(`set_cluster_window_size(25)` + `set_cluster_threshold(8)` +
-`set_legal_move_radius(8)`) and emits per-ply (8, 25, 25) tensors aligned
-with the played move's cluster window — same alignment policy as v6.
+Replays raw human game moves on a Rust Board configured for v6w25 via
+`Board.with_encoding_name("v6w25")` (§173 A6) and emits per-ply (8, 25, 25)
+tensors aligned with the played move's cluster window — same alignment
+policy as v6.
 
 §169 A3 — optional ``with_global_crop`` flag emits an additional
 ``(T, 3, 32, 32)`` float16 array (cur stones / opp stones / canvas-realness
@@ -24,7 +24,8 @@ import structlog
 
 from engine import Board
 from hexo_rl.env.game_state import GameState, _compute_chain_planes
-from hexo_rl.utils.constants import KEPT_PLANE_INDICES
+from hexo_rl.encoding import lookup as _lookup_encoding
+from hexo_rl.encoding.spec import EncodingSpec
 from hexo_rl.utils.global_crop import (
     CANVAS_SIZE as GLOBAL_CANVAS_SIZE,
     N_GLOBAL_PLANES,
@@ -33,7 +34,10 @@ from hexo_rl.utils.global_crop import (
 
 log = structlog.get_logger()
 
-# v6w25 dimensions (mirrors engine/src/replay_buffer/sym_tables.rs:96-104).
+# §173 A6: registry spec for v6w25 — use spec fields instead of hardcoded consts.
+_V6W25_SPEC: EncodingSpec = _lookup_encoding("v6w25")
+
+# v6w25 dimensions (mirrors engine/src/encoding/registry.toml [encodings.v6w25]).
 BOARD_SIZE_V6W25: int = 25
 HALF_V6W25: int = (BOARD_SIZE_V6W25 - 1) // 2  # 12
 N_PLANES_V6W25: int = 8
@@ -44,12 +48,11 @@ LEGAL_MOVE_RADIUS_V6W25: int = 8
 
 
 def _make_v6w25_board() -> Board:
-    """Construct a fresh Board configured for v6w25 cluster encoding."""
-    board = Board()
-    board.set_legal_move_radius(LEGAL_MOVE_RADIUS_V6W25)
-    board.set_cluster_threshold(CLUSTER_THRESHOLD_V6W25)
-    board.set_cluster_window_size(BOARD_SIZE_V6W25)
-    return board
+    """Construct a fresh Board configured for v6w25 cluster encoding.
+
+    §173 A6: migrated from triple-setter to registry-sourced construction.
+    """
+    return Board.with_encoding_name("v6w25")
 
 
 def replay_game_to_triples_v6w25(
@@ -70,7 +73,7 @@ def replay_game_to_triples_v6w25(
 
     Returns:
         Default 4-tuple ``(states, chain_planes, policies, outcomes)``:
-        states:       float16 array of shape (T, 8, 25, 25) — KEPT_PLANE_INDICES
+        states:       float16 array of shape (T, 8, 25, 25) — spec.kept_plane_indices
                       slice of the full 18-plane tensor.
         chain_planes: float16 array of shape (T, 6, 25, 25) — Q13 chain planes.
         policies:     float32 array of shape (T, 626) — one-hot on move played.
@@ -114,8 +117,8 @@ def replay_game_to_triples_v6w25(
                 break
 
         if target_k >= 0:
-            # Slice 18 → 8 planes (KEPT_PLANE_INDICES, v6 wire format).
-            states[t] = full_tensor[target_k, KEPT_PLANE_INDICES]
+            # Slice 18 → 8 planes (spec.kept_plane_indices, v6 wire format).
+            states[t] = full_tensor[target_k, list(_V6W25_SPEC.kept_plane_indices)]
             chain_planes[t] = (
                 _compute_chain_planes(
                     full_tensor[target_k, 0].astype(np.float32),
