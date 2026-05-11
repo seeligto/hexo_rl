@@ -366,7 +366,7 @@ def main() -> None:
     else:
         min_buf_size = max(128, min(512, int(train_cfg.get("batch_size", config.get("batch_size", 256)))))
 
-    buffer = ReplayBuffer(capacity=capacity)
+    buffer = ReplayBuffer(capacity=capacity, encoding=config.get("encoding", "v6"))
 
     glw = train_cfg.get("game_length_weights", config.get("game_length_weights", {}))
     if glw:

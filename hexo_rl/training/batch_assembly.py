@@ -194,7 +194,8 @@ def load_pretrained_buffer(
             msg="push_game allocates full corpus in RAM — training starts after this completes",
         )
 
-    pretrained_buffer = ReplayBuffer(capacity=T)
+    _enc = config.get("encoding", "v6")
+    pretrained_buffer = ReplayBuffer(capacity=T, encoding=_enc)
     # Neutral aux: ownership=1 ("empty" → 0.0 after decode), winning_line=0.
     n_cells = board_size * board_size
     pre_own = np.ones((T, n_cells), dtype=np.uint8)
