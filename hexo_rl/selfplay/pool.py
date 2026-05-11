@@ -19,12 +19,12 @@ from typing import Any, Dict, Optional
 import numpy as np
 import structlog
 import torch
+from engine import EncodingSpec as PyO3EncodingSpec  # type: ignore[attr-defined]
 from engine import SelfPlayRunner  # type: ignore[attr-defined]
 
 from hexo_rl.encoding import EncodingSpec as RegistrySpec
 from hexo_rl.encoding import resolve_from_config as registry_resolve_from_config
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
-from hexo_rl.utils.constants import BUFFER_CHANNELS
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
 from hexo_rl.selfplay.inference_server import InferenceServer
@@ -122,24 +122,20 @@ class WorkerPool:
         sp = config.get("selfplay", config)
         self.n_workers = int(n_workers if n_workers is not None else sp.get("n_workers", 1))
         # §172 A4.2 — resolve encoding via the new `hexo_rl.encoding`
-        # registry. Multi-window and v8 selfplay are both blocked here
-        # (loud-fail) before any Rust runner construction, per design
-        # `docs/designs/encoding_registry_design.md` §4.6 / §172 A7
-        # deferral. Single-window v6 / v7full reach `to_pyo3()`.
+        # registry. §173 A8' lifted the multi-window guard; only v8
+        # selfplay remains blocked here (loud-fail) before any Rust runner
+        # construction. v6 / v6w25 / v7full all reach `to_pyo3()`.
         registry_spec: RegistrySpec = registry_resolve_from_config(config)
         self.encoding_spec: RegistrySpec = registry_spec
 
-        # Multi-window guard (§172 A4.2). Selfplay path under v6w25 is α
-        # territory — pretrain / eval / bot paths use LocalInferenceEngine
-        # which handles the K-cluster `centers` loop natively.
-        if registry_spec.is_multi_window:
-            raise NotImplementedError(
-                f"multi-window selfplay (encoding={registry_spec.name!r}) "
-                f"deferred to α; see docs/designs/"
-                f"encoding_alpha_multiwindow_selfplay.md (§172 Phase A7). "
-                f"For pretrain/eval/bot paths use LocalInferenceEngine; "
-                f"for selfplay use a single-window encoding (v6, v7full)."
-            )
+        # Multi-window α (§173 A8') unblocked. K-cluster fan happens in
+        # worker_loop.rs (get_cluster_views + aggregate_policy + min-pool
+        # value); see engine/src/game_runner/worker_loop.rs:340-470 + :716-754.
+        # NN-input geometry below uses spec.trunk_size (per-cluster window
+        # dim) instead of spec.board_size (canvas geometry) so any
+        # multi-window encoding with cluster_window_size != board_size
+        # routes correctly. v6w25 (trunk_size == board_size == 25)
+        # coincides today; the refactor unblocks future arches.
 
         # v8 selfplay guard (§172 A4.2). v8 has no Rust selfplay runner
         # path today; failing loud here beats letting `to_pyo3()` raise
@@ -155,6 +151,14 @@ class WorkerPool:
         # v6 fallback. Cross-check against the model's declared board_size so a
         # mis-paired model+config fails fast instead of silently routing planes
         # through wrong-shaped buffers.
+        #
+        # §173 A8' geometry split:
+        #   - `board_size` is canvas geometry (physical hex grid extent).
+        #   - `trunk_size` is the per-cluster NN-input window (== board_size
+        #     for single-window encodings; == cluster_window_size for
+        #     multi-window). All NN-input / buffer / reshape dims below use
+        #     `trunk_size`; only the model.board_size cross-check uses the
+        #     canvas value.
         spec = registry_spec
         model_board_size = int(getattr(model, "board_size", spec.board_size))
         if model_board_size != spec.board_size:
@@ -165,6 +169,8 @@ class WorkerPool:
                 f"the checkpoint hparam mismatch before re-launching."
             )
         board_size = spec.board_size
+        trunk_size = spec.trunk_size
+        n_kept_planes = len(spec.kept_plane_indices)
 
         # Legacy spec for the SelfPlayRunner Rust kwarg round-trip — kept
         # alive until a future refactor migrates Rust SelfPlayRunner off
@@ -172,17 +178,17 @@ class WorkerPool:
         # {v6, v6w25, v8}; v7full is a registry-only label whose wire
         # format is byte-identical to v6 (same board_size, n_planes,
         # cluster fields, legal-move radius), so we synthesise the legacy
-        # spec from the v6 helper for that one case. v8 is already
-        # blocked above; v6w25 is already blocked above; only v6 / v7full
-        # reach here.
+        # spec from the v6 helper for that one case. v8 is blocked
+        # above; v6 / v6w25 (§173 A8' unblocked) / v7full reach here.
         if registry_spec.name == "v7full":
             from hexo_rl.utils.encoding import v6_spec as _legacy_v6_spec
             legacy_spec: LegacyEncodingSpec = _legacy_v6_spec()
         else:
             legacy_spec = legacy_resolve_encoding(config)
 
-        # Rust inference batcher uses WIRE_CHANNELS (18) planes; game runner slices
-        # to BUFFER_CHANNELS (8) before pushing to results queue (HEXB v6).
+        # Rust inference batcher uses WIRE_CHANNELS (8) planes wide; the
+        # game runner slices to len(spec.kept_plane_indices) before pushing
+        # to the results queue (HEXB v6 / §173 A3 spec-driven schema).
 
         mcts_cfg = config.get("mcts", config)
         self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
@@ -235,6 +241,12 @@ class WorkerPool:
             runner_encoding = legacy_spec.to_pyo3()
         else:
             runner_encoding = None
+        # §173 A8' — also pass the registry-form spec so the Rust runner
+        # stores `spec_static` (used by worker_loop for sym_tables /
+        # n_cells / kept_planes / policy_stride / agg_trunk_sz) and so
+        # `state_stride()` / `policy_stride()` drive feature_len/policy_len
+        # derivation symmetrically with the multi-window dispatch path.
+        runner_registry_spec = PyO3EncodingSpec.from_registry(spec.name)
         self._runner = SelfPlayRunner(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_game_moves", sp.get("max_moves_per_game", 128))),
@@ -242,8 +254,13 @@ class WorkerPool:
             leaf_batch_size=leaf_batch_size,
             c_puct=self.c_puct,
             fpu_reduction=self.fpu_reduction,
-            feature_len=WIRE_CHANNELS * board_size * board_size,
-            policy_len=board_size * board_size + 1,
+            # §173 A8' — NN-input geometry uses trunk_size (per-cluster
+            # window) + policy_logit_count (handles has_pass_slot per
+            # encoding). For v6w25 trunk_size == board_size == 25 so v6w25
+            # coincides numerically; future arches with cluster_window_size
+            # != board_size route correctly without further edits.
+            feature_len=WIRE_CHANNELS * trunk_size * trunk_size,
+            policy_len=spec.policy_logit_count,
             fast_prob=float(pc.get("fast_prob", 0.0)),
             fast_sims=int(pc["fast_sims"]),
             standard_sims=int(pc.get("standard_sims", 0)),
@@ -279,6 +296,7 @@ class WorkerPool:
             # pre-§152 variant stay at the canonical radius 5.
             legal_move_radius_jitter=bool(sp.get("legal_move_radius_jitter", False)),
             encoding=runner_encoding,
+            encoding_spec=runner_registry_spec,
         )
         self._inference_server = InferenceServer(
             model, device, config, batcher=self._runner.batcher,
@@ -312,14 +330,17 @@ class WorkerPool:
         # Set by the training loop after construction; None = disabled.
         self.recent_buffer: Optional[Any] = None
 
-        self._board_size = board_size
-        # §172 A4.2 — sourced from the registry spec (single source of truth).
-        # board_size, feat_len, chain_len derived from spec.board_size; pol_len
-        # uses spec.policy_logit_count which already accounts for the per-encoding
-        # pass-slot bit.
-        self._feat_len = BUFFER_CHANNELS * board_size * board_size  # 8*19*19 = 2888
-        self._pol_len = registry_spec.policy_logit_count            # 362 (v6/v7full)
-        self._chain_len = 6 * board_size * board_size            # 6*19*19 = 2166
+        self._board_size = board_size            # canvas geometry (physical hex grid)
+        self._trunk_size = trunk_size            # per-cluster NN-input geometry
+        # §173 A8' — feat_len / chain_len keyed on trunk_size (per-cluster
+        # window) and n_kept_planes (== len(spec.kept_plane_indices)) so the
+        # schema is symmetric with engine/src/game_runner/worker_loop.rs:722
+        # (`kept_planes.len() * n_cells`). For v6 / v7full this collapses to
+        # 8*19*19=2888 and for v6w25 expands to 8*25*25=5000 — the same
+        # values the Rust side computes from the spec.
+        self._feat_len = n_kept_planes * trunk_size * trunk_size
+        self._pol_len = spec.policy_logit_count
+        self._chain_len = 6 * trunk_size * trunk_size
 
         _mon = config.get("monitoring", config)
         self._log_investigation_metrics = bool(_mon.get(
@@ -430,7 +451,10 @@ class WorkerPool:
     _WINNER_NAMES = ("draw", "x", "o")
 
     def _stats_loop(self) -> None:
-        _in_ch = self._feat_len // (self._board_size * self._board_size)
+        # §173 A8' — reshape NN-input tensors using trunk_size (per-cluster
+        # window), not board_size (canvas). For single-window encodings the
+        # two coincide; under multi-window the buffer holds per-cluster rows.
+        _in_ch = self._feat_len // (self._trunk_size * self._trunk_size)
         _last_buf_emit = time.monotonic()
         while not self._stop_event.is_set():
             # collect_data() returns 8-tuple from Rust — no Python list allocation.
@@ -445,10 +469,10 @@ class WorkerPool:
                 # Vectorised dtype cast + reshape is much cheaper than the per-row
                 # _feat_buf[:] = feats_np[i] pattern that preceded this block.
                 feats_f16 = feats_np.astype(np.float16).reshape(
-                    n, _in_ch, self._board_size, self._board_size,
+                    n, _in_ch, self._trunk_size, self._trunk_size,
                 )
                 chain_f16 = chain_np.astype(np.float16).reshape(
-                    n, 6, self._board_size, self._board_size,
+                    n, 6, self._trunk_size, self._trunk_size,
                 )
                 # Per-row compound-move count; clamp into u16 range.
                 game_lengths = np.minimum(

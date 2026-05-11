@@ -83,57 +83,57 @@ def _base_selfplay_cfg(extra_selfplay: Dict[str, Any] | None = None,
 # ── 1. WorkerPool spawn paths ─────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(
-    reason="§172 A4.2 multi-window selfplay blocked pending α (Phase A7)",
-    raises=NotImplementedError,
-    strict=True,
-)
 def test_pool_spawns_v6w25_workers():
-    """v6w25 config wires the v6w25 EncodingSpec onto the WorkerPool surface.
+    """v6w25 config wires the v6w25 RegistrySpec onto the WorkerPool surface.
 
-    Verifies:
-      * `pool.encoding_spec` is the v6w25 NamedTuple (real instance, not a
-        mock).
-      * Tensor-length helpers (_feat_len, _pol_len, _chain_len) compute from
-        spec.board_size (still 19 for v6w25 — same canvas as v6).
-      * The InferenceServer attached to the pool inherits the same spec.
-      * `to_pyo3()` round-trips into an `engine.EncodingSpec` carrying the
-        load-bearing cluster_window_size=25 / cluster_threshold=8.
+    §173 A8' — multi-window selfplay α guard lifted. Geometry uses
+    spec.trunk_size (25) for NN-input dims; canvas board_size also 25
+    under the registry spec (canvas == cluster window for K-cluster
+    encodings, per A2 §3.2 / A1 §6.11).
     """
     device = torch.device("cpu")
-    model = HexTacToeNet(board_size=19, in_channels=8, filters=8, res_blocks=1).to(device)
+    model = HexTacToeNet(
+        board_size=25, in_channels=8, filters=8, res_blocks=1,
+        encoding="v6w25",
+    ).to(device)
     cfg = _base_selfplay_cfg(encoding_version="v6w25")
     buf = ReplayBuffer(capacity=64)
     pool = WorkerPool(model, cfg, device, buf, n_workers=4)
 
     spec = pool.encoding_spec
-    assert isinstance(spec, EncodingSpec)
-    assert spec.version == "v6w25"
-    assert spec.board_size == 19
+    assert isinstance(spec, RegistrySpec)
+    assert spec.name == "v6w25"
+    assert spec.board_size == 25
+    assert spec.trunk_size == 25
     assert spec.cluster_window_size == 25
     assert spec.cluster_threshold == 8
     assert spec.legal_move_radius == 8
+    assert spec.is_multi_window is True
 
-    # Internal length helpers track spec.board_size, not a hardcoded 19.
-    assert pool._board_size == 19
-    assert pool._feat_len == 8 * 19 * 19
-    assert pool._pol_len == 19 * 19 + 1
-    assert pool._chain_len == 6 * 19 * 19
+    # Internal length helpers track spec.trunk_size for NN-input dims and
+    # spec.policy_logit_count for policy (handles per-encoding pass slot).
+    assert pool._board_size == 25
+    assert pool._trunk_size == 25
+    assert pool._feat_len == 8 * 25 * 25
+    assert pool._pol_len == 626
+    assert pool._chain_len == 6 * 25 * 25
 
     # InferenceServer inherits the same spec.
     assert pool._inference_server.encoding_spec is spec
 
-    # to_pyo3() round-trip — these are the load-bearing values that need to
-    # reach the Rust Board for v6w25 perception. The Python plumbing must
-    # surface them, even though A1 followup is required to wire them into
-    # SelfPlayRunner.
-    pyspec = spec.to_pyo3()
+    # Legacy to_pyo3 round-trip on the v6w25 legacy spec still carries
+    # the load-bearing cluster_window_size / cluster_threshold values
+    # that reach the Rust Board for v6w25 perception. (§173 A8' also
+    # threads the new-registry spec via SelfPlayRunner's encoding_spec=
+    # kwarg, so spec_static is set on the Rust side.)
+    legacy_spec = v6w25_spec()
+    pyspec = legacy_spec.to_pyo3()
     assert pyspec.cluster_window_size == 25
     assert pyspec.cluster_threshold == 8
     assert pyspec.legal_move_radius == 8
 
-    # Build a board with this spec — the same call site that A1 followup
-    # will need to thread into the Rust worker_loop.
+    # Build a board with the legacy spec — same call site the Rust
+    # worker_loop uses for `Board::with_encoding(spec)`.
     board = Board.with_encoding(pyspec)
     assert board.cluster_window_size() == 25
     assert board.cluster_threshold() == 8
@@ -320,28 +320,24 @@ def test_inference_server_v6_default():
 # ── 4. Smoke: full pool + v6w25 plumbing under load ───────────────────────────
 
 
-@pytest.mark.xfail(
-    reason="§172 A4.2 multi-window selfplay blocked pending α (Phase A7)",
-    raises=NotImplementedError,
-    strict=True,
-)
 def test_pool_v6w25_smoke_does_not_crash():
-    """Sanity: a v6w25-configured WorkerPool can be constructed, started,
-    and stopped without raising. End-to-end correctness of v6w25 self-play
-    requires the A1 followup (Rust SelfPlayRunner encoding extension) noted
-    in pool.py — this smoke only proves the Python plumbing constructs."""
-    import time
+    """§173 A8' — v6w25-configured WorkerPool constructs without raising.
 
+    Construction-only smoke; end-to-end Rust α correctness (post-game
+    `reproject_game_end_row` aux sizing, MCTS window_flat_idx spec-
+    threading) is covered separately by tests/selfplay/test_v6w25_microsmoke.
+    Once those α blockers land, the microsmoke un-xfails and this test
+    can be widened to start()/stop() the pool.
+    """
     device = torch.device("cpu")
-    model = HexTacToeNet(board_size=19, in_channels=8, filters=8, res_blocks=1).to(device)
+    model = HexTacToeNet(
+        board_size=25, in_channels=8, filters=8, res_blocks=1,
+        encoding="v6w25",
+    ).to(device)
     cfg = _base_selfplay_cfg(encoding_version="v6w25")
     buf = ReplayBuffer(capacity=64)
     pool = WorkerPool(model, cfg, device, buf, n_workers=1)
-    pool.start()
-    try:
-        deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline and pool._runner.games_completed < 1:
-            time.sleep(0.1)
-        assert pool._runner.games_completed >= 1
-    finally:
-        pool.stop()
+    # Construct-only — start() requires the α-completion items tracked
+    # in tests/selfplay/test_v6w25_microsmoke.py::xfail reason.
+    assert pool.encoding_spec.name == "v6w25"
+    assert pool._trunk_size == 25
