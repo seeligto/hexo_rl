@@ -137,8 +137,9 @@ def load_pretrained_buffer(
     )
     t0 = time.time()
     data = np.load(pretrained_path, mmap_mode="r")
-    pre_states   = data["states"]    # (T, 8, 19, 19) float16 — HEXB v6
-    pre_policies = data["policies"]  # (T, 362) float32
+    board_size = config.get("board_size", 19)
+    pre_states   = data["states"]    # (T, 8, board_size, board_size) float16
+    pre_policies = data["policies"]  # (T, policy_logit_count) float32
     pre_outcomes = data["outcomes"]  # (T,) float32
     T = len(pre_outcomes)
 
@@ -151,7 +152,7 @@ def load_pretrained_buffer(
 
     # §102.a: compute chain planes from stone planes (cur=[0], opp=[4] in 8-plane).
     from hexo_rl.env.game_state import _compute_chain_planes
-    pre_chain = np.empty((T, 6, 19, 19), dtype=np.float16)
+    pre_chain = np.empty((T, 6, board_size, board_size), dtype=np.float16)
     if T > 0:
         cur_all = np.asarray(pre_states[:, 0], dtype=np.float32)
         opp_all = np.asarray(pre_states[:, 4], dtype=np.float32)
@@ -195,8 +196,9 @@ def load_pretrained_buffer(
 
     pretrained_buffer = ReplayBuffer(capacity=T)
     # Neutral aux: ownership=1 ("empty" → 0.0 after decode), winning_line=0.
-    pre_own = np.ones((T, 361), dtype=np.uint8)
-    pre_wl  = np.zeros((T, 361), dtype=np.uint8)
+    n_cells = board_size * board_size
+    pre_own = np.ones((T, n_cells), dtype=np.uint8)
+    pre_wl  = np.zeros((T, n_cells), dtype=np.uint8)
     pretrained_buffer.push_game(pre_states, pre_chain, pre_policies, pre_outcomes, pre_own, pre_wl)
     del pre_states, pre_chain, pre_policies, pre_outcomes, pre_own, pre_wl
     del data
