@@ -11686,10 +11686,11 @@ Implementation: 3 commits on `phase4/encoding_registry`:
 |---|---|---|---|
 | Fine-tune wall | 5 min 20 s | — | — |
 | Final loss | 3.50 (epoch 3 early-cut at step 3000) | 3.47 baseline (post-pretrain) | flat |
-| argmax @ r=8 n=200 | **0/200 = 0.0%** [0.000%, 1.88%] | 22.0% [16.8%, 28.2%] | **−22 pp** |
-| argmax mean ply | 23.26 | 47.98 | −24.7 |
-| MCTS-64 @ r=8 n=200 | **0/200 = 0.0%** [0.000%, 1.88%] | (MCTS-128 ~0% pre-fine-tune) | consistent |
+| argmax @ r=8 n=200 | **0/200 = 0.0%** [0.000%, 1.88%], mean ply 23.3 | 0/200 = 0.0% [0.0%, 1.88%], mean ply 23.5 (`reports/ablation_169/A4_eval.json`, 2026-05-08) | no change |
+| MCTS-64 @ r=8 n=200 | **0/200 = 0.0%** [0.000%, 1.88%] | MCTS-128 ~0% pre-fine-tune | consistent |
 | Eval wall | argmax 397 s + MCTS-64 674 s = 17.9 min | — | — |
+
+**Correction (2026-05-11, post-bootstrap-argmax-checkup):** the original close-out of this entry compared the fine-tune argmax (0%) against a 22% baseline and claimed the freeze pattern "collapsed argmax sharpness". That 22% was misattributed — it belongs to **§170 P3 A1+gpool-bias** (v6w25 K-cluster + gpool-bias side-branch; sprint log L9979/L10154/L10259/L10331), not A4 canvas_realness. The actual §169 P4 A4 argmax baseline was already 0/200 (per `reports/ablation_169/A4_eval.json` and sprint log L9535 — "A4 argmax > 12% (bbox direction lives): NOT TRIGGERED (0%)"). Confirmed by re-running A4 argmax n=20 at pre-§172 commit `cedaec3`: 0/20, mean ply 23.2 — identical to HEAD. **A4 was never above 0% argmax at this radius — the fine-tune did not damage anything new, and the DEAD verdict stands strictly on the MCTS-64 axis.**
 
 ### Verdict — DEAD
 
@@ -11699,7 +11700,7 @@ DEAD threshold:  WR <= 0.02 AND Wilson upper < 0.04
                  0.0  ≤ 0.02 ✓    0.0188 < 0.04 ✓
 ```
 
-**Stronger than DEAD predicted:** fine-tune also collapsed the pre-existing argmax sharpness (22% → 0%, mean ply 48 → 23). The freeze pattern broke head-trunk feature calibration in addition to failing the MCTS recovery test. Rules out a "more steps" interpretation — the fine-tune actively damaged a working argmax bot.
+**WITHDRAWN (2026-05-11 amend):** an earlier version of this paragraph claimed the fine-tune "collapsed argmax sharpness 22% → 0% (mean ply 48 → 23)". That comparison was based on a misattributed baseline — the 22% number belongs to §170 P3 A1+gpool-bias, NOT A4 canvas_realness. The §169 P4 A4 baseline was already 0.0% argmax at this radius (`reports/ablation_169/A4_eval.json`, sprint log L9535). Confirmed by re-running argmax n=20 at pre-§172 commit `cedaec3`: 0/20, mean ply 23.2 — identical to HEAD. **The fine-tune did not damage anything new; argmax was already at floor pre-fine-tune. The DEAD verdict rests strictly on the MCTS-64 axis.**
 
 ### Implication
 
@@ -11775,7 +11776,9 @@ Self-play improving (best_arena 0.61 peak, bootstrap_anchor 0.65 peak) while Sea
 
 ### δ — §171 A4 P2-reopen C verdict — DEAD
 
-See §"§171 A4 P2-reopen C — distribution-shift fine-tune side-arm" above. MCTS-64 0/200 vs SealBot, Wilson95 [0.000%, 1.88%] — DEAD bin met cleanly. Argmax also collapsed 22% → 0%. §169 P0 SPATIAL_RICH framing FALSIFIED for the frozen-spine fine-tune class. **Closes the bbox + canvas_realness + frozen-spine line.**
+See §"§171 A4 P2-reopen C — distribution-shift fine-tune side-arm" above. MCTS-64 0/200 vs SealBot, Wilson95 [0.000%, 1.88%] — DEAD bin met cleanly. §169 P0 SPATIAL_RICH framing FALSIFIED for the frozen-spine fine-tune class. **Closes the bbox + canvas_realness + frozen-spine line.**
+
+(Correction 2026-05-11: an earlier draft of this aggregation cited a "22% → 0%" argmax collapse. That 22% was misattributed (§170 P3 A1+gpool-bias, not A4 baseline). The actual A4 argmax baseline @ n=200 from `reports/ablation_169/A4_eval.json` was already 0.0% — confirmed by re-running argmax n=20 at pre-§172 commit `cedaec3` (0/20, mean ply 23.2, identical to HEAD). The DEAD verdict on the fine-tune is unchanged and rests on the MCTS-64 axis alone.)
 
 ### Gate decision packet (operator decides — STOP, awaiting go)
 
