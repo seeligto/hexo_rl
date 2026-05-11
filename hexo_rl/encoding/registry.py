@@ -111,6 +111,21 @@ def _build_and_validate(name: str, body: Mapping[str, Any]) -> EncodingSpec:
     schema_version = _req("schema_version", int)
     notes = _req("notes", str)
 
+    # §173 A3 — kept_plane_indices + n_source_planes.
+    kept_plane_indices_raw = body.get("kept_plane_indices")
+    if not isinstance(kept_plane_indices_raw, list) or not all(
+        isinstance(v, int) and not isinstance(v, bool) for v in kept_plane_indices_raw
+    ):
+        errors.append("kept_plane_indices: expected list[int]")
+        kept_plane_indices: tuple[int, ...] = ()
+    else:
+        if any(v < 0 for v in kept_plane_indices_raw):
+            errors.append("kept_plane_indices: all values must be >= 0")
+            kept_plane_indices = ()
+        else:
+            kept_plane_indices = tuple(kept_plane_indices_raw)
+    n_source_planes = _req("n_source_planes", int)
+
     if value_pool is not None and value_pool not in _VALID_VALUE_POOLS:
         errors.append(
             f"value_pool: must be one of {list(_VALID_VALUE_POOLS)}; got {value_pool!r}"
@@ -187,6 +202,30 @@ def _build_and_validate(name: str, body: Mapping[str, Any]) -> EncodingSpec:
             errors.append(f"plane_layout[{idx}] duplicate name {p!r}")
         seen.add(p)
 
+    # §173 A3 — kept_plane_indices validators (mirror Rust spec.rs).
+    if kept_plane_indices and n_planes is not None:
+        # 3.1: len == n_planes
+        if len(kept_plane_indices) != n_planes:
+            errors.append(
+                f"len(kept_plane_indices)={len(kept_plane_indices)} != n_planes={n_planes}"
+            )
+        # 3.2: no duplicates
+        if len(set(kept_plane_indices)) != len(kept_plane_indices):
+            errors.append("kept_plane_indices: duplicate index")
+        # 3.3: max < n_source_planes
+        if n_source_planes is not None and kept_plane_indices:
+            max_idx = max(kept_plane_indices)
+            if max_idx >= n_source_planes:
+                errors.append(
+                    f"kept_plane_indices: max index {max_idx} >= n_source_planes={n_source_planes}"
+                )
+        # 3.5: n_source_planes >= n_planes
+        if n_source_planes is not None and n_planes is not None and n_source_planes < n_planes:
+            errors.append(
+                f"n_source_planes={n_source_planes} < n_planes={n_planes} "
+                f"(kept set must be a subset of source)"
+            )
+
     if errors:
         raise EncodingRegistryError(
             f"encoding {name!r} validation failed:\n  - " + "\n  - ".join(errors)
@@ -209,6 +248,8 @@ def _build_and_validate(name: str, body: Mapping[str, Any]) -> EncodingSpec:
         sym_table_id=sym_table_id,  # type: ignore[arg-type]
         schema_version=schema_version,  # type: ignore[arg-type]
         notes=notes,  # type: ignore[arg-type]
+        kept_plane_indices=kept_plane_indices,
+        n_source_planes=n_source_planes,  # type: ignore[arg-type]
     )
 
 

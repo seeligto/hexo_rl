@@ -176,6 +176,46 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
     let sym_table_id = get_str!("sym_table_id");
     let notes = get_str!("notes");
 
+    // kept_plane_indices: array of integers.
+    let kept_plane_indices: Option<Vec<usize>> = match table.get("kept_plane_indices") {
+        Some(Value::Array(arr)) => {
+            let mut indices: Vec<usize> = Vec::with_capacity(arr.len());
+            let mut bad = false;
+            for (i, v) in arr.iter().enumerate() {
+                match v.as_integer() {
+                    Some(n) if n >= 0 => indices.push(n as usize),
+                    Some(n) => {
+                        errs.push(format!(
+                            "[encodings.{}].kept_plane_indices[{}]: negative integer {}",
+                            name, i, n
+                        ));
+                        bad = true;
+                        break;
+                    }
+                    None => {
+                        errs.push(format!(
+                            "[encodings.{}].kept_plane_indices[{}]: not an integer",
+                            name, i
+                        ));
+                        bad = true;
+                        break;
+                    }
+                }
+            }
+            if bad { None } else { Some(indices) }
+        }
+        Some(_) => {
+            errs.push(format!("[encodings.{}].kept_plane_indices: not an array", name));
+            None
+        }
+        None => {
+            errs.push(format!("[encodings.{}].kept_plane_indices: missing key", name));
+            None
+        }
+    };
+
+    let n_source_planes = get_int!("n_source_planes").map(|v| v as usize);
+
     // plane_layout: array of strings.
     let plane_layout: Option<Vec<&'static str>> = match table.get("plane_layout") {
         Some(Value::Array(arr)) => {
@@ -236,6 +276,7 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
 
     // All Some at this point.
     let plane_layout: &'static [&'static str] = Box::leak(plane_layout.unwrap().into_boxed_slice());
+    let kept_plane_indices: &'static [usize] = Box::leak(kept_plane_indices.unwrap().into_boxed_slice());
 
     Ok(RegistrySpec {
         name: leak_str(name),
@@ -254,6 +295,8 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
         sym_table_id: leak_str(sym_table_id.unwrap()),
         schema_version: schema_version.unwrap(),
         notes: leak_str(notes.unwrap()),
+        kept_plane_indices,
+        n_source_planes: n_source_planes.unwrap(),
     })
 }
 
@@ -307,7 +350,7 @@ mod tests {
         assert_eq!(s.value_pool, ValuePool::None);
         assert_eq!(s.policy_pool, PolicyPool::None);
         assert_eq!(s.sym_table_id, "size_19");
-        assert_eq!(s.schema_version, 1);
+        assert_eq!(s.schema_version, 2);
     }
 
     #[test]

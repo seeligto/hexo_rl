@@ -129,13 +129,26 @@ pub struct PyRegistrySpec {
 impl PyRegistrySpec {
     #[getter] pub fn name(&self) -> &'static str { self.inner.name }
     #[getter] pub fn board_size(&self) -> usize { self.inner.board_size }
+    #[getter] pub fn trunk_size(&self) -> usize { self.inner.trunk_size }
     #[getter] pub fn n_planes(&self) -> usize { self.inner.n_planes }
     #[getter] pub fn policy_logit_count(&self) -> usize { self.inner.policy_logit_count }
     #[getter] pub fn has_pass_slot(&self) -> bool { self.inner.has_pass_slot }
     #[getter] pub fn is_multi_window(&self) -> bool { self.inner.is_multi_window }
+    /// §173 A3 — physical source-plane indices retained by wire format.
+    #[getter] pub fn kept_plane_indices(&self) -> Vec<usize> {
+        self.inner.kept_plane_indices.to_vec()
+    }
+    /// §173 A3 — source tensor plane count before kept_plane_indices slice.
+    #[getter] pub fn n_source_planes(&self) -> usize { self.inner.n_source_planes }
 
-    /// State plane stride = n_planes × board_size².
+    /// Cells per trunk input tensor = trunk_size². §173 A3 semantic: trunk_size, not board_size.
+    pub fn n_cells(&self) -> usize { self.inner.n_cells() }
+    /// State plane stride = n_planes × n_cells.
     pub fn state_stride(&self) -> usize { self.inner.state_stride() }
+    /// Chain plane stride = N_CHAIN_PLANES × n_cells.
+    pub fn chain_stride(&self) -> usize { self.inner.chain_stride() }
+    /// Aux plane stride = n_cells (single aux plane).
+    pub fn aux_stride(&self) -> usize { self.inner.aux_stride() }
     /// Policy logit count = `policy_logit_count` (mirror of the field).
     pub fn policy_stride(&self) -> usize { self.inner.policy_stride() }
 
