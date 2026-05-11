@@ -47,6 +47,19 @@ from hexo_rl.encoding.registry import _load as _load_registry
 Severity = Literal["info", "warn", "error"]
 
 
+# §173 T10 — deliberately-unstamped dead checkpoint directories.
+# These prefixes are skipped in §2 checkpoint audit (info, not error).
+_DEAD_CKPT_PREFIXES: tuple[str, ...] = (
+    "checkpoints/broken/",
+    "checkpoints/collapsed_",
+    "checkpoints/olod_20k/",
+    "checkpoints/chain_planes",
+    "checkpoints/v9_s3/",
+    "checkpoints/pretrain/",
+    "checkpoints/w4c_smoke_v7_laptop_preflight/",
+)
+
+
 _HARDCODE_HITS_DUMP = Path("/tmp/encoding_audit_hardcode_hits.txt")
 
 
@@ -247,8 +260,17 @@ def _section_checkpoints(
 
     import torch
 
+    def _is_dead_ckpt(rel_path: str) -> bool:
+        return any(rel_path.startswith(prefix) for prefix in _DEAD_CKPT_PREFIXES)
+
     for p in pts:
         rel = str(p.relative_to(ckpt_dir.parent) if p.is_relative_to(ckpt_dir.parent) else p)
+
+        if _is_dead_ckpt(rel):
+            sect.rows.append([rel, "-", "-", "ALLOWLISTED"])
+            report.add_finding("info", "§2", f"{rel}: skipped (allowlisted dead dir)")
+            continue
+
         declared = "-"
         inferred = "-"
         status = "?"
