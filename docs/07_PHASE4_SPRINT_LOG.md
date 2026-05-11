@@ -11721,3 +11721,82 @@ Cheaper alternative (low-prior given the argmax collapse): re-run A4 fine-tune w
 - `reports/sprint_171_a4/A4_finetune_eval.json` (combined + verdict)
 - `logs/sprint_171_a4/finetune.log`, `logs/sprint_171_a4/eval.log`
 - Investigation report: `reports/investigations/sprint_171_a4_finetune_p2reopen_2026-05-11.md`
+
+---
+
+## §172 Phase B — v7full sustained smoke + Gate decision packet — 2026-05-11
+
+**Branch:** `phase4/encoding_registry`
+**Aggregation report:** `reports/sprint_172_summary.md` (Phase A recap + Phase B detail + δ + mechanism statement + full Gate packet).
+**Phase A recap:** A1 → A10 closed `phase4/encoding_registry` registry contract end-to-end. §171 P3 plane-export blocker (Board::to_planes silent corruption under v6w25) resolved. 1306 py / 223 rs tests pass; bench-gate PASS post-T8b. 3 HIGH-RISK silent-corruption hazards retired (pyo3 default-kwarg v6 fallback in game_runner + inference_bridge; N_ACTIONS v6-scoped). See §172 entry above for the full A1-A10 detail.
+
+### B-arc selection rationale
+
+Phase B targeted v7full sustained selfplay (not v6w25) because v6w25 sustained selfplay still requires α multi-window engineering (per §171 P3.4 / §172 A7). v7full sits on existing single-window 19×19 path and was the §150 anchor (17.4% SealBot WR n=500). v6w25 sustained is reserved for §173.
+
+### B1 → B1-redo — cold-smoke G1 + G2 fixes
+
+B1 first launch (`sprint_172_p3_v7full` variant, commit 480e675) surfaced two issues — (G1) `bootstrap_anchor` strict-load failure on `tower.*` ↔ `trunk.tower.*` aliases (BLOCKER for promotion gate); (G2) inherited cosine schedule produced 92.3% draw rate.
+
+B1-redo (`sprint_172_p3_v7full_r12.yaml` + commit `cf73390`) added R12 cosine disable (`temperature_threshold_compound_moves: 0` + `temp_min: 0.5`) and migrated `_load_anchor_model` to delegate to `hexo_rl.eval.checkpoint_loader.load_model_with_encoding`, returning `(model, spec, label)` with a new `bootstrap_anchor_loaded` log event for cross-encoding observability. 5080 1200-step smoke 26 min (vs B1 71 min — 3× speedup as decisive games replace 150-ply draws). **PASS 8/8** — draw_rate 0.923 → 0.040 (23×); colony_extension_fraction = 0.0 every game; bootstrap_anchor LOADED via new delegate.
+
+Tests after B1-redo: 1313 py / 223 rs (+7 covering anchor loader regressions). B2 unblocked.
+
+### B2 — 30K v7full sustained
+
+Variant `sprint_172_p3_v7full_r12.yaml` + `--iterations 30000` on 5080. Mid-run fix commit `e90e49d` wired `argmax_n` DRIFT-detector eval (silently UNWIRED in `eval_pipeline.py` — DRIFT gate had been dead) and bumped `eval_interval` 1000 → 5000 (~22.5 hr → ~4.5 hr eval cost over 30K).
+
+Run timeline: launch 16:21 → SIGINT step 4084 (18:04) for fix → resume 18:06 from `checkpoint_00004084.pt` → final SIGINT step 33024 (`--iterations` is LR-schedule denominator NOT step-stop — ran 3024 over). Final ckpt `checkpoints/sprint_172_p3_b2_sustained/checkpoint_00033024.pt`. Replay buffer 3.1 GB persisted.
+
+Milestone curve (post-fix; n=20 each unless noted):
+
+| Step | sealbot | bootstrap_anchor | best_arena (n=100) | argmax_n | elo | promoted |
+|---|---|---|---|---|---|---|
+| 5K  | 0.100 | 0.350 | 0.410 | 0.000 | -94.2 | F |
+| 10K | 0.200 | 0.600 | 0.570 | 0.000 | +50.5 | F (CI block) |
+| 15K | 0.050 | 0.650 | 0.500 | 0.000 |  -9.4 | F |
+| 20K | 0.050 | 0.650 | **0.610** | 0.000 | +34.0 | **T** ← only promotion |
+| 25K | 0.050 | 0.500 | 0.560 | 0.000 | -63.2 | F (CI block) |
+| 30K | 0.050 | 0.600 | 0.550 | 0.000 | -36.3 | F (CI block) |
+
+§150 v7full anchor: SealBot WR **17.4% n=500**. B2 finished sealbot at **0.050 n=20 (Wilson95 [0.009, 0.236])** — fell short of anchor by 12.4 pp on point estimate. UB 0.236 covers anchor LB 0.143 so REGRESSION gate did not fire. STOP-gates audit: REGRESSION never fired; DRIFT never fired (argmax_n 0/20 across all 6); colony_fraction 0.0 throughout. Run completed clean.
+
+Per-opponent: sealbot **STALLED** four consecutive rounds at 0.050 (15K/20K/25K/30K); bootstrap_anchor **LIFTED then OSCILLATED** 0.35 → 0.65 → 0.50 → 0.60; best_arena **post-promotion parity** at 0.55-0.56; argmax_n **DRIFT-COLD** 0/20 across all 6; elo **OSCILLATING** with BT-rating sparsity (5 player rows).
+
+### B verdict — no v7full graduation
+
+Self-play improving (best_arena 0.61 peak, bootstrap_anchor 0.65 peak) while SealBot stalled at 0.05. **External-opponent transfer gap is the headline negative result**: the model is strong vs self, stagnant vs the rule-based external benchmark. Single promotion at step-20K (best_arena 0.610, CI LB 0.512) was the only snapshot to clear the CI-above-half guard.
+
+### Mechanism statement
+
+**Did v7full self-play generate signal?** PARTIAL — YES vs self, NO vs external benchmark. best_arena climbed 0.41 → 0.61 (5K → 20K) and bootstrap_anchor climbed 0.35 → 0.65; sealbot stalled at 0.05 across four consecutive snapshots. Self-play distribution overfit: the v7full single-window 19×19 selfplay path generates positions the model learns to play well *against itself* but does not exercise the threat structures (open-4s, stride-5 lines) that SealBot exploits at radius=8. Matches the §171 P3.4 hypothesis that single-window v7full selfplay is a tactical pivot, not the structural fix.
+
+**Encoder-agnostic value-drift fingerprint observed?** NO. argmax_n DRIFT detector (fires when argmax > 0.18 AND anchor < 0.28 — §170 P4 P1 over-confident-policy fingerprint) was 0/20 across all 6 rounds. Threat-logit C1-C4 probe not run on B2 ckpts (B3 follow-up). colony_fraction stayed 0.0 throughout. **No value-collapse signature.** The transfer gap appears **encoder-specific** (single-window v7full selfplay cannot generate the threat structure SealBot exploits), not a value-drift pathology. This separation matters for §173 framing — the fix is structural at the encoder level, not head-recalibration.
+
+### δ — §171 A4 P2-reopen C verdict — DEAD
+
+See §"§171 A4 P2-reopen C — distribution-shift fine-tune side-arm" above. MCTS-64 0/200 vs SealBot, Wilson95 [0.000%, 1.88%] — DEAD bin met cleanly. Argmax also collapsed 22% → 0%. §169 P0 SPATIAL_RICH framing FALSIFIED for the frozen-spine fine-tune class. **Closes the bbox + canvas_realness + frozen-spine line.**
+
+### Gate decision packet (operator decides — STOP, awaiting go)
+
+| # | Question | Recommendation | Reasoning |
+|---|---|---|---|
+| (a) | Promote v7full P3 final-step ckpt? | **NO** | sealbot 0.05 n=20 vs §150 anchor 17.4% n=500 — 12.4 pp short. No argmax/MCTS lift over §150. Save `checkpoint_00020000.pt` as B3 anchor candidate (only promoted snapshot) but do NOT graduate to canonical. |
+| (b) | Open §173 (α implementation) under design doc? | **YES** | v7full transfer gap AND δ DEAD verdict point to encoder-structural fix as the only remaining lever. Design doc ready (A7 `8ad4011`; refined `cedaec3`). |
+| (c) | δ A4 verdict resolved? | **DEAD — close bbox direction.** | MCTS-64 WR ≤ 2% AND Wilson UB < 4% met. §173 should NOT include A4 extended-fine-tune side-arm. Frozen-spine v8+canvas_realness class structurally exhausted. |
+| (d) | Merge `phase4/encoding_registry` → `phase4/p171_selfplay_smoke`? | **SKIP intermediate; merge directly to master.** | `phase4/p171_selfplay_smoke` is the older intermediate that handed off to §172. Encoding registry is the canonical close-out for §171 P3 + §172. Direct master merge is cleanest. (If operator prefers two-step, both branches will fast-forward.) |
+| (e) | Merge → master with `sprint-172-close` tag? | **YES** | Tag at the §172 close commit (this aggregation commit). §173 work resumes on a fresh branch cut from the tag. |
+| (f) | Phase 5+ deferral updates: architectural reopens given §172 findings? | **NO new reopens.** | §173 α addresses encoder-structural transfer gap directly. v6 / v7full / v8 anchors settled. No new bbox / canvas / fine-tune side-arms warranted. Operator follow-ups from A10 (T10 backfill, pyo3 1.0 upgrade, Rust SelfPlayRunner registry migration, v8full archival) remain non-blocking and are not architectural reopens. |
+
+### B-side operator follow-ups
+
+1. Save `checkpoint_00020000.pt` as B3 anchor candidate.
+2. B3 prep (if pursued before §173 α): re-run with sealbot n=100 starting at step 10K for 4-5σ statistical power. Current Wilson half-width at n=20 is 0.10 — too wide to call lift below ~5 pp.
+3. `--iterations` semantics: it sets `total_steps` for LR cosine denominator, NOT a step-stop. Variant docs should warn. Cosine LR schedule wired for total_steps=200000 in B2; LR barely decayed (0.002 → 0.00024 final). Short-run variants should override total_steps.
+4. Bootstrap anchor encoding-label cosmetic mismatch — checkpoints stamped `encoding_name='v6'` (shape-inferred fallback) for v7full models. A5 backfill pending.
+
+### Status
+
+**§172 CLOSED. Phase A + Phase B + δ aggregated. Branch ready for merge — operator decision pending on Gate (a)–(f). STOP, awaiting go.**
+
+Forward: §173 α multi-window K-cluster selfplay (design `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`).
