@@ -32,13 +32,16 @@ buffer_schedule:
   - {step: 250000, capacity: 500000}
   - {step: 1500000, capacity: 1000000}
 
-# Selfplay — 5080 tuned
+# Selfplay — 5080 tuned (§174 sweep 2026-05-12)
+# Winner: b128_w16_n18 — steps/hr 8653, games/hr 5522, batch_fill 52.6%
+# vs baseline b224_w8_n18 — steps/hr 5940, games/hr 3963, batch_fill 43.3%
 selfplay:
   gumbel_mcts: false
   completed_q_values: true
   n_workers: 18
-  inference_batch_size: 224
-  inference_max_wait_ms: 8.0
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  leaf_batch_size: 8
   max_game_moves: 150
   legal_move_radius_jitter: true
   playout_cap:
@@ -67,6 +70,10 @@ eval_pipeline:
       n_games: 100
       model_sims: 128
       opponent_sims: 128
+
+# Mixing — corpus resolved by encoding registry (v6w25 → bootstrap_corpus_v6w25.npz)
+mixing:
+  pretrained_buffer_path: "<auto>"
 
 # Monitoring — dashboard ON (no --no-dashboard flag)
 monitors:

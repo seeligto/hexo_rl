@@ -129,7 +129,7 @@ buffer_schedule:
   - {step: 1_000_000,   capacity: 1_000_000}
 
 mixing:
-  pretrained_buffer_path: "data/bootstrap_corpus.npz"
+  pretrained_buffer_path: "<auto>"  # encoding-registry resolved (v6 → bootstrap_corpus.npz, v6w25 → bootstrap_corpus_v6w25.npz, etc.)
   decay_steps: 200_000
   min_pretrained_weight: 0.1
   initial_pretrained_weight: 0.8
