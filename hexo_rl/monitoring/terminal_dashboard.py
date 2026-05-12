@@ -62,7 +62,7 @@ class TerminalDashboard:
         self._alert_entropy_warn = float(mon.get("alert_entropy_warn", 2.0))
         self._alert_grad_max = float(mon.get("alert_grad_norm_max", 10.0))
         self._alert_loss_window = int(mon.get("alert_loss_increase_window", 3))
-        num_actions = int(mon.get("num_actions_for_entropy_norm", 362))
+        num_actions = int(mon.get("num_actions_for_entropy_norm", config.get("board_size", 19) ** 2 + 1))
         self._max_entropy = math.log(num_actions) if num_actions > 1 else 1.0
         # Mirror the web dashboard's knob so terminal + web agree on the
         # selfplay-collapse threshold (§70). Default 1.5 nats.

@@ -209,11 +209,13 @@ def build_subsystems(
     # the existing _emit_training_events cadence so probe cost is amortised.
     early_game_probe: Optional[EarlyGameProbe]
     try:
-        early_game_probe = EarlyGameProbe(device=device)
+        _probe_encoding = config.get("encoding", "v6")
+        early_game_probe = EarlyGameProbe(device=device, encoding_name=_probe_encoding)
         log.info(
             "early_game_probe_init",
             n_positions=early_game_probe.n_positions,
             plies=early_game_probe.plies,
+            encoding=_probe_encoding,
         )
     except Exception as _egp_err:
         log.warning("early_game_probe_unavailable", error=str(_egp_err))

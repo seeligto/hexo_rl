@@ -235,7 +235,7 @@ class WebDashboard:
             return jsonify({
                 "training_step_history": int(mon.get("training_step_history", 2000)),
                 "game_history": int(mon.get("game_history", 500)),
-                "num_actions_for_entropy_norm": int(mon.get("num_actions_for_entropy_norm", 362)),
+                "num_actions_for_entropy_norm": int(mon.get("num_actions_for_entropy_norm", self._config.get("board_size", 19) ** 2 + 1)),
                 "alert_entropy_min": float(mon.get("alert_entropy_min", 1.0)),
                 "alert_entropy_warn": float(mon.get("alert_entropy_warn", 2.0)),
                 "collapse_threshold_nats": float(mon.get("collapse_threshold_nats", 1.5)),

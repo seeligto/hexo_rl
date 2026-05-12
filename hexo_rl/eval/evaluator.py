@@ -19,7 +19,8 @@ from hexo_rl.env.game_state import GameState
 from hexo_rl.eval.colony_detection import is_colony_win
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
-from hexo_rl.selfplay.utils import BOARD_SIZE, N_ACTIONS, get_temperature
+from hexo_rl.encoding import lookup as _lookup_encoding
+from hexo_rl.selfplay.utils import get_temperature
 
 try:
     import structlog
@@ -69,6 +70,11 @@ class ModelPlayer(BotProtocol):
         self._n_sims = n_sims
         self._config = config
         self._temperature = temperature
+        # Derive board geometry from encoding registry (§173 eval-fix)
+        encoding_name = config.get("encoding", "v6") if config else "v6"
+        spec = _lookup_encoding(encoding_name)
+        self.board_size = spec.board_size
+        self.n_actions = spec.policy_logit_count
 
     def get_move(self, state: GameState, rust_board: object) -> Tuple[int, int]:
         board = rust_board
@@ -85,12 +91,12 @@ class ModelPlayer(BotProtocol):
             self._tree.expand_and_backup(policies, values)
             sims_done += current_batch
 
-        policy = self._tree.get_policy(temperature=self._temperature, board_size=BOARD_SIZE)
+        policy = self._tree.get_policy(temperature=self._temperature, board_size=self.board_size)
 
         legal_moves = board.legal_moves()
         legal_flat = [board.to_flat(q, r) for q, r in legal_moves]
         probs = np.array(
-            [policy[i] if i < N_ACTIONS else 0.0 for i in legal_flat],
+            [policy[i] if i < self.n_actions else 0.0 for i in legal_flat],
             dtype=np.float64,
         )
         total = probs.sum()
@@ -175,7 +181,8 @@ class Evaluator:
         for i in range(n_games):
             np.random.seed(self._eval_seed_base + i)
             random.seed(self._eval_seed_base + i)
-            board = Board()
+            encoding_name = self.config.get("encoding", "v6")
+            board = Board.with_encoding_name(encoding_name)
             state = GameState.from_board(board)
             model_player_side = 1 if i % 2 == 0 else -1
             ply = 0
