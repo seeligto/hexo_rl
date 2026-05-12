@@ -41,15 +41,18 @@ from hexo_rl.training.losses import (
     compute_chain_loss, compute_total_loss, fp16_backward_step,
 )
 from hexo_rl.training.checkpoints import get_base_model, save_full_checkpoint, save_inference_weights
-from hexo_rl.encoding import resolve_from_config as _registry_resolve_cfg
+from hexo_rl.encoding import (
+    all_specs as _all_specs,
+    lookup as _lookup_encoding,
+    resolve_corpus_path as _resolve_corpus_path,
+    resolve_from_config as _registry_resolve_cfg,
+)
 from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.augment.luts import get_policy_scatters
 
 log = structlog.get_logger()
 console = Console()
-
-POLICY_SIZE = BOARD_SIZE * BOARD_SIZE + 1
 
 # ── Hex augmentation ──────────────────────────────────────────────────────────
 #
@@ -166,10 +169,8 @@ def make_augmented_collate(
       - Stack as-is, no scatter.
       - Compute chain_planes from raw stone planes.
     """
-    if encoding not in ("v6", "v6w25", "v8"):
-        raise ValueError(f"encoding={encoding!r} must be 'v6', 'v6w25' or 'v8'")
-    # v6 wire format keeps the pass slot; v6w25 inherits this; v8 drops it.
-    has_pass = encoding in ("v6", "v6w25")
+    _enc_spec = _lookup_encoding(encoding)
+    has_pass = _enc_spec.has_pass_slot
     scatters_np = get_policy_scatters(board_size, has_pass=has_pass) if augment else None
 
     def _collate(batch):
@@ -374,7 +375,7 @@ def load_corpus(
     if not all_s:
         return (
             np.empty((0, 18, BOARD_SIZE, BOARD_SIZE), dtype=np.float16),
-            np.empty((0, POLICY_SIZE), dtype=np.float32),
+            np.empty((0, BOARD_SIZE * BOARD_SIZE + 1), dtype=np.float32),
             np.empty(0, dtype=np.float32),
             np.empty(0, dtype=np.float32),
         )
@@ -723,16 +724,16 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     )
     cfg = ckpt["config"]
     enc_section = cfg.get("encoding")
-    cfg_encoding = (
-        str(enc_section.get("version", "v6"))
-        if isinstance(enc_section, dict) else "v6"
-    )
-    from hexo_rl.encoding import lookup as _encoding_lookup
-    _enc_spec = _encoding_lookup(cfg_encoding)
+    if isinstance(enc_section, str):
+        cfg_encoding = enc_section
+    elif isinstance(enc_section, dict):
+        cfg_encoding = str(enc_section.get("version", "v6"))
+    else:
+        cfg_encoding = "v6"
+    _enc_spec = _lookup_encoding(cfg_encoding)
     cfg_board_size = _enc_spec.trunk_size
-    cfg_in_channels = int(cfg.get("in_channels", 18))
-    has_pass = cfg_encoding in ("v6", "v6w25")
-    cfg_n_actions = cfg_board_size * cfg_board_size + (1 if has_pass else 0)
+    cfg_in_channels = int(cfg.get("in_channels", _enc_spec.n_planes))
+    cfg_n_actions = _enc_spec.policy_logit_count
     cfg_half = (cfg_board_size - 1) // 2
 
     cfg_pool_type = str(cfg.get("pool_type", "min_max"))
@@ -891,11 +892,10 @@ def pretrain() -> None:
                              "5e-5 avoids the §149-observed LR-floor stall "
                              "in the final 3 epochs.")
     # ── v8 / Phase B variant CLI overrides ─────────────────────────────────
-    parser.add_argument("--encoding", choices=("v6", "v6w25", "v8"), default=None,
-                        help="Override encoding.version from configs/model.yaml: "
-                             "'v6' canonical default (8-plane × 19×19, K-cluster), "
-                             "'v6w25' (§168 — 8-plane × 25×25 K-cluster at matched R=8 "
-                             "perception), or 'v8' (Path β 11-plane × 25×25 single bbox). "
+    _registered_encodings = tuple(s.name for s in _all_specs())
+    parser.add_argument("--encoding", choices=_registered_encodings, default=None,
+                        help="Override encoding.version from configs/model.yaml. "
+                             "Registered encodings: " + ", ".join(_registered_encodings) + ". "
                              "Routes corpus NPZ and model construction accordingly.")
     parser.add_argument("--filters", type=int, default=None,
                         help="Override trunk channel count (model.yaml: filters).")
@@ -943,9 +943,8 @@ def pretrain() -> None:
              "value-head bias drift specifically.",
     )
     parser.add_argument("--corpus-npz", type=str, default=None,
-                        help="Override corpus NPZ path. Defaults: v6 → "
-                             "data/bootstrap_corpus.npz, v8 → "
-                             "data/bootstrap_corpus_v8.npz.")
+                        help="Override corpus NPZ path. Default resolved from "
+                             "encoding registry (resolve_corpus_path).")
     parser.add_argument(
         "--freeze-trunk-entry", action="store_true",
         help="§171 A4 fine-tune — freeze trunk.input_conv (PartialConv2d when "
@@ -991,30 +990,14 @@ def pretrain() -> None:
         encoding = str(enc_section.get("version", "v6"))
     else:
         encoding = "v6"
-    if encoding not in ("v6", "v6w25", "v8"):
-        raise ValueError(
-            f"encoding must be 'v6', 'v6w25' or 'v8', got {encoding!r}"
-        )
+    # Validate encoding name against canonical registry.
+    _ = _lookup_encoding(encoding)
 
-    # Encoding-specific shape overrides. v6 uses model.yaml defaults (19 / 8 /
-    # 362). v6w25 keeps in_channels=8 + pass slot but grows spatial to 25×25.
-    # v8 = Path β 11-plane × 25×25 + no pass slot.
-    if encoding == "v8":
-        from hexo_rl.bootstrap.dataset_v8 import (
-            N_PLANES_V8, N_ACTIONS_V8,
-        )
-        # board_size scalar retired (§172 A10); trunk_size from registry.
-        config["in_channels"] = N_PLANES_V8
-        explicit_n_actions = N_ACTIONS_V8
-    elif encoding == "v6w25":
-        from hexo_rl.bootstrap.dataset_v6w25 import (
-            N_PLANES_V6W25, N_ACTIONS_V6W25,
-        )
-        # board_size scalar retired (§172 A10); trunk_size from registry.
-        config["in_channels"] = N_PLANES_V6W25
-        explicit_n_actions = N_ACTIONS_V6W25
-    else:
-        explicit_n_actions = None
+    # Encoding-specific shape overrides — single source of truth via registry.
+    # board_size / in_channels / n_actions scalars retired from configs (§172 A10).
+    _enc_spec = _lookup_encoding(encoding)
+    config["in_channels"] = _enc_spec.n_planes
+    explicit_n_actions = _enc_spec.n_actions
 
     # Variant overrides — used by Phase B B0..B4 retrains.
     if args.filters is not None:
@@ -1127,13 +1110,11 @@ def pretrain() -> None:
     console.print("[bold]Loading corpus...[/bold]")
     if args.corpus_npz is not None:
         npz_path = Path(args.corpus_npz)
-    elif encoding == "v8":
-        suffix = "_canvas_realness" if canvas_realness else ""
-        npz_path = Path(f"data/bootstrap_corpus_v8{suffix}.npz")
-    elif encoding == "v6w25":
-        npz_path = Path("data/bootstrap_corpus_v6w25.npz")
     else:
-        npz_path = Path(corpus_cfg.get("corpus_npz_path", "data/bootstrap_corpus.npz"))
+        corpus_enc = encoding
+        if encoding == "v8" and canvas_realness:
+            corpus_enc = "v8_canvas_realness"
+        npz_path = _resolve_corpus_path(_lookup_encoding(corpus_enc))
     global_crops_array: Optional[np.ndarray] = None
     if npz_path.exists():
         log.info("loading_corpus_from_npz", path=str(npz_path))
@@ -1258,8 +1239,7 @@ def pretrain() -> None:
     config["canvas_realness"] = canvas_realness
     config["gpool_bias_active"] = gpool_bias_active
     config["policy_only_bias"] = policy_only_bias
-    if explicit_n_actions is not None:
-        config["n_actions"] = explicit_n_actions
+    config["n_actions"] = explicit_n_actions
     trainer = BootstrapTrainer(model, config, device, checkpoint_dir)
 
     # Resume mode: load model/optimizer/scaler from full checkpoint, restart
