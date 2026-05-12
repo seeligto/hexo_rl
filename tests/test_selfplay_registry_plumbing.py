@@ -92,26 +92,41 @@ def test_pool_v7full_via_registry():
         pass
 
 
-# ── 2. Pool: multi-window guard fires (v6w25) ─────────────────────────────────
+# ── 2. Pool: multi-window α unblocked (§173 A8' — v6w25 selfplay) ────────────
 
 
-def test_pool_v6w25_blocks_with_alpha_message():
-    """Pool with v6w25 config raises NotImplementedError citing α deferral.
+def test_pool_v6w25_constructs_via_registry():
+    """§173 A8' — Pool with v6w25 config constructs (α guard lifted).
 
-    The error message must reference the §172 Phase A7 design doc so an
-    operator hitting it knows where to look.
+    Geometry uses spec.trunk_size (25) for NN-input dims and
+    spec.policy_logit_count (626) for policy. Model is 25×25×8 to match
+    the v6w25 canvas; the cross-check at WorkerPool.__init__ enforces
+    model.board_size == spec.board_size.
     """
     device = torch.device("cpu")
-    # v6w25 model would be 25×25; use a 19×19 v6 model so the construction
-    # error fires from the multi-window guard, not the model_board_size
-    # cross-check (the guard sits BEFORE the cross-check on purpose).
     model = HexTacToeNet(
-        board_size=19, in_channels=8, filters=8, res_blocks=1,
+        board_size=25, in_channels=8, filters=8, res_blocks=1,
+        encoding="v6w25",
     ).to(device)
     cfg = _base_selfplay_cfg(encoding_version="v6w25")
     buf = ReplayBuffer(capacity=32)
-    with pytest.raises(NotImplementedError, match=r"multi-window selfplay.*α"):
-        WorkerPool(model, cfg, device, buf, n_workers=1)
+    pool = WorkerPool(model, cfg, device, buf, n_workers=1)
+    try:
+        spec = pool.encoding_spec
+        assert isinstance(spec, RegistrySpec)
+        assert spec.name == "v6w25"
+        assert spec.is_multi_window is True
+        assert spec.trunk_size == 25
+        assert spec.policy_logit_count == 626
+        # _board_size = canvas (25), _trunk_size = NN-input window (25).
+        assert pool._board_size == 25
+        assert pool._trunk_size == 25
+        # _feat_len = n_kept_planes * trunk_size² = 8*625 = 5000.
+        assert pool._feat_len == 8 * 25 * 25
+        assert pool._pol_len == 626
+        assert pool._chain_len == 6 * 25 * 25
+    finally:
+        pass  # Pool was never started; no stop() needed.
 
 
 # ── 3. Pool: v8 selfplay guard fires ──────────────────────────────────────────

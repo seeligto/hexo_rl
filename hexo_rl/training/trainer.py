@@ -38,6 +38,7 @@ from hexo_rl.utils.device import best_device
 # Perf probes use structlog directly (log.info) so they persist to JSONL even
 # when --no-dashboard is set. emit_event is dashboard-renderer fan-out only.
 from hexo_rl.training.aux_decode import decode_ownership, decode_winning_line, mask_aux_rows
+from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
     compute_aux_loss, compute_total_loss, compute_uncertainty_loss,
@@ -361,9 +362,10 @@ class Trainer:
             n_recent = max(1, int(round(batch_size * recency_weight)))
             n_uniform = batch_size - n_recent
             s_r, c_r, p_r, o_r, own_r, wl_r, ifs_r = recent_buffer.sample(n_recent)
-            # WHY: RecentBuffer stores aux flat (n, 361); reshape to (n, 19, 19) view
-            own_r = own_r.reshape(-1, 19, 19)
-            wl_r  = wl_r.reshape(-1, 19, 19)
+            # WHY: RecentBuffer stores aux flat (n, aux_stride); reshape to (n, board_size, board_size)
+            _bs = int(math.isqrt(own_r.shape[1]))
+            own_r = own_r.reshape(-1, _bs, _bs)
+            wl_r  = wl_r.reshape(-1, _bs, _bs)
             s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), augment)
             states          = np.concatenate([s_r, s_u],     axis=0)
             chain_planes    = np.concatenate([c_r, c_u],     axis=0)
@@ -413,9 +415,10 @@ class Trainer:
         are drawn from pretrained + self-play buffers externally.
 
         Args:
-            chain_planes: (B, 6, 19, 19) float16 array of Q13 chain-length planes,
+            chain_planes: (B, 6, T, T) float16 array of Q13 chain-length planes,
                           stored separately from state since the 18-plane input
-                          no longer includes chain as input channels.
+                          no longer includes chain as input channels. T is the
+                          encoding trunk_size (19 for v6, 25 for v6w25/v8).
             is_full_search: Optional (B,) uint8 array — 1 = full-search (apply policy
                           loss), 0 = quick-search (value/chain only). None means all
                           positions are treated as full-search (legacy behaviour).
@@ -512,9 +515,9 @@ class Trainer:
         use_ownership = ownership_weight > 0.0 and ownership_targets is not None
         use_threat    = threat_weight > 0.0    and threat_targets    is not None
         if use_ownership:
-            own_t = decode_ownership(ownership_targets, self.device)   # (B, 19, 19) f32
+            own_t = decode_ownership(ownership_targets, self.device)   # (B, T, T) f32
         if use_threat:
-            thr_t = decode_winning_line(threat_targets, self.device)   # (B, 19, 19) f32
+            thr_t = decode_winning_line(threat_targets, self.device)   # (B, T, T) f32
 
         if _perf:
             if _sync and self.device.type == "cuda":
@@ -974,8 +977,8 @@ class Trainer:
                 model_cfg["in_channels"] = derived_in
 
         defaults = {
-            "board_size": 19, "res_blocks": 12, "filters": 128,
-            "in_channels": 8, "se_reduction_ratio": 4,
+            "board_size": BOARD_SIZE, "res_blocks": 12, "filters": 128,
+            "in_channels": BUFFER_CHANNELS, "se_reduction_ratio": 4,
         }
 
         def _explicit(key: str) -> Optional[int]:
@@ -1135,7 +1138,7 @@ class Trainer:
         label = ckpt_label.lower()
         if in_ch == 11 and n_actions == 625:
             return v8_spec()
-        if in_ch == 8:
+        if in_ch == BUFFER_CHANNELS:
             if n_actions == 626 or "v6w25" in label or "_w25" in label:
                 # Filename hint can override action-count when the head is a
                 # PMA variant whose output dim differs; in that case we trust

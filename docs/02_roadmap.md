@@ -251,12 +251,29 @@ selfplay onto multi-window K-cluster encodings (v6w25 + future).
   through `Board::with_encoding` → worker_loop → InferenceServer →
   trainer. Audit CLI: `python -m hexo_rl.encoding audit`. Full
   contract: `docs/designs/encoding_registry_design.md`.
-- [ ] **§173+ α — multi-window K-cluster selfplay** — gating sprint
-  for sustained v6w25 and future K-cluster training. Parameterizes
-  replay buffer strides + Python trainer over `EncodingSpec` (Rust
-  MCTS hot path already runs the multi-window contract — α is
-  buffer/trainer routing, not new MCTS architecture). Full design:
-  `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`.
+- [x] **§173 α — multi-window K-cluster selfplay (impl + cold smoke)** —
+  Constants-parameterization pass: retired 54 v6 hardcodes in replay
+  buffer + game_runner + records.rs; added `kept_plane_indices` +
+  `n_source_planes` to registry; Python parity helpers; PyO3 setter
+  guards. Bench gate held all 10 targets. A8 cold smoke deferred;
+  A8' microsmoke PASS. A9 independent review PASS. Closed on
+  `phase4.5/m173_alpha_multiwindow` (2026-05-11). Full design:
+  `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`;
+  sprint log: `docs/07_PHASE4_SPRINT_LOG.md` §173.
+- [ ] **§174 — v6w25 sustained smoke under α** —
+  Inherited gates: G3/G4/G5 from §170 P4 P1. Eval n=100 (locked from
+  P0). Eval interval: 5000 (locked). Train:selfplay ratio 2:1
+  (locked). Buffer growth 500K @ step 250K (locked). Sustained
+  bootstrap: `bootstrap_model_v6w25.pt`. Arena anchor:
+  `bootstrap_model_v6w25.pt` static.
+  - **PREREQUISITE: HEXB v7 format bump** — on-disk replay buffer
+    format needs encoding-name header field. v6w25 first persist would
+    fail or silently corrupt without this. Scope: extend
+    `persist.rs` format, version detection on load, migration path
+    for legacy HEXB v6 buffers. ~1 day wall. Land before §174.
+  - **PREREQUISITE: v6w25 anchor verification** — A8 cold smoke
+    G3/G4/G5 must PASS. If FAIL, scope bootstrap retrain as §174
+    side-task.
 
 ---
 

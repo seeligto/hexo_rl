@@ -189,27 +189,26 @@ def test_selfplay_runner_v6_default_workers_use_w19_boards():
 # ── WorkerPool path — verifies the Python wiring + warning removal ────────────
 
 
-@pytest.mark.xfail(
-    reason="§172 A4.2 multi-window selfplay blocked pending α (Phase A7)",
-    raises=NotImplementedError,
-    strict=True,
-)
 def test_pool_does_not_warn_when_encoding_wired(caplog):
-    """A2 emitted a `selfplay_runner_encoding_unbound` warning under v6w25
-    until the Rust side honoured encoding. After A1 reopen the warning
-    must be GONE — its presence indicates a regression in the wiring."""
+    """§173 A8' — pool wires legacy `encoding=` + new `encoding_spec=` to
+    SelfPlayRunner; the legacy `selfplay_runner_encoding_unbound` warning
+    must remain absent under v6w25.
+
+    Model is 25×25 to match the v6w25 registry canvas (board_size=25).
+    """
     import logging
 
     device = torch.device("cpu")
-    model = HexTacToeNet(board_size=19, in_channels=8, filters=8, res_blocks=1).to(device)
+    model = HexTacToeNet(
+        board_size=25, in_channels=8, filters=8, res_blocks=1,
+        encoding="v6w25",
+    ).to(device)
     cfg = _base_selfplay_cfg(encoding_version="v6w25")
     buf = ReplayBuffer(capacity=64)
 
     with caplog.at_level(logging.WARNING):
         pool = WorkerPool(model, cfg, device, buf, n_workers=1)
 
-    # Inspect captured records — `selfplay_runner_encoding_unbound` MUST be
-    # absent. Any other warnings are fine (e.g. inference batcher startup).
     offending = [
         rec for rec in caplog.records
         if "selfplay_runner_encoding_unbound" in rec.getMessage()
@@ -219,11 +218,6 @@ def test_pool_does_not_warn_when_encoding_wired(caplog):
         "the A1 reopen wiring is broken. See pool.py + game_runner/mod.rs."
     )
 
-    # Sanity — the pool's runner accepted the encoding spec the pool wired
-    # in. Read directly via the `runner.encoding` `#[getter]`: pool wired a
-    # v6w25 spec, so the runner must surface a v6w25-shaped EncodingSpec
-    # (window=25, threshold=8, radius=8) — anything else means the pool
-    # path silently dropped the spec on the way to SelfPlayRunner::new.
     assert pool._runner is not None
     assert pool._runner.encoding is not None, (
         "WorkerPool wired a v6w25 spec but runner.encoding is None — "
@@ -236,16 +230,21 @@ def test_pool_does_not_warn_when_encoding_wired(caplog):
 
 
 @pytest.mark.xfail(
-    reason="§172 A4.2 multi-window selfplay blocked pending α (Phase A7)",
-    raises=NotImplementedError,
-    strict=True,
+    reason=(
+        "§173 A8' construction unblocked; end-to-end Rust α completion "
+        "tracked in tests/selfplay/test_v6w25_microsmoke.py "
+        "(reproject_game_end_row aux sizing + window_flat_idx geometry)."
+    ),
+    raises=(AssertionError, ValueError),
+    strict=False,
 )
 def test_pool_v6w25_smoke_spawns_with_runner_encoding():
-    """End-to-end pool smoke under v6w25 — runner should spawn workers,
-    complete at least one game, and stop cleanly. Pairs with the cargo
-    test `test_worker_loop_spawns_with_v6w25_encoding`."""
+    """End-to-end pool smoke under v6w25 — depends on Rust α completion."""
     device = torch.device("cpu")
-    model = HexTacToeNet(board_size=19, in_channels=8, filters=8, res_blocks=1).to(device)
+    model = HexTacToeNet(
+        board_size=25, in_channels=8, filters=8, res_blocks=1,
+        encoding="v6w25",
+    ).to(device)
     cfg = _base_selfplay_cfg(encoding_version="v6w25")
     buf = ReplayBuffer(capacity=64)
     pool = WorkerPool(model, cfg, device, buf, n_workers=1)

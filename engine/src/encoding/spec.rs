@@ -87,6 +87,19 @@ pub struct RegistrySpec {
     pub sym_table_id: &'static str,
     pub schema_version: u32,
     pub notes: &'static str,
+
+    // ── §173 A3 additions ────────────────────────────────────────────────
+    /// Physical source-plane indices retained by this encoding's wire format.
+    /// Length == `n_planes`. See `registry.toml` header for the canonical
+    /// `[0..3, 8..11]` X+history / O+history block convention.
+    /// v6 family: 8 indices from 18-plane source. v8 family: 11 indices
+    /// from 21-plane source (adds indices 18, 19, 20).
+    pub kept_plane_indices: &'static [usize],
+    /// Source tensor plane count *before* `kept_plane_indices` slice.
+    /// v6 family = 18; v8 family = 21.
+    /// Used by validator for the kept-indices upper bound. Producer-pipeline
+    /// migration to read this from spec is deferred to §174.
+    pub n_source_planes: usize,
 }
 
 impl RegistrySpec {
@@ -217,6 +230,44 @@ impl RegistrySpec {
             }
         }
 
+        // §173 A3 — kept_plane_indices + n_source_planes validators.
+        // 3.1: len(kept_plane_indices) == n_planes
+        if self.kept_plane_indices.len() != self.n_planes {
+            errs.push(format!(
+                "len(kept_plane_indices)={} != n_planes={}",
+                self.kept_plane_indices.len(),
+                self.n_planes
+            ));
+        }
+        // 3.5: n_source_planes >= n_planes
+        if self.n_source_planes < self.n_planes {
+            errs.push(format!(
+                "n_source_planes={} < n_planes={} (kept set must be a subset of source)",
+                self.n_source_planes, self.n_planes
+            ));
+        }
+        // 3.2: no duplicates in kept_plane_indices
+        {
+            let mut seen_idx: BTreeSet<usize> = BTreeSet::new();
+            for &idx in self.kept_plane_indices.iter() {
+                if !seen_idx.insert(idx) {
+                    errs.push(format!(
+                        "kept_plane_indices: duplicate index {}",
+                        idx
+                    ));
+                }
+            }
+        }
+        // 3.3: max(kept_plane_indices) < n_source_planes
+        if let Some(&max_idx) = self.kept_plane_indices.iter().max() {
+            if max_idx >= self.n_source_planes {
+                errs.push(format!(
+                    "kept_plane_indices: max index {} >= n_source_planes={}",
+                    max_idx, self.n_source_planes
+                ));
+            }
+        }
+
         if errs.is_empty() {
             Ok(())
         } else {
@@ -230,33 +281,46 @@ impl RegistrySpec {
 }
 
 impl RegistrySpec {
-    /// Total cells = board_size².
+    /// Total cells per trunk input tensor = `trunk_size²`.
+    ///
+    /// `board_size` is canvas geometry (logical grid extent); `trunk_size` is
+    /// NN input geometry (= `cluster_window_size` for multi-window, = `board_size`
+    /// for single-window). For all current single-window encodings the two are
+    /// equal, but future canvas-larger-than-trunk encodings must use `trunk_size`.
+    /// §173 A3 semantic fix: was `board_size²` (wrong for multi-window). Now
+    /// `trunk_size²` — matches Rust intent and Python parity.
+    #[inline]
     pub fn n_cells(&self) -> usize {
-        self.board_size * self.board_size
+        self.trunk_size * self.trunk_size
     }
 
     /// (board_size − 1) / 2 — board half-extent for axial→canvas mapping.
+    #[inline]
     pub fn half(&self) -> i32 {
         (self.board_size as i32 - 1) / 2
     }
 
     /// State plane stride = n_planes × n_cells.
+    #[inline]
     pub fn state_stride(&self) -> usize {
         self.n_planes * self.n_cells()
     }
 
     /// Chain plane stride = N_CHAIN_PLANES × n_cells.
+    #[inline]
     pub fn chain_stride(&self) -> usize {
         crate::replay_buffer::sym_tables::N_CHAIN_PLANES * self.n_cells()
     }
 
     /// Aux plane stride = n_cells (single aux plane).
+    #[inline]
     pub fn aux_stride(&self) -> usize {
         self.n_cells()
     }
 
     /// Policy stride is `policy_logit_count` (already a struct field — provided as
     /// accessor for parity with the strides above).
+    #[inline]
     pub fn policy_stride(&self) -> usize {
         self.policy_logit_count
     }
@@ -291,8 +355,10 @@ mod tests {
             value_pool: ValuePool::None,
             policy_pool: PolicyPool::None,
             sym_table_id: "size_19",
-            schema_version: 1,
+            schema_version: 2,
             notes: "test",
+            kept_plane_indices: &[0, 1, 2, 3, 8, 9, 10, 11],
+            n_source_planes: 18,
         }
     }
 
@@ -359,5 +425,72 @@ mod tests {
         assert_eq!(s.half(), 9);
         assert_eq!(s.state_stride(), 8 * 361);
         assert_eq!(s.policy_stride(), 362);
+    }
+
+    // §173 A3 — kept_plane_indices validator tests.
+
+    #[test]
+    fn validate_rejects_kept_plane_indices_len_mismatch() {
+        let mut s = ok_v6();
+        s.kept_plane_indices = &[0, 1, 2, 3, 8, 9, 10]; // len=7, n_planes=8
+        let err = s.validate().unwrap_err();
+        assert!(
+            err.contains("len(kept_plane_indices)"),
+            "expected len mismatch error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_rejects_kept_plane_indices_duplicate() {
+        let mut s = ok_v6();
+        s.kept_plane_indices = &[0, 0, 2, 3, 8, 9, 10, 11]; // dup index 0
+        let err = s.validate().unwrap_err();
+        assert!(
+            err.contains("duplicate"),
+            "expected duplicate error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_rejects_kept_plane_indices_out_of_range() {
+        let mut s = ok_v6();
+        s.kept_plane_indices = &[0, 1, 2, 3, 8, 9, 10, 99]; // 99 >= n_source_planes=18
+        let err = s.validate().unwrap_err();
+        assert!(
+            err.contains("n_source_planes"),
+            "expected n_source_planes error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_accepts_kept_plane_indices_unsorted() {
+        let mut s = ok_v6();
+        s.kept_plane_indices = &[3, 1, 2, 0, 11, 10, 9, 8]; // valid unsorted
+        s.validate().unwrap(); // no panic
+    }
+
+    #[test]
+    fn test_n_cells_uses_trunk_size_squared() {
+        // Single-window: trunk_size == board_size — no difference.
+        let v6 = crate::encoding::registry::lookup_or_panic("v6");
+        assert_eq!(v6.n_cells(), v6.trunk_size * v6.trunk_size);
+        // Multi-window: trunk_size == cluster_window_size == 25 (board_size also 25 here).
+        let v6w25 = crate::encoding::registry::lookup_or_panic("v6w25");
+        assert_eq!(v6w25.n_cells(), v6w25.trunk_size * v6w25.trunk_size);
+        assert_eq!(v6w25.n_cells(), 625);
+    }
+
+    #[test]
+    fn test_kept_plane_indices_v6_and_v8() {
+        let v6 = crate::encoding::registry::lookup_or_panic("v6");
+        assert_eq!(v6.kept_plane_indices, &[0usize, 1, 2, 3, 8, 9, 10, 11]);
+        assert_eq!(v6.n_source_planes, 18);
+
+        let v8 = crate::encoding::registry::lookup_or_panic("v8");
+        assert_eq!(v8.kept_plane_indices, &[0usize, 1, 2, 3, 8, 9, 10, 11, 18, 19, 20]);
+        assert_eq!(v8.n_source_planes, 21);
     }
 }

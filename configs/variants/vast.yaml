@@ -1,0 +1,73 @@
+# configs/variants/vast.yaml
+#
+# §174 canonical v6w25 sustained selfplay variant for vast 5080.
+# Locked parameters from §173 P0 operator decisions.
+# LR 1e-3 confirmed stable by A8 v3 ablation (2e-3 causes FP16 scaler overflow
+# on 25×25 geometry — see reports/sprint_173/a8_cold_smoke_final.md).
+#
+# Usage:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6w25.pt \
+#     --variant vast \
+#     --iterations 30000
+#
+# Dashboard active by default (omit --no-dashboard).
+
+# Encoding
+encoding: v6w25
+board_size: 25
+
+# Model
+in_channels: 8
+
+# Training — LR + gradient
+lr: 0.001
+grad_clip: 1.0
+training_steps_per_game: 2.0
+max_train_burst: 8
+
+# Buffer growth schedule (§173 P0 decision #4)
+buffer_schedule:
+  - {step: 0, capacity: 250000}
+  - {step: 250000, capacity: 500000}
+  - {step: 1500000, capacity: 1000000}
+
+# Selfplay — 5080 tuned
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 224
+  inference_max_wait_ms: 8.0
+  max_game_moves: 150
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    # §156 R12 — disable cosine schedule for sustained runs from frozen bootstrap
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+
+# MCTS
+mcts:
+  n_simulations: 400
+
+# Eval — n=100 per §173 P0 decision #1
+eval_interval: 5000
+
+eval_pipeline:
+  opponents:
+    sealbot:
+      n_games: 100
+      model_sims: 128
+    best_checkpoint:
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+    bootstrap_anchor:
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+
+# Monitoring — dashboard ON (no --no-dashboard flag)
+monitors:
+  hard_abort_grad_norm: 10.0

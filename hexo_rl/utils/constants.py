@@ -15,8 +15,12 @@ BOARD_SIZE: int = 19
 NUM_CELLS: int = BOARD_SIZE * BOARD_SIZE  # 361
 
 # HEXB v6 buffer wire format: 8 planes (cur ply-0..3 + opp ply-0..3).
-# Python-side mirror of engine/src/replay_buffer/sym_tables.rs:KEPT_PLANE_INDICES.
 BUFFER_CHANNELS: int = 8
+
+# §173 A6 DEPRECATED: use EncodingSpec.kept_plane_indices from the registry instead.
+# Retained for callers not yet migrated to registry-sourced construction.
+# Equivalent to: hexo_rl.encoding.lookup("v6").kept_plane_indices
+# Will be removed in §174 cleanup.
 KEPT_PLANE_INDICES: list[int] = [0, 1, 2, 3, 8, 9, 10, 11]
 
 # ── v8 Path β (gated) ───────────────────────────────────────────────────────
@@ -37,6 +41,9 @@ N_ACTIONS_V8: int = NUM_CELLS_V8  # 625
 
 # HTTT rule baseline; replaces v6's r=5 cap (§145 Option α').
 LEGAL_MOVE_RADIUS_V8: int = 8
+
+# AlphaZero history length (current + 7 prior timesteps).
+HISTORY_LEN: int = 8
 
 # bbox dilation margin — equals LEGAL_MOVE_RADIUS_V8.
 MARGIN_M_V8: int = 8

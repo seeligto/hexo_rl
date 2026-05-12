@@ -52,11 +52,20 @@ pub fn pool_overflow_count() -> u64 {
 /// `0.0` so they sink to the bottom of the slow path; in the fast path
 /// they keep the legacy `1/n_ch` fallback prior. Out-of-window legal cells
 /// are vanishingly rare given the centred 19×19 view + radius-8 hex ball.
+///
+/// §173 A8'': `trunk_sz` + `half` are pre-extracted scalars matching the
+/// spec-derived NN-input frame geometry (`spec.trunk_size` /
+/// `Board::cluster_window_size`). For v6 single-window callers pass 19 / 9;
+/// for v6w25 multi-window pass 25 / 12. Per-MCTS-sim hot path — kernel call
+/// is `#[inline]` to fold the bounds check + index math into this function.
+#[inline]
 pub(crate) fn pick_topk_children(
     legal_moves: &FxHashSet<(i32, i32)>,
     cq: i32,
     cr: i32,
     policy: &[f32],
+    trunk_sz: i32,
+    half: i32,
 ) -> (Vec<((i32, i32), f32)>, bool) {
     let n_legal = legal_moves.len();
     let n_ch = n_legal.min(MAX_CHILDREN_PER_NODE);
@@ -65,7 +74,7 @@ pub(crate) fn pick_topk_children(
         let chosen: Vec<((i32, i32), f32)> = legal_moves
             .iter()
             .map(|&(q, r)| {
-                let flat = Board::window_flat_idx_at(q, r, cq, cr);
+                let flat = Board::window_flat_idx_at_geom(q, r, cq, cr, trunk_sz, half);
                 let prior = if flat < policy.len() {
                     policy[flat]
                 } else {
@@ -80,7 +89,7 @@ pub(crate) fn pick_topk_children(
     let mut all: Vec<((i32, i32), f32, usize)> = legal_moves
         .iter()
         .map(|&(q, r)| {
-            let flat = Board::window_flat_idx_at(q, r, cq, cr);
+            let flat = Board::window_flat_idx_at_geom(q, r, cq, cr, trunk_sz, half);
             let sort_prior = if flat < policy.len() { policy[flat] } else { 0.0 };
             ((q, r), sort_prior, flat)
         })
@@ -217,8 +226,15 @@ impl MCTSTree {
         }
 
         // Top-K cap on leaf children (see MAX_CHILDREN_PER_NODE doc).
+        // §173 A8'': read trunk_sz from Board's cached cluster_window_size
+        // (set at Board construction from spec.cluster_window_size for
+        // multi-window encodings; falls back to spec.board_size / BOARD_SIZE
+        // for single-window). One field access — cheaper than the §173 A5b
+        // RegistrySpec-by-value antipattern.
         let (cq, cr) = board.window_center();
-        let (chosen, _sort_used) = pick_topk_children(legal_moves, cq, cr, policy);
+        let trunk_sz = board.cluster_window_size() as i32;
+        let half = (trunk_sz - 1) / 2;
+        let (chosen, _sort_used) = pick_topk_children(legal_moves, cq, cr, policy, trunk_sz, half);
         let n_ch        = chosen.len();
         let first_child = self.next_free;
 

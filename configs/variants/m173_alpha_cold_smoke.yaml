@@ -1,0 +1,150 @@
+# m173_alpha_cold_smoke — §173 A8 cold-smoke validation of α multi-window
+#                          K-cluster selfplay on v6w25.
+#
+# Host:    vast.ai 5080 (RTX 5080 16 GB + Ryzen 9 9900X 24t).
+# Encoding: v6w25 (§170 P4 P1 canonical multi-window — first ever sustained
+#                  self-play exposure for any K-cluster encoding).
+# Bootstrap: checkpoints/bootstrap_model_v6w25.pt
+#            (value_fc2.weight |max| baseline = 0.307935, §173 A8 anchor;
+#             see reports/sprint_173/v6w25_baseline_value_max.json).
+#
+# ## Purpose
+#
+# Validates §173 A3-A6 plumbing under real multi-window selfplay traffic:
+# K-fanned per-cluster MCTS dispatch (worker_loop.rs:319-411), K-fanned
+# buffer push (worker_loop.rs:662-694), and spec-threaded
+# records.aggregate_policy (A5b 626-vector path).
+#
+# This is the discriminator probe for the §174 sustained run; per
+# `superpowers:investigation-probe-smoke-verdict`, the 5K-step cold smoke is
+# the gate — any shape error / NaN / hard-gate violation aborts the §174 plan
+# and triggers an A3-A6 redo wave rather than proceeding to sustained.
+#
+# ## Pre-flight prerequisite (BLOCKS launch — NOT in A8 scope)
+#
+# `hexo_rl/selfplay/pool.py:135-142` currently raises NotImplementedError when
+# `spec.is_multi_window=True`. Lifting this guard is α implementation proper
+# and is OUT-OF-SCOPE for §173 A8 (per A8 task contract: "Do not modify α
+# implementation in A8"). The smoke launch is blocked until that guard is
+# lifted in a follow-up commit (operator-authored or §173 A9+ wave).
+#
+# A8 ships:
+#   1. Round-trip tests (tests/encoding/test_buffer_roundtrip.py,
+#                        tests/encoding/test_bootstrap_v6w25_baseline.py).
+#   2. Bootstrap value-head baseline JSON
+#      (reports/sprint_173/v6w25_baseline_value_max.json).
+#   3. THIS variant config + design memo
+#      (reports/sprint_173/a8_smoke_design.md).
+#
+# A9+ ships (operator decision):
+#   4. Lift pool.py:135-142 multi-window guard.
+#   5. Verify InferenceServer + LocalInferenceEngine handle v6w25 (8,25,25)
+#      forward path.
+#   6. Launch this variant on vast 5080.
+#
+# ## Pre-registered hard gates (LOCKED — do not adjust thresholds)
+#
+#   G3 monotonic depth scaling: WR(MCTS-32) ≤ WR(MCTS-64) ≤ WR(MCTS-128)
+#                               on the bootstrap_v6w25 anchor (§170 P4 P1).
+#   G4 value-head |max| drift:  post-smoke value_fc2.weight.abs().max()
+#                               within ±50% of 0.307935 → [0.154, 0.462].
+#   G5 per-cluster value-variance drift: ≤30% from baseline (see §170 P4 P1).
+#   NaN count:                  0 across 5K steps (loss / value / policy).
+#   Buffer push errors:         0 (no crash / OOM / overflow).
+#   MCTS divergence flags:      0 emitted from worker_loop.
+#   Byte-roundtrip identity:    A8 test suite must remain green pre-launch.
+#   Worker pos/hr tax:          v6w25 ≤ 50% slowdown vs v7full baseline
+#                               80,715 → ≥ 40,358 pos/hr.
+#
+# ## Hard surfaces (STOP the smoke)
+#
+#   Engine panic / tensor-shape mismatch / worker-spawn timeout /
+#   evaluation_error on bootstrap_anchor / NaN in loss / value-head |max|
+#   outside G4 band at any milestone.
+#
+# ## Launch (post-guard-lift)
+#
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6w25.pt \
+#     --variant m173_alpha_cold_smoke \
+#     --checkpoint-dir checkpoints/m173_alpha_cold_smoke \
+#     --no-dashboard \
+#     --iterations 5000 \
+#     2>&1 | tee logs/sprint_173/a8_cold_smoke.log
+#
+# Wall budget: ~30 min on vast 5080 ($0.207/hr × 0.5 = ~$0.10).
+
+# §172 A4 canonical — registry resolves all encoding-derived fields.
+encoding: v6w25
+board_size: 25
+
+training_steps_per_game: 4.0
+max_train_burst: 8
+
+# Single end-of-smoke eval at step 5000. Per
+# feedback_smoke_eval_interval_min_2500 — eval_interval ≥ 2500. Setting at
+# 5000 fires exactly one round at the smoke terminus (avoids mid-run
+# eval_skipped_still_running noise documented in §157 5080 smoke).
+eval_interval: 5000
+
+selfplay:
+  gumbel_mcts: false
+  completed_q_values: true
+  max_game_moves: 150
+  # Throughput knobs copied verbatim from
+  # configs/variants/gumbel_targets_5080_24t.yaml per
+  # feedback_smoke_use_optimal_throughput_config (sweep verdict 2026-04-30:
+  # 98,261 pos/hr @ n_workers=18 / batch=224 / wait=8ms).
+  #
+  # A8 task contract called for n_workers=22 — overridden to 18 per sweep
+  # data. Rationale captured in reports/sprint_173/a8_smoke_design.md §1.
+  n_workers: 18
+  inference_batch_size: 224
+  inference_max_wait_ms: 8.0
+  playout_cap:
+    fast_prob: 0.0              # smoke: full search every game
+    # §156 R12 — disable cosine schedule (would re-introduce R10 draw lock
+    # at warm-start with frozen v6w25 bootstrap). Pinned to fixed τ=0.5.
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+  legal_move_radius_jitter: true  # §157 Gate 5 PROPAGATED + R12 colony mitigation
+
+# MCTS sim budget — A8 task contract specified n_simulations=400.
+# Overrides the configs/selfplay.yaml default of 400 (no-op; explicit for
+# bisect clarity).
+mcts:
+  n_simulations: 400
+
+mixing:
+  # §172 T9 — corpus path resolved by encoding registry
+  # (v6w25 → data/bootstrap_corpus_v6w25.npz).
+  pretrained_buffer_path: "<auto>"
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      # Same-encoding (v6w25 ↔ v6w25) — strict-load fix (§172 G1) verified
+      # green in tests/encoding/test_bootstrap_v6w25_baseline.py.
+      enabled: true
+      stride: 1
+      n_games: 20               # smoke threshold (not §174 n=100 gate)
+      model_sims: 128
+      opponent_sims: 128
+      path: "<auto>"            # resolves to checkpoints/bootstrap_model_v6w25.pt
+    sealbot:
+      stride: 1
+      n_games: 20               # smoke threshold
+    argmax_n:
+      # §170 P4 P1 DRIFT detector. n_sims=1 (≈ policy argmax). Inactive in
+      # the G3 monotonic-depth gate (G3 lives at MCTS {32,64,128}); kept for
+      # operator post-hoc DRIFT inspection.
+      enabled: true
+      stride: 1
+      n_games: 20
+    # G3 monotonic depth gate fires post-smoke via the standard eval harness;
+    # MCTS {32, 64, 128} sweep instrumented at end-of-smoke. See design memo
+    # §2 "Instrumentation" — depth-scaling eval is NOT part of the periodic
+    # opponent dict; it runs as a one-shot post-smoke script.
+
+monitors:
+  hard_abort_grad_norm: 10.0    # §157 Gate 5 defensive default

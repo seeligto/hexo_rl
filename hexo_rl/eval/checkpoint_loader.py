@@ -30,6 +30,7 @@ import torch
 from hexo_rl.encoding import EncodingSpec, lookup as _registry_lookup
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
+from hexo_rl.utils.constants import BUFFER_CHANNELS
 
 
 def _strip_compile_prefixes(state: dict) -> dict:
@@ -80,7 +81,7 @@ def detect_encoding_label(ckpt_path: Path, state: dict) -> str:
     in_ch = int(inp_w.shape[1])
     if in_ch == 11:
         return "v8"
-    if in_ch == 8:
+    if in_ch == BUFFER_CHANNELS:
         name = ckpt_path.name.lower()
         if "v6w25" in name or "_w25" in name:
             return "v6w25"

@@ -216,8 +216,14 @@ impl ReplayBuffer {
             dst_own   [dc_u] = src_own[sc_u];
             dst_wl    [dc_u] = src_wl[sc_u];
         }
-        // Pass action (index 361) is always the identity (policy only).
-        dst_policy[N_CELLS] = src_policy[N_CELLS];
+        // Pass action (index n_cells) is always the identity (policy only).
+        // H5-α guard: skip for encodings without a pass slot (e.g. v8 where
+        // has_pass_slot=false and policy_logit_count=n_cells exactly — index
+        // n_cells would be one past the end of the policy slice).
+        // §173 A4 closes HAZARD H5-α.
+        if tables.n_cells < dst_policy.len() {
+            dst_policy[tables.n_cells] = src_policy[tables.n_cells];
+        }
     }
 
     /// Sample `batch_size` entries, optionally with random 12-fold hex augmentation.
@@ -256,16 +262,21 @@ impl ReplayBuffer {
         // scatter path.
         let indices = self.sample_indices(batch_size, true);
 
+        let state_stride  = self.encoding.state_stride();
+        let chain_stride  = self.encoding.chain_stride();
+        let policy_stride = self.encoding.policy_stride();
+        let aux_stride    = self.encoding.aux_stride();
+
         // ── Allocate output arrays (owned by Python after return) ─────────────
         // States and chain_planes as f16 bits (u16) — no type conversion during scatter.
-        let mut out_states      = vec![0u16; batch_size * STATE_STRIDE];
-        let mut out_chain       = vec![0u16; batch_size * CHAIN_STRIDE];
-        let mut out_policies    = vec![0.0f32; batch_size * POLICY_STRIDE];
+        let mut out_states      = vec![0u16; batch_size * state_stride];
+        let mut out_chain       = vec![0u16; batch_size * chain_stride];
+        let mut out_policies    = vec![0.0f32; batch_size * policy_stride];
         let mut out_outcomes    = vec![0.0f32; batch_size];
         // Ownership default 1 = "empty" — cells outside the symmetry's destination
         // window stay at the same neutral value as the row's initial state.
-        let mut out_ownership      = vec![1u8; batch_size * AUX_STRIDE];
-        let mut out_winning_line   = vec![0u8; batch_size * AUX_STRIDE];
+        let mut out_ownership      = vec![1u8; batch_size * aux_stride];
+        let mut out_winning_line   = vec![0u8; batch_size * aux_stride];
         // is_full_search is per-position metadata — no symmetry transform needed.
         let mut out_is_full_search = vec![0u8; batch_size];
 
@@ -273,23 +284,23 @@ impl ReplayBuffer {
         for (b, &idx) in indices.iter().enumerate() {
             let sym_idx = if augment { self.rng.random_range(0..N_SYMS) } else { 0 };
 
-            let src_state  = &self.states      [idx * STATE_STRIDE..(idx + 1) * STATE_STRIDE];
-            let src_chain  = &self.chain_planes [idx * CHAIN_STRIDE..(idx + 1) * CHAIN_STRIDE];
-            let src_policy = &self.policies    [idx * POLICY_STRIDE..(idx + 1) * POLICY_STRIDE];
-            let src_own    = &self.ownership   [idx * AUX_STRIDE   ..(idx + 1) * AUX_STRIDE];
-            let src_wl     = &self.winning_line[idx * AUX_STRIDE   ..(idx + 1) * AUX_STRIDE];
+            let src_state  = &self.states      [idx * state_stride ..(idx + 1) * state_stride];
+            let src_chain  = &self.chain_planes [idx * chain_stride ..(idx + 1) * chain_stride];
+            let src_policy = &self.policies    [idx * policy_stride..(idx + 1) * policy_stride];
+            let src_own    = &self.ownership   [idx * aux_stride   ..(idx + 1) * aux_stride];
+            let src_wl     = &self.winning_line[idx * aux_stride   ..(idx + 1) * aux_stride];
 
-            let dst_state  = &mut out_states      [b * STATE_STRIDE..(b + 1) * STATE_STRIDE];
-            let dst_chain  = &mut out_chain        [b * CHAIN_STRIDE..(b + 1) * CHAIN_STRIDE];
-            let dst_policy = &mut out_policies    [b * POLICY_STRIDE..(b + 1) * POLICY_STRIDE];
-            let dst_own    = &mut out_ownership   [b * AUX_STRIDE   ..(b + 1) * AUX_STRIDE];
-            let dst_wl     = &mut out_winning_line[b * AUX_STRIDE   ..(b + 1) * AUX_STRIDE];
+            let dst_state  = &mut out_states      [b * state_stride ..(b + 1) * state_stride];
+            let dst_chain  = &mut out_chain        [b * chain_stride ..(b + 1) * chain_stride];
+            let dst_policy = &mut out_policies    [b * policy_stride..(b + 1) * policy_stride];
+            let dst_own    = &mut out_ownership   [b * aux_stride   ..(b + 1) * aux_stride];
+            let dst_wl     = &mut out_winning_line[b * aux_stride   ..(b + 1) * aux_stride];
 
             Self::apply_sym(
                 sym_idx,
                 src_state, src_chain, src_policy, src_own, src_wl,
                 dst_state, dst_chain, dst_policy, dst_own, dst_wl,
-                &self.sym_tables,
+                self.sym_tables,
             );
 
             out_outcomes[b] = self.outcomes[idx];
@@ -308,22 +319,26 @@ impl ReplayBuffer {
             Vec::from_raw_parts(v.as_mut_ptr() as *mut f16, v.len(), v.capacity())
         };
 
+        let n_planes   = self.encoding.n_planes;
+        let trunk_size = self.encoding.trunk_size;
+        let n_logits   = self.encoding.policy_logit_count;
+
         let states_np = states_f16
             .into_pyarray(py)
-            .reshape([batch_size, N_PLANES, BOARD_H, BOARD_W])?;
+            .reshape([batch_size, n_planes, trunk_size, trunk_size])?;
         let chain_np = chain_f16
             .into_pyarray(py)
-            .reshape([batch_size, N_CHAIN_PLANES, BOARD_H, BOARD_W])?;
+            .reshape([batch_size, N_CHAIN_PLANES, trunk_size, trunk_size])?;
         let policies_np = out_policies
             .into_pyarray(py)
-            .reshape([batch_size, N_ACTIONS])?;
+            .reshape([batch_size, n_logits])?;
         let outcomes_np = out_outcomes.into_pyarray(py);
         let ownership_np = out_ownership
             .into_pyarray(py)
-            .reshape([batch_size, BOARD_H, BOARD_W])?;
+            .reshape([batch_size, trunk_size, trunk_size])?;
         let winning_line_np = out_winning_line
             .into_pyarray(py)
-            .reshape([batch_size, BOARD_H, BOARD_W])?;
+            .reshape([batch_size, trunk_size, trunk_size])?;
         let is_full_search_np = out_is_full_search.into_pyarray(py);
 
         Ok((states_np, chain_np, policies_np, outcomes_np, ownership_np, winning_line_np, is_full_search_np))
@@ -342,11 +357,13 @@ mod tests {
     /// often as long-game positions.
     #[test]
     fn test_weighted_sampling_distribution() {
+        let v6_spec = crate::encoding::registry::lookup_or_panic("v6");
         let default_w = f16::from_f32(1.0).to_bits();
         let mut buf = ReplayBuffer {
             capacity: 300,
             size: 0,
             head: 0,
+            encoding: v6_spec,
             states:          vec![0u16; 300 * STATE_STRIDE],
             chain_planes:    vec![0u16; 300 * CHAIN_STRIDE],
             policies:        vec![0.0f32; 300 * POLICY_STRIDE],
@@ -356,7 +373,7 @@ mod tests {
             ownership:       vec![1u8; 300 * AUX_STRIDE],
             winning_line:    vec![0u8; 300 * AUX_STRIDE],
             is_full_search:  vec![1u8; 300],
-            sym_tables: SymTables::new(),
+            sym_tables: crate::replay_buffer::sym_tables::sym_tables_for(v6_spec),
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
             rng: StdRng::seed_from_u64(42),

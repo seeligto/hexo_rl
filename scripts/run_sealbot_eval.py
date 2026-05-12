@@ -53,10 +53,6 @@ from hexo_rl.eval.inference_methods import build_inference_method
 from hexo_rl.utils.device import best_device
 
 
-# Default legal-move radius per encoding label. v6 default 5 matches the
-# pre-§168 corpus; v8 / v6w25 use HTTT rule baseline 8.
-_DEFAULT_LEGAL_RADIUS = {"v6": 5, "v6w25": 8, "v8": 8}
-
 
 def wilson_ci(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
     """Wilson score 95% CI for binomial proportion."""
@@ -76,20 +72,17 @@ def play_game(
     model_side: int,
     eval_random_opening_plies: int,
     seed: int,
-    legal_move_radius: int,
+    encoding_name: str,
     max_moves: int = 200,
-    cluster_threshold: int | None = None,
-    cluster_window_size: int | None = None,
 ) -> tuple[int | None, int]:
-    """Play one game; return (winner_side, ply_count). winner_side ∈ {1,-1,None}."""
+    """Play one game; return (winner_side, ply_count). winner_side ∈ {1,-1,None}.
+
+    §173 A6: Board constructed via Board.with_encoding_name(encoding_name)
+    (registry-sourced) instead of Board() + triple-setter. Closes B4-R3.
+    """
     random.seed(seed)
     np.random.seed(seed)
-    board = Board()
-    board.set_legal_move_radius(legal_move_radius)
-    if cluster_threshold is not None:
-        board.set_cluster_threshold(cluster_threshold)
-    if cluster_window_size is not None:
-        board.set_cluster_window_size(cluster_window_size)
+    board = Board.with_encoding_name(encoding_name)
     state = GameState.from_board(board)
     model_bot.reset()
     seal_bot.reset()
@@ -195,15 +188,15 @@ def main() -> int:
         print(f"FATAL: {e}", file=sys.stderr)
         return 2
 
-    legal_radius = (
-        args.legal_radius
-        if args.legal_radius is not None
-        else _DEFAULT_LEGAL_RADIUS[encoding_label]
-    )
-    # §168 Gate 3 — v6w25 needs widened cluster threshold + window for
-    # K-cluster encoding to match the v6w25 corpus. v6 / v8 use defaults.
-    cluster_threshold: int | None = 8 if encoding_label == "v6w25" else None
-    cluster_window_size: int | None = 25 if encoding_label == "v6w25" else None
+    # §173 A6: Board params come from registry via encoding_label.
+    # --legal-radius override removed (post-encoding setter guard now raises;
+    # cross-radius §167 tests must use a different mechanism if re-opened).
+    if args.legal_radius is not None:
+        print(
+            f"[eval] WARNING: --legal-radius is ignored (§173 A6 — Board params "
+            "come from the registry; post-encoding radius override not supported).",
+            file=sys.stderr,
+        )
 
     arm = ckpt_path.stem.replace("_v8full", "").replace("bootstrap_model_", "")
     inference_tag = args.inference.replace("/", "-")
@@ -215,7 +208,7 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(
-        f"[eval] arm={arm}  inference={args.inference}  legal_radius={legal_radius}  "
+        f"[eval] arm={arm}  inference={args.inference}  encoding={encoding_label}  "
         f"n_games={args.n_games}  time_limit={args.time_limit}  "
         f"temp={args.temperature}",
         flush=True,
@@ -237,10 +230,8 @@ def main() -> int:
             model_side=model_side,
             eval_random_opening_plies=args.random_opening_plies,
             seed=args.seed_base + i,
-            legal_move_radius=legal_radius,
+            encoding_name=encoding_label,
             max_moves=args.max_moves,
-            cluster_threshold=cluster_threshold,
-            cluster_window_size=cluster_window_size,
         )
         ply_counts.append(ply)
         if winner == model_side:

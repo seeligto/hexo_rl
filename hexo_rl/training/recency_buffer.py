@@ -14,6 +14,7 @@ import threading
 from typing import Optional
 
 import numpy as np
+from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS, NUM_CELLS
 
 
 class RecentBuffer:
@@ -34,9 +35,9 @@ class RecentBuffer:
     def __init__(
         self,
         capacity: int,
-        state_shape: tuple[int, ...] = (8, 19, 19),
-        policy_len: int = 362,
-        aux_stride: int = 361,
+        state_shape: tuple[int, ...] = (BUFFER_CHANNELS, BOARD_SIZE, BOARD_SIZE),
+        policy_len: int = NUM_CELLS + 1,
+        aux_stride: int = NUM_CELLS,
     ) -> None:
         if capacity < 1:
             raise ValueError(f"capacity must be >= 1, got {capacity}")

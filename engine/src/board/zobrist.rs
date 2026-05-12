@@ -74,9 +74,9 @@ impl ZobristTable {
     #[inline]
     pub fn get_for_pos(q: i32, r: i32, player: usize) -> u128 {
         const HALF: i32 = 9;
-        const SIZE: i32 = 19;
+        const BOARD_SIZE: i32 = 19;
         if q >= -HALF && q <= HALF && r >= -HALF && r <= HALF {
-            let cell = ((q + HALF) as usize) * (SIZE as usize) + ((r + HALF) as usize);
+            let cell = ((q + HALF) as usize) * (BOARD_SIZE as usize) + ((r + HALF) as usize);
             Self::get(cell, player)
         } else {
             // Mixing primes for arbitrary coordinates

@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from hexo_rl.utils.constants import BUFFER_CHANNELS
+
 import structlog
 import torch
 
@@ -51,7 +53,7 @@ def build_inference_model(
     board_size         = _registry_resolve(trainer.config).trunk_size
     res_blocks         = int(trainer.config.get("res_blocks",         12))
     filters            = int(trainer.config.get("filters",            128))
-    in_channels        = int(trainer.config.get("in_channels",         8))
+    in_channels        = int(trainer.config.get("in_channels",         BUFFER_CHANNELS))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
     input_channels     = trainer.config.get("input_channels", None)
 
@@ -209,11 +211,13 @@ def build_subsystems(
     # the existing _emit_training_events cadence so probe cost is amortised.
     early_game_probe: Optional[EarlyGameProbe]
     try:
-        early_game_probe = EarlyGameProbe(device=device)
+        _probe_encoding = config.get("encoding", "v6")
+        early_game_probe = EarlyGameProbe(device=device, encoding_name=_probe_encoding)
         log.info(
             "early_game_probe_init",
             n_positions=early_game_probe.n_positions,
             plies=early_game_probe.plies,
+            encoding=_probe_encoding,
         )
     except Exception as _egp_err:
         log.warning("early_game_probe_unavailable", error=str(_egp_err))

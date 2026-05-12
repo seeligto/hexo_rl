@@ -72,31 +72,61 @@ pub const AUX_STRIDE:    usize = N_CELLS;
 //    cluster window grows 19 → 25, cluster threshold grows 5 → 8, and
 //    legal-move radius grows 5 → 8. Used as the matched-perception A/B
 //    baseline against v8 single-bbox (T3 §168 verdict pending).
+//
+// DEPRECATED (§173 A4): these constants are superseded by `sym_tables_for(spec)`
+// and `spec.*_stride()` / `spec.n_cells()`. Use the spec-based accessors in all
+// new code. These consts will be removed in a follow-up commit once A5a/A5b/A6
+// have migrated all remaining callers.
 
-/// v6w25 cluster window side length. Numerically 25 (matching v8 bbox side)
-/// but distinct symbol — v6w25 keeps the v6 8-plane KEPT_PLANE_INDICES wire
-/// format and pass slot, just with a larger cluster window.
+// These constants are expressed as plain values to avoid triggering deprecation
+// warnings within this module itself (Rust deprecation warnings fire on use,
+// including at peer-constant definition sites). The deprecation doc comments
+// and #[deprecated] annotations communicate the migration path to callers.
+
+/// v6w25 cluster window side length = 25. DEPRECATED — use `spec.trunk_size`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.trunk_size (via sym_tables_for / RegistrySpec::n_cells); §173 A4")]
+#[allow(deprecated)]
 pub const BOARD_H_V6W25: usize = 25;
-pub const BOARD_W_V6W25: usize = BOARD_H_V6W25;
-/// v6w25 total cells = 25 × 25 = 625.
-pub const N_CELLS_V6W25: usize = BOARD_H_V6W25 * BOARD_W_V6W25;
-/// v6w25 plane count: same 8 KEPT planes as v6.
-pub const N_PLANES_V6W25: usize = N_PLANES;
-/// v6w25 action space: 625 cells + 1 pass slot. v6 wire format keeps the
-/// pass slot for state-dict compat with v6 / v7full / v6 model files.
-pub const N_ACTIONS_V6W25: usize = N_CELLS_V6W25 + 1;
-/// v6w25 cluster threshold (matched to perception radius).
+/// DEPRECATED — use `spec.trunk_size`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.trunk_size; §173 A4")]
+#[allow(deprecated)]
+pub const BOARD_W_V6W25: usize = 25; // = BOARD_H_V6W25
+/// v6w25 total cells = 625. DEPRECATED — use `spec.n_cells()`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.n_cells(); §173 A4")]
+#[allow(deprecated)]
+pub const N_CELLS_V6W25: usize = 625; // = BOARD_H_V6W25 * BOARD_W_V6W25
+/// v6w25 plane count = 8. DEPRECATED — use `spec.n_planes`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.n_planes; §173 A4")]
+#[allow(deprecated)]
+pub const N_PLANES_V6W25: usize = 8; // = N_PLANES
+/// v6w25 action space = 626. DEPRECATED — use `spec.policy_stride()`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.policy_stride(); §173 A4")]
+#[allow(deprecated)]
+pub const N_ACTIONS_V6W25: usize = 626; // = N_CELLS_V6W25 + 1
+/// v6w25 cluster threshold = 8. DEPRECATED — use `spec.cluster_threshold.unwrap()`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.cluster_threshold.unwrap(); §173 A4")]
+#[allow(deprecated)]
 pub const CLUSTER_THRESHOLD_V6W25: i32 = 8;
-/// v6w25 legal-move radius (HTTT rule baseline, §168 Gate 3).
+/// v6w25 legal-move radius = 8. DEPRECATED — use `spec.legal_move_radius`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.legal_move_radius; §173 A4")]
+#[allow(deprecated)]
 pub const LEGAL_MOVE_RADIUS_V6W25: i32 = 8;
-/// v6w25 state stride per buffer slot = 8 × 625 = 5000.
-pub const STATE_STRIDE_V6W25: usize = N_PLANES_V6W25 * N_CELLS_V6W25;
-/// v6w25 chain stride per buffer slot = 6 × 625 = 3750.
-pub const CHAIN_STRIDE_V6W25: usize = N_CHAIN_PLANES * N_CELLS_V6W25;
-/// v6w25 policy stride = 626 (cells + pass).
-pub const POLICY_STRIDE_V6W25: usize = N_ACTIONS_V6W25;
-/// v6w25 auxiliary stride = 625.
-pub const AUX_STRIDE_V6W25: usize = N_CELLS_V6W25;
+/// v6w25 state stride = 5000. DEPRECATED — use `spec.state_stride()`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.state_stride(); §173 A4")]
+#[allow(deprecated)]
+pub const STATE_STRIDE_V6W25: usize = 5000; // = N_PLANES_V6W25 * N_CELLS_V6W25
+/// v6w25 chain stride = 3750. DEPRECATED — use `spec.chain_stride()`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.chain_stride(); §173 A4")]
+#[allow(deprecated)]
+pub const CHAIN_STRIDE_V6W25: usize = 3750; // = N_CHAIN_PLANES * N_CELLS_V6W25
+/// v6w25 policy stride = 626. DEPRECATED — use `spec.policy_stride()`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.policy_stride(); §173 A4")]
+#[allow(deprecated)]
+pub const POLICY_STRIDE_V6W25: usize = 626; // = N_ACTIONS_V6W25
+/// v6w25 auxiliary stride = 625. DEPRECATED — use `spec.aux_stride()`. §173 A4.
+#[deprecated(since = "0.173.4", note = "use spec.aux_stride(); §173 A4")]
+#[allow(deprecated)]
+pub const AUX_STRIDE_V6W25: usize = 625; // = N_CELLS_V6W25
 
 // ── Weight schedule ──────────────────────────────────────────────────────────
 
@@ -351,6 +381,54 @@ impl SymTables {
             src_plane_lookup,
             chain_src_lookup,
         }
+    }
+}
+
+// ── sym_tables_for() — per-spec lazy constructor ──────────────────────────────
+
+use once_cell::sync::Lazy;
+
+/// Return the pre-built `SymTables` for the given encoding spec, keyed on
+/// `spec.sym_table_id`.
+///
+/// Lazily initialises one static `SymTables` per distinct `(sym_table_id,
+/// n_planes)` combination and returns a `&'static` reference. Building is
+/// O(N_CELLS × N_SYMS) ≈ 4 µs for v6 / ≈ 7 µs for v6w25; subsequent calls
+/// are free (pointer return only).
+///
+/// Supported `sym_table_id` values (from `registry.toml`):
+///   `"size_19"` → v6/v7full sym tables (board 19×19, n_planes as given).
+///   `"size_25"` → v6w25 / v8 / v8_canvas_realness sym tables (25×25).
+///
+/// Panics on an unknown `sym_table_id` — only valid registry entries should
+/// ever be passed here.
+///
+/// §173 A4: used by A5a to replace the unconditional `SymTables::new()` call
+/// in `worker_loop.rs:151` (H1-α hazard: SymTables v6 unconditional for all
+/// encodings). A4 places the function here so A5a can call it without owning
+/// the `sym_tables` module.
+pub fn sym_tables_for(spec: &'static crate::encoding::RegistrySpec) -> &'static SymTables {
+    // One static per distinct (sym_table_id, n_planes) pair. All current
+    // encodings collapse to three combinations; the match on sym_table_id +
+    // n_planes is explicit so future encodings panic loud rather than silently
+    // reusing a wrong table.
+    //
+    // "size_19" (v6, v7full): board 19×19, n_planes=8 — shared singleton.
+    static SIZE19_8:  Lazy<SymTables> = Lazy::new(|| SymTables::with_shape(19, 8));
+    // "size_25" n_planes=8 (v6w25): board 25×25, 8-plane wire format.
+    static SIZE25_8:  Lazy<SymTables> = Lazy::new(|| SymTables::with_shape(25, 8));
+    // "size_25" n_planes=11 (v8, v8_canvas_realness): board 25×25, 11-plane wire format.
+    static SIZE25_11: Lazy<SymTables> = Lazy::new(|| SymTables::with_shape(25, 11));
+
+    match (spec.sym_table_id, spec.n_planes) {
+        ("size_19", _)  => &*SIZE19_8,
+        ("size_25", 8)  => &*SIZE25_8,
+        ("size_25", 11) => &*SIZE25_11,
+        (id, np) => panic!(
+            "sym_tables_for: no sym table for encoding {:?} (sym_table_id={:?}, n_planes={}). \
+             Add a Lazy<SymTables> entry in sym_tables::sym_tables_for().",
+            spec.name, id, np
+        ),
     }
 }
 
@@ -658,5 +736,66 @@ mod tests {
     fn test_v6_policy_stride_matches_n_actions() {
         let s = crate::encoding::registry::lookup_or_panic("v6");
         assert_eq!(s.policy_stride(), N_ACTIONS);
+    }
+
+    // ── sym_tables_for() tests (§173 A4) ────────────────────────────────────
+
+    #[test]
+    fn sym_tables_for_v6_matches_new() {
+        let spec = crate::encoding::registry::lookup_or_panic("v6");
+        let via_fn = crate::replay_buffer::sym_tables::sym_tables_for(spec);
+        let via_new = SymTables::new();
+        // Same board geometry.
+        assert_eq!(via_fn.board_size, via_new.board_size);
+        assert_eq!(via_fn.n_cells,    via_new.n_cells);
+        assert_eq!(via_fn.n_planes,   via_new.n_planes);
+        // Same scatter tables for all 12 symmetries.
+        for s in 0..N_SYMS {
+            assert_eq!(via_fn.scatter[s], via_new.scatter[s],
+                "scatter[{s}] mismatch between sym_tables_for(v6) and SymTables::new()");
+            assert_eq!(via_fn.axis_perm[s], via_new.axis_perm[s],
+                "axis_perm[{s}] mismatch");
+            assert_eq!(via_fn.chain_src_lookup[s], via_new.chain_src_lookup[s],
+                "chain_src_lookup[{s}] mismatch");
+        }
+    }
+
+    #[test]
+    fn sym_tables_for_v7full_matches_v6_shape() {
+        // v7full uses sym_table_id="size_19" and n_planes=8 — same table as v6.
+        let spec = crate::encoding::registry::lookup_or_panic("v7full");
+        let tables = crate::replay_buffer::sym_tables::sym_tables_for(spec);
+        assert_eq!(tables.board_size, 19);
+        assert_eq!(tables.n_cells, 361);
+        assert_eq!(tables.n_planes, 8);
+    }
+
+    #[test]
+    fn sym_tables_for_v6w25_has_size_25() {
+        let spec = crate::encoding::registry::lookup_or_panic("v6w25");
+        let tables = crate::replay_buffer::sym_tables::sym_tables_for(spec);
+        assert_eq!(tables.board_size, 25);
+        assert_eq!(tables.n_cells, 625);
+        assert_eq!(tables.n_planes, 8);
+        // Identity scatter must cover all 625 cells.
+        assert_eq!(tables.scatter[0].len(), 625);
+    }
+
+    #[test]
+    fn sym_tables_for_v8_has_size_25_n11() {
+        let spec = crate::encoding::registry::lookup_or_panic("v8");
+        let tables = crate::replay_buffer::sym_tables::sym_tables_for(spec);
+        assert_eq!(tables.board_size, 25);
+        assert_eq!(tables.n_cells, 625);
+        assert_eq!(tables.n_planes, 11);
+    }
+
+    #[test]
+    fn sym_tables_for_returns_stable_ref() {
+        // Calling twice returns the same static address (Lazy singleton).
+        let spec = crate::encoding::registry::lookup_or_panic("v6");
+        let t1 = crate::replay_buffer::sym_tables::sym_tables_for(spec) as *const _;
+        let t2 = crate::replay_buffer::sym_tables::sym_tables_for(spec) as *const _;
+        assert_eq!(t1, t2, "sym_tables_for must return the same static singleton");
     }
 }

@@ -17,7 +17,7 @@ This file is read automatically by Claude Code at the start of every session.
 Read it fully before doing anything. Rule files under `docs/rules/` are topic-scoped
 — load on demand per the index below.
 
-**Current phase:** Phase 4.0 sustained DEFERRED 2026-05-06 (§157 Path B — 5k smoke PASS at 19.0% SealBot WR; sustained 40k skipped to preserve dev cycles for the encoding migration that will obsolete the 8-plane trunk). Phase 5+ encoding migration is the active workstream. v7full (§150 anchor, 17.4% n=500 vs SealBot), v7e30, v7, v6 retained as versioned A/B baselines.
+**Current phase:** Phase 4.0 sustained DEFERRED 2026-05-06 (§157 Path B — 5k smoke PASS at 19.0% SealBot WR; sustained 40k skipped to preserve dev cycles for the encoding migration). §173 α multi-window K-cluster selfplay implementation CLOSED 2026-05-11. v6w25 selfplay OPERATIONAL post-§173 (bench gate held, A9 review PASS). §174 = v6w25 sustained smoke under α, blocked on HEXB v7 format bump + A8 cold smoke G3/G4/G5 verification. v7full (§150 anchor, 17.4% n=500 vs SealBot), v7e30, v7, v6 retained as versioned A/B baselines.
 **Reference hardware:** AMD Ryzen 7 3700x + RTX 3070 + 48 GB RAM (target). Current dev host is laptop (Ryzen 7 8845HS + RTX 4060 Max-Q); bench targets calibrated to laptop — see `docs/rules/perf-targets.md`.
 (An internal sprint log is maintained locally — not distributed.)
 

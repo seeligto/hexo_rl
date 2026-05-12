@@ -67,3 +67,18 @@ rsync -avz \
   see transfer speed. For dry-run preview, add `-n`.
 - If the transfer is for a sweep report or benchmark JSON, after rsync completes,
   ask the user if they want the file committed to the repo.
+
+## IPv4/IPv6 — NAT64 network note
+
+On this dev host the network is **IPv6-only with DNS64/NAT64**. `sshN.vast.ai`
+resolves to a NAT64-prefixed address (`64:ff9b::<ipv4>`) — there is no native
+IPv4 path. Key findings (2026-05-10 diagnosis):
+
+- `-4` flag does NOT help: still routes through NAT64, same ~2.7s connect time.
+- `-6` flag is redundant: system already prefers IPv6 via DNS64.
+- Do NOT add `-4` or `-6` to the rsync `-e` ssh string — leave address-family
+  unset so SSH resolves and connects however the system decides.
+- The ~2.7s SSH handshake is the network baseline for this path; ICMP is blocked
+  server-side (ping drops 100%). Do not treat this as a hang.
+- KEX algorithm changes and GSSAPI=no had no effect on connect time — the latency
+  is the NAT64 round-trip, not protocol overhead. Do not alter KEX.

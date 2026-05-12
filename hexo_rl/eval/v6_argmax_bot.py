@@ -26,7 +26,7 @@ import torch
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
 from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
+from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS, KEPT_PLANE_INDICES
 from hexo_rl.utils.global_crop import compute_global_crop_from_board
 
 
@@ -85,7 +85,7 @@ class V6ArgmaxBot(BotProtocol):
         view_half = (view_size - 1) // 2
         # Slice 18 → 8 planes (KEPT_PLANE_INDICES, HEXB v6 wire format) only
         # if the model expects 8 in_channels.
-        if self.model.in_channels == 8:
+        if self.model.in_channels == BUFFER_CHANNELS:
             inp = cluster_tensor[KEPT_PLANE_INDICES]
         else:
             inp = cluster_tensor

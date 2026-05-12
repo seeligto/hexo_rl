@@ -366,7 +366,7 @@ def main() -> None:
     else:
         min_buf_size = max(128, min(512, int(train_cfg.get("batch_size", config.get("batch_size", 256)))))
 
-    buffer = ReplayBuffer(capacity=capacity)
+    buffer = ReplayBuffer(capacity=capacity, encoding=config.get("encoding", "v6"))
 
     glw = train_cfg.get("game_length_weights", config.get("game_length_weights", {}))
     if glw:
@@ -447,8 +447,14 @@ def main() -> None:
     recent_buffer: RecentBuffer | None = None
     if _recency_weight > 0.0:
         _recent_cap = max(256, capacity // 2)
-        recent_buffer = RecentBuffer(capacity=_recent_cap)
-        log.info("recent_buffer_init", capacity=_recent_cap, recency_weight=_recency_weight)
+        recent_buffer = RecentBuffer(
+            capacity=_recent_cap,
+            state_shape=(_registry_spec.n_planes, _registry_spec.trunk_size, _registry_spec.trunk_size),
+            policy_len=_registry_spec.policy_logit_count,
+            aux_stride=_registry_spec.trunk_size * _registry_spec.trunk_size,
+        )
+        log.info("recent_buffer_init", capacity=_recent_cap, recency_weight=_recency_weight,
+                 state_shape=recent_buffer._states.shape[1:], policy_len=_registry_spec.policy_logit_count)
         if _buffer_restored:
             _rbp = Path(str(_bp) + ".recent")
             if _rbp.exists():
@@ -469,7 +475,7 @@ def main() -> None:
         _n_actions_spec = int(_bufs_spec.policy_logit_count)
     except Exception as _re_err:
         log.warning("buffer_alloc_registry_resolve_failed", error=str(_re_err)[:120])
-        _trunk_size = 19  # v6 default fallback (registry unavailable)
+        _trunk_size = int(combined_config.get("board_size", 19))  # fallback from config
         _n_actions_spec = _N_ACTIONS
     bufs = allocate_batch_buffers(
         _batch_size_cfg,

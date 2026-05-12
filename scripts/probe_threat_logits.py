@@ -66,7 +66,8 @@ from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
 from hexo_rl.training.trainer import Trainer
 from hexo_rl.utils.constants import BUFFER_CHANNELS, KEPT_PLANE_INDICES
 
-BOARD_SIZE: int = 19
+# BOARD_SIZE is now encoding-derived; see _get_board_size() below.
+# Hard-coded 19 removed per §173 eval-fix.
 
 # ── Kill-criterion thresholds (§85 / §89, revised §91) ──────────────────────
 
@@ -83,6 +84,20 @@ BASELINE_JSON_PATH: Path = REPO_ROOT / "fixtures" / "threat_probe_baseline.json"
 
 # Fixed seed for deterministic inference (same value every run).
 _PROBE_SEED: int = 42
+
+
+def _get_board_size(encoding_name: str) -> int:
+    """Resolve board_size from encoding registry."""
+    from hexo_rl.encoding import lookup as _lookup_encoding
+    spec = _lookup_encoding(encoding_name)
+    return spec.board_size
+
+
+def _get_policy_logit_count(encoding_name: str) -> int:
+    """Resolve policy_logit_count from encoding registry."""
+    from hexo_rl.encoding import lookup as _lookup_encoding
+    spec = _lookup_encoding(encoding_name)
+    return spec.policy_logit_count
 
 
 def _set_determinism() -> None:
@@ -139,6 +154,7 @@ def save_baseline_json(
 def load_model(
     ckpt_path: Path,
     device: Optional[torch.device] = None,
+    encoding_name: str = "v6",
 ) -> HexTacToeNet:
     """Load checkpoint → HexTacToeNet in eval mode (FP32 always)."""
     if device is None:
@@ -150,13 +166,9 @@ def load_model(
     hparams = Trainer._infer_model_hparams(state)
 
     in_channels = int(hparams.get("in_channels", 8))
-    if in_channels != 8:
-        raise ValueError(
-            f"probe_threat_logits: refusing to load — expected in_channels=8 (v6), "
-            f"got {in_channels}. hparams={hparams}. Wrong checkpoint?"
-        )
+    board_size = _get_board_size(encoding_name)
     model = HexTacToeNet(
-        board_size=int(hparams.get("board_size", 19)),
+        board_size=board_size,
         in_channels=in_channels,
         filters=int(hparams.get("filters", 128)),
         res_blocks=int(hparams.get("res_blocks", 12)),
@@ -171,7 +183,7 @@ def load_model(
 # ── Fixture loading ───────────────────────────────────────────────────────────
 
 
-def load_positions(npz_path: Path) -> Dict:
+def load_positions(npz_path: Path, encoding_name: str = "v6") -> Dict:
     """Load fixture NPZ; returns dict with numpy arrays."""
     data = np.load(str(npz_path), allow_pickle=False)
     required = {"states", "ext_cell_idx", "control_cell_idx"}
@@ -179,10 +191,18 @@ def load_positions(npz_path: Path) -> Dict:
     if missing:
         raise ValueError(f"NPZ missing required arrays: {missing}")
 
-    states = data["states"]  # (N, C, 19, 19) float16; C=18 legacy or C=8 post-§131
-    if states.ndim != 4 or states.shape[2:] != (BOARD_SIZE, BOARD_SIZE):
+    board_size = _get_board_size(encoding_name)
+    n_spatial = board_size * board_size
+
+    states = data["states"]
+    if states.ndim != 4 or states.shape[2:] != (board_size, board_size):
+        # Fixture shape mismatch — v6w25 fixtures not yet generated.
+        # TODO: generate v6w25 threat-probe fixtures (scripts/generate_threat_probe_fixtures.py
+        # needs encoding-awareness) and remove this guard.
         raise ValueError(
-            f"states shape {states.shape} — expected (N, C, {BOARD_SIZE}, {BOARD_SIZE})"
+            f"states shape {states.shape} — expected (N, C, {board_size}, {board_size}). "
+            f"Fixture may be for a different encoding. "
+            f"Run: python scripts/generate_threat_probe_fixtures.py --encoding {encoding_name}"
         )
 
     # Load cell indices verbatim from NPZ — never regenerate at load time.
@@ -201,10 +221,11 @@ def load_positions(npz_path: Path) -> Dict:
 
 def _probe_one(
     model: HexTacToeNet,
-    state_fp16: np.ndarray,   # (18, 19, 19) float16
+    state_fp16: np.ndarray,
     ext_flat: int,
     ctrl_flat: int,
     device: torch.device,
+    board_size: int,
 ) -> Tuple[float, float, float, List[int], List[int]]:
     """Forward one position in FP32; return (ext_logit, ctrl_logit, contrast, top5, top10)."""
     # Slice 18→8 planes when fixture is legacy 18-plane but model expects 8-plane.
@@ -217,16 +238,17 @@ def _probe_one(
         out = model(x, threat=True)
 
     # out = (log_policy, value, v_logit, [opp_reply, sigma2, ownership,] threat_logits)
-    threat_logits = out[-1]  # (1, 1, 19, 19)
-    log_policy = out[0]       # (1, H*W + 1)
+    threat_logits = out[-1]  # (1, 1, B, B)
+    log_policy = out[0]       # (1, A)
 
-    threat_flat = threat_logits[0, 0].float().cpu().flatten()  # (361,)
+    n_spatial = board_size * board_size
+    threat_flat = threat_logits[0, 0].float().cpu().flatten()  # (B*B,)
 
     ext_logit = float(threat_flat[ext_flat].item())
     ctrl_logit = float(threat_flat[ctrl_flat].item())
     contrast = ext_logit - ctrl_logit
 
-    policy_spatial = log_policy[0, :BOARD_SIZE * BOARD_SIZE].float().cpu()
+    policy_spatial = log_policy[0, :n_spatial].float().cpu()
     top10_indices = policy_spatial.topk(min(10, len(policy_spatial))).indices.tolist()
     top5_indices = top10_indices[:5]
 
@@ -237,6 +259,7 @@ def probe_positions(
     model: HexTacToeNet,
     positions: Dict,
     device: Optional[torch.device] = None,
+    board_size: int = 19,
 ) -> List[Dict]:
     """Run probe on all positions; return per-position result dicts."""
     if device is None:
@@ -247,23 +270,24 @@ def probe_positions(
     ctrl_idxs = positions["control_cell_idx"]
     phases = positions["game_phase"]
     n = positions["n"]
+    n_spatial = board_size * board_size
 
     results = []
     for i in range(n):
         ext_flat = int(ext_idxs[i])
         ctrl_flat = int(ctrl_idxs[i])
 
-        if not (0 <= ext_flat < BOARD_SIZE * BOARD_SIZE):
+        if not (0 <= ext_flat < n_spatial):
             raise ValueError(
-                f"Position {i}: ext_cell_idx={ext_flat} out of range [0, {BOARD_SIZE**2})"
+                f"Position {i}: ext_cell_idx={ext_flat} out of range [0, {n_spatial})"
             )
-        if not (0 <= ctrl_flat < BOARD_SIZE * BOARD_SIZE):
+        if not (0 <= ctrl_flat < n_spatial):
             raise ValueError(
-                f"Position {i}: control_cell_idx={ctrl_flat} out of range [0, {BOARD_SIZE**2})"
+                f"Position {i}: control_cell_idx={ctrl_flat} out of range [0, {n_spatial})"
             )
 
         ext_logit, ctrl_logit, contrast, top5, top10 = _probe_one(
-            model, states[i], ext_flat, ctrl_flat, device
+            model, states[i], ext_flat, ctrl_flat, device, board_size
         )
 
         ext_in_top5 = ext_flat in top5
@@ -570,6 +594,7 @@ def main() -> None:
             "will print a warning if used."
         ),
     )
+    parser.add_argument("--encoding", default="v6", help="Encoding name (default: v6).")
     args = parser.parse_args()
 
     exit_code = 0
@@ -582,20 +607,29 @@ def main() -> None:
             print(f"ERROR: checkpoint not found: {args.checkpoint}", file=sys.stderr)
             sys.exit(2)
 
-        if not args.positions.exists():
-            print(f"ERROR: positions file not found: {args.positions}", file=sys.stderr)
+        board_size = _get_board_size(args.encoding)
+        fixture_path = args.positions
+        # Use encoding-specific fixture if default path is the v6 default and
+        # a matching encoding-specific fixture exists.
+        if fixture_path == REPO_ROOT / "fixtures" / "threat_probe_positions.npz":
+            enc_fixture = REPO_ROOT / "fixtures" / f"threat_probe_positions_{args.encoding}.npz"
+            if enc_fixture.exists():
+                fixture_path = enc_fixture
+
+        if not fixture_path.exists():
+            print(f"ERROR: positions file not found: {fixture_path}", file=sys.stderr)
             print(
                 "Run: python scripts/generate_threat_probe_fixtures.py "
-                f"--output {args.positions}",
+                f"--encoding {args.encoding} --output {fixture_path}",
                 file=sys.stderr,
             )
             sys.exit(2)
 
         print(f"Loading model: {args.checkpoint.name}", file=sys.stderr)
-        model = load_model(args.checkpoint, device=device)
+        model = load_model(args.checkpoint, device=device, encoding_name=args.encoding)
 
-        print(f"Loading positions: {args.positions}", file=sys.stderr)
-        positions = load_positions(args.positions)
+        print(f"Loading positions: {fixture_path}", file=sys.stderr)
+        positions = load_positions(fixture_path, encoding_name=args.encoding)
         print(f"  {positions['n']} positions", file=sys.stderr)
 
         # Experiment C: zero chain-length input planes before inference.
@@ -618,7 +652,7 @@ def main() -> None:
                 )
 
         print("Probing...", file=sys.stderr)
-        results = probe_positions(model, positions, device=device)
+        results = probe_positions(model, positions, device=device, board_size=board_size)
         agg = aggregate(results)
 
         # Write baseline json before checking pass/fail so the file is available
@@ -640,8 +674,8 @@ def main() -> None:
         baseline_name: Optional[str] = None
         if args.baseline_checkpoint is not None and args.baseline_checkpoint.exists():
             print(f"Loading comparison checkpoint: {args.baseline_checkpoint.name}", file=sys.stderr)
-            baseline_model = load_model(args.baseline_checkpoint, device=device)
-            baseline_results = probe_positions(baseline_model, positions, device=device)
+            baseline_model = load_model(args.baseline_checkpoint, device=device, encoding_name=args.encoding)
+            baseline_results = probe_positions(baseline_model, positions, device=device, board_size=board_size)
             baseline_agg = aggregate(baseline_results)
             baseline_name = args.baseline_checkpoint.name
 

@@ -51,38 +51,43 @@ impl ReplayBuffer {
             )));
         }
 
+        let state_stride  = self.encoding.state_stride();
+        let chain_stride  = self.encoding.chain_stride();
+        let policy_stride = self.encoding.policy_stride();
+        let aux_stride    = self.encoding.aux_stride();
+
         // Linearise the ring buffer when it has wrapped around.
         if self.size == self.capacity && self.head != 0 {
-            self.states[..self.capacity * STATE_STRIDE]
-                .rotate_left(self.head * STATE_STRIDE);
-            self.chain_planes[..self.capacity * CHAIN_STRIDE]
-                .rotate_left(self.head * CHAIN_STRIDE);
-            self.policies[..self.capacity * POLICY_STRIDE]
-                .rotate_left(self.head * POLICY_STRIDE);
+            self.states[..self.capacity * state_stride]
+                .rotate_left(self.head * state_stride);
+            self.chain_planes[..self.capacity * chain_stride]
+                .rotate_left(self.head * chain_stride);
+            self.policies[..self.capacity * policy_stride]
+                .rotate_left(self.head * policy_stride);
             self.outcomes[..self.capacity]
                 .rotate_left(self.head);
             self.game_ids[..self.capacity]
                 .rotate_left(self.head);
             self.weights[..self.capacity]
                 .rotate_left(self.head);
-            self.ownership[..self.capacity * AUX_STRIDE]
-                .rotate_left(self.head * AUX_STRIDE);
-            self.winning_line[..self.capacity * AUX_STRIDE]
-                .rotate_left(self.head * AUX_STRIDE);
+            self.ownership[..self.capacity * aux_stride]
+                .rotate_left(self.head * aux_stride);
+            self.winning_line[..self.capacity * aux_stride]
+                .rotate_left(self.head * aux_stride);
             self.is_full_search[..self.capacity]
                 .rotate_left(self.head);
         }
 
         // Extend storage to new capacity.
         let default_w = f16::from_f32(1.0).to_bits();
-        self.states.resize(new_capacity * STATE_STRIDE, 0u16);
-        self.chain_planes.resize(new_capacity * CHAIN_STRIDE, 0u16);
-        self.policies.resize(new_capacity * POLICY_STRIDE, 0.0f32);
+        self.states.resize(new_capacity * state_stride, 0u16);
+        self.chain_planes.resize(new_capacity * chain_stride, 0u16);
+        self.policies.resize(new_capacity * policy_stride, 0.0f32);
         self.outcomes.resize(new_capacity, 0.0f32);
         self.game_ids.resize(new_capacity, -1i64);
         self.weights.resize(new_capacity, default_w);
-        self.ownership.resize(new_capacity * AUX_STRIDE, 1u8);     // 1 = empty
-        self.winning_line.resize(new_capacity * AUX_STRIDE, 0u8);
+        self.ownership.resize(new_capacity * aux_stride, 1u8);     // 1 = empty
+        self.winning_line.resize(new_capacity * aux_stride, 0u8);
         self.is_full_search.resize(new_capacity, 1u8);  // 1 = full-search default
 
         self.head = self.size;

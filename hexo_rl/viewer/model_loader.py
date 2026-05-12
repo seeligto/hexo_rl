@@ -15,6 +15,7 @@ import torch
 
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
+from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 
 
 # -- Copied from Trainer._extract_model_state ---------------------------------
@@ -88,8 +89,8 @@ def load_model(
     hparams = _infer_model_hparams(state_dict)
 
     net = HexTacToeNet(
-        board_size=hparams.get("board_size", 19),
-        in_channels=hparams.get("in_channels", 8),
+        board_size=hparams.get("board_size", BOARD_SIZE),
+        in_channels=hparams.get("in_channels", BUFFER_CHANNELS),
         filters=hparams.get("filters", 128),
         res_blocks=hparams.get("res_blocks", 12),
         se_reduction_ratio=hparams.get("se_reduction_ratio", 4),

@@ -23,7 +23,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 import structlog
 
-from hexo_rl.utils.constants import BUFFER_CHANNELS
+from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS, NUM_CELLS
 
 log = structlog.get_logger(__name__)
 
@@ -41,7 +41,7 @@ class BatchBuffers:
 
     Spatial shapes are encoding-derived (not v6-fixed): pass ``trunk_size``
     to :func:`allocate_batch_buffers` to size for v6w25 (25) / v8 (25);
-    the default ``trunk_size=19`` keeps v6 behaviour for legacy callers.
+    the default ``trunk_size=BOARD_SIZE`` keeps v6 behaviour for legacy callers.
     """
     states: np.ndarray          # (B, 8, T, T) float16 (T = trunk_size)
     chain_planes: np.ndarray    # (B, 6, T, T) float16
@@ -56,7 +56,7 @@ class BatchBuffers:
 def allocate_batch_buffers(
     batch_size: int,
     n_actions: int,
-    trunk_size: int = 19,
+    trunk_size: int = BOARD_SIZE,
     aux_stride: Optional[int] = None,
 ) -> BatchBuffers:
     """Allocate shared batch arrays once at startup.
@@ -64,8 +64,8 @@ def allocate_batch_buffers(
     Args:
         batch_size: Expected batch size from training config.
         n_actions:  Number of policy logits (N_ACTIONS constant).
-        trunk_size: Spatial dim for state/chain/aux planes (v6=19,
-                    v6w25=25, v8=25). Default 19 = v6, preserves
+        trunk_size: Spatial dim for state/chain/aux planes (v6=BOARD_SIZE,
+                    v6w25=25, v8=25). Default BOARD_SIZE = v6, preserves
                     backward-compat for callers that have not migrated.
         aux_stride: Flat length per aux plane (`trunk_size**2` unless
                     overridden). Currently unused by the pre-allocated
@@ -137,8 +137,9 @@ def load_pretrained_buffer(
     )
     t0 = time.time()
     data = np.load(pretrained_path, mmap_mode="r")
-    pre_states   = data["states"]    # (T, 8, 19, 19) float16 — HEXB v6
-    pre_policies = data["policies"]  # (T, 362) float32
+    board_size = config.get("board_size", BOARD_SIZE)
+    pre_states   = data["states"]    # (T, 8, board_size, board_size) float16
+    pre_policies = data["policies"]  # (T, policy_logit_count) float32
     pre_outcomes = data["outcomes"]  # (T,) float32
     T = len(pre_outcomes)
 
@@ -151,7 +152,7 @@ def load_pretrained_buffer(
 
     # §102.a: compute chain planes from stone planes (cur=[0], opp=[4] in 8-plane).
     from hexo_rl.env.game_state import _compute_chain_planes
-    pre_chain = np.empty((T, 6, 19, 19), dtype=np.float16)
+    pre_chain = np.empty((T, 6, board_size, board_size), dtype=np.float16)
     if T > 0:
         cur_all = np.asarray(pre_states[:, 0], dtype=np.float32)
         opp_all = np.asarray(pre_states[:, 4], dtype=np.float32)
@@ -193,10 +194,12 @@ def load_pretrained_buffer(
             msg="push_game allocates full corpus in RAM — training starts after this completes",
         )
 
-    pretrained_buffer = ReplayBuffer(capacity=T)
+    _enc = config.get("encoding", "v6")
+    pretrained_buffer = ReplayBuffer(capacity=T, encoding=_enc)
     # Neutral aux: ownership=1 ("empty" → 0.0 after decode), winning_line=0.
-    pre_own = np.ones((T, 361), dtype=np.uint8)
-    pre_wl  = np.zeros((T, 361), dtype=np.uint8)
+    n_cells = board_size * board_size
+    pre_own = np.ones((T, n_cells), dtype=np.uint8)
+    pre_wl  = np.zeros((T, n_cells), dtype=np.uint8)
     pretrained_buffer.push_game(pre_states, pre_chain, pre_policies, pre_outcomes, pre_own, pre_wl)
     del pre_states, pre_chain, pre_policies, pre_outcomes, pre_own, pre_wl
     del data
@@ -233,12 +236,35 @@ def _augment_recent_rows(
     from hexo_rl.augment.luts import get_policy_scatters
 
     n = len(s_r)
-    scatters = get_policy_scatters()
+    board_size = int(s_r.shape[-1])
+    n_cells = board_size * board_size
+    has_pass = p_r.shape[1] == n_cells + 1
+    scatters = get_policy_scatters(board_size, has_pass=has_pass)
     sym_indices = np.random.randint(0, 12, size=n)
 
     states_f32 = s_r.astype(np.float32)
-    states_f32 = _engine.apply_symmetries_batch(states_f32, sym_indices.tolist())
-    s_r = states_f32.astype(np.float16)
+    if board_size == BOARD_SIZE:
+        # v6 fast path — Rust kernel is hardcoded to 19×19.
+        states_f32 = _engine.apply_symmetries_batch(states_f32, sym_indices.tolist())
+        s_r = states_f32.astype(np.float16)
+    else:
+        # v6w25 / v8 pure-numpy scatter (Rust apply_symmetries_batch is v6-only).
+        C = states_f32.shape[1]
+        spatial = n_cells
+        states_flat = states_f32.reshape(n, C, spatial)
+        augmented = np.empty_like(states_flat)
+        policy_aug = np.empty_like(p_r)
+        for sym in range(12):
+            mask_idx = np.where(sym_indices == sym)[0]
+            if mask_idx.size == 0:
+                continue
+            sc = scatters[sym]
+            state_scatter = sc[:spatial] if has_pass else sc
+            augmented[mask_idx] = states_flat[mask_idx][:, :, state_scatter]
+            policy_aug[mask_idx] = p_r[mask_idx][:, sc]
+        states_f32 = augmented.reshape(n, C, board_size, board_size)
+        s_r = states_f32.astype(np.float16)
+        # chain_planes recomputed below (same for both paths)
 
     c_r_aug = np.empty_like(c_r)
     for i in range(n):
@@ -252,8 +278,8 @@ def _augment_recent_rows(
     for i in range(n):
         lut = scatters[int(sym_indices[i])]
         scattered_p[i]   = p_r[i][lut]
-        scattered_own[i] = own_r_flat[i][lut[:361]]
-        scattered_wl[i]  = wl_r_flat[i][lut[:361]]
+        scattered_own[i] = own_r_flat[i][lut[:n_cells]]
+        scattered_wl[i]  = wl_r_flat[i][lut[:n_cells]]
 
     return s_r, c_r_aug, scattered_p, scattered_own, scattered_wl
 
@@ -341,8 +367,9 @@ def assemble_mixed_batch(
         s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
             s_r, c_r, p_r, own_r_flat, wl_r_flat, augment
         )
-        own_r = own_r_flat.reshape(-1, 19, 19)
-        wl_r  = wl_r_flat.reshape(-1, 19, 19)
+        _bs = int(s_r.shape[-1])
+        own_r = own_r_flat.reshape(-1, _bs, _bs)
+        wl_r  = wl_r_flat.reshape(-1, _bs, _bs)
         s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), augment)
         n_recent_actual = len(s_r)
         pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre),
@@ -405,8 +432,9 @@ def _sample_selfplay(
         s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
             s_r, c_r, p_r, own_r_flat, wl_r_flat, augment
         )
-        own_r = own_r_flat.reshape(-1, 19, 19)
-        wl_r  = wl_r_flat.reshape(-1, 19, 19)
+        _bs = int(s_r.shape[-1])
+        own_r = own_r_flat.reshape(-1, _bs, _bs)
+        wl_r  = wl_r_flat.reshape(-1, _bs, _bs)
         s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_u), augment)
         return (
             np.concatenate([s_r, s_u], axis=0),

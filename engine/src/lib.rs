@@ -129,13 +129,26 @@ pub struct PyRegistrySpec {
 impl PyRegistrySpec {
     #[getter] pub fn name(&self) -> &'static str { self.inner.name }
     #[getter] pub fn board_size(&self) -> usize { self.inner.board_size }
+    #[getter] pub fn trunk_size(&self) -> usize { self.inner.trunk_size }
     #[getter] pub fn n_planes(&self) -> usize { self.inner.n_planes }
     #[getter] pub fn policy_logit_count(&self) -> usize { self.inner.policy_logit_count }
     #[getter] pub fn has_pass_slot(&self) -> bool { self.inner.has_pass_slot }
     #[getter] pub fn is_multi_window(&self) -> bool { self.inner.is_multi_window }
+    /// §173 A3 — physical source-plane indices retained by wire format.
+    #[getter] pub fn kept_plane_indices(&self) -> Vec<usize> {
+        self.inner.kept_plane_indices.to_vec()
+    }
+    /// §173 A3 — source tensor plane count before kept_plane_indices slice.
+    #[getter] pub fn n_source_planes(&self) -> usize { self.inner.n_source_planes }
 
-    /// State plane stride = n_planes × board_size².
+    /// Cells per trunk input tensor = trunk_size². §173 A3 semantic: trunk_size, not board_size.
+    pub fn n_cells(&self) -> usize { self.inner.n_cells() }
+    /// State plane stride = n_planes × n_cells.
     pub fn state_stride(&self) -> usize { self.inner.state_stride() }
+    /// Chain plane stride = N_CHAIN_PLANES × n_cells.
+    pub fn chain_stride(&self) -> usize { self.inner.chain_stride() }
+    /// Aux plane stride = n_cells (single aux plane).
+    pub fn aux_stride(&self) -> usize { self.inner.aux_stride() }
     /// Policy logit count = `policy_logit_count` (mirror of the field).
     pub fn policy_stride(&self) -> usize { self.inner.policy_stride() }
 
@@ -153,6 +166,14 @@ impl PyRegistrySpec {
     /// `InferenceBatcher::new` to read the static pointer.
     pub(crate) fn inner(&self) -> &'static RustRegistrySpec {
         self.inner
+    }
+
+    /// §173 A5a — test helper: construct from a `&'static RegistrySpec`
+    /// reference (e.g. returned by `lookup_or_panic`). Allows Rust integration
+    /// tests to pass a `PyRegistrySpec` to `SelfPlayRunner::new` without
+    /// going through the Python boundary.
+    pub fn from_static(spec: &'static RustRegistrySpec) -> Self {
+        PyRegistrySpec { inner: spec }
     }
 }
 
@@ -289,8 +310,19 @@ impl PyBoard {
     /// v8 callers (encoding migration §166 Path β) and per-game radius
     /// jitter (§152 Q2) override via this setter at construction time.
     /// HTTT rule baseline is r=8.
-    pub fn set_legal_move_radius(&mut self, radius: i32) {
+    ///
+    /// §173 A6 — raises `ValueError` when the board was constructed via
+    /// `Board.with_encoding_name` (encoding bound). Callers should use
+    /// the registry entry instead of overriding post-construction.
+    pub fn set_legal_move_radius(&mut self, radius: i32) -> PyResult<()> {
+        if self.inner.encoding.is_some() {
+            return Err(PyValueError::new_err(
+                "set_legal_move_radius after with_encoding_name is not supported; \
+                 use registry (Board.with_encoding_name) instead of overriding post-construction"
+            ));
+        }
         self.inner.set_legal_move_radius(radius);
+        Ok(())
     }
 
     /// Read the current per-Board legal-move radius cap.
@@ -379,8 +411,18 @@ impl PyBoard {
     /// proportion to the larger 25×25 cluster window. Affects only
     /// `get_clusters()` / `get_cluster_views()`; legal-move expansion is
     /// independent (controlled by `set_legal_move_radius`).
-    pub fn set_cluster_threshold(&mut self, threshold: i32) {
+    ///
+    /// §173 A6 — raises `ValueError` when the board was constructed via
+    /// `Board.with_encoding_name` (encoding bound). Use registry entry instead.
+    pub fn set_cluster_threshold(&mut self, threshold: i32) -> PyResult<()> {
+        if self.inner.encoding.is_some() {
+            return Err(PyValueError::new_err(
+                "set_cluster_threshold after with_encoding_name is not supported; \
+                 use registry (Board.with_encoding_name) instead of overriding post-construction"
+            ));
+        }
         self.inner.set_cluster_threshold(threshold);
+        Ok(())
     }
 
     /// Current cluster threshold (default 5).
@@ -391,7 +433,16 @@ impl PyBoard {
     /// §168 Gate 3 — set the cluster window side length (default 19).
     /// Used by v6w25 corpus generation to produce 25×25 cluster windows.
     /// Caller must use an odd value >= 7. Returns ValueError on bad input.
+    ///
+    /// §173 A6 — raises `ValueError` when the board was constructed via
+    /// `Board.with_encoding_name` (encoding bound). Use registry entry instead.
     pub fn set_cluster_window_size(&mut self, size: usize) -> PyResult<()> {
+        if self.inner.encoding.is_some() {
+            return Err(PyValueError::new_err(
+                "set_cluster_window_size after with_encoding_name is not supported; \
+                 use registry (Board.with_encoding_name) instead of overriding post-construction"
+            ));
+        }
         if size < 7 || size % 2 == 0 {
             return Err(PyValueError::new_err(format!(
                 "cluster_window_size must be odd and >= 7; got {}", size

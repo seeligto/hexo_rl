@@ -31,13 +31,24 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        default=DEFAULT_FIXTURE_PATH,
-        help=f"Output NPZ path (default: {DEFAULT_FIXTURE_PATH!s}).",
+        default=None,
+        help="Output NPZ path (default: encoding-specific fixture path).",
+    )
+    parser.add_argument(
+        "--encoding",
+        default="v6",
+        help="Encoding name for fixture generation (default: v6).",
     )
     args = parser.parse_args()
 
-    payload = save_fixture(args.output)
-    print(f"[early_game_probe] wrote fixture → {args.output!s}")
+    out_path = args.output
+    if out_path is None:
+        from hexo_rl.monitoring.early_game_probe import _fixture_path_for_encoding
+        out_path = _fixture_path_for_encoding(args.encoding)
+
+    payload = save_fixture(out_path, encoding_name=args.encoding)
+    print(f"[early_game_probe] wrote fixture → {out_path!s}")
+    print(f"                   encoding: {args.encoding}")
     print(f"                   plies: {list(_FIXTURE_PLIES)}")
     print(f"                   states shape: {payload.states.shape}")
     return 0

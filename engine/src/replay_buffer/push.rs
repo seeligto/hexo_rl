@@ -53,29 +53,43 @@ impl ReplayBuffer {
         let wl_slice = winning_line.as_slice()
             .map_err(|e| PyValueError::new_err(format!("winning_line not contiguous: {e}")))?;
 
-        if state_slice.len() != STATE_STRIDE {
+        let state_stride  = self.encoding.state_stride();
+        let chain_stride  = self.encoding.chain_stride();
+        let policy_stride = self.encoding.policy_stride();
+        let aux_stride    = self.encoding.aux_stride();
+        let n_planes      = self.encoding.n_planes;
+        let trunk_size    = self.encoding.trunk_size;
+
+        if state_slice.len() != state_stride {
             return Err(PyValueError::new_err(format!(
-                "state must have {} elements (8×19×19, HEXB v6), got {}", STATE_STRIDE, state_slice.len()
+                "state must have {} elements ({}×{}×{}, HEXB {}), got {}",
+                state_stride, n_planes, trunk_size, trunk_size, self.encoding.name,
+                state_slice.len()
             )));
         }
-        if chain_slice.len() != CHAIN_STRIDE {
+        if chain_slice.len() != chain_stride {
             return Err(PyValueError::new_err(format!(
-                "chain_planes must have {} elements (6×19×19), got {}", CHAIN_STRIDE, chain_slice.len()
+                "chain_planes must have {} elements ({}×{}×{}), got {}",
+                chain_stride, N_CHAIN_PLANES, trunk_size, trunk_size,
+                chain_slice.len()
             )));
         }
-        if policy_slice.len() != POLICY_STRIDE {
+        if policy_slice.len() != policy_stride {
             return Err(PyValueError::new_err(format!(
-                "policy must have {} elements (362), got {}", POLICY_STRIDE, policy_slice.len()
+                "policy must have {} elements ({}), got {}",
+                policy_stride, policy_stride, policy_slice.len()
             )));
         }
-        if own_slice.len() != AUX_STRIDE {
+        if own_slice.len() != aux_stride {
             return Err(PyValueError::new_err(format!(
-                "ownership must have {} elements (361), got {}", AUX_STRIDE, own_slice.len()
+                "ownership must have {} elements ({}), got {}",
+                aux_stride, aux_stride, own_slice.len()
             )));
         }
-        if wl_slice.len() != AUX_STRIDE {
+        if wl_slice.len() != aux_stride {
             return Err(PyValueError::new_err(format!(
-                "winning_line must have {} elements (361), got {}", AUX_STRIDE, wl_slice.len()
+                "winning_line must have {} elements ({}), got {}",
+                aux_stride, aux_stride, wl_slice.len()
             )));
         }
 
@@ -88,18 +102,18 @@ impl ReplayBuffer {
         }
 
         // Copy state as raw f16 bits.
-        let dst = &mut self.states[slot * STATE_STRIDE..(slot + 1) * STATE_STRIDE];
+        let dst = &mut self.states[slot * state_stride..(slot + 1) * state_stride];
         for (d, s) in dst.iter_mut().zip(state_slice.iter()) {
             *d = s.to_bits();
         }
 
         // Copy chain planes as raw f16 bits.
-        let dst_chain = &mut self.chain_planes[slot * CHAIN_STRIDE..(slot + 1) * CHAIN_STRIDE];
+        let dst_chain = &mut self.chain_planes[slot * chain_stride..(slot + 1) * chain_stride];
         for (d, s) in dst_chain.iter_mut().zip(chain_slice.iter()) {
             *d = s.to_bits();
         }
 
-        self.policies[slot * POLICY_STRIDE..(slot + 1) * POLICY_STRIDE]
+        self.policies[slot * policy_stride..(slot + 1) * policy_stride]
             .copy_from_slice(policy_slice);
         self.outcomes[slot] = outcome;
         self.game_ids[slot] = game_id;
@@ -109,9 +123,9 @@ impl ReplayBuffer {
             self.weight_schedule.weight_for(game_length)
         };
 
-        self.ownership[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
+        self.ownership[slot * aux_stride..(slot + 1) * aux_stride]
             .copy_from_slice(own_slice);
-        self.winning_line[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
+        self.winning_line[slot * aux_stride..(slot + 1) * aux_stride]
             .copy_from_slice(wl_slice);
         self.is_full_search[slot] = is_full_search as u8;
 
@@ -172,14 +186,19 @@ impl ReplayBuffer {
             &ifs_owned
         };
 
+        let state_stride  = self.encoding.state_stride();
+        let chain_stride  = self.encoding.chain_stride();
+        let policy_stride = self.encoding.policy_stride();
+        let aux_stride    = self.encoding.aux_stride();
+
         let t = outcomes_s.len();
         if t == 0 { return Ok(()); }
 
-        if states_s.len()   != t * STATE_STRIDE  { return Err(PyValueError::new_err("states shape mismatch")); }
-        if chain_s.len()    != t * CHAIN_STRIDE  { return Err(PyValueError::new_err("chain_planes shape mismatch")); }
-        if policies_s.len() != t * POLICY_STRIDE { return Err(PyValueError::new_err("policies shape mismatch")); }
-        if own_s.len() != t * AUX_STRIDE { return Err(PyValueError::new_err("ownership shape mismatch")); }
-        if wl_s.len()  != t * AUX_STRIDE { return Err(PyValueError::new_err("winning_line shape mismatch")); }
+        if states_s.len()   != t * state_stride  { return Err(PyValueError::new_err("states shape mismatch")); }
+        if chain_s.len()    != t * chain_stride  { return Err(PyValueError::new_err("chain_planes shape mismatch")); }
+        if policies_s.len() != t * policy_stride { return Err(PyValueError::new_err("policies shape mismatch")); }
+        if own_s.len() != t * aux_stride { return Err(PyValueError::new_err("ownership shape mismatch")); }
+        if wl_s.len()  != t * aux_stride { return Err(PyValueError::new_err("winning_line shape mismatch")); }
         if !ifs_s.is_empty() && ifs_s.len() != t {
             return Err(PyValueError::new_err(format!(
                 "is_full_search must have {} elements (one per position), got {}", t, ifs_s.len()
@@ -207,29 +226,29 @@ impl ReplayBuffer {
             }
 
             // State: convert f16 → u16 bits
-            let src_state = &states_s[i * STATE_STRIDE..(i + 1) * STATE_STRIDE];
-            let dst_state = &mut self.states[slot * STATE_STRIDE..(slot + 1) * STATE_STRIDE];
+            let src_state = &states_s[i * state_stride..(i + 1) * state_stride];
+            let dst_state = &mut self.states[slot * state_stride..(slot + 1) * state_stride];
             for (d, s) in dst_state.iter_mut().zip(src_state.iter()) {
                 *d = s.to_bits();
             }
 
             // Chain planes: convert f16 → u16 bits
-            let src_chain = &chain_s[i * CHAIN_STRIDE..(i + 1) * CHAIN_STRIDE];
-            let dst_chain = &mut self.chain_planes[slot * CHAIN_STRIDE..(slot + 1) * CHAIN_STRIDE];
+            let src_chain = &chain_s[i * chain_stride..(i + 1) * chain_stride];
+            let dst_chain = &mut self.chain_planes[slot * chain_stride..(slot + 1) * chain_stride];
             for (d, s) in dst_chain.iter_mut().zip(src_chain.iter()) {
                 *d = s.to_bits();
             }
 
             // Policy: direct f32 copy
-            let src_pol = &policies_s[i * POLICY_STRIDE..(i + 1) * POLICY_STRIDE];
-            self.policies[slot * POLICY_STRIDE..(slot + 1) * POLICY_STRIDE]
+            let src_pol = &policies_s[i * policy_stride..(i + 1) * policy_stride];
+            self.policies[slot * policy_stride..(slot + 1) * policy_stride]
                 .copy_from_slice(src_pol);
 
             // Auxiliary spatial targets — direct u8 copies.
-            self.ownership[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
-                .copy_from_slice(&own_s[i * AUX_STRIDE..(i + 1) * AUX_STRIDE]);
-            self.winning_line[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
-                .copy_from_slice(&wl_s[i * AUX_STRIDE..(i + 1) * AUX_STRIDE]);
+            self.ownership[slot * aux_stride..(slot + 1) * aux_stride]
+                .copy_from_slice(&own_s[i * aux_stride..(i + 1) * aux_stride]);
+            self.winning_line[slot * aux_stride..(slot + 1) * aux_stride]
+                .copy_from_slice(&wl_s[i * aux_stride..(i + 1) * aux_stride]);
 
             // is_full_search: use provided value or default to 1 (full-search).
             self.is_full_search[slot] = if ifs_s.is_empty() { 1u8 } else { ifs_s[i] };
@@ -289,14 +308,19 @@ impl ReplayBuffer {
         let ifs_s = is_full_search.as_slice()
             .map_err(|e| PyValueError::new_err(format!("is_full_search not contiguous: {e}")))?;
 
+        let state_stride  = self.encoding.state_stride();
+        let chain_stride  = self.encoding.chain_stride();
+        let policy_stride = self.encoding.policy_stride();
+        let aux_stride    = self.encoding.aux_stride();
+
         let t = outcomes_s.len();
         if t == 0 { return Ok(()); }
 
-        if states_s.len()   != t * STATE_STRIDE  { return Err(PyValueError::new_err("states shape mismatch")); }
-        if chain_s.len()    != t * CHAIN_STRIDE  { return Err(PyValueError::new_err("chain_planes shape mismatch")); }
-        if policies_s.len() != t * POLICY_STRIDE { return Err(PyValueError::new_err("policies shape mismatch")); }
-        if own_s.len() != t * AUX_STRIDE { return Err(PyValueError::new_err("ownership shape mismatch")); }
-        if wl_s.len()  != t * AUX_STRIDE { return Err(PyValueError::new_err("winning_line shape mismatch")); }
+        if states_s.len()   != t * state_stride  { return Err(PyValueError::new_err("states shape mismatch")); }
+        if chain_s.len()    != t * chain_stride  { return Err(PyValueError::new_err("chain_planes shape mismatch")); }
+        if policies_s.len() != t * policy_stride { return Err(PyValueError::new_err("policies shape mismatch")); }
+        if own_s.len() != t * aux_stride { return Err(PyValueError::new_err("ownership shape mismatch")); }
+        if wl_s.len()  != t * aux_stride { return Err(PyValueError::new_err("winning_line shape mismatch")); }
         if gl_s.len() != t {
             return Err(PyValueError::new_err(format!("game_lengths must have {t} elements, got {}", gl_s.len())));
         }
@@ -327,8 +351,8 @@ impl ReplayBuffer {
             };
             let new_bucket = Self::weight_bucket(w);
 
-            let src_state = &states_s[i * STATE_STRIDE..(i + 1) * STATE_STRIDE];
-            let dst_state = &mut self.states[slot * STATE_STRIDE..(slot + 1) * STATE_STRIDE];
+            let src_state = &states_s[i * state_stride..(i + 1) * state_stride];
+            let dst_state = &mut self.states[slot * state_stride..(slot + 1) * state_stride];
             debug_assert_eq!(src_state.len(), dst_state.len());
             // SAFETY: f16 and u16 same size/align; bit pattern preserved (to_bits semantics).
             let src_bits = unsafe {
@@ -336,8 +360,8 @@ impl ReplayBuffer {
             };
             dst_state.copy_from_slice(src_bits);
 
-            let src_chain = &chain_s[i * CHAIN_STRIDE..(i + 1) * CHAIN_STRIDE];
-            let dst_chain = &mut self.chain_planes[slot * CHAIN_STRIDE..(slot + 1) * CHAIN_STRIDE];
+            let src_chain = &chain_s[i * chain_stride..(i + 1) * chain_stride];
+            let dst_chain = &mut self.chain_planes[slot * chain_stride..(slot + 1) * chain_stride];
             debug_assert_eq!(src_chain.len(), dst_chain.len());
             // SAFETY: same as above.
             let chain_bits = unsafe {
@@ -345,12 +369,12 @@ impl ReplayBuffer {
             };
             dst_chain.copy_from_slice(chain_bits);
 
-            self.policies[slot * POLICY_STRIDE..(slot + 1) * POLICY_STRIDE]
-                .copy_from_slice(&policies_s[i * POLICY_STRIDE..(i + 1) * POLICY_STRIDE]);
-            self.ownership[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
-                .copy_from_slice(&own_s[i * AUX_STRIDE..(i + 1) * AUX_STRIDE]);
-            self.winning_line[slot * AUX_STRIDE..(slot + 1) * AUX_STRIDE]
-                .copy_from_slice(&wl_s[i * AUX_STRIDE..(i + 1) * AUX_STRIDE]);
+            self.policies[slot * policy_stride..(slot + 1) * policy_stride]
+                .copy_from_slice(&policies_s[i * policy_stride..(i + 1) * policy_stride]);
+            self.ownership[slot * aux_stride..(slot + 1) * aux_stride]
+                .copy_from_slice(&own_s[i * aux_stride..(i + 1) * aux_stride]);
+            self.winning_line[slot * aux_stride..(slot + 1) * aux_stride]
+                .copy_from_slice(&wl_s[i * aux_stride..(i + 1) * aux_stride]);
 
             self.is_full_search[slot] = ifs_s[i];
             self.outcomes[slot] = outcomes_s[i];
@@ -378,15 +402,19 @@ impl ReplayBuffer {
         }
 
         // Zero state/policy/aux (content doesn't matter for weight tests).
-        let s_start = slot * STATE_STRIDE;
-        self.states[s_start..s_start + STATE_STRIDE].fill(0);
-        let c_start = slot * CHAIN_STRIDE;
-        self.chain_planes[c_start..c_start + CHAIN_STRIDE].fill(0);
-        let p_start = slot * POLICY_STRIDE;
-        self.policies[p_start..p_start + POLICY_STRIDE].fill(0.0);
-        let a_start = slot * AUX_STRIDE;
-        self.ownership   [a_start..a_start + AUX_STRIDE].fill(1); // empty
-        self.winning_line[a_start..a_start + AUX_STRIDE].fill(0);
+        let state_stride  = self.encoding.state_stride();
+        let chain_stride  = self.encoding.chain_stride();
+        let policy_stride = self.encoding.policy_stride();
+        let aux_stride    = self.encoding.aux_stride();
+        let s_start = slot * state_stride;
+        self.states[s_start..s_start + state_stride].fill(0);
+        let c_start = slot * chain_stride;
+        self.chain_planes[c_start..c_start + chain_stride].fill(0);
+        let p_start = slot * policy_stride;
+        self.policies[p_start..p_start + policy_stride].fill(0.0);
+        let a_start = slot * aux_stride;
+        self.ownership   [a_start..a_start + aux_stride].fill(1); // empty
+        self.winning_line[a_start..a_start + aux_stride].fill(0);
         self.is_full_search[slot] = 1;
         self.outcomes[slot] = outcome;
         self.game_ids[slot] = -1;
@@ -446,7 +474,7 @@ mod tests {
 
         // Build the per-row aux mask using centre B (the row's own centre)
         // and write it into the buffer's ring storage directly.
-        let mut buf = ReplayBuffer::new(4);
+        let mut buf = ReplayBuffer::new(4, "v6");
         let slot = 0;
         let a_start = slot * AUX_STRIDE;
         for &flat in &proj_b {
@@ -489,7 +517,7 @@ mod tests {
     /// outputs receive the chosen symmetry consistently.
     #[test]
     fn test_aux_stress_1k_rows() {
-        let mut buf = ReplayBuffer::new(2000);
+        let mut buf = ReplayBuffer::new(2000, "v6");
 
         // Push 1000 rows. push_raw zeroes state/policy/aux to defaults; we
         // then sprinkle random nonzero markers into the aux columns directly.

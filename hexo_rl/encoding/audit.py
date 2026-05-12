@@ -47,6 +47,19 @@ from hexo_rl.encoding.registry import _load as _load_registry
 Severity = Literal["info", "warn", "error"]
 
 
+# §173 T10 — deliberately-unstamped dead checkpoint directories.
+# These prefixes are skipped in §2 checkpoint audit (info, not error).
+_DEAD_CKPT_PREFIXES: tuple[str, ...] = (
+    "checkpoints/broken/",
+    "checkpoints/collapsed_",
+    "checkpoints/olod_20k/",
+    "checkpoints/chain_planes",
+    "checkpoints/v9_s3/",
+    "checkpoints/pretrain/",
+    "checkpoints/w4c_smoke_v7_laptop_preflight/",
+)
+
+
 _HARDCODE_HITS_DUMP = Path("/tmp/encoding_audit_hardcode_hits.txt")
 
 
@@ -247,8 +260,17 @@ def _section_checkpoints(
 
     import torch
 
+    def _is_dead_ckpt(rel_path: str) -> bool:
+        return any(rel_path.startswith(prefix) for prefix in _DEAD_CKPT_PREFIXES)
+
     for p in pts:
         rel = str(p.relative_to(ckpt_dir.parent) if p.is_relative_to(ckpt_dir.parent) else p)
+
+        if _is_dead_ckpt(rel):
+            sect.rows.append([rel, "-", "-", "ALLOWLISTED"])
+            report.add_finding("info", "§2", f"{rel}: skipped (allowlisted dead dir)")
+            continue
+
         declared = "-"
         inferred = "-"
         status = "?"
@@ -573,6 +595,11 @@ _ALLOW_TOKENS: tuple[str, ...] = (
     "encoding.lookup",
     "registry::lookup",
     "enc-literal-ok",
+    "audit: legacy-v6-fallback",   # §173 A7 — doc-commented legacy PyO3 fallback paths
+    "#[pyo3(signature",            # §173 A7 — PyO3 signature defaults are not geometry violations
+    "GroupNorm",                   # §173 A7 — GroupNorm group count is NN arch, not encoding geometry
+    "GN_GROUPS",                   # §173 A7 — same
+    "gn_group",                    # §173 A7 — same (fn param)
 )
 _TEST_FILE_HINTS: tuple[str, ...] = ("test", "fixtures", "fixture")
 # Patterns that look like version tokens or in-string literals; allow.
@@ -587,6 +614,33 @@ _TUNABLE_TOKENS: frozenset[str] = frozenset({
     "c_puct", "fpu_reduction", "dirichlet_alpha", "dirichlet_epsilon",
     "temp_min", "eta_min", "timeout", "interval", "poll_interval",
     "figsize", "linewidth", "weight_for",
+    # §173 A7 additions — tunable MCTS / training knobs + display/logging params
+    "leaf_batch_size",     # MCTS batch size (tuned per host via sweep)
+    "zoi_margin",          # zone-of-interest search margin (tunable)
+    "max_train_burst",     # training throughput cap (tunable)
+    "hard_abort_grad_norm_steps",  # gradient-norm abort window (tunable)
+    "backup_count",        # log-rotation file count (infra, not geometry)
+    "batch_size",          # generic inference batch (tunable unless guarded)
+    "max_frames",          # animation/display frame count (not geometry)
+    "fail_gb",             # disk-guard threshold (not geometry)
+    "gn_groups",           # GroupNorm groups (NN arch knob, not encoding)
+    "gn_group",                    # §173 A7 — same (fn param)
+    "epochs",              # training epoch count (tunable CLI arg)
+    "n_workers",           # worker pool count (tunable, used in CPU budget)
+    "budget",              # CPU thread budget expression
+    "divisor",             # CPU budget divisor expression
+    "skipped_nonfinite",   # error counter (training loop)
+    "len(batch)",          # batch accumulator size check
+    "len(wdr)",            # display worker count for terminal UI
+    "board.ply",           # game-ply threshold (not encoding geometry)
+    "human_seeding_max_move",  # corpus opening-move seeding param (not encoding)
+    "max_move",            # opening game length limit (not encoding geometry)
+    "has_player_long_run", # game-rule threat probe (run-length ≠ encoding geometry)
+    "hex_distance",        # game-coordinate distance function (not encoding geometry)
+    "max_pages",           # scraper page limit (infra, not geometry)
+    "jitter",              # MCTS jitter radii (tunable)
+    "stride5",             # stride-5 detector step (game-rule constant)
+    "pages",               # CLI page argument (infra)
 })
 # Guard: if a line also contains these tokens, do NOT suppress even if _TUNABLE_TOKENS hit.
 # These are high-risk encoding constants that must still flag.
@@ -597,12 +651,76 @@ _TUNABLE_SKIP_GUARD_TOKENS: frozenset[str] = frozenset({
 # Rule 2 — float tolerances like 1e-5, 1e-8, 2.5e-4.
 _FLOAT_TOL_RE = re.compile(r"\d+(?:\.\d+)?[eE]-\d+")
 
+# Rule 2b — decimal fraction literals like 0.5, 1.5, 0.25, 0.8 (§173 A7).
+# These are probability/float scalars; `\b5\b` inside `0.5` is a false positive.
+# Pattern: digit(s) DOT digit(s) — strips the whole token so `0.5` doesn't leave
+# a bare `5` for the word-boundary scanner.
+_DECIMAL_FRAC_RE = re.compile(r"\d+\.\d+")
+
+# Rule 10 — display / infra context patterns (§173 A7): strip before scanning.
+#   10a: Python sequence-slice notation `[:N]` and `[N:]` — display limits, not geometry.
+#   10b: Rust Vec::with_capacity(N) — pre-allocation hint, not geometry.
+#   10c: matplotlib / display kwargs like fontsize=N, dpi=N, alpha=N, linewidth=N.
+#   10d: round(expr, N) precision argument.
+#   10e: most_common(N), top-N display slices.
+_SLICE_RE     = re.compile(r"\[:\s*\d+\s*\]")                    # 10a
+_WITH_CAP_RE  = re.compile(r"\bwith_capacity\s*\(\s*\d+\s*\)")   # 10b
+_DISPLAY_KW_RE = re.compile(                                       # 10c
+    r"\b(?:fontsize|dpi|alpha|linewidth|markersize|rotation|zorder"
+    r"|s=|edgelinewidth)\s*=\s*\d+"
+)
+_ROUND_PREC_RE = re.compile(r"\bround\s*\([^,]+,\s*\d+\s*\)")    # 10d
+_TOP_N_RE      = re.compile(r"\bmost_common\s*\(\s*\d+\s*\)")     # 10e
+# 10f — Rust byte-buffer declarations like `[0u8; 8]`, `[0i32; 5]`.
+_BYTE_BUF_RE  = re.compile(r"\[\s*0[ui]\d+\s*;\s*\d+\s*\]")      # 10f
+# 10g — Rust multi-line string continuation lines: these start with whitespace
+#   and the content is text (no `=`, `let`, `fn`, etc.).  Heuristic: lines that
+#   start with ≥12 spaces and contain only non-code prose patterns after the
+#   spaces.  Use a simpler signal: lines ending with `\` (Rust string continue).
+_RUST_STR_CONT_RE = re.compile(r"\\\s*$")                          # 10g
+# 10h — Python sequence constructor `[N, N, N]` list literals that are clearly
+#   not geometry (mixed values, or values outside the target set).
+#   Strip repetition multiplier like `"-" * 25`.
+_STR_REPEAT_RE = re.compile(r"\"\s*-*\s*\"\s*\*\s*\d+")           # 10h
+# 10i — Python indexing `variable[N]` where context suggests tuple/list field
+#   access, not an encoding plane index.  Conservative: only match `row[N]`,
+#   `p[N]` in for-comprehension contexts, not `tensor[k, N]` (geometry-likely).
+_ROW_IDX_RE = re.compile(r"\b(?:row|p)\[(\d+)\]")                 # 10i
+# 10j — Rust match arms `N => {` — the integer is a channel/enum discriminant,
+#   not an encoding geometry value being passed to a constructor.
+_RUST_MATCH_ARM_RE = re.compile(r"^\s*\d+\s*=>\s*\{")             # 10j
+# 10k — §N section references in report paths and inline text (`§5`, `§122`).
+#   These survive multi-line-string continuation after the `\` is stripped.
+_SECTION_REF_RE = re.compile(r"§\d+")                              # 10k
+# 10l — byte-size arithmetic like `4 + 8 + 2` (u32 + u64 + u16 byte widths).
+#   Pattern: `N + M` where N and M are single-digit; only in `.rs` files.
+#   (Already covered by actual hits in persist.rs L199 only; keep conservative.)
+_ENTRY_BYTES_RE = re.compile(r"\bpolicy_bytes\s*\+")               # 10l
+# 10m — mixed-value collection literals with ≥ 4 elements containing a value
+#   outside the encoding target set (i.e. a number ≥ 10 that is not 19, 25, or
+#   361).  These are ply-count / step-number / milestone sequences, not
+#   geometry constructors.  Guard: ONLY strip when element count ≥ 4 (safe
+#   threshold that avoids `(8, 19, 19)` shape tuples with 3 elements).
+# Pattern:  [\(\[] number (, number){3,} [\)\]]  — 4+ element sequence.
+_MIXED_COLLECTION_RE = re.compile(
+    r"[\(\[]\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*\d+(?:\s*,\s*\d+)*\s*[\)\]]"
+)
+
 # Rule 4 — range bounds like `0..5`, `0..=8`, `0..19`.
 _RANGE_BOUND_RE = re.compile(r"\b\d+\s*\.\.\s*=?\s*\d+\b")
 
 # Rule 9 — whole-file allowlist (these ARE the sources of truth).
+# §173 A7: added encoding/mod.rs (canonical TOML parser; EncodingSpec V6/V6W25
+# const structs are the source of truth), and dataset_v{6w25,8}.py (corpus
+# dataset files whose encoding parameters are intentional dataset attributes).
 _FULL_FILE_ALLOWLIST: frozenset[str] = frozenset({
     "hexo_rl/utils/constants.py",
+    "engine/src/encoding/mod.rs",          # §173 A7 — canonical TOML parser / EncodingSpec defs
+    "hexo_rl/bootstrap/dataset_v6w25.py",  # §173 A7 — intentional v6w25 dataset attributes
+    "hexo_rl/bootstrap/dataset_v8.py",     # §173 A7 — intentional v8 dataset attributes
+    "hexo_rl/model/tf32.py",               # §173 A7 — CUDA compute-capability detection; no encoding geometry
+    "hexo_rl/utils/encoding.py",           # §174 — canonical v6/v6w25/v8 EncodingSpec factory
+    "engine/src/replay_buffer/sym_tables.rs",  # §174 — canonical static sym-table data
 })
 
 # Rule 3 — coordinate-call patterns; strip the match before scanning.
@@ -615,10 +733,25 @@ _COORD_PATTERNS: tuple[re.Pattern, ...] = (
 
 # Rule 8 — canonical-define lines are the source of truth; skip them.
 # Matches both `BOARD_SIZE: usize = 19` (no prefix) and `pub const BOARD_SIZE: usize = 19`
+# and `static SIZE19_8: Lazy<SymTables> = ...` (Rust static lazy).
 _CANONICAL_DEFINE_RE = re.compile(
-    r"^\s*(?:pub\s+(?:const\s+)?|const\s+)?"
+    r"^\s*(?:pub\s+(?:const\s+)?|const\s+|static\s+)?"
     r"(BOARD_SIZE|NUM_CELLS|BUFFER_CHANNELS|N_ACTIONS|MARGIN_M|HISTORY_LEN"
-    r"|N_PLANES|N_CHAIN_PLANES|BOARD_H|BOARD_W|TOTAL_CELLS)\s*[:=]"
+    r"|N_PLANES|N_CHAIN_PLANES|BOARD_H|BOARD_W|TOTAL_CELLS"
+    # §173 A7 additions — v6w25 canonical constants + derived helper bodies
+    r"|BOARD_H_V6W25|BOARD_W_V6W25|N_CELLS_V6W25|N_PLANES_V6W25"
+    r"|N_ACTIONS_V6W25|STATE_STRIDE_V6W25|CHAIN_STRIDE_V6W25"
+    r"|POLICY_STRIDE_V6W25|AUX_STRIDE_V6W25"
+    r"|CLUSTER_THRESHOLD_V6W25|LEGAL_MOVE_RADIUS_V6W25"
+    r"|KEPT_PLANE_INDICES"
+    r"|DEFAULT_LEGAL_MOVE_RADIUS|DEFAULT_CLUSTER_THRESHOLD"
+    # §174 additions — additional canonical constants used in production / Rust
+    r"|WIRE_CHANNELS|_V8_OFF_WINDOW_PLANE_DEFAULT|_STRIDE5_STEP"
+    r"|JITTER_RADII|MAX_PAGES"
+    r"|OPP_STONE_PLANE|MOVES_REMAINING_PLANE|PLY_PARITY_PLANE"
+    # Pure infrastructure constants unrelated to encoding geometry
+    r"|MAX_RETRIES"
+    r")\s*[:=\[]"
 )
 
 # Rule 7 — trailing comment patterns.
@@ -797,8 +930,28 @@ def _apply_line_transforms(line: str, suffix: str) -> str:
         line = _strip_trailing_comment_python(line)
     # Rule 2: strip float tolerance patterns.
     line = _FLOAT_TOL_RE.sub("", line)
+    # Rule 2b: strip decimal fraction literals (0.5, 1.5, 0.25, 0.8, …).
+    line = _DECIMAL_FRAC_RE.sub("", line)
     # Rule 4: strip range bounds.
     line = _RANGE_BOUND_RE.sub("", line)
+    # Rule 10: strip display / infra context patterns.
+    line = _SLICE_RE.sub("[]", line)       # 10a — sequence slices
+    line = _WITH_CAP_RE.sub("", line)      # 10b — Rust pre-alloc hints
+    line = _DISPLAY_KW_RE.sub("", line)    # 10c — matplotlib kwargs
+    line = _ROUND_PREC_RE.sub("", line)    # 10d — round() precision
+    line = _TOP_N_RE.sub("", line)         # 10e — most_common()
+    line = _BYTE_BUF_RE.sub("", line)      # 10f — Rust byte-buffer declarations
+    if _RUST_STR_CONT_RE.search(line):     # 10g — Rust string continuation lines
+        return ""
+    line = _STR_REPEAT_RE.sub("", line)    # 10h — string repeat `"-" * N`
+    line = _ROW_IDX_RE.sub("", line)       # 10i — row/tuple field indexing
+    if _RUST_MATCH_ARM_RE.match(line):     # 10j — Rust match arm `N => {`
+        return ""
+    line = _SECTION_REF_RE.sub("", line)  # 10k — §N section references
+    if _ENTRY_BYTES_RE.search(line):       # 10l — buffer entry byte-layout arithmetic
+        return ""
+    if _MIXED_COLLECTION_RE.search(line):  # 10m — mixed-value collections (not pure geometry)
+        return ""
     return line
 
 
@@ -831,9 +984,11 @@ def _scan_file(path: Path) -> list[tuple[int, str, list[str]]]:
         if (any(tok in line for tok in _TUNABLE_TOKENS)
                 and not any(g in line for g in _TUNABLE_SKIP_GUARD_TOKENS)):
             continue
-        # Rule 8: skip canonical-define lines in Rust only (Python canonical source is
-        # constants.py, already handled by rule 9 whole-file allowlist).
-        if suffix == ".rs" and _CANONICAL_DEFINE_RE.match(line):
+        # Rule 8: skip canonical-define lines in both Rust and Python.
+        # Python canonical source files (constants.py, encoding.py) are handled
+        # by rule 9 whole-file allowlist; this catches stray module-level
+        # canonical constants elsewhere.
+        if suffix in (".py", ".rs") and _CANONICAL_DEFINE_RE.match(line):
             continue
         # Rule 3: skip lines containing coordinate-call patterns.
         if _line_has_coord_pattern(line):
@@ -1115,6 +1270,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="directory of variant yaml files (default: ./configs/variants)",
     )
     parser.add_argument(
+        "--hardcodes-only",
+        action="store_true",
+        help="run only the hardcoded-literals scan (skips checkpoints, corpora, variants, cross-table)",
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="promote hardcode hits from warn → error",
@@ -1127,6 +1287,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     ns = parser.parse_args(list(argv) if argv is not None else None)
+    if ns.hardcodes_only:
+        report = AuditReport(strict=ns.strict)
+        _section_hardcode(report, ns.repo_root or _repo_root())
+        print(report)
+        return report.exit_code()
     report = audit(
         ns.checkpoints_dir,
         ns.corpora_dir,

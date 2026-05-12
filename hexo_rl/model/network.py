@@ -49,6 +49,7 @@ from hexo_rl.model.pooling import (
     PMAPool,
     build_pool,
 )
+from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 
 _log = logging.getLogger(__name__)
 
@@ -56,7 +57,8 @@ _log = logging.getLogger(__name__)
 # Buffer wire-format plane count. Matches engine/src/replay_buffer/sym_tables.rs:N_PLANES.
 # Sweep variants reduce model in_channels by selecting a subset of these 8 wire planes
 # via the `input_channels` constructor arg — the Rust storage format is unchanged.
-WIRE_CHANNELS: int = 8
+
+WIRE_CHANNELS: int = BUFFER_CHANNELS
 
 # Required wire planes — every variant must include at least these or the model
 # has no stone information. Plane 0 = cur ply-0, plane 4 = opp ply-0 (8-plane HEXB v6).
@@ -308,8 +310,8 @@ class HexTacToeNet(nn.Module):
 
     def __init__(
         self,
-        board_size: int = 19,
-        in_channels: int = 8,
+        board_size: int = BOARD_SIZE,
+        in_channels: int = BUFFER_CHANNELS,
         filters: int = 128,
         res_blocks: int = 12,
         se_reduction_ratio: int = 4,

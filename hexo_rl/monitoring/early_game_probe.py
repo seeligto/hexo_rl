@@ -46,38 +46,48 @@ import torch.nn.functional as F
 _FIXTURE_VERSION: int = 3
 _FIXTURE_SEED: int = 42
 _FIXTURE_PLIES: Tuple[int, ...] = (0, 1, 2, 3, 4, 5, 7, 10, 15, 20)
-_N_ACTIONS: int = 19 * 19 + 1  # must match hexo_rl.selfplay.utils.N_ACTIONS
 
 
 REPO_ROOT: Path = Path(__file__).resolve().parents[2]
-DEFAULT_FIXTURE_PATH: Path = REPO_ROOT / "fixtures" / "early_game_probe_v1.npz"
+
+
+def _fixture_path_for_encoding(encoding_name: str) -> Path:
+    if encoding_name == "v6":
+        return REPO_ROOT / "fixtures" / "early_game_probe_v1.npz"
+    return REPO_ROOT / "fixtures" / f"early_game_probe_{encoding_name}_v1.npz"
+
+
+DEFAULT_FIXTURE_PATH: Path = _fixture_path_for_encoding("v6")
 
 
 @dataclass
 class _FixturePayload:
-    states:     np.ndarray  # (N, 8, 19, 19) float16 — HEXB v6 8-plane
+    states:     np.ndarray  # (N, 8, B, B) float16 — encoding-aware 8-plane
     plies:      np.ndarray  # (N,) int32
     seeds:      np.ndarray  # (N,) int32
-    legal_mask: np.ndarray  # (N, N_ACTIONS) uint8
+    legal_mask: np.ndarray  # (N, A) uint8  where A = policy_logit_count for encoding
 
 
 def _generate_fixture_payload(
     target_plies: Tuple[int, ...] = _FIXTURE_PLIES,
     seed: int = _FIXTURE_SEED,
+    encoding_name: str = "v6",
 ) -> _FixturePayload:
     """Build the fixture from scratch.
 
     For each target ply, seed ``(seed + ply)`` into ``random`` + ``np.random``
     and play ``ply`` uniformly-random legal moves from a fresh board. Records
-    the resulting 8-plane HEXB v6 tensor (cluster 0, which is always present —
-    the origin window — for board histories this shallow) plus the legal-action
-    mask at the resulting position. The mask is stored at fixture build time
-    so probe evaluation does not need to touch the Rust Board.
+    the resulting 8-plane tensor (encoding-aware) plus the legal-action mask.
     """
     # Deferred imports: keep the import graph cold when probe isn't used.
     from engine import Board
     from hexo_rl.env.game_state import GameState
+    from hexo_rl.encoding import lookup as _lookup_encoding
     from hexo_rl.utils.constants import KEPT_PLANE_INDICES
+
+    spec = _lookup_encoding(encoding_name)
+    board_size = spec.board_size
+    n_actions = spec.policy_logit_count
 
     states_out: List[np.ndarray] = []
     masks_out:  List[np.ndarray] = []
@@ -86,7 +96,7 @@ def _generate_fixture_payload(
         random.seed(per_ply_seed)
         np.random.seed(per_ply_seed)
 
-        board = Board()
+        board = Board.with_encoding_name(encoding_name)
         state = GameState.from_board(board)
         for _ in range(target_ply):
             legal = board.legal_moves()
@@ -95,19 +105,15 @@ def _generate_fixture_payload(
             q, r = random.choice(legal)
             state = state.apply_move(board, q, r)
         tensor, _centers = state.to_tensor()
-        # Aug-only K-aggregation site. Live training/inference forwards ALL K cluster
-        # views through the network: min-pool on value, scatter-max on policy
-        # (worker_loop.rs:299-401 MCTS forward, 649-682 replay push). This probe
-        # picks cluster 0 ONLY because shallow random rollouts keep every stone inside
-        # the origin window — no ambiguity about which cluster to score. Not a boundary
-        # bug. See sprint §164 P1. Slice to 8-plane HEXB v6 wire format.
+        # For multi-window encodings shallow random rollouts keep every stone
+        # inside the origin cluster window — cluster 0 is unambiguous.
         aug_cluster = tensor[0]
         states_out.append(aug_cluster[list(KEPT_PLANE_INDICES)].copy())
 
-        mask = np.zeros(_N_ACTIONS, dtype=np.uint8)
+        mask = np.zeros(n_actions, dtype=np.uint8)
         for q, r in board.legal_moves():
             flat = board.to_flat(q, r)
-            if 0 <= flat < _N_ACTIONS:
+            if 0 <= flat < n_actions:
                 mask[flat] = 1
         masks_out.append(mask)
 
@@ -118,11 +124,13 @@ def _generate_fixture_payload(
     return _FixturePayload(states=states, plies=plies, seeds=seeds, legal_mask=legal_mask)
 
 
-def save_fixture(path: Path = DEFAULT_FIXTURE_PATH) -> _FixturePayload:
+def save_fixture(path: Path | None = None, encoding_name: str = "v6") -> _FixturePayload:
     """Regenerate + write the fixture. Idempotent: two consecutive calls
     produce byte-identical files.
     """
-    payload = _generate_fixture_payload()
+    if path is None:
+        path = _fixture_path_for_encoding(encoding_name)
+    payload = _generate_fixture_payload(encoding_name=encoding_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         path,
@@ -135,10 +143,12 @@ def save_fixture(path: Path = DEFAULT_FIXTURE_PATH) -> _FixturePayload:
     return payload
 
 
-def load_fixture(path: Path = DEFAULT_FIXTURE_PATH) -> _FixturePayload:
+def load_fixture(path: Path | None = None, encoding_name: str = "v6") -> _FixturePayload:
     """Load the fixture; generate it if absent."""
+    if path is None:
+        path = _fixture_path_for_encoding(encoding_name)
     if not path.exists():
-        return save_fixture(path)
+        return save_fixture(path, encoding_name=encoding_name)
     z = np.load(path)
     version = int(z["version"])
     if version != _FIXTURE_VERSION:
@@ -161,9 +171,10 @@ class EarlyGameProbe:
     def __init__(
         self,
         device: torch.device,
-        fixture_path: Path = DEFAULT_FIXTURE_PATH,
+        fixture_path: Path | None = None,
+        encoding_name: str = "v6",
     ) -> None:
-        payload = load_fixture(fixture_path)
+        payload = load_fixture(fixture_path, encoding_name=encoding_name)
         self._plies: List[int] = payload.plies.tolist()
         # Hold the probe tensor on device as float32 — the model's forward
         # path accepts either fp16 or fp32 inputs (amp autocast downcasts
@@ -177,6 +188,7 @@ class EarlyGameProbe:
         self._n_legal_per_pos: List[int] = [int(x) for x in payload.legal_mask.sum(axis=1).tolist()]
         self._device = device
         self._n_positions = self._states.shape[0]
+        self.encoding_name = encoding_name
 
     @property
     def n_positions(self) -> int:
@@ -204,6 +216,30 @@ class EarlyGameProbe:
             early_game_entropy_by_ply     — list[float] per-position H_legal
             early_game_top1_mass_by_ply   — list[float] per-position top-1 mass
         """
+        if self._n_positions == 0:
+            return {
+                "early_game_entropy_mean": 0.0,
+                "early_game_entropy_max": 0.0,
+                "early_game_top1_mass_mean": 0.0,
+                "early_game_entropy_by_ply": [],
+                "early_game_top1_mass_by_ply": [],
+            }
+
+        # Guard against model / fixture shape mismatch (e.g. v6w25 model vs v6 fixture).
+        # If the input spatial dims differ, skip the probe gracefully.
+        expected_spatial = (self._states.shape[2], self._states.shape[3])
+        model_in_channels = getattr(model, "in_channels", None)
+        # Try to infer expected spatial size from model.board_size
+        model_board_size = getattr(model, "board_size", None)
+        if model_board_size is not None and expected_spatial != (model_board_size, model_board_size):
+            return {
+                "early_game_entropy_mean": 0.0,
+                "early_game_entropy_max": 0.0,
+                "early_game_top1_mass_mean": 0.0,
+                "early_game_entropy_by_ply": [],
+                "early_game_top1_mass_by_ply": [],
+            }
+
         was_training = bool(getattr(model, "training", False))
         base = getattr(model, "_orig_mod", model)  # unwrap torch.compile
         base.eval()

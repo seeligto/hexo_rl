@@ -55,6 +55,17 @@ _REGISTERED: list[str] = sorted(s.name for s in all_specs())
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _rust_spec(name: str) -> Any:
+    """Return the Rust PyRegistrySpec for `name`.
+
+    Used by §173 A3 parity tests — calls the Rust-side registry lookup
+    via the PyO3 `EncodingSpec.from_registry` classmethod which returns
+    a `RegistrySpec` (PyRegistrySpec) containing all fields.
+    """
+    from engine import EncodingSpec as RustEncodingSpec
+    return RustEncodingSpec.from_registry(name)
+
+
 def _model_kwargs(spec: EncodingSpec) -> dict[str, Any]:
     """Map an EncodingSpec onto HexTacToeNet ctor kwargs.
 
@@ -218,3 +229,60 @@ def test_round_trip(encoding_name: str) -> None:
             [0.0] * len(leaves),
         )
     assert tree.root_visits() <= 1
+
+
+# ---------------------------------------------------------------------------
+# §173 A3 — Rust ↔ Python parity tests for new helper fields + properties
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("encoding_name", _REGISTERED)
+def test_helper_parity_rust_python(encoding_name: str) -> None:
+    """§173 A3: Python EncodingSpec properties match Rust RegistrySpec methods.
+
+    Covers all 5 helpers (n_cells, state_stride, chain_stride, aux_stride,
+    policy_stride) and both new fields (kept_plane_indices, n_source_planes).
+    """
+    py = lookup(encoding_name)
+    rs = _rust_spec(encoding_name)
+
+    # n_cells: trunk_size² (A3 semantic fix — was board_size²).
+    assert py.n_cells == rs.n_cells(), (
+        f"{encoding_name}: py.n_cells={py.n_cells} != rs.n_cells()={rs.n_cells()}"
+    )
+
+    # state_stride = n_planes * n_cells.
+    assert py.state_stride == rs.state_stride(), (
+        f"{encoding_name}: py.state_stride={py.state_stride} != "
+        f"rs.state_stride()={rs.state_stride()}"
+    )
+
+    # chain_stride = N_CHAIN_PLANES(6) * n_cells.
+    assert py.chain_stride == rs.chain_stride(), (
+        f"{encoding_name}: py.chain_stride={py.chain_stride} != "
+        f"rs.chain_stride()={rs.chain_stride()}"
+    )
+
+    # aux_stride = n_cells.
+    assert py.aux_stride == rs.aux_stride(), (
+        f"{encoding_name}: py.aux_stride={py.aux_stride} != "
+        f"rs.aux_stride()={rs.aux_stride()}"
+    )
+
+    # policy_stride = policy_logit_count.
+    assert py.policy_stride == rs.policy_stride(), (
+        f"{encoding_name}: py.policy_stride={py.policy_stride} != "
+        f"rs.policy_stride()={rs.policy_stride()}"
+    )
+
+    # kept_plane_indices (new §173 A3 TOML field).
+    assert tuple(py.kept_plane_indices) == tuple(rs.kept_plane_indices), (
+        f"{encoding_name}: py.kept_plane_indices={py.kept_plane_indices} != "
+        f"rs.kept_plane_indices={tuple(rs.kept_plane_indices)}"
+    )
+
+    # n_source_planes (new §173 A3 TOML field).
+    assert py.n_source_planes == rs.n_source_planes, (
+        f"{encoding_name}: py.n_source_planes={py.n_source_planes} != "
+        f"rs.n_source_planes={rs.n_source_planes}"
+    )

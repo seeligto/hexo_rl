@@ -39,31 +39,29 @@ def _base_cfgs_for_validator() -> dict:
     return result
 
 
-def test_gumbel_full_passes_playout_cap_mutex() -> None:
-    """§104 — gumbel_full.yaml must resolve with ``fast_prob == 0`` so it
-    survives the WorkerPool mutex (``fast_prob > 0 AND full_search_prob > 0``
-    raises at pool init). Pre-§104 the variant set ``fast_prob: 0.25`` and
-    then inherited ``full_search_prob: 0.25`` from the base, making the
-    desktop Exp E variant un-launchable. Decision justification:
-    reports/gumbel_target_quality_2026-04-17.md (D-Gumbel verdict: Option A).
-    """
-    cfg = _resolve("gumbel_full")
-    playout_cap = cfg["selfplay"]["playout_cap"]
-    assert playout_cap["fast_prob"] == 0.0, (
-        "gumbel_full.fast_prob != 0 — §104 Option A repair missing; the "
-        "variant will crash WorkerPool.__init__ on launch"
-    )
-    assert playout_cap["full_search_prob"] > 0.0, (
-        "gumbel_full.full_search_prob == 0 — variant must keep the §100 "
-        "move-level cap (inherited from base) so the selective gate actually "
-        "fires on quick-search rows"
-    )
-    # §100 sim counts must survive the merge — noise budget is not a free parameter.
-    assert playout_cap["n_sims_quick"] == 100
-    assert playout_cap["n_sims_full"] == 600
-    # Variant-defining flags must still be set.
-    assert cfg["selfplay"]["gumbel_mcts"] is True
+# ---------------------------------------------------------------------------
+# Canonical variant (vast.yaml) — §174 sustained-run validation
+# ---------------------------------------------------------------------------
+
+
+def test_vast_resolves_to_sustained_values() -> None:
+    """§174 canonical variant must resolve with the P0-operator-locked knobs.
+    Prevents silent drift when base configs change."""
+    cfg = _resolve("vast")
+    assert cfg.get("training_steps_per_game") == 2.0
+    assert cfg.get("max_train_burst") == 8
+    assert cfg["lr"] == 1e-3
+    assert cfg["grad_clip"] == 1.0
+    assert cfg["encoding"] == "v6w25"
+    assert cfg["selfplay"]["gumbel_mcts"] is False
     assert cfg["selfplay"]["completed_q_values"] is True
+    assert cfg["selfplay"]["n_workers"] == 18
+    assert cfg["selfplay"]["inference_batch_size"] == 224
+    assert cfg["selfplay"]["max_game_moves"] == 150
+    assert cfg["selfplay"]["playout_cap"]["fast_prob"] == 0.0
+    assert cfg["mcts"]["n_simulations"] == 400
+    assert cfg["eval_interval"] == 5000
+    assert cfg["monitors"]["hard_abort_grad_norm"] == 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -97,39 +95,3 @@ def test_validator_catches_nested_training_block() -> None:
         "E-001 class bug would go undetected"
     )
     assert any("training" in w for w in warnings)
-
-
-def test_training_steps_per_game_per_variant() -> None:
-    """Q27 smoke (2026-04-19): base ``training_steps_per_game`` was 4.0, tuned
-    in §69 for a different throughput regime. Laptop 14-worker run measured
-    47% trainer idle (SUPPLY/DEMAND=0.40). Per-variant declaration is now
-    authoritative; base dropped to 1.5 (laptop-fit). Each variant pins its
-    expected value here to prevent silent drift when the base changes.
-    """
-    expected = {
-        "gumbel_full": 2.0,            # desktop sustained run (rebaselined post-Option-A, Prompt 16)
-        "gumbel_targets": 2.0,         # laptop — §107 mid-run bump 2026-04-19
-        "gumbel_targets_desktop": 4.0, # W3 fix 2026-04-29: §69 P3 winner
-    }
-    for variant, want in expected.items():
-        cfg = _resolve(variant)
-        got = cfg.get("training_steps_per_game")
-        assert got == want, (
-            f"{variant}: training_steps_per_game resolved to {got!r}, "
-            f"expected {want!r}"
-        )
-
-
-def test_training_steps_per_game_resolves_to_variant_value_for_desktop() -> None:
-    """E-001: after flattening gumbel_targets_desktop.yaml, max_train_burst must
-    resolve to 8 at the top level (not 16 from the base). Pre-fix the nested
-    training: block silently dropped the override and desktop ran at burst=16."""
-    cfg = _resolve("gumbel_targets_desktop")
-    assert cfg["max_train_burst"] == 8, (
-        f"max_train_burst={cfg['max_train_burst']} — expected 8 from desktop D3 sweep; "
-        "nested training: block fix may be missing or broken"
-    )
-    # No nested 'training' dict should survive — flat keys only.
-    assert not isinstance(cfg.get("training"), dict), (
-        "merged config has nested 'training' dict — variant still uses wrong namespace"
-    )

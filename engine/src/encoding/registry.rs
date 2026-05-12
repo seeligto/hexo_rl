@@ -176,6 +176,46 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
     let sym_table_id = get_str!("sym_table_id");
     let notes = get_str!("notes");
 
+    // kept_plane_indices: array of integers.
+    let kept_plane_indices: Option<Vec<usize>> = match table.get("kept_plane_indices") {
+        Some(Value::Array(arr)) => {
+            let mut indices: Vec<usize> = Vec::with_capacity(arr.len());
+            let mut bad = false;
+            for (i, v) in arr.iter().enumerate() {
+                match v.as_integer() {
+                    Some(n) if n >= 0 => indices.push(n as usize),
+                    Some(n) => {
+                        errs.push(format!(
+                            "[encodings.{}].kept_plane_indices[{}]: negative integer {}",
+                            name, i, n
+                        ));
+                        bad = true;
+                        break;
+                    }
+                    None => {
+                        errs.push(format!(
+                            "[encodings.{}].kept_plane_indices[{}]: not an integer",
+                            name, i
+                        ));
+                        bad = true;
+                        break;
+                    }
+                }
+            }
+            if bad { None } else { Some(indices) }
+        }
+        Some(_) => {
+            errs.push(format!("[encodings.{}].kept_plane_indices: not an array", name));
+            None
+        }
+        None => {
+            errs.push(format!("[encodings.{}].kept_plane_indices: missing key", name));
+            None
+        }
+    };
+
+    let n_source_planes = get_int!("n_source_planes").map(|v| v as usize);
+
     // plane_layout: array of strings.
     let plane_layout: Option<Vec<&'static str>> = match table.get("plane_layout") {
         Some(Value::Array(arr)) => {
@@ -236,6 +276,7 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
 
     // All Some at this point.
     let plane_layout: &'static [&'static str] = Box::leak(plane_layout.unwrap().into_boxed_slice());
+    let kept_plane_indices: &'static [usize] = Box::leak(kept_plane_indices.unwrap().into_boxed_slice());
 
     Ok(RegistrySpec {
         name: leak_str(name),
@@ -254,6 +295,8 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
         sym_table_id: leak_str(sym_table_id.unwrap()),
         schema_version: schema_version.unwrap(),
         notes: leak_str(notes.unwrap()),
+        kept_plane_indices,
+        n_source_planes: n_source_planes.unwrap(),
     })
 }
 
@@ -307,7 +350,7 @@ mod tests {
         assert_eq!(s.value_pool, ValuePool::None);
         assert_eq!(s.policy_pool, PolicyPool::None);
         assert_eq!(s.sym_table_id, "size_19");
-        assert_eq!(s.schema_version, 1);
+        assert_eq!(s.schema_version, 2);
     }
 
     #[test]
@@ -338,6 +381,28 @@ mod tests {
     }
 
     #[test]
+    fn test_registry_loads_v7() {
+        let s = lookup("v7").expect("v7 present");
+        assert_eq!(s.board_size, 19);
+        assert_eq!(s.n_planes, 8);
+        assert_eq!(s.policy_logit_count, 362);
+        assert!(!s.is_multi_window);
+        assert!(s.has_pass_slot);
+        assert_eq!(s.schema_version, 2);
+    }
+
+    #[test]
+    fn test_registry_loads_v7e30() {
+        let s = lookup("v7e30").expect("v7e30 present");
+        assert_eq!(s.board_size, 19);
+        assert_eq!(s.n_planes, 8);
+        assert_eq!(s.policy_logit_count, 362);
+        assert!(!s.is_multi_window);
+        assert!(s.has_pass_slot);
+        assert_eq!(s.schema_version, 2);
+    }
+
+    #[test]
     fn test_registry_loads_v8() {
         let s = lookup("v8").expect("v8 present");
         assert_eq!(s.board_size, 25);
@@ -364,7 +429,7 @@ mod tests {
     #[test]
     fn test_registry_loads_all_known_encodings() {
         let names: Vec<&str> = all_specs().map(|s| s.name).collect();
-        for expected in ["v6", "v6w25", "v7full", "v8", "v8_canvas_realness"] {
+        for expected in ["v6", "v6w25", "v7full", "v7", "v7e30", "v8", "v8_canvas_realness"] {
             assert!(
                 names.contains(&expected),
                 "missing {:?} in {:?}",
@@ -374,8 +439,8 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            5,
-            "expected exactly 5 encodings, got {:?}",
+            7,
+            "expected exactly 7 encodings, got {:?}",
             names
         );
     }
@@ -412,9 +477,9 @@ mod tests {
     }
 
     #[test]
-    fn test_all_specs_includes_all_5() {
+    fn test_all_specs_includes_all_7() {
         let count = all_specs().count();
-        assert_eq!(count, 5);
+        assert_eq!(count, 7);
     }
 
     #[test]
