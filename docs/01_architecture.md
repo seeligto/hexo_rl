@@ -359,7 +359,7 @@ The hot-path concurrency is Rust-owned (not Python multiprocessing). Python is r
 The replay buffer lives entirely in Rust and is exposed to Python via PyO3.
 The Python `ReplayBuffer` class has been deleted; `ReplayBuffer` (from `engine`) is the only buffer.
 
-**Storage layout (HEXB v6 on-disk format, in-memory columns — §131 P1):**
+**Storage layout (HEXB v7 on-disk format, in-memory columns — §174 prereq):**
 
 - `states: Vec<u16>` — f16 bits as u16, logical shape `[capacity, 8, 19, 19]`
   (§131 — 18→8 plane migration; v5 hard-rejected at load).
@@ -377,7 +377,7 @@ The Python `ReplayBuffer` class has been deleted; `ReplayBuffer` (from `engine`)
 - **12-fold hex augmentation** — applied lazily at sample time. 6 rotations × 2 (with/without reflection). Scatter-copy via pre-computed symmetry tables. Cells that fall outside the 19×19 window after transformation are left as zero. Chain planes undergo a second scatter pass that additionally remaps the 3 hex-axis planes per symmetry (`axis_perm` table — §92 C2, §97 retained).
 - **Zero-copy transfer** — Python receives numpy arrays directly via PyO3's `IntoPyArray`; no type conversion in the hot path.
 - **f16-as-u16 storage** — states are stored as raw u16 (f16 bit-pattern) to halve VRAM footprint; reinterpreted as f16 on PyO3 return.
-- **Persistence** — HEXB v6 (`engine/src/replay_buffer/persist.rs`). v5 and v4 buffers are hard-rejected with an informative error (§131 P1 commit `480bb24`). Only v6 loads.
+- **Persistence** — HEXB v7 (`engine/src/replay_buffer/persist.rs`). v7 adds an encoding-name header field so buffers saved with one encoding cannot be silently loaded into a buffer with a different encoding. v6 files load with assumed encoding "v6" and a deprecation warning; v5 and earlier are hard-rejected (§131 P1 commit `480bb24`).
 
 **Python API:**
 

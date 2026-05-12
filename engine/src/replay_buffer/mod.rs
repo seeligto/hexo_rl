@@ -41,6 +41,7 @@ use numpy::{
     PyArray1, PyArray2, PyArray3, PyArray4,
     PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArray4,
 };
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rand::rngs::StdRng;
 use std::sync::atomic::AtomicU64;
@@ -284,6 +285,7 @@ impl ReplayBuffer {
     #[pyo3(text_signature = "(self, path)")]
     pub fn load_from_path(&mut self, path: &str) -> PyResult<usize> {
         self.load_from_path_impl(path)
+            .map_err(|e| PyValueError::new_err(e))
     }
 
     #[getter]

@@ -1,22 +1,30 @@
-//! HEXB v6 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
+//! HEXB v7 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
 //! `load_from_path_impl`.
 //!
 //! Format (little-endian native):
 //!   [magic: u32 = 0x48455842]  ("HEXB")
-//!   [version: u32 = 6]
-//!   [n_planes: u32]            (redundant sanity field, must equal N_PLANES = 8)
+//!   [version: u32 = 7]
+//!   [n_planes: u32]            (redundant sanity field, must equal encoding.n_planes)
 //!   [capacity: u64]
 //!   [size: u64]
+//!   [encoding_name_len: u32]   (NEW in v7)
+//!   [encoding_name: [u8; N]]   (UTF-8, no null terminator)
 //!   For each of `size` positions (oldest → newest):
-//!     state:          STATE_STRIDE × u16    (8 planes × 361 cells; KEPT_PLANE_INDICES)
-//!     chain_planes:   CHAIN_STRIDE × u16    (6 planes × 361 cells)
+//!     state:          STATE_STRIDE × u16    (n_planes × n_cells)
+//!     chain_planes:   CHAIN_STRIDE × u16    (6 planes × n_cells)
 //!     policy:         POLICY_STRIDE × f32
 //!     outcome:        f32
 //!     game_id:        i64
 //!     weight:         u16
-//!     ownership:      AUX_STRIDE × u8   (encoding 0/1/2)
-//!     winning_line:   AUX_STRIDE × u8   (binary mask)
-//!     is_full_search: u8                (1 = full-search, 0 = quick-search)
+//!     ownership:      AUX_STRIDE × u8
+//!     winning_line:   AUX_STRIDE × u8
+//!     is_full_search: u8
+//!
+//! v6 backward compatibility:
+//!   v6 files lack the encoding_name field. On load, version==6 → assumed
+//!   encoding "v6" with a deprecation warning. The buffer's runtime encoding
+//!   must also be "v6"; cross-encoding loads are hard-rejected. Re-save
+//!   writes v7.
 //!
 //! v5 and earlier buffers are HARD-REJECTED at load — the §122 B4 verdict
 //! committed to a wire-format channel-drop (18 → 8 planes), making any v5
@@ -26,16 +34,16 @@
 
 use std::sync::atomic::Ordering;
 
-use pyo3::exceptions::{PyIOError, PyValueError};
+use pyo3::exceptions::PyIOError;
 use pyo3::prelude::*;
 
 use super::ReplayBuffer;
 
 pub(crate) const HEXB_MAGIC: u32 = 0x4845_5842; // "HEXB"
-pub(crate) const HEXB_VERSION: u32 = 6;
+pub(crate) const HEXB_VERSION: u32 = 7;
 
 impl ReplayBuffer {
-    /// Save buffer contents to a binary file in HEXB v6 format.
+    /// Save buffer contents to a binary file in HEXB v7 format.
     pub(crate) fn save_to_path_impl(&self, path: &str) -> PyResult<()> {
         use std::io::{BufWriter, Write};
 
@@ -48,12 +56,19 @@ impl ReplayBuffer {
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         w.write_all(&HEXB_VERSION.to_le_bytes())
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
-        // Redundant plane-count field for v3+ sanity checking.
+        // Redundant plane-count field for sanity checking.
         w.write_all(&(self.encoding.n_planes as u32).to_le_bytes())
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         w.write_all(&(self.capacity as u64).to_le_bytes())
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
         w.write_all(&(self.size as u64).to_le_bytes())
+            .map_err(|e| PyIOError::new_err(e.to_string()))?;
+
+        // v7: encoding name
+        let name_bytes = self.encoding.name.as_bytes();
+        w.write_all(&(name_bytes.len() as u32).to_le_bytes())
+            .map_err(|e| PyIOError::new_err(e.to_string()))?;
+        w.write_all(name_bytes)
             .map_err(|e| PyIOError::new_err(e.to_string()))?;
 
         let state_stride  = self.encoding.state_stride();
@@ -117,7 +132,7 @@ impl ReplayBuffer {
             // winning_line: aux_stride × u8
             w.write_all(&self.winning_line[aux_start..aux_start + aux_stride])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
-            // is_full_search: u8 (v5)
+            // is_full_search: u8
             w.write_all(&[self.is_full_search[slot]])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
         }
@@ -133,15 +148,17 @@ impl ReplayBuffer {
     ///
     /// If the saved buffer has more positions than `self.capacity`, only the
     /// most recent `self.capacity` positions are loaded.
-    pub(crate) fn load_from_path_impl(&mut self, path: &str) -> PyResult<usize> {
+    ///
+    /// Returns `String` errors so unit tests (no Python interpreter) can
+    /// exercise error paths.  The PyO3 façade in `mod.rs` maps these to
+    /// `PyValueError`.
+    pub(crate) fn load_from_path_impl(&mut self, path: &str) -> Result<usize, String> {
         use std::io::{BufReader, Read};
 
         let file = match std::fs::File::open(path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-            Err(e) => return Err(PyIOError::new_err(
-                format!("cannot open {path}: {e}")
-            )),
+            Err(e) => return Err(format!("cannot open {path}: {e}")),
         };
         let mut r = BufReader::new(file);
 
@@ -150,46 +167,116 @@ impl ReplayBuffer {
         let mut buf8 = [0u8; 8];
 
         r.read_exact(&mut buf4)
-            .map_err(|e| PyIOError::new_err(e.to_string()))?;
+            .map_err(|e| format!("{e}"))?;
         let magic = u32::from_le_bytes(buf4);
         if magic != HEXB_MAGIC {
-            return Err(PyValueError::new_err(format!(
+            return Err(format!(
                 "invalid magic: expected 0x48455842 (HEXB), got 0x{magic:08X}"
-            )));
+            ));
         }
 
         r.read_exact(&mut buf4)
-            .map_err(|e| PyIOError::new_err(e.to_string()))?;
+            .map_err(|e| format!("{e}"))?;
         let version = u32::from_le_bytes(buf4);
-        if version != HEXB_VERSION {
-            return Err(PyValueError::new_err(format!(
+
+        // ── Version dispatch ──────────────────────────────────────────────
+        let file_encoding_name: String;
+        let saved_n_planes: usize;
+        let _saved_capacity: usize;
+        let saved_size: usize;
+
+        if version == 7 {
+            // v7 header: n_planes, capacity, size, encoding_name_len, encoding_name
+            r.read_exact(&mut buf4)
+                .map_err(|e| format!("{e}"))?;
+            saved_n_planes = u32::from_le_bytes(buf4) as usize;
+
+            r.read_exact(&mut buf8)
+                .map_err(|e| format!("{e}"))?;
+            _saved_capacity = u64::from_le_bytes(buf8) as usize;
+
+            r.read_exact(&mut buf8)
+                .map_err(|e| format!("{e}"))?;
+            saved_size = u64::from_le_bytes(buf8) as usize;
+
+            r.read_exact(&mut buf4)
+                .map_err(|e| format!("{e}"))?;
+            let name_len = u32::from_le_bytes(buf4) as usize;
+            if name_len > 256 {
+                return Err(format!(
+                    "HEXB v7 encoding_name_len={name_len} exceeds maximum 256"
+                ));
+            }
+            let mut name_buf = vec![0u8; name_len];
+            r.read_exact(&mut name_buf)
+                .map_err(|e| format!("{e}"))?;
+            file_encoding_name = String::from_utf8(name_buf)
+                .map_err(|e| format!(
+                    "HEXB v7 encoding name is not valid UTF-8: {e}"
+                ))?;
+        } else if version == 6 {
+            // v6 backward compat: no encoding field — assume "v6"
+            eprintln!(
+                "warning: loading deprecated HEXB v6 file ({}). \
+                 Assuming encoding 'v6'. Re-save to upgrade to v7.",
+                path
+            );
+            r.read_exact(&mut buf4)
+                .map_err(|e| format!("{e}"))?;
+            saved_n_planes = u32::from_le_bytes(buf4) as usize;
+
+            r.read_exact(&mut buf8)
+                .map_err(|e| format!("{e}"))?;
+            _saved_capacity = u64::from_le_bytes(buf8) as usize;
+
+            r.read_exact(&mut buf8)
+                .map_err(|e| format!("{e}"))?;
+            saved_size = u64::from_le_bytes(buf8) as usize;
+
+            file_encoding_name = "v6".to_string();
+        } else {
+            return Err(format!(
                 "HEXB version {version} not supported (this build only reads v{HEXB_VERSION}). \
                  v5 and earlier are deprecated by the §122 B4 verdict — wire-format \
                  channel-drop (18 → 8 planes per D17 ablation Set A) is incompatible \
                  with their plane count. Regenerate the buffer with v{HEXB_VERSION} \
                  (see reports/audits/buffer_compat_20260429.md §5 for cost estimate)."
-            )));
+            ));
         }
 
-        // Redundant plane-count sanity check.
-        r.read_exact(&mut buf4)
-            .map_err(|e| PyIOError::new_err(e.to_string()))?;
-        let saved_n_planes = u32::from_le_bytes(buf4) as usize;
-        if saved_n_planes != self.encoding.n_planes {
-            return Err(PyValueError::new_err(format!(
-                "HEXB v{HEXB_VERSION} header has n_planes={saved_n_planes}, expected {} \
-                 (encoding {:?})",
-                self.encoding.n_planes, self.encoding.name
-            )));
+        // ── Encoding validation ───────────────────────────────────────────
+        let file_spec = match crate::encoding::registry::lookup(&file_encoding_name) {
+            Some(s) => s,
+            None => {
+                return Err(format!(
+                    "HEXB file declares unknown encoding '{file_encoding_name}'. \
+                     Registered encodings: {:?}",
+                    {
+                        let mut known: Vec<&str> = crate::encoding::registry::all_specs()
+                            .map(|s| s.name).collect();
+                        known.sort();
+                        known
+                    }
+                ));
+            }
+        };
+
+        if saved_n_planes != file_spec.n_planes {
+            return Err(format!(
+                "HEXB file header has n_planes={saved_n_planes}, \
+                 but encoding '{file_encoding_name}' expects {}. \
+                 File may be corrupted or written with a mismatched registry.",
+                file_spec.n_planes
+            ));
         }
 
-        r.read_exact(&mut buf8)
-            .map_err(|e| PyIOError::new_err(e.to_string()))?;
-        let _saved_capacity = u64::from_le_bytes(buf8) as usize;
-
-        r.read_exact(&mut buf8)
-            .map_err(|e| PyIOError::new_err(e.to_string()))?;
-        let saved_size = u64::from_le_bytes(buf8) as usize;
+        // Cross-encoding mismatch guard.
+        if self.encoding.name != file_encoding_name {
+            return Err(format!(
+                "HEXB encoding mismatch: buffer expects '{}', file declares '{}'",
+                self.encoding.name, file_encoding_name
+            ));
+        }
 
         // How many to actually load — cap at our capacity
         let to_load = saved_size.min(self.capacity);
@@ -201,8 +288,7 @@ impl ReplayBuffer {
         let policy_stride = self.encoding.policy_stride();
         let aux_stride    = self.encoding.aux_stride();
 
-        // Per-entry byte sizes. v6 layout = state+chain+policy+outcome+game_id+
-        // weight+own+wl+is_full_search.
+        // Per-entry byte sizes.
         let state_bytes = state_stride * 2;
         let chain_bytes = chain_stride * 2;
         let policy_bytes = policy_stride * 4;
@@ -217,7 +303,7 @@ impl ReplayBuffer {
             while remaining > 0 {
                 let chunk = remaining.min(skip_buf.len());
                 r.read_exact(&mut skip_buf[..chunk])
-                    .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                    .map_err(|e| format!("{e}"))?;
                 remaining -= chunk;
             }
         }
@@ -237,7 +323,7 @@ impl ReplayBuffer {
 
             // state
             r.read_exact(&mut state_buf)
-                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                .map_err(|e| format!("{e}"))?;
             let dst_state = &mut self.states[slot * state_stride..(slot + 1) * state_stride];
             for (j, d) in dst_state.iter_mut().enumerate() {
                 *d = u16::from_le_bytes([state_buf[j * 2], state_buf[j * 2 + 1]]);
@@ -245,7 +331,7 @@ impl ReplayBuffer {
 
             // chain_planes
             r.read_exact(&mut chain_buf)
-                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                .map_err(|e| format!("{e}"))?;
             let dst_chain = &mut self.chain_planes[slot * chain_stride..(slot + 1) * chain_stride];
             for (j, d) in dst_chain.iter_mut().enumerate() {
                 *d = u16::from_le_bytes([chain_buf[j * 2], chain_buf[j * 2 + 1]]);
@@ -253,7 +339,7 @@ impl ReplayBuffer {
 
             // policy
             r.read_exact(&mut pol_buf)
-                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                .map_err(|e| format!("{e}"))?;
             let dst_pol = &mut self.policies[slot * policy_stride..(slot + 1) * policy_stride];
             for (j, d) in dst_pol.iter_mut().enumerate() {
                 *d = f32::from_le_bytes([
@@ -264,32 +350,32 @@ impl ReplayBuffer {
 
             // outcome
             r.read_exact(&mut buf4)
-                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                .map_err(|e| format!("{e}"))?;
             self.outcomes[slot] = f32::from_le_bytes(buf4);
 
             // game_id
             r.read_exact(&mut buf8)
-                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                .map_err(|e| format!("{e}"))?;
             self.game_ids[slot] = i64::from_le_bytes(buf8);
 
             // weight
             let mut buf2 = [0u8; 2];
             r.read_exact(&mut buf2)
-                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                .map_err(|e| format!("{e}"))?;
             let w_bits = u16::from_le_bytes(buf2);
             self.weights[slot] = w_bits;
 
             // ownership + winning_line
             let aux_dst_start = slot * aux_stride;
             r.read_exact(&mut self.ownership[aux_dst_start..aux_dst_start + aux_stride])
-                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                .map_err(|e| format!("{e}"))?;
             r.read_exact(&mut self.winning_line[aux_dst_start..aux_dst_start + aux_stride])
-                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                .map_err(|e| format!("{e}"))?;
 
             // is_full_search: u8
             let mut buf1 = [0u8; 1];
             r.read_exact(&mut buf1)
-                .map_err(|e| PyIOError::new_err(e.to_string()))?;
+                .map_err(|e| format!("{e}"))?;
             self.is_full_search[slot] = buf1[0];
 
             // Update weight histogram
@@ -308,9 +394,9 @@ mod tests {
     use super::*;
     use half::f16;
 
-    /// HEXB v6 round-trip — verify aux columns (ownership, winning_line, chain_planes, is_full_search) survive save/load.
+    /// HEXB v7 round-trip — verify aux columns (ownership, winning_line, chain_planes, is_full_search) survive save/load.
     #[test]
-    fn test_aux_hexb_v6_roundtrip() {
+    fn test_aux_hexb_v7_roundtrip() {
         use std::env::temp_dir;
 
         let mut buf = ReplayBuffer::new(8, "v6");
@@ -326,18 +412,18 @@ mod tests {
         let c_start = slot * chain_stride;
         buf.chain_planes[c_start + 0]   = f16::from_f32(0.5).to_bits();
         buf.chain_planes[c_start + 100] = f16::from_f32(1.0).to_bits();
-        buf.chain_planes[c_start + buf.encoding.n_cells()] = f16::from_f32(0.25).to_bits();  // plane 1 (offset = n_cells)
+        buf.chain_planes[c_start + buf.encoding.n_cells()] = f16::from_f32(0.25).to_bits();  // plane 1
         buf.outcomes[slot]       = 1.0;
         buf.weights[slot]        = f16::from_f32(1.0).to_bits();
-        buf.is_full_search[slot] = 0;  // quick-search — test the non-default value
+        buf.is_full_search[slot] = 0;  // quick-search
         buf.head = 1;
         buf.size = 1;
 
-        let path = temp_dir().join("aux_v6_roundtrip.hexb");
+        let path = temp_dir().join("aux_v7_roundtrip.hexb");
         buf.save_to_path(path.to_str().unwrap()).unwrap();
 
         let mut buf2 = ReplayBuffer::new(8, "v6");
-        let n = buf2.load_from_path(path.to_str().unwrap()).unwrap();
+        let n = buf2.load_from_path_impl(path.to_str().unwrap()).unwrap();
         assert_eq!(n, 1);
 
         let aux_stride2   = buf2.encoding.aux_stride();
@@ -354,6 +440,224 @@ mod tests {
         assert_eq!(buf2.chain_planes[c2 + 100], f16::from_f32(1.0).to_bits());
         assert_eq!(buf2.chain_planes[c2 + buf2.encoding.n_cells()], f16::from_f32(0.25).to_bits());
         assert_eq!(buf2.is_full_search[0], 0, "is_full_search must survive round-trip");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// HEXB v7 round-trip with v6w25 encoding.
+    #[test]
+    fn test_hexb_v7_round_trip_v6w25() {
+        use std::env::temp_dir;
+
+        let mut buf = ReplayBuffer::new(100, "v6w25");
+        for i in 0..100 {
+            buf.push_for_test(i as f32 / 100.0, (i % 50) as u16, i % 3 == 0);
+        }
+        assert_eq!(buf.size(), 100);
+
+        let path = temp_dir().join("v7_v6w25_roundtrip.hexb");
+        buf.save_to_path(path.to_str().unwrap()).unwrap();
+
+        let mut buf2 = ReplayBuffer::new(100, "v6w25");
+        let n = buf2.load_from_path_impl(path.to_str().unwrap()).unwrap();
+        assert_eq!(n, 100);
+        assert_eq!(buf2.size(), 100);
+
+        for slot in 0..100 {
+            assert_eq!(buf2.outcomes[slot], (slot as f32) / 100.0, "outcome mismatch at slot {slot}");
+            assert_eq!(buf2.is_full_search_at(slot), (slot % 3 == 0) as u8, "is_full_search mismatch at slot {slot}");
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Parametrize round-trip over all 7 registered encodings.
+    #[test]
+    fn test_hexb_v7_round_trip_all_encodings() {
+        use std::env::temp_dir;
+
+        let names: Vec<&str> = crate::encoding::registry::all_specs()
+            .map(|s| s.name).collect();
+        for name in names {
+            let mut buf = ReplayBuffer::new(10, name);
+            for i in 0..10 {
+                buf.push_for_test(i as f32, 10, true);
+            }
+            let path = temp_dir().join(format!("v7_all_enc_{}.hexb", name));
+            buf.save_to_path(path.to_str().unwrap()).unwrap();
+
+            let mut buf2 = ReplayBuffer::new(10, name);
+            let n = buf2.load_from_path_impl(path.to_str().unwrap()).unwrap();
+            assert_eq!(n, 10, "encoding {name}: expected 10 positions loaded");
+            assert_eq!(buf2.size(), 10, "encoding {name}: size mismatch");
+
+            // Verify outcome values survived.
+            for slot in 0..10 {
+                assert_eq!(buf2.outcomes[slot], slot as f32,
+                    "encoding {name}: outcome mismatch at slot {slot}");
+            }
+
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// v6 backward compat: manually write a v6-format file, load with v7 code,
+    /// verify assumed "v6" + deprecation warning.
+    #[test]
+    fn test_hexb_v6_backward_compat() {
+        use std::env::temp_dir;
+        use std::io::Write;
+
+        let path = temp_dir().join("legacy_v6_no_encoding.hexb");
+        {
+            let mut file = std::fs::File::create(&path).unwrap();
+            // v6 header: magic, version=6, n_planes=8, capacity=10, size=5
+            file.write_all(&HEXB_MAGIC.to_le_bytes()).unwrap();
+            file.write_all(&6u32.to_le_bytes()).unwrap();
+            file.write_all(&8u32.to_le_bytes()).unwrap();
+            file.write_all(&10u64.to_le_bytes()).unwrap();
+            file.write_all(&5u64.to_le_bytes()).unwrap();
+
+            // Write 5 dummy entries (state + chain + policy + outcome + game_id + weight + own + wl + ifs)
+            let state_stride = 8 * 361;
+            let chain_stride = 6 * 361;
+            let policy_stride = 362;
+            let aux_stride = 361;
+            let entry_bytes = state_stride * 2 + chain_stride * 2 + policy_stride * 4 + 4 + 8 + 2
+                + aux_stride + aux_stride + 1;
+            for i in 0..5 {
+                let mut entry = vec![0u8; entry_bytes];
+                // outcome at offset state*2 + chain*2 + policy*4
+                let off = state_stride * 2 + chain_stride * 2 + policy_stride * 4;
+                entry[off..off+4].copy_from_slice(&(i as f32).to_le_bytes());
+                file.write_all(&entry).unwrap();
+            }
+        }
+
+        let mut buf = ReplayBuffer::new(10, "v6");
+        let n = buf.load_from_path_impl(path.to_str().unwrap()).unwrap();
+        assert_eq!(n, 5, "v6 backward compat: expected 5 positions");
+        assert_eq!(buf.size(), 5);
+        for slot in 0..5 {
+            assert_eq!(buf.outcomes[slot], slot as f32,
+                "v6 backward compat: outcome mismatch at slot {slot}");
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Cross-encoding mismatch: v7 file with encoding="v6", load into v6w25 buffer → hard error.
+    #[test]
+    fn test_hexb_v7_encoding_mismatch_rejects() {
+        use std::env::temp_dir;
+        use std::io::Write;
+
+        let path = temp_dir().join("v7_mismatch_v6_into_v6w25.hexb");
+        {
+            let mut file = std::fs::File::create(&path).unwrap();
+            // v7 header declaring encoding "v6"
+            file.write_all(&HEXB_MAGIC.to_le_bytes()).unwrap();
+            file.write_all(&7u32.to_le_bytes()).unwrap();
+            file.write_all(&8u32.to_le_bytes()).unwrap(); // n_planes=8 (v6)
+            file.write_all(&10u64.to_le_bytes()).unwrap();
+            file.write_all(&1u64.to_le_bytes()).unwrap();
+            file.write_all(&2u32.to_le_bytes()).unwrap(); // name_len = 2
+            file.write_all(b"v6").unwrap();
+
+            // Dummy entry
+            let state_stride = 8 * 361;
+            let chain_stride = 6 * 361;
+            let policy_stride = 362;
+            let aux_stride = 361;
+            let entry_bytes = state_stride * 2 + chain_stride * 2 + policy_stride * 4 + 4 + 8 + 2
+                + aux_stride + aux_stride + 1;
+            file.write_all(&vec![0u8; entry_bytes]).unwrap();
+        }
+
+        let mut buf = ReplayBuffer::new(10, "v6w25");
+        let err = buf.load_from_path_impl(path.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("encoding mismatch"), "expected 'encoding mismatch' error, got: {err}");
+        assert!(err.contains("v6w25"), "error should mention buffer encoding v6w25: {err}");
+        assert!(err.contains("v6"), "error should mention file encoding v6: {err}");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Unknown encoding in v7 header → hard error.
+    #[test]
+    fn test_hexb_v7_unknown_encoding_rejects() {
+        use std::env::temp_dir;
+        use std::io::Write;
+
+        let path = temp_dir().join("v7_unknown_encoding.hexb");
+        {
+            let mut file = std::fs::File::create(&path).unwrap();
+            file.write_all(&HEXB_MAGIC.to_le_bytes()).unwrap();
+            file.write_all(&7u32.to_le_bytes()).unwrap();
+            file.write_all(&8u32.to_le_bytes()).unwrap();
+            file.write_all(&10u64.to_le_bytes()).unwrap();
+            file.write_all(&1u64.to_le_bytes()).unwrap();
+            let name = b"nonexistent";
+            file.write_all(&(name.len() as u32).to_le_bytes()).unwrap();
+            file.write_all(name).unwrap();
+
+            let state_stride = 8 * 361;
+            let chain_stride = 6 * 361;
+            let policy_stride = 362;
+            let aux_stride = 361;
+            let entry_bytes = state_stride * 2 + chain_stride * 2 + policy_stride * 4 + 4 + 8 + 2
+                + aux_stride + aux_stride + 1;
+            file.write_all(&vec![0u8; entry_bytes]).unwrap();
+        }
+
+        let mut buf = ReplayBuffer::new(10, "v6");
+        let err = buf.load_from_path_impl(path.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("unknown encoding"), "expected 'unknown encoding' error, got: {err}");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// v5 hard-reject unchanged.
+    #[test]
+    fn test_hexb_v5_hard_reject() {
+        use std::env::temp_dir;
+        use std::io::Write;
+
+        let path = temp_dir().join("v5_rejected.hexb");
+        {
+            let mut file = std::fs::File::create(&path).unwrap();
+            file.write_all(&HEXB_MAGIC.to_le_bytes()).unwrap();
+            file.write_all(&5u32.to_le_bytes()).unwrap();
+        }
+
+        let mut buf = ReplayBuffer::new(10, "v6");
+        let err = buf.load_from_path_impl(path.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("not supported"), "expected 'not supported' for v5, got: {err}");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Max-length encoding name round-trips (v8_canvas_realness = 18 bytes).
+    #[test]
+    fn test_hexb_v7_header_max_name() {
+        use std::env::temp_dir;
+
+        let mut buf = ReplayBuffer::new(10, "v8_canvas_realness");
+        for i in 0..10 {
+            buf.push_for_test(i as f32, 10, true);
+        }
+        let path = temp_dir().join("v7_max_name.hexb");
+        buf.save_to_path(path.to_str().unwrap()).unwrap();
+
+        let mut buf2 = ReplayBuffer::new(10, "v8_canvas_realness");
+        let n = buf2.load_from_path_impl(path.to_str().unwrap()).unwrap();
+        assert_eq!(n, 10, "max-name round-trip: expected 10 positions");
+        assert_eq!(buf2.size(), 10);
+
+        for slot in 0..10 {
+            assert_eq!(buf2.outcomes[slot], slot as f32,
+                "max-name round-trip: outcome mismatch at slot {slot}");
+        }
 
         let _ = std::fs::remove_file(path);
     }
