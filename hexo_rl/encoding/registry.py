@@ -11,7 +11,6 @@ process.
 """
 from __future__ import annotations
 
-import functools
 import pathlib
 import tomllib
 from typing import Any, Iterable, Mapping
@@ -253,8 +252,13 @@ def _build_and_validate(name: str, body: Mapping[str, Any]) -> EncodingSpec:
     )
 
 
-@functools.cache
+_REGISTRY_CACHE: dict[str, EncodingSpec] | None = None
+
+
 def _load() -> dict[str, EncodingSpec]:
+    global _REGISTRY_CACHE
+    if _REGISTRY_CACHE is not None:
+        return _REGISTRY_CACHE
     raw = tomllib.loads(_REGISTRY_TOML_PATH.read_text())
     if "encodings" not in raw or not isinstance(raw["encodings"], dict):
         raise EncodingRegistryError(
@@ -274,6 +278,7 @@ def _load() -> dict[str, EncodingSpec]:
         raise EncodingRegistryError(
             "registry validation failed:\n" + "\n".join(errors)
         )
+    _REGISTRY_CACHE = specs
     return specs
 
 
