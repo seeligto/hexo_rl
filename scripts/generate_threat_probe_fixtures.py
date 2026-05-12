@@ -263,7 +263,7 @@ def _synthetic_positions(n: int, spec: EncodingSpec, seed: int = 42) -> List[dic
         if len(far) < 4:
             continue
 
-        board = Board()
+        board = Board.with_encoding_name(spec.name)
         history: deque = deque(maxlen=HISTORY_LEN)
         state = GameState.from_board(board, history=history)
 
@@ -299,7 +299,7 @@ def _synthetic_positions(n: int, spec: EncodingSpec, seed: int = 42) -> List[dic
 
         far = list(far_base_coords)
 
-        board = Board()
+        board = Board.with_encoding_name(spec.name)
         history = deque(maxlen=HISTORY_LEN)
         state = GameState.from_board(board, history=history)
 
