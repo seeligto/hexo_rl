@@ -2,17 +2,19 @@
 Generate threat-probe fixture positions for scripts/probe_threat_logits.py.
 
 NPZ schema (fixtures/threat_probe_positions.npz):
-  states:           (N, 18, 19, 19) float16 — K=0 cluster window tensor
+  states:           (N, P, T, T) float16 — K=0 cluster window tensor
   side_to_move:     (N,) int8           — 1 = P1, -1 = P2 (current player at position)
-  ext_cell_idx:     (N,) int32          — flat index [0, 361) into 19×19 threat logit map;
-                                          the "open extension cell" of side-to-move's 3-in-a-row
+  ext_cell_idx:     (N,) int32          — flat index [0, T²) into T×T threat logit map;
+                                           the "open extension cell" of side-to-move's 3-in-a-row
   control_cell_idx: (N,) int32          — flat index of empty cell with hex-distance ≥ 4
-                                          from all stones (baseline reference cell)
+                                           from all stones (baseline reference cell)
   game_phase:       (N,) U8 string      — "early" (ply < 15), "mid" (15-49), "late" (≥ 50)
+  encoding:         (1,) U16 string     — encoding name used to generate fixtures
 
 Indexing convention:
-  ext_cell_idx = wq * 19 + wr
-  where wq = q - cq + 9, wr = r - cr + 9, (cq, cr) = centers[0] from state.to_tensor()
+  ext_cell_idx = wq * T + wr
+  where wq = q - cq + half, wr = r - cr + half, (cq, cr) = centers[0] from state.to_tensor()
+  T = trunk_size for the chosen encoding.
 
 Regeneration commands (from repo root):
   # From self-play game records (recommended for production fixtures):
@@ -45,11 +47,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from engine import Board
+from hexo_rl.encoding import all_specs, lookup
+from hexo_rl.encoding.spec import EncodingSpec
 from hexo_rl.env.game_state import GameState, HISTORY_LEN
-from hexo_rl.utils.constants import BOARD_SIZE
 from hexo_rl.utils.coordinates import axial_distance, axial_to_flat
 
-HALF: int = (BOARD_SIZE - 1) // 2  # 9
 
 # ── Geometry helpers ──────────────────────────────────────────────────────────
 
@@ -58,23 +60,23 @@ def hex_dist(q1: int, r1: int, q2: int, r2: int) -> int:
     return axial_distance((q1, r1), (q2, r2))
 
 
-def cell_to_flat(q: int, r: int, cq: int, cr: int) -> Optional[int]:
+def cell_to_flat(q: int, r: int, cq: int, cr: int, board_size: int) -> Optional[int]:
     """Convert axial (q, r) → window flat index given cluster centre (cq, cr)."""
-    return axial_to_flat(q - cq, r - cr, BOARD_SIZE)
+    return axial_to_flat(q - cq, r - cr, board_size)
 
 
 def find_control_cell(
-    stones: set, cq: int, cr: int, min_dist: int = 4
+    stones: set, cq: int, cr: int, board_size: int, half: int, min_dist: int = 4
 ) -> Optional[int]:
-    """First empty cell inside the 19×19 window with hex-dist ≥ min_dist from all stones."""
-    for wq in range(BOARD_SIZE):
-        for wr in range(BOARD_SIZE):
-            q = wq - HALF + cq
-            r = wr - HALF + cr
+    """First empty cell inside the board_size×board_size window with hex-dist ≥ min_dist from all stones."""
+    for wq in range(board_size):
+        for wr in range(board_size):
+            q = wq - half + cq
+            r = wr - half + cr
             if (q, r) in stones:
                 continue
             if all(hex_dist(q, r, sq, sr) >= min_dist for sq, sr in stones):
-                return wq * BOARD_SIZE + wr
+                return wq * board_size + wr
     return None
 
 
@@ -101,13 +103,15 @@ def _phase(ply: int) -> str:
 def _extract_position(
     board: Board,
     state: GameState,
+    spec: EncodingSpec,
 ) -> Optional[dict]:
     """Extract one position dict if side-to-move has a threat level ≥ 3."""
     tensor, centers = state.to_tensor()
     if tensor.shape[0] == 0:
         return None
 
-    k0 = tensor[0]  # (18, 19, 19) float16 — K=0 cluster window
+    trunk_size = spec.trunk_size
+    k0 = tensor[0]  # (n_source_planes, trunk_size, trunk_size) float16 — K=0 cluster window
     cq, cr = centers[0]
 
     current = board.current_player  # 1 = P1, -1 = P2
@@ -126,19 +130,20 @@ def _extract_position(
     ext_candidates.sort(key=lambda t: -t[2])
     eq, er, _ = ext_candidates[0]
 
-    ext_flat = cell_to_flat(eq, er, cq, cr)
+    ext_flat = cell_to_flat(eq, er, cq, cr, trunk_size)
     if ext_flat is None:
         return None
 
+    half = (trunk_size - 1) // 2
     stones = {(q, r) for q, r, _ in board.get_stones()}
-    ctrl_flat = find_control_cell(stones, cq, cr, min_dist=4)
+    ctrl_flat = find_control_cell(stones, cq, cr, trunk_size, half, min_dist=4)
     if ctrl_flat is None:
         # Fallback: corner of window if no cell far enough.
-        for wq, wr in [(0, 0), (0, 18), (18, 0), (18, 18)]:
-            q = wq - HALF + cq
-            r = wr - HALF + cr
+        for wq, wr in [(0, 0), (0, trunk_size - 1), (trunk_size - 1, 0), (trunk_size - 1, trunk_size - 1)]:
+            q = wq - half + cq
+            r = wr - half + cr
             if (q, r) not in stones:
-                ctrl_flat = wq * BOARD_SIZE + wr
+                ctrl_flat = wq * trunk_size + wr
                 break
     if ctrl_flat is None:
         return None
@@ -164,6 +169,7 @@ def _parse_move(token: str) -> Tuple[int, int]:
 def _sample_from_games(
     game_files: List[Path],
     n: int,
+    spec: EncodingSpec,
     seed: int = 42,
     quotas: Optional[dict] = None,
 ) -> List[dict]:
@@ -199,7 +205,7 @@ def _sample_from_games(
         except Exception:
             continue
 
-        board = Board()
+        board = Board.with_encoding_name(spec.name)
         history: deque = deque(maxlen=HISTORY_LEN)
         state = GameState.from_board(board, history=history)
 
@@ -215,7 +221,7 @@ def _sample_from_games(
             if len(phase_buckets[phase]) >= quotas[phase]:
                 continue
 
-            pos = _extract_position(board, state)
+            pos = _extract_position(board, state, spec)
             if pos is not None:
                 phase_buckets[phase].append(pos)
 
@@ -229,7 +235,7 @@ def _sample_from_games(
 # ── Synthetic position generation ────────────────────────────────────────────
 
 
-def _synthetic_positions(n: int, seed: int = 42) -> List[dict]:
+def _synthetic_positions(n: int, spec: EncodingSpec, seed: int = 42) -> List[dict]:
     """Build positions programmatically. Each has a 3-in-a-row for the current player."""
     rng = random.Random(seed)
     positions: List[dict] = []
@@ -282,7 +288,7 @@ def _synthetic_positions(n: int, seed: int = 42) -> List[dict]:
         if not ok or board.check_win():
             continue
 
-        pos = _extract_position(board, state)
+        pos = _extract_position(board, state, spec)
         if pos is not None:
             positions.append(pos)
 
@@ -316,7 +322,7 @@ def _synthetic_positions(n: int, seed: int = 42) -> List[dict]:
         if not ok or board.check_win():
             continue
 
-        pos = _extract_position(board, state)
+        pos = _extract_position(board, state, spec)
         if pos is not None:
             positions.append(pos)
 
@@ -332,7 +338,7 @@ def _synthetic_positions(n: int, seed: int = 42) -> List[dict]:
 # ── NPZ save / load ───────────────────────────────────────────────────────────
 
 
-def save_npz(positions: List[dict], output: Path) -> None:
+def save_npz(positions: List[dict], output: Path, encoding_name: str) -> None:
     if not positions:
         raise RuntimeError("No positions to save")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -343,6 +349,7 @@ def save_npz(positions: List[dict], output: Path) -> None:
         ext_cell_idx=np.array([p["ext_cell_idx"] for p in positions], dtype=np.int32),
         control_cell_idx=np.array([p["control_cell_idx"] for p in positions], dtype=np.int32),
         game_phase=np.array([p["game_phase"] for p in positions], dtype="U8"),
+        encoding=np.array([encoding_name], dtype="U16"),
     )
     print(f"Saved {len(positions)} positions → {output}")
 
@@ -400,7 +407,16 @@ def main() -> None:
         help="Quotas for each phase (e.g. --n-per-phase 7 7 6). Overrides --n-positions.",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--encoding",
+        type=str,
+        default="v6",
+        choices=[s.name for s in all_specs()],
+        help="Encoding name from registry (default: v6).",
+    )
     args = parser.parse_args()
+
+    spec = lookup(args.encoding)
 
     quotas: Optional[dict] = None
     if args.n_per_phase is not None:
@@ -412,8 +428,8 @@ def main() -> None:
         args.n_positions = sum(args.n_per_phase)
 
     if args.synthetic:
-        print("[generate_fixtures] synthetic mode")
-        positions = _synthetic_positions(args.n_positions, seed=args.seed)
+        print(f"[generate_fixtures] synthetic mode, encoding={spec.name}")
+        positions = _synthetic_positions(args.n_positions, spec, seed=args.seed)
     else:
         game_files: List[Path] = []
 
@@ -430,11 +446,11 @@ def main() -> None:
 
         if game_files:
             positions = _sample_from_games(
-                game_files, args.n_positions, seed=args.seed, quotas=quotas
+                game_files, args.n_positions, spec, seed=args.seed, quotas=quotas
             )
         else:
             print("[generate_fixtures] no game files found; falling back to synthetic mode")
-            positions = _synthetic_positions(args.n_positions, seed=args.seed)
+            positions = _synthetic_positions(args.n_positions, spec, seed=args.seed)
 
         if quotas is not None:
             counts = {"early": 0, "mid": 0, "late": 0}
@@ -455,9 +471,9 @@ def main() -> None:
                 f"[generate_fixtures] {len(positions)} positions from game records; "
                 f"supplementing with {needed} synthetic"
             )
-            positions += _synthetic_positions(needed, seed=args.seed + 1)
+            positions += _synthetic_positions(needed, spec, seed=args.seed + 1)
 
-    save_npz(positions, args.output)
+    save_npz(positions, args.output, spec.name)
 
 
 if __name__ == "__main__":

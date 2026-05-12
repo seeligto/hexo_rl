@@ -173,6 +173,7 @@ def load_model(
         filters=int(hparams.get("filters", 128)),
         res_blocks=int(hparams.get("res_blocks", 12)),
         se_reduction_ratio=int(hparams.get("se_reduction_ratio", 4)),
+        encoding=encoding_name,
     )
     Trainer._load_state_dict_strict(model, state)
     # FP32 throughout — avoids autocast-induced non-determinism at zero accuracy cost.
@@ -183,7 +184,7 @@ def load_model(
 # ── Fixture loading ───────────────────────────────────────────────────────────
 
 
-def load_positions(npz_path: Path, encoding_name: str = "v6") -> Dict:
+def load_positions(npz_path: Path, encoding_name: Optional[str] = None) -> Dict:
     """Load fixture NPZ; returns dict with numpy arrays."""
     data = np.load(str(npz_path), allow_pickle=False)
     required = {"states", "ext_cell_idx", "control_cell_idx"}
@@ -191,17 +192,29 @@ def load_positions(npz_path: Path, encoding_name: str = "v6") -> Dict:
     if missing:
         raise ValueError(f"NPZ missing required arrays: {missing}")
 
-    board_size = _get_board_size(encoding_name)
-    n_spatial = board_size * board_size
+    # Auto-detect encoding from NPZ metadata if not provided explicitly.
+    if encoding_name is None:
+        enc_arr = data.get("encoding", np.array(["v6"], dtype="U16"))
+        encoding_name = str(enc_arr[0])
+
+    from hexo_rl.encoding import lookup as _lookup_encoding
+    spec = _lookup_encoding(encoding_name)
+    trunk_size = spec.trunk_size
 
     states = data["states"]
-    if states.ndim != 4 or states.shape[2:] != (board_size, board_size):
-        # Fixture shape mismatch — v6w25 fixtures not yet generated.
-        # TODO: generate v6w25 threat-probe fixtures (scripts/generate_threat_probe_fixtures.py
-        # needs encoding-awareness) and remove this guard.
+    if states.ndim != 4 or states.shape[2:] != (trunk_size, trunk_size):
         raise ValueError(
-            f"states shape {states.shape} — expected (N, C, {board_size}, {board_size}). "
+            f"states shape {states.shape} — expected (N, C, {trunk_size}, {trunk_size}) "
+            f"for encoding {encoding_name!r}. "
             f"Fixture may be for a different encoding. "
+            f"Run: python scripts/generate_threat_probe_fixtures.py --encoding {encoding_name}"
+        )
+
+    n_planes = states.shape[1]
+    if n_planes != spec.n_source_planes and n_planes != spec.n_planes:
+        raise ValueError(
+            f"states has {n_planes} planes but encoding {encoding_name!r} expects "
+            f"{spec.n_source_planes} (source) or {spec.n_planes} (wire). "
             f"Run: python scripts/generate_threat_probe_fixtures.py --encoding {encoding_name}"
         )
 
@@ -228,6 +241,8 @@ def _probe_one(
     board_size: int,
 ) -> Tuple[float, float, float, List[int], List[int]]:
     """Forward one position in FP32; return (ext_logit, ctrl_logit, contrast, top5, top10)."""
+    # Resolve board_size from model encoding spec when available.
+    board_size = getattr(model, "board_size", board_size)
     # Slice 18→8 planes when fixture is legacy 18-plane but model expects 8-plane.
     s = state_fp16
     if s.shape[0] != model.in_channels and s.shape[0] == 18 and model.in_channels == 8:
@@ -259,11 +274,13 @@ def probe_positions(
     model: HexTacToeNet,
     positions: Dict,
     device: Optional[torch.device] = None,
-    board_size: int = 19,
+    board_size: Optional[int] = None,
 ) -> List[Dict]:
     """Run probe on all positions; return per-position result dicts."""
     if device is None:
         device = next(model.parameters()).device
+    if board_size is None:
+        board_size = getattr(model, "board_size", 19)
 
     states = positions["states"]
     ext_idxs = positions["ext_cell_idx"]
