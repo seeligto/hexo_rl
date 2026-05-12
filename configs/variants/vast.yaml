@@ -1,4 +1,4 @@
-# configs/variants/m173_v6w25_sustained_5080.yaml
+# configs/variants/vast.yaml
 #
 # §174 canonical v6w25 sustained selfplay variant for vast 5080.
 # Locked parameters from §173 P0 operator decisions.
@@ -8,7 +8,7 @@
 # Usage:
 #   python scripts/train.py \
 #     --checkpoint checkpoints/bootstrap_model_v6w25.pt \
-#     --variant m173_v6w25_sustained_5080 \
+#     --variant vast \
 #     --iterations 30000
 #
 # Dashboard active by default (omit --no-dashboard).
@@ -21,7 +21,7 @@ board_size: 25
 in_channels: 8
 
 # Training — LR + gradient
-lr: 1e-3
+lr: 0.001
 grad_clip: 1.0
 training_steps_per_game: 2.0
 max_train_burst: 8

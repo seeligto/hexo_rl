@@ -21,6 +21,12 @@ no active consumers.  Stamping them would add noise without value.
 | `checkpoints/pretrain/` | Obsolete pretrain sweep artifacts |
 | `checkpoints/w4c_smoke_v7_laptop_preflight/` | Pre-§150 laptop preflight (dead) |
 
+## Cleanup cadence
+
+Dead directories are deleted from disk during hygiene sweeps (see
+`reports/audits/repo_hygiene_2026-05-12.md`).  They do not need to persist
+on the working laptop once the audit ledger is written.
+
 ## Adding a new dead dir
 
 1. Add the prefix to `_DEAD_DIR_PATTERNS` in

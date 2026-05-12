@@ -33,6 +33,7 @@ data/
 !data/**/.gitkeep
 # Investigative/local-only — never committed
 reports/
+!reports/FINDINGS_SUMMARY.md
 archive/
 checkpoints/
 logs/
