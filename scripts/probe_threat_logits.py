@@ -594,8 +594,16 @@ def main() -> None:
             "will print a warning if used."
         ),
     )
-    parser.add_argument("--encoding", default="v6", help="Encoding name (default: v6).")
+    parser.add_argument("--encoding", default=None, help="Encoding name (auto-detected from checkpoint if omitted).")
     args = parser.parse_args()
+
+    # Auto-detect encoding from checkpoint when not explicitly supplied.
+    if args.encoding is None:
+        from hexo_rl.eval.checkpoint_loader import detect_encoding_label
+        ckpt_raw = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        state = ckpt_raw.get("model_state", ckpt_raw) if isinstance(ckpt_raw, dict) else ckpt_raw
+        args.encoding = detect_encoding_label(args.checkpoint, state)
+        print(f"[probe] auto-detected encoding: {args.encoding}")
 
     exit_code = 0
     try:
