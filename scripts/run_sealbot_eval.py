@@ -266,7 +266,7 @@ def main() -> int:
         "time_limit": args.time_limit,
         "temperature": args.temperature,
         "c_puct": args.c_puct,
-        "legal_radius": legal_radius,
+        "legal_radius": args.legal_radius,
         "random_opening_plies": args.random_opening_plies,
         "elapsed_sec": round(elapsed, 1),
         "mean_ply": float(np.mean(ply_counts)) if ply_counts else 0.0,
