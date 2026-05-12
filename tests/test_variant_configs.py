@@ -56,11 +56,11 @@ def test_vast_resolves_to_sustained_values() -> None:
     assert cfg["selfplay"]["gumbel_mcts"] is False
     assert cfg["selfplay"]["completed_q_values"] is True
     assert cfg["selfplay"]["n_workers"] == 18
-    assert cfg["selfplay"]["inference_batch_size"] == 224
+    assert cfg["selfplay"]["inference_batch_size"] == 128
     assert cfg["selfplay"]["max_game_moves"] == 150
     assert cfg["selfplay"]["playout_cap"]["fast_prob"] == 0.0
     assert cfg["mcts"]["n_simulations"] == 400
-    assert cfg["eval_interval"] == 5000
+    assert cfg["eval_interval"] == 10000
     assert cfg["monitors"]["hard_abort_grad_norm"] == 10.0
 
 

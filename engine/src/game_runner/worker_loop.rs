@@ -212,6 +212,9 @@ impl SelfPlayRunner {
             let random_opening_plies = self.random_opening_plies;
             let selfplay_rotation_enabled = self.selfplay_rotation_enabled;
             let legal_move_radius_jitter = self.legal_move_radius_jitter;
+            // §174 — curriculum radius override.  Workers read this atomic at
+            // the start of each game; `-1` means "no override".
+            let radius_override = self.radius_override.clone();
             // §171 P3 A1 reopen — Copy the EncodingSpec into each worker
             // closure. `Option<EncodingSpec>` is `Copy` (EncodingSpec derives
             // Copy/Clone), so each thread owns its own value with no shared
@@ -293,12 +296,21 @@ impl SelfPlayRunner {
                     let mut move_history: Vec<(i32, i32)> = Vec::new();
                     version_seen.clear();
 
+                    // §174: curriculum radius override takes precedence over
+                    // encoding default and jitter.  Applied after encoding setup
+                    // so it intentionally overrides the spec's canonical radius.
+                    let ro = radius_override.load(Ordering::SeqCst);
+                    if ro >= 0 {
+                        board.override_legal_move_radius(ro);
+                    }
+
                     // Phase B' v8 §152 Q2: per-game radius jitter ∈ {4, 5, 6}.
                     // §171 P3 A1 reopen — guard with `encoding.is_none()` so a v6w25 (or
                     // any future v6-family encoding) Board::with_encoding(spec) radius is
                     // not overwritten by the v6-shaped jitter range. Jitter remains active
                     // for the bare-defaults v6 path.
-                    if legal_move_radius_jitter && encoding.is_none() {
+                    // §174: jitter is skipped when curriculum override is active.
+                    if legal_move_radius_jitter && encoding.is_none() && ro < 0 {
                         const JITTER_RADII: [i32; 3] = [4, 5, 6];
                         let r = *JITTER_RADII.choose(&mut rng).unwrap();
                         board.set_legal_move_radius(r);

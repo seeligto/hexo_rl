@@ -325,6 +325,15 @@ impl PyBoard {
         Ok(())
     }
 
+    /// §174 — curriculum radius override.  Works with encoding.
+    ///
+    /// Use this for training-time radius scheduling, NOT for general board
+    /// setup.  Bypasses the `set_legal_move_radius` guard intentionally.
+    pub fn override_legal_move_radius(&mut self, radius: i32) -> PyResult<()> {
+        self.inner.override_legal_move_radius(radius);
+        Ok(())
+    }
+
     /// Read the current per-Board legal-move radius cap.
     pub fn legal_move_radius(&self) -> i32 {
         self.inner.legal_move_radius()

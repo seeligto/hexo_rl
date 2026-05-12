@@ -76,6 +76,7 @@ class WorkerPoolLike(Protocol):
     def buffer_composition(self) -> dict[str, Any]: ...
     def model_version_summary(self) -> dict[str, Any]: ...
     def per_worker_draw_rates(self) -> dict[int, float]: ...
+    def set_radius_override(self, radius: int | None) -> None: ...
 
 
 @runtime_checkable
@@ -292,6 +293,27 @@ class StepCoordinator:
         self._last_quiescence_fires = 0
         self._last_pool_overflows = 0
         self._rolling_gph = RollingGamesPerHour(t_start=clock.now())
+
+        # §174 — radius curriculum state
+        self._current_radius: int | None = self._resolve_radius(self._train_step)
+        if self._current_radius is not None and hasattr(pool, "set_radius_override"):
+            pool.set_radius_override(self._current_radius)
+
+    # ── Radius curriculum (§174) ─────────────────────────────────────────────
+
+    def _resolve_radius(self, step: int) -> int | None:
+        """Resolve current legal_move_radius from schedule.
+
+        Returns ``None`` if no schedule configured (use encoding default).
+        """
+        schedule = self.full_config.get("selfplay", {}).get("legal_move_radius_schedule")
+        if not schedule:
+            return None
+        current_radius = None
+        for entry in schedule:
+            if step >= entry["step"]:
+                current_radius = entry["radius"]
+        return current_radius
 
     # ── Read-only properties ─────────────────────────────────────────────────
 
@@ -669,6 +691,19 @@ class StepCoordinator:
                     )
                 except Exception as _tm_err:
                     self._logger.warning("tracemalloc_failed", error=str(_tm_err))
+
+            # D7b: §174 radius curriculum — check schedule at log cadence
+            if self._train_step % cfg.log_interval == 0:
+                new_radius = self._resolve_radius(self._train_step)
+                if new_radius != self._current_radius:
+                    self._current_radius = new_radius
+                    if hasattr(self.pool, "set_radius_override"):
+                        self.pool.set_radius_override(new_radius)
+                    self._logger.info(
+                        "radius_curriculum",
+                        step=self._train_step,
+                        radius=new_radius,
+                    )
 
             # D8: emit training events + pool-overflow soft warning
             if self._train_step % cfg.log_interval == 0:

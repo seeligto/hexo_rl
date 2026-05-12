@@ -85,5 +85,5 @@ eval_pipeline:
     anchor_player: checkpoint_0
     regularization: 1.0e-06
   eval_temperature: 0.5
-  eval_random_opening_plies: 4
+  eval_random_opening_plies: 0  # §174: was 4 — inflated WR by giving free positional advantage
   eval_seed_base: 42

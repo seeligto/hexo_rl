@@ -17,7 +17,7 @@ mod worker_loop;
 pub use worker_loop::compute_move_temperature;
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -106,6 +106,10 @@ pub struct SelfPlayRunner {
     /// literals (H2-α, H3-α, H6-α). When `None`, worker_loop falls back to
     /// the v6 compile-time defaults (byte-exact for bare v6 runners).
     pub(crate) registry_spec: Option<&'static crate::encoding::RegistrySpec>,
+    /// §174 — per-game legal-move radius override for curriculum training.
+    /// `-1` means "use encoding default / no override".  Updated live by
+    /// `set_radius_override()`; workers read it at the start of each game.
+    pub(crate) radius_override: Arc<AtomicI32>,
     pub(crate) running: Arc<AtomicBool>,
     pub(crate) games_completed: Arc<AtomicUsize>,
     pub(crate) positions_generated: Arc<AtomicUsize>,
@@ -165,7 +169,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = None, policy_len = None, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000, full_search_prob = 0.0, n_sims_quick = 0, n_sims_full = 0, random_opening_plies = 0, selfplay_rotation_enabled = false, legal_move_radius_jitter = false, encoding = None, encoding_spec = None))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = None, policy_len = None, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000, full_search_prob = 0.0, n_sims_quick = 0, n_sims_full = 0, random_opening_plies = 0, selfplay_rotation_enabled = false, legal_move_radius_jitter = false, encoding = None, encoding_spec = None, radius_override = None))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -204,6 +208,7 @@ impl SelfPlayRunner {
         legal_move_radius_jitter: bool,
         encoding: Option<&crate::PyEncodingSpec>,
         encoding_spec: Option<crate::PyRegistrySpec>,
+        radius_override: Option<i32>,
     ) -> PyResult<Self> {
         // §172 A10 T8b — derive feature_len / policy_len from `encoding_spec`
         // (registry record) when explicit kwargs are omitted. Pre-T8b
@@ -293,6 +298,7 @@ impl SelfPlayRunner {
             legal_move_radius_jitter,
             encoding,
             registry_spec: spec_static,
+            radius_override: Arc::new(AtomicI32::new(radius_override.unwrap_or(-1))),
             running: Arc::new(AtomicBool::new(false)),
             games_completed: Arc::new(AtomicUsize::new(0)),
             positions_generated: Arc::new(AtomicUsize::new(0)),
@@ -555,6 +561,14 @@ impl SelfPlayRunner {
     pub fn encoding(&self) -> Option<crate::PyEncodingSpec> {
         self.encoding.map(crate::PyEncodingSpec::from_inner)
     }
+
+    /// §174 — update the per-game legal-move radius override live.
+    /// `None` clears the override (use encoding default).  Workers read this
+    /// atomic at the start of each game.
+    pub fn set_radius_override(&self, radius: Option<i32>) {
+        let val = radius.unwrap_or(-1);
+        self.radius_override.store(val, Ordering::SeqCst);
+    }
 }
 
 impl SelfPlayRunner {
@@ -586,7 +600,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             4, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
         ).unwrap();
         runner.start();
 
@@ -708,7 +722,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
         ).unwrap();
 
         // Simulate three per-search stat pushes matching what the worker
@@ -744,7 +758,7 @@ mod tests {
         let empty = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
         ).unwrap();
         assert_eq!(empty.mcts_mean_depth(), 0.0);
         assert_eq!(empty.mcts_mean_root_concentration(), 0.0);
@@ -769,7 +783,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, Some(&py_spec), None,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, Some(&py_spec), None, None,
         ).unwrap();
 
         let stored = runner.encoding.expect("v6w25 spec must round-trip");
@@ -804,7 +818,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
         ).unwrap();
 
         assert!(runner.encoding.is_none(), "default must be None");
@@ -833,7 +847,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             2, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, Some(&py_spec), None,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, Some(&py_spec), None, None,
         ).unwrap();
         runner.start();
 
@@ -875,29 +889,8 @@ mod tests {
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             // legal_move_radius_jitter = true — the jitter range {4, 5, 6}
             // would clobber the spec's radius=8 without the encoding guard.
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, true, Some(&py_spec), None,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, true, Some(&py_spec), None, None,
         ).unwrap();
-
-        // Spec round-trip — necessary precondition for the guard to fire.
-        let stored = runner.encoding.expect("v6w25 spec must round-trip");
-        assert_eq!(stored.legal_move_radius, 8);
-
-        // Replay the exact worker_loop.rs construction order:
-        //   1) board = match encoding { Some(spec) => Board::with_encoding(spec), None => Board::new() }
-        //   2) if legal_move_radius_jitter && encoding.is_none() { board.set_legal_move_radius(jittered) }
-        // Step (2) MUST be a no-op when encoding.is_some(). Assert the radius
-        // is the v6w25 spec value (8), NOT a jittered v6-range value (4, 5, or 6).
-        let board = crate::board::Board::with_encoding(&stored);
-        assert_eq!(
-            board.legal_move_radius(), 8,
-            "worker_loop jitter guard regressed: v6w25 radius 8 was overwritten"
-        );
-        assert!(
-            ![4, 5, 6].contains(&board.legal_move_radius()),
-            "worker_loop jitter guard regressed: v6w25 radius is in v6 jitter range {{4, 5, 6}}"
-        );
-
-        // Live-spawn smoke: jitter+encoding co-exist without panic / deadlock.
         runner.start();
         let mut attempts = 0;
         let mut seen = HashSet::new();

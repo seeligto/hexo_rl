@@ -314,6 +314,11 @@ impl Board {
         self.cluster_window_size
     }
 
+    /// §174 — read the bound encoding spec (if any).
+    pub fn encoding_spec(&self) -> Option<&'static crate::encoding::RegistrySpec> {
+        self.encoding
+    }
+
     /// Phase B' v8 (§152 Q2): override the legal-move radius for this Board.
     ///
     /// Marks `legal_cache` dirty so the next `legal_moves_set()` rebuilds at
@@ -331,6 +336,17 @@ impl Board {
     /// case; the assertion would fire on every legitimate jitter call.
     /// See `feedback_encoding_post_mutators_audit.md`.
     pub fn set_legal_move_radius(&mut self, radius: i32) {
+        self.legal_move_radius = radius;
+        self.cache_dirty.set(true);
+    }
+
+    /// §174 — explicit curriculum radius override.  Works WITH encoding.
+    ///
+    /// Unlike `set_legal_move_radius()`, this bypasses the §173 A6 guard
+    /// and is intended for training-time radius scheduling.  The encoding's
+    /// canonical radius remains in the spec; this override affects only
+    /// `legal_moves()` for this Board instance.
+    pub fn override_legal_move_radius(&mut self, radius: i32) {
         self.legal_move_radius = radius;
         self.cache_dirty.set(true);
     }

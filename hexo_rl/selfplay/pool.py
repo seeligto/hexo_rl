@@ -637,6 +637,15 @@ class WorkerPool:
             n_workers=self.n_workers,
         )
 
+    def set_radius_override(self, radius: int | None) -> None:
+        """§174 — update the per-game legal-move radius override live.
+
+        ``None`` clears the override (use encoding default).  Propagated to
+        the Rust ``SelfPlayRunner`` atomic; workers read it at the start of
+        each game.
+        """
+        self._runner.set_radius_override(radius)
+
     def stop(self) -> None:
         self._stop_event.set()
         self._runner.stop()

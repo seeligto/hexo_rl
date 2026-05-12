@@ -44,6 +44,12 @@ selfplay:
   leaf_batch_size: 8
   max_game_moves: 150
   legal_move_radius_jitter: true
+  # §174: radius curriculum — start compact (R=5), widen as model improves.
+  legal_move_radius_schedule:
+    - {step: 0, radius: 5}
+    - {step: 50000, radius: 6}
+    - {step: 100000, radius: 7}
+    - {step: 150000, radius: 8}
   # §174: model plays from move 1 after forced (0,0). 0 disables random openings.
   random_opening_plies: 0
   playout_cap:
