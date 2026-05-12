@@ -147,7 +147,8 @@ def benchmark_inference(model: "HexTacToeNet", n_positions: int = 20_000,
     """NN throughput in batched evaluation mode."""
     device = next(model.parameters()).device
     _in_ch = getattr(model, "in_channels", 18)
-    dummy_local = torch.zeros(batch_size, _in_ch, 19, 19, dtype=torch.float32, device=device)
+    _board_size = int(getattr(model, "board_size", 19))
+    dummy_local = torch.zeros(batch_size, _in_ch, _board_size, _board_size, dtype=torch.float32, device=device)
     model.eval()
     n_batches = n_positions // batch_size
     total_positions = n_batches * batch_size
@@ -182,7 +183,8 @@ def benchmark_inference_latency(model: "HexTacToeNet", n_runs: int = 5,
     """Single-position latency (worst case for synchronous MCTS)."""
     device = next(model.parameters()).device
     _in_ch = getattr(model, "in_channels", 18)
-    dummy_local = torch.zeros(1, _in_ch, 19, 19, dtype=torch.float32, device=device)
+    _board_size = int(getattr(model, "board_size", 19))
+    dummy_local = torch.zeros(1, _in_ch, _board_size, _board_size, dtype=torch.float32, device=device)
     model.eval()
 
     def single_inference():
@@ -233,11 +235,18 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
     aug_iters = 500
     push_iters = 10_000
 
-    dummy_state = np.zeros((8, 19, 19), dtype=np.float16)
-    dummy_chain = np.zeros((6, 19, 19), dtype=np.float16)
-    dummy_policy = np.ones(362, dtype=np.float32) / 362.0
-    dummy_own = np.ones(361, dtype=np.uint8)
-    dummy_wl  = np.zeros(361, dtype=np.uint8)
+    # Encoding-aware dummy shapes — read from the buffer's own spec.
+    _spec = buffer.encoding
+    _ts = _spec.trunk_size
+    _np = _spec.n_planes
+    _plc = _spec.policy_logit_count
+    _nc = _spec.n_cells()
+
+    dummy_state = np.zeros((_np, _ts, _ts), dtype=np.float16)
+    dummy_chain = np.zeros((6, _ts, _ts), dtype=np.float16)
+    dummy_policy = np.ones(_plc, dtype=np.float32) / float(_plc)
+    dummy_own = np.ones(_nc, dtype=np.uint8)
+    dummy_wl  = np.zeros(_nc, dtype=np.uint8)
 
     # Warm-up push
     warmup(lambda: buffer.push(dummy_state, dummy_chain, dummy_policy, 0.0, dummy_own, dummy_wl), warmup_sec)
@@ -296,7 +305,8 @@ def benchmark_gpu_utilisation(model: "HexTacToeNet", n_runs: int = 5) -> Dict[st
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         model.eval()
         _in_ch = getattr(model, "in_channels", 18)
-        dummy_local = torch.zeros(64, _in_ch, 19, 19, dtype=torch.float32, device=device)
+        _board_size = int(getattr(model, "board_size", 19))
+        dummy_local = torch.zeros(64, _in_ch, _board_size, _board_size, dtype=torch.float32, device=device)
 
         util_runs: list[float] = []
         vram_runs: list[float] = []
@@ -361,62 +371,64 @@ def benchmark_worker_pool(
     # Do NOT fall back to production config (400+ sims): games would not complete
     # within the measurement window on desktop hardware.
     effective_sims = mcts_sims_override if mcts_sims_override is not None else worker_sims
-    bench_cfg = {
-        "mcts": {
-            "n_simulations": effective_sims,
-            "c_puct": float(_mcts.get("c_puct", config.get("c_puct", 1.5))),
-            "temperature_threshold_ply": int(_mcts.get("temperature_threshold_ply", config.get("temperature_threshold_ply", 30))),
-            "fpu_reduction": float(_mcts.get("fpu_reduction", 0.25)),
-            "quiescence_enabled": bool(_mcts.get("quiescence_enabled", True)),
-            "quiescence_blend_2": float(_mcts.get("quiescence_blend_2", 0.3)),
-            "dirichlet_alpha": float(_mcts.get("dirichlet_alpha", 0.3)),
-            "epsilon": float(_mcts.get("epsilon", 0.25)),
-            "dirichlet_enabled": bool(_mcts.get("dirichlet_enabled", True)),
+    # Shallow-copy the full config so encoding / model / training keys are
+    # preserved for WorkerPool / InferenceServer resolution, then override
+    # mcts + selfplay with bench-specific values.
+    bench_cfg = {**config}
+    bench_cfg["mcts"] = {
+        "n_simulations": effective_sims,
+        "c_puct": float(_mcts.get("c_puct", config.get("c_puct", 1.5))),
+        "temperature_threshold_ply": int(_mcts.get("temperature_threshold_ply", config.get("temperature_threshold_ply", 30))),
+        "fpu_reduction": float(_mcts.get("fpu_reduction", 0.25)),
+        "quiescence_enabled": bool(_mcts.get("quiescence_enabled", True)),
+        "quiescence_blend_2": float(_mcts.get("quiescence_blend_2", 0.3)),
+        "dirichlet_alpha": float(_mcts.get("dirichlet_alpha", 0.3)),
+        "epsilon": float(_mcts.get("epsilon", 0.25)),
+        "dirichlet_enabled": bool(_mcts.get("dirichlet_enabled", True)),
+    }
+    bench_cfg["selfplay"] = {
+        "n_workers": n_workers,
+        "inference_batch_size": int(_sp.get("inference_batch_size", config.get("inference_batch_size", 32))),
+        "inference_max_wait_ms": float(_sp.get("inference_max_wait_ms", config.get("inference_max_wait_ms", 8.0))),
+        "max_moves_per_game": bench_max_moves,
+        "leaf_batch_size": int(_sp.get("leaf_batch_size", 8)),
+        # Forward Gumbel / completed-Q flags so the worker-pool bench
+        # actually exercises the variant's root search path.
+        "gumbel_mcts": bool(_sp.get("gumbel_mcts", False)),
+        "gumbel_m": int(_sp.get("gumbel_m", 16)),
+        "gumbel_explore_moves": int(_sp.get("gumbel_explore_moves", 10)),
+        "completed_q_values": bool(_sp.get("completed_q_values", False)),
+        "c_visit": float(_sp.get("c_visit", 50.0)),
+        "c_scale": float(_sp.get("c_scale", 1.0)),
+        # pool.py enforces playout_cap.fast_sims as a required key (no silent
+        # defaults). The benchmark doesn't care about fast-game mixing — set
+        # fast_prob=0.0 so fast_sims is never actually consumed, and pass
+        # standard_sims=0 so SelfPlayRunner falls back to mcts.n_simulations
+        # (the value this bench used before c915004 added the required-key
+        # check). Preserves apples-to-apples comparison against the pre-c915004
+        # worker-throughput baseline.
+        "playout_cap": {
+            "fast_prob": 0.0,
+            "fast_sims": 64,
+            "standard_sims": 0,
+            # Explicitly disable move-level playout cap — all benchmark
+            # positions are full-search so pos/hr measures max throughput.
+            # pool.py defaults these to 0.0/0/0 already; listed here to
+            # document intent and prevent silent mismatch if defaults change.
+            "full_search_prob": 0.0,
+            "n_sims_quick": 0,
+            "n_sims_full": 0,
         },
-        "selfplay": {
-            "n_workers": n_workers,
-            "inference_batch_size": int(_sp.get("inference_batch_size", config.get("inference_batch_size", 32))),
-            "inference_max_wait_ms": float(_sp.get("inference_max_wait_ms", config.get("inference_max_wait_ms", 8.0))),
-            "max_moves_per_game": bench_max_moves,
-            "leaf_batch_size": int(_sp.get("leaf_batch_size", 8)),
-            # Forward Gumbel / completed-Q flags so the worker-pool bench
-            # actually exercises the variant's root search path.
-            "gumbel_mcts": bool(_sp.get("gumbel_mcts", False)),
-            "gumbel_m": int(_sp.get("gumbel_m", 16)),
-            "gumbel_explore_moves": int(_sp.get("gumbel_explore_moves", 10)),
-            "completed_q_values": bool(_sp.get("completed_q_values", False)),
-            "c_visit": float(_sp.get("c_visit", 50.0)),
-            "c_scale": float(_sp.get("c_scale", 1.0)),
-            # pool.py enforces playout_cap.fast_sims as a required key (no silent
-            # defaults). The benchmark doesn't care about fast-game mixing — set
-            # fast_prob=0.0 so fast_sims is never actually consumed, and pass
-            # standard_sims=0 so SelfPlayRunner falls back to mcts.n_simulations
-            # (the value this bench used before c915004 added the required-key
-            # check). Preserves apples-to-apples comparison against the pre-c915004
-            # worker-throughput baseline.
-            "playout_cap": {
-                "fast_prob": 0.0,
-                "fast_sims": 64,
-                "standard_sims": 0,
-                # Explicitly disable move-level playout cap — all benchmark
-                # positions are full-search so pos/hr measures max throughput.
-                # pool.py defaults these to 0.0/0/0 already; listed here to
-                # document intent and prevent silent mismatch if defaults change.
-                "full_search_prob": 0.0,
-                "n_sims_quick": 0,
-                "n_sims_full": 0,
-            },
-            # No random opening plies: skipped rows deflate pos/hr and would
-            # make the bench metric incomparable across configs.
-            "random_opening_plies": 0,
-            # InferenceServer dispatcher knobs (trace + compile_retry_20260426 Phase 2).
-            # Forwarded so bench can A/B these against the production trace path
-            # without touching variant YAMLs.
-            "trace_inference": bool(_sp.get("trace_inference", True)),
-            "compile_inference": bool(_sp.get("compile_inference", False)),
-            "compile_inference_mode": str(_sp.get("compile_inference_mode", "default")),
-            "compile_inference_dynamic": bool(_sp.get("compile_inference_dynamic", True)),
-        },
+        # No random opening plies: skipped rows deflate pos/hr and would
+        # make the bench metric incomparable across configs.
+        "random_opening_plies": 0,
+        # InferenceServer dispatcher knobs (trace + compile_retry_20260426 Phase 2).
+        # Forwarded so bench can A/B these against the production trace path
+        # without touching variant YAMLs.
+        "trace_inference": bool(_sp.get("trace_inference", True)),
+        "compile_inference": bool(_sp.get("compile_inference", False)),
+        "compile_inference_mode": str(_sp.get("compile_inference_mode", "default")),
+        "compile_inference_dynamic": bool(_sp.get("compile_inference_dynamic", True)),
     }
 
     # CUDA warm-up: force PyTorch to JIT-compile autocast kernels before workers
@@ -440,7 +452,10 @@ def benchmark_worker_pool(
     # Run one pool for the entire benchmark: warm-up + N measurement windows.
     # Previous approach created separate pools per run, so each run had its own
     # ~20-25s cold-start (no games completing), biasing the 60s window low.
-    replay = ReplayBuffer(capacity=100_000)
+    # Encoding-aware replay buffer for worker pool bench.
+    from hexo_rl.encoding import resolve_from_config as _rfc2
+    _enc_name2 = _rfc2(config.get("model", {}) or config).name
+    replay = ReplayBuffer(capacity=100_000, encoding=_enc_name2)
     try:
         pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
     except Exception as exc:
@@ -994,16 +1009,22 @@ def main() -> None:
         _compile_elapsed += compile_warmup(pool_model, device, _in_ch, _board_size,
                                            batch_sizes=(64, 1))
 
-    # Fill replay buffer with dummy data
-    buffer = ReplayBuffer(capacity=100_000)
-    _bm_own = np.ones(361, dtype=np.uint8)
-    _bm_wl  = np.zeros(361, dtype=np.uint8)
-    _bm_chain = np.zeros((6, 19, 19), dtype=np.float16)
+    # Fill replay buffer with dummy data — encoding-aware via registry spec.
+    _enc_name = _rfc(model_cfg or config).name
+    buffer = ReplayBuffer(capacity=100_000, encoding=_enc_name)
+    _spec = buffer.encoding
+    _ts = _spec.trunk_size
+    _np = _spec.n_planes
+    _plc = _spec.policy_logit_count
+    _nc = _spec.n_cells()
+    _bm_own = np.ones(_nc, dtype=np.uint8)
+    _bm_wl  = np.zeros(_nc, dtype=np.uint8)
+    _bm_chain = np.zeros((6, _ts, _ts), dtype=np.float16)
     for _ in range(10_000):
         buffer.push(
-            np.zeros((8, 19, 19), dtype=np.float16),
+            np.zeros((_np, _ts, _ts), dtype=np.float16),
             _bm_chain,
-            np.ones(362, dtype=np.float32) / 362,
+            np.ones(_plc, dtype=np.float32) / float(_plc),
             0.0,
             _bm_own, _bm_wl,
         )
