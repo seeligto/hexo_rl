@@ -195,6 +195,9 @@ def _aggregate_priors_pma(
     return (raw / s).tolist()
 
 
+from hexo_rl.utils.constants import BUFFER_CHANNELS
+
+
 class KClusterMCTSBot(BotProtocol):
     """PUCT MCTS over a v6 / v6w25 K-cluster NN policy + value head.
 
@@ -255,7 +258,7 @@ class KClusterMCTSBot(BotProtocol):
         self.temperature = float(temperature)
         self.pool_type = pool_type
         self.fpu_q = float(fpu_q)
-        self._slice_to_8 = self.model.in_channels == 8
+        self._slice_to_8 = self.model.in_channels == BUFFER_CHANNELS
 
     def reset(self) -> None:
         # K-cluster v6/v6w25 models read no Python history (planes 1-7 /

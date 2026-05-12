@@ -18,6 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from hexo_rl.utils.constants import BOARD_SIZE
+
 import numpy as np
 import structlog
 import torch
@@ -96,7 +98,7 @@ def _get_engine(checkpoint_path: str) -> Tuple[LocalInferenceEngine, int]:
     """Get cached inference engine + board_size for a checkpoint."""
     abs_path = str(Path(checkpoint_path).resolve())
     _model, _device, metadata = _get_model(checkpoint_path)
-    board_size = metadata.get("hparams", {}).get("board_size", 19)
+    board_size = metadata.get("hparams", {}).get("board_size", BOARD_SIZE)
     with _cache_lock:
         return _cache[abs_path]["engine"], board_size
 
@@ -117,7 +119,7 @@ def _build_board(moves: List[Dict[str, Any]]) -> Board:
 def _analyze_raw(
     engine: LocalInferenceEngine,
     board: Board,
-    board_size: int = 19,
+    board_size: int = BOARD_SIZE,
 ) -> Dict[str, Any]:
     """Run raw NN forward pass, return policy/value/entropy."""
     state = GameState.from_board(board)

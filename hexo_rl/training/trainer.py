@@ -38,6 +38,7 @@ from hexo_rl.utils.device import best_device
 # Perf probes use structlog directly (log.info) so they persist to JSONL even
 # when --no-dashboard is set. emit_event is dashboard-renderer fan-out only.
 from hexo_rl.training.aux_decode import decode_ownership, decode_winning_line, mask_aux_rows
+from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
     compute_aux_loss, compute_total_loss, compute_uncertainty_loss,
@@ -976,8 +977,8 @@ class Trainer:
                 model_cfg["in_channels"] = derived_in
 
         defaults = {
-            "board_size": 19, "res_blocks": 12, "filters": 128,
-            "in_channels": 8, "se_reduction_ratio": 4,
+            "board_size": BOARD_SIZE, "res_blocks": 12, "filters": 128,
+            "in_channels": BUFFER_CHANNELS, "se_reduction_ratio": 4,
         }
 
         def _explicit(key: str) -> Optional[int]:
@@ -1137,7 +1138,7 @@ class Trainer:
         label = ckpt_label.lower()
         if in_ch == 11 and n_actions == 625:
             return v8_spec()
-        if in_ch == 8:
+        if in_ch == BUFFER_CHANNELS:
             if n_actions == 626 or "v6w25" in label or "_w25" in label:
                 # Filename hint can override action-count when the head is a
                 # PMA variant whose output dim differs; in that case we trust

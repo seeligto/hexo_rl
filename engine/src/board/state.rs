@@ -40,6 +40,11 @@ pub const HALF: i32 = (BOARD_SIZE as i32 - 1) / 2; // 9
 /// Total cells in the 19×19 view window.
 pub const TOTAL_CELLS: usize = BOARD_SIZE * BOARD_SIZE; // 361
 
+/// Plane offsets in the 18-plane state tensor (§174 — eliminate bare literals).
+pub const OPP_STONE_PLANE: usize = 8;
+pub const MOVES_REMAINING_PLANE: usize = 16;
+pub const PLY_PARITY_PLANE: usize = 17;
+
 /// The three hex axis directions (positive direction only; win scan uses ±).
 pub fn hex_distance(q1: i32, r1: i32, q2: i32, r2: i32) -> i32 {
     ((q1 - q2).abs() + (q1 + r1 - q2 - r2).abs() + (r1 - r2).abs()) / 2
@@ -628,17 +633,17 @@ impl Board {
         }
         // Plane 8: opp stones
         for i in 0..TOTAL_CELLS {
-            out[8 * TOTAL_CELLS + i] = planes_2[TOTAL_CELLS + i];
+            out[OPP_STONE_PLANE * TOTAL_CELLS + i] = planes_2[TOTAL_CELLS + i];
         }
         // Plane 16: moves_remaining == 2 ? 1.0 : 0.0
         let mr_val = if self.moves_remaining == 2 { 1.0 } else { 0.0 };
         for i in 0..TOTAL_CELLS {
-            out[16 * TOTAL_CELLS + i] = mr_val;
+            out[MOVES_REMAINING_PLANE * TOTAL_CELLS + i] = mr_val;
         }
         // Plane 17: ply % 2
         let ply_val = (self.ply % 2) as f32;
         for i in 0..TOTAL_CELLS {
-            out[17 * TOTAL_CELLS + i] = ply_val;
+            out[PLY_PARITY_PLANE * TOTAL_CELLS + i] = ply_val;
         }
         debug_assert_eq!(
             out.len(),
@@ -839,7 +844,7 @@ impl Board {
             // Plane 0: my stones; Plane 8: opp stones.
             for i in 0..TOTAL_CELLS {
                 out[0 * total_cells + i] = planes_2[i];
-                out[8 * total_cells + i] = planes_2[TOTAL_CELLS + i];
+                out[OPP_STONE_PLANE * total_cells + i] = planes_2[TOTAL_CELLS + i];
             }
             // Plane 16: moves_remaining == 2 broadcast over full plane.
             let mr_val = if self.moves_remaining == 2 { 1.0 } else { 0.0 };

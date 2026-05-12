@@ -624,6 +624,7 @@ _TUNABLE_TOKENS: frozenset[str] = frozenset({
     "max_frames",          # animation/display frame count (not geometry)
     "fail_gb",             # disk-guard threshold (not geometry)
     "gn_groups",           # GroupNorm groups (NN arch knob, not encoding)
+    "gn_group",                    # §173 A7 — same (fn param)
     "epochs",              # training epoch count (tunable CLI arg)
     "n_workers",           # worker pool count (tunable, used in CPU budget)
     "budget",              # CPU thread budget expression
@@ -636,6 +637,10 @@ _TUNABLE_TOKENS: frozenset[str] = frozenset({
     "max_move",            # opening game length limit (not encoding geometry)
     "has_player_long_run", # game-rule threat probe (run-length ≠ encoding geometry)
     "hex_distance",        # game-coordinate distance function (not encoding geometry)
+    "max_pages",           # scraper page limit (infra, not geometry)
+    "jitter",              # MCTS jitter radii (tunable)
+    "stride5",             # stride-5 detector step (game-rule constant)
+    "pages",               # CLI page argument (infra)
 })
 # Guard: if a line also contains these tokens, do NOT suppress even if _TUNABLE_TOKENS hit.
 # These are high-risk encoding constants that must still flag.
@@ -714,6 +719,8 @@ _FULL_FILE_ALLOWLIST: frozenset[str] = frozenset({
     "hexo_rl/bootstrap/dataset_v6w25.py",  # §173 A7 — intentional v6w25 dataset attributes
     "hexo_rl/bootstrap/dataset_v8.py",     # §173 A7 — intentional v8 dataset attributes
     "hexo_rl/model/tf32.py",               # §173 A7 — CUDA compute-capability detection; no encoding geometry
+    "hexo_rl/utils/encoding.py",           # §174 — canonical v6/v6w25/v8 EncodingSpec factory
+    "engine/src/replay_buffer/sym_tables.rs",  # §174 — canonical static sym-table data
 })
 
 # Rule 3 — coordinate-call patterns; strip the match before scanning.
@@ -726,8 +733,9 @@ _COORD_PATTERNS: tuple[re.Pattern, ...] = (
 
 # Rule 8 — canonical-define lines are the source of truth; skip them.
 # Matches both `BOARD_SIZE: usize = 19` (no prefix) and `pub const BOARD_SIZE: usize = 19`
+# and `static SIZE19_8: Lazy<SymTables> = ...` (Rust static lazy).
 _CANONICAL_DEFINE_RE = re.compile(
-    r"^\s*(?:pub\s+(?:const\s+)?|const\s+)?"
+    r"^\s*(?:pub\s+(?:const\s+)?|const\s+|static\s+)?"
     r"(BOARD_SIZE|NUM_CELLS|BUFFER_CHANNELS|N_ACTIONS|MARGIN_M|HISTORY_LEN"
     r"|N_PLANES|N_CHAIN_PLANES|BOARD_H|BOARD_W|TOTAL_CELLS"
     # §173 A7 additions — v6w25 canonical constants + derived helper bodies
@@ -737,6 +745,10 @@ _CANONICAL_DEFINE_RE = re.compile(
     r"|CLUSTER_THRESHOLD_V6W25|LEGAL_MOVE_RADIUS_V6W25"
     r"|KEPT_PLANE_INDICES"
     r"|DEFAULT_LEGAL_MOVE_RADIUS|DEFAULT_CLUSTER_THRESHOLD"
+    # §174 additions — additional canonical constants used in production / Rust
+    r"|WIRE_CHANNELS|_V8_OFF_WINDOW_PLANE_DEFAULT|_STRIDE5_STEP"
+    r"|JITTER_RADII|MAX_PAGES"
+    r"|OPP_STONE_PLANE|MOVES_REMAINING_PLANE|PLY_PARITY_PLANE"
     # Pure infrastructure constants unrelated to encoding geometry
     r"|MAX_RETRIES"
     r")\s*[:=\[]"
@@ -972,9 +984,11 @@ def _scan_file(path: Path) -> list[tuple[int, str, list[str]]]:
         if (any(tok in line for tok in _TUNABLE_TOKENS)
                 and not any(g in line for g in _TUNABLE_SKIP_GUARD_TOKENS)):
             continue
-        # Rule 8: skip canonical-define lines in Rust only (Python canonical source is
-        # constants.py, already handled by rule 9 whole-file allowlist).
-        if suffix == ".rs" and _CANONICAL_DEFINE_RE.match(line):
+        # Rule 8: skip canonical-define lines in both Rust and Python.
+        # Python canonical source files (constants.py, encoding.py) are handled
+        # by rule 9 whole-file allowlist; this catches stray module-level
+        # canonical constants elsewhere.
+        if suffix in (".py", ".rs") and _CANONICAL_DEFINE_RE.match(line):
             continue
         # Rule 3: skip lines containing coordinate-call patterns.
         if _line_has_coord_pattern(line):
@@ -1256,6 +1270,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="directory of variant yaml files (default: ./configs/variants)",
     )
     parser.add_argument(
+        "--hardcodes-only",
+        action="store_true",
+        help="run only the hardcoded-literals scan (skips checkpoints, corpora, variants, cross-table)",
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="promote hardcode hits from warn → error",
@@ -1268,6 +1287,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     ns = parser.parse_args(list(argv) if argv is not None else None)
+    if ns.hardcodes_only:
+        report = AuditReport(strict=ns.strict)
+        _section_hardcode(report, ns.repo_root or _repo_root())
+        print(report)
+        return report.exit_code()
     report = audit(
         ns.checkpoints_dir,
         ns.corpora_dir,

@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+from hexo_rl.utils.constants import BOARD_SIZE
 
 
-def decode_ownership(arr: np.ndarray, device: torch.device, board_size: int = 19) -> torch.Tensor:
+def decode_ownership(arr: np.ndarray, device: torch.device, board_size: int = BOARD_SIZE) -> torch.Tensor:
     """Decode u8 ownership {0=P2, 1=empty, 2=P1} → float32 {-1, 0, +1}.
 
     Ships u8 to device first (4× smaller H2D transfer vs fp32) then converts
@@ -30,7 +31,7 @@ def decode_ownership(arr: np.ndarray, device: torch.device, board_size: int = 19
     return torch.from_numpy(c).to(device, non_blocking=True).float().sub_(1.0)
 
 
-def decode_winning_line(arr: np.ndarray, device: torch.device, board_size: int = 19) -> torch.Tensor:
+def decode_winning_line(arr: np.ndarray, device: torch.device, board_size: int = BOARD_SIZE) -> torch.Tensor:
     """Decode u8 winning_line → float32 {0.0, 1.0}, moved to ``device``.
 
     Args:

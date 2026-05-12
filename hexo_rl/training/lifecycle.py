@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from hexo_rl.utils.constants import BUFFER_CHANNELS
+
 import structlog
 import torch
 
@@ -51,7 +53,7 @@ def build_inference_model(
     board_size         = _registry_resolve(trainer.config).trunk_size
     res_blocks         = int(trainer.config.get("res_blocks",         12))
     filters            = int(trainer.config.get("filters",            128))
-    in_channels        = int(trainer.config.get("in_channels",         8))
+    in_channels        = int(trainer.config.get("in_channels",         BUFFER_CHANNELS))
     se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
     input_channels     = trainer.config.get("input_channels", None)
 

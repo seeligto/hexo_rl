@@ -8,7 +8,7 @@ import numpy as np
 import structlog
 
 from engine import Board
-from hexo_rl.env.game_state import GameState, BOARD_SIZE, _compute_chain_planes
+from hexo_rl.env.game_state import GameState, BOARD_SIZE, HISTORY_LEN, _compute_chain_planes
 
 log = structlog.get_logger()
 
@@ -56,7 +56,7 @@ def replay_game_to_triples(
             # Chain planes: computed from most-recent stone planes (plane 0 = cur, plane 8 = opp).
             chain_planes[t]         = _compute_chain_planes(
                 tensor[target_k, 0].astype(np.float32),
-                tensor[target_k, 8].astype(np.float32),
+                tensor[target_k, HISTORY_LEN].astype(np.float32),
             ).astype(np.float16) / 6.0
             policies[t, target_idx] = 1.0
             outcomes[t]             = 1.0 if state.current_player == winner else -1.0

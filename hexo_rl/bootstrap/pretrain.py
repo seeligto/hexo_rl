@@ -42,7 +42,7 @@ from hexo_rl.training.losses import (
 )
 from hexo_rl.training.checkpoints import get_base_model, save_full_checkpoint, save_inference_weights
 from hexo_rl.encoding import resolve_from_config as _registry_resolve_cfg
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.augment.luts import get_policy_scatters
 
@@ -1097,7 +1097,7 @@ def pretrain() -> None:
         "encoding_resolved",
         encoding=encoding,
         board_size=_registry_resolve_cfg(config).trunk_size,
-        in_channels=int(config.get("in_channels", 8)),
+        in_channels=int(config.get("in_channels", BUFFER_CHANNELS)),
         filters=int(config.get("filters", 128)),
         res_blocks=int(config.get("res_blocks", 12)),
         gpool_indices=gpool_indices,

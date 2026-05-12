@@ -248,7 +248,7 @@ class GameState:
             cur_stones = current_views[k][0]
             opp_stones = current_views[k][1]
             tensor[k, 0] = cur_stones
-            tensor[k, 8] = opp_stones
+            tensor[k, HISTORY_LEN] = opp_stones
 
             # Historical timesteps t-1 … t-7 (deque[-1]=most recent, deque[-t]=t steps back)
             for t in range(1, HISTORY_LEN):
@@ -257,7 +257,7 @@ class GameState:
                 prior = history[-t]
                 if k < len(prior.views):
                     tensor[k, t]     = prior.views[k][0]  # prior my-stones
-                    tensor[k, 8 + t] = prior.views[k][1]  # prior opp-stones
+                    tensor[k, HISTORY_LEN + t] = prior.views[k][1]  # prior opp-stones
                 # if the prior state had fewer clusters, leave the planes as zero
 
         return tensor, centers

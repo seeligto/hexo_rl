@@ -42,5 +42,8 @@ N_ACTIONS_V8: int = NUM_CELLS_V8  # 625
 # HTTT rule baseline; replaces v6's r=5 cap (§145 Option α').
 LEGAL_MOVE_RADIUS_V8: int = 8
 
+# AlphaZero history length (current + 7 prior timesteps).
+HISTORY_LEN: int = 8
+
 # bbox dilation margin — equals LEGAL_MOVE_RADIUS_V8.
 MARGIN_M_V8: int = 8

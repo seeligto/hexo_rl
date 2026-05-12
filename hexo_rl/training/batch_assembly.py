@@ -23,7 +23,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 import structlog
 
-from hexo_rl.utils.constants import BUFFER_CHANNELS
+from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS, NUM_CELLS
 
 log = structlog.get_logger(__name__)
 
@@ -41,7 +41,7 @@ class BatchBuffers:
 
     Spatial shapes are encoding-derived (not v6-fixed): pass ``trunk_size``
     to :func:`allocate_batch_buffers` to size for v6w25 (25) / v8 (25);
-    the default ``trunk_size=19`` keeps v6 behaviour for legacy callers.
+    the default ``trunk_size=BOARD_SIZE`` keeps v6 behaviour for legacy callers.
     """
     states: np.ndarray          # (B, 8, T, T) float16 (T = trunk_size)
     chain_planes: np.ndarray    # (B, 6, T, T) float16
@@ -56,7 +56,7 @@ class BatchBuffers:
 def allocate_batch_buffers(
     batch_size: int,
     n_actions: int,
-    trunk_size: int = 19,
+    trunk_size: int = BOARD_SIZE,
     aux_stride: Optional[int] = None,
 ) -> BatchBuffers:
     """Allocate shared batch arrays once at startup.
@@ -64,8 +64,8 @@ def allocate_batch_buffers(
     Args:
         batch_size: Expected batch size from training config.
         n_actions:  Number of policy logits (N_ACTIONS constant).
-        trunk_size: Spatial dim for state/chain/aux planes (v6=19,
-                    v6w25=25, v8=25). Default 19 = v6, preserves
+        trunk_size: Spatial dim for state/chain/aux planes (v6=BOARD_SIZE,
+                    v6w25=25, v8=25). Default BOARD_SIZE = v6, preserves
                     backward-compat for callers that have not migrated.
         aux_stride: Flat length per aux plane (`trunk_size**2` unless
                     overridden). Currently unused by the pre-allocated
@@ -137,7 +137,7 @@ def load_pretrained_buffer(
     )
     t0 = time.time()
     data = np.load(pretrained_path, mmap_mode="r")
-    board_size = config.get("board_size", 19)
+    board_size = config.get("board_size", BOARD_SIZE)
     pre_states   = data["states"]    # (T, 8, board_size, board_size) float16
     pre_policies = data["policies"]  # (T, policy_logit_count) float32
     pre_outcomes = data["outcomes"]  # (T,) float32
@@ -243,7 +243,7 @@ def _augment_recent_rows(
     sym_indices = np.random.randint(0, 12, size=n)
 
     states_f32 = s_r.astype(np.float32)
-    if board_size == 19:
+    if board_size == BOARD_SIZE:
         # v6 fast path — Rust kernel is hardcoded to 19×19.
         states_f32 = _engine.apply_symmetries_batch(states_f32, sym_indices.tolist())
         s_r = states_f32.astype(np.float16)

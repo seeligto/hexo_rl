@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Sequence
 
 import numpy as np
+from hexo_rl.utils.constants import HISTORY_LEN
 
 # Mirrors game_state._HEX_AXES — do not reorder.
 _AXES = ((1, 0), (0, 1), (1, -1))
@@ -85,7 +86,7 @@ def compute_axis_fractions_from_states(states: np.ndarray) -> dict[str, float]:
     Aggregates pairs across all N positions.
     """
     cur = (states[:, 0] > 0).astype(np.uint8)  # (N, H, W)
-    opp = (states[:, 8] > 0).astype(np.uint8)  # (N, H, W)
+    opp = (states[:, HISTORY_LEN] > 0).astype(np.uint8)  # (N, H, W)
     H, W = cur.shape[1], cur.shape[2]
 
     fracs: list[float] = []
