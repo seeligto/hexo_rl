@@ -147,7 +147,8 @@ def benchmark_inference(model: "HexTacToeNet", n_positions: int = 20_000,
     """NN throughput in batched evaluation mode."""
     device = next(model.parameters()).device
     _in_ch = getattr(model, "in_channels", 18)
-    dummy_local = torch.zeros(batch_size, _in_ch, 19, 19, dtype=torch.float32, device=device)
+    _board_size = int(getattr(model, "board_size", 19))
+    dummy_local = torch.zeros(batch_size, _in_ch, _board_size, _board_size, dtype=torch.float32, device=device)
     model.eval()
     n_batches = n_positions // batch_size
     total_positions = n_batches * batch_size
@@ -182,7 +183,8 @@ def benchmark_inference_latency(model: "HexTacToeNet", n_runs: int = 5,
     """Single-position latency (worst case for synchronous MCTS)."""
     device = next(model.parameters()).device
     _in_ch = getattr(model, "in_channels", 18)
-    dummy_local = torch.zeros(1, _in_ch, 19, 19, dtype=torch.float32, device=device)
+    _board_size = int(getattr(model, "board_size", 19))
+    dummy_local = torch.zeros(1, _in_ch, _board_size, _board_size, dtype=torch.float32, device=device)
     model.eval()
 
     def single_inference():
@@ -233,11 +235,18 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
     aug_iters = 500
     push_iters = 10_000
 
-    dummy_state = np.zeros((8, 19, 19), dtype=np.float16)
-    dummy_chain = np.zeros((6, 19, 19), dtype=np.float16)
-    dummy_policy = np.ones(362, dtype=np.float32) / 362.0
-    dummy_own = np.ones(361, dtype=np.uint8)
-    dummy_wl  = np.zeros(361, dtype=np.uint8)
+    # Encoding-aware dummy shapes — read from the buffer's own spec.
+    _spec = buffer.encoding
+    _ts = _spec.trunk_size
+    _np = _spec.n_planes
+    _plc = _spec.policy_logit_count
+    _nc = _spec.n_cells()
+
+    dummy_state = np.zeros((_np, _ts, _ts), dtype=np.float16)
+    dummy_chain = np.zeros((6, _ts, _ts), dtype=np.float16)
+    dummy_policy = np.ones(_plc, dtype=np.float32) / float(_plc)
+    dummy_own = np.ones(_nc, dtype=np.uint8)
+    dummy_wl  = np.zeros(_nc, dtype=np.uint8)
 
     # Warm-up push
     warmup(lambda: buffer.push(dummy_state, dummy_chain, dummy_policy, 0.0, dummy_own, dummy_wl), warmup_sec)
@@ -296,7 +305,8 @@ def benchmark_gpu_utilisation(model: "HexTacToeNet", n_runs: int = 5) -> Dict[st
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
         model.eval()
         _in_ch = getattr(model, "in_channels", 18)
-        dummy_local = torch.zeros(64, _in_ch, 19, 19, dtype=torch.float32, device=device)
+        _board_size = int(getattr(model, "board_size", 19))
+        dummy_local = torch.zeros(64, _in_ch, _board_size, _board_size, dtype=torch.float32, device=device)
 
         util_runs: list[float] = []
         vram_runs: list[float] = []
@@ -440,7 +450,10 @@ def benchmark_worker_pool(
     # Run one pool for the entire benchmark: warm-up + N measurement windows.
     # Previous approach created separate pools per run, so each run had its own
     # ~20-25s cold-start (no games completing), biasing the 60s window low.
-    replay = ReplayBuffer(capacity=100_000)
+    # Encoding-aware replay buffer for worker pool bench.
+    from hexo_rl.encoding import resolve_from_config as _rfc2
+    _enc_name2 = _rfc2(config.get("model", {}) or config).name
+    replay = ReplayBuffer(capacity=100_000, encoding=_enc_name2)
     try:
         pool = WorkerPool(model, bench_cfg, device, replay, n_workers=n_workers)
     except Exception as exc:
@@ -994,16 +1007,22 @@ def main() -> None:
         _compile_elapsed += compile_warmup(pool_model, device, _in_ch, _board_size,
                                            batch_sizes=(64, 1))
 
-    # Fill replay buffer with dummy data
-    buffer = ReplayBuffer(capacity=100_000)
-    _bm_own = np.ones(361, dtype=np.uint8)
-    _bm_wl  = np.zeros(361, dtype=np.uint8)
-    _bm_chain = np.zeros((6, 19, 19), dtype=np.float16)
+    # Fill replay buffer with dummy data — encoding-aware via registry spec.
+    _enc_name = _rfc(model_cfg or config).name
+    buffer = ReplayBuffer(capacity=100_000, encoding=_enc_name)
+    _spec = buffer.encoding
+    _ts = _spec.trunk_size
+    _np = _spec.n_planes
+    _plc = _spec.policy_logit_count
+    _nc = _spec.n_cells()
+    _bm_own = np.ones(_nc, dtype=np.uint8)
+    _bm_wl  = np.zeros(_nc, dtype=np.uint8)
+    _bm_chain = np.zeros((6, _ts, _ts), dtype=np.float16)
     for _ in range(10_000):
         buffer.push(
-            np.zeros((8, 19, 19), dtype=np.float16),
+            np.zeros((_np, _ts, _ts), dtype=np.float16),
             _bm_chain,
-            np.ones(362, dtype=np.float32) / 362,
+            np.ones(_plc, dtype=np.float32) / float(_plc),
             0.0,
             _bm_own, _bm_wl,
         )

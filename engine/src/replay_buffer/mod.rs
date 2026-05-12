@@ -293,6 +293,14 @@ impl ReplayBuffer {
 
     #[getter]
     pub fn capacity(&self) -> usize { self.capacity }
+
+    /// Return the encoding spec driving this buffer's geometry.
+    /// §174: enables Python consumers (benchmark.py, dashboard) to query
+    /// trunk_size / n_planes / policy_logit_count without hardcoding.
+    #[getter]
+    pub fn encoding(&self) -> crate::PyRegistrySpec {
+        crate::PyRegistrySpec { inner: self.encoding }
+    }
 }
 
 /// Non-PyO3 helpers used by Rust integration tests in `engine/tests/`.
