@@ -72,8 +72,8 @@ def resolve_checkpoints(args: argparse.Namespace) -> list[Path]:
 
 
 def main() -> None:
+    from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
     from hexo_rl.eval.evaluator import Evaluator
-    from hexo_rl.training.trainer import Trainer
 
     args = parse_args()
 
@@ -104,13 +104,13 @@ def main() -> None:
 
     records: list[dict] = []
     for ckpt in ckpts:
-        trainer = Trainer.load_checkpoint(
-            ckpt,
-            checkpoint_dir="checkpoints",
-            device=device,
-            fallback_config=cfg,
-        )
-        evaluator = Evaluator(trainer.model, device, cfg)
+        # Encoding-aware load: avoids Trainer.load_checkpoint raising on
+        # scattered board_size mismatch when base configs carry board_size=19
+        # but the checkpoint is v6w25 (§173 eval-fix).
+        model, spec, label = load_model_with_encoding(ckpt, device)
+        cfg["encoding"] = label
+        cfg.pop("board_size", None)  # let registry decide
+        evaluator = Evaluator(model, device, cfg)
         result = evaluator.evaluate_vs_sealbot(
             n_games=int(args.n_games),
             time_limit=float(args.time_limit),
@@ -128,6 +128,7 @@ def main() -> None:
             "draw_count": int(result.draw_count),
             "colony_wins": int(result.colony_wins),
             "device": str(device),
+            "encoding": label,
             "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         }
         records.append(rec)
