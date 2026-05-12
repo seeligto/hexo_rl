@@ -61,10 +61,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
+from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
 from hexo_rl.training.trainer import Trainer
-from hexo_rl.utils.constants import BUFFER_CHANNELS, KEPT_PLANE_INDICES
 
 # BOARD_SIZE is now encoding-derived; see _get_board_size() below.
 # Hard-coded 19 removed per §173 eval-fix.
@@ -91,13 +90,6 @@ def _get_board_size(encoding_name: str) -> int:
     from hexo_rl.encoding import lookup as _lookup_encoding
     spec = _lookup_encoding(encoding_name)
     return spec.board_size
-
-
-def _get_policy_logit_count(encoding_name: str) -> int:
-    """Resolve policy_logit_count from encoding registry."""
-    from hexo_rl.encoding import lookup as _lookup_encoding
-    spec = _lookup_encoding(encoding_name)
-    return spec.policy_logit_count
 
 
 def _set_determinism() -> None:
@@ -165,7 +157,9 @@ def load_model(
     state = normalize_model_state_dict_keys(state)
     hparams = Trainer._infer_model_hparams(state)
 
-    in_channels = int(hparams.get("in_channels", 8))
+    from hexo_rl.encoding import lookup as _lookup_encoding
+    spec = _lookup_encoding(encoding_name)
+    in_channels = int(hparams.get("in_channels", spec.n_planes))
     board_size = _get_board_size(encoding_name)
     model = HexTacToeNet(
         board_size=board_size,
@@ -243,10 +237,20 @@ def _probe_one(
     """Forward one position in FP32; return (ext_logit, ctrl_logit, contrast, top5, top10)."""
     # Resolve board_size from model encoding spec when available.
     board_size = getattr(model, "board_size", board_size)
-    # Slice 18→8 planes when fixture is legacy 18-plane but model expects 8-plane.
+    # Slice source planes → wire planes when fixture carries the full source tensor
+    # (n_source_planes) but the model expects the sliced wire format (n_planes).
     s = state_fp16
-    if s.shape[0] != model.in_channels and s.shape[0] == 18 and model.in_channels == 8:
-        s = s[KEPT_PLANE_INDICES]
+    if s.shape[0] != model.in_channels:
+        from hexo_rl.encoding import lookup as _lookup_encoding
+        spec = _lookup_encoding(model.encoding)
+        if s.shape[0] == spec.n_source_planes and model.in_channels == spec.n_planes:
+            s = s[list(spec.kept_plane_indices)]
+        else:
+            raise ValueError(
+                f"Fixture has {s.shape[0]} planes but model expects {model.in_channels}; "
+                f"encoding {model.encoding!r} expects {spec.n_source_planes} source "
+                f"or {spec.n_planes} wire planes."
+            )
     x = torch.from_numpy(s.astype(np.float32)).unsqueeze(0).to(device)
 
     with torch.no_grad():
@@ -761,6 +765,9 @@ def main() -> None:
 
     except SystemExit:
         raise
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        sys.exit(130)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         import traceback
