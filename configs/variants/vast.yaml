@@ -52,7 +52,7 @@ mcts:
   n_simulations: 400
 
 # Eval — n=100 per §173 P0 decision #1
-eval_interval: 5000
+eval_interval: 10000
 
 eval_pipeline:
   opponents:
