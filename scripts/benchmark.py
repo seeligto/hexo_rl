@@ -371,62 +371,64 @@ def benchmark_worker_pool(
     # Do NOT fall back to production config (400+ sims): games would not complete
     # within the measurement window on desktop hardware.
     effective_sims = mcts_sims_override if mcts_sims_override is not None else worker_sims
-    bench_cfg = {
-        "mcts": {
-            "n_simulations": effective_sims,
-            "c_puct": float(_mcts.get("c_puct", config.get("c_puct", 1.5))),
-            "temperature_threshold_ply": int(_mcts.get("temperature_threshold_ply", config.get("temperature_threshold_ply", 30))),
-            "fpu_reduction": float(_mcts.get("fpu_reduction", 0.25)),
-            "quiescence_enabled": bool(_mcts.get("quiescence_enabled", True)),
-            "quiescence_blend_2": float(_mcts.get("quiescence_blend_2", 0.3)),
-            "dirichlet_alpha": float(_mcts.get("dirichlet_alpha", 0.3)),
-            "epsilon": float(_mcts.get("epsilon", 0.25)),
-            "dirichlet_enabled": bool(_mcts.get("dirichlet_enabled", True)),
+    # Shallow-copy the full config so encoding / model / training keys are
+    # preserved for WorkerPool / InferenceServer resolution, then override
+    # mcts + selfplay with bench-specific values.
+    bench_cfg = {**config}
+    bench_cfg["mcts"] = {
+        "n_simulations": effective_sims,
+        "c_puct": float(_mcts.get("c_puct", config.get("c_puct", 1.5))),
+        "temperature_threshold_ply": int(_mcts.get("temperature_threshold_ply", config.get("temperature_threshold_ply", 30))),
+        "fpu_reduction": float(_mcts.get("fpu_reduction", 0.25)),
+        "quiescence_enabled": bool(_mcts.get("quiescence_enabled", True)),
+        "quiescence_blend_2": float(_mcts.get("quiescence_blend_2", 0.3)),
+        "dirichlet_alpha": float(_mcts.get("dirichlet_alpha", 0.3)),
+        "epsilon": float(_mcts.get("epsilon", 0.25)),
+        "dirichlet_enabled": bool(_mcts.get("dirichlet_enabled", True)),
+    }
+    bench_cfg["selfplay"] = {
+        "n_workers": n_workers,
+        "inference_batch_size": int(_sp.get("inference_batch_size", config.get("inference_batch_size", 32))),
+        "inference_max_wait_ms": float(_sp.get("inference_max_wait_ms", config.get("inference_max_wait_ms", 8.0))),
+        "max_moves_per_game": bench_max_moves,
+        "leaf_batch_size": int(_sp.get("leaf_batch_size", 8)),
+        # Forward Gumbel / completed-Q flags so the worker-pool bench
+        # actually exercises the variant's root search path.
+        "gumbel_mcts": bool(_sp.get("gumbel_mcts", False)),
+        "gumbel_m": int(_sp.get("gumbel_m", 16)),
+        "gumbel_explore_moves": int(_sp.get("gumbel_explore_moves", 10)),
+        "completed_q_values": bool(_sp.get("completed_q_values", False)),
+        "c_visit": float(_sp.get("c_visit", 50.0)),
+        "c_scale": float(_sp.get("c_scale", 1.0)),
+        # pool.py enforces playout_cap.fast_sims as a required key (no silent
+        # defaults). The benchmark doesn't care about fast-game mixing — set
+        # fast_prob=0.0 so fast_sims is never actually consumed, and pass
+        # standard_sims=0 so SelfPlayRunner falls back to mcts.n_simulations
+        # (the value this bench used before c915004 added the required-key
+        # check). Preserves apples-to-apples comparison against the pre-c915004
+        # worker-throughput baseline.
+        "playout_cap": {
+            "fast_prob": 0.0,
+            "fast_sims": 64,
+            "standard_sims": 0,
+            # Explicitly disable move-level playout cap — all benchmark
+            # positions are full-search so pos/hr measures max throughput.
+            # pool.py defaults these to 0.0/0/0 already; listed here to
+            # document intent and prevent silent mismatch if defaults change.
+            "full_search_prob": 0.0,
+            "n_sims_quick": 0,
+            "n_sims_full": 0,
         },
-        "selfplay": {
-            "n_workers": n_workers,
-            "inference_batch_size": int(_sp.get("inference_batch_size", config.get("inference_batch_size", 32))),
-            "inference_max_wait_ms": float(_sp.get("inference_max_wait_ms", config.get("inference_max_wait_ms", 8.0))),
-            "max_moves_per_game": bench_max_moves,
-            "leaf_batch_size": int(_sp.get("leaf_batch_size", 8)),
-            # Forward Gumbel / completed-Q flags so the worker-pool bench
-            # actually exercises the variant's root search path.
-            "gumbel_mcts": bool(_sp.get("gumbel_mcts", False)),
-            "gumbel_m": int(_sp.get("gumbel_m", 16)),
-            "gumbel_explore_moves": int(_sp.get("gumbel_explore_moves", 10)),
-            "completed_q_values": bool(_sp.get("completed_q_values", False)),
-            "c_visit": float(_sp.get("c_visit", 50.0)),
-            "c_scale": float(_sp.get("c_scale", 1.0)),
-            # pool.py enforces playout_cap.fast_sims as a required key (no silent
-            # defaults). The benchmark doesn't care about fast-game mixing — set
-            # fast_prob=0.0 so fast_sims is never actually consumed, and pass
-            # standard_sims=0 so SelfPlayRunner falls back to mcts.n_simulations
-            # (the value this bench used before c915004 added the required-key
-            # check). Preserves apples-to-apples comparison against the pre-c915004
-            # worker-throughput baseline.
-            "playout_cap": {
-                "fast_prob": 0.0,
-                "fast_sims": 64,
-                "standard_sims": 0,
-                # Explicitly disable move-level playout cap — all benchmark
-                # positions are full-search so pos/hr measures max throughput.
-                # pool.py defaults these to 0.0/0/0 already; listed here to
-                # document intent and prevent silent mismatch if defaults change.
-                "full_search_prob": 0.0,
-                "n_sims_quick": 0,
-                "n_sims_full": 0,
-            },
-            # No random opening plies: skipped rows deflate pos/hr and would
-            # make the bench metric incomparable across configs.
-            "random_opening_plies": 0,
-            # InferenceServer dispatcher knobs (trace + compile_retry_20260426 Phase 2).
-            # Forwarded so bench can A/B these against the production trace path
-            # without touching variant YAMLs.
-            "trace_inference": bool(_sp.get("trace_inference", True)),
-            "compile_inference": bool(_sp.get("compile_inference", False)),
-            "compile_inference_mode": str(_sp.get("compile_inference_mode", "default")),
-            "compile_inference_dynamic": bool(_sp.get("compile_inference_dynamic", True)),
-        },
+        # No random opening plies: skipped rows deflate pos/hr and would
+        # make the bench metric incomparable across configs.
+        "random_opening_plies": 0,
+        # InferenceServer dispatcher knobs (trace + compile_retry_20260426 Phase 2).
+        # Forwarded so bench can A/B these against the production trace path
+        # without touching variant YAMLs.
+        "trace_inference": bool(_sp.get("trace_inference", True)),
+        "compile_inference": bool(_sp.get("compile_inference", False)),
+        "compile_inference_mode": str(_sp.get("compile_inference_mode", "default")),
+        "compile_inference_dynamic": bool(_sp.get("compile_inference_dynamic", True)),
     }
 
     # CUDA warm-up: force PyTorch to JIT-compile autocast kernels before workers
