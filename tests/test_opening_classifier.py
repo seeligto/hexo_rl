@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import pytest
 
-from hexo_rl.bootstrap.opening_classifier import (
+from tests.fixtures.opening_classifier import (
     angular_gap_sectors,
     classify_opening,
     hex_dist,
