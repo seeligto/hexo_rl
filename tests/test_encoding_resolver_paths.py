@@ -114,3 +114,53 @@ def test_expand_auto_paths_partial_replacement():
     expand_auto_paths(cfg, spec)
     assert cfg["corpus_npz"] == "data/bootstrap_corpus_v8.npz"
     assert cfg["bootstrap_anchor"] == "checkpoints/custom.pt"
+
+
+# ---------------------------------------------------------------------------
+# CG23 — drift guard: resolver dicts must cover every registered encoding
+# (or be explicitly allowlisted as operator-curated not-yet-shipped).
+# P62 / bucket 07. §176 P2.
+# ---------------------------------------------------------------------------
+
+# Encodings registered in registry.toml that have no corpus/anchor yet.
+# These are intentional gaps (v7/v7e30 retired before resolver entries landed).
+# Add entries to _CORPUS_PATHS / _ANCHOR_PATHS in hexo_rl/encoding/resolvers.py
+# and remove from this allowlist when the artifacts ship.
+_RESOLVER_GAPS_ALLOWLIST: frozenset[str] = frozenset({"v7", "v7e30"})
+
+
+def test_corpus_paths_covers_all_registered_encodings() -> None:
+    """Adding a registered encoding without a resolver corpus path
+    silently breaks dataset loading. Guard against future drift.
+
+    CG23 in bucket 07.
+    """
+    from hexo_rl.encoding import all_specs
+    from hexo_rl.encoding.resolvers import _CORPUS_PATHS
+
+    registered = {s.name for s in all_specs()}
+    pathed = set(_CORPUS_PATHS.keys())
+    missing = registered - pathed - _RESOLVER_GAPS_ALLOWLIST
+    assert not missing, (
+        f"Encodings registered but missing corpus paths: {missing}. "
+        "Add entries to _CORPUS_PATHS in hexo_rl/encoding/resolvers.py "
+        "or add to _RESOLVER_GAPS_ALLOWLIST if corpus intentionally absent."
+    )
+
+
+def test_anchor_paths_covers_all_registered_encodings() -> None:
+    """Same drift guard for bootstrap anchor paths.
+
+    CG23 in bucket 07.
+    """
+    from hexo_rl.encoding import all_specs
+    from hexo_rl.encoding.resolvers import _ANCHOR_PATHS
+
+    registered = {s.name for s in all_specs()}
+    pathed = set(_ANCHOR_PATHS.keys())
+    missing = registered - pathed - _RESOLVER_GAPS_ALLOWLIST
+    assert not missing, (
+        f"Encodings registered but missing anchor paths: {missing}. "
+        "Add entries to _ANCHOR_PATHS in hexo_rl/encoding/resolvers.py "
+        "or add to _RESOLVER_GAPS_ALLOWLIST if anchor intentionally absent."
+    )
