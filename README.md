@@ -146,6 +146,45 @@ filename-inferred encoding + `DeprecationWarning`.
 
 ---
 
+## Common workflows
+
+Every Makefile target below picks up the encoding from the checkpoint itself
+(metadata-first, shape-inference fallback). Pass `EVAL_ENCODING=` /
+`SMOKE_ENCODING=` / `PRETRAIN_ENCODING=` only when you need to override
+the auto-detection (e.g. when fine-tuning a v7full ckpt under a v6w25
+architecture).
+
+```bash
+# Cold pretrain — new encoding from scratch
+make pretrain PRETRAIN_ENCODING=v6w25 PRETRAIN_EPOCHS=30 PRETRAIN_LR=2e-3
+
+# Transfer v6 / v7full weights into v6w25 architecture (shape-match, drop
+# the policy / opp_reply heads, Xavier-init the rest).
+make transfer TRANSFER_SOURCE=checkpoints/bootstrap_model.pt \
+              TRANSFER_OUTPUT=checkpoints/bootstrap_model_v6w25_transfer.pt
+
+# Fine-tune the transferred ckpt under cosine restart
+make pretrain PRETRAIN_CHECKPOINT=checkpoints/bootstrap_model_v6w25_transfer.pt \
+              PRETRAIN_EPOCHS=15 PRETRAIN_LR=5e-4 PRETRAIN_ETA_MIN=5e-5
+
+# Eval vs SealBot (encoding auto-detected from the checkpoint)
+make eval.sealbot EVAL_CHECKPOINT=checkpoints/bootstrap_model_v6w25_transfer_ft.pt \
+                  EVAL_N=200
+
+# Self-play smoke (mcts / argmax / both)
+make selfplay.smoke SMOKE_CHECKPOINT=checkpoints/bootstrap_model_v6w25_transfer_ft.pt \
+                    SMOKE_N=20 SMOKE_MODE=both
+
+# Launch sustained self-play training from a chosen bootstrap
+make train BOOTSTRAP=checkpoints/bootstrap_model_v6w25_transfer_ft.pt VARIANT=vast
+```
+
+`make help` lists every target. `BOOTSTRAP=` is the canonical knob for
+`make train` / `train.bg` / `train.dashboard`; the older
+`CHECKPOINT_BOOTSTRAP=` is kept as an alias.
+
+---
+
 ## Performance
 
 **Reference hardware:** Ryzen 7 8845HS + RTX 4060 Laptop, 14 workers, LTO + native CPU.

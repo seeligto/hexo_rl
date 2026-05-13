@@ -57,6 +57,7 @@ make sweep.dryrun     # validate orchestration with synthetic eval (no GPU)
 # Training
 make train            # train with web + terminal dashboard (default)
 make train DASHBOARD=0  # train without dashboard
+make train BOOTSTRAP=checkpoints/foo.pt VARIANT=vast  # §174 W3 — canonical bootstrap knob
 make train.bg         # background training (logs to logs/)
 make train.stop       # stop background training
 make train.status     # check if running, show recent log
@@ -65,12 +66,22 @@ make train.smoke      # 200-step smoke test
 make dash.open        # open web dashboard in browser
 
 # Eval
-make eval             # run eval pipeline (see configs/eval.yaml)
+make eval             # legacy: CKPT=latest, N_GAMES=100, SIMS=128
+make eval.sealbot EVAL_CHECKPOINT=ckpt.pt EVAL_N=200  # §174 W3 — encoding auto-detect; EVAL_ENCODING= to override
 # Eval game diversity: eval_temperature, eval_random_opening_plies, eval_seed_base in configs/eval.yaml (§80)
+
+# Self-play smoke (§174 W3)
+make selfplay.smoke SMOKE_CHECKPOINT=ckpt.pt SMOKE_N=20 SMOKE_MODE=both  # mcts | argmax | both
 
 # Corpus & pretrain
 make corpus.export    # export raw cache to data/bootstrap_corpus.npz
-make pretrain         # full bootstrap pretrain (15 epochs)
+make pretrain                                          # 15 epochs, encoding from configs/model.yaml
+make pretrain PRETRAIN_ENCODING=v6w25 PRETRAIN_EPOCHS=30 PRETRAIN_LR=2e-3  # cold-start a new encoding
+make pretrain PRETRAIN_CHECKPOINT=ckpt.pt PRETRAIN_LR=5e-4  # fine-tune (encoding auto-detected from --resume ckpt)
+
+# Transfer weights into a new encoding (§174 W3)
+make transfer TRANSFER_SOURCE=checkpoints/bootstrap_model.pt \
+              TRANSFER_OUTPUT=checkpoints/bootstrap_model_v6w25_transfer.pt
 ```
 
 Run `make help` for the complete list of targets.
