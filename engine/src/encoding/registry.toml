@@ -157,7 +157,10 @@ notes                   = "§150 30-epoch v7 retrain; identical wire format to v
 
 # ---------------------------------------------------------------------------
 # v6w25 — K-cluster 25×25 windows, matched-perception variant.
-# §170 P4 P1 canonical for pretrain+eval+matched-MCTS. Selfplay deferred to α.
+# §174 retired as selfplay anchor — 3 bootstrap recipes (e30 / e50 / v6→v6w25
+# transfer FT) all failed viability gate at R=8 MCTS-128. Pretrain+eval+
+# matched-MCTS pin LIFTED. Retained as future re-entry target; §175 escalates
+# to v6 sustained (100K steps, n=100 SealBot eval).
 # board_size widens to 25 per A2 §3.2 + A1 §6.11 (canvas semantics: canvas
 # == cluster window for K-cluster encodings).
 # ---------------------------------------------------------------------------
@@ -182,7 +185,7 @@ sym_table_id            = "size_25"
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
 schema_version          = 2
-notes                   = "§170 P4 P1 canonical for pretrain+eval+matched-MCTS; selfplay blocked on α."
+notes                   = "§174 retired as selfplay anchor (3 bootstrap recipes failed viability gate at R=8 MCTS-128). Pretrain+eval+matched-MCTS pin LIFTED. Retained as future re-entry target."
 
 # ---------------------------------------------------------------------------
 # v8 — bbox-of-stones 25×25, 11 planes (history + 3 aux).
