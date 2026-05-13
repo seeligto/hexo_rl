@@ -232,8 +232,8 @@ evaluator, or MCTS):
   `completed_q_values: false` so the training loss defaults to CE against
   visit counts. `c_visit: 50`, `c_scale: 1.0` when enabled.
 - Mixed precision: `torch.cuda.amp.autocast()` + `GradScaler`
-- `torch.compile()`: currently disabled (CUDA graph thread-local conflict with shared inference+training model). Re-enable when architecture allows separate models.
-- Batch size: 256 (fits in RTX 3070 8GB with FP16)
+- `torch.compile()`: re-enabled at §116 (reduce-overhead). Production self-play uses **trace** (not compile) per §124 — `selfplay.trace_inference` (default true) is the InferenceServer fast path; compile and trace deliver the same selfplay throughput within noise, trace wins on simplicity (no Dynamo guard cost, no cudagraph TLS thread issue). See `docs/rules/perf-targets.md`.
+- Batch size: 256 (fits in RTX 3070 8 GB with FP16; vast 5080 / 4060 Max-Q have additional headroom)
 
 ### Checkpointing
 

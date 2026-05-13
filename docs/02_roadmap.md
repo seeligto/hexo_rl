@@ -162,7 +162,9 @@ See `docs/rules/perf-targets.md` for current bench floors
 
 ---
 
-## Phase 4.0 — Self-Play RL (CURRENT)
+## Phase 4.0 — Self-Play RL
+
+**Status:** ACTIVE on §175 v6 sustained (100K steps, n=100 SealBot eval). §174 v6w25 sustained CLOSED 2026-05-13 as ESCALATED — three v6w25 bootstrap recipes (30-ep, e50, v6→v6w25 transfer FT) all failed selfplay viability gate at R=8 MCTS-128. Root cause is at the argmax-degeneracy / selfplay-interaction layer, not the corpus or loss layer. v6w25 retained as future re-entry target once a selfplay-friendly bootstrap recipe is found. See sprint log §174.
 
 **Goal**: Run the distributed self-play loop continuously to produce training data from the bootstrapped model checkpoint.
 
@@ -195,7 +197,7 @@ The split-responsibility architecture is fully in place:
   285,762 positions (was 193,972). C1 contrast: −0.046 → +0.360 (+0.406). Head-to-head
   vs old bootstrap: 67.0% WR. SealBot WR: 18.7% (128 sims, 0.5s). Phase 4.5 deferred
   pending outcome of Phase 4.0 sustained run from bootstrap-v6.
-- [ ] **Sustained training run** — 24-48 hour run from bootstrap-v6 (`checkpoints/bootstrap_model.pt`, 8-plane, §134), monitor for policy entropy collapse, value loss plateau
+- [~] **Sustained training run** — attempted twice in §174 on v6w25 (e30 + e50 + transfer FT), all aborted at the selfplay viability gate. §175 active: 100K-step sustained from `bootstrap_model.pt` (v6 anchor) with matched cosine schedule and n=100 SealBot eval cadence. Monitors: policy entropy, value loss plateau, G3/G4/G5 inherited gates.
 - [ ] **Q2 ablation** — value aggregation strategy: min vs mean vs attention (highest-priority open question)
 - [ ] **Q40 — MCTS subtree reuse** (`docs/06_OPEN_QUESTIONS.md`).
   Re-root + §100 resolution. Gate: channel-drop verdict + audit C
@@ -260,20 +262,8 @@ selfplay onto multi-window K-cluster encodings (v6w25 + future).
   `phase4.5/m173_alpha_multiwindow` (2026-05-11). Full design:
   `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`;
   sprint log: `docs/07_PHASE4_SPRINT_LOG.md` §173.
-- [ ] **§174 — v6w25 sustained smoke under α** —
-  Inherited gates: G3/G4/G5 from §170 P4 P1. Eval n=100 (locked from
-  P0). Eval interval: 5000 (locked). Train:selfplay ratio 2:1
-  (locked). Buffer growth 500K @ step 250K (locked). Sustained
-  bootstrap: `bootstrap_model_v6w25.pt`. Arena anchor:
-  `bootstrap_model_v6w25.pt` static.
-  - **PREREQUISITE: HEXB v7 format bump** — on-disk replay buffer
-    format needs encoding-name header field. v6w25 first persist would
-    fail or silently corrupt without this. Scope: extend
-    `persist.rs` format, version detection on load, migration path
-    for legacy HEXB v6 buffers. ~1 day wall. Land before §174.
-  - **PREREQUISITE: v6w25 anchor verification** — A8 cold smoke
-    G3/G4/G5 must PASS. If FAIL, scope bootstrap retrain as §174
-    side-task.
+- [x] **§174 — v6w25 sustained smoke under α** — CLOSED 2026-05-13 as ESCALATED. Three bootstrap recipes (30-ep, e50, v6→v6w25 transfer FT) failed selfplay viability gate at R=8 MCTS-128 (median 6-9 plies; 0% MCTS-128 WR vs SealBot at random_plies=0). Root cause is at the argmax-degeneracy / selfplay-interaction layer, not corpus or loss layer (opening fractions match v6 within 1pp; 30-ep achieves the largest absolute improvement over its uniform-policy floor of any v6/v7full/v6w25 bootstrap). HEXB v7 format bump was NOT required — v6w25 buffer persisted in existing HEXB v6 format. Infrastructure landed: encoding auto-detect (W1), G4 eval-time wiring (Track 2), Makefile encoding overrides, v6→v6w25 transfer script. Forward: §175 v6 sustained. v6w25 retained for future re-entry. See sprint log §174.
+- [ ] **§175 — v6 sustained** — 100K steps from `bootstrap_model.pt` (v6 anchor). Matched cosine LR schedule inherited from §174 vast.yaml. n=100 SealBot eval cadence. Inherited gates: G3/G4/G5 from §170 P4 P1.
 
 ---
 

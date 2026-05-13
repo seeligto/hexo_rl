@@ -12,7 +12,7 @@ There is an active human community with existing openings and strategies. The in
 
 1. Play at or beyond top human level through self-play
 2. Serve as a research tool for the community to explore openings
-3. Be trained on consumer hardware (AMD Ryzen 7 3700x, RTX 3070, 48GB RAM)
+3. Be trained on consumer hardware (current primary host: vast.ai 5080 + Ryzen 9 9900X; dev: laptop Ryzen 7 8845HS + RTX 4060 Max-Q; legacy reference: desktop Ryzen 7 3700x + RTX 3070, 48GB RAM)
 
 ---
 
@@ -56,7 +56,7 @@ Rust exposes its API to Python via **PyO3**. Import as: `from engine import MCTS
 ## Key design decisions already made
 
 - **Board representation**: axial (cube) hex coordinates internally; offset 2D array for tensor input
-- **State tensor**: 8 channels — 2×4 history planes (post-§131; meta planes 16/17 dropped)
+- **State tensor**: 8 channels — 2×4 history planes (KEPT_PLANE_INDICES = [0,1,2,3,8,9,10,11] from the 18-plane index space; post-§131; meta planes 16/17 dropped). Encoding registry (`engine/src/encoding/registry.toml`) is canonical for v6 / v6w25 / v7full / v8 / v8_canvas_realness — §172.
 - **Network**: ResNet-12 with 128 filters, SE blocks on every residual block (reduction ratio 4); policy head → `board_size² + 1` logits; value head → dual-pooling (global avg+max → FC), BCE loss
 - **Auxiliary loss**: opponent reply prediction head (weight 0.15)
 - **MCTS**: batched leaf evaluation — leaves queued across N parallel games, single GPU forward pass per batch

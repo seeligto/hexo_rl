@@ -17,20 +17,18 @@
 
 ## Active (Phase 4.0)
 
+Entries previously listed here as strikethrough (Q17, Q8, Q25, Q33, Q37) are now in the Resolved table above only. The Active table tracks open work.
+
 | # | Question | Experiment Design | Estimated Cost | Priority |
 |---|---|---|---|---|
-| ~~Q17~~ | ~~Phase 4.0 self-play mode collapse — root cause and remediation~~ | **RESOLVED 2026-04-10** — Dirichlet ported to `engine/src/game_runner/` (commit `71d7e6e`). Verified via `debug_prior_trace` (commit `4a3149e`). Awaiting §71 checklist walk before sustained run. See sprint log §73. | done | resolved |
-| Q2 | Value aggregation: min vs mean vs attention | Train 4 variants, compare value MSE + win rate | ~4 GPU-days | HIGH — unblocked now Q17 resolved |
+| Q2 | Value aggregation: min vs mean vs attention | Train 4 variants, compare value MSE + win rate | ~4 GPU-days | HIGH |
 | Q3 | Optimal K (number of cluster windows) | Ablation K=2,3,4,6 | ~6 GPU-days | MEDIUM |
-| ~~Q8~~ | ~~First-player advantage in value training~~ | **RESOLVED 2026-04-22 (auto, corpus fix)** — POSITION_END=50 + broken Elo read; fixed in §114. | done | resolved |
-| ~~Q25~~ | ~~Worker throughput variance: 24-plane NN latency + IQR spike~~ | **RESOLVED 2026-04-16** — §97 reverted the 24-plane payload. The 24-plane-specific variance hypothesis is moot. A separate post-§97 bench artifact (warmup-design 0-position windows) is tracked in §98 action items, not as a research question. | done | resolved |
 | Q27 | Attention hijacking (reframed post Probe 1b): C2/C3 miss was synthetic-fixture artifact; no active regression against real-fixture baseline | Monitor sustained-run probe against v6 fixture; reopen probes 2/3 only on regression | 0 GPU-days (watch) | WATCH — reframed 2026-04-19, see §106 |
 | Q32 | Threat-scalar magnitude vs policy-ranking decoupling on bootstrap: contrast flips negative on real fixture yet policy still routes 60% top-5 | Track across sustained runs; correlate threat-head logit drift with C2/C3 on real-fixture probe | 0 GPU-days (watch) | WATCH — bookkeeping only |
-| ~~Q33~~ | ~~Self-play policy-target entropy at bootstrap strength — 20K `pe_self ≈ 5.35` driving mixed-batch noise hypothesis~~ | **RESOLVED 2026-04-21 (non-pathology).** Q33-C2 (sprint §112, `reports/q33c2_augmentation_discriminator_2026-04-21.md`): disabling augmentation does not drop `pe_self`; fixed point is distribution, not augmentation. | done | resolved |
-| ~~Q37~~ | ~~Trainer-update-path hypothesis for `pe_self` fixed point~~ | **RESOLVED 2026-04-21 (non-pathology).** Q33-C2 rules out the augmentation mask branch; distribution-shift reading has direct empirical support. See sprint §112. | done | resolved |
 | Q40 | MCTS subtree reuse: re-root vs reset per move | Path C phased: Phase 1 ship `advance_to_child` at current sims (full=600, quick=100), §100 preserved conservatively; Phase 2 recalibrate to full=400/quick=50 after smoke+probe pass | ~2-4 dev days (Rust port + bench) | MEDIUM — channel-drop gate satisfied §131/§135; gated on Q45 cost-benefit re-derivation before implementation |
 | Q45 | Subtree reuse (Q40) cost-benefit re-derivation post-§131: does smaller H2D tensor change the audit B verdict? | Re-run subtree reuse audit B sim-share measurement on bootstrap-v6 at production sim counts; recompute ROI in skipped-NN-evals. §131 NN inference uplift (+10.2%) means each skipped eval is worth ~10% less wall-time; conversely smaller tensor weakens the dispatch-bound hypothesis. | ~4 GPU-hr | MEDIUM (gates Q40 implementation) |
 | Q-§162a | Stride-5 abort retired in §162. P90 metric retained as passive event field. Re-enable abort requires recalibration tied to current encoding/radius — old P90=4 threshold was R=5/cluster=5 specific. If stride-5 spam returns post-encoding-migration, re-instrument before re-enabling abort logic. | Monitor stride5_run_p90 event field in event logs | 0 GPU-days | WATCH |
+| Q-§174 | v6w25 selfplay-interaction failure: three bootstrap recipes (30-ep, e50, v6→v6w25 transfer FT) all fail at R=8 MCTS-128 despite normal loss surface and matched opening fractions. What recipe (policy-head ablation, sharper Dirichlet, multi-window curriculum, value-head warm-start) unlocks v6w25 selfplay? | Defer until §175 v6 sustained returns. Compare §175 trajectory against §174 v6w25 failure points to isolate which interaction breaks. | ~3-5 GPU-days | MEDIUM — gated on §175 baseline |
 
 **Q33 (2026-04-21, WATCH, see sprint §109):** The diag-20K report read
 `policy_entropy_selfplay ≈ 5.35` as evidence that MCTS visit targets were
