@@ -76,9 +76,11 @@ eval_pipeline:
       model_sims: 128
       opponent_sims: 128
 
-# Corpus resolved by encoding registry: v6 → data/bootstrap_corpus.npz
+# Explicit v6 corpus path — vast's data/bootstrap_corpus.npz was overwritten
+# with v6w25 data during §174 (resolvers._CORPUS_PATHS["v6"] points there).
+# data/bootstrap_corpus_v6.npz is the canonical v6 19×19 corpus (2.4 GB).
 mixing:
-  pretrained_buffer_path: "<auto>"
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
 
 monitors:
   hard_abort_grad_norm: 10.0
