@@ -237,3 +237,60 @@ def test_pool_init_rejects_both_playout_caps():
     }
     with pytest.raises(ValueError, match="mutually exclusive"):
         WorkerPool(model, bad_cfg, device, buffer, n_workers=1)
+
+
+# ── P21: set_radius_override integration (§176) ───────────────────────────────
+
+_MINIMAL_CFG = {
+    "mcts": {
+        "n_simulations": 1,
+        "c_puct": 1.0,
+        "temperature_threshold_ply": 8,
+    },
+    "selfplay": {
+        "n_workers": 1,
+        "playout_cap": {
+            "fast_sims": 1,
+            "fast_prob": 0.0,
+            "standard_sims": 1,
+        },
+    },
+}
+
+
+def _make_pool() -> tuple["WorkerPool", "MagicMock"]:
+    """Construct a WorkerPool on CPU and replace _runner with a MagicMock.
+
+    The pool is never started — we only test the Python delegation path.
+    Returns (pool, mock_runner).
+    """
+    from unittest.mock import MagicMock
+
+    device = torch.device("cpu")
+    model = HexTacToeNet(board_size=19, in_channels=8, filters=32, res_blocks=2).to(device)
+    buffer = ReplayBuffer(capacity=100)
+    pool = WorkerPool(model, _MINIMAL_CFG, device, buffer, n_workers=1)
+    mock_runner = MagicMock()
+    pool._runner = mock_runner
+    return pool, mock_runner
+
+
+def test_set_radius_override_apply() -> None:
+    """set_radius_override(int) must forward the value to _runner (§176 P21 — apply)."""
+    pool, mock_runner = _make_pool()
+    pool.set_radius_override(7)
+    mock_runner.set_radius_override.assert_called_once_with(7)
+
+
+def test_set_radius_override_clear() -> None:
+    """set_radius_override(None) must forward None to _runner (§176 P21 — clear)."""
+    pool, mock_runner = _make_pool()
+    pool.set_radius_override(None)
+    mock_runner.set_radius_override.assert_called_once_with(None)
+
+
+def test_set_radius_override_default() -> None:
+    """Without calling set_radius_override, _runner.set_radius_override is never
+    called — workers use the encoding default (§176 P21 — default path)."""
+    _, mock_runner = _make_pool()
+    mock_runner.set_radius_override.assert_not_called()
