@@ -12031,3 +12031,72 @@ Two distinct fields, two distinct config sources:
 Pipeline build path (`hexo_rl/eval/pipeline_setup.py:52`) loads `configs/eval.yaml` directly — separate from `scripts/train.py`'s base-config list — so the eval.yaml value reaches the evaluator. Deep-merge from any variant `eval_pipeline:` block is applied on top (none in vast.yaml).
 
 Conclusion: the §168 → §174 sealbot WR drop (14.5% → 0%) is fully explained by `eval_random_opening_plies` 4 → 0. With 4 random plies the model got free positional diversity that masked policy/value weaknesses; with 0 the model plays a fully-deterministic MCTS opening and SealBot's preparation lands cleanly. No code fix required — the eval.yaml flip is already in place.
+
+---
+
+## §174 — v6w25 sustained: bootstrap investigation + escalation — CLOSED 2026-05-13
+
+### Verdict: ESCALATE to v6 sustained (§175)
+
+Three v6w25 bootstraps tested (30-epoch, e50, v6→v6w25 transfer FT). None
+clears selfplay viability gate (6–9 plies at R=8 MCTS-128). Radius
+compression hypothesis falsified (smokes were already at R=8).
+
+| Bootstrap | SealBot MCTS-128 | Selfplay median plies |
+|---|---|---|
+| 30-epoch | 0% (0/200) | 6 |
+| e50 | 10% (10/100, artifact-suspect) | 6 |
+| transfer FT | 0% (0/200) | 8 |
+
+Root cause (from `reports/s174_v6w25_investigation.md`): the loss surface
+is normal — v6w25 30-ep achieves 3.96 nats improvement over uniform (best
+of v6 / v7full / v6w25 by that measure) and matches v7full value-loss
+trajectory. Opening-fraction starvation hypothesis (H1) is refuted: ply ≤
+10 fraction 16.09% (v6w25) vs 17.15% (v6) — gap is 1.06pp, not the
+multi-× gap predicted. The collapse is at the **argmax-degeneracy /
+selfplay-interaction layer**, not at the corpus or loss layer. Transfer
+recipe inherited the v6 trunk but lost opening knowledge in the
+re-initialised policy FC.
+
+### Infrastructure landed (Track 2)
+
+- Encoding auto-detect across `make pretrain` / `make eval` / `make
+  selfplay.smoke` / `make transfer` (W1 — checkpoint metadata is
+  authoritative; CLI flag overrides when ambiguous).
+- G4 value-head |max| band check wired into every `run_evaluation`
+  round (`_g4_value_head_band_check`, structlog WARNING on out-of-band).
+- v6 → v6w25 transfer script (`scripts/transfer_v6_to_v6w25.py`).
+- vast.yaml audited clean: LR 1e-3, eval_interval 10000,
+  random_opening_plies 0 on both selfplay and eval paths.
+- Makefile encoding-override knobs (`PRETRAIN_ENCODING`, `EVAL_ENCODING`,
+  `SMOKE_ENCODING`, `TRANSFER_SOURCE`, `TRANSFER_OUTPUT`).
+
+### Reports
+
+- `reports/s174_v6w25_investigation.md` — opening fractions, policy-head
+  capacity ratio, loss decomposition vs v6 / v7full, entropy normalised
+  against `log(K)` floor.
+- `reports/s174_bootstrap_investigation.md` — vast eval matrix (e30,
+  e50, transfer FT) vs SealBot at random_plies=0.
+- `reports/s174_bootstrap_fix.md` — transfer recipe + Xavier-init policy
+  FC + drop-and-restart fine-tune.
+
+### Available checkpoints (post-§174)
+
+| Name | Epochs | Encoding | Use |
+|---|---|---|---|
+| `bootstrap_model_v6w25.pt` (e30) | 30 | v6w25 | retained for analysis; not §175 anchor |
+| `bootstrap_model_v6w25_e50.pt` | 50 | v6w25 | G4 marginal fail; dominated |
+| `bootstrap_model_v6w25_transfer_ft.pt` | 15 ft | v6w25 | 0% MCTS-128; retained for analysis |
+| `bootstrap_model_v7full.pt` | 30 | v7full | §150 anchor (17.4% n=500); not §175 anchor |
+| `bootstrap_model.pt` (v6) | 30 | v6 | **§175 anchor** |
+
+### Forward: §175 v6 sustained
+
+Recipe: 100K steps, n=100 SealBot eval, matched cosine LR schedule
+inherited from §174 vast.yaml. Selfplay encoding v6 (single-window 19×19,
+existing path). v6w25 retained as a future re-entry target once a
+selfplay-friendly bootstrap recipe is found — current evidence says the
+fix is at the policy/value head and selfplay-interaction layer, not the
+corpus layer. Tracking: see §175 sprint log entry.
+
