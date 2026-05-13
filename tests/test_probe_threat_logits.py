@@ -30,14 +30,28 @@ BOARD_SIZE = 19
 HALF = 9
 
 
-def _bootstrap_is_pre_p3() -> bool:
+def _bootstrap_is_v6() -> bool:
+    """True iff bootstrap_model.pt matches v6 shape: 8 input planes, 362-logit policy.
+
+    The synthetic fixture in :func:`_build_synthetic_positions` is v6-only
+    (board_size=19 hardcoded). When the bootstrap is v6w25 / v8 / etc., the
+    fixture-driven probe tests cannot run — they skip rather than fail.
+    """
     if not BOOTSTRAP_CKPT.exists():
         return False
     try:
         import torch as _torch
-        sd = _torch.load(BOOTSTRAP_CKPT, map_location="cpu", weights_only=True)
-        w = sd.get("trunk.input_conv.weight")
-        return w is not None and w.dim() == 4 and int(w.shape[1]) == 18
+        ckpt = _torch.load(BOOTSTRAP_CKPT, map_location="cpu", weights_only=False)
+        sd = ckpt.get("model_state", ckpt) if isinstance(ckpt, dict) else ckpt
+        first = sd.get("trunk.input_conv.weight")
+        pol = sd.get("policy_fc.weight")
+        if first is None or pol is None:
+            return False
+        return (
+            first.dim() == 4
+            and int(first.shape[1]) == 8       # v6 wire-format input planes
+            and int(pol.shape[0]) == 362       # v6 policy logits (361 cells + pass)
+        )
     except Exception:
         return False
 
@@ -181,8 +195,8 @@ def _build_synthetic_positions(n: int = 5) -> dict:
 
 
 @pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists() or _bootstrap_is_pre_p3(),
-    reason="bootstrap_model.pt not found or is pre-P3 (18-plane); skip until 8-plane bootstrap trained",
+    not BOOTSTRAP_CKPT.exists() or not _bootstrap_is_v6(),
+    reason="bootstrap_model.pt missing or not v6 (synthetic fixture is v6-only)",
 )
 def test_probe_shapes_and_sanity() -> None:
     """Probe produces correct shapes and bounded, finite logits."""
@@ -192,14 +206,7 @@ def test_probe_shapes_and_sanity() -> None:
     device = torch.device("cpu")
     model = load_model(BOOTSTRAP_CKPT, device=device)
 
-    # Skip if checkpoint has wrong in_channels (old 24-channel checkpoint).
-    first_conv = next(iter(model.parameters()))
-    if first_conv.shape[1] != 18:
-        pytest.skip(
-            f"checkpoint has {first_conv.shape[1]}-channel input; "
-            "regenerate with 18-channel model"
-        )
-
+    # Outer skipif already gated on v6 shape (in_channels=8, 362-logit policy).
     positions = _build_synthetic_positions(n=5)
 
     assert positions["states"].ndim == 4
@@ -222,8 +229,8 @@ def test_probe_shapes_and_sanity() -> None:
 
 
 @pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists() or _bootstrap_is_pre_p3(),
-    reason="bootstrap_model.pt not found or is pre-P3 (18-plane); skip until 8-plane bootstrap trained",
+    not BOOTSTRAP_CKPT.exists() or not _bootstrap_is_v6(),
+    reason="bootstrap_model.pt missing or not v6 (synthetic fixture is v6-only)",
 )
 def test_probe_aggregate_structure() -> None:
     """Aggregate dict has expected keys and finite values."""
@@ -232,9 +239,6 @@ def test_probe_aggregate_structure() -> None:
 
     device = torch.device("cpu")
     model = load_model(BOOTSTRAP_CKPT, device=device)
-    first_conv = next(iter(model.parameters()))
-    if first_conv.shape[1] != 18:
-        pytest.skip(f"checkpoint has {first_conv.shape[1]}-channel input; regenerate")
     positions = _build_synthetic_positions(n=3)
     results = probe_positions(model, positions, device=device)
     agg = aggregate(results)
@@ -253,8 +257,8 @@ def test_probe_aggregate_structure() -> None:
 
 
 @pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists() or _bootstrap_is_pre_p3(),
-    reason="bootstrap_model.pt not found or is pre-P3 (18-plane); skip until 8-plane bootstrap trained",
+    not BOOTSTRAP_CKPT.exists() or not _bootstrap_is_v6(),
+    reason="bootstrap_model.pt missing or not v6 (synthetic fixture is v6-only)",
 )
 def test_probe_deterministic() -> None:
     """Two consecutive probes of the same checkpoint produce identical results."""
@@ -266,9 +270,6 @@ def test_probe_deterministic() -> None:
 
     _set_determinism()
     model1 = load_model(BOOTSTRAP_CKPT, device=device)
-    first_conv = next(iter(model1.parameters()))
-    if first_conv.shape[1] != 18:
-        pytest.skip(f"checkpoint has {first_conv.shape[1]}-channel input; regenerate")
     results1 = probe_positions(model1, positions, device=device)
     agg1 = aggregate(results1)
 
@@ -443,8 +444,8 @@ def test_load_baseline_json_absent() -> None:
 
 
 @pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists() or _bootstrap_is_pre_p3(),
-    reason="bootstrap_model.pt not found or is pre-P3 (18-plane); skip until 8-plane bootstrap trained",
+    not BOOTSTRAP_CKPT.exists() or not _bootstrap_is_v6(),
+    reason="bootstrap_model.pt missing or not v6 (synthetic fixture is v6-only)",
 )
 def test_probe_report_renders() -> None:
     """format_report produces non-empty markdown with three conditions listed."""
@@ -453,9 +454,6 @@ def test_probe_report_renders() -> None:
 
     device = torch.device("cpu")
     model = load_model(BOOTSTRAP_CKPT, device=device)
-    first_conv = next(iter(model.parameters()))
-    if first_conv.shape[1] != 18:
-        pytest.skip(f"checkpoint has {first_conv.shape[1]}-channel input; regenerate")
     positions = _build_synthetic_positions(n=3)
     results = probe_positions(model, positions, device=device)
     agg = aggregate(results)
@@ -473,8 +471,8 @@ def test_probe_report_renders() -> None:
 
 
 @pytest.mark.skipif(
-    not BOOTSTRAP_CKPT.exists() or _bootstrap_is_pre_p3(),
-    reason="bootstrap_model.pt not found or is pre-P3 (18-plane); skip until 8-plane bootstrap trained",
+    not BOOTSTRAP_CKPT.exists() or not _bootstrap_is_v6(),
+    reason="bootstrap_model.pt missing or not v6 (synthetic fixture is v6-only)",
 )
 def test_probe_baseline_comparison() -> None:
     """format_report includes baseline column when baseline_agg provided."""
@@ -483,9 +481,6 @@ def test_probe_baseline_comparison() -> None:
 
     device = torch.device("cpu")
     model = load_model(BOOTSTRAP_CKPT, device=device)
-    first_conv = next(iter(model.parameters()))
-    if first_conv.shape[1] != 18:
-        pytest.skip(f"checkpoint has {first_conv.shape[1]}-channel input; regenerate")
     positions = _build_synthetic_positions(n=2)
     results = probe_positions(model, positions, device=device)
     agg = aggregate(results)

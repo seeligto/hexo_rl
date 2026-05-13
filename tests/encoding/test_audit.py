@@ -152,9 +152,15 @@ def test_audit_legacy_ckpt_warns(tmp_path: Path):
 
 
 def test_audit_hardcode_hit_errors_under_strict(tmp_path: Path):
-    """Synthetic source file with `BOARD_SIZE = 19` + no allowlist marker:
+    """Synthetic source file with a bare `19` literal + no allowlist marker:
     - default → exit 1 (warn)
-    - --strict → exit 2 (error)"""
+    - --strict → exit 2 (error)
+
+    Uses `width = 19` rather than `BOARD_SIZE = 19` because the latter
+    matches `_CANONICAL_DEFINE_RE` and is intentionally allowlisted (it
+    IS a canonical define). The test needs a literal that the audit's
+    rule 8 will NOT skip.
+    """
     ckpts = tmp_path / "checkpoints"
     corpora = tmp_path / "data"
     variants = tmp_path / "variants"
@@ -171,8 +177,8 @@ def test_audit_hardcode_hit_errors_under_strict(tmp_path: Path):
     _make_corpus_with_sidecar(corpora / "bootstrap_corpus_v6.npz", encoding_name="v6")
     _make_variant(variants / "clean_v6.yaml", encoding_name="v6")
 
-    # The bare literal — not allowlisted.
-    (hxrl_root / "foo.py").write_text("BOARD_SIZE = 19\n")
+    # Bare literal in a non-canonical variable name — should flag.
+    (hxrl_root / "foo.py").write_text("width = 19\n")
 
     # Default → warn → exit 1.
     rep = audit(ckpts, corpora, variants, strict=False, repo_root=src_root)
