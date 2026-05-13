@@ -370,16 +370,6 @@ class TerminalDashboard:
                 expiry, f"SealBot eval FAILED — {wr_str} win rate"
             )
 
-        # §152 Class-4 stride-5 alarm — fires once row_max P90 (last 50 games)
-        # crosses 30. Re-arms each game; the dedup-by-prefix logic in
-        # _add_alert keeps this from spamming the panel.
-        if event == "game_complete":
-            rm_p90 = self._state.get("row_max_p90")
-            if isinstance(rm_p90, int) and rm_p90 > 30:
-                self._add_alert(
-                    expiry, f"row_max P90 {rm_p90} — stride-5 spam (Class 4)"
-                )
-
         # Expire old alerts
         self._alerts = [(t, m) for t, m in self._alerts if t > now]
 

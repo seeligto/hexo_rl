@@ -11,7 +11,6 @@ import glob
 import json
 import os
 import queue
-import re
 import secrets
 import threading
 from pathlib import Path
@@ -87,23 +86,6 @@ def _install_engineio_excepthook() -> None:
         previous(args)
 
     threading.excepthook = _hook
-
-
-def _find_latest_checkpoint(config: dict) -> str | None:
-    """Find the latest checkpoint_*.pt file in the checkpoint directory."""
-    ckpt_dir = Path(config.get("checkpoint_dir", "checkpoints"))
-    if not ckpt_dir.exists():
-        return None
-    pattern = re.compile(r"^checkpoint_(\d+)\.pt$")
-    candidates: list[tuple[int, Path]] = []
-    for p in ckpt_dir.iterdir():
-        m = pattern.match(p.name)
-        if m:
-            candidates.append((int(m.group(1)), p))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: x[0])
-    return str(candidates[-1][1])
 
 
 class WebDashboard:

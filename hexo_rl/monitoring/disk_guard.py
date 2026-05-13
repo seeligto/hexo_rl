@@ -1,7 +1,6 @@
 """Disk-space monitor: emit disk_free_gb events, WARN at < 10 GB, HARD FAIL at < 5 GB."""
 from __future__ import annotations
 
-import gzip
 import os
 import shutil
 import signal
@@ -85,10 +84,3 @@ class DiskGuard:
                 self.check_once()
             except Exception as exc:
                 log.warning("disk_guard_error", error=str(exc))
-
-
-def gzip_rotate(source: str, dest: str) -> None:
-    """Gzip ``source`` to ``dest``, then remove ``source``. Used by RotatingFileHandler."""
-    with open(source, "rb") as f_in, gzip.open(dest, "wb") as f_out:
-        shutil.copyfileobj(f_in, f_out)
-    os.remove(source)

@@ -28,7 +28,7 @@ def _make_dashboard(config: dict):
 
 
 class TestGatePassedReloadsFromBestModelPath:
-    """gate_passed=True must reload viewer from best_model.pt, not _find_latest_checkpoint."""
+    """gate_passed=True must reload viewer from best_model.pt, not a numbered checkpoint."""
 
     def test_gate_passed_reloads_from_best_model_path(self, tmp_path):
         best = tmp_path / "best_model.pt"

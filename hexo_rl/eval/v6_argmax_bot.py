@@ -18,7 +18,7 @@ For each call:
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 import torch
@@ -130,33 +130,3 @@ class V6ArgmaxBot(BotProtocol):
             probs /= probs.sum()
             idx = int(np.random.choice(len(legal_moves), p=probs))
         return legal_moves[idx]
-
-
-def load_v6_model_from_checkpoint(
-    ckpt_path: str,
-    device: torch.device,
-) -> HexTacToeNet:
-    """Reconstruct a v6 HexTacToeNet from a bootstrap inference checkpoint.
-
-    v7full / v6 / v7 checkpoints store only state_dict (no architecture
-    metadata); shape inferred from `trunk.input_conv.weight`.
-    """
-    state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-    inp_w = state["trunk.input_conv.weight"]
-    filters = int(inp_w.shape[0])
-    in_channels = int(inp_w.shape[1])
-    block_indices = sorted({
-        int(k.split(".")[2]) for k in state.keys()
-        if k.startswith("trunk.tower.") and len(k.split(".")) >= 4
-    })
-    res_blocks = max(block_indices) + 1 if block_indices else 12
-    model = HexTacToeNet(
-        board_size=BOARD_SIZE,
-        in_channels=in_channels,
-        filters=filters,
-        res_blocks=res_blocks,
-        encoding="v6",
-    )
-    model.load_state_dict(state, strict=False)
-    model.eval().to(device)
-    return model
