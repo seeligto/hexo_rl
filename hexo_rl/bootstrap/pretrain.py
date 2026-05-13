@@ -45,8 +45,10 @@ from hexo_rl.encoding import (
     all_specs as _all_specs,
     lookup as _lookup_encoding,
     resolve_corpus_path as _resolve_corpus_path,
+    resolve_from_checkpoint as _resolve_encoding_from_ckpt,
     resolve_from_config as _registry_resolve_cfg,
 )
+from hexo_rl.encoding.registry import EncodingRegistryError as _EncodingRegistryError
 from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.augment.luts import get_policy_scatters
@@ -959,6 +961,23 @@ def pretrain() -> None:
              "blocks remain trainable.",
     )
     args = parser.parse_args()
+
+    # §174 W1 — when --resume is set and --encoding is unset, auto-detect
+    # the encoding from the resume checkpoint's metadata (or shape-inference
+    # fallback). Lets `pretrain --resume <ckpt>` work without re-specifying
+    # encoding for transfer scenarios.
+    if args.resume is not None and args.encoding is None:
+        try:
+            _resume_spec = _resolve_encoding_from_ckpt(args.resume)
+        except _EncodingRegistryError as e:
+            raise SystemExit(
+                f"--resume {args.resume!r}: could not auto-detect encoding "
+                f"(no metadata + shape-inference failed). Pass --encoding "
+                f"explicitly. Underlying error: {e}"
+            ) from e
+        args.encoding = _resume_spec.name
+        log.info("auto_detected_encoding_from_resume_ckpt",
+                 name=args.encoding, resume=args.resume)
 
     # Load configs
     from hexo_rl.utils.config import load_config

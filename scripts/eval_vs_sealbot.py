@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -37,6 +38,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--time-limit", type=float, default=0.5, help="SealBot think time per move in seconds (default: 0.5 = strong)")
     p.add_argument("--model-sims", type=int, default=96, help="Model MCTS simulations per move")
     p.add_argument("--out", default=None, help="Optional output JSONL path")
+    p.add_argument("--encoding", default=None,
+                   help="Encoding name override. Auto-detected from "
+                        "checkpoint metadata when omitted.")
     return p.parse_args()
 
 
@@ -108,6 +112,15 @@ def main() -> None:
         # scattered board_size mismatch when base configs carry board_size=19
         # but the checkpoint is v6w25 (§173 eval-fix).
         model, spec, label = load_model_with_encoding(ckpt, device)
+        # §174 W1 — --encoding overrides the auto-detected label. Mismatch is
+        # a warning (operator may know, e.g. transfer scenarios), not an error.
+        if args.encoding is not None and args.encoding != label:
+            warnings.warn(
+                f"--encoding={args.encoding!r} disagrees with checkpoint "
+                f"auto-detected label={label!r} for {ckpt}; using override.",
+                stacklevel=2,
+            )
+            label = args.encoding
         cfg["encoding"] = label
         cfg.pop("board_size", None)  # let registry decide
         evaluator = Evaluator(model, device, cfg)
