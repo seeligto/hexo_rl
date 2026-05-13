@@ -32,8 +32,10 @@ htmlcov/
 data/
 !data/**/.gitkeep
 # Investigative/local-only — never committed
-reports/
+reports/**
 !reports/FINDINGS_SUMMARY.md
+!reports/sprint_archive/
+!reports/sprint_archive/**
 archive/
 checkpoints/
 logs/
