@@ -46,7 +46,6 @@ selfplay:
   n_workers: 14
   inference_batch_size: 64
   inference_max_wait_ms: 4.0   # sweep P3 winner (was 12.0, see sprint §69)
-  dispatch_wait_ms: 2.0
   leaf_batch_size: 8            # sweep §69: leaf_bs=16 hurts throughput
   # 2026-04-25 dispatch profile (project_dispatch_pyspy_2026-04-25.md):
   # InferenceServer was ~33% blocked in Python module dispatch at L208 of
