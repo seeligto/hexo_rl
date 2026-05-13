@@ -17,8 +17,8 @@ This file is read automatically by Claude Code at the start of every session.
 Read it fully before doing anything. Rule files under `docs/rules/` are topic-scoped
 — load on demand per the index below.
 
-**Current phase:** Phase 4.0 sustained DEFERRED 2026-05-06 (§157 Path B — 5k smoke PASS at 19.0% SealBot WR; sustained 40k skipped to preserve dev cycles for the encoding migration). §173 α multi-window K-cluster selfplay implementation CLOSED 2026-05-11. v6w25 selfplay OPERATIONAL post-§173 (bench gate held, A9 review PASS). §174 = v6w25 sustained smoke under α, blocked on HEXB v7 format bump + A8 cold smoke G3/G4/G5 verification. v7full (§150 anchor, 17.4% n=500 vs SealBot), v7e30, v7, v6 retained as versioned A/B baselines.
-**Reference hardware:** AMD Ryzen 7 3700x + RTX 3070 + 48 GB RAM (target). Current dev host is laptop (Ryzen 7 8845HS + RTX 4060 Max-Q); bench targets calibrated to laptop — see `docs/rules/perf-targets.md`.
+**Current phase:** §174 v6w25 sustained CLOSED 2026-05-13 — three bootstrap recipes (e30 / e50 / v6→v6w25 transfer FT) all failed selfplay viability gate at R=8 MCTS-128. ESCALATED to §175 v6 sustained (100K steps, n=100 SealBot eval, matched cosine). §173 α multi-window K-cluster selfplay infrastructure operational (bench gate held). v7full (§150 anchor, 17.4% n=500 vs SealBot), v7e30, v7, v6, v6w25 retained as versioned baselines.
+**Reference hardware:** vast 5080 + Ryzen 9 9900X is primary; laptop Ryzen 7 8845HS + RTX 4060 Max-Q is dev; desktop Ryzen 7 3700x + RTX 3070 is legacy reference. See `docs/rules/perf-targets.md`.
 (An internal sprint log is maintained locally — not distributed.)
 
 ---
@@ -51,12 +51,14 @@ Topic-scoped rules under `docs/rules/` — load the file whose trigger matches y
 - `docs/rules/build-commands.md` — language/toolchain, venv rules, make targets, repository layout
 - `docs/rules/board-representation.md` — infinite board, NN windowing, value aggregation
 - `docs/rules/phase-4-architecture.md` — network, heads, graduation gate, resolved Qs
-- `docs/designs/encoding_registry_design.md` — encoding registry spec: canonical TOML at `engine/src/encoding/registry.toml`, new encodings go in TOML (not factory functions), α multi-window selfplay in `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`
 - `docs/rules/perf-targets.md` — 10-metric bench gate, methodology
 - `docs/rules/bot-integration.md` — submodules, BotProtocol, community URLs
 - `docs/rules/background-tasks.md` — daily scrape, manifest commit policy
+- `docs/rules/checkpoint-archive-policy.md` — eval checkpoint retention, archive cadence
+- `docs/designs/encoding_registry_design.md` — encoding registry spec: canonical TOML at `engine/src/encoding/registry.toml`, new encodings go in TOML (not factory functions)
+- `docs/designs/encoding_alpha_multiwindow_selfplay_design.md` — α multi-window K-cluster selfplay (§173+)
 - `docs/refactor-template.md` — refactor discipline, pure-move rule, bench-gate skip conditions
-- `docs/sweep_harness.md` — knob-registry throughput sweep (`make sweep` / `sweep.long`); use for per-host tuning of n_workers, inference_batch_size, max_train_burst; `--resume <cells.csv>` to continue a killed sweep
+- `docs/sweep_harness.md` — knob-registry throughput sweep (`make sweep` / `sweep.long`); per-host tuning, `--resume <cells.csv>` continues killed sweep
 
 Workflow skills live under `.claude/skills/` and are discovered by OpenCode,
 Claude Code, and Codex via Claude-compatible skill discovery:
