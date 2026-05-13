@@ -1752,108 +1752,28 @@ Raising `inf_bs` to 128 grows mean batch 60 → 85 (+42%) but forwards/sec colla
 
 ## §91 — Threat-probe criterion revised: target colony-spam, not BCE drift (2026-04-14)
 
-**What.** Replace the §85/§89 step-5k probe criterion C1 (`ext_logit_mean ≥
-baseline − 1.0`) with a contrast-floor + top-10 pair that directly tests the
-policy-head behaviour we actually care about (colony-spam vs not). The old C1
-was a scale-drift detector that misfired on a healthy run.
+Replaces §85/§89 step-5k probe C1 (`ext_logit_mean ≥ baseline − 1.0`) with a contrast-floor + top-N pair targeting policy-head colony-spam directly. Old C1 was a scale-drift detector misfiring on healthy runs (ckpt_00014344: contrast grew 10× while abs logits drifted globally negative — opposite of the ckpt_19500 marginal-class collapse the old C1 targeted).
 
-**Trigger.** ckpt_00014344 probe FAILed under the old criterion:
+**Locked criterion (enforced by `scripts/probe_threat_logits.py`):**
 
-```
-C1: ext_logit_mean -6.209 (floor -1.60)  FAIL
-C2: contrast +3.939 (floor +0.38)         PASS (10× bootstrap)
-C3: top5 50% (floor 40%)                  PASS
-```
-
-Contrast grew TO **10× baseline (+3.94)** while absolute logits drifted
-globally negative. This is the OPPOSITE of the ckpt_19500 collapse signature
-that motivated the original C1: ckpt_19500 had contrast grow only 5× while
-BOTH logits collapsed by similar amounts (the marginal-class shortcut). The
-ckpt_00014344 pattern is consistent with BCE-on-imbalanced-labels driving
-logits globally negative while position-conditional sharpness IMPROVES — i.e.
-the policy head is doing exactly what we wanted, just with a global bias
-shift in the threat head. The old C1 was therefore a BCE scale-drift detector
-dressed up as a colony-spam detector.
-
-**Revised criterion (now enforced by `scripts/probe_threat_logits.py`).**
-
-| # | condition | threshold | notes |
-|---|-----------|-----------|-------|
-| C1 | `contrast_mean ≥ max(0.38, 0.8 × bootstrap_contrast)` | floor 0.40 (bootstrap = 0.502) | preserves §85 0.38 absolute floor, scales with bootstrap |
+| # | condition | threshold | why |
+|---|-----------|-----------|-----|
+| C1 | `contrast_mean ≥ max(0.38, 0.8 × bootstrap_contrast)` | floor 0.40 (bootstrap=0.502) | direct contrast-floor; scales with bootstrap, preserves §85 absolute floor |
 | C2 | `ext_in_top5_pct ≥ 40` | unchanged | direct colony-spam test on policy head |
-| C3 | `ext_in_top10_pct ≥ 60` | NEW | catches partial sharpness — rank 6-10 is fine |
-| C4 | `abs(ext_logit_mean − bootstrap_ext_logit_mean) < 5.0` | warning only | catches catastrophic decode/mapping bugs without gating |
+| C3 | `ext_in_top10_pct ≥ 60` | NEW | catches partial sharpness — rank 6-10 fine |
+| C4 | `abs(ext_logit_mean − bootstrap_ext_logit_mean) < 5.0` | warning only | catastrophic decode/mapping canary; never gates |
 
-C1-C3 must all PASS for `make probe.latest` exit code 0. C4 only prints a
-`WARNING` line in the markdown report; the gate never trips on it.
+C1–C3 must all PASS for `make probe.latest` exit 0. C4 is warning-only (BCE-drift / Q19 monitoring hook).
 
-**Baseline JSON schema bumped to v2.** `fixtures/threat_probe_baseline.json`
-now carries `version: 2`, `ext_in_top10_frac`, and explicit `ext_in_top5_pct`
-/ `ext_in_top10_pct` fields. Regenerated from `bootstrap_model.pt`:
+**Baseline.** `fixtures/threat_probe_baseline.json` bumped to v2 (adds `ext_in_top10_pct`); regenerated from `bootstrap_model.pt`: contrast 0.502, top5 50%, top10 65%.
 
-```json
-{
-  "version": 2,
-  "ext_logit_mean": -0.5985873519442976,
-  "ctrl_logit_mean": -1.100777158141136,
-  "contrast_mean":  0.5021898061968386,
-  "ext_in_top5_pct":  50.0,
-  "ext_in_top10_pct": 65.0
-}
-```
+**Q19 [WATCH]** logged in `docs/06_OPEN_QUESTIONS.md` — `BCEWithLogitsLoss` at ~1.6% positive labels drives logits globally negative; proposed `pos_weight ≈ 59` on next bootstrap-from-scratch. C4 is the monitoring hook; escalate WATCH→HIGH if drift > 8 nats or aux loss > 4.0.
 
-**ckpt_00014344 re-probed under the new criterion — PASS.**
+**Replaces:** §85 (original C1 floor), §89 (C1 retune). Forward: §92 lands Q19 `pos_weight=59` atomically with chain-plane bootstrap.
 
-```
-C1: contrast=+3.939   (≥ +0.402)  PASS
-C2: top5 = 50%        (≥ 40%)     PASS
-C3: top10= 70%        (≥ 60%)     PASS
-C4: |Δ ext_logit_mean| = 5.611    WARNING
-```
-
-Drift > 5.0 nats triggers C4 — flagged in the report for follow-up but does
-not block the run. The threat head's global bias shift remains an open
-question; if it persists, investigate whether BCE positive-weight scaling or
-a focal/class-balanced loss reformulation is warranted.
-
-**Open question logged.** The BCE class-imbalance hypothesis is recorded as
-**Q19 [WATCH]** in `docs/06_OPEN_QUESTIONS.md` (winning_line labels are ~1.6%
-positive → `BCEWithLogitsLoss` without `pos_weight` drives logits globally
-negative; proposed fix `pos_weight ≈ 59`, lands on next
-bootstrap-from-scratch run, not mid-run). The C4 warning path defined above
-is the monitoring hook for Q19 — drift > 8 nats, or aux loss > 4.0, or
-policy top-10 regression below bootstrap escalates Q19 from WATCH to HIGH.
-
-**Files touched.**
-
-- `scripts/probe_threat_logits.py` — thresholds, `check_pass`, new `check_warning`, `contrast_floor` helper, baseline v2 writer, top-10 extraction, console summary, markdown report.
-- `tests/test_probe_threat_logits.py` — three-condition tests rewritten for revised C1; new `test_check_pass_no_baseline_uses_floor` and `test_check_warning_drift_threshold`; baseline-roundtrip test now verifies `version`/`ext_in_top10_pct`.
-- `fixtures/threat_probe_baseline.json` — regenerated as v2 (top10 = 65%).
-- `docs/07_PHASE4_SPRINT_LOG.md` — §85 + §89 cross-reference §91; this entry.
-- `hexo_rl/monitoring/web_dashboard.py` — orthogonal: install a `threading.excepthook` filter to swallow the engineio `KeyError('Session is disconnected')` race that was polluting training stderr (see "Dashboard fix" below).
-
-**Dashboard fix (orthogonal, same commit batch).**
-
-When a browser tab closes mid-stream, `engineio.base_server._get_socket`
-raises `KeyError('Session is disconnected')` from one of engineio's internal
-background threads (writer / receive handler). Our `_drain_emit` thread's
-`try/except Exception` cannot catch it because the exception lives in a
-different thread entirely. Solution: install a one-shot `threading.excepthook`
-in `WebDashboard.start()` that:
-
-  1. Filters by `exc_type is KeyError`,
-  2. Filters by message (`"Session is disconnected"` / `"Session not found"`),
-  3. Walks the traceback for an `engineio.*` / `socketio.*` frame,
-  4. Drops the exception silently if all three match; delegates everything
-     else to the previous excepthook.
-
-Verified end-to-end with a real `socketio.SimpleClient` connect → flood emit
-→ disconnect → flood emit cycle: zero tracebacks on stderr, dashboard server
-unaffected. Unrelated `KeyError` in another thread still surfaces normally.
-
-**Commit:** `fix(eval): revise threat-probe criterion to target colony-spam directly`
-
-**Commit:** `fix(monitoring): swallow engineio disconnect KeyError in web dashboard`
+**Commits:**
+- `fix(eval): revise threat-probe criterion to target colony-spam directly`
+- `fix(monitoring): swallow engineio disconnect KeyError in web dashboard` (orthogonal: `threading.excepthook` filter for engineio `KeyError('Session is disconnected')` from tab-close races).
 
 ---
 
@@ -2833,242 +2753,39 @@ decoupling, WATCH).
 
 ## §107 — Post-W1 sustained run launch + live investigation instrumentation (2026-04-19)
 
-**Motivation.** W1 (`e9ebbb9`) landed as a correctness fix; §105
-+ §106 forensics left two residual questions that archive analysis
-alone cannot decide:
+**Launched.** `gumbel_targets` (laptop) from `bootstrap_model.pt`, 50k steps, tsp=1.5 (rebaselined 2.0→1.5 per preflight Pareto pick; all three smokes supply-bottlenecked at 14 workers ≈0.145 games/s). §101.a graduation params held (D2=5000, D4=400). Projected wall ≈52 h vs prompt 35 GPU-h target — laptop hardware ceiling.
 
-- **R1 (colony-extension).** Q17 bias amplification is mechanism-primary
-  for pre-fix colony spam. W1 contribution is plausible but
-  under-evidenced in archives.
-- **Q2 / Q27 (attention hijacking).** Whether the windowing path
-  produces divergent per-cluster evaluations that the min-pool
-  aggregation hides.
+**Live instrumentation (residuals R1 colony-extension + Q2/Q27 attention-hijack).**
 
-Both need live behaviour on post-W1 self-play, not more re-reading.
-This sprint lands two narrow live metrics alongside the sustained
-run so the residuals resolve (or stay open with quantitative signal)
-without another separate experiment.
+- **I1 colony-extension (Python).** `pool.py::_compute_colony_extension` walks `move_history` at `game_complete`, counts stones >6 hex-dist from any opponent stone. Adds `colony_extension_stone_count/total/fraction` to payload. <1 ms/game.
+- **I2 per-cluster variance (Rust).** Three `AtomicU64` fixed-point accumulators on `SelfPlayRunner` updated in `infer_and_expand` when K≥2: population std of per-cluster values pre-min-pool + `1−(top1-majority/K)` policy disagreement. Lifetime means emitted on `iteration_complete`. Rust-side because cluster structure is consumed by batcher before Python.
+- **Gating.** `monitoring.log_investigation_metrics` (default true; off on bench).
+- **Dashboards.** Web "Live Investigation" card (3 rows) + terminal summary line; schema in §08.
 
-**Instrumentation.**
+**Commits.** 77699f1 (I1), 59c0964 (I2), 914518f (tests), 17ef5ee (dashboard+schema), ed5d3b5 (tsp 2.0→1.5).
 
-- **I1 colony-extension detector (Python).** `hexo_rl/selfplay/pool.py::_compute_colony_extension`
-  walks `move_history` at each `game_complete` emit, counts stones
-  ending at hex-distance > 6 from any opponent stone. Pure Python;
-  buffer-tuple unchanged. Fields added to `game_complete` payload:
-  `colony_extension_stone_count`, `colony_extension_stone_total`,
-  `colony_extension_fraction`. <1 ms/game.
-- **I2 per-cluster variance (Rust).** Accumulators on `SelfPlayRunner`
-  (`cluster_value_std_accum`, `cluster_policy_disagreement_accum`,
-  `cluster_variance_samples`, all `AtomicU64` fixed-point scaled by
-  1e6). Hot-path update inside `infer_and_expand` when K ≥ 2 clusters
-  for a leaf — population std of per-cluster values before min-pool
-  aggregation; `1 − (top1-majority-count/K)` for policy disagreement.
-  Getters follow `mcts_mean_depth` pattern. Python emits lifetime
-  means on `iteration_complete`. Rust-side because cluster structure
-  is consumed by the batcher before Python sees the fused batch —
-  trainer forward has no K grouping.
-- **Gating.** `monitoring.log_investigation_metrics: bool` (default
-  true). Disable on bench runs so worker/throughput numbers are not
-  perturbed by the atomic stores.
-- **Dashboards.** Web: new "Live Investigation" card, three rows
-  (rolling colony_extension_fraction over last 50 games, lifetime
-  cluster_value_std_mean, cluster_policy_disagreement_mean).
-  Terminal: one new summary line. Schema docs in §08.
+**Abort gates.** wr_random<0.90 ×2; NaN >10 steps; `colony_extension_fraction>0.80` 500+ games; `policy_entropy_selfplay<1.0` 500+ steps; OOM/disk.
 
-**Preflight — supply/demand decision (Phase 1).**
-
-Three 500-step smokes from `bootstrap_model.pt`, `gumbel_targets`:
-
-| tsp | wall_sec | n_games | idle_frac | ratio | Δpolicy_loss (500 steps) |
-|---|---|---|---|---|---|
-| 2.0 | 1724 | 250 | 0.992 | 0.18 | **+0.08 (regressing)** |
-| 1.5 | 1888 | 253 | 0.988 | 0.20 | −0.26 |
-| 1.0 | 3516 | 500 | 0.993 | 0.39 | −0.26 (2× wall time) |
-
-All three are supply-bottlenecked on laptop (14-worker rate
-≈ 0.145 games/s); the prompt's `idle < 15%` criterion is unachievable
-on this hardware at this model size. Directional tie-break:
-tsp=2.0 regresses the policy loss outright; tsp=1.0 matches
-tsp=1.5's improvement at 2× wall-clock cost. **Chose tsp=1.5** as
-the Pareto point (best progress per wall-clock hour with non-regressing
-trajectory). Report:
-`reports/supply_demand_preflight_2026-04-19.md`.
-
-**Sustained run scope.**
-
-- Variant: `gumbel_targets` (laptop).
-- `training_steps_per_game`: 1.5 (previously 2.0).
-- 50 000 steps. Projected wall time ≈ 52 h at measured 953 steps/h.
-  Prompt target was 35 GPU-hours — unreachable on this hardware at
-  tsp ≥ 1.0. Proceed with 52 h, monitor for early kill criteria.
-- All graduation-gate parameters from §101.a hold (D2=5000, D4=400).
-- Dashboards: web + terminal both active (operator request).
-- Launch command:
-  ```
-  MALLOC_ARENA_MAX=2 nohup .venv/bin/python scripts/train.py \
-    --checkpoint checkpoints/bootstrap_model.pt \
-    --variant gumbel_targets \
-    --iterations 50000 \
-    --run-name post_w1_sustained_2026-04-19 \
-    > logs/post_w1_sustained_2026-04-19.stdout 2>&1 &
-  ```
-
-**Abort conditions (hour-35 checklist, copied for reference).**
-
-- `wr_random < 0.90` for 2 consecutive evals.
-- NaN in any loss for > 10 consecutive steps.
-- `colony_extension_fraction > 0.80` for 500+ consecutive games
-  (colony spam confirmed).
-- `policy_entropy_selfplay < 1.0` for 500+ steps (collapse).
-- OOM / disk / dashboard-crash > 15 min.
-
-**Files touched.**
-
-- `engine/src/game_runner/mod.rs` — 3 atomics, 3 getters.
-- `engine/src/game_runner/worker_loop.rs` — I2 hot-path block.
-- `hexo_rl/selfplay/pool.py` — I1 detector + game_complete fields.
-- `hexo_rl/training/loop.py` — iteration_complete I2 fields.
-- `hexo_rl/monitoring/terminal_dashboard.py` — investigation line.
-- `hexo_rl/monitoring/static/index.html` — Live Investigation card.
-- `docs/08_DASHBOARD_SPEC.md` — I1 + I2 schema.
-- `configs/monitoring.yaml` — `log_investigation_metrics` flag.
-- `configs/variants/gumbel_targets.yaml` — tsp 2.0 → 1.5.
-- `tests/test_investigation_metrics.py` — 11 cases.
-- `tests/test_variant_configs.py` — tsp expectation.
-- `scripts/analyze_supply_demand_smoke.py` — preflight analyzer.
-- `reports/supply_demand_preflight_2026-04-19.md` — Phase 1 report.
-
-**Resolves.** Nothing yet — residuals R1 and Q2/Q27 remain OPEN
-pending live data from the sustained run. **Opens.** None.
-
-### Commits
-
-- `feat(monitoring): colony extension detector (§107 I1)` — 77699f1
-- `feat(monitoring): per-cluster value/policy variance (§107 I2)` — 59c0964
-- `test(monitoring): investigation metrics synthetic cases (§107)` — 914518f
-- `feat(dashboard): §107 Live Investigation panel + schema` — 17ef5ee
-- `chore(config): training_steps_per_game → 1.5 for gumbel_targets (§107)` — ed5d3b5
-- `docs(sprint): §107 post-W1 sustained run launch + live instrumentation`
+**Status at close.** Residuals R1 + Q2/Q27 OPEN pending live data. Forward: §108 (desktop `gumbel_full` companion launch + b35de20 JSONL mirror for I1/I2); §109 (Q33 selfplay-entropy diagnostic; pe_self≈5.36 fixed point investigation through §110 Q33-B / §111 Q33-C HALT).
 
 ---
 
 ## §108 — Desktop post-W1 sustained launch `gumbel_full` (2026-04-19)
 
-Launch of the first post-W1 desktop sustained run. Companion to the
-laptop `gumbel_targets` run (Prompt 15). Desktop variant answers Q2:
-does Gumbel SH contribute beyond CE targets alone, controlling for
-identical W1 fix + Option A playout-cap repair + R1 anchor semantics?
+First post-W1 desktop sustained, companion to laptop `gumbel_targets` (Prompt 15). Answers Q2: does Gumbel SH add value beyond CE targets alone under identical W1 fix + Option A playout-cap repair + R1 anchor semantics.
 
-### Launch state
+**Config.** Host archstation (3700X + 3070). Variant `gumbel_full` (Gumbel root + completed-Q). Bootstrap `bootstrap_model.pt` (18-plane, GroupNorm(8), §93 v3b). 50k iters. Run `post_w1_desktop_gumbel_full_20260419`.
 
-- Host: archstation (Ryzen 7 3700X + RTX 3070 8GB + 48GB RAM).
-- Variant: `gumbel_full` (Gumbel root search + completed-Q targets).
-- Checkpoint: `bootstrap_model.pt` (18-plane, GroupNorm(8), §93 v3b).
-- Iterations: 50000.
-- Dashboard: web (:5001) + terminal active.
-- Run name: `post_w1_desktop_gumbel_full_20260419`.
-- Log: `logs/post_w1_desktop_gumbel_full_20260419.jsonl`.
+**Key decisions.** SDG rebased 4.0→2.0 (Option A removed per-game fast_prob, per-game cost up). A/B preflight skipped (analyzer not in tree, `make train.smoke` no override) — launched at 2.0 with hour-1 gate. Pre-W1 artifacts archived to `archive/prefix_desktop_20260419_154604/`; kept only `bootstrap_model.pt` + `best_model.pt`. `gumbel_full` mutex (`fast_prob: 0.0`) + regression test already landed. I1/I2 JSONL mirror landed mid-run (b35de20).
 
-### Pre-launch decisions
+**Hour-1 telemetry.** policy_loss flat ~2.07, value_loss declining 0.548→0.530, pe_self contracting 3.82→3.13, 930 games/hr steady (vs estimated 130-180 — Option A cost was 1.16× not 2.5×), GPU 65-80%, SDG hit 2.000 exactly (trainer not starving), idle 27% = burst pattern not GPU idle, 1 pool overflow at startup with graceful fallback, 0 NaN.
 
-**SDG rebaseline 4.0 → 2.0** (`config(variants)` commit 299b4c0).
-Option A (§104) removed game-level fast_prob so every game now runs the
-§100 mixture; per-game compute up. Trainer catches up faster → SDG
-drops. Laptop recently raised 1.5 → 2.0 for same reason; desktop Zen2
-lower IPC keeps 2.0 safe either side.
+**Status: RUNNING at launch.** Outcomes processed in §109+ (Q33 selfplay entropy diagnostic — `pe_self ≈ 5.35` fixed point flagged from this run's diag-20K report). See §109 for entropy verdict, §110 Q33-B for fixed-point confirmation, §111 Q33-C HALT on aug discriminator.
 
-**Preflight A/B smokes skipped.** Prompt 16 called for SDG=2.0 vs 1.5
-smokes via `scripts/analyze_supply_demand_smoke.py` + throwaway variant
-configs. Analyzer script not in tree; `make train.smoke` is 20-step,
-no param override. Option 3 taken: launch at 2.0, monitor hour-1 gate,
-abort if idle >30% or <5%. Tradeoff: lose 1.5 vs 2.0 policy-slope
-signal.
-
-**Pre-W1 artifacts archived.** `archive/prefix_desktop_20260419_154604/`
-— 1.5 GB checkpoints + 4.6 GB replay_buffer + `checkpoints/broken/`.
-Retained only `bootstrap_model.pt` + `best_model.pt`. MANIFEST notes
-that on-disk checkpoints were actually post-W1 `q27_post_fix` probe
-output, not pre-W1 sign-inverted data; archive correct for provenance
-reasons regardless.
-
-**gumbel_full mutex fix already landed.** `fast_prob: 0.0` +
-regression test `test_gumbel_full_passes_playout_cap_mutex`
-(`tests/test_variant_configs.py:61`). Prompt 16 Phase 1 was no-op.
-
-**I1/I2 JSONL mirror landed mid-run** (commit b35de20). Pool +
-loop emitters already pushed to dashboard via `emit_event`; structlog
-log.info entries now mirror `colony_extension_fraction`,
-`cluster_value_std_mean`, `cluster_policy_disagreement_mean`,
-`cluster_variance_sample_count`. Current run keeps the pre-mirror
-gap; all future runs get durable JSONL record of the §107 cluster /
-I1 colony metrics used by Prompt 15/16 abort conditions.
-
-### First-hour telemetry
-
-| Metric | T+4min (step 138) | T+28min (step 958) | T+1h (step 1874) |
-|---|---|---|---|
-| policy_loss | 2.063 | 2.075 | 2.085 |
-| value_loss | 0.560 | 0.501 | 0.530 |
-| policy_entropy_selfplay | 2.56 | 3.82 | 3.13 |
-| games_per_hour | 1067 | 756 | 930 |
-| effective SDG | — | 2.009 | 2.000 |
-| GPU util | 59% | 80% | 65% |
-| buffer fill | 2.4k/250k | 21k/250k | 40k/250k |
-| batch_fill_pct | 50.3% | 53.3% | 53.1% |
-| pool overflow | 1 | 1 | 1 |
-| NaN | 0 | 0 | 0 |
-| idle ratio | 23% | 28% | 27% |
-
-**Read.** Policy_loss flat across the first hour (200-window Δ +0.013,
-500-window Δ +0.002). Value_loss declining (first-200 mean 0.548 →
-last-200 mean 0.530, Δ −0.018). Policy_entropy_selfplay contracting
-from initial 3.82 toward target 0.009 (policy_target_entropy_fullsearch).
-Model decompressing on value head first, policy head still decoupled
-— expected with sharp completed-Q targets on a 19×19 action space.
-
-**Games/hr surprise.** Prompt 16 estimated 130–180 games/hr on desktop;
-observed steady-state 930. Option A's per-game cost increase was
-smaller than predicted (~1.16× not ~2.5×). Not a bug — Option A ratio
-was vs pre-§100 baseline, not vs pre-Option-A. Config rationale in
-gumbel_full.yaml comment stands.
-
-**Idle ratio.** 27% `waiting_for_games` events does NOT equal 27% GPU
-idle — it is the `max_train_burst` bursting pattern. SDG ratio hits
-2.000 exactly so trainer is not starving. GPU util 65–80% healthy.
-Real starvation would show SDG << 2.0.
-
-**Pool overflow.** Single MCTS node-pool ceiling hit at startup
-(`next_free=199807, n_ch=381, pool_len=200000`). Graceful fallback
-(mark leaf terminal). No recurrence in 1h of wall clock — non-issue
-for this run. Flagged for broader MCTS review if it recurs.
-
-### Abort gates (active)
-
-- `wr_random < 0.90` for 2 consecutive evals — first eval at step 5000.
-- NaN in any loss for >10 consecutive steps.
-- `colony_extension_fraction > healthy_baseline × 2.5` for 500+ games
-  — baseline unknown until first 4h; threshold revised at hour-4 check.
-  Current run reads I1/I2 from web dashboard only (pre-mirror).
-- `policy_entropy_selfplay < 1.0` for 500+ steps.
-- OOM / disk / VRAM saturation.
-- `cluster_value_std` diverges > 2× laptop steady-state — desktop-only
-  abort, would flag novel Gumbel-SH per-cluster instability.
-
-### Next checkpoints
-
-- Step 5000: first eval round, `make probe.latest`, gate against
-  bootstrap random-bot ≥95/100.
-- Step 12k: C2/C3 probe vs real-fixture v6, cluster disagreement trend.
-- Step 24k: first graduation attempt, wr_best vs bootstrap.
-- Step 50k: run complete, cross-host `post_w1_laptop_vs_desktop` report.
-
-### Commits
-
-- `config(variants): gumbel_full SDG 4.0 → 2.0 for post-Option-A launch`
-  (299b4c0)
+**Commits.**
+- `config(variants): gumbel_full SDG 4.0 → 2.0 for post-Option-A launch` (299b4c0)
 - `test(variants): update gumbel_full SDG pin 4.0 → 2.0` (a797abd)
-- `feat(monitoring): mirror I1/I2 cluster + colony metrics to JSONL`
-  (b35de20)
+- `feat(monitoring): mirror I1/I2 cluster + colony metrics to JSONL` (b35de20)
 - `docs(sprint): §108 desktop gumbel_full sustained run launch`
 
 ---
@@ -3387,125 +3104,37 @@ Post-supply-wave cold bench showed `buffer_sample_raw_us = 1,715 µs` vs ≤ 1,5
 
 ## §114 — bootstrap-v4: full-corpus retrain + eval — 2026-04-22
 
-### Root cause: POSITION_END=50 silently truncated all late-game positions
+**Status:** RESOLVED. Superseded by v5 (§118), v6 (§134), v7 (§148), v7full (§150).
 
-`scripts/export_corpus_npz.py` had a hard-coded `POSITION_END = 50` constant that
-discarded every position at ply ≥ 50. This silently removed ~40% of all positions
-— the entire late-game — from every pretrain corpus export. A compounding bug in
-`scripts/update_manifest.py` read Elo from top-level `player_black_elo` /
-`player_white_elo` keys (old scraper format), missing the current `players[].elo`
-path, so Elo-weighted sampling treated all 5,694 of 5,706 games as "unrated".
+### Root cause: two silent corpus bugs
 
-**Effect on bootstrap v3b / v3c:**
-The pretrained model never saw a position past ply 50, making it endgame-blind. All
-value-head gradient during pretraining came from early and mid-game positions only.
-When RL self-play reached late-game positions (ply > 50), the model had no prior for
-value or policy there, contributing to collapse pressure that was previously attributed
-to the Dirichlet bug alone (Q17). The Dirichlet port (§73) added diversity, but the
-underlying endgame blindness remained.
+1. **POSITION_END=50 truncation** in `scripts/export_corpus_npz.py` — hard-coded cap discarded every position at ply ≥ 50, removing ~40% of all positions (entire late-game) from every pretrain corpus. Bootstrap was endgame-blind; value head never saw ply > 50. Retcons Q17 as two-cause: Dirichlet (§73) was necessary but not sufficient — corpus completeness was the structural fix.
+2. **Broken Elo read** in `scripts/update_manifest.py` — read `player_black_elo` / `player_white_elo` (old scraper format), missing `players[].elo`. 5,694 / 5,706 games treated as unrated; Elo-weighted sampling effectively off.
 
-**This is also the retcon for Q17:** mode collapse was a two-cause failure — missing
-Dirichlet (trainer-path, §73) **and** endgame-blind bootstrap (corpus-path, this
-session). Dirichlet alone was a partial fix; corpus completeness was the structural fix.
+### Fix sequence
 
-### Fix sequence (commits `aa16624`, `ddd408f`, `8b446c5`)
+- `aa16624` — Elo field fix: fall back to `players[].elo`. All 5,706 games rated.
+- `ddd408f` — drop POSITION_END cap entirely. 305,410 positions (was 193,972).
+- `8b446c5` — set POSITION_END=150 (P95.5) to trim time-scramble noise. 285,762 exported → ~3.4M with 12× aug (was ~2.3M).
 
-1. **`aa16624` — Elo field fix**: `update_manifest.py` now falls back to
-   `players[].elo` when top-level fields absent. All 5,706 games now rated.
-2. **`ddd408f` — remove POSITION_END cap**: drop the ply-50 cutoff entirely.
-   305,410 qualifying positions (was 193,972). Per-position Elo weighting now
-   effective. Replacement sampling removed (was a workaround for the cap).
-3. **`8b446c5` — set POSITION_END=150 (P95.5)**: positions past ply 150 are
-   time-scramble / playing-out-lost noise (254/5,706 games; 5.8% of positions).
-   Capped at 150 for signal quality. 287,764 qualifying → 285,762 exported.
-   With 12× augmentation: **~3.4M effective positions** (was ~2.3M before).
+### Eval results (bootstrap-v4)
 
-### Bootstrap-v4 pretrain (2026-04-22)
+| Probe | v4 | v3c |
+|---|---|---|
+| C1 contrast_mean | **+0.360** (margin 0.020 to 0.380 floor) | −0.046 |
+| H2H WR (100g, 64 sims) | **67% ± 9.2%** | 33% |
+| SealBot WR (150g, 128 sims, 0.5s) | **18.7% ± 6.2%** | — |
 
-Retrained from scratch on `data/bootstrap_corpus.npz` (285,762 positions).
-Result: `checkpoints/bootstrap_model.pt` (Apr 22 14:09, 17M). Full pretrain
-checkpoint at `checkpoints/pretrain/pretrain_00000000.pt`.
+C1 delta +0.406 absolute from pure corpus fix. ctrl logits flipped +0.062 → −0.152 (threat head now suppresses far empties). Colony-win fraction 82% expected pre-RL.
 
-### Eval results vs bootstrap-v3c (8-to-50-plys variant)
+### Rule established: corpus discipline
 
-**Threat probe (20 fixture positions, v6 baseline):**
+**Before diagnosing trainer pathology (hyperparameters, augmentation, architecture), verify the corpus is complete.** Pretrain loss curves were plausible throughout — only the C1 probe on real-game positions exposed the truncation. Upstream data quality gates downstream model quality more strongly than any downstream training improvement. Probe FAIL ⇒ check corpus before tuner.
 
-| Metric | bootstrap-v4 (new) | bootstrap-v3c (old) | v6 stored ref |
-|--------|---------------------|----------------------|---------------|
-| C1 contrast_mean | **+0.360** FAIL (need ≥0.380) | −0.046 FAIL | −0.046 |
-| C2 ext∈top5_pct | 60% PASS (≥25%) | 60% PASS | 60% |
-| C3 ext∈top10_pct | 60% PASS (≥40%) | 65% PASS | 65% |
-| ext logit mean | +0.212 | +0.015 | +0.015 |
-| ctrl logit mean | −0.152 | +0.062 | +0.062 |
-| Verdict | FAIL C1 (margin 0.020) | FAIL C1 (margin 0.426) | — |
+### Forward pointers
 
-C1 improved +0.406 absolute. ctrl logits went from positive (+0.062) to negative
-(−0.152) — the threat head now correctly suppresses far empty cells. The 0.020
-gap to the 0.380 floor suggests one more corpus pass or additional RL warmup will
-clear C1. C1 threshold is the absolute floor (0.8 × −0.046 = −0.037 < floor).
-
-**Head-to-head game eval (100 games, 64 sims/move):**
-
-| | |
-|---|---|
-| bootstrap-v4 wins | **67** / 100 |
-| bootstrap-v3c wins | 33 / 100 |
-| WR (v4) | **67.0% ± 9.2%** |
-| Colony wins | 61 / 100 |
-
-Statistically decisive — lower CI bound 57.8%, above the 55% promotion gate.
-
-**SealBot eval (150 games, 128 sims/move, 0.5s think):**
-
-| | |
-|---|---|
-| Wins | **28** / 150 |
-| WR | **18.7% ± 6.2%** |
-| Colony wins | 23 / 28 (82%) |
-
-1-in-5 games won against SealBot at full strength. Colony-win fraction (82%) is
-expected for a bootstrap-only model pre-RL. High colony rate = model wins primarily
-via spatial separation, not direct 6-in-a-row threat chains.
-
-### Bug fix: `eval_vs_sealbot.py`
-
-Two bugs fixed during this session:
-1. `resolve_checkpoints` raised `FileNotFoundError` when no `checkpoint_*.pt` exist
-   at the root, even when `--checkpoint` was explicitly passed (glob ran before the
-   early-return branch).
-2. `wr = evaluator.evaluate_vs_sealbot(...)` assigned `EvalResult` to `wr`, then
-   called `float(wr)` — crashed after eval completed. Fixed to `result.win_rate`;
-   also added `win_count`, `draw_count`, `colony_wins` to the JSONL record.
-
-### Q updates
-
-- **Q8**: closed — see `docs/06_OPEN_QUESTIONS.md` Resolved table.
-- **Q17**: retcon note added — POSITION_END=50 was a second, upstream cause of
-  self-play instability. Dirichlet fix was necessary but not sufficient.
-- **Q32**: C1 contrast updated (+0.360 for v4 bootstrap); still WATCH.
-- **Phase 4.5**: deferred — run Phase 4.0 RL from v4 bootstrap first; assess
-  SealBot WR at end of sustained run before committing to Phase 4.5 scope.
-
-### Meta-lesson: corpus filter = model quality floor
-
-The threat probe contrast delta of +0.406 from a pure corpus fix (no architecture
-change, no hyperparameter tuning) demonstrates that upstream data quality gates
-downstream model quality more strongly than any downstream training improvement.
-POSITION_END and Elo weighting are corpus filters. Both were silent bugs — the
-pretrain loss curves were plausible throughout, so no training-time signal exposed
-the truncation. The only observable was the C1 contrast regression on real-game
-probe positions.
-
-**Rule:** Before diagnosing trainer pathology (hyperparameters, augmentation bugs,
-architecture), verify the corpus is complete. A model that has never seen late-game
-positions will fail at late-game regardless of the RL loop quality.
-
-### Commits
-
-- `fix(corpus): read elo from players[].elo in manifest; remove 4 test fixtures` (`aa16624`)
-- `fix(corpus): remove POSITION_END cap; include full endgame in export` (`ddd408f`)
-- `fix(corpus): set POSITION_END=150 (P95.5); remove extreme lategame noise` (`8b446c5`)
-- `fix(eval): move --checkpoint early-return before glob; add win_count/draw_count/colony_wins to JSONL` (this session)
+- v5 retrain §118 · v6 §134 · v7 §148 · v7full §150 (canonical §150 anchor 17.4% n=500 vs SealBot)
+- Also fixed in this session: `eval_vs_sealbot.py` `resolve_checkpoints` glob-before-early-return + `EvalResult` → `float()` crash.
 
 ## §115 — CLAUDE.md split + skill scaffolding — 2026-04-22
 
