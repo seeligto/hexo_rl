@@ -1,0 +1,84 @@
+# configs/variants/v6_sustained.yaml
+#
+# §175 — v6 sustained selfplay, 100K steps.
+#
+# Q11 test: does training depth close the SealBot transfer gap?
+# §172 B2 ran v7full for 30K with cosine denominator=200K (LR never decayed,
+# n=20 eval too noisy for real signal). §175 fixes both:
+#   1. total_steps=100K → cosine decays to fine-tune phase by ~50K.
+#   2. SealBot n=100 (vs B2 n=20) → real signal, CI discriminates 17.4% anchor.
+#
+# Bootstrap: checkpoints/bootstrap_model_v7full.pt
+#   (v7full §150 anchor; 17.4% vs SealBot n=500; same architecture as v6)
+# Encoding: v6 (19×19, 362 logits, 8 planes, single-window; same wire format as v7full)
+#
+# Note: bootstrap_model.pt is NOW v6w25 (626 logits). Use bootstrap_model_v7full.pt.
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v7full.pt \
+#     --variant v6_sustained \
+#     --iterations 100000 \
+#     2>&1 | tee logs/s175_v6_sustained.log
+#
+# Or via make:
+#   make train BOOTSTRAP=checkpoints/bootstrap_model_v7full.pt VARIANT=v6_sustained \
+#     2>&1 | tee logs/s175_v6_sustained.log
+#
+# Decision gate at 50K: if sealbot WR > 20% → continue; < 5% → ABORT.
+# Final verdict at 100K: Q11 training-depth or structural?
+#
+# Wall budget: ~20 hr on vast 5080 at ~5K steps/hr ($0.207/hr ≈ $4.14).
+
+# Encoding — v6 canonical (19×19 single-window, 8 planes, 362 logits)
+encoding: v6
+
+# Training — LR safe at 2e-3 on 19×19 (no FP16 overflow, unlike v6w25 25×25).
+lr: 2.0e-3
+# Cosine schedule denominator must match run length for proper LR decay.
+# B2's failure: total_steps=200K on a 30K run — LR barely decayed.
+total_steps: 100000
+
+# Eval — 10 rounds over 100K. SealBot fires every round (stride=1, not stride=4).
+eval_interval: 10000
+
+# Selfplay — 5080-tuned throughput knobs (from vast.yaml sweep verdict 2026-05-12)
+selfplay:
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  leaf_batch_size: 8
+  max_game_moves: 150
+  random_opening_plies: 0       # deterministic from move 1; no free opening diversity
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    # §156 R12 — disable cosine schedule for warm-start from frozen bootstrap.
+    # Prevents the 92% draw lock observed in §172 B1 (super-additive with warm-start).
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+
+mcts:
+  n_simulations: 400
+
+eval_pipeline:
+  opponents:
+    sealbot:
+      stride: 1          # fire every eval_interval=10K (not every 40K at base stride=4)
+      n_games: 100       # real signal: 17.4% anchor has CI [10.7%, 25.9%] at n=100
+    best_checkpoint:
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+    bootstrap_anchor:
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+
+# Corpus resolved by encoding registry: v6 → data/bootstrap_corpus.npz
+mixing:
+  pretrained_buffer_path: "<auto>"
+
+monitors:
+  hard_abort_grad_norm: 10.0
