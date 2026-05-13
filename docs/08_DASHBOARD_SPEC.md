@@ -209,6 +209,152 @@ No schema changes.
 }
 ```
 
+### 2.7 `value_probe_drift`
+
+Emitted every `instrumentation.value_probe_interval` training steps when
+`instrumentation.enabled = true`. Runs the value head on a fixed 50-position
+fixture (`fixtures/value_probe_50.npz`) to detect value-head collapse.
+
+Emission site: `hexo_rl/training/step_coordinator.py:762`.
+
+```python
+{
+    "event":         "value_probe_drift",
+    "ts":            float,
+    "step":          int,      # global training step
+    "decisive_mean": float,    # mean value output on decisive positions (subset=0); NaN if empty
+    "decisive_std":  float,    # std-dev on decisive positions; 0.0 if ≤1 sample
+    "draw_mean":     float,    # mean value output on draw positions (subset=1); NaN if empty
+    "draw_std":      float,    # std-dev on draw positions; 0.0 if ≤1 sample
+    "n_decisive":    int,      # count of decisive positions in fixture
+    "n_draw":        int,      # count of draw positions in fixture
+    "fixture":       str,      # path of fixture file used (for auditability)
+}
+```
+
+**Semantics.** Decisive positions should yield value near ±1; draw positions
+near 0. Drift of `decisive_mean` toward −0.5 signals value-head collapse onto
+the draw equilibrium (Phase B' Class-2 failure mode).
+
+### 2.8 `buffer_composition`
+
+Emitted every `instrumentation.composition_interval` training steps when
+`instrumentation.enabled = true`. Snapshot of the live replay buffer
+composition and terminal-reason breakdown.
+
+Emission site: `hexo_rl/training/step_coordinator.py:789`.
+
+```python
+{
+    "event":                    "buffer_composition",
+    "ts":                       float,
+    "step":                     int,      # global training step
+    "buffer_size":              int,      # current buffer occupancy
+    "buffer_capacity":          int,      # max buffer size
+    "corpus_fraction":          float,    # fraction of buffer positions from preloaded corpus
+    "draw_target_fraction":     float,    # fraction with outcome in [−0.6, −0.4) (draw-ish targets)
+    "six_terminal_fraction":    float,    # fraction of games ending by six-in-a-row
+    "colony_terminal_fraction": float,    # fraction of games ending by colony-extension cap
+    "cap_terminal_fraction":    float,    # fraction of games ending by ply cap
+    "other_draw_fraction":      float,    # fraction of games ending by other-draw rule
+    "n_games_observed":         int,      # cumulative self-play games since pool start
+}
+```
+
+**Semantics.** `corpus_fraction` > 0 means preloaded corpus positions still
+dominate. `colony_terminal_fraction` > 0.5 signals training-explosion risk.
+`draw_target_fraction` can be NaN if the engine wheel predates
+`outcome_in_range_count`.
+
+### 2.9 `model_version_summary`
+
+Emitted immediately after `buffer_composition` (same `composition_interval`
+cadence). Summarises the model-version spread across recently completed
+self-play games.
+
+Emission site: `hexo_rl/training/step_coordinator.py:802`.
+
+```python
+{
+    "event":                        "model_version_summary",
+    "ts":                           float,
+    "step":                         int,      # global training step
+    "n":                            int,      # number of games in the sample window
+    "median_range":                 int,      # median of (mv_max − mv_min) per game
+    "p90_range":                    int,      # 90th-pct version span
+    "max_range":                    int,      # worst-case version spread
+    "median_distinct":              int,      # median distinct model versions per game
+    "spearman_rho_range_vs_draw":   float | None,  # Spearman ρ between version spread and draw outcome;
+                                              # None if n < 10 or scipy unavailable
+    "current_version":              int,      # model_version at time of emission
+}
+```
+
+**Semantics.** High `max_range` or `p90_range` means workers are playing
+against stale model snapshots; increases off-policy risk. `n = 0` when no
+self-play games have completed yet (returns `{"n": 0}` with no other keys).
+
+### 2.10 `worker_draw_rate`
+
+Emitted immediately before `model_version_summary` (same `composition_interval`
+cadence). Per-worker rolling draw rate over the last 50 games.
+
+Emission site: `hexo_rl/training/step_coordinator.py:796`.
+
+```python
+{
+    "event":              "worker_draw_rate",
+    "ts":                 float,
+    "step":               int,      # global training step
+    "per_worker":         dict,     # {str(worker_id): float} — rolling draw rate in [0, 1]
+    "n_workers_observed": int,      # number of workers with ≥1 completed game
+}
+```
+
+**Semantics.** Sustained high draw rate (> 0.8) across all workers indicates
+the model is stuck in draw equilibrium. Per-worker breakdown surfaces single
+unstable workers. Only workers with ≥1 game in the rolling window appear.
+
+### 2.11 `disk_free`
+
+Emitted every `DiskGuard.interval_sec` seconds (default 60 s). Normal heartbeat
+showing current free disk space.
+
+Emission site: `hexo_rl/monitoring/disk_guard.py:61`.
+
+```python
+{
+    "event":        "disk_free",
+    "ts":           float,
+    "disk_free_gb": float,    # free space in GB, rounded to 2 decimal places
+}
+```
+
+**Semantics.** Routine telemetry. No action unless `disk_free_gb` drops below
+`warn_gb` (default 10 GB) or `fail_gb` (default 5 GB), at which point
+`disk_alert` is also emitted.
+
+### 2.12 `disk_alert`
+
+Emitted when free disk space crosses a threshold. Accompanies the normal
+`disk_free` event and additionally triggers a SIGTERM when `level = "critical"`.
+
+Emission site: `hexo_rl/monitoring/disk_guard.py:70` (critical),
+`hexo_rl/monitoring/disk_guard.py:78` (warn).
+
+```python
+{
+    "event":        "disk_alert",
+    "ts":           float,
+    "level":        str,      # "warn" (< warn_gb) or "critical" (< fail_gb; SIGTERM follows)
+    "disk_free_gb": float,    # free space in GB, rounded to 2 decimal places
+}
+```
+
+**Semantics.** `"warn"` — log a warning; renderers should highlight the disk
+panel. `"critical"` — training will be halted via SIGTERM immediately after
+this event; renderers should show a hard error banner.
+
 ---
 
 ## 3. Emitter — `hexo_rl/monitoring/events.py`

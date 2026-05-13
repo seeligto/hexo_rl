@@ -145,6 +145,29 @@ REQUIRED_KEYS = {
     "run_end": [
         "step",
     ],
+    # §176 P54 — six new event types (CG15)
+    "value_probe_drift": [
+        "step", "decisive_mean", "decisive_std", "draw_mean", "draw_std",
+        "n_decisive", "n_draw", "fixture",
+    ],
+    "buffer_composition": [
+        "step", "buffer_size", "buffer_capacity", "corpus_fraction",
+        "draw_target_fraction", "six_terminal_fraction",
+        "colony_terminal_fraction", "cap_terminal_fraction",
+        "other_draw_fraction", "n_games_observed",
+    ],
+    "model_version_summary": [
+        "step", "n", "current_version",
+    ],
+    "worker_draw_rate": [
+        "step", "per_worker", "n_workers_observed",
+    ],
+    "disk_free": [
+        "disk_free_gb",
+    ],
+    "disk_alert": [
+        "level", "disk_free_gb",
+    ],
 }
 
 
@@ -220,6 +243,57 @@ def _make_sample_payload(event_type: str) -> dict:
         "run_end": {
             "event": "run_end",
             "step": 5000,
+        },
+        # §176 P54 — six new event types (CG15)
+        "value_probe_drift": {
+            "event": "value_probe_drift",
+            "step": 5000,
+            "decisive_mean": 0.72,
+            "decisive_std": 0.15,
+            "draw_mean": -0.03,
+            "draw_std": 0.08,
+            "n_decisive": 25,
+            "n_draw": 25,
+            "fixture": "fixtures/value_probe_50.npz",
+        },
+        "buffer_composition": {
+            "event": "buffer_composition",
+            "step": 5000,
+            "buffer_size": 50000,
+            "buffer_capacity": 250000,
+            "corpus_fraction": 0.24,
+            "draw_target_fraction": 0.12,
+            "six_terminal_fraction": 0.68,
+            "colony_terminal_fraction": 0.08,
+            "cap_terminal_fraction": 0.15,
+            "other_draw_fraction": 0.09,
+            "n_games_observed": 12000,
+        },
+        "model_version_summary": {
+            "event": "model_version_summary",
+            "step": 5000,
+            "n": 200,
+            "median_range": 2,
+            "p90_range": 5,
+            "max_range": 8,
+            "median_distinct": 3,
+            "spearman_rho_range_vs_draw": 0.12,
+            "current_version": 47,
+        },
+        "worker_draw_rate": {
+            "event": "worker_draw_rate",
+            "step": 5000,
+            "per_worker": {"0": 0.12, "1": 0.08, "2": 0.20},
+            "n_workers_observed": 3,
+        },
+        "disk_free": {
+            "event": "disk_free",
+            "disk_free_gb": 42.35,
+        },
+        "disk_alert": {
+            "event": "disk_alert",
+            "level": "warn",
+            "disk_free_gb": 8.21,
         },
     }
     return samples[event_type]
