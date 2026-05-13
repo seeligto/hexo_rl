@@ -456,6 +456,17 @@ class BootstrapTrainer:
 
         Returns:
             Dict with keys loss, policy_loss, value_loss, opp_reply_loss, chain_loss.
+
+        Negative-step convention (C-004):
+            ``self.step`` is initialised to ``-total_pretrain_steps`` at the call
+            site (pretrain CLI, line ~1316) and counts up toward 0 across pretrain
+            epochs. The ``step_budget`` exit at line 625 uses the *delta*
+            ``self.step - budget_origin`` so the contract is sign-independent;
+            callers must NOT pre-negate ``step_budget``. Checkpoint filenames at
+            line 639 branch on sign and write ``pretrain_{abs(step):08d}.pt`` for
+            the negative phase. ``tests/test_pretrain_step_accounting.py`` pins
+            this invariant — any refactor that splits ``BootstrapTrainer`` must
+            preserve it.
         """
         budget_origin = start_step if start_step is not None else self.step
         self.model.train()
