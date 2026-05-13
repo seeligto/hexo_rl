@@ -6,9 +6,46 @@ PY ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 MATURIN ?= .venv/bin/maturin
 
-CHECKPOINT_BOOTSTRAP ?= checkpoints/bootstrap_model.pt
+# BOOTSTRAP is the canonical knob (§174 W3); CHECKPOINT_BOOTSTRAP kept as
+# back-compat alias for older docs/scripts. Both resolve to the same default.
+BOOTSTRAP ?= checkpoints/bootstrap_model.pt
+CHECKPOINT_BOOTSTRAP ?= $(BOOTSTRAP)
 CHECKPOINT_LATEST ?= $(shell ls -1 checkpoints/checkpoint_*.pt 2>/dev/null | tail -n 1)
 PRETRAIN_CKPT ?= $(shell ls -1 checkpoints/pretrain/pretrain_*.pt 2>/dev/null | tail -n 1)
+
+# ── Pretrain knobs (§174 W3) ──────────────────────────────────────────────────
+# Drive `make pretrain` from CLI without editing the Makefile.
+PRETRAIN_ENCODING ?=
+PRETRAIN_EPOCHS ?= 15
+PRETRAIN_LR ?=
+PRETRAIN_ETA_MIN ?=
+PRETRAIN_BATCH ?=
+PRETRAIN_CHECKPOINT ?=
+PRETRAIN_OUT ?=
+_PRETRAIN_FLAGS = \
+    $(if $(PRETRAIN_ENCODING),--encoding $(PRETRAIN_ENCODING),) \
+    $(if $(PRETRAIN_LR),--lr-peak $(PRETRAIN_LR),) \
+    $(if $(PRETRAIN_ETA_MIN),--eta-min $(PRETRAIN_ETA_MIN),) \
+    $(if $(PRETRAIN_BATCH),--batch-size $(PRETRAIN_BATCH),) \
+    $(if $(PRETRAIN_CHECKPOINT),--resume $(PRETRAIN_CHECKPOINT),) \
+    $(if $(PRETRAIN_OUT),--inference-out $(PRETRAIN_OUT),)
+
+# ── Eval / smoke knobs (§174 W3) ──────────────────────────────────────────────
+EVAL_CHECKPOINT ?= $(BOOTSTRAP)
+EVAL_N ?= 200
+EVAL_SIMS ?= 128
+EVAL_THINK ?= 0.5
+EVAL_ENCODING ?=
+_EVAL_ENC_FLAG = $(if $(EVAL_ENCODING),--encoding $(EVAL_ENCODING),)
+
+SMOKE_CHECKPOINT ?= $(BOOTSTRAP)
+SMOKE_N ?= 20
+SMOKE_MODE ?= mcts
+SMOKE_ENCODING ?=
+_SMOKE_ENC_FLAG = $(if $(SMOKE_ENCODING),--encoding $(SMOKE_ENCODING),)
+
+TRANSFER_SOURCE ?= checkpoints/bootstrap_model.pt
+TRANSFER_OUTPUT ?= checkpoints/bootstrap_model_v6w25_transfer.pt
 
 # Named variant from configs/variants/ — deep-merged on top of selfplay.yaml.
 # Usage: make train VARIANT=vast        (canonical sustained variant)
@@ -262,8 +299,9 @@ train.smoke: ## 20-step smoke test to verify training end-to-end
 	MALLOC_ARENA_MAX=2 $(PY) scripts/train.py --checkpoint $(PRETRAIN_CKPT) --iterations 20
 
 .PHONY: pretrain
-pretrain: ## Full bootstrap pretrain (15 epochs)
-	MALLOC_ARENA_MAX=2 $(PY) -m hexo_rl.bootstrap.pretrain --epochs 15
+pretrain: ## Bootstrap pretrain. Vars: PRETRAIN_ENCODING, PRETRAIN_EPOCHS, PRETRAIN_LR, PRETRAIN_ETA_MIN, PRETRAIN_BATCH, PRETRAIN_CHECKPOINT, PRETRAIN_OUT
+	MALLOC_ARENA_MAX=2 $(PY) -m hexo_rl.bootstrap.pretrain \
+		--epochs $(PRETRAIN_EPOCHS) $(_PRETRAIN_FLAGS)
 
 
 # ── Probes ────────────────────────────────────────────────────────────────────
@@ -311,6 +349,25 @@ probe.windowing: ## Windowing diagnostic probe (Q_cov, Q_anchor, Q_stability) on
 eval: ## Evaluate checkpoint vs SealBot (CKPT=latest, N_GAMES=100, THINK_TIME=0.5, SIMS=128)
 	@test -n "$(CKPT)" || (echo "No checkpoint found. Pass CKPT= or generate one first." && exit 1)
 	$(PY) scripts/eval_vs_sealbot.py --checkpoint "$(CKPT)" --n-games $(N_GAMES) --time-limit $(THINK_TIME) --model-sims $(SIMS)
+
+.PHONY: eval.sealbot
+eval.sealbot: ## Eval vs SealBot with encoding auto-detect. Vars: EVAL_CHECKPOINT, EVAL_N, EVAL_SIMS, EVAL_THINK, EVAL_ENCODING
+	@test -n "$(EVAL_CHECKPOINT)" || (echo "Set EVAL_CHECKPOINT=" && exit 1)
+	$(PY) scripts/eval_vs_sealbot.py --checkpoint "$(EVAL_CHECKPOINT)" \
+		--n-games $(EVAL_N) --time-limit $(EVAL_THINK) --model-sims $(EVAL_SIMS) \
+		$(_EVAL_ENC_FLAG)
+
+.PHONY: selfplay.smoke
+selfplay.smoke: ## Self-play smoke (encoding auto-detect). Vars: SMOKE_CHECKPOINT, SMOKE_N, SMOKE_MODE={mcts|argmax|both}, SMOKE_ENCODING
+	@test -n "$(SMOKE_CHECKPOINT)" || (echo "Set SMOKE_CHECKPOINT=" && exit 1)
+	$(PY) scripts/smoke_selfplay_bootstrap.py --checkpoint "$(SMOKE_CHECKPOINT)" \
+		--n-games $(SMOKE_N) --mode $(SMOKE_MODE) $(_SMOKE_ENC_FLAG)
+
+.PHONY: transfer
+transfer: ## Transfer v6/v7full weights into v6w25 architecture. Vars: TRANSFER_SOURCE, TRANSFER_OUTPUT
+	@test -n "$(TRANSFER_SOURCE)" || (echo "Set TRANSFER_SOURCE=" && exit 1)
+	@test -f scripts/transfer_v6_to_v6w25.py || (echo "scripts/transfer_v6_to_v6w25.py not found — operator-curated script (§174 bootstrap fix). Check git log." && exit 1)
+	PYTHONPATH=. $(PY) scripts/transfer_v6_to_v6w25.py --source "$(TRANSFER_SOURCE)" --output "$(TRANSFER_OUTPUT)"
 
 
 # ── Corpus ────────────────────────────────────────────────────────────────────
