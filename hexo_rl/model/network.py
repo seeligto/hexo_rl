@@ -49,6 +49,7 @@ from hexo_rl.model.pooling import (
     PMAPool,
     build_pool,
 )
+from hexo_rl.encoding import all_specs, lookup
 from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 
 _log = logging.getLogger(__name__)
@@ -59,6 +60,12 @@ _log = logging.getLogger(__name__)
 # via the `input_channels` constructor arg — the Rust storage format is unchanged.
 
 WIRE_CHANNELS: int = BUFFER_CHANNELS
+
+# §176 P1 — registry-derived encoding whitelist replaces hardcoded
+# ("v6", "v6w25", "v8") tuple at the HexTacToeNet ctor. Built once at
+# import; the §172 registry is the single source of truth for which
+# names are accepted. Adding a registry entry auto-extends acceptance.
+_VALID_ENCODINGS: frozenset = frozenset(s.name for s in all_specs())
 
 # Required wire planes — every variant must include at least these or the model
 # has no stone information. Plane 0 = cur ply-0, plane 4 = opp ply-0 (8-plane HEXB v6).
@@ -330,10 +337,17 @@ class HexTacToeNet(nn.Module):
         policy_only_bias: bool = False,
     ) -> None:
         super().__init__()
-        if encoding not in ("v6", "v6w25", "v8"):
+        if encoding not in _VALID_ENCODINGS:
             raise ValueError(
-                f"encoding={encoding!r} must be 'v6', 'v6w25' or 'v8'"
+                f"encoding={encoding!r} not in registry. "
+                f"Registered: {sorted(_VALID_ENCODINGS)}"
             )
+        # §176 P1 — cache the registry spec on the instance and as a local
+        # alias for the ctor body. Routing decisions read attributes off
+        # `spec` (e.g. `has_pass_slot`) instead of comparing the encoding
+        # string. Avoids a per-forward registry lookup in the hot path.
+        self._spec = lookup(encoding)
+        spec = self._spec
         if pool_type not in SUPPORTED_POOL_TYPES:
             raise ValueError(
                 f"pool_type={pool_type!r} must be one of {SUPPORTED_POOL_TYPES}"
@@ -343,7 +357,7 @@ class HexTacToeNet(nn.Module):
         # meaningful for K-cluster encodings (v6 / v6w25). Under v8 (single
         # bbox) there is no K dimension to aggregate, so the PMA family is
         # gated off.
-        if pool_type in ("pma", "pma_global") and encoding == "v8":
+        if pool_type in ("pma", "pma_global") and not spec.has_pass_slot:
             raise ValueError(
                 f"pool_type={pool_type!r} is only valid for v6/v6w25 K-cluster "
                 "encodings; v8 has a single bounding-box window (no K)."
@@ -376,7 +390,7 @@ class HexTacToeNet(nn.Module):
                     "intervention (in-trunk feature mixing); the gpool-bias "
                     "branch is the additive head-level analog."
                 )
-            if encoding == "v8":
+            if not spec.has_pass_slot:
                 raise ValueError(
                     "gpool_bias_active=True is K-cluster-only (additive over "
                     "the K-cluster heads). v8 has a single bbox window and no "
@@ -417,7 +431,7 @@ class HexTacToeNet(nn.Module):
         # 8-plane (HEXB v6) — slicing happens entirely model-side. Disabled
         # under v8 since the v8 wire format is already a curated 11-plane set.
         if input_channels is not None:
-            if encoding == "v8":
+            if not spec.has_pass_slot:
                 raise ValueError(
                     "input_channels is a v6-only knob (slices the 8-plane "
                     "wire format); v8 wire format is already a curated 11-plane "
@@ -444,8 +458,10 @@ class HexTacToeNet(nn.Module):
             self.input_channel_index = None  # type: ignore[assignment]
             self.in_channels = int(in_channels)
 
-        # n_actions: v6 / v6w25 keep the legacy pass slot (HEXB shape); v8 drops it.
-        self.has_pass: bool = encoding in ("v6", "v6w25")
+        # n_actions: v6 / v6w25 / v7-family keep the legacy pass slot
+        # (HEXB shape); v8 / v8_canvas_realness drop it. Read straight off
+        # the registry spec — single source of truth (§172).
+        self.has_pass: bool = spec.has_pass_slot
         self.n_actions: int = spatial + (1 if self.has_pass else 0)
         self.off_window_plane_idx: int = int(off_window_plane_idx)
 
@@ -455,14 +471,14 @@ class HexTacToeNet(nn.Module):
             filters=filters,
             res_blocks=res_blocks,
             se_reduction_ratio=se_reduction_ratio,
-            gpool_indices=gpool_indices if encoding == "v8" else None,
+            gpool_indices=gpool_indices if not spec.has_pass_slot else None,
             gpool_channels=gpool_channels,
             canvas_realness=self.canvas_realness,
         )
 
         # Policy / opp_reply heads — branch on encoding. v6 keeps the FC head
         # (loads existing v6 checkpoints byte-exact); v8 swaps in KataGoPolicyHead.
-        if encoding == "v8":
+        if not spec.has_pass_slot:
             self.policy_head = KataGoPolicyHead(
                 c_in=filters,
                 spatial=spatial,
@@ -644,7 +660,7 @@ class HexTacToeNet(nn.Module):
         # gpool site (trunk + policy / opp_reply heads). Under canvas_realness
         # the plane-8 polarity is already (1 inside, 0 outside), so we read the
         # plane directly without the off→mask inversion.
-        if self.encoding == "v8":
+        if not self._spec.has_pass_slot:
             if self.canvas_realness:
                 mask = x[
                     :,
@@ -718,7 +734,7 @@ class HexTacToeNet(nn.Module):
                 policy_bias = p_bias_raw
 
             # Policy head — branch on encoding.
-            if self.encoding == "v8":
+            if not self._spec.has_pass_slot:
                 log_policy = self.policy_head(out, mask, mask_sum_hw)
             else:
                 p = F.relu(self.policy_conv(out))
@@ -742,7 +758,7 @@ class HexTacToeNet(nn.Module):
         extras: list = []
 
         if aux:
-            if self.encoding == "v8":
+            if not self._spec.has_pass_slot:
                 extras.append(self.opp_reply_head(out, mask, mask_sum_hw))
             else:
                 o = F.relu(self.opp_reply_conv(out))
@@ -793,7 +809,7 @@ class HexTacToeNet(nn.Module):
         if self._input_channels is not None:
             x_K = x_K.index_select(1, self.input_channel_index)
 
-        if self.encoding == "v8":
+        if not self._spec.has_pass_slot:
             raise RuntimeError(
                 "aggregated_forward_K is K-cluster only; v8 has no K dim."
             )
