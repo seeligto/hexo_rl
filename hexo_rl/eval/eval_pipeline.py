@@ -53,6 +53,31 @@ except ImportError:
     log = logging.getLogger("eval_pipeline")  # type: ignore[assignment]
 
 
+# §174 G4 — value-head |max| band check.  Baseline 0.308 measured on the v7full
+# bootstrap (§170 P4 P1); band is ±50% → [0.154, 0.462].  e50 retrain marginal-
+# failed at 0.489 (value head grew during extra epochs), so this gate runs at
+# every eval round and emits a WARNING when out of band.  Bands are constants —
+# variants do not override.  Returns the measured |max| and the band-PASS flag.
+_G4_VALUE_FC2_BAND_LO = 0.154
+_G4_VALUE_FC2_BAND_HI = 0.462
+
+
+def _g4_value_head_band_check(model: HexTacToeNet) -> tuple[float, bool]:
+    """Return (value_fc2.weight.abs().max(), in_band).
+
+    Returns (nan, True) when the model lacks a real ``value_fc2.weight``
+    Tensor (e.g. unit-test MagicMock).  Production HexTacToeNet always
+    exposes the real Linear layer, so this guard only short-circuits tests.
+    """
+    weight = getattr(getattr(model, "value_fc2", None), "weight", None)
+    if not isinstance(weight, torch.Tensor):
+        return float("nan"), True
+    with torch.no_grad():
+        val = float(weight.detach().abs().max().item())
+    in_band = _G4_VALUE_FC2_BAND_LO <= val <= _G4_VALUE_FC2_BAND_HI
+    return val, in_band
+
+
 class EvalPipeline:
     """Orchestrates evaluation rounds for Phase 4.0 training."""
 
@@ -208,6 +233,20 @@ class EvalPipeline:
         )
 
         results: Dict[str, Any] = {"step": train_step, "promoted": False, "eval_games": 0}
+
+        # §174 G4 — value-head |max| band check.  Runs first so the measurement
+        # is logged even when no opponents fire (stride-skipped rounds).
+        _g4_val, _g4_in_band = _g4_value_head_band_check(current_model)
+        results["value_fc2_weight_abs_max"] = round(_g4_val, 4)
+        results["g4_value_head_band_pass"] = _g4_in_band
+        if not _g4_in_band:
+            log.warning(
+                "g4_value_head_band_violation",
+                step=train_step,
+                value_fc2_weight_abs_max=_g4_val,
+                band_lo=_G4_VALUE_FC2_BAND_LO,
+                band_hi=_G4_VALUE_FC2_BAND_HI,
+            )
 
         def _should_run(name: str, opp_cfg: dict[str, Any]) -> bool:
             stride = int(opp_cfg.get("stride", 1))

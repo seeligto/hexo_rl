@@ -772,4 +772,49 @@ def test_db_insert_match_with_colony_wins(tmp_path: Path) -> None:
     stats = db.get_colony_win_stats()
     assert len(stats) == 1
     assert stats[0][3] == 3  # colony_wins
-    db.close()
+
+
+# ── §174 G4 — value-head |max| band check ────────────────────────────────────
+
+def test_g4_in_band_returns_pass() -> None:
+    """Weight |max| within [0.154, 0.462] → in_band=True."""
+    import torch
+    from hexo_rl.eval.eval_pipeline import _g4_value_head_band_check
+
+    model = MagicMock()
+    model.value_fc2.weight = torch.tensor([[0.30, -0.20, 0.10]])
+    val, in_band = _g4_value_head_band_check(model)
+    assert in_band is True
+    assert abs(val - 0.30) < 1e-6
+
+
+def test_g4_above_band_returns_fail() -> None:
+    """Weight |max| > 0.462 → in_band=False (e50 marginal failure mode)."""
+    import torch
+    from hexo_rl.eval.eval_pipeline import _g4_value_head_band_check
+
+    model = MagicMock()
+    model.value_fc2.weight = torch.tensor([[0.50, 0.10]])
+    val, in_band = _g4_value_head_band_check(model)
+    assert in_band is False
+    assert abs(val - 0.50) < 1e-6
+
+
+def test_g4_below_band_returns_fail() -> None:
+    """Weight |max| < 0.154 → in_band=False (value head collapsed)."""
+    import torch
+    from hexo_rl.eval.eval_pipeline import _g4_value_head_band_check
+
+    model = MagicMock()
+    model.value_fc2.weight = torch.tensor([[0.10, -0.05]])
+    val, in_band = _g4_value_head_band_check(model)
+    assert in_band is False
+
+
+def test_g4_handles_non_tensor_weight() -> None:
+    """MagicMock without a real tensor → (nan, True), no exception."""
+    from hexo_rl.eval.eval_pipeline import _g4_value_head_band_check
+
+    val, in_band = _g4_value_head_band_check(MagicMock())
+    assert math.isnan(val)
+    assert in_band is True
