@@ -242,9 +242,6 @@ class InferenceServer(threading.Thread):
     def infer(self, state: np.ndarray) -> tuple[np.ndarray, float]:
         return self.submit_and_wait(state)
 
-    def infer_many(self, states: list[np.ndarray]) -> list[tuple[np.ndarray, float]]:
-        return [self.submit_and_wait(state) for state in states]
-
     @property
     def forward_count(self) -> int:
         return self._forward_count
