@@ -70,13 +70,13 @@ def _model_kwargs(spec: EncodingSpec) -> dict[str, Any]:
     """Map an EncodingSpec onto HexTacToeNet ctor kwargs.
 
     HexTacToeNet's `encoding` argument accepts only {"v6", "v6w25", "v8"};
-    v7full / v7 / v7e30 share the v6 wire format and load with encoding="v6".
-    v8_canvas_realness is encoding="v8" + canvas_realness=True per §169 A4.
-    Filters / blocks are kept tiny — this test exercises shape contracts,
-    not training dynamics.
+    v7full / v7 / v7e30 / v7mw share the v6 wire format and load with
+    encoding="v6". v8_canvas_realness is encoding="v8" + canvas_realness=True
+    per §169 A4. Filters / blocks are kept tiny — this test exercises
+    shape contracts, not training dynamics.
     """
     common = dict(filters=8, res_blocks=1)
-    if spec.name in ("v6", "v7full", "v7", "v7e30"):
+    if spec.name in ("v6", "v7full", "v7", "v7e30", "v7mw"):
         return {**common, "encoding": "v6", "board_size": spec.trunk_size,
                 "in_channels": spec.n_planes}
     if spec.name == "v6w25":

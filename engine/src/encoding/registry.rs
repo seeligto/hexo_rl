@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn test_registry_loads_all_known_encodings() {
         let names: Vec<&str> = all_specs().map(|s| s.name).collect();
-        for expected in ["v6", "v6w25", "v7full", "v7", "v7e30", "v8", "v8_canvas_realness"] {
+        for expected in ["v6", "v6w25", "v7full", "v7", "v7e30", "v7mw", "v8", "v8_canvas_realness"] {
             assert!(
                 names.contains(&expected),
                 "missing {:?} in {:?}",
@@ -439,8 +439,8 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            7,
-            "expected exactly 7 encodings, got {:?}",
+            8,
+            "expected exactly 8 encodings, got {:?}",
             names
         );
     }
@@ -477,9 +477,9 @@ mod tests {
     }
 
     #[test]
-    fn test_all_specs_includes_all_7() {
+    fn test_all_specs_includes_all_8() {
         let count = all_specs().count();
-        assert_eq!(count, 7);
+        assert_eq!(count, 8);
     }
 
     #[test]

@@ -175,12 +175,12 @@ class WorkerPool:
         # Legacy spec for the SelfPlayRunner Rust kwarg round-trip — kept
         # alive until a future refactor migrates Rust SelfPlayRunner off
         # the 4-field PyEncodingSpec. The legacy module knows only
-        # {v6, v6w25, v8}; v7full is a registry-only label whose wire
-        # format is byte-identical to v6 (same board_size, n_planes,
+        # {v6, v6w25, v8}; v7full / v7mw are registry-only labels whose
+        # wire format is byte-identical to v6 (same board_size, n_planes,
         # cluster fields, legal-move radius), so we synthesise the legacy
-        # spec from the v6 helper for that one case. v8 is blocked
-        # above; v6 / v6w25 (§173 A8' unblocked) / v7full reach here.
-        if registry_spec.name == "v7full":
+        # spec from the v6 helper for those cases. v8 is blocked above;
+        # v6 / v6w25 / v7full / v7mw reach here.
+        if registry_spec.name in ("v7full", "v7mw"):
             from hexo_rl.utils.encoding import v6_spec as _legacy_v6_spec
             legacy_spec: LegacyEncodingSpec = _legacy_v6_spec()
         else:

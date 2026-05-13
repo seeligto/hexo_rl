@@ -188,6 +188,40 @@ schema_version          = 2
 notes                   = "§174 retired as selfplay anchor (3 bootstrap recipes failed viability gate at R=8 MCTS-128). Pretrain+eval+matched-MCTS pin LIFTED. Retained as future re-entry target."
 
 # ---------------------------------------------------------------------------
+# v7mw — v7full + K-cluster multi-window perception at 19×19.
+# Same model architecture as v7full (n_planes=8, board_size=19,
+# policy_logit_count=362, sym_table_id=size_19) — v7full weights load
+# directly into v7mw with no shape changes. Difference is selfplay:
+# is_multi_window=true activates the §173 α multi-window K-cluster path,
+# get_cluster_views() can emit K>1 windows when stones spread beyond
+# cluster_threshold=5 hex distance. Isolates the multi-window effect from
+# the v6w25 confound (v6w25 also widens window to 25×25 and action space
+# to 626). §176a experiment.
+# ---------------------------------------------------------------------------
+[encodings.v7mw]
+board_size              = 19
+trunk_size              = 19            # = cluster_window_size for multi-window
+cluster_window_size     = 19
+cluster_threshold       = 5             # hex-distance; matches legal_move_radius
+legal_move_radius       = 5
+n_planes                = 8
+plane_layout            = [
+  "current_player_t0", "current_player_t-1", "current_player_t-2", "current_player_t-3",
+  "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
+]
+policy_logit_count      = 362            # 19*19 + 1 (same as v7full)
+has_pass_slot           = true
+is_multi_window         = true
+value_pool              = "min"          # §170 P4 P1 canonical aggregation
+policy_pool             = "scatter_max"  # per-move cluster dispatch (α §3.1)
+sym_table_id            = "size_19"      # 19×19 sym tables shared with v6/v7full
+# kept_plane_indices: canonical X+history, O+history (see header comment).
+kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
+n_source_planes         = 18
+schema_version          = 2
+notes                   = "§176a — v7full arch + K-cluster multi-window perception at 19×19. Isolates multi-window from v6w25 action-space confound."
+
+# ---------------------------------------------------------------------------
 # v8 — bbox-of-stones 25×25, 11 planes (history + 3 aux).
 # Plane-8 polarity OFF→OUTSIDE (vanilla v8 contract).
 # ---------------------------------------------------------------------------
