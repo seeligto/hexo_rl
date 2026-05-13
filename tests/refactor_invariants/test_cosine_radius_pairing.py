@@ -11,6 +11,12 @@ configs/variants/*.yaml on 2026-05-13):
                   (NO separate cosine.enabled flag; threshold=0 disables cosine)
   jitter:         selfplay.legal_move_radius_jitter (bool, must be truthy)
 
+NOTE — inverted-semantic gate: §156 fixed draw collapse by setting
+selfplay.playout_cap.temperature_threshold_compound_moves=0, which
+DISABLES the cosine schedule. So "threshold > 0" = cosine ACTIVE =
+legacy pre-§156 state, which must pair with LEGAL_MOVE_RADIUS jitter.
+Variants with threshold=0 (canonical §156 fix applied) are skipped.
+
 Effective config = deep-merge(configs/selfplay.yaml, variant) via
 hexo_rl.utils.config.load_config — same merge logic the runtime uses.
 
