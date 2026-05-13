@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 import structlog
 
+from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding_name
 from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS, NUM_CELLS
 
 log = structlog.get_logger(__name__)
@@ -194,7 +195,7 @@ def load_pretrained_buffer(
             msg="push_game allocates full corpus in RAM — training starts after this completes",
         )
 
-    _enc = config.get("encoding", "v6")
+    _enc = _normalize_encoding_name(config.get("encoding"))
     pretrained_buffer = ReplayBuffer(capacity=T, encoding=_enc)
     # Neutral aux: ownership=1 ("empty" → 0.0 after decode), winning_line=0.
     n_cells = board_size * board_size

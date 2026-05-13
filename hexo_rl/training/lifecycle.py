@@ -211,7 +211,8 @@ def build_subsystems(
     # the existing _emit_training_events cadence so probe cost is amortised.
     early_game_probe: Optional[EarlyGameProbe]
     try:
-        _probe_encoding = config.get("encoding", "v6")
+        from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding_name
+        _probe_encoding = _normalize_encoding_name(config.get("encoding"))
         early_game_probe = EarlyGameProbe(device=device, encoding_name=_probe_encoding)
         log.info(
             "early_game_probe_init",

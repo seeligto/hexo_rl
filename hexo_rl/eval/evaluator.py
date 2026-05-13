@@ -20,6 +20,7 @@ from hexo_rl.eval.colony_detection import is_colony_win
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
 from hexo_rl.encoding import lookup as _lookup_encoding
+from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding_name
 from hexo_rl.selfplay.utils import get_temperature
 
 try:
@@ -70,8 +71,10 @@ class ModelPlayer(BotProtocol):
         self._n_sims = n_sims
         self._config = config
         self._temperature = temperature
-        # Derive board geometry from encoding registry (§173 eval-fix)
-        encoding_name = config.get("encoding", "v6") if config else "v6"
+        # Derive board geometry from encoding registry (§173 eval-fix).
+        # §175: config["encoding"] may be str OR {"version": ...} dict after
+        # Trainer._propagate_encoding_into_config — normalize either form.
+        encoding_name = _normalize_encoding_name(config.get("encoding") if config else None)
         spec = _lookup_encoding(encoding_name)
         self.board_size = spec.board_size
         self.n_actions = spec.policy_logit_count
@@ -181,7 +184,7 @@ class Evaluator:
         for i in range(n_games):
             np.random.seed(self._eval_seed_base + i)
             random.seed(self._eval_seed_base + i)
-            encoding_name = self.config.get("encoding", "v6")
+            encoding_name = _normalize_encoding_name(self.config.get("encoding"))
             board = Board.with_encoding_name(encoding_name)
             state = GameState.from_board(board)
             model_player_side = 1 if i % 2 == 0 else -1

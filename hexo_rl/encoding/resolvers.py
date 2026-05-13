@@ -26,6 +26,42 @@ class ShapeMismatchError(Exception):
 # Sentinel value used by expand_auto_paths to detect unresolved artifact paths.
 _AUTO = "<auto>"
 
+def normalize_encoding_name(enc: Any) -> str:
+    """Coerce a config encoding value to its registry name string.
+
+    Accepts the four forms that show up at consumer sites:
+      - str ``"v6"``                           → returned as-is
+      - dict ``{"version": "v6", ...}`` or
+             ``{"name": "v6", ...}``           → version/name extracted
+      - object with ``.name`` (EncodingSpec)   → ``.name`` returned
+      - ``None``                               → default ``"v6"``
+
+    §175 eval-fix: `Trainer._propagate_encoding_into_config` rewrites
+    `config["encoding"]` from the initial string form to a
+    ``{"version": <name>}`` dict on resume. Downstream sites that call
+    ``lookup(config.get("encoding"))`` must funnel through this helper or
+    they crash with ``TypeError: unhashable type: 'dict'``.
+    """
+    if enc is None:
+        return "v6"
+    if isinstance(enc, str):
+        return enc
+    if isinstance(enc, Mapping):
+        name = enc.get("name", enc.get("version", "v6"))
+        if not isinstance(name, str):
+            raise EncodingRegistryError(
+                f"encoding mapping name/version must be a string; "
+                f"got {type(name).__name__}: {name!r}"
+            )
+        return name
+    name = getattr(enc, "name", None)
+    if isinstance(name, str):
+        return name
+    raise EncodingRegistryError(
+        f"cannot extract encoding name from {type(enc).__name__}: {enc!r}"
+    )
+
+
 _SCATTERED_KEYS_TO_FIELD: dict[str, str] = {
     "board_size": "board_size",
     "cluster_window_size": "cluster_window_size",

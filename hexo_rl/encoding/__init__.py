@@ -26,6 +26,7 @@ from hexo_rl.encoding.registry import (
 from hexo_rl.encoding.resolvers import (
     ShapeMismatchError,
     expand_auto_paths,
+    normalize_encoding_name,
     resolve_anchor_path,
     resolve_corpus_path,
     resolve_encoding_for_eval,
@@ -42,6 +43,7 @@ __all__ = [
     "all_specs",
     "expand_auto_paths",
     "lookup",
+    "normalize_encoding_name",
     "resolve_anchor_path",
     "resolve_corpus_path",
     "resolve_encoding_for_eval",
