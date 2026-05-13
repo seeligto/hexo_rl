@@ -90,6 +90,7 @@ _CORPUS_PATHS: dict[str, str] = {
     "v6":                 "data/bootstrap_corpus.npz",
     "v6w25":              "data/bootstrap_corpus_v6w25.npz",
     "v7full":             "data/bootstrap_corpus.npz",   # shared with v6 (§150)
+    "v7mw":               "data/bootstrap_corpus.npz",   # shared with v6/v7full (§176a)
     "v8":                 "data/bootstrap_corpus_v8.npz",
     "v8_canvas_realness": "data/bootstrap_corpus_v8_canvas_realness.npz",
 }
@@ -98,6 +99,7 @@ _ANCHOR_PATHS: dict[str, str] = {
     "v6":                 "checkpoints/bootstrap_model_v6.pt",
     "v6w25":              "checkpoints/bootstrap_model_v6w25.pt",
     "v7full":             "checkpoints/bootstrap_model_v7full.pt",
+    "v7mw":               "checkpoints/bootstrap_model_v7full.pt",   # v7full anchor (same arch §176a)
     "v8":                 "checkpoints/bootstrap_model_v8full_warm.pt",
     "v8_canvas_realness": "checkpoints/v8_variants/A4_canvas_realness.pt",
 }
