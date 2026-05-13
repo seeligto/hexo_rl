@@ -39,7 +39,7 @@ Read it fully before doing anything. Rule files under `docs/rules/` are topic-sc
 
 `engine/src/encoding/registry.toml` is canonical single source of truth for every encoding (v6, v6w25, v7full, v8, v8_canvas_realness, …). Encoding-aware code: check registry first. Lookup via `hexo_rl.encoding.lookup(name)` (Python) or `engine::encoding::lookup_or_panic(name)` (Rust) — don't reinvent fields, don't hardcode plane counts.
 
-New encoding: add 1 TOML entry, run `python -m hexo_rl.encoding audit` to verify Rust/Python parity + invariants. No factory functions, no scattered constants — both parsers read the same TOML at load. Variant configs use `encoding: <name>` only; overrides like `board_size:`, `n_planes:`, `cluster_window_size:` rejected at load. Forward pointers: `docs/designs/encoding_registry_design.md` (registry spec, field semantics, migration policy), `docs/designs/encoding_alpha_multiwindow_selfplay_design.md` (α multi-window K-cluster selfplay, §173+).
+New encoding: add 1 TOML entry, run `python -m hexo_rl.encoding audit` to verify Rust/Python parity + invariants. No factory functions, no scattered constants — both parsers read the same TOML at load. Variant configs use `encoding: <name>`; redundant scalar overrides (e.g. `board_size:`, `n_planes:`) are tolerated by `_check_scattered_keys` when consistent with the named encoding, and rejected when they disagree. Forward pointers: `docs/designs/encoding_registry_design.md` (registry spec, field semantics, migration policy), `docs/designs/encoding_alpha_multiwindow_selfplay_design.md` (α multi-window K-cluster selfplay, §173+).
 
 ---
 
