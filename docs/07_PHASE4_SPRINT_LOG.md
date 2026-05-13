@@ -4,6 +4,13 @@ Read this alongside `CLAUDE.md` at the start of any new session to avoid
 re-litigating resolved decisions. Structured by subsystem, not by date.
 For per-day narrative see `docs/07_PHASE4_SPRINT_LOG_BACKUP.md`.
 
+<!-- Compressed 2026-05-13: §70, §90, §118, §124 verbose debugging
+     narratives condensed to verdict + key tables + commit SHAs.
+     Saved ~600 lines. Full pre-compression history in git
+     (before commit 89fbe07). Section §1-§101 subsystem narrative
+     and other §75-§140 sections retain full detail — compress on
+     demand as they age. -->
+
 ---
 
 ## Classification Audit (§1–§101)
@@ -827,365 +834,66 @@ P3 chosen over P8b despite P8b's +23% steps/hr because P3 has +22% games/hr, 16p
 
 ### §70 — Phase 4.0 Overnight Run — Mode Collapse Diagnosis
 
-**Status:** diagnostics complete 2026-04-09, no fixes proposed. Run
-`dcf8cbba5b9f485987880055e9cb6ea7` PAUSED at
-`checkpoint_00017428.pt` pending the fix session. Full artefacts in
-`archive/diagnosis_2026-04-10/`. Tracked as **Q17** in `docs/06_OPEN_QUESTIONS.md`.
+**Status:** RESOLVED at §73 — Dirichlet root noise ported to Rust `engine/src/game_runner.rs` (commit `71d7e6e`). Q17 closed. Diagnostics complete 2026-04-09; run `dcf8cbba5b9f485987880055e9cb6ea7` PAUSED at `checkpoint_00017428.pt`. Full artefacts: `archive/diagnosis_2026-04-10/`.
 
-#### Context
+#### Verdict
 
-The P3 overnight run started from `checkpoints/bootstrap_model.pt` and
-reached ~step 16,880 on the `gumbel_targets` variant (`gumbel_mcts: false`,
-`completed_q_values: true`). Dashboard metrics looked healthy at the time
-of inspection:
+Root cause: **no Dirichlet root noise on the Rust training path.** The PyO3 `apply_dirichlet_to_root` (`engine/src/lib.rs:454`, impl `engine/src/mcts/mod.rs:321-337`) was only wired through the Python `SelfPlayWorker` (eval / benchmark / `OurModelBot`). When the training self-play loop migrated to `engine::SelfPlayRunner` on 2026-03-30 (two days after the Dirichlet feature landed), the injection was not carried across — **unported feature, not regression**. Runtime trace under feature `debug_prior_trace`: 30/30 records `site: game_runner`, 0/30 `site: apply_dirichlet_to_root`.
 
-- `policy_entropy` ≈ 2.54 nats on the combined pretrain+selfplay mini-batch stream
-- training loss trending down
-- 733 games/hr, 28% draws
-- no obvious deadlock or OOM
+Result: MCTS rubber-stamps a sharp prior → self-play enters deterministic fixed point → training targets match network outputs → no gradient signal to break the equilibrium. Dashboard `policy_entropy` averaged the high-entropy pretrain stream with the collapsed selfplay stream and masked the collapse for 16,880 steps.
 
-Despite this, intra-run round-robins between near-current checkpoints
-exposed a hard mode collapse.
+#### Evidence — round-robin eval (collapse signature)
 
-#### Eval results table
+| Matchup | Score | Game length |
+|---|---|---|
+| ckpt_13000 vs ckpt_14000 | 100/0 P1 | exactly 25 moves, carbon-copy |
+| ckpt_14000 vs ckpt_15000 | 50/0 P1 + 50 draws | 31-33 moves, carbon-copy |
+| **ckpt_15000 vs RandomBot** | **50/0 P1** | **11-33, varied** |
 
-Three ckpt-vs-ckpt round-robins plus a RandomBot control, using
-`scripts/eval_round_robin.py` at the default 64 sims / 0.1 s settings:
+RandomBot anchor proves the net has real knowledge; the *self-play distribution* collapsed. τ=1.0 sampling check (20 games) confirmed temperature sampling functionally correct.
 
-| Matchup | Score | Colony wins | Game length | Observation |
-|---|---|---|---|---|
-| ckpt_13000 vs ckpt_14000 | 100/0 P1 | deterministic | exactly 25 moves | carbon-copy games every rollout |
-| ckpt_13000 vs ckpt_15000 | 100/0 P1 | deterministic | exactly 25 moves | carbon-copy |
-| ckpt_14000 vs ckpt_15000 | 50/0 P1 (50 draws) | deterministic | exactly 31–33 moves | carbon-copy |
-| **ckpt_15000 vs RandomBot (control)** | **50/0 P1** | varied | **lengths 11–33** | **varied games — the network has real knowledge, the self-play equilibrium has collapsed** |
+#### Diagnostic A — static audit + feature-gated runtime trace (collapsed)
 
-The RandomBot control is the critical anchor: ckpt_15000 does know how
-to win games. The collapse is not in the policy's game-playing ability,
-it is in the self-play distribution that produces training data.
+Static audit + git archaeology + 30-worker runtime trace under `debug_prior_trace` feature (gated on `HEXO_PRIOR_TRACE_PATH`) all confirm: zero `apply_dirichlet_to_root` calls on the Rust training path; 30/30 records `site: game_runner`. Python path Dirichlet is functionally correct, just dead code for training. Variant disclosure: trace under `gumbel_targets`; behaviour identical to `baseline_puct` (only `completed_q_values` differs). Artefacts: `archive/diagnosis_2026-04-10/diag_A_*`.
 
-#### Monitoring gap
+#### Diagnostic B — raw policy sharpness across checkpoints (collapsed)
 
-Dashboard `policy_entropy` is computed over the combined pretrain + selfplay
-mini-batch stream (`trainer.py:402-405`). With buffer mix ~63% pretrain /
-~37% selfplay (from the `pretrained_weight = max(0.1, 0.8·exp(-step / decay_steps))`
-schedule at step ~16k with `decay_steps = 70_000`), the pretrain stream's
-high entropy masked the selfplay stream's collapse. The §69 overnight open
-issue flagged `policy_entropy_mean ≈ 0.25` on every sweep run as
-"probably a bootstrap-concentration artifact" — in hindsight that was
-the early warning signal for this collapse.
+500 positions stratified by phase, K=0 window. Per-checkpoint summary:
 
-**Action item (follow-up, not this pass):** split `policy_entropy` into
-`policy_entropy_pretrain` and `policy_entropy_selfplay` in the
-`train_step` monitoring event so the collapse is visible on the
-dashboard next time. Tracked under Q17 remediation.
-
-#### Diagnostic A — static audit + feature-gated runtime trace
-
-**Goal:** programmatically prove or refute that `engine/src/game_runner.rs`
-calls `apply_dirichlet_to_root` on the training path.
-
-**Headline finding:** it does not. The live training path
-(`scripts/train.py` → `hexo_rl/selfplay/pool.py` → Rust
-`engine::SelfPlayRunner`) has **zero** calls to
-`apply_dirichlet_to_root`. The PyO3 method exists at
-`engine/src/lib.rs:454` and its Rust implementation at
-`engine/src/mcts/mod.rs:321-337`, but the **only** caller is the Python
-`SelfPlayWorker._run_mcts_with_sims` at
-`hexo_rl/selfplay/worker.py:138-145`, which is referenced from
-`scripts/benchmark_mcts.py`, `hexo_rl/bootstrap/bots/our_model_bot.py`,
-and `hexo_rl/eval/evaluator.py` only. `scripts/train.py` never
-constructs a `SelfPlayWorker`.
-
-**Git archaeology verdict:** *unported feature*. The commit that added
-`apply_dirichlet_to_root` to the Python path landed on 2026-03-28. The
-Phase 3.5 migration of the training path to Rust
-(`engine::SelfPlayRunner`) landed two days later on 2026-03-30 and did
-not carry Dirichlet injection across. This matters for the fix session's
-framing: it is not a regression someone rolled back by mistake, it is a
-missing port. See `archive/diagnosis_2026-04-10/diag_A_grep.txt` and
-`diag_A_static_audit.md` for the raw proof.
-
-**Runtime trace instrumentation.** To confirm the static finding at
-runtime *and* give diagnostic C its data for free, a compile-time
-feature-gated JSONL trace was added:
-
-- Cargo feature `debug_prior_trace` (empty default, opt-in via
-  `maturin develop --release -m engine/Cargo.toml --features debug_prior_trace`).
-- Activation is gated a second time at launch by the environment variable
-  `HEXO_PRIOR_TRACE_PATH`. If the feature is compiled in but the env var
-  is unset, the trace is a no-op.
-- Two capture sites: `engine/src/game_runner.rs` (post-MCTS root-prior
-  and visit-count snapshot, cap 30 records) and
-  `engine/src/mcts/mod.rs::apply_dirichlet_to_root` (pre/post priors and
-  noise vector, cap 10 records).
-- Writer uses unbuffered `write_all` + `flush` via a
-  `std::sync::LazyLock<Mutex<Option<File>>>` sink so every record is
-  durable at the moment it is written, surviving SIGINT paths that skip
-  Rust-side `Drop` chains.
-- One gated unit test (`test_dirichlet_trace_roundtrip`) asserts the
-  JSONL wrapper on the Python path produces exactly one well-formed
-  record per call.
-
-**Runtime trace result — training path.** 30 records captured from 14
-workers during a ~45-second smoke run from `checkpoint_00015000.pt` on
-the `gumbel_targets` variant. **All 30 records have `site: game_runner`;
-zero records have `site: apply_dirichlet_to_root`** — confirming the
-static audit at runtime. The first move on the empty board shows:
-
-| Metric | Value |
-|---|---|
-| root_priors[argmax] | 0.5397 (one cell out of 25 legal candidates) |
-| second/third priors | 0.1709, 0.0978 |
-| priors below 0.002 | 18 of 25 candidates (effectively unreachable even at τ=1.0) |
-| MCTS top-1 visit fraction | **0.649** (133 of 205 visits on the top prior) |
-| children receiving visits | 6 of 25 |
-| temperature | 1.0 (compound_move = 0) |
-
-Full record dump and per-field explanation in
-`archive/diagnosis_2026-04-10/diag_A_trace_summary.md`.
-
-**Runtime trace result — Python path.** 4 records from
-`scripts/benchmark_mcts.py`, all with `site: apply_dirichlet_to_root`,
-`n_children = 25`, `epsilon = 0.25`, and non-uniform Dirichlet noise
-vectors (23–25 non-zero components, peak magnitudes 0.17–0.36). The
-Python path is functionally correct; it is just dead code for training
-purposes.
-
-**Variant disclosure.** The trace was captured under `gumbel_targets`,
-the same variant as the collapsed run. The relevant behaviour (absence
-of Dirichlet injection, temperature formula, MCTS visit concentration)
-is identical between `gumbel_targets` and `baseline_puct` because both
-set `gumbel_mcts: false` — the only difference is `completed_q_values`
-(KL policy target vs CE visit target), which affects the training-loss
-shape, not the self-play path that produces root noise. A secondary run
-under `baseline_puct` is not required.
-
-#### Diagnostic B — raw policy sharpness across checkpoints
-
-**Goal:** measure whether the policy head has sharpened to near-zero
-entropy on the positions the training loop was actually training on,
-and anchor the progression against `best_model.pt` (pre-§67 reference).
-
-**Method.** 500 positions drawn with stratified sampling (early /
-mid / late phase) from the 500 recorded games in the collapsed run
-`runs/dcf8cbba5b9f485987880055e9cb6ea7/games/`. Replayed through Rust
-`Board` + Python `GameState.from_board` / `apply_move`, converted to
-`(K, 18, 19, 19)` tensors, K=0 (centroid) window taken to produce
-`(18, 19, 19)` per position. Each checkpoint was loaded via
-`Trainer._extract_model_state` + `Trainer._infer_model_hparams` +
-`HexTacToeNet.load_state_dict(strict=False)`, evaluated in `.eval()` +
-`torch.no_grad()` + `torch.autocast` on CUDA. Entropy per position:
-`torch.special.entr(exp(log_policy)).sum(dim=-1)` matching
-`trainer.py:402-405`.
-
-**K=0 caveat (must appear at top of `diag_B_sharpness.md`):** see
-`archive/diagnosis_2026-04-10/diag_B_sharpness.md`. Primary signal is
-the **progression across checkpoints on identical positions**, not the
-absolute nat values vs the §1 heuristic.
-
-**Per-checkpoint summary (500 positions, K=0):**
-
-| Checkpoint | H(π) mean | median | p10 | p90 | top-1 mean | eff. support mean |
-|---|---|---|---|---|---|---|
-| bootstrap_model.pt | 2.665 | 2.688 | 1.330 | 3.889 | 0.379 | 21.48 |
-| checkpoint_00013000.pt | 1.666 | 1.643 | 0.620 | 2.681 | 0.497 | 9.72 |
-| checkpoint_00014000.pt | 1.581 | 1.547 | 0.556 | 2.622 | 0.520 | 7.00 |
-| checkpoint_00015000.pt | 1.532 | 1.601 | 0.569 | 2.336 | 0.524 | 5.79 |
-| checkpoint_00016000.pt | 1.649 | 1.650 | 0.521 | 2.572 | 0.504 | 7.05 |
-| checkpoint_00017000.pt | 1.486 | 1.446 | 0.477 | 2.353 | 0.540 | 6.68 |
-| checkpoint_00017428.pt | 1.698 | 1.644 | 0.531 | 2.755 | 0.505 | 9.35 |
-| best_model.pt | 2.665 | 2.688 | 1.330 | 3.889 | 0.379 | 21.48 |
-
-**Phase split (mid bucket `10 ≤ cm < 25` is the worst-case window):**
-
-| Checkpoint | Early (cm<10) mean | Mid (10≤cm<25) mean | Late (cm≥25) mean |
+| Checkpoint | H(π) mean | top-1 mean | eff. support |
 |---|---|---|---|
-| bootstrap_model.pt | 2.430 | 2.665 | 3.418 |
-| checkpoint_00013000.pt | 1.622 | 1.466 (p10=0.179) | 2.070 |
-| checkpoint_00014000.pt | 1.499 | 1.443 (p10=0.191) | 2.021 |
-| checkpoint_00015000.pt | 1.591 | **1.317** (p10=0.081) | 1.621 |
-| checkpoint_00016000.pt | 1.634 | 1.465 (p10=0.294) | 1.935 |
-| checkpoint_00017000.pt | 1.387 | 1.419 (p10=0.132) | 1.887 |
-| checkpoint_00017428.pt | 1.623 | 1.620 (p10=0.136) | 2.037 |
-| best_model.pt | 2.430 | 2.665 | 3.418 |
+| bootstrap_model.pt | 2.665 | 0.379 | 21.48 |
+| ckpt_13000-17428 (band) | 1.49-1.70 | 0.50-0.54 | 5.8-9.7 |
 
-**Key observations:**
+Stuck **fixed point**, not progressive collapse — entire post-bootstrap band sits within 0.21 nats. Mid-game bucket (cm 10-24) is worst: p10 down to 0.08 nats. `best_model.pt` ≡ `bootstrap_model.pt` (SHA-256 `ed07ecbe6a73` on first conv) — never promoted during P3. Restart point selection should be based on **buffer composition** not entropy rank; fresh bootstrap is the cleanest option. Artefacts: `archive/diagnosis_2026-04-10/diag_B_sharpness.md`.
 
-- **`best_model.pt` is NOT an independent reference — it IS
-  `bootstrap_model.pt`.** Weight fingerprint (SHA-256 of first conv
-  layer): `ed07ecbe6a73` for both files. `best_model.pt` is a plain
-  state dict that was seeded from `bootstrap_model.pt` weights when
-  training started (`scripts/train.py:526`) and was **never promoted
-  during training** — no challenger beat the incumbent gating eval in
-  the entire P3 run. The files differ on disk because one is a full
-  checkpoint dict and the other is a raw state dict, but the tensor
-  values are identical. The diag B table should be read as:
-  bootstrap (H≈2.67) vs. all post-bootstrap (H≈1.5–1.7 nat band).
-  There is no pre-§67 independent reference in this dataset.
-- **Stuck fixed point, not progressive collapse.** All post-bootstrap
-  checkpoints sit in a narrow 1.49–1.70 nat band with no downward
-  trend — entropy oscillates within ~0.2 nats of a stable fixed point.
-  The system found a self-consistent policy where MCTS rubber-stamps
-  the prior, training targets match network outputs, and no gradient
-  signal breaks the equilibrium. Framing this as "progressive collapse"
-  is misleading: the collapse happened fast (likely within the first
-  few thousand self-play steps), and subsequent training maintained
-  rather than deepened it.
-- **The worst bucket is mid-game (cm 10–24)**, where p10 drops to
-  0.08–0.19 nats on every post-bootstrap checkpoint. Late-game is
-  consistently the highest-entropy bucket — the opposite of what the
-  §1 heuristic assumes about "expected range 3–6 nats".
-- The raw-policy collapse on its own is *not* catastrophic (means still
-  above 1.5 nats at K=0, effective support 5–10 children). What makes
-  it catastrophic is diagnostic C: MCTS is not adding any exploration
-  on top of that prior.
+#### Diagnostic C — temperature schedule + MCTS visit distribution (collapsed)
 
-**Restart candidate heuristic.** `checkpoint_00017428.pt` has the
-highest mean H(π) in the post-bootstrap set (1.698 nats) but the band
-width is 0.21 nats — entropy rank is noise at this scale. **Do not use
-entropy ordering to select the restart point.** The honest framing:
-
-- No checkpoint in the 13k–17k range is meaningfully less collapsed
-  than any other. Picking 13000 because H=1.666 > 17000 H=1.486 is
-  spurious; both are stuck at the same fixed point.
-- Restart point selection should be based on **buffer composition**:
-  the earliest checkpoint before self-play dominated the replay buffer
-  (~step 10k, where pretrain share was still ≥70%), not on entropy rank.
-- Starting fresh from `bootstrap_model.pt` (clean pretrained weights,
-  H≈2.67) is the simplest and cleanest option once the Dirichlet port
-  is complete. This is a **finding, not a recommendation**; the fix
-  session owns the call.
-
-#### Diagnostic C — temperature schedule + MCTS visit distribution
-
-**C.1 — temperature schedule audit.** Config values: `temperature_min
-= 0.05`, `temperature_threshold_compound_moves = 15`.
-
-Rust code (`engine/src/game_runner.rs:510-515`):
+Temperature schedule (`engine/src/game_runner.rs:510-515`):
 
 ```
-τ(cm) = temp_min                                 if cm ≥ threshold
-      = max(temp_min, cos(π/2 · cm / threshold)) otherwise
+τ(cm) = max(temp_min, cos(π/2 · cm / threshold))   if cm < threshold
+τ(cm) = temp_min                                   if cm ≥ threshold
 ```
 
 | compound_move | 0 | 5 | 10 | 14 | 15 | 16 | 20 | 30 |
 |---|---|---|---|---|---|---|---|---|
 | τ | 1.0000 | 0.8660 | 0.5000 | 0.1045 | 0.0500 | 0.0500 | 0.0500 | 0.0500 |
 
-**Temperature formula drift (separate bullet — independent finding).**
-Sprint log §36 originally described the schedule as a half-cosine per
-ply with `temp_anneal_moves = 60`, which disagreed with the Rust
-quarter-cosine-per-compound-move with hard floor at cm 15.
+Doc reconciliation: §36 block + `docs/01_architecture.md` updated 2026-04-19 to match Rust quarter-cosine-per-compound-move formula and `selfplay.playout_cap.{temperature_threshold_compound_moves, temp_min}` config keys. Legacy ply-based `get_temperature` in `hexo_rl/selfplay/utils.py` retained for eval-adjacent paths only (`OurModelBot`, `benchmark_mcts`). See `reports/c_series_doc_fixes_2026-04-19.md`.
 
-**RESOLVED 2026-04-19 (doc-only).** Doc updates to match code: the §36
-block in this file and the temperature section in
-`docs/01_architecture.md` now describe the quarter-cosine-per-compound-move
-formula and the `selfplay.playout_cap.{temperature_threshold_compound_moves,
-temp_min}` config keys. No code change. The legacy ply-based
-`get_temperature` step function in `hexo_rl/selfplay/utils.py` is retained
-because it is still exercised by `hexo_rl/selfplay/worker.py::SelfPlayWorker`
-for eval-adjacent paths (`OurModelBot`, `benchmark_mcts`) and does not
-touch the self-play training path. See `reports/c_series_doc_fixes_2026-04-19.md`
-and `archive/diagnosis_2026-04-10/diag_C_temp_schedule.md` for history.
+MCTS visit stats (30 cm=0 records from training trace): H(π_prior) mean 1.340, H(π_visits) mean 1.213, Δ 0.127 nats; top-1 visit fraction 0.526; effective support ~3.4 children. MCTS sharpens the prior by only 0.13 nats — picks among top 3 children and rubber-stamps. 30 records are all cm=0 / empty board (`GAME_RUNNER_CAP` saturated under 14 worker contention); per-game-phase variation not in this data but sufficient to demonstrate the rubber-stamp behaviour.
 
-**C.2 — per-move MCTS entropy from the training trace.** Parsed the 30
-records in `diag_A_trace_training.jsonl` and computed H(π_prior),
-H(π_visits), Δentropy, and top-1 visit fraction per record.
+#### Locked parameters (still apply post-§73)
 
-| Metric | mean | median | p10 | p90 | min | max |
-|---|---|---|---|---|---|---|
-| H(π_prior) | 1.340 | 1.437 | 1.213 | 1.438 | 1.213 | 1.585 |
-| H(π_visits) | 1.213 | 1.207 | 1.199 | 1.250 | 1.169 | 1.379 |
-| Δ (prior − visits) | **0.127** | 0.178 | 0.014 | 0.230 | −0.055 | 0.333 |
-| top-1 visit fraction | 0.526 | 0.509 | 0.399 | 0.649 | 0.395 | 0.649 |
-| effective support (exp H_visits) | 3.366 | 3.345 | 3.316 | 3.490 | 3.217 | 3.972 |
+- Temperature: `temp_min = 0.05`, `temperature_threshold_compound_moves = 15`.
+- `entropy_reg_weight = 0.01`.
+- Dirichlet injection params on Python eval path: `epsilon = 0.25` over `n_children` (`hexo_rl/selfplay/worker.py:138-145`); §73 port carries these into Rust.
 
-**Verdict.** MCTS sharpens the prior by only 0.13 nats on average. The
-effective support of the visit distribution is ~3.4 children — MCTS is
-picking between the top 3 prior candidates and rubber-stamping them.
-Combined with the temperature schedule dropping to 0.05 at cm 15 and
-the §70 diag-A finding that there is no Dirichlet perturbation at the
-root, this closes the loop: once the prior concentrates on 3 children
-there is no mechanism in the training path to make the self-play stream
-explore any other continuation. The sampling window for "not
-deterministic" self-play is compound_move 0 through ~14, and even inside
-that window the top prior gets picked >50% of the time.
+#### Follow-up landed elsewhere
 
-**Caveat:** the 30 records are all cm=0, ply=0 on the empty board
-(different games from different workers, all starting identically).
-They are 30 independent rollouts of the same position, not a sweep
-across game phases. This is a consequence of the global counter cap
-firing inside the first move because 14 workers contend for it in
-parallel. The per-game-phase variation the plan originally asked for
-is not in this data — the fix session should raise the
-`GAME_RUNNER_CAP` and/or make it per-game if that variation is needed
-for remediation decisions. For the current diagnostic pass the 30
-empty-board records are sufficient to demonstrate the rubber-stamp
-behaviour, because the empty board is where the self-play loop enters
-its deterministic attractor.
-
-#### Candidate root causes (ranked by support from A/B/C)
-
-1. **No root noise on the training path.** Strongest candidate.
-   Confirmed by diagnostic A at both static (grep + git archaeology)
-   and runtime (30 game_runner records, 0 apply_dirichlet_to_root
-   records) levels.
-2. **Policy sharpness amplified by self-referential MCTS.** Quantified
-   by diagnostic B (mean H(π) ≈ 1.5 nats on K=0, p10 ≈ 0.1 nats in the
-   mid-game bucket) and C (Δentropy ≈ 0.13 nats, effective support ≈
-   3.4 children). MCTS does not add exploration, it rubber-stamps.
-3. **Temperature schedule is weaker than §36 described.** Hard floor
-   at cm 15, quarter-cosine shape, no further annealing. Not the root
-   cause on its own but it narrows the time window in which (1) and (2)
-   could be broken by chance.
-4. **Entropy regularisation too weak** (`entropy_reg_weight = 0.01`).
-   Consistent with the late-phase p10 numbers in diagnostic B but not
-   independently proven by this diagnostic pass.
-5. **Buffer-mix interaction masking the collapse in monitoring.**
-   Independent of the root cause but explains why the collapse went
-   unnoticed for 16,880 steps. See Monitoring Gap above.
-
-#### Identical eval games — expected behaviour, not a seeding bug
-
-The round-robin results showed 100% identical games between near-era
-checkpoints (ckpt_13000 vs ckpt_14000: all 25 moves, carbon-copy). This
-is **expected behaviour**: `ModelPlayer.get_move()` calls
-`tree.get_policy(temperature=0.0)` which returns a one-hot argmax policy,
-and the eval loop has no stochastic element. Any two runs of the same
-matchup will produce identical games by construction.
-
-A separate temperature sampling check (2026-04-10, `scripts/eval_diagnostic.py
---temperature 1.0 --model_a/b ckpt_15000.pt`, 20 games) confirmed that
-with τ=1.0, games diverge normally: 13 distinct game lengths across 20
-games, P1/P2 wins roughly equal. **Temperature sampling in the Rust
-game_runner and in the eval path is functionally correct.** The collapse
-is not caused by broken temperature sampling — it is purely the missing
-Dirichlet injection on the training path.
-
-#### "Known correct" reference
-
-There is no independent pre-collapse reference checkpoint in the P3
-dataset. `best_model.pt` was initialised from `bootstrap_model.pt`
-weights at training start and never updated — weight fingerprint
-confirms identity (`ed07ecbe6a73`). The `bootstrap_model.pt` pretrained
-weights (H≈2.67 nats) are the only available anchor. The previous
-framing of `best_model.pt` as a "pre-§67 CE-loss reference" was
-incorrect.
-
-#### Not-in-scope (fix session to decide)
-
-- Porting `apply_dirichlet_to_root` into the Rust training path
-  (`engine/src/game_runner.rs`) vs switching the laptop variant to
-  `gumbel_mcts: true` (Gumbel-Top-k provides root noise by
-  construction). Both are valid remediations; the choice is not owned
-  by this diagnostic pass.
-- Splitting `policy_entropy` into pretrain / selfplay streams in the
-  monitoring event.
-- Reconciling the §36 temperature formula with the code (either
-  direction).
-- Re-running diagnostic C with a larger `GAME_RUNNER_CAP` to cover
-  mid-game and late-game MCTS behaviour.
-- Any change to checkpoints, replay buffer, or run directory state.
+- §73: Dirichlet port to Rust training path (commit `71d7e6e`).
+- Monitoring split (`policy_entropy_pretrain` / `policy_entropy_selfplay`) tracked under Q17 remediation.
 
 ---
 
@@ -2018,114 +1726,27 @@ To regenerate synthetically (no game records required): see script `--synthetic`
 
 ## §90 — GPU util sweep: inf_bs / wait_ms levers are exhausted (2026-04-13)
 
-**Context.** Tom reported dashboard "28% GPU util" on a gumbel_targets run. Phase 1
-(`/tmp/gpu_util_phase1.md`) reframed this: actual GPU util is **84%**, the 28% figure
-is a throughput-vs-bench ratio, and the real bottleneck is **NN forward latency**
-(12.5 ms live vs 1.6 ms bench, 7.8× worse per-forward). Phase 1 surfaced three
-hypotheses — this sprint entry records the Phase 2 narrowed sweep against H1.
+**Verdict.** `inference_batch_size=64, inference_max_wait_ms=4.0` stays as laptop live config. H1 (raise inf_bs to lift GPU util) falsified — `gpu_util` invariant at ~83% across all swept cells; bottleneck is NN forward latency (12.5 ms live vs 1.6 ms bench), not batcher config. Phase 1 reframed Tom's "28% GPU util" report as throughput-vs-bench ratio; actual util is 84%.
 
-**Sweep design (3 runs, laptop Ryzen 7 8845HS + RTX 4060, fresh bootstrap_model.pt).**
+**Sweep:** A=(64, 4.0), B=(128, 8.0), C=(128, 4.0). Laptop 4060, gumbel_targets, fresh bootstrap, 14 workers, 20-min windows last-15-min measured. Entropy kill-gate (≥ 4.0 nats `policy_entropy_selfplay`) passed all runs.
 
-| run | inference_batch_size | inference_max_wait_ms |
-|-----|---------------------:|----------------------:|
-| A   | 64                   | 4.0                   |
-| B   | 128                  | 8.0                   |
-| C   | 128                  | 4.0                   |
-
-All runs: `gumbel_targets` variant, `standard_sims=200`, `training_steps_per_game=4`,
-`max_train_burst=16`, `n_workers=14`, `leaf_batch_size=8`, `fast_prob=0.0`,
-`dirichlet_enabled=true`, `mixing.buffer_persist=false`. 20-min windows, last 15
-min measured. Full data: `archive/sweep_2026-04-13_gpu_util/`.
-
-**Kill criterion:** `policy_entropy_selfplay` must stay ≥ 4.0 nats (Phase 1
-correction — combined entropy is polluted by pretrain sharpness and is not a
-valid collapse signal at this training stage). All three runs passed (min
-4.85 / 4.98 / 5.10).
-
-### Results (last 15 min, per-run)
+### Results (last 15 min)
 
 | metric | Run A | Run B | Run C | B vs A | C vs A |
 |---|---:|---:|---:|---:|---:|
-| games/hr | 545 | 381 | 372 | **−30.0%** | **−31.8%** |
-| pos/hr (buffer delta) | 215,527 | 200,530 | 217,535 | −7.0% | +0.9% |
+| games/hr | 545 | 381 | 372 | −30.0% | −31.8% |
+| pos/hr | 215,527 | 200,530 | 217,535 | −7.0% | +0.9% |
 | nn_forwards/sec | 88.2 | 54.0 | 53.4 | −38.7% | −39.4% |
 | nn_mean_batch_size | 60.1 | 84.8 | 85.8 | +40.9% | +42.7% |
-| nn_pos/sec (fwd × batch) | 5,304 | 4,579 | 4,585 | **−13.7%** | **−13.6%** |
-| batch_fill_pct (mean) | 91.4 | 63.4 | 67.4 | −30.6% | −26.2% |
-| gpu_util_mean (nvidia-smi dmon) | 83.7 | 83.2 | 83.1 | −0.6% | −0.8% |
-| gpu_util_p10 / p90 | 79 / 91 | 77 / 90 | 77 / 89 | — | — |
-| policy_entropy_selfplay (final / min) | 5.18 / 4.85 | 5.14 / 4.98 | 5.47 / 5.10 | — | — |
+| nn_pos/sec | 5,304 | 4,579 | 4,585 | **−13.7%** | **−13.6%** |
+| batch_fill_pct | 91.4 | 63.4 | 67.4 | −30.6% | −26.2% |
+| gpu_util_mean | 83.7 | 83.2 | 83.1 | −0.6% | −0.8% |
 | steps in window | 540 | 380 | 340 | −29.6% | **−37.0%** |
-| game_len_median (plies) | 37 | 62 | 74 | +68% | +100% |
+| game_len_median | 37 | 62 | 74 | +68% | +100% |
 
-### H1 falsified
+Raising `inf_bs` to 128 grows mean batch 60 → 85 (+42%) but forwards/sec collapses 88 → 53 (−39%) — workers can't supply 128 leaves in the same wall-clock window. Run C's flat pos/hr masks −37% steps/hr because `game_len_median` doubled; **pos/hr is not a sufficient summary statistic when game length shifts**. Future sweeps must report steps/hr.
 
-Raising `inference_batch_size` to 128 does grow the mean batch 60 → 85 (+42%),
-confirming the Phase 1 diagnosis that 64 is not a hard ceiling. But forwards/sec
-collapses 88.2 → 53.4 (−39%), so the product `nn_pos/sec` **drops 14%**. Workers
-cannot supply 128 leaves in the same wall-clock window they supply 64, so the
-batch fill plateaus at 63–67%, and the larger batches simply cost more per-forward
-GPU time than they save in amortization. **The live batcher is starved, not the
-GPU.**
-
-`gpu_util` is invariant at ~83% across all three runs. The sweep levers cannot
-move it. The Phase 1 finding — "GPU is busy but inefficient" — is confirmed
-downstream of this.
-
-### Why pos/hr looks neutral when games/hr halves
-
-Run C's pos/hr is +0.9% vs Run A, a coincidental wash: games/hr collapses 545 →
-372, but `game_len_median` doubles 37 → 74 plies, so each game produces roughly
-2× more training positions (longer per-move budget → fewer blunders → games run
-closer to the 200-ply cap). Training `steps_in_window` correspondingly drops
-−37%, which is a real **learning-signal regression** even though pos/hr reads
-flat. **pos/hr is not a sufficient summary statistic** when game length shifts
-this much — future sweeps should report steps/hr alongside.
-
-### Config decision
-
-**No change.** Run C is +0.9% pos/hr (below the +5% threshold) at the cost of
-−37% steps/hr. Run B is a net loss on every metric except mean batch size. The
-`inference_batch_size=64, inference_max_wait_ms=4.0` baseline stays as the
-laptop live config for Phase 4.0.
-
-### Next lever (not in this sprint)
-
-The remaining 12.5 ms NN forward latency is **architectural, not configurable**:
-
-- **CUDA stream separation.** Training gradient kernels and inference forward
-  kernels share the default stream, so training step kernels evict inference
-  kernel state and autocast caches. A separate inference stream would let the
-  inference server run continuously without training-step pollution.
-- **Process split.** Run the Python training loop in a second process, leaving
-  the inference server + worker pool in the primary. Trades IPC + duplicate
-  weight hosting for zero cross-contamination.
-- **`torch.compile` re-enable.** Blocked on Python 3.14 + CUDA graph
-  compatibility (sprint §25, §30, §32). When unblocked, the compiled forward
-  should cut per-forward Python dispatch overhead substantially.
-
-Flagged as a **Phase 4.5 followup**. Not a Phase 4.0 blocker — sustained runs
-can proceed on the current config.
-
-### Desktop (3070) — not validated here
-
-The §69 G3/P3 laptop winners were not re-verified on the desktop 3070 + Zen2
-combo. If the desktop ever runs the `gumbel_targets` variant sustained, a
-single-run confirmation that `inference_batch_size=64` remains optimal on that
-hardware is worth doing before committing. No urgent action.
-
-**Artifacts:** `archive/sweep_2026-04-13_gpu_util/{run_a,run_b,run_c}/` (train.jsonl,
-dmon.log, train.log), `archive/sweep_2026-04-13_gpu_util/results.md`,
-`archive/sweep_2026-04-13_gpu_util/analyze.py`.
-
-**No commit of `configs/*.yaml`** — config is already near-optimal on the
-swept axes.
-
-### Followup
-
-Architectural levers (CUDA stream separation, process split, `torch.compile`
-re-enable, mixed-precision tuning) tracked as **Q18** in
-`docs/06_OPEN_QUESTIONS.md`, deferred to Phase 4.5.
+**No config commit.** Artifacts: `archive/sweep_2026-04-13_gpu_util/`. Architectural levers (CUDA stream separation, process split, `torch.compile` re-enable) deferred to Phase 4.5 as **Q18** in `docs/06_OPEN_QUESTIONS.md`. Desktop 3070 not validated here — single-run confirmation worth doing before committing if 3070 ever runs gumbel_targets sustained.
 
 ---
 
@@ -4206,165 +3827,52 @@ Shipped as:
 
 ## §118 — Early-game forgetting fix wave (2026-04-23 → 2026-04-24)
 
-*Labelled "§115 wave" in the investigation brief; §115 on the sprint log
-had already been taken by the 2026-04-22 CLAUDE.md split.*
+*Labelled "§115 wave" in investigation brief; sprint §115 already taken by 2026-04-22 CLAUDE.md split.*
 
-Four commits landed on master; first sustained run since §114 that cleared
-every substantive gate on fresh v5 bootstrap weights.
+**Verdict — root cause:** `pe_self ≈ 5.4` is not policy-head collapse; it is a **self-play-starvation rate problem on off-canonical early-game positions**. Under prod (`decay_steps=20000`, `full_search_prob=0.25`), only ~13% of batch policy-gradient came from fresh SP rows, and that slice was dominated by mid-to-late positions. Ply 2-7 off-canonical drifted toward `log(N_legal)` — the legal-uniform that *looks* like collapse. **Axis is canonical vs off-canonical, not ply depth.** Ply-bucket buffer audits miss the real signal: future audits must ask "do these rows sit on the same distribution as the pretrain corpus?".
 
-### Pathology retcon
+### Smoke discriminator (matrix: A drops + B stays → loss-gate primary)
 
-§112 framed the `pe_self ≈ 5.4` steady state as a training-level regression
-in the policy head's self-play slice — "the policy collapsed to near-uniform
-under continued training". The D-ladder investigation (§116 D-ladder) then
-refined it to "policy head collapsed to near-uniform on the ply 2-7 slice
-off-canonical positions". This wave's corrected framing:
+| Regime              | w_pre @ 2500 | fs_frac SP | SP-grad share | H_mean last-50 |
+|---|---|---|---|---|
+| Baseline prod       | 0.70 | 0.25 | ~13% | ~5.4 (§116) |
+| Smoke A fsp=0.5     | 0.70 | 0.50 | ~26% | 3.97 |
+| Smoke B decay=2500  | 0.29 | 0.25 | ~17.6% | 3.32 |
 
-> `pe_self ≈ 5.4` is not a collapse; it is a **rate problem**. The self-play
-> policy entropy slice measures policy-head output entropy on self-play
-> rows. Under production settings (`decay_steps=20000`, `full_search_prob=0.25`),
-> only ~13 % of each training batch's policy gradient comes from fresh
-> self-play rows, and that ~13 % is dominated by positions far from the
-> opening window. Off-canonical early-game positions (ply 2-7 random
-> rollouts, the same axis the §116 probe hit) see almost no policy
-> gradient signal, so the head's output on those positions drifts toward
-> `log(N_legal)` — i.e., the legal-uniform that *looks* like collapse.
-
-**Axis of the problem is not ply depth; it is canonical vs off-canonical.**
-Plies that the corpus covers densely (mid-to-late game) hold sharp policy
-priors throughout. Plies that only appear in self-play (early opening
-branches beyond the top-25 cells) starve. The §116 symptom was ply 2-7
-because that is where off-canonical coverage vanishes fastest, not because
-depth itself matters.
-
-### Investigation chain
-
-| Phase | What | Artefact |
-|---|---|---|
-| 1 Audit | Read-only: Dirichlet plumbing single-source? full_search_prob mutex intact? random-opening infra absent? probe fixture design. | `reports/investigations/discriminator_audit_20260423/AUDIT.md` |
-| 2 Probe | 10-position fixture, legal-action renormalised entropy to match §116 diag. Fire every `log_interval=10` steps. WARN at `H_mean > 4.5`. 5.8 ms / fire on RTX 3070. | `hexo_rl/monitoring/early_game_probe.py`, `fixtures/early_game_probe_v1.npz`, commit `fa15100` |
-| 3 Smokes | Smoke A (`full_search_prob=0.5`, 2000 steps) + Smoke B (`decay_steps=2500`, 3470 steps, early-stopped). Serial. First `fsp=1.0` attempt deadlocked at step 360 under MCTS pool overflow and was replaced by `fsp=0.5`. | `reports/investigations/discriminator_audit_20260423/VERDICT.md` |
-| 4 Landings | 4b random_opening_plies → 4a α=0.05 → 4c fsp=0.5. Per-commit test pass + bench after 4b. | `53fb19f`, `abefdca`, `95caf90` |
-| 5 Validation | `make train.bg` from bootstrap-v5, stopped at step 6000 after the 5k eval completed. | `reports/investigations/phase5_validation_20260424/PHASE5_VALIDATION.md` |
-
-### Discriminator verdicts (matrix)
-
-```
-                    | A drops         | A stays               |
-       B stays      | loss-gate       | neither — deeper      |
-       B worsens    | both            | corpus was helping    |
-```
-
-- **A** (fsp=0.5): H dropped below 4.5 at step 220 and stayed below for
-  1 780 steps. Last-50 mean 3.97. **Drops.**
-- **B** (decay_steps=2500): H started 4.17, ended 3.32 at step 3470,
-  last-50 mean 3.32 (below A). **Stays** (did not worsen; in fact
-  improved further).
-
-Matrix cell: **A drops + B stays → "loss-gate" (supported, primary driver)**.
-Corpus-dominance was not an independent driver; accelerating the corpus
-sunset made things *better*, not worse.
-
-### Mechanism confirmation
-
-Both smokes shift the same underlying quantity — fraction of each batch's
-policy-gradient rows that come from fresh self-play. Quantitative:
-
-| Regime              | w_pre @ step 2500 | fs_frac SP | SP-gradient contribution |
-|---|---|---|---|
-| Baseline production | 0.70 | 0.25 | ≈ 13 % |
-| Smoke A fsp=0.5     | 0.70 | 0.50 | ≈ 26 % |
-| Smoke B decay=2500  | 0.29 | 0.25 | ≈ 17.6 % |
-
-Entropy drop correlates with SP-gradient share. Confirms that the §116
-forgetting was a self-play-starvation signal on off-canonical plies.
+Corpus sunset is not an independent driver — accelerating it made things *better*.
 
 ### Landed fixes
 
-| Phase | Commit | Change | Evidence gate |
-|---|---|---|---|
-| 4b | `53fb19f` | `selfplay.random_opening_plies: 4` + Rust worker branch + 3 integration tests | Always-land (evidence-independent); bench 9/10 (buffer_push failure pre-existing) |
-| 4a | `abefdca` | `mcts.dirichlet_alpha: 0.3 → 0.05` (Go-regime α for hex branching factor ~300) | Always-land |
-| 4c | `95caf90` | `playout_cap.full_search_prob: 0.25 → 0.5` | Conditional — Smoke A supported loss-gate |
-| §115 follow-up | `01e7397` | `pretrain_max_samples: 200_000 → 0` (full 320k corpus, was silently dropping 30 % via seed-42 subsample) | Paired with v5 bootstrap-v5 retrain |
+| Commit | Change |
+|---|---|
+| `fa15100` | `feat(monitoring): early_game_entropy probe` (10-pos fixture, fires every `log_interval`, WARN >4.5) |
+| `53fb19f` | `selfplay.random_opening_plies: 4` + Rust worker branch + 3 tests (evidence-independent) |
+| `abefdca` | `mcts.dirichlet_alpha: 0.3 → 0.05` (Go-regime α for hex BF~300) |
+| `95caf90` | `playout_cap.full_search_prob: 0.25 → 0.5` (Smoke A supported loss-gate) |
+| `01e7397` | `pretrain_max_samples: 200_000 → 0` (full 320k corpus; was silently dropping 30%); paired with bootstrap-v5 retrain |
 
-### Phase 5 validation — first run to clear every substantive gate since §114
-
-From `bootstrap_model.pt` (v5 full ply 0-150 corpus, retrained 2026-04-23),
-`make train.bg` with the four fixes active, stopped at step 6000 on
-2026-04-24 06:48 UTC after the eval-at-5000 completed.
+### Phase 5 validation (bootstrap-v5, `train.bg` stopped step 6000)
 
 | Criterion | Target | Measured | Verdict |
 |---|---|---|---|
-| `early_game_entropy_mean` by step 2500 | < 4.0 nat | **3.55** at step 2500 (3.50 already at step 2000) | PASS |
-| Last-100 summaries < 4.5 | — | 100 / 100 (98 / 100 below 4.0) | PASS |
-| Threat probe C1 contrast | ≥ +0.38 | **+3.438** (9 × floor) | PASS |
-| Threat probe C2 / C3 | §91 gates 25 / 40 | 50 / 65 | PASS |
-| D1 curr_5000 vs bootstrap (zero-sim argmax) | ≥ 30 % | 24 % (vs §116's 1-6 % — 4-24× improvement) | NEAR |
-| Eval vs random_bot | — | 100 % (20 / 20, 16 colony-wins) | PASS |
-| Eval vs best anchor | graduation 55 % | 27 % | no graduation (expected — anchor is v5 itself) |
-| Throughput vs pre-Phase-4 baseline | < 20 % regression | **+10 %** (gph ~430 vs ~390) | PASS |
+| `early_game_entropy_mean` @ step 2500 | < 4.0 | **3.55** (3.50 by step 2000) | PASS |
+| Last-100 < 4.5 | — | 100/100 (98/100 < 4.0) | PASS |
+| Threat probe C1 contrast | ≥ +0.38 | **+3.438** (9× floor) | PASS |
+| Threat C2 / C3 | 25 / 40 | 50 / 65 | PASS |
+| D1 curr_5000 vs bootstrap argmax | ≥ 30% | 24% (vs §116's 1-6%, 4-24× lift) | NEAR |
+| Throughput vs pre-Phase-4 | < 20% regress | **+10%** | PASS |
 | NaN / crash | 0 | 0 | PASS |
 
-D1 at 24 % is below the 30 % target but five-to-ten-fold above the §116
-regression's 1-6 %. pe_self held at ~5.6 throughout — still exploring,
-not yet sharp against bootstrap on the fixed argmax test. No criterion
-failed in the direction of collapse.
+First sustained run since §114 clearing every substantive gate. pe_self held ~5.6 throughout — still exploring, not collapsed.
 
-### Meta-lesson
+### Q updates / forward pointers
 
-**The axis is canonical vs off-canonical distribution, not ply depth.**
-Ply-bucket buffer audits miss the real signal because the ply-distribution
-is fine (ply < 20 = 46 % of the buffer per §116 investigation #1). The
-latent axis is whether the positions in a ply bucket are the same ones
-the corpus covered.
+- **Q8** reconfirmed CLOSED (head well-conditioned: C1=+3.44, `pe_pretrain≈2.2`).
+- **Q33 / Q37** — framing flipped from "training pathology" to "sampling-rate starvation"; monitoring-only.
+- Open follow-up: no equivalent off-canonical probe for **mid-game** drift — `early_game_entropy` only covers ply 0-20.
+- Recovery run from ckpt_12190 → §118 recovery (see memory `project_phase118_recovery.md`); main-island neglect pattern → **§119**; D-ladder framework reused → §122+.
 
-Practical consequence: future buffer-composition audits must ask "do these
-rows sit on the same distribution as the pretrain corpus?", not "do these
-rows span the right ply range?". The `early_game_entropy` probe now
-continuously answers the first question for ply 0-20; no equivalent signal
-exists for mid-game off-canonical drift. Open follow-up.
-
-### Q updates
-
-- **Q8 — "Does the policy head collapse under continued self-play
-  training?"** — reconfirmed CLOSED. The §116 symptom was not head-level
-  collapse; it was a self-play-starvation signal on the off-canonical
-  slice, fully fixable via batch-composition levers (Phase 4c + 4a + 4b).
-  The head remains well-conditioned: threat C1 at +3.44, corpus slice
-  `pe_pretrain ≈ 2.2`, value_accuracy healthy throughout the Phase 5 run.
-- **Q33 / Q37 — "pe_self ≈ 5.4 fixed point"** — framing update. Same
-  numeric fixed point, but the mechanism flips from "training pathology"
-  to "sampling-rate starvation on under-covered positions". `pe_self` is
-  the right aggregate metric but the wrong diagnostic lens — the
-  legal-masked early-game probe is the one that discriminates
-  off-canonical collapse from healthy exploration. No new open question;
-  both Qs revert to monitoring-only status.
-
-### Artefacts
-
-- Phase 1 audit: `reports/investigations/discriminator_audit_20260423/AUDIT.md`
-- Phase 2 probe design: `reports/investigations/discriminator_audit_20260423/PHASE2_PROBE.md`
-- Phase 3 verdict: `reports/investigations/discriminator_audit_20260423/VERDICT.md`
-- Smoke A JSONL: `logs/smoke_A_full_search.jsonl` (final fsp=0.5 run);
-  dead attempts archived at `logs/smoke_A_full_search_{deadlock_fsp1.0,nocorpus_fsp0.5}.*`
-- Smoke B JSONL: `logs/smoke_B_decay_steps.jsonl`
-- Phase 5 validation: `reports/investigations/phase5_validation_20260424/PHASE5_VALIDATION.md`
-- Phase 5 D1 match: `reports/investigations/phase5_validation_20260424/D1_phase5_curr5000_vs_bootv5_argmax.md`
-- Threat probe at ckpt_5000: `reports/probes/phase5_ckpt5000_20260424_064954.md`
-- Training JSONL: `logs/train_6136463b43c24b1a8681b92f51a50ed1.jsonl`
-- Archived pre-v5 run artefacts: `checkpoints/archive_pre_v5_bootstrap_20260424/`
-
-### Commits
-
-- `fa15100` — `feat(monitoring): early_game_entropy probe`
-- `53fb19f` — `feat(selfplay): random opening plies for off-canonical coverage`
-- `abefdca` — `feat(selfplay): dirichlet_alpha 0.3 → 0.05 for hex branching factor`
-- `95caf90` — `feat(selfplay): full_search_prob 0.25 → 0.5 per §115 discriminator`
-- `01e7397` — `feat(training): remove pretrain_max_samples cap (full corpus load)`
-
-No commit labelled `§118` — the wave landed under the brief's `§115`
-conventional prefix. This entry consolidates the trail.
+Artefacts: `reports/investigations/discriminator_audit_20260423/`, `reports/investigations/phase5_validation_20260424/`, `reports/probes/phase5_ckpt5000_20260424_064954.md`.
 
 ---
 
@@ -4776,55 +4284,14 @@ If a compiled model (`reduce-overhead`) is called from a background thread, comp
 ## §124 — InferenceServer dispatch fix: TorchScript trace + bench methodology shift
 
 **Date:** 2026-04-25
-**Commits:** `1ab2e01` (trace + tests + narrow sweep), follow-up commit (bench
-methodology + perf-targets + this entry).
+**Commits:** `1ab2e01` (trace + tests + narrow sweep), follow-up commit (bench methodology + perf-targets + this entry).
 **Reference hardware:** laptop AMD Ryzen 7 8845HS + RTX 4060 Laptop GPU.
 
 ### Verdict
 
-py-spy (200 Hz, --idle --threads, 180 s) on local desktop 3070
-attributed dispatcher steady-state wall (n_workers=10, batch_fill 97 %)
-to:
+TorchScript-trace InferenceServer forward at `__init__` via `torch.jit.trace`; gated by `selfplay.trace_inference` (default `true`); falls back to untraced module if trace raises (e.g. `torch.compile`-wrapped). ScriptModule shares parameter storage so `load_state_dict_safe` mutation propagates without re-tracing. Also merges D2H (`cat(probs, value)` → single `.cpu().numpy()`). Eliminates ~32.6% CPython `nn.Module._call_impl` dispatch cost per forward (py-spy 200 Hz, 180 s, n_workers=10 on 3070); binding constraint on dispatch-bound hardware (EPYC 4080 S 60% GPU-util lock — see `feedback_compile_selfplay_dispatch_bound.md`). Closes `project_stall_diagnostic_deferred.md`; Q35 (ReplayBuffer GIL) won't move pos/hr.
 
-| Line | % | Phase |
-|---|---|---|
-| `probs.cpu().numpy()` GPU sync | 61.7 % | unavoidable GPU drain (~7.3 ms/forward on 3070) |
-| **`self.model(tensor)` Python module dispatch** | **32.6 %** | **~3.9 ms/forward — the bottleneck** |
-| `next_inference_batch` | 1.9 % | queue not starving |
-| `submit_inference_results` | 0.8 % | per-id Rust waiter wakeups (cheap) |
-| H2D + others | <2 % | noise |
-
-The 32.6 % is pure CPython overhead iterating ~100
-`nn.Module._call_impl` invocations per forward (12 ResBlocks × ~7
-modules + 7 heads). On 3070 GPU compute (~7.3 ms) > Python dispatch
-(~3.9 ms) → GPU-bound. On EPYC 4080 S GPU compute drops to ~3-4 ms and
-dispatch becomes the binding constraint — explains the 60 % GPU-util
-lock observed across all 19 sweep cells of
-`feedback_compile_selfplay_dispatch_bound.md`. Q35 (ReplayBuffer GIL)
-will not move pos/hr meaningfully; closes
-`project_stall_diagnostic_deferred.md`.
-
-### Fix
-
-`hexo_rl/selfplay/inference_server.py`:
-- TorchScript-trace the eval forward at `__init__` via `torch.jit.trace`.
-  The resulting `ScriptModule` shares parameter storage with `self.model`
-  so `load_state_dict_safe`'s in-place mutation propagates without
-  re-tracing.
-- Falls back to the untraced module if trace raises (e.g. on a
-  `torch.compile`-wrapped model — FX/dynamo not supported by jit.trace).
-- Gated by `selfplay.trace_inference` (default `true`).
-- Merged D2H: `cat(probs, value)` on GPU, single `.cpu().numpy()`,
-  split on host (~70 KB at batch=192, L2-cache cheap). Saves one
-  `cudaMemcpyAsync` per forward.
-- L218 renormalize **kept**: 0.2 % profile cost; removing it would
-  break `test_policy_shape_and_sums_to_one` (asserts policy sum
-  within 1e-4 of 1.0, fp16 exp drift is ~1e-3).
-
-`tests/test_inference_server.py`: 3 new tests in
-`TestInferenceServerTrace` — parity ≤ 5e-3 vs untraced, weight-swap
-propagation through shared params, config-disable path. All 12
-inference-server tests pass.
+**Why trace not compile:** trace wins on simplicity (no Dynamo guard cost, no cudagraph TLS thread issue, no Triton 27 GB spike on PT 2.10) and ~matches compile throughput on GPU-bound hardware while lifting dispatch-bound hardware. They're alternatives, not stackable (`compiled._orig_mod` unwrap verified but not implemented).
 
 ### Local 3070 smoke (90 s warmup + 180 s steady, n_workers=10, no py-spy)
 
@@ -4833,115 +4300,28 @@ inference-server tests pass.
 | trace OFF | 122,800 | 73.7 | 97.5 % | 4,600 |
 | **trace ON** | **164,600** | **94.5** | **87.9 %** | **5,316** |
 
-**+34 % pos/hr on 3070.** An earlier reading suggested a regression;
-that was py-spy at 200 Hz × 4 threads distorting absolute throughput.
-**Always profile-compare without py-spy attached for absolute
-numbers** — py-spy is fine for proportional breakdowns only.
+**+34% pos/hr on 3070.** Always profile-compare without py-spy attached for absolute numbers — py-spy is fine for proportional breakdowns only.
 
-### Bench methodology shift: compile OFF is the new `make bench`
+### Bench methodology shift: compile OFF + trace ON is the production gate
 
-§123 set `make bench` to compile-on under the assumption it matched
-production. Today's `feedback_compile_selfplay_dispatch_bound.md`
-sweep showed compile *regresses* selfplay pos/hr by ~4 % on EPYC
-4080 S — so production variants
-(`gumbel_targets_epyc4080.yaml`, etc.) set `torch_compile: false`.
-Bench is the gate; the gate must reflect production.
+§123 set `make bench` to compile-on under the assumption it matched production; today's sweep showed compile *regresses* selfplay pos/hr ~4% on EPYC 4080 S — production variants set `torch_compile: false`. Bench must reflect production.
 
 | make target | compile | trace | When to use |
 |---|---|---|---|
-| `make bench`         | OFF | ON (default) | Phase 4.5 gate; matches production training |
-| `make bench.compile` | ON  | falls back   | Engineering datum: peak NN inference compute |
-| `make bench.fast`    | OFF | ON (default) | Cold-cache quick check (n=3, 60 s) |
+| `make bench`         | OFF | ON (default) | Phase 4.5 gate; matches production |
+| `make bench.compile` | ON  | falls back   | Engineering datum: peak NN compute |
+| `make bench.fast`    | OFF | ON (default) | Cold-cache quick check |
 
-`scripts/sweep_epyc4080.py` always passes `--no-compile` to bench
-now (the old `NO_COMPILE` env knob is no-op'd; flip it via
-`make bench.compile` if you need a compile-on datum). Sweep YAML
-also writes `torch_compile: false` so any training pulled from a
-sweep cell stays consistent.
+`scripts/sweep_epyc4080.py` passes `--no-compile`; sweep YAML writes `torch_compile: false`. NN inference target lowered 6,500 → 4,000 pos/s (compile-off loses Inductor fusion; tracks `min(observed × 0.85, prior)`).
 
-### Bench result, laptop 8845HS + 4060 (2026-04-25)
+### Laptop 4060 baseline (`make bench` compile-off + trace-on, NEW PRODUCTION BASELINE)
 
-#### `make bench.compile` (compile-on, trace falls back) — sanity vs §123
-
-| Metric | Result | §123 | Δ |
-|---|---|---|---|
-| MCTS sim/s | 68,832 | 72,711 | -5 % (run-to-run, CPU-only) |
-| NN inference pos/s | 7,784 | 7,931 | -2 % (flat) |
-| NN latency ms | 1.89 | 0.51 | +271 % (likely §123 measurement quirk — was 1.84 ms in 2026-04-18 baseline) |
-| Buffer push pos/s | 428,543 | 621,156 | -31 % ⚠ environmental — recovered to 615 k on next run |
-| Buffer raw µs | 1,675 | 1,374 | +22 % ⚠ same env burst |
-| Buffer aug µs | 1,804 | 1,356 | +33 % ⚠ same env burst |
-| Worker pos/hr | 186,832 | 171,241 | **+9 % (D2H merge alone — trace fell back)** |
-| Worker batch fill | 99.9 % | 99.4 % | flat |
-
-#### `make bench` (compile-off, trace-on) — **NEW PRODUCTION BASELINE**
-
-| Metric | Result | Target | Pass |
-|---|---|---|---|
-| MCTS sim/s | 66,926 | ≥ 26,000 | ✓ |
-| NN inference pos/s | 4,859 | ≥ 4,000 (lowered §124) | ✓ |
-| NN latency ms | 2.56 | ≤ 3.5 | ✓ |
-| Buffer push pos/s | 615,183 | ≥ 525,000 | ✓ |
-| Buffer raw µs | 1,400 | ≤ 1,550 | ✓ |
-| Buffer aug µs | 1,362 | ≤ 1,800 | ✓ |
-| GPU util % | 100.0 | ≥ 85 | ✓ |
-| VRAM GB | 0.11 | ≤ 6.4 | ✓ |
-| Worker pos/hr | 177,799 | ≥ 142,000 | ✓ (IQR ±143 k = **80 % bimodal**, range [0–198 k]) |
-| Worker batch fill | 99.2 % | ≥ 84 | ✓ |
-
-**Compile vs trace on this hardware:** 186,832 (compile-on) vs 177,799
-(trace-on) = within IQR. Trace ≈ compile for selfplay throughput on
-laptop 4060. Wins on simplicity (no Dynamo guard cost, no cudagraph
-TLS thread issue, no Triton 27 GB spike on PT 2.10) and matches
-production training. On dispatch-bound hardware (EPYC 4080 S, 60 %
-GPU-util lock) the trace path is expected to lift selfplay
-materially — sweep validation pending.
-
-**NN inference target lowered 6,500 → 4,000 pos/s.** Compile-off
-loses Inductor kernel fusion; the new target tracks methodology
-(`min(observed × 0.85, prior)` = 4,130 → rounded conservatively
-to 4,000). Production-relevant — selfplay dispatcher uses trace,
-not raw batch=64 inference.
-
-**Worker bimodality:** one of five runs completed 0 games. Same
-startup-race pattern §102 fought. Median is robust to it; if a
-downstream alert reads the mean, raise `n_runs` or `pool_duration`.
-Pre-existing — trace fix did not introduce this.
-
-### Sweep harness narrow validation
-
-`scripts/sweep_epyc4080.sh` accepts `MODE=validate` for a tight grid
-(workers={16,20,24} × batch={128,192} = 6 cells, ~1.2 hr) post-trace
-fix. Run:
-
-```
-MODE=validate bash scripts/sweep_epyc4080.sh 2>&1 | tee reports/sweeps/sweep_validate.log
-```
-
-If pos/hr lifts ~30 % at the prior winner cell (n_workers=16,
-batch=128), ship as-is. If a different worker count wins, update
-`gumbel_targets_epyc4080.yaml`. Full 19-cell grid only if validate
-shows unexpected behaviour — dispatch mechanism is now understood.
+MCTS 66,926 sim/s · NN inf 4,859 pos/s · NN lat 2.56 ms · Buffer push 615,183 pos/s · GPU 100% · Worker 177,799 pos/hr (batch_fill 99.2%) — all gates PASS. Compile-on datum 186,832 pos/hr (within IQR of trace-on). Worker bimodality (1 of 5 runs 0 games) is pre-existing §102 startup race, not trace-induced.
 
 ### Follow-ups
 
-- **Python 3.14 deprecation.** `torch.jit.trace` warned as deprecated
-  on Py 3.14+ ("switch to torch.compile or torch.export"). Tested
-  `torch.export` locally — works on the model, output bit-identical,
-  ~equivalent perf. When PyTorch removes jit.trace, migrate the
-  trace-fix path to `torch.export`. Until then the runtime fallback
-  handles gracefully (degrades to untraced module). pytest.ini
-  suppresses the deprecation warnings; production runtime warning
-  still surfaces in logs.
-- **trace + compile coexistence.** Possible via `compiled._orig_mod`
-  unwrap (verified). Not implemented — they're alternatives; running
-  both on the dispatcher path adds Dynamo guard cost without benefit
-  given trace already eliminates module dispatch.
-- **EPYC 4080 S validation sweep.** ~~Pending~~ **CLOSED 2026-04-25** — see §125.
-- **trace + compile coexistence.** Possible via `compiled._orig_mod`
-  unwrap (verified). Not implemented — they're alternatives; running
-  both on the dispatcher path adds Dynamo guard cost without benefit
-  given trace already eliminates module dispatch.
+- **Python 3.14 deprecation.** `torch.jit.trace` deprecated on Py 3.14+. `torch.export` verified bit-identical / ~equivalent perf locally; migrate when PyTorch removes jit.trace. pytest.ini suppresses deprecation warnings.
+- **EPYC 4080 S validation sweep.** CLOSED 2026-04-25 — see §125.
 
 ---
 
