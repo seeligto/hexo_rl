@@ -109,8 +109,12 @@ def parse_args() -> argparse.Namespace:
             "configs/game_replay.yaml). Example: --config configs/fast_debug.yaml"
         ),
     )
-    p.add_argument("--checkpoint", default=None,
-                   help="Resume from this checkpoint file (optional)")
+    p.add_argument("--checkpoint", "--bootstrap", default=None,
+                   help="Resume from this checkpoint file (optional). "
+                        "Encoding is auto-detected from checkpoint metadata "
+                        "and reconciled against the variant config; a "
+                        "version mismatch raises ValueError before training "
+                        "starts (Trainer._resolve_checkpoint_encoding).")
     p.add_argument("--iterations", type=int, default=None,
                    help="Stop after this many training steps (default: run until Ctrl-C)")
     p.add_argument(
