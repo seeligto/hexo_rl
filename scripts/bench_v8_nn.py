@@ -45,7 +45,7 @@ from hexo_rl.bootstrap.dataset_v8 import (
     LEGAL_MOVE_RADIUS_V8,
     N_PLANES_V8,
 )
-from hexo_rl.eval.v8_argmax_bot import load_v8_model_from_checkpoint
+from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
 from hexo_rl.utils.device import best_device
 
 
@@ -141,7 +141,13 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     device = best_device()
-    model = load_v8_model_from_checkpoint(str(ckpt), device)
+    model, _spec, label = load_model_with_encoding(str(ckpt), device)
+    if label != "v8":
+        print(
+            f"FATAL: bench_v8_nn requires a v8 checkpoint; got label={label!r}",
+            file=sys.stderr,
+        )
+        return 1
     n_params = sum(p.numel() for p in model.parameters())
     n_train_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
