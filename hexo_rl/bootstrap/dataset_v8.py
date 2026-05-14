@@ -35,19 +35,20 @@ import numpy as np
 import structlog
 
 from engine import Board
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.env.game_state import _compute_chain_planes
-from hexo_rl.utils import constants as _c
 
 log = structlog.get_logger()
 
-# v8 dimensions (mirrors hexo_rl.utils.constants.* but inlined to avoid runtime
-# encoding-spec resolution in the hot encode path).
-BOARD_SIZE_V8: int = _c.BOARD_SIZE_V8  # 25
+# v8 dimensions sourced from the canonical encoding registry (§176 P5).
+# Snapshotted at module load so the hot encode path stays branch-free.
+_V8_SPEC = _lookup_encoding("v8")
+BOARD_SIZE_V8: int = _V8_SPEC.board_size  # 25
 HALF_V8: int = (BOARD_SIZE_V8 - 1) // 2  # 12
-N_PLANES_V8: int = _c.BUFFER_CHANNELS_V8  # 11
-N_CELLS_V8: int = _c.NUM_CELLS_V8  # 625
-N_ACTIONS_V8: int = _c.N_ACTIONS_V8  # 625 (no pass slot)
-LEGAL_MOVE_RADIUS_V8: int = _c.LEGAL_MOVE_RADIUS_V8  # 8
+N_PLANES_V8: int = _V8_SPEC.n_planes  # 11
+N_CELLS_V8: int = _V8_SPEC.n_cells  # 625
+N_ACTIONS_V8: int = _V8_SPEC.n_actions  # 625 (no pass slot)
+LEGAL_MOVE_RADIUS_V8: int = _V8_SPEC.legal_move_radius  # 8
 
 # v8 history depth: 4 plies (ply T, T-1, T-2, T-3) for both current player and
 # opponent → 8 stone planes (matches v6 KEPT_PLANE_INDICES depth).

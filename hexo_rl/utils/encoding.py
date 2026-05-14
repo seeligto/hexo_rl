@@ -88,20 +88,26 @@ _V6_SPEC = EncodingSpec(
     aux_stride=_c.NUM_CELLS,  # 361
 )
 
+# v8 fields sourced from the canonical encoding registry (§176 P5). The
+# legacy `_V8` constants in hexo_rl.utils.constants were retired; this
+# shim still exposes its NamedTuple-shaped `_V8_SPEC` for backward compat.
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+_V8_REG = _lookup_encoding("v8")
 _V8_SPEC = EncodingSpec(
     version="v8",
-    board_size=_c.BOARD_SIZE_V8,
-    half=(_c.BOARD_SIZE_V8 - 1) // 2,
-    n_cells=_c.NUM_CELLS_V8,
-    n_actions=_c.N_ACTIONS_V8,  # 625, no pass slot
-    n_planes=_c.BUFFER_CHANNELS_V8,
-    legal_move_radius=_c.LEGAL_MOVE_RADIUS_V8,
+    board_size=_V8_REG.board_size,
+    half=(_V8_REG.board_size - 1) // 2,
+    n_cells=_V8_REG.n_cells,
+    n_actions=_V8_REG.n_actions,  # 625, no pass slot
+    n_planes=_V8_REG.n_planes,
+    legal_move_radius=_V8_REG.legal_move_radius,
     cluster_threshold=None,
     cluster_window_size=None,
-    state_stride=_c.BUFFER_CHANNELS_V8 * _c.NUM_CELLS_V8,  # 6875
-    chain_stride=_N_CHAIN_PLANES * _c.NUM_CELLS_V8,  # 3750
-    policy_stride=_c.N_ACTIONS_V8,  # 625
-    aux_stride=_c.NUM_CELLS_V8,  # 625
+    state_stride=_V8_REG.state_stride,  # 6875
+    chain_stride=_N_CHAIN_PLANES * _V8_REG.n_cells,  # 3750
+    policy_stride=_V8_REG.policy_stride,  # 625
+    aux_stride=_V8_REG.aux_stride,  # 625
 )
 
 # v6w25 (§168 Gate 3 / §171 P2 reopen): widened 25×25 cluster window with
