@@ -1,0 +1,4 @@
+bot,n_wins,colony_fraction_mean
+randombot,0,0.0
+sealbot,10,0.2167
+our_v6_mcts128,5,0.0
