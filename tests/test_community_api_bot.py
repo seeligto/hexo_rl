@@ -22,7 +22,7 @@ def _make_state():
 
 def test_bot_constructs_without_attribute_error():
     """get_move must not access state.board; must call rust_board.get_stones()."""
-    from hexo_rl.bootstrap.bots.community_api_bot import CommunityAPIBot
+    from hexo_rl.bots.community_api_bot import CommunityAPIBot
 
     bot = CommunityAPIBot(url="http://fake-bot.local", name_id="test")
     rust_board = _make_rust_board()
@@ -45,7 +45,7 @@ def test_bot_constructs_without_attribute_error():
 def test_stones_payload_uses_get_stones_coords():
     """Stones in HTTP payload must match get_stones() absolute coords, not window math."""
     import urllib.request
-    from hexo_rl.bootstrap.bots.community_api_bot import CommunityAPIBot
+    from hexo_rl.bots.community_api_bot import CommunityAPIBot
 
     bot = CommunityAPIBot(url="http://fake-bot.local")
     rust_board = _make_rust_board(stones=[(5, -3, 1), (-2, 7, 2)])

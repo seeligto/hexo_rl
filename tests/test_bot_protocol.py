@@ -9,8 +9,8 @@ import pytest
 from engine import Board
 from hexo_rl.env import GameState
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
-from hexo_rl.bootstrap.bots.random_bot import RandomBot
-from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
+from hexo_rl.bots.random_bot import RandomBot
+from hexo_rl.bots.sealbot_bot import SealBotBot
 
 
 # ── BotProtocol ABC ───────────────────────────────────────────────────────────
