@@ -1,0 +1,1 @@
+MODEL_GN_GROUPS = 8

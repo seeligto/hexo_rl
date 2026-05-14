@@ -50,6 +50,7 @@ from hexo_rl.model.pooling import (
     build_pool,
 )
 from hexo_rl.encoding import all_specs, lookup
+from hexo_rl.model._constants import MODEL_GN_GROUPS
 from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 
 _log = logging.getLogger(__name__)
@@ -133,7 +134,7 @@ class SEBlock(nn.Module):
         return x * s.view(b, c, 1, 1)       # scale
 
 
-_GN_GROUPS = 8  # GroupNorm group count; filters must be divisible by this
+_GN_GROUPS = MODEL_GN_GROUPS  # GroupNorm group count; filters must be divisible by this
 
 
 class ResidualBlock(nn.Module):

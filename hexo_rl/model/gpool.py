@@ -32,6 +32,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from hexo_rl.model._constants import MODEL_GN_GROUPS
+
 
 # Default board-size offset for KataGo's size-aware mean scaling.
 # KataGo uses 14.0 = sqrt(196), the midpoint of typical training board sizes
@@ -121,7 +123,7 @@ class KataConvAndGPool(nn.Module):
         c_in: int,
         c_out: int,
         c_gpool: int,
-        gn_groups: int = 8,
+        gn_groups: int = MODEL_GN_GROUPS,
     ) -> None:
         super().__init__()
         if c_gpool % gn_groups != 0:
@@ -192,7 +194,7 @@ class KataGoPolicyHead(nn.Module):
         use_gpool: bool = True,
         c_p1: int = 32,
         c_g1: int = 32,
-        gn_groups: int = 8,
+        gn_groups: int = MODEL_GN_GROUPS,
         offboard_logit_bias: float = -50.0,
     ) -> None:
         super().__init__()

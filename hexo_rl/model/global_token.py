@@ -30,6 +30,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from hexo_rl.model._constants import MODEL_GN_GROUPS
 from hexo_rl.model.gpool import KataGPool
 
 
@@ -37,7 +38,7 @@ from hexo_rl.model.gpool import KataGPool
 # (~3·C·dim = ~25k parameters in the linear projection at dim=128) and
 # matches the spec's "2-3 conv blocks at ~64ch".
 DEFAULT_CONV_CHANNELS: int = 64
-DEFAULT_GN_GROUPS: int = 8
+DEFAULT_GN_GROUPS: int = MODEL_GN_GROUPS
 DEFAULT_CANVAS_MASK_PLANE: int = 2  # input plane 2 = canvas-realness mask
 
 
