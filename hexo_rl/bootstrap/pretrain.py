@@ -1111,7 +1111,7 @@ def pretrain() -> None:
         "encoding_resolved",
         encoding=encoding,
         board_size=_registry_resolve_cfg(config).trunk_size,
-        in_channels=int(config.get("in_channels", BUFFER_CHANNELS)),
+        in_channels=int(config.get("in_channels", _registry_resolve_cfg(config).n_planes)),
         filters=int(config.get("filters", 128)),
         res_blocks=int(config.get("res_blocks", 12)),
         gpool_indices=gpool_indices,
