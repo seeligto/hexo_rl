@@ -53,8 +53,8 @@ def _fmt_plain(v: Any, dp: int = 1) -> str:
     return f"{v:.{dp}f}"
 
 
+from hexo_rl.encoding import resolve_from_config
 from hexo_rl.monitoring.config import MonitoringConfig
-from hexo_rl.utils.constants import BOARD_SIZE
 
 
 class TerminalDashboard:
@@ -67,7 +67,7 @@ class TerminalDashboard:
         self._alert_entropy_warn = float(self._mon_cfg.alert_entropy_warn)
         self._alert_grad_max = float(self._mon_cfg.alert_grad_norm_max)
         self._alert_loss_window = int(self._mon_cfg.alert_loss_increase_window)
-        num_actions = int(mon.get("num_actions_for_entropy_norm", config.get("board_size", BOARD_SIZE) ** 2 + 1))
+        num_actions = int(mon.get("num_actions_for_entropy_norm", resolve_from_config(config).policy_logit_count))
         self._max_entropy = math.log(num_actions) if num_actions > 1 else 1.0
         # Mirror the web dashboard's knob so terminal + web agree on the
         # selfplay-collapse threshold (§70). Default 1.5 nats.

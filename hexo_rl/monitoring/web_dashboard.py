@@ -21,8 +21,8 @@ import logging
 import structlog
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
+from hexo_rl.encoding import resolve_from_config
 from hexo_rl.monitoring.config import MonitoringConfig
-from hexo_rl.utils.constants import BOARD_SIZE
 
 log = structlog.get_logger()
 
@@ -220,7 +220,7 @@ class WebDashboard:
             return jsonify({
                 "training_step_history": int(mc.training_step_history),
                 "game_history": int(mc.game_history),
-                "num_actions_for_entropy_norm": int(mon.get("num_actions_for_entropy_norm", self._config.get("board_size", BOARD_SIZE) ** 2 + 1)),
+                "num_actions_for_entropy_norm": int(mon.get("num_actions_for_entropy_norm", resolve_from_config(self._config).policy_logit_count)),
                 "alert_entropy_min": float(mc.alert_entropy_min),
                 "alert_entropy_warn": float(mc.alert_entropy_warn),
                 "collapse_threshold_nats": float(mc.collapse_threshold_nats),
