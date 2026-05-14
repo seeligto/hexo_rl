@@ -21,6 +21,7 @@ import logging
 import structlog
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
+from hexo_rl.monitoring.config import MonitoringConfig
 from hexo_rl.utils.constants import BOARD_SIZE
 
 log = structlog.get_logger()
@@ -92,10 +93,10 @@ class WebDashboard:
     """Web dashboard server that forwards events to browsers via SocketIO."""
 
     def __init__(self, config: dict) -> None:
-        mon = config.get("monitoring", config)
-        self._port = int(mon.get("web_port", 5001))
-        maxlen = int(mon.get("event_log_maxlen", 500))
-        training_step_maxlen = int(mon.get("training_step_history", 2000))
+        self._mon_cfg = MonitoringConfig.from_dict(config)
+        self._port = int(self._mon_cfg.web_port)
+        maxlen = int(self._mon_cfg.event_log_maxlen)
+        training_step_maxlen = int(self._mon_cfg.training_step_history)
         self._config = config
 
         # Shared history for all non-training_step events (run_start, game_complete, etc.)
@@ -108,24 +109,24 @@ class WebDashboard:
 
         # Bounded send queue: background thread drains into socketio.emit().
         # Training loop puts with put_nowait() — if full, newest event is dropped.
-        _queue_maxsize = int(mon.get("emit_queue_maxsize", 200))
+        _queue_maxsize = int(self._mon_cfg.emit_queue_maxsize)
         self._emit_queue: queue.Queue = queue.Queue(maxsize=_queue_maxsize)
         self._drain_thread: threading.Thread | None = None
 
         # Game index — lightweight refs only; full records written to disk
-        max_games = int(mon.get("viewer_max_memory_games", 50))
+        max_games = int(self._mon_cfg.viewer_max_memory_games)
         self._game_index: collections.deque = collections.deque(maxlen=max_games)
-        self._max_disk_games = int(mon.get("viewer_max_disk_games", 1000))
-        self._games_base_dir = Path(mon.get("viewer_games_dir", "runs"))
+        self._max_disk_games = int(self._mon_cfg.viewer_max_disk_games)
+        self._games_base_dir = Path(self._mon_cfg.viewer_games_dir)
         self._run_id: str = "default"
 
-        self._host = str(mon.get("web_host", "127.0.0.1"))
+        self._host = str(self._mon_cfg.web_host)
 
         # async_mode: "threading" (werkzeug dev server, in-process default) or
         # "gevent" (production WSGI, used by scripts/serve_dashboard.py).
         # Gevent avoids the "Session is disconnected" KeyError storms that
         # werkzeug's threaded mode produces under backpressure.
-        self._async_mode = str(mon.get("socketio_async_mode", "threading"))
+        self._async_mode = str(self._mon_cfg.socketio_async_mode)
 
         # Viewer engine — lazy init at start()
         self._viewer_engine: Any = None
@@ -215,17 +216,18 @@ class WebDashboard:
         @app.route("/api/monitoring-config")
         def monitoring_config():
             mon = dashboard._config.get("monitoring", dashboard._config)
+            mc = dashboard._mon_cfg
             return jsonify({
-                "training_step_history": int(mon.get("training_step_history", 2000)),
-                "game_history": int(mon.get("game_history", 500)),
+                "training_step_history": int(mc.training_step_history),
+                "game_history": int(mc.game_history),
                 "num_actions_for_entropy_norm": int(mon.get("num_actions_for_entropy_norm", self._config.get("board_size", BOARD_SIZE) ** 2 + 1)),
-                "alert_entropy_min": float(mon.get("alert_entropy_min", 1.0)),
-                "alert_entropy_warn": float(mon.get("alert_entropy_warn", 2.0)),
-                "collapse_threshold_nats": float(mon.get("collapse_threshold_nats", 1.5)),
-                "alert_grad_norm_max": float(mon.get("alert_grad_norm_max", 10.0)),
-                "ema_alpha": float(mon.get("ema_alpha", 0.06)),
-                "p0_win_rate_target_low": float(mon.get("p0_win_rate_target_low", 54.0)),
-                "p0_win_rate_target_high": float(mon.get("p0_win_rate_target_high", 58.0)),
+                "alert_entropy_min": float(mc.alert_entropy_min),
+                "alert_entropy_warn": float(mc.alert_entropy_warn),
+                "collapse_threshold_nats": float(mc.collapse_threshold_nats),
+                "alert_grad_norm_max": float(mc.alert_grad_norm_max),
+                "ema_alpha": float(mc.ema_alpha),
+                "p0_win_rate_target_low": float(mc.p0_win_rate_target_low),
+                "p0_win_rate_target_high": float(mc.p0_win_rate_target_high),
             })
 
         @socketio.on("connect")

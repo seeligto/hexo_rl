@@ -53,6 +53,7 @@ def _fmt_plain(v: Any, dp: int = 1) -> str:
     return f"{v:.{dp}f}"
 
 
+from hexo_rl.monitoring.config import MonitoringConfig
 from hexo_rl.utils.constants import BOARD_SIZE
 
 
@@ -61,15 +62,16 @@ class TerminalDashboard:
 
     def __init__(self, config: dict) -> None:
         mon = config.get("monitoring", config)
-        self._alert_entropy_min = float(mon.get("alert_entropy_min", 1.0))
-        self._alert_entropy_warn = float(mon.get("alert_entropy_warn", 2.0))
-        self._alert_grad_max = float(mon.get("alert_grad_norm_max", 10.0))
-        self._alert_loss_window = int(mon.get("alert_loss_increase_window", 3))
+        self._mon_cfg = MonitoringConfig.from_dict(config)
+        self._alert_entropy_min = float(self._mon_cfg.alert_entropy_min)
+        self._alert_entropy_warn = float(self._mon_cfg.alert_entropy_warn)
+        self._alert_grad_max = float(self._mon_cfg.alert_grad_norm_max)
+        self._alert_loss_window = int(self._mon_cfg.alert_loss_increase_window)
         num_actions = int(mon.get("num_actions_for_entropy_norm", config.get("board_size", BOARD_SIZE) ** 2 + 1))
         self._max_entropy = math.log(num_actions) if num_actions > 1 else 1.0
         # Mirror the web dashboard's knob so terminal + web agree on the
         # selfplay-collapse threshold (§70). Default 1.5 nats.
-        self._collapse_threshold = float(mon.get("collapse_threshold_nats", 1.5))
+        self._collapse_threshold = float(self._mon_cfg.collapse_threshold_nats)
 
         self._lock = threading.Lock()
         self._live: Live | None = None
