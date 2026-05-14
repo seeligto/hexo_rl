@@ -70,10 +70,10 @@ _VALID_ENCODINGS: frozenset = frozenset(s.name for s in all_specs())
 
 # Required wire planes — every variant must include at least these or the model
 # has no stone information. Plane 0 = cur ply-0, plane 4 = opp ply-0 (8-plane HEXB v6).
-REQUIRED_INPUT_CHANNELS: tuple = (0, 4)
+_REQUIRED_INPUT_CHANNELS: tuple = (0, 4)
 
 
-def validate_input_channels(channels) -> List[int]:
+def _validate_input_channels(channels) -> List[int]:
     """Validate a variant's `input_channels` list. Fail loudly on misconfig.
 
     Returns the canonicalised list (ints, in the order given). Raises
@@ -106,7 +106,7 @@ def validate_input_channels(channels) -> List[int]:
                 f"appear at most once."
             )
         canon.append(ci)
-    for required in REQUIRED_INPUT_CHANNELS:
+    for required in _REQUIRED_INPUT_CHANNELS:
         if required not in canon:
             raise ValueError(
                 f"input_channels missing required plane {required} "
@@ -438,7 +438,7 @@ class HexTacToeNet(nn.Module):
                     "wire format); v8 wire format is already a curated 11-plane "
                     "set — drop input_channels under encoding='v8'."
                 )
-            channels = validate_input_channels(input_channels)
+            channels = _validate_input_channels(input_channels)
             if int(in_channels) != len(channels):
                 raise ValueError(
                     f"in_channels={in_channels} disagrees with "

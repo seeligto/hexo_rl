@@ -943,8 +943,8 @@ class Trainer:
         if input_channels_cfg is None and isinstance(model_cfg, dict):
             input_channels_cfg = model_cfg.get("input_channels")
         if input_channels_cfg is not None:
-            from hexo_rl.model.network import validate_input_channels  # local import to avoid cycle
-            input_channels_cfg = validate_input_channels(input_channels_cfg)
+            from hexo_rl.model.network import _validate_input_channels  # local import to avoid cycle
+            input_channels_cfg = _validate_input_channels(input_channels_cfg)
             config["input_channels"] = list(input_channels_cfg)
             if isinstance(model_cfg, dict):
                 model_cfg["input_channels"] = list(input_channels_cfg)
