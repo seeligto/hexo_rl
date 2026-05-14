@@ -64,31 +64,7 @@ from hexo_rl.encoding import (
 from engine import ReplayBuffer
 
 
-def _legacy_spec_for_registry_name(name: str) -> EncodingSpec:
-    """Map a registry encoding name to a legacy NamedTuple `EncodingSpec`.
-
-    The legacy resolver (`hexo_rl.utils.encoding.resolve_encoding`) only
-    knows the historical names (v6 / v6w25 / v8). Registry-only names
-    (v7full, v7, v7e30, v7mw, v8_canvas_realness) bridge to the wire-
-    compatible legacy spec so downstream consumers reading `state_stride`
-    / `chain_stride` keep working.
-
-      v7full / v7 / v7e30  → v6_spec()  (same wire format, distinct anchor tag)
-      v7mw                  → v6_spec()  (same wire format; multi-window label
-                                          surfaces via the registry spec)
-      v8_canvas_realness    → v8_spec()  (same wire format, plane-8 polarity differs)
-    """
-    if name in ("v6", "v6w25", "v8"):
-        return resolve_encoding({"encoding": {"version": name}})
-    if name in ("v7full", "v7", "v7e30", "v7mw"):
-        return v6_spec()
-    if name == "v8_canvas_realness":
-        return v8_spec()
-    raise ValueError(
-        f"_legacy_spec_for_registry_name: no legacy bridge for registry "
-        f"encoding {name!r}. Add a mapping if the wire format matches an "
-        f"existing legacy spec."
-    )
+from hexo_rl.encoding.compat import legacy_spec_for_registry_name as _legacy_spec_for_registry_name  # noqa: E402  (§176 P14)
 
 log = structlog.get_logger()
 
