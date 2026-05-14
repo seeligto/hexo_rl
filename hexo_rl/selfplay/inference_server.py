@@ -18,7 +18,6 @@ import structlog
 
 from engine import InferenceBatcher  # type: ignore[attr-defined]
 from hexo_rl.encoding import EncodingSpec as RegistrySpec
-from hexo_rl.encoding import lookup as registry_lookup
 from hexo_rl.encoding import resolve_from_config as registry_resolve_from_config
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 
@@ -50,21 +49,17 @@ class InferenceServer(threading.Thread):
 
         # §172 A4.2 — encoding spec sourced from new `hexo_rl.encoding`
         # registry. §176 P3 — legacy `hexo_rl.utils.encoding` NamedTuple
-        # shim retired; only the registry dataclass is accepted now. Any
-        # other spec-like object with a `.name` attribute is round-tripped
-        # via `lookup` so internal storage is uniform on the new dataclass.
+        # shim retired; only the registry dataclass is accepted now.
         # Standalone callers (no kwarg) fall back to resolving from config
         # (default v6).
         if encoding_spec is None:
             self.encoding_spec: RegistrySpec = registry_resolve_from_config(config)
         elif isinstance(encoding_spec, RegistrySpec):
             self.encoding_spec = encoding_spec
-        elif hasattr(encoding_spec, "name"):
-            self.encoding_spec = registry_lookup(encoding_spec.name)
         else:
             raise TypeError(
                 f"InferenceServer: unrecognised encoding_spec type "
-                f"{type(encoding_spec).__name__!r}"
+                f"{type(encoding_spec).__name__!r}; expected hexo_rl.encoding.EncodingSpec"
             )
         # H2D staging tensors size to the trunk window (the spatial dim the
         # model actually accepts). For v6/v6w25/v7*/v8 trunk_size == board_size,

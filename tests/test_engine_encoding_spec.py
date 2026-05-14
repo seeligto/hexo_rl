@@ -19,30 +19,9 @@ import pytest
 from engine import Board, EncodingSpec as PyEncodingSpec
 from hexo_rl.encoding import resolve_from_config
 from hexo_rl.encoding.compat import (
-    WireFormatSpec,
     WIRE_FORMAT_SPECS,
     legacy_spec_for_registry_name,
 )
-
-
-def _wire_to_pyo3(spec: WireFormatSpec) -> PyEncodingSpec:
-    """Build a PyEncodingSpec from a wire-format spec.
-
-    Mirrors the construction the WorkerPool runs at __init__ to wire
-    the SelfPlayRunner's `encoding=` kwarg. Only valid for v6-family
-    wire formats; v8 wire format has no cluster fields.
-    """
-    if spec.cluster_window_size is None or spec.cluster_threshold is None:
-        raise ValueError(
-            f"WireFormatSpec(name={spec.name!r}) has no cluster fields; "
-            "PyEncodingSpec requires cluster_window_size + cluster_threshold."
-        )
-    return PyEncodingSpec(
-        cluster_window_size=int(spec.cluster_window_size),
-        cluster_threshold=int(spec.cluster_threshold),
-        legal_move_radius=int(spec.legal_move_radius),
-        board_size=int(spec.board_size),
-    )
 
 
 def test_pyencoding_kwargs_construction():
@@ -90,7 +69,7 @@ def test_pyboard_with_encoding_validates_inputs():
 
 
 def test_wire_format_v6_round_trip():
-    py = _wire_to_pyo3(WIRE_FORMAT_SPECS["v6"])
+    py = WIRE_FORMAT_SPECS["v6"].to_pyo3()
     assert py.cluster_window_size == 19
     assert py.cluster_threshold == 5
     assert py.legal_move_radius == 5
@@ -98,7 +77,7 @@ def test_wire_format_v6_round_trip():
 
 
 def test_wire_format_v6w25_round_trip():
-    py = _wire_to_pyo3(WIRE_FORMAT_SPECS["v6w25"])
+    py = WIRE_FORMAT_SPECS["v6w25"].to_pyo3()
     assert py.cluster_window_size == 25
     assert py.cluster_threshold == 8
     assert py.legal_move_radius == 8
@@ -109,8 +88,8 @@ def test_wire_format_v8_has_no_cluster_fields():
     assert spec.cluster_window_size is None
     assert spec.cluster_threshold is None
     assert spec.legal_move_radius == 8
-    with pytest.raises(ValueError, match="no cluster fields"):
-        _wire_to_pyo3(spec)
+    with pytest.raises(ValueError, match="no cluster window/threshold"):
+        spec.to_pyo3()
 
 
 def test_resolve_from_config_v6w25():

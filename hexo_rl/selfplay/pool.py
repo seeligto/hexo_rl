@@ -189,12 +189,7 @@ def _resolve_encoding_for_pool(
         wire_format_spec.cluster_window_size is not None
         and wire_format_spec.cluster_threshold is not None
     ):
-        runner_encoding = PyO3EncodingSpec(
-            cluster_window_size=int(wire_format_spec.cluster_window_size),
-            cluster_threshold=int(wire_format_spec.cluster_threshold),
-            legal_move_radius=int(wire_format_spec.legal_move_radius),
-            board_size=int(wire_format_spec.board_size),
-        )
+        runner_encoding = wire_format_spec.to_pyo3()
     else:
         runner_encoding = None
 
