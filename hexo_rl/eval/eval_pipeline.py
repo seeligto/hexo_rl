@@ -21,6 +21,7 @@ from hexo_rl.eval.display import print_colony_win_breakdown, print_match_result,
 from hexo_rl.eval.evaluator import Evaluator
 from hexo_rl.eval.gate_logic import GateConfig, _binomial_ci, evaluate_gate
 from hexo_rl.eval.reporting import plot_ratings_curve
+from hexo_rl.eval.result_types import EvalRoundResult
 from hexo_rl.eval.results_db import ResultsDB
 from hexo_rl.model.network import HexTacToeNet
 
@@ -181,7 +182,7 @@ class EvalPipeline:
         best_model: HexTacToeNet | None,
         full_config: dict[str, Any] | None = None,
         best_model_step: int | None = None,
-    ) -> Dict[str, Any]:
+    ) -> EvalRoundResult:
         """Run a full evaluation round.
 
         Args:
@@ -232,7 +233,7 @@ class EvalPipeline:
             run_id=self.run_id,
         )
 
-        results: Dict[str, Any] = {"step": train_step, "promoted": False, "eval_games": 0}
+        results: EvalRoundResult = {"step": train_step, "promoted": False, "eval_games": 0}
 
         # §174 G4 — value-head |max| band check.  Runs first so the measurement
         # is logged even when no opponents fire (stride-skipped rounds).

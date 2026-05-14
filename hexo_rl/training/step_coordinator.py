@@ -27,6 +27,7 @@ from typing import Any, Callable, Protocol, runtime_checkable
 
 import structlog
 
+from hexo_rl.eval.result_types import EvalRoundResult
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.training.batch_assembly import assemble_mixed_batch
 from hexo_rl.training.loop import RollingGamesPerHour
@@ -655,7 +656,7 @@ class StepCoordinator:
                         try:
                             # L4: run_evaluation sets result["step"] itself; the
                             # post-hoc assignment here was dead code.
-                            result = eval_pipeline.run_evaluation(
+                            result: EvalRoundResult = eval_pipeline.run_evaluation(
                                 _model, _step, _best, full_config=_cfg,
                                 best_model_step=_best_step,
                             )
