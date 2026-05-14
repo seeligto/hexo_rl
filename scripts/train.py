@@ -40,66 +40,21 @@ from hexo_rl.utils.cpu_budget import apply_auto_thread_budget, apply_torch_inter
 from hexo_rl.utils.config import load_config as _load_config_early
 
 
-def _peek_n_workers() -> int | None:
-    """Partial-parse ``--config`` / ``--variant`` so the auto-tune can size
-    the per-lib slice for the actual self-play worker count. Both load_config
-    and the YAML reader are torch-free, so this can run before numpy / torch.
-    Failures fall through to None (auto-tune uses the no-workers heuristic).
+def build_argparser(*, peek_only: bool = False) -> argparse.ArgumentParser:
+    """Single source of truth for the train.py CLI.
+
+    ``peek_only=True`` returns an ``add_help=False`` parser exposing only
+    ``--config`` / ``--variant`` — used by :func:`_peek_n_workers` before
+    numpy/torch import to partial-parse the worker count for thread-budget
+    sizing. ``peek_only=False`` (default) returns the full parser used by
+    :func:`parse_args`.
     """
-    try:
+    if peek_only:
         p = argparse.ArgumentParser(add_help=False)
         p.add_argument("--config", default=None)
         p.add_argument("--variant", default=None)
-        early, _ = p.parse_known_args()
-        paths = [
-            "configs/model.yaml", "configs/training.yaml",
-            "configs/selfplay.yaml", "configs/game_replay.yaml",
-            "configs/monitoring.yaml", "configs/monitors.yaml",
-        ]
-        if early.config:
-            paths.append(early.config)
-        if early.variant:
-            vp = f"configs/variants/{early.variant}.yaml"
-            if Path(vp).exists():
-                paths.append(vp)
-        cfg = _load_config_early(*paths)
-        sp = cfg.get("selfplay", {})
-        n = sp.get("n_workers")
-        return int(n) if n is not None else None
-    except Exception:
-        return None
+        return p
 
-
-apply_auto_thread_budget(n_workers=_peek_n_workers(), log_prefix="[hexo_rl train]")
-
-
-import numpy as np
-import structlog
-import torch
-
-apply_torch_interop_cap()
-
-from hexo_rl.monitoring.configure import configure_logging
-from hexo_rl.model.network import HexTacToeNet
-from engine import ReplayBuffer
-from hexo_rl.training.trainer import Trainer
-from hexo_rl.training.batch_assembly import allocate_batch_buffers, load_pretrained_buffer
-from hexo_rl.training.loop import run_training_loop
-from hexo_rl.selfplay.utils import N_ACTIONS as _N_ACTIONS
-from hexo_rl.monitoring.events import emit_event
-
-
-def seed_everything(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    if hasattr(torch, "mps") and torch.backends.mps.is_available():
-        torch.mps.manual_seed(seed)
-
-
-def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Phase 4 self-play training loop")
     p.add_argument(
         "--config", default=None,
@@ -150,7 +105,67 @@ def parse_args() -> argparse.Namespace:
                    help="Disable torch.compile (useful for debugging)")
     p.add_argument("--min-buffer-size", type=int, default=None,
                    help="Override replay warmup size before first training step")
-    return p.parse_args()
+    return p
+
+
+def _peek_n_workers() -> int | None:
+    """Partial-parse ``--config`` / ``--variant`` so the auto-tune can size
+    the per-lib slice for the actual self-play worker count. Both load_config
+    and the YAML reader are torch-free, so this can run before numpy / torch.
+    Failures fall through to None (auto-tune uses the no-workers heuristic).
+    """
+    try:
+        early, _ = build_argparser(peek_only=True).parse_known_args()
+        paths = [
+            "configs/model.yaml", "configs/training.yaml",
+            "configs/selfplay.yaml", "configs/game_replay.yaml",
+            "configs/monitoring.yaml", "configs/monitors.yaml",
+        ]
+        if early.config:
+            paths.append(early.config)
+        if early.variant:
+            vp = f"configs/variants/{early.variant}.yaml"
+            if Path(vp).exists():
+                paths.append(vp)
+        cfg = _load_config_early(*paths)
+        sp = cfg.get("selfplay", {})
+        n = sp.get("n_workers")
+        return int(n) if n is not None else None
+    except Exception:
+        return None
+
+
+apply_auto_thread_budget(n_workers=_peek_n_workers(), log_prefix="[hexo_rl train]")
+
+
+import numpy as np
+import structlog
+import torch
+
+apply_torch_interop_cap()
+
+from hexo_rl.monitoring.configure import configure_logging
+from hexo_rl.model.network import HexTacToeNet
+from engine import ReplayBuffer
+from hexo_rl.training.trainer import Trainer
+from hexo_rl.training.batch_assembly import allocate_batch_buffers, load_pretrained_buffer
+from hexo_rl.training.loop import run_training_loop
+from hexo_rl.selfplay.utils import N_ACTIONS as _N_ACTIONS
+from hexo_rl.monitoring.events import emit_event
+
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    if hasattr(torch, "mps") and torch.backends.mps.is_available():
+        torch.mps.manual_seed(seed)
+
+
+def parse_args() -> argparse.Namespace:
+    return build_argparser().parse_args()
 
 
 def main() -> None:
