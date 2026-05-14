@@ -26,7 +26,7 @@ import torch
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.monitoring.disk_guard import DiskGuard
 from hexo_rl.monitoring.early_game_probe import EarlyGameProbe
-from hexo_rl.monitoring.events import register_renderer
+from hexo_rl.monitoring.events import register_jsonl_sink, register_renderer
 from hexo_rl.monitoring.gpu_monitor import GPUMonitor
 from hexo_rl.monitoring.value_probe import ValueProbe
 from hexo_rl.training.trainer import Trainer
@@ -274,6 +274,14 @@ def build_subsystems(
         log.info("tensorboard_writer_init", log_dir=_tb_log_dir)
     except Exception as _tb_err:
         log.warning("tensorboard_writer_unavailable", error=str(_tb_err))
+
+    # ── Events JSONL sink ────────────────────────────────────────────────────
+    # Registered unconditionally so `make dashboard` works whether or not the
+    # in-process dashboard is enabled. Out-of-process dashboards
+    # (scripts/serve_dashboard.py via EventsTailer) tail this file.
+    _events_jsonl_path = Path(getattr(args, "log_dir", "logs") or "logs") / f"events_{run_id}.jsonl"
+    register_jsonl_sink(_events_jsonl_path)
+    log.info("events_jsonl_sink", path=str(_events_jsonl_path))
 
     # ── Dashboard renderers ───────────────────────────────────────────────────
     dashboards: list = []
