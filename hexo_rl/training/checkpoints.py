@@ -408,15 +408,34 @@ def load_inference_model(
 
     Args:
         checkpoint_path: path to a .pt checkpoint.
-        config:          optional config dict — currently unused. Reserved
-                         for future hparam fallbacks (filters, res_blocks,
-                         se_reduction_ratio) when state-dict inference is
-                         insufficient.
+        config:          optional config dict — **currently unused** (the
+                         body discards it via ``del config``). Reserved
+                         for future hparam fallbacks (``filters``,
+                         ``res_blocks``, ``se_reduction_ratio``) when
+                         state-dict inference is insufficient. The
+                         state-dict shape is the **sole** source of arch
+                         dims today — pre-§176-P47 callers (e.g. the old
+                         ``our_model_bot.py`` path) that relied on
+                         ``config['model']['filters']`` /
+                         ``['res_blocks']`` / ``['se_reduction_ratio']``
+                         overrides must ensure the state-dict carries
+                         matching shapes; ``load_state_dict`` raises
+                         loudly on any mismatch (see
+                         ``load_state_dict_strict`` above).
         device:          target device. Defaults to `best_device()`.
 
     Returns:
         (model, EncodingSpec, label) — model is `.to(device).eval()`.
         `label` is the canonical encoding name (e.g. "v6", "v6w25", "v8").
+
+    Security:
+        Loads checkpoints with ``weights_only=False`` (inherited from
+        ``load_model_with_encoding``'s eval-path default — the pre-§176-P47
+        ``our_model_bot.py`` path used ``weights_only=True``, but every
+        other eval-side loader has been ``weights_only=False`` since the
+        registry landed, so this is documented consistency, not a
+        regression). Only load checkpoints from trusted sources;
+        ``weights_only=False`` will execute pickled Python during load.
 
     §176 P47.
     """
