@@ -133,7 +133,7 @@ class Evaluator:
             eval_cfg.get("colony_centroid_threshold", 6.0)
         )
         self._eval_temperature = float(eval_cfg.get("eval_temperature", 0.5))
-        self._eval_random_opening_plies = int(eval_cfg.get("eval_random_opening_plies", 4))
+        self._eval_random_opening_plies = int(eval_cfg.get("eval_random_opening_plies", 0))
         self._eval_seed_base = int(eval_cfg.get("eval_seed_base", 42))
 
     def _log_progress(self, phase: str, idx: int, total: int, start_time: float, win_count: int) -> None:

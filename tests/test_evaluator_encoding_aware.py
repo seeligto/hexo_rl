@@ -120,6 +120,15 @@ def test_board_with_encoding_name_v6w25_to_tensor_shape():
     assert sliced.shape == (8, 25, 25)
 
 
+def test_eval_random_opening_plies_default_is_zero():
+    """§174 amendment: default aligned to configs/eval.yaml (0 plies)."""
+    model = _make_v6_model()
+    config = {"encoding": "v6", "mcts": {"c_puct": 1.5}}
+    device = torch.device("cpu")
+    evaluator = Evaluator(model, device, config)
+    assert evaluator._eval_random_opening_plies == 0
+
+
 def test_board_with_encoding_name_v6_to_tensor_shape():
     """Board.with_encoding_name('v6') must yield (8, 19, 19) tensor."""
     board = Board.with_encoding_name("v6")
