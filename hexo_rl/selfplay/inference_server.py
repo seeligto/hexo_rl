@@ -76,10 +76,11 @@ class InferenceServer(threading.Thread):
         # accounts for the per-encoding pass-slot bit (v8: 625, v6/v7full: 362,
         # v6w25: 626).
         self._policy_len = self.encoding_spec.policy_logit_count
-        # Rust workers always emit WIRE_CHANNELS (18) planes — the Rust replay
-        # buffer is hardcoded to N_PLANES=18. Channel reduction happens inside
-        # model.forward() via index_select, so the InferenceBatcher and the
-        # H2D reshape must use the wire-format width, not the model's trunk width.
+        # Rust workers always emit WIRE_CHANNELS planes (post-§131:
+        # WIRE_CHANNELS == BUFFER_CHANNELS == 8 via KEPT_PLANE_INDICES).
+        # Channel reduction (if any) happens inside model.forward() via
+        # index_select, so the InferenceBatcher and the H2D reshape must
+        # use the wire-format width, not the model's trunk width.
         self._feature_len = WIRE_CHANNELS * board_size * board_size
         self._shape = (WIRE_CHANNELS, board_size, board_size)
 
@@ -162,8 +163,9 @@ class InferenceServer(threading.Thread):
                 self._compile_inference = False
 
         # Pinned host staging buffer for async H2D (Bucket 1 #5, E2 row 1).
-        # Size: batch_size * feature_len * 4B ≈ 1 MB for default (64 * 18*19*19 * 4).
-        # Enables DMA engine copy on CUDA (non_blocking=True); no-op on CPU.
+        # Size: batch_size * feature_len * 4B (e.g. 64 * 8 * 19 * 19 * 4 ≈ 0.5 MB
+        # at WIRE_CHANNELS=8). Enables DMA engine copy on CUDA
+        # (non_blocking=True); no-op on CPU.
         if self.device.type == "cuda":
             self._h2d_staging = torch.empty(
                 (self._batch_size, WIRE_CHANNELS, board_size, board_size),
