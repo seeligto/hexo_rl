@@ -474,9 +474,10 @@ class WorkerPool:
                 # stride-5 per-game detection (pure function; pool computes,
                 # instrumentation owns the rolling window and P90).
                 if move_history:
-                    _stride5_run, _ = _compute_stride5_metrics(move_history)
+                    _stride5_run, _row_max_density = _compute_stride5_metrics(move_history)
                 else:
                     _stride5_run = 0
+                    _row_max_density = 0
 
                 _ext_count, _ext_total, _ext_frac, _stride5_p90 = (
                     self._instrumentation.on_game_complete(
@@ -521,6 +522,8 @@ class WorkerPool:
                     "model_version_range_size": int(mv_max - mv_min),
                     # Phase B' — stride-5 P90 retained as passive metric (§162).
                     "stride5_run_p90":   int(_stride5_p90),
+                    # §176 P23 — densest hex-row stone count (any of 3 axes).
+                    "row_max_density":   int(_row_max_density),
                 }
                 emit_event(game_complete_payload)
 
