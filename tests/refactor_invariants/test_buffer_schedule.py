@@ -164,6 +164,13 @@ def _make_coordinator(
     pool.recent_buffer = None
 
     cfg = _make_config(**(config_overrides or {}))
+    _subsystems = Mock(
+        gpu_monitor=Mock(gpu_util_pct=10.0),
+        early_game_probe=None,
+        value_probe=None,
+        axis_baseline={},
+        tb_writer=None,
+    )
     coord = StepCoordinator(
         trainer=trainer or _make_trainer(start_step),
         buffer=buffer or _make_buffer(),
@@ -171,16 +178,11 @@ def _make_coordinator(
         recent_buffer=None,
         pool=pool,
         eval_pipeline=None,
-        gpu_monitor=Mock(gpu_util_pct=10.0),
-        subsystems=Mock(),
+        subsystems=_subsystems,
         anchor_state=anchor,
         shutdown=_FakeShutdown(),
         eval_model=Mock(_orig_mod=Mock()),
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline={},
-        tb_writer=None,
         config=cfg,
         full_config={"monitors": {}},
         train_cfg={"batch_size": 16},

@@ -55,16 +55,11 @@ def test_init_populates_all_instance_fields_from_anchor_state():
         recent_buffer=None,
         pool=pool,
         eval_pipeline=None,
-        gpu_monitor=Mock(),
         subsystems=Mock(),
         anchor_state=anchor,
         shutdown=Mock(),
         eval_model=Mock(),
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=_make_config(),
     )
     assert coord.best_model_step == 42
@@ -79,16 +74,11 @@ def test_init_creates_fresh_eval_result_cell():
         recent_buffer=None,
         pool=Mock(games_completed=0),
         eval_pipeline=None,
-        gpu_monitor=Mock(),
         subsystems=Mock(),
         anchor_state=Mock(best_model=None, best_model_step=None),
         shutdown=Mock(),
         eval_model=None,
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=_make_config(),
     )
     assert coord._eval_result == [None]
@@ -103,16 +93,11 @@ def test_init_creates_fresh_ew_history_deque():
         recent_buffer=None,
         pool=Mock(games_completed=0),
         eval_pipeline=None,
-        gpu_monitor=Mock(),
         subsystems=Mock(),
         anchor_state=Mock(best_model=None, best_model_step=None),
         shutdown=Mock(),
         eval_model=None,
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=_make_config(soft_ew_min_pts=5),
     )
     assert isinstance(coord._ew_history, deque)
@@ -129,16 +114,11 @@ def test_init_train_step_mirrors_trainer_step():
         recent_buffer=None,
         pool=pool,
         eval_pipeline=None,
-        gpu_monitor=Mock(),
         subsystems=Mock(),
         anchor_state=Mock(best_model=None, best_model_step=None),
         shutdown=Mock(),
         eval_model=None,
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=_make_config(),
     )
     assert coord.train_step == 123
@@ -152,16 +132,11 @@ def test_init_schedule_idx_starts_at_one():
         recent_buffer=None,
         pool=Mock(games_completed=0),
         eval_pipeline=None,
-        gpu_monitor=Mock(),
         subsystems=Mock(),
         anchor_state=Mock(best_model=None, best_model_step=None),
         shutdown=Mock(),
         eval_model=None,
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=_make_config(),
     )
     assert coord.schedule_idx == 1
@@ -175,16 +150,11 @@ def test_init_consec_high_gn_starts_at_zero():
         recent_buffer=None,
         pool=Mock(games_completed=0),
         eval_pipeline=None,
-        gpu_monitor=Mock(),
         subsystems=Mock(),
         anchor_state=Mock(best_model=None, best_model_step=None),
         shutdown=Mock(),
         eval_model=None,
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=_make_config(),
     )
     assert coord.consec_high_gn == 0
@@ -199,16 +169,11 @@ def test_init_last_train_game_count_mirrors_pool():
         recent_buffer=None,
         pool=pool,
         eval_pipeline=None,
-        gpu_monitor=Mock(),
         subsystems=Mock(),
         anchor_state=Mock(best_model=None, best_model_step=None),
         shutdown=Mock(),
         eval_model=None,
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=_make_config(),
     )
     assert coord.last_train_game_count == 99
@@ -222,16 +187,11 @@ def test_init_rolling_games_per_hour_attached():
         recent_buffer=None,
         pool=Mock(games_completed=0),
         eval_pipeline=None,
-        gpu_monitor=Mock(),
         subsystems=Mock(),
         anchor_state=Mock(best_model=None, best_model_step=None),
         shutdown=Mock(),
         eval_model=None,
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=_make_config(),
     )
     # games_per_hour should be a bound method (not recreated each call)
@@ -246,16 +206,11 @@ def test_init_compute_pretrained_weight_attached():
         recent_buffer=None,
         pool=Mock(games_completed=0),
         eval_pipeline=None,
-        gpu_monitor=Mock(),
         subsystems=Mock(),
         anchor_state=Mock(best_model=None, best_model_step=None),
         shutdown=Mock(),
         eval_model=None,
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=_make_config(mixing_initial_w=0.8, mixing_min_w=0.1, mixing_decay_steps=1_000_000.0),
     )
     assert coord.compute_pretrained_weight(0) == pytest.approx(0.8, abs=1e-9)
@@ -269,16 +224,11 @@ def test_init_clock_default_is_real_clock():
         recent_buffer=None,
         pool=Mock(games_completed=0),
         eval_pipeline=None,
-        gpu_monitor=Mock(),
         subsystems=Mock(),
         anchor_state=Mock(best_model=None, best_model_step=None),
         shutdown=Mock(),
         eval_model=None,
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=_make_config(),
     )
     assert isinstance(coord._clock, RealClock)
@@ -290,7 +240,6 @@ def test_init_with_stub_collaborators():
     trainer = Mock(step=0)
     pool = Mock(games_completed=0)
     buffer = Mock(spec=["size", "capacity", "resize", "save_to_path"])
-    gpu_monitor = Mock(spec=["gpu_util_pct"])
     config = _make_config()
 
     coord = StepCoordinator(
@@ -300,16 +249,11 @@ def test_init_with_stub_collaborators():
         recent_buffer=None,
         pool=pool,
         eval_pipeline=None,
-        gpu_monitor=gpu_monitor,
         subsystems=Mock(),
         anchor_state=anchor,
         shutdown=Mock(),
         eval_model=None,
         bufs=Mock(),
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=config,
     )
     # Sanity: all expected attributes exist and have the right shape

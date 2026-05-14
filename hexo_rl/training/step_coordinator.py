@@ -225,16 +225,11 @@ class StepCoordinator:
         recent_buffer: RecentBufferLike | None,
         pool: WorkerPoolLike,
         eval_pipeline: EvalPipelineLike | None,
-        gpu_monitor: GpuMonitorLike,
         subsystems: Any,
         anchor_state: Any,
         shutdown: Any,
         eval_model: Any,
         bufs: Any,
-        early_game_probe: Any,
-        value_probe: Any,
-        axis_baseline: dict[str, Any] | None,
-        tb_writer: Any,
         config: StepCoordinatorConfig,
         full_config: dict[str, Any] | None = None,
         train_cfg: dict[str, Any] | None = None,
@@ -254,17 +249,14 @@ class StepCoordinator:
         self.recent_buffer = recent_buffer
         self.pool = pool
         self.eval_pipeline = eval_pipeline
-        self.gpu_monitor = gpu_monitor
+        # gpu_monitor / early_game_probe / value_probe / axis_baseline / tb_writer
+        # accessed via self.subsystems.<name> (§176 P11 — collapsed redundant kwargs)
         self.subsystems = subsystems
         self.anchor_state = anchor_state
         self.shutdown = shutdown
         self.best_model = anchor_state.best_model
         self.eval_model = eval_model
         self.bufs = bufs
-        self.early_game_probe = early_game_probe
-        self.value_probe = value_probe
-        self.axis_baseline = axis_baseline
-        self.tb_writer = tb_writer
         self.config = config
         self.full_config = full_config if full_config is not None else {}
         self.train_cfg = train_cfg if train_cfg is not None else {}
@@ -464,7 +456,7 @@ class StepCoordinator:
                     buffer=self.buffer.size,
                     target=cfg.min_buf_size,
                     games=self._games_played,
-                    gpu_pct=round(self.gpu_monitor.gpu_util_pct, 0),
+                    gpu_pct=round(self.subsystems.gpu_monitor.gpu_util_pct, 0),
                 )
                 self._event_emitter({
                     "event": "system_stats",
@@ -594,7 +586,8 @@ class StepCoordinator:
             # D5: axis-distribution emit + D5b soft-abort
             if self._train_step > 0 and self._train_step % cfg.eval_interval == 0:
                 _axis_q_val = _emit_axis_distribution(
-                    self._train_step, self.pool, self.full_config, self.axis_baseline, self.tb_writer,
+                    self._train_step, self.pool, self.full_config,
+                    self.subsystems.axis_baseline, self.subsystems.tb_writer,
                 )
                 axis_emitted = True
                 if (cfg.soft_ew_threshold > 0.0 and cfg.soft_ew_min_pts > 0
@@ -746,21 +739,21 @@ class StepCoordinator:
                     })
                 _emit_training_events(
                     self._train_step, loss_info, w_pre, self._games_played,
-                    self.last_iter_games, self.pool, self.buffer, self.gpu_monitor,
+                    self.last_iter_games, self.pool, self.buffer, self.subsystems.gpu_monitor,
                     self.full_config, self.mcts_config, cfg.capacity,
                     self.games_per_hour, _qfire_delta,
-                    early_game_probe=self.early_game_probe,
+                    early_game_probe=self.subsystems.early_game_probe,
                     trainer_model=self.trainer.model,
                 )
                 self.last_iter_games = self._games_played
 
             # D9 + D10: instrumentation cadence (gated)
             if cfg.instrumentation_enabled:
-                if (self.value_probe is not None
+                if (self.subsystems.value_probe is not None
                         and self._train_step > 0
                         and self._train_step % cfg.value_probe_interval == 0):
                     try:
-                        vp = self.value_probe.compute(self.trainer.model)
+                        vp = self.subsystems.value_probe.compute(self.trainer.model)
                         self._event_emitter({
                             "event": "value_probe_drift",
                             "step": self._train_step,
@@ -770,7 +763,7 @@ class StepCoordinator:
                             "draw_std":      vp["draw_std"],
                             "n_decisive":    vp["decisive_n"],
                             "n_draw":        vp["draw_n"],
-                            "fixture":       self.value_probe.fixture_path,
+                            "fixture":       self.subsystems.value_probe.fixture_path,
                         })
                         self._logger.info(
                             "value_probe_drift",

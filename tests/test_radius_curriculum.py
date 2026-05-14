@@ -170,6 +170,14 @@ def test_radius_transition_emitted() -> None:
         }
     }
 
+    _subsystems = type("S", (), {
+        "teardown": lambda self: None,
+        "gpu_monitor": type("G", (), {"gpu_util_pct": 0.0})(),
+        "early_game_probe": None,
+        "value_probe": None,
+        "axis_baseline": None,
+        "tb_writer": None,
+    })()
     coordinator = StepCoordinator(
         trainer=trainer,
         buffer=type("B", (), {"size": 100, "capacity": 1000, "resize": lambda *a: None, "save_to_path": lambda *a: None})(),
@@ -177,16 +185,11 @@ def test_radius_transition_emitted() -> None:
         recent_buffer=None,
         pool=pool,
         eval_pipeline=None,
-        gpu_monitor=type("G", (), {"gpu_util_pct": 0.0})(),
-        subsystems=type("S", (), {"teardown": lambda self: None})(),
+        subsystems=_subsystems,
         anchor_state=type("A", (), {"best_model": None, "best_model_path": "", "best_model_step": None})(),
         shutdown=type("Sh", (), {"running": True, "shutdown_save": False})(),
         eval_model=None,
         bufs=None,
-        early_game_probe=None,
-        value_probe=None,
-        axis_baseline=None,
-        tb_writer=None,
         config=cfg,
         full_config=full_config,
     )
