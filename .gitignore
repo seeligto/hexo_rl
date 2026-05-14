@@ -37,6 +37,8 @@ reports/**
 !reports/sprint_archive/
 !reports/sprint_archive/**
 archive/
+!scripts/archive/
+!scripts/archive/**
 checkpoints/
 logs/
 logs/scrape_history.log
@@ -116,3 +118,6 @@ audit/
 docs/notes/remote_reports/
 *.jsonl
 reports/phase_b_prime/instrumented/checkpoints/
+
+reports/refactor_audit/
+prompts/
