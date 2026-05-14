@@ -39,6 +39,7 @@ from hexo_rl.utils.device import best_device
 # when --no-dashboard is set. emit_event is dashboard-renderer fan-out only.
 from hexo_rl.training.aux_decode import decode_ownership, decode_winning_line, mask_aux_rows
 from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
+from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
     compute_aux_loss, compute_total_loss, compute_uncertainty_loss,
@@ -954,10 +955,7 @@ class Trainer:
             if isinstance(model_cfg, dict):
                 model_cfg["in_channels"] = derived_in
 
-        defaults = {
-            "board_size": BOARD_SIZE, "res_blocks": 12, "filters": 128,
-            "in_channels": BUFFER_CHANNELS, "se_reduction_ratio": 4,
-        }
+        defaults = dict(MODEL_HPARAM_DEFAULTS)
 
         def _explicit(key: str) -> Optional[int]:
             if isinstance(model_cfg, dict) and key in model_cfg:
@@ -1393,7 +1391,7 @@ class Trainer:
             in_channels=model_hparams["in_channels"],
             res_blocks=model_hparams["res_blocks"],
             filters=model_hparams["filters"],
-            se_reduction_ratio=model_hparams.get("se_reduction_ratio", 4),
+            se_reduction_ratio=model_hparams.get("se_reduction_ratio", MODEL_HPARAM_DEFAULTS["se_reduction_ratio"]),
             input_channels=config.get("input_channels"),
         )
         # If input_channels was explicitly nulled (e.g. loading a sweep checkpoint

@@ -18,12 +18,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from hexo_rl.utils.constants import BUFFER_CHANNELS
-
 import structlog
 import torch
 
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS
 from hexo_rl.monitoring.disk_guard import DiskGuard
 from hexo_rl.monitoring.early_game_probe import EarlyGameProbe
 from hexo_rl.monitoring.events import register_jsonl_sink, register_renderer
@@ -51,10 +50,10 @@ def build_inference_model(
     # ── Inference model — separate instance owned by InferenceServer ──────────
     from hexo_rl.encoding import resolve_from_config as _registry_resolve
     board_size         = _registry_resolve(trainer.config).trunk_size
-    res_blocks         = int(trainer.config.get("res_blocks",         12))
-    filters            = int(trainer.config.get("filters",            128))
-    in_channels        = int(trainer.config.get("in_channels",         BUFFER_CHANNELS))
-    se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", 4))
+    res_blocks         = int(trainer.config.get("res_blocks",         MODEL_HPARAM_DEFAULTS["res_blocks"]))
+    filters            = int(trainer.config.get("filters",            MODEL_HPARAM_DEFAULTS["filters"]))
+    in_channels        = int(trainer.config.get("in_channels",        MODEL_HPARAM_DEFAULTS["in_channels"]))
+    se_reduction_ratio = int(trainer.config.get("se_reduction_ratio", MODEL_HPARAM_DEFAULTS["se_reduction_ratio"]))
     input_channels     = trainer.config.get("input_channels", None)
 
     _torch_compile_enabled = (

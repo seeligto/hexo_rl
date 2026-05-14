@@ -31,6 +31,7 @@ from hexo_rl.training.lifecycle import (
     cuda_stream_audit,
     cuda_warmup,
 )
+from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS
 from hexo_rl.training.buffer_persist import try_save_buffer as _try_save_buffer
 from hexo_rl.training.events import replay_pretrain_events as _replay_pretrain_events
 from hexo_rl.training.signals import ShutdownState, install_signal_handlers
@@ -246,8 +247,8 @@ def run_training_loop(
         "run_id": run_id,
         "worker_count": pool.n_workers,
         "config_summary": {
-            "n_blocks": int(config.get("res_blocks", 12)),
-            "channels": int(config.get("filters", 128)),
+            "n_blocks": int(config.get("res_blocks", MODEL_HPARAM_DEFAULTS["res_blocks"])),
+            "channels": int(config.get("filters", MODEL_HPARAM_DEFAULTS["filters"])),
             "n_sims": int(mcts_config.get("n_simulations", 800)),
             "buffer_capacity": capacity,
         },
