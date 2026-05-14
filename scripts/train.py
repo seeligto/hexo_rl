@@ -145,13 +145,10 @@ import torch
 apply_torch_interop_cap()
 
 from hexo_rl.monitoring.configure import configure_logging
-from hexo_rl.model.network import HexTacToeNet
-from engine import ReplayBuffer
-from hexo_rl.training.trainer import Trainer
-from hexo_rl.training.batch_assembly import allocate_batch_buffers, load_pretrained_buffer
+from hexo_rl.training.batch_assembly import load_pretrained_buffer
 from hexo_rl.training.loop import run_training_loop
-from hexo_rl.selfplay.utils import N_ACTIONS as _N_ACTIONS
-from hexo_rl.monitoring.events import emit_event
+from hexo_rl.monitoring.events import emit_event  # re-exported for back-compat
+from hexo_rl.training import orchestrator as _orchestrator
 
 
 def seed_everything(seed: int) -> None:
@@ -179,296 +176,42 @@ def main() -> None:
     run_id = uuid.uuid4().hex
 
     # ── Load config ───────────────────────────────────────────────────────────
-    from hexo_rl.utils.config import load_config
-    _BASE_CONFIGS = [
-        "configs/model.yaml",
-        "configs/training.yaml",
-        "configs/selfplay.yaml",
-        "configs/game_replay.yaml",
-        "configs/monitoring.yaml",
-        "configs/monitors.yaml",
-    ]
-    load_paths: list[str] = list(_BASE_CONFIGS)
-    if args.config:
-        override = str(Path(args.config).resolve())
-        load_paths = [p for p in load_paths if str(Path(p).resolve()) != override]
-        load_paths.append(args.config)
-    if args.variant:
-        variant_path = Path(f"configs/variants/{args.variant}.yaml")
-        if not variant_path.exists():
-            available = sorted(p.stem for p in Path("configs/variants").glob("*.yaml"))
-            raise FileNotFoundError(
-                f"Variant '{args.variant}' not found. Available: {available}"
-            )
-        load_paths.append(str(variant_path))
-
-        # §176 P68 — abort-on-warning variant validation. Catches silent
-        # namespace shadows before merge (e.g. variant declaring
-        # ``training: {max_train_burst: 8}`` when base has flat
-        # ``max_train_burst``).
-        import yaml as _yaml
-        from hexo_rl.utils.variant_validator import (
-            _load_standard_base_cfgs,
-            validate_variant_against_bases,
-        )
-        with open(variant_path) as _vf:
-            _variant_cfg = _yaml.safe_load(_vf) or {}
-        _base_cfgs = _load_standard_base_cfgs(Path(".").resolve())
-        _warnings = validate_variant_against_bases(_variant_cfg, _base_cfgs)
-        if _warnings:
-            for _w in _warnings:
-                print(f"variant_validator WARNING: {_w}", file=sys.stderr)
-            raise RuntimeError(
-                f"variant '{args.variant}' has {len(_warnings)} validator warning(s); "
-                f"see stderr. Fix the variant or run with --no-validate (not implemented)."
-            )
-
-    config = load_config(*load_paths)
+    config = _orchestrator.load_train_config(args)
 
     # ── Logging ───────────────────────────────────────────────────────────────
     _log_run_name = args.run_name or f"train_{run_id}"
     log, _log_fh = configure_logging(log_dir=args.log_dir, run_name=_log_run_name)
     log.info("startup", config=config, variant=args.variant, pid=os.getpid())
 
-    # ── Seed + device ─────────────────────────────────────────────────────────
-    seed = int(config.get("seed", 42))
-    seed_everything(seed)
-    log.info("seeded", seed=seed)
+    # ── Seed + device + TF32 ──────────────────────────────────────────────────
+    device = _orchestrator.setup_seed_device_tf32(config, log)
 
-    from hexo_rl.utils.device import best_device
-    device = best_device()
-    log.info("device", device=str(device))
-
-    # Per-host TF32 configuration (§117). Applies backend flags once; safe
-    # no-op on CPU. See hexo_rl/model/tf32.py.
-    from hexo_rl.model.tf32 import resolve_and_apply as _tf32_resolve_and_apply
-    _tf32_resolved = _tf32_resolve_and_apply(config)
-    log.info("tf32_applied", **_tf32_resolved)
-
-    # ── Config flattening ─────────────────────────────────────────────────────
-    model_config = config.get("model", {})
-    train_config = config.get("training", {})
-    mcts_config  = config.get("mcts", {})
-    self_config  = config.get("selfplay", {})
-    combined_config = {
-        **config,
-        **model_config,
-        **train_config,
-        **mcts_config,
-        **self_config,
-    }
-    train_cfg = config.get("training", config)
-
-    if args.iterations is not None:
-        combined_config["total_steps"] = int(args.iterations)
-        train_cfg["total_steps"]       = int(args.iterations)
-    if args.no_compile:
-        combined_config["torch_compile"] = False
-        train_cfg["torch_compile"]       = False
-
-    # §172 A10: registry is the sole source of truth for trunk_size;
-    # `combined_config["board_size"]` scalar retired. All downstream readers
-    # (eval, model, selfplay) consume `resolve_from_config(cfg).trunk_size`.
-    from hexo_rl.encoding import expand_auto_paths, resolve_from_config as _registry_resolve
-    _registry_spec = _registry_resolve(combined_config)
-    # §172 A10 / T9: expand <auto> corpus/anchor path literals now that the
-    # encoding spec is resolved. Mutates combined_config in-place so all
-    # downstream readers (batch_assembly, eval_pipeline) see the real paths.
-    expand_auto_paths(combined_config, _registry_spec)
-    # Trunk size for HexTacToeNet ctor: v6=19 canvas, v6w25=25 cluster
-    # window, v8=25 bbox.
-    board_size = _registry_spec.trunk_size
-    log.info(
-        "train_encoding_resolved",
-        encoding_name=_registry_spec.name,
-        board_size=board_size,
-        n_planes=_registry_spec.n_planes,
-        is_multi_window=_registry_spec.is_multi_window,
+    # ── Config flattening + registry resolve + <auto> path expansion ──────────
+    (combined_config, train_cfg, mcts_config, _registry_spec,
+     board_size, res_blocks, filters) = _orchestrator.flatten_config_and_resolve_encoding(
+        config, args, log,
     )
-    res_blocks = int(combined_config.get("res_blocks", 10))
-    filters    = int(combined_config.get("filters",    128))
 
     # ── Trainer (resume or fresh) ─────────────────────────────────────────────
-    if args.checkpoint:
-        config_overrides: dict = {"torch_compile": combined_config.get("torch_compile", False)}
-        # §116: torch_compile_mode must travel alongside torch_compile on resume.
-        # Without this, pre-§116 checkpoints resume at mode="default" regardless of
-        # configs/training.yaml's new reduce-overhead setting.
-        if combined_config.get("torch_compile_mode") is not None:
-            config_overrides["torch_compile_mode"] = combined_config["torch_compile_mode"]
-        for _key in (
-            "uncertainty_weight", "recency_weight", "ownership_weight", "threat_weight",
-            "eta_min", "scheduler_t_max",
-        ):
-            if combined_config.get(_key) is not None:
-                config_overrides[_key] = combined_config[_key]
-        if args.override_scheduler_horizon and combined_config.get("total_steps") is not None:
-            config_overrides["total_steps"] = int(combined_config["total_steps"])
-        if args.allow_fresh_scheduler:
-            config_overrides["allow_fresh_scheduler"] = True
-        # Perf-investigation: plumb diagnostics section so --config overrides
-        # the checkpoint-baked config for probe flags. Without this, probes
-        # cannot be enabled on a resumed run (checkpoint config wins by default).
-        if isinstance(combined_config.get("diagnostics"), dict):
-            config_overrides["diagnostics"] = combined_config["diagnostics"]
-
-        trainer = Trainer.load_checkpoint(
-            args.checkpoint,
-            checkpoint_dir=args.checkpoint_dir,
-            device=device,
-            fallback_config=combined_config,
-            config_overrides=config_overrides,
-        )
-        # Propagate the ckpt-resolved encoding back into the local config
-        # dicts so downstream selfplay surfaces (pool, worker, lifecycle,
-        # eval) read the encoding the model was actually trained under
-        # rather than the variant YAML's default. Without this, a v6w25
-        # bootstrap loaded against a v6-default variant would route
-        # correctly inside the trainer but feed v6 plane geometry into
-        # the self-play workers (§171 P3 blocker).
-        for _enc_key in (
-            "cluster_window_size", "cluster_threshold",
-            "legal_move_radius", "encoding",
-        ):
-            if _enc_key in trainer.config:
-                combined_config[_enc_key] = trainer.config[_enc_key]
-        # §172 A10: board_size retired — re-resolve trunk_size from registry.
-        try:
-            _post_load_spec = _registry_resolve(combined_config)
-            _registry_name_post = _post_load_spec.name
-            board_size = _post_load_spec.trunk_size
-        except Exception:
-            _registry_name_post = None
-        log.info(
-            "resumed",
-            checkpoint=args.checkpoint,
-            step=trainer.step,
-            configured_total_steps=trainer.config.get("total_steps"),
-            encoding_version=(combined_config.get("encoding") or {}).get("version"),
-            registry_name=_registry_name_post,
-            board_size=board_size,
-            cluster_window_size=combined_config.get("cluster_window_size"),
-            cluster_threshold=combined_config.get("cluster_threshold"),
-        )
-    else:
-        # Sweep-variant support: configs may carry `input_channels: [list]` to
-        # pick a subset of the 18 wire planes. When present, in_channels is
-        # derived from the list length; otherwise the standard 18-plane model
-        # is built.
-        input_channels_cfg = combined_config.get("input_channels")
-        if input_channels_cfg is None:
-            in_channels_arg = int(combined_config.get("in_channels", 18))
-        else:
-            in_channels_arg = len(input_channels_cfg)
-            combined_config["in_channels"] = in_channels_arg
-        model = HexTacToeNet(
-            board_size=board_size,
-            res_blocks=res_blocks,
-            filters=filters,
-            in_channels=in_channels_arg,
-            input_channels=input_channels_cfg,
-        )
-        trainer = Trainer(model, combined_config, checkpoint_dir=args.checkpoint_dir, device=device)
-        log.info(
-            "new_run",
-            model_params=sum(p.numel() for p in model.parameters()),
-            in_channels=in_channels_arg,
-            input_channels=list(input_channels_cfg) if input_channels_cfg is not None else None,
-        )
+    trainer, board_size = _orchestrator.init_trainer(
+        args, combined_config, device, board_size, res_blocks, filters, log,
+    )
 
     log.info("run_id", run_id=run_id)
 
     # ── Replay buffer + growth schedule ───────────────────────────────────────
-    buffer_schedule_raw = train_cfg.get("buffer_schedule", config.get("buffer_schedule", []))
-    buffer_schedule = sorted(
-        [{"step": int(e["step"]), "capacity": int(e["capacity"])} for e in buffer_schedule_raw],
-        key=lambda x: x["step"],
+    buffer, buffer_schedule, capacity, min_buf_size = _orchestrator.init_replay_buffer(
+        args, config, train_cfg, log,
     )
-    capacity = (
-        buffer_schedule[0]["capacity"]
-        if buffer_schedule
-        else int(config.get("buffer_capacity", train_cfg.get("buffer_capacity", 500_000)))
-    )
-
-    if args.min_buffer_size is not None:
-        min_buf_size = int(args.min_buffer_size)
-    elif train_cfg.get("min_buffer_size") is not None:
-        min_buf_size = int(train_cfg["min_buffer_size"])
-    elif config.get("min_buffer_size") is not None:
-        min_buf_size = int(config["min_buffer_size"])
-    else:
-        min_buf_size = max(128, min(512, int(train_cfg.get("batch_size", config.get("batch_size", 256)))))
-
-    from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding_name
-    buffer = ReplayBuffer(capacity=capacity, encoding=_normalize_encoding_name(config.get("encoding")))
-
-    glw = train_cfg.get("game_length_weights", config.get("game_length_weights", {}))
-    if glw:
-        glw_thresholds = [int(t) for t in glw["thresholds"]]
-        glw_weights    = [float(w) for w in glw["weights"]]
-        glw_default    = float(glw.get("default_weight", 1.0))
-        buffer.set_weight_schedule(glw_thresholds, glw_weights, glw_default)
-        log.info("replay_buffer.weight_schedule_set",
-                 thresholds=glw_thresholds, weights=glw_weights, default_weight=glw_default)
-
-    log.info("buffer_init", capacity=capacity, min_buffer_size=min_buf_size,
-             schedule_entries=len(buffer_schedule))
 
     # ── Buffer restore (on resume) ────────────────────────────────────────────
     mixing_cfg = train_cfg.get("mixing", config.get("mixing", {}))
-    _MIN_BUFFER_PREFILL_SKIP = 10_000
-    _buffer_restored = False
-    if args.checkpoint and mixing_cfg.get("buffer_persist", False):
-        _bp = Path(mixing_cfg.get("buffer_persist_path", "checkpoints/replay_buffer.bin"))
-        if _bp.exists():
-            try:
-                n_loaded = buffer.load_from_path(str(_bp))
-                log.info("buffer_restored", path=str(_bp), positions=n_loaded, capacity=buffer.capacity)
-                emit_event({"event": "system_stats", "buffer_size": buffer.size, "buffer_capacity": capacity})
-                _buffer_restored = n_loaded >= _MIN_BUFFER_PREFILL_SKIP
-                if not _buffer_restored:
-                    log.info("corpus_prefill_running", restored_positions=n_loaded,
-                             reason="buffer_too_small", threshold=_MIN_BUFFER_PREFILL_SKIP)
-            except Exception as e:
-                log.warning("buffer_restore_failed", error=str(e))
-    if _buffer_restored:
-        log.info("corpus_prefill_skipped", msg="buffer well-restored from file",
-                 buffer_size=buffer.size)
+    _buffer_restored, _bp = _orchestrator.restore_buffer_from_checkpoint(
+        args, buffer, capacity, mixing_cfg, log,
+    )
 
     # ── Buffer contamination guard (§149 task 4d) ─────────────────────────────
-    # Always emit the pre-corpus buffer size so contamination is greppable.
-    # When training is being kicked off from a bootstrap-like checkpoint (step
-    # counter near 0 — the pretrain-end value) but the on-disk buffer was
-    # populated by a prior, possibly failed, run, log a loud warning. The
-    # legitimate resume path has a meaningful trainer.step from a self-play
-    # run, so this gate only fires on fresh-from-bootstrap launches that
-    # silently inherited stale self-play data.
-    _ckpt_path_str = str(args.checkpoint) if args.checkpoint else ""
-    _looks_like_bootstrap_resume = bool(args.checkpoint) and any(
-        marker in _ckpt_path_str for marker in ("bootstrap_model", "pretrain_")
-    )
-    log.info(
-        "buffer_state_at_corpus_load",
-        buffer_size_before_corpus_load=buffer.size,
-        ckpt_step=trainer.step if args.checkpoint else None,
-        ckpt_path=_ckpt_path_str or None,
-        buffer_persist_enabled=mixing_cfg.get("buffer_persist", False),
-    )
-    if _looks_like_bootstrap_resume and buffer.size > 0 and trainer.step <= 0:
-        log.warning(
-            "buffer_contamination_suspected",
-            msg=(
-                "Bootstrap-like checkpoint (step <= 0) was loaded but the replay "
-                "buffer is non-empty before corpus load. The on-disk "
-                "replay_buffer.bin from a prior run was likely auto-restored. "
-                "Delete checkpoints/replay_buffer.bin (and *.recent) before a "
-                "fresh launch, or set training.mixing.buffer_persist=false on "
-                "the variant. See §149 task 4c/4d."
-            ),
-            buffer_size=buffer.size,
-            ckpt=_ckpt_path_str,
-            ckpt_step=trainer.step,
-        )
+    _orchestrator.check_buffer_contamination(args, trainer, buffer, mixing_cfg, log)
 
     # ── Corpus loading ────────────────────────────────────────────────────────
     pretrained_buffer = load_pretrained_buffer(
@@ -476,53 +219,17 @@ def main() -> None:
     )
 
     # ── Recent buffer ─────────────────────────────────────────────────────────
-    from hexo_rl.training.recency_buffer import RecentBuffer
-    _recency_weight = float(train_cfg.get("recency_weight", 0.0))
-    recent_buffer: RecentBuffer | None = None
-    if _recency_weight > 0.0:
-        _recent_cap = max(256, capacity // 2)
-        recent_buffer = RecentBuffer(
-            capacity=_recent_cap,
-            state_shape=(_registry_spec.n_planes, _registry_spec.trunk_size, _registry_spec.trunk_size),
-            policy_len=_registry_spec.policy_logit_count,
-            aux_stride=_registry_spec.trunk_size * _registry_spec.trunk_size,
-        )
-        log.info("recent_buffer_init", capacity=_recent_cap, recency_weight=_recency_weight,
-                 state_shape=recent_buffer._states.shape[1:], policy_len=_registry_spec.policy_logit_count)
-        if _buffer_restored:
-            _rbp = Path(str(_bp) + ".recent")
-            if _rbp.exists():
-                try:
-                    _rn = recent_buffer.load_from_path(str(_rbp))
-                    log.info("recent_buffer_restored", path=str(_rbp), positions=_rn)
-                except Exception as _re:
-                    log.warning("recent_buffer_restore_failed", error=str(_re))
+    recent_buffer, _recency_weight = _orchestrator.init_recent_buffer(
+        train_cfg, config, capacity, _registry_spec, _bp, _buffer_restored, log,
+    )
 
     # ── Pre-allocated batch arrays ────────────────────────────────────────────
-    # §172 A4.3: re-resolve registry post-checkpoint-load (resume path may
-    # have rewritten encoding via metadata) and size buffers per trunk_size /
-    # policy_logit_count. Falls through to v6 defaults on legacy v6 configs.
-    _batch_size_cfg = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
-    try:
-        _bufs_spec = _registry_resolve(combined_config)
-        _trunk_size = int(_bufs_spec.trunk_size)
-        _n_actions_spec = int(_bufs_spec.policy_logit_count)
-    except Exception as _re_err:
-        log.warning("buffer_alloc_registry_resolve_failed", error=str(_re_err)[:120])
-        _trunk_size = int(combined_config.get("board_size", 19))  # fallback from config
-        _n_actions_spec = _N_ACTIONS
-    bufs = allocate_batch_buffers(
-        _batch_size_cfg,
-        _n_actions_spec,
-        trunk_size=_trunk_size,
+    bufs, _batch_size_cfg = _orchestrator.allocate_batch_buffers_for_config(
+        train_cfg, config, combined_config, log,
     )
 
     # ── Mixing schedule params ────────────────────────────────────────────────
-    mixing_decay_steps = float(mixing_cfg.get("decay_steps", 1_000_000))
-    if mixing_decay_steps <= 0:
-        raise ValueError(f"mixing.decay_steps must be > 0, got {mixing_decay_steps}")
-    mixing_min_w     = float(mixing_cfg.get("min_pretrained_weight",     0.1))
-    mixing_initial_w = float(mixing_cfg.get("initial_pretrained_weight", 0.8))
+    mixing_decay_steps, mixing_min_w, mixing_initial_w = _orchestrator.read_mixing_params(mixing_cfg)
 
     # ── Hand off to the training loop ─────────────────────────────────────────
     run_training_loop(
