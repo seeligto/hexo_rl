@@ -110,13 +110,17 @@ def test_legacy_path_computes_quality_times_source(
 
     §148 contamination invariant. Verified by:
       1. Writing one human game JSON (game_id='game_human') to a tmp dir.
-      2. Patching RAW_HUMAN_DIR in hexo_rl.bootstrap.pretrain to that dir.
+      2. Patching RAW_HUMAN_DIR in hexo_rl.bootstrap.pretrain_legacy to that dir.
       3. Patching BOT_GAMES_DIR / INJECTED_DIR to empty dirs (no bot games).
       4. Patching replay_game_to_triples to return known sentinel arrays.
       5. Calling load_corpus(quality_scores, source_weights).
       6. Asserting weights[i] == quality_score × source_weight for all i.
+
+    §176 P39 — pretrain.py was split; load_corpus now lives in
+    pretrain_legacy.py and resolves names from that module's globals.
+    Patch targets follow the function home, not the legacy shim.
     """
-    import hexo_rl.bootstrap.pretrain as pretrain_mod
+    import hexo_rl.bootstrap.pretrain_legacy as pretrain_mod
 
     # ── Fake directories ────────────────────────────────────────────────────
     human_dir   = tmp_path / "raw_human"
@@ -148,13 +152,13 @@ def test_legacy_path_computes_quality_times_source(
         )
 
     with patch(
-        "hexo_rl.bootstrap.pretrain.replay_game_to_triples",
+        "hexo_rl.bootstrap.pretrain_legacy.replay_game_to_triples",
         side_effect=_fake_replay,
     ):
         # _game_winner_from_replay tries to actually replay on a Board.
         # Patch it too so moves don't need to be real.
         with patch(
-            "hexo_rl.bootstrap.pretrain._game_winner_from_replay",
+            "hexo_rl.bootstrap.pretrain_legacy._game_winner_from_replay",
             return_value=1,
         ):
             quality_score = 0.75

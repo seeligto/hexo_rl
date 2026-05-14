@@ -25,7 +25,9 @@ def test_pretrain_emits_training_step_event():
     outcomes = torch.zeros(2, dtype=torch.float32)
     loader = [(states, chain_planes, policies, outcomes)]
 
-    with patch("hexo_rl.bootstrap.pretrain.emit_event") as mock_emit:
+    # §176 P39 — emit_event reference now lives in pretrain_trainer (split
+    # from pretrain.py). Patch the function home, not the legacy shim.
+    with patch("hexo_rl.bootstrap.pretrain_trainer.emit_event") as mock_emit:
         trainer.train_epoch(loader, log_interval=1)
         
         assert mock_emit.called
