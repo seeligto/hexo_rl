@@ -156,6 +156,7 @@ def test_bench_one_threads_global_crop_for_gpool_bias_active():
         in_channels=8,
         batch=2,
         device=DEVICE,
+        encoding_label="v6w25",
         n_runs=2,
         n_warmup=2,
         global_crop=gc,
