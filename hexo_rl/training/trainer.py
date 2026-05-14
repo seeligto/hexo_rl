@@ -659,42 +659,11 @@ class Trainer:
         if self.scheduler is not None and math.isfinite(grad_norm):
             self.scheduler.step()
 
+        entropies = self._compute_entropies(
+            log_policy=log_policy, n_pretrain=n_pretrain, n_recent=n_recent,
+        )
+
         with torch.no_grad():
-            # Policy entropy: H = -Σ π log π  (nats). Computed outside autocast
-            # to avoid fp16 underflow for near-zero probabilities.
-            p_fp32 = torch.exp(log_policy.float())
-            policy_entropy = torch.special.entr(p_fp32).sum(dim=-1).mean().item()
-
-            # Per-stream entropy split.  Batch order: [corpus | recent | uniform_self].
-            # n_pretrain=0 means all rows are self-play (single-buffer path).
-            # n_recent=0 means recent_buffer was absent or empty this step.
-            _batch_n = p_fp32.shape[0]
-            if n_pretrain > 0 and n_pretrain < _batch_n:
-                policy_entropy_pretrain = torch.special.entr(p_fp32[:n_pretrain]).sum(dim=-1).mean().item()
-                policy_entropy_selfplay = torch.special.entr(p_fp32[n_pretrain:]).sum(dim=-1).mean().item()
-            elif n_pretrain == 0:
-                policy_entropy_pretrain = float("nan")
-                policy_entropy_selfplay = policy_entropy
-            else:  # entire batch is pretrain
-                policy_entropy_pretrain = policy_entropy
-                policy_entropy_selfplay = float("nan")
-
-            # 3-way split: corpus / recent / uniform_self
-            _sp_start  = n_pretrain
-            _rec_end   = n_pretrain + n_recent
-            if n_recent > 0 and _rec_end <= _batch_n and _sp_start < _batch_n:
-                policy_entropy_recent = (
-                    torch.special.entr(p_fp32[_sp_start:_rec_end]).sum(dim=-1).mean().item()
-                    if _rec_end > _sp_start else float("nan")
-                )
-                policy_entropy_uniform_sp = (
-                    torch.special.entr(p_fp32[_rec_end:]).sum(dim=-1).mean().item()
-                    if _rec_end < _batch_n else float("nan")
-                )
-            else:
-                policy_entropy_recent    = float("nan")
-                policy_entropy_uniform_sp = policy_entropy_selfplay
-
             # Value accuracy: fraction where predicted winner matches actual.
             # v_logit > 0 → predict win (outcome > 0), v_logit ≤ 0 → predict loss.
             pred_win = (v_logit.squeeze(1) > 0).float()
@@ -732,12 +701,12 @@ class Trainer:
             "loss":                     loss.item(),
             "policy_loss":              policy_loss.item(),
             "value_loss":               value_loss.item(),
-            "policy_entropy":                 policy_entropy,
-            "policy_entropy_pretrain":        policy_entropy_pretrain,
-            "policy_entropy_selfplay":        policy_entropy_selfplay,
-            "selfplay_model_entropy_batch":   policy_entropy_selfplay,  # alias; drop 2026-05-28
-            "policy_entropy_recent":          policy_entropy_recent,
-            "policy_entropy_uniform_selfplay": policy_entropy_uniform_sp,
+            "policy_entropy":                 entropies["policy_entropy"],
+            "policy_entropy_pretrain":        entropies["policy_entropy_pretrain"],
+            "policy_entropy_selfplay":        entropies["policy_entropy_selfplay"],
+            "selfplay_model_entropy_batch":   entropies["policy_entropy_selfplay"],  # alias; drop 2026-05-28
+            "policy_entropy_recent":          entropies["policy_entropy_recent"],
+            "policy_entropy_uniform_selfplay": entropies["policy_entropy_uniform_sp"],
             "policy_target_entropy":    policy_target_entropy,
             "grad_norm":                grad_norm,
             "value_accuracy":           value_accuracy,
@@ -745,21 +714,15 @@ class Trainer:
             "full_search_frac":         full_search_frac,
         }
         result.update(policy_target_metrics)
-        if use_aux:
-            result["opp_reply_loss"] = opp_reply_loss.item()
-        if use_uncertainty:
-            with torch.no_grad():
-                avg_sigma = sigma2.float().sqrt().mean().item()
-            result["uncertainty_loss"] = unc_loss.item()
-            result["avg_sigma"] = avg_sigma
-        if use_ownership and own_loss is not None:
-            result["ownership_loss"] = own_loss.item()
-        if use_threat and thr_loss is not None:
-            result["threat_loss"] = thr_loss.item()
-        if use_chain and chain_loss is not None:
-            result["chain_loss"] = chain_loss.item()
-        if use_ownership or use_threat:
-            result["aux_loss_rows"] = max(0, batch_n - n_pretrain)
+        self._append_conditional_metrics(
+            result,
+            use_aux=use_aux, opp_reply_loss=opp_reply_loss,
+            use_uncertainty=use_uncertainty, sigma2=sigma2, unc_loss=unc_loss,
+            use_ownership=use_ownership, own_loss=own_loss,
+            use_threat=use_threat, thr_loss=thr_loss,
+            use_chain=use_chain, chain_loss=chain_loss,
+            batch_n=batch_n, n_pretrain=n_pretrain,
+        )
 
         interval = int(self.config.get("checkpoint_interval", 100))
         if self.step % interval == 0:
@@ -785,17 +748,133 @@ class Trainer:
         # Perf probes (diagnostic mode only) — via structlog so they persist
         # to JSONL independent of dashboard renderers.
         if _perf:
-            log.info(
-                "train_step_timing",
-                step=self.step,
-                h2d_us=(_t_h2d - _t0) * 1e6,
-                fwd_loss_us=(_t_forward_loss - _t_h2d) * 1e6,
-                bwd_opt_us=(_t_backward_opt - _t_forward_loss) * 1e6,
-                total_us=(_t_backward_opt - _t0) * 1e6,
-                sync_cuda=_sync,
-                batch_n=batch_n,
+            self._perf_probe_emit(
+                t0=_t0, t_h2d=_t_h2d,
+                t_forward_loss=_t_forward_loss, t_backward_opt=_t_backward_opt,
+                sync=_sync, batch_n=batch_n,
             )
-        if self._perf_timing and self._vram_probe_interval > 0 \
+
+        return result
+
+    # ── _train_on_batch helpers (§176 P8) ─────────────────────────────────────
+
+    def _compute_entropies(
+        self, *,
+        log_policy: torch.Tensor,
+        n_pretrain: int,
+        n_recent: int,
+    ) -> Dict[str, float]:
+        """Per-stream policy entropy split (corpus / recent / uniform_self).
+
+        Returns dict with 5 keys: policy_entropy, policy_entropy_pretrain,
+        policy_entropy_selfplay, policy_entropy_recent, policy_entropy_uniform_sp.
+        Each is a Python float (.item() called inside).
+
+        Block: torch.no_grad() — fp32 entropies computed outside autocast to
+        avoid fp16 underflow for near-zero probabilities.
+        """
+        with torch.no_grad():
+            # Policy entropy: H = -Σ π log π  (nats). Computed outside autocast
+            # to avoid fp16 underflow for near-zero probabilities.
+            p_fp32 = torch.exp(log_policy.float())
+            policy_entropy = torch.special.entr(p_fp32).sum(dim=-1).mean().item()
+
+            # Per-stream entropy split.  Batch order: [corpus | recent | uniform_self].
+            # n_pretrain=0 means all rows are self-play (single-buffer path).
+            # n_recent=0 means recent_buffer was absent or empty this step.
+            _batch_n = p_fp32.shape[0]
+            if n_pretrain > 0 and n_pretrain < _batch_n:
+                policy_entropy_pretrain = torch.special.entr(p_fp32[:n_pretrain]).sum(dim=-1).mean().item()
+                policy_entropy_selfplay = torch.special.entr(p_fp32[n_pretrain:]).sum(dim=-1).mean().item()
+            elif n_pretrain == 0:
+                policy_entropy_pretrain = float("nan")
+                policy_entropy_selfplay = policy_entropy
+            else:  # entire batch is pretrain
+                policy_entropy_pretrain = policy_entropy
+                policy_entropy_selfplay = float("nan")
+
+            # 3-way split: corpus / recent / uniform_self
+            _sp_start  = n_pretrain
+            _rec_end   = n_pretrain + n_recent
+            if n_recent > 0 and _rec_end <= _batch_n and _sp_start < _batch_n:
+                policy_entropy_recent = (
+                    torch.special.entr(p_fp32[_sp_start:_rec_end]).sum(dim=-1).mean().item()
+                    if _rec_end > _sp_start else float("nan")
+                )
+                policy_entropy_uniform_sp = (
+                    torch.special.entr(p_fp32[_rec_end:]).sum(dim=-1).mean().item()
+                    if _rec_end < _batch_n else float("nan")
+                )
+            else:
+                policy_entropy_recent    = float("nan")
+                policy_entropy_uniform_sp = policy_entropy_selfplay
+
+        return {
+            "policy_entropy":            policy_entropy,
+            "policy_entropy_pretrain":   policy_entropy_pretrain,
+            "policy_entropy_selfplay":   policy_entropy_selfplay,
+            "policy_entropy_recent":     policy_entropy_recent,
+            "policy_entropy_uniform_sp": policy_entropy_uniform_sp,
+        }
+
+    def _append_conditional_metrics(
+        self, result: Dict[str, float], *,
+        use_aux: bool, opp_reply_loss: Optional[torch.Tensor],
+        use_uncertainty: bool, sigma2: Optional[torch.Tensor],
+        unc_loss: Optional[torch.Tensor],
+        use_ownership: bool, own_loss: Optional[torch.Tensor],
+        use_threat: bool, thr_loss: Optional[torch.Tensor],
+        use_chain: bool, chain_loss: Optional[torch.Tensor],
+        batch_n: int, n_pretrain: int,
+    ) -> None:
+        """Append conditional aux/uncertainty/ownership/threat/chain loss keys
+        to the result dict. Mutates ``result`` in place; returns None.
+
+        Field-order preserved from the inline block: opp_reply_loss → unc/sigma →
+        own → thr → chain → aux_loss_rows.
+        """
+        if use_aux:
+            result["opp_reply_loss"] = opp_reply_loss.item()
+        if use_uncertainty:
+            with torch.no_grad():
+                avg_sigma = sigma2.float().sqrt().mean().item()
+            result["uncertainty_loss"] = unc_loss.item()
+            result["avg_sigma"] = avg_sigma
+        if use_ownership and own_loss is not None:
+            result["ownership_loss"] = own_loss.item()
+        if use_threat and thr_loss is not None:
+            result["threat_loss"] = thr_loss.item()
+        if use_chain and chain_loss is not None:
+            result["chain_loss"] = chain_loss.item()
+        if use_ownership or use_threat:
+            result["aux_loss_rows"] = max(0, batch_n - n_pretrain)
+
+    def _perf_probe_emit(
+        self, *,
+        t0: float,
+        t_h2d: float,
+        t_forward_loss: float,
+        t_backward_opt: float,
+        sync: bool,
+        batch_n: int,
+    ) -> None:
+        """Emit train_step_timing event + optional VRAM probe.
+
+        Caller-guarded by ``self._perf_timing``; this helper unconditionally
+        emits the train_step_timing event and additionally fires a vram_probe
+        when on CUDA at the configured interval.
+        """
+        log.info(
+            "train_step_timing",
+            step=self.step,
+            h2d_us=(t_h2d - t0) * 1e6,
+            fwd_loss_us=(t_forward_loss - t_h2d) * 1e6,
+            bwd_opt_us=(t_backward_opt - t_forward_loss) * 1e6,
+            total_us=(t_backward_opt - t0) * 1e6,
+            sync_cuda=sync,
+            batch_n=batch_n,
+        )
+        if self._vram_probe_interval > 0 \
                 and self.device.type == "cuda" \
                 and self.step % self._vram_probe_interval == 0:
             stats = torch.cuda.memory_stats(self.device)
@@ -812,8 +891,6 @@ class Trainer:
                 num_ooms=int(stats.get("num_ooms", 0)),
             )
             torch.cuda.reset_peak_memory_stats(self.device)
-
-        return result
 
     # ── Checkpoint I/O ────────────────────────────────────────────────────────
 
