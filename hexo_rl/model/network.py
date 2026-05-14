@@ -317,39 +317,25 @@ class HexTacToeNet(nn.Module):
     and re-enable the policy head's G branch.
     """
 
-    def __init__(
-        self,
-        board_size: int = BOARD_SIZE,
-        in_channels: int = BUFFER_CHANNELS,
-        filters: int = 128,
-        res_blocks: int = 12,
-        se_reduction_ratio: int = 4,
-        input_channels: Optional[List[int]] = None,
-        encoding: str = "v6",
-        gpool_indices: Optional[List[int]] = None,
-        gpool_channels: int = _V8_TRUNK_GPOOL_CHANNELS_DEFAULT,
-        head_p_channels: int = _V8_HEAD_P_CHANNELS_DEFAULT,
-        head_g_channels: int = _V8_HEAD_G_CHANNELS_DEFAULT,
-        head_use_gpool: bool = True,
-        off_window_plane_idx: int = _V8_OFF_WINDOW_PLANE_DEFAULT,
-        pool_type: str = "min_max",
-        pool_attn_dropout: float = 0.1,
-        canvas_realness: bool = False,
-        gpool_bias_active: bool = False,
-        policy_only_bias: bool = False,
+    @staticmethod
+    def _validate_ctor_args(
+        *,
+        encoding: str,
+        pool_type: str,
+        canvas_realness: bool,
+        gpool_bias_active: bool,
+        gpool_indices: Optional[List[int]],
+        policy_only_bias: bool,
+        spec,
     ) -> None:
-        super().__init__()
-        if encoding not in _VALID_ENCODINGS:
-            raise ValueError(
-                f"encoding={encoding!r} not in registry. "
-                f"Registered: {sorted(_VALID_ENCODINGS)}"
-            )
-        # §176 P1 — cache the registry spec on the instance and as a local
-        # alias for the ctor body. Routing decisions read attributes off
-        # `spec` (e.g. `has_pass_slot`) instead of comparing the encoding
-        # string. Avoids a per-forward registry lookup in the hot path.
-        self._spec = lookup(encoding)
-        spec = self._spec
+        """Validate incompatible flag combinations passed to ``__init__``.
+
+        §176 P25 — extracted verbatim from ``HexTacToeNet.__init__``. Pure
+        move: each raise block here is byte-identical to the pre-refactor
+        inline form (error message strings are substring-pinned by tests).
+        The ``encoding`` registry check and ``_spec`` resolution remain in
+        ``__init__`` (this helper assumes ``spec`` is already resolved).
+        """
         if pool_type not in SUPPORTED_POOL_TYPES:
             raise ValueError(
                 f"pool_type={pool_type!r} must be one of {SUPPORTED_POOL_TYPES}"
@@ -414,6 +400,52 @@ class HexTacToeNet(nn.Module):
                 "policy-only knob configures the GpoolBiasBranch and has no "
                 "effect without the branch being active."
             )
+
+    def __init__(
+        self,
+        board_size: int = BOARD_SIZE,
+        in_channels: int = BUFFER_CHANNELS,
+        filters: int = 128,
+        res_blocks: int = 12,
+        se_reduction_ratio: int = 4,
+        input_channels: Optional[List[int]] = None,
+        encoding: str = "v6",
+        gpool_indices: Optional[List[int]] = None,
+        gpool_channels: int = _V8_TRUNK_GPOOL_CHANNELS_DEFAULT,
+        head_p_channels: int = _V8_HEAD_P_CHANNELS_DEFAULT,
+        head_g_channels: int = _V8_HEAD_G_CHANNELS_DEFAULT,
+        head_use_gpool: bool = True,
+        off_window_plane_idx: int = _V8_OFF_WINDOW_PLANE_DEFAULT,
+        pool_type: str = "min_max",
+        pool_attn_dropout: float = 0.1,
+        canvas_realness: bool = False,
+        gpool_bias_active: bool = False,
+        policy_only_bias: bool = False,
+    ) -> None:
+        super().__init__()
+        if encoding not in _VALID_ENCODINGS:
+            raise ValueError(
+                f"encoding={encoding!r} not in registry. "
+                f"Registered: {sorted(_VALID_ENCODINGS)}"
+            )
+        # §176 P1 — cache the registry spec on the instance and as a local
+        # alias for the ctor body. Routing decisions read attributes off
+        # `spec` (e.g. `has_pass_slot`) instead of comparing the encoding
+        # string. Avoids a per-forward registry lookup in the hot path.
+        self._spec = lookup(encoding)
+        spec = self._spec
+        # §176 P25 — flag-combination validation extracted to a private
+        # helper. Pure-move: each raise block below is byte-identical to the
+        # pre-refactor inline form (tests substring-pin the messages).
+        self._validate_ctor_args(
+            encoding=encoding,
+            pool_type=pool_type,
+            canvas_realness=canvas_realness,
+            gpool_bias_active=gpool_bias_active,
+            gpool_indices=gpool_indices,
+            policy_only_bias=policy_only_bias,
+            spec=spec,
+        )
         self.gpool_bias_active: bool = bool(gpool_bias_active)
         self.policy_only_bias: bool = bool(policy_only_bias)
         self.canvas_realness: bool = bool(canvas_realness)
