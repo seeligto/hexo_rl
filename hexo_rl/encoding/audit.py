@@ -62,6 +62,23 @@ _DEAD_CKPT_PREFIXES: tuple[str, ...] = (
 
 _HARDCODE_HITS_DUMP = Path("/tmp/encoding_audit_hardcode_hits.txt")
 
+# JSON output format (--format=json):
+# {
+#   "registry_specs": [{"name":..., "board_size":..., "n_planes":...,
+#                        "policy_logits":..., "multi_window":..., "schema_v":...}, ...],
+#   "checkpoints": [{"path":..., "declared":..., "inferred":..., "status":...}, ...],
+#   "corpora": [{"path":..., "declared":..., "inferred":..., "sha":..., "status":...}, ...],
+#   "variants": [{"path":..., "resolved":..., "status":...}, ...],
+#   "hardcode_hits": [{"file":..., "line":..., "hits":[...]}, ...],
+#   "cross_table": [{"checkpoint":..., "ckpt_enc":..., "corpus_sha":...,
+#                    "corpus_enc":..., "status":...}, ...],
+#   "findings": [{"severity":..., "section":..., "message":...}, ...],
+#   "summary": {"info":..., "warn":..., "error":..., "strict":..., "exit_code":...}
+# }
+# hardcode_hits replaces the /tmp side-channel; each entry is a per-line record
+# (not per-file-summary), allowing callers to process the raw hit list.
+# Text-mode behaviour (print(report)) is unchanged.
+
 
 # ---------------------------------------------------------------------------
 # AuditReport / AuditFinding
@@ -88,6 +105,10 @@ class AuditReport:
     sections: dict[str, AuditSection] = field(default_factory=dict)
     findings: list[AuditFinding] = field(default_factory=list)
     strict: bool = False
+    # Raw hardcode hits collected by _section_hardcode; populated when
+    # json_mode=True so the caller can embed them in JSON output instead
+    # of writing to /tmp.  Format: list of {"file", "line", "hits"} dicts.
+    _raw_hardcode_hits: list[dict] = field(default_factory=list)
 
     def add_finding(self, severity: Severity, section: str, message: str) -> None:
         self.findings.append(AuditFinding(severity, section, message))
@@ -133,6 +154,79 @@ class AuditReport:
             out.append(f"  [{f.severity.upper()}] {f.section}: {f.message}")
         out.append(f"  exit_code = {self.exit_code()}")
         return "\n".join(out)
+
+    def to_json_dict(self) -> dict:
+        """Serialise audit results to a JSON-compatible dict.
+
+        Shape mirrors the text sections; see module-level docstring for
+        full field list.  hardcode_hits carries the raw per-line records
+        (replaces the /tmp side-channel when --format=json is active).
+        """
+        # §1 — registry specs
+        registry_rows = self.sections.get("§1")
+        registry_specs: list[dict] = []
+        if registry_rows and registry_rows.rows:
+            keys = ("name", "board_size", "n_planes", "policy_logits",
+                    "multi_window", "schema_v")
+            for row in registry_rows.rows:
+                registry_specs.append(dict(zip(keys, row)))
+
+        # §2 — checkpoints
+        ckpt_section = self.sections.get("§2")
+        checkpoints: list[dict] = []
+        if ckpt_section and ckpt_section.rows:
+            keys2 = ("path", "declared", "inferred", "status")
+            for row in ckpt_section.rows:
+                checkpoints.append(dict(zip(keys2, row)))
+
+        # §3 — corpora
+        corpus_section = self.sections.get("§3")
+        corpora: list[dict] = []
+        if corpus_section and corpus_section.rows:
+            keys3 = ("path", "declared", "inferred", "sha", "status")
+            for row in corpus_section.rows:
+                corpora.append(dict(zip(keys3, row)))
+
+        # §4 — variants
+        var_section = self.sections.get("§4")
+        variants: list[dict] = []
+        if var_section and var_section.rows:
+            keys4 = ("path", "resolved", "status")
+            for row in var_section.rows:
+                variants.append(dict(zip(keys4, row)))
+
+        # §5 — hardcode hits: raw per-line records (replaces /tmp dump)
+        hardcode_hits: list[dict] = list(self._raw_hardcode_hits)
+
+        # §6 — cross-table
+        xt_section = self.sections.get("§6")
+        cross_table: list[dict] = []
+        if xt_section and xt_section.rows:
+            keys6 = ("checkpoint", "ckpt_enc", "corpus_sha", "corpus_enc", "status")
+            for row in xt_section.rows:
+                cross_table.append(dict(zip(keys6, row)))
+
+        # findings + summary
+        ctr = Counter(f.severity for f in self.findings)
+        return {
+            "registry_specs": registry_specs,
+            "checkpoints": checkpoints,
+            "corpora": corpora,
+            "variants": variants,
+            "hardcode_hits": hardcode_hits,
+            "cross_table": cross_table,
+            "findings": [
+                {"severity": f.severity, "section": f.section, "message": f.message}
+                for f in self.findings
+            ],
+            "summary": {
+                "info": ctr.get("info", 0),
+                "warn": ctr.get("warn", 0),
+                "error": ctr.get("error", 0),
+                "strict": self.strict,
+                "exit_code": self.exit_code(),
+            },
+        }
 
 
 @dataclass(frozen=True)
@@ -1001,7 +1095,7 @@ def _scan_file(path: Path) -> list[tuple[int, str, list[str]]]:
     return out
 
 
-def _section_hardcode(report: AuditReport, repo_root: Path) -> None:
+def _section_hardcode(report: AuditReport, repo_root: Path, *, collect_raw: bool = False) -> None:
     sect = AuditSection(
         title="§5 Hardcoded literals",
         headers=("file", "hits", "lines (top 3)"),
@@ -1041,18 +1135,29 @@ def _section_hardcode(report: AuditReport, repo_root: Path) -> None:
         return
 
     severity: Severity = "error" if report.strict else "warn"
-    # Persist full dump to /tmp.
-    try:
-        with _HARDCODE_HITS_DUMP.open("w") as fh:
-            for p in sorted(file_hits):
-                fh.write(f"# {p}\n")
-                for lineno, line, hits in file_hits[p]:
-                    fh.write(f"  L{lineno}  hits={hits}  | {line}\n")
-                fh.write("\n")
-    except OSError:
-        pass
 
-    # Render compact table (top-N per file).
+    # collect_raw=True: store per-line dicts on report (used by --format=json).
+    # Also skips the /tmp side-channel write — JSON payload carries the data.
+    if collect_raw:
+        for p in sorted(file_hits):
+            rel = str(p.relative_to(repo_root) if p.is_relative_to(repo_root) else p)
+            for lineno, line, hits in file_hits[p]:
+                report._raw_hardcode_hits.append(
+                    {"file": rel, "line": lineno, "content": line, "hits": hits}
+                )
+    else:
+        # Text mode: persist full dump to /tmp side-channel.
+        try:
+            with _HARDCODE_HITS_DUMP.open("w") as fh:
+                for p in sorted(file_hits):
+                    fh.write(f"# {p}\n")
+                    for lineno, line, hits in file_hits[p]:
+                        fh.write(f"  L{lineno}  hits={hits}  | {line}\n")
+                    fh.write("\n")
+        except OSError:
+            pass
+
+    # Render compact table (top-N per file) — same for both modes.
     for p in sorted(file_hits):
         hits = file_hits[p]
         rel = str(p.relative_to(repo_root) if p.is_relative_to(repo_root) else p)
@@ -1060,14 +1165,24 @@ def _section_hardcode(report: AuditReport, repo_root: Path) -> None:
         preview = "; ".join(f"L{ln}={hh}" for ln, _, hh in hits[:3])
         sect.rows.append([rel, str(n), preview])
 
-    report.add_finding(
-        severity,
-        "§5",
-        f"{total_hits} unjustified literal hit(s) across {len(file_hits)} file(s); "
-        f"full dump → {_HARDCODE_HITS_DUMP}",
-    )
-    sect.notes.append(f"strict={report.strict} → severity={severity}")
-    sect.notes.append(f"full dump: {_HARDCODE_HITS_DUMP}")
+    if collect_raw:
+        report.add_finding(
+            severity,
+            "§5",
+            f"{total_hits} unjustified literal hit(s) across {len(file_hits)} file(s); "
+            f"full dump in JSON hardcode_hits",
+        )
+        sect.notes.append(f"strict={report.strict} → severity={severity}")
+        sect.notes.append("full dump: included in JSON hardcode_hits field")
+    else:
+        report.add_finding(
+            severity,
+            "§5",
+            f"{total_hits} unjustified literal hit(s) across {len(file_hits)} file(s); "
+            f"full dump → {_HARDCODE_HITS_DUMP}",
+        )
+        sect.notes.append(f"strict={report.strict} → severity={severity}")
+        sect.notes.append(f"full dump: {_HARDCODE_HITS_DUMP}")
     report.sections["§5"] = sect
 
 
@@ -1217,8 +1332,13 @@ def audit(
     *,
     strict: bool = False,
     repo_root: Path | None = None,
+    collect_raw_hardcode: bool = False,
 ) -> AuditReport:
-    """Run the full 6-section audit; return AuditReport."""
+    """Run the full 6-section audit; return AuditReport.
+
+    collect_raw_hardcode: when True, store per-line hardcode hit dicts on
+    report._raw_hardcode_hits (used by --format=json) and skip /tmp write.
+    """
     report = AuditReport(strict=strict)
     _section_registered(report)
     ckpt_entries: list[CheckpointEntry] = []
@@ -1233,7 +1353,7 @@ def audit(
     else:
         _effective_variants = variants_dir
     _section_variants(report, _effective_variants)
-    _section_hardcode(report, repo_root or _repo_root())
+    _section_hardcode(report, repo_root or _repo_root(), collect_raw=collect_raw_hardcode)
     _section_cross_table(report, ckpt_entries, corpus_entries, corpora_dir)
     return report
 
@@ -1285,12 +1405,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="override hardcode-grep root (default: auto-detected repo root)",
     )
+    parser.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        dest="output_format",
+        help=(
+            "output format: 'text' (default, human-readable) or 'json' "
+            "(structured JSON to stdout; hardcode hits in 'hardcode_hits' "
+            "key instead of /tmp side-channel)"
+        ),
+    )
 
     ns = parser.parse_args(list(argv) if argv is not None else None)
+    json_mode = ns.output_format == "json"
+
     if ns.hardcodes_only:
         report = AuditReport(strict=ns.strict)
-        _section_hardcode(report, ns.repo_root or _repo_root())
-        print(report)
+        _section_hardcode(report, ns.repo_root or _repo_root(), collect_raw=json_mode)
+        if json_mode:
+            print(json.dumps(report.to_json_dict(), indent=2))
+        else:
+            print(report)
         return report.exit_code()
     report = audit(
         ns.checkpoints_dir,
@@ -1298,8 +1434,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         ns.variants_dir,
         strict=ns.strict,
         repo_root=ns.repo_root,
+        collect_raw_hardcode=json_mode,
     )
-    print(report)
+    if json_mode:
+        print(json.dumps(report.to_json_dict(), indent=2))
+    else:
+        print(report)
     return report.exit_code()
 
 
