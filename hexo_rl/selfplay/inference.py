@@ -20,7 +20,10 @@ from engine import Board
 from hexo_rl.encoding import EncodingSpec, lookup
 from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.utils.constants import KEPT_PLANE_INDICES
+
+# Module-level hoist (registry lookup at import time, not per-iteration).
+# Used in infer_batch() at the inference hot-path slice (tensor[:, KEPT_PLANE_INDICES]).
+KEPT_PLANE_INDICES: list[int] = list(lookup("v6").kept_plane_indices)
 
 
 class LocalInferenceEngine:

@@ -15,7 +15,9 @@ from hexo_rl.env.game_state import (
     _compute_chain_planes,
     _shift_zero_pad,
 )
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+BOARD_SIZE: int = _lookup_encoding("v6").board_size
 
 # Axis plane indices in the 6-plane block.
 AX0_CUR, AX0_OPP = 0, 1  # (1, 0) E/W

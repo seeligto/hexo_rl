@@ -50,7 +50,10 @@ from hexo_rl.encoding import (
     resolve_from_config as _registry_resolve_cfg,
 )
 from hexo_rl.encoding.registry import EncodingRegistryError as _EncodingRegistryError
-from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+BUFFER_CHANNELS: int = _V6.n_planes
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.augment.luts import get_policy_scatters
 

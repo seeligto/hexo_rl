@@ -48,10 +48,14 @@ import numpy as np
 import torch
 
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 from hexo_rl.utils.global_crop import compute_global_crop_from_board
+
+_V6 = _lookup_encoding("v6")
+KEPT_PLANE_INDICES: list[int] = list(_V6.kept_plane_indices)
+BUFFER_CHANNELS: int = _V6.n_planes
 
 
 Action = Tuple[int, int]
@@ -193,9 +197,6 @@ def _aggregate_priors_pma(
     if s < 1e-12:
         return [1.0 / n_legal] * n_legal
     return (raw / s).tolist()
-
-
-from hexo_rl.utils.constants import BUFFER_CHANNELS
 
 
 class KClusterMCTSBot(BotProtocol):

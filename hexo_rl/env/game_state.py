@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from typing import Deque, List, Optional, Tuple
 import numpy as np
 from engine import Board
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+BOARD_SIZE: int = _lookup_encoding("v6").board_size
 HISTORY_LEN: int = 8  # AlphaZero uses 8 timesteps (current + 7 prior)
 
 # Chain-length plane encoding (Q13). Mirror of engine/src/board/state.rs:48-52.

@@ -25,10 +25,14 @@ import torch
 import engine
 from hexo_rl.env.game_state import _compute_chain_planes
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.training.batch_assembly import load_pretrained_buffer
 from hexo_rl.training.losses import compute_chain_loss
 from hexo_rl.training.trainer import Trainer
-from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+KEPT_PLANE_INDICES = list(_V6.kept_plane_indices)
 
 HALF = (BOARD_SIZE - 1) // 2  # 9
 

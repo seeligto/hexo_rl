@@ -24,10 +24,15 @@ import numpy as np
 import torch
 
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS, KEPT_PLANE_INDICES
 from hexo_rl.utils.global_crop import compute_global_crop_from_board
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+BUFFER_CHANNELS: int = _V6.n_planes
+KEPT_PLANE_INDICES: list[int] = list(_V6.kept_plane_indices)
 
 
 _HALF: int = (BOARD_SIZE - 1) // 2  # 9

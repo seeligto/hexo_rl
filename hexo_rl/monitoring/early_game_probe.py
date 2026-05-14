@@ -83,9 +83,9 @@ def _generate_fixture_payload(
     from engine import Board
     from hexo_rl.env.game_state import GameState
     from hexo_rl.encoding import lookup as _lookup_encoding
-    from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 
     spec = _lookup_encoding(encoding_name)
+    KEPT_PLANE_INDICES = list(_lookup_encoding("v6").kept_plane_indices)
     board_size = spec.board_size
     n_actions = spec.policy_logit_count
 

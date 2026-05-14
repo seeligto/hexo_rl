@@ -19,7 +19,9 @@ import pytest
 
 import engine
 from hexo_rl.env.game_state import _CHAIN_CAP, _compute_chain_planes
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+BOARD_SIZE: int = _lookup_encoding("v6").board_size
 
 HALF = (BOARD_SIZE - 1) // 2  # 9
 

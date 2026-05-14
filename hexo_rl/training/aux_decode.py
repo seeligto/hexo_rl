@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+BOARD_SIZE: int = _lookup_encoding("v6").board_size
 
 
 def decode_ownership(arr: np.ndarray, device: torch.device, board_size: int = BOARD_SIZE) -> torch.Tensor:

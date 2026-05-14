@@ -23,8 +23,12 @@ import pytest
 
 import engine
 from engine import Board, ReplayBuffer
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.env.game_state import GameState
-from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+KEPT_PLANE_INDICES = list(_V6.kept_plane_indices)
 
 CHANNELS = 18  # to_tensor() output; sliced to 8 before buffer push
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1

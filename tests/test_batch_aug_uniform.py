@@ -25,8 +25,12 @@ from hexo_rl.training.batch_assembly import (
     allocate_batch_buffers,
     assemble_mixed_batch,
 )
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.training.recency_buffer import RecentBuffer
-from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+KEPT_PLANE_INDICES = list(_V6.kept_plane_indices)
 
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1
 AUX_STRIDE = BOARD_SIZE * BOARD_SIZE

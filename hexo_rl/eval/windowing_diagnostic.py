@@ -13,13 +13,14 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from hexo_rl.utils.constants import KEPT_PLANE_INDICES
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.utils.coordinates import (
     axial_distance,
     flat_to_axial as _local_flat_to_axial,
     axial_to_flat as _local_axial_to_flat,
 )
 
+KEPT_PLANE_INDICES: list[int] = list(_lookup_encoding("v6").kept_plane_indices)
 BOARD_SIZE: int = 19
 HALF: int = (BOARD_SIZE - 1) // 2  # 9
 SENTINEL: int = -32768  # padding value in moves arrays

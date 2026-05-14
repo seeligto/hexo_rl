@@ -30,7 +30,8 @@ import torch
 from hexo_rl.encoding import EncodingSpec, lookup as _registry_lookup
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
-from hexo_rl.utils.constants import BUFFER_CHANNELS
+
+BUFFER_CHANNELS: int = _registry_lookup("v6").n_planes
 
 
 def _strip_compile_prefixes(state: dict) -> dict:

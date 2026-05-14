@@ -52,7 +52,8 @@ from hexo_rl.model.pooling import (
 )
 from hexo_rl.encoding import all_specs, lookup
 from hexo_rl.model._constants import MODEL_GN_GROUPS
-from hexo_rl.utils.constants import BUFFER_CHANNELS
+
+BUFFER_CHANNELS: int = lookup("v6").n_planes
 
 _log = logging.getLogger(__name__)
 

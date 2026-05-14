@@ -8,7 +8,9 @@ from typing import Any, Dict
 # `EncodingSpec` (`hexo_rl.encoding`) and read `spec.board_size` /
 # `spec.policy_logit_count` (or the `n_actions` property) instead. Kept for
 # backward compat with eval/probe call sites that still hard-code v6.
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+BOARD_SIZE: int = _lookup_encoding("v6").board_size
 
 N_ACTIONS: int = BOARD_SIZE * BOARD_SIZE + 1  # 362  (v6 only — DEPRECATED)
 

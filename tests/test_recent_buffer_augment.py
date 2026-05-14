@@ -15,8 +15,12 @@ import engine
 from engine import Board
 from hexo_rl.augment.luts import get_policy_scatters
 from hexo_rl.env.game_state import GameState, _compute_chain_planes
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.training.batch_assembly import _augment_recent_rows
-from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+KEPT_PLANE_INDICES = list(_V6.kept_plane_indices)
 
 N_ACTIONS = BOARD_SIZE * BOARD_SIZE + 1
 AUX_STRIDE = BOARD_SIZE * BOARD_SIZE

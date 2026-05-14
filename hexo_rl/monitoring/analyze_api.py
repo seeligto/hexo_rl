@@ -18,7 +18,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+KEPT_PLANE_INDICES: list[int] = list(_V6.kept_plane_indices)
 
 import numpy as np
 import structlog
@@ -28,7 +32,6 @@ from flask import Blueprint, jsonify, request
 from engine import Board, MCTSTree
 from hexo_rl.env.game_state import GameState
 from hexo_rl.selfplay.inference import LocalInferenceEngine
-from hexo_rl.utils.constants import KEPT_PLANE_INDICES
 from hexo_rl.viewer.model_loader import load_model
 
 log = structlog.get_logger(__name__)

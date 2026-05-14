@@ -63,11 +63,13 @@ from hexo_rl.bootstrap.dataset_v8 import (
     N_PLANES_V8,
     replay_game_to_triples_v8,
 )
-from hexo_rl.utils.constants import KEPT_PLANE_INDICES
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.utils.global_crop import (
     CANVAS_SIZE as GLOBAL_CANVAS_SIZE,
     N_GLOBAL_PLANES,
 )
+
+KEPT_PLANE_INDICES: list[int] = list(_lookup_encoding("v6").kept_plane_indices)
 
 BOT_GAMES_DIR = ROOT / "data" / "corpus" / "bot_games"
 RAW_HUMAN_DIR = ROOT / "data" / "corpus" / "raw_human"

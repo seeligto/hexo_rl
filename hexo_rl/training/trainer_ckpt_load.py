@@ -32,12 +32,13 @@ from hexo_rl.training.checkpoints import (
     normalize_model_state_dict_keys,
 )
 from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS
-from hexo_rl.utils.constants import BUFFER_CHANNELS
 from hexo_rl.encoding import (
     EncodingSpec as RegistrySpec,
     lookup as registry_lookup,
     resolve_from_config as registry_resolve_config,
 )
+
+BUFFER_CHANNELS: int = registry_lookup("v6").n_planes
 from hexo_rl.encoding.compat import (
     WireFormatSpec,
     WIRE_FORMAT_SPECS,

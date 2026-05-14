@@ -58,7 +58,8 @@ def test_model_processes_multi_cluster_board(two_cluster_board):
     model.to(device)
     model.eval()
 
-    from hexo_rl.utils.constants import KEPT_PLANE_INDICES
+    from hexo_rl.encoding import lookup as _lookup_encoding
+    KEPT_PLANE_INDICES = list(_lookup_encoding("v6").kept_plane_indices)
     state = GameState.from_board(two_cluster_board)
     tensors, centers = state.to_tensor()
     # Slice to HEXB v6 8-plane wire format (to_tensor returns 18 planes for compat)

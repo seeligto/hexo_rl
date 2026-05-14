@@ -14,7 +14,12 @@ import threading
 from typing import Optional
 
 import numpy as np
-from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS, NUM_CELLS
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+BUFFER_CHANNELS: int = _V6.n_planes
+NUM_CELLS: int = _V6.n_cells
 
 
 class RecentBuffer:

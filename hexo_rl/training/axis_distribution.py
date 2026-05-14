@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Sequence
 
 import numpy as np
-from hexo_rl.utils.constants import HISTORY_LEN
+from hexo_rl.utils.constants import HISTORY_LEN  # not registry-tracked: training/selfplay hyperparam
 
 # Mirrors game_state._HEX_AXES — do not reorder.
 _AXES = ((1, 0), (0, 1), (1, -1))

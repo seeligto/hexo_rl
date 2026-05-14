@@ -11,14 +11,17 @@ from typing import Any, Dict
 import torch
 
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
-from hexo_rl.encoding import EncodingRegistryError, resolve_from_config
+from hexo_rl.encoding import EncodingRegistryError, lookup as _lookup_encoding, resolve_from_config
 from hexo_rl.env import GameState
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.worker import SelfPlayWorker
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
-from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 from hexo_rl.training.trainer import Trainer
 from hexo_rl.viewer.model_loader import _extract_model_state, _infer_model_hparams
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+BUFFER_CHANNELS: int = _V6.n_planes
 
 
 class OurModelBot(BotProtocol):

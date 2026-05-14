@@ -26,8 +26,11 @@ import numpy as np
 import structlog
 import torch
 
-from hexo_rl.encoding import EncodingRegistryError, resolve_from_config
-from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
+from hexo_rl.encoding import EncodingRegistryError, lookup as _lookup_encoding, resolve_from_config
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+BUFFER_CHANNELS: int = _V6.n_planes
 
 log = structlog.get_logger(__name__)
 

@@ -115,8 +115,9 @@ def test_board_with_encoding_name_v6w25_to_tensor_shape():
     assert cluster0.shape == (18, 25, 25)
 
     # After slicing to 8 planes (KEPT_PLANE_INDICES), shape is (8, 25, 25).
-    from hexo_rl.utils.constants import KEPT_PLANE_INDICES
-    sliced = cluster0[list(KEPT_PLANE_INDICES)]
+    from hexo_rl.encoding import lookup as _lookup_encoding
+    KEPT_PLANE_INDICES = list(_lookup_encoding("v6").kept_plane_indices)
+    sliced = cluster0[KEPT_PLANE_INDICES]
     assert sliced.shape == (8, 25, 25)
 
 
@@ -138,6 +139,7 @@ def test_board_with_encoding_name_v6_to_tensor_shape():
     cluster0 = tensor[0]
     assert cluster0.shape == (18, 19, 19)
 
-    from hexo_rl.utils.constants import KEPT_PLANE_INDICES
-    sliced = cluster0[list(KEPT_PLANE_INDICES)]
+    from hexo_rl.encoding import lookup as _lookup_encoding
+    KEPT_PLANE_INDICES = list(_lookup_encoding("v6").kept_plane_indices)
+    sliced = cluster0[KEPT_PLANE_INDICES]
     assert sliced.shape == (8, 19, 19)

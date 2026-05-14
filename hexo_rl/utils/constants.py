@@ -1,30 +1,23 @@
-"""Canonical constants for the Hex Tac Toe board (v6 only).
+"""Non-encoding training/selfplay hyperparameters.
 
-v6 symbols stay here as the legacy default; v8 / v6w25 / v7full / etc.
-are sourced from the canonical encoding registry at
-``engine/src/encoding/registry.toml`` via ``hexo_rl.encoding.lookup(name)``.
+§176 P4 retired the v6 encoding constants (BOARD_SIZE / NUM_CELLS /
+BUFFER_CHANNELS / KEPT_PLANE_INDICES) from this module. Per §172 the
+canonical source of truth for every encoding is the registry at
+``engine/src/encoding/registry.toml``; route through
+``hexo_rl.encoding.lookup(name)`` (Python) or
+``engine::encoding::lookup_or_panic(name)`` (Rust).
 
-§176 P5 retired the v8 block from this module; downstream v8 callers
-import their numeric constants from ``hexo_rl.bootstrap.dataset_v8``
-(which now sources them from the registry). §176 P3 retired the legacy
-``hexo_rl.utils.encoding`` NamedTuple shim entirely; downstream
-consumers route through ``hexo_rl.encoding`` (registry) and
-``hexo_rl.encoding.compat`` (wire-format scalars).
+§176 P5 retired the v8 block; downstream v8 callers use
+``hexo_rl.bootstrap.dataset_v8``. §176 P3 retired the legacy
+``hexo_rl.utils.encoding`` NamedTuple shim entirely; consumers route
+through ``hexo_rl.encoding`` (registry) and ``hexo_rl.encoding.compat``
+(wire-format scalars).
+
+What remains here are non-encoding hyperparameters — values that are not
+geometry / plane-layout / action-space attributes of any encoding and
+therefore have no place in the registry.
 """
 
-# ── v6 (canonical default) ──────────────────────────────────────────────────
-
-BOARD_SIZE: int = 19
-NUM_CELLS: int = BOARD_SIZE * BOARD_SIZE  # 361
-
-# HEXB v6 buffer wire format: 8 planes (cur ply-0..3 + opp ply-0..3).
-BUFFER_CHANNELS: int = 8
-
-# §173 A6 DEPRECATED: use EncodingSpec.kept_plane_indices from the registry instead.
-# Retained for callers not yet migrated to registry-sourced construction.
-# Equivalent to: hexo_rl.encoding.lookup("v6").kept_plane_indices
-# Will be removed in §174 cleanup.
-KEPT_PLANE_INDICES: list[int] = [0, 1, 2, 3, 8, 9, 10, 11]
-
-# AlphaZero history length (current + 7 prior timesteps).
+# AlphaZero history length (current + 7 prior timesteps). Self-play /
+# training hyperparameter, not an encoding parameter — kept here.
 HISTORY_LEN: int = 8

@@ -10,7 +10,9 @@ import numpy as np
 import pytest
 
 from hexo_rl.env.game_state import _compute_chain_planes
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+BOARD_SIZE: int = _lookup_encoding("v6").board_size
 
 
 def _make_50_stone_position() -> tuple[np.ndarray, np.ndarray]:

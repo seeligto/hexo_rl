@@ -23,8 +23,13 @@ from typing import Any, Callable, Optional
 import numpy as np
 import structlog
 
-from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding_name
-from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS, NUM_CELLS
+from hexo_rl.encoding import lookup as _lookup_encoding, normalize_encoding_name as _normalize_encoding_name
+
+# Module-level hoist (registry lookup at import time, not per-batch).
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+BUFFER_CHANNELS: int = _V6.n_planes
+NUM_CELLS: int = _V6.n_cells
 
 log = structlog.get_logger(__name__)
 

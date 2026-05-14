@@ -17,12 +17,16 @@ from typing import Any
 import torch
 
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.training.checkpoints import (
     extract_model_state,
     infer_model_hparams,
     normalize_model_state_dict_keys,
 )
-from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+BUFFER_CHANNELS: int = _V6.n_planes
 
 
 # Underscore-prefixed re-exports for back-compat with our_model_bot and

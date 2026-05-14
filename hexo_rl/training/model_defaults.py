@@ -18,7 +18,11 @@ from __future__ import annotations
 
 from typing import Dict
 
-from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+BUFFER_CHANNELS: int = _V6.n_planes
 
 # Canonical defaults. Keep keys in sync with HexTacToeNet.__init__.
 MODEL_HPARAM_DEFAULTS: Dict[str, int] = {

@@ -41,8 +41,12 @@ from typing import Iterable
 import numpy as np
 from engine import Board
 
+from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.env.game_state import GameState
-from hexo_rl.utils.constants import BOARD_SIZE, KEPT_PLANE_INDICES
+
+_V6 = _lookup_encoding("v6")
+BOARD_SIZE: int = _V6.board_size
+KEPT_PLANE_INDICES: list[int] = list(_V6.kept_plane_indices)
 
 
 def _replay_to_position(moves: list[tuple[int, int]], stop_ply: int) -> Board:

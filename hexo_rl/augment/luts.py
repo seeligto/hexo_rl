@@ -12,7 +12,9 @@ from typing import List, Optional
 
 import numpy as np
 
-from hexo_rl.utils.constants import BOARD_SIZE
+from hexo_rl.encoding import lookup as _lookup_encoding
+
+BOARD_SIZE: int = _lookup_encoding("v6").board_size
 
 _POLICY_SCATTERS: Optional[List[np.ndarray]] = None
 
