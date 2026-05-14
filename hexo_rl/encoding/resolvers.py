@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from hexo_rl.encoding import compat
+from hexo_rl.encoding._probes import FIRST_CONV_KEYS as _FIRST_CONV_KEYS
+from hexo_rl.encoding._probes import POLICY_FC_KEYS as _POLICY_FC_KEYS
 from hexo_rl.encoding.registry import EncodingRegistryError, _load as _load_registry, lookup
 from hexo_rl.encoding.spec import EncodingSpec
 
@@ -360,22 +362,8 @@ def validate_against_state_dict(
     to know which architecture they hold). Raises `ShapeMismatchError`
     on disagreement.
     """
-    policy_keys = (
-        "policy_fc.weight",
-        "policy_head.fc.weight",
-        "policy.fc.weight",
-        "policy.weight",
-    )
-    conv_keys = (
-        "trunk.0.weight",
-        "trunk.conv.weight",
-        "input_conv.weight",
-        "stem.0.weight",
-        "conv1.weight",
-    )
-
     pfc = None
-    for k in policy_keys:
+    for k in _POLICY_FC_KEYS:
         if k in state_dict:
             pfc = state_dict[k]
             break
@@ -389,7 +377,7 @@ def validate_against_state_dict(
             )
 
     conv = None
-    for k in conv_keys:
+    for k in _FIRST_CONV_KEYS:
         if k in state_dict:
             conv = state_dict[k]
             break

@@ -14,24 +14,9 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from hexo_rl.encoding._probes import FIRST_CONV_KEYS as _FIRST_CONV_KEYS
+from hexo_rl.encoding._probes import POLICY_FC_KEYS as _POLICY_FC_KEYS
 from hexo_rl.encoding.registry import EncodingRegistryError, _load
-
-
-# Probe keys for the network's first conv (in_channels) and final policy
-# fc (out_features). Listed in priority order; first match wins.
-_FIRST_CONV_KEYS: tuple[str, ...] = (
-    "trunk.0.weight",
-    "trunk.conv.weight",
-    "input_conv.weight",
-    "stem.0.weight",
-    "conv1.weight",
-)
-_POLICY_FC_KEYS: tuple[str, ...] = (
-    "policy_fc.weight",
-    "policy_head.fc.weight",
-    "policy.fc.weight",
-    "policy.weight",
-)
 
 
 def _filename_match(path_hint: str) -> str | None:
