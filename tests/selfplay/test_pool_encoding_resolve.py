@@ -6,20 +6,19 @@ shim, the PyO3 runner kwargs, and the model.board_size cross-check.
 That block was extracted to ``_resolve_encoding_for_pool(config, model)``
 so it can be exercised in isolation per registered encoding.
 
+§176 P3: legacy `hexo_rl.utils.encoding` shim retired; the wire-format
+spec is now sourced from `hexo_rl.encoding.compat.WIRE_FORMAT_SPECS`,
+which covers every registered encoding (no more legacy-resolver
+ValueError fallback for v7 / v7e30).
+
 Parametrized over every encoding in the registry (v6, v6w25, v7full,
 v7, v7e30, v7mw, v8, v8_canvas_realness):
 
-  - v6 / v6w25 / v7full / v7mw    → returns ResolvedPoolEncoding
+  - v6 / v6w25 / v7full / v7 / v7e30 / v7mw → returns ResolvedPoolEncoding
                                      with registry-derived shape.
   - v8 / v8_canvas_realness        → NotImplementedError loud-fail
                                      (no Rust runner path; pretrain
                                      via dataset_v8.py).
-  - v7 / v7e30                     → ValueError from the legacy
-                                     resolver (registry-only labels;
-                                     not on a selfplay path today).
-                                     This documents pre-existing
-                                     behaviour preserved by the
-                                     refactor.
 
 Also exercises the model.board_size mismatch guard.
 """
@@ -37,31 +36,21 @@ from hexo_rl.selfplay.pool import (
 )
 
 
-# Pre-classify every registered encoding into the three buckets. Done
+# Pre-classify every registered encoding into two buckets. Done
 # at import time so the parametrize ids are stable and a registry add
 # surfaces here on test-collection rather than at runtime.
+#
+# §176 P3: WIRE_FORMAT_SPECS covers every registered name; the previous
+# "legacy resolver doesn't know v7 / v7e30" bucket is gone.
 _V8_NAMES = ("v8", "v8_canvas_realness")
-# Legacy `hexo_rl.utils.encoding.resolve_encoding` knows v6 / v6w25 / v8.
-# v7full / v7mw are routed through the explicit v6_spec() fallback inside
-# the helper. Any other registry name (e.g. v7, v7e30) falls through to
-# the legacy resolver and ValueErrors — pre-existing behaviour.
-_LEGACY_HANDLED = ("v6", "v6w25", "v7full", "v7mw")
 
 
 def _ok_names() -> List[str]:
-    return [s.name for s in all_specs() if s.name in _LEGACY_HANDLED]
+    return [s.name for s in all_specs() if s.name not in _V8_NAMES]
 
 
 def _v8_names() -> List[str]:
     return [s.name for s in all_specs() if s.name in _V8_NAMES]
-
-
-def _legacy_unknown_names() -> List[str]:
-    return [
-        s.name
-        for s in all_specs()
-        if s.name not in _LEGACY_HANDLED and s.name not in _V8_NAMES
-    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -70,7 +59,7 @@ def _legacy_unknown_names() -> List[str]:
 @pytest.mark.parametrize("name", _ok_names())
 def test_resolve_encoding_for_pool_returns_expected_shape(name: str) -> None:
     """Each ok encoding returns a ResolvedPoolEncoding whose scalar
-    fields match the registry; legacy_spec / runner_encoding /
+    fields match the registry; wire_format_spec / runner_encoding /
     runner_registry_spec are non-None and round-trip."""
     spec = lookup(name)
     cfg: Dict[str, Any] = {"encoding": name}
@@ -83,16 +72,16 @@ def test_resolve_encoding_for_pool_returns_expected_shape(name: str) -> None:
     assert r.trunk_size == spec.trunk_size
     assert r.n_kept_planes == len(spec.kept_plane_indices)
 
-    # legacy_spec is a NamedTuple shim — must carry a `version` matching
-    # the registry name (or the v6-family fallback for v7full/v7mw,
-    # which still tags `version` per the v6_spec() helper).
-    assert r.legacy_spec is not None
+    # wire_format_spec is the §176 P3 shim — must carry a `name`
+    # routing the encoding through the wire-format mapping. v6-family
+    # aliases (v6 / v7* / v7full / v7mw) all map to the v6 wire format;
+    # v6w25 maps to its own wire format.
+    assert r.wire_format_spec is not None
+    assert r.wire_format_spec.name in ("v6", "v6w25")
 
-    # Multi-window encodings (v6w25, v7mw) have cluster fields set in
-    # the legacy spec → runner_encoding (PyO3 4-field) is non-None.
-    # Single-window v6 / v7full also have cluster fields set in their
-    # legacy spec (v6 default), so all four ok encodings yield a
-    # non-None runner_encoding.
+    # All v6-family + v6w25 wire-format specs carry non-None cluster
+    # fields → runner_encoding (PyO3 4-field) is non-None. v8 is
+    # excluded from this bucket via _v8_names.
     assert r.runner_encoding is not None
 
     # runner_registry_spec is the PyO3 full-schema mirror; carries the
@@ -108,24 +97,9 @@ def test_resolve_encoding_for_pool_returns_expected_shape(name: str) -> None:
 def test_resolve_encoding_for_pool_v8_loud_fails(name: str) -> None:
     """v8 selfplay path is intentionally blocked at the helper — the
     Rust runner has no v8 dispatch and silently routing through
-    legacy_spec.to_pyo3() would crash with an obscure ValueError."""
+    PyEncodingSpec construction would crash with an obscure ValueError."""
     cfg = {"encoding": name}
     with pytest.raises(NotImplementedError, match=r"v8 selfplay"):
-        _resolve_encoding_for_pool(cfg)
-
-
-# --------------------------------------------------------------------------- #
-# Registry-only labels not handled by the legacy resolver
-# --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("name", _legacy_unknown_names())
-def test_resolve_encoding_for_pool_legacy_unknown_raises(name: str) -> None:
-    """v7 / v7e30 are registry-only labels; the legacy
-    `hexo_rl.utils.encoding.resolve_encoding` knows v6 / v6w25 / v8.
-    The helper preserves that pre-existing behaviour — pure-move
-    discipline forbids inventing a v6 fallback for them in this
-    refactor."""
-    cfg = {"encoding": name}
-    with pytest.raises(ValueError, match=r"unknown encoding\.version"):
         _resolve_encoding_for_pool(cfg)
 
 
@@ -158,9 +132,9 @@ def test_resolve_encoding_for_pool_model_board_size_match_passes() -> None:
 # --------------------------------------------------------------------------- #
 def test_every_registered_encoding_classified() -> None:
     """Tripwire — new encodings added to registry.toml will surface here
-    if they don't land in one of the three test buckets, prompting a
-    test update."""
-    classified = set(_ok_names()) | set(_v8_names()) | set(_legacy_unknown_names())
+    if they don't land in one of the test buckets, prompting a test
+    update."""
+    classified = set(_ok_names()) | set(_v8_names())
     registered = {s.name for s in all_specs()}
     missing = registered - classified
     assert not missing, (

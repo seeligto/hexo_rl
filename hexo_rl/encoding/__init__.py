@@ -14,9 +14,10 @@ Schema authoring lives in `engine/src/encoding/registry.toml`; both
 Rust (`engine/src/encoding/registry.rs`) and Python parse the same
 file.
 
-A4 will migrate consumers off the legacy `hexo_rl.utils.encoding`
-NamedTuple shim and extend the PyO3 binding to surface the full
-schema.
+§176 P3 retired the legacy `hexo_rl.utils.encoding` NamedTuple shim;
+the wire-format scalars consumers (trainer ckpt-load propagation +
+pool runner-kwarg construction) used to read off it now live at
+`hexo_rl.encoding.compat.WIRE_FORMAT_SPECS`.
 """
 from hexo_rl.encoding.registry import (
     EncodingRegistryError,

@@ -32,9 +32,6 @@ from hexo_rl.training.checkpoints import (
     normalize_model_state_dict_keys,
 )
 from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS
-from hexo_rl.utils.encoding import (
-    EncodingSpec, resolve_encoding, v6_spec, v6w25_spec, v8_spec,
-)
 from hexo_rl.utils.constants import BUFFER_CHANNELS
 from hexo_rl.encoding import (
     EncodingSpec as RegistrySpec,
@@ -42,6 +39,8 @@ from hexo_rl.encoding import (
     resolve_from_config as registry_resolve_config,
 )
 from hexo_rl.encoding.compat import (
+    WireFormatSpec,
+    WIRE_FORMAT_SPECS,
     legacy_spec_for_registry_name as _legacy_spec_for_registry_name,
 )
 
@@ -53,13 +52,14 @@ log = structlog.get_logger()
 
 def _detect_encoding_from_state_dict(
     state_dict: Dict[str, torch.Tensor], ckpt_label: str,
-) -> Optional[EncodingSpec]:
-    """Infer an EncodingSpec from a bare model state_dict.
+) -> Optional[WireFormatSpec]:
+    """Infer a wire-format spec from a bare model state_dict.
 
     Used for weights-only checkpoints (e.g. bootstrap_model_v6w25.pt)
     that carry no `config` payload. Mirrors the dispatch in
     hexo_rl.eval.checkpoint_loader.detect_encoding_label but returns
-    a full EncodingSpec the trainer can act on.
+    a ``WireFormatSpec`` (§176 P3 — replaces the legacy
+    ``hexo_rl.utils.encoding.EncodingSpec`` NamedTuple).
 
     Returns ``None`` when the state-dict shape does not match a
     canonical (v6 / v6w25 / v8) encoding — the caller should then
@@ -87,15 +87,15 @@ def _detect_encoding_from_state_dict(
             break
     label = ckpt_label.lower()
     if in_ch == 11 and n_actions == 625:
-        return v8_spec()
+        return WIRE_FORMAT_SPECS["v8"]
     if in_ch == BUFFER_CHANNELS:
         if n_actions == 626 or "v6w25" in label or "_w25" in label:
             # Filename hint can override action-count when the head is a
             # PMA variant whose output dim differs; in that case we trust
             # the operator's filename labeling.
-            return v6w25_spec()
+            return WIRE_FORMAT_SPECS["v6w25"]
         if n_actions == 362:
-            return v6_spec()
+            return WIRE_FORMAT_SPECS["v6"]
     return None
 
 
@@ -104,27 +104,28 @@ def _resolve_checkpoint_encoding(
     in_memory_config: Optional[Dict[str, Any]],
     model_state: Dict[str, torch.Tensor],
     checkpoint_path: Any,
-) -> Optional[EncodingSpec]:
+) -> Optional[WireFormatSpec]:
     """Reconcile checkpoint encoding with the in-memory config encoding.
 
     Resolution rules:
       - Checkpoint encoding: prefer ckpt['config']['encoding'] (full
         ckpt). Otherwise infer from state_dict shape + filename.
       - In-memory encoding: read `in_memory_config['encoding']`. If
-        absent, defaults to v6 via resolve_encoding.
-      - Disagreement on version → ValueError naming both sources.
+        absent, defaults to v6 via the registry resolver.
+      - Disagreement on name → ValueError naming both sources.
       - In-memory config also pinning board_size / cluster_window_size /
         cluster_threshold that contradict the ckpt-resolved spec → also
         ValueError.
 
-    Returns the ckpt-resolved EncodingSpec on success.
+    Returns the ckpt-resolved ``WireFormatSpec`` on success.
     """
     # Step 1 — resolve the ckpt-side encoding.
     ckpt_cfg = ckpt.get("config") if isinstance(ckpt, dict) else None
     ckpt_source: str
-    ckpt_spec: Optional[EncodingSpec]
+    ckpt_spec: Optional[WireFormatSpec]
     if isinstance(ckpt_cfg, dict) and ckpt_cfg.get("encoding") is not None:
-        ckpt_spec = resolve_encoding(ckpt_cfg)
+        ckpt_registry_spec = registry_resolve_config(ckpt_cfg)
+        ckpt_spec = _legacy_spec_for_registry_name(ckpt_registry_spec.name)
         ckpt_source = f"checkpoint {checkpoint_path!s} config['encoding']"
     else:
         ckpt_spec = _detect_encoding_from_state_dict(
@@ -154,7 +155,8 @@ def _resolve_checkpoint_encoding(
 
     # In-memory side has at least one pin — reconcile.
     if explicit_encoding:
-        cfg_spec = resolve_encoding(in_memory_config)
+        cfg_registry_spec = registry_resolve_config(in_memory_config)
+        cfg_spec = _legacy_spec_for_registry_name(cfg_registry_spec.name)
         cfg_source = "in-memory config['encoding']"
     else:
         # No encoding section but explicit pins → derive a v6/v6w25-ish
@@ -162,11 +164,11 @@ def _resolve_checkpoint_encoding(
         cfg_spec = ckpt_spec  # start from ckpt; override with pins for compare
         cfg_source = "in-memory config (pins)"
 
-    if cfg_spec.version != ckpt_spec.version:
+    if cfg_spec.name != ckpt_spec.name:
         raise ValueError(
             f"Encoding version disagrees: "
-            f"{cfg_source}.version={cfg_spec.version!r} vs "
-            f"{ckpt_source}.version={ckpt_spec.version!r}. "
+            f"{cfg_source}.version={cfg_spec.name!r} vs "
+            f"{ckpt_source}.version={ckpt_spec.name!r}. "
             "Update the variant config to match the checkpoint encoding "
             "(or load a checkpoint matching the config). Refusing to "
             "silently override either direction."
@@ -176,7 +178,7 @@ def _resolve_checkpoint_encoding(
     # numeric pins (board_size / cluster_window_size / cluster_threshold).
     for key, cfg_val in explicit_pins.items():
         if key == "board_size":
-            ckpt_val: Optional[int] = registry_lookup(ckpt_spec.version).trunk_size
+            ckpt_val: Optional[int] = registry_lookup(ckpt_spec.name).trunk_size
         elif key == "cluster_window_size":
             ckpt_val = ckpt_spec.cluster_window_size
         elif key == "cluster_threshold":
@@ -188,7 +190,7 @@ def _resolve_checkpoint_encoding(
                 f"Encoding pin {key!r} disagrees: "
                 f"in-memory config {key}={cfg_val} vs "
                 f"{ckpt_source} {key}={ckpt_val} "
-                f"(checkpoint encoding={ckpt_spec.version!r}). "
+                f"(checkpoint encoding={ckpt_spec.name!r}). "
                 "Remove the explicit pin from the config or load a "
                 "matching checkpoint; refusing to silently override."
             )
@@ -197,7 +199,7 @@ def _resolve_checkpoint_encoding(
 
 
 def _propagate_encoding_into_config(
-    config: Dict[str, Any], spec: EncodingSpec,
+    config: Dict[str, Any], spec: WireFormatSpec,
 ) -> None:
     """Write the resolved encoding fields into the in-memory config.
 
@@ -213,7 +215,7 @@ def _propagate_encoding_into_config(
     encoding_section = config.get("encoding")
     if not isinstance(encoding_section, dict):
         encoding_section = {}
-    encoding_section["version"] = spec.version
+    encoding_section["version"] = spec.name
     config["encoding"] = encoding_section
 
     # board_size scalar retired — §172 A10.
@@ -393,10 +395,10 @@ def load_checkpoint(
             )
 
     if registry_spec_from_meta is not None:
-        # Bridge to legacy NamedTuple — downstream propagation (which
-        # writes board_size / cluster_* / legal_move_radius into the
-        # in-memory config) reads `.version`, `.board_size`,
-        # `.cluster_window_size`, etc. off the legacy NamedTuple.
+        # Bridge to wire-format spec (§176 P3 — replaces the legacy
+        # NamedTuple). Propagation writes board_size / cluster_* /
+        # legal_move_radius into the in-memory config from the wire
+        # format mapped to the registry name.
         resolved_spec = _legacy_spec_for_registry_name(
             registry_spec_from_meta.name
         )
@@ -404,7 +406,7 @@ def load_checkpoint(
         log.info(
             "checkpoint_encoding_resolved",
             checkpoint_path=str(checkpoint_path),
-            encoding_version=resolved_spec.version,
+            encoding_version=resolved_spec.name,
             encoding_name=registry_spec_from_meta.name,
             board_size=registry_resolve_config(config).trunk_size,
             cluster_window_size=config.get("cluster_window_size"),
@@ -433,7 +435,7 @@ def load_checkpoint(
             log.info(
                 "checkpoint_encoding_resolved",
                 checkpoint_path=str(checkpoint_path),
-                encoding_version=resolved_spec.version,
+                encoding_version=resolved_spec.name,
                 board_size=registry_resolve_config(config).trunk_size,
                 cluster_window_size=config.get("cluster_window_size"),
                 cluster_threshold=config.get("cluster_threshold"),

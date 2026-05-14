@@ -24,10 +24,27 @@ from typing import Any, Dict
 import pytest
 import torch
 
-from engine import Board, ReplayBuffer, SelfPlayRunner
+from engine import Board, EncodingSpec as PyEncodingSpec, ReplayBuffer, SelfPlayRunner
+from hexo_rl.encoding.compat import WIRE_FORMAT_SPECS
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 from hexo_rl.selfplay.pool import WorkerPool
-from hexo_rl.utils.encoding import v6_spec, v6w25_spec
+
+
+def _wire_to_pyo3(name: str) -> PyEncodingSpec:
+    """Build a PyEncodingSpec from the wire-format mapping (§176 P3).
+
+    Same construction the WorkerPool runs at __init__ to wire the
+    SelfPlayRunner's `encoding=` kwarg.
+    """
+    spec = WIRE_FORMAT_SPECS[name]
+    assert spec.cluster_window_size is not None
+    assert spec.cluster_threshold is not None
+    return PyEncodingSpec(
+        cluster_window_size=int(spec.cluster_window_size),
+        cluster_threshold=int(spec.cluster_threshold),
+        legal_move_radius=int(spec.legal_move_radius),
+        board_size=int(spec.board_size),
+    )
 
 
 def _base_selfplay_cfg(encoding_version: str = "v6") -> Dict[str, Any]:
@@ -84,7 +101,7 @@ def test_selfplay_runner_accepts_encoding_kwarg():
     as a keyword argument (added in A1 reopen). Backward compat: omitting
     the kwarg is identical to `encoding=None`. Both must construct without
     raising."""
-    spec = v6w25_spec().to_pyo3()
+    spec = _wire_to_pyo3("v6w25")
     # With encoding kwarg.
     r1 = SelfPlayRunner(
         n_workers=1,
@@ -119,7 +136,7 @@ def test_selfplay_runner_v6w25_workers_use_w25_boards():
     perception. Also asserts the cross-check via `Board.with_encoding(py_spec)`
     matches the same parameters.
     """
-    py_spec = v6w25_spec().to_pyo3()
+    py_spec = _wire_to_pyo3("v6w25")
     runner = SelfPlayRunner(
         n_workers=2,
         max_moves_per_game=0,           # workers spin per-game Board ctor

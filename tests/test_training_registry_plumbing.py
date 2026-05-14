@@ -88,34 +88,34 @@ def test_recency_buffer_v8_state_shape_drives_chain_shape() -> None:
 
 
 def test_legacy_bridge_v7full_to_v6_spec() -> None:
-    """v7full (registry-only) bridges to legacy v6 spec for downstream consumers."""
+    """v7full (registry-only) bridges to v6 wire format (§176 P3)."""
     from hexo_rl.training.trainer import _legacy_spec_for_registry_name
 
-    legacy = _legacy_spec_for_registry_name("v7full")
-    assert legacy.version == "v6"
-    assert legacy.board_size == 19
-    assert legacy.cluster_window_size == 19
+    wire = _legacy_spec_for_registry_name("v7full")
+    assert wire.name == "v6"
+    assert wire.board_size == 19
+    assert wire.cluster_window_size == 19
 
 
 def test_legacy_bridge_v8_canvas_realness_to_v8_spec() -> None:
-    """v8_canvas_realness (registry-only) bridges to legacy v8 spec."""
+    """v8_canvas_realness (registry-only) bridges to v8 wire format (§176 P3)."""
     from hexo_rl.training.trainer import _legacy_spec_for_registry_name
 
-    legacy = _legacy_spec_for_registry_name("v8_canvas_realness")
-    assert legacy.version == "v8"
+    wire = _legacy_spec_for_registry_name("v8_canvas_realness")
+    assert wire.name == "v8"
 
 
 def test_legacy_bridge_unknown_name_raises() -> None:
     from hexo_rl.training.trainer import _legacy_spec_for_registry_name
 
-    with pytest.raises(ValueError, match="no legacy bridge"):
+    with pytest.raises(ValueError, match="no wire-format mapping"):
         _legacy_spec_for_registry_name("v999_imaginary")
 
 
 def test_legacy_bridge_canonical_names_round_trip() -> None:
-    """v6 / v6w25 / v8 names go through resolve_encoding cleanly."""
+    """v6 / v6w25 / v8 names map to their own wire format (§176 P3)."""
     from hexo_rl.training.trainer import _legacy_spec_for_registry_name
 
-    assert _legacy_spec_for_registry_name("v6").version == "v6"
-    assert _legacy_spec_for_registry_name("v6w25").version == "v6w25"
-    assert _legacy_spec_for_registry_name("v8").version == "v8"
+    assert _legacy_spec_for_registry_name("v6").name == "v6"
+    assert _legacy_spec_for_registry_name("v6w25").name == "v6w25"
+    assert _legacy_spec_for_registry_name("v8").name == "v8"

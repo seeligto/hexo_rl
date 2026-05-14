@@ -21,7 +21,6 @@ from hexo_rl.encoding import EncodingSpec as RegistrySpec
 from hexo_rl.encoding import lookup as registry_lookup
 from hexo_rl.encoding import resolve_from_config as registry_resolve_from_config
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
-from hexo_rl.utils.encoding import EncodingSpec as LegacyEncodingSpec
 
 # Perf probes log via structlog so they persist to JSONL independent of dashboards.
 _perf_log = structlog.get_logger()
@@ -38,9 +37,7 @@ class InferenceServer(threading.Thread):
         device: torch.device,
         config: Dict[str, Any],
         batcher: Optional[InferenceBatcher] = None,
-        encoding_spec: Optional[
-            "RegistrySpec | LegacyEncodingSpec"
-        ] = None,
+        encoding_spec: Optional[RegistrySpec] = None,
     ) -> None:
         super().__init__(daemon=True, name="inference-server")
         self.model = model
@@ -52,18 +49,16 @@ class InferenceServer(threading.Thread):
         self._max_wait_ms = int(float(sp.get("inference_max_wait_ms", 10.0)))
 
         # §172 A4.2 — encoding spec sourced from new `hexo_rl.encoding`
-        # registry. Accept either legacy NamedTuple (`.version`) or new
-        # dataclass (`.name`); store internally as the new dataclass.
+        # registry. §176 P3 — legacy `hexo_rl.utils.encoding` NamedTuple
+        # shim retired; only the registry dataclass is accepted now. Any
+        # other spec-like object with a `.name` attribute is round-tripped
+        # via `lookup` so internal storage is uniform on the new dataclass.
         # Standalone callers (no kwarg) fall back to resolving from config
         # (default v6).
         if encoding_spec is None:
             self.encoding_spec: RegistrySpec = registry_resolve_from_config(config)
         elif isinstance(encoding_spec, RegistrySpec):
             self.encoding_spec = encoding_spec
-        elif hasattr(encoding_spec, "version"):
-            # Legacy NamedTuple — round-trip via `lookup` so internal storage
-            # is uniform on the new dataclass.
-            self.encoding_spec = registry_lookup(encoding_spec.version)
         elif hasattr(encoding_spec, "name"):
             self.encoding_spec = registry_lookup(encoding_spec.name)
         else:

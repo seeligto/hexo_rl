@@ -9,46 +9,103 @@ Heuristic order (per A2 §5.5 + §5.6):
   1. Filename match — longest-first against registered names.
   2. State-dict shape inference — first conv `in_channels` × policy
      `out_features` → unique encoding (or ambiguous → error).
+
+§176 P3 retired the legacy `hexo_rl.utils.encoding` NamedTuple shim.
+The trainer-side wire-format propagation (cluster_window_size /
+cluster_threshold / legal_move_radius / board_size that the Rust
+SelfPlayRunner kwargs consume) used to ride on that NamedTuple. Now
+the wire-format mapping lives here as ``WIRE_FORMAT_SPECS`` keyed by
+registry name; ``legacy_spec_for_registry_name`` returns a tiny
+``WireFormatSpec`` dataclass carrying those four scalars plus the
+registry ``name``.
+
+For v6-family (v6 / v7full / v7 / v7e30 / v7mw) the wire format is
+the legacy v6 16-plane layout (cw=19, ct=5, lmr=5, bs=19). v6w25 is
+its own wire format (cw=25, ct=8, lmr=8, bs=25). v8 / v8_canvas_realness
+share the v8 11-plane layout (no cluster fields, lmr=8, bs=25); v8 is
+not on a Rust selfplay path today (loud-fail in pool resolver).
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from dataclasses import dataclass
+from typing import Any, Mapping, Optional
 
 from hexo_rl.encoding._probes import FIRST_CONV_KEYS as _FIRST_CONV_KEYS
 from hexo_rl.encoding._probes import POLICY_FC_KEYS as _POLICY_FC_KEYS
 from hexo_rl.encoding.registry import EncodingRegistryError, _load
 
 
-def legacy_spec_for_registry_name(name: str):
-    """Map a registry encoding name to a legacy NamedTuple ``EncodingSpec``.
+@dataclass(frozen=True, slots=True)
+class WireFormatSpec:
+    """Wire-format scalars for a registry encoding name (§176 P3).
 
-    The legacy resolver (``hexo_rl.utils.encoding.resolve_encoding``) only
-    knows the historical names (v6 / v6w25 / v8). Registry-only names
-    (v7full, v7, v7e30, v7mw, v8_canvas_realness) bridge to the wire-
-    compatible legacy spec so downstream consumers reading
-    ``state_stride`` / ``chain_stride`` keep working.
+    Replaces the four-field surface of the retired legacy
+    ``hexo_rl.utils.encoding.EncodingSpec`` NamedTuple — the only
+    contract downstream consumers (trainer ckpt-load propagation +
+    pool runner-kwarg construction) actually relied on.
 
-      v7full / v7 / v7e30  → v6_spec()  (same wire format, distinct anchor tag)
-      v7mw                  → v6_spec()  (same wire format; multi-window label
-                                          surfaces via the registry spec)
-      v8_canvas_realness    → v8_spec()  (same wire format, plane-8 polarity differs)
-
-    Lazy imports avoid a circular-import path through
-    ``hexo_rl.utils.encoding`` at package init.
+    ``cluster_window_size`` / ``cluster_threshold`` are ``None`` for
+    v8 family encodings (K-aggregation retired).
     """
-    from hexo_rl.utils.encoding import resolve_encoding, v6_spec, v8_spec
 
-    if name in ("v6", "v6w25", "v8"):
-        return resolve_encoding({"encoding": {"version": name}})
-    if name in ("v7full", "v7", "v7e30", "v7mw"):
-        return v6_spec()
-    if name == "v8_canvas_realness":
-        return v8_spec()
-    raise ValueError(
-        f"legacy_spec_for_registry_name: no legacy bridge for registry "
-        f"encoding {name!r}. Add a mapping if the wire format matches an "
-        f"existing legacy spec."
-    )
+    name: str
+    cluster_window_size: Optional[int]
+    cluster_threshold: Optional[int]
+    legal_move_radius: int
+    board_size: int
+
+
+# Registry name → wire-format scalars (§176 P3).
+#
+# v6-family (v6 / v7full / v7 / v7e30 / v7mw) all share the legacy v6
+# wire format: 19×19 cluster window, threshold=5, radius=5, canvas
+# board_size=19. v6w25 is its own wire format. v8 / v8_canvas_realness
+# share the v8 wire format; cluster fields stay None because v8 retired
+# K-aggregation (Rust selfplay path also blocked at the pool resolver).
+_V6_WIRE = WireFormatSpec(
+    name="v6", cluster_window_size=19, cluster_threshold=5,
+    legal_move_radius=5, board_size=19,
+)
+_V6W25_WIRE = WireFormatSpec(
+    name="v6w25", cluster_window_size=25, cluster_threshold=8,
+    legal_move_radius=8, board_size=25,
+)
+_V8_WIRE = WireFormatSpec(
+    name="v8", cluster_window_size=None, cluster_threshold=None,
+    legal_move_radius=8, board_size=25,
+)
+WIRE_FORMAT_SPECS: dict[str, WireFormatSpec] = {
+    "v6":                  _V6_WIRE,
+    "v6w25":               _V6W25_WIRE,
+    "v7full":              _V6_WIRE,
+    "v7":                  _V6_WIRE,
+    "v7e30":               _V6_WIRE,
+    "v7mw":                _V6_WIRE,
+    "v8":                  _V8_WIRE,
+    "v8_canvas_realness":  _V8_WIRE,
+}
+
+
+def legacy_spec_for_registry_name(name: str) -> WireFormatSpec:
+    """Map a registry encoding name to a ``WireFormatSpec`` (§176 P3).
+
+    Wire-format mapping (preserves byte-exact pre-§176 selfplay
+    behaviour: v6-family Rust workers see v6 wire constants, v6w25
+    workers see v6w25 wire constants):
+
+      v6 / v7full / v7 / v7e30 / v7mw  → v6 wire (cw=19, ct=5, lmr=5, bs=19)
+      v6w25                            → v6w25 wire (cw=25, ct=8, lmr=8, bs=25)
+      v8 / v8_canvas_realness          → v8 wire (cw=None, ct=None, lmr=8, bs=25)
+    """
+    spec = WIRE_FORMAT_SPECS.get(name)
+    if spec is None:
+        raise ValueError(
+            f"legacy_spec_for_registry_name: no wire-format mapping for "
+            f"registry encoding {name!r}. Add an entry to "
+            f"WIRE_FORMAT_SPECS if the wire format matches an existing "
+            f"layout."
+        )
+    return spec
 
 
 def _filename_match(path_hint: str) -> str | None:

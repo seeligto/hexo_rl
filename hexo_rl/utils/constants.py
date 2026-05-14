@@ -5,9 +5,11 @@ are sourced from the canonical encoding registry at
 ``engine/src/encoding/registry.toml`` via ``hexo_rl.encoding.lookup(name)``.
 
 §176 P5 retired the v8 block from this module; downstream v8 callers
-import their numeric constants from ``hexo_rl.bootstrap.dataset_v8`` (which
-now sources them from the registry), and the legacy v8 NamedTuple lives
-in ``hexo_rl.utils.encoding`` until W3 retires that shim.
+import their numeric constants from ``hexo_rl.bootstrap.dataset_v8``
+(which now sources them from the registry). §176 P3 retired the legacy
+``hexo_rl.utils.encoding`` NamedTuple shim entirely; downstream
+consumers route through ``hexo_rl.encoding`` (registry) and
+``hexo_rl.encoding.compat`` (wire-format scalars).
 """
 
 # ── v6 (canonical default) ──────────────────────────────────────────────────

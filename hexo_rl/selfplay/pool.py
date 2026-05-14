@@ -25,6 +25,10 @@ from engine import SelfPlayRunner  # type: ignore[attr-defined]
 
 from hexo_rl.encoding import EncodingSpec as RegistrySpec
 from hexo_rl.encoding import resolve_from_config as registry_resolve_from_config
+from hexo_rl.encoding.compat import (
+    WireFormatSpec,
+    legacy_spec_for_registry_name,
+)
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
@@ -33,10 +37,6 @@ from hexo_rl.selfplay.instrumentation import (
     PoolInstrumentation,
     _compute_stride5_metrics,
 )
-# Legacy spec retained for the SelfPlayRunner Rust-kwarg `to_pyo3()` round-trip;
-# A4.2 does NOT migrate the Rust SelfPlayRunner — that's a future refactor.
-from hexo_rl.utils.encoding import EncodingSpec as LegacyEncodingSpec
-from hexo_rl.utils.encoding import resolve_encoding as legacy_resolve_encoding
 from engine import ReplayBuffer
 
 log = structlog.get_logger()
@@ -86,11 +86,14 @@ class ResolvedPoolEncoding:
     Rust ``SelfPlayRunner`` and the Python NN-input/buffer dims:
 
       - ``registry_spec`` — canonical ``hexo_rl.encoding.EncodingSpec``.
-      - ``legacy_spec``   — 4-field NamedTuple kept alive until a future
-                            refactor migrates the Rust runner off the
-                            legacy ``PyEncodingSpec``; v7full/v7mw share
-                            the v6 wire format and reuse ``v6_spec()``.
-      - ``runner_encoding`` — ``legacy_spec.to_pyo3()`` (or ``None``).
+      - ``wire_format_spec`` — ``hexo_rl.encoding.compat.WireFormatSpec``
+                               (§176 P3 — replaces the retired legacy
+                               4-field NamedTuple); supplies the v6 /
+                               v6w25 / v8 wire constants the Rust
+                               ``PyEncodingSpec`` kwarg consumes.
+      - ``runner_encoding`` — 4-field ``PyO3EncodingSpec`` built from
+                              the wire format (or ``None`` for v8 family
+                              where cluster fields are absent).
       - ``runner_registry_spec`` — ``PyO3EncodingSpec.from_registry(name)``.
       - ``board_size`` / ``trunk_size`` / ``n_kept_planes`` — scalar
                                                               dims reused
@@ -99,7 +102,7 @@ class ResolvedPoolEncoding:
     """
 
     registry_spec: Any  # RegistrySpec (full schema)
-    legacy_spec: Any    # LegacyEncodingSpec (4-field shim)
+    wire_format_spec: WireFormatSpec  # §176 P3 — wire-format scalars
     runner_encoding: Any  # PyO3EncodingSpec | None
     runner_registry_spec: Any  # PyO3EncodingSpec (full schema, registry-form)
     board_size: int
@@ -115,6 +118,9 @@ def _resolve_encoding_for_pool(
     §172 A4.2 — resolves via the new ``hexo_rl.encoding`` registry.
     §173 A8' — multi-window guard lifted; v8 selfplay still loud-fails.
     §176 P20 — extracted from ``WorkerPool.__init__`` for unit testability.
+    §176 P3  — wire-format scalars now sourced from
+               ``hexo_rl.encoding.compat.legacy_spec_for_registry_name``;
+               retired the legacy ``hexo_rl.utils.encoding`` shim.
 
     Validation:
       - v8 / v8_canvas_realness → ``NotImplementedError`` (Rust runner
@@ -129,8 +135,8 @@ def _resolve_encoding_for_pool(
     registry_spec: RegistrySpec = registry_resolve_from_config(config)
 
     # v8 selfplay guard (§172 A4.2). v8 has no Rust selfplay runner
-    # path today; failing loud here beats letting `to_pyo3()` raise
-    # an obscure ValueError later in __init__.
+    # path today; failing loud here beats letting downstream PyO3
+    # construction raise an obscure ValueError later in __init__.
     if registry_spec.name in ("v8", "v8_canvas_realness"):
         raise NotImplementedError(
             f"v8 selfplay (encoding={registry_spec.name!r}) Rust runner "
@@ -161,32 +167,34 @@ def _resolve_encoding_for_pool(
                 f"the checkpoint hparam mismatch before re-launching."
             )
 
-    # Legacy spec for the SelfPlayRunner Rust kwarg round-trip — kept
-    # alive until a future refactor migrates Rust SelfPlayRunner off
-    # the 4-field PyEncodingSpec. The legacy module knows only
-    # {v6, v6w25, v8}; v7full / v7mw are registry-only labels whose
-    # wire format is byte-identical to v6 (same board_size, n_planes,
-    # cluster fields, legal-move radius), so we synthesise the legacy
-    # spec from the v6 helper for those cases. v8 is blocked above;
-    # v6 / v6w25 / v7full / v7mw reach here.
-    if registry_spec.name in ("v7full", "v7mw"):
-        from hexo_rl.utils.encoding import v6_spec as _legacy_v6_spec
-        legacy_spec: LegacyEncodingSpec = _legacy_v6_spec()
-    else:
-        legacy_spec = legacy_resolve_encoding(config)
+    # §176 P3 — wire-format scalars for the SelfPlayRunner 4-field
+    # PyEncodingSpec kwarg. The wire-format mapping (compat.WIRE_FORMAT_SPECS)
+    # routes v6 / v7full / v7 / v7e30 / v7mw to v6 wire constants
+    # (cw=19, ct=5, lmr=5, bs=19) and v6w25 to its own (cw=25, ct=8,
+    # lmr=8, bs=25). v8 is loud-failed above so no v8 wire-format lookup
+    # reaches here. This preserves byte-exact pre-§176 selfplay
+    # behaviour: the same 4-field PyEncodingSpec instance the legacy
+    # `legacy_spec.to_pyo3()` produced is built directly from the wire-
+    # format scalars.
+    wire_format_spec: WireFormatSpec = legacy_spec_for_registry_name(spec.name)
 
     # §171 P3 A1 reopen / §172 A4.2 — pass the resolved EncodingSpec
     # through to the Rust runner so per-game `Board` construction in
     # worker_loop.rs uses `Board::with_encoding(spec)` instead of the
     # v6-default `Board::new()`. After the multi-window + v8 guards
-    # above, only v6 / v7full reach this branch — both are v6-family
-    # legacy specs with cluster_window_size + cluster_threshold set,
-    # so `legacy_spec.to_pyo3()` always succeeds.
+    # above, only v6-family / v6w25 reach this branch — every wire-
+    # format spec for those carries non-None cluster fields, so the
+    # PyEncodingSpec construction always succeeds.
     if (
-        legacy_spec.cluster_window_size is not None
-        and legacy_spec.cluster_threshold is not None
+        wire_format_spec.cluster_window_size is not None
+        and wire_format_spec.cluster_threshold is not None
     ):
-        runner_encoding = legacy_spec.to_pyo3()
+        runner_encoding = PyO3EncodingSpec(
+            cluster_window_size=int(wire_format_spec.cluster_window_size),
+            cluster_threshold=int(wire_format_spec.cluster_threshold),
+            legal_move_radius=int(wire_format_spec.legal_move_radius),
+            board_size=int(wire_format_spec.board_size),
+        )
     else:
         runner_encoding = None
 
@@ -199,7 +207,7 @@ def _resolve_encoding_for_pool(
 
     return ResolvedPoolEncoding(
         registry_spec=registry_spec,
-        legacy_spec=legacy_spec,
+        wire_format_spec=wire_format_spec,
         runner_encoding=runner_encoding,
         runner_registry_spec=runner_registry_spec,
         board_size=spec.board_size,
@@ -228,7 +236,7 @@ class WorkerPool:
         self.n_workers = int(n_workers if n_workers is not None else sp.get("n_workers", 1))
         # §176 P20 — encoding-resolve extracted to `_resolve_encoding_for_pool`.
         # Returns a frozen ResolvedPoolEncoding bundling registry_spec,
-        # legacy_spec, runner_encoding, runner_registry_spec, plus the
+        # wire_format_spec, runner_encoding, runner_registry_spec, plus the
         # board_size/trunk_size/n_kept_planes scalars. v8 selfplay still
         # loud-fails inside the helper; model.board_size cross-check is
         # delegated through `model=model`.
@@ -248,7 +256,6 @@ class WorkerPool:
         board_size = _resolved.board_size
         trunk_size = _resolved.trunk_size
         n_kept_planes = _resolved.n_kept_planes
-        legacy_spec: LegacyEncodingSpec = _resolved.legacy_spec
 
         # Rust inference batcher uses WIRE_CHANNELS (8) planes wide; the
         # game runner slices to len(spec.kept_plane_indices) before pushing

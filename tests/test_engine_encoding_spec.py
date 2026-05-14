@@ -3,23 +3,46 @@
 Tests cover:
 - engine.EncodingSpec construction with kwargs (validation in Rust).
 - Board.with_encoding produces a board with the correct window / threshold / radius.
-- Default Board() and Board.with_encoding(v6_spec) are encoding-equivalent.
-- Python EncodingSpec.to_pyo3() round-trip for v6 and v6w25.
-- v8 EncodingSpec.to_pyo3() raises ValueError (no cluster plumbing).
+- Default Board() and Board.with_encoding for v6 wire constants are equivalent.
+- Wire-format spec (§176 P3) round-trip through PyEncodingSpec for v6 / v6w25.
+- v8 wire-format spec exposes no cluster fields (None).
 - Validation rejects bad inputs.
+
+§176 P3: legacy `hexo_rl.utils.encoding` NamedTuple shim retired; the
+wire-format mapping moved to `hexo_rl.encoding.compat.WIRE_FORMAT_SPECS`
+and the registry resolver lives at `hexo_rl.encoding.resolve_from_config`.
 """
 from __future__ import annotations
 
 import pytest
 
 from engine import Board, EncodingSpec as PyEncodingSpec
-from hexo_rl.utils.encoding import (
-    EncodingSpec,
-    resolve_encoding,
-    v6_spec,
-    v6w25_spec,
-    v8_spec,
+from hexo_rl.encoding import resolve_from_config
+from hexo_rl.encoding.compat import (
+    WireFormatSpec,
+    WIRE_FORMAT_SPECS,
+    legacy_spec_for_registry_name,
 )
+
+
+def _wire_to_pyo3(spec: WireFormatSpec) -> PyEncodingSpec:
+    """Build a PyEncodingSpec from a wire-format spec.
+
+    Mirrors the construction the WorkerPool runs at __init__ to wire
+    the SelfPlayRunner's `encoding=` kwarg. Only valid for v6-family
+    wire formats; v8 wire format has no cluster fields.
+    """
+    if spec.cluster_window_size is None or spec.cluster_threshold is None:
+        raise ValueError(
+            f"WireFormatSpec(name={spec.name!r}) has no cluster fields; "
+            "PyEncodingSpec requires cluster_window_size + cluster_threshold."
+        )
+    return PyEncodingSpec(
+        cluster_window_size=int(spec.cluster_window_size),
+        cluster_threshold=int(spec.cluster_threshold),
+        legal_move_radius=int(spec.legal_move_radius),
+        board_size=int(spec.board_size),
+    )
 
 
 def test_pyencoding_kwargs_construction():
@@ -66,36 +89,43 @@ def test_pyboard_with_encoding_validates_inputs():
         )
 
 
-def test_to_pyo3_v6_round_trip():
-    py = v6_spec().to_pyo3()
+def test_wire_format_v6_round_trip():
+    py = _wire_to_pyo3(WIRE_FORMAT_SPECS["v6"])
     assert py.cluster_window_size == 19
     assert py.cluster_threshold == 5
     assert py.legal_move_radius == 5
     assert py.board_size == 19
 
 
-def test_to_pyo3_v6w25_round_trip():
-    py = v6w25_spec().to_pyo3()
+def test_wire_format_v6w25_round_trip():
+    py = _wire_to_pyo3(WIRE_FORMAT_SPECS["v6w25"])
     assert py.cluster_window_size == 25
     assert py.cluster_threshold == 8
     assert py.legal_move_radius == 8
 
 
-def test_to_pyo3_v8_raises():
-    with pytest.raises(ValueError, match="cluster"):
-        v8_spec().to_pyo3()
+def test_wire_format_v8_has_no_cluster_fields():
+    spec = WIRE_FORMAT_SPECS["v8"]
+    assert spec.cluster_window_size is None
+    assert spec.cluster_threshold is None
+    assert spec.legal_move_radius == 8
+    with pytest.raises(ValueError, match="no cluster fields"):
+        _wire_to_pyo3(spec)
 
 
-def test_resolve_encoding_v6w25():
-    spec = resolve_encoding({"encoding": {"version": "v6w25"}})
-    assert spec.version == "v6w25"
+def test_resolve_from_config_v6w25():
+    spec = resolve_from_config({"encoding": {"version": "v6w25"}})
+    assert spec.name == "v6w25"
     assert spec.cluster_window_size == 25
 
 
-def test_python_namedtuple_has_cluster_window_size():
-    assert v6_spec().cluster_window_size == 19
-    assert v6w25_spec().cluster_window_size == 25
-    assert v8_spec().cluster_window_size is None
+def test_wire_format_specs_carry_expected_cluster_fields():
+    assert WIRE_FORMAT_SPECS["v6"].cluster_window_size == 19
+    assert WIRE_FORMAT_SPECS["v6w25"].cluster_window_size == 25
+    assert WIRE_FORMAT_SPECS["v8"].cluster_window_size is None
+    # v7-family aliases share the v6 wire format.
+    for n in ("v7full", "v7", "v7e30", "v7mw"):
+        assert legacy_spec_for_registry_name(n).cluster_window_size == 19
 
 
 # ── §172 A10 T8b regression tests — pyo3 default-kwarg silent v6 fallback ────

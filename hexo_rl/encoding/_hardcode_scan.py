@@ -157,8 +157,8 @@ _FULL_FILE_ALLOWLIST: frozenset[str] = frozenset({
     "hexo_rl/bootstrap/dataset_v6w25.py",  # §173 A7 — intentional v6w25 dataset attributes
     "hexo_rl/bootstrap/dataset_v8.py",     # §173 A7 — intentional v8 dataset attributes
     "hexo_rl/model/tf32.py",               # §173 A7 — CUDA compute-capability detection; no encoding geometry
-    "hexo_rl/utils/encoding.py",           # §174 — canonical v6/v6w25/v8 EncodingSpec factory
     "engine/src/replay_buffer/sym_tables.rs",  # §174 — canonical static sym-table data
+    "hexo_rl/encoding/compat.py",          # §176 P3 — canonical wire-format scalars (WIRE_FORMAT_SPECS)
 })
 
 # Rule 3 — coordinate-call patterns; strip the match before scanning.

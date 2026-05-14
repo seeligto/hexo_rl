@@ -10,10 +10,9 @@ Phase 2 additions retained:
   - Both controlled by config and a `use_dirichlet` flag.
 
 §172 A4.2: encoding spec sourced from the new `hexo_rl.encoding` registry.
-Accepts both legacy `hexo_rl.utils.encoding.EncodingSpec` (NamedTuple) and
-new `hexo_rl.encoding.EncodingSpec` (dataclass) via `_to_registry_spec`
-adapter for backward compat with `OurModelBot` callers that still hold
-the legacy spec.
+§176 P3: legacy `hexo_rl.utils.encoding.EncodingSpec` NamedTuple shim
+retired; `_to_registry_spec` accepts the new dataclass directly or any
+spec-like object exposing `.name`.
 
 Usage:
     worker = SelfPlayWorker(model, config, device)
@@ -45,21 +44,18 @@ __all__ = ["SelfPlayWorker", "get_temperature"]
 def _to_registry_spec(
     spec: Union[RegistrySpec, Any],
 ) -> RegistrySpec:
-    """§172 A4.2 adapter — accept either legacy NamedTuple or new dataclass.
+    """§172 A4.2 adapter — return the new registry-form `EncodingSpec`.
 
-    Returns the new registry-form `EncodingSpec`. Looks up by `.version`
-    (legacy NamedTuple) or `.name` (new dataclass).
+    §176 P3 dropped the legacy NamedTuple branch; only the registry
+    dataclass (or any spec-like object exposing `.name`) is accepted.
     """
     if isinstance(spec, RegistrySpec):
         return spec
-    if hasattr(spec, "version"):
-        return lookup(spec.version)
     if hasattr(spec, "name"):
         return lookup(spec.name)
     raise TypeError(
         f"_to_registry_spec: cannot adapt {type(spec).__name__!r}; "
-        "expected hexo_rl.encoding.EncodingSpec or "
-        "hexo_rl.utils.encoding.EncodingSpec"
+        "expected hexo_rl.encoding.EncodingSpec"
     )
 
 
@@ -72,8 +68,9 @@ class SelfPlayWorker:
                      n_simulations, c_puct, temperature_threshold_ply,
                      board_size (must match network input).
         device:  torch.device.
-        encoding_spec: Optional explicit spec (legacy NamedTuple or new
-                       dataclass). If omitted, resolved from config.
+        encoding_spec: Optional explicit registry-form `EncodingSpec`
+                       (or any spec-like object with `.name`). If
+                       omitted, resolved from config.
     """
 
     def __init__(
@@ -86,9 +83,9 @@ class SelfPlayWorker:
         self.config = config
         self.device = device
 
-        # §172 A4.2 — resolve via the new registry. Legacy specs round-trip
-        # through `_to_registry_spec` so OurModelBot / tests that hold the
-        # NamedTuple form continue to work.
+        # §172 A4.2 — resolve via the new registry. Spec-like inputs
+        # (any object with a `.name` attribute) round-trip through
+        # `_to_registry_spec` for caller convenience.
         if encoding_spec is None:
             self.encoding_spec: RegistrySpec = resolve_from_config(config)
         else:

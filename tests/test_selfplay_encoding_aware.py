@@ -1,4 +1,4 @@
-"""§171 P3 / §172 A4.2 — encoding-aware self-play plumbing.
+"""§171 P3 / §172 A4.2 / §176 P3 — encoding-aware self-play plumbing.
 
 Validates that `WorkerPool`, `SelfPlayWorker`, and `InferenceServer` resolve
 the encoding from the config (rather than hardcoding the v6 defaults) and
@@ -7,19 +7,14 @@ on every code path the sustained training loop touches.
 
 §172 A4.2 amendments:
   * `pool.encoding_spec` / `worker.encoding_spec` / `server.encoding_spec`
-    are now `hexo_rl.encoding.EncodingSpec` dataclasses (new registry),
-    NOT `hexo_rl.utils.encoding.EncodingSpec` NamedTuples (legacy). The
-    `.version` field was renamed to `.name`; tests probe `.name` now.
-  * v6w25 selfplay (multi-window) is BLOCKED at `WorkerPool.__init__`
-    pending α (§172 Phase A7); the pool-level v6w25 tests are xfail'd.
-    The non-pool v6w25 tests (worker / server direct construction)
-    remain green.
+    are `hexo_rl.encoding.EncodingSpec` dataclasses (new registry); tests
+    probe `.name` (not the retired legacy NamedTuple's `.version`).
 
-Caveat — Rust SelfPlayRunner gap (§171 P3 A1 followup): `engine.SelfPlayRunner`
-constructs `Board::new()` per game; A1 reopen now threads
-`engine.EncodingSpec` (legacy 4-field PyEncodingSpec) into the Rust-owned
-worker threads. The Python plumbing asserts here cover the Python surface
-(Pool resolves spec, worker uses spec, server sizes its tensors from spec).
+§176 P3 amendments:
+  * legacy `hexo_rl.utils.encoding` shim retired; wire-format constants
+    live at `hexo_rl.encoding.compat.WIRE_FORMAT_SPECS` and the
+    PyO3-side runner kwarg is built directly from the wire-format
+    spec.
 """
 
 from __future__ import annotations
@@ -29,19 +24,14 @@ from typing import Any, Dict
 import pytest
 import torch
 
-from engine import Board
+from engine import Board, EncodingSpec as PyEncodingSpec
 from hexo_rl.encoding import EncodingSpec as RegistrySpec
 from hexo_rl.encoding import lookup as registry_lookup
+from hexo_rl.encoding.compat import WIRE_FORMAT_SPECS
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference_server import InferenceServer
 from hexo_rl.selfplay.pool import WorkerPool
 from hexo_rl.selfplay.worker import SelfPlayWorker
-from hexo_rl.utils.encoding import (
-    EncodingSpec,
-    resolve_encoding,
-    v6_spec,
-    v6w25_spec,
-)
 from engine import ReplayBuffer
 
 
@@ -121,18 +111,23 @@ def test_pool_spawns_v6w25_workers():
     # InferenceServer inherits the same spec. §176 P9 — read via typed snapshot.
     assert pool.inference_stats().encoding_spec is spec
 
-    # Legacy to_pyo3 round-trip on the v6w25 legacy spec still carries
-    # the load-bearing cluster_window_size / cluster_threshold values
-    # that reach the Rust Board for v6w25 perception. (§173 A8' also
-    # threads the new-registry spec via SelfPlayRunner's encoding_spec=
-    # kwarg, so spec_static is set on the Rust side.)
-    legacy_spec = v6w25_spec()
-    pyspec = legacy_spec.to_pyo3()
+    # Wire-format spec round-trip into PyEncodingSpec carries the
+    # load-bearing cluster_window_size / cluster_threshold values that
+    # reach the Rust Board for v6w25 perception. (§173 A8' also threads
+    # the new-registry spec via SelfPlayRunner's encoding_spec= kwarg,
+    # so spec_static is set on the Rust side.)
+    wire_spec = WIRE_FORMAT_SPECS["v6w25"]
+    pyspec = PyEncodingSpec(
+        cluster_window_size=int(wire_spec.cluster_window_size),
+        cluster_threshold=int(wire_spec.cluster_threshold),
+        legal_move_radius=int(wire_spec.legal_move_radius),
+        board_size=int(wire_spec.board_size),
+    )
     assert pyspec.cluster_window_size == 25
     assert pyspec.cluster_threshold == 8
     assert pyspec.legal_move_radius == 8
 
-    # Build a board with the legacy spec — same call site the Rust
+    # Build a board with the wire-format spec — same call site the Rust
     # worker_loop uses for `Board::with_encoding(spec)`.
     board = Board.with_encoding(pyspec)
     assert board.cluster_window_size() == 25
@@ -238,23 +233,18 @@ def test_worker_explicit_spec_overrides_config():
     OurModelBot / tests that already hold a resolved spec from the
     checkpoint loader.
 
-    §172 A4.2: legacy NamedTuple still accepted (round-trips through
-    `_to_registry_spec`); internal storage is the new dataclass, so the
-    `is` identity check on the legacy form no longer holds. Test now
-    asserts the round-trip preserves `.name`.
+    §176 P3: registry dataclass is the only accepted form; identity is
+    preserved when the input is already a RegistrySpec.
     """
     device = torch.device("cpu")
     model = HexTacToeNet(board_size=19, in_channels=8, filters=8, res_blocks=1).to(device)
     cfg = _base_selfplay_cfg()  # config says v6 implicitly
     cfg.pop("encoding")
-    explicit_legacy = v6w25_spec()  # legacy NamedTuple form
-    worker = SelfPlayWorker(model, cfg, device, encoding_spec=explicit_legacy)
+    explicit_new = registry_lookup("v6w25")
+    worker = SelfPlayWorker(model, cfg, device, encoding_spec=explicit_new)
     assert isinstance(worker.encoding_spec, RegistrySpec)
     assert worker.encoding_spec.name == "v6w25"
-    # Cross-check: the new dataclass also accepted (identity preserved).
-    explicit_new = registry_lookup("v6w25")
-    worker2 = SelfPlayWorker(model, cfg, device, encoding_spec=explicit_new)
-    assert worker2.encoding_spec is explicit_new
+    assert worker.encoding_spec is explicit_new
 
 
 # ── 3. InferenceServer tensor shape ───────────────────────────────────────────
@@ -266,9 +256,8 @@ def test_inference_server_v6w25_forward():
 
     §172 A4.2: the new registry widens v6w25 board_size to 25 (canvas
     == cluster window). Server uses 18 wire planes × 25 × 25 and a
-    policy length of 626 (25*25 + pass slot). Probes `.name` not
-    `.version`. Constructor accepts the legacy NamedTuple too — it is
-    round-tripped through `lookup`.
+    policy length of 626 (25*25 + pass slot). §176 P3: only registry
+    dataclasses accepted (legacy NamedTuple shim retired).
     """
     from hexo_rl.model.network import WIRE_CHANNELS
 
@@ -276,7 +265,9 @@ def test_inference_server_v6w25_forward():
     model = HexTacToeNet(board_size=25, in_channels=8, filters=8, res_blocks=1).to(device)
     cfg = _base_selfplay_cfg(encoding_version="v6w25")
 
-    server = InferenceServer(model, device, cfg, encoding_spec=v6w25_spec())
+    server = InferenceServer(
+        model, device, cfg, encoding_spec=registry_lookup("v6w25"),
+    )
 
     assert isinstance(server.encoding_spec, RegistrySpec)
     assert server.encoding_spec.name == "v6w25"

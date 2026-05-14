@@ -17,9 +17,16 @@ import pytest
 import torch
 
 from hexo_rl.encoding import resolve_from_config
+from hexo_rl.encoding.compat import WIRE_FORMAT_SPECS
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.trainer import Trainer
-from hexo_rl.utils.encoding import v6_spec, v6w25_spec
+
+# §176 P3: legacy NamedTuple shim retired; the wire-format scalars
+# trainer.config propagation writes (cluster_window_size /
+# cluster_threshold / legal_move_radius) live at
+# `hexo_rl.encoding.compat.WIRE_FORMAT_SPECS`.
+_v6_wire = WIRE_FORMAT_SPECS["v6"]
+_v6w25_wire = WIRE_FORMAT_SPECS["v6w25"]
 
 
 _FAST_RES_BLOCKS = 2
@@ -91,12 +98,12 @@ def test_load_v6w25_checkpoint_resolves_to_v6w25(tmp_path: Path) -> None:
     assert trainer.config["cluster_window_size"] == 25
     assert trainer.config["cluster_threshold"] == 8
     assert trainer.config["encoding"]["version"] == "v6w25"
-    # Spec sanity — must agree with hexo_rl.utils.encoding's v6w25 helper
-    # on the perception fields (canvas board_size differs by design and
-    # is overridden to the trunk dimension; that's the whole point).
-    spec = v6w25_spec()
-    assert trainer.config["cluster_window_size"] == spec.cluster_window_size
-    assert trainer.config["cluster_threshold"] == spec.cluster_threshold
+    # Spec sanity — must agree with the registry wire-format spec for
+    # v6w25 on the perception fields (canvas board_size differs by
+    # design and is overridden to the trunk dimension; that's the
+    # whole point).
+    assert trainer.config["cluster_window_size"] == _v6w25_wire.cluster_window_size
+    assert trainer.config["cluster_threshold"] == _v6w25_wire.cluster_threshold
 
 
 def test_load_v6_checkpoint_resolves_to_v6(tmp_path: Path) -> None:
@@ -115,9 +122,8 @@ def test_load_v6_checkpoint_resolves_to_v6(tmp_path: Path) -> None:
     assert trainer.config["cluster_window_size"] == 19
     assert trainer.config["cluster_threshold"] == 5
     assert trainer.config["encoding"]["version"] == "v6"
-    spec = v6_spec()
-    assert trainer.config["cluster_window_size"] == spec.cluster_window_size
-    assert trainer.config["cluster_threshold"] == spec.cluster_threshold
+    assert trainer.config["cluster_window_size"] == _v6_wire.cluster_window_size
+    assert trainer.config["cluster_threshold"] == _v6_wire.cluster_threshold
 
 
 def test_load_v6_checkpoint_with_no_encoding_section_backward_compat(tmp_path: Path) -> None:
@@ -188,12 +194,11 @@ def test_config_propagates_resolved_encoding(tmp_path: Path) -> None:
         checkpoint_dir=tmp_path,
         fallback_config=cfg,
     )
-    spec = v6w25_spec()
     # All fields the §171 P3 selfplay surfaces depend on must be present.
     assert resolve_from_config(trainer.config).trunk_size == 25  # model trunk dimension
-    assert trainer.config["cluster_window_size"] == spec.cluster_window_size
-    assert trainer.config["cluster_threshold"] == spec.cluster_threshold
-    assert trainer.config["legal_move_radius"] == spec.legal_move_radius
+    assert trainer.config["cluster_window_size"] == _v6w25_wire.cluster_window_size
+    assert trainer.config["cluster_threshold"] == _v6w25_wire.cluster_threshold
+    assert trainer.config["legal_move_radius"] == _v6w25_wire.legal_move_radius
     assert trainer.config["encoding"]["version"] == "v6w25"
 
 
