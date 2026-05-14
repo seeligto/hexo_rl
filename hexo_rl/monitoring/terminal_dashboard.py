@@ -54,6 +54,10 @@ def _fmt_plain(v: Any, dp: int = 1) -> str:
 
 
 from hexo_rl.encoding import resolve_from_config
+from hexo_rl.monitoring.alert_rules import (
+    evaluate_eval_complete_alerts,
+    evaluate_training_step_alerts,
+)
 from hexo_rl.monitoring.config import MonitoringConfig
 
 
@@ -329,48 +333,28 @@ class TerminalDashboard:
         # Unknown events are silently ignored.
 
     def _check_alerts(self, payload: dict) -> None:
-        """Evaluate alert conditions and manage active alerts."""
+        """Evaluate alert conditions and manage active alerts.
+
+        Rule predicates live in :mod:`hexo_rl.monitoring.alert_rules`;
+        this method owns the stateful rolling-loss-window deque, the
+        de-duplication queue (:meth:`_add_alert`), and the 60s TTL.
+        """
         now = time.time()
         expiry = now + 60.0
         event = payload.get("event")
 
         if event == "training_step":
-            # Entropy collapse (combined)
-            ent = payload.get("policy_entropy")
-            if ent is not None and ent < self._alert_entropy_min:
-                self._add_alert(
-                    expiry, f"policy entropy {ent:.2f} — possible mode collapse"
-                )
-            # Selfplay-stream collapse (threshold per §70; configurable).
-            ent_sp = payload.get("selfplay_model_entropy_batch", payload.get("policy_entropy_selfplay"))
-            if ent_sp is not None and math.isfinite(ent_sp) and ent_sp < self._collapse_threshold:
-                self._add_alert(
-                    expiry, f"selfplay entropy {ent_sp:.2f} — selfplay mode collapse"
-                )
-
-            # Grad norm spike
-            gn = payload.get("grad_norm")
-            if gn is not None and gn == gn and gn > self._alert_grad_max:
-                self._add_alert(expiry, f"grad norm {gn:.1f} — instability")
-
-            # Loss increasing trend
             lt = payload.get("loss_total")
             if lt is not None:
                 self._recent_losses.append(lt)
-                if len(self._recent_losses) > self._alert_loss_window:
-                    window = list(self._recent_losses)[-self._alert_loss_window - 1:]
-                    if all(window[i] < window[i + 1] for i in range(len(window) - 1)):
-                        self._add_alert(
-                            expiry,
-                            f"loss increased {self._alert_loss_window} consecutive steps",
-                        )
+            for msg in evaluate_training_step_alerts(
+                payload, self._mon_cfg, list(self._recent_losses)
+            ):
+                self._add_alert(expiry, msg)
 
-        if event == "eval_complete" and payload.get("sealbot_gate_passed") is False:
-            wr = payload.get("win_rate_vs_sealbot")
-            wr_str = f"{wr:.1%}" if wr is not None else "?"
-            self._add_alert(
-                expiry, f"SealBot eval FAILED — {wr_str} win rate"
-            )
+        if event == "eval_complete":
+            for msg in evaluate_eval_complete_alerts(payload):
+                self._add_alert(expiry, msg)
 
         # Expire old alerts
         self._alerts = [(t, m) for t, m in self._alerts if t > now]
