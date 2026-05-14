@@ -142,7 +142,6 @@ class AugmentedBootstrapDataset(torch.utils.data.Dataset):
 
 def make_augmented_collate(
     augment: bool,
-    board_size: int = BOARD_SIZE,
     encoding: str = "v6",
     with_global_crop: bool = False,
 ):
@@ -150,13 +149,13 @@ def make_augmented_collate(
 
     Two paths:
 
-    v6 (default, `encoding="v6"`, `board_size=19`):
+    v6 (default, `encoding="v6"`, trunk_size=19):
       - Stack states (N, 8, 19, 19) f16, upcast to f32.
       - Rust `engine.apply_symmetries_batch` for state scatter (one PyO3 hop).
       - Policy scatter via precomputed numpy index tables (12 × 362).
       - Chain planes recomputed from augmented stone planes 0 (cur) / 4 (opp).
 
-    v8 (`encoding="v8"`, `board_size=25`, `has_pass=False`):
+    v8 (`encoding="v8"`, trunk_size=25, `has_pass=False`):
       - Stack states (N, 11, 25, 25) f16.
       - Pure-numpy state scatter (same hex-symmetry math as Rust kernel) —
         the Rust `apply_symmetries_batch` PyO3 binding hardcodes BOARD_SIZE=19
@@ -171,9 +170,13 @@ def make_augmented_collate(
     With `augment=False`:
       - Stack as-is, no scatter.
       - Compute chain_planes from raw stone planes.
+
+    §176 P76: dropped redundant `board_size` parameter — read off
+    `spec.trunk_size` (canonical spatial size of trunk input tensor).
     """
     _enc_spec = _lookup_encoding(encoding)
     has_pass = _enc_spec.has_pass_slot
+    board_size = _enc_spec.trunk_size
     scatters_np = get_policy_scatters(board_size, has_pass=has_pass) if augment else None
 
     def _collate(batch):
@@ -1200,7 +1203,6 @@ def pretrain() -> None:
         num_samples=len(dataset),
         replacement=True,
     )
-    board_size_for_collate = _registry_resolve_cfg(config).trunk_size
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
@@ -1209,7 +1211,6 @@ def pretrain() -> None:
         pin_memory=(device.type == "cuda"),
         collate_fn=make_augmented_collate(
             augment=True,
-            board_size=board_size_for_collate,
             encoding=encoding,
             with_global_crop=(global_crops_array is not None),
         ),

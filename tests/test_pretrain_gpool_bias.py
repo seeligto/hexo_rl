@@ -62,7 +62,6 @@ def test_gpool_bias_pretrain_wiring_one_step():
 
     collate = make_augmented_collate(
         augment=True,
-        board_size=BOARD_SIZE_V6W25,
         encoding="v6w25",
         with_global_crop=True,
     )
