@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 
+from hexo_rl.encoding.resolvers import resolve_from_config
 from hexo_rl.utils.config import load_config
 from hexo_rl.utils.variant_validator import validate_variant_against_bases
 
@@ -62,6 +63,32 @@ def test_vast_resolves_to_sustained_values() -> None:
     assert cfg["mcts"]["n_simulations"] == 400
     assert cfg["eval_interval"] == 10000
     assert cfg["monitors"]["hard_abort_grad_norm"] == 10.0
+
+
+# ---------------------------------------------------------------------------
+# P69 — registry-sourced board_size / in_channels after SSR14 cleanup
+# ---------------------------------------------------------------------------
+
+
+def test_vast_resolves_encoding_from_registry() -> None:
+    """P69/SSR14: vast.yaml must NOT carry board_size or in_channels as
+    scattered keys; encoding: v6w25 in registry must supply both values."""
+    variant_path = ROOT / "configs" / "variants" / "vast.yaml"
+    with open(variant_path) as f:
+        raw = yaml.safe_load(f) or {}
+
+    # Scattered keys must be absent after P69 cleanup.
+    assert "board_size" not in raw, (
+        "vast.yaml still has redundant board_size scalar — P69 cleanup missed"
+    )
+    assert "in_channels" not in raw, (
+        "vast.yaml still has redundant in_channels scalar — P69 cleanup missed"
+    )
+
+    # Registry must supply the correct values from encoding: v6w25.
+    spec = resolve_from_config(raw)
+    assert spec.board_size == 25, f"expected board_size=25 from registry, got {spec.board_size}"
+    assert spec.n_planes == 8, f"expected n_planes(in_channels)=8 from registry, got {spec.n_planes}"
 
 
 # ---------------------------------------------------------------------------

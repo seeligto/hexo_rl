@@ -5,10 +5,6 @@
 
 # Encoding
 encoding: v6w25
-board_size: 25
-
-# Model
-in_channels: 8
 
 # Training — LR + gradient
 lr: 0.001

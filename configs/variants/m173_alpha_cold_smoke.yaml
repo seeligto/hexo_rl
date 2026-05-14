@@ -76,7 +76,6 @@
 
 # §172 A4 canonical — registry resolves all encoding-derived fields.
 encoding: v6w25
-board_size: 25
 
 training_steps_per_game: 4.0
 max_train_burst: 8
