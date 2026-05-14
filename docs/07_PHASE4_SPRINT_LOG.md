@@ -1247,6 +1247,73 @@ Forensics: `reports/refactor_audit/00_MASTER_PLAN.md`, `reports/refactor_audit/p
 
 ---
 
+## §176 — Phase A — KrakenBot eval ladder validation + colony POC (2026-05-14)
+
+Branch `phase4.5/s176_phase_a_validation`. Five-wave empirical investigation (A1–A4 parallel + B + C + D + E fresh-context review) closing **Q14 partial**, opening §176 Phase B implementation scope. §175 v6 sustained continues on vast; aborts at next eval boundary post-merge.
+
+**Waves:**
+- **A1** (`reports/s176_a1_kraken_smoke.md`) — submodule pinned `d9c5bfb`; verdict `INTEGRABLE_NOW` for MinimaxBot+RandomBot, `NEEDS_WEIGHTS_DOWNLOAD` for both MCTSBot variants (`vendor/bots/krakenbot/.gitignore:8`, no public mirror). MinimaxBot latency 222–232 ms @ time_limit∈{0.1,…,2.0}.
+- **A2** (`reports/s176_a2_eval_arch.md`) — verdict `CACHING_CLEAN`. Evaluator loop stone-by-stone (evaluator.py:201-210); `_pending_move` cache already proven on SealBot+KrakenBot. Minimal-diff plan ~150-180 LOC, 0 INV pins fire.
+- **A3** (`reports/s176_a3_selfplay_forensics.md`) — operator's "one large diffuse cluster" claim **REFUTED** by 21,371 §175 game records (vast run `c7e74d2842404a82bdd9f62edf740ea2`). Single-cluster fraction monotone-down 18.1% (20K) → 6.3% (50K); attractor is multi-island fragmentation. Step-change at 40K (n_components 9.61→13.77, +43%). **POC metric = `n_components` raw BFS, Cohen's d −0.822** (largest among 8 candidates). In-trainer `colony_extension_fraction` flat zero — does NOT capture §175 attractor; justifies new POC.
+- **A4** (`reports/s176_a4_falsified_scan.md`) — 9 falsified rows + 11 mechanism lessons (L1–L17 subset) + 4 regressions + 4 open Qs. 15-item do-not list each empirically sourced. Surfaced 7 master-prompt gaps (pool freeze, e30/e50 pretrain, radius+cosine pairing, v6 corpus blacklist, extended smoke boundary, frozen-spine rejection, realistic plumbing budget).
+- **B** (`reports/s176_b_smoke.md`) — `KrakenBotRandomBot` + `KrakenBotMCTSBot` skeleton + `scripts/tournament_validate.py` + 3 wrapper tests (PASS). 15-game smoke verdict `PROCEED-TO-C`. Flagged: `bootstrap_model.pt` is v6w25; `our_v6_*` Wave C must pin `bootstrap_model_v6.pt`.
+- **C** (`reports/s176_c_tourney/summary.md`) — 1050-game round-robin / 7 bots / 50 games/pair / laptop wall 85 min. Mid-tourney critical fix: KrakenBot MinimaxBot returns `[(0,0)]` sentinel when `_generate_turns` rejects all compounds (vendor lines 184/219/325/330); naive uniform-random fallback caused 0.42 sentinel/game in mid-game (ply ≥20). Smart neighbour-2 fallback (`_smart_legal_fallback` in `hexo_rl/bots/krakenbot_bot.py`) using KrakenBot's own `_D2_OFFSETS` pool prevented 438 uniform-random degradations across full run (fb_n2=438 / fb_rand=0).
+- **D** (`reports/s176_d_plan.md`) — §176 Phase B implementation plan, 6 commits ≤10 cap, ~990 LOC delta, zero bench gates (all cold paths).
+- **E** (`reports/s176_e_review.md`) — fresh-context audit verdict **CLEAR** across all 5 dimensions. 7-row risk register; 3 non-blocking strengthening notes for S6.
+
+**BT ladder (anchor=sealbot, n=50/pair):**
+
+| Bot | Elo | CI lo | CI hi | Wins/300 | Colony>0.3 rate |
+|---|---:|---:|---:|---:|---:|
+| sealbot | 0 | 0 | 0 | 274 (91.3%) | 35.0% [29.6, 40.9] |
+| our_v6_mcts128 | −62 | −150 | +26 | 263 (87.7%) | 33.5% [28.0, 39.4] |
+| kraken_minimax_strong | −494 | −612 | −376 | 182 (60.7%) | 7.1% [4.2, 11.8] |
+| kraken_minimax_fast | −499 | −618 | −381 | 181 (60.3%) | 15.5% [10.9, 21.4] |
+| kraken_random | −3072 | sat. | sat. | 7 (2.3%) | 85.7% [48.7, 97.4] (n=7) |
+| randombot | −3091 | sat. | sat. | 0 | n/a |
+| our_v6_argmax | −3102 | sat. | sat. | 0 | n/a |
+
+**V1–V6 verdicts** (full text + numbers in `reports/s176_c_tourney/summary.md`):
+
+| ID | Hypothesis | Verdict | Mechanism |
+|---|---|---|---|
+| V1 | strongest Kraken MCTS > SealBot | `N/A_MCTSBOT_BLOCKED`; modified-V1 FAIL | strongest tested Kraken (MinimaxBot @ 1.0s) is −494 Elo vs sealbot |
+| V2 | Kraken MinimaxBot @ 1.0s > MCTSBot | `N/A_MCTSBOT_BLOCKED`; side-finding: MinimaxBot @ 0.1s ≈ @ 1.0s (Δ −5 Elo within CI) | iterative-deepening saturates at depth 4 + sentinel-fallback rate inflates draws |
+| V3 | MinimaxBot colony ≤ MCTSBot colony − 10pp | `N/A_MCTSBOT_BLOCKED`; modified-V3 PASS | sealbot 35.0% vs kraken_minimax_strong 7.1%, gap 27.9pp, CIs non-overlapping by 18pp |
+| V4 | SealBot colony > all Kraken | FAIL (kraken_random 85.7% > sealbot 35.0%) | caveat: kraken_random only 7 wins, CI wide |
+| V5 | our_v6 strictly between Random and weakest Kraken | FAIL — our_v6_mcts128 is the 2nd-strongest bot in the tourney, not a weak baseline | our_v6 −62 BT vs kraken_random −3072 / randombot −3091 |
+| V6 | cross-pair colony ≠ self-pair (opponent-coupled) | PASS — sealbot colony ranges 0.000 (vs argmax) → 0.412 (vs kraken_minimax_strong), 41pp spread | colony emergence is opponent-driven, not bot-intrinsic |
+
+**D1–D5 master-prompt decision verdicts:**
+
+| ID | Verdict | Source |
+|---|---|---|
+| D1 BotProtocol caching not `get_turn` | BACKED | A2 CACHING_CLEAN + Wave C 1050-game stability |
+| D2 tourney includes all Kraken variants | PARTIAL — MCTSBot blocked, defer to §177+ until weights | A1 NEEDS_WEIGHTS_DOWNLOAD |
+| D3 MinimaxBot colony < MCTSBot colony | PARTIAL — modified BACKED (vs SealBot 27.9pp); MCTSBot blocked | V3 PASS |
+| D4 mix 75/15/10 | NEEDS_REVISION → adjusted bot pool: sealbot 50% / our_v6 30% / kraken_strong 15% / kraken_random 5% (Elo-derived per-source weights) | Wave C BT ladder |
+| D5 Source A first, Source B target | BACKED | V6 opponent-coupled colony + A4 do-not #1 mandates subprocess for B |
+
+**New mechanism lessons (L18+ candidates):**
+
+- **L18** — *Pretrained-bootstrap-at-MCTS-128 can match an external minimax engine.* Wave C: our_v6 bootstrap (`bootstrap_model_v6.pt`, untrained on selfplay) is 25/50 H2H vs SealBot @ 0.5s, BT delta −62. Implication: a "weak external opponent" framing for §175-style transfer-gap diagnoses is wrong at matched MCTS perception — the degradation is internal self-play head drift, not opponent-strength regression.
+- **L19** — *KrakenBot MinimaxBot `_generate_turns` sentinel `[(0,0)]` is the upstream strength floor, not the time_limit.* time_limit ∈ {0.1, 1.0} produces BT delta −5 Elo. The 0.42 sentinel/game rate in mid-board positions (ply ≥20) caps strength independently of search budget. Any bot wrapper consuming a third-party bot MUST validate the returned cell against the live engine board, not trust the bot's output blindly.
+- **L20** — *Argmax-only proxies (MCTS-1) are structurally below RandomBot.* `our_v6_argmax` (n_sims=1, temperature=0) went 0/300 — below randombot's 0/300-with-99-draws. The argmax-handicap memory (`feedback_v6_v8_same_training_data.md`) generalises beyond cross-encoding diagnostics: argmax-only mode is a degenerate strength sensor, only useful as a relative-direction signal, never as an absolute baseline.
+
+**New Falsified Hypotheses Register row candidates:**
+
+| § | Hypothesis | Falsified by | Mechanism |
+|---|---|---|---|
+| §176 Phase A | A3 — §175 selfplay terminal states are "one large diffuse cluster" | A3 §c-§d | Single-cluster fraction monotone-down 18.1%→6.3% across 20K–50K cohorts; modal pattern is multi-island fragmentation |
+| §176 Phase A | V2 — KrakenBot MinimaxBot @ 1.0s > @ 0.1s | Wave C V2 | BT delta −5 Elo, head-to-head 20-30 favouring 0.1s; iterative deepening saturates at depth 4 in our off-distribution game |
+| §176 Phase A | V5 — our v6 bootstrap @ MCTS-128 strictly between RandomBot and weakest Kraken | Wave C V5 | bootstrap MCTS-128 is the 2nd-strongest bot in the tourney (BT −62 vs sealbot); ~3030 Elo above RandomBot |
+
+**Forward pointer:** §176 Phase B implementation (S1–S6 per `reports/s176_d_plan.md` §2) opens on a fresh branch (TBD). Recommended 6 commits ≤10 cap. Mix-ratio bot-pool weights (sealbot 50 / our_v6 30 / kraken_strong 15 / kraken_random 5) per S4 design doc. Source B (live cross-bot) is design-only this sprint; subprocess isolation mandatory per A4 do-not #1.
+
+Forensics: `reports/s176_{a1,a2,a3,a4}_*.md`, `reports/s176_b_smoke{.md,/}`, `reports/s176_c_tourney/{summary.md,verdicts.txt,ratings.csv,h2h_matrix.csv,colony_table.csv,per_game.jsonl}`, `reports/s176_d_plan.md`, `reports/s176_e_review.md`. Memory: `project_176_phase_a_close.md` (to be written).
+
+---
+
 ## Supplementary tables — preserved from per-§ bodies
 
 ### §70 mode-collapse evidence (round-robin signature)
