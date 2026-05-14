@@ -17,6 +17,14 @@ import torch
 from hexo_rl.encoding import EncodingSpec
 from hexo_rl.eval.bradley_terry import compute_ratings
 from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
+from hexo_rl.eval.defaults import (
+    DEFAULT_COLONY_CENTROID_THRESHOLD,
+    DEFAULT_EVAL_RANDOM_OPENING_PLIES,
+    DEFAULT_EVAL_SEED_BASE,
+    DEFAULT_EVAL_TEMPERATURE,
+    DEFAULT_RANDOM_MODEL_SIMS,
+    DEFAULT_SEALBOT_MODEL_SIMS,
+)
 from hexo_rl.eval.display import print_colony_win_breakdown, print_match_result, print_ratings_table
 from hexo_rl.eval.evaluator import Evaluator
 from hexo_rl.eval.gate_logic import GateConfig, _binomial_ci, evaluate_gate
@@ -213,15 +221,15 @@ class EvalPipeline:
 
         # Merge our eval settings into the config the Evaluator reads
         eval_section = config_for_eval.get("evaluation", {})
-        eval_section.setdefault("random_model_sims", self.random_cfg.get("model_sims", 96))
-        eval_section.setdefault("sealbot_model_sims", self.sealbot_cfg.get("model_sims", 128))
+        eval_section.setdefault("random_model_sims", self.random_cfg.get("model_sims", DEFAULT_RANDOM_MODEL_SIMS))
+        eval_section.setdefault("sealbot_model_sims", self.sealbot_cfg.get("model_sims", DEFAULT_SEALBOT_MODEL_SIMS))
         eval_section.setdefault(
             "colony_centroid_threshold",
-            self.cfg.get("colony_centroid_threshold", 6.0),
+            self.cfg.get("colony_centroid_threshold", DEFAULT_COLONY_CENTROID_THRESHOLD),
         )
-        eval_section.setdefault("eval_temperature", self.cfg.get("eval_temperature", 0.5))
-        eval_section.setdefault("eval_random_opening_plies", self.cfg.get("eval_random_opening_plies", 4))
-        eval_section.setdefault("eval_seed_base", self.cfg.get("eval_seed_base", 42))
+        eval_section.setdefault("eval_temperature", self.cfg.get("eval_temperature", DEFAULT_EVAL_TEMPERATURE))
+        eval_section.setdefault("eval_random_opening_plies", self.cfg.get("eval_random_opening_plies", DEFAULT_EVAL_RANDOM_OPENING_PLIES))
+        eval_section.setdefault("eval_seed_base", self.cfg.get("eval_seed_base", DEFAULT_EVAL_SEED_BASE))
         config_for_eval["evaluation"] = eval_section
 
         evaluator = Evaluator(current_model, self.device, config_for_eval)

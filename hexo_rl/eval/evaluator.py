@@ -17,6 +17,14 @@ from engine import Board, MCTSTree
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
 from hexo_rl.env.game_state import GameState
 from hexo_rl.eval.colony_detection import is_colony_win
+from hexo_rl.eval.defaults import (
+    DEFAULT_C_PUCT,
+    DEFAULT_COLONY_CENTROID_THRESHOLD,
+    DEFAULT_EVAL_SEED_BASE,
+    DEFAULT_EVAL_TEMPERATURE,
+    DEFAULT_EVALUATOR_RANDOM_MODEL_SIMS,
+    DEFAULT_EVALUATOR_SEALBOT_MODEL_SIMS,
+)
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
 from hexo_rl.encoding import lookup as _lookup_encoding
@@ -67,7 +75,7 @@ class ModelPlayer(BotProtocol):
         temperature: float = 0.0,
     ) -> None:
         self._engine = LocalInferenceEngine(model, device)
-        self._tree = MCTSTree(float(config.get("mcts", config).get("c_puct", 1.5)))
+        self._tree = MCTSTree(float(config.get("mcts", config).get("c_puct", DEFAULT_C_PUCT)))
         self._n_sims = n_sims
         self._config = config
         self._temperature = temperature
@@ -126,15 +134,15 @@ class Evaluator:
         self.device = device
         self.config = config
         eval_cfg = config.get("evaluation", config.get("eval", {}))
-        self.random_model_sims = int(eval_cfg.get("random_model_sims", 100))
-        self.sealbot_model_sims = int(eval_cfg.get("sealbot_model_sims", 200))
+        self.random_model_sims = int(eval_cfg.get("random_model_sims", DEFAULT_EVALUATOR_RANDOM_MODEL_SIMS))
+        self.sealbot_model_sims = int(eval_cfg.get("sealbot_model_sims", DEFAULT_EVALUATOR_SEALBOT_MODEL_SIMS))
         self.progress_every = max(1, int(eval_cfg.get("progress_every", 1)))
         self.colony_centroid_threshold = float(
-            eval_cfg.get("colony_centroid_threshold", 6.0)
+            eval_cfg.get("colony_centroid_threshold", DEFAULT_COLONY_CENTROID_THRESHOLD)
         )
-        self._eval_temperature = float(eval_cfg.get("eval_temperature", 0.5))
+        self._eval_temperature = float(eval_cfg.get("eval_temperature", DEFAULT_EVAL_TEMPERATURE))
         self._eval_random_opening_plies = int(eval_cfg.get("eval_random_opening_plies", 0))
-        self._eval_seed_base = int(eval_cfg.get("eval_seed_base", 42))
+        self._eval_seed_base = int(eval_cfg.get("eval_seed_base", DEFAULT_EVAL_SEED_BASE))
 
     def _log_progress(self, phase: str, idx: int, total: int, start_time: float, win_count: int) -> None:
         if idx % self.progress_every != 0 and idx != total:
