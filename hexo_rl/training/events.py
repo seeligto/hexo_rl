@@ -1,112 +1,24 @@
-"""Self-play loop side-channel orchestration: eval drain, axis-distribution,
-buffer save, pretrain-replay, training-event emission.
+"""Training-loop event emitters: pretrain-replay, axis-distribution, training-step.
 
-Each function is called from training/loop.py at a specific cadence; none
-hold loop state. Extracted from training/loop.py per §159 refactor. No
-behavior change.
+Extracted from training/orchestrator.py per §176 P15. No behavior change.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import threading
 from pathlib import Path
 from typing import Any, Optional
 
 import structlog
 
-from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.monitoring.early_game_probe import (
     EARLY_GAME_ENTROPY_WARN_THRESHOLD,
     EarlyGameProbe,
 )
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.gpu_monitor import GPUMonitor
-from hexo_rl.training.anchor import save_best_model_atomic
 
 log = structlog.get_logger(__name__)
-
-
-def drain_pending_eval(
-    eval_thread: Optional[threading.Thread],
-    eval_result: list[Optional[dict[str, Any]]],
-    eval_model: Optional[HexTacToeNet],
-    best_model: Optional[HexTacToeNet],
-    best_model_path: Path,
-    best_model_step: Optional[int],
-    pool: Any,
-    train_step: int,
-) -> tuple[Optional[threading.Thread], Optional[int]]:
-    """Drain the most recent completed eval: emit event + promote if gated.
-
-    Safe at normal eval ticks and at shutdown — the latter is the whole
-    point: without a post-``_run_loop`` drain, a promotion from the final
-    eval before Ctrl-C / ``stop_step`` never hits ``best_model.pt`` and
-    is silently lost on next restart (D-012).
-
-    Returns ``(new_eval_thread, new_best_model_step)``; callers should
-    rebind both. No-op when the thread is still running.
-    """
-    if eval_thread is None or eval_thread.is_alive():
-        return eval_thread, best_model_step
-    prev = eval_result[0]
-    if prev is None:
-        return None, best_model_step
-    emit_event({
-        "event": "eval_complete",
-        "step": prev.get("step", train_step),
-        "elo_estimate": prev.get("elo_estimate"),
-        "win_rate_vs_sealbot": prev.get("wr_sealbot"),
-        "eval_games": prev.get("eval_games", 0),
-        "anchor_promoted": prev.get("promoted", False),
-        "sealbot_gate_passed": prev.get("sealbot_gate_passed"),
-    })
-    new_best_step = best_model_step
-    if prev.get("promoted"):
-        assert eval_model is not None
-        assert best_model is not None
-        # C1: promote the snapshot that actually passed the gate.
-        eval_base = getattr(eval_model, "_orig_mod", eval_model)
-        best_model.load_state_dict(eval_base.state_dict())
-        best_model.eval()
-        save_best_model_atomic(best_model, best_model_path)
-        new_best_step = prev.get("step", train_step)
-        pool._inference_server.load_state_dict_safe(eval_base.state_dict())
-        log.info(
-            "best_model_promoted",
-            step=train_step,
-            eval_step=new_best_step,
-            path=str(best_model_path),
-            graduated=True,
-            wr_best=prev.get("wr_best"),
-        )
-    eval_result[0] = None
-    return None, new_best_step
-
-
-def try_save_buffer(
-    buffer: Any,
-    mixing_cfg: dict[str, Any],
-    trigger: str,
-    recent_buffer: Optional[Any] = None,
-) -> None:
-    """Save replay buffer (and optionally recent_buffer) if buffer_persist is enabled."""
-    if not mixing_cfg.get("buffer_persist", False):
-        return
-    bp = Path(mixing_cfg.get("buffer_persist_path", "checkpoints/replay_buffer.bin"))
-    try:
-        buffer.save_to_path(str(bp))
-        log.info("buffer_saved", path=str(bp), positions=buffer.size, trigger=trigger)
-    except Exception as exc:
-        log.warning("buffer_save_failed", path=str(bp), error=str(exc))
-    if recent_buffer is not None and recent_buffer.size > 0:
-        rbp = Path(str(bp) + ".recent")
-        try:
-            n = recent_buffer.save_to_path(str(rbp))
-            log.info("recent_buffer_saved", path=str(rbp), positions=n, trigger=trigger)
-        except Exception as exc:
-            log.warning("recent_buffer_save_failed", path=str(rbp), error=str(exc))
 
 
 def replay_pretrain_events(args: argparse.Namespace) -> None:

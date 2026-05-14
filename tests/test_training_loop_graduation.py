@@ -200,7 +200,7 @@ def test_final_promotion_drains_on_shutdown(tmp_path: Path):
     restart (D-012). Exercises the exported helper directly.
     """
     import threading
-    from hexo_rl.training.orchestrator import drain_pending_eval as _drain_pending_eval
+    from hexo_rl.training.eval_drain import drain_pending_eval as _drain_pending_eval
 
     EVAL_VALUE = 5.0
     INITIAL_BEST_VALUE = -1.0
@@ -263,7 +263,7 @@ def test_drain_noop_when_eval_thread_still_running():
     """If the eval thread is still alive at shutdown, drain must not touch
     best_model — draining half-complete state would poison the anchor."""
     import threading
-    from hexo_rl.training.orchestrator import drain_pending_eval as _drain_pending_eval
+    from hexo_rl.training.eval_drain import drain_pending_eval as _drain_pending_eval
 
     # Long-running thread (simulated; we won't actually wait for it).
     started = threading.Event()
