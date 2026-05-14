@@ -45,6 +45,7 @@ from hexo_rl.model.gpool_bias import GpoolBiasBranch
 from hexo_rl.model.partial_conv import PartialConv2d
 from hexo_rl.model.pooling import (
     SUPPORTED_POOL_TYPES,
+    MinMaxPool,
     PMAGlobalPool,
     PMAPool,
     build_pool,
@@ -850,7 +851,6 @@ class HexTacToeNet(nn.Module):
         # the same scatter-max-in-prob-space rule as the bot. Lifted into the
         # model so callers can switch pool_type without reaching into bot
         # internals.
-        from hexo_rl.model.pooling import MinMaxPool
 
         # §170 P3 — encode global crop ONCE for this single board, then
         # broadcast the (1, ...) biases to every cluster window before the
