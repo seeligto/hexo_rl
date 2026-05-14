@@ -6,7 +6,11 @@ from collections import deque
 
 import pytest
 
-from hexo_rl.selfplay.instrumentation import PoolInstrumentation, _compute_colony_extension
+from hexo_rl.selfplay.instrumentation import (
+    PoolInstrumentation,
+    _compute_colony_extension,
+    _compute_stride5_metrics,
+)
 
 
 def _lock() -> threading.Lock:
@@ -83,3 +87,27 @@ def test_colony_extension_pure_function():
     count, total = _compute_colony_extension(moves)
     assert total == 2
     assert count == 2  # both stones far from any opponent stone
+
+
+# ── _compute_stride5_metrics (§176 P16, formerly in pool.py) ─────────────────
+
+
+def test_stride5_metrics_empty_history():
+    assert _compute_stride5_metrics([]) == (0, 0)
+
+
+def test_stride5_metrics_chain_along_r_row():
+    # Four stones on r=0 at q ∈ {3, 8, 13, 18} → stride-5 chain of length 4.
+    moves = [(3, 0), (8, 0), (13, 0), (18, 0)]
+    stride5_max, row_max = _compute_stride5_metrics(moves)
+    assert stride5_max == 4
+    assert row_max == 4
+
+
+def test_stride5_metrics_no_stride5_pattern():
+    # Adjacent stones — row_max counts them; stride5_max reads each stone as
+    # a degenerate "chain of length 1" (no stride-5 follow-on in row).
+    moves = [(0, 0), (1, 0), (2, 0)]
+    stride5_max, row_max = _compute_stride5_metrics(moves)
+    assert stride5_max == 1
+    assert row_max == 3

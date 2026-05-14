@@ -18,6 +18,70 @@ from hexo_rl.utils.coordinates import axial_distance
 # (W1 forensics R1, 2026-04-19).
 _COLONY_EXT_HEX_DIST = 6
 
+# Phase B' Class-4 stride-5 detector (§152).  Targets the q-axis stride-5
+# spam pattern (mixed-color stones at distance-5 spacing along a single hex
+# row).  Stride 5 is the inclusive boundary of LEGAL_MOVE_RADIUS = 5 (§146)
+# and CLUSTER_THRESHOLD = 5 (§151 δ.c); existing macro detectors
+# (colony_extension_fraction at hex_dist > 6, axis_distribution at
+# distance-1 adjacency) miss it by construction.
+_STRIDE5_STEP = 5
+
+
+def _compute_stride5_metrics(
+    move_history: list[tuple[int, int]],
+) -> tuple[int, int]:
+    """Phase B' Class-4 detector — return (stride5_run_max, row_max_density).
+
+    Scans all hex rows in all three axes (matching ``_HEX_AXES``):
+
+      axis_q (E-W,    dq=+1, dr= 0): row keyed by r,        position = q
+      axis_r (NW-SE,  dq= 0, dr=+1): row keyed by q,        position = r
+      axis_s (NE-SW,  dq=+1, dr=-1): row keyed by s=-q-r,   position = q
+
+    ``stride5_run_max`` is the longest chain of stones lying on a single hex
+    row whose along-row coordinates are consecutive at step 5 (e.g. q ∈
+    {3, 8, 13, 18} on the same r-row is a chain of length 4).  Color-blind:
+    we measure stone-on-row geometry, not same-color sub-runs.
+
+    ``row_max_density`` is the maximum stone count on any single hex row in
+    any of the three axes (densest row in the densest direction).
+
+    Per-game cost: O(|stones|).  Budget << 1 ms at typical game length.
+    """
+    if not move_history:
+        return (0, 0)
+
+    bucket_r: dict[int, set[int]] = {}
+    bucket_q: dict[int, set[int]] = {}
+    bucket_s: dict[int, set[int]] = {}
+    for q, r in move_history:
+        s = -q - r
+        bucket_r.setdefault(r, set()).add(q)
+        bucket_q.setdefault(q, set()).add(r)
+        bucket_s.setdefault(s, set()).add(q)
+
+    row_max = 0
+    stride5_max = 0
+    step = _STRIDE5_STEP
+    for buckets in (bucket_r, bucket_q, bucket_s):
+        for posset in buckets.values():
+            n = len(posset)
+            if n > row_max:
+                row_max = n
+            if n < 2:
+                continue
+            for p in posset:
+                if (p - step) in posset:
+                    continue  # not start of chain
+                length = 1
+                cur = p
+                while (cur + step) in posset:
+                    length += 1
+                    cur += step
+                if length > stride5_max:
+                    stride5_max = length
+    return (stride5_max, row_max)
+
 
 def _compute_colony_extension(move_history: list[tuple[int, int]]) -> tuple[int, int]:
     """Return (colony_extension_count, classified_total) for a finished game.
