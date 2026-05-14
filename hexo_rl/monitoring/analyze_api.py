@@ -45,7 +45,21 @@ _cache_lock = threading.Lock()
 _cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()  # path → entry
 
 # Single worker thread for inference + MCTS (prevents blocking Flask/SocketIO)
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="analyze")
+# Lazily initialised on first use so that importing this module does not
+# spawn a background thread (important for test isolation).
+_executor: Optional[ThreadPoolExecutor] = None
+_executor_lock = threading.Lock()
+
+
+def _get_executor() -> ThreadPoolExecutor:
+    global _executor
+    if _executor is None:
+        with _executor_lock:
+            if _executor is None:
+                _executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="analyze"
+                )
+    return _executor
 
 
 def _get_model(checkpoint_path: str) -> Tuple[Any, torch.device, dict]:
@@ -407,7 +421,7 @@ def analyze():
 
         return result
 
-    future = _executor.submit(_do_analyze)
+    future = _get_executor().submit(_do_analyze)
     result = future.result(timeout=60)
 
     status = result.pop("_status", 200)
