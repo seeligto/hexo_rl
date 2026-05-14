@@ -37,14 +37,16 @@ log = structlog.get_logger()
 # §173 A6: registry spec for v6w25 — use spec fields instead of hardcoded consts.
 _V6W25_SPEC: EncodingSpec = _lookup_encoding("v6w25")
 
-# v6w25 dimensions (mirrors engine/src/encoding/registry.toml [encodings.v6w25]).
-BOARD_SIZE_V6W25: int = 25
+# §176 P44 — v6w25 dimensions sourced from the canonical registry spec.
+# Keeps the public module-level names but eliminates the shadow constants
+# (previously hardcoded; risk of drift against registry).
+BOARD_SIZE_V6W25: int = _V6W25_SPEC.board_size  # 25
 HALF_V6W25: int = (BOARD_SIZE_V6W25 - 1) // 2  # 12
-N_PLANES_V6W25: int = 8
-N_CELLS_V6W25: int = BOARD_SIZE_V6W25 * BOARD_SIZE_V6W25  # 625
-N_ACTIONS_V6W25: int = N_CELLS_V6W25 + 1  # 626 (cells + pass; v6 wire-format compat)
-CLUSTER_THRESHOLD_V6W25: int = 8
-LEGAL_MOVE_RADIUS_V6W25: int = 8
+N_PLANES_V6W25: int = _V6W25_SPEC.n_planes  # 8
+N_CELLS_V6W25: int = _V6W25_SPEC.n_cells  # 625
+N_ACTIONS_V6W25: int = _V6W25_SPEC.n_actions  # 626 (cells + pass; v6 wire-format compat)
+CLUSTER_THRESHOLD_V6W25: int = _V6W25_SPEC.cluster_threshold  # 8
+LEGAL_MOVE_RADIUS_V6W25: int = _V6W25_SPEC.legal_move_radius  # 8
 
 
 def _make_v6w25_board() -> Board:
