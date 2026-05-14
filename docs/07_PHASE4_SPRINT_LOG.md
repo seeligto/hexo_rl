@@ -1215,6 +1215,38 @@ Forensics: `reports/s174_v6w25_investigation.md`, `reports/s174_bootstrap_invest
 
 ---
 
+## §176 — Python codebase refactor cycle (2026-05-13 → 2026-05-14)
+
+**Scope:** 80-proposal audit + 6-phase execute on `refactor/python-audit` branch.
+
+**Phases:**
+- Phase 0 — master plan fixup (`c4eaa53` CLAUDE.md scattered-keys clarification) + drift annotations (`838b5ed` open-questions log)
+- Phase 1a/b — HEAD-blocker fixes (B2 `sweep_harness` restore, B1 `HexTacToeNet` encoding whitelist→registry)
+- Phase 2 — invariant pre-flight tests (12 INV pins under `tests/refactor_invariants/`) + 4 low-risk additions
+- Phase 3a — W1 deletions (-274 LOC net)
+- Phase 3b — W1 extracts + SSR fixes + small renames (24 commits)
+- Phase 4 — W2 splits + extracts (25 commits; 3 bench-gated items)
+- Phase 5 — W3 cross-bucket consolidation (15 commits; 4 bench-gated items)
+
+**Outcomes:**
+- 86 commits landed `c4eaa53..HEAD` (post-rebase HEAD `7233d5d`); 171 files changed, +12102/-7446 (net +4656; dominated by P39 6-module pretrain split, P70 train.py orchestrator decomposition, and INV/fixture test scaffolding)
+- 75 of 80 proposals landed (5 NEEDS-WORK resolved at Phase 0; 3 deferred to W3 sub-items)
+- Cross-bucket SSR debt cleared: `utils/encoding.py` + `utils/constants.py` v6/v8 entries retired; ~37 callers migrated to §172 registry; `hexo_rl/bootstrap/bots/` retired (P78a–d) — all three SSR grep targets return 0 post-merge
+- 12 behavior invariants pinned as regression tests under `tests/refactor_invariants/` (all green post-merge)
+- HEAD-blocker B1 (v7-family pretrain crash via whitelist) + B2 (sweep_harness broken imports after §163 deletion) fixed
+- Test count: 1518 → 1574 (+56 from new fixtures + INV pins). Single pre-existing failure `test_no_stale_plane_refs` baselined and unchanged
+- Bench: all hot-path edits verified within ±5% on 10-metric gate (P3, P4, P8, P22, P24); cold-path skips documented per `docs/refactor-template.md`
+- `make test.py` post-merge: 1574 passed / 1 failed (pre-existing) / 17 skipped / 4 deselected / 1 xpassed
+- §175 selfplay state unaffected throughout — refactor branch strictly isolated; rebase onto `phase4.5/m176a_v7mw` HEAD `838b5ed` was conflict-free (no file overlap with in-flight commits)
+
+**Deferred to future micro-refactor cycle** (tracked as `Q-§176-residual` in `06_OPEN_QUESTIONS.md`):
+- P24b/c: `HexTacToeNet.__init__` (262 LOC), `forward` (162 LOC), `aggregated_forward_K` (113 LOC) further decomposition — partial landed in Phase 5
+- P70: `scripts.train::seed_everything` circular-import shim lifted inside orchestrator helper — clean candidate
+
+Forensics: `reports/refactor_audit/00_MASTER_PLAN.md`, `reports/refactor_audit/p6_phase4.5_inflight_commits.txt`, Phase 5 reviewer verdict (in conversation history of `phase4.5/m176a_v7mw` § auditor session).
+
+---
+
 ## Supplementary tables — preserved from per-§ bodies
 
 ### §70 mode-collapse evidence (round-robin signature)

@@ -749,6 +749,28 @@ Post-§161: 991 passed, 8 skipped.
 
 ---
 
+## Q-§176-residual — Micro-refactor candidates deferred from §176
+
+**Status:** OPEN [LOW] — absorb during normal §177+ work, or batch as a follow-up micro-refactor cycle.
+
+Two items deferred at §176 close-out:
+
+- **P24b/c:** `HexTacToeNet.__init__` (262 LOC), `forward` (162 LOC),
+  `aggregated_forward_K` (113 LOC) — further decomposition. P24-partial
+  landed in §176 Phase 5; the remaining `__init__`/`forward`/aggregator
+  bodies are still long but no longer carry hot-path risk after §172
+  registry threading.
+- **P70:** `scripts.train::seed_everything` circular-import shim lifted
+  inside the orchestrator helper module from the train.py decomposition
+  — clean candidate, low risk.
+
+**Scope:** Either can be absorbed opportunistically; no bench gate
+required for cold-path edits (per `docs/refactor-template.md`). Hot-path
+edits inside `HexTacToeNet.forward` (P24c) do require the 10-metric
+bench gate.
+
+---
+
 ## Deferred (Phase 5+)
 
 | # | Question | Reason deferred |
