@@ -8,13 +8,17 @@ import math
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import structlog
 
 log = structlog.get_logger()
+
+if TYPE_CHECKING:
+    from hexo_rl.encoding import EncodingSpec
+    from hexo_rl.model.network import HexTacToeNet
 
 
 # ── State-dict inspection helpers ────────────────────────────────────────────
@@ -333,3 +337,96 @@ def normalize_model_state_dict_keys(
                 normalized.setdefault(key[len("trunk."):], value)
 
     return normalized
+
+
+def load_state_dict_strict(
+    model: nn.Module, state_dict: Dict[str, torch.Tensor]
+) -> None:
+    """Load state_dict with explicit missing/unexpected key reporting.
+
+    `normalize_model_state_dict_keys` adds tower/trunk.tower aliases; one side
+    is always "unexpected" to the live model. Those are filtered. Anything
+    else missing or unexpected raises — pre-§99 BN keys are rejected at
+    normalize time (F-002), and silent drops at load time hide the same
+    class of bug (B-002).
+
+    §176 P47: lifted from Trainer._load_state_dict_strict so the public
+    `load_inference_model` API and probe scripts share one implementation.
+    Trainer._load_state_dict_strict remains as a thin delegate.
+    """
+    load_result = model.load_state_dict(state_dict, strict=False)
+    missing_keys = list(load_result.missing_keys)
+    unexpected_keys = list(load_result.unexpected_keys)
+
+    model_key_set = set(model.state_dict().keys())
+    benign_unexpected = []
+    real_unexpected = []
+    for k in unexpected_keys:
+        if k.startswith("tower."):
+            alias = f"trunk.{k}"
+        elif k.startswith("trunk.tower."):
+            alias = k[len("trunk."):]
+        else:
+            alias = None
+        if alias is not None and alias in model_key_set:
+            benign_unexpected.append(k)
+        else:
+            real_unexpected.append(k)
+
+    if missing_keys or real_unexpected:
+        log.error(
+            "checkpoint_key_mismatch",
+            missing_count=len(missing_keys),
+            unexpected_count=len(real_unexpected),
+            missing_examples=missing_keys[:5],
+            unexpected_examples=real_unexpected[:5],
+        )
+        raise RuntimeError(
+            f"Checkpoint load_state_dict mismatch: missing={len(missing_keys)} keys, "
+            f"unexpected={len(real_unexpected)} keys (after filtering tower/trunk.tower aliases). "
+            f"Missing examples: {missing_keys[:3]}. Unexpected examples: {real_unexpected[:3]}. "
+            "If this is an intentional architecture change, retrain from bootstrap_model.pt."
+        )
+
+
+def load_inference_model(
+    checkpoint_path: str | Path,
+    config: Dict[str, Any] | None = None,
+    device: torch.device | None = None,
+) -> Tuple["HexTacToeNet", "EncodingSpec", str]:
+    """Load a checkpoint into an inference-ready HexTacToeNet.
+
+    Public entry point for ckpt → (model, encoding_spec, label) used by
+    bots, viewer, and probe scripts. Delegates encoding-aware construction
+    (pool_type / gpool_bias / canvas_realness detection, v6 vs v8
+    branching) to ``eval.checkpoint_loader.load_model_with_encoding``;
+    ``config`` is reserved for future hparam fallbacks the eval loader
+    does not need (the eval loader infers everything from the state dict
+    today). The arg is kept in the signature so call sites that pass it
+    (OurModelBot, future bot adapters) don't need to change when those
+    fallbacks are added.
+
+    Args:
+        checkpoint_path: path to a .pt checkpoint.
+        config:          optional config dict — currently unused. Reserved
+                         for future hparam fallbacks (filters, res_blocks,
+                         se_reduction_ratio) when state-dict inference is
+                         insufficient.
+        device:          target device. Defaults to `best_device()`.
+
+    Returns:
+        (model, EncodingSpec, label) — model is `.to(device).eval()`.
+        `label` is the canonical encoding name (e.g. "v6", "v6w25", "v8").
+
+    §176 P47.
+    """
+    # Local imports to keep checkpoints.py free of model/encoding cycles
+    # at module-import time.
+    from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
+
+    if device is None:
+        from hexo_rl.utils.device import best_device
+        device = best_device()
+
+    del config  # reserved for future hparam fallbacks; see docstring.
+    return load_model_with_encoding(checkpoint_path, device)

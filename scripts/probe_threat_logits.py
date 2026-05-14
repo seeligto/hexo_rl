@@ -62,8 +62,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
-from hexo_rl.training.trainer import Trainer
+from hexo_rl.training.checkpoints import load_inference_model
 
 # BOARD_SIZE is now encoding-derived; see _get_board_size() below.
 # Hard-coded 19 removed per §173 eval-fix.
@@ -148,31 +147,26 @@ def load_model(
     device: Optional[torch.device] = None,
     encoding_name: str = "v6",
 ) -> HexTacToeNet:
-    """Load checkpoint → HexTacToeNet in eval mode (FP32 always)."""
+    """Load checkpoint → HexTacToeNet in eval mode (FP32 always).
+
+    `encoding_name` is now an integrity check: load_inference_model
+    auto-detects the encoding from the state dict (and filename for
+    v6w25), and we raise if it disagrees with the caller's expectation.
+    """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
-    state = Trainer._extract_model_state(ckpt)
-    state = normalize_model_state_dict_keys(state)
-    hparams = Trainer._infer_model_hparams(state)
-
-    from hexo_rl.encoding import lookup as _lookup_encoding
-    spec = _lookup_encoding(encoding_name)
-    in_channels = int(hparams.get("in_channels", spec.n_planes))
-    board_size = _get_board_size(encoding_name)
-    model = HexTacToeNet(
-        board_size=board_size,
-        in_channels=in_channels,
-        filters=int(hparams.get("filters", 128)),
-        res_blocks=int(hparams.get("res_blocks", 12)),
-        se_reduction_ratio=int(hparams.get("se_reduction_ratio", 4)),
-        encoding=encoding_name,
-    )
-    Trainer._load_state_dict_strict(model, state)
+    # §176 P47: public load_inference_model handles state-dict
+    # extraction, normalization, encoding detection, hparam inference,
+    # and strict load.
+    model, _spec, label = load_inference_model(ckpt_path, {}, device=device)
+    if label != encoding_name:
+        raise ValueError(
+            f"probe_threat_logits: checkpoint encoding {label!r} != "
+            f"requested encoding_name={encoding_name!r}"
+        )
     # FP32 throughout — avoids autocast-induced non-determinism at zero accuracy cost.
-    model = model.float().to(device).eval()
-    return model
+    return model.float()
 
 
 # ── Fixture loading ───────────────────────────────────────────────────────────

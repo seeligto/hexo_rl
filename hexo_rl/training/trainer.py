@@ -49,6 +49,7 @@ from hexo_rl.training.checkpoints import (
     extract_model_state as _extract_model_state_impl,
     infer_model_hparams as _infer_model_hparams_impl,
     infer_res_blocks_from_state_dict as _infer_res_blocks_impl,
+    load_state_dict_strict as _load_state_dict_strict_impl,
 )
 # §172 A4.3: re-export legacy spec resolver for backward-compat imports
 # (e.g. tests/test_training_registry_plumbing.py). Cold-path checkpoint
@@ -900,50 +901,10 @@ class Trainer:
     # (our_model_bot, scripts/probe_*, tests/test_analyze_api parity check).
     _infer_res_blocks_from_state_dict = staticmethod(_infer_res_blocks_impl)
     _infer_model_hparams = staticmethod(_infer_model_hparams_impl)
-
-    @staticmethod
-    def _load_state_dict_strict(model: nn.Module, state_dict: Dict[str, torch.Tensor]) -> None:
-        """Load state_dict with explicit missing/unexpected key reporting.
-
-        normalize_model_state_dict_keys adds tower/trunk.tower aliases; one side
-        is always "unexpected" to the live model. Those are filtered. Anything
-        else missing or unexpected raises — we already reject pre-§99 BN keys
-        at normalize time (F-002), and silent drops at load time hide the same
-        class of bug (B-002).
-        """
-        load_result = model.load_state_dict(state_dict, strict=False)
-        missing_keys = list(load_result.missing_keys)
-        unexpected_keys = list(load_result.unexpected_keys)
-
-        model_key_set = set(model.state_dict().keys())
-        benign_unexpected = []
-        real_unexpected = []
-        for k in unexpected_keys:
-            if k.startswith("tower."):
-                alias = f"trunk.{k}"
-            elif k.startswith("trunk.tower."):
-                alias = k[len("trunk."):]
-            else:
-                alias = None
-            if alias is not None and alias in model_key_set:
-                benign_unexpected.append(k)
-            else:
-                real_unexpected.append(k)
-
-        if missing_keys or real_unexpected:
-            log.error(
-                "checkpoint_key_mismatch",
-                missing_count=len(missing_keys),
-                unexpected_count=len(real_unexpected),
-                missing_examples=missing_keys[:5],
-                unexpected_examples=real_unexpected[:5],
-            )
-            raise RuntimeError(
-                f"Checkpoint load_state_dict mismatch: missing={len(missing_keys)} keys, "
-                f"unexpected={len(real_unexpected)} keys (after filtering tower/trunk.tower aliases). "
-                f"Missing examples: {missing_keys[:3]}. Unexpected examples: {real_unexpected[:3]}. "
-                "If this is an intentional architecture change, retrain from bootstrap_model.pt."
-            )
+    # §176 P47: lifted to checkpoints.load_state_dict_strict; staticmethod
+    # surface preserved for back-compat callers (trainer_ckpt_load.py via
+    # `cls._load_state_dict_strict`).
+    _load_state_dict_strict = staticmethod(_load_state_dict_strict_impl)
 
     # §176 P79: see comment near _infer_model_hparams above.
     _extract_model_state = staticmethod(_extract_model_state_impl)

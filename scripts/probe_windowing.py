@@ -38,8 +38,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
-from hexo_rl.training.trainer import Trainer
+from hexo_rl.training.checkpoints import load_inference_model
 from hexo_rl.eval.windowing_diagnostic import (
     BOARD_SIZE, HALF, SENTINEL,
     hex_dist,
@@ -57,26 +56,16 @@ DEFAULT_RUNS_ROOT = REPO_ROOT / "runs"
 # ── Model loading (mirrors probe_threat_logits.py) ─────────────────────────────
 
 def load_model(ckpt_path: Path, device: torch.device) -> HexTacToeNet:
-    ckpt = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
-    state = Trainer._extract_model_state(ckpt)
-    state = normalize_model_state_dict_keys(state)
-    hparams = Trainer._infer_model_hparams(state)
-
-    in_channels = int(hparams.get("in_channels", 8))
-    if in_channels != 8:
+    # §176 P47: public load_inference_model auto-detects encoding and
+    # builds the matching net. Probe rejects non-v6 checkpoints (v6w25 /
+    # v8 use different windowing semantics, so the diagnostic is invalid).
+    model, _spec, label = load_inference_model(ckpt_path, {}, device=device)
+    if label != "v6":
         raise ValueError(
-            f"probe_windowing: refusing to load — expected in_channels=8 (v6), "
-            f"got {in_channels}. hparams={hparams}. Wrong checkpoint?"
+            f"probe_windowing: refusing to load — expected encoding='v6', "
+            f"got {label!r}. Wrong checkpoint?"
         )
-    model = HexTacToeNet(
-        board_size=int(hparams.get("board_size", 19)),
-        in_channels=in_channels,
-        filters=int(hparams.get("filters", 128)),
-        res_blocks=int(hparams.get("res_blocks", 12)),
-        se_reduction_ratio=int(hparams.get("se_reduction_ratio", 4)),
-    )
-    Trainer._load_state_dict_strict(model, state)
-    return model.float().to(device).eval()
+    return model.float()
 
 
 # ── ASCII histogram helper ─────────────────────────────────────────────────────
