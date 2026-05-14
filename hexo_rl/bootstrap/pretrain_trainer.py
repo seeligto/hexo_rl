@@ -271,7 +271,7 @@ class BootstrapTrainer:
                     policy_entropy=round(policy_entropy, 4),
                     value_accuracy=round(value_accuracy, 4),
                     lr=lr,
-                    grad_norm=grad_norm,
+                    grad_norm=round(grad_norm, 4),
                     corpus_mix={"pretrain": 1.0, "self_play": 0.0},
                 )
                 if gate_val is not None:

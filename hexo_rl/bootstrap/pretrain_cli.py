@@ -29,7 +29,6 @@ import torch
 import torch.optim as optim
 from rich.console import Console
 
-from hexo_rl.augment.luts import get_policy_scatters  # noqa: F401  (kept for symmetry w/ legacy module)
 from hexo_rl.bootstrap.paths import QUALITY_SCORES_PATH
 from hexo_rl.bootstrap.pretrain_dataset import (
     AugmentedBootstrapDataset,
