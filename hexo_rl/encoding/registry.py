@@ -15,11 +15,16 @@ import pathlib
 import tomllib
 from typing import Any, Iterable, Mapping
 
+from hexo_rl.encoding._validators import (
+    validate_cross_field_consistency,
+    validate_kept_plane_indices,
+    validate_multi_window_invariants,
+    validate_plane_layout,
+    validate_pool_enums,
+)
 from hexo_rl.encoding.spec import EncodingSpec, PolicyPool, ValuePool
 
 
-_VALID_VALUE_POOLS = ("none", "min", "max", "mean")
-_VALID_POLICY_POOLS = ("none", "scatter_max", "scatter_mean")
 _NONE_SENTINEL = "none"
 
 
@@ -125,105 +130,30 @@ def _build_and_validate(name: str, body: Mapping[str, Any]) -> EncodingSpec:
             kept_plane_indices = tuple(kept_plane_indices_raw)
     n_source_planes = _req("n_source_planes", int)
 
-    if value_pool is not None and value_pool not in _VALID_VALUE_POOLS:
-        errors.append(
-            f"value_pool: must be one of {list(_VALID_VALUE_POOLS)}; got {value_pool!r}"
-        )
-    if policy_pool is not None and policy_pool not in _VALID_POLICY_POOLS:
-        errors.append(
-            f"policy_pool: must be one of {list(_VALID_POLICY_POOLS)}; got {policy_pool!r}"
-        )
-
-    # Cross-field invariants (mirror Rust validator).
-    if plane_layout and n_planes is not None and len(plane_layout) != n_planes:
-        errors.append(
-            f"len(plane_layout)={len(plane_layout)} != n_planes={n_planes}"
-        )
-
-    if board_size is not None and policy_logit_count is not None and has_pass_slot is not None:
-        expected_logits = board_size * board_size + (1 if has_pass_slot else 0)
-        if policy_logit_count != expected_logits:
-            errors.append(
-                f"policy_logit_count={policy_logit_count} != board_size²+(pass_slot?1:0)"
-                f"={expected_logits} (board_size={board_size}, has_pass_slot={has_pass_slot})"
-            )
-
-    if is_multi_window is not None:
-        cw_some = cluster_window_size is not None
-        ct_some = cluster_threshold is not None
-        if cw_some != is_multi_window:
-            errors.append(
-                f"is_multi_window={is_multi_window} != cluster_window_size.is_some()={cw_some}"
-            )
-        if ct_some != is_multi_window:
-            errors.append(
-                f"is_multi_window={is_multi_window} != cluster_threshold.is_some()={ct_some}"
-            )
-        if is_multi_window:
-            if value_pool not in ("min", "max", "mean"):
-                errors.append(
-                    f"is_multi_window=true requires value_pool ∈ {{min,max,mean}}; got {value_pool!r}"
-                )
-            if policy_pool not in ("scatter_max", "scatter_mean"):
-                errors.append(
-                    f"is_multi_window=true requires policy_pool ∈ {{scatter_max,scatter_mean}}; "
-                    f"got {policy_pool!r}"
-                )
-            if cluster_window_size is not None and trunk_size is not None and trunk_size != cluster_window_size:
-                errors.append(
-                    f"is_multi_window=true requires trunk_size==cluster_window_size; "
-                    f"got trunk_size={trunk_size}, cluster_window_size={cluster_window_size}"
-                )
-        else:
-            if value_pool != "none":
-                errors.append(
-                    f"is_multi_window=false requires value_pool='none'; got {value_pool!r}"
-                )
-            if policy_pool != "none":
-                errors.append(
-                    f"is_multi_window=false requires policy_pool='none'; got {policy_pool!r}"
-                )
-            if trunk_size is not None and board_size is not None and trunk_size != board_size:
-                errors.append(
-                    f"is_multi_window=false requires trunk_size==board_size; "
-                    f"got trunk_size={trunk_size}, board_size={board_size}"
-                )
-
-    if legal_move_radius is not None and legal_move_radius <= 0:
-        errors.append("legal_move_radius must be > 0")
-
-    # plane_layout no-empty + no-dup
-    seen: set[str] = set()
-    for idx, p in enumerate(plane_layout):
-        if not p:
-            errors.append(f"plane_layout[{idx}] is empty")
-        if p in seen:
-            errors.append(f"plane_layout[{idx}] duplicate name {p!r}")
-        seen.add(p)
-
-    # §173 A3 — kept_plane_indices validators (mirror Rust spec.rs).
-    if kept_plane_indices and n_planes is not None:
-        # 3.1: len == n_planes
-        if len(kept_plane_indices) != n_planes:
-            errors.append(
-                f"len(kept_plane_indices)={len(kept_plane_indices)} != n_planes={n_planes}"
-            )
-        # 3.2: no duplicates
-        if len(set(kept_plane_indices)) != len(kept_plane_indices):
-            errors.append("kept_plane_indices: duplicate index")
-        # 3.3: max < n_source_planes
-        if n_source_planes is not None and kept_plane_indices:
-            max_idx = max(kept_plane_indices)
-            if max_idx >= n_source_planes:
-                errors.append(
-                    f"kept_plane_indices: max index {max_idx} >= n_source_planes={n_source_planes}"
-                )
-        # 3.5: n_source_planes >= n_planes
-        if n_source_planes is not None and n_planes is not None and n_source_planes < n_planes:
-            errors.append(
-                f"n_source_planes={n_source_planes} < n_planes={n_planes} "
-                f"(kept set must be a subset of source)"
-            )
+    validate_pool_enums(value_pool, policy_pool, errors)
+    validate_cross_field_consistency(
+        plane_layout,
+        n_planes,
+        board_size,
+        policy_logit_count,
+        has_pass_slot,
+        legal_move_radius,
+        errors,
+    )
+    validate_multi_window_invariants(
+        is_multi_window,
+        cluster_window_size,
+        cluster_threshold,
+        value_pool,
+        policy_pool,
+        trunk_size,
+        board_size,
+        errors,
+    )
+    validate_plane_layout(plane_layout, errors)
+    validate_kept_plane_indices(
+        kept_plane_indices, n_planes, n_source_planes, errors
+    )
 
     if errors:
         raise EncodingRegistryError(
