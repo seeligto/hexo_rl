@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import torch
 
@@ -25,9 +25,10 @@ from hexo_rl.eval.defaults import (
     DEFAULT_RANDOM_MODEL_SIMS,
     DEFAULT_SEALBOT_MODEL_SIMS,
 )
-from hexo_rl.eval.display import print_colony_win_breakdown, print_match_result, print_ratings_table
+from hexo_rl.eval.display import print_colony_win_breakdown, print_ratings_table
 from hexo_rl.eval.evaluator import Evaluator
-from hexo_rl.eval.gate_logic import GateConfig, _binomial_ci, evaluate_gate
+from hexo_rl.eval.gate_logic import GateConfig, evaluate_gate
+from hexo_rl.eval.opponent_runners import OPPONENTS, _RunnerContext
 from hexo_rl.eval.reporting import plot_ratings_curve
 from hexo_rl.eval.result_types import EvalRoundResult
 from hexo_rl.eval.results_db import ResultsDB
@@ -264,204 +265,35 @@ class EvalPipeline:
             round_idx = train_step // max(effective_interval, 1)
             return round_idx % stride == 0
 
-        # ── vs Random ────────────────────────────────────────────────
-        if self.random_cfg.get("enabled", True) and _should_run("random", self.random_cfg):
-            n = int(self.random_cfg.get("n_games", 20))
-            sims = self.random_cfg.get("model_sims")
-            er = evaluator.evaluate_vs_random(n_games=n, model_sims=sims)
-            ci_lo, ci_hi = _binomial_ci(er.win_count, n)
-            self.db.insert_match(
-                train_step, ckpt_pid, self._random_pid,
-                er.win_count, n - er.win_count - er.draw_count, er.draw_count,
-                n, er.win_rate, ci_lo, ci_hi,
-                colony_wins_a=er.colony_wins,
-                run_id=self.run_id,
-            )
-            print_match_result(ckpt_name, "random_bot", er.win_count, n - er.win_count - er.draw_count, n, ci_lo, ci_hi)
-            results["wr_random"] = er.win_rate
-            results["ci_random"] = (ci_lo, ci_hi)
-            results["colony_wins_random"] = er.colony_wins
-            results["eval_games"] += n
-
-        # ── vs SealBot ───────────────────────────────────────────────
-        if self.sealbot_cfg.get("enabled", True) and _should_run("sealbot", self.sealbot_cfg):
-            n = int(self.sealbot_cfg.get("n_games", 50))
-            tl = float(self.sealbot_cfg.get("think_time_strong",
-                                            self.sealbot_cfg.get("time_limit", 0.5)))
-            sims = self.sealbot_cfg.get("model_sims")
-            er = evaluator.evaluate_vs_sealbot(n_games=n, time_limit=tl, model_sims=sims)
-            ci_lo, ci_hi = _binomial_ci(er.win_count, n)
-            self.db.insert_match(
-                train_step, ckpt_pid, self._sealbot_pid,
-                er.win_count, n - er.win_count - er.draw_count, er.draw_count,
-                n, er.win_rate, ci_lo, ci_hi,
-                colony_wins_a=er.colony_wins,
-                run_id=self.run_id,
-            )
-            print_match_result(ckpt_name, f"SealBot(t={tl})", er.win_count, n - er.win_count - er.draw_count, n, ci_lo, ci_hi)
-            results["wr_sealbot"] = er.win_rate
-            results["ci_sealbot"] = (ci_lo, ci_hi)
-            results["colony_wins_sealbot"] = er.colony_wins
-            results["sealbot_gate_passed"] = er.win_rate >= 0.5
-            results["eval_games"] += n
-
-        # ── vs SealBot (argmax-only) ──────────────────────────────────
-        # §170 P4 P1 DRIFT detector.  Model plays with n_sims=1 (≈ policy
-        # argmax); SealBot plays at the same time_limit as the regular
-        # sealbot opponent.  When wr_argmax_n rises above ~18% but the
-        # MCTS-128 floor (wr_bootstrap_anchor) falls below ~28% the policy
-        # head is over-fitting while the value head is broken — halt the
-        # run before promotion damage.
-        if (
-            self.argmax_n_cfg.get("enabled", False)
-            and _should_run("argmax_n", self.argmax_n_cfg)
-        ):
-            n = int(self.argmax_n_cfg.get("n_games", 20))
-            tl = float(self.argmax_n_cfg.get(
-                "time_limit", self.sealbot_cfg.get("time_limit", 0.5),
-            ))
-            er = evaluator.evaluate_vs_argmax_sealbot(n_games=n, time_limit=tl)
-            ci_lo, ci_hi = _binomial_ci(er.win_count, n)
-            self.db.insert_match(
-                train_step, ckpt_pid, self._argmax_n_pid,
-                er.win_count, n - er.win_count - er.draw_count, er.draw_count,
-                n, er.win_rate, ci_lo, ci_hi,
-                colony_wins_a=er.colony_wins,
-                run_id=self.run_id,
-            )
-            print_match_result(
-                ckpt_name, f"SealBot_argmax(t={tl})",
-                er.win_count, n - er.win_count - er.draw_count, n, ci_lo, ci_hi,
-            )
-            results["wr_argmax_n"] = er.win_rate
-            results["ci_argmax_n"] = (ci_lo, ci_hi)
-            results["colony_wins_argmax_n"] = er.colony_wins
-            results["eval_games"] += n
-
-        # ── vs Bootstrap Anchor (multi-anchor floor) ──────────────────
-        # §155 T2 — frozen reference (typically the canonical bootstrap)
-        # that the trainer must keep beating with WR ≥ floor while it
-        # accumulates wins against the rotating best_checkpoint.  Promotion
-        # gate AND-combines this floor with the existing best gates when
-        # ``gating.bootstrap_floor.enabled``.
-        wr_bootstrap_anchor: float | None = None
-        if (
-            self.bootstrap_anchor_cfg.get("enabled", False)
-            and _should_run("bootstrap_anchor", self.bootstrap_anchor_cfg)
-        ):
-            anchor_path_str = self.bootstrap_anchor_cfg.get(
-                "path", "checkpoints/bootstrap_model.pt",
-            )
-            anchor_path = Path(anchor_path_str)
-            if not anchor_path.exists():
-                log.warning(
-                    "bootstrap_anchor_missing",
-                    path=str(anchor_path),
-                    msg="bootstrap_anchor opponent enabled but checkpoint not found; "
-                        "skipping this round.  Promotion gate will not block on absence "
-                        "unless `gating.bootstrap_floor.enabled` is also set.",
-                )
-            else:
-                if self._bootstrap_anchor_model is None:
-                    log.info("bootstrap_anchor_loading", path=str(anchor_path))
-                    anchor_model, anchor_spec, anchor_label = _load_anchor_model(
-                        anchor_path, self.device,
-                    )
-                    self._bootstrap_anchor_model = anchor_model
-                    log.info(
-                        "bootstrap_anchor_loaded",
-                        path=str(anchor_path),
-                        encoding_label=anchor_label,
-                        encoding_name=anchor_spec.name,
-                        n_planes=anchor_spec.n_planes,
-                        board_size=anchor_spec.board_size,
-                        policy_logit_count=anchor_spec.policy_logit_count,
-                    )
-                    # Persistent player row, keyed by checkpoint filename so
-                    # the BT-rating and colony-win histories survive across
-                    # promotion-anchor swaps (the bootstrap_anchor identity
-                    # never rotates, by design).
-                    self._bootstrap_anchor_pid = self.db.get_or_create_player(
-                        f"bootstrap_anchor:{anchor_path.name}",
-                        "checkpoint",
-                        {"role": "bootstrap_floor", "path": str(anchor_path)},
-                    )
-                n = int(self.bootstrap_anchor_cfg.get("n_games", 100))
-                sims = self.bootstrap_anchor_cfg.get("model_sims")
-                opp_sims = self.bootstrap_anchor_cfg.get("opponent_sims")
-                er = evaluator.evaluate_vs_model(
-                    self._bootstrap_anchor_model,
-                    n_games=n, model_sims=sims, opponent_sims=opp_sims,
-                )
-                ci_lo, ci_hi = _binomial_ci(er.win_count, n)
-                self.db.insert_match(
-                    train_step, ckpt_pid, self._bootstrap_anchor_pid,
-                    er.win_count, n - er.win_count - er.draw_count, er.draw_count,
-                    n, er.win_rate, ci_lo, ci_hi,
-                    colony_wins_a=er.colony_wins,
-                    run_id=self.run_id,
-                )
-                print_match_result(
-                    ckpt_name, f"bootstrap_anchor:{anchor_path.name}",
-                    er.win_count, n - er.win_count - er.draw_count, n, ci_lo, ci_hi,
-                )
-                results["wr_bootstrap_anchor"] = er.win_rate
-                results["ci_bootstrap_anchor"] = (ci_lo, ci_hi)
-                results["colony_wins_bootstrap_anchor"] = er.colony_wins
-                results["eval_games"] += n
-                wr_bootstrap_anchor = er.win_rate
-
-        # ── vs Best Checkpoint ────────────────────────────────────────
-        wr_best = None
-        wins_best: int | None = None
-        n_best: int | None = None
-        if (
-            self.best_cfg.get("enabled", True)
-            and best_model is not None
-            and _should_run("best_checkpoint", self.best_cfg)
-        ):
-            n = int(self.best_cfg.get("n_games", 200))
-            sims = self.best_cfg.get("model_sims")
-            opp_sims = self.best_cfg.get("opponent_sims")
-            er = evaluator.evaluate_vs_model(
-                best_model, n_games=n, model_sims=sims, opponent_sims=opp_sims,
-            )
-            ci_lo, ci_hi = _binomial_ci(er.win_count, n)
-
-            # R1 fix: anchor identity carries the promotion step so each
-            # graduated anchor is a distinct opponent to Bradley-Terry
-            # instead of a single pooled "best_checkpoint" entity whose
-            # strength would collapse across graduations.
-            if best_model_step is not None:
-                best_name = f"anchor_ckpt_{best_model_step}"
-                best_meta: Dict[str, Any] = {
-                    "role": "champion",
-                    "anchor_step": best_model_step,
-                }
-            else:
-                best_name = "best_checkpoint"
-                best_meta = {"role": "champion"}
-            best_pid = self.db.get_or_create_player(
-                best_name, "checkpoint", best_meta,
-                run_id=self.run_id,
-            )
-            self.db.insert_match(
-                train_step, ckpt_pid, best_pid,
-                er.win_count, n - er.win_count - er.draw_count, er.draw_count,
-                n, er.win_rate, ci_lo, ci_hi,
-                colony_wins_a=er.colony_wins,
-                run_id=self.run_id,
-            )
-            print_match_result(ckpt_name, best_name, er.win_count, n - er.win_count, n, ci_lo, ci_hi)
-            results["wr_best"] = er.win_rate
-            results["ci_best"] = (ci_lo, ci_hi)
-            results["colony_wins_best"] = er.colony_wins
-            results["eval_games"] += n
-            wr_best = er.win_rate
-            wins_best = er.win_count
-            n_best = n
+        # ── Opponent dispatch ────────────────────────────────────────
+        # §176 P32 — canonical order [random, sealbot, argmax_n,
+        # bootstrap_anchor, best] preserved in
+        # ``hexo_rl.eval.opponent_runners.OPPONENTS``.  The five
+        # ``self.db.insert_match`` calls happen in that order, matching
+        # the pre-refactor sequence; pinned by
+        # ``tests/test_eval_opponent_runners.py``.
+        ctx = _RunnerContext(
+            pipeline=self,
+            evaluator=evaluator,
+            train_step=train_step,
+            ckpt_pid=ckpt_pid,
+            ckpt_name=ckpt_name,
+            best_model=best_model,
+            best_model_step=best_model_step,
+            results=results,
+            should_run=_should_run,
+        )
+        for spec in OPPONENTS:
+            spec.run(ctx)
 
         # ── Gating ────────────────────────────────────────────────────
+        # Reads measurements written into ``results`` by the runners; the
+        # ``_best_wins`` / ``_best_n`` side-channel keys are popped after
+        # use so the public TypedDict shape is unchanged.
+        wr_best = results.get("wr_best")
+        wins_best = results.pop("_best_wins", None)  # type: ignore[misc]
+        n_best = results.pop("_best_n", None)  # type: ignore[misc]
+        wr_bootstrap_anchor = results.get("wr_bootstrap_anchor")
         threshold = float(self.gating_cfg.get("promotion_winrate", 0.55))
         floor_enabled = bool(self._bootstrap_floor_cfg.get("enabled", False))
         floor_threshold = float(self._bootstrap_floor_cfg.get("min_winrate", 0.45))
