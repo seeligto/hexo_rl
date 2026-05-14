@@ -285,6 +285,97 @@ def resolve_from_config(cfg: Mapping[str, Any] | None) -> EncodingSpec:
     return spec
 
 
+def detect_encoding_from_state_dict(
+    state: Mapping[str, Any],
+    ckpt_label: str,
+    strict: bool = False,
+) -> EncodingSpec | None:
+    """Detect a registry encoding from a model state-dict shape + filename.
+
+    Consolidates two near-duplicate implementations (§176 P6):
+      - `hexo_rl.training.trainer_ckpt_load._detect_encoding_from_state_dict`
+        (lenient — returned None on no match so trainer fell through to
+        legacy hparam inference)
+      - `hexo_rl.eval.checkpoint_loader.detect_encoding_label`
+        (strict — raised ValueError on no match; defaulted in_ch=8 with
+        no n_actions probe to v6)
+
+    Detection logic:
+      1. Read `inp_w` from state-dict at `trunk.input_conv.conv.weight`
+         (preferred — wraps partial-conv) then `trunk.input_conv.weight`
+         (legacy).
+      2. If `inp_w` is missing or has wrong dims:
+         - strict=True → raise ValueError (eval-side message preserved).
+         - strict=False → return None.
+      3. `in_ch = inp_w.shape[1]`; probe `n_actions` from
+         `policy_fc.weight` then `cluster_pool.policy_mlp.2.weight`.
+      4. Dispatch:
+         - `in_ch=11 and n_actions=625` → v8.
+         - `in_ch=8` (BUFFER_CHANNELS):
+             * filename hint (`v6w25` or `_w25` substring) OR
+               `n_actions=626` → v6w25.
+             * `n_actions=362` → v6.
+             * Otherwise: strict defaults to v6 (matches eval-side
+               line 99 fallback); lenient returns None (matches
+               trainer-side fall-through).
+         - `in_ch != 8 and != 11`: strict raises ValueError;
+           lenient returns None.
+
+    Args:
+        state: Model state-dict (key → tensor).
+        ckpt_label: Free-form label/path string used for the v6/v6w25
+                    filename disambiguator.
+        strict: If True, raise ValueError on no canonical match.
+                If False, return None.
+
+    Returns:
+        Registry `EncodingSpec` (via `lookup(name)`), or None when
+        lenient and no match.
+    """
+    buffer_channels = lookup("v6").n_planes
+    inp_w = state.get("trunk.input_conv.conv.weight")
+    if inp_w is None:
+        inp_w = state.get("trunk.input_conv.weight")
+    if inp_w is None or getattr(inp_w, "dim", lambda: 0)() != 4:
+        if strict:
+            raise ValueError(
+                f"checkpoint {ckpt_label} has no trunk.input_conv(.conv)?.weight; "
+                "cannot detect encoding"
+            )
+        return None
+    in_ch = int(inp_w.shape[1])
+    n_actions: int | None = None
+    for k in ("policy_fc.weight", "cluster_pool.policy_mlp.2.weight"):
+        w = state.get(k)
+        if w is not None and getattr(w, "dim", lambda: 0)() == 2:
+            n_actions = int(w.shape[0])
+            break
+    label = ckpt_label.lower()
+    if in_ch == 11 and n_actions == 625:
+        return lookup("v8")
+    if in_ch == 11 and strict:
+        # Eval-side accepts in_ch=11 alone as v8 (no n_actions probe required).
+        return lookup("v8")
+    if in_ch == buffer_channels:
+        if n_actions == 626 or "v6w25" in label or "_w25" in label:
+            # Filename hint can override action-count when the head is a
+            # PMA variant whose output dim differs; trust operator labels.
+            return lookup("v6w25")
+        if n_actions == 362:
+            return lookup("v6")
+        if strict:
+            # Eval-side fallback: in_ch=8 with no n_actions match defaults
+            # to v6 (preserves checkpoint_loader.py:99 behaviour).
+            return lookup("v6")
+        return None
+    if strict:
+        raise ValueError(
+            f"checkpoint {ckpt_label}: unsupported in_channels={in_ch} "
+            "(expected 8 for v6/v6w25, 11 for v8)"
+        )
+    return None
+
+
 def resolve_from_checkpoint(path: str | Path) -> EncodingSpec:
     """Return an `EncodingSpec` for a saved checkpoint.
 

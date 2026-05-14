@@ -34,14 +34,13 @@ from hexo_rl.training.checkpoints import (
 from hexo_rl.training.model_defaults import MODEL_HPARAM_DEFAULTS
 from hexo_rl.encoding import (
     EncodingSpec as RegistrySpec,
+    detect_encoding_from_state_dict as _registry_detect_from_state_dict,
     lookup as registry_lookup,
     resolve_from_config as registry_resolve_config,
 )
 
-BUFFER_CHANNELS: int = registry_lookup("v6").n_planes
 from hexo_rl.encoding.compat import (
     WireFormatSpec,
-    WIRE_FORMAT_SPECS,
     legacy_spec_for_registry_name as _legacy_spec_for_registry_name,
 )
 
@@ -56,48 +55,26 @@ def _detect_encoding_from_state_dict(
 ) -> Optional[WireFormatSpec]:
     """Infer a wire-format spec from a bare model state_dict.
 
-    Used for weights-only checkpoints (e.g. bootstrap_model_v6w25.pt)
-    that carry no `config` payload. Mirrors the dispatch in
-    hexo_rl.eval.checkpoint_loader.detect_encoding_label but returns
-    a ``WireFormatSpec`` (§176 P3 — replaces the legacy
-    ``hexo_rl.utils.encoding.EncodingSpec`` NamedTuple).
+    Thin trainer-side wrapper over
+    ``hexo_rl.encoding.resolvers.detect_encoding_from_state_dict``
+    (§176 P6 consolidation). Lenient mode (``strict=False``) preserves
+    the trainer fall-through to legacy ``_resolve_model_hparams``
+    inference for non-canonical fixtures (e.g. a 9×9 trainer round-trip).
 
-    Returns ``None`` when the state-dict shape does not match a
-    canonical (v6 / v6w25 / v8) encoding — the caller should then
-    fall through to legacy `_resolve_model_hparams` inference. This
-    keeps backward compat for non-canonical test fixtures (e.g. a
-    9×9 trainer round-trip).
+    Returns ``None`` when the shared detector returns ``None``;
+    otherwise maps the registry name to the legacy ``WireFormatSpec``
+    via ``legacy_spec_for_registry_name`` so downstream
+    ``_resolve_checkpoint_encoding`` keeps its existing typed surface.
 
     ``ckpt_label`` is a short identifier (e.g. the checkpoint filename)
     used for the v6 vs v6w25 filename disambiguator.
     """
-    inp_w = state_dict.get("trunk.input_conv.weight")
-    if inp_w is None:
-        inp_w = state_dict.get("trunk.input_conv.conv.weight")
-    if inp_w is None or inp_w.dim() != 4:
+    spec = _registry_detect_from_state_dict(
+        state_dict, ckpt_label, strict=False,
+    )
+    if spec is None:
         return None
-    in_ch = int(inp_w.shape[1])
-    # Read the policy-head action count to disambiguate canonical encodings
-    # from non-canonical (e.g. 9×9 test) shapes. A canonical match must
-    # carry one of the well-known action counts (v6=362, v6w25=626, v8=625).
-    n_actions: Optional[int] = None
-    for k in ("policy_fc.weight", "cluster_pool.policy_mlp.2.weight"):
-        w = state_dict.get(k)
-        if w is not None and w.dim() == 2:
-            n_actions = int(w.shape[0])
-            break
-    label = ckpt_label.lower()
-    if in_ch == 11 and n_actions == 625:
-        return WIRE_FORMAT_SPECS["v8"]
-    if in_ch == BUFFER_CHANNELS:
-        if n_actions == 626 or "v6w25" in label or "_w25" in label:
-            # Filename hint can override action-count when the head is a
-            # PMA variant whose output dim differs; in that case we trust
-            # the operator's filename labeling.
-            return WIRE_FORMAT_SPECS["v6w25"]
-        if n_actions == 362:
-            return WIRE_FORMAT_SPECS["v6"]
-    return None
+    return _legacy_spec_for_registry_name(spec.name)
 
 
 def _resolve_checkpoint_encoding(
