@@ -216,7 +216,8 @@ def test_assemble_with_recent_buffer(augment: bool):
         train_step=500,
         augment=augment,
     )
-    states_batch, _, _, _, _, _, _, n_recent_actual = result
+    states_batch = result.states
+    n_recent_actual = result.n_recent_actual
 
     # recent rows were drawn
     assert n_recent_actual == n_recent_req, (

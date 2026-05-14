@@ -29,6 +29,29 @@ from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS, NUM_CELLS
 log = structlog.get_logger(__name__)
 
 
+# ── Mixed-batch result ────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class BatchAssemblyResult:
+    """Result of :func:`assemble_mixed_batch`.
+
+    Seven arrays (views into pre-allocated ``BatchBuffers`` in steady state,
+    freshly allocated during warm-up / size-mismatch fallback) plus the actual
+    number of rows drawn from ``recent_buffer`` so callers can slice
+    ``[corpus | recent | uniform_self]``.
+
+    Frozen for safety; attribute access is perf-parity with tuple unpack.
+    """
+    states: np.ndarray
+    chain_planes: np.ndarray
+    policies: np.ndarray
+    outcomes: np.ndarray
+    ownership: np.ndarray
+    winning_line: np.ndarray
+    is_full_search: np.ndarray
+    n_recent_actual: int
+
+
 # ── Pre-allocated batch buffers ───────────────────────────────────────────────
 
 @dataclass
@@ -299,7 +322,7 @@ def assemble_mixed_batch(
     bufs: BatchBuffers,
     train_step: int,
     augment: bool = True,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+) -> BatchAssemblyResult:
     """Assemble one mixed batch from pretrain + self-play (+ optional recent) buffers.
 
     During warm-up (buffers partially filled), falls back to ``np.concatenate``
@@ -324,12 +347,14 @@ def assemble_mixed_batch(
                            diagnostic runs (see CLAUDE.md § Testing conventions).
 
     Returns:
-        Eight-tuple: seven arrays ``(states, chain_planes, policies, outcomes, ownership,
-        winning_line, is_full_search)`` — views into ``bufs`` in steady-state, freshly
-        allocated during warm-up — plus ``n_recent_actual`` (int): actual number of rows
-        drawn from recent_buffer (0 when recent_buffer absent or empty). Batch order is
-        ``[corpus | recent | uniform_self]``; caller uses n_pre + n_recent_actual to slice.
-        Corpus positions always have ``is_full_search=1`` (apply full policy loss).
+        :class:`BatchAssemblyResult` — seven arrays
+        ``(states, chain_planes, policies, outcomes, ownership, winning_line,
+        is_full_search)`` (views into ``bufs`` in steady-state, freshly allocated
+        during warm-up) plus ``n_recent_actual`` (int): actual number of rows drawn
+        from recent_buffer (0 when recent_buffer absent or empty). Batch order is
+        ``[corpus | recent | uniform_self]``; caller uses n_pre + n_recent_actual to
+        slice. Corpus positions always have ``is_full_search=1`` (apply full policy
+        loss).
     """
     s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre = pretrained_buffer.sample_batch(n_pre, augment)
 
@@ -341,15 +366,15 @@ def assemble_mixed_batch(
             buffer, recent_buffer, n_self, recency_weight, augment
         )
         # n_recent unknown in this mismatch path — report 0 (caller disables 3-way split).
-        return (
-            np.concatenate([s_pre, s_self], axis=0),
-            np.concatenate([c_pre, c_self], axis=0),
-            np.concatenate([p_pre, p_self], axis=0),
-            np.concatenate([o_pre, o_self], axis=0),
-            np.concatenate([own_pre, own_self], axis=0),
-            np.concatenate([wl_pre, wl_self], axis=0),
-            np.concatenate([ifs_pre, ifs_self], axis=0),
-            0,
+        return BatchAssemblyResult(
+            states=np.concatenate([s_pre, s_self], axis=0),
+            chain_planes=np.concatenate([c_pre, c_self], axis=0),
+            policies=np.concatenate([p_pre, p_self], axis=0),
+            outcomes=np.concatenate([o_pre, o_self], axis=0),
+            ownership=np.concatenate([own_pre, own_self], axis=0),
+            winning_line=np.concatenate([wl_pre, wl_self], axis=0),
+            is_full_search=np.concatenate([ifs_pre, ifs_self], axis=0),
+            n_recent_actual=0,
         )
 
     # ── Normal path: try in-place fill into bufs ──────────────────────────────
@@ -385,15 +410,15 @@ def assemble_mixed_batch(
 
     if n_avail < batch_size:
         # Warm-up: one or more sources returned fewer rows than requested.
-        return (
-            np.concatenate([p[0] for p in pieces], axis=0),
-            np.concatenate([p[1] for p in pieces], axis=0),
-            np.concatenate([p[2] for p in pieces], axis=0),
-            np.concatenate([p[3] for p in pieces], axis=0),
-            np.concatenate([p[4] for p in pieces], axis=0),
-            np.concatenate([p[5] for p in pieces], axis=0),
-            np.concatenate([p[6] for p in pieces], axis=0),
-            n_recent_actual,
+        return BatchAssemblyResult(
+            states=np.concatenate([p[0] for p in pieces], axis=0),
+            chain_planes=np.concatenate([p[1] for p in pieces], axis=0),
+            policies=np.concatenate([p[2] for p in pieces], axis=0),
+            outcomes=np.concatenate([p[3] for p in pieces], axis=0),
+            ownership=np.concatenate([p[4] for p in pieces], axis=0),
+            winning_line=np.concatenate([p[5] for p in pieces], axis=0),
+            is_full_search=np.concatenate([p[6] for p in pieces], axis=0),
+            n_recent_actual=n_recent_actual,
         )
 
     # Steady-state: in-place copy, no heap allocation.
@@ -413,8 +438,16 @@ def assemble_mixed_batch(
         np.copyto(bufs.is_full_search[offset:offset + n],  ifs)
         offset += n
 
-    return (bufs.states, bufs.chain_planes, bufs.policies, bufs.outcomes,
-            bufs.ownership, bufs.winning_line, bufs.is_full_search, n_recent_actual)
+    return BatchAssemblyResult(
+        states=bufs.states,
+        chain_planes=bufs.chain_planes,
+        policies=bufs.policies,
+        outcomes=bufs.outcomes,
+        ownership=bufs.ownership,
+        winning_line=bufs.winning_line,
+        is_full_search=bufs.is_full_search,
+        n_recent_actual=n_recent_actual,
+    )
 
 
 def _sample_selfplay(

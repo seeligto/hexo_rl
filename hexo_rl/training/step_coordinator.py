@@ -529,22 +529,20 @@ class StepCoordinator:
                 )
                 n_pre = max(1, int(math.ceil(batch_size * w_pre)))
                 n_self = batch_size - n_pre
-                (states, chain_planes, policies, outcomes,
-                 ownership, winning_line, is_full_search,
-                 n_recent_batch) = assemble_mixed_batch(
+                batch = assemble_mixed_batch(
                     self.pretrained_buffer, self.buffer, self.recent_buffer,
                     n_pre, n_self, batch_size, self.batch_size_cfg,
                     cfg.recency_weight, self.bufs, self._train_step,
                     augment=cfg.augment,
                 )
                 loss_info = self.trainer.train_step_from_tensors(
-                    states, policies, outcomes,
-                    chain_planes=chain_planes,
-                    ownership_targets=ownership,
-                    threat_targets=winning_line,
-                    is_full_search=is_full_search,
+                    batch.states, batch.policies, batch.outcomes,
+                    chain_planes=batch.chain_planes,
+                    ownership_targets=batch.ownership,
+                    threat_targets=batch.winning_line,
+                    is_full_search=batch.is_full_search,
                     n_pretrain=n_pre,
-                    n_recent=n_recent_batch,
+                    n_recent=batch.n_recent_actual,
                 )
             else:
                 w_pre = 0.0
