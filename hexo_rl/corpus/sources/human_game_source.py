@@ -8,11 +8,10 @@ from typing import Iterator, Optional
 
 import structlog
 
+from hexo_rl.bootstrap.paths import RAW_HUMAN_DIR as _DEFAULT_RAW_DIR
 from hexo_rl.corpus.sources.base import CorpusSource, GameRecord
 
 log = structlog.get_logger()
-
-_DEFAULT_RAW_DIR = Path("data/corpus/raw_human")
 
 
 class HumanGameSource(CorpusSource):

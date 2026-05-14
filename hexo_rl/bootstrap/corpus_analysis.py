@@ -28,6 +28,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import structlog
+
+from hexo_rl.bootstrap.paths import BOT_GAMES_DIR, INJECTED_DIR, QUALITY_SCORES_PATH
 import yaml
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
@@ -83,7 +85,7 @@ def load_all_games(include_bot_games: bool = False) -> List[GameRecord]:
 
     # Bot games — distinguish fast and strong by directory
     if include_bot_games:
-        bot_dir = Path("data/corpus/bot_games")
+        bot_dir = BOT_GAMES_DIR
         for depth_dir in ["sealbot_fast", "sealbot_strong"]:
             source_label = "bot_fast" if "fast" in depth_dir else "bot_strong"
             sub_dir = bot_dir / depth_dir
@@ -109,7 +111,7 @@ def load_all_games(include_bot_games: bool = False) -> List[GameRecord]:
             log.info("loaded_bot_games", depth=depth_dir, count=bot_count)
 
         # Injected games (human-seed bot-continuation)
-        injected_dir = Path("data/corpus/injected")
+        injected_dir = INJECTED_DIR
         injected_count = 0
         if injected_dir.exists():
             for game_file in sorted(injected_dir.glob("*.json")):
@@ -1026,7 +1028,7 @@ def main() -> None:
         quality_stats = analyse_quality_distribution(quality_scores)
 
         # Write sidecar file
-        scores_path = Path("data/corpus/quality_scores.json")
+        scores_path = QUALITY_SCORES_PATH
         with open(scores_path, "w") as f:
             json.dump(quality_scores, f, indent=2)
         log.info("quality_scores_written", path=str(scores_path),

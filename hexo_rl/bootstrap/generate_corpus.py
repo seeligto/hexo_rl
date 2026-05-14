@@ -25,9 +25,14 @@ from hexo_rl.env.game_state import GameState
 
 log = structlog.get_logger()
 
-RAW_HUMAN_DIR = Path("data/corpus/raw_human")
-BOT_GAMES_DIR = Path("data/corpus/bot_games")
-INJECTED_DIR = Path("data/corpus/injected")
+# Re-export canonical paths (§176 P43). Single source of truth in paths.py.
+# Re-export kept so existing callers (pretrain, tests/refactor_invariants) can
+# continue importing from this module.
+from hexo_rl.bootstrap.paths import (  # noqa: E402
+    BOT_GAMES_DIR,
+    INJECTED_DIR,
+    RAW_HUMAN_DIR,
+)
 
 MAX_MOVES_PER_GAME = 500
 

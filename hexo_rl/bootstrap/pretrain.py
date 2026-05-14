@@ -34,6 +34,7 @@ import engine
 from engine import Board
 from hexo_rl.bootstrap.dataset import replay_game_to_triples
 from hexo_rl.bootstrap.generate_corpus import BOT_GAMES_DIR, INJECTED_DIR, RAW_HUMAN_DIR
+from hexo_rl.bootstrap.paths import QUALITY_SCORES_PATH
 from hexo_rl.env.game_state import GameState, _compute_chain_planes
 from hexo_rl.model.network import HexTacToeNet, compile_model
 from hexo_rl.training.losses import (
@@ -1127,7 +1128,7 @@ def pretrain() -> None:
     console.print(f"[bold]Pretrain — device:[/bold] {device}")
 
     # Quality scores
-    quality_path = Path("data/corpus/quality_scores.json")
+    quality_path = QUALITY_SCORES_PATH
     quality_scores: Dict = {}
     if quality_path.exists():
         with open(quality_path) as f:
