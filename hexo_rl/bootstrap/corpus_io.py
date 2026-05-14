@@ -110,8 +110,9 @@ def save_corpus(
     encoding_name: str,
     source_manifest: str | None = None,
     extra: dict[str, Any] | None = None,
+    compress: bool = True,
 ) -> None:
-    """Save `arrays` as compressed npz at `path`; write sidecar metadata.
+    """Save `arrays` as npz at `path`; write sidecar metadata.
 
     Sidecar = `<path>.metadata.json` with:
       encoding_name, sha256, n_positions, source_manifest, created_at,
@@ -119,13 +120,21 @@ def save_corpus(
 
     `n_positions` is the leading dim of `arrays["states"]` if present,
     else the first inserted array's leading dim.
+
+    `compress=True` (default) uses `np.savez_compressed`; pass `False` to
+    write an uncompressed archive (lets downstream loaders use
+    `np.load(mmap_mode='r')` for near-zero RAM at startup — see
+    `scripts/export_corpus_npz.py`).
     """
     npz_path = pathlib.Path(path)
     npz_path.parent.mkdir(parents=True, exist_ok=True)
 
     n_positions = _infer_n_positions(arrays)
 
-    np.savez_compressed(npz_path, **arrays)
+    if compress:
+        np.savez_compressed(npz_path, **arrays)
+    else:
+        np.savez(npz_path, **arrays)
     # np.savez_compressed appends `.npz` if extension absent — match its
     # actual on-disk path so sha + sidecar line up.
     if not npz_path.exists() and npz_path.with_suffix(".npz").exists():

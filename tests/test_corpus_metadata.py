@@ -134,3 +134,75 @@ def test_load_corpus_future_schema_rejected(tmp_path):
 def test_load_corpus_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_corpus(tmp_path / "does_not_exist.npz")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# §176 P48 / SSR17 — scripts/export_corpus_npz.py must emit sidecar
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_export_corpus_npz_writes_sidecar(tmp_path, monkeypatch):
+    """End-to-end: scripts/export_corpus_npz.py main() under v6w25 must
+    leave a `.metadata.json` sidecar whose sha256 round-trips the on-disk
+    npz contents (§176 P48 / SSR17)."""
+    # Locate a few real raw_human game JSONs as test fixtures (the replay
+    # engine rejects naive synthetic move lists — Hex-Tac-Toe needs valid
+    # 2-moves-per-turn sequences). Skip if no corpus is available locally.
+    import importlib
+    import pathlib as _plib
+    import shutil
+
+    mod = importlib.import_module("scripts.export_corpus_npz")
+    real_raw = mod.RAW_HUMAN_DIR
+    if not real_raw.exists():
+        pytest.skip(f"raw_human corpus dir absent: {real_raw}")
+    real_games = sorted(real_raw.glob("*.json"))[:4]
+    if len(real_games) < 1:
+        pytest.skip(f"raw_human corpus is empty: {real_raw}")
+
+    raw_human = tmp_path / "raw_human"
+    bot = tmp_path / "bot_games"
+    injected = tmp_path / "injected"
+    raw_human.mkdir()
+    bot.mkdir()
+    injected.mkdir()
+    for src in real_games:
+        shutil.copy2(src, raw_human / src.name)
+
+    monkeypatch.setattr(mod, "RAW_HUMAN_DIR", raw_human)
+    monkeypatch.setattr(mod, "BOT_GAMES_DIR", bot)
+    monkeypatch.setattr(mod, "INJECTED_DIR", injected)
+
+    out_path = tmp_path / "exported.npz"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "export_corpus_npz",
+            "--encoding", "v6w25",
+            "--human-only",
+            "--max-positions", "8",
+            "--no-compress",
+            "--out", str(out_path),
+        ],
+    )
+
+    mod.main()
+
+    assert out_path.exists(), "exporter must write npz at --out"
+    sidecar = _sidecar_path(out_path)
+    assert sidecar.exists(), f"sidecar must exist next to {out_path}"
+
+    meta = json.loads(sidecar.read_text())
+    assert meta["encoding_name"] == "v6w25"
+    assert meta["schema_version"] == SCHEMA_VERSION
+    assert meta["n_positions"] >= 1
+    assert meta["sha256"] == compute_npz_sha256(out_path), (
+        "sidecar sha256 must round-trip on-disk npz contents"
+    )
+    # Exporter records compression flag + mode in extras.
+    assert meta["extra"]["pretrain_mode"] is True
+    assert meta["extra"]["compressed"] is False
+    # load_corpus must accept the artifact w/ matching encoding.
+    arrays, loaded_meta = load_corpus(out_path, expected_encoding="v6w25")
+    assert "states" in arrays and "policies" in arrays
+    assert loaded_meta["sha256"] == meta["sha256"]

@@ -48,6 +48,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from hexo_rl.bootstrap.corpus_io import compute_npz_sha256, save_corpus
 from hexo_rl.bootstrap.pretrain import _game_winner_from_replay
 from hexo_rl.bootstrap.dataset import replay_game_to_triples
 from hexo_rl.bootstrap.dataset_v6w25 import (
@@ -401,18 +402,31 @@ def main() -> None:
                        outcomes=outcomes_out, weights=weights_out)
     if global_crops_out is not None:
         save_kwargs["global_crops"] = global_crops_out
-    if compress:
-        np.savez_compressed(out_path, **save_kwargs)
-    else:
-        np.savez(out_path, **save_kwargs)
-
-    # SHA256 — useful for run-log reproducibility on §169 A3 corpus regen.
-    import hashlib
-    h = hashlib.sha256()
-    with open(out_path, "rb") as fh:
-        for block in iter(lambda: fh.read(1 << 20), b""):
-            h.update(block)
-    sha256_hex = h.hexdigest()
+    # Route through corpus_io.save_corpus (§172 A5.2, SSR17) — writes the npz
+    # AND a `.metadata.json` sidecar (sha256 + encoding_name + n_positions +
+    # git commit). Replaces the prior inline np.savez + hashlib block.
+    save_corpus(
+        out_path,
+        arrays=save_kwargs,
+        encoding_name=encoding,
+        source_manifest=(
+            "scripts/export_corpus_npz.py --human-only"
+            if pretrain_mode
+            else "scripts/export_corpus_npz.py"
+        ),
+        extra={
+            "pretrain_mode": pretrain_mode,
+            "with_global_crop": bool(args.with_global_crop),
+            "canvas_realness": bool(args.canvas_realness),
+            "compressed": compress,
+            "max_positions": args.max_positions,
+            "min_game_length": MIN_GAME_LENGTH,
+            "position_start": POSITION_START,
+            "position_end": POSITION_END,
+        },
+        compress=compress,
+    )
+    sha256_hex = compute_npz_sha256(out_path)
     size_mb = out_path.stat().st_size / 1024 / 1024
     if encoding == "v8":
         bytes_per_pos = N_PLANES_V8 * BOARD_SIZE_V8 * BOARD_SIZE_V8 * 2 + N_ACTIONS_V8 * 4 + 4
