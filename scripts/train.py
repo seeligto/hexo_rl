@@ -186,6 +186,28 @@ def main() -> None:
                 f"Variant '{args.variant}' not found. Available: {available}"
             )
         load_paths.append(str(variant_path))
+
+        # §176 P68 — abort-on-warning variant validation. Catches silent
+        # namespace shadows before merge (e.g. variant declaring
+        # ``training: {max_train_burst: 8}`` when base has flat
+        # ``max_train_burst``).
+        import yaml as _yaml
+        from hexo_rl.utils.variant_validator import (
+            _load_standard_base_cfgs,
+            validate_variant_against_bases,
+        )
+        with open(variant_path) as _vf:
+            _variant_cfg = _yaml.safe_load(_vf) or {}
+        _base_cfgs = _load_standard_base_cfgs(Path(".").resolve())
+        _warnings = validate_variant_against_bases(_variant_cfg, _base_cfgs)
+        if _warnings:
+            for _w in _warnings:
+                print(f"variant_validator WARNING: {_w}", file=sys.stderr)
+            raise RuntimeError(
+                f"variant '{args.variant}' has {len(_warnings)} validator warning(s); "
+                f"see stderr. Fix the variant or run with --no-validate (not implemented)."
+            )
+
     config = load_config(*load_paths)
 
     # ── Logging ───────────────────────────────────────────────────────────────

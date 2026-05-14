@@ -66,6 +66,53 @@ def test_vast_resolves_to_sustained_values() -> None:
 
 
 # ---------------------------------------------------------------------------
+# P68 — scripts/train.py wires variant_validator (abort-on-warning)
+# ---------------------------------------------------------------------------
+
+
+def test_validator_fires_on_train_py(tmp_path, monkeypatch):
+    """§176 P68: scripts/train.py must invoke variant_validator on --variant
+    load and abort when it returns warnings.
+
+    Constructs a deliberately-shadowing variant (nested ``training`` block
+    declaring a flat-base key) and invokes scripts/train.py via subprocess.
+    Expect non-zero exit + stderr containing ``variant_validator WARNING``.
+    """
+    import subprocess
+    import sys
+
+    # Build a minimal variant that triggers the namespace-shadow warning:
+    # base ``training.yaml`` has flat ``max_train_burst``; nesting it under
+    # ``training:`` triggers the validator.
+    bad_variant_dir = ROOT / "configs" / "variants"
+    bad_variant_name = "__p68_validator_test_variant__"
+    bad_variant_path = bad_variant_dir / f"{bad_variant_name}.yaml"
+    bad_variant_path.write_text(
+        "encoding: v6w25\n"
+        "training:\n"
+        "  max_train_burst: 8\n"
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "train.py"),
+             "--variant", bad_variant_name,
+             "--log-dir", str(tmp_path / "logs")],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(ROOT),
+        )
+        # Must have aborted before training starts.
+        assert proc.returncode != 0, (
+            f"train.py should have aborted on bad variant; stdout={proc.stdout!r} "
+            f"stderr={proc.stderr!r}"
+        )
+        assert "variant_validator WARNING" in proc.stderr, (
+            f"missing validator warning in stderr; stderr={proc.stderr!r}"
+        )
+    finally:
+        bad_variant_path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
 # P69 — registry-sourced board_size / in_channels after SSR14 cleanup
 # ---------------------------------------------------------------------------
 
