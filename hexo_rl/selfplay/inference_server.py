@@ -71,7 +71,11 @@ class InferenceServer(threading.Thread):
                 f"InferenceServer: unrecognised encoding_spec type "
                 f"{type(encoding_spec).__name__!r}"
             )
-        board_size = self.encoding_spec.board_size
+        # H2D staging tensors size to the trunk window (the spatial dim the
+        # model actually accepts). For v6/v6w25/v7*/v8 trunk_size == board_size,
+        # so this is currently a no-op semantic shift; future α multi-window
+        # K-cluster encodings will diverge (trunk_size != board_size). §176 P18.
+        board_size = self.encoding_spec.trunk_size
         # Policy len from the registry — `policy_logit_count` already
         # accounts for the per-encoding pass-slot bit (v8: 625, v6/v7full: 362,
         # v6w25: 626).
