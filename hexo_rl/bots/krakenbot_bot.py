@@ -31,6 +31,42 @@ if str(_KRAKENBOT_ROOT) not in sys.path:
 
 from minimax_bot import MinimaxBot as _MinimaxBot  # type: ignore[import]
 from game import Player as _KPlayer               # type: ignore[import]
+from bot import _D2_OFFSETS                       # type: ignore[import]
+
+
+def _smart_legal_fallback(rust_board: object, reason: str, ply: int) -> tuple[int, int]:
+    """Pick a legal move biased toward hex-distance-2 of existing stones — mirrors
+    KrakenBot's own RandomBot candidate generator (`vendor/bots/krakenbot/bot.py:42`).
+    Falls back to uniform-random-legal only when no neighbour-2 candidate exists
+    within the engine's legal-move radius (e.g. empty board or fully outside R=8).
+
+    This is used when MinimaxBot returns its `[(0, 0)]` sentinel because
+    `_generate_turns(game)` rejected every compound (vendor lines 325, 330);
+    sampling KrakenBot's own candidate pool keeps fallback strength closer to
+    the bot's intended playstyle than uniform random.
+    """
+    legal = rust_board.legal_moves()
+    if not legal:
+        raise RuntimeError("No legal moves available on board")
+    stones = rust_board.get_stones()
+    if not stones:
+        log.warning("krakenbot_fallback_empty_board", reason=reason, ply=ply)
+        return random.choice(legal)
+
+    occupied = {(q, r) for q, r, _ in stones}
+    legal_set = set(legal)
+    candidates: set[tuple[int, int]] = set()
+    for q, r in occupied:
+        for dq, dr in _D2_OFFSETS:
+            nb = (q + dq, r + dr)
+            if nb in legal_set and nb not in occupied:
+                candidates.add(nb)
+    if candidates:
+        log.warning("krakenbot_fallback_neighbor2", reason=reason, ply=ply,
+                    n_cand=len(candidates))
+        return random.choice(list(candidates))
+    log.warning("krakenbot_fallback_random_legal", reason=reason, ply=ply)
+    return random.choice(legal)
 
 
 class _MockGame:
@@ -77,17 +113,24 @@ class KrakenBotBot(BotProtocol):
         self._pending_move: Optional[tuple[int, int]] = None
 
     def get_move(self, state: GameState, rust_board: object) -> tuple[int, int]:
-        # Return cached second stone without re-searching.
+        # MinimaxBot returns [(0,0)] as a sentinel when its candidate set or
+        # turn generator yields empty (vendor/bots/krakenbot/minimax_bot.py
+        # lines 184, 219, 325, 330). On a non-empty board with stone at (0,0)
+        # this is silently illegal. Validate every returned cell + cached
+        # second stone; fall back to random-legal when illegal.
+
         if self._pending_move is not None:
             move = self._pending_move
             self._pending_move = None
-            return move
+            q_p, r_p = move
+            if rust_board.get(q_p, r_p) == 0:
+                return move
+            return _smart_legal_fallback(rust_board, "pending_move_now_illegal",
+                                         state.ply)
 
-        # Reset pending cache at the start of a new full turn.
         if state.moves_remaining > 1:
             self._pending_move = None
 
-        # Build board dict using KrakenBot's Player enum.
         board_dict: dict = {}
         for q, r, p in rust_board.get_stones():
             board_dict[(q, r)] = _KPlayer.A if p == 1 else _KPlayer.B
@@ -103,21 +146,19 @@ class KrakenBotBot(BotProtocol):
         result = self._bot.get_move(game)
 
         if not result:
-            log.warning("krakenbot_no_moves_found", ply=state.ply)
-            legal = rust_board.legal_moves()
-            if not legal:
-                raise RuntimeError("No legal moves available on board")
-            return random.choice(legal)
+            return _smart_legal_fallback(rust_board, "empty_result", state.ply)
 
-        # Cache second stone for the next call if this is a compound turn.
+        q1, r1 = result[0]
+        if rust_board.get(q1, r1) != 0:
+            return _smart_legal_fallback(rust_board, "result0_illegal", state.ply)
+
         if len(result) >= 2 and state.moves_remaining > 1:
             q2, r2 = result[1]
-            if rust_board.get(q2, r2) == 0:
+            if rust_board.get(q2, r2) == 0 and (q2, r2) != (q1, r1):
                 self._pending_move = (q2, r2)
             else:
                 log.warning("krakenbot_pending_move_illegal", q=q2, r=r2)
 
-        q1, r1 = result[0]
         return (q1, r1)
 
     def reset(self) -> None:
