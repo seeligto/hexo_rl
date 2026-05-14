@@ -42,6 +42,7 @@ from hexo_rl.model.gpool import (
 )
 from hexo_rl.model.global_token import GlobalTokenEncoder
 from hexo_rl.model.gpool_bias import GpoolBiasBranch
+from hexo_rl.model.network_v6_head import min_max_v6_head
 from hexo_rl.model.partial_conv import PartialConv2d
 from hexo_rl.model.pooling import (
     SUPPORTED_POOL_TYPES,
@@ -776,26 +777,31 @@ class HexTacToeNet(nn.Module):
                 value_bias = v_bias_raw
                 policy_bias = p_bias_raw
 
-            # Policy head — branch on encoding.
+            # Policy + value heads — branch on encoding. v6 / v6w25 route
+            # through the shared ``min_max_v6_head`` helper (single-sourced
+            # with ``aggregated_forward_K``'s per-cluster math — §176 P24).
+            # v8 keeps its KataGoPolicyHead for the policy branch but reuses
+            # the same value head (avg+max pool → fc1 → fc2 → tanh).
             if not self._spec.has_pass_slot:
                 log_policy = self.policy_head(out, mask, mask_sum_hw)
+                v_avg = out.mean(dim=(2, 3))           # (B, C)
+                v_max = out.amax(dim=(2, 3))           # (B, C)
+                v = torch.cat([v_avg, v_max], dim=1)   # (B, 2C)
+                v = F.relu(self.value_fc1(v))
+                if value_bias is not None:
+                    v = v + value_bias.to(v.dtype)
+                v_logit = self.value_fc2(v)            # (B, 1) raw logit
+                value = torch.tanh(v_logit)
             else:
-                p = F.relu(self.policy_conv(out))
-                p = p.flatten(1)
-                p_logits = self.policy_fc(p)                       # (B, A) raw
-                if policy_bias is not None:
-                    p_logits = p_logits + policy_bias.to(p_logits.dtype)
-                log_policy = F.log_softmax(p_logits, dim=1)
-
-            # Value head — global avg + max pooling
-            v_avg = out.mean(dim=(2, 3))           # (B, C)
-            v_max = out.amax(dim=(2, 3))           # (B, C)
-            v = torch.cat([v_avg, v_max], dim=1)   # (B, 2C)
-            v = F.relu(self.value_fc1(v))
-            if value_bias is not None:
-                v = v + value_bias.to(v.dtype)
-            v_logit = self.value_fc2(v)            # (B, 1) raw logit
-            value = torch.tanh(v_logit)
+                log_policy, value, v_logit = min_max_v6_head(
+                    out,
+                    policy_conv=self.policy_conv,
+                    policy_fc=self.policy_fc,
+                    value_fc1=self.value_fc1,
+                    value_fc2=self.value_fc2,
+                    policy_bias=policy_bias,
+                    value_bias=value_bias,
+                )
 
         # Build the base 3-tuple; optional heads are appended in order.
         extras: list = []
@@ -919,19 +925,19 @@ class HexTacToeNet(nn.Module):
             value_bias_K = v_bias_raw.expand(out.size(0), -1)
             policy_bias_K = p_bias_raw.expand(out.size(0), -1)
 
-        per_p = F.relu(self.policy_conv(out)).flatten(1)
-        per_logits = self.policy_fc(per_p)                        # (K, A) raw
-        if policy_bias_K is not None:
-            per_logits = per_logits + policy_bias_K.to(per_logits.dtype)
-        per_logp = F.log_softmax(per_logits, dim=1)               # (K, A)
-        v_avg = out.mean(dim=(2, 3))
-        v_max = out.amax(dim=(2, 3))
-        v_cat = torch.cat([v_avg, v_max], dim=1)
-        v_hidden = F.relu(self.value_fc1(v_cat))                  # (K, 256)
-        if value_bias_K is not None:
-            v_hidden = v_hidden + value_bias_K.to(v_hidden.dtype)
-        per_vlogit = self.value_fc2(v_hidden)
-        per_val = torch.tanh(per_vlogit)                          # (K, 1)
+        # §176 P24 — per-cluster (K, *) head shares math with the
+        # single-window forward via ``min_max_v6_head``. The pooled output is
+        # unsqueezed to ``(1, K, *)`` for ``MinMaxPool``'s scatter-pool
+        # contract; bias broadcasting (1→K) happens above before the call.
+        per_logp, per_val, _per_vlogit = min_max_v6_head(
+            out,
+            policy_conv=self.policy_conv,
+            policy_fc=self.policy_fc,
+            value_fc1=self.value_fc1,
+            value_fc2=self.value_fc2,
+            policy_bias=policy_bias_K,
+            value_bias=value_bias_K,
+        )
 
         pool = MinMaxPool()
         return pool(
