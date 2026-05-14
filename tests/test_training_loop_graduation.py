@@ -221,8 +221,20 @@ def test_final_promotion_drains_on_shutdown(tmp_path: Path):
             self.last_synced = sd
 
     class _FakePool:
+        """Mirrors the WorkerPool surface that ``drain_pending_eval``
+        touches. §176 P9 routed promotion sync through
+        ``pool.sync_inference_weights(...)`` (typed forwarder); the fake
+        delegates back to the legacy ``load_state_dict_safe`` so the
+        ``last_synced`` invariant below still binds."""
+
         def __init__(self) -> None:
             self._inference_server = _FakeInferenceServer()
+
+        def sync_inference_weights(self, sd: dict) -> None:
+            self._inference_server.load_state_dict_safe(sd)
+
+        def last_synced_state_dict(self) -> dict | None:
+            return self._inference_server.last_synced
 
     pool = _FakePool()
 
@@ -256,7 +268,10 @@ def test_final_promotion_drains_on_shutdown(tmp_path: Path):
     assert abs(_param_mean(reloaded) - EVAL_VALUE) < 0.01
 
     # Inference-server sync fired: post-promotion self-play uses the anchor.
-    assert pool._inference_server.last_synced is not None
+    # §176 P9 — read the fake's recorded payload via its own attribute, not
+    # by reaching into the (test-owned) ``_inference_server`` field, so the
+    # zero-private-reach grep stays clean across the codebase.
+    assert pool.last_synced_state_dict() is not None
 
 
 def test_drain_noop_when_eval_thread_still_running():

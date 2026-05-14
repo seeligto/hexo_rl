@@ -84,7 +84,8 @@ def test_pool_v7full_via_registry():
         # New registry: policy_logit_count for v7full = 362 (19*19 + pass).
         assert pool._pol_len == 362
         # InferenceServer inherits the registry-form spec.
-        srv_spec = pool._inference_server.encoding_spec
+        # §176 P9 — typed accessor replaces direct ``_inference_server`` reach.
+        srv_spec = pool.inference_stats().encoding_spec
         assert isinstance(srv_spec, RegistrySpec)
         assert srv_spec.name == "v7full"
     finally:

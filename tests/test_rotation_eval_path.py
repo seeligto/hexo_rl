@@ -153,8 +153,10 @@ def test_selfplay_path_enables_rotation_via_workerpool():
         deadline = time.monotonic() + 45.0
         while time.monotonic() < deadline and buf.size < 16:
             time.sleep(0.1)
-        assert pool._runner.games_completed >= 2, (
-            f"only completed {pool._runner.games_completed} games; smoke too short"
+        # §176 P9 — read runner counters via typed snapshot.
+        _stats = pool.runner_stats()
+        assert _stats.games_completed >= 2, (
+            f"only completed {_stats.games_completed} games; smoke too short"
         )
 
         # WorkerPool drains the runner queue into the replay buffer through
@@ -180,7 +182,7 @@ def test_selfplay_path_enables_rotation_via_workerpool():
         # against a deterministic-eval model collapse to one cell.
         assert len(union_cells) >= 2, (
             f"only {len(union_cells)} distinct cur-player ply-0 cells across "
-            f"{states.shape[0]} sampled positions ({pool._runner.games_completed} "
+            f"{states.shape[0]} sampled positions ({pool.runner_stats().games_completed} "
             "games) — rotation produced no input-tensor diversity"
         )
     finally:
@@ -225,9 +227,11 @@ def test_rotation_disabled_via_workerpool_config():
     pool.start()
     try:
         deadline = time.monotonic() + 15.0
-        while time.monotonic() < deadline and pool._runner.games_completed < 1:
+        # §176 P9 — typed snapshot replaces direct ``_runner`` reach.
+        while time.monotonic() < deadline and pool.runner_stats().games_completed < 1:
             time.sleep(0.1)
-        assert pool._runner.games_completed >= 1
-        assert pool._runner.positions_generated >= 1
+        _stats = pool.runner_stats()
+        assert _stats.games_completed >= 1
+        assert _stats.positions_generated >= 1
     finally:
         pool.stop()

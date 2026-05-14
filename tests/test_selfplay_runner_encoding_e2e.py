@@ -218,14 +218,15 @@ def test_pool_does_not_warn_when_encoding_wired(caplog):
         "the A1 reopen wiring is broken. See pool.py + game_runner/mod.rs."
     )
 
-    assert pool._runner is not None
-    assert pool._runner.encoding is not None, (
+    # §176 P9 — runner encoding snapshot exposed via typed accessor.
+    _stats = pool.runner_stats()
+    assert _stats.runner_encoding is not None, (
         "WorkerPool wired a v6w25 spec but runner.encoding is None — "
         "the pool→runner kwarg passthrough regressed."
     )
-    assert pool._runner.encoding.cluster_window_size == 25
-    assert pool._runner.encoding.cluster_threshold == 8
-    assert pool._runner.encoding.legal_move_radius == 8
+    assert _stats.runner_encoding.cluster_window_size == 25
+    assert _stats.runner_encoding.cluster_threshold == 8
+    assert _stats.runner_encoding.legal_move_radius == 8
     del pool
 
 
@@ -251,9 +252,10 @@ def test_pool_v6w25_smoke_spawns_with_runner_encoding():
     pool.start()
     try:
         deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline and pool._runner.games_completed < 1:
+        # §176 P9 — typed snapshot replaces direct ``_runner`` reach.
+        while time.monotonic() < deadline and pool.runner_stats().games_completed < 1:
             time.sleep(0.1)
-        assert pool._runner.games_completed >= 1, (
+        assert pool.runner_stats().games_completed >= 1, (
             "pool did not complete any v6w25 game in 10s"
         )
     finally:

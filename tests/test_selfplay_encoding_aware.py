@@ -118,8 +118,8 @@ def test_pool_spawns_v6w25_workers():
     assert pool._pol_len == 626
     assert pool._chain_len == 6 * 25 * 25
 
-    # InferenceServer inherits the same spec.
-    assert pool._inference_server.encoding_spec is spec
+    # InferenceServer inherits the same spec. §176 P9 — read via typed snapshot.
+    assert pool.inference_stats().encoding_spec is spec
 
     # Legacy to_pyo3 round-trip on the v6w25 legacy spec still carries
     # the load-bearing cluster_window_size / cluster_threshold values
@@ -148,8 +148,8 @@ def test_pool_spawns_v6_workers_default_path():
     (`hexo_rl.encoding.EncodingSpec`); test probes `.name` not `.version`.
     The new v6 registry record reports `cluster_window_size=None` because
     v6 is single-window in the registry schema (cluster fields are
-    `is_multi_window`-only). Use `pool._inference_server.encoding_spec`
-    to cross-check the same spec is threaded through.
+    `is_multi_window`-only). Use `pool.inference_stats().encoding_spec`
+    (§176 P9 typed accessor) to cross-check the same spec is threaded through.
     """
     device = torch.device("cpu")
     model = HexTacToeNet(board_size=19, in_channels=8, filters=8, res_blocks=1).to(device)
@@ -166,7 +166,7 @@ def test_pool_spawns_v6_workers_default_path():
     assert spec.cluster_window_size is None  # v6 single-window in registry schema
     assert spec.cluster_threshold is None
     assert spec.legal_move_radius == 5
-    assert pool._inference_server.encoding_spec.name == "v6"
+    assert pool.inference_stats().encoding_spec.name == "v6"
 
 
 def test_pool_rejects_model_board_size_mismatch():

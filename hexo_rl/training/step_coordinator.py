@@ -707,7 +707,8 @@ class StepCoordinator:
 
             # D8: emit training events + pool-overflow soft warning
             if self._train_step % cfg.log_interval == 0:
-                _cur_qfire = int(getattr(self.pool._runner, "mcts_quiescence_fires", 0))
+                # §176 P9 — typed snapshot replaces direct ``_runner`` reach.
+                _cur_qfire = self.pool.runner_stats().mcts_quiescence_fires
                 _qfire_delta = _cur_qfire - self._last_quiescence_fires
                 self._last_quiescence_fires = _cur_qfire
                 # Pool-overflow surface — soft warning only, not hard-fail.  We
@@ -803,7 +804,7 @@ class StepCoordinator:
                             "event": "model_version_summary",
                             "step": self._train_step,
                             **mvs,
-                            "current_version": int(getattr(self.pool._runner, "model_version", 0)),
+                            "current_version": self.pool.runner_stats().model_version,
                         })
                         self._logger.info(
                             "instrumentation_periodic",

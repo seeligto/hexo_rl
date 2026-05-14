@@ -143,8 +143,24 @@ def _make_coordinator(
     pool = Mock()
     pool.games_completed = 1
     pool.n_workers = 1
+    # §176 P9 — pool now exposes typed snapshots; provide them on the mock.
+    from hexo_rl.selfplay.pool import RunnerStats, InferenceStats
     pool._runner = Mock(mcts_quiescence_fires=0, model_version=0)
     pool._inference_server = Mock()
+    _rstats = RunnerStats(
+        games_completed=1, positions_generated=0,
+        x_wins=0, o_wins=0, draws=0, model_version=0,
+        mcts_quiescence_fires=0, mcts_mean_depth=0.0,
+        mcts_mean_root_concentration=0.0, cluster_value_std_mean=0.0,
+        cluster_policy_disagreement_mean=0.0, cluster_variance_sample_count=0,
+        runner_encoding=None,
+    )
+    _istats = InferenceStats(
+        forward_count=0, total_requests=0, encoding_spec=None,
+    )
+    pool.runner_stats = Mock(return_value=_rstats)
+    pool.inference_stats = Mock(return_value=_istats)
+    pool.sync_inference_weights = Mock()
     pool.recent_buffer = None
 
     cfg = _make_config(**(config_overrides or {}))

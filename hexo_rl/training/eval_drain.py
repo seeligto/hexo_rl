@@ -59,7 +59,8 @@ def drain_pending_eval(
         best_model.eval()
         save_best_model_atomic(best_model, best_model_path)
         new_best_step = prev.get("step", train_step)
-        pool._inference_server.load_state_dict_safe(eval_base.state_dict())
+        # §176 P9 — typed forwarder replaces direct ``_inference_server`` reach.
+        pool.sync_inference_weights(eval_base.state_dict())
         log.info(
             "best_model_promoted",
             step=train_step,

@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -39,6 +40,42 @@ from hexo_rl.utils.encoding import resolve_encoding as legacy_resolve_encoding
 from engine import ReplayBuffer
 
 log = structlog.get_logger()
+
+
+# §176 P9 — typed snapshot dataclasses replace ad-hoc reaches into the
+# private ``_runner`` / ``_inference_server`` attributes. Pure read-only
+# snapshots; no behaviour change. Consumers (events.py, step_coordinator,
+# tests) call ``pool.runner_stats()`` / ``pool.inference_stats()`` instead.
+@dataclass(frozen=True)
+class RunnerStats:
+    """Snapshot of Rust ``SelfPlayRunner`` counters / scalars."""
+
+    games_completed: int
+    positions_generated: int
+    x_wins: int
+    o_wins: int
+    draws: int
+    model_version: int
+    mcts_quiescence_fires: int
+    mcts_mean_depth: float
+    mcts_mean_root_concentration: float
+    cluster_value_std_mean: float
+    cluster_policy_disagreement_mean: float
+    cluster_variance_sample_count: int
+    # ``runner_encoding`` mirrors ``SelfPlayRunner.encoding`` — the legacy
+    # PyEncodingSpec (or ``None`` when no encoding kwarg was passed). Tests
+    # cross-check ``cluster_window_size`` / ``cluster_threshold`` /
+    # ``legal_move_radius`` on this object.
+    runner_encoding: Any = None
+
+
+@dataclass(frozen=True)
+class InferenceStats:
+    """Snapshot of ``InferenceServer`` counters + bound encoding spec."""
+
+    forward_count: int
+    total_requests: int
+    encoding_spec: Any  # hexo_rl.encoding.EncodingSpec
 
 
 class WorkerPool:
@@ -330,6 +367,58 @@ class WorkerPool:
     @property
     def instrumentation_enabled(self) -> bool:
         return self._instrumentation_enabled
+
+    # §176 P9 — typed accessors. Read-only snapshots; pure-move discipline
+    # (no new computation, no behaviour change vs prior ``pool._runner.X``
+    # / ``pool._inference_server.X`` reaches).
+    def runner_stats(self) -> RunnerStats:
+        """Snapshot of ``SelfPlayRunner`` counters / scalars.
+
+        Defaults via ``getattr`` cover pre-Tier-1.A engine wheels that
+        predate any individual counter — matches the legacy
+        ``getattr(_runner, "field", 0.0)`` reaches in ``events.py``.
+        """
+        r = self._runner
+        return RunnerStats(
+            games_completed=int(getattr(r, "games_completed", 0)),
+            positions_generated=int(getattr(r, "positions_generated", 0)),
+            x_wins=int(getattr(r, "x_wins", 0)),
+            o_wins=int(getattr(r, "o_wins", 0)),
+            draws=int(getattr(r, "draws", 0)),
+            model_version=int(getattr(r, "model_version", 0)),
+            mcts_quiescence_fires=int(getattr(r, "mcts_quiescence_fires", 0)),
+            mcts_mean_depth=float(getattr(r, "mcts_mean_depth", 0.0)),
+            mcts_mean_root_concentration=float(
+                getattr(r, "mcts_mean_root_concentration", 0.0)
+            ),
+            cluster_value_std_mean=float(getattr(r, "cluster_value_std_mean", 0.0)),
+            cluster_policy_disagreement_mean=float(
+                getattr(r, "cluster_policy_disagreement_mean", 0.0)
+            ),
+            cluster_variance_sample_count=int(
+                getattr(r, "cluster_variance_sample_count", 0)
+            ),
+            runner_encoding=getattr(r, "encoding", None),
+        )
+
+    def inference_stats(self) -> InferenceStats:
+        """Snapshot of ``InferenceServer`` counters + bound encoding spec."""
+        s = self._inference_server
+        return InferenceStats(
+            forward_count=int(getattr(s, "_forward_count", 0)),
+            total_requests=int(getattr(s, "_total_requests", 0)),
+            encoding_spec=getattr(s, "encoding_spec", None),
+        )
+
+    def sync_inference_weights(self, state_dict: Dict[str, Any]) -> None:
+        """Forward a fresh state_dict to the bound inference server.
+
+        Promotion path (eval_drain) used to reach into
+        ``pool._inference_server.load_state_dict_safe(...)`` — this is a
+        mutating action, not a stat, so it gets its own forwarder rather
+        than living on the snapshot dataclasses.
+        """
+        self._inference_server.load_state_dict_safe(state_dict)
 
     def per_worker_draw_rates(self) -> dict[int, float]:
         """Phase B' Class-1: rolling last-50-game draw rate per worker."""

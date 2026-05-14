@@ -234,7 +234,9 @@ def emit_training_events(
     gph    = games_per_hour_fn()
     avg_gl = pool.avg_game_length if hasattr(pool, "avg_game_length") else 0.0
     pph    = gph * avg_gl if avg_gl > 0 else 0.0
-    _runner = pool._runner
+    # §176 P9 — typed snapshot replaces ad-hoc ``pool._runner`` reaches.
+    rstats = pool.runner_stats()
+    istats = pool.inference_stats()
 
     _buf_sp_pct = round(min(pool.self_play_positions_pushed / max(buffer.size, 1), 1.0), 4)
 
@@ -254,13 +256,13 @@ def emit_training_events(
         "buffer_capacity":    buffer.capacity,
         "corpus_selfplay_frac": round(1.0 - w_pre, 4),
         "batch_fill_pct":     pool.batch_fill_pct,
-        "mcts_mean_depth":    float(getattr(_runner, "mcts_mean_depth", 0.0)),
-        "mcts_root_concentration": float(getattr(_runner, "mcts_mean_root_concentration", 0.0)),
+        "mcts_mean_depth":    rstats.mcts_mean_depth,
+        "mcts_root_concentration": rstats.mcts_mean_root_concentration,
         # §107 I2 investigation metrics: lifetime-mean per-cluster std-dev of
         # values and top-1 policy disagreement (K≥2 positions only).
-        "cluster_value_std_mean":      float(getattr(_runner, "cluster_value_std_mean", 0.0)),
-        "cluster_policy_disagreement_mean": float(getattr(_runner, "cluster_policy_disagreement_mean", 0.0)),
-        "cluster_variance_sample_count":    int(getattr(_runner, "cluster_variance_sample_count", 0)),
+        "cluster_value_std_mean":           rstats.cluster_value_std_mean,
+        "cluster_policy_disagreement_mean": rstats.cluster_policy_disagreement_mean,
+        "cluster_variance_sample_count":    rstats.cluster_variance_sample_count,
     })
 
     # Richer summary structlog entry — fires at log_interval cadence alongside
@@ -302,10 +304,10 @@ def emit_training_events(
         threat_loss=round(float(loss_info["threat_loss"]), 4) if loss_info.get("threat_loss") is not None else None,
         aux_loss_rows=int(loss_info.get("aux_loss_rows", 0)),
         batch_fill_pct=round(pool.batch_fill_pct, 1),
-        inf_forward_count=pool._inference_server._forward_count,
-        inf_total_requests=pool._inference_server._total_requests,
-        mcts_mean_depth=round(float(getattr(_runner, "mcts_mean_depth", 0.0)), 3),
-        mcts_root_concentration=round(float(getattr(_runner, "mcts_mean_root_concentration", 0.0)), 3),
+        inf_forward_count=istats.forward_count,
+        inf_total_requests=istats.total_requests,
+        mcts_mean_depth=round(rstats.mcts_mean_depth, 3),
+        mcts_root_concentration=round(rstats.mcts_mean_root_concentration, 3),
         policy_target_entropy_fullsearch=float(loss_info.get("policy_target_entropy_fullsearch", float("nan"))),
         policy_target_entropy_fastsearch=float(loss_info.get("policy_target_entropy_fastsearch", float("nan"))),
         policy_target_kl_uniform_fullsearch=float(loss_info.get("policy_target_kl_uniform_fullsearch", float("nan"))),
@@ -313,9 +315,9 @@ def emit_training_events(
         frac_fullsearch_in_batch=float(loss_info.get("frac_fullsearch_in_batch", 0.0)),
         n_rows_policy_loss=int(loss_info.get("n_rows_policy_loss", 0)),
         n_rows_total=int(loss_info.get("n_rows_total", 0)),
-        cluster_value_std_mean=float(getattr(_runner, "cluster_value_std_mean", 0.0)),
-        cluster_policy_disagreement_mean=float(getattr(_runner, "cluster_policy_disagreement_mean", 0.0)),
-        cluster_variance_sample_count=int(getattr(_runner, "cluster_variance_sample_count", 0)),
+        cluster_value_std_mean=rstats.cluster_value_std_mean,
+        cluster_policy_disagreement_mean=rstats.cluster_policy_disagreement_mean,
+        cluster_variance_sample_count=rstats.cluster_variance_sample_count,
         early_game_entropy_mean=round(float(probe_metrics.get("early_game_entropy_mean", float("nan"))), 4)
             if probe_metrics else None,
         early_game_top1_mass_mean=round(float(probe_metrics.get("early_game_top1_mass_mean", float("nan"))), 4)
