@@ -52,7 +52,7 @@ from hexo_rl.model.pooling import (
 )
 from hexo_rl.encoding import all_specs, lookup
 from hexo_rl.model._constants import MODEL_GN_GROUPS
-from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
+from hexo_rl.utils.constants import BUFFER_CHANNELS
 
 _log = logging.getLogger(__name__)
 
@@ -403,8 +403,8 @@ class HexTacToeNet(nn.Module):
 
     def __init__(
         self,
-        board_size: int = BOARD_SIZE,
-        in_channels: int = BUFFER_CHANNELS,
+        board_size: Optional[int] = None,
+        in_channels: Optional[int] = None,
         filters: int = 128,
         res_blocks: int = 12,
         se_reduction_ratio: int = 4,
@@ -434,6 +434,14 @@ class HexTacToeNet(nn.Module):
         # string. Avoids a per-forward registry lookup in the hot path.
         self._spec = lookup(encoding)
         spec = self._spec
+        # §176 P26 — defaults for board_size / in_channels now resolve from
+        # the registry spec rather than v6-only constants. HexTacToeNet()
+        # still returns (19, 8) via v6 spec; HexTacToeNet(encoding="v6w25")
+        # returns (25, 8). Explicit kwargs are honored unchanged.
+        if board_size is None:
+            board_size = spec.board_size
+        if in_channels is None:
+            in_channels = spec.n_planes
         # §176 P25 — flag-combination validation extracted to a private
         # helper. Pure-move: each raise block below is byte-identical to the
         # pre-refactor inline form (tests substring-pin the messages).
