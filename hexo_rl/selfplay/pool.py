@@ -78,6 +78,136 @@ class InferenceStats:
     encoding_spec: Any  # hexo_rl.encoding.EncodingSpec
 
 
+@dataclass(frozen=True)
+class ResolvedPoolEncoding:
+    """§176 P20 — encoding-resolve result for ``WorkerPool.__init__``.
+
+    Bundles every encoding-derived value the WorkerPool wires through the
+    Rust ``SelfPlayRunner`` and the Python NN-input/buffer dims:
+
+      - ``registry_spec`` — canonical ``hexo_rl.encoding.EncodingSpec``.
+      - ``legacy_spec``   — 4-field NamedTuple kept alive until a future
+                            refactor migrates the Rust runner off the
+                            legacy ``PyEncodingSpec``; v7full/v7mw share
+                            the v6 wire format and reuse ``v6_spec()``.
+      - ``runner_encoding`` — ``legacy_spec.to_pyo3()`` (or ``None``).
+      - ``runner_registry_spec`` — ``PyO3EncodingSpec.from_registry(name)``.
+      - ``board_size`` / ``trunk_size`` / ``n_kept_planes`` — scalar
+                                                              dims reused
+                                                              for buffer
+                                                              + reshape.
+    """
+
+    registry_spec: Any  # RegistrySpec (full schema)
+    legacy_spec: Any    # LegacyEncodingSpec (4-field shim)
+    runner_encoding: Any  # PyO3EncodingSpec | None
+    runner_registry_spec: Any  # PyO3EncodingSpec (full schema, registry-form)
+    board_size: int
+    trunk_size: int
+    n_kept_planes: int
+
+
+def _resolve_encoding_for_pool(
+    config: Dict[str, Any], model: Any | None = None
+) -> ResolvedPoolEncoding:
+    """Resolve every encoding-derived value ``WorkerPool.__init__`` needs.
+
+    §172 A4.2 — resolves via the new ``hexo_rl.encoding`` registry.
+    §173 A8' — multi-window guard lifted; v8 selfplay still loud-fails.
+    §176 P20 — extracted from ``WorkerPool.__init__`` for unit testability.
+
+    Validation:
+      - v8 / v8_canvas_realness → ``NotImplementedError`` (Rust runner
+        path absent; pretrain via ``dataset_v8.py`` instead).
+      - When ``model`` is supplied, cross-checks ``model.board_size``
+        against the resolved canvas geometry. Mis-paired model+config
+        loud-fails with ``ValueError`` before any Rust runner is built.
+
+    Returns a frozen ``ResolvedPoolEncoding`` dataclass; the caller wires
+    the fields into ``SelfPlayRunner(...)`` and the Python buffer dims.
+    """
+    registry_spec: RegistrySpec = registry_resolve_from_config(config)
+
+    # v8 selfplay guard (§172 A4.2). v8 has no Rust selfplay runner
+    # path today; failing loud here beats letting `to_pyo3()` raise
+    # an obscure ValueError later in __init__.
+    if registry_spec.name in ("v8", "v8_canvas_realness"):
+        raise NotImplementedError(
+            f"v8 selfplay (encoding={registry_spec.name!r}) Rust runner "
+            f"path not implemented; use v6 / v7full for selfplay or run "
+            f"pretrain via dataset_v8.py + encode_position_v8."
+        )
+
+    # spec.board_size supersedes the legacy `getattr(model, 'board_size', 19)`
+    # v6 fallback. Cross-check against the model's declared board_size so a
+    # mis-paired model+config fails fast instead of silently routing planes
+    # through wrong-shaped buffers.
+    #
+    # §173 A8' geometry split:
+    #   - `board_size` is canvas geometry (physical hex grid extent).
+    #   - `trunk_size` is the per-cluster NN-input window (== board_size
+    #     for single-window encodings; == cluster_window_size for
+    #     multi-window). All NN-input / buffer / reshape dims below use
+    #     `trunk_size`; only the model.board_size cross-check uses the
+    #     canvas value.
+    spec = registry_spec
+    if model is not None:
+        model_board_size = int(getattr(model, "board_size", spec.board_size))
+        if model_board_size != spec.board_size:
+            raise ValueError(
+                f"WorkerPool: model.board_size={model_board_size} disagrees "
+                f"with resolved encoding {spec.name!r} (board_size="
+                f"{spec.board_size}). Fix the variant `encoding.version` or "
+                f"the checkpoint hparam mismatch before re-launching."
+            )
+
+    # Legacy spec for the SelfPlayRunner Rust kwarg round-trip — kept
+    # alive until a future refactor migrates Rust SelfPlayRunner off
+    # the 4-field PyEncodingSpec. The legacy module knows only
+    # {v6, v6w25, v8}; v7full / v7mw are registry-only labels whose
+    # wire format is byte-identical to v6 (same board_size, n_planes,
+    # cluster fields, legal-move radius), so we synthesise the legacy
+    # spec from the v6 helper for those cases. v8 is blocked above;
+    # v6 / v6w25 / v7full / v7mw reach here.
+    if registry_spec.name in ("v7full", "v7mw"):
+        from hexo_rl.utils.encoding import v6_spec as _legacy_v6_spec
+        legacy_spec: LegacyEncodingSpec = _legacy_v6_spec()
+    else:
+        legacy_spec = legacy_resolve_encoding(config)
+
+    # §171 P3 A1 reopen / §172 A4.2 — pass the resolved EncodingSpec
+    # through to the Rust runner so per-game `Board` construction in
+    # worker_loop.rs uses `Board::with_encoding(spec)` instead of the
+    # v6-default `Board::new()`. After the multi-window + v8 guards
+    # above, only v6 / v7full reach this branch — both are v6-family
+    # legacy specs with cluster_window_size + cluster_threshold set,
+    # so `legacy_spec.to_pyo3()` always succeeds.
+    if (
+        legacy_spec.cluster_window_size is not None
+        and legacy_spec.cluster_threshold is not None
+    ):
+        runner_encoding = legacy_spec.to_pyo3()
+    else:
+        runner_encoding = None
+
+    # §173 A8' — also pass the registry-form spec so the Rust runner
+    # stores `spec_static` (used by worker_loop for sym_tables /
+    # n_cells / kept_planes / policy_stride / agg_trunk_sz) and so
+    # `state_stride()` / `policy_stride()` drive feature_len/policy_len
+    # derivation symmetrically with the multi-window dispatch path.
+    runner_registry_spec = PyO3EncodingSpec.from_registry(spec.name)
+
+    return ResolvedPoolEncoding(
+        registry_spec=registry_spec,
+        legacy_spec=legacy_spec,
+        runner_encoding=runner_encoding,
+        runner_registry_spec=runner_registry_spec,
+        board_size=spec.board_size,
+        trunk_size=spec.trunk_size,
+        n_kept_planes=len(spec.kept_plane_indices),
+    )
+
+
 class WorkerPool:
     """Runs concurrent self-play games on background threads."""
 
@@ -96,13 +226,13 @@ class WorkerPool:
 
         sp = config.get("selfplay", config)
         self.n_workers = int(n_workers if n_workers is not None else sp.get("n_workers", 1))
-        # §172 A4.2 — resolve encoding via the new `hexo_rl.encoding`
-        # registry. §173 A8' lifted the multi-window guard; only v8
-        # selfplay remains blocked here (loud-fail) before any Rust runner
-        # construction. v6 / v6w25 / v7full all reach `to_pyo3()`.
-        registry_spec: RegistrySpec = registry_resolve_from_config(config)
-        self.encoding_spec: RegistrySpec = registry_spec
-
+        # §176 P20 — encoding-resolve extracted to `_resolve_encoding_for_pool`.
+        # Returns a frozen ResolvedPoolEncoding bundling registry_spec,
+        # legacy_spec, runner_encoding, runner_registry_spec, plus the
+        # board_size/trunk_size/n_kept_planes scalars. v8 selfplay still
+        # loud-fails inside the helper; model.board_size cross-check is
+        # delegated through `model=model`.
+        #
         # Multi-window α (§173 A8') unblocked. K-cluster fan happens in
         # worker_loop.rs (get_cluster_views + aggregate_policy + min-pool
         # value); see engine/src/game_runner/worker_loop.rs:340-470 + :716-754.
@@ -111,55 +241,14 @@ class WorkerPool:
         # multi-window encoding with cluster_window_size != board_size
         # routes correctly. v6w25 (trunk_size == board_size == 25)
         # coincides today; the refactor unblocks future arches.
-
-        # v8 selfplay guard (§172 A4.2). v8 has no Rust selfplay runner
-        # path today; failing loud here beats letting `to_pyo3()` raise
-        # an obscure ValueError later in __init__.
-        if registry_spec.name in ("v8", "v8_canvas_realness"):
-            raise NotImplementedError(
-                f"v8 selfplay (encoding={registry_spec.name!r}) Rust runner "
-                f"path not implemented; use v6 / v7full for selfplay or run "
-                f"pretrain via dataset_v8.py + encode_position_v8."
-            )
-
-        # spec.board_size supersedes the legacy `getattr(model, 'board_size', 19)`
-        # v6 fallback. Cross-check against the model's declared board_size so a
-        # mis-paired model+config fails fast instead of silently routing planes
-        # through wrong-shaped buffers.
-        #
-        # §173 A8' geometry split:
-        #   - `board_size` is canvas geometry (physical hex grid extent).
-        #   - `trunk_size` is the per-cluster NN-input window (== board_size
-        #     for single-window encodings; == cluster_window_size for
-        #     multi-window). All NN-input / buffer / reshape dims below use
-        #     `trunk_size`; only the model.board_size cross-check uses the
-        #     canvas value.
+        _resolved = _resolve_encoding_for_pool(config, model=model)
+        registry_spec: RegistrySpec = _resolved.registry_spec
+        self.encoding_spec: RegistrySpec = registry_spec
         spec = registry_spec
-        model_board_size = int(getattr(model, "board_size", spec.board_size))
-        if model_board_size != spec.board_size:
-            raise ValueError(
-                f"WorkerPool: model.board_size={model_board_size} disagrees "
-                f"with resolved encoding {spec.name!r} (board_size="
-                f"{spec.board_size}). Fix the variant `encoding.version` or "
-                f"the checkpoint hparam mismatch before re-launching."
-            )
-        board_size = spec.board_size
-        trunk_size = spec.trunk_size
-        n_kept_planes = len(spec.kept_plane_indices)
-
-        # Legacy spec for the SelfPlayRunner Rust kwarg round-trip — kept
-        # alive until a future refactor migrates Rust SelfPlayRunner off
-        # the 4-field PyEncodingSpec. The legacy module knows only
-        # {v6, v6w25, v8}; v7full / v7mw are registry-only labels whose
-        # wire format is byte-identical to v6 (same board_size, n_planes,
-        # cluster fields, legal-move radius), so we synthesise the legacy
-        # spec from the v6 helper for those cases. v8 is blocked above;
-        # v6 / v6w25 / v7full / v7mw reach here.
-        if registry_spec.name in ("v7full", "v7mw"):
-            from hexo_rl.utils.encoding import v6_spec as _legacy_v6_spec
-            legacy_spec: LegacyEncodingSpec = _legacy_v6_spec()
-        else:
-            legacy_spec = legacy_resolve_encoding(config)
+        board_size = _resolved.board_size
+        trunk_size = _resolved.trunk_size
+        n_kept_planes = _resolved.n_kept_planes
+        legacy_spec: LegacyEncodingSpec = _resolved.legacy_spec
 
         # Rust inference batcher uses WIRE_CHANNELS (8) planes wide; the
         # game runner slices to len(spec.kept_plane_indices) before pushing
@@ -202,26 +291,13 @@ class WorkerPool:
             )
 
         training_cfg = config.get("training", config)
-        # §171 P3 A1 reopen / §172 A4.2 — pass the resolved EncodingSpec
-        # through to the Rust runner so per-game `Board` construction in
-        # worker_loop.rs uses `Board::with_encoding(spec)` instead of the
-        # v6-default `Board::new()`. After the multi-window + v8 guards
-        # above, only v6 / v7full reach this branch — both are v6-family
-        # legacy specs with cluster_window_size + cluster_threshold set,
-        # so `legacy_spec.to_pyo3()` always succeeds.
-        if (
-            legacy_spec.cluster_window_size is not None
-            and legacy_spec.cluster_threshold is not None
-        ):
-            runner_encoding = legacy_spec.to_pyo3()
-        else:
-            runner_encoding = None
-        # §173 A8' — also pass the registry-form spec so the Rust runner
-        # stores `spec_static` (used by worker_loop for sym_tables /
-        # n_cells / kept_planes / policy_stride / agg_trunk_sz) and so
-        # `state_stride()` / `policy_stride()` drive feature_len/policy_len
-        # derivation symmetrically with the multi-window dispatch path.
-        runner_registry_spec = PyO3EncodingSpec.from_registry(spec.name)
+        # §176 P20 — runner_encoding (legacy 4-field PyEncodingSpec, or None
+        # when cluster fields absent) and runner_registry_spec (registry-form
+        # PyEncodingSpec) both built inside `_resolve_encoding_for_pool`.
+        # See ResolvedPoolEncoding docstring for the historical context
+        # (§171 P3 A1 reopen, §172 A4.2, §173 A8').
+        runner_encoding = _resolved.runner_encoding
+        runner_registry_spec = _resolved.runner_registry_spec
         self._runner = SelfPlayRunner(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_game_moves", sp.get("max_moves_per_game", 128))),
