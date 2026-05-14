@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as _datetime
 import json
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -14,6 +15,71 @@ import torch.nn as nn
 import structlog
 
 log = structlog.get_logger()
+
+
+# ── State-dict inspection helpers ────────────────────────────────────────────
+# §176 P79: lifted from Trainer staticmethods so viewer/model_loader.py and
+# probe scripts can dedup against a single source. Trainer keeps its
+# @staticmethod surface as a thin delegate (back-compat for our_model_bot
+# and probe scripts that call Trainer._extract_model_state etc.).
+
+_TOWER_RES_BLOCK_PATTERN = re.compile(r"^(?:trunk\.)?tower\.(\d+)\.")
+
+
+def extract_model_state(ckpt: Any) -> Dict[str, torch.Tensor]:
+    """Extract the model state dict from common checkpoint payload layouts."""
+    if not isinstance(ckpt, dict):
+        raise ValueError(f"Unsupported checkpoint payload type: {type(ckpt)!r}")
+
+    for key in ("model_state", "model_state_dict", "state_dict"):
+        maybe_state = ckpt.get(key)
+        if isinstance(maybe_state, dict):
+            return maybe_state
+
+    # Weights-only checkpoints are plain state_dict payloads.
+    if all(isinstance(k, str) for k in ckpt.keys()):
+        return ckpt
+
+    raise ValueError("Unable to locate model state dict in checkpoint payload")
+
+
+def infer_res_blocks_from_state_dict(
+    state_dict: Dict[str, torch.Tensor],
+) -> Optional[int]:
+    idxs = {
+        int(match.group(1))
+        for key in state_dict.keys()
+        for match in [_TOWER_RES_BLOCK_PATTERN.search(key)]
+        if match is not None
+    }
+    if not idxs:
+        return None
+    return max(idxs) + 1
+
+
+def infer_model_hparams(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
+    """Infer model hyperparameters directly from a checkpoint state_dict."""
+    inferred: Dict[str, int] = {}
+
+    conv_w = state_dict.get("trunk.input_conv.weight")
+    if conv_w is not None and conv_w.ndim == 4:
+        inferred["filters"] = int(conv_w.shape[0])
+        inferred["in_channels"] = int(conv_w.shape[1])
+
+    policy_fc_w = state_dict.get("policy_fc.weight")
+    if policy_fc_w is not None and policy_fc_w.ndim == 2:
+        two_spatial = int(policy_fc_w.shape[1])
+        if two_spatial % 2 == 0:
+            spatial = two_spatial // 2
+            board_size = int(math.isqrt(spatial))
+            if board_size * board_size == spatial:
+                inferred["board_size"] = board_size
+
+    res_blocks = infer_res_blocks_from_state_dict(state_dict)
+    if res_blocks is not None:
+        inferred["res_blocks"] = int(res_blocks)
+
+    return inferred
 
 
 # §172 A5.1 metadata schema version. Bump if a metadata key is renamed/removed.

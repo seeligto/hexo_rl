@@ -1,75 +1,36 @@
 """Lightweight checkpoint -> HexTacToeNet loader for the /analyze path.
 
-Deliberately avoids importing Trainer to keep the import graph minimal.
-The _extract_model_state and _infer_model_hparams functions are copied from
-Trainer (hexo_rl/training/trainer.py) -- keep in sync if those change.
+Deliberately avoids importing Trainer to keep the import graph minimal
+(monitoring invariant enforced by tests/test_analyze_api.py
+``TestMonitoringInvariant``). State-dict inspection helpers live in
+``hexo_rl.training.checkpoints`` and are shared with Trainer
+(§176 P79 dedup; previously copied byte-for-byte from Trainer with a
+"keep in sync" note). Paired follow-up: P47 (deferred to Phase 5 / W3)
+will lift this to a public ``load_model_for_inference`` API used by
+viewer + bots alike.
 """
 from __future__ import annotations
 
-import math
-import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import torch
 
 from hexo_rl.model.network import HexTacToeNet
-from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
+from hexo_rl.training.checkpoints import (
+    extract_model_state,
+    infer_model_hparams,
+    normalize_model_state_dict_keys,
+)
 from hexo_rl.utils.constants import BOARD_SIZE, BUFFER_CHANNELS
 
 
-# -- Copied from Trainer._extract_model_state ---------------------------------
+# Underscore-prefixed re-exports for back-compat with our_model_bot and
+# tests/test_analyze_api parity checks. New callers should import the
+# unprefixed names from hexo_rl.training.checkpoints directly.
+_extract_model_state = extract_model_state
+_infer_model_hparams = infer_model_hparams
 
-def _extract_model_state(ckpt: Any) -> Dict[str, torch.Tensor]:
-    """Extract model state dict from common checkpoint payload layouts."""
-    if not isinstance(ckpt, dict):
-        raise ValueError(f"Unsupported checkpoint payload type: {type(ckpt)!r}")
-    for key in ("model_state", "model_state_dict", "state_dict"):
-        maybe_state = ckpt.get(key)
-        if isinstance(maybe_state, dict):
-            return maybe_state
-    if all(isinstance(k, str) for k in ckpt.keys()):
-        return ckpt
-    raise ValueError("Unable to locate model state dict in checkpoint payload")
-
-
-# -- Copied from Trainer._infer_res_blocks_from_state_dict --------------------
-
-def _infer_res_blocks(state_dict: Dict[str, torch.Tensor]) -> Optional[int]:
-    pattern = re.compile(r"^(?:trunk\.)?tower\.(\d+)\.")
-    idxs = {
-        int(m.group(1))
-        for key in state_dict.keys()
-        for m in [pattern.search(key)]
-        if m is not None
-    }
-    return (max(idxs) + 1) if idxs else None
-
-
-# -- Copied from Trainer._infer_model_hparams ---------------------------------
-
-def _infer_model_hparams(state_dict: Dict[str, torch.Tensor]) -> Dict[str, int]:
-    """Infer model hyperparameters from checkpoint weights alone."""
-    inferred: Dict[str, int] = {}
-    conv_w = state_dict.get("trunk.input_conv.weight")
-    if conv_w is not None and conv_w.ndim == 4:
-        inferred["filters"] = int(conv_w.shape[0])
-        inferred["in_channels"] = int(conv_w.shape[1])
-    policy_fc_w = state_dict.get("policy_fc.weight")
-    if policy_fc_w is not None and policy_fc_w.ndim == 2:
-        two_spatial = int(policy_fc_w.shape[1])
-        if two_spatial % 2 == 0:
-            spatial = two_spatial // 2
-            board_size = int(math.isqrt(spatial))
-            if board_size * board_size == spatial:
-                inferred["board_size"] = board_size
-    res_blocks = _infer_res_blocks(state_dict)
-    if res_blocks is not None:
-        inferred["res_blocks"] = int(res_blocks)
-    return inferred
-
-
-# -- Public API ----------------------------------------------------------------
 
 def load_model(
     checkpoint_path: str | Path,
@@ -84,9 +45,9 @@ def load_model(
         device = best_device()
 
     checkpoint_path = Path(checkpoint_path)
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    state_dict = normalize_model_state_dict_keys(_extract_model_state(payload))
-    hparams = _infer_model_hparams(state_dict)
+    payload: Any = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    state_dict = normalize_model_state_dict_keys(extract_model_state(payload))
+    hparams = infer_model_hparams(state_dict)
 
     net = HexTacToeNet(
         board_size=hparams.get("board_size", BOARD_SIZE),
