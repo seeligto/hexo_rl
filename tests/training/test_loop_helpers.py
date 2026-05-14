@@ -5,8 +5,8 @@ import math
 
 import pytest
 
-from hexo_rl.training.loop import (
-    RollingGamesPerHour,
+from hexo_rl.training.loop import RollingGamesPerHour
+from hexo_rl.training.mixing import (
     _compute_pretrained_weight,
     _steps_budget,
 )

@@ -177,7 +177,7 @@ def test_buffer_resize_during_training():
 
 def test_pretrained_weight_schedule():
     """Verify the pretrained weight formula decays correctly."""
-    from hexo_rl.training.loop import _compute_pretrained_weight
+    from hexo_rl.training.mixing import _compute_pretrained_weight
 
     min_w = 0.1
     initial_w = 0.8

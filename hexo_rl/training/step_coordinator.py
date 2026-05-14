@@ -29,8 +29,8 @@ import structlog
 
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.training.batch_assembly import assemble_mixed_batch
-from hexo_rl.training.loop import (
-    RollingGamesPerHour,
+from hexo_rl.training.loop import RollingGamesPerHour
+from hexo_rl.training.mixing import (
     _compute_pretrained_weight,
     _steps_budget,
 )
