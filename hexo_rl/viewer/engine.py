@@ -30,7 +30,7 @@ class ViewerEngine:
     def _load_model(self, config: dict, checkpoint_path: str) -> None:
         """Lazy import to avoid pulling training deps at module level."""
         try:
-            from hexo_rl.bootstrap.bots.our_model_bot import OurModelBot
+            from hexo_rl.bots.our_model_bot import OurModelBot
             self._model_bot = OurModelBot(
                 checkpoint_path=checkpoint_path,
                 config=config,

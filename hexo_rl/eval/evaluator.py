@@ -238,7 +238,7 @@ class Evaluator:
     def evaluate_vs_random(self, n_games: int = 20, model_sims: int | None = None, random_bot: Optional[BotProtocol] = None) -> EvalResult:
         """Play n_games against a random bot. Accepts bot via DI or creates default."""
         if random_bot is None:
-            from hexo_rl.bootstrap.bots.random_bot import RandomBot
+            from hexo_rl.bots.random_bot import RandomBot
             random_bot = RandomBot()
         sims = self.random_model_sims if model_sims is None else int(model_sims)
         return self.evaluate(random_bot, n_games, sims, phase="random")
@@ -252,7 +252,7 @@ class Evaluator:
     ) -> EvalResult:
         """Play n_games against SealBot. Accepts bot via DI or creates default."""
         if sealbot is None:
-            from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
+            from hexo_rl.bots.sealbot_bot import SealBotBot
             sealbot = SealBotBot(time_limit=time_limit)
         sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
         return self.evaluate(sealbot, n_games, sims, phase="sealbot")
@@ -273,7 +273,7 @@ class Evaluator:
         between the two is the §170 value-drift signature.
         """
         if sealbot is None:
-            from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
+            from hexo_rl.bots.sealbot_bot import SealBotBot
             sealbot = SealBotBot(time_limit=time_limit)
         return self.evaluate(sealbot, n_games, model_sims=1, phase="argmax_n")
 

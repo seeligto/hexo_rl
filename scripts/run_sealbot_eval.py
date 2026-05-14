@@ -59,7 +59,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from engine import Board
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
-from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot
+from hexo_rl.bots.sealbot_bot import SealBotBot
 from hexo_rl.env.game_state import GameState
 from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
 from hexo_rl.eval.inference_methods import build_inference_method

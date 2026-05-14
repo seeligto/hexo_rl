@@ -55,8 +55,8 @@ if str(REPO) not in sys.path:
 
 from engine import Board  # type: ignore
 from hexo_rl.bootstrap.bot_protocol import BotProtocol  # noqa: E402
-from hexo_rl.bootstrap.bots.sealbot_bot import SealBotBot  # noqa: E402
-from hexo_rl.bootstrap.bots.krakenbot_bot import KrakenBotBot  # noqa: E402
+from hexo_rl.bots.sealbot_bot import SealBotBot  # noqa: E402
+from hexo_rl.bots.krakenbot_bot import KrakenBotBot  # noqa: E402
 from hexo_rl.bootstrap.dataset_v8 import (  # noqa: E402
     BOARD_SIZE_V8,
     LEGAL_MOVE_RADIUS_V8,

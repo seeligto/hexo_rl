@@ -39,7 +39,7 @@ def validate(ckpt_path: Path, device: torch.device) -> None:
     threshold 5 / r=5; v6w25 at 25×25 / threshold 8 / r=8; v8 path
     skipped (encoding != "v6"-family — no K-cluster window encoder).
     """
-    from hexo_rl.bootstrap.bots.random_bot import RandomBot
+    from hexo_rl.bots.random_bot import RandomBot
 
     # Round-trip: load checkpoint, rebuild model, run forward pass.
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
