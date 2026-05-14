@@ -22,13 +22,27 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
-_renderers: list = []
+
+@runtime_checkable
+class EventRenderer(Protocol):
+    """Structural interface for monitoring renderers.
+
+    Any object with ``on_event(payload: dict) -> None`` satisfies this Protocol.
+    Pure typing aid — no runtime enforcement beyond ``isinstance`` if needed.
+    """
+
+    def on_event(self, payload: dict[str, Any]) -> None:
+        """Receive and process one event payload (already timestamped)."""
+        ...
+
+
+_renderers: list[EventRenderer] = []
 _lock = threading.Lock()
 
 
-def register_renderer(renderer: Any) -> None:
+def register_renderer(renderer: EventRenderer) -> None:
     """Register a renderer that will receive all events via on_event()."""
     with _lock:
         _renderers.append(renderer)
