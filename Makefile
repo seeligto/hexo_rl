@@ -348,12 +348,12 @@ probe.windowing: ## Windowing diagnostic probe (Q_cov, Q_anchor, Q_stability) on
 .PHONY: eval
 eval: ## Evaluate checkpoint vs SealBot (CKPT=latest, N_GAMES=100, THINK_TIME=0.5, SIMS=128)
 	@test -n "$(CKPT)" || (echo "No checkpoint found. Pass CKPT= or generate one first." && exit 1)
-	$(PY) scripts/eval_vs_sealbot.py --checkpoint "$(CKPT)" --n-games $(N_GAMES) --time-limit $(THINK_TIME) --model-sims $(SIMS)
+	$(PY) scripts/run_sealbot_eval.py --checkpoint "$(CKPT)" --n-games $(N_GAMES) --time-limit $(THINK_TIME) --model-sims $(SIMS)
 
 .PHONY: eval.sealbot
 eval.sealbot: ## Eval vs SealBot with encoding auto-detect. Vars: EVAL_CHECKPOINT, EVAL_N, EVAL_SIMS, EVAL_THINK, EVAL_ENCODING
 	@test -n "$(EVAL_CHECKPOINT)" || (echo "Set EVAL_CHECKPOINT=" && exit 1)
-	$(PY) scripts/eval_vs_sealbot.py --checkpoint "$(EVAL_CHECKPOINT)" \
+	$(PY) scripts/run_sealbot_eval.py --checkpoint "$(EVAL_CHECKPOINT)" \
 		--n-games $(EVAL_N) --time-limit $(EVAL_THINK) --model-sims $(EVAL_SIMS) \
 		$(_EVAL_ENC_FLAG)
 
