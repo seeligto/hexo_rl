@@ -602,10 +602,41 @@ def main() -> int:
         "--our_n_sims", type=int, default=128,
         help="MCTS sims for our_v6_mcts128. Drop to 64 for fast smoke.",
     )
+    parser.add_argument(
+        "--our_ckpts", type=str, default="",
+        help="Comma-separated list of additional checkpoint paths. Pair with --our_labels.",
+    )
+    parser.add_argument(
+        "--our_labels", type=str, default="",
+        help="Comma-separated labels matching --our_ckpts. Each label registers a "
+        "BOT_REGISTRY entry with OurModelBot @ MCTS=--our_n_sims using that ckpt.",
+    )
     parser.add_argument("--output", type=str, required=True)
     args = parser.parse_args()
 
     _register_default_bots(args.our_model_ckpt, args.our_n_sims)
+
+    if args.our_ckpts:
+        from hexo_rl.bots.our_model_bot import OurModelBot
+        ckpts = [c.strip() for c in args.our_ckpts.split(",") if c.strip()]
+        labels = [l.strip() for l in args.our_labels.split(",") if l.strip()]
+        if len(ckpts) != len(labels):
+            print(
+                f"[err] --our_ckpts ({len(ckpts)}) and --our_labels ({len(labels)}) "
+                f"must have same length",
+                file=sys.stderr,
+            )
+            return 1
+        for ckpt, label in zip(ckpts, labels):
+            def _make(ckpt_path=ckpt, n_sims=args.our_n_sims):
+                return OurModelBot(
+                    checkpoint_path=ckpt_path,
+                    config=_build_our_model_config(n_sims),
+                    temperature=0.0,
+                )
+            BOT_REGISTRY[label] = _make
+            print(f"[info] registered bot '{label}' @ MCTS-{args.our_n_sims} ckpt={ckpt}",
+                  file=sys.stderr)
 
     bot_names = [s.strip() for s in args.bots.split(",") if s.strip()]
     for name in bot_names:
