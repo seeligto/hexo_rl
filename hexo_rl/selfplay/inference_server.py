@@ -97,6 +97,56 @@ class InferenceServer(threading.Thread):
         self._forward_count = 0
         self._total_requests = 0
 
+        self._setup_inference_path(sp, board_size)
+
+        # Pinned host staging buffer for async H2D (Bucket 1 #5, E2 row 1).
+        # Size: batch_size * feature_len * 4B (e.g. 64 * 8 * 19 * 19 * 4 ≈ 0.5 MB
+        # at WIRE_CHANNELS=8). Enables DMA engine copy on CUDA
+        # (non_blocking=True); no-op on CPU.
+        if self.device.type == "cuda":
+            self._h2d_staging = torch.empty(
+                (self._batch_size, WIRE_CHANNELS, board_size, board_size),
+                dtype=torch.float32,
+                pin_memory=True,
+            )
+        else:
+            self._h2d_staging = None
+
+        # Perf-investigation probes (docs/perf/instrumentation_notes.md).
+        _diag = config.get("diagnostics") if isinstance(config.get("diagnostics"), dict) else {}
+        self._perf_timing = bool(_diag.get("perf_timing", False))
+        self._perf_sync_cuda = bool(_diag.get("perf_sync_cuda", False))
+        if self._perf_sync_cuda and torch.cuda.is_available():
+            _perf_log.warning(
+                "perf_sync_cuda_enabled_serialising_stream",
+                context="inference_server",
+                impact="expect_30_50_pct_throughput_drop",
+                remedy="unset_diagnostics.perf_sync_cuda_in_production_config",
+            )
+
+        # Autocast dtype — must match trainer for weight-sync consistency.
+        # Config: "fp16" (default) or "bf16". bf16 on Ampere+/Ada avoids the
+        # GradScaler overhead on the training side; inference-side just
+        # enables the same autocast target.
+        _amp_raw = str(config.get("amp_dtype", "fp16")).lower()
+        if _amp_raw in ("fp16", "float16", "half"):
+            self._amp_dtype = torch.float16
+        elif _amp_raw in ("bf16", "bfloat16"):
+            self._amp_dtype = torch.bfloat16
+        else:
+            raise ValueError(f"amp_dtype must be 'fp16' or 'bf16', got {_amp_raw!r}")
+
+    def _setup_inference_path(self, sp: dict, board_size: int) -> None:
+        """Configure trace OR compile path for the inference model (§176 P22).
+
+        Mutually exclusive: trace_inference and compile_inference can't both
+        be enabled. Sets self._trace_inference, self._traced_model,
+        self._compile_inference, self._compile_mode, self._compile_dynamic.
+        May replace self.model with a torch.compile wrapper.
+
+        Called once at __init__. Run-loop hot path reads the resolved
+        attributes; no per-batch overhead from this helper.
+        """
         # TorchScript trace of the eval forward. The 2026-04-25 py-spy profile
         # (project_dispatch_pyspy_2026-04-25.md) attributed ~33% of dispatcher
         # wall time to L208 — pure CPython overhead iterating ~100 nn.Module
@@ -166,43 +216,6 @@ class InferenceServer(threading.Thread):
                 )
                 self._compile_inference = False
 
-        # Pinned host staging buffer for async H2D (Bucket 1 #5, E2 row 1).
-        # Size: batch_size * feature_len * 4B (e.g. 64 * 8 * 19 * 19 * 4 ≈ 0.5 MB
-        # at WIRE_CHANNELS=8). Enables DMA engine copy on CUDA
-        # (non_blocking=True); no-op on CPU.
-        if self.device.type == "cuda":
-            self._h2d_staging = torch.empty(
-                (self._batch_size, WIRE_CHANNELS, board_size, board_size),
-                dtype=torch.float32,
-                pin_memory=True,
-            )
-        else:
-            self._h2d_staging = None
-
-        # Perf-investigation probes (docs/perf/instrumentation_notes.md).
-        _diag = config.get("diagnostics") if isinstance(config.get("diagnostics"), dict) else {}
-        self._perf_timing = bool(_diag.get("perf_timing", False))
-        self._perf_sync_cuda = bool(_diag.get("perf_sync_cuda", False))
-        if self._perf_sync_cuda and torch.cuda.is_available():
-            _perf_log.warning(
-                "perf_sync_cuda_enabled_serialising_stream",
-                context="inference_server",
-                impact="expect_30_50_pct_throughput_drop",
-                remedy="unset_diagnostics.perf_sync_cuda_in_production_config",
-            )
-
-        # Autocast dtype — must match trainer for weight-sync consistency.
-        # Config: "fp16" (default) or "bf16". bf16 on Ampere+/Ada avoids the
-        # GradScaler overhead on the training side; inference-side just
-        # enables the same autocast target.
-        _amp_raw = str(config.get("amp_dtype", "fp16")).lower()
-        if _amp_raw in ("fp16", "float16", "half"):
-            self._amp_dtype = torch.float16
-        elif _amp_raw in ("bf16", "bfloat16"):
-            self._amp_dtype = torch.bfloat16
-        else:
-            raise ValueError(f"amp_dtype must be 'fp16' or 'bf16', got {_amp_raw!r}")
-
     @property
     def batcher(self) -> InferenceBatcher:
         return self._batcher
@@ -270,33 +283,19 @@ class InferenceServer(threading.Thread):
             and self._h2d_staging is not None
         )
 
-    def run(self) -> None:
-        _perf = self._perf_timing
-        _sync = self._perf_sync_cuda and self.device.type == "cuda"
+    def _warmup_compile_path(self) -> None:
+        """CUDA-graph TLS warmup for compile+reduce-overhead (§123, §176 P22).
 
-        # B4: log which CUDA stream we're on, once at thread start.
-        # Q18 smoking gun: if this matches trainer stream (both default), no overlap.
-        if self.device.type == "cuda":
-            try:
-                current_stream = torch.cuda.current_stream(self.device)
-                default_stream = torch.cuda.default_stream(self.device)
-                _perf_log.info(
-                    "cuda_stream_audit",
-                    context="inference_server",
-                    current_stream_ptr=int(current_stream.cuda_stream),
-                    default_stream_ptr=int(default_stream.cuda_stream),
-                    on_default_stream=current_stream.cuda_stream == default_stream.cuda_stream,
-                )
-            except Exception as exc:  # noqa: BLE001
-                _perf_log.warning("cuda_stream_audit_failed", context="inference_server", error=str(exc))
+        The cudagraph_trees state lives in C++ dynamic TLS — the first
+        forward must run on this dispatcher thread so the captured graph
+        binds here, not to the main thread that built the OptimizedModule
+        wrapper. We also pad the warmup tensor to the production batch_size
+        so the graph is captured for the steady-state shape, not a smaller
+        one-off. Failures degrade to fall-back-on-first-batch behaviour.
 
-        # CUDA-graph TLS warmup for compile+reduce-overhead (§123). The
-        # cudagraph_trees state lives in C++ dynamic TLS — the first forward
-        # must run on this dispatcher thread so the captured graph binds here,
-        # not to the main thread that built the OptimizedModule wrapper. We
-        # also pad the warmup tensor to the production batch_size so the
-        # graph is captured for the steady-state shape, not a smaller
-        # one-off. Failures degrade to fall-back-on-first-batch behaviour.
+        Called once at the top of run() (per-thread). No-op for non-CUDA
+        or non-compile+reduce-overhead configurations.
+        """
         if (
             self._compile_inference
             and self._compile_mode == "reduce-overhead"
@@ -333,6 +332,28 @@ class InferenceServer(threading.Thread):
                     context="inference_server",
                     error=str(exc)[:200],
                 )
+
+    def run(self) -> None:
+        _perf = self._perf_timing
+        _sync = self._perf_sync_cuda and self.device.type == "cuda"
+
+        # B4: log which CUDA stream we're on, once at thread start.
+        # Q18 smoking gun: if this matches trainer stream (both default), no overlap.
+        if self.device.type == "cuda":
+            try:
+                current_stream = torch.cuda.current_stream(self.device)
+                default_stream = torch.cuda.default_stream(self.device)
+                _perf_log.info(
+                    "cuda_stream_audit",
+                    context="inference_server",
+                    current_stream_ptr=int(current_stream.cuda_stream),
+                    default_stream_ptr=int(default_stream.cuda_stream),
+                    on_default_stream=current_stream.cuda_stream == default_stream.cuda_stream,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _perf_log.warning("cuda_stream_audit_failed", context="inference_server", error=str(exc))
+
+        self._warmup_compile_path()
 
         try:
             while not self._stop_event.is_set():
