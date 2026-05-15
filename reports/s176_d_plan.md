@@ -252,6 +252,18 @@ hard abort gate. A4 §e do-not #9 ("no moving goalposts") + L12 (sprint log
 line 636) require pre-registration; A4 §e #15 requires fresh-context review.
 Warning-only is the conservative call.
 
+**Mode-scope qualifier (L21/L22 mandate).** The 15-component threshold
+applies to **selfplay-mode `pool.py game_complete` emit only**. The
+threshold derivation chain is mixed-mode: §175 selfplay-mode cohort mean
+13.63 (sampled-temperature selfplay records) + Gate 2 V70K-4 tourney
+greedy-argmax mean 14.90 (T=0.0 evaluation). Per L21 "modes are
+effectively two different bots from the same weights"; cross-mode
+comparisons require separate threshold derivation. Add an inline comment
+at the `pool.py` `game_complete` emit site declaring the mode-scope so
+future tourney/eval-pipeline `n_components` emit sites do not collide
+threshold semantics with this one. Documentation pin only — no code
+change required for §176 Phase B beyond the comment.
+
 **Commit boundary 3.** `feat(selfplay): emit n_components colony POC metric in game_complete (§176 S3)` —
 single commit, `pool.py` + emit-schema test.
 
