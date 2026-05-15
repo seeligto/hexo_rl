@@ -1419,6 +1419,8 @@ Phase B does NOT run a sustained training smoke; design docs queue for §177+ im
 | `2014669` | F09 N1+N3 risk register rows 8+9 |
 | `3994459` | Phase B prompt artifact pre-launch baseline |
 
+**Master merge + anchor SHA parity verification (2026-05-15).** `phase4.5/s176_phase_a_validation` merged into master via `--no-ff` (14 commits, merge SHA pinned at master push). Branch preserved local + remote per L13 traceability + bisect anchor. Anchor `bootstrap_model_v6_step20k.pt` PARITY verified across hosts: laptop SHA `297e0ce0e48c8c9c417d923610de6ed0166c7295789ebc7bd029c90bb42bce6a` (17,035,312 bytes) == vast `/workspace/hexo_rl/checkpoints/bootstrap_model_v6_step20k.pt` SHA `297e0ce0e48c8c9c417d923610de6ed0166c7295789ebc7bd029c90bb42bce6a` (17,035,312 bytes). Forensics specimen retained on vast: `/workspace/hexo_rl/checkpoints/checkpoint_00070000.pt`, SHA `1f6aa40852e57db6e3cdeac64adb879590370b8596975f2b86f9023f459224dc`, 51,131,811 bytes — L22 witness for Phase B S6 sidecar consumption.
+
 ---
 
 ## Supplementary tables — preserved from per-§ bodies
