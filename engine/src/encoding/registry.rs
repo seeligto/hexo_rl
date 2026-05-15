@@ -1,4 +1,4 @@
-//! Encoding registry — TOML parser + Lazy lookup.
+//! Encoding registry — TOML parser + LazyLock lookup.
 //!
 //! Authored §172 Phase A3 (2026-05-09). `registry.toml` is embedded at
 //! compile time via `include_str!`; first call to `lookup`/`all_specs`
@@ -11,8 +11,8 @@
 //! failure is unrecoverable (the binary cannot construct a Board without
 //! a valid encoding).
 
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use toml::Value;
 
 use super::spec::{PolicyPool, RegistrySpec, ValuePool};
@@ -21,7 +21,7 @@ use super::spec::{PolicyPool, RegistrySpec, ValuePool};
 /// self-contained — runtime never reads from disk.
 static REGISTRY_TOML: &str = include_str!("registry.toml");
 
-static REGISTRY: Lazy<HashMap<&'static str, &'static RegistrySpec>> = Lazy::new(load);
+static REGISTRY: LazyLock<HashMap<&'static str, &'static RegistrySpec>> = LazyLock::new(load);
 
 /// Look up an encoding by name. Returns `None` if unknown.
 pub fn lookup(name: &str) -> Option<&'static RegistrySpec> {
@@ -50,7 +50,7 @@ pub fn all_specs() -> impl Iterator<Item = &'static RegistrySpec> {
 }
 
 // --------------------------------------------------------------------------
-// TOML parsing — runs once via Lazy.
+// TOML parsing — runs once via LazyLock.
 // --------------------------------------------------------------------------
 
 fn load() -> HashMap<&'static str, &'static RegistrySpec> {
@@ -479,7 +479,7 @@ mod tests {
     fn test_lookup_returns_stable_address() {
         let a = lookup("v6").unwrap();
         let b = lookup("v6").unwrap();
-        // &'static — Lazy holds the only allocation; both calls must
+        // &'static — LazyLock holds the only allocation; both calls must
         // return identical pointers.
         assert!(std::ptr::eq(a, b), "lookup returned non-stable address");
     }

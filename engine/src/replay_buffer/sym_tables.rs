@@ -386,7 +386,7 @@ impl SymTables {
 
 // ── sym_tables_for() — per-spec lazy constructor ──────────────────────────────
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
 /// Return the pre-built `SymTables` for the given encoding spec, keyed on
 /// `spec.sym_table_id`.
@@ -414,11 +414,11 @@ pub fn sym_tables_for(spec: &'static crate::encoding::RegistrySpec) -> &'static 
     // reusing a wrong table.
     //
     // "size_19" (v6, v7full): board 19×19, n_planes=8 — shared singleton.
-    static SIZE19_8:  Lazy<SymTables> = Lazy::new(|| SymTables::with_shape(19, 8));
+    static SIZE19_8:  LazyLock<SymTables> = LazyLock::new(|| SymTables::with_shape(19, 8));
     // "size_25" n_planes=8 (v6w25): board 25×25, 8-plane wire format.
-    static SIZE25_8:  Lazy<SymTables> = Lazy::new(|| SymTables::with_shape(25, 8));
+    static SIZE25_8:  LazyLock<SymTables> = LazyLock::new(|| SymTables::with_shape(25, 8));
     // "size_25" n_planes=11 (v8, v8_canvas_realness): board 25×25, 11-plane wire format.
-    static SIZE25_11: Lazy<SymTables> = Lazy::new(|| SymTables::with_shape(25, 11));
+    static SIZE25_11: LazyLock<SymTables> = LazyLock::new(|| SymTables::with_shape(25, 11));
 
     match (spec.sym_table_id, spec.n_planes) {
         ("size_19", _)  => &*SIZE19_8,
@@ -426,7 +426,7 @@ pub fn sym_tables_for(spec: &'static crate::encoding::RegistrySpec) -> &'static 
         ("size_25", 11) => &*SIZE25_11,
         (id, np) => panic!(
             "sym_tables_for: no sym table for encoding {:?} (sym_table_id={:?}, n_planes={}). \
-             Add a Lazy<SymTables> entry in sym_tables::sym_tables_for().",
+             Add a LazyLock<SymTables> entry in sym_tables::sym_tables_for().",
             spec.name, id, np
         ),
     }
@@ -792,7 +792,7 @@ mod tests {
 
     #[test]
     fn sym_tables_for_returns_stable_ref() {
-        // Calling twice returns the same static address (Lazy singleton).
+        // Calling twice returns the same static address (LazyLock singleton).
         let spec = crate::encoding::registry::lookup_or_panic("v6");
         let t1 = crate::replay_buffer::sym_tables::sym_tables_for(spec) as *const _;
         let t2 = crate::replay_buffer::sym_tables::sym_tables_for(spec) as *const _;
