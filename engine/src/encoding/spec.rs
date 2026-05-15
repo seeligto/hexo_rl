@@ -71,6 +71,7 @@ impl PolicyPool {
 /// process lifetime. Cheap to copy — pass by value or `&'static`.
 #[derive(Copy, Clone, Debug)]
 pub struct RegistrySpec {
+    /// &'static after Box::leak in registry::load(); stable for process lifetime.
     pub name: &'static str,
     pub board_size: usize,
     pub trunk_size: usize,
@@ -78,14 +79,17 @@ pub struct RegistrySpec {
     pub cluster_threshold: Option<usize>,
     pub legal_move_radius: usize,
     pub n_planes: usize,
+    /// &'static after Box::leak in registry::load(); stable for process lifetime.
     pub plane_layout: &'static [&'static str],
     pub policy_logit_count: usize,
     pub has_pass_slot: bool,
     pub is_multi_window: bool,
     pub value_pool: ValuePool,
     pub policy_pool: PolicyPool,
+    /// &'static after Box::leak in registry::load(); stable for process lifetime.
     pub sym_table_id: &'static str,
     pub schema_version: u32,
+    /// &'static after Box::leak in registry::load(); stable for process lifetime.
     pub notes: &'static str,
 
     // ── §173 A3 additions ────────────────────────────────────────────────
@@ -94,6 +98,8 @@ pub struct RegistrySpec {
     /// `[0..3, 8..11]` X+history / O+history block convention.
     /// v6 family: 8 indices from 18-plane source. v8 family: 11 indices
     /// from 21-plane source (adds indices 18, 19, 20).
+    ///
+    /// &'static after Box::leak in registry::load(); stable for process lifetime.
     pub kept_plane_indices: &'static [usize],
     /// Source tensor plane count *before* `kept_plane_indices` slice.
     /// v6 family = 18; v8 family = 21.

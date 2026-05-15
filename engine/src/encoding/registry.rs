@@ -68,6 +68,8 @@ fn load() -> HashMap<&'static str, &'static RegistrySpec> {
     for (name, body) in encodings {
         match parse_one(name, body) {
             Ok(spec) => {
+                // SAFETY: allocated by Box::leak in registry::load();
+                // stable for process lifetime — registry is one-shot init.
                 let leaked: &'static RegistrySpec = Box::leak(Box::new(spec));
                 if let Err(e) = leaked.validate() {
                     errors.push(e);
@@ -95,6 +97,8 @@ fn load() -> HashMap<&'static str, &'static RegistrySpec> {
 }
 
 fn leak_str(s: &str) -> &'static str {
+    // SAFETY: allocated by Box::leak in registry::load();
+    // stable for process lifetime — registry is one-shot init.
     Box::leak(s.to_string().into_boxed_str())
 }
 
@@ -275,7 +279,11 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
     }
 
     // All Some at this point.
+    // SAFETY: allocated by Box::leak in registry::load();
+    // stable for process lifetime — registry is one-shot init.
     let plane_layout: &'static [&'static str] = Box::leak(plane_layout.unwrap().into_boxed_slice());
+    // SAFETY: allocated by Box::leak in registry::load();
+    // stable for process lifetime — registry is one-shot init.
     let kept_plane_indices: &'static [usize] = Box::leak(kept_plane_indices.unwrap().into_boxed_slice());
 
     Ok(RegistrySpec {
