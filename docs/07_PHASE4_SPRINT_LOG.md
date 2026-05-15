@@ -1399,6 +1399,28 @@ Forensics added: `reports/s176_gate1_operator_review.md`, `reports/s176_gate2_ve
 
 ---
 
+## §176 — Phase B pre-launch baseline (2026-05-15)
+
+Pre-Phase-B fix wave landed on `phase4.5/s176_phase_a_validation`: six commits absorbing F01–F05 SHOULD-FIX from `reports/s176_review_findings.md` + F06 + F09 N1+N3+N4 cheap STRENGTHEN items. Phase B launch prompt committed as pre-registered done-when artifact per Gate 1 §145 Note 5.
+
+**Forward pointer:** §176 Phase B prompt artifact at `reports/s176_phase_b_prompt.md` (pinned at commit `3994459`). A future Opus session reads that file top-to-bottom and executes Phase B S1–S6 end-to-end. Anchor for Phase B: `checkpoints/bootstrap_model_v6_step20k.pt` (SHA `297e0ce0…2bce6a`, 18.0% n=100 vs SealBot [11.7%, 26.7%]). Forensics specimen retained: `checkpoints/checkpoint_00070000.pt` (L22 attractor-capture witness; F07 deferred to Phase B S6 close-out for retention metadata sidecar OR `docs/rules/checkpoint-archive-policy.md` retention note).
+
+Phase B scope: S1 wrapper audit + anchor n=100 re-baseline (F08), S2 dual-temperature eval ladder + Q14 close, S3 `n_components` colony POC at `pool.py game_complete` selfplay-mode emit, S4 Source A static corpus mixing design doc (lowered-expected-benefit framing per L22), S5 Source B live cross-bot games design doc (elevated to primary-fix-mechanism candidate per L22 + V6 PASS opponent-coupling), S6 close-out. Pre-registered verdicts V-PhaseB-1..9 freeze at the artifact's commit SHA per L13 + A4 do-not #9.
+
+Phase B does NOT run a sustained training smoke; design docs queue for §177+ implementation. Pre-Phase-B fix wave commits `1d5b6b5..2014669`:
+
+| Commit | Item |
+|---|---|
+| `1d5b6b5` | F01 Gate 1+2+3 close-out + L21–L23 + 3 Falsified rows (+ F06 + F09 N4 L18 inline) |
+| `834f761` | F04 CLAUDE.md current phase refresh |
+| `9994d5d` | F05 roadmap §175 row + §176 Phase A/B rows |
+| `6c30f03` | F02 S2 eval_temperature=0.5 pin per L21 |
+| `80a0205` | F03 S3 n_components threshold mode-scope qualifier |
+| `2014669` | F09 N1+N3 risk register rows 8+9 |
+| `3994459` | Phase B prompt artifact pre-launch baseline |
+
+---
+
 ## Supplementary tables — preserved from per-§ bodies
 
 ### §70 mode-collapse evidence (round-robin signature)
