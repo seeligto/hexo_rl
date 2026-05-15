@@ -387,7 +387,7 @@ impl SelfPlayRunner {
                                 leaf_metadata.push((k, centers));
                                 for view in views {
                                     let mut buffer = batcher.get_feature_buffer();
-                                    leaf.encode_state_to_buffer_channels(&view, &mut buffer, kept_planes);
+                                    leaf.encode_state_to_buffer_channels(&view, &mut buffer, kept_planes, n_cells);
                                     // §130: forward-scatter the input planes to
                                     // the rotated frame so the model sees a
                                     // randomly-oriented view of this game. The
@@ -740,13 +740,15 @@ impl SelfPlayRunner {
                             // §173 A5a (H2-α, H3-α): kept_planes and n_cells are
                             // spec-derived; replace KEPT_PLANE_INDICES/SYM_N_CELLS/TOTAL_CELLS.
                             let mut feat = vec![0.0f32; kept_planes.len() * n_cells];
-                            board.encode_state_to_buffer_channels(&views[k], &mut feat, kept_planes);
+                            board.encode_state_to_buffer_channels(&views[k], &mut feat, kept_planes, n_cells);
                             // Compute Q13 chain-length planes separately (not in state).
                             let mut chain = vec![0.0f32; 6 * n_cells];
                             encode_chain_planes(
                                 &views[k][..n_cells],
                                 &views[k][n_cells..2 * n_cells],
                                 &mut chain,
+                                n_cells,
+                                agg_trunk_sz,
                             );
                             // Fast games: zero-policy marks value-only targets (unless
                             // completed Q-values are enabled, which give signal even at 50 sims).
