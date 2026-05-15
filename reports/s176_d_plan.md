@@ -461,6 +461,8 @@ D4 NEEDS_REVISION basis: Wave C BT ladder (`reports/s176_c_tourney/ratings.csv`)
 | 5 | Source B live bot-mixing re-introduces §17 GIL regression (3.3× pos/hr drop) | CRITICAL if attempted in-process | S5 design doc mandates subprocess isolation; do NOT in-process daemon; `scripts/tournament_validate.py` (Wave B) is the launcher template | A4 §e do-not #1; sprint log line 597; §17 c9f39de revert |
 | 6 | Operator's qualitative "one large diffuse cluster" intuition still drives §177+ work despite A3 REFUTED verdict | MEDIUM | A3 forensics REFUTED single-cluster (6.3% non-orphan at 50K); §176 Phase B work must cite §175 multi-island fragmentation as the attractor, not unified colony | A3 §d, §verdict |
 | 7 | Wave D plan author mis-allocates §176 Phase B bot-integration LOC budget as "one-liner" | HIGH per L17 | S2 budget explicit: ~65 LOC opponent integration + 1 INV test update; L17 origin §122 rotation was ~50-80 LOC port | A4 §b L17; sprint log line 641 |
+| 8 | SealBot upstream colony-detection bug per `docs/rules/bot-integration.md:34` skews V3 framing → Source A weighting | MEDIUM | S4 design doc must cite the upstream caveat and treat sealbot colony rate (35.0%) as a noisy baseline; recompute weights if upstream patches land | `docs/rules/bot-integration.md:34`; Gate 1 §139 strengthening Note 1 |
+| 9 | Vendor submodule SHA drift on `git submodule update --remote` re-introduces Wave A1 INTEGRABLE-NOW assumption breakage | LOW but silent | Pin documented: `vendor/bots/krakenbot @ d9c5bfb`; do NOT `--remote`-update without re-running `tests/test_krakenbot_wrappers.py` + 50-game smoke | A1 §a submodule SHA; Gate 1 §141 strengthening Note 3 |
 
 ---
 
