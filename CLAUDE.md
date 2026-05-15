@@ -17,7 +17,7 @@ This file is read automatically by Claude Code at the start of every session.
 Read it fully before doing anything. Rule files under `docs/rules/` are topic-scoped
 — load on demand per the index below.
 
-**Current phase:** §174 v6w25 sustained CLOSED 2026-05-13 — three bootstrap recipes (e30 / e50 / v6→v6w25 transfer FT) all failed selfplay viability gate at R=8 MCTS-128. ESCALATED to §175 v6 sustained (100K steps, n=100 SealBot eval, matched cosine). §173 α multi-window K-cluster selfplay infrastructure operational (bench gate held). v7full (§150 anchor, 17.4% n=500 vs SealBot), v7e30, v7, v6, v6w25 retained as versioned baselines.
+**Current phase:** §175 v6 sustained closed-by-interrupt at step 70176 (2026-05-14T20:56Z); §176 Phase A merged 2026-05-15 with step-20K promoted as canonical anchor (`bootstrap_model_v6_step20k.pt`, SHA `297e0ce0…2bce6a`, 18.0% n=100 vs SealBot [11.7, 26.7]) via Gate 3. Phase B pending launch on fresh branch. §173 α multi-window K-cluster selfplay infrastructure operational (bench gate held). v7full (§150 anchor, 17.4% n=500 vs SealBot), v7e30, v7, v6, v6w25, v6_step20k retained as versioned baselines.
 **Reference hardware:** vast 5080 + Ryzen 9 9900X is primary; laptop Ryzen 7 8845HS + RTX 4060 Max-Q is dev; desktop Ryzen 7 3700x + RTX 3070 is legacy reference. See `docs/rules/perf-targets.md`.
 (An internal sprint log is maintained locally — not distributed.)
 
