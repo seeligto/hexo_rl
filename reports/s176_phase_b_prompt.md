@@ -17,6 +17,8 @@
 
 **Mechanism re-statement (Q11 carry-over).** §174 forward block (sprint log line 1202) framed the §175 degradation as "policy/value head + selfplay-interaction layer." L22 (sprint log line 1374) sharpens this to "**sampled-policy distribution flattening into colony attractor** under T=0.5 sampling, NOT loss of argmax dominance over bootstrap." Phase B S5 design doc (Source B) MUST cite L22 as the mechanism justification — opponent-coupling (V6 PASS, 41pp colony spread) is the empirical lever; sampled-distribution flattening is the failure mode the lever counter-acts. The two are different framings of the same mechanism and Phase B uses them together.
 
+**Naming clarification — "Q11 carry-over" is shorthand, not literal Q11.** The existing `docs/06_OPEN_QUESTIONS.md` Q11 ("colony-detection over-inclusion") is RESOLVED 2026-04-28 and stays so — that question is a different mechanism question (colony detector false-positive rate, not §174 transfer-gap / §175 sampled-flattening). Phase B S6 MUST create a NEW queryable Q-row `Q-§176-mechanism` (heading: "§174 transfer-gap + §175 sampled-policy attractor mechanism — root cause and counter-mechanism") that carries the §174/L22 mechanism question forward, with Q11 receiving only a one-line `See also: Q-§176-mechanism` cross-reference at the bottom of its RESOLVED block. Do NOT overload Q11's body with §175 mechanism content. (Per operator pre-launch audit 2026-05-15 naming clarification.)
+
 **Why Phase B is reframed from `s176_d_plan.md` (Wave D, pre-Gate-2).** Wave D wrote S4 Source A as the **primary** fix mechanism candidate. Gate 2 + L21/L22/L23 inverted this reading: the L22 mechanism (sampled-policy flattening) is best counter-acted by Source B's opponent-coupled cross-bot games (V6 PASS), not by Source A's static-corpus weighting. Phase B promotes **S5 Source B from "design-only, defer to §177+" to "design-only with explicit primary-fix-mechanism justification, implementation queued immediately after Phase B closes"**. S4 retains its slot but with lowered expected-benefit — it remains the unblocked first-shot at the §175 head drift, and an Elo-weighted static corpus is empirically defensible (Wave C ratings.csv ~500 Elo gap mandates per-source weighting per L1+L15) — but it is no longer the primary mechanism story.
 
 ---
@@ -206,13 +208,13 @@ G6 is a **warning panel**, not a hard abort gate, per L13 + Q12 (no moving goalp
 
 > S5 MUST NOT propose an in-process Python daemon for opponent mixing. §17 (sprint log line 597, commit c9f39de) showed 1.52M → 464K pos/hr regression (3.3×) when SealBot was integrated as in-process daemon. Subprocess isolation via `scripts/tournament_validate.py`-style single-game-at-a-time process spawning is the validated pattern (Wave B harness, 1050 games / 5111s wall on laptop). If Phase B reviewers find any in-process daemon proposal in this doc, HALT.
 
-### S6 — Sprint log §176 Phase B close-out + Q11 re-statement + deferred-list reconciliation
+### S6 — Sprint log §176 Phase B close-out + new Q-§176-mechanism row + Q11 cross-ref + deferred-list reconciliation
 
-**Goal.** Close §176 Phase B with sprint log entry, Q11 re-statement landed, deferred STRENGTHEN items reconciled.
+**Goal.** Close §176 Phase B with sprint log entry, **NEW** `Q-§176-mechanism` row landed in `docs/06_OPEN_QUESTIONS.md` (carrying the §174/L22 mechanism question, per Section 1 naming clarification), Q11 RESOLVED-block updated with `See also` cross-reference only, deferred STRENGTHEN items reconciled.
 
 **Files in scope.**
 - WRITE: `docs/07_PHASE4_SPRINT_LOG.md` (append §176 Phase B close-out block, ~150 LOC).
-- WRITE: `docs/06_OPEN_QUESTIONS.md` Q11 re-statement (cite L22 sharpening; ~10 LOC; Q11's RESOLVED 2026-04-28 status preserved, the re-statement is a forward-looking note on how Phase B sustained smokes should report colony detection).
+- WRITE: `docs/06_OPEN_QUESTIONS.md` — (a) NEW `Q-§176-mechanism` row (~15 LOC; heading + L22 framing + Phase B sustained-smoke forward-looking note); (b) Q11 RESOLVED-block append a one-line `See also: Q-§176-mechanism` cross-reference (~1 LOC; Q11's RESOLVED 2026-04-28 status preserved, body unchanged).
 - WRITE: `docs/02_roadmap.md` §176 Phase B row → CLOSED.
 - WRITE: `CLAUDE.md:20` Current phase → §177+ active phase pin.
 
@@ -222,7 +224,7 @@ G6 is a **warning panel**, not a hard abort gate, per L13 + Q12 (no moving goalp
 
 **Bench gate.** No.
 
-**Commit boundary.** `docs(sprint): §176 Phase B close-out + Q11 re-statement + L24+ if any (§176 S6)`.
+**Commit boundary.** `docs(sprint): §176 Phase B close-out + Q-§176-mechanism Q-row + Q11 cross-ref + L24+ if any (§176 S6)`.
 
 **S6 must reconcile (deferred-from-pre-Phase-B list, per Section 8 below):**
 - F07 — promote `checkpoint_00070000.pt` as `checkpoints/known_pathological_v6_step70k.pt` weights-only with sidecar JSON, OR add explicit retention note in `docs/rules/checkpoint-archive-policy.md`.
@@ -333,9 +335,9 @@ For S1 SKIP-WITH-RATIONALE: anchor CI [11.7, 26.7] preserved by tensor-equality;
 **Pass:** S6 close-out forward-pointer to §177+ includes this requirement verbatim.
 **Fail action:** S6 close-out revised.
 
-### V-PhaseB-9 — Q11 mechanism re-statement landed
-**Hypothesis.** S6 lands Q11 re-statement in `docs/06_OPEN_QUESTIONS.md` citing L22 sharpening (sampled-policy flattening into colony attractor, not argmax-mode regression). Q11's RESOLVED 2026-04-28 status preserved.
-**Pass:** Q11 body has both the original RESOLVED note AND the L22 forward-looking re-statement note.
+### V-PhaseB-9 — Q-§176-mechanism Q-row landed + Q11 cross-reference added
+**Hypothesis.** S6 lands a NEW `Q-§176-mechanism` row in `docs/06_OPEN_QUESTIONS.md` citing L22 sharpening (sampled-policy flattening into colony attractor, not argmax-mode regression). Q11's RESOLVED 2026-04-28 status + body preserved unchanged; only a one-line `See also: Q-§176-mechanism` cross-reference appended.
+**Pass:** new Q-row exists with L22 framing; Q11 body unchanged except for the one-line `See also` cross-reference at the bottom of its RESOLVED block.
 **Fail action:** S6 revised.
 
 ---
@@ -348,7 +350,7 @@ Mirrors Phase A's parallel-subagent + sequential-implementation structure, adapt
 
 Four parallel subagent dispatches:
 
-- **Wave A1 — wrapper audit + anchor re-baseline** (subagent_type: general-purpose). Read-only audit of Phase A wrapper deliverables on the fresh branch + execute n=100 SealBot eval at T=0.5 on the promoted artifact (if vast budget approved). Output: `reports/s176_phase_b/s1_wrapper_audit.md` + `s1_anchor_rebaseline.md`.
+- **Wave A1 — wrapper audit + anchor SHA parity re-check + anchor re-baseline** (subagent_type: general-purpose). (a) 30-second pre-launch SHA parity re-check of `checkpoints/bootstrap_model_v6_step20k.pt` (laptop vs vast `/workspace/hexo_rl/checkpoints/bootstrap_model_v6_step20k.pt`) — expected SHA `297e0ce0e48c8c9c417d923610de6ed0166c7295789ebc7bd029c90bb42bce6a`, expected size 17,035,312 bytes; verified PARITY 2026-05-15 per sprint log SHA-parity row, but cheap re-verification at launch insures against drift between this prompt's commit and launch. (b) Read-only audit of Phase A wrapper deliverables on the fresh branch. (c) Execute n=100 SealBot eval at T=0.5 on the promoted artifact (if vast budget approved). Output: `reports/s176_phase_b/s1_wrapper_audit.md` + `s1_anchor_rebaseline.md` + a one-line SHA-parity verdict appended to one of them.
 - **Wave A2 — eval-schema design** (subagent_type: Plan). Design the dual-mode eval schema (eval_temperature pin + eval_dual_mode field + dual-mode runner closures). Output: design fragment with schema YAML + Python closure sketches for S2.
 - **Wave A3 — colony POC metric design** (subagent_type: Plan). Read A3 forensics report + colony_detection.py + pool.py emit site; produce the BFS-helper + game_complete-event-schema delta for S3. Output: design fragment with code sketches.
 - **Wave A4 — S4 + S5 design-doc skeletons in parallel** (two subagent dispatches; subagent_type: general-purpose each). Skeletons with Section 1–6 headers + bullet-point content per Section 3 above. Outputs: `docs/designs/bot_game_mixing_design.md` skeleton + `docs/designs/bot_live_selfplay_design.md` skeleton.
