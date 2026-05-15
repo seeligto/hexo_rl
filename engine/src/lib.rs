@@ -16,10 +16,10 @@ use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
 use numpy::{
     IntoPyArray, PyArray1, PyArray3, PyArray4, PyArrayMethods,
-    PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArray4, PyUntypedArrayMethods,
+    PyReadonlyArray4, PyUntypedArrayMethods,
 };
 
-use board::{Board as RustBoard, Player, BOARD_SIZE, encode_chain_planes as rust_encode_chain_planes, TOTAL_CELLS};
+use board::{Board as RustBoard, Player, BOARD_SIZE};
 use crate::encoding::EncodingSpec as RustEncodingSpec;
 use crate::encoding::RegistrySpec as RustRegistrySpec;
 use game_runner::SelfPlayRunner;
@@ -364,33 +364,6 @@ impl PyBoard {
         self.inner.to_planes()
     }
 
-    /// Same as `to_tensor` but makes the sliding-window semantics explicit.
-    /// `size` is ignored; output shape comes from the Board's encoding
-    /// (default 19×19 v6). Multi-window encodings panic per `to_tensor`
-    /// (§172 A4.1).
-    pub fn view_window(&self, _size: usize) -> Vec<f32> {
-        self.inner.to_planes()
-    }
-
-    /// Encode the board as a flat list of floats covering only the listed
-    /// wire planes. `channels` selects from the canonical 18-plane layout
-    /// documented on `to_tensor`; the returned vector has length
-    /// `len(channels) * 361` and emits planes in the given order.
-    ///
-    /// Used by sweep variants whose model in_channels < 18 to avoid
-    /// allocating zero history slots (planes 1–7 / 9–15).
-    pub fn to_tensor_channels(&self, channels: Vec<usize>) -> PyResult<Vec<f32>> {
-        for (i, &c) in channels.iter().enumerate() {
-            if c >= 18 {
-                return Err(PyValueError::new_err(format!(
-                    "channels[{}] = {} out of range [0, 18)",
-                    i, c
-                )));
-            }
-        }
-        Ok(self.inner.to_planes_channels(&channels))
-    }
-
     /// Returns a tuple of (list of NumPy arrays, list of (q, r) centers) for each cluster.
     ///
     /// Each NumPy array has shape `(2, S, S)` where `S = self.cluster_window_size`
@@ -472,40 +445,12 @@ impl PyBoard {
         self.inner.window_flat_idx(q, r)
     }
 
-    /// (cq, cr) centre of the current 19×19 view window.
-    pub fn window_center(&self) -> (i32, i32) {
-        self.inner.window_center()
-    }
-
-    /// Whether (q, r) is inside the current 19×19 view window.
-    pub fn in_window(&self, q: i32, r: i32) -> bool {
-        self.inner.in_window(q, r)
-    }
-
     /// Board size (cells per axis). Default 19 (v6 wire format); honors
     /// the encoding bound at construction via `with_encoding_name` (e.g.
     /// 25 for v8). §172 A4.1.
     #[getter]
     pub fn size(&self) -> usize {
         self.inner.encoding.map_or(BOARD_SIZE, |s| s.board_size)
-    }
-
-    /// Human-readable string showing the 19×19 view window (for debugging).
-    
-    /// Returns a list of all stones on the board as (q, r, player).
-    /// Count how many empty cells, if occupied by `player`, would complete a 6-in-a-row.
-    ///
-    /// Used for the MCTS quiescence check: ≥3 winning moves is a forced win because
-    /// the opponent can block at most 2 cells per turn.
-    ///
-    /// `player`: 1 for player 1, -1 for player 2.  Returns 0 for an empty board.
-    pub fn count_winning_moves(&self, player: i8) -> u32 {
-        let rust_player = match player {
-            1  => board::Player::One,
-            -1 => board::Player::Two,
-            _  => return 0,
-        };
-        self.inner.count_winning_moves(rust_player)
     }
 
     /// Returns threat cells as list of (q, r, level, player) tuples.
@@ -810,52 +755,12 @@ thread_local! {
     static SYM_TABLES_TLS: SymTables = SymTables::new();
 }
 
-/// Apply 12-fold hex symmetry `sym_idx` to one (C, 19, 19) state tensor.
+/// Batched hex-dihedral symmetry scatter.
 ///
 /// Plane-count-generic: any positive `C` works (8 for HEXB v6 buffer planes,
-/// 18 for the legacy inference / corpus tensor). State planes do not permute
+/// 18 for legacy inference / corpus tensors). State planes do not permute
 /// under hex dihedral symmetry — only cell coordinates do — so a single
 /// scatter table applies to any plane count.
-///
-/// Args:
-///     state:   (C, 19, 19) float32 numpy array. **Must be C-contiguous.**
-///              If the array may be non-contiguous (e.g. a slice or transposed
-///              view), call `np.ascontiguousarray(state)` before passing it in.
-///     sym_idx: integer in [0, 12).
-///
-/// Returns a newly-allocated (C, 19, 19) float32 numpy array.
-#[pyfunction]
-fn apply_symmetry<'py>(
-    py: Python<'py>,
-    state: PyReadonlyArray3<'py, f32>,
-    sym_idx: usize,
-) -> PyResult<Bound<'py, PyArray3<f32>>> {
-    if sym_idx >= N_SYMS {
-        return Err(PyValueError::new_err(format!(
-            "sym_idx out of range: {} (expected 0..{})",
-            sym_idx, N_SYMS
-        )));
-    }
-    let shape = state.shape();
-    if shape.len() != 3 || shape[1] != BOARD_SIZE || shape[2] != BOARD_SIZE {
-        return Err(PyValueError::new_err(format!(
-            "expected state shape (C, {}, {}); got {:?}",
-            BOARD_SIZE, BOARD_SIZE, shape
-        )));
-    }
-    let n_planes = shape[0];
-    let src = state.as_slice()?;
-    let mut dst = vec![0.0f32; n_planes * BOARD_SIZE * BOARD_SIZE];
-    SYM_TABLES_TLS.with(|tables| {
-        apply_symmetry_state::<f32>(src, &mut dst, sym_idx, tables);
-    });
-    dst.into_pyarray(py).reshape([n_planes, BOARD_SIZE, BOARD_SIZE])
-}
-
-/// Batched version of `apply_symmetry`.
-///
-/// Plane-count-generic: any positive `C` works (8 for HEXB v6 buffer planes,
-/// 18 for legacy inference / corpus tensors).
 ///
 /// Args:
 ///     states:      (N, C, 19, 19) float32 numpy array.
@@ -904,36 +809,6 @@ fn apply_symmetries_batch<'py>(
     dst.into_pyarray(py).reshape([n, n_planes, BOARD_SIZE, BOARD_SIZE])
 }
 
-/// Compute the 6 Q13 chain-length planes from (cur, opp) stone masks.
-///
-/// Args:
-///     cur_stones: (19, 19) float32 mask, 1.0 at current-player stones else 0.0.
-///     opp_stones: (19, 19) float32 mask, 1.0 at opponent stones else 0.0.
-///
-/// Returns a (6, 19, 19) float32 numpy array of /6-normalised chain values.
-/// Plane order: [axis0_cur, axis0_opp, axis1_cur, axis1_opp, axis2_cur, axis2_opp].
-#[pyfunction]
-fn compute_chain_planes<'py>(
-    py: Python<'py>,
-    cur_stones: PyReadonlyArray2<'py, f32>,
-    opp_stones: PyReadonlyArray2<'py, f32>,
-) -> PyResult<Bound<'py, PyArray3<f32>>> {
-    for (name, arr) in [("cur_stones", &cur_stones), ("opp_stones", &opp_stones)] {
-        let shape = arr.shape();
-        if shape.len() != 2 || shape[0] != BOARD_SIZE || shape[1] != BOARD_SIZE {
-            return Err(PyValueError::new_err(format!(
-                "{} shape must be ({}, {}); got {:?}",
-                name, BOARD_SIZE, BOARD_SIZE, shape
-            )));
-        }
-    }
-    let cur = cur_stones.as_slice()?;
-    let opp = opp_stones.as_slice()?;
-    let mut out = vec![0.0f32; 6 * TOTAL_CELLS];
-    rust_encode_chain_planes(cur, opp, &mut out);
-    out.into_pyarray(py).reshape([6usize, BOARD_SIZE, BOARD_SIZE])
-}
-
 /// Read the process-wide MCTS pool-overflow counter without resetting.
 ///
 /// Pool overflow events fabricate a terminal value at the leaf and let
@@ -967,9 +842,7 @@ fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<InferenceBatcher>()?;
     m.add_class::<SelfPlayRunner>()?;
     m.add_class::<ReplayBuffer>()?;
-    m.add_function(wrap_pyfunction!(apply_symmetry, m)?)?;
     m.add_function(wrap_pyfunction!(apply_symmetries_batch, m)?)?;
-    m.add_function(wrap_pyfunction!(compute_chain_planes, m)?)?;
     m.add_function(wrap_pyfunction!(mcts_pool_overflow_count, m)?)?;
     m.add_function(wrap_pyfunction!(take_mcts_pool_overflow_count, m)?)?;
     Ok(())

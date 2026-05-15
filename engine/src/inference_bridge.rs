@@ -145,9 +145,10 @@ impl Inner {
 
 /// Rust-owned blocking inference queue for fused Python model inference.
 ///
-/// Worker threads call `submit_request_and_wait`, which enqueues features and
-/// blocks. Python calls `next_inference_batch` to fetch a fused batch tensor,
-/// runs the model, then calls `submit_inference_results` to wake waiters.
+/// Worker threads call `submit_batch_and_wait_rust`, which enqueues features
+/// and blocks. Python calls `next_inference_batch` to fetch a fused batch
+/// tensor, runs the model, then calls `submit_inference_results` to wake
+/// waiters.
 #[pyclass(name = "InferenceBatcher", skip_from_py_object)]
 #[derive(Clone)]
 pub struct InferenceBatcher {
@@ -160,50 +161,6 @@ pub struct InferenceBatcher {
 
 #[allow(dead_code)]
 impl InferenceBatcher {
-    pub(crate) fn submit_request_and_wait_rust(
-        &self,
-        features: Vec<f32>,
-    ) -> Result<(Vec<f32>, f32), ()> {
-        if features.len() != self.feature_len {
-            return Err(());
-        }
-        if self.inner.closed.load(Ordering::SeqCst) {
-            return Err(());
-        }
-
-        let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
-        let waiter = Arc::new(Waiter::default());
-
-        self.inner.waiters.insert(id, waiter.clone());
-
-        {
-            let mut queue = self.inner.queue.lock().expect("queue lock poisoned");
-            queue.push_back(PendingRequest { id, features });
-            self.inner.queue_cv.notify_all();
-        }
-
-        let mut guard = waiter.result.lock().expect("waiter lock poisoned");
-        loop {
-            if let Some(res) = guard.take() {
-                match res {
-                    Ok((policy, value)) => {
-                        if policy.len() != self.policy_len {
-                            return Err(());
-                        }
-                        return Ok((policy, value));
-                    }
-                    Err(_) => return Err(()),
-                }
-            }
-
-            if self.inner.closed.load(Ordering::SeqCst) {
-                return Err(());
-            }
-
-            guard = waiter.cv.wait(guard).expect("waiter condvar poisoned");
-        }
-    }
-
     pub(crate) fn submit_batch_and_wait_rust(
         &self,
         batch_features: Vec<Vec<f32>>,
@@ -338,18 +295,6 @@ impl InferenceBatcher {
     }
 
 
-    /// Submit one request and block until Python returns its policy/value.
-    pub fn submit_request_and_wait(
-        &self,
-        py: Python<'_>,
-        features: Vec<f32>,
-    ) -> PyResult<(Vec<f32>, f32)> {
-        py.detach(|| {
-            self.inner
-                .submit_and_wait(features, self.feature_len, self.policy_len)
-        })
-    }
-
     /// Spawn N mock game requests on native threads (test utility).
     pub fn spawn_mock_games(&self, n_games: usize) {
         let inner = self.inner.clone();
@@ -400,7 +345,7 @@ impl InferenceBatcher {
         if pulled.is_empty() {
             // Return an explicit 0xfeature_len tensor for timeout/no-work polls.
             // Using from_vec2 on an empty Vec can raise and kill the Python
-            // inference thread, which then deadlocks submit_request_and_wait callers.
+            // inference thread, which then deadlocks submit_batch_and_wait_rust callers.
             let arr = PyArray2::<f32>::zeros(py, [0, self.feature_len], false);
             return Ok((Vec::new(), arr));
         }

@@ -866,16 +866,6 @@ impl Board {
         out
     }
 
-    /// Same as `to_planes` — present to make the sliding-window semantics
-    /// explicit in the PyO3 interface.
-    ///
-    /// `size` is ignored; output shape comes from the Board's encoding
-    /// (default 19×19 v6). Multi-window encodings panic per `to_planes`
-    /// (§172 A4.1).
-    pub fn view_window(&self, _size: usize) -> Vec<f32> {
-        self.to_planes()
-    }
-
     /// Returns **2-plane views** (2 × TOTAL_CELLS = 722 floats each) and the
     /// window centre (cq, cr) for each cluster.
     ///
