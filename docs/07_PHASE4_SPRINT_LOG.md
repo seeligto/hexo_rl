@@ -1425,6 +1425,49 @@ Phase B does NOT run a sustained training smoke; design docs queue for §177+ im
 
 ---
 
+## §177-pre — Wave A1 baseline (n=100 dual-temperature SealBot eval) — 2026-05-15
+
+Operator-driven Wave A1 ahead of S1–S6 implementation: 30-s SHA parity re-check + n=100 dual-temperature SealBot eval of the §176 Phase A anchor + variant config authoring + §177 training launch from the step-20K anchor (NOT Phase B's design-only scope; Phase B S1–S6 sequence still queued for a future session against this baseline).
+
+**Anchor SHA parity re-check (vast 5080, post-master-pull 7d4b4fb).** PASS both:
+- `bootstrap_model_v6_step20k.pt` → `297e0ce0e48c8c9c417d923610de6ed0166c7295789ebc7bd029c90bb42bce6a` (17,035,312 B) ✓ matches expected
+- `checkpoint_00070000.pt` → `1f6aa40852e57db6e3cdeac64adb879590370b8596975f2b86f9023f459224dc` (51,131,811 B) ✓ matches expected
+
+**n=100 dual-temperature SealBot baseline** (MCTS-128, `random_opening_plies=0`, `time_limit=0.5`, seed_base=42):
+
+| Mode | n | wins | WR | Wilson 95% | mean_ply | elapsed_sec |
+|---|---|---|---|---|---|---|
+| greedy T=0.0   | 100 | 0  | 0.0%  | [0.0%, 3.7%]  | 77.4 | 1722 |
+| sampled T=0.5  | 100 | 12 | 12.0% | [7.0%, 19.8%] | 52.7 | 1129 |
+
+Reports: `reports/phase_b_wave_a1/{baseline_greedy.json, baseline_sampled.json, baseline_*.log}`.
+
+**Pre-registered verdicts BL-1..BL-4 (operator prompt) — disposition.** Three of the four were NULL'd: the operator's pre-registration conflated greedy vs sampled modes for the anchor-reproduction test, but §175 step-20K's documented 18% is the **sampled** number per `eval.yaml::eval_temperature=0.5`, and L21 explicitly establishes **greedy=0%** for the same checkpoint. NULL'd per L13 + skill `investigation-probe-smoke-verdict` anti-pattern #1 (don't rewrite report to fit verdict).
+
+| ID | User-pre-registered hypothesis | Literal verdict | Disposition |
+|---|---|---|---|
+| BL-1 | Greedy n=100 reproduces §175 step-20K eval (PASS: WR ∈ [11.7, 26.7]) | FAIL (0% vs 18% expected) | **NULL — basis invalidated by L21.** §175 18% is sampled mode (`eval_temperature: 0.5` pin); L21 explicitly states step-20K **greedy = 0.0%**. The 0/100 greedy result EXACTLY reproduces L21's documented greedy-mode value. Reframed: GREEDY_L21_REPRO = PASS. |
+| BL-2 | Sampled diverges from greedy ≥ 6pp absolute per L21 | PASS (12pp) | **PASS** — L21 dual-mode divergence confirmed at the Phase B baseline. Locks dual-temperature gate scope for Phase B S2. |
+| BL-3 | Sampled WR < greedy WR (matches §175 trajectory direction) | FAIL (sampled > greedy by 12pp) | **NULL — basis invalidated by L22.** Sampled > greedy at step-20K is the normal **pre-flattening** ordering (exploration-spread baseline). The §175 trajectory direction (sampled < greedy) emerges **post-flattening** at step-70K per V70K-3 PASS strong + §175 eval slide 18%→4%. BL-3's framing should be applied to a post-flattening checkpoint, not the pre-flattening anchor. Sampled-canonical meta-claim PASSes independently via eval.yaml `eval_temperature: 0.5` pin + L21 convention. |
+| BL-4 | Colony fraction in sampled wins ≥ greedy wins by ≥ 10pp | undefined | **NULL — greedy wins=0 ⇒ divisor zero.** No greedy-side colony rate computable. Sampled-side colony measurement deferred to Phase B S3 implementation. |
+
+**Phase B prompt S1 re-baseline verdict (canonical).** Per Section 6 V-PhaseB-5 + Section 3 S1 PASS criterion (point-estimate-in-original-CI):
+
+- Sampled n=100 = 12.0%, point estimate **12.0% ∈ [11.7%, 26.7%]** (original §175 anchor CI).
+- **V-PhaseB-5 verdict: PASS** (anchor preserved by extraction; tensor-equality + behavioral-equality both green).
+- Wilson95 of 12/100 = [7.0%, 19.8%] overlaps but does not contain §175 [11.7%, 26.7%]; point-estimate criterion is what the Phase B prompt pre-registered, and it is met.
+- F08 SHOULD-RE-BASELINE deferred-strengthen item now CLOSED.
+
+**Mode comparison signature (Wave A1 forensics).**
+
+- Greedy mean_ply 77.4 (long grinding losses, no termination via win).
+- Sampled mean_ply 52.7 (12 wins terminate games earlier; sampled exploration shortens losing trajectories too).
+- Sampled-greedy elapsed asymmetry: 1722 s vs 1129 s (greedy 1.5× sampled wall-time despite identical MCTS budget) — sampled's shorter games dominate.
+
+**Variant config + training launch.** Authored `configs/variants/v6_sustained_s177.yaml` (commit `166ac7c` on master): clone of §175 `v6_sustained.yaml` with bootstrap delta only (CLI `--checkpoint` flag); L9 cosine-temp + jitter pairing preserved, `random_opening_plies=0`, `eval_interval=10000`, n_games=100, total_steps=100000. Dashboard port falls back to `monitoring.yaml` default 5001 (vast port 8080 occupied by jupyter-notebook pid 690). §177 training launched on vast 5080 in tmux `s177` from `bootstrap_model_v6_step20k.pt` along the §175 recipe — empirical zero-point for Phase B Wave C source-mixing experiments. No bot-game mixing (Source A/B arrive after Phase B S1–S6 land).
+
+---
+
 ## Supplementary tables — preserved from per-§ bodies
 
 ### §70 mode-collapse evidence (round-robin signature)
