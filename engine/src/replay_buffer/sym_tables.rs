@@ -67,67 +67,6 @@ pub const POLICY_STRIDE: usize = N_ACTIONS;
 /// scatter table as a single state plane.
 pub const AUX_STRIDE:    usize = N_CELLS;
 
-// ── v6w25 constants (§168 Gate 3 — K-cluster encoding at matched R=8 ───
-//    perception). Wire format = v6 (8 KEPT planes + pass slot) but
-//    cluster window grows 19 → 25, cluster threshold grows 5 → 8, and
-//    legal-move radius grows 5 → 8. Used as the matched-perception A/B
-//    baseline against v8 single-bbox (T3 §168 verdict pending).
-//
-// DEPRECATED (§173 A4): these constants are superseded by `sym_tables_for(spec)`
-// and `spec.*_stride()` / `spec.n_cells()`. Use the spec-based accessors in all
-// new code. These consts will be removed in a follow-up commit once A5a/A5b/A6
-// have migrated all remaining callers.
-
-// These constants are expressed as plain values to avoid triggering deprecation
-// warnings within this module itself (Rust deprecation warnings fire on use,
-// including at peer-constant definition sites). The deprecation doc comments
-// and #[deprecated] annotations communicate the migration path to callers.
-
-/// v6w25 cluster window side length = 25. DEPRECATED — use `spec.trunk_size`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.trunk_size (via sym_tables_for / RegistrySpec::n_cells); §173 A4")]
-#[allow(deprecated)]
-pub const BOARD_H_V6W25: usize = 25;
-/// DEPRECATED — use `spec.trunk_size`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.trunk_size; §173 A4")]
-#[allow(deprecated)]
-pub const BOARD_W_V6W25: usize = 25; // = BOARD_H_V6W25
-/// v6w25 total cells = 625. DEPRECATED — use `spec.n_cells()`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.n_cells(); §173 A4")]
-#[allow(deprecated)]
-pub const N_CELLS_V6W25: usize = 625; // = BOARD_H_V6W25 * BOARD_W_V6W25
-/// v6w25 plane count = 8. DEPRECATED — use `spec.n_planes`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.n_planes; §173 A4")]
-#[allow(deprecated)]
-pub const N_PLANES_V6W25: usize = 8; // = N_PLANES
-/// v6w25 action space = 626. DEPRECATED — use `spec.policy_stride()`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.policy_stride(); §173 A4")]
-#[allow(deprecated)]
-pub const N_ACTIONS_V6W25: usize = 626; // = N_CELLS_V6W25 + 1
-/// v6w25 cluster threshold = 8. DEPRECATED — use `spec.cluster_threshold.unwrap()`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.cluster_threshold.unwrap(); §173 A4")]
-#[allow(deprecated)]
-pub const CLUSTER_THRESHOLD_V6W25: i32 = 8;
-/// v6w25 legal-move radius = 8. DEPRECATED — use `spec.legal_move_radius`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.legal_move_radius; §173 A4")]
-#[allow(deprecated)]
-pub const LEGAL_MOVE_RADIUS_V6W25: i32 = 8;
-/// v6w25 state stride = 5000. DEPRECATED — use `spec.state_stride()`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.state_stride(); §173 A4")]
-#[allow(deprecated)]
-pub const STATE_STRIDE_V6W25: usize = 5000; // = N_PLANES_V6W25 * N_CELLS_V6W25
-/// v6w25 chain stride = 3750. DEPRECATED — use `spec.chain_stride()`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.chain_stride(); §173 A4")]
-#[allow(deprecated)]
-pub const CHAIN_STRIDE_V6W25: usize = 3750; // = N_CHAIN_PLANES * N_CELLS_V6W25
-/// v6w25 policy stride = 626. DEPRECATED — use `spec.policy_stride()`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.policy_stride(); §173 A4")]
-#[allow(deprecated)]
-pub const POLICY_STRIDE_V6W25: usize = 626; // = N_ACTIONS_V6W25
-/// v6w25 auxiliary stride = 625. DEPRECATED — use `spec.aux_stride()`. §173 A4.
-#[deprecated(since = "0.173.4", note = "use spec.aux_stride(); §173 A4")]
-#[allow(deprecated)]
-pub const AUX_STRIDE_V6W25: usize = 625; // = N_CELLS_V6W25
-
 // ── Weight schedule ──────────────────────────────────────────────────────────
 
 /// A single threshold bracket: games with length < `max_moves` get `weight`.
@@ -215,7 +154,7 @@ pub struct SymTables {
     pub board_size: usize,
     /// Total cells = `board_size * board_size`. v6: 361. v8: 625.
     pub n_cells: usize,
-    /// State plane count for which `src_plane_lookup` is sized. v6: 8. v8: 11.
+    /// State plane count this table targets. v6: 8. v8: 11.
     pub n_planes: usize,
     pub scatter:   [Vec<(u16, u16)>; N_SYMS],
     /// Per-symmetry axis-plane remap for Q13 chain-length planes.
@@ -223,14 +162,6 @@ pub struct SymTables {
     /// from source plane for axis i under symmetry s. Board-size invariant
     /// (depends only on hex axes).
     pub axis_perm: [[usize; 3]; N_SYMS],
-    /// Fused per-symmetry source-plane lookup for the state planes.
-    /// State planes are pure coordinate scatter (identity plane mapping), so
-    /// `src_plane_lookup[s][p] == p` for all s and p. `apply_symmetry_state`
-    /// no longer consumes this field (it's now plane-count-generic and uses
-    /// implicit identity mapping); retained as P4's aug-table substrate for any
-    /// future per-plane permutation use case.
-    /// Outer length: N_SYMS=12. Inner length: `n_planes` (runtime).
-    pub src_plane_lookup: Vec<Vec<usize>>,
     /// Fused per-symmetry source-plane lookup for the 6 chain-length planes.
     /// `chain_src_lookup[s][dst_p] = src_p`: coordinate + axis-plane remap.
     /// Inner length is the universal `N_CHAIN_PLANES = 6`.
@@ -351,13 +282,6 @@ impl SymTables {
             axis_perm[sym_idx] = perm;
         }
 
-        // Build fused src_plane_lookup for the state planes.
-        // All state planes are pure coordinate scatter — identity plane mapping.
-        let mut src_plane_lookup: Vec<Vec<usize>> = Vec::with_capacity(N_SYMS);
-        for _ in 0..N_SYMS {
-            src_plane_lookup.push((0..n_planes).collect());
-        }
-
         // Build chain_src_lookup for the 6 chain-length planes.
         // Each destination axis j reads from source axis i (axis-perm remap),
         // with current/opponent interleaved: plane index = 2*axis + player_off.
@@ -378,7 +302,6 @@ impl SymTables {
             n_planes,
             scatter,
             axis_perm,
-            src_plane_lookup,
             chain_src_lookup,
         }
     }
@@ -681,20 +604,6 @@ mod tests {
     }
 
     #[test]
-    fn v8_src_plane_lookup_is_identity_at_n_planes_11() {
-        let spec = crate::encoding::registry::lookup_or_panic("v8");
-        let tables = SymTables::with_shape(spec.board_size, spec.n_planes);
-        for s in 0..N_SYMS {
-            assert_eq!(tables.src_plane_lookup[s].len(), 11);
-            for p in 0..11 {
-                assert_eq!(tables.src_plane_lookup[s][p], p,
-                    "v8 src_plane_lookup must be identity; got [{}][{}] = {}",
-                    s, p, tables.src_plane_lookup[s][p]);
-            }
-        }
-    }
-
-    #[test]
     fn v6_default_byte_exact() {
         // SymTables::new() must produce v6-shape output identical to before
         // §166. This is the v6 byte-exact regression guard.
@@ -707,13 +616,6 @@ mod tests {
         for (i, &(src, dst)) in tables.scatter[0].iter().enumerate() {
             assert_eq!(src as usize, i);
             assert_eq!(dst as usize, i);
-        }
-        // src_plane_lookup must still be 8-wide identity.
-        for s in 0..N_SYMS {
-            assert_eq!(tables.src_plane_lookup[s].len(), 8);
-            for p in 0..8 {
-                assert_eq!(tables.src_plane_lookup[s][p], p);
-            }
         }
     }
 

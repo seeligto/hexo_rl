@@ -87,15 +87,6 @@ fn identity_element_is_no_op() {
         assert_eq!(sc, dc, "scatter[0] entry ({sc}, {dc}) is not the identity");
     }
 
-    // src_plane_lookup[0] is the identity permutation on the 8 planes.
-    for p in 0..N_PLANES {
-        assert_eq!(
-            tables.src_plane_lookup[0][p], p,
-            "src_plane_lookup[0][{p}] is {} (expected {p})",
-            tables.src_plane_lookup[0][p]
-        );
-    }
-
     // Apply scatter to a tagged 8-plane tensor; result must be byte-identical.
     let mut src = vec![0.0f32; N_PLANES * N_CELLS];
     for p in 0..N_PLANES {
@@ -183,19 +174,6 @@ fn every_element_has_inverse() {
 #[test]
 fn plane_indices_invariant_under_d6() {
     let tables = SymTables::new();
-
-    // src_plane_lookup is the production source-of-truth for plane mapping.
-    // Confirm identity for every (g, p).
-    for g in 0..N_SYMS {
-        for p in 0..N_PLANES {
-            assert_eq!(
-                tables.src_plane_lookup[g][p], p,
-                "src_plane_lookup[{g}][{p}] = {} (expected {p}; D6 must not \
-                 permute state planes — see module-level claim)",
-                tables.src_plane_lookup[g][p]
-            );
-        }
-    }
 
     // Behavioural cross-check: tag each plane with a distinguishable constant
     // value at a central interior cell, scatter, and confirm the only plane
