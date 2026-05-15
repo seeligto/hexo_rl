@@ -55,7 +55,7 @@ impl ZobristTable {
     /// Return the Zobrist key for placing a stone of `player` (0=P1, 1=P2)
     /// at flat cell index `cell` (for the 19×19 absolute grid).
     #[inline(always)]
-    pub fn get(cell: usize, player: usize) -> u128 {
+    pub(crate) fn get(cell: usize, player: usize) -> u128 {
         if player == 0 {
             KEYS_P1[cell]
         } else {
