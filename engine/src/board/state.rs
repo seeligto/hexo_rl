@@ -41,6 +41,7 @@ pub const HALF: i32 = (BOARD_SIZE as i32 - 1) / 2; // 9
 pub const TOTAL_CELLS: usize = BOARD_SIZE * BOARD_SIZE; // 361
 
 /// Plane offsets in the 18-plane state tensor (§174 — eliminate bare literals).
+pub const MY_STONE_PLANE: usize = 0;
 pub const OPP_STONE_PLANE: usize = 8;
 pub const MOVES_REMAINING_PLANE: usize = 16;
 pub const PLY_PARITY_PLANE: usize = 17;
@@ -855,7 +856,7 @@ impl Board {
             // differ from v8 native (11 planes); see method-doc caveat.
             // Plane 0: my stones; Plane 8: opp stones.
             for i in 0..TOTAL_CELLS {
-                out[0 * total_cells + i] = planes_2[i];
+                out[MY_STONE_PLANE * total_cells + i] = planes_2[i];
                 out[OPP_STONE_PLANE * total_cells + i] = planes_2[TOTAL_CELLS + i];
             }
             // Plane 16: moves_remaining == 2 broadcast over full plane.

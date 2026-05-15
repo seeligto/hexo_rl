@@ -2,6 +2,13 @@
 name = "engine"
 version = "0.1.0"
 edition = "2021"
+description = "Rust core for the Hex Tac Toe AlphaZero engine: MCTS, board state, replay buffer, encoding registry, PyO3 bindings."
+license = "Apache-2.0"
+repository = "https://github.com/anthropics/hexo-rl"
+readme = "../README.md"
+keywords = ["alphazero", "mcts", "hex", "hexagonal", "go"]
+categories = ["game-development", "algorithms", "science"]
+publish = false
 
 [lib]
 name = "engine"
@@ -48,3 +55,22 @@ harness = false
 [[bench]]
 name = "mcts_bench"
 harness = false
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+doc_markdown = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_const_for_fn = "allow"
+use_self = "allow"
+needless_pass_by_value = "allow"
+
+[lints.rust]
+unused_imports = "warn"
+dead_code = "warn"

@@ -394,6 +394,11 @@ mod tests {
     use super::*;
     use half::f16;
 
+    /// Position-0 offset within a slot — documents intent of `0 * stride` in
+    /// round-trip tests (avoids `clippy::erasing_op` while preserving the
+    /// "first stored position" annotation).
+    const POS_0: usize = 0;
+
     /// HEXB v7 round-trip — verify aux columns (ownership, winning_line, chain_planes, is_full_search) survive save/load.
     #[test]
     fn test_aux_hexb_v7_roundtrip() {
@@ -428,14 +433,14 @@ mod tests {
 
         let aux_stride2   = buf2.encoding.aux_stride();
         let chain_stride2 = buf2.encoding.chain_stride();
-        let a2 = 0 * aux_stride2;
+        let a2 = POS_0 * aux_stride2;
         assert_eq!(buf2.ownership[a2 + 10], 2);
         assert_eq!(buf2.ownership[a2 + 20], 0);
         assert_eq!(buf2.ownership[a2 + 30], 1);
         for i in 0..6 {
             assert_eq!(buf2.winning_line[a2 + 100 + i], 1);
         }
-        let c2 = 0 * chain_stride2;
+        let c2 = POS_0 * chain_stride2;
         assert_eq!(buf2.chain_planes[c2 + 0],   f16::from_f32(0.5).to_bits());
         assert_eq!(buf2.chain_planes[c2 + 100], f16::from_f32(1.0).to_bits());
         assert_eq!(buf2.chain_planes[c2 + buf2.encoding.n_cells()], f16::from_f32(0.25).to_bits());
