@@ -16,20 +16,30 @@ use rand::{rng, RngExt};
 /// caller's hot loop avoids copying the full `RegistrySpec` struct (~174 B)
 /// on every call. Caller derives these once from spec before entering the
 /// per-sim loop:
-///   - `n_actions` = `spec.policy_stride()` (362 for v6/v7full, 626 for v6w25)
-///   - `trunk_sz`  = `spec.trunk_size as i32` (19 for v6, 25 for v6w25)
+///   - `n_actions`     = `spec.policy_stride()` (362 for v6/v7full, 626 for v6w25, 625 for v8)
+///   - `has_pass_slot` = `spec.has_pass_slot` (true for v6/v6w25/v7full; false for v8/v8_canvas_realness)
+///   - `trunk_sz`      = `spec.trunk_size as i32` (19 for v6, 25 for v6w25/v8)
+///
+/// §P2: `has_pass_slot` gates the pass-slot skip + zero-write at the tail of
+/// the policy array. Pre-P2, both writes assumed `policy[n_actions-1]` is
+/// the pass slot, which CORRUPTED v8's bottom-right corner cell at flat
+/// index 624 (audit FD.3): the legal-cell scatter contribution was skipped
+/// AND the slot was zeroed unconditionally — structurally killing that cell
+/// in v8 selfplay.
 ///
 /// Scatter-max semantics UNCHANGED (α design §3.1): for each legal move m,
 /// locate all clusters k that cover m, take max probability across them,
 /// assign to `global_policy[mcts_idx(m)]`.
 ///
 /// For each legal move, takes the max probability across clusters that cover
-/// it. The pass move (index n_actions - 1) is set to 0.0. The result is
-/// renormalised to sum to 1; if every entry is ~0 we fall back to a uniform
-/// distribution to avoid division by zero downstream.
+/// it. When `has_pass_slot=true`, the pass move (index n_actions - 1) is set
+/// to 0.0; when false, every index from 0 to n_actions-1 is a legal cell.
+/// The result is renormalised to sum to 1; if every entry is ~0 we fall back
+/// to a uniform distribution to avoid division by zero downstream.
 #[inline]
 pub fn aggregate_policy(
     n_actions: usize,
+    has_pass_slot: bool,
     trunk_sz: i32,
     board: &Board,
     centers: &[(i32, i32)],
@@ -47,7 +57,9 @@ pub fn aggregate_policy(
 
     for &(q, r) in &legal {
         let mcts_idx = Board::window_flat_idx_at_geom(q, r, bcq, bcr, trunk_sz, half);
-        if mcts_idx >= n_actions - 1 { continue; }
+        // §P2: only skip the tail index when it really IS a pass slot. v8 has
+        // no pass slot — the tail is a real legal cell.
+        if has_pass_slot && mcts_idx >= n_actions - 1 { continue; }
 
         let mut max_prob = 0.0;
         for (k, &(cq, cr)) in centers.iter().enumerate() {
@@ -65,7 +77,11 @@ pub fn aggregate_policy(
 
     // Pass slot — unreachable in HTTT (no pass move). Constant 0.0 makes
     // dead-ness explicit; prior [0] read looked like a boundary K-pick.
-    global_policy[n_actions - 1] = 0.0;
+    // §P2: skip this write under has_pass_slot=false (v8 family) — the tail
+    // cell is a real legal index, not a pass slot.
+    if has_pass_slot {
+        global_policy[n_actions - 1] = 0.0;
+    }
 
     let sum: f32 = global_policy.iter().sum();
     if sum > 1e-9 {
@@ -83,21 +99,29 @@ pub fn aggregate_policy(
 /// caller's hot loop avoids copying the full `RegistrySpec` struct (~174 B)
 /// on every call. Caller derives these once from spec before entering the
 /// per-move loop:
-///   - `n_actions` = `spec.policy_stride()` (362 for v6/v7full, 626 for v6w25)
-///   - `trunk_sz`  = `spec.trunk_size as i32` (19 for v6, 25 for v6w25)
+///   - `n_actions`     = `spec.policy_stride()` (362 for v6/v7full, 626 for v6w25, 625 for v8)
+///   - `has_pass_slot` = `spec.has_pass_slot` (true for v6/v6w25/v7full; false for v8/v8_canvas_realness)
+///   - `trunk_sz`      = `spec.trunk_size as i32` (19 for v6, 25 for v6w25/v8)
+///
+/// §P2: `has_pass_slot` gates the pass-slot copy at the tail of the policy
+/// array. Pre-P2, the copy ran unconditionally — under v8 it would clobber
+/// `local_policy[624]` (a real legal cell) with the corresponding (also
+/// corrupted by the sister bug in `aggregate_policy`) `global_policy[624]`.
 ///
 /// Per-window local-frame projection UNCHANGED: for each legal move m, project
 /// from the global MCTS index to local window coordinates via
-/// `(q - cq + half, r - cr + half)`. Pass move copied verbatim from global.
+/// `(q - cq + half, r - cr + half)`. When `has_pass_slot=true`, the pass move
+/// is copied verbatim from global; when false, the legal-cell scatter loop
+/// owns every index from 0 to n_actions-1.
 ///
 /// Inverse of `aggregate_policy` for a single cluster: used at record time
 /// to stash a cluster-local policy next to the row's 2-plane state snapshot
 /// so that each row is self-consistent under later symmetry augmentation.
-/// The pass move is copied verbatim from the global policy; the result is
-/// renormalised, with a uniform fallback for the zero-mass case.
+/// The result is renormalised, with a uniform fallback for the zero-mass case.
 #[inline]
 pub fn aggregate_policy_to_local(
     n_actions: usize,
+    has_pass_slot: bool,
     trunk_sz: i32,
     board: &Board,
     center: &(i32, i32),
@@ -124,8 +148,11 @@ pub fn aggregate_policy_to_local(
         }
     }
 
-    // Pass move (the last element) is always copied from the global policy
-    if n_actions > 0 && global_policy.len() >= n_actions {
+    // Pass move (the last element) copied from the global policy.
+    // §P2: skip under has_pass_slot=false (v8 family) — the tail index is a
+    // real legal cell already populated by the scatter loop above; copying
+    // global_policy[n_actions-1] would silently overwrite it.
+    if has_pass_slot && n_actions > 0 && global_policy.len() >= n_actions {
         local_policy[n_actions - 1] = global_policy[n_actions - 1];
     }
 

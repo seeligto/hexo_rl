@@ -37,7 +37,9 @@ fn test_aggregate_policy_v6w25_returns_626_vector() {
     let centers = vec![(0i32, 0i32)];
     let cluster_policies = vec![vec![0.0f32; n_actions]];
 
-    let result = aggregate_policy(n_actions, trunk_sz, &board, &centers, &cluster_policies);
+    // §P2 SD3: aggregate_policy now takes has_pass_slot (= spec.has_pass_slot).
+    // v6w25 has has_pass_slot=true.
+    let result = aggregate_policy(n_actions, true, trunk_sz, &board, &centers, &cluster_policies);
     assert_eq!(
         result.len(),
         626,
@@ -58,7 +60,7 @@ fn test_aggregate_policy_to_local_v6w25_returns_626_vector() {
     let center = (0i32, 0i32);
     let global_policy = vec![0.0f32; n_actions];
 
-    let result = aggregate_policy_to_local(n_actions, trunk_sz, &board, &center, &global_policy);
+    let result = aggregate_policy_to_local(n_actions, true, trunk_sz, &board, &center, &global_policy);
     assert_eq!(
         result.len(),
         626,
@@ -132,7 +134,7 @@ fn test_aggregate_policy_scatter_max_takes_max_across_clusters() {
     let centers = vec![c1, c2];
     let cluster_policies = vec![p_c1, p_c2];
 
-    let global = aggregate_policy(n_actions, trunk_sz, &board, &centers, &cluster_policies);
+    let global = aggregate_policy(n_actions, true, trunk_sz, &board, &centers, &cluster_policies);
 
     assert_eq!(global.len(), 626, "output must be 626-vector for v6w25");
 
@@ -188,7 +190,8 @@ fn test_aggregate_policy_v6_returns_362_vector() {
     let centers = vec![(0i32, 0i32)];
     let cluster_policies = vec![p0];
 
-    let result = aggregate_policy(n_actions, trunk_sz, &board, &centers, &cluster_policies);
+    // §P2 SD3: v6 has has_pass_slot=true.
+    let result = aggregate_policy(n_actions, true, trunk_sz, &board, &centers, &cluster_policies);
     assert_eq!(result.len(), 362, "v6 geometry must return 362-vector");
 }
 
@@ -203,7 +206,7 @@ fn test_aggregate_policy_to_local_v6_returns_362_vector() {
 
     let global = vec![1.0f32 / n_actions as f32; n_actions];
     let center = (0i32, 0i32);
-    let result = aggregate_policy_to_local(n_actions, trunk_sz, &board, &center, &global);
+    let result = aggregate_policy_to_local(n_actions, true, trunk_sz, &board, &center, &global);
     assert_eq!(result.len(), 362, "v6 geometry must return 362-vector");
 }
 
@@ -237,11 +240,11 @@ fn test_round_trip_aggregate_to_local_v6w25() {
     let cluster_policies = vec![local_init.clone()];
 
     // Aggregate to global.
-    let global = aggregate_policy(n_actions, trunk_sz, &board, &centers, &cluster_policies);
+    let global = aggregate_policy(n_actions, true, trunk_sz, &board, &centers, &cluster_policies);
     assert_eq!(global.len(), 626);
 
     // Project back to local.
-    let local_out = aggregate_policy_to_local(n_actions, trunk_sz, &board, &center, &global);
+    let local_out = aggregate_policy_to_local(n_actions, true, trunk_sz, &board, &center, &global);
     assert_eq!(local_out.len(), 626);
 
     // The move's local index should recover its probability.

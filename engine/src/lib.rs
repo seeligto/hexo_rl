@@ -648,7 +648,13 @@ impl PyMCTSTree {
         board_size: Option<usize>,
     ) -> Vec<f32> {
         let bs = board_size.unwrap_or(self.board_size);
-        self.inner.get_policy(temperature, bs)
+        // §P2: inner API now takes `n_actions` (= policy_stride) instead of
+        // `board_size`. PyO3 surface unchanged — Python callers still pass
+        // board_size kwarg. Python-side selfplay path (if any non-Rust
+        // selfplay still uses MCTSTree) is v6-only today, so bs²+1 is correct.
+        // audit: P14 follow-up — read n_actions from self.inner.root_board.encoding
+        let n_actions = bs * bs + 1;
+        self.inner.get_policy(temperature, n_actions)
     }
 
     /// Total visit count at the root (= number of simulations run).
@@ -741,7 +747,11 @@ impl PyMCTSTree {
         c_scale: f32,
     ) -> Vec<f32> {
         let bs = board_size.unwrap_or(self.board_size);
-        self.inner.get_improved_policy(bs, c_visit, c_scale)
+        // §P2: inner API now takes `n_actions` (= policy_stride) instead of
+        // `board_size`. Same pattern as get_policy above.
+        // audit: P14 follow-up — read n_actions from self.inner.root_board.encoding
+        let n_actions = bs * bs + 1;
+        self.inner.get_improved_policy(n_actions, c_visit, c_scale)
     }
 }
 

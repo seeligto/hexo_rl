@@ -210,9 +210,18 @@ impl MCTSTree {
     }
 
     /// Run `n` simulations using uniform priors (no NN). For benchmarking.
+    ///
+    /// §P2 — n_actions sourced from root_board's encoding spec when present;
+    /// audit: legacy-v6-fallback when encoding is None (bench harness path
+    /// has no spec wired today). Pre-P2 unconditionally used `BOARD_SIZE² + 1`
+    /// which would phantom-pass-slot a v8 board if a future bench wraps one.
     pub fn run_simulations_cpu_only(&mut self, n: usize) {
-        let uniform_prior = 1.0 / (BOARD_SIZE * BOARD_SIZE + 1) as f32;
-        let uniform_policy = vec![uniform_prior; BOARD_SIZE * BOARD_SIZE + 1];
+        let n_actions = match self.root_board.encoding_spec() {
+            Some(spec) => spec.policy_stride(),
+            None => BOARD_SIZE * BOARD_SIZE + 1, // audit: legacy-v6-fallback
+        };
+        let uniform_prior = 1.0 / n_actions as f32;
+        let uniform_policy = vec![uniform_prior; n_actions];
         for _ in 0..n {
             let boards = self.select_leaves(1);
             if boards.is_empty() {

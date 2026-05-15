@@ -7,8 +7,12 @@
 use super::MCTSTree;
 
 impl MCTSTree {
-    pub fn get_policy(&self, temperature: f32, board_size: usize) -> Vec<f32> {
-        let n_actions = board_size * board_size + 1;
+    /// §P2 — `n_actions` is the policy stride supplied by the caller (=
+    /// `spec.policy_stride()`). v6/v6w25/v7full = bs²+1 (with pass slot);
+    /// v8/v8_canvas_realness = bs² (no pass slot). Pre-P2 this method
+    /// computed `bs * bs + 1` unconditionally, which produced phantom
+    /// pass-slot vectors for v8 (audit FD.4 / FE.3).
+    pub fn get_policy(&self, temperature: f32, n_actions: usize) -> Vec<f32> {
         let mut policy = vec![0.0f32; n_actions];
 
         let root = &self.pool[0];
@@ -57,16 +61,19 @@ impl MCTSTree {
     /// Compute improved policy targets using Gumbel completed Q-values
     /// (Danihelka et al., Gumbel AlphaZero, ICLR 2022 §4, Appendix D Eq. 33).
     ///
-    /// Returns a `(board_size * board_size + 1)`-dim probability distribution that
-    /// incorporates MCTS Q-values into the prior, giving useful policy signal even
-    /// at low simulation counts.
+    /// §P2 — `n_actions` is the policy stride supplied by the caller (=
+    /// `spec.policy_stride()`); see `get_policy` for the rationale. Pre-P2
+    /// this method computed `board_size² + 1` unconditionally.
+    ///
+    /// Returns an `n_actions`-dim probability distribution that incorporates
+    /// MCTS Q-values into the prior, giving useful policy signal even at
+    /// low simulation counts.
     pub fn get_improved_policy(
         &self,
-        board_size: usize,
+        n_actions: usize,
         c_visit: f32,
         c_scale: f32,
     ) -> Vec<f32> {
-        let n_actions = board_size * board_size + 1;
         let mut policy = vec![0.0f32; n_actions];
 
         let root = &self.pool[0];
@@ -284,7 +291,7 @@ mod tests {
         tree.pool[child_a as usize].n_visits = 7;
         tree.pool[child_b as usize].n_visits = 3;
 
-        let policy = tree.get_policy(1.0, BOARD_SIZE);
+        let policy = tree.get_policy(1.0, BOARD_SIZE * BOARD_SIZE + 1);
         let pa = policy[180];
         let pb = policy[181];
         assert!((pa - 0.7).abs() < 1e-5, "action 0 should get 70%: {pa}");
@@ -299,7 +306,7 @@ mod tests {
         tree.pool[child_a as usize].n_visits = 7;
         tree.pool[child_b as usize].n_visits = 3;
 
-        let policy = tree.get_policy(0.0, BOARD_SIZE);
+        let policy = tree.get_policy(0.0, BOARD_SIZE * BOARD_SIZE + 1);
         assert_eq!(policy[180], 1.0);
         assert_eq!(policy[181], 0.0);
     }
@@ -320,7 +327,7 @@ mod tests {
             tree.expand_and_backup(&policies, &values);
         }
 
-        let policy = tree.get_policy(1.0, BOARD_SIZE);
+        let policy = tree.get_policy(1.0, BOARD_SIZE * BOARD_SIZE + 1);
         let sum: f32 = policy.iter().sum();
         assert!((sum - 1.0).abs() < 1e-4, "policy should sum to 1.0, got {sum}");
     }
@@ -473,7 +480,7 @@ mod tests {
             (8, -2.0, 0.3),   // Q=-0.25
             (2, 0.4, 0.2),    // Q=0.2
         ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
+        let policy = tree.get_improved_policy(BOARD_SIZE * BOARD_SIZE + 1, 50.0, 1.0);
         let sum: f32 = policy.iter().sum();
         assert!((sum - 1.0).abs() < 1e-5, "policy should sum to 1.0, got {sum}");
     }
@@ -485,7 +492,7 @@ mod tests {
             (0, 0.0, 0.6),
             (0, 0.0, 0.4),
         ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
+        let policy = tree.get_improved_policy(BOARD_SIZE * BOARD_SIZE + 1, 50.0, 1.0);
         let sum: f32 = policy.iter().sum();
         assert!((sum - 1.0).abs() < 1e-5, "prior fallback should sum to 1.0, got {sum}");
 
@@ -503,7 +510,7 @@ mod tests {
             (50, 45.0, 0.5),   // Q=+0.9
             (50, -45.0, 0.5),  // Q=-0.9
         ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
+        let policy = tree.get_improved_policy(BOARD_SIZE * BOARD_SIZE + 1, 50.0, 1.0);
 
         // Find the two non-zero actions.
         let (cq, cr) = tree.root_board.window_center();
@@ -524,7 +531,7 @@ mod tests {
             (10, 5.0, 0.7),
             (5, 1.0, 0.3),
         ]);
-        let policy = tree.get_improved_policy(BOARD_SIZE, 50.0, 1.0);
+        let policy = tree.get_improved_policy(BOARD_SIZE * BOARD_SIZE + 1, 50.0, 1.0);
 
         // Only 2 actions should be non-zero out of board_size*board_size+1.
         let nonzero_count = policy.iter().filter(|&&p| p > 0.0).count();

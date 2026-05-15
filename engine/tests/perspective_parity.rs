@@ -71,8 +71,11 @@ mod perspective_parity {
         let c_visit = 50.0_f32;
         let c_scale = 1.0_f32;
 
-        let policy_mr2 = tree_mr2.get_improved_policy(BOARD_SIZE, c_visit, c_scale);
-        let policy_mr1 = tree_mr1.get_improved_policy(BOARD_SIZE, c_visit, c_scale);
+        // §P2 SD3: get_improved_policy now takes n_actions (= policy_stride),
+        // not board_size. v6 has has_pass_slot=true, so n_actions = bs²+1.
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let policy_mr2 = tree_mr2.get_improved_policy(n_actions, c_visit, c_scale);
+        let policy_mr1 = tree_mr1.get_improved_policy(n_actions, c_visit, c_scale);
 
         // log(policy) ≈ logit - log(Z). Visited-child logit differs by ±σ*q.
         // After fix: diff >> 2*0.8*c_scale*max_n (actual ≈ 20 at c_visit=50).

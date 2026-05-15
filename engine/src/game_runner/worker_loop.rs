@@ -244,6 +244,10 @@ impl SelfPlayRunner {
             // copying the full RegistrySpec struct (~174 B) on every
             // aggregate_policy* call. `policy_stride` = n_actions per call site;
             // `agg_trunk_sz` = trunk_size as i32 for window-bound arithmetic.
+            // §P2: `has_pass_slot` added so records::aggregate_policy* can gate
+            // the pass-slot skip + zero-write at the tail index. v6/v6w25/v7full
+            // = true; v8/v8_canvas_realness = false. v6 default fallback for
+            // legacy SelfPlayRunner constructions without registry_spec.
             let policy_stride: usize = match self.registry_spec {
                 Some(ref s) => s.policy_stride(),
                 None => BOARD_SIZE * BOARD_SIZE + 1,
@@ -251,6 +255,10 @@ impl SelfPlayRunner {
             let agg_trunk_sz: i32 = match self.registry_spec {
                 Some(ref s) => s.trunk_size as i32,
                 None => BOARD_SIZE as i32,
+            };
+            let has_pass_slot: bool = match self.registry_spec {
+                Some(s) => s.has_pass_slot,
+                None => true, // v6 default
             };
             let sym_tables = sym_tables_arc.clone();
             let results_queue = self.results.clone();
@@ -472,7 +480,9 @@ impl SelfPlayRunner {
                                 aggregated_values.push(min_v);
                                 // §173 A5b: pass pre-extracted (policy_stride, agg_trunk_sz)
                                 // instead of copying full RegistrySpec on every sim call.
-                                aggregated_policies.push(records::aggregate_policy(policy_stride, agg_trunk_sz, &leaves[i], centers, leaf_policies));
+                                // §P2: has_pass_slot pre-extracted at A5b boundary so the
+                                // tail-index skip + zero-write only runs under has_pass_slot=true.
+                                aggregated_policies.push(records::aggregate_policy(policy_stride, has_pass_slot, agg_trunk_sz, &leaves[i], centers, leaf_policies));
                             }
 
                             let n = leaves.len();
@@ -610,11 +620,13 @@ impl SelfPlayRunner {
                         } else {
                             compute_move_temperature(compound_move, temp_threshold, temp_min)
                         };
-                        // §173 A8'': use spec-derived trunk_sz (= NN-input frame side
-                        // length), not the BOARD_SIZE=19 hardcode. agg_trunk_sz is
-                        // already pre-extracted by the §173 A5b boundary; convert
-                        // back to usize for the get_policy(.., board_size) signature.
-                        let policy = tree.get_policy(temperature, agg_trunk_sz as usize);
+                        // §P2: pass `policy_stride` (= spec.policy_logit_count) instead
+                        // of `agg_trunk_sz²+1`. policy_stride is already pre-extracted at
+                        // the §173 A5b boundary and is correct under both has_pass_slot=true
+                        // (= bs²+1) and has_pass_slot=false (= bs²) — covers v8 family.
+                        // Pre-P2 the inner API computed bs²+1 unconditionally, producing
+                        // phantom pass-slot vectors for v8 (audit FD.4).
+                        let policy = tree.get_policy(temperature, policy_stride);
 
                         // ── debug_prior_trace: snapshot root priors + visit counts ──
                         // Compile-time gated; zero cost in default builds. Runtime
@@ -676,9 +688,9 @@ impl SelfPlayRunner {
                         // Completed Q-values: compute improved policy for training target.
                         // Move selection still uses temperature-scaled visit counts above.
                         let target_policy = if completed_q_values {
-                            // §173 A8'': use spec-derived trunk_sz (= NN-input frame
-                            // side length); see comment on the get_policy call above.
-                            tree.get_improved_policy(agg_trunk_sz as usize, c_visit, c_scale)
+                            // §P2: pass `policy_stride` (= spec.policy_logit_count); see
+                            // comment on the get_policy call above. Same FD.4 fix.
+                            tree.get_improved_policy(policy_stride, c_visit, c_scale)
                         } else {
                             policy.clone()
                         };
@@ -757,7 +769,9 @@ impl SelfPlayRunner {
                             let mut projected_policy = if is_fast_game && !completed_q_values {
                                 vec![0.0; policy_stride]
                             } else {
-                                records::aggregate_policy_to_local(policy_stride, agg_trunk_sz, &board, center, &target_policy)
+                                // §P2: has_pass_slot pre-extracted at A5b boundary so the
+                                // tail-index copy from global only runs under has_pass_slot=true.
+                                records::aggregate_policy_to_local(policy_stride, has_pass_slot, agg_trunk_sz, &board, center, &target_policy)
                             };
                             // §130: forward-scatter the recorded state, chain, and
                             // policy into the rotated frame so the buffer stores
