@@ -760,11 +760,9 @@ impl Board {
         if let Some(spec) = self.encoding {
             if spec.is_multi_window {
                 unimplemented!(
-                    "Board::to_planes_channels() called on multi-window encoding {:?}; \
-                     use get_cluster_views() instead. Multi-window selfplay deferred \
-                     to α — see docs/designs/encoding_alpha_multiwindow_selfplay.md \
-                     (§172 Phase A7).",
-                    spec.name
+                    "multi-window selfplay deferred to α; see \
+                     docs/designs/encoding_alpha_multiwindow_selfplay_design.md \
+                     (§172 Phase A7)"
                 );
             }
         }
@@ -820,11 +818,9 @@ impl Board {
         if let Some(spec) = self.encoding {
             if spec.is_multi_window {
                 unimplemented!(
-                    "Board::to_planes() called on multi-window encoding {:?}; \
-                     use get_cluster_views() instead. Multi-window selfplay deferred \
-                     to α — see docs/designs/encoding_alpha_multiwindow_selfplay.md \
-                     (§172 Phase A7).",
-                    spec.name
+                    "multi-window selfplay deferred to α; see \
+                     docs/designs/encoding_alpha_multiwindow_selfplay_design.md \
+                     (§172 Phase A7)"
                 );
             }
         }
