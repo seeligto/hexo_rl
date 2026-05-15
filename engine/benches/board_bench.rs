@@ -1,7 +1,7 @@
 /// Criterion benchmarks for board operations.
 ///
 /// Benchmarks:
-///   1. Win detection: Bitboard::has_six_in_row() vs Board::check_win() (HashMap scan)
+///   1. Win detection: Board::check_win() (last-move-anchored HashMap scan)
 ///   2. Board::clone() cost at various game depths (bottleneck in reconstruct_board)
 ///   3. Zobrist hash incremental update (should be near-zero marginal cost)
 ///
@@ -9,7 +9,7 @@
 ///   cargo bench --bench board_bench
 ///   cargo bench --bench board_bench -- --output-format html
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use engine::board::{bitboard::Bitboard, Board, BOARD_SIZE, HALF};
+use engine::board::Board;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -27,49 +27,22 @@ fn board_with_n_stones(n_stones: usize) -> Board {
     b
 }
 
-/// Build a Bitboard for player 1 from a Board's stone layout.
-///
-/// Uses window-relative flat indices (same as the Bitboard's coordinate system).
-fn bitboard_from_board_p1(board: &Board) -> Bitboard {
-    use engine::board::Cell;
-    let mut bb = Bitboard::empty();
-    let (cq, cr) = board.window_center();
-    for (&(q, r), &cell) in board.cells_iter() {
-        if cell == Cell::P1 {
-            let wq = q - cq + HALF;
-            let wr = r - cr + HALF;
-            if wq >= 0 && wq < BOARD_SIZE as i32 && wr >= 0 && wr < BOARD_SIZE as i32 {
-                let flat = wq as usize * BOARD_SIZE + wr as usize;
-                bb.set(flat);
-            }
-        }
-    }
-    bb
-}
+// ── 1. Win detection: last-move-anchored HashMap scan ────────────────────────
 
-// ── 1. Win detection: HashMap scan vs Bitboard ───────────────────────────────
-
-fn bench_win_detection_comparison(c: &mut Criterion) {
+fn bench_win_detection(c: &mut Criterion) {
     let mut group = c.benchmark_group("win_detection");
 
     for &n_stones in &[10usize, 20, 40] {
         let board = board_with_n_stones(n_stones);
-        let bb = bitboard_from_board_p1(&board);
 
         group.bench_with_input(
             BenchmarkId::new("hashmap_check_win", n_stones),
             &n_stones,
             |b, _| b.iter(|| black_box(board.check_win())),
         );
-
-        group.bench_with_input(
-            BenchmarkId::new("bitboard_has_six_in_row", n_stones),
-            &n_stones,
-            |b, _| b.iter(|| black_box(bb.has_six_in_row())),
-        );
     }
 
-    // Win case: 6-in-a-row on E axis for both methods.
+    // Win case: 6-in-a-row on E axis.
     let mut win_board = Board::new();
     win_board.apply_move(0, 0).unwrap();
     win_board.apply_move(-9, 5).unwrap();
@@ -83,13 +56,9 @@ fn bench_win_detection_comparison(c: &mut Criterion) {
     win_board.apply_move(-9, -5).unwrap();
     win_board.apply_move(-9, -6).unwrap();
     win_board.apply_move(5, 0).unwrap();
-    let win_bb = bitboard_from_board_p1(&win_board);
 
     group.bench_function("hashmap_check_win_TRUE", |b| {
         b.iter(|| black_box(win_board.check_win()))
-    });
-    group.bench_function("bitboard_has_six_in_row_TRUE", |b| {
-        b.iter(|| black_box(win_bb.has_six_in_row()))
     });
 
     group.finish();
@@ -201,7 +170,7 @@ fn bench_zobrist_incremental(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_win_detection_comparison,
+    bench_win_detection,
     bench_board_clone,
     bench_reconstruct_path_replay,
     bench_zobrist_incremental,

@@ -57,13 +57,6 @@ pub const HEX_AXES: [(i32, i32); 3] = [
     (1, -1), // SE / NW
 ];
 
-/// All 6 hex directions (each HEX_AXES entry plus its negative).
-pub const HEX_DIRS: [(i32, i32); 6] = [
-    (1, 0), (-1, 0),   // E, W
-    (0, 1), (0, -1),   // NE, SW
-    (1, -1), (-1, 1),  // SE, NW
-];
-
 // ── Player ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -135,22 +135,9 @@ Turn 1+: each player places exactly 2 stones per turn (two sequential moves).
 
 The `moves_remaining` counter tracks whether a player has used their first move. The MCTS tree and network both see this counter — the network learns the strategic difference between the first and second placement of a double-move turn.
 
-### Win detection (Rust bitboard)
+### Win detection (last-move-anchored HashMap probing)
 
-Each player's board is stored as a bitboard: six `u64` values covering 384 bits (361 used for 19×19). Win detection is a bitwise sliding AND in each of the three hex directions:
-
-```rust
-fn check_win(board: &Bitboard, direction: Direction) -> bool {
-    let shift = direction.shift();
-    let mut run = board.bits;
-    for _ in 0..5 {
-        run &= board.bits >> shift;
-    }
-    run != 0  // any set bit = 6-in-a-row found
-}
-```
-
-This runs in nanoseconds per move — no loop over cells, no Python overhead.
+Stones live in the sparse `FxHashMap<(q, r), Cell>` on `Board`. After each `apply_move`, `Board::check_win()` anchors at the last move and probes the three hex axes via `count_in_line` / `count_direction` (`engine/src/board/moves.rs:152-178`): for each axis it walks outward in both directions counting consecutive same-colour stones and returns true if any axis hits `WIN_LENGTH = 6`. Cost is O(player_run_length × 3 axes) — at most ~30 HashMap probes per move regardless of board population. A fallback scan over all player stones is used only when the caller (e.g. `player_wins`) is not the last mover. The older `Bitboard` sliding-AND implementation was deleted at §P16 (it was v6-locked and unreferenced after the multi-encoding migration); resurrecting it for non-v6 encodings would require a per-encoding rewrite.
 
 ---
 

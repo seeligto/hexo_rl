@@ -22,7 +22,6 @@
 ///   ply 0 (first move ever): player 1 places exactly 1 stone.
 ///   ply 1+: each player places exactly 2 stones before the turn passes.
 
-pub mod bitboard;
 pub mod zobrist;
 pub mod state;
 pub mod threats;
@@ -30,7 +29,7 @@ mod moves;
 
 pub use state::{
     Board, MoveDiff, Player, Cell,
-    BOARD_SIZE, HALF, TOTAL_CELLS, HEX_AXES, HEX_DIRS,
+    BOARD_SIZE, HALF, TOTAL_CELLS, HEX_AXES,
     hex_distance, encode_chain_planes,
 };
 
