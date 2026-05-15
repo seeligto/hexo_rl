@@ -332,6 +332,15 @@ the `bench-gate` skill before A4 commit lands; expectation is no
 measurable regression vs current `pub const V6_META` (struct-fields-on-
 cache-line invariant preserved by `Lazy`).
 
+> **Implementation note (post-§172):** The implementation collapsed
+> `EncodingMeta` and `EncodingSpec` into a single `RegistrySpec` struct
+> with `#[inline]` accessors. Authored fields and derived strided-storage
+> fields share one source of truth; the separate
+> `engine/src/encoding/meta.rs` module was not created. The rationale
+> documented in §4.4 still applies — derived fields are computed once
+> during registry load via `Box::leak` and accessed via `&'static`
+> reference at hot-path call sites.
+
 ### 4.5 `Board::with_encoding(spec)`
 
 Already exists from §171 A1 (`engine/src/board/state.rs:219`). A4 adapts
