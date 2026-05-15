@@ -1,0 +1,93 @@
+# configs/variants/v6_sustained_s177.yaml
+#
+# §177-equivalent (Phase B Wave A1 launch baseline).
+#
+# Clone of §175's `v6_sustained.yaml` with one substantive delta:
+# bootstrap is now `checkpoints/bootstrap_model_v6_step20k.pt` (the §176
+# Phase A Gate-3-promoted step-20K anchor; SHA `297e0ce0..2bce6a`;
+# tensor-equal 143/143 keys to §175 step_00020000 trainer-ckpt), NOT
+# `bootstrap_model_v7full.pt`.
+#
+# Rationale: §175 v6 sustained closed by interrupt at step 70176 with
+# V70K-4 attractor capture (sampled-policy distribution flattening into
+# colony attractor per L22). §176 Phase A extracted step-20K as the
+# pre-degradation empirical anchor (Gate 3 STRENGTHEN_ONLY → PROMOTED).
+# This run continues from that anchor along the §175 recipe to establish
+# an empirical "anchor + same training recipe" zero-point for Phase B
+# Wave C source-mixing experiments (S4/S5 design docs queued for next
+# session; bot-game mixing arrives at §177+ after S1–S6 land).
+#
+# DO NOT change:
+#   - L9 cosine-temp + jitter pairing (temperature_threshold_compound_moves=0,
+#     temp_min=0.5, legal_move_radius_jitter=true).
+#   - eval_interval=10000 (§174 vast.yaml halved wall-time; stride math
+#     preserved against §175 cadence).
+#   - n_games=100 for sealbot (§175 cadence; direct comparability).
+#   - total_steps=100000 (§175 budget).
+#   - random_opening_plies=0 (§174 fix).
+#   - bootstrap_anchor path = v7full default (eval.yaml line 63; frozen
+#     reference per §157 Gate 6; cross-checkpoint sanity).
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6_step20k.pt \
+#     --variant v6_sustained_s177 \
+#     --iterations 100000 \
+#     2>&1 | tee logs/s177_launch.log
+#
+# Dashboard: monitoring.yaml default web_port=5001 (vast port 8080 is
+# occupied by jupyter-notebook; operator SSH port-forward to 5001).
+#
+# Wall budget: ~20 hr on vast 5080 at ~5K steps/hr.
+
+# Encoding — v6 canonical (19×19 single-window, 8 planes, 362 logits)
+encoding: v6
+
+# Training — match §175 v6_sustained.yaml exactly.
+lr: 2.0e-3
+total_steps: 100000
+
+# Eval — 10 rounds over 100K. SealBot fires every round (stride=1).
+eval_interval: 10000
+
+# Selfplay — §174 5080-tuned throughput knobs, L9 cosine-temp + jitter
+# pairing preserved.
+selfplay:
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  leaf_batch_size: 8
+  max_game_moves: 150
+  random_opening_plies: 0
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+
+mcts:
+  n_simulations: 400
+
+eval_pipeline:
+  opponents:
+    sealbot:
+      stride: 1
+      n_games: 100
+    best_checkpoint:
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+    bootstrap_anchor:
+      n_games: 100
+      model_sims: 128
+      opponent_sims: 128
+
+# v6 corpus path — vast's data/bootstrap_corpus.npz was overwritten with
+# v6w25 data during §174. data/bootstrap_corpus_v6.npz is canonical v6
+# 19×19 (2.4 GB).
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
+
+monitors:
+  hard_abort_grad_norm: 10.0
