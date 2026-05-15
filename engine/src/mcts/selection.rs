@@ -19,9 +19,9 @@ impl MCTSTree {
             // so we use it directly (the caller computes it from the parent's Q).
             fpu_value
         } else if parent.moves_remaining == 1 {
-            -child.q_value_vl(self.virtual_loss, self.vl_adaptive)
+            -child.q_value_vl(self.virtual_loss)
         } else {
-            child.q_value_vl(self.virtual_loss, self.vl_adaptive)
+            child.q_value_vl(self.virtual_loss)
         };
 
         let u = self.c_puct * child.prior * parent_n.sqrt()

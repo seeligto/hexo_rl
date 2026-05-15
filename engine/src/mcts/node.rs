@@ -48,16 +48,12 @@ impl Node {
 
     /// Mean value Q(s,a) adjusted for outstanding virtual losses.
     #[inline]
-    pub fn q_value_vl(&self, penalty: f32, adaptive: bool) -> f32 {
+    pub fn q_value_vl(&self, penalty: f32) -> f32 {
         let effective_n = self.n_visits + self.virtual_loss_count;
         if effective_n == 0 {
             0.0
         } else {
-            let total_penalty = if adaptive {
-                (self.virtual_loss_count as f32).sqrt() * penalty
-            } else {
-                self.virtual_loss_count as f32 * penalty
-            };
+            let total_penalty = self.virtual_loss_count as f32 * penalty;
             (self.w_value - total_penalty) / effective_n as f32
         }
     }

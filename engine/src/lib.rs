@@ -617,83 +617,21 @@ impl PyMCTSTree {
     /// Args:
     ///     c_puct: exploration constant (default 1.5).
     ///     virtual_loss: fixed penalty (default 1.0).
-    ///     vl_adaptive: enable scaled virtual loss (default False).
     ///     fpu_reduction: KataGo-style dynamic FPU base (default 0.25).
     ///         FPU for unvisited children = parent_q - fpu_reduction * sqrt(explored_mass).
     ///         Set to 0.0 to disable (classical Q=0 for unvisited).
     ///     quiescence_enabled: override leaf value when forced win/loss is proven (default True).
     ///     quiescence_blend_2: blend amount for the 2-winning-moves case (default 0.3).
     #[new]
-    #[pyo3(signature = (c_puct = 1.5, virtual_loss = 1.0, vl_adaptive = false, fpu_reduction = 0.25, quiescence_enabled = true, quiescence_blend_2 = 0.3))]
-    pub fn new(c_puct: f32, virtual_loss: f32, vl_adaptive: bool, fpu_reduction: f32, quiescence_enabled: bool, quiescence_blend_2: f32) -> Self {
+    #[pyo3(signature = (c_puct = 1.5, virtual_loss = 1.0, fpu_reduction = 0.25, quiescence_enabled = true, quiescence_blend_2 = 0.3))]
+    pub fn new(c_puct: f32, virtual_loss: f32, fpu_reduction: f32, quiescence_enabled: bool, quiescence_blend_2: f32) -> Self {
         let mut inner = MCTSTree::new_full(c_puct, virtual_loss, fpu_reduction);
-        inner.vl_adaptive = vl_adaptive;
         inner.quiescence_enabled = quiescence_enabled;
         inner.quiescence_blend_2 = quiescence_blend_2;
         PyMCTSTree {
             inner,
             board_size: board::BOARD_SIZE,
         }
-    }
-
-    #[getter]
-    pub fn fpu_reduction(&self) -> f32 {
-        self.inner.fpu_reduction
-    }
-
-    #[setter]
-    pub fn set_fpu_reduction(&mut self, val: f32) {
-        self.inner.fpu_reduction = val;
-    }
-
-    #[getter]
-    pub fn quiescence_enabled(&self) -> bool {
-        self.inner.quiescence_enabled
-    }
-
-    #[setter]
-    pub fn set_quiescence_enabled(&mut self, val: bool) {
-        self.inner.quiescence_enabled = val;
-    }
-
-    #[getter]
-    pub fn quiescence_blend_2(&self) -> f32 {
-        self.inner.quiescence_blend_2
-    }
-
-    #[setter]
-    pub fn set_quiescence_blend_2(&mut self, val: f32) {
-        self.inner.quiescence_blend_2 = val;
-    }
-
-    #[getter]
-    pub fn vl_adaptive(&self) -> bool {
-        self.inner.vl_adaptive
-    }
-
-    #[setter]
-    pub fn set_vl_adaptive(&mut self, val: bool) {
-        self.inner.vl_adaptive = val;
-    }
-
-    #[getter]
-    pub fn virtual_loss(&self) -> f32 {
-        self.inner.virtual_loss
-    }
-
-    #[setter]
-    pub fn set_virtual_loss(&mut self, val: f32) {
-        self.inner.virtual_loss = val;
-    }
-
-    #[getter]
-    pub fn selection_overlap_count(&self) -> u32 {
-        self.inner.selection_overlap_count
-    }
-
-    #[getter]
-    pub fn max_depth_observed(&self) -> u32 {
-        self.inner.max_depth_observed
     }
 
     /// Total quiescence value overrides/blends since last `new_game()`.

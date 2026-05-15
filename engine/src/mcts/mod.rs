@@ -56,7 +56,6 @@ pub struct MCTSTree {
     pub root_board: Board,
     pub(crate) c_puct: f32,
     pub(crate) virtual_loss: f32,
-    pub(crate) vl_adaptive: bool,
     /// KataGo-style dynamic FPU base. FPU for unvisited children is computed as:
     ///   fpu_value = parent_q - fpu_reduction * sqrt(explored_policy_mass)
     /// where explored_policy_mass = sum of prior for all visited children.
@@ -93,19 +92,10 @@ pub struct MCTSTree {
 }
 
 impl MCTSTree {
+    /// Convenience constructor used by benches + tests; production hot path
+    /// constructs via `new_full` directly (see `SelfPlayRunner` worker init).
     pub fn new(c_puct: f32) -> Self {
-        MCTSTree::new_with_vl(c_puct, VIRTUAL_LOSS_PENALTY)
-    }
-
-    pub fn new_with_vl(c_puct: f32, virtual_loss: f32) -> Self {
-        MCTSTree::new_full(c_puct, virtual_loss, 0.0)
-    }
-
-    /// Create with a custom pool capacity. Used in tests to force pool overflow.
-    pub fn new_with_capacity(c_puct: f32, pool_size: usize) -> Self {
-        let mut t = MCTSTree::new_full(c_puct, VIRTUAL_LOSS_PENALTY, 0.0);
-        t.pool = vec![Node::uninit(); pool_size];
-        t
+        MCTSTree::new_full(c_puct, VIRTUAL_LOSS_PENALTY, 0.0)
     }
 
     pub fn new_full(c_puct: f32, virtual_loss: f32, fpu_reduction: f32) -> Self {
@@ -116,7 +106,6 @@ impl MCTSTree {
             root_board: Board::new(),
             c_puct,
             virtual_loss,
-            vl_adaptive: false,
             fpu_reduction,
             selection_overlap_count: 0,
             max_depth_observed: 0,
@@ -445,7 +434,7 @@ mod tests {
             moves_remaining: 1, is_terminal: false, terminal_value: 0.0,
             virtual_loss_count: 2,
         };
-        let q = node.q_value_vl(VIRTUAL_LOSS_PENALTY, false);
+        let q = node.q_value_vl(VIRTUAL_LOSS_PENALTY);
         assert!(q.abs() < 1e-6, "Q should be 0.0: got {q}");
     }
 
