@@ -1,0 +1,8 @@
+winner\loser,sealbot,kraken_minimax_strong,kraken_minimax_fast,kraken_random,our_v6_mcts128,our_v6_argmax,randombot
+sealbot,0,49,50,50,25,50,50
+kraken_minimax_strong,1,0,20,50,11,50,50
+kraken_minimax_fast,0,30,0,50,1,50,50
+kraken_random,0,0,0,0,0,6,1
+our_v6_mcts128,25,39,49,50,0,50,50
+our_v6_argmax,0,0,0,0,0,0,0
+randombot,0,0,0,0,0,0,0

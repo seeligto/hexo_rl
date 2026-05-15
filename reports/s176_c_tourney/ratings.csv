@@ -1,0 +1,8 @@
+bot,elo,ci_lo,ci_hi
+sealbot,0.0,0.0,0.0
+kraken_minimax_strong,-493.8,-611.9,-375.8
+kraken_minimax_fast,-499.4,-617.9,-381.0
+kraken_random,-3072.2,-35150.7,29006.3
+our_v6_mcts128,-62.1,-149.8,25.6
+our_v6_argmax,-3102.4,-35180.9,28976.1
+randombot,-3090.8,-35169.3,28987.7

@@ -1,0 +1,8 @@
+bot,n_wins,colony_fraction_mean
+sealbot,274,0.1689
+kraken_minimax_strong,182,0.0719
+kraken_minimax_fast,181,0.0969
+kraken_random,7,0.7583
+our_v6_mcts128,263,0.2057
+our_v6_argmax,0,0.0
+randombot,0,0.0
