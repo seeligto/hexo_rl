@@ -1296,7 +1296,7 @@ Branch `phase4.5/s176_phase_a_validation`. Five-wave empirical investigation (A1
 
 **New mechanism lessons (L18+ candidates):**
 
-- **L18** — *Pretrained-bootstrap-at-MCTS-128 can match an external minimax engine.* Wave C: our_v6 bootstrap (`bootstrap_model_v6.pt`, untrained on selfplay) is 25/50 H2H vs SealBot @ 0.5s, BT delta −62. Implication: a "weak external opponent" framing for §175-style transfer-gap diagnoses is wrong at matched MCTS perception — the degradation is internal self-play head drift, not opponent-strength regression.
+- **L18** — *Pretrained-bootstrap-at-MCTS-128 can match an external minimax engine.* Wave C: our_v6 bootstrap (`bootstrap_model_v6.pt`, untrained on selfplay) is 25/50 H2H vs SealBot @ 0.5s, BT delta −62 (95% CI [−150, +26], WR Wilson95 [36.3%, 63.7%], n=50 — point-estimate-parity-consistent, not strongly-asserted parity). Implication: a "weak external opponent" framing for §175-style transfer-gap diagnoses is wrong at matched MCTS perception — the degradation is internal self-play head drift, not opponent-strength regression. **Refined by L22 below:** "head drift" is sampled-policy distribution flattening into colony attractor under T=0.5, not argmax-mode regression past bootstrap.
 - **L19** — *KrakenBot MinimaxBot `_generate_turns` sentinel `[(0,0)]` is the upstream strength floor, not the time_limit.* time_limit ∈ {0.1, 1.0} produces BT delta −5 Elo. The 0.42 sentinel/game rate in mid-board positions (ply ≥20) caps strength independently of search budget. Any bot wrapper consuming a third-party bot MUST validate the returned cell against the live engine board, not trust the bot's output blindly.
 - **L20** — *Argmax-only proxies (MCTS-1) are structurally below RandomBot.* `our_v6_argmax` (n_sims=1, temperature=0) went 0/300 — below randombot's 0/300-with-99-draws. The argmax-handicap memory (`feedback_v6_v8_same_training_data.md`) generalises beyond cross-encoding diagnostics: argmax-only mode is a degenerate strength sensor, only useful as a relative-direction signal, never as an absolute baseline.
 
@@ -1311,6 +1311,91 @@ Branch `phase4.5/s176_phase_a_validation`. Five-wave empirical investigation (A1
 **Forward pointer:** §176 Phase B implementation (S1–S6 per `reports/s176_d_plan.md` §2) opens on a fresh branch (TBD). Recommended 6 commits ≤10 cap. Mix-ratio bot-pool weights (sealbot 50 / our_v6 30 / kraken_strong 15 / kraken_random 5) per S4 design doc. Source B (live cross-bot) is design-only this sprint; subprocess isolation mandatory per A4 do-not #1.
 
 Forensics: `reports/s176_{a1,a2,a3,a4}_*.md`, `reports/s176_b_smoke{.md,/}`, `reports/s176_c_tourney/{summary.md,verdicts.txt,ratings.csv,h2h_matrix.csv,colony_table.csv,per_game.jsonl}`, `reports/s176_d_plan.md`, `reports/s176_e_review.md`. Memory: `project_176_phase_a_close.md` (to be written).
+
+---
+
+## §176 — Phase A Gate 1 + Gate 2 + Gate 3 close-out (2026-05-15)
+
+Branch `phase4.5/s176_phase_a_validation`. Three-gate operator-mandated cycle: (1) fresh-context independent review of Phase A artifacts (Wave E was the implementer-adjacent fresh-context audit; Gate 1 is a second pass per L13), (2) §175 interrupt + 70K vast tourney for tide-vs-recover empirical answer, (3) step-20K checkpoint promotion to weights-only bootstrap artifact.
+
+### Gate 1 — operator review, verdict **STRENGTHEN_ONLY**
+
+`reports/s176_gate1_operator_review.md`. 7 dimensions audited: D1–D5 cites (12 claims PASS), Wave C BT-ladder reproducibility (3 H2H pairs reproduced from `per_game.jsonl` — sealbot vs our_v6_mcts128 25/25, sealbot vs kraken_strong 49/1, sealbot vs randombot 50/0), `_smart_legal_fallback` correctness (`hexo_rl/bots/krakenbot_bot.py:34` imports `_D2_OFFSETS` from vendor — no divergent reimplementation), Falsified Register hygiene (16 rows walked; §17 GIL daemon row explicitly cited in plan S5 mandate), L18 sufficiency (PASS with strengthening note — n=50 H2H, BT CI [-150, +26] crosses zero; lesson body should disclose CI), risk register (7 rows ≥ 5 floor; 5 non-blocking strengthening notes captured for Phase B prep).
+
+One process-note dimension: V1–V6 pre-registration is not committed as a separate artifact (`reports/s176_c_tourney/verdicts.txt` is post-hoc results dump). Honest FAIL declarations on V1, V4, V5 are weak evidence of integrity; operator vouches pre-registration. Gate 2 verdicts (V70K-1..5) committed BEFORE tourney in `reports/s176_gate2_verdicts.txt` — establishes audit-trail pattern for Phase B.
+
+### Gate 2 — §175 interrupt + 70K tourney on vast 5080, verdict **MIXED**
+
+`reports/s176_gate2_tourney/{summary.md,verdicts_v70k.md,ratings.csv,h2h_matrix.csv,per_game.jsonl}` + `reports/s175_forensics/`.
+
+§175 interrupt was a no-op: session ended cleanly at step 70176 at 2026-05-14T20:56Z (SIGINT during sealbot eval game 37/100; `shutdown_save=True` triggered, buffer persisted, final checkpoint flushed). tmux session `s175` detached, kept for state preservation. Forensics archived locally: 21 eval-DB rows, checkpoint_log.json, training-step tail (5000 lines), shutdown events.
+
+Tourney: 5 bots × 50 games/pair × 10 pairs = 500 games, 6551.1 s wall (well under 4-hr cap). Participants: `our_v6_latest` (step 70000, MCTS-128), `our_v6_step20k` (step 20000, MCTS-128), `our_v6_bootstrap` (bootstrap_model_v6.pt, MCTS-128), `sealbot` (think_time=0.5s), `kraken_minimax_strong` (time_limit=1.0s).
+
+**Pre-registered verdicts (V70K-1..5):**
+
+| ID | Hypothesis | Observed | Verdict |
+|---|---|---|---|
+| V70K-1 | 70K vs SealBot WR ≥ 17.4% | 25/50 = 50.0%, Wilson95 [36.6, 63.4] | **PASS (greedy mode)** |
+| V70K-2 | 20K stronger than 70K H2H | step20k vs latest 50/0 = 100% | **PASS strong** |
+| V70K-3 | 70K improved over own bootstrap | latest vs bootstrap 50/0 = 100% | **PASS strong** |
+| V70K-4 | 70K col-frac (winner-side) ≤ 65% | 100% col>0.3 rate, mean col-frac 63.3%, n_components 14.90 | **FAIL strong** |
+| V70K-5 | 70K vs Kraken strong WR ≥ 60% | 49/50 = 98.0%, Wilson95 [89.5, 99.6] | **PASS strong** |
+
+**Critical methodology divergence.** `tournament_validate.py` runs `OurModelBot` at `temperature=0.0` (greedy argmax). §175 `eval_pipeline.py` defaults to `eval_temperature=0.5` (stochastic). Two distinct play modes from the same weights produce radically different rankings. §175 trajectory was 18.0% → 4.0% (T=0.5, n=100) across 20K → 70K. This tourney shows 0.0% → 50.0% (T=0.0, n=50) across the same checkpoints. The H2H 50-0 results between checkpoints reflect 2-effective-unique-games × 25 P1/P2 repetitions inflated to Wilson95 [92.9%, 100%] — over-confident at greedy-mode determinism.
+
+**Interpretation:**
+1. V70K-2 PASS strong is robust across both modes (step20k > latest in greedy 50-0; step20k > latest in sampled 18% > 4%). **20K-as-bootstrap decision validated.** Both methodologies agree.
+2. V70K-3 PASS strong contradicts L18's "regressed past own bootstrap" framing for greedy mode but is silent on sampled mode (no eval-pipeline measurement of latest_70K vs bootstrap). **L18 needs refinement** (see L21 below).
+3. V70K-4 FAIL strong (100% col>0.3 rate for latest_70K wins, n_components 14.90) is the most important finding — **attractor fully captured the latest_70K argmax distribution**, sitting right at the §176 Phase B warning threshold (`n_components ≥ 15`). Argues for aggressive bot-game mixing in Source A; Section 3 weights in `s176_d_plan.md` remain sound.
+4. V70K-1 PASS is mode-qualified. Greedy parity with sealbot at step 70K is real (25/25) but DOES NOT contradict the §175 sampled-eval 4% slide.
+
+### Gate 3 — step-20K promotion, verdict **PROMOTED with n=20 caveat**
+
+`reports/s176_gate3/smoke_eval.md` + `checkpoints/bootstrap_model_v6_step20k.{pt,json}`.
+
+- Source: §175 `checkpoint_00020000.pt` (run `c7e74d2842404a82bdd9f62edf740ea2`), source SHA256 `540ac1cf91be38c21b8c10267d36828f34aec242d89c51bc4fd0ea6f2a8680ca`.
+- Artifact: `checkpoints/bootstrap_model_v6_step20k.pt`, SHA256 `297e0ce0e48c8c9c417d923610de6ed0166c7295789ebc7bd029c90bb42bce6a`, 17.0 MB (weights-only per §34: only `model_state` + `metadata` retained; optimizer/scaler/scheduler stripped).
+- Sidecar: `checkpoints/bootstrap_model_v6_step20k.json`.
+- Extraction verification: tensor-equality 143/143 keys MATCH source; round-trip `load_state_dict(strict=True)` returns `<All keys matched successfully>`; `python -m hexo_rl.encoding audit` reports `v6 v6 OK` (declared==inferred).
+- Smoke eval: matched §175 methodology (`eval_temperature=0.5`, per-game seed) → 1/20 = 5.0% Wilson95 [0.9%, 23.6%]; binomial P(X≤1 | n=20, p=0.18) = 0.10 — consistent with §175 18/100 anchor at α=0.10; n=20 noise dominates point estimate. Master-prompt STOP boundary (< 5%) not strictly triggered. **Promotion approved.**
+- Vast parity: artifact + sidecar pushed; SHA matches both hosts.
+- `bootstrap_model.pt` symlink UNTOUCHED (§175-era reproducibility preserved).
+
+### Retained baselines — new row
+
+| Anchor | Path | SHA256 | Source step / run | Eval WR (n=100) | Note |
+|---|---|---|---|---|---|
+| v6_step20k (§176 Gate 3) | `checkpoints/bootstrap_model_v6_step20k.pt` | `297e0ce0…2bce6a` | §175 step 20000 / `c7e74d…40ea2` | 18.0% [11.7, 26.7] vs SealBot | Empirical §175 sampled-eval peak; weights-only per §34 |
+
+### New mechanism lessons (L21+)
+
+- **L21** — *Eval temperature mode change can invert checkpoint rankings.* §175 step-20K vs SealBot at T=0.5 is 18.0% (peak across §175); same checkpoint at T=0.0 (greedy argmax) is 0.0%. §175 step-70K at T=0.5 is 4.0%; at T=0.0 it ties sealbot 25/25. The argmax-mode and sampled-mode are effectively **two different bots** from the same weights. Any cross-tooling comparison must declare temperature; defaulting to `eval_temperature=0.5` is the convention for §175-era continuity.
+- **L22** — *L18 head-drift refinement.* §175 internal drift between 20K and 70K is **policy-distribution flattening into colony attractor** under T=0.5 sampling, NOT loss of argmax dominance over bootstrap. V70K-3 PASS strong (latest dominates bootstrap 50-0 in greedy) + V70K-4 FAIL strong (100% colony-spam wins for latest, n_components 14.90) + §175 eval trajectory (18% → 4% sampled) jointly pin the mechanism. L18 should read "*sampled-policy regression into colony attractor*", not "*regressed past bootstrap*".
+- **L23** — *H2H 50-0 in greedy-argmax tourneys is 2 effective unique games × 25 P1/P2 repetitions.* `tournament_validate.py` with `temperature=0.0`, `dirichlet_enabled=False`, `random_opening_plies=0`, and sealbot's roughly-deterministic 0.5s response produces 2 distinct game trajectories per pair (one per opening side). Wilson95 intervals on the inflated n=50 are over-confident. For 20K-as-bootstrap-style discriminator runs, this is acceptable as a sign-test (direction); for absolute strength estimates, prefer eval_pipeline at T=0.5 to inject per-game variance.
+
+### New Falsified Hypotheses Register rows
+
+| § | Hypothesis | Falsified by | Mechanism |
+|---|---|---|---|
+| §176 Phase A Gate 2 | V70K-4 — §175 step-70K winner-side col-frac ≤ 65% (attractor weakened by training past 50K) | V70K-4 strong FAIL (100% col>0.3 rate, n_components 14.90) | Attractor captured the policy. Greedy-mode wins are uniformly colony-spam patterns. |
+| §176 Phase A Gate 2 | L18 strict reading — "§175 latest_70K regressed past its own bootstrap on the selfplay axis" | V70K-3 PASS strong (50-0 H2H latest dominates bootstrap in greedy argmax) | Drift is sampled-mode policy-distribution flattening, not argmax-mode regression. See L22. |
+| §176 Phase A Gate 1 | Operator-prompted L18 framing requires no statistical disclaimer at n=50 | Gate 1 dim (vi) — BT 95% CI [-150, +26] crosses zero; H2H 25/25 is parity-consistent only at n=50, NOT strongly-asserted parity | L18 lesson body should disclose CI; framing already correct ("can match") |
+
+### Phase B anchor decision
+
+**Anchor for §176 Phase B sustained: `checkpoints/bootstrap_model_v6_step20k.pt`** (Gate 3 artifact). Validated by:
+- V70K-2 PASS strong (20K dominates latest in greedy 50-0)
+- §175 sampled-eval (18% vs 4% across 20K vs 70K)
+- Both methodologies agree direction.
+
+Phase B implementation opens on a fresh branch (S1–S6 per `reports/s176_d_plan.md`). Mix-ratio bot-pool weights per Section 3 unchanged. **Add eval-temperature pin to all sustained smoke prompts** (recommend T=0.5 for §175 continuity).
+
+### Phase A close
+
+PR #8 mergeable. §175 tmux detached but session preserved. Replay buffer (2.9 GB + 77 MB .recent.npz), 24 checkpoints from step 5000 to 70176, structlog jsonl (49 MB train + 51 MB events) all intact on vast under `c7e74d2842404a82bdd9f62edf740ea2`.
+
+Forensics added: `reports/s176_gate1_operator_review.md`, `reports/s176_gate2_verdicts.txt`, `reports/s176_gate2_tourney/{summary.md,verdicts_v70k.md,…}`, `reports/s176_gate3/smoke_eval.md`, `reports/s175_forensics/{eval_db_rows.json,train_tail_5000.jsonl,checkpoint_log.json,…}`.
 
 ---
 
