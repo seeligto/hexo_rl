@@ -168,6 +168,18 @@ primary gate (`reports/s176_a4_falsified_scan.md` Q14 row, §d).
 - `kraken_random` (no think time). Latency negligible per `summary.md:51-52`
   (0.005s total).
 
+**Eval-temperature pin (L21 mandate).** All §176 Phase B sustained smoke
+eval blocks MUST declare `eval_temperature` explicitly. Recommended
+default: `eval_temperature: 0.5` for §175-era continuity (matches the
+17.4%/18.0% n=100 baselines). Gate 2 demonstrated greedy-argmax (T=0.0)
+vs sampled (T=0.5) mode produces inverted checkpoint rankings on the same
+weights (`reports/s176_gate2_tourney/verdicts_v70k.md` Methodology
+divergence note + sprint log L21/L22/L23). The new opponent blocks for
+`kraken_minimax_strong` + `kraken_random` inherit the existing
+`eval_temperature` field — no per-opponent override; the pin lives at
+the `configs/eval.yaml` top-level + `tests/test_eval_opponent_runners.py`
+INV snapshot.
+
 **OMITTED.** `kraken_minimax_fast` (0.1s). V2 finding (`summary.md:73-75`):
 0.1s vs 1.0s BT delta only −5 Elo, within CI. 10× budget does NOT translate
 to strength — iterative deepening saturates at depth 4 on dense mid-board
@@ -188,17 +200,20 @@ failure mode (tight αβ-punished play) than SealBot (tree-search-with-extension
 (referenced in A2 §f INV table, "0 pins fire on new opponent" — but the
 canonical-order list itself is an explicit string assertion that must be
 updated for new bot names). Cost: ~2 LOC in the canonical list + 0 LOC
-elsewhere.
+elsewhere. Add second INV (or extend existing) snapshotting
+`eval_temperature` field value per L21 pin; ~3 LOC.
 
 **Commit boundary 2.** `feat(eval): kraken_minimax_strong + kraken_random eval ladder + Q14 close (§176 S2)` —
 covers `configs/eval.yaml` additions, `opponent_runners.py` two new runner
 closures, `eval_pipeline.py` wiring loop update, `tests/test_eval_opponent_runners.py`
 canonical-order update, `docs/06_OPEN_QUESTIONS.md:444-456` Q14 RESOLVED.
 
-**LOC delta.** ~50 LOC code (20 yaml + 40 runners + 5 wiring) + ~5 LOC test
-+ ~10 LOC Q14 close text = ~65 LOC.
+**LOC delta.** ~50 LOC code (20 yaml + 40 runners + 5 wiring) + ~8 LOC test
+(canonical-order + eval_temperature INV) + ~10 LOC Q14 close text = ~68 LOC.
 
-**INV risk.** 1 (canonical-order test).
+**INV risk.** 1 (canonical-order test) + 1 (eval_temperature snapshot) = 2.
+
+**Compliance pin.** L21 (sprint log line 1373) — eval mode pinned T=0.5.
 
 **Bench gate.** NO. Eval runs per-checkpoint, cold path.
 
