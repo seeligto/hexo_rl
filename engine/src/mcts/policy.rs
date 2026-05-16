@@ -65,6 +65,17 @@ impl MCTSTree {
     /// `spec.policy_stride()`); see `get_policy` for the rationale. Pre-P2
     /// this method computed `board_size² + 1` unconditionally.
     ///
+    /// §P33 (Wave 4): the separate `logits: Vec<f32; n_actions>` buffer is
+    /// retired. `child_data` already carries (action, visits, prior, q_val)
+    /// and the softmax is sparse (only entries in `child_data` are non-zero
+    /// before exp). The max-logit / sum-exp passes now iterate `child_data`
+    /// directly instead of scanning a full n_actions-wide sentinel vector,
+    /// and the final exp/scatter writes straight into `policy[action]`.
+    /// SmallVec swap for `child_data` skipped: `smallvec` is not a dep at
+    /// HEAD; per Wave 4 launch prompt we do NOT add a new dep just for this
+    /// proposal. `Vec::with_capacity(n_ch)` keeps the single-allocation
+    /// child_data path.
+    ///
     /// Returns an `n_actions`-dim probability distribution that incorporates
     /// MCTS Q-values into the prior, giving useful policy signal even at
     /// low simulation counts.
@@ -157,9 +168,48 @@ impl MCTSTree {
         };
 
         // Build completed Q-values and compute pi_improved = softmax(log_prior + sigma(completedQ))
+        // §P33: logits are sparse over legal actions — every illegal slot is
+        // -inf and contributes 0 to the softmax sum. Iterate child_data
+        // twice (max + sum) and once for the final scatter, instead of
+        // allocating an n_actions-wide -inf vector. Two-pass keeps numerical
+        // stability identical to the pre-P33 max_logit / sum_exp pair.
         let sigma_scale = (c_visit + max_n as f32) * c_scale;
-        let mut logits = vec![f32::NEG_INFINITY; n_actions];
 
+        // Pass 1: find max_logit over child_data only (illegal slots are -inf
+        // which never wins a max).
+        let mut max_logit = f32::NEG_INFINITY;
+        for &(_, visits, prior, q_val) in &child_data {
+            let completed_q = if visits > 0 {
+                q_val.clamp(-1.0, 1.0)
+            } else {
+                v_mix.clamp(-1.0, 1.0)
+            };
+            let log_prior = (prior.max(1e-8)).ln();
+            let l = log_prior + sigma_scale * completed_q;
+            if l > max_logit { max_logit = l; }
+        }
+        if max_logit == f32::NEG_INFINITY {
+            return policy;
+        }
+
+        // Pass 2: sum-exp over child_data.
+        let mut sum_exp = 0.0f32;
+        for &(_, visits, prior, q_val) in &child_data {
+            let completed_q = if visits > 0 {
+                q_val.clamp(-1.0, 1.0)
+            } else {
+                v_mix.clamp(-1.0, 1.0)
+            };
+            let log_prior = (prior.max(1e-8)).ln();
+            let l = log_prior + sigma_scale * completed_q;
+            sum_exp += (l - max_logit).exp();
+        }
+        if sum_exp <= 0.0 {
+            return policy;
+        }
+
+        // Pass 3: scatter the softmax mass back into policy at each
+        // child's flat action index.
         for &(action, visits, prior, q_val) in &child_data {
             let completed_q = if visits > 0 {
                 q_val.clamp(-1.0, 1.0)
@@ -167,29 +217,8 @@ impl MCTSTree {
                 v_mix.clamp(-1.0, 1.0)
             };
             let log_prior = (prior.max(1e-8)).ln();
-            logits[action] = log_prior + sigma_scale * completed_q;
-        }
-
-        // Numerically stable softmax over legal actions only
-        let max_logit = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        if max_logit == f32::NEG_INFINITY {
-            return policy;
-        }
-
-        let mut sum_exp = 0.0f32;
-        for &l in &logits {
-            if l > f32::NEG_INFINITY {
-                sum_exp += (l - max_logit).exp();
-            }
-        }
-        if sum_exp <= 0.0 {
-            return policy;
-        }
-
-        for i in 0..n_actions {
-            if logits[i] > f32::NEG_INFINITY {
-                policy[i] = (logits[i] - max_logit).exp() / sum_exp;
-            }
+            let l = log_prior + sigma_scale * completed_q;
+            policy[action] = (l - max_logit).exp() / sum_exp;
         }
 
         // Note: policy pruning is applied only in the Python training loop

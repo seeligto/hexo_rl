@@ -60,7 +60,9 @@ fn test_aggregate_policy_to_local_v6w25_returns_626_vector() {
     let center = (0i32, 0i32);
     let global_policy = vec![0.0f32; n_actions];
 
-    let result = aggregate_policy_to_local(n_actions, true, trunk_sz, &board, &center, &global_policy);
+    // §P11: test-side legal_moves hoist matches worker_loop call shape.
+    let legal_moves = board.legal_moves();
+    let result = aggregate_policy_to_local(n_actions, true, trunk_sz, &board, &center, &global_policy, &legal_moves);
     assert_eq!(
         result.len(),
         626,
@@ -206,7 +208,9 @@ fn test_aggregate_policy_to_local_v6_returns_362_vector() {
 
     let global = vec![1.0f32 / n_actions as f32; n_actions];
     let center = (0i32, 0i32);
-    let result = aggregate_policy_to_local(n_actions, true, trunk_sz, &board, &center, &global);
+    // §P11: test-side legal_moves hoist matches worker_loop call shape.
+    let legal_moves = board.legal_moves();
+    let result = aggregate_policy_to_local(n_actions, true, trunk_sz, &board, &center, &global, &legal_moves);
     assert_eq!(result.len(), 362, "v6 geometry must return 362-vector");
 }
 
@@ -244,7 +248,8 @@ fn test_round_trip_aggregate_to_local_v6w25() {
     assert_eq!(global.len(), 626);
 
     // Project back to local.
-    let local_out = aggregate_policy_to_local(n_actions, true, trunk_sz, &board, &center, &global);
+    // §P11: test-side legal_moves hoist matches worker_loop call shape.
+    let local_out = aggregate_policy_to_local(n_actions, true, trunk_sz, &board, &center, &global, &legal);
     assert_eq!(local_out.len(), 626);
 
     // The move's local index should recover its probability.

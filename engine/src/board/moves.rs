@@ -1,5 +1,43 @@
+use std::cell::RefCell;
+
 use fxhash::FxHashSet;
 use super::state::{Board, Cell, Player, HEX_AXES, hex_distance};
+
+/// Per-thread reusable scratch buffers for `get_clusters()` BFS partition.
+///
+/// §P10 (Wave 4): pre-cycle-2, `get_clusters` allocated `stones`, `visited`,
+/// and `queue` Vecs on every call. Per MCTS leaf expansion + per record this
+/// produced churn proportional to leaves/move × clusters/board on the hot
+/// path. Reusing per-thread scratch eliminates those three allocations; the
+/// returned `Vec<Vec<(i32,i32)>>` is still owned-per-cluster (return-type
+/// contract is unchanged).
+///
+/// Thread-local rather than per-Board: `Board::clone` is on the MCTS hot path
+/// (`expand_and_backup` reconstructs a board per leaf) and the existing
+/// pattern (cycle-1 legal_cache lesson at `state/core.rs:619-651`) is to skip
+/// cache-shaped fields in Clone. A per-Board scratch would need the same
+/// skip-on-clone treatment AND would not survive across distinct Board calls
+/// (each leaf is a fresh clone). Thread-local is shared across all leaves on
+/// the same worker thread — strictly more reuse and zero Clone footprint.
+struct ClusterScratch {
+    stones: Vec<(i32, i32)>,
+    visited: Vec<bool>,
+    queue: Vec<usize>,
+}
+
+impl ClusterScratch {
+    fn new() -> Self {
+        Self {
+            stones: Vec::new(),
+            visited: Vec::new(),
+            queue: Vec::new(),
+        }
+    }
+}
+
+thread_local! {
+    static CLUSTER_SCRATCH_TLS: RefCell<ClusterScratch> = RefCell::new(ClusterScratch::new());
+}
 
 /// Stones in a row required to win.
 const WIN_LENGTH: usize = 6;
@@ -280,27 +318,40 @@ impl Board {
             return clusters;
         }
 
-        let stones: Vec<(i32, i32)> = self.cells.keys().cloned().collect();
-        let mut visited = vec![false; stones.len()];
         let threshold = self.cluster_threshold;
 
-        for i in 0..stones.len() {
-            if visited[i] { continue; }
-            let mut cluster = Vec::new();
-            let mut queue = vec![i];
-            visited[i] = true;
+        CLUSTER_SCRATCH_TLS.with(|scratch| {
+            let mut s = scratch.borrow_mut();
+            let ClusterScratch { stones, visited, queue } = &mut *s;
 
-            while let Some(curr) = queue.pop() {
-                cluster.push(stones[curr]);
-                for j in 0..stones.len() {
-                    if !visited[j] && hex_distance(stones[curr].0, stones[curr].1, stones[j].0, stones[j].1) <= threshold {
-                        visited[j] = true;
-                        queue.push(j);
+            // §P10: refill the thread-local scratch from this Board's stones.
+            // `clear` + `extend` reuses the existing allocation when capacity
+            // suffices; `visited.resize(.., false)` zeroes only the in-use
+            // prefix (still O(n) but no allocation when n ≤ capacity).
+            stones.clear();
+            stones.extend(self.cells.keys().cloned());
+            visited.clear();
+            visited.resize(stones.len(), false);
+            queue.clear();
+
+            for i in 0..stones.len() {
+                if visited[i] { continue; }
+                let mut cluster = Vec::new();
+                queue.push(i);
+                visited[i] = true;
+
+                while let Some(curr) = queue.pop() {
+                    cluster.push(stones[curr]);
+                    for j in 0..stones.len() {
+                        if !visited[j] && hex_distance(stones[curr].0, stones[curr].1, stones[j].0, stones[j].1) <= threshold {
+                            visited[j] = true;
+                            queue.push(j);
+                        }
                     }
                 }
+                clusters.push(cluster);
             }
-            clusters.push(cluster);
-        }
+        });
 
         clusters
     }

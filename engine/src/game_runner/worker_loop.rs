@@ -763,6 +763,11 @@ impl SelfPlayRunner {
 
                         // ── Record position ──
                         let (views, centers) = board.get_cluster_views();
+                        // §P11 (Wave 4): hoist legal_moves once across the
+                        // K cluster scatters — each call to
+                        // aggregate_policy_to_local previously re-walked
+                        // board.legal_moves() (one allocation per K).
+                        let record_legal_moves = board.legal_moves();
                         for (k, center) in centers.iter().enumerate() {
                             // §173 A5a (H2-α, H3-α): kept_planes and n_cells are
                             // spec-derived; replace KEPT_PLANE_INDICES/SYM_N_CELLS/TOTAL_CELLS.
@@ -786,7 +791,7 @@ impl SelfPlayRunner {
                             } else {
                                 // §P2: has_pass_slot pre-extracted at A5b boundary so the
                                 // tail-index copy from global only runs under has_pass_slot=true.
-                                records::aggregate_policy_to_local(policy_stride, has_pass_slot, agg_trunk_sz, &board, center, &target_policy)
+                                records::aggregate_policy_to_local(policy_stride, has_pass_slot, agg_trunk_sz, &board, center, &target_policy, &record_legal_moves)
                             };
                             // §130: forward-scatter the recorded state, chain, and
                             // policy into the rotated frame so the buffer stores

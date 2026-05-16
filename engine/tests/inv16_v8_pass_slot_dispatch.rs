@@ -202,7 +202,9 @@ fn test_v8_aggregate_policy_to_local_preserves_corner_cell() {
 
     let center = (0i32, 0i32);
 
-    // Post-P2 7-arg signature.
+    // §P11: test-side legal_moves hoist matches worker_loop call shape.
+    let legal_moves = board.legal_moves();
+    // Post-P11 8-arg signature (legal_moves slice hoisted by caller).
     let local = aggregate_policy_to_local(
         n_actions,
         false, // v8: has_pass_slot=false
@@ -210,6 +212,7 @@ fn test_v8_aggregate_policy_to_local_preserves_corner_cell() {
         &board,
         &center,
         &global,
+        &legal_moves,
     );
 
     assert_eq!(local.len(), 625, "v8 aggregate_policy_to_local must return 625-vector");

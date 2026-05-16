@@ -118,6 +118,11 @@ pub fn aggregate_policy(
 /// to stash a cluster-local policy next to the row's 2-plane state snapshot
 /// so that each row is self-consistent under later symmetry augmentation.
 /// The result is renormalised, with a uniform fallback for the zero-mass case.
+///
+/// §P11 (Wave 4): the legal-moves slice is supplied by the caller (hoisted
+/// once at the record-emission boundary in worker_loop.rs) so K cluster
+/// scatters share one `board.legal_moves()` call instead of K separate
+/// allocations.
 #[inline]
 pub fn aggregate_policy_to_local(
     n_actions: usize,
@@ -126,6 +131,7 @@ pub fn aggregate_policy_to_local(
     board: &Board,
     center: &(i32, i32),
     global_policy: &[f32],
+    legal_moves: &[(i32, i32)],
 ) -> Vec<f32> {
     let (cq, cr) = *center;
     let half = (trunk_sz - 1) / 2;
@@ -134,9 +140,8 @@ pub fn aggregate_policy_to_local(
     let (bcq, bcr) = board.window_center();
 
     let mut local_policy = vec![0.0; n_actions];
-    let legal = board.legal_moves();
 
-    for &(q, r) in &legal {
+    for &(q, r) in legal_moves {
         let wq = q - cq + half;
         let wr = r - cr + half;
         if wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz {
