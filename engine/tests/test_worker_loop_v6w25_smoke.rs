@@ -67,6 +67,7 @@ fn test_v6w25_runner_constructs_correct_geometry() {
         false,                    // legal_move_radius_jitter
         Some(engine::PyRegistrySpec::from_static(spec)), // encoding_spec (§173 A5a)
         None,                     // radius_override (§174)
+        None,                     // inference_pool_size (§P55)
     )
     .expect("v6w25 SelfPlayRunner must construct without panic");
 

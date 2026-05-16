@@ -66,6 +66,7 @@ fn make_runner(
         false,                              // legal_move_radius_jitter
         None,                               // encoding_spec (§172 A10 T8b)
         None,                               // radius_override (§174)
+        None,                               // inference_pool_size (§P55)
     )
     .expect("runner construction should succeed")
 }

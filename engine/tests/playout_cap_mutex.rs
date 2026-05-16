@@ -48,6 +48,7 @@ fn start_panics_when_both_caps_active() {
         false,              // legal_move_radius_jitter
         None,               // encoding_spec (§172 A10 T8b: v6 default)
         None,               // radius_override (§174)
+        None,               // inference_pool_size (§P55)
     )
     .expect("constructor succeeds; mutex is enforced at start()");
 

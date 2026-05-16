@@ -256,11 +256,12 @@ impl InferenceBatcher {
 #[pymethods]
 impl InferenceBatcher {
     #[new]
-    #[pyo3(signature = (encoding_spec = None, feature_len = None, policy_len = None))]
+    #[pyo3(signature = (encoding_spec = None, feature_len = None, policy_len = None, pool_size = None))]
     pub fn new(
         encoding_spec: Option<crate::PyRegistrySpec>,
         feature_len: Option<usize>,
         policy_len: Option<usize>,
+        pool_size: Option<usize>,
     ) -> Self {
         // §172 A10 T8b — derive feature_len / policy_len from `encoding_spec`
         // (registry record) when explicit kwargs are omitted. Pre-T8b
@@ -280,8 +281,14 @@ impl InferenceBatcher {
             (None, Some(p), None) => (8 * 19 * 19, p), // audit: legacy-v6-fallback
         };
 
-        let (pool_sender, pool_receiver) = flume::bounded(1024);
-        for _ in 0..512 {
+        // §P55: pool_size = None preserves cycle 1 fixed 512 pre-send + 1024 channel.
+        // When caller opts in (e.g. v6w25 16-worker mid-game K_avg≈6 → 768 working set
+        // exceeds 512), channel grows to max(pool_size * 2, 1024) so try_send pre-fill
+        // doesn't silently drop into a full channel.
+        let prefill = pool_size.unwrap_or(512);
+        let channel_cap = pool_size.map_or(1024, |n| (n * 2).max(1024));
+        let (pool_sender, pool_receiver) = flume::bounded(channel_cap);
+        for _ in 0..prefill {
             let _ = pool_sender.send(vec![0.0f32; feature_len]);
         }
 
