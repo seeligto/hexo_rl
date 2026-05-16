@@ -355,6 +355,21 @@ pub fn sym_tables_for(spec: &'static crate::encoding::RegistrySpec) -> &'static 
     }
 }
 
+/// Return the v6 default (`SymTables::new()`) singleton.
+///
+/// §P51 (cycle 2 Wave 5a, Batch B): used by `worker_loop::start_impl` to
+/// satisfy the `None`-spec legacy fallback path with a `&'static SymTables`
+/// reference (avoiding the `Arc<SymTables>` allocation + `Arc::clone` per
+/// worker spawn). Byte-exact to `SymTables::new()` (board 19×19, n_planes
+/// derived from `KEPT_PLANE_INDICES` — see `SymTables::new()`).
+///
+/// Returned reference outlives any worker thread, so the worker closure can
+/// capture `&'static SymTables` and drop the `Arc::clone` per spawn.
+pub fn sym_tables_v6_default() -> &'static SymTables {
+    static V6_DEFAULT: LazyLock<SymTables> = LazyLock::new(SymTables::new);
+    &V6_DEFAULT
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -293,6 +293,17 @@ class WorkerPool:
         # construction (§P3.2).  See ResolvedPoolEncoding docstring +
         # historical context (§171 P3 A1 reopen, §172 A4.2, §173 A8').
         runner_registry_spec = _resolved.runner_registry_spec
+        # §P55 / Wave 5a operator follow-up — opt-in `inference_pool_size`
+        # forwarded from `selfplay.inference_pool_size`. Default = None
+        # preserves cycle-1 behavior (InferenceBatcher uses its fixed 512
+        # feature-buffer prefill / 1024 channel capacity). Operator opts in
+        # via YAML for v6w25 16-worker high-K runs where the per-leaf K_avg
+        # working set (~768 with n_workers=16, leaf_batch=8, K_avg≈6) exceeds
+        # the 512 default; recommended size is
+        # `n_workers * leaf_batch_size * K_max * 2` per the §P55 commit body.
+        inference_pool_size = sp.get("inference_pool_size", None)
+        if inference_pool_size is not None:
+            inference_pool_size = int(inference_pool_size)
         self._runner = SelfPlayRunner(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_game_moves", sp.get("max_moves_per_game", 128))),
@@ -342,6 +353,7 @@ class WorkerPool:
             # pre-§152 variant stay at the canonical radius 5.
             legal_move_radius_jitter=bool(sp.get("legal_move_radius_jitter", False)),
             encoding_spec=runner_registry_spec,
+            inference_pool_size=inference_pool_size,
         )
         self._inference_server = InferenceServer(
             model, device, config, batcher=self._runner.batcher,

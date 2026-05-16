@@ -30,9 +30,13 @@ pub fn compute_move_temperature(
     }
 }
 
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::thread;
+
+use crate::inference_bridge::InferenceBatcher;
 
 use rand::prelude::IndexedRandom;
 use rand::{rng, RngExt};
@@ -45,8 +49,13 @@ use crate::replay_buffer::sym_tables::{
     SymTables, N_SYMS,
     // §173 A5a: SYM_N_CELLS (= N_CELLS = 361) and KEPT_PLANE_INDICES removed from
     // import — replaced by runtime spec.n_cells() and spec.kept_plane_indices at
-    // all call sites (H1-α, H2-α, H3-α). sym_tables_for not imported here;
-    // start_impl uses SymTables::with_shape(spec.trunk_size, spec.n_planes) directly.
+    // all call sites (H1-α, H2-α, H3-α).
+    // §P51 (cycle 2 Wave 5a, Batch B): `sym_tables_for` now imported so
+    // `start_impl` can grab a `&'static SymTables` reference (Some-spec path)
+    // instead of allocating a fresh `Arc<SymTables>` per `start()` call.
+    // `sym_tables_v6_default` covers the None-spec legacy fallback with the
+    // byte-exact v6 default singleton (`SymTables::new()`).
+    sym_tables_for, sym_tables_v6_default,
 };
 use crate::replay_buffer::sample::{apply_symmetry_state, apply_chain_symmetry};
 
@@ -127,6 +136,97 @@ fn rotate_aux_inplace(buf: &mut Vec<u8>, sym_idx: usize, tables: &SymTables, n_c
     std::mem::swap(buf, &mut tmp);
 }
 
+// ── §P52: WorkerCtx — per-worker capture bundle ───────────────────────────────
+//
+// Pre-cycle-2 each worker spawn duplicated 35 `let x = self.x.clone();` lines
+// in front of `thread::spawn(move || ...)`. The capture set is shared across
+// all `n_workers` threads, so the bundle is built once and `#[derive(Clone)]`
+// gives the spawn-site one cheap `Arc::clone`-per-field call inside `Clone::clone`
+// instead of 35 explicit ones. Per-thread closure destructures the bundle at
+// the top of `thread::spawn` so the existing hot-loop body keeps reading
+// unqualified locals (no `ctx.atomics.running.load(...)` in the hot path).
+//
+// Sub-grouping mirrors the per-field usage clusters in the worker body:
+//
+//   Stats     — `Arc<AtomicU{64,size}>` accumulator counters (mcts_*, cluster_*,
+//               win/loss/draw counts, position counters, dropped-position counter).
+//   Atomics   — control flags / live tunables (`running`, `radius_override`).
+//   Channels  — shared queues + batcher handle (results, recent_game_results,
+//               InferenceBatcher).
+//   Params    — `Copy` config scalars + the `Option<&'static RegistrySpec>`
+//               (no `Arc` — `#[derive(Clone)]` is trivial copy of each field).
+//
+// `Params` is `Copy` and explicit `#[derive(Copy)]` would be redundant; we keep
+// it `Clone`-only so the spawn-site call shape is uniform across all four
+// sub-structs (`group.clone()`).
+#[derive(Clone)]
+struct WorkerStats {
+    games_completed: Arc<AtomicUsize>,
+    positions_generated: Arc<AtomicUsize>,
+    x_wins: Arc<AtomicU64>,
+    o_wins: Arc<AtomicU64>,
+    draws: Arc<AtomicU64>,
+    positions_dropped: Arc<AtomicU64>,
+    mcts_depth_accum: Arc<AtomicU64>,
+    mcts_conc_accum: Arc<AtomicU64>,
+    mcts_stat_count: Arc<AtomicU64>,
+    mcts_quiescence_fires: Arc<AtomicU64>,
+    cluster_value_std_accum: Arc<AtomicU64>,
+    cluster_policy_disagreement_accum: Arc<AtomicU64>,
+    cluster_variance_samples: Arc<AtomicU64>,
+}
+
+#[derive(Clone)]
+struct WorkerAtomics {
+    running: Arc<AtomicBool>,
+    radius_override: Arc<AtomicI32>,
+}
+
+#[derive(Clone)]
+#[allow(clippy::type_complexity)] // tuple types mirror SelfPlayRunner.results / recent_game_results — bundled as-is.
+struct WorkerChannels {
+    batcher: InferenceBatcher,
+    results_queue: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, bool)>>>,
+    recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32)>>>,
+}
+
+#[derive(Clone)]
+#[allow(clippy::struct_excessive_bools)] // 9 config flags — mirror SelfPlayRunner public surface (PyO3 kwargs).
+struct WorkerParams {
+    max_moves: usize,
+    leaf_batch_size: usize,
+    c_puct: f32,
+    fpu_reduction: f32,
+    quiescence_enabled: bool,
+    quiescence_blend_2: f32,
+    fast_prob: f32,
+    fast_sims: usize,
+    standard_sims: usize,
+    temp_threshold: usize,
+    temp_min: f32,
+    draw_reward: f32,
+    zoi_enabled: bool,
+    zoi_lookback: usize,
+    zoi_margin: i32,
+    completed_q_values: bool,
+    c_visit: f32,
+    c_scale: f32,
+    gumbel_mcts: bool,
+    gumbel_m: usize,
+    gumbel_explore_moves: usize,
+    dirichlet_alpha: f32,
+    dirichlet_epsilon: f32,
+    dirichlet_enabled: bool,
+    results_queue_cap: usize,
+    full_search_prob: f32,
+    n_sims_quick: usize,
+    n_sims_full: usize,
+    random_opening_plies: u32,
+    selfplay_rotation_enabled: bool,
+    legal_move_radius_jitter: bool,
+    registry_spec: Option<&'static crate::encoding::RegistrySpec>,
+}
+
 impl SelfPlayRunner {
     /// Spawn `n_workers` self-play threads. Idempotent: a second call while
     /// already running is a no-op.
@@ -136,6 +236,7 @@ impl SelfPlayRunner {
     /// `running` (kill switch), `games_completed` / `positions_generated` /
     /// `x_wins` / `o_wins` / `draws` / `results` / `recent_game_results` /
     /// `mcts_*_accum` (stats dashboards). All workers are joined by `stop()`.
+    #[allow(clippy::too_many_lines)] // hot loop body lives here; structural split is Wave 5b.
     pub(crate) fn start_impl(&self) {
         if self.running.swap(true, Ordering::SeqCst) {
             return;
@@ -155,76 +256,101 @@ impl SelfPlayRunner {
             self.full_search_prob,
         );
 
-        // §130: build the 12-fold dihedral scatter tables once and share by Arc.
-        // SymTables construction is O(N_CELLS × N_SYMS) ≈ 4 µs; keeping a single
-        // shared instance avoids paying that per-thread (and per-game) plus the
-        // cache pressure of duplicate copies in every worker.
+        // §130: build the 12-fold dihedral scatter tables once and share via a
+        // `&'static SymTables`. SymTables construction is O(N_CELLS × N_SYMS)
+        // ≈ 4 µs; lazy-init means the FIRST `start()` per encoding pays it and
+        // every subsequent `start()` reuses the same shared singleton (no Arc
+        // allocation, no `Arc::clone` per worker spawn).
         //
-        // §173 A5a (H1-α): when a registry spec is present, build the sym tables
-        // at the spec's board geometry (trunk_size × trunk_size) so v6w25 runners
-        // get 25×25 scatter tables instead of the default v6 19×19 tables.
-        // sym_tables_for() returns a &'static reference to a lazily-initialised
-        // singleton; we call SymTables::with_shape to get an owned instance for
-        // the Arc — this is a one-time ≈ 4–7 µs cost at runner start, not hot.
-        // Callers without encoding_spec fall back to SymTables::new() (v6 byte-exact).
-        let sym_tables_arc: Arc<SymTables> = match self.registry_spec {
-            Some(spec) => Arc::new(SymTables::with_shape(spec.trunk_size, spec.n_planes)),
-            None       => Arc::new(SymTables::new()),
+        // §173 A5a (H1-α): when a registry spec is present, `sym_tables_for(spec)`
+        // returns the spec-keyed singleton (size_19/{8|11}, size_25/{8|11}).
+        // §P51 (cycle 2 Wave 5a, Batch B): legacy `None`-spec callers go through
+        // `sym_tables_v6_default()` which lazily builds `SymTables::new()` once
+        // and returns the same `&'static` on every call. Byte-exact to the
+        // previous `Arc::new(SymTables::new())` semantics (same construction
+        // path); the change is purely the elimination of the per-runner Arc.
+        let sym_tables_static: &'static SymTables = match self.registry_spec {
+            Some(spec) => sym_tables_for(spec),
+            None       => sym_tables_v6_default(),
+        };
+
+        // §P52: build the per-worker capture prototype ONCE before the spawn
+        // loop. Each iteration calls `.clone()` on each sub-struct (cheap:
+        // 1 `Arc::clone` per field for Arc-typed members, scalar copy for
+        // Params), collapsing the historical 35-line per-spawn clone block to
+        // 4 group clones. Body of the spawn closure destructures the bundle
+        // back into the same identifier names so the hot-loop body is byte-
+        // identical to the pre-P52 source.
+        let stats_proto = WorkerStats {
+            games_completed: self.games_completed.clone(),
+            positions_generated: self.positions_generated.clone(),
+            x_wins: self.x_wins.clone(),
+            o_wins: self.o_wins.clone(),
+            draws: self.draws.clone(),
+            positions_dropped: self.positions_dropped.clone(),
+            mcts_depth_accum: self.mcts_depth_accum.clone(),
+            mcts_conc_accum: self.mcts_conc_accum.clone(),
+            mcts_stat_count: self.mcts_stat_count.clone(),
+            mcts_quiescence_fires: self.mcts_quiescence_fires.clone(),
+            cluster_value_std_accum: self.cluster_value_std_accum.clone(),
+            cluster_policy_disagreement_accum: self.cluster_policy_disagreement_accum.clone(),
+            cluster_variance_samples: self.cluster_variance_samples.clone(),
+        };
+        let atomics_proto = WorkerAtomics {
+            running: self.running.clone(),
+            radius_override: self.radius_override.clone(),
+        };
+        let channels_proto = WorkerChannels {
+            batcher: self.batcher.clone(),
+            results_queue: self.results.clone(),
+            recent_game_results: self.recent_game_results.clone(),
+        };
+        let params_proto = WorkerParams {
+            max_moves: self.max_moves_per_game,
+            leaf_batch_size: self.leaf_batch_size,
+            c_puct: self.c_puct,
+            fpu_reduction: self.fpu_reduction,
+            quiescence_enabled: self.quiescence_enabled,
+            quiescence_blend_2: self.quiescence_blend_2,
+            fast_prob: self.fast_prob,
+            fast_sims: self.fast_sims,
+            standard_sims: self.standard_sims,
+            temp_threshold: self.temp_threshold_compound_moves,
+            temp_min: self.temp_min,
+            draw_reward: self.draw_reward,
+            zoi_enabled: self.zoi_enabled,
+            zoi_lookback: self.zoi_lookback,
+            zoi_margin: self.zoi_margin,
+            completed_q_values: self.completed_q_values,
+            c_visit: self.c_visit,
+            c_scale: self.c_scale,
+            gumbel_mcts: self.gumbel_mcts,
+            gumbel_m: self.gumbel_m,
+            gumbel_explore_moves: self.gumbel_explore_moves,
+            dirichlet_alpha: self.dirichlet_alpha,
+            dirichlet_epsilon: self.dirichlet_epsilon,
+            dirichlet_enabled: self.dirichlet_enabled,
+            results_queue_cap: self.results_queue_cap,
+            full_search_prob: self.full_search_prob,
+            n_sims_quick: self.n_sims_quick,
+            n_sims_full: self.n_sims_full,
+            random_opening_plies: self.random_opening_plies,
+            selfplay_rotation_enabled: self.selfplay_rotation_enabled,
+            legal_move_radius_jitter: self.legal_move_radius_jitter,
+            registry_spec: self.registry_spec,
         };
 
         let mut handles = self.handles.lock().expect("runner handles lock poisoned");
         for worker_id in 0..self.n_workers {
-            let running = self.running.clone();
-            let games_completed = self.games_completed.clone();
-            let positions_generated = self.positions_generated.clone();
-            let x_wins = self.x_wins.clone();
-            let o_wins = self.o_wins.clone();
-            let draws = self.draws.clone();
-            let batcher = self.batcher.clone();
-            let max_moves = self.max_moves_per_game;
-            let leaf_batch_size = self.leaf_batch_size;
-            let c_puct = self.c_puct;
-            let fpu_reduction = self.fpu_reduction;
-            let quiescence_enabled = self.quiescence_enabled;
-            let quiescence_blend_2 = self.quiescence_blend_2;
-            let fast_prob = self.fast_prob;
-            let fast_sims = self.fast_sims;
-            let standard_sims = self.standard_sims;
-            let temp_threshold = self.temp_threshold_compound_moves;
-            let temp_min = self.temp_min;
-            let draw_reward = self.draw_reward;
-            let zoi_enabled = self.zoi_enabled;
-            let zoi_lookback = self.zoi_lookback;
-            let zoi_margin = self.zoi_margin;
-            let completed_q_values = self.completed_q_values;
-            let c_visit = self.c_visit;
-            let c_scale = self.c_scale;
-            let gumbel_mcts = self.gumbel_mcts;
-            let gumbel_m = self.gumbel_m;
-            let gumbel_explore_moves = self.gumbel_explore_moves;
-            let dirichlet_alpha   = self.dirichlet_alpha;
-            let dirichlet_epsilon = self.dirichlet_epsilon;
-            let dirichlet_enabled = self.dirichlet_enabled;
-            let results_queue_cap = self.results_queue_cap;
-            let full_search_prob  = self.full_search_prob;
-            let n_sims_quick      = self.n_sims_quick;
-            let n_sims_full       = self.n_sims_full;
-            let random_opening_plies = self.random_opening_plies;
-            let selfplay_rotation_enabled = self.selfplay_rotation_enabled;
-            let legal_move_radius_jitter = self.legal_move_radius_jitter;
-            // §174 — curriculum radius override.  Workers read this atomic at
-            // the start of each game; `-1` means "no override".
-            let radius_override = self.radius_override.clone();
-            // §P3.2 — `encoding: Option<EncodingSpec>` field deleted alongside
-            // the retired PyEncodingSpec PyO3 class. `registry_spec` (already
-            // captured below as part of the geometry block) is now the only
-            // source of "non-default perception bound" — workers branch on it
-            // for per-game Board construction (`with_registry_spec` vs `new`)
-            // and for the legal-move-radius jitter guard (jitter only on the
-            // bare-defaults path, same semantics as the deleted `encoding`
-            // sentinel).
-            // §173 A5a (H2-α, H3-α): per-spec geometry captured once before
-            // the thread spawn so workers don't re-derive on every hot iteration.
+            // §P52: per-worker bundle clone — 4 sub-struct clones replace the
+            // historical 35-line `let x = self.x.clone();` block.
+            let stats = stats_proto.clone();
+            let atomics = atomics_proto.clone();
+            let channels = channels_proto.clone();
+            let params = params_proto.clone();
+
+            // §173 A5a (H2-α, H3-α): per-spec geometry pre-extracted once before
+            // thread spawn so workers don't re-derive on every hot iteration.
             // `n_cells` = trunk_size² (cluster window cells per view); used to
             // replace hardcoded SYM_N_CELLS=361 and TOTAL_CELLS=361 in rotation
             // helpers and buffer sizing. Falls back to v6 default (361) for
@@ -263,25 +389,67 @@ impl SelfPlayRunner {
                 Some(s) => s.has_pass_slot,
                 None => true, // v6 default
             };
-            // §P3.2: capture the `&'static`-backed registry_spec by value into
-            // the worker closure. `Option<&'static RegistrySpec>` is `Copy`,
-            // so each thread owns its own value with no shared-state cost.
-            // Used at per-game Board construction + jitter guard inside the
-            // hot loop (replaces the deleted `encoding` field).
-            let registry_spec_for_worker = self.registry_spec;
-            let sym_tables = sym_tables_arc.clone();
-            let results_queue = self.results.clone();
-            let positions_dropped = self.positions_dropped.clone();
-            let recent_game_results = self.recent_game_results.clone();
-            let mcts_depth_accum = self.mcts_depth_accum.clone();
-            let mcts_conc_accum = self.mcts_conc_accum.clone();
-            let mcts_stat_count = self.mcts_stat_count.clone();
-            let mcts_quiescence_fires = self.mcts_quiescence_fires.clone();
-            let cluster_value_std_accum = self.cluster_value_std_accum.clone();
-            let cluster_policy_disagreement_accum = self.cluster_policy_disagreement_accum.clone();
-            let cluster_variance_samples = self.cluster_variance_samples.clone();
+            // §P51: `sym_tables_static` is `&'static SymTables` (Copy); each
+            // closure captures it by `move` with zero allocation cost. No
+            // `Arc::clone` per worker spawn (cycle 1 ran one Arc clone here).
+            let sym_tables = sym_tables_static;
 
             let handle = thread::spawn(move || {
+                // §P52: destructure the captured groups back into the local
+                // names used by the hot-loop body. Field order matches the
+                // pre-P52 capture order so the body diff is empty.
+                let WorkerStats {
+                    games_completed,
+                    positions_generated,
+                    x_wins,
+                    o_wins,
+                    draws,
+                    positions_dropped,
+                    mcts_depth_accum,
+                    mcts_conc_accum,
+                    mcts_stat_count,
+                    mcts_quiescence_fires,
+                    cluster_value_std_accum,
+                    cluster_policy_disagreement_accum,
+                    cluster_variance_samples,
+                } = stats;
+                let WorkerAtomics { running, radius_override } = atomics;
+                let WorkerChannels { batcher, results_queue, recent_game_results } = channels;
+                let WorkerParams {
+                    max_moves,
+                    leaf_batch_size,
+                    c_puct,
+                    fpu_reduction,
+                    quiescence_enabled,
+                    quiescence_blend_2,
+                    fast_prob,
+                    fast_sims,
+                    standard_sims,
+                    temp_threshold,
+                    temp_min,
+                    draw_reward,
+                    zoi_enabled,
+                    zoi_lookback,
+                    zoi_margin,
+                    completed_q_values,
+                    c_visit,
+                    c_scale,
+                    gumbel_mcts,
+                    gumbel_m,
+                    gumbel_explore_moves,
+                    dirichlet_alpha,
+                    dirichlet_epsilon,
+                    dirichlet_enabled,
+                    results_queue_cap,
+                    full_search_prob,
+                    n_sims_quick,
+                    n_sims_full,
+                    random_opening_plies,
+                    selfplay_rotation_enabled,
+                    legal_move_radius_jitter,
+                    registry_spec: registry_spec_for_worker,
+                } = params;
+
                 let mut tree = MCTSTree::new_full(c_puct, crate::mcts::VIRTUAL_LOSS_PENALTY, fpu_reduction);
                 tree.quiescence_enabled = quiescence_enabled;
                 tree.quiescence_blend_2 = quiescence_blend_2;
@@ -313,8 +481,14 @@ impl SelfPlayRunner {
                         Some(spec) => Board::with_registry_spec(spec),
                         None       => Board::new(),
                     };
-                    let mut records_vec = Vec::new();
-                    let mut move_history: Vec<(i32, i32)> = Vec::new();
+                    // §P67: pre-size per-game record vectors against the
+                    // upper-bound on moves per game so the typical 64-128-move
+                    // game never re-allocates. `records_vec` collects one entry
+                    // per cluster window per move; we pre-size to max_moves
+                    // (under-estimate for K>1 encodings, but still kills the
+                    // first ~6 doublings from len=0).
+                    let mut records_vec = Vec::with_capacity(max_moves);
+                    let mut move_history: Vec<(i32, i32)> = Vec::with_capacity(max_moves);
                     version_seen.clear();
 
                     // §174: curriculum radius override takes precedence over
@@ -417,7 +591,8 @@ impl SelfPlayRunner {
                                     // inverse scatter on the returned policy
                                     // (below) keeps MCTS in canonical frame.
                                     if sym_idx != 0 {
-                                        rotate_state_inplace(&mut buffer, sym_idx, &sym_tables);
+                                        // §P51: `sym_tables` is `&'static SymTables`; pass directly.
+                                        rotate_state_inplace(&mut buffer, sym_idx, sym_tables);
                                     }
                                     all_batch_features.push(buffer);
                                 }
@@ -435,7 +610,7 @@ impl SelfPlayRunner {
                                         // to canonical frame. Value is scalar
                                         // and rotation-invariant — left as-is.
                                         if sym_idx != 0 {
-                                            rotate_policy_inplace(&mut p, inv_idx, &sym_tables, n_cells);
+                                            rotate_policy_inplace(&mut p, inv_idx, sym_tables, n_cells);
                                         }
                                         ps.push(p);
                                         vs.push(v);
@@ -799,9 +974,9 @@ impl SelfPlayRunner {
                             // (12-fold scatter) still runs on top — over-augmentation
                             // is benign because identity-element overlap is negligible.
                             if sym_idx != 0 {
-                                rotate_state_inplace(&mut feat, sym_idx, &sym_tables);
-                                rotate_chain_inplace(&mut chain, sym_idx, &sym_tables);
-                                rotate_policy_inplace(&mut projected_policy, sym_idx, &sym_tables, n_cells);
+                                rotate_state_inplace(&mut feat, sym_idx, sym_tables);
+                                rotate_chain_inplace(&mut chain, sym_idx, sym_tables);
+                                rotate_policy_inplace(&mut projected_policy, sym_idx, sym_tables, n_cells);
                             }
                             // Capture the per-row window centre so the aux targets
                             // (computed at game end) can be reprojected into the same
@@ -814,6 +989,22 @@ impl SelfPlayRunner {
                         }
                         move_history.push((move_idx.0, move_idx.1));
                         positions_generated.fetch_add(1, Ordering::SeqCst);
+                    }
+
+                    // §P22 — drain shutdown skip: if the move loop broke
+                    // because `running` was flipped false by `stop()`, the
+                    // game is *in progress*, NOT terminal. `board.winner()`
+                    // returns `None` for an in-progress board, which under
+                    // the legacy code drove `terminal_reason = 3 (other_draw)`
+                    // and pushed N partial-game rows into the replay buffer
+                    // with `outcome = draw_reward`. That corrupted the
+                    // training distribution at shutdown / mid-eval pivots
+                    // (~n_workers × max_moves rows of false draws per
+                    // pause). `continue` short-circuits to the outer
+                    // `while running.load(...)` guard at L306 which then
+                    // exits the worker cleanly without recording.
+                    if !running.load(Ordering::SeqCst) {
+                        continue;
                     }
 
                     // ── Game End: determine outcome ──
@@ -871,7 +1062,7 @@ impl SelfPlayRunner {
                         // frame as state/chain/policy. Reproject + scatter compose
                         // because both are pure permutations on cell indices.
                         if sym_idx != 0 {
-                            rotate_aux_inplace(&mut aux_u8, sym_idx, &sym_tables, n_cells);
+                            rotate_aux_inplace(&mut aux_u8, sym_idx, sym_tables, n_cells);
                         }
 
                         games_results.push_back((feat, chain, pol, outcome, plies, aux_u8, is_full_search));
