@@ -11,6 +11,11 @@ use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods};
 
 use crate::board::{self, Board as RustBoard, Player, BOARD_SIZE};
 
+/// Return tuple of `get_cluster_views`: a list of `(2, S, S)` view arrays
+/// (current-player + opponent stones) paired with the axial (q, r) centre
+/// of each cluster window.
+type ClusterViewsOut = (Vec<Py<PyArray3<f32>>>, Vec<(i32, i32)>);
+
 /// A Hex Tac Toe board.
 ///
 /// Coordinate system: axial (q, r) with -9 ≤ q, r ≤ 9 for a 19×19 grid.
@@ -21,6 +26,13 @@ use crate::board::{self, Board as RustBoard, Player, BOARD_SIZE};
 #[pyclass(name = "Board")]
 pub struct PyBoard {
     inner: RustBoard,
+}
+
+impl Default for PyBoard {
+    /// Equivalent to `PyBoard::new()` — empty board, v6 encoding default.
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[pymethods]
@@ -181,7 +193,7 @@ impl PyBoard {
     pub fn get_cluster_views(
         &self,
         py: Python<'_>,
-    ) -> PyResult<(Vec<Py<PyArray3<f32>>>, Vec<(i32, i32)>)> {
+    ) -> PyResult<ClusterViewsOut> {
         let window_size = self.inner.cluster_window_size();
         let (views, centers) = self.inner.get_cluster_views();
         let py_views: PyResult<Vec<_>> = views

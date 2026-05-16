@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use super::sym_tables::*;
+use super::sym_tables::{WeightBracket, WeightSchedule};
 use super::ReplayBuffer;
 
 impl ReplayBuffer {

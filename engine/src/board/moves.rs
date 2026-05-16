@@ -282,13 +282,11 @@ impl Board {
     /// Checks from the last placed stone along all three hex axes.
     /// The returned cells are in axis order from one end to the other.
     pub fn find_winning_line(&self) -> Vec<(i32, i32)> {
-        let (lq, lr) = match self.last_move {
-            Some(m) => m,
-            None => return vec![],
+        let Some((lq, lr)) = self.last_move else {
+            return vec![];
         };
-        let cell = match self.cells.get(&(lq, lr)) {
-            Some(&c) => c,
-            None => return vec![],
+        let Some(&cell) = self.cells.get(&(lq, lr)) else {
+            return vec![];
         };
         for &(dq, dr) in &HEX_AXES {
             let pos_count = self.count_direction(lq, lr, dq, dr, cell) as i32;

@@ -30,6 +30,33 @@ use crate::inference_bridge::InferenceBatcher;
 // §173 A5a: STATE_STRIDE import removed — collect_data now uses batcher.feature_len() (H6-α).
 // use crate::replay_buffer::sym_tables::STATE_STRIDE;
 
+/// Per-row training tuple produced by self-play workers and consumed by
+/// `collect_data`. See the `results` field doc for the field semantics.
+///
+/// Fields (in order): `(feat, chain, policy, outcome, plies, combined_aux_u8, is_full_search)`.
+pub(crate) type WorkerResultRow = (Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, bool);
+
+/// Per-game result tuple consumed by `drain_game_results`. See the
+/// `recent_game_results` field doc for the field semantics.
+///
+/// Fields (in order): `(plies, winner_code, move_history, worker_id,
+/// terminal_reason, model_version_min, model_version_max, model_version_distinct)`.
+pub(crate) type GameResultRow = (usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32);
+
+/// Return tuple of `collect_data` — eight NumPy arrays bound to the GIL
+/// lifetime. Fields: `(feat, chain, policy, value, plies, ownership,
+/// winning_line, is_full_search)`.
+pub(crate) type CollectDataOut<'py> = (
+    Bound<'py, PyArray2<f32>>,
+    Bound<'py, PyArray2<f32>>,
+    Bound<'py, PyArray2<f32>>,
+    Bound<'py, PyArray1<f32>>,
+    Bound<'py, PyArray1<u64>>,
+    Bound<'py, PyArray2<u8>>,
+    Bound<'py, PyArray2<u8>>,
+    Bound<'py, PyArray1<u8>>,
+);
+
 #[pyclass(name = "SelfPlayRunner")]
 pub struct SelfPlayRunner {
     pub(crate) batcher: InferenceBatcher,
@@ -126,7 +153,7 @@ pub struct SelfPlayRunner {
     ///     the position was recorded (NOT the game-end bbox centroid), so the
     ///     aux target frame aligns with the state frame under later symmetry
     ///     augmentation in the replay buffer.
-    pub(crate) results: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, bool)>>>,
+    pub(crate) results: Arc<Mutex<VecDeque<WorkerResultRow>>>,
     /// Ring-buffer of recent game results for Python logging.
     /// Tuple: (plies, winner_code, move_history, worker_id, terminal_reason,
     ///         model_version_min, model_version_max, model_version_distinct).
@@ -138,7 +165,7 @@ pub struct SelfPlayRunner {
     ///                    seen across the moves of this game (Phase B' Class-1
     ///                    probe). distinct = count of unique versions seen.
     ///                    All zero when the model never swapped during the game.
-    pub(crate) recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32)>>>,
+    pub(crate) recent_game_results: Arc<Mutex<VecDeque<GameResultRow>>>,
     pub(crate) handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
     /// Accumulated MCTS leaf depth across all searches (scaled by 1_000_000 to preserve fractional part).
     pub(crate) mcts_depth_accum: Arc<AtomicU64>,
@@ -333,16 +360,7 @@ impl SelfPlayRunner {
     pub fn collect_data<'py>(
         &self,
         py: Python<'py>,
-    ) -> PyResult<(
-        Bound<'py, PyArray2<f32>>,
-        Bound<'py, PyArray2<f32>>,
-        Bound<'py, PyArray2<f32>>,
-        Bound<'py, PyArray1<f32>>,
-        Bound<'py, PyArray1<u64>>,
-        Bound<'py, PyArray2<u8>>,
-        Bound<'py, PyArray2<u8>>,
-        Bound<'py, PyArray1<u8>>,
-    )> {
+    ) -> PyResult<CollectDataOut<'py>> {
         // §173 A5a (H6-α): use batcher.feature_len() instead of the v6-hardcoded
         // STATE_STRIDE constant. batcher carries the spec-derived value set at
         // construction time (§172 A10 T8b), so this is always encoding-correct.
@@ -529,7 +547,7 @@ impl SelfPlayRunner {
     ///                    no weight swap occurred during the game.
     pub fn drain_game_results(
         &self,
-    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32)> {
+    ) -> Vec<GameResultRow> {
         self.drain_game_results_raw()
     }
 
@@ -554,7 +572,7 @@ impl SelfPlayRunner {
     /// Returns raw Vecs — no Python dependency, safe to call from `cargo test`.
     pub(crate) fn drain_game_results_raw(
         &self,
-    ) -> Vec<(usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32)> {
+    ) -> Vec<GameResultRow> {
         let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
         rg.drain(..).collect()
     }

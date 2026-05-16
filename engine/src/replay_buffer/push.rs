@@ -12,7 +12,12 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArra
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use super::sym_tables::*;
+use super::sym_tables::N_CHAIN_PLANES;
+#[cfg(test)]
+use super::sym_tables::{
+    AUX_STRIDE, CHAIN_STRIDE, N_ACTIONS, N_CELLS, N_PLANES, N_SYMS,
+    POLICY_STRIDE, STATE_STRIDE,
+};
 use super::ReplayBuffer;
 
 impl ReplayBuffer {

@@ -47,7 +47,20 @@ use rand::rngs::StdRng;
 use std::sync::atomic::AtomicU64;
 
 use crate::encoding::RegistrySpec;
-use sym_tables::*;
+use sym_tables::{SymTables, WeightSchedule, sym_tables_for};
+
+/// Return tuple of `sample_batch` / `sample_batch_impl` — seven NumPy arrays
+/// bound to the GIL lifetime. Fields: `(states, chain, policies, outcomes,
+/// ownership, winning_line, is_full_search)`.
+pub(crate) type SampleBatchOut<'py> = (
+    Bound<'py, PyArray4<f16>>,
+    Bound<'py, PyArray4<f16>>,
+    Bound<'py, PyArray2<f32>>,
+    Bound<'py, PyArray1<f32>>,
+    Bound<'py, PyArray3<u8>>,
+    Bound<'py, PyArray3<u8>>,
+    Bound<'py, PyArray1<u8>>,
+);
 
 // ── ReplayBuffer ──────────────────────────────────────────────────────────
 
@@ -235,15 +248,7 @@ impl ReplayBuffer {
         py:        Python<'py>,
         batch_size: usize,
         augment:    bool,
-    ) -> PyResult<(
-        Bound<'py, PyArray4<f16>>,
-        Bound<'py, PyArray4<f16>>,
-        Bound<'py, PyArray2<f32>>,
-        Bound<'py, PyArray1<f32>>,
-        Bound<'py, PyArray3<u8>>,
-        Bound<'py, PyArray3<u8>>,
-        Bound<'py, PyArray1<u8>>,
-    )> {
+    ) -> PyResult<SampleBatchOut<'py>> {
         self.sample_batch_impl(py, batch_size, augment)
     }
 

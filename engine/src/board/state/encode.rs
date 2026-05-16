@@ -35,9 +35,7 @@ impl Board {
         out: &mut [f32]
     ) {
         // Plane 0: my stones
-        for i in 0..TOTAL_CELLS {
-            out[i] = planes_2[i];
-        }
+        out[..TOTAL_CELLS].copy_from_slice(&planes_2[..TOTAL_CELLS]);
         // Plane 8: opp stones
         for i in 0..TOTAL_CELLS {
             out[OPP_STONE_PLANE * TOTAL_CELLS + i] = planes_2[TOTAL_CELLS + i];

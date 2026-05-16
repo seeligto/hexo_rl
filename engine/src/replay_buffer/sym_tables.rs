@@ -168,6 +168,13 @@ pub struct SymTables {
     pub chain_src_lookup: [[usize; N_CHAIN_PLANES]; N_SYMS],
 }
 
+impl Default for SymTables {
+    /// Equivalent to `SymTables::new()` — v6 default shape (19×19, 8 planes).
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SymTables {
     /// Build sym tables at the v6 default shape (`board_size=19, n_planes=8`).
     /// v6 byte-exact: identical scatter LUTs and axis_perm to pre-§166 master.

@@ -31,7 +31,7 @@ pub struct ThreatCell {
 /// Scan the board for threat cells.
 ///
 /// `stones` maps (q, r) -> player (0 or 1).
-pub fn get_threats(stones: &HashMap<(i32, i32), u8>) -> Vec<ThreatCell> {
+pub fn get_threats<S: ::std::hash::BuildHasher>(stones: &HashMap<(i32, i32), u8, S>) -> Vec<ThreatCell> {
     if stones.is_empty() {
         return Vec::new();
     }
@@ -112,21 +112,21 @@ pub fn get_threats(stones: &HashMap<(i32, i32), u8>) -> Vec<ThreatCell> {
 /// Scan a line along direction (dq, dr) starting at (start_q, start_r).
 /// For axis (1,0): start_r is fixed, q varies from q_min to q_max.
 /// For axis (0,1): start_q is fixed, r varies from r_min to r_max.
-fn scan_line(
-    stones: &HashMap<(i32, i32), u8>,
+fn scan_line<S: ::std::hash::BuildHasher>(
+    stones: &HashMap<(i32, i32), u8, S>,
     best: &mut HashMap<(i32, i32, u8), u8>,
     start_q: i32,
-    _end_q: i32,
+    end_q: i32,
     start_r: i32,
-    _end_r: i32,
+    end_r: i32,
     dq: i32,
     dr: i32,
 ) {
     // Determine line length from bounding box.
     let (line_start_q, line_start_r, steps) = if dq == 1 && dr == 0 {
-        (start_q, start_r, (_end_q - start_q + 1) as usize)
+        (start_q, start_r, (end_q - start_q + 1) as usize)
     } else {
-        (start_q, start_r, (_end_r - start_r + 1) as usize)
+        (start_q, start_r, (end_r - start_r + 1) as usize)
     };
 
     if steps < WIN_LEN {
@@ -143,8 +143,8 @@ fn scan_line(
 }
 
 /// General line scanner for (1,-1) direction.
-fn scan_line_general(
-    stones: &HashMap<(i32, i32), u8>,
+fn scan_line_general<S: ::std::hash::BuildHasher>(
+    stones: &HashMap<(i32, i32), u8, S>,
     best: &mut HashMap<(i32, i32, u8), u8>,
     start_q: i32,
     start_r: i32,
@@ -179,8 +179,8 @@ fn scan_line_general(
 }
 
 /// Check a single window of WIN_LEN cells starting at (wq, wr) in direction (dq, dr).
-fn check_window(
-    stones: &HashMap<(i32, i32), u8>,
+fn check_window<S: ::std::hash::BuildHasher>(
+    stones: &HashMap<(i32, i32), u8, S>,
     best: &mut HashMap<(i32, i32, u8), u8>,
     wq: i32,
     wr: i32,

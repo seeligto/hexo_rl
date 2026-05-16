@@ -244,20 +244,17 @@ impl ReplayBuffer {
         }
 
         // ── Encoding validation ───────────────────────────────────────────
-        let file_spec = match crate::encoding::registry::lookup(&file_encoding_name) {
-            Some(s) => s,
-            None => {
-                return Err(format!(
-                    "HEXB file declares unknown encoding '{file_encoding_name}'. \
-                     Registered encodings: {:?}",
-                    {
-                        let mut known: Vec<&str> = crate::encoding::registry::all_specs()
-                            .map(|s| s.name).collect();
-                        known.sort_unstable();
-                        known
-                    }
-                ));
-            }
+        let Some(file_spec) = crate::encoding::registry::lookup(&file_encoding_name) else {
+            return Err(format!(
+                "HEXB file declares unknown encoding '{file_encoding_name}'. \
+                 Registered encodings: {:?}",
+                {
+                    let mut known: Vec<&str> = crate::encoding::registry::all_specs()
+                        .map(|s| s.name).collect();
+                    known.sort_unstable();
+                    known
+                }
+            ));
         };
 
         if saved_n_planes != file_spec.n_planes {

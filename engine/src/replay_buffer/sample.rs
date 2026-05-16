@@ -12,12 +12,17 @@
 use std::collections::HashSet;
 
 use half::f16;
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, PyArray4, PyArrayMethods};
+use numpy::{IntoPyArray, PyArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rand::RngExt;
 
-use super::sym_tables::*;
+use super::sym_tables::{N_CHAIN_PLANES, N_SYMS, SymTables};
+#[cfg(test)]
+use super::sym_tables::{
+    AUX_STRIDE, CHAIN_STRIDE, N_ACTIONS, N_CELLS, N_PLANES,
+    POLICY_STRIDE, STATE_STRIDE, WeightBracket, WeightSchedule,
+};
 use super::ReplayBuffer;
 
 /// Apply symmetry `sym_idx` to a state tensor (pure coord scatter).
@@ -241,15 +246,7 @@ impl ReplayBuffer {
         py:        Python<'py>,
         batch_size: usize,
         augment:    bool,
-    ) -> PyResult<(
-        Bound<'py, PyArray4<f16>>,
-        Bound<'py, PyArray4<f16>>,
-        Bound<'py, PyArray2<f32>>,
-        Bound<'py, PyArray1<f32>>,
-        Bound<'py, PyArray3<u8>>,
-        Bound<'py, PyArray3<u8>>,
-        Bound<'py, PyArray1<u8>>,
-    )> {
+    ) -> PyResult<super::SampleBatchOut<'py>> {
         if self.size == 0 {
             return Err(PyValueError::new_err("Cannot sample from an empty replay buffer"));
         }

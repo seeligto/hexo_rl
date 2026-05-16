@@ -11,6 +11,11 @@ use crate::board::{self, BOARD_SIZE};
 use crate::mcts::MCTSTree;
 use crate::pyo3::board::PyBoard;
 
+/// Per-root-child info returned by `get_root_children_info`:
+/// `((q, r), pool_idx, prior, visits, q_value)`. Used by the policy viewer
+/// to drive Gumbel Sequential Halving from Python.
+type RootChildInfo = ((i32, i32), u32, f32, u32, f32);
+
 /// Single-threaded PUCT MCTS tree exposed to Python.
 ///
 /// Usage (Python):
@@ -207,7 +212,7 @@ impl PyMCTSTree {
     ///
     /// §P34 — coord is a `(i32, i32)` axial tuple instead of a pre-formatted
     /// `"(q,r)"` string. Same alloc-saving rationale as `get_top_visits`.
-    pub fn get_root_children_info(&self) -> Vec<((i32, i32), u32, f32, u32, f32)> {
+    pub fn get_root_children_info(&self) -> Vec<RootChildInfo> {
         let children = self.inner.get_root_children_info();
         let q_sign: f32 = if self.inner.pool[0].moves_remaining == 1 { -1.0 } else { 1.0 };
         children.into_iter().map(|(pool_idx, prior)| {

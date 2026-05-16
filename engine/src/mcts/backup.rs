@@ -6,6 +6,11 @@ use crate::board::Board;
 use super::node::Node;
 use super::{MCTSTree, MAX_CHILDREN_PER_NODE};
 
+/// Output of `pick_topk_children`: `(chosen, sort_used)` where `chosen` is a
+/// vector of `((q, r), prior)` entries and `sort_used` flags whether the
+/// slow sort path ran (vs the fast no-sort path).
+pub(crate) type TopKChildren = (Vec<((i32, i32), f32)>, bool);
+
 /// Process-wide counter of pool-overflow events.
 ///
 /// Should always read 0 in production: `MAX_CHILDREN_PER_NODE` caps children
@@ -66,7 +71,7 @@ pub(crate) fn pick_topk_children(
     policy: &[f32],
     trunk_sz: i32,
     half: i32,
-) -> (Vec<((i32, i32), f32)>, bool) {
+) -> TopKChildren {
     let n_legal = legal_moves.len();
     let n_ch = n_legal.min(MAX_CHILDREN_PER_NODE);
 
