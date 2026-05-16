@@ -12,6 +12,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 #[cfg(test)]
+use super::sample::{ApplySymDst, ApplySymSlices, ApplySymSrc};
+#[cfg(test)]
 use super::sym_tables::{
     AUX_STRIDE, CHAIN_STRIDE, N_ACTIONS, N_CELLS, N_CHAIN_PLANES, N_PLANES, N_SYMS,
     POLICY_STRIDE, STATE_STRIDE,
@@ -549,16 +551,23 @@ mod tests {
             let c = idx * CHAIN_STRIDE;
             let p = idx * POLICY_STRIDE;
             let a = idx * AUX_STRIDE;
-            ReplayBuffer::apply_sym(
-                sym_idx,
-                &buf.states[s..s + STATE_STRIDE],
-                &buf.chain_planes[c..c + CHAIN_STRIDE],
-                &buf.policies[p..p + POLICY_STRIDE],
-                &buf.ownership[a..a + AUX_STRIDE],
-                &buf.winning_line[a..a + AUX_STRIDE],
-                &mut dst_state, &mut dst_chain, &mut dst_pol, &mut dst_own, &mut dst_wl,
-                &buf.sym_tables,
-            );
+            ReplayBuffer::apply_sym(sym_idx, ApplySymSlices {
+                src: ApplySymSrc {
+                    state:  &buf.states[s..s + STATE_STRIDE],
+                    chain:  &buf.chain_planes[c..c + CHAIN_STRIDE],
+                    policy: &buf.policies[p..p + POLICY_STRIDE],
+                    own:    &buf.ownership[a..a + AUX_STRIDE],
+                    wl:     &buf.winning_line[a..a + AUX_STRIDE],
+                },
+                dst: ApplySymDst {
+                    state:  &mut dst_state,
+                    chain:  &mut dst_chain,
+                    policy: &mut dst_pol,
+                    own:    &mut dst_own,
+                    wl:     &mut dst_wl,
+                },
+                tables: &buf.sym_tables,
+            });
 
             // Every output ownership cell must be a valid encoding {0,1,2}.
             for &v in &dst_own {

@@ -95,6 +95,31 @@ pub fn apply_chain_symmetry<T: Copy>(
     }
 }
 
+/// Source slice bundle for `ReplayBuffer::apply_sym` (read-only views).
+pub(crate) struct ApplySymSrc<'a> {
+    pub state:  &'a [u16],
+    pub chain:  &'a [u16],
+    pub policy: &'a [f32],
+    pub own:    &'a [u8],
+    pub wl:     &'a [u8],
+}
+
+/// Destination slice bundle for `ReplayBuffer::apply_sym` (mutable views).
+pub(crate) struct ApplySymDst<'a> {
+    pub state:  &'a mut [u16],
+    pub chain:  &'a mut [u16],
+    pub policy: &'a mut [f32],
+    pub own:    &'a mut [u8],
+    pub wl:     &'a mut [u8],
+}
+
+/// Combined slice + sym-tables bundle for `ReplayBuffer::apply_sym`.
+pub(crate) struct ApplySymSlices<'a> {
+    pub src:    ApplySymSrc<'a>,
+    pub dst:    ApplySymDst<'a>,
+    pub tables: &'a SymTables,
+}
+
 impl ReplayBuffer {
     /// Map an f16 weight (stored as bits) to a histogram bucket index.
     ///
@@ -193,23 +218,26 @@ impl ReplayBuffer {
     ///
     /// State (8 planes, HEXB v6): pure coordinate scatter via `apply_symmetry_state`.
     /// Chain (6 planes): coordinate scatter + axis-plane remap via `apply_chain_symmetry`.
-    // cycle 3 P79: builder pattern for apply_sym src/dst slice-bundle
-    #[allow(clippy::too_many_arguments)]
     #[inline]
-    pub(crate) fn apply_sym(
-        sym_idx:      usize,
-        src_state:    &[u16],     // f16 bits, length N_PLANES × N_CELLS
-        src_chain:    &[u16],     // f16 bits, length N_CHAIN_PLANES × N_CELLS
-        src_policy:   &[f32],     // length N_ACTIONS
-        src_own:      &[u8],      // length AUX_STRIDE (= N_CELLS)
-        src_wl:       &[u8],      // length AUX_STRIDE
-        dst_state:    &mut [u16], // f16 bits, length N_PLANES × N_CELLS  (zeroed by caller)
-        dst_chain:    &mut [u16], // f16 bits, length N_CHAIN_PLANES × N_CELLS (zeroed by caller)
-        dst_policy:   &mut [f32], // length N_ACTIONS                     (zeroed by caller)
-        dst_own:      &mut [u8],  // length AUX_STRIDE                    (caller-initialised)
-        dst_wl:       &mut [u8],  // length AUX_STRIDE                    (caller-initialised)
-        tables:       &SymTables,
-    ) {
+    pub(crate) fn apply_sym(sym_idx: usize, slices: ApplySymSlices<'_>) {
+        let ApplySymSlices {
+            src: ApplySymSrc {
+                state:  src_state,
+                chain:  src_chain,
+                policy: src_policy,
+                own:    src_own,
+                wl:     src_wl,
+            },
+            dst: ApplySymDst {
+                state:  dst_state,
+                chain:  dst_chain,
+                policy: dst_policy,
+                own:    dst_own,
+                wl:     dst_wl,
+            },
+            tables,
+        } = slices;
+
         // State planes: pure coordinate scatter (identity plane mapping).
         apply_symmetry_state::<u16>(src_state, dst_state, sym_idx, tables);
 
@@ -299,12 +327,23 @@ impl ReplayBuffer {
             let dst_own    = &mut out_ownership   [b * aux_stride   ..(b + 1) * aux_stride];
             let dst_wl     = &mut out_winning_line[b * aux_stride   ..(b + 1) * aux_stride];
 
-            Self::apply_sym(
-                sym_idx,
-                src_state, src_chain, src_policy, src_own, src_wl,
-                dst_state, dst_chain, dst_policy, dst_own, dst_wl,
-                self.sym_tables,
-            );
+            Self::apply_sym(sym_idx, ApplySymSlices {
+                src: ApplySymSrc {
+                    state:  src_state,
+                    chain:  src_chain,
+                    policy: src_policy,
+                    own:    src_own,
+                    wl:     src_wl,
+                },
+                dst: ApplySymDst {
+                    state:  dst_state,
+                    chain:  dst_chain,
+                    policy: dst_policy,
+                    own:    dst_own,
+                    wl:     dst_wl,
+                },
+                tables: self.sym_tables,
+            });
 
             out_outcomes[b] = self.outcomes[idx];
             out_is_full_search[b] = self.is_full_search[idx];
@@ -512,12 +551,23 @@ mod tests {
                 let mut dst_own   = vec![1u8; AUX_STRIDE];
                 let mut dst_wl    = vec![0u8; AUX_STRIDE];
 
-                ReplayBuffer::apply_sym(
-                    sym_idx,
-                    &src_state, &src_chain, &src_pol, &src_own, &src_wl,
-                    &mut dst_state, &mut dst_chain, &mut dst_pol, &mut dst_own, &mut dst_wl,
-                    &tables,
-                );
+                ReplayBuffer::apply_sym(sym_idx, ApplySymSlices {
+                    src: ApplySymSrc {
+                        state:  &src_state,
+                        chain:  &src_chain,
+                        policy: &src_pol,
+                        own:    &src_own,
+                        wl:     &src_wl,
+                    },
+                    dst: ApplySymDst {
+                        state:  &mut dst_state,
+                        chain:  &mut dst_chain,
+                        policy: &mut dst_pol,
+                        own:    &mut dst_own,
+                        wl:     &mut dst_wl,
+                    },
+                    tables: &tables,
+                });
 
                 let dst_state_idx = (0..N_CELLS).find(|&i| dst_state[i] != 0);
                 let dst_pol_idx   = (0..N_CELLS).find(|&i| dst_pol[i]   != 0.0);

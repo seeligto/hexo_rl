@@ -853,17 +853,19 @@ impl SelfPlayRunner {
                                 }
                                 let legal_count = board.legal_move_count() as u32;
                                 crate::debug_trace::record_game_runner(
-                                    dbg_game_idx,
-                                    worker_id as u32,
-                                    compound_move as u32,
-                                    board.ply as u32,
-                                    legal_count,
-                                    n_ch as u32,
-                                    game_sims as u32,
-                                    &priors,
-                                    &visits,
-                                    temperature,
-                                    is_fast_game,
+                                    crate::debug_trace::GameRunnerRecord {
+                                        game_index:          dbg_game_idx,
+                                        worker_id:           worker_id as u32,
+                                        compound_move:       compound_move as u32,
+                                        ply:                 board.ply as u32,
+                                        legal_move_count:    legal_count,
+                                        root_n_children:     n_ch as u32,
+                                        simulations_planned: game_sims as u32,
+                                        root_priors:         &priors,
+                                        root_visit_counts:   &visits,
+                                        temperature,
+                                        is_fast_game,
+                                    },
                                 );
                             }
                         }

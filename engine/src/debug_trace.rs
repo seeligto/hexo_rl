@@ -110,23 +110,40 @@ fn u32_list(values: &[u32]) -> String {
     s
 }
 
+/// Param bundle for `record_game_runner` — describes one MCTS search at the
+/// game-runner level (root priors + visit counts + per-move metadata).
+pub struct GameRunnerRecord<'a> {
+    pub game_index:          u32,
+    pub worker_id:           u32,
+    pub compound_move:       u32,
+    pub ply:                 u32,
+    pub legal_move_count:    u32,
+    pub root_n_children:     u32,
+    pub simulations_planned: u32,
+    pub root_priors:         &'a [f32],
+    pub root_visit_counts:   &'a [u32],
+    pub temperature:         f32,
+    pub is_fast_game:        bool,
+}
+
 /// Emit a `game_runner` JSONL record describing root priors + visit counts
 /// for one MCTS search. Cap-enforced: after `GAME_RUNNER_CAP` accepted
 /// records this is a no-op.
-#[allow(clippy::too_many_arguments)]
-pub fn record_game_runner(
-    game_index: u32,
-    worker_id: u32,
-    compound_move: u32,
-    ply: u32,
-    legal_move_count: u32,
-    root_n_children: u32,
-    simulations_planned: u32,
-    root_priors: &[f32],
-    root_visit_counts: &[u32],
-    temperature: f32,
-    is_fast_game: bool,
-) {
+pub fn record_game_runner(record: GameRunnerRecord<'_>) {
+    let GameRunnerRecord {
+        game_index,
+        worker_id,
+        compound_move,
+        ply,
+        legal_move_count,
+        root_n_children,
+        simulations_planned,
+        root_priors,
+        root_visit_counts,
+        temperature,
+        is_fast_game,
+    } = record;
+
     if !sink_configured() {
         return;
     }

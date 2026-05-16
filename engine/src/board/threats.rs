@@ -19,6 +19,23 @@ use super::state::HEX_AXES;
 
 const WIN_LEN: usize = 6;
 
+/// Endpoint-bounded line for `scan_line` (axes (1,0) and (0,1)).
+#[derive(Clone, Copy, Debug)]
+struct ScanLineParams {
+    start: (i32, i32),
+    end:   (i32, i32),
+    axis:  (i32, i32),
+}
+
+/// Bbox-walking line for `scan_line_general` (axis (1,-1)).
+#[derive(Clone, Copy, Debug)]
+struct ScanLineGeneralParams {
+    start:    (i32, i32),
+    axis:     (i32, i32),
+    bbox_min: (i32, i32),
+    bbox_max: (i32, i32),
+}
+
 /// A single threat cell: an empty cell within a threatening window.
 #[derive(Debug, Clone, Copy)]
 pub struct ThreatCell {
@@ -81,12 +98,20 @@ pub fn get_threats<S: ::std::hash::BuildHasher>(stones: &HashMap<(i32, i32), u8,
         if dq == 1 && dr == 0 {
             // Lines indexed by r. For each r, slide window over q.
             for r in min_r..=max_r {
-                scan_line(stones, &mut best, min_q, max_q, r, r, dq, dr);
+                scan_line(stones, &mut best, ScanLineParams {
+                    start: (min_q, r),
+                    end:   (max_q, r),
+                    axis:  (dq, dr),
+                });
             }
         } else if dq == 0 && dr == 1 {
             // Lines indexed by q. For each q, slide window over r.
             for q in min_q..=max_q {
-                scan_line(stones, &mut best, q, q, min_r, max_r, dq, dr);
+                scan_line(stones, &mut best, ScanLineParams {
+                    start: (q, min_r),
+                    end:   (q, max_r),
+                    axis:  (dq, dr),
+                });
             }
         } else {
             // (1, -1): lines indexed by q+r. For constant s = q+r,
@@ -98,7 +123,12 @@ pub fn get_threats<S: ::std::hash::BuildHasher>(stones: &HashMap<(i32, i32), u8,
                 // We just need any starting point on the line; scan_line_general handles the rest.
                 let start_q = min_q;
                 let start_r = s - start_q;
-                scan_line_general(stones, &mut best, start_q, start_r, dq, dr, max_q, max_r, min_q, min_r);
+                scan_line_general(stones, &mut best, ScanLineGeneralParams {
+                    start:    (start_q, start_r),
+                    axis:     (dq, dr),
+                    bbox_min: (min_q, min_r),
+                    bbox_max: (max_q, max_r),
+                });
             }
         }
     }
@@ -112,18 +142,13 @@ pub fn get_threats<S: ::std::hash::BuildHasher>(stones: &HashMap<(i32, i32), u8,
 /// Scan a line along direction (dq, dr) starting at (start_q, start_r).
 /// For axis (1,0): start_r is fixed, q varies from q_min to q_max.
 /// For axis (0,1): start_q is fixed, r varies from r_min to r_max.
-// cycle 3 P79: builder pattern for scan_line bbox bundle
-#[allow(clippy::too_many_arguments)]
 fn scan_line<S: ::std::hash::BuildHasher>(
     stones: &HashMap<(i32, i32), u8, S>,
     best: &mut HashMap<(i32, i32, u8), u8>,
-    start_q: i32,
-    end_q: i32,
-    start_r: i32,
-    end_r: i32,
-    dq: i32,
-    dr: i32,
+    params: ScanLineParams,
 ) {
+    let ScanLineParams { start: (start_q, start_r), end: (end_q, end_r), axis: (dq, dr) } = params;
+
     // Determine line length from bounding box.
     let (line_start_q, line_start_r, steps) = if dq == 1 && dr == 0 {
         (start_q, start_r, (end_q - start_q + 1) as usize)
@@ -145,20 +170,18 @@ fn scan_line<S: ::std::hash::BuildHasher>(
 }
 
 /// General line scanner for (1,-1) direction.
-// cycle 3 P79: builder pattern for scan_line_general bbox bundle
-#[allow(clippy::too_many_arguments)]
 fn scan_line_general<S: ::std::hash::BuildHasher>(
     stones: &HashMap<(i32, i32), u8, S>,
     best: &mut HashMap<(i32, i32, u8), u8>,
-    start_q: i32,
-    start_r: i32,
-    dq: i32,
-    dr: i32,
-    max_q: i32,
-    max_r: i32,
-    min_q: i32,
-    min_r: i32,
+    params: ScanLineGeneralParams,
 ) {
+    let ScanLineGeneralParams {
+        start: (start_q, start_r),
+        axis: (dq, dr),
+        bbox_min: (min_q, min_r),
+        bbox_max: (max_q, max_r),
+    } = params;
+
     // Count how many steps we can take from start in direction (dq, dr)
     // while staying within bounds.
     let mut steps = 0usize;
