@@ -177,6 +177,8 @@ impl ReplayBuffer {
     }
 
     /// Store a single (state, chain_planes, policy, outcome, ownership, winning_line) sample.
+    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (state, chain_planes, policy, outcome, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = true))]
     pub fn push(
         &mut self,
@@ -194,6 +196,8 @@ impl ReplayBuffer {
     }
 
     /// Store all positions from a completed game efficiently.
+    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (states, chain_planes, policies, outcomes, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = None))]
     pub fn push_game(
         &mut self,
@@ -219,6 +223,8 @@ impl ReplayBuffer {
     ///
     /// Per-row `game_lengths` must be pre-computed compound-move counts
     /// (i.e. `(plies + 1) / 2`); value 0 → default weight 1.0.
+    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
+    #[allow(clippy::too_many_arguments)]
     pub fn push_many(
         &mut self,
         states:         PyReadonlyArray4<f16>,

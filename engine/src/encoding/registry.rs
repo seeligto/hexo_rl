@@ -96,6 +96,8 @@ fn leak_str(s: &str) -> &'static str {
     Box::leak(s.to_string().into_boxed_str())
 }
 
+// cycle 3 P68: module split — extract field-parser helpers to encoding/registry/parse.rs
+#[allow(clippy::too_many_lines)]
 fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
     let table = body
         .as_table()

@@ -112,6 +112,8 @@ pub fn get_threats<S: ::std::hash::BuildHasher>(stones: &HashMap<(i32, i32), u8,
 /// Scan a line along direction (dq, dr) starting at (start_q, start_r).
 /// For axis (1,0): start_r is fixed, q varies from q_min to q_max.
 /// For axis (0,1): start_q is fixed, r varies from r_min to r_max.
+// cycle 3 P79: builder pattern for scan_line bbox bundle
+#[allow(clippy::too_many_arguments)]
 fn scan_line<S: ::std::hash::BuildHasher>(
     stones: &HashMap<(i32, i32), u8, S>,
     best: &mut HashMap<(i32, i32, u8), u8>,
@@ -143,6 +145,8 @@ fn scan_line<S: ::std::hash::BuildHasher>(
 }
 
 /// General line scanner for (1,-1) direction.
+// cycle 3 P79: builder pattern for scan_line_general bbox bundle
+#[allow(clippy::too_many_arguments)]
 fn scan_line_general<S: ::std::hash::BuildHasher>(
     stones: &HashMap<(i32, i32), u8, S>,
     best: &mut HashMap<(i32, i32, u8), u8>,

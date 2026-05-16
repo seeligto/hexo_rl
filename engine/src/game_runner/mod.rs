@@ -57,6 +57,8 @@ pub(crate) type CollectDataOut<'py> = (
     Bound<'py, PyArray1<u8>>,
 );
 
+// cycle 3 P79: builder pattern for SelfPlayRunner (40-param ctor) folds the bool flags into a config struct
+#[allow(clippy::struct_excessive_bools)]
 #[pyclass(name = "SelfPlayRunner")]
 pub struct SelfPlayRunner {
     pub(crate) batcher: InferenceBatcher,
@@ -187,6 +189,8 @@ pub struct SelfPlayRunner {
 
 #[pymethods]
 impl SelfPlayRunner {
+    // cycle 3 P79: builder pattern for SelfPlayRunner::new (40 params; PyO3 signature constraint)
+    #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     #[new]
     #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = None, policy_len = None, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000, full_search_prob = 0.0, n_sims_quick = 0, n_sims_full = 0, random_opening_plies = 0, selfplay_rotation_enabled = false, legal_move_radius_jitter = false, encoding_spec = None, radius_override = None, inference_pool_size = None))]
     pub fn new(

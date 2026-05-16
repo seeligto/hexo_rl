@@ -35,6 +35,8 @@ impl ReplayBuffer {
     ///
     /// All aux targets MUST be projected to the same window centre as `state` (per-row cluster
     /// centre, not the game-end bbox centroid).
+    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_impl(
         &mut self,
         state:          PyReadonlyArray3<f16>,
@@ -156,6 +158,8 @@ impl ReplayBuffer {
     ///     winning_line:  uint8   numpy array of shape (T, 361)  per-row binary mask
     ///     game_id:       shared position tag for all T entries; default −1
     ///     game_length:   total compound moves in the originating game; default 0 (= weight 1.0)
+    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_game_impl(
         &mut self,
         states:         PyReadonlyArray4<f16>,
@@ -285,6 +289,8 @@ impl ReplayBuffer {
     ///     winning_line:   uint8   numpy array of shape (N, 361)
     ///     game_lengths:   uint16  numpy array of shape (N,) — compound-move counts
     ///     is_full_search: uint8   numpy array of shape (N,)
+    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn push_many_impl(
         &mut self,
         states:         PyReadonlyArray4<f16>,

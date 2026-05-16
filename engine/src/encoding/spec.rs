@@ -121,6 +121,8 @@ impl RegistrySpec {
     ///                              cluster_threshold == None
     ///   - trunk_size == cluster_window_size if is_multi_window else board_size
     ///   - legal_move_radius > 0
+    // cycle 3 P68: module split — extract per-invariant check helpers
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<(), String> {
         let mut errs: Vec<String> = Vec::new();
 

@@ -54,6 +54,8 @@ pub struct ZobristTable;
 impl ZobristTable {
     /// Return the Zobrist key for placing a stone of `player` (0=P1, 1=P2)
     /// at flat cell index `cell` (for the 19×19 absolute grid).
+    // hot path; bench-attested at §172 A10
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn get(cell: usize, player: usize) -> u128 {
         if player == 0 {

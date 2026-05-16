@@ -193,6 +193,8 @@ impl ReplayBuffer {
     ///
     /// State (8 planes, HEXB v6): pure coordinate scatter via `apply_symmetry_state`.
     /// Chain (6 planes): coordinate scatter + axis-plane remap via `apply_chain_symmetry`.
+    // cycle 3 P79: builder pattern for apply_sym src/dst slice-bundle
+    #[allow(clippy::too_many_arguments)]
     #[inline]
     pub(crate) fn apply_sym(
         sym_idx:      usize,

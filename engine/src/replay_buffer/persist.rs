@@ -152,6 +152,8 @@ impl ReplayBuffer {
     /// Returns `String` errors so unit tests (no Python interpreter) can
     /// exercise error paths.  The PyO3 façade in `mod.rs` maps these to
     /// `PyValueError`.
+    // cycle 3 P68: module split — extract header/payload reader helpers
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn load_from_path_impl(&mut self, path: &str) -> Result<usize, String> {
         use std::io::{BufReader, Read};
 
