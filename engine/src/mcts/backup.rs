@@ -169,33 +169,43 @@ impl MCTSTree {
             return value;
         }
 
+        // §P32: consolidate 4 fetch_add(1) sites into a single fetch_add at
+        // function end. Bit-equivalent final counter value; saves 3 atomic ops
+        // per quiescence fire. SD4: no concurrent reader of
+        // quiescence_fire_count mid-apply_quiescence — all loads are
+        // telemetry/test-side after game/search completion.
+        let mut fired: u64 = 0;
         let current_wins = if current_may_threat {
             board.count_winning_moves(current_player)
         } else {
             0
         };
-        if current_wins >= 3 {
-            self.quiescence_fire_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return 1.0;
-        }
-        let opponent_wins = if opponent_may_threat {
-            board.count_winning_moves(opponent)
+        let result = if current_wins >= 3 {
+            fired = 1;
+            1.0
         } else {
-            0
+            let opponent_wins = if opponent_may_threat {
+                board.count_winning_moves(opponent)
+            } else {
+                0
+            };
+            if opponent_wins >= 3 {
+                fired = 1;
+                -1.0
+            } else if current_wins == 2 {
+                fired = 1;
+                (value + self.quiescence_blend_2).min(1.0)
+            } else if opponent_wins == 2 {
+                fired = 1;
+                (value - self.quiescence_blend_2).max(-1.0)
+            } else {
+                value
+            }
         };
-        if opponent_wins >= 3 {
-            self.quiescence_fire_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return -1.0;
+        if fired > 0 {
+            self.quiescence_fire_count.fetch_add(fired, std::sync::atomic::Ordering::Relaxed);
         }
-        if current_wins == 2 {
-            self.quiescence_fire_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return (value + self.quiescence_blend_2).min(1.0);
-        }
-        if opponent_wins == 2 {
-            self.quiescence_fire_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return (value - self.quiescence_blend_2).max(-1.0);
-        }
-        value
+        result
     }
 
     /// Expand a single leaf node and backup its value.

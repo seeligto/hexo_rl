@@ -227,15 +227,25 @@ impl MCTSTree {
         };
         let uniform_prior = 1.0 / n_actions as f32;
         let uniform_policy = vec![uniform_prior; n_actions];
+        // §P38: bench-fidelity — hoist policies/values slot vecs ONCE outside the
+        // outer loop and resize per iteration. select_leaves(1) returns at most
+        // one board, so capacity 1 suffices. Production self-play does NOT enter
+        // this path — worker_loop uses a different MCTS entry. The change removes
+        // bench-loop allocation noise so the MCTS sim/s metric better reflects
+        // algorithm cost. Bit-equivalent algorithm.
+        let mut policies: Vec<Vec<f32>> = Vec::with_capacity(1);
+        let mut values: Vec<f32> = Vec::with_capacity(1);
         for _ in 0..n {
             let boards = self.select_leaves(1);
             if boards.is_empty() {
                 continue;
             }
-            let policies: Vec<Vec<f32>> = (0..boards.len())
-                .map(|_| uniform_policy.clone())
-                .collect();
-            let values: Vec<f32> = vec![0.0; boards.len()];
+            policies.clear();
+            for _ in 0..boards.len() {
+                policies.push(uniform_policy.clone());
+            }
+            values.clear();
+            values.resize(boards.len(), 0.0);
             self.expand_and_backup(&policies, &values);
         }
     }
