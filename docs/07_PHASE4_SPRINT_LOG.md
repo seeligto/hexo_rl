@@ -1667,6 +1667,73 @@ Track 1 returned 0% MCTS-128 across all three v6w25 bootstrap recipes → escala
 
 ---
 
+## §178 — Rust engine refactor cycle 1 close (2026-05-15 → 2026-05-16)
+
+Branch `refactor/rust-engine`. Three-wave cycle bracketed by a 90-proposal Phase 3 audit pass at `audit/rust-engine/00_aggregated_proposals.md` + per-file split addendum at `audit/rust-engine/01_file_split_addendum.md`. Wave 1 = foundation (docs + clippy floor + LazyLock migration). Wave 2 = dead-code purge (six commits, net −789 LOC, bitboard module + mcts dead setters + dead lib.rs PyO3 surfaces). Wave 3 = hot-path correctness (P1 silent v6w25 corruption, P2 v8 `has_pass_slot` dispatch, P3 cross-language `EncodingSpec` retirement) + pre-3d hygiene (Python test consumer cleanup, NN-latency triangulation). Cycle bench gate PASS; INV15+INV16+INV17 pinned; 6 settled decisions migrated below.
+
+**Forward pointer:** archive consolidation at `reports/sprint_archive/§178_rust_engine_audit.md` (user post-cycle action — see `audit/rust-engine/wave_3/3d/archive_prep_note.md`). Source-of-truth audit tree retained at `audit/rust-engine/` for forensic reference until archive lands; SD1–SD6 are cite-from-future-prompts surface.
+
+### Wave-by-wave commit lineage
+
+| Wave | Commits | Range | LOC ± | Reviewer | Notes |
+|---|---:|---|---|---|---|
+| 1 — foundation | 5 | `4bff8c7..5391e79` | +75 / −25 | 5× APPROVE | docs (P87, P84, P88), clippy lint config (P60 — 3 erasing_op errors resolved, exit 0 maintained throughout), once_cell::Lazy → std::sync::LazyLock (P70) |
+| 2 — dead-code purge | 6 | `a311347..fd22bc2` | +760 / −1549 (net **−789**) | 7× APPROVE (Reviewer F = P86 investigation) | bitboard module −347 LOC (P16+P41), 11 V6W25 consts + src_plane_lookup −121 (P17+P44), Zobrist demotion (P85), 12 PyMCTSTree setters + `vl_adaptive` (P15+P27), 5 dead Board PyO3 surfaces + view_window twin + 3 inference_bridge PyO3 (P24+P25), mcts/mod.rs → mcts/tests.rs pure-cut-paste (file-split addendum). P26 SKIP (integration test caller) + P86 RETAIN (zero runtime cost, historical reproducibility) — see SD1+SD2. |
+| 3a — P1 CRITICAL + state.rs split + INV15 | 3 | `5d411c4..54baab8` | +1148 / −786 | APPROVE | P1 silent `TOTAL_CELLS=361` v6w25 corruption: `encode_state_to_buffer_channels` + `encode_chain_planes` parameterised on `n_cells`; `state.rs` split atomic with kernel mod into `state/{core,encode,cluster}.rs`. INV15 (3 v6w25 + v6-byte-identity tests). Bench WATCH → resolved at 3b. |
+| 3b — P2 v8 has_pass_slot + INV16 | 1 | `867164e` | +428 / −51 | APPROVE | `aggregate_policy[_to_local]` + `get_policy`/`get_improved_policy` thread `has_pass_slot` from `spec`; v8 (n=625) corner cell no longer zeroed by unconditional pass-slot write at `records.rs:68`. INV16 (3 v8 + v6 dispatch tests). Bench PASS. Parent-prompt CONSTRAINTS inverted v6/v8 semantics → implementer followed registry per SD4. |
+| 3c — P3 EncodingSpec retirement + INV17 | 2 | `a2b0be1..8ea6436` | +356 / −558 (net −204) | APPROVE | Python `engine.EncodingSpec` wrapper retired → `engine.RegistrySpec.from_registry(name)` classmethod (P3.1); Rust `PyEncodingSpec` pyclass + `PyBoard::with_encoding` + getter retired (P3.2, breaking change `!`-marked). 16 files, INV17 Rust (3 tests) + Python (2 tests). Bench PASS-with-WATCH; NN latency / push / sample aug carried to pre-3d triangulation. |
+| pre-3d — H1 test cleanup + H2 NN triangulation | 1 | `d74972a` | +138 / −441 (net −303) | n/a (hygiene) | 39 → 1 Python test failures resolved: `test_chain_plane_rust_parity` retired whole-file (Python `_compute_chain_planes` canonical), `test_corpus_chain_target` migrated to Python kernel, `InferenceServer.submit_and_wait/.infer` rewritten as direct sync forward (closes 00b7d2b coordinated-Python-PR promise), `apply_symmetry(s,i)` → `apply_symmetries_batch(s[None],[i])[0]` migration. H2 fresh bench confirms NN latency reverts to Wave 2 baseline; SD6 second-confirm point. |
+
+### Cycle metrics
+
+- Test counts at cycle close: **Rust 249** tests (across 17 binaries, 0 fail) + **Python 1549 / 1 failed / 18 skipped / 4 deselected / 1 xpassed** (the 1 failure is `tests/test_policy_target_metrics.py::test_cost_budget_under_200us_at_b256` — a timing-budget flake under concurrent `make bench` GPU contention; the test's own docstring discloses 10× idle-baseline tolerance specifically to handle this scenario, and the budget tripped today only because `make test.py` ran while `make bench` was holding 100% GPU. Not a Wave 3 code regression — pre-cycle suite was 1550/0 fail post-H1 measurement.)
+- Clippy floor: `cargo clippy --release` exit 0, **190 lib warnings** (Wave 1 opened gate at 199; Wave 2 closed at 192; Wave 3 closed at 190 — strict downward trend across cycle).
+- Cycle bench gate: **PASS** per `audit/rust-engine/wave_3/3d/cycle_bench_verdict.md`. 9 metrics measured at HEAD = `d74972a`; `all_targets_met` PASS. Cumulative vs Wave 2 close (SD5 anchor): MCTS sim/s +3.23%, NN inf +0.13%, NN latency +8.91% (PASS-WITH-WATCH per SD6), buffer push +14.86% IMPROVED, sample raw −16.08% IMPROVED, sample aug −8.25% IMPROVED, GPU flat, worker pos/hr −4.36% (PASS-WITH-WATCH per SD6), batch fill +1.01%. Cumulative vs Phase 0: MCTS +72.97%, NN latency −6.27%, push +0.04%, raw −7.53%, aug +5.09%, worker −10.60% (inside ±12.5% IQR envelope), batch fill −0.72% — net cycle improvement on load-bearing MCTS sim/s, neutral elsewhere.
+
+### Settled decisions
+
+The six entries below were maintained in `audit/rust-engine/cycle_settled_decisions.md` during the cycle and are cited from future Phase 4/5 prompts that touch the affected surfaces.
+
+- **SD1 — P26 SKIP: `PyRegistrySpec::from_static` retained as `pub`.** Audit P26 proposed demoting `pub fn from_static` to `pub(crate)`; reality found at implementation: `engine/tests/test_worker_loop_v6w25_smoke.rs:69` calls it for §173 A5a v6w25 SelfPlayRunner construction guard. Integration tests are external to the crate; `pub(crate)` would break compilation. SKIP confirmed. Unblock conditions: migrate that test to `PyEncodingSpec::from_registry` (now retired — would need to be `PyRegistrySpec::from_registry`, available post-P3.1), OR expose `pub(crate)` in-crate constructor. Cite in any future prompt that touches `engine/src/lib.rs` `PyRegistrySpec` or registry constructor surface.
+
+- **SD2 — P86 RETAIN: `v7` and `v7e30` registry entries kept.** P86 INVESTIGATE recommended INVESTIGATE; investigation found wire format `v7` byte-identical to `v6`, `v7e30` byte-identical to `v7full` — both legitimate historical names with zero production dispatch but loadable §148/§149/§150 ckpts depending on them. Cost RETAIN = 0 runtime (LazyLock lazy-init); RETIRE = 14 file edits + 2 ckpt renames + breakage risk. RETAIN AS-IS. SSR-collapse spirit applies to *duplicate* SoTs, not historical-tag entries in a single SoT TOML. Cite in any prompt touching `engine/src/encoding/registry.toml`.
+
+- **SD3 — Per-commit scope-expansion-by-deletion is permitted.** Wave 2 + Wave 3 produced 8 forced scope expansions total (Wave 2: A→benches, B→d6_sym_tables, D→selection.rs; Wave 3: 3a→state.rs tests, 3b→3 test sites, 3c→4 Rust mod-tests + 5 positional-arg sites + `compat.py`/`pool.py` cascade, pre-3d H1→`inference_server.py`). All disclosed in commit bodies, all reviewer-approved, all minimal. Rule: expansion file MUST reference an in-scope deleted symbol; edit MUST be minimal (delete dead ref or migrate to surviving API); commit body MUST disclose; reviewer MUST confirm forced+minimal. Half-deletion that leaves the codebase non-compiling is worse. Cite under CONSTRAINTS in all Phase 4 implementer prompts. **Mechanism Lesson candidate L24** if pattern recurs in future cycles.
+
+- **SD4 — Implementer/reviewer corrections to audit MD take precedence.** Wave 2 + Wave 3 found audit MD inaccuracies via implementation-time `rg` inventory: P15 audit said 10 dead PyMCTSTree setters → real 12; P26 audit said zero callers → integration test caller existed; P1 audit estimated 12 literal sites → impl observed 19 substitutions (some lines carried two `TOTAL_CELLS` each); 3b parent prompt CONSTRAINTS INVERTED v8 vs v6 pass-slot semantics (implementer followed registry); 3c PREP §D enumerated 3 deleted Rust mod-tests → reality was 4. Rule: implementer must run verification `rg` checks per their prompt's CONSTRAINTS section; if reality contradicts the audit MD findings count/caller list, report in commit body + adjust scope; if reality CONTRADICTS the proposal premise (e.g. "zero callers" falsified) → STOP and report. Cite under DONE-WHEN in all Phase 4 implementer prompts. **Mechanism Lesson candidate L25** if pattern recurs.
+
+- **SD5 — Bench baseline re-anchored at Wave 2 close.** Phase 0 baseline measured at `072d0db` (pre-Wave-1) became stale after 6 dead-code-purge commits dropped 788 LOC. Re-snapshot at `fd22bc2` (`audit/rust-engine/wave_3/00_bench_baseline_post_wave_2_run2.txt`) is the formal Wave 3 cumulative bench-gate baseline. Phase 0 baseline preserved unchanged as canonical "before refactor cycle" measurement for Phase 5 bench audit + this § entry's transparency table. Cite as the "baseline" file path in any Wave 4+ bench-gate prompt.
+
+- **SD6 — Mechanism-absent bench WATCH on small-absolute deltas is measurement variance until 2-3 commits confirm.** Promoted at 3d cycle close. NN latency b=1 trajectory across 6 measurements: 2.47 → 2.58 → 2.49 → 2.62 → 2.47 → 2.69, oscillating-revert without code mechanism (P1/P2/P3 don't touch NN paths; 3d and pre-3d H2 are the same HEAD `d74972a`). Independently confirmed on buffer push (3b WATCH → 3c → H2 +25.55%) and sample aug (3c → H2 −21.08%). Rule: WATCH metric is treated as measurement variance — NOT actionable — when code commit does not mechanistically explain it AND subsequent commits show non-monotonic/reverting behavior (or fresh-bench triangulation reverts toward baseline); escalated to investigation only when monotonic over 3+ commits AND code-level mechanism connects. Operator implication: future cycles do NOT freeze on a single-commit bench WATCH; require 2-commit confirmation OR fresh-bench triangulation. Cite this entry in Phase 4/5 bench-gate subagent prompts as the verdict heuristic.
+
+### INV pin additions
+
+- **INV15** — v6w25 encode round-trip regression pin (3a, `engine/tests/inv15_v6w25_encode_roundtrip.rs`, 3 `#[test]` fns: corner-cell byte-identity, v6 byte-identity-unchanged regression guard, v6w25 chain-plane axis runs)
+- **INV16** — v8 has_pass_slot dispatch pin (3b, `engine/tests/inv16_v8_pass_slot_dispatch.rs`, 3 `#[test]` fns: v8 aggregate_policy preserves corner cell, v8 aggregate_policy_to_local preserves corner cell, v6 pass-slot zeroing regression guard)
+- **INV17** — PyRegistrySpec.from_registry classmethod supersedes PyEncodingSpec (3c, Rust `engine/tests/inv17_pyregistryspec_supersedes_pyencodingspec.rs` 3 fns + Python `tests/test_inv17_pyregistryspec_retired.py` 2 fns)
+
+### Open items deferred to Wave 4 / next cycle
+
+- `engine/src/encoding/spec.rs` legacy Rust `EncodingSpec` struct + `Board::with_encoding` `cfg(test)`-only survivors (PREP 3c §A deferral). Kept as test-only fixtures pending operator review of test-only surface; not blocking but inelegant.
+- `engine/src/lib.rs` → `pyo3/{board,mcts,encoding,utils}.rs` split (file-split addendum Wave-5 sequencing, dependencies now all settled — P3 done in 3c, Wave 2 deletes done in P15+P24+P25+P26-SKIP). Eligible Wave 4 candidate.
+- `engine/src/game_runner/worker_loop.rs` split (881 LOC, INVESTIGATE) — blocked on P69 inline-test coverage per file-split addendum.
+- `engine/src/game_runner/mod.rs` split (936 LOC) — DEFER confirmed; re-eval gates `[P22, P58]`.
+- Remaining Phase 3 audit-pass proposals not addressed by Waves 1–3: tracked in `audit/rust-engine/00_aggregated_proposals.md`; next-cycle audit-pass should re-classify against post-cycle HEAD.
+
+### Falsified Hypotheses Register additions
+
+| § | Hypothesis | Falsified by | Mechanism |
+|---|---|---|---|
+| §178 (Wave 3 3b) | v8 `has_pass_slot=true` (parent prompt CONSTRAINTS claim) | 3b SD4 catch + INV16 Test A | Registry `engine/src/encoding/registry.toml` declares v8 has_pass_slot=false; implementer ran rg on registry source per SD4 and disregarded inverted parent claim; INV16 Test A pins the corner-cell-preserved-when-has_pass_slot-false contract |
+| §178 (Wave 3 3a) | P1 audit claim "12 `TOTAL_CELLS` literal sites in production code" | 3a impl rg sweep | Real count was 19 substitutions (some lines carried two literals each); disclosed in P1.1 commit body; SD4 application |
+| §178 (Wave 2 P15) | P15 audit claim "10 dead PyMCTSTree setters" | Implementer D rg sweep | Real count 12; commit `1d68d5b` lists correct enumeration; SD4 application |
+
+### Archive reference
+
+`reports/sprint_archive/§178_rust_engine_audit.md` (user post-cycle action — preserve full audit tree forensics for cross-cycle reference per `audit/rust-engine/wave_3/3d/archive_prep_note.md`). Memory: pending — recommend `project_178_rust_engine_audit.md` covering cycle outcome + SD6 entry + INV15/16/17 pin paths for cross-session lookup.
+
+---
+
 ## Sprint memory map (cross-conversation pointers)
 
 | Topic | Memory file |
