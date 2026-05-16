@@ -299,7 +299,7 @@ impl ReplayBuffer {
     /// trunk_size / n_planes / policy_logit_count without hardcoding.
     #[getter]
     pub fn encoding(&self) -> crate::PyRegistrySpec {
-        crate::PyRegistrySpec { inner: self.encoding }
+        crate::PyRegistrySpec::from_static(self.encoding)
     }
 }
 

@@ -1,0 +1,108 @@
+//! Python-visible RegistrySpec — wraps `&'static crate::encoding::RegistrySpec`.
+//!
+//! Extracted from `engine/src/lib.rs` at §178 Wave 5b Commit 1. Byte-identical
+//! move (struct + #[pymethods] + inherent impl); only the surrounding `use`
+//! lines, the file-level doc comment, and the `register()` registration helper
+//! are new.
+
+use pyo3::prelude::*;
+use pyo3::exceptions::PyValueError;
+
+use crate::encoding::RegistrySpec as RustRegistrySpec;
+
+/// Python-visible RegistrySpec — wraps `&'static crate::encoding::RegistrySpec`.
+/// Returned by `RegistrySpec.from_registry(name)`. Carries derived shape
+/// accessors (`state_stride()`, `policy_stride()`) so PyO3 callers
+/// constructing `SelfPlayRunner` / `InferenceBatcher` can derive
+/// `feature_len` / `policy_len` from the canonical registry instead of
+/// duplicating the per-encoding shape table.
+///
+/// Read-only — clone is `Copy` (just the &'static pointer).
+//
+// TODO(post-§172): pyo3 0.28 deprecated automatic `FromPyObject` derivation
+// for `#[pyclass]` types implementing `Clone`. Build emits one warning at
+// pyclass macro expansion; the warning will become a hard error on pyo3
+// 1.0. Migration is mechanical: add `#[pyclass(from_py_object)]` to opt-in
+// OR `#[pyclass(skip_from_py_object)]` to skip. No timeline — gated by pyo3
+// upgrade prioritization.
+#[pyclass(name = "RegistrySpec", from_py_object)]
+#[derive(Clone, Copy)]
+pub struct PyRegistrySpec {
+    inner: &'static RustRegistrySpec,
+}
+
+#[pymethods]
+impl PyRegistrySpec {
+    #[getter] pub fn name(&self) -> &'static str { self.inner.name }
+    #[getter] pub fn board_size(&self) -> usize { self.inner.board_size }
+    #[getter] pub fn trunk_size(&self) -> usize { self.inner.trunk_size }
+    #[getter] pub fn n_planes(&self) -> usize { self.inner.n_planes }
+    #[getter] pub fn policy_logit_count(&self) -> usize { self.inner.policy_logit_count }
+    #[getter] pub fn has_pass_slot(&self) -> bool { self.inner.has_pass_slot }
+    #[getter] pub fn is_multi_window(&self) -> bool { self.inner.is_multi_window }
+    /// §173 A3 — physical source-plane indices retained by wire format.
+    #[getter] pub fn kept_plane_indices(&self) -> Vec<usize> {
+        self.inner.kept_plane_indices.to_vec()
+    }
+    /// §173 A3 — source tensor plane count before kept_plane_indices slice.
+    #[getter] pub fn n_source_planes(&self) -> usize { self.inner.n_source_planes }
+
+    /// Cells per trunk input tensor = trunk_size². §173 A3 semantic: trunk_size, not board_size.
+    pub fn n_cells(&self) -> usize { self.inner.n_cells() }
+    /// State plane stride = n_planes × n_cells.
+    pub fn state_stride(&self) -> usize { self.inner.state_stride() }
+    /// Chain plane stride = N_CHAIN_PLANES × n_cells.
+    pub fn chain_stride(&self) -> usize { self.inner.chain_stride() }
+    /// Aux plane stride = n_cells (single aux plane).
+    pub fn aux_stride(&self) -> usize { self.inner.aux_stride() }
+    /// Policy logit count = `policy_logit_count` (mirror of the field).
+    pub fn policy_stride(&self) -> usize { self.inner.policy_stride() }
+
+    pub fn __repr__(&self) -> String {
+        format!(
+            "RegistrySpec(name={:?}, board_size={}, n_planes={}, policy_logit_count={}, is_multi_window={})",
+            self.inner.name, self.inner.board_size, self.inner.n_planes,
+            self.inner.policy_logit_count, self.inner.is_multi_window,
+        )
+    }
+
+    /// §P3.1 — registry-backed lookup. Returns a `PyRegistrySpec` (full-schema
+    /// record incl. policy_logit_count + n_planes). Supersedes the legacy
+    /// `EncodingSpec.from_registry` classmethod (whose return type is also
+    /// `PyRegistrySpec`); the legacy entry stays alive for one commit so
+    /// callers can migrate, then is deleted in P3.2.
+    #[classmethod]
+    pub fn from_registry(_cls: &Bound<'_, pyo3::types::PyType>, name: &str) -> PyResult<Self> {
+        if let Some(spec) = crate::encoding::lookup(name) {
+            Ok(PyRegistrySpec { inner: spec })
+        } else {
+            let mut known: Vec<&str> =
+                crate::encoding::all_specs().map(|s| s.name).collect();
+            known.sort_unstable();
+            Err(PyValueError::new_err(format!(
+                "RegistrySpec.from_registry: unknown encoding {name:?}; registered: {known:?}"
+            )))
+        }
+    }
+}
+
+impl PyRegistrySpec {
+    /// Crate-internal accessor — used by `SelfPlayRunner::new` /
+    /// `InferenceBatcher::new` to read the static pointer.
+    pub(crate) fn inner(&self) -> &'static RustRegistrySpec {
+        self.inner
+    }
+
+    /// §173 A5a — test helper: construct from a `&'static RegistrySpec`
+    /// reference (e.g. returned by `lookup_or_panic`). Allows Rust integration
+    /// tests to pass a `PyRegistrySpec` to `SelfPlayRunner::new` without
+    /// going through the Python boundary.
+    pub fn from_static(spec: &'static RustRegistrySpec) -> Self {
+        PyRegistrySpec { inner: spec }
+    }
+}
+
+pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyRegistrySpec>()?;
+    Ok(())
+}
