@@ -24,10 +24,9 @@ from typing import Any, Dict
 import pytest
 import torch
 
-from engine import Board, EncodingSpec as PyEncodingSpec
+from engine import Board
 from hexo_rl.encoding import EncodingSpec as RegistrySpec
 from hexo_rl.encoding import lookup as registry_lookup
-from hexo_rl.encoding.compat import WIRE_FORMAT_SPECS
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference_server import InferenceServer
 from hexo_rl.selfplay.pool import WorkerPool
@@ -110,29 +109,6 @@ def test_pool_spawns_v6w25_workers():
 
     # InferenceServer inherits the same spec. §176 P9 — read via typed snapshot.
     assert pool.inference_stats().encoding_spec is spec
-
-    # Wire-format spec round-trip into PyEncodingSpec carries the
-    # load-bearing cluster_window_size / cluster_threshold values that
-    # reach the Rust Board for v6w25 perception. (§173 A8' also threads
-    # the new-registry spec via SelfPlayRunner's encoding_spec= kwarg,
-    # so spec_static is set on the Rust side.)
-    wire_spec = WIRE_FORMAT_SPECS["v6w25"]
-    pyspec = PyEncodingSpec(
-        cluster_window_size=int(wire_spec.cluster_window_size),
-        cluster_threshold=int(wire_spec.cluster_threshold),
-        legal_move_radius=int(wire_spec.legal_move_radius),
-        board_size=int(wire_spec.board_size),
-    )
-    assert pyspec.cluster_window_size == 25
-    assert pyspec.cluster_threshold == 8
-    assert pyspec.legal_move_radius == 8
-
-    # Build a board with the wire-format spec — same call site the Rust
-    # worker_loop uses for `Board::with_encoding(spec)`.
-    board = Board.with_encoding(pyspec)
-    assert board.cluster_window_size() == 25
-    assert board.cluster_threshold() == 8
-    assert board.legal_move_radius() == 8
 
 
 def test_pool_spawns_v6_workers_default_path():

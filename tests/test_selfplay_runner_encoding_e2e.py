@@ -1,16 +1,15 @@
-"""§171 P3 A1 reopen — end-to-end SelfPlayRunner ↔ EncodingSpec plumbing.
+"""§P3.1 — end-to-end SelfPlayRunner ↔ encoding plumbing (registry path).
 
-A2 (commit 52acb44) wired the Python side; A1 reopen (this commit) threads
-EncodingSpec through `engine.SelfPlayRunner.__init__` so per-game `Board`
-construction in `worker_loop.rs` honours the spec instead of defaulting to
-v6 (`Board::new()`).
+Pre-§P3.1 the runner accepted both `encoding=PyEncodingSpec` (legacy 4-field)
+and `encoding_spec=PyRegistrySpec` (registry-backed) kwargs. §P3.1 retired
+the Python-side `engine.EncodingSpec` PyO3 wrapper; the legacy `encoding=`
+kwarg path remains alive in Rust but no Python caller wires it. These tests
+now exercise the registry path only via `engine.RegistrySpec.from_registry`.
 
 The discriminator: a v6w25 spec gives `legal_move_radius=8`; v6 default is
-5. We construct a `Board` with the spec the runner is built with and check
-the legal-move radius matches what the runner actually wires through, then
-spawn a 1-game smoke to confirm the runner doesn't panic when the spec is
-present (the per-game `Board::with_encoding(spec)` path is the only
-encoding-honouring construction site in the worker loop).
+5. We assert via `runner.feature_len()` / `runner.policy_len()` that the
+runner derived the v6w25 geometry, plus a `Board.with_encoding_name`
+cross-check that the same spec produces a v6w25 Board.
 
 If the legacy `selfplay_runner_encoding_unbound` warning is still emitted
 during pool construction, the wiring regressed — see the regression guard
@@ -21,11 +20,11 @@ from __future__ import annotations
 import time
 from typing import Any, Dict
 
+import engine
 import pytest
 import torch
 
 from engine import Board, ReplayBuffer, SelfPlayRunner
-from hexo_rl.encoding.compat import WIRE_FORMAT_SPECS
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 from hexo_rl.selfplay.pool import WorkerPool
 
@@ -80,18 +79,17 @@ def _drain_until_first_game(runner: SelfPlayRunner, timeout_s: float) -> int:
 
 
 def test_selfplay_runner_accepts_encoding_kwarg():
-    """`engine.SelfPlayRunner(...)` accepts `encoding=engine.EncodingSpec(...)`
-    as a keyword argument (added in A1 reopen). Backward compat: omitting
-    the kwarg is identical to `encoding=None`. Both must construct without
-    raising."""
-    spec = WIRE_FORMAT_SPECS["v6w25"].to_pyo3()
-    # With encoding kwarg.
+    """`engine.SelfPlayRunner(...)` accepts `encoding_spec=engine.RegistrySpec(...)`
+    as a keyword argument. Backward compat: omitting the kwarg falls back to
+    v6 defaults. Both must construct without raising."""
+    spec = engine.RegistrySpec.from_registry("v6w25")
+    # With encoding_spec kwarg.
     r1 = SelfPlayRunner(
         n_workers=1,
         max_moves_per_game=0,
         n_simulations=1,
         leaf_batch_size=1,
-        encoding=spec,
+        encoding_spec=spec,
     )
     assert not r1.is_running()
 
@@ -110,32 +108,30 @@ def test_selfplay_runner_v6w25_workers_use_w25_boards():
     the runner doesn't panic and at least one game completes per worker.
 
     Behavioural discriminator (deterministic, no model needed): the runner's
-    `encoding` `#[getter]` must surface the v6w25 spec values (window=25,
-    threshold=8, radius=8) — combined with the cargo unit test
-    `test_worker_loop_honors_v6w25_encoding` (which proves the same spec
-    produces a v6w25 Board via `Board::with_encoding`), this closes the
-    chain: "runner.encoding is set" + "if runner.encoding is set, worker
-    uses Board::with_encoding(spec)" ⇒ workers really do see v6w25
-    perception. Also asserts the cross-check via `Board.with_encoding(py_spec)`
-    matches the same parameters.
+    derived geometry (`feature_len()` / `policy_len()`) must reflect the
+    v6w25 spec (8×25×25 features, 626 policy logits). Combined with the
+    cargo unit test `test_worker_loop_honors_v6w25_encoding` (which proves
+    the same spec produces a v6w25 Board via the registry path), this closes
+    the chain: "runner geometry is v6w25" + "worker uses spec_static for per-
+    game Board ctor" ⇒ workers really do see v6w25 perception. Cross-check
+    via `Board.with_encoding_name("v6w25")` matches.
     """
-    py_spec = WIRE_FORMAT_SPECS["v6w25"].to_pyo3()
+    py_spec = engine.RegistrySpec.from_registry("v6w25")
     runner = SelfPlayRunner(
         n_workers=2,
         max_moves_per_game=0,           # workers spin per-game Board ctor
         n_simulations=1,
         leaf_batch_size=1,
-        encoding=py_spec,
+        encoding_spec=py_spec,
     )
 
-    # Direct FFI assert — runner stored the spec the wiring passed in.
-    # Without the `#[getter]` we could only observe this indirectly.
-    assert runner.encoding is not None, (
-        "runner.encoding must round-trip the spec passed at construction"
+    # Direct FFI assert — runner derived v6w25 geometry from the spec.
+    assert runner.feature_len() == 8 * 25 * 25, (
+        f"runner.feature_len()={runner.feature_len()}; expected 5000 for v6w25"
     )
-    assert runner.encoding.cluster_window_size == 25
-    assert runner.encoding.cluster_threshold == 8
-    assert runner.encoding.legal_move_radius == 8
+    assert runner.policy_len() == 626, (
+        f"runner.policy_len()={runner.policy_len()}; expected 626 for v6w25"
+    )
 
     runner.start()
     try:
@@ -144,31 +140,34 @@ def test_selfplay_runner_v6w25_workers_use_w25_boards():
     finally:
         runner.stop()
 
-    # Independent observable: the spec the runner was constructed with
-    # produces a v6w25 Board when passed through `Board.with_encoding`.
-    # This is the same conversion the worker thread performs per game.
-    board = Board.with_encoding(py_spec)
+    # Independent observable: the registry-resolved Board ctor for v6w25
+    # produces a board with v6w25 perception. Same path the worker thread
+    # invokes per game.
+    board = Board.with_encoding_name("v6w25")
     assert board.cluster_window_size() == 25
     assert board.cluster_threshold() == 8
     assert board.legal_move_radius() == 8
 
 
 def test_selfplay_runner_v6_default_workers_use_w19_boards():
-    """Backward-compat regression: `encoding=None` (default) keeps every
+    """Backward-compat regression: omitting the encoding kwarg keeps every
     worker on v6 perception. Verifies that the legacy `Board::new()` path
-    (the worker_loop's `None` branch) is byte-exact unchanged, and that
-    the Python-visible `runner.encoding` getter reports `None`."""
+    (the worker_loop's no-spec branch) is byte-exact unchanged, and that
+    the runner derives v6 default geometry."""
     runner = SelfPlayRunner(
         n_workers=2,
         max_moves_per_game=0,
         n_simulations=1,
         leaf_batch_size=1,
-        # encoding intentionally omitted — defaults to None
+        # encoding intentionally omitted — defaults to v6 geometry
     )
 
-    # Direct FFI assert — getter must report None on the bare-defaults path.
-    assert runner.encoding is None, (
-        "default constructor (no encoding kwarg) must leave runner.encoding == None"
+    # Direct FFI assert — geometry reflects v6 defaults.
+    assert runner.feature_len() == 8 * 19 * 19, (
+        f"runner.feature_len()={runner.feature_len()}; expected 2888 for v6"
+    )
+    assert runner.policy_len() == 19 * 19 + 1, (
+        f"runner.policy_len()={runner.policy_len()}; expected 362 for v6"
     )
 
     runner.start()
@@ -179,7 +178,7 @@ def test_selfplay_runner_v6_default_workers_use_w19_boards():
         runner.stop()
 
     # Independent observable: a default-constructed Board (the path the
-    # worker thread takes under `None`) has v6 perception.
+    # worker thread takes under no-spec) has v6 perception.
     board = Board()
     assert board.cluster_window_size() == 19
     assert board.cluster_threshold() == 5

@@ -59,11 +59,11 @@ def _rust_spec(name: str) -> Any:
     """Return the Rust PyRegistrySpec for `name`.
 
     Used by §173 A3 parity tests — calls the Rust-side registry lookup
-    via the PyO3 `EncodingSpec.from_registry` classmethod which returns
-    a `RegistrySpec` (PyRegistrySpec) containing all fields.
+    via the PyO3 `RegistrySpec.from_registry` classmethod (§P3.1 — was
+    `EncodingSpec.from_registry`; FF.1 cross-class smell fix).
     """
-    from engine import EncodingSpec as RustEncodingSpec
-    return RustEncodingSpec.from_registry(name)
+    from engine import RegistrySpec as RustRegistrySpec
+    return RustRegistrySpec.from_registry(name)
 
 
 def _model_kwargs(spec: EncodingSpec) -> dict[str, Any]:

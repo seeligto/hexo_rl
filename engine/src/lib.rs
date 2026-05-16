@@ -159,6 +159,25 @@ impl PyRegistrySpec {
             self.inner.policy_logit_count, self.inner.is_multi_window,
         )
     }
+
+    /// §P3.1 — registry-backed lookup. Returns a `PyRegistrySpec` (full-schema
+    /// record incl. policy_logit_count + n_planes). Supersedes the legacy
+    /// `EncodingSpec.from_registry` classmethod (whose return type is also
+    /// `PyRegistrySpec`); the legacy entry stays alive for one commit so
+    /// callers can migrate, then is deleted in P3.2.
+    #[classmethod]
+    pub fn from_registry(_cls: &Bound<'_, pyo3::types::PyType>, name: &str) -> PyResult<Self> {
+        if let Some(spec) = crate::encoding::lookup(name) {
+            Ok(PyRegistrySpec { inner: spec })
+        } else {
+            let mut known: Vec<&str> =
+                crate::encoding::all_specs().map(|s| s.name).collect();
+            known.sort_unstable();
+            Err(PyValueError::new_err(format!(
+                "RegistrySpec.from_registry: unknown encoding {name:?}; registered: {known:?}"
+            )))
+        }
+    }
 }
 
 impl PyRegistrySpec {

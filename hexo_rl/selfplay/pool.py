@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import structlog
 import torch
-from engine import EncodingSpec as PyO3EncodingSpec  # type: ignore[attr-defined]
+from engine import RegistrySpec as PyO3EncodingSpec  # type: ignore[attr-defined]
 from engine import SelfPlayRunner  # type: ignore[attr-defined]
 
 from hexo_rl.encoding import EncodingSpec as RegistrySpec

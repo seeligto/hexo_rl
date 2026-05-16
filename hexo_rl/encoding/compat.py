@@ -59,6 +59,8 @@ class WireFormatSpec:
 
         Raises ValueError if cluster_window_size or cluster_threshold is None
         (v8 family — no cluster plumbing).
+
+        TODO(§P3.2): retire alongside SelfPlayRunner encoding kwarg deletion.
         """
         from engine import EncodingSpec as _PyEnc
         if self.cluster_window_size is None or self.cluster_threshold is None:
