@@ -140,8 +140,12 @@ impl ReplayBuffer {
             .map(|_| self.weighted_sample_one())
             .collect();
 
+        // §P45: HashSet allocation hoisted outside the retry loop; we
+        // `.clear()` at iteration top so each retry sees a fresh empty set
+        // (bit-equivalent to the previous per-iteration alloc).
+        let mut seen: HashSet<i64> = HashSet::with_capacity(batch_size);
         for _ in 0..MAX_RETRIES {
-            let mut seen: HashSet<i64> = HashSet::with_capacity(batch_size);
+            seen.clear();
             let mut all_unique = true;
             for idx in indices.iter_mut() {
                 let gid = self.game_ids[*idx];

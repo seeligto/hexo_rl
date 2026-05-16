@@ -270,11 +270,23 @@ impl ReplayBuffer {
             ));
         }
 
-        // Cross-encoding mismatch guard.
-        if self.encoding.name != file_encoding_name {
+        // Cross-encoding mismatch guard (§P13).
+        //
+        // Compare wire-format signature instead of the encoding name string.
+        // Two encodings producing byte-identical HEXB rows must auto-cross-load
+        // even when their names differ — v6 / v7full / v7 / v7e30 / v7mw all
+        // share `(8, 19, 362, true, "size_19")`; v8 / v8_canvas_realness share
+        // `(11, 25, 625, false, "size_25")`; v6w25 stays distinct at
+        // `(8, 25, 362, true, "size_25")`. Strict shape rejection is preserved
+        // — any signature drift (different n_planes, board_size,
+        // policy_logit_count, has_pass_slot, or sym_table_id) still hard-errors.
+        let buffer_sig = self.encoding.wire_signature();
+        let file_sig = file_spec.wire_signature();
+        if buffer_sig != file_sig {
             return Err(format!(
-                "HEXB encoding mismatch: buffer expects '{}', file declares '{}'",
-                self.encoding.name, file_encoding_name
+                "HEXB encoding mismatch: buffer encoding '{}' wire_signature \
+                 {:?} differs from file encoding '{}' wire_signature {:?}",
+                self.encoding.name, buffer_sig, file_encoding_name, file_sig
             ));
         }
 
@@ -559,6 +571,56 @@ mod tests {
             assert_eq!(buf.outcomes[slot], slot as f32,
                 "v6 backward compat: outcome mismatch at slot {slot}");
         }
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// §P13 — wire-identical crossload SUCCEEDS in-process (mirror of the
+    /// integration test in `engine/tests/test_p13_wire_signature_crossload.rs`).
+    /// v6 → v7full share `(8, 19, 362, true, "size_19")` so the load guard
+    /// accepts despite the name string mismatch.
+    #[test]
+    fn test_hexb_v7_wire_signature_v6_to_v7full_crossload_succeeds() {
+        let mut writer = ReplayBuffer::new(8, "v6");
+        for i in 0..6 {
+            writer.push_for_test(i as f32, 10, i % 2 == 0);
+        }
+
+        let path = unique_test_path("p13_v6_to_v7full");
+        writer.save_to_path(path.to_str().unwrap()).unwrap();
+
+        let mut reader = ReplayBuffer::new(8, "v7full");
+        let loaded = reader
+            .load_from_path_impl(path.to_str().unwrap())
+            .expect("wire-identical v6 -> v7full crossload must succeed");
+        assert_eq!(loaded, 6);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// §P13 — v6 → v8 wire-mismatched crossload REJECTS. Full wire-signature
+    /// drift (n_planes 8→11, board_size 19→25, policy_logit_count 362→625,
+    /// has_pass_slot true→false, sym_table_id "size_19"→"size_25"). The
+    /// `saved_n_planes != file_spec.n_planes` guard CANNOT fire here because
+    /// the file header is internally consistent for v6 (saved_n_planes=8 and
+    /// file_spec='v6' n_planes=8); the wire_signature compare is the only
+    /// thing rejecting the load.
+    #[test]
+    fn test_hexb_v7_wire_signature_v6_to_v8_rejects() {
+        let mut writer = ReplayBuffer::new(8, "v6");
+        writer.push_for_test(1.0, 10, true);
+
+        let path = unique_test_path("p13_v6_to_v8_rejects");
+        writer.save_to_path(path.to_str().unwrap()).unwrap();
+
+        let mut reader = ReplayBuffer::new(8, "v8");
+        let err = reader
+            .load_from_path_impl(path.to_str().unwrap())
+            .expect_err("v6 -> v8 crossload must reject (full wire-signature drift)");
+        assert!(
+            err.contains("encoding mismatch") && err.contains("wire_signature"),
+            "expected wire_signature framing, got: {err}"
+        );
 
         let _ = std::fs::remove_file(path);
     }

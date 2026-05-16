@@ -330,6 +330,30 @@ impl RegistrySpec {
     pub fn policy_stride(&self) -> usize {
         self.policy_logit_count
     }
+
+    /// Wire-format signature for cross-encoding compatibility checks (§P13).
+    ///
+    /// Two encodings are wire-identical when they produce byte-identical on-disk
+    /// rows for the HEXB replay-buffer format. The buffer wire layout depends on
+    /// `(n_planes, board_size, policy_logit_count, has_pass_slot, sym_table_id)`
+    /// — every other registry field affects training semantics but not stored
+    /// bytes. Aliases sharing this tuple auto-cross-load via
+    /// `ReplayBuffer::load_from_path_impl`:
+    ///   - v6 / v7full / v7 / v7e30 / v7mw → (8, 19, 362, true, "size_19")
+    ///   - v8 / v8_canvas_realness        → (11, 25, 625, false, "size_25")
+    ///   - v6w25 stays distinct           → (8,  25, 362, true, "size_25")
+    ///
+    /// Derived from existing fields — Registry-as-SSR (TOML) untouched.
+    #[inline]
+    pub fn wire_signature(&self) -> (usize, usize, usize, bool, &'static str) {
+        (
+            self.n_planes,
+            self.board_size,
+            self.policy_logit_count,
+            self.has_pass_slot,
+            self.sym_table_id,
+        )
+    }
 }
 
 #[cfg(test)]
