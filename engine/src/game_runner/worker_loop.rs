@@ -62,6 +62,7 @@ use crate::replay_buffer::sample::{apply_symmetry_state, apply_chain_symmetry};
 use super::SelfPlayRunner;
 use super::gumbel_search::GumbelSearchState;
 use super::records;
+use super::{GameResultRow, WorkerResultRow};
 
 /// Inverse of dihedral element `s` parameterized as reflect-then-rotate^n.
 ///
@@ -183,21 +184,42 @@ struct WorkerAtomics {
 }
 
 #[derive(Clone)]
-#[allow(clippy::type_complexity)] // tuple types mirror SelfPlayRunner.results / recent_game_results — bundled as-is.
 struct WorkerChannels {
     batcher: InferenceBatcher,
-    results_queue: Arc<Mutex<VecDeque<(Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, bool)>>>,
-    recent_game_results: Arc<Mutex<VecDeque<(usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32)>>>,
+    results_queue: Arc<Mutex<VecDeque<WorkerResultRow>>>,
+    recent_game_results: Arc<Mutex<VecDeque<GameResultRow>>>,
+}
+
+// Themed sub-flag bundles (cycle 3 Wave 7 Batch C, P79). Partition the 7
+// WorkerParams bool fields into ≤3-bool themed groups so
+// `clippy::struct_excessive_bools` no longer fires on WorkerParams itself
+// (which now has zero raw bool fields) nor on any of the sub-structs
+// (each ≤3 bools, under the default threshold).
+#[derive(Clone)]
+struct SearchFlags {
+    quiescence_enabled: bool,
+    completed_q_values: bool,
+    gumbel_mcts: bool,
 }
 
 #[derive(Clone)]
-#[allow(clippy::struct_excessive_bools)] // 9 config flags — mirror SelfPlayRunner public surface (PyO3 kwargs).
+struct ExplorationFlags {
+    dirichlet_enabled: bool,
+    selfplay_rotation_enabled: bool,
+}
+
+#[derive(Clone)]
+struct MoveConstraintFlags {
+    zoi_enabled: bool,
+    legal_move_radius_jitter: bool,
+}
+
+#[derive(Clone)]
 struct WorkerParams {
     max_moves: usize,
     leaf_batch_size: usize,
     c_puct: f32,
     fpu_reduction: f32,
-    quiescence_enabled: bool,
     quiescence_blend_2: f32,
     fast_prob: f32,
     fast_sims: usize,
@@ -205,26 +227,23 @@ struct WorkerParams {
     temp_threshold: usize,
     temp_min: f32,
     draw_reward: f32,
-    zoi_enabled: bool,
     zoi_lookback: usize,
     zoi_margin: i32,
-    completed_q_values: bool,
     c_visit: f32,
     c_scale: f32,
-    gumbel_mcts: bool,
     gumbel_m: usize,
     gumbel_explore_moves: usize,
     dirichlet_alpha: f32,
     dirichlet_epsilon: f32,
-    dirichlet_enabled: bool,
     results_queue_cap: usize,
     full_search_prob: f32,
     n_sims_quick: usize,
     n_sims_full: usize,
     random_opening_plies: u32,
-    selfplay_rotation_enabled: bool,
-    legal_move_radius_jitter: bool,
     registry_spec: Option<&'static crate::encoding::RegistrySpec>,
+    search_flags: SearchFlags,
+    exploration_flags: ExplorationFlags,
+    move_constraint_flags: MoveConstraintFlags,
 }
 
 impl SelfPlayRunner {
@@ -310,7 +329,6 @@ impl SelfPlayRunner {
             leaf_batch_size: self.leaf_batch_size,
             c_puct: self.c_puct,
             fpu_reduction: self.fpu_reduction,
-            quiescence_enabled: self.quiescence_enabled,
             quiescence_blend_2: self.quiescence_blend_2,
             fast_prob: self.fast_prob,
             fast_sims: self.fast_sims,
@@ -318,26 +336,33 @@ impl SelfPlayRunner {
             temp_threshold: self.temp_threshold_compound_moves,
             temp_min: self.temp_min,
             draw_reward: self.draw_reward,
-            zoi_enabled: self.zoi_enabled,
             zoi_lookback: self.zoi_lookback,
             zoi_margin: self.zoi_margin,
-            completed_q_values: self.completed_q_values,
             c_visit: self.c_visit,
             c_scale: self.c_scale,
-            gumbel_mcts: self.gumbel_mcts,
             gumbel_m: self.gumbel_m,
             gumbel_explore_moves: self.gumbel_explore_moves,
             dirichlet_alpha: self.dirichlet_alpha,
             dirichlet_epsilon: self.dirichlet_epsilon,
-            dirichlet_enabled: self.dirichlet_enabled,
             results_queue_cap: self.results_queue_cap,
             full_search_prob: self.full_search_prob,
             n_sims_quick: self.n_sims_quick,
             n_sims_full: self.n_sims_full,
             random_opening_plies: self.random_opening_plies,
-            selfplay_rotation_enabled: self.selfplay_rotation_enabled,
-            legal_move_radius_jitter: self.legal_move_radius_jitter,
             registry_spec: self.registry_spec,
+            search_flags: SearchFlags {
+                quiescence_enabled: self.quiescence_enabled,
+                completed_q_values: self.completed_q_values,
+                gumbel_mcts: self.gumbel_mcts,
+            },
+            exploration_flags: ExplorationFlags {
+                dirichlet_enabled: self.dirichlet_enabled,
+                selfplay_rotation_enabled: self.selfplay_rotation_enabled,
+            },
+            move_constraint_flags: MoveConstraintFlags {
+                zoi_enabled: self.zoi_enabled,
+                legal_move_radius_jitter: self.legal_move_radius_jitter,
+            },
         };
 
         let mut handles = self.handles.lock().expect("runner handles lock poisoned");
@@ -417,7 +442,6 @@ impl SelfPlayRunner {
                     leaf_batch_size,
                     c_puct,
                     fpu_reduction,
-                    quiescence_enabled,
                     quiescence_blend_2,
                     fast_prob,
                     fast_sims,
@@ -425,26 +449,23 @@ impl SelfPlayRunner {
                     temp_threshold,
                     temp_min,
                     draw_reward,
-                    zoi_enabled,
                     zoi_lookback,
                     zoi_margin,
-                    completed_q_values,
                     c_visit,
                     c_scale,
-                    gumbel_mcts,
                     gumbel_m,
                     gumbel_explore_moves,
                     dirichlet_alpha,
                     dirichlet_epsilon,
-                    dirichlet_enabled,
                     results_queue_cap,
                     full_search_prob,
                     n_sims_quick,
                     n_sims_full,
                     random_opening_plies,
-                    selfplay_rotation_enabled,
-                    legal_move_radius_jitter,
                     registry_spec: registry_spec_for_worker,
+                    search_flags: SearchFlags { quiescence_enabled, completed_q_values, gumbel_mcts },
+                    exploration_flags: ExplorationFlags { dirichlet_enabled, selfplay_rotation_enabled },
+                    move_constraint_flags: MoveConstraintFlags { zoi_enabled, legal_move_radius_jitter },
                 } = params;
 
                 let mut tree = MCTSTree::new_full(c_puct, crate::mcts::VIRTUAL_LOSS_PENALTY, fpu_reduction);
