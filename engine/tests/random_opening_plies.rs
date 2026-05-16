@@ -64,7 +64,6 @@ fn make_runner(
         random_opening_plies,
         false,                              // selfplay_rotation_enabled
         false,                              // legal_move_radius_jitter
-        None,                               // encoding (§171 P3 A1: v6 default)
         None,                               // encoding_spec (§172 A10 T8b)
         None,                               // radius_override (§174)
     )

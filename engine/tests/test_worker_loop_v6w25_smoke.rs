@@ -65,7 +65,6 @@ fn test_v6w25_runner_constructs_correct_geometry() {
         0_u32,                    // random_opening_plies
         false,                    // selfplay_rotation_enabled
         false,                    // legal_move_radius_jitter
-        None,                     // encoding (legacy EncodingSpec — None for registry-path test)
         Some(engine::PyRegistrySpec::from_static(spec)), // encoding_spec (§173 A5a)
         None,                     // radius_override (§174)
     )

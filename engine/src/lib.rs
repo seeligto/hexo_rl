@@ -20,7 +20,6 @@ use numpy::{
 };
 
 use board::{Board as RustBoard, Player, BOARD_SIZE};
-use crate::encoding::EncodingSpec as RustEncodingSpec;
 use crate::encoding::RegistrySpec as RustRegistrySpec;
 use game_runner::SelfPlayRunner;
 use inference_bridge::InferenceBatcher;
@@ -28,97 +27,23 @@ use replay_buffer::ReplayBuffer;
 use replay_buffer::sample::apply_symmetry_state;
 use replay_buffer::sym_tables::{SymTables, N_SYMS};
 
-// ── Python-visible EncodingSpec ───────────────────────────────────────────────
-
-/// Python-visible EncodingSpec. Pass to `Board.with_encoding(spec)` to
-/// construct a Board with non-default cluster window / threshold / radius.
-//
-// TODO(post-§172): pyo3 0.28 deprecated automatic `FromPyObject` derivation
-// for `#[pyclass]` types implementing `Clone`. Build emits one warning here
-// and at PyRegistrySpec below; both will become hard errors on pyo3 1.0.
-// Migration is mechanical: add `#[pyclass(from_py_object)]` to opt-in OR
-// `#[pyclass(skip_from_py_object)]` to skip. No timeline — gated by pyo3
-// upgrade prioritization. See engine/src/lib.rs:115 for the second site.
-#[pyclass(name = "EncodingSpec")]
-#[derive(Clone)]
-pub struct PyEncodingSpec {
-    inner: RustEncodingSpec,
-}
-
-#[pymethods]
-impl PyEncodingSpec {
-    #[new]
-    #[pyo3(signature = (*, cluster_window_size, cluster_threshold, legal_move_radius, board_size))]
-    pub fn new(
-        cluster_window_size: usize,
-        cluster_threshold: i32,
-        legal_move_radius: i32,
-        board_size: usize,
-    ) -> PyResult<Self> {
-        let inner = RustEncodingSpec {
-            cluster_window_size,
-            cluster_threshold,
-            legal_move_radius,
-            board_size,
-        };
-        inner.validate().map_err(PyValueError::new_err)?;
-        Ok(PyEncodingSpec { inner })
-    }
-
-    #[getter] pub fn cluster_window_size(&self) -> usize { self.inner.cluster_window_size }
-    #[getter] pub fn cluster_threshold(&self) -> i32 { self.inner.cluster_threshold }
-    #[getter] pub fn legal_move_radius(&self) -> i32 { self.inner.legal_move_radius }
-    #[getter] pub fn board_size(&self) -> usize { self.inner.board_size }
-
-    pub fn __repr__(&self) -> String {
-        format!(
-            "EncodingSpec(cluster_window_size={}, cluster_threshold={}, legal_move_radius={}, board_size={})",
-            self.inner.cluster_window_size, self.inner.cluster_threshold,
-            self.inner.legal_move_radius, self.inner.board_size,
-        )
-    }
-
-    pub fn __eq__(&self, other: &PyEncodingSpec) -> bool { self.inner == other.inner }
-    pub fn __hash__(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.inner.hash(&mut h);
-        h.finish()
-    }
-
-    /// §172 A10 T8b — registry-backed lookup. Returns a `PyRegistrySpec`
-    /// (full-schema record incl. policy_logit_count + n_planes) so v8 callers
-    /// can derive feature_len / policy_len at the PyO3 boundary without
-    /// re-implementing the Python-side schema. The legacy 4-field
-    /// `EncodingSpec(...)` constructor cannot represent v8 (no cluster
-    /// window), so `from_registry("v8")` is the v8 entry point.
-    #[classmethod]
-    pub fn from_registry(_cls: &Bound<'_, pyo3::types::PyType>, name: &str) -> PyResult<PyRegistrySpec> {
-        match crate::encoding::lookup(name) {
-            Some(spec) => Ok(PyRegistrySpec { inner: spec }),
-            None => {
-                let mut known: Vec<&str> =
-                    crate::encoding::all_specs().map(|s| s.name).collect();
-                known.sort();
-                Err(PyValueError::new_err(format!(
-                    "EncodingSpec.from_registry: unknown encoding {:?}; registered: {:?}",
-                    name, known
-                )))
-            }
-        }
-    }
-}
-
 // ── Python-visible RegistrySpec (read-only registry record) ───────────────────
 
 /// Python-visible RegistrySpec — wraps `&'static crate::encoding::RegistrySpec`.
-/// Returned by `EncodingSpec.from_registry(name)`. Carries derived shape
+/// Returned by `RegistrySpec.from_registry(name)`. Carries derived shape
 /// accessors (`state_stride()`, `policy_stride()`) so PyO3 callers
 /// constructing `SelfPlayRunner` / `InferenceBatcher` can derive
 /// `feature_len` / `policy_len` from the canonical registry instead of
 /// duplicating the per-encoding shape table.
 ///
 /// Read-only — clone is `Copy` (just the &'static pointer).
+//
+// TODO(post-§172): pyo3 0.28 deprecated automatic `FromPyObject` derivation
+// for `#[pyclass]` types implementing `Clone`. Build emits one warning at
+// pyclass macro expansion; the warning will become a hard error on pyo3
+// 1.0. Migration is mechanical: add `#[pyclass(from_py_object)]` to opt-in
+// OR `#[pyclass(skip_from_py_object)]` to skip. No timeline — gated by pyo3
+// upgrade prioritization.
 #[pyclass(name = "RegistrySpec")]
 #[derive(Clone, Copy)]
 pub struct PyRegistrySpec {
@@ -196,23 +121,6 @@ impl PyRegistrySpec {
     }
 }
 
-impl PyEncodingSpec {
-    /// Crate-internal accessor: copy out the underlying `RustEncodingSpec`.
-    /// Used by `SelfPlayRunner::new` (game_runner/mod.rs) to thread the
-    /// spec through to the Rust-owned worker thread Boards.
-    pub(crate) fn to_inner(&self) -> RustEncodingSpec {
-        self.inner
-    }
-
-    /// Crate-internal constructor: wrap a `RustEncodingSpec` in the
-    /// PyO3-visible PyEncodingSpec. Used by the `SelfPlayRunner.encoding`
-    /// `#[getter]` and by Rust-side test sites that previously poked the
-    /// (now-private) `inner` field via struct-literal construction.
-    pub(crate) fn from_inner(inner: RustEncodingSpec) -> Self {
-        PyEncodingSpec { inner }
-    }
-}
-
 // ── Python-visible Board wrapper ──────────────────────────────────────────────
 
 /// A Hex Tac Toe board.
@@ -235,20 +143,12 @@ impl PyBoard {
         PyBoard { inner: RustBoard::new() }
     }
 
-    /// §171 P2 reopen — construct a Board with a non-default EncodingSpec.
-    /// Equivalent to calling Board() then set_cluster_window_size /
-    /// set_cluster_threshold / set_legal_move_radius, but bundles them into a
-    /// single validated call. Used by v6w25 self-play workers.
-    #[staticmethod]
-    pub fn with_encoding(encoding: &PyEncodingSpec) -> Self {
-        PyBoard { inner: RustBoard::with_encoding(&encoding.inner) }
-    }
-
     /// §172 A4.1 — registry-resolved Board ctor. Looks the encoding up by
     /// name in `engine/src/encoding/registry.toml` and binds the resulting
-    /// `RegistrySpec` to the new Board. Preferred over `with_encoding`
-    /// (which takes the legacy 4-field struct) for new consumers — adding
-    /// a new encoding becomes a single TOML edit.
+    /// `RegistrySpec` to the new Board. §P3.2 retired the legacy 4-field
+    /// `with_encoding(PyEncodingSpec)` static method — registry path is the
+    /// single supported entry point for non-default encoding construction.
+    /// Adding a new encoding becomes a single TOML edit.
     ///
     /// Raises `ValueError` if `name` is not a registered encoding.
     /// `Board.size`, `Board.to_tensor()`, and the multi-window guard at
@@ -865,7 +765,6 @@ fn take_mcts_pool_overflow_count() -> u64 {
 #[pymodule]
 fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoard>()?;
-    m.add_class::<PyEncodingSpec>()?;
     m.add_class::<PyRegistrySpec>()?;
     m.add_class::<PyMCTSTree>()?;
     m.add_class::<InferenceBatcher>()?;

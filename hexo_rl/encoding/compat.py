@@ -54,26 +54,13 @@ class WireFormatSpec:
     legal_move_radius: int
     board_size: int
 
-    def to_pyo3(self):
-        """Build the 4-field engine.EncodingSpec the Rust SelfPlayRunner kwarg expects.
-
-        Raises ValueError if cluster_window_size or cluster_threshold is None
-        (v8 family — no cluster plumbing).
-
-        TODO(§P3.2): retire alongside SelfPlayRunner encoding kwarg deletion.
-        """
-        from engine import EncodingSpec as _PyEnc
-        if self.cluster_window_size is None or self.cluster_threshold is None:
-            raise ValueError(
-                f"WireFormatSpec(name={self.name!r}) has no cluster window/threshold; "
-                "to_pyo3 is only defined for v6-family encodings"
-            )
-        return _PyEnc(
-            cluster_window_size=int(self.cluster_window_size),
-            cluster_threshold=int(self.cluster_threshold),
-            legal_move_radius=int(self.legal_move_radius),
-            board_size=int(self.board_size),
-        )
+    # §P3.2: `to_pyo3()` retired alongside the legacy 4-field
+    # `engine.EncodingSpec` PyO3 wrapper class.  Callers needing to wire a
+    # spec into the Rust `SelfPlayRunner` should use
+    # `engine.RegistrySpec.from_registry(name)` (registry-form spec routed
+    # via the runner's `encoding_spec=` kwarg).  WireFormatSpec retains its
+    # 4-field scalars surface for checkpoint metadata serialisation and
+    # config-vs-checkpoint cross-checks.
 
 
 # Registry name → wire-format scalars (§176 P3).

@@ -62,10 +62,13 @@ class RunnerStats:
     cluster_value_std_mean: float
     cluster_policy_disagreement_mean: float
     cluster_variance_sample_count: int
-    # ``runner_encoding`` mirrors ``SelfPlayRunner.encoding`` — the legacy
-    # PyEncodingSpec (or ``None`` when no encoding kwarg was passed). Tests
-    # cross-check ``cluster_window_size`` / ``cluster_threshold`` /
-    # ``legal_move_radius`` on this object.
+    # §P3.2: ``runner_encoding`` retired alongside the legacy 4-field
+    # PyEncodingSpec PyO3 class.  Field kept as a vestigial ``None``-valued
+    # slot to avoid breaking external callers that construct ``RunnerStats``
+    # by kwarg.  Tests that previously cross-checked ``cluster_window_size``
+    # / ``cluster_threshold`` / ``legal_move_radius`` on this object now
+    # cross-check ``pool.encoding_spec`` (registry-form spec, threaded
+    # through to the Rust runner via ``encoding_spec=``).
     runner_encoding: Any = None
 
 
@@ -89,12 +92,13 @@ class ResolvedPoolEncoding:
       - ``wire_format_spec`` — ``hexo_rl.encoding.compat.WireFormatSpec``
                                (§176 P3 — replaces the retired legacy
                                4-field NamedTuple); supplies the v6 /
-                               v6w25 / v8 wire constants the Rust
-                               ``PyEncodingSpec`` kwarg consumes.
-      - ``runner_encoding`` — 4-field ``PyO3EncodingSpec`` built from
-                              the wire format (or ``None`` for v8 family
-                              where cluster fields are absent).
-      - ``runner_registry_spec`` — ``PyO3EncodingSpec.from_registry(name)``.
+                               v6w25 / v8 wire constants for checkpoint
+                               metadata / cross-checks.
+      - ``runner_registry_spec`` — ``PyO3RegistrySpec.from_registry(name)``.
+                                   Wired to the Rust SelfPlayRunner via
+                                   ``encoding_spec=`` (§173 A8'); replaces
+                                   the legacy 4-field ``encoding=`` kwarg
+                                   retired in §P3.2.
       - ``board_size`` / ``trunk_size`` / ``n_kept_planes`` — scalar
                                                               dims reused
                                                               for buffer
@@ -103,8 +107,7 @@ class ResolvedPoolEncoding:
 
     registry_spec: Any  # RegistrySpec (full schema)
     wire_format_spec: WireFormatSpec  # §176 P3 — wire-format scalars
-    runner_encoding: Any  # PyO3EncodingSpec | None
-    runner_registry_spec: Any  # PyO3EncodingSpec (full schema, registry-form)
+    runner_registry_spec: Any  # PyO3RegistrySpec (full schema, registry-form)
     board_size: int
     trunk_size: int
     n_kept_planes: int
@@ -167,43 +170,32 @@ def _resolve_encoding_for_pool(
                 f"the checkpoint hparam mismatch before re-launching."
             )
 
-    # §176 P3 — wire-format scalars for the SelfPlayRunner 4-field
-    # PyEncodingSpec kwarg. The wire-format mapping (compat.WIRE_FORMAT_SPECS)
-    # routes v6 / v7full / v7 / v7e30 / v7mw to v6 wire constants
-    # (cw=19, ct=5, lmr=5, bs=19) and v6w25 to its own (cw=25, ct=8,
-    # lmr=8, bs=25). v8 is loud-failed above so no v8 wire-format lookup
-    # reaches here. This preserves byte-exact pre-§176 selfplay
-    # behaviour: the same 4-field PyEncodingSpec instance the legacy
-    # `legacy_spec.to_pyo3()` produced is built directly from the wire-
-    # format scalars.
+    # §176 P3 — wire-format scalars for board_size / cluster cross-checks.
+    # The wire-format mapping (compat.WIRE_FORMAT_SPECS) routes v6 / v7full /
+    # v7 / v7e30 / v7mw to v6 wire constants (cw=19, ct=5, lmr=5, bs=19) and
+    # v6w25 to its own (cw=25, ct=8, lmr=8, bs=25). v8 is loud-failed above
+    # so no v8 wire-format lookup reaches here.
+    #
+    # §P3.2: the legacy `wire_format_spec.to_pyo3()` 4-field PyEncodingSpec
+    # construction path is retired alongside the Rust SelfPlayRunner
+    # `encoding=` kwarg.  The Rust runner now consumes the registry-form
+    # spec exclusively via `encoding_spec=PyRegistrySpec.from_registry(name)`
+    # (see `runner_registry_spec` below); workers branch on
+    # `registry_spec.is_none()` for per-game Board construction and for the
+    # legal-move-radius jitter guard (same semantics, single source of
+    # truth).  `wire_format_spec` stays in the bundle for callers that need
+    # the legacy 4-field scalars (e.g. checkpoint metadata serialisation).
     wire_format_spec: WireFormatSpec = legacy_spec_for_registry_name(spec.name)
 
-    # §171 P3 A1 reopen / §172 A4.2 — pass the resolved EncodingSpec
-    # through to the Rust runner so per-game `Board` construction in
-    # worker_loop.rs uses `Board::with_encoding(spec)` instead of the
-    # v6-default `Board::new()`. After the multi-window + v8 guards
-    # above, only v6-family / v6w25 reach this branch — every wire-
-    # format spec for those carries non-None cluster fields, so the
-    # PyEncodingSpec construction always succeeds.
-    if (
-        wire_format_spec.cluster_window_size is not None
-        and wire_format_spec.cluster_threshold is not None
-    ):
-        runner_encoding = wire_format_spec.to_pyo3()
-    else:
-        runner_encoding = None
-
-    # §173 A8' — also pass the registry-form spec so the Rust runner
-    # stores `spec_static` (used by worker_loop for sym_tables /
-    # n_cells / kept_planes / policy_stride / agg_trunk_sz) and so
-    # `state_stride()` / `policy_stride()` drive feature_len/policy_len
-    # derivation symmetrically with the multi-window dispatch path.
+    # §173 A8' — registry-form spec drives the Rust runner. Worker_loop reads
+    # `spec_static` for sym_tables / n_cells / kept_planes / policy_stride /
+    # agg_trunk_sz and for per-game `Board::with_registry_spec(spec)` (§P3.2,
+    # replaces the deleted `Board::with_encoding(legacy_spec)` path).
     runner_registry_spec = PyO3EncodingSpec.from_registry(spec.name)
 
     return ResolvedPoolEncoding(
         registry_spec=registry_spec,
         wire_format_spec=wire_format_spec,
-        runner_encoding=runner_encoding,
         runner_registry_spec=runner_registry_spec,
         board_size=spec.board_size,
         trunk_size=spec.trunk_size,
@@ -293,12 +285,13 @@ class WorkerPool:
             )
 
         training_cfg = config.get("training", config)
-        # §176 P20 — runner_encoding (legacy 4-field PyEncodingSpec, or None
-        # when cluster fields absent) and runner_registry_spec (registry-form
-        # PyEncodingSpec) both built inside `_resolve_encoding_for_pool`.
-        # See ResolvedPoolEncoding docstring for the historical context
-        # (§171 P3 A1 reopen, §172 A4.2, §173 A8').
-        runner_encoding = _resolved.runner_encoding
+        # §P3.2 — legacy 4-field `runner_encoding` (PyEncodingSpec) flow
+        # retired alongside the Rust `SelfPlayRunner.encoding=` kwarg.
+        # Runner geometry / perception is now driven exclusively by the
+        # registry-form spec (`encoding_spec=`); worker_loop branches on
+        # `registry_spec.is_some()` for per-game `Board::with_registry_spec`
+        # construction (§P3.2).  See ResolvedPoolEncoding docstring +
+        # historical context (§171 P3 A1 reopen, §172 A4.2, §173 A8').
         runner_registry_spec = _resolved.runner_registry_spec
         self._runner = SelfPlayRunner(
             n_workers=self.n_workers,
@@ -348,7 +341,6 @@ class WorkerPool:
             # {4, 5, 6}. Default off so eval/bot/test paths and any
             # pre-§152 variant stay at the canonical radius 5.
             legal_move_radius_jitter=bool(sp.get("legal_move_radius_jitter", False)),
-            encoding=runner_encoding,
             encoding_spec=runner_registry_spec,
         )
         self._inference_server = InferenceServer(
@@ -476,7 +468,9 @@ class WorkerPool:
             cluster_variance_sample_count=int(
                 getattr(r, "cluster_variance_sample_count", 0)
             ),
-            runner_encoding=getattr(r, "encoding", None),
+            # §P3.2: legacy `r.encoding` getter retired alongside the
+            # Rust `SelfPlayRunner.encoding` field; runner_encoding stays
+            # at the field default (`None`) for vestigial-field callers.
         )
 
     def inference_stats(self) -> InferenceStats:

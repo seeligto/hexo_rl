@@ -215,11 +215,14 @@ impl SelfPlayRunner {
             // §174 — curriculum radius override.  Workers read this atomic at
             // the start of each game; `-1` means "no override".
             let radius_override = self.radius_override.clone();
-            // §171 P3 A1 reopen — Copy the EncodingSpec into each worker
-            // closure. `Option<EncodingSpec>` is `Copy` (EncodingSpec derives
-            // Copy/Clone), so each thread owns its own value with no shared
-            // state cost.
-            let encoding = self.encoding;
+            // §P3.2 — `encoding: Option<EncodingSpec>` field deleted alongside
+            // the retired PyEncodingSpec PyO3 class. `registry_spec` (already
+            // captured below as part of the geometry block) is now the only
+            // source of "non-default perception bound" — workers branch on it
+            // for per-game Board construction (`with_registry_spec` vs `new`)
+            // and for the legal-move-radius jitter guard (jitter only on the
+            // bare-defaults path, same semantics as the deleted `encoding`
+            // sentinel).
             // §173 A5a (H2-α, H3-α): per-spec geometry captured once before
             // the thread spawn so workers don't re-derive on every hot iteration.
             // `n_cells` = trunk_size² (cluster window cells per view); used to
@@ -260,6 +263,12 @@ impl SelfPlayRunner {
                 Some(s) => s.has_pass_slot,
                 None => true, // v6 default
             };
+            // §P3.2: capture the `&'static`-backed registry_spec by value into
+            // the worker closure. `Option<&'static RegistrySpec>` is `Copy`,
+            // so each thread owns its own value with no shared-state cost.
+            // Used at per-game Board construction + jitter guard inside the
+            // hot loop (replaces the deleted `encoding` field).
+            let registry_spec_for_worker = self.registry_spec;
             let sym_tables = sym_tables_arc.clone();
             let results_queue = self.results.clone();
             let positions_dropped = self.positions_dropped.clone();
@@ -291,13 +300,17 @@ impl SelfPlayRunner {
                 #[cfg(feature = "debug_prior_trace")]
                 let mut dbg_game_idx: u32 = 0;
 
+                // §P3.2: the closure already captured `registry_spec_for_worker`
+                // (Copy, `&'static`-backed). Alias for in-loop readability.
+                let worker_registry_spec = registry_spec_for_worker;
                 while running.load(Ordering::SeqCst) {
-                    // §171 P3 A1 reopen — honor the runner's EncodingSpec so
-                    // v6w25 workers actually perceive a 25×25 cluster window
-                    // (threshold=8, radius=8). `None` keeps byte-exact pre-§171
-                    // v6 defaults (window=19, threshold=5, radius=5).
-                    let mut board = match encoding.as_ref() {
-                        Some(spec) => Board::with_encoding(spec),
+                    // §P3.2 — bind the registry-resolved spec at per-game
+                    // Board construction. v6w25/v7full/etc. carry their own
+                    // perception (cluster window, threshold, legal-move
+                    // radius). `None` keeps byte-exact pre-§171 v6 defaults
+                    // (`Board::new()` ⇒ window=19, threshold=5, radius=5).
+                    let mut board = match worker_registry_spec {
+                        Some(spec) => Board::with_registry_spec(spec),
                         None       => Board::new(),
                     };
                     let mut records_vec = Vec::new();
@@ -313,12 +326,14 @@ impl SelfPlayRunner {
                     }
 
                     // Phase B' v8 §152 Q2: per-game radius jitter ∈ {4, 5, 6}.
-                    // §171 P3 A1 reopen — guard with `encoding.is_none()` so a v6w25 (or
-                    // any future v6-family encoding) Board::with_encoding(spec) radius is
-                    // not overwritten by the v6-shaped jitter range. Jitter remains active
-                    // for the bare-defaults v6 path.
+                    // §P3.2 — guard with `worker_registry_spec.is_none()` so a
+                    // v6w25 (or any future registry-bound encoding) Board's
+                    // legal_move_radius is not overwritten by the v6-shaped
+                    // jitter range. Same semantics as the deleted `encoding`
+                    // field's `is_none()` guard. Jitter remains active for the
+                    // bare-defaults v6 path.
                     // §174: jitter is skipped when curriculum override is active.
-                    if legal_move_radius_jitter && encoding.is_none() && ro < 0 {
+                    if legal_move_radius_jitter && worker_registry_spec.is_none() && ro < 0 {
                         const JITTER_RADII: [i32; 3] = [4, 5, 6];
                         let r = *JITTER_RADII.choose(&mut rng).unwrap();
                         board.set_legal_move_radius(r);

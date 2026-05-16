@@ -217,15 +217,17 @@ def test_pool_does_not_warn_when_encoding_wired(caplog):
         "the A1 reopen wiring is broken. See pool.py + game_runner/mod.rs."
     )
 
-    # §176 P9 — runner encoding snapshot exposed via typed accessor.
-    _stats = pool.runner_stats()
-    assert _stats.runner_encoding is not None, (
-        "WorkerPool wired a v6w25 spec but runner.encoding is None — "
-        "the pool→runner kwarg passthrough regressed."
-    )
-    assert _stats.runner_encoding.cluster_window_size == 25
-    assert _stats.runner_encoding.cluster_threshold == 8
-    assert _stats.runner_encoding.legal_move_radius == 8
+    # §P3.2 — legacy `_stats.runner_encoding` (PyEncodingSpec) retired
+    # alongside the Rust `SelfPlayRunner.encoding=` kwarg.  Cross-check the
+    # v6w25 perception via the pool-side registry spec (canonical surface)
+    # and the inference-server spec (must be the same RegistrySpec object).
+    spec = pool.encoding_spec
+    assert spec.name == "v6w25"
+    assert spec.cluster_window_size == 25
+    assert spec.cluster_threshold == 8
+    assert spec.legal_move_radius == 8
+    # Inference server inherits the same RegistrySpec (§176 P9).
+    assert pool.inference_stats().encoding_spec is spec
     del pool
 
 

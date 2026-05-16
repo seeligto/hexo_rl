@@ -26,7 +26,6 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::board::TOTAL_CELLS;
-use crate::encoding::EncodingSpec;
 use crate::inference_bridge::InferenceBatcher;
 // §173 A5a: STATE_STRIDE import removed — collect_data now uses batcher.feature_len() (H6-α).
 // use crate::replay_buffer::sym_tables::STATE_STRIDE;
@@ -92,13 +91,6 @@ pub struct SelfPlayRunner {
     /// = 5`).  Used to break the radius-5 stride-5 fixed point identified in
     /// the §152 instrumented diagnosis.
     pub(crate) legal_move_radius_jitter: bool,
-    /// §171 P3 A1 reopen — encoding spec routed to per-game `Board` construction
-    /// in `worker_loop`. `None` (default) preserves byte-exact pre-§171 v6
-    /// behaviour (`Board::new()` ⇒ window=19, threshold=5, radius=5). `Some(spec)`
-    /// constructs each per-game board via `Board::with_encoding(&spec)` so v6w25
-    /// workers actually perceive a 25×25 cluster window with threshold=8 and
-    /// legal-move radius=8. Cross-encoding silent-corruption guard.
-    pub(crate) encoding: Option<EncodingSpec>,
     /// §173 A5a — full registry record for the active encoding; `None` for
     /// legacy callers that don't provide `encoding_spec`. Used by worker_loop
     /// to call `sym_tables_for(spec)` (H1-α) and to derive per-spec geometry
@@ -169,7 +161,7 @@ pub struct SelfPlayRunner {
 #[pymethods]
 impl SelfPlayRunner {
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = None, policy_len = None, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000, full_search_prob = 0.0, n_sims_quick = 0, n_sims_full = 0, random_opening_plies = 0, selfplay_rotation_enabled = false, legal_move_radius_jitter = false, encoding = None, encoding_spec = None, radius_override = None))]
+    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = None, policy_len = None, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000, full_search_prob = 0.0, n_sims_quick = 0, n_sims_full = 0, random_opening_plies = 0, selfplay_rotation_enabled = false, legal_move_radius_jitter = false, encoding_spec = None, radius_override = None))]
     pub fn new(
         n_workers: usize,
         max_moves_per_game: usize,
@@ -206,7 +198,6 @@ impl SelfPlayRunner {
         random_opening_plies: u32,
         selfplay_rotation_enabled: bool,
         legal_move_radius_jitter: bool,
-        encoding: Option<&crate::PyEncodingSpec>,
         encoding_spec: Option<crate::PyRegistrySpec>,
         radius_override: Option<i32>,
     ) -> PyResult<Self> {
@@ -251,13 +242,6 @@ impl SelfPlayRunner {
                 n_sims_quick, n_sims_full,
             )));
         }
-        // §171 P3 A1 reopen — pull the underlying RustEncodingSpec out of the
-        // PyO3 wrapper at the boundary so worker threads see a Copy value
-        // (no Python GIL needed to read the spec inside the Rust hot path).
-        let encoding = encoding.map(|e| e.to_inner());
-        if let Some(spec) = encoding.as_ref() {
-            spec.validate().map_err(PyValueError::new_err)?;
-        }
         Ok(Self {
             // §172 A10 T8b: pass already-resolved widths through to the
             // batcher (its pyo3 sig now also takes Option<usize>; the runner
@@ -296,7 +280,6 @@ impl SelfPlayRunner {
             random_opening_plies,
             selfplay_rotation_enabled,
             legal_move_radius_jitter,
-            encoding,
             registry_spec: spec_static,
             radius_override: Arc::new(AtomicI32::new(radius_override.unwrap_or(-1))),
             running: Arc::new(AtomicBool::new(false)),
@@ -551,17 +534,6 @@ impl SelfPlayRunner {
         self.batcher.current_model_version()
     }
 
-    /// §171 P3 A1 reopen — Python-visible read of the runner's `EncodingSpec`.
-    /// `None` when no spec was passed at construction (callers asking for the
-    /// v6 default `Board::new()` path); `Some(EncodingSpec)` when an explicit
-    /// spec was wired through (e.g. v6w25). Used by the e2e Python tests to
-    /// confirm the Pool-side wiring reaches the runner without poking
-    /// internals across the FFI.
-    #[getter]
-    pub fn encoding(&self) -> Option<crate::PyEncodingSpec> {
-        self.encoding.map(crate::PyEncodingSpec::from_inner)
-    }
-
     /// §174 — update the per-game legal-move radius override live.
     /// `None` clears the override (use encoding default).  Workers read this
     /// atomic at the start of each game.
@@ -600,7 +572,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             4, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None,
         ).unwrap();
         runner.start();
 
@@ -722,7 +694,7 @@ mod tests {
         let runner = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None,
         ).unwrap();
 
         // Simulate three per-search stat pushes matching what the worker
@@ -758,156 +730,30 @@ mod tests {
         let empty = SelfPlayRunner::new(
             1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
+            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None,
         ).unwrap();
         assert_eq!(empty.mcts_mean_depth(), 0.0);
         assert_eq!(empty.mcts_mean_root_concentration(), 0.0);
     }
 
-    // ── §171 P3 A1 reopen: EncodingSpec → SelfPlayRunner → worker_loop ──
+    // ── §P3.2: removed 4 PyEncodingSpec-coupled tests ─────────────────────
+    // Removed test fns:
+    //   - `test_worker_loop_honors_v6w25_encoding`
+    //   - `test_worker_loop_default_is_v6`
+    //   - `test_worker_loop_spawns_with_v6w25_encoding`
+    //   - `test_worker_loop_jitter_does_not_override_v6w25_radius`
     //
-    // These guard the load-bearing wiring that lets v6w25 sustained self-play
-    // actually run on a v6w25 perception (cluster_window_size=25, threshold=8,
-    // legal_move_radius=8) instead of silently routing the v6w25 model through
-    // a v6 (window=19, threshold=5) Board::new() — the "silent statistical
-    // corruption" failure mode the original blocker doc described.
-
-    /// `Some(EncodingSpec::V6W25)` round-trips end-to-end into the worker
-    /// thread. Asserts the field is set on the runner *and* that calling
-    /// `Board::with_encoding(&spec)` (the exact path worker_loop.rs takes
-    /// per game) produces a Board with v6w25 perception parameters.
-    #[test]
-    fn test_worker_loop_honors_v6w25_encoding() {
-        let spec = crate::encoding::EncodingSpec::V6W25;
-        let py_spec = crate::PyEncodingSpec::from_inner(spec);
-        let runner = SelfPlayRunner::new(
-            1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
-            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, Some(&py_spec), None, None,
-        ).unwrap();
-
-        let stored = runner.encoding.expect("v6w25 spec must round-trip");
-        assert_eq!(stored, spec);
-        assert_eq!(stored.cluster_window_size, 25);
-        assert_eq!(stored.cluster_threshold, 8);
-        assert_eq!(stored.legal_move_radius, 8);
-
-        // Python-visible getter mirrors the field — the Pool-side e2e test
-        // reads `runner.encoding` over the FFI; assert here that the Rust
-        // half emits the same spec values via the `#[getter]`.
-        let py_view = runner.encoding().expect("getter must mirror field");
-        assert_eq!(py_view.cluster_window_size(), 25);
-        assert_eq!(py_view.cluster_threshold(), 8);
-        assert_eq!(py_view.legal_move_radius(), 8);
-
-        // Behavioural guard — `Board::with_encoding(&spec)` (the constructor
-        // worker_loop.rs:225 dispatches to under `Some(_)`) gives a Board
-        // whose perception parameters are v6w25, not v6 defaults.
-        let board = crate::board::Board::with_encoding(&stored);
-        assert_eq!(board.cluster_window_size(), 25);
-        assert_eq!(board.cluster_threshold(), 8);
-        assert_eq!(board.legal_move_radius(), 8);
-    }
-
-    /// `None` (default) preserves byte-exact pre-§171 v6 behavior — every
-    /// worker constructs `Board::new()`, which is window=19, threshold=5,
-    /// radius=5. Regression guard so a future refactor cannot silently drift
-    /// the default when no encoding kwarg is passed.
-    #[test]
-    fn test_worker_loop_default_is_v6() {
-        let runner = SelfPlayRunner::new(
-            1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
-            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
-        ).unwrap();
-
-        assert!(runner.encoding.is_none(), "default must be None");
-        assert!(runner.encoding().is_none(), "Python-visible getter must mirror field");
-
-        // Behavioural guard — no spec ⇒ worker_loop falls through to
-        // `Board::new()` whose v6 defaults are documented at
-        // engine/src/board/state.rs.
-        let board = crate::board::Board::new();
-        assert_eq!(board.cluster_window_size(), 19);
-        assert_eq!(board.cluster_threshold(), 5);
-        assert_eq!(board.legal_move_radius(), 5);
-    }
-
-    /// End-to-end live-spawn check: with `max_moves_per_game=0` workers spin
-    /// the per-game loop (constructing a Board each iteration) and immediately
-    /// hit the `legal_move_count() == 0`-style break, recording a draw. Confirms
-    /// the encoding plumbing survives the spawn closure (closure captures
-    /// `encoding` by `Copy`, no borrow surprises) and that the runner finishes
-    /// games without panic. Pairs with the Python e2e behavioral test that
-    /// observes downstream effects on actual game data.
-    #[test]
-    fn test_worker_loop_spawns_with_v6w25_encoding() {
-        let spec = crate::encoding::EncodingSpec::V6W25;
-        let py_spec = crate::PyEncodingSpec::from_inner(spec);
-        let runner = SelfPlayRunner::new(
-            2, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
-            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, Some(&py_spec), None, None,
-        ).unwrap();
-        runner.start();
-
-        // Wait for at least one drained game per worker. With max_moves=0 each
-        // iteration is essentially `Board::with_encoding(spec); record draw`,
-        // so we should accumulate fast.
-        let mut attempts = 0;
-        let mut seen = HashSet::new();
-        while seen.len() < 2 && attempts < 100 {
-            let results = runner.drain_game_results_raw();
-            for (_, _, _, worker_id, _, _, _, _) in results {
-                seen.insert(worker_id);
-            }
-            std::thread::sleep(Duration::from_millis(20));
-            attempts += 1;
-        }
-        runner.stop();
-        assert_eq!(
-            seen.len(), 2,
-            "with v6w25 encoding both workers must complete games (no panic, no deadlock)"
-        );
-    }
-
-    /// §171 P3 A1 reopen — jitter-guard regression. Without the
-    /// `encoding.is_none()` guard in worker_loop.rs, every game under
-    /// `legal_move_radius_jitter=true` would silently overwrite the v6w25
-    /// `Board::with_encoding(spec).legal_move_radius` (=8) with a v6-shaped
-    /// jitter ∈ {4, 5, 6}, training the v6w25 model on a v6 perception. This
-    /// test pairs the runner-side spec round-trip with the exact construction
-    /// sequence worker_loop.rs runs per game, then confirms the radius is
-    /// still 8 (NOT in {4, 5, 6}). Live-spawn check confirms no panic when
-    /// jitter and encoding co-exist.
-    #[test]
-    fn test_worker_loop_jitter_does_not_override_v6w25_radius() {
-        let spec = crate::encoding::EncodingSpec::V6W25;
-        let py_spec = crate::PyEncodingSpec::from_inner(spec);
-        let runner = SelfPlayRunner::new(
-            2, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
-            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            // legal_move_radius_jitter = true — the jitter range {4, 5, 6}
-            // would clobber the spec's radius=8 without the encoding guard.
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, true, Some(&py_spec), None, None,
-        ).unwrap();
-        runner.start();
-        let mut attempts = 0;
-        let mut seen = HashSet::new();
-        while seen.len() < 2 && attempts < 100 {
-            let results = runner.drain_game_results_raw();
-            for (_, _, _, worker_id, _, _, _, _) in results {
-                seen.insert(worker_id);
-            }
-            std::thread::sleep(Duration::from_millis(20));
-            attempts += 1;
-        }
-        runner.stop();
-        assert_eq!(
-            seen.len(), 2,
-            "jitter + v6w25 encoding co-existence must complete games on both workers"
-        );
-    }
+    // Coverage of the v6w25 worker_loop path is preserved by:
+    //   - `engine/tests/test_worker_loop_v6w25_smoke.rs` (registry_spec path,
+    //     `PyRegistrySpec::from_static` ctor — §173 A5a)
+    //   - `engine/tests/inv17_pyregistryspec_supersedes_pyencodingspec.rs`
+    //     (registry parity pin, INV17 Rust — §P3.1)
+    //
+    // Default-v6 byte-exactness is covered by
+    // `engine/src/board/state/core.rs::with_encoding_tests`. Jitter behaviour
+    // is now guarded by `worker_loop.rs:321` `registry_spec.is_none()` branch
+    // (the deleted `encoding` field used to alias this guard — registry_spec
+    // is the surviving sentinel for "non-default perception bound").
 
     #[test]
     fn test_dirichlet_gate_disabled_preserves_priors() {
