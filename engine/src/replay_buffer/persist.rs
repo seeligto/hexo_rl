@@ -393,17 +393,34 @@ impl ReplayBuffer {
 mod tests {
     use super::*;
     use half::f16;
+    use std::sync::atomic::AtomicU64;
 
     /// Position-0 offset within a slot — documents intent of `0 * stride` in
     /// round-trip tests (avoids `clippy::erasing_op` while preserving the
     /// "first stored position" annotation).
     const POS_0: usize = 0;
 
+    /// Per-test unique path under `temp_dir()`.
+    /// Pre-existing pattern used hardcoded filenames shared across tests; cargo
+    /// runs test binaries in parallel, so the integration test in
+    /// `engine/tests/replay_buffer_v6_roundtrip.rs` and these unit tests would
+    /// race on the same path under sufficient load (§178-class concurrency
+    /// flake observed by Wave 4 Batch C reviewer). Per-test unique paths
+    /// dispatch the race entirely. Triaged cycle 2 wave 5 pre-flight (Flake 3).
+    fn unique_test_path(stem: &str) -> std::path::PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("hexb_persist_{stem}_{pid}_{nanos}_{n}.hexb"))
+    }
+
     /// HEXB v7 round-trip — verify aux columns (ownership, winning_line, chain_planes, is_full_search) survive save/load.
     #[test]
     fn test_aux_hexb_v7_roundtrip() {
-        use std::env::temp_dir;
-
         let mut buf = ReplayBuffer::new(8, "v6");
         let slot = 0;
         let aux_stride   = buf.encoding.aux_stride();
@@ -424,7 +441,7 @@ mod tests {
         buf.head = 1;
         buf.size = 1;
 
-        let path = temp_dir().join("aux_v7_roundtrip.hexb");
+        let path = unique_test_path("aux_v7_roundtrip");
         buf.save_to_path(path.to_str().unwrap()).unwrap();
 
         let mut buf2 = ReplayBuffer::new(8, "v6");
@@ -452,15 +469,13 @@ mod tests {
     /// HEXB v7 round-trip with v6w25 encoding.
     #[test]
     fn test_hexb_v7_round_trip_v6w25() {
-        use std::env::temp_dir;
-
         let mut buf = ReplayBuffer::new(100, "v6w25");
         for i in 0..100 {
             buf.push_for_test(i as f32 / 100.0, (i % 50) as u16, i % 3 == 0);
         }
         assert_eq!(buf.size(), 100);
 
-        let path = temp_dir().join("v7_v6w25_roundtrip.hexb");
+        let path = unique_test_path("v7_v6w25_roundtrip");
         buf.save_to_path(path.to_str().unwrap()).unwrap();
 
         let mut buf2 = ReplayBuffer::new(100, "v6w25");
@@ -479,8 +494,6 @@ mod tests {
     /// Parametrize round-trip over all 7 registered encodings.
     #[test]
     fn test_hexb_v7_round_trip_all_encodings() {
-        use std::env::temp_dir;
-
         let names: Vec<&str> = crate::encoding::registry::all_specs()
             .map(|s| s.name).collect();
         for name in names {
@@ -488,7 +501,7 @@ mod tests {
             for i in 0..10 {
                 buf.push_for_test(i as f32, 10, true);
             }
-            let path = temp_dir().join(format!("v7_all_enc_{}.hexb", name));
+            let path = unique_test_path(&format!("v7_all_enc_{name}"));
             buf.save_to_path(path.to_str().unwrap()).unwrap();
 
             let mut buf2 = ReplayBuffer::new(10, name);
@@ -510,10 +523,9 @@ mod tests {
     /// verify assumed "v6" + deprecation warning.
     #[test]
     fn test_hexb_v6_backward_compat() {
-        use std::env::temp_dir;
         use std::io::Write;
 
-        let path = temp_dir().join("legacy_v6_no_encoding.hexb");
+        let path = unique_test_path("legacy_v6_no_encoding");
         {
             let mut file = std::fs::File::create(&path).unwrap();
             // v6 header: magic, version=6, n_planes=8, capacity=10, size=5
@@ -554,10 +566,9 @@ mod tests {
     /// Cross-encoding mismatch: v7 file with encoding="v6", load into v6w25 buffer → hard error.
     #[test]
     fn test_hexb_v7_encoding_mismatch_rejects() {
-        use std::env::temp_dir;
         use std::io::Write;
 
-        let path = temp_dir().join("v7_mismatch_v6_into_v6w25.hexb");
+        let path = unique_test_path("v7_mismatch_v6_into_v6w25");
         {
             let mut file = std::fs::File::create(&path).unwrap();
             // v7 header declaring encoding "v6"
@@ -591,10 +602,9 @@ mod tests {
     /// Unknown encoding in v7 header → hard error.
     #[test]
     fn test_hexb_v7_unknown_encoding_rejects() {
-        use std::env::temp_dir;
         use std::io::Write;
 
-        let path = temp_dir().join("v7_unknown_encoding.hexb");
+        let path = unique_test_path("v7_unknown_encoding");
         {
             let mut file = std::fs::File::create(&path).unwrap();
             file.write_all(&HEXB_MAGIC.to_le_bytes()).unwrap();
@@ -625,10 +635,9 @@ mod tests {
     /// v5 hard-reject unchanged.
     #[test]
     fn test_hexb_v5_hard_reject() {
-        use std::env::temp_dir;
         use std::io::Write;
 
-        let path = temp_dir().join("v5_rejected.hexb");
+        let path = unique_test_path("v5_rejected");
         {
             let mut file = std::fs::File::create(&path).unwrap();
             file.write_all(&HEXB_MAGIC.to_le_bytes()).unwrap();
@@ -645,13 +654,11 @@ mod tests {
     /// Max-length encoding name round-trips (v8_canvas_realness = 18 bytes).
     #[test]
     fn test_hexb_v7_header_max_name() {
-        use std::env::temp_dir;
-
         let mut buf = ReplayBuffer::new(10, "v8_canvas_realness");
         for i in 0..10 {
             buf.push_for_test(i as f32, 10, true);
         }
-        let path = temp_dir().join("v7_max_name.hexb");
+        let path = unique_test_path("v7_max_name");
         buf.save_to_path(path.to_str().unwrap()).unwrap();
 
         let mut buf2 = ReplayBuffer::new(10, "v8_canvas_realness");

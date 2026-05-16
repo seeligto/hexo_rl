@@ -20,6 +20,21 @@
 
 use engine::replay_buffer::ReplayBuffer;
 use std::env::temp_dir;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Per-test unique path under `temp_dir()`. See `replay_buffer/persist.rs`
+/// tests for the §178-class concurrency rationale. Triaged cycle 2 wave 5
+/// pre-flight (Flake 3).
+fn unique_test_path(stem: &str) -> std::path::PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    temp_dir().join(format!("hexb_int_{stem}_{pid}_{nanos}_{n}.hexb"))
+}
 
 #[test]
 fn hexb_v6_is_full_search_survives_roundtrip_at_different_capacity() {
@@ -44,7 +59,7 @@ fn hexb_v6_is_full_search_survives_roundtrip_at_different_capacity() {
     }
 
     // Save.
-    let path = temp_dir().join("integration_v6_ifs_roundtrip.hexb");
+    let path = unique_test_path("integration_v6_ifs_roundtrip");
     buf.save_to_path(path.to_str().unwrap()).unwrap();
 
     // Load into a fresh buffer with LARGER capacity (regression: slot mapping must be preserved).
@@ -83,7 +98,7 @@ fn hexb_v6_game_length_weight_survives_roundtrip() {
         buf.push_for_test(-1.0, 40, false);
     }
 
-    let path = temp_dir().join("integration_v6_weight_roundtrip.hexb");
+    let path = unique_test_path("integration_v6_weight_roundtrip");
     buf.save_to_path(path.to_str().unwrap()).unwrap();
 
     let mut buf2 = ReplayBuffer::new(20, "v6");

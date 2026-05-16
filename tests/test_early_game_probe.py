@@ -142,6 +142,17 @@ def test_bootstrap_entropy_range() -> None:
         _w = state_dict.get("trunk.input_conv.weight")
         if _w is not None and _w.dim() == 4 and _w.shape[1] == 18:
             pytest.skip("bootstrap_model.pt is a pre-P3 18-plane checkpoint; skipping until 8-plane bootstrap is trained")
+        # Entropy band [2.5, 4.5] nats was calibrated against v6 (8-plane,
+        # 19×19, policy=362). Non-v6 encodings (e.g. v6w25 K-cluster with
+        # policy=626) load into a different HexTacToeNet geometry; loading
+        # mismatched weights here raises before the probe even runs. Skip
+        # cleanly instead. Triaged cycle 2 wave 5 pre-flight (Flake 2).
+        _pfc = state_dict.get("policy_fc.weight")
+        if _pfc is not None and _pfc.dim() == 2 and _pfc.shape[0] != 362:
+            pytest.skip(
+                f"bootstrap_model.pt has non-v6 policy head (shape {tuple(_pfc.shape)}); "
+                "entropy band 2.5-4.5 nats is v6-calibrated only"
+            )
     from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
     state_dict = normalize_model_state_dict_keys(state_dict)
     net = HexTacToeNet(board_size=19, filters=128, res_blocks=12)

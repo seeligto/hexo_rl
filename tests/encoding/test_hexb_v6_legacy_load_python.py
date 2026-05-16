@@ -72,7 +72,11 @@ def test_hexb_v6_legacy_load_python() -> None:
         assert buf.size == n_rows
 
         # Verify outcomes.
-        out = buf.sample_batch(n_rows * 4, augment=False)
+        # Sample n_rows * 40 = 200 with replacement: per-run miss rate for any
+        # one outcome = 5 * (4/5)^200 ≈ 2e-19. Original n_rows * 4 = 20 yielded
+        # ~5.76% miss rate (birthday-paradox math), a known pre-existing flake
+        # carried from cycle 1 baseline. Triaged in cycle 2 wave 5 pre-flight.
+        out = buf.sample_batch(n_rows * 40, augment=False)
         o_all = out[3]
         for i in range(n_rows):
             assert any(abs(float(o) - float(i)) < 1e-6 for o in o_all), (
