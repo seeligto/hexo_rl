@@ -1,20 +1,25 @@
-"""F1 guard — pretrain Rust-kernel aug parity (apply_symmetry vs ReplayBuffer).
+"""F1 guard — pretrain Rust-kernel aug parity (apply_symmetries_batch vs ReplayBuffer).
 
 After the Q13 chain-plane landing (§92), pretrain no longer uses a Python
-`_apply_hex_sym` scatter — it routes through `engine.apply_symmetry` /
-`engine.apply_symmetries_batch`, which share the exact Rust scatter kernel
-used inside `ReplayBuffer.sample_batch`. This test is the byte-exact guard
-against anyone re-introducing a divergent Python augmentation path.
+`_apply_hex_sym` scatter — it routes through `engine.apply_symmetries_batch`,
+which shares the exact Rust scatter kernel used inside
+`ReplayBuffer.sample_batch`. This test is the byte-exact guard against
+anyone re-introducing a divergent Python augmentation path.
+
+Post-`00b7d2b` the single-state `engine.apply_symmetry` PyO3 free function
+is retired; only the batch form `apply_symmetries_batch` remains. Single-
+state calls are emulated via batch-of-1 + index-0 — the inner kernel
+(`apply_symmetry_state`) is the same.
 
 Strategy:
   1. Build a known (18, 19, 19) state tensor via `to_tensor()` for a few
      hand-picked positions.
   2. For each of the 12 hex symmetries:
-       - Compute `engine.apply_symmetry(state, sym_idx)`.
+       - Compute `apply_symmetries_batch(state[None], [sym_idx])[0]`.
        - Compute the reference path: push into a fresh ReplayBuffer with a
          marker game_id, sample-loop many times with `augment=True`, and
          collect every unique output; the one whose raw stone scatter
-         matches `sym_idx` must equal the `apply_symmetry` output byte-exact.
+         matches `sym_idx` must equal the batch-of-1 output byte-exact.
 """
 from __future__ import annotations
 
@@ -83,11 +88,13 @@ def _collect_buffer_unique_outputs(state8: np.ndarray, n_draws: int = 4000) -> s
 
 
 def _binding_unique_outputs(state8: np.ndarray) -> dict[bytes, int]:
-    """Compute {f16 bytes → sym_idx} for all 12 syms via `engine.apply_symmetry`
-    on the 8-plane state. Collapses duplicates for symmetric positions."""
+    """Compute {f16 bytes → sym_idx} for all 12 syms via
+    `engine.apply_symmetries_batch` (batch-of-1) on the 8-plane state.
+    Collapses duplicates for symmetric positions."""
     out: dict[bytes, int] = {}
+    state_f32 = state8.astype(np.float32)
     for sym_idx in range(12):
-        result = engine.apply_symmetry(state8.astype(np.float32), sym_idx).astype(np.float16)
+        result = engine.apply_symmetries_batch(state_f32[None], [sym_idx])[0].astype(np.float16)
         key = result.tobytes()
         out.setdefault(key, sym_idx)
     return out
@@ -108,7 +115,7 @@ def test_apply_symmetry_matches_replay_buffer_path(name, moves):
     unknown = buffer_keys - set(binding_keys.keys())
     assert not unknown, (
         f"[{name}] {len(unknown)} buffer-sampled outputs did not match any "
-        f"engine.apply_symmetry output across 12 syms — kernel divergence."
+        f"apply_symmetries_batch output across 12 syms — kernel divergence."
     )
     # The buffer should exhaust every unique binding output class in 4000 draws.
     missing = set(binding_keys.keys()) - buffer_keys

@@ -5,13 +5,21 @@ Post-§97 the bootstrap corpus NPZ is 18-plane (chain planes removed from input)
 ``pre_chain = np.zeros((T, 6, 19, 19))`` — so corpus rows carried an all-zero
 chain target, pulling the chain head toward zero on the pretrain fraction of
 every mixed batch. The §102.a fix computes chain planes from the stored
-stone planes at NPZ load, byte-exact with the Rust self-play path.
+stone planes at NPZ load, byte-exact with the canonical Python kernel
+``_compute_chain_planes`` (same function the production training pipeline
+uses in ``batch_assembly.py`` / ``bootstrap/*``).
 
 This module pins:
-    1. Parity — corpus-loaded chain planes equal Rust ``engine.compute_chain_planes``
-       on the same stones (to float16 precision).
+    1. Loader correctness — corpus-loaded chain planes match the canonical
+       Python kernel applied to the same stones (byte-exact at float16).
     2. Training step smoke — a mixed corpus+self-play batch produces a finite,
        non-zero chain loss and the corpus-row targets are not pinned to zero.
+
+Post-`00b7d2b` the Rust PyO3 surface `engine.compute_chain_planes` is gone;
+production chain-plane computation lives in Python (`_compute_chain_planes`)
+on the corpus loader side and in Rust (`encode_chain_planes`, in-crate) on
+the self-play worker side. The Rust kernel has its own in-crate parity
+tests at `engine/src/board/state/encode.rs`.
 """
 from __future__ import annotations
 
@@ -22,8 +30,7 @@ import numpy as np
 import pytest
 import torch
 
-import engine
-from hexo_rl.env.game_state import _compute_chain_planes
+from hexo_rl.env.game_state import _CHAIN_CAP, _compute_chain_planes
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.training.batch_assembly import load_pretrained_buffer
@@ -107,10 +114,22 @@ def _load(path: Path):
     )
 
 
-# ── Test 1 — Parity with Rust engine.compute_chain_planes ─────────────────────
+# ── Test 1 — Loader matches canonical Python kernel ───────────────────────────
 
-def test_corpus_chain_planes_match_rust_byte_exact(tmp_path: Path) -> None:
-    """Corpus-loaded chain planes match ``engine.compute_chain_planes`` at f16."""
+def _reference_chain(cur: np.ndarray, opp: np.ndarray) -> np.ndarray:
+    """Canonical Python chain-plane reference.
+
+    Matches the normalisation used by the corpus loader in
+    `batch_assembly.load_pretrained_buffer` / `_compute_chain_planes`-callers:
+    int8 planes from `_compute_chain_planes` cast to float32 and divided by
+    `_CHAIN_CAP` (6.0), then truncated to float16 for buffer storage.
+    """
+    planes = _compute_chain_planes(cur, opp)  # int8 (6, 19, 19)
+    return (planes.astype(np.float32) / float(_CHAIN_CAP)).astype(np.float16)
+
+
+def test_corpus_chain_planes_match_python_kernel(tmp_path: Path) -> None:
+    """Corpus-loaded chain planes match the canonical Python kernel at f16."""
     states = np.stack([fn() for _, fn in POSITIONS], axis=0)  # (T, 18, 19, 19)
     corpus_path = tmp_path / "corpus.npz"
     _write_corpus(corpus_path, states)
@@ -129,7 +148,7 @@ def test_corpus_chain_planes_match_rust_byte_exact(tmp_path: Path) -> None:
     for i in range(len(POSITIONS)):
         cur = states[i, 0].astype(np.float32)
         opp = states[i, 8].astype(np.float32)
-        expected_chains[i] = engine.compute_chain_planes(cur, opp).astype(np.float16)
+        expected_chains[i] = _reference_chain(cur, opp)
         state_keys.append(cur.tobytes() + opp.tobytes())
 
     s_s, c_s, *_ = buf.sample_batch(len(POSITIONS), False)
@@ -149,7 +168,7 @@ def test_corpus_chain_planes_match_rust_byte_exact(tmp_path: Path) -> None:
             any_row_nonzero = True
         assert np.array_equal(actual, expected_chains[src_idx]), (
             f"row {i} (source position #{src_idx}): sampled chain differs from "
-            f"Rust engine.compute_chain_planes output"
+            f"canonical Python kernel output"
         )
     assert any_row_nonzero, (
         "every sampled chain plane was zero — §102.a fix regressed or the "
@@ -214,12 +233,16 @@ def test_mixed_batch_chain_loss_uses_nonzero_corpus_targets(tmp_path: Path) -> N
         "are not being computed at NPZ load"
     )
 
-    # Build a self-play chain via the same Rust entry used by the worker loop.
+    # Build self-play chain targets via the canonical Python kernel — same
+    # function the corpus loader uses internally. The Rust self-play worker
+    # writes chain planes via the in-crate `encode_chain_planes` kernel
+    # (covered by `engine/src/board/state/encode.rs` tests); we mirror the
+    # Python normalisation here so the loss path has comparable targets.
     self_chain = np.empty((4, 6, BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
     for i in range(4):
         cur = self_states[i, 0].astype(np.float32)
         opp = self_states[i, 8].astype(np.float32)
-        self_chain[i] = engine.compute_chain_planes(cur, opp).astype(np.float16)
+        self_chain[i] = _reference_chain(cur, opp)
 
     # Concatenate into a single 8-row batch.
     states       = np.concatenate([corpus_states, self_states], axis=0)

@@ -243,10 +243,58 @@ class InferenceServer(threading.Thread):
         )
 
     def submit_and_wait(self, state: np.ndarray) -> tuple[np.ndarray, float]:
-        """Compatibility helper for single direct requests via Rust queue."""
-        arr = np.asarray(state, dtype=np.float32).reshape(-1)
-        policy, value = self._batcher.submit_request_and_wait(arr.tolist())
-        return np.asarray(policy, dtype=np.float32), float(value)
+        """Synchronous single-state inference for test / diagnostic use.
+
+        Runs the model forward in-process under ``_weights_lock``, mirroring
+        the dispatcher loop's hot path (trace/compile model selection, prep,
+        autocast). Bypasses the Rust ``InferenceBatcher`` queue — production
+        self-play goes through the dispatcher thread + Rust workers and
+        does not call this method.
+
+        Post-`00b7d2b` the Rust-side single-request PyO3 surface
+        ``submit_request_and_wait`` is retired; this method is the
+        coordinated Python-side replacement (see `00b7d2b` commit body
+        and `audit/rust-engine/wave_3/pre_3d/H1_recon.md` Group C).
+
+        Raises:
+            ValueError: prefixed with ``"Model inference failed: "`` if the
+                wrapped model forward raises. Translates the underlying
+                ``RuntimeError`` so callers can wait on ``threading.Event``
+                without deadlocking on a thread-bound exception (the dispatcher
+                path carries the same contract through
+                ``submit_inference_failure``).
+        """
+        # Match dispatcher's batch prep contract (explicit C-contiguous f32).
+        # Patching ``np.ascontiguousarray`` in this module from the test suite
+        # triggers ValueError here, mirroring the dispatcher's batch-prep
+        # error path and unblocking the caller (no Rust queue waiter exists
+        # under the direct path).
+        arr = np.ascontiguousarray(state, dtype=np.float32).reshape(self._shape)
+        tensor = torch.from_numpy(arr).unsqueeze(0).to(self.device)
+        # Choose the traced graph when available — shares parameter storage
+        # with ``self.model`` so weight swaps via ``load_state_dict_safe``
+        # propagate without re-tracing (same path the dispatcher uses).
+        fwd_model = self._traced_model if self._traced_model is not None else self.model
+        try:
+            with self._weights_lock:
+                with torch.inference_mode():
+                    with torch.autocast(
+                        device_type=self.device.type,
+                        dtype=self._amp_dtype,
+                        enabled=self.device.type == "cuda",
+                    ):
+                        log_policy, value, _v_logit = fwd_model(tensor)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"Model inference failed: {exc}") from exc
+
+        probs = log_policy.float().exp()
+        probs = probs / probs.sum(dim=-1, keepdim=True)
+        policy_np = probs.squeeze(0).cpu().numpy().astype(np.float32)
+        value_f = float(value.squeeze().cpu().item())
+
+        self._total_requests += 1
+        self._forward_count += 1
+        return policy_np, value_f
 
     def infer(self, state: np.ndarray) -> tuple[np.ndarray, float]:
         return self.submit_and_wait(state)

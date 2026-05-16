@@ -2,9 +2,14 @@
 
 Guards three invariants:
   I1. sym_idx=0 (identity) produces byte-identical output to un-augmented.
-  I2. A known rotation (sym_idx=1) matches engine.apply_symmetry on the state,
-      with the policy permuted by the corresponding LUT.
+  I2. A known rotation (sym_idx=1) matches engine.apply_symmetries_batch
+      (batch-of-1) on the state, with the policy permuted by the
+      corresponding LUT.
   I3. augment=False is a strict no-op (same array objects returned).
+
+Post-`00b7d2b` the single-state `engine.apply_symmetry` PyO3 surface is
+retired; only the batch form remains. Single-state references are emulated
+via batch-of-1 + index-0 (same inner Rust kernel).
 """
 from __future__ import annotations
 
@@ -116,11 +121,13 @@ def test_rotation_matches_apply_symmetry():
     lut = scatters[sym_idx]
 
     for i in range(len(s)):
-        # State: compare via engine.apply_symmetry reference
-        ref_state = engine.apply_symmetry(s[i].astype(np.float32), sym_idx).astype(np.float16)
+        # State: compare via engine.apply_symmetries_batch (batch-of-1) reference.
+        ref_state = engine.apply_symmetries_batch(
+            s[i:i+1].astype(np.float32), [sym_idx],
+        )[0].astype(np.float16)
         np.testing.assert_array_equal(
             s_aug[i], ref_state,
-            err_msg=f"row {i}: augmented state does not match engine.apply_symmetry",
+            err_msg=f"row {i}: augmented state does not match apply_symmetries_batch",
         )
 
         # Policy: LUT scatter
