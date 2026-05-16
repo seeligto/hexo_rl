@@ -33,16 +33,11 @@ fn build_tree_visit_one_child(board: Board, child_value: f32) -> (MCTSTree, usiz
     // find the visited child via get_top_visits
     let top = tree.get_top_visits(1);
     assert_eq!(top.len(), 1, "exactly one child should have visits");
-    let (coord_str, visits, _prior, _q) = &top[0];
+    let ((q, r), visits, _prior, _q) = &top[0];
     assert_eq!(*visits, 1, "visited child should have n_visits=1");
 
-    // parse "(q,r)" and compute flat index
-    let inner = coord_str
-        .trim_matches(|c| c == '(' || c == ')')
-        .split(',')
-        .map(|x| x.trim().parse::<i32>().unwrap())
-        .collect::<Vec<_>>();
-    let flat = tree.root_board.window_flat_idx(inner[0], inner[1]);
+    // §P34: coord is now a `(i32, i32)` axial tuple — no string parsing.
+    let flat = tree.root_board.window_flat_idx(*q, *r);
     assert!(flat < n_actions, "visited coord must be in window");
 
     (tree, flat)

@@ -279,8 +279,13 @@ impl MCTSTree {
     }
 
     /// Top-N children of root by visit count.
-    /// Returns Vec<(coord_string, visits, prior, q_value)> sorted by visits descending.
-    pub fn get_top_visits(&self, n: usize) -> Vec<(String, u32, f32, f32)> {
+    /// Returns Vec<((q, r), visits, prior, q_value)> sorted by visits descending.
+    ///
+    /// §P34 — returns raw `(i32, i32)` axial coords instead of pre-formatted
+    /// `"(q,r)"` strings. Drops the per-child `format!(...)` heap String
+    /// allocation; Python callers format with f-strings at the call site
+    /// (`hexo_rl/monitoring/analyze_api.py`, `hexo_rl/viewer/engine.py`).
+    pub fn get_top_visits(&self, n: usize) -> Vec<((i32, i32), u32, f32, f32)> {
         let root = &self.pool[0];
         if !root.is_expanded() {
             return Vec::new();
@@ -301,7 +306,7 @@ impl MCTSTree {
             let q = (val >> 16) as i32 - 32768;
             let r = (val & 0xFFFF) as i32 - 32768;
             let q_value = if visits > 0 { q_sign * node.w_value / visits as f32 } else { 0.0 };
-            (format!("({},{})", q, r), visits, node.prior, q_value)
+            ((q, r), visits, node.prior, q_value)
         }).collect()
     }
 }

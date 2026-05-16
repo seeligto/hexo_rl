@@ -288,16 +288,19 @@ def test_zobrist_identical_positions_same_hash():
 # ── to_tensor ─────────────────────────────────────────────────────────────────
 
 def test_tensor_shape_and_dtype():
+    # §P76: Board.to_tensor returns a 1-D float32 ndarray via zero-copy
+    # IntoPyArray; callers chain .reshape(...) directly.
     b = Board()
     t = b.to_tensor()
-    assert isinstance(t, list)
-    assert len(t) == 18 * 19 * 19
+    assert isinstance(t, np.ndarray)
+    assert t.dtype == np.float32
+    assert t.size == 18 * 19 * 19
 
 
 def test_tensor_as_numpy():
     b = Board()
     b.apply_move(0, 0)  # P1 at origin; turn passes to P2
-    arr = np.array(b.to_tensor(), dtype=np.float32).reshape(18, 19, 19)
+    arr = b.to_tensor().reshape(18, 19, 19)
     # Current player is P2 (-1).  Plane 0 = current player's stones = P2 = none yet.
     # Plane 8 = opponent's stones = P1's stones = origin (q=0, r=0).
     assert arr.shape == (18, 19, 19)
@@ -314,7 +317,7 @@ def test_tensor_current_player_plane():
     # Turn is P2 now. Place P2 stone.
     b.apply_move(-1, -1)  # P2 at (-1,-1)
     b.apply_move(-2, -2)  # P2's 2nd move — turn passes to P1
-    arr = np.array(b.to_tensor(), dtype=np.float32).reshape(18, 19, 19)
+    arr = b.to_tensor().reshape(18, 19, 19)
     flat = arr.reshape(18, -1)
     # Current player is P1 (1). Plane 0 = P1's stones = (1,1).
     p1_idx = (1 + 9) * 19 + (1 + 9)   # idx(1,1)

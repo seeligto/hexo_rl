@@ -343,10 +343,9 @@ def _collect_mcts_results(tree: MCTSTree) -> Dict[str, Any]:
     """Extract visit distribution from a searched tree."""
     top = tree.get_top_visits(20)
     visits = []
-    for coord_str, v, prior, q_val in top:
-        # Parse "(q,r)" → ints
-        parts = coord_str.strip("()").split(",")
-        q, r = int(parts[0]), int(parts[1])
+    # §P34: tree.get_top_visits returns ((q, r), visits, prior, q_value) tuples;
+    # no string parsing needed.
+    for (q, r), v, prior, q_val in top:
         visits.append({
             "q": q, "r": r,
             "visits": int(v),

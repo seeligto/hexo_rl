@@ -135,9 +135,17 @@ class ViewerEngine:
         value_est = None
         try:
             tree = self._model_bot._worker.tree
+            # §P34: tree.get_top_visits returns ((q, r), visits, prior, q_value);
+            # format the coord as a string at the call site (drops the per-child
+            # `format!(...)` heap String alloc on the Rust side).
             top_visits = [
-                {"coord": c, "visits": int(v), "prior": float(p), "q_value": float(q)}
-                for c, v, p, q in tree.get_top_visits(15)
+                {
+                    "coord": f"({coord[0]},{coord[1]})",
+                    "visits": int(v),
+                    "prior": float(p),
+                    "q_value": float(q),
+                }
+                for coord, v, p, q in tree.get_top_visits(15)
             ]
             value_est = float(tree.root_value())
         except Exception:

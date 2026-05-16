@@ -44,7 +44,7 @@ use replay_buffer::sym_tables::{SymTables, N_SYMS};
 // 1.0. Migration is mechanical: add `#[pyclass(from_py_object)]` to opt-in
 // OR `#[pyclass(skip_from_py_object)]` to skip. No timeline — gated by pyo3
 // upgrade prioritization.
-#[pyclass(name = "RegistrySpec")]
+#[pyclass(name = "RegistrySpec", from_py_object)]
 #[derive(Clone, Copy)]
 pub struct PyRegistrySpec {
     inner: &'static RustRegistrySpec,
@@ -277,10 +277,12 @@ impl PyBoard {
     /// `get_cluster_views()` for those. Multi-window selfplay deferred to α
     /// — see `docs/designs/encoding_alpha_multiwindow_selfplay.md`.
     ///
-    /// Use numpy.array(board.to_tensor(), dtype=numpy.float32)
-    ///   .reshape(18, board.size, board.size).
-    pub fn to_tensor(&self) -> Vec<f32> {
-        self.inner.to_planes()
+    /// §P76 — zero-copy return via `IntoPyArray`. Python callers spell:
+    ///   board.to_tensor().reshape(18, board.size, board.size)
+    /// `Bound<PyArray1<f32>>` is a NumPy view over the Vec the Rust side
+    /// just allocated — `into_pyarray(py)` transfers ownership, no copy.
+    pub fn to_tensor<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
+        self.inner.to_planes().into_pyarray(py)
     }
 
     /// Returns a tuple of (list of NumPy arrays, list of (q, r) centers) for each cluster.
@@ -561,19 +563,21 @@ impl PyMCTSTree {
     ///
     /// Returns a list of length `board_size * board_size + 1`.
     #[pyo3(signature = (temperature = 1.0, board_size = None))]
-    pub fn get_policy(
+    pub fn get_policy<'py>(
         &self,
+        py: Python<'py>,
         temperature: f32,
         board_size: Option<usize>,
-    ) -> Vec<f32> {
+    ) -> Bound<'py, PyArray1<f32>> {
         let bs = board_size.unwrap_or(self.board_size);
         // §P2: inner API now takes `n_actions` (= policy_stride) instead of
         // `board_size`. PyO3 surface unchanged — Python callers still pass
         // board_size kwarg. Python-side selfplay path (if any non-Rust
         // selfplay still uses MCTSTree) is v6-only today, so bs²+1 is correct.
         // audit: P14 follow-up — read n_actions from self.inner.root_board.encoding
+        // §P77 — zero-copy return via `IntoPyArray`.
         let n_actions = bs * bs + 1;
-        self.inner.get_policy(temperature, n_actions)
+        self.inner.get_policy(temperature, n_actions).into_pyarray(py)
     }
 
     /// Total visit count at the root (= number of simulations run).
@@ -614,8 +618,13 @@ impl PyMCTSTree {
     }
 
     /// Top-N children of root by visit count.
-    /// Returns list of (coord_str, visits, prior, q_value) sorted by visits descending.
-    pub fn get_top_visits(&self, n: usize) -> Vec<(String, u32, f32, f32)> {
+    /// Returns list of ((q, r), visits, prior, q_value) sorted by visits descending.
+    ///
+    /// §P34 — coord is a `(i32, i32)` axial tuple instead of a pre-formatted
+    /// `"(q,r)"` string. Saves per-child `format!(...)` heap String alloc on
+    /// viewer/analyze-API paths. Python callers format with f-strings at the
+    /// call site.
+    pub fn get_top_visits(&self, n: usize) -> Vec<((i32, i32), u32, f32, f32)> {
         self.inner.get_top_visits(n)
     }
 
@@ -639,9 +648,12 @@ impl PyMCTSTree {
         self.inner.forced_root_child = val;
     }
 
-    /// Returns list of (coord_str, pool_idx, prior, visits, q_value) for each root child.
+    /// Returns list of ((q, r), pool_idx, prior, visits, q_value) for each root child.
     /// Used by the policy viewer to drive Gumbel Sequential Halving from Python.
-    pub fn get_root_children_info(&self) -> Vec<(String, u32, f32, u32, f32)> {
+    ///
+    /// §P34 — coord is a `(i32, i32)` axial tuple instead of a pre-formatted
+    /// `"(q,r)"` string. Same alloc-saving rationale as `get_top_visits`.
+    pub fn get_root_children_info(&self) -> Vec<((i32, i32), u32, f32, u32, f32)> {
         let children = self.inner.get_root_children_info();
         let q_sign: f32 = if self.inner.pool[0].moves_remaining == 1 { -1.0 } else { 1.0 };
         children.into_iter().map(|(pool_idx, prior)| {
@@ -651,7 +663,7 @@ impl PyMCTSTree {
             let val = child.action_idx;
             let aq = (val >> 16) as i32 - 32768;
             let ar = (val & 0xFFFF) as i32 - 32768;
-            (format!("({},{})", aq, ar), pool_idx, prior, visits, q_value)
+            ((aq, ar), pool_idx, prior, visits, q_value)
         }).collect()
     }
 
@@ -659,18 +671,22 @@ impl PyMCTSTree {
     /// (Danihelka et al., ICLR 2022). Used by the policy viewer for
     /// Gumbel-mode analysis overlay.
     #[pyo3(signature = (board_size = None, c_visit = 50.0, c_scale = 1.0))]
-    pub fn get_improved_policy(
+    pub fn get_improved_policy<'py>(
         &self,
+        py: Python<'py>,
         board_size: Option<usize>,
         c_visit: f32,
         c_scale: f32,
-    ) -> Vec<f32> {
+    ) -> Bound<'py, PyArray1<f32>> {
         let bs = board_size.unwrap_or(self.board_size);
         // §P2: inner API now takes `n_actions` (= policy_stride) instead of
         // `board_size`. Same pattern as get_policy above.
         // audit: P14 follow-up — read n_actions from self.inner.root_board.encoding
+        // §P77 — zero-copy return via `IntoPyArray`.
         let n_actions = bs * bs + 1;
-        self.inner.get_improved_policy(n_actions, c_visit, c_scale)
+        self.inner
+            .get_improved_policy(n_actions, c_visit, c_scale)
+            .into_pyarray(py)
     }
 }
 
