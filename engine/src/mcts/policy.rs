@@ -145,7 +145,7 @@ impl MCTSTree {
                 total_prior += prior;
             }
             if total_prior > 0.0 {
-                for p in policy.iter_mut() {
+                for p in &mut policy {
                     *p /= total_prior;
                 }
             }

@@ -84,7 +84,7 @@ impl ReplayBuffer {
             let state_start = slot * state_stride;
             let state_bytes = unsafe {
                 std::slice::from_raw_parts(
-                    self.states[state_start..state_start + state_stride].as_ptr() as *const u8,
+                    self.states[state_start..state_start + state_stride].as_ptr().cast::<u8>(),
                     state_stride * 2,
                 )
             };
@@ -95,7 +95,7 @@ impl ReplayBuffer {
             let chain_start = slot * chain_stride;
             let chain_bytes = unsafe {
                 std::slice::from_raw_parts(
-                    self.chain_planes[chain_start..chain_start + chain_stride].as_ptr() as *const u8,
+                    self.chain_planes[chain_start..chain_start + chain_stride].as_ptr().cast::<u8>(),
                     chain_stride * 2,
                 )
             };
@@ -106,7 +106,7 @@ impl ReplayBuffer {
             let pol_start = slot * policy_stride;
             let pol_bytes = unsafe {
                 std::slice::from_raw_parts(
-                    self.policies[pol_start..pol_start + policy_stride].as_ptr() as *const u8,
+                    self.policies[pol_start..pol_start + policy_stride].as_ptr().cast::<u8>(),
                     policy_stride * 4,
                 )
             };
@@ -217,9 +217,8 @@ impl ReplayBuffer {
         } else if version == 6 {
             // v6 backward compat: no encoding field — assume "v6"
             eprintln!(
-                "warning: loading deprecated HEXB v6 file ({}). \
-                 Assuming encoding 'v6'. Re-save to upgrade to v7.",
-                path
+                "warning: loading deprecated HEXB v6 file ({path}). \
+                 Assuming encoding 'v6'. Re-save to upgrade to v7."
             );
             r.read_exact(&mut buf4)
                 .map_err(|e| format!("{e}"))?;
@@ -254,7 +253,7 @@ impl ReplayBuffer {
                     {
                         let mut known: Vec<&str> = crate::encoding::registry::all_specs()
                             .map(|s| s.name).collect();
-                        known.sort();
+                        known.sort_unstable();
                         known
                     }
                 ));

@@ -88,7 +88,7 @@ pub fn aggregate_policy(
         for p in &mut global_policy { *p /= sum; }
     } else {
         let uniform = 1.0 / n_actions as f32;
-        for p in &mut global_policy { *p = uniform; }
+        global_policy.fill(uniform);
     }
     global_policy
 }
@@ -166,7 +166,7 @@ pub fn aggregate_policy_to_local(
         for p in &mut local_policy { *p /= sum; }
     } else {
         let uniform = 1.0 / n_actions as f32;
-        for p in &mut local_policy { *p = uniform; }
+        local_policy.fill(uniform);
     }
     local_policy
 }
@@ -247,7 +247,7 @@ pub(crate) fn reproject_game_end_row(
     let trunk_sz = (n_cells as f64).sqrt() as i32;
     debug_assert_eq!(
         (trunk_sz as usize) * (trunk_sz as usize), n_cells,
-        "reproject_game_end_row: n_cells {} is not a perfect square — trunk_sz²", n_cells
+        "reproject_game_end_row: n_cells {n_cells} is not a perfect square — trunk_sz²"
     );
     let half = (trunk_sz - 1) / 2;
 

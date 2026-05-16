@@ -55,8 +55,7 @@ impl Board {
         debug_assert_eq!(
             out.len(),
             18 * TOTAL_CELLS,
-            "encode_state_to_buffer output length mismatch — expected 18 planes × {} cells",
-            TOTAL_CELLS
+            "encode_state_to_buffer output length mismatch — expected 18 planes × {TOTAL_CELLS} cells"
         );
     }
 
@@ -64,7 +63,7 @@ impl Board {
     /// point for callers outside this module.
     #[inline]
     pub fn encode_planes_to_buffer(&self, planes_2: &[f32], out: &mut [f32]) {
-        self.encode_state_to_buffer(planes_2, out)
+        self.encode_state_to_buffer(planes_2, out);
     }
 
     /// Encode a *subset* of the 18 wire planes selected by `channels`, in the
@@ -94,9 +93,7 @@ impl Board {
             out.len(),
             n * n_cells,
             "encode_state_to_buffer_channels output length mismatch — \
-             expected {} planes × {} cells",
-            n,
-            n_cells
+             expected {n} planes × {n_cells} cells"
         );
         let mr_val = if self.moves_remaining == 2 { 1.0 } else { 0.0 };
         let ply_val = (self.ply % 2) as f32;
@@ -127,7 +124,7 @@ impl Board {
                     }
                 }
                 _ => {
-                    debug_assert!(false, "channel index {} out of range [0, 18)", ch);
+                    debug_assert!(false, "channel index {ch} out of range [0, 18)");
                     for v in dst.iter_mut() {
                         *v = 0.0;
                     }
@@ -160,7 +157,7 @@ impl Board {
             Player::One => (Cell::P1, Cell::P2),
             Player::Two => (Cell::P2, Cell::P1),
         };
-        for (&(q, r), &cell) in self.cells.iter() {
+        for (&(q, r), &cell) in &self.cells {
             let flat = self.window_flat_idx(q, r);
             if flat < TOTAL_CELLS {
                 if cell == my_cell {
@@ -224,7 +221,7 @@ impl Board {
             Player::One => (Cell::P1, Cell::P2),
             Player::Two => (Cell::P2, Cell::P1),
         };
-        for (&(q, r), &cell) in self.cells.iter() {
+        for (&(q, r), &cell) in &self.cells {
             let flat = self.window_flat_idx(q, r);
             if flat < TOTAL_CELLS {
                 if cell == my_cell {

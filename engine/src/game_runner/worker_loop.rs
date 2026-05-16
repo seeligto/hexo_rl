@@ -358,15 +358,12 @@ impl SelfPlayRunner {
             // `kept_planes` = &'static slice of source-plane indices retained by
             // this encoding; replaces the hardcoded KEPT_PLANE_INDICES import.
             // Falls back to the v6 constant (len=8, [0,1,2,3,8,9,10,11]).
-            let (n_cells, kept_planes): (usize, &'static [usize]) = match self.registry_spec {
-                Some(spec) => (spec.n_cells(), spec.kept_plane_indices),
-                None => {
-                    use crate::replay_buffer::sym_tables::N_CELLS;
-                    // KEPT_PLANE_INDICES is a `const` array — &KEPT_PLANE_INDICES
-                    // promotes to &'static [usize] via const-to-static coercion.
-                    const KPI: &[usize] = &crate::replay_buffer::sym_tables::KEPT_PLANE_INDICES;
-                    (N_CELLS, KPI)
-                }
+            let (n_cells, kept_planes): (usize, &'static [usize]) = if let Some(spec) = self.registry_spec { (spec.n_cells(), spec.kept_plane_indices) } else {
+                use crate::replay_buffer::sym_tables::N_CELLS;
+                // KEPT_PLANE_INDICES is a `const` array — &KEPT_PLANE_INDICES
+                // promotes to &'static [usize] via const-to-static coercion.
+                const KPI: &[usize] = &crate::replay_buffer::sym_tables::KEPT_PLANE_INDICES;
+                (N_CELLS, KPI)
             };
             // §173 A5b (H4-α): encoding geometry pre-extracted once before thread
             // spawn so per-sim hot path passes cheap integer pairs instead of
@@ -378,11 +375,11 @@ impl SelfPlayRunner {
             // = true; v8/v8_canvas_realness = false. v6 default fallback for
             // legacy SelfPlayRunner constructions without registry_spec.
             let policy_stride: usize = match self.registry_spec {
-                Some(ref s) => s.policy_stride(),
+                Some(s) => s.policy_stride(),
                 None => BOARD_SIZE * BOARD_SIZE + 1,
             };
             let agg_trunk_sz: i32 = match self.registry_spec {
-                Some(ref s) => s.trunk_size as i32,
+                Some(s) => s.trunk_size as i32,
                 None => BOARD_SIZE as i32,
             };
             let has_pass_slot: bool = match self.registry_spec {
@@ -542,7 +539,7 @@ impl SelfPlayRunner {
                         // NOT pushed to the buffer (would add garbage policy
                         // targets from random moves). Mirrors eval path
                         // semantics (§80, `eval_random_opening_plies`).
-                        if (board.ply as u32) < random_opening_plies {
+                        if board.ply < random_opening_plies {
                             let legal = board.legal_moves();
                             if legal.is_empty() { break; }
                             let (mq, mr) = *legal.choose(&mut rng).unwrap();
@@ -617,7 +614,7 @@ impl SelfPlayRunner {
                                     }
                                     (ps, vs)
                                 }
-                                Err(_) => return 0,
+                                Err(()) => return 0,
                             };
 
                             if all_policies.len() < total_clusters { return 0; }
@@ -781,8 +778,8 @@ impl SelfPlayRunner {
                             // mirrors hexo_rl/selfplay/worker.py:107-111.
                             // ply==0 is P1's single opening stone, which IS a turn boundary.
                             let is_intermediate_ply = board.moves_remaining == 1 && board.ply > 0;
-                            if dirichlet_enabled && !is_intermediate_ply {
-                                if tree.pool[0].is_expanded() {
+                            if dirichlet_enabled && !is_intermediate_ply
+                                && tree.pool[0].is_expanded() {
                                     let n_ch = tree.pool[0].n_children as usize;
                                     if n_ch > 0 {
                                         let noise = crate::mcts::dirichlet::sample_dirichlet(
@@ -791,7 +788,6 @@ impl SelfPlayRunner {
                                         tree.apply_dirichlet_to_root(&noise, dirichlet_epsilon);
                                     }
                                 }
-                            }
 
                             while sims_done < move_sims {
                                 if !running.load(Ordering::SeqCst) { break; }
@@ -804,7 +800,7 @@ impl SelfPlayRunner {
                         if !running.load(Ordering::SeqCst) { break; }
 
                         // ── MCTS Policy with cosine-annealed temperature schedule ──
-                        let compound_move = if board.ply == 0 { 0 } else { (board.ply as usize + 1) / 2 };
+                        let compound_move = if board.ply == 0 { 0 } else { (board.ply as usize).div_ceil(2) };
                         let temperature = if is_fast_game {
                             1.0  // fast games: always exploratory
                         } else {
@@ -897,7 +893,7 @@ impl SelfPlayRunner {
                                         hex_distance(*q, *r, *q0, *r0) <= zoi_margin
                                     })
                                 })
-                                .cloned()
+                                .copied()
                                 .collect();
                             if filtered.len() < 3 { full_legal } else { filtered }
                         } else {
@@ -1031,7 +1027,7 @@ impl SelfPlayRunner {
                     //   2 = ply_cap      : no winner AND ply == max_moves
                     //   3 = other_draw   : no winner AND ply < max_moves
                     let terminal_reason: u8 = match winner {
-                        Some(_) => if winning_cells.is_empty() { 1 } else { 0 },
+                        Some(_) => u8::from(winning_cells.is_empty()),
                         None    => if plies >= max_moves { 2 } else { 3 },
                     };
 

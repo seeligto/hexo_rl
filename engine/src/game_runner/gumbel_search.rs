@@ -145,7 +145,7 @@ impl GumbelSearchState {
             .map(|&c| (c, self.score(c, max_n)))
             .collect();
         scored.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let keep = (scored.len() + 1) / 2;
+        let keep = scored.len().div_ceil(2);
         scored.truncate(keep);
         self.candidates = scored.into_iter().map(|(c, _)| c).collect();
     }

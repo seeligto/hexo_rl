@@ -72,7 +72,7 @@ impl Board {
 
                 if span_q <= span_threshold && span_r <= span_threshold {
                     // Small Clusters: single window centered on geometric middle
-                    final_centers.push(((min_q + max_q) / 2, (min_r + max_r) / 2));
+                    final_centers.push((i32::midpoint(min_q, max_q), i32::midpoint(min_r, max_r)));
                 } else {
                     // Massive Clusters: window centered on each Action and Threat anchor in the cluster
                     let mut cluster_anchors = Vec::new();
@@ -93,7 +93,7 @@ impl Board {
 
                     if cluster_anchors.is_empty() {
                         // Fallback if no anchors found
-                        final_centers.push(((min_q + max_q) / 2, (min_r + max_r) / 2));
+                        final_centers.push((i32::midpoint(min_q, max_q), i32::midpoint(min_r, max_r)));
                     } else {
                         // Deduplicate anchors: radius matches v6 baseline (5)
                         // regardless of cluster_window_size — this is a
@@ -118,7 +118,7 @@ impl Board {
 
         for &(cq, cr) in &final_centers {
             let mut planes_2 = vec![0.0f32; 2 * total_cells];
-            for (&(q, r), &cell) in self.cells.iter() {
+            for (&(q, r), &cell) in &self.cells {
                 let wq = q - cq + half;
                 let wr = r - cr + half;
                 if wq >= 0
@@ -152,7 +152,7 @@ impl Board {
         // Pre-collect stones by player to avoid repeated HashMap scans.
         let mut p1_stones = Vec::with_capacity(self.cells.len());
         let mut p2_stones = Vec::with_capacity(self.cells.len());
-        for (&pos, &cell) in self.cells.iter() {
+        for (&pos, &cell) in &self.cells {
             match cell {
                 Cell::P1 => p1_stones.push(pos),
                 Cell::P2 => p2_stones.push(pos),

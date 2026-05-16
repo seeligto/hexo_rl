@@ -285,7 +285,7 @@ impl ReplayBuffer {
     #[pyo3(text_signature = "(self, path)")]
     pub fn load_from_path(&mut self, path: &str) -> PyResult<usize> {
         self.load_from_path_impl(path)
-            .map_err(|e| PyValueError::new_err(e))
+            .map_err(PyValueError::new_err)
     }
 
     #[getter]

@@ -100,9 +100,7 @@ impl Inner {
                         let policy_len = range.len();
                         if policy_len != expected_policy_len {
                             return Err(PyValueError::new_err(format!(
-                                "policy length mismatch for request {id}: got {}, expected {}",
-                                policy_len,
-                                expected_policy_len
+                                "policy length mismatch for request {id}: got {policy_len}, expected {expected_policy_len}"
                             )));
                         }
                         let policy = policy_arc[range].to_vec();
@@ -241,7 +239,7 @@ impl InferenceBatcher {
         self.inner.closed.store(true, Ordering::SeqCst);
         self.inner.queue_cv.notify_all();
 
-        for r in self.inner.waiters.iter() {
+        for r in &self.inner.waiters {
             r.value().cv.notify_all();
         }
     }
@@ -293,7 +291,7 @@ impl InferenceBatcher {
         // — a HIGH-RISK silent-corruption hazard.
         //
         // Precedence: explicit kwargs > encoding_spec derivation > legacy v6 default.
-        let spec_static = encoding_spec.as_ref().map(|s| s.inner());
+        let spec_static = encoding_spec.as_ref().map(super::pyo3::encoding::PyRegistrySpec::inner);
         let (feature_len, policy_len) = match (feature_len, policy_len, spec_static) {
             (Some(f), Some(p), _) => (f, p),
             (None, None, Some(spec)) => (spec.state_stride(), spec.policy_stride()),

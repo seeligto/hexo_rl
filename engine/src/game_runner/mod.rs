@@ -209,7 +209,7 @@ impl SelfPlayRunner {
         // a HIGH-RISK silent-corruption hazard.
         //
         // Precedence: explicit kwargs > encoding_spec derivation > legacy v6 default.
-        let spec_static = encoding_spec.as_ref().map(|s| s.inner());
+        let spec_static = encoding_spec.as_ref().map(super::pyo3::encoding::PyRegistrySpec::inner);
         let (feature_len, policy_len) = match (feature_len, policy_len, spec_static) {
             (Some(f), Some(p), _) => (f, p),
             (None, None, Some(spec)) => (spec.state_stride(), spec.policy_stride()),
@@ -239,8 +239,7 @@ impl SelfPlayRunner {
         if full_search_prob > 0.0 && (n_sims_quick == 0 || n_sims_full == 0) {
             return Err(PyValueError::new_err(format!(
                 "SelfPlayRunner: n_sims_quick and n_sims_full must both be > 0 \
-                 when full_search_prob > 0 (got n_sims_quick={}, n_sims_full={})",
-                n_sims_quick, n_sims_full,
+                 when full_search_prob > 0 (got n_sims_quick={n_sims_quick}, n_sims_full={n_sims_full})",
             )));
         }
         Ok(Self {
@@ -350,7 +349,7 @@ impl SelfPlayRunner {
         let feat_len  = self.batcher.feature_len();
         // n_cells: per-spec cluster window cell count. Falls back to v6 TOTAL_CELLS
         // (361) for legacy runners that don't provide encoding_spec.
-        let n_cells   = self.registry_spec.map(|s| s.n_cells()).unwrap_or(TOTAL_CELLS);
+        let n_cells   = self.registry_spec.map_or(TOTAL_CELLS, super::encoding::spec::RegistrySpec::n_cells);
         let chain_len = 6 * n_cells;
         let pol_len   = self.pol_len;
 

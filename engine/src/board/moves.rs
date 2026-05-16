@@ -129,7 +129,7 @@ impl Board {
     ///
     /// Use `legal_moves_set()` in performance-critical paths.
     pub fn legal_moves(&self) -> Vec<(i32, i32)> {
-        let mut moves_vec: Vec<(i32, i32)> = self.legal_moves_set().iter().cloned().collect();
+        let mut moves_vec: Vec<(i32, i32)> = self.legal_moves_set().iter().copied().collect();
         moves_vec.sort_unstable();
         moves_vec
     }
@@ -172,12 +172,12 @@ impl Board {
         };
         // Fast path: only the player who just moved can have just won.
         if let Some((lq, lr)) = self.last_move {
-            if self.cells.get(&(lq, lr)).map(|r| *r) == Some(cell) {
+            if self.cells.get(&(lq, lr)).copied() == Some(cell) {
                 return self.count_in_line(lq, lr, cell) >= WIN_LENGTH;
             }
         }
         // Fallback: scan all stones of this player (reached when player != last mover).
-        for (&(q, r), &c) in self.cells.iter() {
+        for (&(q, r), &c) in &self.cells {
             if c == cell && self.count_in_line(q, r, cell) >= WIN_LENGTH {
                 return true;
             }
@@ -207,7 +207,7 @@ impl Board {
         loop {
             q += dq;
             r += dr;
-            if self.cells.get(&(q, r)).map(|r| *r) != Some(cell) {
+            if self.cells.get(&(q, r)).copied() != Some(cell) {
                 break;
             }
             count += 1;
@@ -227,7 +227,7 @@ impl Board {
             Player::One => Cell::P1,
             Player::Two => Cell::P2,
         };
-        for (&(q, r), &c) in self.cells.iter() {
+        for (&(q, r), &c) in &self.cells {
             if c != cell {
                 continue;
             }
@@ -329,7 +329,7 @@ impl Board {
             // suffices; `visited.resize(.., false)` zeroes only the in-use
             // prefix (still O(n) but no allocation when n ≤ capacity).
             stones.clear();
-            stones.extend(self.cells.keys().cloned());
+            stones.extend(self.cells.keys().copied());
             visited.clear();
             visited.resize(stones.len(), false);
             queue.clear();

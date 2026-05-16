@@ -45,8 +45,7 @@ impl PyBoard {
     pub fn with_encoding_name(name: &str) -> PyResult<Self> {
         let spec = crate::encoding::lookup(name).ok_or_else(|| {
             PyValueError::new_err(format!(
-                "unknown encoding {:?}; see engine/src/encoding/registry.toml",
-                name
+                "unknown encoding {name:?}; see engine/src/encoding/registry.toml"
             ))
         })?;
         Ok(PyBoard { inner: RustBoard::with_registry_spec(spec) })
@@ -55,7 +54,7 @@ impl PyBoard {
     /// Place a stone at (q, r) for the current player.
     /// Raises ValueError if the move is illegal.
     pub fn apply_move(&mut self, q: i32, r: i32) -> PyResult<()> {
-        self.inner.apply_move(q, r).map_err(|e| PyValueError::new_err(e))
+        self.inner.apply_move(q, r).map_err(PyValueError::new_err)
     }
 
     /// Returns True if either player has 6 in a row.
@@ -179,9 +178,9 @@ impl PyBoard {
     /// (default 19 = v6 wire format; v6w25 callers `set_cluster_window_size(25)`
     /// per §168 Gate 3). Plane 0 = current player's stones, plane 1 = opponent's
     /// stones.  Arrays are created via zero-copy transfer from Rust allocations.
-    pub fn get_cluster_views<'py>(
+    pub fn get_cluster_views(
         &self,
-        py: Python<'py>,
+        py: Python<'_>,
     ) -> PyResult<(Vec<Py<PyArray3<f32>>>, Vec<(i32, i32)>)> {
         let window_size = self.inner.cluster_window_size();
         let (views, centers) = self.inner.get_cluster_views();
@@ -191,7 +190,7 @@ impl PyBoard {
                 // Transfer Vec ownership to NumPy (zero-copy), then reshape.
                 PyArray1::from_vec(py, v)
                     .reshape([2_usize, window_size, window_size])
-                    .map(|arr| arr.unbind())
+                    .map(pyo3::Bound::unbind)
             })
             .collect();
         Ok((py_views?, centers))
@@ -234,9 +233,9 @@ impl PyBoard {
                  use registry (Board.with_encoding_name) instead of overriding post-construction"
             ));
         }
-        if size < 7 || size % 2 == 0 {
+        if size < 7 || size.is_multiple_of(2) {
             return Err(PyValueError::new_err(format!(
-                "cluster_window_size must be odd and >= 7; got {}", size
+                "cluster_window_size must be odd and >= 7; got {size}"
             )));
         }
         self.inner.set_cluster_window_size(size);
@@ -266,7 +265,7 @@ impl PyBoard {
     /// Threats are EMPTY cells within threatening windows. Viewer only.
     pub fn get_threats(&self) -> Vec<(i32, i32, u8, u8)> {
         let mut stones = std::collections::HashMap::new();
-        for (&(q, r), &cell) in self.inner.cells.iter() {
+        for (&(q, r), &cell) in &self.inner.cells {
             let player = match cell {
                 board::Cell::P1 => 0u8,
                 board::Cell::P2 => 1u8,

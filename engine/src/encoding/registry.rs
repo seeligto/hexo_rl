@@ -31,16 +31,12 @@ pub fn lookup(name: &str) -> Option<&'static RegistrySpec> {
 /// Look up an encoding by name, panicking with a helpful message on miss.
 /// Use at init-time call sites where unknown encodings indicate a config bug.
 pub fn lookup_or_panic(name: &str) -> &'static RegistrySpec {
-    match lookup(name) {
-        Some(s) => s,
-        None => {
-            let mut known: Vec<&str> = REGISTRY.keys().copied().collect();
-            known.sort();
-            panic!(
-                "encoding registry: unknown encoding {:?}; registered: {:?}",
-                name, known
-            );
-        }
+    if let Some(s) = lookup(name) { s } else {
+        let mut known: Vec<&str> = REGISTRY.keys().copied().collect();
+        known.sort_unstable();
+        panic!(
+            "encoding registry: unknown encoding {name:?}; registered: {known:?}"
+        );
     }
 }
 
@@ -55,7 +51,7 @@ pub fn all_specs() -> impl Iterator<Item = &'static RegistrySpec> {
 
 fn load() -> HashMap<&'static str, &'static RegistrySpec> {
     let root: Value = toml::from_str(REGISTRY_TOML)
-        .unwrap_or_else(|e| panic!("encoding registry: TOML parse error: {}", e));
+        .unwrap_or_else(|e| panic!("encoding registry: TOML parse error: {e}"));
 
     let encodings = root
         .get("encodings")
@@ -81,17 +77,15 @@ fn load() -> HashMap<&'static str, &'static RegistrySpec> {
         }
     }
 
-    if !errors.is_empty() {
-        panic!(
-            "encoding registry: parse/validation failed for {} entries:\n{}",
-            errors.len(),
-            errors
-                .iter()
-                .map(|e| format!("  * {}", e))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
+    assert!(errors.is_empty(), 
+        "encoding registry: parse/validation failed for {} entries:\n{}",
+        errors.len(),
+        errors
+            .iter()
+            .map(|e| format!("  * {e}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 
     map
 }
@@ -105,7 +99,7 @@ fn leak_str(s: &str) -> &'static str {
 fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
     let table = body
         .as_table()
-        .ok_or_else(|| format!("[encodings.{}]: not a table", name))?;
+        .ok_or_else(|| format!("[encodings.{name}]: not a table"))?;
 
     let mut errs: Vec<String> = Vec::new();
 
@@ -163,13 +157,13 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
 
     // cluster_window_size + cluster_threshold: int OR string "none".
     let cluster_window_size = parse_int_or_none(table.get("cluster_window_size"))
-        .map_err(|e| format!("[encodings.{}].cluster_window_size: {}", name, e))
+        .map_err(|e| format!("[encodings.{name}].cluster_window_size: {e}"))
         .unwrap_or_else(|e| {
             errs.push(e);
             None
         });
     let cluster_threshold = parse_int_or_none(table.get("cluster_threshold"))
-        .map_err(|e| format!("[encodings.{}].cluster_threshold: {}", name, e))
+        .map_err(|e| format!("[encodings.{name}].cluster_threshold: {e}"))
         .unwrap_or_else(|e| {
             errs.push(e);
             None
@@ -190,16 +184,14 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
                     Some(n) if n >= 0 => indices.push(n as usize),
                     Some(n) => {
                         errs.push(format!(
-                            "[encodings.{}].kept_plane_indices[{}]: negative integer {}",
-                            name, i, n
+                            "[encodings.{name}].kept_plane_indices[{i}]: negative integer {n}"
                         ));
                         bad = true;
                         break;
                     }
                     None => {
                         errs.push(format!(
-                            "[encodings.{}].kept_plane_indices[{}]: not an integer",
-                            name, i
+                            "[encodings.{name}].kept_plane_indices[{i}]: not an integer"
                         ));
                         bad = true;
                         break;
@@ -209,11 +201,11 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
             if bad { None } else { Some(indices) }
         }
         Some(_) => {
-            errs.push(format!("[encodings.{}].kept_plane_indices: not an array", name));
+            errs.push(format!("[encodings.{name}].kept_plane_indices: not an array"));
             None
         }
         None => {
-            errs.push(format!("[encodings.{}].kept_plane_indices: missing key", name));
+            errs.push(format!("[encodings.{name}].kept_plane_indices: missing key"));
             None
         }
     };
@@ -226,16 +218,12 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
             let mut planes: Vec<&'static str> = Vec::with_capacity(arr.len());
             let mut bad = false;
             for (i, v) in arr.iter().enumerate() {
-                match v.as_str() {
-                    Some(s) => planes.push(leak_str(s)),
-                    None => {
-                        errs.push(format!(
-                            "[encodings.{}].plane_layout[{}]: not a string",
-                            name, i
-                        ));
-                        bad = true;
-                        break;
-                    }
+                if let Some(s) = v.as_str() { planes.push(leak_str(s)) } else {
+                    errs.push(format!(
+                        "[encodings.{name}].plane_layout[{i}]: not a string"
+                    ));
+                    bad = true;
+                    break;
                 }
             }
             if bad {
@@ -245,11 +233,11 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
             }
         }
         Some(_) => {
-            errs.push(format!("[encodings.{}].plane_layout: not an array", name));
+            errs.push(format!("[encodings.{name}].plane_layout: not an array"));
             None
         }
         None => {
-            errs.push(format!("[encodings.{}].plane_layout: missing key", name));
+            errs.push(format!("[encodings.{name}].plane_layout: missing key"));
             None
         }
     };
@@ -257,14 +245,14 @@ fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String> {
     let value_pool = value_pool_raw.and_then(|s| match ValuePool::parse(s) {
         Ok(v) => Some(v),
         Err(e) => {
-            errs.push(format!("[encodings.{}].value_pool: {}", name, e));
+            errs.push(format!("[encodings.{name}].value_pool: {e}"));
             None
         }
     });
     let policy_pool = policy_pool_raw.and_then(|s| match PolicyPool::parse(s) {
         Ok(v) => Some(v),
         Err(e) => {
-            errs.push(format!("[encodings.{}].policy_pool: {}", name, e));
+            errs.push(format!("[encodings.{name}].policy_pool: {e}"));
             None
         }
     });
@@ -315,15 +303,14 @@ fn parse_int_or_none(v: Option<&Value>) -> Result<Option<usize>, String> {
     match v {
         Some(Value::Integer(i)) => {
             if *i < 0 {
-                Err(format!("integer must be >= 0; got {}", i))
+                Err(format!("integer must be >= 0; got {i}"))
             } else {
                 Ok(Some(*i as usize))
             }
         }
         Some(Value::String(s)) if s == "none" => Ok(None),
         Some(Value::String(s)) => Err(format!(
-            "string value must be \"none\" sentinel; got {:?}",
-            s
+            "string value must be \"none\" sentinel; got {s:?}"
         )),
         Some(other) => Err(format!(
             "must be integer or string \"none\"; got {:?}",

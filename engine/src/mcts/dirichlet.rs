@@ -29,9 +29,7 @@ pub fn sample_dirichlet(alpha: f32, n: usize, rng: &mut impl Rng) -> Vec<f32> {
     } else {
         // Degenerate: all Gamma draws underflowed to zero. Fall back to uniform.
         let u = 1.0 / n as f32;
-        for s in &mut samples {
-            *s = u;
-        }
+        samples.fill(u);
     }
     samples
 }

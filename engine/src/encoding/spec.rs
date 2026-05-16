@@ -35,8 +35,7 @@ impl ValuePool {
             "max" => Ok(ValuePool::Max),
             "mean" => Ok(ValuePool::Mean),
             other => Err(format!(
-                "value_pool must be one of [none,min,max,mean]; got {:?}",
-                other
+                "value_pool must be one of [none,min,max,mean]; got {other:?}"
             )),
         }
     }
@@ -53,8 +52,7 @@ impl PolicyPool {
             "scatter_max" => Ok(PolicyPool::ScatterMax),
             "scatter_mean" => Ok(PolicyPool::ScatterMean),
             other => Err(format!(
-                "policy_pool must be one of [none,scatter_max,scatter_mean]; got {:?}",
-                other
+                "policy_pool must be one of [none,scatter_max,scatter_mean]; got {other:?}"
             )),
         }
     }
@@ -135,7 +133,7 @@ impl RegistrySpec {
         }
 
         let expected_logits =
-            self.board_size * self.board_size + (if self.has_pass_slot { 1 } else { 0 });
+            self.board_size * self.board_size + usize::from(self.has_pass_slot);
         if self.policy_logit_count != expected_logits {
             errs.push(format!(
                 "policy_logit_count={} != board_size²+(pass_slot?1:0)={} \
@@ -229,10 +227,10 @@ impl RegistrySpec {
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         for (idx, p) in self.plane_layout.iter().enumerate() {
             if p.is_empty() {
-                errs.push(format!("plane_layout[{}] is empty", idx));
+                errs.push(format!("plane_layout[{idx}] is empty"));
             }
             if !seen.insert(p) {
-                errs.push(format!("plane_layout[{}] duplicate name {:?}", idx, p));
+                errs.push(format!("plane_layout[{idx}] duplicate name {p:?}"));
             }
         }
 
@@ -255,11 +253,10 @@ impl RegistrySpec {
         // 3.2: no duplicates in kept_plane_indices
         {
             let mut seen_idx: BTreeSet<usize> = BTreeSet::new();
-            for &idx in self.kept_plane_indices.iter() {
+            for &idx in self.kept_plane_indices {
                 if !seen_idx.insert(idx) {
                     errs.push(format!(
-                        "kept_plane_indices: duplicate index {}",
-                        idx
+                        "kept_plane_indices: duplicate index {idx}"
                     ));
                 }
             }

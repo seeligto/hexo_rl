@@ -46,8 +46,7 @@ fn apply_symmetries_batch<'py>(
     let shape = states.shape();
     if shape.len() != 4 || shape[2] != BOARD_SIZE || shape[3] != BOARD_SIZE {
         return Err(PyValueError::new_err(format!(
-            "expected states shape (N, C, {}, {}); got {:?}",
-            BOARD_SIZE, BOARD_SIZE, shape
+            "expected states shape (N, C, {BOARD_SIZE}, {BOARD_SIZE}); got {shape:?}"
         )));
     }
     let n = shape[0];
@@ -61,8 +60,7 @@ fn apply_symmetries_batch<'py>(
     for (i, &s) in sym_indices.iter().enumerate() {
         if s >= N_SYMS {
             return Err(PyValueError::new_err(format!(
-                "sym_indices[{}] = {} out of range (expected 0..{})",
-                i, s, N_SYMS
+                "sym_indices[{i}] = {s} out of range (expected 0..{N_SYMS})"
             )));
         }
     }

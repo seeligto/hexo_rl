@@ -356,7 +356,7 @@ impl ReplayBuffer {
             debug_assert_eq!(src_state.len(), dst_state.len());
             // SAFETY: f16 and u16 same size/align; bit pattern preserved (to_bits semantics).
             let src_bits = unsafe {
-                std::slice::from_raw_parts(src_state.as_ptr() as *const u16, src_state.len())
+                std::slice::from_raw_parts(src_state.as_ptr().cast::<u16>(), src_state.len())
             };
             dst_state.copy_from_slice(src_bits);
 
@@ -365,7 +365,7 @@ impl ReplayBuffer {
             debug_assert_eq!(src_chain.len(), dst_chain.len());
             // SAFETY: same as above.
             let chain_bits = unsafe {
-                std::slice::from_raw_parts(src_chain.as_ptr() as *const u16, src_chain.len())
+                std::slice::from_raw_parts(src_chain.as_ptr().cast::<u16>(), src_chain.len())
             };
             dst_chain.copy_from_slice(chain_bits);
 

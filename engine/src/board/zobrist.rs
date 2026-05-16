@@ -75,7 +75,7 @@ impl ZobristTable {
     pub fn get_for_pos(q: i32, r: i32, player: usize) -> u128 {
         const HALF: i32 = 9;
         const BOARD_SIZE: i32 = 19;
-        if q >= -HALF && q <= HALF && r >= -HALF && r <= HALF {
+        if (-HALF..=HALF).contains(&q) && (-HALF..=HALF).contains(&r) {
             let cell = ((q + HALF) as usize) * (BOARD_SIZE as usize) + ((r + HALF) as usize);
             Self::get(cell, player)
         } else {

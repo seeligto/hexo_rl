@@ -298,7 +298,7 @@ impl Board {
     pub fn set_cluster_window_size(&mut self, size: usize) {
         debug_assert!(
             size >= 7 && size % 2 == 1,
-            "cluster_window_size must be odd and >= 7; got {}", size
+            "cluster_window_size must be odd and >= 7; got {size}"
         );
         self.cluster_window_size = size;
     }
@@ -362,8 +362,8 @@ impl Board {
         if !self.has_stones {
             return (0, 0);
         }
-        let cq = (self.min_q + self.max_q) / 2;
-        let cr = (self.min_r + self.max_r) / 2;
+        let cq = i32::midpoint(self.min_q, self.max_q);
+        let cr = i32::midpoint(self.min_r, self.max_r);
         (cq, cr)
     }
 
@@ -428,7 +428,7 @@ impl Board {
 
     /// Returns the cell at (q, r).
     pub fn get_cell(&self, q: i32, r: i32) -> Cell {
-        self.cells.get(&(q, r)).map(|r| *r).unwrap_or(Cell::Empty)
+        self.cells.get(&(q, r)).copied().unwrap_or(Cell::Empty)
     }
 
     /// Axial coordinates (q, r) from a window-relative flat index.
@@ -469,7 +469,7 @@ impl Board {
     /// Cell at (q, r).  Returns Empty for unoccupied or out-of-window cells.
     #[inline]
     pub fn get(&self, q: i32, r: i32) -> Cell {
-        self.cells.get(&(q, r)).map(|r| *r).unwrap_or(Cell::Empty)
+        self.cells.get(&(q, r)).copied().unwrap_or(Cell::Empty)
     }
 
     // ── Move application ──────────────────────────────────────────────────────
@@ -493,17 +493,17 @@ impl Board {
         // Update bounding box FIRST so that window_flat_idx uses the final
         // bounding box — this keeps the Zobrist hash position-deterministic
         // (same stone set → same bbox → same centre → same hash).
-        if !self.has_stones {
+        if self.has_stones {
+            if q < self.min_q { self.min_q = q; }
+            if q > self.max_q { self.max_q = q; }
+            if r < self.min_r { self.min_r = r; }
+            if r > self.max_r { self.max_r = r; }
+        } else {
             self.min_q = q;
             self.max_q = q;
             self.min_r = r;
             self.max_r = r;
             self.has_stones = true;
-        } else {
-            if q < self.min_q { self.min_q = q; }
-            if q > self.max_q { self.max_q = q; }
-            if r < self.min_r { self.min_r = r; }
-            if r > self.max_r { self.max_r = r; }
         }
 
         let player_idx = match self.current_player { Player::One => 0, Player::Two => 1 };

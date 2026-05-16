@@ -53,7 +53,7 @@ impl EncodingSpec {
                 self.cluster_window_size
             ));
         }
-        if self.cluster_window_size % 2 == 0 {
+        if self.cluster_window_size.is_multiple_of(2) {
             return Err(format!(
                 "cluster_window_size must be odd; got {}",
                 self.cluster_window_size

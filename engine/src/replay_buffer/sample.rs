@@ -147,7 +147,7 @@ impl ReplayBuffer {
         for _ in 0..MAX_RETRIES {
             seen.clear();
             let mut all_unique = true;
-            for idx in indices.iter_mut() {
+            for idx in &mut indices {
                 let gid = self.game_ids[*idx];
                 if gid == -1 || seen.insert(gid) {
                     // OK: untagged or first occurrence of this game_id.
@@ -316,11 +316,11 @@ impl ReplayBuffer {
         // and we only wrote bits that came from valid f16 values stored via push().
         let states_f16: Vec<f16> = unsafe {
             let mut v = std::mem::ManuallyDrop::new(out_states);
-            Vec::from_raw_parts(v.as_mut_ptr() as *mut f16, v.len(), v.capacity())
+            Vec::from_raw_parts(v.as_mut_ptr().cast::<f16>(), v.len(), v.capacity())
         };
         let chain_f16: Vec<f16> = unsafe {
             let mut v = std::mem::ManuallyDrop::new(out_chain);
-            Vec::from_raw_parts(v.as_mut_ptr() as *mut f16, v.len(), v.capacity())
+            Vec::from_raw_parts(v.as_mut_ptr().cast::<f16>(), v.len(), v.capacity())
         };
 
         let n_planes   = self.encoding.n_planes;

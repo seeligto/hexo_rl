@@ -187,7 +187,7 @@ impl SymTables {
     pub fn with_shape(board_size: usize, n_planes: usize) -> Self {
         assert!(
             board_size % 2 == 1,
-            "SymTables: board_size must be odd, got {}", board_size
+            "SymTables: board_size must be odd, got {board_size}"
         );
         let n_cells = board_size * board_size;
         let half = (board_size as i32 - 1) / 2;
@@ -271,12 +271,12 @@ impl SymTables {
             }
             debug_assert!(
                 perm.iter().all(|&i| i < 3),
-                "axis_perm[{}] has an unset slot: {:?}", sym_idx, perm
+                "axis_perm[{sym_idx}] has an unset slot: {perm:?}"
             );
             // Sanity check: perm must be a bijection on {0,1,2}.
             let mut seen = [false; 3];
             for &i in &perm {
-                debug_assert!(!seen[i], "axis_perm[{}] is not a bijection: {:?}", sym_idx, perm);
+                debug_assert!(!seen[i], "axis_perm[{sym_idx}] is not a bijection: {perm:?}");
                 seen[i] = true;
             }
             axis_perm[sym_idx] = perm;
@@ -344,9 +344,9 @@ pub fn sym_tables_for(spec: &'static crate::encoding::RegistrySpec) -> &'static 
     static SIZE25_11: LazyLock<SymTables> = LazyLock::new(|| SymTables::with_shape(25, 11));
 
     match (spec.sym_table_id, spec.n_planes) {
-        ("size_19", _)  => &*SIZE19_8,
-        ("size_25", 8)  => &*SIZE25_8,
-        ("size_25", 11) => &*SIZE25_11,
+        ("size_19", _)  => &SIZE19_8,
+        ("size_25", 8)  => &SIZE25_8,
+        ("size_25", 11) => &SIZE25_11,
         (id, np) => panic!(
             "sym_tables_for: no sym table for encoding {:?} (sym_table_id={:?}, n_planes={}). \
              Add a LazyLock<SymTables> entry in sym_tables::sym_tables_for().",
