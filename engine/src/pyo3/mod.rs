@@ -5,3 +5,4 @@
 //! uses to construct or unwrap the wrapper.
 
 pub mod encoding;
+pub mod utils;
