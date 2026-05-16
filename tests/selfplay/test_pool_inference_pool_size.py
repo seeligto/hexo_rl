@@ -17,10 +17,12 @@ Tests below assert:
   2. Explicit `inference_pool_size = N` in config → kwarg passed as `int(N)`.
   3. Non-int values get coerced to int.
 
-Strategy: monkey-patch `hexo_rl.selfplay.pool.SelfPlayRunner` to a recorder
-that captures the kwargs of its call and short-circuits the rest of
-WorkerPool construction. We don't need the runner to actually start — we
-only assert the kwarg propagation.
+Strategy: monkey-patch `hexo_rl.selfplay.pool.SelfPlayRunnerConfig` to a
+recorder that captures the kwargs of its call (cycle 3 Wave 7 Batch A — kwargs
+now ride on `SelfPlayRunnerConfig` rather than `SelfPlayRunner`) and
+`hexo_rl.selfplay.pool.SelfPlayRunner` to a passthrough mock that returns a
+runner-like instance. We don't need the runner to actually start — we only
+assert the kwarg propagation.
 """
 from __future__ import annotations
 
@@ -32,23 +34,40 @@ import pytest
 
 
 def _make_recorder() -> Any:
-    """Build a recorder object that mimics SelfPlayRunner's surface enough
-    for WorkerPool.__init__ to finish (it accesses `.batcher` after construct).
+    """Build a recorder pair (config_recorder, runner_mock) that mimics the
+    SelfPlayRunner construction path enough for WorkerPool.__init__ to finish
+    (it accesses `.batcher` after construct).
 
-    Returns a callable; calling it returns a MagicMock with `.batcher` set
-    to a MagicMock so the InferenceServer ctor doesn't blow up on attribute
-    access. The recorder stashes the kwargs on `recorder.last_kwargs`."""
+    cycle 3 Wave 7 Batch A: kwargs land on `SelfPlayRunnerConfig` first; the
+    recorder is set as `pool_mod.SelfPlayRunnerConfig`. `pool_mod.SelfPlayRunner`
+    receives the config instance positionally and returns a `.batcher`-enabled
+    MagicMock so InferenceServer ctor doesn't blow up on attribute access.
+
+    The recorder stashes the kwargs on `recorder.last_kwargs`."""
     recorder = MagicMock()
 
-    def _ctor(*args, **kwargs):
+    def _config_ctor(*args, **kwargs):
         recorder.last_kwargs = kwargs
+        # Return a sentinel config object — passed positionally to SelfPlayRunner
+        # mock; tests don't introspect it (kwargs were already captured above).
+        return MagicMock(name="SelfPlayRunnerConfig_instance", _captured=kwargs)
+
+    recorder.side_effect = _config_ctor
+
+    def _runner_ctor(config, *args, **kwargs):
+        # `config` is the sentinel from _config_ctor; pull captured kwargs
+        # off it so the `.batcher.feature_len` / `.policy_len_py` accessors
+        # below work on the runner-like instance.
+        captured = getattr(config, "_captured", {})
         instance = MagicMock()
         instance.batcher = MagicMock()
-        instance.batcher.policy_len_py = kwargs.get("policy_len", 362)
-        instance.batcher.feature_len = MagicMock(return_value=kwargs.get("feature_len", 2888))
+        instance.batcher.policy_len_py = captured.get("policy_len", 362)
+        instance.batcher.feature_len = MagicMock(return_value=captured.get("feature_len", 2888))
         return instance
 
-    recorder.side_effect = _ctor
+    runner_mock = MagicMock()
+    runner_mock.side_effect = _runner_ctor
+    recorder.runner_mock = runner_mock
     return recorder
 
 
@@ -87,7 +106,8 @@ def test_inference_pool_size_default_is_none(monkeypatch: pytest.MonkeyPatch) ->
     from hexo_rl.selfplay import pool as pool_mod
 
     recorder = _make_recorder()
-    monkeypatch.setattr(pool_mod, "SelfPlayRunner", recorder)
+    monkeypatch.setattr(pool_mod, "SelfPlayRunnerConfig", recorder)
+    monkeypatch.setattr(pool_mod, "SelfPlayRunner", recorder.runner_mock)
     # InferenceServer ctor reads model attrs; stub it too so it doesn't fail
     # on the MagicMock model.
     monkeypatch.setattr(pool_mod, "InferenceServer", MagicMock())
@@ -110,7 +130,8 @@ def test_inference_pool_size_explicit_int_threads_through(monkeypatch: pytest.Mo
     from hexo_rl.selfplay import pool as pool_mod
 
     recorder = _make_recorder()
-    monkeypatch.setattr(pool_mod, "SelfPlayRunner", recorder)
+    monkeypatch.setattr(pool_mod, "SelfPlayRunnerConfig", recorder)
+    monkeypatch.setattr(pool_mod, "SelfPlayRunner", recorder.runner_mock)
     monkeypatch.setattr(pool_mod, "InferenceServer", MagicMock())
 
     cfg = _minimal_cfg({"inference_pool_size": 8192})
@@ -131,7 +152,8 @@ def test_inference_pool_size_string_coerced_to_int(monkeypatch: pytest.MonkeyPat
     from hexo_rl.selfplay import pool as pool_mod
 
     recorder = _make_recorder()
-    monkeypatch.setattr(pool_mod, "SelfPlayRunner", recorder)
+    monkeypatch.setattr(pool_mod, "SelfPlayRunnerConfig", recorder)
+    monkeypatch.setattr(pool_mod, "SelfPlayRunner", recorder.runner_mock)
     monkeypatch.setattr(pool_mod, "InferenceServer", MagicMock())
 
     cfg = _minimal_cfg({"inference_pool_size": "4096"})

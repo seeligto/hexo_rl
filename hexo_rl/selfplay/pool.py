@@ -21,7 +21,7 @@ import numpy as np
 import structlog
 import torch
 from engine import RegistrySpec as PyO3EncodingSpec  # type: ignore[attr-defined]
-from engine import SelfPlayRunner  # type: ignore[attr-defined]
+from engine import SelfPlayRunner, SelfPlayRunnerConfig  # type: ignore[attr-defined]
 
 from hexo_rl.encoding import EncodingSpec as RegistrySpec
 from hexo_rl.encoding import resolve_from_config as registry_resolve_from_config
@@ -304,7 +304,10 @@ class WorkerPool:
         inference_pool_size = sp.get("inference_pool_size", None)
         if inference_pool_size is not None:
             inference_pool_size = int(inference_pool_size)
-        self._runner = SelfPlayRunner(
+        # cycle 3 Wave 7 Batch A (P79): kwargs now ride on the
+        # `SelfPlayRunnerConfig` builder; `SelfPlayRunner(config)` takes the
+        # config struct. Breaking PyO3 API change — `!`-marked commit.
+        self._runner = SelfPlayRunner(SelfPlayRunnerConfig(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_game_moves", sp.get("max_moves_per_game", 128))),
             n_simulations=self.n_simulations,
@@ -354,7 +357,7 @@ class WorkerPool:
             legal_move_radius_jitter=bool(sp.get("legal_move_radius_jitter", False)),
             encoding_spec=runner_registry_spec,
             inference_pool_size=inference_pool_size,
-        )
+        ))
         self._inference_server = InferenceServer(
             model, device, config, batcher=self._runner.batcher,
             encoding_spec=spec,

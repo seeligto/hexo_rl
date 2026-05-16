@@ -9,11 +9,13 @@
 //!   gumbel_search.rs — `GumbelSearchState` (Gumbel-Top-k + Sequential Halving)
 //!   records.rs      — policy aggregation + game-end aux reprojection helpers
 
+pub mod config;
 pub mod gumbel_search;
 // §173 A5b: `pub mod` so integration tests can call aggregate_policy* directly.
 pub mod records;
 mod worker_loop;
 
+pub use config::SelfPlayRunnerConfig;
 pub use worker_loop::compute_move_temperature;
 
 use std::collections::VecDeque;
@@ -57,7 +59,10 @@ pub(crate) type CollectDataOut<'py> = (
     Bound<'py, PyArray1<u8>>,
 );
 
-// cycle 3 P79: builder pattern for SelfPlayRunner (40-param ctor) folds the bool flags into a config struct
+// cycle 3 P79 Wave 7 Batch A: stored-flat for hot-path field access in worker_loop;
+// the public construction surface is `SelfPlayRunnerConfig` (`config.rs`).
+// Permanent KEEP — 7 bool fields here mirror user-tunable PyO3 kwargs; folding them
+// into an enum would lose the per-flag ergonomics on the Python kwarg surface.
 #[allow(clippy::struct_excessive_bools)]
 #[pyclass(name = "SelfPlayRunner")]
 pub struct SelfPlayRunner {
@@ -189,50 +194,58 @@ pub struct SelfPlayRunner {
 
 #[pymethods]
 impl SelfPlayRunner {
-    // cycle 3 P79: builder pattern for SelfPlayRunner::new (40 params; PyO3 signature constraint)
-    #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+    /// Construct a runner from a [`SelfPlayRunnerConfig`] builder (cycle 3 Wave 7
+    /// Batch A, P79). The 38-kwarg PyO3 surface lives on `SelfPlayRunnerConfig::new`;
+    /// this `#[new]` consumes the config struct and runs the existing validation
+    /// (effective_standard, fast_sims, n_sims_quick/full) byte-equivalent to the
+    /// pre-cycle-3 38-positional-arg form. INV19 pins.
+    // 38-field destructure + 3 validation gates + 50-field struct init pushes the
+    // body over the 100-LOC clippy `too_many_lines` threshold. Permanent KEEP per
+    // cycle 3 P79 Wave 7 Batch A — splitting the body would obscure the validation
+    // / construction sequence that INV19 contracts against.
+    #[allow(clippy::too_many_lines)]
     #[new]
-    #[pyo3(signature = (n_workers = 4, max_moves_per_game = 128, n_simulations = 50, leaf_batch_size = 8, c_puct = 1.5, fpu_reduction = 0.25, feature_len = None, policy_len = None, fast_prob = 0.0, fast_sims = 50, standard_sims = 0, temp_threshold_compound_moves = 15, draw_reward = -0.1, quiescence_enabled = true, quiescence_blend_2 = 0.3, temp_min = 0.05, zoi_enabled = false, zoi_lookback = 16, zoi_margin = 5, completed_q_values = false, c_visit = 50.0, c_scale = 1.0, gumbel_mcts = false, gumbel_m = 16, gumbel_explore_moves = 10, dirichlet_alpha = 0.3, dirichlet_epsilon = 0.25, dirichlet_enabled = true, results_queue_cap = 10_000, full_search_prob = 0.0, n_sims_quick = 0, n_sims_full = 0, random_opening_plies = 0, selfplay_rotation_enabled = false, legal_move_radius_jitter = false, encoding_spec = None, radius_override = None, inference_pool_size = None))]
-    pub fn new(
-        n_workers: usize,
-        max_moves_per_game: usize,
-        n_simulations: usize,
-        leaf_batch_size: usize,
-        c_puct: f32,
-        fpu_reduction: f32,
-        feature_len: Option<usize>,
-        policy_len: Option<usize>,
-        fast_prob: f32,
-        fast_sims: usize,
-        standard_sims: usize,
-        temp_threshold_compound_moves: usize,
-        draw_reward: f32,
-        quiescence_enabled: bool,
-        quiescence_blend_2: f32,
-        temp_min: f32,
-        zoi_enabled: bool,
-        zoi_lookback: usize,
-        zoi_margin: i32,
-        completed_q_values: bool,
-        c_visit: f32,
-        c_scale: f32,
-        gumbel_mcts: bool,
-        gumbel_m: usize,
-        gumbel_explore_moves: usize,
-        dirichlet_alpha: f32,
-        dirichlet_epsilon: f32,
-        dirichlet_enabled: bool,
-        results_queue_cap: usize,
-        full_search_prob: f32,
-        n_sims_quick: usize,
-        n_sims_full: usize,
-        random_opening_plies: u32,
-        selfplay_rotation_enabled: bool,
-        legal_move_radius_jitter: bool,
-        encoding_spec: Option<crate::PyRegistrySpec>,
-        radius_override: Option<i32>,
-        inference_pool_size: Option<usize>,
-    ) -> PyResult<Self> {
+    pub fn new(config: SelfPlayRunnerConfig) -> PyResult<Self> {
+        let SelfPlayRunnerConfig {
+            n_workers,
+            max_moves_per_game,
+            n_simulations,
+            leaf_batch_size,
+            c_puct,
+            fpu_reduction,
+            feature_len,
+            policy_len,
+            fast_prob,
+            fast_sims,
+            standard_sims,
+            temp_threshold_compound_moves,
+            draw_reward,
+            quiescence_enabled,
+            quiescence_blend_2,
+            temp_min,
+            zoi_enabled,
+            zoi_lookback,
+            zoi_margin,
+            completed_q_values,
+            c_visit,
+            c_scale,
+            gumbel_mcts,
+            gumbel_m,
+            gumbel_explore_moves,
+            dirichlet_alpha,
+            dirichlet_epsilon,
+            dirichlet_enabled,
+            results_queue_cap,
+            full_search_prob,
+            n_sims_quick,
+            n_sims_full,
+            random_opening_plies,
+            selfplay_rotation_enabled,
+            legal_move_radius_jitter,
+            encoding_spec,
+            radius_override,
+            inference_pool_size,
+        } = config;
         // §172 A10 T8b — derive feature_len / policy_len from `encoding_spec`
         // (registry record) when explicit kwargs are omitted. Pre-T8b
         // defaults silently gave v6 geometry (2888 / 362) to v8 callers
@@ -607,11 +620,11 @@ mod tests {
     #[test]
     fn test_worker_id_assignment() {
         // Run with max_moves_per_game = 0 to avoid triggering MCTS and inference server dependency
-        let runner = SelfPlayRunner::new(
+        let runner = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
             4, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
-        ).unwrap();
+        )).unwrap();
         runner.start();
 
         let mut attempts = 0;
@@ -729,11 +742,11 @@ mod tests {
     /// requiring a full worker / inference-batcher spin-up.
     #[test]
     fn test_mcts_mean_depth_is_per_search_average() {
-        let runner = SelfPlayRunner::new(
+        let runner = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
             1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
-        ).unwrap();
+        )).unwrap();
 
         // Simulate three per-search stat pushes matching what the worker
         // loop does for depth 4.0 / 6.0 / 8.0. Scaling factor = 1_000_000.
@@ -765,11 +778,11 @@ mod tests {
         );
 
         // Zero-denominator guard.
-        let empty = SelfPlayRunner::new(
+        let empty = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
             1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
-        ).unwrap();
+        )).unwrap();
         assert_eq!(empty.mcts_mean_depth(), 0.0);
         assert_eq!(empty.mcts_mean_root_concentration(), 0.0);
     }

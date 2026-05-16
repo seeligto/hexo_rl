@@ -19,7 +19,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use engine::board::{Board, BOARD_SIZE};
-use engine::game_runner::SelfPlayRunner;
+use engine::game_runner::{SelfPlayRunner, SelfPlayRunnerConfig};
 
 /// Helper: construct a `SelfPlayRunner` with the full argument list. The
 /// positional-arg surface is painful but matches the existing test pattern
@@ -28,7 +28,7 @@ fn make_runner(
     max_moves_per_game: usize,
     random_opening_plies: u32,
 ) -> SelfPlayRunner {
-    SelfPlayRunner::new(
+    SelfPlayRunner::new(SelfPlayRunnerConfig::new(
         2,                                  // n_workers (2 keeps game count small)
         max_moves_per_game,
         1,                                  // n_simulations (irrelevant — no MCTS)
@@ -67,7 +67,7 @@ fn make_runner(
         None,                               // encoding_spec (§172 A10 T8b)
         None,                               // radius_override (§174)
         None,                               // inference_pool_size (§P55)
-    )
+    ))
     .expect("runner construction should succeed")
 }
 

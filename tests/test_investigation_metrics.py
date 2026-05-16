@@ -154,9 +154,9 @@ def test_divergent_top1_policies_nonzero_disagreement():
 
 def test_fresh_runner_returns_default_zeros():
     """New SelfPlayRunner has zero I2 samples → getters return 0.0."""
-    from engine import SelfPlayRunner  # type: ignore[attr-defined]
+    from engine import SelfPlayRunner, SelfPlayRunnerConfig  # type: ignore[attr-defined]
 
-    r = SelfPlayRunner()
+    r = SelfPlayRunner(SelfPlayRunnerConfig())
     assert r.cluster_value_std_mean == 0.0
     assert r.cluster_policy_disagreement_mean == 0.0
     assert r.cluster_variance_sample_count == 0

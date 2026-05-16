@@ -106,10 +106,10 @@ class TestSelfPlayRunnerGumbelConfig:
 
     def test_runner_accepts_gumbel_params(self):
         """SelfPlayRunner constructor accepts gumbel_mcts, gumbel_m, gumbel_explore_moves."""
-        from engine import SelfPlayRunner
+        from engine import SelfPlayRunner, SelfPlayRunnerConfig
 
         # Should not raise — verifies the PyO3 signature accepts the new params.
-        runner = SelfPlayRunner(
+        runner = SelfPlayRunner(SelfPlayRunnerConfig(
             n_workers=1,
             max_moves_per_game=0,  # 0 moves = instant game completion
             n_simulations=10,
@@ -121,19 +121,19 @@ class TestSelfPlayRunnerGumbelConfig:
             gumbel_mcts=True,
             gumbel_m=8,
             gumbel_explore_moves=5,
-        )
+        ))
         assert runner is not None
 
     def test_runner_defaults_gumbel_off(self):
         """SelfPlayRunner defaults to gumbel_mcts=False."""
-        from engine import SelfPlayRunner
+        from engine import SelfPlayRunner, SelfPlayRunnerConfig
 
         # Default construction — should not use Gumbel.
-        runner = SelfPlayRunner(
+        runner = SelfPlayRunner(SelfPlayRunnerConfig(
             n_workers=1,
             max_moves_per_game=0,
             n_simulations=10,
-        )
+        ))
         assert runner is not None
 
 

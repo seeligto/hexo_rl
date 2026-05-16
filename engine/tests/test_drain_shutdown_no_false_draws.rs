@@ -33,12 +33,12 @@
 use std::time::Duration;
 
 use engine::board::BOARD_SIZE;
-use engine::game_runner::SelfPlayRunner;
+use engine::game_runner::{SelfPlayRunner, SelfPlayRunnerConfig};
 
 /// Construct a SelfPlayRunner where every move is a random opening pick.
 /// Avoids the inference batcher entirely (per random_opening_plies.rs).
 fn make_runner_random_only(max_moves: usize) -> SelfPlayRunner {
-    SelfPlayRunner::new(
+    SelfPlayRunner::new(SelfPlayRunnerConfig::new(
         4,                                  // n_workers (more workers → higher mid-game stop probability)
         max_moves,
         1,                                  // n_simulations (irrelevant — no MCTS)
@@ -67,7 +67,7 @@ fn make_runner_random_only(max_moves: usize) -> SelfPlayRunner {
         None,                               // encoding_spec
         None,                               // radius_override
         None,                               // inference_pool_size
-    )
+    ))
     .expect("runner construction should succeed")
 }
 

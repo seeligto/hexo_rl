@@ -5,12 +5,12 @@
 /// `SelfPlayRunner::start()` panics if both arrive >0 through a path that
 /// bypasses that gate.
 
-use engine::game_runner::SelfPlayRunner;
+use engine::game_runner::{SelfPlayRunner, SelfPlayRunnerConfig};
 
 #[test]
 #[should_panic(expected = "playout-cap mutex violated")]
 fn start_panics_when_both_caps_active() {
-    let runner = SelfPlayRunner::new(
+    let runner = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
         1,                  // n_workers
         0,                  // max_moves_per_game (0 → workers exit immediately)
         1,                  // n_simulations
@@ -49,7 +49,7 @@ fn start_panics_when_both_caps_active() {
         None,               // encoding_spec (§172 A10 T8b: v6 default)
         None,               // radius_override (§174)
         None,               // inference_pool_size (§P55)
-    )
+    ))
     .expect("constructor succeeds; mutex is enforced at start()");
 
     runner.start();

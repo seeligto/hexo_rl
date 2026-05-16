@@ -201,14 +201,14 @@ def test_pretrained_weight_schedule():
 
 def test_runner_accepts_playout_cap_params():
     """SelfPlayRunner constructor accepts the new playout cap kwargs."""
-    from engine import SelfPlayRunner
+    from engine import SelfPlayRunner, SelfPlayRunnerConfig
 
-    runner = SelfPlayRunner(
+    runner = SelfPlayRunner(SelfPlayRunnerConfig(
         n_workers=1,
         n_simulations=50,
         fast_prob=0.25,
         fast_sims=50,
         standard_sims=400,
         temp_threshold_compound_moves=15,
-    )
+    ))
     assert not runner.is_running()

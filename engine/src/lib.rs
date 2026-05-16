@@ -39,6 +39,7 @@ fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     crate::pyo3::mcts::register(m)?;
     crate::pyo3::utils::register(m)?;
     m.add_class::<crate::inference_bridge::InferenceBatcher>()?;
+    m.add_class::<crate::game_runner::SelfPlayRunnerConfig>()?;
     m.add_class::<crate::game_runner::SelfPlayRunner>()?;
     m.add_class::<crate::replay_buffer::ReplayBuffer>()?;
     Ok(())

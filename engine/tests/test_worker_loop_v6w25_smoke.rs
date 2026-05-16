@@ -12,7 +12,7 @@
 //! SelfPlayRunner without a panic or shape mismatch.
 
 use engine::encoding::registry::lookup_or_panic;
-use engine::game_runner::SelfPlayRunner;
+use engine::game_runner::{SelfPlayRunner, SelfPlayRunnerConfig};
 use engine::replay_buffer::sym_tables::SymTables;
 
 /// v6w25 runner constructs with correct geometry and does not panic.
@@ -29,7 +29,7 @@ fn test_v6w25_runner_constructs_correct_geometry() {
     let expected_feature_len = spec.state_stride(); // 8 × 625 = 5000
     let expected_policy_len  = spec.policy_stride(); // 626
 
-    let runner = SelfPlayRunner::new(
+    let runner = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
         1,                        // n_workers
         0,                        // max_moves_per_game (no game loop)
         1,                        // n_simulations
@@ -68,7 +68,7 @@ fn test_v6w25_runner_constructs_correct_geometry() {
         Some(engine::PyRegistrySpec::from_static(spec)), // encoding_spec (§173 A5a)
         None,                     // radius_override (§174)
         None,                     // inference_pool_size (§P55)
-    )
+    ))
     .expect("v6w25 SelfPlayRunner must construct without panic");
 
     assert_eq!(

@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 import torch
 
-from engine import InferenceBatcher, SelfPlayRunner
+from engine import InferenceBatcher, SelfPlayRunner, SelfPlayRunnerConfig
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference_server import InferenceServer
 from hexo_rl.selfplay.pool import WorkerPool
@@ -55,9 +55,9 @@ def test_eval_path_disables_rotation_default_ctor():
     device = torch.device("cpu")
     model = HexTacToeNet(board_size=19, in_channels=8, filters=16, res_blocks=2).to(device)
 
-    runner = SelfPlayRunner(
+    runner = SelfPlayRunner(SelfPlayRunnerConfig(
         n_workers=1, max_moves_per_game=8, n_simulations=2, leaf_batch_size=1
-    )
+    ))
     server = InferenceServer(
         model, device,
         {"selfplay": {"inference_batch_size": 4, "inference_max_wait_ms": 5.0}},

@@ -147,9 +147,9 @@ def test_selfplay_runner_with_v8_spec_no_explicit_shape_kwargs():
     """
     import engine
 
-    runner = engine.SelfPlayRunner(
+    runner = engine.SelfPlayRunner(engine.SelfPlayRunnerConfig(
         **_runner_kwargs({"encoding_spec": engine.RegistrySpec.from_registry("v8")}),
-    )
+    ))
     assert runner.feature_len() == 11 * 25 * 25, (
         f"v8 caller silently got feature_len={runner.feature_len()}; expected 6875"
     )
@@ -162,7 +162,7 @@ def test_selfplay_runner_explicit_shapes_override_spec():
     """Backward-compat: explicit feature_len/policy_len win over spec."""
     import engine
 
-    runner = engine.SelfPlayRunner(
+    runner = engine.SelfPlayRunner(engine.SelfPlayRunnerConfig(
         **_runner_kwargs(
             {
                 "encoding_spec": engine.RegistrySpec.from_registry("v8"),
@@ -170,7 +170,7 @@ def test_selfplay_runner_explicit_shapes_override_spec():
                 "policy_len": 567,
             }
         ),
-    )
+    ))
     assert runner.feature_len() == 1234
     assert runner.policy_len() == 567
 
@@ -179,6 +179,6 @@ def test_selfplay_runner_legacy_no_spec_keeps_v6_default():
     """Backward-compat: omitting both spec AND kwargs falls back to v6 defaults."""
     import engine
 
-    runner = engine.SelfPlayRunner(**_runner_kwargs())
+    runner = engine.SelfPlayRunner(engine.SelfPlayRunnerConfig(**_runner_kwargs()))
     assert runner.feature_len() == 8 * 19 * 19
     assert runner.policy_len() == 19 * 19 + 1

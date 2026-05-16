@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 import torch
 
-from engine import InferenceBatcher, SelfPlayRunner
+from engine import InferenceBatcher, SelfPlayRunner, SelfPlayRunnerConfig
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference_server import InferenceServer
 from hexo_rl.selfplay.pool import WorkerPool
@@ -106,7 +106,7 @@ def test_rust_runner_with_inference_server_generates_positions():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = HexTacToeNet(board_size=19, in_channels=8, filters=32, res_blocks=2).to(device)
 
-    runner = SelfPlayRunner(n_workers=2, max_moves_per_game=16, n_simulations=1, leaf_batch_size=1)
+    runner = SelfPlayRunner(SelfPlayRunnerConfig(n_workers=2, max_moves_per_game=16, n_simulations=1, leaf_batch_size=1))
     server = InferenceServer(
         model,
         device,
@@ -136,7 +136,7 @@ def test_rust_runner_collect_data_format():
     model = HexTacToeNet(board_size=19, in_channels=8, filters=32, res_blocks=2).to(device)
     
     # Run with 1 worker and 1 simulation for speed
-    runner = SelfPlayRunner(n_workers=1, max_moves_per_game=4, n_simulations=1, leaf_batch_size=1)
+    runner = SelfPlayRunner(SelfPlayRunnerConfig(n_workers=1, max_moves_per_game=4, n_simulations=1, leaf_batch_size=1))
     server = InferenceServer(
         model,
         device,

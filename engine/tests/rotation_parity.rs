@@ -34,7 +34,7 @@
 //!   * `test_rotation_disabled_by_default_in_runner` proves the eval path
 //!     stays at sym_idx=0.
 
-use engine::game_runner::SelfPlayRunner;
+use engine::game_runner::{SelfPlayRunner, SelfPlayRunnerConfig};
 use engine::replay_buffer::sample::{apply_chain_symmetry, apply_symmetry_state};
 use engine::replay_buffer::sym_tables::{
     SymTables, N_ACTIONS, N_CELLS, N_CHAIN_PLANES, N_PLANES, N_SYMS,
@@ -330,7 +330,7 @@ fn test_rotation_preserves_top_k_under_relabel() {
 #[test]
 fn test_rotation_disabled_by_default_in_runner() {
     // Default ctor — rotation flag omitted; spec defaults to false.
-    let runner_default = SelfPlayRunner::new(
+    let runner_default = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
         1,            // n_workers
         0,            // max_moves_per_game (skip game loop)
         1,            // n_simulations
@@ -369,16 +369,16 @@ fn test_rotation_disabled_by_default_in_runner() {
         None,         // encoding_spec (§172 A10 T8b)
         None,         // radius_override (§174)
         None,         // inference_pool_size (§P55)
-    )
+    ))
     .expect("runner ctor with rotation=false must succeed");
     assert!(!runner_default.is_running());
 
     // Explicit rotation=true must also accept (training-loop path).
-    let runner_rot = SelfPlayRunner::new(
+    let runner_rot = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
         1, 0, 1, 1, 1.5, 0.25, Some(8 * 19 * 19), Some(19 * 19 + 1), 0.0, 1, 1, 15, -0.1, true,
         0.3, 0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
         10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, true, false, None, None, None,
-    )
+    ))
     .expect("runner ctor with rotation=true must succeed");
     assert!(!runner_rot.is_running());
 }

@@ -24,7 +24,7 @@ import engine
 import pytest
 import torch
 
-from engine import Board, ReplayBuffer, SelfPlayRunner
+from engine import Board, ReplayBuffer, SelfPlayRunner, SelfPlayRunnerConfig
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 from hexo_rl.selfplay.pool import WorkerPool
 
@@ -84,22 +84,22 @@ def test_selfplay_runner_accepts_encoding_kwarg():
     v6 defaults. Both must construct without raising."""
     spec = engine.RegistrySpec.from_registry("v6w25")
     # With encoding_spec kwarg.
-    r1 = SelfPlayRunner(
+    r1 = SelfPlayRunner(SelfPlayRunnerConfig(
         n_workers=1,
         max_moves_per_game=0,
         n_simulations=1,
         leaf_batch_size=1,
         encoding_spec=spec,
-    )
+    ))
     assert not r1.is_running()
 
     # Without encoding kwarg — backward-compat for every pre-A1 caller.
-    r2 = SelfPlayRunner(
+    r2 = SelfPlayRunner(SelfPlayRunnerConfig(
         n_workers=1,
         max_moves_per_game=0,
         n_simulations=1,
         leaf_batch_size=1,
-    )
+    ))
     assert not r2.is_running()
 
 
@@ -117,13 +117,13 @@ def test_selfplay_runner_v6w25_workers_use_w25_boards():
     via `Board.with_encoding_name("v6w25")` matches.
     """
     py_spec = engine.RegistrySpec.from_registry("v6w25")
-    runner = SelfPlayRunner(
+    runner = SelfPlayRunner(SelfPlayRunnerConfig(
         n_workers=2,
         max_moves_per_game=0,           # workers spin per-game Board ctor
         n_simulations=1,
         leaf_batch_size=1,
         encoding_spec=py_spec,
-    )
+    ))
 
     # Direct FFI assert — runner derived v6w25 geometry from the spec.
     assert runner.feature_len() == 8 * 25 * 25, (
@@ -154,13 +154,13 @@ def test_selfplay_runner_v6_default_workers_use_w19_boards():
     worker on v6 perception. Verifies that the legacy `Board::new()` path
     (the worker_loop's no-spec branch) is byte-exact unchanged, and that
     the runner derives v6 default geometry."""
-    runner = SelfPlayRunner(
+    runner = SelfPlayRunner(SelfPlayRunnerConfig(
         n_workers=2,
         max_moves_per_game=0,
         n_simulations=1,
         leaf_batch_size=1,
         # encoding intentionally omitted — defaults to v6 geometry
-    )
+    ))
 
     # Direct FFI assert — geometry reflects v6 defaults.
     assert runner.feature_len() == 8 * 19 * 19, (
