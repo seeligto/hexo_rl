@@ -34,6 +34,7 @@
 pub mod sym_tables;
 mod storage;
 mod push;
+pub mod push_config;
 pub mod sample;
 mod persist;
 
@@ -178,7 +179,8 @@ impl ReplayBuffer {
     }
 
     /// Store a single (state, chain_planes, policy, outcome, ownership, winning_line) sample.
-    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
+    // KEEP — PyO3 kwarg surface mirrors 9 user-tunable params; INV20 contract
+    // pins facade signature byte-identical pre/post Wave 7 Batch B P79 refactor.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (state, chain_planes, policy, outcome, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = true))]
     pub fn push(
@@ -193,11 +195,15 @@ impl ReplayBuffer {
         game_length:    u16,
         is_full_search: bool,
     ) -> PyResult<()> {
-        self.push_impl(state, chain_planes, policy, outcome, ownership, winning_line, game_id, game_length, is_full_search)
+        self.push_impl(push_config::PushSingleConfig {
+            state, chain_planes, policy, outcome, ownership, winning_line,
+            game_id, game_length, is_full_search,
+        })
     }
 
     /// Store all positions from a completed game efficiently.
-    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
+    // KEEP — PyO3 kwarg surface mirrors 9 user-tunable params; INV20 contract
+    // pins facade signature byte-identical pre/post Wave 7 Batch B P79 refactor.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (states, chain_planes, policies, outcomes, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = None))]
     pub fn push_game(
@@ -212,7 +218,10 @@ impl ReplayBuffer {
         game_length:    u16,
         is_full_search: Option<PyReadonlyArray1<u8>>,
     ) -> PyResult<()> {
-        self.push_game_impl(states, chain_planes, policies, outcomes, ownership, winning_line, game_id, game_length, is_full_search)
+        self.push_game_impl(push_config::PushGameConfig {
+            states, chain_planes, policies, outcomes, ownership, winning_line,
+            game_id, game_length, is_full_search,
+        })
     }
 
     /// Store N positions with per-row game_length and is_full_search in one PyO3 call.
@@ -224,7 +233,8 @@ impl ReplayBuffer {
     ///
     /// Per-row `game_lengths` must be pre-computed compound-move counts
     /// (i.e. `(plies + 1) / 2`); value 0 → default weight 1.0.
-    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
+    // KEEP — PyO3 kwarg surface mirrors 8 user-tunable params; INV20 contract
+    // pins facade signature byte-identical pre/post Wave 7 Batch B P79 refactor.
     #[allow(clippy::too_many_arguments)]
     pub fn push_many(
         &mut self,
@@ -237,7 +247,10 @@ impl ReplayBuffer {
         game_lengths:   PyReadonlyArray1<u16>,
         is_full_search: PyReadonlyArray1<u8>,
     ) -> PyResult<()> {
-        self.push_many_impl(states, chain_planes, policies, outcomes, ownership, winning_line, game_lengths, is_full_search)
+        self.push_many_impl(push_config::PushManyConfig {
+            states, chain_planes, policies, outcomes, ownership, winning_line,
+            game_lengths, is_full_search,
+        })
     }
 
     /// Sample `batch_size` entries, optionally with 12-fold hex augmentation.

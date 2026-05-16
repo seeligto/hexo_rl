@@ -8,7 +8,6 @@
 use half::f16;
 use std::sync::atomic::Ordering;
 
-use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArray4};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -18,6 +17,7 @@ use super::sym_tables::{
     POLICY_STRIDE, STATE_STRIDE,
 };
 use super::ReplayBuffer;
+use super::push_config::{PushGameConfig, PushManyConfig, PushSingleConfig};
 
 impl ReplayBuffer {
     /// Store a single `(state, chain_planes, policy, outcome, ownership, winning_line)` sample.
@@ -36,20 +36,12 @@ impl ReplayBuffer {
     ///
     /// All aux targets MUST be projected to the same window centre as `state` (per-row cluster
     /// centre, not the game-end bbox centroid).
-    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn push_impl(
-        &mut self,
-        state:          PyReadonlyArray3<f16>,
-        chain_planes:   PyReadonlyArray3<f16>,
-        policy:         PyReadonlyArray1<f32>,
-        outcome:        f32,
-        ownership:      PyReadonlyArray1<u8>,
-        winning_line:   PyReadonlyArray1<u8>,
-        game_id:        i64,
-        game_length:    u16,
-        is_full_search: bool,
-    ) -> PyResult<()> {
+    pub(crate) fn push_impl(&mut self, cfg: PushSingleConfig<'_>) -> PyResult<()> {
+        let PushSingleConfig {
+            state, chain_planes, policy, outcome, ownership, winning_line,
+            game_id, game_length, is_full_search,
+        } = cfg;
+
         let state_slice  = state.as_slice()
             .map_err(|e| PyValueError::new_err(format!("state not contiguous: {e}")))?;
         let chain_slice  = chain_planes.as_slice()
@@ -160,20 +152,12 @@ impl ReplayBuffer {
     ///     winning_line:  uint8   numpy array of shape (T, 361)  per-row binary mask
     ///     game_id:       shared position tag for all T entries; default −1
     ///     game_length:   total compound moves in the originating game; default 0 (= weight 1.0)
-    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn push_game_impl(
-        &mut self,
-        states:         PyReadonlyArray4<f16>,
-        chain_planes:   PyReadonlyArray4<f16>,
-        policies:       PyReadonlyArray2<f32>,
-        outcomes:       PyReadonlyArray1<f32>,
-        ownership:      PyReadonlyArray2<u8>,
-        winning_line:   PyReadonlyArray2<u8>,
-        game_id:        i64,
-        game_length:    u16,
-        is_full_search: Option<PyReadonlyArray1<u8>>,
-    ) -> PyResult<()> {
+    pub(crate) fn push_game_impl(&mut self, cfg: PushGameConfig<'_>) -> PyResult<()> {
+        let PushGameConfig {
+            states, chain_planes, policies, outcomes, ownership, winning_line,
+            game_id, game_length, is_full_search,
+        } = cfg;
+
         let states_s   = states.as_slice()
             .map_err(|e| PyValueError::new_err(format!("states not contiguous: {e}")))?;
         let chain_s    = chain_planes.as_slice()
@@ -292,19 +276,12 @@ impl ReplayBuffer {
     ///     winning_line:   uint8   numpy array of shape (N, 361)
     ///     game_lengths:   uint16  numpy array of shape (N,) — compound-move counts
     ///     is_full_search: uint8   numpy array of shape (N,)
-    // cycle 3 P79: builder pattern for ReplayBuffer push API (PyO3 signature)
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn push_many_impl(
-        &mut self,
-        states:         PyReadonlyArray4<f16>,
-        chain_planes:   PyReadonlyArray4<f16>,
-        policies:       PyReadonlyArray2<f32>,
-        outcomes:       PyReadonlyArray1<f32>,
-        ownership:      PyReadonlyArray2<u8>,
-        winning_line:   PyReadonlyArray2<u8>,
-        game_lengths:   PyReadonlyArray1<u16>,
-        is_full_search: PyReadonlyArray1<u8>,
-    ) -> PyResult<()> {
+    pub(crate) fn push_many_impl(&mut self, cfg: PushManyConfig<'_>) -> PyResult<()> {
+        let PushManyConfig {
+            states, chain_planes, policies, outcomes, ownership, winning_line,
+            game_lengths, is_full_search,
+        } = cfg;
+
         let states_s   = states.as_slice()
             .map_err(|e| PyValueError::new_err(format!("states not contiguous: {e}")))?;
         let chain_s    = chain_planes.as_slice()
