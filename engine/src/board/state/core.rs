@@ -476,10 +476,13 @@ impl Board {
 
     /// Apply a move at (q, r) for the current player.
     ///
-    /// Returns an error if the cell is outside the current 19×19 window or is
-    /// already occupied.  Any in-window empty cell is accepted (the player is
-    /// not restricted to the bbox+2 margin — that is enforced by MCTS via
-    /// `legal_moves`, not by the board itself).
+    /// Returns `Err` only if the cell is already occupied. Post-§142 the
+    /// board is conceptually infinite (`docs/rules/board-representation.md`)
+    /// — `apply_move` performs no window or radius check, and any
+    /// previously-empty (q, r) is accepted. Window / radius / bbox-margin
+    /// constraints are the caller's responsibility (`legal_moves_set` for
+    /// MCTS, `legal_move_radius` for self-play, etc.); this entry point is
+    /// the unconditional cell-write primitive.
     ///
     /// After a successful move:
     /// - `moves_remaining` decrements.

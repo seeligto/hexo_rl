@@ -447,6 +447,16 @@ impl SelfPlayRunner {
         self.games_completed.load(Ordering::Relaxed)
     }
 
+    /// Rows produced by self-play workers — continuous per-ply counter
+    /// (§128). EXCLUDES random-opening plies: when
+    /// `random_opening_plies > 0` the worker selects opening moves
+    /// uniformly at random WITHOUT pushing rows to the replay buffer
+    /// (random-move targets would poison policy/value heads), and the
+    /// counter is intentionally not bumped (see
+    /// `worker_loop.rs:542`). Consequence for dashboards: `pos/hr`
+    /// derived from this counter excludes opening wall-clock work and
+    /// is only directly comparable across runs that share the same
+    /// `random_opening_plies` value.
     #[getter]
     pub fn positions_generated(&self) -> usize {
         self.positions_generated.load(Ordering::Relaxed)

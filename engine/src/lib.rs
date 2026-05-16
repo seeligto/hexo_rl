@@ -11,6 +11,17 @@ pub mod encoding;
 pub mod game_runner;
 pub mod inference_bridge;
 pub mod mcts;
+/// `pub mod pyo3` SHADOWS the external `pyo3` crate inside this module's
+/// resolution scope. Any `use pyo3::...;` at lib.rs scope resolves to the
+/// local module first and fails (no `prelude` inside our shim).
+///
+/// **Mitigation:** lib.rs uses fully-qualified `use ::pyo3::prelude::*;`
+/// (leading `::` forces extern-crate resolution). Submodules under
+/// `engine/src/pyo3/` use the unqualified `use pyo3::prelude::*;` because
+/// the local `mod pyo3` is not in their resolution scope.
+///
+/// Preflight artifact: `audit/rust-engine/cycle_2/wave_5b/g6_preflight.txt`
+/// (44+ compile errors confirmed when the leading `::` is omitted).
 pub mod pyo3;
 pub mod replay_buffer;
 

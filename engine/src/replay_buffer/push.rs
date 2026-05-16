@@ -23,8 +23,10 @@ use super::ReplayBuffer;
 impl ReplayBuffer {
     /// Store a single `(state, chain_planes, policy, outcome, ownership, winning_line)` sample.
     ///
-    /// Args:
-    ///     state:        float16 numpy array of shape (8, 19, 19) — HEXB v6 KEPT_PLANE_INDICES
+    /// Args (shapes shown for encoding=v6; generally
+    /// `(encoding.n_planes, encoding.trunk_size, encoding.trunk_size)`,
+    /// `(encoding.policy_logit_count,)` etc. — derived from `self.encoding`):
+    ///     state:        float16 numpy array of shape (8, 19, 19) — KEPT_PLANE_INDICES
     ///     chain_planes: float16 numpy array of shape (6, 19, 19) — Q13 chain-length planes
     ///     policy:       float32 numpy array of shape (362,)
     ///     outcome:      scalar float32  (−1 / 0 / +1)
@@ -149,8 +151,9 @@ impl ReplayBuffer {
     ///
     /// Handles ring-buffer wrap-around correctly.
     ///
-    /// Args:
-    ///     states:        float16 numpy array of shape (T, 8, 19, 19) — HEXB v6
+    /// Args (shapes shown for encoding=v6; generally
+    /// `(T, encoding.n_planes, encoding.trunk_size, encoding.trunk_size)` etc.):
+    ///     states:        float16 numpy array of shape (T, 8, 19, 19)
     ///     chain_planes:  float16 numpy array of shape (T, 6, 19, 19)
     ///     policies:      float32 numpy array of shape (T, 362)
     ///     outcomes:      float32 numpy array of shape (T,)
@@ -280,8 +283,9 @@ impl ReplayBuffer {
     /// Replaces the per-row `push` loop in `WorkerPool._stats_loop`, avoiding
     /// N PyO3 method-dispatch + PyRefMut acquire/release cycles.
     ///
-    /// Args:
-    ///     states:         float16 numpy array of shape (N, 8, 19, 19) — HEXB v6
+    /// Args (shapes shown for encoding=v6; generally
+    /// `(N, encoding.n_planes, encoding.trunk_size, encoding.trunk_size)` etc.):
+    ///     states:         float16 numpy array of shape (N, 8, 19, 19)
     ///     chain_planes:   float16 numpy array of shape (N, 6, 19, 19)
     ///     policies:       float32 numpy array of shape (N, 362)
     ///     outcomes:       float32 numpy array of shape (N,)

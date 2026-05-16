@@ -16,7 +16,7 @@
 //! Per Wave 5a Batch C PREP §A: v6 / v7full / v7 / v7e30 / v7mw all share
 //! `(8, 19, 362, true, "size_19")`. v8 / v8_canvas_realness share
 //! `(11, 25, 625, false, "size_25")`. v6w25 stands alone at
-//! `(8, 25, 362, true, "size_25")`.
+//! `(8, 25, 626, true, "size_25")`.
 
 use engine::replay_buffer::ReplayBuffer;
 use std::env::temp_dir;

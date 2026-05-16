@@ -340,7 +340,7 @@ impl RegistrySpec {
     /// `ReplayBuffer::load_from_path_impl`:
     ///   - v6 / v7full / v7 / v7e30 / v7mw → (8, 19, 362, true, "size_19")
     ///   - v8 / v8_canvas_realness        → (11, 25, 625, false, "size_25")
-    ///   - v6w25 stays distinct           → (8,  25, 362, true, "size_25")
+    ///   - v6w25 stays distinct           → (8,  25, 626, true, "size_25")
     ///
     /// Derived from existing fields — Registry-as-SSR (TOML) untouched.
     #[inline]

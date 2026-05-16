@@ -9,13 +9,14 @@
 //!   storage.rs    — resize, dashboard stats, weight schedule, monotonic id
 //!   push.rs       — single-position `push`, batched `push_game`, test-only `push_raw`
 //!   sample.rs     — `sample_batch` entry + weighted-sample + 12-fold apply_sym kernel
-//!   persist.rs    — HEXB v3 save / load
+//!   persist.rs    — HEXB v7 save / load (on-disk format; current §174)
 //!   sym_tables.rs — 12-fold permutation tables, axis-plane remap, constants
 //!
 //! ## Memory layout (flat, row-major)
-//!   states       : Vec<u16> — f16 bits, logical shape [capacity, 8, 361]
-//!                            (HEXB v6: 8 buffer planes per KEPT_PLANE_INDICES; chain planes
-//!                            stored separately)
+//!   states       : Vec<u16> — f16 bits, logical shape
+//!                            [capacity, encoding.n_planes, encoding.trunk_size²]
+//!                            (encoding=v6: 8 buffer planes per KEPT_PLANE_INDICES,
+//!                            trunk 19; chain planes stored separately)
 //!   chain_planes : Vec<u16> — f16 bits, logical shape [capacity, 6, 361]
 //!                            (Q13 chain-length planes: 3 axes × 2 players, normalized /6)
 //!   policies     : Vec<f32> — logical shape [capacity, 362]
@@ -241,8 +242,9 @@ impl ReplayBuffer {
 
     /// Sample `batch_size` entries, optionally with 12-fold hex augmentation.
     ///
-    /// Returns:
-    ///     states:          float16 numpy array of shape (batch_size, 8, 19, 19) — HEXB v6
+    /// Returns (shapes shown for encoding=v6; generally
+    /// `(batch_size, encoding.n_planes, encoding.trunk_size, encoding.trunk_size)`):
+    ///     states:          float16 numpy array of shape (batch_size, 8, 19, 19)
     ///     chain_planes:    float16 numpy array of shape (batch_size, 6, 19, 19)
     ///     policies:        float32 numpy array of shape (batch_size, 362)
     ///     outcomes:        float32 numpy array of shape (batch_size,)
@@ -284,7 +286,7 @@ impl ReplayBuffer {
         self.set_weight_schedule_impl(thresholds, weights, default_weight)
     }
 
-    /// Save buffer contents to a binary file (HEXB v2 format).
+    /// Save buffer contents to a binary file (HEXB v7 on-disk format; current §174).
     #[pyo3(text_signature = "(self, path)")]
     pub fn save_to_path(&self, path: &str) -> PyResult<()> {
         self.save_to_path_impl(path)

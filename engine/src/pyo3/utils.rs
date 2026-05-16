@@ -79,13 +79,17 @@ fn apply_symmetries_batch<'py>(
 
 /// Read the process-wide MCTS pool-overflow counter without resetting.
 ///
-/// Pool overflow events fabricate a terminal value at the leaf and let
-/// it propagate through `backup()`, biasing visit counts and
-/// policy/value training targets. The counter is global (all trees
-/// across all worker threads share it) — bench drops contaminated
-/// runs by reading deltas across measurement windows; production
-/// training loops should sample it periodically and alarm if it
-/// grows.
+/// Post-§127 semantics: pool overflow is a hard panic — the counter is
+/// incremented immediately before `panic!()` inside the MCTS node
+/// allocator. A live process therefore never observes a nonzero value
+/// from its own work. Non-zero reads at startup indicate a previous-life
+/// event (test fixture with a hand-crafted small pool, or a config that
+/// drove the worker outside MCTS `MAX_NODES`' design envelope) carried
+/// across the symbol surface, not a silent terminal-value fabrication.
+///
+/// The counter is global (all trees across all worker threads share it).
+/// Bench harnesses use the take-counterpart (`take_mcts_pool_overflow_count`)
+/// to bracket measurement windows and reject contaminated runs.
 #[pyfunction]
 fn mcts_pool_overflow_count() -> u64 {
     mcts::pool_overflow_count()

@@ -275,7 +275,7 @@ impl ReplayBuffer {
         // even when their names differ — v6 / v7full / v7 / v7e30 / v7mw all
         // share `(8, 19, 362, true, "size_19")`; v8 / v8_canvas_realness share
         // `(11, 25, 625, false, "size_25")`; v6w25 stays distinct at
-        // `(8, 25, 362, true, "size_25")`. Strict shape rejection is preserved
+        // `(8, 25, 626, true, "size_25")`. Strict shape rejection is preserved
         // — any signature drift (different n_planes, board_size,
         // policy_logit_count, has_pass_slot, or sym_table_id) still hard-errors.
         let buffer_sig = self.encoding.wire_signature();
