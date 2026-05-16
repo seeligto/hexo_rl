@@ -4,5 +4,6 @@
 //! bridge helpers (`from_inner`, `inner()`, etc.) the rest of the engine
 //! uses to construct or unwrap the wrapper.
 
+pub mod board;
 pub mod encoding;
 pub mod utils;
