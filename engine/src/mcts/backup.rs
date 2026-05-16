@@ -86,6 +86,11 @@ pub(crate) fn pick_topk_children(
         return (chosen, false);
     }
 
+    // §P5: collapse the prior double-allocation (sort buffer + final `chosen`)
+    // into a single pre-sized `chosen` Vec. Sort path now allocates exactly one
+    // Vec of `((q,r), sort_prior, flat)` triples (needed for sort + tie-break),
+    // sorts + truncates, then drains in order into a single K-sized `chosen`
+    // Vec built up-front. No intermediate `.collect()` re-allocation.
     let mut all: Vec<((i32, i32), f32, usize)> = legal_moves
         .iter()
         .map(|&(q, r)| {
@@ -102,17 +107,15 @@ pub(crate) fn pick_topk_children(
     });
     all.truncate(MAX_CHILDREN_PER_NODE);
 
-    let chosen: Vec<((i32, i32), f32)> = all
-        .into_iter()
-        .map(|((q, r), _sort_prior, flat)| {
-            let prior = if flat < policy.len() {
-                policy[flat]
-            } else {
-                1.0 / n_ch as f32
-            };
-            ((q, r), prior)
-        })
-        .collect();
+    let mut chosen: Vec<((i32, i32), f32)> = Vec::with_capacity(all.len());
+    for ((q, r), _sort_prior, flat) in all {
+        let prior = if flat < policy.len() {
+            policy[flat]
+        } else {
+            1.0 / n_ch as f32
+        };
+        chosen.push(((q, r), prior));
+    }
 
     (chosen, true)
 }
@@ -285,25 +288,28 @@ impl MCTSTree {
 
     /// Expand all pending leaves and backup values to the root.
     pub fn expand_and_backup(&mut self, policies: &[Vec<f32>], values: &[f32]) {
-        let pending: Vec<(u32, Vec<crate::board::MoveDiff>)> = std::mem::take(&mut self.pending);
+        // §P9: pending now owns the leaf `Board` (§P6 tuple shape change).
+        // Per-leaf `root_board.clone() + N × apply_move` re-walk eliminated;
+        // each leaf board is consumed directly. SD3 disclosure: P9 + P6
+        // share the pending tuple shape change (Vec<MoveDiff> → Board).
+        let pending: Vec<(u32, crate::board::Board)> = std::mem::take(&mut self.pending);
         let n = pending.len().min(policies.len()).min(values.len());
 
+        // §P7: TTEntry.policy is `Arc<Vec<f32>>`. We allocate one Arc per
+        // first-touch insertion (cheaper than the prior per-hit clone path
+        // because hits dominate at high TT-hit rate); the policy slice is
+        // still threaded through `expand_and_backup_single` as `&[f32]`.
         for i in 0..n {
-            let (leaf_idx, ref diffs) = pending[i];
+            let (leaf_idx, board) = &pending[i];
             let policy = &policies[i];
             let value  = values[i];
 
-            let mut board = self.root_board.clone();
-            for diff in diffs {
-                board.apply_move(diff.q, diff.r).expect("moves in diffs must be legal");
-            }
-
             self.transposition_table.insert(board.zobrist_hash, super::node::TTEntry {
-                policy: policy.clone(),
+                policy: std::sync::Arc::new(policy.clone()),
                 value,
             });
 
-            self.expand_and_backup_single(leaf_idx, &board, policy, value);
+            self.expand_and_backup_single(*leaf_idx, board, policy, value);
         }
     }
 

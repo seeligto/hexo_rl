@@ -44,7 +44,7 @@ pub use backup::{pool_overflow_count, take_pool_overflow_count};
 /// by local policy + flat_idx, both invariant under root rotation.
 pub const MAX_CHILDREN_PER_NODE: usize = 192;
 
-use crate::board::{Board, MoveDiff, BOARD_SIZE};
+use crate::board::{Board, BOARD_SIZE};
 use fxhash::FxHashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -63,7 +63,12 @@ pub struct MCTSTree {
     pub(crate) fpu_reduction: f32,
     pub selection_overlap_count: u32,
     pub max_depth_observed: u32,
-    pub(crate) pending: Vec<(u32, Vec<MoveDiff>)>,
+    /// §P6+§P9: pending leaves carry the fully-replayed leaf `Board` itself
+    /// (zobrist + ply state captured at `select_one_leaf` exit), eliminating
+    /// the per-leaf `root_board.clone() + N × apply_move` re-walk previously
+    /// done inside `expand_and_backup`. MoveDiff Vec retired (its
+    /// prev_zobrist/bbox/anchors fields were never consumed downstream).
+    pub(crate) pending: Vec<(u32, Board)>,
     pub transposition_table: FxHashMap<u128, TTEntry>,
     /// Enable quiescence value override at leaf nodes.
     /// When true, if the current player has ≥3 winning moves the value is
