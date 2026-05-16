@@ -15,9 +15,19 @@ struct PendingRequest {
     features: Vec<f32>,
 }
 
+/// Waiter result payload (§P74): the policy buffer is delivered as
+/// `(Arc<Vec<f32>>, Range<usize>, f32)` so a single bulk `to_vec()` at the
+/// submitter side replaces N per-row `to_vec()` allocations. Consumers
+/// materialise the owned `Vec<f32>` (preserving the public
+/// `(Vec<f32>, f32)` contract) only at pull-time via `arc[range].to_vec()`.
+///
+/// Precedent: `TTEntry.policy = Arc<Vec<f32>>` in `engine/src/mcts/backup.rs`
+/// (Wave 4 P7). Same Arc-share + late-materialise pattern.
+type WaiterPayload = Result<(Arc<Vec<f32>>, std::ops::Range<usize>, f32), String>;
+
 #[derive(Default)]
 struct Waiter {
-    result: Mutex<Option<Result<(Vec<f32>, f32), String>>>,
+    result: Mutex<Option<WaiterPayload>>,
     cv: Condvar,
 }
 
@@ -81,15 +91,21 @@ impl Inner {
         let mut guard = waiter.result.lock().expect("waiter lock poisoned");
         loop {
             if let Some(res) = guard.take() {
+                // §P74: result is `(Arc<Vec<f32>>, Range<usize>, f32)`.
+                // Materialise the owned Vec at consumer pull-time so the
+                // external `(Vec<f32>, f32)` contract is preserved. Range
+                // length is the validated policy length from the submitter.
                 match res {
-                    Ok((policy, value)) => {
-                        if policy.len() != expected_policy_len {
+                    Ok((policy_arc, range, value)) => {
+                        let policy_len = range.len();
+                        if policy_len != expected_policy_len {
                             return Err(PyValueError::new_err(format!(
                                 "policy length mismatch for request {id}: got {}, expected {}",
-                                policy.len(),
+                                policy_len,
                                 expected_policy_len
                             )));
                         }
+                        let policy = policy_arc[range].to_vec();
                         return Ok((policy, value));
                     }
                     Err(e) => return Err(PyValueError::new_err(format!("inference failed: {e}"))),
@@ -195,8 +211,16 @@ impl InferenceBatcher {
             let mut guard = waiter.result.lock().expect("waiter lock poisoned");
             loop {
                 if let Some(res) = guard.take() {
+                    // §P74: result is `(Arc<Vec<f32>>, Range<usize>, f32)`.
+                    // Materialise the owned Vec here so `worker_loop.rs`'s
+                    // `for (mut p, v) in results` (in-place rotation path)
+                    // keeps working. The Arc bulk-share collapses N submitter
+                    // allocations to 1; the per-row Vec materialise on the
+                    // consumer side is required only because downstream
+                    // mutates `p` for symmetry rotation.
                     match res {
-                        Ok((policy, value)) => {
+                        Ok((policy_arc, range, value)) => {
+                            let policy = policy_arc[range].to_vec();
                             results.push((policy, value));
                             break;
                         }
@@ -403,16 +427,32 @@ impl InferenceBatcher {
         let values_view = values.readonly();
         let values_slice = values_view.as_slice()?;
 
+        // §P74: wrap the whole policies buffer in `Arc<Vec<f32>>` ONCE.
+        // The bulk copy from numpy-owned memory into a Rust-owned Vec
+        // happens here exactly once per submit_inference_results call.
+        // Each waiter receives an `Arc::clone(&shared_policies)` + its
+        // own (start..end) range, replacing N per-row
+        // `policies_slice[start..end].to_vec()` heap allocations with
+        // N refcount bumps. Total bytes copied are unchanged; alloc
+        // count drops from N → 1 (plus N Arc bumps).
+        //
+        // GIL-safety (§F risk 2 of Wave 5a PREP): `Arc::clone` happens
+        // OUTSIDE any waiter mutex. The pattern is: clone → enter
+        // waiter.result.lock() → store → drop guard → notify.
+        // Mirrors the Wave 4 P7 TTEntry.policy = Arc<Vec<f32>> pattern
+        // (engine/src/mcts/backup.rs:~298 / ~318).
+        let shared_policies: Arc<Vec<f32>> = Arc::new(policies_slice.to_vec());
+
         for i in 0..n {
             let id = request_ids[i];
             if let Some((_, waiter)) = self.inner.waiters.remove(&id) {
                 let start = i * self.policy_len;
                 let end = start + self.policy_len;
-                let policy_vec = policies_slice[start..end].to_vec();
+                let policy_arc = Arc::clone(&shared_policies);
                 let value = values_slice[i];
 
                 let mut result_guard = waiter.result.lock().expect("waiter lock poisoned");
-                *result_guard = Some(Ok((policy_vec, value)));
+                *result_guard = Some(Ok((policy_arc, start..end, value)));
                 waiter.cv.notify_all();
             }
         }

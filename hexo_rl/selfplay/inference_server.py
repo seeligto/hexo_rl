@@ -408,10 +408,30 @@ class InferenceServer(threading.Thread):
                     self._total_requests += len(request_ids)
 
                     try:
-                        # Ensure the batch is explicitly C-contiguous for safe pointer arithmetic in Rust as_slice()
-                        # Coordinate Sentinels (usize::MAX): These are handled in the Rust core during tensor extraction;
-                        # out-of-window indices are zeroed before reaching this fused batch.
-                        batch_np = np.ascontiguousarray(batch, dtype=np.float32)
+                        # §P75 (Wave 5a Batch E): Rust contract on the bound
+                        # supplier guarantees `batch` is already a float32
+                        # C-contiguous numpy array — `next_inference_batch`
+                        # returns `PyArray1::from_vec(py, flat_features)
+                        # .reshape([n, feature_len])` (see
+                        # engine/src/inference_bridge.rs:~370), and
+                        # `IntoPyArray` builds a contiguous buffer that
+                        # `reshape` cannot strip without copying. The
+                        # previous defensive `np.ascontiguousarray(batch,
+                        # dtype=np.float32)` performed an unconditional
+                        # ~740 KB memcpy per batch (v6 batch=64 ×
+                        # feature_len=2888 × 4 B) + ~1-2 µs of dtype
+                        # inspection. Replaced with a debug-only assert
+                        # that disappears under `python -O`.
+                        if __debug__:
+                            assert batch.dtype == np.float32, (
+                                f"InferenceBatcher.next_inference_batch returned dtype={batch.dtype}; "
+                                "Rust contract guarantees float32"
+                            )
+                            assert batch.flags["C_CONTIGUOUS"], (
+                                f"InferenceBatcher.next_inference_batch returned flags={batch.flags}; "
+                                "Rust contract guarantees C-contiguous"
+                            )
+                        batch_np = batch
                         n = len(request_ids)
                         _pad = self._padding_active()
                         if self._h2d_staging is not None:
