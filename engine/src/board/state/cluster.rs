@@ -35,6 +35,10 @@ impl Board {
     /// `to_planes()` / `Board.to_tensor()` (the single-board Python binding)
     /// also uses `encode_planes_to_buffer`, so the 2-plane snapshot and the
     /// 18-plane encoding share the same kernel.
+    // Truncate-toward-zero semantics preserves anchor calibration for
+    // v6/v6w25 checkpoints trained pre-2b0dd08. See
+    // audit/rust-engine/cycle_3/00_i32_midpoint_forensic.md.
+    #[allow(clippy::manual_midpoint)]
     pub fn get_cluster_views(&self) -> (Vec<Vec<f32>>, Vec<(i32, i32)>) {
         // §168 Gate 3: window dimensions resolve from `self.cluster_window_size`
         // (default 19 = v6 wire format; v6w25 callers set 25). The "small
@@ -72,7 +76,7 @@ impl Board {
 
                 if span_q <= span_threshold && span_r <= span_threshold {
                     // Small Clusters: single window centered on geometric middle
-                    final_centers.push((i32::midpoint(min_q, max_q), i32::midpoint(min_r, max_r)));
+                    final_centers.push(((min_q + max_q) / 2, (min_r + max_r) / 2));
                 } else {
                     // Massive Clusters: window centered on each Action and Threat anchor in the cluster
                     let mut cluster_anchors = Vec::new();
@@ -93,7 +97,7 @@ impl Board {
 
                     if cluster_anchors.is_empty() {
                         // Fallback if no anchors found
-                        final_centers.push((i32::midpoint(min_q, max_q), i32::midpoint(min_r, max_r)));
+                        final_centers.push(((min_q + max_q) / 2, (min_r + max_r) / 2));
                     } else {
                         // Deduplicate anchors: radius matches v6 baseline (5)
                         // regardless of cluster_window_size — this is a

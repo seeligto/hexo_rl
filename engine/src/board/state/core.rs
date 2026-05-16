@@ -353,17 +353,25 @@ impl Board {
 
     // ── Window ────────────────────────────────────────────────────────────────
 
-    /// Centre of the 19×19 view window: centroid of the bounding box.
-    /// Defaults to (0, 0) on an empty board.
+    /// Centre of the trunk-sized view window: centroid of the bounding
+    /// box. Defaults to (0, 0) on an empty board.
     ///
-    /// Uses Rust truncating-toward-zero integer division, which matches the
-    /// Python-side `board.window_center()` call used in `game_state.py`.
+    /// Uses truncating-toward-zero integer division `(a+b)/2` to preserve
+    /// frame calibration for legacy v6/v6w25 checkpoints trained against
+    /// this semantic (e.g. bootstrap_model_v6_step20k.pt, §176 Phase B
+    /// anchor). Migrating to `i32::midpoint` (floor toward -∞) would
+    /// shift the absolute NN window by ≤1 cell on negative-odd bbox
+    /// sums. See audit/rust-engine/cycle_3/00_i32_midpoint_forensic.md.
+    // Truncate-toward-zero semantics preserves anchor calibration for
+    // v6/v6w25 checkpoints trained pre-2b0dd08. See
+    // audit/rust-engine/cycle_3/00_i32_midpoint_forensic.md.
+    #[allow(clippy::manual_midpoint)]
     pub fn window_center(&self) -> (i32, i32) {
         if !self.has_stones {
             return (0, 0);
         }
-        let cq = i32::midpoint(self.min_q, self.max_q);
-        let cr = i32::midpoint(self.min_r, self.max_r);
+        let cq = (self.min_q + self.max_q) / 2;
+        let cr = (self.min_r + self.max_r) / 2;
         (cq, cr)
     }
 
