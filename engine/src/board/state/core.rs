@@ -629,6 +629,9 @@ impl Clone for Board {
         // legal_moves_set() call on the clone rebuilds from `cells` (which IS
         // correctly copied).  This is safe even when diffs is empty (root node
         // expansion) because the rebuild is always correct given a valid `cells`.
+        // SAFETY: Clone takes &self → no concurrent &mut alias exists; per the
+        // `unsafe impl Sync for Board` contract (see below), Board is always
+        // accessed by a single thread, so this UnsafeCell read aliases no writer.
         let cap = unsafe { (*self.legal_cache.get()).len() };
         Board {
             cells: self.cells.clone(),

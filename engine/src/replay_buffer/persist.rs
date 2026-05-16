@@ -82,6 +82,9 @@ impl ReplayBuffer {
 
             // state: u16 slice → bytes
             let state_start = slot * state_stride;
+            // SAFETY: &[u16] is layout-compatible with &[u8] (byte_len = 2 × elem_len);
+            // resulting slice lifetime is bounded by this match arm and consumed by
+            // w.write_all before any aliasing &mut to self.states can be created.
             let state_bytes = unsafe {
                 std::slice::from_raw_parts(
                     self.states[state_start..state_start + state_stride].as_ptr().cast::<u8>(),
@@ -93,6 +96,9 @@ impl ReplayBuffer {
 
             // chain_planes: u16 slice → bytes
             let chain_start = slot * chain_stride;
+            // SAFETY: &[u16] is layout-compatible with &[u8] (byte_len = 2 × elem_len);
+            // resulting slice lifetime is bounded by this match arm and consumed by
+            // w.write_all before any aliasing &mut to self.chain_planes can be created.
             let chain_bytes = unsafe {
                 std::slice::from_raw_parts(
                     self.chain_planes[chain_start..chain_start + chain_stride].as_ptr().cast::<u8>(),
@@ -104,6 +110,9 @@ impl ReplayBuffer {
 
             // policy: f32 slice → bytes
             let pol_start = slot * policy_stride;
+            // SAFETY: &[f32] is layout-compatible with &[u8] (byte_len = 4 × elem_len);
+            // resulting slice lifetime is bounded by this match arm and consumed by
+            // w.write_all before any aliasing &mut to self.policies can be created.
             let pol_bytes = unsafe {
                 std::slice::from_raw_parts(
                     self.policies[pol_start..pol_start + policy_stride].as_ptr().cast::<u8>(),

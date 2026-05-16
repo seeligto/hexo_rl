@@ -12,10 +12,9 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArra
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use super::sym_tables::N_CHAIN_PLANES;
 #[cfg(test)]
 use super::sym_tables::{
-    AUX_STRIDE, CHAIN_STRIDE, N_ACTIONS, N_CELLS, N_PLANES, N_SYMS,
+    AUX_STRIDE, CHAIN_STRIDE, N_ACTIONS, N_CELLS, N_CHAIN_PLANES, N_PLANES, N_SYMS,
     POLICY_STRIDE, STATE_STRIDE,
 };
 use super::ReplayBuffer;
@@ -79,7 +78,7 @@ impl ReplayBuffer {
         if chain_slice.len() != chain_stride {
             return Err(PyValueError::new_err(format!(
                 "chain_planes must have {} elements ({}×{}×{}), got {}",
-                chain_stride, N_CHAIN_PLANES, trunk_size, trunk_size,
+                chain_stride, self.encoding.n_chain_planes(), trunk_size, trunk_size,
                 chain_slice.len()
             )));
         }

@@ -248,12 +248,12 @@ impl Board {
             // Plane 16: moves_remaining == 2 broadcast over full plane.
             let mr_val = if self.moves_remaining == 2 { 1.0 } else { 0.0 };
             for i in 0..total_cells {
-                out[16 * total_cells + i] = mr_val;
+                out[MOVES_REMAINING_PLANE * total_cells + i] = mr_val;
             }
             // Plane 17: ply parity broadcast over full plane.
             let ply_val = (self.ply % 2) as f32;
             for i in 0..total_cells {
-                out[17 * total_cells + i] = ply_val;
+                out[PLY_PARITY_PLANE * total_cells + i] = ply_val;
             }
         }
         out

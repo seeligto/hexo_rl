@@ -147,6 +147,11 @@ impl Board {
         match self.last_move {
             None => false,
             Some((q, r)) => {
+                // Invariant: `apply_move` (state/core.rs) atomically inserts the
+                // cell into `self.cells` (line 518) and sets `self.last_move`
+                // (line 541). `check_win` is only meaningful after `apply_move`,
+                // so when `last_move == Some((q, r))` the cell at (q, r) is
+                // guaranteed present → `.unwrap()` is sound.
                 let cell = *self.cells.get(&(q, r)).unwrap();
                 self.count_in_line(q, r, cell) >= WIN_LENGTH
             }

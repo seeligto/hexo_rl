@@ -322,16 +322,17 @@ impl ReplayBuffer {
             Vec::from_raw_parts(v.as_mut_ptr().cast::<f16>(), v.len(), v.capacity())
         };
 
-        let n_planes   = self.encoding.n_planes;
-        let trunk_size = self.encoding.trunk_size;
-        let n_logits   = self.encoding.policy_logit_count;
+        let n_planes       = self.encoding.n_planes;
+        let trunk_size     = self.encoding.trunk_size;
+        let n_logits       = self.encoding.policy_logit_count;
+        let n_chain_planes = self.encoding.n_chain_planes();
 
         let states_np = states_f16
             .into_pyarray(py)
             .reshape([batch_size, n_planes, trunk_size, trunk_size])?;
         let chain_np = chain_f16
             .into_pyarray(py)
-            .reshape([batch_size, N_CHAIN_PLANES, trunk_size, trunk_size])?;
+            .reshape([batch_size, n_chain_planes, trunk_size, trunk_size])?;
         let policies_np = out_policies
             .into_pyarray(py)
             .reshape([batch_size, n_logits])?;

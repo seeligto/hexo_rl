@@ -317,6 +317,20 @@ impl RegistrySpec {
         crate::replay_buffer::sym_tables::N_CHAIN_PLANES * self.n_cells()
     }
 
+    /// Number of chain-length planes (= 6 across all current encodings:
+    /// 3 hex axes × 2 players). Equivalent to `chain_stride() / n_cells()`.
+    /// §P19 — decouples consumers (e.g. `replay_buffer::sample`) from a
+    /// hardcoded reach-through into `sym_tables::N_CHAIN_PLANES`.
+    #[inline]
+    pub fn n_chain_planes(&self) -> usize {
+        debug_assert_eq!(
+            self.chain_stride(),
+            6 * self.n_cells(),
+            "n_chain_planes invariant: chain_stride must equal 6 × n_cells",
+        );
+        6
+    }
+
     /// Aux plane stride = n_cells (single aux plane).
     #[inline]
     pub fn aux_stride(&self) -> usize {
