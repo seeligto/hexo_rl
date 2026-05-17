@@ -133,20 +133,42 @@ def load_model_with_encoding(
 
     if label == "v8":
         spec = _registry_lookup("v8")
-        model = _build_v8_model(state, spec)
     elif label == "v6w25":
         spec = _registry_lookup("v6w25")
-        model = _build_v6_model(state, spec)
     else:
         spec = _registry_lookup("v6")
-        model = _build_v6_model(state, spec)
+    model = _build_model_from_spec(state, spec)
 
     model.to(device)
     model.eval()
     return model, spec, label
 
 
-def _build_v6_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
+def _build_model_from_spec(state: dict, spec: EncodingSpec) -> HexTacToeNet:
+    """Unified entry point — dispatches to the per-family builder by
+    ``spec.has_pass_slot``.
+
+    Branch:
+      - ``has_pass_slot=True``  → ``_build_min_max_model`` (v6 / v6w25 /
+                                  v7full / v7 / v7e30 / v7mw family;
+                                  min_max policy head with optional
+                                  pma / pma_global pool variants and the
+                                  §170 P3 gpool_bias side-branch).
+      - ``has_pass_slot=False`` → ``_build_kata_model`` (v8 / v8_canvas_realness
+                                  family; KataGoPolicyHead + per-block gpool +
+                                  optional PartialConv2d canvas_realness wrap).
+
+    Cycle 3 Wave 8 Batch D (2026-05-17): renamed from
+    ``_build_v6_model`` / ``_build_v8_model`` (GENERICISE #4 fold);
+    bodies preserved architecturally distinct because feature-detection
+    + ``strict`` load policy differ per family.
+    """
+    if spec.has_pass_slot:
+        return _build_min_max_model(state, spec)
+    return _build_kata_model(state, spec)
+
+
+def _build_min_max_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
     inp_w = state["trunk.input_conv.weight"]
     filters = int(inp_w.shape[0])
     in_channels = int(inp_w.shape[1])
@@ -194,7 +216,7 @@ def _build_v6_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
     return model
 
 
-def _build_v8_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
+def _build_kata_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
     # §169 A4 — under canvas_realness the trunk-entry conv is wrapped in a
     # PartialConv2d, so the weight key shifts from `trunk.input_conv.weight`
     # to `trunk.input_conv.conv.weight`. Detection is unambiguous because

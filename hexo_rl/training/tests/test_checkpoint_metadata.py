@@ -19,6 +19,7 @@ from typing import Dict
 import pytest
 import torch
 
+from hexo_rl.encoding import lookup as _registry_lookup
 from hexo_rl.encoding.resolvers import resolve_from_checkpoint
 from hexo_rl.training.checkpoints import (
     CHECKPOINT_METADATA_SCHEMA_VERSION,
@@ -44,14 +45,22 @@ class _SyntheticNet(torch.nn.Module):
         return x
 
 
-def _v6_net() -> _SyntheticNet:
-    # v6: n_planes=8, policy_logit_count=362 (19*19 + 1 pass slot)
-    return _SyntheticNet(n_planes=8, policy_logit_count=362)
+def _net_from_spec(encoding_name: str) -> _SyntheticNet:
+    """Build a ``_SyntheticNet`` shaped to match the named registry encoding.
 
+    Reads ``n_planes`` + ``policy_logit_count`` off ``engine.RegistrySpec``
+    so the synthetic NN's ``trunk.0.weight`` + ``policy_fc.weight`` shapes
+    match the per-encoding probes in ``hexo_rl/encoding/compat.py``.
 
-def _v8_net() -> _SyntheticNet:
-    # v8: n_planes=11, policy_logit_count=625 (25*25, no pass slot)
-    return _SyntheticNet(n_planes=11, policy_logit_count=625)
+    Cycle 3 Wave 8 Batch D (2026-05-17): collapsed from sibling
+    ``_v6_net`` / ``_v8_net`` helpers into a single registry-spec-driven
+    fixture (CONSOLIDATE #4 fold).
+    """
+    spec = _registry_lookup(encoding_name)
+    return _SyntheticNet(
+        n_planes=spec.n_planes,
+        policy_logit_count=spec.policy_logit_count,
+    )
 
 
 def _make_optim_scaler(model: torch.nn.Module):
@@ -93,7 +102,7 @@ def test_build_checkpoint_metadata_rejects_empty_encoding() -> None:
 
 def test_save_checkpoint_writes_metadata(tmp_path: Path) -> None:
     """save_full_checkpoint(encoding_name=...) stamps a metadata dict."""
-    model = _v6_net()
+    model = _net_from_spec("v6")
     optim, scaler = _make_optim_scaler(model)
     ckpt = tmp_path / "checkpoint_00000000.pt"
     save_full_checkpoint(
@@ -119,7 +128,7 @@ def test_save_checkpoint_writes_metadata(tmp_path: Path) -> None:
 
 def test_save_checkpoint_legacy_omits_metadata(tmp_path: Path) -> None:
     """No encoding_name kwarg → metadata block omitted (load path infers)."""
-    model = _v6_net()
+    model = _net_from_spec("v6")
     optim, scaler = _make_optim_scaler(model)
     ckpt = tmp_path / "checkpoint_legacy.pt"
     save_full_checkpoint(
@@ -135,7 +144,7 @@ def test_save_checkpoint_legacy_omits_metadata(tmp_path: Path) -> None:
 
 def test_load_checkpoint_with_metadata_no_warning(tmp_path: Path) -> None:
     """resolve_from_checkpoint silent on stamped ckpt."""
-    model = _v6_net()
+    model = _net_from_spec("v6")
     optim, scaler = _make_optim_scaler(model)
     ckpt = tmp_path / "checkpoint_stamped.pt"
     save_full_checkpoint(
@@ -161,7 +170,7 @@ def test_load_checkpoint_legacy_emits_warning(tmp_path: Path) -> None:
     deterministically (v6 + v7full share state-dict shape; the filename
     hint is what disambiguates them in real artifacts too).
     """
-    model = _v6_net()
+    model = _net_from_spec("v6")
     ckpt = tmp_path / "legacy_v6_no_metadata.pt"
     torch.save({"model_state": model.state_dict()}, ckpt)
 
@@ -177,7 +186,7 @@ def test_load_checkpoint_legacy_emits_warning(tmp_path: Path) -> None:
 
 def test_load_checkpoint_legacy_v8_shape_inference(tmp_path: Path) -> None:
     """v8-shaped state-dict with no filename hint resolves via shape probe."""
-    model = _v8_net()
+    model = _net_from_spec("v8")
     # Filename intentionally lacks 'v8' substring so we exercise shape
     # inference, not the filename heuristic.
     ckpt = tmp_path / "anonymous_legacy_ckpt.pt"

@@ -1,4 +1,4 @@
-"""§176 P24 — v6 / v6w25 min_max policy + value head helpers.
+"""§176 P24 — min_max policy + value per-window head helpers.
 
 Extracted from ``hexo_rl/model/network.py`` to dedupe the per-window
 policy + value computation that was inline in both
@@ -12,9 +12,9 @@ Design notes
   attributes of ``HexTacToeNet`` (``policy_conv``, ``policy_fc``,
   ``value_fc1``, ``value_fc2``). This file exports plain functions taking
   layer references as args — state-dict keys are unchanged. Loading any
-  pre-existing v6 / v6w25 checkpoint is byte-exact.
+  pre-existing v6 / v6w25 / v7full / v7 / v7e30 / v7mw checkpoint is byte-exact.
 
-* ``min_max_v6_head`` runs the per-window head once and returns the
+* ``min_max_window_head`` runs the per-window head once and returns the
   ``(log_policy, value, v_logit)`` triple. ``forward()`` calls it on the
   whole (B, C, H, W) trunk output; ``aggregated_forward_K`` calls it on
   the per-cluster (K, C, H, W) trunk output and feeds the per-K result
@@ -23,6 +23,13 @@ Design notes
 * The optional ``policy_bias`` / ``value_bias`` args carry the §170 P3
   gpool-bias side-branch contribution (None when the branch is inactive,
   preserving exact A1 byte-parity).
+
+Cycle 3 Wave 8 Batch D (2026-05-17): renamed from ``min_max_v6_head`` /
+``network_v6_head.py`` to generic ``min_max_window_head`` /
+``network_min_max_head.py``. The head is shared across every
+``has_pass_slot=true`` single-window registry encoding (v6, v6w25,
+v7full, v7, v7e30, v7mw) — the historical ``v6`` prefix was
+encoding-version legacy.
 """
 
 from __future__ import annotations
@@ -34,7 +41,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def min_max_v6_head(
+def min_max_window_head(
     out: torch.Tensor,
     *,
     policy_conv: nn.Conv2d,
@@ -44,7 +51,7 @@ def min_max_v6_head(
     policy_bias: Optional[torch.Tensor] = None,
     value_bias: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Per-window v6 / v6w25 min_max head.
+    """Per-window min_max head for ``has_pass_slot=true`` encodings.
 
     Args:
         out:        ``(N, C, H, W)`` trunk output. ``N`` is ``B`` when called

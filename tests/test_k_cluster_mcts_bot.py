@@ -353,9 +353,9 @@ def test_v6_argmax_bot_threads_global_crop_under_pma_global():
     from hexo_rl.eval.v6_argmax_bot import V6ArgmaxBot
     model = _tiny_v6w25_pma_global_model()
     # V6ArgmaxBot's encoding-check accepts the model only when
-    # model.encoding == 'v6'. _build_v6_model rewrites the encoding to 'v6'
-    # for v6w25 checkpoints; tiny model defaults to 'v6w25' so we mirror
-    # the loader's rewrite for this unit test.
+    # model.encoding == 'v6'. _build_min_max_model rewrites the encoding
+    # to 'v6' for v6w25 checkpoints; tiny model defaults to 'v6w25' so
+    # we mirror the loader's rewrite for this unit test.
     model.encoding = "v6"
     board = Board()
     board.set_legal_move_radius(8)
@@ -380,7 +380,7 @@ def test_pma_global_bot_pool_mismatch_rejected():
 
 
 def test_checkpoint_loader_detects_pma_global():
-    """checkpoint_loader._build_v6_model must read 'pma_global' from the
+    """checkpoint_loader._build_min_max_model must read 'pma_global' from the
     presence of global_encoder.* + cluster_pool.global_gate in the state."""
     import tempfile
     from pathlib import Path

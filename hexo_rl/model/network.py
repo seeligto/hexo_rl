@@ -42,7 +42,7 @@ from hexo_rl.model.gpool import (
 )
 from hexo_rl.model.global_token import GlobalTokenEncoder
 from hexo_rl.model.gpool_bias import GpoolBiasBranch
-from hexo_rl.model.network_v6_head import min_max_v6_head
+from hexo_rl.model.network_min_max_head import min_max_window_head
 from hexo_rl.model.partial_conv import PartialConv2d
 from hexo_rl.model.pooling import (
     SUPPORTED_POOL_TYPES,
@@ -777,11 +777,13 @@ class HexTacToeNet(nn.Module):
                 value_bias = v_bias_raw
                 policy_bias = p_bias_raw
 
-            # Policy + value heads — branch on encoding. v6 / v6w25 route
-            # through the shared ``min_max_v6_head`` helper (single-sourced
-            # with ``aggregated_forward_K``'s per-cluster math — §176 P24).
-            # v8 keeps its KataGoPolicyHead for the policy branch but reuses
-            # the same value head (avg+max pool → fc1 → fc2 → tanh).
+            # Policy + value heads — branch on encoding. has_pass_slot=true
+            # encodings (v6 / v6w25 / v7full / v7 / v7e30 / v7mw) route through
+            # the shared ``min_max_window_head`` helper (single-sourced with
+            # ``aggregated_forward_K``'s per-cluster math — §176 P24).
+            # has_pass_slot=false (v8 / v8_canvas_realness) keeps its
+            # KataGoPolicyHead for the policy branch but reuses the same value
+            # head (avg+max pool → fc1 → fc2 → tanh).
             if not self._spec.has_pass_slot:
                 log_policy = self.policy_head(out, mask, mask_sum_hw)
                 v_avg = out.mean(dim=(2, 3))           # (B, C)
@@ -793,7 +795,7 @@ class HexTacToeNet(nn.Module):
                 v_logit = self.value_fc2(v)            # (B, 1) raw logit
                 value = torch.tanh(v_logit)
             else:
-                log_policy, value, v_logit = min_max_v6_head(
+                log_policy, value, v_logit = min_max_window_head(
                     out,
                     policy_conv=self.policy_conv,
                     policy_fc=self.policy_fc,
@@ -926,10 +928,10 @@ class HexTacToeNet(nn.Module):
             policy_bias_K = p_bias_raw.expand(out.size(0), -1)
 
         # §176 P24 — per-cluster (K, *) head shares math with the
-        # single-window forward via ``min_max_v6_head``. The pooled output is
-        # unsqueezed to ``(1, K, *)`` for ``MinMaxPool``'s scatter-pool
+        # single-window forward via ``min_max_window_head``. The pooled output
+        # is unsqueezed to ``(1, K, *)`` for ``MinMaxPool``'s scatter-pool
         # contract; bias broadcasting (1→K) happens above before the call.
-        per_logp, per_val, _per_vlogit = min_max_v6_head(
+        per_logp, per_val, _per_vlogit = min_max_window_head(
             out,
             policy_conv=self.policy_conv,
             policy_fc=self.policy_fc,

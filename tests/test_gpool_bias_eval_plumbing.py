@@ -32,7 +32,7 @@ DEVICE = torch.device("cpu")
 def _tiny_v6w25_gpool_bias_model(encoding: str = "v6") -> HexTacToeNet:
     """Tiny v6w25-shaped model with gpool_bias_active=True.
 
-    Mirrors ``checkpoint_loader._build_v6_model`` which constructs the
+    Mirrors ``checkpoint_loader._build_min_max_model`` which constructs the
     network with ``encoding='v6'`` even for v6w25 wire-format-compatible
     checkpoints (board_size=25 disambiguates them at the spatial level).
     The argmax bot's encoding gate accepts 'v6' only.
