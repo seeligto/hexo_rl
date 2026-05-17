@@ -247,32 +247,34 @@ def test_helper_parity_rust_python(encoding_name: str) -> None:
     rs = _rust_spec(encoding_name)
 
     # n_cells: trunk_size² (A3 semantic fix — was board_size²).
-    assert py.n_cells == rs.n_cells(), (
-        f"{encoding_name}: py.n_cells={py.n_cells} != rs.n_cells()={rs.n_cells()}"
+    # Wave 8 Batch A FF.2 — py and rs are the same object (engine.RegistrySpec
+    # type alias); parity checks now defensively assert attribute identity.
+    assert py.n_cells == rs.n_cells, (
+        f"{encoding_name}: py.n_cells={py.n_cells} != rs.n_cells={rs.n_cells}"
     )
 
     # state_stride = n_planes * n_cells.
-    assert py.state_stride == rs.state_stride(), (
+    assert py.state_stride == rs.state_stride, (
         f"{encoding_name}: py.state_stride={py.state_stride} != "
-        f"rs.state_stride()={rs.state_stride()}"
+        f"rs.state_stride={rs.state_stride}"
     )
 
     # chain_stride = N_CHAIN_PLANES(6) * n_cells.
-    assert py.chain_stride == rs.chain_stride(), (
+    assert py.chain_stride == rs.chain_stride, (
         f"{encoding_name}: py.chain_stride={py.chain_stride} != "
-        f"rs.chain_stride()={rs.chain_stride()}"
+        f"rs.chain_stride={rs.chain_stride}"
     )
 
     # aux_stride = n_cells.
-    assert py.aux_stride == rs.aux_stride(), (
+    assert py.aux_stride == rs.aux_stride, (
         f"{encoding_name}: py.aux_stride={py.aux_stride} != "
-        f"rs.aux_stride()={rs.aux_stride()}"
+        f"rs.aux_stride={rs.aux_stride}"
     )
 
     # policy_stride = policy_logit_count.
-    assert py.policy_stride == rs.policy_stride(), (
+    assert py.policy_stride == rs.policy_stride, (
         f"{encoding_name}: py.policy_stride={py.policy_stride} != "
-        f"rs.policy_stride()={rs.policy_stride()}"
+        f"rs.policy_stride={rs.policy_stride}"
     )
 
     # kept_plane_indices (new §173 A3 TOML field).

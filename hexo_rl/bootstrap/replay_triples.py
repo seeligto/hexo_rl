@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from hexo_rl.encoding.spec import EncodingSpec
+from hexo_rl.encoding import EncodingSpec
 from hexo_rl.bootstrap.dataset import replay_game_to_triples as _v6_replay
 from hexo_rl.bootstrap.dataset_v6w25 import replay_game_to_triples_v6w25 as _v6w25_replay
 from hexo_rl.bootstrap.dataset_v8 import replay_game_to_triples_v8 as _v8_replay

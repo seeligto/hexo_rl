@@ -36,10 +36,34 @@ impl PyRegistrySpec {
     #[getter] pub fn name(&self) -> &'static str { self.inner.name }
     #[getter] pub fn board_size(&self) -> usize { self.inner.board_size }
     #[getter] pub fn trunk_size(&self) -> usize { self.inner.trunk_size }
+    #[getter] pub fn cluster_window_size(&self) -> Option<usize> { self.inner.cluster_window_size }
+    #[getter] pub fn cluster_threshold(&self) -> Option<usize> { self.inner.cluster_threshold }
+    #[getter] pub fn legal_move_radius(&self) -> usize { self.inner.legal_move_radius }
     #[getter] pub fn n_planes(&self) -> usize { self.inner.n_planes }
+    #[getter] pub fn plane_layout(&self) -> Vec<&'static str> { self.inner.plane_layout.to_vec() }
     #[getter] pub fn policy_logit_count(&self) -> usize { self.inner.policy_logit_count }
     #[getter] pub fn has_pass_slot(&self) -> bool { self.inner.has_pass_slot }
     #[getter] pub fn is_multi_window(&self) -> bool { self.inner.is_multi_window }
+    /// §P3.2 — wire-format pool enums exposed as strings (matches Python `Literal` shape
+    /// returned by the @dataclass `value_pool` / `policy_pool` fields).
+    #[getter] pub fn value_pool(&self) -> &'static str {
+        match self.inner.value_pool {
+            crate::encoding::ValuePool::None => "none",
+            crate::encoding::ValuePool::Min => "min",
+            crate::encoding::ValuePool::Max => "max",
+            crate::encoding::ValuePool::Mean => "mean",
+        }
+    }
+    #[getter] pub fn policy_pool(&self) -> &'static str {
+        match self.inner.policy_pool {
+            crate::encoding::PolicyPool::None => "none",
+            crate::encoding::PolicyPool::ScatterMax => "scatter_max",
+            crate::encoding::PolicyPool::ScatterMean => "scatter_mean",
+        }
+    }
+    #[getter] pub fn sym_table_id(&self) -> &'static str { self.inner.sym_table_id }
+    #[getter] pub fn schema_version(&self) -> u32 { self.inner.schema_version }
+    #[getter] pub fn notes(&self) -> &'static str { self.inner.notes }
     /// §173 A3 — physical source-plane indices retained by wire format.
     #[getter] pub fn kept_plane_indices(&self) -> Vec<usize> {
         self.inner.kept_plane_indices.to_vec()
@@ -47,16 +71,19 @@ impl PyRegistrySpec {
     /// §173 A3 — source tensor plane count before kept_plane_indices slice.
     #[getter] pub fn n_source_planes(&self) -> usize { self.inner.n_source_planes }
 
+    /// Alias for `policy_logit_count` — matches the retired Python @dataclass
+    /// `n_actions` @property (Wave 8 Batch A FF.2 parity).
+    #[getter] pub fn n_actions(&self) -> usize { self.inner.policy_logit_count }
     /// Cells per trunk input tensor = trunk_size². §173 A3 semantic: trunk_size, not board_size.
-    pub fn n_cells(&self) -> usize { self.inner.n_cells() }
+    #[getter] pub fn n_cells(&self) -> usize { self.inner.n_cells() }
     /// State plane stride = n_planes × n_cells.
-    pub fn state_stride(&self) -> usize { self.inner.state_stride() }
+    #[getter] pub fn state_stride(&self) -> usize { self.inner.state_stride() }
     /// Chain plane stride = N_CHAIN_PLANES × n_cells.
-    pub fn chain_stride(&self) -> usize { self.inner.chain_stride() }
+    #[getter] pub fn chain_stride(&self) -> usize { self.inner.chain_stride() }
     /// Aux plane stride = n_cells (single aux plane).
-    pub fn aux_stride(&self) -> usize { self.inner.aux_stride() }
+    #[getter] pub fn aux_stride(&self) -> usize { self.inner.aux_stride() }
     /// Policy logit count = `policy_logit_count` (mirror of the field).
-    pub fn policy_stride(&self) -> usize { self.inner.policy_stride() }
+    #[getter] pub fn policy_stride(&self) -> usize { self.inner.policy_stride() }
 
     pub fn __repr__(&self) -> String {
         format!(

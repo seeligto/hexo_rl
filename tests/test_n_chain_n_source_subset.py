@@ -79,11 +79,16 @@ def test_v8_family_has_21_source_planes() -> None:
 
 
 def test_v6_family_canonical_indices() -> None:
-    """v6 family: canonical [0,1,2,3,8,9,10,11] X+history, O+history block."""
+    """v6 family: canonical [0,1,2,3,8,9,10,11] X+history, O+history block.
+
+    Wave 8 Batch A FF.2 — `kept_plane_indices` is now a PyO3 Vec<usize>
+    surfaced as a Python list (was @dataclass tuple). Test coerces to
+    tuple for stable equality with the literal.
+    """
     expected = (0, 1, 2, 3, 8, 9, 10, 11)
     for name in ("v6", "v7full", "v6w25"):
         spec = lookup(name)
-        assert spec.kept_plane_indices == expected, (
+        assert tuple(spec.kept_plane_indices) == expected, (
             f"{name}: kept_plane_indices={spec.kept_plane_indices}, "
             f"expected {expected}"
         )
@@ -94,7 +99,7 @@ def test_v8_family_canonical_indices() -> None:
     expected = (0, 1, 2, 3, 8, 9, 10, 11, 18, 19, 20)
     for name in ("v8", "v8_canvas_realness"):
         spec = lookup(name)
-        assert spec.kept_plane_indices == expected, (
+        assert tuple(spec.kept_plane_indices) == expected, (
             f"{name}: kept_plane_indices={spec.kept_plane_indices}, "
             f"expected {expected}"
         )

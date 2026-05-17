@@ -53,8 +53,8 @@ def test_engine_encoding_spec_from_registry_v8():
     assert spec.n_planes == 11
     assert spec.policy_logit_count == 625
     assert spec.has_pass_slot is False
-    assert spec.state_stride() == 11 * 25 * 25
-    assert spec.policy_stride() == 625
+    assert spec.state_stride == 11 * 25 * 25
+    assert spec.policy_stride == 625
 
 
 def test_engine_encoding_spec_from_registry_v6():
@@ -66,8 +66,8 @@ def test_engine_encoding_spec_from_registry_v6():
     assert spec.n_planes == 8
     assert spec.policy_logit_count == 362
     assert spec.has_pass_slot is True
-    assert spec.state_stride() == 8 * 19 * 19
-    assert spec.policy_stride() == 362
+    assert spec.state_stride == 8 * 19 * 19
+    assert spec.policy_stride == 362
 
 
 def test_engine_encoding_spec_from_registry_unknown_raises():

@@ -240,7 +240,7 @@ def benchmark_replay_buffer(buffer: "ReplayBuffer", n_runs: int = 5,
     _ts = _spec.trunk_size
     _np = _spec.n_planes
     _plc = _spec.policy_logit_count
-    _nc = _spec.n_cells()
+    _nc = _spec.n_cells
 
     dummy_state = np.zeros((_np, _ts, _ts), dtype=np.float16)
     dummy_chain = np.zeros((6, _ts, _ts), dtype=np.float16)
@@ -1016,7 +1016,7 @@ def main() -> None:
     _ts = _spec.trunk_size
     _np = _spec.n_planes
     _plc = _spec.policy_logit_count
-    _nc = _spec.n_cells()
+    _nc = _spec.n_cells
     _bm_own = np.ones(_nc, dtype=np.uint8)
     _bm_wl  = np.zeros(_nc, dtype=np.uint8)
     _bm_chain = np.zeros((6, _ts, _ts), dtype=np.float16)

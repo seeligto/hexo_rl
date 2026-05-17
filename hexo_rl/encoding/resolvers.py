@@ -11,11 +11,12 @@ import warnings
 from pathlib import Path
 from typing import Any, Mapping
 
+from engine import RegistrySpec as EncodingSpec  # type: ignore[attr-defined]
+
 from hexo_rl.encoding import compat
 from hexo_rl.encoding._probes import FIRST_CONV_KEYS as _FIRST_CONV_KEYS
 from hexo_rl.encoding._probes import POLICY_FC_KEYS as _POLICY_FC_KEYS
 from hexo_rl.encoding.registry import EncodingRegistryError, _load as _load_registry, lookup
-from hexo_rl.encoding.spec import EncodingSpec
 
 
 class ShapeMismatchError(Exception):

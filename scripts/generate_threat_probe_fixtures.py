@@ -47,8 +47,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from engine import Board
-from hexo_rl.encoding import all_specs, lookup
-from hexo_rl.encoding.spec import EncodingSpec
+from hexo_rl.encoding import EncodingSpec, all_specs, lookup
 from hexo_rl.env.game_state import GameState, HISTORY_LEN
 from hexo_rl.utils.coordinates import axial_distance, axial_to_flat
 

@@ -24,8 +24,7 @@ import structlog
 
 from engine import Board
 from hexo_rl.env.game_state import GameState, _compute_chain_planes
-from hexo_rl.encoding import lookup as _lookup_encoding
-from hexo_rl.encoding.spec import EncodingSpec
+from hexo_rl.encoding import EncodingSpec, lookup as _lookup_encoding
 from hexo_rl.utils.global_crop import (
     CANVAS_SIZE as GLOBAL_CANVAS_SIZE,
     N_GLOBAL_PLANES,
