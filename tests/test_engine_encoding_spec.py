@@ -3,7 +3,8 @@
 Tests cover (post-§P3.1):
 - engine.RegistrySpec.from_registry classmethod for v6 / v8 / unknown.
 - InferenceBatcher / SelfPlayRunner derive feature_len / policy_len from spec.
-- Default-kwarg silent v6 fallback regression pin (§172 A10 T8b).
+- Cycle 3 Wave 8 Batch C (FF.10): missing-encoding loud-fail regression pin
+  (was: legacy "silent v6 fallback" hazard).
 
 Migrated from prior `engine.EncodingSpec.from_registry` callers — the legacy
 `engine.EncodingSpec` PyO3 wrapper retired in §P3.1; the registry classmethod
@@ -18,11 +19,8 @@ from __future__ import annotations
 
 import pytest
 
+from hexo_rl.encoding import lookup as registry_lookup
 from hexo_rl.encoding import resolve_from_config
-from hexo_rl.encoding.compat import (
-    WIRE_FORMAT_SPECS,
-    legacy_spec_for_registry_name,
-)
 
 
 def test_resolve_from_config_v6w25():
@@ -31,13 +29,19 @@ def test_resolve_from_config_v6w25():
     assert spec.cluster_window_size == 25
 
 
-def test_wire_format_specs_carry_expected_cluster_fields():
-    assert WIRE_FORMAT_SPECS["v6"].cluster_window_size == 19
-    assert WIRE_FORMAT_SPECS["v6w25"].cluster_window_size == 25
-    assert WIRE_FORMAT_SPECS["v8"].cluster_window_size is None
-    # v7-family aliases share the v6 wire format.
+def test_registry_lookup_carries_expected_cluster_fields():
+    """Wire-format scalars (cluster_*, legal_move_radius, board_size) come
+    straight off the registry record post-FF.10 (the WireFormatSpec
+    bridge retired in cycle 3 Wave 8 Batch C)."""
+    assert registry_lookup("v6").cluster_window_size is None
+    assert registry_lookup("v6w25").cluster_window_size == 25
+    assert registry_lookup("v8").cluster_window_size is None
+    # v7-family aliases inherit v6 wire geometry (board_size=19, legal radius=5)
+    # via the registry's own alias entries.
     for n in ("v7full", "v7", "v7e30", "v7mw"):
-        assert legacy_spec_for_registry_name(n).cluster_window_size == 19
+        spec = registry_lookup(n)
+        assert spec.board_size == 19
+        assert spec.legal_move_radius == 5
 
 
 # ── §172 A10 T8b regression tests — pyo3 default-kwarg silent v6 fallback ────
@@ -112,15 +116,16 @@ def test_inference_batcher_explicit_kwargs_override_spec():
     assert bridge.policy_len_py == 77
 
 
-def test_inference_batcher_legacy_no_spec_keeps_v6_default():
-    """Backward-compat: omitting both spec AND kwargs falls back to v6 defaults
-    (2888/362) so existing v6 callers don't break.
-    """
+def test_inference_batcher_no_spec_no_explicit_kwargs_raises():
+    """Cycle 3 Wave 8 Batch C (FF.10): omitting both encoding_spec AND
+    feature_len/policy_len must loud-fail. Pre-Wave-8 the runner silently
+    inherited v6 defaults (2888/362) — corrupting wire-format on every v8
+    push. Post-Wave-8 the omission returns PyValueError so the bug class
+    is closed at the boundary."""
     import engine
 
-    bridge = engine.InferenceBatcher()
-    assert bridge.feature_len_py == 8 * 19 * 19
-    assert bridge.policy_len_py == 19 * 19 + 1
+    with pytest.raises(ValueError, match=r"encoding_spec required|feature_len"):
+        engine.InferenceBatcher()
 
 
 def _runner_kwargs(extra: dict | None = None) -> dict:
@@ -140,15 +145,15 @@ def _runner_kwargs(extra: dict | None = None) -> dict:
     return base
 
 
-def test_selfplay_runner_with_v8_spec_no_explicit_shape_kwargs():
-    """HIGH-1 regression: SelfPlayRunner with a v8 registry spec must derive
-    feature_len/policy_len from the spec — not silently fall back to v6
-    (2888/362).
+def test_selfplay_runner_with_v8_encoding_name_no_explicit_shape_kwargs():
+    """HIGH-1 regression: SelfPlayRunner with `encoding_name='v8'` must derive
+    feature_len/policy_len from the registry record — not silently fall back
+    to v6 (2888/362).
     """
     import engine
 
     runner = engine.SelfPlayRunner(engine.SelfPlayRunnerConfig(
-        **_runner_kwargs({"encoding_spec": engine.RegistrySpec.from_registry("v8")}),
+        **_runner_kwargs({"encoding_name": "v8"}),
     ))
     assert runner.feature_len() == 11 * 25 * 25, (
         f"v8 caller silently got feature_len={runner.feature_len()}; expected 6875"
@@ -158,14 +163,14 @@ def test_selfplay_runner_with_v8_spec_no_explicit_shape_kwargs():
     )
 
 
-def test_selfplay_runner_explicit_shapes_override_spec():
-    """Backward-compat: explicit feature_len/policy_len win over spec."""
+def test_selfplay_runner_explicit_shapes_override_encoding_name():
+    """Backward-compat: explicit feature_len/policy_len win over registry."""
     import engine
 
     runner = engine.SelfPlayRunner(engine.SelfPlayRunnerConfig(
         **_runner_kwargs(
             {
-                "encoding_spec": engine.RegistrySpec.from_registry("v8"),
+                "encoding_name": "v8",
                 "feature_len": 1234,
                 "policy_len": 567,
             }
@@ -175,10 +180,23 @@ def test_selfplay_runner_explicit_shapes_override_spec():
     assert runner.policy_len() == 567
 
 
-def test_selfplay_runner_legacy_no_spec_keeps_v6_default():
-    """Backward-compat: omitting both spec AND kwargs falls back to v6 defaults."""
+def test_selfplay_runner_no_encoding_no_explicit_shapes_raises():
+    """Cycle 3 Wave 8 Batch C (FF.10): omitting both encoding_name AND
+    feature_len/policy_len must loud-fail. Pre-Wave-8 this silently
+    inherited v6 defaults (the FH.10 silent-v6-fallback hazard).
+    """
     import engine
 
-    runner = engine.SelfPlayRunner(engine.SelfPlayRunnerConfig(**_runner_kwargs()))
-    assert runner.feature_len() == 8 * 19 * 19
-    assert runner.policy_len() == 19 * 19 + 1
+    with pytest.raises(ValueError, match=r"encoding_name required|feature_len"):
+        engine.SelfPlayRunner(engine.SelfPlayRunnerConfig(**_runner_kwargs()))
+
+
+def test_selfplay_runner_unknown_encoding_name_raises():
+    """Unknown encoding_name → PyValueError naming the bad name and the
+    registry keys."""
+    import engine
+
+    with pytest.raises(ValueError, match=r"not_a_real_encoding"):
+        engine.SelfPlayRunner(engine.SelfPlayRunnerConfig(
+            **_runner_kwargs({"encoding_name": "not_a_real_encoding"}),
+        ))

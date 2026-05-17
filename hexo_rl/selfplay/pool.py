@@ -20,15 +20,10 @@ from typing import Any, Dict, Optional
 import numpy as np
 import structlog
 import torch
-from engine import RegistrySpec as PyO3EncodingSpec  # type: ignore[attr-defined]
 from engine import SelfPlayRunner, SelfPlayRunnerConfig  # type: ignore[attr-defined]
 
 from hexo_rl.encoding import EncodingSpec as RegistrySpec
 from hexo_rl.encoding import resolve_from_config as registry_resolve_from_config
-from hexo_rl.encoding.compat import (
-    WireFormatSpec,
-    legacy_spec_for_registry_name,
-)
 from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
@@ -88,17 +83,16 @@ class ResolvedPoolEncoding:
     Bundles every encoding-derived value the WorkerPool wires through the
     Rust ``SelfPlayRunner`` and the Python NN-input/buffer dims:
 
-      - ``registry_spec`` — canonical ``hexo_rl.encoding.EncodingSpec``.
-      - ``wire_format_spec`` — ``hexo_rl.encoding.compat.WireFormatSpec``
-                               (§176 P3 — replaces the retired legacy
-                               4-field NamedTuple); supplies the v6 /
-                               v6w25 / v8 wire constants for checkpoint
-                               metadata / cross-checks.
-      - ``runner_registry_spec`` — ``PyO3RegistrySpec.from_registry(name)``.
-                                   Wired to the Rust SelfPlayRunner via
-                                   ``encoding_spec=`` (§173 A8'); replaces
-                                   the legacy 4-field ``encoding=`` kwarg
-                                   retired in §P3.2.
+      - ``registry_spec`` — canonical ``hexo_rl.encoding.EncodingSpec``
+                            (== ``engine.RegistrySpec`` since cycle 3
+                            Wave 8 Batch A FF.2).
+      - ``encoding_name`` — registry name (e.g. "v6", "v6w25"). Wired to
+                            the Rust ``SelfPlayRunner`` via
+                            ``encoding_name=`` (cycle 3 Wave 8 Batch C
+                            FF.10 — collapsed the WireFormatSpec +
+                            ``encoding_spec=PyRegistrySpec`` round-trip
+                            into a single string lookup at the Rust
+                            boundary).
       - ``board_size`` / ``trunk_size`` / ``n_kept_planes`` — scalar
                                                               dims reused
                                                               for buffer
@@ -106,8 +100,7 @@ class ResolvedPoolEncoding:
     """
 
     registry_spec: Any  # RegistrySpec (full schema)
-    wire_format_spec: WireFormatSpec  # §176 P3 — wire-format scalars
-    runner_registry_spec: Any  # PyO3RegistrySpec (full schema, registry-form)
+    encoding_name: str  # registry name; wired to Rust runner via encoding_name kwarg
     board_size: int
     trunk_size: int
     n_kept_planes: int
@@ -121,9 +114,11 @@ def _resolve_encoding_for_pool(
     §172 A4.2 — resolves via the new ``hexo_rl.encoding`` registry.
     §173 A8' — multi-window guard lifted; v8 selfplay still loud-fails.
     §176 P20 — extracted from ``WorkerPool.__init__`` for unit testability.
-    §176 P3  — wire-format scalars now sourced from
-               ``hexo_rl.encoding.compat.legacy_spec_for_registry_name``;
-               retired the legacy ``hexo_rl.utils.encoding`` shim.
+    Cycle 3 Wave 8 Batch C (FF.10, 2026-05-17) — collapsed the
+        WireFormatSpec + PyO3 ``encoding_spec=`` round-trip into a single
+        string lookup at the Rust boundary; the runner now takes
+        ``encoding_name: Optional[str]`` and resolves the registry record
+        once on the Rust side.
 
     Validation:
       - v8 / v8_canvas_realness → ``NotImplementedError`` (Rust runner
@@ -170,33 +165,9 @@ def _resolve_encoding_for_pool(
                 f"the checkpoint hparam mismatch before re-launching."
             )
 
-    # §176 P3 — wire-format scalars for board_size / cluster cross-checks.
-    # The wire-format mapping (compat.WIRE_FORMAT_SPECS) routes v6 / v7full /
-    # v7 / v7e30 / v7mw to v6 wire constants (cw=19, ct=5, lmr=5, bs=19) and
-    # v6w25 to its own (cw=25, ct=8, lmr=8, bs=25). v8 is loud-failed above
-    # so no v8 wire-format lookup reaches here.
-    #
-    # §P3.2: the legacy `wire_format_spec.to_pyo3()` 4-field PyEncodingSpec
-    # construction path is retired alongside the Rust SelfPlayRunner
-    # `encoding=` kwarg.  The Rust runner now consumes the registry-form
-    # spec exclusively via `encoding_spec=PyRegistrySpec.from_registry(name)`
-    # (see `runner_registry_spec` below); workers branch on
-    # `registry_spec.is_none()` for per-game Board construction and for the
-    # legal-move-radius jitter guard (same semantics, single source of
-    # truth).  `wire_format_spec` stays in the bundle for callers that need
-    # the legacy 4-field scalars (e.g. checkpoint metadata serialisation).
-    wire_format_spec: WireFormatSpec = legacy_spec_for_registry_name(spec.name)
-
-    # §173 A8' — registry-form spec drives the Rust runner. Worker_loop reads
-    # `spec_static` for sym_tables / n_cells / kept_planes / policy_stride /
-    # agg_trunk_sz and for per-game `Board::with_registry_spec(spec)` (§P3.2,
-    # replaces the deleted `Board::with_encoding(legacy_spec)` path).
-    runner_registry_spec = PyO3EncodingSpec.from_registry(spec.name)
-
     return ResolvedPoolEncoding(
         registry_spec=registry_spec,
-        wire_format_spec=wire_format_spec,
-        runner_registry_spec=runner_registry_spec,
+        encoding_name=spec.name,
         board_size=spec.board_size,
         trunk_size=spec.trunk_size,
         n_kept_planes=len(spec.kept_plane_indices),
@@ -285,14 +256,14 @@ class WorkerPool:
             )
 
         training_cfg = config.get("training", config)
-        # §P3.2 — legacy 4-field `runner_encoding` (PyEncodingSpec) flow
-        # retired alongside the Rust `SelfPlayRunner.encoding=` kwarg.
-        # Runner geometry / perception is now driven exclusively by the
-        # registry-form spec (`encoding_spec=`); worker_loop branches on
-        # `registry_spec.is_some()` for per-game `Board::with_registry_spec`
-        # construction (§P3.2).  See ResolvedPoolEncoding docstring +
-        # historical context (§171 P3 A1 reopen, §172 A4.2, §173 A8').
-        runner_registry_spec = _resolved.runner_registry_spec
+        # Cycle 3 Wave 8 Batch C (FF.10, 2026-05-17): the legacy
+        # `encoding_spec=PyRegistrySpec` round-trip retired alongside
+        # the WireFormatSpec shim. The Rust runner now takes the
+        # registry name as a string and resolves the record once on
+        # the Rust side (worker_loop reads `spec_static` for sym_tables
+        # / n_cells / kept_planes / policy_stride / agg_trunk_sz and
+        # for per-game `Board::with_registry_spec(spec)`).
+        encoding_name = _resolved.encoding_name
         # §P55 / Wave 5a operator follow-up — opt-in `inference_pool_size`
         # forwarded from `selfplay.inference_pool_size`. Default = None
         # preserves cycle-1 behavior (InferenceBatcher uses its fixed 512
@@ -355,7 +326,7 @@ class WorkerPool:
             # {4, 5, 6}. Default off so eval/bot/test paths and any
             # pre-§152 variant stay at the canonical radius 5.
             legal_move_radius_jitter=bool(sp.get("legal_move_radius_jitter", False)),
-            encoding_spec=runner_registry_spec,
+            encoding_name=encoding_name,
             inference_pool_size=inference_pool_size,
         ))
         self._inference_server = InferenceServer(

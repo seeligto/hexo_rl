@@ -284,23 +284,26 @@ impl InferenceBatcher {
         feature_len: Option<usize>,
         policy_len: Option<usize>,
         pool_size: Option<usize>,
-    ) -> Self {
-        // §172 A10 T8b — derive feature_len / policy_len from `encoding_spec`
-        // (registry record) when explicit kwargs are omitted. Pre-T8b
-        // defaults silently gave v6 geometry (2888 / 362) to v8 callers
-        // — a HIGH-RISK silent-corruption hazard.
+    ) -> PyResult<Self> {
+        // §172 A10 T8b / cycle 3 Wave 8 Batch C FF.10 — derive feature_len /
+        // policy_len from `encoding_spec` when explicit kwargs are omitted.
+        // The 3 legacy `audit: legacy-v6-fallback` arms (none-and-no-spec)
+        // retire to `PyValueError` so a v8 caller who omits everything no
+        // longer silently inherits v6 geometry (2888 / 362).
         //
-        // Precedence: explicit kwargs > encoding_spec derivation > legacy v6 default.
+        // Precedence: explicit kwargs > encoding_spec derivation > error.
         let spec_static = encoding_spec.as_ref().map(super::pyo3::encoding::PyRegistrySpec::inner);
         let (feature_len, policy_len) = match (feature_len, policy_len, spec_static) {
             (Some(f), Some(p), _) => (f, p),
             (None, None, Some(spec)) => (spec.state_stride(), spec.policy_stride()),
             (Some(f), None, Some(spec)) => (f, spec.policy_stride()),
             (None, Some(p), Some(spec)) => (spec.state_stride(), p),
-            // LEGACY: v6 fallback for backward-compat PyO3 callers without explicit encoding. See §172 A10 + §173 A7. // audit: legacy-v6-fallback
-            (None, None, None) => (8 * 19 * 19, 19 * 19 + 1), // audit: legacy-v6-fallback
-            (Some(f), None, None) => (f, 19 * 19 + 1), // audit: legacy-v6-fallback
-            (None, Some(p), None) => (8 * 19 * 19, p), // audit: legacy-v6-fallback
+            (None, _, None) | (_, None, None) => {
+                return Err(PyValueError::new_err(
+                    "InferenceBatcher: encoding_spec required when feature_len/policy_len omitted \
+                     (cycle 3 Wave 8 Batch C FF.10 retired the legacy v6 fallback arms)",
+                ));
+            }
         };
 
         // §P55: pool_size = None preserves cycle 1 fixed 512 pre-send + 1024 channel.
@@ -314,13 +317,13 @@ impl InferenceBatcher {
             let _ = pool_sender.send(vec![0.0f32; feature_len]);
         }
 
-        Self {
+        Ok(Self {
             inner: Arc::new(Inner::new()),
             feature_len,
             policy_len,
             pool_sender,
             pool_receiver,
-        }
+        })
     }
 
 

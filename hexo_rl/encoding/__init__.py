@@ -18,9 +18,16 @@ truth. The retired Python parser at `hexo_rl/encoding/registry.py` is
 preserved as a thin delegating shim over `engine.RegistrySpec.from_registry`.
 
 §176 P3 retired the legacy `hexo_rl.utils.encoding` NamedTuple shim;
-the wire-format scalars consumers (trainer ckpt-load propagation +
-pool runner-kwarg construction) used to read off it now live at
-`hexo_rl.encoding.compat.WIRE_FORMAT_SPECS`.
+wire-format scalars (cluster_window_size / cluster_threshold /
+legal_move_radius / board_size) are read directly off the registry
+record at `hexo_rl.encoding.lookup(name)`.
+
+Cycle 3 Wave 8 Batch C (FF.10, 2026-05-17): retired the `WireFormatSpec`
+dataclass + `WIRE_FORMAT_SPECS` table + `legacy_spec_for_registry_name`
+shim at `hexo_rl/encoding/compat.py`. The trainer ckpt-load propagation
+and the pool runner-kwarg construction now read the registry record
+directly; the Rust SelfPlayRunner takes `encoding_name: Optional[str]`
+and resolves the spec once on the Rust side.
 
 §178 cycle 3 Wave 8 Batch A FF.2 (2026-05-17): retired the parallel
 Python `hexo_rl.encoding.spec.EncodingSpec` @dataclass mirror; the

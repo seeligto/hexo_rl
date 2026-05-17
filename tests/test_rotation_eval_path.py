@@ -56,7 +56,8 @@ def test_eval_path_disables_rotation_default_ctor():
     model = HexTacToeNet(board_size=19, in_channels=8, filters=16, res_blocks=2).to(device)
 
     runner = SelfPlayRunner(SelfPlayRunnerConfig(
-        n_workers=1, max_moves_per_game=8, n_simulations=2, leaf_batch_size=1
+        n_workers=1, max_moves_per_game=8, n_simulations=2, leaf_batch_size=1,
+        encoding_name="v6",
     ))
     server = InferenceServer(
         model, device,

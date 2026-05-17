@@ -156,7 +156,7 @@ def test_fresh_runner_returns_default_zeros():
     """New SelfPlayRunner has zero I2 samples → getters return 0.0."""
     from engine import SelfPlayRunner, SelfPlayRunnerConfig  # type: ignore[attr-defined]
 
-    r = SelfPlayRunner(SelfPlayRunnerConfig())
+    r = SelfPlayRunner(SelfPlayRunnerConfig(encoding_name="v6"))
     assert r.cluster_value_std_mean == 0.0
     assert r.cluster_policy_disagreement_mean == 0.0
     assert r.cluster_variance_sample_count == 0

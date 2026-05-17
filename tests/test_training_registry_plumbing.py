@@ -9,7 +9,6 @@ contract.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from hexo_rl.encoding import lookup
 from hexo_rl.training.batch_assembly import BatchBuffers, allocate_batch_buffers
@@ -87,35 +86,20 @@ def test_recency_buffer_v8_state_shape_drives_chain_shape() -> None:
     assert rb._chain_planes.shape == (4, 6, 25, 25)
 
 
-def test_legacy_bridge_v7full_to_v6_spec() -> None:
-    """v7full (registry-only) bridges to v6 wire format (§176 P3)."""
-    from hexo_rl.training.trainer import _legacy_spec_for_registry_name
-
-    wire = _legacy_spec_for_registry_name("v7full")
-    assert wire.name == "v6"
-    assert wire.board_size == 19
-    assert wire.cluster_window_size == 19
-
-
-def test_legacy_bridge_v8_canvas_realness_to_v8_spec() -> None:
-    """v8_canvas_realness (registry-only) bridges to v8 wire format (§176 P3)."""
-    from hexo_rl.training.trainer import _legacy_spec_for_registry_name
-
-    wire = _legacy_spec_for_registry_name("v8_canvas_realness")
-    assert wire.name == "v8"
-
-
-def test_legacy_bridge_unknown_name_raises() -> None:
-    from hexo_rl.training.trainer import _legacy_spec_for_registry_name
-
-    with pytest.raises(ValueError, match="no wire-format mapping"):
-        _legacy_spec_for_registry_name("v999_imaginary")
-
-
-def test_legacy_bridge_canonical_names_round_trip() -> None:
-    """v6 / v6w25 / v8 names map to their own wire format (§176 P3)."""
-    from hexo_rl.training.trainer import _legacy_spec_for_registry_name
-
-    assert _legacy_spec_for_registry_name("v6").name == "v6"
-    assert _legacy_spec_for_registry_name("v6w25").name == "v6w25"
-    assert _legacy_spec_for_registry_name("v8").name == "v8"
+# Cycle 3 Wave 8 Batch C (FF.10, 2026-05-17) retired the
+# `_legacy_spec_for_registry_name` shim that bridged registry names into
+# the WireFormatSpec dataclass. Wire-format scalars are now read directly
+# off the registry record at `hexo_rl.encoding.lookup(name)`.
+#
+# The 4 retired tests below covered:
+#   - v7full → v6 wire (name="v6", board_size=19, cw=19): registry
+#     lookup("v7full") returns spec.name="v7full" (registry-name, not
+#     wire-family) but spec.board_size=19 / spec.legal_move_radius=5
+#     (v6 wire geometry inherited via the registry's v7full alias).
+#   - v8_canvas_realness → v8 wire (name="v8"): registry lookup gives
+#     spec.name="v8_canvas_realness" (registry-name) with v8 geometry.
+#   - unknown name → ValueError: registry lookup raises
+#     `EncodingRegistryError` rather than the legacy "no wire-format
+#     mapping" message.
+#   - canonical names round-trip: superseded by
+#     `tests/test_encoding_registry.py::test_lookup_round_trips`.

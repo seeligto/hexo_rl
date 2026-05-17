@@ -64,7 +64,7 @@ fn make_runner_random_only(max_moves: usize) -> SelfPlayRunner {
         max_moves as u32,                   // random_opening_plies == max_moves → never MCTS
         false,                              // selfplay_rotation_enabled
         false,                              // legal_move_radius_jitter
-        None,                               // encoding_spec
+        None,                               // encoding_name (cycle 3 Wave 8 Batch C)
         None,                               // radius_override
         None,                               // inference_pool_size
     ))

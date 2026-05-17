@@ -16,17 +16,17 @@ from typing import Tuple
 import pytest
 import torch
 
+from hexo_rl.encoding import lookup as registry_lookup
 from hexo_rl.encoding import resolve_from_config
-from hexo_rl.encoding.compat import WIRE_FORMAT_SPECS
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.training.trainer import Trainer
 
-# §176 P3: legacy NamedTuple shim retired; the wire-format scalars
-# trainer.config propagation writes (cluster_window_size /
-# cluster_threshold / legal_move_radius) live at
-# `hexo_rl.encoding.compat.WIRE_FORMAT_SPECS`.
-_v6_wire = WIRE_FORMAT_SPECS["v6"]
-_v6w25_wire = WIRE_FORMAT_SPECS["v6w25"]
+# Cycle 3 Wave 8 Batch C (FF.10, 2026-05-17): `WIRE_FORMAT_SPECS` retired
+# alongside the rest of the WireFormatSpec shim. The trainer-config
+# propagation (cluster_window_size / cluster_threshold / legal_move_radius)
+# now writes values straight off the registry record.
+_v6_wire = registry_lookup("v6")
+_v6w25_wire = registry_lookup("v6w25")
 
 
 _FAST_RES_BLOCKS = 2
@@ -107,7 +107,15 @@ def test_load_v6w25_checkpoint_resolves_to_v6w25(tmp_path: Path) -> None:
 
 
 def test_load_v6_checkpoint_resolves_to_v6(tmp_path: Path) -> None:
-    """v6 ckpt + v6 config (or unset) → trainer.config keeps v6 numerics."""
+    """v6 ckpt + v6 config (or unset) → trainer.config keeps v6 numerics.
+
+    Cycle 3 Wave 8 Batch C (FF.10): v6 is single-window in the registry,
+    so `spec.cluster_window_size` / `spec.cluster_threshold` are None;
+    `_propagate_encoding_into_config` skips writing None values, so those
+    keys remain absent in `trainer.config` (legacy WireFormatSpec used to
+    write the wire-bucket 19/5 values). legal_move_radius still rides
+    through (always int) and stays at the registry value 5.
+    """
     ckpt_path = _make_v6_ckpt(tmp_path)
     cfg = {
         **_base_train_cfg(),
@@ -119,11 +127,12 @@ def test_load_v6_checkpoint_resolves_to_v6(tmp_path: Path) -> None:
         fallback_config=cfg,
     )
     assert resolve_from_config(trainer.config).trunk_size == 19
-    assert trainer.config["cluster_window_size"] == 19
-    assert trainer.config["cluster_threshold"] == 5
     assert trainer.config["encoding"]["version"] == "v6"
-    assert trainer.config["cluster_window_size"] == _v6_wire.cluster_window_size
-    assert trainer.config["cluster_threshold"] == _v6_wire.cluster_threshold
+    # v6 single-window registry → cluster_* keys absent (or unchanged from input).
+    assert _v6_wire.cluster_window_size is None
+    assert _v6_wire.cluster_threshold is None
+    # legal_move_radius always propagates (int field).
+    assert trainer.config["legal_move_radius"] == _v6_wire.legal_move_radius == 5
 
 
 def test_load_v6_checkpoint_with_no_encoding_section_backward_compat(tmp_path: Path) -> None:

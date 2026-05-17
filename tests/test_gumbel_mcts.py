@@ -133,6 +133,7 @@ class TestSelfPlayRunnerGumbelConfig:
             n_workers=1,
             max_moves_per_game=0,
             n_simulations=10,
+            encoding_name="v6",
         ))
         assert runner is not None
 

@@ -56,7 +56,7 @@ fn config_with_distinct_sentinels() -> SelfPlayRunnerConfig {
         3,                                  // 33 random_opening_plies
         true,                               // 34 selfplay_rotation_enabled (flip)
         true,                               // 35 legal_move_radius_jitter (flip)
-        None,                               // 36 encoding_spec
+        None,                               // 36 encoding_name (cycle 3 Wave 8 Batch C)
         Some(6),                            // 37 radius_override
         Some(4096),                         // 38 inference_pool_size
     )
@@ -106,7 +106,7 @@ fn test_config_default_matches_pyo3_signature_defaults() {
         0,                                  // 33 random_opening_plies
         false,                              // 34 selfplay_rotation_enabled
         false,                              // 35 legal_move_radius_jitter
-        None,                               // 36 encoding_spec
+        None,                               // 36 encoding_name (cycle 3 Wave 8 Batch C)
         None,                               // 37 radius_override
         None,                               // 38 inference_pool_size
     );
@@ -147,7 +147,7 @@ fn test_config_default_matches_pyo3_signature_defaults() {
     assert_eq!(cfg.random_opening_plies, 0);
     assert!(!cfg.selfplay_rotation_enabled);
     assert!(!cfg.legal_move_radius_jitter);
-    assert!(cfg.encoding_spec.is_none());
+    assert!(cfg.encoding_name.is_none());
     assert_eq!(cfg.radius_override, None);
     assert_eq!(cfg.inference_pool_size, None);
 }
@@ -197,7 +197,7 @@ fn test_config_param_grouping_one_to_one_no_silent_drops() {
     assert_eq!(cfg.random_opening_plies, 3);
     assert!(cfg.selfplay_rotation_enabled);
     assert!(cfg.legal_move_radius_jitter);
-    assert!(cfg.encoding_spec.is_none());
+    assert!(cfg.encoding_name.is_none());
     assert_eq!(cfg.radius_override, Some(6));
     assert_eq!(cfg.inference_pool_size, Some(4096));
 
@@ -264,7 +264,7 @@ fn test_config_construction_edge_case_minimal_valid() {
         0,                          // random_opening_plies
         false,                      // selfplay_rotation_enabled
         false,                      // legal_move_radius_jitter
-        None,                       // encoding_spec (v6 default)
+        None,                       // encoding_name (cycle 3 Wave 8 Batch C)
         None,                       // radius_override
         None,                       // inference_pool_size (cycle-1 fixed 512 pool)
     );

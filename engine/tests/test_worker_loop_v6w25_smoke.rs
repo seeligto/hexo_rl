@@ -14,6 +14,9 @@
 use engine::encoding::registry::lookup_or_panic;
 use engine::game_runner::{SelfPlayRunner, SelfPlayRunnerConfig};
 use engine::replay_buffer::sym_tables::SymTables;
+// `PyRegistrySpec::from_static` (and the `Some(...)` slot-36 wrapper) retired
+// in cycle 3 Wave 8 Batch C (FF.10) — runners now resolve encoding by name
+// via `encoding_name: Option<String>`.
 
 /// v6w25 runner constructs with correct geometry and does not panic.
 ///
@@ -65,7 +68,7 @@ fn test_v6w25_runner_constructs_correct_geometry() {
         0_u32,                    // random_opening_plies
         false,                    // selfplay_rotation_enabled
         false,                    // legal_move_radius_jitter
-        Some(engine::PyRegistrySpec::from_static(spec)), // encoding_spec (§173 A5a)
+        Some("v6w25".to_string()),                       // encoding_name (cycle 3 Wave 8 Batch C FF.10)
         None,                     // radius_override (§174)
         None,                     // inference_pool_size (§P55)
     ))

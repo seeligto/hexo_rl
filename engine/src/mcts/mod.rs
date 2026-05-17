@@ -220,10 +220,29 @@ impl MCTSTree {
     /// audit: legacy-v6-fallback when encoding is None (bench harness path
     /// has no spec wired today). Pre-P2 unconditionally used `BOARD_SIZE² + 1`
     /// which would phantom-pass-slot a v8 board if a future bench wraps one.
+    ///
+    /// Cycle 3 Wave 8 Batch C (FF.10): the parallel fallback arms in
+    /// `engine/src/game_runner/mod.rs` and `engine/src/inference_bridge.rs`
+    /// retired to `PyValueError` so production callers must supply
+    /// `encoding_name`. This bench-harness arm is the sole survivor and is
+    /// **comment-and-keep** by operator pre-decision — `MCTSTree::new()` /
+    /// `Board::new()` produces a tree with no `encoding_spec`, which is the
+    /// canonical bench-harness construction shape. Migrating the bench
+    /// harness to thread an explicit name would expand scope past the FF.10
+    /// anchor with no production-side benefit.
     pub fn run_simulations_cpu_only(&mut self, n: usize) {
         let n_actions = match self.root_board.encoding_spec() {
             Some(spec) => spec.policy_stride(),
-            None => BOARD_SIZE * BOARD_SIZE + 1, // audit: legacy-v6-fallback
+            // audit: bench-harness-only
+            //
+            // Bench harness (`MCTSTree::new()` + `Board::new()`) constructs
+            // trees with no `encoding_spec`. Retained as the v6 fallback so
+            // the bench keeps compiling against multiple registry versions.
+            // Production callers — `SelfPlayRunner::new` /
+            // `InferenceBatcher::new` — now `PyValueError` on missing
+            // `encoding_name`, so this arm is unreachable from production
+            // paths.
+            None => BOARD_SIZE * BOARD_SIZE + 1, // audit: bench-harness-only
         };
         let uniform_prior = 1.0 / n_actions as f32;
         let uniform_policy = vec![uniform_prior; n_actions];

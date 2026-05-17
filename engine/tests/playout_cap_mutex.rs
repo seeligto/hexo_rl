@@ -46,7 +46,7 @@ fn start_panics_when_both_caps_active() {
         0_u32,              // random_opening_plies
         false,              // selfplay_rotation_enabled
         false,              // legal_move_radius_jitter
-        None,               // encoding_spec (§172 A10 T8b: v6 default)
+        None,               // encoding_name (cycle 3 Wave 8 Batch C)
         None,               // radius_override (§174)
         None,               // inference_pool_size (§P55)
     ))

@@ -23,8 +23,6 @@
 
 use pyo3::prelude::*;
 
-use crate::pyo3::encoding::PyRegistrySpec;
-
 /// Configuration for [`crate::game_runner::SelfPlayRunner`] — single-struct fold of the
 /// pre-cycle-3 38-kwarg constructor surface.
 ///
@@ -72,7 +70,13 @@ pub struct SelfPlayRunnerConfig {
     pub random_opening_plies: u32,
     pub selfplay_rotation_enabled: bool,
     pub legal_move_radius_jitter: bool,
-    pub encoding_spec: Option<PyRegistrySpec>,
+    /// Registry-form encoding name (e.g. "v6", "v6w25"). Routed to
+    /// `crate::encoding::lookup` at `SelfPlayRunner::new` time to derive
+    /// `&'static RegistrySpec`. Cycle 3 Wave 8 Batch C FF.10 collapsed the
+    /// pre-refactor `encoding_spec: Option<PyRegistrySpec>` round-trip — the
+    /// Rust side now owns the lookup, breaking the parallel Python wire-spec
+    /// resolution shim that bridged into PyO3.
+    pub encoding_name: Option<String>,
     pub radius_override: Option<i32>,
     pub inference_pool_size: Option<usize>,
 }
@@ -119,7 +123,7 @@ impl SelfPlayRunnerConfig {
         random_opening_plies = 0,
         selfplay_rotation_enabled = false,
         legal_move_radius_jitter = false,
-        encoding_spec = None,
+        encoding_name = None,
         radius_override = None,
         inference_pool_size = None
     ))]
@@ -159,7 +163,7 @@ impl SelfPlayRunnerConfig {
         random_opening_plies: u32,
         selfplay_rotation_enabled: bool,
         legal_move_radius_jitter: bool,
-        encoding_spec: Option<PyRegistrySpec>,
+        encoding_name: Option<String>,
         radius_override: Option<i32>,
         inference_pool_size: Option<usize>,
     ) -> Self {
@@ -199,7 +203,7 @@ impl SelfPlayRunnerConfig {
             random_opening_plies,
             selfplay_rotation_enabled,
             legal_move_radius_jitter,
-            encoding_spec,
+            encoding_name,
             radius_override,
             inference_pool_size,
         }

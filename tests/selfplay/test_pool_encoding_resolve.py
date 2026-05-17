@@ -6,10 +6,12 @@ shim, the PyO3 runner kwargs, and the model.board_size cross-check.
 That block was extracted to ``_resolve_encoding_for_pool(config, model)``
 so it can be exercised in isolation per registered encoding.
 
-§176 P3: legacy `hexo_rl.utils.encoding` shim retired; the wire-format
-spec is now sourced from `hexo_rl.encoding.compat.WIRE_FORMAT_SPECS`,
-which covers every registered encoding (no more legacy-resolver
-ValueError fallback for v7 / v7e30).
+Cycle 3 Wave 8 Batch C (FF.10, 2026-05-17): the WireFormatSpec +
+PyO3 ``encoding_spec=PyRegistrySpec`` round-trip retired. The Rust
+runner now takes a registry name string via ``encoding_name=`` and
+resolves the record once on the Rust side. ``ResolvedPoolEncoding``
+drops the ``wire_format_spec`` + ``runner_registry_spec`` fields and
+exposes ``encoding_name`` directly.
 
 Parametrized over every encoding in the registry (v6, v6w25, v7full,
 v7, v7e30, v7mw, v8, v8_canvas_realness):
@@ -59,12 +61,11 @@ def _v8_names() -> List[str]:
 @pytest.mark.parametrize("name", _ok_names())
 def test_resolve_encoding_for_pool_returns_expected_shape(name: str) -> None:
     """Each ok encoding returns a ResolvedPoolEncoding whose scalar
-    fields match the registry; wire_format_spec / runner_registry_spec
-    are non-None and round-trip.
+    fields match the registry; ``encoding_name`` round-trips.
 
-    §P3.2: legacy 4-field `runner_encoding` retired alongside the Rust
-    `SelfPlayRunner.encoding=` kwarg.  `runner_registry_spec` is the
-    single surviving spec surface threaded to the Rust runner.
+    Cycle 3 Wave 8 Batch C (FF.10): `wire_format_spec` /
+    `runner_registry_spec` fields retired; the Rust runner takes the
+    registry name string directly via ``encoding_name=``.
     """
     spec = lookup(name)
     cfg: Dict[str, Any] = {"encoding": name}
@@ -76,19 +77,8 @@ def test_resolve_encoding_for_pool_returns_expected_shape(name: str) -> None:
     assert r.board_size == spec.board_size
     assert r.trunk_size == spec.trunk_size
     assert r.n_kept_planes == len(spec.kept_plane_indices)
-
-    # wire_format_spec is the §176 P3 shim — must carry a `name`
-    # routing the encoding through the wire-format mapping. v6-family
-    # aliases (v6 / v7* / v7full / v7mw) all map to the v6 wire format;
-    # v6w25 maps to its own wire format.
-    assert r.wire_format_spec is not None
-    assert r.wire_format_spec.name in ("v6", "v6w25")
-
-    # runner_registry_spec is the PyO3 full-schema mirror; carries the
-    # same registered name.  Wired to the Rust runner via `encoding_spec=`
-    # (replaces the §P3.2-retired 4-field `encoding=` kwarg).
-    assert r.runner_registry_spec is not None
-    assert r.runner_registry_spec.name == name
+    # `encoding_name` is the single Rust-bound surface post-FF.10.
+    assert r.encoding_name == name
 
 
 # --------------------------------------------------------------------------- #

@@ -366,7 +366,7 @@ fn test_rotation_disabled_by_default_in_runner() {
         0_u32,        // random_opening_plies
         false,        // selfplay_rotation_enabled (eval default)
         false,        // legal_move_radius_jitter
-        None,         // encoding_spec (§172 A10 T8b)
+        None,         // encoding_name (cycle 3 Wave 8 Batch C)
         None,         // radius_override (§174)
         None,         // inference_pool_size (§P55)
     ))

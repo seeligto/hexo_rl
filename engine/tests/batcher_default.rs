@@ -9,7 +9,8 @@ const EXPECTED_FEATURE_LEN: usize = 8 * 19 * 19; // 2888
 
 #[test]
 fn feature_len_8_planes_roundtrip() {
-    let batcher = InferenceBatcher::new(None, Some(EXPECTED_FEATURE_LEN), Some(19 * 19 + 1), None);
+    let batcher = InferenceBatcher::new(None, Some(EXPECTED_FEATURE_LEN), Some(19 * 19 + 1), None)
+        .expect("explicit feature_len/policy_len must construct");
     assert_eq!(batcher.feature_len(), EXPECTED_FEATURE_LEN);
     // Buffer pool pre-allocates with feature_len; verify a popped buffer has correct size.
     let buf = batcher.get_feature_buffer();

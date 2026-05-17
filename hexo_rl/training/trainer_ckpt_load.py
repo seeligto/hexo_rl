@@ -39,10 +39,11 @@ from hexo_rl.encoding import (
     resolve_from_config as registry_resolve_config,
 )
 
-from hexo_rl.encoding.compat import (
-    WireFormatSpec,
-    legacy_spec_for_registry_name as _legacy_spec_for_registry_name,
-)
+# Cycle 3 Wave 8 Batch C (FF.10): `WireFormatSpec` / `legacy_spec_for_registry_name`
+# retired alongside the Rust SelfPlayRunner `encoding_spec=` kwarg. The
+# trainer ckpt-load propagation now reads cluster_window_size /
+# cluster_threshold / legal_move_radius / board_size off the registry
+# `RegistrySpec` record directly.
 
 if TYPE_CHECKING:
     from hexo_rl.training.trainer import Trainer
@@ -52,8 +53,8 @@ log = structlog.get_logger()
 
 def _detect_encoding_from_state_dict(
     state_dict: Dict[str, torch.Tensor], ckpt_label: str,
-) -> Optional[WireFormatSpec]:
-    """Infer a wire-format spec from a bare model state_dict.
+) -> Optional[RegistrySpec]:
+    """Infer a registry encoding spec from a bare model state_dict.
 
     Thin trainer-side wrapper over
     ``hexo_rl.encoding.resolvers.detect_encoding_from_state_dict``
@@ -61,20 +62,17 @@ def _detect_encoding_from_state_dict(
     the trainer fall-through to legacy ``_resolve_model_hparams``
     inference for non-canonical fixtures (e.g. a 9×9 trainer round-trip).
 
-    Returns ``None`` when the shared detector returns ``None``;
-    otherwise maps the registry name to the legacy ``WireFormatSpec``
-    via ``legacy_spec_for_registry_name`` so downstream
-    ``_resolve_checkpoint_encoding`` keeps its existing typed surface.
+    Cycle 3 Wave 8 Batch C (FF.10, 2026-05-17): the post-detect bridge to
+    `WireFormatSpec` retired alongside the rest of the compat shim; the
+    registry record is the single source of truth for cluster_window_size
+    / cluster_threshold / legal_move_radius / board_size.
 
     ``ckpt_label`` is a short identifier (e.g. the checkpoint filename)
     used for the v6 vs v6w25 filename disambiguator.
     """
-    spec = _registry_detect_from_state_dict(
+    return _registry_detect_from_state_dict(
         state_dict, ckpt_label, strict=False,
     )
-    if spec is None:
-        return None
-    return _legacy_spec_for_registry_name(spec.name)
 
 
 def _resolve_checkpoint_encoding(
@@ -82,7 +80,7 @@ def _resolve_checkpoint_encoding(
     in_memory_config: Optional[Dict[str, Any]],
     model_state: Dict[str, torch.Tensor],
     checkpoint_path: Any,
-) -> Optional[WireFormatSpec]:
+) -> Optional[RegistrySpec]:
     """Reconcile checkpoint encoding with the in-memory config encoding.
 
     Resolution rules:
@@ -95,15 +93,17 @@ def _resolve_checkpoint_encoding(
         cluster_threshold that contradict the ckpt-resolved spec → also
         ValueError.
 
-    Returns the ckpt-resolved ``WireFormatSpec`` on success.
+    Cycle 3 Wave 8 Batch C (FF.10): the WireFormatSpec bridge retired;
+    every spec value comes directly off the registry record.
+
+    Returns the ckpt-resolved registry ``RegistrySpec`` on success.
     """
     # Step 1 — resolve the ckpt-side encoding.
     ckpt_cfg = ckpt.get("config") if isinstance(ckpt, dict) else None
     ckpt_source: str
-    ckpt_spec: Optional[WireFormatSpec]
+    ckpt_spec: Optional[RegistrySpec]
     if isinstance(ckpt_cfg, dict) and ckpt_cfg.get("encoding") is not None:
-        ckpt_registry_spec = registry_resolve_config(ckpt_cfg)
-        ckpt_spec = _legacy_spec_for_registry_name(ckpt_registry_spec.name)
+        ckpt_spec = registry_resolve_config(ckpt_cfg)
         ckpt_source = f"checkpoint {checkpoint_path!s} config['encoding']"
     else:
         ckpt_spec = _detect_encoding_from_state_dict(
@@ -133,13 +133,12 @@ def _resolve_checkpoint_encoding(
 
     # In-memory side has at least one pin — reconcile.
     if explicit_encoding:
-        cfg_registry_spec = registry_resolve_config(in_memory_config)
-        cfg_spec = _legacy_spec_for_registry_name(cfg_registry_spec.name)
+        cfg_spec: RegistrySpec = registry_resolve_config(in_memory_config)
         cfg_source = "in-memory config['encoding']"
     else:
-        # No encoding section but explicit pins → derive a v6/v6w25-ish
-        # comparison spec from the pins themselves.
-        cfg_spec = ckpt_spec  # start from ckpt; override with pins for compare
+        # No encoding section but explicit pins → use ckpt spec as
+        # the comparison anchor for the pin reconciliation below.
+        cfg_spec = ckpt_spec
         cfg_source = "in-memory config (pins)"
 
     if cfg_spec.name != ckpt_spec.name:
@@ -156,7 +155,7 @@ def _resolve_checkpoint_encoding(
     # numeric pins (board_size / cluster_window_size / cluster_threshold).
     for key, cfg_val in explicit_pins.items():
         if key == "board_size":
-            ckpt_val: Optional[int] = registry_lookup(ckpt_spec.name).trunk_size
+            ckpt_val: Optional[int] = ckpt_spec.trunk_size
         elif key == "cluster_window_size":
             ckpt_val = ckpt_spec.cluster_window_size
         elif key == "cluster_threshold":
@@ -177,7 +176,7 @@ def _resolve_checkpoint_encoding(
 
 
 def _propagate_encoding_into_config(
-    config: Dict[str, Any], spec: WireFormatSpec,
+    config: Dict[str, Any], spec: RegistrySpec,
 ) -> None:
     """Write the resolved encoding fields into the in-memory config.
 
@@ -189,6 +188,12 @@ def _propagate_encoding_into_config(
 
     §172 A10: `config["board_size"]` scalar retired. Readers use
     `resolve_from_config(cfg).trunk_size` instead.
+
+    Cycle 3 Wave 8 Batch C (FF.10): `spec` is now the registry
+    `RegistrySpec` directly (was `WireFormatSpec`). `spec.name` is the
+    full registry name (e.g. "v7full", not the wire-family bucket "v6"
+    the legacy shim emitted) — `resolve_from_config` accepts both since
+    the registry indexes by registry name.
     """
     encoding_section = config.get("encoding")
     if not isinstance(encoding_section, dict):
@@ -373,13 +378,10 @@ def load_checkpoint(
             )
 
     if registry_spec_from_meta is not None:
-        # Bridge to wire-format spec (§176 P3 — replaces the legacy
-        # NamedTuple). Propagation writes board_size / cluster_* /
-        # legal_move_radius into the in-memory config from the wire
-        # format mapped to the registry name.
-        resolved_spec = _legacy_spec_for_registry_name(
-            registry_spec_from_meta.name
-        )
+        # Cycle 3 Wave 8 Batch C (FF.10): legacy WireFormatSpec bridge
+        # retired; propagation reads board_size / cluster_* /
+        # legal_move_radius directly off the registry record.
+        resolved_spec: Optional[RegistrySpec] = registry_spec_from_meta
         _propagate_encoding_into_config(config, resolved_spec)
         log.info(
             "checkpoint_encoding_resolved",

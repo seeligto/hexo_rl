@@ -2,14 +2,14 @@
 
 Pre-§P3.1 the runner accepted both `encoding=PyEncodingSpec` (legacy 4-field)
 and `encoding_spec=PyRegistrySpec` (registry-backed) kwargs. §P3.1 retired
-the Python-side `engine.EncodingSpec` PyO3 wrapper; the legacy `encoding=`
-kwarg path remains alive in Rust but no Python caller wires it. These tests
-now exercise the registry path only via `engine.RegistrySpec.from_registry`.
+the Python-side `engine.EncodingSpec` PyO3 wrapper; cycle 3 Wave 8 Batch C
+(FF.10, 2026-05-17) collapsed the `encoding_spec=PyRegistrySpec` round-trip
+into a single `encoding_name: Optional[str]` lookup at the Rust boundary.
 
 The discriminator: a v6w25 spec gives `legal_move_radius=8`; v6 default is
 5. We assert via `runner.feature_len()` / `runner.policy_len()` that the
 runner derived the v6w25 geometry, plus a `Board.with_encoding_name`
-cross-check that the same spec produces a v6w25 Board.
+cross-check that the same name produces a v6w25 Board.
 
 If the legacy `selfplay_runner_encoding_unbound` warning is still emitted
 during pool construction, the wiring regressed — see the regression guard
@@ -79,28 +79,27 @@ def _drain_until_first_game(runner: SelfPlayRunner, timeout_s: float) -> int:
 
 
 def test_selfplay_runner_accepts_encoding_kwarg():
-    """`engine.SelfPlayRunner(...)` accepts `encoding_spec=engine.RegistrySpec(...)`
-    as a keyword argument. Backward compat: omitting the kwarg falls back to
-    v6 defaults. Both must construct without raising."""
-    spec = engine.RegistrySpec.from_registry("v6w25")
-    # With encoding_spec kwarg.
+    """`engine.SelfPlayRunner(...)` accepts `encoding_name="v6w25"` as a
+    keyword argument. Cycle 3 Wave 8 Batch C (FF.10): omitting both
+    `encoding_name` and explicit `feature_len`/`policy_len` now loud-fails
+    (was: silently inherited v6 defaults)."""
     r1 = SelfPlayRunner(SelfPlayRunnerConfig(
         n_workers=1,
         max_moves_per_game=0,
         n_simulations=1,
         leaf_batch_size=1,
-        encoding_spec=spec,
+        encoding_name="v6w25",
     ))
     assert not r1.is_running()
 
-    # Without encoding kwarg — backward-compat for every pre-A1 caller.
-    r2 = SelfPlayRunner(SelfPlayRunnerConfig(
-        n_workers=1,
-        max_moves_per_game=0,
-        n_simulations=1,
-        leaf_batch_size=1,
-    ))
-    assert not r2.is_running()
+    # Omitting encoding_name + no explicit feature_len/policy_len → loud-fail.
+    with pytest.raises(ValueError, match=r"encoding_name|feature_len"):
+        SelfPlayRunner(SelfPlayRunnerConfig(
+            n_workers=1,
+            max_moves_per_game=0,
+            n_simulations=1,
+            leaf_batch_size=1,
+        ))
 
 
 def test_selfplay_runner_v6w25_workers_use_w25_boards():
@@ -116,13 +115,12 @@ def test_selfplay_runner_v6w25_workers_use_w25_boards():
     game Board ctor" ⇒ workers really do see v6w25 perception. Cross-check
     via `Board.with_encoding_name("v6w25")` matches.
     """
-    py_spec = engine.RegistrySpec.from_registry("v6w25")
     runner = SelfPlayRunner(SelfPlayRunnerConfig(
         n_workers=2,
         max_moves_per_game=0,           # workers spin per-game Board ctor
         n_simulations=1,
         leaf_batch_size=1,
-        encoding_spec=py_spec,
+        encoding_name="v6w25",
     ))
 
     # Direct FFI assert — runner derived v6w25 geometry from the spec.
@@ -150,16 +148,17 @@ def test_selfplay_runner_v6w25_workers_use_w25_boards():
 
 
 def test_selfplay_runner_v6_default_workers_use_w19_boards():
-    """Backward-compat regression: omitting the encoding kwarg keeps every
-    worker on v6 perception. Verifies that the legacy `Board::new()` path
-    (the worker_loop's no-spec branch) is byte-exact unchanged, and that
-    the runner derives v6 default geometry."""
+    """Cycle 3 Wave 8 Batch C (FF.10): explicit `encoding_name="v6"` is now
+    required to get v6 geometry from the runner — the legacy silent-v6
+    fallback retired. Workers see v6 perception via the `Board::new()`
+    path (no `registry_spec` → worker_loop legacy branch keyed off
+    `v6` sym_tables)."""
     runner = SelfPlayRunner(SelfPlayRunnerConfig(
         n_workers=2,
         max_moves_per_game=0,
         n_simulations=1,
         leaf_batch_size=1,
-        # encoding intentionally omitted — defaults to v6 geometry
+        encoding_name="v6",
     ))
 
     # Direct FFI assert — geometry reflects v6 defaults.
@@ -189,9 +188,9 @@ def test_selfplay_runner_v6_default_workers_use_w19_boards():
 
 
 def test_pool_does_not_warn_when_encoding_wired(caplog):
-    """§173 A8' — pool wires legacy `encoding=` + new `encoding_spec=` to
-    SelfPlayRunner; the legacy `selfplay_runner_encoding_unbound` warning
-    must remain absent under v6w25.
+    """§173 A8' / cycle 3 Wave 8 Batch C (FF.10) — pool wires
+    `encoding_name=` to SelfPlayRunner; the legacy
+    `selfplay_runner_encoding_unbound` warning must remain absent under v6w25.
 
     Model is 25×25 to match the v6w25 registry canvas (board_size=25).
     """

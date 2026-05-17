@@ -210,5 +210,6 @@ def test_runner_accepts_playout_cap_params():
         fast_sims=50,
         standard_sims=400,
         temp_threshold_compound_moves=15,
+        encoding_name="v6",
     ))
     assert not runner.is_running()

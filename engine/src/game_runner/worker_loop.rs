@@ -50,12 +50,14 @@ use crate::replay_buffer::sym_tables::{
     // §173 A5a: SYM_N_CELLS (= N_CELLS = 361) and KEPT_PLANE_INDICES removed from
     // import — replaced by runtime spec.n_cells() and spec.kept_plane_indices at
     // all call sites (H1-α, H2-α, H3-α).
-    // §P51 (cycle 2 Wave 5a, Batch B): `sym_tables_for` now imported so
-    // `start_impl` can grab a `&'static SymTables` reference (Some-spec path)
-    // instead of allocating a fresh `Arc<SymTables>` per `start()` call.
-    // `sym_tables_v6_default` covers the None-spec legacy fallback with the
-    // byte-exact v6 default singleton (`SymTables::new()`).
-    sym_tables_for, sym_tables_v6_default,
+    // §P51 (cycle 2 Wave 5a, Batch B): `sym_tables_for` carries the
+    // `&'static SymTables` for a registry spec; cycle 3 Wave 8 Batch C
+    // (FF.10) retired the no-spec `sym_tables_v6_default` fallback alongside
+    // the legacy v6 audit-arms. `KEPT_PLANE_INDICES` + `N_CELLS` are still
+    // imported below for the per-spawn fallback geometry of legacy v6
+    // SelfPlayRunner constructions (registry_spec=None, explicit
+    // feature_len/policy_len provided — e.g. eval/bot paths).
+    sym_tables_for,
 };
 use crate::replay_buffer::sample::{apply_symmetry_state, apply_chain_symmetry};
 
@@ -283,14 +285,14 @@ impl SelfPlayRunner {
         //
         // §173 A5a (H1-α): when a registry spec is present, `sym_tables_for(spec)`
         // returns the spec-keyed singleton (size_19/{8|11}, size_25/{8|11}).
-        // §P51 (cycle 2 Wave 5a, Batch B): legacy `None`-spec callers go through
-        // `sym_tables_v6_default()` which lazily builds `SymTables::new()` once
-        // and returns the same `&'static` on every call. Byte-exact to the
-        // previous `Arc::new(SymTables::new())` semantics (same construction
-        // path); the change is purely the elimination of the per-runner Arc.
+        // Cycle 3 Wave 8 Batch C (FF.10): legacy no-spec runners fall back to
+        // the v6 registry spec singleton via `sym_tables_for(lookup_or_panic("v6"))`.
+        // The historical `sym_tables_v6_default()` accessor retired alongside
+        // the `audit: legacy-v6-fallback` arms in `SelfPlayRunner::new` /
+        // `InferenceBatcher::new`.
         let sym_tables_static: &'static SymTables = match self.registry_spec {
             Some(spec) => sym_tables_for(spec),
-            None       => sym_tables_v6_default(),
+            None       => sym_tables_for(crate::encoding::registry::lookup_or_panic("v6")),
         };
 
         // §P52: build the per-worker capture prototype ONCE before the spawn

@@ -242,27 +242,46 @@ impl SelfPlayRunner {
             random_opening_plies,
             selfplay_rotation_enabled,
             legal_move_radius_jitter,
-            encoding_spec,
+            encoding_name,
             radius_override,
             inference_pool_size,
         } = config;
-        // §172 A10 T8b — derive feature_len / policy_len from `encoding_spec`
-        // (registry record) when explicit kwargs are omitted. Pre-T8b
-        // defaults silently gave v6 geometry (2888 / 362) to v8 callers
-        // who passed an encoding but omitted feature_len/policy_len —
-        // a HIGH-RISK silent-corruption hazard.
+        // §172 A10 T8b / cycle 3 Wave 8 Batch C FF.10 — derive feature_len /
+        // policy_len from the named encoding's registry record. Pre-Wave-8
+        // the registry was looked up Python-side and routed as a
+        // `PyRegistrySpec` round-trip; cycle 3 Wave 8 collapsed that into a
+        // single string lookup at the Rust boundary. The 4 historic
+        // `audit: legacy-v6-fallback` arms (none-and-none) retire to
+        // `PyValueError` so silent v6-geometry corruption of v8 callers is
+        // impossible.
         //
-        // Precedence: explicit kwargs > encoding_spec derivation > legacy v6 default.
-        let spec_static = encoding_spec.as_ref().map(super::pyo3::encoding::PyRegistrySpec::inner);
+        // Precedence: explicit kwargs > encoding_name lookup > error.
+        let spec_static: Option<&'static crate::encoding::RegistrySpec> =
+            if let Some(name) = encoding_name.as_deref() {
+                if let Some(spec) = crate::encoding::lookup(name) {
+                    Some(spec)
+                } else {
+                    let mut known: Vec<&str> =
+                        crate::encoding::all_specs().map(|s| s.name).collect();
+                    known.sort_unstable();
+                    return Err(PyValueError::new_err(format!(
+                        "SelfPlayRunner: encoding_name {name:?} not in registry; known: {known:?}"
+                    )));
+                }
+            } else {
+                None
+            };
         let (feature_len, policy_len) = match (feature_len, policy_len, spec_static) {
             (Some(f), Some(p), _) => (f, p),
             (None, None, Some(spec)) => (spec.state_stride(), spec.policy_stride()),
             (Some(f), None, Some(spec)) => (f, spec.policy_stride()),
             (None, Some(p), Some(spec)) => (spec.state_stride(), p),
-            // LEGACY: v6 fallback for backward-compat PyO3 callers without explicit encoding. See §172 A10 + §173 A7. // audit: legacy-v6-fallback
-            (None, None, None) => (8 * 19 * 19, 19 * 19 + 1), // audit: legacy-v6-fallback
-            (Some(f), None, None) => (f, 19 * 19 + 1), // audit: legacy-v6-fallback
-            (None, Some(p), None) => (8 * 19 * 19, p), // audit: legacy-v6-fallback
+            (None, _, None) | (_, None, None) => {
+                return Err(PyValueError::new_err(
+                    "SelfPlayRunner: encoding_name required when feature_len/policy_len omitted \
+                     (cycle 3 Wave 8 Batch C FF.10 retired the legacy v6 fallback arms)",
+                ));
+            }
         };
         // Effective standard-search sim budget: `standard_sims` wins, else
         // `n_simulations`. Reject zero on the *effective* value — a silent
@@ -296,7 +315,7 @@ impl SelfPlayRunner {
             // exceeds 512) should pass `n_workers * leaf_batch_size * K_avg * 2`
             // or similar; the runner does not auto-derive K_avg since the registry
             // spec has no K_max field at present.
-            batcher: InferenceBatcher::new(None, Some(feature_len), Some(policy_len), inference_pool_size),
+            batcher: InferenceBatcher::new(None, Some(feature_len), Some(policy_len), inference_pool_size)?,
             pol_len: policy_len,
             n_workers,
             max_moves_per_game,
@@ -800,11 +819,13 @@ mod tests {
     //   - `engine/tests/inv17_pyregistryspec_supersedes_pyencodingspec.rs`
     //     (registry parity pin, INV17 Rust — §P3.1)
     //
-    // Default-v6 byte-exactness is covered by
-    // `engine/src/board/state/core.rs::with_encoding_tests`. Jitter behaviour
-    // is now guarded by `worker_loop.rs:321` `registry_spec.is_none()` branch
-    // (the deleted `encoding` field used to alias this guard — registry_spec
-    // is the surviving sentinel for "non-default perception bound").
+    // Default-v6 byte-exactness is covered by the
+    // `with_registry_spec_tests` cohort at `engine/src/board/state/core.rs`
+    // (cycle 3 Wave 8 Batch B retired the legacy `with_encoding_tests`).
+    // Jitter behaviour is now guarded by `worker_loop.rs:321`
+    // `registry_spec.is_none()` branch (the deleted `encoding` field used
+    // to alias this guard — registry_spec is the surviving sentinel for
+    // "non-default perception bound").
 
     #[test]
     fn test_dirichlet_gate_disabled_preserves_priors() {

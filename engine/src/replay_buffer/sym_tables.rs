@@ -367,15 +367,13 @@ pub fn sym_tables_for(spec: &'static crate::encoding::RegistrySpec) -> &'static 
 /// §P51 (cycle 2 Wave 5a, Batch B): used by `worker_loop::start_impl` to
 /// satisfy the `None`-spec legacy fallback path with a `&'static SymTables`
 /// reference (avoiding the `Arc<SymTables>` allocation + `Arc::clone` per
-/// worker spawn). Byte-exact to `SymTables::new()` (board 19×19, n_planes
-/// derived from `KEPT_PLANE_INDICES` — see `SymTables::new()`).
-///
-/// Returned reference outlives any worker thread, so the worker closure can
-/// capture `&'static SymTables` and drop the `Arc::clone` per spawn.
-pub fn sym_tables_v6_default() -> &'static SymTables {
-    static V6_DEFAULT: LazyLock<SymTables> = LazyLock::new(SymTables::new);
-    &V6_DEFAULT
-}
+// `sym_tables_v6_default` retired in cycle 3 Wave 8 Batch C (FF.10): the
+// `worker_loop.rs` no-spec fallback that used to call it has retired alongside
+// the parallel `audit: legacy-v6-fallback` arms in `SelfPlayRunner::new` /
+// `InferenceBatcher::new`. All worker spawns now go through
+// `sym_tables_for(spec)` (H1-α). The historical accessor lazily built
+// `SymTables::new()` for legacy callers that omitted `encoding_spec`; that
+// surface no longer exists.
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 

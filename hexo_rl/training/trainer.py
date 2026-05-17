@@ -60,7 +60,10 @@ from hexo_rl.encoding import (
 from engine import ReplayBuffer
 
 
-from hexo_rl.encoding.compat import legacy_spec_for_registry_name as _legacy_spec_for_registry_name  # noqa: F401, E402  (§176 P14 — public re-export)
+# §176 P14 re-export of `legacy_spec_for_registry_name` retired in cycle 3
+# Wave 8 Batch C (FF.10, 2026-05-17) alongside the underlying compat shim.
+# Callers needing wire-format scalars read them off
+# `hexo_rl.encoding.lookup(name)` directly (returns the registry record).
 
 log = structlog.get_logger()
 
