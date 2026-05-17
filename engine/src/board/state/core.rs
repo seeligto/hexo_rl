@@ -219,10 +219,9 @@ impl Board {
 
     /// §172 A4.1 — construct a Board bound to a registry-resolved encoding.
     ///
-    /// Companion to the legacy 4-field `Board::with_encoding(&EncodingSpec)`
-    /// (kept for §171 plumbing compat). New consumers should prefer this
-    /// ctor — fields below derive directly from the registry record so
-    /// adding a new encoding means editing only `registry.toml`.
+    /// The sole non-default Board ctor. Fields derive directly from the
+    /// registry record so adding a new encoding means editing only
+    /// `registry.toml`.
     ///
     /// Field mapping (per design doc §4.5):
     ///   - `cluster_window_size` ← `spec.cluster_window_size.unwrap_or(spec.board_size)`
@@ -253,29 +252,6 @@ impl Board {
             .unwrap_or(super::super::moves::DEFAULT_CLUSTER_THRESHOLD as usize) as i32;
         b.legal_move_radius = spec.legal_move_radius as i32;
         b.encoding = Some(spec);
-        b.cache_dirty.set(true);
-        b
-    }
-
-    /// §171 P2 reopen — construct a Board with a non-default encoding spec.
-    ///
-    /// Equivalent to `Board::new()` followed by the three setters
-    /// (`set_cluster_window_size`, `set_cluster_threshold`,
-    /// `set_legal_move_radius`), but performs spec validation eagerly and
-    /// returns a single Board. Used by self-play workers under v6w25 and
-    /// future encoding variants (§168 Gate 3 plumbing).
-    ///
-    /// Panics if `enc.validate()` fails. Callers that may receive untrusted
-    /// input should call `enc.validate()` first.
-    pub fn with_encoding(enc: &crate::encoding::EncodingSpec) -> Board {
-        enc.validate().expect("EncodingSpec validation failed");
-        let mut b = Board::new();
-        b.cluster_window_size = enc.cluster_window_size;
-        b.cluster_threshold = enc.cluster_threshold;
-        b.legal_move_radius = enc.legal_move_radius;
-        // legal_cache built in `new()` is for radius=2 (init_cache); larger radius
-        // requires rebuild on next legal_moves_set() call. set_legal_move_radius
-        // marks cache dirty; replicate that here:
         b.cache_dirty.set(true);
         b
     }
@@ -321,10 +297,10 @@ impl Board {
     /// per game and applies it before the first move.
     ///
     /// **Post-mutator hazard (§171 P3 e6682f6 precedent, §172 A4.1):** if
-    /// this Board was constructed via `Board::with_registry_spec` or
-    /// `Board::with_encoding`, calling this setter silently overrides the
-    /// encoding's `legal_move_radius`. The caller (e.g. `worker_loop.rs`)
-    /// is responsible for guarding with `encoding.is_none()` or by an
+    /// this Board was constructed via `Board::with_registry_spec`,
+    /// calling this setter silently overrides the encoding's
+    /// `legal_move_radius`. The caller (e.g. `worker_loop.rs`) is
+    /// responsible for guarding with `encoding.is_none()` or by an
     /// explicit jitter-overrides-encoding contract. This method does not
     /// assert because the v6 + jitter combination is the legitimate use
     /// case; the assertion would fire on every legitimate jitter call.
@@ -668,65 +644,6 @@ impl Clone for Board {
 // SAFETY: `Board` is always accessed by a single thread (MCTS worker or Python GIL).
 // The `UnsafeCell` / `Cell` fields are never reached concurrently via shared references.
 unsafe impl Sync for Board {}
-
-#[cfg(test)]
-mod with_encoding_tests {
-    use super::*;
-    use crate::encoding::EncodingSpec;
-
-    #[test]
-    fn test_with_encoding_v6w25() {
-        let b = Board::with_encoding(&EncodingSpec::V6W25);
-        assert_eq!(b.cluster_window_size(), 25);
-        assert_eq!(b.cluster_threshold(), 8);
-        assert_eq!(b.legal_move_radius(), 8);
-    }
-
-    #[test]
-    fn test_with_encoding_v6_matches_default() {
-        let b_with = Board::with_encoding(&EncodingSpec::V6);
-        let b_new = Board::new();
-        assert_eq!(b_with.cluster_window_size(), b_new.cluster_window_size());
-        assert_eq!(b_with.cluster_threshold(), b_new.cluster_threshold());
-        assert_eq!(b_with.legal_move_radius(), b_new.legal_move_radius());
-    }
-
-    #[test]
-    #[should_panic(expected = "cluster_window_size")]
-    fn test_with_encoding_window_lt_threshold_panics() {
-        let bad = EncodingSpec {
-            cluster_window_size: 7,
-            cluster_threshold: 9,
-            legal_move_radius: 5,
-            board_size: 19,
-        };
-        let _ = Board::with_encoding(&bad);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_with_encoding_zero_radius_panics() {
-        let bad = EncodingSpec {
-            cluster_window_size: 19,
-            cluster_threshold: 5,
-            legal_move_radius: 0,
-            board_size: 19,
-        };
-        let _ = Board::with_encoding(&bad);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_with_encoding_even_window_panics() {
-        let bad = EncodingSpec {
-            cluster_window_size: 20,
-            cluster_threshold: 5,
-            legal_move_radius: 5,
-            board_size: 19,
-        };
-        let _ = Board::with_encoding(&bad);
-    }
-}
 
 #[cfg(test)]
 mod with_registry_spec_tests {

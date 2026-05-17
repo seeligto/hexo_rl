@@ -1,10 +1,9 @@
 //! Encoding registry spec — full-schema record per `registry.toml`.
 //!
-//! Authored §172 Phase A3 (2026-05-09). Distinct from the legacy 4-field
-//! `crate::encoding::EncodingSpec` (which §171 plumbing on this branch still
-//! uses). A4 is the migration commit — it switches `Board::with_encoding`,
-//! the PyO3 boundary, and every consumer to read from `RegistrySpec`. Keep
-//! both types alive in parallel until then.
+//! Authored §172 Phase A3 (2026-05-09). The sole encoding record type;
+//! the legacy 4-field `EncodingSpec` retired in Wave 8 Batch B
+//! (cycle 3 FF.3 residue). Per-Board construction goes through
+//! `Board::with_registry_spec`.
 //!
 //! Schema source of truth: `docs/designs/encoding_registry_design.md` §3.
 
