@@ -4,8 +4,9 @@ Cycle 3 Wave 8 Batch A FF.2 (2026-05-17). Pins:
 
   1. ``hexo_rl.encoding.EncodingSpec is engine.RegistrySpec`` — type alias
      byte-identity (no parallel @dataclass mirror).
-  2. For every registered encoding, the alias exposes all 18 schema fields
-     plus the 6 derived accessors (`n_actions`, `n_cells`, `state_stride`,
+  2. For every registered encoding, the alias exposes all 19 schema fields
+     (18 v2 + ``k_max`` added in cycle 3 P55 Wave 9 / schema v3) plus the
+     6 derived accessors (`n_actions`, `n_cells`, `state_stride`,
      `chain_stride`, `aux_stride`, `policy_stride`) as Python attributes
      (not method calls), with values mirroring the Rust `RegistrySpec`
      impl.
@@ -32,9 +33,9 @@ _REGISTERED_NAMES: tuple[str, ...] = tuple(sorted(s.name for s in all_specs()))
 
 
 # Required attribute surface (post-Wave 8 Batch A retirement of the Python
-# @dataclass mirror). The 18 schema fields are TOML-parsed by the Rust
-# loader; the 6 derived accessors are exposed as `#[getter]` methods on
-# `engine.PyRegistrySpec`.
+# @dataclass mirror; extended by cycle 3 P55 Wave 9 to cover ``k_max``).
+# The 19 schema fields are TOML-parsed by the Rust loader; the 6 derived
+# accessors are exposed as `#[getter]` methods on `engine.PyRegistrySpec`.
 _REQUIRED_FIELDS: tuple[str, ...] = (
     "name",
     "board_size",
@@ -54,6 +55,7 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "notes",
     "kept_plane_indices",
     "n_source_planes",
+    "k_max",
 )
 _REQUIRED_DERIVED: tuple[str, ...] = (
     "n_actions",

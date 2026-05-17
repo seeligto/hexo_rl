@@ -10,6 +10,11 @@
 # Schema v2 additions (§173 A3, 2026-05-11):
 #   kept_plane_indices — physical source-plane indices retained by wire format.
 #   n_source_planes    — source tensor plane count before slicing.
+# Schema v3 additions (cycle 3 P55 Wave 9, 2026-05-17):
+#   k_max — multi-window cluster-count upper bound per position emitted by
+#           Board::get_cluster_views(); = 1 for single-window encodings.
+#           Used by InferenceBatcher pool-size auto-derive in
+#           SelfPlayRunner::new (closes the cycle 1 hardcoded 512 prefill).
 #
 # Adding a new encoding:
 #   1. Append a `[encodings.<name>]` table with all required keys (§3.1).
@@ -72,7 +77,8 @@ sym_table_id            = "size_19"
 # kept_plane_indices: canonical X+history, O+history (see header comment).
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
-schema_version          = 2
+k_max                   = 1            # single-window → 1 cluster view per leaf
+schema_version          = 3
 notes                   = "v6 canonical encoding (Phase 1-3 anchor)."
 
 # ---------------------------------------------------------------------------
@@ -99,7 +105,8 @@ sym_table_id            = "size_19"
 # kept_plane_indices: canonical X+history, O+history (see header comment).
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
-schema_version          = 2
+k_max                   = 1            # single-window → 1 cluster view per leaf
+schema_version          = 3
 notes                   = "§150 anchor (17.4% n=500 vs SealBot); selfplay-canonical pending α."
 
 # ---------------------------------------------------------------------------
@@ -126,7 +133,8 @@ sym_table_id            = "size_19"
 # kept_plane_indices: canonical X+history, O+history (see header comment).
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
-schema_version          = 2
+k_max                   = 1            # single-window → 1 cluster view per leaf
+schema_version          = 3
 notes                   = "§150 predecessor anchor; pre-v7full pretrain. Wire format identical to v6."
 
 # ---------------------------------------------------------------------------
@@ -152,7 +160,8 @@ sym_table_id            = "size_19"
 # kept_plane_indices: canonical X+history, O+history (see header comment).
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
-schema_version          = 2
+k_max                   = 1            # single-window → 1 cluster view per leaf
+schema_version          = 3
 notes                   = "§150 30-epoch v7 retrain; identical wire format to v7/v7full."
 
 # ---------------------------------------------------------------------------
@@ -184,7 +193,8 @@ sym_table_id            = "size_25"
 # kept_plane_indices: canonical X+history, O+history (see header comment).
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
-schema_version          = 2
+k_max                   = 8            # multi-window cap; ~33% head-room over observed K_avg≈6
+schema_version          = 3
 notes                   = "§174 retired as selfplay anchor (3 bootstrap recipes failed viability gate at R=8 MCTS-128). Pretrain+eval+matched-MCTS pin LIFTED. Retained as future re-entry target."
 
 # ---------------------------------------------------------------------------
@@ -218,7 +228,8 @@ sym_table_id            = "size_19"      # 19×19 sym tables shared with v6/v7fu
 # kept_plane_indices: canonical X+history, O+history (see header comment).
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
-schema_version          = 2
+k_max                   = 8            # multi-window cap; matches v6w25 head-room target
+schema_version          = 3
 notes                   = "§176a — v7full arch + K-cluster multi-window perception at 19×19. Isolates multi-window from v6w25 action-space confound."
 
 # ---------------------------------------------------------------------------
@@ -254,7 +265,8 @@ sym_table_id            = "size_25"
 # See header comment for index→semantic mapping.
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11, 18, 19, 20]
 n_source_planes         = 21
-schema_version          = 2
+k_max                   = 1            # single-window → 1 cluster view per leaf
+schema_version          = 3
 notes                   = "v8 contract — single-bbox 25x25; plane-8 polarity OFF->OUTSIDE (vanilla); no pass slot (existing v8 ckpts have policy_fc.out_features=625)."
 
 # ---------------------------------------------------------------------------
@@ -286,5 +298,6 @@ sym_table_id            = "size_25"
 # Plane 18 is canvas_realness (flipped polarity vs v8). See header comment.
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11, 18, 19, 20]
 n_source_planes         = 21
-schema_version          = 2
+k_max                   = 1            # single-window → 1 cluster view per leaf
+schema_version          = 3
 notes                   = "§169 A4 / §170 P4 P2 variant; plane-8 polarity INSIDE->CANVAS for PartialConv2d trunk-entry. Pair with bootstrap_corpus_v8_canvas_realness.npz (sha 110ea6b2…)."

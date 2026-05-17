@@ -305,17 +305,24 @@ impl SelfPlayRunner {
                  when full_search_prob > 0 (got n_sims_quick={n_sims_quick}, n_sims_full={n_sims_full})",
             )));
         }
+        // cycle 3 P55 / Wave 9 — auto-derive InferenceBatcher.pool_size from
+        // spec.k_max when Python omits the explicit kwarg. Heuristic:
+        // `n_workers * leaf_batch_size * k_max * 2`, floored at 512 so the
+        // dominant v6 default path (k_max=1 → 14*8*1*2 = 224 < 512) preserves
+        // the cycle 1 fallback. v6w25 16-worker default (k_max=8 → 14*8*8*2 =
+        // 1792) clears the floor and closes the K-aware-pool gap flagged by
+        // P55. Explicit `inference_pool_size` kwarg still wins.
+        let derived_pool_size = inference_pool_size.or_else(|| {
+            spec_static.map(|s| {
+                let derived = n_workers * leaf_batch_size * (s.k_max as usize) * 2;
+                derived.max(512)
+            })
+        });
         Ok(Self {
             // §172 A10 T8b: pass already-resolved widths through to the
             // batcher (its pyo3 sig now also takes Option<usize>; the runner
             // already collapsed encoding_spec → concrete widths above).
-            // §P55: when Python omits `inference_pool_size`, default is None →
-            // InferenceBatcher keeps cycle 1 fixed 512 pool / 1024 channel.
-            // Callers tuning v6w25 16-worker mid-game (K_avg≈6 → 768 working set
-            // exceeds 512) should pass `n_workers * leaf_batch_size * K_avg * 2`
-            // or similar; the runner does not auto-derive K_avg since the registry
-            // spec has no K_max field at present.
-            batcher: InferenceBatcher::new(None, Some(feature_len), Some(policy_len), inference_pool_size)?,
+            batcher: InferenceBatcher::new(None, Some(feature_len), Some(policy_len), derived_pool_size)?,
             pol_len: policy_len,
             n_workers,
             max_moves_per_game,

@@ -103,6 +103,17 @@ pub struct RegistrySpec {
     /// Used by validator for the kept-indices upper bound. Producer-pipeline
     /// migration to read this from spec is deferred to §174.
     pub n_source_planes: usize,
+
+    // ── cycle 3 P55 / Wave 9 (schema v3) additions ───────────────────────
+    /// Multi-window cluster-count upper bound per position emitted by
+    /// `Board::get_cluster_views()`. Single-window encodings emit exactly
+    /// 1 view per leaf, so `k_max = 1` is the canonical degenerate case;
+    /// multi-window encodings (v6w25, v7mw) use a conservative cap above
+    /// the observed mid/late-game K_avg from the α design doc.
+    /// Used by `SelfPlayRunner::new` to auto-derive the
+    /// `InferenceBatcher.pool_size` default when the caller omits an
+    /// explicit kwarg. NOT a hard runtime cap on `get_cluster_views()`.
+    pub k_max: u32,
 }
 
 impl RegistrySpec {
@@ -222,6 +233,7 @@ mod tests {
             notes: "test",
             kept_plane_indices: &[0, 1, 2, 3, 8, 9, 10, 11],
             n_source_planes: 18,
+            k_max: 1,
         }
     }
 

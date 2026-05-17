@@ -130,6 +130,7 @@ pub(super) fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String
     };
 
     let n_source_planes = get_int!("n_source_planes").map(|v| v as usize);
+    let k_max = get_int!("k_max").map(|v| v as u32);
 
     // plane_layout: array of strings.
     let plane_layout: Option<Vec<&'static str>> = match table.get("plane_layout") {
@@ -212,5 +213,6 @@ pub(super) fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String
         notes: leak_str(notes.unwrap()),
         kept_plane_indices,
         n_source_planes: n_source_planes.unwrap(),
+        k_max: k_max.unwrap(),
     })
 }

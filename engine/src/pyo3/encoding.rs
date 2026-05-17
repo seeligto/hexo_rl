@@ -70,6 +70,11 @@ impl PyRegistrySpec {
     }
     /// §173 A3 — source tensor plane count before kept_plane_indices slice.
     #[getter] pub fn n_source_planes(&self) -> usize { self.inner.n_source_planes }
+    /// cycle 3 P55 / Wave 9 — multi-window cluster-count upper bound per
+    /// position emitted by `Board::get_cluster_views()`. = 1 for
+    /// single-window encodings. Read by `hexo_rl/selfplay/pool.py` when
+    /// computing the `InferenceBatcher.pool_size` auto-derive heuristic.
+    #[getter] pub fn k_max(&self) -> u32 { self.inner.k_max }
 
     /// Alias for `policy_logit_count` — matches the retired Python @dataclass
     /// `n_actions` @property (Wave 8 Batch A FF.2 parity).

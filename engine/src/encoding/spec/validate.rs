@@ -131,6 +131,15 @@ impl RegistrySpec {
             errs.push("legal_move_radius must be > 0".to_string());
         }
 
+        // cycle 3 P55 / Wave 9 — k_max must be >= 1. Single-window encodings
+        // emit exactly 1 cluster view per leaf (the canonical board encode);
+        // multi-window encodings cap at the registry-declared upper bound.
+        // No cross-validation against is_multi_window — a future canvas-
+        // augmented single-window arch may legitimately set k_max > 1.
+        if self.k_max == 0 {
+            errs.push("k_max must be >= 1".to_string());
+        }
+
         // Plane layout sanity: no duplicates, no empty strings.
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         for (idx, p) in self.plane_layout.iter().enumerate() {

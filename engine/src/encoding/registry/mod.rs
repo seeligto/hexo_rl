@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(s.value_pool, ValuePool::None);
         assert_eq!(s.policy_pool, PolicyPool::None);
         assert_eq!(s.sym_table_id, "size_19");
-        assert_eq!(s.schema_version, 2);
+        assert_eq!(s.schema_version, 3);
     }
 
     #[test]
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(s.policy_logit_count, 362);
         assert!(!s.is_multi_window);
         assert!(s.has_pass_slot);
-        assert_eq!(s.schema_version, 2);
+        assert_eq!(s.schema_version, 3);
     }
 
     #[test]
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(s.policy_logit_count, 362);
         assert!(!s.is_multi_window);
         assert!(s.has_pass_slot);
-        assert_eq!(s.schema_version, 2);
+        assert_eq!(s.schema_version, 3);
     }
 
     #[test]
