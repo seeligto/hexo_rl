@@ -307,7 +307,7 @@ pub(super) fn run_worker_thread(
 /// Init board + per-game state, run inner move loop, finalize game. Ports
 /// verbatim from the pre-Wave-11 inner.rs L143-L772 (the body inside the
 /// outer `while running.load()` loop). Returns when game ends or shutdown.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // per-game loop body; hot-path-by-value per §173 A5b (bundle would re-pack on each game)
 fn run_one_game(
     tree: &mut MCTSTree,
     rng: &mut ThreadRng,
@@ -603,7 +603,7 @@ fn infer_and_expand(
 /// `infer_and_expand` repeatedly inside.
 ///
 /// Ports verbatim from the pre-Wave-11 inner.rs L352-L470.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // MCTS dispatcher; hot-path-by-value per §173 A5b (bundle would add field-access overhead on each sim)
 fn run_mcts_search(
     tree: &mut MCTSTree,
     board: &Board,
@@ -738,7 +738,7 @@ fn run_mcts_search(
 /// Returns `MoveOutcome` to signal the parent loop control flow.
 ///
 /// Ports verbatim from the pre-Wave-11 inner.rs L225-L443.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // per-move dispatcher; hot-path-by-value per §173 A5b (bundle would re-pack on each move)
 fn play_one_move(
     tree: &mut MCTSTree,
     board: &mut Board,
@@ -889,7 +889,7 @@ fn play_one_move(
 /// (caller should break the inner move loop).
 ///
 /// Ports verbatim from the pre-Wave-11 inner.rs L559-L607.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // per-move sampler; hot-path-by-value per §173 A5b (bundle would re-pack on each move)
 fn select_move(
     board: &Board,
     move_history: &[(i32, i32)],
@@ -1009,7 +1009,7 @@ fn record_position(
 /// `recent_game_results` metadata row.
 ///
 /// Ports verbatim from the pre-Wave-11 inner.rs L680-L772.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // per-game finalize; hot-path-by-value per §173 A5b (bundle would add field-access overhead on results-queue push)
 fn finalize_game(
     board: &Board,
     max_moves: usize,
