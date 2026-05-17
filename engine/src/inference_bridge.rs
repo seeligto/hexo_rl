@@ -505,3 +505,38 @@ impl InferenceBatcher {
         self.policy_len
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! P69 inline-test scaffold (cycle 3 Wave 10 Batch B). Covers the
+    //! two early-return paths in `submit_batch_and_wait_rust`. Future
+    //! waves may extend coverage to `infer_and_expand`'s partial-batch
+    //! handler in `worker_loop/inner.rs` (deferred per U9 = Option B.2.c).
+    use super::*;
+
+    const FEATURE_LEN: usize = 8 * 19 * 19; // v6 default 2888
+    const POLICY_LEN: usize = 19 * 19 + 1; // 362
+
+    fn new_batcher() -> InferenceBatcher {
+        // PyO3-free ctor arm at inference_bridge.rs:297
+        // (Some(f), Some(p), _) => (f, p) — skips encoding_spec deref.
+        InferenceBatcher::new(None, Some(FEATURE_LEN), Some(POLICY_LEN), None)
+            .expect("explicit feature_len/policy_len must construct")
+    }
+
+    #[test]
+    fn submit_batch_and_wait_rust_returns_err_when_closed() {
+        let batcher = new_batcher();
+        batcher.close_rust();
+        let res = batcher.submit_batch_and_wait_rust(vec![vec![0.0_f32; FEATURE_LEN]]);
+        assert!(res.is_err(), "expected Err(()) on closed batcher");
+    }
+
+    #[test]
+    fn submit_batch_and_wait_rust_returns_err_on_length_mismatch() {
+        let batcher = new_batcher();
+        let bad = vec![vec![0.0_f32; FEATURE_LEN + 1]];
+        let res = batcher.submit_batch_and_wait_rust(bad);
+        assert!(res.is_err(), "expected Err(()) on feature length mismatch");
+    }
+}
