@@ -85,11 +85,13 @@ log_interval: 10        # also controls web-dashboard send frequency
 aux_opp_reply_weight: 0.15
 entropy_reg_weight: 0.01  # policy entropy regularization (KrakenBot-style, prevents policy collapse)
 draw_value: -0.5          # draw outcome value target (reverted from -0.75 for experiment A; isolate chain aux kill)
-ply_cap_value: -0.5       # §178: truncation outcome (winner=None, ply>=max_moves).
-                          # Default -0.5 == draw_value for back-compat (no-op for §177 variant).
-                          # §178 variant `v6_botmix_s178.yaml` overrides to -0.5 (operator pre-commit;
-                          # design called for -0.8). Split from draw_value so value head sees distinct
-                          # targets for organic draws vs ply-cap truncations.
+ply_cap_value: 0.0        # §178: truncation outcome (winner=None, ply>=max_moves).
+                          # §S178 T12 (2026-05-18): default revised -0.5 → 0.0 per AlphaZero
+                          # chess (50-move auto-draw → value 0) + KataGo (max-ply truncation
+                          # → value 0). Honest neutral on genuinely unresolved positions
+                          # rather than soft-penalty. Split from draw_value: organic draws
+                          # (winner=None, ply<max) still pay draw_value; truncation pays this.
+                          # §S178 variant `v6_botmix_s178.yaml` inherits 0.0 (override removed).
 recency_weight: 0.75      # fraction of each batch from the recent-position ring buffer (newest ~50% of buffer)
 uncertainty_weight: 0.0   # disabled — Gaussian NLL diverges when σ²→0 causing total_loss spikes to ~394
 ownership_weight: 0.1     # weight for ownership auxiliary head (spatial MSE); training only
