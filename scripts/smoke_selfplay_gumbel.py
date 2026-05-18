@@ -4,7 +4,7 @@ no training, no dashboard, dump draw rate / avg game length / entropy.
 
 Usage:
     .venv/bin/python scripts/smoke_selfplay_gumbel.py \
-        --variant gumbel_full --checkpoint checkpoints/bootstrap_model.pt \
+        --variant gumbel_full --checkpoint checkpoints/bootstrap_model_v6.pt \
         --duration 600 --workers 10
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--variant", required=True,
                    help="configs/variants/<name>.yaml without extension")
-    p.add_argument("--checkpoint", default="checkpoints/bootstrap_model.pt")
+    p.add_argument("--checkpoint", default="checkpoints/bootstrap_model_v6.pt")
     p.add_argument("--duration", type=int, default=600)
     p.add_argument("--workers", type=int, default=None)
     p.add_argument("--out", type=str, default=None)

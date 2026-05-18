@@ -595,7 +595,7 @@ def main() -> int:
     parser.add_argument(
         "--our_model_ckpt",
         type=str,
-        default="checkpoints/bootstrap_model.pt",
+        default="checkpoints/bootstrap_model_v6.pt",
         help="Checkpoint path for our_v6_* bots.",
     )
     parser.add_argument(

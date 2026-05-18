@@ -307,10 +307,10 @@ pretrain: ## Bootstrap pretrain. Vars: PRETRAIN_ENCODING, PRETRAIN_EPOCHS, PRETR
 # ── Probes ────────────────────────────────────────────────────────────────────
 
 .PHONY: probe.bootstrap
-probe.bootstrap: ## Probe bootstrap_model.pt; save fixtures/threat_probe_baseline.json + report
+probe.bootstrap: ## Probe $(BOOTSTRAP); save fixtures/threat_probe_baseline.json + report
 	@mkdir -p reports/probes
 	$(PY) scripts/probe_threat_logits.py \
-		--checkpoint checkpoints/bootstrap_model.pt \
+		--checkpoint $(BOOTSTRAP) \
 		--write-baseline \
 		--output "reports/probes/bootstrap_$(shell date +%Y%m%d_%H%M%S).md"; \
 	rc=$$?; [ $$rc -le 1 ] || exit $$rc
@@ -321,7 +321,7 @@ probe.latest: ## Threat-logit probe against latest checkpoint; PASS/FAIL step-5k
 	@mkdir -p reports/probes
 	$(PY) scripts/probe_threat_logits.py \
 		--checkpoint "$(CHECKPOINT_LATEST)" \
-		--baseline-checkpoint checkpoints/bootstrap_model.pt \
+		--baseline-checkpoint $(BOOTSTRAP) \
 		--output "reports/probes/latest_$(shell date +%Y%m%d_%H%M%S).md"
 
 .PHONY: probe.fixtures
