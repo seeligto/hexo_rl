@@ -284,25 +284,52 @@ impl Board {
 
     /// Returns the cells forming the winning 6-in-a-row, or an empty Vec if no win.
     ///
-    /// Checks from the last placed stone along all three hex axes.
-    /// The returned cells are in axis order from one end to the other.
+    /// Fast path: checks from the last placed stone along all three hex axes.
+    /// Fallback (§S178 F-fix-1): if last_move doesn't yield a 6-line, scans
+    /// all placed stones for any 6-in-a-row. Mirrors `player_wins`'s fallback
+    /// at line 184-189 — both must agree on outcome or threat-head target
+    /// goes empty on `winner=Some(_)` games where the winning line was not
+    /// completed by the immediately-prior move (HTT 2-moves-per-turn rule:
+    /// first move of a turn can complete a 6-line then the second move sits
+    /// off-line; `winner()` finds it via fallback, this fn must too).
     pub fn find_winning_line(&self) -> Vec<(i32, i32)> {
-        let Some((lq, lr)) = self.last_move else {
-            return vec![];
-        };
-        let Some(&cell) = self.cells.get(&(lq, lr)) else {
-            return vec![];
-        };
-        for &(dq, dr) in &HEX_AXES {
-            let pos_count = self.count_direction(lq, lr, dq, dr, cell) as i32;
-            let neg_count = self.count_direction(lq, lr, -dq, -dr, cell) as i32;
-            let total = (1 + pos_count + neg_count) as usize;
-            if total >= WIN_LENGTH {
-                let mut line = Vec::with_capacity(total);
-                for i in -neg_count..=pos_count {
-                    line.push((lq + dq * i, lr + dr * i));
+        if let Some((lq, lr)) = self.last_move {
+            if let Some(&cell) = self.cells.get(&(lq, lr)) {
+                for &(dq, dr) in &HEX_AXES {
+                    let pos_count = self.count_direction(lq, lr, dq, dr, cell) as i32;
+                    let neg_count = self.count_direction(lq, lr, -dq, -dr, cell) as i32;
+                    let total = (1 + pos_count + neg_count) as usize;
+                    if total >= WIN_LENGTH {
+                        let mut line = Vec::with_capacity(total);
+                        for i in -neg_count..=pos_count {
+                            line.push((lq + dq * i, lr + dr * i));
+                        }
+                        return line;
+                    }
                 }
-                return line;
+            }
+        }
+        // Fallback scan (§S178 F-fix-1). Sort stones by (q, r) so the choice
+        // of returned line is deterministic across HashMap iteration orders.
+        // Per-game-end call (not hot path) — sort cost is negligible.
+        let mut stones: Vec<((i32, i32), Cell)> =
+            self.cells.iter().map(|(&k, &v)| (k, v)).collect();
+        stones.sort_unstable_by_key(|&((q, r), _)| (q, r));
+        for &((q, r), cell) in &stones {
+            for &(dq, dr) in &HEX_AXES {
+                // Only count from the start of a run (no predecessor of same colour).
+                if self.cells.get(&(q - dq, r - dr)).copied() == Some(cell) {
+                    continue;
+                }
+                let pos_count = self.count_direction(q, r, dq, dr, cell) as i32;
+                let total = (1 + pos_count) as usize;
+                if total >= WIN_LENGTH {
+                    let mut line = Vec::with_capacity(total);
+                    for i in 0..=pos_count {
+                        line.push((q + dq * i, r + dr * i));
+                    }
+                    return line;
+                }
             }
         }
         vec![]

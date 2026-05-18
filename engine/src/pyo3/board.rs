@@ -82,6 +82,15 @@ impl PyBoard {
         })
     }
 
+    /// Returns the 6 cells forming the winning line, or empty list if no win.
+    ///
+    /// §S178 F-fix-1: scans all stones when last_move doesn't yield a 6-line,
+    /// so a win found by `winner()`'s fallback path (HTT 2-moves-per-turn
+    /// shifting last_move off the line) still surfaces the winning cells.
+    pub fn find_winning_line(&self) -> Vec<(i32, i32)> {
+        self.inner.find_winning_line()
+    }
+
     /// List of all legal moves as list of (q, r) tuples.
     pub fn legal_moves(&self) -> Vec<(i32, i32)> {
         self.inner.legal_moves()
