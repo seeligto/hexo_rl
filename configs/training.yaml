@@ -143,6 +143,16 @@ mixing:
                                  # early-game positions. 48GB RAM handles the full 285k corpus (~4.1 GB).
   buffer_persist: true
   buffer_persist_path: "checkpoints/replay_buffer.bin"
+  # §178 bot-corpus slot (top-level batch share, parallel to corpus + selfplay).
+  # Defaults are NEUTRAL — null path + 0 share → no behaviour change for §177
+  # and earlier. Variants opt in (see configs/variants/v6_botmix_s178.yaml).
+  bot_corpus_path: null
+  bot_batch_share: 0.0
+  bot_corpus_refresh:
+    enabled: false             # §178 static; §179 flips True for async regen
+    trigger: best_model_promotion
+    cooldown_steps: 25_000
+    min_new_games: 200
 
 seed: 42
 

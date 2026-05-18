@@ -1,0 +1,130 @@
+# configs/variants/v6_botmix_s178.yaml
+# §178 — v6 sustained from CLEAN v6 anchor + SealBot bot-corpus mixing + ply-cap-value split.
+# Predecessor: §175 (same anchor, no bot mixing, trajectory 18→4% SealBot; colony attractor).
+# §177 (step-20K anchor, same recipe as §175): same trajectory; recipe alone cannot escape.
+# Design doc: reports/s178_design.md
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6.pt \
+#     --variant v6_botmix_s178 \
+#     --iterations 100000
+
+# Header: bootstrap anchor + variant identity
+# Anchor choice rationale: v6.pt (not _step20k) for direct A/B vs §175.
+# v6.pt = canonical v6 base bootstrap (untrained selfplay). §175 anchor.
+# §178 with v6.pt + bot mixing tests: does the new mechanism prevent the
+# colony capture that §175 (same anchor, no bot) exhibited from step ~5K onward?
+
+# Operator pre-flight (see launch script):
+#   1. tmux kill-session -t s177 (if still alive on vast)
+#   2. data/bootstrap_corpus_v6.npz present on vast (regen or scp; SA-E vast-only finding)
+#   3. rm checkpoints/replay_buffer.bin (clean start; §177 buffer discarded)
+#   4. data/bot_corpus_s178_sealbot_vs_v6.npz present (generated via `make corpus.bot`)
+#   5. --checkpoint MUST be bootstrap_model_v6.pt, NOT Makefile default (bootstrap_model.pt is random)
+
+# ── §177 baseline overrides retained ──────────────────────────────────────────
+lr: 2e-3
+total_steps: 100_000
+eta_min: 2e-4
+
+# ── §177 mixing block retained, with NEW bot_corpus slot ──────────────────────
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"  # human corpus (v7 Elo-weighted, §148)
+  # decay_steps: 200_000 unchanged from training.yaml; F2 rationale — corpus dominance is anti-colony.
+  # min_pretrained_weight: 0.1, initial_pretrained_weight: 0.8 unchanged.
+
+  # NEW — Source A bot-game corpus (separate top-level batch slot).
+  # NOT decaying with pretrain_weight; NOT subject to LRU eviction.
+  # Baked against v6.pt anchor (matches §178 starting weights).
+  bot_corpus_path: "data/bot_corpus_s178_sealbot_vs_v6.npz"
+  bot_batch_share: 0.15  # fraction of batch sampled from bot corpus
+
+  # Refresh-on-anchor-change hook — DISABLED for §178 (static).
+  # Flip on for §179 after observing §178 colony_frac trajectory.
+  bot_corpus_refresh:
+    enabled: false
+    trigger: best_model_promotion
+    cooldown_steps: 25_000
+    min_new_games: 200
+
+# ── Pair-A — ply_cap_value split from draw_value ──────────────────────────────
+# Operator pre-commit: draw_value -0.5 → -0.1 (softer on organic draws).
+# §178 addition: ply_cap_value separate, harder (truncation = near-loss).
+# Restores finish-pressure on long colony-prone games without flattening genuine draws.
+draw_value: -0.1       # organic draws (winner=None, ply<150) → BCE target 0.45 (near-neutral)
+ply_cap_value: -0.5    # NEW — truncation (winner=None, ply≥150). Operator override 2026-05-18:
+                       # design called for -0.8 (BCE 0.10, near-loss); operator dialed back to
+                       # -0.5 (BCE 0.25, soft-penalty) pending §178 outcome — may revisit.
+
+# ── §175/§177 cosine-temp + jitter mandatory pairings (L9) ────────────────────
+# DO NOT override — preserved from base selfplay.yaml.
+# - selfplay.playout_cap.temperature_threshold_compound_moves: 10
+# - selfplay.playout_cap.temp_min: 0.05
+# - selfplay.legal_move_radius_jitter: true
+
+# ── §177 selfplay overrides retained ──────────────────────────────────────────
+selfplay:
+  completed_q_values: true  # §177 setting — Gumbel completed-Q KL policy targets
+  c_visit: 50.0
+  c_scale: 1.0
+  n_workers: 18
+  inference_batch_size: 64
+  n_simulations: 400
+  max_game_moves: 150       # 150 plies = 75 compound turns (§144 recalibrated)
+  random_opening_plies: 1
+  rotation_enabled: true
+  legal_move_radius_jitter: true  # L9 mandatory pairing
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.5    # §177 inheritance (NOT 0.25)
+    n_sims_quick: 100
+    n_sims_full: 600
+    temperature_threshold_compound_moves: 10
+    temp_min: 0.05
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+# ── §177 buffer schedule retained ─────────────────────────────────────────────
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 300_000,   capacity: 500_000}
+  - {step: 1_000_000, capacity: 1_000_000}
+
+# ── §175/§177 gating retained ─────────────────────────────────────────────────
+gating:
+  bootstrap_floor:
+    enabled: true
+    min_winrate: 0.45
+
+# ── §175/§177 eval cadence retained (T=0.5 for §175 continuity per L21) ───────
+eval_interval: 5000
+eval_temperature: 0.5
+eval_random_opening_plies: 0  # §174 verified
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v6.pt"  # explicit; NOT bootstrap_model.pt (random init)
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+# ── Hard-abort signature thresholds (from §157 / L9) ──────────────────────────
+hard_abort:
+  grad_norm: 10.0
+  loss_nan: true
+  stride5_p90: 60       # rolling 50 games
+  row_max_p90: 50
+  colony_ext_frac_max: 0.40
+  draw_rate_warn: 0.70  # WARN-only; do not auto-abort
+  pct_at_cap_warn: 0.30 # NEW — soft-abort if ply-cap rate rises ≥5pp without WR recovery
+
+# ── V178 telemetry probes (extends §175 set) ──────────────────────────────────
+telemetry:
+  emit_bot_corpus_metrics: true   # log avg policy/value loss split by source (corpus/bot/selfplay)
+  emit_outcome_distribution: true # log win/loss/organic_draw/ply_cap_truncation counts per round
+  emit_value_pred_at_ply_cap: true # V178-8 probe — mean v_pred for ply >= 140
