@@ -8,7 +8,7 @@ MATURIN ?= .venv/bin/maturin
 
 # BOOTSTRAP is the canonical knob (§174 W3); CHECKPOINT_BOOTSTRAP kept as
 # back-compat alias for older docs/scripts. Both resolve to the same default.
-BOOTSTRAP ?= checkpoints/bootstrap_model.pt
+BOOTSTRAP ?= checkpoints/bootstrap_model_v6.pt
 CHECKPOINT_BOOTSTRAP ?= $(BOOTSTRAP)
 CHECKPOINT_LATEST ?= $(shell ls -1 checkpoints/checkpoint_*.pt 2>/dev/null | tail -n 1)
 PRETRAIN_CKPT ?= $(shell ls -1 checkpoints/pretrain/pretrain_*.pt 2>/dev/null | tail -n 1)
@@ -44,7 +44,7 @@ SMOKE_MODE ?= mcts
 SMOKE_ENCODING ?=
 _SMOKE_ENC_FLAG = $(if $(SMOKE_ENCODING),--encoding $(SMOKE_ENCODING),)
 
-TRANSFER_SOURCE ?= checkpoints/bootstrap_model.pt
+TRANSFER_SOURCE ?= checkpoints/bootstrap_model_v6.pt
 TRANSFER_OUTPUT ?= checkpoints/bootstrap_model_v6w25_transfer.pt
 
 # Named variant from configs/variants/ — deep-merged on top of selfplay.yaml.

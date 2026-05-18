@@ -27,8 +27,8 @@ log = structlog.get_logger(__name__)
 # Fresh runs anchor against the trained bootstrap, not a random fresh-init
 # copy of trainer.model.
 _BOOTSTRAP_ANCHOR_CANDIDATES: tuple[str, ...] = (
+    "checkpoints/bootstrap_model_v6.pt",
     "checkpoints/bootstrap_model_v7full.pt",
-    "checkpoints/bootstrap_model.pt",
 )
 
 

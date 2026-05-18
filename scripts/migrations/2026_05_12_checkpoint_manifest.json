@@ -1,7 +1,6 @@
 {
   "checkpoints/best_model.pt": "v7full",
   "checkpoints/inference_only.pt": "v7full",
-  "checkpoints/bootstrap_model.pt": "v6",
   "checkpoints/bootstrap_model_v6w25.pt": "v6w25",
   "checkpoints/bootstrap_model_v7.pt": "v7",
   "checkpoints/bootstrap_model_v7e30.pt": "v7e30",

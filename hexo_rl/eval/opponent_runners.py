@@ -214,7 +214,7 @@ def _run_bootstrap_anchor(ctx: _RunnerContext) -> None:
     from hexo_rl.eval.eval_pipeline import _load_anchor_model, log
 
     anchor_path_str = pipeline.bootstrap_anchor_cfg.get(
-        "path", "checkpoints/bootstrap_model.pt",
+        "path", "checkpoints/bootstrap_model_v6.pt",
     )
     anchor_path = Path(anchor_path_str)
     if not anchor_path.exists():
