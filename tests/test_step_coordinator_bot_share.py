@@ -155,6 +155,7 @@ def _make_coordinator(
     config_overrides: dict[str, Any] | None = None,
     event_emitter: Any = None,
     train_step_override: int | None = None,
+    logger: Any = None,
     **kwargs: Any,
 ) -> StepCoordinator:
     cfg = _make_config(**(config_overrides or {}))
@@ -191,6 +192,7 @@ def _make_coordinator(
         clock=clock or FakeClock(),
         tracemalloc_provider=tracemalloc_provider or Mock(),
         event_emitter=event_emitter or Mock(),
+        logger=logger,
         **kwargs,
     )
     coord.last_train_game_count = 0
@@ -332,3 +334,105 @@ def test_bot_buffer_empty_size_falls_to_zero(patch_helpers):
     coord.step()
     call = patch_helpers["mix"].call_args
     assert call.kwargs["n_bot"] == 0
+
+
+# ── T7 Refresh hook cells (§178: DISABLED; §179: ENABLED) ─────────────────────
+
+def _make_eval_pipeline_promoting(promoted_step: int = 100) -> Mock:
+    """Eval pipeline that promotes synchronously when drain returns its step."""
+    ep = Mock()
+    ep.run_evaluation = Mock(return_value={"promoted": True, "step": promoted_step})
+    return ep
+
+
+def test_refresh_hook_disabled_does_not_fire(patch_helpers):
+    """§178 default: bot_corpus_refresh_enabled=False → hook does NOT fire."""
+    logger = Mock()
+    pretrained_buffer = _make_buffer(size=100_000)
+    bot_buffer = _make_buffer(size=50_000)
+    eval_pipeline = _make_eval_pipeline_promoting(promoted_step=200)
+    # drain returns the new promoted step → triggers `promoted_step` branch
+    patch_helpers["drain"].return_value = (None, 200)
+    coord = _make_coordinator(
+        pretrained_buffer=pretrained_buffer,
+        bot_buffer=bot_buffer,
+        eval_pipeline=eval_pipeline,
+        train_step_override=10_000,
+        config_overrides={"eval_interval": 1, "max_train_burst": 1,
+                          "training_steps_per_game": 1.0,
+                          "bot_batch_share": 0.15,
+                          "bot_corpus_refresh_enabled": False,  # §178 default
+                          "bot_corpus_refresh_cooldown": 25_000},
+        logger=logger,
+    )
+    # Plant a prior eval thread to drive the drain → promotion branch.
+    coord._eval_thread = Mock(is_alive=Mock(return_value=False))
+    coord._best_model_step = 0  # so drain's new step (200) is a promotion delta
+    coord.step()
+    # No refresh warning emitted (hook is fully inert)
+    warning_calls = [c for c in logger.warning.call_args_list
+                     if c.args and c.args[0] == "bot_corpus_refresh_requested_but_disabled"]
+    assert not warning_calls
+    # Bookkeeping NOT bumped
+    assert coord._last_bot_refresh_step == 0
+
+
+def test_refresh_hook_enabled_fires_warning_and_bumps_state(patch_helpers):
+    """Enabled + promotion + cooldown elapsed → warning + bump."""
+    logger = Mock()
+    pretrained_buffer = _make_buffer(size=100_000)
+    bot_buffer = _make_buffer(size=50_000)
+    eval_pipeline = _make_eval_pipeline_promoting(promoted_step=200)
+    patch_helpers["drain"].return_value = (None, 200)
+    coord = _make_coordinator(
+        pretrained_buffer=pretrained_buffer,
+        bot_buffer=bot_buffer,
+        eval_pipeline=eval_pipeline,
+        train_step_override=30_000,  # > cooldown(25_000)
+        config_overrides={"eval_interval": 1, "max_train_burst": 1,
+                          "training_steps_per_game": 1.0,
+                          "bot_batch_share": 0.15,
+                          "bot_corpus_refresh_enabled": True,
+                          "bot_corpus_refresh_cooldown": 25_000},
+        logger=logger,
+    )
+    coord._eval_thread = Mock(is_alive=Mock(return_value=False))
+    coord._best_model_step = 0
+    coord.step()
+    warning_calls = [c for c in logger.warning.call_args_list
+                     if c.args and c.args[0] == "bot_corpus_refresh_requested_but_disabled"]
+    assert len(warning_calls) == 1, (
+        f"expected one refresh-hook warning; got {len(warning_calls)}: {logger.warning.call_args_list}"
+    )
+    # Bookkeeping bumped to current step
+    assert coord._last_bot_refresh_step == coord._train_step
+
+
+def test_refresh_hook_respects_cooldown_no_refire(patch_helpers):
+    """Cooldown not elapsed since last refresh → no fire (idempotent in window)."""
+    logger = Mock()
+    pretrained_buffer = _make_buffer(size=100_000)
+    bot_buffer = _make_buffer(size=50_000)
+    eval_pipeline = _make_eval_pipeline_promoting(promoted_step=200)
+    patch_helpers["drain"].return_value = (None, 200)
+    coord = _make_coordinator(
+        pretrained_buffer=pretrained_buffer,
+        bot_buffer=bot_buffer,
+        eval_pipeline=eval_pipeline,
+        train_step_override=12_000,  # within cooldown(25_000) of last_refresh=0
+        config_overrides={"eval_interval": 1, "max_train_burst": 1,
+                          "training_steps_per_game": 1.0,
+                          "bot_batch_share": 0.15,
+                          "bot_corpus_refresh_enabled": True,
+                          "bot_corpus_refresh_cooldown": 25_000},
+        logger=logger,
+    )
+    coord._eval_thread = Mock(is_alive=Mock(return_value=False))
+    coord._best_model_step = 0
+    # Pretend we recently refreshed at step 0 (default); 12_000 - 0 < 25_000.
+    coord._last_bot_refresh_step = 0
+    coord.step()
+    warning_calls = [c for c in logger.warning.call_args_list
+                     if c.args and c.args[0] == "bot_corpus_refresh_requested_but_disabled"]
+    assert not warning_calls
+    assert coord._last_bot_refresh_step == 0  # unchanged

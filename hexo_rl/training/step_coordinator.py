@@ -642,6 +642,29 @@ class StepCoordinator:
                     if self._best_model_step != prev_best_step:
                         promoted_step = self._best_model_step
 
+                # §178 T7 bot-corpus refresh hook (DISABLED for §178 — warning-only log).
+                # When cfg.bot_corpus_refresh_enabled is False (§178 default) the
+                # hook is fully inert. §179 will flip the flag True to fire an
+                # async regen via subprocess (design §4.4 + risk #4 mitigation).
+                # Cooldown gate avoids re-firing within `cooldown_steps` of last
+                # promotion (default 25K steps per design §4.4 yaml).
+                if (cfg.bot_corpus_refresh_enabled
+                        and promoted_step is not None
+                        and self.bot_buffer is not None
+                        and (self._train_step - self._last_bot_refresh_step)
+                            >= cfg.bot_corpus_refresh_cooldown):
+                    self._logger.warning(
+                        "bot_corpus_refresh_requested_but_disabled",
+                        step=self._train_step,
+                        promoted_step=promoted_step,
+                        last_refresh_step=self._last_bot_refresh_step,
+                        msg=(
+                            "§178 hook fired; static-pool mode for this sprint. "
+                            "§179 will flip enabled=True for async regen."
+                        ),
+                    )
+                    self._last_bot_refresh_step = self._train_step
+
                 if self._eval_thread is None or not self._eval_thread.is_alive():
                     base_model = getattr(self.trainer.model, "_orig_mod", self.trainer.model)
                     assert self.eval_model is not None
