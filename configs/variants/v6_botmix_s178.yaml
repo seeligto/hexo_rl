@@ -128,7 +128,6 @@ eval_pipeline:
       path: "checkpoints/bootstrap_model_v6.pt"  # explicit; NOT bootstrap_model.pt (random init)
     sealbot:
       enabled: true
-      stride: 1     # override base eval.yaml:27 stride:4 → fire every eval for generalization monitoring
     randombot:
       enabled: true
     best_checkpoint:

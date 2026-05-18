@@ -131,8 +131,7 @@ eval_pipeline:
       opponent_sims: 128
       path: "<auto>"            # resolves to checkpoints/bootstrap_model_v6w25.pt
     sealbot:
-      stride: 1
-      n_games: 20               # smoke threshold
+      n_games: 20               # smoke threshold (stride:1 inherited from base)
     argmax_n:
       # §170 P4 P1 DRIFT detector. n_sims=1 (≈ policy argmax). Inactive in
       # the G3 monotonic-depth gate (G3 lives at MCTS {32,64,128}); kept for

@@ -24,8 +24,11 @@ eval_pipeline:
       opponent_sims: 128
     sealbot:
       enabled: true
-      stride: 4
-      n_games: 50
+      # Generalization monitor — fires every eval round; n_games sized for
+      # Wilson95 half-width ~10pp at p≈0.55. Smoke variants override n_games
+      # for speed (see m173_alpha_cold_smoke.yaml, smoke_radius_curriculum.yaml).
+      stride: 1
+      n_games: 100
       think_time_strong: 0.5
       think_time_fast: 0.1
       model_sims: 128

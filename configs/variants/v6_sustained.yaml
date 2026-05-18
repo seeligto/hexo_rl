@@ -59,12 +59,6 @@ selfplay:
   # block was removed from this file per the hygiene audit. Behaviour
   # unchanged. Sprint-log reference: §156 R12 / §175 cosine-off pairing.
 
-eval_pipeline:
-  opponents:
-    sealbot:
-      stride: 1          # fire every eval_interval=10K (base stride=4 = every 40K)
-      n_games: 100       # real signal: 17.4% anchor has CI [10.7%, 25.9%] at n=100
-
 # Explicit v6 corpus path — vast's data/bootstrap_corpus.npz was overwritten
 # with v6w25 data during §174 (resolvers._CORPUS_PATHS["v6"] points there).
 # data/bootstrap_corpus_v6.npz is the canonical v6 19×19 corpus (2.4 GB).

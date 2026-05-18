@@ -71,9 +71,6 @@ mcts:
 
 eval_pipeline:
   opponents:
-    sealbot:
-      stride: 1
-      n_games: 100
     best_checkpoint:
       n_games: 100
       model_sims: 128

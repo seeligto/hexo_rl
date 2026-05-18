@@ -55,12 +55,6 @@ selfplay:
   inference_max_wait_ms: 16.0
   random_opening_plies: 0
 
-eval_pipeline:
-  opponents:
-    sealbot:
-      stride: 1
-      n_games: 100
-
 # Explicit corpus path — vast's data/bootstrap_corpus.npz was overwritten
 # with v6w25 data during §174. data/bootstrap_corpus_v6.npz is the canonical
 # v6 19×19 corpus (2.4 GB) and shares its wire format with v7full / v7mw.
