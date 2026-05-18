@@ -635,6 +635,16 @@ impl SelfPlayRunner {
         let mut rg = self.recent_game_results.lock().expect("recent_game_results lock poisoned");
         rg.drain(..).collect()
     }
+
+    /// §178 INV26 — test-only accessor for per-row outcomes (the 4th tuple
+    /// field of `WorkerResultRow`). The Python-facing `collect_data` consumes
+    /// the same queue but folds it into a NumPy array under the GIL, which is
+    /// not reachable from `cargo test`. Returns one f32 per row in the order
+    /// produced by the workers. NOT for production use.
+    pub fn drain_outcomes_for_test(&self) -> Vec<f32> {
+        let mut q = self.results.lock().expect("results lock poisoned");
+        q.drain(..).map(|(_, _, _, outcome, _, _, _)| outcome).collect()
+    }
 }
 
 impl Drop for SelfPlayRunner {
