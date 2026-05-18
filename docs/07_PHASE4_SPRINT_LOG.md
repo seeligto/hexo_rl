@@ -2169,6 +2169,81 @@ Length-discounted value target DROPPED from candidate pool per operator (termina
 
 ---
 
+## §S178a — Tier-1 hygiene wave (mid-§S178) — 2026-05-18
+
+Five-item parallel hygiene wave on branch `phase4.5/tier1_hygiene` (off master
+`96337c4`); §S178 sustained run on vast.ai untouched throughout (tmux `sS178`
+LIVE; active anchor `bootstrap_model_v6.pt` + active bot corpus
+`bot_corpus_s178_sealbot_vs_v6.npz` + active variant `v6_botmix_s178.yaml` all
+untouched in every diff). Wave-driver:
+`reports/tier1_hygiene_wave.md` (this aggregation report).
+
+**A — quarantine fresh-init `bootstrap_model.pt`** (commit `c1173a8`).
+Closes §S178 open hygiene **H1**. The unknown-provenance v6w25-architecture
+file at `checkpoints/bootstrap_model.pt` was the silent `Makefile:11` default
+when `BOOTSTRAP=` was unset; per `reports/bootstrap_model_pt_provenance.md`
+§3+§5 it carries Kaiming-uniform fresh-init weights with 0/143 tensor match
+vs every sibling — not a trained anchor. Repointed canonical defaults
+(`Makefile:11`+`:47`, `hexo_rl/training/anchor.py`
+`_BOOTSTRAP_ANCHOR_CANDIDATES`, `hexo_rl/eval/opponent_runners.py:217`
+`bootstrap_anchor`) to `bootstrap_model_v6.pt`; dropped the row from
+`scripts/migrations/2026_05_12_checkpoint_manifest.json`. Forensic copy
+preserved at `checkpoints/archive_quarantine/bootstrap_model_random_init_v6w25.pt`
+(gitignored; SHA `d00b8604…1586253`). 4 residual references outside the
+contracted touch list deferred to follow-up (Q-§S178a F-A1).
+
+**B — `tests/test_scraper.py` restore** (NO-OP, no commit).
+The tracked-path test does not exist anywhere in reachable git history
+(neither `7aea774` nor `913c5a0` touched a `tests/test_scraper.py`). A
+gitignored local copy DOES exist on this worktree, imports
+`hexo_rl.bootstrap.scraper` cleanly, and runs 19/19 PASS in venv — there
+is no broken `elo_band_key` import to fix locally. The wave-driver
+premise was sourced from a vast-side bench-gate report describing a
+different stale gitignored file (Q-§S178a F-B1 follow-up).
+
+**C — `scripts/verify_anchor.py` anchor verification CLI** (commit
+`2740766`; 254 LOC new file). Reports `sha256` (16 hex), `format`,
+`key_count`, `param_count`, `head_shapes`, `fresh_init_signature` (bool),
+`verdict` (TRAINED | FRESH_INIT_SUSPECT | UNKNOWN). Heuristic per
+provenance report §3: `value_fc2.weight.abs().max() / sqrt(1/fan_in)`
+within `[0.8, 1.25]` → suspect. Sidecar JSON at `<ckpt>.verify.json`.
+Exit codes 0 / 1 / 2. Verified end-to-end against the active anchor
+(exit 0 TRAINED, ratio 2.013) and the quarantined fresh-init file
+(exit 1 SUSPECT, ratio 0.999).
+
+**D — CLAUDE.md split** (NO-OP, no commit). `wc -l CLAUDE.md` = 105 ≤
+200 target; all 8 `docs/rules/*.md` topic files exist; CLAUDE.md is
+index-shaped (Prime Directive + threat-probe gate + encoding registry +
+rule files index + deep-dive index + MCP tools) with no fat content to
+extract.
+
+**E — variant config hygiene audit + cleanup** (commit `ba4f1e7`).
+Audited 7 non-active variants (`v6_botmix_s178.yaml` SKIPPED, active
+§S178). Cleaned `v6_sustained.yaml` (§175 closed-by-interrupt) and
+`v7mw_sustained.yaml` (§176a experimental v7mw) — dropped 11/12
+base-equal scalars each. Audit report at
+`reports/variant_hygiene_audit.md` (306 LOC) covers per-variant
+noise/override/extension tables. Deferred audit-only:
+`m173_alpha_cold_smoke.yaml`, `smoke_radius_curriculum.yaml`,
+`_sweep_template.yaml`, `v6_sustained_s177.yaml` (§S178 contrast),
+`vast.yaml` (operator-designated exemplar). All 22+ removed keys
+spot-checked base-equal; `tests/test_variant_configs.py` 5/5 PASS;
+`#[allow` count = 29 (cycle-3 close baseline preserved). Follow-ups
+Q-§S178a F-E1, F-E2.
+
+**Verification.** Cherry-pick order A → C → E on
+`phase4.5/tier1_hygiene` (B + D no-op). 5 independent REVIEW subagents
+(no IMPL context, fresh per-agent) each PASS. `make test` exit 0 on
+branch HEAD: 1588 passed, 21 skipped, 1 xpassed, in 155.74s. No
+hot-path touch; no Rust `#[allow]` regression; active-run paths
+confirmed untouched in every diff. Operator FF-merges to master
+post-inspection (no tag — hygiene wave, not cycle close).
+
+**Follow-up entries:** `docs/06_OPEN_QUESTIONS.md` — Q-§S178a row
+(LOW/MED priority items absorbed during normal §S178+/§S179 work).
+
+---
+
 ## §66–§101 Classification Audit — quick-look table
 
 | Bucket | Sections | Compressed body location |

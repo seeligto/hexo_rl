@@ -749,6 +749,46 @@ Post-§161: 991 passed, 8 skipped.
 
 ---
 
+## Q-§S178a — Tier-1 hygiene wave follow-ups (2026-05-18)
+
+**Status:** OPEN [LOW/MED] — absorb during normal §S178+ / §S179 work, no
+standalone wave required. Surfaced by §S178a tier-1 hygiene wave (see
+sprint log §S178a + `reports/tier1_hygiene_wave.md`).
+
+- **F-A1 [LOW]** — 4 residual `bootstrap_model.pt` references outside IMPL-A's
+  strict touch list:
+  - `hexo_rl/bootstrap/pretrain_trainer.py:302` (default OUTPUT path — writes a
+    new file with that name, no foot-gun).
+  - `scripts/smoke_selfplay_gumbel.py:37` (CLI default arg).
+  - `scripts/tournament_validate.py:598` (CLI default).
+  - `Makefile` `probe.bootstrap` / `probe.latest` targets (probe-target paths).
+  - None of these are silent `make train` defaults (those are closed by
+    IMPL-A). Captured for next hygiene pass.
+
+- **F-B1 [MED]** — vast-side `tests/test_scraper.py` discrepancy. The vast
+  checkout's gitignored copy of `tests/test_scraper.py` imports the deleted
+  `scripts.update_manifest.elo_band_key` symbol (per
+  `reports/s178_bench_gate_vast.md`). Local copy is healthy.
+  Operationally: regenerate the vast-side gitignored test file from the
+  local healthy copy, OR remove the stale `scripts/scrape_daily.sh:44`
+  subprocess reference to deleted `update_manifest.py`. Address on the
+  next vast operator-run.
+
+- **F-E1 [LOW]** — clean `configs/variants/v6_sustained_s177.yaml`
+  symmetrically with `v6_sustained.yaml` (drop 11+ base-equal scalars)
+  after §S178 closeout. Currently retained as §S178 A/B contrast
+  reference.
+
+- **F-E2 [LOW]** — fold `_sweep_template.yaml` +
+  `m173_alpha_cold_smoke.yaml` + `smoke_radius_curriculum.yaml` cleanup
+  into a §173/§174 retrospective sweep. Deferred to preserve sprint-trace
+  structural parity.
+
+**Scope:** All four items are cold-path docs/config edits — no bench gate
+required per `docs/refactor-template.md`.
+
+---
+
 ## Q-§176-residual — Micro-refactor candidates deferred from §176
 
 **Status:** OPEN [LOW] — absorb during normal §177+ work, or batch as a follow-up micro-refactor cycle.
