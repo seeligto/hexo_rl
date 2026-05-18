@@ -380,6 +380,14 @@ corpus.export: ## Export optimized NPZ corpus for buffer prefill (all positions,
 corpus.export.pretrain: ## Export human-only Elo-weighted NPZ for pretrain (all positions, no cap)
 	$(PY) scripts/export_corpus_npz.py --human-only --no-compress
 
+.PHONY: corpus.bot
+corpus.bot: ## §178 T1 — generate SealBot-vs-anchor bot-game NPZ (ANCHOR=path required)
+	$(PY) scripts/generate_bot_corpus.py \
+		--anchor $${ANCHOR:?ANCHOR=path required (use checkpoints/bootstrap_model_v6.pt)} \
+		--n-games $${N_GAMES:-700} \
+		--out $${OUT:-data/bot_corpus_s178_sealbot_vs_v6.npz} \
+		--n-workers $${N_WORKERS:-1}
+
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
