@@ -65,11 +65,16 @@ mixing:
 draw_value: -0.1       # organic draws (winner=None, ply<150) → BCE target 0.45 (near-neutral)
 ply_cap_value: 0.0     # truncation (winner=None, ply≥150) → BCE target 0.5 (literature-canonical)
 
-# ── §175/§177 cosine-temp + jitter mandatory pairings (L9) ────────────────────
-# DO NOT override — preserved from base selfplay.yaml.
-# - selfplay.playout_cap.temperature_threshold_compound_moves: 10
-# - selfplay.playout_cap.temp_min: 0.05
-# - selfplay.legal_move_radius_jitter: true
+# ── §175/§177 cosine-temp DISABLED (operator override 2026-05-18) ─────────────
+# §156 R12 finding (per configs/variants/vast.yaml line 53): cosine schedule is
+# disabled for sustained runs from frozen bootstrap. Operator observed colony
+# spam re-emerging in §S178 first-game telemetry with cosine-temp on (peak
+# temp_min=0.05 → over-peaky policy → colony pattern reinforcement). Override
+# L9 mandatory pairing: aligns sustained-from-bootstrap policy with vast.yaml
+# canonical settings while keeping §178 mechanism levers (bot mix + ply_cap_value).
+# - selfplay.playout_cap.temperature_threshold_compound_moves: 0  (was 10)
+# - selfplay.playout_cap.temp_min: 0.5                            (was 0.05)
+# - selfplay.legal_move_radius_jitter: true                       (unchanged)
 
 # ── §177 selfplay overrides retained ──────────────────────────────────────────
 selfplay:
@@ -88,8 +93,14 @@ selfplay:
     full_search_prob: 0.5    # §177 inheritance (NOT 0.25)
     n_sims_quick: 100
     n_sims_full: 600
-    temperature_threshold_compound_moves: 10
-    temp_min: 0.05
+    # Cosine-temp DISABLED 2026-05-18 (operator override) — see comment block
+    # above. §156 R12 settings: threshold 0 (no cosine), temp_min 0.5 (fixed τ).
+    # NOTE: sprint log §156/L9 frames cosine-temp as draw-collapse driver, not
+    # primary colony driver. R12 colony rate was 67% (mitigated by jitter).
+    # Colony attractor in §175 captured by `n_components` per §176 A3, NOT by
+    # `colony_extension_fraction`. Disable per operator call regardless.
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
     zoi_enabled: true
     zoi_lookback: 16
     zoi_margin: 5
