@@ -2087,6 +2087,56 @@ The 5 partially-tracked recon files under `audit/rust-engine/cycle_3/wave_{8,9,1
 
 ---
 
+## §S178 — v6 sustained bot-mix recipe launch (2026-05-18)
+
+**Branch:** `phase4.5/s178_botmix` (off master `ddfa42e`); **anchor:** `checkpoints/bootstrap_model_v6.pt` (clean v6 base bootstrap; §175 anchor preserved for direct A/B vs §175 + §177).
+**Design:** `docs/designs/S178_design.md` (commit `b26999b`).
+**Investigation:** `reports/s178_pre_design_investigation.md` (gitignored, vast-only).
+**Implementation:** 9 commits `b26999b..22597fc` on `phase4.5/s178_botmix` (design + T2 Rust split + INV26 + T3 Python wire + T1 bot corpus generator + T4/T5/T7 training-path + T6 yaml).
+
+### Two mechanism levers vs §175/§177 colony-attractor capture
+
+1. **SealBot-vs-anchor bot corpus pool** at `bot_batch_share=0.15`. Top-level batch slot (NOT inside selfplay decay, NOT subject to LRU eviction). Pre-generated via `make corpus.bot ANCHOR=checkpoints/bootstrap_model_v6.pt N_GAMES=700 OUT=data/bot_corpus_s178_sealbot_vs_v6.npz`. KrakenBot DROPPED (operator call, supported by Wave C BT data); bot-vs-bot games SKIPPED (no anchor-mistake signal). Bootstrap corpus UNCHANGED (human-only per §148).
+2. **`ply_cap_value` split from `draw_reward`.** Rust `finalize_game` outcome branch now distinguishes terminal_reason==2 (ply-cap, → `ply_cap_value`) from winner=None,ply<max (→ `draw_reward`). Operator pre-commit `draw_value: -0.5 → -0.1`. Operator override on `ply_cap_value`: design called for `-0.8` (BCE 0.10, near-loss); operator dialed back to `-0.5` (BCE 0.25, soft-penalty) pending §178 outcome — may revisit.
+
+### Pre-registered V178-1..8 verdicts (design §7)
+
+| ID | Hypothesis | PASS criterion | FAIL criterion | NULL criterion |
+|---|---|---|---|---|
+| V178-1 | SealBot WR @ step 10K beats §177 step-10K (2%) | ≥5%, n=100 | ≤2% | 2–5% inconclusive |
+| V178-2 | SealBot WR @ step 30K > 0% | ≥1 win / 100 | 0/100 | — |
+| V178-3 | colony_fraction in bootstrap_anchor wins @ step 30K below §177 (~64%) | ≤50% | ≥70% | 50–70% |
+| V178-4 | Non-monotonically-declining SealBot WR (no strict-decline trajectory) | observed | strict monotone decline | — |
+| V178-5 | G4 value_fc2_weight_abs_max in [0.154, 0.462] by step 20K | in-band | below-band | — |
+| V178-6 | Bot-pool policy-loss > 0.5 nat through step 30K (corpus dominance does NOT compete it down) | observed | bot ≈ corpus loss | — |
+| V178-7 | draw_rate + ply_cap_rate both stable/down | both | either ≥5pp rise | — |
+| V178-8 | v_pred(ply≥140) ∈ [-0.9, -0.7] by step 15K (ply-cap-value penalty learned) | in-band | drifts toward 0 | — |
+
+### Risk register pointer
+
+`docs/designs/S178_design.md` §8 — 12 rows, operator-confirmed pre-launch. Hard-abort thresholds preserved (§157/L9): grad_norm 10.0, stride5_p90 60, row_max_p90 50, colony_ext_frac_max 0.40. NEW soft-abort: `pct_at_cap_warn 0.30` (≥5pp rise without WR recovery).
+
+### Operator overrides this sprint
+
+- `ply_cap_value: -0.8 → -0.5` (variant yaml + training.yaml default). Design value retained in `docs/designs/S178_design.md` body for traceability; revisit if §178 outcome insufficient.
+- §S178 discriminator on sprint log heading: sprint log already uses §178/§179/§180 for Rust engine refactor cycles 1/2/3 (lines 1697/1764/1921). Branch + design + verdict IDs all keep "s178"/"S178" branding.
+
+### Pre-launch hygiene (operator, vast 5080)
+
+1. `make bench` on vast 5080 to confirm no regression vs cycle-3-close baseline at `audit/rust-engine/cycle_3/close/04_baseline_next_cycle.txt`. Local laptop bench-gate SKIPPED (no AC; design §11). Touch points: T2 `finalize_game` + T4 `assemble_mixed_batch` in-place copyto.
+2. `tmux kill-session -t s177` (if still alive on vast).
+3. `data/bootstrap_corpus_v6.npz` present on vast (regen or scp; SA-E vast-only finding).
+4. `rm checkpoints/replay_buffer.bin` (clean start; §177 buffer discarded).
+5. `make corpus.bot ANCHOR=checkpoints/bootstrap_model_v6.pt N_GAMES=700 OUT=data/bot_corpus_s178_sealbot_vs_v6.npz` to generate bot corpus.
+6. Launch: `python scripts/train.py --checkpoint checkpoints/bootstrap_model_v6.pt --variant v6_botmix_s178 --iterations 100000`.
+
+### Forward pointers
+
+- §179 candidate: flip `bot_corpus_refresh.enabled: true` if §178 colony_frac trajectory shows aging (currently hook present + disabled, warning-only log when triggered).
+- INV26 pins ply_cap_value-distinct outcome path; INV19 byte-equivalence extends 38→39 atomically with T2.
+
+---
+
 ## §66–§101 Classification Audit — quick-look table
 
 | Bucket | Sections | Compressed body location |
