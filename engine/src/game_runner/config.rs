@@ -48,6 +48,11 @@ pub struct SelfPlayRunnerConfig {
     pub standard_sims: usize,
     pub temp_threshold_compound_moves: usize,
     pub draw_reward: f32,
+    /// §178: terminal-via-ply-cap outcome (winner=None AND ply≥max_moves_per_game).
+    /// Split from `draw_reward` so organic draws and ply-cap truncations can pay
+    /// distinct value-head targets. Default `-0.1` matches `draw_reward` default
+    /// for back-compat — pre-§178 callers see identical outcomes.
+    pub ply_cap_value: f32,
     pub quiescence_enabled: bool,
     pub quiescence_blend_2: f32,
     pub temp_min: f32,
@@ -101,6 +106,7 @@ impl SelfPlayRunnerConfig {
         standard_sims = 0,
         temp_threshold_compound_moves = 15,
         draw_reward = -0.1,
+        ply_cap_value = -0.1,
         quiescence_enabled = true,
         quiescence_blend_2 = 0.3,
         temp_min = 0.05,
@@ -141,6 +147,7 @@ impl SelfPlayRunnerConfig {
         standard_sims: usize,
         temp_threshold_compound_moves: usize,
         draw_reward: f32,
+        ply_cap_value: f32,
         quiescence_enabled: bool,
         quiescence_blend_2: f32,
         temp_min: f32,
@@ -181,6 +188,7 @@ impl SelfPlayRunnerConfig {
             standard_sims,
             temp_threshold_compound_moves,
             draw_reward,
+            ply_cap_value,
             quiescence_enabled,
             quiescence_blend_2,
             temp_min,

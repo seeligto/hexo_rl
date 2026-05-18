@@ -46,6 +46,7 @@ fn test_v6w25_runner_constructs_correct_geometry() {
         1,                        // standard_sims
         15,                       // temp_threshold
         -0.1,                     // draw_reward
+        -0.1,                     // ply_cap_value (§178; back-compat = draw_reward)
         false,                    // quiescence_enabled
         0.0,                      // quiescence_blend_2
         0.05,                     // temp_min

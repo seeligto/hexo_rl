@@ -344,6 +344,7 @@ fn test_rotation_disabled_by_default_in_runner() {
         1,            // standard_sims
         15,           // temp_threshold
         -0.1,         // draw_reward
+        -0.1,         // ply_cap_value (§178; back-compat = draw_reward)
         true,         // quiescence_enabled
         0.3,          // quiescence_blend_2
         0.05,         // temp_min
@@ -375,7 +376,7 @@ fn test_rotation_disabled_by_default_in_runner() {
 
     // Explicit rotation=true must also accept (training-loop path).
     let runner_rot = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-        1, 0, 1, 1, 1.5, 0.25, Some(8 * 19 * 19), Some(19 * 19 + 1), 0.0, 1, 1, 15, -0.1, true,
+        1, 0, 1, 1, 1.5, 0.25, Some(8 * 19 * 19), Some(19 * 19 + 1), 0.0, 1, 1, 15, -0.1, -0.1, true,
         0.3, 0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
         10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, true, false, None, None, None,
     ))

@@ -63,6 +63,7 @@ fn build_config(
         1,                        // standard_sims
         15,                       // temp_threshold
         -0.1,                     // draw_reward
+        -0.1,                     // ply_cap_value (§178; back-compat = draw_reward)
         quiescence_enabled,
         0.0,                      // quiescence_blend_2
         0.05,                     // temp_min
@@ -147,6 +148,7 @@ fn inv25_spawn_loop_fan_out_independent_stats() {
         Some(feature_len),
         Some(policy_len),
         0.0, 1, 1, 15, -0.1,
+        -0.1,                     // §178 ply_cap_value (back-compat = draw_reward)
         false, 0.0, 0.05,
         false, 16, 5,
         false, 50.0, 1.0,

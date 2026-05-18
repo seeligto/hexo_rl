@@ -62,6 +62,11 @@ pub(super) struct WorkerParams {
     pub(super) temp_threshold: usize,
     pub(super) temp_min: f32,
     pub(super) draw_reward: f32,
+    /// §178: terminal-via-ply-cap outcome (winner=None AND ply>=max_moves).
+    /// Split from `draw_reward` so the value head sees distinct targets for
+    /// organic draws (`terminal_reason==3`) vs ply-cap truncations
+    /// (`terminal_reason==2`). See `inner::finalize_game`.
+    pub(super) ply_cap_value: f32,
     pub(super) zoi_lookback: usize,
     pub(super) zoi_margin: i32,
     pub(super) c_visit: f32,

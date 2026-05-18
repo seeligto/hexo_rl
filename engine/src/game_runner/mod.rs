@@ -81,6 +81,10 @@ pub struct SelfPlayRunner {
     pub(crate) temp_threshold_compound_moves: usize,
     pub(crate) temp_min: f32,
     pub(crate) draw_reward: f32,
+    /// §178: terminal-via-ply-cap outcome (winner=None AND ply>=max_moves_per_game).
+    /// Split from `draw_reward` so organic draws and ply-cap truncations can pay
+    /// distinct value-head targets. See `worker_loop/inner.rs::finalize_game`.
+    pub(crate) ply_cap_value: f32,
     pub(crate) zoi_enabled: bool,
     pub(crate) zoi_lookback: usize,
     pub(crate) zoi_margin: i32,
@@ -220,6 +224,7 @@ impl SelfPlayRunner {
             standard_sims,
             temp_threshold_compound_moves,
             draw_reward,
+            ply_cap_value,
             quiescence_enabled,
             quiescence_blend_2,
             temp_min,
@@ -337,6 +342,7 @@ impl SelfPlayRunner {
             temp_threshold_compound_moves,
             temp_min,
             draw_reward,
+            ply_cap_value,
             zoi_enabled,
             zoi_lookback,
             zoi_margin,
@@ -647,7 +653,7 @@ mod tests {
     fn test_worker_id_assignment() {
         // Run with max_moves_per_game = 0 to avoid triggering MCTS and inference server dependency
         let runner = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-            4, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
+            4, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
         )).unwrap();
@@ -769,7 +775,7 @@ mod tests {
     #[test]
     fn test_mcts_mean_depth_is_per_search_average() {
         let runner = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-            1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
+            1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
         )).unwrap();
@@ -805,7 +811,7 @@ mod tests {
 
         // Zero-denominator guard.
         let empty = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-            1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, true, 0.3,
+            1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, -0.1, true, 0.3,
             0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
             10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
         )).unwrap();

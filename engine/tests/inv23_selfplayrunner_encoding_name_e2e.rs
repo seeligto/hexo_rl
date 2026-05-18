@@ -46,7 +46,8 @@ fn cfg_with_encoding(
         1,                                 // 11 standard_sims
         15,                                // 12 temp_threshold_compound_moves
         -0.1,                              // 13 draw_reward
-        false,                             // 14 quiescence_enabled
+        -0.1,                              // 14 ply_cap_value (§178; back-compat = draw_reward)
+        false,                             // 15 quiescence_enabled
         0.0,                               // 15 quiescence_blend_2
         0.05,                              // 16 temp_min
         false,                             // 17 zoi_enabled

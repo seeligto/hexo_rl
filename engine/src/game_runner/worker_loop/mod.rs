@@ -230,6 +230,7 @@ impl SelfPlayRunner {
             temp_threshold: self.temp_threshold_compound_moves,
             temp_min: self.temp_min,
             draw_reward: self.draw_reward,
+            ply_cap_value: self.ply_cap_value,
             zoi_lookback: self.zoi_lookback,
             zoi_margin: self.zoi_margin,
             c_visit: self.c_visit,

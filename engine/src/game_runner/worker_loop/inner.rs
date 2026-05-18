@@ -154,6 +154,10 @@ struct PerGameInitCtx {
     standard_sims: usize,
     n_cells: usize,
     draw_reward: f32,
+    /// §178: terminal-via-ply-cap outcome (winner=None AND ply>=max_moves).
+    /// Routed parallel to `draw_reward` so the value head sees distinct targets
+    /// for organic draws vs ply-cap truncations.
+    ply_cap_value: f32,
     results_queue_cap: usize,
     worker_id: usize,
 }
@@ -230,6 +234,7 @@ pub(super) fn run_worker_thread(
         temp_threshold,
         temp_min,
         draw_reward,
+        ply_cap_value,
         zoi_lookback,
         zoi_margin,
         c_visit,
@@ -275,7 +280,7 @@ pub(super) fn run_worker_thread(
     let init_ctx = PerGameInitCtx {
         max_moves, random_opening_plies, legal_move_radius_jitter,
         selfplay_rotation_enabled, fast_prob, fast_sims, standard_sims,
-        n_cells, draw_reward, results_queue_cap, worker_id,
+        n_cells, draw_reward, ply_cap_value, results_queue_cap, worker_id,
     };
     let search_scalars = (leaf_batch_size, temp_threshold, temp_min, zoi_lookback, zoi_margin);
     let gumbel_scalars = (c_visit, c_scale, gumbel_m, gumbel_explore_moves);
@@ -398,7 +403,7 @@ fn run_one_game(
     finalize_game(
         &board, init_ctx.max_moves, records_vec, move_history, version_seen,
         sym_idx, sym_tables, init_ctx.n_cells, init_ctx.draw_reward,
-        init_ctx.results_queue_cap, init_ctx.worker_id,
+        init_ctx.ply_cap_value, init_ctx.results_queue_cap, init_ctx.worker_id,
         results_queue, recent_game_results,
         games_completed, x_wins, o_wins, draws, positions_dropped,
     );
@@ -1020,6 +1025,7 @@ fn finalize_game(
     sym_tables: &'static SymTables,
     n_cells: usize,
     draw_reward: f32,
+    ply_cap_value: f32,
     results_queue_cap: usize,
     worker_id: usize,
     results_queue: &Mutex<VecDeque<WorkerResultRow>>,
@@ -1068,9 +1074,14 @@ fn finalize_game(
 
     let mut games_results = results_queue.lock().expect("results lock poisoned");
     for (feat, chain, pol, player, cq, cr, is_full_search) in records_vec {
+        // §178: split outcome by terminal_reason. `terminal_reason == 2` is the
+        // ply-cap branch (winner=None AND ply>=max_moves) — pay `ply_cap_value`.
+        // Any other winner=None path (organic draw, legal_move_count==0) pays
+        // `draw_reward`. Default cfg has both equal (`-0.1`), preserving
+        // pre-§178 behavior byte-for-byte (INV26 Cell 4 pins this).
         let outcome = match winner {
             Some(p) => if p as i8 == player as i8 { 1.0 } else { -1.0 },
-            None => draw_reward,
+            None => if terminal_reason == 2 { ply_cap_value } else { draw_reward },
         };
 
         // Per-row aux reprojection (ownership + winning_line) into this row's

@@ -34,7 +34,8 @@ fn config_with_distinct_sentinels() -> SelfPlayRunnerConfig {
         42,                                 // 11 standard_sims
         21,                                 // 12 temp_threshold_compound_moves
         -0.75,                              // 13 draw_reward
-        false,                              // 14 quiescence_enabled (flip from default true)
+        -0.875,                             // 14 ply_cap_value (§178 — distinct from draw_reward sentinel)
+        false,                              // 15 quiescence_enabled (flip from default true)
         0.625,                              // 15 quiescence_blend_2
         0.0625,                             // 16 temp_min
         true,                               // 17 zoi_enabled (flip)
@@ -84,7 +85,8 @@ fn test_config_default_matches_pyo3_signature_defaults() {
         0,                                  // 11 standard_sims
         15,                                 // 12 temp_threshold_compound_moves
         -0.1,                               // 13 draw_reward
-        true,                               // 14 quiescence_enabled
+        -0.1,                               // 14 ply_cap_value (§178 — back-compat default = draw_reward)
+        true,                               // 15 quiescence_enabled
         0.3,                                // 15 quiescence_blend_2
         0.05,                               // 16 temp_min
         false,                              // 17 zoi_enabled
@@ -125,6 +127,7 @@ fn test_config_default_matches_pyo3_signature_defaults() {
     assert_eq!(cfg.standard_sims, 0);
     assert_eq!(cfg.temp_threshold_compound_moves, 15);
     assert!((cfg.draw_reward - -0.1).abs() < 1e-9);
+    assert!((cfg.ply_cap_value - -0.1).abs() < 1e-9);
     assert!(cfg.quiescence_enabled);
     assert!((cfg.quiescence_blend_2 - 0.3).abs() < 1e-9);
     assert!((cfg.temp_min - 0.05).abs() < 1e-9);
@@ -175,6 +178,7 @@ fn test_config_param_grouping_one_to_one_no_silent_drops() {
     assert_eq!(cfg.standard_sims, 42);
     assert_eq!(cfg.temp_threshold_compound_moves, 21);
     assert!((cfg.draw_reward - -0.75).abs() < 1e-9);
+    assert!((cfg.ply_cap_value - -0.875).abs() < 1e-9);
     assert!(!cfg.quiescence_enabled);
     assert!((cfg.quiescence_blend_2 - 0.625).abs() < 1e-9);
     assert!((cfg.temp_min - 0.0625).abs() < 1e-9);
@@ -242,6 +246,7 @@ fn test_config_construction_edge_case_minimal_valid() {
         0,                          // standard_sims (0 → falls back to n_simulations)
         15,                         // temp_threshold_compound_moves
         0.0,                        // draw_reward
+        0.0,                        // ply_cap_value (§178)
         false,                      // quiescence_enabled
         0.0,                        // quiescence_blend_2
         0.0,                        // temp_min

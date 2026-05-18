@@ -42,6 +42,7 @@ fn make_runner(
         1,                                  // standard_sims
         15,                                 // temp_threshold_compound_moves
         -0.1,                               // draw_reward
+        -0.1,                               // ply_cap_value (§178; back-compat = draw_reward)
         true,                               // quiescence_enabled
         0.3,                                // quiescence_blend_2
         0.05,                               // temp_min
