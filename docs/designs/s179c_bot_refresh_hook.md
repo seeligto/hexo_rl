@@ -1,7 +1,7 @@
 # §S179c — Bot Corpus Refresh Hook Activation Design
 
 **Status.** DESIGN. Implementation deferred pending §S178 sustained run verdict.
-**Position.** Escalation lever §3.4 in s178_design.md ladder.
+**Position.** Escalation lever §4.4 in docs/designs/S178_design.md ladder.
 **Branch.** phase4.5/s179c_fa1_prep
 **Master at branch creation.** f34295a
 
@@ -12,7 +12,7 @@
 §S178 uses a STATIC bot corpus (`data/bot_corpus_s178_sealbot_vs_v6.npz`, 700 games / 21,899
 positions, SealBot vs `bootstrap_model_v6.pt`). The refresh hook is fully wired but inert: when
 `cfg.bot_corpus_refresh_enabled` is False, `hexo_rl/training/step_coordinator.py:651-666` emits a
-warning-only log and does not regenerate. §S178 design §3.4 (`docs/designs/S178_design.md:163-184`)
+warning-only log and does not regenerate. §S178 design §4.4 (`docs/designs/S178_design.md:163-184`)
 catalogues the aging risk: model diverges from v6.pt rapidly during first 5-10K steps, and the
 bot signal weakens as model surpasses v6.pt strength. §S179c flips `enabled: true` and adds:
 
@@ -54,8 +54,11 @@ a regen costs compute only on a meaningfully stronger anchor, not noise crossing
 promotion is insufficient: it can fire on +1pp where the bot pool is still informative.
 
 **Rationale.** SealBot WR @ MCTS-128 jitter is wide (e.g. §175 sampled-eval n=20 Wilson CIs span
-~12pp per `MEMORY.md project_bootstrap_argmax_drift_check_20260511`). Δ ≥ 5pp on n=200
-(`eval.yaml:752`, best_checkpoint `n_games: 200`) holds at Wilson95 against 1pp noise.
+~12pp per `MEMORY.md project_bootstrap_argmax_drift_check_20260511`). Best-checkpoint eval at
+current `n_games: 100` (`eval.yaml:22`) gives binomial stderr ≈ 5pp at p ≈ 0.55 per the
+calibration history noted at `eval.yaml:11-21`; Δ ≥ 5pp threshold catches roughly 1-σ jumps.
+If §S178 verdict shows tight WR distribution and a tighter trigger is needed, raise the threshold
+to 7-10pp or raise best_checkpoint n_games back to 200+ per the `eval.yaml:11` calibration note.
 
 ### 1.2 Cooldown
 
@@ -70,7 +73,7 @@ are still valid for `best_model.pt` updates but do not re-fire the regen.
 Smaller (e.g. 10K) risks thrashing: ~ 10hr single-thread regen (`scripts/generate_bot_corpus.py`
 n_games=700 elapsed_sec=2786 per
 `data/bot_corpus_s178_sealbot_vs_v6.npz.metadata.json:14` extrapolated to 4× sims) would
-overlap the next promotion window. Larger (e.g. 50K) defeats the §3.4 lever: anchor drift
+overlap the next promotion window. Larger (e.g. 50K) defeats the §4.4 lever: anchor drift
 during 50K steps invalidates the bot pool.
 
 ### 1.3 Hard cap
@@ -398,7 +401,7 @@ bot_corpus_refresh_max_regens=int(mixing_cfg.get("bot_corpus_refresh", {}).get("
 |---|---|---|---|---|
 | **V179c-1** | Regen subprocess starts + completes without blocking trainer | Max trainer pause at launch ≤ 200ms (measured: `t_pre_Popen` vs `t_post_Popen` in fire path); subprocess `Popen.poll() is None` immediately after start | Trainer pause > 200ms at launch, OR subprocess fails to start | — |
 | **V179c-2** | Hot-reload swaps buffer without dropped batch reads | Batch read error count = 0 across entire run (`assemble_mixed_batch` exception counter); INV-S179c-3 (identity stable within step) passes | Any `AttributeError` / `RuntimeError` from `bot_buffer.sample_batch` during a step in which a refresh fired | — |
-| **V179c-3** | SealBot WR @ step 30K post-refresh ≥ §S178 step-30K baseline | Wilson95 lower bound of refresh-on WR ≥ §S178 step-30K WR point estimate, n=100 SealBot games (matches eval.yaml `sealbot.n_games: 50`, double for tight CI) | Wilson95 upper bound of refresh-on WR < §S178 baseline (strict regression) | Overlap of CIs |
+| **V179c-3** | SealBot WR @ step 30K post-refresh ≥ §S178 step-30K baseline | Wilson95 lower bound of refresh-on WR ≥ §S178 step-30K WR point estimate, n=100 SealBot games (doubles `eval.yaml:28` `sealbot.n_games: 50` for tighter CI) | Wilson95 upper bound of refresh-on WR < §S178 baseline (strict regression) | Overlap of CIs |
 | **V179c-4** | colony_frac @ step 30K does not regress | Refresh-on colony_frac ≤ §S178 step-30K colony_frac + 5pp tolerance | Refresh-on colony_frac ≥ §S178 step-30K + 10pp | 5-10pp delta |
 | **V179c-5** | Regen runs against PROMOTED model (not stale anchor) | Sidecar `extra.anchor_sha256` of refreshed NPZ matches `best_model.pt` sha at fire time; verified by post-swap sha comparison | Sidecar anchor_sha does not match `best_model.pt` at fire time | — |
 
@@ -414,8 +417,8 @@ All verdicts pre-registered before code lands. Freeze at variant-yaml commit SHA
 | 1 | Regen compute steals GPU from trainer | HIGH | Subprocess runs SealBot @ 0.5s/move (CPU-only per `generate_bot_corpus.py:301-322`) + anchor MCTS @ 200 sims (GPU bursts ~ 1-2GB VRAM). At 5080+9900X (primary host) GPU contention reduces selfplay throughput ~ 5-15% during regen window. Acceptable for ~ 2-10hr per 25K-step window. Operator-driven on idle GPU windows in worst case. | `data/bot_corpus_s178_sealbot_vs_v6.npz.metadata.json` elapsed_sec=2786 baseline |
 | 2 | NPZ corrupt-write during atomic rename failure | LOW | SHA verify post-rename (§3.2); `.bak` retained for one cycle; quarantine pattern from `anchor.py:61-67` | §3 + `anchor.py:35-58` |
 | 3 | Buffer instance lifetime race during hot-reload | LOW | Single-writer/single-reader (§4.3); swap site is post-eval-drain pre-next-step; INV-S179c-3 pin | §4.3 |
-| 4 | Bot strength drift mid-run changes corrective signal distribution (feature/bug?) | MEDIUM (feature, monitor) | Documented §3.4 in S178_design.md:163-184 — refreshing against newer/stronger anchor TEACHES "what SealBot punishes about current weights" instead of "what SealBot punishes about v6.pt weights". V179c-3/V179c-4 catch regression if the signal shift hurts colony reduction. Risk #4 in §S178 risk register (`S178_design.md:313`) is the inverse risk this lever addresses. | §S178 risk #4, L8 head-drift |
-| 5 | Refresh fires during a transient WR-noise crossing (5pp threshold gamed by eval noise) | MEDIUM | n=200 best_checkpoint eval (`eval.yaml:752`) at Wilson95 holds 5pp delta against ~ 1pp noise. Threshold is configurable; raise to 7pp if §S178 verdict shows tight WR distribution | `eval.yaml:752`, MEMORY `project_175_eval_fix` Wilson CI ~ 12pp at n=20 |
+| 4 | Bot strength drift mid-run changes corrective signal distribution (feature/bug?) | MEDIUM (feature, monitor) | Documented §4.4 in S178_design.md:163-184 — refreshing against newer/stronger anchor TEACHES "what SealBot punishes about current weights" instead of "what SealBot punishes about v6.pt weights". V179c-3/V179c-4 catch regression if the signal shift hurts colony reduction. Risk #4 in §S178 risk register (`S178_design.md:313`) is the inverse risk this lever addresses. | §S178 risk #4, L8 head-drift |
+| 5 | Refresh fires during a transient WR-noise crossing (5pp threshold gamed by eval noise) | MEDIUM | Current best_checkpoint eval (`eval.yaml:22`, n=100) has binomial stderr ≈ 5pp at p ≈ 0.55 — 5pp threshold is at ~1σ, so a single noisy round can fire. Threshold is configurable; raise to 7-10pp if §S178 verdict shows tight WR distribution, or raise n_games to 200+ per `eval.yaml:11` calibration history for tighter CI | `eval.yaml:22`, MEMORY `project_175_eval_fix` Wilson CI ~ 12pp at n=20 |
 | 6 | Stale subprocess on training crash leaves zombie + lock on `<canonical>.NEW.tmp` | LOW | Coordinator's `flush_pending_eval()` final-block (`step_coordinator.py:215-216` pattern) extended: SIGTERM the subprocess on shutdown; unlink stale `.tmp` files. Detect on next launch and unlink + warn | §2.2 zombie reap |
 | 7 | Filesystem write fails between rename of canonical and rename of sidecar (§3.1 steps 5-6) | LOW | Order matters: canonical-first, sidecar-second. If sidecar rename fails post canonical rename, the run has an unsidecar'd NPZ. Mitigation: `corpus_io.py:178-250` load path requires sidecar (`f"{npz_path} has no metadata sidecar"`). Rollback: rename `.bak` back to canonical + log fatal | `corpus_io.py:204-205` |
 | 8 | `min_new_games: 200` produces small pool (~ 6K positions) → behavioural cloning overfit | MEDIUM | 200 games × ~30 plies-decisive = ~ 6K positions vs §S178's 22K. With `bot_batch_share=0.15` at batch=256, n_bot ≈ 38; sample-with-replacement on 6K is fine. Operator override: raise to 400 if entropy probes flag overfit | §S178 risk #2, design §4.3 |
@@ -481,7 +484,7 @@ Bench gate: confirm hot-reload (5-sec pause × N refreshes ≈ 30 sec total over
 ## 10. Forward pointers
 
 - §S179a (visit-count CE policy target) and §S179b (policy surprise weighting) are sibling
-  escalation levers per `reports/s178_design.md §3.3-3.4` ladder.
+  escalation levers per `docs/designs/S178_design.md` §3.3 trigger ladder (refresh hook spec at §4.4).
 - §S179c implementation gated behind §S178 verdict V178-3 (colony_frac ≤ 50% at step 30K).
   V178-3 PASS → defer S179c. V178-3 FAIL/NULL → proceed.
 - §S179c does NOT block on Source B subprocess infra (`S178_design.md:254`, deferred). Refresh
