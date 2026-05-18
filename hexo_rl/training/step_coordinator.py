@@ -167,6 +167,11 @@ class StepCoordinatorConfig:
     instrumentation_enabled: bool
     stop_step: int | None
     final_eval_drain_timeout_sec: float
+    # §178 bot-corpus slot
+    bot_batch_share: float = 0.0
+    # §178 refresh hook (DISABLED for §178; §179 will flip enabled=True)
+    bot_corpus_refresh_enabled: bool = False
+    bot_corpus_refresh_cooldown: int = 25_000
 
 
 # ── Step outcome dataclass ───────────────────────────────────────────────────
@@ -241,11 +246,13 @@ class StepCoordinator:
         tracemalloc_provider: TracemallocLike = RealTracemalloc(),
         event_emitter: Callable[[dict[str, Any]], None] = emit_event,
         logger: Any = None,
+        bot_buffer: ReplayBufferLike | None = None,
     ) -> None:
         # Collaborators
         self.trainer = trainer
         self.buffer = buffer
         self.pretrained_buffer = pretrained_buffer
+        self.bot_buffer = bot_buffer  # §178 bot-corpus slot
         self.recent_buffer = recent_buffer
         self.pool = pool
         self.eval_pipeline = eval_pipeline
@@ -272,6 +279,7 @@ class StepCoordinator:
         # Mutable per-run state (§1.1)
         self._train_step = trainer.step
         self._games_played = pool.games_completed
+        self._last_bot_refresh_step: int = 0  # §178 T7 refresh-hook cooldown
         self._initial_policy_loss: float | None = None
         self._last_loss_info: dict[str, float] = {}
         self._eval_thread: threading.Thread | None = None
@@ -527,13 +535,23 @@ class StepCoordinator:
                     cfg.mixing_min_w,
                     cfg.mixing_decay_steps,
                 )
-                n_pre = max(1, int(math.ceil(batch_size * w_pre)))
-                n_self = batch_size - n_pre
+                # §178 — top-level bot slot, parallel to corpus + selfplay.
+                # n_bot fixed by config (NOT decaying with pretrain_weight).
+                n_bot = (
+                    round(cfg.bot_batch_share * batch_size)
+                    if (self.bot_buffer is not None and self.bot_buffer.size > 0)
+                    else 0
+                )
+                # corpus weight applied to non-bot remainder (batch_size − n_bot).
+                n_pre = max(1, int(math.ceil(w_pre * (batch_size - n_bot))))
+                n_self = batch_size - n_pre - n_bot
                 batch = assemble_mixed_batch(
                     self.pretrained_buffer, self.buffer, self.recent_buffer,
                     n_pre, n_self, batch_size, self.batch_size_cfg,
                     cfg.recency_weight, self.bufs, self._train_step,
                     augment=cfg.augment,
+                    bot_buffer=self.bot_buffer,
+                    n_bot=n_bot,
                 )
                 loss_info = self.trainer.train_step_from_tensors(
                     batch.states, batch.policies, batch.outcomes,
@@ -541,7 +559,10 @@ class StepCoordinator:
                     ownership_targets=batch.ownership,
                     threat_targets=batch.winning_line,
                     is_full_search=batch.is_full_search,
-                    n_pretrain=n_pre,
+                    # §178 critical pin: n_pretrain extends through bot rows so
+                    # aux_decode.mask_aux_rows excludes them from aux losses
+                    # (bot rows have neutral aux pad — ownership=1 / wl=0).
+                    n_pretrain=n_pre + n_bot,
                     n_recent=batch.n_recent_actual,
                 )
             else:

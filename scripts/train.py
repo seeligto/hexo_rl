@@ -145,7 +145,7 @@ import torch
 apply_torch_interop_cap()
 
 from hexo_rl.monitoring.configure import configure_logging
-from hexo_rl.training.batch_assembly import load_pretrained_buffer
+from hexo_rl.training.batch_assembly import load_bot_corpus_buffer, load_pretrained_buffer
 from hexo_rl.training.loop import run_training_loop
 from hexo_rl.monitoring.events import emit_event  # re-exported for back-compat
 from hexo_rl.training import orchestrator as _orchestrator
@@ -218,6 +218,11 @@ def main() -> None:
         mixing_cfg, config, emit_event, buffer.size, capacity
     )
 
+    # ── §178 bot-corpus loading (None for §177-style runs) ────────────────────
+    bot_buffer = load_bot_corpus_buffer(
+        mixing_cfg, config, emit_event, buffer.size, capacity
+    )
+
     # ── Recent buffer ─────────────────────────────────────────────────────────
     recent_buffer, _recency_weight = _orchestrator.init_recent_buffer(
         train_cfg, config, capacity, _registry_spec, _bp, _buffer_restored, log,
@@ -236,6 +241,7 @@ def main() -> None:
         trainer=trainer,
         buffer=buffer,
         pretrained_buffer=pretrained_buffer,
+        bot_buffer=bot_buffer,
         recent_buffer=recent_buffer,
         bufs=bufs,
         config=combined_config,

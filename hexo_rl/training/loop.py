@@ -80,6 +80,7 @@ def run_training_loop(
     mixing_initial_w: float,
     mixing_min_w: float,
     mixing_decay_steps: float,
+    bot_buffer: Optional[Any] = None,     # §178 ReplayBuffer | None (bot-corpus slot)
 ) -> None:
     """Drive the self-play / train / eval / checkpoint cycle until stopped.
 
@@ -238,6 +239,14 @@ def run_training_loop(
             train_cfg.get("eval_final_drain_timeout_sec",
                           config.get("eval_final_drain_timeout_sec", 0.0))
         ),
+        # §178 — bot-corpus slot share + refresh hook (DISABLED for §178 → §179)
+        bot_batch_share=float(mixing_cfg.get("bot_batch_share", 0.0)),
+        bot_corpus_refresh_enabled=bool(
+            mixing_cfg.get("bot_corpus_refresh", {}).get("enabled", False)
+        ),
+        bot_corpus_refresh_cooldown=int(
+            mixing_cfg.get("bot_corpus_refresh", {}).get("cooldown_steps", 25_000)
+        ),
     )
 
     # ── Emit run_start ─────────────────────────────────────────────────────────
@@ -268,6 +277,7 @@ def run_training_loop(
         trainer=trainer,
         buffer=buffer,
         pretrained_buffer=pretrained_buffer,
+        bot_buffer=bot_buffer,
         recent_buffer=recent_buffer,
         pool=pool,
         eval_pipeline=eval_pipeline,

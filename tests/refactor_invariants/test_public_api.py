@@ -13,6 +13,7 @@ from hexo_rl.training.loop import run_training_loop
 
 
 # Captured at HEAD ea881d8. Update only when changing the public API on purpose.
+# §178 — appended bot_buffer (Optional, default None) for bot-corpus mixing slot.
 _EXPECTED_PARAMS: tuple[str, ...] = (
     "trainer",
     "buffer",
@@ -34,6 +35,7 @@ _EXPECTED_PARAMS: tuple[str, ...] = (
     "mixing_initial_w",
     "mixing_min_w",
     "mixing_decay_steps",
+    "bot_buffer",  # §178 — Optional ReplayBuffer for bot-corpus slot.
 )
 
 
