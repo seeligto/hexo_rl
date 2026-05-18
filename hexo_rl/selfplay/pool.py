@@ -297,6 +297,12 @@ class WorkerPool:
             standard_sims=int(pc.get("standard_sims", 0)),
             temp_threshold_compound_moves=int(pc.get("temperature_threshold_compound_moves", 15)),
             draw_reward=float(training_cfg.get("draw_value", -0.5)),
+            # §178 ply_cap_value: split from draw_reward so the value head sees
+            # distinct targets for organic draws vs ply-cap truncations. Falls
+            # back to draw_value when YAML omits the new key (back-compat).
+            ply_cap_value=float(
+                training_cfg.get("ply_cap_value", training_cfg.get("draw_value", -0.5))
+            ),
             quiescence_enabled=self.quiescence_enabled,
             quiescence_blend_2=self.quiescence_blend_2,
             temp_min=float(pc.get("temp_min", 0.05)),
