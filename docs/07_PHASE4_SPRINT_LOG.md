@@ -1468,6 +1468,33 @@ Reports: `reports/phase_b_wave_a1/{baseline_greedy.json, baseline_sampled.json, 
 
 ---
 
+## §177 — v6 sustained from step-20K anchor: closed by recipe-attractor reproduction (2026-05-18)
+
+**Branch:** `phase4.5/m176a_v7mw` (continuation), tmux session `s177` on vast 5080.
+**Anchor:** `bootstrap_model_v6_step20k.pt` (SHA `297e0ce0…2bce6a`, §175 step-20K promotion).
+**Launch commits:** `166ac7c` (variant `v6_sustained_s177.yaml`), `d70507a` (Wave A1 baseline doc), `072d0db` (vast checkup script).
+**Reference §177-pre:** lines 1428–1470.
+
+**Closing trajectory (vast, per §178 pre-design investigation):** SealBot WR 2→0% across step 10K→40K, mirroring §175 18→4% trajectory in different anchor. Combined with §175, falsifies the residual "anchor weight is the lever" hypothesis: same recipe + different anchors → same colony-attractor capture.
+
+**Closed by interrupt** at the point §178 pre-design investigation gathered sufficient evidence to motivate the bot-mix + ply-cap-value mechanism intervention. No further sustained running was useful.
+
+### L24/L25/L26 mechanism-lesson candidates (pending operator confirm — defer to L24+ register if accepted)
+
+| ID | Candidate lesson | Evidence | Implication |
+|---|---|---|---|
+| L24 | **Recipe-dependent colony attractor, not anchor-dependent.** Same §175 recipe captures the colony attractor regardless of bootstrap anchor (v6.pt clean AND v6_step20k.pt continuation both ride the attractor). | §175 18→4% + §177 2→0% across two anchors; combined PASS in `reports/s178_pre_design_investigation.md` SA-A | Refines L18 (anchor-mistake signal coupling) — anchor swap is NOT a lever; recipe/objective intervention required. §178 trials this. |
+| L25 | **G4 value-head band FAIL concurrent with colony capture.** §175 + §177 both showed `value_fc2_weight_abs_max` drift outside `[0.154, 0.462]` coincident with sealbot WR collapse. | §175 stages probe + §177-pre L21/L22 dual-mode | Value head flattening tracks colony entrenchment; G4 is the upstream WR-collapse predictor. |
+| L26 | **Ply-cap truncation outcome = organic draw outcome silently dilutes finish-pressure on long colony-prone games.** Pre-§178 Rust path writes `outcome = draw_reward` for both winner=None && ply≥max AND winner=None && legal_count=0. Only `terminal_reason` metadata distinguishes — and value-head never sees it. | §178 investigation SA-C VC-2; §178 T2 resolves via `ply_cap_value` split | Operator pre-commit `draw_value -0.5→-0.1` alone REMOVES finish-pressure; `ply_cap_value` split (-0.5 vs -0.1 in §178 — operator dialed back from design -0.8) restores it. |
+
+### Falsified Hypotheses Register row added
+
+| § | Hypothesis | Evidence FAILing | Closer |
+|---|---|---|---|
+| §177 | Step-20K anchor escapes the colony attractor under §175 recipe | §177 2→0% across 10K→40K reproduces §175 18→4% on different anchor | §178 launch — same recipe, different mechanism (bot-mix + ply-cap split) |
+
+---
+
 ## Supplementary tables — preserved from per-§ bodies
 
 ### §70 mode-collapse evidence (round-robin signature)
