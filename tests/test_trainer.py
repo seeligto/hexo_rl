@@ -339,6 +339,30 @@ def test_load_weights_only_checkpoint_infers_architecture(tmp_path: Path):
     assert restored.model.filters == 32
 
 
+def test_load_bootstrap_skeleton_keys_starts_fresh_optimizer(tmp_path: Path):
+    base = HexTacToeNet(board_size=9, in_channels=8, res_blocks=2, filters=32)
+    skeleton = {
+        "step": None,
+        "model_state": base.state_dict(),
+        "optimizer_state": None,
+        "scaler_state": None,
+        "scheduler_state": None,
+        "config": None,
+        "metadata": {},
+    }
+    ckpt_path = tmp_path / "bootstrap_skeleton.pt"
+    torch.save(skeleton, ckpt_path)
+
+    fallback = {
+        "board_size": 9, "res_blocks": 2, "filters": 32, "in_channels": 8,
+        "batch_size": 8, "lr": 2e-3, "weight_decay": 1e-4,
+        "checkpoint_interval": 5, "log_interval": 1, "torch_compile": False,
+    }
+    restored = Trainer.load_checkpoint(ckpt_path, checkpoint_dir=tmp_path, fallback_config=fallback)
+    assert restored.step == 0
+    assert restored.optimizer.state_dict()["state"] == {}
+
+
 # ── Policy target pruning ────────────────────────────────────────────────────
 
 def test_prune_policy_targets_basic():

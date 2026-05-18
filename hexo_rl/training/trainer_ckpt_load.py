@@ -325,7 +325,10 @@ def load_checkpoint(
     if not isinstance(ckpt, dict):
         raise ValueError(f"Unsupported checkpoint payload type: {type(ckpt)!r}")
 
-    is_full_ckpt = all(k in ckpt for k in ("model_state", "config", "optimizer_state", "scaler_state", "step"))
+    is_full_ckpt = all(
+        k in ckpt and ckpt[k] is not None
+        for k in ("model_state", "config", "optimizer_state", "scaler_state", "step")
+    )
 
     if "config" in ckpt and isinstance(ckpt["config"], dict):
         config = dict(ckpt["config"])
