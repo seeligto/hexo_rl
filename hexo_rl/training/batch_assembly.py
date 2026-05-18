@@ -238,6 +238,104 @@ def load_pretrained_buffer(
     return pretrained_buffer
 
 
+# ── Bot-corpus loading (§178) ────────────────────────────────────────────────
+
+def load_bot_corpus_buffer(
+    mixing_cfg: dict[str, Any],
+    config: dict[str, Any],
+    emit_fn: Callable[[dict[str, Any]], None],
+    buffer_size: int,
+    buffer_capacity: int,
+) -> Optional[Any]:  # returns ReplayBuffer | None
+    """Load §178 bot-game NPZ (SealBot vs anchor) into a Rust ReplayBuffer.
+
+    Parallel to :func:`load_pretrained_buffer` — same NPZ schema, same neutral
+    aux padding (ownership=1, winning_line=0). The aux-decode mask at
+    :func:`hexo_rl.training.aux_decode.mask_aux_rows` excludes bot rows from
+    aux losses via the `n_pretrain` slice (caller must pass
+    ``n_pretrain = n_pre + n_bot``).
+
+    Bot games have one-hot policy targets (SealBot's chosen move). Per-row
+    ``is_full_search`` returned by ``sample_batch`` should be overridden to 1
+    by the caller (sharp targets, NOT quick-search-decimated).
+
+    Args:
+        mixing_cfg:       ``config["training"]["mixing"]`` sub-dict — reads
+                          ``"bot_corpus_path"``.
+        config:           Full merged config (for seed, encoding name).
+        emit_fn:          ``emit_event`` callable for dashboard events.
+        buffer_size:      Current self-play buffer size (for dashboard event).
+        buffer_capacity:  Self-play buffer capacity (for dashboard event).
+
+    Returns:
+        Populated ``ReplayBuffer`` if path absent OR file missing → ``None``
+        (back-compat: §177-style runs without bot corpus silently skip).
+    """
+    from engine import ReplayBuffer  # local import — engine only available post-build
+
+    bot_path = mixing_cfg.get("bot_corpus_path")
+    if not bot_path:
+        return None
+    if not Path(bot_path).exists():
+        log.warning(
+            "bot_corpus_npz_not_found",
+            path=bot_path,
+            msg=(
+                "No bot-corpus NPZ at configured path — skipping bot-corpus slot. "
+                "Run 'make corpus.bot' to generate (§178 design §4.2)."
+            ),
+        )
+        return None
+
+    log.info(
+        "loading_bot_corpus_npz",
+        path=bot_path,
+        msg="copying §178 bot corpus into Rust ReplayBuffer",
+    )
+    t0 = time.time()
+    data = np.load(bot_path, mmap_mode="r")
+    board_size = config.get("board_size", BOARD_SIZE)
+    bot_states   = data["states"]    # (T, 8, board_size, board_size) float16
+    bot_policies = data["policies"]  # (T, policy_logit_count) float32 (one-hot)
+    bot_outcomes = data["outcomes"]  # (T,) float32 ∈ {-1, +1}
+    T = len(bot_outcomes)
+
+    if bot_states.shape[1] != BUFFER_CHANNELS:
+        raise ValueError(
+            f"bot corpus '{bot_path}': states.shape[1]={bot_states.shape[1]}, "
+            f"expected {BUFFER_CHANNELS} (HEXB v6). Regenerate with "
+            f"'scripts/generate_bot_corpus.py'."
+        )
+
+    # §178 chain planes from stone planes (cur=[0], opp=[4] in 8-plane).
+    from hexo_rl.env.game_state import _compute_chain_planes
+    bot_chain = np.empty((T, 6, board_size, board_size), dtype=np.float16)
+    if T > 0:
+        cur_all = np.asarray(bot_states[:, 0], dtype=np.float32)
+        opp_all = np.asarray(bot_states[:, 4], dtype=np.float32)
+        for k in range(T):
+            planes_f32 = _compute_chain_planes(cur_all[k], opp_all[k]).astype(np.float32) / 6.0
+            bot_chain[k] = planes_f32.astype(np.float16)
+
+    file_mb = os.path.getsize(bot_path) / 1e6
+    log.info("bot_corpus_prefill", positions=T, file_mb=round(file_mb, 1))
+
+    _enc = _normalize_encoding_name(config.get("encoding"))
+    bot_buffer = ReplayBuffer(capacity=max(T, 1), encoding=_enc)
+    # Neutral aux: ownership=1 ("empty"→0.0 after decode), winning_line=0.
+    # Bot rows masked out of aux loss via n_pretrain = n_pre + n_bot slice.
+    n_cells = board_size * board_size
+    bot_own = np.ones((T, n_cells), dtype=np.uint8)
+    bot_wl  = np.zeros((T, n_cells), dtype=np.uint8)
+    bot_buffer.push_game(bot_states, bot_chain, bot_policies, bot_outcomes, bot_own, bot_wl)
+    del bot_states, bot_chain, bot_policies, bot_outcomes, bot_own, bot_wl
+    del data
+
+    log.info("bot_corpus_loaded", positions=T, seconds=f"{time.time() - t0:.1f}")
+    emit_fn({"event": "system_stats", "buffer_size": buffer_size, "buffer_capacity": buffer_capacity})
+    return bot_buffer
+
+
 # ── Recent-buffer augmentation ───────────────────────────────────────────────
 
 def _augment_recent_rows(
@@ -327,13 +425,23 @@ def assemble_mixed_batch(
     bufs: BatchBuffers,
     train_step: int,
     augment: bool = True,
+    *,
+    bot_buffer: Optional[Any] = None,  # ReplayBuffer | None — §178 bot-corpus slot
+    n_bot: int = 0,                    # §178 bot rows count
 ) -> BatchAssemblyResult:
-    """Assemble one mixed batch from pretrain + self-play (+ optional recent) buffers.
+    """Assemble one mixed batch from pretrain + bot + self-play (+ optional recent) buffers.
 
     During warm-up (buffers partially filled), falls back to ``np.concatenate``
     which allocates.  Once all sources return the full requested row count,
     switches to in-place ``np.copyto`` into ``bufs`` and clears
     ``bufs.warmup_active``.
+
+    §178 bot slot (when ``bot_buffer is not None and n_bot > 0``): bot rows
+    inserted between corpus and recent/uniform slots so the aux-mask
+    ``[n_pretrain:]`` slice (caller passes ``n_pretrain = n_pre + n_bot``)
+    excludes BOTH corpus AND bot rows from aux losses. Bot rows have one-hot
+    SealBot targets → ``is_full_search=1`` enforced (overrides whatever
+    ``sample_batch`` returned).
 
     Args:
         pretrained_buffer: Corpus Rust ReplayBuffer.
@@ -341,7 +449,7 @@ def assemble_mixed_batch(
         recent_buffer:     Optional Python RecentBuffer for recency weighting.
         n_pre:             Corpus rows to sample.
         n_self:            Self-play rows to sample.
-        batch_size:        Total batch size this step (should equal n_pre + n_self).
+        batch_size:        Total batch size this step (should equal n_pre + n_bot + n_self).
         batch_size_cfg:    Pre-allocated buffer batch size; if they differ we fall back
                            to concat to avoid out-of-bounds writes.
         recency_weight:    Fraction of self-play rows taken from recent_buffer.
@@ -350,6 +458,10 @@ def assemble_mixed_batch(
         augment:           Apply 12-fold hex symmetry augmentation during Rust sample_batch.
                            Default True preserves production behaviour; set False only for
                            diagnostic runs (see CLAUDE.md § Testing conventions).
+        bot_buffer:        §178 Optional Rust ReplayBuffer carrying SealBot-vs-anchor games.
+                           When ``None`` or ``n_bot == 0`` the slot is omitted (back-compat
+                           with §177 and earlier).
+        n_bot:             §178 Number of bot rows to sample (0 = no bot slot).
 
     Returns:
         :class:`BatchAssemblyResult` — seven arrays
@@ -357,11 +469,23 @@ def assemble_mixed_batch(
         is_full_search)`` (views into ``bufs`` in steady-state, freshly allocated
         during warm-up) plus ``n_recent_actual`` (int): actual number of rows drawn
         from recent_buffer (0 when recent_buffer absent or empty). Batch order is
-        ``[corpus | recent | uniform_self]``; caller uses n_pre + n_recent_actual to
-        slice. Corpus positions always have ``is_full_search=1`` (apply full policy
-        loss).
+        ``[corpus | bot | recent | uniform_self]`` when bot active, else
+        ``[corpus | recent | uniform_self]`` (back-compat). Caller uses
+        ``n_pre + n_bot + n_recent_actual`` to slice. Corpus AND bot positions
+        always have ``is_full_search=1``.
     """
     s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre = pretrained_buffer.sample_batch(n_pre, augment)
+
+    # §178 bot slot — optional fourth piece (gates on size>0 like steady-state fallback).
+    use_bot = bot_buffer is not None and n_bot > 0 and bot_buffer.size > 0
+    if use_bot:
+        s_b, c_b, p_b, o_b, own_b, wl_b, _ifs_b = bot_buffer.sample_batch(n_bot, augment)
+        # Override is_full_search → 1 for all bot rows (one-hot SealBot targets are
+        # full-search-equivalent; design §4.1).
+        ifs_b = np.ones(len(s_b), dtype=np.uint8)
+    else:
+        n_bot = 0  # collapse to 0 so downstream slicing arithmetic is correct
+        s_b = c_b = p_b = o_b = own_b = wl_b = ifs_b = None
 
     if batch_size != batch_size_cfg:
         # Edge case: runtime batch size diverged from pre-allocated shape.
@@ -371,6 +495,17 @@ def assemble_mixed_batch(
             buffer, recent_buffer, n_self, recency_weight, augment
         )
         # n_recent unknown in this mismatch path — report 0 (caller disables 3-way split).
+        if use_bot:
+            return BatchAssemblyResult(
+                states=np.concatenate([s_pre, s_b, s_self], axis=0),
+                chain_planes=np.concatenate([c_pre, c_b, c_self], axis=0),
+                policies=np.concatenate([p_pre, p_b, p_self], axis=0),
+                outcomes=np.concatenate([o_pre, o_b, o_self], axis=0),
+                ownership=np.concatenate([own_pre, own_b, own_self], axis=0),
+                winning_line=np.concatenate([wl_pre, wl_b, wl_self], axis=0),
+                is_full_search=np.concatenate([ifs_pre, ifs_b, ifs_self], axis=0),
+                n_recent_actual=0,
+            )
         return BatchAssemblyResult(
             states=np.concatenate([s_pre, s_self], axis=0),
             chain_planes=np.concatenate([c_pre, c_self], axis=0),
@@ -390,6 +525,10 @@ def assemble_mixed_batch(
         and n_self > 1
     )
 
+    bot_piece: Optional[tuple[Any, ...]] = None
+    if use_bot:
+        bot_piece = (s_b, c_b, p_b, o_b, own_b, wl_b, ifs_b)
+
     n_recent_actual = 0
     if use_recent:
         n_recent_req  = max(1, int(round(n_self * recency_weight)))
@@ -403,15 +542,19 @@ def assemble_mixed_batch(
         wl_r  = wl_r_flat.reshape(-1, _bs, _bs)
         s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), augment)
         n_recent_actual = len(s_r)
-        pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre),
-                     (s_r,   c_r,   p_r,   o_r,   own_r,   wl_r,   ifs_r),
-                     (s_u,   c_u,   p_u,   o_u,   own_u,   wl_u,   ifs_u)]
-        n_avail   = n_pre + len(s_r) + len(s_u)
+        pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre)]
+        if bot_piece is not None:
+            pieces.append(bot_piece)
+        pieces.extend([(s_r, c_r, p_r, o_r, own_r, wl_r, ifs_r),
+                       (s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u)])
+        n_avail = n_pre + (n_bot if use_bot else 0) + len(s_r) + len(s_u)
     else:
         s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_self), augment)
-        pieces  = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre),
-                   (s_u,   c_u,   p_u,   o_u,   own_u,   wl_u,   ifs_u)]
-        n_avail = n_pre + len(s_u)
+        pieces = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre)]
+        if bot_piece is not None:
+            pieces.append(bot_piece)
+        pieces.append((s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u))
+        n_avail = n_pre + (n_bot if use_bot else 0) + len(s_u)
 
     if n_avail < batch_size:
         # Warm-up: one or more sources returned fewer rows than requested.
