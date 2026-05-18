@@ -1696,6 +1696,8 @@ Track 1 returned 0% MCTS-128 across all three v6w25 bootstrap recipes → escala
 
 ## §178 — Rust engine refactor cycle 1 close (2026-05-15 → 2026-05-16)
 
+*NOTE: This §178 = Rust engine refactor cycle 1 close. See also the §S178+ scheme (Sustained Training Sprint, post-§180) for v6 sustained run + bot-corpus mixing — the prefix `S` disambiguates the two numbering schemes that coexist permanently.*
+
 Branch `refactor/rust-engine`. Three-wave cycle bracketed by a 90-proposal Phase 3 audit pass at `audit/rust-engine/00_aggregated_proposals.md` + per-file split addendum at `audit/rust-engine/01_file_split_addendum.md`. Wave 1 = foundation (docs + clippy floor + LazyLock migration). Wave 2 = dead-code purge (six commits, net −789 LOC, bitboard module + mcts dead setters + dead lib.rs PyO3 surfaces). Wave 3 = hot-path correctness (P1 silent v6w25 corruption, P2 v8 `has_pass_slot` dispatch, P3 cross-language `EncodingSpec` retirement) + pre-3d hygiene (Python test consumer cleanup, NN-latency triangulation). Cycle bench gate PASS; INV15+INV16+INV17 pinned; 6 settled decisions migrated below.
 
 **Forward pointer:** archive consolidation at `reports/sprint_archive/§178_rust_engine_audit.md` (user post-cycle action — see `audit/rust-engine/wave_3/3d/archive_prep_note.md`). Source-of-truth audit tree retained at `audit/rust-engine/` for forensic reference until archive lands; SD1–SD6 are cite-from-future-prompts surface.
@@ -1762,6 +1764,8 @@ The six entries below were maintained in `audit/rust-engine/cycle_settled_decisi
 ---
 
 ## §179 — Rust engine refactor cycle 2 close (2026-05-16)
+
+*NOTE: This §179 = Rust engine refactor cycle 2 close. See also the §S179+ scheme (Sustained Training Sprint, post-§180) when those entries land — prefix `S` disambiguates.*
 
 Branch `refactor/rust-engine-cycle-2`. Five-wave cycle bracketed by the §178 cycle 1 close at master `e0e7c47`. Wave 4 = MCTS hot-loop allocation cleanup + InferenceBatcher pool sizing (3 commits, +184 LOC, PASS-WITH-WATCH after SD6 bisection triangulation). Wave 5 pre-flight = three pre-existing test-suite flakes triaged (1 commit, test-only fixes, no production touch). Wave 5a = PyO3 boundary hardening + held fold-in (P74/P75/P76/P77) + Python `inference_pool_size` wiring (5 commits, net +784 LOC, zero-copy strengthens A+E, SD6 single WATCH). Wave 5b = `engine/src/lib.rs` structural split into `engine/src/pyo3/{board, encoding, mcts, utils}.rs` (4 commits, net +79 LOC, lib.rs 793 → 34 LOC at split, 45 LOC post-Wave-6 L26 rustdoc). Wave 6 = clippy ride-through + idiom polish + tail (P19, P42, P63, P64, P66) (5 commits, +110 LOC, clippy 186 → 42 warnings, −77.4%). Cycle bench gate PASS at Wave 6 close per `audit/rust-engine/cycle_2/wave_6/wave_close_bench_verdict.md`; all 10 `all_targets_met` checkpoints GREEN. INV15+INV16+INV17 pinned through entire cycle (Rust 9/9 + Python 2/2 at every wave close). SD1–SD6 preserved and cited per commit body across all 18 cycle-2 commits.
 
@@ -1919,6 +1923,8 @@ Remaining ~75 proposals (post cycle 1's 18 landed) tracked in `audit/rust-engine
 ---
 
 ## §180 — Rust engine refactor cycle 3 close (Waves 6.5, 7, 8, 9, 10, 11)
+
+*NOTE: This §180 = Rust engine refactor cycle 3 close. Sustained Training Sprint numbering (§S178+) starts AFTER this entry to avoid confusion. Always cite the prefix (§S…) or the branch (e.g. `phase4.5/s178_botmix`) when referring to a sustained-training sprint.*
 
 Branch `refactor/rust-engine-cycle-3`. Six-wave cycle bracketed by the §179 cycle 2 close at master `ba19b1c`. Wave 6.5 = `i32::midpoint` revert + INV18/INV18b truncate-semantics pin (1 commit, +50 LOC, NEEDS-WATCH from cycle 2 Wave 6 Batch A closed at cycle 3 entry per `audit/rust-engine/cycle_3/00_i32_midpoint_forensic.md`). Wave 7 = P79 builder pattern across 12 large-arity ctors + P68 small module splits for 3 monolithic >100-LOC fn bodies (5 commits `3ef3100..a37a50c`, net +1,230 LOC, 5× PASS-or-PASS-WITH-NOTES, bench 9 PASS / 4 WATCH, INV19+INV20+INV21 pinned). Wave 8 = FF.2/FF.3/FF.10 EncodingSpec retirement cohort + Wave-8 Batch D naming-fold (4 commits `a37a50c..43d5d8a`, net +438 LOC, 3× PASS-WITH-NOTES + 1× PASS, bench 4 PASS / 5 WATCH all mechanism-absent + SD6-bidirectionally-reverted, INV22 Python parametrized + INV23 e2e pinned, 2 `!`-markers across A+C). Wave 9 = P55 K_max Option A registry field + InferenceBatcher pool auto-derive (1 commit `4eefd53`, net +210 LOC, PASS-WITH-NOTES, bench SKIPPED per zero hot-path touch, INV24 K_max + INV22 extension pinned). Wave 10 = `worker_loop` structural split into 7 sibling modules + P69 inline-test scaffold for InferenceBatcher early-return paths (2 commits `f53975e` + `8ba72be`, net +829 LOC, PASS-WITH-NOTES + PASS, bench GREEN 6 PASS / 3 WATCH, INV25 byte-identity-on-behavior pinned with 3 cells incl. `include_str!` destructure substring assertion). Wave 11 = cycle 3 close engineering (tail clippy + J.2.b `run_worker_thread` 712-LOC body sub-fn extraction into 8 sub-fns + REVIEW-driven §173 A5b rationale annotation, 3 commits `e678757` + `5a63a23` + `5e0c09d`, net +346 LOC, per-wave bench SKIPPED per Phase 6 CYCLE-BENCH n=10 supersedes). Cycle bench gate **PASS** at cycle 3 close (n=4×10 laptop primary 40 samples + n=2×10 vast.ai mirror 20 samples; 10/10 metrics within Phase 4.5 floors; worker pos/hr −9.95% vs Wave 10 ref WATCH-edge per SD7 bidirectional variance — bimodal CUDA across runs 1+2 low / 3+4 high, mechanism-absent for Batch B §173 A5b discipline). Cycle 4 entry baseline anchored at `audit/rust-engine/cycle_3/close/04_baseline_next_cycle.txt` (HEAD `5e0c09d`, 2026-05-18).
 
@@ -2089,6 +2095,8 @@ The 5 partially-tracked recon files under `audit/rust-engine/cycle_3/wave_{8,9,1
 
 ## §S178 — v6 sustained bot-mix recipe launch (2026-05-18)
 
+*DISCRIMINATOR: This is §S178 = Sustained Training Sprint 178. NOT to be confused with §178 (line 1697) which is the Rust engine refactor cycle 1 close. The two numbering schemes coexist permanently post-cycle-3. Always cite the branch (`phase4.5/s178_botmix`) or the prefix (§S178) for disambiguation.*
+
 **Branch:** `phase4.5/s178_botmix` (off master `ddfa42e`); **anchor:** `checkpoints/bootstrap_model_v6.pt` (clean v6 base bootstrap; §175 anchor preserved for direct A/B vs §175 + §177).
 **Design:** `docs/designs/S178_design.md` (commit `b26999b`).
 **Investigation:** `reports/s178_pre_design_investigation.md` (gitignored, vast-only).
@@ -2134,6 +2142,30 @@ The 5 partially-tracked recon files under `audit/rust-engine/cycle_3/wave_{8,9,1
 
 - §179 candidate: flip `bot_corpus_refresh.enabled: true` if §178 colony_frac trajectory shows aging (currently hook present + disabled, warning-only log when triggered).
 - INV26 pins ply_cap_value-distinct outcome path; INV19 byte-equivalence extends 38→39 atomically with T2.
+
+### Pending post-launch follow-ups (for future sessions)
+
+Pre-launch branch extension (T11/T12/T13, 2026-05-18; on `phase4.5/s178_botmix`):
+- **F-fix-1** threat-target colony fix landed at **T11** (commit `1aa0c8f`): `find_winning_line` now scans all stones via fallback so the threat-head target is non-empty when `winner` is set via the `player_wins` all-stones fallback (HTT 2-moves-per-turn off-line second-move case). INV27 Rust + Python parametrized GREEN.
+- **ply_cap_value revised** to `0.0` at **T12** (commit `1b47eb1`): literature-canonical per AlphaZero/KataGo (was `-0.5` = no-op vs draw_value). Variant only; training.yaml default kept at `-0.5` for back-compat.
+- **T13** (this commit): sprint-log cross-pointers + this follow-up block.
+
+Open §S179 candidates if §S178 colony reduction is modest:
+- (a) `completed_q_values: false` A/B at step 30K-50K (visit-count CE policy target).
+- (b) Policy Surprise Weighting / KL-weighted buffer writes (Q9; KataGo confirmed major efficiency win).
+- (c) Soft policy target T=4 with 8x weight (KataGo b18c384 innovation).
+- (d) `bot_batch_share` → 0.20.
+- (e) `game_length_weights` neutralization (H4).
+
+Open hygiene items (NOT in §S178 scope; defer to follow-up commits on master):
+- **H1** — `bootstrap_model.pt` cleanup (rename/delete + repoint `Makefile` / `anchor.py` / `opponent_runners`; provenance per `reports/bootstrap_model_pt_provenance.md`).
+- **H2** — `data/bootstrap_corpus_v6.npz` on vast (regen on vast if absent; can run before bench gate).
+- **H3** — §177 vast tmux liveness (SSH check; kill if alive before bot-corpus generation).
+- **H4** — `game_length_weights` colony-bias (§S179 candidate, not pre-launch).
+- **H5** — `Makefile` BOOTSTRAP default → explicit error (separate hygiene commit).
+
+Source B live cross-bot subprocess infra design deferred to §179+.
+Length-discounted value target DROPPED from candidate pool per operator (terminal-reward purity principle).
 
 ---
 
