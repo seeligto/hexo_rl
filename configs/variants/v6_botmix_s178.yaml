@@ -49,12 +49,21 @@ mixing:
 
 # ── Pair-A — ply_cap_value split from draw_value ──────────────────────────────
 # Operator pre-commit: draw_value -0.5 → -0.1 (softer on organic draws).
-# §178 addition: ply_cap_value separate, harder (truncation = near-loss).
-# Restores finish-pressure on long colony-prone games without flattening genuine draws.
+# §178 addition: ply_cap_value separate, literature-canonical neutral (0.0).
+# Restores split semantics without arbitrary reward tweaking.
+#
+# Revised 2026-05-18 (T12) from -0.5 → 0.0 per AlphaZero/KataGo canonical:
+# - AlphaZero chess (Silver 2017): 50-move rule auto-draw → value target 0.
+# - KataGo (Wu 2019): max-ply truncation → value target 0.
+# - HTT geometry: ply-150 positions on infinite board are genuinely unresolved
+#   (P1 ~76 stones, P2 ~74, no 6-line, pieces scattered) — honest target is
+#   "unknown / draw-like", not "near loss". -0.5 (= old draw_value) collapsed
+#   the split into a no-op; 0.0 makes it meaningful.
+# - Anti-tweaking principle: terminal-end purity. ply-cap truncation often
+#   follows GOOD defensive play (model defending well, prolonging game);
+#   penalising it with -0.5 would punish defense.
 draw_value: -0.1       # organic draws (winner=None, ply<150) → BCE target 0.45 (near-neutral)
-ply_cap_value: -0.5    # NEW — truncation (winner=None, ply≥150). Operator override 2026-05-18:
-                       # design called for -0.8 (BCE 0.10, near-loss); operator dialed back to
-                       # -0.5 (BCE 0.25, soft-penalty) pending §178 outcome — may revisit.
+ply_cap_value: 0.0     # truncation (winner=None, ply≥150) → BCE target 0.5 (literature-canonical)
 
 # ── §175/§177 cosine-temp + jitter mandatory pairings (L9) ────────────────────
 # DO NOT override — preserved from base selfplay.yaml.
