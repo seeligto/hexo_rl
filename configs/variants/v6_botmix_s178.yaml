@@ -117,8 +117,10 @@ gating:
     enabled: true
     min_winrate: 0.45
 
-# ── §175/§177 eval cadence retained (T=0.5 for §175 continuity per L21) ───────
-eval_interval: 5000
+# ── Eval cadence — §179 relaunch: 10K matches vast.yaml profile ──────────────
+# T=0.5 retained for §175 continuity (L21). SealBot fires every eval round
+# (stride:1 in base eval.yaml since refactor d9b3a1d).
+eval_interval: 10000
 eval_temperature: 0.5
 eval_random_opening_plies: 0  # §174 verified
 
