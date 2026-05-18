@@ -27,13 +27,21 @@
 # Final verdict at 50K: does multi-window labeling produce measurable Δ?
 #
 # Wall budget: ~10-12 hr on vast 5080 at ~5K steps/hr.
+#
+# Hygiene 2026-05-18: redundant-to-base scalars dropped (lr, leaf_batch_size,
+# max_game_moves, legal_move_radius_jitter, fast_prob,
+# temperature_threshold_compound_moves, temp_min, mcts.n_simulations, and
+# best_checkpoint/bootstrap_anchor n_games/model_sims/opponent_sims).
+# legal_move_radius_jitter previously had an inline annotation noting it
+# no-ops on the v7mw multi-window path — that semantics is unchanged with
+# the key removed (base default true still no-ops for v7mw). See
+# reports/variant_hygiene_audit.md.
 
 # Encoding — v7mw multi-window K-cluster perception at 19×19
 encoding: v7mw
 
-# Training — LR safe at 2e-3 on 19×19 (no FP16 overflow).
-lr: 2.0e-3
-# Cosine schedule denominator matches run length for proper LR decay.
+# Training — total_steps overrides base 200K for cosine-schedule denominator
+# match against 50K run length.
 total_steps: 50000
 
 # Eval — 5 rounds over 50K. SealBot fires every round.
@@ -45,34 +53,13 @@ selfplay:
   n_workers: 18
   inference_batch_size: 128
   inference_max_wait_ms: 16.0
-  leaf_batch_size: 8
-  max_game_moves: 150
   random_opening_plies: 0
-  # legal_move_radius_jitter only fires for the bare-defaults v6 path
-  # (skipped when encoding is set — see worker_loop.rs:313). Leave on
-  # to match §175 v6 config structure; it'll no-op here.
-  legal_move_radius_jitter: true
-  playout_cap:
-    fast_prob: 0.0
-    temperature_threshold_compound_moves: 0
-    temp_min: 0.5
-
-mcts:
-  n_simulations: 400
 
 eval_pipeline:
   opponents:
     sealbot:
       stride: 1
       n_games: 100
-    best_checkpoint:
-      n_games: 100
-      model_sims: 128
-      opponent_sims: 128
-    bootstrap_anchor:
-      n_games: 100
-      model_sims: 128
-      opponent_sims: 128
 
 # Explicit corpus path — vast's data/bootstrap_corpus.npz was overwritten
 # with v6w25 data during §174. data/bootstrap_corpus_v6.npz is the canonical
