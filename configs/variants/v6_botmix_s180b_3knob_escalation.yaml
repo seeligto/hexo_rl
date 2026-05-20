@@ -1,0 +1,217 @@
+# configs/variants/v6_botmix_s180b_3knob_escalation.yaml
+# §S180b — 3-knob anti-colony escalation. Inherits the §S179 recipe and
+# escalates 3 colony levers simultaneously. NOT a single-knob A/B — see L36:
+# §S179 + §S180a established 2 baseline arms with an unranked 4-suspect set;
+# single-knob discipline on 4 unranked suspects = 4 × ~30h = 120h. §S180b
+# combines the 3 cheapest unfired levers (all targeting the same DIRECT
+# anti-corrective force). If §S180b PASS, a follow-up ablation isolates.
+#
+# ── 3 KNOB DELTAS vs §S179 / §S180a ──────────────────────────────────────────
+# Knob 1 — mixing.bot_batch_share: 0.15 → 0.30
+#   Doubles the DIRECT anti-colony gradient. Per docs/designs/S178_design.md
+#   §3.1, raises the DIRECT-corrective : recent-selfplay-colony force ratio
+#   from 0.82:1 (borderline — §S179 confirmed it lost) to ~1.64:1 (above the
+#   ≥2:1-target neighbourhood; L35 mandates ≥2:1 or amplifier isolation).
+# Knob 2 — game_length_weights: colony-biased → neutral (uniform 1.0)
+#   §S179/§S180a base (training.yaml): thresholds [10,25] weights [0.15,0.50]
+#   default 1.0 — short games downweighted 0.15, mid 0.50, full (≥25 turns)
+#   1.0. Colony wins tend to be LONG games → this schedule upweights colony
+#   games in every training batch. §S180b neutralizes to weights [1.0,1.0]
+#   default 1.0 (uniform) — kills the colony upweighting in the selfplay
+#   slice. Q-§S179-residual confirmed-lever candidate (§S178 hygiene H4).
+# Knob 3 — selfplay.completed_q_values: true (RESTORED from §S180a flip)
+#   §S180a flipped this false (visit-count CE) → FAILED with a uniformly
+#   weaker gradient (L37: wr_sealbot -4pp, wr_anchor -15pp, wr_best -18pp
+#   @ step 20K). CQV is the stronger learning signal in the colony regime.
+#   §S180b keeps CQV true (== §S179). This is a "knob" only relative to
+#   §S180a; vs §S178/§S179 it is unchanged.
+#
+# Predecessor chain: §175 (no bot mixing, colony attractor) → §177 (step-20K
+#   anchor, same) → §S178/§S179 (bot-mix 0.15 + ply_cap split, FAILED, colony
+#   capture) → §S180a (CQV-flip A/B, FAILED, CQV ruled out) → §S180b.
+# Verdict logic: §S180b PASS → follow-up ablation isolates which knob carried
+#   it. §S180b FAIL → surface is dead; escalate §S181 to code-level levers
+#   (PSW or bot-corpus refresh hook).
+# Design doc: docs/designs/S178_design.md (recipe + §3.1 force decomposition).
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6.pt \
+#     --variant v6_botmix_s180b_3knob_escalation \
+#     --iterations 100000
+
+# Header: bootstrap anchor + variant identity
+# Anchor choice rationale: v6.pt (not _step20k) for direct A/B vs §175.
+# v6.pt = canonical v6 base bootstrap (untrained selfplay). §175 anchor.
+# §178 with v6.pt + bot mixing tests: does the new mechanism prevent the
+# colony capture that §175 (same anchor, no bot) exhibited from step ~5K onward?
+
+# Operator pre-flight (see launch script):
+#   1. tmux kill-session -t s177 (if still alive on vast)
+#   2. data/bootstrap_corpus_v6.npz present on vast (regen or scp; SA-E vast-only finding)
+#   3. rm checkpoints/replay_buffer.bin (clean start; §177 buffer discarded)
+#   4. data/bot_corpus_s178_sealbot_vs_v6.npz present (generated via `make corpus.bot`)
+#   5. --checkpoint MUST be bootstrap_model_v6.pt, NOT Makefile default (bootstrap_model.pt is random)
+
+# ── §177 baseline overrides retained ──────────────────────────────────────────
+lr: 2e-3
+total_steps: 100_000
+eta_min: 2e-4
+
+# ── §177 mixing block retained, with NEW bot_corpus slot ──────────────────────
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"  # human corpus (v7 Elo-weighted, §148)
+  # decay_steps: 200_000 unchanged from training.yaml; F2 rationale — corpus dominance is anti-colony.
+  # min_pretrained_weight: 0.1, initial_pretrained_weight: 0.8 unchanged.
+
+  # NEW — Source A bot-game corpus (separate top-level batch slot).
+  # NOT decaying with pretrain_weight; NOT subject to LRU eviction.
+  # Baked against v6.pt anchor (matches §178 starting weights).
+  bot_corpus_path: "data/bot_corpus_s178_sealbot_vs_v6.npz"
+  bot_batch_share: 0.30  # §S180b KNOB 1 (was 0.15) — doubles DIRECT anti-colony
+                         # gradient; force ratio 0.82:1 → ~1.64:1 (S178_design §3.1)
+
+  # Refresh-on-anchor-change hook — DISABLED for §178 (static).
+  # Flip on for §179 after observing §178 colony_frac trajectory.
+  bot_corpus_refresh:
+    enabled: false
+    trigger: best_model_promotion
+    cooldown_steps: 25_000
+    min_new_games: 200
+
+# ── Pair-A — ply_cap_value split from draw_value ──────────────────────────────
+# Operator pre-commit: draw_value -0.5 → -0.1 (softer on organic draws).
+# §178 addition: ply_cap_value separate, literature-canonical neutral (0.0).
+# Restores split semantics without arbitrary reward tweaking.
+#
+# Revised 2026-05-18 (T12) from -0.5 → 0.0 per AlphaZero/KataGo canonical:
+# - AlphaZero chess (Silver 2017): 50-move rule auto-draw → value target 0.
+# - KataGo (Wu 2019): max-ply truncation → value target 0.
+# - HTT geometry: ply-150 positions on infinite board are genuinely unresolved
+#   (P1 ~76 stones, P2 ~74, no 6-line, pieces scattered) — honest target is
+#   "unknown / draw-like", not "near loss". -0.5 (= old draw_value) collapsed
+#   the split into a no-op; 0.0 makes it meaningful.
+# - Anti-tweaking principle: terminal-end purity. ply-cap truncation often
+#   follows GOOD defensive play (model defending well, prolonging game);
+#   penalising it with -0.5 would punish defense.
+draw_value: -0.1       # organic draws (winner=None, ply<150) → BCE target 0.45 (near-neutral)
+ply_cap_value: 0.0     # truncation (winner=None, ply≥150) → BCE target 0.5 (literature-canonical)
+
+# ── §S180b KNOB 2 — game_length_weights neutralized ───────────────────────────
+# training.yaml base: thresholds [10,25] weights [0.15,0.50] default 1.0 —
+# short games (<10 turns) downweighted to 0.15, mid (10-24) to 0.50, full
+# (≥25 turns) at default 1.0. Colony wins tend to be LONG games, so this
+# schedule upweights colony games in every training batch (Q-§S179-residual).
+# §S180b neutralizes to uniform 1.0 across all length buckets — kills the
+# colony upweighting in the selfplay slice. Read by orchestrator.py:338
+# (`train_cfg.get("game_length_weights", ...)`); variant key overrides base.
+game_length_weights:
+  thresholds: [10, 25]
+  weights: [1.0, 1.0]   # was [0.15, 0.50] — neutralized
+  default_weight: 1.0
+
+# ── §175/§177 cosine-temp DISABLED (operator override 2026-05-18) ─────────────
+# §156 R12 finding (per configs/variants/vast.yaml line 53): cosine schedule is
+# disabled for sustained runs from frozen bootstrap. Operator observed colony
+# spam re-emerging in §S178 first-game telemetry with cosine-temp on (peak
+# temp_min=0.05 → over-peaky policy → colony pattern reinforcement). Override
+# L9 mandatory pairing: aligns sustained-from-bootstrap policy with vast.yaml
+# canonical settings while keeping §178 mechanism levers (bot mix + ply_cap_value).
+# - selfplay.playout_cap.temperature_threshold_compound_moves: 0  (was 10)
+# - selfplay.playout_cap.temp_min: 0.5                            (was 0.05)
+# - selfplay.legal_move_radius_jitter: true                       (unchanged)
+
+# ── §177 selfplay overrides retained ──────────────────────────────────────────
+selfplay:
+  completed_q_values: true  # §S180b KNOB 3 — Gumbel completed-Q KL targets, RESTORED
+                            # from §S180a flip (false=visit-count CE FAILED, L37). == §S179.
+  c_visit: 50.0
+  c_scale: 1.0
+  n_workers: 18
+  inference_batch_size: 64
+  n_simulations: 400
+  max_game_moves: 150       # 150 plies = 75 compound turns (§144 recalibrated)
+  random_opening_plies: 1
+  rotation_enabled: true
+  legal_move_radius_jitter: true  # L9 mandatory pairing
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.5    # §177 inheritance (NOT 0.25)
+    n_sims_quick: 100
+    n_sims_full: 600
+    # Cosine-temp DISABLED 2026-05-18 (operator override) — see comment block
+    # above. §156 R12 settings: threshold 0 (no cosine), temp_min 0.5 (fixed τ).
+    # NOTE: sprint log §156/L9 frames cosine-temp as draw-collapse driver, not
+    # primary colony driver. R12 colony rate was 67% (mitigated by jitter).
+    # Colony attractor in §175 captured by `n_components` per §176 A3, NOT by
+    # `colony_extension_fraction`. Disable per operator call regardless.
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+# ── §177 buffer schedule retained ─────────────────────────────────────────────
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 300_000,   capacity: 500_000}
+  - {step: 1_000_000, capacity: 1_000_000}
+
+# ── §175/§177 gating retained ─────────────────────────────────────────────────
+gating:
+  bootstrap_floor:
+    enabled: true
+    min_winrate: 0.45
+
+# ── Eval cadence — §179 relaunch: 10K matches vast.yaml profile ──────────────
+# T=0.5 retained for §175 continuity (L21). SealBot fires every eval round
+# (stride:1 in base eval.yaml since refactor d9b3a1d).
+eval_interval: 10000
+eval_temperature: 0.5
+eval_random_opening_plies: 0  # §174 verified
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v6.pt"  # explicit; NOT bootstrap_model.pt (random init)
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+# ── Hard-abort signature thresholds (from §157 / L9) ──────────────────────────
+hard_abort:
+  grad_norm: 10.0
+  loss_nan: true
+  stride5_p90: 60       # rolling 50 games
+  row_max_p90: 50
+  colony_ext_frac_max: 0.40
+  draw_rate_warn: 0.70  # WARN-only; do not auto-abort
+  pct_at_cap_warn: 0.30 # NEW — soft-abort if ply-cap rate rises ≥5pp without WR recovery
+
+# ── V178 telemetry probes (extends §175 set) ──────────────────────────────────
+telemetry:
+  emit_bot_corpus_metrics: true   # log avg policy/value loss split by source (corpus/bot/selfplay)
+  emit_outcome_distribution: true # log win/loss/organic_draw/ply_cap_truncation counts per round
+  emit_value_pred_at_ply_cap: true # V178-8 probe — mean v_pred for ply >= 140
+
+# ── §S180b pre-registered verdicts (vs §S179 reference data) ──────────────────
+#   V180b-1 @ step 10K: wr_sealbot ≥ 10% (vs §S179 8% — escalation must beat
+#                       unaugmented bot-mix)
+#                       AND colony@sealbot < 20% (vs §S179 13% — neutral game
+#                       weights should reduce)
+#   V180b-2 @ step 20K: wr_sealbot ≥ 15% (vs §S179 11% — escalation must beat
+#                       peak-trajectory baseline)
+#                       AND colony@sealbot < 50% (vs §S179 91% — major
+#                       direct-force impact)
+#   V180b-3 @ step 30K: wr_sealbot ≥ 14% AND colony@sealbot < 60% AND NO
+#                       anchor↑/sealbot↓ divergence (L34)
+#   V180b-4 @ step 50K: wr_sealbot ≥ 14% sustained, anchor stable 55-70%
+#                       (NOT climbing past 70%)
+#   Hard-abort: wr_sealbot < 5% at step 20K — 3-knob escalation insufficient,
+#               surface is dead, escalate §S181 with PSW/refresh-hook.
+#   Hard-abort: colony@sealbot > 80% at step 30K — escalation insufficient,
+#               same as above.
+#   Hard-abort: any §S178 hard_abort threshold (grad_norm >10, loss_nan,
+#               colony_ext_frac >0.40, stride5_p90 >60).
