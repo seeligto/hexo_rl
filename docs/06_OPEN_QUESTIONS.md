@@ -7,7 +7,7 @@
 | Q-§164-P1 | Window-anchor index-0 picks suspected boundary bug | RESOLVED 2026-05-07 (Principled) — live MCTS + replay push K-aggregate fully: min-pool value, scatter-max policy (worker_loop.rs:299-401 + 649-682). Index-0 picks exist only at aug-only sites (pretrain RandomBot validation, early_game_probe, records.rs pass slot). Cleanup commit adds semantic clarity at each site. | `3cd496b` |
 | Q5 | Supervised→self-play transition schedule | Exponential decay 0.8→0.1 over 1M steps; growing buffer + mixed data streams | `a6e5a79` |
 | Q6 | Sequential vs compound action space | Sequential confirmed — 2 MCTS plies per turn, Q-flip at turn boundaries, Dirichlet skipped at intermediate plies | `5be7df7`, `9b899e9` |
-| Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically. **Status (2026-05-18):** S-ordering audit DEFERRED. Bot-corpus mixing landed as §178 mechanism intervention (`docs/designs/S178_design.md`, branch `phase4.5/s178_botmix`). If §178 trajectory shows the levers insufficient and the colony attractor reproduces a third time, S-ordering audit becomes the next experimental probe. Until then, the §178 outcome decides whether deeper source-ordering investigation is warranted. **Status (2026-05-20):** §S178 mechanism intervention FAILED (§S179 close — colony attractor reproduced; archive `archive/s179_recipe_fail/`). Colony attractor has now reproduced a third time (§175, §177, §S179) — the S-ordering-audit trigger condition is met. §S180a CQV-flip A/B (`completed_q_values: false`) launches first as the next isolated colony-amplifier test; S-ordering audit escalates if §S180a is also NULL/FAIL. | — |
+| Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically. **Status (2026-05-18):** S-ordering audit DEFERRED. Bot-corpus mixing landed as §178 mechanism intervention (`docs/designs/S178_design.md`, branch `phase4.5/s178_botmix`). If §178 trajectory shows the levers insufficient and the colony attractor reproduces a third time, S-ordering audit becomes the next experimental probe. Until then, the §178 outcome decides whether deeper source-ordering investigation is warranted. **Status (2026-05-20):** §S178 mechanism intervention FAILED (§S179 close — colony attractor reproduced; archive `archive/s179_recipe_fail/`). Colony attractor has now reproduced a third time (§175, §177, §S179) — the S-ordering-audit trigger condition is met. §S180a CQV-flip A/B (`completed_q_values: false`) launches first as the next isolated colony-amplifier test; S-ordering audit escalates if §S180a is also NULL/FAIL. **Status (2026-05-20, post-§S180a):** §S180a FAILED (close — CQV ruled out as colony lever; not colony capture, weaker learning signal). 3rd colony reproduction confirmed (§175, §S179, §S180a). S-ordering audit triggered — running parallel to §S180b launch as `audit/q12_s_ordering_audit.md`. | — |
 | Q13 | Chain-length planes as input tensor augmentation | §92 landed 6 chain-length planes as input (18→24). §97 reverted: chain planes moved out of the input tensor into a dedicated `ReplayBuffer.chain_planes` sub-buffer. Input is back to 18 planes. `chain_head` aux regression loss retained (smooth-L1, `aux_chain_weight: 1.0`); target reads from the chain sub-buffer, NOT from `input[:, 18:24]`. See sprint log §92, §93, §97. | §97 on master |
 | Q19 | Threat-head BCE class imbalance | `pos_weight = 59.0` (theoretical `(1−p)/p` at ~1.6% positive fraction) added to threat-head `BCEWithLogitsLoss`. Landed atomically with Q13 as a fresh bootstrap. `scripts/compute_threat_pos_weight.py` recomputes empirically from a replay buffer when available. §91 C4 monitoring hook stays in place. | `feat/q13-chain-planes` branch §92 |
 | Q8 | First-player advantage in value training | **RESOLVED 2026-04-22 (auto, corpus fix)** — POSITION_END=50 truncation and broken Elo read meant pretraining corpus was biased to early/mid-game only. With both bugs fixed (`ddd408f`, `aa16624`, `8b446c5`), the full Elo-weighted corpus covers ply 8–150 and the P1 outcome distribution matches actual game statistics. No explicit adjustment of value targets needed. Sprint §114. | `ddd408f` + §114 |
@@ -813,16 +813,32 @@ bench gate.
 
 ## Q-§S179-residual — `game_length_weights` colony bias [LOW]
 
-**Status:** OPEN [LOW] — defer until §S180a verdict.
+**Status (2026-05-20):** CONFIRMED LEVER CANDIDATE — folded into §S180b.
+§S180a's `completed_q_values` flip did not break the attractor (CQV ruled
+out). `game_length_weights` colony bias is now a confirmed lever candidate.
+§S180b includes its neutralization (uniform 1.0/1.0/1.0) as one of 3
+escalation knobs. Per L36, the unranked suspect-set is escalated as a
+combined-lever variant rather than 4 separate single-knob A/Bs. If §S180b
+PASS, a follow-up ablation isolates which of the 3 knobs carried the effect.
 
 §S179 reproduced the colony attractor under the §S178 mechanism. One
 un-isolated amplifier candidate is `game_length_weights`: long-game
 weighting (1.0) vs tactical-game weighting (~0.50) may upweight colony
 games in the training batch, since colony wins tend to be longer games.
-If §S180a's `completed_q_values` flip does not break the attractor,
-`game_length_weights` neutralization (§S178 hygiene item H4) is the next
-isolated lever to test. Defer the investigation until the §S180a verdict
-lands — do not run in parallel (single-variable A/B discipline).
+
+---
+
+## Q-§S180a-residual — visit-count CE weaker than CQV in colony regime [LOW]
+
+**Status:** OPEN [LOW].
+
+§S180a established empirically (L37) that visit-count CE policy targets
+produce a uniformly weaker gradient than CQV in the colony-rich regime
+(wr_sealbot -4pp, wr_anchor -15pp, wr_best -18pp @ step 20K). Probable
+mechanism: diffuse MCTS visit distributions yield a high-entropy
+near-uniform CE target, where CQV reweighting concentrates the target on
+high-value children. If visit-count CE is ever desired (e.g. for Gumbel
+MCTS deployment), pair it with a value-head signal restoration mechanism.
 
 ---
 
