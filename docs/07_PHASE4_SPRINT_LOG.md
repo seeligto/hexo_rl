@@ -2244,6 +2244,115 @@ post-inspection (no tag — hygiene wave, not cycle close).
 
 ---
 
+## §S179 — §S178 mechanism CLOSE: bot-mix + ply_cap split insufficient
+
+*DISCRIMINATOR: §S179 = Sustained Training Sprint 179 (this entry). NOT §179
+(line 1921) = Rust engine refactor cycle 3 close. Cite the run-id or `§S179`
+prefix to disambiguate.*
+
+**Status:** FAILED. Colony attractor reproduced. Same dead-end as §175.
+
+**Run identity:**
+- Branch at launch: master `98296f9` (post-§S178a + §S179a/§S179b/§S179c +
+  F-A1 merges; `98296f9` = cadence-fix `eval_interval 5K→10K`).
+- Anchor: `checkpoints/bootstrap_model_v6.pt` (SHA
+  `7ab77d2cb091e3a67a0900e8c312f11fd7f9e87c8ea31cdd27102b9298372103`).
+- Bot corpus: `data/bot_corpus_s178_sealbot_vs_v6.npz` (700g, static).
+- Variant: `configs/variants/v6_botmix_s178.yaml` (post-cadence-fix:
+  `eval_interval` 10K, SealBot stride 1 n=100; `ply_cap_value` 0.0 per §S178
+  T12; `draw_value` -0.1).
+- Run-id: `243e321f76504c6d908ab2f64eef8100`; tmux `sS179` on vast (5080).
+- Launched 2026-05-18 17:36 UTC; SIGINT-stopped 2026-05-20 07:04 UTC at
+  step **62,740** (31,370 games, ~37.4 h elapsed). Clean exit — final
+  checkpoint + buffer flushed, `session_end` written. Last eval @ step 60K
+  (`eval_interval` 10K); steps 60K→62.7K trained without further eval.
+
+**Eval trajectory** (SealBot/anchor n=100, greedy-bot n=20; colony =
+colony-formation wins ÷ player wins):
+
+| Step | wr_sealbot | wr_anchor | wr_best | colony@anchor | colony@best | colony@sealbot | Elo | Promoted |
+|---|---|---|---|---|---|---|---|---|
+| 10K | 8% | 59% | 55% | 49% | 62% | 13% | 410 | ❌ |
+| 20K | 11% | 68% | 66% | 79% | 85% | 91% | 414 | ✅ peak |
+| 30K | 12% | 64% | 49% | 70% | 80% | 83% | 302 | ❌ |
+| 40K | 2% | 66% | 60% | 85% | 88% | 100% | 266 | ✅ |
+| 50K | 2% | 70% | 63% | 83% | 89% | 100% | 224 | ✅ |
+| 60K | 4% | 75% | 45% | 77% | 93% | 100% | 224 | ❌ |
+
+**Diagnostic.**
+
+SealBot WR peaked 12% @ step 30K, crashed to 2–4% by 40K–60K. Peak Elo
+promotion @ step 20K (Elo 414). Anchor WR climbed monotonically 59→75 over
+the same span. colony@sealbot pinned 100% the last 3 rounds (every SealBot
+win is a colony-formation win). Canonical anchor↑/sealbot↓ divergence — the
+§155 T2 / §175 colony-capture signature.
+
+Threat probes did not trigger the C1–C3 kill criterion through step 60K
+(run ran uninterrupted to 62.7K) — the threat circuit is intact; the failure
+is policy-distribution-level, not threat-representation-level. L22 confirmed
+again: the sampled policy diverts into colony patterns despite correct
+threat representation.
+
+§S178 mechanism (`bot_batch_share=0.15` SealBot-vs-v6 corpus +
+`ply_cap_value=0.0` + `draw_value=-0.1` + cosine-OFF + F-fix-1 threat-target
+colony fix) bought ~one extra promotion vs §175 trajectory (§175 peak 17% @
+15.5K; §S179 peak 12% @ 30K) but did NOT escape the attractor. The
+anti-corrective force decomposition in `docs/designs/S178_design.md §3.1`
+predicted 0.82:1 (DIRECT-corrective vs recent-selfplay-colony) = BORDERLINE.
+Borderline lost.
+
+**Falsified.** §S178 design hypothesis H-S178-1: "`bot_batch_share=0.15`
+with SealBot-vs-v6 corpus + `ply_cap_value=0.0` + cosine-OFF is a sufficient
+anti-colony lever for stable training to step ≥50K."
+
+### Falsified Hypotheses Register addition
+
+| § | Hypothesis | Falsified by | Mechanism |
+|---|---|---|---|
+| §S179 (H-S178-1) | `bot_batch_share=0.15` SealBot-vs-v6 corpus + `ply_cap_value=0.0` + cosine-OFF is a sufficient anti-colony lever for stable training to step ≥50K | §S179 eval trajectory (close 2026-05-20) | SealBot WR 8→11→12→2→2→4; anchor 59→75; colony@sealbot pinned 100% from step 40K. Mechanism buys ~1 extra promotion vs §175 but does not escape the colony attractor. Borderline 0.82:1 corrective-force decomposition (S178_design §3.1) lost. |
+
+**Archive.** `archive/s179_recipe_fail/` on vast — 8 eval-aligned/peak/final
+checkpoints (`ckpt_step{10,20-peak,30,40,50,60}k.pt`, `ckpt_final_step62740.pt`,
+`best_model_final.pt`) + `eval_db.sqlite` + `metadata.json` + `training_tail.log`.
+Replay buffer (2.9 GB, colony-saturated) + dense intermediate checkpoints
+deleted post-archive-verify (low forensic value). `best_model.pt` reflects
+the last promotion (step 50K) — the step-20K peak is preserved separately
+as `ckpt_step20k_peak.pt`.
+
+**Successor.** §S180a launching: §S179 recipe + single config flip
+`completed_q_values: false` (pre-registered §S179-candidate (a) — visit-count
+CE policy target). Tests CQV as a colony-attractor amplifier. Single
+isolated variable.
+
+### Process patterns / Mechanism Lessons
+
+L-numbering: L1–L17 promoted in the register table above; L18–L33 are
+§-local candidates (latest L33 = §180 Wave 9). §S179 adds L34/L35.
+
+- **L34 (anchor↑/sealbot↓ divergence = canonical colony-capture signature
+  — 3rd confirming instance; promotable).** The calibration rule
+  "`wr_bootstrap_anchor` drop below 50–55% = regression" is
+  necessary-but-not-sufficient: it assumes the anchor is a colony-resistant
+  reference. The v6 anchor SHARES the colony weakness. Rising `wr_anchor`
+  with falling `wr_sealbot` is the textbook colony-capture pattern — the
+  model improves at exploiting v6's colony weakness while losing the ability
+  to play threat hex. Always cross-check the anchor trajectory against a
+  colony-resistant opponent (SealBot). Confirming instances: §155 T2, §175,
+  §S179. Calibration memo
+  (`feedback_alphazero_sustained_eval_calibration`) amended accordingly.
+
+- **L35 (§S178 mechanism — bot-mix 0.15 + ply_cap split + cosine-OFF — is an
+  insufficient anti-colony lever; 1 instance).** The borderline
+  anti-corrective force decomposition (0.82:1 DIRECT vs colony reinforcement)
+  predicted at design time was confirmed insufficient empirically. The
+  mechanism buys ~one extra promotion vs the §175 baseline but does not
+  escape the attractor. Future mechanism interventions must target a ≥2:1
+  corrective-force ratio OR isolate the amplification mechanism
+  (CQV / `game_length_weights` / value-head pretrain bias) for direct
+  nullification. Cycle 4+ candidate for 2nd-instance confirmation.
+
+---
+
 ## §66–§101 Classification Audit — quick-look table
 
 | Bucket | Sections | Compressed body location |
