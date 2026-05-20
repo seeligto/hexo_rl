@@ -2353,6 +2353,104 @@ L-numbering: L1–L17 promoted in the register table above; L18–L33 are
 
 ---
 
+## §S180a — CQV-flip A/B CLOSE: CQV not the colony lever
+
+*DISCRIMINATOR: §S180a = Sustained Training Sprint 180a (this entry). Cite
+the run-id or `§S180a` prefix to disambiguate from §180 (Rust engine refactor
+cycle 3).*
+
+**Status:** FAILED. Different signature than §S179 — not colony capture,
+weaker learning signal. CQV-flip RULED OUT as colony lever via single-knob
+A/B vs §S179.
+
+**Run identity:**
+- Branch at launch: master `6f08042`
+- Anchor: `bootstrap_model_v6.pt` (SHA `7ab77d2c…372103`)
+- Variant: `configs/variants/v6_botmix_s180a_cqv_off.yaml`
+- Single-knob delta vs §S179: `completed_q_values: true → false`
+- Run-id: `e68e79a53793421a886611c625f9c802`
+- tmux: `sS180a` on vast (5080)
+- Launched 2026-05-20 07:20 UTC; SIGINT-stopped 2026-05-20 20:52 UTC at
+  step **22,624** (11,312 games, ~13.5 h elapsed). Clean exit — final
+  checkpoint flushed, `session_end` written. Killed after V180a-2 FAIL
+  @ step 20K.
+
+**Eval comparison (single-knob A/B):**
+
+| @step | metric | §S179 (CQV true) | §S180a (CQV false) | delta |
+|---|---|---|---|---|
+| 10K | wr_sealbot | 8% | 8% | 0 |
+| 10K | wr_anchor | 59% | 58% | -1 |
+| 20K | wr_sealbot | 11% | 7% | -4 |
+| 20K | wr_anchor | 68% | 53% | -15 |
+| 20K | wr_best | 66% | 48% | -18 |
+
+**Diagnostic.**
+
+§S179 = colony capture (anchor↑ + sealbot↑ then crash). §S180a = not
+learning (anchor↓ + sealbot↓ + wr_best <50% at step 20K, weaker than own
+step-10K ckpt). Visit-count CE policy target produces weaker gradient than
+CQV without escaping the colony attractor. CQV is NOT the colony amplifier
+— it gave better learning, but learning the same wrong thing.
+
+Threat probes PASS throughout both runs — circuit health independent of
+colony failure mode (L22 reconfirmed).
+
+**Falsified.** Hypothesis H-S180a-1: "`completed_q_values: false` produces
+more diverse policy target, escaping colony attractor." Add to Falsified
+Hypotheses Register.
+
+### Falsified Hypotheses Register addition
+
+| § | Hypothesis | Falsified by | Mechanism |
+|---|---|---|---|
+| §S180a (H-S180a-1) | `completed_q_values: false` produces a more diverse policy target, escaping the colony attractor | §S180a eval trajectory (close 2026-05-20) | Visit-count CE = uniformly weaker metrics at step 20K (wr_sealbot -4pp, wr_anchor -15pp, wr_best -18pp vs §S179). Not colony capture — slower learning of the same trapped state. CQV ruled out as colony lever. |
+
+**Archive.** `archive/s180a_cqv_off_fail/` on vast — 3 eval-aligned/final
+checkpoints (`ckpt_step{10,20}k.pt`, `ckpt_final_step22624.pt`) +
+`best_model_final.pt` + `eval_rounds_s180a.json` (12 `evaluation_*` events
+extracted from train jsonl; `results.db` has no `eval_rounds` table) +
+`metadata.json` + `training_tail.jsonl`. Replay buffer (2.9 GB) + dense
+intermediate checkpoints deleted post-archive-verify.
+
+**Successor.** §S180b — 3-knob escalation targeting direct anti-colony force:
+1. `completed_q_values: true` (restore — stronger gradient confirmed)
+2. `bot_batch_share: 0.15 → 0.30` (double direct anti-colony signal;
+   per `docs/designs/S178_design.md §3.1`, raises DIRECT:colony ratio from
+   0.82:1 to ~1.64:1)
+3. `game_length_weights` neutralize (uniform 1.0/1.0/1.0 — kill colony
+   upweighting in selfplay slice; Q-§S179-residual confirmed lever)
+
+Multi-knob delta justified: §S179 + §S180a establish 2 baseline arms;
+§S180b tests combined direct-force escalation. If §S180b PASS, follow-up
+ablation isolates. If §S180b FAIL, surface is dead — escalate to §S181
+with code-level levers (PSW or refresh hook).
+
+### Process patterns / Mechanism Lessons
+
+§S180a adds L36/L37.
+
+- **L36 (single-knob A/B discipline retired when suspect-set unranked).**
+  §S180a single-knob A/B isolated CQV cleanly = ruled out. But 4 remaining
+  candidate levers (`bot_batch_share`, `game_length_weights`, PSW, refresh
+  hook) have no quantitative ranking from §S179/§S180a data. Single-knob
+  discipline on 4 unranked suspects = 4 × ~30h = 120h. Pragmatic shift:
+  combine cheapest 2-3 unfired levers when all target the same mechanism.
+  §S180b applies this.
+
+- **L37 (visit-count CE = weaker gradient than CQV in colony-rich regime).**
+  Empirical finding worth documenting: with bot-mix corpus + ply_cap split +
+  cosine-OFF, switching from CQV to visit-count CE produced uniformly weaker
+  metrics at step 20K (wr_sealbot -4pp, wr_anchor -15pp, wr_best -18pp).
+  Possible mechanism: in the colony regime, the MCTS visit distribution is
+  diffuse (low value-head signal), so the visit-count CE target = high-
+  entropy near-uniform. CQV reweighting concentrates the target on
+  high-value children = stronger learning signal despite the colony bias.
+  Future variants with visit-count CE should pair with a value-head signal
+  restoration mechanism.
+
+---
+
 ## §66–§101 Classification Audit — quick-look table
 
 | Bucket | Sections | Compressed body location |
