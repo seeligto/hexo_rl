@@ -2472,6 +2472,95 @@ insert cost itself (TLS scratch / incremental legal-set; plan Option (c)).
 
 ---
 
+## §S180b — 3-knob escalation CLOSE: config-level surface exhausted
+
+*DISCRIMINATOR: §S180b = Sustained Training Sprint 180b (this entry).*
+
+**Status:** FAILED. V180b-4 HARD FAIL @ step 50K — wr_sealbot collapsed to
+**0%** (CI [0.0, 3.7]). 4th colony reproduction (§175, §S179, §S180a, §S180b).
+Config-level anti-colony surface area exhausted.
+
+**Run identity:**
+- Branch at launch: master `3146144`
+- Anchor: `bootstrap_model_v6.pt` (SHA `7ab77d2c…372103`)
+- Variant: `configs/variants/v6_botmix_s180b_3knob_escalation.yaml`
+- 3-knob delta vs §S179: `completed_q_values: true` (restored) +
+  `bot_batch_share: 0.15 → 0.30` + `game_length_weights` neutralized
+  (`[1.0, 0.50, 0.15] → uniform [1.0, 1.0, 1.0]`)
+- Run-id: `fd9ea56e320646e5aeae11aefbe296bb`
+- tmux: `sS180b` on vast (5080)
+- Launched 2026-05-20 21:04 UTC; SIGINT-stopped 2026-05-21 23:00 UTC at
+  step **53,890** (~26 h elapsed). Clean exit. Killed after V180b-4 FAIL
+  @ step 50K.
+
+**Eval trajectory:**
+
+| @step | wr_sealbot | CI95 | colony@sb | wr_anchor | colony_a | wr_best | elo |
+|---|---|---|---|---|---|---|---|
+| 10K | 11% | [6.3, 18.6] | 7/100 | 61% | 36/100 | 52% | 422 |
+| 20K | 7% | [3.4, 13.7] | 3/100 | 56% | 35/100 | 50% | 342 |
+| 30K | 12% | [7.0, 19.8] | 11/100 | 61% | 40/100 | 61% | 354 |
+| 40K | 19% | [12.5, 27.8] | 12/100 | 68% | 43/100 | 57% | 330 |
+| 50K | **0%** | [0.0, 3.7] | 0/100 | 65% | **59/100** | 62% | 237 |
+
+Pre-registered verdicts: V180b-1 @10K PASS; V180b-2 @20K FAIL; V180b-3 @30K
+FAIL; **V180b-4 @50K FAIL**.
+
+**Diagnostic — colony capture, masked.**
+
+The 3-knob escalation crushed every *visible* colony metric: self-play
+`colony_extension_fraction` ~0.04% of games (near-extinct), `colony@sealbot`
+0–12% throughout (never the §S179 91%). Yet the policy still collapsed:
+wr_sealbot 11→7→12→19→0. The 40K 19% was a transient pre-crash peak, not
+recovery. At 50K the L34 capture signature fired — anchor 65% (high) /
+sealbot 0% (collapsed) / `colony_a` jumped 43→59 per 100. The colony lives
+in *anchor games*, a channel none of the 3 knobs touch. The model overfit
+to beating the colony-prone anchor and lost all generalization to SealBot.
+
+Threat probes PASS throughout (C1–C3, contrast 4.2–5.4, top5 40–70%,
+top10 65–75%) — circuit health independent of colony collapse, L22
+reconfirmed a 4th time.
+
+**Falsified.** Hypothesis H-S180b-1: "combined config-level escalation
+(CQV + 2× bot_batch_share + neutral game_length_weights) supplies enough
+direct anti-colony force to escape the attractor."
+
+### Falsified Hypotheses Register addition
+
+| § | Hypothesis | Falsified by | Mechanism |
+|---|---|---|---|
+| §S180b (H-S180b-1) | 3-knob config escalation supplies enough direct anti-colony force to escape the attractor | §S180b eval trajectory (close 2026-05-21) | Every visible colony metric crushed (self-play colony ~0.04%, colony@sealbot 0–12%) yet wr_sealbot still collapsed 19%→0% @50K with L34 anchor↑/sealbot↓ divergence. Capture channel is config-invisible. |
+
+**Archive.** `archive/s180b_3knob_fail/` on vast — 6 checkpoints
+(`ckpt_step{10,20,30,40,50}k.pt` + `ckpt_step53500.pt`) +
+`best_model_final.pt` + `eval_rounds_s180b.jsonl` (5 `evaluation_round_complete`
+events) + `metadata.json` + `training_tail.jsonl`. Replay buffer (3.1 GB) +
+14 dense intermediate checkpoints deleted post-archive-verify (`checkpoints/`
+4.2 GB → 569 MB).
+
+**Successor.** §S181 — code-level levers. Config-level surface (CQV,
+bot_batch_share, game_length_weights, cosine, ply_cap split) is exhausted
+across §S178/§S179/§S180a/§S180b with zero escape. Next intervention must
+be code-level: prioritized-sample-weighting (PSW) on bot-corpus rows, OR a
+bot-corpus refresh hook that regenerates SealBot-vs-current games mid-run.
+
+### Process patterns / Mechanism Lessons
+
+§S180b adds L38.
+
+- **L38 (config-level anti-colony surface is exhausted; capture channel is
+  config-invisible).** §S178/§S179/§S180a/§S180b swept the full config-level
+  lever set — bot-mix share (0.15, 0.30), CQV on/off, ply_cap split, cosine
+  on/off, game_length_weights (biased, neutral). Every arm reproduces the
+  colony attractor. §S180b is the decisive instance: it drove every *visible*
+  colony metric to near-zero (self-play colony 0.04%, colony@sealbot 0–12%)
+  and still collapsed via L34 anchor↑/sealbot↓ divergence. Conclusion: the
+  capture operates through a channel no YAML knob reaches — diagnosis-by-
+  metric is exhausted. §S181+ must use code-level levers (PSW / corpus
+  refresh hook) and instrument the anchor-game colony channel directly.
+
+---
+
 ## §66–§101 Classification Audit — quick-look table
 
 | Bucket | Sections | Compressed body location |
