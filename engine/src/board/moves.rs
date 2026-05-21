@@ -106,6 +106,32 @@ impl Board {
                 //   |dq| ≤ R, |dr| ≤ R, |dq + dr| ≤ R
                 // which translates to dr ∈ [max(-R, -R-dq), min(R, R-dq)].
                 let r = self.legal_move_radius;
+                // Bbox-based upper bound on the legal-move set size. Two
+                // independent valid upper bounds, take the min (tighter):
+                //  (a) bbox area — every legal cell lies in the axial rectangle
+                //      [min_q-r, max_q+r] × [min_r-r, max_r+r]; each cell at
+                //      most once a legal move. Tight late-game (high density).
+                //  (b) cells.len() · hex-ball-area — every stone contributes at
+                //      most a radius-r ball of legal positions; the union can't
+                //      exceed the sum. Tight early-game (low density).
+                // O(1) integer math, no allocation. saturating ops are
+                // defensive against extreme board sizes. Reserving a proven
+                // upper bound lets the insert loop grow the table in a single
+                // allocation — zero in-loop hashbrown rehash cascade.
+                let ru = r.max(0) as usize;
+                let w_q = (self.max_q.saturating_sub(self.min_q) as usize)
+                    .saturating_add(1)
+                    .saturating_add(2 * ru);
+                let w_r = (self.max_r.saturating_sub(self.min_r) as usize)
+                    .saturating_add(1)
+                    .saturating_add(2 * ru);
+                let bbox_area = w_q.saturating_mul(w_r);
+                // Hex ball area in axial coords = 3r² + 3r + 1.
+                let ball_area = 3 * ru * ru + 3 * ru + 1;
+                let combo_bound = self.cells.len().saturating_mul(ball_area);
+                let upper_bound = bbox_area.min(combo_bound);
+                // reserve relative to current capacity — no-op if already sized.
+                cache.reserve(upper_bound.saturating_sub(cache.len()));
                 for &(sq, sr) in self.cells.keys() {
                     for dq in -r..=r {
                         let dr_min = (-r).max(-r - dq);
