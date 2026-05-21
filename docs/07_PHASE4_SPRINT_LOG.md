@@ -2470,6 +2470,9 @@ FF-merge + push; if diverges >5pp → investigate L3-cache sensitivity
 still #1 self-time (41.8%) post-fix → next perf wave targets the rebuild
 insert cost itself (TLS scratch / incremental legal-set; plan Option (c)).
 
+**CLOSED → §S182** — vast cross-host re-bench PASS (+66.4%, within ±5pp of
+laptop +70.9%); FF-merged to master 2026-05-22.
+
 ---
 
 ## §S180b — 3-knob escalation CLOSE: config-level surface exhausted
@@ -2558,6 +2561,45 @@ bot-corpus refresh hook that regenerates SealBot-vs-current games mid-run.
   capture operates through a channel no YAML knob reaches — diagnosis-by-
   metric is exhausted. §S181+ must use code-level levers (PSW / corpus
   refresh hook) and instrument the anchor-game colony channel directly.
+
+---
+
+## §S182 — perf wave: legal_moves_set capacity fix MERGED
+
+*DISCRIMINATOR: §S182 = Rust-perf wave merge (this entry). The §S178 bot-mix
+training line and the Rust-perf waves advance on independent sprint numbers;
+§S181 stays reserved for the §S180b code-level-lever training successor.*
+
+**Merged.** `perf/legal-moves-cache-cap` FF-merged to master 2026-05-22.
+Tag `perf-legal-moves-cache-cap` at `46fa489`. Perf-fix commit `f8ff7b8`
+(+26 LOC `engine/src/board/moves.rs`) — O(1) bbox+ball-area capacity reserve
+before the `legal_moves_set` rebuild loop; kills the hashbrown power-of-2
+`reserve_rehash` cascade. Closes the §S180b-era CANDIDATE-branch merge-hold.
+
+**Bench gate — cross-host PASS.** Criterion `mcts_sims_cpu_only`,
+`--profile profiling`, n=800, median of runs 2+3 after discard-first warm-up:
+
+| host | baseline (master `3146144`) | post (`46fa489`) | sims/s Δ |
+|---|---|---|---|
+| laptop 8845HS | 2.4936 ms | 1.4595 ms | **+70.9%** |
+| vast 9900X+5080 | 1.9974 ms | 1.2001 ms | **+66.4%** |
+
+Cross-host gap 4.5pp — inside the ±5pp merge gate. Uniform across sizes
+(vast +62.4% / +68.5% / +66.4% at n=100/400/800; laptop ~+70% all sizes).
+The L3-cache sensitivity concern (8845HS 16 MB vs 9900X 64 MB) did not
+materialize — the mechanism is an allocation-pattern fix, not cache-
+residency, so it is hardware-portable. Raw: `investigation/rust-perf-
+2026-05-20/raw/vast/` (gitignored).
+
+**Mechanism confirmed.** Laptop perf report: `hashbrown::reserve_rehash`
+31.4% → 1.2%, dropped out of top-5. Residual post-fix top-3 self-time:
+`legal_moves_set` 41.8%, `expand_and_backup_single` 28.0%, `select_leaves`
+12.0%.
+
+**Successors.** §S183 — quick-win micro-opt wave (P1 `sqrt` hoist + F1/F2
+`mul_add` + A1/A4 atomic-ordering relax), branch `perf/quick-wins-mcts`.
+§S184 — `legal_moves_set` rebuild-cost reduction targeting the residual
+41.8% self-time (planning doc `09_rebuild_fix_plan.md`).
 
 ---
 
