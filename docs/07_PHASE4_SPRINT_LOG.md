@@ -2449,6 +2449,27 @@ with code-level levers (PSW or refresh hook).
   Future variants with visit-count CE should pair with a value-head signal
   restoration mechanism.
 
+### perf/legal-moves-cache-cap — CANDIDATE branch (merge held)
+
+Rust-perf wave (`investigation/rust-perf-2026-05-20/`): `legal_moves_set`
+pre-reserve fix. Branch `perf/legal-moves-cache-cap` HEAD `f8ff7b8` (off
+master `3146144`), tag `perf-legal-moves-cache-cap-candidate`. Single-file
++26 LOC in `engine/src/board/moves.rs` — O(1) bbox+ball-area capacity
+reserve before the legal-set rebuild loop, kills the hashbrown
+power-of-2 rehash cascade. Laptop bench gate (8845HS, `--profile
+profiling`, criterion n=800, median runs 2+3): **2.4936 ms → 1.4595 ms =
++70.9% sims/s**, uniform across n=100/400/800. perf report confirms
+mechanism — `reserve_rehash` 31.4% → 1.2%, out of top-5. Independent
+review `07_legal_moves_review.md` = MERGE-READY, all 8 checks pass.
+
+**Merge HELD** — §S178/§S180b live on vast; no master push, no FF-merge
+until §S178 close + vast cross-host (`9900X + 5080`) re-bench (same
+3-run discard-first protocol). If vast delta within ±5pp of laptop →
+FF-merge + push; if diverges >5pp → investigate L3-cache sensitivity
+(8845HS 16MB vs 9900X 64MB) before merge. Residual: `legal_moves_set`
+still #1 self-time (41.8%) post-fix → next perf wave targets the rebuild
+insert cost itself (TLS scratch / incremental legal-set; plan Option (c)).
+
 ---
 
 ## §66–§101 Classification Audit — quick-look table
