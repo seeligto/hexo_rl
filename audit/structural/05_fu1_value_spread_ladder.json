@@ -1,0 +1,1589 @@
+{
+  "meta": {
+    "script": "scripts/structural_diagnosis/fu1_value_spread_ladder.py",
+    "bank_source": "mcts_colony_probe.py (T3) build_colony_positions + build_extension_positions \u2014 reused verbatim",
+    "bank_fixture_sha256": "934204713620d171743820aea6907cf4e117ca97c69e50052b991a3fdcc23991",
+    "bank_realized": 40,
+    "n_colony": 20,
+    "n_extension": 20,
+    "encoding": "v6",
+    "wall_s": 2.3
+  },
+  "reproducibility_gate": {
+    "t3_ref": {
+      "v_colony": 0.1635,
+      "v_extension": -0.4539,
+      "v_spread": 0.6174
+    },
+    "fu1_anchor": {
+      "v_colony": 0.1635,
+      "v_extension": -0.4539,
+      "v_spread": 0.6173
+    },
+    "tol": 0.01,
+    "pass": true
+  },
+  "ladder": [
+    {
+      "label": "anchor_step0",
+      "step": 0,
+      "v_spread": 0.6173
+    },
+    {
+      "label": "step10k",
+      "step": 10000,
+      "v_spread": 0.2601
+    },
+    {
+      "label": "step20k",
+      "step": 20000,
+      "v_spread": -0.1103
+    },
+    {
+      "label": "step30k",
+      "step": 30000,
+      "v_spread": 0.1395
+    },
+    {
+      "label": "step40k",
+      "step": 40000,
+      "v_spread": -0.0506
+    },
+    {
+      "label": "step50k",
+      "step": 50000,
+      "v_spread": -0.0159
+    },
+    {
+      "label": "step53500",
+      "step": 53500,
+      "v_spread": 0.099
+    }
+  ],
+  "drift_signature": {
+    "verdict": "OSCILLATION",
+    "total_spread_loss": 0.5183,
+    "intervals": [
+      {
+        "from": 0,
+        "to": 10000,
+        "delta": -0.3572
+      },
+      {
+        "from": 10000,
+        "to": 20000,
+        "delta": -0.3704
+      },
+      {
+        "from": 20000,
+        "to": 30000,
+        "delta": 0.2498
+      },
+      {
+        "from": 30000,
+        "to": 40000,
+        "delta": -0.1901
+      },
+      {
+        "from": 40000,
+        "to": 50000,
+        "delta": 0.0347
+      },
+      {
+        "from": 50000,
+        "to": 53500,
+        "delta": 0.1149
+      }
+    ],
+    "max_single_interval_loss": 0.3704,
+    "max_single_interval_frac_of_total": 0.7146,
+    "monotone_non_increasing": false,
+    "max_single_interval_gain": 0.2498
+  },
+  "per_checkpoint": {
+    "anchor_step0": {
+      "ckpt_step_meta": null,
+      "mean_v_colony": 0.1635,
+      "mean_v_extension": -0.4539,
+      "std_v_colony": 0.7882,
+      "std_v_extension": 0.7151,
+      "v_spread": 0.6173,
+      "n_colony": 20,
+      "n_extension": 20,
+      "per_position": [
+        {
+          "name": "colony_00_stage6",
+          "pos_class": "colony",
+          "value": -0.178832
+        },
+        {
+          "name": "colony_01_stage8",
+          "pos_class": "colony",
+          "value": -0.505687
+        },
+        {
+          "name": "colony_02_stage10",
+          "pos_class": "colony",
+          "value": 0.672618
+        },
+        {
+          "name": "colony_03_stage12",
+          "pos_class": "colony",
+          "value": -0.382696
+        },
+        {
+          "name": "colony_04_stage14",
+          "pos_class": "colony",
+          "value": 0.683928
+        },
+        {
+          "name": "colony_05_stage16",
+          "pos_class": "colony",
+          "value": -0.656529
+        },
+        {
+          "name": "colony_06_stage18",
+          "pos_class": "colony",
+          "value": 0.85798
+        },
+        {
+          "name": "colony_07_stage20",
+          "pos_class": "colony",
+          "value": -0.999392
+        },
+        {
+          "name": "colony_08_stage22",
+          "pos_class": "colony",
+          "value": 0.999601
+        },
+        {
+          "name": "colony_09_stage24",
+          "pos_class": "colony",
+          "value": -0.999416
+        },
+        {
+          "name": "colony_10_stage26",
+          "pos_class": "colony",
+          "value": 0.998686
+        },
+        {
+          "name": "colony_11_stage28",
+          "pos_class": "colony",
+          "value": -0.975379
+        },
+        {
+          "name": "colony_12_stage30",
+          "pos_class": "colony",
+          "value": 0.999806
+        },
+        {
+          "name": "colony_13_stage32",
+          "pos_class": "colony",
+          "value": -0.9171
+        },
+        {
+          "name": "colony_14_stage34",
+          "pos_class": "colony",
+          "value": 0.999506
+        },
+        {
+          "name": "colony_15_stage36",
+          "pos_class": "colony",
+          "value": -0.409211
+        },
+        {
+          "name": "colony_16_stage38",
+          "pos_class": "colony",
+          "value": 0.941415
+        },
+        {
+          "name": "colony_17_stage40",
+          "pos_class": "colony",
+          "value": 0.593643
+        },
+        {
+          "name": "colony_18_stage42",
+          "pos_class": "colony",
+          "value": 0.93429
+        },
+        {
+          "name": "colony_19_stage44",
+          "pos_class": "colony",
+          "value": 0.612094
+        },
+        {
+          "name": "ext_00_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.852771
+        },
+        {
+          "name": "ext_01_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.852771
+        },
+        {
+          "name": "ext_02_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.852771
+        },
+        {
+          "name": "ext_03_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.852771
+        },
+        {
+          "name": "ext_04_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.77459
+        },
+        {
+          "name": "ext_05_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.77459
+        },
+        {
+          "name": "ext_06_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.77459
+        },
+        {
+          "name": "ext_07_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.77459
+        },
+        {
+          "name": "ext_08_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.847804
+        },
+        {
+          "name": "ext_09_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.847804
+        },
+        {
+          "name": "ext_10_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.847804
+        },
+        {
+          "name": "ext_11_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.847804
+        },
+        {
+          "name": "ext_12_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.76879
+        },
+        {
+          "name": "ext_13_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.76879
+        },
+        {
+          "name": "ext_14_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.76879
+        },
+        {
+          "name": "ext_15_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.76879
+        },
+        {
+          "name": "ext_16_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.974694
+        },
+        {
+          "name": "ext_17_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.974694
+        },
+        {
+          "name": "ext_18_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.974694
+        },
+        {
+          "name": "ext_19_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.974694
+        }
+      ]
+    },
+    "step10k": {
+      "ckpt_step_meta": 10000,
+      "mean_v_colony": 0.2116,
+      "mean_v_extension": -0.0485,
+      "std_v_colony": 0.6764,
+      "std_v_extension": 0.4576,
+      "v_spread": 0.2601,
+      "n_colony": 20,
+      "n_extension": 20,
+      "per_position": [
+        {
+          "name": "colony_00_stage6",
+          "pos_class": "colony",
+          "value": 0.100195
+        },
+        {
+          "name": "colony_01_stage8",
+          "pos_class": "colony",
+          "value": -0.238825
+        },
+        {
+          "name": "colony_02_stage10",
+          "pos_class": "colony",
+          "value": 0.67345
+        },
+        {
+          "name": "colony_03_stage12",
+          "pos_class": "colony",
+          "value": -0.156133
+        },
+        {
+          "name": "colony_04_stage14",
+          "pos_class": "colony",
+          "value": 0.871145
+        },
+        {
+          "name": "colony_05_stage16",
+          "pos_class": "colony",
+          "value": -0.183296
+        },
+        {
+          "name": "colony_06_stage18",
+          "pos_class": "colony",
+          "value": 0.876465
+        },
+        {
+          "name": "colony_07_stage20",
+          "pos_class": "colony",
+          "value": -0.886326
+        },
+        {
+          "name": "colony_08_stage22",
+          "pos_class": "colony",
+          "value": 0.992176
+        },
+        {
+          "name": "colony_09_stage24",
+          "pos_class": "colony",
+          "value": -0.897909
+        },
+        {
+          "name": "colony_10_stage26",
+          "pos_class": "colony",
+          "value": 0.923539
+        },
+        {
+          "name": "colony_11_stage28",
+          "pos_class": "colony",
+          "value": -0.742245
+        },
+        {
+          "name": "colony_12_stage30",
+          "pos_class": "colony",
+          "value": 0.996875
+        },
+        {
+          "name": "colony_13_stage32",
+          "pos_class": "colony",
+          "value": -0.62762
+        },
+        {
+          "name": "colony_14_stage34",
+          "pos_class": "colony",
+          "value": 0.988689
+        },
+        {
+          "name": "colony_15_stage36",
+          "pos_class": "colony",
+          "value": -0.299133
+        },
+        {
+          "name": "colony_16_stage38",
+          "pos_class": "colony",
+          "value": 0.852874
+        },
+        {
+          "name": "colony_17_stage40",
+          "pos_class": "colony",
+          "value": 0.098498
+        },
+        {
+          "name": "colony_18_stage42",
+          "pos_class": "colony",
+          "value": 0.876271
+        },
+        {
+          "name": "colony_19_stage44",
+          "pos_class": "colony",
+          "value": 0.014115
+        },
+        {
+          "name": "ext_00_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.403637
+        },
+        {
+          "name": "ext_01_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.320043
+        },
+        {
+          "name": "ext_02_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.320043
+        },
+        {
+          "name": "ext_03_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.320043
+        },
+        {
+          "name": "ext_04_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.181546
+        },
+        {
+          "name": "ext_05_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.181546
+        },
+        {
+          "name": "ext_06_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.181546
+        },
+        {
+          "name": "ext_07_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.181546
+        },
+        {
+          "name": "ext_08_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.229167
+        },
+        {
+          "name": "ext_09_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.229167
+        },
+        {
+          "name": "ext_10_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.229167
+        },
+        {
+          "name": "ext_11_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.229167
+        },
+        {
+          "name": "ext_12_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.34787
+        },
+        {
+          "name": "ext_13_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.34787
+        },
+        {
+          "name": "ext_14_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.34787
+        },
+        {
+          "name": "ext_15_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.34787
+        },
+        {
+          "name": "ext_16_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.857141
+        },
+        {
+          "name": "ext_17_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.857141
+        },
+        {
+          "name": "ext_18_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.857141
+        },
+        {
+          "name": "ext_19_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.857141
+        }
+      ]
+    },
+    "step20k": {
+      "ckpt_step_meta": 20000,
+      "mean_v_colony": 0.1469,
+      "mean_v_extension": 0.2572,
+      "std_v_colony": 0.6167,
+      "std_v_extension": 0.3878,
+      "v_spread": -0.1103,
+      "n_colony": 20,
+      "n_extension": 20,
+      "per_position": [
+        {
+          "name": "colony_00_stage6",
+          "pos_class": "colony",
+          "value": 0.068513
+        },
+        {
+          "name": "colony_01_stage8",
+          "pos_class": "colony",
+          "value": -0.099835
+        },
+        {
+          "name": "colony_02_stage10",
+          "pos_class": "colony",
+          "value": 0.39298
+        },
+        {
+          "name": "colony_03_stage12",
+          "pos_class": "colony",
+          "value": -0.054405
+        },
+        {
+          "name": "colony_04_stage14",
+          "pos_class": "colony",
+          "value": 0.486157
+        },
+        {
+          "name": "colony_05_stage16",
+          "pos_class": "colony",
+          "value": -0.224777
+        },
+        {
+          "name": "colony_06_stage18",
+          "pos_class": "colony",
+          "value": 0.467553
+        },
+        {
+          "name": "colony_07_stage20",
+          "pos_class": "colony",
+          "value": -0.934137
+        },
+        {
+          "name": "colony_08_stage22",
+          "pos_class": "colony",
+          "value": 0.957709
+        },
+        {
+          "name": "colony_09_stage24",
+          "pos_class": "colony",
+          "value": -0.968768
+        },
+        {
+          "name": "colony_10_stage26",
+          "pos_class": "colony",
+          "value": 0.941953
+        },
+        {
+          "name": "colony_11_stage28",
+          "pos_class": "colony",
+          "value": -0.715117
+        },
+        {
+          "name": "colony_12_stage30",
+          "pos_class": "colony",
+          "value": 0.999573
+        },
+        {
+          "name": "colony_13_stage32",
+          "pos_class": "colony",
+          "value": -0.541614
+        },
+        {
+          "name": "colony_14_stage34",
+          "pos_class": "colony",
+          "value": 0.999419
+        },
+        {
+          "name": "colony_15_stage36",
+          "pos_class": "colony",
+          "value": -0.200856
+        },
+        {
+          "name": "colony_16_stage38",
+          "pos_class": "colony",
+          "value": 0.732713
+        },
+        {
+          "name": "colony_17_stage40",
+          "pos_class": "colony",
+          "value": 0.037083
+        },
+        {
+          "name": "colony_18_stage42",
+          "pos_class": "colony",
+          "value": 0.6026
+        },
+        {
+          "name": "colony_19_stage44",
+          "pos_class": "colony",
+          "value": -0.008997
+        },
+        {
+          "name": "ext_00_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.052508
+        },
+        {
+          "name": "ext_01_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.052508
+        },
+        {
+          "name": "ext_02_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.052508
+        },
+        {
+          "name": "ext_03_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.052508
+        },
+        {
+          "name": "ext_04_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.044809
+        },
+        {
+          "name": "ext_05_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.044809
+        },
+        {
+          "name": "ext_06_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.044809
+        },
+        {
+          "name": "ext_07_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.044809
+        },
+        {
+          "name": "ext_08_run4_ax2",
+          "pos_class": "extension_4",
+          "value": 0.001012
+        },
+        {
+          "name": "ext_09_run4_ax2",
+          "pos_class": "extension_4",
+          "value": 0.001012
+        },
+        {
+          "name": "ext_10_run4_ax2",
+          "pos_class": "extension_4",
+          "value": 0.001012
+        },
+        {
+          "name": "ext_11_run4_ax2",
+          "pos_class": "extension_4",
+          "value": 0.001012
+        },
+        {
+          "name": "ext_12_run5_ax0",
+          "pos_class": "extension_5",
+          "value": 0.297838
+        },
+        {
+          "name": "ext_13_run5_ax0",
+          "pos_class": "extension_5",
+          "value": 0.297838
+        },
+        {
+          "name": "ext_14_run5_ax0",
+          "pos_class": "extension_5",
+          "value": 0.297838
+        },
+        {
+          "name": "ext_15_run5_ax0",
+          "pos_class": "extension_5",
+          "value": 0.297838
+        },
+        {
+          "name": "ext_16_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.994608
+        },
+        {
+          "name": "ext_17_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.994608
+        },
+        {
+          "name": "ext_18_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.994608
+        },
+        {
+          "name": "ext_19_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.994608
+        }
+      ]
+    },
+    "step30k": {
+      "ckpt_step_meta": 30000,
+      "mean_v_colony": 0.107,
+      "mean_v_extension": -0.0326,
+      "std_v_colony": 0.6775,
+      "std_v_extension": 0.5339,
+      "v_spread": 0.1395,
+      "n_colony": 20,
+      "n_extension": 20,
+      "per_position": [
+        {
+          "name": "colony_00_stage6",
+          "pos_class": "colony",
+          "value": 0.095208
+        },
+        {
+          "name": "colony_01_stage8",
+          "pos_class": "colony",
+          "value": -0.008458
+        },
+        {
+          "name": "colony_02_stage10",
+          "pos_class": "colony",
+          "value": 0.348916
+        },
+        {
+          "name": "colony_03_stage12",
+          "pos_class": "colony",
+          "value": 0.0451
+        },
+        {
+          "name": "colony_04_stage14",
+          "pos_class": "colony",
+          "value": 0.72132
+        },
+        {
+          "name": "colony_05_stage16",
+          "pos_class": "colony",
+          "value": -0.330352
+        },
+        {
+          "name": "colony_06_stage18",
+          "pos_class": "colony",
+          "value": 0.661708
+        },
+        {
+          "name": "colony_07_stage20",
+          "pos_class": "colony",
+          "value": -0.983013
+        },
+        {
+          "name": "colony_08_stage22",
+          "pos_class": "colony",
+          "value": 0.982326
+        },
+        {
+          "name": "colony_09_stage24",
+          "pos_class": "colony",
+          "value": -0.994257
+        },
+        {
+          "name": "colony_10_stage26",
+          "pos_class": "colony",
+          "value": 0.983766
+        },
+        {
+          "name": "colony_11_stage28",
+          "pos_class": "colony",
+          "value": -0.98446
+        },
+        {
+          "name": "colony_12_stage30",
+          "pos_class": "colony",
+          "value": 0.99965
+        },
+        {
+          "name": "colony_13_stage32",
+          "pos_class": "colony",
+          "value": -0.886148
+        },
+        {
+          "name": "colony_14_stage34",
+          "pos_class": "colony",
+          "value": 0.999538
+        },
+        {
+          "name": "colony_15_stage36",
+          "pos_class": "colony",
+          "value": -0.470734
+        },
+        {
+          "name": "colony_16_stage38",
+          "pos_class": "colony",
+          "value": 0.404248
+        },
+        {
+          "name": "colony_17_stage40",
+          "pos_class": "colony",
+          "value": 0.069751
+        },
+        {
+          "name": "colony_18_stage42",
+          "pos_class": "colony",
+          "value": 0.41525
+        },
+        {
+          "name": "colony_19_stage44",
+          "pos_class": "colony",
+          "value": 0.069751
+        },
+        {
+          "name": "ext_00_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.239528
+        },
+        {
+          "name": "ext_01_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.239528
+        },
+        {
+          "name": "ext_02_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.239528
+        },
+        {
+          "name": "ext_03_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.239528
+        },
+        {
+          "name": "ext_04_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.317352
+        },
+        {
+          "name": "ext_05_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.317352
+        },
+        {
+          "name": "ext_06_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.317352
+        },
+        {
+          "name": "ext_07_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.317352
+        },
+        {
+          "name": "ext_08_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.521386
+        },
+        {
+          "name": "ext_09_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.521386
+        },
+        {
+          "name": "ext_10_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.521386
+        },
+        {
+          "name": "ext_11_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.521386
+        },
+        {
+          "name": "ext_12_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.081518
+        },
+        {
+          "name": "ext_13_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.081518
+        },
+        {
+          "name": "ext_14_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.081518
+        },
+        {
+          "name": "ext_15_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.081518
+        },
+        {
+          "name": "ext_16_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.996909
+        },
+        {
+          "name": "ext_17_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.996909
+        },
+        {
+          "name": "ext_18_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.996909
+        },
+        {
+          "name": "ext_19_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.996909
+        }
+      ]
+    },
+    "step40k": {
+      "ckpt_step_meta": 40000,
+      "mean_v_colony": 0.1936,
+      "mean_v_extension": 0.2442,
+      "std_v_colony": 0.7563,
+      "std_v_extension": 0.4539,
+      "v_spread": -0.0506,
+      "n_colony": 20,
+      "n_extension": 20,
+      "per_position": [
+        {
+          "name": "colony_00_stage6",
+          "pos_class": "colony",
+          "value": 0.355421
+        },
+        {
+          "name": "colony_01_stage8",
+          "pos_class": "colony",
+          "value": -0.305392
+        },
+        {
+          "name": "colony_02_stage10",
+          "pos_class": "colony",
+          "value": 0.557761
+        },
+        {
+          "name": "colony_03_stage12",
+          "pos_class": "colony",
+          "value": 0.034359
+        },
+        {
+          "name": "colony_04_stage14",
+          "pos_class": "colony",
+          "value": 0.914066
+        },
+        {
+          "name": "colony_05_stage16",
+          "pos_class": "colony",
+          "value": -0.13141
+        },
+        {
+          "name": "colony_06_stage18",
+          "pos_class": "colony",
+          "value": 0.893878
+        },
+        {
+          "name": "colony_07_stage20",
+          "pos_class": "colony",
+          "value": -0.996545
+        },
+        {
+          "name": "colony_08_stage22",
+          "pos_class": "colony",
+          "value": 0.996249
+        },
+        {
+          "name": "colony_09_stage24",
+          "pos_class": "colony",
+          "value": -0.999241
+        },
+        {
+          "name": "colony_10_stage26",
+          "pos_class": "colony",
+          "value": 0.989426
+        },
+        {
+          "name": "colony_11_stage28",
+          "pos_class": "colony",
+          "value": -0.982575
+        },
+        {
+          "name": "colony_12_stage30",
+          "pos_class": "colony",
+          "value": 0.99956
+        },
+        {
+          "name": "colony_13_stage32",
+          "pos_class": "colony",
+          "value": -0.918163
+        },
+        {
+          "name": "colony_14_stage34",
+          "pos_class": "colony",
+          "value": 0.999664
+        },
+        {
+          "name": "colony_15_stage36",
+          "pos_class": "colony",
+          "value": -0.619079
+        },
+        {
+          "name": "colony_16_stage38",
+          "pos_class": "colony",
+          "value": 0.93452
+        },
+        {
+          "name": "colony_17_stage40",
+          "pos_class": "colony",
+          "value": 0.165109
+        },
+        {
+          "name": "colony_18_stage42",
+          "pos_class": "colony",
+          "value": 0.974933
+        },
+        {
+          "name": "colony_19_stage44",
+          "pos_class": "colony",
+          "value": 0.00848
+        },
+        {
+          "name": "ext_00_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.215503
+        },
+        {
+          "name": "ext_01_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.215503
+        },
+        {
+          "name": "ext_02_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.215503
+        },
+        {
+          "name": "ext_03_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.215503
+        },
+        {
+          "name": "ext_04_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.126542
+        },
+        {
+          "name": "ext_05_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.126542
+        },
+        {
+          "name": "ext_06_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.126542
+        },
+        {
+          "name": "ext_07_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.126542
+        },
+        {
+          "name": "ext_08_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.172083
+        },
+        {
+          "name": "ext_09_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.172083
+        },
+        {
+          "name": "ext_10_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.17834
+        },
+        {
+          "name": "ext_11_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.17834
+        },
+        {
+          "name": "ext_12_run5_ax0",
+          "pos_class": "extension_5",
+          "value": 0.485172
+        },
+        {
+          "name": "ext_13_run5_ax0",
+          "pos_class": "extension_5",
+          "value": 0.485172
+        },
+        {
+          "name": "ext_14_run5_ax0",
+          "pos_class": "extension_5",
+          "value": 0.485172
+        },
+        {
+          "name": "ext_15_run5_ax0",
+          "pos_class": "extension_5",
+          "value": 0.485172
+        },
+        {
+          "name": "ext_16_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.999801
+        },
+        {
+          "name": "ext_17_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.999801
+        },
+        {
+          "name": "ext_18_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.999801
+        },
+        {
+          "name": "ext_19_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 0.999801
+        }
+      ]
+    },
+    "step50k": {
+      "ckpt_step_meta": 50000,
+      "mean_v_colony": 0.0837,
+      "mean_v_extension": 0.0996,
+      "std_v_colony": 0.684,
+      "std_v_extension": 0.4742,
+      "v_spread": -0.0159,
+      "n_colony": 20,
+      "n_extension": 20,
+      "per_position": [
+        {
+          "name": "colony_00_stage6",
+          "pos_class": "colony",
+          "value": 0.514781
+        },
+        {
+          "name": "colony_01_stage8",
+          "pos_class": "colony",
+          "value": -0.479888
+        },
+        {
+          "name": "colony_02_stage10",
+          "pos_class": "colony",
+          "value": 0.186557
+        },
+        {
+          "name": "colony_03_stage12",
+          "pos_class": "colony",
+          "value": -0.099358
+        },
+        {
+          "name": "colony_04_stage14",
+          "pos_class": "colony",
+          "value": 0.753305
+        },
+        {
+          "name": "colony_05_stage16",
+          "pos_class": "colony",
+          "value": -0.337336
+        },
+        {
+          "name": "colony_06_stage18",
+          "pos_class": "colony",
+          "value": 0.649209
+        },
+        {
+          "name": "colony_07_stage20",
+          "pos_class": "colony",
+          "value": -0.979019
+        },
+        {
+          "name": "colony_08_stage22",
+          "pos_class": "colony",
+          "value": 0.74835
+        },
+        {
+          "name": "colony_09_stage24",
+          "pos_class": "colony",
+          "value": -0.988795
+        },
+        {
+          "name": "colony_10_stage26",
+          "pos_class": "colony",
+          "value": 0.922197
+        },
+        {
+          "name": "colony_11_stage28",
+          "pos_class": "colony",
+          "value": -0.952024
+        },
+        {
+          "name": "colony_12_stage30",
+          "pos_class": "colony",
+          "value": 0.999037
+        },
+        {
+          "name": "colony_13_stage32",
+          "pos_class": "colony",
+          "value": -0.73865
+        },
+        {
+          "name": "colony_14_stage34",
+          "pos_class": "colony",
+          "value": 0.999067
+        },
+        {
+          "name": "colony_15_stage36",
+          "pos_class": "colony",
+          "value": -0.555566
+        },
+        {
+          "name": "colony_16_stage38",
+          "pos_class": "colony",
+          "value": 0.550426
+        },
+        {
+          "name": "colony_17_stage40",
+          "pos_class": "colony",
+          "value": -0.093147
+        },
+        {
+          "name": "colony_18_stage42",
+          "pos_class": "colony",
+          "value": 0.657821
+        },
+        {
+          "name": "colony_19_stage44",
+          "pos_class": "colony",
+          "value": -0.082636
+        },
+        {
+          "name": "ext_00_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.049575
+        },
+        {
+          "name": "ext_01_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.049575
+        },
+        {
+          "name": "ext_02_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.049575
+        },
+        {
+          "name": "ext_03_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.049575
+        },
+        {
+          "name": "ext_04_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.03612
+        },
+        {
+          "name": "ext_05_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.03612
+        },
+        {
+          "name": "ext_06_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.03612
+        },
+        {
+          "name": "ext_07_run4_ax1",
+          "pos_class": "extension_4",
+          "value": 0.03612
+        },
+        {
+          "name": "ext_08_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.400627
+        },
+        {
+          "name": "ext_09_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.400627
+        },
+        {
+          "name": "ext_10_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.406657
+        },
+        {
+          "name": "ext_11_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.406657
+        },
+        {
+          "name": "ext_12_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.084826
+        },
+        {
+          "name": "ext_13_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.084826
+        },
+        {
+          "name": "ext_14_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.084826
+        },
+        {
+          "name": "ext_15_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.084826
+        },
+        {
+          "name": "ext_16_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 1.0
+        },
+        {
+          "name": "ext_17_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 1.0
+        },
+        {
+          "name": "ext_18_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 1.0
+        },
+        {
+          "name": "ext_19_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 1.0
+        }
+      ]
+    },
+    "step53500": {
+      "ckpt_step_meta": 53500,
+      "mean_v_colony": 0.1027,
+      "mean_v_extension": 0.0036,
+      "std_v_colony": 0.6634,
+      "std_v_extension": 0.5154,
+      "v_spread": 0.099,
+      "n_colony": 20,
+      "n_extension": 20,
+      "per_position": [
+        {
+          "name": "colony_00_stage6",
+          "pos_class": "colony",
+          "value": 0.460097
+        },
+        {
+          "name": "colony_01_stage8",
+          "pos_class": "colony",
+          "value": -0.476919
+        },
+        {
+          "name": "colony_02_stage10",
+          "pos_class": "colony",
+          "value": 0.440922
+        },
+        {
+          "name": "colony_03_stage12",
+          "pos_class": "colony",
+          "value": 0.130942
+        },
+        {
+          "name": "colony_04_stage14",
+          "pos_class": "colony",
+          "value": 0.726825
+        },
+        {
+          "name": "colony_05_stage16",
+          "pos_class": "colony",
+          "value": -0.174407
+        },
+        {
+          "name": "colony_06_stage18",
+          "pos_class": "colony",
+          "value": 0.690087
+        },
+        {
+          "name": "colony_07_stage20",
+          "pos_class": "colony",
+          "value": -0.960835
+        },
+        {
+          "name": "colony_08_stage22",
+          "pos_class": "colony",
+          "value": 0.987232
+        },
+        {
+          "name": "colony_09_stage24",
+          "pos_class": "colony",
+          "value": -0.980626
+        },
+        {
+          "name": "colony_10_stage26",
+          "pos_class": "colony",
+          "value": 0.959851
+        },
+        {
+          "name": "colony_11_stage28",
+          "pos_class": "colony",
+          "value": -0.827768
+        },
+        {
+          "name": "colony_12_stage30",
+          "pos_class": "colony",
+          "value": 0.999753
+        },
+        {
+          "name": "colony_13_stage32",
+          "pos_class": "colony",
+          "value": -0.602274
+        },
+        {
+          "name": "colony_14_stage34",
+          "pos_class": "colony",
+          "value": 0.999678
+        },
+        {
+          "name": "colony_15_stage36",
+          "pos_class": "colony",
+          "value": -0.484804
+        },
+        {
+          "name": "colony_16_stage38",
+          "pos_class": "colony",
+          "value": 0.027424
+        },
+        {
+          "name": "colony_17_stage40",
+          "pos_class": "colony",
+          "value": -0.034019
+        },
+        {
+          "name": "colony_18_stage42",
+          "pos_class": "colony",
+          "value": 0.438745
+        },
+        {
+          "name": "colony_19_stage44",
+          "pos_class": "colony",
+          "value": -0.266695
+        },
+        {
+          "name": "ext_00_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.340173
+        },
+        {
+          "name": "ext_01_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.340173
+        },
+        {
+          "name": "ext_02_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.340173
+        },
+        {
+          "name": "ext_03_run4_ax0",
+          "pos_class": "extension_4",
+          "value": -0.340173
+        },
+        {
+          "name": "ext_04_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.048944
+        },
+        {
+          "name": "ext_05_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.048944
+        },
+        {
+          "name": "ext_06_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.048944
+        },
+        {
+          "name": "ext_07_run4_ax1",
+          "pos_class": "extension_4",
+          "value": -0.048944
+        },
+        {
+          "name": "ext_08_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.419437
+        },
+        {
+          "name": "ext_09_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.419437
+        },
+        {
+          "name": "ext_10_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.43615
+        },
+        {
+          "name": "ext_11_run4_ax2",
+          "pos_class": "extension_4",
+          "value": -0.43615
+        },
+        {
+          "name": "ext_12_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.164844
+        },
+        {
+          "name": "ext_13_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.164844
+        },
+        {
+          "name": "ext_14_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.164844
+        },
+        {
+          "name": "ext_15_run5_ax0",
+          "pos_class": "extension_5",
+          "value": -0.164844
+        },
+        {
+          "name": "ext_16_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 1.0
+        },
+        {
+          "name": "ext_17_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 1.0
+        },
+        {
+          "name": "ext_18_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 1.0
+        },
+        {
+          "name": "ext_19_run5_ax1",
+          "pos_class": "extension_5",
+          "value": 1.0
+        }
+      ]
+    }
+  }
+}
