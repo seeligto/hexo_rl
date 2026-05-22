@@ -728,3 +728,45 @@ fn test_topk_fast_path_keeps_all_when_under_cap() {
     assert_eq!(chosen_set, cells.iter().copied().collect(),
         "fast path must include every legal move");
 }
+
+#[test]
+fn test_topk_child_order_independent_of_hashset_capacity() {
+    // §S182 regression guard. `pick_topk_children` must emit children in a
+    // canonical order that does NOT depend on the `FxHashSet`'s capacity or
+    // iteration order. §S182's `legal_moves_set` capacity-reserve changed the
+    // hashbrown table layout; before the fix the `n_legal <= K` path collected
+    // children in raw iteration order, leaking that layout into MCTS.
+    use fxhash::FxHashSet;
+    use crate::board::HALF;
+    use super::backup::pick_topk_children;
+
+    let coords: Vec<(i32, i32)> =
+        (-3..=3).flat_map(|q| (-3..=3).map(move |r| (q, r))).collect();
+
+    // Same elements, deliberately different table capacities → the two sets
+    // iterate in different orders (exactly the §S182 scenario).
+    let mut set_small: FxHashSet<(i32, i32)> = FxHashSet::default();
+    for &c in &coords { set_small.insert(c); }
+    let mut set_large: FxHashSet<(i32, i32)> = FxHashSet::default();
+    set_large.reserve(4096);
+    for &c in &coords { set_large.insert(c); }
+    assert_eq!(set_small, set_large, "the two sets must hold identical moves");
+
+    // Non-uniform policy so there is a real prior ordering to canonicalize.
+    let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+    let mut policy = vec![0.0f32; n_actions];
+    for (i, p) in policy.iter_mut().enumerate() {
+        *p = ((i % 17) as f32) * 0.013;
+    }
+
+    let (chosen_small, _) =
+        pick_topk_children(&set_small, 0, 0, &policy, BOARD_SIZE as i32, HALF);
+    let (chosen_large, _) =
+        pick_topk_children(&set_large, 0, 0, &policy, BOARD_SIZE as i32, HALF);
+
+    assert_eq!(
+        chosen_small, chosen_large,
+        "pick_topk_children child ORDER must be independent of FxHashSet \
+         capacity / iteration order (§S182 regression — see backup.rs fn-doc)"
+    );
+}

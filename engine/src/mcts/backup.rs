@@ -39,19 +39,23 @@ pub fn pool_overflow_count() -> u64 {
 
 /// Pick up to `MAX_CHILDREN_PER_NODE` children for a leaf expansion.
 ///
-/// Returns `(chosen, sort_used)`:
-/// * `chosen` — `Vec<((q, r), prior)>`, length `min(legal_moves.len(), K)`.
-/// * `sort_used` — `true` when the slow path (sort + truncate) ran,
-///   `false` for the fast path. Exposed only so unit tests can assert
-///   the fast path is taken when `legal_moves.len() <= K`.
+/// Returns `(chosen, topk_truncated)`:
+/// * `chosen` — `Vec<((q, r), prior)>`, length `min(legal_moves.len(), K)`,
+///   ALWAYS ordered by `(prior desc, window_flat_idx asc)`.
+/// * `topk_truncated` — `true` when `n_legal > K` and the Top-K cap dropped
+///   the lowest-prior moves; `false` otherwise. (`false` for `n_legal <= K`,
+///   so unit tests asserting the no-truncation case still hold.)
 ///
-/// Fast path (`n_legal <= K`): emit every legal move in HashSet iteration
-/// order with its policy prior (or `1/n_ch` fallback for out-of-window
-/// cells). Identical to the pre-cap behaviour.
-///
-/// Sort path (`n_legal > K`): order by `(prior desc, window_flat_idx asc)`
-/// and take the top K. The flat-index tie-break is what makes the truncated
-/// set deterministic regardless of `FxHashSet` iteration order.
+/// Canonical order — independent of `FxHashSet` iteration order. `legal_moves`
+/// is an `FxHashSet`; its iteration order is a hashbrown table-layout artifact
+/// (capacity + insertion order), NOT a semantic move order. Emitting children
+/// in raw iteration order leaked that layout into the MCTS child array and
+/// hence into `pick_best_puct` tie-breaking ("first equal score wins"). §S182's
+/// `legal_moves_set` capacity-reserve changed the layout and silently shifted
+/// search behaviour (mcts_mean_depth 3.4 -> 2.5 from the bootstrap anchor).
+/// Both the small-set and the truncated case now sort by
+/// `(prior desc, window_flat_idx asc)`; the flat-index tie-break makes the
+/// child array fully deterministic regardless of `FxHashSet` capacity.
 ///
 /// Out-of-window cells (`window_flat_idx == usize::MAX`) get sort prior
 /// `0.0` so they sink to the bottom of the slow path; in the fast path
@@ -75,27 +79,15 @@ pub(crate) fn pick_topk_children(
     let n_legal = legal_moves.len();
     let n_ch = n_legal.min(MAX_CHILDREN_PER_NODE);
 
-    if n_legal <= MAX_CHILDREN_PER_NODE {
-        let chosen: Vec<((i32, i32), f32)> = legal_moves
-            .iter()
-            .map(|&(q, r)| {
-                let flat = Board::window_flat_idx_at_geom(q, r, cq, cr, trunk_sz, half);
-                let prior = if flat < policy.len() {
-                    policy[flat]
-                } else {
-                    1.0 / n_ch as f32
-                };
-                ((q, r), prior)
-            })
-            .collect();
-        return (chosen, false);
-    }
-
-    // §P5: collapse the prior double-allocation (sort buffer + final `chosen`)
-    // into a single pre-sized `chosen` Vec. Sort path now allocates exactly one
-    // Vec of `((q,r), sort_prior, flat)` triples (needed for sort + tie-break),
-    // sorts + truncates, then drains in order into a single K-sized `chosen`
-    // Vec built up-front. No intermediate `.collect()` re-allocation.
+    // Single canonical path for every node size. Collect `((q,r), sort_prior,
+    // flat)` triples, sort by `(prior desc, flat asc)`, truncate to the Top-K
+    // cap (a no-op when `n_legal <= MAX_CHILDREN_PER_NODE`), then drain in
+    // order into the final `chosen` Vec. Sorting unconditionally is what makes
+    // the child array independent of `FxHashSet` iteration order — see the
+    // fn-doc: the previous `n_legal <= K` fast path emitted children in raw
+    // hash order, so §S182's capacity-reserve perturbed search behaviour.
+    // The sort is O(K log K), K <= MAX_CHILDREN_PER_NODE — negligible beside
+    // the per-leaf NN forward that dominates expansion cost.
     let mut all: Vec<((i32, i32), f32, usize)> = legal_moves
         .iter()
         .map(|&(q, r)| {
@@ -122,7 +114,7 @@ pub(crate) fn pick_topk_children(
         chosen.push(((q, r), prior));
     }
 
-    (chosen, true)
+    (chosen, n_legal > MAX_CHILDREN_PER_NODE)
 }
 
 impl MCTSTree {
