@@ -57,6 +57,7 @@ from hexo_rl.encoding import resolve_from_config
 from hexo_rl.monitoring.alert_rules import (
     evaluate_eval_complete_alerts,
     evaluate_training_step_alerts,
+    evaluate_value_spread_alerts,
 )
 from hexo_rl.monitoring.config import MonitoringConfig
 
@@ -154,6 +155,12 @@ class TerminalDashboard:
             # Sparkline buffers (last 30 readings).
             "_value_probe_decisive_hist": collections.deque(maxlen=30),
             "_value_probe_draw_hist":     collections.deque(maxlen=30),
+            # ── §S181 PR-A — value-spread colony-capture canary ────────────
+            "value_spread":         None,
+            "value_spread_colony":  None,
+            "value_spread_ext":     None,
+            "value_spread_step":    None,
+            "_value_spread_hist":   collections.deque(maxlen=30),
             "buffer_corpus_fraction":     None,
             "buffer_draw_target_fraction": None,
             "buffer_six_terminal_fraction": None,
@@ -301,6 +308,18 @@ class TerminalDashboard:
                 self._state["_value_probe_draw_hist"].append(float(w))
             return
 
+        if event == "value_spread":
+            # §S181 PR-A — colony-capture canary. Anchor V_spread = +0.617;
+            # crossing +0.20 = value-head capture (FU-2 abort gate).
+            sp = payload.get("spread")
+            self._state["value_spread"]        = sp
+            self._state["value_spread_colony"] = payload.get("mean_colony")
+            self._state["value_spread_ext"]    = payload.get("mean_ext")
+            self._state["value_spread_step"]   = payload.get("step")
+            if sp is not None and isinstance(sp, (int, float)) and math.isfinite(sp):
+                self._state["_value_spread_hist"].append(float(sp))
+            return
+
         if event == "buffer_composition":
             for key, dst in (
                 ("corpus_fraction",          "buffer_corpus_fraction"),
@@ -354,6 +373,10 @@ class TerminalDashboard:
 
         if event == "eval_complete":
             for msg in evaluate_eval_complete_alerts(payload):
+                self._add_alert(expiry, msg)
+
+        if event == "value_spread":
+            for msg in evaluate_value_spread_alerts(payload):
                 self._add_alert(expiry, msg)
 
         # Expire old alerts
@@ -571,6 +594,7 @@ class TerminalDashboard:
         instr_tbl: Table | None = None
         if (
             s["value_probe_step"] is not None
+            or s["value_spread_step"] is not None
             or s["buffer_corpus_fraction"] is not None
             or s["mv_median_range"] is not None
             or s["worker_draw_rates"]
@@ -607,6 +631,36 @@ class TerminalDashboard:
                 f"draw={w_str} {w_spark}  │  "
                 f"step={vp_step}  [dim](class-2: decisive→-0.5 = collapse)[/dim]"
             )
+
+            # §S181 PR-A — value-spread colony-capture canary. Anchor +0.617;
+            # < +0.20 abort gate (FU-2), < +0.30 WARNING.
+            if s["value_spread_step"] is not None:
+                vs = s["value_spread"]
+                vs_col = s["value_spread_colony"]
+                vs_ext = s["value_spread_ext"]
+                vs_str = (f"{vs:+.3f}"
+                          if isinstance(vs, (int, float)) and vs == vs
+                          else _EM_DASH)
+                if isinstance(vs, (int, float)) and vs == vs and vs < 0.20:
+                    vs_styled = f"[bold red]{vs_str}[/bold red]"
+                elif isinstance(vs, (int, float)) and vs == vs and vs < 0.30:
+                    vs_styled = f"[bold yellow]{vs_str}[/bold yellow]"
+                else:
+                    vs_styled = vs_str
+                vs_spark = _spark(s["_value_spread_hist"])
+                vs_step = _fmt_int(s["value_spread_step"])
+                col_str = (f"{vs_col:+.3f}"
+                           if isinstance(vs_col, (int, float)) and vs_col == vs_col
+                           else _EM_DASH)
+                ext_str = (f"{vs_ext:+.3f}"
+                           if isinstance(vs_ext, (int, float)) and vs_ext == vs_ext
+                           else _EM_DASH)
+                instr_tbl.add_row(
+                    f"[bold]value-spread canary[/bold]  "
+                    f"spread={vs_styled} {vs_spark}  │  "
+                    f"V(colony)={col_str}  V(ext)={ext_str}  │  "
+                    f"step={vs_step}  [dim](abort<+0.20; anchor +0.617)[/dim]"
+                )
 
             # Buffer composition row.
             corp = s["buffer_corpus_fraction"]

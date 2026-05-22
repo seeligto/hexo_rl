@@ -979,6 +979,16 @@ class Trainer:
             checkpoint_path=str(ckpt_path),
         )
 
+        # §S181 PR-A — value-spread colony-capture canary. Fires on every
+        # checkpoint save (not in the inner loop). Fire-and-forget: never
+        # raises, restores model train mode internally.
+        try:
+            from hexo_rl.monitoring.value_spread_canary import fire_canary
+            fire_canary(self.model, self.step, self.device)
+        except Exception as exc:  # noqa: BLE001 — canary must never break a save
+            log.warning("value_spread_canary_dispatch_failed",
+                        step=self.step, error=str(exc))
+
         return ckpt_path
 
     @classmethod

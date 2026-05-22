@@ -93,6 +93,26 @@ def check_sealbot_gate_failed(payload: dict) -> Optional[str]:
     return None
 
 
+def check_value_spread_canary(payload: dict) -> Optional[str]:
+    """``value_spread`` payload — colony-capture canary (§S181 PR-A / FU-1).
+
+    The value-head colony/extension discriminator. Anchor V_spread = +0.617;
+    a healthy head stays high. FU-1 pinned the gates:
+      * SOFT-ABORT below +0.20 — the FU-2 abort gate; value head captured.
+      * WARNING  below +0.30 — discriminator degrading.
+    Canary only — the message routes to the operator, never auto-aborts.
+    """
+    spread = payload.get("spread")
+    if spread is None or not isinstance(spread, (int, float)) or spread != spread:
+        return None
+    if spread < 0.20:
+        return (f"SOFT-ABORT: value_spread {spread:+.3f} < +0.20 — value-head "
+                "colony capture (FU-2 abort gate)")
+    if spread < 0.30:
+        return f"WARNING: value_spread {spread:+.3f} < +0.30 — discriminator degrading"
+    return None
+
+
 # ── Aggregators ──────────────────────────────────────────────────────────
 
 
@@ -121,6 +141,15 @@ def evaluate_eval_complete_alerts(payload: dict) -> list[str]:
     """Run every ``eval_complete`` rule, returning fired messages."""
     out: list[str] = []
     msg = check_sealbot_gate_failed(payload)
+    if msg is not None:
+        out.append(msg)
+    return out
+
+
+def evaluate_value_spread_alerts(payload: dict) -> list[str]:
+    """Run every ``value_spread`` rule, returning fired messages."""
+    out: list[str] = []
+    msg = check_value_spread_canary(payload)
     if msg is not None:
         out.append(msg)
     return out
