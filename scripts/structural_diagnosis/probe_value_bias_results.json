@@ -1,0 +1,701 @@
+{
+  "meta": {
+    "script": "scripts/structural_diagnosis/probe_value_bias.py",
+    "anchor": "checkpoints/bootstrap_model_v6.pt",
+    "anchor_sha_prefix": "7ab77d2c",
+    "encoding": "v6",
+    "n_colony": 50,
+    "n_extension": 50,
+    "fresh_init_note": "fresh HexTacToeNet(encoding='v6') seed=20260522; the quarantine random-init file is v6w25 arch \u2014 not arch-compatible with the v6 anchor, cannot be the floor"
+  },
+  "corpus_game_stats": {
+    "_skipped": 0,
+    "_total_games": 6857,
+    "sub_1000": {
+      "n_games": 1829,
+      "median_game_len": 41.0,
+      "mean_game_len": 52.36358665937671,
+      "mean_max_chain": 5.4215418261345,
+      "mean_pairwise_dist_winline": 4.292279583657942,
+      "mean_win_stones": 24.243849097867688,
+      "p1_win_rate": 0.5500273373428103,
+      "p1_win_ci95": [
+        0.527146168704218,
+        0.5726987933481492
+      ],
+      "frac_winline_extension_ge5": 0.900492072170585,
+      "frac_winline_compact_mpd_le2p6": 0.15910333515582287
+    },
+    "1000_1200": {
+      "n_games": 3872,
+      "median_game_len": 49.0,
+      "mean_game_len": 61.600723140495866,
+      "mean_max_chain": 5.4914772727272725,
+      "mean_pairwise_dist_winline": 5.204476317791583,
+      "mean_win_stones": 28.534349173553718,
+      "p1_win_rate": 0.5485537190082644,
+      "p1_win_ci95": [
+        0.5328385261103895,
+        0.5641726623757446
+      ],
+      "frac_winline_extension_ge5": 0.912448347107438,
+      "frac_winline_compact_mpd_le2p6": 0.14979338842975207
+    },
+    "1200_1400": {
+      "n_games": 1125,
+      "median_game_len": 59.0,
+      "mean_game_len": 80.21866666666666,
+      "mean_max_chain": 5.621333333333333,
+      "mean_pairwise_dist_winline": 6.861455120881954,
+      "mean_win_stones": 38.11822222222222,
+      "p1_win_rate": 0.5173333333333333,
+      "p1_win_ci95": [
+        0.4881236218793098,
+        0.5464250694516971
+      ],
+      "frac_winline_extension_ge5": 0.9342222222222222,
+      "frac_winline_compact_mpd_le2p6": 0.10933333333333334
+    },
+    "1400_plus": {
+      "n_games": 31,
+      "median_game_len": 89.0,
+      "mean_game_len": 106.74193548387096,
+      "mean_max_chain": 6.064516129032258,
+      "mean_pairwise_dist_winline": 8.199546818774909,
+      "mean_win_stones": 53.87096774193548,
+      "p1_win_rate": 0.5161290322580645,
+      "p1_win_ci95": [
+        0.3484011828697317,
+        0.6803001396872116
+      ],
+      "frac_winline_extension_ge5": 1.0,
+      "frac_winline_compact_mpd_le2p6": 0.03225806451612903
+    },
+    "_all": {
+      "n_games": 6857,
+      "median_game_len": 49.0,
+      "mean_game_len": 62.395508239754996,
+      "mean_max_chain": 5.496718681639201,
+      "mean_pairwise_dist_winline": 5.24655601915905,
+      "mean_win_stones": 29.076855767828498,
+      "p1_win_rate": 0.5436779932915269,
+      "p1_win_ci95": [
+        0.5318673070997515,
+        0.555439766131614
+      ],
+      "frac_winline_extension_ge5": 0.9132273589033105,
+      "frac_winline_compact_mpd_le2p6": 0.14510718973311945
+    }
+  },
+  "corpus_position_stats": {
+    "sampled_positions": 40000,
+    "stone_sets_classified": 71703,
+    "frac_extension_ge4": 0.499755937687405,
+    "frac_colony_compact": 0.046455517900227325,
+    "frac_neither": 0.45378854441236766,
+    "mean_weight_extension": 0.014181644296190395,
+    "mean_weight_colony": 0.019193649537439444,
+    "max_chain_histogram": {
+      "1": 1975,
+      "2": 12088,
+      "3": 21806,
+      "4": 31920,
+      "5": 3914
+    },
+    "definitions": {
+      "extension": "max straight chain >= 4 (no gaps) in a player's stone set",
+      "colony": "mean pairwise hex dist <= 2.2 AND max chain <= 3"
+    }
+  },
+  "probe_anchor": {
+    "tag": "anchor",
+    "value_colony": {
+      "mean": -0.08792277991771698,
+      "sd": 0.7213877611777015,
+      "ci95": [
+        -0.28788126561286087,
+        0.1120357057774269
+      ],
+      "n": 50
+    },
+    "value_extension": {
+      "mean": 0.0622785821557045,
+      "sd": 0.8926964676149495,
+      "ci95": [
+        -0.1851642543546842,
+        0.3097214186660932
+      ],
+      "n": 50
+    },
+    "value_delta_colony_minus_extension": -0.15020136207342147,
+    "value_welch": {
+      "t": -0.9253698093927991,
+      "df": 93.86440498052679,
+      "p_approx": 0.3547735774148779
+    },
+    "argmax_pass_colony": [
+      0,
+      50
+    ],
+    "argmax_pass_extension": [
+      0,
+      50
+    ],
+    "argmax_adjacent_to_own_colony": [
+      50,
+      50,
+      [
+        0.9286499658256813,
+        1.0
+      ]
+    ],
+    "argmax_adjacent_to_own_extension": [
+      50,
+      50,
+      [
+        0.9286499658256813,
+        1.0
+      ]
+    ],
+    "extension_endpoint_breakdown": {
+      "endpoint": 45,
+      "offaxis": 5,
+      "other": 0,
+      "total": 50
+    },
+    "extension_endpoint_frac": 0.9,
+    "extension_endpoint_ci95": [
+      0.7863950966521162,
+      0.9565248760084288
+    ],
+    "colony_breakout_breakdown": {
+      "breakout": 0,
+      "stay_compact": 50,
+      "total": 50
+    },
+    "colony_breakout_frac": 0.0,
+    "colony_breakout_ci95": [
+      0.0,
+      0.07135003417431873
+    ]
+  },
+  "probe_fresh_init": {
+    "tag": "fresh_init",
+    "value_colony": {
+      "mean": -0.826045241355896,
+      "sd": 0.10683878029433136,
+      "ci95": [
+        -0.8556594403635059,
+        -0.796431042348286
+      ],
+      "n": 50
+    },
+    "value_extension": {
+      "mean": -0.8727578401565552,
+      "sd": 0.036257027942855076,
+      "ci95": [
+        -0.8828077755635879,
+        -0.8627079047495225
+      ],
+      "n": 50
+    },
+    "value_delta_colony_minus_extension": 0.046712598800659255,
+    "value_welch": {
+      "t": 2.9276572608300495,
+      "df": 60.1385921628394,
+      "p_approx": 0.003415262968971877
+    },
+    "argmax_pass_colony": [
+      0,
+      50
+    ],
+    "argmax_pass_extension": [
+      0,
+      50
+    ],
+    "argmax_adjacent_to_own_colony": [
+      5,
+      50,
+      [
+        0.0434751239915711,
+        0.21360490334788393
+      ]
+    ],
+    "argmax_adjacent_to_own_extension": [
+      7,
+      50,
+      [
+        0.06950745262022862,
+        0.2618645719852809
+      ]
+    ],
+    "extension_endpoint_breakdown": {
+      "endpoint": 2,
+      "offaxis": 5,
+      "other": 43,
+      "total": 50
+    },
+    "extension_endpoint_frac": 0.04,
+    "extension_endpoint_ci95": [
+      0.011038652660826579,
+      0.13460337877954667
+    ],
+    "colony_breakout_breakdown": {
+      "breakout": 45,
+      "stay_compact": 5,
+      "total": 50
+    },
+    "colony_breakout_frac": 0.9,
+    "colony_breakout_ci95": [
+      0.7863950966521162,
+      0.9565248760084288
+    ]
+  },
+  "subprobe_near_win": {
+    "description": "Discriminating hand-built sub-probe \u2014 4 positions, current-player perspective. open_5_in_row = straight 5-chain (0,0)..(4,0), both axis endpoints (-1,0)/(5,0) empty -> either completes a 6-in-row. compact_5_blob = 5-stone BFS hex blob. open_4_in_row / compact_4_blob = the 4-stone analogues. Built by build_subprobe_positions() from the same straight-axis / BFS-blob primitives as the main 50+50 bank (color=cur, jitter=0).",
+    "anchor": [
+      {
+        "name": "open_5_in_row",
+        "meta": {
+          "kind": "extension",
+          "length": 5,
+          "color": "cur",
+          "max_chain": 5,
+          "mean_pair_dist": 2.0,
+          "subprobe_name": "open_5_in_row"
+        },
+        "value": 0.9774761199951172,
+        "v_logit": 2.2375004291534424,
+        "argmax": 179,
+        "argmax_cell": [
+          -1,
+          0
+        ],
+        "argmax_is_pass": false,
+        "top5": [
+          179,
+          185,
+          202,
+          199,
+          200
+        ],
+        "top5_cells": [
+          [
+            -1,
+            0
+          ],
+          [
+            5,
+            0
+          ],
+          [
+            3,
+            1
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            1
+          ]
+        ],
+        "top5_logp": [
+          -0.3185969591140747,
+          -2.5761947631835938,
+          -3.9384613037109375,
+          -4.229781150817871,
+          -4.710775375366211
+        ]
+      },
+      {
+        "name": "compact_5_blob",
+        "meta": {
+          "kind": "colony",
+          "size": 5,
+          "color": "cur",
+          "max_chain": 3,
+          "mean_pair_dist": 1.4,
+          "subprobe_name": "compact_5_blob"
+        },
+        "value": 0.5830610394477844,
+        "v_logit": 0.6670879125595093,
+        "argmax": 178,
+        "argmax_cell": [
+          -2,
+          0
+        ],
+        "argmax_is_pass": false,
+        "top5": [
+          178,
+          142,
+          182,
+          218,
+          162
+        ],
+        "top5_cells": [
+          [
+            -2,
+            0
+          ],
+          [
+            0,
+            -2
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            1,
+            -1
+          ]
+        ],
+        "top5_logp": [
+          -1.2911654710769653,
+          -1.7160598039627075,
+          -1.912704586982727,
+          -1.9306575059890747,
+          -3.059157371520996
+        ]
+      },
+      {
+        "name": "open_4_in_row",
+        "meta": {
+          "kind": "extension",
+          "length": 4,
+          "color": "cur",
+          "max_chain": 4,
+          "mean_pair_dist": 1.6666666666666667,
+          "subprobe_name": "open_4_in_row"
+        },
+        "value": 0.7036455869674683,
+        "v_logit": 0.8744848370552063,
+        "argmax": 199,
+        "argmax_cell": [
+          0,
+          1
+        ],
+        "argmax_is_pass": false,
+        "top5": [
+          199,
+          200,
+          163,
+          162,
+          201
+        ],
+        "top5_cells": [
+          [
+            0,
+            1
+          ],
+          [
+            1,
+            1
+          ],
+          [
+            2,
+            -1
+          ],
+          [
+            1,
+            -1
+          ],
+          [
+            2,
+            1
+          ]
+        ],
+        "top5_logp": [
+          -1.4296221733093262,
+          -1.7884469032287598,
+          -2.323978900909424,
+          -2.4080147743225098,
+          -2.556318759918213
+        ]
+      },
+      {
+        "name": "compact_4_blob",
+        "meta": {
+          "kind": "colony",
+          "size": 4,
+          "color": "cur",
+          "max_chain": 3,
+          "mean_pair_dist": 1.3333333333333333,
+          "subprobe_name": "compact_4_blob"
+        },
+        "value": 0.37765535712242126,
+        "v_logit": 0.3973221480846405,
+        "argmax": 178,
+        "argmax_cell": [
+          -2,
+          0
+        ],
+        "argmax_is_pass": false,
+        "top5": [
+          178,
+          182,
+          198,
+          161,
+          162
+        ],
+        "top5_cells": [
+          [
+            -2,
+            0
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            -1,
+            1
+          ],
+          [
+            0,
+            -1
+          ],
+          [
+            1,
+            -1
+          ]
+        ],
+        "top5_logp": [
+          -0.5141217708587646,
+          -2.225604295730591,
+          -3.0269463062286377,
+          -3.2080938816070557,
+          -3.6354267597198486
+        ]
+      }
+    ],
+    "fresh_init": [
+      {
+        "name": "open_5_in_row",
+        "meta": {
+          "kind": "extension",
+          "length": 5,
+          "color": "cur",
+          "max_chain": 5,
+          "mean_pair_dist": 2.0,
+          "subprobe_name": "open_5_in_row"
+        },
+        "value": -0.8652617335319519,
+        "v_logit": -1.3139111995697021,
+        "argmax": 166,
+        "argmax_cell": [
+          5,
+          -1
+        ],
+        "argmax_is_pass": false,
+        "top5": [
+          166,
+          268,
+          281,
+          181,
+          289
+        ],
+        "top5_cells": [
+          [
+            5,
+            -1
+          ],
+          [
+            -7,
+            5
+          ],
+          [
+            6,
+            5
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            -5,
+            6
+          ]
+        ],
+        "top5_logp": [
+          -5.531219959259033,
+          -5.574843883514404,
+          -5.596678733825684,
+          -5.602584362030029,
+          -5.6101531982421875
+        ]
+      },
+      {
+        "name": "compact_5_blob",
+        "meta": {
+          "kind": "colony",
+          "size": 5,
+          "color": "cur",
+          "max_chain": 3,
+          "mean_pair_dist": 1.4,
+          "subprobe_name": "compact_5_blob"
+        },
+        "value": -0.7983142137527466,
+        "v_logit": -1.0939470529556274,
+        "argmax": 216,
+        "argmax_cell": [
+          -2,
+          2
+        ],
+        "argmax_is_pass": false,
+        "top5": [
+          216,
+          268,
+          310,
+          249,
+          289
+        ],
+        "top5_cells": [
+          [
+            -2,
+            2
+          ],
+          [
+            -7,
+            5
+          ],
+          [
+            -3,
+            7
+          ],
+          [
+            -7,
+            4
+          ],
+          [
+            -5,
+            6
+          ]
+        ],
+        "top5_logp": [
+          -5.583130836486816,
+          -5.592623710632324,
+          -5.611281871795654,
+          -5.626023769378662,
+          -5.66086483001709
+        ]
+      },
+      {
+        "name": "open_4_in_row",
+        "meta": {
+          "kind": "extension",
+          "length": 4,
+          "color": "cur",
+          "max_chain": 4,
+          "mean_pair_dist": 1.6666666666666667,
+          "subprobe_name": "open_4_in_row"
+        },
+        "value": -0.8715585470199585,
+        "v_logit": -1.339526891708374,
+        "argmax": 268,
+        "argmax_cell": [
+          -7,
+          5
+        ],
+        "argmax_is_pass": false,
+        "top5": [
+          268,
+          289,
+          281,
+          7,
+          331
+        ],
+        "top5_cells": [
+          [
+            -7,
+            5
+          ],
+          [
+            -5,
+            6
+          ],
+          [
+            6,
+            5
+          ],
+          [
+            -2,
+            -9
+          ],
+          [
+            -1,
+            8
+          ]
+        ],
+        "top5_logp": [
+          -5.5405988693237305,
+          -5.607954502105713,
+          -5.6333327293396,
+          -5.647014141082764,
+          -5.671241760253906
+        ]
+      },
+      {
+        "name": "compact_4_blob",
+        "meta": {
+          "kind": "colony",
+          "size": 4,
+          "color": "cur",
+          "max_chain": 3,
+          "mean_pair_dist": 1.3333333333333333,
+          "subprobe_name": "compact_4_blob"
+        },
+        "value": -0.8244273066520691,
+        "v_logit": -1.1704840660095215,
+        "argmax": 216,
+        "argmax_cell": [
+          -2,
+          2
+        ],
+        "argmax_is_pass": false,
+        "top5": [
+          216,
+          268,
+          310,
+          289,
+          205
+        ],
+        "top5_cells": [
+          [
+            -2,
+            2
+          ],
+          [
+            -7,
+            5
+          ],
+          [
+            -3,
+            7
+          ],
+          [
+            -5,
+            6
+          ],
+          [
+            6,
+            1
+          ]
+        ],
+        "top5_logp": [
+          -5.540724277496338,
+          -5.609116554260254,
+          -5.618660926818848,
+          -5.622435092926025,
+          -5.670078754425049
+        ]
+      }
+    ]
+  }
+}
