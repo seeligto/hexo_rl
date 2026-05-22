@@ -2747,6 +2747,52 @@ help if the reshaped buffer retrains value-head discrimination — pair
 either with the L42 value-spread canary as the success criterion, not
 loss/value-acc (Goodhart).
 
+### §S181 FU-1 — value-spread checkpoint-ladder probe
+
+Ran the FU-1 ladder probe (`scripts/structural_diagnosis/fu1_value_spread_ladder.py`,
+inspection-only, CPU, ~0 compute). Pins WHEN the value-head discriminator
+flattens across the §S180b trajectory. Full report:
+`audit/structural/05_fu1_value_spread_ladder.md`.
+
+**Bank.** Reused the T3 40-position canonical bank verbatim (20 colony +
+20 extension; `mcts_colony_probe.py` builders, deterministic). Fixture
+SHA-256 `934204713620d171…dcc23991`. **Brief correction:** the +0.617
+anchor spread is a T3 measurement, NOT T1 — T1's `probe_value_bias.py`
+bank is 50+50 and gives a different figure (−0.150). FU-1 used the T3
+bank, the only one consistent with +0.617. Anchor reproducibility gate
+PASS — FU-1 reproduces T3 `value_head` to 4 dp (+0.6173 vs +0.617).
+
+**Ladder.** V_spread (mean V colony − mean V extension):
+
+| step | 0 | 10k | 20k | 30k | 40k | 50k | 53.5k |
+|---|---|---|---|---|---|---|---|
+| V_spread | +0.617 | +0.260 | −0.110 | +0.140 | −0.051 | −0.016 | +0.099 |
+
+**Verdict.** Drift classifier returns `OSCILLATION` (non-monotone;
++0.250 up-swing 20k→30k). But the mechanical label is a **noise
+artifact** — post-20k swings (±0.25 peak-to-peak) sit within ~1.3×
+SE(spread)=0.185 of a flat spread ≈ 0. The substantive signature is
+**EARLY / FRONT-LOADED COLLAPSE**: 69 % of spread lost by step 10k,
+sub-+0.20 (FU-2 abort gate) at or before 10k, negative by 20k, then
+flat-dead. The discriminator dies inside the first 10–20k steps and
+never recovers. Ladder limitation: no sub-10k checkpoint — cannot
+resolve a step-0 onset from an ~8k cliff.
+
+**colony_a denominator = WINS-ONLY** (`evaluator.py:213-216`,
+`display.py:40`: `colony / wins`). The §S180b colony_a series is the
+fraction of the model's *wins vs the anchor* that are colony-shaped —
+computed over a shrinking small win pool as wr collapses. A colony_a
+trigger fires late + noisy; the value-spread static probe (stable
+denominator, crosses +0.20 before step 10k) is the better canary.
+
+**Recommendation (operator decides).** Early-collapse read routes to
+FU-2 (value-head re-arch A/B, T2 A2+A3) with the value-spread canary
+wired as a hard-abort gate **from step 0** — a buffer-level refresh
+hook cannot act fast enough for a collapse >half complete by step 10k.
+Cheaper de-risk before committing FU-2: a finer 0–20k ladder (new
+checkpoints every ~2k from a short §S180b-config re-run) to pin
+step-0-onset vs mid-cliff. Not auto-launched.
+
 ---
 
 ## §S182 — perf wave: legal_moves_set capacity fix MERGED
