@@ -554,6 +554,9 @@ Do not re-litigate. Each row points at the § that closed it.
 | §131 (pre) | 18-plane input dimensionality is load-bearing | §131 ablation | KEPT_PLANE_INDICES=[0,1,2,3,8,9,10,11] (8 of 18) suffice. Chain moved to aux sub-buffer (§97 line). |
 | forced-win short-circuit (pre-baseline) | MCTS expansion-time forced-win detection accelerates training | removed pre-§0 | Network never evaluated near-win positions → no fork learning. Removed; quiescence value-override at leaf-eval is the correct alternative. |
 | §171 A4 P2-reopen | Distribution-shift fine-tune over 5% adversarial corpus (frozen-spine) recovers MCTS signal on A4 | §171 A4 P2-reopen C closeout | MCTS-64 0/200 Wilson95 [0%, 1.88%] — DEAD bin cleanly met. Falsifies §169 P0 SPATIAL_RICH for frozen-spine class. |
+| §S184 | Strategy δ: a sorted-`Vec` representation for `legal_moves_set` beats the `FxHashSet` rebuild | §S184 vast bench | −32.5% sims/s. The ring loop `push`es ~7× duplicate cells (overlapping radius balls); `sort_unstable`+`dedup` on the bloated array costs more than `FxHashSet`'s hash-with-inline-dedup insert. |
+| §S185 | The residual ~44% `legal_moves_set` self-time is `cells.contains_key`-dominated (the §S184 post-mortem's interim inference) | §S185 laptop flamegraph | `FxHashSet::insert` 56.8% vs `contains_key` 27.7% — insert is dominant. δ's failure was a fix-design error, not a contains_key mechanism. |
+| §S186 | Strategy β: incremental `legal_cov` delta maintenance amortizes below the once-per-leaf rebuild | §S186 vast + laptop bench | −49.5% sims/s. The delta runs once per descent *step* (`apply_move` ×depth + `undo_move` ×2·depth), not once per leaf — de-amortized to ~3× the rebuild's work, on the hot path. The residual `legal_moves_set` cost is a structural floor; see the "Perf-investigation arc" appendix. |
 
 ---
 
