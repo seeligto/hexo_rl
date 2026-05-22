@@ -38,40 +38,52 @@ eliminated — all 5 runs unimodal. Target 20k floor confirmed.
 range [29.1k–36.3k]. +19% vs desktop; driven by 8-plane smaller tensor +
 RTX 4060 Max-Q Ada Lovelace (sm_89). Old estimate ~25k was wrong.
 
-Latest baseline **2026-05-18** (§180 cycle 3 close at HEAD `5e0c09d` — Wave 11 Batch B `run_worker_thread` 8-sub-fn extraction, compile OFF, trace ON, 8-plane v6).
-**10/10 targets PASS on laptop n=4 × 10 internal (40 samples) + vast.ai mirror n=2 × 10 internal (20 samples).**
+Latest baseline **2026-05-22** (post-§S183 perf wave, master `1995873` — §S182 `legal_moves_set` capacity-reserve + §S183 MCTS micro-opts merged; §S184/§S186 perf strategies aborted, no engine change; compile OFF, trace ON, 8-plane v6).
+**10/10 targets PASS — `make bench` n=5, laptop `n_workers=14` + vast.ai `n_workers=22`.**
+
+> **MCTS floor refloored (2026-05-22):** the `MCTS (CPU only, no NN)` target
+> was ≥26,000 sim/s against an ~87k median — 70% slack, caught no regression.
+> Refloored to **≥73,000** (0.85× the lower host median, clear of both hosts'
+> observed minimum). The other nine floors are unchanged by design: laptop
+> buffer-push has an outlier-low run (709k vs 862k median) and worker
+> throughput is documented-bimodal (IQR ±26%) — a blanket 0.85×-median floor
+> would false-fail those. NOTE: the §S182 `mcts_sims_cpu_only` *criterion*
+> micro-bench gain (+66.4%) does **not** appear in this realistic `make bench`
+> MCTS metric — vast is flat (86.8k → 86.9k); the laptop's apparent +24.8% is
+> the old §180 baseline having been bimodal-depressed ("range 67k-72k
+> bimodal"), not a fresh gain. Different benchmarks, different workloads.
 
 ### Laptop (Ryzen 7 8845HS + RTX 4060 Laptop GPU) — PRIMARY reference
 
-| Metric | Baseline (median, n=4×10) | Target | Notes |
+| Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 70,520 sim/s | ≥ 26,000 sim/s | range 67k-72k, bimodal CUDA state across runs (runs 1+2 low / 3+4 high — §180 SD7 variance envelope) |
-| NN inference (batch=64) | 4,500 pos/s | ≥ 4,000 pos/s | range 4.1k-4.8k, same bimodal pattern; −7.6% vs §156 4,800 within SD7 envelope |
-| NN latency (batch=1, mean) | 2.66 ms | ≤ 3.5 ms | range 2.45-2.88 ms; flat vs §156 |
-| Replay buffer push | 840,734 pos/sec | ≥ 525,000 pos/sec | range 768k-873k; +27.4% vs Wave 10 ref 660k (P79/P68 cycle 3 cumulative effect — buffer push path untouched in cycle 3, gain is from CUDA/dispatch state) |
-| Replay buffer sample raw (batch=256) | 949 µs/batch | ≤ 1,300 µs | range 914-1072 µs; −24.3% vs Wave 10 ref 1,253 |
-| Replay buffer sample augmented (batch=256) | 978 µs/batch | ≤ 1,500 µs | range 963-1127 µs; −30.4% vs Wave 10 ref 1,404 |
-| GPU utilization | 100.0% | ≥ 85% | saturated; NN-isolated benchmark |
+| MCTS (CPU only, no NN) | 88,006 sim/s | ≥ 73,000 sim/s | range 87.7k-90.1k, IQR ±904 — tight, no bimodality. Old §180 baseline 70,520 was bimodal-depressed; floor refloored ≥26k→≥73k. |
+| NN inference (batch=64) | 4,871 pos/s | ≥ 4,000 pos/s | range 4.87k-4.88k, IQR ±0.2; +8.2% vs §180 4,500 |
+| NN latency (batch=1, mean) | 2.68 ms | ≤ 3.5 ms | range 2.60-2.73 ms; flat vs §180 2.66 |
+| Replay buffer push | 862,037 pos/sec | ≥ 525,000 pos/sec | range 709k-866k; +2.5% vs §180 840,734 — one outlier-low run (709k), floor kept conservative |
+| Replay buffer sample raw (batch=256) | 992 µs/batch | ≤ 1,300 µs | range 965-1015 µs; +4.5% vs §180 949 (within noise) |
+| Replay buffer sample augmented (batch=256) | 966 µs/batch | ≤ 1,500 µs | range 926-1155 µs; −1.2% vs §180 978 |
+| GPU utilization | 100.0% | ≥ 85% | range 97.4-100%; saturated, NN-isolated benchmark |
 | VRAM usage (process) | 0.10 GB / 8.6 GB | ≤ 6.9 GB (80%) | unchanged — 8-plane model; VRAM budget matches RTX 4060 Max-Q 8.6 GB |
-| Worker throughput | 29,118 pos_gen/hr | ≥ 20,000 pos_gen/hr | range 26k-30k, −9.9% vs Wave 10 ref 32,334 — at SD7 bidirectional variance edge; bimodal CUDA across runs; §180 close documents SD7 promotion datapoint |
-| Batch fill % | 98.82% | ≥ 84% | range 98.27-99.77%; flat vs §156 |
+| Worker throughput | 33,565 pos_gen/hr | ≥ 20,000 pos_gen/hr | range 27.0k-35.8k, IQR ±8,579 — bimodal; +15.3% vs §180 29,118; floor kept loose for the bimodal low mode |
+| Batch fill % | 98.75% | ≥ 84% | range 97.0-99.9%; flat vs §180 98.82 |
 
-### Vast.ai mirror (Ryzen 9 9900X + RTX 5080, CUDA 12.8) — n=2×10
+### Vast.ai mirror (Ryzen 9 9900X + RTX 5080, CUDA 12.8) — n=5
 
-Cycle close mirror per master directive. Vast.ai is the production training host; mirror confirms cycle 3 work doesn't regress on the canonical-rental hardware.
+Vast.ai is the production training host; the mirror confirms the §S182/§S183 perf merges do not regress on the canonical-rental hardware. `make bench` `n_workers=22`.
 
-| Metric | Baseline (median, n=2×10) | Target | Notes |
+| Metric | Baseline (median, n=5) | Target | Notes |
 |---|---|---|---|
-| MCTS (CPU only, no NN) | 86,780 sim/s | ≥ 26,000 sim/s | range 85k-87k; 1.23× laptop (CPU-only, 12c/24t 9900X vs 8c/16t 8845HS) |
-| NN inference (batch=64) | 14,301 pos/s | ≥ 4,000 pos/s | range 14.2k-14.4k; 3.18× laptop (Blackwell sm_120 vs Ada Lovelace sm_89) |
-| NN latency (batch=1, mean) | 1.53 ms | ≤ 3.5 ms | range 1.50-1.55 ms; 0.58× laptop |
-| Replay buffer push | 1,027,088 pos/sec | ≥ 525,000 pos/sec | range 999k-1.06M; 1.22× laptop |
-| Replay buffer sample raw (batch=256) | 723 µs/batch | ≤ 1,300 µs | range 700-746 µs; 0.76× laptop |
-| Replay buffer sample augmented (batch=256) | 731 µs/batch | ≤ 1,500 µs | range 702-759 µs; 0.75× laptop |
-| GPU utilization | 94.0% | ≥ 85% | range 80-94%; not saturated (5080 finishes batches faster than 14 workers can refill — expected) |
+| MCTS (CPU only, no NN) | 86,890 sim/s | ≥ 73,000 sim/s | range 86.8k-86.9k, IQR ±19 — rock-stable; +0.1% vs §180 86,780 — flat. §S182/§S183 criterion-bench gains do not appear in this realistic make-bench MCTS workload. |
+| NN inference (batch=64) | 14,206 pos/s | ≥ 4,000 pos/s | range 14.2k, IQR ±0.2; −0.7% vs §180 14,301; 2.92× laptop (Blackwell sm_120 vs Ada sm_89) |
+| NN latency (batch=1, mean) | 1.54 ms | ≤ 3.5 ms | range 1.54 ms; flat vs §180 1.53; 0.57× laptop |
+| Replay buffer push | 1,007,042 pos/sec | ≥ 525,000 pos/sec | range 994k-1.01M; −2.0% vs §180 1,027,088; 1.17× laptop |
+| Replay buffer sample raw (batch=256) | 735 µs/batch | ≤ 1,300 µs | range 733-738 µs; +1.6% vs §180 723; 0.74× laptop |
+| Replay buffer sample augmented (batch=256) | 743 µs/batch | ≤ 1,500 µs | range 740-748 µs; +1.6% vs §180 731; 0.77× laptop |
+| GPU utilization | 94.0% | ≥ 85% | range 80.6-94%; not saturated (5080 outpaces 22 workers — expected) |
 | VRAM usage (process) | 0.10 GB / 17.1 GB | ≤ 13.7 GB (80%) | 5080 has 17.1 GB VRAM |
-| Worker throughput | 83,692 pos_gen/hr | ≥ 20,000 pos_gen/hr | range 80k-87k; 2.87× laptop. v3 retake on `/root/hexo_rl` (non-canonical workspace) saw batch-fill 56% anomaly run 2; v4 on `/workspace/hexo_rl` did NOT reproduce (both runs 99%+); anomaly attributed to vast-host noisy-neighbor on shared infrastructure |
-| Batch fill % | 99.51% | ≥ 84% | range 99.20-99.83% on v4 retake |
+| Worker throughput | 91,871 pos_gen/hr | ≥ 20,000 pos_gen/hr | range 89.0k-92.4k, IQR ±900; +9.8% vs §180 83,692; 2.74× laptop |
+| Batch fill % | 99.998% | ≥ 84% | range 99.98-99.999% |
 
 **Cross-host floor convention:** laptop targets are conservative and remain the canonical gate (Phase 4.5 exit criteria). Vast.ai serves as production-host mirror; same target floors apply because the gate is throughput-relative-to-floor, not relative-to-host. Vast medians being higher than laptop is expected and documented per cycle 3 §180.
 
