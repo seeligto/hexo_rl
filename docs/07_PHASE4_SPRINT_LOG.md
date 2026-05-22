@@ -2603,6 +2603,60 @@ residency, so it is hardware-portable. Raw: `investigation/rust-perf-
 
 ---
 
+## §S183 — perf wave: MCTS quick-win micro-opt bundle MERGED
+
+*DISCRIMINATOR: §S183 = Rust-perf quick-win wave (this entry), the §S182
+successor. Independent of the §S178 bot-mix training line; §S181 stays
+reserved for the §S180b code-level-lever training successor.*
+
+**Merged.** `perf/quick-wins-mcts` FF-merged to master 2026-05-22, commit
+`4781fae` (off master `f9ae886`). Five mechanically-distinct hot-path edits,
+one commit, from `investigation/rust-perf-2026-05-20` ranks 1/2/3/6/14:
+
+- **P1** `selection.rs` — hoist `parent_n.sqrt()` out of `puct_score` into
+  the `pick_best_puct` caller as `sqrt_parent_n`; loop-invariant across the
+  K≤192 children, was recomputed per child. Signature + all callers updated.
+- **F1** `selection.rs` — FPU `parent_q − fpu_reduction·sqrt(mass)` →
+  `(−fpu_reduction).mul_add(sqrt, parent_q)`. The clippy-flagged
+  `suboptimal_flops` site is the FPU expr, not the PUCT `q+u` term (`q +
+  num/den` is add-of-division, not FMA-able).
+- **F2** `policy.rs` ×5 — `a·b+c` → `a.mul_add(b,c)` (v_mix, 3× logit,
+  Dirichlet mix).
+- **A1** `worker_loop/inner.rs` ×8 — `running.load` `SeqCst` → `Relaxed`;
+  `running` is a payload-free stop-signal flag, `handles.join()` after
+  `stop()` supplies the real happens-before.
+- **A4** `inner.rs` — `positions_generated.fetch_add` `SeqCst` → `Relaxed`;
+  monotonic counter, reader was already `Relaxed`.
+
+**Bench gate — cross-host.** Laptop 8845HS inconclusive (protocol +1.33%
+n=800 but ~3.8% run-spread swamps the signal). Vast 9900X+5080 (lower noise
+floor) resolved it — criterion `mcts_sims_cpu_only`, `--profile profiling`,
+discard run 1, median runs 2+3:
+
+| n | baseline (`f9ae886`) | post (`4781fae`) | sims/s Δ |
+|---|---|---|---|
+| 100 | 111.88 µs | 110.29 µs | +1.4% |
+| 400 | 567.0 µs | 549.4 µs | +3.2% |
+| 800 | 1.1817 ms | 1.1686 ms | **+1.12%** |
+
+All three sizes positive; n=800 +1.12% clears the ≥1% acceptance gate. A
+thin margin (baseline n=800 spread ~3.8%) — cross-host all-sizes-positive
+consistency is what carries it past the inconclusive laptop result.
+
+**Verification.** `cargo test` 282 pass / 0 fail. clippy `suboptimal_flops`
+13 → 7 (−6: F1 + 5×F2). Fresh-context REVIEW subagent verdict MERGE-READY,
+all 7 checks pass (scope, P1/F1/F2/A1/A4 correctness, clippy delta, bench,
+hygiene).
+
+**Successor.** §S184 — `legal_moves_set` rebuild-cost reduction (residual
+41.8% self-time). Plan `09_rebuild_fix_plan.md`: recommended strategy δ
+(FxHashSet-free sorted-Vec representation), branch
+`perf/legal-moves-rebuild-reduce`, ≥20% n=800 acceptance gate. After §S184
+merges, write the perf-wave Mechanism Lesson (flamegraph-first for
+throughput, static-first for correctness).
+
+---
+
 ## §66–§101 Classification Audit — quick-look table
 
 | Bucket | Sections | Compressed body location |
