@@ -2728,6 +2728,75 @@ Lesson stays unwritten until §S186 resolves.
 
 ---
 
+## §S186 — perf wave: incremental legal-moves β ABORTED, arc closed
+
+*DISCRIMINATOR: §S186 = Rust-perf wave (this entry), the §S184/§S185
+successor and the final §09 perf-investigation strategy. §S181 stays
+reserved for the §S180b code-level-lever training successor.*
+
+**Aborted — not merged. Perf-investigation arc CLOSED.** Branch
+`perf/legal-moves-incremental` (commit `1cae62f`, off master `70abacb`)
+implemented `13_s185_plan.md` strategy β — replace the per-leaf full
+rebuild of `legal_moves_set` with incremental delta maintenance through
+`apply_move`/`undo_move`, backed by a per-cell `u16` coverage map
+(`legal_cov`). Post-review cleanup folded into the commit: `UnsafeCell`→
+plain field (β made the wrapper vestigial; `Board` now auto-`Sync`) +
+stale `legal_cache`/`cache_dirty` doc-comment fixes.
+
+**Bench gate — cross-host.** Criterion `mcts_sims_cpu_only`,
+`--profile profiling`, discard run 1, median runs 2+3:
+
+| n | vast base | vast β | vast Δ | laptop base | laptop β | laptop Δ |
+|---|---|---|---|---|---|---|
+| 100 | 111.6 µs | 203.2 µs | −45.1% | 134.2 µs | 248.6 µs | −46.0% |
+| 400 | 548.6 µs | 1088.9 µs | −49.6% | 721.6 µs | 1305.4 µs | −44.7% |
+| 800 | 1.145 ms | 2.268 ms | −49.5% | 1.483 ms | 2.776 ms | −46.6% |
+
+β roughly halves MCTS throughput — every size, every run, both hosts,
+tight CIs. Decision gate Negative → abort, branch deleted, master
+unchanged at `70abacb`.
+
+**Mechanism.** IMPL was correct — the §S186 debug canary
+(recompute-and-assert in debug builds) stayed green across 282 tests;
+REVIEW verdict MERGE-READY-pending-bench. β is a *cadence* error: it
+de-amortizes the once-per-leaf rebuild onto every descent step.
+`apply_move` (×depth per sim) now walks a 91-cell radius ball;
+`undo_move` (×depth) walks two. ~3× the ball-walk work of the rebuild it
+replaced, moved onto the hot descent path that previously only flipped a
+`cache_dirty` flag. legal-moves work was 44% self-time → ~3× → ~1.9×
+total slowdown; the measured +82–98% time matches.
+
+**Falsified.** `13_s185_plan.md` §5 acknowledged β adds apply/undo work
+yet estimated a "large but not full 37%" *gain* — wrong by ~85 points.
+The plan's model ("rebuild once-per-leaf, an incremental delta must be
+cheaper") inverted reality: the delta runs once per descent *step*, and a
+descent has `depth` steps.
+
+**Arc closed.** §09's four strategies are exhausted: α rejected (loses the
+intra-leaf O(1) fast path), γ rejected (workload always mutates clones),
+δ §S184 FAILED −32%, β §S186 FAILED −50%. The residual 44%
+`legal_moves_set` self-time is structural — the once-per-leaf `FxHashSet`
+rebuild is already the cheap way to produce a leaf's legal-move set.
+§S182 +66.4% was the genuine win; net merged perf gain §S182+§S183 ≈
++68%.
+
+**Lesson (L40 + perf-wave ML).** L40: an incremental fix that relocates a
+per-leaf cost onto a per-step path *de-amortizes* — model call-frequency,
+not just per-call cost. ML: a flamegraph shows where time is *spent*, not
+where it is *recoverable*. The 44% `legal_moves_set` line drew δ and β;
+both made MCTS slower (−32%, −50%). A tall profiler line is a question
+("is this cost necessary?"), not an answer ("there is 44% to win here").
+The honest test before building a fix — does a genuinely cheaper
+algorithm *exist*. §S182 took the one real inefficiency (hashbrown rehash
+cascade); the rest was structural.
+
+**Successor.** None — perf-investigation arc (§S180→§S186) CLOSED.
+Post-mortems `investigation/rust-perf-2026-05-20/11_s184_postmortem.md` +
+`16_s186_postmortem.md`; plans `09`/`13` retained as the strategy record.
+§S181 remains reserved for the §S180b code-level-lever training successor.
+
+---
+
 ## §66–§101 Classification Audit — quick-look table
 
 | Bucket | Sections | Compressed body location |
