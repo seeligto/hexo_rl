@@ -639,6 +639,28 @@ Distilled meta-lessons. Cite a row before re-deriving its rule.
 | L15 | Pre-§148 v6 corpus retired wholesale. All v6-era anchors (Q41 51%, Q52 24%) carry contaminated baseline; do not cite as comparison. | §147, §148 |
 | L16 | RegistrySpec by value (~174 B) on MCTS hot path kills `worker_pos_per_hr` ~10%. Use `&'static`, scalar extraction, or `#[inline]` accessors. | §173 A5b |
 | L17 | Always grep receiving code before scheduling a sprint item as "one-line config change". §122 rotation "one-liner" was a ~50-80 line port. | §122, §131 |
+| L18 | A flamegraph shows where time is *spent*, not where it is *recoverable*. A tall profiler line is a question ("is this cost necessary?"), not proof of headroom. Before speccing a fix, confirm a genuinely cheaper algorithm *exists*. | §S180–§S186 perf arc |
+
+---
+
+## Perf-investigation arc §S180→§S186 — CLOSED (do not re-litigate)
+
+**Closed 2026-05-22.** The `legal_moves_set` hot line (~44% whole-program
+self-time — §S185 laptop flamegraph; 41.8% in the §S182-era `perf report`)
+drew the four-strategy menu of `investigation/rust-perf-2026-05-20/09_*`.
+**Merged wins:** §S182 capacity-`reserve` fix **+66.4% sims/s** vast (killed
+the hashbrown rehash cascade), §S183 micro-opt bundle **+1.12%** (sqrt hoist
++ `mul_add` FMA + relaxed atomics). **Both rewrites of the residual FAILED:**
+§S184 δ (sorted-`Vec` representation) **−32.5%**, §S186 β (incremental `u16`
+coverage map) **−49.5%** — δ traded the representation for a worse one, β
+de-amortized the once-per-leaf rebuild onto every descent step. α and γ were
+rejected by design. **Verdict: the residual ~44% `legal_moves_set` self-time
+is a structural floor, not headroom** — the once-per-leaf `FxHashSet` rebuild
+is already the cheap way to produce a leaf's legal-move set. **Do NOT
+re-spec a `legal_moves_set` optimization without NEW mechanism evidence** (a
+concretely cheaper algorithm, not a tall profiler line — see L18). Full
+record: `investigation/rust-perf-2026-05-20/` plans `09`/`13` + post-mortems
+`11`/`16`; sprint entries §S182/§S183/§S184/§S186.
 
 ---
 
@@ -663,6 +685,9 @@ Distilled meta-lessons. Cite a row before re-deriving its rule.
 | Q18 | NN forward latency ceiling | 🔵 Watch — architectural (CUDA streams / process split / torch.compile); Phase 4.5 |
 | Q21 | Wider-window chain-aux target | 🟣 Parked — revisit post-§97 baseline |
 | Q1, Q4, Q7 | MCTS convergence rate, augmentation equivariance, Transformer encoder | 🔵 Deferred — Phase 5+ |
+| Q-§S181-structural | Config-invisible capture channel | ✅ Resolved (diagnosis axis) §S181 — training-loop value-head discrimination collapse; resolution path FU-1/FU-2 open |
+| Q-§S181-value-head-arch | Does removing coverage-blind `v_max` pool prevent value-head collapse? | 🔴 Active — HIGH; §S181-T2; folded into FU-2 |
+| Q-§S181-probe-redesign | Do MCTS-in-loop probes catch colony capture C1–C4 miss? | 🔴 Active — HIGH; §S181-T4; PR-A first |
 
 See `docs/06_OPEN_QUESTIONS.md` for full detail.
 
@@ -2561,6 +2586,163 @@ bot-corpus refresh hook that regenerates SealBot-vs-current games mid-run.
   capture operates through a channel no YAML knob reaches — diagnosis-by-
   metric is exhausted. §S181+ must use code-level levers (PSW / corpus
   refresh hook) and instrument the anchor-game colony channel directly.
+
+---
+
+## §S181 — structural diagnosis (research wave)
+
+*DISCRIMINATOR: §S181 = structural-diagnosis research wave (this entry).
+INSPECTION-ONLY — no training, no hot-path edit, no config edit. Successor
+to §S180b after the config-level anti-colony surface was declared exhausted
+(L38).*
+
+**Status:** COMPLETE. 4 parallel inspection tracks, all reviewed and PASSED.
+Verdict: the colony attractor is a **training-loop-generated value-head
+discrimination collapse** that the architecture PERMITS and the current
+metrics are BLIND to. It is NOT bootstrapped and NOT MCTS-driven —
+handoff hypotheses #1 and #5 both FALSIFIED.
+
+**Wave identity:**
+- Branch: `phase4.5/s181_structural_research`
+- Mode: inspection-only (4 standalone probes under
+  `scripts/structural_diagnosis/`; no selfplay/training/MCTS core touched)
+- Inputs: §S180b archive (`archive/s180b_3knob_fail/`), anchor
+  `bootstrap_model_v6.pt` (SHA `7ab77d2c…`), v6 human corpus, eval archives
+- Aggregation: `audit/structural/00_aggregation.md`
+
+### Per-track verdicts
+
+| Track | Question | Verdict |
+|---|---|---|
+| T1 — bootstrap+corpus bias | Does the bootstrap/corpus encode colony bias pre-self-play? | **BIAS-RULED-OUT.** Value head extension-favouring (open-5 +0.978 > 5-blob +0.583; open-4 +0.704 > 4-blob +0.378); Δ(colony−ext) value −0.150, Welch p=0.355 (wrong sign, n.s.). Corpus winning lines 91.3% extension-shaped, rising to 100% at 1400+ Elo. Policy plays the 6th-move win 90%. Falsifies handoff hypothesis #1. Correction: §S178 line uses encoding `v6` (k_max=1), NOT v6w25. |
+| T2 — value head + encoding architecture | Does the architecture structurally encourage colony interpretation? | **ARCHITECTURAL-BIAS-CONFIRMED (PERMISSIVE, not FORCED).** Dual-pool value head `v_max` half is a coverage-blind monotone peak detector — `GMP(colony) ≡ GMP(extension)` exactly (max\|diff\|=0.0), no architectural counterweight guaranteed. Permits colony-value-saturation; does not compel it. Density-centred cluster windowing favors compact structure. K-cluster min-pool is v6w25-only — does NOT fire for the §S178 line. Ranked fixes A1–A4; recommends A2 (multi-scale avg-pool ~40 LOC) + A3 (colony-penalty aux ~60 LOC) paired. |
+| T3 — MCTS colony dynamics | Does MCTS+PUCT amplify or correct the bias? | **MCTS-NEUTRAL.** c_puct ×0.5/×2.0 and Dirichlet ×4 sweeps move colony-visit fraction <6pp / <3pp — no search-config escape hatch (extends L38). DECISIVE side result: §S180b step-50k value head collapsed FLAT — colony−extension value spread −0.016 vs anchor +0.617. L37 INVERTED: colony positions yield LOWER-entropy, MORE-concentrated visit targets (sharp-and-wrong, strong self-reinforcing CE gradient). |
+| T4 — probe + dashboard redesign | Why did the probes miss 4 collapses? | **PROBE-REDESIGN-NEEDED.** C1–C4 static threat-logit probes cleared the gate ~11× at the §S180b 0/100 crash — categorically blind. `colony_a` (anchor-game colony fraction) already in the `evaluation_round_complete` payload at 36/100 by step 10K — 40K before crash — never surfaced first-class. 4 MCTS-in-loop probes designed; retrospective fire-step 20–40K before the §S180b crash. Land order PR-A (`colony_a` ~40 LOC) first. |
+
+### Convergent diagnosis
+
+The colony attractor is **H6 — a training-loop value-head discrimination
+collapse**: the value head flattens (loses colony/extension separation)
+during self-play, removing the signal MCTS needs to prefer extension;
+search then collapses onto the colony-biased policy prior. Measured: value
+spread +0.617 (anchor, healthy) → −0.016 (§S180b step-50k, captured). The
+architecture **H7 — offers no resistance**: the `v_max` coverage-blind
+monotone peak detector has no counterweight. The metrics **H3/H4 — are
+blind**: C1–C4 static, `colony_a` never first-class. This IS the
+config-invisible capture channel L38 named — and it is directly observable
+with a 40-position static value-spread probe, one forward pass per
+checkpoint.
+
+### Ranked hypothesis list
+
+| Rank | Hypothesis | Status |
+|---|---|---|
+| 1 | H6 — training-loop value-head discrimination collapse (value spread +0.617→−0.016) | TOP — MEASURED; primary driver |
+| 2 | H7 — architecture permits H6, no resistance (`v_max` coverage-blind, weight-independent) | HIGH — MEASURED; fix surface = T2 A2 |
+| 3 | H3/H4 — probes blind, `colony_a` config-invisible | HIGH — CONFIRMED 4×; instrumentation, not a fix |
+| 4 | H8 — colony target sharp-and-wrong (L37 inverted; H_frac 0.484 vs 0.805) | MED — explains *why* CE reinforces |
+| 5 | H9 — aux opp-reply head lower loss floor in colony regime | MED — mechanism inferred, not measured |
+| 6 | H10 — density-centred windowing favors compact structure | LOW for v6 K=1; v6w25 re-entry only |
+| — | H1 — bootstrap/corpus encode colony bias | **FALSIFIED** (T1) |
+| — | H5 — MCTS dynamics favor colony | **FALSIFIED** (T3); MCTS-search config sub-surface exhausted |
+| — | H2 (v6 form) — min-pool architectural asymmetry | **N/A** for v6 anchor (`value_pool="none"`) |
+
+### Next-step decision tree
+
+```
+FU-1 — value-spread checkpoint-ladder probe  (~30–60 min, 0 GPU, ~2 dev-hr)
+  Probe §S180b ladder ckpt_step{10,20,30,40,50}k for value spread.
+  │
+  ├─ spread degrades monotonically from step 10K
+  │    → loop installs bias early + gradually
+  │    → FU-2 architecture A/B must hold the canary from step 0;
+  │      PSW/refresh-hook (if used) must act before step 20K
+  │
+  └─ spread holds healthy then late cliff
+       → phase transition exists; target the cliff step directly
+
+FU-2 — value-head re-architecture A/B  (T2 A2+A3; ~3–5 days, ~3–4 GPU-days)
+  Requires FU-1 first (pins the canary target). Fresh re-pretrain
+  mandatory (A2 breaks value_fc1 shape). Wire value-spread canary +
+  hard-abort gate (abort if spread < +0.20).
+  │
+  ├─ A2+A3 holds spread > +0.20 AND wr_sealbot does not collapse
+  │    → architecture was the load-bearing permissive element (H7 = fix)
+  │    → adopt A2+A3; close the structural line
+  │
+  └─ spread still collapses under A2+A3
+       → loop installs the bias regardless of architecture
+       → escalate to buffer-level levers (PSW / bot-corpus refresh hook),
+         success metric = value-spread canary, NOT loss/value-acc (Goodhart)
+
+PR-A — colony_a first-class metric + ALERT-2  (T4; ~40 LOC, ~2 hr)
+  Independent of FU-1/FU-2 — land in parallel. Lowest-LOC highest-leverage
+  fix in the wave: would have fired 20–40K steps before the §S180b crash.
+```
+
+### Process patterns / Mechanism Lessons
+
+§S181 adds L41/L42/L43.
+
+- **L41 (MCTS-search config sub-surface is also exhausted — extends L38).**
+  T3 swept the last untested config sub-surface: `c_puct` ×0.5/×2.0 and
+  `dirichlet_alpha` ×4. Colony-visit fraction moved <6pp / <3pp — inside
+  n=20 noise. Higher c_puct mildly *worsens* colony preference (it
+  up-weights an already colony-biased prior). The MCTS-search knobs join
+  the YAML config-level levers as exhausted. Do NOT propose c_puct /
+  Dirichlet retune as an anti-colony lever — FALSIFIED in
+  `audit/structural/03_mcts_colony_dynamics.md` §4/§5.
+
+- **L42 (value-head discrimination collapse is the config-invisible
+  capture channel — directly observable).** The L38 "config-invisible
+  capture channel" is the value head losing colony/extension separation
+  during self-play. MEASURED: colony−extension value spread +0.617
+  (anchor) → −0.016 (§S180b step-50k). A flat value head gives MCTS no
+  signal to prefer extension over colony, so search collapses onto the
+  colony-biased policy prior. It is "config-invisible" only because no
+  dashboard metric tracked it — it is fully observable with a 40-position
+  static probe, one forward pass per checkpoint. Wire `value_spread`
+  (mean V over a colony bank − mean V over an extension bank) as a
+  first-class canary + hard-abort gate (abort if spread < +0.20). This
+  supersedes diagnosis-by-config-metric.
+
+- **L43 (colony training target is sharp-and-wrong, not diffuse — L37
+  inverted).** §S180a L37 hypothesized "colony regime → diffuse MCTS
+  visit target → weak CE signal". T3 MEASURED the opposite: colony
+  positions yield LOWER-entropy, MORE-concentrated visit targets
+  (H_frac 0.484 vs extension 0.805) — the policy prior is sharply peaked
+  on blob-adjacent cells. CE against a sharp wrong target is a STRONG
+  self-reinforcing gradient pushing the policy further into the colony
+  mode — a worse failure mode than a diffuse target. This is the textbook
+  attractor mechanic and matches the operator's "structured wrong choice,
+  not random collapse" game-read. L37's *empirical finding* (visit-count
+  CE weaker than CQV) stands; its *proposed mechanism* (diffuse target)
+  is corrected.
+
+### Falsified Hypotheses Register additions
+
+| § | Hypothesis | Falsified by | Mechanism |
+|---|---|---|---|
+| §S181-T1 | `bootstrap_model_v6.pt` + v6 human corpus jointly encode a colony bias in the value head and/or policy head before self-play (handoff hypothesis #1) | §S181-T1 bootstrap+corpus bias audit (`audit/structural/01_bootstrap_corpus_bias.md`) | Value-head Δ(colony−ext)=−0.150, Welch p=0.355 (wrong sign, n.s.); near-win sub-probe rates open-5 extension +0.978 > 5-blob +0.583 (open-4 +0.704 > 4-blob +0.378); policy plays the 6th-move win 90%; corpus winning lines 91.3% extension rising to 100% at 1400+ Elo. No colony bias exists pre-self-play — the attractor is generated by the training loop. |
+| §S181-T3 | MCTS-search parameters (`c_puct`, `dirichlet_alpha`/`epsilon`) are a viable anti-colony escape lever (handoff hypothesis #5) | §S181-T3 MCTS colony-dynamics audit (`audit/structural/03_mcts_colony_dynamics.md`) | c_puct ×0.5/×2.0 moves colony-visit fraction <6pp; Dirichlet ×4 moves it <3pp — both inside n=20 noise. Higher c_puct mildly worsens colony preference. MCTS+PUCT neither amplifies nor corrects the bias; it faithfully passes through a colony-biased value/policy head. MCTS-NEUTRAL — extends L38 to the search sub-surface. |
+
+### Files produced
+
+- `audit/structural/00_aggregation.md` — this wave's synthesis
+- `audit/structural/0{1,2,3,4}_*.md` — 4 track audits + sidecar JSONs
+- `scripts/structural_diagnosis/{probe_value_bias,probe_architecture,mcts_colony_probe,new_probes}.py`
+- `reports/s181_next_wave_skeleton.md` — next-wave operations skeleton
+
+### Successor
+
+§S181 does NOT launch a training run. Next wave = `reports/s181_next_wave_skeleton.md`:
+FU-1 value-spread ladder probe FIRST (pins the flatten step, ~30 min),
+THEN FU-2 value-head re-architecture A/B (T2 A2+A3) gated on FU-1. PR-A
+(`colony_a` first-class metric) lands in parallel — independent, ~40 LOC.
+PSW / refresh-hook levers are demoted: they reshape the buffer but only
+help if the reshaped buffer retrains value-head discrimination — pair
+either with the L42 value-spread canary as the success criterion, not
+loss/value-acc (Goodhart).
 
 ---
 

@@ -851,6 +851,102 @@ MCTS deployment), pair it with a value-head signal restoration mechanism.
 
 ---
 
+## Q-§S181-structural — what is the config-invisible capture channel? [HIGH]
+
+**Status (2026-05-22, post-§S181 research wave):** RESOLVED ON THE
+DIAGNOSIS AXIS — resolution path open.
+
+The §S181 4-track structural-diagnosis wave (`audit/structural/00_aggregation.md`)
+identified the config-invisible capture channel L38 named: it is a
+**training-loop value-head discrimination collapse**. The value head
+flattens during self-play — losing colony/extension separation — which
+removes the signal MCTS needs to prefer extension; search then collapses
+onto the colony-biased policy prior. MEASURED: colony−extension value
+spread +0.617 (anchor `bootstrap_model_v6.pt`, healthy) → −0.016 (§S180b
+step-50k checkpoint, captured). The channel was "invisible" only because
+no dashboard metric tracked it — it is fully observable with a
+40-position static value-spread probe, one forward pass per checkpoint
+(L42).
+
+Ruled out by the wave: the bootstrap/corpus do NOT encode colony bias
+pre-self-play (§S181-T1, FALSIFIED handoff hypothesis #1 — value head
+extension-favouring at step 0, corpus 91.3% extension); MCTS+PUCT
+neither amplifies nor corrects the bias (§S181-T3, FALSIFIED handoff
+hypothesis #5 — MCTS-NEUTRAL, search-config sub-surface exhausted, L41).
+The architecture PERMITS the collapse without resistance (§S181-T2 —
+the dual-pool `v_max` half is a coverage-blind monotone peak detector,
+`GMP(colony) ≡ GMP(extension)` exactly; PERMISSIVE not FORCED).
+
+**Resolution path.**
+1. **FU-1 — value-spread checkpoint-ladder probe.** Probe the §S180b
+   archive ladder (`archive/s180b_3knob_fail/ckpts/ckpt_step{10,20,30,40,50}k.pt`)
+   for the colony−extension value spread; pin the step at which the value
+   head flattens. ~30–60 min, 0 GPU. Confirms the loop (not the bootstrap)
+   installs the bias and tells the re-architecture canary where to look.
+2. **FU-2 — value-head re-architecture A/B.** T2 A2 (multi-scale avg-pool,
+   removes the coverage-blind `v_max` route, ~40 LOC) + A3 (colony-penalty
+   value-head auxiliary loss, ~60 LOC), fresh re-pretrain, sustained run
+   with the value-spread canary + hard-abort gate (abort if spread <
+   +0.20). If the canary holds and wr_sealbot does not collapse → the
+   architecture was the load-bearing permissive element. If the spread
+   still collapses → the loop installs the bias regardless of
+   architecture; escalate to buffer-level levers (PSW / bot-corpus
+   refresh hook), success metric = value-spread canary, NOT loss/value-acc
+   (Goodhart — improved through every §S178-line crash).
+3. **PR-A — `colony_a` first-class metric + alert** (T4). Independent,
+   ~40 LOC; lands in parallel. Data already in the
+   `evaluation_round_complete` payload.
+
+Full skeleton: `reports/s181_next_wave_skeleton.md`. Sprint log §S181.
+
+---
+
+## Q-§S181-value-head-arch — does removing the coverage-blind `v_max` pool prevent value-head collapse? [HIGH]
+
+**Status (2026-05-22):** OPEN [HIGH] — surfaced by §S181-T2.
+
+The v6 value head reduces the trunk spatially via `cat([v_avg, v_max])`
+(`network.py:787-796`). The `v_max` (global max-pool) half is a
+coverage-blind monotone peak detector: `GMP(colony) ≡ GMP(extension)`
+exactly at equal peak activation (§S181-T2 probe, max|diff|=0.0), and a
+net that learns positive `fc1`/`fc2` weight on the `v_max` block has an
+unobstructed monotone route from one saturated activation cell to value
+≈ +1. KataGo's value head has NO board-spatial max-pool — this `v_max`
+half is a HeXO-specific addition and the single most colony-permissive
+architectural element identified in the wave. **Experiment:** T2 A2 —
+replace `v_max` with multi-scale `v_avg` (global mean + 2×2-block mean),
+fresh re-pretrain, A/B vs stock architecture on a sustained run with the
+value-spread canary. ~40 LOC + 1 re-pretrain; ~3–4 GPU-days. Folded
+into the Q-§S181-structural FU-2 resolution path. Related: Q2 (value
+aggregation min vs mean vs attention) — A2 is a concrete instance of the
+"mean" arm of Q2 applied to the within-window spatial reduction.
+
+---
+
+## Q-§S181-probe-redesign — do MCTS-in-loop probes catch colony capture the static probes miss? [HIGH]
+
+**Status (2026-05-22):** OPEN [HIGH] — surfaced by §S181-T4.
+
+C1–C4 static threat-logit probes cleared the gate ~11× at the §S180b
+0/100 crash — categorically blind to colony capture (L2 reconfirmed 4×).
+§S181-T4 designed 4 MCTS-in-loop probes (P1 W3S0 forced-win, P2 W3S1
+forced-win, P3 threat-following, P4 anti-colony) measuring the net+MCTS
+*search output*, not a static forward pass. Retrospective fire-step
+analysis (derived from archived eval trajectories) estimates the new
+probes + `colony_a` alert fire 20–40K steps before the §S180b crash.
+**Experiment:** run `scripts/structural_diagnosis/new_probes.py --probe p4`
+against the 5 §S180b archived checkpoints; confirm P4 `colony_pull`
+crosses 0.20 at step 10K. If it does, P4 is a validated
+40K-steps-early detector and the full probe-implementation wave (T4
+PR-E) is justified. Land order: PR-A (`colony_a`, ~40 LOC) → PR-B (L34
+divergence alert) → PR-D (training-side value-bias probe) → PR-C
+(per-opponent matrix) → PR-E (MCTS-in-loop probes P1–P4). Do NOT remove
+C1–C4 — they remain valid decode/sharpness sanity checks; stop treating
+them as a sufficient pre-promotion gate. Skeleton:
+`reports/s181_next_wave_skeleton.md`.
+
+---
+
 ## Deferred (Phase 5+)
 
 | # | Question | Reason deferred |
