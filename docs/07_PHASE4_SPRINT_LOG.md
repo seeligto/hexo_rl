@@ -2657,6 +2657,77 @@ throughput, static-first for correctness).
 
 ---
 
+## §S184 — perf wave: legal_moves_set sorted-Vec δ ABORTED
+
+*DISCRIMINATOR: §S184 = Rust-perf wave (this entry), the §S183 successor.
+Independent of the §S178 bot-mix training line; §S181 stays reserved for the
+§S180b code-level-lever training successor.*
+
+**Aborted — not merged.** Branch `perf/legal-moves-rebuild-reduce` (commit
+`194b5a0`, off master `e5c2b0a`) implemented `09_rebuild_fix_plan.md`
+strategy δ — swap the per-Board `legal_moves_set` cache from
+`FxHashSet<(i32,i32)>` to a sorted-deduped `Vec<(i32,i32)>`, targeting the
+residual 41.8% `legal_moves_set` self-time left after §S182.
+
+**Bench gate — vast 5080/9900X.** Criterion `mcts_sims_cpu_only`,
+`--profile profiling`, discard run 1, median runs 2+3:
+
+| n | baseline `e5c2b0a` | post δ `194b5a0` | sims/s Δ |
+|---|---|---|---|
+| 100 | 111.36 µs | 168.43 µs | **−33.9%** |
+| 400 | 554.85 µs | 822.22 µs | **−32.5%** |
+| 800 | 1.16825 ms | 1.73035 ms | **−32.5%** |
+
+All sizes regressed, every run, p<0.05. Decision gate (Negative → Abort):
+branch reverted, master unchanged at `e5c2b0a`.
+
+**Mechanism (post-mortem `11_s184_postmortem.md`).** IMPL was correct — the
+regression is inherent to δ. The rebuild loop `push`es every non-occupied
+ring cell *including duplicates* from overlapping radius-5 balls; in a dense
+leaf board every interior cell is covered by ~7 stones, so the pre-dedup Vec
+is a several-× blow-up. δ then `sort_unstable()`s that *blown-up* array —
+`O(N log N)` on the pre-dedup `N`, not the ≤~200 deduped count the plan
+assumed. The `FxHashSet` it replaced deduplicated *inline at insert* and
+never exceeded the unique count. δ traded cheap-hash-with-free-dedup for
+cheap-push + expensive-sort-of-bloated-array. +48% rebuild → −32.5% sims/s.
+
+**Falsified.** Plan §3 claim *"the O(n log n) sort is cheaper than the
+removed hashbrown insert work"* — false by ~48%. δ swapped `FxHashSet::insert`
+(hash + bucket write, with **free inline dedup**) for `Vec::push` +
+`sort_unstable` + `dedup` on a pre-dedup array several× larger than the
+deduped count (overlapping radius-5 balls); the sort on the blown-up `N`
+costs more than the insert it replaced. The §S185 flamegraph confirms
+`FxHashSet::insert` IS the dominant rebuild cost (56.8% of `legal_moves_set`)
+— δ replaced the #1 hot op with something worse.
+
+**Lesson (L39).** δ's failure was a **fix-design error, not a mechanism
+miss**. The §07 static review correctly identified `FxHashSet::insert` as
+the dominant rebuild cost (§S185 flamegraph: 56.8%). The plan's error:
+assuming a representation swap to `Vec::push`+`sort`+`dedup` would beat it —
+but overlapping-ball duplicates blow the pre-dedup array up several× and the
+`O(N log N)` sort on that costs more. Lesson: when a fix *replaces* a hot
+operation rather than *eliminating* it, the replacement's cost must be
+modeled, not assumed cheaper — and only a bench (not a flamegraph) catches a
+bad replacement. β is preferred precisely because it *eliminates* the
+rebuild. (The §S184 post-mortem's interim guess that the residual was
+`cells.contains_key` was itself refuted by the §S185 flamegraph — see
+`13_s185_plan.md` §4.)
+
+**Successor.** §S185 — laptop flamegraph (`perf` DWARF call-graph, 72k
+samples) localized the 44% `legal_moves_set` self-time: `FxHashSet::insert`
+56.8%, `cells.contains_key` 27.7%, `reserve` 5.6%, ring-iteration 9.9%.
+84.5% (insert+probe) is pure per-leaf redundant rebuild. Representation
+swaps are dead (δ falsified); the only surviving strategy is **β —
+incremental delta maintenance** of `legal_cache` through
+`apply_move`/`undo_move`, which deletes the rebuild and *both* costs (~37%
+whole-program). Plan `13_s185_plan.md` = SPEC-BETA: per-cell `u16` coverage
+map for the union-coverage hazard, ~180–270 LOC / 4 engine files,
+debug-mode recompute-and-assert canary, ≥20% n=800 gate, branch
+`perf/legal-moves-incremental`, IMPL = sprint §S186. The perf-wave Mechanism
+Lesson stays unwritten until §S186 resolves.
+
+---
+
 ## §66–§101 Classification Audit — quick-look table
 
 | Bucket | Sections | Compressed body location |
