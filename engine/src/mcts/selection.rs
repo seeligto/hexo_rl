@@ -20,10 +20,14 @@ fn pick_best_puct(
     fpu_value: f32,
 ) -> u32 {
     debug_assert!(n_ch > 0, "pick_best_puct called on a node with no children");
+    // §P1: `parent_n.sqrt()` is loop-invariant across all K≤192 children of one
+    // node — hoist it out of the per-child `puct_score` call so the sqrtf is
+    // evaluated once per descent level, not K times.
+    let sqrt_parent_n = parent_n.sqrt();
     let mut best_idx: u32 = first as u32;
-    let mut best_score: f32 = tree.puct_score(best_idx, parent_idx, parent_n, fpu_value);
+    let mut best_score: f32 = tree.puct_score(best_idx, parent_idx, sqrt_parent_n, fpu_value);
     for i in (first + 1)..(first + n_ch) {
-        let score = tree.puct_score(i as u32, parent_idx, parent_n, fpu_value);
+        let score = tree.puct_score(i as u32, parent_idx, sqrt_parent_n, fpu_value);
         // Strict `>` matches `max_by` Greater semantics: first equal score
         // wins, NaN comparisons preserve the running best (Equal fallback).
         if score.partial_cmp(&best_score).unwrap_or(std::cmp::Ordering::Equal)
@@ -41,8 +45,12 @@ impl MCTSTree {
     ///
     /// `fpu_value`: pre-computed first-play urgency value for unvisited children.
     /// For visited children this is ignored — their actual Q is used instead.
+    ///
+    /// `sqrt_parent_n`: `parent.n_visits + parent.virtual_loss_count` already
+    /// passed through `sqrt`. §P1 hoists this loop-invariant out of the
+    /// per-child caller loop so it is computed once per descent level.
     #[inline]
-    pub(crate) fn puct_score(&self, child_idx: u32, parent_idx: u32, parent_n: f32, fpu_value: f32) -> f32 {
+    pub(crate) fn puct_score(&self, child_idx: u32, parent_idx: u32, sqrt_parent_n: f32, fpu_value: f32) -> f32 {
         let child  = &self.pool[child_idx  as usize];
         let parent = &self.pool[parent_idx as usize];
 
@@ -57,7 +65,7 @@ impl MCTSTree {
             child.q_value_vl(self.virtual_loss)
         };
 
-        let u = self.c_puct * child.prior * parent_n.sqrt()
+        let u = self.c_puct * child.prior * sqrt_parent_n
             / (1.0 + child.n_visits as f32 + child.virtual_loss_count as f32);
         q + u
     }
@@ -100,7 +108,8 @@ impl MCTSTree {
                     })
                     .map(|i| self.pool[i].prior)
                     .sum();
-                parent_q - self.fpu_reduction * explored_mass.sqrt()
+                // §F1: `parent_q - fpu_reduction * sqrt(mass)` → fused FMA.
+                (-self.fpu_reduction).mul_add(explored_mass.sqrt(), parent_q)
             } else {
                 0.0
             };

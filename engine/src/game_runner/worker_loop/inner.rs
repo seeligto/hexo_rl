@@ -291,7 +291,7 @@ pub(super) fn run_worker_thread(
         &games_completed, &x_wins, &o_wins, &draws, &positions_dropped,
     );
 
-    while running.load(Ordering::SeqCst) {
+    while running.load(Ordering::Relaxed) {
         #[cfg(feature = "debug_prior_trace")]
         let dbg_game_idx_for_game = { let g = dbg_game_idx; dbg_game_idx += 1; g };
         #[cfg(not(feature = "debug_prior_trace"))]
@@ -365,7 +365,7 @@ fn run_one_game(
     };
 
     for _ in 0..init_ctx.max_moves {
-        if !running.load(Ordering::SeqCst) || board.check_win() || board.legal_move_count() == 0 {
+        if !running.load(Ordering::Relaxed) || board.check_win() || board.legal_move_count() == 0 {
             break;
         }
 
@@ -395,7 +395,7 @@ fn run_one_game(
     // §P22 — drain shutdown skip: if the move loop broke because `running`
     // was flipped false by `stop()`, the game is *in progress*, NOT terminal.
     // Returning here short-circuits to the outer `while running…` guard.
-    if !running.load(Ordering::SeqCst) {
+    if !running.load(Ordering::Relaxed) {
         return;
     }
 
@@ -659,7 +659,7 @@ fn run_mcts_search(
         if effective_m == 0 {
             let mut sims_done = sims_used;
             while sims_done < move_sims {
-                if !running.load(Ordering::SeqCst) { break; }
+                if !running.load(Ordering::Relaxed) { break; }
                 let n = infer_and_expand(tree, leaf_batch_size, kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, infer, variance);
                 if n == 0 { break; }
                 sims_done += n;
@@ -680,14 +680,14 @@ fn run_mcts_search(
             let cands = gs.candidates.clone();
             for &cand_offset in &cands {
                 if sims_used >= move_sims { break; }
-                if !running.load(Ordering::SeqCst) { break; }
+                if !running.load(Ordering::Relaxed) { break; }
 
                 let child_pool_idx = gs.first_child + cand_offset as u32;
                 tree.forced_root_child = Some(child_pool_idx);
 
                 let mut cand_sims = 0;
                 while cand_sims < sims_per && sims_used < move_sims {
-                    if !running.load(Ordering::SeqCst) { break; }
+                    if !running.load(Ordering::Relaxed) { break; }
                     // Cap batch to remaining budget for this candidate so we
                     // don't overshoot sims_per (leaf_batch_size can be 8 when
                     // only 1-3 sims are budgeted, biasing early candidates).
@@ -725,7 +725,7 @@ fn run_mcts_search(
             }
 
         while sims_done < move_sims {
-            if !running.load(Ordering::SeqCst) { break; }
+            if !running.load(Ordering::Relaxed) { break; }
             let n = infer_and_expand(tree, leaf_batch_size, kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, infer, variance);
             if n == 0 { break; }
             sims_done += n;
@@ -790,7 +790,7 @@ fn play_one_move(
         McTSSearchResult::RootExpansionFailed => return MoveOutcome::Continue,
     };
 
-    if !running.load(Ordering::SeqCst) { return MoveOutcome::Break; }
+    if !running.load(Ordering::Relaxed) { return MoveOutcome::Break; }
 
     // ── MCTS Policy with cosine-annealed temperature schedule ──
     let compound_move = if board.ply == 0 { 0 } else { (board.ply as usize).div_ceil(2) };
@@ -882,7 +882,7 @@ fn play_one_move(
         return MoveOutcome::Break;
     }
     move_history.push((move_idx.0, move_idx.1));
-    accumulators.positions_generated.fetch_add(1, Ordering::SeqCst);
+    accumulators.positions_generated.fetch_add(1, Ordering::Relaxed);
     MoveOutcome::Played
 }
 

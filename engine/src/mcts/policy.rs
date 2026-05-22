@@ -161,8 +161,10 @@ impl MCTSTree {
         // pruning is added in the future.
         let v_mix = if visited_prior_sum > 1e-8 {
             let sum_n_f = sum_n as f32;
+            // §F2: `v_hat + (sum_n_f / visited_prior_sum) * policy_weighted_q`
+            // → fused FMA on the inner mul-add.
             (1.0 / (1.0 + sum_n_f))
-                * (v_hat + (sum_n_f / visited_prior_sum) * policy_weighted_q)
+                * (sum_n_f / visited_prior_sum).mul_add(policy_weighted_q, v_hat)
         } else {
             v_hat
         };
@@ -185,7 +187,8 @@ impl MCTSTree {
                 v_mix.clamp(-1.0, 1.0)
             };
             let log_prior = (prior.max(1e-8)).ln();
-            let l = log_prior + sigma_scale * completed_q;
+            // §F2: `log_prior + sigma_scale * completed_q` → fused FMA.
+            let l = sigma_scale.mul_add(completed_q, log_prior);
             if l > max_logit { max_logit = l; }
         }
         if max_logit == f32::NEG_INFINITY {
@@ -201,7 +204,8 @@ impl MCTSTree {
                 v_mix.clamp(-1.0, 1.0)
             };
             let log_prior = (prior.max(1e-8)).ln();
-            let l = log_prior + sigma_scale * completed_q;
+            // §F2: `log_prior + sigma_scale * completed_q` → fused FMA.
+            let l = sigma_scale.mul_add(completed_q, log_prior);
             sum_exp += (l - max_logit).exp();
         }
         if sum_exp <= 0.0 {
@@ -217,7 +221,8 @@ impl MCTSTree {
                 v_mix.clamp(-1.0, 1.0)
             };
             let log_prior = (prior.max(1e-8)).ln();
-            let l = log_prior + sigma_scale * completed_q;
+            // §F2: `log_prior + sigma_scale * completed_q` → fused FMA.
+            let l = sigma_scale.mul_add(completed_q, log_prior);
             policy[action] = (l - max_logit).exp() / sum_exp;
         }
 
@@ -261,7 +266,8 @@ impl MCTSTree {
 
         for j in 0..n_ch {
             let child = &mut self.pool[first + j];
-            child.prior = (1.0 - epsilon) * child.prior + epsilon * noise[j];
+            // §F2: `(1.0 - epsilon) * prior + epsilon * noise` → fused FMA.
+            child.prior = epsilon.mul_add(noise[j], (1.0 - epsilon) * child.prior);
         }
 
         #[cfg(feature = "debug_prior_trace")]
