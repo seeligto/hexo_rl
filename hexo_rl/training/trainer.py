@@ -167,6 +167,33 @@ _ZERO_POLICY_TARGET_METRICS: Dict[str, float] = {
 }
 
 
+def build_param_groups(model: nn.Module, weight_decay: float) -> list:
+    """Split params for AdamW weight decay: 1D params + biases skip decay.
+
+    Standard AdamW pattern (nanoGPT / KataGo precedent):
+    - 2D+ weights (conv/linear kernels) receive weight decay.
+    - 1D params (BN/LN scale & bias, explicit bias terms) get weight_decay=0.
+    This prevents decay from shrinking normalisation gains toward zero and
+    avoids decaying bias terms which should be free to shift.
+
+    §S181 PR-B: no-decay group added to counter loss-of-plasticity at late
+    training when colony attractor manifests.
+    """
+    decay = []
+    no_decay = []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if p.ndim <= 1 or name.endswith(".bias"):
+            no_decay.append(p)
+        else:
+            decay.append(p)
+    return [
+        {"params": decay,    "weight_decay": weight_decay},
+        {"params": no_decay, "weight_decay": 0.0},
+    ]
+
+
 class Trainer:
     """Manages one training step and checkpoint I/O.
 
@@ -207,9 +234,8 @@ class Trainer:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         self.optimizer = optim.AdamW(
-            self.model.parameters(),
+            build_param_groups(self.model, float(config["weight_decay"])),
             lr=float(config["lr"]),
-            weight_decay=float(config["weight_decay"]),
         )
         self.scheduler = self._build_scheduler(config)
 
