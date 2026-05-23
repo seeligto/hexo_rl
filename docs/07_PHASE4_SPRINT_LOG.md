@@ -2916,6 +2916,154 @@ pretrain cycle) per L34/L42/V-FL-A routing.
 
 ---
 
+## §S181-AUDIT — Track A source decomposition + PR-B hygiene
+
+**Wave.** Cheap inspection-only audit + no-regret hygiene patch in
+parallel. Track A on `phase4.5/s181_audit_track_a` (6 commits
+`c2c9e5e..e717c61`, FF-merged 2026-05-23). PR-B on
+`phase4.5/s181_pr_b_hygiene` (3 commits `c2a0f31..03425de` post-rebase,
+FF-merged 2026-05-23). REVIEW pass (Opus 4.7 fresh-context, scopes
+A/B/C all PASS).
+
+**Provenance.** Designed against L47 (training-loop dominates
+architecture by ≥1.0 V_spread per ~1000 steps; banked on the parked
+`phase4.5/s181_fu2_a2_arch` branch, audit doc
+`audit/structural/08_fu2_a2_sustained_ladder.md`). The FU-2 wave proved
+A2's architectural anchor inversion (−0.508 PT-3 baseline) was dragged
+to +0.13 within 1000 steps — same end-state as pre-A2 from the
+sign-opposite direction. Next surface = the LOOP. Track A localizes
+which loop-level source carries the bias; PR-B lands stage-1 hygiene
+mechanism-aligned with L47.
+
+### Per-subtask Track A verdicts (LITERAL, L13 guard)
+
+| ID | hypothesis | verdict | quantitative finding |
+|---|---|---|---|
+| A1 | H-BOT — bot corpus position-level bias | INCONCLUSIVE | colony frac 26.0%, asymmetry +0.078 (8× < anchor +0.617) |
+| A2 | H-AUG — augmentation oversamples colony | INCONCLUSIVE + FALSIFIED | unique-variants ratio 1.0 (mechanism dead); feat-var ratio 0.54 is downstream signature |
+| A3 | H-BANK — T3 bank confound | **CONFOUND** | Pearson r=0.27, T3 V_spread amplified ~3× vs alt bank |
+| A4 | H-CE-STRENGTH — per-class gradient | INCONCLUSIVE | grad L2 ratio 1.21 (L43 entropy confirmed col 0.50 / ext 0.80) |
+| A5 | H-PRETRAIN — pretrain position z | INCONCLUSIVE | colony frac 31.2%, asymmetry +0.157 (~25% of anchor) |
+
+No subtask reached STRONG-CONFIRM / ASYMMETRIC-CONFIRMED /
+PRETRAIN-COLONY-BIASED. The largest source contributor is H-PRETRAIN
+(asymmetry +0.157 × ~30% sample share = +0.057/step upper bound),
+followed by H-BOT (+0.014/step), with H-CE-STRENGTH as a 1.21×
+multiplier on every colony sample and H-AUG falsified to zero.
+
+### A6 dominant-source identification + routing
+
+**Dominant source: NONE pre-registered-confirmed.** Per routing table:
+"None confirmed → escalate to Track B (live training-loop gradient
+instrumentation)". The largest unmeasured surface is the self-play
+buffer's per-sample gradient signal — Track B is a short instrumented
+run that closes the per-step pull accounting gap.
+
+**Composite next-wave lever (operator decides — NOT auto-launched):**
+
+1. Track B (PRIMARY) — short instrumented run logging per-sample
+   gradient magnitude bucketed by colony / extension / neither on the
+   live self-play buffer.
+2. Combined lever IF Track B confirms loop-side imbalance:
+   PSW (Prioritized Stratified Window on the buffer) + refresh hook
+   (periodic bot-corpus regeneration) + per-class target temperature
+   on colony positions.
+3. **Dual-bank V_spread canary update.** Per A3, augment PR-A's
+   `value_spread_canary.py` to compute V_spread on BOTH T3 and alt
+   banks. Alt bank fixture pinned at
+   `tests/fixtures/value_spread_bank_alt.json` with SHA in
+   `meta.sha256`. Compute on both ≈ 1 sec per ckpt.
+
+**DEFERRED.** Track C (encoding swap, ~1 GPU-day), EMA (changes
+self-play inference model), WDL migration (same cost profile as A2).
+**DO NOT** re-propose architecture-only fixes (L47 stands).
+
+### PR-B — hygiene patch (Stage-1, landed)
+
+Three trainer-side hygiene changes, ~80 LOC net:
+
+1. **Param-group split for AdamW** (`c2a0f31`). New helper
+   `build_param_groups(model, weight_decay)` — 1D params (BN/LN
+   scales) OR `.bias`-suffixed → no-decay; 2D+ weights → decay.
+   Standard nanoGPT/KataGo pattern; pure hygiene, orthogonal to
+   colony attractor.
+2. **Cosine `eta_min` floor raised** to 5e-4 (from 2e-4) in
+   `configs/training.yaml` (`a43d5eb`). Mechanism alignment with L47:
+   prevent loss-of-plasticity at late-run when the colony attractor
+   manifests; KataGo precedent (never drop below 0.5× peak).
+3. **Policy entropy regularization** set to 0.005 (from 0.01) in
+   `configs/training.yaml` (`03425de`). Mechanism alignment with L47:
+   counter-pressure on policy collapse via entropy bonus. Wiring
+   pre-existing (trainer.py:512 + losses.py:215 — `total = total -
+   entropy_weight * entropy_bonus`, correct sign).
+
+**Tests.** `tests/test_optimizer_param_groups.py` (4 unit tests) +
+`tests/test_inv_optimizer_param_groups.py` (5 INV pin tests). 9/9 PASS;
+broader trainer/optimizer/losses regression 84/84 PASS (excluding
+pre-existing minimax_bot ImportError, unrelated).
+
+**Deliberately excluded (cite L47).**
+- **EMA.** Smooths gradient flow but changes the self-play inference
+  model; contaminates audit baseline + future ladder probes. Defer
+  until Track A localizes the dominant lever and we want a clean
+  baseline.
+- **`beta2 = 0.95`.** L47 says recent gradients are colony-biased;
+  shortening AdamW's gradient memory window AMPLIFIES the bias.
+  Counter-indicated.
+- **WDL migration.** Same cost profile as A2 (re-pretrain, value-head
+  re-arch). V-FU2-C falsification of architecture-only fixes makes
+  this a low-priority commitment until Track A/B/C surface a
+  source-targeted lever.
+
+### L47 (adopted to master from the parked FU-2 branch)
+
+**L47 — value-head architectural inductive-bias fixes are insufficient
+without loop-side intervention.** A2's starting-point inversion
+(extension-favouring anchor V_spread −0.508) was dragged through zero
+to +0.13 colony-favouring within ~1000 training steps under the
+§S178/§S180b 3-knob recipe — same end-state as pre-A2 reached
+monotonically from +0.617, from the SIGN-OPPOSITE direction. The
+training loop's value-target dynamics (selfplay outcome × MCTS
+visit-count CE × corpus mix) override the architecture's structural
+starting point by a margin of ≥0.5 in V_spread magnitude per 1000
+steps (T3-bank metric; see L48 for revised magnitude). The next surface
+IS the loop — PSW / refresh hook / value-target perturbation / class-
+weighted gradient. **Source:** parked branch
+`phase4.5/s181_fu2_a2_arch` audit doc
+`audit/structural/08_fu2_a2_sustained_ladder.md`.
+
+### L48 — V_spread metric is partially T3-bank-specific (CONFOUND)
+
+A3 measured Pearson r=0.27 between V_spread(T3) and V_spread(alt
+corpus-derived bank) across the FU-1.5 ladder (anchor + 10 ckpts at 2k
+cadence). Anchor V_spread on T3 is +0.617; on alt bank +0.212 (~34%).
+Alt-bank trajectory range [+0.016, +0.258] vs T3 range [−0.118,
++0.617] — alt magnitudes ~3× smaller throughout the ladder. **L47's
+≥1.0/1000-step magnitude is revised downward** by the same factor when
+read on real corpus positions: actual per-step pull ≈ +0.33/1000 steps,
+not ≥1.0. The mechanism stands; the absolute amplitude was amplified
+by T3 bank's specific synthetic structures. **Operational corollary:**
+V_spread canary should be augmented to compute on BOTH banks; T3 stays
+as historical reference, alt grounds the metric in corpus reality.
+
+### L49 — no single corpus-level source confirmed dominant; multi-source attractor
+
+Across A1 + A4 + A5, no single hypothesis reached its pre-registered
+confirmation threshold. H-PRETRAIN is the largest contributor (+0.157
+asymmetry, ~25% of anchor V_spread direction), H-BOT contributes
++0.078 (~13% of anchor), H-CE-STRENGTH provides a 1.21× per-colony-
+sample gradient multiplier. Sum of source-attributable per-step pull
+upper bounds (~+0.07/step) exceeds the observed alt-bank-corrected
+movement rate (~+0.0003/step) by ~200× — meaning sources have
+**head-room**; the actual per-step rate is gated by optimizer
+damping + neither-class counter-currents (61% bot, 63% pretrain) +
+unmeasured self-play buffer dynamics (Track B). **Implication:** no
+single corpus-side knob fixes the attractor. The next wave should be
+multi-lever (PSW + refresh hook + per-class target temperature) +
+Track B instrumentation, NOT a single targeted intervention.
+
+---
+
 ## §S182 — perf wave: legal_moves_set capacity fix MERGED
 
 *DISCRIMINATOR: §S182 = Rust-perf wave merge (this entry). The §S178 bot-mix
