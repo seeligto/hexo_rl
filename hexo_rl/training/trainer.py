@@ -28,7 +28,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.amp import GradScaler, autocast  # type: ignore[attr-defined]
 
 import structlog
@@ -296,7 +296,36 @@ class Trainer:
                     "lr_schedule: cosine requires eta_min to be set in configs/training.yaml."
                 )
             min_lr = float(min_lr_val)
-            return CosineAnnealingLR(self.optimizer, T_max=total_steps, eta_min=min_lr, last_epoch=-1)
+            warmup_steps = int(config.get("lr_warmup_steps", 0))
+            if warmup_steps <= 0:
+                return CosineAnnealingLR(
+                    self.optimizer, T_max=total_steps, eta_min=min_lr,
+                    last_epoch=-1,
+                )
+            # §S181 FU-2 warmup: LinearLR ramp from lr*start_factor → lr over
+            # `lr_warmup_steps`, then cosine `lr → eta_min` over the remaining
+            # `total_steps - warmup_steps`. Motivation: a fresh A2 anchor's
+            # flatter value head produces near-uniform selfplay → random games
+            # → near-zero value targets → value head stuck. Lower LR during
+            # the policy-sharpening transient lets MCTS visit-counts pull the
+            # policy in before the value head reaches a degenerate fixed point.
+            cosine_steps = max(1, total_steps - warmup_steps)
+            start_factor = float(config.get("lr_warmup_start_factor", 0.01))
+            warmup = LinearLR(
+                self.optimizer,
+                start_factor=start_factor,
+                end_factor=1.0,
+                total_iters=warmup_steps,
+            )
+            cosine = CosineAnnealingLR(
+                self.optimizer, T_max=cosine_steps, eta_min=min_lr,
+                last_epoch=-1,
+            )
+            return SequentialLR(
+                self.optimizer,
+                schedulers=[warmup, cosine],
+                milestones=[warmup_steps],
+            )
 
         raise ValueError(f"Unsupported lr_schedule: {schedule}")
 

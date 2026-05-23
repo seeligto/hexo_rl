@@ -51,6 +51,23 @@ lr: 2e-3
 total_steps: 100_000
 eta_min: 2e-4
 
+# ── §S181 FU-2 — LR warmup ramp (post-step-80 observation) ───────────────────
+# First T3 launch (commit 637242a) ran straight to peak lr=2e-3 from step 0.
+# At step ~80, observed: policy_entropy 5.0 (near-uniform, max=5.89), value
+# loss stuck at ln(2)=0.693, total_loss 6.3, selfplay games 100% draws at
+# ply-cap (random walks). Root cause: A2 anchor is flat by design (PT-2
+# argmax 8.6% vs pre-A2 11.4%, policy entropy higher) → at peak LR from
+# step 0, gradients are too large for the flat init, value head can't
+# accumulate informative signal because games are random.
+#
+# Warmup: linear ramp lr*0.01=2e-5 → 2e-3 over 2000 steps (≈10% of the
+# 20k operator target), then cosine 2e-3 → 2e-4 over the remaining
+# 98_000. Lets the policy sharpen via MCTS visit-count CE before
+# selfplay enters the "random outcomes → zero value targets → stuck
+# value head" trap.
+lr_warmup_steps: 2000
+lr_warmup_start_factor: 0.01
+
 # ── §177 mixing block retained ────────────────────────────────────────────────
 mixing:
   pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
