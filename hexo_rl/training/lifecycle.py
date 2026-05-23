@@ -67,8 +67,10 @@ def build_inference_model(
         filters=filters,
         se_reduction_ratio=se_reduction_ratio,
     ).to(device)
-    _train_base = getattr(trainer.model, "_orig_mod", trainer.model)
-    inf_model.load_state_dict(_train_base.state_dict())
+    # §S181-AUDIT Wave 2 — route through trainer.inference_state_dict so the
+    # InferenceServer reads EMA weights when EMA is enabled. At step 0 this
+    # is identical to trainer.model's state (EMA was deep-copied from it).
+    inf_model.load_state_dict(trainer.inference_state_dict())
     inf_model.eval()
     if _torch_compile_enabled:
         # inf_model runs in InferenceServer background thread. reduce-overhead's
