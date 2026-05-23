@@ -3031,33 +3031,39 @@ empirical instrument: it fired at step 500 (5× faster than wr_sealbot
 would have surfaced the collapse) and gives a clean per-checkpoint
 binary signal for any future arch+loop combination.
 
-**§5 — Disposition pending operator.** Brief T5 says FF-merge; V-FU2-C
-verdict says "A2 reverts". Tension between the two. Audit doc 08 §5
-recommends per-item disposition:
+**§5 — Disposition: BRANCH PARKED, master untouched (operator decision
+2026-05-23).** Brief T5 specs FF-merge under PASS verdict; V-FU2-C
+FAIL routes "A2 reverts". Operator selected the third option:
+branch `phase4.5/s181_fu2_a2_arch` stays at origin (HEAD `4bcc4cd`)
+as a permanent reference for the wave; master never receives the A2
+architecture, the LR warmup feature, the PT-quality gate runner, or
+the FU-2 audit docs. Any of these can be cherry-picked to master
+later via a separate operator-driven action; they are not auto-
+promoted.
 
-- **Preserve regardless of A2 reversal**: LR warmup feature (commit
-  `4b2510d`, generally useful, 5/5 tests PASS); PT-quality gate runner
-  `scripts/structural_diagnosis/fu2_pretrain_quality_gates.py`
-  (generally useful for any future arch change); audit docs
-  `07_fu2_a2_pretrain_quality.md` + `08_fu2_a2_sustained_ladder.md`
-  (wave record).
-- **Tied to A2 (revert if reverting)**: A2 value head change
+Audit doc 08 §5 per-item disposition (kept on the branch only):
+
+- **Preserve set (cherry-pick candidates for future master)**: LR
+  warmup feature (commit `4b2510d`, generally useful, 5/5 tests
+  PASS); PT-quality gate runner `scripts/structural_diagnosis/
+  fu2_pretrain_quality_gates.py` (generally useful for any future
+  arch change); audit docs `07_fu2_a2_pretrain_quality.md` +
+  `08_fu2_a2_sustained_ladder.md` (wave record).
+- **A2-tied (do not promote without A2)**: A2 value head change
   (`network.py` + `network_min_max_head.py` value-head sections);
-  A2 ckpt-load shape guards; `tests/test_inv_value_head_a2_shape.py`;
+  A2 ckpt-load shape guards in `eval/checkpoint_loader.py` +
+  `viewer/model_loader.py`; `tests/test_inv_value_head_a2_shape.py`;
   `tests/_a2_compat.py`.
-
-Three operator options (per AskUserQuestion in next turn):
-  (a) Cherry-pick the preserve set to master, A2 dies on branch.
-  (b) FF-merge everything per brief T5, A2 stays on master pending
-      explicit revert later (preserves history at cost of arch debt).
-  (c) Park branch, no merge, A2 + infra co-exist on branch only.
 
 **A2 anchor (`bootstrap_model_v6_a2.pt`, SHA `36c9111e…`) is NOT the
 canonical anchor for any next wave** — pre-A2 `bootstrap_model_v6.pt`
-remains canonical.
+remains canonical on master.
 
 **Next.** PSW or refresh hook or A3 aux-loss — operator's call.
-V_spread canary stays wired on whichever recipe the next wave uses.
+V_spread canary infrastructure stays on master (already landed
+pre-FU-2 as PR-A, commit `879bcc8`). The next-wave runner should
+wire it from step 0 — proven 5× faster than wr_sealbot at catching
+the colony-attractor signature.
 
 ---
 
