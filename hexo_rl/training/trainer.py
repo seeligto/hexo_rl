@@ -239,6 +239,21 @@ class Trainer:
         )
         self.scheduler = self._build_scheduler(config)
 
+        # §S181-AUDIT Wave 2 — EMA of model weights for self-play / eval /
+        # bot-promotion dispatch. Trainer keeps stepping the raw model; the
+        # EMA module is read-only and updated every `ema_update_every`
+        # optimizer steps after the optimizer step lands. Default OFF
+        # preserves pre-Wave-2 behaviour (see hexo_rl/training/ema.py).
+        from hexo_rl.training.ema import build_ema_model, resolve_ema_config
+        _ema_enabled, _ema_decay, _ema_update_every = resolve_ema_config(config)
+        self.ema_update_every: int = _ema_update_every
+        if _ema_enabled:
+            _base = getattr(self.model, "_orig_mod", self.model)
+            self.ema_model = build_ema_model(_base, decay=_ema_decay)
+            log.info("ema_enabled", decay=_ema_decay, update_every=_ema_update_every)
+        else:
+            self.ema_model = None
+
         # GradScaler for FP16 training; no-op on CPU or when bf16 selected.
         self.scaler = GradScaler(device=self.device.type, enabled=scaler_enabled)
         self._scaler_enabled = scaler_enabled
@@ -739,6 +754,15 @@ class Trainer:
         if self.scheduler is not None and math.isfinite(grad_norm):
             self.scheduler.step()
 
+        # §S181-AUDIT Wave 2 — EMA update after optimizer step. Skip when
+        # grad_norm is non-finite (matches scheduler skip above so EMA does
+        # not absorb a step that the optimizer itself rejected).
+        if (self.ema_model is not None
+                and math.isfinite(grad_norm)
+                and self.step % self.ema_update_every == 0):
+            _base = getattr(self.model, "_orig_mod", self.model)
+            self.ema_model.update_parameters(_base)
+
         entropies = self._compute_entropies(
             log_policy=log_policy, n_pretrain=n_pretrain, n_recent=n_recent,
         )
@@ -988,6 +1012,21 @@ class Trainer:
     # §176 P79: see comment near _infer_model_hparams above.
     _extract_model_state = staticmethod(_extract_model_state_impl)
 
+    def inference_state_dict(self) -> Dict[str, torch.Tensor]:
+        """Return the state_dict consumed by self-play / eval / promotion.
+
+        §S181-AUDIT Wave 2. When EMA is enabled, downstream weight-sync
+        sites (build_inference_model, eval kickoff, best-model promotion,
+        anchor fresh-init) must read EMA weights so the training-loop
+        decoupling is honoured. Centralising the choice here keeps the
+        dispatch-routing single-sourced and prevents drift between the
+        sites listed above.
+        """
+        if self.ema_model is not None:
+            return self.ema_model.state_dict()
+        base = getattr(self.model, "_orig_mod", self.model)
+        return base.state_dict()
+
     def save_checkpoint(self, loss_info: Optional[Dict[str, float]] = None) -> Path:
         """Save full checkpoint and inference-only weights.
 
@@ -1017,6 +1056,17 @@ class Trainer:
         # Inference-only copy (weights only, no optimizer state).
         inf_path = self.checkpoint_dir / "inference_only.pt"
         save_inference_weights(self.model, inf_path)
+
+        # §S181-AUDIT Wave 2 — EMA sidecars. When EMA is on, the inference
+        # / eval / promotion paths read EMA weights via Trainer.inference_state_dict;
+        # the EMA sidecars let post-hoc viewer + analysis scripts compare
+        # raw vs EMA trajectories. Naming: `checkpoint_<step>_ema.pt` next to
+        # the raw ckpt; `inference_only_ema.pt` next to the inference copy.
+        if self.ema_model is not None:
+            ema_ckpt_path = self.checkpoint_dir / f"checkpoint_{self.step:08d}_ema.pt"
+            save_inference_weights(self.ema_model.module, ema_ckpt_path)
+            ema_inf_path = self.checkpoint_dir / "inference_only_ema.pt"
+            save_inference_weights(self.ema_model.module, ema_inf_path)
 
         # Update log.
         entry: Dict[str, Any] = {"step": self.step}
@@ -1058,9 +1108,28 @@ class Trainer:
         # §S181 PR-A — value-spread colony-capture canary. Fires on every
         # checkpoint save (not in the inner loop). Fire-and-forget: never
         # raises, restores model train mode internally.
+        #
+        # §S181-AUDIT Wave 2 — when EMA is on, fire the canary on the EMA
+        # weights so the dashboard signal tracks what self-play / eval
+        # actually see. EmaModel is not an nn.Module, so we materialize
+        # the EMA state into the trainer's own model in-place around the
+        # fire and restore the training weights after. The canary runs
+        # under torch.no_grad on the same thread that owns the optimizer,
+        # so the swap window is single-threaded by construction.
         try:
             from hexo_rl.monitoring.value_spread_canary import fire_canary
-            fire_canary(self.model, self.step, self.device)
+            base = getattr(self.model, "_orig_mod", self.model)
+            saved_state: Optional[Dict[str, torch.Tensor]] = None
+            if self.ema_model is not None:
+                saved_state = {
+                    k: v.detach().clone() for k, v in base.state_dict().items()
+                }
+                base.load_state_dict(self.ema_model.state_dict())
+            try:
+                fire_canary(self.model, self.step, self.device)
+            finally:
+                if saved_state is not None:
+                    base.load_state_dict(saved_state)
         except Exception as exc:  # noqa: BLE001 — canary must never break a save
             log.warning("value_spread_canary_dispatch_failed",
                         step=self.step, error=str(exc))
