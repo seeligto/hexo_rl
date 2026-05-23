@@ -1,0 +1,46 @@
+{
+  "meta": {
+    "wave": "\u00a7S181-AUDIT Wave 1 \u2014 Track C-LITE-1",
+    "anchor_path": "checkpoints/bootstrap_model_v7full.pt",
+    "anchor_sha256": "568d8a332a41b0c6a0cfc0dd8d90ddd8153a046cd6245f517f351e77d61e8e98",
+    "encoding_name": "?",
+    "t3_fixture_sha": "934204713620d171743820aea6907cf4e117ca97c69e50052b991a3fdcc23991",
+    "alt_fixture_sha": "a68b810f27d31a51e06173bfcd3e2d88d8f3275c7773a63b37aafb3fe25a20ff",
+    "wall_s": 0.5
+  },
+  "thresholds": {
+    "t3_warn": 0.3,
+    "t3_soft_abort": 0.2,
+    "alt_warn": 0.1,
+    "alt_soft_abort": 0.07
+  },
+  "v6_baseline": {
+    "t3_spread": 0.6173,
+    "alt_spread": 0.2119
+  },
+  "v7full": {
+    "t3_spread": 0.2171,
+    "t3_components": {
+      "mean_colony": 0.0169,
+      "mean_ext": -0.2002,
+      "sd_col": 0.8755,
+      "sd_ext": 0.7187,
+      "n": 40,
+      "n_colony": 20,
+      "n_extension": 20
+    },
+    "alt_spread": 0.4078,
+    "alt_components": {
+      "mean_colony": 0.0837,
+      "mean_ext": -0.3241,
+      "sd_col": 0.678,
+      "sd_ext": 0.8363,
+      "n": 40,
+      "n_colony": 20,
+      "n_extension": 20
+    },
+    "both_pass": true
+  },
+  "verdict": "C-LITE-1-A",
+  "verdict_description": "v7full alt-bank V_spread \u2265 +0.15 \u2014 encoding regression candidate CONFIRMED; consider v7full as the real-run anchor"
+}
