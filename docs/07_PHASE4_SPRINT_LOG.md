@@ -3064,6 +3064,86 @@ Track B instrumentation, NOT a single targeted intervention.
 
 ---
 
+## §S181-AUDIT Wave 1 — Track B infra + C-LITE-1 + Track D + REAL_RUN_RECIPE
+
+**Wave.** Capstone diagnostic before the next sustained run. Closes the
+Track A "no single source" cliff (L49) by landing Track B's
+instrumentation infra (operator-mediated run pending), capturing v7full
+as a real-run anchor candidate, and synthesizing a parameterized recipe
+gated on Track B's V-B verdict. FF-merged to master 2026-05-23 as 4
+commits `7cd0dc0..71268ab` across 4 short-lived branches (PR-C / Track
+B / Track C-LITE / Track D — all pruned post-merge). REVIEW pass (Opus
+4.7 fresh-context, scopes A-F all PASS).
+
+### Landed commits
+
+- `7cd0dc0` PR-C: dual-bank V_spread canary (T3 + alt per L48). 412 LOC
+  net, INV pin extended to alt fixture SHA `a68b810f…20a20ff`. 31/31
+  PASS (8 INV + 23 unit). Back-compat preserved for legacy single-bank
+  payloads. No hot-path touch.
+- `3201c39` Track B: B1 per-source gradient-norm attribution
+  (`hexo_rl/training/track_b_attribution.py`, ~3× cost via 3
+  retain_graph autograd.grad slices) + B2 buffer position-class
+  snapshot (`hexo_rl/training/track_b_buffer_snapshot.py`, ckpt-cadence
+  hook in StepCoordinator) + B3 post-run trunk feature drift script +
+  `v6_botmix_s181_track_b.yaml` variant + launch-and-analysis spec.
+  43/43 PASS (12 Track B + 31 PR-C/INV). NOT LAUNCHED — operator-
+  mediated vast launch (~6 h, ~$1.50) blocks V-B verdict aggregation.
+- `b93d994` Track C-LITE-1: v7full anchor dual-bank V_spread (T3
+  +0.2171 / alt +0.4078). Verdict C-LITE-1-A — encoding regression
+  candidate CONFIRMED; v7full's alt-bank V_spread is ~2× v6's. T3
+  borderline at +0.017 over SOFT-ABORT is L48-explained (T3 calibrated
+  on v6's value head; alt is the corpus-grounded reference). C-LITE-2
+  v6w25 stock probe DEFERRED — C-LITE-1's answer + REAL_RUN_RECIPE
+  conditional path covers the encoding question for the v6 family.
+- `47d658e` REAL_RUN_RECIPE: 7-section synthesis with parameterized
+  Wave 2 lever stack gated on V-B-{A,B,C,D,E}. Anchor primary
+  `bootstrap_model_v7full.pt`; encoding `v7full`; success criteria
+  RR-G1..RR-G6 (LITERAL L13); compute budget ~$5 + 2-3 days dev.
+- `71268ab` Track D: pipeline regression audit §150→§S178+ (596
+  lines). Smoking-gun rank: (1) bot-corpus value-target imprint +
+  staleness, (2) pretrain corpus colony pull × recency_weight=0.75,
+  (3) ply_cap_value=0.0 × full_search_prob=0.5 cross, (4) bot-corpus
+  staleness × outcome feedback, (5) recency_weight ×
+  selfplay-buffer compounding (INCONCLUSIVE).
+
+### Track B — B4 run pending (operator-mediated)
+
+Run spec at `audit/structural/track_b/B_launch_and_analysis_spec.md`:
+3000-step instrumented run on vast 5080 with `v6_botmix_s181_track_b`
+variant, `bootstrap_model_v6.pt` anchor, dual-bank canary firing every
+500 steps. Pre-registered V-B-{A..E} decision tree:
+
+| ID | rule | downstream |
+|---|---|---|
+| V-B-A | one source ≥60% of total grad pull | source-targeted lever |
+| V-B-B | all three sources 25-45% | multi-source damping (EMA + 2-stone aux + per-class target temp) |
+| V-B-C | buffer colony-heavy ≥50% by step 2k | refresh hook + EMA priority |
+| V-B-D | trunk centroids collapse ≥50% by step 1k | aux heads forcing trunk discrimination |
+| V-B-E | none match | escalate, no real-run launch |
+
+V-B-{verdict} feeds REAL_RUN_RECIPE §3 conditional lever pick. No L50+
+banked this wave — Wave 2 will bank lessons from the actual B4 run +
+verdict application.
+
+### Wave 2 — operator decision point
+
+`audit/structural/REAL_RUN_RECIPE.md` §7 captures the Wave 2 sequence:
+B4 run → V-B aggregation → conditional lever pick → EMA always; 2-stone
+aux iff V-B-D; per-source lever per V-B → pre-launch smoke (~$1.50,
+~6 h) → main 100k-step run on v7full anchor (~$3, ~14 h). Total Wave 2
+estimated cost ~$5 + 2-3 days dev. Operator decides launch timing; do
+NOT auto-launch.
+
+### Branches pruned post-merge
+
+`phase4.5/s181_pr_c_dual_bank`, `phase4.5/s181_track_b_instrumented`,
+`phase4.5/s181_track_c_lite`, `phase4.5/s181_track_d` — all FF-merged
+and deleted. No push of these branch names; master HEAD `71268ab`
+carries every commit.
+
+---
+
 ## §S182 — perf wave: legal_moves_set capacity fix MERGED
 
 *DISCRIMINATOR: §S182 = Rust-perf wave merge (this entry). The §S178 bot-mix
