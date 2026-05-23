@@ -105,9 +105,11 @@ def snapshot_buffer_position_classes(
         log.warning("track_b_buffer_snapshot_emit_failed",
                     step=step, error=str(exc))
 
-    log.info("buffer_position_class_snapshot",
-             step=step, n=n_total,
-             colony_frac=payload["colony_frac"],
-             extension_frac=payload["extension_frac"],
-             neither_frac=payload["neither_frac"])
+    # Log the full payload via structlog as well as the emit_event sink so
+    # the structlog file is self-sufficient for B2 analysis (the dashboard
+    # events JSONL is the primary source, but the structlog file is what
+    # survives in `logs/` indexing + rsync). Strip the `event` key — structlog
+    # treats it as the message name positionally.
+    _log_payload = {k: v for k, v in payload.items() if k != "event"}
+    log.info("buffer_position_class_snapshot", **_log_payload)
     return payload
