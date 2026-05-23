@@ -1,0 +1,74 @@
+{
+  "meta": {
+    "wave": "\u00a7S181-AUDIT Wave 1 \u2014 Track B / B3",
+    "ckpt_dir": "reports/track_b_b4/checkpoints",
+    "alt_bank_sha": "a68b810f27d31a51e06173bfcd3e2d88d8f3275c7773a63b37aafb3fe25a20ff",
+    "n_ladder": 7,
+    "wall_s": 1.31
+  },
+  "ladder": [
+    {
+      "step": 0,
+      "ckpt": "bootstrap_model_v6.pt",
+      "colony_intra_var": 2338.929932,
+      "extension_intra_var": 2800.537354,
+      "inter_centroid_dist": 23.232159,
+      "inter_intra_ratio": 0.324064,
+      "feature_dim": 46208
+    },
+    {
+      "step": 500,
+      "ckpt": "checkpoint_00000500.pt",
+      "colony_intra_var": 2249.864746,
+      "extension_intra_var": 2984.987793,
+      "inter_centroid_dist": 20.645538,
+      "inter_intra_ratio": 0.285347,
+      "feature_dim": 46208
+    },
+    {
+      "step": 1000,
+      "ckpt": "checkpoint_00001000.pt",
+      "colony_intra_var": 2086.646973,
+      "extension_intra_var": 2947.03418,
+      "inter_centroid_dist": 19.458044,
+      "inter_intra_ratio": 0.274256,
+      "feature_dim": 46208
+    },
+    {
+      "step": 1500,
+      "ckpt": "checkpoint_00001500.pt",
+      "colony_intra_var": 2146.809082,
+      "extension_intra_var": 2902.71167,
+      "inter_centroid_dist": 20.802385,
+      "inter_intra_ratio": 0.292744,
+      "feature_dim": 46208
+    },
+    {
+      "step": 2000,
+      "ckpt": "checkpoint_00002000.pt",
+      "colony_intra_var": 2129.005371,
+      "extension_intra_var": 2709.853516,
+      "inter_centroid_dist": 20.040707,
+      "inter_intra_ratio": 0.288099,
+      "feature_dim": 46208
+    },
+    {
+      "step": 2500,
+      "ckpt": "checkpoint_00002500.pt",
+      "colony_intra_var": 2149.638428,
+      "extension_intra_var": 3030.787842,
+      "inter_centroid_dist": 21.376734,
+      "inter_intra_ratio": 0.297001,
+      "feature_dim": 46208
+    },
+    {
+      "step": 3000,
+      "ckpt": "checkpoint_00003000.pt",
+      "colony_intra_var": 2151.965332,
+      "extension_intra_var": 3048.058105,
+      "inter_centroid_dist": 22.134041,
+      "inter_intra_ratio": 0.306943,
+      "feature_dim": 46208
+    }
+  ]
+}

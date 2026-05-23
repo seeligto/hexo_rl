@@ -53,8 +53,9 @@ def _extract_trunk_features(
     """
     captured: dict[str, torch.Tensor] = {}
 
-    def _hook(_module: torch.nn.Module, args: tuple, _output: Any) -> None:
-        # args[0] is the trunk output tensor (post-trunk, pre-head input).
+    def _hook(_module: torch.nn.Module, args: tuple) -> None:
+        # forward-pre-hook signature is (module, args); args[0] is the
+        # trunk output tensor handed to the policy head (its first input).
         if args and isinstance(args[0], torch.Tensor):
             captured["features"] = args[0].detach()
 
