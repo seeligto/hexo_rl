@@ -208,3 +208,17 @@ ema:
   enabled: false
   decay: 0.999            # EMA mixing rate: avg = decay * avg + (1-decay) * cur
   update_every: 10        # apply EMA update every N optimizer steps
+
+# §S181-AUDIT Wave 2 — per-class target temperature on the selfplay slice.
+# V-B-A `uniform_self` lever per REAL_RUN_RECIPE §3 (Track B B1 pinned
+# selfplay-family ~91 % of total gradient pull; this softens colony
+# positions' sharp visit-count CE peaks to attenuate the gradient-pull
+# asymmetry — direct counter to L43). Default OFF preserves pre-Wave-2
+# behaviour. See hexo_rl/training/per_class_target_temperature.py and
+# tests/test_inv_per_class_target_temperature.py.
+per_class_target_temperature:
+  enabled: false
+  colony_temperature: 1.5      # T > 1 softens; calibrated on the L43 1.21x ratio
+  extension_temperature: 1.0   # no-op on extension positions
+  neither_temperature: 1.0     # no-op on neither positions
+  apply_to_pretrain: false     # default: only the selfplay slice gets scaled

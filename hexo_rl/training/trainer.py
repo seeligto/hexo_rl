@@ -507,6 +507,22 @@ class Trainer:
                 np.asarray(is_full_search, dtype=np.uint8)
             ).to(self.device).bool()
 
+        # §S181-AUDIT Wave 2 — per-class target temperature on selfplay slice
+        # (V-B-A `uniform_self` lever per REAL_RUN_RECIPE §3). Softens
+        # visit-count CE targets on colony positions to attenuate the
+        # gradient-pull asymmetry Track B B1 pinned. Applied BEFORE
+        # policy_prune_frac so pruning sees the softened distribution and
+        # keeps its own (post-temperature) top-k mass. Default OFF preserves
+        # pre-Wave-2 behaviour.
+        if self.config.get("per_class_target_temperature", {}).get("enabled", False):
+            from hexo_rl.training.per_class_target_temperature import (
+                apply_per_class_temperature,
+            )
+            policies_t = apply_per_class_temperature(
+                policies_t, states_t, n_pretrain=n_pretrain,
+                config=self.config, device=self.device,
+            )
+
         prune_frac = float(self.config.get("policy_prune_frac", 0.0))
         if prune_frac > 0.0:
             if not self._policy_diag_done:
