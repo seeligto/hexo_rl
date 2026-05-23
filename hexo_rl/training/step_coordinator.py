@@ -601,6 +601,25 @@ class StepCoordinator:
                 if self._train_step > 0:
                     _try_save_buffer(self.buffer, self.mixing_cfg, "checkpoint_interval", self.recent_buffer)
                     checkpoint_saved = True
+                    # §S181-AUDIT Track B — buffer position-class snapshot.
+                    # Gated on trainer._track_b_buffer_snapshot; fire-and-forget.
+                    if getattr(self.trainer, "_track_b_buffer_snapshot", False):
+                        try:
+                            from hexo_rl.training.track_b_buffer_snapshot import (
+                                snapshot_buffer_position_classes,
+                            )
+                            snapshot_buffer_position_classes(
+                                self.buffer, self._train_step,
+                                n_sample=int(getattr(
+                                    self.trainer,
+                                    "_track_b_buffer_snapshot_n", 5000,
+                                )),
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            structlog.get_logger().warning(
+                                "track_b_buffer_snapshot_dispatch_failed",
+                                step=self._train_step, error=str(exc),
+                            )
 
             # D5: axis-distribution emit + D5b soft-abort
             if self._train_step > 0 and self._train_step % cfg.eval_interval == 0:

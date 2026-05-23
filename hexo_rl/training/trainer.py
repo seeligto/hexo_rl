@@ -283,6 +283,20 @@ class Trainer:
         self._perf_timing = bool(_diag.get("perf_timing", False))
         self._perf_sync_cuda = bool(_diag.get("perf_sync_cuda", False))
         self._vram_probe_interval = int(_diag.get("vram_probe_interval", 100))
+
+        # §S181-AUDIT Track B — per-source gradient-norm attribution (~3× cost,
+        # off by default). Set `track_b_grad_attribution: true` to enable.
+        self._track_b_grad_attribution = bool(
+            config.get("track_b_grad_attribution", False)
+        )
+        # §S181-AUDIT Track B — selfplay buffer position-class snapshot at
+        # checkpoint cadence. ~5k positions per snapshot, ~few sec per fire.
+        self._track_b_buffer_snapshot = bool(
+            config.get("track_b_buffer_snapshot", False)
+        )
+        self._track_b_buffer_snapshot_n = int(
+            config.get("track_b_buffer_snapshot_n", 5000)
+        )
         if self._perf_sync_cuda and torch.cuda.is_available():
             log.warning(
                 "perf_sync_cuda_enabled_serialising_stream",
@@ -667,6 +681,42 @@ class Trainer:
                 "lr": self.optimizer.param_groups[0]["lr"],
                 **_ZERO_POLICY_TARGET_METRICS,
             }
+
+        # §S181-AUDIT Track B — per-source gradient-norm attribution.
+        # Fires BEFORE the main backward; uses retain_graph so backward
+        # still consumes the graph. Skips on any failure (never blocks
+        # training). ~3× per-step cost (3 extra slice backwards).
+        if self._track_b_grad_attribution:
+            try:
+                from hexo_rl.training.track_b_attribution import (
+                    build_slice_losses,
+                    compute_per_source_grad_attribution,
+                    select_param_groups,
+                )
+                slice_losses = build_slice_losses(
+                    log_policy=log_policy, v_logit=v_logit,
+                    policies_t=policies_t, outcomes_t=outcomes_t,
+                    policy_valid=policy_valid, device=self.device,
+                    n_pretrain=n_pretrain, n_recent=n_recent,
+                    full_search_mask=full_search_mask_t,
+                    use_kl=use_kl,
+                )
+                target_groups = select_param_groups(self.model)
+                attribution = compute_per_source_grad_attribution(
+                    slice_losses, target_groups,
+                )
+                log.info(
+                    "per_source_grad_norm",
+                    step=self.step + 1,
+                    n_pretrain=n_pretrain, n_recent=n_recent,
+                    n_uniform_self=batch_n - n_pretrain - n_recent,
+                    **attribution,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "track_b_attribution_failed",
+                    step=self.step, error=str(exc),
+                )
 
         max_grad_norm = float(self.config.get("grad_clip", 1.0))
         grad_norm = fp16_backward_step(
