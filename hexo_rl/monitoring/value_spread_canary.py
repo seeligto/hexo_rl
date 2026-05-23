@@ -1,4 +1,4 @@
-"""§S181 PR-A — value-spread canary.
+"""§S181 PR-A — value-spread canary. PR-C: dual-bank (T3 + alt per L48).
 
 First-class colony-capture canary. Replaces `colony_a` as the *trigger*
 signal (FU-1 §5: `colony_a` is a wins-only, late, small-denominator ratio;
@@ -10,20 +10,29 @@ positions from open-extension positions:
 
     V_spread = mean V(colony bank) - mean V(extension bank)
 
-The `bootstrap_model_v6.pt` anchor scores V_spread = +0.617. Across the
-§S180b colony-captured trajectory it collapses to ~0 by step 20k — the
-value head can no longer tell a dead blob from a winning open run. FU-1
-pinned the +0.20 line as the abort gate.
+The `bootstrap_model_v6.pt` anchor scores T3 V_spread = +0.617 (synthetic
+T3 builder positions). Across the §S180b colony-captured trajectory it
+collapses to ~0 by step 20k — the value head can no longer tell a dead
+blob from a winning open run. FU-1 pinned the +0.20 line as the T3 abort
+gate.
 
-This module forwards the value head on the frozen 40-position T3 bank
-(`tests/fixtures/value_spread_bank.json`, SHA-pinned) on every checkpoint
-save and emits a `value_spread` dashboard event. It is a CANARY, not a
-kill switch — it surfaces WARNING / SOFT-ABORT to the operator and never
-aborts training itself.
+PR-C / L48 (`docs/07_PHASE4_SPRINT_LOG.md` §S181-AUDIT). Track A A3
+confirmed T3 amplifies ~3× vs an alt bank drawn from real bot-corpus
+positions (Pearson r=0.27). Alt anchor V_spread = +0.212; alt gates are
+T3/3: WARN < +0.10, SOFT-ABORT < +0.07. The dual-bank canary computes
+BOTH and SOFT-ABORTs if either bank crosses.
+
+This module forwards the value head on:
+  * the frozen 40-position T3 bank (`tests/fixtures/value_spread_bank.json`)
+  * the frozen 40-position alt bank (`tests/fixtures/value_spread_bank_alt.json`)
+on every checkpoint save and emits a `value_spread` dashboard event. It
+is a CANARY, not a kill switch — it surfaces WARNING / SOFT-ABORT to the
+operator and never aborts training itself.
 
 INSPECTION-ONLY. Imports the compiled `engine` bindings + the
-`LocalInferenceEngine` thin wrapper — no hot-path edits, no `scripts/`
-imports. The forward runs under `torch.no_grad()`.
+`LocalInferenceEngine` thin wrapper for the T3 bank; the alt bank is a
+direct `net(state)` forward (matches A3's reproduction path). No hot-path
+edits, no `scripts/` imports. The forward runs under `torch.no_grad()`.
 """
 from __future__ import annotations
 
@@ -39,16 +48,23 @@ import torch
 
 log = structlog.get_logger(__name__)
 
-# Repo-root-relative default fixture path.
+# Repo-root-relative default fixture paths.
 _REPO = Path(__file__).resolve().parents[2]
 _FIXTURE_PATH = _REPO / "tests" / "fixtures" / "value_spread_bank.json"
+_ALT_FIXTURE_PATH = _REPO / "tests" / "fixtures" / "value_spread_bank_alt.json"
 
 # FU-1 anchor bank SHA — the fixture MUST hash to this. Drift = STOP.
 BANK_SHA256 = "934204713620d171743820aea6907cf4e117ca97c69e50052b991a3fdcc23991"
+# PR-C / L48 — A3 alt bank fixture SHA (`meta.sha256`). Drift = STOP.
+ALT_BANK_SHA256 = "a68b810f27d31a51e06173bfcd3e2d88d8f3275c7773a63b37aafb3fe25a20ff"
 
-# FU-1 / skeleton FU-2 gate. Anchor V_spread = +0.617; healthy stays high.
-WARN_THRESHOLD = 0.30        # WARNING below this
-SOFT_ABORT_THRESHOLD = 0.20  # SOFT-ABORT signal below this (FU-2 abort gate)
+# FU-1 / skeleton FU-2 gate. T3 anchor V_spread = +0.617; healthy stays high.
+WARN_THRESHOLD = 0.30        # WARNING below this (T3)
+SOFT_ABORT_THRESHOLD = 0.20  # SOFT-ABORT signal below this (T3 FU-2 abort gate)
+# PR-C / L48 — alt bank scaled gates (T3 amplifies ~3× per A3 Pearson r=0.27).
+# Alt anchor V_spread = +0.212; gates set at T3/3.
+ALT_WARN_THRESHOLD = 0.10
+ALT_SOFT_ABORT_THRESHOLD = 0.07
 
 
 # ── Bank ─────────────────────────────────────────────────────────────────
@@ -178,8 +194,143 @@ def compute_value_spread(
     )
 
 
+# ── Alt bank (PR-C / L48) ────────────────────────────────────────────────
+@dataclass
+class _AltBank:
+    """Realized 40-position alt bank: pre-built (8, 19, 19) state tensors
+    drawn from real bot-corpus positions (A3 builder)."""
+
+    states: np.ndarray   # (40, 8, 19, 19) float32
+    classes: np.ndarray  # (40,) object/str — "colony" | "extension"
+    sha: str
+
+
+def _alt_bank_sha(positions: list[dict]) -> str:
+    """A3 SHA scope (name + class + state.tobytes()) — different from T3
+    (which hashes the move sequence). Matches `a3_h_bank.bank_sha`."""
+    h = hashlib.sha256()
+    for spec in positions:
+        h.update(spec["name"].encode())
+        h.update(spec["pos_class"].encode())
+        arr = np.asarray(spec["state"], dtype=np.float32)
+        h.update(arr.tobytes())
+    return h.hexdigest()
+
+
+def load_alt_bank(fixture_path: Optional[Path | str] = None) -> _AltBank:
+    """Load + SHA-verify the alt bank fixture. Drift = STOP."""
+    path = Path(fixture_path) if fixture_path is not None else _ALT_FIXTURE_PATH
+    if not path.exists():
+        raise FileNotFoundError(f"value-spread alt bank fixture missing at {path}")
+    data = json.loads(path.read_text())
+    positions = data["positions"]
+    sha = _alt_bank_sha(positions)
+    if sha != ALT_BANK_SHA256:
+        raise ValueError(
+            f"value-spread alt bank SHA {sha} != pinned {ALT_BANK_SHA256} — "
+            "fixture drifted from the A3 anchor. STOP."
+        )
+    states = np.stack([np.asarray(p["state"], dtype=np.float32)
+                       for p in positions])
+    classes = np.array([p["pos_class"] for p in positions])
+    return _AltBank(states=states, classes=classes, sha=sha)
+
+
+def compute_value_spread_alt(
+    net: torch.nn.Module,
+    bank: _AltBank,
+    device: Optional[torch.device] = None,
+) -> CanaryResult:
+    """Direct `net(state)` forward over the alt bank — matches A3's
+    reproduction path (`a3_h_bank.forward_value`). Returns the spread."""
+    dev = device if device is not None else torch.device("cpu")
+    was_training = net.training
+    net.eval()
+    try:
+        x = torch.from_numpy(bank.states).to(dev)
+        with torch.no_grad():
+            _logp, value, _vlogit = net(x)
+        vals = value.squeeze(-1).cpu().float().numpy().astype(np.float64)
+    finally:
+        if was_training:
+            net.train()
+
+    col = vals[bank.classes == "colony"]
+    ext = vals[bank.classes == "extension"]
+    mc = float(col.mean()) if col.size else float("nan")
+    me = float(ext.mean()) if ext.size else float("nan")
+    return CanaryResult(
+        mean_colony=round(mc, 4),
+        mean_ext=round(me, 4),
+        spread=round(mc - me, 4),
+        sd_col=round(float(col.std(ddof=0)), 4) if col.size else 0.0,
+        sd_ext=round(float(ext.std(ddof=0)), 4) if ext.size else 0.0,
+        n=int(vals.size),
+        n_colony=int(col.size),
+        n_extension=int(ext.size),
+    )
+
+
+# ── Dual canary (PR-C) ───────────────────────────────────────────────────
+@dataclass
+class DualCanaryResult:
+    """T3 + alt V_spread measured together (PR-C / L48).
+
+    PASS = T3 ≥ SOFT_ABORT_THRESHOLD AND alt ≥ ALT_SOFT_ABORT_THRESHOLD.
+    Either failing flips `both_pass=False` → SOFT-ABORT signal.
+    """
+
+    t3_spread: float
+    t3_components: dict[str, float]
+    alt_spread: float
+    alt_components: dict[str, float]
+    both_pass: bool
+
+    def to_payload(self) -> dict[str, Any]:
+        return dict(
+            t3_spread=self.t3_spread,
+            t3_components=self.t3_components,
+            alt_spread=self.alt_spread,
+            alt_components=self.alt_components,
+            both_pass=self.both_pass,
+            # Back-compat with pre-PR-C single-bank renderers/tests.
+            spread=self.t3_spread,
+            mean_colony=self.t3_components["mean_colony"],
+            mean_ext=self.t3_components["mean_ext"],
+        )
+
+
+def _components(r: CanaryResult) -> dict[str, float]:
+    return dict(
+        mean_colony=r.mean_colony, mean_ext=r.mean_ext,
+        sd_col=r.sd_col, sd_ext=r.sd_ext,
+        n=r.n, n_colony=r.n_colony, n_extension=r.n_extension,
+    )
+
+
+def compute_value_spread_dual(
+    net: torch.nn.Module,
+    device: Optional[torch.device] = None,
+    t3_bank: Optional[_Bank] = None,
+    alt_bank: Optional[_AltBank] = None,
+) -> DualCanaryResult:
+    """Forward once over each bank; return dual result + PASS verdict."""
+    t3 = t3_bank if t3_bank is not None else load_bank()
+    alt = alt_bank if alt_bank is not None else load_alt_bank()
+    t3_r = compute_value_spread(net, t3, device)
+    alt_r = compute_value_spread_alt(net, alt, device)
+    both_pass = (t3_r.spread >= SOFT_ABORT_THRESHOLD
+                 and alt_r.spread >= ALT_SOFT_ABORT_THRESHOLD)
+    return DualCanaryResult(
+        t3_spread=t3_r.spread, t3_components=_components(t3_r),
+        alt_spread=alt_r.spread, alt_components=_components(alt_r),
+        both_pass=both_pass,
+    )
+
+
 # ── Checkpoint-save hook ─────────────────────────────────────────────────
 _BANK_CACHE: Optional[_Bank] = None
+_ALT_BANK_CACHE: Optional[_AltBank] = None
 _BANK_LOAD_FAILED = False
 
 
@@ -187,20 +338,24 @@ def fire_canary(
     model: torch.nn.Module,
     step: int,
     device: Optional[torch.device] = None,
-) -> Optional[CanaryResult]:
-    """Run the canary on a checkpoint save: measure, emit, alert.
+) -> Optional[DualCanaryResult]:
+    """Run the dual-bank canary on a checkpoint save: measure, emit, alert.
 
     Fire-and-forget — never raises. A canary or fixture failure disables
     the canary for the run and logs once; training is unaffected.
-    Returns the `CanaryResult` (handy for tests) or None on failure.
+    Returns the `DualCanaryResult` (handy for tests) or None on failure.
     """
-    global _BANK_CACHE, _BANK_LOAD_FAILED
+    global _BANK_CACHE, _ALT_BANK_CACHE, _BANK_LOAD_FAILED
     if _BANK_LOAD_FAILED:
         return None
     try:
         if _BANK_CACHE is None:
             _BANK_CACHE = load_bank()
-        result = compute_value_spread(model, _BANK_CACHE, device)
+        if _ALT_BANK_CACHE is None:
+            _ALT_BANK_CACHE = load_alt_bank()
+        result = compute_value_spread_dual(
+            model, device, t3_bank=_BANK_CACHE, alt_bank=_ALT_BANK_CACHE,
+        )
     except Exception as exc:  # noqa: BLE001 — canary must never break training
         _BANK_LOAD_FAILED = True
         log.warning("value_spread_canary_failed", step=step, error=str(exc))
@@ -216,6 +371,8 @@ def fire_canary(
             **result.to_payload(),
             "warn_threshold": WARN_THRESHOLD,
             "soft_abort_threshold": SOFT_ABORT_THRESHOLD,
+            "alt_warn_threshold": ALT_WARN_THRESHOLD,
+            "alt_soft_abort_threshold": ALT_SOFT_ABORT_THRESHOLD,
         })
     except Exception as exc:  # noqa: BLE001
         log.warning("value_spread_emit_failed", step=step, error=str(exc))
@@ -223,11 +380,13 @@ def fire_canary(
     # Surface the alert to the operator via structlog (canary, not killer).
     from hexo_rl.monitoring.alert_rules import check_value_spread_canary
 
-    msg = check_value_spread_canary({"spread": result.spread})
+    msg = check_value_spread_canary(result.to_payload())
     if msg is not None:
-        log.warning("value_spread_alert", step=step, spread=result.spread,
-                     alert=msg)
+        log.warning("value_spread_alert", step=step,
+                    t3_spread=result.t3_spread, alt_spread=result.alt_spread,
+                    both_pass=result.both_pass, alert=msg)
     else:
-        log.info("value_spread_canary", step=step, spread=result.spread,
-                 mean_colony=result.mean_colony, mean_ext=result.mean_ext)
+        log.info("value_spread_canary", step=step,
+                 t3_spread=result.t3_spread, alt_spread=result.alt_spread,
+                 both_pass=result.both_pass)
     return result

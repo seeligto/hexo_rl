@@ -1,4 +1,4 @@
-"""Tests for the §S181 PR-A value-spread colony-capture canary."""
+"""Tests for the §S181 PR-A + PR-C dual-bank value-spread canary."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,12 +11,19 @@ from hexo_rl.monitoring.alert_rules import (
     evaluate_value_spread_alerts,
 )
 from hexo_rl.monitoring.value_spread_canary import (
+    ALT_BANK_SHA256,
+    ALT_SOFT_ABORT_THRESHOLD,
+    ALT_WARN_THRESHOLD,
     BANK_SHA256,
     SOFT_ABORT_THRESHOLD,
     WARN_THRESHOLD,
     CanaryResult,
+    DualCanaryResult,
     compute_value_spread,
+    compute_value_spread_alt,
+    compute_value_spread_dual,
     fire_canary,
+    load_alt_bank,
     load_bank,
 )
 
@@ -26,6 +33,11 @@ ANCHOR = REPO / "checkpoints" / "bootstrap_model_v6.pt"
 # FU-1 anchor reproduction target — see audit/structural/05_fu1_value_spread_ladder.md.
 ANCHOR_SPREAD = 0.6173
 ANCHOR_TOL = 0.005
+
+# A3 alt anchor reproduction target — see audit/structural/track_a/A3_h_bank_confound.json
+# (anchor row, vspread_alt ≈ +0.212).
+ANCHOR_ALT_SPREAD = 0.2119
+ANCHOR_ALT_TOL = 0.005
 
 
 # ── Bank + fixture ───────────────────────────────────────────────────────
@@ -147,3 +159,122 @@ def test_fire_canary_emit_failure_does_not_propagate(monkeypatch):
     # Must not raise.
     result = fire_canary(net, step=1, device=torch.device("cpu"))
     assert result is not None
+
+
+# ── PR-C / L48 dual-bank tests ───────────────────────────────────────────
+
+
+def test_load_alt_bank_sha_and_shape():
+    bank = load_alt_bank()
+    assert bank.sha == ALT_BANK_SHA256
+    assert bank.states.shape == (40, 8, 19, 19)
+    n_col = int((bank.classes == "colony").sum())
+    n_ext = int((bank.classes == "extension").sum())
+    assert n_col == 20
+    assert n_ext == 20
+
+
+def test_alt_threshold_constants():
+    # L48 scaling: T3 amplifies ~3×, alt gates at T3/3.
+    assert ALT_WARN_THRESHOLD == 0.10
+    assert ALT_SOFT_ABORT_THRESHOLD == 0.07
+
+
+def test_dual_alert_t3_below_gate_soft_aborts():
+    msg = check_value_spread_canary({"t3_spread": 0.10, "alt_spread": 0.15})
+    assert msg is not None and "SOFT-ABORT" in msg
+
+
+def test_dual_alert_alt_below_gate_soft_aborts():
+    msg = check_value_spread_canary({"t3_spread": 0.50, "alt_spread": 0.05})
+    assert msg is not None and "SOFT-ABORT" in msg
+
+
+def test_dual_alert_t3_warns_alone():
+    msg = check_value_spread_canary({"t3_spread": 0.25, "alt_spread": 0.15})
+    assert msg is not None and "WARNING" in msg and "SOFT-ABORT" not in msg
+
+
+def test_dual_alert_alt_warns_alone():
+    msg = check_value_spread_canary({"t3_spread": 0.50, "alt_spread": 0.08})
+    assert msg is not None and "WARNING" in msg and "SOFT-ABORT" not in msg
+
+
+def test_dual_alert_silent_when_both_healthy():
+    # Anchor values: T3 +0.617, alt +0.212 — both above WARN.
+    assert check_value_spread_canary({
+        "t3_spread": ANCHOR_SPREAD, "alt_spread": ANCHOR_ALT_SPREAD,
+    }) is None
+
+
+def test_dual_alert_handles_one_bank_missing():
+    # Single-bank back-compat (legacy single-bank payload still works).
+    assert check_value_spread_canary({"spread": ANCHOR_SPREAD}) is None
+    assert check_value_spread_canary({"spread": 0.10}) is not None
+
+
+def test_dual_alert_thresholds_strict_lt():
+    # Exactly at the threshold is not SOFT-ABORT (strict <).
+    msg = check_value_spread_canary({"t3_spread": 0.20, "alt_spread": 0.07})
+    assert msg is not None and "SOFT-ABORT" not in msg
+
+
+@pytest.mark.skipif(not ANCHOR.exists(), reason="bootstrap_model_v6.pt absent")
+def test_compute_value_spread_alt_reproduces_anchor():
+    """Alt-bank forward must reproduce A3 anchor V_spread = +0.212."""
+    from hexo_rl.viewer.model_loader import load_model
+
+    net, _meta, _dev = load_model(ANCHOR, device=torch.device("cpu"))
+    bank = load_alt_bank()
+    result = compute_value_spread_alt(net, bank, torch.device("cpu"))
+    assert isinstance(result, CanaryResult)
+    assert result.n == 40
+    assert abs(result.spread - ANCHOR_ALT_SPREAD) <= ANCHOR_ALT_TOL, (
+        f"alt-bank V_spread {result.spread} != A3 anchor {ANCHOR_ALT_SPREAD}"
+    )
+
+
+@pytest.mark.skipif(not ANCHOR.exists(), reason="bootstrap_model_v6.pt absent")
+def test_compute_value_spread_dual_anchor_both_pass():
+    """At the anchor both banks pass the SOFT-ABORT gates."""
+    from hexo_rl.viewer.model_loader import load_model
+
+    net, _meta, _dev = load_model(ANCHOR, device=torch.device("cpu"))
+    result = compute_value_spread_dual(net, torch.device("cpu"))
+    assert isinstance(result, DualCanaryResult)
+    assert abs(result.t3_spread - ANCHOR_SPREAD) <= ANCHOR_TOL
+    assert abs(result.alt_spread - ANCHOR_ALT_SPREAD) <= ANCHOR_ALT_TOL
+    assert result.both_pass is True
+    assert "mean_colony" in result.t3_components
+    assert "mean_colony" in result.alt_components
+
+
+@pytest.mark.skipif(not ANCHOR.exists(), reason="bootstrap_model_v6.pt absent")
+def test_fire_canary_emits_dual_payload():
+    """fire_canary returns DualCanaryResult and emits dual fields."""
+    from hexo_rl.monitoring import events as events_mod
+    from hexo_rl.viewer.model_loader import load_model
+
+    captured: list[dict] = []
+
+    class _Sink:
+        def on_event(self, payload: dict) -> None:
+            captured.append(payload)
+
+    events_mod.register_renderer(_Sink())
+    net, _meta, _dev = load_model(ANCHOR, device=torch.device("cpu"))
+    result = fire_canary(net, step=99999, device=torch.device("cpu"))
+
+    assert isinstance(result, DualCanaryResult)
+    evs = [p for p in captured if p.get("event") == "value_spread"
+           and p.get("step") == 99999]
+    assert evs, "no value_spread event emitted"
+    ev = evs[-1]
+    # Dual fields:
+    assert "t3_spread" in ev and "alt_spread" in ev and "both_pass" in ev
+    assert ev["alt_soft_abort_threshold"] == ALT_SOFT_ABORT_THRESHOLD
+    assert ev["alt_warn_threshold"] == ALT_WARN_THRESHOLD
+    # Back-compat fields still present:
+    assert "spread" in ev and "mean_colony" in ev and "mean_ext" in ev
+    assert ev["spread"] == ev["t3_spread"]
+    assert ev["both_pass"] is True

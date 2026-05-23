@@ -94,22 +94,39 @@ def check_sealbot_gate_failed(payload: dict) -> Optional[str]:
 
 
 def check_value_spread_canary(payload: dict) -> Optional[str]:
-    """``value_spread`` payload — colony-capture canary (§S181 PR-A / FU-1).
+    """``value_spread`` payload — colony-capture canary (§S181 PR-A + PR-C / FU-1 / L48).
 
-    The value-head colony/extension discriminator. Anchor V_spread = +0.617;
-    a healthy head stays high. FU-1 pinned the gates:
-      * SOFT-ABORT below +0.20 — the FU-2 abort gate; value head captured.
-      * WARNING  below +0.30 — discriminator degrading.
+    Dual-bank discriminator. T3 anchor V_spread = +0.617; alt anchor = +0.212.
+    L48 revised the magnitude: T3 amplifies ~3× vs the corpus-drawn alt bank.
+    Gates (PR-C):
+      * SOFT-ABORT: T3 < +0.20 OR alt < +0.07 (dual-bank colony capture).
+      * WARNING:   T3 < +0.30 OR alt < +0.10 (discriminator degrading).
+    Back-compat: single-bank payloads (only `spread` set) use the T3 gates.
     Canary only — the message routes to the operator, never auto-aborts.
     """
-    spread = payload.get("spread")
-    if spread is None or not isinstance(spread, (int, float)) or spread != spread:
+    t3 = payload.get("t3_spread", payload.get("spread"))
+    alt = payload.get("alt_spread")
+
+    def _bad(x: Any) -> bool:
+        return (x is None or not isinstance(x, (int, float))
+                or not math.isfinite(x))
+
+    def _fmt(x: Any) -> str:
+        return "nan" if _bad(x) else f"{x:+.3f}"
+
+    if _bad(t3) and _bad(alt):
         return None
-    if spread < 0.20:
-        return (f"SOFT-ABORT: value_spread {spread:+.3f} < +0.20 — value-head "
-                "colony capture (FU-2 abort gate)")
-    if spread < 0.30:
-        return f"WARNING: value_spread {spread:+.3f} < +0.30 — discriminator degrading"
+
+    t3_soft = (not _bad(t3)) and t3 < 0.20
+    alt_soft = (not _bad(alt)) and alt < 0.07
+    if t3_soft or alt_soft:
+        return (f"SOFT-ABORT: V_spread T3={_fmt(t3)} alt={_fmt(alt)} — "
+                "dual-bank colony capture (FU-2/L48 gate)")
+    t3_warn = (not _bad(t3)) and t3 < 0.30
+    alt_warn = (not _bad(alt)) and alt < 0.10
+    if t3_warn or alt_warn:
+        return (f"WARNING: V_spread T3={_fmt(t3)} alt={_fmt(alt)} — "
+                "discriminator degrading")
     return None
 
 
