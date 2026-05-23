@@ -73,7 +73,10 @@ def test_detect_encoding_unknown_in_channels_raises():
     reason=f"v7full checkpoint not present at {V7FULL_PATH}",
 )
 def test_v7full_loads_as_v6_argmax_returns_legal_move():
-    model, spec, label = load_model_with_encoding(V7FULL_PATH, DEVICE)
+    from tests._a2_compat import a2_load_or_skip
+    model, spec, label = a2_load_or_skip(
+        load_model_with_encoding, V7FULL_PATH, DEVICE,
+    )
     assert label == "v6"
     assert spec.board_size == 19
     assert spec.n_planes == 8
@@ -94,7 +97,10 @@ def test_v7full_loads_as_v6_argmax_returns_legal_move():
     reason=f"B1 v8 checkpoint not present at {B1_V8FULL_PATH}",
 )
 def test_b1_loads_as_v8_argmax_returns_legal_move():
-    model, spec, label = load_model_with_encoding(B1_V8FULL_PATH, DEVICE)
+    from tests._a2_compat import a2_load_or_skip
+    model, spec, label = a2_load_or_skip(
+        load_model_with_encoding, B1_V8FULL_PATH, DEVICE,
+    )
     assert label == "v8"
     assert spec.board_size == 25
     assert spec.n_planes == 11
@@ -116,8 +122,13 @@ def test_b1_loads_as_v8_argmax_returns_legal_move():
 )
 def test_v6_and_v8_argmax_produce_different_action_spaces():
     """v6 returns argmax over (cells + pass), v8 over cells-only. Both legal."""
-    v6_model, _, v6_label = load_model_with_encoding(V7FULL_PATH, DEVICE)
-    v8_model, _, v8_label = load_model_with_encoding(B1_V8FULL_PATH, DEVICE)
+    from tests._a2_compat import a2_load_or_skip
+    v6_model, _, v6_label = a2_load_or_skip(
+        load_model_with_encoding, V7FULL_PATH, DEVICE,
+    )
+    v8_model, _, v8_label = a2_load_or_skip(
+        load_model_with_encoding, B1_V8FULL_PATH, DEVICE,
+    )
     v6_bot = build_inference_method("argmax", v6_model, DEVICE, v6_label)
     v8_bot = build_inference_method("argmax", v8_model, DEVICE, v8_label)
 

@@ -114,7 +114,10 @@ def test_v7full_each_method_returns_legal_move(method: str):
     but parametrizing across many sims wastes CI time — the important
     thing is that the dispatch works and the bot produces a valid move.
     """
-    model, _spec, label = load_model_with_encoding(V7FULL_PATH, DEVICE)
+    from tests._a2_compat import a2_load_or_skip
+    model, _spec, label = a2_load_or_skip(
+        load_model_with_encoding, V7FULL_PATH, DEVICE,
+    )
     assert label == "v6"
     bot = build_inference_method(method, model, DEVICE, label)
     bot.reset()
@@ -143,7 +146,10 @@ def test_b1_v8_each_method_returns_legal_move(method: str):
     mcts-4 is small but exercises the Python MCTS path end-to-end:
     descend, expand, NN forward via v8 encoder, backup, action select.
     """
-    model, _spec, label = load_model_with_encoding(B1_V8FULL_PATH, DEVICE)
+    from tests._a2_compat import a2_load_or_skip
+    model, _spec, label = a2_load_or_skip(
+        load_model_with_encoding, B1_V8FULL_PATH, DEVICE,
+    )
     assert label == "v8"
     bot = build_inference_method(method, model, DEVICE, label)
     bot.reset()

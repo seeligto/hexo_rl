@@ -1,12 +1,19 @@
 """
-HexTacToeNet — ResNet backbone with SE blocks, dual-pooling value head,
-policy head, and opponent-reply auxiliary head.
+HexTacToeNet — ResNet backbone with SE blocks, multi-scale avg-pool value
+head, policy head, and opponent-reply auxiliary head.
 
 v6 architecture (Multi-Window Cluster-Based, 8-plane × 19×19):
   Input:  (B, 8, 19, 19) float16 tensor.
   Trunk:  Conv → GN → ReLU → 12 × ResidualBlock(SE).
   Policy: Conv2d(filters→2, 1×1) → ReLU → FC(2·H·W → H·W+1) → log_softmax.
-  Value:  GAP+max → FC(2C→256) → ReLU → FC(256→1) → Tanh.
+  Value:  multi-scale avg-pool (GAP + 2×2 adaptive avg-pool → 5C concat) →
+          FC(5C→256) → ReLU → FC(256→1) → Tanh.
+          §S181 FU-2 A2: replaced the prior GAP+GMP (2C) dual-pool whose
+          GMP half was coverage-blind (T2 §1.3) and the PRIMARY permissive
+          element of the colony attractor. See
+          ``network_min_max_head.multi_scale_avg_pool`` + the
+          ``VALUE_FC1_MULTIPLIER`` constant; pre-A2 ckpts are state-dict
+          incompatible (loader guard in ``eval/checkpoint_loader.py``).
   Opp_reply (aux): mirror of policy head.
 
 v8 architecture (Path β, 11-plane × 25×25, no pass slot):
@@ -19,7 +26,7 @@ v8 architecture (Path β, 11-plane × 25×25, no pass slot):
   Policy: KataGoPolicyHead — 1×1 P branch + (optional) 1×1 G branch with
           KataGPool → linear_g → broadcast-add → bias → ReLU → 1×1 → mask
           off-board → log_softmax. n_actions = H*W = 625 (no pass).
-  Value:  unchanged (KataGo's value-head GPool is multi-board-size-only).
+  Value:  shares the same A2 multi-scale avg-pool layers as v6.
   Opp_reply (aux): mirror of policy head.
 
 Spec sources: docs/designs/encoding_v8_contract.md;
@@ -42,7 +49,11 @@ from hexo_rl.model.gpool import (
 )
 from hexo_rl.model.global_token import GlobalTokenEncoder
 from hexo_rl.model.gpool_bias import GpoolBiasBranch
-from hexo_rl.model.network_min_max_head import min_max_window_head
+from hexo_rl.model.network_min_max_head import (
+    VALUE_FC1_MULTIPLIER,
+    min_max_window_head,
+    multi_scale_avg_pool,
+)
 from hexo_rl.model.partial_conv import PartialConv2d
 from hexo_rl.model.pooling import (
     SUPPORTED_POOL_TYPES,
@@ -555,8 +566,11 @@ class HexTacToeNet(nn.Module):
             self.opp_reply_conv = nn.Conv2d(filters, 2, 1)
             self.opp_reply_fc = nn.Linear(2 * spatial, spatial + 1)
 
-        # Value head — global avg+max pooling
-        self.value_fc1 = nn.Linear(2 * filters, 256)
+        # Value head — §S181 FU-2 A2 multi-scale avg-pool (1C GAP + 4C 2×2
+        # adaptive avg-pool) → 5C concat. VALUE_FC1_MULTIPLIER is the
+        # single source of truth — bump there if the concat shape changes
+        # and the checkpoint_loader A2 shape guard will stay consistent.
+        self.value_fc1 = nn.Linear(VALUE_FC1_MULTIPLIER * filters, 256)
         self.value_fc2 = nn.Linear(256, 1)
 
         # Value uncertainty head (training only — diagnostic σ², never used in MCTS)
@@ -786,9 +800,10 @@ class HexTacToeNet(nn.Module):
             # head (avg+max pool → fc1 → fc2 → tanh).
             if not self._spec.has_pass_slot:
                 log_policy = self.policy_head(out, mask, mask_sum_hw)
-                v_avg = out.mean(dim=(2, 3))           # (B, C)
-                v_max = out.amax(dim=(2, 3))           # (B, C)
-                v = torch.cat([v_avg, v_max], dim=1)   # (B, 2C)
+                # §S181 FU-2 A2 — multi-scale avg-pool, same helper as the
+                # has_pass_slot=true branch below. (B, 5C) concat replaces
+                # the prior (B, 2C) GAP+GMP concat.
+                v = multi_scale_avg_pool(out)          # (B, 5C)
                 v = F.relu(self.value_fc1(v))
                 if value_bias is not None:
                     v = v + value_bias.to(v.dtype)

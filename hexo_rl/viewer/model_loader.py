@@ -17,6 +17,7 @@ from typing import Any
 import torch
 
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.model.network_min_max_head import VALUE_FC1_MULTIPLIER
 from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.training.checkpoints import (
     extract_model_state,
@@ -70,6 +71,19 @@ def load_model(
     ]
     if missing or real_unexpected:
         raise ValueError(f"Checkpoint mismatch — missing: {missing}, unexpected: {real_unexpected}")
+    # §S181 FU-2 A2 — pre-A2 ckpts have value_fc1 input dim 2*filters; A2
+    # model expects VALUE_FC1_MULTIPLIER * filters. Surface a clear error
+    # rather than letting load_state_dict leak the raw torch shape mismatch.
+    fc1_w = state_dict.get("value_fc1.weight")
+    if fc1_w is not None and int(fc1_w.shape[1]) != net.value_fc1.in_features:
+        raise RuntimeError(
+            f"value_fc1 shape mismatch in {checkpoint_path}: checkpoint has "
+            f"in_features={int(fc1_w.shape[1])}, A2 model expects "
+            f"{net.value_fc1.in_features} (VALUE_FC1_MULTIPLIER="
+            f"{VALUE_FC1_MULTIPLIER} * filters). Pre-§S181-FU-2 A2 "
+            f"checkpoints (GAP+GMP 2*filters) are INVALID for the A2 "
+            f"multi-scale avg-pool value head — pretrain a new A2 anchor."
+        )
     net.load_state_dict(state_dict, strict=False)
     net.to(device).eval()
 

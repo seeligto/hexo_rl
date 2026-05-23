@@ -33,7 +33,20 @@ def loaded_v6w25():
     if not _CKPT.is_file():
         pytest.skip(f"bootstrap_model_v6w25.pt missing at {_CKPT}")
     from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
-    model, spec, label = load_model_with_encoding(_CKPT, torch.device("cpu"))
+    try:
+        model, spec, label = load_model_with_encoding(_CKPT, torch.device("cpu"))
+    except RuntimeError as exc:
+        # §S181 FU-2 A2 — pre-A2 v6w25 anchors are state-dict incompatible.
+        # If this wave produces a v6w25 A2 re-pretrain, swap the checkpoint
+        # filename and the skip naturally vanishes.
+        if "value_fc1" in str(exc) and "A2" in str(exc):
+            pytest.skip(
+                f"bootstrap_model_v6w25.pt is pre-§S181-FU-2 A2 (GAP+GMP "
+                f"2*filters) and incompatible with the A2 multi-scale "
+                f"avg-pool value head — re-pretrain v6w25 under A2 to "
+                f"re-stamp this baseline. Original error: {exc}"
+            )
+        raise
     return model, spec, label
 
 

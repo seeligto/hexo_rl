@@ -106,9 +106,10 @@ def test_gate_zero_byte_exact_a1():
                     "cannot run byte-exact parity test")
 
     from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
+    from tests._a2_compat import a2_load_or_skip
 
     device = torch.device("cpu")
-    a1, _spec, label = load_model_with_encoding(ckpt, device)
+    a1, _spec, label = a2_load_or_skip(load_model_with_encoding, ckpt, device)
     assert label == "v6w25", f"expected v6w25 anchor, got {label}"
     a1.eval()
 

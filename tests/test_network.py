@@ -81,9 +81,17 @@ def test_se_block_present():
 
 
 def test_value_head_uses_global_pooling():
-    """Value head FC1 should accept 2*filters (avg+max pool concat)."""
+    """§S181 FU-2 A2 — value FC1 accepts 5*filters (multi-scale avg-pool concat).
+
+    Was 2*filters under GAP+GMP; the GMP half was coverage-blind and the
+    PRIMARY permissive element of the colony attractor (T2 §6.1). A2
+    swapped to (GAP 1C) + (2×2 adaptive avg-pool flattened 4C) = 5C.
+    """
+    from hexo_rl.model.network_min_max_head import VALUE_FC1_MULTIPLIER
+
     net = make_net(filters=32)
-    assert net.value_fc1.in_features == 64  # 2 * 32
+    assert net.value_fc1.in_features == VALUE_FC1_MULTIPLIER * 32
+    assert VALUE_FC1_MULTIPLIER == 5
 
 
 def test_aux_head_output_shapes():

@@ -33,9 +33,37 @@ from hexo_rl.encoding import (
     lookup as _registry_lookup,
 )
 from hexo_rl.model.network import HexTacToeNet
+from hexo_rl.model.network_min_max_head import VALUE_FC1_MULTIPLIER
 from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
 
 BUFFER_CHANNELS: int = _registry_lookup("v6").n_planes
+
+
+def _assert_a2_value_fc1_shape(state: dict, filters: int, ckpt_path: Path) -> None:
+    """§S181 FU-2 A2 guard — fail loud on pre-A2 ckpts.
+
+    A2 shifted ``value_fc1`` in_features from ``2 * filters`` (GAP+GMP)
+    to ``VALUE_FC1_MULTIPLIER * filters`` (multi-scale avg-pool). Loading
+    a pre-A2 state-dict into an A2 model produces a confusing shape
+    mismatch deep inside ``load_state_dict`` — surface a clear message
+    here instead of leaking the raw torch error.
+    """
+    w = state.get("value_fc1.weight")
+    if w is None:
+        return
+    expected = VALUE_FC1_MULTIPLIER * filters
+    got = int(w.shape[1])
+    if got == expected:
+        return
+    raise RuntimeError(
+        f"value_fc1 shape mismatch in {ckpt_path}: checkpoint has "
+        f"in_features={got}, A2 model expects {expected} "
+        f"(VALUE_FC1_MULTIPLIER={VALUE_FC1_MULTIPLIER} * filters={filters}). "
+        f"Pre-A2 checkpoints (e.g. bootstrap_model_v6.pt, GAP+GMP=2*filters) "
+        f"are INVALID for the §S181 FU-2 A2 multi-scale avg-pool value head — "
+        f"pretrain a new A2 anchor (see audit/structural/02_value_head_"
+        f"encoding_architecture.md §7)."
+    )
 
 
 def _strip_compile_prefixes(state: dict) -> dict:
@@ -137,14 +165,16 @@ def load_model_with_encoding(
         spec = _registry_lookup("v6w25")
     else:
         spec = _registry_lookup("v6")
-    model = _build_model_from_spec(state, spec)
+    model = _build_model_from_spec(state, spec, ckpt_path=ckpt_path)
 
     model.to(device)
     model.eval()
     return model, spec, label
 
 
-def _build_model_from_spec(state: dict, spec: EncodingSpec) -> HexTacToeNet:
+def _build_model_from_spec(
+    state: dict, spec: EncodingSpec, *, ckpt_path: Path | None = None,
+) -> HexTacToeNet:
     """Unified entry point — dispatches to the per-family builder by
     ``spec.has_pass_slot``.
 
@@ -164,11 +194,13 @@ def _build_model_from_spec(state: dict, spec: EncodingSpec) -> HexTacToeNet:
     + ``strict`` load policy differ per family.
     """
     if spec.has_pass_slot:
-        return _build_min_max_model(state, spec)
-    return _build_kata_model(state, spec)
+        return _build_min_max_model(state, spec, ckpt_path=ckpt_path)
+    return _build_kata_model(state, spec, ckpt_path=ckpt_path)
 
 
-def _build_min_max_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
+def _build_min_max_model(
+    state: dict, spec: EncodingSpec, *, ckpt_path: Path | None = None,
+) -> HexTacToeNet:
     inp_w = state["trunk.input_conv.weight"]
     filters = int(inp_w.shape[0])
     in_channels = int(inp_w.shape[1])
@@ -210,13 +242,18 @@ def _build_min_max_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         pool_type=pool_type,
         gpool_bias_active=gpool_bias_active,
     )
+    _assert_a2_value_fc1_shape(
+        state, filters, ckpt_path=ckpt_path or Path("<unknown>"),
+    )
     # strict=False because v6 / v6w25 checkpoints may carry tower.* duplicates
     # left over from older save formats (see eval_pipeline._load_anchor_model).
     model.load_state_dict(state, strict=False)
     return model
 
 
-def _build_kata_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
+def _build_kata_model(
+    state: dict, spec: EncodingSpec, *, ckpt_path: Path | None = None,
+) -> HexTacToeNet:
     # §169 A4 — under canvas_realness the trunk-entry conv is wrapped in a
     # PartialConv2d, so the weight key shifts from `trunk.input_conv.weight`
     # to `trunk.input_conv.conv.weight`. Detection is unambiguous because
@@ -252,6 +289,9 @@ def _build_kata_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         gpool_indices=gpool_indices if gpool_indices else None,
         head_use_gpool=head_use_gpool,
         canvas_realness=canvas_realness,
+    )
+    _assert_a2_value_fc1_shape(
+        state, filters, ckpt_path=ckpt_path or Path("<unknown>"),
     )
     model.load_state_dict(state, strict=True)
     return model

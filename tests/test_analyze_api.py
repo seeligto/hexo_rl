@@ -35,6 +35,36 @@ def _checkpoint_in_channels(path: Path) -> int | None:
         return None
 
 
+def _checkpoint_is_a2_compatible(path: Path) -> bool:
+    """§S181 FU-2 A2 — only ckpts with value_fc1.in_features == 5*filters.
+
+    Pre-A2 ckpts (2*filters from GAP+GMP) raise at viewer/model_loader and
+    would surface as 500 errors from the analyze API. Filter at selection.
+    """
+    try:
+        import torch
+        from hexo_rl.model.network_min_max_head import VALUE_FC1_MULTIPLIER
+
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+        for key in ("model_state", "model_state_dict", "state_dict"):
+            if isinstance(payload, dict) and key in payload and isinstance(
+                payload[key], dict
+            ):
+                payload = payload[key]
+                break
+        if not isinstance(payload, dict):
+            return False
+        inp = payload.get("trunk.input_conv.weight") or payload.get(
+            "trunk.input_conv.conv.weight"
+        ) or payload.get("input_conv.weight")
+        w = payload.get("value_fc1.weight")
+        if inp is None or w is None:
+            return False
+        return int(w.shape[1]) == VALUE_FC1_MULTIPLIER * int(inp.shape[0])
+    except Exception:
+        return False
+
+
 def _checkpoint_n_actions(path: Path) -> int | None:
     """Return policy output size (n_actions). Discriminates v6 (362) from v6w25 (626) / v8 (625)."""
     try:
@@ -60,12 +90,16 @@ AVAILABLE_CKPTS = [
     p for p in _all_ckpts
     if _checkpoint_in_channels(p) == _EXPECTED_IN_CHANNELS
     and _checkpoint_n_actions(p) == _V6_N_ACTIONS
+    and _checkpoint_is_a2_compatible(p)
 ]
 TEST_CKPT = str(AVAILABLE_CKPTS[0]) if AVAILABLE_CKPTS else None
 
 needs_checkpoint = pytest.mark.skipif(
     TEST_CKPT is None,
-    reason=f"No {_EXPECTED_IN_CHANNELS}-plane checkpoint available",
+    reason=(
+        f"No {_EXPECTED_IN_CHANNELS}-plane §S181-FU-2 A2-compatible "
+        f"checkpoint available — pretrain an A2 anchor to re-enable."
+    ),
 )
 
 

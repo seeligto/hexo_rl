@@ -5,31 +5,13 @@ policy + value computation that was inline in both
 ``HexTacToeNet.forward`` (single-window B) and
 ``HexTacToeNet.aggregated_forward_K`` (K-cluster scatter-pool).
 
-Design notes
-------------
-
-* The trained ``nn.Conv2d`` / ``nn.Linear`` layers stay attached as direct
-  attributes of ``HexTacToeNet`` (``policy_conv``, ``policy_fc``,
-  ``value_fc1``, ``value_fc2``). This file exports plain functions taking
-  layer references as args — state-dict keys are unchanged. Loading any
-  pre-existing v6 / v6w25 / v7full / v7 / v7e30 / v7mw checkpoint is byte-exact.
-
-* ``min_max_window_head`` runs the per-window head once and returns the
-  ``(log_policy, value, v_logit)`` triple. ``forward()`` calls it on the
-  whole (B, C, H, W) trunk output; ``aggregated_forward_K`` calls it on
-  the per-cluster (K, C, H, W) trunk output and feeds the per-K result
-  into ``MinMaxPool``.
-
-* The optional ``policy_bias`` / ``value_bias`` args carry the §170 P3
-  gpool-bias side-branch contribution (None when the branch is inactive,
-  preserving exact A1 byte-parity).
-
-Cycle 3 Wave 8 Batch D (2026-05-17): renamed from ``min_max_v6_head`` /
-``network_v6_head.py`` to generic ``min_max_window_head`` /
-``network_min_max_head.py``. The head is shared across every
-``has_pass_slot=true`` single-window registry encoding (v6, v6w25,
-v7full, v7, v7e30, v7mw) — the historical ``v6`` prefix was
-encoding-version legacy.
+§S181 FU-2 A2 (2026-05-23): value head's coverage-blind GMP half was
+replaced with a multi-scale avg-pool aggregation
+(:func:`multi_scale_avg_pool`). ``VALUE_FC1_MULTIPLIER`` is the single
+source of truth for the value_fc1 input dim — both the ctor in
+``network.py`` and this helper read it. Pre-A2 checkpoints (GAP+GMP,
+2*filters) are state-dict incompatible; see the A2 shape guard in
+``hexo_rl/eval/checkpoint_loader.py``.
 """
 
 from __future__ import annotations
@@ -39,6 +21,38 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+# §S181 FU-2 A2 — value_fc1 input dim multiplier (was 2 for GAP+GMP, now
+# 5 for GAP (1C) + 2×2 adaptive avg pool (4C)). Single source of truth:
+# the ctor in network.py reads this constant, as does
+# multi_scale_avg_pool below. Bump together if the concat shape changes.
+VALUE_FC1_MULTIPLIER: int = 5
+
+
+def multi_scale_avg_pool(out: torch.Tensor) -> torch.Tensor:
+    """§S181 FU-2 A2 — multi-scale avg-pool replacing GAP+GMP value-head input.
+
+    Two scales of pure average pooling preserve coverage information at
+    multiple resolutions (T2 §7 A2). The audit found the prior GMP half
+    was coverage-blind (T2 §1.3: GMP(colony) ≡ GMP(extension) for matched
+    peaks, exact max|diff|=0) and the PRIMARY permissive element of the
+    §S178/§S180b colony attractor.
+
+    - scale 1 (1C): global avg pool ``out.mean(dim=(2,3))`` — whole-board
+      coverage.
+    - scale 2 (4C): ``F.adaptive_avg_pool2d(out, 2).flatten(1)`` — quadrant
+      coverage. Distinguishes single-quadrant extensions from a colony
+      whose mass is distributed across multiple quadrants. (Note: 2×2
+      adaptive pool of an odd 19×19 feature map uses uneven kernel sizes
+      per axis — semantics are "average within each of 4 equal-area
+      quadrants of the feature map".)
+
+    Returns ``(N, VALUE_FC1_MULTIPLIER * C)``.
+    """
+    v_gap = out.mean(dim=(2, 3))                       # (N, C)
+    v_2x2 = F.adaptive_avg_pool2d(out, 2).flatten(1)   # (N, 4C)
+    return torch.cat([v_gap, v_2x2], dim=1)            # (N, 5C)
 
 
 def min_max_window_head(
@@ -73,8 +87,6 @@ def min_max_window_head(
           * ``value``:      ``(N, 1)`` tanh of v_logit.
           * ``v_logit``:    ``(N, 1)`` raw pre-tanh logit (for BCE loss).
     """
-    # Policy branch — 1×1 conv → ReLU → flatten → FC → optional bias →
-    # log_softmax. Identical math to the pre-refactor inline form.
     p = F.relu(policy_conv(out))
     p = p.flatten(1)
     p_logits = policy_fc(p)
@@ -82,11 +94,7 @@ def min_max_window_head(
         p_logits = p_logits + policy_bias.to(p_logits.dtype)
     log_policy = F.log_softmax(p_logits, dim=1)
 
-    # Value branch — global avg + max pool → cat → FC → ReLU → optional
-    # bias → FC → tanh. Mirrors the pre-refactor inline form exactly.
-    v_avg = out.mean(dim=(2, 3))
-    v_max = out.amax(dim=(2, 3))
-    v = torch.cat([v_avg, v_max], dim=1)
+    v = multi_scale_avg_pool(out)                       # (N, 5C)
     v = F.relu(value_fc1(v))
     if value_bias is not None:
         v = v + value_bias.to(v.dtype)

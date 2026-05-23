@@ -52,7 +52,10 @@ def test_anchor_loader_strict_load_succeeds(encoding_name: str, ckpt_name: str) 
     spec = registry_lookup(encoding_name)
     device = torch.device("cpu")
 
-    model, loaded_spec, loaded_label = _load_anchor_model(ckpt_path, device)
+    from tests._a2_compat import a2_load_or_skip
+    model, loaded_spec, loaded_label = a2_load_or_skip(
+        _load_anchor_model, ckpt_path, device,
+    )
 
     assert isinstance(model, HexTacToeNet)
     # Encoding parity: the detected label/spec must match the registry

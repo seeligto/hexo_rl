@@ -1,9 +1,10 @@
-"""§176 P1 — capture pre-refactor v6 forward fixture.
+"""§176 P1 — capture v6 forward fixture.
 
-Run ONCE at HEAD before the network.py refactor. Produces
-tests/fixtures/p1_v6_forward_baseline.pt; loaded by
-test_v6_forward_byte_parity_vs_baseline to guard against v6 drift
-during the 9 encoding-dispatch retires.
+Re-stamped under §S181 FU-2 A2 (multi-scale avg-pool value head, 2026-05-23) —
+the architecture changed value_fc1 input dim from 2C to 5C, breaking the
+prior fixture by design. The test's guarantee is "v6 forward output is
+byte-stable post-A2"; re-run this generator on any future intentional
+arch change and update the fixture in the same commit.
 """
 import torch
 

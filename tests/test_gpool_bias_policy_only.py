@@ -127,7 +127,17 @@ def test_forward_parity_v6w25_anchor() -> None:
     from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
 
     device = torch.device("cpu")
-    a1, _spec, label = load_model_with_encoding(ckpt, device)
+    try:
+        a1, _spec, label = load_model_with_encoding(ckpt, device)
+    except RuntimeError as exc:
+        # §S181 FU-2 A2 — pre-A2 v6w25 anchor incompatible. Re-run when an
+        # A2 v6w25 anchor exists.
+        if "value_fc1" in str(exc) and "A2" in str(exc):
+            pytest.skip(
+                f"pre-§S181-FU-2 v6w25 anchor incompatible with A2 "
+                f"multi-scale avg-pool: {exc}"
+            )
+        raise
     assert label == "v6w25", f"expected v6w25 anchor, got {label}"
     a1.eval()
 
