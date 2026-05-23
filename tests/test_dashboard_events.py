@@ -376,8 +376,8 @@ def test_gpu_monitor_emits_new_psutil_fields():
             monitor = gm_mod.GPUMonitor(interval_sec=0)
             monitor._handle = "fake_handle"
 
-            # Drive exactly one poll cycle by having _stop.wait return False once then True.
-            monitor._stop.wait = MagicMock(side_effect=[False, True])
+            # Drive exactly one poll cycle by having _stop_event.wait return False once then True.
+            monitor._stop_event.wait = MagicMock(side_effect=[False, True])
             monitor.run()
 
     assert len(recorder.calls) >= 1
@@ -410,7 +410,7 @@ def test_gpu_monitor_emits_zero_on_psutil_failure():
 
             monitor = gm_mod.GPUMonitor(interval_sec=0)
             monitor._handle = "fake_handle"
-            monitor._stop.wait = MagicMock(side_effect=[False, True])
+            monitor._stop_event.wait = MagicMock(side_effect=[False, True])
             monitor.run()
 
     assert len(recorder.calls) >= 1
