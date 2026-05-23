@@ -1,0 +1,98 @@
+{
+  "meta": {
+    "corpus": "bootstrap_corpus_v6.npz",
+    "sha256": "6ea62afa892b03c71c3dee3e1eeb35d0682477b8c42d6387b806b5e316d88b47",
+    "n_positions": 353091,
+    "anchor_vspread_t3": 0.617,
+    "classifier_thresholds": {
+      "min_stones": 8,
+      "max_mean_hex_dist": 2.7,
+      "open_run_len": 4
+    },
+    "wall_s": 41.5
+  },
+  "distribution": {
+    "neither": 221123,
+    "colony": 110109,
+    "extension": 21859
+  },
+  "by_class": {
+    "colony": {
+      "n": 110109,
+      "frac": 0.3118,
+      "mean_z": 0.0129,
+      "median_z": 1.0,
+      "sd_z": 0.9999,
+      "z_buckets": {
+        "z == -1": 54342,
+        "-1 < z <= -0.5": 0,
+        "-0.5 < z < 0": 0,
+        "z == 0": 0,
+        "0 < z < +0.5": 0,
+        "+0.5 <= z < +1": 0,
+        "z == +1": 55767
+      }
+    },
+    "extension": {
+      "n": 21859,
+      "frac": 0.0619,
+      "mean_z": -0.1437,
+      "median_z": -1.0,
+      "sd_z": 0.9896,
+      "z_buckets": {
+        "z == -1": 12500,
+        "-1 < z <= -0.5": 0,
+        "-0.5 < z < 0": 0,
+        "z == 0": 0,
+        "0 < z < +0.5": 0,
+        "+0.5 <= z < +1": 0,
+        "z == +1": 9359
+      }
+    },
+    "neither": {
+      "n": 221123,
+      "frac": 0.6262,
+      "mean_z": 0.0334,
+      "median_z": 1.0,
+      "sd_z": 0.9994,
+      "z_buckets": {
+        "z == -1": 106864,
+        "-1 < z <= -0.5": 0,
+        "-0.5 < z < 0": 0,
+        "z == 0": 0,
+        "0 < z < +0.5": 0,
+        "+0.5 <= z < +1": 0,
+        "z == +1": 114259
+      }
+    }
+  },
+  "by_class_outcome_sign": {
+    "colony": {
+      "curr_player_wins": 55767,
+      "opp_wins": 54342,
+      "draws": 0,
+      "curr_wins_frac": 0.5065,
+      "opp_wins_frac": 0.4935,
+      "draws_frac": 0.0
+    },
+    "extension": {
+      "curr_player_wins": 9359,
+      "opp_wins": 12500,
+      "draws": 0,
+      "curr_wins_frac": 0.4282,
+      "opp_wins_frac": 0.5718,
+      "draws_frac": 0.0
+    },
+    "neither": {
+      "curr_player_wins": 114259,
+      "opp_wins": 106864,
+      "draws": 0,
+      "curr_wins_frac": 0.5167,
+      "opp_wins_frac": 0.4833,
+      "draws_frac": 0.0
+    }
+  },
+  "asymmetry_colony_minus_extension": 0.1566,
+  "anchor_vspread_t3": 0.617,
+  "verdict": "INCONCLUSIVE"
+}
