@@ -1,0 +1,151 @@
+# configs/variants/v7_real_run_smoke.yaml
+# §S181-AUDIT Wave 2 Stage 4 — pre-launch smoke for the real-run lever stack.
+#
+# Inherits from v6_botmix_s180b_3knob_escalation.yaml with two deltas:
+#   1. Encoding migration v6 → v7full (matches the real-run anchor, per
+#      C-LITE-1 finding: v7full alt-bank V_spread = +0.4078 vs v6 +0.2119;
+#      see audit/structural/track_c/C_LITE_1_v7full_reference.md).
+#   2. Wave 2 lever stack ENABLED:
+#        - EMA on selfplay / eval / promotion dispatch (decay 0.999, every 10 steps)
+#        - per_class_target_temperature on selfplay slice (T_colony 1.5)
+#      EMA always lands in Wave 2 per REAL_RUN_RECIPE §3 LANDED;
+#      per_class_target_temperature is the V-B-A `uniform_self` source-targeted
+#      lever per B4 verdict (`audit/structural/track_b/B_verdict_synthesis.md`
+#      §"Operator-information layer"). Cheap path (Option D) — 3000-step smoke
+#      gates the 100k main run.
+#
+# Pre-registered smoke verdicts (LITERAL, dispatcher Stage 4C):
+#   S-A: V_spread (alt) ≥ +0.10 at step 3000 AND ≥ +0.07 sustained → proceed Stage 5
+#   S-B: V_spread (alt) holds > +0.07 throughout but ends +0.07-0.10 → proceed cautiously
+#   S-C: V_spread (alt) crashes below +0.07 by step 1500 → STOP, revise Stage 3
+#   S-D: V_spread (alt) crashes below +0.07 by step 500 → STOP, reconsider V-B verdict
+#   S-E: other (grad explosion, gpu OOM, policy_entropy collapse) → STOP, debug
+#
+# Cost: ~$1.50 / ~6 h on vast 5080 (1.3× §S180b baseline due to per-class
+# classify + EMA update). Operator-mediated launch.
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v7full.pt \
+#     --variant v7_real_run_smoke \
+#     --iterations 3000
+
+# ── encoding migration (v6 → v7full) ─────────────────────────────────────────
+# v7full and v6 are wire-format identical (board_size 19, n_planes 8,
+# identical plane_layout + kept_plane_indices); the registry tag carries
+# the lineage. Anchor `bootstrap_model_v7full.pt` SHA b947659d…
+# (training_date 2026-05-11) verified loads cleanly into
+# HexTacToeNet(encoding='v7full') with 0 missing / 0 unexpected keys
+# (see Stage 4A pre-check in the dispatcher transcript).
+encoding: v7full
+
+# ── §S180b base — bot-mix + ply_cap split + neutralized game-length weights ──
+lr: 2e-3
+total_steps: 100_000              # smoke runs only 3000 of these; cosine schedule peak-leading
+eta_min: 5e-4                     # PR-B raised default
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
+  bot_corpus_path: "data/bot_corpus_s178_sealbot_vs_v6.npz"
+  bot_batch_share: 0.30           # §S180b KNOB 1
+  bot_corpus_refresh:
+    enabled: false
+    trigger: best_model_promotion
+    cooldown_steps: 25_000
+    min_new_games: 200
+
+draw_value: -0.1
+ply_cap_value: 0.0
+
+game_length_weights:
+  thresholds: [10, 25]
+  weights: [1.0, 1.0]             # §S180b KNOB 2 (uniform)
+  default_weight: 1.0
+
+selfplay:
+  completed_q_values: true        # §S180b KNOB 3
+  c_visit: 50.0
+  c_scale: 1.0
+  n_workers: 18
+  inference_batch_size: 64
+  n_simulations: 400
+  max_game_moves: 150
+  random_opening_plies: 1
+  rotation_enabled: true
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.5
+    n_sims_quick: 100
+    n_sims_full: 600
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 300_000,   capacity: 500_000}
+
+gating:
+  bootstrap_floor:
+    enabled: true
+    min_winrate: 0.45
+
+# Short-run cadence — checkpoint every 500 steps for the 3000-step smoke.
+# Dual-bank V_spread canary fires at every checkpoint save (PR-C, dispatched
+# through EMA when EMA is on per Wave 2 trainer wiring).
+checkpoint_interval: 500
+eval_interval: 10000              # smoke too short for eval to fire
+eval_temperature: 0.5
+eval_random_opening_plies: 0
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v7full.pt"   # v7full lineage (NOT v6)
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+hard_abort:
+  grad_norm: 10.0
+  loss_nan: true
+  stride5_p90: 60
+  row_max_p90: 50
+  colony_ext_frac_max: 0.40
+  draw_rate_warn: 0.70
+  pct_at_cap_warn: 0.30
+
+telemetry:
+  emit_bot_corpus_metrics: true
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── §S181-AUDIT Wave 2 lever stack (the new bits vs §S180b) ──────────────────
+
+# EMA-of-weights. Self-play / eval / promotion read EMA via
+# Trainer.inference_state_dict; trainer keeps stepping raw weights.
+# Decay 0.999 + update every 10 steps; AveragedModel-free implementation
+# in hexo_rl/training/ema.py (HexTacToeNet._spec is a PyO3 RegistrySpec
+# that does not deep-copy). Canary fires on EMA weights when enabled.
+ema:
+  enabled: true
+  decay: 0.999
+  update_every: 10
+
+# Per-class target temperature on the selfplay slice — V-B-A `uniform_self`
+# lever per REAL_RUN_RECIPE §3. Softens colony positions' visit-count CE
+# peaks to attenuate the 1.21× grad-L2 asymmetry (A4) the selfplay-family
+# (~90.8 % of total pull per B1) compounds. Pretrain slice (bot corpus +
+# bootstrap corpus rows) untouched (apply_to_pretrain: false).
+per_class_target_temperature:
+  enabled: true
+  colony_temperature: 1.5
+  extension_temperature: 1.0
+  neither_temperature: 1.0
+  apply_to_pretrain: false
