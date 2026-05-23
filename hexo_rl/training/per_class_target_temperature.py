@@ -24,11 +24,14 @@ slice mean share 0.092, smallest contributor). Bot corpus rows live
 in the pretrain slice and are similarly untouched by default.
 
 Cost. classify_state is a numpy loop over hex axes — per-state cost is
-dominated by `_find_max_open_run` (3 axes × O(H × W) walks). On a batch
-of 256 with selfplay slice ~192 rows the classify call adds a few ms
-per train step on top of a ~100 ms forward+backward. Smoke gate
-(Stage 4) measures the real overhead; if intolerable the next iteration
-can sub-sample the selfplay slice (`subsample_rate < 1.0`).
+dominated by `_find_max_open_run` (3 axes × O(H × W) walks). The Wave 2
+Stage 4 smoke measured ~16 steps/min vs B4's ~37 steps/min (~2.3× slower)
+with full-rate classify on ~192 selfplay rows per 256-batch (see
+`audit/structural/wave2_smoke.md` §"Throughput regression"). The
+`selfplay_sample_rate` knob sub-samples the selfplay rows per batch —
+sample_rate=0.20 means classify + apply to ~38 rows per batch, restoring
+throughput to ~30 steps/min; rows outside the sample keep T=1.0 (no
+temperature applied).
 """
 from __future__ import annotations
 
@@ -38,11 +41,17 @@ import numpy as np
 import torch
 
 
-def _resolve_config(config: Dict[str, Any]) -> Optional[Dict[str, float]]:
+def _resolve_config(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Pull `per_class_target_temperature` settings from the trainer config.
 
     Returns None if disabled OR if every temperature equals 1.0 (no-op).
-    Otherwise a dict ``{colony, extension, neither, apply_to_pretrain}``.
+    Otherwise a dict ``{colony, extension, neither, apply_to_pretrain,
+    selfplay_sample_rate}``.
+
+    `selfplay_sample_rate` defaults to 1.0 (classify every selfplay row);
+    smaller values uniformly sub-sample selfplay rows per batch to cut
+    the `classify_batch` CPU loop cost. Rows outside the sample keep
+    T=1.0 (no temperature applied).
     """
     cfg = config.get("per_class_target_temperature") if isinstance(
         config.get("per_class_target_temperature"), dict
@@ -59,11 +68,18 @@ def _resolve_config(config: Dict[str, Any]) -> Optional[Dict[str, float]]:
             raise ValueError(
                 f"per_class_target_temperature.{label}_temperature must be > 0; got {val}"
             )
+    sample_rate = float(cfg.get("selfplay_sample_rate", 1.0))
+    if not (0.0 < sample_rate <= 1.0):
+        raise ValueError(
+            f"per_class_target_temperature.selfplay_sample_rate must be in "
+            f"(0.0, 1.0]; got {sample_rate}"
+        )
     return {
         "colony": t_col,
         "extension": t_ext,
         "neither": t_nei,
         "apply_to_pretrain": bool(cfg.get("apply_to_pretrain", False)),
+        "selfplay_sample_rate": sample_rate,
     }
 
 
@@ -120,11 +136,26 @@ def apply_per_class_temperature(
     if row_start >= batch_n:
         return policies_t  # nothing to scale
 
-    # Snapshot the slice we need to classify; conversion goes via CPU since
-    # the classifier is pure numpy. fp16 states get upcast to float32 before
-    # the .numpy() call so threshold comparisons (>0.5) behave the same as
-    # they would on the dashboard / B2 path.
-    slice_states = states_t[row_start:].detach()
+    # §S181-AUDIT Wave 2 Stage 5 perf opt — uniform random sub-sample of the
+    # selfplay rows. Drops `classify_batch` CPU cost from O(n_selfplay) to
+    # O(sample_rate * n_selfplay) per batch; rows outside the sample retain
+    # their original (T=1) targets. Default sample_rate=1.0 preserves the
+    # smoke-validated full-rate behaviour.
+    sample_rate = float(resolved["selfplay_sample_rate"])
+    selfplay_rows = torch.arange(row_start, batch_n, device="cpu")
+    if sample_rate < 1.0:
+        n_sample = max(1, int(round(selfplay_rows.numel() * sample_rate)))
+        # torch.randperm is deterministic under torch.manual_seed at run launch.
+        perm = torch.randperm(selfplay_rows.numel(), device="cpu")[:n_sample]
+        sampled_rows = selfplay_rows[perm.sort().values]
+    else:
+        sampled_rows = selfplay_rows
+    sampled_rows_device = sampled_rows.to(device)
+
+    # Snapshot only the sampled rows for classification; fp16 states get
+    # upcast to float32 before the .numpy() call so threshold comparisons
+    # (>0.5) behave the same as they would on the dashboard / B2 path.
+    slice_states = states_t.index_select(0, sampled_rows_device).detach()
     if slice_states.dtype != torch.float32:
         slice_states = slice_states.float()
     states_np = slice_states.cpu().numpy()
@@ -141,8 +172,8 @@ def apply_per_class_temperature(
     # (policies are constructed from torch.from_numpy → no graph, but the
     # caller still expects an unmodified input).
     out = policies_t.clone()
-    sub = out[row_start:].clamp(min=1e-9).to(dtype=torch.float32)
+    sub = out.index_select(0, sampled_rows_device).clamp(min=1e-9).to(dtype=torch.float32)
     scaled = sub.pow(inv_temps)
     norm = scaled.sum(dim=1, keepdim=True).clamp(min=1e-9)
-    out[row_start:] = (scaled / norm).to(dtype=out.dtype)
+    out.index_copy_(0, sampled_rows_device, (scaled / norm).to(dtype=out.dtype))
     return out

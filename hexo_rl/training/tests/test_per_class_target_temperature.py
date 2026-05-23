@@ -39,6 +39,7 @@ def test_resolve_config_resolves_non_unit_temperatures():
     assert res == {
         "colony": 1.5, "extension": 0.9, "neither": 1.0,
         "apply_to_pretrain": True,
+        "selfplay_sample_rate": 1.0,
     }
 
 
@@ -200,3 +201,85 @@ def test_apply_temperature_preserves_dtype_under_fp16_policies():
         config=cfg, device=torch.device("cpu"),
     )
     assert out.dtype == torch.float16
+
+
+# ── sub-sampling (Stage 5 perf opt) ─────────────────────────────────────────
+def test_resolve_config_default_sample_rate_is_full():
+    """Default selfplay_sample_rate is 1.0 (full classify, smoke-validated)."""
+    cfg = {"per_class_target_temperature": {
+        "enabled": True, "colony_temperature": 1.5,
+    }}
+    res = _resolve_config(cfg)
+    assert res["selfplay_sample_rate"] == 1.0
+
+
+def test_resolve_config_rejects_invalid_sample_rate():
+    for bad in (0.0, -0.1, 1.1, 2.0):
+        with pytest.raises(ValueError):
+            _resolve_config({"per_class_target_temperature": {
+                "enabled": True, "colony_temperature": 1.5,
+                "selfplay_sample_rate": bad,
+            }})
+
+
+def test_subsample_classifies_subset_only():
+    """sample_rate < 1.0: only a subset of selfplay rows get T_colony."""
+    torch.manual_seed(0)
+    # 4 pretrain + 20 selfplay (all colony).
+    states_np = np.stack([_colony_state() for _ in range(24)])
+    states = torch.from_numpy(states_np).float()
+    policies = _peaked_policy(24)
+    initial = policies.clone()
+
+    cfg = {"per_class_target_temperature": {
+        "enabled": True, "colony_temperature": 2.0,
+        "selfplay_sample_rate": 0.25,  # 25% of 20 = 5 rows sampled
+    }}
+    out = apply_per_class_temperature(
+        policies, states, n_pretrain=4,
+        config=cfg, device=torch.device("cpu"),
+    )
+    # Pretrain rows always unchanged.
+    assert torch.allclose(out[:4], initial[:4])
+    # Sampled selfplay rows: peak changed; unsampled: unchanged.
+    peaks_changed = sum(
+        bool((out[i, 0] != initial[i, 0]).item()) for i in range(4, 24)
+    )
+    assert peaks_changed == 5, (
+        f"Expected 5 sampled selfplay rows scaled; got {peaks_changed}"
+    )
+    unchanged_count = sum(
+        bool(torch.allclose(out[i], initial[i])) for i in range(4, 24)
+    )
+    assert unchanged_count == 15
+
+
+def test_subsample_full_rate_equivalent_to_no_subsample():
+    """selfplay_sample_rate=1.0 must classify every selfplay row.
+
+    Regression guard — the smoke-validated path is the default behaviour.
+    """
+    torch.manual_seed(0)
+    states = torch.from_numpy(np.stack(
+        [_colony_state() for _ in range(3)] + [_extension_state() for _ in range(2)]
+    )).float()
+    policies = _peaked_policy(5)
+    cfg_implicit = {"per_class_target_temperature": {
+        "enabled": True, "colony_temperature": 2.0,
+    }}
+    cfg_explicit = {"per_class_target_temperature": {
+        "enabled": True, "colony_temperature": 2.0,
+        "selfplay_sample_rate": 1.0,
+    }}
+    out_implicit = apply_per_class_temperature(
+        policies, states, n_pretrain=0,
+        config=cfg_implicit, device=torch.device("cpu"),
+    )
+    out_explicit = apply_per_class_temperature(
+        policies, states, n_pretrain=0,
+        config=cfg_explicit, device=torch.device("cpu"),
+    )
+    assert torch.allclose(out_implicit, out_explicit), (
+        "selfplay_sample_rate=1.0 must produce bit-identical output to the "
+        "implicit default (smoke-validated path)."
+    )

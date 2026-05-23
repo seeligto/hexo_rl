@@ -222,3 +222,6 @@ per_class_target_temperature:
   extension_temperature: 1.0   # no-op on extension positions
   neither_temperature: 1.0     # no-op on neither positions
   apply_to_pretrain: false     # default: only the selfplay slice gets scaled
+  selfplay_sample_rate: 1.0    # 1.0 = classify every selfplay row (smoke-validated);
+                               # <1.0 sub-samples per batch to cut classify CPU cost
+                               # (Stage 5 perf opt per audit/structural/wave2_smoke.md)

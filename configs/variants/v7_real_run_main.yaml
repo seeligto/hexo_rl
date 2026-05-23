@@ -1,0 +1,160 @@
+# configs/variants/v7_real_run_main.yaml
+# §S181-AUDIT Wave 2 Stage 5 — main real training run (100k steps).
+#
+# Inherits the Stage 4 pre-launch smoke variant `v7_real_run_smoke.yaml`
+# with two deltas:
+#   1. iterations: 3000 → 100000 (full real run per REAL_RUN_RECIPE §4)
+#   2. per_class_target_temperature.selfplay_sample_rate: 1.0 → 0.20
+#      (Stage 5 perf optimization per audit/structural/wave2_smoke.md
+#      §"Throughput regression" — smoke ran at 16.4 steps/min full-rate;
+#      0.20 sub-sample restores ~30-50 steps/min and brings 100k cost
+#      from ~$22 / ~100h to ~$8-12 / ~40-60h.)
+#   3. checkpoint_interval: 500 → 2000 (per dispatcher Stage 5A; reduces
+#      checkpoint disk churn for the longer run while still emitting one
+#      canary fire per ~30 min wall)
+#   4. eval_interval: 10000 (unchanged — same as smoke; first eval at
+#      step 10k matches RR-G1 V_spread sustained check)
+#
+# Pre-registered success criteria (REAL_RUN_RECIPE §4, LITERAL L13):
+#   RR-G1: dual canary T3 >= +0.20 sustained 0 -> 50k        |
+#   RR-G2: dual canary alt >= +0.07 sustained 0 -> 50k        | These two
+#          (alt is corpus-grounded ref per L48; T3 partly bank-specific)  | gate the
+#   RR-G3: SealBot WR >= 13% at step 30k (n=200 effective games,         | real-run
+#          Wilson95 lower-bound >= 9%)                                    | success
+#   RR-G4: SealBot WR >= 18% at step 50k (matches §148 v6 baseline LB)    |
+#   RR-G5: colony_a < 50/100 in eval rounds                               |
+#   RR-G6: L34 anchor↑/sealbot↓ divergence alarm clean throughout         |
+#
+# Stop conditions (REAL_RUN_RECIPE §5):
+#   - dual canary both_pass=false for 2 consecutive checkpoints → SOFT-ABORT
+#   - SealBot WR < 8% at step 30k → HARD-ABORT (§S180b stop)
+#   - L34 divergence (anchor WR climbs >=5pp while sealbot WR drops >=5pp
+#     over 5 consecutive evals) → SOFT-ABORT
+#   - grad_norm > 10 for 5 consecutive steps → HARD-ABORT
+#   - loss_nan / nan_or_inf_loss_skipped > 20/100-step window → HARD-ABORT
+#   - colony_ext_frac > 0.40 → HARD-ABORT
+#   - wallclock > 24h on a single GPU → operator decision point
+#
+# Cost: ~$8-12 / ~40-60 h on vast 5080 (sub-sampling rate 0.20 perf
+# recovery). Operator-mediated launch — DO NOT auto-launch from smoke
+# verdict; explicit Stage 5 gate per dispatcher hard constraint.
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v7full.pt \
+#     --variant v7_real_run_main \
+#     --iterations 100000 --no-dashboard
+
+# ── encoding migration (v6 → v7full) ────────────────────────────────────────
+encoding: v7full
+
+# ── §S180b base — bot-mix + ply_cap split + neutralized game-length weights ──
+lr: 2e-3
+total_steps: 100_000
+eta_min: 5e-4
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
+  bot_corpus_path: "data/bot_corpus_s178_sealbot_vs_v6.npz"
+  bot_batch_share: 0.30
+  bot_corpus_refresh:
+    enabled: false
+    trigger: best_model_promotion
+    cooldown_steps: 25_000
+    min_new_games: 200
+
+draw_value: -0.1
+ply_cap_value: 0.0
+
+game_length_weights:
+  thresholds: [10, 25]
+  weights: [1.0, 1.0]
+  default_weight: 1.0
+
+selfplay:
+  completed_q_values: true
+  c_visit: 50.0
+  c_scale: 1.0
+  n_workers: 18
+  inference_batch_size: 64
+  n_simulations: 400
+  max_game_moves: 150
+  random_opening_plies: 1
+  rotation_enabled: true
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.5
+    n_sims_quick: 100
+    n_sims_full: 600
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 300_000,   capacity: 500_000}
+  - {step: 1_000_000, capacity: 1_000_000}
+
+gating:
+  bootstrap_floor:
+    enabled: true
+    min_winrate: 0.45
+
+# Main-run cadence — checkpoint every 2000 steps (~30 min wall on 5080
+# with sub-sample 0.20). 50 checkpoints across the 100k run.
+checkpoint_interval: 2000
+eval_interval: 10000              # first eval at step 10k, then every 10k
+eval_temperature: 0.5
+eval_random_opening_plies: 0
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v7full.pt"   # v7full lineage
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+hard_abort:
+  grad_norm: 10.0
+  loss_nan: true
+  stride5_p90: 60
+  row_max_p90: 50
+  colony_ext_frac_max: 0.40
+  draw_rate_warn: 0.70
+  pct_at_cap_warn: 0.30
+
+telemetry:
+  emit_bot_corpus_metrics: true
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── §S181-AUDIT Wave 2 lever stack ──────────────────────────────────────────
+# EMA-of-weights (smoke-validated). Self-play / eval / promotion read EMA.
+ema:
+  enabled: true
+  decay: 0.999
+  update_every: 10
+
+# Per-class target temperature on selfplay slice with Stage 5 perf opt.
+# selfplay_sample_rate: 0.20 means classify + apply T_colony to ~20% of
+# selfplay rows per batch instead of all. Statistical effect of the lever
+# scales with sample rate; smoke validated the full-rate path produced
+# alt-V_spread +0.28 @ step 3000 — sub-sampled rate is expected to
+# preserve much of the anti-colony pressure at 5× lower CPU cost. If
+# Stage 5 first 10k canaries show alt regressing toward zero faster
+# than smoke trajectory predicts, sample_rate can be raised back to
+# 1.0 via mid-run config sync + restart-from-best-ckpt.
+per_class_target_temperature:
+  enabled: true
+  colony_temperature: 1.5
+  extension_temperature: 1.0
+  neither_temperature: 1.0
+  apply_to_pretrain: false
+  selfplay_sample_rate: 0.20
