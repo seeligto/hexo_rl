@@ -86,7 +86,9 @@ max_checkpoints_kept: 10
 preserve_eval_checkpoints: true   # never prune checkpoints at eval_interval boundaries
 log_interval: 10        # also controls web-dashboard send frequency
 aux_opp_reply_weight: 0.15
-entropy_reg_weight: 0.01  # policy entropy regularization (KrakenBot-style, prevents policy collapse)
+entropy_reg_weight: 0.005  # policy entropy regularization (KrakenBot-style, prevents policy collapse)
+                          # §S181 PR-B: halved from 0.01 → 0.005; counter-pressure on policy
+                          # collapse without over-penalising confident tactical moves.
 draw_value: -0.5          # draw outcome value target (reverted from -0.75 for experiment A; isolate chain aux kill)
 ply_cap_value: 0.0        # §178: truncation outcome (winner=None, ply>=max_moves).
                           # §S178 T12 (2026-05-18): default revised -0.5 → 0.0 per AlphaZero
