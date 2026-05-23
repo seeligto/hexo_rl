@@ -1,0 +1,23 @@
+{
+  "arm": "v6_a2",
+  "checkpoint": "/workspace/hexo_rl/checkpoints/bootstrap_model_v6_a2.pt",
+  "step": -1,
+  "encoding": "v6",
+  "inference": "argmax",
+  "n_games": 500,
+  "wins": 43,
+  "losses": 456,
+  "draws": 1,
+  "win_rate": 0.086,
+  "ci_95_low": 0.06447280005130328,
+  "ci_95_high": 0.11384038409228468,
+  "time_limit": 0.5,
+  "temperature": 0.0,
+  "c_puct": 1.5,
+  "random_opening_plies": 4,
+  "elapsed_sec": 2139.2,
+  "mean_ply": 46.444,
+  "median_ply": 35.0,
+  "timestamp_utc": "2026-05-23T09:13:33.613963+00:00",
+  "method": "argmax"
+}

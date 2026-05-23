@@ -1,0 +1,150 @@
+# configs/variants/v6_botmix_s180b_a2.yaml
+# ═══════════════════════════════════════════════════════════════════════════
+# §S181 FU-2 — A2 multi-scale avg-pool value head sustained run.
+#
+# VERBATIM copy of v6_botmix_s180b_3knob_escalation.yaml with TWO deltas:
+#
+#   1. eval_pipeline.opponents.bootstrap_anchor.path:
+#        "checkpoints/bootstrap_model_v6.pt"  (pre-A2)
+#      → "checkpoints/bootstrap_model_v6_a2.pt"  (A2)
+#
+#   2. anchor_every_steps: 2000  (preserved from FU-1.5; ladder cadence
+#      for V_spread canary on every 2k-step checkpoint up through 20k)
+#
+# NO other anti-colony lever touched. The point is isolating A2 as the
+# SINGLE architectural change vs §S180b's recipe; everything else (3-knob
+# escalation: bot_batch_share=0.30, neutral game_length_weights, CQV=true,
+# cosine OFF, ply_cap_value=0.0, draw_value=-0.1) stays bit-identical.
+#
+# PT-quality verdict (audit/structural/07_fu2_a2_pretrain_quality.md):
+#   PT-1 PASS / PT-2 FAIL literal (8.6% < 13%) / PT-3 FAIL literal (V_spread
+#   -0.508, |magnitude| 0.508 > 0.45 — SIGN FLIPPED, audit-predicted
+#   removal of GMP coverage-blind colony bias) / PT-4 C1 FAIL same sign-flip
+#   / C2 PASS / C3 PASS. Operator override (2026-05-23): proceed to T3
+#   because FU-2 hypothesis can ONLY be tested via sustained self-play.
+#
+# Pre-registered verdict table (V-FU2-A through V-FU2-F) lives in the
+# original §S181 FU-2 brief; applied LITERALLY on V_spread trajectory
+# without rewriting to fit outcome (L13 anti-pattern guard).
+#
+# LATENT BASELINE NOTE. de149e6 (canonical-child-order MCTS fix) on master
+# baseline; this run inherits it. §S180b/§S178 ran WITHOUT it (the fix
+# landed mid-FU-1.5). FU-1.5 verified §S180b reproduces within noise on
+# the new baseline (audit 06_fu1_5_finer_ladder.md §0).
+#
+# Launch:
+#   python scripts/train.py \
+#     --variant v6_botmix_s180b_a2 \
+#     --iterations 100000
+#   STOP at step 20000 (kill tmux session). Operator decides at 20k whether
+#   to extend to 50k for late-trajectory (AlphaZero late-phase) data.
+# Probe: scripts/structural_diagnosis/fu1_value_spread_ladder.py
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ── ORIGINAL §S180b HEADER (verbatim — config body below is unchanged) ──────
+# configs/variants/v6_botmix_s180b_3knob_escalation.yaml
+# §S180b — 3-knob anti-colony escalation. (Body inherits — see source.)
+# ────────────────────────────────────────────────────────────────────────────
+
+# ── §177 baseline overrides retained ──────────────────────────────────────────
+lr: 2e-3
+total_steps: 100_000
+eta_min: 2e-4
+
+# ── §177 mixing block retained ────────────────────────────────────────────────
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
+  bot_corpus_path: "data/bot_corpus_s178_sealbot_vs_v6.npz"
+  bot_batch_share: 0.30  # §S180b KNOB 1
+  bot_corpus_refresh:
+    enabled: false
+    trigger: best_model_promotion
+    cooldown_steps: 25_000
+    min_new_games: 200
+
+# ── Pair-A — ply_cap_value split from draw_value ──────────────────────────────
+draw_value: -0.1
+ply_cap_value: 0.0
+
+# ── §S180b KNOB 2 — game_length_weights neutralized ───────────────────────────
+game_length_weights:
+  thresholds: [10, 25]
+  weights: [1.0, 1.0]
+  default_weight: 1.0
+
+# ── §177 selfplay overrides retained ──────────────────────────────────────────
+selfplay:
+  completed_q_values: true  # §S180b KNOB 3
+  c_visit: 50.0
+  c_scale: 1.0
+  n_workers: 18
+  inference_batch_size: 64
+  n_simulations: 400
+  max_game_moves: 150
+  random_opening_plies: 1
+  rotation_enabled: true
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.5
+    n_sims_quick: 100
+    n_sims_full: 600
+    # Cosine-temp DISABLED (operator override 2026-05-18; L9 mandatory pairing)
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+# ── §177 buffer schedule retained ─────────────────────────────────────────────
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 300_000,   capacity: 500_000}
+  - {step: 1_000_000, capacity: 1_000_000}
+
+# ── §175/§177 gating retained ─────────────────────────────────────────────────
+gating:
+  bootstrap_floor:
+    enabled: true
+    min_winrate: 0.45
+
+# ── Eval cadence ──────────────────────────────────────────────────────────────
+eval_interval: 10000
+eval_temperature: 0.5
+eval_random_opening_plies: 0
+
+# ── DELTA #1 — A2 anchor for bootstrap_anchor opponent ────────────────────────
+# Pre-A2 path was "checkpoints/bootstrap_model_v6.pt". For the §S181-FU-2
+# A2-vs-§S180b comparison the anchor must be the A2-pretrained sibling.
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v6_a2.pt"
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+# ── Hard-abort signature thresholds (from §157 / L9) ──────────────────────────
+hard_abort:
+  grad_norm: 10.0
+  loss_nan: true
+  stride5_p90: 60
+  row_max_p90: 50
+  colony_ext_frac_max: 0.40
+  draw_rate_warn: 0.70
+  pct_at_cap_warn: 0.30
+
+# ── V178 telemetry probes (extends §175 set) ──────────────────────────────────
+telemetry:
+  emit_bot_corpus_metrics: true
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── DELTA #2 — preserve checkpoints at every 2k step (FU-1.5 cadence) ─────────
+# Same delta as v6_botmix_s180b_2kckpt.yaml — keeps the 10-rung ladder
+# inside the first 20k steps for direct apples-to-apples V_spread plot vs
+# FU-1.5 historical control.
+anchor_every_steps: 2000

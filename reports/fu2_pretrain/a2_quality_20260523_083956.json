@@ -1,0 +1,43 @@
+{
+  "wave": "\u00a7S181 FU-2",
+  "ckpt": "checkpoints/bootstrap_model_v6_a2.pt",
+  "pretrain_log": "reports/fu2_pretrain/pretrain_a2_20260523_065301.log",
+  "timestamp_utc": "2026-05-23T08:39:56.737723+00:00",
+  "gates": {
+    "PT-1": {
+      "gate": "PT-1",
+      "metric": "final_pretrain_loss",
+      "value": 3.2183,
+      "threshold_le": 3.5,
+      "comparator": "\u00a7148 v6 = 3.31",
+      "status": "PASS",
+      "epoch_count": 30,
+      "epochs_completed": 30
+    },
+    "PT-3": {
+      "gate": "PT-3",
+      "metric": "value_spread_T3_bank",
+      "value": -0.5076,
+      "threshold_ge": 0.45,
+      "comparator": "pre-A2 anchor +0.617 (75% target)",
+      "status": "FAIL",
+      "mean_colony": 0.2058,
+      "mean_extension": 0.7134,
+      "encoding_label": "v6",
+      "bank_sha": "934204713620d171743820aea6907cf4e117ca97c69e50052b991a3fdcc23991"
+    },
+    "PT-4": {
+      "gate": "PT-4",
+      "metric": "threat_probes_C1_C2_C3",
+      "status": "FAIL",
+      "exit_code": 1,
+      "stdout_tail": "6 | +0.059 | -0.785 | yes | yes |\n| 7 | early | +0.469 | +0.008 | +0.461 | yes | yes |\n| 8 | early | -1.942 | -0.123 | -1.819 | yes | yes |\n| 9 | late | +0.144 | +0.080 | +0.064 | no | no |\n| 10 | late | -0.063 | -0.144 | +0.081 | no | yes |\n| 11 | late | +0.215 | +0.043 | +0.172 | yes | yes |\n| 12 | late | +0.130 | -0.014 | +0.144 | yes | yes |\n| 13 | mid | -0.078 | -0.103 | +0.025 | no | no |\n| 14 | mid | -1.056 | -0.118 | -0.938 | yes | yes |\n| 15 | early | +0.075 | +0.061 | +0.014 | yes | yes |\n| 16 | mid | -1.031 | -0.082 | -0.949 | yes | yes |\n| 17 | mid | -0.026 | -0.080 | +0.054 | no | no |\n| 18 | mid | -0.948 | -0.139 | -0.810 | yes | yes |\n| 19 | early | -0.517 | -0.101 | -0.416 | no | no |\n| 20 | early | +0.307 | +0.073 | +0.234 | no | no |\n\n*Positions: 20  Seed: 42  Baseline: threat_probe_baseline.json*\n/home/timmy/Work/hexo_rl/.venv/lib/python3.14/site-packages/torch/cuda/__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.\n  import pynvml  # type: ignore[import]\nLoading model: bootstrap_model_v6_a2.pt\nLoading positions: /home/timmy/Work/hexo_rl/fixtures/threat_probe_positions.npz\n  20 positions\nProbing...\nLoading comparison checkpoint: bootstrap_model_v6_a2.pt\n\nFAIL  [C1] contrast=-0.282 (\u2265+0.380) FAIL  [C2] top5=50% (\u226525%) OK  [C3] top10=55% (\u226540%) OK\n[C4] |\u0394 ext_logit_mean|=0.000 (<5.0) ok\n"
+    },
+    "PT-2": {
+      "gate": "PT-2",
+      "status": "DEFERRED",
+      "reason": "--skip-pt2 (run on vast separately)"
+    }
+  },
+  "composite_verdict": "FAIL"
+}
