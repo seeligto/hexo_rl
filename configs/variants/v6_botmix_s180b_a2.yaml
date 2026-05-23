@@ -128,14 +128,25 @@ eval_pipeline:
       enabled: true
 
 # ── Hard-abort signature thresholds (from §157 / L9) ──────────────────────────
+# NOTE: parent §S180b variant carried these under `hard_abort:` which is
+# NOT consumed by hexo_rl/training/loop.py — that reads `monitors.hard_abort_
+# grad_norm` (default 3.0). The §175-family / vast.yaml standard is 10.0
+# under `monitors:`. First T3 launch (commit 1358710) ran with effective
+# threshold 3.0 and hard-aborted at step 8 (grad_norm 6.94, consec_steps 5).
+# A2's wider fc1 (5C vs 2C input) + flatter value distribution produce
+# larger early gradients than pre-A2; the §175-standard 10.0 is the
+# correct ceiling.
 hard_abort:
-  grad_norm: 10.0
   loss_nan: true
   stride5_p90: 60
   row_max_p90: 50
   colony_ext_frac_max: 0.40
   draw_rate_warn: 0.70
   pct_at_cap_warn: 0.30
+monitors:
+  hard_abort_grad_norm: 10.0  # §175-family standard; A2 needs headroom for
+                              # wider value-head init (5C fc1 vs 2C)
+  hard_abort_grad_norm_steps: 5  # default, kept explicit for audit
 
 # ── V178 telemetry probes (extends §175 set) ──────────────────────────────────
 telemetry:
