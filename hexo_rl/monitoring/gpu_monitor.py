@@ -60,7 +60,11 @@ class GPUMonitor(threading.Thread):
         super().__init__(daemon=True, name="gpu-monitor")
         self.interval     = interval_sec
         self.device_index = device_index
-        self._stop        = threading.Event()
+        # `_stop_event` not `_stop`: threading.Thread has a private `_stop()`
+        # method that join() invokes via _wait_for_tstate_lock. Shadowing it
+        # with an Event instance raises TypeError on clean teardown
+        # (lifecycle.py:177 join → 'Event' object is not callable).
+        self._stop_event  = threading.Event()
         self._handle      = None  # nvml device handle, set in start()
 
         # Latest stats (read-only from other threads; approximate, no lock).
@@ -86,7 +90,7 @@ class GPUMonitor(threading.Thread):
         from hexo_rl.monitoring.events import emit_event
 
         pynvml = _get_pynvml()
-        while not self._stop.wait(self.interval):
+        while not self._stop_event.wait(self.interval):
             try:
                 util = pynvml.nvmlDeviceGetUtilizationRates(self._handle)
                 mem  = pynvml.nvmlDeviceGetMemoryInfo(self._handle)
@@ -136,4 +140,4 @@ class GPUMonitor(threading.Thread):
 
     def stop(self) -> None:
         """Signal the monitor to stop after the current sleep."""
-        self._stop.set()
+        self._stop_event.set()
