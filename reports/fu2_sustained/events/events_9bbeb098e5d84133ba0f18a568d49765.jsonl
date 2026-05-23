@@ -1,0 +1,71 @@
+{"ts": 1779528971.7467256, "event": "run_start", "step": 0, "run_id": "9bbeb098e5d84133ba0f18a568d49765", "worker_count": 18, "config_summary": {"n_blocks": 12, "channels": 128, "n_sims": 400, "buffer_capacity": 250000}}
+{"ts": 1779528971.7505882, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528976.5351079, "event": "system_stats", "gpu_util_pct": 0.0, "vram_used_gb": 1.018953728, "vram_total_gb": 17.094934528, "ram_used_gb": 10.459447296, "ram_total_gb": 64.992473088, "cpu_util_pct": 0.0, "rss_gb": 7.619473408}
+{"ts": 1779528976.752913, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528976.753641, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528981.5379245, "event": "system_stats", "gpu_util_pct": 0.0, "vram_used_gb": 1.012662272, "vram_total_gb": 17.094934528, "ram_used_gb": 10.4717312, "ram_total_gb": 64.992473088, "cpu_util_pct": 4.6, "rss_gb": 7.62677248}
+{"ts": 1779528981.7553391, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528981.7600622, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528986.5407896, "event": "system_stats", "gpu_util_pct": 0.0, "vram_used_gb": 1.027342336, "vram_total_gb": 17.094934528, "ram_used_gb": 10.482388992, "ram_total_gb": 64.992473088, "cpu_util_pct": 4.8, "rss_gb": 7.629205504}
+{"ts": 1779528986.7580204, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528986.767081, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528991.5435686, "event": "system_stats", "gpu_util_pct": 0.0, "vram_used_gb": 0.993787904, "vram_total_gb": 17.094934528, "ram_used_gb": 10.491891712, "ram_total_gb": 64.992473088, "cpu_util_pct": 5.0, "rss_gb": 7.633260544}
+{"ts": 1779528991.7606044, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528991.7737765, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528996.5464005, "event": "system_stats", "gpu_util_pct": 0.0, "vram_used_gb": 1.014759424, "vram_total_gb": 17.094934528, "ram_used_gb": 10.50243072, "ram_total_gb": 64.992473088, "cpu_util_pct": 5.4, "rss_gb": 7.640829952}
+{"ts": 1779528996.763095, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528996.7804043, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529001.549768, "event": "system_stats", "gpu_util_pct": 86.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.50578944, "ram_total_gb": 64.992473088, "cpu_util_pct": 11.9, "rss_gb": 7.649492992}
+{"ts": 1779529001.7655795, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529001.7866137, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529006.5528526, "event": "system_stats", "gpu_util_pct": 86.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.50474496, "ram_total_gb": 64.992473088, "cpu_util_pct": 16.6, "rss_gb": 7.65300736}
+{"ts": 1779529006.767975, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529006.7922997, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529011.5558913, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.511876096, "ram_total_gb": 64.992473088, "cpu_util_pct": 16.4, "rss_gb": 7.657603072}
+{"ts": 1779529011.7701874, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529011.7981458, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529016.5588238, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.51574272, "ram_total_gb": 64.992473088, "cpu_util_pct": 16.3, "rss_gb": 7.66246912}
+{"ts": 1779529016.7728, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529016.8038762, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529021.5621543, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.521223168, "ram_total_gb": 64.992473088, "cpu_util_pct": 16.9, "rss_gb": 7.666765824}
+{"ts": 1779529021.776225, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529021.8103547, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529026.5654447, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.528124928, "ram_total_gb": 64.992473088, "cpu_util_pct": 16.8, "rss_gb": 7.672713216}
+{"ts": 1779529026.7790215, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529026.816276, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529031.5309527, "event": "disk_free", "disk_free_gb": 79.27}
+{"ts": 1779529031.5683115, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.527031296, "ram_total_gb": 64.992473088, "cpu_util_pct": 17.0, "rss_gb": 7.678119936}
+{"ts": 1779529031.781882, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529031.8234556, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529036.5703797, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.531885056, "ram_total_gb": 64.992473088, "cpu_util_pct": 17.1, "rss_gb": 7.682174976}
+{"ts": 1779529036.785726, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529036.8300176, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779529037.743153, "event": "game_complete", "game_id": "05f7daa20593450ea4baadd5b03889db", "winner": 0, "moves": 45, "moves_list": ["(1,2)", "(-2,1)", "(2,4)", "(0,3)", "(6,1)", "(9,0)", "(-6,6)", "(-5,2)", "(-8,1)", "(0,-2)", "(8,4)", "(-8,9)", "(6,-3)", "(-6,0)", "(2,6)", "(1,-2)", "(8,5)", "(4,1)", "(2,5)", "(-2,5)", "(-2,0)", "(-8,5)", "(4,7)", "(1,5)", "(-2,4)", "(-1,8)", "(4,11)", "(-2,13)", "(-7,5)", "(3,14)", "(-2,12)", "(1,11)", "(-4,4)", "(1,4)", "(8,12)", "(-1,4)", "(-3,6)", "(2,1)", "(2,12)", "(8,13)", "(-9,5)", "(-4,1)", "(3,9)", "(-8,2)", "(-4,7)"], "worker_id": 0, "moves_detail": null, "value_trace": null, "colony_extension_stone_count": 0, "colony_extension_stone_total": 45, "colony_extension_fraction": 0.0, "terminal_reason": "six_in_a_row", "model_version_min": 0, "model_version_max": 0, "model_version_distinct": 1, "model_version_range_size": 0, "stride5_run_p90": 3, "row_max_density": 8}
+{"ts": 1779529041.5733192, "event": "system_stats", "gpu_util_pct": 86.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.548559872, "ram_total_gb": 64.992473088, "cpu_util_pct": 17.0, "rss_gb": 7.693582336}
+{"ts": 1779529041.7879765, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529041.851441, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529046.5763547, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.556997632, "ram_total_gb": 64.992473088, "cpu_util_pct": 17.1, "rss_gb": 7.698178048}
+{"ts": 1779529046.7904053, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529046.8584423, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529051.5795717, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.5517056, "ram_total_gb": 64.992473088, "cpu_util_pct": 17.5, "rss_gb": 7.702503424}
+{"ts": 1779529051.7931116, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529051.8654523, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529056.5823698, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.558046208, "ram_total_gb": 64.992473088, "cpu_util_pct": 17.4, "rss_gb": 7.706288128}
+{"ts": 1779529056.795398, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529056.873033, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529061.5848632, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.562265088, "ram_total_gb": 64.992473088, "cpu_util_pct": 17.5, "rss_gb": 7.71223552}
+{"ts": 1779529061.7982223, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529061.8803103, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529066.5873861, "event": "system_stats", "gpu_util_pct": 86.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.566090752, "ram_total_gb": 64.992473088, "cpu_util_pct": 17.6, "rss_gb": 7.716560896}
+{"ts": 1779529066.800639, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529066.8876169, "event": "system_stats", "buffer_size": 120, "buffer_capacity": 250000}
+{"ts": 1779529071.5903258, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 1.025245184, "vram_total_gb": 17.094934528, "ram_used_gb": 10.575474688, "ram_total_gb": 64.992473088, "cpu_util_pct": 17.5, "rss_gb": 7.720075264}
+{"ts": 1779529071.6104174, "event": "game_complete", "game_id": "dfba52d0d0954d1f9723a97324fb8ed3", "winner": 1, "moves": 63, "moves_list": ["(-1,1)", "(-3,0)", "(3,-2)", "(-3,2)", "(-1,6)", "(8,-2)", "(0,1)", "(9,-7)", "(8,-6)", "(-1,5)", "(0,9)", "(7,0)", "(12,-6)", "(10,-7)", "(4,2)", "(1,4)", "(13,-4)", "(14,-2)", "(9,-4)", "(6,2)", "(0,8)", "(14,-3)", "(3,2)", "(4,9)", "(-1,7)", "(11,-5)", "(14,-1)", "(4,1)", "(4,8)", "(8,2)", "(0,6)", "(2,4)", "(9,7)", "(10,-3)", "(3,10)", "(7,3)", "(10,7)", "(4,7)", "(3,8)", "(12,8)", "(7,-4)", "(-1,3)", "(8,6)", "(8,-1)", "(12,9)", "(8,8)", "(11,9)", "(10,5)", "(13,9)", "(8,4)", "(9,8)", "(14,8)", "(1,2)", "(8,7)", "(-3,7)", "(10,3)", "(14,7)", "(8,5)", "(6,8)", "(14,3)", "(6,4)", "(13,3)", "(8,9)"], "worker_id": 7, "moves_detail": null, "value_trace": null, "colony_extension_stone_count": 0, "colony_extension_stone_total": 63, "colony_extension_fraction": 0.0, "terminal_reason": "six_in_a_row", "model_version_min": 0, "model_version_max": 0, "model_version_distinct": 1, "model_version_range_size": 0, "stride5_run_p90": 3, "row_max_density": 10}
+{"ts": 1779529071.9164762, "event": "system_stats", "buffer_size": 300, "buffer_capacity": 250000}
+{"ts": 1779529076.5935273, "event": "system_stats", "gpu_util_pct": 92.0, "vram_used_gb": 5.018222592, "vram_total_gb": 17.094934528, "ram_used_gb": 11.274674176, "ram_total_gb": 64.992473088, "cpu_util_pct": 20.3, "rss_gb": 8.473837568}
+{"ts": 1779529076.9244099, "event": "system_stats", "buffer_size": 300, "buffer_capacity": 250000}
+{"ts": 1779529079.2457345, "event": "game_complete", "game_id": "ba76725b9c0a4401b5416c2c2119d10e", "winner": 1, "moves": 67, "moves_list": ["(2,-2)", "(-1,0)", "(-5,2)", "(0,3)", "(6,-1)", "(1,0)", "(-7,4)", "(4,2)", "(9,-4)", "(2,-4)", "(-3,5)", "(3,-6)", "(4,-5)", "(1,6)", "(-8,4)", "(5,7)", "(8,-4)", "(3,5)", "(9,8)", "(5,2)", "(5,10)", "(-1,3)", "(-4,10)", "(-2,8)", "(3,4)", "(3,9)", "(-9,9)", "(8,7)", "(-2,4)", "(5,-1)", "(-5,10)", "(6,8)", "(2,5)", "(7,7)", "(-1,11)", "(0,5)", "(9,11)", "(4,7)", "(4,6)", "(-4,9)", "(-9,8)", "(0,10)", "(6,3)", "(-6,7)", "(6,10)", "(-7,11)", "(9,1)", "(8,9)", "(-5,8)", "(-1,10)", "(-1,9)", "(2,3)", "(2,7)", "(-3,2)", "(-6,8)", "(-6,9)", "(-3,11)", "(0,4)", "(-8,10)", "(-4,11)", "(4,5)", "(2,1)", "(-2,10)", "(-1,7)", "(-7,9)", "(8,3)", "(-3,10)"], "worker_id": 14, "moves_detail": null, "value_trace": null, "colony_extension_stone_count": 0, "colony_extension_stone_total": 67, "colony_extension_fraction": 0.0, "terminal_reason": "six_in_a_row", "model_version_min": 0, "model_version_max": 0, "model_version_distinct": 1, "model_version_range_size": 0, "stride5_run_p90": 3, "row_max_density": 9}
+{"ts": 1779529081.5971792, "event": "system_stats", "gpu_util_pct": 87.0, "vram_used_gb": 5.018222592, "vram_total_gb": 17.094934528, "ram_used_gb": 11.276480512, "ram_total_gb": 64.992473088, "cpu_util_pct": 17.2, "rss_gb": 8.483770368}
+{"ts": 1779529081.9528468, "event": "system_stats", "buffer_size": 486, "buffer_capacity": 250000}
+{"ts": 1779529084.477085, "event": "game_complete", "game_id": "c042eaf0d2dc4edca4c45b5f555d75d4", "winner": 1, "moves": 75, "moves_list": ["(1,-1)", "(3,-1)", "(2,2)", "(-3,-1)", "(2,5)", "(4,6)", "(4,3)", "(-7,2)", "(2,1)", "(-6,6)", "(3,3)", "(-9,7)", "(2,4)", "(-1,-6)", "(7,-5)", "(6,5)", "(3,2)", "(7,3)", "(-1,9)", "(-1,-3)", "(3,-2)", "(-4,-3)", "(-6,8)", "(-10,1)", "(7,-1)", "(-6,3)", "(-2,9)", "(0,3)", "(5,7)", "(-4,10)", "(4,4)", "(4,1)", "(0,11)", "(5,1)", "(8,5)", "(6,0)", "(-5,10)", "(2,9)", "(3,4)", "(7,0)", "(-1,11)", "(8,6)", "(7,5)", "(6,-4)", "(-6,10)", "(4,2)", "(1,1)", "(4,9)", "(-1,1)", "(4,0)", "(8,10)", "(5,6)", "(7,11)", "(-1,3)", "(0,9)", "(-6,2)", "(6,9)", "(-8,10)", "(-2,10)", "(8,2)", "(8,11)", "(2,11)", "(1,9)", "(3,9)", "(-1,2)", "(2,0)", "(5,10)", "(5,2)", "(-6,1)", "(6,10)", "(-2,2)", "(-3,11)", "(6,1)", "(-8,5)", "(-3,9)"], "worker_id": 16, "moves_detail": null, "value_trace": null, "colony_extension_stone_count": 0, "colony_extension_stone_total": 75, "colony_extension_fraction": 0.0, "terminal_reason": "six_in_a_row", "model_version_min": 0, "model_version_max": 0, "model_version_distinct": 1, "model_version_range_size": 0, "stride5_run_p90": 4, "row_max_density": 9}
+{"ts": 1779529084.8732884, "event": "run_end", "step": 8}

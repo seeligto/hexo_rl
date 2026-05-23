@@ -1,0 +1,91 @@
+config_key_overlap: key 'lr' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'total_steps' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'eta_min' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'mixing' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'draw_value' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'ply_cap_value' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'game_length_weights' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'selfplay' appears in both 'configs/selfplay.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'buffer_schedule' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'eval_interval' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'monitors' appears in both 'configs/monitors.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'anchor_every_steps' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+[hexo_rl train] cpu_budget=24 n_workers=18 per_lib=4 omp=4 mkl=4 interop=4
+config_key_overlap: key 'lr' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'total_steps' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'eta_min' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'mixing' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'draw_value' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'ply_cap_value' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'game_length_weights' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'selfplay' appears in both 'configs/selfplay.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'buffer_schedule' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'eval_interval' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'monitors' appears in both 'configs/monitors.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+config_key_overlap: key 'anchor_every_steps' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' — 'configs/variants/v6_botmix_s180b_a2.yaml' wins
+{"log_path": "logs/train_d1b2a3f7aded455cbf8399fa951ca3f6.jsonl", "run_name": "train_d1b2a3f7aded455cbf8399fa951ca3f6", "event": "logging_configured", "level": "info", "timestamp": "2026-05-23T10:22:55.987568Z"}
+{"config": {"board_size": 19, "in_channels": 8, "res_blocks": 12, "filters": 128, "se_reduction_ratio": 4, "encoding": "v6", "fp16": true, "amp_dtype": "fp16", "torch_compile": false, "torch_compile_mode": "default", "augment": true, "policy_prune_frac": 0.02, "batch_size": 256, "min_buffer_size": 256, "training_steps_per_game": 2.0, "max_train_burst": 16, "lr": "2e-3", "weight_decay": 0.0001, "grad_clip": 1.0, "lr_schedule": "cosine", "total_steps": 100000, "eta_min": "2e-4", "eval_interval": 10000, "checkpoint_interval": 500, "max_checkpoints_kept": 10, "preserve_eval_checkpoints": true, "log_interval": 10, "aux_opp_reply_weight": 0.15, "entropy_reg_weight": 0.01, "draw_value": -0.1, "ply_cap_value": 0.0, "recency_weight": 0.75, "uncertainty_weight": 0.0, "ownership_weight": 0.1, "threat_weight": 0.1, "aux_chain_weight": 1.0, "zero_chain_planes": false, "threat_pos_weight": 59.0, "game_length_weights": {"thresholds": [10, 25], "weights": [1.0, 1.0], "default_weight": 1.0}, "buffer_schedule": [{"step": 0, "capacity": 250000}, {"step": 300000, "capacity": 500000}, {"step": 1000000, "capacity": 1000000}], "mixing": {"pretrained_buffer_path": "data/bootstrap_corpus_v6.npz", "decay_steps": 200000, "min_pretrained_weight": 0.1, "initial_pretrained_weight": 0.8, "pretrain_max_samples": 0, "buffer_persist": true, "buffer_persist_path": "checkpoints/replay_buffer.bin", "bot_corpus_path": "data/bot_corpus_s178_sealbot_vs_v6.npz", "bot_batch_share": 0.3, "bot_corpus_refresh": {"enabled": false, "trigger": "best_model_promotion", "cooldown_steps": 25000, "min_new_games": 200}}, "seed": 42, "gpu": {"tf32_matmul": "auto", "tf32_cudnn": "auto"}, "diagnostics": {"perf_timing": false, "perf_sync_cuda": false, "vram_probe_interval": 100}, "disk_guard": {"warn_gb": 10.0, "fail_gb": 5.0, "interval_sec": 60.0, "keep_all": false}, "anchor_every_steps": 2000, "max_game_records": 10000, "mcts": {"n_simulations": 400, "c_puct": 1.5, "fpu_reduction": 0.25, "quiescence_enabled": true, "quiescence_blend_2": 0.3, "dirichlet_alpha": 0.05, "epsilon": 0.1, "dirichlet_enabled": true, "temperature_threshold_ply": 30}, "selfplay": {"completed_q_values": true, "c_visit": 50.0, "c_scale": 1.0, "gumbel_mcts": false, "gumbel_m": 16, "gumbel_explore_moves": 10, "n_workers": 18, "inference_batch_size": 64, "inference_max_wait_ms": 4.0, "leaf_batch_size": 8, "trace_inference": true, "replay_buffer_capacity": 500000, "max_game_moves": 150, "results_queue_cap": 10000, "random_opening_plies": 1, "rotation_enabled": true, "legal_move_radius_jitter": true, "playout_cap": {"fast_prob": 0.0, "fast_sims": 64, "standard_sims": 200, "temperature_threshold_compound_moves": 0, "temp_min": 0.5, "zoi_enabled": true, "zoi_lookback": 16, "zoi_margin": 5, "n_sims_quick": 100, "n_sims_full": 600, "full_search_prob": 0.5}, "n_simulations": 400}, "game_replay": {"enabled": true, "sample_rate": 50, "output_dir": "logs/replays", "include_mcts_visits": false, "include_value_estimates": false}, "monitoring": {"enabled": true, "terminal_dashboard": true, "web_dashboard": true, "web_port": 5001, "log_interval": 10, "event_log_maxlen": 500, "alert_entropy_min": 1.0, "alert_grad_norm_max": 10.0, "alert_loss_increase_window": 3, "alert_entropy_warn": 2.0, "ema_alpha": 0.06, "training_step_history": 2000, "game_history": 500, "num_actions_for_entropy_norm": 362, "p0_win_rate_target_low": 54.0, "p0_win_rate_target_high": 58.0, "viewer_max_memory_games": 50, "viewer_max_disk_games": 1000, "log_policy_target_metrics": true, "log_investigation_metrics": true}, "monitors": {"axis_warn": 0.45, "axis_alert": 0.5, "hard_abort_grad_norm": 10.0, "hard_abort_grad_norm_steps": 5}, "lr_warmup_steps": 2000, "lr_warmup_start_factor": 0.01, "gating": {"bootstrap_floor": {"enabled": true, "min_winrate": 0.45}}, "eval_temperature": 0.5, "eval_random_opening_plies": 0, "eval_pipeline": {"opponents": {"bootstrap_anchor": {"path": "checkpoints/bootstrap_model_v6_a2.pt"}, "sealbot": {"enabled": true}, "randombot": {"enabled": true}, "best_checkpoint": {"enabled": true}}}, "hard_abort": {"loss_nan": true, "stride5_p90": 60, "row_max_p90": 50, "colony_ext_frac_max": 0.4, "draw_rate_warn": 0.7, "pct_at_cap_warn": 0.3}, "telemetry": {"emit_bot_corpus_metrics": true, "emit_outcome_distribution": true, "emit_value_pred_at_ply_cap": true}}, "variant": "v6_botmix_s180b_a2", "pid": 2666338, "event": "startup", "level": "info", "timestamp": "2026-05-23T10:22:55.987700Z"}
+{"event": "config_key_overlap: key 'lr' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998115Z"}
+{"event": "config_key_overlap: key 'total_steps' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998161Z"}
+{"event": "config_key_overlap: key 'eta_min' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998199Z"}
+{"event": "config_key_overlap: key 'mixing' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998235Z"}
+{"event": "config_key_overlap: key 'draw_value' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998268Z"}
+{"event": "config_key_overlap: key 'ply_cap_value' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998301Z"}
+{"event": "config_key_overlap: key 'game_length_weights' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998335Z"}
+{"event": "config_key_overlap: key 'selfplay' appears in both 'configs/selfplay.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998368Z"}
+{"event": "config_key_overlap: key 'buffer_schedule' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998403Z"}
+{"event": "config_key_overlap: key 'eval_interval' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998436Z"}
+{"event": "config_key_overlap: key 'monitors' appears in both 'configs/monitors.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998468Z"}
+{"event": "config_key_overlap: key 'anchor_every_steps' appears in both 'configs/training.yaml' and 'configs/variants/v6_botmix_s180b_a2.yaml' \u2014 'configs/variants/v6_botmix_s180b_a2.yaml' wins", "level": "warning", "timestamp": "2026-05-23T10:22:55.998502Z"}
+{"seed": 42, "event": "seeded", "level": "info", "timestamp": "2026-05-23T10:22:56.002015Z"}
+{"device": "cuda", "event": "device", "level": "info", "timestamp": "2026-05-23T10:22:56.002118Z"}
+{"event": "tf32_auto_unmeasured_arch", "level": "warning", "timestamp": "2026-05-23T10:22:56.036233Z"}
+{"event": "tf32_auto_unmeasured_arch", "level": "warning", "timestamp": "2026-05-23T10:22:56.036286Z"}
+{"event": "tf32_resolved", "level": "info", "timestamp": "2026-05-23T10:22:56.036361Z"}
+{"tf32_matmul": true, "tf32_cudnn": true, "compute_capability": "sm_120", "source": {"tf32_matmul": "auto", "tf32_cudnn": "auto"}, "applied": true, "event": "tf32_applied", "level": "info", "timestamp": "2026-05-23T10:22:56.036372Z"}
+{"encoding_name": "v6", "board_size": 19, "n_planes": 8, "is_multi_window": false, "event": "train_encoding_resolved", "level": "info", "timestamp": "2026-05-23T10:22:56.036455Z"}
+{"model_params": 4344266, "in_channels": 8, "input_channels": null, "event": "new_run", "level": "info", "timestamp": "2026-05-23T10:22:56.865468Z"}
+{"run_id": "d1b2a3f7aded455cbf8399fa951ca3f6", "event": "run_id", "level": "info", "timestamp": "2026-05-23T10:22:56.865640Z"}
+{"thresholds": [10, 25], "weights": [1.0, 1.0], "default_weight": 1.0, "event": "replay_buffer.weight_schedule_set", "level": "info", "timestamp": "2026-05-23T10:22:56.880416Z"}
+{"capacity": 250000, "min_buffer_size": 256, "schedule_entries": 3, "event": "buffer_init", "level": "info", "timestamp": "2026-05-23T10:22:56.880545Z"}
+{"buffer_size_before_corpus_load": 0, "ckpt_step": null, "ckpt_path": null, "buffer_persist_enabled": true, "event": "buffer_state_at_corpus_load", "level": "info", "timestamp": "2026-05-23T10:22:56.880592Z"}
+{"path": "data/bootstrap_corpus_v6.npz", "msg": "copying corpus into Rust pretrained_buffer \u2014 may take minutes for large corpora", "event": "loading_corpus_npz", "level": "info", "timestamp": "2026-05-23T10:22:56.880674Z"}
+{"positions": 353091, "file_mb": 2553.6, "event": "corpus_prefill", "level": "info", "timestamp": "2026-05-23T10:23:25.737044Z"}
+{"positions": 353091, "msg": "NPZ has >100K positions \u2014 cold-start only needs 50K. Run 'make corpus.npz' to regenerate with the optimized pipeline.", "event": "corpus_prefill_oversized", "level": "warning", "timestamp": "2026-05-23T10:23:25.737286Z"}
+{"path": "data/bootstrap_corpus_v6.npz", "n_positions": 353091, "estimated_ram_gb": 4.8, "msg": "push_game allocates full corpus in RAM \u2014 training starts after this completes", "event": "corpus_prefill_high_ram", "level": "warning", "timestamp": "2026-05-23T10:23:25.737344Z"}
+{"positions": 353091, "seconds": "29.6", "event": "corpus_loaded", "level": "info", "timestamp": "2026-05-23T10:23:26.485514Z"}
+{"path": "data/bot_corpus_s178_sealbot_vs_v6.npz", "msg": "copying \u00a7178 bot corpus into Rust ReplayBuffer", "event": "loading_bot_corpus_npz", "level": "info", "timestamp": "2026-05-23T10:23:26.487016Z"}
+{"positions": 21899, "file_mb": 1.1, "event": "bot_corpus_prefill", "level": "info", "timestamp": "2026-05-23T10:23:28.335158Z"}
+{"positions": 21899, "seconds": "1.9", "event": "bot_corpus_loaded", "level": "info", "timestamp": "2026-05-23T10:23:28.384309Z"}
+{"capacity": 125000, "recency_weight": 0.75, "state_shape": [8, 19, 19], "policy_len": 362, "event": "recent_buffer_init", "level": "info", "timestamp": "2026-05-23T10:23:28.389485Z"}
+{"event": "cuda_warmup_start", "level": "info", "timestamp": "2026-05-23T10:23:28.643958Z"}
+{"elapsed_sec": 1.2, "event": "cuda_warmup_done", "level": "info", "timestamp": "2026-05-23T10:23:29.858527Z"}
+{"context": "inference_server", "batch_size": 64, "board_size": 19, "event": "inference_trace_compiled", "level": "info", "timestamp": "2026-05-23T10:23:31.363752Z"}
+{"interval": 2500, "overrides_applied": true, "event": "eval_pipeline_enabled", "level": "info", "timestamp": "2026-05-23T10:23:31.853365Z"}
+{"checkpoint_path": "checkpoints/best_model.pt", "encoding_version": "v6", "board_size": 19, "cluster_window_size": null, "cluster_threshold": null, "source": "shape_inference", "event": "checkpoint_encoding_resolved", "level": "info", "timestamp": "2026-05-23T10:23:31.862652Z"}
+{"path": "checkpoints/best_model.pt", "step": 0, "event": "best_model_loaded", "level": "info", "timestamp": "2026-05-23T10:23:32.134612Z"}
+{"n_positions": 10, "plies": [0, 1, 2, 3, 4, 5, 7, 10, 15, 20], "encoding": "v6", "event": "early_game_probe_init", "level": "info", "timestamp": "2026-05-23T10:23:32.428994Z"}
+{"error": "No module named 'tensorboard'", "event": "tensorboard_writer_unavailable", "level": "warning", "timestamp": "2026-05-23T10:23:32.429520Z"}
+{"path": "logs/events_d1b2a3f7aded455cbf8399fa951ca3f6.jsonl", "event": "events_jsonl_sink", "level": "info", "timestamp": "2026-05-23T10:23:32.429708Z"}
+{"checkpoint": "checkpoints/best_model.pt", "event": "viewer_engine_loaded", "level": "info", "timestamp": "2026-05-23T10:23:32.933689Z"}
+{"loaded": 50, "path": "runs", "event": "load_existing_games_done", "level": "info", "timestamp": "2026-05-23T10:23:32.937532Z"}
+Traceback (most recent call last):
+  File "/workspace/hexo_rl/hexo_rl/monitoring/web_dashboard.py", line 281, in start
+    _probe.bind((host, port))
+OSError: [Errno 98] Address already in use
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/hexo_rl/scripts/train.py", line 271, in <module>
+    main()
+  File "/workspace/hexo_rl/scripts/train.py", line 240, in main
+    run_training_loop(
+  File "/workspace/hexo_rl/hexo_rl/training/loop.py", line 173, in run_training_loop
+    subsys = build_subsystems(args, config, device, run_id)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/hexo_rl/hexo_rl/training/lifecycle.py", line 298, in build_subsystems
+    wd.start()
+  File "/workspace/hexo_rl/hexo_rl/monitoring/web_dashboard.py", line 284, in start
+    raise OSError(
+OSError: dashboard cannot bind 127.0.0.1:5001 (Address already in use). Another dashboard is likely already running — `make dashboard.stop` or set DASHBOARD_PORT=<other> for this one.

@@ -1,0 +1,12 @@
+{"ts": 1779528794.9854357, "event": "run_start", "step": 0, "run_id": "89c5eb875675400da3955665dbac316d", "worker_count": 18, "config_summary": {"n_blocks": 12, "channels": 128, "n_sims": 400, "buffer_capacity": 250000}}
+{"ts": 1779528794.9883702, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528799.7675672, "event": "system_stats", "gpu_util_pct": 0.0, "vram_used_gb": 1.018953728, "vram_total_gb": 17.094934528, "ram_used_gb": 10.461999104, "ram_total_gb": 64.992473088, "cpu_util_pct": 0.0, "rss_gb": 7.618121728}
+{"ts": 1779528799.990694, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528799.9927657, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528804.7706804, "event": "system_stats", "gpu_util_pct": 0.0, "vram_used_gb": 1.027342336, "vram_total_gb": 17.094934528, "ram_used_gb": 10.473209856, "ram_total_gb": 64.992473088, "cpu_util_pct": 4.9, "rss_gb": 7.627583488}
+{"ts": 1779528804.9932096, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528804.997545, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528809.7736416, "event": "system_stats", "gpu_util_pct": 13.0, "vram_used_gb": 0.991690752, "vram_total_gb": 17.094934528, "ram_used_gb": 10.481180672, "ram_total_gb": 64.992473088, "cpu_util_pct": 4.9, "rss_gb": 7.632990208}
+{"ts": 1779528809.9958153, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528810.0029202, "event": "system_stats", "buffer_size": 0, "buffer_capacity": 250000}
+{"ts": 1779528810.496476, "event": "run_end", "step": 0}

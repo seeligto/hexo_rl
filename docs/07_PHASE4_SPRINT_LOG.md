@@ -2914,6 +2914,151 @@ agrees within ~1 × SE; the trajectory does not.
 (multi-scale avg-pool value-head re-architecture; ~3-4 GPU-days
 pretrain cycle) per L34/L42/V-FL-A routing.
 
+### §S181 FU-2 — A2 multi-scale avg-pool value head: V-FU2-C FAIL
+
+**Branch.** `phase4.5/s181_fu2_a2_arch` (commits `f938fa5` → `4b2510d`).
+Operator-mediated vast launches. **Closed 2026-05-23 — disposition
+pending operator decision** (V-FU2-C verdict + brief T5 FF-merge
+spec in tension; see §5 below).
+
+**T1 — A2 architecture landed.** `feat(arch): A2 multi-scale avg-pool
+value head` (commit `f938fa5`). Drop GMP half of value head (T2 §6.1
+PRIMARY permissive element). Replace with multi-scale avg-pool: GAP
+(1C) + 2×2 adaptive-avg-pool flattened (4C) = (B, 5C). `value_fc1`
+input dim `2*filters → 5*filters` via `VALUE_FC1_MULTIPLIER=5` single
+source. INV pin `tests/test_inv_value_head_a2_shape.py` 6/6 PASS.
+Ckpt-load A2 shape guard in `eval/checkpoint_loader.py` +
+`viewer/model_loader.py`. NN-latency micro-bench laptop CPU batch=1
+n=20 median: 5.19ms → 5.52ms (+6.4%, inside +10% budget). Pre-merge
+REVIEW (Opus 4.7 fresh-context subagent): scope A all PASS.
+
+**T2 — A2 pretrain + PT-quality gates** (commit `1358710`). 30 epochs
+cosine 2e-3 → 1e-5 batch 256 on `data/bootstrap_corpus_v6.npz` (SHA
+`6ea62afa…`), ~60 min vast 5080. Anchor SHA `36c9111e…`. Brief's
+"match §148 v6 recipe (5e-4 → 1e-5)" mis-attributed — sprint log §149
+shows 5e-4 was the v7e30 fine-tune; §148 v6 from-scratch used
+config-default 2e-3. Operator-confirmed at 2e-3.
+
+PT gate results (composite literal FAIL, composite intent AMBIGUOUS —
+see `audit/structural/07_fu2_a2_pretrain_quality.md`):
+
+| gate | A2 value | threshold | status (literal) | comparator |
+|---|---:|---:|---|---|
+| PT-1 final loss | 3.218 | ≤ 3.50 | PASS | pre-A2 v6: 2.896 |
+| PT-2 SealBot WR n=500 argmax | 8.6% | ≥ 13% | FAIL | pre-A2 v6: 11.4% (Δ −2.8pp) |
+| PT-3 V_spread on T3 bank | **−0.508** | ≥ +0.45 | FAIL-LITERAL / PASS-MAGNITUDE | pre-A2 +0.617 (SIGN FLIPPED) |
+| PT-4 C1 threat contrast | −0.282 | ≥ +0.38 | FAIL-LITERAL | pre-A2 era ≈+0.48 (same sign-flip) |
+| PT-4 C2 top-5 ext | 50% | ≥ 25% | PASS | strong |
+| PT-4 C3 top-10 ext | 55% | ≥ 40% | PASS | strong |
+
+**Sign-flip is audit-predicted.** Pre-A2 anchor was colony-favouring
+(+0.617) — the GMP coverage-blind monotone route biased random init
+toward colony. A2 removed it → random init now extension-favouring
+(−0.508). Same magnitude (0.51 vs 0.62) but inverted direction. Matched-
+epoch value loss collapse: pre-A2 v6 0.688 → 0.179 (74% — sharp fit);
+A2 0.690 → 0.543 (21% — coverage-aware, structurally cannot peak-
+saturate). Falsified failure: §169 A2 PMA ablation stuck at ln(2)=0.693
+across all 30 epochs (degenerate). A2 multi-scale avg-pool DESCENDS
+monotonically — head IS learning. Distinct failure mode.
+
+Operator-override of literal halt-rule: proceed to T3 because the
+FU-2 hypothesis "does A2 prevent colony collapse during sustained
+self-play?" can ONLY be tested via T3. Sign-flip + functional play
+(8.6% WR >> random ~0.5%) argue for "A2 altered inductive bias", not
+"A2 broken".
+
+**T3 — sustained run** (commit `4b2510d` adds `lr_warmup_steps`
+feature: `SequentialLR(LinearLR, CosineAnnealingLR)`, 5/5 tests PASS).
+Variant `v6_botmix_s180b_a2.yaml` = §S180b 3-knob recipe with single
+arch delta = A2 anchor + 2000-step LR warmup (ramp 2e-5 → 2e-3).
+Brief target 50k, operator override 20k for FU-1.5 ladder-cadence
+direct comparison. Killed early at step 2500 on strong V-FU2-C signal.
+
+Pre-launch fixes during T3 stand-up: (1) `monitors.hard_abort_grad_
+norm` config-key correction — the parent §S180b variant put 10.0 under
+`hard_abort:` which is NOT consumed by `loop.py:210`; first launch
+aborted at step 8 (grad_norm 6.94, default threshold 3.0). Moved under
+`monitors:` (commit `637242a`). (2) LR warmup added because at full
+2e-3 from step 0 the A2 anchor's flat priors produced 100% draw-rate
+random selfplay walks → value targets ≈ 0 → value head stuck at
+ln(2) (commit `4b2510d`). (3) Dashboard port conflicts from
+zombie-process residuals — `make dashboard.stop` + zombie kill +
+clean relaunch with in-process dashboard.
+
+**Canary V_spread trajectory (5-rung ladder, raw events in
+`reports/fu2_sustained/events/events_*.jsonl`):**
+
+| step | V_spread | direction | canary alert |
+|---:|---:|---|---|
+| 0 (A2 anchor) | **−0.508** | extension | n/a (PT-3 baseline) |
+| 500 | **−0.117** | extension | SOFT-ABORT (<+0.20) |
+| 1000 | **+0.128** | **flipped → colony** | SOFT-ABORT |
+| 1500 | +0.101 | colony | SOFT-ABORT |
+| 2000 | +0.127 | colony | SOFT-ABORT |
+| 2500 | **+0.186** | colony | SOFT-ABORT |
+
+**Cross-plot vs FU-1.5 at matched step 2k:**
+FU-1.5 V_spread(2k) = +0.175; A2 V_spread(2k) = +0.127; Δ = 0.048 —
+**WITHIN ±0.10 V-FU2-C matching tolerance.** Both runs converge on
+the same colony-favouring magnitude band (+0.1 to +0.2) by step 2k.
+A2 started −0.508 extension-favouring and was DRAGGED through zero
+to +0.13 colony by step 1000 — same end-state as pre-A2 reached
+monotonically from +0.617.
+
+**V-FU2-C TRUE** per pre-registered table applied literally (L13
+guard). V-FU2-A/B/D/F all FALSE; V-FU2-E borderline (range Δ 0.303
+vs ±0.30 threshold). REVIEW (Opus 4.7 fresh-context subagent on
+audit doc 08): scope C/D/C-extra/E all PASS; numerical accuracy
+verified against raw events. APPROVE FOR T5 CLOSE.
+
+**KEY FINDING — FU-1.5 V-FL-A hypothesis FALSIFIED.** V-FL-A predicted
+A2 (architectural intervention) would prevent the early-step
+discriminator collapse. A2 did NOT prevent it. The training-loop
+dynamics override the architecture's structural starting point by
+≥0.5 in V_spread magnitude within 1000 steps. **Architectural
+inversion of inductive bias is not sufficient.**
+
+**L47 — value-head architectural inductive-bias fixes are insufficient
+without loop-side intervention.** A starting-point inversion (A2's
+extension-favouring anchor) is overpowered by the §S178/§S180b
+3-knob recipe's value-target dynamics within ~1000 training steps.
+The collapse mechanism is not the architecture's structural
+preference; it is the loop's gradient direction toward the colony-
+favouring fixed point under the current selfplay × MCTS visit-count
+CE × corpus mix. The next surface IS the loop — PSW / refresh hook /
+A3 aux-loss / value-target perturbation. The V_spread canary is the
+empirical instrument: it fired at step 500 (5× faster than wr_sealbot
+would have surfaced the collapse) and gives a clean per-checkpoint
+binary signal for any future arch+loop combination.
+
+**§5 — Disposition pending operator.** Brief T5 says FF-merge; V-FU2-C
+verdict says "A2 reverts". Tension between the two. Audit doc 08 §5
+recommends per-item disposition:
+
+- **Preserve regardless of A2 reversal**: LR warmup feature (commit
+  `4b2510d`, generally useful, 5/5 tests PASS); PT-quality gate runner
+  `scripts/structural_diagnosis/fu2_pretrain_quality_gates.py`
+  (generally useful for any future arch change); audit docs
+  `07_fu2_a2_pretrain_quality.md` + `08_fu2_a2_sustained_ladder.md`
+  (wave record).
+- **Tied to A2 (revert if reverting)**: A2 value head change
+  (`network.py` + `network_min_max_head.py` value-head sections);
+  A2 ckpt-load shape guards; `tests/test_inv_value_head_a2_shape.py`;
+  `tests/_a2_compat.py`.
+
+Three operator options (per AskUserQuestion in next turn):
+  (a) Cherry-pick the preserve set to master, A2 dies on branch.
+  (b) FF-merge everything per brief T5, A2 stays on master pending
+      explicit revert later (preserves history at cost of arch debt).
+  (c) Park branch, no merge, A2 + infra co-exist on branch only.
+
+**A2 anchor (`bootstrap_model_v6_a2.pt`, SHA `36c9111e…`) is NOT the
+canonical anchor for any next wave** — pre-A2 `bootstrap_model_v6.pt`
+remains canonical.
+
+**Next.** PSW or refresh hook or A3 aux-loss — operator's call.
+V_spread canary stays wired on whichever recipe the next wave uses.
+
 ---
 
 ## §S182 — perf wave: legal_moves_set capacity fix MERGED
