@@ -2793,6 +2793,127 @@ Cheaper de-risk before committing FU-2: a finer 0–20k ladder (new
 checkpoints every ~2k from a short §S180b-config re-run) to pin
 step-0-onset vs mid-cliff. Not auto-launched.
 
+### §S181 FU-1.5 + PR-A — finer ladder + value_spread canary
+
+Closed 2026-05-23 — Stage 4 merged. 4 commits on master
+(`b8ebb1d..9cfadd7`) covering FU-1.5 (probe SHA gate + pre-registered
+V-FL classifier + 10-rung 2k-cadence ladder + audit doc), PR-A
+(value_spread canary as a first-class colony-capture trigger), the
+§S180b config + launch script for the re-run, and the FU-1 audit
+artifacts brought along. Independent landed fix `de149e6
+fix(mcts): canonical child order — kill FxHashSet-order leak`
+addresses a latent `FxHashSet` iteration-order leak found during the
+investigation (behaviourally inert per 5 independent tests; not a
+regression cause; landed as a hygiene improvement). REVIEW
+(Opus 4.7, high-effort, fresh context) returned **PASS 19/19** across
+scopes A/B/C.
+
+**Verdict (mechanical, code — L13 guard).** `V-FL-A — STEP-0-ONSET`.
+
+**Ladder (clean-host vast re-run, anchor + bank SHA gates PASS):**
+
+| step | 0 | 2k | 4k | 6k | 8k | 10k | 12k | 14k | 16k | 18k | 20k |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| V_spread | +0.617 | **+0.175** | **−0.118** | +0.055 | +0.217 | +0.390 | +0.167 | +0.523 | +0.221 | +0.208 | +0.108 |
+
+Single-interval loss 0→2k = **−0.4421 = 86.7 % of the total
+trajectory loss**. V_spread crosses the +0.20 FU-2 abort gate
+*between step 0 and step 2k*. Step 4k goes negative.
+
+**Key finding — resolves FU-1's open question:** the value-head
+collapse is front-loaded to the first 2k steps. The FU-1 10k-cadence
+ladder under-sampled this region and could not localize the onset;
+FU-1.5's 2k cadence places >86 % of the collapse before step 2k.
+
+**FU-2 routing (pre-registered V-FL-A → A2 arm):** **A2 multi-scale
+avg-pool value head load-bearing.** An aux-loss A3 cannot catch a
+value-head crash that is >86 % complete by step 2k — there is no
+time for an aux gradient to push back before the discriminator is
+already through the abort gate.
+
+**Substantive nuance (not the verdict).** §S180b crashed
+monotonically to a permanent flat-dead band by step 20k; FU-1.5
+crashes fast then **oscillates** post-onset (peak +0.523 at step
+14k, range −0.118 to +0.523). Both 20k endpoints sit near zero
+(FU-1.5 +0.108, §S180b −0.110, both within ~1 × SE of zero). The
+endpoints agree; the paths diverge — consistent with chaotic
+post-onset divergence in the colony-attractor neighbourhood.
+
+**§S180b cross-check @ step 10k (brief ±15pp variance gate):**
+wr_sealbot 9 % vs §S180b 11 % (−2 pp); elo 421.3 vs 422 (−0.7);
+wr_anchor 66 % vs 61 %; wr_best 52 % vs 52 %; colony_wins_anchor
+41 vs 36. All within noise — FU-1.5 IS a faithful §S180b
+reproduction.
+
+**Investigation context (the host-state regression).** The first
+FU-1.5 launch attempt hit an anomalous vast-host regime (`depth ~2.5
+/ games ~77-96 plies` vs every pre-05-22 run at depth 3.4-3.8 /
+plies 27-57). Five-test code exoneration of §S182/§S183
+(deterministic depth probe; deterministic full-game probe; laptop
+self-play 100-game smoke A/B; laptop full-training 100-game A/B;
+vast 100-game A/B post-reinstall — every test bit-identical old vs
+new code) ruled out the perf wave. Root cause: stale vast-host state.
+Clean reinstall (`rm -rf hexo_rl` → fresh `git clone` → `make install`:
+fresh `.venv` torch 2.11.0+cu128 + fresh engine build + 1555 tests
+PASS) restored the §S180b regime. The relaunch on the clean host is
+the data this audit reports on.
+
+**PR-A — value_spread canary.** First-class colony-capture trigger
+wired as a checkpoint-save callback emitting a `value_spread` event
++ alert rule (WARNING < +0.30, SOFT-ABORT < +0.20 — the FU-1 / FU-2
+abort gate). 40-position T3 bank frozen at
+`tests/fixtures/value_spread_bank.json` (SHA `9342…23991`); INV pin
+`tests/test_inv_value_spread_bank.py` asserts the SHA. Renderer
+failure cannot propagate (canary fire-and-forget). `colony_a` stays
+in the eval payload — additive, not destructive. No hot-path touch
+(canary fires post-save, not in the inner loop). Micro-bench: 15.1
+ms → 30.4 ms ckpt-save on RTX 4060 (+15.3 ms, under the 50 ms gate).
+Replaces `colony_a` as the *trigger* signal (FU-1 §5: `colony_a` is
+wins-only / late / small-denominator; value_spread is a stable
+static probe that crosses +0.20 before step 2k).
+
+**Independent landed fix (`de149e6`).** `pick_topk_children` Path A
+emitted children in raw `FxHashSet` iteration order (a knowingly-left
+"identical to pre-cap behaviour" hash leak); §S182's capacity-reserve
+changed that order. The fix unifies both paths to canonical
+`(prior desc, flat asc)` — the canonical key Path B already used.
+MCTS is now order-stable regardless of hashbrown capacity. Five
+independent tests prove behavioural identity (it was never a
+regression cause); landed as hygiene. Bench-gated: MCTS sim/s
+−3.0 % (under 5 % gate). Regression test
+`test_topk_child_order_independent_of_hashset_capacity` pins the
+invariant.
+
+**L44 — value-head crashes can be front-loaded.** A 2k-cadence
+ladder on §S180b's recipe shows >86 % of the value-spread loss
+occurs in the first 2k steps from the bootstrap. The 10k-cadence
+ladder of FU-1 under-sampled this region. Future structural-
+diagnosis waves that probe value-head onset should default to ≤2k
+cadence in the first 10k steps.
+
+**L45 — host-state hygiene is research-load-bearing.** The
+05-21→05-22 vast regime change (depth 3.4→2.5 stable; uniform
+across all 05-22 vast launches before the reinstall) was *not*
+code. It was accumulated host cruft (stale `.venv`, stale compiled
+engine, leftover state from prior runs). Five independent code
+A/B tests exonerated the perf wave. A clean `git clone` +
+`make install` restored the §S180b regime. **Implication:** when a
+"first variance since the N-knob baseline" appears, host-state
+reinstall belongs in the discriminator set alongside the code
+bisect — not as a follow-up.
+
+**L46 — post-onset oscillation ≠ flat-dead.** §S180b reached a
+permanent flat-dead V_spread band after step 20k; FU-1.5 (same
+recipe, clean host) reaches a similar mean-near-zero by step 20k
+but the path oscillates (+0.523 peak at step 14k). Two faithful
+reproductions of the same recipe can take different routes through
+the chaotic colony-attractor neighbourhood. The 20k endpoint
+agrees within ~1 × SE; the trajectory does not.
+
+**Next.** FU-2 NOT auto-launched. **Operator decides FU-2 A2 arm**
+(multi-scale avg-pool value-head re-architecture; ~3-4 GPU-days
+pretrain cycle) per L34/L42/V-FL-A routing.
+
 ---
 
 ## §S182 — perf wave: legal_moves_set capacity fix MERGED
