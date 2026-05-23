@@ -60,7 +60,10 @@ lr_schedule: cosine
 #
 # Current design (200K run):
 #   total_steps : 200_000  — full run length; sets CosineAnnealingLR T_max
-#   eta_min     :   2e-4   — LR floor (~10% of peak lr=0.002)
+#   eta_min     :   5e-4   — LR floor (~25% of peak lr=0.002); raised from 2e-4
+#                            per §S181 PR-B L47: KataGo precedent (never drop
+#                            below 0.5× peak), prevents loss-of-plasticity at
+#                            late-run when colony attractor manifests.
 #   decay_steps : 200_000  — pretrain_weight decays slowly across the full run;
 #                            floor reached near end of training. Reverted from
 #                            20K (was accelerated post exp A/C) to maintain
@@ -68,7 +71,7 @@ lr_schedule: cosine
 #
 # Do not change decay_steps without adjusting total_steps (and vice versa).
 total_steps: 200_000
-eta_min: 2e-4
+eta_min: 5e-4
 eval_interval: 5000            # overrides eval.yaml's eval_interval at trigger time.
                                # §101: EvalPipeline stride math reads this same value
                                # via full_config; keep the two in sync (or set only here)
