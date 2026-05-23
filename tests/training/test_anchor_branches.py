@@ -36,9 +36,13 @@ def test_resolve_anchor_eval_pipeline_none(tmp_path):
 def test_resolve_anchor_fresh_init_no_candidates(mock_save, mock_load, tmp_path):
     device = torch.device("cpu")
     real_model = HexTacToeNet(board_size=5, res_blocks=1, filters=16).to(device)
-    trainer = MagicMock(spec=["model", "step"])
+    # §S181-AUDIT Wave 2 — anchor fresh-init now routes the source
+    # state through Trainer.inference_state_dict so EMA weights flow
+    # consistently with the rest of the dispatch surface.
+    trainer = MagicMock(spec=["model", "step", "inference_state_dict"])
     trainer.model = real_model
     trainer.step = 7
+    trainer.inference_state_dict.return_value = real_model.state_dict()
 
     state = resolve_anchor(
         eval_pipeline=object(),  # not None → eval branch

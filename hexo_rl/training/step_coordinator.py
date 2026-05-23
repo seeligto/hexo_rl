@@ -685,10 +685,12 @@ class StepCoordinator:
                     self._last_bot_refresh_step = self._train_step
 
                 if self._eval_thread is None or not self._eval_thread.is_alive():
-                    base_model = getattr(self.trainer.model, "_orig_mod", self.trainer.model)
+                    # §S181-AUDIT Wave 2 — eval consumes EMA weights when
+                    # enabled (Trainer.inference_state_dict centralises the
+                    # raw-vs-EMA routing).
                     assert self.eval_model is not None
                     _eval_base = getattr(self.eval_model, "_orig_mod", self.eval_model)
-                    _eval_base.load_state_dict(base_model.state_dict())
+                    _eval_base.load_state_dict(self.trainer.inference_state_dict())
                     step_snapshot = self._train_step
                     self._logger.info("evaluation_start", step=step_snapshot)
 

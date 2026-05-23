@@ -296,13 +296,16 @@ def resolve_anchor(
             msg="No anchor or bootstrap available — initialising best_model.pt from current trainer.model. "
                 "Drop a bootstrap_model.pt (or one of _BOOTSTRAP_ANCHOR_CANDIDATES) into checkpoints/ to anchor wr_best meaningfully.",
         )
-        base_model = getattr(trainer.model, "_orig_mod", trainer.model)
         best_model = HexTacToeNet(
             board_size=board_size, res_blocks=res_blocks, filters=filters,
             in_channels=in_channels, input_channels=input_channels,
             se_reduction_ratio=se_reduction_ratio,
         ).to(device)
-        best_model.load_state_dict(base_model.state_dict())
+        # §S181-AUDIT Wave 2 — fresh anchor adopts EMA weights when enabled
+        # so this rare path stays consistent with the rest of the inference
+        # dispatch surface (lifecycle.build_inference_model, eval kickoff,
+        # promotion).
+        best_model.load_state_dict(trainer.inference_state_dict())
         best_model.eval()
         save_best_model_atomic(best_model, best_model_path)
         best_model_step = trainer.step
