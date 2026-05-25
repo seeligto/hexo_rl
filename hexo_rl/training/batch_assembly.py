@@ -336,6 +336,128 @@ def load_bot_corpus_buffer(
     return bot_buffer
 
 
+# ── §S181-AUDIT Wave 3 Stage 2A — atomic bot-corpus NPZ swap ─────────────────
+
+class BotCorpusSwapError(Exception):
+    """Raised when atomic swap of a refreshed bot-corpus NPZ fails the
+    integrity check (sha mismatch, missing sidecar, missing tmp file).
+    The canonical NPZ is preserved untouched in every failure path.
+    """
+
+
+def swap_bot_corpus_atomic(
+    canonical_path: str | Path,
+    tmp_path: str | Path,
+) -> tuple[str, str]:
+    """Atomically swap a freshly-written NPZ into the canonical bot-corpus slot.
+
+    Mirrors the ``anchor.py:save_best_model_atomic`` write-rename-verify
+    pattern (§S179c §3.1 — coordinator owns the swap, not the subprocess).
+    Sequence:
+
+        1. Validate ``tmp_path`` and its sidecar exist.
+        2. Read sidecar's declared sha256.
+        3. Recompute sha256 of ``tmp_path``; reject on mismatch
+           (quarantine as ``.corrupt-<ts>``).
+        4. ``os.rename(canonical_path, canonical_path + ".bak")`` if canonical exists.
+        5. ``os.rename(tmp_path, canonical_path)`` — POSIX-atomic.
+        6. ``os.rename(<tmp sidecar>, <canonical sidecar>)``.
+        7. Return ``(old_sha, new_sha)`` for forensic logging.
+
+    Returns:
+        ``(old_canonical_sha, new_canonical_sha)``. Empty string on the
+        ``old_canonical_sha`` slot when no canonical NPZ existed at swap time.
+
+    Raises:
+        ``BotCorpusSwapError`` on missing tmp/sidecar or sha mismatch. The
+        canonical NPZ is untouched in every failure path; the bad tmp is
+        renamed aside as ``.corrupt-<ts>``.
+    """
+    # Local imports (cold path; keeps module import-time work minimal).
+    import os
+    import time as _time
+    from hexo_rl.bootstrap.corpus_io import (
+        compute_npz_sha256 as _sha256_of_npz,
+        _sidecar_path as _sidecar_for,
+    )
+
+    canonical = Path(canonical_path)
+    tmp = Path(tmp_path)
+
+    if not tmp.exists():
+        raise BotCorpusSwapError(
+            f"refresh tmp NPZ missing: {tmp} — subprocess may have crashed "
+            f"between save and rename"
+        )
+
+    tmp_sidecar = _sidecar_for(tmp)
+    if not tmp_sidecar.exists():
+        raise BotCorpusSwapError(
+            f"refresh tmp sidecar missing: {tmp_sidecar} — refusing swap; "
+            f"canonical NPZ retained"
+        )
+
+    # Sidecar declares sha; verify on-disk content matches.
+    import json as _json
+    try:
+        meta = _json.loads(tmp_sidecar.read_text())
+    except (OSError, _json.JSONDecodeError) as exc:
+        raise BotCorpusSwapError(
+            f"refresh tmp sidecar parse failed: {tmp_sidecar} ({exc})"
+        ) from exc
+    declared_sha = meta.get("sha256")
+    if not isinstance(declared_sha, str) or not declared_sha:
+        raise BotCorpusSwapError(
+            f"refresh tmp sidecar missing 'sha256': {tmp_sidecar}"
+        )
+
+    actual_sha = _sha256_of_npz(tmp)
+    if actual_sha != declared_sha:
+        # Quarantine — do NOT clobber the canonical NPZ. INV-S179c-2 fail-safe.
+        ts = _time.strftime("%Y%m%dT%H%M%S")
+        corrupt = tmp.with_suffix(tmp.suffix + f".corrupt-{ts}")
+        tmp.replace(corrupt)
+        try:
+            tmp_sidecar.replace(corrupt.with_name(corrupt.name + ".metadata.json"))
+        except OSError:
+            pass
+        raise BotCorpusSwapError(
+            f"refresh tmp sha mismatch (declared {declared_sha[:12]}…, actual "
+            f"{actual_sha[:12]}…) — quarantined to {corrupt}; canonical retained"
+        )
+
+    # Compute old canonical sha for forensic log (empty string if no canonical
+    # existed yet — refresh-from-empty-slot path).
+    old_sha = _sha256_of_npz(canonical) if canonical.exists() else ""
+    canonical_sidecar = _sidecar_for(canonical)
+
+    # Step 4 — rotate canonical → .bak (one-cycle backup per s179c §3.3).
+    if canonical.exists():
+        bak = canonical.with_suffix(canonical.suffix + ".bak")
+        canonical.replace(bak)
+    if canonical_sidecar.exists():
+        sidecar_bak = canonical_sidecar.with_suffix(canonical_sidecar.suffix + ".bak")
+        canonical_sidecar.replace(sidecar_bak)
+
+    # Step 5 — atomic rename of NPZ.
+    tmp.replace(canonical)
+    # Step 6 — sidecar second; if it fails, we leave the canonical NPZ as
+    # un-sidecar'd (load path will warn + still function per corpus_io.load_corpus
+    # back-compat warning). Mitigation per s179c §8 risk #7.
+    try:
+        tmp_sidecar.replace(canonical_sidecar)
+    except OSError as exc:
+        log.warning(
+            "bot_corpus_swap_sidecar_rename_failed",
+            sidecar_src=str(tmp_sidecar),
+            sidecar_dst=str(canonical_sidecar),
+            error=str(exc),
+            msg="canonical NPZ swap committed but sidecar rename failed; load path will warn",
+        )
+
+    return old_sha, actual_sha
+
+
 # ── Recent-buffer augmentation ───────────────────────────────────────────────
 
 def _augment_recent_rows(

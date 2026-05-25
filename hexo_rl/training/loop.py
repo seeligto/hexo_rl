@@ -239,7 +239,8 @@ def run_training_loop(
             train_cfg.get("eval_final_drain_timeout_sec",
                           config.get("eval_final_drain_timeout_sec", 0.0))
         ),
-        # §178 — bot-corpus slot share + refresh hook (DISABLED for §178 → §179)
+        # §178 — bot-corpus slot share + refresh hook (DISABLED-by-default;
+        # Wave 3 variant flips `enabled: true`).
         bot_batch_share=float(mixing_cfg.get("bot_batch_share", 0.0)),
         bot_corpus_refresh_enabled=bool(
             mixing_cfg.get("bot_corpus_refresh", {}).get("enabled", False)
@@ -247,6 +248,46 @@ def run_training_loop(
         bot_corpus_refresh_cooldown=int(
             mixing_cfg.get("bot_corpus_refresh", {}).get("cooldown_steps", 25_000)
         ),
+        # §S181-AUDIT Wave 3 Stage 2A refresh-hook activation knobs.
+        bot_corpus_refresh_interval_steps=int(
+            mixing_cfg.get("bot_corpus_refresh", {}).get("interval_steps", 5_000)
+        ),
+        bot_corpus_refresh_n_games=int(
+            mixing_cfg.get("bot_corpus_refresh", {}).get("n_games", 200)
+        ),
+        bot_corpus_refresh_opponent_model=str(
+            mixing_cfg.get("bot_corpus_refresh", {}).get("opponent_model", "ema")
+        ),
+        bot_corpus_refresh_replace_strategy=str(
+            mixing_cfg.get("bot_corpus_refresh", {}).get("replace_strategy", "rolling_window")
+        ),
+        bot_corpus_refresh_max_regens=int(
+            mixing_cfg.get("bot_corpus_refresh", {}).get("max_regens", 20)
+        ),
+        bot_corpus_refresh_min_wr_delta=float(
+            mixing_cfg.get("bot_corpus_refresh", {}).get("min_wr_delta", 0.0)
+        ),
+        bot_corpus_refresh_max_plies=int(
+            mixing_cfg.get("bot_corpus_refresh", {})
+            .get("regen_command", {}).get("args", {}).get("max_plies", 150)
+        ),
+        bot_corpus_refresh_random_opening_plies=int(
+            mixing_cfg.get("bot_corpus_refresh", {})
+            .get("regen_command", {}).get("args", {}).get("random_opening_plies", 4)
+        ),
+        bot_corpus_refresh_think_seconds=float(
+            mixing_cfg.get("bot_corpus_refresh", {})
+            .get("regen_command", {}).get("args", {}).get("think_seconds", 0.5)
+        ),
+        bot_corpus_refresh_anchor_n_sims=int(
+            mixing_cfg.get("bot_corpus_refresh", {})
+            .get("regen_command", {}).get("args", {}).get("anchor_n_sims", 200)
+        ),
+        bot_corpus_refresh_anchor_temperature=float(
+            mixing_cfg.get("bot_corpus_refresh", {})
+            .get("regen_command", {}).get("args", {}).get("anchor_temperature", 0.5)
+        ),
+        bot_corpus_path=str(mixing_cfg.get("bot_corpus_path", "") or ""),
     )
 
     # ── Emit run_start ─────────────────────────────────────────────────────────

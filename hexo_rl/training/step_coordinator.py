@@ -169,9 +169,31 @@ class StepCoordinatorConfig:
     final_eval_drain_timeout_sec: float
     # §178 bot-corpus slot
     bot_batch_share: float = 0.0
-    # §178 refresh hook (DISABLED for §178; §179 will flip enabled=True)
+    # §178 refresh hook surface (DISABLED-by-default per master baseline; Wave 3
+    # variant flips enabled=True). When enabled, fires async regen via
+    # subprocess.Popen with hot-reload post-completion. See
+    # docs/designs/s179c_bot_refresh_hook.md for the full design + INV pins.
     bot_corpus_refresh_enabled: bool = False
-    bot_corpus_refresh_cooldown: int = 25_000
+    bot_corpus_refresh_cooldown: int = 25_000  # legacy key — retained for back-compat
+    # §S181-AUDIT Wave 3 Stage 2A — fixed-interval trigger (replaces s179c
+    # promotion-delta trigger; L51 corpus staleness is time-based not
+    # promotion-based). Defaults match Wave 3 dispatcher §2A spec.
+    bot_corpus_refresh_interval_steps: int = 5000
+    bot_corpus_refresh_n_games: int = 200
+    bot_corpus_refresh_opponent_model: str = "ema"   # "ema" | "raw"
+    bot_corpus_refresh_replace_strategy: str = "rolling_window"
+    bot_corpus_refresh_max_regens: int = 20
+    bot_corpus_refresh_min_wr_delta: float = 0.0
+    # Subprocess args — passed through unchanged to scripts/generate_bot_corpus.py
+    bot_corpus_refresh_max_plies: int = 150
+    bot_corpus_refresh_random_opening_plies: int = 4
+    bot_corpus_refresh_think_seconds: float = 0.5
+    bot_corpus_refresh_anchor_n_sims: int = 200
+    bot_corpus_refresh_anchor_temperature: float = 0.5
+    # Canonical NPZ path (so the coordinator owns swap-target resolution
+    # symmetric with batch_assembly's load-target). Empty string means
+    # "fall back to mixing_cfg['bot_corpus_path']" at runtime.
+    bot_corpus_path: str = ""
 
 
 # ── Step outcome dataclass ───────────────────────────────────────────────────
@@ -279,7 +301,24 @@ class StepCoordinator:
         # Mutable per-run state (§1.1)
         self._train_step = trainer.step
         self._games_played = pool.games_completed
-        self._last_bot_refresh_step: int = 0  # §178 T7 refresh-hook cooldown
+        # §178 T7 refresh-hook cooldown bookkeeping (legacy field; retained for
+        # the inert disabled-path that still emits the warning log).
+        self._last_bot_refresh_step: int = 0
+        # §S181-AUDIT Wave 3 Stage 2A — refresh-hook state per s179c §2.2.
+        # All None / 0 until first fire; gated entirely behind
+        # ``cfg.bot_corpus_refresh_enabled`` so disabled runs are bitwise
+        # identical to master baseline (INV-S179c-4).
+        self._refresh_proc: Any = None  # subprocess.Popen | None
+        self._refresh_started_step: int = 0
+        self._refresh_target_anchor_sha: str | None = None
+        self._refresh_ema_snapshot_path: Path | None = None
+        self._refresh_tmp_npz_path: Path | None = None
+        self._n_refreshes_so_far: int = 0
+        self._force_bot_refresh: bool = False
+        # INV-S179c-2 deferred check — performed on first activation in
+        # ``_resolve_canonical_bot_path`` (config-load time can't see runtime FS).
+        # INV-S179c-2 enforced at first fire (deferred to runtime — config-load
+        # site does not own filesystem state).
         self._initial_policy_loss: float | None = None
         self._last_loss_info: dict[str, float] = {}
         self._eval_thread: threading.Thread | None = None
@@ -407,6 +446,12 @@ class StepCoordinator:
         iter-limit / shutdown-save / hard-GN / soft-EW.
         """
         cfg = self.config
+
+        # §S181-AUDIT Wave 3 Stage 2A — force-trigger sentinel (s179c §1.4).
+        # Operator drops /tmp/hexo_rl_force_bot_refresh to bypass the interval
+        # gate on the next eval-boundary fire path. Inert when refresh disabled.
+        if cfg.bot_corpus_refresh_enabled:
+            self._poll_force_refresh_sentinel()
 
         # Outcome scaffolding
         in_warmup = False
@@ -661,28 +706,23 @@ class StepCoordinator:
                     if self._best_model_step != prev_best_step:
                         promoted_step = self._best_model_step
 
-                # §178 T7 bot-corpus refresh hook (DISABLED for §178 — warning-only log).
-                # When cfg.bot_corpus_refresh_enabled is False (§178 default) the
-                # hook is fully inert. §179 will flip the flag True to fire an
-                # async regen via subprocess (design §4.4 + risk #4 mitigation).
-                # Cooldown gate avoids re-firing within `cooldown_steps` of last
-                # promotion (default 25K steps per design §4.4 yaml).
-                if (cfg.bot_corpus_refresh_enabled
-                        and promoted_step is not None
-                        and self.bot_buffer is not None
-                        and (self._train_step - self._last_bot_refresh_step)
-                            >= cfg.bot_corpus_refresh_cooldown):
-                    self._logger.warning(
-                        "bot_corpus_refresh_requested_but_disabled",
-                        step=self._train_step,
-                        promoted_step=promoted_step,
-                        last_refresh_step=self._last_bot_refresh_step,
-                        msg=(
-                            "§178 hook fired; static-pool mode for this sprint. "
-                            "§179 will flip enabled=True for async regen."
-                        ),
-                    )
-                    self._last_bot_refresh_step = self._train_step
+                # §S181-AUDIT Wave 3 Stage 2A — bot-corpus refresh hook (active).
+                # When ``cfg.bot_corpus_refresh_enabled`` is False the hook is
+                # entirely inert (no state init, no Popen, no log). When True,
+                # we use a FIXED-INTERVAL trigger (NOT promotion-delta — L51:
+                # corpus staleness is time-based not promotion-based).
+                #
+                # Trigger predicate (replaces s179c §1.1 V179c-1):
+                #     enabled AND bot_buffer is not None
+                #     AND (train_step - last_refresh) >= interval_steps
+                #     AND n_refreshes_so_far < max_regens
+                #     AND no refresh subprocess already in-flight
+                #
+                # Force-trigger sentinel (per s179c §1.4) is polled at top of
+                # ``step()`` and overrides the interval gate via
+                # ``self._force_bot_refresh`` instance flag.
+                if cfg.bot_corpus_refresh_enabled:
+                    self._tick_bot_refresh()
 
                 if self._eval_thread is None or not self._eval_thread.is_alive():
                     # §S181-AUDIT Wave 2 — eval consumes EMA weights when
@@ -942,6 +982,382 @@ class StepCoordinator:
         except Exception:
             self._logger.warning("final_eval_drain_failed", exc_info=True)
         return None
+
+    # ── §S181-AUDIT Wave 3 Stage 2A — bot-corpus refresh hook ────────────────
+
+    _FORCE_REFRESH_SENTINEL = Path("/tmp/hexo_rl_force_bot_refresh")
+
+    def _poll_force_refresh_sentinel(self) -> None:
+        """Check + consume the operator-drop force-refresh sentinel (s179c §1.4).
+
+        Reading + unlinking the sentinel sets ``self._force_bot_refresh`` so the
+        next ``_tick_bot_refresh`` call bypasses the interval gate. Inert when
+        ``cfg.bot_corpus_refresh_enabled`` is False (caller-gated).
+        """
+        try:
+            if self._FORCE_REFRESH_SENTINEL.is_file():
+                self._FORCE_REFRESH_SENTINEL.unlink(missing_ok=True)
+                self._force_bot_refresh = True
+                self._logger.info(
+                    "bot_corpus_refresh_force_sentinel_consumed",
+                    step=self._train_step,
+                    msg="operator-force-refresh sentinel observed",
+                )
+        except OSError as exc:
+            # Sentinel access errors are non-fatal; log + continue.
+            self._logger.warning(
+                "bot_corpus_refresh_sentinel_access_failed",
+                error=str(exc),
+            )
+
+    def _resolve_canonical_bot_path(self) -> Path | None:
+        """Resolve canonical NPZ path, validating INV-S179c-2 same-FS invariant.
+
+        Returns None if the configured path is empty (refresh has nothing to
+        swap into). Raises RuntimeError on cross-FS violation (refresh tmp
+        must share st_dev with canonical for atomic rename per POSIX).
+        """
+        cfg = self.config
+        raw = cfg.bot_corpus_path or self.mixing_cfg.get("bot_corpus_path", "")
+        if not raw:
+            return None
+        canonical = Path(raw).resolve()
+        # INV-S179c-2: tmp lives next to canonical (same parent dir → same FS
+        # by construction); the guard fires if the parent does not exist.
+        if not canonical.parent.exists():
+            raise RuntimeError(
+                f"bot_corpus_path parent dir missing: {canonical.parent} — "
+                f"cannot host refresh tmp file (INV-S179c-2)"
+            )
+        return canonical
+
+    def _build_refresh_subprocess_command(
+        self,
+        canonical_path: Path,
+        tmp_path: Path,
+        anchor_path: Path,
+    ) -> list[str]:
+        """Compose argv for the regen subprocess (TC4 contract).
+
+        Reuses ``scripts/generate_bot_corpus.py``'s existing CLI surface
+        (--anchor, --n-games, --max-plies, etc.). The anchor passed here is
+        the EMA snapshot, NOT bootstrap_model_v6.pt, per Wave 3 §opponent_model.
+        """
+        import sys as _sys
+        cfg = self.config
+        script = Path(__file__).resolve().parents[1].parent / "scripts" / "generate_bot_corpus.py"
+        return [
+            _sys.executable,
+            str(script),
+            "--anchor", str(anchor_path),
+            "--n-games", str(cfg.bot_corpus_refresh_n_games),
+            "--out", str(tmp_path),
+            "--max-plies", str(cfg.bot_corpus_refresh_max_plies),
+            "--random-opening-plies", str(cfg.bot_corpus_refresh_random_opening_plies),
+            "--think-seconds", str(cfg.bot_corpus_refresh_think_seconds),
+            "--anchor-n-sims", str(cfg.bot_corpus_refresh_anchor_n_sims),
+            "--anchor-temperature", str(cfg.bot_corpus_refresh_anchor_temperature),
+        ]
+
+    def _save_refresh_anchor_snapshot(
+        self,
+        canonical: Path,
+    ) -> tuple[Path, str]:
+        """Snapshot the current opponent-model weights to a transient .pt path.
+
+        For ``opponent_model: ema`` we extract EMA via
+        ``trainer.inference_state_dict()`` (which routes through EMA when
+        enabled). For ``opponent_model: raw`` we extract raw
+        ``trainer.model.state_dict()``. The snapshot lives in
+        ``checkpoints/refresh_ema_snapshot.pt`` and is unlinked after the
+        subprocess completes.
+
+        Returns ``(snapshot_path, sha256)``.
+        """
+        import hashlib as _hashlib
+        import torch as _torch
+        cfg = self.config
+        anchor_dir = canonical.parent.parent / "checkpoints"
+        if not anchor_dir.exists():
+            anchor_dir = canonical.parent
+        snapshot_path = anchor_dir / "refresh_ema_snapshot.pt"
+
+        if cfg.bot_corpus_refresh_opponent_model == "ema":
+            sd = self.trainer.inference_state_dict()
+        else:
+            base = getattr(self.trainer.model, "_orig_mod", self.trainer.model)
+            sd = base.state_dict()
+        # Wrap in load_inference_model-compatible format: bare state_dict accepted
+        # by load_inference_model (corpus generator loads via this entry).
+        _torch.save(sd, snapshot_path)
+        # Compute sha for forensic log.
+        h = _hashlib.sha256()
+        with snapshot_path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return snapshot_path, h.hexdigest()
+
+    def _launch_refresh_subprocess(
+        self,
+        canonical: Path,
+    ) -> None:
+        """Launch the async regen subprocess + record state for poll().
+
+        Trainer pause budget: ≤ 200ms per V179c-1 verdict. Heavy work
+        (game generation) happens in the subprocess — this function only
+        snapshots weights + spawns. Emits ``bot_corpus_regen_requested``.
+        """
+        import subprocess as _subprocess
+        cfg = self.config
+        # Snapshot opponent-model weights to a transient .pt; subprocess
+        # consumes this as --anchor.
+        anchor_snapshot, anchor_sha = self._save_refresh_anchor_snapshot(canonical)
+        tmp_npz = canonical.with_name(canonical.name + ".NEW.tmp.npz")
+        # Clean any stale tmp from a prior crash (s179c §8 risk #6).
+        if tmp_npz.exists():
+            tmp_npz.unlink()
+        cmd = self._build_refresh_subprocess_command(canonical, tmp_npz, anchor_snapshot)
+        proc = _subprocess.Popen(  # noqa: S603 — argv list, paths validated
+            cmd,
+            stdout=_subprocess.PIPE,
+            stderr=_subprocess.PIPE,
+            text=True,
+        )
+        self._refresh_proc = proc
+        self._refresh_started_step = self._train_step
+        self._refresh_target_anchor_sha = anchor_sha
+        self._refresh_ema_snapshot_path = anchor_snapshot
+        self._refresh_tmp_npz_path = tmp_npz
+        self._event_emitter({
+            "event": "bot_corpus_regen_requested",
+            "step": self._train_step,
+            "trigger": "force" if self._force_bot_refresh else "interval",
+            "anchor_sha": anchor_sha,
+            "subprocess_pid": proc.pid,
+            "interval_steps": cfg.bot_corpus_refresh_interval_steps,
+            "opponent_model": cfg.bot_corpus_refresh_opponent_model,
+            "n_games": cfg.bot_corpus_refresh_n_games,
+        })
+        self._logger.info(
+            "bot_corpus_regen_requested",
+            step=self._train_step,
+            anchor_sha=anchor_sha[:12],
+            subprocess_pid=proc.pid,
+            n_games=cfg.bot_corpus_refresh_n_games,
+            opponent_model=cfg.bot_corpus_refresh_opponent_model,
+        )
+
+    def _drop_refresh_state(self) -> None:
+        """Clear in-flight refresh state + cleanup transient files."""
+        # Drop EMA snapshot (transient — only the subprocess needed it).
+        if self._refresh_ema_snapshot_path is not None:
+            try:
+                self._refresh_ema_snapshot_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._refresh_proc = None
+        self._refresh_target_anchor_sha = None
+        self._refresh_ema_snapshot_path = None
+        self._refresh_tmp_npz_path = None
+
+    def _swap_and_hot_reload_bot_corpus(self, canonical: Path) -> None:
+        """Atomic NPZ swap + hot-reload of self.bot_buffer (s179c §3 + §4).
+
+        Called only when subprocess returncode == 0.
+        """
+        from hexo_rl.training.batch_assembly import (
+            BotCorpusSwapError,
+            load_bot_corpus_buffer,
+            swap_bot_corpus_atomic,
+        )
+        import time as _time
+
+        assert self._refresh_tmp_npz_path is not None
+        # Step 1 — atomic swap (sha-verified).
+        try:
+            old_sha, new_sha = swap_bot_corpus_atomic(
+                canonical_path=canonical,
+                tmp_path=self._refresh_tmp_npz_path,
+            )
+        except BotCorpusSwapError as exc:
+            self._logger.warning(
+                "bot_corpus_regen_failed",
+                step=self._train_step,
+                returncode=0,
+                reason=f"swap_failed: {exc}",
+            )
+            self._event_emitter({
+                "event": "bot_corpus_regen_failed",
+                "step": self._train_step,
+                "returncode": 0,
+                "reason": f"swap_failed: {exc}",
+            })
+            return
+        self._event_emitter({
+            "event": "bot_corpus_swap_committed",
+            "step": self._train_step,
+            "old_npz_sha": old_sha,
+            "new_npz_sha": new_sha,
+        })
+        self._logger.info(
+            "bot_corpus_swap_committed",
+            step=self._train_step,
+            old_sha=old_sha[:12] if old_sha else "(none)",
+            new_sha=new_sha[:12],
+        )
+
+        # Step 2 — hot-reload (s179c §4.2). Drop ref + reload.
+        old_size = getattr(self.bot_buffer, "size", 0)
+        self.bot_buffer = None
+        import gc as _gc
+        _gc.collect()
+        _t0 = _time.time()
+        self.bot_buffer = load_bot_corpus_buffer(
+            self.mixing_cfg, self.full_config, self._event_emitter,
+            self.buffer.size, self.buffer.capacity,
+        )
+        reload_sec = _time.time() - _t0
+        new_size = getattr(self.bot_buffer, "size", 0)
+        self._event_emitter({
+            "event": "bot_corpus_hot_reload",
+            "step": self._train_step,
+            "old_n_positions": old_size,
+            "new_n_positions": new_size,
+            "reload_sec": round(reload_sec, 3),
+        })
+        self._logger.info(
+            "bot_corpus_hot_reload",
+            step=self._train_step,
+            old_n_positions=old_size,
+            new_n_positions=new_size,
+            reload_sec=round(reload_sec, 3),
+        )
+
+    def _tick_bot_refresh(self) -> None:
+        """One refresh-hook tick at the eval boundary (s179c §2.2 + §3 + §4).
+
+        Three sub-paths:
+          (a) An in-flight subprocess exists → poll(); on terminal handle
+              completion (sha + atomic swap + hot-reload) or failure (log).
+          (b) Trigger predicate fires → snapshot anchor + Popen the subprocess.
+          (c) Neither → no-op.
+
+        All paths preserve canonical NPZ on any failure (s179c §2.3).
+        """
+        cfg = self.config
+
+        # Sub-path (a) — handle an in-flight subprocess.
+        if self._refresh_proc is not None:
+            import time as _time
+            rc = self._refresh_proc.poll()
+            if rc is None:
+                return  # still running; check again next eval boundary
+            elapsed_sec = max(self._train_step - self._refresh_started_step, 0)
+            if rc == 0:
+                # Subprocess succeeded — perform swap + hot-reload.
+                try:
+                    canonical = self._resolve_canonical_bot_path()
+                    if canonical is None:
+                        # Configuration changed mid-run; bail clean.
+                        self._logger.warning(
+                            "bot_corpus_regen_no_canonical_path",
+                            step=self._train_step,
+                        )
+                    else:
+                        # Wrapped swap + hot-reload. Emit completion event
+                        # AFTER the swap commits successfully.
+                        n_pos_before = getattr(self.bot_buffer, "size", 0)
+                        self._swap_and_hot_reload_bot_corpus(canonical)
+                        n_pos_after = getattr(self.bot_buffer, "size", 0)
+                        self._event_emitter({
+                            "event": "bot_corpus_regen_complete",
+                            "step": self._train_step,
+                            "returncode": 0,
+                            "elapsed_steps": elapsed_sec,
+                            "n_positions": n_pos_after,
+                        })
+                        self._logger.info(
+                            "bot_corpus_regen_complete",
+                            step=self._train_step,
+                            returncode=0,
+                            elapsed_steps=elapsed_sec,
+                            n_positions_before=n_pos_before,
+                            n_positions_after=n_pos_after,
+                        )
+                        self._n_refreshes_so_far += 1
+                        self._last_bot_refresh_step = self._train_step
+                except Exception as exc:  # noqa: BLE001
+                    # Defensive: never crash the trainer over a refresh failure.
+                    self._logger.warning(
+                        "bot_corpus_regen_completion_failed",
+                        step=self._train_step,
+                        error=str(exc),
+                    )
+            else:
+                # Subprocess non-zero. Per s179c §2.3 retain canonical NPZ;
+                # do NOT bump n_refreshes_so_far (retry possible at next cadence).
+                stderr_excerpt = ""
+                try:
+                    if self._refresh_proc.stderr is not None:
+                        stderr_excerpt = self._refresh_proc.stderr.read()[-512:]
+                except Exception:
+                    pass
+                self._logger.warning(
+                    "bot_corpus_regen_failed",
+                    step=self._train_step,
+                    returncode=rc,
+                    reason="subprocess_nonzero_exit",
+                    stderr_tail=stderr_excerpt,
+                )
+                self._event_emitter({
+                    "event": "bot_corpus_regen_failed",
+                    "step": self._train_step,
+                    "returncode": rc,
+                    "reason": "subprocess_nonzero_exit",
+                })
+            # Whatever the outcome (0 or non-zero), tear down refresh state.
+            self._drop_refresh_state()
+            self._force_bot_refresh = False
+            return
+
+        # Sub-path (b) — no in-flight; check trigger.
+        if self.bot_buffer is None:
+            return  # nothing to refresh into
+        if self._n_refreshes_so_far >= cfg.bot_corpus_refresh_max_regens:
+            # Hard cap reached; silent skip (rate-limited log to avoid spam).
+            return
+        interval_ready = (
+            self._train_step - self._last_bot_refresh_step
+        ) >= cfg.bot_corpus_refresh_interval_steps
+        if not (interval_ready or self._force_bot_refresh):
+            return
+
+        # Fire — snapshot anchor + Popen subprocess.
+        try:
+            canonical = self._resolve_canonical_bot_path()
+            if canonical is None:
+                self._logger.warning(
+                    "bot_corpus_refresh_no_canonical_path_at_fire",
+                    step=self._train_step,
+                )
+                self._force_bot_refresh = False
+                return
+            self._launch_refresh_subprocess(canonical)
+        except Exception as exc:  # noqa: BLE001
+            # Defensive: never crash the trainer over refresh launch.
+            self._logger.warning(
+                "bot_corpus_refresh_launch_failed",
+                step=self._train_step,
+                error=str(exc),
+            )
+            self._event_emitter({
+                "event": "bot_corpus_regen_failed",
+                "step": self._train_step,
+                "returncode": -1,
+                "reason": f"launch_failed: {exc}",
+            })
+            self._drop_refresh_state()
+            self._force_bot_refresh = False
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
