@@ -28,6 +28,8 @@ from typing import Any, Callable, Protocol, runtime_checkable
 import structlog
 
 from hexo_rl.eval.result_types import EvalRoundResult
+from hexo_rl.monitoring.alert_rules import check_sealbot_wr_hard_abort
+from hexo_rl.monitoring.config import MonitoringConfig
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.training.batch_assembly import assemble_mixed_batch
 from hexo_rl.training.loop import RollingGamesPerHour
@@ -317,6 +319,17 @@ class StepCoordinator:
         self._force_bot_refresh: bool = False
         # INV-S179c-2 deferred check — performed on first activation in
         # ``_resolve_canonical_bot_path`` (config-load time can't see runtime FS).
+
+        # §S181-AUDIT Wave 3 Stage 2B — sliding-window SealBot WR hard-abort gate (L50).
+        # Wave 2 evidence: alt V_spread held +0.18-+0.30 across 46k steps while
+        # wr_sealbot collapsed 33% → 5%; the held-out V_spread canary failed to
+        # track actual eval performance. L50 mandates a SealBot WR sliding-window
+        # gate as the PRIMARY abort trigger (alt V_spread downgraded to
+        # informational per audit/structural/REAL_RUN_RECIPE.md §3).
+        # Ring keeps last 5 eval rounds; pure-function trigger logic lives in
+        # ``hexo_rl/monitoring/alert_rules.py:check_sealbot_wr_hard_abort``.
+        self._wr_history: list[tuple[int, float]] = []
+        self._monitoring_cfg = MonitoringConfig.from_dict(self.full_config)
         # INV-S179c-2 enforced at first fire (deferred to runtime — config-load
         # site does not own filesystem state).
         self._initial_policy_loss: float | None = None
@@ -697,6 +710,14 @@ class StepCoordinator:
                     and self._train_step % cfg.eval_interval == 0):
                 prev_thread = self._eval_thread
                 prev_best_step = self._best_model_step
+                # §S181-AUDIT Wave 3 Stage 2B — snapshot eval result before drain
+                # clears `eval_result[0]`. Needed for the sliding-window SealBot
+                # WR hard-abort gate check that fires AFTER drain.
+                _pending_eval_result: dict[str, Any] | None = (
+                    self._eval_result[0]
+                    if (prev_thread is not None and not prev_thread.is_alive())
+                    else None
+                )
                 self._eval_thread, self._best_model_step = _drain_pending_eval(
                     self._eval_thread, self._eval_result, self.eval_model, self.best_model,
                     self.anchor_state.best_model_path, self._best_model_step, self.pool, self._train_step,
@@ -705,6 +726,44 @@ class StepCoordinator:
                     eval_drained = True
                     if self._best_model_step != prev_best_step:
                         promoted_step = self._best_model_step
+
+                    # §S181-AUDIT Wave 3 Stage 2B — L50 sliding-window SealBot WR
+                    # HARD-ABORT gate. Pure-function trigger logic in
+                    # ``alert_rules.check_sealbot_wr_hard_abort``; this site owns
+                    # the ring + the abort wiring. Wave 2 alt V_spread canary
+                    # PASSED throughout the run while wr_sealbot collapsed 33→5%
+                    # — this gate is the replacement primary trigger.
+                    if (
+                        _pending_eval_result is not None
+                        and "wr_sealbot" in _pending_eval_result
+                        and _pending_eval_result.get("wr_sealbot") is not None
+                    ):
+                        _wr_sb = float(_pending_eval_result["wr_sealbot"])
+                        _eval_step = int(_pending_eval_result.get("step", self._train_step))
+                        self._wr_history.append((_eval_step, _wr_sb))
+                        # Keep last 5 eval rounds (enough for rolling + peak window).
+                        if len(self._wr_history) > 5:
+                            self._wr_history.pop(0)
+                        _abort_msg = check_sealbot_wr_hard_abort(
+                            self._wr_history,
+                            self._train_step,
+                            self._monitoring_cfg,
+                        )
+                        if _abort_msg is not None:
+                            self._logger.warning(
+                                "wave3_wr_hard_abort_triggered",
+                                step=self._train_step,
+                                wr_history=[(s, round(w, 4)) for s, w in self._wr_history],
+                                msg=_abort_msg,
+                            )
+                            self._event_emitter({
+                                "event": "wave3_wr_hard_abort",
+                                "step": self._train_step,
+                                "wr_history": list(self._wr_history),
+                                "message": _abort_msg,
+                            })
+                            self.shutdown.running = False
+                            hard_abort_fired = True
 
                 # §S181-AUDIT Wave 3 Stage 2A — bot-corpus refresh hook (active).
                 # When ``cfg.bot_corpus_refresh_enabled`` is False the hook is

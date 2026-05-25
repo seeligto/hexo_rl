@@ -38,6 +38,21 @@ class MonitoringConfig:
     alert_loss_increase_window: int = 3
     collapse_threshold_nats: float = 1.5
 
+    # §S181-AUDIT Wave 3 Stage 2B — sliding-window SealBot WR hard-abort (L50).
+    # Wave 2 evidence: alt V_spread sustained +0.18-+0.30 across 46k steps
+    # while wr_sealbot collapsed 33% → 5%. The held-out V_spread canary
+    # failed to track actual eval performance. L50 mandates a SealBot WR
+    # sliding-window gate as the PRIMARY abort trigger.
+    # Operator can disable for debug (NEVER on real runs) via wr_hard_abort_enabled.
+    wr_hard_abort_enabled: bool = True
+    wr_rolling_consecutive_evals: int = 2
+    wr_rolling_threshold: float = 0.10
+    wr_rolling_min_step: int = 20000
+    wr_collapse_from_peak_ratio: float = 0.5
+    wr_collapse_min_step: int = 25000
+    wr_early_death_threshold: float = 0.05
+    wr_early_death_min_step: int = 15000
+
     # Web dashboard server
     web_port: int = 5001
     web_host: str = "127.0.0.1"

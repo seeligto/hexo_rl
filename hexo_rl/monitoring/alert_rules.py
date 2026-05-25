@@ -93,6 +93,91 @@ def check_sealbot_gate_failed(payload: dict) -> Optional[str]:
     return None
 
 
+def check_sealbot_wr_hard_abort(
+    wr_history: list[tuple[int, float]],
+    current_step: int,
+    cfg: MonitoringConfig,
+) -> Optional[str]:
+    """§S181-AUDIT Wave 3 Stage 2B — sliding-window SealBot WR HARD-ABORT (L50).
+
+    Wave 2 evidence (audit/structural/wave2_real_run_analysis.md L50):
+    alt V_spread held +0.18-+0.30 throughout 46k steps while wr_sealbot
+    collapsed 33% → 5%. The held-out V_spread canary failed to track
+    actual eval performance — sustained-run gates MUST include a
+    sliding-window SealBot WR trajectory tracker as the PRIMARY trigger.
+
+    Three triggers (any fires → HARD-ABORT recommended; caller decides
+    enforcement via cfg.wr_hard_abort_enabled):
+      A. Rolling-mean WR below `wr_rolling_threshold` for
+         `wr_rolling_consecutive_evals` consecutive evals AFTER
+         `wr_rolling_min_step` — catches gradual decline.
+      B. Current WR < peak × `wr_collapse_from_peak_ratio` AND past
+         `wr_collapse_min_step` — catches Wave-2-style 33%→16% collapse.
+      C. Current WR < `wr_early_death_threshold` past
+         `wr_early_death_min_step` — catches §S180b-style early death.
+
+    Args:
+        wr_history: list of (step, wr) tuples for last N eval rounds
+                    (caller-owned ring; typically last 3-5 rounds).
+        current_step: current training step (typically equals the step
+                      of the most recent eval round).
+        cfg: MonitoringConfig with wr_* thresholds.
+
+    Returns:
+        Human-readable HARD-ABORT message if any trigger fires, else None.
+        Caller decides whether to act on the message (set
+        `shutdown.running = False` when `cfg.wr_hard_abort_enabled` is true).
+
+    Stateless: caller owns the `wr_history` list.
+    """
+    if not cfg.wr_hard_abort_enabled or not wr_history:
+        return None
+
+    current_wr = wr_history[-1][1]
+    peak_wr = max(wr for _, wr in wr_history)
+
+    # Trigger C first (earliest catchable — fires past min_step 15k).
+    if (
+        current_step > cfg.wr_early_death_min_step
+        and current_wr < cfg.wr_early_death_threshold
+    ):
+        return (
+            f"HARD-ABORT (L50/Wave3-C): SealBot WR {current_wr:.1%} "
+            f"< {cfg.wr_early_death_threshold:.0%} past step "
+            f"{cfg.wr_early_death_min_step:,} — §S180b-style early death"
+        )
+
+    # Trigger B (collapse from peak past min_step 25k).
+    if (
+        current_step > cfg.wr_collapse_min_step
+        and peak_wr > 0.0
+        and current_wr < peak_wr * cfg.wr_collapse_from_peak_ratio
+    ):
+        return (
+            f"HARD-ABORT (L50/Wave3-B): SealBot WR {current_wr:.1%} "
+            f"< peak {peak_wr:.1%} × {cfg.wr_collapse_from_peak_ratio:.0%} "
+            f"past step {cfg.wr_collapse_min_step:,} — Wave-2-style collapse"
+        )
+
+    # Trigger A (rolling-mean below threshold for consecutive evals past min_step 20k).
+    n_consec = int(cfg.wr_rolling_consecutive_evals)
+    if (
+        current_step > cfg.wr_rolling_min_step
+        and len(wr_history) >= n_consec
+    ):
+        tail = wr_history[-n_consec:]
+        if all(wr < cfg.wr_rolling_threshold for _, wr in tail):
+            mean_wr = sum(wr for _, wr in tail) / len(tail)
+            return (
+                f"HARD-ABORT (L50/Wave3-A): rolling-mean SealBot WR "
+                f"{mean_wr:.1%} < {cfg.wr_rolling_threshold:.0%} for "
+                f"{n_consec} consecutive evals past step "
+                f"{cfg.wr_rolling_min_step:,}"
+            )
+
+    return None
+
+
 def check_value_spread_canary(payload: dict) -> Optional[str]:
     """``value_spread`` payload — colony-capture canary (§S181 PR-A + PR-C / FU-1 / L48).
 
@@ -103,6 +188,10 @@ def check_value_spread_canary(payload: dict) -> Optional[str]:
       * WARNING:   T3 < +0.30 OR alt < +0.10 (discriminator degrading).
     Back-compat: single-bank payloads (only `spread` set) use the T3 gates.
     Canary only — the message routes to the operator, never auto-aborts.
+
+    §S181-AUDIT Wave 3 L50: this canary is now INFORMATIONAL ONLY for
+    real runs. The PRIMARY abort trigger is the sliding-window SealBot
+    WR check (`check_sealbot_wr_hard_abort`).
     """
     t3 = payload.get("t3_spread", payload.get("spread"))
     alt = payload.get("alt_spread")
