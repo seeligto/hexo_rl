@@ -3144,6 +3144,300 @@ carries every commit.
 
 ---
 
+## §S181-AUDIT Wave 2 — refresh-hook-less lever stack peak-and-collapse
+
+**Status.** Lever stack `uniform_self` (v7full anchor + EMA decay 0.999 +
+per-class target temperature on selfplay slice `sample_rate=0.20`) hit
+project-record SealBot WR **33% peak @ step 20k** (1.9× §150 baseline
+17.4%), then monotonic decline 11% @ 30k → 5% @ 40k. HARD-ABORT @ step
+47642 on RR-G3 / §S180b 8% threshold breach. Wave 2 PROVES anti-colony
+lever stack works short-term but **fails sustained without bot corpus
+refresh**. Phase 4.5 remains BLOCKED; Wave 3 with refresh hook +
+sliding-window WR gate + per-class temp scope revision is the successor.
+
+### Run identity
+
+| field | value |
+|---|---|
+| host | vast.ai 5080 (ssh6.vast.ai:13053) |
+| branch | `phase4.5/s181_wave2_lever_vba_selfplay` `54bd9da` (origin, NOT master) |
+| variant | `v7_real_run_main` (`configs/variants/v7_real_run_main.yaml`) |
+| anchor | `bootstrap_model_v7full.pt` SHA `568d8a33…d61e8e98` |
+| encoding | v7full (single-window 19×19, 8 planes) |
+| iterations target | 100 000; **actual 47 642** (operator-aborted) |
+| run_id | `aad5e948c4b94bf395daeddbb57415b9` |
+| launch / abort | 2026-05-24 00:09 UTC / 2026-05-25 00:05 UTC (~24h wall) |
+| cost | ~$5 (1A B4 $1.30 + 4B smoke $0.70 + 5 main ~$5 = **~$7 total Wave 2**) |
+| checkpoints saved | 23 @ 2k cadence + best_model.pt (last promotion step 30k) |
+| events captured | 23 dual-bank canary fires; 4 SealBot evals; 3 best_model promotions |
+| canonical deliverable | `reports/track_b_main/checkpoints/checkpoint_00020000.pt` (33% peak) |
+| key audit doc | `audit/structural/wave2_real_run_analysis.md` |
+
+Lever stack vs §S180b 3-knob recipe:
+- encoding v6 → **v7full** (anchor match; C-LITE-1 verdict)
+- EMA of weights (decay 0.999, every 10 optimizer steps), dispatched
+  through `Trainer.inference_state_dict`
+- per-class target temperature on selfplay slice (T_colony=1.5, others
+  1.0, pretrain slice untouched, `selfplay_sample_rate=0.20` perf opt
+  per smoke L48 throughput recovery)
+
+### Path through V-B verdict (Option D)
+
+B4 LITERAL verdict was **V-B-E** (no clean match): per
+`audit/structural/track_b/B_aggregation.md`:
+- V-B-A NO — uniform_self mean share 0.563 < 0.60 single-source gate
+- V-B-B NO — pretrain mean 0.092 outside [0.25, 0.45] band
+- V-B-C NO — buffer colony_frac stable 9-10% (no feedback loop)
+- V-B-D NO — trunk inter-centroid 84% of anchor at step 1000
+
+`B_verdict_synthesis.md` surfaced 4 routing options + recommended
+**Option D** (partial smoke before full real-run commit) on the
+near-miss V-B-A reading: selfplay-family share (uniform_self + recent)
+= 90.8% — single-source partition missed by 3.7pp. Operator took
+Option D. Smoke S-A PASS authorized main launch. Documented in
+B_verdict_synthesis.md as "respects both the literal V-B-E *and* the
+near-miss mechanism interpretation".
+
+### SealBot WR trajectory
+
+| step | wr_sealbot | CI95 | wr_anchor | colony_wins_sealbot | promoted |
+|---:|---:|---|---:|---:|:---:|
+| 10 000 | 24.0 % | [16.7, 33.2] | 66.0 % | 3 | ✓ |
+| **20 000** | **33.0 %** | [24.6, 42.7] | 61.0 % | 6 | ✓ |
+| 30 000 | 11.0 % | [6.3, 18.6] | 65.0 % | 4 | ✓ |
+| **40 000** | **5.0 %** | **[2.2, 11.2]** | **70.0 %** | 5 | ✗ |
+
+Peak step 20k; monotonic decline thereafter. Step-40k 5% below RR-G3
+13% gate AND below §S180b 8% HARD-ABORT threshold. promoted=False at
+step-40k = bootstrap_floor 0.45 gate failed = training producing
+weaker models than current best_model.
+
+### L34 anchor↑/sealbot↓ divergence
+
+| transition | anchor Δ | sealbot Δ | L34 fires? |
+|---|---:|---:|:---:|
+| 10k → 20k | -5 pp | +9 pp | INVERSE (healthy) |
+| 20k → 30k | +4 pp | -22 pp | **YES (1st)** |
+| 30k → 40k | +5 pp | -6 pp | **YES (2nd)** |
+
+Classic colony-attractor capture signature: model becomes *relatively
+stronger* vs frozen anchor while *absolutely weaker* vs SealBot.
+SOFT-ABORT trigger requires 5 consecutive — 2 observed when run was
+killed.
+
+### Dual-bank V_spread canary
+
+alt-bank held +0.18–0.30 throughout 46k steps (well above +0.07
+sustained gate). T3 started +0.27, oscillated +0.03–+0.09 through
+step 28k, then collapsed to -0.26 by step 46k.
+
+**Critical**: alt V_spread stayed above gate the entire run yet
+eval-measured wr_sealbot collapsed 33→5%. The held-out V_spread canary
+failed to track the actual performance collapse. (L50)
+
+### Pre-registered success criteria — verdict
+
+| ID | criterion | result |
+|---|---|:---:|
+| RR-G1 | T3 ≥ +0.20 sustained 0→50k | **FAIL** (crossed below at step 1000 in smoke; collapsed deep negative in main) |
+| RR-G2 | alt ≥ +0.07 sustained 0→50k | PASS (held +0.18+ throughout) |
+| RR-G3 | SealBot WR ≥ 13% @ step 30k (Wilson95 LB ≥ 9%) | **FAIL** (11% / LB 6.3%) |
+| RR-G4 | SealBot WR ≥ 18% @ step 50k | **FAIL** (extrapolated from 5% @ 40k) |
+| RR-G5 | colony_a < 50/100 in eval rounds | PASS (colony_wins_sealbot 3-6 throughout) |
+| RR-G6 | L34 anchor↑/sealbot↓ clean | **FAIL** (2 consecutive instances) |
+
+4 of 6 RR-G* FAIL. RR-G2 + RR-G5 PASS isolate the L50 mechanism:
+held-out V_spread + colony-policy gates can both PASS while
+eval-measured tactical WR collapses.
+
+### Mechanism diagnosis
+
+Three candidate mechanisms (ranked):
+
+**M1 — Bot corpus opportunistic fit + degeneration (HIGH).**
+21,899-position static bot corpus at `bot_batch_share=0.30` exposes
+~77 SealBot positions/batch. By step 20k the corpus has been re-
+encountered ~70 times (batch 256 × 30 % × 20k steps = 1.54 M bot
+positions / 21,899 corpus size); distributional decay vs the
+evolving model grows with policy-distance after corpus saturation.
+Past step 20k: selfplay drifts model policy off the corpus
+distribution → 30% bot-batch becomes off-distribution noise → fit
+decays. Track D C4 (bot staleness × outcome feedback) candidate now
+CONFIRMED as the dominant Wave 2 failure mechanism.
+
+**M2 — Per-class temp dilution over selfplay slice (MEDIUM).**
+T_colony=1.5 softens visit-count CE targets on 20% of selfplay
+colony-classified rows. As selfplay buffer accumulates sharper
+late-game policies, softening the model's own best moves degrades
+tactical learning. Combined with M1 drift, compounds the post-peak
+collapse. NOTE: alt V_spread stayed high → M2 doesn't hurt value-head
+discrimination; the proxy for M2 damage is policy-sharpness data
+not captured in this Wave 2 instrumentation.
+
+**M3 — EMA averaging artifact (LOW, ruled out).** Smoke (Stage 4B,
+also EMA-enabled) was clean S-A PASS at step 3000. Collapse appears
+at step 20-40k, well past EMA's effective warmup. EMA decay 0.999
+is monotonically a smoother (can lag, doesn't actively degrade).
+
+**Most likely: M1 + M2 compound.** Bot-corpus drift is dominant
+driver; per-class temp amplifies tactical degradation as selfplay
+slice grows past corpus-dominated early window. Wave 3 must address
+BOTH: refresh hook (M1) + per-class temp scope revision (M2).
+
+### Wave 1 vs Wave 2 reframing of Track D C4
+
+REVIEW (Stage 1A) surfaced an apparent tension between Wave 1 B4 and
+Wave 2 main on the bot-corpus mechanism:
+
+- **Wave 1 B4** (3000 steps, B_track_d_xref.md): C4 ranked "small
+  absolute magnitude" — bot corpus gradient-pull share 0.092 mean,
+  smallest of three sources.
+- **Wave 2 main** (47642 steps, M1 above): C4 confirmed as DOMINANT
+  failure mechanism via staleness amplification.
+
+Both findings are correct AT THEIR TIME WINDOW. B4 measured
+gradient-pull share at step 0-3000 when the corpus is in-
+distribution; the static-staleness mechanism doesn't yet bite. Wave 2
+main captured the 20k+ horizon where the model has drifted off the
+static distribution and the 30% bot-batch share becomes off-
+distribution noise. Same channel, different time windows, two
+metrics measuring different aspects (instantaneous pull vs cumulative
+distributional decay). The Track D ranking is NOT inverted — it is
+extended with a time dimension B4 did not measure.
+
+### Falsified Hypotheses Register additions
+
+- **Static bot corpus alone is a sufficient anti-colony anchor for
+  sustained training past peak fit point.** FALSIFIED by Wave 2:
+  21,899-position static SealBot-vs-v6 corpus held the colony
+  attractor at bay through step 20k (33% SealBot peak); past step 20k
+  the model's policy drifted off the corpus distribution and the
+  30% bot batch share became off-distribution noise. Future runs need
+  dynamic regeneration of the bot corpus against the current model.
+
+- **alt V_spread + dual-bank canary alone is a sufficient gate for
+  real-run quality.** FALSIFIED by Wave 2 (L50): alt V_spread stayed
+  +0.18–0.30 throughout 46k steps (well above +0.07 sustained gate)
+  while wr_sealbot collapsed 33% → 5%. Value-head discrimination on
+  fixed held-out banks is not a sufficient proxy for actual
+  selfplay/eval performance. Future runs must ALSO gate on sealbot WR
+  sliding-window trajectory (Wave 3 hard-abort triggers).
+
+### L50 — alt-bank V_spread is necessary but not sufficient for sustained eval quality
+
+**Rule.** Held-out value-head discrimination metrics (T3 + alt bank
+V_spread) can both PASS while training-loop policy quality
+deteriorates. The metric measures value-head separation on a fixed
+position bank; it does not capture the model's *policy* on actual
+self-play / eval games.
+
+**Why.** Wave 2 evidence: alt V_spread sustained +0.18–0.30 across
+46k steps (well above the +0.07 sustained gate) yet wr_sealbot
+collapsed 33% (step 20k peak) → 5% (step 40k). The value head
+remained discriminative on the static bank while the policy
+deteriorated tactically on live SealBot games.
+
+**How to apply.** Sustained run gates must include sliding-window
+SealBot WR trajectory tracking as a hard-abort lever, not advisory.
+alt-bank V_spread remains useful as an early-warning signal but
+cannot stand alone. L48 framing (alt is the corpus-grounded
+reference vs T3 synthetic) refined: alt-bank is corpus-grounded but
+only for the value-head sub-task, not the policy-head sub-task.
+
+### L51 — Bot-corpus staleness predicted as Track D C4 — Wave 2 confirms
+
+**Rule.** A static bot corpus regularization signal has an effective
+training-lifetime bounded by the ratio (model drift rate) ÷
+(corpus-replay rate). Past that lifetime, the signal becomes
+off-distribution noise and contributes negatively rather than as
+anti-colony anchor.
+
+**Why.** Wave 2 lever stack used a 21,899-position SealBot-vs-v6
+corpus (`bot_corpus_s178_sealbot_vs_v6.npz`) at `bot_batch_share=0.30`.
+By step 20k the corpus had been re-encountered ~70 times (batch 256
+× 30% × 20k steps = 1.54 M bot positions / 21,899 corpus size); the
+model had imprinted the SealBot tactical distribution → peak 33% WR.
+Past step 20k the model's selfplay policy drifted off the corpus's
+position distribution → the 30% bot slice became increasingly
+off-distribution → fit decayed monotonically to 5% by step 40k.
+
+**How to apply.** ANY future sustained run with a static bot corpus
+must specify (a) maximum effective training-lifetime, (b) refresh
+trigger, (c) refresh cooldown. Wave 3 `bot_corpus_refresh.enabled=true`
+is the design-named remedy (refresh against current EMA model on
+each best_model_promotion + 5pp WR delta, cooldown 5k steps,
+max_regens 19 per 100k run).
+
+### L52 — Per-class target temperature on selfplay slice over-softens late tactical learning when bot corpus drifts off-distribution
+
+**Rule.** Per-class CE-target softening on the SELFPLAY slice
+reduces gradient magnitude on the model's strongest moves. This is
+benign while selfplay positions are dominated by early-game /
+corpus-class shapes, but degrades tactical sharpness once selfplay
+buffer accumulates late-game shapes the model is sharpening on
+itself. Combined with a stale anti-colony signal (L51), the model
+loses tactical strength faster than the static bot corpus can
+correct.
+
+**Why.** Wave 2 used T_colony=1.5 with `selfplay_sample_rate=0.20`
+on selfplay slice. M2 mechanism: softening visit-count CE on
+colony-classified selfplay rows attenuates the model's own best-move
+signal. In the bot-corpus-fresh window (step 0-20k) this is balanced
+by the 30% bot corpus pulling toward SealBot's tactical distribution.
+Past corpus exhaustion (step 20k+ per L51), the per-class temp
+softening is the dominant remaining anti-colony pressure on selfplay
+rows — and it's tactical-softening, not target-replacement, so it
+actively de-sharpens rather than re-pointing.
+
+**How to apply.** Per-class target temperature should apply only to
+slices where the model is NOT learning its own play (pretrain + bot
+slices). Drop the selfplay slice from per-class temp. Wave 3
+implementation adds `apply_to_selfplay: false` flag to the existing
+`apply_to_pretrain: true` companion. Combined with Wave 3 refresh
+hook (L51), the levers separate: bot corpus stays current via
+refresh (anti-colony pressure), per-class temp targets only static-
+distribution rows (pretrain + bot), selfplay slice learns its own
+play unmodified.
+
+### Wave 2 canonical deliverable preservation
+
+`reports/track_b_main/checkpoints/checkpoint_00020000.pt` is the
+project-record SealBot WR 33% snapshot. Preserved as historical
+reference even if Wave 3 produces a stronger sustained model. Not
+promoted, not anchor candidate — Wave 2 mechanism-evidence ckpt.
+Operator decides post-Stage-1 whether to archive to
+`reports/canonical_models/wave2_step20k_peak33pct.pt` for long-term
+retention.
+
+`best_model.pt` (step-30k promotion, 11% WR degradation point) +
+`checkpoint_00010000/30000/40000.pt` retained at
+`reports/track_b_main/checkpoints/` as the full trajectory ladder.
+
+### Open handles (Wave 3 carries forward)
+
+- Refresh hook activation per L51 (design at
+  `docs/designs/s179c_bot_refresh_hook.md`)
+- Sliding-window SealBot WR hard-abort gate per L50
+- Per-class temp scope revision per L52 (`apply_to_selfplay: false`)
+- REAL_RUN_RECIPE v2 update with new PRIMARY success criterion
+  (rolling-mean SealBot WR ≥20% sustained 30k-50k vs current
+  RR-G3+RR-G4 single-step gates)
+- Compute budget ~$5 + 2-3 days dev (same as Wave 2 allocation)
+
+### Branches
+
+| branch | commit | status |
+|---|---|---|
+| `phase4.5/s181_wave2_ema` | `6ef4aad` | cherry-picked to master Stage 1C (commit `95624af`) |
+| `phase4.5/s181_wave2_b4_analysis` | `814c4ef` | cherry-picked to master Stage 1C (commits `e973d1f`, `6fab8c9`) |
+| `phase4.5/s181_wave2_lever_vba_selfplay` | `54bd9da` | KEEP as historical reference (origin push pending operator); audit docs cherry-picked to master Stage 1C (commit `96562fa`) |
+
+Wave 2 lever code (per_class_target_temperature.py + variant configs)
+stays on the lever branch — Wave 3 revises scope (L52) so the code
+is reference-only.
+
+---
+
 ## §S182 — perf wave: legal_moves_set capacity fix MERGED
 
 *DISCRIMINATOR: §S182 = Rust-perf wave merge (this entry). The §S178 bot-mix
