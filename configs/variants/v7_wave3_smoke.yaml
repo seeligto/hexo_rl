@@ -1,0 +1,192 @@
+# configs/variants/v7_wave3_smoke.yaml
+# §S181-AUDIT Wave 3 Stage 3 — pre-launch smoke for the Wave 3 lever stack.
+#
+# Inherits from v7_real_run_smoke.yaml (Wave 2 smoke, lives on
+# phase4.5/s181_wave2_lever_vba_selfplay as historical reference) with
+# 3 Wave 3 deltas:
+#   1. Bot corpus refresh hook ACTIVATED per L51 (was disabled in Wave 2):
+#        - mixing.bot_corpus_refresh.enabled: true
+#        - interval_steps: 5_000 (fixed-interval trigger; refresh fires at
+#          step 5000 during this 6000-step smoke as the WS-A verdict probe)
+#        - n_games: 200 (incremental refresh — async subprocess)
+#        - opponent_model: ema (refresh against EMA model snapshot)
+#        - replace_strategy: rolling_window (bounded buffer)
+#   2. Per-class target temperature SCOPE FLIP per L52 (was selfplay-only
+#      in Wave 2, which over-softened late tactical learning):
+#        - apply_to_pretrain: true (softens colony rows in pretrain+bot)
+#        - apply_to_selfplay: false (selfplay slice unmodified — preserves
+#          the model's own sharp policies)
+#   3. Sliding-window SealBot WR hard-abort gate ACTIVE per L50 (smoke
+#      step range is below all 3 trigger floors so it won't fire during
+#      this 6000-step run; the gate is enabled to verify it's wired and
+#      to catch any extreme early collapse).
+#
+# Pre-registered smoke verdicts (LITERAL L13, dispatcher Stage 3C):
+#   WS-A: alt V_spread ≥ +0.10 through step 6000 AND refresh event
+#         (bot_corpus_swap_committed) logged at step 5000 AND run
+#         completes cleanly → proceed Stage 4 main
+#   WS-B: alt V_spread holds throughout BUT refresh event
+#         missing/malformed → refresh hook bug; fix + re-smoke
+#         (operator approval for $1.50 re-spend)
+#   WS-C: alt V_spread crashes below +0.07 by step 3000 (matches Wave 2
+#         §S180b baseline regression) → lever stack regression; STOP
+#   WS-D: run completes BUT SealBot WR @ step 3000 eval < 10% → weaker
+#         than Wave 2 baseline; STOP, mechanism re-eval
+#   WS-E: any HARD-ABORT trigger fires (false positive OR genuine collapse
+#         OR refresh subprocess fail) → STOP, inspect trigger reason
+#
+# Cost: ~$1.50 / ~6 h on vast 5080 (similar to Wave 2 smoke + refresh
+# subprocess overhead ~$0.10).
+#
+# Launch:
+#   tmux new -d -s s181_w3smoke 'python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v7full.pt \
+#     --variant v7_wave3_smoke \
+#     --iterations 6000 2>&1 | tee logs/s181_w3smoke_$(date +%Y%m%d_%H%M).log'
+
+# ── encoding migration (v6 → v7full) ─────────────────────────────────────────
+# v7full + v6 are wire-format identical; the registry tag carries lineage.
+# Anchor checkpoints/bootstrap_model_v7full.pt SHA 568d8a33…d61e8e98 loads
+# cleanly into HexTacToeNet(encoding='v7full').
+encoding: v7full
+
+# ── §S180b base — bot-mix + ply_cap split + neutralized game-length weights ──
+lr: 2e-3
+total_steps: 100_000              # smoke runs only 6000; cosine schedule peak-leading
+eta_min: 5e-4                     # PR-B raised default
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
+  bot_corpus_path: "data/bot_corpus_s178_sealbot_vs_v6.npz"
+  bot_batch_share: 0.30           # §S180b KNOB 1 (unchanged)
+
+  # §S181-AUDIT Wave 3 Stage 2A — bot corpus refresh hook ACTIVE.
+  # Fixed-interval trigger (NOT promotion-delta — L51: corpus staleness
+  # is time-based not promotion-based). Refresh fires at step 5000 in
+  # this smoke (the WS-A verdict probe). Subprocess regen against
+  # current EMA model snapshot per design §0 anchor stickiness.
+  bot_corpus_refresh:
+    enabled: true
+    interval_steps: 5_000
+    n_games: 200
+    opponent_model: ema           # refresh against EMA, NOT raw weights
+    replace_strategy: rolling_window
+    cooldown_steps: 5_000
+    max_regens: 20                # hard cap; 1-2 fires during smoke
+    min_wr_delta: 0.0             # fire unconditionally on interval
+    regen_command:
+      script: scripts/generate_bot_corpus.py
+      args:
+        max_plies: 150
+        random_opening_plies: 4
+        think_seconds: 0.5
+
+draw_value: -0.1
+ply_cap_value: 0.0
+
+game_length_weights:
+  thresholds: [10, 25]
+  weights: [1.0, 1.0]             # §S180b KNOB 2 (uniform)
+  default_weight: 1.0
+
+selfplay:
+  completed_q_values: true        # §S180b KNOB 3
+  c_visit: 50.0
+  c_scale: 1.0
+  n_workers: 18
+  inference_batch_size: 64
+  n_simulations: 400
+  max_game_moves: 150
+  random_opening_plies: 1
+  rotation_enabled: true
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.5
+    n_sims_quick: 100
+    n_sims_full: 600
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 300_000,   capacity: 500_000}
+
+gating:
+  bootstrap_floor:
+    enabled: true
+    min_winrate: 0.45
+
+# Dispatcher Stage 3A — denser cadence for smoke verdict collection.
+# 6 ckpts across the 6000-step smoke (every 1000 steps); 2 eval rounds
+# at step 3000 + 6000 (sanity, NOT a verdict gate — eval needs ≥10000
+# for the L50 wr_history ring to stabilize).
+checkpoint_interval: 1000
+eval_interval: 3000
+eval_temperature: 0.5
+eval_random_opening_plies: 0
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v7full.pt"   # v7full lineage
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+hard_abort:
+  grad_norm: 10.0
+  loss_nan: true
+  stride5_p90: 60
+  row_max_p90: 50
+  colony_ext_frac_max: 0.40
+  draw_rate_warn: 0.70
+  pct_at_cap_warn: 0.30
+
+telemetry:
+  emit_bot_corpus_metrics: true
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── §S181-AUDIT Wave 2 lever stack (retained from Wave 2 smoke) ──────────────
+
+# EMA-of-weights — held Wave 2's 33% peak without infra failure.
+# Self-play / eval / promotion read EMA via Trainer.inference_state_dict;
+# trainer keeps stepping raw weights. Wave 3 refresh hook reads EMA
+# snapshot at fire time per Stage 2A `opponent_model: ema`.
+ema:
+  enabled: true
+  decay: 0.999
+  update_every: 10
+
+# §S181-AUDIT Wave 3 Stage 2C L52 SCOPE FLIP — apply per-class temp only
+# to pretrain+bot slices (NOT selfplay). Wave 2 used selfplay-only scope
+# which over-softened late tactical learning (M2 mechanism per
+# wave2_real_run_analysis.md). Wave 3 fix: selfplay slice keeps sharp
+# CE targets (model's own best moves preserved), while pretrain+bot
+# colony rows get softened — anti-colony pressure targets static
+# distributions where the model is NOT learning its own play.
+per_class_target_temperature:
+  enabled: true
+  colony_temperature: 1.5
+  extension_temperature: 1.0
+  neither_temperature: 1.0
+  apply_to_pretrain: true         # Wave 3 ON
+  apply_to_selfplay: false        # Wave 3 OFF (Wave 2 was implicit true)
+
+# §S181-AUDIT Wave 3 Stage 2B — sliding-window SealBot WR hard-abort gate (L50).
+# Wave 2 evidence: alt V_spread held +0.18-+0.30 across 46k steps while
+# wr_sealbot collapsed 33% → 5%. The held-out V_spread canary failed
+# to track actual eval performance. L50 mandates a SealBot WR sliding-
+# window gate as the PRIMARY abort trigger. Smoke step range (≤6k)
+# sits below all 3 trigger floors (15k/20k/25k) — gate enabled to
+# verify wiring + catch extreme early collapse, but expected to stay
+# silent during this smoke.
+monitoring:
+  wr_hard_abort_enabled: true     # NEVER set false on real runs
