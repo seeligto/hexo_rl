@@ -1,0 +1,194 @@
+# configs/variants/v7_wave3_main.yaml
+# §S181-AUDIT Wave 3 Stage 4 — main real training run (100k steps).
+#
+# Inherits from v7_wave3_smoke.yaml with deltas:
+#   1. iterations: 6000 → 100000 (full real run per REAL_RUN_RECIPE v2 §4)
+#   2. eval_interval: 3000 → 5000 (aligns refresh hook fire at step 5000
+#      exactly per Wave 3 §2A spec; also matches REAL_RUN_RECIPE §4
+#      sliding-window cadence for L50 catch speed)
+#   3. checkpoint_interval: 1000 → 2000 (per dispatcher Stage 4A;
+#      reduces disk churn for the longer run; 50 ckpts across 100k)
+#
+# Pre-registered success criteria (REAL_RUN_RECIPE v2 §4, LITERAL L13):
+#   PRIMARY (gate):
+#     W3-G1: rolling-mean SealBot WR ≥ 20% across 3 consec eval rounds
+#            sustained 30k → 50k
+#     W3-G2: no L34 anchor↑/sealbot↓ divergence alarm
+#     W3-G3: no HARD-ABORT fires (run reaches 100k)
+#   SECONDARY (informational):
+#     W3-G4: peak SealBot WR ≥ §150 baseline 17.4% (any single eval)
+#     W3-G5: refresh hook fired ~19 times (floor(100k/5k) − 1)
+#     W3-G6: alt V_spread ≥ +0.10 sustained (informational per L50)
+#     W3-G7: T3 V_spread sign track (informational per L48)
+#     W3-G8: colony_a < 50/100 (informational)
+#
+# Stop conditions (REAL_RUN_RECIPE v2 §5):
+#   HARD-ABORT triggers (wired to self.shutdown.running):
+#     - L50/Wave3-A: rolling-mean SealBot WR < 10% for 2 consec evals
+#       AFTER step 20k
+#     - L50/Wave3-B: current WR < peak × 0.5 AND past step 25k
+#       (catches Wave-2-style 33%→16% collapse)
+#     - L50/Wave3-C: current WR < 5% past step 15k
+#       (catches §S180b-style early death)
+#     - grad_norm > 10 for 5 consec steps (existing)
+#     - loss_nan (existing)
+#     - colony_ext_frac > 0.40 (existing)
+#     - stride5_p90 > 60 (existing)
+#   SOFT-ABORT (operator decision):
+#     - dual canary both_pass=false for 2 consec checkpoints (per L50
+#       this is now WARNING, not auto-abort)
+#     - L34 anchor↑/sealbot↓ over 3 consec evals (tightened from
+#       Wave 2's 5 per Wave 2 REVIEW observation)
+#     - wallclock > 24h on a single GPU
+#
+# Cost: ~$3-4 / ~14-20h on vast 5080 (Wave 3 smoke measured ~24.8
+# steps/min — at that rate 100k steps = ~67h; expected ~30-50
+# steps/min steady → ~33-55h. Operator may truncate to 50k if rate
+# stays slow; W3-G1 sustained 30k-50k still gates on the truncated
+# range.). Operator-mediated launch — DO NOT auto-launch from smoke
+# verdict; explicit Stage 4 gate per dispatcher hard constraint.
+#
+# Launch:
+#   tmux new -d -s s181_w3main 'cd /workspace/hexo_rl && .venv/bin/python \
+#     scripts/train.py --checkpoint checkpoints/bootstrap_model_v7full.pt \
+#     --variant v7_wave3_main --iterations 100000 2>&1 \
+#     | tee logs/s181_w3main_$(date +%Y%m%d_%H%M).log'
+
+# ── encoding migration (v6 → v7full) ─────────────────────────────────────────
+encoding: v7full
+
+# ── §S180b base — bot-mix + ply_cap split + neutralized game-length weights ──
+lr: 2e-3
+total_steps: 100_000
+eta_min: 5e-4
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
+  bot_corpus_path: "data/bot_corpus_s178_sealbot_vs_v6.npz"
+  bot_batch_share: 0.30
+
+  # §S181-AUDIT Wave 3 Stage 2A — bot corpus refresh hook ACTIVE.
+  # Main run: refresh fires at every eval boundary (every 5000 steps)
+  # → ~19 fires over 100k. Each fire runs ~200-game subprocess against
+  # current EMA model snapshot, atomically swaps NPZ + hot-reloads
+  # bot_buffer. Hard cap max_regens: 20.
+  bot_corpus_refresh:
+    enabled: true
+    interval_steps: 5_000
+    n_games: 200
+    opponent_model: ema
+    replace_strategy: rolling_window
+    cooldown_steps: 5_000
+    max_regens: 20
+    min_wr_delta: 0.0
+    regen_command:
+      script: scripts/generate_bot_corpus.py
+      args:
+        max_plies: 150
+        random_opening_plies: 4
+        think_seconds: 0.5
+
+draw_value: -0.1
+ply_cap_value: 0.0
+
+game_length_weights:
+  thresholds: [10, 25]
+  weights: [1.0, 1.0]
+  default_weight: 1.0
+
+selfplay:
+  completed_q_values: true
+  c_visit: 50.0
+  c_scale: 1.0
+  n_workers: 18
+  inference_batch_size: 64
+  n_simulations: 400
+  max_game_moves: 150
+  random_opening_plies: 1
+  rotation_enabled: true
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.5
+    n_sims_quick: 100
+    n_sims_full: 600
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 300_000,   capacity: 500_000}
+  - {step: 1_000_000, capacity: 1_000_000}
+
+gating:
+  bootstrap_floor:
+    enabled: true
+    min_winrate: 0.45
+
+# Main-run cadence — 50 ckpts × 2000 steps; 20 evals × 5000 steps.
+# eval_interval=5000 aligns refresh hook fire AT exactly step 5000
+# (smoke's eval_interval=3000 caused the first refresh to land at
+# step 6000 — eval-boundary timing artifact, see wave3_smoke.md).
+checkpoint_interval: 2000
+eval_interval: 5000
+eval_temperature: 0.5
+eval_random_opening_plies: 0
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v7full.pt"
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+hard_abort:
+  grad_norm: 10.0
+  loss_nan: true
+  stride5_p90: 60
+  row_max_p90: 50
+  colony_ext_frac_max: 0.40
+  draw_rate_warn: 0.70
+  pct_at_cap_warn: 0.30
+
+telemetry:
+  emit_bot_corpus_metrics: true
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── §S181-AUDIT Wave 3 lever stack ──────────────────────────────────────────
+
+# EMA-of-weights (smoke-validated; Wave 2 33% peak baseline).
+# Refresh hook reads EMA snapshot at fire time for opponent_model.
+ema:
+  enabled: true
+  decay: 0.999
+  update_every: 10
+
+# §S181-AUDIT Wave 3 Stage 2C — per-class temp scope flip (L52).
+# Apply to pretrain+bot slices only; selfplay slice keeps sharp
+# tactical CE targets. Wave 2's selfplay-only scope over-softened
+# late tactical learning (M2 per wave2_real_run_analysis.md).
+per_class_target_temperature:
+  enabled: true
+  colony_temperature: 1.5
+  extension_temperature: 1.0
+  neither_temperature: 1.0
+  apply_to_pretrain: true
+  apply_to_selfplay: false
+
+# §S181-AUDIT Wave 3 Stage 2B — sliding-window SealBot WR HARD-ABORT (L50).
+# PRIMARY abort trigger (alt V_spread downgraded to informational per
+# REAL_RUN_RECIPE v2 §3). Three triggers checked at every eval drain:
+#   A: rolling-mean < 10% × 2 consec evals AFTER step 20k
+#   B: current < peak × 0.5 past step 25k (Wave-2-style collapse)
+#   C: current < 5% past step 15k (§S180b-style early death)
+# Operator override `--ignore-hard-abort` exists but MUST NOT be used.
+monitoring:
+  wr_hard_abort_enabled: true
