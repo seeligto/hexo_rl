@@ -68,18 +68,23 @@ mixing:
   bot_batch_share: 0.30
 
   # §S181-AUDIT Wave 3 Stage 2A — bot corpus refresh hook ACTIVE.
-  # Main run: refresh fires at every eval boundary (every 5000 steps)
-  # → ~19 fires over 100k. Each fire runs ~200-game subprocess against
-  # current EMA model snapshot, atomically swaps NPZ + hot-reloads
-  # bot_buffer. Hard cap max_regens: 20.
+  # Main run (post-2026-05-25 resume from step 8000): refresh fires
+  # every 10k steps → ~9 fires over 100k (alternating eval boundaries
+  # at eval_interval=5000; refresh + eval co-locate on odd 10k boundary,
+  # eval-only on intermediate 5k boundary). Initial config (interval=5000)
+  # caused refresh + eval to co-locate at EVERY eval boundary, doubling
+  # GPU contention overhead — operator-directed reduction to 10000 keeps
+  # anti-staleness pressure while halving the subprocess wall budget.
+  # Each refresh runs ~200-game subprocess against current EMA snapshot,
+  # atomic NPZ swap + hot-reload. Hard cap max_regens: 10.
   bot_corpus_refresh:
     enabled: true
-    interval_steps: 5_000
+    interval_steps: 10_000
     n_games: 200
     opponent_model: ema
     replace_strategy: rolling_window
-    cooldown_steps: 5_000
-    max_regens: 20
+    cooldown_steps: 10_000
+    max_regens: 10
     min_wr_delta: 0.0
     regen_command:
       script: scripts/generate_bot_corpus.py
