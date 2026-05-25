@@ -64,124 +64,194 @@ lever stack fails its 30k-step gate in Wave 2.
 **Do NOT** mix encodings within a single training run — the registry
 validates encoding consistency at trainer init.
 
-## §3 Anti-colony lever stack
+## Wave 2 close — Option D path
 
-Levers in priority order. Categories: LANDED (already on master /
-about to be merged), CONDITIONAL (Wave 2 add iff Track B verdict
-matches), DEFERRED (Wave 3+).
+§S181-AUDIT Wave 2 executed §7 below (Wave 2 plan, archived below)
+under operator-routing Option D (smoke-first per the near-miss V-B-A
+synthesis at `audit/structural/track_b/B_verdict_synthesis.md`).
 
-### LANDED
+Result: project-record SealBot WR 33% peak @ step 20k → monotonic
+collapse to 5% @ step 40k → HARD-ABORT @ step 47642. The Wave 2
+canonical deliverable is `reports/track_b_main/checkpoints/checkpoint_00020000.pt`.
+Full mechanism analysis: `audit/structural/wave2_real_run_analysis.md`.
 
-- PR-B param-group split for AdamW (`c2a0f31`). nanoGPT/KataGo
-  standard; no-decay on 1D / bias params, decay on weights.
-- PR-B `eta_min: 5e-4` (`a43d5eb`, raised from 2e-4) — KataGo
-  precedent never below 0.5× peak; prevents late-run loss-of-plasticity.
-- PR-B `entropy_reg_weight: 0.005` (`03425de`, halved from 0.01) —
-  counter-pressure on policy collapse via entropy bonus.
-- PR-C dual-bank V_spread canary (`7cd0dc0`) — T3 + alt at every
-  checkpoint, SOFT-ABORT if T3<+0.20 OR alt<+0.07.
+L50/L51/L52 banked. Wave 2 falsified two prior assumptions: (a)
+static bot corpus alone is sufficient anti-colony anchor past peak
+fit point; (b) alt V_spread + dual-bank canary alone is sufficient
+gate for real-run quality. Wave 3 below addresses both.
 
-### CONDITIONAL on Track B verdict (Wave 2 scope)
+## §3 Wave 3 anti-colony lever stack
 
-| If V-B-A (one source ≥60%) | …apply source-targeted lever |
-|---|---|
-| dominant = pretrain | per-class target temperature on pretrain colony rows; OR class-weighted CE; OR reduce `recency_weight` for pretrain channel |
-| dominant = bot | static bot corpus → refresh hook (`bot_corpus_refresh.enabled=true`, cooldown 25k); OR re-sample bot corpus on each best-model promotion |
-| dominant = uniform_self | PSW (Prioritized Stratified Window on the replay buffer); under-sample colony class on selfplay slice |
+Wave 3 stack = Wave 2 stack (LANDED — no regression) + 3 new levers:
+**refresh hook** (L51), **per-class temp scope revision** (L52),
+**sliding-window SealBot WR hard-abort gate** (L50).
 
-| If V-B-B (multi-source 25-45%) | EMA + 2-stone aux + per-class target temp |
-|---|---|
+### LANDED on master (no Wave 3 change)
 
-| If V-B-C (buffer colony-heavy ≥50% by step 2k) | refresh hook PRIORITY 1 + EMA on selfplay inference model |
-|---|---|
+- PR-B param-group split for AdamW (`c2a0f31`)
+- PR-B `eta_min: 5e-4` (`a43d5eb`)
+- PR-B `entropy_reg_weight: 0.005` (`03425de`)
+- PR-C dual-bank V_spread canary (`7cd0dc0`) — kept, now INFORMATIONAL
+  only per L50 (was SOFT-ABORT in Wave 2; downgraded because alt
+  passed while wr_sealbot crashed)
+- EMA-of-weights infrastructure (`95624af`) — held Wave 2's 33% peak
+  without infra failure
+- v7full anchor + encoding (§1 + §2)
 
-| If V-B-D (trunk centroids collapse ≥50% by step 1k) | aux heads forcing trunk discrimination — 2-stone opponent-reply aux (Wave 2 implement) + maintain existing ownership + threat aux |
-|---|---|
+### Wave 3 NEW levers (LANDED on `phase4.5/s181_wave3_design`)
 
-| If V-B-E (no clean match) | escalate to operator; NO real run launch |
-|---|---|
+1. **Bot corpus refresh hook** (Stage 2A — addresses M1 / L51).
+   `mixing.bot_corpus_refresh.enabled: true` with fixed-interval
+   trigger (`interval_steps: 5000`), async subprocess regen via
+   `scripts/generate_bot_corpus.py`, anchor against current EMA
+   model snapshot, atomic NPZ swap + hot-reload, rolling-window
+   replacement, hard cap `max_regens: 20` per 100k run. Implementation
+   per `docs/designs/s179c_bot_refresh_hook.md` (Wave 3 deltas:
+   fixed-interval trigger replacing the design's promotion-delta
+   trigger; EMA opponent; 5k cooldown vs design's 25k).
 
-### DEFERRED
+2. **Sliding-window SealBot WR hard-abort gate** (Stage 2B —
+   addresses L50). Rolling-mean tracking of last 3 eval rounds;
+   hard-abort on (a) rolling-mean < 10% for 2 consecutive evals
+   after step 20k OR (b) current < peak × 0.5 past step 25k OR
+   (c) current < 5% past step 15k. Operator-flag override for
+   debug runs only.
 
-- KL-weighted buffer writes (Q9) — design ready; parked unless V-B-C confirms feedback loop.
-- Activation alternatives (SiLU/Mish) — parked until baseline healthy.
-- Muon optimizer — parked until baseline established.
-- WDL value-head migration — parked; A2 falsified arch-only fix.
-- Gumbel CQV / KrakenBot wrapper / Phase 4.5 feature queue — parked behind real-run success.
+3. **Per-class target temperature scope revision** (Stage 2C —
+   addresses M2 / L52). Add `apply_to_selfplay: false` (default
+   true for Wave 2 backward-compat). Wave 3 variant sets
+   `apply_to_pretrain: true, apply_to_selfplay: false` — softens
+   colony CE on pretrain + bot rows only, leaves selfplay rows
+   untouched so the model's own sharp policies are preserved.
 
-## §4 Pre-registered success criteria
+### DEFERRED to Wave 4+ (only if Wave 3 fails its primary gate)
 
-LITERAL L13 guard. Real run aborts on first failure; promotion gated
-on ALL passing.
+- KL-weighted buffer writes (Q9)
+- 2-stone opp-reply aux head (V-B-D conditional, never tested)
+- Class-weighted gradient scaling (alternative to per-class temp)
+- Activation alternatives (SiLU/Mish)
+- Muon optimizer
+- WDL value-head migration (A2 falsified arch-only fix)
+- Gumbel CQV / KrakenBot wrapper / Phase 4.5 feature queue
+  (parked behind Wave 3 success)
+
+## §4 Pre-registered success criteria — v2 (rolling-mean PRIMARY per L50)
+
+LITERAL L13 guard. Real run aborts on first PRIMARY failure;
+promotion gated on ALL PRIMARY passing.
+
+### PRIMARY (gate)
 
 | ID | criterion | window |
 |---|---|---|
-| RR-G1 | dual canary T3 ≥ +0.20 sustained | steps 0 → 50k |
-| RR-G2 | dual canary alt ≥ +0.07 sustained | steps 0 → 50k |
-| RR-G3 | SealBot WR ≥ 13% at step 30k (n ≥ 200 effective games, Wilson95 lower-bound ≥ 9%) | step 30k |
-| RR-G4 | SealBot WR ≥ 18% at step 50k (matches §148 v6 baseline lower-bound) | step 50k |
-| RR-G5 | colony_a < 50/100 in eval rounds | every eval |
-| RR-G6 | L34 anchor↑/sealbot↓ divergence alarm clean (anchor WR not rising while sealbot WR falls) | every eval round |
+| W3-G1 | Rolling-mean SealBot WR ≥ 20% across 3 consecutive eval rounds | sustained over 30k → 50k |
+| W3-G2 | No L34 anchor↑/sealbot↓ divergence alarm fires | every eval round |
+| W3-G3 | No HARD-ABORT trigger fires (run reaches 100k) | run completion |
 
-Promotion to Wave 3+ requires G1-G6 all PASS at step 50k AND the
-trajectory does not soft-abort between 50k and 100k.
+### SECONDARY (informational)
 
-## §5 Stop conditions during the run
+| ID | criterion | window |
+|---|---|---|
+| W3-G4 | Peak SealBot WR ≥ §150 baseline | any single eval; target ≥ 17.4% |
+| W3-G5 | Refresh hook fired ≥ floor(100k / 5k) - 1 = 19 times | refresh event count |
+| W3-G6 | alt V_spread ≥ +0.10 sustained | informational per L50; not gate |
+| W3-G7 | T3 V_spread sign track | informational per L48; not gate |
+| W3-G8 | colony_a < 50/100 in eval rounds | informational per Wave 2 (PASS clean in Wave 2 while wr_sealbot crashed) |
 
-- Dual canary `both_pass: false` for 2 consecutive checkpoints — SOFT-ABORT.
-- SealBot WR < 8% at step 30k — HARD-ABORT (matches §S180b stop condition).
-- L34 divergence fires (anchor WR climbs ≥ 5pp while sealbot WR drops ≥ 5pp over 5 consecutive evals) — SOFT-ABORT.
-- GPU NaN/Inf in gradients (`nan_or_inf_loss_skipped` count > 20 in any 100-step window) — HARD-ABORT.
-- Standard §S180b hard-aborts: `grad_norm > 10` for 5 consecutive steps, `loss_nan`, `colony_ext_frac > 0.40`, `stride5_p90 > 60`.
+Promotion to canonical model: ALL PRIMARY PASS at step 50k AND no
+soft-abort/hard-abort between 50k and 100k AND no L34 divergence in
+any eval. Failed-PRIMARY ckpts may still be useful reference
+(Wave 2 step-20k 33% peak is project record); but not promoted.
+
+## §5 Stop conditions during the run — explicit (per Wave 3 §2B)
+
+HARD-ABORT triggers (run terminates immediately):
+- Rolling-mean SealBot WR < 10% for 2 consecutive evals AFTER step 20k.
+- Current WR < peak × 0.5 AND past step 25k (catches Wave-2-style
+  collapse: 33% → 16% at step 25k+).
+- Current WR < 5% past step 15k (catches §S180b-style early death).
+- L34 anchor↑/sealbot↓ divergence alarm fires (Wave 3 tightens
+  Wave 2's "5 consecutive" to "3 consecutive" per Wave 2 REVIEW
+  observation 2; calibration at implementation time).
+- GPU NaN/Inf in gradients (`nan_or_inf_loss_skipped` count > 20 in
+  any 100-step window).
+- Standard §S180b hard-aborts: `grad_norm > 10` for 5 consecutive
+  steps, `loss_nan`, `colony_ext_frac > 0.40`, `stride5_p90 > 60`.
+
+SOFT-ABORT (operator decision):
+- Dual canary `both_pass: false` for 2 consecutive checkpoints —
+  WARNING, NOT gate (per L50). Operator may inspect ckpts but
+  trajectory continues unless a HARD trigger fires.
 - Wallclock > 24h on a single GPU — operator decision point.
+
+`--ignore-hard-abort` debug flag exists but MUST NOT be used on real
+runs.
 
 ## §6 Compute budget
 
 | stage | cost | wall |
 |---|---|---|
-| Wave 2 dev (Track B verdict applied → lever stack final) | 1-2 days dev | 1-2 d |
-| Pre-launch smoke (3000 steps to confirm levers behave) | $1.50 | ~6 h |
-| Main run (100k steps @ ~14 s/step ≈ 14 GPU-h × ~$0.21/h) | ~$3 | ~14 h |
+| Wave 3 dev (refresh hook + hard gate + per-class temp scope + REAL_RUN_RECIPE v2) | 1-2 days | 1-2 d |
+| Pre-launch smoke (6000 steps to confirm refresh fires + lever stack behaves) | $1.50 | ~6 h |
+| Main run (100k steps; ~$3 baseline + ~$0.50 refresh subprocess overhead = ~$3.50) | ~$3.50 | ~14 h |
 | Post-run analysis + sprint-log + memory | 0 GPU | 0.5 d |
 | **TOTAL** | **~$5 + 2-3 days dev** | **~3 days incl. launch** |
 
-C-LITE-2 reopen (only if Wave 2 fails its smoke) — additional $0.75 +
-~3 h vast. Track B B4 launch — $1.50 + ~6 h (separate from main run
-budget; required before Wave 2 dev kicks off).
+Hard cap unless re-approved: $8 (per dispatcher).
 
-## §7 Wave 2 plan
+## §7 Wave 3 plan
 
 Dependency order:
 
-1. **Operator runs Track B B4** — 3000-step instrumented run on
-   `phase4.5/s181_track_b_instrumented` (`3201c39`) with
-   `v6_botmix_s181_track_b.yaml`. Emits `per_source_grad_norm` events
-   per step + `buffer_position_class_snapshot` events at ckpts
-   500/1000/.../3000.
-2. **Operator runs B3 trunk drift script** post-run.
-3. **Apply V-B aggregator** — `audit/structural/track_b/B_aggregation.md`
-   records verdict per the §1.7 decision tree.
-4. **Pick V-B-conditional lever from §3** of this doc.
-5. **Wave 2 dev:**
-   - EMA on selfplay inference model (always — protects Track B baseline
-     during Wave 2 sustained probes).
-   - 2-stone opp-reply aux head (only if V-B-D).
-   - Per-source lever from §3 conditional table.
-6. **Wave 2 pre-launch smoke** — 3000-step lever-stack confirmation on
-   vast (~6 h, $1.50).
-7. **Wave 2 main run launch** — 100k steps from
-   `bootstrap_model_v7full.pt` anchor under v7full encoding with the
-   final lever stack. Operator-mediated.
+1. **Stage 2 design** — branch `phase4.5/s181_wave3_design` off
+   post-Wave-2-close master:
+   - 2A: Refresh hook activation (~500-800 LOC across step_coordinator,
+     batch_assembly, loop, generate_bot_corpus, tests)
+   - 2B: Sliding-window SealBot WR hard-abort gate (~50 LOC across
+     evaluator, alert_rules, tests)
+   - 2C: Per-class temp scope revision (~30 LOC + tests)
+   - 2D: REAL_RUN_RECIPE v2 (this update)
+   - 2E: REVIEW + operator gate
+2. **Stage 3 pre-launch smoke** — `v7_wave3_smoke.yaml` inheriting
+   `v7_real_run_smoke.yaml` + Wave 3 deltas; 6000 steps to confirm
+   refresh fires at step 5000 + lever stack behaves cleanly. Smoke
+   verdict gates per pre-registered WS-A..WS-E table (dispatcher Stage 3C).
+3. **Stage 4 main run** — `v7_wave3_main.yaml` inheriting smoke; 100k
+   steps from `bootstrap_model_v7full.pt` anchor under v7full encoding
+   with full Wave 3 lever stack. Operator-mediated.
+4. **Stage 5 analysis** — `audit/structural/wave3_real_run_analysis.md`;
+   pre-registered W3-G1..W3-G8 verdict check; Phase 4.5 unblock decision.
+5. **Stage 6 REVIEW + close** — REVIEW subagent on chain;
+   FF-merge to master.
 
-**Do not auto-launch Wave 2.** Operator decides post-Track-B-verdict.
+**Do not auto-launch Wave 3.** Operator-mediated gates at every stage
+transition.
 
 ---
 
 ## Inputs cited
 
+### Wave 1 inputs
+
 - `audit/structural/track_a/A6_aggregation.md` — A1-A5 verdicts, L47/L48/L49
 - `audit/structural/track_c/C_LITE_1_v7full_reference.md` — v7full anchor
 - `audit/structural/track_d_pipeline_regression.md` — pipeline regression + smoking-gun rank
 - `audit/structural/track_b/B_launch_and_analysis_spec.md` — Track B run procedure + V-B verdict logic
+- `audit/structural/track_b/B_aggregation.md` — V-B LITERAL verdict (V-B-E)
+- `audit/structural/track_b/B_verdict_synthesis.md` — Option D recommendation
+- `audit/structural/track_b/B_track_d_xref.md` — Track D candidate confrontation
 - `docs/07_PHASE4_SPRINT_LOG.md` §S181-AUDIT — L47/L48/L49 + Track A verdicts + PR-B hygiene
 - `engine/src/encoding/registry.toml` — v6 / v7full encoding parity
+
+### Wave 2 inputs
+
+- `audit/structural/wave2_smoke.md` — Stage 4B smoke S-A PASS
+- `audit/structural/wave2_real_run_analysis.md` — peak-and-collapse mechanism, L50/L51/L52
+- `docs/07_PHASE4_SPRINT_LOG.md` §S181-AUDIT Wave 2 — L50/L51/L52 banked
+
+### Wave 3 inputs
+
+- `docs/designs/s179c_bot_refresh_hook.md` — refresh hook design
+- `hexo_rl/training/per_class_target_temperature.py` — per-class temp + Wave 3 apply_to_selfplay flag
+- `configs/variants/v7_wave3_smoke.yaml` — Stage 3 smoke variant (NEW)
+- `configs/variants/v7_wave3_main.yaml` — Stage 4 main variant (NEW)
