@@ -310,6 +310,9 @@ impl ReplayBuffer {
         let mut out_winning_line   = vec![0u8; batch_size * aux_stride];
         // is_full_search is per-position metadata — no symmetry transform needed.
         let mut out_is_full_search = vec![0u8; batch_size];
+        // §S181-AUDIT Wave 4 4B-impl-1 — per-position ply index. Scalar metadata
+        // (no symmetry transform).
+        let mut out_position_indices = vec![0u16; batch_size];
 
         // ── Fill output ───────────────────────────────────────────────────────
         for (b, &idx) in indices.iter().enumerate() {
@@ -347,6 +350,7 @@ impl ReplayBuffer {
 
             out_outcomes[b] = self.outcomes[idx];
             out_is_full_search[b] = self.is_full_search[idx];
+            out_position_indices[b] = self.position_indices[idx];
         }
 
         // ── Transmute u16 Vecs to f16 Vecs and wrap as numpy arrays ───────────
@@ -383,8 +387,116 @@ impl ReplayBuffer {
             .into_pyarray(py)
             .reshape([batch_size, trunk_size, trunk_size])?;
         let is_full_search_np = out_is_full_search.into_pyarray(py);
+        let position_indices_np = out_position_indices.into_pyarray(py);
 
+        // §S181-AUDIT Wave 4 4B-impl-1 — legacy facade emits 7-tuple. Python wrappers
+        // that need position_indices call sample_batch_with_pos for the 8-tuple form.
+        // position_indices_np is constructed unconditionally so the impl is shared.
+        let _ = position_indices_np; // kept alive but unused in 7-tuple legacy form
         Ok((states_np, chain_np, policies_np, outcomes_np, ownership_np, winning_line_np, is_full_search_np))
+    }
+
+    /// §S181-AUDIT Wave 4 4B-impl-1 — extended sampling that includes per-row
+    /// position_indices for the ply-to-end aux head. Mirrors `sample_batch_impl`
+    /// but returns 8-tuple.
+    pub(crate) fn sample_batch_with_pos_impl<'py>(
+        &mut self,
+        py:        Python<'py>,
+        batch_size: usize,
+        augment:    bool,
+    ) -> PyResult<super::SampleBatchWithPosOut<'py>> {
+        if self.size == 0 {
+            return Err(PyValueError::new_err("Cannot sample from an empty replay buffer"));
+        }
+
+        let indices = self.sample_indices(batch_size, true);
+
+        let state_stride  = self.encoding.state_stride();
+        let chain_stride  = self.encoding.chain_stride();
+        let policy_stride = self.encoding.policy_stride();
+        let aux_stride    = self.encoding.aux_stride();
+
+        let mut out_states      = vec![0u16; batch_size * state_stride];
+        let mut out_chain       = vec![0u16; batch_size * chain_stride];
+        let mut out_policies    = vec![0.0f32; batch_size * policy_stride];
+        let mut out_outcomes    = vec![0.0f32; batch_size];
+        let mut out_ownership      = vec![1u8; batch_size * aux_stride];
+        let mut out_winning_line   = vec![0u8; batch_size * aux_stride];
+        let mut out_is_full_search = vec![0u8; batch_size];
+        let mut out_position_indices = vec![0u16; batch_size];
+
+        for (b, &idx) in indices.iter().enumerate() {
+            let sym_idx = if augment { self.rng.random_range(0..N_SYMS) } else { 0 };
+
+            let src_state  = &self.states      [idx * state_stride ..(idx + 1) * state_stride];
+            let src_chain  = &self.chain_planes [idx * chain_stride ..(idx + 1) * chain_stride];
+            let src_policy = &self.policies    [idx * policy_stride..(idx + 1) * policy_stride];
+            let src_own    = &self.ownership   [idx * aux_stride   ..(idx + 1) * aux_stride];
+            let src_wl     = &self.winning_line[idx * aux_stride   ..(idx + 1) * aux_stride];
+
+            let dst_state  = &mut out_states      [b * state_stride ..(b + 1) * state_stride];
+            let dst_chain  = &mut out_chain        [b * chain_stride ..(b + 1) * chain_stride];
+            let dst_policy = &mut out_policies    [b * policy_stride..(b + 1) * policy_stride];
+            let dst_own    = &mut out_ownership   [b * aux_stride   ..(b + 1) * aux_stride];
+            let dst_wl     = &mut out_winning_line[b * aux_stride   ..(b + 1) * aux_stride];
+
+            Self::apply_sym(sym_idx, ApplySymSlices {
+                src: ApplySymSrc {
+                    state:  src_state,
+                    chain:  src_chain,
+                    policy: src_policy,
+                    own:    src_own,
+                    wl:     src_wl,
+                },
+                dst: ApplySymDst {
+                    state:  dst_state,
+                    chain:  dst_chain,
+                    policy: dst_policy,
+                    own:    dst_own,
+                    wl:     dst_wl,
+                },
+                tables: self.sym_tables,
+            });
+
+            out_outcomes[b] = self.outcomes[idx];
+            out_is_full_search[b] = self.is_full_search[idx];
+            out_position_indices[b] = self.position_indices[idx];
+        }
+
+        let states_f16: Vec<f16> = unsafe {
+            let mut v = std::mem::ManuallyDrop::new(out_states);
+            Vec::from_raw_parts(v.as_mut_ptr().cast::<f16>(), v.len(), v.capacity())
+        };
+        let chain_f16: Vec<f16> = unsafe {
+            let mut v = std::mem::ManuallyDrop::new(out_chain);
+            Vec::from_raw_parts(v.as_mut_ptr().cast::<f16>(), v.len(), v.capacity())
+        };
+
+        let n_planes       = self.encoding.n_planes;
+        let trunk_size     = self.encoding.trunk_size;
+        let n_logits       = self.encoding.policy_logit_count;
+        let n_chain_planes = self.encoding.n_chain_planes();
+
+        let states_np = states_f16
+            .into_pyarray(py)
+            .reshape([batch_size, n_planes, trunk_size, trunk_size])?;
+        let chain_np = chain_f16
+            .into_pyarray(py)
+            .reshape([batch_size, n_chain_planes, trunk_size, trunk_size])?;
+        let policies_np = out_policies
+            .into_pyarray(py)
+            .reshape([batch_size, n_logits])?;
+        let outcomes_np = out_outcomes.into_pyarray(py);
+        let ownership_np = out_ownership
+            .into_pyarray(py)
+            .reshape([batch_size, trunk_size, trunk_size])?;
+        let winning_line_np = out_winning_line
+            .into_pyarray(py)
+            .reshape([batch_size, trunk_size, trunk_size])?;
+        let is_full_search_np = out_is_full_search.into_pyarray(py);
+        let position_indices_np = out_position_indices.into_pyarray(py);
+
+        Ok((states_np, chain_np, policies_np, outcomes_np, ownership_np, winning_line_np, is_full_search_np, position_indices_np))
     }
 }
 
@@ -416,6 +528,7 @@ mod tests {
             ownership:       vec![1u8; 300 * AUX_STRIDE],
             winning_line:    vec![0u8; 300 * AUX_STRIDE],
             is_full_search:  vec![1u8; 300],
+            position_indices: vec![0u16; 300],
             sym_tables: crate::replay_buffer::sym_tables::sym_tables_for(v6_spec),
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,

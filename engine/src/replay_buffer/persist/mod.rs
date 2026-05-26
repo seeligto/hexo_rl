@@ -1,9 +1,9 @@
-//! HEXB v7 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
+//! HEXB v8 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
 //! `load_from_path_impl`.
 //!
 //! Format (little-endian native):
 //!   [magic: u32 = 0x48455842]  ("HEXB")
-//!   [version: u32 = 7]
+//!   [version: u32 = 8]
 //!   [n_planes: u32]            (redundant sanity field, must equal encoding.n_planes)
 //!   [capacity: u64]
 //!   [size: u64]
@@ -19,6 +19,12 @@
 //!     ownership:      AUX_STRIDE × u8
 //!     winning_line:   AUX_STRIDE × u8
 //!     is_full_search: u8
+//!     position_index: u16                    (NEW in v8; §S181 Wave 4 4B-impl-1)
+//!
+//! v7 backward compatibility:
+//!   v7 files lack position_index. On load, version==7 → defaults position_index to 0
+//!   for every row. Aux loss masks pretrain rows so the dummy zeros don't pollute
+//!   training. Re-save writes v8.
 //!
 //! v6 backward compatibility:
 //!   v6 files lack the encoding_name field. On load, version==6 → assumed
@@ -40,7 +46,7 @@ use super::ReplayBuffer;
 mod load;
 
 pub(crate) const HEXB_MAGIC: u32 = 0x4845_5842; // "HEXB"
-pub(crate) const HEXB_VERSION: u32 = 7;
+pub(crate) const HEXB_VERSION: u32 = 8;
 
 impl ReplayBuffer {
     /// Save buffer contents to a binary file in HEXB v7 format.
@@ -144,6 +150,9 @@ impl ReplayBuffer {
             // is_full_search: u8
             w.write_all(&[self.is_full_search[slot]])
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
+            // §S181-AUDIT Wave 4 4B-impl-1 (HEXB v8): position_index u16
+            w.write_all(&self.position_indices[slot].to_le_bytes())
+                .map_err(|e| PyIOError::new_err(e.to_string()))?;
         }
 
         w.flush().map_err(|e| PyIOError::new_err(e.to_string()))?;
@@ -201,6 +210,7 @@ mod tests {
         buf.outcomes[slot]       = 1.0;
         buf.weights[slot]        = f16::from_f32(1.0).to_bits();
         buf.is_full_search[slot] = 0;  // quick-search
+        buf.position_indices[slot] = 42;  // §S181 Wave 4 4B-impl-1
         buf.head = 1;
         buf.size = 1;
 
@@ -225,6 +235,35 @@ mod tests {
         assert_eq!(buf2.chain_planes[c2 + 100], f16::from_f32(1.0).to_bits());
         assert_eq!(buf2.chain_planes[c2 + buf2.encoding.n_cells()], f16::from_f32(0.25).to_bits());
         assert_eq!(buf2.is_full_search[0], 0, "is_full_search must survive round-trip");
+        assert_eq!(buf2.position_indices[0], 42, "position_index must survive v8 round-trip");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// §S181-AUDIT Wave 4 4B-impl-1 — explicit per-row position_index round-trip
+    /// across multiple rows, verifying v8 file format wire-correctness.
+    #[test]
+    fn test_position_index_v8_roundtrip_multirow() {
+        let mut buf = ReplayBuffer::new(8, "v6");
+        for i in 0..5u16 {
+            buf.push_for_test(i as f32, 30, true);
+        }
+        for i in 0..5u16 {
+            buf.position_indices[i as usize] = i * 7 + 3;
+        }
+
+        let path = unique_test_path("pos_idx_v8_roundtrip");
+        buf.save_to_path(path.to_str().unwrap()).unwrap();
+
+        let mut buf2 = ReplayBuffer::new(8, "v6");
+        let n = buf2.load_from_path_impl(path.to_str().unwrap()).unwrap();
+        assert_eq!(n, 5);
+        for i in 0..5u16 {
+            assert_eq!(
+                buf2.position_indices[i as usize], i * 7 + 3,
+                "position_index mismatch at row {i}",
+            );
+        }
 
         let _ = std::fs::remove_file(path);
     }

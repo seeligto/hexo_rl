@@ -1,4 +1,6 @@
-//! HEXB v7 + v6 load path for `ReplayBuffer::load_from_path_impl`.
+//! HEXB v8 + v7 + v6 load path for `ReplayBuffer::load_from_path_impl`.
+//! v8 added `position_index: u16` per-row (§S181 Wave 4 4B-impl-1); v7 files
+//! load with position_index defaulted to 0.
 //!
 //! Extracted from `engine/src/replay_buffer/persist.rs` at cycle 3 P68 Wave 7
 //! Batch E as a pure module split. The save path + HEXB constants + module
@@ -58,8 +60,9 @@ impl ReplayBuffer {
         let _saved_capacity: usize;
         let saved_size: usize;
 
-        if version == 7 {
-            // v7 header: n_planes, capacity, size, encoding_name_len, encoding_name
+        if version == 8 || version == 7 {
+            // v7/v8 header: n_planes, capacity, size, encoding_name_len, encoding_name
+            // v8 adds per-row position_index; header layout otherwise identical.
             r.read_exact(&mut buf4)
                 .map_err(|e| format!("{e}"))?;
             saved_n_planes = u32::from_le_bytes(buf4) as usize;
@@ -77,7 +80,7 @@ impl ReplayBuffer {
             let name_len = u32::from_le_bytes(buf4) as usize;
             if name_len > 256 {
                 return Err(format!(
-                    "HEXB v7 encoding_name_len={name_len} exceeds maximum 256"
+                    "HEXB v{version} encoding_name_len={name_len} exceeds maximum 256"
                 ));
             }
             let mut name_buf = vec![0u8; name_len];
@@ -85,7 +88,7 @@ impl ReplayBuffer {
                 .map_err(|e| format!("{e}"))?;
             file_encoding_name = String::from_utf8(name_buf)
                 .map_err(|e| format!(
-                    "HEXB v7 encoding name is not valid UTF-8: {e}"
+                    "HEXB v{version} encoding name is not valid UTF-8: {e}"
                 ))?;
         } else if version == 6 {
             // v6 backward compat: no encoding field — assume "v6"
@@ -173,8 +176,12 @@ impl ReplayBuffer {
         let state_bytes = state_stride * 2;
         let chain_bytes = chain_stride * 2;
         let policy_bytes = policy_stride * 4;
-        let entry_bytes = state_bytes + chain_bytes + policy_bytes + 4 + 8 + 2
+        // v6/v7 entry: state + chain + policy + outcome(4) + game_id(8) + weight(2)
+        //              + ownership + winning_line + is_full_search(1)
+        // v8 entry: above + position_index(2)
+        let v7_entry_bytes = state_bytes + chain_bytes + policy_bytes + 4 + 8 + 2
             + aux_stride + aux_stride + 1;
+        let entry_bytes = if version == 8 { v7_entry_bytes + 2 } else { v7_entry_bytes };
 
         // Skip oldest entries
         if to_skip > 0 {
@@ -258,6 +265,17 @@ impl ReplayBuffer {
             r.read_exact(&mut buf1)
                 .map_err(|e| format!("{e}"))?;
             self.is_full_search[slot] = buf1[0];
+
+            // §S181-AUDIT Wave 4 4B-impl-1 — position_index per row (v8+ only).
+            // v6/v7 files default position_index to 0 (aux loss masks pretrain rows).
+            if version == 8 {
+                let mut buf2 = [0u8; 2];
+                r.read_exact(&mut buf2)
+                    .map_err(|e| format!("{e}"))?;
+                self.position_indices[slot] = u16::from_le_bytes(buf2);
+            } else {
+                self.position_indices[slot] = 0;
+            }
 
             // Update weight histogram
             let bucket = Self::weight_bucket(w_bits);
