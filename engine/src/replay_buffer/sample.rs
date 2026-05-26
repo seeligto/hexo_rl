@@ -310,9 +310,9 @@ impl ReplayBuffer {
         let mut out_winning_line   = vec![0u8; batch_size * aux_stride];
         // is_full_search is per-position metadata — no symmetry transform needed.
         let mut out_is_full_search = vec![0u8; batch_size];
-        // §S181-AUDIT Wave 4 4B-impl-1 — per-position ply index. Scalar metadata
-        // (no symmetry transform).
-        let mut out_position_indices = vec![0u16; batch_size];
+        // Note: legacy sample_batch_impl does NOT emit position_indices to keep
+        // its hot-path 7-tuple byte-identical pre/post §S181 Wave 4 4B-impl-1.
+        // Callers needing per-row ply index use `sample_batch_with_pos_impl`.
 
         // ── Fill output ───────────────────────────────────────────────────────
         for (b, &idx) in indices.iter().enumerate() {
@@ -350,7 +350,6 @@ impl ReplayBuffer {
 
             out_outcomes[b] = self.outcomes[idx];
             out_is_full_search[b] = self.is_full_search[idx];
-            out_position_indices[b] = self.position_indices[idx];
         }
 
         // ── Transmute u16 Vecs to f16 Vecs and wrap as numpy arrays ───────────
@@ -387,12 +386,7 @@ impl ReplayBuffer {
             .into_pyarray(py)
             .reshape([batch_size, trunk_size, trunk_size])?;
         let is_full_search_np = out_is_full_search.into_pyarray(py);
-        let position_indices_np = out_position_indices.into_pyarray(py);
 
-        // §S181-AUDIT Wave 4 4B-impl-1 — legacy facade emits 7-tuple. Python wrappers
-        // that need position_indices call sample_batch_with_pos for the 8-tuple form.
-        // position_indices_np is constructed unconditionally so the impl is shared.
-        let _ = position_indices_np; // kept alive but unused in 7-tuple legacy form
         Ok((states_np, chain_np, policies_np, outcomes_np, ownership_np, winning_line_np, is_full_search_np))
     }
 
