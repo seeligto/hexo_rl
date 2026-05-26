@@ -1,0 +1,192 @@
+# configs/variants/v7full_wave4_multiaux.yaml
+# §S181-AUDIT Wave 4 Track 4B — multi-aux head suite + ply-index probe.
+#
+# Hypothesis. KataGo-style aux signal density at the trunk prevents
+# single-attractor lock. Tests whether adding the ply-index aux head
+# (temporal-context signal) + re-enabled sigma2 head (Huber-on-squared-
+# error) + bumped ownership/threat density to a v7full + no-bot recipe
+# breaks the colony attractor that Wave 2/3 reproduced.
+#
+# Routing assumption: W4A-B (Track 4A reached peak ≥ 15% but late
+# decline — bot mix not load-bearing alone; aux density may stabilize).
+# If Track 4A verdict was W4A-C (colony attractor reached despite no
+# bot mix), edit `encoding:` upstream chain to inherit v7_wave3_main
+# (keep refresh hook + per-class temp). If W4A-A (PASS), this variant
+# is optional polish. If W4A-D, STOP — surface to operator.
+#
+# Parent recipe. v7full_baseline_minus_bot.yaml (Track 4A variant).
+# Delta: ply_index_weight 0.0 → 0.1 (ply-index head enabled).
+# Other multi-aux density bumps already in training.yaml root defaults
+# from 4B-impl-5: uncertainty_weight 0.1 (Huber sigma2), ownership 0.2,
+# threat 0.2.
+#
+# Anchor. checkpoints/bootstrap_model_v7full.pt (SHA 568d8a33…d61e8e98).
+# OR — if Track 4A produced a useful checkpoint at step >= 20k — that
+# checkpoint can replace the bootstrap anchor (operator decision at
+# verdict time). Default: bootstrap_model_v7full.pt.
+#
+# Pre-registered verdicts (LITERAL L13, dispatcher §S181 Wave 4 Stage 4):
+#   W4B-A — rolling-mean SealBot WR ≥ 20% sustained 30k-50k AND
+#           ply_index_loss converges (mean trajectory < 0.05 by step 30k) →
+#           Phase 4.5 UNBLOCKED. Promote final checkpoint.
+#   W4B-B — peak ≥ 20% but late decline → tighter aux weights OR add
+#           refresh hook on top. Wave 5 design.
+#   W4B-C — reaches colony attractor end-state (≥ 3 L34 fires, wr_sb
+#           below 5% by step 40k, anchor / sb divergence) → multi-aux
+#           NOT the answer. Strategic reckoning Wave 5: WDL migration
+#           OR target-propagation revisit.
+#   W4B-D — other anomaly (gradient explosion, head divergence,
+#           uncertainty loss spike > 10) → STOP, debug.
+#
+# Aux head training notes:
+#   - ply_index_loss masks pretrain + recent buffer rows IMPLICITLY:
+#     pretrain rows have position_index = 0 (corpus NPZ lacks the field,
+#     defaults from buffer load); recent_buffer rows also fill zeros
+#     (per Wave 4 4B-impl-3 batch_assembly plumbing). Trainer applies
+#     loss to all rows but pretrain/recent zeros produce target ≈ 0
+#     which the head must predict for those rows — degenerate but not
+#     harmful.
+#   - Long-term improvement: extend buffer to carry per-row game_length
+#     OR per-row remaining_ply for "true" ply-to-end semantics. Wave 5+.
+#
+# Cost. ~$3 / ~14h on vast 5080 (60k steps × ~25 steps/min observed).
+#
+# Wave 4 budget. $7 total. Track 4A spent ~$2.50; Track 4B ~$3 leaves
+# ~$1.50 buffer. Hard cap discipline per dispatcher: override ONLY on
+# (a) wr_sealbot rolling mean rising in last 10k OR (b) novel signal.
+# NO override on monotonic decline.
+#
+# Launch:
+#   tmux new -d -s s181_w4b 'cd /workspace/hexo_rl && .venv/bin/python \
+#     scripts/train.py --checkpoint checkpoints/bootstrap_model_v7full.pt \
+#     --variant v7full_wave4_multiaux --iterations 60000 2>&1 \
+#     | tee logs/s181_w4b_$(date +%Y%m%d_%H%M).log'
+
+# ── encoding (v7full anchor lineage) ─────────────────────────────────────────
+encoding: v7full
+
+# ── base training knobs (mirror Track 4A; §S180b knobs preserved) ────────────
+lr: 2e-3
+total_steps: 60_000
+eta_min: 5e-4
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
+
+  # NO bot corpus mix — Track 4A DELTA 1 preserved.
+  bot_corpus_path: null
+  bot_batch_share: 0.0
+
+  # NO bot corpus refresh hook — Track 4A DELTA 2 preserved.
+  bot_corpus_refresh:
+    enabled: false
+
+draw_value: -0.1
+ply_cap_value: 0.0
+
+# §S180b knob 2 — uniform game-length weights (preserved).
+game_length_weights:
+  thresholds: [10, 25]
+  weights: [1.0, 1.0]
+  default_weight: 1.0
+
+# §S180b knob 3 — completed Q-values (preserved).
+selfplay:
+  completed_q_values: true
+  c_visit: 50.0
+  c_scale: 1.0
+  n_workers: 18
+  inference_batch_size: 64
+  n_simulations: 400
+  max_game_moves: 150
+  random_opening_plies: 1
+  rotation_enabled: true
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.5
+    n_sims_quick: 100
+    n_sims_full: 600
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 300_000,   capacity: 500_000}
+  - {step: 1_000_000, capacity: 1_000_000}
+
+gating:
+  bootstrap_floor:
+    enabled: true
+    min_winrate: 0.45
+
+checkpoint_interval: 2000
+eval_interval: 5000
+eval_temperature: 0.5
+eval_random_opening_plies: 0
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v7full.pt"
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+hard_abort:
+  grad_norm: 10.0
+  loss_nan: true
+  stride5_p90: 60
+  row_max_p90: 50
+  colony_ext_frac_max: 0.40
+  draw_rate_warn: 0.70
+  pct_at_cap_warn: 0.30
+
+telemetry:
+  emit_bot_corpus_metrics: false
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── Wave 2-3 hygiene PRESERVED ──────────────────────────────────────────────
+
+ema:
+  enabled: true
+  decay: 0.999
+  update_every: 10
+
+# Per-class target temperature DISABLED (Track 4A DELTA 3 preserved).
+per_class_target_temperature:
+  enabled: false
+
+# Hard SealBot WR gate L50 — STRICT thresholds (matches Track 4A).
+monitoring:
+  wr_hard_abort_enabled: true
+  wr_rolling_threshold: 0.10
+  wr_rolling_min_step: 20000
+  wr_rolling_consecutive_evals: 2
+  wr_collapse_from_peak_ratio: 0.5
+  wr_collapse_min_step: 25000
+  wr_early_death_threshold: 0.05
+  wr_early_death_min_step: 15000
+
+# ── Wave 4 4B-impl-3 — ply-index aux head ENABLED ───────────────────────────
+# Predicts normalized 0-based ply index via Sigmoid; Huber loss against
+# clamp(position_index / 100, 0, 1). Forces the trunk to encode game-time
+# temporal context. KataGo aux density hypothesis applied to game progress.
+ply_index_weight: 0.1
+
+# Multi-aux density already at KataGo-range total in training.yaml root
+# defaults (set by 4B-impl-5 commit d80de72):
+#   aux_opp_reply_weight: 0.15  (policy-aux regularizer)
+#   aux_chain_weight: 1.0       (Q13 chain planes; /6-normalized → effective ~0.17)
+#   uncertainty_weight: 0.1     (Huber-on-squared-error, NOT Gaussian NLL)
+#   ownership_weight: 0.2       (bumped from 0.1)
+#   threat_weight: 0.2          (bumped from 0.1)
+#   ply_index_weight: 0.1       (this variant ENABLES)
+# Effective total aux contribution ~0.85 raw weight (~0.45 effective gradient).
