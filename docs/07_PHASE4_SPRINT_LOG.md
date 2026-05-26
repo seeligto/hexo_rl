@@ -3438,6 +3438,239 @@ is reference-only.
 
 ---
 
+## §S181-AUDIT Wave 3 — refresh hook + per-class temp scope flip plateau-then-collapse
+
+**Status.** Wave 3 lever stack (v7full anchor + EMA + bot corpus refresh
+hook per L51 + per-class target temp scope flip per L52 + L50 sliding-
+window WR hard-abort gate) ran 50 000 steps across 3 sessions, then
+hit L50 Trigger C auto-abort @ step 50k after wr_sealbot collapsed to
+**2% @ step 45k**. Wave 3 plateaued the model at 16-25% wr_sb across
+steps 10k-30k (5 evals) — a softer trajectory shape than Wave 2's
+peak-then-monotonic-decline — but hit the SAME end-state colony
+attractor (anchor 70% / sealbot 2% / 68pp divergence). Refresh hook +
+per-class scope flip are necessary-not-sufficient against the
+colony-attractor capture. Wave 4 design with structural levers (2-stone
+aux / WDL / PSW) required. **Phase 4.5 remains BLOCKED.**
+
+### Run identity
+
+| field | value |
+|---|---|
+| host | vast.ai 5080 (ssh6.vast.ai:13053) |
+| branch | `phase4.5/s181_wave3_design` 4435f4d (pushed to origin) |
+| variant | `v7_wave3_main` (with mid-run L50 widening @ 4435f4d) |
+| anchor | `bootstrap_model_v7full.pt` SHA `568d8a33…d61e8e98` |
+| encoding | v7full (single-window 19×19, 8 planes) |
+| iterations target | 100 000; **actual 50 000** (L50 Trigger C auto-fire) |
+| sessions | 3 (s1: cadence-fix-stop @ 11 746 / s2: L50-B-fire @ 40 000 / s3: L50-C-fire @ 50 000) |
+| total wall | ~32 h |
+| total cost | ~$8.30 (slight overrun of $8 hard cap on operator "continue to 50k regardless" override) |
+| total games | ~25 000 |
+| canonical archive | `reports/track_b_main_wave3/` (353 MB) |
+| key audit doc | `audit/structural/wave3_real_run_analysis.md` (452 lines) |
+
+Wave 3 lever stack vs Wave 2:
+- EMA + v7full anchor (Wave 2 baseline, kept)
+- **Bot corpus refresh hook ACTIVATED** per L51 (Wave 2 was disabled)
+- **Per-class target temp SCOPE FLIP** per L52 (Wave 2 was selfplay-only;
+  Wave 3 is pretrain+bot only, selfplay slice sharp tactical CE preserved)
+- **L50 sliding-window WR hard-abort gate** active (Wave 2 didn't have this)
+
+### SealBot WR trajectory (peak-and-collapse)
+
+| step | wr_sb | wr_anc | wr_best | c_sb | promoted | elo |
+|---:|---:|---:|---:|---:|:---:|---:|
+| 5 000 | 16.0% | 60.0% | 52.0% | 2 | ✗ | 435 |
+| **10 000** | **25.0%** | 62.0% | 58.0% | 3 | ✗ | 417 |
+| 15 000 | 18.0% | 46.0% | 59.0% | 7 | ✗ | 428 |
+| 20 000 | 16.0% | 68.0% | 55.0% | 3 | ✗ | 407 |
+| 25 000 | 23.0% | 59.0% | 66.0% | 8 | **✓** | 377 |
+| 30 000 | 20.0% | 65.0% | 65.0% | 11 | **✓** | 313 |
+| 35 000 | 10.0% | 61.0% | 57.0% | 6 | ✗ | 212 |
+| **45 000** | **2.0%** | **70.0%** | **69.0%** | 2 | **✓** | 397 |
+
+Peak step 10k 25% (vs Wave 2 peak step 20k 33%). Plateau 16-25%
+steps 10k-30k. Catastrophic collapse 23%→2% over steps 25k→45k. SAME
+end-state attractor as Wave 2 (anchor 70% / sb ≤5%).
+
+### L34 anchor↑/sealbot↓ divergence (3 fires)
+
+| transition | anchor Δ | sealbot Δ | L34? |
+|---|---:|---:|:---:|
+| 15k → 20k | +22 pp | -2 pp | **YES (1st)** |
+| 25k → 30k | +6 pp | -3 pp | **YES (2nd)** |
+| 35k → 45k | +9 pp | -8 pp | **YES (3rd)** |
+
+3 L34 fires across trajectory. Step 45k = final form: 70%/2% = 68pp
+divergence (Wave 2 peak was 65pp at step 40k). Same colony-attractor
+end-state.
+
+### L50 hard-abort fires (mechanism validated end-to-end)
+
+- **Fire #1 — Trigger B @ step 40 000** (session 2): "SealBot WR 10.0% <
+  peak 23.0% × 50% past step 25,000 — Wave-2-style collapse". Operator
+  widened `wr_collapse_from_peak_ratio: 0.5 → 0.25` and resumed from
+  ckpt_00040000.pt.
+- **Fire #2 — Trigger C @ step 50 000** (session 3): "SealBot WR 2.0% <
+  5% past step 15,000 — §S180b-style early death". Clean session_end.
+
+Both fired AS DESIGNED. Stage 2B's L50 gate is validated end-to-end.
+
+### Refresh hook validation (4 cycles end-to-end)
+
+| cycle | requested step | swap step | n_pos_after |
+|---:|---:|---:|---:|
+| 1 | 5 000 | 10 000 | 6 724 |
+| 2 | 15 000 | 20 000 | 7 453 |
+| 3 | 30 000 | 35 000 | 8 006 |
+| 4 | 45 000 | 50 000 | 9 932 |
+
+Mechanism works perfectly. Atomic NPZ swap + hot-reload + corpus growth
+across cycles (6.7k → 9.9k positions as EMA model strengthens + sustains
+longer games). Reload_sec ≤ 6s each. The mechanism is NOT defective —
+the verdict is that it's INSUFFICIENT against the attractor.
+
+### Mechanism diagnosis (M1 + M2 + M3 compound)
+
+**M1 — Refresh hook insufficient (high).** 30% bot-batch-share + dynamic
+EMA-anchored fresh corpus IS overpowered by the 70% selfplay-buffer
+share that drives the gradient toward colony shapes. Mechanism works,
+share is wrong.
+
+**M2 — Per-class temp scope flip insufficient (high).** Wave 2's M2
+mechanism (per-class temp on selfplay slice over-softens tactical CE)
+WAS addressed by L52 scope flip (apply_to_selfplay: false). But the
+attractor operates ABOVE the per-class CE level. Wave 3 STILL collapsed.
+Preserving selfplay CE sharpness ≠ preserving the right policy direction.
+
+**M3 — best_model rotation amplifies the attractor (moderate).** Promotion
+at step 25k, 30k, 45k. Step 45k promotion happened WHILE wr_sb crashed
+to 2% — the promotion criteria (wr_best ≥ 0.55 + bootstrap_floor 0.45)
+reinforce colony exploitation via positive feedback on internal metrics
+that don't penalize anchor-exploit.
+
+### L53 — Refresh hook + per-class temp scope flip insufficient against the colony attractor
+
+**Rule.** A 30%-batch-share dynamic-refreshed bot corpus + per-class
+CE softening scoped to static (pretrain+bot) rows is INSUFFICIENT to
+prevent the colony-attractor capture in v7full sustained training.
+
+**Why.** Wave 3 ran 50k steps with both levers active. wr_sb peaked at
+25% (step 10k), oscillated 16-25% across steps 10k-30k, then collapsed
+to 2% by step 45k. Same end-state attractor as Wave 2 reached via
+different trajectory shape. Refresh hook cycles complete cleanly but
+the fresh corpus signal is overpowered by selfplay-dominated gradient.
+
+**How to apply.** Wave 4+ must employ STRUCTURAL interventions, not
+RATIO interventions. Candidates: 2-stone opponent-reply aux head
+(addresses M3), WDL value-head migration (changes value-target
+structure), KL-weighted buffer writes, PSW (s179b parked design),
+class-weighted gradient scaling (vs CE softening). The refresh hook +
+per-class temp scope flip should REMAIN as defensive substrate but a
+fundamental mechanism change is needed atop them.
+
+### L54 — Trigger B peak×0.5 threshold catches collapse late
+
+**Rule.** L50 Trigger B fires AFTER trajectory drops to half its peak —
+by then the collapse is already deep.
+
+**Why.** Wave 3 fired Trigger B at step 40k drain (wr_sb 10%, peak 23%,
+threshold 11.5%) — but the trajectory crashed 23% (step 25k) to 10%
+(step 35k) BEFORE the fire. ~15k steps of collapse training before
+auto-abort. Trigger C fired even later (step 50k after wr_sb hit 2%).
+
+**How to apply.** Future runs should add a derivative trigger: "rolling-
+mean WR drops ≥ Xpp across 2 consecutive evals past step 20k". X=5pp
+would have caught Wave 3 at step 35k (rolling-mean 21.5% → 15% = 6.5pp
+drop). Or tighten Trigger B's peak ratio earlier (ratio 0.7 + min_step
+20k catches earlier).
+
+### L55 — Wave 3 plateau-then-collapse is SAME L34-attractor with delay, not new mechanism
+
+**Rule.** A long sustained mid-WR phase (plateau) is NOT evidence of
+attractor break. It's consistent with the SAME attractor + lever-stack-
+induced inertia before the wr_sb-measurable collapse.
+
+**Why.** Wave 2 and Wave 3 end at the SAME L34 signature (anchor ~70%
+/ sealbot ≤5% / 65pp divergence). The end-state is identical. Wave 3
+lever stack delayed wr_sb-measurable manifestation by ~10-15k steps but
+didn't break the attractor.
+
+**How to apply.** Wave 4+ design should NOT chase a different trajectory
+shape (longer plateau ≠ better if collapsing at 2%). Design for a
+different ATTRACTOR — different value-head / policy-head / value-target
+structure with no colony-exploit-of-anchor-bias attractor. WDL, 2-stone
+aux, or PSW change WHAT THE MODEL OPTIMIZES, not just the
+gradient-share of the existing optimization.
+
+### Falsified Hypotheses Register additions
+
+- **Refresh hook + per-class temp scope flip is sufficient to prevent
+  colony-attractor capture in v7full sustained training.** FALSIFIED by
+  Wave 3 — wr_sb collapsed to 2% by step 45k despite both levers active.
+- **Plateau (long sustained mid-WR phase) is a positive sign of attractor
+  break.** FALSIFIED by Wave 3 — model plateaued 16-25% wr_sb across
+  10k-30k then catastrophically collapsed to 2%.
+- **best_model promotion is a reliable signal of model improvement
+  toward Phase 4.5 readiness.** FALSIFIED by Wave 3 — best_model promoted
+  AT step 45k (wr_best 69%) WHILE wr_sb crashed to 2%. Promotion gate
+  rewards anchor-exploit, not anti-colony improvement.
+
+### Wave 3 canonical deliverable preservation
+
+No single project-record snapshot. Candidates:
+- `checkpoint_00010000.pt` — Wave 3 peak 25% wr_sb (CI wide; not promoted)
+- `checkpoint_00025000.pt` — first promotion + 23% wr_sb
+- `checkpoint_00045000.pt` — **colony-attractor reference** (70%/2% — useful
+  for Wave 4 mechanism ablation work)
+
+Wave 2's `wave2_step20k_peak33pct.pt` remains the project-record peak
+SealBot WR snapshot. Wave 3 archive at `reports/track_b_main_wave3/`
+holds the trajectory for future analysis.
+
+### Wave 4 escalation path (operator decides priority)
+
+Per dispatcher §5C routing (PRIMARY all FAIL → "Mechanism wrong"):
+
+1. **2-stone opponent-reply aux head** (V-B-D conditional, never tested
+   in sustained context). Highest priority — forces trunk to discriminate
+   on-policy reply patterns, addresses M3.
+2. **WDL value-head migration** (parked since §S178; A2 falsified
+   arch-only fix, BUT Wave 3 shows loop-side levers ALSO insufficient
+   → arch + loop combined hypothesis worth testing).
+3. **PSW (Policy Surprise Weighting)** — design `s179b` parked. Penalizes
+   high-KL transitions in selfplay buffer writes.
+4. **Class-weighted gradient scaling** (different mechanism class than
+   per-class CE softening Wave 3 already tested).
+
+L53/L54/L55 + `audit/structural/wave3_real_run_analysis.md` are the
+Wave 4 design starting point.
+
+### Cross-references
+
+- `audit/structural/wave3_real_run_analysis.md` — full analysis (452 lines)
+- `audit/structural/wave3_smoke.md` — Stage 3 smoke WS-A PASS-WITH-NOTES
+- `audit/structural/wave3_launch_readiness.md` — Stage 2 close-out
+- `audit/structural/wave2_real_run_analysis.md` — Wave 2 baseline (L50/L51/L52)
+- `audit/structural/REAL_RUN_RECIPE.md` — Wave 3 success criteria
+- `docs/designs/s179c_bot_refresh_hook.md` — refresh hook design (validated)
+- `docs/designs/s179b_policy_surprise_weighting.md` — PSW (Wave 4 candidate)
+- `reports/track_b_main_wave3/` — 353 MB local archive (ckpts + logs + events JSONL)
+
+### Branches (Stage 4 → Stage 6 disposition)
+
+| branch | commit | status |
+|---|---|---|
+| `phase4.5/s181_wave3_design` | `4435f4d` | active; pending Stage 6 REVIEW → master merge |
+
+Wave 3 design branch has 10 commits ahead of master: Stage 2A refresh
+hook + Stage 2B WR hard-abort gate + Stage 2C per-class temp scope +
+Stage 2D REAL_RUN_RECIPE v2 + Stage 2E launch readiness + Stage 3A
+smoke variant + Stage 3C smoke audit + Stage 4A main variant + mid-run
+yaml widening + this sprint-log entry.
+
+---
+
 ## §S182 — perf wave: legal_moves_set capacity fix MERGED
 
 *DISCRIMINATOR: §S182 = Rust-perf wave merge (this entry). The §S178 bot-mix
