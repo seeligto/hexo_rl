@@ -190,10 +190,24 @@ per_class_target_temperature:
 
 # §S181-AUDIT Wave 3 Stage 2B — sliding-window SealBot WR HARD-ABORT (L50).
 # PRIMARY abort trigger (alt V_spread downgraded to informational per
-# REAL_RUN_RECIPE v2 §3). Three triggers checked at every eval drain:
-#   A: rolling-mean < 10% × 2 consec evals AFTER step 20k
-#   B: current < peak × 0.5 past step 25k (Wave-2-style collapse)
-#   C: current < 5% past step 15k (§S180b-style early death)
-# Operator override `--ignore-hard-abort` exists but MUST NOT be used.
+# REAL_RUN_RECIPE v2 §3). Three triggers checked at every eval drain.
+#
+# WIDENED 2026-05-26 post-step-40k Trigger B fire @ wr_sb 10% (peak 23%):
+# operator instruction to widen thresholds + resume from ckpt_40000 to
+# reach step 50k for trajectory data. Gate stays ACTIVE (catches
+# catastrophic collapse) but tolerates the observed plateau-decline
+# pattern. Per-class temp scope flip + refresh hook produced a softer
+# decline than Wave 2's steep 33→5 collapse; need full 50k window to
+# characterize plateau vs continued decline.
 monitoring:
   wr_hard_abort_enabled: true
+  # A: rolling-mean < threshold × 2 consec evals AFTER min_step
+  wr_rolling_threshold: 0.05         # was 0.10 — allows 5-9% range
+  wr_rolling_min_step: 20000         # unchanged
+  wr_rolling_consecutive_evals: 2    # unchanged
+  # B: current < peak × ratio past min_step (catches Wave-2-style collapse)
+  wr_collapse_from_peak_ratio: 0.25  # was 0.5 — threshold becomes 23%*0.25=5.75%
+  wr_collapse_min_step: 25000        # unchanged
+  # C: current < threshold past min_step (catches §S180b-style early death)
+  wr_early_death_threshold: 0.05     # unchanged
+  wr_early_death_min_step: 15000     # unchanged
