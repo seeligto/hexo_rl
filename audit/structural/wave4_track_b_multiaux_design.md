@@ -95,16 +95,50 @@ Wave 4 budget $7 total ($2.50 Track 4A + $3 Track 4B + buffer). Override
 ONLY on (a) wr_sealbot rolling mean rising in last 10k OR (b) novel
 signal not seen in prior waves. NO override on monotonic decline.
 
-## Open question for operator
+## Scope decision history
 
-Confirm revised scope before implementation:
-- (recommended) **Lean**: 4B-1 + 4B-2 + 4B-3 + DEFER 4B-4. ~70 LOC + tests
-  + INV pin. ~3h dev.
-- (full per dispatcher) **Full**: 4B-1 + 4B-2 + 4B-3 + 4B-4 build out
-  true 2-stone opp-reply. ~250 LOC + Rust buffer ext + bench gate. ~8h
-  dev + ~$0.30 bench compute.
+**2026-05-26 initial scope (operator approved "Full")**: 4B-1 + 4B-2 +
+4B-3 + 4B-4 (true 2-stone opp-reply). Estimated ~250 LOC per dispatcher.
 
-Recommendation: **Lean** because the 4B sustained run cost ($3) is the
-limit, not LOC. We get most of the aux density benefit from 4B-1/2/3
-alone, and 4B-4 buffer extension is a long-term feature worth doing on
-its own time (not a Wave 4 rush). Operator may overrule.
+**2026-05-26 scope reduction post-Rust audit (executor decision)**:
+Deeper inspection of `engine/src/replay_buffer/` (storage.rs +
+push_config.rs + mod.rs + persist/) revealed Full scope actual cost is
+~480 LOC + bench gate + corpus NPZ migration:
+- Rust buffer ext for position_index + opp_reply_1 + opp_reply_2: ~250
+  LOC across storage / push / sample / persist / mod (+ tests)
+- Corpus NPZ format negotiation (existing pretrain rows carry only
+  ownership + winning_line; new fields default to zeros): ~50 LOC
+- Worker target generation (game_runner emits next-2 stones per row):
+  ~50 LOC Rust
+- Python heads + losses + trainer wiring: ~100 LOC
+- Tests + INV pin: ~50 LOC
+- Bench gate (mandatory per replay_buffer touch): ~$0.30 vast + ~$0.10
+  laptop wall
+
+This is significantly larger than the dispatcher's ~250 LOC framing.
+The 2-stone opp-reply implementation (4B-4) is the cost driver; the
+opp_reply fields nearly double policy-storage memory (+2.9 GB on 1M
+capacity buffer with v7full 362-action stride).
+
+**Executor decision: scale back to ply-to-end only (revised Lean).**
+Reasoning:
+- Operator approved Full assuming ~250 LOC; actual ~480 LOC overshoots
+  the implicit time budget.
+- ply-to-end alone tests the temporal-planning hypothesis at a fraction
+  of the cost (~80 LOC + bench gate).
+- If ply-to-end + 4B-impl-5 (sigma2 Huber + density bumps) materially
+  changes Track 4B sustained behavior, 2-stone opp-reply can be added
+  in Wave 5 as a follow-up.
+- If they don't, 2-stone opp-reply was likely wasted work anyway —
+  KataGo density hypothesis would be falsified.
+
+**Revised Wave 4 4B scope**:
+- 4B-impl-5: DONE (Huber sigma2 + density bumps)
+- 4B-impl-1: position_index buffer field only (drop opp_reply_1/2)
+- 4B-impl-3: ply-to-end head + loss + trainer wiring + tests
+- 4B-impl-2: SKIP (no opp_reply worker target generation)
+- 4B-impl-4: SKIP (no 2-stone opp-reply heads — DEFERRED to Wave 5+)
+- 4B-impl-6: Track 4B variant + verdict pre-reg
+- 4B-impl-7: Bench gate (mandatory)
+
+Operator may overrule before 4B-impl-1 lands.
