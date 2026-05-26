@@ -39,7 +39,10 @@ AUX_STRIDE = BOARD_SIZE * BOARD_SIZE
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _mk_buffer_return(n: int) -> tuple:
-    """Mock Rust buffer sample_batch return — HEXB v6: 8-plane states."""
+    """Mock Rust buffer sample_batch_with_pos return — 8-plane states + position_indices.
+
+    §S181-AUDIT Wave 4 4B-impl-3: 8-tuple now (added position_indices).
+    """
     return (
         np.zeros((n, 8,  19, 19), dtype=np.float16),
         np.zeros((n, 6,  19, 19), dtype=np.float16),
@@ -48,6 +51,7 @@ def _mk_buffer_return(n: int) -> tuple:
         np.ones( (n, 19, 19),     dtype=np.uint8),
         np.zeros((n, 19, 19),     dtype=np.uint8),
         np.ones(n,                dtype=np.uint8),
+        np.arange(n,              dtype=np.uint16),
     )
 
 
@@ -157,9 +161,9 @@ def test_augment_false_assemble_forwards_flag():
     n_self = 24
 
     pretrained = MagicMock()
-    pretrained.sample_batch = MagicMock(return_value=_mk_buffer_return(n_pre))
+    pretrained.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_pre))
     selfplay = MagicMock()
-    selfplay.sample_batch = MagicMock(return_value=_mk_buffer_return(n_self))
+    selfplay.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_self))
 
     bufs = allocate_batch_buffers(batch_size, N_ACTIONS)
     assemble_mixed_batch(
@@ -176,8 +180,8 @@ def test_augment_false_assemble_forwards_flag():
         augment=False,
     )
 
-    pretrained.sample_batch.assert_called_once_with(n_pre, False)
-    selfplay.sample_batch.assert_called_once_with(max(1, n_self), False)
+    pretrained.sample_batch_with_pos.assert_called_once_with(n_pre, False)
+    selfplay.sample_batch_with_pos.assert_called_once_with(max(1, n_self), False)
 
 
 # ── T4: assemble with real RecentBuffer ───────────────────────────────────────
@@ -195,9 +199,9 @@ def test_assemble_with_recent_buffer(augment: bool):
     n_uniform    = n_self - n_recent_req                         # 6
 
     pretrained = MagicMock()
-    pretrained.sample_batch = MagicMock(return_value=_mk_buffer_return(n_pre))
+    pretrained.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_pre))
     selfplay = MagicMock()
-    selfplay.sample_batch = MagicMock(return_value=_mk_buffer_return(n_uniform))
+    selfplay.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_uniform))
 
     buf, _ = _make_asymmetric_recent_buffer(n_recent_req + 5)
     bufs = allocate_batch_buffers(batch_size, N_ACTIONS)
@@ -229,8 +233,8 @@ def test_assemble_with_recent_buffer(augment: bool):
     )
 
     # corpus/selfplay flags
-    pretrained.sample_batch.assert_called_once_with(n_pre, augment)
-    selfplay.sample_batch.assert_called_once_with(n_uniform, augment)
+    pretrained.sample_batch_with_pos.assert_called_once_with(n_pre, augment)
+    selfplay.sample_batch_with_pos.assert_called_once_with(n_uniform, augment)
 
     # recent slice: compare to raw sample
     recent_slice = np.array(states_batch[n_pre:n_pre + n_recent_actual])

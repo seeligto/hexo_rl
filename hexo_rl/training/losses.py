@@ -195,6 +195,31 @@ def compute_uncertainty_loss(
     )
 
 
+def compute_ply_index_loss(
+    ply_pred: torch.Tensor,
+    position_indices: torch.Tensor,
+) -> torch.Tensor:
+    """Huber loss on normalized ply index.
+
+    §S181-AUDIT Wave 4 4B-impl-3. Forces the trunk to encode "where am I in
+    the game" temporal context — the KataGo aux density hypothesis applied
+    to game-time progress.
+
+    Args:
+        ply_pred:         (B, 1) prediction from ply_index_head, range [0, 1]
+                          via Sigmoid.
+        position_indices: (B,) per-row 0-based ply index from the replay buffer
+                          (uint16 or int).
+
+    Returns:
+        Scalar mean Huber loss with target = clamp(position_indices / 100, 0, 1).
+    """
+    target = (position_indices.float() / 100.0).clamp(0.0, 1.0).unsqueeze(1)
+    return torch.nn.functional.smooth_l1_loss(
+        ply_pred.float(), target, beta=1.0, reduction="mean",
+    )
+
+
 def compute_total_loss(
     policy_loss: torch.Tensor,
     value_loss: torch.Tensor,
@@ -210,8 +235,10 @@ def compute_total_loss(
     threat_weight: float = 0.0,
     chain_loss: Optional[torch.Tensor] = None,
     chain_weight: float = 0.0,
+    ply_index_loss: Optional[torch.Tensor] = None,
+    ply_index_weight: float = 0.0,
 ) -> torch.Tensor:
-    """Combine policy, value, auxiliary, entropy, uncertainty, ownership, threat, and chain losses."""
+    """Combine policy, value, aux, entropy, uncertainty, ownership, threat, chain, and ply-index losses."""
     total = policy_loss + value_loss
     if aux_loss is not None and aux_weight > 0.0:
         total = total + aux_weight * aux_loss
@@ -225,6 +252,8 @@ def compute_total_loss(
         total = total + threat_weight * threat_loss
     if chain_loss is not None and chain_weight > 0.0:
         total = total + chain_weight * chain_loss
+    if ply_index_loss is not None and ply_index_weight > 0.0:
+        total = total + ply_index_weight * ply_index_loss
     return total
 
 

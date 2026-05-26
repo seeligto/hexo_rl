@@ -118,6 +118,13 @@ threat_weight: 0.2        # weight for binary threat auxiliary head (winning-lin
 # Reverted to 1.0 post exp A/C. See TODO §95 for full ablation record.
 aux_chain_weight: 1.0
 
+# §S181-AUDIT Wave 4 4B-impl-3 — ply-index auxiliary head weight.
+# Predicts normalized 0-based ply index via Sigmoid; Huber loss against
+# clamp(position_index / 100, 0, 1). Forces the trunk to encode game-time
+# temporal context (KataGo aux density hypothesis applied to game progress).
+# Default 0.0 = head disabled. Wave 4 Track 4B variant flips to 0.1.
+ply_index_weight: 0.0
+
 # Experiment C ablation: zero planes 18-23 at inference+training time while keeping 24ch architecture.
 # Default false. Set true in configs/variants/gumbel_targets.yaml for Experiment C only.
 # Chain planes ARE stored in the replay buffer (computed at encode time by encode_state_to_buffer,

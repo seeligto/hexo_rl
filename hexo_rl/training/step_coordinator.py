@@ -622,6 +622,8 @@ class StepCoordinator:
                     # (bot rows have neutral aux pad — ownership=1 / wl=0).
                     n_pretrain=n_pre + n_bot,
                     n_recent=batch.n_recent_actual,
+                    # §S181-AUDIT Wave 4 4B-impl-3 — ply-index aux head feed.
+                    position_indices=batch.position_indices,
                 )
             else:
                 w_pre = 0.0

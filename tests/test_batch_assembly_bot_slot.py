@@ -32,7 +32,10 @@ N_ACTIONS: int = BOARD_SIZE * BOARD_SIZE + 1
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _mk_buffer_return(n: int, ifs_value: int = 1) -> tuple:
-    """Mock Rust buffer sample_batch return — 8-plane states, configurable ifs."""
+    """Mock Rust buffer sample_batch_with_pos return — 8-plane states, configurable ifs.
+
+    §S181-AUDIT Wave 4 4B-impl-3: 8-tuple now (added position_indices).
+    """
     return (
         np.zeros((n, 8,  BOARD_SIZE, BOARD_SIZE), dtype=np.float16),
         np.zeros((n, 6,  BOARD_SIZE, BOARD_SIZE), dtype=np.float16),
@@ -41,11 +44,15 @@ def _mk_buffer_return(n: int, ifs_value: int = 1) -> tuple:
         np.ones( (n, BOARD_SIZE, BOARD_SIZE),     dtype=np.uint8),
         np.zeros((n, BOARD_SIZE, BOARD_SIZE),     dtype=np.uint8),
         np.full(n, ifs_value,                     dtype=np.uint8),
+        np.arange(n,                              dtype=np.uint16),
     )
 
 
 def _mk_signed_buffer_return(n: int, marker: float) -> tuple:
-    """Marker-tagged buffer return so we can verify slot ordering byte-by-byte."""
+    """Marker-tagged buffer return so we can verify slot ordering byte-by-byte.
+
+    §S181-AUDIT Wave 4 4B-impl-3: 8-tuple now (added position_indices).
+    """
     states = np.full((n, 8, BOARD_SIZE, BOARD_SIZE), marker, dtype=np.float16)
     chain  = np.full((n, 6, BOARD_SIZE, BOARD_SIZE), marker, dtype=np.float16)
     pol    = np.full((n, N_ACTIONS), marker, dtype=np.float32)
@@ -53,7 +60,8 @@ def _mk_signed_buffer_return(n: int, marker: float) -> tuple:
     own    = np.full((n, BOARD_SIZE, BOARD_SIZE), 1, dtype=np.uint8)
     wl     = np.zeros((n, BOARD_SIZE, BOARD_SIZE), dtype=np.uint8)
     ifs    = np.zeros(n, dtype=np.uint8)  # zero so we can verify the override
-    return (states, chain, pol, out, own, wl, ifs)
+    pos    = np.arange(n, dtype=np.uint16)
+    return (states, chain, pol, out, own, wl, ifs, pos)
 
 
 # ── Cell A: load_bot_corpus_buffer back-compat ───────────────────────────────
@@ -108,9 +116,9 @@ def test_assemble_mixed_batch_no_bot_kwargs_equals_default():
     self_payload = _mk_signed_buffer_return(n_self, marker=2.0)
 
     pretrained = MagicMock()
-    pretrained.sample_batch = MagicMock(return_value=pre_payload)
+    pretrained.sample_batch_with_pos = MagicMock(return_value=pre_payload)
     selfplay = MagicMock()
-    selfplay.sample_batch = MagicMock(return_value=self_payload)
+    selfplay.sample_batch_with_pos = MagicMock(return_value=self_payload)
 
     bufs1 = allocate_batch_buffers(batch_size, N_ACTIONS)
     bufs2 = allocate_batch_buffers(batch_size, N_ACTIONS)
@@ -124,9 +132,9 @@ def test_assemble_mixed_batch_no_bot_kwargs_equals_default():
 
     # Re-mock so call counts reset
     pretrained2 = MagicMock()
-    pretrained2.sample_batch = MagicMock(return_value=pre_payload)
+    pretrained2.sample_batch_with_pos = MagicMock(return_value=pre_payload)
     selfplay2 = MagicMock()
-    selfplay2.sample_batch = MagicMock(return_value=self_payload)
+    selfplay2.sample_batch_with_pos = MagicMock(return_value=self_payload)
     res_explicit = assemble_mixed_batch(
         pretrained_buffer=pretrained2, buffer=selfplay2, recent_buffer=None,
         n_pre=n_pre, n_self=n_self, batch_size=batch_size,
@@ -151,12 +159,12 @@ def test_assemble_mixed_batch_bot_buffer_empty_falls_through():
     n_self = 24
 
     pretrained = MagicMock()
-    pretrained.sample_batch = MagicMock(return_value=_mk_buffer_return(n_pre))
+    pretrained.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_pre))
     selfplay = MagicMock()
-    selfplay.sample_batch = MagicMock(return_value=_mk_buffer_return(n_self))
+    selfplay.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_self))
     empty_bot = MagicMock()
     empty_bot.size = 0
-    empty_bot.sample_batch = MagicMock()  # MUST NOT be called
+    empty_bot.sample_batch_with_pos = MagicMock()  # MUST NOT be called
 
     bufs = allocate_batch_buffers(batch_size, N_ACTIONS)
     result = assemble_mixed_batch(
@@ -166,7 +174,7 @@ def test_assemble_mixed_batch_bot_buffer_empty_falls_through():
         bufs=bufs, train_step=0, augment=False,
         bot_buffer=empty_bot, n_bot=8,
     )
-    empty_bot.sample_batch.assert_not_called()
+    empty_bot.sample_batch_with_pos.assert_not_called()
     assert result.states.shape[0] == batch_size
 
 
@@ -180,13 +188,13 @@ def test_assemble_mixed_batch_bot_rows_is_full_search_one():
     n_self = 20
 
     pretrained = MagicMock()
-    pretrained.sample_batch = MagicMock(return_value=_mk_buffer_return(n_pre, ifs_value=1))
+    pretrained.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_pre, ifs_value=1))
     selfplay = MagicMock()
-    selfplay.sample_batch = MagicMock(return_value=_mk_buffer_return(n_self, ifs_value=1))
+    selfplay.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_self, ifs_value=1))
     # Bot returns ifs=0 — implementation MUST override to 1
     bot_buf = MagicMock()
     bot_buf.size = 1000
-    bot_buf.sample_batch = MagicMock(return_value=_mk_buffer_return(n_bot, ifs_value=0))
+    bot_buf.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_bot, ifs_value=0))
 
     bufs = allocate_batch_buffers(batch_size, N_ACTIONS)
     result = assemble_mixed_batch(
@@ -196,7 +204,7 @@ def test_assemble_mixed_batch_bot_rows_is_full_search_one():
         bufs=bufs, train_step=0, augment=False,
         bot_buffer=bot_buf, n_bot=n_bot,
     )
-    bot_buf.sample_batch.assert_called_once_with(n_bot, False)
+    bot_buf.sample_batch_with_pos.assert_called_once_with(n_bot, False)
     # Bot slot is [n_pre : n_pre+n_bot] in batch ordering
     assert np.all(result.is_full_search[n_pre:n_pre + n_bot] == 1), (
         "bot rows must have is_full_search=1 (one-hot SealBot targets are full-search-equivalent)"
@@ -213,12 +221,12 @@ def test_assemble_mixed_batch_bot_slot_ordering():
     n_self = 20
 
     pretrained = MagicMock()
-    pretrained.sample_batch = MagicMock(return_value=_mk_signed_buffer_return(n_pre, marker=1.0))
+    pretrained.sample_batch_with_pos = MagicMock(return_value=_mk_signed_buffer_return(n_pre, marker=1.0))
     selfplay = MagicMock()
-    selfplay.sample_batch = MagicMock(return_value=_mk_signed_buffer_return(n_self, marker=3.0))
+    selfplay.sample_batch_with_pos = MagicMock(return_value=_mk_signed_buffer_return(n_self, marker=3.0))
     bot_buf = MagicMock()
     bot_buf.size = 1000
-    bot_buf.sample_batch = MagicMock(return_value=_mk_signed_buffer_return(n_bot, marker=2.0))
+    bot_buf.sample_batch_with_pos = MagicMock(return_value=_mk_signed_buffer_return(n_bot, marker=2.0))
 
     bufs = allocate_batch_buffers(batch_size, N_ACTIONS)
     result = assemble_mixed_batch(
@@ -245,12 +253,12 @@ def test_assemble_mixed_batch_size_mismatch_with_bot():
     n_self = 14  # 6+4+14 = 24
 
     pretrained = MagicMock()
-    pretrained.sample_batch = MagicMock(return_value=_mk_buffer_return(n_pre, ifs_value=1))
+    pretrained.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_pre, ifs_value=1))
     selfplay = MagicMock()
-    selfplay.sample_batch = MagicMock(return_value=_mk_buffer_return(n_self, ifs_value=1))
+    selfplay.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_self, ifs_value=1))
     bot_buf = MagicMock()
     bot_buf.size = 1000
-    bot_buf.sample_batch = MagicMock(return_value=_mk_buffer_return(n_bot, ifs_value=0))
+    bot_buf.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_bot, ifs_value=0))
 
     bufs = allocate_batch_buffers(batch_size_cfg, N_ACTIONS)
     result = assemble_mixed_batch(
