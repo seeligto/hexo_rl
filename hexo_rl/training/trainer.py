@@ -960,7 +960,7 @@ class Trainer:
             with torch.no_grad():
                 avg_sigma = sigma2.float().sqrt().mean().item()
             result["uncertainty_loss"] = unc_loss.item()
-            result["avg_sigma"] = avg_sigma
+            result["avg_sigma"] = avg_sigma   # sqrt(predicted squared err) since Wave 4 4B-impl-5
         if use_ownership and own_loss is not None:
             result["ownership_loss"] = own_loss.item()
         if use_threat and thr_loss is not None:

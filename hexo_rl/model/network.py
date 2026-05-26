@@ -559,9 +559,11 @@ class HexTacToeNet(nn.Module):
         self.value_fc1 = nn.Linear(2 * filters, 256)
         self.value_fc2 = nn.Linear(256, 1)
 
-        # Value uncertainty head (training only — diagnostic σ², never used in MCTS)
-        # Reads from the same trunk features as the value head.
-        # Softplus ensures σ² > 0.
+        # Value uncertainty head (training only — never used in MCTS).
+        # Reads from the same trunk features as the value head. Softplus
+        # ensures positive output. §S181-AUDIT Wave 4 4B-impl-5: trained
+        # with Huber-on-squared-error (compute_uncertainty_loss), so the
+        # output is "predicted squared error of value" rather than variance.
         self.value_var = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
