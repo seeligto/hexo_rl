@@ -1,0 +1,194 @@
+# configs/variants/v7full_baseline_minus_bot.yaml
+# §S181-AUDIT Wave 4 Track 4A — subtract-the-variable probe.
+#
+# Hypothesis. Bot mixing (introduced §S178 to "cure" §S175's colony attractor)
+# is the LOAD-BEARING failure variable. Strip bot-side levers from the Wave 3
+# main recipe while keeping every other Wave 2-3 hygiene lever (EMA, entropy,
+# PR-B, hard-abort gate, dual-bank canary). Tests whether v7full anchor +
+# Wave 2-3 hygiene MINUS bot mix MINUS refresh hook MINUS per-class temp
+# sustains.
+#
+# Comparison frame. §172 Phase B B2 = v7full anchor + v7full encoding + NO
+# bot mix + NO Wave 2-3 hygiene → STALLED at 5% wr_sealbot across 4 consec
+# evals (15k/20k/25k/30k). Track 4A adds Wave 2-3 hygiene on top of §172 B2:
+# does that fix it? Reference baseline: v7full bootstrap eval 17.4% n=500
+# (NOT a sustained-run number — it's the bootstrap's own SealBot eval).
+#
+# Parent recipe. v7_wave3_main.yaml (§S181 Wave 3 main). Three DELTAs:
+#   DELTA 1: mixing.bot_batch_share: 0.30 → 0.0
+#   DELTA 2: mixing.bot_corpus_refresh.enabled: true → false
+#   DELTA 3: per_class_target_temperature.enabled: true → false
+# Two structural changes:
+#   STRUCT 1: iterations target 100_000 → 60_000 (Wave 4 budget)
+#   STRUCT 2: monitoring.wr_* thresholds reverted to STRICT (pre-Wave-3-widening)
+#             — Track 4A's hypothesis is cleaner, so the hard-abort gate
+#             returns to its original strict pre-registration. If bot mix
+#             is the variable, Track 4A should NEVER approach those thresholds.
+#
+# Preserved hygiene (Wave 2-3 levers retained):
+#   - EMA-of-weights (decay 0.999, update_every 10) — Wave 2 33% peak baseline
+#   - entropy_reg_weight 0.005 (root default, PR-B) — anti-collapse pressure
+#   - eta_min 5e-4 (root default, PR-B) — anti-loss-of-plasticity
+#   - build_param_groups no-decay split (trainer.py:170, PR-B) — auto-default
+#   - dual-bank V_spread canary (alt V_spread + T3 V_spread) — alert-rules
+#   - hard SealBot WR gate L50/Wave3-A/B/C — STRICT thresholds (see below)
+#   - L34 anchor↑/sealbot↓ divergence alarm — manual-eval per 9f4220c
+#
+# Bot-side levers SUBTRACTED (the experiment):
+#   - bot mixing (bot_batch_share)
+#   - bot corpus refresh hook (L51)
+#   - per-class target temperature pretrain-scope (L52)
+#
+# Pre-registered verdicts (LITERAL L13, dispatcher §S181 Wave 4 Stage 2):
+#   W4A-A — rolling-mean SealBot WR ≥ 15% sustained steps 20k-50k →
+#           BOT MIX IS THE LOAD-BEARING FAILURE VARIABLE. Track 4B becomes
+#           optional polish. §S150-style recipe + Wave 2-3 hygiene is the
+#           real-run answer. Phase 4.5 UNBLOCKED.
+#   W4A-B — peak ≥ 15% but late decline (sustained band fails) →
+#           bot mix not load-bearing alone; EMA + entropy insufficient
+#           damping. Combine with multi-aux (Track 4B).
+#   W4A-C — reaches §S180b-style colony attractor (WR < 5% by step 40k) →
+#           bot mix NOT the variable — colony lives in trainer/loop
+#           fundamentals. Proceed to Track 4B as fix attempt.
+#   W4A-D — reaches §S175-style early crash (WR < 5% by step 20k) →
+#           SEVERE: even cleaner recipe fails fast. Surface to operator;
+#           major mechanism re-aggregation needed.
+#   W4A-E — other anomaly (gradient explosion, encoding mismatch, OOM) →
+#           STOP, debug.
+#
+# Cost. ~$2.50 / ~10h on vast 5080 (60k steps × ~25 steps/min observed in
+# Wave 3 smoke).
+#
+# Hard cap discipline (Wave 4 budget $7). Operator override permitted ONLY
+# IF: (a) wr_sealbot rolling mean rising in last 10k steps, OR (b) novel
+# signal not seen in prior waves. NO override on monotonic decline.
+#
+# Launch:
+#   tmux new -d -s s181_w4a 'cd /workspace/hexo_rl && .venv/bin/python \
+#     scripts/train.py --checkpoint checkpoints/bootstrap_model_v7full.pt \
+#     --variant v7full_baseline_minus_bot --iterations 60000 2>&1 \
+#     | tee logs/s181_w4a_$(date +%Y%m%d_%H%M).log'
+
+# ── encoding (v7full anchor lineage) ─────────────────────────────────────────
+encoding: v7full
+
+# ── base training knobs (inherited from v7_wave3_main; §S180b knobs preserved) ──
+lr: 2e-3
+total_steps: 60_000
+eta_min: 5e-4
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
+
+  # DELTA 1 — NO bot corpus mix. Track 4A's load-bearing experimental subtraction.
+  bot_corpus_path: null
+  bot_batch_share: 0.0
+
+  # DELTA 2 — bot corpus refresh hook DISABLED (no bot corpus to refresh).
+  bot_corpus_refresh:
+    enabled: false
+
+draw_value: -0.1
+ply_cap_value: 0.0
+
+# §S180b knob 2 — uniform game-length weights (preserved, not bot-side).
+game_length_weights:
+  thresholds: [10, 25]
+  weights: [1.0, 1.0]
+  default_weight: 1.0
+
+# §S180b knob 3 — completed Q-values (preserved, not bot-side).
+selfplay:
+  completed_q_values: true
+  c_visit: 50.0
+  c_scale: 1.0
+  n_workers: 18
+  inference_batch_size: 64
+  n_simulations: 400
+  max_game_moves: 150
+  random_opening_plies: 1
+  rotation_enabled: true
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.5
+    n_sims_quick: 100
+    n_sims_full: 600
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 300_000,   capacity: 500_000}
+  - {step: 1_000_000, capacity: 1_000_000}
+
+gating:
+  bootstrap_floor:
+    enabled: true
+    min_winrate: 0.45
+
+# Cadence. 30 ckpts × 2000 steps, 12 evals × 5000 steps over 60k.
+checkpoint_interval: 2000
+eval_interval: 5000
+eval_temperature: 0.5
+eval_random_opening_plies: 0
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v7full.pt"
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+hard_abort:
+  grad_norm: 10.0
+  loss_nan: true
+  stride5_p90: 60
+  row_max_p90: 50
+  colony_ext_frac_max: 0.40
+  draw_rate_warn: 0.70
+  pct_at_cap_warn: 0.30
+
+telemetry:
+  emit_bot_corpus_metrics: false
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── Wave 2-3 hygiene PRESERVED ──────────────────────────────────────────────
+
+# EMA-of-weights — Wave 2 33% peak baseline; preserved for Track 4A.
+# Inference + eval + promotion read EMA via Trainer.inference_state_dict.
+ema:
+  enabled: true
+  decay: 0.999
+  update_every: 10
+
+# DELTA 3 — per-class target temperature DISABLED.
+# Wave 3 used pretrain-only scope (L52) which delayed but did not prevent
+# the collapse. Track 4A tests whether the lever is necessary at all when
+# bot mix is also removed.
+per_class_target_temperature:
+  enabled: false
+
+# Hard SealBot WR gate L50 — STRICT thresholds (pre-Wave-3-widening).
+# Wave 3 widened Trigger A 0.10→0.05 and Trigger B 0.5→0.25 mid-run for
+# plateau observation. Track 4A's hypothesis is cleaner: if bot mix is
+# the variable, the gate should NEVER fire. Strict thresholds catch any
+# Wave-2-style 33%→16% collapse fast, and the W4A-A/B/C/D verdicts above
+# bound trajectory behaviour anyway.
+monitoring:
+  wr_hard_abort_enabled: true
+  wr_rolling_threshold: 0.10
+  wr_rolling_min_step: 20000
+  wr_rolling_consecutive_evals: 2
+  wr_collapse_from_peak_ratio: 0.5
+  wr_collapse_min_step: 25000
+  wr_early_death_threshold: 0.05
+  wr_early_death_min_step: 15000
