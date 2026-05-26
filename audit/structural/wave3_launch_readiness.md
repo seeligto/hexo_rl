@@ -58,7 +58,7 @@ L34 divergence in any eval.
 
 ## Pre-registered hard-abort triggers (REAL_RUN_RECIPE v2 §5)
 
-Wired in `hexo_rl/monitoring/alert_rules.py:check_sealbot_wr_hard_abort`
+**Automated (wired)** in `hexo_rl/monitoring/alert_rules.py:check_sealbot_wr_hard_abort`
 + `hexo_rl/training/step_coordinator.py` post-eval-drain:
 
 - Trigger A: rolling-mean SealBot WR < 10% for 2 consecutive evals AFTER
@@ -67,11 +67,17 @@ Wired in `hexo_rl/monitoring/alert_rules.py:check_sealbot_wr_hard_abort`
   collapse — would have caught Wave 2 at step 30k via 11% < 33% × 0.5 =
   16.5%)
 - Trigger C: current WR < 5% past step 15k (§S180b-style early death)
-- L34 anchor↑/sealbot↓ divergence (tightened to 3 consecutive instances
-  vs Wave 2's 5)
 - GPU NaN/Inf gradients (existing)
 - Standard §S180b hard-aborts retained (`grad_norm > 10` ×5 consec,
   `loss_nan`, `colony_ext_frac > 0.40`, `stride5_p90 > 60`)
+
+**Manual eval-by-eval check** (operator-evaluated post-hoc; NOT wired
+as automated trigger per REAL_RUN_RECIPE v2 §5 "calibration at
+implementation time" deferral):
+
+- L34 anchor↑/sealbot↓ divergence (tightened to 3 consecutive instances
+  vs Wave 2's 5) — operator inspects eval-round trajectory each round
+  and surfaces if 3 consecutive instances detected
 
 Operator override `--ignore-hard-abort` exists for debug only.
 
