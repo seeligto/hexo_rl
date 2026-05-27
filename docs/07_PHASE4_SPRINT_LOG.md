@@ -3671,6 +3671,187 @@ yaml widening + this sprint-log entry.
 
 ---
 
+## §S181-AUDIT Wave 4 — subtract-the-variable + multi-aux suite
+
+**Status.** Both Track 4A (subtract bot mix) and Track 4B (multi-aux
+density on Wave 3 lever stack) ran sustained sessions on vast 5080
+and SIGINTed early when verdict patterns landed. Track 4A peaked
+at step 5k 19% and collapsed to 11% by step 10k (W4A-B verdict
+LITERAL). Track 4B peaked at step 10k 23% and collapsed to 11% by
+step 15k (W4B-B verdict LITERAL). Both reached ~11% wr_sealbot by
+step 12-15k via different paths — bot mix removal accelerated the
+collapse (Track 4A), multi-aux density delayed it ~5k steps but
+didn't prevent it (Track 4B). **Colony-attractor mechanism lives
+downstream of all config + density levers tested in Waves 1-4.**
+Wave 5 strategic reckoning required: value-target propagation
+(TD-λ / n-step), WDL 3-class head, or game-theoretic regularization.
+**Phase 4.5 remains BLOCKED.**
+
+### Run identity
+
+| field | Track 4A | Track 4B |
+|---|---|---|
+| branch | `phase4.5/s181_wave4_subtract` 5b7f85e | `phase4.5/s181_wave4_multiaux` 0523147 |
+| variant | `v7full_baseline_minus_bot` | `v7full_wave4_multiaux_w4ac` |
+| anchor | `bootstrap_model_v7full.pt` SHA `568d8a33…` | (same) |
+| iter target / actual | 60 000 / ~12 000 (SIGINT) | 60 000 / ~15 500 (SIGINT) |
+| run_id | `1b8c649a…` | `8e4568c6…` |
+| wall | ~7 h | ~9.5 h |
+| spend | ~$3 | ~$3 |
+
+Total Wave 4 spend ~$6 (under $7 cap).
+
+### Track 4A subtract-the-variable verdict (W4A-B LITERAL)
+
+Three DELTAs vs Wave 3 main: `bot_batch_share 0.30→0.0`,
+`bot_corpus_refresh.enabled true→false`, `per_class_target_temperature.enabled
+true→false`. Preserved Wave 2-3 hygiene (EMA + entropy 0.005 +
+eta_min 5e-4 + PR-B param-group + L50 hard-abort STRICT thresholds).
+
+| step | wr_sb | wr_anchor | wr_best | col_anchor | promoted | elo |
+|---:|---:|---:|---:|---:|:---:|---:|
+| 5 000 | **19.0%** | 57.0% | 59.0% | 40 (70%) | ✗ | 448 |
+| 10 000 | **11.0%** | 53.0% | 68.0% | 40 (75%) | ✓ | 382 |
+
+Δ 5k→10k: wr_sb -8pp, wr_anchor -4pp, wr_best +9pp, elo -66. BOTH
+anchor and sealbot DECLINING (broader value-head degradation, NOT
+classic L34 anchor↑/sealbot↓). Colony share 70→75% creeping. Audit
+doc `audit/structural/wave4_track_a_subtract.md`.
+
+### Track 4B multi-aux density verdict (W4B-B LITERAL)
+
+Parent v7_wave3_main (KEEPS bot mix + refresh hook + per-class temp).
+Multi-aux density bumps in training.yaml: sigma2 Huber 0.1 (NLL
+formulation diverged at σ²→0; switched to Huber-on-squared-error per
+4B-impl-5 d80de72), ownership 0.1→0.2, threat 0.1→0.2, ply_index
+0.0→0.1 (NEW 4B-impl-3 head).
+
+| step | wr_sb | wr_anchor | wr_best | col_sb | col_anchor | promoted | elo |
+|---:|---:|---:|---:|---:|---:|:---:|---:|
+| 5 000 | 20.0% | 64.0% | 62.0% | 4 (20%) | 50 (78%) | ✓ | 465 |
+| 10 000 | **23.0%** | 62.0% | 61.0% | 3 (13%) | 41 (66%) | ✓ | 362 |
+| 15 000 | **11.0%** | (~62.5 partial) | — | 5 (45%) | — | — | — |
+
+Δ 5k→10k: wr_sb +3pp, col composition decreasing (78→66 anchor,
+20→13 sb) — initially looked W4B-A-trending. Δ 10k→15k: wr_sb -12pp,
+col_sb composition jumped 13→45% (homogenization confirmed). Audit
+doc `audit/structural/wave4_track_b_sustained.md`.
+
+### Cross-run shape comparison
+
+| step | Wave 3 wr_sb | Track 4A wr_sb | Track 4B wr_sb |
+|---:|---:|---:|---:|
+| 5 000 | 16% | 19% | **20%** |
+| 10 000 | **25%** (peak) | 11% (collapsed) | 23% (peak) |
+| 15 000 | 18% | (SIGINT step 12k) | 11% (collapsed) |
+
+Track 4B's peak (23%) ≈ Wave 3's peak (25%). Track 4A's peak (19%)
+is the only data point where "no bot mix" started ahead before
+accelerating its own decline. Multi-aux density configurations
+shift WHEN the collapse happens, not WHETHER it happens.
+
+### Lessons (L56-L60 banked)
+
+**L56 (Wave 4 Track 4A).** Bot mix is NOT the load-bearing failure
+variable in the colony-attractor mechanism. Removing it produces a
+FASTER decline than keeping it (Track 4A step-10k 11% vs Wave 3
+step-10k 25%). The §S178+ hypothesis ("bot mix introduces the
+colony") is inverted or non-monotonic: bot mix may DELAY or attenuate
+the colony pattern; removing it accelerates the mechanism.
+
+**L57 (Wave 4 Track 4A).** Track 4A peaked at step 5k (19%) not step
+10k like Wave 3 (25%). Without bot mix, the trainer's
+`training_steps_per_game=2.0` rate forces heavy reuse of early
+selfplay buffer, causing premature exposure to bootstrap distribution
+drift. Recipe sensitivity to selfplay supply rate.
+
+**L58 (Wave 4 Track 4B).** Multi-aux density (sigma2 Huber +
+ownership 0.2 + threat 0.2 + ply_index 0.1) DELAYS the colony
+attractor by ~5k steps but does NOT prevent it. Peak shifts from
+Wave 3 step 10k 25% to Track 4B step 10k 23% (essentially same
+magnitude). The KataGo aux-density hypothesis is FALSIFIED for
+HeXO's colony attractor.
+
+**L59 (Wave 4 close).** The colony attractor mechanism is INSENSITIVE
+to: bot mix presence/absence, refresh hook, per-class target
+temperature, multi-aux density, EMA/entropy/PR-B hygiene. The
+mechanism lives DOWNSTREAM of all currently-tested levers — in the
+training objective itself (value head + target propagation), trainer
+step structure, or MCTS+selfplay interaction. Wave 5 must operate
+at this boundary.
+
+**L60 (Wave 4 Track 4B).** Colony composition (col_sb%, col_anchor%)
+trajectory SHAPE predicts the W4B verdict before raw wr_sb does.
+Track 4B step 5→10k showed composition DECREASING (positive signal),
+but step 15k composition shot up (sb 13→45%) AS the wr_sb decline was
+confirmed. Watch composition deltas as leading indicator of pattern
+homogenization. (Per operator's colony-framing memo
+`feedback_colony_is_meta_not_kill_signal`: colony presence is not a
+kill signal; colony GROWTH + L34 + stride5 spike is.)
+
+### Multi-aux infrastructure SHIPPED (regardless of verdict)
+
+Even though the science hypothesis was falsified, the Wave 4 implementation
+work is permanently useful and landed on master:
+
+- `4B-impl-5` d80de72: sigma2 Huber-on-squared-error formulation
+  (replaces Gaussian NLL that diverged at σ²→0); density bumps for
+  ownership/threat (0.1→0.2); uncertainty re-enabled (0.0→0.1)
+- `4B-impl-1` 4fee9d1: `position_index: u16` field in
+  `ReplayBuffer`; HEXB v8 wire format with v7 backward-compat load;
+  `sample_batch_with_pos` 8-tuple facade (legacy `sample_batch` 7-tuple
+  byte-identical preserved); INV20 contract extended; bench gate PASS
+  (n=5 on laptop, +25.79% buffer_push_per_s after hot-path cleanup)
+- `4B-impl-3` f3509ce: `ply_index_head` 2-layer MLP + `compute_ply_index_loss`
+  Huber on `clamp(position_index / 100, 0, 1)` + end-to-end plumbing
+  through `BatchAssemblyResult` → `step_coordinator` →
+  `train_step_from_tensors`
+- `7c80a2d`: `load_state_dict_strict` benign-missing-keys allowlist
+  for `ply_index_head.*` (extensible pattern for future aux heads)
+- Tests: 7 new uncertainty loss tests + 7 new ply_index loss tests +
+  buffer round-trip + INV20 facade pin extension; 1714+ pytest +
+  191 cargo tests green
+
+### Wave 5 strategic reckoning (Task 5 pre-write)
+
+Per dispatcher: "if BOTH Track 4A and Track 4B colony, strategic
+reckoning is forced." Both colonyed within 15k steps. Surfaces NOT
+yet tested:
+
+1. **Value-target propagation**: terminal z → all positions may be
+   fundamentally wrong for HeXO. Try n-step bootstrap or TD-λ.
+2. **WDL 3-class softmax** value head (replaces tanh scalar).
+3. **Game-theoretic regularization**: explicit anti-colony loss term
+   penalizing homogeneous-pattern composition.
+
+Wave 5 scope estimate: ~3 weeks dev + ~$20 vast. Major commitment.
+Operator decision pending; parked for now per "Stage 6 close + park
+for Wave 5 design" route.
+
+### Sprint-log header pre-written
+
+`## §S181-AUDIT Wave 5 — strategic reckoning + structural target rework`
+
+### Falsified Hypotheses Register additions
+
+- "Bot mix is the load-bearing failure variable in the colony
+  attractor mechanism" → FALSIFIED 2026-05-27 by Track 4A (W4A-B).
+  Removing bot mix produced FASTER decline.
+- "Multi-aux density (KataGo-style diverse aux signal) prevents
+  single-attractor lock" → FALSIFIED 2026-05-27 by Track 4B (W4B-B).
+  Delayed colony attractor ~5k steps but did not prevent it.
+
+### Forensics
+
+- Branches: `phase4.5/s181_wave4_subtract` (Track 4A), `phase4.5/s181_wave4_multiaux` (Track 4B impl + audit docs)
+- Audit docs: `audit/structural/wave4_track_a_subtract.md`,
+  `audit/structural/wave4_track_b_sustained.md`,
+  `audit/structural/wave4_track_b_multiaux_design.md` (pre-impl design + scope reduction history)
+- Stage 6 REVIEW: opus 4.7 fresh-context subagent dispatched 2026-05-27, verdict GREEN
+- Commits: 5b7f85e (Track 4A variant) + d80de72/4fee9d1/f3509ce/6e75bfd/5fea1ce/3f0d9cd/7c80a2d/37b216d/0523147 (Track 4B impl + audit chain)
+
+---
+
 ## §S182 — perf wave: legal_moves_set capacity fix MERGED
 
 *DISCRIMINATOR: §S182 = Rust-perf wave merge (this entry). The §S178 bot-mix
