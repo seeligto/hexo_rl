@@ -1,0 +1,186 @@
+# configs/variants/v7full_wave4_multiaux_w4ac.yaml
+# §S181-AUDIT Wave 4 Track 4B — W4A-C routing (Track 4A colony-attractor pattern).
+#
+# Authored 2026-05-27 after Track 4A step 5k (19%) → step 10k (11%) confirmed
+# early decline = Wave-2/3-style colony attractor reproduces despite "no bot
+# mix" subtraction. Hypothesis: bot mix is NOT the load-bearing variable;
+# multi-aux density is the next discriminator.
+#
+# Parent recipe. v7_wave3_main.yaml (NOT v7full_baseline_minus_bot — that
+# was the W4A-B-routed variant; this is the W4A-C route per dispatcher).
+# Preserves Wave 3 lever stack:
+#   - bot_batch_share 0.30 (bot mix ON)
+#   - bot_corpus_refresh ON (L51)
+#   - per_class_target_temperature on pretrain+bot (L52)
+# Then adds:
+#   - ply_index_weight 0.1 (Wave 4 4B-impl-3 head)
+# Multi-aux density bumps already in training.yaml root defaults (Wave 4
+# 4B-impl-5):
+#   - uncertainty_weight 0.1 (Huber-on-squared-error sigma2)
+#   - ownership_weight 0.2 (bumped from 0.1)
+#   - threat_weight 0.2 (bumped from 0.1)
+#
+# Anchor. checkpoints/bootstrap_model_v7full.pt (SHA 568d8a33…d61e8e98).
+#
+# Pre-registered verdicts (LITERAL L13):
+#   W4B-A — rolling-mean SealBot WR ≥ 20% sustained 30k-50k AND ply_index_loss
+#           converges → Phase 4.5 UNBLOCKED. Promote final ckpt.
+#   W4B-B — peak ≥ 20% but late decline → tighter aux weights OR refresh hook
+#           adjustment. Wave 5 design.
+#   W4B-C — colony attractor end-state → multi-aux NOT the answer. Strategic
+#           reckoning Wave 5: WDL OR target-propagation revisit.
+#   W4B-D — anomaly → STOP, debug.
+#
+# Iterations. 60k (matches Wave 3 main run length minus the truncation point;
+# may be SIGINTed at step 50k if verdict pattern visible).
+#
+# Cost. ~$5-8 vast 5080 at ~30 steps/min combined eval+train rate.
+#
+# Wave 4 budget hard cap $7 already exceeded by Track 4A (~$2 actual after
+# SIGINT at step 10k-12k). Track 4B cost is committed to per operator
+# decision at Track 4A SIGINT.
+#
+# Launch:
+#   tmux new -d -s s181_w4b 'cd /workspace/hexo_rl && .venv/bin/python \
+#     scripts/train.py --checkpoint checkpoints/bootstrap_model_v7full.pt \
+#     --variant v7full_wave4_multiaux_w4ac --iterations 60000 2>&1 \
+#     | tee logs/s181_w4b_$(date +%Y%m%d_%H%M).log'
+
+# ── encoding (v7full lineage) ────────────────────────────────────────────────
+encoding: v7full
+
+# ── base training knobs (mirror Wave 3 main) ─────────────────────────────────
+lr: 2e-3
+total_steps: 60_000
+eta_min: 5e-4
+
+# ── Wave 3 bot-mix stack PRESERVED ──────────────────────────────────────────
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6.npz"
+  bot_corpus_path: "data/bot_corpus_s178_sealbot_vs_v6.npz"
+  bot_batch_share: 0.30
+
+  bot_corpus_refresh:
+    enabled: true
+    interval_steps: 10_000
+    n_games: 200
+    opponent_model: ema
+    replace_strategy: rolling_window
+    cooldown_steps: 10_000
+    max_regens: 10
+    min_wr_delta: 0.0
+    regen_command:
+      script: scripts/generate_bot_corpus.py
+      args:
+        max_plies: 150
+        random_opening_plies: 4
+        think_seconds: 0.5
+
+draw_value: -0.1
+ply_cap_value: 0.0
+
+game_length_weights:
+  thresholds: [10, 25]
+  weights: [1.0, 1.0]
+  default_weight: 1.0
+
+selfplay:
+  completed_q_values: true
+  c_visit: 50.0
+  c_scale: 1.0
+  n_workers: 18
+  inference_batch_size: 64
+  n_simulations: 400
+  max_game_moves: 150
+  random_opening_plies: 1
+  rotation_enabled: true
+  legal_move_radius_jitter: true
+  playout_cap:
+    fast_prob: 0.0
+    full_search_prob: 0.5
+    n_sims_quick: 100
+    n_sims_full: 600
+    temperature_threshold_compound_moves: 0
+    temp_min: 0.5
+    zoi_enabled: true
+    zoi_lookback: 16
+    zoi_margin: 5
+
+buffer_schedule:
+  - {step: 0,         capacity: 250_000}
+  - {step: 300_000,   capacity: 500_000}
+  - {step: 1_000_000, capacity: 1_000_000}
+
+gating:
+  bootstrap_floor:
+    enabled: true
+    min_winrate: 0.45
+
+checkpoint_interval: 2000
+eval_interval: 5000
+eval_temperature: 0.5
+eval_random_opening_plies: 0
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v7full.pt"
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+hard_abort:
+  grad_norm: 10.0
+  loss_nan: true
+  stride5_p90: 60
+  row_max_p90: 50
+  colony_ext_frac_max: 0.40
+  draw_rate_warn: 0.70
+  pct_at_cap_warn: 0.30
+
+telemetry:
+  emit_bot_corpus_metrics: true
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── Wave 2-3 hygiene + per-class temp PRESERVED ─────────────────────────────
+
+ema:
+  enabled: true
+  decay: 0.999
+  update_every: 10
+
+# Per-class temp ENABLED (Wave 3 L52 scope: pretrain+bot only).
+per_class_target_temperature:
+  enabled: true
+  colony_temperature: 1.5
+  extension_temperature: 1.0
+  neither_temperature: 1.0
+  apply_to_pretrain: true
+  apply_to_selfplay: false
+
+# Hard SealBot WR gate L50 — Wave 3 WIDENED thresholds.
+monitoring:
+  wr_hard_abort_enabled: true
+  wr_rolling_threshold: 0.05
+  wr_rolling_min_step: 20000
+  wr_rolling_consecutive_evals: 2
+  wr_collapse_from_peak_ratio: 0.25
+  wr_collapse_min_step: 25000
+  wr_early_death_threshold: 0.05
+  wr_early_death_min_step: 15000
+
+# ── Wave 4 4B-impl-3 — ply-index aux head ENABLED ───────────────────────────
+ply_index_weight: 0.1
+
+# Multi-aux density already at KataGo-range total in training.yaml root
+# defaults (set by 4B-impl-5 commit d80de72):
+#   aux_opp_reply_weight: 0.15  (policy-aux regularizer)
+#   aux_chain_weight: 1.0       (Q13 chain planes; /6-normalized → effective ~0.17)
+#   uncertainty_weight: 0.1     (Huber-on-squared-error sigma2)
+#   ownership_weight: 0.2       (bumped from 0.1)
+#   threat_weight: 0.2          (bumped from 0.1)
+#   ply_index_weight: 0.1       (this variant ENABLES)

@@ -51,8 +51,8 @@ use std::sync::atomic::AtomicU64;
 use crate::encoding::RegistrySpec;
 use sym_tables::{SymTables, WeightSchedule, sym_tables_for};
 
-/// Return tuple of `sample_batch` / `sample_batch_impl` — seven NumPy arrays
-/// bound to the GIL lifetime. Fields: `(states, chain, policies, outcomes,
+/// Return tuple of `sample_batch` (legacy 7-tuple — preserved for byte-compat
+/// with all existing Python callers): `(states, chain, policies, outcomes,
 /// ownership, winning_line, is_full_search)`.
 pub(crate) type SampleBatchOut<'py> = (
     Bound<'py, PyArray4<f16>>,
@@ -62,6 +62,19 @@ pub(crate) type SampleBatchOut<'py> = (
     Bound<'py, PyArray3<u8>>,
     Bound<'py, PyArray3<u8>>,
     Bound<'py, PyArray1<u8>>,
+);
+
+/// §S181-AUDIT Wave 4 4B-impl-1 — extended 8-tuple form, adds per-row
+/// `position_indices` for the ply-to-end aux head. Emitted by `sample_batch_with_pos`.
+pub(crate) type SampleBatchWithPosOut<'py> = (
+    Bound<'py, PyArray4<f16>>,
+    Bound<'py, PyArray4<f16>>,
+    Bound<'py, PyArray2<f32>>,
+    Bound<'py, PyArray1<f32>>,
+    Bound<'py, PyArray3<u8>>,
+    Bound<'py, PyArray3<u8>>,
+    Bound<'py, PyArray1<u8>>,
+    Bound<'py, PyArray1<u16>>,
 );
 
 // ── ReplayBuffer ──────────────────────────────────────────────────────────
@@ -104,6 +117,13 @@ pub struct ReplayBuffer {
     /// 0 = quick-search (value/chain/aux losses only). Flat [capacity].
     /// Defaults to 1 so corpus and legacy positions always contribute to policy.
     pub(crate) is_full_search: Vec<u8>,
+
+    /// §S181-AUDIT Wave 4 4B-impl-1 — per-position ply index within its game.
+    /// 0-based; flat [capacity]. Drives the ply-to-end auxiliary head
+    /// (target = (game_length - position_index) / 100 trained via Huber).
+    /// Defaults to 0 for corpus rows that lack per-position metadata
+    /// (auxiliary loss masks pretrain rows so dummy values don't contribute).
+    pub(crate) position_indices: Vec<u16>,
 
     /// Static sym tables for this buffer's encoding. Shared across all buffers
     /// of the same encoding via `sym_tables_for()`. §173 A4.
@@ -160,6 +180,7 @@ impl ReplayBuffer {
             ownership:      vec![1u8; capacity * spec.aux_stride()],  // 1 = empty default
             winning_line:   vec![0u8; capacity * spec.aux_stride()],
             is_full_search: vec![1u8; capacity],  // 1 = full-search default (legacy compat)
+            position_indices: vec![0u16; capacity],  // §S181 Wave 4 4B-impl-1
             sym_tables: sym_tables_for(spec),
             weight_schedule: WeightSchedule::uniform(),
             next_game_id: 0,
@@ -179,10 +200,11 @@ impl ReplayBuffer {
     }
 
     /// Store a single (state, chain_planes, policy, outcome, ownership, winning_line) sample.
-    // KEEP — PyO3 kwarg surface mirrors 9 user-tunable params; INV20 contract
-    // pins facade signature byte-identical pre/post Wave 7 Batch B P79 refactor.
+    // KEEP — PyO3 kwarg surface mirrors 9 user-tunable params (INV20). §S181 Wave 4
+    // 4B-impl-1 added `position_index` as an additive kwarg (default 0) — old callers
+    // continue to work without modification.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (state, chain_planes, policy, outcome, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = true))]
+    #[pyo3(signature = (state, chain_planes, policy, outcome, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = true, position_index = 0))]
     pub fn push(
         &mut self,
         state:          PyReadonlyArray3<f16>,
@@ -194,18 +216,20 @@ impl ReplayBuffer {
         game_id:        i64,
         game_length:    u16,
         is_full_search: bool,
+        position_index: u16,
     ) -> PyResult<()> {
         self.push_impl(push_config::PushSingleConfig {
             state, chain_planes, policy, outcome, ownership, winning_line,
-            game_id, game_length, is_full_search,
+            game_id, game_length, is_full_search, position_index,
         })
     }
 
     /// Store all positions from a completed game efficiently.
-    // KEEP — PyO3 kwarg surface mirrors 9 user-tunable params; INV20 contract
-    // pins facade signature byte-identical pre/post Wave 7 Batch B P79 refactor.
+    // KEEP — PyO3 kwarg surface mirrors 9 user-tunable params (INV20). §S181 Wave 4
+    // 4B-impl-1 added `position_indices` as an additive Option kwarg (default
+    // None → fills 0..N-1 in game order) — old callers continue to work.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (states, chain_planes, policies, outcomes, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = None))]
+    #[pyo3(signature = (states, chain_planes, policies, outcomes, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = None, position_indices = None))]
     pub fn push_game(
         &mut self,
         states:         PyReadonlyArray4<f16>,
@@ -217,10 +241,11 @@ impl ReplayBuffer {
         game_id:        i64,
         game_length:    u16,
         is_full_search: Option<PyReadonlyArray1<u8>>,
+        position_indices: Option<PyReadonlyArray1<u16>>,
     ) -> PyResult<()> {
         self.push_game_impl(push_config::PushGameConfig {
             states, chain_planes, policies, outcomes, ownership, winning_line,
-            game_id, game_length, is_full_search,
+            game_id, game_length, is_full_search, position_indices,
         })
     }
 
@@ -233,9 +258,11 @@ impl ReplayBuffer {
     ///
     /// Per-row `game_lengths` must be pre-computed compound-move counts
     /// (i.e. `(plies + 1) / 2`); value 0 → default weight 1.0.
-    // KEEP — PyO3 kwarg surface mirrors 8 user-tunable params; INV20 contract
-    // pins facade signature byte-identical pre/post Wave 7 Batch B P79 refactor.
+    // KEEP — PyO3 kwarg surface mirrors 8 user-tunable params (INV20). §S181 Wave 4
+    // 4B-impl-1 added `position_indices` as an additive Option kwarg — default
+    // None preserves legacy callers (fills zeros).
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (states, chain_planes, policies, outcomes, ownership, winning_line, game_lengths, is_full_search, position_indices = None))]
     pub fn push_many(
         &mut self,
         states:         PyReadonlyArray4<f16>,
@@ -246,10 +273,11 @@ impl ReplayBuffer {
         winning_line:   PyReadonlyArray2<u8>,
         game_lengths:   PyReadonlyArray1<u16>,
         is_full_search: PyReadonlyArray1<u8>,
+        position_indices: Option<PyReadonlyArray1<u16>>,
     ) -> PyResult<()> {
         self.push_many_impl(push_config::PushManyConfig {
             states, chain_planes, policies, outcomes, ownership, winning_line,
-            game_lengths, is_full_search,
+            game_lengths, is_full_search, position_indices,
         })
     }
 
@@ -271,6 +299,19 @@ impl ReplayBuffer {
         augment:    bool,
     ) -> PyResult<SampleBatchOut<'py>> {
         self.sample_batch_impl(py, batch_size, augment)
+    }
+
+    /// §S181-AUDIT Wave 4 4B-impl-1 — extended `sample_batch` returning 8-tuple
+    /// with per-row `position_indices` (uint16, shape (batch_size,)) appended.
+    /// Used by the ply-to-end auxiliary head training path. Existing callers
+    /// continue to use the 7-tuple `sample_batch` (byte-identical to pre-Wave-4).
+    pub fn sample_batch_with_pos<'py>(
+        &mut self,
+        py:        Python<'py>,
+        batch_size: usize,
+        augment:    bool,
+    ) -> PyResult<SampleBatchWithPosOut<'py>> {
+        self.sample_batch_with_pos_impl(py, batch_size, augment)
     }
 
     /// Grow the buffer to `new_capacity` positions, preserving all existing data.
@@ -356,6 +397,7 @@ impl ReplayBuffer {
         self.ownership[a..a + aux_stride].fill(1);
         self.winning_line[a..a + aux_stride].fill(0);
         self.is_full_search[slot] = is_full_search as u8;
+        self.position_indices[slot] = 0;
         self.outcomes[slot] = outcome;
         self.game_ids[slot] = -1;
         self.weights[slot] = if game_length == 0 {

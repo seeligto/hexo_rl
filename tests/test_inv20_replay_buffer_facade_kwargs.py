@@ -34,41 +34,44 @@ from engine import ReplayBuffer
 # `Ellipsis`, so `game_id`'s default of `-1` is only verified by behavior in
 # Test 2, not by introspected value.
 EXPECTED_PUSH_PARAMS = [
-    ("self",           False),
-    ("state",          False),
-    ("chain_planes",   False),
-    ("policy",         False),
-    ("outcome",        False),
-    ("ownership",      False),
-    ("winning_line",   False),
-    ("game_id",        True),   # default −1 (shown as Ellipsis via PyO3)
-    ("game_length",    True),   # default 0
-    ("is_full_search", True),   # default True
+    ("self",            False),
+    ("state",           False),
+    ("chain_planes",    False),
+    ("policy",          False),
+    ("outcome",         False),
+    ("ownership",       False),
+    ("winning_line",    False),
+    ("game_id",         True),   # default −1 (shown as Ellipsis via PyO3)
+    ("game_length",     True),   # default 0
+    ("is_full_search",  True),   # default True
+    ("position_index",  True),   # §S181 Wave 4 4B-impl-1: default 0
 ]
 
 EXPECTED_PUSH_GAME_PARAMS = [
-    ("self",           False),
-    ("states",         False),
-    ("chain_planes",   False),
-    ("policies",       False),
-    ("outcomes",       False),
-    ("ownership",      False),
-    ("winning_line",   False),
-    ("game_id",        True),   # default −1
-    ("game_length",    True),   # default 0
-    ("is_full_search", True),   # default None
+    ("self",             False),
+    ("states",           False),
+    ("chain_planes",     False),
+    ("policies",         False),
+    ("outcomes",         False),
+    ("ownership",        False),
+    ("winning_line",     False),
+    ("game_id",          True),   # default −1
+    ("game_length",      True),   # default 0
+    ("is_full_search",   True),   # default None
+    ("position_indices", True),   # §S181 Wave 4 4B-impl-1: default None
 ]
 
 EXPECTED_PUSH_MANY_PARAMS = [
-    ("self",           False),
-    ("states",         False),
-    ("chain_planes",   False),
-    ("policies",       False),
-    ("outcomes",       False),
-    ("ownership",      False),
-    ("winning_line",   False),
-    ("game_lengths",   False),
-    ("is_full_search", False),
+    ("self",             False),
+    ("states",           False),
+    ("chain_planes",     False),
+    ("policies",         False),
+    ("outcomes",         False),
+    ("ownership",        False),
+    ("winning_line",     False),
+    ("game_lengths",     False),
+    ("is_full_search",   False),
+    ("position_indices", True),   # §S181 Wave 4 4B-impl-1: default None
 ]
 
 

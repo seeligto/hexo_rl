@@ -166,29 +166,58 @@ def compute_uncertainty_loss(
     z_targets: torch.Tensor,
     value_detached: torch.Tensor,
 ) -> torch.Tensor:
-    """Gaussian NLL loss for the value uncertainty head.
+    """Huber loss for the value uncertainty head — predicts squared value error.
 
-    Gradient flows only through σ² — ``value_detached`` must be .detach()'d by
-    the caller so that this head does not influence the value head's gradients.
+    §S181-AUDIT Wave 4 4B-impl-5: switched from Gaussian NLL to Huber-on-
+    squared-error per dispatcher §2D. Gaussian NLL diverged as σ²→0 even
+    with clamp(min=1e-6) — total_loss spiked to ~83k for σ²≈6e-8 inputs
+    (FP16 subnormal floor), and gradient through the clamp was zero so the
+    head could not recover. Huber is bounded everywhere and the head simply
+    learns to predict the magnitude of the value head's error.
+
+    The head's output is still produced by a Softplus (positive), now
+    interpreted as "predicted squared error of value" rather than "variance
+    of value distribution". Gradient flows only through the head parameters
+    — caller must pass detached value tensor.
 
     Args:
-        sigma2:         (B, 1) predicted variance from value_var head (> 0).
+        sigma2:         (B, 1) predicted squared error (> 0 via Softplus).
         z_targets:      (B,) game outcomes in {-1, 0, +1}.
         value_detached: (B, 1) value head output with gradients stopped.
 
     Returns:
-        Scalar mean Gaussian NLL.
+        Scalar mean Huber loss.
     """
-    z = z_targets.unsqueeze(1)          # (B, 1)
-    # Promote to FP32 and clamp before log/divide to prevent FP16 subnormal
-    # blow-up (sigma2 near 6e-8 → inf in division → NaN in loss).
-    # clamp(min=1e-6): log(1e-6) ≈ -13.8, well within representable range;
-    # σ ≈ 0.001 is a physically meaningful minimum uncertainty.
-    sigma2_fp32 = sigma2.float().clamp(min=1e-6)
-    log_sigma2_fp32 = torch.log(sigma2_fp32)
-    z_fp32 = z.float()
-    v_det_fp32 = value_detached.float()
-    return 0.5 * (log_sigma2_fp32 + (z_fp32 - v_det_fp32).pow(2) / sigma2_fp32).mean()
+    z = z_targets.float().unsqueeze(1)
+    target = (z - value_detached.float()).pow(2)
+    return torch.nn.functional.smooth_l1_loss(
+        sigma2.float(), target, beta=1.0, reduction="mean",
+    )
+
+
+def compute_ply_index_loss(
+    ply_pred: torch.Tensor,
+    position_indices: torch.Tensor,
+) -> torch.Tensor:
+    """Huber loss on normalized ply index.
+
+    §S181-AUDIT Wave 4 4B-impl-3. Forces the trunk to encode "where am I in
+    the game" temporal context — the KataGo aux density hypothesis applied
+    to game-time progress.
+
+    Args:
+        ply_pred:         (B, 1) prediction from ply_index_head, range [0, 1]
+                          via Sigmoid.
+        position_indices: (B,) per-row 0-based ply index from the replay buffer
+                          (uint16 or int).
+
+    Returns:
+        Scalar mean Huber loss with target = clamp(position_indices / 100, 0, 1).
+    """
+    target = (position_indices.float() / 100.0).clamp(0.0, 1.0).unsqueeze(1)
+    return torch.nn.functional.smooth_l1_loss(
+        ply_pred.float(), target, beta=1.0, reduction="mean",
+    )
 
 
 def compute_total_loss(
@@ -206,8 +235,10 @@ def compute_total_loss(
     threat_weight: float = 0.0,
     chain_loss: Optional[torch.Tensor] = None,
     chain_weight: float = 0.0,
+    ply_index_loss: Optional[torch.Tensor] = None,
+    ply_index_weight: float = 0.0,
 ) -> torch.Tensor:
-    """Combine policy, value, auxiliary, entropy, uncertainty, ownership, threat, and chain losses."""
+    """Combine policy, value, aux, entropy, uncertainty, ownership, threat, chain, and ply-index losses."""
     total = policy_loss + value_loss
     if aux_loss is not None and aux_weight > 0.0:
         total = total + aux_weight * aux_loss
@@ -221,6 +252,8 @@ def compute_total_loss(
         total = total + threat_weight * threat_loss
     if chain_loss is not None and chain_weight > 0.0:
         total = total + chain_weight * chain_loss
+    if ply_index_loss is not None and ply_index_weight > 0.0:
+        total = total + ply_index_weight * ply_index_loss
     return total
 
 

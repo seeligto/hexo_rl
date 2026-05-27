@@ -51,14 +51,15 @@ fn test_push_single_config_field_shape() {
         game_id:        i64,
         game_length:    u16,
         is_full_search: bool,
+        position_index: u16,
     ) -> PushSingleConfig<'py> {
         PushSingleConfig {
             state, chain_planes, policy, outcome, ownership, winning_line,
-            game_id, game_length, is_full_search,
+            game_id, game_length, is_full_search, position_index,
         }
     }
     // Erase unused-fn warning by reading the fn pointer.
-    let _: fn(_, _, _, _, _, _, _, _, _) -> _ = _shape_check;
+    let _: fn(_, _, _, _, _, _, _, _, _, _) -> _ = _shape_check;
 }
 
 /// Test 2 — `PushGameConfig` field shape.
@@ -81,13 +82,14 @@ fn test_push_game_config_field_shape() {
         game_id:        i64,
         game_length:    u16,
         is_full_search: Option<PyReadonlyArray1<'py, u8>>,
+        position_indices: Option<PyReadonlyArray1<'py, u16>>,
     ) -> PushGameConfig<'py> {
         PushGameConfig {
             states, chain_planes, policies, outcomes, ownership, winning_line,
-            game_id, game_length, is_full_search,
+            game_id, game_length, is_full_search, position_indices,
         }
     }
-    let _: fn(_, _, _, _, _, _, _, _, _) -> _ = _shape_check;
+    let _: fn(_, _, _, _, _, _, _, _, _, _) -> _ = _shape_check;
 }
 
 /// Test 3 — `PushManyConfig` field shape.
@@ -109,11 +111,12 @@ fn test_push_many_config_field_shape() {
         winning_line:   PyReadonlyArray2<'py, u8>,
         game_lengths:   PyReadonlyArray1<'py, u16>,
         is_full_search: PyReadonlyArray1<'py, u8>,
+        position_indices: Option<PyReadonlyArray1<'py, u16>>,
     ) -> PushManyConfig<'py> {
         PushManyConfig {
             states, chain_planes, policies, outcomes, ownership, winning_line,
-            game_lengths, is_full_search,
+            game_lengths, is_full_search, position_indices,
         }
     }
-    let _: fn(_, _, _, _, _, _, _, _) -> _ = _shape_check;
+    let _: fn(_, _, _, _, _, _, _, _, _) -> _ = _shape_check;
 }

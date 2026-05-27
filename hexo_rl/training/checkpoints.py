@@ -373,6 +373,20 @@ def load_state_dict_strict(
         else:
             real_unexpected.append(k)
 
+    # §S181 Wave 4 4B-impl-3 — ply_index_head is a new aux head; pre-Wave-4
+    # checkpoints lack its keys but the head initializes from scratch fine.
+    # Filter missing keys that belong to known new aux heads.
+    new_aux_prefixes = ("ply_index_head.",)
+    benign_missing = [k for k in missing_keys if k.startswith(new_aux_prefixes)]
+    real_missing = [k for k in missing_keys if not k.startswith(new_aux_prefixes)]
+    if benign_missing:
+        log.info(
+            "checkpoint_new_aux_head_init",
+            count=len(benign_missing),
+            examples=benign_missing[:3],
+        )
+    missing_keys = real_missing
+
     if missing_keys or real_unexpected:
         log.error(
             "checkpoint_key_mismatch",

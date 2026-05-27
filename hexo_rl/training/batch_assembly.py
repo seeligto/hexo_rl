@@ -40,10 +40,14 @@ log = structlog.get_logger(__name__)
 class BatchAssemblyResult:
     """Result of :func:`assemble_mixed_batch`.
 
-    Seven arrays (views into pre-allocated ``BatchBuffers`` in steady state,
+    Eight arrays (views into pre-allocated ``BatchBuffers`` in steady state,
     freshly allocated during warm-up / size-mismatch fallback) plus the actual
     number of rows drawn from ``recent_buffer`` so callers can slice
     ``[corpus | recent | uniform_self]``.
+
+    §S181-AUDIT Wave 4 4B-impl-3 added ``position_indices`` for the ply-index
+    aux head. None when ply_index_weight == 0 (head disabled) to avoid the
+    extra sample_batch_with_pos call.
 
     Frozen for safety; attribute access is perf-parity with tuple unpack.
     """
@@ -55,6 +59,7 @@ class BatchAssemblyResult:
     winning_line: np.ndarray
     is_full_search: np.ndarray
     n_recent_actual: int
+    position_indices: Optional[np.ndarray] = None
 
 
 # ── Pre-allocated batch buffers ───────────────────────────────────────────────
@@ -596,24 +601,24 @@ def assemble_mixed_batch(
         ``n_pre + n_bot + n_recent_actual`` to slice. Corpus AND bot positions
         always have ``is_full_search=1``.
     """
-    s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre = pretrained_buffer.sample_batch(n_pre, augment)
+    s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre, pos_pre = pretrained_buffer.sample_batch_with_pos(n_pre, augment)
 
     # §178 bot slot — optional fourth piece (gates on size>0 like steady-state fallback).
     use_bot = bot_buffer is not None and n_bot > 0 and bot_buffer.size > 0
     if use_bot:
-        s_b, c_b, p_b, o_b, own_b, wl_b, _ifs_b = bot_buffer.sample_batch(n_bot, augment)
+        s_b, c_b, p_b, o_b, own_b, wl_b, _ifs_b, pos_b = bot_buffer.sample_batch_with_pos(n_bot, augment)
         # Override is_full_search → 1 for all bot rows (one-hot SealBot targets are
         # full-search-equivalent; design §4.1).
         ifs_b = np.ones(len(s_b), dtype=np.uint8)
     else:
         n_bot = 0  # collapse to 0 so downstream slicing arithmetic is correct
-        s_b = c_b = p_b = o_b = own_b = wl_b = ifs_b = None
+        s_b = c_b = p_b = o_b = own_b = wl_b = ifs_b = pos_b = None
 
     if batch_size != batch_size_cfg:
         # Edge case: runtime batch size diverged from pre-allocated shape.
         if train_step > 100:
             log.warning("mixed_batch_size_mismatch", batch_size=batch_size, expected=batch_size_cfg)
-        s_self, c_self, p_self, o_self, own_self, wl_self, ifs_self = _sample_selfplay(
+        s_self, c_self, p_self, o_self, own_self, wl_self, ifs_self, pos_self = _sample_selfplay(
             buffer, recent_buffer, n_self, recency_weight, augment
         )
         # n_recent unknown in this mismatch path — report 0 (caller disables 3-way split).
@@ -627,6 +632,7 @@ def assemble_mixed_batch(
                 winning_line=np.concatenate([wl_pre, wl_b, wl_self], axis=0),
                 is_full_search=np.concatenate([ifs_pre, ifs_b, ifs_self], axis=0),
                 n_recent_actual=0,
+                position_indices=np.concatenate([pos_pre, pos_b, pos_self], axis=0),
             )
         return BatchAssemblyResult(
             states=np.concatenate([s_pre, s_self], axis=0),
@@ -637,6 +643,7 @@ def assemble_mixed_batch(
             winning_line=np.concatenate([wl_pre, wl_self], axis=0),
             is_full_search=np.concatenate([ifs_pre, ifs_self], axis=0),
             n_recent_actual=0,
+            position_indices=np.concatenate([pos_pre, pos_self], axis=0),
         )
 
     # ── Normal path: try in-place fill into bufs ──────────────────────────────
@@ -649,7 +656,7 @@ def assemble_mixed_batch(
 
     bot_piece: Optional[tuple[Any, ...]] = None
     if use_bot:
-        bot_piece = (s_b, c_b, p_b, o_b, own_b, wl_b, ifs_b)
+        bot_piece = (s_b, c_b, p_b, o_b, own_b, wl_b, ifs_b, pos_b)
 
     n_recent_actual = 0
     if use_recent:
@@ -662,20 +669,24 @@ def assemble_mixed_batch(
         _bs = int(s_r.shape[-1])
         own_r = own_r_flat.reshape(-1, _bs, _bs)
         wl_r  = wl_r_flat.reshape(-1, _bs, _bs)
-        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), augment)
+        # Recent buffer lacks per-row position_indices — fill zeros (ply_index head
+        # masking can ignore these rows if needed; default behaviour treats them as
+        # "early-game" target).
+        pos_r = np.zeros(len(s_r), dtype=np.uint16)
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u = buffer.sample_batch_with_pos(max(1, n_uniform), augment)
         n_recent_actual = len(s_r)
-        pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre)]
+        pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre, pos_pre)]
         if bot_piece is not None:
             pieces.append(bot_piece)
-        pieces.extend([(s_r, c_r, p_r, o_r, own_r, wl_r, ifs_r),
-                       (s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u)])
+        pieces.extend([(s_r, c_r, p_r, o_r, own_r, wl_r, ifs_r, pos_r),
+                       (s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u)])
         n_avail = n_pre + (n_bot if use_bot else 0) + len(s_r) + len(s_u)
     else:
-        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_self), augment)
-        pieces = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre)]
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u = buffer.sample_batch_with_pos(max(1, n_self), augment)
+        pieces = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre, pos_pre)]
         if bot_piece is not None:
             pieces.append(bot_piece)
-        pieces.append((s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u))
+        pieces.append((s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u))
         n_avail = n_pre + (n_bot if use_bot else 0) + len(s_u)
 
     if n_avail < batch_size:
@@ -689,6 +700,7 @@ def assemble_mixed_batch(
             winning_line=np.concatenate([p[5] for p in pieces], axis=0),
             is_full_search=np.concatenate([p[6] for p in pieces], axis=0),
             n_recent_actual=n_recent_actual,
+            position_indices=np.concatenate([p[7] for p in pieces], axis=0),
         )
 
     # Steady-state: in-place copy, no heap allocation.
@@ -696,8 +708,11 @@ def assemble_mixed_batch(
         log.info("buffer_warmup_ended", step=train_step, n_available=n_avail, batch_size=batch_size)
         bufs.warmup_active = False
 
+    # Concatenate position_indices for return (small u16 array; not in bufs).
+    out_pos = np.concatenate([p[7] for p in pieces], axis=0)
+
     offset = 0
-    for s, c, p, o, own, wl, ifs in pieces:
+    for s, c, p, o, own, wl, ifs, _pos in pieces:
         n = len(s)
         np.copyto(bufs.states[offset:offset + n],          s)
         np.copyto(bufs.chain_planes[offset:offset + n],    c)
@@ -717,6 +732,7 @@ def assemble_mixed_batch(
         winning_line=bufs.winning_line,
         is_full_search=bufs.is_full_search,
         n_recent_actual=n_recent_actual,
+        position_indices=out_pos,
     )
 
 
@@ -726,8 +742,12 @@ def _sample_selfplay(
     n_self: int,
     recency_weight: float,
     augment: bool = True,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Sample self-play rows, blending recent + uniform when recency_weight > 0."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Sample self-play rows, blending recent + uniform when recency_weight > 0.
+
+    §S181-AUDIT Wave 4 4B-impl-3 — 8-tuple now (added position_indices); recent
+    buffer rows fill zeros since they lack per-row ply tracking.
+    """
     if (recent_buffer is not None and recent_buffer.size > 0
             and recency_weight > 0.0 and n_self > 1):
         n_r = max(1, int(round(n_self * recency_weight)))
@@ -739,7 +759,8 @@ def _sample_selfplay(
         _bs = int(s_r.shape[-1])
         own_r = own_r_flat.reshape(-1, _bs, _bs)
         wl_r  = wl_r_flat.reshape(-1, _bs, _bs)
-        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_u), augment)
+        pos_r = np.zeros(len(s_r), dtype=np.uint16)
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u = buffer.sample_batch_with_pos(max(1, n_u), augment)
         return (
             np.concatenate([s_r, s_u], axis=0),
             np.concatenate([c_r, c_u], axis=0),
@@ -748,5 +769,6 @@ def _sample_selfplay(
             np.concatenate([own_r, own_u], axis=0),
             np.concatenate([wl_r, wl_u], axis=0),
             np.concatenate([ifs_r, ifs_u], axis=0),
+            np.concatenate([pos_r, pos_u], axis=0),
         )
-    return buffer.sample_batch(max(1, n_self), augment)
+    return buffer.sample_batch_with_pos(max(1, n_self), augment)

@@ -136,8 +136,8 @@ def test_hextactoenet_canvas_realness_forward_and_backward() -> None:
     loss = log_p.sum() + value.sum() + opp_reply.sum()
     loss.backward()
     # Skip heads that aren't part of the (log_p, value, opp_reply) path
-    # (uncertainty, ownership, threat, chain — all gated off here).
-    skip_prefixes = ("value_var.", "ownership_head.", "threat_head.", "chain_head.")
+    # (uncertainty, ownership, threat, chain, ply_index — all gated off here).
+    skip_prefixes = ("value_var.", "ownership_head.", "threat_head.", "chain_head.", "ply_index_head.")
     for name, p in m.named_parameters():
         if any(name.startswith(s) for s in skip_prefixes):
             continue

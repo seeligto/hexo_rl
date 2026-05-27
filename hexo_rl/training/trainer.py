@@ -40,7 +40,7 @@ from hexo_rl.utils.device import best_device
 from hexo_rl.training.aux_decode import decode_ownership, decode_winning_line, mask_aux_rows
 from hexo_rl.training.losses import (
     compute_policy_loss, compute_kl_policy_loss, compute_value_loss,
-    compute_aux_loss, compute_total_loss, compute_uncertainty_loss,
+    compute_aux_loss, compute_ply_index_loss, compute_total_loss, compute_uncertainty_loss,
     compute_chain_loss, fp16_backward_step,
 )
 from hexo_rl.training.checkpoints import (
@@ -390,6 +390,7 @@ class Trainer:
         _t_sample_start = time.perf_counter() if _perf else 0.0
 
         n_recent = 0
+        position_indices: Optional[np.ndarray] = None
         if recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0:
             n_recent = max(1, int(round(batch_size * recency_weight)))
             n_uniform = batch_size - n_recent
@@ -398,7 +399,9 @@ class Trainer:
             _bs = int(math.isqrt(own_r.shape[1]))
             own_r = own_r.reshape(-1, _bs, _bs)
             wl_r  = wl_r.reshape(-1, _bs, _bs)
-            s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u = buffer.sample_batch(max(1, n_uniform), augment)
+            # §S181-AUDIT Wave 4 4B-impl-3 — recent_buffer lacks ply index; fill zeros.
+            pos_r = np.zeros(len(s_r), dtype=np.uint16)
+            s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u = buffer.sample_batch_with_pos(max(1, n_uniform), augment)
             states          = np.concatenate([s_r, s_u],     axis=0)
             chain_planes    = np.concatenate([c_r, c_u],     axis=0)
             policies        = np.concatenate([p_r, p_u],     axis=0)
@@ -406,9 +409,10 @@ class Trainer:
             ownership       = np.concatenate([own_r, own_u], axis=0)
             winning_line    = np.concatenate([wl_r, wl_u],   axis=0)
             is_full_search  = np.concatenate([ifs_r, ifs_u], axis=0)
+            position_indices = np.concatenate([pos_r, pos_u], axis=0)
         else:
-            states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search = \
-                buffer.sample_batch(batch_size, augment)
+            states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search, position_indices = \
+                buffer.sample_batch_with_pos(batch_size, augment)
 
         if _perf:
             log.info(
@@ -427,6 +431,7 @@ class Trainer:
             is_full_search=is_full_search,
             n_pretrain=0,
             n_recent=n_recent,
+            position_indices=position_indices,
         )
 
     def train_step_from_tensors(
@@ -440,6 +445,7 @@ class Trainer:
         is_full_search: Optional[Any] = None,
         n_pretrain: int = 0,
         n_recent: int = 0,
+        position_indices: Optional[Any] = None,
     ) -> Dict[str, float]:
         """Perform one gradient update from pre-built numpy arrays.
 
@@ -467,7 +473,8 @@ class Trainer:
                                      threat_targets=threat_targets,
                                      is_full_search=is_full_search,
                                      n_pretrain=n_pretrain,
-                                     n_recent=n_recent)
+                                     n_recent=n_recent,
+                                     position_indices=position_indices)
 
     def _train_on_batch(
         self,
@@ -480,6 +487,7 @@ class Trainer:
         is_full_search: Optional[Any] = None,
         n_pretrain: int = 0,
         n_recent: int = 0,
+        position_indices: Optional[Any] = None,
     ) -> Dict[str, float]:
         """Core training step: forward, loss, backward, optimizer step."""
         _perf = self._perf_timing
@@ -491,6 +499,7 @@ class Trainer:
         ownership_weight   = float(self.config.get("ownership_weight", 0.0))
         threat_weight      = float(self.config.get("threat_weight", 0.0))
         chain_weight       = float(self.config.get("aux_chain_weight", 0.0))
+        ply_index_weight   = float(self.config.get("ply_index_weight", 0.0))
 
         # Move to device. With FP16/autocast, keep float16 states for the mixed-
         # precision path; without it, upcast to float32 to match model weights.
@@ -578,6 +587,7 @@ class Trainer:
             use_aux         = aux_weight > 0.0
             use_uncertainty = uncertainty_weight > 0.0
             use_chain       = chain_weight > 0.0
+            use_ply_index   = ply_index_weight > 0.0 and position_indices is not None
 
             fwd_result = self.model(
                 states_t,
@@ -586,8 +596,9 @@ class Trainer:
                 ownership=use_ownership,
                 threat=use_threat,
                 chain=use_chain,
+                ply_index=use_ply_index,
             )
-            # Unpack in order: log_policy, value, v_logit, [opp_reply], [sigma2], [own_pred], [thr_pred], [chain_pred]
+            # Unpack in order: log_policy, value, v_logit, [opp_reply], [sigma2], [own_pred], [thr_pred], [chain_pred], [ply_pred]
             log_policy, value, v_logit = fwd_result[0], fwd_result[1], fwd_result[2]
             _idx = 3
             opp_reply = fwd_result[_idx] if use_aux else None
@@ -599,6 +610,8 @@ class Trainer:
             thr_pred = fwd_result[_idx] if use_threat else None
             if use_threat: _idx += 1
             chain_pred = fwd_result[_idx] if use_chain else None
+            if use_chain: _idx += 1
+            ply_pred = fwd_result[_idx] if use_ply_index else None
 
             policy_valid = policies_t.sum(dim=1) > 1e-6
             use_kl = bool(self.config.get("completed_q_values", False))
@@ -659,6 +672,11 @@ class Trainer:
                 chain_target = torch.from_numpy(chain_planes).to(self.device).float()
                 chain_loss = compute_chain_loss(chain_pred, chain_target)
 
+            ply_index_loss = None
+            if use_ply_index and ply_pred is not None and position_indices is not None:
+                pos_idx_t = torch.from_numpy(np.asarray(position_indices)).to(self.device)
+                ply_index_loss = compute_ply_index_loss(ply_pred, pos_idx_t)
+
             loss = compute_total_loss(
                 policy_loss, value_loss,
                 opp_reply_loss, aux_weight,
@@ -667,6 +685,7 @@ class Trainer:
                 own_loss, ownership_weight,
                 thr_loss, threat_weight,
                 chain_loss, chain_weight,
+                ply_index_loss, ply_index_weight,
             )
 
         if _perf:
@@ -842,6 +861,7 @@ class Trainer:
             use_ownership=use_ownership, own_loss=own_loss,
             use_threat=use_threat, thr_loss=thr_loss,
             use_chain=use_chain, chain_loss=chain_loss,
+            use_ply_index=use_ply_index, ply_index_loss=ply_index_loss,
             batch_n=batch_n, n_pretrain=n_pretrain,
         )
 
@@ -946,7 +966,9 @@ class Trainer:
         use_ownership: bool, own_loss: Optional[torch.Tensor],
         use_threat: bool, thr_loss: Optional[torch.Tensor],
         use_chain: bool, chain_loss: Optional[torch.Tensor],
-        batch_n: int, n_pretrain: int,
+        use_ply_index: bool = False,
+        ply_index_loss: Optional[torch.Tensor] = None,
+        batch_n: int = 0, n_pretrain: int = 0,
     ) -> None:
         """Append conditional aux/uncertainty/ownership/threat/chain loss keys
         to the result dict. Mutates ``result`` in place; returns None.
@@ -960,13 +982,15 @@ class Trainer:
             with torch.no_grad():
                 avg_sigma = sigma2.float().sqrt().mean().item()
             result["uncertainty_loss"] = unc_loss.item()
-            result["avg_sigma"] = avg_sigma
+            result["avg_sigma"] = avg_sigma   # sqrt(predicted squared err) since Wave 4 4B-impl-5
         if use_ownership and own_loss is not None:
             result["ownership_loss"] = own_loss.item()
         if use_threat and thr_loss is not None:
             result["threat_loss"] = thr_loss.item()
         if use_chain and chain_loss is not None:
             result["chain_loss"] = chain_loss.item()
+        if use_ply_index and ply_index_loss is not None:
+            result["ply_index_loss"] = ply_index_loss.item()
         if use_ownership or use_threat:
             result["aux_loss_rows"] = max(0, batch_n - n_pretrain)
 

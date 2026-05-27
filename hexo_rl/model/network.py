@@ -559,9 +559,11 @@ class HexTacToeNet(nn.Module):
         self.value_fc1 = nn.Linear(2 * filters, 256)
         self.value_fc2 = nn.Linear(256, 1)
 
-        # Value uncertainty head (training only — diagnostic σ², never used in MCTS)
-        # Reads from the same trunk features as the value head.
-        # Softplus ensures σ² > 0.
+        # Value uncertainty head (training only — never used in MCTS).
+        # Reads from the same trunk features as the value head. Softplus
+        # ensures positive output. §S181-AUDIT Wave 4 4B-impl-5: trained
+        # with Huber-on-squared-error (compute_uncertainty_loss), so the
+        # output is "predicted squared error of value" rather than variance.
         self.value_var = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
@@ -590,6 +592,20 @@ class HexTacToeNet(nn.Module):
         # target is an input slice (not future information like KataGo's ownership),
         # so realistic uplift is smaller (~1.1–1.3× tactical sharpening).
         self.chain_head = nn.Conv2d(filters, 6, kernel_size=1)
+
+        # §S181-AUDIT Wave 4 4B-impl-3 — ply index head (training only).
+        # Predicts position_index normalized to [0, 1] (clamped at 100 plies).
+        # Forces the trunk to encode "where am I in the game" temporal context
+        # — the KataGo aux density hypothesis applied to game-time progress.
+        # 2-layer MLP from trunk avg-pool + sigmoid for [0, 1] output range.
+        self.ply_index_head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(filters, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 1),
+            nn.Sigmoid(),
+        )
 
         # K-cluster pool — §169 A2 / A3.
         #   - pool_type='min_max': pool is unused at the model level (the bot
@@ -674,6 +690,7 @@ class HexTacToeNet(nn.Module):
         ownership: bool = False,
         threat: bool = False,
         chain: bool = False,
+        ply_index: bool = False,
         global_crop: Optional[torch.Tensor] = None,
     ) -> tuple:
         """
@@ -687,6 +704,8 @@ class HexTacToeNet(nn.Module):
             threat:      If True, also return threat logits (B, 1, H, W) raw (training only).
             chain:       If True, also return Q13 chain-length predictions
                          (B, 6, H, W) raw regression outputs (training only).
+            ply_index:   If True, also return ply-index prediction (B, 1) ∈ [0, 1]
+                         (§S181 Wave 4 4B-impl-3, training only).
             Never pass any of these flags from InferenceServer, evaluator, or MCTS paths.
 
         Base return (all flags False) — 3-tuple, unchanged inference contract:
@@ -695,7 +714,7 @@ class HexTacToeNet(nn.Module):
             value:        (B, 1)          tanh scalar in [-1, 1]  (for MCTS)
             value_logit:  (B, 1)          pre-tanh logit          (for BCE loss)
         Additional outputs appended in order:
-            opp_reply, sigma2, ownership_pred, threat_pred, chain_pred.
+            opp_reply, sigma2, ownership_pred, threat_pred, chain_pred, ply_pred.
         """
         if self._input_channels is not None:
             x = x.index_select(1, self.input_channel_index)
@@ -827,6 +846,9 @@ class HexTacToeNet(nn.Module):
 
         if chain:
             extras.append(self.chain_head(out))      # (B, 6, H, W) raw regression
+
+        if ply_index:
+            extras.append(self.ply_index_head(out))  # (B, 1) ∈ [0, 1]
 
         if not extras:
             return log_policy, value, v_logit

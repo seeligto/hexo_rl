@@ -21,7 +21,10 @@ from hexo_rl.training.batch_assembly import (
 
 
 def _mk_sample_return(n: int) -> tuple:
-    """Return a 7-tuple matching `ReplayBuffer.sample_batch` signature."""
+    """Return an 8-tuple matching `ReplayBuffer.sample_batch_with_pos` signature.
+
+    §S181-AUDIT Wave 4 4B-impl-3: 8-tuple (added position_indices).
+    """
     states       = np.zeros((n, 8, 19, 19), dtype=np.float16)
     chain_planes = np.zeros((n, 6, 19, 19),  dtype=np.float16)
     policies     = np.zeros((n, 362),        dtype=np.float32)
@@ -29,7 +32,8 @@ def _mk_sample_return(n: int) -> tuple:
     ownership    = np.ones((n, 19, 19),      dtype=np.uint8)
     winning_line = np.zeros((n, 19, 19),     dtype=np.uint8)
     is_full_search = np.ones(n, dtype=np.uint8)
-    return states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search
+    position_indices = np.arange(n, dtype=np.uint16)
+    return states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search, position_indices
 
 
 @pytest.mark.parametrize("augment", [True, False])
@@ -40,9 +44,9 @@ def test_assemble_mixed_batch_forwards_augment_flag(augment: bool) -> None:
     n_self     = 4
 
     pretrained = MagicMock()
-    pretrained.sample_batch = MagicMock(return_value=_mk_sample_return(n_pre))
+    pretrained.sample_batch_with_pos = MagicMock(return_value=_mk_sample_return(n_pre))
     selfplay = MagicMock()
-    selfplay.sample_batch = MagicMock(return_value=_mk_sample_return(n_self))
+    selfplay.sample_batch_with_pos = MagicMock(return_value=_mk_sample_return(n_self))
 
     bufs = allocate_batch_buffers(batch_size, 362)
 
@@ -60,8 +64,8 @@ def test_assemble_mixed_batch_forwards_augment_flag(augment: bool) -> None:
         augment=augment,
     )
 
-    pretrained.sample_batch.assert_called_once_with(n_pre, augment)
-    selfplay.sample_batch.assert_called_once_with(max(1, n_self), augment)
+    pretrained.sample_batch_with_pos.assert_called_once_with(n_pre, augment)
+    selfplay.sample_batch_with_pos.assert_called_once_with(max(1, n_self), augment)
 
 
 @pytest.mark.parametrize("augment", [True, False])
@@ -69,7 +73,7 @@ def test_sample_selfplay_forwards_augment_flag(augment: bool) -> None:
     """`_sample_selfplay` uniform fallback path respects the flag."""
     n_self = 4
     selfplay = MagicMock()
-    selfplay.sample_batch = MagicMock(return_value=_mk_sample_return(n_self))
+    selfplay.sample_batch_with_pos = MagicMock(return_value=_mk_sample_return(n_self))
 
     _sample_selfplay(
         buffer=selfplay,
@@ -79,7 +83,7 @@ def test_sample_selfplay_forwards_augment_flag(augment: bool) -> None:
         augment=augment,
     )
 
-    selfplay.sample_batch.assert_called_once_with(max(1, n_self), augment)
+    selfplay.sample_batch_with_pos.assert_called_once_with(max(1, n_self), augment)
 
 
 def test_assemble_mixed_batch_default_augment_is_true() -> None:
@@ -89,9 +93,9 @@ def test_assemble_mixed_batch_default_augment_is_true() -> None:
     batch_size = 4
 
     pretrained = MagicMock()
-    pretrained.sample_batch = MagicMock(return_value=_mk_sample_return(n_pre))
+    pretrained.sample_batch_with_pos = MagicMock(return_value=_mk_sample_return(n_pre))
     selfplay = MagicMock()
-    selfplay.sample_batch = MagicMock(return_value=_mk_sample_return(n_self))
+    selfplay.sample_batch_with_pos = MagicMock(return_value=_mk_sample_return(n_self))
 
     bufs = allocate_batch_buffers(batch_size, 362)
 
@@ -108,8 +112,8 @@ def test_assemble_mixed_batch_default_augment_is_true() -> None:
         train_step=0,
     )
 
-    pretrained.sample_batch.assert_called_once_with(n_pre, True)
-    selfplay.sample_batch.assert_called_once_with(max(1, n_self), True)
+    pretrained.sample_batch_with_pos.assert_called_once_with(n_pre, True)
+    selfplay.sample_batch_with_pos.assert_called_once_with(max(1, n_self), True)
 
 
 def test_training_yaml_declares_augment_key() -> None:

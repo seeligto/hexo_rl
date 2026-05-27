@@ -41,7 +41,7 @@ impl ReplayBuffer {
     pub(crate) fn push_impl(&mut self, cfg: PushSingleConfig<'_>) -> PyResult<()> {
         let PushSingleConfig {
             state, chain_planes, policy, outcome, ownership, winning_line,
-            game_id, game_length, is_full_search,
+            game_id, game_length, is_full_search, position_index,
         } = cfg;
 
         let state_slice  = state.as_slice()
@@ -130,6 +130,7 @@ impl ReplayBuffer {
         self.winning_line[slot * aux_stride..(slot + 1) * aux_stride]
             .copy_from_slice(wl_slice);
         self.is_full_search[slot] = is_full_search as u8;
+        self.position_indices[slot] = position_index;
 
         // Increment the new position's bucket.
         let new_bucket = Self::weight_bucket(self.weights[slot]);
@@ -157,7 +158,7 @@ impl ReplayBuffer {
     pub(crate) fn push_game_impl(&mut self, cfg: PushGameConfig<'_>) -> PyResult<()> {
         let PushGameConfig {
             states, chain_planes, policies, outcomes, ownership, winning_line,
-            game_id, game_length, is_full_search,
+            game_id, game_length, is_full_search, position_indices,
         } = cfg;
 
         let states_s   = states.as_slice()
@@ -182,6 +183,16 @@ impl ReplayBuffer {
             ifs_owned = Vec::new();
             &ifs_owned
         };
+        // §S181-AUDIT Wave 4 4B-impl-1 — Resolve optional position_indices slice;
+        // None ⇒ fills 0..N-1 per loop iteration.
+        let pos_owned: Vec<u16>;
+        let pos_s: &[u16] = if let Some(ref arr) = position_indices {
+            arr.as_slice()
+                .map_err(|e| PyValueError::new_err(format!("position_indices not contiguous: {e}")))?
+        } else {
+            pos_owned = Vec::new();
+            &pos_owned
+        };
 
         let state_stride  = self.encoding.state_stride();
         let chain_stride  = self.encoding.chain_stride();
@@ -199,6 +210,11 @@ impl ReplayBuffer {
         if !ifs_s.is_empty() && ifs_s.len() != t {
             return Err(PyValueError::new_err(format!(
                 "is_full_search must have {} elements (one per position), got {}", t, ifs_s.len()
+            )));
+        }
+        if !pos_s.is_empty() && pos_s.len() != t {
+            return Err(PyValueError::new_err(format!(
+                "position_indices must have {} elements (one per position), got {}", t, pos_s.len()
             )));
         }
 
@@ -249,6 +265,8 @@ impl ReplayBuffer {
 
             // is_full_search: use provided value or default to 1 (full-search).
             self.is_full_search[slot] = if ifs_s.is_empty() { 1u8 } else { ifs_s[i] };
+            // §S181-AUDIT Wave 4 4B-impl-1 — position_index: use provided value or default 0..N-1.
+            self.position_indices[slot] = if pos_s.is_empty() { i as u16 } else { pos_s[i] };
 
             self.outcomes[slot] = outcomes_s[i];
             self.game_ids[slot] = game_id;
@@ -281,7 +299,7 @@ impl ReplayBuffer {
     pub(crate) fn push_many_impl(&mut self, cfg: PushManyConfig<'_>) -> PyResult<()> {
         let PushManyConfig {
             states, chain_planes, policies, outcomes, ownership, winning_line,
-            game_lengths, is_full_search,
+            game_lengths, is_full_search, position_indices,
         } = cfg;
 
         let states_s   = states.as_slice()
@@ -300,6 +318,15 @@ impl ReplayBuffer {
             .map_err(|e| PyValueError::new_err(format!("game_lengths not contiguous: {e}")))?;
         let ifs_s = is_full_search.as_slice()
             .map_err(|e| PyValueError::new_err(format!("is_full_search not contiguous: {e}")))?;
+        // §S181-AUDIT Wave 4 4B-impl-1 — optional per-row position_indices; None ⇒ zeros.
+        let pos_owned: Vec<u16>;
+        let pos_s: &[u16] = if let Some(ref arr) = position_indices {
+            arr.as_slice()
+                .map_err(|e| PyValueError::new_err(format!("position_indices not contiguous: {e}")))?
+        } else {
+            pos_owned = Vec::new();
+            &pos_owned
+        };
 
         let state_stride  = self.encoding.state_stride();
         let chain_stride  = self.encoding.chain_stride();
@@ -319,6 +346,9 @@ impl ReplayBuffer {
         }
         if ifs_s.len() != t {
             return Err(PyValueError::new_err(format!("is_full_search must have {t} elements, got {}", ifs_s.len())));
+        }
+        if !pos_s.is_empty() && pos_s.len() != t {
+            return Err(PyValueError::new_err(format!("position_indices must have {t} elements, got {}", pos_s.len())));
         }
 
         let available = self.capacity.saturating_sub(self.size);
@@ -370,6 +400,8 @@ impl ReplayBuffer {
                 .copy_from_slice(&wl_s[i * aux_stride..(i + 1) * aux_stride]);
 
             self.is_full_search[slot] = ifs_s[i];
+            // §S181-AUDIT Wave 4 4B-impl-1 — position_index per row (default 0 when None).
+            self.position_indices[slot] = if pos_s.is_empty() { 0u16 } else { pos_s[i] };
             self.outcomes[slot] = outcomes_s[i];
             self.game_ids[slot] = -1;
             self.weights[slot]  = w;
@@ -409,6 +441,7 @@ impl ReplayBuffer {
         self.ownership   [a_start..a_start + aux_stride].fill(1); // empty
         self.winning_line[a_start..a_start + aux_stride].fill(0);
         self.is_full_search[slot] = 1;
+        self.position_indices[slot] = 0;
         self.outcomes[slot] = outcome;
         self.game_ids[slot] = -1;
         self.weights[slot] = if game_length == 0 {

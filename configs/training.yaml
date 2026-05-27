@@ -98,9 +98,14 @@ ply_cap_value: 0.0        # §178: truncation outcome (winner=None, ply>=max_mov
                           # (winner=None, ply<max) still pay draw_value; truncation pays this.
                           # §S178 variant `v6_botmix_s178.yaml` inherits 0.0 (override removed).
 recency_weight: 0.75      # fraction of each batch from the recent-position ring buffer (newest ~50% of buffer)
-uncertainty_weight: 0.0   # disabled — Gaussian NLL diverges when σ²→0 causing total_loss spikes to ~394
-ownership_weight: 0.1     # weight for ownership auxiliary head (spatial MSE); training only
-threat_weight: 0.1        # weight for binary threat auxiliary head (winning-line BCE); training only
+uncertainty_weight: 0.1   # value uncertainty head; §S181 Wave 4 4B-impl-5 switched
+                          # from Gaussian NLL to Huber-on-squared-error per dispatcher
+                          # §2D — bounded loss, gradient flows everywhere
+ownership_weight: 0.2     # weight for ownership auxiliary head (spatial MSE); training only
+                          # §S181 Wave 4 4B-impl-5 density bump 0.1 → 0.2 per dispatcher
+                          # KataGo aux density target ~0.3-0.5 total
+threat_weight: 0.2        # weight for binary threat auxiliary head (winning-line BCE); training only
+                          # §S181 Wave 4 4B-impl-5 density bump 0.1 → 0.2
 
 # Q13-aux: chain-length prediction auxiliary head, smooth-L1 (Huber) loss on 6 chain planes.
 # Target comes from the replay-buffer chain sub-buffer (post-§97; no longer input planes); aux loss forces
@@ -112,6 +117,13 @@ threat_weight: 0.1        # weight for binary threat auxiliary head (winning-lin
 # Exp C (§95) zeroed chain planes instead — draw rate worsened (+35pp). Chain planes essential.
 # Reverted to 1.0 post exp A/C. See TODO §95 for full ablation record.
 aux_chain_weight: 1.0
+
+# §S181-AUDIT Wave 4 4B-impl-3 — ply-index auxiliary head weight.
+# Predicts normalized 0-based ply index via Sigmoid; Huber loss against
+# clamp(position_index / 100, 0, 1). Forces the trunk to encode game-time
+# temporal context (KataGo aux density hypothesis applied to game progress).
+# Default 0.0 = head disabled. Wave 4 Track 4B variant flips to 0.1.
+ply_index_weight: 0.0
 
 # Experiment C ablation: zero planes 18-23 at inference+training time while keeping 24ch architecture.
 # Default false. Set true in configs/variants/gumbel_targets.yaml for Experiment C only.
