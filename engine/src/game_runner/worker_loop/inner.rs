@@ -108,6 +108,8 @@ type RecordTuple = (
     i32,                // center q
     i32,                // center r
     bool,               // is_full_search
+    u16,                // ply_index (CF-4): 0-based ply of this decision (board.ply
+                        // pre-move; shared across the K cluster rows of one ply)
 );
 
 /// Per-game scalar context bundled to keep `play_one_move` / `run_one_game`
@@ -1001,7 +1003,11 @@ fn record_position(
             rotate_chain_inplace(&mut chain, sym_idx, sym_tables);
             rotate_policy_inplace(&mut projected_policy, sym_idx, sym_tables, n_cells);
         }
-        records_vec.push((feat, chain, projected_policy, board.current_player, center.0, center.1, move_is_full_search));
+        // CF-4: record this decision's 0-based ply index. `record_position`
+        // runs before `apply_move`, so `board.ply` is the ply of the position
+        // being recorded; all K cluster rows of one ply share it. Fixes the
+        // degenerate constant-0 self-play ply-index aux target (audit CF-4).
+        records_vec.push((feat, chain, projected_policy, board.current_player, center.0, center.1, move_is_full_search, board.ply as u16));
     }
 }
 
@@ -1073,7 +1079,7 @@ fn finalize_game(
     };
 
     let mut games_results = results_queue.lock().expect("results lock poisoned");
-    for (feat, chain, pol, player, cq, cr, is_full_search) in records_vec {
+    for (feat, chain, pol, player, cq, cr, is_full_search, ply_index) in records_vec {
         // §178: split outcome by terminal_reason. `terminal_reason == 2` is the
         // ply-cap branch (winner=None AND ply>=max_moves) — pay `ply_cap_value`.
         // Any other winner=None path (organic draw, legal_move_count==0) pays
@@ -1096,7 +1102,7 @@ fn finalize_game(
             rotate_aux_inplace(&mut aux_u8, sym_idx, sym_tables, n_cells);
         }
 
-        games_results.push_back((feat, chain, pol, outcome, plies, aux_u8, is_full_search));
+        games_results.push_back((feat, chain, pol, outcome, plies, aux_u8, is_full_search, ply_index));
     }
     games_completed.fetch_add(1, Ordering::Relaxed);
     match winner {

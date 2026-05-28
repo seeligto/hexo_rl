@@ -35,8 +35,10 @@ use crate::inference_bridge::InferenceBatcher;
 /// Per-row training tuple produced by self-play workers and consumed by
 /// `collect_data`. See the `results` field doc for the field semantics.
 ///
-/// Fields (in order): `(feat, chain, policy, outcome, plies, combined_aux_u8, is_full_search)`.
-pub(crate) type WorkerResultRow = (Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, bool);
+/// Fields (in order): `(feat, chain, policy, outcome, plies, combined_aux_u8,
+/// is_full_search, ply_index)`. `ply_index` (CF-4) is the per-row 0-based ply
+/// of the decision; `plies` is the game-total (shared across the game's rows).
+pub(crate) type WorkerResultRow = (Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, bool, u16);
 
 /// Per-game result tuple consumed by `drain_game_results`. See the
 /// `recent_game_results` field doc for the field semantics.
@@ -45,9 +47,10 @@ pub(crate) type WorkerResultRow = (Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec
 /// terminal_reason, model_version_min, model_version_max, model_version_distinct)`.
 pub(crate) type GameResultRow = (usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32);
 
-/// Return tuple of `collect_data` — eight NumPy arrays bound to the GIL
+/// Return tuple of `collect_data` — nine NumPy arrays bound to the GIL
 /// lifetime. Fields: `(feat, chain, policy, value, plies, ownership,
-/// winning_line, is_full_search)`.
+/// winning_line, is_full_search, position_index)`. `position_index` (CF-4,
+/// u16) is the per-row 0-based ply index; `plies` is the game-total.
 pub(crate) type CollectDataOut<'py> = (
     Bound<'py, PyArray2<f32>>,
     Bound<'py, PyArray2<f32>>,
@@ -57,6 +60,7 @@ pub(crate) type CollectDataOut<'py> = (
     Bound<'py, PyArray2<u8>>,
     Bound<'py, PyArray2<u8>>,
     Bound<'py, PyArray1<u8>>,
+    Bound<'py, PyArray1<u16>>,
 );
 
 // cycle 3 P79 Wave 7 Batch A: stored-flat for hot-path field access in worker_loop;
@@ -391,7 +395,7 @@ impl SelfPlayRunner {
 
     /// Drain all buffered positions and return them as numpy arrays.
     ///
-    /// Returns (features, chain_planes, policies, values, plies, ownership, winning_line, is_full_search):
+    /// Returns (features, chain_planes, policies, values, plies, ownership, winning_line, is_full_search, position_index):
     ///   features:        (N, 8*361)    float32 — HEXB v6 buffer wire format (sliced from
     ///                                            18-plane game state via KEPT_PLANE_INDICES;
     ///                                            §131 Option X). Reshape to (N, 8, 19, 19) on
@@ -404,6 +408,10 @@ impl SelfPlayRunner {
     ///   ownership:       (N, 361)      uint8  — per-row aux target {0=P2, 1=empty, 2=P1}
     ///   winning_line:    (N, 361)      uint8  — per-row binary mask of winning 6-in-a-row
     ///   is_full_search:  (N,)          uint8  — 1 = full-search move, 0 = quick-search move
+    ///   position_index:  (N,)          uint16 — CF-4: per-row 0-based ply index of the
+    ///                                            decision (NOT the game-total `plies`); feeds
+    ///                                            the ply-index aux target. K cluster rows of
+    ///                                            one ply share it.
     ///
     /// N = 0 when no positions are available (arrays have zero rows).
     pub fn collect_data<'py>(
@@ -431,8 +439,9 @@ impl SelfPlayRunner {
         let mut flat_own        = Vec::with_capacity(n * n_cells);
         let mut flat_wl         = Vec::with_capacity(n * n_cells);
         let mut is_full_search  = Vec::with_capacity(n);
+        let mut position_index  = Vec::with_capacity(n);
 
-        while let Some((feat, chain, pol, outcome, plies, aux_u8, full_search)) = results.pop_front() {
+        while let Some((feat, chain, pol, outcome, plies, aux_u8, full_search, ply_index)) = results.pop_front() {
             flat_feats.extend_from_slice(&feat);
             flat_chain.extend_from_slice(&chain);
             flat_pols.extend_from_slice(&pol);
@@ -443,6 +452,8 @@ impl SelfPlayRunner {
             flat_own.extend_from_slice(&aux_u8[..n_cells]);
             flat_wl.extend_from_slice(&aux_u8[n_cells..]);
             is_full_search.push(full_search as u8);
+            // CF-4: per-row 0-based ply index for the ply-index aux target.
+            position_index.push(ply_index);
         }
 
         let feats_np  = flat_feats.into_pyarray(py).reshape([n, feat_len])?;
@@ -453,8 +464,9 @@ impl SelfPlayRunner {
         let own_np    = flat_own.into_pyarray(py).reshape([n, n_cells])?;
         let wl_np     = flat_wl.into_pyarray(py).reshape([n, n_cells])?;
         let ifs_np    = is_full_search.into_pyarray(py);
+        let pidx_np   = position_index.into_pyarray(py);
 
-        Ok((feats_np, chain_np, pols_np, vals_np, gids_np, own_np, wl_np, ifs_np))
+        Ok((feats_np, chain_np, pols_np, vals_np, gids_np, own_np, wl_np, ifs_np, pidx_np))
     }
 
     pub fn stop(&self) {
@@ -643,7 +655,7 @@ impl SelfPlayRunner {
     /// produced by the workers. NOT for production use.
     pub fn drain_outcomes_for_test(&self) -> Vec<f32> {
         let mut q = self.results.lock().expect("results lock poisoned");
-        q.drain(..).map(|(_, _, _, outcome, _, _, _)| outcome).collect()
+        q.drain(..).map(|(_, _, _, outcome, _, _, _, _)| outcome).collect()
     }
 }
 
