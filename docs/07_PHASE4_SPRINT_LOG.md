@@ -4132,6 +4132,85 @@ Post-mortems `investigation/rust-perf-2026-05-20/11_s184_postmortem.md` +
 
 ---
 
+## §P5-CT — compound-turn defect probe (CF-1 banked, CF-2 gated)
+
+**Date 2026-05-28.** Discriminate compound-turn-adjacent defects from the
+§S150 loop-regression alternative as proximate driver of the colony /
+value-head discrimination collapse. Backing audit
+`audit/structural/compound_turn_pipeline_audit.md`; investigation report
+`reports/investigations/compound_turn_cf1_cf2_20260528.md`.
+
+**ARM 1 — CF-1 BANKED (free, code-complete).** `expand_and_backup_single`
+(backup.rs:223) hardcoded the terminal value `-1.0`, which is a sign
+**inversion** for a **first-stone win**: `apply_move` (core.rs:528-532) keeps
+the player on stone-1 (mr 2→1, no flip), so the `check_win` leaf's
+side-to-move is still the winner → should be `+1.0`. Fix derives the sign
+from `board.moves_remaining` (`mr==1`⇒+1.0, `mr==2`⇒-1.0). TDD discriminator
+in `engine/src/mcts/tests.rs` (`test_cf1_stone1_win_scored_as_win` FAILS on
+old code / passes on new; `test_cf1_stone2_win_still_scored_as_loss_to_mover`
+proves no Case-B regression). Placed crate-internal because
+`expand_and_backup_single` + `Board::cells/last_move` are `pub(crate)`
+(brief's `engine/tests/inv*.rs` placement impossible). Independent review:
+all 4 checks PASS. Bench (focused `mcts_sims_cpu_only` pre/post, laptop):
+−1.4% / +0.8% / +1.2% — within noise, MCTS ≥73k floor PASS.
+
+**ARM 2 — CF-2 GATED (pretrain operator/GPU-pending).** v6 drops turn-phase
+planes 16/17 (registry.toml:78); v8 keeps them but a v8 smoke is a
+**confounded + argmax-degenerate** CF-2 test → REJECTED. Clean recipe = new
+`v6tp` registry entry keeping 16/17 (channels encoder already emits them — no
+encode.rs change) + ~30-epoch §150 pretrain. **Sequencing:** run CF-1-fixed
+v6 smoke FIRST; escalate to v6tp pretrain only on FAIL/SPLIT.
+
+**CF-4 DEFERRED:** not "free" — needs a per-row ply field across the hot-path
+record tuple + PyO3 boundary; ply-index aux already inert (L58).
+
+**Pre-registered verdict (V_spread@2k primary):** PASS = V_spread>+0.10
+through 5k AND SealBot WR within 10pp of peak @20k; FAIL = V_spread≤0 by 2k
+(L44 sig) → pivot to §S150 hunt; SPLIT = filler-first policy improves but
+V_spread collapses → CF-1 banked as correctness-only. **E1 vs E2 UNDECIDED**
+pending smoke. Cosine temp stays OFF (L9).
+
+**L61 — a hardcoded terminal sign is a compound-turn trap.** Negamax
+terminal values must be derived from the leaf's side-to-move, never
+hardcoded, in any engine where a move can fail to flip the player (multi-ply
+turns). The `-1.0` constant was correct for every turn-final win and silently
+inverted only first-stone wins — a class invisible to single-stone-game
+intuition. **Why:** caught by re-deriving the sign from `apply_move`'s
+turn-structure, not from the "side-to-move just lost" heuristic. **How to
+apply:** any future MCTS terminal-handling edit must case on
+`moves_remaining`; pin with a stone-1-vs-stone-2 unit test.
+
+### Phase 5a — productionized CF-1 + CF-2 + CF-4 (2026-05-28)
+
+Operator decision after the cheap arm passed: productionize all three as a
+5-stage surgical wave on `master` (zero file-overlap Rust↔Python). Six
+commits `fd25a37..fc0308c`: CF-1 sign fix (B1.1), v6tp registry (B1.2), CF-4
+ply-index emission through `collect_data` (B1.3), v6tp Python mirror + smoke
+config (B2.1), v6tp 10-plane corpus export + pretrain recipe (B2.2), CF-4
+pool.py wiring (B2.3).
+
+- **CF-4 was NOT pool.py-only** as the brief implied: `collect_data` carried
+  no per-row ply index and no game_id, so the Rust record tuple had to emit
+  it (the "not free" cost the probe deferred). Landed via
+  `RecordTuple→WorkerResultRow→collect_data` (8→9 arrays). Bench-cold
+  (per-move, not per-sim). Inert on the baseline (`ply_index_weight: 0.0`).
+- **BENCH-GATE PASS:** controlled A/B on `mcts_sims_cpu_only` — no change at
+  n=100/400/800; ≈257k sim/s vs 73k floor.
+- **REVIEW PASS** (2 parallel fresh-context): Rust sign/plumbing correct;
+  Python is a **clean single-variable delta** vs v6 (corpus seed-stable,
+  policies/outcomes encoding-independent, augmentation plane-generic, fresh
+  10-plane pretrain, lever stack OFF).
+- **Caveat (reviewer):** CF-1 is a global engine change ⇒ a v6tp smoke is not
+  comparable to the *historical* §175 v6 datapoint; attributing V_spread
+  recovery to CF-2 alone needs a co-built **CF-1-only v6 control**.
+- **AGGREGATION (operator GPU-pending):** `scripts/p5a_v6tp_pretrain.sh` →
+  `--variant v6tp_p5a_smoke --iterations 30000`. SUCCESS = SealBot WR ≥25%
+  past 30k AND V_spread >+0.10 @20k. FAILURE (V_spread collapse despite the
+  plane) → Phase 5b **TD-λ** (NOT aux heads). Report:
+  `reports/investigations/compound_turn_cf1_cf2_20260528.md` §8.
+
+---
+
 ## §66–§101 Classification Audit — quick-look table
 
 | Bucket | Sections | Compressed body location |
