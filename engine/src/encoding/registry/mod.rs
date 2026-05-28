@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn test_registry_loads_all_known_encodings() {
         let names: Vec<&str> = all_specs().map(|s| s.name).collect();
-        for expected in ["v6", "v6w25", "v7full", "v7", "v7e30", "v7mw", "v8", "v8_canvas_realness"] {
+        for expected in ["v6", "v6tp", "v6w25", "v7full", "v7", "v7e30", "v7mw", "v8", "v8_canvas_realness"] {
             assert!(
                 names.contains(&expected),
                 "missing {:?} in {:?}",
@@ -238,8 +238,8 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            8,
-            "expected exactly 8 encodings, got {:?}",
+            9,
+            "expected exactly 9 encodings, got {:?}",
             names
         );
     }
@@ -276,9 +276,20 @@ mod tests {
     }
 
     #[test]
-    fn test_all_specs_includes_all_8() {
+    fn test_all_specs_includes_all_9() {
         let count = all_specs().count();
-        assert_eq!(count, 8);
+        assert_eq!(count, 9);
+    }
+
+    #[test]
+    fn test_registry_loads_v6tp() {
+        // CF-2 (§P5-CT): v6 wire format + turn-phase planes 16/17.
+        let s = lookup("v6tp").expect("v6tp must be in registry");
+        assert_eq!(s.n_planes, 10);
+        assert_eq!(s.kept_plane_indices, &[0usize, 1, 2, 3, 8, 9, 10, 11, 16, 17]);
+        assert_eq!(s.board_size, 19);
+        assert_eq!(s.policy_logit_count, 362);
+        assert!(!s.is_multi_window);
     }
 
     #[test]

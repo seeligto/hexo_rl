@@ -233,6 +233,47 @@ schema_version          = 3
 notes                   = "§176a — v7full arch + K-cluster multi-window perception at 19×19. Isolates multi-window from v6w25 action-space confound."
 
 # ---------------------------------------------------------------------------
+# v6tp — v6 wire format + turn-phase planes (CF-2, §P5-CT Phase 5a).
+# Identical to v6 except it KEEPS source planes 16 (moves_remaining==2) and
+# 17 (ply parity), giving the value head an explicit turn-phase signal. The
+# v6 family drops 16/17, forcing the value head to infer mid-turn vs
+# turn-boundary from stone-count parity alone while both position types carry
+# the same terminal z (audit CF-2 — value-head discrimination collapse). The
+# channels encoder (encode.rs:96-116) and Python to_tensor (game_state.py:
+# 241-242) already emit 16/17 identically, so no encoder change is needed;
+# only this 10-plane slice differs from v6. n_planes 8→10 ⇒ model in_channels
+# must be 10 (fresh pretrain, NOT a v6/v7full transfer).
+# ---------------------------------------------------------------------------
+[encodings.v6tp]
+board_size              = 19
+trunk_size              = 19
+cluster_window_size     = "none"
+cluster_threshold       = "none"
+legal_move_radius       = 5
+n_planes                = 10
+plane_layout            = [
+  # 4× current-player history (most-recent first)
+  "current_player_t0", "current_player_t-1", "current_player_t-2", "current_player_t-3",
+  # 4× opponent history (most-recent first)
+  "opponent_t0",       "opponent_t-1",       "opponent_t-2",       "opponent_t-3",
+  # turn-phase scalars (broadcast over the plane)
+  "moves_remaining_bcast",   # source plane 16: moves_remaining == 2 ? 1 : 0
+  "ply_parity_bcast",        # source plane 17: ply % 2
+]
+policy_logit_count      = 362            # 19*19 + 1 (last = pass)
+has_pass_slot           = true
+is_multi_window         = false
+value_pool              = "none"
+policy_pool             = "none"
+sym_table_id            = "size_19"
+# kept_plane_indices: canonical X+history, O+history + turn-phase 16/17.
+kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11, 16, 17]
+n_source_planes         = 18
+k_max                   = 1            # single-window → 1 cluster view per leaf
+schema_version          = 3
+notes                   = "§P5-CT Phase 5a CF-2 — v6 wire format + turn-phase planes 16/17 (value-head discrimination signal). Fresh 10-plane pretrain; not a v6/v7full transfer."
+
+# ---------------------------------------------------------------------------
 # v8 — bbox-of-stones 25×25, 11 planes (history + 3 aux).
 # Plane-8 polarity OFF→OUTSIDE (vanilla v8 contract).
 # ---------------------------------------------------------------------------
