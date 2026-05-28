@@ -74,16 +74,19 @@ class ModelPlayer(BotProtocol):
         n_sims: int = 100,
         temperature: float = 0.0,
     ) -> None:
-        self._engine = LocalInferenceEngine(model, device)
-        self._tree = MCTSTree(float(config.get("mcts", config).get("c_puct", DEFAULT_C_PUCT)))
-        self._n_sims = n_sims
-        self._config = config
-        self._temperature = temperature
         # Derive board geometry from encoding registry (§173 eval-fix).
         # §175: config["encoding"] may be str OR {"version": ...} dict after
         # Trainer._propagate_encoding_into_config — normalize either form.
         encoding_name = _normalize_encoding_name(config.get("encoding") if config else None)
         spec = _lookup_encoding(encoding_name)
+        # Pass the resolved spec so the engine slices the 18-plane wire tensor
+        # to THIS encoding's kept planes (v6tp keeps 16/17 → 10 planes); the
+        # default would slice to v6's 8 and mismatch a 10-channel model.
+        self._engine = LocalInferenceEngine(model, device, encoding_spec=spec)
+        self._tree = MCTSTree(float(config.get("mcts", config).get("c_puct", DEFAULT_C_PUCT)))
+        self._n_sims = n_sims
+        self._config = config
+        self._temperature = temperature
         self.board_size = spec.board_size
         self.n_actions = spec.policy_logit_count
 

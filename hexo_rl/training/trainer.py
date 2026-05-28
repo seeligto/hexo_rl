@@ -1167,7 +1167,8 @@ class Trainer:
                 }
                 base.load_state_dict(self.ema_model.state_dict())
             try:
-                fire_canary(self.model, self.step, self.device)
+                fire_canary(self.model, self.step, self.device,
+                            encoding=self.config.get("encoding"))
             finally:
                 if saved_state is not None:
                     base.load_state_dict(saved_state)

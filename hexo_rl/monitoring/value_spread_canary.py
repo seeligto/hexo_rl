@@ -156,19 +156,24 @@ def compute_value_spread(
     net: torch.nn.Module,
     bank: _Bank,
     device: Optional[torch.device] = None,
+    encoding_spec: Optional[Any] = None,
 ) -> CanaryResult:
     """Forward the value head once over the bank; return the spread.
 
     Uses the same `LocalInferenceEngine` path FU-1 used, so the anchor
     reproduces V_spread = +0.617. Runs under `torch.no_grad()`; restores
     the model's prior train/eval mode (LocalInferenceEngine forces eval()).
+
+    `encoding_spec` selects the wire-plane slice the engine applies (v6 → 8
+    planes, v6tp → 10 incl. turn-phase 16/17). Defaults to v6 inside the
+    engine when None — correct for the 8-plane families this bank anchors.
     """
     from hexo_rl.selfplay.inference import LocalInferenceEngine
 
     dev = device if device is not None else torch.device("cpu")
     was_training = net.training
     try:
-        eng = LocalInferenceEngine(net, dev)
+        eng = LocalInferenceEngine(net, dev, encoding_spec=encoding_spec)
         with torch.no_grad():
             _policies, values = eng.infer_batch(bank.boards)
     finally:
@@ -308,22 +313,55 @@ def _components(r: CanaryResult) -> dict[str, float]:
     )
 
 
+def _net_in_channels(net: torch.nn.Module) -> Optional[int]:
+    base = getattr(net, "_orig_mod", net)
+    return getattr(base, "in_channels", None)
+
+
 def compute_value_spread_dual(
     net: torch.nn.Module,
     device: Optional[torch.device] = None,
     t3_bank: Optional[_Bank] = None,
     alt_bank: Optional[_AltBank] = None,
+    encoding_spec: Optional[Any] = None,
 ) -> DualCanaryResult:
-    """Forward once over each bank; return dual result + PASS verdict."""
+    """Forward once over each bank; return dual result + PASS verdict.
+
+    T3 bank routes board → to_tensor → engine slice, so it works for any
+    encoding given `encoding_spec`. The alt bank stores PRE-BAKED state
+    tensors at a fixed plane count (the v6/8-plane FU-1/A3 anchor); it is
+    fed directly into `net()` and so is inapplicable when the model's
+    in_channels differ (e.g. v6tp's 10). In that case the alt bank is
+    skipped (NaN, not a failure) and the verdict rests on T3 — the
+    canonical +0.617 anchor metric — rather than killing the whole canary.
+    """
     t3 = t3_bank if t3_bank is not None else load_bank()
     alt = alt_bank if alt_bank is not None else load_alt_bank()
-    t3_r = compute_value_spread(net, t3, device)
-    alt_r = compute_value_spread_alt(net, alt, device)
-    both_pass = (t3_r.spread >= SOFT_ABORT_THRESHOLD
-                 and alt_r.spread >= ALT_SOFT_ABORT_THRESHOLD)
+    t3_r = compute_value_spread(net, t3, device, encoding_spec=encoding_spec)
+
+    _in_ch = _net_in_channels(net)
+    _alt_planes = int(alt.states.shape[1]) if alt.states.ndim >= 2 else None
+    alt_applicable = _in_ch is None or _alt_planes is None or _in_ch == _alt_planes
+    if alt_applicable:
+        alt_r = compute_value_spread_alt(net, alt, device)
+        alt_spread = alt_r.spread
+        alt_components = _components(alt_r)
+        both_pass = (t3_r.spread >= SOFT_ABORT_THRESHOLD
+                     and alt_r.spread >= ALT_SOFT_ABORT_THRESHOLD)
+    else:
+        # Alt fixture plane count (e.g. 8) != model in_channels (e.g. v6tp 10).
+        # Skip alt; verdict rests on T3 only.
+        log.info("value_spread_alt_skipped_plane_mismatch",
+                 alt_planes=_alt_planes, model_in_channels=_in_ch)
+        alt_spread = float("nan")
+        alt_components = {
+            "mean_colony": float("nan"), "mean_ext": float("nan"),
+            "sd_col": 0.0, "sd_ext": 0.0, "n": 0, "n_colony": 0, "n_extension": 0,
+        }
+        both_pass = t3_r.spread >= SOFT_ABORT_THRESHOLD
     return DualCanaryResult(
         t3_spread=t3_r.spread, t3_components=_components(t3_r),
-        alt_spread=alt_r.spread, alt_components=_components(alt_r),
+        alt_spread=alt_spread, alt_components=alt_components,
         both_pass=both_pass,
     )
 
@@ -338,23 +376,36 @@ def fire_canary(
     model: torch.nn.Module,
     step: int,
     device: Optional[torch.device] = None,
+    encoding: Any = None,
 ) -> Optional[DualCanaryResult]:
     """Run the dual-bank canary on a checkpoint save: measure, emit, alert.
 
     Fire-and-forget — never raises. A canary or fixture failure disables
     the canary for the run and logs once; training is unaffected.
     Returns the `DualCanaryResult` (handy for tests) or None on failure.
+
+    `encoding` (str or {"version": ...} dict) selects the T3 bank's wire-plane
+    slice so non-v6 encodings (e.g. v6tp's 10 planes) forward correctly;
+    None defaults to v6 inside the engine.
     """
     global _BANK_CACHE, _ALT_BANK_CACHE, _BANK_LOAD_FAILED
     if _BANK_LOAD_FAILED:
         return None
     try:
+        _spec = None
+        if encoding is not None:
+            from hexo_rl.encoding import (
+                lookup as _lookup_encoding,
+                normalize_encoding_name as _normalize_encoding_name,
+            )
+            _spec = _lookup_encoding(_normalize_encoding_name(encoding))
         if _BANK_CACHE is None:
             _BANK_CACHE = load_bank()
         if _ALT_BANK_CACHE is None:
             _ALT_BANK_CACHE = load_alt_bank()
         result = compute_value_spread_dual(
             model, device, t3_bank=_BANK_CACHE, alt_bank=_ALT_BANK_CACHE,
+            encoding_spec=_spec,
         )
     except Exception as exc:  # noqa: BLE001 — canary must never break training
         _BANK_LOAD_FAILED = True

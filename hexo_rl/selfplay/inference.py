@@ -80,7 +80,11 @@ class LocalInferenceEngine:
             state = GameState.from_board(board)
             tensor, centers = state.to_tensor()
             if tensor.shape[1] != self.model.in_channels:
-                tensor = tensor[:, KEPT_PLANE_INDICES]
+                # Slice the 18-plane wire tensor to THIS encoding's kept planes
+                # (v6 → 8, v6tp → 10 incl. turn-phase 16/17). The module-level
+                # KEPT_PLANE_INDICES is v6-only and would feed 8 planes into a
+                # 10-channel v6tp model; use the bound spec instead.
+                tensor = tensor[:, list(spec.kept_plane_indices)]
             all_tensors.append(torch.from_numpy(tensor))
             board_info.append((len(centers), centers))
 

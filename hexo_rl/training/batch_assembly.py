@@ -177,11 +177,16 @@ def load_pretrained_buffer(
     pre_outcomes = data["outcomes"]  # (T,) float32
     T = len(pre_outcomes)
 
-    if pre_states.shape[1] != BUFFER_CHANNELS:
+    # Validate against the ACTIVE encoding's plane count, not the v6
+    # BUFFER_CHANNELS constant (8). v6tp keeps turn-phase planes 16/17 →
+    # 10 planes; resolves to 8 for the v6 family (byte-identical check).
+    _expected_planes = _lookup_encoding(_normalize_encoding_name(config.get("encoding"))).n_planes
+    if pre_states.shape[1] != _expected_planes:
         raise ValueError(
             f"corpus '{pretrained_path}': states.shape[1]={pre_states.shape[1]}, "
-            f"expected {BUFFER_CHANNELS} (HEXB v6). Regenerate with "
-            f"'scripts/export_corpus_npz.py'."
+            f"expected {_expected_planes} (encoding "
+            f"{_normalize_encoding_name(config.get('encoding'))!r}). Regenerate "
+            f"with 'scripts/export_corpus_npz.py --encoding <name>'."
         )
 
     # §102.a: compute chain planes from stone planes (cur=[0], opp=[4] in 8-plane).
@@ -305,11 +310,15 @@ def load_bot_corpus_buffer(
     bot_outcomes = data["outcomes"]  # (T,) float32 ∈ {-1, +1}
     T = len(bot_outcomes)
 
-    if bot_states.shape[1] != BUFFER_CHANNELS:
+    # Validate against the ACTIVE encoding's plane count (see load_pretrained
+    # _buffer); resolves to 8 for v6, 10 for v6tp.
+    _expected_planes = _lookup_encoding(_normalize_encoding_name(config.get("encoding"))).n_planes
+    if bot_states.shape[1] != _expected_planes:
         raise ValueError(
             f"bot corpus '{bot_path}': states.shape[1]={bot_states.shape[1]}, "
-            f"expected {BUFFER_CHANNELS} (HEXB v6). Regenerate with "
-            f"'scripts/generate_bot_corpus.py'."
+            f"expected {_expected_planes} (encoding "
+            f"{_normalize_encoding_name(config.get('encoding'))!r}). Regenerate "
+            f"with 'scripts/generate_bot_corpus.py'."
         )
 
     # §178 chain planes from stone planes (cur=[0], opp=[4] in 8-plane).
