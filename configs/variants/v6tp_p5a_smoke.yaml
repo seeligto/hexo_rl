@@ -1,0 +1,91 @@
+# configs/variants/v6tp_p5a_smoke.yaml
+#
+# §P5-CT Phase 5a — CF-2 productionization smoke. Tests whether giving the
+# value head an explicit turn-phase signal (v6tp planes 16/17) rescues the
+# value-head discrimination collapse (V_spread +0.617 → −0.016, L47 /
+# project_s181_structural_diagnosis) that drives the colony attractor.
+#
+# DELIBERATELY CLEAN: this is a SUBTRACT-THE-VARIABLE run. It is the §175
+# v6 sustained baseline with exactly three deltas vs that baseline, all
+# landed in §P5-CT Phase 5a:
+#   - encoding v6 → v6tp (the single intended variable: +2 turn-phase planes)
+#   - CF-1 terminal-sign fix (in the engine; affects every run)
+#   - CF-4 per-row ply-index aux target (now non-degenerate on self-play)
+# The §S181 anti-colony lever stack (bot refresh, per-class temp, EMA,
+# WR sliding-window abort) is OFF on purpose — enabling it would confound
+# the CF-2 read. If CF-2 works, V_spread must recover WITHOUT those levers.
+#
+# Bootstrap + corpus: produced by the §P5-CT Phase 5a pretrain recipe
+#   (scripts/export_corpus_npz.py --encoding v6tp + pretrain ~30 epochs).
+#   - checkpoints/bootstrap_model_v6tp.pt  (10-plane, fresh — NOT a transfer)
+#   - data/bootstrap_corpus_v6tp.npz       (10-plane slice incl. 16/17)
+#   The eval anchor is the v6tp bootstrap itself (self-anchor; cross-encoding
+#   anchors cannot load — v7full is 8-plane). Measures drift from pretrain.
+#
+# Pre-registered verdict (LITERAL):
+#   SUCCESS  : SealBot WR sustains ≥25% past step 30000 AND V_spread > +0.10
+#              at step 20000.
+#   FAILURE  : V_spread collapses (≤0) despite the turn-phase plane → CF-2
+#              falsified as the proximate lever → escalate Phase 5b TD-λ
+#              value bootstrapping. DO NOT add aux heads first.
+#   (CF-1 + CF-4 remain banked as correctness fixes regardless of verdict.)
+#
+# Wall budget: ~6 h / ~$1.3 on vast 5080 at ~5K steps/hr to step 30K.
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6tp.pt \
+#     --variant v6tp_p5a_smoke \
+#     --iterations 30000 \
+#     2>&1 | tee logs/p5a_v6tp_$(date +%Y%m%d_%H%M).log
+
+# ── encoding (THE intended variable) ─────────────────────────────────────────
+# v6tp = v6 wire format + turn-phase planes 16 (moves_remaining==2) and 17
+# (ply parity). 10 input channels; fresh pretrain (not a v6/v7full transfer).
+encoding: v6tp
+# Override base model.yaml in_channels: 8 → 10 (v6tp keeps 16/17). Consistent
+# with the named encoding's n_planes, so the scattered-key check accepts it.
+in_channels: 10
+
+# Training — total_steps == run length so the cosine LR denominator matches
+# the 30K smoke (avoids the §172 B2 "200K denominator on a 30K run" mistake).
+total_steps: 30000
+
+# Eval — 6 rounds (5K,10K,15K,20K,25K,30K). V_spread@20K is the primary gate;
+# SealBot WR trajectory through 30K is the sustain gate.
+eval_interval: 5000
+
+selfplay:
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  random_opening_plies: 0
+
+mixing:
+  # 10-plane v6tp corpus (export_corpus_npz.py --encoding v6tp). MUST be the
+  # v6tp slice — the 8-plane data/bootstrap_corpus_v6.npz will shape-mismatch.
+  pretrained_buffer_path: "data/bootstrap_corpus_v6tp.npz"
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      # Self-anchor: same encoding (10-plane) so the model loads. Measures
+      # drift from the v6tp pretrain, not a cross-encoding comparison.
+      path: "checkpoints/bootstrap_model_v6tp.pt"
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+# Value-head discrimination telemetry — V_spread trajectory is the primary
+# CF-2 read. Emit the value-prediction distribution so the spread metric is
+# available per eval round.
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0

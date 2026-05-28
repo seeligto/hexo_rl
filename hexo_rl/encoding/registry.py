@@ -26,6 +26,7 @@ from engine import RegistrySpec as _EngineRegistrySpec  # type: ignore[attr-defi
 # entry AND appending the name here. (Rust still owns parse + validation.)
 _REGISTERED_NAMES: tuple[str, ...] = (
     "v6",
+    "v6tp",
     "v7full",
     "v7",
     "v7e30",

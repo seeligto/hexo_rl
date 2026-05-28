@@ -76,7 +76,10 @@ def _model_kwargs(spec: EncodingSpec) -> dict[str, Any]:
     shape contracts, not training dynamics.
     """
     common = dict(filters=8, res_blocks=1)
-    if spec.name in ("v6", "v7full", "v7", "v7e30", "v7mw"):
+    # v6tp shares the v6 wire geometry (19×19, 362 logits, single-window);
+    # it only keeps two extra source planes (16/17), so in_channels=10 while
+    # the model's encoding geometry is still "v6".
+    if spec.name in ("v6", "v6tp", "v7full", "v7", "v7e30", "v7mw"):
         return {**common, "encoding": "v6", "board_size": spec.trunk_size,
                 "in_channels": spec.n_planes}
     if spec.name == "v6w25":
