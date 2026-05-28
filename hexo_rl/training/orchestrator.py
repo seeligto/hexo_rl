@@ -257,12 +257,20 @@ def init_trainer(
             board_size = _post_load_spec.trunk_size
         except Exception:
             _registry_name_post = None
+        # `encoding` may be a dict ({"version": ...}, post-propagation) or a
+        # bare string (variant YAML form, e.g. "v6tp", when the checkpoint
+        # lacks encoding metadata and shape inference can't resolve a novel
+        # plane count). Log either form; never assume dict (.get on a str
+        # raised AttributeError — every other encoding read here already
+        # routes through normalize_encoding_name / resolve_from_config).
+        _enc_cfg = combined_config.get("encoding")
+        _enc_version = _enc_cfg.get("version") if isinstance(_enc_cfg, dict) else _enc_cfg
         log.info(
             "resumed",
             checkpoint=args.checkpoint,
             step=trainer.step,
             configured_total_steps=trainer.config.get("total_steps"),
-            encoding_version=(combined_config.get("encoding") or {}).get("version"),
+            encoding_version=_enc_version,
             registry_name=_registry_name_post,
             board_size=board_size,
             cluster_window_size=combined_config.get("cluster_window_size"),
