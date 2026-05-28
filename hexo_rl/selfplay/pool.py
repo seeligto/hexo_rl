@@ -548,12 +548,14 @@ class WorkerPool:
         _in_ch = self._feat_len // (self._trunk_size * self._trunk_size)
         _last_buf_emit = time.monotonic()
         while not self._stop_event.is_set():
-            # collect_data() returns 8-tuple from Rust — no Python list allocation.
+            # collect_data() returns 9-tuple from Rust — no Python list allocation.
             # feats_np: (N, feat_len) f32, chain_np: (N, chain_len) f32,
             # pols_np: (N, pol_len) f32, vals_np/plies_np: (N,),
             # own_np/wl_np: (N, 361) u8 — per-row aux projected to cluster window.
             # ifs_np: (N,) u8 — 1 = full-search, 0 = quick-search.
-            feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np = self._runner.collect_data()
+            # pidx_np: (N,) u16 — CF-4 per-row 0-based ply index (NOT plies_np,
+            #   the game-total); feeds the ply-index aux target.
+            feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np, pidx_np = self._runner.collect_data()
             n = len(vals_np)
             if n > 0:
                 # Bulk push: one PyO3 call instead of N per-row pushes (Bucket 5 #2).
@@ -571,7 +573,7 @@ class WorkerPool:
                 ).astype(np.uint16)
                 self.replay_buffer.push_many(
                     feats_f16, chain_f16, pols_np, vals_np, own_np, wl_np,
-                    game_lengths, ifs_np,
+                    game_lengths, ifs_np, pidx_np,   # CF-4: per-row ply index
                 )
 
                 # Recent buffer still requires per-row push (Python Lock semantics).

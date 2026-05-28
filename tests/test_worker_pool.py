@@ -169,9 +169,9 @@ def test_rust_runner_collect_data_format():
         assert mv_max >= mv_min
         assert mv_distinct >= 1 if plies_drain > 0 else mv_distinct >= 0
 
-        # collect_data returns 8 numpy arrays:
-        # (feats, chain, pols, vals, plies, own, wl, is_full_search)
-        feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np = runner.collect_data()
+        # collect_data returns 9 numpy arrays:
+        # (feats, chain, pols, vals, plies, own, wl, is_full_search, position_index)
+        feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np, pidx_np = runner.collect_data()
         assert isinstance(feats_np, np.ndarray)
         assert isinstance(chain_np, np.ndarray)
         assert isinstance(pols_np, np.ndarray)
@@ -180,6 +180,7 @@ def test_rust_runner_collect_data_format():
         assert isinstance(own_np, np.ndarray)
         assert isinstance(wl_np, np.ndarray)
         assert isinstance(ifs_np, np.ndarray)
+        assert isinstance(pidx_np, np.ndarray)
         assert ifs_np.dtype == np.uint8
         n = len(vals_np)
         assert n > 0
@@ -192,6 +193,18 @@ def test_rust_runner_collect_data_format():
         assert wl_np.shape == (n, 19 * 19)
         assert ifs_np.shape == (n,)
         assert feats_np.dtype == np.float32
+
+        # CF-4: per-row position_index is the 0-based ply of each decision —
+        # NOT the constant game-total. It must be uint16, bounded by the
+        # game-total plies, and (across a multi-ply game) not all-zero.
+        assert pidx_np.shape == (n,)
+        assert pidx_np.dtype == np.uint16
+        assert (pidx_np.astype(np.int64) <= plies_np.astype(np.int64)).all()
+        if int(plies_np.max()) > 1:
+            assert int(pidx_np.max()) > 0, (
+                "CF-4 regression: position_index is all-zero on the self-play "
+                "path (degenerate ply-index aux target)"
+            )
         assert chain_np.dtype == np.float32
         assert pols_np.dtype == np.float32
         assert vals_np.dtype == np.float32
