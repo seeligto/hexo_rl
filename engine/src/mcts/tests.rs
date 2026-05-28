@@ -432,6 +432,87 @@ fn test_no_forced_win_short_circuit_in_expansion() {
         "root must NOT be marked terminal for a forced-win formation");
 }
 
+// ── CF-1: compound-turn terminal sign ────────────────────────────────────
+//
+// `expand_and_backup_single` assigns the terminal value of a `check_win`
+// leaf. The leaf's side-to-move (== `board.moves_remaining`) decides the
+// sign, NOT a hardcoded -1.0:
+//   * stone-2 / turn-final win → `apply_move` flips the player, leaf has
+//     `mr==2` (opponent/loser to move) → terminal value -1.0 (correct).
+//   * stone-1 win (mid-turn)   → `apply_move` keeps the player (mr 2→1, no
+//     flip), leaf has `mr==1` (winner still to move) → terminal value +1.0.
+// The pre-fix hardcode scored the stone-1 win as -1.0, dragging its parent's
+// Q toward a loss → PUCT avoided completing on the first stone (CF-1).
+//
+// Placement: these exercise `expand_and_backup_single` and poke
+// `Board::cells`/`last_move`, both `pub(crate)`. An external
+// `engine/tests/inv*.rs` cannot reach either, so the discriminating cell
+// lives crate-internal alongside `test_no_forced_win_short_circuit_*`.
+
+/// Build a P1 6-in-a-row along the E/W axis with `last_move` on the line.
+/// `mr`/`player` are set by the caller to model stone-1 vs stone-2 wins.
+fn make_stone1_win_board(mr: u8, player: crate::board::Player) -> Board {
+    let mut board = Board::new();
+    for q in 0..6 {
+        board.cells.insert((q, 0), crate::board::Cell::P1);
+    }
+    board.last_move = Some((5, 0));
+    board.current_player = player;
+    board.moves_remaining = mr;
+    board.ply = 11;
+    assert!(board.check_win(), "test setup: board must be a terminal win");
+    board
+}
+
+/// Attach a single leaf child to the root and run its terminal backup.
+/// Returns (leaf_terminal_value, parent_backed_up_w).
+fn run_terminal_leaf(parent_mr: u8, leaf_mr: u8, board: &Board) -> (f32, f32) {
+    let mut tree = MCTSTree::new(1.5);
+    tree.pool[0].moves_remaining = parent_mr;
+    tree.pool[0].first_child = 1;
+    tree.pool[0].n_children = 1;
+    tree.next_free = 2;
+    tree.pool[1] = Node {
+        parent: 0, action_idx: (32768u32 << 16) | 32773u32, n_visits: 0, w_value: 0.0,
+        prior: 1.0, first_child: u32::MAX, n_children: 0,
+        moves_remaining: leaf_mr, is_terminal: false, terminal_value: 0.0,
+        virtual_loss_count: 0,
+    };
+    tree.expand_and_backup_single(1, board, &[], 0.0);
+    (tree.pool[1].terminal_value, tree.pool[0].w_value)
+}
+
+/// Case A — stone-1 win: leaf `mr==1` (winner to move) from a `mr==2`
+/// parent. Terminal value must be +1.0, and since the parent does NOT flip
+/// (mr==2), the winning child drags the parent's Q toward +1 → PUCT prefers
+/// completing on the first stone (the policy-target signal). FAILS on the
+/// pre-fix hardcoded -1.0.
+#[test]
+fn test_cf1_stone1_win_scored_as_win() {
+    let board = make_stone1_win_board(1, crate::board::Player::One);
+    let (leaf_tv, parent_w) = run_terminal_leaf(2, 1, &board);
+    assert_eq!(leaf_tv, 1.0,
+        "stone-1 win leaf (mr==1, winner to move) must score +1.0, not -1.0");
+    assert_eq!(parent_w, 1.0,
+        "winning stone-1 child must back up +1.0 to its mr==2 parent \
+         (policy target points at the winning move, not filler-first)");
+}
+
+/// Case B — stone-2 / turn-final win: leaf `mr==2` (opponent to move) from a
+/// `mr==1` parent. Terminal value must stay -1.0; the negamax flip at the
+/// mr==1 parent turns that into +1.0 for the mover. Proves the leaf-side
+/// derivation does NOT regress the case the hardcode handled correctly.
+#[test]
+fn test_cf1_stone2_win_still_scored_as_loss_to_mover() {
+    let board = make_stone1_win_board(2, crate::board::Player::Two);
+    let (leaf_tv, parent_w) = run_terminal_leaf(1, 2, &board);
+    assert_eq!(leaf_tv, -1.0,
+        "turn-final win leaf (mr==2, loser to move) must stay -1.0");
+    assert_eq!(parent_w, 1.0,
+        "negamax flip at the mr==1 parent turns the -1.0 leaf into +1.0 \
+         for the player who completed the line");
+}
+
 // ── Gumbel MCTS tests ────────────────────────────────────────────────────
 
 pub(super) fn setup_expanded_root() -> MCTSTree {

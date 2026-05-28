@@ -221,9 +221,17 @@ impl MCTSTree {
         }
 
         if board.check_win() {
+            // CF-1: derive the terminal sign from the leaf's side-to-move, not
+            // a hardcoded -1.0. `apply_move` flips the player only on a
+            // turn-final stone (mr 1→0→flip→2); a stone-1 win keeps the same
+            // player (mr 2→1, no flip). So `mr==1` ⇒ the winner is still to
+            // move ⇒ +1.0; `mr==2` ⇒ the player flipped to the loser ⇒ -1.0.
+            // The old hardcode scored a first-stone win as a loss, biasing the
+            // policy target toward filler-first move orders.
+            let tv = if board.moves_remaining == 1 { 1.0 } else { -1.0 };
             self.pool[leaf_idx as usize].is_terminal    = true;
-            self.pool[leaf_idx as usize].terminal_value = -1.0;
-            self.backup(leaf_idx, -1.0);
+            self.pool[leaf_idx as usize].terminal_value = tv;
+            self.backup(leaf_idx, tv);
             return;
         }
 
