@@ -17,6 +17,18 @@ hot path. See `docs/07_PHASE4_SPRINT_LOG.md` §173 for bench gate
 results and `docs/designs/encoding_alpha_multiwindow_selfplay_design.md`
 for the K-cluster encoding implementation spec.
 
+**Turn structure (2 stones per compound turn):** P1 opens with 1 stone
+(ply 0), then both players alternate placing **2 stones per turn**.
+`Board.moves_remaining` tracks the phase (2 = about to place stone 1, 1 =
+stone 2; `state/core.rs:109`). The board is a stone *set* with a
+commutative-XOR zobrist (`state/core.rs:523`), so a turn's two stones are
+an **unordered pair** — `{A,B}` and `{B,A}` yield identical state/hash.
+`apply_move` places one stone and performs no win check; win detection is
+a separate per-stone call (a turn can win on its first stone). For how
+MCTS / buffer / training treat the compound turn, see
+`docs/rules/phase-4-architecture.md` "Compound-turn handling" and the
+audit `audit/structural/compound_turn_pipeline_audit.md`.
+
 The board is infinite. The NN requires fixed-size tensors. We resolve this as follows:
 
 **Internal storage (Rust):** `HashMap<(q,r), Player>` — sparse, genuinely unbounded.

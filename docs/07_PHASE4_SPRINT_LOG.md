@@ -3852,6 +3852,53 @@ for Wave 5 design" route.
 
 ---
 
+## §S181-AUDIT Wave 5 entry — compound-turn investigation
+
+**Status:** OPEN — research/audit session landed; sustained-run verdict
+operator-pending. (Placeholder: operator fills run details after the
+Wave 5 design session.)
+
+**Premise (per L59 boundary).** Wave 4 close established the colony
+mechanism is insensitive to every config / hygiene / aux-density lever;
+it lives downstream in the training objective + MCTS/selfplay interaction.
+Wave 5 entry tests a structural hypothesis: HeXO's 2-stones-per-compound-
+turn is modelled as two *sequential single-stone* decisions, which may
+favour colony (order-invariant) over extension (needs coordination).
+
+**Phase 5 read-only pipeline audit (this session, 2026-05-28).** Full
+static audit of compound-turn handling across all 7 stages:
+`audit/structural/compound_turn_pipeline_audit.md`.
+
+Key results (see audit for citations + the five critical questions):
+- Hypothesis's STRONG form FALSIFIED — the engine is **not** order-blind.
+  Board/zobrist order-invariant; TT merges `{A,B}`≡`{B,A}`; MCTS Q-flips
+  per *turn boundary* not per stone, with a correct 2-ply within-turn
+  look-ahead. Genuinely sequential facets: greedy per-stone *commitment*
+  (2 fresh searches/turn, no subtree reuse) and *per-ply storage* of the
+  intermediate position.
+- **Bug found — CF-1:** a first-stone win is scored `terminal_value=-1.0`
+  (backup.rs:223-228) because `apply_move` does not flip the player after
+  stone 1; the value convention is current_player-perspective, so the
+  sign is inverted only for stone-1 wins. Distorts the stone-1 policy
+  target (visit mass pushed off winning-cell-first). Mechanism-plausible
+  minor colony contributor; causal link NOT established. Fix + A/B
+  pre-registered in the audit, NOT yet implemented (read-only scope).
+- **CF-2 (inferred-strong):** v6/v7full NN input drops the
+  `moves_remaining`/`ply_parity` planes (registry.toml:78) — the value
+  head gets no explicit turn-phase signal, mechanism-aligned with the
+  L47 value-head discrimination collapse.
+- **CF-6 (undetermined):** FPU sign at `mr==1` parents may not honour the
+  per-turn flip; needs a `puct_score` unit test to resolve.
+
+**Open question opened:** Q-COMPOUND-TURN in `docs/06_OPEN_QUESTIONS.md`.
+
+**Operator next steps (Wave 5 design, pending):** CF-1 sign-fix unit test
++ A/B; CF-2 value-spread probe with planes 16/17 added; the structural
+reckoning options pre-written in the Wave 4 entry (value-target
+propagation / WDL value head / anti-colony regularization).
+
+---
+
 ## §S182 — perf wave: legal_moves_set capacity fix MERGED
 
 *DISCRIMINATOR: §S182 = Rust-perf wave merge (this entry). The §S178 bot-mix

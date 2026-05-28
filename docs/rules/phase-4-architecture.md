@@ -79,6 +79,22 @@ Starting config for self-play RL (do not exceed without benchmarking):
   Gumbel provides root noise by construction; Dirichlet is additionally
   applied post-§73 in both branches.
 
+- Compound-turn handling (Q6 / Q-COMPOUND-TURN; audit
+  `audit/structural/compound_turn_pipeline_audit.md`): each turn places 2
+  stones (ply-0 opener places 1). Turn phase is tracked by
+  `Board.moves_remaining` (2 = about to place stone 1, 1 = stone 2), and
+  threaded into every MCTS `Node.moves_remaining`. MCTS negamax Q-flips
+  **per turn boundary, not per stone** (`backup.rs:337`, `selection.rs:62`
+  negate iff `parent.moves_remaining == 1`); the two stones of one turn
+  share a perspective. Move selection runs **one fresh MCTS search per
+  ply** (2 searches/turn, no subtree reuse), and Dirichlet root noise is
+  applied at turn start only — skipped at the intermediate ply
+  (`inner.rs:647,717`). Board state is order-invariant (`{A,B}`≡`{B,A}`,
+  TT-merged), but the after-stone-1 intermediate position is stored as its
+  own per-ply buffer row. NOTE: the v6/v7full NN input drops the
+  `moves_remaining`/`ply_parity` planes (`registry.toml:78`) — the network
+  has no explicit turn-phase channel (the v8 family keeps it).
+
 Resolved before / during Phase 4.0:
 
 - [x] Open Question 6: sequential vs compound action space

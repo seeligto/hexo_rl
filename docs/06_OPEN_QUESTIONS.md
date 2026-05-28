@@ -947,6 +947,72 @@ them as a sufficient pre-promotion gate. Skeleton:
 
 ---
 
+## Q-COMPOUND-TURN — how is the 2-stones-per-turn rule handled across the pipeline? [OPEN, findings recorded]
+
+**Status (2026-05-28):** AUDITED (read-only) — §S181 Wave 5 entry. Full
+forensic audit at `audit/structural/compound_turn_pipeline_audit.md`.
+This entry records **what the code does**, not what to do about it.
+Supersedes the one-line Q6 summary ("Sequential confirmed") with current
+citations; does NOT re-open Q6's resolution.
+
+**What the code does (findings, not prescriptions):**
+
+1. **Board state is order-invariant.** A compound turn's two stones form
+   an unordered pair; `{A,B}` and `{B,A}` reach the same board and the
+   same 128-bit zobrist (commutative XOR, `state/core.rs:523`). The MCTS
+   transposition table merges the two orderings at the post-pair node
+   (`selection.rs:189`).
+
+2. **Turn phase is tracked by `Board.moves_remaining`** (`state/core.rs:109`,
+   starts at 1 for the ply-0 opener, else 2; decrements per stone, flips
+   player + resets to 2 at 0 — `state/core.rs:528-532`). Threaded into
+   each MCTS `Node.moves_remaining` (`node.rs:32`, `mod.rs:131-134`).
+
+3. **Win is detected after stone-1.** `apply_move` does no win check; the
+   self-play/eval loops call `check_win()` before every stone
+   (`inner.rs:368`, `evaluator.py:201`). A turn whose first stone makes
+   six ends the game as a singleton (stone 2 never placed).
+
+4. **MCTS Q-flips per turn boundary, not per stone** (`backup.rs:337-339`,
+   `selection.rs:62`; child mr alternates 1↔2, `backup.rs:268`). The two
+   stones of one turn share a perspective; a single per-ply search looks
+   two plies deep within the turn.
+
+5. **Move commitment is greedy-sequential.** One fresh MCTS search per
+   ply (`tree.new_game`, `inner.rs:780`) → 2 searches per turn (≈
+   `2 × move_sims × K` NN forwards), no subtree reuse (Q40 pending).
+   Dirichlet root noise is applied at turn start only, skipped at the
+   intermediate ply (`inner.rs:647,717`). Temperature is keyed on
+   compound move (`inner.rs:796`).
+
+6. **The buffer stores 2 rows per turn (one per ply, × K clusters).** The
+   intermediate (after-stone-1) position is an independent training row
+   carrying the shared game outcome as its value target
+   (`inner.rs:960-1005, 1076-1100`).
+
+7. **No intra-turn stone-order-swap augmentation** — only the 12-fold hex
+   dihedral group (`augment/luts.py:50-67`). Order is not a stored field.
+
+8. **v6/v7full NN input carries no turn-phase channel** — planes 16/17
+   (`moves_remaining`, `ply_parity`) are dropped by `kept_plane_indices`
+   (`registry.toml:78`). v8 family keeps them.
+
+**Candidate defect surfaced (CF-1):** first-stone wins are scored
+`terminal_value=-1.0` (`backup.rs:223-228`) — a sign inversion specific
+to the no-player-flip stone-1 case, distorting the stone-1 policy target.
+Read-only audit; fix + A/B pre-registered in the audit doc, not
+implemented. **Mechanism-plausible minor colony contributor; causal link
+NOT established.**
+
+**Resolving experiments (operator, not done here):** (a) CF-1 unit test +
+sign-fix A/B; (b) tag buffer rows with `moves_remaining` and compare
+value-spread of intermediate vs turn-start rows on the §S180b archive;
+(c) CF-2 — add planes 16/17 to a v6-class smoke and measure value-spread.
+Cross-ref: `audit/structural/compound_turn_pipeline_audit.md`; sprint log
+§S181-AUDIT Wave 5 entry.
+
+---
+
 ## Deferred (Phase 5+)
 
 | # | Question | Reason deferred |
