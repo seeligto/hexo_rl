@@ -92,6 +92,7 @@ def allocate_batch_buffers(
     n_actions: int,
     trunk_size: int = BOARD_SIZE,
     aux_stride: Optional[int] = None,
+    n_planes: int = BUFFER_CHANNELS,
 ) -> BatchBuffers:
     """Allocate shared batch arrays once at startup.
 
@@ -105,6 +106,9 @@ def allocate_batch_buffers(
                     overridden). Currently unused by the pre-allocated
                     arrays (aux is shaped as `(B, T, T)`); reserved for
                     future flat-aux variants.
+        n_planes:   State-plane count for the active encoding (v6 → 8,
+                    v6tp → 10 incl. turn-phase 16/17). Default BUFFER_CHANNELS
+                    (8) preserves byte-identical behavior for v6-family callers.
 
     Returns:
         A :class:`BatchBuffers` instance with all arrays empty/ones.
@@ -112,7 +116,7 @@ def allocate_batch_buffers(
     if aux_stride is None:
         aux_stride = trunk_size * trunk_size  # noqa: F841 — reserved hook
     return BatchBuffers(
-        states=np.empty((batch_size, 8, trunk_size, trunk_size), dtype=np.float16),
+        states=np.empty((batch_size, n_planes, trunk_size, trunk_size), dtype=np.float16),
         chain_planes=np.empty((batch_size, 6, trunk_size, trunk_size), dtype=np.float16),
         policies=np.empty((batch_size, n_actions), dtype=np.float32),
         outcomes=np.empty(batch_size, dtype=np.float32),

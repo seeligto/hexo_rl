@@ -507,10 +507,12 @@ def allocate_batch_buffers_for_config(
     # have rewritten encoding via metadata) and size buffers per trunk_size /
     # policy_logit_count. Falls through to v6 defaults on legacy v6 configs.
     _batch_size_cfg = int(train_cfg.get("batch_size", config.get("batch_size", 256)))
+    _n_planes_spec = 8  # v6-family default; overridden from the resolved spec.
     try:
         _bufs_spec = _registry_resolve(combined_config)
         _trunk_size = int(_bufs_spec.trunk_size)
         _n_actions_spec = int(_bufs_spec.policy_logit_count)
+        _n_planes_spec = int(_bufs_spec.n_planes)
     except Exception as _re_err:
         log.warning("buffer_alloc_registry_resolve_failed", error=str(_re_err)[:120])
         _trunk_size = int(combined_config.get("board_size", 19))  # fallback from config
@@ -519,6 +521,7 @@ def allocate_batch_buffers_for_config(
         _batch_size_cfg,
         _n_actions_spec,
         trunk_size=_trunk_size,
+        n_planes=_n_planes_spec,
     )
     return bufs, _batch_size_cfg
 
