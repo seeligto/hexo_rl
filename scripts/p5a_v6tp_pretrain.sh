@@ -15,8 +15,10 @@
 set -euo pipefail
 
 # 1. Export the 10-plane v6tp corpus from human games (all positions,
-#    Elo-weighted, uncompressed for mmap). ~700 MB.
-python scripts/export_corpus_npz.py --encoding v6tp --human-only --no-compress
+#    Elo-weighted, uncompressed for mmap). ~700 MB. Use the repo venv
+#    python (non-interactive shells — e.g. vast over ssh — have no bare
+#    `python` on PATH; matches the Makefile PY convention).
+.venv/bin/python scripts/export_corpus_npz.py --encoding v6tp --human-only --no-compress
 
 # 2. Fresh 30-epoch pretrain. --inference-out writes the smoke's bootstrap
 #    checkpoint; training checkpoints land under checkpoints/pretrain/.
