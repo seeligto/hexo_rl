@@ -70,13 +70,15 @@ class InferenceServer(threading.Thread):
         # accounts for the per-encoding pass-slot bit (v8: 625, v6/v7full: 362,
         # v6w25: 626).
         self._policy_len = self.encoding_spec.policy_logit_count
-        # Rust workers always emit WIRE_CHANNELS planes (post-§131:
-        # WIRE_CHANNELS == BUFFER_CHANNELS == 8 via KEPT_PLANE_INDICES).
-        # Channel reduction (if any) happens inside model.forward() via
-        # index_select, so the InferenceBatcher and the H2D reshape must
-        # use the wire-format width, not the model's trunk width.
-        self._feature_len = WIRE_CHANNELS * board_size * board_size
-        self._shape = (WIRE_CHANNELS, board_size, board_size)
+        # Rust workers emit exactly `spec.kept_plane_indices` planes (v6 → 8,
+        # v6tp → 10 incl. turn-phase 16/17). The wire width is the active
+        # encoding's plane count — NOT the v6-hardcoded WIRE_CHANNELS=8.
+        # Sub-selection (sweep `input_channels` variants) happens inside
+        # model.forward() via index_select, but the wire/H2D width is what
+        # Rust actually sends = spec.n_planes.
+        wire_channels = self.encoding_spec.n_planes
+        self._feature_len = wire_channels * board_size * board_size
+        self._shape = (wire_channels, board_size, board_size)
 
         self._batcher = batcher or InferenceBatcher(
             feature_len=self._feature_len,
@@ -95,7 +97,7 @@ class InferenceServer(threading.Thread):
         # (non_blocking=True); no-op on CPU.
         if self.device.type == "cuda":
             self._h2d_staging = torch.empty(
-                (self._batch_size, WIRE_CHANNELS, board_size, board_size),
+                (self._batch_size, wire_channels, board_size, board_size),
                 dtype=torch.float32,
                 pin_memory=True,
             )
