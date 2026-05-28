@@ -118,10 +118,19 @@ def cuda_warmup(
         _t_warmup = time.time()
         with torch.no_grad():
             with torch.autocast(device_type="cuda"):
-                # Warmup input must be wire-format width (18 planes) — model
-                # slices to in_channels internally via index_select.
+                # Warmup width must match what forward() expects as input.
+                # Sweep variants (`_input_channels` set) index_select from the
+                # wire width inside forward, so they need the wire width; every
+                # other model (v6 → 8, v6tp → 10) takes exactly in_channels with
+                # no internal slice. Using the v6 WIRE_CHANNELS constant fed an
+                # 8-plane dummy into v6tp's 10-channel conv and crashed here.
                 from hexo_rl.model.network import WIRE_CHANNELS as _WIRE_CH
-                _dummy = torch.zeros(1, _WIRE_CH, board_size, board_size, device=device)
+                _base = getattr(inf_model, "_orig_mod", inf_model)
+                if getattr(_base, "_input_channels", None) is not None:
+                    _warmup_ch = _WIRE_CH
+                else:
+                    _warmup_ch = int(getattr(_base, "in_channels", _WIRE_CH))
+                _dummy = torch.zeros(1, _warmup_ch, board_size, board_size, device=device)
                 inf_model(_dummy)
         torch.cuda.synchronize()
         log.info("cuda_warmup_done", elapsed_sec=round(time.time() - _t_warmup, 1))

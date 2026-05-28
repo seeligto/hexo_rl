@@ -24,7 +24,7 @@ from engine import SelfPlayRunner, SelfPlayRunnerConfig  # type: ignore[attr-def
 
 from hexo_rl.encoding import EncodingSpec as RegistrySpec
 from hexo_rl.encoding import resolve_from_config as registry_resolve_from_config
-from hexo_rl.model.network import HexTacToeNet, WIRE_CHANNELS
+from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.monitoring.game_recorder import GameRecorder
 from hexo_rl.selfplay.inference_server import InferenceServer
@@ -215,9 +215,9 @@ class WorkerPool:
         trunk_size = _resolved.trunk_size
         n_kept_planes = _resolved.n_kept_planes
 
-        # Rust inference batcher uses WIRE_CHANNELS (8) planes wide; the
-        # game runner slices to len(spec.kept_plane_indices) before pushing
-        # to the results queue (HEXB v6 / §173 A3 spec-driven schema).
+        # Rust inference batcher is `n_kept_planes` wide — the count the game
+        # runner emits via spec.kept_plane_indices (v6 → 8, v6tp → 10 incl.
+        # turn-phase 16/17). NOT the v6-hardcoded WIRE_CHANNELS=8.
 
         mcts_cfg = config.get("mcts", config)
         self.n_simulations = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
@@ -290,7 +290,7 @@ class WorkerPool:
             # encoding). For v6w25 trunk_size == board_size == 25 so v6w25
             # coincides numerically; future arches with cluster_window_size
             # != board_size route correctly without further edits.
-            feature_len=WIRE_CHANNELS * trunk_size * trunk_size,
+            feature_len=n_kept_planes * trunk_size * trunk_size,
             policy_len=spec.policy_logit_count,
             fast_prob=float(pc.get("fast_prob", 0.0)),
             fast_sims=int(pc["fast_sims"]),
