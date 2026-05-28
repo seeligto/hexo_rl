@@ -206,12 +206,13 @@ def main() -> None:
     parser.add_argument("--human-only", action="store_true",
                         help="Pretrain mode: human games only, Elo-weighted, saves weights array")
     parser.add_argument(
-        "--encoding", choices=("v6", "v6w25", "v8"), default="v6",
+        "--encoding", choices=("v6", "v6tp", "v6w25", "v8"), default="v6",
         help="Corpus encoding version: 'v6' (default; 8-plane × 19×19 K-cluster, "
-             "362-action with pass slot), 'v6w25' (§168 — 8-plane × 25×25 K-cluster "
-             "at matched R=8 perception, 626-action with pass slot), or 'v8' "
-             "(11-plane × 25×25 bbox, 625-action no pass; Path β per "
-             "docs/designs/encoding_v8_contract.md).",
+             "362-action with pass slot), 'v6tp' (§P5-CT CF-2 — v6 + turn-phase "
+             "planes 16/17, 10-plane × 19×19, 362-action), 'v6w25' (§168 — "
+             "8-plane × 25×25 K-cluster at matched R=8 perception, 626-action "
+             "with pass slot), or 'v8' (11-plane × 25×25 bbox, 625-action no "
+             "pass; Path β per docs/designs/encoding_v8_contract.md).",
     )
     parser.add_argument(
         "--with-global-crop", action="store_true",
@@ -234,6 +235,10 @@ def main() -> None:
         parser.error("--canvas-realness is only valid under --encoding v8")
 
     encoding = args.encoding
+    # Active kept-plane slice for the v6-family single-window path (v6=8,
+    # v6tp=10 incl. turn-phase 16/17). Resolved once here so it is always
+    # bound; unused for the v8 / v6w25 native-plane paths.
+    kept_plane_indices = list(_lookup_encoding(encoding).kept_plane_indices)
     if args.out:
         out_path = Path(args.out)
     elif encoding == "v8":
@@ -241,6 +246,8 @@ def main() -> None:
         out_path = ROOT / "data" / f"bootstrap_corpus_v8{suffix}.npz"
     elif encoding == "v6w25":
         out_path = ROOT / "data" / "bootstrap_corpus_v6w25.npz"
+    elif encoding == "v6tp":
+        out_path = ROOT / "data" / "bootstrap_corpus_v6tp.npz"
     else:
         out_path = ROOT / "data" / "bootstrap_corpus.npz"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -330,7 +337,10 @@ def main() -> None:
         )
         policies_buf = np.empty((n_sample, N_ACTIONS_V6W25), dtype=np.float32)
     else:
-        states_buf = np.empty((n_sample, 8, 19, 19), dtype=np.float16)  # HEXB v6: 8 planes
+        # v6 / v6tp single-window 19×19 path. Plane count is the encoding's
+        # kept-slice width (v6=8, v6tp=10 incl. turn-phase 16/17). Both replay
+        # via replay_game_to_triples (full 18-plane) then slice below.
+        states_buf = np.empty((n_sample, len(kept_plane_indices), 19, 19), dtype=np.float16)
         policies_buf = np.empty((n_sample, 362), dtype=np.float32)
     outcomes_buf = np.empty(n_sample, dtype=np.float32)
     weights_buf = np.empty(n_sample, dtype=np.float32)
@@ -372,7 +382,7 @@ def main() -> None:
                 elif encoding == "v6w25":
                     states_buf[out_idx] = s[pi]  # already 8 planes native
                 else:
-                    states_buf[out_idx] = s[pi][KEPT_PLANE_INDICES]  # slice 18→8 planes
+                    states_buf[out_idx] = s[pi][kept_plane_indices]  # slice 18→{8,10} planes
                 policies_buf[out_idx] = p[pi]
                 outcomes_buf[out_idx] = o[pi]
                 weights_buf[out_idx] = pos_weight

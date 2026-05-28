@@ -127,6 +127,7 @@ def _check_scattered_keys(cfg: Mapping[str, Any], spec: EncodingSpec) -> None:
 
 _CORPUS_PATHS: dict[str, str] = {
     "v6":                 "data/bootstrap_corpus.npz",
+    "v6tp":               "data/bootstrap_corpus_v6tp.npz",  # §P5-CT CF-2 (10-plane, incl. 16/17)
     "v6w25":              "data/bootstrap_corpus_v6w25.npz",
     "v7full":             "data/bootstrap_corpus.npz",   # shared with v6 (§150)
     "v7mw":               "data/bootstrap_corpus.npz",   # shared with v6/v7full (§176a)
@@ -136,6 +137,7 @@ _CORPUS_PATHS: dict[str, str] = {
 
 _ANCHOR_PATHS: dict[str, str] = {
     "v6":                 "checkpoints/bootstrap_model_v6.pt",
+    "v6tp":               "checkpoints/bootstrap_model_v6tp.pt",  # §P5-CT CF-2 self-anchor
     "v6w25":              "checkpoints/bootstrap_model_v6w25.pt",
     "v7full":             "checkpoints/bootstrap_model_v7full.pt",
     "v7mw":               "checkpoints/bootstrap_model_v7full.pt",   # v7full anchor (same arch §176a)
