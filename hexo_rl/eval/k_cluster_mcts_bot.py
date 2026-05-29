@@ -226,6 +226,7 @@ class KClusterMCTSBot(BotProtocol):
         temperature: float = 0.0,
         pool_type: Optional[str] = None,
         fpu_q: float = 0.0,
+        kept_plane_indices: Optional[list[int]] = None,
     ) -> None:
         encoding = getattr(model, "encoding", None)
         if encoding not in ("v6", "v6w25"):
@@ -259,7 +260,14 @@ class KClusterMCTSBot(BotProtocol):
         self.temperature = float(temperature)
         self.pool_type = pool_type
         self.fpu_q = float(fpu_q)
-        self._slice_to_8 = self.model.in_channels == BUFFER_CHANNELS
+        # Wire-plane slice: to_tensor emits the full 18-plane source; slice it
+        # down to the planes THIS model expects. v6/v6w25 keep the 8-plane
+        # KEPT_PLANE_INDICES; v6tp passes its 10-plane set (incl. turn-phase
+        # 16/17). Default to v6's 8 when the caller gives nothing (back-compat).
+        self._kept_planes = (
+            list(kept_plane_indices) if kept_plane_indices is not None
+            else list(KEPT_PLANE_INDICES)
+        )
 
     def reset(self) -> None:
         # K-cluster v6/v6w25 models read no Python history (planes 1-7 /
@@ -324,8 +332,8 @@ class KClusterMCTSBot(BotProtocol):
 
         state = GameState.from_board(sim_board)
         tensor, centers = state.to_tensor()  # (K, 18, S, S) float16
-        if self._slice_to_8:
-            tensor = tensor[:, KEPT_PLANE_INDICES]
+        if tensor.shape[1] != self.model.in_channels:
+            tensor = tensor[:, self._kept_planes]
         K, _, view_h, view_w = tensor.shape
         assert view_h == view_w, "KClusterMCTSBot expects square cluster window"
         view_size = view_h

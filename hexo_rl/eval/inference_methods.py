@@ -68,6 +68,7 @@ def build_inference_method(
     *,
     temperature: float = 0.0,
     c_puct: float = 1.5,
+    kept_plane_indices: list[int] | None = None,
 ) -> BotProtocol:
     """Build a BotProtocol for the (encoding, method) tuple.
 
@@ -87,7 +88,10 @@ def build_inference_method(
             model, device, n_sims=n_sims, c_puct=c_puct, temperature=temperature
         )
 
-    if encoding_label == "v6":
+    # v6tp (§P5-CT CF-2) shares v6 runtime inference; the only difference is
+    # the wire-plane slice (10 planes incl. turn-phase 16/17 vs v6's 8),
+    # threaded via kept_plane_indices into the shape-aware bots.
+    if encoding_label in ("v6", "v6tp"):
         if kind == "argmax":
             return V6ArgmaxBot(model, device, temperature=temperature)
         # v6 MCTS: Python K-cluster MCTS (KClusterMCTSBot) since §169 P1.
@@ -95,7 +99,8 @@ def build_inference_method(
         # this dispatcher uses the Python path uniformly across v6 / v6w25
         # for matched-MCTS comparison apples-to-apples.
         return KClusterMCTSBot(
-            model, device, n_sims=n_sims, c_puct=c_puct, temperature=temperature
+            model, device, n_sims=n_sims, c_puct=c_puct, temperature=temperature,
+            kept_plane_indices=kept_plane_indices,
         )
 
     if encoding_label == "v6w25":

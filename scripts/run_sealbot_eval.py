@@ -204,6 +204,7 @@ def _eval_one_checkpoint(
     model_bot = build_inference_method(
         inference, model, device, encoding_label,
         temperature=temperature, c_puct=c_puct,
+        kept_plane_indices=list(spec.kept_plane_indices),
     )
 
     arm = ckpt_path.stem.replace("_v8full", "").replace("bootstrap_model_", "")
