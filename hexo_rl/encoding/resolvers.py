@@ -359,6 +359,10 @@ def detect_encoding_from_state_dict(
     if in_ch == 11 and strict:
         # Eval-side accepts in_ch=11 alone as v8 (no n_actions probe required).
         return lookup("v8")
+    # §P5-CT CF-2 — v6tp keeps turn-phase planes 16/17 → in_ch=10, 362 actions,
+    # 19×19 single-window. Distinct plane count from the v6 family (8).
+    if in_ch == 10 and (n_actions == 362 or "v6tp" in label):
+        return lookup("v6tp")
     if in_ch == buffer_channels:
         if n_actions == 626 or "v6w25" in label or "_w25" in label:
             # Filename hint can override action-count when the head is a
