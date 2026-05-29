@@ -1,0 +1,70 @@
+# configs/variants/v6_p5a_control.yaml
+#
+# §P5-CT Phase 5a — CF-1-ONLY v6 CONTROL (clean CF-2 attribution).
+#
+# Reviewer caveat: CF-1 (terminal-sign fix) is a GLOBAL engine change, so the
+# v6tp smoke result (33% greedy / ~21% sampled, attractor suppressed) cannot
+# be attributed to the CF-2 turn-phase plane alone — CF-1 may carry it. This
+# control isolates CF-2 by running the SAME experiment WITHOUT the turn-phase
+# planes: 8-plane v6, same CF-1 engine, same lever-off config, same fresh
+# 30-epoch pretrain on the SAME human games (seed 42).
+#
+# v6tp arm vs v6 control — the ONLY difference is encoding (10-plane w/ 16,17
+# vs 8-plane). Everything else matches:
+#   - same engine HEAD (CF-1 + CF-4 present in both)
+#   - same corpus games/sampling (export_corpus_npz --human-only, seed 42)
+#   - same fresh 30-ep pretrain recipe (scripts/p5a_v6_control_pretrain.sh)
+#   - same lever stack OFF (no bot refresh / per-class temp / EMA / WR abort)
+#   - same eval (self-anchor + SealBot + Random), 30k steps
+#
+# Attribution logic on the SealBot trajectory + V_spread:
+#   - v6 control ≈ v6tp  → the turn-phase plane (CF-2) adds little; CF-1 (and/or
+#     the lever-off baseline) carries the suppression. CF-2 not worth keeping.
+#   - v6 control << v6tp (collapses / lower WR / V_spread decays)  → CF-2 is the
+#     active lever; productionize v6tp.
+# Run eval at BOTH T=0 (greedy) and T=0.5 (sampled) for every checkpoint to
+# avoid the §P5-CT temperature confound (L21/L22).
+#
+# Bootstrap + corpus (produced by scripts/p5a_v6_control_pretrain.sh):
+#   - checkpoints/bootstrap_model_v6_p5ctl.pt   (8-plane, fresh 30-ep)
+#   - data/bootstrap_corpus_v6_p5ctl.npz        (8-plane, same games as v6tp)
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6_p5ctl.pt \
+#     --variant v6_p5a_control --iterations 30000
+
+# ── encoding (the control = v6tp MINUS turn-phase planes) ────────────────────
+encoding: v6
+in_channels: 8
+
+total_steps: 30000
+eval_interval: 5000
+
+selfplay:
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  random_opening_plies: 0
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_p5ctl.npz"
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v6_p5ctl.pt"   # self-anchor (8-plane)
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0
