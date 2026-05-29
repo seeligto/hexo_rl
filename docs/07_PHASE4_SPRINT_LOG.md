@@ -4209,6 +4209,35 @@ pool.py wiring (B2.3).
   plane) → Phase 5b **TD-λ** (NOT aux heads). Report:
   `reports/investigations/compound_turn_cf1_cf2_20260528.md` §8.
 
+#### Phase 5a smoke VERDICT — QUALIFIED SUCCESS (2026-05-29, ran on vast)
+
+30k smoke completed (lever stack OFF). Full data + reasoning: report §9.
+- **SealBot WR (sampled T=0.5, in-run):** 22/18/21/21/22 % (5k–25k) — flat
+  ~21% plateau, above §150 anchor 17.4%, far above §S178/§S181 collapse (0–5%).
+- **SealBot WR (greedy T=0, standalone 30k ckpt): 33%** [24.6, 42.7] — clears
+  the ≥25% bar, ≈2× anchor.
+- **Temperature isolated as the dominant factor** of the 33-vs-21 gap: same
+  KClusterMCTSBot path 0.33@T0 → 0.23@T0.5 (−10pp); path effect (KCluster vs
+  ModelPlayer @T0.5) ~2pp within noise. Confirms L21/L22 — sampled flatness,
+  not weak argmax.
+- **V_spread (T3):** net-positive throughout (+0.22..+0.59 vs §S181's −0.016),
+  degraded in the tail (+0.6→+0.22, −0.31 excursion @25.5k) — attractor
+  pressing late but not winning.
+- **Colony = decision, not spam:** stride5_p90=4 (vs 60), colony_ext_frac=0.0
+  (vs 0.40); colony share of wins 36%→82% is legit meta per
+  [[feedback_colony_is_meta_not_kill_signal]].
+- **Net:** colony attractor SUPPRESSED (the §S181 target). Favors E1
+  (compound-turn defects were contributing); E2 (§S150 loop-regression)
+  weakened. Open: CF-1 (global) vs CF-2 (turn-phase plane) attribution →
+  **CF-1-only v6 control** (`v6_p5a_control`, running) resolves it; eval at
+  BOTH T=0 and T=0.5.
+- **L62 — always eval at both T=0 (greedy strength) and T=0.5 (sampled-policy
+  health); a single temperature misreads the model** (here: 33% vs 22% on the
+  same checkpoint). **L63 — the encoding registry is NOT the single source of
+  truth it claims; ~14 modules hardcode "v6≡8 planes" (WIRE_CHANNELS/
+  BUFFER_CHANNELS/KEPT_PLANE_INDICES/{8,11} literals). Needs a dedicated
+  encoding-width audit wave** (report §9.7).
+
 ---
 
 ## §66–§101 Classification Audit — quick-look table
