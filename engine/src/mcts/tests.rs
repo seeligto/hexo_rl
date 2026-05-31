@@ -513,6 +513,53 @@ fn test_cf1_stone2_win_still_scored_as_loss_to_mover() {
          for the player who completed the line");
 }
 
+// ── CF-6: FPU sign consistency (pinning test, no production-logic change) ──
+//
+// Pins the verified no-bug invariant in `puct_score`:
+//   * A VISITED child's stored Q is mr-negated: at an mr==1 parent the child is
+//     the OTHER player (apply_move flips), so its own-perspective Q must be
+//     flipped into the parent's frame (`-child.q_value_vl`); at mr==2 the child
+//     is the SAME player (no flip, `+child.q_value_vl`).
+//   * An UNVISITED child's `fpu_value` is supplied by the caller ALREADY in the
+//     parent's to-move frame, so it is NEVER mr-negated — identical at mr==1 and
+//     mr==2.
+// Setting c_puct=0.0 makes the U term exactly 0, so `puct_score == q` and the
+// q-part is read directly. Flipping either expected sign makes this FAIL.
+
+#[test]
+fn test_cf6_fpu_sign_consistent_with_visited_child_at_both_mr() {
+    let (mut tree, c1, c2) = setup_two_child_tree(0.0);
+    let sqrt_n = 2.0_f32.sqrt();
+    const FPU: f32 = -0.3;
+
+    // c1: visited child, known decisive own-frame Q. virtual_loss_count==0 from
+    // setup, so q_value_vl == w_value / n_visits.
+    tree.pool[c1 as usize].n_visits = 4;
+    tree.pool[c1 as usize].w_value  = 2.0; // own-frame Q = 2.0 / 4 = 0.5
+    let own_q = tree.pool[c1 as usize].q_value_vl(tree.virtual_loss);
+    assert!((own_q - 0.5).abs() < 1e-6, "precondition: own_q = {own_q}");
+    // c2 stays unvisited (n_visits == 0 from setup).
+    assert_eq!(tree.pool[c2 as usize].n_visits, 0);
+
+    // --- mr == 2 parent (children are the SAME player) ---
+    assert_eq!(tree.pool[0].moves_remaining, 2);
+    let q_visited_mr2 = tree.puct_score(c1, 0, sqrt_n, FPU);
+    assert!((q_visited_mr2 - 0.5).abs() < 1e-6,
+        "mr2 visited q = {q_visited_mr2}, want +0.5 (not negated)");
+    let q_unvisited_mr2 = tree.puct_score(c2, 0, sqrt_n, FPU);
+    assert!((q_unvisited_mr2 - FPU).abs() < 1e-6,
+        "mr2 unvisited q = {q_unvisited_mr2}, want fpu_value {FPU}");
+
+    // --- mr == 1 parent (children are the OTHER player) ---
+    tree.pool[0].moves_remaining = 1;
+    let q_visited_mr1 = tree.puct_score(c1, 0, sqrt_n, FPU);
+    assert!((q_visited_mr1 - (-0.5)).abs() < 1e-6,
+        "mr1 visited q = {q_visited_mr1}, want -0.5 (negated into parent frame)");
+    let q_unvisited_mr1 = tree.puct_score(c2, 0, sqrt_n, FPU);
+    assert!((q_unvisited_mr1 - FPU).abs() < 1e-6,
+        "mr1 unvisited q = {q_unvisited_mr1}, want fpu_value {FPU} (UNCHANGED by mr)");
+}
+
 // ── Gumbel MCTS tests ────────────────────────────────────────────────────
 
 pub(super) fn setup_expanded_root() -> MCTSTree {

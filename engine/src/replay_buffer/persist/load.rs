@@ -266,6 +266,13 @@ impl ReplayBuffer {
                 .map_err(|e| format!("{e}"))?;
             self.is_full_search[slot] = buf1[0];
 
+            // DRAW-MASK (Phase 6) — value_target_valid is NOT persisted to the
+            // on-disk HEXB format (no format bump). On load it defaults to 1
+            // (supervise value). ACCEPTABLE SHORTCUT: the 30k re-measure is a
+            // FRESH run (no buffer resume), so a saved+reloaded buffer's pre-cap
+            // masking is never relied on in practice. `new()` already inits the
+            // column to all-ones, so no explicit write is needed here.
+
             // §S181-AUDIT Wave 4 4B-impl-1 — position_index per row (v8+ only).
             // v6/v7 files default position_index to 0 (aux loss masks pretrain rows).
             if version == 8 {

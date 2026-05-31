@@ -79,6 +79,7 @@ class WorkerPoolLike(Protocol):
     def buffer_composition(self) -> dict[str, Any]: ...
     def model_version_summary(self) -> dict[str, Any]: ...
     def per_worker_draw_rates(self) -> dict[int, float]: ...
+    def current_stride5_p90(self) -> int: ...
     def set_radius_override(self, radius: int | None) -> None: ...
 
 
@@ -169,6 +170,12 @@ class StepCoordinatorConfig:
     instrumentation_enabled: bool
     stop_step: int | None
     final_eval_drain_timeout_sec: float
+    # §CANARY-VAL stride-5 spam hard-abort (validated 2026-05-31: benign rolling
+    # P90 ≤4 on all radius-5 runs; cosine-temp draw-collapse spam P90 86-133).
+    # Gate fires when the pool's rolling-50 stride5 P90 stays ≥ threshold for
+    # ``stride5_p90_consec`` consecutive eval points. threshold ≤ 0 disables.
+    stride5_p90_threshold: float = 30.0
+    stride5_p90_consec: int = 3
     # §178 bot-corpus slot
     bot_batch_share: float = 0.0
     # §178 refresh hook surface (DISABLED-by-default per master baseline; Wave 3
@@ -338,6 +345,8 @@ class StepCoordinator:
         self._best_model_step: int | None = anchor_state.best_model_step
         self._schedule_idx = 1  # first schedule entry already applied at buffer construction
         self._consec_high_gn = 0
+        # §CANARY-VAL — consecutive eval points with rolling stride5 P90 ≥ threshold.
+        self._consec_high_stride5 = 0
         self._eval_result: list[dict[str, Any] | None] = [None]
         self._ew_history = deque(maxlen=max(config.soft_ew_min_pts, 1))
         self.last_train_game_count = pool.games_completed
@@ -381,6 +390,10 @@ class StepCoordinator:
     @property
     def consec_high_gn(self) -> int:
         return self._consec_high_gn
+
+    @property
+    def consec_high_stride5(self) -> int:
+        return self._consec_high_stride5
 
     @property
     def ew_history(self) -> tuple[float, ...]:
@@ -624,6 +637,9 @@ class StepCoordinator:
                     n_recent=batch.n_recent_actual,
                     # §S181-AUDIT Wave 4 4B-impl-3 — ply-index aux head feed.
                     position_indices=batch.position_indices,
+                    # DRAW-MASK (Phase 6) — per-row value-supervision mask (capped
+                    # self-play rows masked out of the value loss).
+                    value_target_valid=batch.value_target_valid,
                 )
             else:
                 w_pre = 0.0
@@ -705,6 +721,30 @@ class StepCoordinator:
                         )
                         self.shutdown.running = False
                         soft_abort_fired = True
+
+                # D5c: hard-abort on sustained stride-5 spam (§CANARY-VAL).
+                # Rolling-50 stride5 P90 ≥ threshold for N consecutive eval
+                # points → halt. Validated separator: radius-5 benign P90 ≤4;
+                # cosine-temp draw-collapse spam P90 86-133. threshold ≤ 0 = off.
+                if cfg.stride5_p90_threshold > 0.0:
+                    _s5_p90 = int(self.pool.current_stride5_p90())
+                    if _s5_p90 >= cfg.stride5_p90_threshold:
+                        self._consec_high_stride5 += 1
+                        if self._consec_high_stride5 >= cfg.stride5_p90_consec:
+                            self._logger.error(
+                                "hard_abort_stride5_spam",
+                                step=self._train_step,
+                                consec_evals=self._consec_high_stride5,
+                                stride5_p90=_s5_p90,
+                                threshold=cfg.stride5_p90_threshold,
+                                msg=("Sustained stride-5 spam (rolling-50 P90 ≥ "
+                                     "threshold) — halting run. Inspect for "
+                                     "draw-collapse / degenerate lattice fill."),
+                            )
+                            self.shutdown.running = False
+                            hard_abort_fired = True
+                    else:
+                        self._consec_high_stride5 = 0
 
             # D6: eval (drain previous, then maybe kick off new)
             if (self.eval_pipeline is not None

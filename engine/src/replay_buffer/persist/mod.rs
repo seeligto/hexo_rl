@@ -240,6 +240,36 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// DRAW-MASK (Phase 6) — per-row `value_target_valid` column round-trip
+    /// (in-memory; the column is intentionally NOT persisted — documented
+    /// shortcut). Pushes a capped row (value_target_valid=0) plus a default
+    /// row, then asserts the accessor reads back the stamped values. Mirrors
+    /// the `is_full_search` round-trip contract.
+    #[test]
+    fn test_value_target_valid_column_in_memory() {
+        let mut buf = ReplayBuffer::new(8, "v6");
+        // Default rows: push_for_test leaves value_target_valid at its push_raw
+        // default of 1 (supervise value).
+        buf.push_for_test(0.5, 30, true);
+        assert_eq!(buf.value_target_valid_at(0), 1,
+            "default pushed row must supervise value (value_target_valid=1)");
+
+        // Stamp slot 1 as a ply-capped row (masked from value loss).
+        buf.push_for_test(-0.5, 30, true);
+        buf.value_target_valid[1] = 0;
+        assert_eq!(buf.value_target_valid_at(1), 0,
+            "ply-capped row must read value_target_valid=0 via accessor");
+        // is_full_search is independent — the capped row still contributes policy.
+        assert_eq!(buf.is_full_search_at(1), 1,
+            "value-mask must not touch is_full_search (policy target kept)");
+
+        // Documented persist shortcut: the column is NOT written to disk and
+        // defaults to 1 on load. Confirm a fresh buffer inits to all-ones.
+        let buf2 = ReplayBuffer::new(8, "v6");
+        assert_eq!(buf2.value_target_valid_at(0), 1,
+            "fresh buffer must default value_target_valid to 1 (supervise)");
+    }
+
     /// §S181-AUDIT Wave 4 4B-impl-1 — explicit per-row position_index round-trip
     /// across multiple rows, verifying v8 file format wire-correctness.
     #[test]

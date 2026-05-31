@@ -81,7 +81,7 @@ def test_v6_buffer_geometry_matches_legacy_defaults() -> None:
         wl = np.zeros(361, dtype=np.uint8)
         buf.push(state, chain, policy, 0.0, own, wl)
 
-    s, c, p, o, own, wl, _ifs = buf.sample_batch(4, augment=False)
+    s, c, p, o, own, wl, _ifs, _vv = buf.sample_batch(4, augment=False)
     # Shapes must match v6 geometry exactly.
     assert s.shape == (4, 8, 19, 19), f"state shape mismatch: {s.shape}"
     assert c.shape == (4, 6, 19, 19), f"chain shape mismatch: {c.shape}"
@@ -102,7 +102,7 @@ def test_v6w25_buffer_geometry_correct() -> None:
         wl = np.zeros(625, dtype=np.uint8)
         buf.push(state, chain, policy, 0.0, own, wl)
 
-    s, c, p, o, own, wl, _ifs = buf.sample_batch(4, augment=False)
+    s, c, p, o, own, wl, _ifs, _vv = buf.sample_batch(4, augment=False)
     assert s.shape == (4, 8, 25, 25), f"state shape mismatch: {s.shape}"
     assert c.shape == (4, 6, 25, 25), f"chain shape mismatch: {c.shape}"
     assert p.shape == (4, 626),       f"policy shape mismatch: {p.shape}"

@@ -70,7 +70,7 @@ def test_eval_path_disables_rotation_default_ctor():
         _wait_for_games(runner, n_games=2, timeout_s=20.0)
         assert runner.games_completed >= 1, "default-ctor runner did not complete a game"
 
-        feats_np, _chain_np, _pols_np, _vals_np, _plies_np, _own_np, _wl_np, _ifs_np, _pidx_np = (
+        feats_np, _chain_np, _pols_np, _vals_np, _plies_np, _own_np, _wl_np, _ifs_np, _pidx_np, _vv_np = (
             runner.collect_data()
         )
         assert feats_np.shape[0] > 0

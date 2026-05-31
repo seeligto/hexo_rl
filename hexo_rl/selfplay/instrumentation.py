@@ -181,6 +181,19 @@ class PoolInstrumentation:
 
         return (ext_count, ext_total, ext_frac, stride5_p90)
 
+    def current_stride5_p90(self, lock: threading.Lock) -> int:
+        """Rolling P90 of stride5_run over the last ≤50 completed games.
+
+        Same window + percentile rule as ``on_game_complete`` (§162), exposed as
+        a read-only getter so the training step coordinator can gate on it
+        (§CANARY-VAL stride-5 spam hard-abort). Returns 0 when no games yet.
+        """
+        with lock:
+            if not self._stride5_run_history:
+                return 0
+            sr = sorted(self._stride5_run_history)
+        return sr[max(0, int(len(sr) * 0.9) - 1)]
+
     def per_worker_draw_rates(self, lock: threading.Lock) -> dict[int, float]:
         """Phase B' Class-1: rolling last-50-game draw rate per worker."""
         with lock:

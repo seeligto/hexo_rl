@@ -391,17 +391,18 @@ class Trainer:
 
         n_recent = 0
         position_indices: Optional[np.ndarray] = None
+        value_target_valid: Optional[np.ndarray] = None
         if recent_buffer is not None and recent_buffer.size > 0 and recency_weight > 0.0:
             n_recent = max(1, int(round(batch_size * recency_weight)))
             n_uniform = batch_size - n_recent
-            s_r, c_r, p_r, o_r, own_r, wl_r, ifs_r = recent_buffer.sample(n_recent)
+            s_r, c_r, p_r, o_r, own_r, wl_r, ifs_r, vv_r = recent_buffer.sample(n_recent)
             # WHY: RecentBuffer stores aux flat (n, aux_stride); reshape to (n, board_size, board_size)
             _bs = int(math.isqrt(own_r.shape[1]))
             own_r = own_r.reshape(-1, _bs, _bs)
             wl_r  = wl_r.reshape(-1, _bs, _bs)
             # §S181-AUDIT Wave 4 4B-impl-3 — recent_buffer lacks ply index; fill zeros.
             pos_r = np.zeros(len(s_r), dtype=np.uint16)
-            s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u = buffer.sample_batch_with_pos(max(1, n_uniform), augment)
+            s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u, vv_u = buffer.sample_batch_with_pos(max(1, n_uniform), augment)
             states          = np.concatenate([s_r, s_u],     axis=0)
             chain_planes    = np.concatenate([c_r, c_u],     axis=0)
             policies        = np.concatenate([p_r, p_u],     axis=0)
@@ -410,8 +411,10 @@ class Trainer:
             winning_line    = np.concatenate([wl_r, wl_u],   axis=0)
             is_full_search  = np.concatenate([ifs_r, ifs_u], axis=0)
             position_indices = np.concatenate([pos_r, pos_u], axis=0)
+            # DRAW-MASK (Phase 6): per-row value-supervision mask.
+            value_target_valid = np.concatenate([vv_r, vv_u], axis=0)
         else:
-            states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search, position_indices = \
+            states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search, position_indices, value_target_valid = \
                 buffer.sample_batch_with_pos(batch_size, augment)
 
         if _perf:
@@ -432,6 +435,7 @@ class Trainer:
             n_pretrain=0,
             n_recent=n_recent,
             position_indices=position_indices,
+            value_target_valid=value_target_valid,
         )
 
     def train_step_from_tensors(
@@ -446,6 +450,7 @@ class Trainer:
         n_pretrain: int = 0,
         n_recent: int = 0,
         position_indices: Optional[Any] = None,
+        value_target_valid: Optional[Any] = None,
     ) -> Dict[str, float]:
         """Perform one gradient update from pre-built numpy arrays.
 
@@ -474,7 +479,8 @@ class Trainer:
                                      is_full_search=is_full_search,
                                      n_pretrain=n_pretrain,
                                      n_recent=n_recent,
-                                     position_indices=position_indices)
+                                     position_indices=position_indices,
+                                     value_target_valid=value_target_valid)
 
     def _train_on_batch(
         self,
@@ -488,6 +494,7 @@ class Trainer:
         n_pretrain: int = 0,
         n_recent: int = 0,
         position_indices: Optional[Any] = None,
+        value_target_valid: Optional[Any] = None,
     ) -> Dict[str, float]:
         """Core training step: forward, loss, backward, optimizer step."""
         _perf = self._perf_timing
@@ -514,6 +521,14 @@ class Trainer:
         if is_full_search is not None:
             full_search_mask_t = torch.from_numpy(
                 np.asarray(is_full_search, dtype=np.uint8)
+            ).to(self.device).bool()
+        # DRAW-MASK (Phase 6): value_target_valid (B,) uint8 → bool tensor. 1 =
+        # supervise the value head, 0 = ply-capped row → mask out of value loss.
+        # None = all rows supervised (backward-compat; matches prior behaviour).
+        value_mask_t: Optional[torch.Tensor] = None
+        if value_target_valid is not None:
+            value_mask_t = torch.from_numpy(
+                np.asarray(value_target_valid, dtype=np.uint8)
             ).to(self.device).bool()
 
         # §S181-AUDIT Wave 2/3 — per-class target temperature on configurable
@@ -625,7 +640,7 @@ class Trainer:
                     log_policy, policies_t, policy_valid, self.device,
                     full_search_mask=full_search_mask_t,
                 )
-            value_loss = compute_value_loss(v_logit, outcomes_t)
+            value_loss = compute_value_loss(v_logit, outcomes_t, value_mask=value_mask_t)
 
             opp_reply_loss = None
             if use_aux:

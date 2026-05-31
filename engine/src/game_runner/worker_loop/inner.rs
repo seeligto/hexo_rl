@@ -1078,6 +1078,12 @@ fn finalize_game(
         (mn, mx, version_seen.len() as u32)
     };
 
+    // DRAW-MASK (Phase 6): per-GAME value-supervision flag. `terminal_reason == 2`
+    // is the ply-cap branch (horizon truncation, no real outcome) — its fabricated
+    // `ply_cap_value` label must be masked out of the value loss. 1 = supervise value
+    // (default, all decisive/organic-draw games), 0 = capped → mask. Computed once
+    // here (per-game constant); the per-move record carries no value_valid field.
+    let value_valid: u8 = u8::from(terminal_reason != 2);
     let mut games_results = results_queue.lock().expect("results lock poisoned");
     for (feat, chain, pol, player, cq, cr, is_full_search, ply_index) in records_vec {
         // §178: split outcome by terminal_reason. `terminal_reason == 2` is the
@@ -1102,7 +1108,7 @@ fn finalize_game(
             rotate_aux_inplace(&mut aux_u8, sym_idx, sym_tables, n_cells);
         }
 
-        games_results.push_back((feat, chain, pol, outcome, plies, aux_u8, is_full_search, ply_index));
+        games_results.push_back((feat, chain, pol, outcome, plies, aux_u8, is_full_search, ply_index, value_valid));
     }
     games_completed.fetch_add(1, Ordering::Relaxed);
     match winner {

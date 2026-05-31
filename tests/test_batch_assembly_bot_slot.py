@@ -35,6 +35,7 @@ def _mk_buffer_return(n: int, ifs_value: int = 1) -> tuple:
     """Mock Rust buffer sample_batch_with_pos return — 8-plane states, configurable ifs.
 
     §S181-AUDIT Wave 4 4B-impl-3: 8-tuple now (added position_indices).
+    DRAW-MASK (Phase 6): 9-tuple now (appended value_target_valid).
     """
     return (
         np.zeros((n, 8,  BOARD_SIZE, BOARD_SIZE), dtype=np.float16),
@@ -45,6 +46,7 @@ def _mk_buffer_return(n: int, ifs_value: int = 1) -> tuple:
         np.zeros((n, BOARD_SIZE, BOARD_SIZE),     dtype=np.uint8),
         np.full(n, ifs_value,                     dtype=np.uint8),
         np.arange(n,                              dtype=np.uint16),
+        np.ones(n,                                dtype=np.uint8),
     )
 
 
@@ -52,6 +54,7 @@ def _mk_signed_buffer_return(n: int, marker: float) -> tuple:
     """Marker-tagged buffer return so we can verify slot ordering byte-by-byte.
 
     §S181-AUDIT Wave 4 4B-impl-3: 8-tuple now (added position_indices).
+    DRAW-MASK (Phase 6): 9-tuple now (appended value_target_valid).
     """
     states = np.full((n, 8, BOARD_SIZE, BOARD_SIZE), marker, dtype=np.float16)
     chain  = np.full((n, 6, BOARD_SIZE, BOARD_SIZE), marker, dtype=np.float16)
@@ -61,7 +64,8 @@ def _mk_signed_buffer_return(n: int, marker: float) -> tuple:
     wl     = np.zeros((n, BOARD_SIZE, BOARD_SIZE), dtype=np.uint8)
     ifs    = np.zeros(n, dtype=np.uint8)  # zero so we can verify the override
     pos    = np.arange(n, dtype=np.uint16)
-    return (states, chain, pol, out, own, wl, ifs, pos)
+    vv     = np.ones(n, dtype=np.uint8)
+    return (states, chain, pol, out, own, wl, ifs, pos, vv)
 
 
 # ── Cell A: load_bot_corpus_buffer back-compat ───────────────────────────────

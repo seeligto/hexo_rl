@@ -224,7 +224,7 @@ def test_mixed_batch_chain_loss_uses_nonzero_corpus_targets(tmp_path: Path) -> N
     assert buf is not None
 
     # Pull the corpus chain planes straight from the buffer (augment=False).
-    _, corpus_chain, _, _, _, _, _ = buf.sample_batch(4, False)
+    _, corpus_chain, _, _, _, _, _, _vv = buf.sample_batch(4, False)
     assert corpus_chain.dtype == np.float16
     assert corpus_chain.shape == (4, 6, BOARD_SIZE, BOARD_SIZE)
     # The §102.a bug would leave corpus_chain all zeros. Guard against that.

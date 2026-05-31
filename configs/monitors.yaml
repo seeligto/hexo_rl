@@ -6,3 +6,11 @@ monitors:
   # Sustained excess above axis_alert may indicate a degenerate strategy.
   axis_warn: 0.45
   axis_alert: 0.50
+  # §CANARY-VAL (2026-05-31) — stride-5 spam hard-abort. The LIVE gate (read by
+  # loop.py → StepCoordinator), distinct from the dead `hard_abort:` block.
+  # Fires when the pool's rolling-50 stride5 P90 stays ≥ threshold for
+  # hard_abort_stride5_p90_consec consecutive eval points. Validated: radius-5
+  # benign P90 ≤4 (0 false positives over 25,601 on-disk games); cosine-temp
+  # draw-collapse spam P90 86-133. Set threshold ≤ 0 to disable.
+  hard_abort_stride5_p90: 30
+  hard_abort_stride5_p90_consec: 3

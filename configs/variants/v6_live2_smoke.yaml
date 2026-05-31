@@ -35,6 +35,14 @@ in_channels: 4
 total_steps: 30000
 eval_interval: 5000
 
+# ── Phase 6 flatness fixes — single re-measure vs the prior v6_live2 30k ──
+# CF-5: zero the mis-fed opp-reply aux head. compute_aux_loss trains on the
+# current-player MCTS visit target (the SAME target as compute_policy_loss),
+# not the opponent's reply — a redundant gradient spending 15% of loss weight
+# reinforcing the (flat) policy distribution. Off until a real next-turn target
+# is plumbed. See reports/investigations/phase6_scoping_memo_20260531.md §3.
+aux_opp_reply_weight: 0.0
+
 selfplay:
   completed_q_values: true
   n_workers: 18

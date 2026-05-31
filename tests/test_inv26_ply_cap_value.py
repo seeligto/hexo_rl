@@ -85,7 +85,7 @@ def _drive_one_round(runner: SelfPlayRunner, model, device) -> tuple[np.ndarray,
 
     drained = runner.drain_game_results()
     terminal_reasons = [row[4] for row in drained]
-    feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np, pidx_np = (
+    feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np, pidx_np, vv_np = (
         runner.collect_data()
     )
     return vals_np, terminal_reasons

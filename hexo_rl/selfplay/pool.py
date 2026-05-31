@@ -484,6 +484,10 @@ class WorkerPool:
         """
         self._inference_server.load_state_dict_safe(state_dict)
 
+    def current_stride5_p90(self) -> int:
+        """Rolling P90 of stride5_run over the last ≤50 games (§CANARY-VAL gate)."""
+        return self._instrumentation.current_stride5_p90(self._lock)
+
     def per_worker_draw_rates(self) -> dict[int, float]:
         """Phase B' Class-1: rolling last-50-game draw rate per worker."""
         return self._instrumentation.per_worker_draw_rates(self._lock)
@@ -548,14 +552,16 @@ class WorkerPool:
         _in_ch = self._feat_len // (self._trunk_size * self._trunk_size)
         _last_buf_emit = time.monotonic()
         while not self._stop_event.is_set():
-            # collect_data() returns 9-tuple from Rust — no Python list allocation.
+            # collect_data() returns 10-tuple from Rust — no Python list allocation.
             # feats_np: (N, feat_len) f32, chain_np: (N, chain_len) f32,
             # pols_np: (N, pol_len) f32, vals_np/plies_np: (N,),
             # own_np/wl_np: (N, 361) u8 — per-row aux projected to cluster window.
             # ifs_np: (N,) u8 — 1 = full-search, 0 = quick-search.
             # pidx_np: (N,) u16 — CF-4 per-row 0-based ply index (NOT plies_np,
             #   the game-total); feeds the ply-index aux target.
-            feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np, pidx_np = self._runner.collect_data()
+            # vv_np: (N,) u8 — DRAW-MASK (Phase 6) per-row value-supervision flag
+            #   (1 = supervise value, 0 = ply-capped row masked from value loss).
+            feats_np, chain_np, pols_np, vals_np, plies_np, own_np, wl_np, ifs_np, pidx_np, vv_np = self._runner.collect_data()
             n = len(vals_np)
             if n > 0:
                 # Bulk push: one PyO3 call instead of N per-row pushes (Bucket 5 #2).
@@ -574,6 +580,7 @@ class WorkerPool:
                 self.replay_buffer.push_many(
                     feats_f16, chain_f16, pols_np, vals_np, own_np, wl_np,
                     game_lengths, ifs_np, pidx_np,   # CF-4: per-row ply index
+                    value_target_valid=vv_np,        # DRAW-MASK: per-row value mask
                 )
 
                 # Recent buffer still requires per-row push (Python Lock semantics).
@@ -589,6 +596,7 @@ class WorkerPool:
                             ownership=own_np[i],
                             winning_line=wl_np[i],
                             is_full_search=bool(ifs_np[i]),
+                            value_target_valid=bool(vv_np[i]),  # DRAW-MASK: per-row value mask
                         )
 
                 with self._lock:

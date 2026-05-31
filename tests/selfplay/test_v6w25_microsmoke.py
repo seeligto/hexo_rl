@@ -123,7 +123,7 @@ def test_v6w25_pool_smoke_no_nan_correct_shapes():
 
         # Sample rows from the replay buffer; verify shape + NaN-free.
         bs = min(8, buf.size)
-        states, chain_planes, policies, outcomes, ownership, wl, ifs = (
+        states, chain_planes, policies, outcomes, ownership, wl, ifs, _vv = (
             buf.sample_batch(batch_size=bs, augment=False)
         )
 

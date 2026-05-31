@@ -123,6 +123,8 @@ def _make_pool(games_completed: int = 0) -> Mock:
     pool.inference_stats = Mock(return_value=_istats)
     pool.sync_inference_weights = Mock()
     pool.recent_buffer = None
+    # §CANARY-VAL stride-5 gate reads this at every eval point; default benign.
+    pool.current_stride5_p90 = Mock(return_value=0)
     return pool
 
 
@@ -271,6 +273,64 @@ def test_hard_abort_resets_on_finite_low(patch_orchestrator_helpers):
     assert shutdown.running is True
     # After reset on step 4, only 2 high-GN streak follows
     assert coord.consec_high_gn == 2
+
+
+# ── B#1c: hard-abort on sustained stride-5 spam (rolling-50 P90) ─────────────
+
+def test_hard_abort_stride5_spam_streak(patch_orchestrator_helpers):
+    """3 consecutive eval points with rolling stride5 P90 >= threshold trip
+    shutdown.running = False."""
+    pool = _make_pool()
+    pool.current_stride5_p90 = Mock(return_value=60)  # >= 30 threshold
+    shutdown = FakeShutdown()
+    coord = _make_coordinator(
+        pool=pool,
+        shutdown=shutdown,
+        config_overrides={"eval_interval": 1, "stride5_p90_threshold": 30.0,
+                          "stride5_p90_consec": 3, "max_train_burst": 5,
+                          "training_steps_per_game": 5.0},
+    )
+    out = coord.step()
+    assert out.hard_abort_fired is True
+    assert shutdown.running is False
+    assert coord.consec_high_stride5 >= 3
+
+
+def test_hard_abort_stride5_resets_on_low(patch_orchestrator_helpers):
+    """A single below-threshold eval point resets the consecutive counter, so a
+    high/high/low/high/high pattern never reaches 3-in-a-row."""
+    pool = _make_pool()
+    pool.current_stride5_p90 = Mock(side_effect=[60, 60, 10, 60, 60])
+    shutdown = FakeShutdown()
+    coord = _make_coordinator(
+        pool=pool,
+        shutdown=shutdown,
+        config_overrides={"eval_interval": 1, "stride5_p90_threshold": 30.0,
+                          "stride5_p90_consec": 3, "max_train_burst": 5,
+                          "training_steps_per_game": 5.0},
+    )
+    out = coord.step()
+    assert out.hard_abort_fired is False
+    assert shutdown.running is True
+    assert coord.consec_high_stride5 == 2  # reset at the low, then 2 highs
+
+
+def test_stride5_gate_off_when_threshold_nonpositive(patch_orchestrator_helpers):
+    """threshold <= 0 disables the gate even with extreme rolling P90."""
+    pool = _make_pool()
+    pool.current_stride5_p90 = Mock(return_value=999)
+    shutdown = FakeShutdown()
+    coord = _make_coordinator(
+        pool=pool,
+        shutdown=shutdown,
+        config_overrides={"eval_interval": 1, "stride5_p90_threshold": 0.0,
+                          "stride5_p90_consec": 3, "max_train_burst": 5,
+                          "training_steps_per_game": 5.0},
+    )
+    out = coord.step()
+    assert out.hard_abort_fired is False
+    assert shutdown.running is True
+    assert coord.consec_high_stride5 == 0
 
 
 # ── B#2: soft-abort on E-W axis drift ───────────────────────────────────────

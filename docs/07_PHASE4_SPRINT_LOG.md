@@ -4566,3 +4566,16 @@ dynamic play, L2): RECENT v6_live2-window 866 games (vast-staged
   (§157, v6_live2 adoption) leaned on an inert gate; v6_live2 still spam-clean by
   direct measurement (stride5 max 2, colony_ext 0).
 - Gates are LIVE aborts (`step_coordinator.py:147-164`, `raise HardAbort`).
+
+**WIRED 2026-05-31 (operator directive).** stride5 spam gate now LIVE via
+`monitors.hard_abort_stride5_p90` (default 30) + `hard_abort_stride5_p90_consec`
+(default 3), mirroring the grad-norm gate (NOT the dead `hard_abort:` block, which
+stays inert). Fires when pool rolling-50 stride5 P90 ≥ threshold for 3 consecutive
+eval points. Code: `instrumentation.current_stride5_p90` → `pool.current_stride5_p90`
+→ `step_coordinator` D5c → `loop.py`. TDD: 3 tests (`test_hard_abort_stride5_*`);
+coordinator suite 23/0/0, instrumentation 14/0/0, tests/training 105/0/0.
+FPR safety: scanned 25,601 on-disk games — §175 attractor (22,320) rolling-p90
+max=4, 0 games ≥60; ONLY pre-radius-5 (obsolete §146) + cosine-temp full-conjunction
+(R10-R14 p90 86-133, cosine OFF in prod L9) exceed it → **0 false positives on any
+radius-5 run.** colony_ext left as telemetry (annotated non-enforced in 10 configs).
+Default-on, ≤0 disables. Not in any hot path (called once per eval-interval ≥2500).

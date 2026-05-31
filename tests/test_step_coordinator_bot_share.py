@@ -120,6 +120,8 @@ def _make_pool(games_completed: int = 0) -> Mock:
     pool.inference_stats = Mock(return_value=_istats)
     pool.sync_inference_weights = Mock()
     pool.recent_buffer = None
+    # §CANARY-VAL stride-5 gate reads this at every eval point; default benign.
+    pool.current_stride5_p90 = Mock(return_value=0)
     return pool
 
 

@@ -24,6 +24,7 @@ def _mk_sample_return(n: int) -> tuple:
     """Return an 8-tuple matching `ReplayBuffer.sample_batch_with_pos` signature.
 
     §S181-AUDIT Wave 4 4B-impl-3: 8-tuple (added position_indices).
+    DRAW-MASK (Phase 6): 9-tuple now (appended value_target_valid).
     """
     states       = np.zeros((n, 8, 19, 19), dtype=np.float16)
     chain_planes = np.zeros((n, 6, 19, 19),  dtype=np.float16)
@@ -33,7 +34,8 @@ def _mk_sample_return(n: int) -> tuple:
     winning_line = np.zeros((n, 19, 19),     dtype=np.uint8)
     is_full_search = np.ones(n, dtype=np.uint8)
     position_indices = np.arange(n, dtype=np.uint16)
-    return states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search, position_indices
+    value_target_valid = np.ones(n, dtype=np.uint8)
+    return states, chain_planes, policies, outcomes, ownership, winning_line, is_full_search, position_indices, value_target_valid
 
 
 @pytest.mark.parametrize("augment", [True, False])

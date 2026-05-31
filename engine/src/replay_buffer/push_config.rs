@@ -32,6 +32,8 @@ pub struct PushSingleConfig<'py> {
     pub is_full_search: bool,
     /// §S181-AUDIT Wave 4 4B-impl-1 — 0-based ply index within game.
     pub position_index: u16,
+    /// DRAW-MASK (Phase 6) — 1 = supervise value head, 0 = ply-capped → masked.
+    pub value_target_valid: bool,
 }
 
 /// Config for `push_game_impl` — batched per-game with shared scalar metadata
@@ -48,6 +50,8 @@ pub struct PushGameConfig<'py> {
     pub is_full_search: Option<PyReadonlyArray1<'py, u8>>,
     /// §S181-AUDIT Wave 4 4B-impl-1 — per-row 0-based ply index. None ⇒ fills 0..N-1.
     pub position_indices: Option<PyReadonlyArray1<'py, u16>>,
+    /// DRAW-MASK (Phase 6) — per-row value-supervision flag. None ⇒ all-ones (supervise).
+    pub value_target_valid: Option<PyReadonlyArray1<'py, u8>>,
 }
 
 /// Config for `push_many_impl` — batched per-row with all metadata as arrays;
@@ -63,4 +67,6 @@ pub struct PushManyConfig<'py> {
     pub is_full_search: PyReadonlyArray1<'py, u8>,
     /// §S181-AUDIT Wave 4 4B-impl-1 — per-row 0-based ply index. None ⇒ fills zeros.
     pub position_indices: Option<PyReadonlyArray1<'py, u16>>,
+    /// DRAW-MASK (Phase 6) — per-row value-supervision flag. None ⇒ all-ones (supervise).
+    pub value_target_valid: Option<PyReadonlyArray1<'py, u8>>,
 }

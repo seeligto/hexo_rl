@@ -52,6 +52,7 @@ def _mk_buffer_return(n: int) -> tuple:
         np.zeros((n, 19, 19),     dtype=np.uint8),
         np.ones(n,                dtype=np.uint8),
         np.arange(n,              dtype=np.uint16),
+        np.ones(n,                dtype=np.uint8),
     )
 
 
@@ -96,7 +97,7 @@ def test_augment_recent_nonidentity_frequency_256():
     """augment=True on 256 rows: ≥ 82% changed (expected 11/12 ≈ 91.7%)."""
     n = 256
     buf, _ = _make_asymmetric_recent_buffer(n)
-    s_r, c_r, p_r, o_r, own_r, wl_r, _ = buf.sample(n)
+    s_r, c_r, p_r, o_r, own_r, wl_r, _, _ = buf.sample(n)
     s_orig = s_r.copy()
 
     np.random.seed(101)
@@ -120,13 +121,13 @@ def test_determinism_same_seed_same_transforms():
     buf, _ = _make_asymmetric_recent_buffer(n)
 
     np.random.seed(42)
-    s_r1, c_r1, p_r1, o_r1, own_r1, wl_r1, _ = buf.sample(n)
+    s_r1, c_r1, p_r1, o_r1, own_r1, wl_r1, _, _ = buf.sample(n)
     s1, _, p1, _, _ = _augment_recent_rows(
         s_r1.copy(), c_r1.copy(), p_r1.copy(), own_r1.copy(), wl_r1.copy(), augment=True
     )
 
     np.random.seed(42)
-    s_r2, c_r2, p_r2, o_r2, own_r2, wl_r2, _ = buf.sample(n)
+    s_r2, c_r2, p_r2, o_r2, own_r2, wl_r2, _, _ = buf.sample(n)
     s2, _, p2, _, _ = _augment_recent_rows(
         s_r2.copy(), c_r2.copy(), p_r2.copy(), own_r2.copy(), wl_r2.copy(), augment=True
     )
@@ -141,7 +142,7 @@ def test_augment_false_recent_slice_is_noop():
     """augment=False: _augment_recent_rows returns same array objects."""
     n = 32
     buf, _ = _make_asymmetric_recent_buffer(n)
-    s_r, c_r, p_r, o_r, own_r, wl_r, _ = buf.sample(n)
+    s_r, c_r, p_r, o_r, own_r, wl_r, _, _ = buf.sample(n)
 
     s_out, c_out, p_out, own_out, wl_out = _augment_recent_rows(
         s_r, c_r, p_r, own_r, wl_r, augment=False

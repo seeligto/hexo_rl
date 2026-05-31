@@ -62,7 +62,7 @@ def test_v8_sample_batch_no_oob() -> None:
     # With augment=True, apply_sym is called for each sample.
     # Pre-A4 this would OOB on the pass-slot copy path.
     for _ in range(5):
-        s, c, p, o, own, wl, _ifs = buf.sample_batch(8, augment=True)
+        s, c, p, o, own, wl, _ifs, _vv = buf.sample_batch(8, augment=True)
         assert s.shape   == (8, 11, 25, 25), f"state shape: {s.shape}"
         assert c.shape   == (8, 6,  25, 25), f"chain shape: {c.shape}"
         assert p.shape   == (8, 625),        f"policy shape: {p.shape}"
@@ -76,7 +76,7 @@ def test_v8_policy_values_in_range_after_augment() -> None:
     for _ in range(15):
         buf.push(*_v8_entry())
 
-    _, _, p, _, _, _, _ = buf.sample_batch(15, augment=True)
+    _, _, p, _, _, _, _, _vv = buf.sample_batch(15, augment=True)
     assert (p >= 0.0).all(), "v8 augmented policy must have no negative values"
 
 
@@ -101,13 +101,13 @@ def test_v6_pass_slot_preserved_under_augmentation() -> None:
         buf.push(*_v6_entry_with_known_pass(pass_val))
 
     # Without augmentation — should be exact.
-    _, _, p_noaug, _, _, _, _ = buf.sample_batch(15, augment=False)
+    _, _, p_noaug, _, _, _, _, _vv = buf.sample_batch(15, augment=False)
     pass_logits = p_noaug[:, 361]
     assert np.allclose(pass_logits, pass_val, atol=1e-3), \
         f"no-aug pass slot mismatch: {pass_logits}"
 
     # With augmentation — pass slot is invariant under hex symmetry.
-    _, _, p_aug, _, _, _, _ = buf.sample_batch(15, augment=True)
+    _, _, p_aug, _, _, _, _, _vv = buf.sample_batch(15, augment=True)
     pass_logits_aug = p_aug[:, 361]
     assert np.allclose(pass_logits_aug, pass_val, atol=1e-3), \
         f"aug pass slot mismatch: {pass_logits_aug}"

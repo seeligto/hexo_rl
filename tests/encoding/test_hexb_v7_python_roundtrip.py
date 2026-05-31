@@ -54,7 +54,7 @@ def test_hexb_v7_v6w25_roundtrip() -> None:
 
         # Sample a batch and verify shapes match v6w25 spec.
         out = buf2.sample_batch(4, augment=False)
-        s_out, c_out, p_out, o_out, own_out, wl_out, ifs_out = out
+        s_out, c_out, p_out, o_out, own_out, wl_out, ifs_out, _vv = out
 
         assert s_out.shape == (4, spec.n_planes, spec.trunk_size, spec.trunk_size)
         assert c_out.shape == (4, 6, spec.trunk_size, spec.trunk_size)

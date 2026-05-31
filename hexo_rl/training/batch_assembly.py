@@ -61,6 +61,9 @@ class BatchAssemblyResult:
     is_full_search: np.ndarray
     n_recent_actual: int
     position_indices: Optional[np.ndarray] = None
+    # DRAW-MASK (Phase 6): per-row value-supervision mask (1 = supervise value,
+    # 0 = ply-capped → masked from value loss). None when absent (back-compat).
+    value_target_valid: Optional[np.ndarray] = None
 
 
 # ── Pre-allocated batch buffers ───────────────────────────────────────────────
@@ -85,6 +88,7 @@ class BatchBuffers:
     ownership: np.ndarray       # (B, T, T) uint8
     winning_line: np.ndarray    # (B, T, T) uint8
     is_full_search: np.ndarray  # (B,) uint8 — 1=full-search, 0=quick-search
+    value_target_valid: np.ndarray  # (B,) uint8 — DRAW-MASK: 1=supervise value, 0=masked
     warmup_active: bool = field(default=True)
 
 
@@ -124,6 +128,7 @@ def allocate_batch_buffers(
         ownership=np.empty((batch_size, trunk_size, trunk_size), dtype=np.uint8),
         winning_line=np.empty((batch_size, trunk_size, trunk_size), dtype=np.uint8),
         is_full_search=np.ones(batch_size, dtype=np.uint8),  # default full-search
+        value_target_valid=np.ones(batch_size, dtype=np.uint8),  # DRAW-MASK: default supervise
     )
 
 
@@ -625,24 +630,26 @@ def assemble_mixed_batch(
         ``n_pre + n_bot + n_recent_actual`` to slice. Corpus AND bot positions
         always have ``is_full_search=1``.
     """
-    s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre, pos_pre = pretrained_buffer.sample_batch_with_pos(n_pre, augment)
+    s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre, pos_pre, vv_pre = pretrained_buffer.sample_batch_with_pos(n_pre, augment)
 
     # §178 bot slot — optional fourth piece (gates on size>0 like steady-state fallback).
     use_bot = bot_buffer is not None and n_bot > 0 and bot_buffer.size > 0
     if use_bot:
-        s_b, c_b, p_b, o_b, own_b, wl_b, _ifs_b, pos_b = bot_buffer.sample_batch_with_pos(n_bot, augment)
+        s_b, c_b, p_b, o_b, own_b, wl_b, _ifs_b, pos_b, _vv_b = bot_buffer.sample_batch_with_pos(n_bot, augment)
         # Override is_full_search → 1 for all bot rows (one-hot SealBot targets are
-        # full-search-equivalent; design §4.1).
+        # full-search-equivalent; design §4.1). DRAW-MASK: bot games have no
+        # ply-cap concept (one-hot SealBot targets) → value_target_valid = 1.
         ifs_b = np.ones(len(s_b), dtype=np.uint8)
+        vv_b = np.ones(len(s_b), dtype=np.uint8)
     else:
         n_bot = 0  # collapse to 0 so downstream slicing arithmetic is correct
-        s_b = c_b = p_b = o_b = own_b = wl_b = ifs_b = pos_b = None
+        s_b = c_b = p_b = o_b = own_b = wl_b = ifs_b = pos_b = vv_b = None
 
     if batch_size != batch_size_cfg:
         # Edge case: runtime batch size diverged from pre-allocated shape.
         if train_step > 100:
             log.warning("mixed_batch_size_mismatch", batch_size=batch_size, expected=batch_size_cfg)
-        s_self, c_self, p_self, o_self, own_self, wl_self, ifs_self, pos_self = _sample_selfplay(
+        s_self, c_self, p_self, o_self, own_self, wl_self, ifs_self, pos_self, vv_self = _sample_selfplay(
             buffer, recent_buffer, n_self, recency_weight, augment
         )
         # n_recent unknown in this mismatch path — report 0 (caller disables 3-way split).
@@ -657,6 +664,7 @@ def assemble_mixed_batch(
                 is_full_search=np.concatenate([ifs_pre, ifs_b, ifs_self], axis=0),
                 n_recent_actual=0,
                 position_indices=np.concatenate([pos_pre, pos_b, pos_self], axis=0),
+                value_target_valid=np.concatenate([vv_pre, vv_b, vv_self], axis=0),
             )
         return BatchAssemblyResult(
             states=np.concatenate([s_pre, s_self], axis=0),
@@ -668,6 +676,7 @@ def assemble_mixed_batch(
             is_full_search=np.concatenate([ifs_pre, ifs_self], axis=0),
             n_recent_actual=0,
             position_indices=np.concatenate([pos_pre, pos_self], axis=0),
+            value_target_valid=np.concatenate([vv_pre, vv_self], axis=0),
         )
 
     # ── Normal path: try in-place fill into bufs ──────────────────────────────
@@ -680,13 +689,13 @@ def assemble_mixed_batch(
 
     bot_piece: Optional[tuple[Any, ...]] = None
     if use_bot:
-        bot_piece = (s_b, c_b, p_b, o_b, own_b, wl_b, ifs_b, pos_b)
+        bot_piece = (s_b, c_b, p_b, o_b, own_b, wl_b, ifs_b, pos_b, vv_b)
 
     n_recent_actual = 0
     if use_recent:
         n_recent_req  = max(1, int(round(n_self * recency_weight)))
         n_uniform     = n_self - n_recent_req
-        s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_recent_req)
+        s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r, vv_r = recent_buffer.sample(n_recent_req)
         s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
             s_r, c_r, p_r, own_r_flat, wl_r_flat, augment, opp_stone_slot(buffer.encoding)
         )
@@ -697,20 +706,20 @@ def assemble_mixed_batch(
         # masking can ignore these rows if needed; default behaviour treats them as
         # "early-game" target).
         pos_r = np.zeros(len(s_r), dtype=np.uint16)
-        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u = buffer.sample_batch_with_pos(max(1, n_uniform), augment)
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u, vv_u = buffer.sample_batch_with_pos(max(1, n_uniform), augment)
         n_recent_actual = len(s_r)
-        pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre, pos_pre)]
+        pieces    = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre, pos_pre, vv_pre)]
         if bot_piece is not None:
             pieces.append(bot_piece)
-        pieces.extend([(s_r, c_r, p_r, o_r, own_r, wl_r, ifs_r, pos_r),
-                       (s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u)])
+        pieces.extend([(s_r, c_r, p_r, o_r, own_r, wl_r, ifs_r, pos_r, vv_r),
+                       (s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u, vv_u)])
         n_avail = n_pre + (n_bot if use_bot else 0) + len(s_r) + len(s_u)
     else:
-        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u = buffer.sample_batch_with_pos(max(1, n_self), augment)
-        pieces = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre, pos_pre)]
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u, vv_u = buffer.sample_batch_with_pos(max(1, n_self), augment)
+        pieces = [(s_pre, c_pre, p_pre, o_pre, own_pre, wl_pre, ifs_pre, pos_pre, vv_pre)]
         if bot_piece is not None:
             pieces.append(bot_piece)
-        pieces.append((s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u))
+        pieces.append((s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u, vv_u))
         n_avail = n_pre + (n_bot if use_bot else 0) + len(s_u)
 
     if n_avail < batch_size:
@@ -725,6 +734,7 @@ def assemble_mixed_batch(
             is_full_search=np.concatenate([p[6] for p in pieces], axis=0),
             n_recent_actual=n_recent_actual,
             position_indices=np.concatenate([p[7] for p in pieces], axis=0),
+            value_target_valid=np.concatenate([p[8] for p in pieces], axis=0),
         )
 
     # Steady-state: in-place copy, no heap allocation.
@@ -736,7 +746,7 @@ def assemble_mixed_batch(
     out_pos = np.concatenate([p[7] for p in pieces], axis=0)
 
     offset = 0
-    for s, c, p, o, own, wl, ifs, _pos in pieces:
+    for s, c, p, o, own, wl, ifs, _pos, vv in pieces:
         n = len(s)
         np.copyto(bufs.states[offset:offset + n],          s)
         np.copyto(bufs.chain_planes[offset:offset + n],    c)
@@ -745,6 +755,7 @@ def assemble_mixed_batch(
         np.copyto(bufs.ownership[offset:offset + n],       own)
         np.copyto(bufs.winning_line[offset:offset + n],    wl)
         np.copyto(bufs.is_full_search[offset:offset + n],  ifs)
+        np.copyto(bufs.value_target_valid[offset:offset + n], vv)
         offset += n
 
     return BatchAssemblyResult(
@@ -757,6 +768,7 @@ def assemble_mixed_batch(
         is_full_search=bufs.is_full_search,
         n_recent_actual=n_recent_actual,
         position_indices=out_pos,
+        value_target_valid=bufs.value_target_valid,
     )
 
 
@@ -766,17 +778,18 @@ def _sample_selfplay(
     n_self: int,
     recency_weight: float,
     augment: bool = True,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Sample self-play rows, blending recent + uniform when recency_weight > 0.
 
-    §S181-AUDIT Wave 4 4B-impl-3 — 8-tuple now (added position_indices); recent
-    buffer rows fill zeros since they lack per-row ply tracking.
+    §S181-AUDIT Wave 4 4B-impl-3 — added position_indices (recent rows zero-filled).
+    DRAW-MASK (Phase 6) — 9-tuple now (added trailing value_target_valid; recent
+    rows default to 1 = supervise value).
     """
     if (recent_buffer is not None and recent_buffer.size > 0
             and recency_weight > 0.0 and n_self > 1):
         n_r = max(1, int(round(n_self * recency_weight)))
         n_u = n_self - n_r
-        s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_r)
+        s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r, vv_r = recent_buffer.sample(n_r)
         s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
             s_r, c_r, p_r, own_r_flat, wl_r_flat, augment, opp_stone_slot(buffer.encoding)
         )
@@ -784,7 +797,7 @@ def _sample_selfplay(
         own_r = own_r_flat.reshape(-1, _bs, _bs)
         wl_r  = wl_r_flat.reshape(-1, _bs, _bs)
         pos_r = np.zeros(len(s_r), dtype=np.uint16)
-        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u = buffer.sample_batch_with_pos(max(1, n_u), augment)
+        s_u, c_u, p_u, o_u, own_u, wl_u, ifs_u, pos_u, vv_u = buffer.sample_batch_with_pos(max(1, n_u), augment)
         return (
             np.concatenate([s_r, s_u], axis=0),
             np.concatenate([c_r, c_u], axis=0),
@@ -794,5 +807,6 @@ def _sample_selfplay(
             np.concatenate([wl_r, wl_u], axis=0),
             np.concatenate([ifs_r, ifs_u], axis=0),
             np.concatenate([pos_r, pos_u], axis=0),
+            np.concatenate([vv_r, vv_u], axis=0),
         )
     return buffer.sample_batch_with_pos(max(1, n_self), augment)

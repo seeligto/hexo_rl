@@ -84,7 +84,7 @@ def test_buffer_byte_roundtrip(encoding_name: str) -> None:
     # OR re-sample until we cover every slot. Easier: sample a much larger
     # batch and verify EVERY pushed row appears unchanged at least once.
     out = buf.sample_batch(n_rows * 8, augment=False)
-    s_out, c_out, p_out, o_out, own_out, wl_out, _ifs = out
+    s_out, c_out, p_out, o_out, own_out, wl_out, _ifs, _vv = out
 
     # Output shapes must match spec.
     assert s_out.shape == (n_rows * 8, spec.n_planes, spec.trunk_size, spec.trunk_size), (

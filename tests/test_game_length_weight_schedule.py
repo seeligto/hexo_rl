@@ -78,7 +78,7 @@ def test_sampling_distribution_matches_weight_schedule(filled_buffer: ReplayBuff
 
     observed = np.zeros(3, dtype=int)
     for _ in range(N_SAMPLES):
-        _, _, _, outcomes, _, _, _ = filled_buffer.sample_batch(1, False)
+        _, _, _, outcomes, _, _, _, _vv = filled_buffer.sample_batch(1, False)
         bucket = _classify_sample(float(outcomes[0]))
         observed[bucket] += 1
 
@@ -108,7 +108,7 @@ def test_short_games_sampled_less_than_long_games(filled_buffer: ReplayBuffer):
     N = 2000
     counts = [0, 0, 0]
     for _ in range(N):
-        _, _, _, outcomes, _, _, _ = filled_buffer.sample_batch(1, False)
+        _, _, _, outcomes, _, _, _, _vv = filled_buffer.sample_batch(1, False)
         counts[_classify_sample(float(outcomes[0]))] += 1
 
     ratio_0_2 = counts[0] / max(counts[2], 1)

@@ -75,12 +75,31 @@ def compute_kl_policy_loss(
 def compute_value_loss(
     value_logit: torch.Tensor,
     outcome: torch.Tensor,
+    value_mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Numerically stable BCE via binary_cross_entropy_with_logits. Outcomes mapped {-1,+1} -> {0,1}."""
+    """Numerically stable BCE via binary_cross_entropy_with_logits. Outcomes mapped {-1,+1} -> {0,1}.
+
+    ``value_mask``: optional (B,) bool/uint8 — 1 = supervise the value head on
+    this row, 0 = mask it out. DRAW-MASK (Phase 6): ply-capped games are horizon
+    truncation with no real outcome, so their value target is a false label and
+    must not be supervised. When ``None`` (default) all rows contribute — exactly
+    the prior unmasked behaviour (regression-preserving; pretrain corpus rows
+    have no cap concept and pass mask=None / all-ones).
+    """
     value_target = (outcome + 1.0) / 2.0
-    return nn.functional.binary_cross_entropy_with_logits(
-        value_logit.squeeze(1), value_target
-    )
+    logit = value_logit.squeeze(1)
+    if value_mask is None:
+        return nn.functional.binary_cross_entropy_with_logits(logit, value_target)
+    per_row = nn.functional.binary_cross_entropy_with_logits(
+        logit, value_target, reduction="none"
+    )  # (B,)
+    mask = value_mask.reshape(-1).bool()
+    combined = per_row[mask]
+    if combined.numel() == 0:
+        # No valid rows (whole batch capped) → zero scalar on the right
+        # device/dtype, mirroring the empty-`combined` guard in compute_policy_loss.
+        return torch.zeros((), device=per_row.device, dtype=per_row.dtype)
+    return combined.mean()
 
 
 def compute_aux_loss(

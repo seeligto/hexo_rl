@@ -209,6 +209,10 @@ def run_training_loop(
     # Hard-abort: gradient norm > threshold for N consecutive training steps.
     _hard_gn_threshold = float(_mon_cfg.get("hard_abort_grad_norm", 3.0))
     _hard_gn_min_steps = int(_mon_cfg.get("hard_abort_grad_norm_steps", 5))
+    # §CANARY-VAL — stride-5 spam hard-abort (default-on; validated FPR=0 on all
+    # radius-5 runs). Set hard_abort_stride5_p90 ≤ 0 to disable.
+    _stride5_p90_threshold = float(_mon_cfg.get("hard_abort_stride5_p90", 30.0))
+    _stride5_p90_consec    = int(_mon_cfg.get("hard_abort_stride5_p90_consec", 3))
 
     # ── StepCoordinatorConfig ────────────────────────────────────────────────
     from hexo_rl.training.step_coordinator import StepCoordinator, StepCoordinatorConfig
@@ -233,6 +237,8 @@ def run_training_loop(
         soft_ew_min_pts=_soft_ew_min_pts,
         hard_gn_threshold=_hard_gn_threshold,
         hard_gn_min_steps=_hard_gn_min_steps,
+        stride5_p90_threshold=_stride5_p90_threshold,
+        stride5_p90_consec=_stride5_p90_consec,
         instrumentation_enabled=instrumentation_enabled,
         stop_step=stop_step,
         final_eval_drain_timeout_sec=float(

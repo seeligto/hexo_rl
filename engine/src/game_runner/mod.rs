@@ -36,9 +36,12 @@ use crate::inference_bridge::InferenceBatcher;
 /// `collect_data`. See the `results` field doc for the field semantics.
 ///
 /// Fields (in order): `(feat, chain, policy, outcome, plies, combined_aux_u8,
-/// is_full_search, ply_index)`. `ply_index` (CF-4) is the per-row 0-based ply
-/// of the decision; `plies` is the game-total (shared across the game's rows).
-pub(crate) type WorkerResultRow = (Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, bool, u16);
+/// is_full_search, ply_index, value_valid)`. `ply_index` (CF-4) is the per-row
+/// 0-based ply of the decision; `plies` is the game-total (shared across the
+/// game's rows). `value_valid` (DRAW-MASK, Phase 6) is a per-game u8: 1 =
+/// supervise the value head on this row, 0 = ply-capped (terminal_reason==2) →
+/// mask the fabricated value label out of the value loss (policy target kept).
+pub(crate) type WorkerResultRow = (Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec<u8>, bool, u16, u8);
 
 /// Per-game result tuple consumed by `drain_game_results`. See the
 /// `recent_game_results` field doc for the field semantics.
@@ -47,10 +50,12 @@ pub(crate) type WorkerResultRow = (Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec
 /// terminal_reason, model_version_min, model_version_max, model_version_distinct)`.
 pub(crate) type GameResultRow = (usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32);
 
-/// Return tuple of `collect_data` — nine NumPy arrays bound to the GIL
+/// Return tuple of `collect_data` — ten NumPy arrays bound to the GIL
 /// lifetime. Fields: `(feat, chain, policy, value, plies, ownership,
-/// winning_line, is_full_search, position_index)`. `position_index` (CF-4,
-/// u16) is the per-row 0-based ply index; `plies` is the game-total.
+/// winning_line, is_full_search, position_index, value_valid)`. `position_index`
+/// (CF-4, u16) is the per-row 0-based ply index; `plies` is the game-total.
+/// `value_valid` (DRAW-MASK, Phase 6, u8) is 1 = supervise value, 0 = ply-capped
+/// row whose fabricated value label is masked out of the value loss.
 pub(crate) type CollectDataOut<'py> = (
     Bound<'py, PyArray2<f32>>,
     Bound<'py, PyArray2<f32>>,
@@ -61,6 +66,7 @@ pub(crate) type CollectDataOut<'py> = (
     Bound<'py, PyArray2<u8>>,
     Bound<'py, PyArray1<u8>>,
     Bound<'py, PyArray1<u16>>,
+    Bound<'py, PyArray1<u8>>,
 );
 
 // cycle 3 P79 Wave 7 Batch A: stored-flat for hot-path field access in worker_loop;
@@ -395,7 +401,7 @@ impl SelfPlayRunner {
 
     /// Drain all buffered positions and return them as numpy arrays.
     ///
-    /// Returns (features, chain_planes, policies, values, plies, ownership, winning_line, is_full_search, position_index):
+    /// Returns (features, chain_planes, policies, values, plies, ownership, winning_line, is_full_search, position_index, value_valid):
     ///   features:        (N, 8*361)    float32 — HEXB v6 buffer wire format (sliced from
     ///                                            18-plane game state via KEPT_PLANE_INDICES;
     ///                                            §131 Option X). Reshape to (N, 8, 19, 19) on
@@ -412,6 +418,10 @@ impl SelfPlayRunner {
     ///                                            decision (NOT the game-total `plies`); feeds
     ///                                            the ply-index aux target. K cluster rows of
     ///                                            one ply share it.
+    ///   value_valid:     (N,)          uint8  — DRAW-MASK (Phase 6): 1 = supervise value
+    ///                                            head, 0 = ply-capped row → mask the
+    ///                                            fabricated value label out of the value loss
+    ///                                            (per-game constant; policy target unaffected).
     ///
     /// N = 0 when no positions are available (arrays have zero rows).
     pub fn collect_data<'py>(
@@ -440,8 +450,9 @@ impl SelfPlayRunner {
         let mut flat_wl         = Vec::with_capacity(n * n_cells);
         let mut is_full_search  = Vec::with_capacity(n);
         let mut position_index  = Vec::with_capacity(n);
+        let mut value_valid_v   = Vec::with_capacity(n);
 
-        while let Some((feat, chain, pol, outcome, plies, aux_u8, full_search, ply_index)) = results.pop_front() {
+        while let Some((feat, chain, pol, outcome, plies, aux_u8, full_search, ply_index, value_valid)) = results.pop_front() {
             flat_feats.extend_from_slice(&feat);
             flat_chain.extend_from_slice(&chain);
             flat_pols.extend_from_slice(&pol);
@@ -454,6 +465,8 @@ impl SelfPlayRunner {
             is_full_search.push(full_search as u8);
             // CF-4: per-row 0-based ply index for the ply-index aux target.
             position_index.push(ply_index);
+            // DRAW-MASK (Phase 6): per-row value-supervision flag (per-game constant).
+            value_valid_v.push(value_valid);
         }
 
         let feats_np  = flat_feats.into_pyarray(py).reshape([n, feat_len])?;
@@ -465,8 +478,9 @@ impl SelfPlayRunner {
         let wl_np     = flat_wl.into_pyarray(py).reshape([n, n_cells])?;
         let ifs_np    = is_full_search.into_pyarray(py);
         let pidx_np   = position_index.into_pyarray(py);
+        let vv_np     = value_valid_v.into_pyarray(py);
 
-        Ok((feats_np, chain_np, pols_np, vals_np, gids_np, own_np, wl_np, ifs_np, pidx_np))
+        Ok((feats_np, chain_np, pols_np, vals_np, gids_np, own_np, wl_np, ifs_np, pidx_np, vv_np))
     }
 
     pub fn stop(&self) {
@@ -655,7 +669,7 @@ impl SelfPlayRunner {
     /// produced by the workers. NOT for production use.
     pub fn drain_outcomes_for_test(&self) -> Vec<f32> {
         let mut q = self.results.lock().expect("results lock poisoned");
-        q.drain(..).map(|(_, _, _, outcome, _, _, _, _)| outcome).collect()
+        q.drain(..).map(|(_, _, _, outcome, _, _, _, _, _)| outcome).collect()
     }
 }
 

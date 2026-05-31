@@ -45,6 +45,7 @@ EXPECTED_PUSH_PARAMS = [
     ("game_length",     True),   # default 0
     ("is_full_search",  True),   # default True
     ("position_index",  True),   # §S181 Wave 4 4B-impl-1: default 0
+    ("value_target_valid", True),  # DRAW-MASK (Phase 6): default True
 ]
 
 EXPECTED_PUSH_GAME_PARAMS = [
@@ -59,6 +60,7 @@ EXPECTED_PUSH_GAME_PARAMS = [
     ("game_length",      True),   # default 0
     ("is_full_search",   True),   # default None
     ("position_indices", True),   # §S181 Wave 4 4B-impl-1: default None
+    ("value_target_valid", True),  # DRAW-MASK (Phase 6): default None
 ]
 
 EXPECTED_PUSH_MANY_PARAMS = [
@@ -72,6 +74,7 @@ EXPECTED_PUSH_MANY_PARAMS = [
     ("game_lengths",     False),
     ("is_full_search",   False),
     ("position_indices", True),   # §S181 Wave 4 4B-impl-1: default None
+    ("value_target_valid", True),  # DRAW-MASK (Phase 6): default None
 ]
 
 
@@ -128,7 +131,7 @@ def test_push_facade_byte_identical_buffer_state():
         buf.push(state, chain, policy, 0.5, own, wl,
                  game_id=42, game_length=10, is_full_search=False)
     assert buf.size == 8
-    _, _, _, outcomes, _, _, ifs = buf.sample_batch(16, augment=False)
+    _, _, _, outcomes, _, _, ifs, _vv = buf.sample_batch(16, augment=False)
     assert outcomes.shape == (16,)
     assert ifs.shape == (16,)
     np.testing.assert_allclose(outcomes, 0.5, atol=1e-3,
@@ -141,7 +144,7 @@ def test_push_facade_byte_identical_buffer_state():
     for _ in range(8):
         buf2.push(state, chain, policy, -1.0, own, wl)  # all defaults
     assert buf2.size == 8
-    _, _, _, outcomes2, _, _, ifs2 = buf2.sample_batch(16, augment=False)
+    _, _, _, outcomes2, _, _, ifs2, _vv = buf2.sample_batch(16, augment=False)
     np.testing.assert_allclose(outcomes2, -1.0, atol=1e-3)
     assert (ifs2 == 1).all(), \
         "push default is_full_search=True must store as 1u8 in every row"
@@ -159,7 +162,7 @@ def test_push_facade_byte_identical_buffer_state():
     buf3.push_game(states_b, chain_b, pol_b, out_b, own_b, wl_b,
                    game_id=7, game_length=20, is_full_search=ifs_b)
     assert buf3.size == t
-    _, _, _, outcomes3, _, _, ifs3 = buf3.sample_batch(16, augment=False)
+    _, _, _, outcomes3, _, _, ifs3, _vv = buf3.sample_batch(16, augment=False)
     np.testing.assert_allclose(outcomes3, 0.25, atol=1e-3,
         err_msg="push_game shared outcome must round-trip")
     assert (ifs3 == 0).all(), \
@@ -170,7 +173,7 @@ def test_push_facade_byte_identical_buffer_state():
     buf4.push_game(states_b, chain_b, pol_b, out_b, own_b, wl_b,
                    game_id=8, game_length=20)
     assert buf4.size == t
-    _, _, _, _outc4, _, _, ifs4 = buf4.sample_batch(16, augment=False)
+    _, _, _, _outc4, _, _, ifs4, _vv = buf4.sample_batch(16, augment=False)
     assert (ifs4 == 1).all(), \
         "push_game default is_full_search=None must default to 1u8"
 
@@ -187,7 +190,7 @@ def test_push_facade_byte_identical_buffer_state():
     ifs_n    = np.zeros(n, dtype=np.uint8)
     buf5.push_many(states_n, chain_n, pol_n, out_n, own_n, wl_n, gls_n, ifs_n)
     assert buf5.size == n
-    _, _, _, outcomes5, _, _, ifs5 = buf5.sample_batch(16, augment=False)
+    _, _, _, outcomes5, _, _, ifs5, _vv = buf5.sample_batch(16, augment=False)
     np.testing.assert_allclose(outcomes5, 0.75, atol=1e-3,
         err_msg="push_many homogeneous outcome must round-trip")
     assert (ifs5 == 0).all(), \

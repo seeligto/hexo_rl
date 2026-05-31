@@ -34,7 +34,7 @@ def test_recent_buffer_v6w25_shapes():
 
     assert buf.size == 10
 
-    s, c, p, o, own, wl, ifs = buf.sample(4)
+    s, c, p, o, own, wl, ifs, vv = buf.sample(4)
     assert s.shape == (4, 8, 25, 25)
     assert c.shape == (4, 6, 25, 25)
     assert p.shape == (4, 626)
@@ -52,7 +52,7 @@ def test_recent_buffer_v6_default_backward_compat():
         policy=np.zeros(362, dtype=np.float32),
         ownership=np.ones(361, dtype=np.uint8),
     )
-    s, c, p, o, own, wl, ifs = buf.sample(1)
+    s, c, p, o, own, wl, ifs, vv = buf.sample(1)
     assert s.shape == (1, 8, 19, 19)
     assert p.shape == (1, 362)
     assert own.shape == (1, 361)

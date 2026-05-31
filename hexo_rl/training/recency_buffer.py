@@ -61,6 +61,11 @@ class RecentBuffer:
         # Default is_full_search=1 so an unpopulated slot is never mistakenly
         # masked out of policy loss if ever sampled before being written.
         self._is_full_search = np.ones(capacity, dtype=np.uint8)
+        # DRAW-MASK (Phase 6): per-row value-supervision flag, default 1 so an
+        # unpopulated slot is never masked out of value loss. Mirrors
+        # _is_full_search; keeps the sample tuple shape-compatible with the Rust
+        # sample tuple where the two are concatenated in batch_assembly/trainer.
+        self._value_target_valid = np.ones(capacity, dtype=np.uint8)
         self._head = 0
         self._size = 0
         self._lock = threading.Lock()
@@ -79,13 +84,15 @@ class RecentBuffer:
         ownership:    Optional[np.ndarray] = None,
         winning_line: Optional[np.ndarray] = None,
         is_full_search: bool = True,
+        value_target_valid: bool = True,
     ) -> None:
         """Add one position; overwrites oldest when full.
 
         chain_planes, ownership, and winning_line default to None which leaves
         the pre-allocated zeros/ones in place. ``is_full_search`` defaults to
         True so callers that haven't been updated keep old semantics (all rows
-        contribute to policy loss).
+        contribute to policy loss). ``value_target_valid`` defaults to True
+        (supervise value) — DRAW-MASK (Phase 6); set False for ply-capped rows.
         """
         with self._lock:
             self._states[self._head] = state
@@ -95,18 +102,21 @@ class RecentBuffer:
             self._ownership[self._head]    = ownership    if ownership    is not None else 1  # "empty"
             self._winning_line[self._head] = winning_line if winning_line is not None else 0
             self._is_full_search[self._head] = 1 if is_full_search else 0
+            self._value_target_valid[self._head] = 1 if value_target_valid else 0
             self._head = (self._head + 1) % self.capacity
             self._size = min(self._size + 1, self.capacity)
 
     def sample(
         self, n: int
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Uniform random sample of ``n`` positions from the stored recent window.
 
-        Returns 7-tuple (states, chain_planes, policies, outcomes, ownership,
-        winning_line, is_full_search). ownership and winning_line are returned
-        as (n, aux_stride) u8 — caller reshapes to (n, 19, 19) if needed.
-        is_full_search is (n,) u8.
+        Returns 8-tuple (states, chain_planes, policies, outcomes, ownership,
+        winning_line, is_full_search, value_target_valid). ownership and
+        winning_line are returned as (n, aux_stride) u8 — caller reshapes to
+        (n, 19, 19) if needed. is_full_search and value_target_valid are (n,) u8.
+        DRAW-MASK (Phase 6): value_target_valid (1 = supervise value, 0 = masked)
+        was appended; recent-buffer rows default to 1.
 
         NumPy fancy indexing (`arr[index_array]`) returns a newly-allocated
         array that is NOT aliased to the underlying ring buffer storage —
@@ -134,6 +144,7 @@ class RecentBuffer:
                 self._ownership[indices],
                 self._winning_line[indices],
                 self._is_full_search[indices],
+                self._value_target_valid[indices],
             )
 
     def save_to_path(self, path: str) -> int:
@@ -155,6 +166,7 @@ class RecentBuffer:
                 ownership=self._ownership[idx],
                 winning_line=self._winning_line[idx],
                 is_full_search=self._is_full_search[idx],
+                value_target_valid=self._value_target_valid[idx],
             )
             return size
 
@@ -170,6 +182,12 @@ class RecentBuffer:
             self._ownership[:n]      = data["ownership"][:n]
             self._winning_line[:n]   = data["winning_line"][:n]
             self._is_full_search[:n] = data["is_full_search"][:n]
+            # DRAW-MASK (Phase 6): backward-compat — older .npz lacks the column;
+            # default to 1 (supervise value) when absent.
+            if "value_target_valid" in data:
+                self._value_target_valid[:n] = data["value_target_valid"][:n]
+            else:
+                self._value_target_valid[:n] = 1
             self._head = n % self.capacity
             self._size = n
         return n

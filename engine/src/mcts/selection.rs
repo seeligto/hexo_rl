@@ -56,8 +56,14 @@ impl MCTSTree {
 
         let q = if child.n_visits == 0 && child.virtual_loss_count == 0 {
             // Unvisited node: use dynamic FPU value.
-            // fpu_value is already negated relative to parent when moves_remaining == 1,
-            // so we use it directly (the caller computes it from the parent's Q).
+            // CF-6 (Phase 6): fpu_value is computed by the caller from the
+            // parent's own Q (parent.w_value / parent.n_visits), so it is ALREADY
+            // in the parent's to-move perspective — the same perspective the
+            // visited branches below resolve to. The visited child's stored Q is
+            // in the CHILD's perspective and must be negated when the turn flips
+            // (parent.moves_remaining == 1); fpu_value needs no such negation
+            // because it never left the parent's perspective. Sign-consistent at
+            // both mr==1 and mr==2 (verified, no bug). Pinned by the FPU-sign test.
             fpu_value
         } else if parent.moves_remaining == 1 {
             -child.q_value_vl(self.virtual_loss)

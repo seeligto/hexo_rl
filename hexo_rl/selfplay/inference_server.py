@@ -519,6 +519,10 @@ class InferenceServer(threading.Thread):
                             values,
                         )
                         if _perf:
+                            # submit_us closes the 2nd (return) PyO3 crossing so the
+                            # 5 buckets sum to the full fetch→submit cycle. The fetch
+                            # crossing already lives inside fetch_wait_us.
+                            _t_submit_done = time.perf_counter()
                             _perf_log.info(
                                 "inference_batch_timing",
                                 batch_n=len(request_ids),
@@ -526,6 +530,7 @@ class InferenceServer(threading.Thread):
                                 h2d_us=(_t_h2d_done - _t_fetched) * 1e6,
                                 forward_us=(_t_forward_done - _t_h2d_done) * 1e6,
                                 d2h_scatter_us=(_t_d2h_done - _t_forward_done) * 1e6,
+                                submit_us=(_t_submit_done - _t_d2h_done) * 1e6,
                                 sync_cuda=_sync,
                                 forward_count=self._forward_count + 1,
                             )

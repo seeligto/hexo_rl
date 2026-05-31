@@ -52,14 +52,15 @@ fn test_push_single_config_field_shape() {
         game_length:    u16,
         is_full_search: bool,
         position_index: u16,
+        value_target_valid: bool,
     ) -> PushSingleConfig<'py> {
         PushSingleConfig {
             state, chain_planes, policy, outcome, ownership, winning_line,
-            game_id, game_length, is_full_search, position_index,
+            game_id, game_length, is_full_search, position_index, value_target_valid,
         }
     }
     // Erase unused-fn warning by reading the fn pointer.
-    let _: fn(_, _, _, _, _, _, _, _, _, _) -> _ = _shape_check;
+    let _: fn(_, _, _, _, _, _, _, _, _, _, _) -> _ = _shape_check;
 }
 
 /// Test 2 — `PushGameConfig` field shape.
@@ -83,13 +84,14 @@ fn test_push_game_config_field_shape() {
         game_length:    u16,
         is_full_search: Option<PyReadonlyArray1<'py, u8>>,
         position_indices: Option<PyReadonlyArray1<'py, u16>>,
+        value_target_valid: Option<PyReadonlyArray1<'py, u8>>,
     ) -> PushGameConfig<'py> {
         PushGameConfig {
             states, chain_planes, policies, outcomes, ownership, winning_line,
-            game_id, game_length, is_full_search, position_indices,
+            game_id, game_length, is_full_search, position_indices, value_target_valid,
         }
     }
-    let _: fn(_, _, _, _, _, _, _, _, _, _) -> _ = _shape_check;
+    let _: fn(_, _, _, _, _, _, _, _, _, _, _) -> _ = _shape_check;
 }
 
 /// Test 3 — `PushManyConfig` field shape.
@@ -112,11 +114,12 @@ fn test_push_many_config_field_shape() {
         game_lengths:   PyReadonlyArray1<'py, u16>,
         is_full_search: PyReadonlyArray1<'py, u8>,
         position_indices: Option<PyReadonlyArray1<'py, u16>>,
+        value_target_valid: Option<PyReadonlyArray1<'py, u8>>,
     ) -> PushManyConfig<'py> {
         PushManyConfig {
             states, chain_planes, policies, outcomes, ownership, winning_line,
-            game_lengths, is_full_search, position_indices,
+            game_lengths, is_full_search, position_indices, value_target_valid,
         }
     }
-    let _: fn(_, _, _, _, _, _, _, _, _) -> _ = _shape_check;
+    let _: fn(_, _, _, _, _, _, _, _, _, _) -> _ = _shape_check;
 }

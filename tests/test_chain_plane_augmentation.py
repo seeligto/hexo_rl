@@ -191,7 +191,7 @@ def test_chain_plane_augmentation_byte_exact(pos_name, pos_fn):
     unknown_keys: list[bytes] = []
     N_SAMPLES = 400
     for _ in range(N_SAMPLES):
-        _, chain_out, _, _, _, _, _ = buf.sample_batch(1, augment=True)
+        _, chain_out, _, _, _, _, _, _vv = buf.sample_batch(1, augment=True)
         sampled = _decode_chain_planes(np.asarray(chain_out[0]))
         key = sampled.tobytes()
         if key in expected_chain_by_key:

@@ -98,7 +98,7 @@ def from_buffer(buffer_path: Path, sample_n: int = 10_000) -> Optional[float]:
         return None
 
     batch_size = min(n, sample_n)
-    _, _, _, _, _, winning_line, _ = buf.sample_batch(batch_size, False)
+    _, _, _, _, _, winning_line, _, _ = buf.sample_batch(batch_size, False)
 
     wl = np.asarray(winning_line, dtype=np.float32)
     p = float(wl.mean())

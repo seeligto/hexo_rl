@@ -133,6 +133,13 @@ eval_pipeline:
       enabled: true
 
 hard_abort:
+  # §CANARY-VAL 2026-05-31: this `hard_abort:` block is NOT code-enforced
+  # (operator-eyeball reference only). The stride-5 spam gate IS now wired
+  # via monitors.hard_abort_stride5_p90 (default 30, 3 consecutive eval
+  # points) — NOT the stride5_p90 key below. colony_ext_frac_max is
+  # metric-insufficient (never reaches 0.40 even at maximal stride-5 spam).
+  # Live auto-aborts: stride5 (monitors) + monitors.hard_abort_grad_norm +
+  # SealBot-WR (alert_rules.check_sealbot_wr_hard_abort).
   grad_norm: 10.0
   loss_nan: true
   stride5_p90: 60
