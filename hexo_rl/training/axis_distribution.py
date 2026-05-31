@@ -85,6 +85,11 @@ def compute_axis_fractions_from_states(states: np.ndarray) -> dict[str, float]:
     Returns dict with same keys as compute_axis_fractions.
     Aggregates pairs across all N positions.
     """
+    # SOURCE-layout read (NOT a kept-slice): plane 0 = current-player stones,
+    # plane HISTORY_LEN(8) = opponent — the fixed 18-plane source contract, same
+    # class as game_state.to_tensor's source writes. These are source-plane
+    # indices, not the encoding's kept slots; NOT routed through cur/opp_stone_slot
+    # (which return kept-tensor positions). §P5-CT — allowlisted in the INV grep.
     cur = (states[:, 0] > 0).astype(np.uint8)  # (N, H, W)
     opp = (states[:, HISTORY_LEN] > 0).astype(np.uint8)  # (N, H, W)
     H, W = cur.shape[1], cur.shape[2]

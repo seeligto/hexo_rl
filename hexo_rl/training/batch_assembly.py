@@ -24,7 +24,7 @@ import numpy as np
 import structlog
 
 from hexo_rl.encoding import lookup as _lookup_encoding, normalize_encoding_name as _normalize_encoding_name
-from hexo_rl.encoding.resolvers import opp_stone_slot
+from hexo_rl.encoding.resolvers import cur_stone_slot, opp_stone_slot
 
 # Module-level hoist (registry lookup at import time, not per-batch).
 _V6 = _lookup_encoding("v6")
@@ -199,10 +199,11 @@ def load_pretrained_buffer(
     # opp t0 (source plane 8) is slot 4 for the v6 family but slot 1 for
     # v6_live2 — derive from the registry, never hardcode 4.
     from hexo_rl.env.game_state import _compute_chain_planes
+    _cur_slot = cur_stone_slot(_spec)
     _opp_slot = opp_stone_slot(_spec)
     pre_chain = np.empty((T, 6, board_size, board_size), dtype=np.float16)
     if T > 0:
-        cur_all = np.asarray(pre_states[:, 0], dtype=np.float32)
+        cur_all = np.asarray(pre_states[:, _cur_slot], dtype=np.float32)
         opp_all = np.asarray(pre_states[:, _opp_slot], dtype=np.float32)
         for k in range(T):
             planes_f32 = _compute_chain_planes(cur_all[k], opp_all[k]).astype(np.float32) / 6.0
@@ -334,10 +335,11 @@ def load_bot_corpus_buffer(
     # §178 chain planes from stone planes. opp t0 (source 8) slot is encoding-
     # derived (4 for v6 family, 1 for v6_live2); cur t0 is always slot 0.
     from hexo_rl.env.game_state import _compute_chain_planes
+    _cur_slot = cur_stone_slot(_spec)
     _opp_slot = opp_stone_slot(_spec)
     bot_chain = np.empty((T, 6, board_size, board_size), dtype=np.float16)
     if T > 0:
-        cur_all = np.asarray(bot_states[:, 0], dtype=np.float32)
+        cur_all = np.asarray(bot_states[:, _cur_slot], dtype=np.float32)
         opp_all = np.asarray(bot_states[:, _opp_slot], dtype=np.float32)
         for k in range(T):
             planes_f32 = _compute_chain_planes(cur_all[k], opp_all[k]).astype(np.float32) / 6.0
