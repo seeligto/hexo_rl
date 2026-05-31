@@ -1,0 +1,46 @@
+# configs/variants/v6_live2_smoke_laptop.yaml
+#
+# LAPTOP-HOST variant of v6_live2_smoke (8845HS 8c/16t + RTX 4060 Max-Q).
+# Identical to configs/variants/v6_live2_smoke.yaml EXCEPT selfplay throughput
+# knobs are tuned down for 16 threads (the canonical config's n_workers:18 is
+# 5080/9900X-tuned and oversubscribes the laptop). Run here only while vast is
+# unavailable; the canonical v6_live2_smoke.yaml is the gate config on vast.
+#
+# Launch (after scripts/p5a_v6_live2_pretrain.sh produces the bootstrap):
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6_live2.pt \
+#     --variant v6_live2_smoke_laptop --iterations 30000
+
+encoding: v6_live2
+in_channels: 4
+
+total_steps: 30000
+eval_interval: 5000
+
+selfplay:
+  completed_q_values: true
+  n_workers: 12                  # 16-thread laptop (vs 18 on the 5080/9900X)
+  inference_batch_size: 96       # smaller batch to match fewer feeders
+  inference_max_wait_ms: 16.0
+  random_opening_plies: 0
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+
+eval_pipeline:
+  opponents:
+    bootstrap_anchor:
+      path: "checkpoints/bootstrap_model_v6_live2.pt"   # self-anchor (4-plane)
+    sealbot:
+      enabled: true
+    randombot:
+      enabled: true
+    best_checkpoint:
+      enabled: true
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0

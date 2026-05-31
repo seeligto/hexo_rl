@@ -27,6 +27,7 @@ from engine import RegistrySpec as _EngineRegistrySpec  # type: ignore[attr-defi
 _REGISTERED_NAMES: tuple[str, ...] = (
     "v6",
     "v6tp",
+    "v6_live2",
     "v7full",
     "v7",
     "v7e30",

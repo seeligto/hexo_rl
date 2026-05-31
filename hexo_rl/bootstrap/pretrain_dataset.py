@@ -25,6 +25,7 @@ import engine
 from engine import Board
 from hexo_rl.augment.luts import get_policy_scatters
 from hexo_rl.encoding import lookup as _lookup_encoding
+from hexo_rl.encoding.resolvers import opp_stone_slot
 from hexo_rl.env.game_state import _compute_chain_planes
 
 
@@ -148,6 +149,7 @@ def make_augmented_collate(
     _enc_spec = _lookup_encoding(encoding)
     has_pass = _enc_spec.has_pass_slot
     board_size = _enc_spec.trunk_size
+    _opp_slot = opp_stone_slot(_enc_spec)  # opp t0 slice idx: 4 (v6 family) / 1 (v6_live2)
     scatters_np = get_policy_scatters(board_size, has_pass=has_pass) if augment else None
 
     def _collate(batch):
@@ -202,13 +204,13 @@ def make_augmented_collate(
                 policies = policy_aug
 
         # Chain planes — recomputed post-augmentation from stone planes.
-        # Stone plane indices: 0 = cur ply-0, 4 = opp ply-0 (v6 KEPT layout
-        # carries through to v8 wire format planes 0/4).
+        # cur t0 is always slot 0; opp t0 (source plane 8) sits at slot 4 for
+        # the v6 family but slot 1 for v6_live2 — derive from the registry.
         chain_np = np.zeros((n, 6, board_size, board_size), dtype=np.float16)
         for i in range(n):
             chain_np[i] = _compute_chain_planes(
                 states[i, 0].astype(np.float32),
-                states[i, 4].astype(np.float32),
+                states[i, _opp_slot].astype(np.float32),
             ).astype(np.float16) / 6.0
 
         if global_crops is not None:

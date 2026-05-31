@@ -126,7 +126,7 @@ def load_model_with_encoding(
     else:
         state = normalize_model_state_dict_keys(state)
     label = explicit_label or detect_encoding_label(ckpt_path, state)
-    if label not in ("v6", "v6tp", "v6w25", "v8"):
+    if label not in ("v6", "v6tp", "v6_live2", "v6w25", "v8"):
         raise ValueError(
             f"checkpoint {ckpt_path}: unknown encoding label {label!r}"
         )
@@ -139,6 +139,10 @@ def load_model_with_encoding(
         # §P5-CT CF-2 — 10-plane (v6 + turn-phase 16/17); builds like v6
         # (min_max head, in_channels read from the conv weight = 10).
         spec = _registry_lookup("v6tp")
+    elif label == "v6_live2":
+        # §P5-CT H-PLANE fix — 4-plane (v6 minus history); builds like v6
+        # (min_max head, in_channels read from the conv weight = 4).
+        spec = _registry_lookup("v6_live2")
     else:
         spec = _registry_lookup("v6")
     model = _build_model_from_spec(state, spec)

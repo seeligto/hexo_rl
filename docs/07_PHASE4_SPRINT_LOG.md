@@ -4238,6 +4238,143 @@ pool.py wiring (B2.3).
   BUFFER_CHANNELS/KEPT_PLANE_INDICES/{8,11} literals). Needs a dedicated
   encoding-width audit wave** (report §9.7).
 
+### Next-session PROMPT 2 — H-PLANE-MISMATCH CONFIRMED + hardcode ledger (2026-05-29)
+
+Two no-GPU deliverables, run in parallel with the CF-1 control. Report
+`reports/investigations/hplane_mismatch_20260529.md`; probe
+`scripts/structural_diagnosis/hplane_activation_dump.py`.
+
+**H-PLANE-MISMATCH — CONFIRMED.** v6-family wire planes 1-3/9-11 (my/opp history
+t-1..t-3) are LIVE in pretrain (Python `to_tensor` fills them from the
+`move_history` deque; corpus mean-abs ≈ 0.04 ≈ the live t0 planes, nonzero in
+94-99.8% of rows) but EXACTLY ZERO in self-play (Rust `encode_state_to_buffer` +
+`_channels` zero them; pinning test). Matched-sample dump: corpus history-sum
+0.0434 vs self-play 0.0000. So 6 of 8 (v6) / 6 of 10 (v6tp) wire planes carry full
+mass in pretrain and zero in RL — a transfer cliff. Fresh-context review PASS
+(re-dumped Rust path → history 0.000000). **Correction:** the zeroing is only the
+history planes; turn-phase 16/17 are live on both paths.
+
+**CRITICAL caveat — NOT a colony cause.** The mismatch is INVARIANT across all
+v6-family runs; §150 (17.4%, no collapse) and §175/§S178/§S181 (collapse) share
+it. It cannot be the colony differentiator — it is a constant **regression-class
+baseline handicap**, scoped against/before Phase 6, NOT a colony remedy.
+
+**Recommendation:** register `v6_live2` (`kept_plane_indices=[0,8,16,17]`, 4
+planes = my/opp t0 + turn-phase) — drops exactly the mismatched history planes,
+makes pretrain==selfplay. Gate a fresh-pretrain **MCTS-matched** smoke vs v6tp
+(probe gates can't validate dynamic equivariance, L2). Populated-history-on-Rust
+is infeasible (split-responsibility).
+
+**Hardcode ledger (L63 follow-through):**
+`audit/structural/encoding_width_hardcode_ledger.md` — **P0=2**
+(`orchestrator.py:286` in_channels fallback=18; `generate_bot_corpus.py` hardcoded
+v6), P1=6 (diagnostic/probe surfaces). Every reactively-fixed LIVE path verified
+clean. Ledger only (clean bisect); fix wave is separate, P0s first; add v6tp as
+the non-8-plane regression canary.
+
+**L64 — a documented encoding asymmetry that is constant across runs is a
+baseline handicap, never a per-run failure differentiator.** Don't attribute a
+divergent failure (colony in some runs, not others) to an invariant. **Why:** the
+history-plane shift read as colony-relevant in the brief but is identical in
+collapsing and non-collapsing runs. **How to apply:** before proposing an
+invariant as a cause, confirm it varies across the outcomes you're explaining; if
+it doesn't, it's a floor, not a trigger.
+
+### PROMPT 1 — CF-1 control launched on vast; second opponent DROPPED (2026-05-29)
+
+- **CF-1-only v6 control LAUNCHED on vast** (5080, `phase4.5/p5a_v6tp`). Pretrain
+  (`p5a_v6_control_pretrain.sh`, 8-plane v6, seed 42) running; a guarded chain
+  (`scripts/_chain_v6ctl_smoke.sh`, tmux `v6ctlsmoke`) auto-launches the 30k
+  `v6_p5a_control` smoke on `PRETRAIN_DONE`. v6tp 30k artifacts archived (vast
+  `checkpoints/v6tp_archive/` + pulled to laptop `checkpoints/v6tp_archive/`)
+  BEFORE the control clobbers the shared `checkpoints/` dir — this preserves the
+  QUALIFIED-SUCCESS v6tp 30k model regardless.
+- **Second-opponent disambiguation DROPPED (operator, 2026-05-29).** KrakenBot was
+  the only non-SealBot bundled bot and is too weak to serve as a strong second
+  opponent: its MinimaxBot emits illegal-move sentinels mid-game so the wrapper
+  falls back to a neighbor-2 heuristic (early v6tp@T0 vs Kraken ≈90% reflected the
+  weakened opponent, not model strength). No other strong bundled bot exists; the
+  only alternative is `CommunityAPIBot` against a live `explore.htttx.io/bots/<name>`
+  endpoint (needs a URL + the bot online). A trial `run_sealbot_eval --opponent`
+  generalization + its eval were **reverted** (uncommitted) — the kraken arm is not
+  pursued. The v6tp ~21% sampled / 33% greedy therefore stays read as
+  distance-from-SealBot, NOT validated as a general plateau.
+- **Attribution verdict (CF-1 vs CF-2) BLOCKED** on the control 30k results
+  (~13hr). Process per report §9.6 + PROMPT 1 — spam-signal primary, V_spread
+  DEMOTED (operator note 2). CF-1 + CF-4 banked as correctness regardless.
+
+### v6_live2 encoding LANDED (H-PLANE-MISMATCH fix scaffolding, 2026-05-29)
+
+Registered `v6_live2` (`kept_plane_indices=[0,8,16,17]`, 4 planes = my/opp t0 +
+turn-phase) = v6tp minus the dead history planes. Scope/gate:
+`reports/investigations/v6_live2_scoping_20260529.md`. Landed the no-GPU
+scaffolding + made it actually runnable (NOT yet pretrained/smoked — GPU queued
+behind the control). Code uncommitted.
+
+- **Wiring** (all green): registry.toml entry + Python `_REGISTERED_NAMES` +
+  resolvers detector (`in_ch==4 → v6_live2`) + corpus/anchor path maps + export
+  `--encoding v6_live2` + `configs/variants/v6_live2_smoke.yaml` (`in_channels:4`)
+  + `scripts/p5a_v6_live2_pretrain.sh`. Engine rebuilt (`make build`). Verified:
+  audit parity, lookup, 4-plane model construct+forward, detector (neutral label
+  → v6_live2), export slice → (T,4,19,19), round-trip + 16 Rust registry tests.
+- **Fresh-context review caught 6 run-blockers** the static wiring missed — all
+  one root cause the hardcode-ledger UNDER-COUNTED: chain-plane recompute hardcodes
+  the **opponent t0 stone at corpus/buffer slot 4** (the v6 position), but v6_live2
+  has opp at slot 1. Fixed via a registry-derived `opp_stone_slot(spec)` helper
+  (`hexo_rl/encoding/resolvers.py`) at all 5 recompute sites
+  (`batch_assembly.py` ×3: load_pretrained / load_bot / `_augment_recent_rows`;
+  `pretrain_dataset.py` collate) + the checkpoint_loader allow-list & spec branch
+  (`checkpoint_loader.py`). **Backward-compat pinned:** `opp_stone_slot`==4 for
+  v6/v6tp/v6w25/v8/v7full, ==1 only for v6_live2. Regression test
+  `tests/test_v6_live2_wiring.py`. Full Python suite green except 2 PRE-EXISTING
+  `test_analyze_api` failures (confirmed via stash — unrelated to v6_live2).
+- **L65 — the encoding-width ledger's grep patterns missed the `states[:, 4]`
+  opponent-plane-index class.** A hardcode audit keyed on identifier names
+  (WIRE_CHANNELS/KEPT_PLANE_INDICES/{8,11}) will not catch a bare positional
+  slice like `states[:, 4]` that encodes "opp lives at plane 4". **Why:** the
+  ledger reported all live paths clean, yet a 4-plane run hard-crashed at 5 such
+  sites. **How to apply:** when adding an encoding with a NEW plane COUNT, grep
+  positional slices (`[:, N]`, `[i, N]`) over state tensors too, and prefer a
+  dry end-to-end run / fresh-context trace over a name-grep ledger alone.
+
+### FINAL VERDICTS — PROMPT 1 + PROMPT 2 (2026-05-31)
+
+All data in: CF-1-only v6 control (killed @20k, verdict decisive) + v6_live2 30k
+smoke (ADOPT). Handoff: `reports/investigations/v6_live2_session_handoff_20260530.md`.
+
+**PROMPT 1 — CF-2 (turn-phase planes 16/17) is LOAD-BEARING.** The CF-1-only v6
+control COLLAPSED vs SealBot (9%→1%→3% @ 5/10/15k) with the self-anchor *rising*
+(0.47→0.63) — the anchor↑/sealbot↓ colony-capture divergence (L34) — while v6tp
+held ~21% and v6_live2 matched/beat it. CF-1's terminal-sign fix alone does NOT
+suppress the attractor; the turn-phase signal carries v6tp. **Keep the plane.**
+Collapse manifested as the WR/anchor divergence, NOT `colony_extension_fraction`
+(stayed 0.0) — a strength collapse vs SealBot, not extension-spam. CF-1 + CF-4
+banked as correctness regardless. **Second opponent DROPPED** (KrakenBot too weak —
+illegal-move fallbacks); SealBot-style-specificity NOT disambiguated (only
+`CommunityAPIBot` vs a live htttx.io endpoint remains). Residual = **policy
+flatness** (10pp T0/T0.5 gap: v6tp 33/21, v6_live2 40/20) — policy-target hygiene,
+deferred. CF-5/CF-6 UNFIXED/UNDETERMINED (gate any future KataGo FPU).
+
+**PROMPT 2 — H-PLANE-MISMATCH CONFIRMED → v6_live2 ADOPTED.** History planes
+1-3/9-11 live in pretrain (mean-abs ≈ live t0 ≈ 0.04), exactly zero in self-play —
+a 6-plane pretrain↔selfplay cliff. INVARIANT across collapse/non-collapse runs ⇒
+baseline handicap, not the colony cause (L64). Fix realized: `v6_live2=[0,8,16,17]`
+(drop dead history, keep stones + turn-phase), 30k smoke = **ADOPT** —
+**greedy 40% [31,50] (n=100) > v6tp 33%**; sampled ~0.20 ≈ v6tp ~0.21 (within CI,
+trajectory 0.15/0.20/0.20/0.29/0.16); anchor 0.45→0.52 + best 0.37→0.54 climbing
+with SealBot (genuine self-improvement, no colony-capture); spam clean throughout;
+threat head healthy (C1 PASS 3.870 @ 8.5k vs bootstrap 0.063). Ledger: P0=2, P1=6
++ the missed positional-slice class (L65, fixed). Ledger P0s + a proper
+de-hardcoding sweep still owed.
+
+**Synthesis — production encoding = v6_live2.** `[0,8,16,17]` literally IS
+PROMPT 1's answer (keep the load-bearing turn-phase = CF-2) + PROMPT 2's answer
+(drop the history cliff). Simplest of the three (4 planes vs v6tp's 10),
+matches-or-beats v6tp vs SealBot, no spam. **Adopt v6_live2.** 30k model archived
+`checkpoints/v6_live2_rl/checkpoint_00030000.pt`; vast run hung in its final
+in-run eval (instance reset) — training completed, model safe. Open: commit the
+arc, ledger-P0 sweep, policy-flatness + real-second-opponent (deferred).
+
 ---
 
 ## §66–§101 Classification Audit — quick-look table

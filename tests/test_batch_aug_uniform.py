@@ -202,6 +202,7 @@ def test_assemble_with_recent_buffer(augment: bool):
     pretrained.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_pre))
     selfplay = MagicMock()
     selfplay.sample_batch_with_pos = MagicMock(return_value=_mk_buffer_return(n_uniform))
+    selfplay.encoding = _V6  # real ReplayBuffer exposes its RegistrySpec (opp_stone_slot reads it)
 
     buf, _ = _make_asymmetric_recent_buffer(n_recent_req + 5)
     bufs = allocate_batch_buffers(batch_size, N_ACTIONS)

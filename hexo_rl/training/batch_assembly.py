@@ -24,6 +24,7 @@ import numpy as np
 import structlog
 
 from hexo_rl.encoding import lookup as _lookup_encoding, normalize_encoding_name as _normalize_encoding_name
+from hexo_rl.encoding.resolvers import opp_stone_slot
 
 # Module-level hoist (registry lookup at import time, not per-batch).
 _V6 = _lookup_encoding("v6")
@@ -184,7 +185,8 @@ def load_pretrained_buffer(
     # Validate against the ACTIVE encoding's plane count, not the v6
     # BUFFER_CHANNELS constant (8). v6tp keeps turn-phase planes 16/17 →
     # 10 planes; resolves to 8 for the v6 family (byte-identical check).
-    _expected_planes = _lookup_encoding(_normalize_encoding_name(config.get("encoding"))).n_planes
+    _spec = _lookup_encoding(_normalize_encoding_name(config.get("encoding")))
+    _expected_planes = _spec.n_planes
     if pre_states.shape[1] != _expected_planes:
         raise ValueError(
             f"corpus '{pretrained_path}': states.shape[1]={pre_states.shape[1]}, "
@@ -193,12 +195,15 @@ def load_pretrained_buffer(
             f"with 'scripts/export_corpus_npz.py --encoding <name>'."
         )
 
-    # §102.a: compute chain planes from stone planes (cur=[0], opp=[4] in 8-plane).
+    # §102.a: compute chain planes from stone planes. cur t0 is always slot 0;
+    # opp t0 (source plane 8) is slot 4 for the v6 family but slot 1 for
+    # v6_live2 — derive from the registry, never hardcode 4.
     from hexo_rl.env.game_state import _compute_chain_planes
+    _opp_slot = opp_stone_slot(_spec)
     pre_chain = np.empty((T, 6, board_size, board_size), dtype=np.float16)
     if T > 0:
         cur_all = np.asarray(pre_states[:, 0], dtype=np.float32)
-        opp_all = np.asarray(pre_states[:, 4], dtype=np.float32)
+        opp_all = np.asarray(pre_states[:, _opp_slot], dtype=np.float32)
         for k in range(T):
             planes_f32 = _compute_chain_planes(cur_all[k], opp_all[k]).astype(np.float32) / 6.0
             pre_chain[k] = planes_f32.astype(np.float16)
@@ -316,7 +321,8 @@ def load_bot_corpus_buffer(
 
     # Validate against the ACTIVE encoding's plane count (see load_pretrained
     # _buffer); resolves to 8 for v6, 10 for v6tp.
-    _expected_planes = _lookup_encoding(_normalize_encoding_name(config.get("encoding"))).n_planes
+    _spec = _lookup_encoding(_normalize_encoding_name(config.get("encoding")))
+    _expected_planes = _spec.n_planes
     if bot_states.shape[1] != _expected_planes:
         raise ValueError(
             f"bot corpus '{bot_path}': states.shape[1]={bot_states.shape[1]}, "
@@ -325,12 +331,14 @@ def load_bot_corpus_buffer(
             f"with 'scripts/generate_bot_corpus.py'."
         )
 
-    # §178 chain planes from stone planes (cur=[0], opp=[4] in 8-plane).
+    # §178 chain planes from stone planes. opp t0 (source 8) slot is encoding-
+    # derived (4 for v6 family, 1 for v6_live2); cur t0 is always slot 0.
     from hexo_rl.env.game_state import _compute_chain_planes
+    _opp_slot = opp_stone_slot(_spec)
     bot_chain = np.empty((T, 6, board_size, board_size), dtype=np.float16)
     if T > 0:
         cur_all = np.asarray(bot_states[:, 0], dtype=np.float32)
-        opp_all = np.asarray(bot_states[:, 4], dtype=np.float32)
+        opp_all = np.asarray(bot_states[:, _opp_slot], dtype=np.float32)
         for k in range(T):
             planes_f32 = _compute_chain_planes(cur_all[k], opp_all[k]).astype(np.float32) / 6.0
             bot_chain[k] = planes_f32.astype(np.float16)
@@ -485,6 +493,7 @@ def _augment_recent_rows(
     own_r_flat: np.ndarray,
     wl_r_flat: np.ndarray,
     augment: bool,
+    opp_slot: int = 4,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Apply 12-fold hex augmentation to a batch of RecentBuffer rows.
 
@@ -536,7 +545,7 @@ def _augment_recent_rows(
     c_r_aug = np.empty_like(c_r)
     for i in range(n):
         c_r_aug[i] = (
-            _compute_chain_planes(states_f32[i, 0], states_f32[i, 4]).astype(np.float32) / 6.0
+            _compute_chain_planes(states_f32[i, 0], states_f32[i, opp_slot]).astype(np.float32) / 6.0
         ).astype(np.float16)
 
     scattered_p   = np.empty_like(p_r)
@@ -677,7 +686,7 @@ def assemble_mixed_batch(
         n_uniform     = n_self - n_recent_req
         s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_recent_req)
         s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
-            s_r, c_r, p_r, own_r_flat, wl_r_flat, augment
+            s_r, c_r, p_r, own_r_flat, wl_r_flat, augment, opp_stone_slot(buffer.encoding)
         )
         _bs = int(s_r.shape[-1])
         own_r = own_r_flat.reshape(-1, _bs, _bs)
@@ -767,7 +776,7 @@ def _sample_selfplay(
         n_u = n_self - n_r
         s_r, c_r, p_r, o_r, own_r_flat, wl_r_flat, ifs_r = recent_buffer.sample(n_r)
         s_r, c_r, p_r, own_r_flat, wl_r_flat = _augment_recent_rows(
-            s_r, c_r, p_r, own_r_flat, wl_r_flat, augment
+            s_r, c_r, p_r, own_r_flat, wl_r_flat, augment, opp_stone_slot(buffer.encoding)
         )
         _bs = int(s_r.shape[-1])
         own_r = own_r_flat.reshape(-1, _bs, _bs)

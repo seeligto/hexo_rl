@@ -128,6 +128,7 @@ def _check_scattered_keys(cfg: Mapping[str, Any], spec: EncodingSpec) -> None:
 _CORPUS_PATHS: dict[str, str] = {
     "v6":                 "data/bootstrap_corpus.npz",
     "v6tp":               "data/bootstrap_corpus_v6tp.npz",  # §P5-CT CF-2 (10-plane, incl. 16/17)
+    "v6_live2":           "data/bootstrap_corpus_v6_live2.npz",  # §P5-CT H-PLANE fix (4-plane [0,8,16,17])
     "v6w25":              "data/bootstrap_corpus_v6w25.npz",
     "v7full":             "data/bootstrap_corpus.npz",   # shared with v6 (§150)
     "v7mw":               "data/bootstrap_corpus.npz",   # shared with v6/v7full (§176a)
@@ -138,12 +139,27 @@ _CORPUS_PATHS: dict[str, str] = {
 _ANCHOR_PATHS: dict[str, str] = {
     "v6":                 "checkpoints/bootstrap_model_v6.pt",
     "v6tp":               "checkpoints/bootstrap_model_v6tp.pt",  # §P5-CT CF-2 self-anchor
+    "v6_live2":           "checkpoints/bootstrap_model_v6_live2.pt",  # §P5-CT H-PLANE fix self-anchor
     "v6w25":              "checkpoints/bootstrap_model_v6w25.pt",
     "v7full":             "checkpoints/bootstrap_model_v7full.pt",
     "v7mw":               "checkpoints/bootstrap_model_v7full.pt",   # v7full anchor (same arch §176a)
     "v8":                 "checkpoints/bootstrap_model_v8full_warm.pt",
     "v8_canvas_realness": "checkpoints/v8_variants/A4_canvas_realness.pt",
 }
+
+
+def opp_stone_slot(spec: Any) -> int:
+    """Slice index of the opponent t0 stone plane (source plane 8) within the
+    encoding's kept-plane order.
+
+    Chain-plane recompute (`_compute_chain_planes`) reads the current- and
+    opponent-player t0 stone planes out of a sliced corpus / buffer array. The
+    current-player t0 plane (source 0) is always slot 0 (every kept set leads
+    with 0); the opponent plane (source 8) sits at slot 4 for the v6 family
+    (kept [0,1,2,3,8,...]) but slot 1 for v6_live2 (kept [0,8,16,17]). Derive it
+    from the registry instead of hardcoding the v6-only ``4``.
+    """
+    return list(spec.kept_plane_indices).index(8)
 
 
 def resolve_corpus_path(spec: Any) -> Path:
@@ -363,6 +379,11 @@ def detect_encoding_from_state_dict(
     # 19×19 single-window. Distinct plane count from the v6 family (8).
     if in_ch == 10 and (n_actions == 362 or "v6tp" in label):
         return lookup("v6tp")
+    # §P5-CT H-PLANE fix — v6_live2 keeps only the live-on-both-paths planes
+    # [0,8,16,17] → in_ch=4, 362 actions, 19×19 single-window. Distinct plane
+    # count from v6 (8) / v6tp (10).
+    if in_ch == 4 and (n_actions == 362 or "v6_live2" in label or "live2" in label):
+        return lookup("v6_live2")
     if in_ch == buffer_channels:
         if n_actions == 626 or "v6w25" in label or "_w25" in label:
             # Filename hint can override action-count when the head is a
@@ -378,7 +399,7 @@ def detect_encoding_from_state_dict(
     if strict:
         raise ValueError(
             f"checkpoint {ckpt_label}: unsupported in_channels={in_ch} "
-            "(expected 8 for v6/v6w25, 11 for v8)"
+            "(expected 4 for v6_live2, 8 for v6/v6w25, 10 for v6tp, 11 for v8)"
         )
     return None
 

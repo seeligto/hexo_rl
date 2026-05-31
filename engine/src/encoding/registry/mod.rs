@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn test_registry_loads_all_known_encodings() {
         let names: Vec<&str> = all_specs().map(|s| s.name).collect();
-        for expected in ["v6", "v6tp", "v6w25", "v7full", "v7", "v7e30", "v7mw", "v8", "v8_canvas_realness"] {
+        for expected in ["v6", "v6tp", "v6_live2", "v6w25", "v7full", "v7", "v7e30", "v7mw", "v8", "v8_canvas_realness"] {
             assert!(
                 names.contains(&expected),
                 "missing {:?} in {:?}",
@@ -238,10 +238,28 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            9,
-            "expected exactly 9 encodings, got {:?}",
+            10,
+            "expected exactly 10 encodings, got {:?}",
             names
         );
+    }
+
+    #[test]
+    fn test_registry_loads_v6_live2() {
+        // §P5-CT H-PLANE fix — v6tp minus dead history planes; live-on-both set
+        // [0,8,16,17] = 4 planes, v6 geometry.
+        let s = lookup("v6_live2").expect("v6_live2 present");
+        assert_eq!(s.board_size, 19);
+        assert_eq!(s.trunk_size, 19);
+        assert_eq!(s.n_planes, 4);
+        assert_eq!(s.plane_layout.len(), 4);
+        assert_eq!(s.kept_plane_indices.to_vec(), vec![0usize, 8, 16, 17]);
+        assert_eq!(s.policy_logit_count, 362);
+        assert!(s.has_pass_slot);
+        assert!(!s.is_multi_window);
+        assert_eq!(s.value_pool, ValuePool::None);
+        assert_eq!(s.policy_pool, PolicyPool::None);
+        assert_eq!(s.sym_table_id, "size_19");
     }
 
     #[test]
@@ -276,9 +294,9 @@ mod tests {
     }
 
     #[test]
-    fn test_all_specs_includes_all_9() {
+    fn test_all_specs_includes_all_10() {
         let count = all_specs().count();
-        assert_eq!(count, 9);
+        assert_eq!(count, 10);
     }
 
     #[test]

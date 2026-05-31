@@ -88,10 +88,11 @@ def build_inference_method(
             model, device, n_sims=n_sims, c_puct=c_puct, temperature=temperature
         )
 
-    # v6tp (§P5-CT CF-2) shares v6 runtime inference; the only difference is
-    # the wire-plane slice (10 planes incl. turn-phase 16/17 vs v6's 8),
-    # threaded via kept_plane_indices into the shape-aware bots.
-    if encoding_label in ("v6", "v6tp"):
+    # v6tp (§P5-CT CF-2) and v6_live2 (§P5-CT H-PLANE fix) share v6 runtime
+    # inference; the only difference is the wire-plane slice (v6tp 10 incl.
+    # turn-phase 16/17, v6_live2 4 = [0,8,16,17] vs v6's 8), threaded via
+    # kept_plane_indices into the shape-aware bots.
+    if encoding_label in ("v6", "v6tp", "v6_live2"):
         if kind == "argmax":
             return V6ArgmaxBot(model, device, temperature=temperature)
         # v6 MCTS: Python K-cluster MCTS (KClusterMCTSBot) since §169 P1.

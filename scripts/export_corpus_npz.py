@@ -206,7 +206,7 @@ def main() -> None:
     parser.add_argument("--human-only", action="store_true",
                         help="Pretrain mode: human games only, Elo-weighted, saves weights array")
     parser.add_argument(
-        "--encoding", choices=("v6", "v6tp", "v6w25", "v8"), default="v6",
+        "--encoding", choices=("v6", "v6tp", "v6_live2", "v6w25", "v8"), default="v6",
         help="Corpus encoding version: 'v6' (default; 8-plane × 19×19 K-cluster, "
              "362-action with pass slot), 'v6tp' (§P5-CT CF-2 — v6 + turn-phase "
              "planes 16/17, 10-plane × 19×19, 362-action), 'v6w25' (§168 — "
@@ -248,6 +248,8 @@ def main() -> None:
         out_path = ROOT / "data" / "bootstrap_corpus_v6w25.npz"
     elif encoding == "v6tp":
         out_path = ROOT / "data" / "bootstrap_corpus_v6tp.npz"
+    elif encoding == "v6_live2":
+        out_path = ROOT / "data" / "bootstrap_corpus_v6_live2.npz"
     else:
         out_path = ROOT / "data" / "bootstrap_corpus.npz"
     out_path.parent.mkdir(parents=True, exist_ok=True)

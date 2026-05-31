@@ -227,6 +227,7 @@ def _probe_one(
     ctrl_flat: int,
     device: torch.device,
     board_size: int,
+    kept_plane_indices: Optional[List[int]] = None,
 ) -> Tuple[float, float, float, List[int], List[int]]:
     """Forward one position in FP32; return (ext_logit, ctrl_logit, contrast, top5, top10)."""
     # Resolve board_size from model encoding spec when available.
@@ -235,16 +236,23 @@ def _probe_one(
     # (n_source_planes) but the model expects the sliced wire format (n_planes).
     s = state_fp16
     if s.shape[0] != model.in_channels:
-        from hexo_rl.encoding import lookup as _lookup_encoding
-        spec = _lookup_encoding(model.encoding)
-        if s.shape[0] == spec.n_source_planes and model.in_channels == spec.n_planes:
-            s = s[list(spec.kept_plane_indices)]
+        # Prefer an explicit wire slice: `model.encoding` is the geometry-family
+        # bucket (e.g. v6_live2 builds as 'v6' geometry) and loses the registry
+        # identity, so its kept_plane_indices would be wrong. The caller passes
+        # the resolved encoding's kept indices.
+        if kept_plane_indices is not None and len(kept_plane_indices) == model.in_channels:
+            s = s[list(kept_plane_indices)]
         else:
-            raise ValueError(
-                f"Fixture has {s.shape[0]} planes but model expects {model.in_channels}; "
-                f"encoding {model.encoding!r} expects {spec.n_source_planes} source "
-                f"or {spec.n_planes} wire planes."
-            )
+            from hexo_rl.encoding import lookup as _lookup_encoding
+            spec = _lookup_encoding(model.encoding)
+            if s.shape[0] == spec.n_source_planes and model.in_channels == spec.n_planes:
+                s = s[list(spec.kept_plane_indices)]
+            else:
+                raise ValueError(
+                    f"Fixture has {s.shape[0]} planes but model expects {model.in_channels}; "
+                    f"encoding {model.encoding!r} expects {spec.n_source_planes} source "
+                    f"or {spec.n_planes} wire planes."
+                )
     x = torch.from_numpy(s.astype(np.float32)).unsqueeze(0).to(device)
 
     with torch.no_grad():
@@ -273,6 +281,7 @@ def probe_positions(
     positions: Dict,
     device: Optional[torch.device] = None,
     board_size: Optional[int] = None,
+    kept_plane_indices: Optional[List[int]] = None,
 ) -> List[Dict]:
     """Run probe on all positions; return per-position result dicts."""
     if device is None:
@@ -302,7 +311,8 @@ def probe_positions(
             )
 
         ext_logit, ctrl_logit, contrast, top5, top10 = _probe_one(
-            model, states[i], ext_flat, ctrl_flat, device, board_size
+            model, states[i], ext_flat, ctrl_flat, device, board_size,
+            kept_plane_indices=kept_plane_indices,
         )
 
         ext_in_top5 = ext_flat in top5
@@ -675,7 +685,17 @@ def main() -> None:
                 )
 
         print("Probing...", file=sys.stderr)
-        results = probe_positions(model, positions, device=device, board_size=board_size)
+        # Resolve the wire-plane slice from the registry name (args.encoding),
+        # since model.encoding is the geometry-family bucket and loses the
+        # v6_live2 identity (4-plane [0,8,16,17] vs v6's 8-plane).
+        _kept = None
+        if args.encoding:
+            from hexo_rl.encoding import lookup as _lk
+            _kept = list(_lk(args.encoding).kept_plane_indices)
+        results = probe_positions(
+            model, positions, device=device, board_size=board_size,
+            kept_plane_indices=_kept,
+        )
         agg = aggregate(results)
 
         # Write baseline json before checking pass/fail so the file is available
