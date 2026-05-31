@@ -188,6 +188,31 @@ def flatten_config_and_resolve_encoding(
     return combined_config, train_cfg, mcts_config, _registry_spec, board_size, res_blocks, filters
 
 
+def _resolve_fresh_in_channels(combined_config: dict) -> tuple[int, "list | None"]:
+    """Resolve (in_channels, input_channels) for a fresh-run model build.
+
+    §P5-CT P0-1 fix: when the variant omits both `input_channels` and
+    `in_channels`, fall back to the RESOLVED encoding's plane count via
+    `resolve_arch`, NEVER the legacy literal 18 (which is neither the wire
+    width nor any registered encoding's n_planes — it built an 18-channel trunk
+    against an n-plane wire for any variant lacking an explicit in_channels).
+
+    Sweep-variant support preserved: an `input_channels: [list]` picks a subset
+    of the source wire planes and derives in_channels from its length (mutating
+    combined_config in-place, as before).
+    """
+    from hexo_rl.encoding import resolve_arch
+
+    input_channels_cfg = combined_config.get("input_channels")
+    if input_channels_cfg is None:
+        fallback = resolve_arch(combined_config.get("encoding")).in_channels
+        in_channels_arg = int(combined_config.get("in_channels", fallback))
+    else:
+        in_channels_arg = len(input_channels_cfg)
+        combined_config["in_channels"] = in_channels_arg
+    return in_channels_arg, input_channels_cfg
+
+
 # ── Section 7: trainer init (resume vs fresh) ────────────────────────────────
 def init_trainer(
     args: argparse.Namespace,
@@ -277,16 +302,7 @@ def init_trainer(
             cluster_threshold=combined_config.get("cluster_threshold"),
         )
     else:
-        # Sweep-variant support: configs may carry `input_channels: [list]` to
-        # pick a subset of the 18 wire planes. When present, in_channels is
-        # derived from the list length; otherwise the standard 18-plane model
-        # is built.
-        input_channels_cfg = combined_config.get("input_channels")
-        if input_channels_cfg is None:
-            in_channels_arg = int(combined_config.get("in_channels", 18))
-        else:
-            in_channels_arg = len(input_channels_cfg)
-            combined_config["in_channels"] = in_channels_arg
+        in_channels_arg, input_channels_cfg = _resolve_fresh_in_channels(combined_config)
         model = HexTacToeNet(
             board_size=board_size,
             res_blocks=res_blocks,
