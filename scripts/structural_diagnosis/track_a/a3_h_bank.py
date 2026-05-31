@@ -42,7 +42,23 @@ sys.path.insert(0, str(REPO))
 from scripts.structural_diagnosis.track_a.position_classifier import (
     classify_state, MIN_STONES, MAX_MEAN_HEX_DIST, OPEN_RUN_LEN,
 )
+from hexo_rl.encoding import all_specs as _all_specs
+from hexo_rl.encoding.resolvers import cur_stone_slot, opp_stone_slot
 from hexo_rl.viewer.model_loader import load_model
+
+
+def _slots_for_plane_count(n_planes: int) -> tuple[int, int]:
+    """Registry-derived (cur_slot, opp_slot) for a corpus's plane count.
+
+    §P5-CT L65 class: the alt-bank filter + classifier read the opponent t0
+    plane at the hardcoded v6 slot 4, which is wrong for a 4-plane v6_live2
+    corpus (opp at slot 1). Map the corpus plane count to the matching
+    encoding and derive the kept slots.
+    """
+    for spec in _all_specs():
+        if spec.n_planes == n_planes:
+            return cur_stone_slot(spec), opp_stone_slot(spec)
+    raise ValueError(f"no registered encoding with n_planes={n_planes}")
 
 CORPUS = REPO / "data" / "bot_corpus_s178_sealbot_vs_v6.npz"
 ANCHOR = REPO / "checkpoints" / "bootstrap_model_v6.pt"
@@ -79,9 +95,11 @@ def sample_alt_bank() -> dict:
     states = d["states"]
     n = len(states)
 
-    # mid-game filter
-    cp = (states[:, 0] > 0.5).reshape(n, -1).sum(axis=1)
-    op = (states[:, 4] > 0.5).reshape(n, -1).sum(axis=1)
+    # mid-game filter — opp slot is registry-derived (4 for v6, 1 for v6_live2),
+    # never the hardcoded v6-only 4 (§P5-CT L65 class).
+    _cur_slot, _opp_slot = _slots_for_plane_count(states.shape[1])
+    cp = (states[:, _cur_slot] > 0.5).reshape(n, -1).sum(axis=1)
+    op = (states[:, _opp_slot] > 0.5).reshape(n, -1).sum(axis=1)
     n_stones = cp + op
     mid_mask = (n_stones >= MID_GAME_MIN) & (n_stones <= MID_GAME_MAX)
     candidate_idx = np.flatnonzero(mid_mask)
@@ -91,7 +109,7 @@ def sample_alt_bank() -> dict:
     # classify candidates
     cls = np.empty(len(candidate_idx), dtype=object)
     for i, idx in enumerate(candidate_idx):
-        cls[i] = classify_state(states[idx])
+        cls[i] = classify_state(states[idx], cur_slot=_cur_slot, opp_slot=_opp_slot)
 
     col_pool = candidate_idx[cls == "colony"]
     ext_pool = candidate_idx[cls == "extension"]

@@ -100,11 +100,14 @@ def _mean_hex_dist_from_centroid(occ_mask: np.ndarray) -> float:
 def classify_state(state: np.ndarray,
                    min_stones: int = MIN_STONES,
                    max_mean_hex_dist: float = MAX_MEAN_HEX_DIST,
-                   open_run_len: int = OPEN_RUN_LEN) -> str:
+                   open_run_len: int = OPEN_RUN_LEN,
+                   cur_slot: int = 0,
+                   opp_slot: int = 4) -> str:
     """Classify a single (n_planes, H, W) state plane tensor.
 
-    Plane 0 = current-player stones (binary); plane 4 = opponent stones.
-    Other planes ignored (history not consulted for class).
+    `cur_slot` / `opp_slot` are the current/opponent t0 kept-slot indices.
+    They default to v6 (0 / 4); pass the registry-derived slots for a
+    non-v6 array (v6_live2 opp is at slot 1, not 4 — §P5-CT L65 class).
 
     Decision order:
       1. COLONY first: tight cluster (mean hex dist <= max_mean_hex_dist)
@@ -115,8 +118,8 @@ def classify_state(state: np.ndarray,
       2. EXTENSION otherwise: any player has open run >= open_run_len
          along a hex axis with empty flanks.
       3. NEITHER if neither test fires."""
-    cp_mask = np.asarray(state[0]) > 0.5
-    op_mask = np.asarray(state[4]) > 0.5
+    cp_mask = np.asarray(state[cur_slot]) > 0.5
+    op_mask = np.asarray(state[opp_slot]) > 0.5
     occ_mask = cp_mask | op_mask
     n_stones = int(occ_mask.sum())
     # COLONY test (precedes extension to handle blob-with-internal-run case)
