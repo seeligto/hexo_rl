@@ -13,17 +13,34 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from hexo_rl.encoding import lookup as _lookup_encoding
+from hexo_rl.encoding import all_specs as _all_specs
 from hexo_rl.utils.coordinates import (
     axial_distance,
     flat_to_axial as _local_flat_to_axial,
     axial_to_flat as _local_axial_to_flat,
 )
 
-KEPT_PLANE_INDICES: list[int] = list(_lookup_encoding("v6").kept_plane_indices)
 BOARD_SIZE: int = 19
 HALF: int = (BOARD_SIZE - 1) // 2  # 9
 SENTINEL: int = -32768  # padding value in moves arrays
+
+
+def _kept_planes_for_model(model) -> list[int]:
+    """Registry-derived kept-plane indices for a model's in_channels.
+
+    §P5-CT P1-4: this 19x19 single-window diagnostic used to slice v6's 8 kept
+    planes unconditionally, mismatching a v6tp (10-ch) / v6_live2 (4-ch) model.
+    Map the model's in_channels to the matching encoding's kept set, preferring
+    the 19x19 single-window family (the geometry this diagnostic assumes).
+    """
+    in_ch = int(getattr(model, "in_channels"))
+    for spec in _all_specs():
+        if spec.n_planes == in_ch and spec.board_size == 19 and not spec.is_multi_window:
+            return list(spec.kept_plane_indices)
+    for spec in _all_specs():
+        if spec.n_planes == in_ch:
+            return list(spec.kept_plane_indices)
+    raise ValueError(f"no registered encoding with n_planes={in_ch}")
 
 
 # ── Geometry helpers ───────────────────────────────────────────────────────────
@@ -314,12 +331,14 @@ def analyse_position(
     top5_policy: List[Tuple[int, int, bool, float]] = []
 
     if tensor is not None and K > 0:
-        # state.to_tensor() returns 18-plane canonical history tensor.
-        # Slice to KEPT_PLANE_INDICES (8 planes, HEXB v6) before model forward.
-        t8 = tensor[:, KEPT_PLANE_INDICES, :, :]  # (K, 8, 19, 19)
+        # state.to_tensor() returns 18-plane canonical history tensor. Slice to
+        # the model encoding's kept planes (v6→8, v6tp→10, v6_live2→4) before
+        # the forward — registry-derived, not the v6-only constant (§P5-CT P1-4).
+        kept = _kept_planes_for_model(model)
+        t8 = tensor[:, kept, :, :]  # (K, n_planes, 19, 19)
         x = torch.tensor(t8.astype(np.float32), dtype=torch.float32, device=device)
         with torch.no_grad():
-            log_pi, _v, _vl = model(x)  # (K, 362)
+            log_pi, _v, _vl = model(x)  # (K, policy_logit_count)
         log_pi_np = log_pi.cpu().numpy()  # (K, 362)
 
         # Collect (global_q, global_r, logit) for all board cells across all clusters
