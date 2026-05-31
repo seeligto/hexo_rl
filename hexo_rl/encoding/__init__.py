@@ -43,11 +43,15 @@ from hexo_rl.encoding.registry import (
     lookup,
 )
 from hexo_rl.encoding.resolvers import (
+    ArchSpec,
     ShapeMismatchError,
+    cur_stone_slot,
     detect_encoding_from_state_dict,
     expand_auto_paths,
     normalize_encoding_name,
+    opp_stone_slot,
     resolve_anchor_path,
+    resolve_arch,
     resolve_corpus_path,
     resolve_encoding_for_eval,
     resolve_from_checkpoint,
@@ -56,15 +60,19 @@ from hexo_rl.encoding.resolvers import (
 )
 
 __all__ = [
+    "ArchSpec",
     "EncodingSpec",
     "EncodingRegistryError",
     "ShapeMismatchError",
     "all_specs",
+    "cur_stone_slot",
     "detect_encoding_from_state_dict",
     "expand_auto_paths",
     "lookup",
     "normalize_encoding_name",
+    "opp_stone_slot",
     "resolve_anchor_path",
+    "resolve_arch",
     "resolve_corpus_path",
     "resolve_encoding_for_eval",
     "resolve_from_checkpoint",

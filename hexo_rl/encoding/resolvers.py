@@ -8,6 +8,7 @@ hard-coded string except for explicit defaults.
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -148,6 +149,90 @@ _ANCHOR_PATHS: dict[str, str] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Architecture resolver — ONE registry-derived map from an encoding NAME to the
+# arch facts consumers used to hardcode (plane count, kept-index list, stone
+# slots, policy width). Authored §P5-CT de-hardcoding sweep (2026-05-31, L63/
+# L65 follow-through). Every P0/P1 ledger site routes through this instead of a
+# literal 18 / module-level v6 `KEPT_PLANE_INDICES` / bare `[:, 4]` slice.
+#
+# Source-plane semantics fixed by the v6 wire format (game_state.to_tensor):
+#   0       → current-player stone, t0          (always kept-slot 0)
+#   8       → opponent stone, t0
+#   1,2,3   → current-player history t-1..t-3   (H-PLANE class, §P5-CT)
+#   9,10,11 → opponent history t-1..t-3
+#   16,17   → turn-phase scalars (CF-2 class, §P5-CT)
+# `history_planes` / `turn_phase_planes` are the kept-SLOT indices (positions
+# within the sliced tensor) of those source planes that the encoding retains.
+# ---------------------------------------------------------------------------
+
+_CUR_STONE_SRC_PLANE = 0
+_OPP_STONE_SRC_PLANE = 8
+_HISTORY_SRC_PLANES = frozenset({1, 2, 3, 9, 10, 11})
+_TURN_PHASE_SRC_PLANES = frozenset({16, 17})
+
+
+def _kept_slot_of(kept: list[int], src_plane: int) -> int:
+    """Position of ``src_plane`` within the encoding's kept-plane order."""
+    return kept.index(src_plane)
+
+
+@dataclass(frozen=True)
+class ArchSpec:
+    """Registry-derived architecture facts for a single encoding.
+
+    A thin, typed, immutable view over the registry `EncodingSpec` — every
+    field is computed from `lookup(name)`, never hardcoded. This is the single
+    place a consumer asks "for encoding X, how many input channels / which
+    kept planes / where is the opponent stone" instead of baking v6 literals.
+    """
+
+    name: str
+    in_channels: int               # = spec.n_planes (model trunk in_channels)
+    kept_indices: tuple[int, ...]  # = spec.kept_plane_indices (source→wire slice)
+    cur_stone_slot: int            # kept-slot of source plane 0 (always 0)
+    opp_stone_slot: int            # kept-slot of source plane 8
+    k_max: int                     # = spec.k_max (multi-window cluster cap)
+    policy_logit_count: int        # = spec.policy_logit_count
+    history_planes: tuple[int, ...]     # kept-slots of source {1,2,3,9,10,11}
+    turn_phase_planes: tuple[int, ...]  # kept-slots of source {16,17}
+
+
+def resolve_arch(name: Any) -> ArchSpec:
+    """Resolve an encoding NAME (str / dict / EncodingSpec) to its `ArchSpec`.
+
+    The one registry-derived resolver: never shape-sniff a checkpoint, never
+    hardcode a plane count or kept-index list — call this by name. Funnels
+    through `normalize_encoding_name` so the dict form
+    (`Trainer._propagate_encoding_into_config`) also resolves.
+    """
+    spec = lookup(normalize_encoding_name(name))
+    kept = list(spec.kept_plane_indices)
+    history = tuple(i for i, src in enumerate(kept) if src in _HISTORY_SRC_PLANES)
+    turn_phase = tuple(i for i, src in enumerate(kept) if src in _TURN_PHASE_SRC_PLANES)
+    return ArchSpec(
+        name=spec.name,
+        in_channels=spec.n_planes,
+        kept_indices=tuple(kept),
+        cur_stone_slot=_kept_slot_of(kept, _CUR_STONE_SRC_PLANE),
+        opp_stone_slot=_kept_slot_of(kept, _OPP_STONE_SRC_PLANE),
+        k_max=spec.k_max,
+        policy_logit_count=spec.policy_logit_count,
+        history_planes=history,
+        turn_phase_planes=turn_phase,
+    )
+
+
+def cur_stone_slot(spec: Any) -> int:
+    """Slice index of the current-player t0 stone plane (source plane 0).
+
+    Always 0 today (every kept set leads with source plane 0), but derived from
+    the registry so a future plane-reordering encoding cannot silently break
+    the chain-plane recompute that reads `states[:, cur_stone_slot]`.
+    """
+    return _kept_slot_of(list(spec.kept_plane_indices), _CUR_STONE_SRC_PLANE)
+
+
 def opp_stone_slot(spec: Any) -> int:
     """Slice index of the opponent t0 stone plane (source plane 8) within the
     encoding's kept-plane order.
@@ -159,7 +244,7 @@ def opp_stone_slot(spec: Any) -> int:
     (kept [0,1,2,3,8,...]) but slot 1 for v6_live2 (kept [0,8,16,17]). Derive it
     from the registry instead of hardcoding the v6-only ``4``.
     """
-    return list(spec.kept_plane_indices).index(8)
+    return _kept_slot_of(list(spec.kept_plane_indices), _OPP_STONE_SRC_PLANE)
 
 
 def resolve_corpus_path(spec: Any) -> Path:
