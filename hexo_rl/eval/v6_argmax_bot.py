@@ -24,6 +24,7 @@ import numpy as np
 import torch
 
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
+from hexo_rl.encoding import all_specs as _all_specs
 from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet
@@ -31,11 +32,32 @@ from hexo_rl.utils.global_crop import compute_global_crop_from_board
 
 _V6 = _lookup_encoding("v6")
 BOARD_SIZE: int = _V6.board_size
-BUFFER_CHANNELS: int = _V6.n_planes
-KEPT_PLANE_INDICES: list[int] = list(_V6.kept_plane_indices)
 
 
 _HALF: int = (BOARD_SIZE - 1) // 2  # 9
+
+
+def _kept_planes_for_in_channels(in_channels: int) -> list[int]:
+    """Registry-derived kept-plane indices for a model's in_channels."""
+    in_channels = int(in_channels)
+    for spec in _all_specs():
+        if spec.n_planes == in_channels:
+            return list(spec.kept_plane_indices)
+    raise ValueError(f"no registered encoding with n_planes={in_channels}")
+
+
+def _prepare_input(cluster_tensor: np.ndarray, in_channels: int) -> np.ndarray:
+    """Slice the source cluster tensor to the model's kept planes.
+
+    §P5-CT P1-6: the old non-8 branch fed the raw source (18-plane) tensor into
+    the model, crashing any non-8-channel model (e.g. v6tp in_channels=10). Now
+    slice the registry kept set keyed on in_channels; only a genuine full-width
+    (in_channels == source planes) legacy model passes through unsliced.
+    """
+    src_planes = cluster_tensor.shape[0]
+    if in_channels == src_planes:
+        return cluster_tensor
+    return cluster_tensor[_kept_planes_for_in_channels(in_channels)]
 
 
 class V6ArgmaxBot(BotProtocol):
@@ -88,12 +110,9 @@ class V6ArgmaxBot(BotProtocol):
         assert view_h == view_w, "V6ArgmaxBot expects square cluster window"
         view_size = view_h
         view_half = (view_size - 1) // 2
-        # Slice 18 → 8 planes (KEPT_PLANE_INDICES, HEXB v6 wire format) only
-        # if the model expects 8 in_channels.
-        if self.model.in_channels == BUFFER_CHANNELS:
-            inp = cluster_tensor[KEPT_PLANE_INDICES]
-        else:
-            inp = cluster_tensor
+        # Slice the 18-plane source to the model's kept planes (registry-derived
+        # by in_channels) — never feed the raw source into a narrower model.
+        inp = _prepare_input(cluster_tensor, self.model.in_channels)
         x = torch.from_numpy(inp).unsqueeze(0).float().to(self.device)
         # §169 A3 — pma_global needs a (1, 3, 32, 32) global summary crop
         # built from the live board's stones in the current-player frame.
