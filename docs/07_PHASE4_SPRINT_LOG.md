@@ -4375,6 +4375,96 @@ matches-or-beats v6tp vs SealBot, no spam. **Adopt v6_live2.** 30k model archive
 in-run eval (instance reset) — training completed, model safe. Open: commit the
 arc, ledger-P0 sweep, policy-flatness + real-second-opponent (deferred).
 
+### De-hardcoding sweep — `resolve_arch` resolver + INV pin (2026-05-31) — PASS
+
+Owed ledger-P0 sweep closed as a clean, test-pinned, one-commit-per-site arc
+(NOT reactive). Design (question-first, operator-confirmed): REJECT
+checkpoint shape-sniffing; ADOPT ONE registry-derived resolver
+`hexo_rl/encoding/resolvers.py::resolve_arch(name) -> ArchSpec` {in_channels,
+kept_indices, cur_stone_slot, opp_stone_slot, k_max, policy_logit_count,
+history_planes, turn_phase_planes} — explicit, by name, every field from
+`lookup(name)`. Folded the pre-existing `opp_stone_slot` + new `cur_stone_slot`
+onto a shared `_kept_slot_of`. Rust mirror: `impl RegistrySpec` accessors
+(cur/opp_stone_slot, history/turn_phase_planes) — init-time only, NO MCTS
+hot-path call site ⇒ **no bench gate** (confirmed; 196 Rust tests green).
+
+14 commits `0e89ccd..05e3365` on `phase4.5/v6_live2`. Sites routed:
+- **P0-1** `orchestrator.py` fresh-run `in_channels` (was literal 18) →
+  `_resolve_fresh_in_channels` → `resolve_arch(enc).in_channels`.
+- **P0-2** `generate_bot_corpus.py` (was hardcoded-v6 end-to-end, no flag) →
+  `--encoding` + `_resolve_generator_encoding` (19×19-single-window guard) +
+  `spec.kept_plane_indices` slice threaded through factory/play/save.
+- **P1-1..6** early_game_probe / build_value_probe_fixture / value_probe
+  (plane-count skip→NaN guard) / windowing_diagnostic / analyze_api /
+  v6_argmax_bot — each slices the RESOLVED encoding's kept set (or
+  registry-scanned by `in_channels`), never v6's 8.
+- **cur-slot** `batch_assembly.py` `pre/bot_states[:, 0]` → `cur_stone_slot`.
+- **2 NEW L65-class finds beyond the ledger** (the grep caught what name-grep
+  missed): `structural_diagnosis/track_a/{position_classifier,a3_h_bank}.py`
+  hardcoded opp at v6 slot 4 (`state[4]` / `states[:, 4]`) — routed via
+  plane-count→registry slot derivation.
+
+**INV pin (both facets, GREEN):** (1) `resolve_arch == registry` parametrized
+over ALL registered encodings (count-agnostic via `_load()`); (2)
+`test_inv_no_positional_plane_slice` greps the live tree for bare `[:, <int>]`
+plane slices, fails on any not in the documented SOURCE-layout allowlist
+(game_state encoder writes, axis_distribution source read, dataset_v8 native
+builder, bench synthetic input, policy index). **Teeth verified** by injecting
+`arr[:, 4]` → RED, restore → GREEN.
+
+**Verdict = PASS.** All P0+P1 + new finds resolver-routed; INV green; full suite
+**1733 py + 196 rs green, 0 fail** (the anticipated `test_analyze_api` 400==200
+failures did not occur). Fresh-context review: NONE surviving on live paths, 3
+spot-checks PASS. **L66 — a name-grep hardcode ledger is structurally blind to
+positional slices (`states[:, N]`) and leading-axis plane reads (`state[N]`);
+ship a registry-derived resolver AND a grep-INV with TEETH (inject-and-revert)
+so the next new-plane-count encoding fails a test, not a run** (refines L65 from
+"grep positional slices too" to "pin them in CI"). Note: repo has no configured
+formatter (no `[tool.*]`/pre-commit); `ruff format` would reflow ~1188 lines vs
+the hand-aligned house style — deliberately NOT applied; new code matches
+surrounding style; all ruff F401/F841/E402 in touched files are pre-existing.
+Acceptable residuals (P2, unchanged): module-level `BUFFER_CHANNELS =
+lookup("v6").n_planes` v6-family default consts; Rust `sym_tables.rs` v6
+fallbacks (guarded). PARTIAL/none — no site needed a deeper refactor.
+
+---
+
+## §P-INF — inference attribution: GPU-bound vs FFI/dispatch (Rust-rewrite question)
+
+**Date 2026-05-31.** Settle empirically whether self-play inference wall-clock is
+GPU-bound or dispatch/FFI/GIL-bound **before** anyone specs moving inference to Rust
+(per L18/L39/§S186: a tall line is a question, not headroom). Report
+`reports/investigations/inference_attribution_2026-05-31.md`.
+
+**Premise (code-confirmed).** PyO3 is crossed **per fused GPU batch, not per-leaf**:
+worker submit (`submit_batch_and_wait_rust`, inference_bridge.rs:177) is `pub(crate)`
+Rust→Rust (called worker_loop/inner.rs:534); the only per-batch Python-facing crossings
+are `next_inference_batch` (fetch) + `submit_inference_results` (return). 2 FFI crossings
+amortise over 64–192 leaves.
+
+**Method.** Real WorkerPool selfplay, `diagnostics.perf_timing=true` +
+**`perf_sync_cuda=true`** (mandatory — without the post-H2D/post-forward
+`cuda.synchronize()`, `forward_us` collapses to async launch and GPU time mis-attributes
+to the `.cpu()` D2H sync). 5-bucket attribution; `submit_us` added (perf-gated) to time
+the 2nd crossing so Σ5 = full cycle. Driver `scripts/perf/inference_attribution_probe.py`,
+laptop 4060, `v6_live2_smoke_laptop`, bootstrap_model_v6_live2.pt.
+
+**Result (2 independent runs, per-batch p50).** forward/RT = **83.2% / 79.98%**;
+**FFI=(fetch+submit)/RT = 5.7% / 7.8%**; h2d ~1.8%, d2h ~2%. Sum-check closes (untimed
+tail 0.90% via independent inter-emit timestamps). Non-forward residual is dominated by
+**batch-fill stall** (22% of batches hit the 16 ms `max_wait` timeout; high-fetch_wait ⇒
+*lower* batch_n = worker starvation), not dispatch.
+
+**Verdict — Rust inference REJECTED on evidence.** The `forward ≥ 80%` clause is knife-edge
+(reviewer's run 79.98% < gate; **not** post-hoc moved) so the literal E1 gate is
+INCONCLUSIVE-leaning-GPU-bound — but the **decision** rests on the FFI clause only (Rust can
+touch nothing else): FFI <8% on both runs, and an **upper bound** (both ran half-full batches
+under sync; production batch-fill ~99% ⇒ fuller batches + no stall ⇒ FFI fraction strictly
+smaller). The 9 ms GPU forward is untouchable by a rewrite; §124 TorchScript trace already
+captured the dispatch win in the Python server. If selfplay throughput is ever the target, the
+only recoverable lever is the batch-fill stall (feeders: n_workers↑ / max_wait↓ / batch↓),
+config-side. Concurs with §090, §124, §125 (80.4% forward on 4080S), L18.
+
 ---
 
 ## §66–§101 Classification Audit — quick-look table
@@ -4445,3 +4535,34 @@ arc, ledger-P0 sweep, policy-flatness + real-second-opponent (deferred).
 | §172 | Encoding Registry SSoT (Phase A + Phase B v7full sustained) | KEEP-DISTILLED |
 | §173 | α multi-window K-cluster selfplay (constants-parameterization) | KEEP-DISTILLED |
 | §174 | v6w25 sustained: bootstrap investigation + escalation | KEEP-DISTILLED |
+
+### §CANARY-VAL — Spam-canary threshold validation (stride5 / colony_ext) — 2026-05-31
+
+**Verdict (split): stride5_run = RECALIBRATE; colony_extension_fraction = METRIC-INSUFFICIENT.**
+Report: `reports/investigations/canary_validation_20260531/REPORT.md`
+(+ `compute_metrics.py`, `query.py`, `per_game_metrics.csv`). Independent
+re-derivation review: 574-game blind 20% sample, 0/0 metric mismatches.
+
+Validated the two abort canaries against real games (probe gates can't test
+dynamic play, L2): RECENT v6_live2-window 866 games (vast-staged
+`/tmp/hexo_vast_stage/logs_replays/`) + HIST §175 collapse 2000 games
+(`reports/s176_a3_games/replays_05_14.jsonl`). §152 spam-positive raw games are
+**unarchived** — only `phase_b_prime/instrumented/diagnosis.md` survives.
+
+- **stride5_run separates spam cleanly but threshold 60 is dead.** Benign
+  (2866 games) per-game max=3, rolling p90≤4. §152 spam (diagnosis.md, re-verified
+  ×2): P50=8, P90=21, max=34. Deployed `stride5_p90=60` > spam p90 21 → 0% TPR on
+  the spam it was built for. §152 author proposed P90>15. **Recommend
+  `stride5_p90` 60→15** (0% FPR: benign p90≤4≪15). 60 was an eyeballed "preserved
+  §157/L9" guardrail, decoupled from the §152 diagnosis.
+- **colony_ext_frac is blind to the §175 attractor.** Flat ~0 during real
+  collapse (A3 confirmed; here 2/2000 ≥0.40, p90=0.0). AUC≈0.5 for that mode.
+  Detects only rare isolated-far-stone extension. Strategic-vs-spam *colony* axis
+  (cluster coherence) is unmonitored — needs within-run-normalized fragmentation
+  (A3 n_components d=−0.822 within-run, but confounded across runs/training-stage:
+  RECENT clean n_comp 14.93 > HIST 8.40). Specced as follow-up.
+- **Past verdicts:** colony-arc kills (§175/§S179/§S180/§S181) fired on SealBot-WR,
+  NOT these canaries → not invalidated. But "spam clean: stride5_p90≪60" citations
+  (§157, v6_live2 adoption) leaned on an inert gate; v6_live2 still spam-clean by
+  direct measurement (stride5 max 2, colony_ext 0).
+- Gates are LIVE aborts (`step_coordinator.py:147-164`, `raise HardAbort`).

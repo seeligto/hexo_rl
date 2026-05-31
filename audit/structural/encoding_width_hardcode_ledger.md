@@ -1,5 +1,17 @@
 # Encoding-Width Hardcode Ledger
 
+> **RESOLVED 2026-05-31** — de-hardcoding sweep `0e89ccd..05e3365` on
+> `phase4.5/v6_live2`. All P0 (2) + P1 (6) sites below are routed through the
+> registry-derived resolver `hexo_rl/encoding/resolvers.py::resolve_arch` (+
+> `cur_stone_slot`/`opp_stone_slot`/`all_specs` scan). Two NEW L65-class finds
+> beyond this ledger (`structural_diagnosis/track_a/{position_classifier,
+> a3_h_bank}.py` — bare `state[4]`/`states[:, 4]` opp-slot) were also routed.
+> INV pins added: `tests/test_encoding_arch_resolver.py` (resolve_arch ==
+> registry for all encodings) + `tests/test_inv_no_positional_plane_slice.py`
+> (no live-path bare `[:, <int>]`, teeth-verified). Verdict: PASS (1733 py + 196
+> rs green). See sprint log §P5-CT "De-hardcoding sweep". P2 entries below stay
+> as documented acceptable defaults. The body below is the original audit.
+
 Static-only audit (no GPU, no training, no fixes). Repo root `/home/timmy/Work/hexo_rl`, branch `master`.
 Excludes `.claude/worktrees/` (stale agent copies) and `target/` (build artifacts).
 
