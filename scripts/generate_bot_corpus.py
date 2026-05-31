@@ -66,13 +66,32 @@ from hexo_rl.utils.device import best_device  # noqa: E402
 log = structlog.get_logger()
 
 _V6 = _lookup_encoding("v6")
-_BOARD_SIZE: int = _V6.board_size                 # 19
-_N_PLANES: int = _V6.n_planes                     # 8
+_BOARD_SIZE: int = _V6.board_size                 # 19 — generator is 19x19 only
 _N_ACTIONS: int = _V6.policy_logit_count          # 362
-_KEPT_PLANE_INDICES: list[int] = list(_V6.kept_plane_indices)
 
 # F1 hazard — Makefile default that is fresh-init random v6w25; refuse.
 _FORBIDDEN_ANCHOR_NAME = "bootstrap_model.pt"
+
+
+def _resolve_generator_encoding(name: str):
+    """Resolve + validate the encoding for the bot-corpus generator.
+
+    §P5-CT P0-2 fix: the generator was hardcoded to v6 end-to-end. It now takes
+    an --encoding and slices the resolved `spec.kept_plane_indices` so a
+    v6tp/v6_live2 bot-mix recipe gets a corpus with the right plane count
+    (instead of an 8-plane corpus that crashes the batch_assembly plane-count
+    guard). The windowing math (board_size 19, +9 offset, single window) only
+    supports the 19x19 single-window family — refuse v8/v6w25 loudly rather
+    than silently miscompute window projections.
+    """
+    spec = _lookup_encoding(name)
+    if spec.board_size != 19 or spec.is_multi_window:
+        raise ValueError(
+            f"generate_bot_corpus supports only single-window 19x19 encodings "
+            f"(v6/v6tp/v6_live2/v7*); got {name!r} (board_size={spec.board_size}, "
+            f"multi_window={spec.is_multi_window})."
+        )
+    return spec
 
 
 def _sha256_of_file(path: Path) -> str:
@@ -106,11 +125,12 @@ class _AnchorMCTSBot(BotProtocol):
         temperature: float,
         c_puct: float,
         device: torch.device,
+        encoding: str = "v6",
     ) -> None:
         # Encoding lookup baked into SelfPlayWorker via resolve_from_config —
-        # supply `encoding: v6` explicitly + mcts knobs through config dict.
+        # supply the run's encoding explicitly + mcts knobs through config dict.
         config = {
-            "encoding": "v6",
+            "encoding": encoding,
             "n_simulations": int(n_sims),
             "c_puct": float(c_puct),
             "temperature_threshold_ply": 0,  # apply `temperature` everywhere
@@ -143,12 +163,18 @@ class _AnchorMCTSBot(BotProtocol):
         return f"anchor({self._ckpt_name})"
 
 
-def _encode_v6_row(state: GameState, q: int, r: int) -> Optional[Tuple[np.ndarray, int]]:
-    """Encode a (state, chosen-move) row into v6 wire format.
+def _encode_v6_row(
+    state: GameState, q: int, r: int, kept_plane_indices: list[int]
+) -> Optional[Tuple[np.ndarray, int]]:
+    """Encode a (state, chosen-move) row, slicing the source wire to the
+    encoding's kept planes.
 
-    Returns (state_8x19x19_f16, target_idx) or None if the move does not
-    project into any cluster window (skip the row — same semantics as
+    Returns (state_<n_planes>x19x19_f16, target_idx) or None if the move does
+    not project into any cluster window (skip the row — same semantics as
     `dataset.py:62` which advances `t` only when `target_k >= 0`).
+
+    §P5-CT P0-2: `kept_plane_indices` is the resolved encoding's slice (v6→8,
+    v6tp→10, v6_live2→4), no longer the module-level v6 constant.
     """
     tensor, centers = state.to_tensor()  # (K, 18, 19, 19) f16
     target_k = -1
@@ -162,9 +188,8 @@ def _encode_v6_row(state: GameState, q: int, r: int) -> Optional[Tuple[np.ndarra
             break
     if target_k < 0:
         return None
-    # Slice 18 -> 8 planes via kept_plane_indices (v6 wire).
-    state8 = tensor[target_k][_KEPT_PLANE_INDICES, :, :].astype(np.float16)
-    return state8, target_idx
+    state_row = tensor[target_k][kept_plane_indices, :, :].astype(np.float16)
+    return state_row, target_idx
 
 
 def _play_one_game(
@@ -174,11 +199,13 @@ def _play_one_game(
     max_plies: int,
     random_opening_plies: int,
     game_idx: int,
+    encoding: str,
+    kept_plane_indices: list[int],
 ) -> Tuple[List[np.ndarray], List[int], List[int], Optional[int], int, str]:
     """Play one game; record per-row state + target_idx + cur_player.
 
     Returns:
-      states_8       — list of (8,19,19) f16 arrays (length T)
+      states_8       — list of (n_planes,19,19) f16 arrays (length T)
       target_idxs    — list of int target indices (length T)
       cur_players    — list of int player labels {1,-1} at each row
       winner         — int player label or None
@@ -188,7 +215,7 @@ def _play_one_game(
     sealbot = sealbot_factory()
     anchor = anchor_factory()
 
-    board = Board.with_encoding_name("v6")
+    board = Board.with_encoding_name(encoding)
     state = GameState.from_board(board)
 
     states_8: List[np.ndarray] = []
@@ -214,7 +241,7 @@ def _play_one_game(
             q, r = anchor.get_move(state, board)
 
         # Record row pre-apply (state + chosen move).
-        row = _encode_v6_row(state, int(q), int(r))
+        row = _encode_v6_row(state, int(q), int(r), kept_plane_indices)
         if row is not None:
             state8, target_idx = row
             states_8.append(state8)
@@ -243,6 +270,7 @@ def _build_factories(
     anchor_temperature: float,
     anchor_c_puct: float,
     device: torch.device,
+    encoding: str = "v6",
 ) -> Tuple[Callable[[], BotProtocol], Callable[[], BotProtocol]]:
     """Return (sealbot_factory, anchor_factory). Both spawn FRESH per game."""
     def sealbot_factory() -> BotProtocol:
@@ -255,6 +283,7 @@ def _build_factories(
             temperature=anchor_temperature,
             c_puct=anchor_c_puct,
             device=device,
+            encoding=encoding,
         )
     return sealbot_factory, anchor_factory
 
@@ -264,8 +293,12 @@ def main() -> int:
         description="SealBot-vs-anchor bot-game NPZ generator (§178 T1).",
     )
     parser.add_argument("--anchor", required=True,
-                        help="Path to v6 anchor checkpoint (.pt). "
+                        help="Path to anchor checkpoint (.pt). "
                              "REQUIRED; F1-refuses bootstrap_model.pt.")
+    parser.add_argument("--encoding", type=str, default="v6",
+                        help="Registry encoding name (v6/v6tp/v6_live2/v7*); "
+                             "slices the corpus to the encoding's plane count. "
+                             "19x19 single-window only.")
     parser.add_argument("--n-games", type=int, default=700,
                         help="Number of games to generate (design §4.2 default 700).")
     parser.add_argument(
@@ -314,12 +347,23 @@ def main() -> int:
             note="serial-only generation in §178 T1; multi-proc deferred.",
         )
 
+    try:
+        _spec = _resolve_generator_encoding(args.encoding)
+    except ValueError as exc:
+        print(f"FATAL: {exc}", file=sys.stderr)
+        return 1
+    _kept_plane_indices = list(_spec.kept_plane_indices)
+
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
     device = best_device()
-    print(f"[bot_corpus] device={device}  anchor={anchor_path.name}", flush=True)
+    print(
+        f"[bot_corpus] device={device}  anchor={anchor_path.name}  "
+        f"encoding={args.encoding} ({_spec.n_planes} planes)",
+        flush=True,
+    )
 
     sealbot_factory, anchor_factory = _build_factories(
         anchor_path=anchor_path,
@@ -328,6 +372,7 @@ def main() -> int:
         anchor_temperature=args.anchor_temperature,
         anchor_c_puct=args.anchor_c_puct,
         device=device,
+        encoding=args.encoding,
     )
 
     all_states: List[np.ndarray] = []
@@ -351,6 +396,8 @@ def main() -> int:
                 max_plies=args.max_plies,
                 random_opening_plies=args.random_opening_plies,
                 game_idx=game_idx,
+                encoding=args.encoding,
+                kept_plane_indices=_kept_plane_indices,
             )
         except Exception as exc:  # noqa: BLE001 — log + skip game; continue corpus generation.
             log.error("bot_corpus_game_failed", game_idx=game_idx, error=str(exc))
@@ -434,7 +481,7 @@ def main() -> int:
             "outcomes": outcomes_arr,
             "weights": weights_arr,
         },
-        encoding_name="v6",
+        encoding_name=args.encoding,
         source_manifest="scripts/generate_bot_corpus.py (§178 T1)",
         extra=extra,
         compress=True,
