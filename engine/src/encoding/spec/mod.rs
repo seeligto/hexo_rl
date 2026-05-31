@@ -175,6 +175,64 @@ impl RegistrySpec {
         self.policy_logit_count
     }
 
+    /// Kept-slot index of a source plane within `kept_plane_indices`.
+    /// Panics if the source plane is not retained by this encoding.
+    #[inline]
+    fn kept_slot_of(&self, src_plane: usize) -> usize {
+        self.kept_plane_indices
+            .iter()
+            .position(|&p| p == src_plane)
+            .unwrap_or_else(|| {
+                panic!(
+                    "encoding {:?} does not keep source plane {} (kept={:?})",
+                    self.name, src_plane, self.kept_plane_indices
+                )
+            })
+    }
+
+    /// Slice index of the current-player t0 stone plane (source plane 0).
+    ///
+    /// §P5-CT de-hardcoding sweep — Rust mirror of `resolve_arch().cur_stone_slot`.
+    /// Always 0 today (every kept set leads with source plane 0) but derived
+    /// from the registry so a plane-reorder cannot silently shift it.
+    #[inline]
+    pub fn cur_stone_slot(&self) -> usize {
+        self.kept_slot_of(0)
+    }
+
+    /// Slice index of the opponent t0 stone plane (source plane 8).
+    ///
+    /// §P5-CT — Rust mirror of `resolve_arch().opp_stone_slot`. Slot 4 for the
+    /// v6 family (kept [0,1,2,3,8,...]), slot 1 for v6_live2 (kept [0,8,16,17]).
+    #[inline]
+    pub fn opp_stone_slot(&self) -> usize {
+        self.kept_slot_of(8)
+    }
+
+    /// Kept-slot indices of the history planes (source 1,2,3 / 9,10,11) the
+    /// encoding retains. Empty for v6_live2 (history dropped — the H-PLANE fix).
+    pub fn history_planes(&self) -> Vec<usize> {
+        const HISTORY_SRC: [usize; 6] = [1, 2, 3, 9, 10, 11];
+        self.kept_plane_indices
+            .iter()
+            .enumerate()
+            .filter(|(_, &p)| HISTORY_SRC.contains(&p))
+            .map(|(slot, _)| slot)
+            .collect()
+    }
+
+    /// Kept-slot indices of the turn-phase planes (source 16,17) the encoding
+    /// retains. Non-empty only for v6tp / v6_live2 (CF-2 signal, §P5-CT).
+    pub fn turn_phase_planes(&self) -> Vec<usize> {
+        const TURN_PHASE_SRC: [usize; 2] = [16, 17];
+        self.kept_plane_indices
+            .iter()
+            .enumerate()
+            .filter(|(_, &p)| TURN_PHASE_SRC.contains(&p))
+            .map(|(slot, _)| slot)
+            .collect()
+    }
+
     /// Wire-format signature for cross-encoding compatibility checks (§P13).
     ///
     /// Two encodings are wire-identical when they produce byte-identical on-disk
@@ -367,5 +425,40 @@ mod tests {
         let v8 = crate::encoding::registry::lookup_or_panic("v8");
         assert_eq!(v8.kept_plane_indices, &[0usize, 1, 2, 3, 8, 9, 10, 11, 18, 19, 20]);
         assert_eq!(v8.n_source_planes, 21);
+    }
+
+    // §P5-CT de-hardcoding sweep — Rust mirror of the Python `resolve_arch`
+    // derived slot accessors. Init-time only (no MCTS hot path); parity with
+    // hexo_rl/encoding/resolvers.py so a future Rust consumer reads the same
+    // registry-derived slots instead of a v6 literal.
+    #[test]
+    fn test_arch_slot_accessors() {
+        let look = crate::encoding::registry::lookup_or_panic;
+
+        // v6: kept [0,1,2,3,8,9,10,11] → cur slot 0, opp slot 4,
+        // history slots [1,2,3,5,6,7], no turn-phase.
+        let v6 = look("v6");
+        assert_eq!(v6.cur_stone_slot(), 0);
+        assert_eq!(v6.opp_stone_slot(), 4);
+        assert_eq!(v6.history_planes(), vec![1, 2, 3, 5, 6, 7]);
+        assert_eq!(v6.turn_phase_planes(), Vec::<usize>::new());
+
+        // v6tp: kept [...,16,17] → turn-phase at slots [8,9], opp still slot 4.
+        let v6tp = look("v6tp");
+        assert_eq!(v6tp.opp_stone_slot(), 4);
+        assert_eq!(v6tp.turn_phase_planes(), vec![8, 9]);
+
+        // v6_live2: kept [0,8,16,17] → opp slot 1, no history, turn-phase [2,3].
+        let live2 = look("v6_live2");
+        assert_eq!(live2.cur_stone_slot(), 0);
+        assert_eq!(live2.opp_stone_slot(), 1);
+        assert_eq!(live2.history_planes(), Vec::<usize>::new());
+        assert_eq!(live2.turn_phase_planes(), vec![2, 3]);
+
+        // v8: aux planes 18/19/20 are neither history nor turn-phase.
+        let v8 = look("v8");
+        assert_eq!(v8.cur_stone_slot(), 0);
+        assert_eq!(v8.opp_stone_slot(), 4);
+        assert_eq!(v8.turn_phase_planes(), Vec::<usize>::new());
     }
 }
