@@ -18,11 +18,25 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from hexo_rl.encoding import all_specs as _all_specs
 from hexo_rl.encoding import lookup as _lookup_encoding
 
 _V6 = _lookup_encoding("v6")
 BOARD_SIZE: int = _V6.board_size
-KEPT_PLANE_INDICES: list[int] = list(_V6.kept_plane_indices)
+
+
+def _kept_planes_for_in_channels(in_channels: int) -> list[int]:
+    """Registry-derived kept-plane indices for a model's in_channels.
+
+    §P5-CT P1-5: /analyze used to slice the 18-plane source to v6's 8 kept
+    planes for ANY model, so a v6tp (10-ch) / v6_live2 (4-ch) model still
+    mismatched. Map in_channels to the matching encoding's kept set.
+    """
+    in_channels = int(in_channels)
+    for spec in _all_specs():
+        if spec.n_planes == in_channels:
+            return list(spec.kept_plane_indices)
+    raise ValueError(f"no registered encoding with n_planes={in_channels}")
 
 import numpy as np
 import structlog
@@ -142,7 +156,7 @@ def _analyze_raw(
     state = GameState.from_board(board)
     tensor, centers = state.to_tensor()
     if tensor.shape[1] != engine.model.in_channels:
-        tensor = tensor[:, KEPT_PLANE_INDICES]
+        tensor = tensor[:, _kept_planes_for_in_channels(engine.model.in_channels)]
     K = len(centers)
     N_ACTIONS = board_size * board_size + 1
     half = (board_size - 1) // 2
