@@ -85,7 +85,10 @@ def _generate_fixture_payload(
     from hexo_rl.encoding import lookup as _lookup_encoding
 
     spec = _lookup_encoding(encoding_name)
-    KEPT_PLANE_INDICES = list(_lookup_encoding("v6").kept_plane_indices)
+    # §P5-CT P1-1: slice the RESOLVED encoding's kept planes (v6→8, v6tp→10,
+    # v6_live2→4), not the module-level v6 set — else a non-8-plane fixture
+    # mismatches the model forward and the probe goes dark.
+    KEPT_PLANE_INDICES = list(spec.kept_plane_indices)
     board_size = spec.board_size
     n_actions = spec.policy_logit_count
 
