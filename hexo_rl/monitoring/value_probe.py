@@ -90,6 +90,21 @@ class ValueProbe:
     def n_draw(self) -> int:
         return int(np.sum(self._subset_np == 1))
 
+    @staticmethod
+    def _nan_result() -> dict[str, Any]:
+        """Skip-result with NaN means (plane-mismatch / encoding-mismatched
+        fixture). Same dict shape as a real compute() so callers don't branch."""
+        return {
+            "decisive_mean": float("nan"),
+            "decisive_std":  0.0,
+            "draw_mean":     float("nan"),
+            "draw_std":      0.0,
+            "decisive_n":    0,
+            "draw_n":        0,
+            "decisive_values": [],
+            "draw_values":     [],
+        }
+
     @torch.inference_mode()
     def compute(self, model: torch.nn.Module) -> dict[str, Any]:
         """Run forward; return per-subset value statistics.
@@ -98,9 +113,16 @@ class ValueProbe:
         its forward — we read the post-tanh `value` channel. The probe
         returns NaN-safe means even when a subset happens to be empty.
 
-        Fixture is 8-plane native (post-§131 buffer format) — fed straight
-        to the model with no slicing.
+        The fixture stores buffer-format states sliced to its encoding's kept
+        planes (v6→8, v6tp→10, v6_live2→4) — fed straight to the model with no
+        slicing. §P5-CT P1-3: if the fixture plane count does not match the
+        model's `in_channels` (encoding-mismatched fixture), skip with NaN means
+        rather than crashing the forward (mirrors value_spread_canary's skip).
         """
+        model_in_ch = getattr(model, "in_channels", None)
+        fixture_planes = int(self._states_np.shape[1])
+        if model_in_ch is not None and int(model_in_ch) != fixture_planes:
+            return self._nan_result()
         model.eval()
         was_train = model.training
         try:
