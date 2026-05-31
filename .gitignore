@@ -121,3 +121,11 @@ reports/phase_b_prime/instrumented/checkpoints/
 
 reports/refactor_audit/
 prompts/
+
+# Profiling artifacts — perf records (perf.data can be GB-scale) + flamegraphs.
+# Nearly committed a 1.9 GB perf.data via `git add -A` (2026-05-31); never track.
+perf.data
+perf.data.old
+perf.data.*
+flamegraph.svg
+*.flame.svg
