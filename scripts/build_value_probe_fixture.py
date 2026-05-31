@@ -17,9 +17,10 @@ exceeded 130 — the configuration ``--cap-source v7full_long`` selects this.
 The fixture must be regenerated once the instrumented smoke produces real
 cap-draws (``--cap-source smoke_jsonl``).
 
-The fixture stores 8-plane buffer-format states (KEPT_PLANE_INDICES slice
-of GameState's 18-plane wire format), matching the post-§131 buffer wire
-format that production networks consume directly. One position per game.
+The fixture stores buffer-format states sliced to the run's encoding kept
+planes (v6→8, v6tp→10, v6_live2→4) from GameState's 18-plane wire format,
+matching the buffer wire format that production networks consume directly.
+Pass ``--encoding`` to size the fixture. One position per game.
 
 Usage:
     python scripts/build_value_probe_fixture.py \
@@ -44,36 +45,38 @@ from engine import Board
 from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.env.game_state import GameState
 
-_V6 = _lookup_encoding("v6")
-BOARD_SIZE: int = _V6.board_size
-KEPT_PLANE_INDICES: list[int] = list(_V6.kept_plane_indices)
-
-
-def _replay_to_position(moves: list[tuple[int, int]], stop_ply: int) -> Board:
+def _replay_to_position(
+    moves: list[tuple[int, int]], stop_ply: int, encoding: str = "v6"
+) -> Board:
     """Apply `moves[:stop_ply]` to a fresh Board and return it.
 
     Returns the Board after exactly ``min(stop_ply, len(moves))`` plies.
     Raises ValueError on illegal move (corrupt fixture).
     """
-    b = Board()
+    b = Board.with_encoding_name(encoding)
     n = min(stop_ply, len(moves))
     for q, r in moves[:n]:
         b.apply_move(int(q), int(r))
     return b
 
 
-def _state_tensor_8(board: Board) -> np.ndarray:
-    """Encode `board` to an (8, 19, 19) float16 cluster-0 buffer tensor.
+def _state_tensor(
+    board: Board, kept_plane_indices: list[int], board_size: int
+) -> np.ndarray:
+    """Encode `board` to an (n_planes, B, B) float16 cluster-0 buffer tensor.
 
-    Slices the 18-plane GameState wire format via KEPT_PLANE_INDICES so
-    the fixture matches the post-§131 buffer wire format that production
-    networks consume directly (no in-model index_select).
+    Slices the 18-plane GameState wire format via the RESOLVED encoding's
+    kept-plane indices so the fixture matches the buffer wire format that
+    production networks consume directly (no in-model index_select).
+
+    §P5-CT P1-2: `kept_plane_indices` / `board_size` are registry-derived for
+    the run's encoding (v6→8, v6tp→10, v6_live2→4), not the v6-only constants.
     """
     gs = GameState.from_board(board)
     tens, _centers = gs.to_tensor()  # shape (K, 18, 19, 19)
     if tens.shape[0] == 0:
-        return np.zeros((len(KEPT_PLANE_INDICES), BOARD_SIZE, BOARD_SIZE), dtype=np.float16)
-    return tens[0, KEPT_PLANE_INDICES, :, :].astype(np.float16, copy=False)
+        return np.zeros((len(kept_plane_indices), board_size, board_size), dtype=np.float16)
+    return tens[0, kept_plane_indices, :, :].astype(np.float16, copy=False)
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -94,6 +97,7 @@ def _load_jsonl(path: Path) -> list[dict]:
 
 def _pick_decisive_positions(
     games: Iterable[dict], n: int, rng: random.Random,
+    kept_plane_indices: list[int], board_size: int, encoding: str,
 ) -> list[tuple[np.ndarray, dict]]:
     """Sample n mid-game positions from decisive games."""
     decisive = [
@@ -112,10 +116,10 @@ def _pick_decisive_positions(
         target_ply = int(0.6 * len(moves))
         target_ply = max(10, min(len(moves) - 2, target_ply))
         try:
-            board = _replay_to_position(moves, target_ply)
+            board = _replay_to_position(moves, target_ply, encoding)
         except Exception:
             continue
-        tens = _state_tensor_8(board)
+        tens = _state_tensor(board, kept_plane_indices, board_size)
         meta = {
             "source_game_id": g.get("game_id"),
             "winner": g.get("winner"),
@@ -130,6 +134,7 @@ def _pick_decisive_positions(
 
 def _pick_cap_draws_v7full_long(
     games: Iterable[dict], n: int, rng: random.Random,
+    kept_plane_indices: list[int], board_size: int, encoding: str,
 ) -> list[tuple[np.ndarray, dict]]:
     """Synthesise cap-draw analogues from v7full long-colony games.
 
@@ -184,10 +189,10 @@ def _pick_cap_draws_v7full_long(
             hi = max(lo, len(moves) - 5)
             target_ply = rng.randint(lo, hi)
         try:
-            board = _replay_to_position(moves, target_ply)
+            board = _replay_to_position(moves, target_ply, encoding)
         except Exception:
             continue
-        tens = _state_tensor_8(board)
+        tens = _state_tensor(board, kept_plane_indices, board_size)
         meta = {
             "source_game_id": g.get("game_id"),
             "winner": g.get("winner"),
@@ -202,6 +207,7 @@ def _pick_cap_draws_v7full_long(
 
 def _pick_cap_draws_smoke(
     games: Iterable[dict], n: int, rng: random.Random,
+    kept_plane_indices: list[int], board_size: int, encoding: str,
 ) -> list[tuple[np.ndarray, dict]]:
     """Pick n cap-draws from a smoke games.jsonl (terminal_reason=ply_cap)."""
     caps = [
@@ -219,8 +225,8 @@ def _pick_cap_draws_smoke(
     for g in caps[:n]:
         moves = [tuple(m) for m in g["moves_list"]]
         target_ply = min(130, len(moves) - 1)
-        board = _replay_to_position(moves, target_ply)
-        tens = _state_tensor_8(board)
+        board = _replay_to_position(moves, target_ply, encoding)
+        tens = _state_tensor(board, kept_plane_indices, board_size)
         meta = {
             "source_game_id": g.get("game_id"),
             "winner": g.get("winner", 0),
@@ -256,17 +262,24 @@ def main() -> int:
     p.add_argument("--n-decisive", type=int, default=25)
     p.add_argument("--n-draw",     type=int, default=25)
     p.add_argument("--seed",       type=int, default=42)
+    p.add_argument("--encoding",   type=str, default="v6",
+                   help="Registry encoding name; the fixture is sliced to its "
+                        "kept-plane count (v6→8, v6tp→10, v6_live2→4).")
     p.add_argument(
         "--out", type=Path, default=Path("fixtures/value_probe_50.npz"),
     )
     args = p.parse_args()
+
+    _spec = _lookup_encoding(args.encoding)
+    _kept = list(_spec.kept_plane_indices)
+    _board_size = _spec.board_size
 
     rng = random.Random(args.seed)
     decisive_games = _load_jsonl(args.decisive_jsonl)
     print(f"loaded {len(decisive_games)} games from {args.decisive_jsonl}")
 
     decisive_positions = _pick_decisive_positions(
-        decisive_games, args.n_decisive, rng,
+        decisive_games, args.n_decisive, rng, _kept, _board_size, args.encoding,
     )
     if len(decisive_positions) < args.n_decisive:
         print(
@@ -276,11 +289,13 @@ def main() -> int:
 
     if args.cap_source == "v7full_long":
         draw_positions = _pick_cap_draws_v7full_long(
-            decisive_games, args.n_draw, rng,
+            decisive_games, args.n_draw, rng, _kept, _board_size, args.encoding,
         )
     else:
         cap_games = _load_jsonl(args.cap_jsonl)
-        draw_positions = _pick_cap_draws_smoke(cap_games, args.n_draw, rng)
+        draw_positions = _pick_cap_draws_smoke(
+            cap_games, args.n_draw, rng, _kept, _board_size, args.encoding,
+        )
 
     if len(draw_positions) < args.n_draw:
         print(f"WARNING: got {len(draw_positions)}/{args.n_draw} draw positions")
@@ -316,8 +331,9 @@ def main() -> int:
                 "decisive_jsonl": str(args.decisive_jsonl),
                 "cap_jsonl":     str(args.cap_jsonl) if args.cap_source == "smoke_jsonl" else None,
                 "subset_legend": {"0": "decisive", "1": "draw"},
-                "wire_planes": 8,
-                "board_size": BOARD_SIZE,
+                "encoding": args.encoding,
+                "wire_planes": len(_kept),
+                "board_size": _board_size,
             },
         ),
     )
