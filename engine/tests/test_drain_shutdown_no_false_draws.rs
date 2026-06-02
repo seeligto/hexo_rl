@@ -38,37 +38,20 @@ use engine::game_runner::{SelfPlayRunner, SelfPlayRunnerConfig};
 /// Construct a SelfPlayRunner where every move is a random opening pick.
 /// Avoids the inference batcher entirely (per random_opening_plies.rs).
 fn make_runner_random_only(max_moves: usize) -> SelfPlayRunner {
-    SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-        4,                                  // n_workers (more workers → higher mid-game stop probability)
-        max_moves,
-        1,                                  // n_simulations (irrelevant — no MCTS)
-        1,                                  // leaf_batch_size
-        1.5,                                // c_puct
-        0.25,                               // fpu_reduction
-        Some(8 * BOARD_SIZE * BOARD_SIZE),  // feature_len
-        Some(BOARD_SIZE * BOARD_SIZE + 1),  // policy_len
-        0.0,                                // fast_prob
-        1,                                  // fast_sims
-        1,                                  // standard_sims
-        15,                                 // temp_threshold_compound_moves
-        -0.1,                               // draw_reward
-        -0.1,                               // ply_cap_value (§178; back-compat = draw_reward)
-        false,                              // quiescence_enabled
-        0.0,                                // quiescence_blend_2
-        0.05,                               // temp_min
-        false, 16, 5,                       // zoi_enabled, zoi_lookback, zoi_margin
-        false, 50.0, 1.0,                   // completed_q, c_visit, c_scale
-        false, 16, 10,                      // gumbel_mcts, gumbel_m, gumbel_explore
-        0.3, 0.25, false,                   // dirichlet alpha/eps/enabled
-        10_000,                             // results_queue_cap
-        0.0_f32, 0_usize, 0_usize,          // playout-cap mutex (all zero)
-        max_moves as u32,                   // random_opening_plies == max_moves → never MCTS
-        false,                              // selfplay_rotation_enabled
-        false,                              // legal_move_radius_jitter
-        None,                               // encoding_name (cycle 3 Wave 8 Batch C)
-        None,                               // radius_override
-        None,                               // inference_pool_size
-    ))
+    SelfPlayRunner::new(SelfPlayRunnerConfig {
+        max_moves_per_game: max_moves,
+        n_simulations: 1, // irrelevant — no MCTS
+        leaf_batch_size: 1,
+        feature_len: Some(8 * BOARD_SIZE * BOARD_SIZE),
+        policy_len: Some(BOARD_SIZE * BOARD_SIZE + 1),
+        fast_sims: 1,
+        standard_sims: 1,
+        quiescence_enabled: false,
+        quiescence_blend_2: 0.0,
+        dirichlet_enabled: false,
+        random_opening_plies: max_moves as u32, // == max_moves → never MCTS
+        ..Default::default()
+    })
     .expect("runner construction should succeed")
 }
 

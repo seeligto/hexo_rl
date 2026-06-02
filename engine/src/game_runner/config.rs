@@ -102,6 +102,65 @@ pub struct SelfPlayRunnerConfig {
     pub forced_win_policy_weight: f32,
 }
 
+/// §B1 (CONFIG-4, 2026-06-02) — semantic defaults SoT for Rust struct-literal
+/// callers: `SelfPlayRunnerConfig { foo, ..Default::default() }` instead of the
+/// 39-arg positional `::new(...)` (the positional-swap tax). The values MUST
+/// match the `#[pyo3(signature = (...))]` defaults on `new()` below — INV19
+/// Test 1 + `test_default_matches_pyo3_signature_defaults` pin the two mirrors
+/// against drift. (A *derived* Default would give type-zeros, NOT these
+/// semantic defaults, silently changing every caller — hence the manual impl.)
+impl Default for SelfPlayRunnerConfig {
+    fn default() -> Self {
+        Self {
+            n_workers: 4,
+            max_moves_per_game: 128,
+            n_simulations: 50,
+            leaf_batch_size: 8,
+            c_puct: 1.5,
+            fpu_reduction: 0.25,
+            feature_len: None,
+            policy_len: None,
+            fast_prob: 0.0,
+            fast_sims: 50,
+            standard_sims: 0,
+            temp_threshold_compound_moves: 15,
+            draw_reward: -0.1,
+            ply_cap_value: -0.1,
+            quiescence_enabled: true,
+            quiescence_blend_2: 0.3,
+            temp_min: 0.05,
+            zoi_enabled: false,
+            zoi_lookback: 16,
+            zoi_margin: 5,
+            completed_q_values: false,
+            c_visit: 50.0,
+            c_scale: 1.0,
+            gumbel_mcts: false,
+            gumbel_m: 16,
+            gumbel_explore_moves: 10,
+            dirichlet_alpha: 0.3,
+            dirichlet_epsilon: 0.25,
+            dirichlet_enabled: true,
+            results_queue_cap: 10_000,
+            full_search_prob: 0.0,
+            n_sims_quick: 0,
+            n_sims_full: 0,
+            random_opening_plies: 0,
+            selfplay_rotation_enabled: false,
+            legal_move_radius_jitter: false,
+            encoding_name: None,
+            radius_override: None,
+            inference_pool_size: None,
+            // O1 forced-win one-hot POLICY target — OFF by default (CONFIG-3
+            // dissolve of the get/set surface is deferred until after the O1
+            // smoke validates the current attr path).
+            forced_win_policy_enabled: false,
+            forced_win_policy_depth: 2,
+            forced_win_policy_weight: 1.0,
+        }
+    }
+}
+
 #[pymethods]
 impl SelfPlayRunnerConfig {
     /// Construct a `SelfPlayRunnerConfig` from kwargs. Defaults match the prior
@@ -230,11 +289,12 @@ impl SelfPlayRunnerConfig {
             encoding_name,
             radius_override,
             inference_pool_size,
-            // O1 forced-win one-hot POLICY target — OFF by default; Python sets
-            // the operative values as attributes from configs/selfplay.yaml.
-            forced_win_policy_enabled: false,
-            forced_win_policy_depth: 2,
-            forced_win_policy_weight: 1.0,
+            // O1 forced-win knobs come from Default (false/2/1.0); Python still
+            // sets the operative values as #[pyo3(get,set)] attributes from
+            // configs/selfplay.yaml (CONFIG-3 ctor-dissolve deferred past the
+            // O1 smoke). §B1: ..Default::default() DRYs the O1 defaults to one
+            // place (the Default impl above).
+            ..Default::default()
         }
     }
 }

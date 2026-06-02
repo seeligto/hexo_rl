@@ -700,11 +700,17 @@ mod tests {
     #[test]
     fn test_worker_id_assignment() {
         // Run with max_moves_per_game = 0 to avoid triggering MCTS and inference server dependency
-        let runner = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-            4, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, -0.1, true, 0.3,
-            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
-        )).unwrap();
+        let runner = SelfPlayRunner::new(SelfPlayRunnerConfig {
+            max_moves_per_game: 0,
+            n_simulations: 1,
+            leaf_batch_size: 1,
+            feature_len: Some(8 * 19 * 19),
+            policy_len: Some(19 * 19 + 1),
+            fast_prob: 1.0,
+            fast_sims: 1,
+            standard_sims: 1,
+            ..Default::default()
+        }).unwrap();
         runner.start();
 
         let mut attempts = 0;
@@ -822,11 +828,18 @@ mod tests {
     /// requiring a full worker / inference-batcher spin-up.
     #[test]
     fn test_mcts_mean_depth_is_per_search_average() {
-        let runner = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-            1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, -0.1, true, 0.3,
-            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
-        )).unwrap();
+        let runner = SelfPlayRunner::new(SelfPlayRunnerConfig {
+            n_workers: 1,
+            max_moves_per_game: 0,
+            n_simulations: 1,
+            leaf_batch_size: 1,
+            feature_len: Some(8 * 19 * 19),
+            policy_len: Some(19 * 19 + 1),
+            fast_prob: 1.0,
+            fast_sims: 1,
+            standard_sims: 1,
+            ..Default::default()
+        }).unwrap();
 
         // Simulate three per-search stat pushes matching what the worker
         // loop does for depth 4.0 / 6.0 / 8.0. Scaling factor = 1_000_000.
@@ -858,11 +871,18 @@ mod tests {
         );
 
         // Zero-denominator guard.
-        let empty = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-            1, 0, 1, 1, 1.5, 0.25, Some(8*19*19), Some(19*19+1), 1.0, 1, 1, 15, -0.1, -0.1, true, 0.3,
-            0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-            10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, false, false, None, None, None,
-        )).unwrap();
+        let empty = SelfPlayRunner::new(SelfPlayRunnerConfig {
+            n_workers: 1,
+            max_moves_per_game: 0,
+            n_simulations: 1,
+            leaf_batch_size: 1,
+            feature_len: Some(8 * 19 * 19),
+            policy_len: Some(19 * 19 + 1),
+            fast_prob: 1.0,
+            fast_sims: 1,
+            standard_sims: 1,
+            ..Default::default()
+        }).unwrap();
         assert_eq!(empty.mcts_mean_depth(), 0.0);
         assert_eq!(empty.mcts_mean_root_concentration(), 0.0);
     }

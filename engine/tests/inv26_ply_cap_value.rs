@@ -41,37 +41,22 @@ use engine::game_runner::{SelfPlayRunner, SelfPlayRunnerConfig};
 /// Build a runner that never calls MCTS — every move is a random opening
 /// pick — so the inference server is unused.
 fn make_runner(max_moves: usize, draw_reward: f32, ply_cap_value: f32) -> SelfPlayRunner {
-    SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-        4,                                  // n_workers
-        max_moves,
-        1,                                  // n_simulations
-        1,                                  // leaf_batch_size
-        1.5,                                // c_puct
-        0.25,                               // fpu_reduction
-        Some(8 * BOARD_SIZE * BOARD_SIZE),  // feature_len
-        Some(BOARD_SIZE * BOARD_SIZE + 1),  // policy_len
-        0.0,                                // fast_prob
-        1,                                  // fast_sims
-        1,                                  // standard_sims
-        15,                                 // temp_threshold_compound_moves
-        draw_reward,                        // draw_reward
-        ply_cap_value,                      // §178 ply_cap_value
-        false,                              // quiescence_enabled
-        0.0,                                // quiescence_blend_2
-        0.05,                               // temp_min
-        false, 16, 5,                       // zoi_enabled, zoi_lookback, zoi_margin
-        false, 50.0, 1.0,                   // completed_q, c_visit, c_scale
-        false, 16, 10,                      // gumbel_mcts, gumbel_m, gumbel_explore
-        0.3, 0.25, false,                   // dirichlet alpha/eps/enabled
-        10_000,                             // results_queue_cap
-        0.0_f32, 0_usize, 0_usize,          // playout-cap mutex (all zero)
-        max_moves as u32,                   // random_opening_plies == max_moves → never MCTS
-        false,                              // selfplay_rotation_enabled
-        false,                              // legal_move_radius_jitter
-        None,                               // encoding_name
-        None,                               // radius_override
-        None,                               // inference_pool_size
-    ))
+    SelfPlayRunner::new(SelfPlayRunnerConfig {
+        max_moves_per_game: max_moves,
+        n_simulations: 1,
+        leaf_batch_size: 1,
+        feature_len: Some(8 * BOARD_SIZE * BOARD_SIZE),
+        policy_len: Some(BOARD_SIZE * BOARD_SIZE + 1),
+        fast_sims: 1,
+        standard_sims: 1,
+        draw_reward,
+        ply_cap_value, // §178
+        quiescence_enabled: false,
+        quiescence_blend_2: 0.0,
+        dirichlet_enabled: false,
+        random_opening_plies: max_moves as u32, // == max_moves → never MCTS
+        ..Default::default()
+    })
     .expect("runner construction should succeed")
 }
 

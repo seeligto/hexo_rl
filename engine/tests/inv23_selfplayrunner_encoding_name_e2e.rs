@@ -32,47 +32,21 @@ fn cfg_with_encoding(
     feature_len: Option<usize>,
     policy_len: Option<usize>,
 ) -> SelfPlayRunnerConfig {
-    SelfPlayRunnerConfig::new(
-        1,                                 //  1 n_workers
-        0,                                 //  2 max_moves_per_game (no game loop)
-        1,                                 //  3 n_simulations
-        1,                                 //  4 leaf_batch_size
-        1.5,                               //  5 c_puct
-        0.25,                              //  6 fpu_reduction
-        feature_len,                       //  7 feature_len
-        policy_len,                        //  8 policy_len
-        0.0,                               //  9 fast_prob
-        1,                                 // 10 fast_sims
-        1,                                 // 11 standard_sims
-        15,                                // 12 temp_threshold_compound_moves
-        -0.1,                              // 13 draw_reward
-        -0.1,                              // 14 ply_cap_value (§178; back-compat = draw_reward)
-        false,                             // 15 quiescence_enabled
-        0.0,                               // 15 quiescence_blend_2
-        0.05,                              // 16 temp_min
-        false,                             // 17 zoi_enabled
-        16,                                // 18 zoi_lookback
-        5,                                 // 19 zoi_margin
-        false,                             // 20 completed_q_values
-        50.0,                              // 21 c_visit
-        1.0,                               // 22 c_scale
-        false,                             // 23 gumbel_mcts
-        16,                                // 24 gumbel_m
-        10,                                // 25 gumbel_explore_moves
-        0.3,                               // 26 dirichlet_alpha
-        0.25,                              // 27 dirichlet_epsilon
-        false,                             // 28 dirichlet_enabled
-        10_000,                            // 29 results_queue_cap
-        0.0_f32,                           // 30 full_search_prob
-        0_usize,                           // 31 n_sims_quick
-        0_usize,                           // 32 n_sims_full
-        0_u32,                             // 33 random_opening_plies
-        false,                             // 34 selfplay_rotation_enabled
-        false,                             // 35 legal_move_radius_jitter
-        encoding_name.map(str::to_string), // 36 encoding_name
-        None,                              // 37 radius_override
-        None,                              // 38 inference_pool_size
-    )
+    SelfPlayRunnerConfig {
+        n_workers: 1,
+        max_moves_per_game: 0, // no game loop
+        n_simulations: 1,
+        leaf_batch_size: 1,
+        feature_len,
+        policy_len,
+        fast_sims: 1,
+        standard_sims: 1,
+        quiescence_enabled: false,
+        quiescence_blend_2: 0.0,
+        dirichlet_enabled: false,
+        encoding_name: encoding_name.map(str::to_string),
+        ..Default::default()
+    }
 }
 
 /// Test 1 — `encoding_name=Some("v6w25")` resolves through the registry and

@@ -330,56 +330,33 @@ fn test_rotation_preserves_top_k_under_relabel() {
 #[test]
 fn test_rotation_disabled_by_default_in_runner() {
     // Default ctor — rotation flag omitted; spec defaults to false.
-    let runner_default = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-        1,            // n_workers
-        0,            // max_moves_per_game (skip game loop)
-        1,            // n_simulations
-        1,            // leaf_batch_size
-        1.5,          // c_puct
-        0.25,         // fpu_reduction
-        Some(8 * 19 * 19),  // feature_len
-        Some(19 * 19 + 1),  // policy_len
-        0.0,          // fast_prob
-        1,            // fast_sims
-        1,            // standard_sims
-        15,           // temp_threshold
-        -0.1,         // draw_reward
-        -0.1,         // ply_cap_value (§178; back-compat = draw_reward)
-        true,         // quiescence_enabled
-        0.3,          // quiescence_blend_2
-        0.05,         // temp_min
-        false,        // zoi_enabled
-        16,           // zoi_lookback
-        5,            // zoi_margin
-        false,        // completed_q
-        50.0,         // c_visit
-        1.0,          // c_scale
-        false,        // gumbel_mcts
-        16,           // gumbel_m
-        10,           // gumbel_explore
-        0.3,          // dirichlet_alpha
-        0.25,         // dirichlet_eps
-        true,         // dirichlet_enabled
-        10_000,       // results_queue_cap
-        0.0_f32,      // full_search_prob
-        0_usize,      // n_sims_quick
-        0_usize,      // n_sims_full
-        0_u32,        // random_opening_plies
-        false,        // selfplay_rotation_enabled (eval default)
-        false,        // legal_move_radius_jitter
-        None,         // encoding_name (cycle 3 Wave 8 Batch C)
-        None,         // radius_override (§174)
-        None,         // inference_pool_size (§P55)
-    ))
+    let runner_default = SelfPlayRunner::new(SelfPlayRunnerConfig {
+        n_workers: 1,
+        max_moves_per_game: 0, // skip game loop
+        n_simulations: 1,
+        leaf_batch_size: 1,
+        feature_len: Some(8 * 19 * 19),
+        policy_len: Some(19 * 19 + 1),
+        fast_sims: 1,
+        standard_sims: 1,
+        ..Default::default()
+    })
     .expect("runner ctor with rotation=false must succeed");
     assert!(!runner_default.is_running());
 
     // Explicit rotation=true must also accept (training-loop path).
-    let runner_rot = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-        1, 0, 1, 1, 1.5, 0.25, Some(8 * 19 * 19), Some(19 * 19 + 1), 0.0, 1, 1, 15, -0.1, -0.1, true,
-        0.3, 0.05, false, 16, 5, false, 50.0, 1.0, false, 16, 10, 0.3, 0.25, true,
-        10_000, 0.0_f32, 0_usize, 0_usize, 0_u32, true, false, None, None, None,
-    ))
+    let runner_rot = SelfPlayRunner::new(SelfPlayRunnerConfig {
+        n_workers: 1,
+        max_moves_per_game: 0,
+        n_simulations: 1,
+        leaf_batch_size: 1,
+        feature_len: Some(8 * 19 * 19),
+        policy_len: Some(19 * 19 + 1),
+        fast_sims: 1,
+        standard_sims: 1,
+        selfplay_rotation_enabled: true,
+        ..Default::default()
+    })
     .expect("runner ctor with rotation=true must succeed");
     assert!(!runner_rot.is_running());
 }

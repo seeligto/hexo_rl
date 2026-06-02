@@ -28,47 +28,18 @@ fn make_runner(
     max_moves_per_game: usize,
     random_opening_plies: u32,
 ) -> SelfPlayRunner {
-    SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-        2,                                  // n_workers (2 keeps game count small)
+    SelfPlayRunner::new(SelfPlayRunnerConfig {
+        n_workers: 2, // 2 keeps game count small
         max_moves_per_game,
-        1,                                  // n_simulations (irrelevant — no MCTS)
-        1,                                  // leaf_batch_size
-        1.5,                                // c_puct
-        0.25,                               // fpu_reduction
-        Some(18 * BOARD_SIZE * BOARD_SIZE), // feature_len
-        Some(BOARD_SIZE * BOARD_SIZE + 1),  // policy_len
-        0.0,                                // fast_prob (mutex)
-        1,                                  // fast_sims
-        1,                                  // standard_sims
-        15,                                 // temp_threshold_compound_moves
-        -0.1,                               // draw_reward
-        -0.1,                               // ply_cap_value (§178; back-compat = draw_reward)
-        true,                               // quiescence_enabled
-        0.3,                                // quiescence_blend_2
-        0.05,                               // temp_min
-        false,                              // zoi_enabled
-        16,                                 // zoi_lookback
-        5,                                  // zoi_margin
-        false,                              // completed_q_values
-        50.0,                               // c_visit
-        1.0,                                // c_scale
-        false,                              // gumbel_mcts
-        16,                                 // gumbel_m
-        10,                                 // gumbel_explore_moves
-        0.3,                                // dirichlet_alpha
-        0.25,                               // dirichlet_epsilon
-        true,                               // dirichlet_enabled
-        10_000,                             // results_queue_cap
-        0.0_f32,                            // full_search_prob (mutex-safe)
-        0_usize,                            // n_sims_quick
-        0_usize,                            // n_sims_full
+        n_simulations: 1, // irrelevant — no MCTS
+        leaf_batch_size: 1,
+        feature_len: Some(18 * BOARD_SIZE * BOARD_SIZE),
+        policy_len: Some(BOARD_SIZE * BOARD_SIZE + 1),
+        fast_sims: 1,
+        standard_sims: 1,
         random_opening_plies,
-        false,                              // selfplay_rotation_enabled
-        false,                              // legal_move_radius_jitter
-        None,                               // encoding_name (cycle 3 Wave 8 Batch C)
-        None,                               // radius_override (§174)
-        None,                               // inference_pool_size (§P55)
-    ))
+        ..Default::default()
+    })
     .expect("runner construction should succeed")
 }
 

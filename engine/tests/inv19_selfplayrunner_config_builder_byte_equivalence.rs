@@ -155,6 +155,60 @@ fn test_config_default_matches_pyo3_signature_defaults() {
     assert_eq!(cfg.inference_pool_size, None);
 }
 
+/// Test 1b (§B1 CONFIG-4) — the manual `Default` impl must mirror the
+/// `#[pyo3(signature = (...))]` defaults exactly. Rust callers now build via
+/// `SelfPlayRunnerConfig { foo, ..Default::default() }`, so a drift between
+/// `Default` and the documented signature defaults would silently change every
+/// such caller. A *derived* Default (type-zeros: n_workers=0, c_puct=0.0,
+/// quiescence_enabled=false, …) trips this immediately.
+#[test]
+fn test_default_matches_pyo3_signature_defaults() {
+    let cfg = SelfPlayRunnerConfig::default();
+    assert_eq!(cfg.n_workers, 4);
+    assert_eq!(cfg.max_moves_per_game, 128);
+    assert_eq!(cfg.n_simulations, 50);
+    assert_eq!(cfg.leaf_batch_size, 8);
+    assert!((cfg.c_puct - 1.5).abs() < 1e-9);
+    assert!((cfg.fpu_reduction - 0.25).abs() < 1e-9);
+    assert_eq!(cfg.feature_len, None);
+    assert_eq!(cfg.policy_len, None);
+    assert!((cfg.fast_prob - 0.0).abs() < 1e-9);
+    assert_eq!(cfg.fast_sims, 50);
+    assert_eq!(cfg.standard_sims, 0);
+    assert_eq!(cfg.temp_threshold_compound_moves, 15);
+    assert!((cfg.draw_reward - -0.1).abs() < 1e-9);
+    assert!((cfg.ply_cap_value - -0.1).abs() < 1e-9);
+    assert!(cfg.quiescence_enabled);
+    assert!((cfg.quiescence_blend_2 - 0.3).abs() < 1e-9);
+    assert!((cfg.temp_min - 0.05).abs() < 1e-9);
+    assert!(!cfg.zoi_enabled);
+    assert_eq!(cfg.zoi_lookback, 16);
+    assert_eq!(cfg.zoi_margin, 5);
+    assert!(!cfg.completed_q_values);
+    assert!((cfg.c_visit - 50.0).abs() < 1e-9);
+    assert!((cfg.c_scale - 1.0).abs() < 1e-9);
+    assert!(!cfg.gumbel_mcts);
+    assert_eq!(cfg.gumbel_m, 16);
+    assert_eq!(cfg.gumbel_explore_moves, 10);
+    assert!((cfg.dirichlet_alpha - 0.3).abs() < 1e-9);
+    assert!((cfg.dirichlet_epsilon - 0.25).abs() < 1e-9);
+    assert!(cfg.dirichlet_enabled);
+    assert_eq!(cfg.results_queue_cap, 10_000);
+    assert!((cfg.full_search_prob - 0.0).abs() < 1e-9);
+    assert_eq!(cfg.n_sims_quick, 0);
+    assert_eq!(cfg.n_sims_full, 0);
+    assert_eq!(cfg.random_opening_plies, 0);
+    assert!(!cfg.selfplay_rotation_enabled);
+    assert!(!cfg.legal_move_radius_jitter);
+    assert_eq!(cfg.encoding_name, None);
+    assert_eq!(cfg.radius_override, None);
+    assert_eq!(cfg.inference_pool_size, None);
+    // O1 knobs default OFF (CONFIG-3 ctor-dissolve deferred past the smoke).
+    assert!(!cfg.forced_win_policy_enabled);
+    assert_eq!(cfg.forced_win_policy_depth, 2);
+    assert!((cfg.forced_win_policy_weight - 1.0).abs() < 1e-9);
+}
+
 /// Test 2 — param-grouping invariant: each config field maps to exactly one
 /// internal slot. Uses unique sentinels per field; a swap or drop manifests
 /// as either a field-equality assert failure on the config OR a getter-visible

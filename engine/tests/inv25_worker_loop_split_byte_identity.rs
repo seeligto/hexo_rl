@@ -49,47 +49,26 @@ fn build_config(
     let feature_len = spec.state_stride();
     let policy_len = spec.policy_stride();
 
-    SelfPlayRunnerConfig::new(
-        1,                        // n_workers
-        0,                        // max_moves_per_game (no game loop)
-        1,                        // n_simulations
-        1,                        // leaf_batch_size
-        1.5,                      // c_puct
-        0.25,                     // fpu_reduction
-        Some(feature_len),
-        Some(policy_len),
-        0.0,                      // fast_prob
-        1,                        // fast_sims
-        1,                        // standard_sims
-        15,                       // temp_threshold
-        -0.1,                     // draw_reward
-        -0.1,                     // ply_cap_value (§178; back-compat = draw_reward)
+    SelfPlayRunnerConfig {
+        n_workers: 1,
+        max_moves_per_game: 0, // no game loop
+        n_simulations: 1,
+        leaf_batch_size: 1,
+        feature_len: Some(feature_len),
+        policy_len: Some(policy_len),
+        fast_sims: 1,
+        standard_sims: 1,
         quiescence_enabled,
-        0.0,                      // quiescence_blend_2
-        0.05,                     // temp_min
+        quiescence_blend_2: 0.0,
         zoi_enabled,
-        16,                       // zoi_lookback
-        5,                        // zoi_margin
         completed_q_values,
-        50.0,                     // c_visit
-        1.0,                      // c_scale
         gumbel_mcts,
-        16,                       // gumbel_m
-        10,                       // gumbel_explore
-        0.3,                      // dirichlet_alpha
-        0.25,                     // dirichlet_eps
         dirichlet_enabled,
-        10_000,                   // results_queue_cap
-        0.0_f32,                  // full_search_prob
-        0_usize,                  // n_sims_quick
-        0_usize,                  // n_sims_full
-        0_u32,                    // random_opening_plies
         selfplay_rotation_enabled,
         legal_move_radius_jitter,
-        Some("v6w25".to_string()),
-        None,                     // radius_override
-        None,                     // inference_pool_size
-    )
+        encoding_name: Some("v6w25".to_string()),
+        ..Default::default()
+    }
 }
 
 /// Cell 1 — construct one runner per Wave 7 Batch C bool with that bool
@@ -141,26 +120,21 @@ fn inv25_spawn_loop_fan_out_independent_stats() {
     let feature_len = spec.state_stride();
     let policy_len = spec.policy_stride();
 
-    let cfg = SelfPlayRunnerConfig::new(
-        4,                        // n_workers — multi-worker fan-out shape
-        0,                        // max_moves_per_game (no game loop fires)
-        1, 1, 1.5, 0.25,
-        Some(feature_len),
-        Some(policy_len),
-        0.0, 1, 1, 15, -0.1,
-        -0.1,                     // §178 ply_cap_value (back-compat = draw_reward)
-        false, 0.0, 0.05,
-        false, 16, 5,
-        false, 50.0, 1.0,
-        false, 16, 10,
-        0.3, 0.25,
-        false, 10_000,
-        0.0_f32, 0_usize, 0_usize,
-        0_u32,
-        false, false,
-        Some("v6w25".to_string()),
-        None, None,
-    );
+    let cfg = SelfPlayRunnerConfig {
+        n_workers: 4, // multi-worker fan-out shape
+        max_moves_per_game: 0, // no game loop fires
+        n_simulations: 1,
+        leaf_batch_size: 1,
+        feature_len: Some(feature_len),
+        policy_len: Some(policy_len),
+        fast_sims: 1,
+        standard_sims: 1,
+        quiescence_enabled: false,
+        quiescence_blend_2: 0.0,
+        dirichlet_enabled: false,
+        encoding_name: Some("v6w25".to_string()),
+        ..Default::default()
+    };
     let r = SelfPlayRunner::new(cfg)
         .expect("4-worker v6w25 runner must construct");
 

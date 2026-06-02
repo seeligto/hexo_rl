@@ -32,47 +32,21 @@ fn test_v6w25_runner_constructs_correct_geometry() {
     let expected_feature_len = spec.state_stride(); // 8 × 625 = 5000
     let expected_policy_len  = spec.policy_stride(); // 626
 
-    let runner = SelfPlayRunner::new(SelfPlayRunnerConfig::new(
-        1,                        // n_workers
-        0,                        // max_moves_per_game (no game loop)
-        1,                        // n_simulations
-        1,                        // leaf_batch_size
-        1.5,                      // c_puct
-        0.25,                     // fpu_reduction
-        Some(expected_feature_len), // feature_len (spec-derived)
-        Some(expected_policy_len),  // policy_len (spec-derived)
-        0.0,                      // fast_prob
-        1,                        // fast_sims
-        1,                        // standard_sims
-        15,                       // temp_threshold
-        -0.1,                     // draw_reward
-        -0.1,                     // ply_cap_value (§178; back-compat = draw_reward)
-        false,                    // quiescence_enabled
-        0.0,                      // quiescence_blend_2
-        0.05,                     // temp_min
-        false,                    // zoi_enabled
-        16,                       // zoi_lookback
-        5,                        // zoi_margin
-        false,                    // completed_q
-        50.0,                     // c_visit
-        1.0,                      // c_scale
-        false,                    // gumbel_mcts
-        16,                       // gumbel_m
-        10,                       // gumbel_explore
-        0.3,                      // dirichlet_alpha
-        0.25,                     // dirichlet_eps
-        false,                    // dirichlet_enabled
-        10_000,                   // results_queue_cap
-        0.0_f32,                  // full_search_prob
-        0_usize,                  // n_sims_quick
-        0_usize,                  // n_sims_full
-        0_u32,                    // random_opening_plies
-        false,                    // selfplay_rotation_enabled
-        false,                    // legal_move_radius_jitter
-        Some("v6w25".to_string()),                       // encoding_name (cycle 3 Wave 8 Batch C FF.10)
-        None,                     // radius_override (§174)
-        None,                     // inference_pool_size (§P55)
-    ))
+    let runner = SelfPlayRunner::new(SelfPlayRunnerConfig {
+        n_workers: 1,
+        max_moves_per_game: 0, // no game loop
+        n_simulations: 1,
+        leaf_batch_size: 1,
+        feature_len: Some(expected_feature_len), // spec-derived
+        policy_len: Some(expected_policy_len),   // spec-derived
+        fast_sims: 1,
+        standard_sims: 1,
+        quiescence_enabled: false,
+        quiescence_blend_2: 0.0,
+        dirichlet_enabled: false,
+        encoding_name: Some("v6w25".to_string()), // cycle 3 Wave 8 Batch C FF.10
+        ..Default::default()
+    })
     .expect("v6w25 SelfPlayRunner must construct without panic");
 
     assert_eq!(
