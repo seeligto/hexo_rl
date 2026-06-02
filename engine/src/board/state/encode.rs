@@ -274,8 +274,10 @@ impl Board {
 
 /// Saturation cap for chain length — the 6-in-a-row win target.
 const CHAIN_CAP: i32 = 6;
-/// Normalisation denominator; matches Python's /6.0 after int8 computation.
-const CHAIN_NORM: f32 = 6.0;
+/// Normalisation denominator; matches Python's /CHAIN_CAP after int8
+/// computation. C2 (2026-06-02): derived from CHAIN_CAP (one const, not two)
+/// so the cap and its normalizer cannot drift apart.
+const CHAIN_NORM: f32 = CHAIN_CAP as f32;
 
 #[inline]
 fn flat_idx(q: i32, r: i32, trunk_sz: i32, half: i32) -> usize {
