@@ -7,6 +7,14 @@ from typing import Deque, List, Optional, Tuple
 import numpy as np
 from engine import Board
 from hexo_rl.encoding import lookup as _lookup_encoding
+# MAGIC-2 (2026-06-02) — named source-plane offsets (no bare 0/16/17 in the
+# corpus tensor build). resolvers.py mirrors the engine core.rs consts; the
+# registry kept_plane_indices select from these (registry is canonical).
+from hexo_rl.encoding.resolvers import (
+    _CUR_STONE_SRC_PLANE as MY_STONE_PLANE,
+    _MOVES_REMAINING_SRC_PLANE as MOVES_REMAINING_PLANE,
+    _PLY_PARITY_SRC_PLANE as PLY_PARITY_PLANE,
+)
 
 BOARD_SIZE: int = _lookup_encoding("v6").board_size
 HISTORY_LEN: int = 8  # AlphaZero uses 8 timesteps (current + 7 prior)
@@ -240,8 +248,8 @@ class GameState:
         # Scalar planes are identical across all clusters.
         mr_val = np.float16(0.0 if self.moves_remaining == 1 else 1.0)
         ply_val = np.float16(float(self.ply % 2))
-        tensor[:, 16, :, :] = mr_val
-        tensor[:, 17, :, :] = ply_val
+        tensor[:, MOVES_REMAINING_PLANE, :, :] = mr_val
+        tensor[:, PLY_PARITY_PLANE, :, :] = ply_val
 
         history = self.move_history  # deque of prior GameStates, oldest first
 
@@ -249,7 +257,7 @@ class GameState:
             # Current timestep
             cur_stones = current_views[k][0]
             opp_stones = current_views[k][1]
-            tensor[k, 0] = cur_stones
+            tensor[k, MY_STONE_PLANE] = cur_stones
             tensor[k, HISTORY_LEN] = opp_stones
 
             # Historical timesteps t-1 … t-7 (deque[-1]=most recent, deque[-t]=t steps back)

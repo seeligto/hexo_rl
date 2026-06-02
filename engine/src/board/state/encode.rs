@@ -97,19 +97,21 @@ impl Board {
         let ply_val = (self.ply % 2) as f32;
         for (slot, &ch) in channels.iter().enumerate() {
             let dst = &mut out[slot * n_cells..(slot + 1) * n_cells];
+            // MAGIC-2 (2026-06-02): address planes by the named core.rs consts,
+            // not bare literals — the H-PLANE pretrain↔selfplay drift guard.
             match ch {
-                0 => {
+                MY_STONE_PLANE => {
                     dst.copy_from_slice(&planes_2[0..n_cells]);
                 }
-                8 => {
+                OPP_STONE_PLANE => {
                     dst.copy_from_slice(&planes_2[n_cells..2 * n_cells]);
                 }
-                16 => {
+                MOVES_REMAINING_PLANE => {
                     for v in dst.iter_mut() {
                         *v = mr_val;
                     }
                 }
-                17 => {
+                PLY_PARITY_PLANE => {
                     for v in dst.iter_mut() {
                         *v = ply_val;
                     }
@@ -435,6 +437,51 @@ mod channel_select_tests {
             let lhs = &full[ch * TOTAL_CELLS..(ch + 1) * TOTAL_CELLS];
             let rhs = &sel[slot * TOTAL_CELLS..(slot + 1) * TOTAL_CELLS];
             assert_eq!(lhs, rhs, "channel {} mismatch (slot {})", ch, slot);
+        }
+    }
+
+    /// MAGIC-2 guard (2026-06-02) — the channel-selective encoder must write the
+    /// exact planes the *registry* declares for the active encoding, addressed
+    /// by the NAMED plane offsets, not bare literals. This is the H-PLANE
+    /// pretrain↔selfplay drift class the v6_live2 arc exists to prevent: a
+    /// registry edit, a `core.rs` const drift, or a wrong plane-write in the
+    /// match arms each trips this assertion (`injected drift → RED`).
+    #[test]
+    fn channel_select_matches_registry_kept_set_v6_live2() {
+        let spec = crate::encoding::lookup("v6_live2")
+            .expect("v6_live2 must be registered");
+        let kept = spec.kept_plane_indices;
+
+        // (1) The registry kept-set IS the four named semantic plane offsets.
+        //     Catches a registry kept_plane_indices edit OR a core.rs const drift.
+        assert_eq!(
+            kept,
+            [MY_STONE_PLANE, OPP_STONE_PLANE, MOVES_REMAINING_PLANE, PLY_PARITY_PLANE].as_slice(),
+            "v6_live2 kept_plane_indices drifted from the named semantic plane offsets \
+             [MY_STONE_PLANE, OPP_STONE_PLANE, MOVES_REMAINING_PLANE, PLY_PARITY_PLANE]"
+        );
+
+        // (2) The channel-selective encoder writes each kept plane identically to
+        //     the full-kernel ground truth (which addresses by named const).
+        //     Catches a wrong plane-write in an encode_state_to_buffer_channels arm.
+        //
+        //     The turn structure couples mr_val ≡ ply_val on every *reachable*
+        //     board (moves_remaining==2 ⟺ ply odd), so a MOVES_REMAINING↔PLY_PARITY
+        //     swap is invisible on real states. Force a *synthetic* decoupled state
+        //     (mr_val=1, ply_val=0) so the swap has teeth: a wrong plane addressed
+        //     for either scalar now diverges from the full-kernel ground truth.
+        let mut b = make_board();
+        b.moves_remaining = 2; // mr_val = 1.0
+        b.ply = 4; // ply_val = 0.0  (≠ mr_val — unreachable in real play, by design)
+        let planes_2 = build_planes_2();
+        let mut full = vec![0.0f32; 18 * TOTAL_CELLS];
+        b.encode_state_to_buffer(&planes_2, &mut full);
+        let mut sel = vec![0.0f32; kept.len() * TOTAL_CELLS];
+        b.encode_state_to_buffer_channels(&planes_2, &mut sel, kept, TOTAL_CELLS);
+        for (slot, &ch) in kept.iter().enumerate() {
+            let lhs = &full[ch * TOTAL_CELLS..(ch + 1) * TOTAL_CELLS];
+            let rhs = &sel[slot * TOTAL_CELLS..(slot + 1) * TOTAL_CELLS];
+            assert_eq!(lhs, rhs, "v6_live2 kept plane {ch} (slot {slot}) encoder drift");
         }
     }
 

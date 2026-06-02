@@ -168,8 +168,14 @@ _ANCHOR_PATHS: dict[str, str] = {
 
 _CUR_STONE_SRC_PLANE = 0
 _OPP_STONE_SRC_PLANE = 8
+# MAGIC-2 (2026-06-02) — named singletons for the turn-phase scalar planes so no
+# source consumer (game_state corpus tensor build, registry pin) carries a bare
+# 16/17. Mirror of engine core.rs MOVES_REMAINING_PLANE / PLY_PARITY_PLANE; the
+# registry kept_plane_indices select from these (registry is canonical).
+_MOVES_REMAINING_SRC_PLANE = 16
+_PLY_PARITY_SRC_PLANE = 17
 _HISTORY_SRC_PLANES = frozenset({1, 2, 3, 9, 10, 11})
-_TURN_PHASE_SRC_PLANES = frozenset({16, 17})
+_TURN_PHASE_SRC_PLANES = frozenset({_MOVES_REMAINING_SRC_PLANE, _PLY_PARITY_SRC_PLANE})
 
 
 def _kept_slot_of(kept: list[int], src_plane: int) -> int:
