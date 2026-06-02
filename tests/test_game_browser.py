@@ -129,7 +129,10 @@ def test_indexes_bot_fast_games(corpus_dir: Path, replay_dir: Path) -> None:
     _write_bot_game(
         corpus_dir / "bot_games" / "sealbot_fast" / "bot001.json",
         moves=[(0, 0), (1, 0), (0, 1)],
-        winner=2,
+        # B2: bot_games store int(board.winner()) ∈ {1, -1}; P2 win is -1, NOT 2
+        # (generate_corpus.py:122). The old fixture used a fictional 2 that only
+        # matched the dead `== 2` branch while real P2 wins (-1) showed "unknown".
+        winner=-1,
     )
     browser = GameBrowser(str(corpus_dir), str(replay_dir))
     games = browser.list_games(source=SOURCE_BOT_FAST)
