@@ -149,7 +149,7 @@ def test_augment_false_is_noop():
     """augment=False returns same array objects (no copies, no mutation)."""
     s, c, p, o, own, wl, ifs = _make_synthetic_batch(n=4)
     s_out, c_out, p_out, own_out, wl_out = _augment_recent_rows(
-        s, c, p, own, wl, augment=False
+        s, c, p, own, wl, augment=False, opp_slot=4  # v6 opp kept-slot
     )
     assert s_out is s,   "states: expected same object"
     assert c_out is c,   "chain_planes: expected same object"
@@ -163,7 +163,7 @@ def test_augment_true_changes_data():
     s, c, p, o, own, wl, ifs = _make_synthetic_batch(n=8, seed=99)
     np.random.seed(7)  # deterministic sym draws; unlikely all land on sym_idx=0
     s_aug, c_aug, p_aug, own_aug, wl_aug = _augment_recent_rows(
-        s.copy(), c.copy(), p.copy(), own.copy(), wl.copy(), augment=True
+        s.copy(), c.copy(), p.copy(), own.copy(), wl.copy(), augment=True, opp_slot=4
     )
     # At least one of the 8 rows should differ (P(all sym_idx=0) = (1/12)^8 ≈ 1e-9)
     assert not np.array_equal(s_aug, s) or not np.array_equal(p_aug, p), (

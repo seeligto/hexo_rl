@@ -500,7 +500,7 @@ def _augment_recent_rows(
     own_r_flat: np.ndarray,
     wl_r_flat: np.ndarray,
     augment: bool,
-    opp_slot: int = 4,
+    opp_slot: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Apply 12-fold hex augmentation to a batch of RecentBuffer rows.
 

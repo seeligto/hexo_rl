@@ -102,7 +102,7 @@ def test_augment_recent_nonidentity_frequency_256():
 
     np.random.seed(101)
     s_aug, c_aug, p_aug, own_aug, wl_aug = _augment_recent_rows(
-        s_r, c_r, p_r, own_r, wl_r, augment=True
+        s_r, c_r, p_r, own_r, wl_r, augment=True, opp_slot=4  # v6 opp kept-slot
     )
 
     n_changed = int(sum(not np.array_equal(s_aug[i], s_orig[i]) for i in range(n)))
@@ -123,13 +123,13 @@ def test_determinism_same_seed_same_transforms():
     np.random.seed(42)
     s_r1, c_r1, p_r1, o_r1, own_r1, wl_r1, _, _ = buf.sample(n)
     s1, _, p1, _, _ = _augment_recent_rows(
-        s_r1.copy(), c_r1.copy(), p_r1.copy(), own_r1.copy(), wl_r1.copy(), augment=True
+        s_r1.copy(), c_r1.copy(), p_r1.copy(), own_r1.copy(), wl_r1.copy(), augment=True, opp_slot=4
     )
 
     np.random.seed(42)
     s_r2, c_r2, p_r2, o_r2, own_r2, wl_r2, _, _ = buf.sample(n)
     s2, _, p2, _, _ = _augment_recent_rows(
-        s_r2.copy(), c_r2.copy(), p_r2.copy(), own_r2.copy(), wl_r2.copy(), augment=True
+        s_r2.copy(), c_r2.copy(), p_r2.copy(), own_r2.copy(), wl_r2.copy(), augment=True, opp_slot=4
     )
 
     np.testing.assert_array_equal(s1, s2, err_msg="states: same seed → different transforms")
@@ -145,7 +145,7 @@ def test_augment_false_recent_slice_is_noop():
     s_r, c_r, p_r, o_r, own_r, wl_r, _, _ = buf.sample(n)
 
     s_out, c_out, p_out, own_out, wl_out = _augment_recent_rows(
-        s_r, c_r, p_r, own_r, wl_r, augment=False
+        s_r, c_r, p_r, own_r, wl_r, augment=False, opp_slot=4
     )
 
     assert s_out is s_r,     "states: expected same object for augment=False"
