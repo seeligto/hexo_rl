@@ -317,10 +317,15 @@ class KClusterMCTSBot(BotProtocol):
         Returns the value (from current player's perspective).
         """
         if sim_board.check_win():
-            # Last move was by the OTHER player; current player just lost.
+            # CF-1 terminal sign from the side-to-move (SCATTER-1): a first-stone
+            # win keeps the winner to move (moves_remaining==1 ⇒ +1.0); a
+            # turn-final win flips to the loser (moves_remaining==2 ⇒ -1.0). Route
+            # through the engine SoT, never a hardcoded -1.0 (the old hardcode
+            # under-valued first-stone winning lines).
+            tv = sim_board.terminal_value_to_move()
             node.is_terminal = True
-            node.terminal_value = -1.0
-            return -1.0
+            node.terminal_value = tv
+            return tv
 
         legal_moves = list(sim_board.legal_moves())
         if not legal_moves:

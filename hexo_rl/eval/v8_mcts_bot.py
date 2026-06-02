@@ -37,7 +37,10 @@ Action = Tuple[int, int]
 
 
 class _Node:
-    __slots__ = ("prior", "visits", "value_sum", "children", "is_terminal", "terminal_value")
+    __slots__ = (
+        "prior", "visits", "value_sum", "children", "is_terminal",
+        "terminal_value", "child_flips",
+    )
 
     def __init__(self, prior: float = 0.0) -> None:
         self.prior: float = prior
@@ -46,6 +49,10 @@ class _Node:
         self.children: Dict[Action, "_Node"] = {}
         self.is_terminal: bool = False
         self.terminal_value: float = 0.0
+        # SCATTER-1: True iff moving from this node to a child crosses a turn
+        # boundary (this node's moves_remaining == 1 ⇒ the turn-final stone
+        # flips the player). Set at expand; gates the backup sign flip below.
+        self.child_flips: bool = False
 
     def expanded(self) -> bool:
         return bool(self.children) or self.is_terminal
@@ -72,6 +79,25 @@ def _puct_select(node: _Node, c_puct: float) -> Action:
             best_action = action
     assert best_action is not None
     return best_action
+
+
+def _backup_turn_aware(path: List["_Node"], leaf_value: float) -> None:
+    """Backup ``leaf_value`` (from the leaf side-to-move's perspective) up
+    ``path``, flipping perspective ONLY across a turn boundary
+    (``parent.child_flips``).
+
+    SCATTER-1: HeXO places 2 stones per turn, so the player-to-move changes
+    only at turn boundaries — NOT on every tree edge. The previous code flipped
+    the sign on every backup step, corrupting Q for intra-turn edges. Mirrors
+    ``KClusterMCTSBot._simulate``'s backup.
+    """
+    value = leaf_value
+    for i in range(len(path) - 1, -1, -1):
+        n = path[i]
+        n.visits += 1
+        n.value_sum += value
+        if i > 0 and path[i - 1].child_flips:
+            value = -value
 
 
 def _legal_priors_from_logp(
@@ -169,10 +195,14 @@ class V8MCTSBot(BotProtocol):
         Returns the value (from current player's perspective).
         """
         if rust_board.check_win():
-            # Last move was by the OTHER player; current player just lost.
+            # CF-1 terminal sign from the side-to-move (SCATTER-1): a first-stone
+            # win keeps the winner to move (moves_remaining==1 ⇒ +1.0); a
+            # turn-final win flips to the loser (moves_remaining==2 ⇒ -1.0). Route
+            # through the engine SoT, never a hardcoded -1.0.
+            tv = rust_board.terminal_value_to_move()
             node.is_terminal = True
-            node.terminal_value = -1.0
-            return -1.0
+            node.terminal_value = tv
+            return tv
 
         legal_moves = list(rust_board.legal_moves())
         if not legal_moves:
@@ -188,6 +218,9 @@ class V8MCTSBot(BotProtocol):
             board_stones, cur_player, history, ply, moves_rem
         )
         priors = _legal_priors_from_logp(log_p, legal_moves, cq, cr)
+        # SCATTER-1: moving from this node crosses a turn boundary iff this is
+        # the turn-final stone (moves_remaining == 1). Gates the backup flip.
+        node.child_flips = (moves_rem == 1)
         for action, p in zip(legal_moves, priors):
             node.children[action] = _Node(prior=p)
         return value
@@ -224,12 +257,10 @@ class V8MCTSBot(BotProtocol):
         else:
             value = self._expand(node, sim_board, history)
 
-        # Backup. Value is from the leaf-current-player's perspective.
-        # Each step up flips perspective.
-        for n in reversed(path):
-            n.visits += 1
-            n.value_sum += value
-            value = -value
+        # Backup. `value` is from the leaf side-to-move's perspective; flip
+        # ONLY across a turn boundary (parent.child_flips), not every step —
+        # HeXO places 2 stones per turn (SCATTER-1).
+        _backup_turn_aware(path, value)
 
     @torch.no_grad()
     def get_move(self, state: GameState, rust_board) -> Action:

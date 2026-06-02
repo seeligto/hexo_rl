@@ -91,6 +91,16 @@ impl PyBoard {
         self.inner.find_winning_line()
     }
 
+    /// CF-1 terminal value from the side-to-move's perspective, valid at a
+    /// `check_win()` leaf: `+1.0` when `moves_remaining == 1` (first-stone win,
+    /// winner still to move), `-1.0` when `moves_remaining == 2` (turn-final
+    /// win, flipped to the loser). Engine-owned SoT for the CF-1 sign so Python
+    /// eval-bot MCTS need not re-derive it (SCATTER-1). Mirrors the inline
+    /// derivation in `mcts/backup.rs::expand_and_backup_single`.
+    pub fn terminal_value_to_move(&self) -> f32 {
+        self.inner.terminal_value_to_move()
+    }
+
     /// List of all legal moves as list of (q, r) tuples.
     pub fn legal_moves(&self) -> Vec<(i32, i32)> {
         self.inner.legal_moves()

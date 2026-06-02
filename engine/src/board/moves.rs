@@ -246,6 +246,23 @@ impl Board {
         count
     }
 
+    /// CF-1 terminal value from the side-to-move's perspective at a `check_win`
+    /// leaf. `apply_move` flips the player ONLY on a turn-final stone
+    /// (`moves_remaining` 1→0→flip→2); a first-stone win keeps the winner to
+    /// move (`moves_remaining` 2→1, no flip). So at a won terminal:
+    ///   `moves_remaining == 1` ⇒ the winner is still to move ⇒ **+1.0**
+    ///   `moves_remaining == 2` ⇒ the player flipped to the loser ⇒ **-1.0**
+    ///
+    /// This is the single engine-owned surface for the CF-1 sign; it mirrors the
+    /// inline derivation in `mcts/backup.rs::expand_and_backup_single` (the
+    /// canonical self-play path) so Python eval bots (`k_cluster_mcts_bot`,
+    /// `v8_mcts_bot`) need not re-derive the sign (SCATTER-1). Only meaningful
+    /// when `check_win()` is true.
+    #[inline]
+    pub fn terminal_value_to_move(&self) -> f32 {
+        if self.moves_remaining == 1 { 1.0 } else { -1.0 }
+    }
+
     /// Returns true if `player` has at least `min_len` consecutive stones along
     /// any of the three hex axes.  Used as a cheap pre-check before the more
     /// expensive `count_winning_moves`: a winning move requires ≥ WIN_LENGTH-1
@@ -740,5 +757,17 @@ mod tests {
         let stones = [((0, 0), Cell::P1), ((5, 0), Cell::P1), ((0, 5), Cell::P1)];
         let b = fwm_board(&stones, Player::One, 2);
         assert_eq!(b.forced_win_move(2), None);
+    }
+
+    #[test]
+    fn test_terminal_value_to_move_cf1_sign() {
+        // SCATTER-1: engine-owned CF-1 terminal sign. At a won terminal,
+        // mr==1 (first-stone win, winner still to move) ⇒ +1.0; mr==2
+        // (turn-final win, flipped to loser) ⇒ -1.0. Mirrors backup.rs.
+        let stones: Vec<_> = (0..5).map(|q| ((q, 0), Cell::P1)).collect();
+        let b1 = fwm_board(&stones, Player::One, 1);
+        assert_eq!(b1.terminal_value_to_move(), 1.0, "mr==1 ⇒ +1.0");
+        let b2 = fwm_board(&stones, Player::One, 2);
+        assert_eq!(b2.terminal_value_to_move(), -1.0, "mr==2 ⇒ -1.0");
     }
 }
