@@ -169,6 +169,43 @@ struct PerGameInitCtx {
     worker_id: usize,
 }
 
+/// §B1 (2026-06-02) — per-move STATIC scalar config, built ONCE per worker at
+/// proto-build and copied through the COLD layers (`run_one_game` →
+/// `MovePlayContext`). Collapses the 6 anonymous transport tuples
+/// (`search_scalars`/`gumbel_scalars`/`dirichlet_scalars`/`move_cap_scalars`/
+/// `play_flags`/`forced_win_scalars`) that existed only to dodge
+/// `clippy::too_many_arguments`.
+///
+/// A5b: this is NEVER passed into the per-sim hot path — `infer_and_expand` and
+/// `run_mcts_search` signatures are unchanged; only the per-game/per-move cold
+/// layers carry it, where the `Copy` is amortized over O(100) sims/move. The
+/// fields/order mirror the static fields of `MovePlayContext`, so the per-game
+/// destructure feeds that build unchanged.
+#[derive(Clone, Copy)]
+struct WorkerMoveCfg {
+    leaf_batch_size: usize,
+    temp_threshold: usize,
+    temp_min: f32,
+    zoi_lookback: usize,
+    zoi_margin: i32,
+    c_visit: f32,
+    c_scale: f32,
+    gumbel_m: usize,
+    gumbel_explore_moves: usize,
+    dirichlet_alpha: f32,
+    dirichlet_epsilon: f32,
+    full_search_prob: f32,
+    n_sims_quick: usize,
+    n_sims_full: usize,
+    completed_q_values: bool,
+    gumbel_mcts: bool,
+    dirichlet_enabled: bool,
+    zoi_enabled: bool,
+    forced_win_enabled: bool,
+    forced_win_depth: u8,
+    forced_win_weight: f32,
+}
+
 /// Result of `play_one_move`: signals the parent loop how to proceed.
 enum MoveOutcome {
     /// Move played successfully — continue inner for-loop iteration.
@@ -294,15 +331,18 @@ pub(super) fn run_worker_thread(
         selfplay_rotation_enabled, fast_prob, fast_sims, standard_sims,
         n_cells, draw_reward, ply_cap_value, results_queue_cap, worker_id,
     };
-    let search_scalars = (leaf_batch_size, temp_threshold, temp_min, zoi_lookback, zoi_margin);
-    let gumbel_scalars = (c_visit, c_scale, gumbel_m, gumbel_explore_moves);
-    let dirichlet_scalars = (dirichlet_alpha, dirichlet_epsilon, full_search_prob);
-    let move_cap_scalars = (n_sims_quick, n_sims_full);
-    let play_flags = (completed_q_values, gumbel_mcts, dirichlet_enabled, zoi_enabled);
-    // O1: forced-win one-hot POLICY target (enabled, depth, weight). Packed like
-    // the other per-move scalar bundles; consumed at training-target extraction.
-    let forced_win_scalars =
-        (forced_win_policy_enabled, forced_win_policy_depth, forced_win_policy_weight);
+    // §B1: one Copy sub-config replaces the 6 anonymous per-move scalar tuples.
+    // O1 forced-win knobs fold in as plain fields (no separate bundle).
+    let move_cfg = WorkerMoveCfg {
+        leaf_batch_size, temp_threshold, temp_min, zoi_lookback, zoi_margin,
+        c_visit, c_scale, gumbel_m, gumbel_explore_moves,
+        dirichlet_alpha, dirichlet_epsilon, full_search_prob,
+        n_sims_quick, n_sims_full,
+        completed_q_values, gumbel_mcts, dirichlet_enabled, zoi_enabled,
+        forced_win_enabled: forced_win_policy_enabled,
+        forced_win_depth: forced_win_policy_depth,
+        forced_win_weight: forced_win_policy_weight,
+    };
     let finalize_counters: (&AtomicUsize, &AtomicU64, &AtomicU64, &AtomicU64, &AtomicU64) = (
         &games_completed, &x_wins, &o_wins, &draws, &positions_dropped,
     );
@@ -315,9 +355,8 @@ pub(super) fn run_worker_thread(
         run_one_game(
             &mut tree, &mut rng, &mut version_seen, &running, &radius_override,
             &batcher, sym_tables, worker_registry_spec, init_ctx, kept_planes,
-            policy_stride, has_pass_slot, agg_trunk_sz, search_scalars,
-            gumbel_scalars, dirichlet_scalars, move_cap_scalars, play_flags,
-            forced_win_scalars, variance_atomics, move_accumulators, &results_queue,
+            policy_stride, has_pass_slot, agg_trunk_sz, move_cfg,
+            variance_atomics, move_accumulators, &results_queue,
             &recent_game_results, finalize_counters, dbg_game_idx_for_game,
         );
     }
@@ -343,12 +382,7 @@ fn run_one_game(
     policy_stride: usize,
     has_pass_slot: bool,
     agg_trunk_sz: i32,
-    search_scalars: (usize, usize, f32, usize, i32),
-    gumbel_scalars: (f32, f32, usize, usize),
-    dirichlet_scalars: (f32, f32, f32),
-    move_cap_scalars: (usize, usize),
-    play_flags: (bool, bool, bool, bool),
-    forced_win_scalars: (bool, u8, f32),
+    move_cfg: WorkerMoveCfg,
     variance_atomics: ClusterVarianceAtomics,
     move_accumulators: MoveAccumulators,
     results_queue: &Mutex<VecDeque<WorkerResultRow>>,
@@ -362,12 +396,17 @@ fn run_one_game(
     ),
     dbg_game_idx: u32,
 ) {
-    let (leaf_batch_size, temp_threshold, temp_min, zoi_lookback, zoi_margin) = search_scalars;
-    let (c_visit, c_scale, gumbel_m, gumbel_explore_moves) = gumbel_scalars;
-    let (dirichlet_alpha, dirichlet_epsilon, full_search_prob) = dirichlet_scalars;
-    let (n_sims_quick, n_sims_full) = move_cap_scalars;
-    let (completed_q_values, gumbel_mcts, dirichlet_enabled, zoi_enabled) = play_flags;
-    let (forced_win_enabled, forced_win_depth, forced_win_weight) = forced_win_scalars;
+    // §B1: destructure the Copy sub-config into the same local names the
+    // MovePlayContext build below already uses (build unchanged). Replaces the
+    // 6 anonymous tuple unpacks.
+    let WorkerMoveCfg {
+        leaf_batch_size, temp_threshold, temp_min, zoi_lookback, zoi_margin,
+        c_visit, c_scale, gumbel_m, gumbel_explore_moves,
+        dirichlet_alpha, dirichlet_epsilon, full_search_prob,
+        n_sims_quick, n_sims_full,
+        completed_q_values, gumbel_mcts, dirichlet_enabled, zoi_enabled,
+        forced_win_enabled, forced_win_depth, forced_win_weight,
+    } = move_cfg;
 
     let PerGameInit { mut board, mut records_vec, mut move_history,
         sym_idx, inv_idx, is_fast_game, game_sims } =
