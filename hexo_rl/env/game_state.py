@@ -15,9 +15,14 @@ from hexo_rl.encoding.resolvers import (
     _MOVES_REMAINING_SRC_PLANE as MOVES_REMAINING_PLANE,
     _PLY_PARITY_SRC_PLANE as PLY_PARITY_PLANE,
 )
+# B4 (2026-06-02) — single SoT for HISTORY_LEN (was defined here AND in
+# constants.py). Load-bearing coupling: the opponent-stone block begins at
+# source plane HISTORY_LEN (== OPP_STONE_PLANE = 8): 8 my-stone history planes
+# (t0..t-7) then 8 opp-stone history planes. `tensor[k, HISTORY_LEN]` below
+# relies on it; test_b4_history_len_sot pins HISTORY_LEN == opp source plane.
+from hexo_rl.utils.constants import HISTORY_LEN
 
 BOARD_SIZE: int = _lookup_encoding("v6").board_size
-HISTORY_LEN: int = 8  # AlphaZero uses 8 timesteps (current + 7 prior)
 
 # Chain-length plane encoding (Q13). Mirror of engine/src/board/state.rs:48-52.
 # Plane layout within the 6-plane block: [a0_cur, a0_opp, a1_cur, a1_opp, a2_cur, a2_opp].

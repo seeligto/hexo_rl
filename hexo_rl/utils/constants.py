@@ -20,4 +20,12 @@ therefore have no place in the registry.
 
 # AlphaZero history length (current + 7 prior timesteps). Self-play /
 # training hyperparameter, not an encoding parameter — kept here.
+#
+# B4 (2026-06-02): SINGLE SoT for HISTORY_LEN (game_state.py now imports this,
+# was a second independent definition). LOAD-BEARING COUPLING: the 18-plane
+# layout places HISTORY_LEN my-stone history planes (source 0..7) then the
+# opponent block starting at source plane HISTORY_LEN — i.e. HISTORY_LEN ==
+# OPP_STONE_PLANE (== resolvers._OPP_STONE_SRC_PLANE == 8 == engine
+# core.rs OPP_STONE_PLANE). A future history-depth change here MUST move the
+# opponent-block offset in lockstep; test_b4_history_len_sot pins the equality.
 HISTORY_LEN: int = 8
