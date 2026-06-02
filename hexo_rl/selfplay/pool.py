@@ -278,7 +278,7 @@ class WorkerPool:
         # cycle 3 Wave 7 Batch A (P79): kwargs now ride on the
         # `SelfPlayRunnerConfig` builder; `SelfPlayRunner(config)` takes the
         # config struct. Breaking PyO3 API change — `!`-marked commit.
-        self._runner = SelfPlayRunner(SelfPlayRunnerConfig(
+        _sp_config = SelfPlayRunnerConfig(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_game_moves", sp.get("max_moves_per_game", 128))),
             n_simulations=self.n_simulations,
@@ -334,7 +334,15 @@ class WorkerPool:
             legal_move_radius_jitter=bool(sp.get("legal_move_radius_jitter", False)),
             encoding_name=encoding_name,
             inference_pool_size=inference_pool_size,
-        ))
+        )
+        # O1 (SootyOwl-validated) forced-win → one-hot POLICY target. Set as
+        # config attributes (`#[pyo3(get, set)]`) rather than ctor kwargs so the
+        # 38-positional Rust ctor surface (INV19) stays untouched. Default OFF —
+        # single-variable discipline; the validation smoke flips `*_enabled` on.
+        _sp_config.forced_win_policy_enabled = bool(sp.get("forced_win_policy_enabled", False))
+        _sp_config.forced_win_policy_depth = int(sp.get("forced_win_policy_depth", 2))
+        _sp_config.forced_win_policy_weight = float(sp.get("forced_win_policy_weight", 1.0))
+        self._runner = SelfPlayRunner(_sp_config)
         self._inference_server = InferenceServer(
             model, device, config, batcher=self._runner.batcher,
             encoding_spec=spec,

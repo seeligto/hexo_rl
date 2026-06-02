@@ -34,6 +34,19 @@ selfplay:
   c_visit: 50.0
   c_scale: 1.0
 
+  # O1 (SootyOwl-validated) forced-win → one-hot POLICY target.
+  # When MCTS proves a within-turn forced win that the soft visit distribution
+  # under-weights, harden the *training* policy target to a (near-)one-hot on the
+  # proven winning move (the value head already gets a forced-win override via
+  # quiescence; the policy head did not). Targets HeXO's policy-side flatness /
+  # weak finishing (§P6 verdict: greedy/sampled ~1.8x gap, soft ~3.1-nat policy).
+  # Default OFF — single-variable discipline; the validation smoke flips
+  # `forced_win_policy_enabled: true`. depth 1 = immediate win only;
+  # 2 = +within-turn (depth-2) setup. weight 1.0 = pure one-hot; <1.0 = blend.
+  forced_win_policy_enabled: false
+  forced_win_policy_depth: 2
+  forced_win_policy_weight: 1.0
+
   # Gumbel MCTS search (Danihelka et al., ICLR 2022 §3.3-3.4).
   # Replaces PUCT exploration at root with Gumbel-Top-k sampling and Sequential
   # Halving budget allocation. Non-root nodes still use PUCT + dynamic FPU.

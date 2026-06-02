@@ -139,6 +139,12 @@ pub struct SelfPlayRunner {
     /// = 5`).  Used to break the radius-5 stride-5 fixed point identified in
     /// the §152 instrumented diagnosis.
     pub(crate) legal_move_radius_jitter: bool,
+    /// O1 (SootyOwl-validated) forced-win → one-hot POLICY target: enabled flag,
+    /// depth (1=immediate / 2=+within-turn-setup), one-hot peak weight. Threaded
+    /// to `worker_loop` via the `ForcedWinPolicy` sub-bundle.
+    pub(crate) forced_win_policy_enabled: bool,
+    pub(crate) forced_win_policy_depth: u8,
+    pub(crate) forced_win_policy_weight: f32,
     /// §173 A5a — full registry record for the active encoding; `None` for
     /// legacy callers that don't provide `encoding_spec`. Used by worker_loop
     /// to call `sym_tables_for(spec)` (H1-α) and to derive per-spec geometry
@@ -260,6 +266,9 @@ impl SelfPlayRunner {
             encoding_name,
             radius_override,
             inference_pool_size,
+            forced_win_policy_enabled,
+            forced_win_policy_depth,
+            forced_win_policy_weight,
         } = config;
         // §172 A10 T8b / cycle 3 Wave 8 Batch C FF.10 — derive feature_len /
         // policy_len from the named encoding's registry record. Pre-Wave-8
@@ -372,6 +381,9 @@ impl SelfPlayRunner {
             random_opening_plies,
             selfplay_rotation_enabled,
             legal_move_radius_jitter,
+            forced_win_policy_enabled,
+            forced_win_policy_depth,
+            forced_win_policy_weight,
             registry_spec: spec_static,
             radius_override: Arc::new(AtomicI32::new(radius_override.unwrap_or(-1))),
             running: Arc::new(AtomicBool::new(false)),

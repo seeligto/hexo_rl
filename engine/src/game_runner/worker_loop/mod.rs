@@ -46,7 +46,8 @@ use super::SelfPlayRunner;
 use atomics::WorkerAtomics;
 use channels::WorkerChannels;
 use params::{
-    ExplorationFlags, MoveConstraintFlags, SearchFlags, WorkerGeometry, WorkerParams,
+    ExplorationFlags, ForcedWinPolicy, MoveConstraintFlags, SearchFlags, WorkerGeometry,
+    WorkerParams,
 };
 use stats::WorkerStats;
 
@@ -257,6 +258,11 @@ impl SelfPlayRunner {
             move_constraint_flags: MoveConstraintFlags {
                 zoi_enabled: self.zoi_enabled,
                 legal_move_radius_jitter: self.legal_move_radius_jitter,
+            },
+            forced_win_policy: ForcedWinPolicy {
+                enabled: self.forced_win_policy_enabled,
+                depth: self.forced_win_policy_depth,
+                weight: self.forced_win_policy_weight,
             },
         };
         (stats_proto, atomics_proto, channels_proto, params_proto)

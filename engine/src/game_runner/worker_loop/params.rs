@@ -49,6 +49,17 @@ pub(super) struct MoveConstraintFlags {
     pub(super) legal_move_radius_jitter: bool,
 }
 
+/// O1 (SootyOwl-validated) forced-win → one-hot POLICY target knobs. Themed
+/// sub-bundle (mirrors `SearchFlags`/`MoveConstraintFlags`) threaded through the
+/// `WorkerParams` prototype to `inner::run_worker_thread`. `enabled == false`
+/// (default) makes the per-move override a no-op — byte-identical to pre-O1.
+#[derive(Clone, Copy)]
+pub(super) struct ForcedWinPolicy {
+    pub(super) enabled: bool,
+    pub(super) depth: u8,
+    pub(super) weight: f32,
+}
+
 #[derive(Clone)]
 pub(super) struct WorkerParams {
     pub(super) max_moves: usize,
@@ -84,4 +95,5 @@ pub(super) struct WorkerParams {
     pub(super) search_flags: SearchFlags,
     pub(super) exploration_flags: ExplorationFlags,
     pub(super) move_constraint_flags: MoveConstraintFlags,
+    pub(super) forced_win_policy: ForcedWinPolicy,
 }

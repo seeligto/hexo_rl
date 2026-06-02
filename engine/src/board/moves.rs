@@ -308,6 +308,95 @@ impl Board {
         count
     }
 
+    /// Returns the lexicographically-first empty legal cell that completes a
+    /// 6-in-a-row for `player`, or `None`. Deterministic across `FxHashSet`
+    /// iteration order (legal set is sorted). Mirrors `count_winning_moves`'s
+    /// per-cell run test but returns the cell — the primitive behind the O1
+    /// forced-win one-hot POLICY target (depth-1 detection).
+    pub fn first_winning_move(&self, player: Player) -> Option<(i32, i32)> {
+        let cell = match player {
+            Player::One => Cell::P1,
+            Player::Two => Cell::P2,
+        };
+        let legal = self.legal_moves_set();
+        let mut cells: Vec<(i32, i32)> = legal.iter().copied().collect();
+        cells.sort_unstable();
+        for (q, r) in cells {
+            for &(dq, dr) in &HEX_AXES {
+                let run = 1
+                    + self.count_direction(q, r, dq, dr, cell)
+                    + self.count_direction(q, r, -dq, -dr, cell);
+                if run >= WIN_LENGTH {
+                    return Some((q, r));
+                }
+            }
+        }
+        None
+    }
+
+    /// Returns the immediate move (for the SIDE TO MOVE) that proves a
+    /// within-turn forced win, or `None`. O1 (SootyOwl-validated) forced-win →
+    /// one-hot POLICY target detector. Rides the same winning-move primitive as
+    /// the quiescence VALUE override (`count_winning_moves` / `count_direction`)
+    /// but returns a single hard target move:
+    ///
+    /// * `depth >= 1` (any turn-phase): a move completing 6-in-a-row *now*.
+    /// * `depth >= 2` AND `moves_remaining == 2`: a first placement that leaves
+    ///   the SAME player an immediate win on the SECOND stone of this turn.
+    ///   Both stones of a turn are placed before the opponent replies, so such a
+    ///   setup is a *proven* forced win. Turn-phase is read from
+    ///   `moves_remaining` — NOT ply parity (CF-1/CF-6 discipline). At `mr == 1`
+    ///   the opponent moves before the second stone, so depth-2 is deliberately
+    ///   suppressed.
+    ///
+    /// Cheap-pre-gated by `has_player_long_run` (a one-move win needs ≥5, a
+    /// two-move win ≥4 consecutive own stones) so the O(legal) / O(legal²) scans
+    /// run only on genuine threats. Called once per move at training-target
+    /// extraction — NOT in the per-simulation MCTS hot path. Recall note: the
+    /// depth-2 ≥4-run pre-gate skips rare two-gap setups (e.g. `XX__XX`,
+    /// max-run 2); precision over recall, matching the reference's
+    /// candidate-set-only detection.
+    pub fn forced_win_move(&self, depth: u8) -> Option<(i32, i32)> {
+        if depth == 0 {
+            return None;
+        }
+        let player = self.current_player;
+
+        // depth-1: an immediate 6-completing move (valid at any moves_remaining).
+        if self.has_player_long_run(player, WIN_LENGTH - 1) {
+            if let Some(mv) = self.first_winning_move(player) {
+                return Some(mv);
+            }
+        }
+
+        // depth-2: a first placement that sets up an immediate win on the same
+        // turn's second stone. Only when the player still holds both placements
+        // (mr == 2) — otherwise the opponent replies before the second stone.
+        if depth >= 2
+            && self.moves_remaining == 2
+            && self.has_player_long_run(player, WIN_LENGTH - 2)
+        {
+            let legal = self.legal_moves_set();
+            let mut cells: Vec<(i32, i32)> = legal.iter().copied().collect();
+            cells.sort_unstable();
+            for (q, r) in cells {
+                let mut probe = self.clone();
+                if probe.apply_move(q, r).is_err() {
+                    continue;
+                }
+                // mr 2→1, no flip: `probe.current_player == player`. A win
+                // available now == the same player completes 6 on the 2nd stone.
+                if probe.has_player_long_run(player, WIN_LENGTH - 1)
+                    && probe.first_winning_move(player).is_some()
+                {
+                    return Some((q, r));
+                }
+            }
+        }
+
+        None
+    }
+
     /// Returns the cells forming the winning 6-in-a-row, or an empty Vec if no win.
     ///
     /// Fast path: checks from the last placed stone along all three hex axes.
@@ -544,5 +633,112 @@ mod tests {
         board.has_stones = true;
         board.cache_dirty.set(true);
         assert!(!board.has_player_long_run(Player::One, 3));
+    }
+
+    // ── O1: forced-win → one-hot policy target detector ──────────────────────
+    // `forced_win_move(depth)` returns the immediate move (for the SIDE TO MOVE)
+    // that proves a within-turn forced win: depth-1 = a move completing 6 now;
+    // depth-2 (only at moves_remaining==2) = a first placement that leaves the
+    // SAME player an immediate win on the second placement (opponent never moves
+    // between the two stones of one turn). Turn-phase is read from
+    // moves_remaining — never ply parity (CF-1/CF-6 discipline).
+
+    /// Build a static position with explicit side-to-move + turn-phase. bbox is
+    /// set so a depth-2 clone+`apply_move` stays internally consistent.
+    fn fwm_board(stones: &[((i32, i32), Cell)], player: Player, mr: u8) -> Board {
+        let mut b = Board::new();
+        let (mut lq, mut hq, mut lr, mut hr) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
+        for &((q, r), c) in stones {
+            b.cells.insert((q, r), c);
+            lq = lq.min(q); hq = hq.max(q); lr = lr.min(r); hr = hr.max(r);
+        }
+        b.has_stones = true;
+        b.min_q = lq; b.max_q = hq; b.min_r = lr; b.max_r = hr;
+        b.cache_dirty.set(true);
+        b.current_player = player;
+        b.moves_remaining = mr;
+        b.ply = stones.len() as u32;
+        b
+    }
+
+    #[test]
+    fn test_first_winning_move_returns_completing_cell() {
+        // P1 5-in-a-row (q=0..4, r=0): (-1,0) and (5,0) each complete 6.
+        let stones: Vec<_> = (0..5).map(|q| ((q, 0), Cell::P1)).collect();
+        let b = fwm_board(&stones, Player::One, 2);
+        let mv = b.first_winning_move(Player::One).expect("a winning move exists");
+        let mut b2 = b.clone();
+        b2.apply_move(mv.0, mv.1).unwrap();
+        assert!(b2.check_win(), "first_winning_move must complete 6, got {mv:?}");
+        assert_eq!(b.first_winning_move(Player::Two), None, "P2 has no winning move");
+    }
+
+    #[test]
+    fn test_forced_win_move_depth1_completes_six() {
+        // P1 5-in-a-row, P1 to move (mr=2): depth-1 returns a 6-completing move.
+        let stones: Vec<_> = (0..5).map(|q| ((q, 0), Cell::P1)).collect();
+        let b = fwm_board(&stones, Player::One, 2);
+        let mv = b.forced_win_move(1).expect("depth-1 forced win exists");
+        let mut b2 = b.clone();
+        b2.apply_move(mv.0, mv.1).unwrap();
+        assert!(b2.check_win(), "depth-1 move must complete 6, got {mv:?}");
+    }
+
+    #[test]
+    fn test_forced_win_move_depth1_fires_at_mr1() {
+        // Depth-1 (immediate win) is valid regardless of turn-phase (mr==1 too).
+        let stones: Vec<_> = (0..5).map(|q| ((q, 0), Cell::P1)).collect();
+        let b = fwm_board(&stones, Player::One, 1);
+        let mv = b.forced_win_move(2).expect("depth-1 must fire at mr==1");
+        let mut b2 = b.clone();
+        b2.apply_move(mv.0, mv.1).unwrap();
+        assert!(b2.check_win(), "got {mv:?}");
+    }
+
+    #[test]
+    fn test_forced_win_move_depth2_sets_up_within_turn_win() {
+        // P1 4-in-a-row (q=0..3, r=0): no single move wins (depth-1 None). At
+        // mr==2, a first placement leaves P1 an immediate win for the SECOND
+        // stone of the same turn → depth-2 fires and the returned move proves it.
+        let stones: Vec<_> = (0..4).map(|q| ((q, 0), Cell::P1)).collect();
+        let b = fwm_board(&stones, Player::One, 2);
+        assert_eq!(b.forced_win_move(1), None, "4-in-a-row has no immediate win");
+
+        let mv = b.forced_win_move(2).expect("depth-2 forced win exists");
+        let mut b2 = b.clone();
+        b2.apply_move(mv.0, mv.1).unwrap();
+        // After the first placement the SAME player is still to move (mr 2→1, no
+        // flip) and now has an immediate win — that is the within-turn forced win.
+        assert_eq!(b2.current_player, Player::One,
+            "first placement of a 2-move turn keeps the same player");
+        assert!(b2.first_winning_move(Player::One).is_some(),
+            "after the depth-2 setup P1 must have an immediate win, setup={mv:?}");
+    }
+
+    #[test]
+    fn test_forced_win_move_depth2_guarded_at_mr1() {
+        // Same 4-in-a-row but P1 has only its LAST placement this turn (mr==1):
+        // after it the OPPONENT moves and can block → NOT forced. The turn-phase
+        // guard must suppress depth-2 at mr==1.
+        let stones: Vec<_> = (0..4).map(|q| ((q, 0), Cell::P1)).collect();
+        let b = fwm_board(&stones, Player::One, 1);
+        assert_eq!(b.forced_win_move(2), None,
+            "depth-2 must be guarded off at mr==1 (opponent blocks before 2nd stone)");
+    }
+
+    #[test]
+    fn test_forced_win_move_targets_side_to_move_only() {
+        // P2 holds the 5-in-a-row but it is P1 to move: must NOT return the
+        // opponent's winning cell.
+        let stones: Vec<_> = (0..5).map(|q| ((q, 0), Cell::P2)).collect();
+        let b = fwm_board(&stones, Player::One, 2);
+        assert_eq!(b.forced_win_move(2), None, "only the side-to-move's wins count");
+    }
+
+    #[test]
+    fn test_forced_win_move_none_without_threat() {
+        let stones = [((0, 0), Cell::P1), ((5, 0), Cell::P1), ((0, 5), Cell::P1)];
+        let b = fwm_board(&stones, Player::One, 2);
+        assert_eq!(b.forced_win_move(2), None);
     }
 }

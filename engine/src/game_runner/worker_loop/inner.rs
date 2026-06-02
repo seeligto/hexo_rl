@@ -50,7 +50,8 @@ use super::super::{GameResultRow, WorkerResultRow, records};
 use super::atomics::WorkerAtomics;
 use super::channels::WorkerChannels;
 use super::params::{
-    ExplorationFlags, MoveConstraintFlags, SearchFlags, WorkerGeometry, WorkerParams,
+    ExplorationFlags, ForcedWinPolicy, MoveConstraintFlags, SearchFlags, WorkerGeometry,
+    WorkerParams,
 };
 use super::rotate::{
     compute_move_temperature, inv_sym_idx, rotate_aux_inplace, rotate_chain_inplace,
@@ -140,6 +141,10 @@ struct MovePlayContext {
     gumbel_mcts: bool,
     dirichlet_enabled: bool,
     zoi_enabled: bool,
+    // O1 forced-win → one-hot POLICY target (per-move; read at target extraction).
+    forced_win_enabled: bool,
+    forced_win_depth: u8,
+    forced_win_weight: f32,
 }
 
 /// Per-game scalar context bundled to keep `run_one_game` arity under
@@ -254,6 +259,11 @@ pub(super) fn run_worker_thread(
         search_flags: SearchFlags { quiescence_enabled, completed_q_values, gumbel_mcts },
         exploration_flags: ExplorationFlags { dirichlet_enabled, selfplay_rotation_enabled },
         move_constraint_flags: MoveConstraintFlags { zoi_enabled, legal_move_radius_jitter },
+        forced_win_policy: ForcedWinPolicy {
+            enabled: forced_win_policy_enabled,
+            depth: forced_win_policy_depth,
+            weight: forced_win_policy_weight,
+        },
     } = params;
 
     let sym_tables = sym_tables_static;
@@ -289,6 +299,10 @@ pub(super) fn run_worker_thread(
     let dirichlet_scalars = (dirichlet_alpha, dirichlet_epsilon, full_search_prob);
     let move_cap_scalars = (n_sims_quick, n_sims_full);
     let play_flags = (completed_q_values, gumbel_mcts, dirichlet_enabled, zoi_enabled);
+    // O1: forced-win one-hot POLICY target (enabled, depth, weight). Packed like
+    // the other per-move scalar bundles; consumed at training-target extraction.
+    let forced_win_scalars =
+        (forced_win_policy_enabled, forced_win_policy_depth, forced_win_policy_weight);
     let finalize_counters: (&AtomicUsize, &AtomicU64, &AtomicU64, &AtomicU64, &AtomicU64) = (
         &games_completed, &x_wins, &o_wins, &draws, &positions_dropped,
     );
@@ -303,7 +317,7 @@ pub(super) fn run_worker_thread(
             &batcher, sym_tables, worker_registry_spec, init_ctx, kept_planes,
             policy_stride, has_pass_slot, agg_trunk_sz, search_scalars,
             gumbel_scalars, dirichlet_scalars, move_cap_scalars, play_flags,
-            variance_atomics, move_accumulators, &results_queue,
+            forced_win_scalars, variance_atomics, move_accumulators, &results_queue,
             &recent_game_results, finalize_counters, dbg_game_idx_for_game,
         );
     }
@@ -334,6 +348,7 @@ fn run_one_game(
     dirichlet_scalars: (f32, f32, f32),
     move_cap_scalars: (usize, usize),
     play_flags: (bool, bool, bool, bool),
+    forced_win_scalars: (bool, u8, f32),
     variance_atomics: ClusterVarianceAtomics,
     move_accumulators: MoveAccumulators,
     results_queue: &Mutex<VecDeque<WorkerResultRow>>,
@@ -352,6 +367,7 @@ fn run_one_game(
     let (dirichlet_alpha, dirichlet_epsilon, full_search_prob) = dirichlet_scalars;
     let (n_sims_quick, n_sims_full) = move_cap_scalars;
     let (completed_q_values, gumbel_mcts, dirichlet_enabled, zoi_enabled) = play_flags;
+    let (forced_win_enabled, forced_win_depth, forced_win_weight) = forced_win_scalars;
 
     let PerGameInit { mut board, mut records_vec, mut move_history,
         sym_idx, inv_idx, is_fast_game, game_sims } =
@@ -364,6 +380,7 @@ fn run_one_game(
         dirichlet_epsilon, full_search_prob, n_sims_quick, n_sims_full,
         game_sims, is_fast_game, sym_idx,
         completed_q_values, gumbel_mcts, dirichlet_enabled, zoi_enabled,
+        forced_win_enabled, forced_win_depth, forced_win_weight,
     };
 
     for _ in 0..init_ctx.max_moves {
@@ -860,11 +877,37 @@ fn play_one_move(
     }
 
     // Completed Q-values: compute improved policy for training target.
-    let target_policy = if ctx.completed_q_values {
+    let mut target_policy = if ctx.completed_q_values {
         tree.get_improved_policy(policy_stride, ctx.c_visit, ctx.c_scale)
     } else {
         policy.clone()
     };
+
+    // O1 (SootyOwl-validated): forced-win → (near-)one-hot POLICY target. When
+    // search proves a within-turn forced win the soft visit distribution
+    // under-weights (depth-1 immediate / depth-2 setup), harden the *training
+    // target* to a one-hot on the proven winning move. Rides the same
+    // winning-move primitive as the quiescence VALUE override; fires once per
+    // move at target extraction — NOT in the per-sim hot path. When O1 fires the
+    // row is forced full-search so the ground-truth target always reaches
+    // `compute_policy_loss` (PCR's `full_search_mask` would otherwise drop the
+    // ~half of forced-win rows that PCR sampled as quick-search).
+    let forced_win_fired = ctx.forced_win_enabled
+        && match board.forced_win_move(ctx.forced_win_depth) {
+            Some((wq, wr)) => {
+                let action = board.window_flat_idx(wq, wr);
+                if action < policy_stride {
+                    records::apply_forced_win_one_hot(
+                        &mut target_policy, action, ctx.forced_win_weight,
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        };
+    let record_full_search = move_is_full_search || forced_win_fired;
 
     // ── Sample and apply move (ZOI-filtered legal set) ──
     let Some(move_idx) = select_move(
@@ -877,7 +920,7 @@ fn play_one_move(
     record_position(
         board, kept_planes, n_cells, agg_trunk_sz, ctx.is_fast_game,
         ctx.completed_q_values, policy_stride, has_pass_slot, &target_policy,
-        ctx.sym_idx, infer.sym_tables, move_is_full_search, records_vec,
+        ctx.sym_idx, infer.sym_tables, record_full_search, records_vec,
     );
 
     if board.apply_move(move_idx.0, move_idx.1).is_err() {
@@ -991,6 +1034,13 @@ fn record_position(
         );
         // Fast games: zero-policy marks value-only targets (unless completed
         // Q-values are enabled, which give signal even at 50 sims).
+        // O1 caveat (defense-in-depth): this `is_fast_game && !completed_q_values`
+        // branch discards `target_policy` entirely, so an O1 forced-win one-hot
+        // is NOT recorded here. Dormant under every O1 config — `is_fast_game`
+        // needs `fast_prob>0`, which `pool.py` makes mutually exclusive with the
+        // PCR `full_search_prob` path, and the O1 lineage runs `completed_q_values
+        // =true`. If game-level fast games are ever re-enabled WITH O1, route the
+        // one-hot through here too (or keep `completed_q_values=true`).
         let mut projected_policy = if is_fast_game && !completed_q_values {
             vec![0.0; policy_stride]
         } else {

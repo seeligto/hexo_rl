@@ -271,3 +271,87 @@ pub(crate) fn reproject_game_end_row(
     }
     aux_u8
 }
+
+/// O1: blend a forced-win one-hot into a policy TARGET in place.
+///
+/// `weight == 1.0` → pure one-hot on `action` (the SootyOwl-validated default);
+/// `0 < weight < 1` → convex blend toward it (`target = (1-w)·target + w·e_action`).
+/// `target` is assumed a probability vector (sums to ~1); the result remains
+/// one (`(1-w)·1 + w = 1`). No-op when `weight <= 0` or `action` is out of range,
+/// so a disabled O1 (or an out-of-window forced-win cell) leaves the
+/// improved-policy target byte-identical.
+pub(crate) fn apply_forced_win_one_hot(target: &mut [f32], action: usize, weight: f32) {
+    if weight <= 0.0 || action >= target.len() {
+        return;
+    }
+    let w = weight.min(1.0);
+    for p in target.iter_mut() {
+        *p *= 1.0 - w;
+    }
+    target[action] += w;
+}
+
+#[cfg(test)]
+mod o1_tests {
+    use super::*;
+    use crate::board::Player;
+
+    #[test]
+    fn test_apply_forced_win_one_hot_pure() {
+        let mut target = vec![0.25_f32; 4];
+        apply_forced_win_one_hot(&mut target, 2, 1.0);
+        assert_eq!(target, vec![0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn test_apply_forced_win_one_hot_blend_stays_distribution() {
+        let mut target = vec![0.25_f32; 4];
+        apply_forced_win_one_hot(&mut target, 2, 0.5);
+        let sum: f32 = target.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-6, "blend must stay a distribution, sum={sum}");
+        assert!((target[2] - 0.625).abs() < 1e-6, "winning action boosted, got {}", target[2]);
+        assert!(target[2] > target[0], "winning action must dominate");
+    }
+
+    #[test]
+    fn test_apply_forced_win_one_hot_noop_when_disabled() {
+        let mut target = vec![0.25_f32; 4];
+        let before = target.clone();
+        apply_forced_win_one_hot(&mut target, 2, 0.0);   // weight 0 ⇒ O1 off
+        assert_eq!(target, before);
+        apply_forced_win_one_hot(&mut target, 99, 1.0);  // out-of-range action
+        assert_eq!(target, before);
+    }
+
+    #[test]
+    fn test_one_hot_survives_aggregate_to_local() {
+        // O1 sets the one-hot on the winning move's GLOBAL window index
+        // (`Board::window_flat_idx`); `aggregate_policy_to_local` must carry it to
+        // the local record as a one-hot. Pins the index-mapping consistency that
+        // keeps the forced-win target from being silently dropped into the buffer.
+        let mut board = Board::new();
+        for q in 0..5i32 { board.cells.insert((q, 0), Cell::P1); }
+        board.has_stones = true;
+        board.min_q = -1; board.max_q = 5; board.min_r = 0; board.max_r = 0;
+        board.cache_dirty.set(true);
+        board.current_player = Player::One;
+        board.moves_remaining = 2;
+
+        let win = board.first_winning_move(Player::One).expect("winning move exists");
+        let stride = 19 * 19 + 1;
+        let action = board.window_flat_idx(win.0, win.1);
+        assert!(action < stride, "winning move maps in-window");
+        let mut global = vec![0.0_f32; stride];
+        apply_forced_win_one_hot(&mut global, action, 1.0);
+
+        let trunk = board.cluster_window_size() as i32;
+        let center = board.window_center();
+        let legal = board.legal_moves();
+        let local =
+            aggregate_policy_to_local(stride, true, trunk, &board, &center, &global, &legal);
+
+        let nonzero: Vec<f32> = local.iter().copied().filter(|&p| p > 1e-6).collect();
+        assert_eq!(nonzero.len(), 1, "aggregate must preserve a one-hot, got {} non-zero", nonzero.len());
+        assert!((nonzero[0] - 1.0).abs() < 1e-6, "surviving mass ~1.0, got {}", nonzero[0]);
+    }
+}

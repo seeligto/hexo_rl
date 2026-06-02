@@ -84,6 +84,22 @@ pub struct SelfPlayRunnerConfig {
     pub encoding_name: Option<String>,
     pub radius_override: Option<i32>,
     pub inference_pool_size: Option<usize>,
+    /// O1 (SootyOwl-validated) forced-win → one-hot POLICY target knobs.
+    /// Added as `#[pyo3(get, set)]` attributes (set post-construction from
+    /// Python) rather than `new()` positional kwargs so the 38-arg positional
+    /// Rust ctor surface — pinned by INV19 + ~10 positional test call sites —
+    /// is untouched. Defaulted OFF in `new()` (single-variable / back-compat
+    /// discipline, mirroring `completed_q_values=false`); the operative values
+    /// come from `configs/selfplay.yaml` via `pool.py`.
+    #[pyo3(get, set)]
+    pub forced_win_policy_enabled: bool,
+    /// 1 = depth-1 only (immediate win); 2 = depth-1 + depth-2 (within-turn setup).
+    #[pyo3(get, set)]
+    pub forced_win_policy_depth: u8,
+    /// One-hot peak weight: 1.0 = pure one-hot on the winning move; <1.0 = convex
+    /// blend with the improved-policy target.
+    #[pyo3(get, set)]
+    pub forced_win_policy_weight: f32,
 }
 
 #[pymethods]
@@ -214,6 +230,11 @@ impl SelfPlayRunnerConfig {
             encoding_name,
             radius_override,
             inference_pool_size,
+            // O1 forced-win one-hot POLICY target — OFF by default; Python sets
+            // the operative values as attributes from configs/selfplay.yaml.
+            forced_win_policy_enabled: false,
+            forced_win_policy_depth: 2,
+            forced_win_policy_weight: 1.0,
         }
     }
 }
