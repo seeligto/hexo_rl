@@ -298,10 +298,13 @@ def _index_bot_games(
             continue
 
         plies = data.get("plies", len(data.get("moves", [])))
+        # bot_games winner is int(board.winner()) ∈ {1, -1} (P1 / P2); -1 is P2,
+        # NOT 2 (B2 / SCATTER-4: the old `== 2` was a dead branch, mislabeling
+        # every P2 win as "unknown").
         winner = data.get("winner", 0)
         if winner == 1:
             outcome = "p1_win"
-        elif winner == 2:
+        elif winner == -1:
             outcome = "p2_win"
         else:
             outcome = "unknown"
