@@ -174,6 +174,23 @@ def _resolve_encoding_for_pool(
     )
 
 
+def _draw_outcome_band(
+    draw_value: float, ply_cap_value: float, eps: float = 0.05
+) -> tuple[float, float]:
+    """Outcome band that captures draw-like value targets for the dashboard
+    ``draw_target_fraction`` metric (PIPE-4).
+
+    Organic draws store ``draw_value`` and ply-cap truncations store
+    ``ply_cap_value``; decisive games store ±1. Span [min, max] of the two
+    config values ± ``eps`` so both draw-like targets are counted and the ±1
+    wins are excluded — instead of a stale hardcoded window that captured
+    neither current value (so the metric read ~0 for every run).
+    """
+    lo = min(draw_value, ply_cap_value) - eps
+    hi = max(draw_value, ply_cap_value) + eps
+    return lo, hi
+
+
 class WorkerPool:
     """Runs concurrent self-play games on background threads."""
 
@@ -513,7 +530,8 @@ class WorkerPool:
 
         Reads:
           - ``corpus_fraction``: 1 − self_play_pushed / size (corpus = preload)
-          - ``draw_target_fraction``: outcomes ∈ [-0.6, -0.4) over size
+          - ``draw_target_fraction``: outcomes in the live draw/ply-cap band
+            (``_draw_outcome_band``) over size — PIPE-4 (was a stale [-0.6,-0.4))
           - terminal-reason fractions over cumulative pushes since start
 
         Falls back gracefully when the engine wheel pre-dates
@@ -523,8 +541,15 @@ class WorkerPool:
         sp_pushed = int(self.self_play_positions_pushed)
         corpus_fraction = max(0.0, 1.0 - (sp_pushed / size))
         try:
+            # PIPE-4: band derived from the live draw/ply-cap targets, not a
+            # stale window. Re-resolve from config (the WorkerParams kwargs hold
+            # the pinned §178 wire site; this monitoring read stays independent).
+            _tcfg = self.config.get("training", self.config)
+            _draw = float(_tcfg.get("draw_value", -0.5))
+            _ply = float(_tcfg.get("ply_cap_value", _tcfg.get("draw_value", -0.5)))
+            _lo, _hi = _draw_outcome_band(_draw, _ply)
             draws_in_buf = int(
-                self.replay_buffer.outcome_in_range_count(-0.6, -0.4)
+                self.replay_buffer.outcome_in_range_count(_lo, _hi)
             )
             draw_target_fraction = draws_in_buf / size
         except (AttributeError, TypeError):
