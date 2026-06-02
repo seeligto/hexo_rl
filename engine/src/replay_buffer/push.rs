@@ -185,7 +185,7 @@ impl ReplayBuffer {
             &ifs_owned
         };
         // §S181-AUDIT Wave 4 4B-impl-1 — Resolve optional position_indices slice;
-        // None ⇒ fills 0..N-1 per loop iteration.
+        // None ⇒ fills 0 (PIPE-1 2026-06-02: corpus has no ply-index concept).
         let pos_owned: Vec<u16>;
         let pos_s: &[u16] = if let Some(ref arr) = position_indices {
             arr.as_slice()
@@ -281,8 +281,12 @@ impl ReplayBuffer {
 
             // is_full_search: use provided value or default to 1 (full-search).
             self.is_full_search[slot] = if ifs_s.is_empty() { 1u8 } else { ifs_s[i] };
-            // §S181-AUDIT Wave 4 4B-impl-1 — position_index: use provided value or default 0..N-1.
-            self.position_indices[slot] = if pos_s.is_empty() { i as u16 } else { pos_s[i] };
+            // §S181-AUDIT Wave 4 4B-impl-1 — position_index: use provided value or default 0.
+            // PIPE-1 (2026-06-02): a missing slice means "no ply-index concept" (the
+            // corpus loader path), NOT the row counter. Defaulting to `i as u16` saturated
+            // the ply-index loss target (losses.py:236, /100 clamp 0..1) to ~1.0 for corpus
+            // rows >=100 — the opposite of intent. Match push_many_impl's 0u16 default.
+            self.position_indices[slot] = if pos_s.is_empty() { 0u16 } else { pos_s[i] };
             // DRAW-MASK (Phase 6) — value_target_valid: provided value or default 1 (supervise).
             self.value_target_valid[slot] = if vv_s.is_empty() { 1u8 } else { vv_s[i] };
 

@@ -241,7 +241,7 @@ impl ReplayBuffer {
     /// Store all positions from a completed game efficiently.
     // KEEP — PyO3 kwarg surface mirrors 9 user-tunable params (INV20). §S181 Wave 4
     // 4B-impl-1 added `position_indices` as an additive Option kwarg (default
-    // None → fills 0..N-1 in game order) — old callers continue to work.
+    // None → fills 0; PIPE-1 2026-06-02) — old callers continue to work.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (states, chain_planes, policies, outcomes, ownership, winning_line, game_id = -1, game_length = 0, is_full_search = None, position_indices = None, value_target_valid = None))]
     pub fn push_game(
