@@ -39,8 +39,9 @@ thread_local! {
     static CLUSTER_SCRATCH_TLS: RefCell<ClusterScratch> = RefCell::new(ClusterScratch::new());
 }
 
-/// Stones in a row required to win.
-const WIN_LENGTH: usize = 6;
+/// Stones in a row required to win. C1 (2026-06-02): `pub(crate)` + re-exported
+/// from `board` so `mcts/backup.rs` uses `WIN_LENGTH - 1` instead of a bare `5`.
+pub(crate) const WIN_LENGTH: usize = 6;
 
 /// Default maximum hex distance from any existing stone at which a new stone
 /// may be placed.  Official HTTT rule is 8, but self-play with bootstrap-v6

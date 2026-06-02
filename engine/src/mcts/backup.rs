@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use fxhash::FxHashSet;
-use crate::board::Board;
+use crate::board::{Board, WIN_LENGTH};
 use super::node::Node;
 use super::{MCTSTree, MAX_CHILDREN_PER_NODE};
 
@@ -158,9 +158,9 @@ impl MCTSTree {
         //   this check is much cheaper than count_winning_moves.
         let current_player = board.current_player;
         let opponent = current_player.other();
-        // WIN_LENGTH = 6, so a winning move needs a run of WIN_LENGTH - 1 = 5.
-        let current_may_threat = board.has_player_long_run(current_player, 5);
-        let opponent_may_threat = board.has_player_long_run(opponent, 5);
+        // A winning move needs a run of WIN_LENGTH - 1 (C1: no bare 5).
+        let current_may_threat = board.has_player_long_run(current_player, WIN_LENGTH - 1);
+        let opponent_may_threat = board.has_player_long_run(opponent, WIN_LENGTH - 1);
 
         if !current_may_threat && !opponent_may_threat {
             return value;

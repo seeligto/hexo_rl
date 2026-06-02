@@ -32,6 +32,9 @@ pub use state::{
     BOARD_SIZE, HALF, TOTAL_CELLS, HEX_AXES,
     hex_distance, encode_chain_planes,
 };
+// C1 (2026-06-02): re-export the win-rule length so crate-internal users
+// (mcts/backup.rs) reference `WIN_LENGTH - 1` instead of a bare `5`.
+pub(crate) use moves::WIN_LENGTH;
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
