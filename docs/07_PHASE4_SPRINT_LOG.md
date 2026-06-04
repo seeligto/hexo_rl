@@ -4825,3 +4825,42 @@ gitignored under `reports/`.
 
 **Next:** the perception arm (23×23 single-window WIDEN primary vs K-cluster
 comparator) on this clean `master`, per the §PRELONG routing — separate chapter.
+
+## §PRELONG-2A — window-anchor centering: eval-only-first FALLBACK — 2026-06-04
+
+Routed by §PRELONG-CENTERING D1 (verdict = **V1 CENTERING**, not size; re-center
+recovers 80.6% deduped via the cheat oracle). Branch `phase4.5/prelong_2a_centering`.
+Pre-registered DESIGN → IMPL → REVIEW → RED-TEAM (design doc
+`reports/investigations/prelong_2A_window_anchor_design_2026-06-04.md`).
+
+- **F1 `dc8bf4f`** feat(encoding): `action_anchor_mode` schema v4 — enum
+  {GlobalBbox,MoverThreat} + RegistrySpec field + parse + validator invariant
+  (mover_threat ⇒ single-window) + PyO3 getter + audit §1 column; new encoding
+  `v6_live2_anchored` (v6_live2 arch + mover_threat, frozen weights load).
+- **F2 `6dbc744`** feat(engine): `Board::window_center()` mode-dispatch —
+  MoverThreat anchors the single global action window on the mover's
+  most-advanced open run (cached via place/undo; GlobalBbox byte-identical).
+  **Bench gate PASS both hosts** (laptop 8845HS MCTS 87,290 ≥73k; vast 5080/9900X
+  112,396 ≥73k, IQR ±0.26%).
+- **F3 eval-only-first = FALLBACK** (`scripts/structural_diagnosis/prelong_2a_eval.py`,
+  result doc `reports/investigations/prelong_2a_eval_result_2026-06-04.md`).
+  Frozen 30k weights, 90 games, 226 forced turns (158 off / 68 in). Production
+  mover-threat recovers **0.432 deduped-majority** (gate 0.55; per-turn 0.409;
+  cheat ceiling 0.806) AND breaks **7 in-window wins** (gate ≤2). Both FAIL.
+  RED-TEAM decomposition: of 149 reproduced misses, 53 wrong-cluster (blind
+  heuristic anchored on a different open run) + 47 indexable-but-unscored (V3
+  policy residual); 5/7 in-window regressions had the win pulled A-in→B-off.
+
+**Conclusion (robust):** a SINGLE global action window is structurally dominated —
+aiming it at the far threat pulls it off in-window wins. Any single-window anchor
+(incl. the banked NN-salience stretch) hits this wall. Confirms D1 §6.3: the input
+is already multi-window; the real fix is the **multi-window scatter ACTION space**
+(per-cluster policy) — head change + re-pretrain, NOT a frozen-weights re-anchor.
+Eval-only-first correctly killed the cheap path before a 300k go-long.
+
+**Disposition:** F1+F2 stay committed (correct, reusable substrate — the
+documented "single-window anchor insufficient" baseline + threat-anchor geometry
+for a future scatter head; the heuristic is insufficient, the code is not). Do NOT
+go-long on `v6_live2_anchored`. Next lever (scatter+re-pretrain vs bank 2A vs
+revisit routing) DEFERRED to a fresh session. The ~15-20% V3 scoring residual is
+orthogonal (O1/more-sims), independent of centering.
