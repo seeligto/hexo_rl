@@ -240,6 +240,105 @@ mod tests {
         assert!(!b.in_window(-6, 0), "one beyond left edge must be out-of-window");
     }
 
+    // ── §PRELONG-2A: mover-threat action-window centering ────────────────────
+
+    #[test]
+    fn mover_threat_center_picks_mover_open_four_midpoint() {
+        // P1 (mover) open-4 on the q-axis at r=3 (ends (9,3)/(14,3) empty).
+        // P2 stones near the origin drag the global bbox-mid AWAY from the run,
+        // so the two centering rules give distinct answers.
+        let mut b = Board::new();
+        for q in 10..=13 {
+            b.cells.insert((q, 3), Cell::P1);
+        }
+        b.cells.insert((-5, -5), Cell::P2);
+        b.cells.insert((-4, -5), Cell::P2);
+        b.current_player = Player::One;
+        b.has_stones = true;
+        b.min_q = -5;
+        b.max_q = 13;
+        b.min_r = -5;
+        b.max_r = 3;
+        // Global bbox-mid = ((-5+13)/2, (-5+3)/2) = (4, -1) — off the run.
+        assert_eq!(b.window_center(), (4, -1), "default board is GlobalBbox");
+        // Open-4 midpoint: count=4, center_idx=2 → (10+2, 3) = (12, 3).
+        assert_eq!(b.mover_action_window_center(), (12, 3));
+    }
+
+    #[test]
+    fn mover_threat_center_falls_back_to_bbox_mid_without_open_run() {
+        // Mover has only scattered stones (no open 3/4) → bbox-mid fallback.
+        let mut b = Board::new();
+        b.cells.insert((0, 0), Cell::P1);
+        b.cells.insert((4, 0), Cell::P1); // gap — not a run
+        b.cells.insert((0, 4), Cell::P2);
+        b.current_player = Player::One;
+        b.has_stones = true;
+        b.min_q = 0;
+        b.max_q = 4;
+        b.min_r = 0;
+        b.max_r = 4;
+        assert_eq!(b.mover_action_window_center(), (2, 2)); // bbox-mid
+    }
+
+    #[test]
+    fn mover_threat_center_tie_break_is_deterministic() {
+        // Two equal open-4s for the mover, no action anchors → deterministic
+        // lexicographically-smallest center, independent of cells iteration order.
+        let mut b = Board::new();
+        for q in 10..=13 {
+            b.cells.insert((q, 0), Cell::P1); // q-axis run, center (12,0)
+        }
+        for r in 10..=13 {
+            b.cells.insert((0, r), Cell::P1); // (0,1)-axis run, center (0,12)
+        }
+        b.current_player = Player::One;
+        b.has_stones = true;
+        b.min_q = 0;
+        b.max_q = 13;
+        b.min_r = 0;
+        b.max_r = 13;
+        // Both count=4, no last action ⇒ dist tie ⇒ lex-min center = (0,12).
+        assert_eq!(b.mover_action_window_center(), (0, 12));
+    }
+
+    #[test]
+    fn window_center_mover_threat_reads_cached_anchor() {
+        // v6_live2_anchored dispatches MoverThreat → reads the cached field.
+        let spec = crate::encoding::lookup_or_panic("v6_live2_anchored");
+        let mut b = Board::with_registry_spec(spec);
+        for q in 10..=13 {
+            b.cells.insert((q, 3), Cell::P1);
+        }
+        b.current_player = Player::One;
+        b.has_stones = true;
+        b.min_q = 10;
+        b.max_q = 13;
+        b.min_r = 3;
+        b.max_r = 3;
+        b.action_window_center = b.mover_action_window_center(); // as apply_move would
+        assert_eq!(b.window_center(), (12, 3));
+    }
+
+    #[test]
+    fn apply_move_undo_restores_mover_threat_cache() {
+        let spec = crate::encoding::lookup_or_panic("v6_live2_anchored");
+        let mut b = Board::with_registry_spec(spec);
+        b.action_window_center = (99, 99); // sentinel
+        let d = b.apply_move_tracked(0, 0).unwrap();
+        assert_ne!(
+            b.action_window_center,
+            (99, 99),
+            "apply_move recomputes the mover-threat center"
+        );
+        b.undo_move(d);
+        assert_eq!(
+            b.action_window_center,
+            (99, 99),
+            "undo restores the cached mover-threat center"
+        );
+    }
+
     #[test]
     fn legal_grows_with_bounding_box() {
         let mut b = Board::new();

@@ -1,6 +1,7 @@
 use std::cell::{Cell as StdCell, UnsafeCell};
 use fxhash::{FxHashMap, FxHashSet};
 use super::super::zobrist::ZobristTable;
+use crate::encoding::ActionAnchorMode;
 
 // ── MoveDiff ──────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,8 @@ pub struct MoveDiff {
     // Action anchors state before the move.
     prev_action_anchors: [(i32, i32); 4],
     prev_action_anchors_count: usize,
+    // §PRELONG-2A — cached mover-threat action-window center before the move.
+    prev_action_window_center: (i32, i32),
 }
 
 /// Board size (cells per axis of the view window).
@@ -170,6 +173,15 @@ pub struct Board {
     /// Pointer is stable for process lifetime (registry uses `Box::leak`
     /// at parse time).
     pub(crate) encoding: Option<&'static crate::encoding::RegistrySpec>,
+    /// §PRELONG-2A — action-window centering mode, cached as a scalar from
+    /// `encoding.action_anchor_mode` at construction (hot-path discipline,
+    /// §173 A5b — `window_center()` reads this, not the `&'static` spec).
+    /// `GlobalBbox` for every legacy/default Board.
+    pub(crate) action_anchor_mode: ActionAnchorMode,
+    /// §PRELONG-2A — cached center of the single global action window under
+    /// `MoverThreat`. Recomputed once per `apply_move` (guarded on the mode);
+    /// read O(1) by `window_center()`. Unused under `GlobalBbox`.
+    pub(crate) action_window_center: (i32, i32),
 }
 
 impl Board {
@@ -214,6 +226,8 @@ impl Board {
             cluster_threshold: super::super::moves::DEFAULT_CLUSTER_THRESHOLD,
             cluster_window_size: BOARD_SIZE,
             encoding: None,
+            action_anchor_mode: ActionAnchorMode::GlobalBbox,
+            action_window_center: (0, 0),
         }
     }
 
@@ -252,6 +266,7 @@ impl Board {
             .unwrap_or(super::super::moves::DEFAULT_CLUSTER_THRESHOLD as usize) as i32;
         b.legal_move_radius = spec.legal_move_radius as i32;
         b.encoding = Some(spec);
+        b.action_anchor_mode = spec.action_anchor_mode;
         b.cache_dirty.set(true);
         b
     }
@@ -346,9 +361,96 @@ impl Board {
         if !self.has_stones {
             return (0, 0);
         }
-        let cq = (self.min_q + self.max_q) / 2;
-        let cr = (self.min_r + self.max_r) / 2;
-        (cq, cr)
+        match self.action_anchor_mode {
+            // Legacy stone-bbox midpoint — byte-identical for every shipped
+            // encoding (frame calibration preserved for v6/v6w25 checkpoints).
+            ActionAnchorMode::GlobalBbox => {
+                let cq = (self.min_q + self.max_q) / 2;
+                let cr = (self.min_r + self.max_r) / 2;
+                (cq, cr)
+            }
+            // §PRELONG-2A — anchor on the mover's active threat (D1 V1). Read
+            // the O(1) cache maintained by `apply_move`/`undo_move`; never
+            // recompute in the MCTS hot path (§173 A5b).
+            ActionAnchorMode::MoverThreat => self.action_window_center,
+        }
+    }
+
+    /// §PRELONG-2A — center of the single global ACTION window under the
+    /// `MoverThreat` anchor mode: midpoint of the current mover's
+    /// most-advanced OPEN run (a 4-run beats a 3-run), tie-broken toward the
+    /// most recent action anchor and then lexicographically by center.
+    /// Falls back to the stone-bbox midpoint when the mover has no open 3/4
+    /// run (early game / threat-free turns → no regression).
+    ///
+    /// Order-independent (does not depend on `cells` iteration order — the
+    /// total comparison order makes ties deterministic across move
+    /// orderings). O(stones); recomputed once per `apply_move` and cached in
+    /// `action_window_center`.
+    pub(crate) fn mover_action_window_center(&self) -> (i32, i32) {
+        let bbox_mid = ((self.min_q + self.max_q) / 2, (self.min_r + self.max_r) / 2);
+        if self.cells.is_empty() {
+            return bbox_mid;
+        }
+        let mover = match self.current_player {
+            Player::One => Cell::P1,
+            Player::Two => Cell::P2,
+        };
+        let last_action = if self.action_anchors_count > 0 {
+            Some(self.action_anchors[self.action_anchors_count - 1])
+        } else {
+            None
+        };
+        // best = (count, dist_to_last_action, center) under the total order
+        // (count DESC, dist ASC, center ASC).
+        let mut best: Option<(i32, i32, (i32, i32))> = None;
+        for (&(q, r), &cell) in &self.cells {
+            if cell != mover {
+                continue;
+            }
+            for (dq, dr) in HEX_AXES {
+                // Scan each run exactly once, from its start (no same-colour
+                // predecessor in this direction).
+                if self.get(q - dq, r - dr) == mover {
+                    continue;
+                }
+                let mut count = 1;
+                while self.get(q + dq * count, r + dr * count) == mover {
+                    count += 1;
+                }
+                if count != 3 && count != 4 {
+                    continue;
+                }
+                let open_start = self.get(q - dq, r - dr) == Cell::Empty;
+                let open_end = self.get(q + dq * count, r + dr * count) == Cell::Empty;
+                if !(open_start || open_end) {
+                    continue;
+                }
+                let center = (q + dq * (count / 2), r + dr * (count / 2));
+                let dist = match last_action {
+                    Some((lq, lr)) => hex_distance(center.0, center.1, lq, lr),
+                    None => 0,
+                };
+                let cand = (count, dist, center);
+                best = Some(match best {
+                    None => cand,
+                    Some(b) => {
+                        if cand.0 > b.0
+                            || (cand.0 == b.0
+                                && (cand.1 < b.1 || (cand.1 == b.1 && cand.2 < b.2)))
+                        {
+                            cand
+                        } else {
+                            b
+                        }
+                    }
+                });
+            }
+        }
+        match best {
+            Some((_, _, center)) => center,
+            None => bbox_mid,
+        }
     }
 
     /// Window-relative flat index for axial (q, r) — spec-aware.
@@ -531,6 +633,13 @@ impl Board {
             self.moves_remaining = 2;
         }
 
+        // §PRELONG-2A — refresh the cached action-window center for the new
+        // state (only under MoverThreat; GlobalBbox skips this entirely so the
+        // legacy hot path is unchanged).
+        if matches!(self.action_anchor_mode, ActionAnchorMode::MoverThreat) {
+            self.action_window_center = self.mover_action_window_center();
+        }
+
         Ok(())
     }
 
@@ -552,6 +661,7 @@ impl Board {
             prev_has_stones: self.has_stones,
             prev_action_anchors: self.action_anchors,
             prev_action_anchors_count: self.action_anchors_count,
+            prev_action_window_center: self.action_window_center,
         };
 
         self.apply_move(q, r)?;
@@ -594,6 +704,7 @@ impl Board {
 
         self.action_anchors = diff.prev_action_anchors;
         self.action_anchors_count = diff.prev_action_anchors_count;
+        self.action_window_center = diff.prev_action_window_center;
     }
 }
 
@@ -637,6 +748,8 @@ impl Clone for Board {
             cluster_threshold: self.cluster_threshold,
             cluster_window_size: self.cluster_window_size,
             encoding: self.encoding,
+            action_anchor_mode: self.action_anchor_mode,
+            action_window_center: self.action_window_center,
         }
     }
 }
