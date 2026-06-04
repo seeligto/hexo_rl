@@ -1,5 +1,10 @@
 [workspace]
 members = ["engine"]
+# Vendored eval-only opponent (vendor/bots/hammerhead) is an independent Rust
+# crate with its own toolchain pin — keep it out of this workspace so `maturin
+# develop` builds it standalone and our `[profile.release]` / resolver don't leak
+# into it. Eval-path only; never built by `make build` / bench.
+exclude = ["vendor/bots/hammerhead"]
 resolver = "2"
 
 [profile.release]

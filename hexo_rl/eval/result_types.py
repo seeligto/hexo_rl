@@ -82,6 +82,11 @@ class EvalRoundResult(TypedDict, total=False):
     ci_argmax_n: tuple[float, float]
     colony_wins_argmax_n: int
 
+    # vs Hammerhead NNUE (§P6 second ladder opponent, eval-only)
+    wr_nnue: float
+    ci_nnue: tuple[float, float]
+    colony_wins_nnue: int
+
     # vs bootstrap_anchor (§155 T2 floor)
     wr_bootstrap_anchor: float
     ci_bootstrap_anchor: tuple[float, float]

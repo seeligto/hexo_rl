@@ -128,9 +128,22 @@ def wilson_ci(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return centre - spread, centre + spread
 
 
+def build_opponent(opponent: str, time_limit: float, opponent_time_ms: int) -> BotProtocol:
+    """Construct the ladder opponent. ``sealbot`` (default) is the §150
+    minimax baseline; ``nnue`` is the vendored Hammerhead minimax+NNUE bot,
+    the §P6 second rung. The NnueBot import is lazy so the heavyweight engine
+    only loads when actually selected (eval-path only)."""
+    if opponent == "sealbot":
+        return SealBotBot(time_limit=time_limit)
+    if opponent == "nnue":
+        from hexo_rl.bots.nnue_bot import NnueBot
+        return NnueBot(time_per_stone_ms=opponent_time_ms)
+    raise ValueError(f"unknown --opponent {opponent!r}; expected sealbot|nnue")
+
+
 def play_game(
     model_bot: BotProtocol,
-    seal_bot: SealBotBot,
+    opponent: BotProtocol,
     model_side: int,
     eval_random_opening_plies: int,
     seed: int,
@@ -147,7 +160,7 @@ def play_game(
     board = Board.with_encoding_name(encoding_name)
     state = GameState.from_board(board)
     model_bot.reset()
-    seal_bot.reset()
+    opponent.reset()
 
     ply = 0
     while ply < max_moves:
@@ -158,7 +171,7 @@ def play_game(
         elif board.current_player == model_side:
             q, r = model_bot.get_move(state, board)
         else:
-            q, r = seal_bot.get_move(state, board)
+            q, r = opponent.get_move(state, board)
         state = state.apply_move(board, q, r)
         ply += 1
 
@@ -177,8 +190,11 @@ def _eval_one_checkpoint(
     max_moves: int,
     policy_only_bias: bool,
     device: object,
+    opponent_kind: str = "sealbot",
+    opponent_time_ms: int = 500,
 ) -> dict:
-    """Load checkpoint, run n_games vs SealBot, return result dict."""
+    """Load checkpoint, run n_games vs the selected ladder opponent, return
+    result dict. ``opponent_kind`` ∈ {sealbot, nnue}."""
     model, spec, encoding_label = load_model_with_encoding(ckpt_path, device)
     if policy_only_bias:
         if not getattr(model, "gpool_bias_active", False):
@@ -214,7 +230,8 @@ def _eval_one_checkpoint(
         flush=True,
     )
 
-    seal_bot = SealBotBot(time_limit=time_limit)
+    opponent = build_opponent(opponent_kind, time_limit, opponent_time_ms)
+    print(f"[eval] opponent={opponent.name()}", flush=True)
     wins = 0
     losses = 0
     draws = 0
@@ -225,7 +242,7 @@ def _eval_one_checkpoint(
         model_side = 1 if i % 2 == 0 else -1
         winner, ply = play_game(
             model_bot=model_bot,
-            seal_bot=seal_bot,
+            opponent=opponent,
             model_side=model_side,
             eval_random_opening_plies=random_opening_plies,
             seed=seed_base + i,
@@ -266,7 +283,10 @@ def _eval_one_checkpoint(
         "win_rate": final_wr,
         "ci_95_low": lo,
         "ci_95_high": hi,
+        "opponent": opponent_kind,
+        "opponent_name": opponent.name(),
         "time_limit": time_limit,
+        "opponent_time_ms": opponent_time_ms,
         "temperature": temperature,
         "c_puct": c_puct,
         "random_opening_plies": random_opening_plies,
@@ -326,6 +346,16 @@ def main() -> int:
     parser.add_argument("--n-games", type=int, default=200)
     parser.add_argument("--time-limit", type=float, default=0.5,
                         help="SealBot think time per move (default 0.5).")
+    parser.add_argument(
+        "--opponent", choices=["sealbot", "nnue"], default="sealbot",
+        help="Ladder opponent: 'sealbot' (§150 minimax baseline, default) or "
+             "'nnue' (vendored Hammerhead minimax+NNUE — §P6 second rung).",
+    )
+    parser.add_argument(
+        "--opponent-time-ms", type=int, default=500,
+        help="Hammerhead per-stone search budget in ms (only for --opponent "
+             "nnue). Default 500 mirrors SealBot think_time_strong=0.5s.",
+    )
     parser.add_argument("--seed-base", type=int, default=42)
     parser.add_argument("--random-opening-plies", type=int, default=4,
                         help="Plies of random play to seed each game's diversity.")
@@ -410,6 +440,7 @@ def main() -> int:
                 ckpts[0], inference, args.n_games, args.time_limit,
                 args.seed_base, args.random_opening_plies, args.temperature,
                 args.c_puct, args.max_moves, args.policy_only_bias, device,
+                args.opponent, args.opponent_time_ms,
             )
         except RuntimeError as e:
             print(f"FATAL: {e}", file=sys.stderr)
@@ -423,7 +454,7 @@ def main() -> int:
         out_path = (
             Path(args.output)
             if args.output
-            else REPO_ROOT / "reports" / "eval" / f"{arm}_{inference_tag}_sealbot.json"
+            else REPO_ROOT / "reports" / "eval" / f"{arm}_{inference_tag}_{args.opponent}.json"
         )
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -454,11 +485,12 @@ def main() -> int:
                 ckpt_path, inference, args.n_games, args.time_limit,
                 args.seed_base, args.random_opening_plies, args.temperature,
                 args.c_puct, args.max_moves, args.policy_only_bias, device,
+                args.opponent, args.opponent_time_ms,
             )
         except (RuntimeError, NotImplementedError) as e:
             print(f"[eval] ERROR on {ckpt_path.name}: {e}", file=sys.stderr)
             continue
-        result["event"] = "eval_vs_sealbot"
+        result["event"] = f"eval_vs_{args.opponent}"
         records.append(result)
         print(result, flush=True)
 

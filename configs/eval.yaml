@@ -64,6 +64,22 @@ eval_pipeline:
       # only after independently validating the new bootstrap ≥ v7full WR
       # vs SealBot.
       path: checkpoints/bootstrap_model_v7full.pt
+    # §P6 — Hammerhead minimax+NNUE second ladder opponent (eval-only, vendored
+    # at vendor/bots/hammerhead).  A LOWER rung than SealBot: reads whether the
+    # SealBot WR ceiling is a GENERAL strength plateau (NNUE WR >> SealBot WR)
+    # or a SealBot-SPECIFIC overfit (NNUE WR ~= or < SealBot WR despite NNUE
+    # being the weaker bot).  DEFAULT OFF so an in-run 30k stays single-variable
+    # — the NNUE read is taken standalone on the final checkpoint via
+    # `scripts/run_sealbot_eval.py --opponent nnue`.  Enable for an in-run
+    # second-opponent ladder. time_per_stone_ms mirrors SealBot think_time_strong
+    # (0.5s) so the two rungs are budget-comparable; tune to match however the
+    # operator measured NNUE's ~6% vs SealBot.
+    nnue:
+      enabled: false
+      stride: 1
+      n_games: 100
+      time_per_stone_ms: 500
+      model_sims: 128
   gating:
     promotion_winrate: 0.55
     best_model_path: checkpoints/best_model.pt

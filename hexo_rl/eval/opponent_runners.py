@@ -156,6 +156,41 @@ def _run_sealbot(ctx: _RunnerContext) -> None:
     ctx.results["eval_games"] = ctx.results.get("eval_games", 0) + n
 
 
+def _run_nnue(ctx: _RunnerContext) -> None:
+    # §P6 second ladder opponent — Hammerhead minimax+NNUE (eval-only, a LOWER
+    # rung than SealBot).  Reads whether the SealBot WR ceiling is a general
+    # strength plateau (NNUE WR ≫ SealBot WR) or a SealBot-specific overfit
+    # (NNUE WR ≈ or < SealBot WR despite NNUE being the weaker bot).  Default
+    # off; variants opt in via ``opponents.nnue.enabled: true``.  NnueBot is
+    # imported lazily inside the Evaluator so the engine never loads otherwise.
+    pipeline = ctx.pipeline
+    if not (
+        pipeline.nnue_cfg.get("enabled", False)
+        and ctx.should_run("nnue", pipeline.nnue_cfg)
+    ):
+        return
+    n = int(pipeline.nnue_cfg.get("n_games", 100))
+    ms = int(pipeline.nnue_cfg.get("time_per_stone_ms", 500))
+    sims = pipeline.nnue_cfg.get("model_sims")
+    er = ctx.evaluator.evaluate_vs_nnue(n_games=n, time_per_stone_ms=ms, model_sims=sims)
+    ci_lo, ci_hi = _binomial_ci(er.win_count, n)
+    pipeline.db.insert_match(
+        ctx.train_step, ctx.ckpt_pid, pipeline._nnue_pid,
+        er.win_count, n - er.win_count - er.draw_count, er.draw_count,
+        n, er.win_rate, ci_lo, ci_hi,
+        colony_wins_a=er.colony_wins,
+        run_id=pipeline.run_id,
+    )
+    print_match_result(
+        ctx.ckpt_name, f"Hammerhead(NNUE,t={ms}ms)",
+        er.win_count, n - er.win_count - er.draw_count, n, ci_lo, ci_hi,
+    )
+    ctx.results["wr_nnue"] = er.win_rate
+    ctx.results["ci_nnue"] = (ci_lo, ci_hi)
+    ctx.results["colony_wins_nnue"] = er.colony_wins
+    ctx.results["eval_games"] = ctx.results.get("eval_games", 0) + n
+
+
 def _run_argmax_n(ctx: _RunnerContext) -> None:
     # §170 P4 P1 DRIFT detector.  Model plays with n_sims=1 (≈ policy
     # argmax); SealBot plays at the same time_limit as the regular
@@ -344,6 +379,9 @@ OPPONENTS: list[_OpponentSpec] = [
     _OpponentSpec("argmax_n", _run_argmax_n),
     _OpponentSpec("bootstrap_anchor", _run_bootstrap_anchor),
     _OpponentSpec("best", _run_best),
+    # §P6 — appended LAST so the existing five keep their byte-for-byte
+    # insert_match row order. Default-off (no-op unless opponents.nnue.enabled).
+    _OpponentSpec("nnue", _run_nnue),
 ]
 
 

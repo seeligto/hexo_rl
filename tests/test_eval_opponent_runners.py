@@ -49,6 +49,9 @@ def test_opponents_canonical_order() -> None:
         "argmax_n",
         "bootstrap_anchor",
         "best",
+        # §P6 — Hammerhead NNUE 2nd opponent, appended LAST so the original
+        # five keep their byte-for-byte insert_match row order. Default-off.
+        "nnue",
     ]
 
 

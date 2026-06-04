@@ -123,6 +123,15 @@ class EvalPipeline:
         # for backward compat; variants opt in via ``argmax_n.enabled: true``.
         self.argmax_n_cfg = opp.get("argmax_n", {})
 
+        # §P6 second ladder opponent — Hammerhead minimax+NNUE (eval-only,
+        # vendored under vendor/bots/hammerhead).  A LOWER rung than SealBot
+        # used to read whether the SealBot WR is a general strength plateau or
+        # a SealBot-specific overfit.  Default OFF so an in-run v6_live2 30k
+        # stays single-variable (NNUE is evaluated standalone on the final
+        # checkpoint); variants opt in via ``nnue.enabled: true``.  NnueBot is
+        # imported lazily so the heavyweight engine never touches the hot path.
+        self.nnue_cfg = opp.get("nnue", {})
+
         self.gating_cfg = cfg.get("gating", {})
         # §155 T2 — bootstrap-floor gate.  When enabled, promotion requires
         # ``wr_bootstrap_anchor >= bootstrap_floor.min_winrate`` in addition
@@ -149,6 +158,7 @@ class EvalPipeline:
             ("random", self.random_cfg),
             ("bootstrap_anchor", self.bootstrap_anchor_cfg),
             ("argmax_n", self.argmax_n_cfg),
+            ("nnue", self.nnue_cfg),
         ):
             if "stride" in opp_cfg:
                 s = opp_cfg["stride"]
@@ -175,6 +185,12 @@ class EvalPipeline:
         self._argmax_n_pid = self.db.get_or_create_player(
             f"SealBot_argmax(t={argmax_tl})", "argmax_n",
             {"time_limit": argmax_tl, "model_sims": 1},
+        )
+        # §P6 — persistent player row for the Hammerhead NNUE second opponent.
+        nnue_ms = int(self.nnue_cfg.get("time_per_stone_ms", 500))
+        self._nnue_pid = self.db.get_or_create_player(
+            f"Hammerhead(NNUE, t={nnue_ms}ms)", "nnue",
+            {"time_per_stone_ms": nnue_ms},
         )
 
         # Stride gating is pure ``round_idx % stride == 0``. A prior queue-based

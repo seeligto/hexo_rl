@@ -63,6 +63,22 @@ eval_pipeline:
       enabled: true
     best_checkpoint:
       enabled: true
+    # §P6 — Hammerhead NNUE 2nd ladder opponent ACTIVE in-run (operator
+    # request). EVAL-ONLY: never touches self-play/training, so the 30k stays
+    # single-variable vs the prior v6_live2 30k — it only adds an in-run NNUE
+    # WR trajectory alongside SealBot (general-strength vs SealBot-specific read).
+    # REQUIRES hammerhead built on the run host (vast): `maturin develop
+    # --release` in vendor/bots/hammerhead/hammerhead-engine + pip install the
+    # SDK, else evaluate_vs_nnue raises when this fires. n_games=50 bounds the
+    # added per-round eval time (~half SealBot's 100); time_per_stone_ms=500
+    # matches the standalone post-run eval. The precise n=100 read is taken
+    # standalone on the final checkpoint (STEP 3).
+    nnue:
+      enabled: true
+      stride: 1
+      n_games: 50
+      time_per_stone_ms: 500
+      model_sims: 128
 
 telemetry:
   emit_outcome_distribution: true

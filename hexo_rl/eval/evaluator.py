@@ -260,6 +260,26 @@ class Evaluator:
         sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
         return self.evaluate(sealbot, n_games, sims, phase="sealbot")
 
+    def evaluate_vs_nnue(
+        self,
+        n_games: int = 100,
+        time_per_stone_ms: int = 500,
+        model_sims: int | None = None,
+        nnue: Optional[BotProtocol] = None,
+    ) -> EvalResult:
+        """Play n_games against the Hammerhead minimax+NNUE bot — the §P6
+        second ladder opponent (eval-only). Accepts the bot via DI or creates
+        a default. ``time_per_stone_ms`` is Hammerhead's per-stone search
+        budget (mirrors SealBot's think-time knob); the model plays at the
+        same ``sealbot_model_sims`` MCTS budget so the two ladder rungs are
+        directly comparable. The NnueBot import is lazy so the heavyweight
+        engine never loads on the self-play/training path."""
+        if nnue is None:
+            from hexo_rl.bots.nnue_bot import NnueBot
+            nnue = NnueBot(time_per_stone_ms=time_per_stone_ms)
+        sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
+        return self.evaluate(nnue, n_games, sims, phase="nnue")
+
     def evaluate_vs_argmax_sealbot(
         self,
         n_games: int = 20,
