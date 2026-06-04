@@ -11,8 +11,15 @@ PYTHON="${PYTHON:-python3}"
 HF_MODEL_REPO="timmyburn/hexo-bootstrap-models"
 HF_CORPUS_REPO="timmyburn/hexo-bootstrap-corpus"
 MODEL_FILE="bootstrap_model.pt"
-CORPUS_FILE="bootstrap_corpus.npz"
-# Corpus repo is public; set WITH_CORPUS=0 to skip download.
+# Corpus is now shipped as an encoding-free JSONL (raw move lists); the install
+# rebuilds the encoding-specific NPZ locally so the dataset repo stays
+# architecture-agnostic. CORPUS_ENCODING must match the bootstrap model's input
+# planes (v6_live2 = 4-plane). The output filename is NOT hardcoded — it is
+# resolved from the encoding registry (resolve_corpus_path) so install writes the
+# exact file the trainer reads and never clobbers another encoding's corpus.
+CORPUS_JSONL="hexo_human_corpus.jsonl"
+CORPUS_ENCODING="${CORPUS_ENCODING:-v6_live2}"
+# Corpus repo is public; set WITH_CORPUS=0 to skip download+build.
 WITH_CORPUS="${WITH_CORPUS:-1}"
 
 TOTAL_STEPS=10
@@ -218,15 +225,41 @@ fi
 step 9 "Downloading release artifacts from Hugging Face..."
 mkdir -p checkpoints data
 
-# Bootstrap model — public repo, no auth required.
+# Bootstrap model — repo is PRIVATE. hf_download cache-skips if the file is
+# already present (checkpoints/bootstrap_model.pt); a fresh box without auth
+# gets a 401 here (non-fatal). Provide the model out-of-band or set up HF auth
+# if you need it on a clean machine.
 if ! hf_download "$HF_MODEL_REPO" model "$MODEL_FILE" checkpoints; then
-    warn "Model download failed. Check network / HF availability."
+    warn "Model download failed (private repo / no auth / network). Provide checkpoints/$MODEL_FILE manually."
 fi
 
 # Corpus — public repo; enabled by default, disable via WITH_CORPUS=0.
+# Download the encoding-free JSONL, then rebuild the encoding-specific NPZ
+# locally (engine was built in step 8). Keeps the dataset repo architecture-free
+# and shrinks the download from ~2.5 GB to a few MB.
 if [[ "$WITH_CORPUS" == "1" ]]; then
-    if ! hf_download "$HF_CORPUS_REPO" dataset "$CORPUS_FILE" data; then
-        warn "Corpus download failed. Check network / HF availability."
+    # Resolve the exact npz path the trainer will read for this encoding
+    # (e.g. v6_live2 -> data/bootstrap_corpus_v6_live2.npz). Building to the
+    # hardcoded data/bootstrap_corpus.npz would (a) leave the v6_live2 run with no
+    # prefill and (b) overwrite the canonical 8-plane v6 corpus with 4-plane data.
+    CORPUS_NPZ_PATH="$(.venv/bin/python -c "from hexo_rl.encoding import lookup, resolve_corpus_path; print(resolve_corpus_path(lookup('$CORPUS_ENCODING')))" 2>/dev/null || true)"
+    if [[ -z "$CORPUS_NPZ_PATH" ]]; then
+        warn "Could not resolve corpus path for encoding '$CORPUS_ENCODING'; skipping corpus build."
+    elif [[ -f "$CORPUS_NPZ_PATH" ]]; then
+        ok "$(basename "$CORPUS_NPZ_PATH") [cached]"
+    elif ! hf_download "$HF_CORPUS_REPO" dataset "$CORPUS_JSONL" data; then
+        warn "Corpus JSONL download failed. Check network / HF availability."
+    else
+        echo "    Building $CORPUS_NPZ_PATH (encoding=$CORPUS_ENCODING) from $CORPUS_JSONL ..."
+        if .venv/bin/python scripts/export_corpus_npz.py \
+                --from-jsonl "data/$CORPUS_JSONL" \
+                --encoding "$CORPUS_ENCODING" \
+                --no-compress \
+                --out "$CORPUS_NPZ_PATH"; then
+            ok "$(basename "$CORPUS_NPZ_PATH") built (encoding=$CORPUS_ENCODING)"
+        else
+            warn "Corpus NPZ build failed. Jumpstart prefill will be skipped at train start."
+        fi
     fi
 else
     ok "Corpus download skipped (disabled via WITH_CORPUS=0)"

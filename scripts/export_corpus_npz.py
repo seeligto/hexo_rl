@@ -25,10 +25,19 @@ Pretrain mode (--human-only):
 
 Expected output: ~700 MB uncompressed, near-zero mmap RAM at training startup.
 
+From a portable JSONL (--from-jsonl):
+  - Builds from the encoding-free corpus JSONL (scripts/export_corpus_jsonl.py
+    output) instead of scanning the raw data/corpus/ tree. Use on a fresh
+    checkout that has the shared human JSONL but not the per-game raw JSON
+    (this is the `make install` jumpstart path). Human-only by construction;
+    any registered --encoding can be rebuilt from the same move lists.
+
 Usage:
     python scripts/export_corpus_npz.py
     python scripts/export_corpus_npz.py --max-positions 50000 --no-compress
     python scripts/export_corpus_npz.py --human-only --max-positions 200000 --no-compress
+    python scripts/export_corpus_npz.py --from-jsonl data/hexo_human_corpus.jsonl \
+        --encoding v6_live2 --no-compress --out data/bootstrap_corpus.npz
     make corpus.export
     make corpus.export.pretrain
 """
@@ -194,6 +203,57 @@ def _scan_bot_games(dir_path: Path, source: str) -> list[dict]:
     return records
 
 
+def _scan_jsonl_games(jsonl_path: Path, pretrain: bool = False) -> list[dict]:
+    """Build corpus records from a portable JSONL (scripts/export_corpus_jsonl.py).
+
+    Encoding-free input: one game per line, ``{"game_hash", "moves":[[x,y],...],
+    "winner", "source", "elo":[e1,e2]}``. Produces the same record shape as
+    :func:`_scan_human_games`, so the downstream weighting / sampling / replay is
+    identical — letting a fresh ``make install`` rebuild any encoding's NPZ from
+    the shared human corpus without the raw per-game JSON tree. Human-only.
+    """
+    records: list[dict] = []
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+                moves = [(int(x), int(y)) for x, y in d["moves"]]
+                if len(moves) < MIN_GAME_LENGTH:
+                    continue
+                winner = int(d["winner"])
+                if winner == 0:
+                    continue
+                elos = [e for e in (d.get("elo") or []) if e is not None]
+                avg_elo = sum(elos) / len(elos) if elos else None
+                n_qualifying = max(0, min(POSITION_END, len(moves)) - POSITION_START)
+                if n_qualifying == 0:
+                    continue
+                game_weight = SOURCE_WEIGHTS["human"] * _elo_band_weight(avg_elo, pretrain=pretrain)
+                if avg_elo is None:
+                    elo_band = "unrated"
+                elif avg_elo < 1000:
+                    elo_band = "sub_1000"
+                elif avg_elo < 1200:
+                    elo_band = "1000_1200"
+                elif avg_elo < 1400:
+                    elo_band = "1200_1400"
+                else:
+                    elo_band = "1400_plus"
+                records.append({
+                    "moves": moves,
+                    "winner": winner,
+                    "weight": game_weight,
+                    "game_len": len(moves),
+                    "elo_band": elo_band,
+                })
+            except Exception:
+                continue
+    return records
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Export optimized corpus NPZ for buffer prefill")
     parser.add_argument("--max-positions", type=int, default=None,
@@ -205,6 +265,11 @@ def main() -> None:
                              "data/bootstrap_corpus_v8.npz for v8)")
     parser.add_argument("--human-only", action="store_true",
                         help="Pretrain mode: human games only, Elo-weighted, saves weights array")
+    parser.add_argument("--from-jsonl", default=None,
+                        help="Build from a portable encoding-free corpus JSONL "
+                             "(scripts/export_corpus_jsonl.py output) instead of "
+                             "scanning the raw data/corpus/ tree. Human-only; used "
+                             "by the `make install` jumpstart on a fresh checkout.")
     parser.add_argument(
         "--encoding", choices=("v6", "v6tp", "v6_live2", "v6w25", "v8"), default="v6",
         help="Corpus encoding version: 'v6' (default; 8-plane × 19×19 K-cluster, "
@@ -259,23 +324,33 @@ def main() -> None:
     # ── Phase 1: scan all sources ─────────────────────────────────────────────
     print("Scanning corpus sources...")
     records: list[dict] = []
-    human = _scan_human_games(pretrain=pretrain_mode)
-    if pretrain_mode:
+    if args.from_jsonl:
+        jsonl_path = Path(args.from_jsonl)
+        if not jsonl_path.exists():
+            print(f"ERROR: --from-jsonl path not found: {jsonl_path}")
+            sys.exit(1)
+        human = _scan_jsonl_games(jsonl_path, pretrain=pretrain_mode)
         fast, strong, injected = [], [], []
-        print(f"  human-only mode (pretrain): {len(human):>6,} qualifying games")
+        print(f"  from-jsonl ({jsonl_path.name}): {len(human):>6,} qualifying human games")
     else:
-        fast = _scan_bot_games(BOT_GAMES_DIR / "sealbot_fast", "bot_fast")
-        strong = _scan_bot_games(BOT_GAMES_DIR / "sealbot_strong", "bot_strong")
-        injected = _scan_bot_games(INJECTED_DIR, "injected")
-        print(f"  human:    {len(human):>6,} games")
-        print(f"  bot_fast: {len(fast):>6,} games")
-        print(f"  bot_strong:{len(strong):>5,} games")
-        print(f"  injected: {len(injected):>6,} games")
+        human = _scan_human_games(pretrain=pretrain_mode)
+        if pretrain_mode:
+            fast, strong, injected = [], [], []
+            print(f"  human-only mode (pretrain): {len(human):>6,} qualifying games")
+        else:
+            fast = _scan_bot_games(BOT_GAMES_DIR / "sealbot_fast", "bot_fast")
+            strong = _scan_bot_games(BOT_GAMES_DIR / "sealbot_strong", "bot_strong")
+            injected = _scan_bot_games(INJECTED_DIR, "injected")
+            print(f"  human:    {len(human):>6,} games")
+            print(f"  bot_fast: {len(fast):>6,} games")
+            print(f"  bot_strong:{len(strong):>5,} games")
+            print(f"  injected: {len(injected):>6,} games")
     records = human + fast + strong + injected
     print(f"  total:    {len(records):>6,} qualifying games")
 
     if not records:
-        print("ERROR: No qualifying games found. Run 'make corpus.fetch' first.")
+        print("ERROR: No qualifying games found. Run 'make corpus.fetch' first "
+              "(or pass --from-jsonl <path>).")
         sys.exit(1)
 
     # ── Phase 2: build weighted position index ────────────────────────────────
@@ -450,7 +525,7 @@ def main() -> None:
             + N_ACTIONS_V6W25 * 4 + 4
         )
     else:
-        bytes_per_pos = 8 * 19 * 19 * 2 + 362 * 4 + 4
+        bytes_per_pos = len(kept_plane_indices) * 19 * 19 * 2 + 362 * 4 + 4
     est_ram_gb = out_idx * bytes_per_pos / (1024 ** 3)
     print(f"Saved: {out_path}")
     print(f"  Encoding  : {encoding}")
