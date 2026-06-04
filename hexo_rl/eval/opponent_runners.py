@@ -268,6 +268,9 @@ def _run_bootstrap_anchor(ctx: _RunnerContext) -> None:
             anchor_path, pipeline.device,
         )
         pipeline._bootstrap_anchor_model = anchor_model
+        # F07 — cache the anchor's TRUE encoding so the opponent ModelPlayer
+        # decodes its own planes even when it is a cross-encoding anchor.
+        pipeline._bootstrap_anchor_encoding = anchor_spec.name
         log.info(
             "bootstrap_anchor_loaded",
             path=str(anchor_path),
@@ -292,6 +295,7 @@ def _run_bootstrap_anchor(ctx: _RunnerContext) -> None:
     er = ctx.evaluator.evaluate_vs_model(
         pipeline._bootstrap_anchor_model,
         n_games=n, model_sims=sims, opponent_sims=opp_sims,
+        opponent_encoding=pipeline._bootstrap_anchor_encoding,
     )
     ci_lo, ci_hi = _binomial_ci(er.win_count, n)
     pipeline.db.insert_match(

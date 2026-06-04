@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import numpy as np
 import pytest
 import torch
@@ -103,6 +105,63 @@ def test_evaluator_uses_encoding_aware_board():
     # We can't easily run a full evaluate without a real opponent, but we can
     # verify the Evaluator stores the encoding correctly.
     assert evaluator.config.get("encoding") == "v6w25"
+
+
+def test_evaluate_vs_model_builds_opponent_with_its_own_encoding():
+    """F07: a cross-encoding opponent (a v6w25 anchor faced by a v6 current model)
+    must have its 18-plane wire tensor sliced to ITS OWN encoding.  Built with the
+    current model's config the opponent decodes v6 geometry (19/362) and its WR —
+    a promotion gate (wr_bootstrap_anchor) — is silently corrupted."""
+    device = torch.device("cpu")
+    cur_model = HexTacToeNet(
+        board_size=19, in_channels=8, filters=8, res_blocks=1, encoding="v6",
+    )
+    ev = Evaluator(
+        cur_model, device,
+        {"encoding": "v6", "evaluation": {"sealbot_model_sims": 1}},
+    )
+
+    captured: dict = {}
+
+    def _capture_evaluate(opponent, n_games, model_sims, phase="eval"):
+        captured["opp"] = opponent
+        return Mock()
+
+    ev.evaluate = _capture_evaluate  # don't play real games — capture the opponent
+
+    opp_model = HexTacToeNet(
+        board_size=25, in_channels=8, filters=8, res_blocks=1, encoding="v6",
+    )
+    ev.evaluate_vs_model(opp_model, n_games=1, opponent_encoding="v6w25")
+
+    opp = captured["opp"]
+    assert opp.board_size == 25, \
+        "opponent must use its OWN v6w25 geometry, not the current v6 model's 19"
+    assert opp.n_actions == 626
+
+
+def test_evaluate_vs_model_same_encoding_falls_back_to_self_config():
+    """F07: with no opponent_encoding (same-encoding opponent, e.g. a promoted
+    champion), the opponent is built from the evaluator's own config — unchanged
+    behaviour, no regression."""
+    device = torch.device("cpu")
+    model = HexTacToeNet(
+        board_size=19, in_channels=8, filters=8, res_blocks=1, encoding="v6",
+    )
+    ev = Evaluator(
+        model, device,
+        {"encoding": "v6", "evaluation": {"sealbot_model_sims": 1}},
+    )
+    captured: dict = {}
+
+    def _capture_evaluate(opponent, n_games, model_sims, phase="eval"):
+        captured["opp"] = opponent
+        return Mock()
+
+    ev.evaluate = _capture_evaluate
+    ev.evaluate_vs_model(model, n_games=1)  # no opponent_encoding
+    assert captured["opp"].board_size == 19
+    assert captured["opp"].n_actions == 362
 
 
 def test_board_with_encoding_name_v6w25_to_tensor_shape():

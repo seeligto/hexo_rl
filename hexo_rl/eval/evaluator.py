@@ -306,14 +306,31 @@ class Evaluator:
         n_games: int = 20,
         model_sims: int | None = None,
         opponent_sims: int | None = None,
+        opponent_encoding: str | None = None,
     ) -> EvalResult:
-        """Play n_games against another model and return EvalResult."""
+        """Play n_games against another model and return EvalResult.
+
+        ``opponent_encoding`` (the opponent's own ``spec.name``, e.g. a
+        cross-encoding ``bootstrap_anchor``'s) drives the opponent ModelPlayer's
+        input-plane slice + board geometry.  Without it (F07) the opponent's
+        18-plane wire tensor is sliced to the CURRENT model's encoding, feeding a
+        cross-encoding anchor the wrong planes and corrupting ``wr_bootstrap_anchor``
+        / ``wr_best`` — the promotion gates.  Note: derive it from the spec the
+        loader returned, NOT ``opponent_model.encoding`` — ``_build_model_from_spec``
+        stamps a hardcoded ``"v6"``/``"v8"`` there, so a v6w25 anchor mis-reports.
+        ``None`` ⇒ same encoding as this model (the same-encoding champion case).
+        """
         current_sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
         other_sims = self.sealbot_model_sims if opponent_sims is None else int(opponent_sims)
 
+        if opponent_encoding is not None:
+            opponent_config = dict(self.config)
+            opponent_config["encoding"] = _normalize_encoding_name(opponent_encoding)
+        else:
+            opponent_config = self.config
         opponent_player = ModelPlayer(
             getattr(opponent_model, "_orig_mod", opponent_model),
-            self.config, self.device, n_sims=other_sims,
+            opponent_config, self.device, n_sims=other_sims,
             temperature=self._eval_temperature,
         )
         return self.evaluate(opponent_player, n_games, current_sims, phase="best_arena")

@@ -147,6 +147,10 @@ class EvalPipeline:
         # rewritten between runs (anchor is read-only from the pipeline's
         # perspective; only the disk file matters).
         self._bootstrap_anchor_model: HexTacToeNet | None = None
+        # F07 — the anchor's TRUE encoding (spec.name from the loader), cached
+        # alongside the model so the opponent ModelPlayer slices the anchor's wire
+        # tensor to its own encoding even on cross-encoding anchors.
+        self._bootstrap_anchor_encoding: str | None = None
         self._bootstrap_anchor_pid: int | None = None
 
         # M4: fail fast on stride=0 / negative / bad strings — these would silently
