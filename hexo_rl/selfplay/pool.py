@@ -367,6 +367,9 @@ class WorkerPool:
 
         self._stop_event = threading.Event()
         self._stats_thread: Optional[threading.Thread] = None
+        # F02: set if the sole-producer feeder daemon dies on an exception.
+        # check_producer_health() re-raises it so the trainer fails fast.
+        self._producer_exc: Optional[BaseException] = None
 
         self._lock = threading.Lock()
         self.games_completed = 0
@@ -578,7 +581,36 @@ class WorkerPool:
 
     _WINNER_NAMES = ("draw", "x", "o")
 
+    def check_producer_health(self) -> None:
+        """F02: fail-fast hook the trainer calls every step.
+
+        The buffer-feeder daemon (``_stats_loop``) is the SOLE producer draining
+        Rust self-play results into the replay buffer.  If it died on an
+        exception, re-raise LOUD so training aborts instead of silently running
+        on a stale buffer.  A clean ``stop()`` (``_stop_event`` set, no
+        exception) leaves ``_producer_exc`` ``None`` — no false abort.
+        """
+        if self._producer_exc is not None:
+            raise RuntimeError(
+                "self-play buffer feeder died — training cannot continue on a "
+                "stale buffer (see selfplay_producer_died log for the cause)"
+            ) from self._producer_exc
+
     def _stats_loop(self) -> None:
+        """F02 guard wrapper — see :meth:`check_producer_health`.
+
+        The feeder is the sole producer; an unguarded raise kills the daemon
+        silently and leaves training on a stale buffer.  Catch any exception,
+        log LOUD at ``.error``, and flag producer death so the trainer fails
+        fast on its next ``step()``.
+        """
+        try:
+            self._run_stats_loop()
+        except Exception as exc:  # noqa: BLE001 — sole-producer watchdog
+            self._producer_exc = exc
+            log.error("selfplay_producer_died", exc_info=True)
+
+    def _run_stats_loop(self) -> None:
         # §173 A8' — reshape NN-input tensors using trunk_size (per-cluster
         # window), not board_size (canvas). For single-window encodings the
         # two coincide; under multi-window the buffer holds per-cluster rows.

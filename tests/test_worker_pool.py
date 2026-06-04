@@ -307,3 +307,40 @@ def test_set_radius_override_default() -> None:
     called — workers use the encoding default (§176 P21 — default path)."""
     _, mock_runner = _make_pool()
     mock_runner.set_radius_override.assert_not_called()
+
+
+def test_stats_loop_guards_feeder_failure_and_flags_producer_dead() -> None:
+    """F02: a raise inside the buffer-feeder loop must be caught + logged + recorded
+    as producer death, NOT propagate.  An unguarded raise kills the sole-producer
+    daemon silently, leaving training to run on a stale buffer with no error."""
+    pool, mock_runner = _make_pool()
+    mock_runner.collect_data.side_effect = RuntimeError("collect_data boom")
+    # Synchronous one-shot: the while-body runs once; the guard must catch the
+    # raise, so _stats_loop returns instead of propagating (silent daemon death).
+    pool._stats_loop()
+    # The trainer's health hook re-raises LOUD, preserving the original cause.
+    with pytest.raises(RuntimeError, match="self-play buffer feeder died") as ei:
+        pool.check_producer_health()
+    assert isinstance(ei.value.__cause__, RuntimeError)
+    assert "collect_data boom" in str(ei.value.__cause__)
+
+
+def test_stats_loop_healthy_pool_reports_no_producer_death() -> None:
+    """F02: a normally-stopped feeder (no exception) must NOT trip the health
+    check — check_producer_health is a no-op when the producer never raised."""
+    pool, mock_runner = _make_pool()
+    empty = np.empty((0,), dtype=np.float32)
+
+    def _one_clean_pass(*_a, **_k):
+        # Run exactly one iteration (n == 0 fast-path), then request stop.
+        pool._stop_event.set()
+        return (empty,) * 10
+
+    mock_runner.collect_data.side_effect = _one_clean_pass
+    mock_runner.games_completed = 0
+    mock_runner.x_wins = 0
+    mock_runner.o_wins = 0
+    mock_runner.draws = 0
+    mock_runner.drain_game_results.return_value = []
+    pool._stats_loop()
+    pool.check_producer_health()  # must not raise

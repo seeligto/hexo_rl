@@ -81,6 +81,7 @@ class WorkerPoolLike(Protocol):
     def per_worker_draw_rates(self) -> dict[int, float]: ...
     def current_stride5_p90(self) -> int: ...
     def set_radius_override(self, radius: int | None) -> None: ...
+    def check_producer_health(self) -> None: ...
 
 
 @runtime_checkable
@@ -483,6 +484,11 @@ class StepCoordinator:
         iter-limit / shutdown-save / hard-GN / soft-EW.
         """
         cfg = self.config
+
+        # F02 fail-fast: the self-play buffer feeder is the sole producer; if it
+        # died on an exception, abort loudly NOW rather than spin in warmup-wait
+        # or train on a stale buffer.  No-op when the feeder is healthy.
+        self.pool.check_producer_health()
 
         # §S181-AUDIT Wave 3 Stage 2A — force-trigger sentinel (s179c §1.4).
         # Operator drops /tmp/hexo_rl_force_bot_refresh to bypass the interval

@@ -786,3 +786,17 @@ def test_flush_drains_inflight_final_boundary_eval():
         e.get("event") == "eval_complete" and e.get("step") == 1 for e in emitted
     ), "final-boundary eval result was dropped (flush did not join the in-flight eval)"
     assert coord._eval_thread is None, "in-flight eval thread not joined/consumed"
+
+
+def test_step_aborts_loudly_when_selfplay_producer_dead() -> None:
+    """F02: a dead self-play buffer feeder must fail-fast.  step() polls pool
+    health every iteration and re-raises loudly instead of silently continuing
+    to train on a stale buffer."""
+    pool = _make_pool(games_completed=5)
+    pool.check_producer_health = Mock(
+        side_effect=RuntimeError("self-play buffer feeder died")
+    )
+    coord = _make_coordinator(pool=pool)
+    with pytest.raises(RuntimeError, match="self-play buffer feeder died"):
+        coord.step()
+    pool.check_producer_health.assert_called()
