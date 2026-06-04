@@ -4579,3 +4579,249 @@ max=4, 0 games ≥60; ONLY pre-radius-5 (obsolete §146) + cosine-temp full-conj
 (R10-R14 p90 86-133, cosine OFF in prod L9) exceed it → **0 false positives on any
 radius-5 run.** colony_ext left as telemetry (annotated non-enforced in 10 configs).
 Default-on, ≤0 disables. Not in any hot path (called once per eval-interval ≥2500).
+
+## §P6 — v6_live2 flatness re-measure + Hammerhead NNUE 2nd opponent — 2026-06-01
+
+Dispatcher for the post-fix flatness verdict. The 3 correctness fixes (DRAW-MASK
+value-target mask on ply-capped rows, CF-5 `aux_opp_reply_weight: 0.0`, CF-6
+no-bug) are already landed (`3291ebe`); this is the wire→run→eval→verdict layer.
+Report + pre-registered verdict: `reports/investigations/v6_live2_flatness_30k_20260601.md`.
+
+**STEP 0 (recorded, NOT changed):** `v6_live2` **k_max=1 (single-cluster)**. The
+§169 K-cluster min/max 12pp-argmax lead lives in the separate v6w25/v7mw k_max=8
+line, never ported. This is **line-divergence / parsimony, NOT a silent
+regression** — the v6→v6tp→v6_live2 production lineage was always k_max=1; the
+H-PLANE fix touched only the plane set. The prior 40%-greedy baseline shares
+k_max=1, so the flatness delta is uncontaminated. K-cluster restore = a separate
+single-variable arm w/ its own matched baseline, flagged for the rethink session.
+
+**STEP 1 DONE — Hammerhead NNUE wired as eval-only 2nd opponent.** Vendored
+`vendor/bots/hammerhead` (submodule of github.com/seeligto/hammerhead) + root
+`Cargo.toml` `workspace.exclude`; built into `.venv` (maturin release). The
+engine `Bot` is stateful/incremental-from-origin (hard `MustStartAtOrigin`, no
+set-position API) and hexo_rl keeps no ordered history → `NnueBot(BotProtocol)`
+**diff-syncs** the board each move + applies one **translation** to the origin.
+Correctness rests on translation-invariance (Hammerhead's static search depends
+only on occupied-set + side-to-move, not replay order) so the exact opening is
+irrelevant; ranges compatible (hh `max_piece_distance=8` ≥ r5; suggests within
+r2 ≤ r5). Reused the SealBot path (no bespoke): `Evaluator.evaluate_vs_nnue`,
+`opponent_runners._run_nnue` (appended LAST → byte-for-byte insert order),
+`EvalRoundResult.wr_nnue`, `eval_pipeline` cfg/pid, `configs/eval.yaml`
+`opponents.nnue` (**default OFF** — keeps the in-run 30k single-variable),
+`run_sealbot_eval.py --opponent {sealbot,nnue}`. **Zero hot-path touch** (no
+bench), pinned by `test_nnue_eval_path_only.py`. TDD `test_nnue_bot.py` 11/11
+green (incremental + cold-start sync == board, non-origin opening, full game,
+auto-reset; caught a real premature-origin-lock bug). End-to-end smoke on the
+real baseline 30k checkpoint PASS. **Second-opponent interpretation:** general
+strength → HeXO_vs_NNUE ≫ HeXO_vs_SealBot; SealBot-overfit → ≈/< despite NNUE
+being weaker.
+
+**STEP 2 launch-ready (operator/vast ~13hr):** `train.py --checkpoint
+checkpoints/bootstrap_model_v6_live2.pt --variant v6_live2_smoke --iterations
+30000`. Single variable vs the prior 30k = the 3 fixes only (verified config
+delta; cosine OFF L9; stride5_p90 + grad-norm + SealBot-WR hard-aborts live).
+
+**STEP 3/4 pending the run:** eval the post-fix 30k dual-opponent × dual-temp
+(SealBot/NNUE, T=0/T=0.5, n=100, mcts-128) → pre-registered flatness bins
+(BUGS-WERE-IT / TUNING-NEEDED / REGRESSION) vs baseline greedy 40% / sampled
+~0.20 / ~2× gap. Canary = spam (stride5); V_spread DEMOTED. Not committed
+(operator-gated).
+
+**Local NNUE baseline matches (2026-06-01, operator request, mcts-128 T=0 n=20,
+NNUE 500ms):** bootstrap v6_live2 **70%** [48,86] (14/6); pre-fix 30k **80%**
+[58,92] (16/4) — both ~2× their SealBot WR (34% / 40%) ⇒ **general-strength
+direction** (NNUE a genuine lower rung); wiring validated end-to-end.
+
+**Post-fix 30k smoke RUNNING on vast (RTX 5080, 2026-06-01), NNUE ON in-run
+(n=50).** Launched once on the laptop by mistake (operator: smoke belongs on
+vast) → killed. vast was on pre-Phase-6 `a604804` (no DRAW-MASK engine, no NNUE)
+→ rsync'd source, `make build` rebuilt engine WITH DRAW-MASK (cargo-PATH gotcha
+[[feedback_vast_bench_scripting]] hit + fixed), built hammerhead for in-run NNUE,
+verified engine+nnue import. §149 buffer trap pre-cleaned (archived stale
+buffer+ckpts). Confirmed clean: encoding v6_live2, buffer_size_before_corpus_load
+=0, step 20 healthy (loss 3.07, grad_norm 1.26), no early_game_probe_failed,
+no abort. tmux `v6l2`, log `/tmp/v6l2_smoke.log`. ~13hr est; 1hr health-watch
+running.
+
+**Probe fix — early_game_probe for the 4-plane model (resolver, no hardcode).**
+The in-run probe failed `expected 4 channels, got 8`: a stale version-matched
+8-plane `early_game_probe_v6_live2_v1.npz` loaded blindly (the BUILDER was
+encoding-aware, the LOADER had no channel check). Fixed TDD: `load_fixture`
+validates the loaded plane count against `resolve_arch(encoding_name).in_channels`
+and regenerates a stale fixture; `compute()` gained a model-channel guard.
+On-disk fixture auto-healed 8→4. Probe-only (never affected training/verdict);
+`tests/test_early_game_probe_encoding.py` +2.
+
+**VERDICT (2026-06-02) — run completed 30k on vast (exit 134 = benign teardown
+abort post-save; model safe). Bin = TUNING-NEEDED + GENERAL strength.**
+- T=0 greedy n=100 standalone: **SealBot 0.32** [0.24,0.42] vs baseline greedy
+  **0.40** (within noise, NOT improved); **NNUE 0.77** [0.68,0.84]. In-run sampled
+  (5–25k): SealBot 0.10/0.25/0.18/0.15/0.18, NNUE 0.30/0.56/0.54/0.64/0.50.
+- **Flatness PERSISTS** (greedy/sampled ≈ 1.8×, the 2× gap survives) → NOT
+  BUGS-WERE-IT. Threat/value-head probe healthy + climbing across ckpts
+  (C1 3.81→4.88→5.35→5.47, all C1–C3 PASS) ⇒ DRAW-MASK/CF-5 fixed the VALUE side;
+  residual is **policy-side flatness, genuine**. Next lever per memo = **O1
+  forced-win one-hot POLICY target** (rethink session). Not a regression (within
+  baseline noise, spam clean, no promotion any round).
+- **Second-opponent RESOLVED = GENERAL strength** (not SealBot-specific overfit):
+  HeXO vs NNUE 0.77 ≫ vs SealBot 0.32, and NNUE is the weaker bot ⇒ the SealBot
+  ceiling is a real general strength gap. KrakenBot blocker closed via NNUE.
+- **NNUE wrapper cold-start bug** (the `(2,-10)` OutOfRange that crashed the first
+  NNUE T0 eval) fixed: within-range replay filter + full-reset retry + legal
+  fallback; resilience test added; re-run clean (4/5000 fallback moves).
+
+**Parallelization (operator asked; DECIDED — not implemented):** in-run eval is
+already async daemon-thread + skip-if-busy, so slow eval never blocks training;
+**leave it sequential** — parallelizing it contends for the GPU (eval MCTS shares
+the GPU-forward-bound selfplay path) = breaks training. Standalone
+`run_sealbot_eval.py` is safely parallelizable (`--jobs N` subprocess-sharding,
+each shard the proven sequential path, deterministic merge) — biggest payoff is
+STEP-3 4×n=100 on vast; deferred (GPU busy with the 30k smoke, can't verify
+locally). Future item; design captured in the report.
+
+## §O1 — flatness diagnostics (D1-D4) + forced-win one-hot POLICY target — 2026-06-02
+
+Report: `reports/investigations/diagnostics_o1_20260602.md`. Resolved the open
+§P6 flatness diagnostics on the post-fix v6_live2 30k (vast run `f8aaf414`,
+artifacts pulled to `/tmp/hexo_postfix/`), then implemented O1 gated on D1.
+
+**Diagnostics (CPU, read-only on the existing run):**
+- **D1 = HEALTHY** (gate for O1). Value loss = binary CE on scalar win-prob
+  (`losses.py:75-102`, floor log(2)=0.693). Stratified by plies-to-terminal on
+  371 real-terminal games: 0-4 bucket **0.271** ≪ floor (mean logit +1.0),
+  5-12 0.519, 13-30 0.690, 31+ 0.762; overall 0.684 dragged to floor by genuinely
+  uncertain deep-early positions. Value head reads near-won positions → bottleneck
+  is policy. Independent re-bucket reviewer AGREED (exact match).
+- **D2 = NATURAL-LENGTH dominant (70.3%).** 38/128 caps weak-conversion (depth-1
+  missed win / open-5), 90/128 natural-length — but 67/90 carry unconverted open-4
+  (2-move-win) pressure (only 23 truly balanced). O1 depth-2 reaches the open-4
+  subset; residual length = cap-height (arch session). Spot-trace: model walked
+  past a completed-6 win ~40 plies.
+- **D3 = ALREADY-RECENTERED → SKIP.** Window = bbox centroid recomputed every
+  `apply_move` (`core.rs:345-351,480-494`); first-move-(0,0) pin is a no-op; NOT a
+  flatness lever.
+- **D4 = soft-but-HEALTHY.** disagreement flat ~0.68 (lagging, not collapsed),
+  early-game entropy ~3.15 stable, losses falling (value best 0.42), aux null
+  (CF-5 confirmed), grad ~1.08. One self-corrected V_spread transient (s15-22k
+  negative → +0.349, §S181 signature, didn't propagate).
+
+Working theory CONFIRMED (soft policy → indecisive finishing → value parks at
+log(2) as genuine uncertainty, one mechanism) → lever = policy sharpening (O1),
+NOT value-head reroute.
+
+**O1 LANDED (uncommitted working tree, NOT pushed):** `Board::forced_win_move`
+(depth-1 + depth-2, turn-phase via `moves_remaining`, NOT ply parity) +
+`first_winning_move` (`moves.rs`); `apply_forced_win_one_hot` (`records.rs`)
+overrides the training policy target to a (near-)one-hot at the proven winning
+move; the hardened row is forced full-search so PCR's `full_search_mask` can't drop
+it. Config `forced_win_policy_{enabled,depth,weight}` as `#[pyo3(get,set)]`
+(default OFF/2/1.0 — INV19/25/26 byte-equivalence untouched) → `pool.py` ←
+`configs/selfplay.yaml`. INV pin `inv_o1_forced_win_one_hot_wiring.rs`
+(source-presence) + behavioral unit tests + Python prune-survival test. **305 Rust
++ 4 Python tests green**; soundness reviewed **5/5, no silent drop** (one
+latent-unreachable fast-game branch documented). Downstream survival proven at
+every stage (aggregate/rotate/augment/prune/loss). Default-OFF = byte-identical.
+
+**Stage C:** `configs/eval.yaml` `eval_profiles` (cheap n=50/10k SealBot-only +
+milestone n=200/20k dual-opponent dual-temp) — config-only, declarative, base
+defaults unchanged, wiring flagged for arch session. k_max NOT changed.
+
+**Bench gate (vast 5080, n=5, make bench):** baseline MCTS 112,135 sim/s (≫73k) /
+worker 96,043 pos/hr / all PASS; post-O1 (default OFF) — see report (no hot-path
+touch: O1 fires once per move at target extraction, not per-sim).
+
+**NOT done this batch:** O1 validation smoke (next GPU run, pre-registered: O1 ON
+must narrow greedy/sampled gap 1.8×→~1.3× on a matched 30k). Handoff →
+claude.ai arch-finalization session (O1 ready; cap-height; K-cluster restore;
+eval_profiles wiring).
+
+## §PRELONG — pre-long-run triage (T1-T3 → window-WIDEN arm) — 2026-06-04
+
+Report: `reports/investigations/prelong_triage_2026-06-04.md`. Separated the causes
+the "flatness" frame conflated after the O1 smoke dissolved the 1.8× premise.
+Local artifacts (vast 30k gone); the perception geometry is encoding-invariant so the
+local **pre-fix** v6_live2 checkpoints answer the routing question. Scripts in
+`scripts/structural_diagnosis/prelong_triage_*.py`.
+
+- **Mechanism (proven):** v6_live2 = `k_max=1` single 19×19 window. A win cell at
+  chebyshev > 9 from the bbox-centroid centre → `to_flat=usize::MAX` → **no policy
+  logit** (362=19×19+pass, prior 0) AND truncated out of the MCTS child array on
+  spread boards (`backup.rs` MAX_CHILDREN 192) → **genuinely unreachable**.
+- **T1 = DECISIVE GAME** (qualitative). SealBot self-play (global eval) misses **0/69**
+  forced wins, caps low at the 150 cap where HeXO caps ~12% (noise-free) / 25.7% (run).
+  *Red-team caught* the SealBot leg was deterministic/seed-blind (n=120→~9 lines, gap
+  not significant); re-run with random openings (27 shapes, cap ~5%) restores it.
+  Human corpus is six-in-a-row-filtered ⇒ length only (median 49), not draw rate.
+- **T2 (keystone) = OFF-WINDOW.** Trained 30k (157 misses): **94.9% off-window**
+  (independent re-derive 94.6%), lift **2.02×**, 97% on ≥2-cluster boards, far-cheb
+  median 11; model takes **every in-window immediate win** (0/18 in-window depth-1);
+  off-window fraction **training-invariant** (bootstrap 97%→30k 95%). All depth-2 =
+  within-turn open/closed-4→6 (operator note); detector verified genuine (turn-phase
+  guard, real check_win, dedup).
+- **T3 = FLAT/structural** (cap 14.7/13.3/12.2% n=90, statistically flat); off-window
+  fraction flat-high → the residual is the wall, not training horizon. Off-window is
+  the dominant **miss** mode but a **minority cap** cause (24% of caps had no
+  forced-miss; 64% of forced-miss games won).
+- **ROUTING (post-red-team):** the binding lever is window **RADIUS, not count** —
+  every off-window cell is cheb ≤ 11, so a **23×23 single-window WIDEN covers 100%**
+  (width oracle: 19×19=5%, 23×23=100%). Stand up a **window-widen arm (primary) vs
+  K-cluster (comparator)** BEFORE the 300k — NOT K-cluster-first (it failed 3× per
+  §174 + doesn't fix single-cluster off-window misses + v8-25×25 argmax-dilution).
+  Do NOT go-long-blind on `k_max=1`. O1 stays banked (P4; ~5% in-window depth-2 only).
+- **Adversarial review:** 10-agent workflow (4 lenses CONFIRM mechanism, 3 red-team
+  attacks LANDED → routing corrected not buried, 2 stat-gap agents → ranked
+  next-diagnostics incl. multi-window value oracle, off-window-DEFENSE on losses,
+  value-calibration-at-cap). Verbatim: reports/investigations/prelong_triage_data/verify_results.json.
+- **Process fixes (working tree, NOT committed):** P1 eval-profile opening-plies pin
+  (kills the greedy@4-vs-sampled@0 artifact class) + P2 cadence (`configs/eval.yaml`);
+  P3 V_spread canary CORE met (T3 bank fires on v6_live2, `t3_spread=0.528`; alt-bank
+  4-plane rebuild deferred); P4 O1 shelved+armed comment (`configs/selfplay.yaml`);
+  P5 `--no-web-dashboard` flag (`train.py`/`lifecycle.py`, kills exit-134 teardown).
+  Owed (operator): commit the hammerhead/NNUE stack; CONFIG-3.
+
+## §PRELONG-CLOSE — v6_live2 + cleanup milestone committed, FF-merged, tagged — 2026-06-04
+
+Closed the v6_live2-adopt + cleanup milestone: the §PRELONG process fixes + the
+Hammerhead/NNUE eval stack are committed on `phase4.5/v6_live2`, FF-merged to
+`master`, and tagged. This is the clean base for the perception arm — which is
+**NOT** started here (no 23×23 / window-widen / K-cluster code lands in this
+milestone; routing call deferred to the arch-finalization session per §PRELONG).
+
+**Owed-work commit wave (5 commits, each its own concern):**
+
+| commit | what |
+|---|---|
+| `65d6b30` feat(eval) | Hammerhead minimax+NNUE 2nd ladder opponent — submodule `vendor/bots/hammerhead`, Cargo `workspace.exclude`, `NnueBot` + eval wiring (`evaluator`/`opponent_runners`/`eval_pipeline`/`result_types`), `run_sealbot_eval.py --opponent {sealbot,nnue}`, `eval.yaml`/`v6_live2_smoke` cfg. **Eval-path only** (grep-pinned `test_nnue_eval_path_only.py`); zero hot-path touch → no bench gate. |
+| `fa4850c` feat(eval) | P1/P2 canonical prolonged-run `eval_profiles` (cheap/milestone) — opening-plies pinned IDENTICALLY across temps (kills the greedy@4-vs-sampled@0 O1-smoke artifact class) + 12.5k cadence. Config-only (SoT); selection hook deferred. |
+| `0c7474a` docs(selfplay) | P4 O1 forced-win policy = SHELVED + ARMED comment (value unchanged, stays `false`); reactive lever IFF the long-run V_spread excursion fails to self-correct at 200-300k. |
+| `10922b6` feat(train) | P5 `--no-web-dashboard` — suppress only the Flask-SocketIO dashboard (kills the benign exit-134 SIGABRT teardown), keep the terminal dashboard. + gate test. |
+| `c7ca6ef` fix(monitoring) | early_game_probe 8→4-plane auto-heal (resolver-derived `in_channels`, regenerate stale fixture) + compute() channel-mismatch skip + canonical v6_live2/v7full fixtures. The v6_live2-adoption monitoring fix. |
+
+**P3 V_spread canary = NO-OP here.** The core T3-bank fix already landed on
+`master` (`321b136`, unmodified in the working tree). Alt-bank 4-plane rebuild
+stays DEFERRED (operator follow-up; the T3 bank alone arms the long-run canary).
+
+**Verification (pre-merge gate):**
+- `make test` GREEN — **1768 passed, 54 skipped, 1 xpassed, 0 failed** (Rust +
+  Python). The v6w25-roundtrip PYTHONHASHSEED flake did not fire (clean run).
+- `make bench` n=5 laptop (`n_workers=14`) — **all 10 targets PASS**. MCTS (CPU,
+  no NN) median **89,891 sim/s** (range 86.9k-90.5k, IQR ±1,109) ≫ ≥73,000 floor;
+  flat vs the §S183 baseline 88,006 → O1 (default-OFF) + B1 cold-path = no
+  regression, as expected (neither touches the hot path).
+- Fresh-context review: O1 `forced_win_policy_enabled: false` in the merged
+  config; hammerhead referenced only on the eval path; no perception-arm/23×23
+  leak in the owed commits.
+
+**Merge + tag:** FF-merge `phase4.5/v6_live2` → `master`; tag
+**`v6_live2-adopt-close`** at the last CODE commit `c7ca6ef` (not this
+docs/sprint-log commit, per archive-tag convention). Pushed `master` + tag.
+
+**Left uncommitted (out of scope — investigation/perception-arm tooling,
+NOT this milestone):** `scripts/structural_diagnosis/*` (§PRELONG triage
+probes), `investigation/`, `docs/compression/`, `scripts/{export_selfplay_games,
+generate_demo_replays,transfer_v6_to_v6w25,update_manifest}.py`,
+`scripts/s174_bootstrap_fix_run.sh`. The §PRELONG triage report itself is
+gitignored under `reports/`.
+
+**Next:** the perception arm (23×23 single-window WIDEN primary vs K-cluster
+comparator) on this clean `master`, per the §PRELONG routing — separate chapter.
