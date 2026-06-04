@@ -106,3 +106,50 @@ eval_pipeline:
   eval_temperature: 0.5
   eval_random_opening_plies: 0  # §174: was 4 — inflated WR by giving free positional advantage
   eval_seed_base: 42
+
+  # §P6→O1→PRELONG — prolonged-run eval-cost cadence profiles. CONFIG-ONLY /
+  # declarative: values live here (SoT), no literals in source. The prolonged-run
+  # variant selects a profile by overriding the keys it names (eval_interval, the
+  # `opponents.*.{enabled,stride,n_games}`, eval_temperature, random_opening_plies);
+  # the eval pipeline is NOT yet wired to read `eval_profiles` directly — that
+  # 1-line selection hook is flagged for the arch-finalization session (do NOT
+  # infer these are active on the base config; base behaviour above is unchanged).
+  #
+  # P1 (PRELONG canonical-eval-profile FIX, 2026-06-04): each profile pins ONE
+  # `random_opening_plies` applied IDENTICALLY across every temperature in
+  # `temperatures`. This is the FIX for the O1-smoke artifact class, NOT just a
+  # cost knob: the "1.8× soft-policy gap" was greedy@plies-4 vs sampled@plies-0
+  # (mismatched opening-plies across temps), which dissolved to 1.28× under
+  # matched measurement (v6_live2_o1_smoke_result_2026-06-04.md). NEVER compare
+  # WR across mismatched opening-plies. The standalone gate
+  # (`scripts/run_sealbot_eval.py`) MUST pass `--random-opening-plies` equal to
+  # the active profile's value so in-run and standalone reads are commensurable.
+  # Canonical value = 0 (§174: plies-4 inflated WR via free positional advantage;
+  # base `eval_random_opening_plies: 0` matches).
+  #
+  # Intent: cut eval wall-cost on the long run — a cheap SealBot-only greedy
+  # monitor most rounds, a full dual-opponent dual-temp read at milestones.
+  # The abort gates (grad-norm, stride5 spam, SealBot-WR) live in
+  # monitors.yaml / the eval pipeline and fire independently of which profile is
+  # active — note only that the SealBot-WR abort is *evaluated* at the active
+  # profile's cadence (every 10-15k under `cheap`, vs 2500 base).
+  #
+  # P2 (PRELONG long-run cadence): `cheap` interval raised to the operator's
+  # 10-15k band; the n=50/n=100 SealBot-WR is a NOISY trend monitor (Wilson95
+  # half-width ~14pp at n=50 / ~10pp at n=100) — too wide to STEER a 300k run.
+  # Steer on the SMOOTH metrics instead (internal-elo, policy/value loss,
+  # draw-rate-vs-intrinsic ~0-2% SealBot floor); demote SealBot-WR to the
+  # periodic stringent `milestone` CHECK.
+  eval_profiles:
+    cheap:                      # frequent low-cost in-run monitor (P2 steering = smooth metrics, NOT this WR)
+      eval_interval: 12500      # every 12.5k steps — operator 10-15k band (5× base 2500)
+      opponents: [sealbot]      # SealBot only (drops best_checkpoint/anchor/nnue/random)
+      n_games: 50               # Wilson95 half-width ~14pp — a NOISY trend monitor, not a gate/steer
+      temperatures: [0.0]       # single temp (greedy)
+      random_opening_plies: 0   # P1: pinned; applies to ALL temps above (§174 canonical)
+    milestone:                  # periodic thorough read (the stringent SealBot-WR CHECK)
+      eval_interval: 25000      # every 25k steps
+      opponents: [sealbot, nnue]
+      n_games: 200              # Wilson95 half-width ~7pp
+      temperatures: [0.0, 0.5]  # both temps — exposes the greedy/sampled gap (matched opening-plies)
+      random_opening_plies: 0   # P1: pinned; SAME value for BOTH temps (kills the 1.8× artifact class)
