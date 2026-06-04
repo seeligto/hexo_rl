@@ -859,3 +859,46 @@ def test_eval_thread_crash_is_loud_and_flagged_not_silent() -> None:
     assert any(e.get("event") == "eval_broken" for e in emitted), \
         "broken eval must surface a distinct event, not masquerade as 'no promotion'"
     assert coord.eval_broken is True
+
+
+# ── WIRE: forced-win trend (§EVALGATE-B detector) emitted at eval boundary ────
+
+def test_forced_win_trend_emitted_at_eval_boundary_single_window(tmp_path) -> None:
+    """WIRE: at each eval boundary the coordinator replays the recorded
+    GameRecorder jsonl through the offline forced-win detector and emits a
+    SINGLE-WINDOW-labelled trend via structlog — in the main loop (not the eval
+    daemon, so a broken eval can't suppress it) and dashboard-independent."""
+    replay = tmp_path / "games_2026-06-04.jsonl"
+    replay.write_text("", encoding="utf-8")  # empty -> trend n=0, still emits
+
+    eval_pipeline = Mock()
+    eval_pipeline.run_evaluation = Mock(return_value={"promoted": False, "step": 1})
+
+    with patch("hexo_rl.training.step_coordinator._emit_axis_distribution", return_value=None), \
+         patch("hexo_rl.training.step_coordinator._emit_training_events", return_value=None), \
+         patch("hexo_rl.training.step_coordinator._try_save_buffer", return_value=None):
+        pool = _make_pool(games_completed=1)
+        pool.latest_replay_path = Mock(return_value=replay)
+        coord = _make_coordinator(
+            pool=pool,
+            eval_pipeline=eval_pipeline,
+            full_config={"monitors": {}, "encoding": "v6"},
+            config_overrides={"eval_interval": 1, "max_train_burst": 1, "stop_step": 3},
+        )
+        logger = Mock()
+        coord._logger = logger
+        for _ in range(5):
+            if not coord.shutdown.running:
+                break
+            coord.pool.games_completed += 1
+            coord.step()
+            if coord._eval_thread is not None:
+                coord._eval_thread.join(timeout=2.0)
+
+    fw_calls = [
+        c for c in logger.info.call_args_list
+        if c.args and c.args[0] == "forced_win_trend"
+    ]
+    assert fw_calls, "forced-win trend not emitted at eval boundary"
+    assert fw_calls[0].kwargs.get("path") == "single-window", \
+        "trend must label the single-window (A0) action path"

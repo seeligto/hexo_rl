@@ -92,6 +92,17 @@ class GameRecorder:
         # determined at record time, not at write time — keeps the background thread simple.
         self._queue.put((str(self._current_path()), json.dumps(record)))
 
+    def latest_replay_path(self) -> Optional[Path]:
+        """Most recent ``games_*.jsonl`` on disk, or ``None`` if recording is off
+        or nothing has been written yet.  Used by the offline forced-win trend
+        readout (§EVALGATE-B); reuses this recorder's own ``output_dir`` so the
+        path default is not duplicated.
+        """
+        if not self._enabled:
+            return None
+        files = sorted(self._output_dir.glob("games_*.jsonl"))
+        return files[-1] if files else None
+
     def stop(self) -> None:
         """Flush pending writes and stop the background thread."""
         if self._thread is not None:

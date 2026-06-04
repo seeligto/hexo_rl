@@ -82,6 +82,7 @@ class WorkerPoolLike(Protocol):
     def current_stride5_p90(self) -> int: ...
     def set_radius_override(self, radius: int | None) -> None: ...
     def check_producer_health(self) -> None: ...
+    def latest_replay_path(self) -> Any: ...
 
 
 @runtime_checkable
@@ -418,6 +419,40 @@ class StepCoordinator:
         the next clean eval.  Lets monitoring distinguish a broken promotion gate
         from a healthy gate that simply did not promote."""
         return self._eval_broken
+
+    def _emit_forced_win_trend(self) -> None:
+        """WIRE (§EVALGATE-B): offline forced-win trend over recorded self-play.
+
+        Replays the latest ``GameRecorder`` jsonl through the shared detector
+        (no NN, no MCTS — zero hot-path), labels it ``single-window`` (A0), and
+        emits the smoothed EMA via ``structlog`` (survives ``--no-web-dashboard``;
+        the web dashboard is only a renderer).  Best-effort — an advisory readout
+        must never break the eval boundary, so any failure is logged, not raised.
+        """
+        full_cfg = self.full_config if isinstance(self.full_config, dict) else {}
+        cfg = full_cfg.get("forced_win_trend", {}) or {}
+        if not cfg.get("enabled", True):
+            return
+        try:
+            path = self.pool.latest_replay_path()
+            if path is None or not Path(str(path)).is_file():
+                return  # nothing recorded yet — no advisory to emit
+            from hexo_rl.diagnostics.forced_win_detector import (
+                analyze_replay_file,
+                emit_forced_win_trend,
+            )
+            from hexo_rl.encoding import normalize_encoding_name
+            trend = analyze_replay_file(
+                path,
+                encoding=normalize_encoding_name(full_cfg.get("encoding")),
+                mover_side=int(cfg.get("mover_side", 0)),
+                smoothing=float(cfg.get("smoothing", 0.2)),
+                path="single-window",  # A0: self-play / in-loop-gate / deploy path
+                max_plies=cfg.get("max_plies"),
+            )
+            emit_forced_win_trend(trend, logger=self._logger)
+        except Exception:
+            self._logger.warning("forced_win_trend_failed", exc_info=True)
 
     @property
     def ew_history(self) -> tuple[float, ...]:
@@ -858,6 +893,13 @@ class StepCoordinator:
                             })
                             self.shutdown.running = False
                             hard_abort_fired = True
+
+                # WIRE (§EVALGATE-B): offline forced-win trend over recorded
+                # self-play games, emitted at eval cadence in the MAIN loop (NOT
+                # the eval daemon — so a broken eval thread can't suppress it,
+                # which is why this lands after F03).  Single-window path (A0);
+                # structlog so it survives --no-web-dashboard.
+                self._emit_forced_win_trend()
 
                 # §S181-AUDIT Wave 3 Stage 2A — bot-corpus refresh hook (active).
                 # When ``cfg.bot_corpus_refresh_enabled`` is False the hook is

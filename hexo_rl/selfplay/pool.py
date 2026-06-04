@@ -15,6 +15,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -578,6 +579,14 @@ class WorkerPool:
     def update_checkpoint_step(self, step: int) -> None:
         """Forward the current training step to the game recorder."""
         self._recorder.set_step(step)
+
+    def latest_replay_path(self) -> Optional[Path]:
+        """Most recent recorded self-play ``games_*.jsonl`` (or ``None``).
+
+        Delegates to the :class:`GameRecorder`; consumed by the offline
+        forced-win trend readout at the eval boundary (§EVALGATE-B).
+        """
+        return self._recorder.latest_replay_path()
 
     _WINNER_NAMES = ("draw", "x", "o")
 
