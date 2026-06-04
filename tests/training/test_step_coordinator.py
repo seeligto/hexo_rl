@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from hexo_rl.training.step_coordinator import (
+    DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC,
     StepCoordinator,
     StepCoordinatorConfig,
 )
@@ -729,3 +730,59 @@ def test_flush_pending_eval_swallows_exception(patch_orchestrator_helpers):
     patch_orchestrator_helpers["drain"].side_effect = RuntimeError("boom")
     # Should not raise
     coord.flush_pending_eval()
+
+
+# ── §EVALGATE-A: final-boundary eval must be drained, not silently dropped ───
+
+def test_flush_drains_inflight_final_boundary_eval():
+    """The eval at the FINAL step boundary is kicked off as a daemon thread and is
+    drained only at the NEXT boundary.  When the run stops at that boundary
+    (``stop_step``), there is no next boundary, so ``flush_pending_eval`` is the only
+    chance to consume it — but ``drain_pending_eval`` no-ops on a still-running thread
+    (``eval_drain.py``), so flush must JOIN the in-flight eval first.  With the buggy
+    default (``final_eval_drain_timeout_sec=0.0``, set in no config) the join was
+    skipped and the final eval was silently lost.  The production default must join,
+    so the final eval's result is consumed + surfaced (``eval_complete``).
+
+    No web dashboard is wired here (== ``--no-web-dashboard``): the eval fires + drains
+    independent of the dashboard.
+    """
+    started = threading.Event()
+
+    def _run_evaluation(model, step, best, full_config=None, best_model_step=None):
+        started.set()
+        time.sleep(0.2)  # still mid-eval at the immediate post-loop flush
+        return {"promoted": False, "step": int(step), "wr_sealbot": 0.3, "eval_games": 10}
+
+    eval_pipeline = Mock()
+    eval_pipeline.run_evaluation = Mock(side_effect=_run_evaluation)
+
+    emitted: list[dict[str, Any]] = []
+    with patch("hexo_rl.training.step_coordinator._emit_axis_distribution", return_value=None), \
+         patch("hexo_rl.training.step_coordinator._emit_training_events", return_value=None), \
+         patch("hexo_rl.training.step_coordinator._try_save_buffer", return_value=None), \
+         patch("hexo_rl.training.eval_drain.emit_event", side_effect=emitted.append):
+        coord = _make_coordinator(
+            eval_pipeline=eval_pipeline,
+            iterations=1,
+            config_overrides={
+                "eval_interval": 1,
+                "max_train_burst": 1,
+                "stop_step": 1,
+                "final_eval_drain_timeout_sec": DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC,
+            },
+        )
+        # step 1 crosses the boundary and kicks off the eval; step 2 hits the
+        # iteration-limit gate (O2) and stops the run.
+        for _ in range(5):
+            if not coord.shutdown.running:
+                break
+            coord.step()
+        assert started.wait(timeout=3.0), "final-boundary eval never kicked off"
+        # eval thread is mid-eval here — the final-boundary case the bug drops.
+        coord.flush_pending_eval()
+
+    assert any(
+        e.get("event") == "eval_complete" and e.get("step") == 1 for e in emitted
+    ), "final-boundary eval result was dropped (flush did not join the in-flight eval)"
+    assert coord._eval_thread is None, "in-flight eval thread not joined/consumed"

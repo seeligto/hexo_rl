@@ -145,6 +145,17 @@ class RealTracemalloc:
 
 # ── Config dataclass ─────────────────────────────────────────────────────────
 
+# Default wall-clock cap for joining the final in-flight eval at shutdown
+# (`flush_pending_eval`).  The scheduled eval is double-buffered — kicked off at
+# boundary N, drained at N+1 — so when a run stops AT a boundary (`stop_step` ==
+# a multiple of `eval_interval`) the final eval has no next boundary to drain it.
+# A positive default makes `flush_pending_eval` JOIN that daemon eval so its
+# result (and any promotion) is consumed instead of dropped when the process
+# tears down.  Scoped large (one full eval wall-clock); shutdown is already
+# terminal so the wait is acceptable.
+DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC: float = 900.0
+
+
 @dataclass(frozen=True)
 class StepCoordinatorConfig:
     eval_interval: int

@@ -215,7 +215,11 @@ def run_training_loop(
     _stride5_p90_consec    = int(_mon_cfg.get("hard_abort_stride5_p90_consec", 3))
 
     # ── StepCoordinatorConfig ────────────────────────────────────────────────
-    from hexo_rl.training.step_coordinator import StepCoordinator, StepCoordinatorConfig
+    from hexo_rl.training.step_coordinator import (
+        DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC,
+        StepCoordinator,
+        StepCoordinatorConfig,
+    )
     _step_cfg = StepCoordinatorConfig(
         eval_interval=eval_interval,
         log_interval=log_interval,
@@ -243,7 +247,8 @@ def run_training_loop(
         stop_step=stop_step,
         final_eval_drain_timeout_sec=float(
             train_cfg.get("eval_final_drain_timeout_sec",
-                          config.get("eval_final_drain_timeout_sec", 0.0))
+                          config.get("eval_final_drain_timeout_sec",
+                                     DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC))
         ),
         # §178 — bot-corpus slot share + refresh hook (DISABLED-by-default;
         # Wave 3 variant flips `enabled: true`).
