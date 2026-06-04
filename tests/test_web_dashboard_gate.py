@@ -120,3 +120,62 @@ class TestColdStartViewerUsesBestModelPath:
 
         assert len(captured_paths) == 1
         assert captured_paths[0] is None, "checkpoint_path=None when best_model.pt absent"
+
+
+class TestNoWebDashboardFlagGate:
+    """--no-web-dashboard suppresses ONLY the Flask-SocketIO web dashboard,
+    keeping the terminal dashboard. Prolonged-run hygiene: the web-socket
+    teardown raised a benign exit-134 (SIGABRT) after the final checkpoint
+    saved, masking the real exit code on the 200-300k run."""
+
+    @staticmethod
+    def _build(no_web_dashboard: bool, tmp_path):
+        import argparse
+
+        import torch
+
+        from hexo_rl.training import lifecycle
+
+        config = {
+            "monitoring": {
+                "enabled": True,
+                "terminal_dashboard": True,
+                "web_dashboard": True,
+            }
+        }
+        args = argparse.Namespace(
+            no_dashboard=False,
+            no_web_dashboard=no_web_dashboard,
+            checkpoint_dir=str(tmp_path),
+            log_dir=str(tmp_path),
+        )
+        # Mock every side-effecting subsystem so only the dashboard gate runs.
+        with patch.object(lifecycle, "GPUMonitor", MagicMock()), \
+             patch.object(lifecycle, "DiskGuard", MagicMock()), \
+             patch.object(lifecycle, "EarlyGameProbe", MagicMock()), \
+             patch.object(lifecycle, "register_renderer", MagicMock()), \
+             patch.object(lifecycle, "register_jsonl_sink", MagicMock()), \
+             patch("hexo_rl.monitoring.metrics_writer.MetricsWriter", MagicMock()), \
+             patch("hexo_rl.monitoring.terminal_dashboard.TerminalDashboard") as TD, \
+             patch("hexo_rl.monitoring.web_dashboard.WebDashboard") as WD:
+            lifecycle.build_subsystems(args, config, torch.device("cpu"), "run_test")
+        return TD, WD
+
+    def test_web_dashboard_suppressed_when_flag_set(self, tmp_path):
+        TD, WD = self._build(no_web_dashboard=True, tmp_path=tmp_path)
+        assert WD.call_count == 0, "--no-web-dashboard must suppress the web dashboard"
+        assert TD.call_count == 1, "terminal dashboard must stay up"
+
+    def test_web_dashboard_built_when_flag_absent(self, tmp_path):
+        TD, WD = self._build(no_web_dashboard=False, tmp_path=tmp_path)
+        assert WD.call_count == 1, "web dashboard built when flag not set (config web_dashboard: true)"
+        assert TD.call_count == 1
+
+
+def test_train_argparser_exposes_no_web_dashboard():
+    """The --no-web-dashboard flag exists and defaults False (web dashboard on)."""
+    from scripts.train import build_argparser
+
+    parser = build_argparser()  # full parser; peek_only=True omits run-time flags
+    assert parser.parse_args([]).no_web_dashboard is False
+    assert parser.parse_args(["--no-web-dashboard"]).no_web_dashboard is True

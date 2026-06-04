@@ -101,6 +101,12 @@ def build_argparser(*, peek_only: bool = False) -> argparse.ArgumentParser:
     )
     p.add_argument("--no-dashboard", action="store_true",
                    help="Disable live dashboard renderers (useful in CI or non-interactive mode)")
+    p.add_argument("--no-web-dashboard", action="store_true",
+                   help="Disable ONLY the Flask-SocketIO web dashboard, keep the terminal "
+                        "dashboard. Prolonged-run hygiene: the web-socket teardown raised "
+                        "exit-134 (SIGABRT) AFTER the final checkpoint saved on the O1 + "
+                        "post-fix 30k runs (benign, but masks the real exit code). "
+                        "Use for the 200-300k run.")
     p.add_argument("--no-compile", action="store_true",
                    help="Disable torch.compile (useful for debugging)")
     p.add_argument("--min-buffer-size", type=int, default=None,

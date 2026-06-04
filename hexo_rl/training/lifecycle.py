@@ -303,7 +303,7 @@ def build_subsystems(
             td.start()
             register_renderer(td)
             dashboards.append(td)
-        if mon_cfg.get("web_dashboard", True):
+        if mon_cfg.get("web_dashboard", True) and not getattr(args, "no_web_dashboard", False):
             from hexo_rl.monitoring.web_dashboard import WebDashboard
             wd = WebDashboard(config)
             wd.start()
