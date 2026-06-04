@@ -23,9 +23,12 @@ import tracemalloc
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
 import structlog
+
+if TYPE_CHECKING:
+    from hexo_rl.diagnostics.forced_win_detector import ForcedWinTrend
 
 from hexo_rl.eval.result_types import EvalRoundResult
 from hexo_rl.monitoring.alert_rules import check_sealbot_wr_hard_abort
@@ -365,6 +368,15 @@ class StepCoordinator:
         # eval (which silently disables ALL promotions) is never mistaken for a
         # routine "ran, no promotion".
         self._eval_broken = False
+        # WIRE (§EVALGATE-B) incremental-replay state.  The eval-boundary forced-win
+        # trend reads only games appended since the previous boundary (O(new), not
+        # O(whole jsonl)) so the readout cannot creep on the MAIN thread across 300k.
+        # ``_fw_trend`` persists the EMA between boundaries; reset together with the
+        # offset when ``latest_replay_path`` rotates (UTC-daily), which keeps the EMA
+        # numerically identical to a from-scratch replay of the active file.
+        self._fw_trend: "ForcedWinTrend | None" = None
+        self._fw_replay_path: str | None = None
+        self._fw_replay_offset: int = 0
         self._eval_result: list[dict[str, Any] | None] = [None]
         self._ew_history = deque(maxlen=max(config.soft_ew_min_pts, 1))
         self.last_train_game_count = pool.games_completed
@@ -428,6 +440,13 @@ class StepCoordinator:
         emits the smoothed EMA via ``structlog`` (survives ``--no-web-dashboard``;
         the web dashboard is only a renderer).  Best-effort — an advisory readout
         must never break the eval boundary, so any failure is logged, not raised.
+
+        Incremental (nit #2): only the records appended since the previous boundary
+        are folded into a persistent EMA (``_fw_trend``).  Per-boundary cost is
+        O(new), not O(whole jsonl) — so the MAIN-thread readout cannot creep as the
+        file grows across 300k.  On daily rotation (``latest_replay_path`` returns a
+        new file) the trend + offset reset, which keeps the EMA numerically identical
+        to the prior from-scratch replay of the active file.
         """
         full_cfg = self.full_config if isinstance(self.full_config, dict) else {}
         cfg = full_cfg.get("forced_win_trend", {}) or {}
@@ -437,20 +456,32 @@ class StepCoordinator:
             path = self.pool.latest_replay_path()
             if path is None or not Path(str(path)).is_file():
                 return  # nothing recorded yet — no advisory to emit
+            path_str = str(path)
             from hexo_rl.diagnostics.forced_win_detector import (
-                analyze_replay_file,
+                ForcedWinTrend,
                 emit_forced_win_trend,
+                update_trend_from_file_incremental,
             )
             from hexo_rl.encoding import normalize_encoding_name
-            trend = analyze_replay_file(
-                path,
+            # (Re)initialise on first call OR when the daily file rotated: a new file
+            # starts at offset 0 with a fresh EMA (matches the old whole-file replay,
+            # which only ever read the active file), and never re-reads the old one.
+            if self._fw_trend is None or self._fw_replay_path != path_str:
+                self._fw_trend = ForcedWinTrend(
+                    path="single-window",  # A0: self-play / in-loop-gate / deploy path
+                    smoothing=float(cfg.get("smoothing", 0.2)),
+                )
+                self._fw_replay_offset = 0
+                self._fw_replay_path = path_str
+            self._fw_replay_offset = update_trend_from_file_incremental(
+                self._fw_trend,
+                path_str,
+                self._fw_replay_offset,
                 encoding=normalize_encoding_name(full_cfg.get("encoding")),
                 mover_side=int(cfg.get("mover_side", 0)),
-                smoothing=float(cfg.get("smoothing", 0.2)),
-                path="single-window",  # A0: self-play / in-loop-gate / deploy path
                 max_plies=cfg.get("max_plies"),
             )
-            emit_forced_win_trend(trend, logger=self._logger)
+            emit_forced_win_trend(self._fw_trend, logger=self._logger)
         except Exception:
             self._logger.warning("forced_win_trend_failed", exc_info=True)
 

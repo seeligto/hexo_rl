@@ -158,3 +158,135 @@ def test_analyze_replay_file_aggregates_trend(tmp_path):
     assert snap["path"] == "single-window"
     assert snap["n"] == 1
     assert snap["forced_win_conversion"] == 1.0
+
+
+# ── incremental replay (nit #2: O(new), not O(whole jsonl), per eval boundary) ─
+
+def _rec(game, outcome="x_win"):
+    import json
+    return json.dumps({
+        "moves": game, "outcome": outcome,
+        "game_length": len(game), "checkpoint_step": 1,
+    })
+
+
+_SHORT = [(0, 0), (0, 1), (1, 0)]  # no forced win
+
+
+def test_incremental_equals_full_replay_across_two_boundaries(tmp_path):
+    """Accumulating the EMA over two incremental boundaries == one from-scratch
+    replay of the whole file (the fold is deterministic and in file order)."""
+    p = tmp_path / "games_2026-06-04.jsonl"
+    win = _winning_game_moves()
+    lines = [_rec(win), _rec(_SHORT, "draw"), _rec(win),
+             _rec(win), _rec(_SHORT, "draw"), _rec(win)]
+
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines[:3]) + "\n")
+    trend = fw.ForcedWinTrend(path="single-window", smoothing=0.3)
+    off = fw.update_trend_from_file_incremental(
+        trend, p, 0, encoding="v6_live2", mover_side=1)
+    assert off == p.stat().st_size            # consumed exactly to EOF
+
+    with open(p, "a", encoding="utf-8") as f:  # second boundary: append the rest
+        f.write("\n".join(lines[3:]) + "\n")
+    off = fw.update_trend_from_file_incremental(
+        trend, p, off, encoding="v6_live2", mover_side=1)
+    assert off == p.stat().st_size
+
+    full = fw.analyze_replay_file(
+        p, encoding="v6_live2", mover_side=1, smoothing=0.3, path="single-window")
+    assert trend.n == full.n
+    assert trend.snapshot() == full.snapshot()  # byte-identical EMA
+
+
+def test_incremental_only_reads_new_bytes(tmp_path):
+    """A second call from the prior offset over an unchanged file is a pure no-op."""
+    p = tmp_path / "games_2026-06-04.jsonl"
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(_rec(_winning_game_moves()) + "\n")
+    trend = fw.ForcedWinTrend(path="single-window", smoothing=0.5)
+    off = fw.update_trend_from_file_incremental(
+        trend, p, 0, encoding="v6_live2", mover_side=1)
+    assert trend.n == 1
+    snap_after_first = trend.snapshot()
+    off2 = fw.update_trend_from_file_incremental(
+        trend, p, off, encoding="v6_live2", mover_side=1)
+    assert off2 == off
+    assert trend.n == 1                        # nothing re-counted
+    assert trend.snapshot() == snap_after_first
+
+
+def test_incremental_leaves_partial_final_line_for_next_call(tmp_path):
+    """A trailing line still being flushed (no newline) is not consumed; the next
+    call picks it up once the newline lands — no double-count, no skip."""
+    p = tmp_path / "games_2026-06-04.jsonl"
+    win = _rec(_winning_game_moves())
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(win + "\n")                    # complete
+        f.write(win)                           # partial — mid-flush, no "\n"
+    trend = fw.ForcedWinTrend(path="single-window", smoothing=0.5)
+    off = fw.update_trend_from_file_incremental(
+        trend, p, 0, encoding="v6_live2", mover_side=1)
+    assert trend.n == 1                        # only the complete record
+    assert off == len(win.encode()) + 1        # offset sits before the partial line
+
+    with open(p, "a", encoding="utf-8") as f:  # writer finishes the line
+        f.write("\n")
+    off = fw.update_trend_from_file_incremental(
+        trend, p, off, encoding="v6_live2", mover_side=1)
+    assert trend.n == 2                        # now the second record lands
+    assert off == p.stat().st_size
+
+
+def test_incremental_offset_past_eof_is_noop(tmp_path):
+    p = tmp_path / "games_2026-06-04.jsonl"
+    p.write_text(_rec(_winning_game_moves()) + "\n")
+    size = p.stat().st_size
+    trend = fw.ForcedWinTrend(path="single-window", smoothing=0.5)
+    off = fw.update_trend_from_file_incremental(
+        trend, p, size, encoding="v6_live2", mover_side=1)
+    assert off == size
+    assert trend.n == 0
+
+
+def test_incremental_missing_file_is_noop(tmp_path):
+    trend = fw.ForcedWinTrend(path="single-window", smoothing=0.5)
+    off = fw.update_trend_from_file_incremental(
+        trend, tmp_path / "nope.jsonl", 0, encoding="v6_live2", mover_side=1)
+    assert off == 0
+    assert trend.n == 0
+
+
+def test_emit_forced_win_trend_resets_on_daily_rotation(tmp_path):
+    """The eval-boundary caller resets the EMA + offset when the daily file rotates,
+    so day-2 reads only day-2's games (matches the old whole-active-file replay) and
+    never re-reads day-1 — the red-team rotation/restart guard."""
+    from types import SimpleNamespace
+    from hexo_rl.training.step_coordinator import StepCoordinator
+
+    day1 = tmp_path / "games_2026-06-04.jsonl"
+    day1.write_text(_rec(_winning_game_moves()) + "\n")
+    pool = SimpleNamespace(p=day1)
+    pool.latest_replay_path = lambda: pool.p  # type: ignore[attr-defined]
+    logger = SimpleNamespace(
+        info=lambda *a, **k: None, warning=lambda *a, **k: None)
+    coord = SimpleNamespace(
+        full_config={"encoding": "v6_live2",
+                     "forced_win_trend": {"smoothing": 0.5, "mover_side": 1}},
+        pool=pool, _logger=logger,
+        _fw_trend=None, _fw_replay_path=None, _fw_replay_offset=0,
+    )
+
+    StepCoordinator._emit_forced_win_trend(coord)
+    assert coord._fw_replay_path == str(day1)
+    assert coord._fw_trend.n == 1
+    first_trend = coord._fw_trend
+
+    day2 = tmp_path / "games_2026-06-05.jsonl"   # UTC-daily rotation
+    day2.write_text(_rec(_winning_game_moves()) + "\n")
+    pool.p = day2
+    StepCoordinator._emit_forced_win_trend(coord)
+    assert coord._fw_replay_path == str(day2)
+    assert coord._fw_trend is not first_trend    # fresh EMA on rotation
+    assert coord._fw_trend.n == 1                 # only day-2's record, not 2

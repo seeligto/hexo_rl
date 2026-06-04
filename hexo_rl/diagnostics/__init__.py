@@ -8,6 +8,7 @@ from hexo_rl.diagnostics.forced_win_detector import (
     analyze_recorded_game,
     analyze_replay_file,
     emit_forced_win_trend,
+    update_trend_from_file_incremental,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "analyze_recorded_game",
     "analyze_replay_file",
     "emit_forced_win_trend",
+    "update_trend_from_file_incremental",
 ]

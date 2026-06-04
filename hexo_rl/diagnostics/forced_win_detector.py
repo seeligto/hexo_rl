@@ -351,6 +351,59 @@ def emit_forced_win_trend(trend: ForcedWinTrend, *, logger: Any = None) -> None:
     log.info("forced_win_trend", **trend.snapshot())
 
 
+def update_trend_from_file_incremental(
+    trend: ForcedWinTrend,
+    jsonl_path: Path | str,
+    start_offset: int,
+    *,
+    encoding: str,
+    mover_side: int,
+    max_plies: Optional[int] = None,
+) -> int:
+    """Feed only records appended at/after ``start_offset`` into ``trend`` in place;
+    return the new byte offset (end of the last COMPLETE line consumed).
+
+    Incremental replay for the eval-boundary readout: across a 300k run the active
+    ``GameRecorder`` ``games_*.jsonl`` grows unboundedly, so a from-scratch
+    ``analyze_replay_file`` every boundary is O(whole file) on the MAIN training
+    thread.  Reading only the bytes appended since the previous boundary makes the
+    per-boundary cost O(new); and — because the daily files are append-only and
+    newline-terminated — the accumulated EMA is numerically identical to a
+    from-scratch replay over the same record sequence (``update`` is a deterministic
+    left-fold in file order).
+
+    A trailing partial line (a game still being flushed by the concurrent
+    ``GameRecorder`` writer thread) is left unconsumed: the returned offset points at
+    its start, so the next call re-reads it once the newline lands.  ``start_offset``
+    at/past EOF, or a missing file, is a no-op returning ``start_offset`` unchanged.
+    """
+    p = Path(jsonl_path)
+    try:
+        size = p.stat().st_size
+    except OSError:
+        return start_offset
+    if start_offset >= size:
+        return start_offset
+    end_offset = start_offset
+    with open(p, "rb") as f:
+        f.seek(start_offset)
+        for raw in f:                      # binary mode splits on b"\n" only
+            if not raw.endswith(b"\n"):
+                break                      # partial final line — leave for next call
+            end_offset += len(raw)         # byte-exact: only complete lines counted
+            line = raw.strip()
+            if not line:
+                continue
+            rec = json.loads(line.decode("utf-8"))
+            summary = analyze_recorded_game(
+                rec["moves"], rec.get("outcome", ""),
+                encoding=encoding, mover_side=mover_side, path=trend.path,
+                max_plies=max_plies,
+            )
+            trend.update(summary)
+    return end_offset
+
+
 def analyze_replay_file(
     jsonl_path: Path | str,
     *,
@@ -360,22 +413,16 @@ def analyze_replay_file(
     path: str = "single-window",
     max_plies: Optional[int] = None,
 ) -> ForcedWinTrend:
-    """Read a ``GameRecorder`` jsonl (``games_*.jsonl``) and return the EMA trend.
+    """Read a ``GameRecorder`` jsonl (``games_*.jsonl``) whole and return the EMA trend.
 
     One record per line: ``{"moves": [[q,r],...], "outcome": ..., ...}``.  Offline —
-    safe to run from the eval pipeline, a periodic hook, or an operator CLI; touches
-    no hot path.
+    safe to run from a periodic hook or an operator CLI; touches no hot path.  Delegates
+    to ``update_trend_from_file_incremental`` from offset 0 (one source of the replay
+    loop); the eval boundary uses the incremental form directly to stay O(new).
     """
     trend = ForcedWinTrend(path=path, smoothing=smoothing)
-    with open(jsonl_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            rec = json.loads(line)
-            summary = analyze_recorded_game(
-                rec["moves"], rec.get("outcome", ""),
-                encoding=encoding, mover_side=mover_side, path=path, max_plies=max_plies,
-            )
-            trend.update(summary)
+    update_trend_from_file_incremental(
+        trend, jsonl_path, 0,
+        encoding=encoding, mover_side=mover_side, max_plies=max_plies,
+    )
     return trend
