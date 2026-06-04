@@ -255,7 +255,9 @@ def prune_checkpoints(
         (step, p) for step, p in candidates
         if not _is_preserved(step)
     ]
-    to_delete = rolling[:-max_kept] if len(rolling) > max_kept else []
+    # F05: ``rolling[:-max_kept]`` is ``rolling[:0] == []`` at max_kept=0 (the
+    # ``[:-0]`` gotcha) — which would keep EVERYTHING.  max_kept<1 ⇒ keep none.
+    to_delete = rolling[:-max_kept] if max_kept > 0 else rolling
     for _, p in to_delete:
         try:
             p.unlink()

@@ -38,6 +38,28 @@ def test_keep_last_n_only(tmp_path: Path):
     assert remaining == {3500, 4000, 4500, 5000, 5500}
 
 
+def test_max_kept_zero_deletes_all_rolling(tmp_path: Path):
+    """F05: max_kept=0 must keep NONE of the rolling checkpoints.
+
+    The ``rolling[:-max_kept]`` slice degenerates to ``rolling[:-0] == rolling[:0]
+    == []`` at max_kept=0, so the buggy code deleted nothing — the OPPOSITE of the
+    'keep N most recent' contract (N=0 ⇒ keep none)."""
+    _make_ckpts(tmp_path, list(range(500, 3000, 500)))  # 5 checkpoints
+    prune_checkpoints(tmp_path, max_kept=0)
+    assert _extant_steps(tmp_path) == set(), \
+        "max_kept=0 must delete every rolling checkpoint (the [:-0] gotcha)"
+
+
+def test_max_kept_zero_still_preserves_anchors(tmp_path: Path):
+    """F05: max_kept=0 deletes all ROLLING checkpoints but preserved (anchor /
+    predicate) steps still survive."""
+    steps = list(range(500, 5500, 500))  # 500..5000, 10 checkpoints
+    _make_ckpts(tmp_path, steps)
+    prune_checkpoints(tmp_path, max_kept=0, anchor_every_steps=2000)
+    assert _extant_steps(tmp_path) == {2000, 4000}, \
+        "max_kept=0 must keep only preserved anchors, delete all rolling"
+
+
 def test_anchor_every_steps_preserved(tmp_path: Path):
     """Steps at anchor_every_steps multiples survive beyond max_kept."""
     # Steps 500..10000 at 500-step intervals = 20 checkpoints.
