@@ -67,6 +67,7 @@ def _section_registered(report: AuditReport) -> None:
             "policy_logits",
             "multi_window",
             "schema_v",
+            "anchor_mode",
         ),
     )
     try:
@@ -85,6 +86,7 @@ def _section_registered(report: AuditReport) -> None:
                 str(s.policy_logit_count),
                 str(s.is_multi_window),
                 str(s.schema_version),
+                str(s.action_anchor_mode),
             ]
         )
     report.add_finding("info", "§1", f"{len(specs)} encoding(s) registered")

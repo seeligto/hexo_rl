@@ -130,7 +130,7 @@ fn parse_int_or_none(v: Option<&Value>) -> Result<Option<usize>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::spec::{PolicyPool, ValuePool};
+    use super::super::spec::{ActionAnchorMode, PolicyPool, ValuePool};
 
     #[test]
     fn test_registry_loads_v6() {
@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(s.value_pool, ValuePool::None);
         assert_eq!(s.policy_pool, PolicyPool::None);
         assert_eq!(s.sym_table_id, "size_19");
-        assert_eq!(s.schema_version, 3);
+        assert_eq!(s.schema_version, 4);
     }
 
     #[test]
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(s.policy_logit_count, 362);
         assert!(!s.is_multi_window);
         assert!(s.has_pass_slot);
-        assert_eq!(s.schema_version, 3);
+        assert_eq!(s.schema_version, 4);
     }
 
     #[test]
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(s.policy_logit_count, 362);
         assert!(!s.is_multi_window);
         assert!(s.has_pass_slot);
-        assert_eq!(s.schema_version, 3);
+        assert_eq!(s.schema_version, 4);
     }
 
     #[test]
@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn test_registry_loads_all_known_encodings() {
         let names: Vec<&str> = all_specs().map(|s| s.name).collect();
-        for expected in ["v6", "v6tp", "v6_live2", "v6w25", "v7full", "v7", "v7e30", "v7mw", "v8", "v8_canvas_realness"] {
+        for expected in ["v6", "v6tp", "v6_live2", "v6_live2_anchored", "v6w25", "v7full", "v7", "v7e30", "v7mw", "v8", "v8_canvas_realness"] {
             assert!(
                 names.contains(&expected),
                 "missing {:?} in {:?}",
@@ -238,8 +238,8 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            10,
-            "expected exactly 10 encodings, got {:?}",
+            11,
+            "expected exactly 11 encodings, got {:?}",
             names
         );
     }
@@ -294,9 +294,10 @@ mod tests {
     }
 
     #[test]
-    fn test_all_specs_includes_all_10() {
+    fn test_all_specs_includes_all_11() {
+        // 10 shipped encodings + v6_live2_anchored (§PRELONG-2A comparator).
         let count = all_specs().count();
-        assert_eq!(count, 10);
+        assert_eq!(count, 11);
     }
 
     #[test]
@@ -320,5 +321,37 @@ mod tests {
     #[should_panic(expected = "unknown encoding")]
     fn test_lookup_or_panic_unknown_panics() {
         let _ = lookup_or_panic("not_a_real_encoding");
+    }
+
+    // ── §PRELONG-2A: action_anchor_mode window-anchor field (schema v4) ──────
+
+    #[test]
+    fn v6_live2_anchored_uses_mover_threat() {
+        // New comparator entry: v6_live2 architecture (frozen weights load
+        // unchanged) + the mover-threat action-window centering mode.
+        let s = lookup_or_panic("v6_live2_anchored");
+        assert_eq!(s.action_anchor_mode, ActionAnchorMode::MoverThreat);
+        assert_eq!(s.board_size, 19);
+        assert_eq!(s.trunk_size, 19);
+        assert_eq!(s.n_planes, 4);
+        assert_eq!(s.kept_plane_indices, &[0usize, 8, 16, 17]);
+        assert_eq!(s.policy_logit_count, 362);
+        assert!(s.has_pass_slot);
+        assert!(!s.is_multi_window);
+        assert_eq!(s.sym_table_id, "size_19");
+        assert_eq!(s.schema_version, 4);
+    }
+
+    #[test]
+    fn legacy_encodings_default_global_bbox() {
+        // Every shipped encoding keeps the legacy bbox-midpoint action window
+        // (byte-identical centering for existing checkpoints).
+        for name in ["v6", "v7full", "v6w25", "v6_live2", "v8"] {
+            assert_eq!(
+                lookup_or_panic(name).action_anchor_mode,
+                ActionAnchorMode::GlobalBbox,
+                "encoding {name} must default to global_bbox",
+            );
+        }
     }
 }

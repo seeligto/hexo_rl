@@ -75,6 +75,14 @@ impl PyRegistrySpec {
     /// single-window encodings. Read by `hexo_rl/selfplay/pool.py` when
     /// computing the `InferenceBatcher.pool_size` auto-derive heuristic.
     #[getter] pub fn k_max(&self) -> u32 { self.inner.k_max }
+    /// §PRELONG-2A — action-window centering mode, exposed as a string
+    /// ("global_bbox" | "mover_threat") matching the registry.toml sentinel.
+    #[getter] pub fn action_anchor_mode(&self) -> &'static str {
+        match self.inner.action_anchor_mode {
+            crate::encoding::ActionAnchorMode::GlobalBbox => "global_bbox",
+            crate::encoding::ActionAnchorMode::MoverThreat => "mover_threat",
+        }
+    }
 
     /// Alias for `policy_logit_count` — matches the retired Python @dataclass
     /// `n_actions` @property (Wave 8 Batch A FF.2 parity).

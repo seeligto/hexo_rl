@@ -130,6 +130,7 @@ _CORPUS_PATHS: dict[str, str] = {
     "v6":                 "data/bootstrap_corpus.npz",
     "v6tp":               "data/bootstrap_corpus_v6tp.npz",  # §P5-CT CF-2 (10-plane, incl. 16/17)
     "v6_live2":           "data/bootstrap_corpus_v6_live2.npz",  # §P5-CT H-PLANE fix (4-plane [0,8,16,17])
+    "v6_live2_anchored":  "data/bootstrap_corpus_v6_live2.npz",  # §PRELONG-2A — shares v6_live2 corpus (eval-only; re-pretrain would mint its own)
     "v6w25":              "data/bootstrap_corpus_v6w25.npz",
     "v7full":             "data/bootstrap_corpus.npz",   # shared with v6 (§150)
     "v7mw":               "data/bootstrap_corpus.npz",   # shared with v6/v7full (§176a)
@@ -141,6 +142,7 @@ _ANCHOR_PATHS: dict[str, str] = {
     "v6":                 "checkpoints/bootstrap_model_v6.pt",
     "v6tp":               "checkpoints/bootstrap_model_v6tp.pt",  # §P5-CT CF-2 self-anchor
     "v6_live2":           "checkpoints/bootstrap_model_v6_live2.pt",  # §P5-CT H-PLANE fix self-anchor
+    "v6_live2_anchored":  "checkpoints/bootstrap_model_v6_live2.pt",  # §PRELONG-2A — frozen v6_live2 weights load unchanged
     "v6w25":              "checkpoints/bootstrap_model_v6w25.pt",
     "v7full":             "checkpoints/bootstrap_model_v7full.pt",
     "v7mw":               "checkpoints/bootstrap_model_v7full.pt",   # v7full anchor (same arch §176a)

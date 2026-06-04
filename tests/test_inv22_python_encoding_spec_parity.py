@@ -56,6 +56,7 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "kept_plane_indices",
     "n_source_planes",
     "k_max",
+    "action_anchor_mode",
 )
 _REQUIRED_DERIVED: tuple[str, ...] = (
     "n_actions",

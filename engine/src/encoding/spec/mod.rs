@@ -26,6 +26,20 @@ pub enum PolicyPool {
     ScatterMean,
 }
 
+/// Action-window centering mode (§PRELONG-2A). Selects where the SINGLE
+/// global action window (`Board::window_center`) is anchored.
+///
+/// `GlobalBbox`  — legacy stone-bbox midpoint; every shipped encoding uses
+///                 this, so existing checkpoints keep byte-identical centering.
+/// `MoverThreat` — anchor on the current mover's most-advanced open run so an
+///                 off-bbox-midpoint forced win stays inside the 19×19 action
+///                 window (D1 verdict V1; frozen-weights — no tensor change).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ActionAnchorMode {
+    GlobalBbox,
+    MoverThreat,
+}
+
 impl ValuePool {
     pub fn parse(s: &str) -> Result<Self, String> {
         match s {
@@ -58,6 +72,18 @@ impl PolicyPool {
 
     pub fn is_some(&self) -> bool {
         !matches!(self, PolicyPool::None)
+    }
+}
+
+impl ActionAnchorMode {
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "global_bbox" => Ok(ActionAnchorMode::GlobalBbox),
+            "mover_threat" => Ok(ActionAnchorMode::MoverThreat),
+            other => Err(format!(
+                "action_anchor_mode must be one of [global_bbox,mover_threat]; got {other:?}"
+            )),
+        }
     }
 }
 
@@ -114,6 +140,13 @@ pub struct RegistrySpec {
     /// `InferenceBatcher.pool_size` default when the caller omits an
     /// explicit kwarg. NOT a hard runtime cap on `get_cluster_views()`.
     pub k_max: u32,
+
+    // ── §PRELONG-2A (schema v4) addition ─────────────────────────────────
+    /// Action-window centering mode. `GlobalBbox` (legacy bbox-midpoint) for
+    /// every shipped encoding; `MoverThreat` re-anchors the single global
+    /// action window on the mover's active threat (D1 verdict V1). Read by
+    /// `Board::window_center` via the mode scalar cached at construction.
+    pub action_anchor_mode: ActionAnchorMode,
 }
 
 impl RegistrySpec {
@@ -292,6 +325,7 @@ mod tests {
             kept_plane_indices: &[0, 1, 2, 3, 8, 9, 10, 11],
             n_source_planes: 18,
             k_max: 1,
+            action_anchor_mode: ActionAnchorMode::GlobalBbox,
         }
     }
 
@@ -315,6 +349,32 @@ mod tests {
         // policy_logit_count still 362, but expected = 361
         let err = s.validate().unwrap_err();
         assert!(err.contains("policy_logit_count"));
+    }
+
+    #[test]
+    fn validate_rejects_mover_threat_on_multi_window() {
+        // §PRELONG-2A: mover_threat re-anchors the SINGLE global action window;
+        // it is undefined for multi-window action aggregation → rejected.
+        let mut s = ok_v6();
+        s.action_anchor_mode = ActionAnchorMode::MoverThreat;
+        s.is_multi_window = true;
+        s.cluster_window_size = Some(19);
+        s.cluster_threshold = Some(15);
+        s.value_pool = ValuePool::Min;
+        s.policy_pool = PolicyPool::ScatterMax;
+        let err = s.validate().unwrap_err();
+        assert!(
+            err.contains("action_anchor_mode") && err.contains("mover_threat"),
+            "expected action_anchor_mode/mover_threat invariant; got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_mover_threat_single_window() {
+        // The intended use: single-window encoding (e.g. v6_live2_anchored).
+        let mut s = ok_v6();
+        s.action_anchor_mode = ActionAnchorMode::MoverThreat;
+        s.validate().unwrap();
     }
 
     #[test]

@@ -13,4 +13,4 @@ pub mod registry;
 pub mod spec;
 
 pub use registry::{all_specs, lookup, lookup_or_panic};
-pub use spec::{PolicyPool, RegistrySpec, ValuePool};
+pub use spec::{ActionAnchorMode, PolicyPool, RegistrySpec, ValuePool};

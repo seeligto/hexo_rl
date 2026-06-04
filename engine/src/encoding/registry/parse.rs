@@ -8,7 +8,7 @@
 
 use toml::Value;
 
-use crate::encoding::spec::{PolicyPool, RegistrySpec, ValuePool};
+use crate::encoding::spec::{ActionAnchorMode, PolicyPool, RegistrySpec, ValuePool};
 
 use super::{leak_str, parse_int_or_none};
 
@@ -92,6 +92,7 @@ pub(super) fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String
     let policy_pool_raw = get_str!("policy_pool");
     let sym_table_id = get_str!("sym_table_id");
     let notes = get_str!("notes");
+    let action_anchor_mode_raw = get_str!("action_anchor_mode");
 
     // kept_plane_indices: array of integers.
     let kept_plane_indices: Option<Vec<usize>> = match table.get("kept_plane_indices") {
@@ -176,6 +177,13 @@ pub(super) fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String
             None
         }
     });
+    let action_anchor_mode = action_anchor_mode_raw.and_then(|s| match ActionAnchorMode::parse(s) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            errs.push(format!("[encodings.{name}].action_anchor_mode: {e}"));
+            None
+        }
+    });
 
     if !errs.is_empty() {
         return Err(format!(
@@ -214,5 +222,6 @@ pub(super) fn parse_one(name: &str, body: &Value) -> Result<RegistrySpec, String
         kept_plane_indices,
         n_source_planes: n_source_planes.unwrap(),
         k_max: k_max.unwrap(),
+        action_anchor_mode: action_anchor_mode.unwrap(),
     })
 }

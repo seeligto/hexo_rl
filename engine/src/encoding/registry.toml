@@ -78,7 +78,8 @@ sym_table_id            = "size_19"
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
 k_max                   = 1            # single-window → 1 cluster view per leaf
-schema_version          = 3
+schema_version          = 4
+action_anchor_mode      = "global_bbox"
 notes                   = "v6 canonical encoding (Phase 1-3 anchor)."
 
 # ---------------------------------------------------------------------------
@@ -106,7 +107,8 @@ sym_table_id            = "size_19"
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
 k_max                   = 1            # single-window → 1 cluster view per leaf
-schema_version          = 3
+schema_version          = 4
+action_anchor_mode      = "global_bbox"
 notes                   = "§150 anchor (17.4% n=500 vs SealBot); selfplay-canonical pending α."
 
 # ---------------------------------------------------------------------------
@@ -134,7 +136,8 @@ sym_table_id            = "size_19"
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
 k_max                   = 1            # single-window → 1 cluster view per leaf
-schema_version          = 3
+schema_version          = 4
+action_anchor_mode      = "global_bbox"
 notes                   = "§150 predecessor anchor; pre-v7full pretrain. Wire format identical to v6."
 
 # ---------------------------------------------------------------------------
@@ -161,7 +164,8 @@ sym_table_id            = "size_19"
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
 k_max                   = 1            # single-window → 1 cluster view per leaf
-schema_version          = 3
+schema_version          = 4
+action_anchor_mode      = "global_bbox"
 notes                   = "§150 30-epoch v7 retrain; identical wire format to v7/v7full."
 
 # ---------------------------------------------------------------------------
@@ -194,7 +198,8 @@ sym_table_id            = "size_25"
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
 k_max                   = 8            # multi-window cap; ~33% head-room over observed K_avg≈6
-schema_version          = 3
+schema_version          = 4
+action_anchor_mode      = "global_bbox"
 notes                   = "§174 retired as selfplay anchor (3 bootstrap recipes failed viability gate at R=8 MCTS-128). Pretrain+eval+matched-MCTS pin LIFTED. Retained as future re-entry target."
 
 # ---------------------------------------------------------------------------
@@ -229,7 +234,8 @@ sym_table_id            = "size_19"      # 19×19 sym tables shared with v6/v7fu
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11]
 n_source_planes         = 18
 k_max                   = 8            # multi-window cap; matches v6w25 head-room target
-schema_version          = 3
+schema_version          = 4
+action_anchor_mode      = "global_bbox"
 notes                   = "§176a — v7full arch + K-cluster multi-window perception at 19×19. Isolates multi-window from v6w25 action-space confound."
 
 # ---------------------------------------------------------------------------
@@ -270,7 +276,8 @@ sym_table_id            = "size_19"
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11, 16, 17]
 n_source_planes         = 18
 k_max                   = 1            # single-window → 1 cluster view per leaf
-schema_version          = 3
+schema_version          = 4
+action_anchor_mode      = "global_bbox"
 notes                   = "§P5-CT Phase 5a CF-2 — v6 wire format + turn-phase planes 16/17 (value-head discrimination signal). Fresh 10-plane pretrain; not a v6/v7full transfer."
 
 # ---------------------------------------------------------------------------
@@ -308,8 +315,45 @@ sym_table_id            = "size_19"
 kept_plane_indices      = [0, 8, 16, 17]
 n_source_planes         = 18
 k_max                   = 1            # single-window → 1 cluster view per leaf
-schema_version          = 3
+schema_version          = 4
+action_anchor_mode      = "global_bbox"
 notes                   = "§P5-CT H-PLANE-MISMATCH fix — v6tp minus dead history planes 1-3/9-11 (live in pretrain, zeroed in self-play). 4-plane live-on-both set [0,8,16,17]. Fresh 4-plane pretrain."
+
+# ---------------------------------------------------------------------------
+# v6_live2_anchored — §PRELONG-2A comparator. Identical architecture to
+# v6_live2 (n_planes/board/trunk/policy/sym all equal) so the frozen v6_live2
+# 30k checkpoint loads unchanged — ONLY the action-window centering differs:
+# action_anchor_mode="mover_threat" anchors the single global action window on
+# the current mover's most-advanced open run instead of the stone-bbox
+# midpoint, so an off-bbox forced win stays inside the 19×19 window (D1 verdict
+# V1 — window-CENTERING bug, not size; no tensor change). Eval-only first; see
+# reports/investigations/prelong_2A_window_anchor_design_2026-06-04.md.
+# ---------------------------------------------------------------------------
+[encodings.v6_live2_anchored]
+board_size              = 19
+trunk_size              = 19
+cluster_window_size     = "none"
+cluster_threshold       = "none"
+legal_move_radius       = 5
+n_planes                = 4
+plane_layout            = [
+  "current_player_t0",       # source plane 0
+  "opponent_t0",             # source plane 8
+  "moves_remaining_bcast",   # source plane 16: moves_remaining == 2 ? 1 : 0
+  "ply_parity_bcast",        # source plane 17: ply % 2
+]
+policy_logit_count      = 362            # 19*19 + 1 (last = pass)
+has_pass_slot           = true
+is_multi_window         = false
+value_pool              = "none"
+policy_pool             = "none"
+sym_table_id            = "size_19"
+kept_plane_indices      = [0, 8, 16, 17]
+n_source_planes         = 18
+k_max                   = 1            # single-window → 1 cluster view per leaf
+schema_version          = 4
+action_anchor_mode      = "mover_threat"
+notes                   = "§PRELONG-2A — v6_live2 architecture + mover-threat action-window centering (D1 V1). Frozen v6_live2 weights load unchanged; eval-only first."
 
 # ---------------------------------------------------------------------------
 # v8 — bbox-of-stones 25×25, 11 planes (history + 3 aux).
@@ -345,7 +389,8 @@ sym_table_id            = "size_25"
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11, 18, 19, 20]
 n_source_planes         = 21
 k_max                   = 1            # single-window → 1 cluster view per leaf
-schema_version          = 3
+schema_version          = 4
+action_anchor_mode      = "global_bbox"
 notes                   = "v8 contract — single-bbox 25x25; plane-8 polarity OFF->OUTSIDE (vanilla); no pass slot (existing v8 ckpts have policy_fc.out_features=625)."
 
 # ---------------------------------------------------------------------------
@@ -378,5 +423,6 @@ sym_table_id            = "size_25"
 kept_plane_indices      = [0, 1, 2, 3, 8, 9, 10, 11, 18, 19, 20]
 n_source_planes         = 21
 k_max                   = 1            # single-window → 1 cluster view per leaf
-schema_version          = 3
+schema_version          = 4
+action_anchor_mode      = "global_bbox"
 notes                   = "§169 A4 / §170 P4 P2 variant; plane-8 polarity INSIDE->CANVAS for PartialConv2d trunk-entry. Pair with bootstrap_corpus_v8_canvas_realness.npz (sha 110ea6b2…)."

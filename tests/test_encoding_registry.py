@@ -79,8 +79,23 @@ def test_registry_loads_all_encodings():
     drops without locking the list.
     """
     names = sorted(s.name for s in all_specs())
-    expected = {"v6", "v6tp", "v6_live2", "v6w25", "v7", "v7e30", "v7full", "v7mw", "v8", "v8_canvas_realness"}
+    expected = {"v6", "v6tp", "v6_live2", "v6_live2_anchored", "v6w25", "v7", "v7e30", "v7full", "v7mw", "v8", "v8_canvas_realness"}
     assert set(names) == expected, f"registry encodings drifted: {names}"
+
+
+def test_v6_live2_anchored_action_anchor_mode():
+    # §PRELONG-2A: comparator entry, v6_live2 arch + mover-threat centering.
+    s = lookup("v6_live2_anchored")
+    assert s.action_anchor_mode == "mover_threat"
+    assert s.board_size == 19
+    assert s.n_planes == 4
+    assert s.policy_logit_count == 362
+    assert s.is_multi_window is False
+
+
+def test_legacy_encodings_default_global_bbox():
+    for name in ("v6", "v6_live2", "v8", "v6w25"):
+        assert lookup(name).action_anchor_mode == "global_bbox", name
 
 
 def test_lookup_unknown_raises():

@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{PolicyPool, RegistrySpec, ValuePool};
+use super::{ActionAnchorMode, PolicyPool, RegistrySpec, ValuePool};
 
 impl RegistrySpec {
     /// Validate cross-field invariants. Collects ALL violations into a
@@ -92,6 +92,18 @@ impl RegistrySpec {
                         self.trunk_size, cw
                     ));
                 }
+            }
+            // §PRELONG-2A: mover_threat re-anchors the SINGLE global action
+            // window; it has no defined meaning under multi-window action
+            // aggregation. Reject the combination so a misconfigured registry
+            // entry fails loudly at parse time.
+            if matches!(self.action_anchor_mode, ActionAnchorMode::MoverThreat) {
+                errs.push(format!(
+                    "is_multi_window=true is incompatible with \
+                     action_anchor_mode=mover_threat (mover_threat re-anchors the \
+                     single global action window); got {:?}",
+                    self.action_anchor_mode
+                ));
             }
         } else {
             if !matches!(self.value_pool, ValuePool::None) {
