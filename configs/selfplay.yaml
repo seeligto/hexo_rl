@@ -43,6 +43,17 @@ selfplay:
   # Default OFF — single-variable discipline; the validation smoke flips
   # `forced_win_policy_enabled: true`. depth 1 = immediate win only;
   # 2 = +within-turn (depth-2) setup. weight 1.0 = pure one-hot; <1.0 = blend.
+  #
+  # P4 (PRELONG, 2026-06-04) — O1 = SHELVED + ARMED, NOT a pre-committed lever.
+  # The O1 validation smoke (v6_live2_o1_smoke_result_2026-06-04.md) showed
+  # GATE-1 NOT MET: the 1.8× sharpening premise was a measurement artifact
+  # (greedy@plies-4 vs sampled@plies-0); O1 delivered no significant 30k WR
+  # gain. O1's ONLY surviving signal is mid-run V_spread stabilization (held
+  # +0.28..+0.36 while baseline dipped negative, then both self-corrected by
+  # 30k). So O1 stays banked default-OFF; it is the PRE-REGISTERED REACTIVE
+  # response IFF the V_spread excursion fails to self-correct at 200-300k scale
+  # (where the baseline may not recover). Do NOT enable on the WR-sharpening
+  # rationale (dead) — only flip this if the long-run V_spread canary captures.
   forced_win_policy_enabled: false
   forced_win_policy_depth: 2
   forced_win_policy_weight: 1.0
