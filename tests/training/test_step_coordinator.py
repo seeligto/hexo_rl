@@ -800,3 +800,62 @@ def test_step_aborts_loudly_when_selfplay_producer_dead() -> None:
     with pytest.raises(RuntimeError, match="self-play buffer feeder died"):
         coord.step()
     pool.check_producer_health.assert_called()
+
+
+# ── F03: eval-thread crash must be LOUD + flagged, not a silent .info ─────────
+
+def test_eval_thread_crash_is_loud_and_flagged_not_silent() -> None:
+    """F03: an eval-thread crash currently logs at ``.info`` (invisible under a
+    WARNING+ filter) and sets an error sentinel that nothing reads — so a broken
+    eval silently disables ALL promotions, indistinguishable from 'ran, no
+    promotion'.  The crash must log at ``.error`` AND the drain must surface a
+    distinct, queryable broken-eval signal."""
+    crashed = threading.Event()
+
+    def _run_evaluation(model, step, best, full_config=None, best_model_step=None):
+        try:
+            raise RuntimeError("eval blew up (anchor load / OOM / encoding mismatch)")
+        finally:
+            crashed.set()
+
+    eval_pipeline = Mock()
+    eval_pipeline.run_evaluation = Mock(side_effect=_run_evaluation)
+
+    emitted: list[dict[str, Any]] = []
+    with patch("hexo_rl.training.step_coordinator._emit_axis_distribution", return_value=None), \
+         patch("hexo_rl.training.step_coordinator._emit_training_events", return_value=None), \
+         patch("hexo_rl.training.step_coordinator._try_save_buffer", return_value=None):
+        coord = _make_coordinator(
+            eval_pipeline=eval_pipeline,
+            event_emitter=emitted.append,
+            config_overrides={
+                "eval_interval": 1,
+                "max_train_burst": 1,
+                "stop_step": 3,
+            },
+        )
+        logger = Mock()
+        coord._logger = logger
+        # step N kicks off the eval (which crashes); step N+1 drains it.  Advance
+        # games each iter so step() reaches the eval block (else it short-circuits
+        # at the waiting_for_games gate).
+        for _ in range(6):
+            if not coord.shutdown.running:
+                break
+            coord.pool.games_completed += 1
+            coord.step()
+            crashed.wait(timeout=2.0)
+            if coord._eval_thread is not None:
+                coord._eval_thread.join(timeout=2.0)
+
+    # crash-site logged LOUD at .error, NOT hidden at .info
+    assert any(
+        c.args and c.args[0] == "evaluation_error" for c in logger.error.call_args_list
+    ), "eval-thread crash must log at .error (was the silent .info)"
+    assert not any(
+        c.args and c.args[0] == "evaluation_error" for c in logger.info.call_args_list
+    ), "eval-thread crash must NOT be logged at .info"
+    # drain surfaces a distinct, queryable broken-eval signal (not just a log)
+    assert any(e.get("event") == "eval_broken" for e in emitted), \
+        "broken eval must surface a distinct event, not masquerade as 'no promotion'"
+    assert coord.eval_broken is True

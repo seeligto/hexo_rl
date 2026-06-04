@@ -359,6 +359,11 @@ class StepCoordinator:
         self._consec_high_gn = 0
         # §CANARY-VAL — consecutive eval points with rolling stride5 P90 ≥ threshold.
         self._consec_high_stride5 = 0
+        # F03 — set when a drained eval result carries the crash sentinel
+        # ({"error": True}); a clean result clears it.  Surfaced LOUD so a broken
+        # eval (which silently disables ALL promotions) is never mistaken for a
+        # routine "ran, no promotion".
+        self._eval_broken = False
         self._eval_result: list[dict[str, Any] | None] = [None]
         self._ew_history = deque(maxlen=max(config.soft_ew_min_pts, 1))
         self.last_train_game_count = pool.games_completed
@@ -406,6 +411,13 @@ class StepCoordinator:
     @property
     def consec_high_stride5(self) -> int:
         return self._consec_high_stride5
+
+    @property
+    def eval_broken(self) -> bool:
+        """F03 — True once a drained eval carried the crash sentinel; cleared by
+        the next clean eval.  Lets monitoring distinguish a broken promotion gate
+        from a healthy gate that simply did not promote."""
+        return self._eval_broken
 
     @property
     def ew_history(self) -> tuple[float, ...]:
@@ -786,6 +798,29 @@ class StepCoordinator:
                     if self._best_model_step != prev_best_step:
                         promoted_step = self._best_model_step
 
+                    # F03: a crashed eval sets the {"error": True} sentinel and
+                    # CANNOT promote — indistinguishable from a clean "ran, no
+                    # promotion" unless surfaced.  A persistently broken eval
+                    # (anchor-load / OOM / encoding mismatch) silently disables
+                    # ALL promotions.  Flag LOUD + emit a distinct event so the
+                    # stoppage is never silent; a clean result clears the flag.
+                    if _pending_eval_result is not None and _pending_eval_result.get("error"):
+                        self._eval_broken = True
+                        self._logger.error(
+                            "eval_broken",
+                            step=self._train_step,
+                            eval_step=_pending_eval_result.get("step"),
+                            msg="evaluation thread crashed; promotions are disabled "
+                                "until eval recovers (see the evaluation_error log)",
+                        )
+                        self._event_emitter({
+                            "event": "eval_broken",
+                            "step": self._train_step,
+                            "eval_step": _pending_eval_result.get("step"),
+                        })
+                    elif _pending_eval_result is not None:
+                        self._eval_broken = False
+
                     # §S181-AUDIT Wave 3 Stage 2B — L50 sliding-window SealBot WR
                     # HARD-ABORT gate. Pure-function trigger logic in
                     # ``alert_rules.check_sealbot_wr_hard_abort``; this site owns
@@ -877,7 +912,9 @@ class StepCoordinator:
                             eval_result[0] = result
                         except Exception:
                             import traceback
-                            logger.info("evaluation_error", step=_step, tb=traceback.format_exc())
+                            # F03: LOUD (.error) — a crashed eval disables promotions;
+                            # at .info it was invisible under a WARNING+ filter.
+                            logger.error("evaluation_error", step=_step, tb=traceback.format_exc())
                             eval_result[0] = {"promoted": False, "error": True, "step": _step}
 
                     self._eval_thread = threading.Thread(target=_run_eval, daemon=True)
