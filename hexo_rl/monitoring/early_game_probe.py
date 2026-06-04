@@ -160,8 +160,18 @@ def load_fixture(path: Path | None = None, encoding_name: str = "v6") -> _Fixtur
             f"does not match expected v{_FIXTURE_VERSION}. "
             "Regenerate with scripts/build_early_game_probe.py."
         )
+    states = np.asarray(z["states"], dtype=np.float16)
+    # Auto-heal a stale fixture whose plane count no longer matches the encoding.
+    # The v6_live2 8→4 regression: a version-matched 8-plane fixture saved under
+    # the 4-plane name loaded blindly and crashed the model forward
+    # (`expected 4 channels, got 8`). resolve_arch is the registry-derived
+    # resolver — the expected channel count is read by name, never hardcoded.
+    from hexo_rl.encoding.resolvers import resolve_arch
+    expected_channels = resolve_arch(encoding_name).in_channels
+    if states.shape[1] != expected_channels:
+        return save_fixture(path, encoding_name=encoding_name)
     return _FixturePayload(
-        states=np.asarray(z["states"], dtype=np.float16),
+        states=states,
         plies=np.asarray(z["plies"],  dtype=np.int32),
         seeds=np.asarray(z["seeds"],  dtype=np.int32),
         legal_mask=np.asarray(z["legal_mask"], dtype=np.uint8),
@@ -228,20 +238,26 @@ class EarlyGameProbe:
                 "early_game_top1_mass_by_ply": [],
             }
 
-        # Guard against model / fixture shape mismatch (e.g. v6w25 model vs v6 fixture).
-        # If the input spatial dims differ, skip the probe gracefully.
+        # Guard against model / fixture shape mismatch (e.g. v6w25 model vs v6
+        # fixture, or a probe encoding that doesn't match the eval model). Skip
+        # the probe gracefully on either a channel-count or spatial-dim mismatch
+        # rather than crashing the model forward — belt-and-suspenders beyond the
+        # load_fixture auto-heal.
+        _skip = {
+            "early_game_entropy_mean": 0.0,
+            "early_game_entropy_max": 0.0,
+            "early_game_top1_mass_mean": 0.0,
+            "early_game_entropy_by_ply": [],
+            "early_game_top1_mass_by_ply": [],
+        }
         expected_spatial = (self._states.shape[2], self._states.shape[3])
         model_in_channels = getattr(model, "in_channels", None)
+        if model_in_channels is not None and model_in_channels != self._states.shape[1]:
+            return _skip
         # Try to infer expected spatial size from model.board_size
         model_board_size = getattr(model, "board_size", None)
         if model_board_size is not None and expected_spatial != (model_board_size, model_board_size):
-            return {
-                "early_game_entropy_mean": 0.0,
-                "early_game_entropy_max": 0.0,
-                "early_game_top1_mass_mean": 0.0,
-                "early_game_entropy_by_ply": [],
-                "early_game_top1_mass_by_ply": [],
-            }
+            return _skip
 
         was_training = bool(getattr(model, "training", False))
         base = getattr(model, "_orig_mod", model)  # unwrap torch.compile
