@@ -351,17 +351,40 @@ def emit_forced_win_trend(trend: ForcedWinTrend, *, logger: Any = None) -> None:
     log.info("forced_win_trend", **trend.snapshot())
 
 
+def engine_player_sides(encoding: str) -> tuple[int, int]:
+    """The two engine player ids for a fresh game, DERIVED from the engine (not
+    hardcoded): a new board's ``current_player`` and its negation.
+
+    The eval-boundary trend folds BOTH movers — the off-window wall is symmetric
+    (both players are walled), and ``mover_side`` MUST match the engine's {1, −1}
+    convention or the detector silently reports n=0.  That inert-tripwire bug
+    (``mover_side`` defaulted to 0, which never matches a player) is §OFFWINDOW §7.
+    """
+    from engine import Board
+    from hexo_rl.encoding import normalize_encoding_name as _norm
+
+    b = Board.with_encoding_name(_norm(encoding))
+    p = int(b.current_player)
+    return (p, -p)
+
+
 def update_trend_from_file_incremental(
     trend: ForcedWinTrend,
     jsonl_path: Path | str,
     start_offset: int,
     *,
     encoding: str,
-    mover_side: int,
+    mover_side: int | Sequence[int],
     max_plies: Optional[int] = None,
 ) -> int:
     """Feed only records appended at/after ``start_offset`` into ``trend`` in place;
     return the new byte offset (end of the last COMPLETE line consumed).
+
+    ``mover_side`` may be a single side or a sequence of sides; each new record is
+    folded into ``trend`` ONCE PER side (so passing both engine players makes ``n``
+    count per-(game, side) units — the symmetric off-window metric of §OFFWINDOW §2).
+    Folding two sides doubles the per-record replay cost but the per-boundary bound
+    stays O(new): each appended line is still read from disk exactly once.
 
     Incremental replay for the eval-boundary readout: across a 300k run the active
     ``GameRecorder`` ``games_*.jsonl`` grows unboundedly, so a from-scratch
@@ -377,6 +400,7 @@ def update_trend_from_file_incremental(
     its start, so the next call re-reads it once the newline lands.  ``start_offset``
     at/past EOF, or a missing file, is a no-op returning ``start_offset`` unchanged.
     """
+    sides = (mover_side,) if isinstance(mover_side, int) else tuple(mover_side)
     p = Path(jsonl_path)
     try:
         size = p.stat().st_size
@@ -395,12 +419,13 @@ def update_trend_from_file_incremental(
             if not line:
                 continue
             rec = json.loads(line.decode("utf-8"))
-            summary = analyze_recorded_game(
-                rec["moves"], rec.get("outcome", ""),
-                encoding=encoding, mover_side=mover_side, path=trend.path,
-                max_plies=max_plies,
-            )
-            trend.update(summary)
+            for side in sides:             # fold each side once (per-(game,side))
+                summary = analyze_recorded_game(
+                    rec["moves"], rec.get("outcome", ""),
+                    encoding=encoding, mover_side=side, path=trend.path,
+                    max_plies=max_plies,
+                )
+                trend.update(summary)
     return end_offset
 
 
@@ -408,7 +433,7 @@ def analyze_replay_file(
     jsonl_path: Path | str,
     *,
     encoding: str,
-    mover_side: int,
+    mover_side: int | Sequence[int],
     smoothing: float,
     path: str = "single-window",
     max_plies: Optional[int] = None,

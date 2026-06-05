@@ -4825,3 +4825,58 @@ gitignored under `reports/`.
 
 **Next:** the perception arm (23×23 single-window WIDEN primary vs K-cluster
 comparator) on this clean `master`, per the §PRELONG routing — separate chapter.
+
+## §D-WALLCAUSATION — does the off-window wall CAUSE colony? + recorder/tripwire fixes — 2026-06-05
+
+Branch `phase4.5/wallcausation_fixes` (Phase B, not committed pending operator).
+Report `reports/investigations/wallcausation_2026-06-04.md`; go-long validation
+`reports/investigations/golong_validation_v2.md`.
+
+**Phase A — causation: INCONCLUSIVE, leaning AGAINST.** Regenerated single-window
+`ModelPlayer` self-play from archived colony checkpoints (s180b 10k–53.5k, s179
+10k–60k, + healthy v6live2) → forced-win detector both sides → correlated off-window
+incidence vs recorded colony signal (`metadata.json eval_trajectory`). s180b corr
+0.96 but off-window is **coincident-not-leading** (flat 0–2% through 10k–40k while
+colony_anchor climbs 36→43 / elo 422→330; spikes only at the 50k hard-fail, CI[13,32]
+disjoint from earlier [0,7.7]); healthy v6live2 carries 11% off-window > colony
+checkpoints; s179-60k (colony 77%) below its own 50k peak. **Decisive caveat
+(structural):** `ModelPlayer` drops off-window at selection (`evaluator.py:113`) →
+`max_spread≤18` (window diameter) → it CANNOT reach the training-self-play spread-306
+regime where the wall fires (§OFFWINDOW 25.6%). Instrument is asymmetrically biased
+against detecting causation → can't claim clean FALSIFIED; lag+non-monotonicity kill
+FIRMED. → **wall→colony NOT firmed → D-SCATTER NOT triggered.** Decisive follow-up =
+Rust worker_loop self-play regen (off-window-searchable), operator-gated (§A.5).
+
+**Phase B — recorder + tripwire fixes (3, tested, suite green; commit pending).**
+(1) Live forced-win tripwire was INERT: `_emit_forced_win_trend` passed
+`mover_side=0`, never matches engine {1,−1} → n=0. Fixed: fold both engine sides via
+`forced_win_detector.engine_player_sides(enc)` (zero-literal, derived from a fresh
+board); `update_trend_from_file_incremental` generalized to `int|Sequence[int]`.
+(2) `checkpoint_step` stuck at 0 (every historical record): `pool.update_checkpoint_step`
+had zero callers. Fixed: seed at StepCoordinator init + refresh at the promotion sync
+(`eval_drain.py`, the ONLY `sync_inference_weights` site) — NOT per train step
+(red-team caught that over-attribution: self-play runs the inference model, swapped only
+on promotion). (3) Moveset: VERIFIED already-correct on master (`move_history.push`
+unconditional, inner.rs:968) — empty historical records are legacy. Bench-exempt
+(Python-only, off hot path). +6 tests in test_forced_win_detector/test_step_coordinator,
+new test_eval_drain.py.
+
+**Phase C — mechanism + precedent (confirmed on master).** Off-window drop is 3-layer:
+target drop `records.rs:62` (via `usize::MAX` from `core.rs:409`) + uniform 1/n_ch prior
+`backup.rs:112` + 192-child cap `backup.rs:105` (binding limiter). records is the SOLE
+TRAINING-TARGET drop site (eval/ModelPlayer drop at inference only). **§S181 did NOT pin
+the single-window action space** — it pinned value-head discrimination collapse (H6) +
+permissive value-head arch (H7); off-window is a DISTINCT (policy/action-target)
+mechanism → the "no-reopen colony" fence basis is WEAKER than assumed; the open question
+(unsettled) is whether off-window is the upstream cause of H6.
+
+**Phase D — go-long validation: GO-WITH-NOTE.** Single-window go-long READY iff the
+fixed tripwire is a HARD gate (n=game-sides semantics). All 8 standing checks PASS; #9
+wall-honesty / #11 tripwire-live (n>0) / #12 causation-not-firmed satisfied; no blockers.
+
+**Lessons.** L: `ModelPlayer` (deploy/eval path) is spread-capped at the action window
+(`evaluator.py:113`) and reproduces neither the spread-306 wall regime nor the
+colony/draw regime — both are training-self-play (Rust worker) phenomena; use the Rust
+path, not ModelPlayer, to study training-time pathologies. L: the recorder's
+`checkpoint_step` must be tagged at the inference weight-sync (promotion), not per train
+step — self-play uses the promoted model, not the live trainer model.

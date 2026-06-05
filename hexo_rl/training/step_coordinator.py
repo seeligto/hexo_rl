@@ -86,6 +86,7 @@ class WorkerPoolLike(Protocol):
     def set_radius_override(self, radius: int | None) -> None: ...
     def check_producer_health(self) -> None: ...
     def latest_replay_path(self) -> Any: ...
+    def update_checkpoint_step(self, step: int) -> None: ...
 
 
 @runtime_checkable
@@ -325,6 +326,16 @@ class StepCoordinator:
 
         # Mutable per-run state (§1.1)
         self._train_step = trainer.step
+        # Seed the recorder's checkpoint_step with the startup train step: the
+        # self-play inference model is built from the trainer at startup
+        # (loop.build_inference_model), so its weights correspond to this step.
+        # It is thereafter refreshed only on promotion (eval_drain) — matching
+        # the inference weight-sync cadence — NOT per train step.  Without this
+        # the recorder defaults checkpoint_step=0 forever (nothing called it,
+        # the §OFFWINDOW data gap).  hasattr-guarded like other optional pool
+        # hooks (e.g. set_radius_override) for partial test doubles.
+        if hasattr(pool, "update_checkpoint_step"):
+            pool.update_checkpoint_step(self._train_step)
         self._games_played = pool.games_completed
         # §178 T7 refresh-hook cooldown bookkeeping (legacy field; retained for
         # the inert disabled-path that still emits the warning log).
@@ -460,6 +471,7 @@ class StepCoordinator:
             from hexo_rl.diagnostics.forced_win_detector import (
                 ForcedWinTrend,
                 emit_forced_win_trend,
+                engine_player_sides,
                 update_trend_from_file_incremental,
             )
             from hexo_rl.encoding import normalize_encoding_name
@@ -473,12 +485,16 @@ class StepCoordinator:
                 )
                 self._fw_replay_offset = 0
                 self._fw_replay_path = path_str
+            enc = normalize_encoding_name(full_cfg.get("encoding"))
             self._fw_replay_offset = update_trend_from_file_incremental(
                 self._fw_trend,
                 path_str,
                 self._fw_replay_offset,
-                encoding=normalize_encoding_name(full_cfg.get("encoding")),
-                mover_side=int(cfg.get("mover_side", 0)),
+                encoding=enc,
+                # Both engine movers {1, −1} — the wall is symmetric, and a single
+                # default (the old ``mover_side=0``) never matches a player → n=0
+                # (§OFFWINDOW §7 inert tripwire).  Derived, not hardcoded.
+                mover_side=engine_player_sides(enc),
                 max_plies=cfg.get("max_plies"),
             )
             emit_forced_win_trend(self._fw_trend, logger=self._logger)
@@ -745,6 +761,11 @@ class StepCoordinator:
                 )
 
             self._train_step = self.trainer.step
+            # NB: the recorder's checkpoint_step is NOT bumped per train step —
+            # self-play workers run the *inference* model, which only changes on
+            # promotion (eval_drain.sync_inference_weights).  Tagging here would
+            # over-advance the step past the weights actually generating the games.
+            # The tag is refreshed at the promotion site instead (eval_drain.py).
             if self._initial_policy_loss is None:
                 self._initial_policy_loss = float(loss_info["policy_loss"])
             self._last_loss_info = loss_info

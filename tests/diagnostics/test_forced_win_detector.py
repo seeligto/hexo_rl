@@ -290,3 +290,43 @@ def test_emit_forced_win_trend_resets_on_daily_rotation(tmp_path):
     assert coord._fw_replay_path == str(day2)
     assert coord._fw_trend is not first_trend    # fresh EMA on rotation
     assert coord._fw_trend.n == 1                 # only day-2's record, not 2
+
+
+# ── §OFFWINDOW §7: both-sides folding fixes the inert live tripwire ───────────
+
+def test_engine_player_sides_match_engine_convention():
+    """Derived from a fresh board, not hardcoded — must be the engine's {1, −1}."""
+    assert fw.engine_player_sides("v6_live2") == (1, -1)
+
+
+def test_incremental_single_wrong_side_is_inert(tmp_path):
+    """The §OFFWINDOW §7 bug: a mover_side that never matches a player (the old
+    ``mover_side=0`` default) folds nothing → n=0, a silently-dead readout."""
+    p = tmp_path / "games_2026-06-04.jsonl"
+    p.write_text(_rec(_winning_game_moves()) + "\n")
+    trend = fw.ForcedWinTrend(path="single-window", smoothing=0.5)
+    fw.update_trend_from_file_incremental(
+        trend, p, 0, encoding="v6_live2", mover_side=0)
+    assert trend.n == 0                          # 0 never matches player {1,−1}
+
+
+def test_incremental_both_sides_fires_where_single_default_would_not(tmp_path):
+    """Folding BOTH engine sides recovers the forced win the inert default missed."""
+    p = tmp_path / "games_2026-06-04.jsonl"
+    p.write_text(_rec(_winning_game_moves()) + "\n")
+    trend = fw.ForcedWinTrend(path="single-window", smoothing=0.5)
+    fw.update_trend_from_file_incremental(
+        trend, p, 0, encoding="v6_live2",
+        mover_side=fw.engine_player_sides("v6_live2"))
+    assert trend.n == 1                          # side 1 (x) informs; side −1 none here
+
+
+def test_incremental_folds_once_per_side(tmp_path):
+    """Each record is folded once per side entry — n counts (game, side) units, the
+    symmetric off-window metric (§OFFWINDOW §2)."""
+    p = tmp_path / "games_2026-06-04.jsonl"
+    p.write_text(_rec(_winning_game_moves()) + "\n")
+    trend = fw.ForcedWinTrend(path="single-window", smoothing=0.5)
+    fw.update_trend_from_file_incremental(
+        trend, p, 0, encoding="v6_live2", mover_side=(1, 1))
+    assert trend.n == 2                          # same side folded twice → 2 units

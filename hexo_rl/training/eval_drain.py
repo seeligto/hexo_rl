@@ -61,6 +61,12 @@ def drain_pending_eval(
         new_best_step = prev.get("step", train_step)
         # §176 P9 — typed forwarder replaces direct ``_inference_server`` reach.
         pool.sync_inference_weights(eval_base.state_dict())
+        # §D-WALLCAUSATION: self-play weights just changed to the promoted model,
+        # so refresh the replay recorder's checkpoint_step to match.  This is the
+        # ONLY weight-sync point — tagging here (not per train step) keeps every
+        # recorded game attributed to the weights that actually generated it.
+        if hasattr(pool, "update_checkpoint_step"):
+            pool.update_checkpoint_step(new_best_step)
         log.info(
             "best_model_promoted",
             step=train_step,

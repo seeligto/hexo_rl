@@ -902,3 +902,31 @@ def test_forced_win_trend_emitted_at_eval_boundary_single_window(tmp_path) -> No
     assert fw_calls, "forced-win trend not emitted at eval boundary"
     assert fw_calls[0].kwargs.get("path") == "single-window", \
         "trend must label the single-window (A0) action path"
+
+
+# ── recorder checkpoint_step propagation (the §OFFWINDOW per-checkpoint gap) ───
+
+def test_update_checkpoint_step_wired_at_init() -> None:
+    """The coordinator forwards the current train step to the pool at construction
+    so GameRecorder tags replays with it.  Without this the recorder defaults
+    checkpoint_step=0 forever (nothing called it — the §OFFWINDOW data gap)."""
+    trainer = _make_trainer()
+    trainer.step = 4242
+    pool = _make_pool()
+    _make_coordinator(trainer=trainer, pool=pool)
+    pool.update_checkpoint_step.assert_called_with(4242)
+
+
+def test_update_checkpoint_step_not_bumped_per_train_step(
+    patch_orchestrator_helpers,
+) -> None:
+    """A plain train step must NOT re-tag the recorder: self-play workers run the
+    *inference* model, whose weights change only on promotion (eval_drain) — tagging
+    every train step would over-advance checkpoint_step past the live weights."""
+    trainer = _make_trainer()        # increments trainer.step on each train_step
+    pool = _make_pool()
+    coord = _make_coordinator(trainer=trainer, pool=pool)
+    init_calls = pool.update_checkpoint_step.call_count        # the init seed (1)
+    coord.step()
+    assert trainer.step >= 1                                    # trained ≥ once
+    assert pool.update_checkpoint_step.call_count == init_calls  # no per-step bump
