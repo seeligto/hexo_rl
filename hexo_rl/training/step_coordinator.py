@@ -162,6 +162,20 @@ class RealTracemalloc:
 DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC: float = 900.0
 
 
+def _recent_pool_draw_rate(per_worker_rates: "dict[int, float]") -> float:
+    """§D-GOLONG — pool-wide recent self-play draw rate.
+
+    Aggregates ``pool.per_worker_draw_rates()`` (each worker's rolling last-50-game
+    draw rate) by an unweighted mean across the workers that have completed a game.
+    Returns 0.0 when no worker has a game yet, so the draw-rate hard-abort gate
+    cannot fire on an empty signal. Mean (not games-weighted) is sufficient for a
+    sustained-collapse trigger and avoids threading per-worker game counts.
+    """
+    if not per_worker_rates:
+        return 0.0
+    return sum(per_worker_rates.values()) / len(per_worker_rates)
+
+
 @dataclass(frozen=True)
 class StepCoordinatorConfig:
     eval_interval: int
@@ -193,6 +207,18 @@ class StepCoordinatorConfig:
     # ``stride5_p90_consec`` consecutive eval points. threshold ≤ 0 disables.
     stride5_p90_threshold: float = 30.0
     stride5_p90_consec: int = 3
+    # §D-GOLONG — sustained self-play draw-rate hard-abort. The pool-wide recent
+    # draw rate (mean of per-worker rolling-50 rates) ≥ ``draw_rate_threshold``
+    # for ``draw_rate_consec`` consecutive eval points past ``draw_rate_min_step``
+    # → halt. A decisive game has an intrinsic draw rate ~0-5% (v6_live2 30k
+    # smoke: 0.05); a sustained climb is the §144/§155 draw-lock collapse
+    # signature. threshold ≤ 0 disables (default OFF — operator arms via
+    # monitors.hard_abort_draw_rate). Complements the stride5 spam gate, which
+    # only catches lattice-spam-shaped draw collapses, not ply-cap-truncation
+    # draw climbs.
+    draw_rate_threshold: float = 0.0
+    draw_rate_consec: int = 3
+    draw_rate_min_step: int = 0
     # §178 bot-corpus slot
     bot_batch_share: float = 0.0
     # §178 refresh hook surface (DISABLED-by-default per master baseline; Wave 3
@@ -374,6 +400,8 @@ class StepCoordinator:
         self._consec_high_gn = 0
         # §CANARY-VAL — consecutive eval points with rolling stride5 P90 ≥ threshold.
         self._consec_high_stride5 = 0
+        # §D-GOLONG — consecutive eval points with recent self-play draw rate ≥ threshold.
+        self._consec_high_draw = 0
         # F03 — set when a drained eval result carries the crash sentinel
         # ({"error": True}); a clean result clears it.  Surfaced LOUD so a broken
         # eval (which silently disables ALL promotions) is never mistaken for a
@@ -435,6 +463,10 @@ class StepCoordinator:
     @property
     def consec_high_stride5(self) -> int:
         return self._consec_high_stride5
+
+    @property
+    def consec_high_draw(self) -> int:
+        return self._consec_high_draw
 
     @property
     def eval_broken(self) -> bool:
@@ -861,6 +893,36 @@ class StepCoordinator:
                             hard_abort_fired = True
                     else:
                         self._consec_high_stride5 = 0
+
+                # D5d: hard-abort on sustained self-play draw-rate climb
+                # (§D-GOLONG). Pool-wide recent draw rate (mean of per-worker
+                # rolling-50 rates) ≥ threshold for ``draw_rate_consec``
+                # consecutive eval points → halt. Decisive-game intrinsic ~0-5%
+                # (v6_live2 30k smoke 0.05); a sustained climb is the §144/§155
+                # draw-lock collapse signature. threshold ≤ 0 = off (operator-
+                # armed via monitors.hard_abort_draw_rate). Complements stride5,
+                # which only fires on lattice-spam-shaped draw collapses.
+                if (cfg.draw_rate_threshold > 0.0
+                        and self._train_step > cfg.draw_rate_min_step):
+                    _draw_rate = _recent_pool_draw_rate(self.pool.per_worker_draw_rates())
+                    if _draw_rate >= cfg.draw_rate_threshold:
+                        self._consec_high_draw += 1
+                        if self._consec_high_draw >= cfg.draw_rate_consec:
+                            self._logger.error(
+                                "hard_abort_draw_rate",
+                                step=self._train_step,
+                                consec_evals=self._consec_high_draw,
+                                draw_rate=round(_draw_rate, 4),
+                                threshold=cfg.draw_rate_threshold,
+                                min_step=cfg.draw_rate_min_step,
+                                msg=("Sustained self-play draw-rate climb (recent "
+                                     "per-worker mean ≥ threshold) — halting run. "
+                                     "Draw-lock / colony-attractor collapse signature."),
+                            )
+                            self.shutdown.running = False
+                            hard_abort_fired = True
+                    else:
+                        self._consec_high_draw = 0
 
             # D6: eval (drain previous, then maybe kick off new)
             if (self.eval_pipeline is not None

@@ -213,6 +213,12 @@ def run_training_loop(
     # radius-5 runs). Set hard_abort_stride5_p90 ≤ 0 to disable.
     _stride5_p90_threshold = float(_mon_cfg.get("hard_abort_stride5_p90", 30.0))
     _stride5_p90_consec    = int(_mon_cfg.get("hard_abort_stride5_p90_consec", 3))
+    # §D-GOLONG — self-play draw-rate hard-abort (default OFF; operator arms via
+    # monitors.hard_abort_draw_rate). threshold ≤ 0 disables. Complements the
+    # stride5 spam gate (which catches only lattice-spam-shaped draw collapses).
+    _draw_rate_threshold = float(_mon_cfg.get("hard_abort_draw_rate", 0.0))
+    _draw_rate_consec    = int(_mon_cfg.get("hard_abort_draw_rate_consec", 3))
+    _draw_rate_min_step  = int(_mon_cfg.get("hard_abort_draw_rate_min_step", 0))
 
     # ── StepCoordinatorConfig ────────────────────────────────────────────────
     from hexo_rl.training.step_coordinator import (
@@ -243,6 +249,9 @@ def run_training_loop(
         hard_gn_min_steps=_hard_gn_min_steps,
         stride5_p90_threshold=_stride5_p90_threshold,
         stride5_p90_consec=_stride5_p90_consec,
+        draw_rate_threshold=_draw_rate_threshold,
+        draw_rate_consec=_draw_rate_consec,
+        draw_rate_min_step=_draw_rate_min_step,
         instrumentation_enabled=instrumentation_enabled,
         stop_step=stop_step,
         final_eval_drain_timeout_sec=float(

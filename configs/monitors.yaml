@@ -14,3 +14,14 @@ monitors:
   # draw-collapse spam P90 86-133. Set threshold ≤ 0 to disable.
   hard_abort_stride5_p90: 30
   hard_abort_stride5_p90_consec: 3
+  # §D-GOLONG — sustained self-play draw-rate hard-abort. The pool-wide recent
+  # draw rate (mean of per-worker rolling-50 rates) ≥ hard_abort_draw_rate for
+  # hard_abort_draw_rate_consec consecutive eval points (past _min_step) → halt.
+  # A decisive game has an intrinsic draw rate ~0-5% (v6_live2 30k smoke: 0.05);
+  # a sustained climb is the §144/§155 draw-lock collapse signature. Set
+  # hard_abort_draw_rate ≤ 0 to disable (DEFAULT OFF here — operator arms it on
+  # the run variant, e.g. configs/variants/v6_live2_golong.yaml). Complements
+  # the stride5 spam gate, which only catches lattice-spam-shaped draw collapses.
+  hard_abort_draw_rate: 0.0
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0

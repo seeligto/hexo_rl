@@ -126,6 +126,9 @@ def _make_pool(games_completed: int = 0) -> Mock:
     pool.recent_buffer = None
     # §CANARY-VAL stride-5 gate reads this at every eval point; default benign.
     pool.current_stride5_p90 = Mock(return_value=0)
+    # §D-GOLONG draw-rate gate reads this at every eval point; default benign
+    # (empty → recent draw rate 0.0, gate cannot fire).
+    pool.per_worker_draw_rates = Mock(return_value={})
     return pool
 
 
@@ -332,6 +335,91 @@ def test_stride5_gate_off_when_threshold_nonpositive(patch_orchestrator_helpers)
     assert out.hard_abort_fired is False
     assert shutdown.running is True
     assert coord.consec_high_stride5 == 0
+
+
+# ── §D-GOLONG: hard-abort on sustained self-play draw-rate climb ─────────────
+
+def test_recent_pool_draw_rate_helper():
+    """Mean across workers that have a game; 0.0 on empty (gate cannot fire)."""
+    from hexo_rl.training.step_coordinator import _recent_pool_draw_rate
+    assert _recent_pool_draw_rate({}) == 0.0
+    assert _recent_pool_draw_rate({0: 0.4, 1: 0.6}) == pytest.approx(0.5)
+    assert _recent_pool_draw_rate({3: 0.9}) == pytest.approx(0.9)
+
+
+def test_hard_abort_draw_rate_streak(patch_orchestrator_helpers):
+    """3 consecutive eval points with recent pool draw rate >= threshold trip
+    shutdown.running = False."""
+    pool = _make_pool()
+    pool.per_worker_draw_rates = Mock(return_value={0: 0.9})  # >= 0.55 threshold
+    shutdown = FakeShutdown()
+    coord = _make_coordinator(
+        pool=pool,
+        shutdown=shutdown,
+        config_overrides={"eval_interval": 1, "draw_rate_threshold": 0.55,
+                          "draw_rate_consec": 3, "max_train_burst": 5,
+                          "training_steps_per_game": 5.0},
+    )
+    out = coord.step()
+    assert out.hard_abort_fired is True
+    assert shutdown.running is False
+    assert coord.consec_high_draw >= 3
+
+
+def test_hard_abort_draw_rate_resets_on_low(patch_orchestrator_helpers):
+    """A single below-threshold eval point resets the consecutive counter."""
+    pool = _make_pool()
+    pool.per_worker_draw_rates = Mock(side_effect=[
+        {0: 0.9}, {0: 0.9}, {0: 0.1}, {0: 0.9}, {0: 0.9},
+    ])
+    shutdown = FakeShutdown()
+    coord = _make_coordinator(
+        pool=pool,
+        shutdown=shutdown,
+        config_overrides={"eval_interval": 1, "draw_rate_threshold": 0.55,
+                          "draw_rate_consec": 3, "max_train_burst": 5,
+                          "training_steps_per_game": 5.0},
+    )
+    out = coord.step()
+    assert out.hard_abort_fired is False
+    assert shutdown.running is True
+    assert coord.consec_high_draw == 2  # reset at the low, then 2 highs
+
+
+def test_draw_rate_gate_off_when_threshold_nonpositive(patch_orchestrator_helpers):
+    """threshold <= 0 disables the gate even with an extreme recent draw rate."""
+    pool = _make_pool()
+    pool.per_worker_draw_rates = Mock(return_value={0: 0.99})
+    shutdown = FakeShutdown()
+    coord = _make_coordinator(
+        pool=pool,
+        shutdown=shutdown,
+        config_overrides={"eval_interval": 1, "draw_rate_threshold": 0.0,
+                          "draw_rate_consec": 3, "max_train_burst": 5,
+                          "training_steps_per_game": 5.0},
+    )
+    out = coord.step()
+    assert out.hard_abort_fired is False
+    assert shutdown.running is True
+    assert coord.consec_high_draw == 0
+
+
+def test_draw_rate_gate_respects_min_step(patch_orchestrator_helpers):
+    """min_step gates the trigger: at eval_interval=1 the inner steps are 1..5;
+    min_step=3 means only steps 4,5 count → never reaches 3 consecutive."""
+    pool = _make_pool()
+    pool.per_worker_draw_rates = Mock(return_value={0: 0.9})
+    shutdown = FakeShutdown()
+    coord = _make_coordinator(
+        pool=pool,
+        shutdown=shutdown,
+        config_overrides={"eval_interval": 1, "draw_rate_threshold": 0.55,
+                          "draw_rate_consec": 3, "draw_rate_min_step": 3,
+                          "max_train_burst": 5, "training_steps_per_game": 5.0},
+    )
+    out = coord.step()
+    assert out.hard_abort_fired is False
+    assert coord.consec_high_draw == 2  # only steps 4,5 > min_step=3
 
 
 # ── B#2: soft-abort on E-W axis drift ───────────────────────────────────────
