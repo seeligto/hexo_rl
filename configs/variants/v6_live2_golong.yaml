@@ -1,0 +1,188 @@
+# configs/variants/v6_live2_golong.yaml
+#
+# §D-GOLONG — v6_live2 strong-model sustained run, 30k → 300k.
+#
+# This is the CONTINUE of the validated v6_live2 30k smoke (which produced
+# checkpoints/v6_live2_rl/checkpoint_00030000.pt — the ADOPTED encoding winner,
+# greedy 40% > v6tp 33%). It is NOT a fresh launch and NOT the colony-
+# reproduction recipe (v6_botmix_s180b_3knob_escalation.yaml).
+#
+# DESIGN DECISIONS (operator-confirmed 2026-06-05):
+#   1. LR = RE-WARM cosine to 300k. The 30k smoke fully annealed its cosine
+#      (ckpt scheduler_state: T_max=30000, last_epoch=29984, base_lr=2e-3,
+#      LR=eta_min=5e-4). Continuing requires re-extending the horizon — leaving
+#      it untouched makes CosineAnnealingLR OSCILLATE (period 2·T_max=60k; the
+#      classic past-T_max footgun). `scheduler_t_max: 300000` re-warms LR to
+#      ~1.96e-3 at step 30k and anneals smoothly to eta_min=5e-4 at step 300k.
+#      base_lr=2e-3 is RESTORED FROM THE CKPT (the lr key below is documentation
+#      — the resumed optimizer/scheduler govern, NOT the variant lr).
+#   2. RECIPE = SMOKE-CONTINUITY (one coherent 0→300k trajectory). lr stays 2e-3
+#      (this is a 19×19 board — vast.yaml's lr:1e-3 is a 25×25 FP16-overflow fix,
+#      irrelevant here). NO legal_move_radius_schedule (vast's 5→8 is a 25×25
+#      curriculum; keep the smoke's base jitter {4,5,6}). CF-5 aux_opp_reply
+#      kill retained. The plan's "canonical vast.yaml" knobs (temp_threshold 0,
+#      temp_min 0.5, jitter ON, decay_steps 200k, mixing 0.8/0.1) are ALREADY the
+#      base defaults this variant inherits — see configs/{training,selfplay}.yaml.
+#   3. GATES = 3 existing LIVE auto-aborts (stride5_p90 monitors.yaml:15,
+#      grad_norm step_coordinator.py:773, sealbot-WR triple alert_rules.py:96)
+#      + a config-driven draw-rate hard-abort (added in the §D-GOLONG PHASE-1
+#      commit; key lives in monitors.yaml, OFF unless set). off-window forced-win
+#      trend = WATCH-ONLY (step_coordinator.py:949, never aborts).
+#
+# LAUNCH (operator-run on vast — see scripts/v6_live2_golong_launch.sh for the
+# MANDATORY preflight cleanup; a stale checkpoints/replay_buffer.bin is SILENTLY
+# auto-loaded on a step>0 resume — the contamination guard only fires at step<=0):
+#   python scripts/train.py \
+#     --checkpoint checkpoints/v6_live2_rl/checkpoint_00030000.pt \
+#     --variant v6_live2_golong \
+#     --iterations 270000 \
+#     --override-scheduler-horizon
+#   (--iterations 270000: stop_step = trainer.step + iterations = 30000 + 270000
+#    = 300000, loop.py:201. --override-scheduler-horizon: plumbs total_steps=300000
+#    below into config_overrides so the resumed CosineAnnealingLR T_max becomes the
+#    ABSOLUTE final step (300000); without it T_max stays the ckpt's 30000 and LR
+#    OSCILLATES. Web dashboard ON (port 5001, localhost on the run host — tunnel
+#    with `ssh -L 5001:localhost:5001 vast`); benign exit-134 at teardown only,
+#    AFTER the final ckpt saves — see scripts/train.py:104.)
+
+# ── encoding (4-plane [0,8,16,17]; in_channels explicit per scoping §2 #6 to
+#    sidestep the orchestrator in_channels fallback) ──────────────────────────
+encoding: v6_live2
+in_channels: 4
+
+# ── LR — re-warm cosine over the remaining 270k (decision 1) ─────────────────
+# The 30k smoke FULLY annealed its cosine (lr=eta_min=5e-4). PyTorch's
+# CosineAnnealingLR uses a RECURSIVE update lr_new = ratio·(lr_old−eta_min)+eta_min,
+# so a restored eta_min lr is STUCK at eta_min regardless of T_max — a fully-
+# annealed cosine CANNOT be re-warmed by changing T_max alone (verified 2026-06-05:
+# both a top-level `scheduler_t_max:` key AND --override-scheduler-horizon left lr
+# pinned at 5e-4).
+# WORKING PATH (zero code change): the launch script builds a "rewarm anchor" copy
+# of the 30k ckpt with scheduler_state stripped + optimizer lr reset to initial_lr
+# (2e-3), then resumes it with --allow-fresh-scheduler. That rebuilds a FRESH
+# CosineAnnealingLR with T_max = total_steps = --iterations = 270000 (the REMAINING
+# horizon; a fresh scheduler counts from 0 at the resume point, so T_max is 270k
+# NOT 300k), last_epoch 0 at train-step 30000. VERIFIED curve: lr 2e-3 @30k →
+# 1.25e-3 @165k → eta_min 5e-4 @300k. Do NOT set total_steps here — --iterations
+# 270000 drives it. lr/eta_min below are the values the rewarm anchor pins.
+lr: 2e-3
+eta_min: 5e-4
+
+# ── CF-5 (smoke-continuity): zero the mis-fed opp-reply aux head ──────────────
+# compute_aux_loss trains the opp-reply head on the current-player MCTS visit
+# target (redundant with the policy head) — a flat-policy-reinforcing gradient
+# spending 15% of loss weight. The 30k smoke ran with this OFF; keep it OFF so
+# 30k→300k is single-variable. (reports/investigations/phase6_scoping_memo_20260531.md §3)
+aux_opp_reply_weight: 0.0
+
+# ── selfplay — IDENTICAL to the smoke's overrides (5080 throughput) ───────────
+# All other selfplay knobs inherit configs/selfplay.yaml base, which is already
+# L9-safe: legal_move_radius_jitter=true, playout_cap.temperature_threshold_
+# compound_moves=0 (cosine TEMP off), temp_min=0.5, max_game_moves=150,
+# mcts.n_simulations=400, rotation_enabled=true. NO legal_move_radius_schedule
+# (decision 2 — vast's 5→8 is a 25×25 curriculum; v6_live2 is 19×19).
+selfplay:
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  random_opening_plies: 0
+
+# ── mixing — explicit v6_live2 corpus pin (== resolvers.py <auto> result, but
+#    pinned for transparency on a 300k run; matches the smoke) ────────────────
+# decay_steps / initial_pretrained_weight / min_pretrained_weight inherit base
+# (200_000 / 0.8 / 0.1 — the plan's "canonical mixing schedule").
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+
+# ── eval — PRELONG long-run cadence (plan PHASE 2 = eval.yaml eval_profiles
+#    `cheap`+`milestone`, encoded as key overrides since the profile-selection
+#    hook is not yet wired — eval.yaml:114-116) ─────────────────────────────────
+# Steering is on the SMOOTH metrics (internal-elo, value_loss, draw-rate-vs-
+# intrinsic); SealBot-WR is the NOISY abort feed + periodic check, NOT a steer
+# signal (eval.yaml:137-142). The precise dual-temp n=100 reads are taken
+# STANDALONE on milestone checkpoints (scripts/run_sealbot_eval.py).
+eval_interval: 12500          # 12.5k — operator 10-15k band; SealBot-WR abort is
+                              # evaluated at this cadence (eval.yaml:132-135).
+eval_pipeline:
+  opponents:
+    best_checkpoint:
+      enabled: true
+      stride: 2               # §D-GOLONG eval-trim: every 25k (was 12.5k) — MCTS-vs-MCTS
+                              # arena is ~70min; promotion attempted every 25k boundary
+      n_games: 50             # §P3 eval-revamp: 100→50 (halves the ~68m arena)
+      opponent_sims: 64       # §P3 eval-revamp: 128→64 (the other half)
+    sealbot:
+      enabled: true
+      stride: 1               # every 12.5k — feeds the WR hard-abort + noisy trend
+      n_games: 100            # plan PHASE 2 n=100; abort triggers are extreme-low-WR (robust)
+    random:
+      enabled: true
+      stride: 1
+      n_games: 20
+    bootstrap_anchor:
+      enabled: true
+      stride: 2               # §D-GOLONG eval-trim: every 25k — MUST match best_checkpoint
+                              # (eval.yaml:46-47) for the floor gate
+      n_games: 20             # §P3 eval-revamp: argmax match n=20 (operator). Self-anchor is a
+      model_sims: 1           # wr≈0.50 near-no-op floor → argmax (1 sim each side) drops the
+      opponent_sims: 1        # ~73m arena to ~2m. SealBot-WR (kept) is the real collapse gate.
+      # Self-anchor (4-plane), == the smoke (v6_live2_smoke.yaml:59). NOT the
+      # eval.yaml:66 frozen-v7full default (a cross-encoding anchor; F07-safe but
+      # the floor would be a meaningless v6_live2-vs-v7full comparison). The
+      # continue is far above this fresh bootstrap, so wr_bootstrap_anchor starts
+      # >50% and bootstrap_floor (0.45) is a harmless sanity gate — the SealBot-WR
+      # gate is the real colony-capture catcher (plan PHASE 1).
+      path: "checkpoints/bootstrap_model_v6_live2.pt"
+    nnue:
+      # §P6 Hammerhead 2nd ladder — PERIODIC general-strength read (plan PHASE 2).
+      # REQUIRES hammerhead built on the run host (maturin develop --release in
+      # vendor/bots/hammerhead/hammerhead-engine + SDK) else evaluate_vs_nnue
+      # raises when this fires. time_per_stone_ms 500 == SealBot think_time_strong.
+      enabled: true
+      stride: 4               # §D-GOLONG: every 50k — NNUE is the slowest opponent
+                              # (~50min/round) and a slow-moving general-strength read;
+                              # no need more often than every 50k.
+      n_games: 50             # §P3 eval-revamp: 100→50 (halves the ~51m NNUE round)
+      time_per_stone_ms: 500
+      model_sims: 128
+    offwindow_adversary:
+      # §D-EXPLOIT Phase 3 — EXPLOITABILITY monitor: off-window adversary forced-win
+      # rate vs the model's own MCTS (the suite's missing adversarial axis; the
+      # multi-cluster A/B instrument). A monitored TREND, NOT a promotion/abort gate.
+      # Default-OFF here; the DECISIVE A/B is the standalone scripts/exploit_probe.py.
+      enabled: false
+      stride: 4               # low cadence (every 50k) — ~3m at n=100, fast forced games
+      n_games: 100
+      arm: "exploit"          # strongest hand-crafted attacker (vs "control" ablation)
+      model_sims: 128
+
+# eval_temperature (0.5) + eval_random_opening_plies (0) inherit base eval.yaml —
+# canonical (§174: plies-0; never blend opening-plies across temps, eval.yaml:118-128).
+
+# ── telemetry (== smoke) — outcome distribution + ply-cap value probe ─────────
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── monitors — inherit the 3 LIVE hard-abort gates from monitors.yaml
+#    (hard_abort_stride5_p90=30 + _consec=3; hard_abort_grad_norm=10.0). The
+#    config-driven draw-rate hard-abort key is added in the PHASE-1 commit. ─────
+monitors:
+  hard_abort_grad_norm: 10.0
+  # §D-GOLONG PHASE-1 — self-play draw-rate hard-abort (the one new gate; the
+  # other 3 collapse-signatures are covered by the existing live gates:
+  # stride5_p90 + grad_norm + sealbot-WR triple). Recent pool draw rate (mean of
+  # per-worker rolling-50 rates) ≥ threshold for N consecutive 12.5k eval points
+  # → halt. Wired: step_coordinator.py D5d + loop.py + alert logic.
+  #
+  # OPERATOR: CONFIRM the threshold. PROPOSED 0.55 — well above the v6_live2 30k
+  # smoke baseline (self-play draw 0.05) and normal fluctuation, below the
+  # existing 0.70 eyeball warn; 3 consecutive 12.5k eval points = 37.5k steps of
+  # sustained ≥55% draws = unambiguous draw-lock collapse. min_step 0 (the
+  # continue starts at step 30k; a draw-lock can manifest early). Set
+  # hard_abort_draw_rate ≤ 0 to disable. (No v6_live2-native draw bands beyond
+  # the smoke exist — this is a conservative collapse floor, not a tuned value.)
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0
