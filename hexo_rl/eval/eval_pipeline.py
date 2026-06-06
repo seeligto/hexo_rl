@@ -131,6 +131,8 @@ class EvalPipeline:
         # checkpoint); variants opt in via ``nnue.enabled: true``.  NnueBot is
         # imported lazily so the heavyweight engine never touches the hot path.
         self.nnue_cfg = opp.get("nnue", {})
+        # D-EXPLOIT Phase 3 — off-window adversary exploitability monitor (default-off).
+        self.offwindow_adversary_cfg = opp.get("offwindow_adversary", {})
 
         self.gating_cfg = cfg.get("gating", {})
         # §155 T2 — bootstrap-floor gate.  When enabled, promotion requires

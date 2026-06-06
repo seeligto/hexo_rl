@@ -87,6 +87,10 @@ class EvalRoundResult(TypedDict, total=False):
     ci_nnue: tuple[float, float]
     colony_wins_nnue: int
 
+    # D-EXPLOIT Phase 3 — off-window adversary EXPLOITABILITY monitor (trend, not a gate)
+    offwindow_forced_win_rate: float
+    offwindow_strict_forced_rate: float
+
     # vs bootstrap_anchor (§155 T2 floor)
     wr_bootstrap_anchor: float
     ci_bootstrap_anchor: tuple[float, float]

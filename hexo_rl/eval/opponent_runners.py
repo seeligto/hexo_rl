@@ -377,6 +377,30 @@ def _run_best(ctx: _RunnerContext) -> None:
 # pipeline so the ``self.db.insert_match`` row order is unchanged.  Pinned
 # by ``tests/test_eval_opponent_runners.py::test_opponents_canonical_order``.
 
+def _run_offwindow_adversary(ctx: _RunnerContext) -> None:
+    # D-EXPLOIT exploitability MONITOR — the off-window adversary's forced-win rate vs the
+    # model's own MCTS (genuine resistance). A monitored TREND in ctx.results, NOT a BT
+    # match or promotion gate. Default-off (no-op unless opponents.offwindow_adversary.enabled).
+    pipeline = ctx.pipeline
+    cfg = pipeline.offwindow_adversary_cfg
+    if not (cfg.get("enabled", False) and ctx.should_run("offwindow_adversary", cfg)):
+        return
+    n = int(cfg.get("n_games", 100))
+    arm = str(cfg.get("arm", "exploit"))
+    sims = cfg.get("model_sims")
+    summary = ctx.evaluator.evaluate_vs_offwindow_adversary(n_games=n, model_sims=sims, arm=arm)
+    rate = float(summary.get("off_window_forced_win_rate", 0.0))
+    strict = float(summary.get("strict_off_window_forced_rate", 0.0))
+    forced = int(round(rate * n))
+    ci_lo, ci_hi = _binomial_ci(forced, n)
+    print_match_result(
+        ctx.ckpt_name, f"offwindow_adv({arm})", forced, n - forced, n, ci_lo, ci_hi,
+    )
+    ctx.results["offwindow_forced_win_rate"] = rate
+    ctx.results["offwindow_strict_forced_rate"] = strict
+    ctx.results["eval_games"] = ctx.results.get("eval_games", 0) + n
+
+
 OPPONENTS: list[_OpponentSpec] = [
     _OpponentSpec("random", _run_random),
     _OpponentSpec("sealbot", _run_sealbot),
@@ -386,6 +410,9 @@ OPPONENTS: list[_OpponentSpec] = [
     # §P6 — appended LAST so the existing five keep their byte-for-byte
     # insert_match row order. Default-off (no-op unless opponents.nnue.enabled).
     _OpponentSpec("nnue", _run_nnue),
+    # D-EXPLOIT Phase 3 — exploitability monitor, default-off, appended last (no
+    # insert_match → does not perturb existing BT row order).
+    _OpponentSpec("offwindow_adversary", _run_offwindow_adversary),
 ]
 
 

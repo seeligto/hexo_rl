@@ -21,6 +21,11 @@ _ALLOWLIST = {
     "hexo_rl/bots/offwindow_adversary_bot.py",
     "hexo_rl/bots/offwindow_geom.py",
     "scripts/exploit_probe.py",
+    # D-EXPLOIT Phase 3 — the in-pipeline exploitability eval opponent (eval-path only).
+    "hexo_rl/eval/offwindow_probe.py",
+    "hexo_rl/eval/evaluator.py",
+    "hexo_rl/eval/opponent_runners.py",
+    "hexo_rl/eval/eval_pipeline.py",
     "tests/test_offwindow_adversary.py",
     "tests/test_offwindow_geom.py",
     "tests/test_offwindow_adversary_eval_path_only.py",

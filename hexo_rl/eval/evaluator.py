@@ -280,6 +280,31 @@ class Evaluator:
         sims = self.sealbot_model_sims if model_sims is None else int(model_sims)
         return self.evaluate(nnue, n_games, sims, phase="nnue")
 
+    def evaluate_vs_offwindow_adversary(
+        self,
+        n_games: int = 100,
+        model_sims: int | None = None,
+        arm: str = "exploit",
+        opening_plies: int = 6,
+    ) -> dict[str, Any]:
+        """EXPLOITABILITY metric (D-EXPLOIT) — the off-window forced-win rate of the
+        off-window adversary vs THIS model's own MCTS (genuine resistance). Returns the
+        summary dict; ``off_window_forced_win_rate`` is the monitored exploitability
+        trend, NOT a promotion gate. The adversary import is lazy (eval-path only).
+        Mirrors the standalone ``scripts/exploit_probe.py`` measurement."""
+        from hexo_rl.eval.offwindow_probe import run_adversary_games
+        encoding = _normalize_encoding_name(self.config.get("encoding"))
+        spec = _lookup_encoding(encoding)
+        model_player = ModelPlayer(
+            self.model, self.config, self.device, n_sims=int(model_sims or self.sealbot_model_sims),
+            temperature=0.0,
+        )
+        summary, _recs = run_adversary_games(
+            model_player, encoding, spec, arm, int(n_games), int(model_sims or self.sealbot_model_sims),
+            opening_plies=int(opening_plies), seed_base=self._eval_seed_base,
+        )
+        return summary
+
     def evaluate_vs_argmax_sealbot(
         self,
         n_games: int = 20,

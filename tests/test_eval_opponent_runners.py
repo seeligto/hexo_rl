@@ -52,6 +52,9 @@ def test_opponents_canonical_order() -> None:
         # §P6 — Hammerhead NNUE 2nd opponent, appended LAST so the original
         # five keep their byte-for-byte insert_match row order. Default-off.
         "nnue",
+        # D-EXPLOIT Phase 3 — exploitability monitor, appended LAST (no insert_match,
+        # so existing BT row order is preserved). Default-off.
+        "offwindow_adversary",
     ]
 
 
