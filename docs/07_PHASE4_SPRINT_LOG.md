@@ -4880,3 +4880,46 @@ colony/draw regime — both are training-self-play (Rust worker) phenomena; use 
 path, not ModelPlayer, to study training-time pathologies. L: the recorder's
 `checkpoint_step` must be tagged at the inference weight-sync (promotion), not per train
 step — self-play uses the promoted model, not the live trainer model.
+
+## §D-MULTICLUSTER S-PRE — §174 kill-gate precheck (CONDITIONALLY CLEAN) — 2026-06-06
+
+**Goal.** Predict the §174 argmax-degeneracy for the legal-set ACTION space CHEAPLY,
+BEFORE paying S0 (the Rust refactor). The handoff brief specced a static argmax-distribution
+probe; CORRECTED — §174 is a bootstrap→selfplay HANDOFF collapse (policy entropy ~2.4 nats,
+explicitly "not the lever"), so a static probe would false-CLEAR. Faithful instrument =
+MCTS viability, Python-runnable via `KClusterMCTSBot` (no Rust; §173 multi-window machinery).
+
+**Method.** A/B isolating ONLY the off-window drop (`records.rs:62`): CONTROL = single-window
+362 (`to_flat ≥ n_actions-1` dropped) vs TREATMENT = legal-set no-drop, same v6_live2 head,
+same Python K-cluster MCTS. The self-play A/B was UNDER-POWERED — sims-64 self-play stays
+K=1 (0% K>1 over 33,715 expansions, all models) → pivoted to MOVE-AGREEMENT on REAL spread
+positions (K≥2 AND off-window present), the regime where the drop can bite.
+
+**Result.** Move-agreement 0.85 (30k) / 0.79 (54.5k); TREATMENT picks an off-window move
+the single-window CONTROL cannot reach ~9% (checkpoint-independent). No collapse / no
+degeneracy → §174's "single-window-tuned policy breaks under multi-cluster scatter-max" is
+REFUTED for the 362-multiwindow legal-set. Real self-play geometry IS multi-window (K up to
+7; 79% of positions have ≥1 off-window legal move). Code-faithfulness PASS (5/5); red-team +
+completeness reviewers applied (3 agents).
+
+**Conditions (all must hold for GO):** (1) **S1 MANDATORY** — eval-only clears the *argmax*
+mechanism, NOT the training-loop handoff (value-head over-fit, §174 e50 mode); §174 failed
+that 3× → S1 still >50%-likely to fail. (2) **S0 MUST lock 19×19 / 362-head + multi-window**
+— NOT a single larger head (that reintroduces the §174-626 risk; registry has no multi-window
+362 encoding yet). (3) efficacy + off-window-pick QUALITY untested → S3 adversarial gate
+(`exploit_probe.py` ≤ 0.06), NEVER vs-bot WR.
+
+**Verdict: CONDITIONALLY CLEAN** — §174 *argmax* kill-gate CLEARED → the multi-cluster line
+is NOT killed; GO/no-go on S0 is now an EFFICACY + COST + S1-risk call, not a §174-argmax call.
+
+**Lessons.** L: a cheap pre-S0 §174 prediction IS possible via eval-path multi-window MCTS,
+but it clears only the argmax mechanism — the bootstrap→selfplay→training handoff is
+irreducibly an S1 (post-S0) gate (consistent with the existing "ModelPlayer eval-path ≠
+training self-play" lesson; the off-window drop is 3-layer in training — `records.rs:62` +
+`backup.rs:112` uniform prior + `backup.rs:105` 192-child cap — the eval probe models only
+the first). L: sims-64 Python self-play never spreads (K=1) regardless of model; use
+move-agreement on REAL replay positions, not self-play, to exercise the multi-window regime
+cheaply.
+
+Full: `reports/investigations/multicluster_s174_precheck_2026-06-06.md`.
+Probe: `scripts/multicluster_s174_precheck.py` + `_moveagreement.py` + `_measure_k.py`.
