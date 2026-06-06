@@ -150,8 +150,10 @@ eval_pipeline:
       # §D-EXPLOIT Phase 3 — EXPLOITABILITY monitor: off-window adversary forced-win
       # rate vs the model's own MCTS (the suite's missing adversarial axis; the
       # multi-cluster A/B instrument). A monitored TREND, NOT a promotion/abort gate.
-      # Default-OFF here; the DECISIVE A/B is the standalone scripts/exploit_probe.py.
-      enabled: false
+      # §D-MULTICLUSTER FOLLOW-ON (2026-06-06): ARMED low-cadence as a WATCH-ONLY
+      # exploitability trend (never a promotion/abort gate). The DECISIVE A/B
+      # remains the standalone scripts/exploit_probe.py.
+      enabled: true
       stride: 4               # low cadence (every 50k) — ~3m at n=100, fast forced games
       n_games: 100
       arm: "exploit"          # strongest hand-crafted attacker (vs "control" ablation)
