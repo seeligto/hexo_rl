@@ -31,6 +31,10 @@ _ALLOWLIST = {
     "hexo_rl/eval/eval_pipeline.py",
     "hexo_rl/eval/result_types.py",  # declares wr_nnue/ci_nnue keys (no import)
     "scripts/run_sealbot_eval.py",
+    # Offline structural-diagnosis probe (§D-PATHSTRENGTH): uses NnueBot as an
+    # eval-path strength opponent via a lazy import — same eval-path-only category
+    # as run_sealbot_eval.py, never on the self-play/training/position-gen path.
+    "scripts/structural_diagnosis/pathstrength_probe.py",
     "tests/test_nnue_bot.py",
     "tests/test_nnue_eval_path_only.py",
 }
