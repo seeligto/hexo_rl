@@ -1,126 +1,145 @@
 ---
 name: hf-upload
 description: >
-  Use when uploading HeXO artifacts (corpus .npz, bootstrap checkpoints,
-  trained models) to Hugging Face Hub, or when the user mentions "upload to
-  HF", "push corpus to huggingface", "publish bootstrap model", "hf auth",
-  "create HF dataset", or "create HF model repo". Covers token auth,
-  `hf auth login`, `hf upload` CLI, `HfApi.upload_file` / `upload_folder`
-  from huggingface_hub, and the convention for which repo type (dataset vs
-  model) HeXO artifacts belong to.
+  Use when uploading/removing HeXO artifacts (encoding-free corpus JSONL,
+  bootstrap checkpoints, trained models) on Hugging Face Hub, or when the user
+  mentions "upload to HF", "push corpus to huggingface", "publish bootstrap
+  model", "update the HF readme/dataset card", "delete files from HF", "hf auth",
+  "create HF dataset", or "create HF model repo". Covers token auth, `hf upload`
+  CLI, `HfApi.upload_file` / `delete_file`, dataset/model cards, repo visibility,
+  and the convention for which repo type HeXO artifacts belong to.
 ---
 
 # Hugging Face upload
 
-## When to use
+## Current HeXO repo layout (post 2026-06-04 JSONL migration)
 
-HeXO artifacts too large for git:
-- `data/bootstrap_corpus*.npz` → **dataset repo** (`timmyburn/hexo-bootstrap-corpus`)
-- `data/bootstrap_corpus_v3_human.npz` and successors → same dataset repo, versioned by filename
-- `bootstrap_model.pt`, `archive/bootstrap_v2_*.pt` → **model repo** (`timmyburn/hexo-bootstrap-models`)
-- Trained Phase-4 checkpoints (rare — usually stay local) → model repo
+- **`timmyburn/hexo-bootstrap-corpus`** (dataset, **public**) — the corpus is now
+  shipped **encoding-free**: `hexo_human_corpus.jsonl` (raw axial move lists, one
+  game per line) + `SCHEMA.md` + `dataset_metadata.json` + `README.md` dataset
+  card. The old `bootstrap_corpus*.npz` tensors were **retired/deleted** — they
+  baked one architecture's input planes into numpy and weren't portable.
+- **`timmyburn/hexo-bootstrap-models`** (model, **private**) — `bootstrap_model.pt`
+  only (currently the v6_live2 4-plane anchor, a weights-only `state_dict`) +
+  `README.md` model card.
+
+Encoding-specific NPZs are **no longer stored on HF** — `make install` rebuilds
+them locally from the JSONL (see "Download / install side"). See
+[[project_corpus_jsonl_install_migration]].
+
+## Generate the artifacts before uploading
+
+```bash
+# Corpus → encoding-free JSONL bundle (jsonl + SCHEMA.md + dataset_metadata.json + README)
+.venv/bin/python scripts/export_corpus_jsonl.py \
+  --input data/corpus/raw_human --out /tmp/hexo_corpus_export
+# Bootstrap model is just a checkpoint .pt (weights-only state_dict)
+```
 
 ## Auth (one-time per machine)
 
 ```bash
-# 1. Generate a token at https://huggingface.co/settings/tokens
-#    - type "Write" (needed to upload)
-#    - scope: restricted to the specific repos once they exist, or "All repos"
-# 2. Log in (stores token at ~/.cache/huggingface/token)
-.venv/bin/hf auth login
-#    Paste token when prompted. Choose "n" for git credential integration
-#    unless you want `git push` to large-file HF repos from CLI.
-# 3. Verify
-.venv/bin/hf auth whoami
+# Token at https://huggingface.co/settings/tokens — type "Write".
+.venv/bin/hf auth login          # stores ~/.cache/huggingface/token; "n" to git-cred
+.venv/bin/hf auth whoami         # verify (should print: timmyburn)
 ```
 
-Alternative — env var (CI / headless):
+Headless / CI alternative: `export HF_TOKEN=hf_xxx` (read from a secret store,
+never hardcode). `huggingface_hub` picks it up automatically.
+
+Keep the client current — the CLI is `hf` (the old `huggingface-cli` is
+deprecated): `.venv/bin/pip install -U "huggingface_hub[cli]"` (≥ 1.17).
+
+## Upload — CLI (preferred for one-off files)
+
+`hf upload <repo_id> <local_path> <path_in_repo> --repo-type {dataset|model}`.
+Repos already exist; `hf repo create <name> --type dataset --private` is only for
+a brand-new repo.
 
 ```bash
-export HF_TOKEN=hf_xxxxxxxxxxxxx   # read from secret store, never hardcode
+REPO=timmyburn/hexo-bootstrap-corpus ; EXP=/tmp/hexo_corpus_export
+for f in hexo_human_corpus.jsonl SCHEMA.md dataset_metadata.json README.md; do
+  .venv/bin/hf upload "$REPO" "$EXP/$f" "$f" --repo-type dataset \
+    --commit-message "Update $f"
+done
+
+# Bootstrap model — rename to the canonical bootstrap_model.pt in the repo
+.venv/bin/hf upload timmyburn/hexo-bootstrap-models \
+  checkpoints/bootstrap_model_v6_live2.pt bootstrap_model.pt --repo-type model \
+  --commit-message "Replace bootstrap_model.pt with v6_live2 4-plane anchor"
 ```
 
-`huggingface_hub` reads `HF_TOKEN` automatically; no login step needed.
+Large files (>5 GB) auto-use hf-xet chunked upload (from `huggingface_hub[cli]`).
+Do not pre-split. The JSONL corpus is only a few MB.
 
-## Upload — CLI (preferred for one-off large files)
+## Delete files / retire old artifacts
 
-```bash
-# Create repo once (idempotent; --repo-type dataset for corpus, default is model)
-.venv/bin/hf repo create hexo-bootstrap-corpus --type dataset --private
-# Switch to public later: hf repo settings ... (or via web UI)
-
-# Upload a single file
-.venv/bin/hf upload \
-  timmyburn/hexo-bootstrap-corpus \
-  data/bootstrap_corpus_v3_human.npz \
-  bootstrap_corpus_v3_human.npz \
-  --repo-type dataset
-
-# Upload a folder (e.g. all corpus variants at once)
-.venv/bin/hf upload \
-  timmyburn/hexo-bootstrap-corpus \
-  data/ . \
-  --repo-type dataset \
-  --include "bootstrap_corpus*.npz"
-```
-
-Large files (>5 GB) automatically use hf-xet chunked upload — installed via
-`huggingface_hub[cli]` extras. Do not pre-split.
-
-## Upload — Python (for scripted/automated paths)
+No CLI verb — use the Python API (idempotent per file):
 
 ```python
 from huggingface_hub import HfApi
-api = HfApi()  # uses HF_TOKEN or ~/.cache/huggingface/token
-
-api.create_repo(
-    repo_id="timmyburn/hexo-bootstrap-corpus",
-    repo_type="dataset",
-    private=True,
-    exist_ok=True,
-)
-api.upload_file(
-    path_or_fileobj="data/bootstrap_corpus_v3_human.npz",
-    path_in_repo="bootstrap_corpus_v3_human.npz",
-    repo_id="timmyburn/hexo-bootstrap-corpus",
-    repo_type="dataset",
-    commit_message="add v3 human corpus (2026-04-22)",
-)
+api = HfApi()
+for f in ["bootstrap_corpus.npz", "bootstrap_corpus_v6w25.npz"]:
+    api.delete_file(path_in_repo=f, repo_id="timmyburn/hexo-bootstrap-corpus",
+                    repo_type="dataset", commit_message=f"Retire {f}")
 ```
 
-## Download side (for install script — future work)
+List current contents first: `api.list_repo_files(repo_id, repo_type=...)`.
+Deleting from a **public** repo is outward-facing — confirm scope with the user,
+and watch ordering: don't delete a file `make install` still reads (e.g. the
+corpus the trainer resolves) until the consumer has been migrated.
 
-```python
-from huggingface_hub import hf_hub_download
-path = hf_hub_download(
-    repo_id="timmyburn/hexo-bootstrap-corpus",
-    filename="bootstrap_corpus_v3_human.npz",
-    repo_type="dataset",
-    local_dir="data/",
-    local_dir_use_symlinks=False,
-)
+## Dataset / model card (README.md)
+
+The repo `README.md` IS the card and needs YAML frontmatter. Dataset card:
+
+```markdown
+---
+license: mit
+pretty_name: Hexo Human Corpus (encoding-free)
+task_categories: [other]
+tags: [hex, hex-tac-toe, board-games, game-records]
+size_categories: [1K<n<10K]
+---
+# ...schema, conventions, usage...
 ```
 
-CLI equivalent: `hf download timmyburn/hexo-bootstrap-corpus bootstrap_corpus_v3_human.npz --repo-type dataset --local-dir data/`.
+HF datasets default to CC-BY-4.0 — HeXO is **MIT**, so set `license: mit`
+explicitly. Model card notes encoding (v6_live2 = 4-plane), architecture, the
+corpus it was pretrained on, and format (weights-only state_dict).
 
-## Conventions for HeXO
+## Download / install side (NOT future work — it's live)
 
-- **Dataset repo**: `hexo-bootstrap-corpus` — all `.npz` corpora; filename carries
-  the version (`_v2`, `_v3_human`, `_18plane`). README.md in repo documents
-  each file's source, row count, and generation date.
-- **Model repo**: `hexo-bootstrap-models` — `.pt` bootstrap checkpoints + model
-  card noting training config (18-plane, SE+aux, BCE value), corpus used,
-  probe pass rates (C2/C3).
-- **Never upload**: `checkpoints/` live training dir, `logs/`, `runs/`,
-  `.torchinductor-cache/`.
+`scripts/install.sh` step 9:
+1. curl the model from the (private) model repo — `hf_download` **cache-skips** if
+   `checkpoints/bootstrap_model.pt` already exists; a fresh box without auth gets
+   a 401 (non-fatal). Provide the model out-of-band or set up auth on clean boxes.
+2. curl `hexo_human_corpus.jsonl` from the public dataset repo, then **rebuild the
+   encoding-specific NPZ locally**:
+   `export_corpus_npz.py --from-jsonl data/hexo_human_corpus.jsonl --encoding $CORPUS_ENCODING`.
+   The output path is the registry's `resolve_corpus_path(lookup(enc))` (e.g.
+   v6_live2 → `data/bootstrap_corpus_v6_live2.npz`) — never the hardcoded
+   `bootstrap_corpus.npz`, which is the 8-plane v6 path. `CORPUS_ENCODING` must
+   match the model's input planes.
+
+Verify the whole jumpstart path end-to-end against live HF (auth model pull +
+rebuild at the resolved path + forward pass + install-path==trainer-path):
+
+```bash
+bash scripts/probe_install_jumpstart.sh        # PROBE PASS on v6_live2
+# from a worktree without its own .venv: VENV=/path/to/repo/.venv bash scripts/...
+```
 
 ## Pitfalls
 
-- `hf auth login --add-to-git-credential` will let `git push` to HF work for
-  small files, but HF model/dataset pushes should go through `hf upload` (uses
-  LFS/xet automatically; raw `git push` to HF without `git lfs` will reject).
-- Repo visibility defaults to **public** unless `--private` is passed at create
-  time. Default to private until corpus content + license are confirmed OK.
-- HF datasets inherit CC-BY-4.0 by default unless overridden in the repo's
-  `README.md` YAML frontmatter (`license: mit`). HeXO uses MIT — set it
-  explicitly in the dataset README.
+- Repo visibility: dataset is **public**, model is **private** (intentional). New
+  repos default public unless `--private` at create; flipping public is
+  effectively a publish — confirm with the user first.
+- Encoding coupling: the model's input-plane count and the rebuilt corpus
+  encoding MUST match (v6_live2 = 4-plane). Uploading a model of a different
+  encoding requires the matching `CORPUS_ENCODING` in install.
+- `hf auth login --add-to-git-credential` lets small-file `git push` to HF work,
+  but model/dataset pushes should go through `hf upload` (LFS/xet auto; raw
+  `git push` without git-lfs rejects).
+- **Never upload**: `checkpoints/` live training dir, `logs/`, `runs/`,
+  `.torchinductor-cache/`, encoding-baked `*.npz` (retired — ship the JSONL).
