@@ -39,6 +39,7 @@ def test_monitoring_config_carries_wr_thresholds():
         "wr_rolling_min_step",
         "wr_collapse_from_peak_ratio",
         "wr_collapse_min_step",
+        "wr_collapse_consecutive_evals",
         "wr_early_death_threshold",
         "wr_early_death_min_step",
     ):
@@ -56,6 +57,7 @@ def test_wr_hard_abort_defaults_match_l50_spec():
     assert cfg.wr_rolling_min_step == 20000
     assert cfg.wr_collapse_from_peak_ratio == 0.5
     assert cfg.wr_collapse_min_step == 25000
+    assert cfg.wr_collapse_consecutive_evals == 3
     assert cfg.wr_early_death_threshold == 0.05
     assert cfg.wr_early_death_min_step == 15000
 
@@ -78,20 +80,34 @@ def test_l50_canary_downgrade_documented_in_module_docstring():
     )
 
 
-def test_wave2_trajectory_would_have_fired_at_step_30k():
-    """Wave 2 actual trajectory: peak 33% @ 20k → 11% @ 30k. The L50 gate
-    would have caught the collapse at step 30k (Trigger B: current 11% <
-    peak 33% × 0.5 = 16.5%) — 17k steps earlier than the §S180b 8%
-    threshold that actually fired at step 40k.
+def test_collapse_requires_consecutive_evals_not_single_dip():
+    """3-consecutive policy (2026-06-07): Triggers B/C require
+    ``wr_collapse_consecutive_evals`` consecutive low evals, NOT a single dip.
 
-    This is the load-bearing integration test for the L50 fix.
+    Motivation: the colony attractor causes transient SealBot-WR dips that
+    self-correct (§175/L34). A single 5% dip at step 75k fired the OLD
+    single-point Trigger B and HARD-ABORTED a RECOVERING golong run at 87.5k
+    (the 87.5k re-eval recovered to ~0.23). Load-bearing in BOTH directions: a
+    single dip must NOT fire, a SUSTAINED collapse MUST still fire.
     """
     cfg = MonitoringConfig()
-    wave2_history = [(10000, 0.24), (20000, 0.33), (30000, 0.11)]
-    msg = check_sealbot_wr_hard_abort(wave2_history, 30000, cfg)
-    assert msg is not None, (
-        "Wave 2 collapse trajectory must trigger HARD-ABORT at step 30k. "
-        "If this test fails the L50 fix is broken — the gate would miss "
-        "Wave-2-style peak-and-collapse."
+    assert cfg.wr_collapse_consecutive_evals == 3
+
+    # The golong incident — peak 0.29 then a SINGLE 0.05 dip → must NOT fire.
+    single_dip = [(50000, 0.38), (62500, 0.29), (75000, 0.05)]
+    assert check_sealbot_wr_hard_abort(single_dip, 87500, cfg) is None, (
+        "A single transient WR dip must NOT hard-abort — it killed a recovering "
+        "golong run at 87.5k before this fix."
     )
-    assert "Wave3-B" in msg
+    # Dip then recovery → must NOT fire.
+    recovered = [(62500, 0.29), (75000, 0.05), (87500, 0.23)]
+    assert check_sealbot_wr_hard_abort(recovered, 87500, cfg) is None
+
+    # A SUSTAINED Wave-2-style collapse (3 consecutive below peak 0.38 × 0.5 =
+    # 0.19) MUST still HARD-ABORT — the gate must not miss a real collapse.
+    sustained = [(20000, 0.38), (30000, 0.12), (42500, 0.08), (55000, 0.06)]
+    msg = check_sealbot_wr_hard_abort(sustained, 55000, cfg)
+    assert msg is not None and "Wave3-B" in msg, (
+        "A sustained 3-consecutive collapse must still HARD-ABORT — the gate "
+        "must not miss a real Wave-2-style peak-and-collapse."
+    )

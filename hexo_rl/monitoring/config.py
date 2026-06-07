@@ -50,6 +50,14 @@ class MonitoringConfig:
     wr_rolling_min_step: int = 20000
     wr_collapse_from_peak_ratio: float = 0.5
     wr_collapse_min_step: int = 25000
+    # Require N consecutive eval rounds below the floor before HARD-ABORT fires
+    # for triggers B (collapse-from-peak) and C (early death). The colony
+    # attractor causes transient SealBot-WR dips that self-correct (§175/L34);
+    # a single 5% dip at step 75k aborted a RECOVERING golong run at 87.5k
+    # (2026-06-07 — 87.5k re-eval recovered to ~0.23). 3 consec @ 12.5k cadence
+    # = ~37.5k of sustained collapse, distinguishing a real collapse from an
+    # oscillation. (Trigger A already has its own wr_rolling_consecutive_evals.)
+    wr_collapse_consecutive_evals: int = 3
     wr_early_death_threshold: float = 0.05
     wr_early_death_min_step: int = 15000
 

@@ -111,10 +111,12 @@ def check_sealbot_wr_hard_abort(
       A. Rolling-mean WR below `wr_rolling_threshold` for
          `wr_rolling_consecutive_evals` consecutive evals AFTER
          `wr_rolling_min_step` — catches gradual decline.
-      B. Current WR < peak × `wr_collapse_from_peak_ratio` AND past
-         `wr_collapse_min_step` — catches Wave-2-style 33%→16% collapse.
-      C. Current WR < `wr_early_death_threshold` past
-         `wr_early_death_min_step` — catches §S180b-style early death.
+      B. WR < peak × `wr_collapse_from_peak_ratio` for
+         `wr_collapse_consecutive_evals` consecutive evals past
+         `wr_collapse_min_step` — catches Wave-2-style 33%→16% collapse
+         (consecutive: avoids aborting on a self-correcting transient dip).
+      C. WR < `wr_early_death_threshold` for `wr_collapse_consecutive_evals`
+         consecutive evals past `wr_early_death_min_step` — §S180b early death.
 
     Args:
         wr_history: list of (step, wr) tuples for last N eval rounds
@@ -136,27 +138,43 @@ def check_sealbot_wr_hard_abort(
     current_wr = wr_history[-1][1]
     peak_wr = max(wr for _, wr in wr_history)
 
-    # Trigger C first (earliest catchable — fires past min_step 15k).
+    # Triggers C and B now require N CONSECUTIVE low evals (not single-point):
+    # the colony attractor causes transient SealBot-WR dips that self-correct
+    # (§175/L34); a single 5% dip at 75k aborted a RECOVERING golong run at 87.5k
+    # (2026-06-07; 87.5k re-eval recovered to ~0.23).
+    n_consec_collapse = int(cfg.wr_collapse_consecutive_evals)
+
+    # Trigger C (early death — N consecutive below floor, past min_step 15k).
     if (
         current_step > cfg.wr_early_death_min_step
-        and current_wr < cfg.wr_early_death_threshold
+        and len(wr_history) >= n_consec_collapse
+        and all(
+            wr < cfg.wr_early_death_threshold
+            for _, wr in wr_history[-n_consec_collapse:]
+        )
     ):
         return (
             f"HARD-ABORT (L50/Wave3-C): SealBot WR {current_wr:.1%} "
-            f"< {cfg.wr_early_death_threshold:.0%} past step "
-            f"{cfg.wr_early_death_min_step:,} — §S180b-style early death"
+            f"< {cfg.wr_early_death_threshold:.0%} for {n_consec_collapse} "
+            f"consecutive evals past step {cfg.wr_early_death_min_step:,} "
+            f"— §S180b-style early death"
         )
 
-    # Trigger B (collapse from peak past min_step 25k).
+    # Trigger B (collapse from peak — N consecutive below peak×ratio, past 25k).
     if (
         current_step > cfg.wr_collapse_min_step
         and peak_wr > 0.0
-        and current_wr < peak_wr * cfg.wr_collapse_from_peak_ratio
+        and len(wr_history) >= n_consec_collapse
+        and all(
+            wr < peak_wr * cfg.wr_collapse_from_peak_ratio
+            for _, wr in wr_history[-n_consec_collapse:]
+        )
     ):
         return (
             f"HARD-ABORT (L50/Wave3-B): SealBot WR {current_wr:.1%} "
             f"< peak {peak_wr:.1%} × {cfg.wr_collapse_from_peak_ratio:.0%} "
-            f"past step {cfg.wr_collapse_min_step:,} — Wave-2-style collapse"
+            f"for {n_consec_collapse} consecutive evals past step "
+            f"{cfg.wr_collapse_min_step:,} — Wave-2-style collapse"
         )
 
     # Trigger A (rolling-mean below threshold for consecutive evals past min_step 20k).
