@@ -4923,3 +4923,59 @@ cheaply.
 
 Full: `reports/investigations/multicluster_s174_precheck_2026-06-06.md`.
 Probe: `scripts/multicluster_s174_precheck.py` + `_moveagreement.py` + `_measure_k.py`.
+
+## §D-FRAGILITY — why do the long runs break + spread? (A/B/C diagnosis) — 2026-06-07
+
+Verdict: **A (LR/training-stability transient); B (off-window value-corruption) DECISIVELY
+FALSIFIED; MODERATE confidence (~0.72–0.75).** Eval-only on the LIVE v6_live2 §D-GOLONG run
+(30k→90k arc pulled from vast); diagnosis only, no re-pretrain/Rust/engine change.
+
+PHASE 0 — the run did NOT "break twice." ONE causal chain: a FALSE single-point SealBot-WR
+gate abort at 87.5k (`v6l2golong.log:146636`, wr_history `[[62500,0.29],[75000,0.05]]` — only
+2 points; the 87.5k drain re-eval had already RECOVERED to ~0.19) + a BENIGN exit-134 SIGABRT
+(`terminate called without an active exception`, `:147047`) during graceful teardown AFTER
+checkpoint+buffers saved. Gate fix committed `b340e99` (B/C triggers now require
+`wr_collapse_consecutive_evals=3`; the 2-point history cannot fire it). The "second abort" is
+the benign teardown the mandate anticipated, not an independent divergence.
+
+PHASE 1 (decisive) — value-head won/lost discrimination (AUC) across 10 checkpoints (40k→90k)
+on a matched 8000-position arc pool (`scripts/structural_diagnosis/fragility_value_discrim.py`,
+reusing `forced_win_detector` + `golong_game_analysis` + `load_inference_model`):
+  • B(iii) FALSE (lead refutation, confound-free): AUC_spread PEAKS at 75k under ALL spread
+    metrics while `value_fc2` weight-norm COLLAPSES (0.224→0.143) + g4 band fails → the 75k
+    event is a weight/CALIBRATION wobble, NOT a ranking-discrimination collapse (AUC is
+    scale-invariant). fc2 self-corrected non-monotonically to ~0.20 by 85–90k.
+  • B(i) FALSE: AUC_compact never reaches 0.70 (max 0.688); spread-vs-compact direction FLIPS
+    by metric (bbox/ncomp spread>compact; density spread<compact) = a ply confound (spread ply
+    72.9 vs compact 21.6), NOT a clean spread deficit.
+  • B(ii) = off-window artifact: clear-won OFF-window-only spread reads ~0/neg (CORRECT —
+    unconvertible, no logit); clear-won IN-WINDOW (convertible) spread reads positive
+    (+0.13..+0.47, peaks 75k).
+  • B(iv) precondition IS MET (independently replicated): per-game off-window forced-win rate
+    RISES with spread (Spearman(bbox, off-window rate) +0.356, p≈9e-11). → **B is dead on its
+    CONSEQUENCE (i+iii), not its precondition** (the stronger refutation): the throttle is
+    real, but the value head handles it correctly and spread-discrimination does not collapse.
+
+PHASE 2 — 75k event at FLAT lr ~0.00197 (53k re-warm 2e-3 plateau; did NOT decay through
+recovery → A's literal lr-decay mechanism doesn't hold, but sustained-high-lr wobble does);
+grad_norm stable 0.9–1.4; t3_spread dipped 0.30@77.5-83k → recovered 0.43.
+
+PHASE 3 — SealBot-WR softening (b340e99) is necessary+sufficient; stride5 (passive p90=4) +
+grad_norm stay FAST (never false-fired, don't self-correct); g4 band is already warn-only
+(fired a TRUE warning at 75k without aborting).
+
+Verification: 7-agent fresh-review + red-team workflow (`wf_72614f66-0b1`) — 6/7 upheld A
+(methodology SOUND); 1 red-team (recovery-illusory, conf 0.25) capped confidence, did not
+overturn. Caught + corrected a reviewer error (3 agents cited the in-run EMA to wrongly claim
+B(iv) fails).
+
+Decision: fix LR/stability; bank `checkpoint_00087500.pt` as deployable single-window
+baseline; **multi-cluster PARKED on the fragility basis** (B falsified → not a fragility fix;
+off-window remains a real ACTION blind spot for the SEPARATE adversarial-human-exploit question
+only). **REVISIT if the 100k full SealBot eval ≤ ~0.15** or loss/draw/grad destabilize. No
+evidence prior long runs all broke at 75–90k (first run to traverse it; recovered) → fragility
+NOT systematic.
+
+Full: `reports/investigations/fragility_diagnosis_2026-06-07.md`.
+Instruments (local, uncommitted): `scripts/structural_diagnosis/fragility_value_discrim.py`,
+`investigation/fragility_2026-06-07/`.
