@@ -5062,6 +5062,20 @@ MCTS-fork-mass ALL peak at 75k (the §D-FRAGILITY/§D-COHERENCE sharpness transi
 value+search are a COUPLED WAVE riding ON TOP of the spread substrate, not its generator. Value-first
 falsified in the wrong direction; value/search are clean signals to lean ON, not holes to patch.
 
+**D5 follow-on (2 purpose instruments; reframe: over-spread = own-force FRAGMENTATION, a single-window
+weights property, NOT off-window reach — the block was un-RECORDED moves, not the window mask).** Leg A
+INTERNAL (banked self-play, n≈210–320/bucket): the more-fragmented side is NEVER the loser
+(P(more-frag lost)=0.40–0.50 ≤0.5 everywhere; winner has MORE components; mildly favored early, neutral
+by the finish) → **over-spread NOT punished internally** → the co-adaptation PRECONDITION is CONFIRMED.
+Leg B EXTERNAL (generated SealBot games, KClusterMCTSBot @ temp 1.0, REGIME=REPRO verified): the naive
+cut-frac Δ(loss−win) (+0.16/+0.04/+0.21, growing) is a **GAME-LENGTH confound** (losses longer: 30k
+69v46, 87.5k 63v47 plies); STONE-MATCHED (fixed-ply) Δ mostly NULL/reversed (30k ply40 −0.13, 50k
+−0.08/−0.01 straddle; 87.5k ply60 +0.16 CI>0 but n_win=2, uninterpretable) — win class underpowered (WR
+0.09–0.14). → **external loss-spread NOT established** (length-mediated, not clean spread-force-loses).
+**D5 = precondition CONFIRMED, external clause INCONCLUSIVE** — leading framing, not a clean LIT driver.
+Branch 2 (compact-reference regularizer) rests on the confirmed internal neutrality. Instruments:
+`overspread_d5_internal_punish.py` + `overspread_d5_sealbot_lossspread.py`.
+
 **TURN-vs-PLY standing hole (operator insight, folded in).** A turn = 2 stones; `count_winning_moves`
 / quiescence are depth-1 (single-stone) — wrong unit. New turn-correct primitive
 `scripts/structural_diagnosis/turn_wins.py::count_winning_turns` = `|depth1 ∪ {depth2 second-stones}|`.
