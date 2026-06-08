@@ -5453,3 +5453,27 @@ Full: `reports/investigations/founding_signal_2026-06-08.md`. Banked data:
 `argmax_discriminator.py` (temp×opening 2×2), `overspread_causal.py`, `spread_trajectory.py`, +
 `rr_agg`/`argmax_agg`/`ctrl_agg`/`rr_5rung_agg` outputs. Housekeeping: `a7ba110` (off-window
 determinism fix) still UNPUSHED on `phase4.5/overspread_driver` (2 ahead) — operator-gated.
+
+**§D-LAND — branch consolidated + FF-merged to master (2026-06-08).** Hygiene close of the §D arc
+(no investigation, no instrument, no run). 4 hygiene commits landed on `phase4.5/overspread_driver`:
+`936c7ad` (this §D-FOUNDING entry), `a07d405` (gitignore `investigation/` — local-evidence dir, mirrors
+the `reports/**` do-not-travel convention; no tracked files lived under it), `c221398` (force-add the 11
+untracked `scripts/structural_diagnosis/` evidence scripts, preserved as-is — not pytest-collected, zero
+test impact), `1d40d6f` (deterministic `(q,r)` tiebreak in `generate_threat_probe_fixtures.py` regen —
+the latent risk flagged in `aa2833a`/§D-RECONVERGE; regen-time only, the baked fixture NPZ is unchanged
+at runtime). Pre-merge gate PASS: `make test` 1829 passed / 0 failed (the `test_shape_fallback`
+full-suite flake did not appear); clean bisect (11 commits, all conventional, no WIP/fixup); FF-able.
+**FF-merged master `7e35290 → 1d40d6f`** (no merge commit). NO tag — investigation arc, not a refactor
+cycle; `checkpoint-archive-policy` defines no git-tag convention here. Supersedes the stale Housekeeping
+line above: all §D commits are now pushed and on master. NOTE: two earlier pushed commits (`9085df9`,
+`c339688`) carry the repo-standard `Co-Authored-By` trailer (present in 277/500 recent master commits) —
+left as-is; the 4 new hygiene commits omit it.
+
+**NEXT FEATURE (own branch, NOT built in this merge):** promote the two reusable instruments into clean
+tracked primitives — (a) the checkpoint-relative round-robin Elo (`rr_driver`, currently an untracked
+workaround around the hardcoded-v6 4-plane loader) as the Objective-B steer/abort floor; (b) the
+adversarial/off-distribution gate (`exploit_probe` / off-window probe / opening-scatter Elo) as the
+Objective-A gate — the steer/abort instruments the eval-swap lesson needs. Deferred fold-in for that
+branch (no tracked target here, `rr_driver` lives under the now-gitignored
+`investigation/founding_2026-06-08/`): log the play command (sims/temp) alongside round-robin results
+(closes the docstring-says-128 / run-used-64 reproducibility gap).
