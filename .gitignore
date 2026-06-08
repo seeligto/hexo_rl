@@ -36,6 +36,7 @@ reports/**
 !reports/FINDINGS_SUMMARY.md
 !reports/sprint_archive/
 !reports/sprint_archive/**
+investigation/
 archive/
 !scripts/archive/
 !scripts/archive/**
