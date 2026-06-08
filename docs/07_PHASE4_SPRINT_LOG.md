@@ -5381,3 +5381,75 @@ Full: `reports/investigations/extlink_gate_2026-06-08.md`. Instruments (local):
 `scripts/exploit_probe.py` (deterministic), `investigation/extlink_2026-06-08/` (PREREGISTRATION +
 `determinism_verify.py` + `analyze_p1.py` + `uncapped_defender_causal.py` + JSON + `review_workflow.js`).
 Phase-0 commit `a7ba110`.
+
+## §D-FOUNDING — re-establish the golong failure signal on the right instrument (checkpoint-relative round-robin) — 2026-06-08
+
+Tested the unexamined premise every prior §D assumed: did the golong suffer a self-play STRENGTH
+regression? Six investigations chased the CAUSE of the "−0.32 collapse" — a vs-SealBot WR (the
+project's own flagged-WRONG strength instrument), never re-established on the instrument-matched
+(checkpoint-relative MCTS-vs-MCTS) measure. EVAL-ONLY, git-diff clean (all code untracked under
+`investigation/founding_2026-06-08/`).
+
+**DATA RECOVERY (the enabler).** The post-peak ladder (75k…112.5k) believed lost was still on the live
+vast box in `checkpoints/_archive_golong_kill_20260608T065342Z/` — full ladder 5k→112.5k + BANK (50k
+PEAK / 85k PRE / 90k POST) + `best_model_75k_deceptive.pt` + 80M final log + AS-RUN yaml + replays.
+Pulled + `torch.load`-verified (v6_live2 4-plane auto-detect). First §D able to measure the post-peak
+segment checkpoint-relatively.
+
+**VERDICT — TWO-FACED, and that is the result.**
+- **On-distribution (standard openings): FLAT.** 12-rung all-pairs round-robin, MCTS-vs-MCTS, 64 sims
+  (compute-bound at 128; relative Elo robust to sims), temp 0.5, color-balanced, n=40/pair (2640
+  games), Bradley-Terry Elo. Slope **+0.13/1k, bootstrap CI [−0.25,+0.55], P(>0)=0.73, r²=0.014**; late
+  rungs 90–112.5k statistically = 50k; heavily non-transitive (25/66 pairs invert; s45k beats s112.5k
+  15–4). **No CI-resolved self-play strength regression → Objective B (recover self-play strength) is
+  ILL-POSED.**
+- **Off-distribution (6 random opening plies): RESOLVED late FELL.** Instrument 2×2 (temp × opening,
+  rungs 50/75/90/100/112.5k, 400g/cell): holding temp=0.5, open0→open6 drops 90–112.5k from ≈50k
+  (n.s.) to −55/−83/−88 Elo (CIs exclude 0); argmax (temp0) deepens only modestly. **Opening
+  randomization, NOT temperature, is the lever.** Slope −1.4 to −1.7/1k, P(neg) 0.95–0.98, growing
+  post-75k. **→ Objective A (off-distribution exploitability / off-window brittleness) is REAL**,
+  triangulating SealBot-WR collapse + §D-EXTLINK off-window. Mechanism: scatter enlarges live-stone
+  bbox → more completing cells off-window → spread-specialized late model (more off-window-dependent)
+  punished hardest = the single-window × over-spread interaction, surfaced by scatter not a bot.
+
+**Over-spread = style/symptom correlate, NOT the strength driver** (powered, n=759 self-play): the
+naive "loser more-spread" (colony z=+11.5) is a SHORT-GAME blowout artifact — length-controlled it is
+neutral/inverted (glen≥95 colony z=−1.7; winner more-spread by pw-dist z=−5.9); the loser−winner gap
+is stable/shrinking with step; monotone-rising spread co-moves with FLAT on-distribution strength.
+Its causal role is on the EXPLOITABILITY axis (the off-window mechanism), not Objective B.
+
+**Premise corrections** (CLAUDE.md re-validate; stated plainly): **C1** no "canonical 200k floor"
+exists anywhere in this log — unsourced/unverified. **C2** the run was NOT auto-killed by the SealBot
+gate — the Wave3-B WR gate fired a `level:"warning"` at 87.5k (5.0% < 14.5%), the operator ran 25k
+MORE steps to 112722, then an EXTERNAL process kill mid-eval; failure mode = instrument MISDIAGNOSIS
+(matchup-WR read as a strength meter) misdirecting six investigations, not a premature auto-kill.
+**C3** STRENGTH-ROSE/FELL/FLAT + §D-FOUNDING were dispatcher-defined, not pre-existing.
+
+**INTELLECTUAL-HONESTY / falsified-register:** the first-pass reported **STRENGTH-ROSE +1.46/1k
+"CI-cleared"** — a BUG (inverse-CI-variance WLS gave the zero-width BT anchor ~10¹⁵× weight, pinning
+the fit through (35k,0)). The fresh-context red-team caught it; corrected → FLAT. L: never weight a LS
+fit by a CI that can be exactly zero (the BT anchor); use a game-level bootstrap. L (re-validate the
+unit, again): the SealBot −0.32 "collapse" was REAL but it measures OFF-DISTRIBUTION EXPLOITABILITY
+(Objective A), not self-play STRENGTH (Objective B) — the founding measurement's MEANING was never
+validated against the decision it gated (matchup-WR ≠ strength), the exact failure CLAUDE.md's
+"verify the measurement unit" rule warns of. L: a borderline retraction earns a CHEAP eval-only
+discriminator before any lever — the temp×opening 2×2 (minutes on the 5080) flipped "FLAT" into the
+correct two-faced read; the red-team did not just verify, it changed the conclusion.
+
+**ROUTING (design only, operator-gated):** Objective B ill-posed → do NOT open a 7th self-play-
+strength cause-hunt. Pour effort into Objective A — the off-distribution/off-window exploitability the
+spread specialization buys: (1) the single-window→multi-cluster/K-window ENCODING decision (§D-GOLONG
+4d) now has measured evidence (the opening-scatter FELL is a measured off-window blind-spot instance);
+Branch C (compact-reference regularizer) addresses the spread STYLE, the encoding swap the MECHANISM;
+gate on an adversarial/spread-uncapped eval, never SealBot-WR. (2) Any fresh canonical run: steer+abort
+on a checkpoint-relative mini-round-robin (Objective-B floor) PLUS an off-distribution/adversarial gate
+(Objective-A), SealBot-WR demoted to logged style-diagnostic; run length governed by these, not a
+guessed floor (C1).
+
+Full: `reports/investigations/founding_signal_2026-06-08.md`. Banked data:
+`reports/eval/golong_vast_pull_20260608/` (arena DB + ratings curve), pulled ladder in
+`checkpoints/_archive_golong_kill_20260608T065342Z/`. Instruments (local, untracked):
+`investigation/founding_2026-06-08/` — `rr_driver.py` (round-robin + BT + bootstrap slope),
+`argmax_discriminator.py` (temp×opening 2×2), `overspread_causal.py`, `spread_trajectory.py`, +
+`rr_agg`/`argmax_agg`/`ctrl_agg`/`rr_5rung_agg` outputs. Housekeeping: `a7ba110` (off-window
+determinism fix) still UNPUSHED on `phase4.5/overspread_driver` (2 ahead) — operator-gated.
