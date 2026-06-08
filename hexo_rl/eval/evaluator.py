@@ -238,6 +238,38 @@ class Evaluator:
             colony_wins=colony_wins, draw_count=draw_count,
         )
 
+    def evaluate_batched(
+        self,
+        opponent_factory: Any,
+        n_games: int,
+        model_sims: int,
+        phase: str = "eval",
+    ) -> EvalResult:
+        """Cross-game batched eval (D-EVALFOUND C3) — same EvalResult as ``evaluate``
+        but plays ``n_games`` concurrently with the model's MCTS batched across games
+        (GPU 50% → high). ``opponent_factory`` builds a FRESH opponent per game (each
+        concurrent game needs its own). Uses per-game RNG seeded ``eval_seed_base+i``
+        and color i%2 — the serial path's schedule (G5 behavior-neutral target).
+
+        Aggregate-equivalent to ``evaluate`` (G4), NOT byte-identical to the old global-
+        RNG serial transcripts (the per-game-RNG fix is the one behavior change)."""
+        from hexo_rl.eval.eval_batcher import batched_evaluate
+
+        log.info("evaluation_games_start", phase=phase, n_games=n_games,
+                 model_sims=model_sims, batched=True)
+        t0 = time.time()
+        res = batched_evaluate(
+            self.model, self.config, self.device, opponent_factory, n_games, model_sims,
+            temperature=self._eval_temperature, seed_base=self._eval_seed_base,
+            opening_plies=self._eval_random_opening_plies,
+            colony_centroid_threshold=self.colony_centroid_threshold,
+        )
+        log.info("evaluation_games_complete", phase=phase, n_games=n_games,
+                 model_sims=model_sims, winrate=res.win_rate, win_count=res.win_count,
+                 draw_count=res.draw_count, colony_wins=res.colony_wins,
+                 elapsed_sec=round(time.time() - t0, 2), batched=True)
+        return res
+
     def evaluate_vs_random(self, n_games: int = 20, model_sims: int | None = None, random_bot: Optional[BotProtocol] = None) -> EvalResult:
         """Play n_games against a random bot. Accepts bot via DI or creates default."""
         if random_bot is None:
