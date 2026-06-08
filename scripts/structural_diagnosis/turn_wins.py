@@ -34,35 +34,18 @@ git-diff clean.
 """
 from __future__ import annotations
 
-from typing import Any
-
-from hexo_rl.diagnostics.forced_win_detector import depth1_wins, depth2_wins
-
-FORK_THRESHOLD = 3   # mirrors engine/src/mcts/backup.rs quiescence (>=3 = forced)
-
-
-def winning_turn_cells(board: Any, side: int) -> set:
-    """Set of cells that complete a win for ``side`` as the FINAL stone of THIS turn.
-
-    Union of depth-1 single-stone completions and the completing (second) stone of each
-    within-turn depth-2 completion. Turn-aware via ``depth2_wins``'s moves_remaining guard.
-    """
-    cells = {tuple(c) for c in depth1_wins(board, side)}
-    cells |= {tuple(pair[1]) for pair in depth2_wins(board, side)}
-    return cells
-
-
-def count_winning_turns(board: Any, side: int) -> int:
-    """Number of distinct ways ``side`` can finish the game THIS turn (turn-level threat count).
-
-    Generalises the Rust depth-1 ``count_winning_moves`` to the 2-stones-per-turn structure.
-    """
-    return len(winning_turn_cells(board, side))
-
-
-def is_fork_turn(board: Any, side: int) -> bool:
-    """>=3 distinct winning-turn completions -> opponent's 2-stone reply cannot block all."""
-    return count_winning_turns(board, side) >= FORK_THRESHOLD
+# PROMOTED 2026-06-08 (§D-GLOBALCONC Phase 2a): the canonical home of these turn-correct
+# primitives is now hexo_rl/diagnostics/forced_win_detector.py. This module is kept as a thin
+# re-export shim so the §D-OVERSPREAD investigation scripts that `from turn_wins import ...`
+# continue to resolve to the SAME single implementation (no metric can drift between copies).
+from hexo_rl.diagnostics.forced_win_detector import (  # noqa: F401
+    FORK_THRESHOLD,
+    count_winning_turns,
+    depth1_wins,
+    depth2_wins,
+    is_fork_turn,
+    winning_turn_cells,
+)
 
 
 if __name__ == "__main__":

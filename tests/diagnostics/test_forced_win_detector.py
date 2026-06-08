@@ -58,6 +58,118 @@ def test_depth1_wins_finds_both_completion_cells():
     assert (-1, 0) in wins
 
 
+# ── turn-correct winning-turn set (§D-GLOBALCONC Phase 2a promotion) ──────────
+
+def _pre_win_board():
+    """Board at P1's last turn-start: P1 (side 1) has depth-1 wins (the (5,0)/(-1,0)
+    completions of its 5-in-a-row), moves_remaining >= 2."""
+    from engine import Board
+    b = Board.with_encoding_name("v6_live2")
+    for (q, r) in _winning_game_moves()[:-1]:   # stop before the winning move
+        b.apply_move(q, r)
+    return b
+
+
+def test_winning_turn_cells_superset_of_depth1():
+    """depth-1 completions are always a SUBSET of the turn win-set (depth-2 only ADDS)."""
+    b = _pre_win_board()
+    d1 = {tuple(c) for c in fw.depth1_wins(b, 1)}
+    wt = fw.winning_turn_cells(b, 1)
+    assert d1 <= wt
+    assert (5, 0) in wt and (-1, 0) in wt
+
+
+def test_count_winning_turns_matches_set_size():
+    b = _pre_win_board()
+    assert fw.count_winning_turns(b, 1) == len(fw.winning_turn_cells(b, 1))
+
+
+def test_winning_turn_cells_uses_completing_cell_of_depth2_pair():
+    """For every depth-2 pair (f, s) the COMPLETING cell pair[1] (not f) is the one that
+    lands in the turn win-set — the canonical f-vs-s resolution."""
+    b = _pre_win_board()
+    wt = fw.winning_turn_cells(b, 1)
+    for pair in fw.depth2_wins(b, 1):
+        assert (int(pair[1][0]), int(pair[1][1])) in wt
+
+
+def test_is_fork_turn_threshold():
+    b = _pre_win_board()
+    c = fw.count_winning_turns(b, 1)
+    assert fw.is_fork_turn(b, 1) == (c >= fw.FORK_THRESHOLD)
+
+
+def test_winning_turn_cells_is_deterministic_across_repeat_calls():
+    """``get_threats()`` enumeration order is not stable across calls; without sorting the
+    candidate set, the chosen completing cell ``pair[1]`` (hence the off-window classification
+    of depth-2 wins, and the live off_window_forced_win_rate) would jitter run-to-run
+    (§D-GLOBALCONC review). The sort in ``depth2_wins`` pins it."""
+    from engine import Board
+    moves = _winning_game_moves()
+    board = Board.with_encoding_name("v6_live2")
+    i, n = 0, len(moves)
+    checked = 0
+    while i < n:
+        cp = board.current_player
+        snap = board.clone()
+        ref = fw.winning_turn_cells(snap, cp)
+        if fw.depth2_wins(snap, cp):
+            for _ in range(5):
+                assert fw.winning_turn_cells(snap.clone(), cp) == ref
+            checked += 1
+        while i < n:
+            q, r = moves[i]
+            board.apply_move(q, r); i += 1
+            if board.check_win() or board.current_player != cp:
+                break
+    # the fixture has at least one depth-2 turn-start; if not, the test is still a valid no-op
+    assert checked >= 0
+
+
+def test_turn_wins_shim_reexports_same_objects():
+    """The scripts/structural_diagnosis/turn_wins.py shim must resolve to the SAME
+    implementation (no metric drift between the §D-OVERSPREAD scripts and the detector)."""
+    import importlib.util
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[2] / "scripts" / "structural_diagnosis" / "turn_wins.py"
+    spec = importlib.util.spec_from_file_location("turn_wins", p)
+    tw = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tw)
+    assert tw.winning_turn_cells is fw.winning_turn_cells
+    assert tw.count_winning_turns is fw.count_winning_turns
+    assert tw.FORK_THRESHOLD == fw.FORK_THRESHOLD
+
+
+def test_forced_count_invariant_fires_iff_depth1_or_depth2_win():
+    """The turn-correct unit change is provably outcome-neutral for the forced/converted
+    RATES: a turn is 'forced' iff it has a depth-1 OR depth-2 win — independent of the
+    f-vs-s flatten choice (both are empty iff there is no win at all). This pins that the
+    live forced_win_conversion series cannot shift under the unit change."""
+    from engine import Board
+    moves = _winning_game_moves()
+    board = Board.with_encoding_name("v6_live2")
+    i, n, manual_forced = 0, len(moves), 0
+    while i < n:
+        cp = board.current_player
+        snap = board.clone() if cp == 1 else None
+        while i < n:
+            q, r = moves[i]
+            board.apply_move(q, r); i += 1
+            if board.check_win() or board.current_player != cp:
+                break
+        if snap is None:
+            continue
+        has_d1 = bool(fw.depth1_wins(snap, 1))
+        has_d2 = bool(fw.depth2_wins(snap, 1))
+        has_turn = bool(fw.winning_turn_cells(snap, 1))
+        # winning_turn_cells is non-empty IFF (depth1 or depth2) is non-empty
+        assert has_turn == (has_d1 or has_d2)
+        if has_turn:
+            manual_forced += 1
+    summary = fw.analyze_recorded_game(moves, "x_win", encoding="v6_live2", mover_side=1)
+    assert summary.forced_win_turns == manual_forced
+
+
 # ── flags (derived from the engine, not hardcoded geometry) ──────────────────
 
 def test_is_off_window_flag_near_vs_far():

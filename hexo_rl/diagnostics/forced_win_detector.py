@@ -113,8 +113,13 @@ def depth2_wins(board: Any, side: int) -> list[tuple[Cell, Cell]]:
         return []
     tp = _threat_player(side)
     legal = set(board.legal_moves())
-    cand = [(q, r) for (q, r, lvl, p) in board.get_threats()
-            if p == tp and lvl in (4, 5) and (q, r) in legal]
+    # SORT the candidate set: ``get_threats()`` enumeration order is not stable across calls
+    # (Rust threat-set iteration), and an unsorted order makes the chosen completing cell
+    # ``pair[1]`` — hence ``winning_turn_cells`` and the off-window classification of depth-2
+    # wins — NON-DETERMINISTIC run-to-run (§D-GLOBALCONC review, 2026-06-08). Sorting fixes the
+    # representative pair deterministically; the SET of wins (deduped by sorted key) is unchanged.
+    cand = sorted((q, r) for (q, r, lvl, p) in board.get_threats()
+                  if p == tp and lvl in (4, 5) and (q, r) in legal)
     pairs = []
     for f in cand:
         c = board.clone()
@@ -128,8 +133,8 @@ def depth2_wins(board: Any, side: int) -> list[tuple[Cell, Cell]]:
             pairs.append((f, f))
             continue
         legal2 = set(c.legal_moves())
-        wins2 = [(q, r) for (q, r, lvl, p) in c.get_threats()
-                 if lvl == 5 and p == tp and (q, r) in legal2]
+        wins2 = sorted((q, r) for (q, r, lvl, p) in c.get_threats()
+                       if lvl == 5 and p == tp and (q, r) in legal2)
         for s in wins2:
             c2 = c.clone()
             try:
@@ -147,6 +152,52 @@ def depth2_wins(board: Any, side: int) -> list[tuple[Cell, Cell]]:
             seen.add(key)
             uniq.append((f, s))
     return uniq
+
+
+# ── turn-correct winning-turn set (§D-OVERSPREAD operator insight, 2026-06-08) ───────────
+# Promoted from scripts/structural_diagnosis/turn_wins.py (its natural home). A Hex Tac Toe
+# turn places TWO stones (one in the opening), so the Rust depth-1 ``count_winning_moves``
+# (single-stone 6-completions) is the WRONG unit for "can I finish THIS turn": it undercounts
+# the turn win-set in ~86.5% of threat snapshots (3069-snapshot empirics). The completing cell
+# of a winning turn is the FINAL stone played, so the turn-correct win-cell set is the union of
+# depth-1 completions and the SECOND stone of each within-turn depth-2 completion.
+#
+# This also UNIFIES the historical f-vs-s inconsistency across the offline detector copies
+# (some flattened the depth-2 pair {f, s}; some used only the first cell f; turn_wins used the
+# completing cell pair[1]). The completing cell ``pair[1]`` is canonical: it is the stone that
+# LANDS the win, hence the cell whose reachability (off-window) decides whether the win is
+# convertible. NB: ``count_winning_turns`` is an OFFLINE measurement primitive — the engine
+# quiescence override (engine/src/mcts/backup.rs) stays depth-1 (perf-sensitive; depth-2 is
+# O(threats^2)/leaf, deliberately omitted §28/§30). This does NOT change the engine.
+
+FORK_THRESHOLD = 3   # mirrors engine/src/mcts/backup.rs quiescence (>=3 distinct = forced)
+
+
+def winning_turn_cells(board: Any, side: int) -> set[Cell]:
+    """Cells that complete a win for ``side`` as the FINAL stone of THIS turn.
+
+    Union of depth-1 single-stone completions and the completing (second) stone of each
+    within-turn depth-2 completion. Turn-aware automatically: ``depth2_wins`` is guarded on
+    ``moves_remaining >= 2`` (on the last stone of a turn only depth-1 wins count). The
+    immediate first-stone case ``depth2_wins`` returns as ``(f, f)`` so ``pair[1]`` is still
+    the completing cell.
+    """
+    cells = {(int(c[0]), int(c[1])) for c in depth1_wins(board, side)}
+    cells |= {(int(pair[1][0]), int(pair[1][1])) for pair in depth2_wins(board, side)}
+    return cells
+
+
+def count_winning_turns(board: Any, side: int) -> int:
+    """Number of distinct ways ``side`` can finish the game THIS turn (turn-level threat count).
+
+    The turn-correct generalisation of the Rust depth-1 ``count_winning_moves``."""
+    return len(winning_turn_cells(board, side))
+
+
+def is_fork_turn(board: Any, side: int) -> bool:
+    """>= ``FORK_THRESHOLD`` distinct winning-turn completions: the opponent's 2-stone reply
+    cannot block them all (an approximately unstoppable turn-fork)."""
+    return count_winning_turns(board, side) >= FORK_THRESHOLD
 
 
 def find_win_line(snapshot: Any, win_cells: Sequence[Cell], side: int) -> list[Cell]:
@@ -278,9 +329,13 @@ def analyze_recorded_game(
                 break
         if snap is None:
             continue
-        d1 = depth1_wins(snap, mover_side)
-        d2 = depth2_wins(snap, mover_side)
-        win_cells = [tuple(c) for c in d1] + [tuple(c) for pair in d2 for c in pair]
+        # Turn-correct win-cell set (completing cells; §D-OVERSPREAD 2026-06-08). The presence
+        # of a forced win (``forced``) and whether it converted are INVARIANT to the f-vs-s
+        # choice — both depend only on (a) the set being non-empty (empty iff no depth-1 AND no
+        # depth-2 win) and (b) the actual game outcome — so ``forced_win_conversion`` is
+        # unchanged. Only the OFF-WINDOW classification of depth-2 wins shifts (the binding cell
+        # is now the move that LANDS the win, not the farthest of {f, s}).
+        win_cells = sorted(winning_turn_cells(snap, mover_side))
         if not win_cells:
             continue
         forced += 1
