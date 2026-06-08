@@ -91,6 +91,12 @@ class EvalRoundResult(TypedDict, total=False):
     offwindow_forced_win_rate: float
     offwindow_strict_forced_rate: float
 
+    # D-EVALFOUND — Tier-B strength aggregate (current ckpt vs fixed reference set) +
+    # the reference ladder's 3-cycle density. Written by the per-round ref-set producer
+    # (operator-gated follow-up); consumed by the strength-regression abort + decide_promotion.
+    strength_aggregate: float
+    strength_cycle_density: float
+
     # vs bootstrap_anchor (§155 T2 floor)
     wr_bootstrap_anchor: float
     ci_bootstrap_anchor: tuple[float, float]

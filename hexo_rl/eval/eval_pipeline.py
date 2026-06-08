@@ -27,7 +27,7 @@ from hexo_rl.eval.defaults import (
 )
 from hexo_rl.eval.display import print_colony_win_breakdown, print_ratings_table
 from hexo_rl.eval.evaluator import Evaluator
-from hexo_rl.eval.gate_logic import GateConfig, evaluate_gate
+from hexo_rl.eval.gate_logic import GateConfig, decide_promotion, evaluate_gate
 from hexo_rl.eval.opponent_runners import OPPONENTS, _RunnerContext
 from hexo_rl.eval.reporting import plot_ratings_curve
 from hexo_rl.eval.result_types import EvalRoundResult
@@ -133,6 +133,21 @@ class EvalPipeline:
         self.nnue_cfg = opp.get("nnue", {})
         # D-EXPLOIT Phase 3 — off-window adversary exploitability monitor (default-off).
         self.offwindow_adversary_cfg = opp.get("offwindow_adversary", {})
+
+        # D-EVALFOUND pre-flight (REVIEW lost-signal guard) — WARN LOUDLY at startup if no
+        # Objective-A signal is active (SealBot-WR demoted + strength/robustness abort off +
+        # this off-window monitor off). Emitted HERE (the module that owns the opponents
+        # config) so the adversary reference stays off the training/self-play path.
+        from hexo_rl.monitoring.alert_rules import check_objective_a_coverage
+        from hexo_rl.monitoring.config import MonitoringConfig as _MonCfg
+        _mon = _MonCfg.from_dict(eval_config)
+        _cov = check_objective_a_coverage(
+            strength_abort_enabled=_mon.strength_abort_enabled,
+            robustness_abort_enabled=_mon.robustness_abort_enabled,
+            offwindow_monitor_enabled=bool(self.offwindow_adversary_cfg.get("enabled", False)),
+        )
+        if _cov is not None:
+            log.warning("objective_a_coverage_gap", msg=_cov)
 
         self.gating_cfg = cfg.get("gating", {})
         # §155 T2 — bootstrap-floor gate.  When enabled, promotion requires
@@ -319,6 +334,8 @@ class EvalPipeline:
         threshold = float(self.gating_cfg.get("promotion_winrate", 0.55))
         floor_enabled = bool(self._bootstrap_floor_cfg.get("enabled", False))
         floor_threshold = float(self._bootstrap_floor_cfg.get("min_winrate", 0.45))
+        # ── wr_best + bootstrap-floor SUB-gate (the legacy strength criterion) ──
+        wr_best_promoted = False
         if wr_best is not None and wr_best >= threshold:
             gate_cfg = GateConfig(
                 promotion_winrate=threshold,
@@ -337,34 +354,36 @@ class EvalPipeline:
                     wr_bootstrap_anchor is not None
                     and wr_bootstrap_anchor >= floor_threshold
                 )
-            if outcome.promoted and floor_ok:
-                results["promoted"] = True
-                log.info(
-                    "checkpoint_promoted",
-                    step=train_step,
-                    wr_best=wr_best,
-                    ci_lo=outcome.ci_lo,
-                    threshold=threshold,
-                    wr_bootstrap_anchor=wr_bootstrap_anchor,
-                    floor_enabled=floor_enabled,
-                    floor_threshold=floor_threshold if floor_enabled else None,
-                )
-            elif not outcome.ci_ok:
-                log.info(
-                    "promotion_blocked_ci",
-                    step=train_step,
-                    wr_best=wr_best,
-                    ci_lo=outcome.ci_lo,
-                    threshold=threshold,
-                )
-            else:
-                log.info(
-                    "promotion_blocked_bootstrap_floor",
-                    step=train_step,
-                    wr_best=wr_best,
-                    wr_bootstrap_anchor=wr_bootstrap_anchor,
-                    floor_threshold=floor_threshold,
-                )
+            wr_best_promoted = bool(outcome.promoted and floor_ok)
+            if not outcome.ci_ok:
+                log.info("promotion_blocked_ci", step=train_step, wr_best=wr_best,
+                         ci_lo=outcome.ci_lo, threshold=threshold)
+            elif not floor_ok:
+                log.info("promotion_blocked_bootstrap_floor", step=train_step, wr_best=wr_best,
+                         wr_bootstrap_anchor=wr_bootstrap_anchor, floor_threshold=floor_threshold)
+
+        # ── D-EVALFOUND conjunction (decisions 3+4): strength (fixed-reference
+        # aggregate REPLACES wr_best when present) AND robustness (off-window gate
+        # BLOCKS; missing measurement = pass). Default — no strength_aggregate, no
+        # offwindow_forced_win_rate — collapses to the legacy wr_best decision.
+        strength_aggregate = results.get("strength_aggregate")
+        robustness_rate = results.get("offwindow_forced_win_rate")
+        strength_floor = float(self.gating_cfg.get("promotion_strength_floor", threshold))
+        robustness_threshold = float(self.gating_cfg.get("robustness_threshold", 0.06))
+        decision = decide_promotion(
+            wr_best_promoted, strength_aggregate, strength_floor,
+            robustness_rate, robustness_threshold,
+        )
+        results["promoted"] = decision.promoted
+        if decision.promoted:
+            log.info("checkpoint_promoted", step=train_step, wr_best=wr_best,
+                     strength_aggregate=strength_aggregate, robustness_rate=robustness_rate,
+                     reason=decision.reason)
+        elif wr_best_promoted and not decision.promoted:
+            # the legacy gate would have promoted but a new axis blocked it — surface loud
+            log.info("promotion_blocked_evalfound", step=train_step, reason=decision.reason,
+                     wr_best=wr_best, strength_aggregate=strength_aggregate,
+                     robustness_rate=robustness_rate)
 
         # ── Bradley-Terry ratings ─────────────────────────────────────
         pairwise = self.db.get_all_pairwise(run_id=self.run_id)

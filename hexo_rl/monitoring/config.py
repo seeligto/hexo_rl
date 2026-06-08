@@ -61,6 +61,37 @@ class MonitoringConfig:
     wr_early_death_threshold: float = 0.05
     wr_early_death_min_step: int = 15000
 
+    # ── D-EVALFOUND — steer/abort on the RIGHT signal (replaces SealBot-WR) ──
+    # §D-FOUNDING: SealBot-WR is the project's flagged-wrong instrument for self-play
+    # strength (it misread an Objective-A off-distribution signal as an Objective-B
+    # strength regression and misdirected six investigations). It is DEMOTED to a
+    # logged diagnostic; the abort now reads a checkpoint-relative STRENGTH aggregate
+    # (current ckpt vs a FIXED frozen reference set — Tier-B, cycle-robust) plus a
+    # separate ROBUSTNESS gate (off-window exploitability — Objective A).
+    #
+    # Strength abort is CYCLE-AWARE: a high directed-3-cycle density means the ladder
+    # is a non-transitive (rock-paper-scissors) equilibrium, NOT a regression, so the
+    # abort is SUPPRESSED (the cheaper error is a missed abort, not a false one that
+    # kills a recovering run — §175/L34). Robustness abort is NEVER cycle-suppressed.
+    #
+    # Defaults: strength abort OFF until the §2.5 calibration locks `strength_abort_floor`
+    # + `strength_cycle_density_max` (calibration BLOCKS any live run). Robustness gates
+    # PROMOTE + WARN by default; hard-abort is operator opt-in.
+    strength_abort_enabled: bool = False
+    strength_abort_floor: float = 0.0          # TBD — locked at §2.5 calibration
+    strength_abort_consecutive_evals: int = 3
+    strength_abort_min_step: int = 25000
+    strength_cycle_density_max: float = 0.15   # suppress abort above this (observed 0.073)
+    robustness_warn_threshold: float = 0.06    # EXT-LINK fix-acceptance bar
+    robustness_abort_enabled: bool = False     # operator opt-in (default = PROMOTE+WARN)
+    robustness_abort_consecutive_evals: int = 3
+    robustness_abort_min_step: int = 30000
+    # Honesty knob (REVIEW §1c): the SealBot-WR demotion is spec-CONDITIONAL on Phase-3
+    # cross-validation; in code it is permanent. Set True to re-arm the legacy SealBot-WR
+    # hard-abort (e.g. before Phase-3 clears the robustness gate as its superset). Default
+    # False = demoted to logged diagnostic.
+    sealbot_wr_revert_to_abort: bool = False
+
     # Web dashboard server
     web_port: int = 5001
     web_host: str = "127.0.0.1"

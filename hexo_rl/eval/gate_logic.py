@@ -30,6 +30,47 @@ class GateOutcome:
     winrate_ok: bool
 
 
+@dataclass(frozen=True)
+class PromotionDecision:
+    """D-EVALFOUND — final promotion decision over the two orthogonal axes."""
+    promoted: bool
+    reason: str
+
+
+def decide_promotion(
+    wr_best_promoted: bool,
+    strength_aggregate: float | None,
+    strength_floor: float,
+    robustness_rate: float | None,
+    robustness_threshold: float,
+) -> PromotionDecision:
+    """Conjunction promotion gate (D-EVALFOUND decisions 3+4):
+    PROMOTE iff strength_ok AND robustness_ok.
+
+    - strength_ok: when the fixed-reference ``strength_aggregate`` is present it REPLACES
+      ``wr_best`` (decision 4) — promote iff aggregate >= floor; otherwise fall back to the
+      existing wr_best+CI gate result (``wr_best_promoted``).
+    - robustness_ok: the off-window gate (decision 3) BLOCKS promotion when the rate
+      exceeds the bar; a MISSING measurement (monitor disabled) is a pass — never a false
+      block (REVIEW gotcha).
+    """
+    if strength_aggregate is not None:
+        strength_ok = strength_aggregate >= strength_floor
+        strength_src = f"ref-aggregate {strength_aggregate:.3f} vs floor {strength_floor:.3f}"
+    else:
+        strength_ok = wr_best_promoted
+        strength_src = f"wr_best gate={wr_best_promoted}"
+
+    robustness_ok = robustness_rate is None or robustness_rate <= robustness_threshold
+
+    if not robustness_ok:
+        return PromotionDecision(False, f"BLOCKED robustness: off-window {robustness_rate:.3f} "
+                                        f"> {robustness_threshold:.3f}")
+    if not strength_ok:
+        return PromotionDecision(False, f"BLOCKED strength: {strength_src}")
+    return PromotionDecision(True, f"PROMOTE: {strength_src}; robustness ok")
+
+
 def _binomial_ci(wins: int, n: int, confidence: float = 0.95) -> tuple[float, float]:
     """Wilson score interval for binomial proportion.
 

@@ -31,7 +31,13 @@ if TYPE_CHECKING:
     from hexo_rl.diagnostics.forced_win_detector import ForcedWinTrend
 
 from hexo_rl.eval.result_types import EvalRoundResult
-from hexo_rl.monitoring.alert_rules import check_sealbot_wr_hard_abort
+from hexo_rl.monitoring.alert_rules import (
+    check_robustness_abort,
+    check_robustness_warn,
+    check_sealbot_wr_hard_abort,
+    check_strength_regression_abort,
+    check_strength_warn,
+)
 from hexo_rl.monitoring.config import MonitoringConfig
 from hexo_rl.monitoring.events import emit_event
 from hexo_rl.training.batch_assembly import assemble_mixed_batch
@@ -389,7 +395,15 @@ class StepCoordinator:
         # Ring keeps last 5 eval rounds; pure-function trigger logic lives in
         # ``hexo_rl/monitoring/alert_rules.py:check_sealbot_wr_hard_abort``.
         self._wr_history: list[tuple[int, float]] = []
+        # D-EVALFOUND — SealBot-WR DEMOTED to a logged diagnostic; the abort now reads
+        # the checkpoint-relative STRENGTH aggregate (current vs a fixed reference set,
+        # cycle-aware) + a ROBUSTNESS gate (off-window exploitability). Rings keep last 5.
+        self._strength_history: list[tuple[int, float]] = []
+        self._robustness_history: list[tuple[int, float]] = []
         self._monitoring_cfg = MonitoringConfig.from_dict(self.full_config)
+        # D-EVALFOUND pre-flight (REVIEW lost-signal guard) is emitted by EvalPipeline —
+        # the only module that owns the opponents config — to keep the off-window monitor
+        # reference off the training/self-play path (test_offwindow_adversary_eval_path_only).
         # INV-S179c-2 enforced at first fire (deferred to runtime — config-load
         # site does not own filesystem state).
         self._initial_policy_loss: float | None = None
@@ -970,40 +984,110 @@ class StepCoordinator:
                     elif _pending_eval_result is not None:
                         self._eval_broken = False
 
-                    # §S181-AUDIT Wave 3 Stage 2B — L50 sliding-window SealBot WR
-                    # HARD-ABORT gate. Pure-function trigger logic in
-                    # ``alert_rules.check_sealbot_wr_hard_abort``; this site owns
-                    # the ring + the abort wiring. Wave 2 alt V_spread canary
-                    # PASSED throughout the run while wr_sealbot collapsed 33→5%
-                    # — this gate is the replacement primary trigger.
+                    # D-EVALFOUND — steer/abort on the RIGHT signal. §D-FOUNDING showed
+                    # SealBot-WR is the project's flagged-wrong instrument for self-play
+                    # strength (it misread an off-distribution Objective-A signal as an
+                    # Objective-B strength regression and misdirected six investigations).
+                    # The abort now reads (1) a checkpoint-relative STRENGTH aggregate
+                    # (current ckpt vs a fixed reference set — cycle-aware) and (2) a
+                    # ROBUSTNESS gate (off-window exploitability). SealBot-WR is DEMOTED
+                    # to a logged diagnostic and NEVER feeds shutdown.
                     if (
                         _pending_eval_result is not None
-                        and "wr_sealbot" in _pending_eval_result
                         and _pending_eval_result.get("wr_sealbot") is not None
                     ):
                         _wr_sb = float(_pending_eval_result["wr_sealbot"])
                         _eval_step = int(_pending_eval_result.get("step", self._train_step))
                         self._wr_history.append((_eval_step, _wr_sb))
-                        # Keep last 5 eval rounds (enough for rolling + peak window).
                         if len(self._wr_history) > 5:
                             self._wr_history.pop(0)
-                        _abort_msg = check_sealbot_wr_hard_abort(
-                            self._wr_history,
-                            self._train_step,
-                            self._monitoring_cfg,
+                        # LOGGED-ONLY: compute the legacy trigger as a diagnostic, but do
+                        # NOT abort on it (the §D-FOUNDING demotion). It remains a valid
+                        # Objective-A style canary — surfaced, never enforced.
+                        _sb_diag = check_sealbot_wr_hard_abort(
+                            self._wr_history, self._train_step, self._monitoring_cfg,
+                        )
+                        if _sb_diag is not None:
+                            self._logger.warning(
+                                "sealbot_wr_diagnostic",  # demoted: logged, not aborting
+                                step=self._train_step,
+                                wr_history=[(s, round(w, 4)) for s, w in self._wr_history],
+                                msg=_sb_diag,
+                                note="SealBot-WR demoted (D-EVALFOUND) — diagnostic only, no abort",
+                            )
+                            # Honesty knob: re-arm the legacy abort only if the operator
+                            # explicitly reverts (e.g. before Phase-3 clears the robustness
+                            # gate as SealBot-WR's superset). Default False = stays demoted.
+                            if self._monitoring_cfg.sealbot_wr_revert_to_abort:
+                                self._event_emitter({
+                                    "event": "sealbot_wr_revert_abort", "step": self._train_step,
+                                    "wr_history": list(self._wr_history), "message": _sb_diag,
+                                })
+                                self.shutdown.running = False
+                                hard_abort_fired = True
+
+                    # (1) STRENGTH-regression abort (cycle-aware) — the new primary trigger.
+                    if (
+                        _pending_eval_result is not None
+                        and _pending_eval_result.get("strength_aggregate") is not None
+                    ):
+                        _agg = float(_pending_eval_result["strength_aggregate"])
+                        _cyc = float(_pending_eval_result.get("strength_cycle_density", 0.0))
+                        _eval_step = int(_pending_eval_result.get("step", self._train_step))
+                        self._strength_history.append((_eval_step, _agg))
+                        if len(self._strength_history) > 5:
+                            self._strength_history.pop(0)
+                        _swarn = check_strength_warn(_agg, self._monitoring_cfg)
+                        if _swarn is not None:
+                            self._logger.warning("strength_warn", step=self._train_step,
+                                                 strength_aggregate=round(_agg, 4), msg=_swarn)
+                        _abort_msg = check_strength_regression_abort(
+                            self._strength_history, _cyc, self._train_step, self._monitoring_cfg,
                         )
                         if _abort_msg is not None:
                             self._logger.warning(
-                                "wave3_wr_hard_abort_triggered",
+                                "strength_regression_hard_abort",
                                 step=self._train_step,
-                                wr_history=[(s, round(w, 4)) for s, w in self._wr_history],
+                                strength_history=[(s, round(a, 4)) for s, a in self._strength_history],
+                                cycle_density=round(_cyc, 4),
                                 msg=_abort_msg,
                             )
                             self._event_emitter({
-                                "event": "wave3_wr_hard_abort",
+                                "event": "strength_regression_hard_abort",
                                 "step": self._train_step,
-                                "wr_history": list(self._wr_history),
+                                "strength_history": list(self._strength_history),
+                                "cycle_density": _cyc,
                                 "message": _abort_msg,
+                            })
+                            self.shutdown.running = False
+                            hard_abort_fired = True
+
+                    # (2) ROBUSTNESS gate — off-window exploitability. WATCH (WARN) by
+                    # default; hard-abort only if operator-armed. NEVER cycle-suppressed.
+                    if (
+                        _pending_eval_result is not None
+                        and _pending_eval_result.get("offwindow_forced_win_rate") is not None
+                    ):
+                        _rob = float(_pending_eval_result["offwindow_forced_win_rate"])
+                        _eval_step = int(_pending_eval_result.get("step", self._train_step))
+                        _warn = check_robustness_warn(_rob, self._monitoring_cfg)
+                        if _warn is not None:
+                            self._logger.warning("robustness_gate_warn", step=self._train_step,
+                                                 exploit_rate=round(_rob, 4), msg=_warn)
+                        self._robustness_history.append((_eval_step, _rob))
+                        if len(self._robustness_history) > 5:
+                            self._robustness_history.pop(0)
+                        _rob_abort = check_robustness_abort(
+                            self._robustness_history, self._train_step, self._monitoring_cfg,
+                        )
+                        if _rob_abort is not None:
+                            self._logger.warning("robustness_hard_abort", step=self._train_step,
+                                                 msg=_rob_abort)
+                            self._event_emitter({
+                                "event": "robustness_hard_abort",
+                                "step": self._train_step,
+                                "robustness_history": list(self._robustness_history),
+                                "message": _rob_abort,
                             })
                             self.shutdown.running = False
                             hard_abort_fired = True

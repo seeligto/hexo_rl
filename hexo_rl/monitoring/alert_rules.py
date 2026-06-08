@@ -196,6 +196,130 @@ def check_sealbot_wr_hard_abort(
     return None
 
 
+def check_strength_regression_abort(
+    strength_history: list[tuple[int, float]],
+    cycle_density: float,
+    current_step: int,
+    cfg: MonitoringConfig,
+) -> Optional[str]:
+    """D-EVALFOUND — checkpoint-relative STRENGTH-regression HARD-ABORT (replaces the
+    SealBot-WR abort).
+
+    Fires when the strength aggregate (current ckpt vs a FIXED frozen reference set —
+    Tier-B, cycle-robust) stays below ``strength_abort_floor`` for
+    ``strength_abort_consecutive_evals`` consecutive evals past ``strength_abort_min_step``.
+
+    CYCLE-AWARE: when ``cycle_density`` (directed-3-cycle density of the reference ladder)
+    is at or above ``strength_cycle_density_max`` the ladder is a non-transitive
+    (rock-paper-scissors) equilibrium, not a regression, and the abort is SUPPRESSED.
+    The cheaper error here is a MISSED abort, not a false one that kills a recovering run
+    (§175/L34); cycle-suppression encodes that asymmetry — and applies to the STRENGTH
+    axis ONLY (robustness abort is never cycle-suppressed).
+
+    Stateless: caller owns ``strength_history``.
+    """
+    if not cfg.strength_abort_enabled or not strength_history:
+        return None
+    if cycle_density >= cfg.strength_cycle_density_max:
+        return None  # non-transitive equilibrium — suppressed
+    n = int(cfg.strength_abort_consecutive_evals)
+    if current_step <= cfg.strength_abort_min_step or len(strength_history) < n:
+        return None
+    tail = strength_history[-n:]
+    if all(agg < cfg.strength_abort_floor for _, agg in tail):
+        mean_agg = sum(a for _, a in tail) / len(tail)
+        return (
+            f"HARD-ABORT (D-EVALFOUND/strength): mean reference-set aggregate "
+            f"{mean_agg:.3f} < floor {cfg.strength_abort_floor:.3f} for {n} consecutive "
+            f"evals past step {cfg.strength_abort_min_step:,} (cycle_density "
+            f"{cycle_density:.3f} < {cfg.strength_cycle_density_max:.3f} — a real "
+            f"regression, not a non-transitive cloud)"
+        )
+    return None
+
+
+def check_strength_warn(
+    strength_aggregate: Optional[float], cfg: MonitoringConfig
+) -> Optional[str]:
+    """D-EVALFOUND — single-eval STRENGTH WARN (spec §1a matrix row 1). Fires on ONE eval
+    below the floor (no consecutive requirement — that is the ABORT). Informational; does
+    not gate. None when the aggregate is absent (ref-set producer not configured)."""
+    if strength_aggregate is None:
+        return None
+    if strength_aggregate < cfg.strength_abort_floor:
+        return (
+            f"WARNING (D-EVALFOUND/strength): reference-set aggregate "
+            f"{strength_aggregate:.3f} < floor {cfg.strength_abort_floor:.3f} (single eval)"
+        )
+    return None
+
+
+def check_objective_a_coverage(
+    *, strength_abort_enabled: bool, robustness_abort_enabled: bool,
+    offwindow_monitor_enabled: bool,
+) -> Optional[str]:
+    """D-EVALFOUND pre-flight (REVIEW lost-signal guard) — WARN at run start when NO
+    Objective-A / off-distribution signal is active: SealBot-WR is demoted, and if the
+    strength abort, the robustness abort, AND the off-window robustness monitor are all
+    off, a naive run can PROMOTE an exploitable checkpoint with no off-window guard. The
+    §7 recipe says enable the off-window robustness monitor; this surfaces the gap LOUDLY
+    (non-blocking). ``offwindow_monitor_enabled`` is supplied by the eval pipeline (the
+    only module that owns the opponents config) so this stays adversary-free."""
+    if not (strength_abort_enabled or robustness_abort_enabled or offwindow_monitor_enabled):
+        return (
+            "WARNING (D-EVALFOUND/coverage): no Objective-A signal active — SealBot-WR is "
+            "demoted and the strength abort, robustness abort, and off-window robustness "
+            "monitor are all OFF. A run can promote an off-window-exploitable checkpoint "
+            "unguarded. Enable the off-window robustness monitor before a live run — see "
+            "docs/designs/D_EVALFOUND_design.md §7."
+        )
+    return None
+
+
+def check_robustness_warn(exploit_rate: float, cfg: MonitoringConfig) -> Optional[str]:
+    """D-EVALFOUND — off-window exploitability WATCH. Single-point WARN (operator-routed)
+    when the off-window forced-win rate exceeds the fix-acceptance bar. The robustness
+    gate is the ONLY instrument that sees the off-window defect (vs-SealBot false-clears);
+    by default it gates PROMOTE + emits this WARN, never auto-aborts."""
+    if exploit_rate is None:
+        return None
+    if exploit_rate > cfg.robustness_warn_threshold:
+        return (
+            f"WARNING (D-EVALFOUND/robustness): off-window forced-win rate "
+            f"{exploit_rate:.3f} > {cfg.robustness_warn_threshold:.3f} — exploitable "
+            f"(blocks promotion; demoted SealBot-WR can't see this)"
+        )
+    return None
+
+
+def check_robustness_abort(
+    robustness_history: list[tuple[int, float]],
+    current_step: int,
+    cfg: MonitoringConfig,
+) -> Optional[str]:
+    """D-EVALFOUND — off-window exploitability HARD-ABORT (operator opt-in;
+    ``robustness_abort_enabled`` default False = PROMOTE+WARN only).
+
+    Fires when the off-window forced-win rate stays above ``robustness_warn_threshold``
+    for ``robustness_abort_consecutive_evals`` consecutive evals past
+    ``robustness_abort_min_step``. Takes NO cycle-density argument — robustness rejection
+    is unambiguous and is NEVER cycle-suppressed (unlike the strength abort)."""
+    if not cfg.robustness_abort_enabled or not robustness_history:
+        return None
+    n = int(cfg.robustness_abort_consecutive_evals)
+    if current_step <= cfg.robustness_abort_min_step or len(robustness_history) < n:
+        return None
+    tail = robustness_history[-n:]
+    if all(rate > cfg.robustness_warn_threshold for _, rate in tail):
+        mean_rate = sum(r for _, r in tail) / len(tail)
+        return (
+            f"HARD-ABORT (D-EVALFOUND/robustness): off-window forced-win rate mean "
+            f"{mean_rate:.3f} > {cfg.robustness_warn_threshold:.3f} for {n} consecutive "
+            f"evals past step {cfg.robustness_abort_min_step:,}"
+        )
+    return None
+
+
 def check_value_spread_canary(payload: dict) -> Optional[str]:
     """``value_spread`` payload — colony-capture canary (§S181 PR-A + PR-C / FU-1 / L48).
 
