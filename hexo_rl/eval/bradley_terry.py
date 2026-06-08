@@ -8,7 +8,7 @@ at rating 0 to fix the gauge.
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, Sequence, Tuple
 
 import numpy as np
 from scipy.optimize import minimize  # type: ignore[import-untyped]
@@ -19,7 +19,7 @@ _ELO_SCALE = 400.0 / math.log(10.0)
 
 
 def compute_ratings(
-    pairwise: List[Tuple[int, int, int, int]],
+    pairwise: Sequence[Tuple[int, int, float, float]],
     anchor_id: int,
     reg: float = 1e-6,
 ) -> Dict[int, Tuple[float, float, float]]:
@@ -62,7 +62,7 @@ def compute_ratings(
 
     # Pre-compute win matrix for fast vectorised objective
     # We store: for each pair involving free players, the win counts
-    pair_data: list[tuple[int | None, int | None, int, int]] = []
+    pair_data: list[tuple[int | None, int | None, float, float]] = []
     for a, b, wa, wb in pairwise:
         if wa + wb == 0:
             continue
@@ -131,7 +131,7 @@ def compute_ratings(
 
 def _compute_ci(
     theta: np.ndarray,
-    pair_data: list[tuple[int | None, int | None, int, int]],
+    pair_data: list[tuple[int | None, int | None, float, float]],
     n_free: int,
     reg: float,
 ) -> np.ndarray:

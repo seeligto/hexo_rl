@@ -38,6 +38,29 @@ from hexo_rl.training.checkpoints import normalize_model_state_dict_keys
 BUFFER_CHANNELS: int = _registry_lookup("v6").n_planes
 
 
+def validate_arch_against_spec(
+    in_channels: int, policy_logit_count: int, spec: EncodingSpec,
+) -> None:
+    """Raise if the arch inferred from a checkpoint disagrees with the registry spec
+    resolved by NAME (D-EVALFOUND C1 — replaces silent shape-sniff trust).
+
+    The §D-FOUNDING driver had to sidestep a loader that hardcoded v6 (8-plane) and
+    crashed/mis-loaded the 4-plane v6_live2 net. Resolving the spec by name upstream
+    is necessary but not sufficient — this guard makes a plane-count / policy-width
+    mismatch a LOUD error instead of a silent corruption.
+    """
+    if in_channels != spec.n_planes:
+        raise ValueError(
+            f"checkpoint in_channels={in_channels} != spec '{spec.name}' "
+            f"n_planes={spec.n_planes}; encoding/arch mismatch (registry-by-name guard)"
+        )
+    if policy_logit_count != spec.policy_logit_count:
+        raise ValueError(
+            f"checkpoint policy logit count={policy_logit_count} != spec '{spec.name}' "
+            f"policy_logit_count={spec.policy_logit_count}; encoding/arch mismatch"
+        )
+
+
 def _strip_compile_prefixes(state: dict) -> dict:
     """Strip `_orig_mod.` / `module.` wrapper prefixes from state-dict keys.
 
@@ -209,12 +232,18 @@ def _build_min_max_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
             f"cluster_pool.* keys (pool_type={pool_type!r}); the side-branch "
             "is A1-only (pool_type='min_max'). Inspect the checkpoint."
         )
+    # D-EVALFOUND C1 — registry-by-name guard: the spec was resolved by NAME upstream
+    # (load_model_with_encoding); validate the shape-sniffed arch agrees with it so a
+    # plane-count / policy-width mismatch is loud, not a silent corruption.
+    policy_w = state.get("policy_fc.weight")
+    policy_logit_count = int(policy_w.shape[0]) if policy_w is not None else spec.policy_logit_count
+    validate_arch_against_spec(in_channels, policy_logit_count, spec)
     model = HexTacToeNet(
         board_size=spec.board_size,
         in_channels=in_channels,
         filters=filters,
         res_blocks=res_blocks,
-        encoding="v6",
+        encoding=spec.name,
         pool_type=pool_type,
         gpool_bias_active=gpool_bias_active,
     )
@@ -256,7 +285,7 @@ def _build_kata_model(state: dict, spec: EncodingSpec) -> HexTacToeNet:
         in_channels=in_channels,
         filters=filters,
         res_blocks=res_blocks,
-        encoding="v8",
+        encoding=spec.name,
         gpool_indices=gpool_indices if gpool_indices else None,
         head_use_gpool=head_use_gpool,
         canvas_realness=canvas_realness,
