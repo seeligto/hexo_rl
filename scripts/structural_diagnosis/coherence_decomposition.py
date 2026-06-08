@@ -36,12 +36,26 @@ from pathlib import Path
 import numpy as np
 
 from hexo_rl.diagnostics.forced_win_detector import (
-    depth1_wins, depth2_wins, is_off_window,
+    depth1_wins, depth2_wins, is_off_window, winning_turn_cells,
 )
 from hexo_rl.encoding import lookup, normalize_encoding_name
 
 
-def analyze_game_sides(moves, spec, name):
+def _win_cells(snap, cp, unit):
+    """The win-cell set whose off-window classification decides in-window vs off-window-only.
+
+    unit='ply'  : LEGACY flatten of the depth-2 pair {f, s} ∪ depth-1 (what §D-COHERENCE ran).
+    unit='turn' : TURN-CORRECT completing cells {pair[1]} ∪ depth-1 (§D-GLOBALCONC Phase 2a) —
+                  the cell that LANDS the win, hence the reachability-relevant one.
+    Both are non-empty iff there is any win, so `forced`/`converted` (and GLOBAL conversion) are
+    invariant; only the IN-WINDOW vs OFF-WINDOW SPLIT differs."""
+    if unit == "turn":
+        return sorted(winning_turn_cells(snap, cp))
+    d1 = depth1_wins(snap, cp); d2 = depth2_wins(snap, cp)
+    return [tuple(c) for c in d1] + [tuple(c) for pr in d2 for c in pr]
+
+
+def analyze_game_sides(moves, spec, name, unit="ply"):
     """Replay one recorded game; per mover side return a dict of forced-win tallies.
 
     Turn-walk is byte-identical to scripts/golong_game_analysis.analyze_game (validated):
@@ -82,9 +96,7 @@ def analyze_game_sides(moves, spec, name):
                 break
             if board.current_player != cp:
                 break
-        d1 = depth1_wins(snap, cp)
-        d2 = depth2_wins(snap, cp)
-        win_cells = [tuple(c) for c in d1] + [tuple(c) for pr in d2 for c in pr]
+        win_cells = _win_cells(snap, cp, unit)
         if not win_cells:
             continue
         s = stat[cp]
@@ -109,7 +121,7 @@ def analyze_game_sides(moves, spec, name):
     return out
 
 
-def load_games(files, name, spec, min_step):
+def load_games(files, name, spec, min_step, unit="ply"):
     """Return {checkpoint_step: [per-game-side tally dict, ...]} from the replays."""
     buckets = defaultdict(list)
     raw = defaultdict(int)
@@ -130,7 +142,7 @@ def load_games(files, name, spec, min_step):
             if step < min_step:
                 continue
             raw[step] += 1
-            gs = analyze_game_sides(d["moves"], spec, name)
+            gs = analyze_game_sides(d["moves"], spec, name, unit)
             for rec in gs.values():
                 buckets[step].append(rec)
     return buckets, raw
@@ -197,15 +209,19 @@ def main():
     ap.add_argument("--seed", type=int, default=20260608)
     ap.add_argument("--lo-step", type=int, default=30000, help="arc endpoint LOW for the delta")
     ap.add_argument("--hi-step", type=int, default=87500, help="arc endpoint HIGH for the delta")
+    ap.add_argument("--unit", choices=["ply", "turn"], default="ply",
+                    help="win-cell unit for the in-window/off-window split: 'ply' = legacy "
+                         "flatten {f,s} (what §D-COHERENCE ran); 'turn' = turn-correct "
+                         "completing cell pair[1] (§D-GLOBALCONC Phase 2a corrected unit).")
     ap.add_argument("--out", default="investigation/coherence_2026-06-08/coherence_decomposition.json")
     args = ap.parse_args()
 
     name = normalize_encoding_name(args.encoding)
     spec = lookup(name)
     print(f"[cfg] encoding={name} policy_logit_count={spec.policy_logit_count} "
-          f"trunk_size={spec.trunk_size}")
+          f"trunk_size={spec.trunk_size} UNIT={args.unit}")
 
-    buckets, raw = load_games(args.files, name, spec, args.min_step)
+    buckets, raw = load_games(args.files, name, spec, args.min_step, args.unit)
     steps = sorted(buckets)
     rng = np.random.default_rng(args.seed)
 

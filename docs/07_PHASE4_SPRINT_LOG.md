@@ -4990,6 +4990,19 @@ change (`git diff --stat` empty). Source data = vast
 buckets (promoted-inference checkpoint_step tags on Rust GameRecorder self-play records):
 30k (n=256 gs) / 53k (377) / 87.5k (293); 75k=1, step-0 legacy unusable.
 
+**CORRECTION (2026-06-08 — RETRACTED by §D-GLOBALCONC Phase 2b; see that entry below).** The
+V-INWINDOW verdict and the "**NOT multi-cluster (off-window not the driver, 19 %)**" routing in this
+entry are **RETRACTED**. They rested on the legacy depth-1/ply flatten win-cell unit, which mislabeled
+depth-2 wins that COMPLETE off-window but place their FIRST stone in-window as in-window. Under the
+turn-correct completing-cell unit (`forced_win_detector.winning_turn_cells`, the cell that LANDS the
+win — re-run `coherence_decomposition.py --unit turn`): the in-window decline LOSES CI significance
+(per-game-side d−0.036 CI[−0.098,+0.028]; turn-level d−0.116 CI[−0.258,+0.034] — both straddle 0),
+the off-window share RISES significantly (+0.074 CI[+0.009,+0.141]), and the decline shift-share flips
+**81/19 → 46/54** → off-window is the larger, significant, rising leg. The GLOBAL `forced_win_conversion`
+decline (−0.075) and the over-spread WHAT (own ncomp 14→22) are **unit-INVARIANT and STAND**; only the
+in/off-window SPLIT and the multi-cluster dismissal change. This RE-OPENS the off-window / multi-cluster
+line (→ §D-GLOBALCONC Phase-3 Branch C). History preserved below as originally written.
+
 **Phase 1 (decomposition).** Off-window share is FLAT (turn-level 0.516→0.480→0.554, Δ+0.038;
 per-game-side Δ−0.006). Shift-share of the global turn-level decline (off-window converts ≈0
 ⇒ global = conv_in·(1−share)): **in-window-drop = 81 %, off-window-rise = 19 %** → the
@@ -5115,3 +5128,93 @@ drives over-spread) FALSIFIED** — value ranks turn-fork concentration 0.69–0
 Full: `reports/investigations/overspread_driver_2026-06-08.md`. Instruments (local, uncommitted):
 `scripts/structural_diagnosis/turn_wins.py` + `overspread_forkredundancy.py` + `overspread_d{1..5}_*.py`
 + red-team scripts; `investigation/overspread_2026-06-08/` (PREREGISTRATION + notes + JSON + workflow).
+
+## §D-GLOBALCONC — mid-game GLOBAL-concentration discriminator + turn-unit fix — 2026-06-08
+
+Verdict: **GLOBAL-SIGNAL-ABSENT — neither head carries a clean concentration signal at the build-up
+scale.** Eval-only GATE for the §D-OVERSPREAD follow-on (strategy-layer red-team: every §D-OVERSPREAD
+concentration signal was measured at LOCAL TACTICAL positions; the fragmentation it explains is a
+GLOBAL build-up property — different scales). Read-only on banked golong replays + the 11-rung
+ladder; tracked-source change = the sanctioned Phase-2 detector edit + tests (+ turn_wins shim +
+coherence_decomposition `--unit`). Pre-reg locked before any probe:
+`investigation/globalconc_2026-06-08/PREREGISTRATION.md`. Verified by a 6-agent fresh-context
+REVIEW + 4-lens RED-TEAM (UPHELD_WITH_CAVEATS; it refuted the initial policy claim + caught a
+determinism bug — folded in below).
+
+**Phase 1 (the gate).** Pool = BUILD-UP turn-starts (ply-band swept, immediate-forced-win turns
+EXCLUDED — NOT the §D-OVERSPREAD tactical regime), n=9000, 30k/53k/87.5k buckets, corr(ncomp,stones)
+=0.604. (a) **VALUE** `AUC_globalconc` = P(value ranks CONCENTRATED build-up > SCATTERED) at matched
+stones AND matched eventual outcome (stratified Mann-Whitney): **0.40–0.42 mean every band, max
+anywhere 0.579, never reaches 0.60**; stone-confound REFUTED as the cause (AUC invariant across
+stone-band widths 1–12 incl. EXACT width-1 match; value is stone-agnostic); CI 2–12 SD below 0.50;
+won-only ~0.50 (NEUTRAL) / lost-only ~0.33 (INVERTED). → value does NOT favor global concentration.
+(b) **POLICY PRIOR** main-vs-PERIPHERAL `AUC` (adjacency controlled) = **0.565 mean, 0.547–0.582,
+upper CI never reaches 0.60, flat-declining** — the prior carries only generic ADJACENCY
+(`AUC_adj`≈0.78), NOT main-mass concentration. → **GLOBAL-SIGNAL-ABSENT on BOTH heads** (NOT the
+clean MIXED first reported; the red-team showed the 0.78 was the trivial adjacency floor). Consistent
+with §D-OVERSPREAD "no clean driver." Re-scopes **§D-OVERSPREAD D1**: value ranks LOCAL turn-fork
+concentration (0.69–0.79) but is GLOBALLY absent (0.41) — D1 was mis-scoped onto local tactics
+(frame meta-lesson #1, empirically confirmed). Value-sign audited (won +0.017 ≫ lost −0.166).
+
+**LIVE COMPETING HYPOTHESIS (un-refuted; the fix must discriminate).** value AUC<0.50 = value rates
+more-fragmented build-up HIGHER. H1: value is a HOLE (over-credits threat-spread w/o convertibility).
+H2: value is CORRECT — §D-OVERSPREAD D5 internal-neutrality (more-fragmented side NEVER the self-play
+loser) means a value head that doesn't penalise build-up fragmentation is a FAITHFUL estimator of the
+spread-tolerant equilibrium, and the liability is at the FINISH not build-up. H1→Branch A; H2→Branch C
++ Branch A pushes away from self-play-optimal (risks the 24→38% WR the spread bought).
+
+**Phase 2a (turn-unit fix; one clean commit; full `make test` green: 1831 pass; 31 detector tests).**
+Promoted `winning_turn_cells`/`count_winning_turns`/`is_fork_turn`/`FORK_THRESHOLD` from turn_wins.py
+into `forced_win_detector.py` (turn_wins → re-export shim). Unified the f-vs-s inconsistency onto the
+COMPLETING cell `pair[1]`. PROVEN bounded: `forced`/`converted` invariant to the f-vs-s choice
+(non-empty iff any win) → `forced_win_conversion` unchanged; only off-window classification of depth-2
+wins shifts. **DETERMINISM FIX (red-team-caught live-metric regression):** `get_threats()` order is
+unstable → `winning_turn_cells`/off-window binding were non-deterministic (65/4068 mismatches); fixed
+by sorting `depth2_wins` candidates (0/3069 after; regression test). `probe_threat_logits.py` audited
+— NOT depth-1-count based (threat HEAD + level≥3); unaffected.
+
+**Phase 2b (re-validation — FLAG HARD; RETRACTS the 19% routing).** Deterministic (two turn runs
+bit-identical). GLOBAL conversion IDENTICAL across units (0.750→0.676 — invariance proven). The
+§D-COHERENCE in-window ATTRIBUTION does NOT survive: in-window decline loses CI significance at BOTH
+levels (per-game-side −0.036 CI[−0.098,+0.028]; turn-level −0.116 CI[−0.258,+0.034] — both straddle
+0), off-window share RISES significantly (+0.074 CI[+0.009,+0.141]), shift-share flips **81/19 →
+46/54**, V-INWINDOW → AMBIGUOUS. Cause: depth-2 wins completing off-window but first-stone in-window
+were mislabeled in-window by the legacy flatten unit. → **RETRACTS §D-COHERENCE's "NOT multi-cluster
+(19%)"** — off-window is the larger, significant, rising leg. Does NOT touch the Phase-1 finding nor
+the over-spread WHAT (ncomp 14→22).
+
+**Routed fix DESIGN (no impl, no engine change, no run; operator-gated).** Lead with the H1/H2
+DISCRIMINATOR (fine-tune value/aux head on a banked ckpt → re-run globalconc_probe [value AUC>0.50?]
+AND overspread_d5_internal_punish [does internal-neutrality reverse?]). Branch A: value-side (+ opt.
+policy-side, since policy is ALSO absent ~0.565) GLOBAL-concentration AUXILIARY PREDICTION target
+(largest-region-share / support-weighted attacking-mass concentration). GUARDS: not A2 avg-pool, not
+a config knob, not LOCAL turn-fork credit (wrong scale); reward supported attacking mass not raw
+clustering, gate between over-spread and the §175/§S181 colony pole; apply the WR guard-rail to
+itself (H2 risk); won't fix the turn-pair scale. Branch C (RE-OPENED, possibly SAFER primary under
+H2): off-window/multi-cluster for the CONVERSION/finishing leg (where §D-OVERSPREAD Leg B showed the
+loss actually happens — length/finishing). Smoke reads TRAJECTORY (components/stone reverses, value
+AUC>0.50, D5 internal-neutrality reverses, colony_fraction/stride5 clean, SealBot-WR holds).
+
+**FOURTH SCALE still unprobed (red-team-named): the TURN-PAIR / second stone.** Both arms are
+per-single-stone; neither measures the JOINT concentration of the two stones a turn places. Branch A
+(per-position) wouldn't fix turn-pair sequencing. Next probe if the build-up fix doesn't move
+components/stone.
+
+**Lessons.** L: a concentration signal can exist at the LOCAL tactical scale (D1 0.69–0.79) yet be
+ABSENT at the GLOBAL strategic scale where the decision is made — match the instrument's regime to the
+decision's (frame meta-lesson #1, empirically confirmed). L: a policy "concentration" AUC that lumps
+isolated moves into "spread" collapses to the trivial adjacency floor — control for adjacency
+(main-vs-peripheral) or you measure "plays near its stones," not concentration (red-team catch). L:
+value-absent at a scale is direction-ambiguous (hole vs faithful-estimator) — discriminate with a
+self-play-internal-punishment counterfactual before forcing the feature. L: the depth-1→turn-correct
+unit change is `forced`/`converted`-invariant but moves the in/off-window SPLIT — re-validating
+§D-COHERENCE RETRACTED its 81/19 → 46/54 (off-window re-opened). L: `get_threats()` order is unstable
+→ any primitive selecting a single threat cell (`winning_turn_cells` `pair[1]`) must sort or it makes
+a live metric non-deterministic. Falsified-register: **§D-COHERENCE "in-window finishing, NOT
+multi-cluster (off-window 19%)" RETRACTED** under the turn-correct unit (off-window ≈54%, the
+significant rising leg). Initial §D-GLOBALCONC "MIXED / policy-sees-concentration" SELF-CORRECTED to
+GLOBAL-SIGNAL-ABSENT by the red-team (0.78 = adjacency floor).
+
+Full: `reports/investigations/globalconc_probe_2026-06-08.md`. Instruments (local):
+`scripts/structural_diagnosis/globalconc_probe.py`; `coherence_decomposition.py --unit {ply,turn}`;
+`investigation/globalconc_2026-06-08/` (PREREGISTRATION + JSON + run{,2}.log + verify_workflow.js).
