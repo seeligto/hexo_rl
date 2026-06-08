@@ -4979,3 +4979,125 @@ NOT systematic.
 Full: `reports/investigations/fragility_diagnosis_2026-06-07.md`.
 Instruments (local, uncommitted): `scripts/structural_diagnosis/fragility_value_discrim.py`,
 `investigation/fragility_2026-06-07/`.
+
+## §D-COHERENCE — in-window vs off-window forced-win conversion decomposition — 2026-06-08
+
+Verdict: **V-INWINDOW** (significant sub-material) — the golong `forced_win_conversion`
+decline is driven by IN-WINDOW finishing, NOT the off-window structural defect. Eval-only,
+read-only on banked golong self-play records + checkpoints; ZERO engine/config/Rust/pretrain
+change (`git diff --stat` empty). Source data = vast
+`checkpoints/_archive_golong_kill_20260608T065342Z/` (the killed run, pulled). Usable arc
+buckets (promoted-inference checkpoint_step tags on Rust GameRecorder self-play records):
+30k (n=256 gs) / 53k (377) / 87.5k (293); 75k=1, step-0 legacy unusable.
+
+**Phase 1 (decomposition).** Off-window share is FLAT (turn-level 0.516→0.480→0.554, Δ+0.038;
+per-game-side Δ−0.006). Shift-share of the global turn-level decline (off-window converts ≈0
+⇒ global = conv_in·(1−share)): **in-window-drop = 81 %, off-window-rise = 19 %** → the
+red-team "decline over-determined by off-window rise" premise is REFUTED. In-window
+conversion drops: recurrence-robust per-game-side Δ−0.089 (CI[−0.156,−0.016], seed-stable,
+**just SUB-material** vs the 0.10 bar); turn-level Δ−0.151 is ~40 % recurrence-inflated (don't
+trust as "material"); non-converting game-side fraction rose 17.0→25.7 %. Survivorship
+inverted: in-window forced-win COUNT per game-side ROSE 1.49→1.90.
+
+**Phase 2 (mechanism, self-contained — re-derived, NOT leaning on §D-FRAGILITY).** On a fixed
+common pool of in-window forced-win positions, NEITHER NN head degrades: POLICY finishing-mass
+flat (p_win 0.237→0.246, top1 ~0.30, entropy flat), VALUE healthy (AUC won>not-won flat
+0.79→0.81; 75k global-sharpness peak independently reproduced). The drop is DISTRIBUTIONAL:
+under the same models, p_win on 87.5k-sourced positions (0.187) ≪ 30k-sourced (0.256), Δ−0.069
+(~27 %, ≈ the conversion drop), uniform at every checkpoint, `#win-cells`-invariant.
+
+**Phase 2b (WHY — operator-driven).** Operator read the games: "defending + scattered attacks,
+way too spread out." Confirmed: the mover's OWN force OVER-FRAGMENTS along the arc — own
+components 14.0→16.6→**22.1** (+58 %) while stones rise only +9 % (components/stone 0.34→0.49,
+elevated within matched ply- AND stone-bands → training-checkpoint property, not game-length);
+largest-blob fraction 0.35→0.24; local support around the win 1.59→1.45 falls; opponent
+interference 0.90→1.12 rises. So forced wins are thin, unsupported, single-threat opportunities
+in scattered structure. This is the **opposite pole** from the §175/§S181 colony attractor
+(over-homogenization) — spread ran too far into force-fragmentation.
+
+**Lever (to strategy layer).** = reward/target shaping for in-window line-COHERENCE, sharpened
+to **force-CONCENTRATION of the attacking mass**; NOT O1 (policy-target — Phase 2 refutes the
+policy-head mechanism, O1 stays falsified), NOT multi-cluster (off-window not the driver, 19 %).
+Guard rail: a concentration lever must land BETWEEN over-spread and colony-homogenization — gate
+on conversion/fragmentation here AND colony_fraction/stride5 monitors AND SealBot-WR (the spread
+also drove the 24→38 % WR gains; don't trade strength for finishing efficiency blindly).
+
+Verification: independent REVIEW (UPHELD — all numbers reproduced, leak-check clean) +
+RED-TEAM (6/7 pillars clean; over-spread reinforced by matched-band controls; one owed
+qualification = sub-material magnitude, folded in). NOTE: the off-window target drop is the
+`window_flat_idx_at_geom` reprojection in `engine/src/game_runner/records.rs`; the widely-quoted
+"`records.rs:62`" is the pass-slot skip, not the off-window drop (mechanism right, line wrong;
+the `forced_win_detector` docstring perpetuates it — left untouched per read-only mandate).
+
+Full: `reports/investigations/coherence_decomposition_2026-06-08.md`. Instruments (local):
+`scripts/structural_diagnosis/coherence_decomposition.py` (Phase 1),
+`coherence_inwindow_policy.py` (Phase 2), `coherence_overspread.py` (Phase 2b);
+`investigation/coherence_2026-06-08/` (replays + checkpoints + JSON + REVIEW.md/REDTEAM.md).
+
+## §D-OVERSPREAD — WHY does the model over-spread? (5-driver discriminator) — 2026-06-08
+
+Verdict: **NO clean driver; the hypothesized D1→D3→D5 value-first stack is FALSIFIED.** Eval-only,
+read-only on banked golong replays + the 11-rung checkpoint ladder; ZERO engine/config/Rust/pretrain
+change (`git diff --stat` = only this sprint-log). 12-agent parallel workflow (5 driver probes →
+per-driver red-team + independent review + ordering attack). Pre-registration (lighting + thresholds
+locked before any probe): `investigation/overspread_2026-06-08/PREREGISTRATION.md`.
+
+**Drivers.** D1 value-discrimination ceiling **OUT** — value RANKS concentration; the clean
+(turn-fork, stone-matched) strand AUC 0.69–0.79 RISING (the mover_ncomp/largest_frac headline
+strands are stone-confounded — red-team correction; OUT rests on the fork-redundancy strand only).
+D2 off-window-structure-biases-play **OUT** — abandonment flat/down, model commits to boundary lines
+MORE (P(pick interior) 0.64→0.56); the boundary-share rise is a SYMPTOM of over-spread, not a driver.
+D3 target-doesn't-credit-forks **OUT** — fork-affinity HIGH (110–180× the no-credit null after
+removing the 52% finishing-move confound) and does NOT fall (75k sharpness peak). D4 exploration
+**OUT by constancy** — 33 exploration knobs byte-identical across 3 relaunches; cosine on LR not temp.
+D5 self-play-co-adaptation **INCONCLUSIVE** — Part-2 (losses are spread-force) instrument-blocked (no
+eval move-sequences banked + window-masked ModelPlayer); Part-1 decline-leg "spearman ±1.0" is a
+training-step monotonicity artifact (87.5k WR injected; colony_wins co-falls → partly the opposite
+pole). All §2 re-validation guards PASS (each OUT ruled out by in-context evidence, not a borrowed
+prior). Review UPHELD (git-clean, numbers re-derived, no leaks).
+
+**Ordering red-team — DECISIVE co-movement.** value_mean, policy p_win, policy-fork-mass AND
+MCTS-fork-mass ALL peak at 75k (the §D-FRAGILITY/§D-COHERENCE sharpness transient) while over-spread
+(ncomp 14→22) rises MONOTONICALLY → a monotone phenomenon cannot be caused by a non-monotone one ⇒
+value+search are a COUPLED WAVE riding ON TOP of the spread substrate, not its generator. Value-first
+falsified in the wrong direction; value/search are clean signals to lean ON, not holes to patch.
+
+**TURN-vs-PLY standing hole (operator insight, folded in).** A turn = 2 stones; `count_winning_moves`
+/ quiescence are depth-1 (single-stone) — wrong unit. New turn-correct primitive
+`scripts/structural_diagnosis/turn_wins.py::count_winning_turns` = `|depth1 ∪ {depth2 second-stones}|`.
+Empirics: depth-1 undercounts the turn win-set in **86.5%** of threat snapshots; at in-window
+forced-win turn-starts the engine quiescence `credit_gap=1.000` / `ply_blind≈0.95` (NEVER fires +1).
+Strength order: this-turn depth-2 completion > next-turn depth-1 ≥3 fork > single ply threat — the
+engine credits only the weaker, blind to the stronger. But the gap is FLAT across the arc → a STANDING
+structural hole that *permits* uncorrected spread, NOT the trend driver (a constant cannot drive +58%
+— same logic that ruled out D4). Eval-MEASURED, engine NOT changed (Phase-B; depth-2 is O(threats²)/
+leaf, deliberately omitted §28/§30). Recommend promoting `count_winning_turns` into
+`forced_win_detector.py` (unify the f-vs-s inconsistency); audit `probe_threat_logits.py` for the
+same depth-1 blind spot.
+
+**Routed fix (NOT value-first; operator-gated; 30k SIGNATURE smoke before any sustained run).**
+(1) Close the credit-gap hole — turn-correct HARD concentration/fork credit (promote
+`count_winning_turns` into the value/target/quiescence path; aux value target predicting turn-fork
+redundancy) so a thin win ≠ a concentrated turn-fork (heads aren't broken — *strengthen the soft
+signal into a hard one*). GUARDS: not A2 avg-pool, not a config knob; quiescence variant bench-gated.
+(2) D5 compact-reference self-play regularizer — the co-adaptation backstop (GUARD: not bot-mix
+anti-colony, not a PFSP league). **Decisive missing instrument FIRST:** D1/D3 OUT ⇒ the soft signal
+already failed to prevent spread, so the self-play DYNAMIC (D5) may be load-bearing — but D5 is
+instrument-blocked. Before paying for a fix, build a **spread-uncapped, move-recording** SealBot-eval
+(lift the n_actions window mask) and test directly whether losses are spread-force. Gate any lever on
+the fragmentation/conversion metrics AND colony_fraction/stride5 (opposite pole) AND SealBot-WR.
+
+**Lessons.** L: when every menu-driver is OUT/INCONCLUSIVE, the over-spread trend is generated by the
+self-play DYNAMIC upstream of value/search — diagnosed via CO-MOVEMENT (a monotone effect can't come
+from a peaked cause), not by a single lit driver. L: a STATIC structural hole (depth-1 credit gap,
+constant) is a standing CONDITION, not a trend DRIVER — apply the D4 constancy logic to any constant.
+L: `count_winning_moves`/quiescence are depth-1; the turn-correct unit (`count_winning_turns`)
+matters wherever forks/winning-counts are credited (value override, target shaping, threat probe).
+L (citation): §D-WALLCAUSATION's `evaluator.py:113`/`max_spread≤18` is imprecise — the spread bound
+is the n_actions window mask at `hexo_rl/eval/evaluator.py:108-118`, no `max_spread` variable
+(mechanism holds). Falsified-register candidate: **§D-OVERSPREAD D1 (value-discrimination ceiling
+drives over-spread) FALSIFIED** — value ranks turn-fork concentration 0.69–0.79 RISING.
+
+Full: `reports/investigations/overspread_driver_2026-06-08.md`. Instruments (local, uncommitted):
+`scripts/structural_diagnosis/turn_wins.py` + `overspread_forkredundancy.py` + `overspread_d{1..5}_*.py`
++ red-team scripts; `investigation/overspread_2026-06-08/` (PREREGISTRATION + notes + JSON + workflow).

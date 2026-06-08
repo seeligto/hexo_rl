@@ -29,6 +29,12 @@ Read it fully before doing anything. Rule files under `docs/rules/` are topic-sc
 
 ---
 
+## Re-validation discipline
+
+Falsifications here are **objective- and regime-specific** (anti-colony ≠ over-spread-correction ≠ conversion-decline ≠ draw-collapse). Do **NOT** drop a candidate driver or fix by citing a prior falsified-register row, banked result, or prior § without re-validating that the prior finding's **context transfers**. Protocol: cite the prior → state the exact context it was falsified in → test whether that context transfers to the current objective → only then keep/drop. A drop resting on an un-re-validated prior = reject. (§D-OVERSPREAD 2026-06-08: every driver had a tempting prior to drop it on; tested fresh, D1 INVERTED its prior.)
+
+---
+
 ## Threat-probe kill criterion
 
 `scripts/probe_threat_logits.py` gates each 5k-step checkpoint and any pre-promotion checkpoint. Full C1–C4 criterion + baseline values + run cadence live in `docs/rules/workflow.md` § "Threat-logit probe". C1–C3 must all PASS; C4 is a warning-only BCE-drift canary.
