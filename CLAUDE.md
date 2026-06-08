@@ -35,6 +35,12 @@ Falsifications here are **objective- and regime-specific** (anti-colony ≠ over
 
 ---
 
+## Verify the measurement unit before building a frame on it
+
+A unit error in a **founding measurement** mis-routes every downstream investigation. Before a metric becomes a frame's load-bearing number, confirm its UNIT matches the decision it gates — especially turn-vs-ply (a HTTT turn places TWO stones; the depth-1 single-stone unit undercounts turn wins) and which cell of a multi-stone win is the reachability-relevant one (the COMPLETING cell `pair[1]` that LANDS the win, not the first stone). (§D-COHERENCE 2026-06-08 counted a depth-2 win's in-window FIRST stone as in-window convertibility; the win actually lands on the off-window completing stone — that one-cell mislabel sent a multi-week "NOT multi-cluster, 19%" detour that §D-GLOBALCONC + §D-RECONVERGE reversed, off-window 19%→54%.) Corollary: a BORDERLINE retraction earns a CHEAP eval-only discriminator before any expensive lever; and an inference/self-play lift is a necessary-condition probe — name the self-play→external **kill** link as an explicit OPEN gate and pick the RIGHT external instrument (adversarial / spread-uncapped — a fixed-bot WR can false-clear an off-window defect by construction).
+
+---
+
 ## Threat-probe kill criterion
 
 `scripts/probe_threat_logits.py` gates each 5k-step checkpoint and any pre-promotion checkpoint. Full C1–C4 criterion + baseline values + run cadence live in `docs/rules/workflow.md` § "Threat-logit probe". C1–C3 must all PASS; C4 is a warning-only BCE-drift canary.

@@ -5218,3 +5218,96 @@ GLOBAL-SIGNAL-ABSENT by the red-team (0.78 = adjacency floor).
 Full: `reports/investigations/globalconc_probe_2026-06-08.md`. Instruments (local):
 `scripts/structural_diagnosis/globalconc_probe.py`; `coherence_decomposition.py --unit {ply,turn}`;
 `investigation/globalconc_2026-06-08/` (PREREGISTRATION + JSON + run{,2}.log + verify_workflow.js).
+
+## §D-RECONVERGE — off-window PLACEMENT conversion-lift discriminator (THE GATE) + corrections — 2026-06-08
+
+Converges the §D-OVERSPREAD/§D-GLOBALCONC arc back to the ORIGINAL §PRELONG off-window frontier. A
+unit bug in the founding §D-COHERENCE conversion metric (depth-1/ply flatten) mis-routed the
+investigation away from off-window ("NOT multi-cluster, 19%"); §D-GLOBALCONC Phase-2b corrected the
+unit (completing cell) and re-opened off-window as the larger, rising leg (46/54). The retraction was
+BORDERLINE (off-window share +0.074 CI[+0.009,+0.141], point-pinned by the determinism fix) — enough
+to KILL the 19% dismissal, NOT enough to commit multi-cluster Rust-weeks. This is the cheap
+discriminator the borderline demanded.
+
+**Phase 0 (COMMITTED + PUSHED `origin/phase4.5/overspread_driver`).** `7e786b9` (detector turn-unit
+promotion + f-vs-s unification onto the completing cell + `get_threats()` determinism SORT, bundled so
+no intermediate commit carries the non-determinism + 7 tests + `turn_wins` shim) + `1361ca0`
+(`coherence_decomposition --unit` + `globalconc_probe.py` + sprint-log §D-GLOBALCONC + §D-COHERENCE
+CORRECTION note). Commit-safety PROVEN: GATED `forced_win_conversion` invariant (forced iff win-set
+non-empty; converted reads outcome — both f-vs-s-independent), only the WATCH `off_window_forced_win_rate`
+shifts toward correctness+determinism. `make test` green (1829 py + rust). **Flake (`test_shape_fallback`)
+verified PRE-EXISTING** (registry `(8,626)→v6w25` shape-probe fragility): parent suite 1822 + change
+1829 BOTH green; the change adds ZERO registry registration → cannot trigger it (STOP condition
+impossible).
+
+**Phase 1a — THE GATE — VERDICT: LIFT (off-window PLACEMENT is the binding conversion constraint).**
+EVAL-ONLY, read-only, NO Rust/training. Reuse `_ControlDropMCTSBot` (single-window, off-window priors
+dropped — production path) vs `KClusterMCTSBot` (multi-window legal-set), SAME model, ONE switch. Pool
+= golong self-play off-window forced-win turn-starts (corrected `winning_turn_cells`+`is_off_window`);
+160 OFF-leg (**all-off 151 = 94%**, control conversion ≈0), 160 IN-leg reference. `recovery =
+MULTI_off / R_in` (R_in = in-window finishing skill). Pre-registered LIFT (recovery≥0.50 + every-ckpt
+lift-CI>0 + placement≥0.5) — **all met**:
+
+| ckpt | R_in | OFF control | OFF multi | lift CI | recovery | off-placement-frac | all-off multi |
+|---|---|---|---|---|---|---|---|
+| 30k | 0.581 | 0.025 | 0.412 | [+0.310,+0.464] | 0.71 | 0.73 | 0.424 |
+| 50k-PEAK | 0.631 | 0.056 | 0.512 | [+0.376,+0.544] | 0.81 | 0.65 | 0.523 |
+| 87.5k | 0.519 | 0.050 | 0.312 | [+0.193,+0.340] | 0.60 | 0.66 | 0.311 |
+| **pooled** | — | ~0.04 | — | **+0.369** | **0.71** | **0.68** | **0.419** |
+
+Multi recovers 60–81% of in-window finishing on off-window forced wins, MOSTLY by placing the
+off-window cell (placement 0.65–0.73); single-window production is structurally walled (~0.02–0.06).
+Ablation-clean (drop fired 28–30k expansions, K>1 ~96%, max_k 7–8, `dropped_all_turns=0` — NOT
+vacuous). The all-off subleg (control ≈0 → multi ~0.42; ANY conversion there REQUIRES off-window
+placement) is the clincher. → the §D-COHERENCE +54% off-window leg is a REAL finishing liability the
+action space addresses → **Branch C (off-window/multi-cluster) is the validated lever.** Phase 2
+(H1/H2) is CONDITIONAL on NO-LIFT → NOT run.
+
+**Phase 1b — determinism CLEAN.** Repeat-call sweep (951 games × 8): **0 mismatches** across the live
+chain — `analyze_recorded_game` 0/13314, `winning_turn_cells`+binding 0/6657 over **3069** turn-starts
+(the exact 65/4068 class, now 0), depth1/2 SETs 0/6657, `coherence` both units 0/6657. The
+`depth2_wins` sort closed the only live-chain leak. **Two LATENT risks flagged OUTSIDE the chain** (NOT
+fixed — design-only): `offwindow_adversary_bot.py:261` `blocks[0]` from unsorted `get_threats()`
+(affects the ARMED exploitability monitor's reproducibility — one-line `sorted()` fix, operator-gated);
+`generate_threat_probe_fixtures.py:129` sorts by level only → ties retain unstable order (fixture
+REGENERATION non-deterministic; live gate reads the baked fixture → unaffected at runtime).
+
+**Phase 3 — routing DESIGN-only (operator-gated).** Branch C re-validated on the new conversion basis
+(NOT the retracted 19%); also covers the unprobed TURN-PAIR fourth scale (legal-set is over both
+stones). §D-MULTICLUSTER gates re-evaluated: **S0** (Rust 362-multiwindow head) still needed — the
+inference lift raises the EFFICACY prior, does not pay for it; **S1** is the DOMINANT residual risk and
+UNCHANGED — the probe models only the FIRST of the THREE training-layer off-window drops
+(`records.rs:62`); the bootstrap→selfplay→training-loop handoff (`backup.rs:112`/`:105` + value
+over-fit, §174 e50) is irreducibly post-S0 and **§174 failed S1 3× (>50%-likely to fail)**; **S3**
+(`exploit_probe`≤0.06, NEVER vs-bot WR) unchanged. **GATE EXT-LINK (OPEN, BLOCKING S0):** the LIFT is
+SELF-PLAY conversion; the self-play→external link is **SIGN-AMBIGUOUS** — §PRELONG-BRIDGE's 0.0pp
+(n=400, Wilson95 upper 1.52pp) + D5 Leg B null/underpowered say a vs-SealBot-WR A/B reads ≈0 BY
+CONSTRUCTION (false-clears), while §D-EXPLOIT's 18%-vs-6% adversary (p=0.00017) says off-window matters
+MORE vs adversarial/human play. → the open gate must be the ADVERSARIAL/spread-uncapped instrument
+(`exploit_probe`≤0.06 OR a spread-uncapped move-recording eval, off-window-targeting WR Δ CI-lower>0),
+NOT a SealBot-WR tourney. Discharge BEFORE any Rust-weeks; do not assert the link a 4th time.
+
+**Verification — 4-agent fresh-context REVIEW + 3-lens RED-TEAM (NOT the implementer): UPHELD WITH
+CAVEATS.** REVIEW re-derived 30k BIT-IDENTICALLY + confirmed corrected unit / one-switch ablation /
+non-vacuous drop / clean Phase-0 tree. RED-TEAM: lift GENUINE off-window placement (all-off alone
+clears all gates; binding-only DILUTES) — correction: control ≈0 not ==0 (residual nets out,
+conservative); retraction is a CORRECT monotone reclassification (387/3069 flip IN→OFF-only, 0 reverse;
+`pair[1]`=landing stone 12/12; forced/converted invariant 0/37279); frame-gate HIGH → the EXT-LINK gate
+sharpened to the adversarial instrument (above). Zero tracked-source contamination.
+
+**Lessons.** **L (CLAUDE.md candidate, promoted): a unit error in a founding measurement mis-routes
+every downstream investigation — verify the measurement UNIT before building a frame on it.** The
+§D-COHERENCE depth-1/ply flatten counted a depth-2 win's in-window FIRST stone as in-window
+convertibility, hiding that the win LANDS on the off-window completing stone; that one-cell mislabel
+sent a multi-week detour ("NOT multi-cluster, 19%") that §D-GLOBALCONC Phase-2b + this gate reversed.
+L: a BORDERLINE retraction earns a CHEAP eval-only discriminator before an expensive lever — the
+LIFT (recovery 0.71) cost one GPU run and converted "re-opened, magnitude-borderline" into "validated
+binding constraint." L: an inference conversion-lift is a NECESSARY-condition / capability probe — name
+the self-play→external KILL link as an explicit OPEN gate, and pick the RIGHT external instrument
+(adversarial, not a fixed-bot WR that false-clears). Falsified-register: no new falsification (confirms
+§D-GLOBALCONC's off-window re-opening + Branch C).
+
+Full: `reports/investigations/offwindow_reconverge_2026-06-08.md`. Instruments (local):
+`scripts/structural_diagnosis/offwindow_placement_lift.py` + `determinism_audit.py`;
+`investigation/reconverge_2026-06-08/` (PREREGISTRATION + JSON + review_scratch). Phase-0 commits
+`7e786b9`,`1361ca0` pushed.
