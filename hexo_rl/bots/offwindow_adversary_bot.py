@@ -254,9 +254,13 @@ class OffWindowAdversaryBot(BotProtocol):
 
         # 2. block the opponent's immediate win cells (level-5 threats for its
         #    threat-player). depth1_wins can't verify off-turn, so read get_threats.
+        #    get_threats() order is not stable (mirrors _pick_win / the d2 sorts above),
+        #    so SORT the candidates: the block SET is unchanged (any level-5 cell is a
+        #    valid block) — sorting only pins WHICH representative is chosen when >=2
+        #    exist, making the chosen block deterministic across runs.
         opp_tp = _threat_player(-me)
-        blocks = [(int(q), int(r)) for (q, r, lvl, p) in board.get_threats()  # type: ignore[attr-defined]
-                  if lvl == 5 and p == opp_tp and (int(q), int(r)) in legal]
+        blocks = sorted((int(q), int(r)) for (q, r, lvl, p) in board.get_threats()  # type: ignore[attr-defined]
+                        if lvl == 5 and p == opp_tp and (int(q), int(r)) in legal)
         if blocks:
             return blocks[0]
 
