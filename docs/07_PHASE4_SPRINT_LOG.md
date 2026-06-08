@@ -5311,3 +5311,73 @@ Full: `reports/investigations/offwindow_reconverge_2026-06-08.md`. Instruments (
 `scripts/structural_diagnosis/offwindow_placement_lift.py` + `determinism_audit.py`;
 `investigation/reconverge_2026-06-08/` (PREREGISTRATION + JSON + review_scratch). Phase-0 commits
 `7e786b9`,`1361ca0` pushed.
+
+## §D-EXTLINK — discharge the off-window external gate before any S0 Rust-weeks — 2026-06-08
+
+Verdict: **EXT-LINK-REAL.** The off-window blind spot is a real EXTERNAL / adversarial defect, not just
+the §D-RECONVERGE self-play conversion constraint → Branch C justified for **least-exploitability
+(Objective A)**; S0 spec MAY proceed (still S1-dominant-risk gated). Discharged on the ADVERSARIAL /
+spread-uncapped instrument, NEVER SealBot-WR (false-clears by construction). Eval-only, frozen
+checkpoints; pre-registration LOCKED before the run (`investigation/extlink_2026-06-08/PREREGISTRATION.md`).
+
+**Phase 0 (COMMITTED `a7ba110`, sole sanctioned commit).** Fixed the gate instrument's determinism:
+`offwindow_adversary_bot.py` blocked level-5 threats via `blocks[0]` from UNSORTED `get_threats()`.
+Characterized (pure-engine, 24612 replay positions): `get_threats()` order unstable **74.6%** (intra-
+process, every run); OLD raw `blocks[0]` varied **165/166** block-relevant (≥2 level-5) positions → the
+§D-EXPLOIT numbers were computed on a non-deterministic instrument (the §114 lesson). One-line
+`sorted(...)` (block SET unchanged; representative pinned). Post-fix `get_move` **0 mismatches / 24612 ×
+8 repeats**. `make test` green (1829 py + rust).
+
+**Phase 1 — THE GATE (deterministic instrument, {30k / 50k-PEAK / 87.5k}, n=200/arm, sims=128, random×6).**
+- **1a (adversarial forced-win) reproduces 18v6 STRONGER.** All 3 ckpts FORCEABLE: exploit
+  0.255 / 0.235 / 0.215, control 0.075 / 0.06 / 0.05; pooled margin **+0.173 [+0.134, +0.213]**, every
+  per-ckpt margin CI-lower > 0. Checkpoint-INDEPENDENT (drifts slightly DOWN with training). CLEAN
+  one-switch ablation: `any_offwindow_forcing_position_rate` equal across arms (0.325/0.325, 0.29/0.30,
+  0.295/0.30) — builder skill constant; arms diverge ONLY at conversion. The point estimate SHIFTED UP
+  vs the pre-fix §D-EXPLOIT 0.18 — exactly the consequence of the block non-determinism (Phase 0 real).
+- **1b (off-window-targeting WR Δ at power).** WR Δ +0.162 [+0.122, +0.202]; off-window win class
+  **n=178** (~89× the §D-OVERSPREAD Leg-B n_win=2 trap). NOTE 1a ≈ 1b (exploit wins ~100% off-window →
+  not independent corroboration); per-ckpt FORCEABLE margins carry the verdict, pooled z=8.45 decorative
+  (same run).
+- **1b-causal (the genuine independent leg; uncapped KClusterMCTSBot vs capped ModelPlayer defender,
+  one switch = the off-window cap, 50k-PEAK n=100).** Uncapping CLOSES the margin **+0.16 → +0.03
+  (−81%, drop z=2.56)**: the uncapped defender faces the forcing setup MORE (0.38 vs 0.27) yet loses 7×
+  LESS (0.03 vs 0.22) — it BLOCKS, not avoids. The off-window advantage is CAUSALLY the action cap.
+  Residual 0.03 ≤ the S3 gate (0.06) = a fix-DIRECTION efficacy prior — NOT an S3/S1 clearance (an
+  inference-time multi-window overlay on single-window-TRAINED weights, not a trained multi-cluster model).
+
+**Phase 2 (routing DESIGN-only, operator-gated).** **Objective A** (least-exploitability — gated REAL,
+the deployment-vs-humans goal §D-FRAGILITY kept off-window alive for) vs **Objective B** (recover
+self-play strength — NOT gated). The golong collapse (−0.32 external, peak→trough 0.38@50k→0.05@75k,
+recovered ~0.19@87.5k) is dominated by the over-spread fragmentation self-play dynamic (§D-OVERSPREAD
+no-clean-driver, value-first falsified); the off-window conversion leg ≈ **−0.040** (54% of the −0.075
+GLOBAL conversion decline — NOT −0.075; that is the total) = ~13% of the −0.32 → **Branch C alone will
+NOT recover Objective B** (bounded-small). Branch C's effect on over-spread is TWO-SIDED (entrench vs
+channel), resolvable ONLY by the S1 TRAJECTORY smoke. §D-MULTICLUSTER gates unchanged: S0 (Rust 362 +
+multi-window, NOT a single larger head) expensive, not paid by the lift; **S1 the dominant residual
+(>50% fail, §174 ×3) UNCHANGED**; S3 post-fix off-window-pick quality ≤0.06. Optional cheap Python
+multi-window S1 pre-check is KILL-ONLY (can falsify, cannot clear). Latent determinism carry-forwards:
+`generate_threat_probe_fixtures.py:129` (fixture-regen, baked gate unaffected) + legacy §PRELONG copies.
+
+**Verification — 4-agent fresh-context REVIEW + 3-lens RED-TEAM (`wf_8e547df9`, NOT the implementer):
+UPHELD, no REFUTE.** REVIEW re-derived 30k 51/200=0.255 BIT-EXACTLY + confirmed pre-reg locked before
+runs (mtimes) + Phase-0 sole-commit + read-only. RED-TEAM: instrument (low — regime genuinely off-window
+cheb 10-15, win class powered, 1b-causal sound) / frame (low) / **magnitude (medium — caught the
+off-window-leg mislabel: −0.075 is the GLOBAL total, the leg is its 54% share ≈ −0.040; corrected
+throughout, conclusion STRENGTHENED)**. Zero tracked-source contamination.
+
+**Lessons.** L: a gate instrument must be DETERMINISTIC before a load-bearing decision rides on it
+(§114) — `get_threats()` order was unstable 74.6% intra-process; the §D-EXPLOIT 18v6 was computed on a
+non-deterministic adversary and the deterministic rate is HIGHER (0.215-0.255). L: discharge the
+off-window external gate on the ADVERSARIAL / spread-uncapped instrument, NEVER vs-bot WR (false-clears
+— off-window wins need a dominant-but-exploitable state a fixed bot never creates). L: a one-switch
+causal defender swap (capped→uncapped) is the cleanest external-defect proof AND a fix-direction prior;
+it is NOT an S1/S3 clearance. L (CLAUDE.md re-validate-unit, again): the off-window LEG (−0.040) ≠ the
+GLOBAL conversion decline (−0.075) — the dispatcher's "−0.075 off-window conversion" mislabeled the
+total; the red-team caught it. EXT-LINK gates Objective A only; the −0.32 driver is elsewhere
+(over-spread). No new falsification (confirms §D-EXPLOIT + §D-RECONVERGE Branch C on the external axis).
+
+Full: `reports/investigations/extlink_gate_2026-06-08.md`. Instruments (local):
+`scripts/exploit_probe.py` (deterministic), `investigation/extlink_2026-06-08/` (PREREGISTRATION +
+`determinism_verify.py` + `analyze_p1.py` + `uncapped_defender_causal.py` + JSON + `review_workflow.js`).
+Phase-0 commit `a7ba110`.
