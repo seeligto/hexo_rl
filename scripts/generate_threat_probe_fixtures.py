@@ -126,7 +126,10 @@ def _extract_position(
         return None
 
     # Pick highest-level threat (most urgent extension cell).
-    ext_candidates.sort(key=lambda t: -t[2])
+    # Tiebreak on (q, r) so the pick is deterministic when get_threats()
+    # returns equal-level cells in an unstable order (regen-time only;
+    # the baked fixture NPZ is unaffected at runtime).
+    ext_candidates.sort(key=lambda t: (-t[2], t[0], t[1]))
     eq, er, _ = ext_candidates[0]
 
     ext_flat = cell_to_flat(eq, er, cq, cr, trunk_size)
