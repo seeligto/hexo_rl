@@ -5477,3 +5477,97 @@ Objective-A gate — the steer/abort instruments the eval-swap lesson needs. Def
 branch (no tracked target here, `rr_driver` lives under the now-gitignored
 `investigation/founding_2026-06-08/`): log the play command (sims/temp) alongside round-robin results
 (closes the docstring-says-128 / run-used-64 reproducibility gap).
+
+## §D-EVALFOUND — build the eval/run foundation (right steer signal + eval throughput) — 2026-06-08
+
+The next major phase after the §D diagnostic arc. The arc's central lesson: a run was steered/judged
+on vs-SealBot WR — the flagged-wrong instrument for self-play strength — misdirecting six
+investigations. Build the two foundations every downstream fork (Objective-A off-window / Phase-4.5
+features / any canonical run) depends on: (1) steer/abort on the RIGHT signal; (2) eval throughput
+(serial-eval halves training throughput). DESIGN → REVIEW → IMPL → REVIEW+RED-TEAM, pre-registered.
+Eval/infra only — NO training run, NO encoding change, NO multi-cluster Rust, NO Phase-4.5 features.
+Commits HELD (operator-gated).
+
+**DESIGN (Phase 1).** `docs/designs/D_EVALFOUND_design.md` (v2). Pre-registered: a TWO-TIER instrument
+(offline all-pairs round-robin = Phase-3 tool; live current-vs-FIXED-reference-set = cycle-robust
+steer, dodging the running-best anchor-reset confound that inflated §D-FOUNDING's "100k lost 0.33");
+cycle-aware abort (a high directed-3-cycle density = non-transitive equilibrium, NOT a regression →
+suppress the STRENGTH abort, NEVER the robustness one); SealBot-WR → logged diagnostic; serial-eval
+cross-game batching. **Fresh-context 4-lens REVIEW (`wf_8eb7e9d8`) PASS_WITH_CHANGES, 11 MAJORs — all
+dispositioned in v2.** Two were resolved by MEASUREMENT (eval-only, local 4060): **M-VAR** —
+batch-size FP variance persists under float32 (logit |Δ| 3.7e-3, not zero) but **0/32 argmax flips**,
+so literal "bit-identical" is unachievable even on float32 (the dispatcher's premise corrected) →
+replaced by an explicit **G1–G5 gate hierarchy** whose primary scatter proof is a deterministic
+inference stub (FP-independent); **M-TP** — serial eval 9,252 games/hr @ GPU 53.3% (the bug confirmed
+exactly); **M-CYC** — banked-ladder directed-3-cycle density **0.073** (38% pairwise inversions but few
+full RPS triples) → `cycle_density_max` data-grounded.
+
+**VERDICT — foundation BUILT + verified (PASS_WITH_CHANGES, all follow-ups resolved).** 5 features,
+TDD, 0 commits (held), `make test` 1872 py PASS, `make bench` 10/10 PASS (MCTS floor **88,989 ≥ 73k**
+— the pure-Python eval changes are off the benched Rust path, as predicted):
+- **C1 round-robin primitive** (`hexo_rl/eval/round_robin.py` + `scripts/eval_round_robin.py`):
+  registry-by-name 4-plane loader fix (`validate_arch_against_spec` guards in_channels==n_planes AND
+  policy==policy_logit_count; `spec.name` stamped, not literal "v6"/"v8"); records full move lists +
+  checkpoint steps + play command (the §D-FOUNDING per_game.jsonl lacked all three); emits win-matrix
+  + BT-Elo + Copeland + median-rank + inversion-fraction + 3-cycle-density + Kendall-τ. **Reproduces
+  §D-FOUNDING EXACTLY** (rr_pull: 2640 games, 25/66 inversions, s50k=87.5, s75k=100.0, s85k=101.4).
+- **C2 robustness gate** (`hexo_rl/eval/robustness_gate.py`): config-keyed wrapper around
+  `offwindow_probe.run_adversary_games` (single source, deterministic post-`a7ba110`); threshold 0.06
+  fix-acceptance; hard-error on encoding mismatch; the ONLY instrument that sees the off-window defect
+  (vs-SealBot false-clears).
+- **C3 cross-game batched evaluator** (`hexo_rl/eval/eval_batcher.py`): generator/scheduler interleaves
+  N games (own MCTSTree + per-game RNG each), one combined `infer_batch`, scatter by game-index. **G1
+  deterministic-stub scatter proof byte-identical batched==serial** (parametrized N∈{8,16,32}); G3
+  repeat-deterministic; **measured 2.24× games/hr (8,730→19,545), GPU 47→63.5%, |ΔWR|=0.000.** G5
+  reseed-equivalence DEFERRED to Phase-3 banked data.
+- **C4 steer/abort rewire** (`alert_rules.py` + `config.py` + `step_coordinator.py` + `eval_pipeline.py`
+  + `gate_logic.py`): SealBot-WR DEMOTED to logged diagnostic (never feeds shutdown; honesty knob
+  `sealbot_wr_revert_to_abort` default False); cycle-aware `check_strength_regression_abort` +
+  `check_strength_warn` + robustness WARN/abort (never cycle-suppressed) + `check_objective_a_coverage`
+  pre-flight (loud WARN if NO Objective-A signal active); promotion conjunction `decide_promotion`
+  (PROMOTE iff strength_ok AND robustness_ok; fixed-ref aggregate REPLACES wr_best when present, else
+  falls back; missing robustness = pass). Back-compat: no new signals → identical to legacy.
+- **C5 §2.5 calibration** (`hexo_rl/eval/strength_calibration.py`): pre-registered separation method.
+  `cycle_density_max`=**0.15** LOCKED. `strength_abort_floor` = **UNCALIBRATABLE on the §D-FOUNDING
+  ladder** — healthy/post-peak per-rung Copeland OVERLAP because on-distribution strength is FLAT +
+  non-transitive (the founding verdict, Objective B ill-posed). The method correctly REFUSED to guess
+  → strength abort stays DISABLED, robustness gate carries Objective-A. This CONFIRMS the SealBot
+  demotion: there is no on-distribution strength regression for any abort to catch.
+
+**REVIEW+RED-TEAM (post-IMPL, `wf_f42ce70d`, fresh 5-lens, PASS_WITH_CHANGES).** Verified every claim
+by RUNNING (re-derived §D-FOUNDING Elo from raw; confirmed loader stamps spec.name; G1 anti-trivial;
+54+ tests). Two lens BLOCKs (strength path inactive) ADJUDICATED DOWN — honestly-disclosed
+operator-gated follow-up, not a hidden defect (`decide_promotion` correctly falls back; result fields
+guarded `is not None`). Genuine issues = hygiene/enforcement, FIXED: lost-signal pre-flight WARN +
+single-eval strength WARN + revert-honesty knob + G1 N-sweep + G5 defer-note. Residual BLOCKER (the
+pre-registered spec is untracked) = the operator's COMMIT decision (held per dispatcher).
+
+**HONESTLY NOT DONE (operator-gated / coupled to at-power data):** the per-round Tier-B ref-set
+strength PRODUCER (decision-4's data source — without it, strength_aggregate is never produced →
+promotion uses wr_best fallback + robustness); the at-power strength floor (uncalibratable until a run
+yields a separable collapse); **Phase 3 validation** (on-distribution plateau at power + off-distribution
+FELL mechanism trace — the round-robin now records the moves it needs; heavy compute → operator-gated).
+The Objective-A guard is CONFIG-GATED OFF by default — the operator MUST enable
+`opponents.offwindow_adversary` before a live run (design §7; pre-flight WARNs if absent).
+
+**FORKED roadmap (Phase 3 tees up; operator-owned, NOT actioned):** plateau-real → strength/
+value-ceiling investigation; off-window-mediated FELL → multi-cluster encoding (S0/S1/S3);
+opening-overfit FELL → opening-diversity. Report the fork; do not pick it.
+
+**Lessons.** L (CLAUDE.md "verify the measurement unit/premise"): the dispatcher's literal
+"bit-identical to serial" was UNACHIEVABLE (M-VAR: GPU batch-size FP variance survives float32) AND
+conflicts with fixing the global-RNG concurrency hazard — corrected to a CPU-byte-identical +
+GPU-determinism + statistical-equivalence hierarchy with a deterministic-stub scatter proof. L: a
+calibration that REFUSES to fabricate a floor on inseparable data is the method working, and the
+refusal is itself the finding (flat ladder ⇒ no strength-abort target ⇒ the SealBot abort was firing
+on a non-strength signal). L: demoting a wrong abort without re-arming the right one is a lost-signal
+trap — the robustness gate is config-gated OFF by default, so a pre-flight coverage WARN is mandatory.
+
+Full: `docs/designs/D_EVALFOUND_design.md` (DESIGN v2 + both review dispositions). Code: tracked edits
+to `hexo_rl/eval/{bradley_terry,checkpoint_loader,eval_pipeline,evaluator,gate_logic,result_types}.py`,
+`hexo_rl/monitoring/{alert_rules,config}.py`, `hexo_rl/training/step_coordinator.py`; new
+`hexo_rl/eval/{round_robin,robustness_gate,eval_batcher,strength_calibration}.py`,
+`scripts/eval_round_robin.py`, 7 new test files. Measurements (local, untracked):
+`investigation/evalfound_2026-06-08/{batch_variance_probe,batched_eval_measure}.py`. ALL COMMITS HELD
+(operator-gated) — nothing committed; `git diff` = the 9 sanctioned tracked files + untracked new
+modules/tests/design.
