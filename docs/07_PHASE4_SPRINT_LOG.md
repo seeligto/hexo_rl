@@ -5807,3 +5807,25 @@ misconfigured" (segment-1 footgun, TRUE) and "the LR caused the dynamics" (FALSE
 region; decline at healthy LR) are different claims; a live-log LR trajectory separated them. Full:
 `investigation/strengthaxis_2026-06-09/{SYNTHESIS.md,validate_instrument.py,phase2_plateau_vs_equilibrium.py}`;
 Phase-3 audit `wf_129aa8df`. ALL COMMITS HELD (operator-gated).
+
+**§D-LAND-EVALFOUND — LANDED to master 2026-06-09.** Branch `phase4.5/evalfound` FF-merged to master
+(no merge commit); master HEAD **`ac628e7`** (was `e7bbee7`). Landed = the 9 already-pushed D-EVALFOUND
+commits (`bbfc493..920b387`: RR primitive + robustness gate + cross-game batched evaluator = the
+serial-eval GPU-~50% fix + steer/abort rewire + calibrate + opening_plies) **plus** the 3
+§D-STRENGTHAXIS commits previously held: **`af22d09`** feat(eval) fixed steer instrument
+(dedupe-bootstrap CI + effective-n guard + opening-jitter, 12 tests), **`e286ec8`** docs(sprint-log)
+(§D-ARGMAX artifact verdict + Phase-3 RETRACTED banner + this §D-STRENGTHAXIS entry), **`ac628e7`**
+docs(claude-md) effective-n lesson. Gate: `make test` green (1904 py passed / 0 failed + Rust, no
+`test_shape_fallback` flake); clean 3-commit bisect, conventional, no Co-Authored-By; FF (master linear
+ancestor). Adversarial pre-merge verify (`wf_b49587ae`, 4 read-only auditors) caught a message off-by-one
+("13 new tests" → corrected to 12; the §D-ARGMAX irony noted) — reworded before merge. EVAL-path Python
+only, zero Rust/hot-path → no `make bench` needed.
+
+**RUN-READINESS FLAGS (pre-RUN items, NOT merge-blockers — for the run-design phase, NOT changed here):**
+(1) **Robustness gate is config-OFF by default** — `opponents.offwindow_adversary` MUST be enabled
+before any live run (the pre-flight WARN exists); default intentionally NOT flipped in this merge.
+(2) **Opening-jitter is routing-tested but run-UNVALIDATED** (jitter_count=0); on-distribution-ness is
+checkpoint-conditional — before any use, add/validate the bbox-span pre-flight (jitter span < the
+checkpoint's uniform-scatter span). Do not rely on it yet.
+(3) **Tier-B ref-set strength producer still deferred** — promotion uses the `wr_best` fallback +
+robustness gate until it lands.
