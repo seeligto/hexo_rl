@@ -11,6 +11,17 @@ of the live Rust+Python action-space surface.
 
 ---
 
+> **RAGGED REVISION LANDED — see §9 (authoritative).** §9 (2026-06-09, D-MULTICLUSTER-S0 Phase 1)
+> resolves the P3 representation contradiction AND **corrects** this §0/§3.3 claim that "the buffer must
+> store the ragged legal-set policy + board-coordinates." It does NOT: the buffer rows are
+> **per-cluster-local dense-362** (one row per cluster crop, `record_position`/`aggregate_policy_to_local`
+> at `inner.rs:1059-1100,:1086`), and an off-*global*-window cell covered by cluster k fits in cluster
+> k's local-362 by construction. The ragged structure is a **Rust-internal global intermediate**
+> (`LegalSetPolicy { dense, overflow }`) consumed only by the MCTS prior + the improved-policy export +
+> the per-cluster projection; it **never crosses PyO3 or the buffer**. Buffer / persist (HEXB v8 stays) /
+> symmetry / trainer-loss / model / PyO3-push are **UNCHANGED**. §3.3's v9/coord-symmetry/MAX_LEGAL
+> training-half is RETRACTED. Read §9 before IMPL; §3.1-§3.3 below are superseded where they conflict.
+
 ## 0. RED-TEAM OUTCOME (2026-06-09) — DESIGN DOES NOT SURVIVE AS WRITTEN; do NOT greenlight S0 yet
 
 5-pillar adversarial red-team (`investigation/dmulticluster_2026-06-09/REDTEAM.md`, default-to-refute,
@@ -333,4 +344,299 @@ justification, NOT a self-play strength recovery (Objective B is an artifact, §
   vs v6w25's 626 reshape, but does NOT remove the e50 value-over-fit failure mode (action-space-driven).
 - **192-cap re-introduces a soft blind spot** if left a literal (§3.2).
 - **Symmetry edge-drop** corrupts legal targets on spread positions if augmentation isn't guarded (§3.3).
+  → RETRACTED by §9: the buffer rows are per-cluster-local-362 (unchanged), so symmetry is unchanged; no
+  new edge-drop class is introduced. Pre-existing cluster-local edge behavior is identical to today.
 - **Instrument false-clear** if the off-window predicate isn't re-expressed as a single-window counterfactual (§7).
+
+---
+
+## 9. RAGGED LEGAL-SET REVISION (Design-B, AUTHORITATIVE) — 2026-06-09, D-MULTICLUSTER-S0 Phase 1
+
+> **PHASE-1 REVIEW VERDICT: PASS (IMPL unblocked).** Fresh-context adversarial review (4 lenses,
+> default-to-refute) found 1 BLOCKING REFUTE (the coverage invariant was NOT true-by-construction for the
+> target/O1 producers → O1 w=1 on an uncovered cell zeroes all global mass → uniform-fallback corruption).
+> Fixed by §9.2a (shared coverage predicate, enforced at all 3 producers). Re-review (2 lenses incl. an
+> empirical FxHashMap clone-order test) confirmed the fix RESOLVES the REFUTE with NO new contradiction —
+> center-consistency between export-coverage and record-projection is guaranteed. PASS.
+
+This section is the buildable ragged spec. It resolves the red-team's P3 (the fixed-362 OOB) and
+**corrects** §0 #1 / §3.3, which over-extrapolated P3 into "the BUFFER must go ragged + board-coords +
+HEXB v9 + coord-symmetry + a trainer cell-mask + a fresh corpus." It does not. Code-grounded on
+`investigation/dmulticluster_2026-06-09/CODE_MAP.md` + the 8-reader subsystem map (`wf_16f29789-f01`) +
+first-hand re-reads of `records.rs`, `backup.rs`, `policy.rs`, `inner.rs:1059-1100`. Where §3.1-§3.3
+conflict with §9, §9 wins.
+
+### 9.0 The structural fact that resizes the training-half to ~zero
+
+`record_position` (`inner.rs:1059-1100`) emits **one buffer row PER CLUSTER VIEW**: for each cluster k it
+encodes cluster k's recenter-crop state (`views[k]`) and stores
+`projected_policy = aggregate_policy_to_local(policy_stride, …, board, center_k, target_policy, …)`
+(`inner.rs:1086`) — the GLOBAL improved-policy target projected into **cluster k's local 19×19(+pass) =
+362** frame. So each training sample is a single cluster crop + a **dense-362 cluster-local target**
+(`network.py:615` "K=1 (one cluster window per training sample)" confirms the train forward is one-window
+**per row**, with K rows per position).
+
+**Consequence:** a legal move that is off the single board-center *global* window but is **covered by
+cluster k** is, by definition of "covered by k", inside cluster k's 19×19 window → it has a real
+`local_idx ∈ [0,361)` in cluster k's dense-362 row. So it IS representable and supervisable **in the
+existing dense-362 buffer**, in cluster k's row, where the existing single-window forward on cluster k's
+crop already emits its logit and the existing dense CE loss (`losses.py:41`) already supervises it.
+
+Today these cells are nonetheless dropped because the GLOBAL intermediate (`aggregate_policy` →
+`global_policy[mcts_idx]`, and `get_improved_policy` → `window_flat_idx`) drops off-global-window cells
+BEFORE `aggregate_policy_to_local` projects them (which then reads `global_policy[mcts_idx]` with
+`mcts_idx = usize::MAX ≥ len` → 0). **Fix the GLOBAL intermediate to retain off-window cells (ragged,
+board-coord-keyed) and have `aggregate_policy_to_local` read it by (q,r); the per-cluster projection then
+lands the cell in its covering cluster's local-362 row.** Nothing else changes.
+
+**Therefore the ragged representation is a RUST-INTERNAL GLOBAL INTERMEDIATE.** It is consumed by exactly
+three sites — (i) the MCTS prior (`pick_topk_children`), (ii) the improved-policy export
+(`get_improved_policy`/`get_policy`) + O1, (iii) `aggregate_policy_to_local` (per-cluster projection). It
+**never crosses PyO3 and never enters the buffer in ragged form**. The recorded row stays dense-362.
+
+### 9.1 The `LegalSetPolicy` type (the ragged global)
+
+```
+struct LegalSetPolicy {
+    dense:    Vec<f32>,                  // length n_actions (362) — the in-global-window slots, keyed by
+                                         //   window_flat_idx exactly as today (fast array path)
+    overflow: FxHashMap<(i32,i32), f32>, // off-global-window covered cells: (q,r) -> scatter-max prob
+}
+```
+Rationale (throughput-preserving, minimal-diff): off-global-window legal cells are "vanishingly rare"
+(`backup.rs:60-63` doc) — the dense-362 array path is untouched for the ~all in-window moves; only the
+rare off-window cells hit the map. Lookup `LegalSetPolicy::get(q,r)`:
+`if flat < dense.len() { dense[flat] } else { overflow.get(&(q,r)).copied().unwrap_or(no_coverage_floor) }`
+where `flat = window_flat_idx_at_geom(q,r,bcq,bcr,trunk,half)`. Renormalization is JOINT over
+`dense.iter().sum() + overflow.values().sum()`. A legal cell covered by **zero** clusters is absent from
+both (it has no NN signal) and reads `no_coverage_floor` (config_key; the old implicit `1/n_ch`).
+`get` distinguishes off-window-covered (in `overflow`) from no-coverage (absent → floor) — the §3.2
+"distinct fallback" requirement, now explicit.
+
+This type is selected by `spec.policy_pool == LegalSetScatterMax` (new variant). The `scatter_max` path
+keeps `Vec<f32>` (dense-362) **byte-identical** so v6_live2 runs are unaffected (one-binary A/B).
+
+### 9.2 The 5 drop layers → ragged replacements (all Rust-internal)
+
+| # | site | today (drop) | §9 ragged replacement |
+|---|------|--------------|------------------------|
+| L1 | `records.rs:62,75` `aggregate_policy` | off-window `mcts_idx=usize::MAX` → `continue`, never written | legal_set branch: write in-window cells to `dense[flat]`, off-window-covered cells to `overflow[(q,r)]`; split the pass-vs-off-window predicate so only the TRUE pass slot (`mcts_idx==n_actions-1`) is skipped |
+| L2a/b | `backup.rs:94-95,108-114` `pick_topk_children` | off-window child: sort_prior 0.0 (sinks) + `1/n_ch` uniform prior | read prior via `LegalSetPolicy::get(q,r)`; sort by TRUE prior, tie-break on packed (q,r) (flat is `usize::MAX` for all off-window → not a stable tiebreak); no uniform sink |
+| L3 | `mcts/mod.rs:45` 192-cap | sorted-to-bottom off-window children truncated first | `max_children` → config_key; truncate by TRUE prior; covered off-window cells now carry real priors so they're not auto-last |
+| L4 | `policy.rs:33,49,115-117` export | `if action >= n_actions { continue }` drops visited off-window child from the target | legal_set export returns `LegalSetPolicy`: in-window children → `dense[flat]`, off-window visited children → `overflow[(q,r)]`; no child skipped |
+| L5 | `inner.rs:937-945` O1 + `records.rs:197` sampling | O1 one-hot gated on `action < policy_stride` (off-window win → not applied); `sample_policy` reads `policy[idx]`, off-window → p=0.0 (never sampled) | O1 applies on the `LegalSetPolicy` by (q,r) (insert-if-absent so a 0-NN-mass forced win still one-hots); `sample_policy` reads by (q,r) via `LegalSetPolicy::get` |
+
+### 9.2a COVERAGE ENFORCEMENT (Phase-1 review fix — the load-bearing correction)
+Define ONE shared coverage predicate, derived once per move/leaf from the SAME cluster centers the rest of
+the pipeline uses (`board.get_cluster_views()` → `centers`, the `(cq,cr)` list; `cluster.rs:42`):
+```
+covered(q,r) := ∃ k ∈ centers : (q-cq_k+half) ∈ [0,trunk) ∧ (r-cr_k+half) ∈ [0,trunk)
+```
+This is byte-identical to `aggregate_policy`'s inner-loop bound test (`records.rs:66-68`) — the predicate
+and the projection (`aggregate_policy_to_local`, `records.rs:144-153`) agree by construction. The ragged
+**action set is the union-of-cluster-windows ∩ legal**, NOT the full legal halo. Apply it consistently:
+- **PRIOR (`aggregate_policy`):** already enforces it (writes `overflow` only for covered cells). An
+  uncovered legal cell is ABSENT from `overflow` → `pick_topk_children` reads `no_coverage_floor` (so MCTS
+  can still expand it — preserving today's behavior — but it is NOT a supervised target).
+- **TARGET (`get_improved_policy_ls` / `get_policy_ls`):** a visited off-window root child enters
+  `overflow` ONLY if `covered(q,r)`. An uncovered visited child is DROPPED from the target (exactly today's
+  L4 behavior; search/label mismatch is unchanged from today and is acceptable — the cell has no logit in
+  any cluster head). Renormalize over {dense in-window} ∪ {covered overflow} only — NO mass leak.
+- **O1 (`apply_forced_win_one_hot_ls`):** if `covered(win_qr)` → one-hot it (it will be supervised in the
+  covering cluster's row); if NOT covered → **no-op** (today's exact behavior: an off-window forced win
+  with no covering cluster is simply not applied — no scale, no leak). `forced_win_fired` is set true ONLY
+  when covered.
+**Provenance of coverage at the export site:** `get_improved_policy_ls` runs on the tree at root and has
+`root_board`; it calls `root_board.get_cluster_views()` (once per move — export is NOT the per-sim hot
+path) to materialize `centers`, then `covered(q,r)` per off-window child. The forced-win cell, being a
+legal placement adjacent to stones, is covered in practice (the prior's `aggregate_policy` already wrote
+it, even at 0 NN mass) — but the predicate is checked, not assumed. **This converts the §9.8 invariant
+from "by construction" to "enforced," eliminating the mass-leak / O1-corruption REFUTE.**
+**Center-consistency (re-review-confirmed, EMPIRICAL):** the export coverage uses `root_board`
+(`= board.clone()` at `inner.rs:838`) while the record projection uses the worker `board` at
+`inner.rs:1059` — TWO Board objects. They yield IDENTICAL `final_centers` because (a) `get_cluster_views`
+is deterministic for a fixed logical state (no RNG; `FxHasher` fixed-seed; the only order-dependence —
+massive-cluster anchor dedup — affects neither the center SET nor set-membership coverage), (b)
+`HashMap::clone` preserves iteration order (empirically verified), and (c) `record_position`
+(`inner.rs:959`) runs BEFORE `apply_move` (`inner.rs:965`), so both reflect the same pre-move state. So
+the separate export call is SAFE. OPTIONAL perf-only refinement: hoist `get_cluster_views` once per move
+and thread the centers to O1 + export + `record_position` (avoids 1 redundant call) — NOT required for
+correctness.
+
+### 9.3 `records.rs` (the producer + the per-cluster projection)
+- **`aggregate_policy`** → add a legal_set variant returning `LegalSetPolicy`. The K-cluster scatter-max
+  INNER loop (`records.rs:64-74`) is FROZEN verbatim — it already keys on per-cluster `(wq,wr)` projection,
+  not the global window. Only the OUTPUT keying changes (dense slot vs `overflow.insert((q,r),max_prob)`).
+  Split `records.rs:62`: drop ONLY `mcts_idx == n_actions-1` (true pass); KEEP off-window cells.
+- **`aggregate_policy_to_local`** → legal_set variant takes `&LegalSetPolicy` instead of `global_policy:
+  &[f32]`; for each legal (q,r) in cluster k's window, `local_policy[local_idx] = ls.get(q,r)`. This is the
+  line that lands the off-window-covered cell in cluster k's local-362 (the whole fix). Renorm unchanged.
+- **`sample_policy`** → legal_set variant reads `ls.get(q,r)` instead of `policy[idx]`.
+- **`apply_forced_win_one_hot`** → ragged variant `apply_forced_win_one_hot_ls(ls: &mut LegalSetPolicy,
+  win:(i32,i32), w, covered: bool)`: **only when `covered(win)`** (§9.2a), scale all `dense` + `overflow`
+  mass by (1-w) and add w onto the win key (in-window → `dense[flat]`; covered-off-window →
+  `overflow[(q,r)]` insert-if-absent). If NOT covered → **no-op** (return false; today's behavior — no
+  scale, no mass leak). Caller sets `forced_win_fired` to the returned bool. Re-express
+  `test_one_hot_survives_aggregate_to_local` (`records.rs:327-356`) + add the uncovered-no-op case (§9.9).
+- **Round-trip INV (S0 gate, §9.9):** an off-window forced-win cell round-trips
+  `aggregate_policy(ls) → apply_forced_win_one_hot_ls → aggregate_policy_to_local(cluster covering it)`
+  and lands non-zero at the covering cluster's `local_idx`, with NO index-violence (no `[usize::MAX]`).
+
+### 9.4 `backup.rs` (the MCTS prior consumer) — ADD `_ls` variants, do NOT mutate signatures
+**Do NOT change the signature of `expand_and_backup`/`pick_topk_children`** — they have ~20 callers
+incl. the PyO3 surface (`pyo3/mcts.rs:107-113`) and the bench harness (`mcts/mod.rs:268`); a signature
+change breaks them and the A/B byte-identity guarantee. Instead add parallel `pick_topk_children_ls` +
+`expand_and_backup_ls` (or an overload taking `&LegalSetPolicy`) selected on the legal_set path; the
+dense `scatter_max` path stays byte-identical. `pick_topk_children_ls` per child reads `ls.get(q,r)`. The
+`LegalSetPolicy` is built ONCE per NN-eval in `aggregate_policy` (NOT re-scattered per expansion — the
+O(n_legal·K) hot-path killer). `TTEntry.policy` becomes `Arc<LegalSetPolicy>` on the legal_set path
+(MCTS-internal; read-only after insert — no aliasing change). The PUCT descent (`selection.rs:74`) reads
+the already-materialized `child.prior` — UNCHANGED (representation-agnostic; bench-safe per Phase-1 review).
+
+### 9.5 `policy.rs` (the improved-policy / visit-target export)
+Add legal_set variants `get_improved_policy_ls` / `get_policy_ls` returning `LegalSetPolicy`. The
+completed-Q softmax math (`policy.rs:156-227`) is FROZEN — it already iterates root children and decodes
+(q,r); drop the `window_flat_idx` + `if action >= n_actions continue` re-keying. **Coverage-filter (§9.2a):**
+an off-window visited child enters `child_data` + `overflow[(q,r)]` ONLY if `covered(q,r)`; an UNCOVERED
+visited child is dropped (today's L4 behavior — no covering cluster head can supervise it). Off-window
+COVERED children must enter `child_data` so their softmax SHARE is computed (not merely re-keyed at
+scatter time). Write `dense[flat]` (in-window) / `overflow[(q,r)]` (covered off-window). Renorm over the
+covered set (dense + covered overflow). Off-window covered children now keep their softmax share (fixes
+the in-window renorm-bias).
+**`sum_n==0` prior-only branch (re-review IMPL note):** `get_improved_policy` has a SEPARATE no-visits
+fallback (`policy.rs:140-152`) that scatters the prior with a `total_prior` renorm — the `_ls` variant
+must ALSO route covered-off-window children to `overflow` here and include them in the renorm sum (easy
+to miss — it's a distinct code path from the main softmax). Flag a gate test for it.
+**Dual role of `get_policy` (review finding):** `get_policy` (`inner.rs:863`) is the move sampler AND, on
+the non-completed-Q path (`ctx.completed_q_values==false`), the recorded TARGET (`target_policy =
+policy.clone()`, `inner.rs:919-922`). So `get_policy_ls` is required for BOTH — the sampler AND that
+regime's buffer target — not just sampling.
+Keep `get_improved_policy`/`get_policy` (dense-362, old drop) for the `scatter_max` path AND the
+PyO3-exposed eval consumer (§9.10).
+
+### 9.6 192-cap → config (`mcts/mod.rs:45`)
+`MAX_CHILDREN_PER_NODE` → `config_key` (e.g. `mcts.max_children_per_node`). The pool-sizing coupling
+(`MAX_NODES` vs `n_sims·leaf_batch·K`, `backup.rs:259-272` panic) must be re-derived if raised. Truncate by
+TRUE prior. Open: does a proven off-window forced-win cell survive top-K? (its prior is real now; flag a
+test that the forced-win child is not capped out — prior/target divergence guard.)
+
+### 9.7 `inner.rs` threading + worker boundary
+Extract a `legal_set: bool` scalar ONCE at the worker boundary (alongside `policy_stride`,
+`has_pass_slot`, `agg_trunk_sz` — §173 A5b: NO `RegistrySpec` by-value in the per-sim loop):
+`let legal_set = matches!(spec.policy_pool, PolicyPool::LegalSetScatterMax);`. Branch
+`aggregate_policy`/`get_improved_policy`/`record_position`'s `aggregate_policy_to_local`/`sample_policy`/O1
+on it. The global ragged target built at `inner.rs:920`/`:934` flows into O1 then into `record_position`
+→ `aggregate_policy_to_local` (per-cluster) → dense-362 rows. Threading the `LegalSetPolicy` type through
+these call sites is the bulk of the IMPL.
+
+### 9.8 What is UNCHANGED — and the invariant it rests on (CORRECTED per Phase-1 review)
+**UNCHANGED (no edit):** `replay_buffer/**` (storage, push, **persist HEXB stays v8**, sample),
+`sym_tables.rs`/the symmetry scatter (`sample.rs:251-265` + `rotate_policy_inplace`), `losses.py`
+/`trainer.py` (dense-362 CE + row-level `valid_mask`), `network.py`/`pooling.py` (model head stays
+362), the PyO3 **push** boundary (`push_many` (T,362)), and the corpus format (no fresh corpus
+mandated — corpus rows stay dense-362 per-cluster-local). The §3.3 v9/coord-symmetry/MAX_LEGAL training-
+half is RETRACTED; the trainer-loss reader's "Option B per-cluster forward+gather" is UNNECESSARY (the
+per-cluster-row pipeline already IS the gather).
+**The single load-bearing invariant:** the **union-of-windows coverage invariant** — every cell that
+carries non-zero mass in the ragged target/O1 must fall inside ≥1 cluster's LOCAL window (else it is
+dropped at per-cluster projection and leaks mass).
+> **CORRECTION (Phase-1 review REFUTE, 2026-06-09): NOT "true by construction" — it must be ENFORCED.**
+> The invariant holds automatically ONLY for the PRIOR producer (`aggregate_policy`, whose inner loop
+> `records.rs:64-74` writes a cell only after finding a covering cluster). It does NOT hold for the
+> TARGET producer (`get_improved_policy_ls`) or O1, which build `overflow` from **root children** =
+> `pick_topk_children` over `board.legal_moves_set()` (the full radius-5 legal halo) keyed against the
+> **global** `window_center` (`core.rs:345-353`). On a spread board with ≥2 isolated clusters a legal
+> root child can be off the global window AND outside every cluster window (cluster centers are per-
+> cluster centroids/anchors, `cluster.rs:79,100,111`, ≠ the global midpoint). Such an uncovered key would
+> enter `overflow`, then be silently dropped by `aggregate_policy_to_local` (read by no cluster) →
+> **mass leak**; for O1, `apply_forced_win_one_hot_ls` scales all mass by (1−w) and puts w on the
+> uncovered key → every cluster row sums to (1−w) → renorm rescales the forced-win signal AWAY → silent
+> training-target corruption (the `backup.rs:262-264` failure class). **FIX → §9.2a: a shared coverage
+> predicate, applied at ALL THREE producers, scopes the ragged action set to the union-of-cluster-windows
+> ∩ legal; uncovered cells are dropped (target) / no-op (O1) / `no_coverage_floor` (prior, for MCTS
+> expansion only — never a supervised target), with renorm over the covered set.**
+
+A no-coverage cell is never a supervised target (no NN signal anywhere) — acceptable, matching today's
+clean drop. Symmetry: the recorded row is dense cluster-local-362 carrying covered cells as ordinary
+cells; `rotate_policy_inplace`/`apply_sym` rotate within that frame exactly as today — no new edge-drop
+class. (Verify with a parity test that an in-window dense row is byte-identical under `scatter_max` vs
+`legal_set` when no off-window cell exists.)
+
+### 9.9 S0 gate tests (TDD seams)
+1. **Off-window round-trip (the P3-killer):** construct a spread board with a legal move off the global
+   19×19 window but covered by a cluster; assert `aggregate_policy` (legal_set) places it in `overflow`,
+   `aggregate_policy_to_local` for the covering cluster lands it non-zero at the right `local_idx`, and NO
+   `[usize::MAX]` index occurs (the OOB the red-team flagged).
+2. **O1 off-window forced win (COVERED):** an off-window-but-covered forced-win cell →
+   `apply_forced_win_one_hot_ls` one-hots it → survives per-cluster projection NON-ZERO in the covering
+   cluster's dense row (forced_win_fired=true). Assert the win mass is actually present in ≥1 row, not
+   merely "survives."
+3. **Coverage ENFORCEMENT (the REFUTE-killer):** every `overflow` key satisfies `covered(q,r)` (§9.2a).
+   Property test over random spread boards: no `overflow` key is read by zero clusters in
+   `aggregate_policy_to_local`.
+6. **UNCOVERED root child / forced win (the review's exact counterexample):** construct a spread board
+   with ≥2 isolated clusters and a legal cell in one cluster's radius-5 halo but OUTSIDE every cluster's
+   19×19 window (uncovered). Assert: (a) the target producer DROPS it (not in `overflow`); the recorded
+   row + ragged target each sum to 1.0 (NO mass leak); (b) O1 on that uncovered cell is a NO-OP
+   (forced_win_fired=false), every cluster row unchanged. This is the test the prior §9.9 suite could not
+   detect (review secondary finding).
+4. **A/B byte-identity:** for a position with NO off-window legal moves, `legal_set` and `scatter_max`
+   produce byte-identical dense-362 rows + identical MCTS priors (the change is inert when no off-window
+   cell exists → clean A/B).
+5. **`apply_quiescence` / sample / select_move** unaffected (coord-based already). NOTE the sampler's prior
+   SOURCE (`get_policy`, `inner.rs:863`) is dense-indexed → needs `get_policy_ls` threading for off-window
+   moves to be sampleable (§9.5); both `select_move` sub-branches (gumbel-fallback `inner.rs:1023`,
+   standard `:1029`) converge on `sample_policy` → cover both.
+
+### 9.10 PyO3 boundary (only the eval-exposed export)
+`get_improved_policy`/`get_policy` are ALSO exposed via `pyo3/mcts.rs:138-139,245-248` (a fixed
+`bs*bs+1` literal — a standing pre-ragged bug; lift to `spec.policy_stride()`). That eval/viewer consumer
+is the single-window ModelPlayer / KClusterMCTSBot path, which does its OWN legal-set scatter in Python
+(§7, P4). Keep the PyO3 surface returning **dense-362** (the legal_set self-play path calls the internal
+`_ls` variants, never the PyO3 one). No new ragged array crosses PyO3. (If a future eval wants the ragged
+target it can call a new method; out of S0 scope.)
+**Resolver-collision guard (review finding, eval-wiring):** `hexo_rl/encoding/resolvers.py:476` byte/
+substring-resolves any `in_ch=4, n_actions=362` checkpoint (and any label containing `live2`) to
+single-window `v6_live2` (`scatter_max` = DROP). A `v6_live2_ls` TREATMENT ckpt loaded via
+`resolve_arch_from_state` would silently become the CONTROL encoding → eval false-clears BOTH A/B axes.
+The wire_signature is identical (§3.4 mislabel landmine). MITIGATION: legal_set eval MUST dispatch by
+**encoding NAME** (KClusterMCTSBot, §7-P4) and training/self-play reads the encoding by name from config
+— never via the shape resolver. **Add an assert** that `resolve_arch_from_state` is never the
+discriminator for a legal_set ckpt (or that the loaded spec name matches the configured one). Pin in the
+A/B runbook + the IMPL eval wiring.
+
+### 9.11 Deploy-half / training-half severance (P5), under Design-B
+- **Deploy-half (inference-only):** `aggregate_policy` legal_set + `pick_topk_children` prior-by-(q,r) +
+  the 192-cap config. This is the off-window MCTS prior — the KClusterMCTSBot overlay's Rust equivalent.
+- **Training-half (target side):** `get_improved_policy_ls` + O1-by-(q,r) + `aggregate_policy_to_local`-
+  by-(q,r). Buffer/persist/symmetry/trainer UNCHANGED. This is the +50k-supervises-off-window half.
+Both halves are small and Rust-only. The A/B GREENLIGHT (§2) still requires Arm C (trained) to beat Arm B
+(the free KClusterMCTSBot overlay) on robustness — the training-half's whole justification.
+
+### 9.12 Bench + zero-literals
+`records.rs`/`backup.rs` are `#[inline]` per-leaf-per-batch hot path → `make bench` ≥73k sim/s median on
+vast 5080 MANDATORY before any perf-sensitive legal_set commit (bench-gate skill auto-fires). The
+`FxHashMap` build is once-per-NN-eval (not per-sim); the dense path is untouched for in-window moves.
+config_keys: `mcts.max_children_per_node` (192), `policy.no_coverage_prior_floor` (the old `1/n_ch`),
+`policy_pool = "legal_set_scatter_max"` (registry, selects the path). Registry: new `[encodings.v6_live2_ls]`
+(4-plane, mirror v6_live2 BUT `is_multi_window=true`, `cluster_window_size=19`, `cluster_threshold=5`,
+`value_pool="min"`, `k_max=8`, `policy_pool="legal_set_scatter_max"`) + `PolicyPool::LegalSetScatterMax`
+— **FOUR coupled atomic Rust edits** or the build breaks: (1) `spec/mod.rs:23-27` variant, (2) `:49-57`
+parse, (3) `validate.rs:78-86` allow-set, (4) **`pyo3/encoding.rs:58` the EXHAUSTIVE `match
+self.inner.policy_pool` getter** (review finding — omitting this is a compile error, not a runtime bug).
+Python `_REGISTERED_NAMES` + resolver paths. NO new buffer/persist literal.
+**A/B note (validate-forced bundle):** `is_multi_window=true` FORCES `value_pool ∈ {Min,Max,Mean}` (≠None)
+and the treatment uses `k_max=8`, so `v6_live2_ls` differs from `v6_live2` in perception (K-window) +
+value-pool (none→min) + action-space (legal-set) — a BUNDLE, not an isolated action-space change. This is
+inherent to the multi-window mechanism (off-window needs K>1 windows); the strength axis is already demoted
+to a non-inferiority guard (§0 P1), and GREENLIGHT rests on Objective-A robustness — name the bundle
+honestly in the A/B writeup rather than claiming "change ONLY the action space."
+
+### 9.13 Open decisions for the fresh-context review
+- `LegalSetPolicy` owning module (records.rs vs mcts) — both consume it; pick the one minimizing the
+  cross-crate edit (records.rs is the producer; mcts consumes the prior — likely a shared small type).
+- TT key/coverage on a same-zobrist hit at a shifted window center (latent in the dense path too; ragged
+  makes it visible) — re-derive vs accept-staleness (matches current dense behavior).
+- `no_coverage_floor` value + whether no-coverage cells are expanded at all (likely yes-with-floor, so
+  off-window stays addressable — the whole point).
+- Confirm the §9.8 byte-identity A/B-inertness claim holds end-to-end (the review's main falsification target).
