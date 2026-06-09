@@ -39,6 +39,8 @@ def main() -> int:
     p.add_argument("--temp", type=float, default=0.5)
     p.add_argument("--max-plies", type=int, default=200)
     p.add_argument("--seed-base", type=int, default=20260608)
+    p.add_argument("--opening-plies", type=int, default=0,
+                   help="random uniform opening plies (off-distribution instrument; §D-FOUNDING 1b)")
     p.add_argument("--pair-shard", default=None, help="k/N — play pairs[k::N]")
     p.add_argument("--output", required=True)
 
@@ -52,6 +54,7 @@ def main() -> int:
         path = play_round_robin(
             args.archive, steps, args.n_games, args.sims, args.temp, args.output,
             max_plies=args.max_plies, seed_base=args.seed_base, pair_shard=args.pair_shard,
+            opening_plies=args.opening_plies,
         )
         print(f"[play] wrote {path}", file=sys.stderr)
         return 0

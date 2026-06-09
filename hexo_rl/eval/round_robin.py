@@ -263,12 +263,18 @@ class _CachedModelBot:
 
 def play_one_recorded_game(
     p1_bot, p2_bot, p1_label: str, p2_label: str, p1_step: int, p2_step: int,
-    game_idx: int, max_plies: int, play_command: dict,
+    game_idx: int, max_plies: int, play_command: dict, opening_plies: int = 0,
 ) -> dict:
     """Play one game capturing the FULL move list + checkpoint steps + play command
     (sims/temp). The move list + steps are the Phase-3 mechanism-trace substrate the
     §D-FOUNDING per_game.jsonl lacked; the play command closes its docstring-128 /
-    run-64 reproducibility gap."""
+    run-64 reproducibility gap.
+
+    ``opening_plies`` > 0 forces that many random (uniform legal) opening moves before
+    either model plays — the off-distribution / opening-scatter instrument (§D-FOUNDING
+    Phase 1b). Uses the global ``random`` RNG, seeded per game by the caller; the first
+    ``opening_plies`` entries of ``moves`` are the random opening (label both sides as
+    the opening, not a model decision)."""
     from engine import Board
     from hexo_rl.env.game_state import GameState
 
@@ -277,8 +283,11 @@ def play_one_recorded_game(
     moves: List[List[int]] = []
     ply = 0
     while ply < max_plies and not board.check_win() and board.legal_move_count() > 0:
-        bot = p1_bot if board.current_player == 1 else p2_bot
-        q, r = bot.get_move(state, board)
+        if ply < opening_plies:
+            q, r = random.choice(board.legal_moves())
+        else:
+            bot = p1_bot if board.current_player == 1 else p2_bot
+            q, r = bot.get_move(state, board)
         moves.append([int(q), int(r)])
         state = state.apply_move(board, q, r)
         ply += 1
@@ -289,6 +298,7 @@ def play_one_recorded_game(
         "p1": p1_label, "p2": p2_label,
         "p1_step": p1_step, "p2_step": p2_step,
         "game_idx": game_idx, "winner": winner, "plies": ply,
+        "opening_plies": opening_plies,
         "moves": moves, "play_command": play_command,
     }
 
@@ -301,7 +311,7 @@ def _default_device():
 def play_round_robin(
     archive: str, steps: Sequence[int], n_games: int, sims: int, temp: float,
     output: str, *, max_plies: int = 200, seed_base: int = 20260608,
-    pair_shard: Optional[str] = None, device=None,
+    pair_shard: Optional[str] = None, device=None, opening_plies: int = 0,
 ) -> str:
     """All-pairs round-robin over banked checkpoints; writes per_game.jsonl with the
     full move list + checkpoint steps + the play command. GAME-OUTER ordering so an
@@ -314,7 +324,8 @@ def play_round_robin(
         if not Path(p).exists():
             raise FileNotFoundError(f"missing checkpoint for {lab}: {p}")
 
-    play_command = {"sims": sims, "temp": temp, "max_plies": max_plies, "seed_base": seed_base}
+    play_command = {"sims": sims, "temp": temp, "max_plies": max_plies,
+                    "seed_base": seed_base, "opening_plies": opening_plies}
     bots = {lab: _CachedModelBot(paths[lab], sims, temp, device) for lab in labels}
 
     pairs = [(labels[i], labels[j]) for i in range(len(labels)) for j in range(i + 1, len(labels))]
@@ -336,6 +347,7 @@ def play_round_robin(
                 rec = play_one_recorded_game(
                     bots[p1], bots[p2], p1, p2,
                     step_for_label(p1), step_for_label(p2), gi, max_plies, play_command,
+                    opening_plies=opening_plies,
                 )
                 f.write(json.dumps(rec) + "\n")
                 f.flush()
