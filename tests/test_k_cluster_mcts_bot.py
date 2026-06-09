@@ -412,5 +412,8 @@ def test_rejects_v8_model():
         def eval(self):
             return self
 
-    with pytest.raises(ValueError, match="v6/v6w25"):
+    # Guard is now registry-driven (spec.has_pass_slot), not a hardcoded name
+    # list — v8 has has_pass_slot=False so it is still rejected. Pin the stable
+    # discriminator in the message rather than the old "v6/v6w25" name list.
+    with pytest.raises(ValueError, match="has_pass_slot"):
         KClusterMCTSBot(_StubV8(), DEVICE, n_sims=4)

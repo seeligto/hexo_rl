@@ -49,6 +49,7 @@ import torch
 
 from hexo_rl.bootstrap.bot_protocol import BotProtocol
 from hexo_rl.encoding import lookup as _lookup_encoding
+from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding
 from hexo_rl.env.game_state import GameState
 from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.utils.global_crop import compute_global_crop_from_board
@@ -229,9 +230,26 @@ class KClusterMCTSBot(BotProtocol):
         kept_plane_indices: Optional[list[int]] = None,
     ) -> None:
         encoding = getattr(model, "encoding", None)
-        if encoding not in ("v6", "v6w25"):
+        # Registry-driven support check (no hardcoded name list — per the
+        # registry-by-name / zero-literals discipline). The bot's per-cluster
+        # scatter-max projects each legal move into a trunk-size window and handles
+        # a pass slot at index policy_logit_count-1; it is encoding-agnostic on
+        # planes (the kept_plane_indices slice below handles 4-/8-/10-plane heads).
+        # The one geometry it does NOT support is the v8 bbox head (625, no pass
+        # slot, KataGo policy head). `has_pass_slot` is exactly that discriminator
+        # in the registry, so gate on the spec property — new v6/v7-family
+        # encodings are then supported automatically.
+        _spec = None
+        if encoding is not None:
+            try:
+                _spec = _lookup_encoding(_normalize_encoding(encoding))
+            except Exception:
+                _spec = None
+        if _spec is None or not _spec.has_pass_slot:
             raise ValueError(
-                f"KClusterMCTSBot requires a v6/v6w25 model; got encoding={encoding!r}"
+                "KClusterMCTSBot requires a windowed pass-slot encoding "
+                "(spec.has_pass_slot=True; the v6/v7 family or v6w25); got "
+                f"encoding={encoding!r}"
             )
         # Default pool_type to model.pool_type if the caller didn't specify;
         # this lets the eval dispatcher stay encoding-only and pool_type
