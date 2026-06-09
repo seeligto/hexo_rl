@@ -5571,3 +5571,67 @@ to `hexo_rl/eval/{bradley_terry,checkpoint_loader,eval_pipeline,evaluator,gate_l
 `investigation/evalfound_2026-06-08/{batch_variance_probe,batched_eval_measure}.py`. ALL COMMITS HELD
 (operator-gated) — nothing committed; `git diff` = the 9 sanctioned tracked files + untracked new
 modules/tests/design.
+
+### §D-EVALFOUND Phase 3 — VALIDATE at power (eval-only, banked golong ladder) — 2026-06-09
+
+Ran the new round-robin primitive (+`opening_plies`) at power to resolve the two §D-FOUNDING open
+questions. Compute: **vast 5080, 3-way pair-sharded** (the serial RR underutilizes the GPU; sharding →
+~82%); contested rungs {50,75,90,100,112.5k}, sims=64; temp×opening **2×2** (temp{0,0.5}×open{0,6}),
+n=1500 (temp0.5) / 800 (temp0). Host hygiene: cleared a stale `/tmp/tmux-*/default` socket (the
+"wedged tmux"); synced code by **push+pull** (vast on `phase4.5/evalfound`), not scp. SealBot xval ran
+on the local 4060. Aggregated with `aggregate_games` + the bootstrap slope; mechanism via
+`analyze_recorded_game` (turn-correct completing-cell `pair[1]` unit). Data:
+`reports/eval/phase3_20260609/` + `reports/eval/phase3_sealbot_xval_20260609/`; analyzer
+`investigation/evalfound_2026-06-08/phase3_analyze.py`.
+
+**VERDICT — two CI-resolved late regressions; §D-FOUNDING's "on-distribution FLAT / Objective B
+ill-posed" is CORRECTED (it was a temp-0.5 sampling artifact).** The temp×opening 2×2 (late-rung Elo,
+anchor s50k=0):
+
+| cell | s75k | s90k | s100k | s112.5k | 3-cycle | verdict |
+|---|---|---|---|---|---|---|
+| on-dist T0.5 (t05_o0, n1500) | +34 | −3.7 | −26.6 | +14.9 | **0.30** | FLAT, non-transitive |
+| on-dist **ARGMAX** (t0_o0, n800) | +75.6 | −36.3 | **−109.5** [−160,−59] | **−109.5** [−160,−59] | 0.00 | **CI-RESOLVED FALL** |
+| off-dist T0.5 (t05_o6, n1500) | −19.6 | −37.2 [−73,−2] | −40.0 [−75,−5] | **−54.5** [−90,−19] | 0.00 | **CI-RESOLVED FELL** |
+| off-dist ARGMAX (t0_o6, n800) | +1.7 | −8.7 | −37.5 | −29.6 | — | FELL (compressed by scatter) |
+
+- **On-distribution: temperature-dependent.** temp0.5 → FLAT + **non-transitive** (3-cycle 0.30, slope
+  −0.69/1k CI [−1.64,+0.14]). temp0 (ARGMAX, best-play) → a **CI-resolved ~109-Elo late FALL**
+  (100k/112.5k vs 50k, transitive 3-cycle 0.00). **Temp-0.5 sampling masks a real argmax regression
+  AND injects the non-transitivity.** → §D-FOUNDING "Objective B ill-posed" CORRECTED: at best-play
+  there IS a resolved late strength regression. (CLAUDE.md re-validate-unit: temperature is a
+  load-bearing measurement choice, not secondary — the founding's temp-0.5-only on-dist read was
+  incomplete; it lacked the temp0×open0 cell, added here.)
+- **Off-distribution: CI-resolved FELL** (open6, temp0.5): 90/100/112.5k = −37/−40/−54 Elo, CIs exclude
+  0, transitive (3-cycle 0.00). Opening randomization is the lever (confirms §D-FOUNDING 1b at power).
+- **MECHANISM (the novel deliverable): off-distribution losses are ~96% OFF-WINDOW-MEDIATED.**
+  Loser-side off-window-forced-turn rate (completing cell `pair[1]`, turn-correct) = **0.96 pooled**,
+  **uniform** across checkpoint (late 0.96 / early 0.96, both t05_o6 + t0_o6) and opening-distance bin.
+  → **Branch A (off-window → multi-cluster) confirmed; Branch B (opening-diversity, criterion <0.15)
+  REFUTED.** The off-window single-window action blind spot is the STRUCTURAL off-distribution failure
+  mechanism (uniform, not late-specific) — matching the SealBot xval below.
+- **SealBot cross-validation (§1c, demotion safety):** `exploit_probe` off-window forced-win on banked
+  {50,75,90,100,112.5k}: all **FORCEABLE 0.20–0.275** (margins +0.15..+0.24), **flat across the
+  wr_sealbot 0.38→0.05 crash** (reproduces EXT-LINK 50k 0.225≈0.235). → off-window defect is
+  structural/persistent + checkpoint-independent; **demoting SealBot-WR loses NO off-window signal**
+  (exploit_probe is its deterministic superset), and the wr_sealbot collapse is **NOT off-window-
+  mediated** (exploit_probe flat across it) — reinforcing that wr_sealbot was a confounded matchup
+  signal, not a clean Objective-A meter.
+
+**FORK (resolved data; operator-owned, NOT actioned) — BOTH arms now live:**
+1. **Off-distribution off-window FELL → multi-cluster / K-window ENCODING (S0/S1/S3).** Strongest
+   evidence yet: 96% of off-distribution losses are off-window-mediated; the single-window action
+   blind spot IS the mechanism. (S1 remains the dominant residual risk, §174 ×3.)
+2. **On-distribution ARGMAX fall (−109, in-window — NOT off-window) → strength/value-ceiling
+   investigation.** Objective B is **NOT** ill-posed: the late checkpoints genuinely regressed at
+   best-play (sampling masked it). A distinct mechanism from the off-window FELL.
+
+**Lessons.** L (CLAUDE.md re-validate-unit, again): the temperature of an Elo measurement is
+load-bearing — temp-0.5 sampling compressed a CI-resolved −109 argmax regression to "flat" AND
+manufactured a non-transitive cloud (3-cycle 0.30→0.00 at argmax). The founding's "FLAT, Objective B
+ill-posed" rested on the temp-0.5-only on-distribution read; the missing temp0×open0 cell inverts it.
+L: the mechanism trace's turn-correct completing-cell unit (`analyze_recorded_game`, depth-1 ∪
+depth-2-`pair[1]`) was essential — a depth-1-only detector would have undercounted the off-window
+forced-win set ~86.5% and could not have established the 96% off-window attribution. Compute: vast
+ssh background/tmux were wedged (stale socket + missing `ssh -n`/`ControlPath=none`); foreground ssh +
+tmux (post-socket-fix) is the working pattern; push+pull beats scp for code sync.
