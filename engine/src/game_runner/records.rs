@@ -7,6 +7,7 @@
 //! worker loop can call them without holding `self`.
 
 use crate::board::{Board, Cell};
+use fxhash::FxHashMap;
 use rand::{rng, RngExt};
 
 /// Fuse K cluster-local policies into one global policy in the main board's
@@ -291,6 +292,268 @@ pub(crate) fn apply_forced_win_one_hot(target: &mut [f32], action: usize, weight
     target[action] += w;
 }
 
+// ===========================================================================
+// §D-MULTICLUSTER-S0 — ragged legal-set policy (Rust-internal global
+// intermediate). See docs/designs/dmulticluster_362_legalset_design.md §9.
+// These functions are the legal_set (no-drop) counterparts of aggregate_policy
+// / aggregate_policy_to_local / sample_policy / apply_forced_win_one_hot. They
+// are selected (vs the dense scatter_max path) when
+// `spec.policy_pool == LegalSetScatterMax`. The dense path is byte-identical
+// for in-global-window cells (A/B byte-identity, §9.9.4); only off-global-window
+// cells COVERED by some cluster are additionally retained (in `overflow`).
+// ===========================================================================
+
+/// Ragged legal-set policy: the in-global-window slots in `dense` (keyed by
+/// `window_flat_idx`, fast array path), plus off-global-window cells COVERED by
+/// some cluster in `overflow` (keyed by board coord). Never crosses PyO3 / the
+/// buffer; re-projected per-cluster into dense-362 rows by
+/// `aggregate_policy_to_local_ls`.
+#[derive(Clone, Debug, Default)]
+pub struct LegalSetPolicy {
+    pub dense: Vec<f32>,
+    pub overflow: FxHashMap<(i32, i32), f32>,
+}
+
+impl LegalSetPolicy {
+    /// Read the prior/target mass for board coord `(q, r)`. In-global-window
+    /// cells read `dense` (identical to the dense path); a covered off-window
+    /// cell reads `overflow`; a cell outside ALL coverage (absent, off-window)
+    /// reads `floor` (the no-coverage prior). `(bcq, bcr)` is the global window
+    /// centre, `trunk_sz`/`half` the spec-derived geometry.
+    #[inline]
+    pub fn get(&self, q: i32, r: i32, bcq: i32, bcr: i32, trunk_sz: i32, half: i32, floor: f32) -> f32 {
+        let flat = Board::window_flat_idx_at_geom(q, r, bcq, bcr, trunk_sz, half);
+        if flat < self.dense.len() {
+            self.dense[flat]
+        } else {
+            self.overflow.get(&(q, r)).copied().unwrap_or(floor)
+        }
+    }
+}
+
+/// §9.2a coverage predicate: is `(q, r)` inside ≥1 cluster window? Byte-identical
+/// to `aggregate_policy`'s inner bound test and `aggregate_policy_to_local`'s
+/// projection test (same `wq = q - cq + half ∈ [0, trunk_sz)`). The target/O1
+/// producers (policy.rs / inner.rs) use this to scope the ragged set to the
+/// union-of-cluster-windows ∩ legal, so no uncovered key leaks into `overflow`.
+#[inline]
+#[allow(dead_code)] // wired into policy.rs / inner.rs target+O1 path (§9.5/§9.3)
+pub(crate) fn is_covered(q: i32, r: i32, centers: &[(i32, i32)], trunk_sz: i32, half: i32) -> bool {
+    centers.iter().any(|&(cq, cr)| {
+        let wq = q - cq + half;
+        let wr = r - cr + half;
+        wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz
+    })
+}
+
+/// Legal-set counterpart of `aggregate_policy`: builds the ragged global MCTS
+/// prior. The K-cluster scatter-max inner loop is FROZEN; the only change is the
+/// OUTPUT keying — in-window cells write `dense[mcts_idx]` (byte-identical to the
+/// dense path), off-window cells COVERED by a cluster write `overflow[(q,r)]`,
+/// off-window NO-COVERAGE cells are dropped (read `no_coverage_floor` later).
+/// Joint renorm over dense + overflow.
+#[inline]
+pub fn aggregate_policy_ls(
+    n_actions: usize,
+    has_pass_slot: bool,
+    trunk_sz: i32,
+    board: &Board,
+    centers: &[(i32, i32)],
+    cluster_policies: &[Vec<f32>],
+) -> LegalSetPolicy {
+    let half = (trunk_sz - 1) / 2;
+    let (bcq, bcr) = board.window_center();
+
+    let mut dense = vec![0.0; n_actions];
+    let mut overflow: FxHashMap<(i32, i32), f32> = FxHashMap::default();
+    let legal = board.legal_moves();
+
+    for &(q, r) in &legal {
+        let mcts_idx = Board::window_flat_idx_at_geom(q, r, bcq, bcr, trunk_sz, half);
+
+        let mut max_prob = 0.0;
+        let mut covered = false;
+        for (k, &(cq, cr)) in centers.iter().enumerate() {
+            let wq = q - cq + half;
+            let wr = r - cr + half;
+            if wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz {
+                covered = true;
+                let local_idx = wq as usize * trunk_sz as usize + wr as usize;
+                if cluster_policies[k][local_idx] > max_prob {
+                    max_prob = cluster_policies[k][local_idx];
+                }
+            }
+        }
+
+        if has_pass_slot && mcts_idx >= n_actions - 1 {
+            // Off-global-window (mcts_idx == usize::MAX). RAGGED FIX: retain it in
+            // overflow IFF a cluster covers it (§9.2a); a no-coverage cell is
+            // dropped (it has no NN signal — reads no_coverage_floor at use).
+            if covered {
+                overflow.insert((q, r), max_prob);
+            }
+            continue;
+        }
+        dense[mcts_idx] = max_prob;
+    }
+
+    // Pass slot — dead-constant 0.0 (no pass move in HTTT), matching the dense path.
+    if has_pass_slot {
+        dense[n_actions - 1] = 0.0;
+    }
+
+    let sum: f32 = dense.iter().sum::<f32>() + overflow.values().sum::<f32>();
+    if sum > 1e-9 {
+        for p in &mut dense {
+            *p /= sum;
+        }
+        for v in overflow.values_mut() {
+            *v /= sum;
+        }
+    } else {
+        // Zero-mass fallback: uniform over the dense window (matches the dense
+        // path's uniform fallback); overflow stays empty.
+        let uniform = 1.0 / n_actions as f32;
+        dense.fill(uniform);
+        overflow.clear();
+    }
+
+    LegalSetPolicy { dense, overflow }
+}
+
+/// Legal-set counterpart of `aggregate_policy_to_local`: projects the ragged
+/// global `ls` into the dense-362 frame of the cluster centred on `center`. For
+/// each legal move in this cluster's window it reads `ls` BY COORD — in-global-
+/// window cells from `ls.dense`, covered off-window cells from `ls.overflow` —
+/// so an off-GLOBAL-window cell covered by THIS cluster lands at its `local_idx`
+/// (the whole fix). Each recorded row stays dense-362 (buffer UNCHANGED).
+#[inline]
+pub fn aggregate_policy_to_local_ls(
+    n_actions: usize,
+    has_pass_slot: bool,
+    trunk_sz: i32,
+    board: &Board,
+    center: &(i32, i32),
+    ls: &LegalSetPolicy,
+    legal_moves: &[(i32, i32)],
+) -> Vec<f32> {
+    let (cq, cr) = *center;
+    let half = (trunk_sz - 1) / 2;
+    let (bcq, bcr) = board.window_center();
+
+    let mut local_policy = vec![0.0; n_actions];
+
+    for &(q, r) in legal_moves {
+        let wq = q - cq + half;
+        let wr = r - cr + half;
+        if wq >= 0 && wq < trunk_sz && wr >= 0 && wr < trunk_sz {
+            let local_idx = wq as usize * trunk_sz as usize + wr as usize;
+            let mcts_idx = Board::window_flat_idx_at_geom(q, r, bcq, bcr, trunk_sz, half);
+            // Read the ragged global by coord. A no-coverage target cell reads
+            // 0.0 (not supervised) — distinct from the prior's floor.
+            let val = if mcts_idx < ls.dense.len() {
+                ls.dense[mcts_idx]
+            } else {
+                ls.overflow.get(&(q, r)).copied().unwrap_or(0.0)
+            };
+            local_policy[local_idx] = val;
+        }
+    }
+
+    if has_pass_slot && n_actions > 0 && ls.dense.len() >= n_actions {
+        local_policy[n_actions - 1] = ls.dense[n_actions - 1];
+    }
+
+    let sum: f32 = local_policy.iter().sum();
+    if sum > 1e-9 {
+        for p in &mut local_policy {
+            *p /= sum;
+        }
+    } else {
+        let uniform = 1.0 / n_actions as f32;
+        local_policy.fill(uniform);
+    }
+    local_policy
+}
+
+/// Legal-set counterpart of `sample_policy`: samples a move from `legal_moves`
+/// proportional to the ragged `ls` mass at each move's coord (off-window covered
+/// moves are now sampleable). `floor` is the no-coverage prior.
+#[allow(dead_code)] // wired into inner.rs select_move (§9.5) once the worker loop branches on legal_set
+pub(crate) fn sample_policy_ls(
+    ls: &LegalSetPolicy,
+    legal_moves: &[(i32, i32)],
+    board: &Board,
+    trunk_sz: i32,
+    floor: f32,
+) -> Option<(i32, i32)> {
+    let half = (trunk_sz - 1) / 2;
+    let (bcq, bcr) = board.window_center();
+
+    let mut probs = Vec::with_capacity(legal_moves.len());
+    let mut sum = 0.0;
+    for &(q, r) in legal_moves {
+        let p = ls.get(q, r, bcq, bcr, trunk_sz, half, floor);
+        probs.push(p);
+        sum += p;
+    }
+
+    if sum < 1e-9 {
+        return None;
+    }
+
+    let mut rng = rng();
+    let mut rv: f32 = rng.random();
+    rv *= sum;
+
+    let mut current = 0.0;
+    for (i, &p) in probs.iter().enumerate() {
+        current += p;
+        if rv <= current {
+            return Some(legal_moves[i]);
+        }
+    }
+    Some(legal_moves[legal_moves.len() - 1])
+}
+
+/// Legal-set counterpart of `apply_forced_win_one_hot` (§9.2a / §9.3). Applies
+/// the forced-win one-hot to the ragged target BY COORD, but ONLY when the win
+/// cell is covered by a cluster — an uncovered win would zero all global mass and
+/// every per-cluster projection would hit the uniform fallback (the corruption
+/// the Phase-1 review caught). `covered=false` → no-op (matching today's clean
+/// off-window drop). Returns whether the one-hot fired (the caller's
+/// `forced_win_fired`).
+#[allow(dead_code)] // wired into inner.rs O1 path (§9.3) once the worker loop branches on legal_set
+pub(crate) fn apply_forced_win_one_hot_ls(
+    ls: &mut LegalSetPolicy,
+    win: (i32, i32),
+    weight: f32,
+    covered: bool,
+    bcq: i32,
+    bcr: i32,
+    trunk_sz: i32,
+    half: i32,
+) -> bool {
+    if weight <= 0.0 || !covered {
+        return false;
+    }
+    let w = weight.min(1.0);
+    for p in ls.dense.iter_mut() {
+        *p *= 1.0 - w;
+    }
+    for v in ls.overflow.values_mut() {
+        *v *= 1.0 - w;
+    }
+    let flat = Board::window_flat_idx_at_geom(win.0, win.1, bcq, bcr, trunk_sz, half);
+    if flat < ls.dense.len() {
+        ls.dense[flat] += w;
+    } else {
+        // Covered off-window win: insert-if-absent then add the boost.
+        *ls.overflow.entry(win).or_insert(0.0) += w;
+    }
+    true
+}
+
 #[cfg(test)]
 mod o1_tests {
     use super::*;
@@ -353,5 +616,170 @@ mod o1_tests {
         let nonzero: Vec<f32> = local.iter().copied().filter(|&p| p > 1e-6).collect();
         assert_eq!(nonzero.len(), 1, "aggregate must preserve a one-hot, got {} non-zero", nonzero.len());
         assert!((nonzero[0] - 1.0).abs() < 1e-6, "surviving mass ~1.0, got {}", nonzero[0]);
+    }
+}
+
+#[cfg(test)]
+mod ls_tests {
+    //! §D-MULTICLUSTER-S0 ragged legal-set gate tests (design §9.9).
+    use super::*;
+    use crate::board::Player;
+
+    /// Build a spread board with TWO far-apart stone clusters so the global
+    /// window centre sits between them and a cell near cluster-2 is OFF the
+    /// global 19×19 window. Returns the board; centres are supplied manually by
+    /// the caller to control geometry exactly.
+    fn spread_board() -> Board {
+        let mut board = Board::new();
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), Cell::P1);
+        }
+        for q in 30..35i32 {
+            board.cells.insert((q, 0), Cell::P2);
+        }
+        board.has_stones = true;
+        board.min_q = 0;
+        board.max_q = 34;
+        board.min_r = 0;
+        board.max_r = 0;
+        board.cache_dirty.set(true);
+        board.current_player = Player::One;
+        board.moves_remaining = 2;
+        board
+    }
+
+    const TRUNK: i32 = 19;
+    const HALF: i32 = 9;
+    const NA: usize = 19 * 19 + 1; // 362
+
+    #[test]
+    fn test_ls_retains_off_window_covered_cell_round_trip() {
+        // §9.9.1 — the P3-killer. Global centre = bbox midpoint (17,0); the global
+        // window covers q∈[8,26]. (28,0) is OFF that window but COVERED by
+        // cluster-2 (centre (32,0): q∈[23,41]). It must land in overflow and
+        // project into cluster-2's local-362 — no usize::MAX index.
+        let board = spread_board();
+        assert_eq!(board.window_center(), (17, 0), "global centre between clusters");
+        let legal = board.legal_moves();
+        assert!(legal.contains(&(28, 0)), "(28,0) must be a legal move near cluster-2");
+
+        let centers = vec![(2, 0), (32, 0)];
+        // cluster-2's NN prob at (28,0)'s local index: wq=28-32+9=5, wr=9 → 104.
+        let local_28 = (5usize) * TRUNK as usize + 9;
+        let mut cp0 = vec![0.0f32; NA];
+        let mut cp1 = vec![0.0f32; NA];
+        cp1[local_28] = 1.0;
+        // give cluster-1 some in-window mass so dense isn't all-zero
+        let _ = &mut cp0;
+        let cluster_policies = vec![cp0, cp1];
+
+        let ls = aggregate_policy_ls(NA, true, TRUNK, &board, &centers, &cluster_policies);
+        assert!(
+            ls.overflow.contains_key(&(28, 0)),
+            "off-window covered cell retained in overflow; got keys {:?}",
+            ls.overflow.keys().collect::<Vec<_>>()
+        );
+        assert!((ls.overflow[&(28, 0)] - 1.0).abs() < 1e-6, "all mass on the one covered cell");
+
+        // Project into cluster-2's local-362: (28,0) must land non-zero at local 104.
+        let local = aggregate_policy_to_local_ls(NA, true, TRUNK, &board, &(32, 0), &ls, &legal);
+        assert!((local[local_28] - 1.0).abs() < 1e-6, "off-window cell projected into covering cluster's local-362, got {}", local[local_28]);
+    }
+
+    #[test]
+    fn test_ls_coverage_enforced_no_uncovered_overflow() {
+        // §9.9.3 — every overflow key is covered by ≥1 cluster (true by the
+        // aggregate_policy_ls construction: it only inserts when `covered`).
+        let board = spread_board();
+        let centers = vec![(2, 0), (32, 0)];
+        let cp = vec![vec![0.1f32; NA], vec![0.1f32; NA]];
+        let ls = aggregate_policy_ls(NA, true, TRUNK, &board, &centers, &cp);
+        for &(q, r) in ls.overflow.keys() {
+            assert!(
+                is_covered(q, r, &centers, TRUNK, HALF),
+                "overflow key ({q},{r}) must be covered by some cluster"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ls_o1_covered_win_fires_uncovered_noops() {
+        // §9.9.2 + §9.9.6 — O1 on a COVERED off-window win fires + survives
+        // projection; O1 on an UNCOVERED cell no-ops (no mass leak / no uniform-
+        // fallback corruption — the Phase-1 review's exact counterexample).
+        let board = spread_board();
+        let centers = vec![(2, 0), (32, 0)];
+        let mut cp = vec![vec![0.0f32; NA], vec![0.0f32; NA]];
+        cp[1][(5usize) * TRUNK as usize + 9] = 0.4; // (28,0) covered, some prior
+        let base = aggregate_policy_ls(NA, true, TRUNK, &board, &centers, &cp);
+
+        // COVERED win (28,0): fires.
+        let mut ls = base.clone();
+        let covered = is_covered(28, 0, &centers, TRUNK, HALF);
+        assert!(covered);
+        let fired = apply_forced_win_one_hot_ls(&mut ls, (28, 0), 1.0, covered, 17, 0, TRUNK, HALF);
+        assert!(fired, "covered off-window win must fire");
+        assert!((ls.overflow[&(28, 0)] - 1.0).abs() < 1e-6, "pure one-hot on the covered win");
+        let legal = board.legal_moves();
+        let local = aggregate_policy_to_local_ls(NA, true, TRUNK, &board, &(32, 0), &ls, &legal);
+        let local_28 = (5usize) * TRUNK as usize + 9;
+        assert!(local[local_28] > 0.99, "covered win one-hot survives projection, got {}", local[local_28]);
+
+        // UNCOVERED cell (60,0): no cluster window contains it → no-op.
+        let mut ls2 = base.clone();
+        let uncovered = is_covered(60, 0, &centers, TRUNK, HALF);
+        assert!(!uncovered, "(60,0) is outside all cluster windows");
+        let before = ls2.clone();
+        let fired2 = apply_forced_win_one_hot_ls(&mut ls2, (60, 0), 1.0, uncovered, 17, 0, TRUNK, HALF);
+        assert!(!fired2, "uncovered win must NO-OP (no leak)");
+        assert_eq!(before.dense, ls2.dense, "uncovered O1 must not touch the target");
+        assert!(!ls2.overflow.contains_key(&(60, 0)), "uncovered key never inserted");
+    }
+
+    #[test]
+    fn test_ls_ab_byte_identity_when_no_off_window() {
+        // §9.9.4 — with NO off-window legal cell (single cluster at the global
+        // centre, all legal moves in-window), the legal_set dense row is
+        // byte-identical to the dense scatter_max aggregate → clean A/B (the
+        // change is inert when there is nothing off-window).
+        let mut board = Board::new();
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), Cell::P1);
+        }
+        board.has_stones = true;
+        board.min_q = -1;
+        board.max_q = 5;
+        board.min_r = 0;
+        board.max_r = 0;
+        board.cache_dirty.set(true);
+        board.current_player = Player::One;
+        board.moves_remaining = 2;
+        let center = board.window_center();
+        let centers = vec![center];
+        let mut cp = vec![0.0f32; NA];
+        // put mass on a couple of in-window cells via cluster-local indices
+        cp[10] = 0.3;
+        cp[200] = 0.7;
+        let cluster_policies = vec![cp];
+
+        let dense = aggregate_policy(NA, true, TRUNK, &board, &centers, &cluster_policies);
+        let ls = aggregate_policy_ls(NA, true, TRUNK, &board, &centers, &cluster_policies);
+        assert!(ls.overflow.is_empty(), "single centre at global centre → no off-window cells");
+        assert_eq!(dense, ls.dense, "legal_set dense row byte-identical to scatter_max when no off-window cell");
+    }
+
+    #[test]
+    fn test_ls_sample_picks_off_window_mass() {
+        // §9.9.5 — self-play sampling over the ragged set can pick an off-window
+        // move (the dense sample_policy returns p=0.0 for it). All mass on the
+        // covered off-window (28,0), floor=0.0 → deterministic pick.
+        let board = spread_board();
+        let centers = vec![(2, 0), (32, 0)];
+        let mut cp = vec![vec![0.0f32; NA], vec![0.0f32; NA]];
+        cp[1][(5usize) * TRUNK as usize + 9] = 1.0; // (28,0)
+        let ls = aggregate_policy_ls(NA, true, TRUNK, &board, &centers, &cp);
+        let legal = board.legal_moves();
+        let picked = sample_policy_ls(&ls, &legal, &board, TRUNK, 0.0);
+        assert_eq!(picked, Some((28, 0)), "sampler picks the only off-window mass");
     }
 }
