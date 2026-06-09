@@ -184,3 +184,170 @@ def test_reproduces_dfounding_numbers():
     assert elo["s50k"] == pytest.approx(87.5, abs=3.0)   # design tolerance ±3 Elo
     assert elo["s75k"] == pytest.approx(100.0, abs=3.0)
     assert elo["s85k"] == pytest.approx(101.4, abs=3.0)  # peak rung
+
+
+# ── §D-STRENGTHAXIS Phase 1 — effective-n discipline (the §D-ARGMAX fix) ──────
+# The deterministic-argmax-from-fixed-opening regime collapses to ~2 effective
+# (DISTINCT) games/pair: 40 byte-identical copies counted as independent inflate
+# the BT-CI by sqrt(copies) and manufacture a spurious "CI-resolved" Elo gap.
+# These functions make the CI honest (dedupe + game-level bootstrap) and flag the
+# trap (distinct-sequence-count / effective-n guard).
+
+from hexo_rl.eval.round_robin import (  # noqa: E402
+    distinct_game_key,
+    distinct_games,
+    distinct_per_pair,
+    effective_n_guard,
+    bootstrap_ratings_ci,
+)
+
+
+def test_distinct_game_key_collapses_byte_identical_sequences():
+    g1 = {"p1": "a", "p2": "b", "winner": "p1", "moves": [[0, 0], [1, 1]]}
+    g2 = {"p1": "a", "p2": "b", "winner": "p1", "moves": [[0, 0], [1, 1]]}  # byte-identical
+    g3 = {"p1": "a", "p2": "b", "winner": "p2", "moves": [[0, 0], [2, 2]]}  # different seq
+    assert distinct_game_key(g1, 0) == distinct_game_key(g2, 1)
+    assert distinct_game_key(g1, 0) != distinct_game_key(g3, 2)
+
+
+def test_distinct_game_key_without_moves_cannot_claim_copies():
+    # No move list ⇒ we cannot prove two records are the same game ⇒ each is distinct.
+    g1 = {"p1": "a", "p2": "b", "winner": "p1"}
+    g2 = {"p1": "a", "p2": "b", "winner": "p1"}
+    assert distinct_game_key(g1, 0) != distinct_game_key(g2, 1)
+
+
+def test_distinct_games_returns_representatives_and_multiplicities():
+    base = {"p1": "a", "p2": "b", "winner": "p1", "moves": [[0, 0]]}
+    other = {"p1": "a", "p2": "b", "winner": "p2", "moves": [[1, 1]]}
+    games = [dict(base) for _ in range(40)] + [dict(other) for _ in range(40)]
+    reps, mult = distinct_games(games)
+    assert len(reps) == 2
+    assert sorted(mult) == [40, 40]
+
+
+def test_distinct_per_pair_flags_the_deterministic_two_coloring_pair():
+    # The t0_o0 artifact: a pair has exactly 2 distinct sequences (the two colorings),
+    # each replicated x40 ⇒ distinct/pair == 2 regardless of raw game count.
+    ca = {"p1": "a", "p2": "b", "winner": "draw", "moves": [[0, 0]]}
+    cb = {"p1": "b", "p2": "a", "winner": "p1", "moves": [[1, 1]]}
+    games = [dict(ca) for _ in range(40)] + [dict(cb) for _ in range(40)]
+    dpp = distinct_per_pair(games, ["a", "b"])
+    assert dpp[("a", "b")] == 2
+
+
+def test_effective_n_guard_flags_pseudoreplication():
+    base = {"p1": "a", "p2": "b", "winner": "p1", "moves": [[0, 0], [1, 1]]}
+    copies = [dict(base) for _ in range(40)]  # 1 distinct, 40 copies
+    rep = effective_n_guard(copies, ["a", "b"], min_distinct_per_pair=10)
+    assert rep["n_games"] == 40
+    assert rep["n_distinct_games"] == 1
+    assert rep["copy_multiplier"] == 40.0
+    assert rep["distinct_per_pair_min"] == 1
+    assert rep["low_power_warning"] is True
+
+
+def test_effective_n_guard_clears_when_every_game_distinct():
+    distinct = [
+        {"p1": "a", "p2": "b", "winner": "p1", "moves": [[i, i]]} for i in range(40)
+    ]
+    rep = effective_n_guard(distinct, ["a", "b"], min_distinct_per_pair=10)
+    assert rep["n_distinct_games"] == 40
+    assert rep["copy_multiplier"] == 1.0
+    assert rep["low_power_warning"] is False
+
+
+def _mixed_ladder(order, n, win_frac=0.7, seq_tag=0):
+    """All-pairs games with a deterministic ~win_frac for the later rung; each game
+    is distinct (move list carries a unique tag) so n controls distinct power."""
+    games = []
+    for i in range(len(order)):
+        for j in range(i + 1, len(order)):
+            for g in range(n):
+                later_wins = (g % 10) < int(win_frac * 10)
+                p1, p2 = order[i], order[j]
+                winner = "p2" if later_wins else "p1"
+                games.append({"p1": p1, "p2": p2, "winner": winner,
+                              "moves": [[i, j], [seq_tag, g]]})
+    return games
+
+
+def test_bootstrap_ci_is_invariant_to_copy_multiplicity():
+    # THE FIX: the game-level bootstrap dedupes first, so x40 byte-identical copies
+    # give the SAME CI as the distinct set — copies cannot narrow the interval.
+    order = ["s1", "s2", "s3"]
+    distinct = _mixed_ladder(order, n=8)
+    copies = [dict(d) for d in distinct for _ in range(40)]
+    ci_d = bootstrap_ratings_ci(distinct, order, n_boot=300, seed=1)
+    ci_c = bootstrap_ratings_ci(copies, order, n_boot=300, seed=1)
+    for lab in order:
+        assert ci_d[lab][0] == pytest.approx(ci_c[lab][0], abs=1e-6)
+        assert ci_d[lab][1] == pytest.approx(ci_c[lab][1], abs=1e-6)
+
+
+def test_bootstrap_ci_widens_as_distinct_power_falls():
+    # Fewer DISTINCT games ⇒ wider CI (the sqrt(n_eff) effect the raw Hessian misses).
+    order = ["s1", "s2"]
+    lo = bootstrap_ratings_ci(_mixed_ladder(order, n=8), order, n_boot=400, seed=2)
+    hi = bootstrap_ratings_ci(_mixed_ladder(order, n=400), order, n_boot=400, seed=2)
+    w_lo = lo["s2"][1] - lo["s2"][0]
+    w_hi = hi["s2"][1] - hi["s2"][0]
+    assert w_lo > w_hi
+    # the high-power CI resolves the 70% edge (excludes 0); the low-power one need not
+    assert hi["s2"][0] > 0
+
+
+def test_aggregate_emits_effective_n_guard_and_warns_on_copies():
+    base = {"p1": "s1", "p2": "s2", "winner": "p2", "moves": [[0, 0], [1, 1]]}
+    games = [dict(base) for _ in range(40)]  # 1 distinct x40
+    s = aggregate_games(games, ladder_order=["s1", "s2"], min_distinct_per_pair=10)
+    assert s["n_distinct_games"] == 1
+    assert s["copy_multiplier"] == 40.0
+    assert s["effective_n_warning"]["low_power_warning"] is True
+
+
+def test_aggregate_without_moves_does_not_false_warn():
+    # Existing per-game records (no move list) must not trip the guard — back-compat.
+    order = ["s1", "s2", "s3"]
+    s = aggregate_games(_ladder_games(order, later_wins=True), ladder_order=order)
+    assert s["copy_multiplier"] == 1.0
+    assert s["effective_n_warning"]["low_power_warning"] is False
+    for k in ("rungs", "copeland", "inversion_fraction", "three_cycle_density"):
+        assert k in s
+
+
+def test_aggregate_bootstrap_ci_attached_when_requested():
+    order = ["s1", "s2"]
+    s = aggregate_games(_mixed_ladder(order, n=80), ladder_order=order, n_boot=200)
+    rung = {r["label"]: r for r in s["rungs"]}["s2"]
+    assert "ci_lo_boot" in rung and "ci_hi_boot" in rung
+    assert rung["ci_lo_boot"] <= rung["elo"] <= rung["ci_hi_boot"]
+
+
+# ── on-distribution opening jitter (model-policy), distinct from the off-dist
+#    uniform `opening_plies` scatter (which measures Objective A) ──────────────
+
+def test_opening_jitter_routes_plies_to_model_policy_then_argmax():
+    from hexo_rl.eval.round_robin import play_one_recorded_game
+
+    class StubBot:
+        def __init__(self):
+            self.calls = 0
+
+        def get_move(self, state, board):
+            self.calls += 1
+            return board.legal_moves()[0]
+
+    main1, main2 = StubBot(), StubBot()
+    open1, open2 = StubBot(), StubBot()
+    rec = play_one_recorded_game(
+        main1, main2, "s1", "s2", 50000, 75000, game_idx=0, max_plies=6,
+        play_command={}, opening_plies=1, opening_jitter_plies=2,
+        p1_open_bot=open1, p2_open_bot=open2,
+    )
+    # ply 0: uniform random (no bot); plies 1-2: on-distribution opening bots;
+    # plies 3-5: main (argmax) bots.
+    assert open1.calls + open2.calls == 2
+    assert main1.calls + main2.calls == 3
+    assert rec["opening_jitter_plies"] == 2
+    assert rec["opening_plies"] == 1
