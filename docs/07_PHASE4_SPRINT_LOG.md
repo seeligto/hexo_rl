@@ -5574,6 +5574,15 @@ modules/tests/design.
 
 ### §D-EVALFOUND Phase 3 — VALIDATE at power (eval-only, banked golong ladder) — 2026-06-09
 
+> **⚠ PARTIALLY RETRACTED by §D-ARGMAX (2026-06-09, below).** The on-distribution **ARGMAX −109 Elo
+> "CI-resolved late FALL"** in the table below is a **measurement artifact**: the t0_o0 cell has only
+> ~2 effective (distinct) games/pair (deterministic argmax + no opening diversity → 40 byte-identical
+> copies), so the raw n=800 BT-CI is over-confident by √40 = 6.32×; the honest deduped CI [−427,+208]
+> **straddles 0**. **Objective B (on-distribution self-play strength) is FLAT / ill-posed — §D-FOUNDING
+> stands.** The off-distribution **t05_o6 FELL (−40..−54, Objective A) is UNAFFECTED** (powered, 150
+> distinct/pair) and remains the one real CI-resolved deficit. The "(2) on-distribution argmax fall →
+> strength/value-ceiling investigation" fork arm is CLOSED. See §D-ARGMAX for the full reversal.
+
 Ran the new round-robin primitive (+`opening_plies`) at power to resolve the two §D-FOUNDING open
 questions. Compute: **vast 5080, 3-way pair-sharded** (the serial RR underutilizes the GPU; sharding →
 ~82%); contested rungs {50,75,90,100,112.5k}, sims=64; temp×opening **2×2** (temp{0,0.5}×open{0,6}),
@@ -5635,3 +5644,166 @@ depth-2-`pair[1]`) was essential — a depth-1-only detector would have undercou
 forced-win set ~86.5% and could not have established the 96% off-window attribution. Compute: vast
 ssh background/tmux were wedged (stale socket + missing `ssh -n`/`ControlPath=none`); foreground ssh +
 tmux (post-socket-fix) is the working pattern; push+pull beats scp for code sync.
+
+## §D-ARGMAX — diagnose the in-window ARGMAX −109 regression → it is a measurement artifact — 2026-06-09
+
+Dispatched to diagnose the §D-EVALFOUND Phase-3 "CI-resolved ~109-Elo in-window ARGMAX strength
+regression" as the DOMINANT deficit and resolve the unification fork (does B unify with the
+single-window encoding → multi-cluster fixes both, or is B distinct). **VERDICT — the −109 is a
+LOW-EFFECTIVE-POWER / over-confident-CI ARTIFACT; Objective B (on-distribution self-play strength
+regression) is NOT real; the fork DISSOLVES — one real deficit remains (A, off-window).** EVAL-ONLY,
+read-only (`git diff` empty); all artifacts under gitignored `investigation/argmax_2026-06-09/`.
+Verified by a fresh-context red-team (NOT the implementer): **SOUND**.
+
+**PHASE 1 — CONFIRM: the −109 does NOT survive at power.** The §D-EVALFOUND Phase-3 read reproduces
+exactly (t0_o0 argmax: s100k=s112.5k=−109.5 [−160,−59]\*, transitive). But the power is fake:
+**t0_o0 (argmax, opening_plies=0) has exactly 1 distinct game-sequence per directed pair — 40
+byte-identical copies; true effective n = 20 games total, ~2/pair.** temp=0 + no opening diversity ⇒
+deterministic self-play ⇒ games repeat (the 60-20 splits = {one color→draw, other→win}, ×40).
+Dedupe to distinct sequences → **s100k=−109.5 [−427,+208], STRADDLES 0**; the raw n=800 BT-CI is
+inflated **exactly 6.32× = √40** (textbook pseudo-replication; L23/§176 generalised). The −109 is NOT
+CI-resolved at its real sample size. Corroborating: **sims=128 INVERTS** the ranking (s100k strongest
++148, also 2 games/pair); a deterministic t0_o0 game **flips winner across GPUs** (4060 vs banked 5080,
+CUDA-float) after the shared opening — not even cross-hardware reproducible. The properly-powered cells
+are FLAT: t05_o0 (sampled, 150 distinct/pair) FLAT; **t0_o6 (argmax + 6 opening plies = 80 distinct/pair,
+real power) FLAT** — every rung straddles 0 (s100k −37.5 [−85.8,+10.9]). The ONLY CI-resolved,
+properly-powered late regression is OFF-distribution: **t05_o6 (sampled, opening-6) s90k/100k/112.5k
+= −37\*/−40\*/−54\*** = the off-window FELL (Objective A, §D-EXTLINK). → §D-FOUNDING's original
+"Objective B ill-posed / FLAT" was CORRECT; §D-EVALFOUND Phase-3's reversal was itself the artifact.
+
+**COMPONENT LOCALIZATION (valid as STYLE, not a strength driver).** Fixed-pool head scoring over the
+full ladder (in-window forced-win turn-starts, n=7498): no head/search collapse — POLICY top1
+−0.02..−0.04 (entropy de-sharpens@100k, RECOVERS@112.5k); VALUE won-vs-lost AUC healthy 0.84–0.88;
+SEARCH MCTS-lift +0.05..+0.10 STABLE. Largest fixed-pool effect is DISTRIBUTIONAL — late-checkpoint-
+sourced positions ~0.10–0.14 harder to finish in-window, STONE-MATCHED (not depth); mechanism: late
+in-window wins are THIN/UNDER-SUPPORTED (local own-stone support 2.04→1.35), genuine finishing-failure
+~10%→34% (NOT a benign multi-win artifact). REAL position-structure facts, but they co-move with FLAT
+powered strength (§D-FOUNDING) = a style/finishing-efficiency correlate, NOT a net strength regression.
+
+**PHASE 2 — MECHANISM (all 4 arms OUT, coherent with "no real B").** A1 encoding-unification **OUT,
+fork_collapses=FALSE** (centering churn loser_late−early +0.004 CI[−0.007,+0.015] FLAT; the game-level
+churn-LIT was a SHORT-GAME blowout confound — paired loss-gap −0.039 at argmax, boundary-pressure
+INVERTED). A2 value-ceiling **OUT as driver** (conc-AUC ~0.40 <0.70 ✓ but FLAT, 75k→112.5k +0.009
+CI[−0.012,+0.031]; a constant PERMITS, cannot drive — D4-constancy; confirms §D-GLOBALCONC absence at
+full ladder incl. late). A3 de-sharpening **OUT** (argmax −0.034\* + sampled −0.026\* fall TOGETHER, gap
+narrows, entropy recovers; L9 cosine-temp = draw-collapse context, does NOT transfer). A4 over-spread
+**OUT as global driver** (matched-buildup WINNER more-spread; game-end loser-spread = short-game
+blowout; global frag doesn't predict finishing — replicates §D-FOUNDING length-confound at argmax).
+
+**UNIFICATION ANSWER — the fork DISSOLVES.** A1 OUT (no centering link) AND the −109 is not a real
+deficit → there is no "dominant B" to route around. ONE real, CI-resolved, properly-powered deficit:
+**A — off-distribution / off-window FELL (Objective A, −40..−54 Elo, t05_o6)**. The sustained late
+SealBot decline is NEITHER on-distribution strength (B, artifact) NOR off-window-mediated (exploit_probe
+flat 0.20–0.275, §D-EVALFOUND xval) → confounded matchup-WR (§D-FOUNDING), not a strength canary.
+
+**ROUTING — DESIGN only, operator-gated.** (1) **B: nothing to fix** (artifact); do NOT open a
+strength/value-ceiling lever; the thin-wins style finding does not justify one (co-moves with flat
+strength). (2) **EVAL-METHOD fix (the real Phase-3 deliverable, no training/Rust):** argmax
+(deployment-regime) strength CANNOT be measured by a deterministic round-robin from a fixed opening
+(~2 effective games/pair, over-confident BT-CI) — the steer instrument
+(`hexo_rl/eval/round_robin.py`) must inject independent variation (on-distribution opening jitter OR a
+diverse opponent panel) AND bootstrap the CI over DISTINCT games (dedupe copies first); add a
+distinct-sequence-count / effective-n guard + warning. (3) **A: off-window / multi-cluster lever**
+(Objective A) on the properly-powered off-distribution + §D-EXTLINK adversarial basis (exploit_probe
+≤0.06, NEVER SealBot-WR), NOT the −109 — clean Rust path (registry.toml source-of-truth,
+registry-by-name, zero literals, `make bench` ≥73k sim/s); **S1 still the dominant residual (>50% fail,
+§174×3)**; the 30k SIGNATURE smoke must use the powered/dedupe-bootstrap instrument or it repeats the
+artifact.
+
+**LESSONS.** **L (promote, CLAUDE.md candidate): a self-play strength CI's effective sample size is the
+number of DISTINCT games, not the game count** — deterministic regimes (argmax/temp-0 + fixed opening)
+collapse to ~2 games/pair, and a BT/Wilson CI over the raw count is over-confident by √(copy-multiplier)
+(here exactly √40 = 6.32×; L23/§176 generalised). Verify the distinct-game count before trusting any
+strength CI; a "CI-resolved" Elo gap on a deterministic round-robin is the over-confidence trap, not a
+finding. Corollary to "verify the measurement unit/premise": temperature is load-bearing AND so is
+opening/opponent DIVERSITY — the argmax deployment regime needs injected variation to be measurable at
+all. **L:** a deterministic argmax game can flip winner across GPUs (CUDA-float) — single-config argmax
+outcomes are not strength statements. **Falsified-register: §D-EVALFOUND Phase-3 "on-dist ARGMAX
+CI-RESOLVED FALL −109.5, transitive" RETRACTED** (counted 40 copies as independent; honest CI [−427,+208]
+straddles 0). §D-FOUNDING "Objective B ill-posed/FLAT" RE-AFFIRMED. The "−109 → strength/value-ceiling"
+fork arm is CLOSED; off-window/multi-cluster (Objective A) is the only surviving live arm.
+
+Full: `investigation/argmax_2026-06-09/SYNTHESIS.md` + `REDTEAM_reversal.md`. Instruments (local,
+gitignored): `component_localize.py` (+component_all/_inwindow.json), `distributional_confound.py`,
+`distributional_mechanism.py` (+json), `search_arm.py` (+json), `a1_centering*.py` (+json),
+`a2_value_conc.py` (+json), `a3_desharpen.py` (+json), `a4_overspread_argmax.py` (+json),
+`sims128_redteam.py` (+sims128_check/). ALL COMMITS HELD (operator-gated).
+
+## §D-STRENGTHAXIS — fix the strength instrument, then answer the hyperparameter question — 2026-06-09
+
+The strength axis flip-flopped THREE times (FOUNDING flat → EVALFOUND −109 → ARGMAX flat) for one root
+cause: the eval instrument could not measure argmax strength (deterministic argmax from a fixed opening
+pseudo-replicates to ~2 effective games/pair → over-confident BT-CI either way). Fix the instrument,
+then test whether there is even a hyperparameter-shaped problem before any hyperparameter hunt.
+EVAL/CONFIG-only (Phase 1 eval-path Python off the benched Rust hot path; Phases 2–3 read-only; Phase 4
+design-only). Full writeup `investigation/strengthaxis_2026-06-09/SYNTHESIS.md`. COMMITS HELD.
+
+**PHASE 1 — the fixed steer instrument (`hexo_rl/eval/round_robin.py`, TDD, +12 tests, `make test.py`
+1904 passed / 0 failed; no Rust → no bench).** (1) dedupe byte-identical `(p1,p2,moves)` sequences
+(`distinct_game_key`/`distinct_games`; no-move records cannot be claimed as copies — legacy-safe); (2)
+**game-level (cluster) bootstrap CI over DISTINCT games** (`bootstrap_ratings_ci`, wired into
+`aggregate_games(n_boot=…)` per-rung `ci_*_boot`; `aggregate_to_dir` defaults 1000) — copies cannot
+narrow it; (3) **effective-n / distinct-per-pair guard + WARN** (`effective_n_guard`: `copy_multiplier`,
+`distinct_per_pair_min`, `low_power_warning`, gated on move-data presence; always emitted by
+`aggregate_games`); (4) **on-distribution opening jitter** (`opening_jitter_plies`/`_temp`: the player's
+OWN model plays the opening at a sampling temp then argmax — breaks argmax determinism WITHOUT
+scattering the bbox off-window; mechanically distinct from the uniform `opening_plies`, which the
+measured evidence shows is the OFF-distribution / Objective-A scatter — but jitter is
+CHECKPOINT-CONDITIONAL: in-window only insofar as the model's own opening policy is, so a
+spread/off-window-specialized checkpoint could drift jitter off-window; (4) is unit-tested for ROUTING
+only, NOT run-validated — verify the jitter-region bbox span in the future Objective-A smoke).
+**VALIDATE on banked Phase-3
+cells:** reproduces the raw Hessian read EXACTLY; the guard fires only on t0_o0 (copy_mult 40, WARN);
+the honest bootstrap CI **straddles 0 for on-dist argmax** (the −109 dissolves), is FLAT for the
+powered cells (t05_o0, t0_o6), and resolves only the off-distribution **t05_o6 FELL (−40..−54 =
+Objective A)**. → §D-ARGMAX / §D-FOUNDING "on-distribution FLAT at power" CONFIRMED on the productionised
+instrument; every future strength/abort call now dedupes copies + bootstraps over distinct games.
+
+**PHASE 2 — plateau vs equilibrium (pre-registered, fixed instrument, §D-FOUNDING full 12-rung ladder
+35k→112.5k temp0.5 2640g).** EARLY (≤75k) slope **+2.80 [+1.6,+4.1]** EXCL-0 (real climb to a
+peak ~75–85k); LATE (≥75k) slope **−1.37 [−2.5,−0.2]** EXCL-0 (**CI-resolved DECLINE from the peak**);
+FULL +0.53 [+0.17,+0.89]; 3-cycle density **0.073** (< 0.15, NOT an RPS cycle); inversion 0.379.
+**Pre-registered binary = AMBIGUOUS** (E1 STALL fails on inversions; E2 EQUILIBRIUM fails on the low
+3-cycle + non-straddling full slope). Per the probe-smoke-verdict discipline thresholds are NOT moved —
+the ambiguity is the finding: a **RISE-to-peak-then-LATE-DECLINE**, neither flatten-and-hold nor a
+non-transitive cloud. Relative to s50k the END ≈ the early-trained level (§D-ARGMAX powered cells
+straddle 0); the decline is the drop FROM the peak (≈40–60 Elo, CI-resolved at temp0.5; an unresolved
+~40-Elo point drop at the powered argmax cell t0_o6). It is NOT a plateau to push past, and it occurred
+at HEALTHY LR — a constant/healthy hyperparameter cannot manufacture a time-localized inflection.
+
+**PHASE 3 — Dirichlet/temp/LR provenance + sanity (parallel audit + adversarial verify; `wf_129aa8df`).**
+All SANE, all NOT_IMPLICATED. **Dirichlet** 0.05/0.10 (config_key, HTTT-tuned §115/§116/§143 per the
+config comment; alpha landed §118): 10/N against
+the ACTUAL windowed root n_children (~25 opening, 216–347 mid/late = 0.029–0.046) puts 0.05 at/above the
+mid-game band; §156 R11 (eps→0 NULL) + §S181-T3 (alpha×4 + no_noise < 3pp) falsify a Dirichlet stall.
+**Temperature** fixed τ=0.5, cosine OFF (config_key, §156 R12 / L9): the large branching is the REASON
+the cosine floor is dangerous (R12 cosine-on → 91% draws); constant, applied to MCTS-improved visits.
+**LR** 2e-3/eta_min 5e-4 cosine (mixed; KataGo never-below-0.5× plasticity floor, raised 2e-4→5e-4
+§S181 PR-B): the §D-STRENGTHAXIS "cosine collapses LR by 50–75k → plateau" hypothesis is FALSIFIED **by
+direct live-log measurement** — the documented segment-1 footgun (launch omitted
+`--override-scheduler-horizon` → T_max baked at 30k → LR toward eta_min by ~50–53k) was fixed at the
+**53k restart re-warm to 2e-3 BEFORE the peak/decline region**; segment-2 LR stayed high
+(1.971e-3@75k, 1.919e-3@90k); the §D-FRAGILITY 75k event was at FLAT ~1.97e-3 LR, not eta_min.
+
+**PHASE 4 — ROUTING (DESIGN only, operator-gated).** GATE (lever IFF Phase2=STALL AND Phase3 implicated)
+NOT satisfied: Phase 2 is not a clean stall and Phase 3 implicates nothing → **no hyperparameter/LR
+lever for on-distribution strength.** The **LR-for-long-runs schedule is HYGIENE not a strength lever**
+— prevent the segment-1 footgun on any fresh run (a clean single cosine over the true 0→N horizon
+avoids the rewarm-anchor hack; plasticity floor already in place) — but it was fixed before the region
+and the decline occurred at healthy LR, so it is not the cause. **The only live lever is Objective A —
+off-window / multi-cluster** (S0 clean-Rust 362-multiwindow registry-by-name zero-literals
+`make bench`≥73k; S1 the dominant residual >50% fail §174×3; S3 exploit_probe ≤0.06), justified on the
+powered off-distribution FELL + the §D-EXTLINK adversarial basis, NEVER the −109 or SealBot-WR. Any
+Objective-A 30k smoke MUST use the Phase-1 fixed instrument (dedupe-bootstrap + effective-n guard) or
+it repeats the pseudo-replication artifact — and if it uses the on-distribution opening-jitter control,
+it MUST first verify the jitter-region bbox span stays in-window for that checkpoint (the
+checkpoint-conditional caveat above).
+
+**Lessons.** L: the three-reversal recursion is closed by fixing the INSTRUMENT, not by a fourth
+cause-hunt — a steer signal that cannot measure the deployment (argmax) regime at power will whipsaw
+every call that depends on it. L: a pre-registered binary that returns AMBIGUOUS is data, not failure —
+the rise-peak-decline is a real third pattern; do not move thresholds to force a verdict. L: "the LR was
+misconfigured" (segment-1 footgun, TRUE) and "the LR caused the dynamics" (FALSE — fixed before the
+region; decline at healthy LR) are different claims; a live-log LR trajectory separated them. Full:
+`investigation/strengthaxis_2026-06-09/{SYNTHESIS.md,validate_instrument.py,phase2_plateau_vs_equilibrium.py}`;
+Phase-3 audit `wf_129aa8df`. ALL COMMITS HELD (operator-gated).
