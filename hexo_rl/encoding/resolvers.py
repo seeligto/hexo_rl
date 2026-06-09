@@ -479,6 +479,15 @@ def detect_encoding_from_state_dict(
     # 19×19 single-window. Distinct plane count from the v6 family (8).
     if in_ch == 10 and (n_actions == 362 or "v6tp" in label):
         return lookup("v6tp")
+    # §D-MULTICLUSTER-S0 — v6_live2_ls is SHAPE-IDENTICAL to v6_live2 (in_ch=4,
+    # 362, 19×19); the shape resolver CANNOT distinguish them, only a label hint
+    # can. Test the more-specific "v6_live2_ls" label BEFORE "v6_live2" so a
+    # labelled TREATMENT ckpt does NOT silently resolve to the CONTROL encoding
+    # (which would false-clear BOTH A/B axes — §9.10). A label-LESS v6_live2_ls
+    # ckpt stays shape-ambiguous → legal_set eval/training MUST dispatch by
+    # encoding NAME from config (KClusterMCTSBot, §7-P4), never via this resolver.
+    if in_ch == 4 and ("v6_live2_ls" in label or "live2_ls" in label):
+        return lookup("v6_live2_ls")
     # §P5-CT H-PLANE fix — v6_live2 keeps only the live-on-both-paths planes
     # [0,8,16,17] → in_ch=4, 362 actions, 19×19 single-window. Distinct plane
     # count from v6 (8) / v6tp (10).

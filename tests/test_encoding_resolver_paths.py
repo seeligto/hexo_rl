@@ -164,3 +164,21 @@ def test_anchor_paths_covers_all_registered_encodings() -> None:
         "Add entries to _ANCHOR_PATHS in hexo_rl/encoding/resolvers.py "
         "or add to _RESOLVER_GAPS_ALLOWLIST if anchor intentionally absent."
     )
+
+
+def test_resolver_disambiguates_v6_live2_ls_from_v6_live2():
+    """§D-MULTICLUSTER-S0 / §9.10 — v6_live2_ls is shape-identical to v6_live2
+    (in_ch=4, 362, 19×19); only the ckpt LABEL disambiguates. The more-specific
+    "v6_live2_ls" label must resolve to the TREATMENT encoding, NOT silently to
+    the CONTROL (which would false-clear both A/B axes). v6_live2 labels and
+    shape-only resolution must still map to v6_live2 (no regression)."""
+    from hexo_rl.model.network import HexTacToeNet
+    from hexo_rl.encoding.resolvers import detect_encoding_from_state_dict as detect
+
+    sd = HexTacToeNet(
+        encoding="v6", board_size=19, in_channels=4, filters=8, res_blocks=1
+    ).state_dict()
+
+    assert detect(sd, "checkpoint_v6_live2_ls_50k.pt", strict=True).name == "v6_live2_ls"
+    assert detect(sd, "checkpoint_00050000_PEAK_sb0.38.pt", strict=True).name == "v6_live2"
+    assert detect(sd, "bootstrap_model_v6_live2.pt", strict=True).name == "v6_live2"
