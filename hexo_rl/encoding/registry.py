@@ -28,6 +28,7 @@ _REGISTERED_NAMES: tuple[str, ...] = (
     "v6",
     "v6tp",
     "v6_live2",
+    "v6_live2_ls",
     "v7full",
     "v7",
     "v7e30",

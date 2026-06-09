@@ -77,10 +77,10 @@ impl RegistrySpec {
             }
             if !matches!(
                 self.policy_pool,
-                PolicyPool::ScatterMax | PolicyPool::ScatterMean
+                PolicyPool::ScatterMax | PolicyPool::ScatterMean | PolicyPool::LegalSetScatterMax
             ) {
                 errs.push(format!(
-                    "is_multi_window=true requires policy_pool ∈ {{ScatterMax,ScatterMean}}; got {:?}",
+                    "is_multi_window=true requires policy_pool ∈ {{ScatterMax,ScatterMean,LegalSetScatterMax}}; got {:?}",
                     self.policy_pool
                 ));
             }

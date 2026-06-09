@@ -24,6 +24,11 @@ pub enum PolicyPool {
     None,
     ScatterMax,
     ScatterMean,
+    /// §D-MULTICLUSTER-S0: scatter-max over K cluster windows WITHOUT the
+    /// off-window drop — the aggregated MCTS prior / improved-policy target is a
+    /// ragged legal-set (board-coord-keyed), retaining off-global-window cells
+    /// that are covered by some cluster. See `docs/designs/dmulticluster_362_legalset_design.md` §9.
+    LegalSetScatterMax,
 }
 
 impl ValuePool {
@@ -50,8 +55,9 @@ impl PolicyPool {
             "none" => Ok(PolicyPool::None),
             "scatter_max" => Ok(PolicyPool::ScatterMax),
             "scatter_mean" => Ok(PolicyPool::ScatterMean),
+            "legal_set_scatter_max" => Ok(PolicyPool::LegalSetScatterMax),
             other => Err(format!(
-                "policy_pool must be one of [none,scatter_max,scatter_mean]; got {other:?}"
+                "policy_pool must be one of [none,scatter_max,scatter_mean,legal_set_scatter_max]; got {other:?}"
             )),
         }
     }

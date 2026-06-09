@@ -59,6 +59,7 @@ impl PyRegistrySpec {
             crate::encoding::PolicyPool::None => "none",
             crate::encoding::PolicyPool::ScatterMax => "scatter_max",
             crate::encoding::PolicyPool::ScatterMean => "scatter_mean",
+            crate::encoding::PolicyPool::LegalSetScatterMax => "legal_set_scatter_max",
         }
     }
     #[getter] pub fn sym_table_id(&self) -> &'static str { self.inner.sym_table_id }

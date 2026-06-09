@@ -130,6 +130,11 @@ _CORPUS_PATHS: dict[str, str] = {
     "v6":                 "data/bootstrap_corpus.npz",
     "v6tp":               "data/bootstrap_corpus_v6tp.npz",  # §P5-CT CF-2 (10-plane, incl. 16/17)
     "v6_live2":           "data/bootstrap_corpus_v6_live2.npz",  # §P5-CT H-PLANE fix (4-plane [0,8,16,17])
+    # §D-MULTICLUSTER-S0: distinct path. Dense-362 per-cluster-local rows are
+    # representation-compatible with v6_live2 (design §9.8), but the multi-window
+    # corpus generation differs (K cluster rows/ply); regenerate-vs-reuse is a
+    # run-design call (AB_RUNBOOK: export_corpus_npz.py --encoding v6_live2_ls).
+    "v6_live2_ls":        "data/bootstrap_corpus_v6_live2_ls.npz",
     "v6w25":              "data/bootstrap_corpus_v6w25.npz",
     "v7full":             "data/bootstrap_corpus.npz",   # shared with v6 (§150)
     "v7mw":               "data/bootstrap_corpus.npz",   # shared with v6/v7full (§176a)
@@ -141,6 +146,10 @@ _ANCHOR_PATHS: dict[str, str] = {
     "v6":                 "checkpoints/bootstrap_model_v6.pt",
     "v6tp":               "checkpoints/bootstrap_model_v6tp.pt",  # §P5-CT CF-2 self-anchor
     "v6_live2":           "checkpoints/bootstrap_model_v6_live2.pt",  # §P5-CT H-PLANE fix self-anchor
+    # §D-MULTICLUSTER-S0: TREATMENT launches from the CONTROL's bootstrap — the
+    # 4-plane/362 v6_live2 weights load into v6_live2_ls with NO reshape (head
+    # shape preserved; AB_RUNBOOK).
+    "v6_live2_ls":        "checkpoints/bootstrap_model_v6_live2.pt",
     "v6w25":              "checkpoints/bootstrap_model_v6w25.pt",
     "v7full":             "checkpoints/bootstrap_model_v7full.pt",
     "v7mw":               "checkpoints/bootstrap_model_v7full.pt",   # v7full anchor (same arch §176a)

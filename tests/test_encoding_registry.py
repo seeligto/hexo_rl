@@ -79,7 +79,7 @@ def test_registry_loads_all_encodings():
     drops without locking the list.
     """
     names = sorted(s.name for s in all_specs())
-    expected = {"v6", "v6tp", "v6_live2", "v6w25", "v7", "v7e30", "v7full", "v7mw", "v8", "v8_canvas_realness"}
+    expected = {"v6", "v6tp", "v6_live2", "v6_live2_ls", "v6w25", "v7", "v7e30", "v7full", "v7mw", "v8", "v8_canvas_realness"}
     assert set(names) == expected, f"registry encodings drifted: {names}"
 
 

@@ -312,6 +312,42 @@ schema_version          = 3
 notes                   = "§P5-CT H-PLANE-MISMATCH fix — v6tp minus dead history planes 1-3/9-11 (live in pretrain, zeroed in self-play). 4-plane live-on-both set [0,8,16,17]. Fresh 4-plane pretrain."
 
 # ---------------------------------------------------------------------------
+# v6_live2_ls — §D-MULTICLUSTER-S0 legal-set TREATMENT. Mirrors v6_live2's
+# 4-plane production shape (362 head, [0,8,16,17]; weights load no-reshape) but
+# is MULTI-WINDOW (K>1, cluster_threshold=5) with the NO-DROP legal-set action
+# policy (policy_pool=legal_set_scatter_max). The off-window MCTS prior /
+# improved-policy target is a Rust-internal ragged legal-set (dense-362 +
+# off-window overflow), re-projected per-cluster into dense-362 buffer rows —
+# buffer/persist/symmetry/trainer UNCHANGED. is_multi_window=true forces
+# value_pool=min + k_max=8 (the multi-window bundle). A/B TREATMENT vs the
+# single-window v6_live2 CONTROL. See docs/designs/dmulticluster_362_legalset_design.md §9.
+# ---------------------------------------------------------------------------
+[encodings.v6_live2_ls]
+board_size              = 19
+trunk_size              = 19
+cluster_window_size     = 19
+cluster_threshold       = 5
+legal_move_radius       = 5
+n_planes                = 4
+plane_layout            = [
+  "current_player_t0",       # source plane 0
+  "opponent_t0",             # source plane 8
+  "moves_remaining_bcast",   # source plane 16: moves_remaining == 2 ? 1 : 0
+  "ply_parity_bcast",        # source plane 17: ply % 2
+]
+policy_logit_count      = 362            # 19*19 + 1 (last = pass); head shape preserved
+has_pass_slot           = true
+is_multi_window         = true
+value_pool              = "min"
+policy_pool             = "legal_set_scatter_max"
+sym_table_id            = "size_19"
+kept_plane_indices      = [0, 8, 16, 17]
+n_source_planes         = 18
+k_max                   = 8            # multi-window → up to K cluster views per leaf
+schema_version          = 3
+notes                   = "§D-MULTICLUSTER-S0 legal-set treatment. v6_live2 4-plane shape + K-window legal-set (no off-window drop). Ragged action policy is Rust-internal; per-cluster-local-362 buffer rows. Bundle vs v6_live2: is_multi_window + value_pool=min + k_max=8 + legal-set action."
+
+# ---------------------------------------------------------------------------
 # v8 — bbox-of-stones 25×25, 11 planes (history + 3 aux).
 # Plane-8 polarity OFF→OUTSIDE (vanilla v8 contract).
 # ---------------------------------------------------------------------------
