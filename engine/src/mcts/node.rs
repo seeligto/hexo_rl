@@ -1,6 +1,7 @@
 /// Node, TTEntry, and pool constants for the MCTS tree.
 
 use std::sync::Arc;
+use crate::game_runner::records::LegalSetPolicy;
 
 /// Pre-allocated pool size per worker. 1 M nodes ~ 32 MB; 24 workers = 768 MB total.
 pub const MAX_NODES: usize = 1_000_000;
@@ -8,14 +9,24 @@ pub const MAX_NODES: usize = 1_000_000;
 /// Virtual-loss penalty applied per unresolved selection.
 pub const VIRTUAL_LOSS_PENALTY: f32 = 1.0;
 
+/// Cached MCTS prior for a board state — either the dense scatter_max policy
+/// (the existing path, byte-identical) or the §D-MULTICLUSTER-S0 ragged
+/// legal-set policy. One run uses exactly one variant (selected by the
+/// encoding's `policy_pool`), so the TT never mixes them within a tree.
+#[derive(Clone)]
+pub enum CachedPolicy {
+    Dense(Arc<Vec<f32>>),
+    Ls(Arc<LegalSetPolicy>),
+}
+
 /// Cached Neural Network evaluation for a board state.
 ///
-/// §P7: `policy` is wrapped in `Arc` so TT-hit reads in `select_leaves` are
+/// §P7: the policy is wrapped in `Arc` so TT-hit reads in `select_leaves` are
 /// refcount bumps instead of a 1448 B (362 floats × 4 B) Vec clone per hit.
-/// Insertion still allocates a fresh `Arc<Vec<f32>>` once per first-touch.
+/// Insertion still allocates a fresh `Arc` once per first-touch.
 #[derive(Clone)]
 pub struct TTEntry {
-    pub policy: Arc<Vec<f32>>,
+    pub policy: CachedPolicy,
     pub value: f32,
 }
 

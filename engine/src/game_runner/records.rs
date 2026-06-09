@@ -337,7 +337,6 @@ impl LegalSetPolicy {
 /// producers (policy.rs / inner.rs) use this to scope the ragged set to the
 /// union-of-cluster-windows ∩ legal, so no uncovered key leaks into `overflow`.
 #[inline]
-#[allow(dead_code)] // wired into policy.rs / inner.rs target+O1 path (§9.5/§9.3)
 pub(crate) fn is_covered(q: i32, r: i32, centers: &[(i32, i32)], trunk_sz: i32, half: i32) -> bool {
     centers.iter().any(|&(cq, cr)| {
         let wq = q - cq + half;
@@ -479,7 +478,6 @@ pub fn aggregate_policy_to_local_ls(
 /// Legal-set counterpart of `sample_policy`: samples a move from `legal_moves`
 /// proportional to the ragged `ls` mass at each move's coord (off-window covered
 /// moves are now sampleable). `floor` is the no-coverage prior.
-#[allow(dead_code)] // wired into inner.rs select_move (§9.5) once the worker loop branches on legal_set
 pub(crate) fn sample_policy_ls(
     ls: &LegalSetPolicy,
     legal_moves: &[(i32, i32)],
@@ -523,7 +521,6 @@ pub(crate) fn sample_policy_ls(
 /// the Phase-1 review caught). `covered=false` → no-op (matching today's clean
 /// off-window drop). Returns whether the one-hot fired (the caller's
 /// `forced_win_fired`).
-#[allow(dead_code)] // wired into inner.rs O1 path (§9.3) once the worker loop branches on legal_set
 pub(crate) fn apply_forced_win_one_hot_ls(
     ls: &mut LegalSetPolicy,
     win: (i32, i32),

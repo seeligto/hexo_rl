@@ -243,7 +243,7 @@ pub(super) fn run_worker_thread(
     // Per feedback_registryspec_by_ref_in_hotpath.md the per-sim hot path must
     // see cheap integer locals, not field-access on a struct ref. WorkerGeometry
     // is `Copy` (~32 bytes) and exists purely to keep the fn arity ≤ 7.
-    let WorkerGeometry { n_cells, kept_planes, policy_stride, agg_trunk_sz, has_pass_slot } =
+    let WorkerGeometry { n_cells, kept_planes, policy_stride, agg_trunk_sz, has_pass_slot, legal_set } =
         geometry;
     // §P52: destructure the captured groups back into the local names used by
     // the hot-loop body. Field order matches the pre-P52 capture order so the
@@ -355,7 +355,7 @@ pub(super) fn run_worker_thread(
         run_one_game(
             &mut tree, &mut rng, &mut version_seen, &running, &radius_override,
             &batcher, sym_tables, worker_registry_spec, init_ctx, kept_planes,
-            policy_stride, has_pass_slot, agg_trunk_sz, move_cfg,
+            policy_stride, has_pass_slot, agg_trunk_sz, legal_set, move_cfg,
             variance_atomics, move_accumulators, &results_queue,
             &recent_game_results, finalize_counters, dbg_game_idx_for_game,
         );
@@ -382,6 +382,7 @@ fn run_one_game(
     policy_stride: usize,
     has_pass_slot: bool,
     agg_trunk_sz: i32,
+    legal_set: bool,
     move_cfg: WorkerMoveCfg,
     variance_atomics: ClusterVarianceAtomics,
     move_accumulators: MoveAccumulators,
@@ -441,7 +442,7 @@ fn run_one_game(
         match play_one_move(
             tree, &mut board, &mut records_vec, &mut move_history,
             version_seen, rng, running, play_ctx, kept_planes,
-            init_ctx.n_cells, policy_stride, has_pass_slot, agg_trunk_sz,
+            init_ctx.n_cells, policy_stride, has_pass_slot, agg_trunk_sz, legal_set,
             infer, variance_atomics, move_accumulators,
             init_ctx.worker_id, dbg_game_idx,
         ) {
@@ -542,6 +543,31 @@ fn init_per_game_board(
 
 /// Per-batch NN inference + leaf expansion (Wave 11 Batch B; HOT path).
 ///
+/// §D-MULTICLUSTER-S0 per-move policy/target — either the dense scatter_max
+/// vector (existing path, byte-identical) or the ragged legal-set policy. Lets
+/// `select_move` / `record_position` keep one signature and match only at the
+/// sample / per-cluster-project site.
+#[derive(Clone)]
+enum MovePolicy {
+    Dense(Vec<f32>),
+    Ls(records::LegalSetPolicy),
+}
+
+impl MovePolicy {
+    /// Sample a move from `legal` proportional to this policy's mass at each
+    /// coord (ragged variant uses the `1/n` no-coverage floor, matching the
+    /// dense path's uniform fallback for unpriored cells).
+    fn sample(&self, legal: &[(i32, i32)], board: &Board, trunk: i32) -> Option<(i32, i32)> {
+        match self {
+            MovePolicy::Dense(p) => records::sample_policy(p, legal, board, trunk),
+            MovePolicy::Ls(ls) => {
+                let floor = 1.0 / legal.len().max(1) as f32;
+                records::sample_policy_ls(ls, legal, board, trunk, floor)
+            }
+        }
+    }
+}
+
 /// Selects leaves, encodes per-cluster state, submits to the inference
 /// batcher, forward/inverse-scatters under the per-game symmetry, accumulates
 /// I2 cluster-variance metrics, aggregates per-leaf policies, and runs
@@ -559,6 +585,7 @@ fn infer_and_expand(
     policy_stride: usize,
     has_pass_slot: bool,
     agg_trunk_sz: i32,
+    legal_set: bool,
     infer: InferContext,
     variance: ClusterVarianceAtomics,
 ) -> usize {
@@ -606,7 +633,12 @@ fn infer_and_expand(
 
     if all_policies.len() < total_clusters { return 0; }
 
-    let mut aggregated_policies = Vec::with_capacity(leaves.len());
+    // One arm allocates, the other is an empty `Vec::new()` (no heap alloc) — the
+    // run uses exactly one policy_pool, so only the matching buffer is filled.
+    let mut aggregated_policies: Vec<Vec<f32>> =
+        if legal_set { Vec::new() } else { Vec::with_capacity(leaves.len()) };
+    let mut aggregated_policies_ls: Vec<records::LegalSetPolicy> =
+        if legal_set { Vec::with_capacity(leaves.len()) } else { Vec::new() };
     let mut aggregated_values = Vec::with_capacity(leaves.len());
     let mut curr = 0;
 
@@ -649,11 +681,19 @@ fn infer_and_expand(
             if v < min_v { min_v = v; }
         }
         aggregated_values.push(min_v);
-        aggregated_policies.push(records::aggregate_policy(policy_stride, has_pass_slot, agg_trunk_sz, &leaves[i], centers, leaf_policies));
+        if legal_set {
+            aggregated_policies_ls.push(records::aggregate_policy_ls(policy_stride, has_pass_slot, agg_trunk_sz, &leaves[i], centers, leaf_policies));
+        } else {
+            aggregated_policies.push(records::aggregate_policy(policy_stride, has_pass_slot, agg_trunk_sz, &leaves[i], centers, leaf_policies));
+        }
     }
 
     let n = leaves.len();
-    tree.expand_and_backup(&aggregated_policies, &aggregated_values);
+    if legal_set {
+        tree.expand_and_backup_ls(&aggregated_policies_ls, &aggregated_values);
+    } else {
+        tree.expand_and_backup(&aggregated_policies, &aggregated_values);
+    }
     n
 }
 
@@ -686,6 +726,7 @@ fn run_mcts_search(
     policy_stride: usize,
     has_pass_slot: bool,
     agg_trunk_sz: i32,
+    legal_set: bool,
     infer: InferContext,
     variance: ClusterVarianceAtomics,
 ) -> McTSSearchResult {
@@ -693,7 +734,7 @@ fn run_mcts_search(
 
     if gumbel_mcts {
         // ── Gumbel MCTS with Sequential Halving ──
-        let root_sims = infer_and_expand(tree, 1, kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, infer, variance);
+        let root_sims = infer_and_expand(tree, 1, kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, legal_set, infer, variance);
         if root_sims == 0 || !tree.pool[0].is_expanded() {
             return McTSSearchResult::RootExpansionFailed;
         }
@@ -718,7 +759,7 @@ fn run_mcts_search(
             let mut sims_done = sims_used;
             while sims_done < move_sims {
                 if !running.load(Ordering::Relaxed) { break; }
-                let n = infer_and_expand(tree, leaf_batch_size, kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, infer, variance);
+                let n = infer_and_expand(tree, leaf_batch_size, kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, legal_set, infer, variance);
                 if n == 0 { break; }
                 sims_done += n;
             }
@@ -750,7 +791,7 @@ fn run_mcts_search(
                     // don't overshoot sims_per (leaf_batch_size can be 8 when
                     // only 1-3 sims are budgeted, biasing early candidates).
                     let batch = leaf_batch_size.min(sims_per.saturating_sub(cand_sims));
-                    let n = infer_and_expand(tree, batch.max(1), kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, infer, variance);
+                    let n = infer_and_expand(tree, batch.max(1), kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, legal_set, infer, variance);
                     if n == 0 { break; }
                     cand_sims += n;
                     sims_used += n;
@@ -766,7 +807,7 @@ fn run_mcts_search(
         } // end effective_m > 0
     } else {
         // ── Standard PUCT search with Dirichlet root noise ──
-        let root_n = infer_and_expand(tree, 1, kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, infer, variance);
+        let root_n = infer_and_expand(tree, 1, kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, legal_set, infer, variance);
         if root_n == 0 {
             return McTSSearchResult::RootExpansionFailed;
         }
@@ -784,7 +825,7 @@ fn run_mcts_search(
 
         while sims_done < move_sims {
             if !running.load(Ordering::Relaxed) { break; }
-            let n = infer_and_expand(tree, leaf_batch_size, kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, infer, variance);
+            let n = infer_and_expand(tree, leaf_batch_size, kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, legal_set, infer, variance);
             if n == 0 { break; }
             sims_done += n;
         }
@@ -816,6 +857,7 @@ fn play_one_move(
     policy_stride: usize,
     has_pass_slot: bool,
     agg_trunk_sz: i32,
+    legal_set: bool,
     infer: InferContext,
     variance: ClusterVarianceAtomics,
     accumulators: MoveAccumulators,
@@ -841,7 +883,7 @@ fn play_one_move(
         tree, board, move_sims, ctx.leaf_batch_size, ctx.gumbel_mcts,
         ctx.dirichlet_enabled, ctx.dirichlet_alpha, ctx.dirichlet_epsilon,
         ctx.gumbel_m, ctx.c_visit, ctx.c_scale, running, rng,
-        kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz,
+        kept_planes, n_cells, policy_stride, has_pass_slot, agg_trunk_sz, legal_set,
         infer, variance,
     ) {
         McTSSearchResult::Completed(gs) => gs,
@@ -860,7 +902,11 @@ fn play_one_move(
     // §P2: pass `policy_stride` (= spec.policy_logit_count). Pre-P2 the inner
     // API computed bs²+1 unconditionally, producing phantom pass-slot vectors
     // for v8 (audit FD.4).
-    let policy = tree.get_policy(temperature, policy_stride);
+    let policy = if legal_set {
+        MovePolicy::Ls(tree.get_policy_ls(temperature, policy_stride))
+    } else {
+        MovePolicy::Dense(tree.get_policy(temperature, policy_stride))
+    };
 
     // ── debug_prior_trace: snapshot root priors + visit counts ──
     #[cfg(feature = "debug_prior_trace")]
@@ -917,7 +963,11 @@ fn play_one_move(
 
     // Completed Q-values: compute improved policy for training target.
     let mut target_policy = if ctx.completed_q_values {
-        tree.get_improved_policy(policy_stride, ctx.c_visit, ctx.c_scale)
+        if legal_set {
+            MovePolicy::Ls(tree.get_improved_policy_ls(policy_stride, ctx.c_visit, ctx.c_scale))
+        } else {
+            MovePolicy::Dense(tree.get_improved_policy(policy_stride, ctx.c_visit, ctx.c_scale))
+        }
     } else {
         policy.clone()
     };
@@ -933,17 +983,30 @@ fn play_one_move(
     // ~half of forced-win rows that PCR sampled as quick-search).
     let forced_win_fired = ctx.forced_win_enabled
         && match board.forced_win_move(ctx.forced_win_depth) {
-            Some((wq, wr)) => {
-                let action = board.window_flat_idx(wq, wr);
-                if action < policy_stride {
-                    records::apply_forced_win_one_hot(
-                        &mut target_policy, action, ctx.forced_win_weight,
-                    );
-                    true
-                } else {
-                    false
+            Some((wq, wr)) => match &mut target_policy {
+                MovePolicy::Dense(t) => {
+                    let action = board.window_flat_idx(wq, wr);
+                    if action < policy_stride {
+                        records::apply_forced_win_one_hot(t, action, ctx.forced_win_weight);
+                        true
+                    } else {
+                        false
+                    }
                 }
-            }
+                // §9.2a/§9.3: coverage-gated — a covered (in- or off-window) win
+                // one-hots; an uncovered win is a no-op (no uniform-fallback
+                // corruption). Coverage uses the SAME centers as the record-time
+                // projection (`board` is the pre-move search root; §9.8).
+                MovePolicy::Ls(ls) => {
+                    let (bcq, bcr) = board.window_center();
+                    let half = (agg_trunk_sz - 1) / 2;
+                    let (_, centers) = board.get_cluster_views();
+                    let covered = records::is_covered(wq, wr, &centers, agg_trunk_sz, half);
+                    records::apply_forced_win_one_hot_ls(
+                        ls, (wq, wr), ctx.forced_win_weight, covered, bcq, bcr, agg_trunk_sz, half,
+                    )
+                }
+            },
             None => false,
         };
     let record_full_search = move_is_full_search || forced_win_fired;
@@ -982,7 +1045,7 @@ fn play_one_move(
 fn select_move(
     board: &Board,
     move_history: &[(i32, i32)],
-    policy: &[f32],
+    policy: &MovePolicy,
     gumbel_state: Option<GumbelSearchState>,
     ctx: MovePlayContext,
     agg_trunk_sz: i32,
@@ -1020,13 +1083,13 @@ fn select_move(
             (mq, mr)
         } else {
             // §173 A8'': sample_policy now takes spec-derived trunk_sz.
-            match records::sample_policy(policy, &legal, board, agg_trunk_sz) {
+            match policy.sample(&legal, board, agg_trunk_sz) {
                 Some(idx) => idx,
                 None => *legal.choose(rng).unwrap(),
             }
         }
     } else {
-        match records::sample_policy(policy, &legal, board, agg_trunk_sz) {
+        match policy.sample(&legal, board, agg_trunk_sz) {
             Some(idx) => idx,
             None => *legal.choose(rng).unwrap(),
         }
@@ -1050,7 +1113,7 @@ fn record_position(
     completed_q_values: bool,
     policy_stride: usize,
     has_pass_slot: bool,
-    target_policy: &[f32],
+    target_policy: &MovePolicy,
     sym_idx: usize,
     sym_tables: &'static SymTables,
     move_is_full_search: bool,
@@ -1083,7 +1146,10 @@ fn record_position(
         let mut projected_policy = if is_fast_game && !completed_q_values {
             vec![0.0; policy_stride]
         } else {
-            records::aggregate_policy_to_local(policy_stride, has_pass_slot, agg_trunk_sz, board, center, target_policy, &record_legal_moves)
+            match target_policy {
+                MovePolicy::Dense(t) => records::aggregate_policy_to_local(policy_stride, has_pass_slot, agg_trunk_sz, board, center, t, &record_legal_moves),
+                MovePolicy::Ls(ls) => records::aggregate_policy_to_local_ls(policy_stride, has_pass_slot, agg_trunk_sz, board, center, ls, &record_legal_moves),
+            }
         };
         // §130: forward-scatter the recorded state, chain, and policy into
         // the rotated frame.

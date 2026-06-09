@@ -5,6 +5,8 @@
 //! Extracted from mcts/mod.rs in §163.
 
 use super::MCTSTree;
+use crate::game_runner::records::{self, LegalSetPolicy};
+use fxhash::FxHashMap;
 
 impl MCTSTree {
     /// §P2 — `n_actions` is the policy stride supplied by the caller (=
@@ -230,6 +232,208 @@ impl MCTSTree {
         // (prune_policy_targets in trainer.py) to avoid double-pruning.
 
         policy
+    }
+
+    /// §D-MULTICLUSTER-S0 legal-set counterpart of `get_policy`. Keys each root
+    /// child by board coord into a ragged `LegalSetPolicy` (in-window → `dense`,
+    /// covered off-window → `overflow`). Off-window children with NO cluster
+    /// coverage are dropped (today's `get_policy` behaviour). §9.5.
+    pub fn get_policy_ls(&self, temperature: f32, n_actions: usize) -> LegalSetPolicy {
+        let mut dense = vec![0.0f32; n_actions];
+        let mut overflow: FxHashMap<(i32, i32), f32> = FxHashMap::default();
+
+        let root = &self.pool[0];
+        if !root.is_expanded() {
+            return LegalSetPolicy { dense, overflow };
+        }
+        let first = root.first_child as usize;
+        let n_ch = root.n_children as usize;
+
+        // §9.2a coverage geometry (once per move — export is not the per-sim hot path).
+        let (_, centers) = self.root_board.get_cluster_views();
+        let trunk_sz = self.root_board.cluster_window_size() as i32;
+        let half = (trunk_sz - 1) / 2;
+
+        if temperature == 0.0 {
+            if let Some(best) = (first..first + n_ch).max_by_key(|&i| self.pool[i].n_visits) {
+                let val = self.pool[best].action_idx;
+                let q = (val >> 16) as i32 - 32768;
+                let r = (val & 0xFFFF) as i32 - 32768;
+                let flat = self.root_board.window_flat_idx(q, r);
+                if flat < n_actions {
+                    dense[flat] = 1.0;
+                } else if records::is_covered(q, r, &centers, trunk_sz, half) {
+                    overflow.insert((q, r), 1.0);
+                }
+            }
+        } else {
+            let visits: Vec<f32> = (first..first + n_ch)
+                .map(|i| (self.pool[i].n_visits as f32).powf(1.0 / temperature))
+                .collect();
+            let total: f32 = visits.iter().sum();
+            if total > 0.0 {
+                for (j, &v) in visits.iter().enumerate() {
+                    let val = self.pool[first + j].action_idx;
+                    let q = (val >> 16) as i32 - 32768;
+                    let r = (val & 0xFFFF) as i32 - 32768;
+                    let flat = self.root_board.window_flat_idx(q, r);
+                    if flat < n_actions {
+                        dense[flat] = v / total;
+                    } else if records::is_covered(q, r, &centers, trunk_sz, half) {
+                        overflow.insert((q, r), v / total);
+                    }
+                }
+            }
+        }
+        LegalSetPolicy { dense, overflow }
+    }
+
+    /// §D-MULTICLUSTER-S0 legal-set counterpart of `get_improved_policy`. The
+    /// completed-Q softmax math is FROZEN; the differences are (1) off-window
+    /// COVERED children are retained (keyed into `overflow`) instead of dropped,
+    /// (2) off-window NO-COVERAGE children are dropped (today's `if action >=
+    /// n_actions continue`), and (3) the output is the ragged `LegalSetPolicy`.
+    /// §9.5 / §9.2a.
+    pub fn get_improved_policy_ls(
+        &self,
+        n_actions: usize,
+        c_visit: f32,
+        c_scale: f32,
+    ) -> LegalSetPolicy {
+        let mut dense = vec![0.0f32; n_actions];
+        let mut overflow: FxHashMap<(i32, i32), f32> = FxHashMap::default();
+
+        let root = &self.pool[0];
+        if !root.is_expanded() {
+            return LegalSetPolicy { dense, overflow };
+        }
+        let first = root.first_child as usize;
+        let n_ch = root.n_children as usize;
+        let q_sign: f32 = if self.pool[0].moves_remaining == 1 { -1.0 } else { 1.0 };
+
+        let (_, centers) = self.root_board.get_cluster_views();
+        let trunk_sz = self.root_board.cluster_window_size() as i32;
+        let half = (trunk_sz - 1) / 2;
+
+        // child_data: (q, r, flat, visits, prior, q_val). flat >= n_actions ⇒ off-window.
+        let mut child_data: Vec<(i32, i32, usize, u32, f32, f32)> = Vec::with_capacity(n_ch);
+        let mut sum_n: u32 = 0;
+        let mut max_n: u32 = 0;
+        let mut visited_prior_sum: f32 = 0.0;
+        let mut policy_weighted_q: f32 = 0.0;
+
+        for j in 0..n_ch {
+            let child = &self.pool[first + j];
+            let val = child.action_idx;
+            let q = (val >> 16) as i32 - 32768;
+            let r = (val & 0xFFFF) as i32 - 32768;
+            let flat = self.root_board.window_flat_idx(q, r);
+            // §9.2a: drop an off-window child only when NO cluster covers it.
+            if flat >= n_actions && !records::is_covered(q, r, &centers, trunk_sz, half) {
+                continue;
+            }
+
+            let visits = child.n_visits;
+            let prior = child.prior;
+            let q_val = if visits > 0 {
+                q_sign * child.w_value / visits as f32
+            } else {
+                0.0
+            };
+
+            sum_n += visits;
+            if visits > max_n {
+                max_n = visits;
+            }
+            if visits > 0 {
+                visited_prior_sum += prior;
+                policy_weighted_q += prior * q_val;
+            }
+
+            child_data.push((q, r, flat, visits, prior, q_val));
+        }
+
+        // Edge case: no visits — return prior distribution (covered cells included).
+        if sum_n == 0 {
+            let mut total_prior = 0.0f32;
+            for &(q, r, flat, _, prior, _) in &child_data {
+                if flat < n_actions {
+                    dense[flat] = prior;
+                } else {
+                    overflow.insert((q, r), prior);
+                }
+                total_prior += prior;
+            }
+            if total_prior > 0.0 {
+                for p in &mut dense {
+                    *p /= total_prior;
+                }
+                for v in overflow.values_mut() {
+                    *v /= total_prior;
+                }
+            }
+            return LegalSetPolicy { dense, overflow };
+        }
+
+        let v_hat = root.w_value / root.n_visits as f32;
+        let v_mix = if visited_prior_sum > 1e-8 {
+            let sum_n_f = sum_n as f32;
+            (1.0 / (1.0 + sum_n_f))
+                * (sum_n_f / visited_prior_sum).mul_add(policy_weighted_q, v_hat)
+        } else {
+            v_hat
+        };
+        let sigma_scale = (c_visit + max_n as f32) * c_scale;
+
+        let mut max_logit = f32::NEG_INFINITY;
+        for &(_, _, _, visits, prior, q_val) in &child_data {
+            let completed_q = if visits > 0 {
+                q_val.clamp(-1.0, 1.0)
+            } else {
+                v_mix.clamp(-1.0, 1.0)
+            };
+            let log_prior = (prior.max(1e-8)).ln();
+            let l = sigma_scale.mul_add(completed_q, log_prior);
+            if l > max_logit {
+                max_logit = l;
+            }
+        }
+        if max_logit == f32::NEG_INFINITY {
+            return LegalSetPolicy { dense, overflow };
+        }
+
+        let mut sum_exp = 0.0f32;
+        for &(_, _, _, visits, prior, q_val) in &child_data {
+            let completed_q = if visits > 0 {
+                q_val.clamp(-1.0, 1.0)
+            } else {
+                v_mix.clamp(-1.0, 1.0)
+            };
+            let log_prior = (prior.max(1e-8)).ln();
+            let l = sigma_scale.mul_add(completed_q, log_prior);
+            sum_exp += (l - max_logit).exp();
+        }
+        if sum_exp <= 0.0 {
+            return LegalSetPolicy { dense, overflow };
+        }
+
+        for &(q, r, flat, visits, prior, q_val) in &child_data {
+            let completed_q = if visits > 0 {
+                q_val.clamp(-1.0, 1.0)
+            } else {
+                v_mix.clamp(-1.0, 1.0)
+            };
+            let log_prior = (prior.max(1e-8)).ln();
+            let l = sigma_scale.mul_add(completed_q, log_prior);
+            let mass = (l - max_logit).exp() / sum_exp;
+            if flat < n_actions {
+                dense[flat] = mass;
+            } else {
+                overflow.insert((q, r), mass);
+            }
+        }
+
+        LegalSetPolicy { dense, overflow }
     }
 
     /// Returns (child_pool_index, prior) for each root child.

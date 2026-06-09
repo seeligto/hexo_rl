@@ -28,6 +28,10 @@ pub(super) struct WorkerGeometry {
     pub(super) policy_stride: usize,
     pub(super) agg_trunk_sz: i32,
     pub(super) has_pass_slot: bool,
+    /// §D-MULTICLUSTER-S0: when true the encoding's `policy_pool` is
+    /// `LegalSetScatterMax` — the worker uses the ragged legal-set MCTS prior /
+    /// improved-policy target (no off-window drop) instead of the dense path.
+    pub(super) legal_set: bool,
 }
 
 #[derive(Clone)]

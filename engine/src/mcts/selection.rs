@@ -2,7 +2,7 @@
 
 use crate::board::{Board, MoveDiff};
 use fxhash::FxHashSet;
-use super::MCTSTree;
+use super::{CachedPolicy, MCTSTree};
 
 /// §P8: single-pass argmax over `[first..first+n_ch)` by PUCT score, computing
 /// each child's score exactly once. Replaces the prior `.max_by()` closures
@@ -192,10 +192,18 @@ impl MCTSTree {
             // checker because `expand_and_backup_single` touches `self.pool`
             // / `self.transposition_table` (insert is a no-op for re-hits)
             // disjointly from the read-only fetch.
-            if let Some(entry) = self.transposition_table.get(&board.zobrist_hash) {
-                let policy = std::sync::Arc::clone(&entry.policy);
-                let value = entry.value;
-                self.expand_and_backup_single(leaf_idx, &board, &policy, value);
+            // Clone the cached policy (Arc refcount bump) + value, dropping the
+            // immutable TT borrow before the `&mut self` expand call. Dispatch on
+            // the dense vs ragged legal-set variant (§D-MULTICLUSTER-S0).
+            let cached = self
+                .transposition_table
+                .get(&board.zobrist_hash)
+                .map(|e| (e.policy.clone(), e.value));
+            if let Some((policy, value)) = cached {
+                match policy {
+                    CachedPolicy::Dense(p) => self.expand_and_backup_single(leaf_idx, &board, &p, value),
+                    CachedPolicy::Ls(ls) => self.expand_and_backup_single_ls(leaf_idx, &board, &ls, value),
+                }
                 while let Some(diff) = diffs.pop() {
                     board.undo_move(diff);
                 }

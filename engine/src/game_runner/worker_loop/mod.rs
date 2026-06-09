@@ -155,6 +155,11 @@ impl SelfPlayRunner {
                 Some(s) => s.has_pass_slot,
                 None => true, // v6 default
             };
+            // §D-MULTICLUSTER-S0: legal-set (no off-window drop) path selector.
+            let legal_set: bool = match self.registry_spec {
+                Some(s) => matches!(s.policy_pool, crate::encoding::PolicyPool::LegalSetScatterMax),
+                None => false,
+            };
             // Wave 10 Batch A: bundle 5 per-worker geometry scalars into
             // `WorkerGeometry` (`Copy`, ~32 B) so `run_worker_thread` arity
             // stays ≤ 7 (avoids clippy::too_many_arguments; preserves F1
@@ -166,6 +171,7 @@ impl SelfPlayRunner {
                 policy_stride,
                 agg_trunk_sz,
                 has_pass_slot,
+                legal_set,
             };
             // §P51: `sym_tables_static` is `&'static SymTables` (Copy); each
             // closure captures it by `move` with zero allocation cost. No

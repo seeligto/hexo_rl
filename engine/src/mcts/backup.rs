@@ -3,7 +3,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use fxhash::FxHashSet;
 use crate::board::{Board, WIN_LENGTH};
-use super::node::Node;
+use crate::game_runner::records::LegalSetPolicy;
+use super::node::{CachedPolicy, Node};
 use super::{MCTSTree, MAX_CHILDREN_PER_NODE};
 
 /// Output of `pick_topk_children`: `(chosen, sort_used)` where `chosen` is a
@@ -114,6 +115,48 @@ pub(crate) fn pick_topk_children(
         chosen.push(((q, r), prior));
     }
 
+    (chosen, n_legal > MAX_CHILDREN_PER_NODE)
+}
+
+/// §D-MULTICLUSTER-S0 legal-set counterpart of `pick_topk_children`: reads each
+/// child's prior from the ragged `ls` BY COORD (in-window cells from `ls.dense`,
+/// the fast array path identical to the dense variant; covered off-window cells
+/// from `ls.overflow`; no-coverage cells from the `1/n_ch` floor). Tie-break is
+/// the packed (q,r) key — `window_flat_idx` is `usize::MAX` for ALL off-window
+/// cells so it is not a stable tiebreak here. Truncates by TRUE prior.
+/// `cq`/`cr` are the leaf's global window centre (the centre `ls.dense` was
+/// indexed with), passed through to `ls.get`.
+#[inline]
+pub(crate) fn pick_topk_children_ls(
+    legal_moves: &FxHashSet<(i32, i32)>,
+    cq: i32,
+    cr: i32,
+    ls: &LegalSetPolicy,
+    trunk_sz: i32,
+    half: i32,
+) -> TopKChildren {
+    let n_legal = legal_moves.len();
+    let n_ch = n_legal.min(MAX_CHILDREN_PER_NODE);
+    let floor = 1.0 / n_ch as f32;
+
+    let mut all: Vec<((i32, i32), f32, u32)> = legal_moves
+        .iter()
+        .map(|&(q, r)| {
+            let prior = ls.get(q, r, cq, cr, trunk_sz, half, floor);
+            // packed (q,r) — unique, total-orderable, deterministic tiebreak.
+            let key = (((q + 32768) as u32) << 16) | ((r + 32768) as u32 & 0xFFFF);
+            ((q, r), prior, key)
+        })
+        .collect();
+
+    all.sort_unstable_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.2.cmp(&b.2))
+    });
+    all.truncate(MAX_CHILDREN_PER_NODE);
+
+    let chosen: Vec<((i32, i32), f32)> = all.into_iter().map(|((q, r), prior, _)| ((q, r), prior)).collect();
     (chosen, n_legal > MAX_CHILDREN_PER_NODE)
 }
 
@@ -253,6 +296,15 @@ impl MCTSTree {
         let trunk_sz = board.cluster_window_size() as i32;
         let half = (trunk_sz - 1) / 2;
         let (chosen, _sort_used) = pick_topk_children(legal_moves, cq, cr, policy, trunk_sz, half);
+        self.finish_expansion(leaf_idx, board, chosen, value);
+    }
+
+    /// Shared tail of `expand_and_backup_single`[`_ls`]: materialise the chosen
+    /// children into the pool, apply quiescence to the leaf value, and backup.
+    /// Policy-representation-agnostic (operates on the already-picked `chosen`
+    /// list), so the dense and legal-set expansion paths share it verbatim —
+    /// keeping the dense path's behaviour byte-identical.
+    fn finish_expansion(&mut self, leaf_idx: u32, board: &Board, chosen: Vec<((i32, i32), f32)>, value: f32) {
         let n_ch        = chosen.len();
         let first_child = self.next_free;
 
@@ -301,6 +353,43 @@ impl MCTSTree {
         self.backup(leaf_idx, corrected);
     }
 
+    /// §D-MULTICLUSTER-S0 legal-set counterpart of `expand_and_backup_single`.
+    /// Pre-checks identical (terminal / TT-hit / win / no-legal); the only
+    /// difference is the prior source — `pick_topk_children_ls` reads the ragged
+    /// `ls` by coord (off-window covered cells get real priors, no uniform sink).
+    /// Shares `finish_expansion`.
+    pub(crate) fn expand_and_backup_single_ls(&mut self, leaf_idx: u32, board: &Board, ls: &LegalSetPolicy, value: f32) {
+        if self.pool[leaf_idx as usize].is_terminal {
+            let tv = self.pool[leaf_idx as usize].terminal_value;
+            self.backup(leaf_idx, tv);
+            return;
+        }
+        if self.pool[leaf_idx as usize].is_expanded() {
+            let corrected = self.apply_quiescence(board, value);
+            self.backup(leaf_idx, corrected);
+            return;
+        }
+        if board.check_win() {
+            let tv = if board.moves_remaining == 1 { 1.0 } else { -1.0 };
+            self.pool[leaf_idx as usize].is_terminal    = true;
+            self.pool[leaf_idx as usize].terminal_value = tv;
+            self.backup(leaf_idx, tv);
+            return;
+        }
+        let legal_moves = board.legal_moves_set();
+        if legal_moves.is_empty() {
+            self.pool[leaf_idx as usize].is_terminal    = true;
+            self.pool[leaf_idx as usize].terminal_value = 0.0;
+            self.backup(leaf_idx, 0.0);
+            return;
+        }
+        let (cq, cr) = board.window_center();
+        let trunk_sz = board.cluster_window_size() as i32;
+        let half = (trunk_sz - 1) / 2;
+        let (chosen, _sort_used) = pick_topk_children_ls(legal_moves, cq, cr, ls, trunk_sz, half);
+        self.finish_expansion(leaf_idx, board, chosen, value);
+    }
+
     /// Expand all pending leaves and backup values to the root.
     pub fn expand_and_backup(&mut self, policies: &[Vec<f32>], values: &[f32]) {
         // §P9: pending now owns the leaf `Board` (§P6 tuple shape change).
@@ -320,11 +409,31 @@ impl MCTSTree {
             let value  = values[i];
 
             self.transposition_table.insert(board.zobrist_hash, super::node::TTEntry {
-                policy: std::sync::Arc::new(policy.clone()),
+                policy: CachedPolicy::Dense(std::sync::Arc::new(policy.clone())),
                 value,
             });
 
             self.expand_and_backup_single(*leaf_idx, board, policy, value);
+        }
+    }
+
+    /// §D-MULTICLUSTER-S0 legal-set counterpart of `expand_and_backup`. Caches
+    /// the ragged `LegalSetPolicy` in the TT (`CachedPolicy::Ls`) so a TT-hit
+    /// re-expansion (selection.rs) replays the same ragged prior.
+    pub fn expand_and_backup_ls(&mut self, policies: &[LegalSetPolicy], values: &[f32]) {
+        let pending: Vec<(u32, crate::board::Board)> = std::mem::take(&mut self.pending);
+        let n = pending.len().min(policies.len()).min(values.len());
+        for i in 0..n {
+            let (leaf_idx, board) = &pending[i];
+            let ls = &policies[i];
+            let value = values[i];
+
+            self.transposition_table.insert(board.zobrist_hash, super::node::TTEntry {
+                policy: CachedPolicy::Ls(std::sync::Arc::new(ls.clone())),
+                value,
+            });
+
+            self.expand_and_backup_single_ls(*leaf_idx, board, ls, value);
         }
     }
 
@@ -347,5 +456,36 @@ impl MCTSTree {
             }
             node_idx = parent;
         }
+    }
+}
+
+#[cfg(test)]
+mod ls_prior_tests {
+    //! §D-MULTICLUSTER-S0 — pick_topk_children_ls reads priors by coord.
+    use super::*;
+
+    #[test]
+    fn test_pick_topk_children_ls_reads_dense_and_overflow() {
+        // window centre (0,0), trunk 19, half 9. In-window cells read ls.dense;
+        // the off-window (28,0) reads ls.overflow; chosen is sorted by TRUE prior.
+        let mut legal: FxHashSet<(i32, i32)> = FxHashSet::default();
+        legal.insert((0, 0)); // wq=9,wr=9 → flat 9*19+9 = 180 (in-window)
+        legal.insert((1, 0)); // wq=10,wr=9 → flat 10*19+9 = 199 (in-window)
+        legal.insert((28, 0)); // wq=37 ≥ 19 → off-window (usize::MAX)
+
+        let mut dense = vec![0.0f32; 19 * 19 + 1];
+        dense[180] = 0.2;
+        dense[199] = 0.3;
+        let mut overflow: fxhash::FxHashMap<(i32, i32), f32> = fxhash::FxHashMap::default();
+        overflow.insert((28, 0), 0.5);
+        let ls = LegalSetPolicy { dense, overflow };
+
+        let (chosen, truncated) = pick_topk_children_ls(&legal, 0, 0, &ls, 19, 9);
+        assert!(!truncated);
+        assert_eq!(chosen.len(), 3);
+        // sorted by prior desc: (28,0)=0.5 (overflow), (1,0)=0.3, (0,0)=0.2 (dense)
+        assert_eq!(chosen[0], ((28, 0), 0.5), "off-window prior read from overflow, ranks first");
+        assert_eq!(chosen[1], ((1, 0), 0.3));
+        assert_eq!(chosen[2], ((0, 0), 0.2));
     }
 }
