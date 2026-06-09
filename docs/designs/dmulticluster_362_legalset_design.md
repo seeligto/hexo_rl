@@ -601,9 +601,12 @@ single-window `v6_live2` (`scatter_max` = DROP). A `v6_live2_ls` TREATMENT ckpt 
 `resolve_arch_from_state` would silently become the CONTROL encoding → eval false-clears BOTH A/B axes.
 The wire_signature is identical (§3.4 mislabel landmine). MITIGATION: legal_set eval MUST dispatch by
 **encoding NAME** (KClusterMCTSBot, §7-P4) and training/self-play reads the encoding by name from config
-— never via the shape resolver. **Add an assert** that `resolve_arch_from_state` is never the
-discriminator for a legal_set ckpt (or that the loaded spec name matches the configured one). Pin in the
-A/B runbook + the IMPL eval wiring.
+— never via the shape resolver. **IMPLEMENTED (Phase-5 review fix):** `detect_encoding_from_state_dict`
+(`resolvers.py`) now tests the more-specific `"v6_live2_ls"` label BEFORE the `"v6_live2"` substring, so a
+labelled TREATMENT ckpt resolves to `v6_live2_ls` (regression test
+`test_resolver_disambiguates_v6_live2_ls_from_v6_live2`). A label-LESS v6_live2_ls ckpt stays
+shape-ambiguous → the A/B MUST name the treatment ckpt with `ls` AND eval by NAME (KClusterMCTSBot). Pinned
+in the A/B runbook.
 
 ### 9.11 Deploy-half / training-half severance (P5), under Design-B
 - **Deploy-half (inference-only):** `aggregate_policy` legal_set + `pick_topk_children` prior-by-(q,r) +

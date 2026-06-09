@@ -5911,3 +5911,62 @@ by a registry-property check (`spec.has_pass_slot` via lookup/normalize; v6/v7-f
 reject). Restores the 2026-06-06 S-PRE behavior; eval-path only. `test_rejects_v8_model` pinned the old
 `match="v6/v6w25"` message → re-pinned to the stable `has_pass_slot` discriminator (intent unchanged: v8
 still rejected). Held for operator commit decision.
+
+## §D-MULTICLUSTER-S0 — ragged legal-set BUILD (operator-greenlit) — 2026-06-09
+
+Operator greenlit the S0 BUILD (all 5 red-team must-fixes binding). Branch `phase4.5/multicluster`.
+DESIGN→IMPL→REVIEW(fresh)→RED-TEAM, dense-path byte-identical, `make test` green.
+
+**PHASE 0 (committed `9357004`/`4a29007`/`81f6482`, pushed).** Sprint-log §D-MULTICLUSTER entry; bot guard
+de-hardcode→`spec.has_pass_slot` (+ found & fixed the held note's wrong "no test pinned" claim —
+`test_rejects_v8_model` re-pinned); design doc.
+
+**PHASE 1 — RAGGED DESIGN-FIX → REVIEW PASS (committed `06e8426`).** §9 (authoritative). **Load-bearing
+correction** (first-hand `record_position` trace): the ragged legal-set is a **Rust-internal global
+intermediate** `LegalSetPolicy{dense:[362], overflow:map<(q,r),f32>}` — it NEVER crosses PyO3 or the
+buffer. Each self-play position emits **one per-cluster-local-362 row per cluster crop**, so an
+off-*global*-window cell covered by cluster k fits k's local-362 and is supervised by the existing forward
++ dense CE → **buffer/persist (HEXB v8)/symmetry/trainer/model/PyO3-push UNCHANGED** (the original design's
+ragged-buffer/v9/coord-symmetry training-half RETRACTED). 4-lens adversarial gate caught a **real
+P3-class bug** (BLOCKING): the coverage invariant was NOT true-by-construction for the TARGET/O1 producers
+(they build overflow from ROOT CHILDREN keyed to the GLOBAL window-center; a spread-board cell can be
+off-global-window AND covered by zero clusters) → O1 w=1 on an uncovered cell zeroes all global mass →
+every cluster projection sums 0 → uniform-fallback (`records.rs:167-169`) corruption. **FIX §9.2a**: a
+shared `covered(q,r)` predicate ENFORCED at all 3 producers (uncovered → drop/no-op + renorm over the
+covered set). Re-review (incl. an empirical FxHashMap clone-order test confirming export-vs-record
+center-consistency): **PASS**.
+
+**PHASE 2 — IMPL (foundation+core committed `1760cbd`/`3d25a2c`; wiring uncommitted, perf-gated).**
+`v6_live2_ls` encoding + `PolicyPool::LegalSetScatterMax` (4 coupled edits) + `LegalSetPolicy` + ragged
+producer/projection/sample/O1 (5 gate tests). WIRING: `node.rs` `CachedPolicy` enum; `backup.rs`
+`pick_topk_children_ls`/`expand_and_backup_ls` + shared `finish_expansion`; `selection.rs` TT-hit dispatch;
+`policy.rs` `get_*_ls` (coverage-filtered, Gumbel math frozen); `inner.rs` worker-loop integration
+(`legal_set` scalar via `WorkerGeometry`→`run_one_game`→`play_one_move`/`run_mcts_search`/`infer_and_expand`;
+`MovePolicy` enum; coverage-gated O1; `aggregate_policy_to_local_ls` record). **Dense path byte-identical**
+(218 Rust + INV25 + full `make test` 1920 passed). DEFERRED (non-blocking): §9.6 192-cap→config (kept the
+const; `pick_topk_children_ls` truncates by TRUE prior so covered off-window cells compete fairly).
+
+**PHASE 5 — REVIEW + RED-TEAM (4 fresh lenses) → 3 PASS + 1 REFUTE-FIXED.** Ragged-correctness,
+dense-byte-identity, adversarial red-team all PASS. **BLOCKING REFUTE (resolver collision):**
+`detect_encoding_from_state_dict` substring `"v6_live2" in label` matched `"v6_live2_ls"` → a TREATMENT
+ckpt silently resolved to the CONTROL encoding (false-clears both A/B axes; §9.10 guard was specced but
+unimplemented). **FIXED**: test the more-specific `"v6_live2_ls"` label first (regression test
+`test_resolver_disambiguates_v6_live2_ls_from_v6_live2`; §9.10 marked IMPLEMENTED). Red-team re-flagged the
+§9.6 192-cap as non-blocking.
+
+**PHASE 6 — AB_RUNBOOK → 3-ARM (un-launched).** A = banked single-window 50k-PEAK; B = `KClusterMCTSBot`
+inference overlay (free, no retrain, already ≤0.06); C = `v6_live2_ls` trained 50k. GREENLIGHT = C beats B
+on robustness ∧ C non-inferior to A on on-dist (P1 demotes strength to a safety guard). PASS-relabel +
+checkpoint-path fix + resolver-collision guard + S1-full kill metric + bench-overhead spec in.
+
+**Uncommitted (one logical S0-wiring unit, operator commits after the vast bench):** Rust wiring
+(perf-sensitive → `make bench` ≥73k on vast gates it) + Python eval-wiring fixes (resolvers.py +
+2 tests, non-perf) + docs (§9.10 note). **Gated on operator/vast:** `make bench` → commit; then Phase 3
+S1-FULL (the real §174 kill test), Phase 4 BENCH-OVERHEAD, Phase 6 A/B 50k. Lessons: L: a fresh-context
+design review caught a P3-class O1-uniform-fallback corruption ON PAPER (free) that the gate tests as first
+written could not detect (they constructed only covered cells) — the §9.9.6 uncovered-counterexample test
+was added from the review. L: the per-cluster-local-362 row IS the loss-side gather — the trainer-loss
+reader's "needs a per-cluster forward+gather" Option-B was unnecessary once `record_position`'s K-rows
+structure was seen first-hand. L: a shape-identical A/B treatment encoding (v6_live2_ls ≡ v6_live2 wire)
+makes the byte-shape resolver a silent CONTROL-mislabel hazard — disambiguate by the more-specific label +
+name-dispatch. Falsified-register: none; confirms [[project_dmulticluster_s0_ragged_design]].
