@@ -45,9 +45,11 @@ selfplay:
   inference_max_wait_ms: 16.0
   random_opening_plies: 0
 
-# ── mixing — v6_live2_ls corpus (see CORPUS note above) ───────────────────────
+# ── mixing — REUSE the v6_live2 corpus (A/B-clean: Arm C holds the corpus
+#    constant with Arm A and changes ONLY the encoding; §9.8 dense rows are
+#    wire-compatible; the S1-FULL smoke validated this corpus on v6_live2_ls). ──
 mixing:
-  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2_ls.npz"
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
 
 # ── eval — IDENTICAL cadence to Arm A golong. NB the off-window/exploitability
 #    reads here are WATCH-ONLY; the decisive A/B is standalone exploit_probe.py
