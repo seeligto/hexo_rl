@@ -1,0 +1,5 @@
+# make.local — machine-specific overrides. NEVER commit this file.
+# Copy to make.local and fill in the rented-host details for your instance.
+HOST_5080 = root@sshN.vast.ai
+PORT_5080 = NNNNN
+REMOTE_REPO_5080 = /workspace/hexo_rl
