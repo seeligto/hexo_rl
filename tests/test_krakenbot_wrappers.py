@@ -4,7 +4,7 @@
   4-stone mid-game board.
 - KrakenBotRandomBot — same.
 - KrakenBotMCTSBot — assert FileNotFoundError at construction (weights
-  blocked; see reports/s176_a1_kraken_smoke.md).
+  blocked; see docs/archive/reports/s176_a1_kraken_smoke.md).
 """
 
 from __future__ import annotations
@@ -65,4 +65,4 @@ def test_krakenbot_mcts_unavailable_raises():
         KrakenBotMCTSBot(n_sims=50)
     msg = str(exc.value)
     assert "KrakenBot MCTSBot weights missing" in msg
-    assert "reports/s176_a1_kraken_smoke.md" in msg
+    assert "docs/archive/reports/s176_a1_kraken_smoke.md" in msg

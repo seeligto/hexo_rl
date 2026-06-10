@@ -11,6 +11,9 @@ STALE_PATTERNS = [
 EXCLUDE = (
     'reports/',
     'archive/',
+    # archived closed-sprint/investigation docs — historical records, exempt
+    # like reports/ and audit/ (D-REPOCLEAN P3 moved them under this prefix)
+    'docs/archive/',
     'docs/07_PHASE4_SPRINT_LOG.md',
     'tests/test_no_stale_plane_refs.py',
     # historical release artifact — accurate record of v0.4.0 24-plane era

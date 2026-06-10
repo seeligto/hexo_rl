@@ -31,22 +31,22 @@ Mandatory reads, in order:
 2. `CLAUDE.md` — current phase, encoding registry pin, threat-probe gate.
 3. `docs/07_PHASE4_SPRINT_LOG.md` §174 / §175 / §176 Phase A / Gate 1+2+3 close-out (lines 1180–1398), Falsified Hypotheses Register (lines 535–557 + Gate-2-added rows), Mechanism Lessons L18–L23.
 4. `reports/s176_review_findings.md` — pre-Phase-B audit; F01–F11 with band classification.
-5. `reports/s176_d_plan.md` — Wave D plan, **as updated by F02/F03/F09 in the pre-Phase-B fix wave** (L21 eval-temperature pin, S3 mode-scope qualifier, risk rows 8+9).
+5. `docs/archive/reports/s176_d_plan.md` — Wave D plan, **as updated by F02/F03/F09 in the pre-Phase-B fix wave** (L21 eval-temperature pin, S3 mode-scope qualifier, risk rows 8+9).
 6. `reports/s176_gate1_operator_review.md` — operator Gate 1 STRENGTHEN_ONLY verdict, 7-dimension audit.
 7. `reports/s176_gate2_tourney/summary.md` + `verdicts_v70k.md` — Gate 2 V70K-1..5 verdicts, methodology divergence note.
 8. `reports/s176_gate3/smoke_eval.md` — Gate 3 PROMOTED verdict, byte-equality + audit-clean + n=20 smoke.
-9. `reports/s176_a3_selfplay_forensics.md` — §175 attractor REFUTED-single-cluster verdict, n_components POC justification (Cohen's d −0.822).
-10. `reports/s176_a4_falsified_scan.md` — 15-item do-not list, L1–L17 mechanism lessons.
-11. `reports/s176_c_tourney/summary.md` — Wave C V1–V6 verdicts, BT ladder, opponent-coupled colony evidence (V6 PASS, 41pp spread).
+9. `docs/archive/reports/s176_a3_selfplay_forensics.md` — §175 attractor REFUTED-single-cluster verdict, n_components POC justification (Cohen's d −0.822).
+10. `docs/archive/reports/s176_a4_falsified_scan.md` — 15-item do-not list, L1–L17 mechanism lessons.
+11. `docs/archive/reports/s176_c_tourney/summary.md` — Wave C V1–V6 verdicts, BT ladder, opponent-coupled colony evidence (V6 PASS, 41pp spread).
 12. `docs/06_OPEN_QUESTIONS.md` Q11 (colony-detection over-inclusion RESOLVED 2026-04-28), Q14 (KrakenBot integration, BT anchor question), Q15 (corpus tactical quality filtering, Source A weight interaction), Q-§176-residual (deferred micro-refactors).
 13. `docs/02_roadmap.md` — Phase 4.5+ rows including §175 closed-by-interrupt + §176 Phase A CLOSED + §176 Phase B pending.
 14. `docs/designs/encoding_registry_design.md` + `docs/designs/encoding_alpha_multiwindow_selfplay_design.md` — encoding contract, multi-window selfplay design (relevant for S4 encoding pin per Gate 1 §140 Note 2).
 
 Optional reads if a specific sub-task surfaces context need:
-- `reports/s176_a1_kraken_smoke.md` (KrakenBot submodule + INTEGRABLE-NOW verdict)
-- `reports/s176_a2_eval_arch.md` (CACHING_CLEAN, minimal-diff plan)
-- `reports/s176_b_smoke.md` (Wave B harness validation, 3 wrapper tests PASS)
-- `reports/s176_e_review.md` (Wave E fresh-context audit)
+- `docs/archive/reports/s176_a1_kraken_smoke.md` (KrakenBot submodule + INTEGRABLE-NOW verdict)
+- `docs/archive/reports/s176_a2_eval_arch.md` (CACHING_CLEAN, minimal-diff plan)
+- `docs/archive/reports/s176_b_smoke.md` (Wave B harness validation, 3 wrapper tests PASS)
+- `docs/archive/reports/s176_e_review.md` (Wave E fresh-context audit)
 - `docs/rules/bot-integration.md` (SealBot upstream colony-bug caveat per F09 Note 1)
 - `docs/rules/checkpoint-archive-policy.md` (retention semantics for F07 deferred 70K specimen)
 
@@ -134,7 +134,7 @@ The 30pp divergence ceiling is **pre-registered before any Phase B sustained smo
 
 **Commit boundary.** `feat(selfplay): n_components colony POC at game_complete emit (§176 S3)`.
 
-**Empirical source.** `reports/s176_a3_selfplay_forensics.md` §e — Cohen's d −0.822 between 20K and 50K cohorts (largest of 8 candidates). Reuses `hexo_rl/eval/colony_detection.py:31-52` `_connected_components` BFS.
+**Empirical source.** `docs/archive/reports/s176_a3_selfplay_forensics.md` §e — Cohen's d −0.822 between 20K and 50K cohorts (largest of 8 candidates). Reuses `hexo_rl/eval/colony_detection.py:31-52` `_connected_components` BFS.
 
 **Pre-registered verdict for S3 G6 colony POC gate.** G6 is the **new mode-qualified** colony gate. The structure is:
 

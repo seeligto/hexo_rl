@@ -207,3 +207,9 @@ scripts/structural_diagnosis/prelong_centering_analyze.py
 !reports/phase_b/v7full_selfplay/
 !reports/phase_b/v7full_selfplay/baseline.md
 !reports/s176_phase_b_prompt.md
+
+# ── D-REPOCLEAN P3: docs/archive/ holds archived closed-sprint docs and IS
+#    tracked. Negations placed last so they also beat the unanchored archive/
+#    and audit/ dir rules and the *.jsonl rule for archived artifacts.
+!docs/archive/
+!docs/archive/**

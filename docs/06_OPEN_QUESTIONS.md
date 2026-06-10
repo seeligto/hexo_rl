@@ -7,7 +7,7 @@
 | Q-§164-P1 | Window-anchor index-0 picks suspected boundary bug | RESOLVED 2026-05-07 (Principled) — live MCTS + replay push K-aggregate fully: min-pool value, scatter-max policy (worker_loop.rs:299-401 + 649-682). Index-0 picks exist only at aug-only sites (pretrain RandomBot validation, early_game_probe, records.rs pass slot). Cleanup commit adds semantic clarity at each site. | `3cd496b` |
 | Q5 | Supervised→self-play transition schedule | Exponential decay 0.8→0.1 over 1M steps; growing buffer + mixed data streams | `a6e5a79` |
 | Q6 | Sequential vs compound action space | Sequential confirmed — 2 MCTS plies per turn, Q-flip at turn boundaries, Dirichlet skipped at intermediate plies | `5be7df7`, `9b899e9` |
-| Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically. **Status (2026-05-18):** S-ordering audit DEFERRED. Bot-corpus mixing landed as §178 mechanism intervention (`docs/designs/S178_design.md`, branch `phase4.5/s178_botmix`). If §178 trajectory shows the levers insufficient and the colony attractor reproduces a third time, S-ordering audit becomes the next experimental probe. Until then, the §178 outcome decides whether deeper source-ordering investigation is warranted. **Status (2026-05-20):** §S178 mechanism intervention FAILED (§S179 close — colony attractor reproduced; archive `archive/s179_recipe_fail/`). Colony attractor has now reproduced a third time (§175, §177, §S179) — the S-ordering-audit trigger condition is met. §S180a CQV-flip A/B (`completed_q_values: false`) launches first as the next isolated colony-amplifier test; S-ordering audit escalates if §S180a is also NULL/FAIL. **Status (2026-05-20, post-§S180a):** §S180a FAILED (close — CQV ruled out as colony lever; not colony capture, weaker learning signal). 3rd colony reproduction confirmed (§175, §S179, §S180a). S-ordering audit triggered — running parallel to §S180b launch as `audit/q12_s_ordering_audit.md`. **Status (2026-05-21, post-§S180b):** S-ordering audit CLOSED CORRECT (`audit/q12_s_ordering_audit.md`, master `a01f799`) — no active shaped-reward table; quiescence override W3S0-only by deliberate scope; S-ordering gap is INDEPENDENT of the colony attractor. §S180b 3-knob escalation FAILED (4th colony reproduction; close — config-level surface exhausted, L38). S-ordering is NOT the colony channel; Q12 resolved on the audit axis. Colony investigation moves to §S181 code-level levers. | — |
+| Q12 | Shaped reward S-ordering correctness | Won't implement shaped rewards — formation taxonomy bias outweighs sample efficiency benefit at current compute scale; quiescence override covers forcing without encoding human formations; revisit at Phase 5 if training stagnates tactically. **Status (2026-05-18):** S-ordering audit DEFERRED. Bot-corpus mixing landed as §178 mechanism intervention (`docs/designs/S178_design.md`, branch `phase4.5/s178_botmix`). If §178 trajectory shows the levers insufficient and the colony attractor reproduces a third time, S-ordering audit becomes the next experimental probe. Until then, the §178 outcome decides whether deeper source-ordering investigation is warranted. **Status (2026-05-20):** §S178 mechanism intervention FAILED (§S179 close — colony attractor reproduced; archive `archive/s179_recipe_fail/`). Colony attractor has now reproduced a third time (§175, §177, §S179) — the S-ordering-audit trigger condition is met. §S180a CQV-flip A/B (`completed_q_values: false`) launches first as the next isolated colony-amplifier test; S-ordering audit escalates if §S180a is also NULL/FAIL. **Status (2026-05-20, post-§S180a):** §S180a FAILED (close — CQV ruled out as colony lever; not colony capture, weaker learning signal). 3rd colony reproduction confirmed (§175, §S179, §S180a). S-ordering audit triggered — running parallel to §S180b launch as `docs/archive/audit/q12_s_ordering_audit.md`. **Status (2026-05-21, post-§S180b):** S-ordering audit CLOSED CORRECT (`docs/archive/audit/q12_s_ordering_audit.md`, master `a01f799`) — no active shaped-reward table; quiescence override W3S0-only by deliberate scope; S-ordering gap is INDEPENDENT of the colony attractor. §S180b 3-knob escalation FAILED (4th colony reproduction; close — config-level surface exhausted, L38). S-ordering is NOT the colony channel; Q12 resolved on the audit axis. Colony investigation moves to §S181 code-level levers. | — |
 | Q13 | Chain-length planes as input tensor augmentation | §92 landed 6 chain-length planes as input (18→24). §97 reverted: chain planes moved out of the input tensor into a dedicated `ReplayBuffer.chain_planes` sub-buffer. Input is back to 18 planes. `chain_head` aux regression loss retained (smooth-L1, `aux_chain_weight: 1.0`); target reads from the chain sub-buffer, NOT from `input[:, 18:24]`. See sprint log §92, §93, §97. | §97 on master |
 | Q19 | Threat-head BCE class imbalance | `pos_weight = 59.0` (theoretical `(1−p)/p` at ~1.6% positive fraction) added to threat-head `BCEWithLogitsLoss`. Landed atomically with Q13 as a fresh bootstrap. `scripts/compute_threat_pos_weight.py` recomputes empirically from a replay buffer when available. §91 C4 monitoring hook stays in place. | `feat/q13-chain-planes` branch §92 |
 | Q8 | First-player advantage in value training | **RESOLVED 2026-04-22 (auto, corpus fix)** — POSITION_END=50 truncation and broken Elo read meant pretraining corpus was biased to early/mid-game only. With both bugs fixed (`ddd408f`, `aa16624`, `8b446c5`), the full Elo-weighted corpus covers ply 8–150 and the P1 outcome distribution matches actual game statistics. No explicit adjustment of value targets needed. Sprint §114. | `ddd408f` + §114 |
@@ -753,7 +753,7 @@ Post-§161: 991 passed, 8 skipped.
 
 **Status:** OPEN [LOW/MED] — absorb during normal §S178+ / §S179 work, no
 standalone wave required. Surfaced by §S178a tier-1 hygiene wave (see
-sprint log §S178a + `reports/tier1_hygiene_wave.md`).
+sprint log §S178a + `docs/archive/reports/tier1_hygiene_wave.md`).
 
 - **F-A1 [LOW]** — 4 residual `bootstrap_model.pt` references outside IMPL-A's
   strict touch list:
@@ -856,7 +856,7 @@ MCTS deployment), pair it with a value-head signal restoration mechanism.
 **Status (2026-05-22, post-§S181 research wave):** RESOLVED ON THE
 DIAGNOSIS AXIS — resolution path open.
 
-The §S181 4-track structural-diagnosis wave (`audit/structural/00_aggregation.md`)
+The §S181 4-track structural-diagnosis wave (`docs/archive/audit/structural/00_aggregation.md`)
 identified the config-invisible capture channel L38 named: it is a
 **training-loop value-head discrimination collapse**. The value head
 flattens during self-play — losing colony/extension separation — which
@@ -897,7 +897,7 @@ the dual-pool `v_max` half is a coverage-blind monotone peak detector,
    ~40 LOC; lands in parallel. Data already in the
    `evaluation_round_complete` payload.
 
-Full skeleton: `reports/s181_next_wave_skeleton.md`. Sprint log §S181.
+Full skeleton: `docs/archive/reports/s181_next_wave_skeleton.md`. Sprint log §S181.
 
 ---
 
@@ -943,7 +943,7 @@ divergence alert) → PR-D (training-side value-bias probe) → PR-C
 (per-opponent matrix) → PR-E (MCTS-in-loop probes P1–P4). Do NOT remove
 C1–C4 — they remain valid decode/sharpness sanity checks; stop treating
 them as a sufficient pre-promotion gate. Skeleton:
-`reports/s181_next_wave_skeleton.md`.
+`docs/archive/reports/s181_next_wave_skeleton.md`.
 
 ---
 

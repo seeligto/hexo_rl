@@ -18,7 +18,7 @@ cd vendor/bots/krakenbot && \\
   /home/timmy/Work/hexo_rl/.venv/bin/python setup_puct.py build_ext --inplace
 ```
 
-Wave A1 report: reports/s176_a1_kraken_smoke.md (section (d) MCTSBot row).
+Wave A1 report: docs/archive/reports/s176_a1_kraken_smoke.md (section (d) MCTSBot row).
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ class KrakenBotMCTSBot(BotProtocol):
         if not Path(model_path).exists():
             raise FileNotFoundError(
                 f"KrakenBot MCTSBot weights missing at {model_path}. "
-                "See reports/s176_a1_kraken_smoke.md for status. "
+                "See docs/archive/reports/s176_a1_kraken_smoke.md for status. "
                 "Weights are not in the submodule (gitignored upstream); "
                 "operator must provide them or run from a checkpoint dir."
             )
