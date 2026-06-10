@@ -130,3 +130,80 @@ perf.data.old
 perf.data.*
 flamegraph.svg
 *.flame.svg
+
+# ── D-REPOCLEAN P1 (2026-06-10) — recurring one-off scratch categories ────
+# one-off golong launch/restart shells
+scripts/golong_*.sh
+scripts/*_launch.sh
+scripts/*_restart.sh
+
+# one-off vast run scripts
+scripts/run_*_vast.sh
+
+# one-off s174/multicluster measurement scripts
+scripts/multicluster_s174_*.py
+
+# one-off o1 analysis scripts
+scripts/o1_*.py
+
+# one-off golong monitor/analysis scripts
+scripts/golong_*.py
+
+# smoke chain orchestration scratch
+scripts/_*chain*.sh
+
+# s174 bootstrap fix run script
+scripts/s174_bootstrap_fix_run.sh
+
+# export/manifest one-offs
+scripts/export_selfplay_games.py
+scripts/update_manifest.py
+scripts/generate_demo_replays.py
+
+# laptop-only variant overrides (explicit names — a *_laptop.yaml glob would
+# catch tracked KEEP configs/variants/v6_live2_smoke_laptop.yaml)
+configs/variants/v6_live2_o1off_laptop.yaml
+configs/variants/v6_live2_o1on_laptop.yaml
+
+# NOTE (RT-AMEND BLOCKING-2): fixtures/*.npz deliberately NOT ignored —
+# 10 tracked KEEP fixtures incl. threat_probe_positions.npz (threat-probe
+# kill-gate input, committed deliberately per Makefile probe.fixtures).
+
+# local host override (see make.local.example)
+make.local
+
+# skills with whole-file infra content
+.claude/skills/rsync-vast/SKILL.md
+
+# scratch/one-off files not covered by existing rules
+docs/reference/notation_notes.md
+reports/FINDINGS_SUMMARY.md
+scripts/archive/s174_corpus_analysis.py
+scripts/archive/s174_probe_model.py
+scripts/structural_diagnosis/probe_value_bias_results.json
+scripts/structural_diagnosis/track_b/vb_aggregator.py
+scripts/structural_diagnosis/pathstrength_analyze.py
+scripts/structural_diagnosis/prelong_centering_analyze.py
+
+# ── intentionally tracked despite gitignore patterns (PIN-1 + active docs) ─
+# audit/ is a dir-level ignore: descent requires un-ignoring the dir, then
+# re-ignoring its contents so only the pinned file is exposed (minimal set).
+!/audit/
+/audit/*
+!/audit/structural/
+/audit/structural/*
+!audit/structural/compound_turn_pipeline_audit.md
+!docs/07_PHASE4_SPRINT_LOG.md
+# reports/** ignores subdirectories themselves — dir negations enable descent;
+# contents stay matched by reports/** except the pinned files below.
+!reports/audit_2026-04-30/
+!reports/audit_2026-04-30/W1D_q49_dirichlet_rotation.md
+!reports/investigations/
+!reports/investigations/dexploit_handoff_20260606.md
+!reports/investigations/exploit_probe_20260606.md
+!reports/investigations/exploit_probe_design_20260606.md
+!reports/investigations/finishing_discriminator_20260606.md
+!reports/phase_b/
+!reports/phase_b/v7full_selfplay/
+!reports/phase_b/v7full_selfplay/baseline.md
+!reports/s176_phase_b_prompt.md

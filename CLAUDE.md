@@ -74,7 +74,7 @@ Topic-scoped rules under `docs/rules/` — load the file whose trigger matches y
 
 Workflow skills live under `.claude/skills/` and are discovered by OpenCode,
 Claude Code, and Codex via Claude-compatible skill discovery:
-`investigation-probe-smoke-verdict`, `wave-audit`, `bench-gate`, `rsync-vast`, `hf-upload`.
+`investigation-probe-smoke-verdict`, `wave-audit`, `bench-gate`, `hf-upload`.
 
 ---
 
