@@ -9,7 +9,7 @@ earlier and steeper decline than Wave 3 (which kept bot mix).
 
 | field | value |
 |---|---|
-| host | vast.ai 5080 (ssh6.vast.ai:13053) |
+| host | vast.ai 5080 (REMOTE_HOST:REMOTE_PORT) |
 | branch | `phase4.5/s181_wave4_subtract` (commit `5b7f85e`) |
 | variant | `v7full_baseline_minus_bot.yaml` |
 | anchor | `bootstrap_model_v7full.pt` SHA `568d8a33…d61e8e98` |

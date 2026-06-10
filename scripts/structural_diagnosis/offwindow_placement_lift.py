@@ -35,7 +35,7 @@ the primary, and every multi conversion is decomposed by whether the LANDING mov
 (``last_move in W_off``). On the all-off leg any conversion REQUIRES an off-window placement.
 
 Run:
-  cd /home/timmy/Work/hexo_rl && PYTHONPATH=. .venv/bin/python \
+  cd $REPO_ROOT && PYTHONPATH=. .venv/bin/python \
     scripts/structural_diagnosis/offwindow_placement_lift.py --dry-pool   # size first
   ... then drop --dry-pool for the full conversion measurement.
 """

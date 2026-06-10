@@ -136,7 +136,7 @@ python scripts/export_corpus_npz.py --human-only --encoding v6w25 \
 ```
 
 Outputs:
-- `/workspace/hexo_rl/data/bootstrap_corpus_v6w25.npz` — 319,207 positions
+- `$REPO_ROOT/data/bootstrap_corpus_v6w25.npz` — 319,207 positions
   (320,000 cap), 3.8 GB uncompressed.
 - sha256: `85c045934c905389507967ee6cc241cd588d818157e19a84c04a3565c293438f`.
 - `reports/eval_generalization/corpus_export_v6w25.log` (vast → laptop pulled).

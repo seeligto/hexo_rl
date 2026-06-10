@@ -32,7 +32,7 @@ LIT iff target fork-affinity is LOW AND FALLS over the arc (pre-registered).
 
 EVAL-ONLY, read-only. New file only. Zero geometry literals (all from spec / detector /
 turn_wins primitive). Run:
-  cd /home/timmy/Work/hexo_rl && PYTHONPATH=. .venv/bin/python \
+  cd $REPO_ROOT && PYTHONPATH=. .venv/bin/python \
     scripts/structural_diagnosis/overspread_d3_fork_affinity.py
 """
 from __future__ import annotations

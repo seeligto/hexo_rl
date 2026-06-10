@@ -145,7 +145,7 @@ the regime already produces at step 0.
 
 ### T1 — operational lesson
 
-Both passes ran on the 5080 vast.ai (`ssh6.vast.ai:13053`) under
+Both passes ran on the 5080 vast.ai (`REMOTE_HOST:REMOTE_PORT`) under
 `n_workers=18`, batch=224, wait=8 ms — the §138 5080 sweep verdict.
 T1.1 R10 wall was 2702 s vs R9's 653 s under the same regime — the
 4× wall increase is consistent with the 91 % cap-rate (games run to
@@ -513,7 +513,7 @@ top-level config propagation + sustained-run authorisation hand-off.
 ### Gate 2 — 5k smoke launch + completion
 
 Launched 2026-05-06 05:46:37 UTC on vast.ai 5080
-(`ssh6.vast.ai:13053`); ran in `tmux hexo_phase_b:smoke5k`.
+(`REMOTE_HOST:REMOTE_PORT`); ran in `tmux hexo_phase_b:smoke5k`.
 `--checkpoint bootstrap_model_v7full.pt --variant w4c_smoke_v7_5080
 --checkpoint-dir checkpoints/w4c_smoke_v7_5k --no-dashboard
 --iterations 5000`.  Completed 09:05:47 UTC; wall 11,916 s = 3h 18m 35s;

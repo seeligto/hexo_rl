@@ -15,7 +15,7 @@ construction and (separately) compile the Cython MCTS modules:
 
 ```
 cd vendor/bots/krakenbot && \\
-  /home/timmy/Work/hexo_rl/.venv/bin/python setup_puct.py build_ext --inplace
+  $REPO_ROOT/.venv/bin/python setup_puct.py build_ext --inplace
 ```
 
 Wave A1 report: docs/archive/reports/s176_a1_kraken_smoke.md (section (d) MCTSBot row).

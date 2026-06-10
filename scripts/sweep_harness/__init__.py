@@ -3,7 +3,7 @@
 Replaces the host-specific scripts/sweep_epyc4080.sh. Each knob in
 ``knobs.KNOBS`` declares its own search strategy (ternary/grid/bisect/fixed);
 the runner orchestrates per-knob search with IQR-aware comparison. Designed
-so a freshly rented vast.ai box converges to an optimal config in under
+so a freshly rented GPU box converges to an optimal config in under
 90 minutes without editing the script per host.
 
 See docs/sweep_harness.md for the knob-recipe and __main__.py for the CLI.

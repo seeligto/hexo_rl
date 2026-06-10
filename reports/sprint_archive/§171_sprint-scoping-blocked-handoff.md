@@ -155,7 +155,7 @@ using §171 A1+A2 Python plumbing as the foundation.
 - **5080:** workspace pulled to `2121069`, engine rebuilt clean, pre-flight tmux
   killed, 0 GPU memory in use.
 - **Laptop:** branch `phase4/p171_selfplay_smoke` HEAD = `2121069`, pushed.
-- **Pre-flight log:** `5080:/workspace/hexo_rl/logs/sprint_171_p3_preflight/run.log`.
+- **Pre-flight log:** `5080:$REPO_ROOT/logs/sprint_171_p3_preflight/run.log`.
 - **Pre-flight ckpt-dir:** empty (crashed before first ckpt).
 - **Cross-reference:** raw report at `/tmp/p171_p3_preflight_blocker.md`.
 

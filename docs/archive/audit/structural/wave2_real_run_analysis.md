@@ -14,8 +14,8 @@ kill. Companion docs: `audit/structural/REAL_RUN_RECIPE.md`,
 
 | field | value |
 |---|---|
-| host | vast.ai 5080 (ssh6.vast.ai:13053) |
-| workdir | /workspace/hexo_rl/ |
+| host | vast.ai 5080 (REMOTE_HOST:REMOTE_PORT) |
+| workdir | $REPO_ROOT/ |
 | branch | phase4.5/s181_wave2_lever_vba_selfplay 3354016 |
 | variant | v7_real_run_main (`configs/variants/v7_real_run_main.yaml`) |
 | anchor | bootstrap_model_v7full.pt SHA 568d8a33…d61e8e98 |

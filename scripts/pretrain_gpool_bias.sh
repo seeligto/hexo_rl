@@ -29,7 +29,7 @@
 #       --out data/bootstrap_corpus_v6w25_with_global.npz
 # (sha256 from §169 A3 closeout: e2876ae5639958dac3758274b7137faeaff91713fe50df6da04ea43dfd896793)
 #
-# Run from repo root on the 5080 vast.ai host (see .claude/skills/rsync-vast/).
+# Run from repo root on the remote 5080 host.
 set -euo pipefail
 
 mkdir -p checkpoints/gpool_bias reports/gpool_bias

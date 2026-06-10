@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 # ── sys.path + auto-thread-budget BEFORE numpy / torch import ───────────────
 # Same call sequence as scripts/train.py — see hexo_rl/utils/cpu_budget.py.
 # Bench results are dramatically affected by thread oversubscription on rented
-# containers (vast.ai 42-of-128 etc.); without this the bench numbers are not
+# containers (rented 42-of-128 etc.); without this the bench numbers are not
 # comparable across boxes.
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:

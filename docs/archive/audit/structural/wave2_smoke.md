@@ -11,8 +11,8 @@ verdict + routing rationale), `audit/structural/track_d_pipeline_regression.md`
 
 | field | value |
 |---|---|
-| host | vast.ai 5080 (ssh6.vast.ai:13053) |
-| workdir | /workspace/hexo_rl/ |
+| host | vast.ai 5080 (REMOTE_HOST:REMOTE_PORT) |
+| workdir | $REPO_ROOT/ |
 | branch | phase4.5/s181_wave2_lever_vba_selfplay 5af2115 |
 | variant | v7_real_run_smoke (`configs/variants/v7_real_run_smoke.yaml`) |
 | anchor | bootstrap_model_v7full.pt SHA 568d8a33…d61e8e98 |

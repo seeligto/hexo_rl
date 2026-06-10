@@ -12,7 +12,7 @@
 > rs green). See sprint log §P5-CT "De-hardcoding sweep". P2 entries below stay
 > as documented acceptable defaults. The body below is the original audit.
 
-Static-only audit (no GPU, no training, no fixes). Repo root `/home/timmy/Work/hexo_rl`, branch `master`.
+Static-only audit (no GPU, no training, no fixes). Repo root `$REPO_ROOT`, branch `master`.
 Excludes `.claude/worktrees/` (stale agent copies) and `target/` (build artifacts).
 
 Goal: every live-tree site where encoding shape (plane count, kept-plane indices, wire width,

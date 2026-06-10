@@ -352,7 +352,7 @@ Worktree-parallel viable: Batch B is fully disjoint from A and C.
 |---|---|---|---|
 | H1 | `bootstrap_model.pt` UNKNOWN-provenance v6w25 — identify or rename | `checkpoints/bootstrap_model.pt` | Separate Claude Code investigation prompt |
 | H2 | `data/bootstrap_corpus_v6.npz` vast-only — scp to local or regenerate | `data/` | Operator pre-flight |
-| H3 | §177 vast tmux liveness — SSH check before §178 prep | vast ssh6.vast.ai:13053 | Operator pre-flight |
+| H3 | §177 vast tmux liveness — SSH check before §178 prep | vast REMOTE_HOST:REMOTE_PORT | Operator pre-flight |
 | H4 | `game_length_weights` colony-bias — flag for §179 review | `configs/training.yaml:118-124` | §179 design |
 | H5 | `bootstrap_model.pt` Makefile default — replace with explicit error | `Makefile:1` | §178 close-out commit |
 

@@ -9,7 +9,7 @@ PyTorch / NumPy / OpenBLAS / MKL all read OMP_NUM_THREADS (and sibling
 vars) at native-runtime initialisation, which happens during their
 import. The env vars must be set in os.environ before ``import numpy``
 or ``import torch``. Without this, on a rented container with N threads
-carved out of an M-thread host (vast.ai 42-of-128, AWS Spot, ...) every
+carved out of an M-thread host (rented 42-of-128 containers, AWS Spot, ...) every
 BLAS op tries to grab M threads against the N-slot cgroup, manifesting
 as 100 % container CPU + ~60 % GPU util + self-play workers starved of
 inference dispatches.
@@ -83,7 +83,7 @@ def derive_per_lib(budget: int, n_workers: int | None) -> int:
     Examples:
 
       laptop (budget=16, n=14)       → 16 // (4 + 1) = 3
-      vast.ai (budget=41, n=24)      → 41 // (4 + 3) = 5
+      rented  (budget=41, n=24)      → 41 // (4 + 3) = 5
       bare metal (budget=128, n=24)  → 128 // 7 = 18 → clamp 8
       bare metal (budget=128, n=0)   → 128 // 4 = 32 → clamp 8
     """

@@ -39,7 +39,7 @@ range [29.1k–36.3k]. +19% vs desktop; driven by 8-plane smaller tensor +
 RTX 4060 Max-Q Ada Lovelace (sm_89). Old estimate ~25k was wrong.
 
 Latest baseline **2026-05-22** (post-§S183 perf wave, master `1995873` — §S182 `legal_moves_set` capacity-reserve + §S183 MCTS micro-opts merged; §S184/§S186 perf strategies aborted, no engine change; compile OFF, trace ON, 8-plane v6).
-**10/10 targets PASS — `make bench` n=5, laptop `n_workers=14` + vast.ai `n_workers=22`.**
+**10/10 targets PASS — `make bench` n=5, laptop `n_workers=14` + remote 5080 `n_workers=22`.**
 
 > **MCTS floor refloored (2026-05-22):** the `MCTS (CPU only, no NN)` target
 > was ≥26,000 sim/s against an ~87k median — 70% slack, caught no regression.

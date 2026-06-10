@@ -53,7 +53,7 @@ make sweep SWEEP_ARGS="--knobs inference_batch_size --fix n_workers=55 \
   --coarse inference_batch_size=256,320,384,448,512"
 ```
 
-## RTX 5090 + 96-effective-thread host (vast.ai cpu-192t)
+## RTX 5090 + 96-effective-thread host (rented cpu-192t)
 
 Host quirks documented in
 `docs/notes/remote_reports/sweep_config_analysis_5090_96th_2026-04-28.md`.

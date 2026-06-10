@@ -330,7 +330,7 @@ opened in this sprint.
 
 ## 4. Artefacts
 
-Pulled from 5080 vast.ai (`scp6.vast.ai:13053`) on 2026-05-09:
+Pulled from 5080 vast.ai (`REMOTE_HOST:REMOTE_PORT`) on 2026-05-09:
 
 ```
 checkpoints/gpool_bias/

@@ -2,7 +2,7 @@
 """Self-play smoke test: bootstrap model vs itself, MCTS and argmax modes.
 
 Usage on vast.ai:
-    cd /workspace/hexo_rl
+    cd $REPO_ROOT
     .venv/bin/python scripts/smoke_selfplay_bootstrap.py \
         --checkpoint checkpoints/bootstrap_model_v6w25_e50.pt \
         --n-games 50 \

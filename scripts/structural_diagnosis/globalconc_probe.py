@@ -26,7 +26,7 @@ EVAL-ONLY. Read-only on banked replays + checkpoints. Zero geometry literals (ev
 the encoding spec + detector + turn_wins primitive). New untracked script.
 
 Run:
-  cd /home/timmy/Work/hexo_rl && PYTHONPATH=. .venv/bin/python \
+  cd $REPO_ROOT && PYTHONPATH=. .venv/bin/python \
     scripts/structural_diagnosis/globalconc_probe.py
 """
 from __future__ import annotations

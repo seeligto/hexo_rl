@@ -374,8 +374,8 @@ Recipe identical to §170 P3 (30 ep cosine, peak 2e-3, eta_min 5e-5,
 batch 256, fp16) + `--policy-only-bias` flag from §170 P4 P0.
 Corpus: `bootstrap_corpus_v6w25_with_global.npz` (sha256 `e2876ae5…`)
 reused verbatim. Wall: 1 h 48 m on 5080 (one mid-run SSH drop on the
-primary `ssh6.vast.ai:13053` endpoint required relaunch under tmux
-detached on the `38118 → 217.171.200.22` alternate; final run
+primary `REMOTE_HOST:REMOTE_PORT` endpoint required relaunch under tmux
+detached on the `38118 → REMOTE_IP` alternate; final run
 contained the full 30 epochs in one process).
 
 | metric                  | value                                |
@@ -683,7 +683,7 @@ target) was absorbed by the 1.3× game-count buffer + other sources.
 
 | field | value |
 |---|---|
-| host | 5080 vast.ai (`ssh6.vast.ai:13053`) |
+| host | 5080 vast.ai (`REMOTE_HOST:REMOTE_PORT`) |
 | seed | 20260509 |
 | wall time | ~14 min (459 s sealbot_vs_a1 + 39 s far_line + 25 s far_placement + 214 s krakenbot + 147 s sealbot self-play) |
 | games attempted / kept | 781 / 655 |
@@ -923,9 +923,9 @@ Result:
   5.36 hard-stop), final gate **0.0718** (peak 0.0775; ~3× growth
   from absolute zero, ~40 % higher than P3's 0.0512), 0 % NaN-skip,
   forward parity gate=0 unit test green. Wall: 1 h 48 m on 5080 (one
-  mid-run SSH drop on the primary `ssh6.vast.ai:13053` endpoint
+  mid-run SSH drop on the primary `REMOTE_HOST:REMOTE_PORT` endpoint
   required relaunch under tmux detached on the alternate `38118 →
-  217.171.200.22` endpoint; final run contained the full 30 epochs in
+  REMOTE_IP` endpoint; final run contained the full 30 epochs in
   one process).
 - **Post-train value-path-frozen verification** (asserted on the
   trained checkpoint): `value_proj.weight` |max| = 0.0884 ≈ Kaiming-

@@ -12,13 +12,13 @@ Cohen's d effect size (20K best-WR vs 50K worst-WR cohorts).
 
 | Field | Value |
 |---|---|
-| Vast host | `ssh6.vast.ai:13053` (per `memory/project_current_vast_host.md`) |
-| Run dir | `/workspace/hexo_rl/runs/c7e74d2842404a82bdd9f62edf740ea2/` |
+| Vast host | `REMOTE_HOST:REMOTE_PORT` (per `memory/project_current_vast_host.md`) |
+| Run dir | `$REPO_ROOT/runs/c7e74d2842404a82bdd9f62edf740ea2/` |
 | Training start | 2026-05-13 15:52 UTC (per `memory/project_175_eval_fix.md`) |
 | Training resumed from | `checkpoint_00015582.pt` |
 | Latest ckpt at pull | `checkpoint_00060000.pt` (2026-05-14 15:09 UTC) |
-| Source events file | `/workspace/hexo_rl/logs/events_c7e74d2842404a82bdd9f62edf740ea2.jsonl` (43 MB) |
-| Source ckpt log | `/workspace/hexo_rl/checkpoints/checkpoint_log.json` (256 KB) |
+| Source events file | `$REPO_ROOT/logs/events_c7e74d2842404a82bdd9f62edf740ea2.jsonl` (43 MB) |
+| Source ckpt log | `$REPO_ROOT/checkpoints/checkpoint_log.json` (256 KB) |
 | Total `game_complete` events | 22,318 |
 | `training_step` events | 4,464 (steps 15,590 → 60,220) |
 | Decisive games (after winner-map fix) | 21,371 (draws=835 excluded) |
@@ -29,19 +29,19 @@ Pull commands (rsync via `rsync-vast` skill convention):
 
 ```bash
 mkdir -p reports/s176_a3_games
-rsync -avz -e 'ssh -i ~/.ssh/vast_hexo -p 13053' \
-  root@ssh6.vast.ai:/workspace/hexo_rl/logs/events_c7e74d2842404a82bdd9f62edf740ea2.jsonl \
+rsync -avz -e 'ssh -i ~/.ssh/REMOTE_KEY -p REMOTE_PORT' \
+  REMOTE_USER@REMOTE_HOST:$REPO_ROOT/logs/events_c7e74d2842404a82bdd9f62edf740ea2.jsonl \
   reports/s176_a3_games/events.jsonl
-rsync -avz -e 'ssh -i ~/.ssh/vast_hexo -p 13053' \
-  root@ssh6.vast.ai:/workspace/hexo_rl/checkpoints/checkpoint_log.json \
+rsync -avz -e 'ssh -i ~/.ssh/REMOTE_KEY -p REMOTE_PORT' \
+  REMOTE_USER@REMOTE_HOST:$REPO_ROOT/checkpoints/checkpoint_log.json \
   reports/s176_a3_games/checkpoint_log.json
-rsync -avz -e 'ssh -i ~/.ssh/vast_hexo -p 13053' \
-  root@ssh6.vast.ai:/workspace/hexo_rl/logs/replays/games_2026-05-14.jsonl \
+rsync -avz -e 'ssh -i ~/.ssh/REMOTE_KEY -p REMOTE_PORT' \
+  REMOTE_USER@REMOTE_HOST:$REPO_ROOT/logs/replays/games_2026-05-14.jsonl \
   reports/s176_a3_games/replays_05_14.jsonl  # cross-validation only
 ```
 
 `reports/s176_a3_games/` falls under `reports/**` gitignore rule
-(`/home/timmy/Work/hexo_rl/.gitignore:35`) — no extra rule needed.
+(`$REPO_ROOT/.gitignore:35`) — no extra rule needed.
 
 §175 training NOT interrupted; pulls are read-only.
 

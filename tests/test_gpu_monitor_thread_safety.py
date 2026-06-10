@@ -25,7 +25,7 @@ def test_gpu_monitor_stop_event_is_not_named_underscore_stop():
     that `join()` invokes via `_wait_for_tstate_lock`; shadowing it with
     an Event instance raises `TypeError: 'Event' object is not callable`
     on clean teardown (the original symptom in the §S181-AUDIT Wave 1
-    Track B B4 run on the vast.ai Python 3.12 runtime). Python 3.14
+    Track B B4 run on the remote Python 3.12 runtime). Python 3.14
     refactored away the method, so the bug is 3.12-specific — but the
     invariant must survive future Python upgrades that may reintroduce
     the same naming. Keep the Event on `_stop_event` regardless.

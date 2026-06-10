@@ -9,7 +9,7 @@ remaining run-to-run mismatches — to confirm the fix closed the only live-chai
 in the chain jitters.
 
 EVAL-ONLY, read-only, CPU-only. Run:
-  cd /home/timmy/Work/hexo_rl && PYTHONPATH=. .venv/bin/python \
+  cd $REPO_ROOT && PYTHONPATH=. .venv/bin/python \
     scripts/structural_diagnosis/determinism_audit.py
 """
 from __future__ import annotations

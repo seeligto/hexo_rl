@@ -4,7 +4,7 @@
 **Branch:** phase4.5/m173_alpha_multiwindow @ 50b3cfb
 **Smoke variant:** configs/variants/m173_alpha_cold_smoke.yaml
 **Bootstrap:** checkpoints/bootstrap_model_v6w25.pt @ 571a82f844fc34bd43e23d5c46dde85910aa16e50b890d1b415e1abe88f9165d
-**Host:** vast.ai RTX 5080 (ssh6.vast.ai)
+**Host:** vast.ai RTX 5080 (REMOTE_HOST)
 **Step count:** 2456 (early-killed, target 5000)
 **Wall:** ~12.5 min (20:40:43 – 20:53:46)
 **Vast spend:** ~$0.04

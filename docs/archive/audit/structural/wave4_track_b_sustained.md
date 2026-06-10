@@ -11,7 +11,7 @@ main: rising through step 10k peak, then collapse beginning at step
 
 | field | value |
 |---|---|
-| host | vast.ai 5080 (ssh6.vast.ai:13053) |
+| host | vast.ai 5080 (REMOTE_HOST:REMOTE_PORT) |
 | branch | `phase4.5/s181_wave4_multiaux` |
 | variant | `v7full_wave4_multiaux_w4ac.yaml` (v7_wave3_main parent + ply_index) |
 | anchor | `bootstrap_model_v7full.pt` SHA `568d8a33…d61e8e98` |

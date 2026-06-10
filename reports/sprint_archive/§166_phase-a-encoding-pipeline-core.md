@@ -147,7 +147,7 @@ First 5080 bench on Phase A master. No pre-Phase-A 5080 baseline exists
 (Phase A gate ran laptop only). This is the **Phase B reference baseline**.
 Artifacts: `reports/encoding_phase_a/post_v6_bench_n5_5080.{txt,json}`.
 
-5080 host: vast.ai `ssh6.vast.ai:13053`, RTX 5080 (17.1 GB VRAM),
+5080 host: vast.ai `REMOTE_HOST:REMOTE_PORT`, RTX 5080 (17.1 GB VRAM),
 xeon/epyc CPU, n_workers=22, pool_duration=120s.
 
 | Metric | 5080 n=5 median | IQR | Range | Production target |

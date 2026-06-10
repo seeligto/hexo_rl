@@ -38,8 +38,8 @@ Spec:
 
 | field | value |
 |---|---|
-| host | vast.ai `ssh6.vast.ai:13053` (5080) |
-| workdir | `/workspace/hexo_rl/` |
+| host | vast.ai `REMOTE_HOST:REMOTE_PORT` (5080) |
+| workdir | `$REPO_ROOT/` |
 | anchor | `checkpoints/bootstrap_model_v6.pt` (SHA `7ab77d2c…`) |
 | variant | `v6_botmix_s181_track_b` |
 | iterations | 3000 |

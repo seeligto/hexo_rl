@@ -1476,7 +1476,7 @@ either v7full or §173 α multi-window engineering.
 
 - [ ] **Step 2: Update memory index + write A10 memory file**
 
-Memory: `/home/timmy/.claude/projects/-home-timmy-Work-hexo-rl/memory/project_172_a10_complete.md` (per session memory protocol).
+Memory: `~/.claude/projects/<project>/memory/project_172_a10_complete.md` (per session memory protocol).
 
 ```markdown
 ---
@@ -1514,7 +1514,7 @@ Update `MEMORY.md` index entry.
 - [ ] **Step 3: Final commit**
 
 ```
-git add docs/07_PHASE4_SPRINT_LOG.md /home/timmy/.claude/projects/-home-timmy-Work-hexo-rl/memory/
+git add docs/07_PHASE4_SPRINT_LOG.md ~/.claude/projects/<project>/memory/
 git commit -m "docs(172,A10): sprint log + memory close
 
 §172 A10 close-out artifacts. 11-commit summary; Phase B unblocked.

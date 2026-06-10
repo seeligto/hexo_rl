@@ -104,7 +104,7 @@ Hard cap unless re-approved: $8.
       lever branch + Wave 3 deltas)
 - [ ] Pre-registered WS-A..WS-E smoke verdict gates from dispatcher
       Stage 3C (LITERAL L13)
-- [ ] Vast host `ssh6.vast.ai:13053` workspace updated to
+- [ ] Vast host `REMOTE_HOST:REMOTE_PORT` workspace updated to
       `phase4.5/s181_wave3_design` HEAD (post-push)
 - [ ] Anchor `checkpoints/bootstrap_model_v7full.pt` present on vast
       (SHA `568d8a33…d61e8e98`)

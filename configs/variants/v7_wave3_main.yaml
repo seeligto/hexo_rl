@@ -49,7 +49,7 @@
 # verdict; explicit Stage 4 gate per dispatcher hard constraint.
 #
 # Launch:
-#   tmux new -d -s s181_w3main 'cd /workspace/hexo_rl && .venv/bin/python \
+#   tmux new -d -s s181_w3main 'cd $REPO_ROOT && .venv/bin/python \
 #     scripts/train.py --checkpoint checkpoints/bootstrap_model_v7full.pt \
 #     --variant v7_wave3_main --iterations 100000 2>&1 \
 #     | tee logs/s181_w3main_$(date +%Y%m%d_%H%M).log'

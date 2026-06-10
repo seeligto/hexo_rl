@@ -100,7 +100,7 @@ If Wave B activates MCTSBot, the build invocation is:
 
 ```bash
 cd vendor/bots/krakenbot && \
-  /home/timmy/Work/hexo_rl/.venv/bin/python setup_puct.py build_ext --inplace
+  $REPO_ROOT/.venv/bin/python setup_puct.py build_ext --inplace
 ```
 
 Document at that time; no script needed yet.

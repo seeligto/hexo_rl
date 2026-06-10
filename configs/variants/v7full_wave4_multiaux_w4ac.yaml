@@ -41,7 +41,7 @@
 # decision at Track 4A SIGINT.
 #
 # Launch:
-#   tmux new -d -s s181_w4b 'cd /workspace/hexo_rl && .venv/bin/python \
+#   tmux new -d -s s181_w4b 'cd $REPO_ROOT && .venv/bin/python \
 #     scripts/train.py --checkpoint checkpoints/bootstrap_model_v7full.pt \
 #     --variant v7full_wave4_multiaux_w4ac --iterations 60000 2>&1 \
 #     | tee logs/s181_w4b_$(date +%Y%m%d_%H%M).log'

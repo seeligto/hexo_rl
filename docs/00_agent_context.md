@@ -12,7 +12,7 @@ There is an active human community with existing openings and strategies. The in
 
 1. Play at or beyond top human level through self-play
 2. Serve as a research tool for the community to explore openings
-3. Be trained on consumer hardware (current primary host: vast.ai 5080 + Ryzen 9 9900X; dev: laptop Ryzen 7 8845HS + RTX 4060 Max-Q; legacy reference: desktop Ryzen 7 3700x + RTX 3070, 48GB RAM)
+3. Be trained on consumer hardware (current primary host: rented RTX 5080-class GPU box; dev: laptop Ryzen 7 8845HS + RTX 4060 Max-Q; legacy reference: desktop Ryzen 7 3700x + RTX 3070, 48GB RAM)
 
 ---
 

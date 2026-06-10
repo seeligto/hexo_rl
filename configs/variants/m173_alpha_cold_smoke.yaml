@@ -1,7 +1,7 @@
 # m173_alpha_cold_smoke — §173 A8 cold-smoke validation of α multi-window
 #                          K-cluster selfplay on v6w25.
 #
-# Host:    vast.ai 5080 (RTX 5080 16 GB + Ryzen 9 9900X 24t).
+# Host:    remote 5080 (RTX 5080 16 GB + Ryzen 9 9900X 24t).
 # Encoding: v6w25 (§170 P4 P1 canonical multi-window — first ever sustained
 #                  self-play exposure for any K-cluster encoding).
 # Bootstrap: checkpoints/bootstrap_model_v6w25.pt
