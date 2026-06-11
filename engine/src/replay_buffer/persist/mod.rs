@@ -56,7 +56,7 @@ pub(crate) const HEXB_MAGIC: u32 = 0x4845_5842; // "HEXB"
 pub(crate) const HEXB_VERSION: u32 = 9;
 
 impl ReplayBuffer {
-    /// Save buffer contents to a binary file in HEXB v7 format.
+    /// Save buffer contents to a binary file in HEXB v9 format.
     pub(crate) fn save_to_path_impl(&self, path: &str) -> PyResult<()> {
         use std::io::{BufWriter, Write};
 
@@ -356,9 +356,9 @@ mod tests {
     }
 
     /// §S181-AUDIT Wave 4 4B-impl-1 — explicit per-row position_index round-trip
-    /// across multiple rows, verifying v8 file format wire-correctness.
+    /// across multiple rows, verifying current-format (v8+, now v9) wire-correctness.
     #[test]
-    fn test_position_index_v8_roundtrip_multirow() {
+    fn test_position_index_roundtrip_multirow() {
         let mut buf = ReplayBuffer::new(8, "v6");
         for i in 0..5u16 {
             buf.push_for_test(i as f32, 30, true);
