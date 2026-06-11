@@ -91,6 +91,11 @@ eval_pipeline:
     # Absent/null = no pin (the identity line is still logged as
     # `anchor_identity`). A/B + sustained runs SHOULD pin; compute the value with
     #   python scripts/anchor_sha256.py checkpoints/<intended_incumbent>.pt
+    # The pin is a LAUNCH-time assertion of the intended incumbent. On a RESUME
+    # after promotions, best_model.pt has legitimately advanced past the pinned
+    # launch incumbent → the pin will hard-fail; that is EXPECTED — update the pin
+    # to the current best_model.pt sha (or clear it) for the resume. The fixed-loop
+    # A/B + sustained runs run to completion (W1 close-out), so this rarely arises.
     # expected_anchor_sha256: "<sha256-hex>"
     # §155 T2 — promotion AND-gate against a frozen bootstrap reference.
     # When enabled, requires `wr_bootstrap_anchor >= min_winrate` in

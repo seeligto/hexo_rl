@@ -58,6 +58,19 @@ def test_state_dict_sha256_distinguishes_weights():
     assert state_dict_sha256(c.state_dict()) != state_dict_sha256(a.state_dict())
 
 
+def test_state_dict_sha256_invariant_to_compile_prefix():
+    """A torch.compiled checkpoint stores ``_orig_mod.`` / ``module.`` key prefixes;
+    resolve_anchor hashes the UNWRAPPED model.state_dict() while scripts/anchor_sha256.py
+    hashes the raw extract_model_state. The hash must be canonical w.r.t. compile
+    wrapping or a compiled-checkpoint pin spuriously hard-fails the launch."""
+    a = _model(3)
+    plain = a.state_dict()
+    wrapped = {f"_orig_mod.{k}": v for k, v in plain.items()}
+    nested = {f"module._orig_mod.{k}": v for k, v in plain.items()}
+    assert state_dict_sha256(wrapped) == state_dict_sha256(plain)
+    assert state_dict_sha256(nested) == state_dict_sha256(plain)
+
+
 def test_pin_match_passes(tmp_path):
     anchor = _model(7)
     (tmp_path / "best_model.pt").write_bytes(b"x")  # exists → skip fallback-persist

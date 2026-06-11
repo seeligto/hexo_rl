@@ -84,17 +84,19 @@ def promote_anchor(
     *,
     run_id: Optional[str] = None,
     encoding: Optional[str] = None,
+    sync_inference: bool = True,
 ) -> None:
     """Install the gated eval weights as the new anchor: copy → stamped atomic
-    save → sync self-play inference. Shared by the in-loop drain and the
-    §D-LOOPFIX W1 terminal close-out eval so the promotion mechanism (weight
-    snapshot, W3 provenance stamp, single weight-sync site) is identical on both
-    paths.
+    save → (optionally) sync self-play inference. Shared by the in-loop drain and
+    the §D-LOOPFIX W1 terminal close-out eval so the promotion mechanism (weight
+    snapshot, W3 provenance stamp) is identical on both paths.
 
-    §176 P9 — ``sync_inference_weights`` is the typed forwarder (no direct
-    ``_inference_server`` reach). §D-WALLCAUSATION — this is the ONLY self-play
-    weight-sync point, so the replay recorder's checkpoint_step is re-tagged here
-    (not per train step) to attribute every recorded game to its generating weights.
+    ``sync_inference`` (§D-LOOPFIX W1): the in-loop drain syncs the new weights
+    into the live self-play inference server and re-tags the replay recorder's
+    checkpoint_step (§176 P9 typed forwarder; §D-WALLCAUSATION single weight-sync
+    point). The TERMINAL close-out eval passes ``sync_inference=False`` — it runs
+    AFTER the pool is stopped (so the terminal eval is UNLOADED), there is no
+    self-play left to sync, and the stopped pool has no inference server.
     """
     eval_base = getattr(eval_model, "_orig_mod", eval_model)
     best_model.load_state_dict(eval_base.state_dict())
@@ -106,6 +108,7 @@ def promote_anchor(
         best_model, best_model_path,
         step=promoted_step, run_id=run_id, encoding=encoding,
     )
-    pool.sync_inference_weights(eval_base.state_dict())
-    if hasattr(pool, "update_checkpoint_step"):
-        pool.update_checkpoint_step(promoted_step)
+    if sync_inference:
+        pool.sync_inference_weights(eval_base.state_dict())
+        if hasattr(pool, "update_checkpoint_step"):
+            pool.update_checkpoint_step(promoted_step)

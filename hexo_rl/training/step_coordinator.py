@@ -1481,9 +1481,11 @@ class StepCoordinator:
                 or self.eval_model is None):
             return
         # On SIGINT/SIGTERM (operator interrupt) skip the multi-minute terminal
-        # eval — flush_pending_eval already banked any in-flight promotion (D-012);
-        # the interrupt path wants a quick clean exit, not a full battery. The
-        # clean stop-at-N path (shutdown_save False) runs it.
+        # eval — the interrupt path wants a quick clean exit, not a full battery.
+        # flush_pending_eval banks any COMPLETED in-flight promotion (D-012); an
+        # eval still RUNNING at the interrupt is intentionally abandoned (the join
+        # is skipped on shutdown_save), NOT re-covered here. The clean stop-at-N
+        # path (shutdown_save False) runs the terminal eval.
         if self.shutdown.shutdown_save:
             self._logger.info("terminal_eval_skipped_on_interrupt", step=self._train_step)
             return
@@ -1537,6 +1539,7 @@ class StepCoordinator:
                 self.eval_model, self.best_model, self.anchor_state.best_model_path,
                 self.pool, (result.get("step", step) if result else step),
                 run_id=self.run_id, encoding=self._encoding_name,
+                sync_inference=False,  # pool stopped before the terminal eval (unloaded)
             )
             self._best_model_step = result.get("step", step) if result else step
             self._logger.info("terminal_eval_promoted", step=step,
@@ -1556,12 +1559,21 @@ class StepCoordinator:
         self._logger.info("terminal_eval_complete", step=step, promoted=promoted,
                           wr_best=(result.get("wr_best") if result else None))
 
-    def close_out(self) -> None:
-        """§D-LOOPFIX W1 — the run lifecycle epilogue: training has STOPPED; DRAIN
-        the in-flight eval (budgeted), then run the TERMINAL full-battery eval on
-        the final checkpoint. Called from the caller's ``finally:`` while the pool
-        is still up (promotion's inference sync needs it)."""
+    def close_out(self, on_drained: "Callable[[], None] | None" = None) -> None:
+        """§D-LOOPFIX W1 — the run lifecycle epilogue: training has STOPPED.
+
+        1. DRAIN the in-flight eval (budgeted) — the pool is still UP here so a
+           drained promotion can sync into self-play inference (D-012).
+        2. ``on_drained()`` (the caller passes ``pool.stop``) — stop self-play so
+           the terminal eval runs on an UNLOADED GPU (faster + free of the
+           co-tenancy nondeterminism that moves a 50-game WR by ~0.16; §D-LOOPFIX
+           Phase 5). No-op when the caller passes nothing.
+        3. TERMINAL full-battery eval on the final checkpoint (pool down → its
+           promotion skips the now-meaningless inference sync).
+        """
         self.flush_pending_eval()
+        if on_drained is not None:
+            on_drained()
         self.run_terminal_eval()
 
     # ── §S181-AUDIT Wave 3 Stage 2A — bot-corpus refresh hook ────────────────

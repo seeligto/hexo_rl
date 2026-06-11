@@ -111,10 +111,26 @@ def state_dict_sha256(state_dict: dict[str, Any]) -> str:
     made cheap so a launch can pin its intended incumbent and the operator can
     reproduce the pin with ``scripts/anchor_sha256.py``.
     """
+    # Canonicalise compile/DDP wrappers so the hash matches whether the weights
+    # came from an UNWRAPPED model.state_dict() (resolve_anchor) or a raw stored
+    # state_dict that still carries `_orig_mod.` / `module.` prefixes
+    # (scripts/anchor_sha256.py via extract_model_state). Without this a
+    # compiled-checkpoint pin would spuriously hard-fail the launch. Sort by the
+    # CANONICAL key so the digest order is stable under (partial) wrapping.
+    def _canon(key: str) -> str:
+        changed = True
+        while changed:  # fixpoint: handles nested/any-order wrappers (module._orig_mod.)
+            changed = False
+            for prefix in ("_orig_mod.", "module."):
+                if key.startswith(prefix):
+                    key = key[len(prefix):]
+                    changed = True
+        return key
+
     h = hashlib.sha256()
-    for key in sorted(state_dict.keys()):
-        h.update(key.encode("utf-8"))
-        value = state_dict[key]
+    for canon_key, raw_key in sorted((_canon(k), k) for k in state_dict.keys()):
+        h.update(canon_key.encode("utf-8"))
+        value = state_dict[raw_key]
         if isinstance(value, torch.Tensor):
             h.update(value.detach().cpu().contiguous().numpy().tobytes())
         else:
@@ -330,12 +346,18 @@ def resolve_anchor(
         if _pin is not None and _anchor_sha != _pin:
             raise RuntimeError(
                 f"anchor sha256 mismatch: best_model.pt resolved to {_anchor_sha} "
-                f"but the run config pinned {_pin}. The incumbent is NOT the run's "
-                f"intended anchor (W2: a silent best_model.pt restore-from-.bak "
-                f"across an experiment boundary?). Refusing to launch. Re-pin the "
-                f"intended incumbent into checkpoints/best_model.pt (compute its sha "
-                f"with scripts/anchor_sha256.py) or clear "
-                f"eval_pipeline.gating.expected_anchor_sha256."
+                f"but the run config pinned {_pin}. Refusing to launch. Two causes:\n"
+                f"  (a) WRONG INCUMBENT (W2) — a silent best_model.pt "
+                f"restore-from-.bak / a stale anchor from another experiment leaked "
+                f"in. Re-pin the intended incumbent into checkpoints/best_model.pt.\n"
+                f"  (b) LEGITIMATE RESUME after promotions — best_model.pt has "
+                f"advanced past the pinned launch incumbent (the pin is a "
+                f"LAUNCH-time assertion; promotions move the anchor). This is "
+                f"EXPECTED on resume: update expected_anchor_sha256 to the current "
+                f"best_model.pt sha (scripts/anchor_sha256.py checkpoints/best_model.pt) "
+                f"or clear it.\n"
+                f"The pin cannot tell (a) from (b) by content alone — it is the "
+                f"operator's per-invocation declaration of the intended incumbent."
             )
         # If best_model.pt was missing/corrupt and we recovered from a
         # bootstrap or .bak, persist the chosen anchor as the live

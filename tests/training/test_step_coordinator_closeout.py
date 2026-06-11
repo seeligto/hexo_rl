@@ -117,17 +117,20 @@ def test_terminal_eval_runs_full_battery_ignoring_stride():
     assert terminal_events[0]["step"] == 50000
 
 
-def test_terminal_eval_promotes_when_gated():
+def test_terminal_eval_promotes_without_inference_sync():
     coord, _ep, _events = _terminal_coord(
         {"promoted": True, "step": 50000, "wr_best": 0.7}
     )
     with patch("hexo_rl.training.eval_drain.save_best_model_atomic") as mock_save:
         coord.run_terminal_eval()
-    # promotion fired: weights synced to self-play + stamped save at the final step.
-    coord.pool.sync_inference_weights.assert_called_once()
+    # best_model.pt written (stamped) at the final step…
     _a, kwargs = mock_save.call_args
     assert kwargs["step"] == 50000
     assert kwargs["run_id"] == "r1"
+    # …but the inference weights are NOT synced: the terminal eval runs AFTER the
+    # pool is stopped (close_out's on_drained=pool.stop), so there is no self-play
+    # left to sync — and that's exactly what makes the terminal eval run UNLOADED.
+    coord.pool.sync_inference_weights.assert_not_called()
 
 
 def test_terminal_eval_noop_when_disabled():
@@ -178,3 +181,16 @@ def test_close_out_drains_then_runs_terminal():
     coord.run_terminal_eval = Mock(side_effect=lambda: order.append("terminal"))
     coord.close_out()
     assert order == ["flush", "terminal"]
+
+
+def test_close_out_drains_stops_pool_then_runs_terminal():
+    """The in-flight drain needs the pool UP (its promotion syncs inference); the
+    terminal eval must run with the pool DOWN (unloaded GPU). close_out fires the
+    on_drained callback (= pool.stop) between the two."""
+    coord = _make_coordinator()
+    order: list[str] = []
+    coord.flush_pending_eval = Mock(side_effect=lambda: order.append("flush"))
+    coord.run_terminal_eval = Mock(side_effect=lambda: order.append("terminal"))
+    stop = Mock(side_effect=lambda: order.append("stop_pool"))
+    coord.close_out(on_drained=stop)
+    assert order == ["flush", "stop_pool", "terminal"]

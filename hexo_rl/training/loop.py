@@ -410,15 +410,15 @@ def run_training_loop(
     finally:
         tracemalloc.stop()
         # R22 + D-012 + §D-LOOPFIX W1: the run lifecycle epilogue — DRAIN the
-        # in-flight eval (budgeted), then run a TERMINAL full-battery eval on the
-        # final checkpoint so the last model gets a real promotion-capable decision
-        # instead of dying truncated on a stride boundary. Pool is still up here —
-        # the inference-server sync inside promotion needs it.
-        coordinator.close_out()
+        # in-flight eval (budgeted; pool still UP so a drained promotion can sync
+        # into self-play), then STOP the pool (on_drained=pool.stop), then run the
+        # TERMINAL full-battery eval on the final checkpoint UNLOADED (faster +
+        # free of co-tenancy nondeterminism) so the last model gets a real
+        # promotion-capable decision instead of dying truncated on a stride
+        # boundary. close_out owns the pool.stop() so the terminal eval runs after it.
+        coordinator.close_out(on_drained=pool.stop)
         emit_event({"event": "run_end", "step": coordinator.train_step})
-        # R4 + R25: pool.stop() then subsys.teardown() — preserves the
-        # gpu_util_pct read window during the last train_step_summary log.
-        pool.stop()
+        # R25: subsys.teardown() after the pool is down (close_out stopped it).
         subsys.teardown()
 
     # ── Final checkpoint + buffer save ────────────────────────────────────────
