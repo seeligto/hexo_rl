@@ -1,6 +1,6 @@
 """Build the Phase B' Class-2 value-head drift probe fixture.
 
-Produces ``fixtures/value_probe_50.npz`` containing 50 fixed positions for
+Produces ``tests/fixtures/value_probe_50.npz`` containing 50 fixed positions for
 periodic value-head evaluation by the trainer:
 
     * 25 ``decisive`` positions   — mid-game snapshots from decisive games
@@ -27,7 +27,7 @@ Usage:
         --decisive-jsonl reports/phase_b/v7full_selfplay/games.jsonl \
         --cap-source v7full_long \
         --decisive-jsonl-secondary reports/phase_b/v7full_selfplay/games.jsonl \
-        --out fixtures/value_probe_50.npz
+        --out tests/fixtures/value_probe_50.npz
 """
 
 from __future__ import annotations
@@ -266,7 +266,7 @@ def main() -> int:
                    help="Registry encoding name; the fixture is sliced to its "
                         "kept-plane count (v6→8, v6tp→10, v6_live2→4).")
     p.add_argument(
-        "--out", type=Path, default=Path("fixtures/value_probe_50.npz"),
+        "--out", type=Path, default=Path("tests/fixtures/value_probe_50.npz"),
     )
     args = p.parse_args()
 

@@ -49,7 +49,7 @@ from hexo_rl.eval.windowing_diagnostic import (
     analyse_position,
 )
 
-DEFAULT_FIXTURE_PATH = REPO_ROOT / "fixtures" / "windowing_probe_positions.npz"
+DEFAULT_FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "windowing_probe_positions.npz"
 DEFAULT_RUNS_ROOT = REPO_ROOT / "runs"
 
 

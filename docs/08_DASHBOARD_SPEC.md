@@ -213,7 +213,7 @@ No schema changes.
 
 Emitted every `instrumentation.value_probe_interval` training steps when
 `instrumentation.enabled = true`. Runs the value head on a fixed 50-position
-fixture (`fixtures/value_probe_50.npz`) to detect value-head collapse.
+fixture (`tests/fixtures/value_probe_50.npz`) to detect value-head collapse.
 
 Emission site: `hexo_rl/training/step_coordinator.py:762`.
 

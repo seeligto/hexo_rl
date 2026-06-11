@@ -151,7 +151,7 @@ Current criterion (§91, revised from §85/§89):
 
 C1–C3 must all PASS. C4 prints a `WARNING` line; it is a BCE-drift canary
 (Q19 monitoring hook) and never flips the exit code. Full rationale in
-§91. Baseline JSON lives at `fixtures/threat_probe_baseline.json` (v4 post-§93).
+§91. Baseline JSON lives at `tests/fixtures/threat_probe_baseline.json` (v4 post-§93).
 
 ## Corpus + probe discipline
 

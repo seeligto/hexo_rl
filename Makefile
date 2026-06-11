@@ -311,7 +311,7 @@ pretrain: ## Bootstrap pretrain. Vars: PRETRAIN_ENCODING, PRETRAIN_EPOCHS, PRETR
 # ── Probes ────────────────────────────────────────────────────────────────────
 
 .PHONY: probe.bootstrap
-probe.bootstrap: ## Probe $(BOOTSTRAP); save fixtures/threat_probe_baseline.json + report
+probe.bootstrap: ## Probe $(BOOTSTRAP); save tests/fixtures/threat_probe_baseline.json + report
 	@mkdir -p reports/probes
 	$(PY) scripts/probe_threat_logits.py \
 		--checkpoint $(BOOTSTRAP) \
@@ -329,12 +329,12 @@ probe.latest: ## Threat-logit probe against latest checkpoint; PASS/FAIL step-5k
 		--output "reports/probes/latest_$(shell date +%Y%m%d_%H%M%S).md"
 
 .PHONY: probe.fixtures
-probe.fixtures: ## Regenerate fixtures/threat_probe_positions.npz (WARNING: invalidates bootstrap baseline — commit deliberately)
+probe.fixtures: ## Regenerate tests/fixtures/threat_probe_positions.npz (WARNING: invalidates bootstrap baseline — commit deliberately)
 	@echo "WARNING: this replaces the committed fixture set and invalidates the bootstrap baseline."
 	@echo "Only run if you intend to rebase the kill criterion. Commit the result explicitly."
 	@read -p "Continue? [y/N] " yn; [ "$$yn" = "y" ] || exit 1
 	$(PY) scripts/generate_threat_probe_fixtures.py \
-		--output fixtures/threat_probe_positions.npz
+		--output tests/fixtures/threat_probe_positions.npz
 
 WINDOWING_CKPT ?= checkpoints/checkpoint_00020496.pt
 
@@ -343,7 +343,7 @@ probe.windowing: ## Windowing diagnostic probe (Q_cov, Q_anchor, Q_stability) on
 	@mkdir -p reports/probes
 	$(PY) scripts/probe_windowing.py \
 		--checkpoint "$(WINDOWING_CKPT)" \
-		--fixture fixtures/windowing_probe_positions.npz \
+		--fixture tests/fixtures/windowing_probe_positions.npz \
 		--output "reports/probes/windowing_$(shell date +%Y%m%d_%H%M%S).md"
 
 

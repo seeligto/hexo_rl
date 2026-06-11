@@ -254,7 +254,7 @@ def _make_sample_payload(event_type: str) -> dict:
             "draw_std": 0.08,
             "n_decisive": 25,
             "n_draw": 25,
-            "fixture": "fixtures/value_probe_50.npz",
+            "fixture": "tests/fixtures/value_probe_50.npz",
         },
         "buffer_composition": {
             "event": "buffer_composition",

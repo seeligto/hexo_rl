@@ -265,7 +265,7 @@ else
     ok "Corpus download skipped (disabled via WITH_CORPUS=0)"
 fi
 
-if [[ -f fixtures/threat_probe_baseline.json ]]; then
+if [[ -f tests/fixtures/threat_probe_baseline.json ]]; then
     ok "threat_probe_baseline.json [git-tracked]"
 fi
 

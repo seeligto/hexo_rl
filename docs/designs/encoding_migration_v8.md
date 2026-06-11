@@ -238,8 +238,8 @@ Each phase = short-lived branch off master, FF-merged on bench-gate PASS. Patter
 * `configs/eval.yaml` — bump `bootstrap_anchor.path: bootstrap_model_v8full.pt`.
 * `configs/variants/w4d_smoke_v8_5080.yaml` — new variant cloning §157 `w4c_smoke_v7_5080.yaml` knob set + §156 cosine-temp fix + Q2 jitter + bootstrap-floor enabled.
 * `scripts/probe_threat_logits.py` — relax `in_channels=8` guard to `in_channels in {8, 11}`; bump `BASELINE_SCHEMA_VERSION 6 → 7`; per-encoding fixture path.
-* `scripts/generate_threat_probe_fixtures.py` — re-run under v8 encoding; write `fixtures/threat_probe_positions_v8.npz`, `fixtures/threat_probe_human_positions_v8.npz`.
-* `fixtures/threat_probe_baseline.json` — append v8 baseline column post-Phase D.
+* `scripts/generate_threat_probe_fixtures.py` — re-run under v8 encoding; write `tests/fixtures/threat_probe_positions_v8.npz`, `tests/fixtures/threat_probe_human_positions_v8.npz`.
+* `tests/fixtures/threat_probe_baseline.json` — append v8 baseline column post-Phase D.
 * `tests/probes/p2_far_placement_opponent.py` — re-run; under v8 encoding `far_line` opp_winrate < 5% per probe SUMMARY exit gate.
 
 **Smoke / bench gate:**

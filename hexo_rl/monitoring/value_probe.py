@@ -1,6 +1,6 @@
 """Phase B' Class-2 — Value-head drift probe.
 
-Loads ``fixtures/value_probe_50.npz`` and runs the trainer's model forward
+Loads ``tests/fixtures/value_probe_50.npz`` and runs the trainer's model forward
 on the 50 fixed positions every N training steps. Emits a
 ``value_probe_drift`` event with per-subset means so we can watch:
 
@@ -28,6 +28,8 @@ import torch
 
 from hexo_rl.encoding import EncodingRegistryError, lookup as _lookup_encoding, resolve_from_config
 
+REPO_ROOT: Path = Path(__file__).resolve().parents[2]
+
 _V6 = _lookup_encoding("v6")
 BOARD_SIZE: int = _V6.board_size
 BUFFER_CHANNELS: int = _V6.n_planes
@@ -44,7 +46,7 @@ class ValueProbe:
 
     def __init__(
         self,
-        fixture_path: Path | str = Path("fixtures/value_probe_50.npz"),
+        fixture_path: Path | str = REPO_ROOT / "tests" / "fixtures" / "value_probe_50.npz",
         device: Optional[torch.device] = None,
     ) -> None:
         path = Path(fixture_path)

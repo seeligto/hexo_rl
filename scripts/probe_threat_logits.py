@@ -25,7 +25,7 @@ Kill criterion (§85 / §89 of docs/07_PHASE4_SPRINT_LOG.md, revised §91):
         Catches catastrophic decode/mapping bugs without gating training.
         Drift > 5.0 nats prints a WARNING line in the report; does not fail.
 
-  Bootstrap baseline numbers come from fixtures/threat_probe_baseline.json
+  Bootstrap baseline numbers come from tests/fixtures/threat_probe_baseline.json
   (schema v2), written once by `make probe.bootstrap --write-baseline`. If
   that file is absent, probe prints FAIL with "no baseline recorded".
 
@@ -78,7 +78,7 @@ THRESH_EXT_LOGIT_DRIFT_WARN: float = 5.0  # |Δ ext_logit_mean| > 5.0 → warnin
 BASELINE_SCHEMA_VERSION: int = 6  # v6: fixture regenerated from real mid/late positions (§105 Q27 Probe 1b)
 
 # Canonical baseline file (generated once via --write-baseline).
-BASELINE_JSON_PATH: Path = REPO_ROOT / "fixtures" / "threat_probe_baseline.json"
+BASELINE_JSON_PATH: Path = REPO_ROOT / "tests" / "fixtures" / "threat_probe_baseline.json"
 
 # Fixed seed for deterministic inference (same value every run).
 _PROBE_SEED: int = 42
@@ -586,8 +586,8 @@ def main() -> None:
     parser.add_argument(
         "--positions",
         type=Path,
-        default=REPO_ROOT / "fixtures" / "threat_probe_positions.npz",
-        help="Path to fixture NPZ (default: fixtures/threat_probe_positions.npz).",
+        default=REPO_ROOT / "tests" / "fixtures" / "threat_probe_positions.npz",
+        help="Path to fixture NPZ (default: tests/fixtures/threat_probe_positions.npz).",
     )
     parser.add_argument(
         "--write-baseline",
@@ -644,8 +644,8 @@ def main() -> None:
         fixture_path = args.positions
         # Use encoding-specific fixture if default path is the v6 default and
         # a matching encoding-specific fixture exists.
-        if fixture_path == REPO_ROOT / "fixtures" / "threat_probe_positions.npz":
-            enc_fixture = REPO_ROOT / "fixtures" / f"threat_probe_positions_{args.encoding}.npz"
+        if fixture_path == REPO_ROOT / "tests" / "fixtures" / "threat_probe_positions.npz":
+            enc_fixture = REPO_ROOT / "tests" / "fixtures" / f"threat_probe_positions_{args.encoding}.npz"
             if enc_fixture.exists():
                 fixture_path = enc_fixture
 

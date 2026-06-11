@@ -19,7 +19,7 @@ reads ≈ 2.2–4.0 nat per ply, the collapsed curr_10k reads ≈ 5.4–5.7.
 Full-softmax entropy would put both models near `log(362) ≈ 5.89` on the
 pathological checkpoints, masking the very signal we care about.
 
-Fixture layout (``fixtures/early_game_probe_v1.npz``):
+Fixture layout (``tests/fixtures/early_game_probe_v1.npz``):
 
     states    : (N, 8, 19, 19)   float16  — HEXB v6 8-plane slice of GameState.to_tensor()
     plies     : (N,)             int32    — ply index for each state (0, 1, 2, …)
@@ -53,8 +53,8 @@ REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 
 def _fixture_path_for_encoding(encoding_name: str) -> Path:
     if encoding_name == "v6":
-        return REPO_ROOT / "fixtures" / "early_game_probe_v1.npz"
-    return REPO_ROOT / "fixtures" / f"early_game_probe_{encoding_name}_v1.npz"
+        return REPO_ROOT / "tests" / "fixtures" / "early_game_probe_v1.npz"
+    return REPO_ROOT / "tests" / "fixtures" / f"early_game_probe_{encoding_name}_v1.npz"
 
 
 DEFAULT_FIXTURE_PATH: Path = _fixture_path_for_encoding("v6")

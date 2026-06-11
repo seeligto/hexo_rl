@@ -49,7 +49,7 @@ def test_v6_forward_byte_parity_vs_baseline():
 
     Load-bearing test for the 9 v8-string-equality retires: if any
     substitution accidentally changes v6 routing, this fails. Fixture
-    captured at HEAD 28878fc via tools/generate_p1_fixture.py.
+    captured at HEAD 28878fc via scripts/generate_p1_fixture.py.
     """
     baseline = torch.load(
         "tests/fixtures/p1_v6_forward_baseline.pt", weights_only=True

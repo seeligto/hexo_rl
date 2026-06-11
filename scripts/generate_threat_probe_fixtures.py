@@ -1,7 +1,7 @@
 """
 Generate threat-probe fixture positions for scripts/probe_threat_logits.py.
 
-NPZ schema (fixtures/threat_probe_positions.npz):
+NPZ schema (tests/fixtures/threat_probe_positions.npz):
   states:           (N, P, T, T) float16 — K=0 cluster window tensor
   side_to_move:     (N,) int8           — 1 = P1, -1 = P2 (current player at position)
   ext_cell_idx:     (N,) int32          — flat index [0, T²) into T×T threat logit map;
@@ -19,15 +19,15 @@ Indexing convention:
 Regeneration commands (from repo root):
   # From self-play game records (recommended for production fixtures):
   .venv/bin/python scripts/generate_threat_probe_fixtures.py \\
-      --run-dir runs/<run_name> --output fixtures/threat_probe_positions.npz
+      --run-dir runs/<run_name> --output tests/fixtures/threat_probe_positions.npz
 
   # Synthetic positions (no game records needed; good for CI/testing):
   .venv/bin/python scripts/generate_threat_probe_fixtures.py \\
-      --synthetic --output fixtures/threat_probe_positions.npz
+      --synthetic --output tests/fixtures/threat_probe_positions.npz
 
   # Scan all available run directories automatically:
   .venv/bin/python scripts/generate_threat_probe_fixtures.py \\
-      --output fixtures/threat_probe_positions.npz
+      --output tests/fixtures/threat_probe_positions.npz
 """
 
 from __future__ import annotations
@@ -386,8 +386,8 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=REPO_ROOT / "fixtures" / "threat_probe_positions.npz",
-        help="Output NPZ path (default: fixtures/threat_probe_positions.npz).",
+        default=REPO_ROOT / "tests" / "fixtures" / "threat_probe_positions.npz",
+        help="Output NPZ path (default: tests/fixtures/threat_probe_positions.npz).",
     )
     parser.add_argument(
         "--n-positions",

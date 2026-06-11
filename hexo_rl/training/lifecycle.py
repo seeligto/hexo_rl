@@ -243,7 +243,8 @@ def build_subsystems(
     value_probe: Optional[ValueProbe] = None
     if instrumentation_enabled:
         fixture_path = Path(instr_cfg_main.get(
-            "value_probe_fixture", "fixtures/value_probe_50.npz",
+            "value_probe_fixture",
+            str(Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "value_probe_50.npz"),
         ))
         try:
             value_probe = ValueProbe(fixture_path=fixture_path, device=device)

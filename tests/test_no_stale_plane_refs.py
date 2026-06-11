@@ -44,7 +44,7 @@ EXCLUDE = (
     # agent memory files — not source, not reviewed
     '.claude/',
     # historical fixture changelog — documents v1→v6 24-plane→18-plane migration
-    'fixtures/threat_probe_baseline.CHANGELOG.md',
+    'tests/fixtures/threat_probe_baseline.CHANGELOG.md',
     # zero_chain_planes handler for legacy 24-plane fixtures (intentional backward-compat code path)
     'scripts/probe_threat_logits.py',
     # gitignored research/investigation artifacts (spikes, audits) — not committed source

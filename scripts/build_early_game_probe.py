@@ -1,6 +1,6 @@
 """One-shot regenerator for the early-game probe fixture.
 
-Writes `fixtures/early_game_probe_v1.npz`. The fixture is deterministic —
+Writes `tests/fixtures/early_game_probe_v1.npz`. The fixture is deterministic —
 running this twice produces byte-identical output — so commit the result
 to the repo and let `EarlyGameProbe` load it on every subsequent run.
 
