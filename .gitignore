@@ -30,16 +30,10 @@ htmlcov/
 
 # Data / checkpoints (large, generated)
 data/
-!data/**/.gitkeep
 # Investigative/local-only — never committed
 reports/**
-!reports/FINDINGS_SUMMARY.md
-!reports/sprint_archive/
-!reports/sprint_archive/**
 investigation/
 archive/
-!scripts/archive/
-!scripts/archive/**
 checkpoints/
 logs/
 logs/scrape_history.log
@@ -194,31 +188,20 @@ scripts/diagnosis/prelong_triage_analyze.py
 scripts/diagnosis/sealbot_selfplay_t1.py
 docs/compression/
 
-# ── intentionally tracked despite gitignore patterns (PIN-1 + active docs) ─
-# audit/ is a dir-level ignore: descent requires un-ignoring the dir, then
-# re-ignoring its contents so only the pinned file is exposed (minimal set).
-!/audit/
-/audit/*
-!/audit/structural/
-/audit/structural/*
-!audit/structural/compound_turn_pipeline_audit.md
+# sprint log: line above in "Docs" section ignores it; this re-exposes it (pair stays)
 !docs/07_PHASE4_SPRINT_LOG.md
-# reports/** ignores subdirectories themselves — dir negations enable descent;
-# contents stay matched by reports/** except the pinned files below.
-!reports/audit_2026-04-30/
-!reports/audit_2026-04-30/W1D_q49_dirichlet_rotation.md
-!reports/investigations/
-!reports/investigations/dexploit_handoff_20260606.md
-!reports/investigations/exploit_probe_20260606.md
-!reports/investigations/exploit_probe_design_20260606.md
-!reports/investigations/finishing_discriminator_20260606.md
-!reports/phase_b/
-!reports/phase_b/v7full_selfplay/
-!reports/phase_b/v7full_selfplay/baseline.md
-!reports/s176_phase_b_prompt.md
 
 # ── D-REPOCLEAN P3: docs/archive/ holds archived closed-sprint docs and IS
 #    tracked. Negations placed last so they also beat the unanchored archive/
 #    and audit/ dir rules and the *.jsonl rule for archived artifacts.
 !docs/archive/
 !docs/archive/**
+
+# ── D-REPOSTRUCT G2/G4 untracked leftovers (local copies preserved per D3) ──
+/releases/
+scripts/perf/
+scripts/eval_a3_pma_global.sh
+scripts/eval_gpool_bias.sh
+scripts/pretrain_gpool_bias.sh
+scripts/probe_tf32_channels_last.py
+scripts/migrations/2026_05_12_checkpoint_manifest.json

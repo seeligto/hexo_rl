@@ -192,19 +192,23 @@ Desktop RTX 3070 numbers differ — see `docs/rules/perf-targets.md`.
 
 | Metric | Baseline (n=5 median) | Target |
 |---|---|---|
-| MCTS (CPU only, no NN) | 88,006 sim/s | ≥ 73,000 sim/s |
-| NN inference (batch=64) | 4,871 pos/s | ≥ 4,000 pos/s |
-| NN latency (batch=1)   | 2.68 ms      | ≤ 3.5 ms |
-| Buffer push            | 862,037 pos/s | ≥ 525,000 pos/s |
-| Worker throughput      | 33,565 pos_gen/hr¹ | ≥ 20,000 pos_gen/hr |
+| MCTS (CPU only, no NN) | 90,028 sim/s | ≥ 73,000 sim/s |
+| NN inference (batch=64) | 4,874 pos/s | ≥ 4,000 pos/s |
+| NN latency (batch=1)   | 2.59 ms      | ≤ 3.5 ms |
+| Buffer push            | 843,914 pos/s | ≥ 525,000 pos/s |
+| Worker throughput      | 24,086 pos_gen/hr¹ | ≥ 20,000 pos_gen/hr |
 | GPU utilization        | 100%         | ≥ 85% |
 
 ¹ §128: metric is `positions_generated` (plies/hr, continuous). Old metric
 `positions_pushed` (177,799/hr) counted K≈7 cluster views × plies; divide by 7.
 Desktop n=5 confirmed: 27,835 pos_gen/hr, IQR 8.6%, no bimodal artifacts.
 
-Methodology: median of n=5 runs, 90s worker warm-up. `make bench` reproduces.
-Baselines re-floored at §S182 (2026-05-22 engine rework, +66.4% MCTS); targets per
+Numbers: `make bench` 2026-06-11, median of n=5 runs, 90s worker warm-up, on the
+primary bench reference host — laptop AMD Ryzen 7 8845HS (16 threads) + RTX 4060
+Laptop GPU (8 GB VRAM). Worker throughput is a documented-bimodal metric (IQR up
+to ±26% across sessions). Full 10-metric gate, per-host notes, and the remote
+vast 5080 + Ryzen 9 9900X numbers live in `docs/rules/perf-targets.md`.
+Baselines re-floored at §S182 (2026-05-22 engine rework, +66.4% MCTS); floors per
 `docs/rules/perf-targets.md`.
 
 ### Tuning a new GPU box
