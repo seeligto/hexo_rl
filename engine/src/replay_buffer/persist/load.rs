@@ -1,6 +1,7 @@
-//! HEXB v8 + v7 + v6 load path for `ReplayBuffer::load_from_path_impl`.
-//! v8 added `position_index: u16` per-row (§S181 Wave 4 4B-impl-1); v7 files
-//! load with position_index defaulted to 0.
+//! HEXB v9 + v8 + v7 + v6 load path for `ReplayBuffer::load_from_path_impl`.
+//! v9 added `value_target_valid: u8` per-row (§D-PROMOGATE persist fix); v8
+//! added `position_index: u16` per-row (§S181 Wave 4 4B-impl-1); older files
+//! load with value_target_valid defaulted to 1 and position_index to 0.
 //!
 //! Extracted from `engine/src/replay_buffer/persist.rs` at cycle 3 P68 Wave 7
 //! Batch E as a pure module split. The save path + HEXB constants + module
@@ -60,9 +61,10 @@ impl ReplayBuffer {
         let _saved_capacity: usize;
         let saved_size: usize;
 
-        if version == 8 || version == 7 {
-            // v7/v8 header: n_planes, capacity, size, encoding_name_len, encoding_name
-            // v8 adds per-row position_index; header layout otherwise identical.
+        if (7..=9).contains(&version) {
+            // v7/v8/v9 header: n_planes, capacity, size, encoding_name_len, encoding_name
+            // v8 adds per-row position_index, v9 per-row value_target_valid;
+            // header layout otherwise identical.
             r.read_exact(&mut buf4)
                 .map_err(|e| format!("{e}"))?;
             saved_n_planes = u32::from_le_bytes(buf4) as usize;
@@ -179,9 +181,14 @@ impl ReplayBuffer {
         // v6/v7 entry: state + chain + policy + outcome(4) + game_id(8) + weight(2)
         //              + ownership + winning_line + is_full_search(1)
         // v8 entry: above + position_index(2)
+        // v9 entry: above + value_target_valid(1)
         let v7_entry_bytes = state_bytes + chain_bytes + policy_bytes + 4 + 8 + 2
             + aux_stride + aux_stride + 1;
-        let entry_bytes = if version == 8 { v7_entry_bytes + 2 } else { v7_entry_bytes };
+        let entry_bytes = match version {
+            9 => v7_entry_bytes + 2 + 1,
+            8 => v7_entry_bytes + 2,
+            _ => v7_entry_bytes,
+        };
 
         // Skip oldest entries
         if to_skip > 0 {
@@ -266,22 +273,29 @@ impl ReplayBuffer {
                 .map_err(|e| format!("{e}"))?;
             self.is_full_search[slot] = buf1[0];
 
-            // DRAW-MASK (Phase 6) — value_target_valid is NOT persisted to the
-            // on-disk HEXB format (no format bump). On load it defaults to 1
-            // (supervise value). ACCEPTABLE SHORTCUT: the 30k re-measure is a
-            // FRESH run (no buffer resume), so a saved+reloaded buffer's pre-cap
-            // masking is never relied on in practice. `new()` already inits the
-            // column to all-ones, so no explicit write is needed here.
-
             // §S181-AUDIT Wave 4 4B-impl-1 — position_index per row (v8+ only).
             // v6/v7 files default position_index to 0 (aux loss masks pretrain rows).
-            if version == 8 {
+            if version >= 8 {
                 let mut buf2 = [0u8; 2];
                 r.read_exact(&mut buf2)
                     .map_err(|e| format!("{e}"))?;
                 self.position_indices[slot] = u16::from_le_bytes(buf2);
             } else {
                 self.position_indices[slot] = 0;
+            }
+
+            // DRAW-MASK / §D-PROMOGATE — value_target_valid per row (v9+ only).
+            // The pre-v9 "acceptable shortcut" dropped the column (defaulted 1 =
+            // supervise), so a continue-from-ckpt buffer restore supervised
+            // previously ply-capped rows at z=ply_cap_value. v9 persists it.
+            // Older versions default to 1 explicitly (the destination buffer may
+            // be reused, so relying on `new()`'s all-ones init is not enough).
+            if version == 9 {
+                r.read_exact(&mut buf1)
+                    .map_err(|e| format!("{e}"))?;
+                self.value_target_valid[slot] = buf1[0];
+            } else {
+                self.value_target_valid[slot] = 1;
             }
 
             // Update weight histogram

@@ -1,9 +1,9 @@
-//! HEXB v8 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
+//! HEXB v9 on-disk format for `ReplayBuffer` — `save_to_path_impl` and
 //! `load_from_path_impl`.
 //!
 //! Format (little-endian native):
 //!   [magic: u32 = 0x48455842]  ("HEXB")
-//!   [version: u32 = 8]
+//!   [version: u32 = 9]
 //!   [n_planes: u32]            (redundant sanity field, must equal encoding.n_planes)
 //!   [capacity: u64]
 //!   [size: u64]
@@ -20,11 +20,18 @@
 //!     winning_line:   AUX_STRIDE × u8
 //!     is_full_search: u8
 //!     position_index: u16                    (NEW in v8; §S181 Wave 4 4B-impl-1)
+//!     value_target_valid: u8                 (NEW in v9; §D-PROMOGATE persist fix)
+//!
+//! v8 backward compatibility:
+//!   v8 files lack value_target_valid. On load, version==8 → defaults the column
+//!   to 1 (supervise value) for every row. NB this is exactly the pre-v9 footgun:
+//!   a v8 buffer resumed via continue-from-ckpt supervises previously ply-capped
+//!   rows at z=ply_cap_value. Re-save writes v9.
 //!
 //! v7 backward compatibility:
 //!   v7 files lack position_index. On load, version==7 → defaults position_index to 0
 //!   for every row. Aux loss masks pretrain rows so the dummy zeros don't pollute
-//!   training. Re-save writes v8.
+//!   training. Re-save writes v8+ fields.
 //!
 //! v6 backward compatibility:
 //!   v6 files lack the encoding_name field. On load, version==6 → assumed
@@ -46,7 +53,7 @@ use super::ReplayBuffer;
 mod load;
 
 pub(crate) const HEXB_MAGIC: u32 = 0x4845_5842; // "HEXB"
-pub(crate) const HEXB_VERSION: u32 = 8;
+pub(crate) const HEXB_VERSION: u32 = 9;
 
 impl ReplayBuffer {
     /// Save buffer contents to a binary file in HEXB v7 format.
@@ -153,6 +160,10 @@ impl ReplayBuffer {
             // §S181-AUDIT Wave 4 4B-impl-1 (HEXB v8): position_index u16
             w.write_all(&self.position_indices[slot].to_le_bytes())
                 .map_err(|e| PyIOError::new_err(e.to_string()))?;
+            // §D-PROMOGATE (HEXB v9): value_target_valid u8 — capped rows must
+            // stay masked across a continue-from-ckpt buffer restore.
+            w.write_all(&[self.value_target_valid[slot]])
+                .map_err(|e| PyIOError::new_err(e.to_string()))?;
         }
 
         w.flush().map_err(|e| PyIOError::new_err(e.to_string()))?;
@@ -240,11 +251,11 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// DRAW-MASK (Phase 6) — per-row `value_target_valid` column round-trip
-    /// (in-memory; the column is intentionally NOT persisted — documented
-    /// shortcut). Pushes a capped row (value_target_valid=0) plus a default
-    /// row, then asserts the accessor reads back the stamped values. Mirrors
-    /// the `is_full_search` round-trip contract.
+    /// DRAW-MASK (Phase 6) — per-row `value_target_valid` column in-memory
+    /// accessor contract (persisted since HEXB v9 — see
+    /// `test_value_target_valid_v9_roundtrip`). Pushes a capped row
+    /// (value_target_valid=0) plus a default row, then asserts the accessor
+    /// reads back the stamped values. Mirrors the `is_full_search` contract.
     #[test]
     fn test_value_target_valid_column_in_memory() {
         let mut buf = ReplayBuffer::new(8, "v6");
@@ -263,11 +274,85 @@ mod tests {
         assert_eq!(buf.is_full_search_at(1), 1,
             "value-mask must not touch is_full_search (policy target kept)");
 
-        // Documented persist shortcut: the column is NOT written to disk and
-        // defaults to 1 on load. Confirm a fresh buffer inits to all-ones.
+        // Confirm a fresh buffer inits the column to all-ones (supervise).
         let buf2 = ReplayBuffer::new(8, "v6");
         assert_eq!(buf2.value_target_valid_at(0), 1,
             "fresh buffer must default value_target_valid to 1 (supervise)");
+    }
+
+    /// §D-PROMOGATE persist fix (HEXB v9) — `value_target_valid` must survive a
+    /// save→load round-trip. The v8 "acceptable shortcut" dropped the column on
+    /// load (defaulted to 1 = supervise), so a continue-from-RL-ckpt buffer
+    /// auto-restore (known footgun, project_buffer_persist_guard_bypass) would
+    /// silently supervise previously-capped rows at z=ply_cap_value.
+    #[test]
+    fn test_value_target_valid_v9_roundtrip() {
+        let mut buf = ReplayBuffer::new(8, "v6");
+        buf.push_for_test(0.5, 30, true); // normal row — supervise
+        buf.push_for_test(0.0, 30, true); // ply-capped row — masked below
+        buf.value_target_valid[1] = 0;
+
+        let path = unique_test_path("vv_v9_roundtrip");
+        buf.save_to_path(path.to_str().unwrap()).unwrap();
+
+        let mut buf2 = ReplayBuffer::new(8, "v6");
+        // Poison the destination column to prove load WRITES it per-row rather
+        // than inheriting the fresh-buffer all-ones init.
+        buf2.value_target_valid[0] = 0;
+        let n = buf2.load_from_path_impl(path.to_str().unwrap()).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(buf2.value_target_valid_at(0), 1,
+            "uncapped row must reload as supervise (1)");
+        assert_eq!(buf2.value_target_valid_at(1), 0,
+            "ply-capped row must stay masked (0) across save/load round-trip");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// §D-PROMOGATE — v8 backward compat: a legacy v8 file (no value_target_valid
+    /// byte) must load with the column explicitly defaulted to 1 (supervise),
+    /// overwriting any stale values in a reused destination buffer.
+    #[test]
+    fn test_value_target_valid_v8_file_defaults_to_supervise() {
+        use std::io::Write;
+
+        let path = unique_test_path("vv_v8_compat");
+        {
+            let mut file = std::fs::File::create(&path).unwrap();
+            // v8 header: magic, version=8, n_planes=8, capacity=10, size=2, name "v6"
+            file.write_all(&HEXB_MAGIC.to_le_bytes()).unwrap();
+            file.write_all(&8u32.to_le_bytes()).unwrap();
+            file.write_all(&8u32.to_le_bytes()).unwrap();
+            file.write_all(&10u64.to_le_bytes()).unwrap();
+            file.write_all(&2u64.to_le_bytes()).unwrap();
+            file.write_all(&2u32.to_le_bytes()).unwrap();
+            file.write_all(b"v6").unwrap();
+
+            // v8 entry: state + chain + policy + outcome(4) + game_id(8) +
+            //           weight(2) + own + wl + is_full_search(1) + position_index(2)
+            let state_stride = 8 * 361;
+            let chain_stride = 6 * 361;
+            let policy_stride = 362;
+            let aux_stride = 361;
+            let entry_bytes = state_stride * 2 + chain_stride * 2 + policy_stride * 4
+                + 4 + 8 + 2 + aux_stride + aux_stride + 1 + 2;
+            for _ in 0..2 {
+                file.write_all(&vec![0u8; entry_bytes]).unwrap();
+            }
+        }
+
+        let mut buf = ReplayBuffer::new(10, "v6");
+        // Stale mask in the destination — load must overwrite, not inherit.
+        buf.value_target_valid[0] = 0;
+        buf.value_target_valid[1] = 0;
+        let n = buf.load_from_path_impl(path.to_str().unwrap()).unwrap();
+        assert_eq!(n, 2, "v8 compat: expected 2 positions");
+        assert_eq!(buf.value_target_valid_at(0), 1,
+            "v8 file row must default value_target_valid to 1 (supervise)");
+        assert_eq!(buf.value_target_valid_at(1), 1,
+            "v8 file row must default value_target_valid to 1 (supervise)");
+
+        let _ = std::fs::remove_file(path);
     }
 
     /// §S181-AUDIT Wave 4 4B-impl-1 — explicit per-row position_index round-trip
