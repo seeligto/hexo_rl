@@ -880,6 +880,24 @@ class Trainer:
             batch_n=batch_n, n_pretrain=n_pretrain,
         )
 
+        # §D-VALPROBE Phase 3 — explicit value-axis decomposition (logging-only;
+        # derived from already-computed scalars, zero effect on training math).
+        # value_loss has always been the main BCE term; the uncertainty/aux keys
+        # below are the WEIGHTED contributions as they enter the total, so
+        # value_loss_composite == main + uncertainty + aux exactly.
+        result["value_loss_main"] = result["value_loss"]
+        result["value_loss_uncertainty"] = (
+            uncertainty_weight * result["uncertainty_loss"] if use_uncertainty else 0.0
+        )
+        result["value_loss_aux"] = (
+            aux_weight * result["opp_reply_loss"] if use_aux else 0.0
+        )
+        result["value_loss_composite"] = (
+            result["value_loss_main"]
+            + result["value_loss_uncertainty"]
+            + result["value_loss_aux"]
+        )
+
         interval = int(self.config.get("checkpoint_interval", 100))
         if self.step % interval == 0:
             self.save_checkpoint(result)
@@ -891,6 +909,10 @@ class Trainer:
             total_loss=result["loss"],
             policy_loss=result["policy_loss"],
             value_loss=result["value_loss"],
+            value_loss_main=result["value_loss_main"],
+            value_loss_uncertainty=result["value_loss_uncertainty"],
+            value_loss_aux=result["value_loss_aux"],
+            value_loss_composite=result["value_loss_composite"],
             aux_loss=result.get("opp_reply_loss"),
             uncertainty_loss=result.get("uncertainty_loss"),
             ownership_loss=result.get("ownership_loss"),
