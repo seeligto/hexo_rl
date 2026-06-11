@@ -6102,3 +6102,76 @@ blindness. L: write confirming-run verdict bands to a timestamped artifact BEFOR
 registration was honored but unverifiable post-hoc). L: a zero-promotion run silently turns "live
 self-play distribution" into "frozen bootstrap-play distribution" — check promotion count before any
 regime claim about live games.
+
+## §D-PROMOGATE — why zero promotions: the dead self-improvement loop (critical path) — 2026-06-11
+
+Dispatcher: diagnose run e928c854's ZERO promotions (gate broken vs eval degenerate vs honest);
+pre-registered PG-DEGENERATE/PG-WIRING/PG-HONEST + AB-CONFOUND + PERSIST-FIX; only the XS persist
+fix lands. Forensics: 4 parallel agents (Arm C trace / golong trace / wiring / degeneracy repro) +
+orchestrator-resolved discrepancy; review = 1 process + 3 default-refute red-team lenses, all
+PASS_WITH_NOTES, must-fixes folded. Full: `reports/investigations/promogate_2026-06-11.md`
+(+ dispatcher-§2 appendix archived there; registration artifact for the confirming probe written
+to vast `tmp/promogate/` BEFORE launch, timestamp-forensics-verified).
+
+**VERDICT — PG-WIRING-PARTIAL + out-of-taxonomy incumbent defect (primary); PG-DEGENERATE REFUTED
+(measured); PG-HONEST NOT CLAIMABLE.** The machinery's components are sound (gate arithmetic
+correct at the one completed decision; §D-EVALFOUND rewire intact; atomic write; single weight-sync
+site eval_drain.py:63; silent promotion not constructible — promoted:true=0, best_model.pt mtime
+98.9s pre-run, ALL 25,103 game_complete events model_version (0,0,1)). Three structural defects:
+**W1 cadence/truncation** — best stride 2 × interval 12500 × --iterations 50000 → 2 capable rounds
+{25k, 50k}; terminal round lands on the stop boundary BY CONSTRUCTION and the 900s final-drain
+(D-012 fix PRESENT, FIRED, ~16× undersized: round-2 = 14,604s incl. configured 11,032s sims=1
+anchor cell) killed it at sealbot 99/100 → nnue + offwindow stride-4 ALSO lost → zero Objective-A
+reads all run → net ONE promotion decision per 50k. W1 fired in golong too (87.5k + 112.5k evals
+truncated) — golong lost no DECISIONS only by odd-round parity luck. **W2 stale incumbent+generator**
+— best_model.pt ≡ golong checkpoint_00050000_PEAK_sb0.38 (147/147 tensors, diff 0; NOT bootstrap);
+restore-resurrect hole fired TWICE pre-AB (a8da 21:07 → s1smoke archive sweep 22:34 → ad0e3535
+22:35); via graduation-gate sync (anchor.py:264, in_channels 4==4, no skip event) **ALL 25,103
+self-play games were golong@50k-PEAK-generated** — behavioral fingerprint confirms (e928 dist ≡
+2ddd 50k-PEAK window: 82.5/77/0.062/0.062/49.5% vs 82.5/77/0.063/0.062/49.8%; ≫σ from 30k-play).
+Corollary: a8da S1-smoke selfplay also 50k-PEAK-generated — re-check S1-smoke reads assuming
+bootstrap-play. **W3** promotion save drops step (best_model_loaded step=0) — latent in golong legs
+2-3 too. **Degeneracy MEASURED ABSENT:** gate cell reproduced exactly (25k ckpt vs best, n=50,
+T=0.5 both, seeds 42..91, 0 opening plies): 50/50 distinct games (round_robin dedupe; dup 1.0;
+47 distinct 4-ply prefixes) — §D-ARGMAX disease not in this path; effective n ≈ 50. New instrument
+hazards: fixed seed schedule (repeat evals not independent); GPU co-tenancy moved same-seed WR
+0.36→0.52 (p≈0.11); n=50+CI-guard dead band 0.55-0.62 (promote prob 0.127-0.447). **Power:** de
+facto bar 32/50 (=0.64 obs; Wilson-lo>0.5), P(promote|0.55)=0.127, 80% power at true ≈0.685, MDE
++0.185; at design n=400 the guard is benign (bar≈0.55) — the inflation is the variant's n=50
+override × guard = power misdesign. PG-HONEST blocked: incumbent wasn't bootstrap (one wrong-config
+read vs true bootstrap 0.60 @ 12/20 sims=1 leaves it OPEN) + single attempt + power.
+
+**AB-CONFOUND POSITIVE → A/B-INVALID-AS-RUN** (dispatcher routing): golong promoted 2/4 capable
+rounds (50k: wr 0.65 n=100, write deferred to 53432, +305ms after manual Ctrl+C, drain-rescued,
+NOT the wave3 abort [that was leg-2 @87.5k]; 75k: wr 0.60 lo 0.5020 EXACTLY at-bar during sealbot
+0.05 colony transient, g4 FAIL); generator advanced 30k→50k→75k-era while Arm C froze; arms differ
+on launch ckpt (30k-warm vs bootstrap), incumbent, instrument (bar 0.60@n100 vs 0.64@n50 — confound
+runs both directions), cadence. GREENLIGHT waits for fixed-loop Arm C or operator re-scope.
+
+**Confirming probe (pre-registered bands reused verbatim):** standalone gen at the TRUE generator
+weights (best_model.pt, 450 games) → kept-mean **54.7 [52.8, 56.6]** plies, IN the 35-56 band →
+weight identity REFUTED at correct weights; §D-VALCEIL "generation-PATH divergence" STANDS
+(+ disclosed strengthening: CI disjoint from bootstrap-run 59.7 [57.2,62.2]; 74-84 band ~20 SE
+away; live 78 vs standalone 54.7 at same weights+config). Rust seed-pluggable trace escalation
+STANDS. Side-finding: fixture self-check REFUSED the bank — golong@50k-PEAK sign_acc **0.537** on
+its OWN games (§S181 value-collapse signature measured directly on the live generator; guard
+message "perspective-flipped" is direction-ambiguous). Standalone: ZERO ply-capped games vs live
+15.6% capped rows — another path fingerprint. **Regime re-stamp:** §D-VALPROBE/§D-VALCEIL livetail
+label "bootstrap-play" → **"golong@50k-PEAK-play"** (verdict letters stand; labels change; value
+investigation stays HELD).
+
+**PERSIST-FIX LANDED:** HEXB v9 persists value_target_valid (`cd3da49` fix + `c60e600` hygiene);
+TDD (RED verified via poisoned destination; v8-compat test mutation-checked); make test green
+(1968 py + full rust, reviewer re-ran fresh); bench gate PASS n=5 pre/post (10/10 targets, no >5%
+regression; one spurious batch-fill FAIL did not reproduce — §102 single-run rule);
+preflight.sh + compute_threat_pos_weight.py verified v9-safe; no Python row-byte parser.
+
+Routing (operator-gated, design-only): size final-drain from measured round wall-clock or set
+--iterations = N·interval+1; preflight MUST pin/assert incumbent sha (auto-restore is correct for
+continuation, wrong across experiment boundaries); persist step+encoding in promotion save; for
+50k A/Bs consider best stride 1 + per-round seed rotation + banking eval game records. L: "frozen
+weights" ≠ "init weights" — pin the generator by tensor identity, the graduation gate syncs
+self-play to the ANCHOR; L: schedule shape IS promotion capacity (parity of capable rounds vs stop
+step); L: a fixed eval seed schedule makes repeat evals deterministic functionals — co-tenancy
+alone moved a 50-game WR by 0.16; L: pre-registered taxonomies need an "experiment-validity defect"
+bucket — the biggest finding here fell outside all three registered verdicts.
