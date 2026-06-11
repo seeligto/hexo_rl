@@ -57,7 +57,6 @@ deploy/
 hexo_rl/bootstrap/scraper.py
 scripts/scrape_daily.sh
 tests/test_scraper.py
-docs/rules/background-tasks.md
 docs/04_bootstrap_strategy.md
 docs/10_COMMUNITY_BOT_ANALYSIS.md
 docs/analysis/

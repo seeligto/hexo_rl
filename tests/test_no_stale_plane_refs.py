@@ -14,6 +14,8 @@ EXCLUDE = (
     # archived closed-sprint/investigation docs — historical records, exempt
     # like reports/ and audit/ (D-REPOCLEAN P3 moved them under this prefix)
     'docs/archive/',
+    # sprint archive moved from reports/ (D-REPOSTRUCT G1) — same historical exemption
+    'docs/sprint_archive/',
     'docs/07_PHASE4_SPRINT_LOG.md',
     'tests/test_no_stale_plane_refs.py',
     # historical release artifact — accurate record of v0.4.0 24-plane era
@@ -36,7 +38,7 @@ EXCLUDE = (
     # §115 moved CLAUDE.md Q25 entry here (historical context preserved)
     'docs/rules/phase-4-architecture.md',
     # FUTURE_REFACTORS.md tracks done/pending items including resolved 24-plane tasks
-    'FUTURE_REFACTORS.md',
+    'docs/FUTURE_REFACTORS.md',
     # torchinductor compiled cache — generated, not source
     '.torchinductor-cache/',
     # agent memory files — not source, not reviewed
