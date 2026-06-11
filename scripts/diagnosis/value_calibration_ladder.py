@@ -111,7 +111,10 @@ HEX_NEIGHBORS: Tuple[Tuple[int, int], ...] = (
 # ── metric kernels (pure, unit-tested in tests/test_value_calibration_metrics.py)
 
 
-def compute_metrics(v: np.ndarray, z: np.ndarray, draw_band: float) -> Dict[str, float]:
+def compute_metrics(
+    v: np.ndarray, z: np.ndarray, draw_band: float,
+    ece_bins: int = DEFAULTS["ece_bins"],
+) -> Dict[str, float]:
     """Core calibration metrics of value predictions v against outcomes z."""
     decided = np.abs(z) >= draw_band
     sign_acc = (
@@ -124,7 +127,7 @@ def compute_metrics(v: np.ndarray, z: np.ndarray, draw_band: float) -> Dict[str,
         "mae": float(np.mean(np.abs(v - z))),
         "value_std": float(np.std(v)),
         "value_mean": float(np.mean(v)),
-        "ece": expected_calibration_error(v, z),
+        "ece": expected_calibration_error(v, z, n_bins=ece_bins),
         "n_decided": int(decided.sum()),
     }
 
@@ -166,8 +169,10 @@ def tercile_masks(x: np.ndarray) -> Dict[str, np.ndarray]:
 def hex_component_count(plane: np.ndarray, threshold: float = 0.5) -> int:
     """Connected components of a binary stone plane under HEX adjacency.
 
-    Axial-coordinate neighbors: the six offsets in HEX_NEIGHBORS. The set is
-    invariant under (q,r) axis swap, so array orientation does not matter.
+    Axial-coordinate neighbors: the six offsets in HEX_NEIGHBORS — identical
+    to the engine's HEX_AXES± set. Window crops are pure translations of
+    axial coords (engine window_flat_idx_at_geom), so axial adjacency carries
+    to array indices unchanged.
     """
     occ = plane > threshold
     h, w = occ.shape
@@ -416,6 +421,7 @@ def main():
     ap.add_argument("--seed", type=int, default=DEFAULTS["seed"])
     ap.add_argument("--batch", type=int, default=DEFAULTS["batch"])
     ap.add_argument("--draw-band", type=float, default=DEFAULTS["draw_band"])
+    ap.add_argument("--ece-bins", type=int, default=DEFAULTS["ece_bins"])
     ap.add_argument("--min-sign-acc", type=float, default=DEFAULTS["min_sign_acc"],
                     help="perspective self-check floor on the best rung")
     ap.add_argument("--baseline-min-step", type=int, default=DEFAULTS["baseline_min_step"])
@@ -452,7 +458,7 @@ def main():
     for label, path in targets:
         model = load_model(path, args.encoding, device)
         v, v_logit = forward_values(model, st, args.batch, device)
-        m = compute_metrics(v, z, draw_band=args.draw_band)
+        m = compute_metrics(v, z, draw_band=args.draw_band, ece_bins=args.ece_bins)
         m["value_bce"] = bce_with_logits(v_logit, z)
         ph = phase_metrics(v, z, occ, draw_band=args.draw_band)
         sp = spread_bin_metrics(v, z, comps, draw_band=args.draw_band)

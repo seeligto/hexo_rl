@@ -18,6 +18,8 @@ scripts/diagnosis/ is a REGULAR Python package (has __init__.py). Import as:
 | new_probes.py, offwindow_placement_lift.py | §D-RECONVERGE/§D-EXTLINK→§D-MULTICLUSTER | 5222-5383 |
 | finishing_sims_sweep.py | §D-EXPLOIT | 5383+ |
 | value_calibration_ladder.py | §D-VALPROBE — fixture-agnostic value-calibration ladder (corpus/selfplay; E1-E2 + G1/G3 verdicts; kernels tested in tests/test_value_calibration_metrics.py) | — |
+| selfplay_fixture_gen.py | §D-VALPROBE — leak-free self-play fixture generator (WorkerPool at frozen ckpt; training-row K-cluster extraction; kernels tested in tests/test_selfplay_fixture_gen.py) | — |
+| fixture_valid_check.py | §D-VALPROBE — FIXTURE-VALID spread-overlap gate (live-run tail games vs fixture, same extractor) | — |
 
 ## CLOSED arcs (instruments retained for reference, no longer deployed)
 

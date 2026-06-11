@@ -885,6 +885,10 @@ class Trainer:
         # value_loss has always been the main BCE term; the uncertainty/aux keys
         # below are the WEIGHTED contributions as they enter the total, so
         # value_loss_composite == main + uncertainty + aux exactly.
+        # CAVEAT (review, §D-VALPROBE Phase 6): opp_reply aux is a POLICY-shaped
+        # head and can dominate the composite — read value_loss_composite as
+        # "total minus pure-policy accounting", NOT as value-head signal; the
+        # value-head signal is value_loss_main (+ value_loss_uncertainty).
         result["value_loss_main"] = result["value_loss"]
         result["value_loss_uncertainty"] = (
             uncertainty_weight * result["uncertainty_loss"] if use_uncertainty else 0.0
