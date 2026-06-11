@@ -77,6 +77,9 @@ def test_train_step_loss_is_finite(tmp_path: Path):
         "policy_entropy_recent",
         "policy_target_entropy_fastsearch",
         "policy_target_kl_uniform_fastsearch",
+        # §D-VALCEIL Q3: corpus slice is empty on the single-buffer path
+        # (n_pretrain=0) → per-source corpus keys are NaN by convention.
+        "value_accuracy_corpus", "value_bce_corpus",
     }
     for k, v in result.items():
         if k in _nan_allowed:
@@ -557,6 +560,9 @@ def test_train_step_recent_buffer_loss_is_finite(tmp_path: Path):
         "selfplay_model_entropy_batch",  # alias; NaN when selfplay undefined
         "policy_target_entropy_fastsearch",
         "policy_target_kl_uniform_fastsearch",
+        # §D-VALCEIL Q3: corpus slice is empty on the single-buffer path
+        # (n_pretrain=0) → per-source corpus keys are NaN by convention.
+        "value_accuracy_corpus", "value_bce_corpus",
     }
     for k, v in result.items():
         if k in _nan_allowed:

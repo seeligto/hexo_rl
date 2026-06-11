@@ -167,6 +167,97 @@ _ZERO_POLICY_TARGET_METRICS: Dict[str, float] = {
 }
 
 
+def compute_value_metrics_per_source(
+    v_logit: torch.Tensor,
+    outcomes: torch.Tensor,
+    value_mask: Optional[torch.Tensor],
+    n_pretrain: int,
+    decided_eps: float = 1e-3,
+) -> Dict[str, float]:
+    """§D-VALCEIL Q3 — per-source + masked value diagnostics (logging-only).
+
+    Resolves the §D-VALPROBE `value_accuracy` ANOMALY (batch 0.66 vs
+    component-predicted ~0.725): the headline ``value_accuracy`` is UNMASKED —
+    ``target_win = (z > 0)`` scores draw rows (z = draw_value, default −0.5)
+    and ply-capped rows (z = ply_cap_value; ``value_target_valid = 0``) as
+    "loss" targets, so non-decided rows deflate it relative to decided-row
+    winner-calling. This helper decomposes it WITHOUT touching any existing
+    key (curve continuity) or any tensor used for backward.
+
+    Source semantics — batch row order is ``[corpus(+bot) | recent |
+    uniform_self]``: "corpus" = rows ``[0, n_pretrain)``. §178 bot-corpus rows
+    are folded into ``n_pretrain`` upstream (step_coordinator passes
+    ``n_pretrain = n_pre + n_bot``) and are NOT separable here — the corpus
+    bucket includes them. "selfplay" = rows ``[n_pretrain, B)`` (recent +
+    uniform self-play).
+
+    Masking semantics:
+      - supervised = ``value_mask`` (DRAW-MASK Phase 6 ``value_target_valid``;
+        ``None`` ⇒ all rows, matching ``compute_value_loss``). Currently 0
+        only on ply-capped self-play rows; organic draws stay supervised.
+      - decided = ``|z| > 1 − decided_eps``: decisive games store exactly
+        ±1.0; ``draw_value`` and ``ply_cap_value`` lie strictly inside (−1, 1)
+        by config, so draws AND capped rows are excluded.
+      - ``value_accuracy_masked`` = accuracy over supervised AND decided rows.
+      - per-source accuracies stay UNMASKED so count-weighted recombination
+        reproduces the batch ``value_accuracy`` exactly.
+      - per-source BCE = mean per-row BCE-with-logits over SUPERVISED rows in
+        the slice (exact ``compute_value_loss`` semantics); weighted by the
+        ``*_supervised`` counts it recombines to ``value_loss``.
+
+    Empty slices report NaN (first-class signal, §101 convention) + count 0.
+    Cost: one per-row BCE + boolean masks on tensors already in memory.
+    """
+    with torch.no_grad():
+        # v_logit is (B, 1) (or already (B,)) — flatten to (B,). reshape(-1)
+        # avoids a bare positional plane slice (INV: no_positional_plane_slice).
+        logit = v_logit.reshape(-1).float()
+        z = outcomes.reshape(-1).float()
+        batch_n = int(z.numel())
+        n_pre = max(0, min(int(n_pretrain), batch_n))
+
+        correct = ((logit > 0).float() == (z > 0).float()).float()      # (B,)
+        per_row_bce = nn.functional.binary_cross_entropy_with_logits(
+            logit, (z + 1.0) / 2.0, reduction="none"
+        )                                                               # (B,)
+        supervised = (
+            value_mask.reshape(-1).bool()
+            if value_mask is not None
+            else torch.ones(batch_n, dtype=torch.bool, device=z.device)
+        )
+        decided = z.abs() > (1.0 - decided_eps)
+        masked_rows = supervised & decided
+
+        is_corpus = torch.zeros(batch_n, dtype=torch.bool, device=z.device)
+        is_corpus[:n_pre] = True
+        is_selfplay = ~is_corpus
+
+        def _mean_over(values: torch.Tensor, mask: torch.Tensor) -> tuple[float, int]:
+            n = int(mask.sum().item())
+            if n == 0:
+                return float("nan"), 0
+            return values[mask].mean().item(), n
+
+        acc_masked, n_masked = _mean_over(correct, masked_rows)
+        acc_corpus, _ = _mean_over(correct, is_corpus)
+        acc_selfplay, _ = _mean_over(correct, is_selfplay)
+        bce_corpus, n_corpus_sup = _mean_over(per_row_bce, is_corpus & supervised)
+        bce_selfplay, n_selfplay_sup = _mean_over(per_row_bce, is_selfplay & supervised)
+
+        return {
+            "value_accuracy_masked":          acc_masked,
+            "value_accuracy_corpus":          acc_corpus,
+            "value_accuracy_selfplay":        acc_selfplay,
+            "value_bce_corpus":               bce_corpus,
+            "value_bce_selfplay":             bce_selfplay,
+            "value_rows_corpus":              n_pre,
+            "value_rows_selfplay":            batch_n - n_pre,
+            "value_rows_masked":              n_masked,
+            "value_rows_corpus_supervised":   n_corpus_sup,
+            "value_rows_selfplay_supervised": n_selfplay_sup,
+        }
+
+
 def build_param_groups(model: nn.Module, weight_decay: float) -> list:
     """Split params for AdamW weight decay: 1D params + biases skip decay.
 
@@ -825,6 +916,13 @@ class Trainer:
             target_win = (outcomes_t > 0).float()
             value_accuracy = (pred_win == target_win).float().mean().item()
 
+            # §D-VALCEIL Q3 — per-source + masked value decomposition
+            # (logging-only; reads tensors already in memory, zero effect on
+            # training math). Source/masking semantics documented on the helper.
+            value_metrics_per_source = compute_value_metrics_per_source(
+                v_logit, outcomes_t, value_mask_t, n_pretrain,
+            )
+
             # Policy target entropy: mean entropy (nats) of the MCTS policy target
             # distribution over the batch, computed only over non-zero-policy rows.
             # Mask matches the policy loss mask for consistency.
@@ -902,6 +1000,14 @@ class Trainer:
             + result["value_loss_aux"]
         )
 
+        # §D-VALCEIL Q3 — per-source masked value keys (logging-only; NEW keys
+        # only, no existing key renamed/altered — curve continuity). Invariant:
+        # count-weighted value_accuracy_{corpus,selfplay} recombine to
+        # value_accuracy; *_supervised-weighted value_bce_{corpus,selfplay}
+        # recombine to value_loss. "corpus" includes §178 bot rows (folded into
+        # n_pretrain upstream, not separable here).
+        result.update(value_metrics_per_source)
+
         interval = int(self.config.get("checkpoint_interval", 100))
         if self.step % interval == 0:
             self.save_checkpoint(result)
@@ -917,6 +1023,18 @@ class Trainer:
             value_loss_uncertainty=result["value_loss_uncertainty"],
             value_loss_aux=result["value_loss_aux"],
             value_loss_composite=result["value_loss_composite"],
+            # §D-VALCEIL Q3 — per-source masked value keys (additive).
+            value_accuracy=result["value_accuracy"],
+            value_accuracy_masked=result["value_accuracy_masked"],
+            value_accuracy_corpus=result["value_accuracy_corpus"],
+            value_accuracy_selfplay=result["value_accuracy_selfplay"],
+            value_bce_corpus=result["value_bce_corpus"],
+            value_bce_selfplay=result["value_bce_selfplay"],
+            value_rows_corpus=result["value_rows_corpus"],
+            value_rows_selfplay=result["value_rows_selfplay"],
+            value_rows_masked=result["value_rows_masked"],
+            value_rows_corpus_supervised=result["value_rows_corpus_supervised"],
+            value_rows_selfplay_supervised=result["value_rows_selfplay_supervised"],
             aux_loss=result.get("opp_reply_loss"),
             uncertainty_loss=result.get("uncertainty_loss"),
             ownership_loss=result.get("ownership_loss"),
