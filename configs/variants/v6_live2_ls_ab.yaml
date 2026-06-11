@@ -68,11 +68,11 @@ eval_pipeline:
       # vs the killed n=50 point: bar 32/50 (0.640), P(0.55)=0.127, dead band 0.55-0.62.
       # vs base n=100: bar 60/100 (0.600), P(0.55)=0.183 — still the golong-era bar.
       # OCs from the shipped evaluate_gate × binomial (§D-LOOPFIX Phase 4; reproduce
-      # over hexo_rl.eval.gate_logic.evaluate_gate). The W1 cadence (best stride →1,
-      # bootstrap_anchor stride/sims, nnue/offwindow in-run scheduling) is set
-      # coherently in the Phase 7 re-run runbook, NOT here.
+      # over hexo_rl.eval.gate_logic.evaluate_gate).
+      # §D-LOOPFIX W1 CADENCE: stride 2→1 so EVERY 12500-step interval is
+      # promotion-capable (4 capable rounds in 50k; was stride 2 → only rounds 2,4).
       enabled: true
-      stride: 2
+      stride: 1
       n_games: 400
       opponent_sims: 64
     sealbot:
@@ -84,24 +84,44 @@ eval_pipeline:
       stride: 1
       n_games: 20
     bootstrap_anchor:
+      # §D-LOOPFIX W1: stride 2→1 so the §155 T2 bootstrap-floor measurement is
+      # present on EVERY promotion-capable round (else the floor's missing-
+      # measurement default BLOCKS odd rounds, undoing best stride 1). model/
+      # opponent sims 1→128: the sims=1 argmax floor degenerated into the
+      # §D-PROMOGATE 11,032 s colony cell (551 s/game, ~360-ply); a decisive
+      # full-strength floor is both faster per round AND a stronger guard.
       enabled: true
-      stride: 2
+      stride: 1
       n_games: 20
-      model_sims: 1
-      opponent_sims: 1
+      model_sims: 128
+      opponent_sims: 128
       path: "checkpoints/bootstrap_model_v6_live2.pt"
     nnue:
+      # §D-LOOPFIX W1: stride 4→2 — the §P6 strength-ladder read lands IN-RUN at
+      # rounds 2,4 (was stride 4 → a single terminal-only read).
       enabled: true
-      stride: 4
+      stride: 2
       n_games: 50
       time_per_stone_ms: 500
       model_sims: 128
     offwindow_adversary:
+      # §D-LOOPFIX W1: stride 4→2 — the PRIMARY-greenlight Objective-A robustness
+      # read lands IN-RUN at rounds 2,4 (WATCH-only here; the decisive read is the
+      # standalone exploit_probe.py + counterfactual via KClusterMCTSBot, §9.10/P4).
       enabled: true
-      stride: 4
+      stride: 2
       n_games: 100
       arm: "exploit"
       model_sims: 128
+  gating:
+    # §D-LOOPFIX W2 — pin the intended incumbent (bootstrap_model_v6_live2). The
+    # launch preflight (resolve_anchor) HARD-FAILS if best_model.pt resolves to
+    # anything else — closing the silent restore-from-.bak that installed
+    # golong@50k-PEAK as the as-run Arm-C incumbent + self-play generator.
+    # Preflight: rm -f checkpoints/best_model.pt{,.bak} so resolve_anchor
+    # fresh-inits the pinned bootstrap. Reproduce the sha:
+    #   python scripts/anchor_sha256.py checkpoints/bootstrap_model_v6_live2.pt
+    expected_anchor_sha256: "aba28e10bd80b2bac65e9b33e109cb9dc36a3a83871bf3a3fff0ca0f96d27165"
 
 # ── telemetry ─────────────────────────────────────────────────────────────────
 telemetry:

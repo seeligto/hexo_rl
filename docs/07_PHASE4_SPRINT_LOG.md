@@ -6175,3 +6175,83 @@ self-play to the ANCHOR; L: schedule shape IS promotion capacity (parity of capa
 step); L: a fixed eval seed schedule makes repeat evals deterministic functionals — co-tenancy
 alone moved a 50-game WR by 0.16; L: pre-registered taxonomies need an "experiment-validity defect"
 bucket — the biggest finding here fell outside all three registered verdicts.
+
+## §D-LOOPFIX — fix the dead self-improvement loop (W1/W2/W3 + power + co-tenancy + close-out) — 2026-06-11
+
+§D-PROMOGATE proved the loop never worked as designed (cadence structurally promotion-incapable,
+incumbent silently wrong, promotions underpowered, terminal eval always killed). This pass FIXES the
+loop — code lands — and proves it. Branch `phase4.5/loopfix`, 7 commits over master
+(`a4d43fe..` ): W3 `a4d43fe`, W2 `44f4925`, W1 `9a09e18`, POWER `6850ca2`+`6ad97e0`, Phase-6
+hardening `52bc24c`, Phase-7 docs (this). Full py suite **1994 passed**; rust unchanged (green
+baseline); bench gate N/A (no hot path — close-out is teardown, run_id/encoding threading is per-
+promotion, eval-round timing is in the daemon eval thread).
+
+**Per-acceptance verdicts (pre-registered §2, fixed before coding):**
+
+- **A-CLOSEOUT PASS (W1).** training-stop ≠ process-exit. New epilogue: RUN → at N STOP →
+  DRAIN(in-flight, BUDGETED) → STOP pool → TERMINAL full-battery eval (all phases, stride IGNORED)
+  on the final checkpoint, run UNLOADED → CLOSE → exit 0. Drain budget = measured eval-round
+  wall-clock × safety-factor, FLOORED at `eval_final_drain_timeout_sec`, HARD-CAPPED (hung-evaluator
+  backstop) — replaces the flat 900 s that was 10-16× undersized (killed the A/B terminal eval at
+  sealbot game 99/100). `run_evaluation(ignore_stride=True)` forces every enabled opponent (the
+  stride-4 nnue/offwindow got ZERO reads all run). Terminal result is a distinct
+  `terminal_eval_complete` event, NEVER fed to steering history (runs outside `step()`); promotes via
+  the shared `promote_anchor`; SKIPPED on SIGINT. Cadence: `promotion_capable_rounds()` +
+  `eval_schedule_capability` launch log surface stride-parity incapability (WARN on zero). Evidence:
+  14 GPU-free unit tests + an integration smoke (real train.py log excerpt: eval_schedule_capability
+  → iteration_limit_reached → final_eval_drain_waiting → terminal_eval_start on the final
+  checkpoint). Full terminal-eval completion in-subprocess is GPU-bound (19×19 eval games are minutes
+  each on CPU) → `tests/test_closeout_lifecycle.py` is slow+integration for vast.
+
+- **A-INCUMBENT PASS (W2).** `resolve_anchor` ALWAYS logs `anchor_identity` (sha256 + path + step +
+  run_id) and HARD-FAILS the launch when the LOADED anchor's state-dict sha ≠
+  `eval_pipeline.gating.expected_anchor_sha256`. Reads the loaded weights → ANY source (best.pt /
+  .bak / bootstrap) yielding non-pinned weights is refused, closing the silent .bak restore that
+  installed golong@50k-PEAK as the as-run Arm-C incumbent + generator. `scripts/anchor_sha256.py`
+  reproduces the pin; `state_dict_sha256` canonicalises compile prefixes so script & preflight agree.
+  Planted-wrong-incumbent test fails loudly. **Pin caveat (red-team Q4):** a pinned run that PROMOTES
+  then RESUMES self-deadlocks (advanced best_model.pt ≠ launch pin) — the RuntimeError names both
+  causes + eval.yaml documents it; the pin is a per-invocation launch declaration; fixed-loop runs
+  run to completion so it rarely bites.
+
+- **A-STAMP PASS (W3).** `save_best_model_atomic(step,run_id,encoding)` wraps the state_dict with
+  provenance + writes a `.provenance.json` sidecar; `trainer_ckpt_load` recovers step from the
+  partial payload (was 0 → promoted anchors logged step=0, indistinguishable from bootstrap).
+  Round-trip tested; bare-payload back-compat pinned.
+
+- **A-POWER PASS.** the n=50 override (× CI guard → bar 0.64, P(promote|0.55)=0.127, dead band
+  0.55-0.62) replaced by EXPLICIT n=400 (review caught that DROPPING it inherits eval.yaml's base
+  n=100, bar 0.600, P=0.183 — still the golong-era bar). OCs at n=400 (shipped evaluate_gate ×
+  binomial): bar 220/400 (0.550), P(promote|0.55)=**0.521** (≥0.5), P(false-promote|0.50)=**0.0255**
+  (≤0.05). Dead band GONE (CI-guard bar == nominal 0.55 bar). Quoted in the variant.
+
+- **A-COTENANCY: MECHANISM-NAMED (fix ticketed, not XS).** the 0.36-live/0.52-idle eval swing at
+  identical seeds/weights is GPU float-nondeterminism under co-tenant kernel interleaving (fp16
+  autocast + non-det cuDNN/cuBLAS flip razor-close MCTS argmax/sampling). NOT a time budget — eval
+  MCTS is fixed-sims (`evaluator.ModelPlayer`). NOT `inference_max_wait_ms` — eval uses
+  `LocalInferenceEngine` (synchronous per-move forward). Fix not XS (global torch flag; eval runs in
+  a daemon thread inside the training process). Structurally mitigated: the decision-critical
+  TERMINAL eval now runs UNLOADED (pool stopped first), and n=400 makes the in-run small-n swing
+  non-decisive. Detail: `reports/investigations/loopfix_cotenancy_2026-06-11.md` (local).
+
+**A/B re-run (DESIGN-ONLY, un-launched):** `docs/handoffs/loopfix_armc_rerun_runbook.md`. Variant
+`v6_live2_ls_ab.yaml` made re-run-ready: incumbent PINNED (aba28e10…), best stride 1 + n 400,
+bootstrap_anchor stride 1 / sims 1→128 (off the 11k-s colony cell), nnue/offwindow stride 4→2
+(Objective-A in-run), terminal_eval_enabled, robustness gate ON. GREENLIGHT: PRIMARY = absolute
+off-window robustness (exploit_probe ≤0.06 + counterfactual via KClusterMCTSBot, NO matched arm);
+strength is a non-inferiority guard vs golong50k WITH THE DISCLOSED CONFOUND — the fixed loop biases
+Arm C UP, so the guard detects HARM but CANNOT attribute gains to the encoding. DO NOT launch.
+
+**Is the loop now worth 50k GPU?** Yes — promotion machinery proven (atomic save kill-safe, steering
+isolation clean, DB double-count blocked by the UNIQUE schema, drain/terminal caps real & bounded),
+the four loop defects fixed + the close-out makes the final checkpoint promotion-capable, power
+restored, incumbent pinned, terminal eval deterministic (unloaded). The Arm-C re-run is the clean A/B
+treatment arm.
+
+L: "remove the override" ≠ "restore the design value" — eval.yaml's base had drifted 200→100; the
+POWER fix shipped n=100 until review re-derived OCs against the EFFECTIVE merged config. L: a fix's
+own success can trip its own guard — W2's pin self-deadlocks W3's promotion-advanced anchor on
+resume; make launch-hygiene gates per-invocation + name the legit case in the error. L: a terminal
+"unloaded" eval must actually stop the pool FIRST — close_out before pool.stop() still ran under
+self-play load. L: schedule shape IS promotion capacity; surface it at launch, never drop the
+decision phase silently.
