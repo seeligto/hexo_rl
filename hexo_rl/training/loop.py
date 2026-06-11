@@ -156,6 +156,7 @@ def run_training_loop(
         in_channels=in_channels,
         input_channels=input_channels,
         se_reduction_ratio=se_reduction_ratio,
+        run_id=run_id,
     )
     # L1: allocate the eval-side model once and reuse across rounds. Reallocating
     # every 2500 steps churned ~30 MB of CUDA activations per round on 12-block

@@ -9,6 +9,7 @@ Extracted from training/loop.py per §159 refactor. No behavior change.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass
@@ -101,6 +102,24 @@ def _write_provenance_sidecar(
     tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
     tmp.write_text(json.dumps(prov, indent=2))
     tmp.replace(sidecar)
+
+
+def state_dict_sha256(state_dict: dict[str, Any]) -> str:
+    """Deterministic sha256 over a model ``state_dict`` (sorted keys + raw tensor
+    bytes). Stable across processes and save formats for identical weights — this
+    is the tensor-identity compare the promogate W2 forensics had to do by hand,
+    made cheap so a launch can pin its intended incumbent and the operator can
+    reproduce the pin with ``scripts/anchor_sha256.py``.
+    """
+    h = hashlib.sha256()
+    for key in sorted(state_dict.keys()):
+        h.update(key.encode("utf-8"))
+        value = state_dict[key]
+        if isinstance(value, torch.Tensor):
+            h.update(value.detach().cpu().contiguous().numpy().tobytes())
+        else:
+            h.update(repr(value).encode("utf-8"))
+    return h.hexdigest()
 
 
 def _quarantine_corrupt(path: Path) -> Path:
@@ -239,6 +258,7 @@ def resolve_anchor(
     in_channels: int,
     input_channels: Any,
     se_reduction_ratio: int,
+    run_id: str | None = None,
 ) -> AnchorState:
     """Resolve the best-model anchor and sync ``inf_model`` to it.
 
@@ -285,6 +305,38 @@ def resolve_anchor(
         best_model = getattr(best_ref.model, "_orig_mod", best_ref.model)
         best_model.eval()
         best_model_step = best_ref.step
+        # §D-LOOPFIX W2 — incumbent identity: ALWAYS log the resolved anchor's
+        # sha256 + path + step + run_id, and HARD-FAIL the launch when it
+        # disagrees with the config-pinned expectation. This is the gate the
+        # silent .bak restore drove straight through — it installed golong@50k-
+        # PEAK as the A/B's incumbent AND self-play generator. The resilient
+        # load above may have come from best.pt, its .bak, or a bootstrap
+        # candidate; the assert reads the LOADED WEIGHTS, so ANY source that
+        # yields non-pinned weights is refused here (closes the .bak hole).
+        _anchor_sha = state_dict_sha256(best_model.state_dict())
+        _pin = (
+            eval_ext_config.get("eval_pipeline", {})
+            .get("gating", {})
+            .get("expected_anchor_sha256")
+        )
+        log.info(
+            "anchor_identity",
+            path=str(best_model_path),
+            step=best_model_step,
+            run_id=run_id,
+            sha256=_anchor_sha,
+            pinned=_pin,
+        )
+        if _pin is not None and _anchor_sha != _pin:
+            raise RuntimeError(
+                f"anchor sha256 mismatch: best_model.pt resolved to {_anchor_sha} "
+                f"but the run config pinned {_pin}. The incumbent is NOT the run's "
+                f"intended anchor (W2: a silent best_model.pt restore-from-.bak "
+                f"across an experiment boundary?). Refusing to launch. Re-pin the "
+                f"intended incumbent into checkpoints/best_model.pt (compute its sha "
+                f"with scripts/anchor_sha256.py) or clear "
+                f"eval_pipeline.gating.expected_anchor_sha256."
+            )
         # If best_model.pt was missing/corrupt and we recovered from a
         # bootstrap or .bak, persist the chosen anchor as the live
         # best_model.pt so subsequent runs find it directly.
