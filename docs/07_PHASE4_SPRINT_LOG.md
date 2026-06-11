@@ -5970,3 +5970,59 @@ reader's "needs a per-cluster forward+gather" Option-B was unnecessary once `rec
 structure was seen first-hand. L: a shape-identical A/B treatment encoding (v6_live2_ls ≡ v6_live2 wire)
 makes the byte-shape resolver a silent CONTROL-mislabel hazard — disambiguate by the more-specific label +
 name-dispatch. Falsified-register: none; confirms [[project_dmulticluster_s0_ragged_design]].
+
+## §D-VALPROBE — probe consolidation + logging decomposition + self-play-distribution ladder — 2026-06-11
+
+Dispatcher: land/clean the value-calibration instrument; decompose trainer `value_loss` logging at source;
+close E1's two red-team caveats (C1 train-fit, C2 wrong-regime) on an honest self-play fixture. Branch
+`phase4.5/valprobe` (04b11f1..929a35d on master 52911fc), eval/logging-only, full suite 1965 green.
+
+**Phase 1 pre-satisfied:** probe landed tracked in restruct G4a `c485918`; report + raw JSON local-only per
+`reports/**`+`audit/` ignore convention. **Phase 2 (04b11f1):** instrument unified fixture-agnostic
+(`--fixture corpus|selfplay|<path>`), kernels TDD'd (21 tests), `value_bce` added (trainer-unit), G1/G3
+classifier + perspective guard + FIXTURE-VALID bank stats built-in. Corpus-reproduction regression gate
+PASS EXACT (banked table's 3 off-cells = old 4dp-console double-rounding, not drift). **Phase 3 (638a729):
+PREMISE CORRECTION** — trainer `value_loss` was ALREADY main-only BCE on every surface; banked report's
+"flat composite" claim WRONG; flat-curve-vs-falling-MSE = BCE-vs-MSE unit difference (measurement-unit
+rule). Decomposition keys (`value_loss_main/_uncertainty/_aux/_composite`) added anyway; logging-only
+PROVEN cross-commit (identical loss + post-step param sha256 at pre/post; probe committed
+`scripts/diagnosis/bit_identity_probe.py`); caveat: composite = total-minus-pure-policy accounting (aux is
+policy-shaped, dominates), NOT value-head signal. **Phase 4 (691de81/1e01ec1/ec52b56/929a35d):** leak-free
+generator (WorkerPool at frozen ckpt, K-cluster training-row replay extraction, mover-z from winner spec,
+ply-cap drop, perspective+strict-load guards) + FIXTURE-VALID checker (live tail games through SAME
+extractor) + occ-matched slicer + K-discriminator.
+
+**FIXTURE-VALID: PARTIAL.** k-axis overlaps (uniform TV 0.098; occ-matching DEGRADED it to 0.172 —
+reported); occupancy under-covers at a STANDALONE-GENERATION-PATH support ceiling (fresh ~56 plies vs live
+~78 STABLE from run start at near-bootstrap weights; occ==ply → one variable; cause OPEN — ruled out:
+load D1 0/0, config deep-merge, version-mixing `model_version_distinct=1`×25103, stop-censoring ~1 ply).
+Live-tail bank (run's own last-150 games, same extractor) = in-regime by construction; rungs ≤40k are
+LEAK-FREE on it (games postdate their training).
+
+**VERDICTS (pre-registered + red-team-amended):** **G1 FAIL** (fresh leak-free fixture 10k→50k Δsign
++0.011 CI[−0.011,+0.033], Δmse +0.027 CI[−0.015,+0.071]; game-bootstrap, clustering-robust). **G2
+re-scoped REGIME-SPLIT** (not train-set-only): livetail 10k→40k leak-free PASSES both G1 thresholds
+(+0.053 CI[+0.029,+0.076] / −0.091 CI[−0.140,−0.038]) — early gains TRANSFER to live regime, SATURATE by
+~20k (20k→50k +0.007); post-20k corpus gains (+0.065 of +0.105) transferred to NO self-play regime; no
+memorization bump at trained-on tip (0.651 ≤ 40k 0.654). **G3: −0.10 deficit EXCLUDED on window-local
+axis (≥3 SE @ DEFF≤5)** but axis re-scoped — cluster-centered crops can't see GLOBAL spread, AUC≈0.41
+untested by terciles; "most-spread best" demoted (comps↔occ ρ=0.79, collapses under occ control);
+**K-axis discriminator (mandated): NO K-deficit any bank/rung, per-row AND min-pool deployment semantics**
+(livetail@50k K1 0.571 / K2 0.690 / K3 0.715 / K4+ 0.703). **E1 now claims:** corpus improvement real +
+early(≤20k) gains transfer to live regime; post-20k half is corpus-fit-only; live-regime winner-calling
+plateaus ~0.65 vs corpus 0.77; mode-collapse refuted everywhere; spread/K-blindness EXCLUDED on measured
+axes. STRUCK: implied-mix 0.48 corroboration (value_accuracy unmasked + population mismatch → open
+ANOMALY: predicted batch 0.725 vs reported 0.66).
+
+Review (3 fresh) PASS_WITH_NOTES → fixes ec52b56 (strict load, history-plane guard, --ece-bins, hex-adj
+docstring, composite caveat). Red-team (4 fresh, default-refute): rt2 z-labels STAND (code-chain +
+late-bins 0.63-0.71 orientation evidence, NOT the 0.55 floor); rt1/rt3/rt4 refuted framings → amendments
+folded (report `reports/investigations/valprobe_selfplay_ladder_2026-06-11.md`). OPEN: length-gap cause;
+value_accuracy anomaly (logging fix candidate: masked/per-source decomposition); AUC≈0.41 needs a
+discrimination-AUC instrument. L: pre-register the FIXTURE-VALID gate's FIX path too — "fix the fixture"
+without a registered fix recipe invites conditioning-variable surgery that degrades co-registered axes
+(occ-matching broke k-TV); always re-gate after the fix. L: a "trained-on" bank still yields LEAK-FREE
+reads for rungs that predate its games — date the data vs the rung, don't discard the bank. L: sign_acc
+floor guards can't orient near-chance heads — use late-phase bins (decided endgames) for orientation. L:
+strength-CI effective-n lesson extends to calibration ladders — CI per-game, not per-row (4000 rows = 150
+games here).
