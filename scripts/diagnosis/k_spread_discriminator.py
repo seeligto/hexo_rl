@@ -10,7 +10,8 @@ sys.path.insert(0, "/workspace/hexo_rl")
 import torch
 from hexo_rl.encoding import cur_stone_slot, lookup, opp_stone_slot
 from scripts.diagnosis.value_calibration_ladder import (
-    load_model, forward_values, hex_component_count, tercile_masks)
+    load_model, forward_values, hex_component_count, stratified_tercile_masks,
+    tercile_masks)
 
 BANKS = {
     "uniform": "data/selfplay_fixture_v6_live2_ls_50k.npz",
@@ -20,6 +21,7 @@ BANKS = {
 CKPTS = {0: "checkpoints/bootstrap_model_v6_live2.pt",
          10000: "checkpoints/checkpoint_00010000.pt",
          20000: "checkpoints/checkpoint_00020000.pt",
+         30000: "checkpoints/checkpoint_00030000.pt",
          40000: "checkpoints/checkpoint_00040000.pt",
          50000: "checkpoints/checkpoint_00050000.pt"}
 SEED, N = 20260611, 4000
@@ -62,7 +64,6 @@ for bname, path in BANKS.items():
         for i, pk in enumerate(pos_key):
             accs[pk] = min(accs.get(pk, 1e9), v[i]); zs[pk] = z[i]
         va = np.array(list(accs.values())); za = np.array([zs[pk] for pk in accs])
-        kk = np.array([k[pos_key == pk][0] for pk in list(accs)[:0]])  # skip per-pos k for speed
         agg[str(step)] = {"sign_acc": round(float(np.mean(np.sign(va) == np.sign(za))), 4), "n_pos": int(len(va))}
     b["minpool_position"] = agg
     # min-pool sign_acc binned by position K (10k vs 50k)
@@ -100,15 +101,17 @@ for bname, path in BANKS.items():
         s_ci, m_ci = boot(a_, b_)
         b[f"boot_dsign_{a_}_{b_}"] = s_ci; b[f"boot_dmse_{a_}_{b_}"] = m_ci
     # (d) occupancy-stratified spread terciles at tip
+    # within-stratum quantiles (stratified_tercile_masks) — the old
+    # tercile_masks(np.where(m, comps, -1)) collapsed both boundaries onto the
+    # -1 padding value (§D-VALPROBE open item 4); masks are already ⊆ stratum.
     comps = np.array([hex_component_count(p) for p in st[:, cur]])
     v50 = preds[50000]
     strata = {}
     for sname, m in tercile_masks(occ).items():
         row = {}
-        for tname, tm in tercile_masks(np.where(m, comps, -1)).items():
-            mm = m & tm
-            if mm.sum() >= 50:
-                row[tname] = {"sign_acc": round(float(np.mean(np.sign(v50[mm]) == np.sign(z[mm]))), 4), "n": int(mm.sum())}
+        for tname, tm in stratified_tercile_masks(comps, m).items():
+            if tm.sum() >= 50:
+                row[tname] = {"sign_acc": round(float(np.mean(np.sign(v50[tm]) == np.sign(z[tm]))), 4), "n": int(tm.sum())}
         strata[sname] = row
     b["tip_spread_within_occ"] = strata
     out[bname] = b

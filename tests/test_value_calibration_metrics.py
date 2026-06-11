@@ -21,6 +21,7 @@ from scripts.diagnosis.value_calibration_ladder import (
     hex_component_count,
     perspective_check,
     spread_bin_metrics,
+    stratified_tercile_masks,
     tercile_masks,
 )
 
@@ -103,6 +104,62 @@ def test_tercile_masks_partition():
         total += m.astype(int)
     assert (total == 1).all()  # disjoint cover
     assert masks["early"][0] and masks["late"][-1]
+
+
+# ── stratified terciles (within-stratum binning, §D-VALPROBE open item 4) ────
+
+
+def test_stratified_terciles_fix_padding_artifact():
+    # Regression for k_spread_discriminator.py section (d): the old
+    # tercile_masks(np.where(m, x, -1)) computes quantiles over the FULL
+    # array, so with >2/3 padding both boundaries collapse onto -1 and the
+    # within-stratum bins degenerate (everything lands in "late").
+    n, n_strat = 300, 81
+    stratum = np.zeros(n, dtype=bool)
+    stratum[:n_strat] = True
+    x = np.full(n, 99, dtype=np.int64)            # out-of-stratum garbage
+    x[:n_strat] = np.repeat([1, 2, 3], n_strat // 3)  # clean in-stratum thirds
+
+    # Old padded approach: degenerate — one bin swallows the whole stratum.
+    old = {k: (stratum & m).sum() for k, m in
+           tercile_masks(np.where(stratum, x, -1)).items()}
+    assert old["early"] == 0 and old["mid"] == 0 and old["late"] == n_strat
+
+    # New kernel: ~equal thirds within the stratum.
+    new = stratified_tercile_masks(x, stratum)
+    assert new["early"].sum() == n_strat // 3
+    assert new["mid"].sum() == n_strat // 3
+    assert new["late"].sum() == n_strat // 3
+
+
+def test_stratified_terciles_disjoint_subset_cover():
+    rng = np.random.default_rng(4)
+    x = rng.integers(0, 12, size=500)
+    stratum = rng.random(500) < 0.3
+    masks = stratified_tercile_masks(x, stratum)
+    assert set(masks) == {"early", "mid", "late"}
+    union = np.zeros(500, dtype=int)
+    for m in masks.values():
+        assert not (m & ~stratum).any()  # subset of stratum
+        union += m.astype(int)
+    assert (union[stratum] == 1).all()   # disjoint cover of the stratum
+    assert (union[~stratum] == 0).all()
+    # Empty stratum → three all-False masks, no crash.
+    empty = stratified_tercile_masks(x, np.zeros(500, dtype=bool))
+    assert all(not m.any() for m in empty.values())
+
+
+def test_stratified_terciles_small_int_tie_degeneracy():
+    # Small-int comps where q1 == q2 within the stratum: mid bin is EMPTY by
+    # construction (documented-acceptable); early/late still partition.
+    x = np.array([1, 1, 1, 1, 1, 1, 1, 5, 5, 99, 99, 99], dtype=np.int64)
+    stratum = np.array([True] * 9 + [False] * 3)
+    masks = stratified_tercile_masks(x, stratum)
+    assert masks["mid"].sum() == 0
+    assert masks["early"].sum() == 7   # the seven 1s
+    assert masks["late"].sum() == 2    # the two 5s
+    union = masks["early"] | masks["mid"] | masks["late"]
+    assert (union == stratum).all()
 
 
 # ── hex component count (spread axis, G3) ────────────────────────────────────

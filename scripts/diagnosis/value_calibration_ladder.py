@@ -166,6 +166,37 @@ def tercile_masks(x: np.ndarray) -> Dict[str, np.ndarray]:
     }
 
 
+def stratified_tercile_masks(
+    x: np.ndarray, stratum_mask: np.ndarray,
+) -> Dict[str, np.ndarray]:
+    """Tercile masks of x computed WITHIN a stratum (in-stratum quantiles only).
+
+    Fixes the §D-VALPROBE within-stratum padding artifact (open item 4):
+    ``tercile_masks(np.where(m, x, -1))`` computes the 1/3- and 2/3-quantiles
+    over the FULL array, so with ~2/3 of rows padded to -1 both boundaries
+    collapse onto the padding value and the within-stratum bins degenerate
+    (the whole stratum lands in "late"). Here q1/q2 come from
+    ``x[stratum_mask]`` alone.
+
+    Returned masks are pairwise disjoint, each a subset of ``stratum_mask``,
+    and their union covers the stratum exactly. Small-int tie degeneracy: x is
+    typically a small-int count (hex components), so q1 == q2 is possible —
+    then the mid bin (q1 < x <= q2) is EMPTY by construction; acceptable, the
+    early/late bins still partition the stratum. An all-False stratum returns
+    three all-False masks.
+    """
+    stratum_mask = np.asarray(stratum_mask, dtype=bool)
+    if not stratum_mask.any():
+        empty = np.zeros(stratum_mask.shape, dtype=bool)
+        return {"early": empty, "mid": empty.copy(), "late": empty.copy()}
+    q1, q2 = np.quantile(x[stratum_mask], [1.0 / 3.0, 2.0 / 3.0])
+    return {
+        "early": stratum_mask & (x <= q1),
+        "mid": stratum_mask & (x > q1) & (x <= q2),
+        "late": stratum_mask & (x > q2),
+    }
+
+
 def hex_component_count(plane: np.ndarray, threshold: float = 0.5) -> int:
     """Connected components of a binary stone plane under HEX adjacency.
 
