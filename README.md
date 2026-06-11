@@ -34,9 +34,9 @@ Dashboard at http://localhost:5001; game viewer at http://localhost:5001/viewer.
 | Bootstrap corpus | [`timmyburn/hexo-bootstrap-corpus`](https://huggingface.co/datasets/timmyburn/hexo-bootstrap-corpus) | `bootstrap_corpus.npz` | public, no auth |
 
 The model (17 MB) downloads automatically. The corpus (4.6 GB) is
-opt-in. To enable it:
+downloaded by default by `make install`. To skip it:
 
-1. Run: `make install WITH_CORPUS=1`
+1. Run: `make install WITH_CORPUS=0`
 
 Without access, you can still run `make train` using the bootstrap model —
 self-play will populate the replay buffer from scratch.
@@ -192,11 +192,11 @@ Desktop RTX 3070 numbers differ — see `docs/rules/perf-targets.md`.
 
 | Metric | Baseline (n=5 median) | Target |
 |---|---|---|
-| MCTS (CPU only, no NN) | 66,926 sim/s | ≥ 26,000 sim/s |
-| NN inference (batch=64) | 4,859 pos/s | ≥ 4,000 pos/s |
-| NN latency (batch=1)   | 2.56 ms      | ≤ 3.5 ms |
-| Buffer push            | 615,183 pos/s | ≥ 525,000 pos/s |
-| Worker throughput      | ~25,400 pos_gen/hr¹ | ≥ 20,000 pos_gen/hr |
+| MCTS (CPU only, no NN) | 88,006 sim/s | ≥ 73,000 sim/s |
+| NN inference (batch=64) | 4,871 pos/s | ≥ 4,000 pos/s |
+| NN latency (batch=1)   | 2.68 ms      | ≤ 3.5 ms |
+| Buffer push            | 862,037 pos/s | ≥ 525,000 pos/s |
+| Worker throughput      | 33,565 pos_gen/hr¹ | ≥ 20,000 pos_gen/hr |
 | GPU utilization        | 100%         | ≥ 85% |
 
 ¹ §128: metric is `positions_generated` (plies/hr, continuous). Old metric
@@ -204,6 +204,8 @@ Desktop RTX 3070 numbers differ — see `docs/rules/perf-targets.md`.
 Desktop n=5 confirmed: 27,835 pos_gen/hr, IQR 8.6%, no bimodal artifacts.
 
 Methodology: median of n=5 runs, 90s worker warm-up. `make bench` reproduces.
+Baselines re-floored at §S182 (2026-05-22 engine rework, +66.4% MCTS); targets per
+`docs/rules/perf-targets.md`.
 
 ### Tuning a new GPU box
 
@@ -231,9 +233,10 @@ Knob-registry recipe: [`docs/sweep_harness.md`](docs/sweep_harness.md).
 engine/        Rust core (board, MCTS, replay buffer, self-play runner)
 hexo_rl/       Python training + orchestration
 configs/       All hyperparameters (model, training, selfplay, monitoring, eval, corpus)
-docs/          Architecture, roadmap, rules
+docs/          Architecture, roadmap, rules, handoffs/, sprint_archive/, archive/
 vendor/bots/   SealBot + KrakenBot submodules — ELO benchmark references
-scripts/       Entry points called by the Makefile
+scripts/       Entry points called by the Makefile (+ diagnosis/ instrument home)
+tests/         Python test suite + tests/fixtures (probe fixtures)
 ```
 
 Run `make help` for the full target list.

@@ -28,10 +28,10 @@ owner for details).
 
 ### How to use the engine
 
-SealBot is imported directly as a Python module via pybind11 — no subprocess or binary compilation needed. The wrapper at `python/bootstrap/bots/sealbot_bot.py` handles path setup and the `BotProtocol` interface.
+SealBot is imported directly as a Python module via pybind11 — no subprocess or binary compilation needed. The wrapper at `hexo_rl/bots/sealbot_bot.py` handles path setup and the `BotProtocol` interface.
 
 ```python
-# python/bootstrap/bots/sealbot_bot.py (simplified)
+# hexo_rl/bots/sealbot_bot.py (simplified)
 from minimax_cpp import MinimaxBot as _MinimaxBot
 from game import Player as SealPlayer
 
@@ -87,7 +87,7 @@ A TypeScript reference parser exists (`standardNotationParser.ts`, written by BS
 - Has a comment typo (`s = -q - s` should be `s = -q - r`) but the code itself is correct
 - Community parsers run to ~400 lines — don't underestimate this
 
-We need a Python BKE parser for importing community game records. Write it in `python/bootstrap/bke_parser.py`. Test against the known opening table in section 5 of this doc.
+We need a Python BKE parser for importing community game records. Write it as `hexo_rl/bootstrap/bke_parser.py` (not yet implemented). Test against the known opening table in section 5 of this doc.
 
 ```python
 # python/bootstrap/bke_parser.py
@@ -199,15 +199,7 @@ Run with: `uvicorn python.api.bot_server:app --port 8080`
 
 ### CLI-to-API wrapper
 
-The community discussed a localhost wrapper pattern: bots launched via shell + stdio are wrapped behind the API. Implement this so our bot can run in both modes:
-
-```bash
-# Standalone API mode
-python scripts/serve_bot.py --port 8080 --checkpoint checkpoints/best.pt
-
-# CLI mode (for HexTacToeBots tournament runner)
-python scripts/bot_cli.py --checkpoint checkpoints/best.pt
-```
+The community discussed a localhost wrapper pattern: bots launched via shell + stdio are wrapped behind the API. The plan is for our bot to run in both modes — a standalone API server and a CLI mode for the HexTacToeBots tournament runner. Neither entry point (`serve_bot.py` / `bot_cli.py`) has been implemented yet.
 
 ---
 

@@ -62,7 +62,7 @@ Rust exposes its API to Python via **PyO3**. Import as: `from engine import MCTS
 - **MCTS**: batched leaf evaluation — leaves queued across N parallel games, single GPU forward pass per batch
 - **Turn structure**: `moves_remaining` field in game state (1 or 2); encoded as feature plane so network learns the difference
 - **Reward**: terminal only by default (+1/-1); optional shaped intermediate rewards that decay to zero over training
-- **Bootstrap phase**: supervised pretraining from minimax-generated games before self-play begins (see `04_BOOTSTRAP_STRATEGY.md`)
+- **Bootstrap phase**: supervised pretraining from minimax-generated games before self-play begins
 - **Monitoring**: event-driven fan-out (events.py → passive renderers). Dashboards never block training. Terminal (Rich, 4Hz max) and web (Flask+SocketIO on :5001) renderers consume identical event stream. Viewer is isolated — `hexo_rl/viewer/` is never imported by training path.
 
 ---
@@ -73,7 +73,7 @@ Rust exposes its API to Python via **PyO3**. Import as: `from engine import MCTS
 - Opening book analysis mode: query what the model thinks of any position
 - Training fully automated: run `python scripts/train.py` and walk away
 - Reproducible: configs + seeds produce the same training run
-- Benchmarks pass: MCTS ≥ 140,000 sim/s, GPU util ≥ 85% during training
+- Benchmarks pass: MCTS ≥ 73,000 sim/s (§S182 refloor; see docs/rules/perf-targets.md), GPU util ≥ 85% during training
 
 ---
 

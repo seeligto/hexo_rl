@@ -221,7 +221,7 @@ Bundle re-bootstrap with channel-drop landing if both ship before Phase 4 restar
 Bench-before-after gate mandatory per `docs/rules/perf-targets.md`.
 
 **Source:** Audit triad 2026-04-28 — see
-`reports/investigations/subtree_reuse_audit_{A,B,C}.md`.
+`reports/investigations/subtree_reuse_audit_{A,B,C}.md` (local forensics, not tracked).
 
 **Current behaviour:** `engine/src/game_runner/worker_loop.rs:183` calls
 `tree.new_game(board.clone())` per move. Every MCTS search starts on a
@@ -950,7 +950,7 @@ them as a sufficient pre-promotion gate. Skeleton:
 ## Q-COMPOUND-TURN — how is the 2-stones-per-turn rule handled across the pipeline? [OPEN, findings recorded]
 
 **Status (2026-05-28):** AUDITED (read-only) — §S181 Wave 5 entry. Full
-forensic audit at `audit/structural/compound_turn_pipeline_audit.md`.
+forensic audit at `docs/handoffs/compound_turn_pipeline_audit.md`.
 This entry records **what the code does**, not what to do about it.
 Supersedes the one-line Q6 summary ("Sequential confirmed") with current
 citations; does NOT re-open Q6's resolution.
@@ -1008,7 +1008,7 @@ NOT established.**
 sign-fix A/B; (b) tag buffer rows with `moves_remaining` and compare
 value-spread of intermediate vs turn-start rows on the §S180b archive;
 (c) CF-2 — add planes 16/17 to a v6-class smoke and measure value-spread.
-Cross-ref: `audit/structural/compound_turn_pipeline_audit.md`; sprint log
+Cross-ref: `docs/handoffs/compound_turn_pipeline_audit.md`; sprint log
 §S181-AUDIT Wave 5 entry.
 
 ---

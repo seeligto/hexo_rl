@@ -22,7 +22,7 @@ Starting config for self-play RL (do not exceed without benchmarking):
   **§156 R12 verdict (2026-05-06):** cosine schedule is the sole
   load-bearing knob behind the §155 R10 91% draw lock under v7full
   warm-start. Variant opt-out at `temperature_threshold_compound_moves: 0`
-  + `temp_min: 0.5` (see `configs/variants/w4c_smoke_v7_5080.yaml`).
+  + `temp_min: 0.5` (the §155-era variant carrying this opt-out was later deleted; knob values preserved here).
   Top-level default unchanged pending cold-start data — §157 Gate 5 S2
   (variant-pinned, comment-only at top level).
 - ZOI: candidate moves restricted to hex-distance ≤ 5 of last 16 moves
@@ -80,7 +80,7 @@ Starting config for self-play RL (do not exceed without benchmarking):
   applied post-§73 in both branches.
 
 - Compound-turn handling (Q6 / Q-COMPOUND-TURN; audit
-  `audit/structural/compound_turn_pipeline_audit.md`): each turn places 2
+  `docs/handoffs/compound_turn_pipeline_audit.md`): each turn places 2
   stones (ply-0 opener places 1). Turn phase is tracked by
   `Board.moves_remaining` (2 = about to place stone 1, 1 = stone 2), and
   threaded into every MCTS `Node.moves_remaining`. MCTS negamax Q-flips

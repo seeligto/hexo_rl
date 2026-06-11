@@ -106,7 +106,7 @@ Findings from `reports/master_review_2026-04-18/verdict.md` Section 4. Skipped a
 | G-018 | docs/08_DASHBOARD_SPEC.md | "train.py emits events" — moved to loop.py (§88) |
 | G-019 | docs/08_DASHBOARD_SPEC.md | Changelog labels 2026-04-18 as §101 — actual §104 |
 | G-020 | docs/02_roadmap.md | Phase 4.0 exit criterion wrong worker throughput number |
-| G-021 | docs/00_agent_context.md | MCTS target stale (≥140k sim/s) |
+| G-021 | docs/00_agent_context.md | MCTS target stale (≥140k sim/s) — RESOLVED 2026-06-11 (D-REPOSTRUCT G5): now ≥73k |
 | G-022 | docs/07_PHASE4_SPRINT_LOG.md §5 | Still references "50 games vs best" |
 | G-023 | docs/07_PHASE4_SPRINT_LOG.md §67 | decay_steps internal inconsistency |
 | G-024 | docs/07_PHASE4_SPRINT_LOG.md §73 | Grep-proof line numbers swapped (self-flagged) |

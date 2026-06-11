@@ -27,7 +27,7 @@ an **unordered pair** — `{A,B}` and `{B,A}` yield identical state/hash.
 a separate per-stone call (a turn can win on its first stone). For how
 MCTS / buffer / training treat the compound turn, see
 `docs/rules/phase-4-architecture.md` "Compound-turn handling" and the
-audit `audit/structural/compound_turn_pipeline_audit.md`.
+audit `docs/handoffs/compound_turn_pipeline_audit.md`.
 
 The board is infinite. The NN requires fixed-size tensors. We resolve this as follows:
 

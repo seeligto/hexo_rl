@@ -402,7 +402,7 @@ if __name__ == "__main__":
     buffer = ReplayBuffer(capacity=100_000)
     # fill buffer with dummy data for benchmark
     for i in range(10_000):
-        buffer.push(
+        buffer.push(  # illustrative; current ReplayBuffer.push takes 10 args (engine/src/replay_buffer/mod.rs)
             np.zeros((8, 19, 19), dtype=np.float16),
             np.ones(362, dtype=np.float32) / 362,
             0.0,

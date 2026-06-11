@@ -96,12 +96,14 @@ hexo_rl/
 │   ├── 01_architecture.md
 │   ├── 02_roadmap.md
 │   ├── 03_tooling.md
-│   ├── 04_bootstrap_strategy.md
 │   ├── 05_community_integration.md
 │   ├── 06_OPEN_QUESTIONS.md
 │   ├── 07_PHASE4_SPRINT_LOG.md
 │   ├── 08_DASHBOARD_SPEC.md
 │   ├── 09_VIEWER_SPEC.md
+│   ├── handoffs/                    ← PIN/handoff docs (relocated from reports/, D-REPOSTRUCT)
+│   ├── sprint_archive/              ← archived sprint reports (relocated from reports/)
+│   ├── archive/                     ← archived closed-sprint/investigation docs
 │   └── reference/                   ← downloaded specs (git-ignored)
 ├── engine/
 │   ├── src/
@@ -127,17 +129,13 @@ hexo_rl/
 ├── hexo_rl/
 │   ├── bootstrap/
 │   │   ├── bot_protocol.py          ← BotProtocol ABC
-│   │   ├── bots/
-│   │   │   ├── sealbot_bot.py       ← SealBotBot wrapper
-│   │   │   ├── our_model_bot.py     ← OurModelBot wrapper
-│   │   │   ├── random_bot.py        ← RandomBot
-│   │   │   └── community_api_bot.py ← CommunityAPIBot (HTTP)
 │   │   ├── generate_corpus.py       ← orchestrates all corpus sources
 │   │   ├── corpus_analysis.py       ← corpus quality analysis
 │   │   ├── injection.py             ← human-seed bot-continuation injection
 │   │   ├── opening_classifier.py    ← opening pattern classifier
 │   │   ├── human_seeding.py         ← human game seeding for bot games
 │   │   └── pretrain.py
+│   ├── bots/                        ← bot wrappers (sealbot_bot, our_model_bot, krakenbot_*, nnue_bot, offwindow_*)
 │   ├── corpus/                      ← corpus pipeline and metrics
 │   │   └── sources/                 ← pluggable corpus sources (human, hybrid)
 │   ├── env/                         ← GameState, tensor assembly
@@ -178,8 +176,10 @@ hexo_rl/
 │   ├── train.py                     ← CLI + config merge + build core objects → run_training_loop
 │   ├── benchmark.py
 │   ├── eval_vs_sealbot.py
+│   ├── diagnosis/                   ← diagnosis/investigation instruments + lifecycle ledger (README.md)
 │   └── ...
 ├── tests/
+│   └── fixtures/                    ← probe/value fixtures (absorbed root fixtures/, D-REPOSTRUCT)
 ├── vendor/
 │   └── bots/                        ← git submodules
 │       ├── sealbot/                 ← Ramora0/SealBot

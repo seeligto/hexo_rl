@@ -32,9 +32,8 @@ git add vendor/bots/sealbot && git commit -m "chore(vendor): update sealbot to l
 1. Add as submodule (above)
 2. Read its source — understand the interface, build system, and move format
 3. Check for known bugs (SealBot has a documented colony-bug risk — see docs/05_COMMUNITY_INTEGRATION.md)
-4. Write a `BotProtocol` wrapper in `hexo_rl/bootstrap/bots/`
-5. Add a build step to `scripts/build_vendor.sh` if it needs compilation
-6. Write a smoke test: bot returns a legal move on a fresh board
+4. Write a `BotProtocol` wrapper in `hexo_rl/bots/`
+5. Write a smoke test: bot returns a legal move on a fresh board
 7. Commit: `feat(bootstrap): add <botname> wrapper`
 
 ### Current bot submodules
@@ -50,7 +49,7 @@ HexTacToeBots repo and the community Discord periodically for new entries.
 ### Bot compilation
 
 SealBot uses pybind11 and is imported directly as a Python module — no separate
-compilation step is needed. The wrapper at `hexo_rl/bootstrap/bots/sealbot_bot.py`
+compilation step is needed. The wrapper at `hexo_rl/bots/sealbot_bot.py`
 adds `vendor/bots/sealbot` to `sys.path` and imports `minimax_cpp.MinimaxBot`.
 
 The agent must read the actual README/build instructions in the submodule
@@ -68,7 +67,7 @@ class BotProtocol(ABC):
     @abstractmethod
     def name(self) -> str: ...
 
-# Wrappers live in hexo_rl/bootstrap/bots/:
+# Wrappers live in hexo_rl/bots/:
 #   sealbot_bot.py       — wraps SealBot pybind11 minimax engine
 #   our_model_bot.py     — wraps our checkpoint + MCTS
 #   random_bot.py        — uniform random (baseline)

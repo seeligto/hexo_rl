@@ -10,12 +10,12 @@
 ## 1. Architecture overview
 
 Unchanged from prior spec. Two renderers, one event schema. The training loop
-(`scripts/train.py`) emits structured events via `emit_event()`. Both renderers
+(`hexo_rl/training/loop.py`, built by `scripts/train.py`) emits structured events via `emit_event()`. Both renderers
 consume the same events independently — they share no code other than the schema
 defined in section 2.
 
 ```
-scripts/train.py
+hexo_rl/training/loop.py
     │
     ├── hexo_rl/monitoring/events.py   ← emit_event() — single call site
     │       │
@@ -26,7 +26,7 @@ scripts/train.py
 ```
 
 **Key constraint:** Both renderers are **passive observers**. They must never
-block the training loop, never raise exceptions that propagate to train.py, and
+block the training loop, never raise exceptions that propagate to the training loop, and
 never write to the replay buffer or any training state. Failures are logged and
 silently swallowed.
 
@@ -56,7 +56,7 @@ Emitted every `config.monitoring.log_interval` training steps (default: 10).
                                          # over the batch, post-pruning+renorm, nats.
                                          # Computed only over non-zero-policy rows.
                                          # 0.0 if unavailable. Must not be NaN.
-    # §101 D-Gumbel / D-Zeroloss split — mean policy-target entropy and
+    # §104 D-Gumbel / D-Zeroloss split — mean policy-target entropy and
     # KL(target || uniform) bucketed by is_full_search. NaN when the bucket
     # is empty; renderers must treat NaN as "no data this step" and never
     # propagate. y-axis range [0, log(num_actions) ≈ 5.89]. frac in [0, 1].
@@ -75,11 +75,11 @@ Emitted every `config.monitoring.log_interval` training steps (default: 10).
 }
 ```
 
-**§101 usage.** `n_rows_policy_loss == 0` ⇒ the selective gate dropped every
+**§104 usage.** `n_rows_policy_loss == 0` ⇒ the selective gate dropped every
 row this step (zero-gradient on the policy head). `n_rows_policy_loss > 0`
 with `loss_policy == 0.0` ⇒ genuine zero loss on surviving rows. This
 disambiguates the "zero loss" case that §100 flagged as a known follow-up.
-`H_fast(CQ) ≈ H_full(CQ)` is the §101 D-Gumbel signal that quick-search
+`H_fast(CQ) ≈ H_full(CQ)` is the §104 D-Gumbel signal that quick-search
 completed-Q targets carry usable gradient.
 
 ### 2.2 `iteration_complete`
@@ -748,4 +748,4 @@ The Flask server is not aware of the layout — it just forwards events.
 | 2026-04-04 | system_stats + 3 new fields; iteration_complete + batch_fill_pct; stat card redesign; loss chart EMA toggle; bottom row → 4 panels (P0 win rate line, game length histogram, entropy trend, grad norm trend); ELO panel made conditional; system panel expanded with RAM/CPU/batch-fill/grad/LR |
 | 2026-04-05 | **§45** — add `rss_gb` (process RSS) to `system_stats` event and system panels (terminal + web). Needed for OOM post-mortem — overnight run OOMed with no RSS history |
 | 2026-04-07 | **§47** — meaningful-ratios pass: `training_step` now emits `policy_target_entropy`; `iteration_complete` now emits `mcts_mean_depth` and `mcts_root_concentration`. Stat cards and loss chart show normalized ratios inline (no toggles). System panel adds MCTS depth and root concentration rows. Ring buffers bumped to 2000 steps / 500 games. Config-driven via `/api/monitoring-config`. 12 new tests added. |
-| 2026-04-18 | **§101** — D-Gumbel / D-Zeroloss instrumentation. `training_step` now emits 7 new keys: `policy_target_entropy_{full,fast}search`, `policy_target_kl_uniform_{full,fast}search`, `frac_fullsearch_in_batch`, `n_rows_policy_loss`, `n_rows_total`. NaN is a first-class signal (empty subset). Terminal dashboard adds one policy-target line; web dashboard extends the loss ratio strip. Gated by `monitoring.log_policy_target_metrics` (default true, <0.2% step cost). New `tests/test_policy_target_metrics.py` exercises the math on synthetic batches. |
+| 2026-04-18 | **§104** — D-Gumbel / D-Zeroloss instrumentation. `training_step` now emits 7 new keys: `policy_target_entropy_{full,fast}search`, `policy_target_kl_uniform_{full,fast}search`, `frac_fullsearch_in_batch`, `n_rows_policy_loss`, `n_rows_total`. NaN is a first-class signal (empty subset). Terminal dashboard adds one policy-target line; web dashboard extends the loss ratio strip. Gated by `monitoring.log_policy_target_metrics` (default true, <0.2% step cost). New `tests/test_policy_target_metrics.py` exercises the math on synthetic batches. |

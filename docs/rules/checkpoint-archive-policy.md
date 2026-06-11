@@ -23,8 +23,8 @@ no active consumers.  Stamping them would add noise without value.
 
 ## Cleanup cadence
 
-Dead directories are deleted from disk during hygiene sweeps (see
-`reports/audits/repo_hygiene_2026-05-12.md`).  They do not need to persist
+Dead directories are deleted from disk during hygiene sweeps (recorded in
+the sweep ledger of that arc).  They do not need to persist
 on the working laptop once the audit ledger is written.
 
 ## Adding a new dead dir

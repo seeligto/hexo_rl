@@ -21,7 +21,7 @@ After each commit, confirm tests still pass before starting the next task.
 
 ## Phase discipline
 
-Always check `docs/02_ROADMAP.md` for the current phase before starting work.
+Always check `docs/02_roadmap.md` for the current phase before starting work.
 Each phase has explicit exit criteria — do not advance until they are met.
 If you are unsure what phase we are in, check git log for the most recent feat commits.
 Authoritative live state lives in `docs/07_PHASE4_SPRINT_LOG.md`.

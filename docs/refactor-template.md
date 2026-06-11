@@ -1,12 +1,12 @@
 # Refactor Session Template
 
-Use for any refactor candidate from `audit/SUMMARY.md` Top 10 (or future audits). One file per session.
+Use for any refactor candidate from the `docs/FUTURE_REFACTORS.md` deferred section or archived audits under `docs/archive/audit/` (or future audits). One file per session.
 
 ## Preamble (every session, every subagent)
 Read in order:
 1. `CLAUDE.md` + `docs/rules/*.md`
 2. `docs/07_PHASE4_SPRINT_LOG.md` — most recent § entries (single source of truth, never re-litigate)
-3. `audit/SUMMARY.md` + relevant per-bucket report (`audit/python_health.md` or `audit/rust_health.md`)
+3. `docs/FUTURE_REFACTORS.md` deferred section + any relevant archived audit report under `docs/archive/audit/`
 4. The TARGET file + every importer (`rg 'from <module>' --type py` or `rg 'use <module>' --type rust`)
 
 ## TARGET (paste audit row)

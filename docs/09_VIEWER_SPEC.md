@@ -4,7 +4,7 @@
 **Status:** Authoritative spec. Implementation complete as of 2026-04-03. Deferred items listed in §10.
 **Scope:** Standalone game viewer and play-against-model interface.
 **Depends on:** docs/08_DASHBOARD_SPEC.md (event schema, web_dashboard.py server)
-**Last updated:** 2026-04-03
+**Last updated:** 2026-06-11 (path/staleness pass; functional content unchanged since 2026-04-03 — note: §78 added an /analyze endpoint not yet reflected in the §-sections)
 
 ---
 

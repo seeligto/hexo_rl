@@ -260,8 +260,8 @@ first.
 engine/src/encoding/
 ├── registry.toml         # canonical authoring file (§3)
 ├── mod.rs                # public API + lookup
-├── spec.rs               # EncodingSpec struct + Schema validator
-└── meta.rs               # EncodingMeta hot-path companion (A4 §6.6)
+├── spec/mod.rs           # EncodingSpec struct + Schema validator
+└── (meta.rs — never created; merged into registry internals per §9 amendment)
 ```
 
 ### 4.2 EncodingSpec
@@ -481,10 +481,10 @@ def validate_against_state_dict(spec: EncodingSpec, state_dict: Mapping[str, Ten
 
 ### 5.6 Compat shim
 
-`hexo_rl/utils/encoding.py` becomes a thin shim:
+`hexo_rl/utils/encoding.py` was planned as a thin shim (as-built, the compat shim is `hexo_rl/encoding/compat.py`; neither `hexo_rl/utils/encoding.py` nor `hexo_rl/encoding/spec.py` was created standalone):
 
 ```python
-# hexo_rl/utils/encoding.py
+# as-built: hexo_rl/encoding/compat.py
 import warnings
 from hexo_rl.encoding import lookup, resolve_from_config
 
@@ -697,7 +697,7 @@ Until then, consistency-not-equality is the contract.
 
 `resolve_corpus_path(spec)` and `resolve_anchor_path(spec)` helpers
 remove the need for variants to spell out corpus + bootstrap_anchor
-paths separately (sprint_171_p3_5080.yaml currently does — A4 cleans up
+paths separately (the sprint_171_p3_5080.yaml example variant was never committed to master; A4 cleans up
 once helpers land).
 
 Backward-compat: legacy configs with `board_size` and no `encoding` key

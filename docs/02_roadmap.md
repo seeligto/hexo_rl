@@ -201,7 +201,7 @@ The split-responsibility architecture is fully in place:
 - [ ] **Q2 ablation** — value aggregation strategy: min vs mean vs attention (highest-priority open question)
 - [ ] **Q40 — MCTS subtree reuse** (`docs/06_OPEN_QUESTIONS.md`).
   Re-root + §100 resolution. Gate: channel-drop verdict + audit C
-  (`reports/investigations/subtree_reuse_audit_C.md`). Implementation
+  (local forensics, not tracked: `reports/investigations/subtree_reuse_audit_C.md`). Implementation
   in pre-Phase-4.5 window if approved.
 
 ### Exit criteria

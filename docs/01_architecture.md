@@ -393,7 +393,7 @@ pre-§128 numbers are not reproduced here to avoid drift.
 | Win by 6-in-a-row | +1.0 | -1.0 |
 | Draw (if applicable) | -0.5 | -0.5 |
 
-Negative draw reward (configurable via `draw_reward` in `configs/training.yaml`). Teaches the network to press for wins rather than accept draws. In a game with ~51.6% P1 win rate, draws are suboptimal for the stronger player. Source: KrakenBot practice (docs/10_COMMUNITY_BOT_ANALYSIS.md §5.1D). Changed from +0.01 on 2026-04-04; raised from -0.1 to -0.5 on 2026-04-05 after first overnight self-play run produced 56% draws — at that frequency -0.1 was dominated by win/loss signal and failed to discourage draw-seeking.
+Negative draw reward (configurable via `draw_value` in `configs/training.yaml`). Teaches the network to press for wins rather than accept draws. In a game with ~51.6% P1 win rate, draws are suboptimal for the stronger player. Source: KrakenBot practice (community bot analysis notes §5.1D; standalone doc never created). Changed from +0.01 on 2026-04-04; raised from -0.1 to -0.5 on 2026-04-05 after first overnight self-play run produced 56% draws — at that frequency -0.1 was dominated by win/loss signal and failed to discourage draw-seeking.
 
 ### Optional shaped rewards (decay to zero)
 
@@ -475,7 +475,7 @@ As Elo grows, periodically generate games against community members (via exporte
 from engine import Board, MCTSTree
 
 # Board
-b = Board(size=19)
+b = Board()  — window geometry comes from the encoding registry (Board::with_encoding)
 b.apply_move(row, col, player)
 b.check_win()           # -> bool
 b.legal_moves()         # -> list[tuple[int,int]]
@@ -483,7 +483,7 @@ b.to_tensor()           # -> np.ndarray (channels, H, W)
 b.zobrist_hash()        # -> int
 
 # MCTS (tree lives in Rust, Python drives the search)
-tree = MCTSTree(c_puct=1.5, dirichlet_alpha=0.3, epsilon=0.25)
+tree = MCTSTree(c_puct=1.5)  — Dirichlet noise is config-driven in the search path, not a constructor kwarg
 tree.new_game(board)
 leaves = tree.select_leaves(n=64)              # returns batch of states needing eval
 tree.expand_and_backup(leaves, policies, values)  # feed network results back

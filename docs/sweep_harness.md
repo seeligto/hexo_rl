@@ -56,7 +56,7 @@ make sweep SWEEP_ARGS="--knobs inference_batch_size --fix n_workers=55 \
 ## RTX 5090 + 96-effective-thread host (rented cpu-192t)
 
 Host quirks documented in
-`docs/notes/remote_reports/sweep_config_analysis_5090_96th_2026-04-28.md`.
+a 2026-04-28 5090-host analyst report (not tracked).
 Use CLI overrides — the registry deliberately stays low-VRAM-default (see
 "Design rationale" below). Confirmed winners from sweep 2026-04-26:
 `n_workers=55, inference_batch_size=256, inference_max_wait_ms=8.0,
@@ -68,7 +68,7 @@ max_train_burst=8, leaf_batch_size=8`.
 # Fix n_workers (already converged on this host) and probe the
 # unexplored regions reported by the 5090 analyst:
 make sweep SWEEP_ARGS="\
-  --variant gumbel_targets_5090_96th \
+  --variant <host-variant> \
   --fix n_workers=55 \
   --knobs inference_batch_size,inference_max_wait_ms,leaf_burst,max_train_burst \
   --coarse inference_batch_size=192,256,320,384 \
@@ -115,7 +115,7 @@ mutating `knobs.py` directly: raise `inference_batch_size` coarse grid to
 * Mutating the registry for a single high-VRAM host would regress the
   default for low-VRAM hosts (e.g. the 4080S 42-thread host) and force
   every host-specific config back into a single shared file.
-* The variant YAML `configs/variants/gumbel_targets_5090_96th.yaml`
+* The 5090-host variant YAML (since deleted)
   carries `TODO(5090-tuning)` annotations marking the unexplored regions,
   so the next operator can lift the recommended invocation above without
   re-reading the analyst report.

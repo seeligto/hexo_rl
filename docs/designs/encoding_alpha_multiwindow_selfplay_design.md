@@ -30,9 +30,9 @@ without re-litigating.
 - §171 P3 blocker resolution (`memory/project_171_p3_blocked.md`).
 - Per-game mutator audit feedback
   (`memory/feedback_encoding_post_mutators_audit.md`).
-- Live source: `engine/src/game_runner/worker_loop.rs`,
+- Live source: `engine/src/game_runner/worker_loop/mod.rs`,
   `engine/src/replay_buffer/sym_tables.rs`,
-  `engine/src/board/state.rs`, `hexo_rl/selfplay/inference.py`.
+  `engine/src/board/state/mod.rs`, `hexo_rl/selfplay/inference.py`.
 
 **Critical surface read at A7 time (drives the design):** `worker_loop.rs`
 already implements multi-window K-cluster MCTS dispatch end-to-end. α is
@@ -49,7 +49,7 @@ v6w25 (and any future K-cluster encoding) sustained selfplay cannot run
 at the replay-buffer + Python trainer interface. Specific failure modes
 the §171 P3 pre-flight surfaced:
 
-- `Board::to_planes()` (`engine/src/board/state.rs:701`) loud-fails on
+- `Board::to_planes()` (`engine/src/board/state/mod.rs:701`) loud-fails on
   `spec.is_multi_window == true`. Scope memo §1 cited this as the
   primary blocker; §172 A4 left the loud-fail in place pending α.
 - Replay buffer geometry hardcodes v6: `N_CELLS = 19*19 = 361`,
@@ -377,7 +377,7 @@ table instances (state stride differs).
 Worker_loop (currently `worker_loop.rs:51` `static SYM_TABLES: Lazy<...>`)
 moves to per-runner spec-keyed lookup at runner-init time.
 
-### 4.4 Rust — `engine/src/game_runner/worker_loop.rs`
+### 4.4 Rust — `engine/src/game_runner/worker_loop/mod.rs`
 
 **Current:** Lines 664-679 use `SYM_N_CELLS`, `TOTAL_CELLS`,
 `KEPT_PLANE_INDICES`, `BOARD_SIZE` — all v6 constants. `aggregate_policy`
@@ -408,7 +408,7 @@ indices field is the projection.
 
 Validator: `len(kept_plane_indices) == n_planes` and indices unique.
 
-### 4.5 Rust — `engine/src/board/state.rs::to_planes`
+### 4.5 Rust — `engine/src/board/state/mod.rs::to_planes`
 
 **Current:** `Board::to_planes()` (line 734-740) loud-fails on
 `spec.is_multi_window` per A2 §4.6.
@@ -461,7 +461,7 @@ single-window-projection path. **α implementation flips this assertion**:
   `pytest.raises(NotImplementedError)` to a green smoke run via the
   multi-window MCTS path.
 
-α adds `tests/test_alpha_buffer_round_trip.py` covering:
+α planned `tests/test_alpha_buffer_round_trip.py` (never created) covering:
 
 - Push K rows per position; sample N positions; verify shapes match
   `spec.state_stride() / chain_stride() / policy_stride()`.
