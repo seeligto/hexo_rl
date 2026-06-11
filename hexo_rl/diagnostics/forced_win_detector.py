@@ -1,7 +1,7 @@
 """Shared forced-win / off-window / win-from-policy detector (§EVALGATE-B).
 
 The SINGLE source of the §PRELONG detector, factored out of the three duplicated
-``scripts/structural_diagnosis/prelong_*.py`` copies (``prelong_2a_eval.py``,
+``scripts/diagnosis/prelong_*.py`` copies (``prelong_2a_eval.py``,
 ``prelong_centering_oracle.py``, ``prelong_triage_probe.py``).  The eval gate, the
 dashboard, structured logs, and any future probe (incl. the §PRELONG-BRIDGE analyzer)
 import from HERE so a metric cannot drift between copies — the same hygiene class as
@@ -155,7 +155,7 @@ def depth2_wins(board: Any, side: int) -> list[tuple[Cell, Cell]]:
 
 
 # ── turn-correct winning-turn set (§D-OVERSPREAD operator insight, 2026-06-08) ───────────
-# Promoted from scripts/structural_diagnosis/turn_wins.py (its natural home). A Hex Tac Toe
+# Promoted from scripts/diagnosis/turn_wins.py (its natural home). A Hex Tac Toe
 # turn places TWO stones (one in the opening), so the Rust depth-1 ``count_winning_moves``
 # (single-stone 6-completions) is the WRONG unit for "can I finish THIS turn": it undercounts
 # the turn win-set in ~86.5% of threat snapshots (3069-snapshot empirics). The completing cell

@@ -7,8 +7,8 @@ calibrated against, silently breaking the +0.617 / +0.212 anchor
 references and the SOFT-ABORT gates.
 
 Drift = STOP. Regenerate T3 only via
-`scripts/structural_diagnosis/export_value_spread_bank.py`; alt only via
-`scripts/structural_diagnosis/track_a/a3_h_bank.py` — and only if the
+`scripts/diagnosis/export_value_spread_bank.py`; alt only via
+`scripts/diagnosis/track_a/a3_h_bank.py` — and only if the
 underlying builders / corpus genuinely changed (each is a wave-level
 decision).
 """
@@ -28,7 +28,7 @@ ALT_FIXTURE = REPO / "tests" / "fixtures" / "value_spread_bank_alt.json"
 # audit/structural/05_fu1_value_spread_ladder.md.
 EXPECTED_SHA = "934204713620d171743820aea6907cf4e117ca97c69e50052b991a3fdcc23991"
 # PR-C / L48 A3 alt bank anchor — pinned in fixture `meta.sha256`,
-# scripts/structural_diagnosis/track_a/a3_h_bank.py, and
+# scripts/diagnosis/track_a/a3_h_bank.py, and
 # hexo_rl/monitoring/value_spread_canary.py.
 EXPECTED_ALT_SHA = "a68b810f27d31a51e06173bfcd3e2d88d8f3275c7773a63b37aafb3fe25a20ff"
 

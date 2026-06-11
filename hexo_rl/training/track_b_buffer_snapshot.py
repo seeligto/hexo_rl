@@ -52,7 +52,7 @@ def snapshot_buffer_position_classes(
 
     # Classifier lives in scripts/ — make sure the repo root is on path.
     try:
-        from scripts.structural_diagnosis.track_a.position_classifier import (
+        from scripts.diagnosis.track_a.position_classifier import (
             classify_state,
         )
     except Exception as exc:  # noqa: BLE001

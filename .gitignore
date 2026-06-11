@@ -179,10 +179,20 @@ docs/reference/notation_notes.md
 reports/FINDINGS_SUMMARY.md
 scripts/archive/s174_corpus_analysis.py
 scripts/archive/s174_probe_model.py
-scripts/structural_diagnosis/probe_value_bias_results.json
-scripts/structural_diagnosis/track_b/vb_aggregator.py
-scripts/structural_diagnosis/pathstrength_analyze.py
-scripts/structural_diagnosis/prelong_centering_analyze.py
+scripts/diagnosis/probe_value_bias_results.json
+scripts/diagnosis/track_b/vb_aggregator.py
+scripts/diagnosis/pathstrength_analyze.py
+scripts/diagnosis/prelong_centering_analyze.py
+
+# D-REPOSTRUCT-EXEC R3 (2026-06-11): closed-arc local scratch, untracked per D2/D3
+scripts/p5a_*.sh
+scripts/transfer_v6_to_v6w25.py
+scripts/vast_s175_checkup.sh
+scripts/diagnosis/depth_bisect_probe.py
+scripts/diagnosis/game_bisect_probe.py
+scripts/diagnosis/prelong_triage_analyze.py
+scripts/diagnosis/sealbot_selfplay_t1.py
+docs/compression/
 
 # ── intentionally tracked despite gitignore patterns (PIN-1 + active docs) ─
 # audit/ is a dir-level ignore: descent requires un-ignoring the dir, then

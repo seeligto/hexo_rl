@@ -114,7 +114,7 @@ def _classify_rows(states_np: np.ndarray) -> np.ndarray:
     # Lazy import — `scripts/` lives outside the hexo_rl package; only pulled
     # in on first use (mirrors the buffer-snapshot pattern). Classifier is
     # pure-NumPy and side-effect-free.
-    from scripts.structural_diagnosis.track_a.position_classifier import classify_batch
+    from scripts.diagnosis.track_a.position_classifier import classify_batch
     return classify_batch(states_np)
 
 

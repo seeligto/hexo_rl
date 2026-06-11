@@ -934,7 +934,7 @@ forced-win, P3 threat-following, P4 anti-colony) measuring the net+MCTS
 *search output*, not a static forward pass. Retrospective fire-step
 analysis (derived from archived eval trajectories) estimates the new
 probes + `colony_a` alert fire 20–40K steps before the §S180b crash.
-**Experiment:** run `scripts/structural_diagnosis/new_probes.py --probe p4`
+**Experiment:** run `scripts/diagnosis/new_probes.py --probe p4`
 against the 5 §S180b archived checkpoints; confirm P4 `colony_pull`
 crosses 0.20 at step 10K. If it does, P4 is a validated
 40K-steps-early detector and the full probe-implementation wave (T4

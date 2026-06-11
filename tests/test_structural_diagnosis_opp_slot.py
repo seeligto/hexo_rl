@@ -13,8 +13,8 @@ import pytest
 
 from hexo_rl.encoding import lookup
 from hexo_rl.encoding.resolvers import opp_stone_slot
-from scripts.structural_diagnosis.track_a.position_classifier import classify_state
-from scripts.structural_diagnosis.track_a.a3_h_bank import _slots_for_plane_count
+from scripts.diagnosis.track_a.position_classifier import classify_state
+from scripts.diagnosis.track_a.a3_h_bank import _slots_for_plane_count
 
 
 @pytest.mark.parametrize("encoding", ["v6", "v6tp", "v6_live2"])

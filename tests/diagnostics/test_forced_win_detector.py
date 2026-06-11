@@ -1,7 +1,7 @@
 """Unit tests for the shared forced-win detector (§EVALGATE-B).
 
 ONE source of the §PRELONG forced-win / off-window / win-from-policy detector,
-factored out of the three ``scripts/structural_diagnosis/prelong_*.py`` copies so the
+factored out of the three ``scripts/diagnosis/prelong_*.py`` copies so the
 eval gate, dashboard, logs, and future probes share a single definition (no metric
 drift).  All readouts derive from already-recorded games (the ``GameRecorder`` jsonl
 schema) — no hot-path pass.  Geometry comes from the encoding spec (zero literals).
@@ -127,11 +127,11 @@ def test_winning_turn_cells_is_deterministic_across_repeat_calls():
 
 
 def test_turn_wins_shim_reexports_same_objects():
-    """The scripts/structural_diagnosis/turn_wins.py shim must resolve to the SAME
+    """The scripts/diagnosis/turn_wins.py shim must resolve to the SAME
     implementation (no metric drift between the §D-OVERSPREAD scripts and the detector)."""
     import importlib.util
     from pathlib import Path
-    p = Path(__file__).resolve().parents[2] / "scripts" / "structural_diagnosis" / "turn_wins.py"
+    p = Path(__file__).resolve().parents[2] / "scripts" / "diagnosis" / "turn_wins.py"
     spec = importlib.util.spec_from_file_location("turn_wins", p)
     tw = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tw)

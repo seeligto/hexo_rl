@@ -29,7 +29,7 @@
 #     --variant v6_botmix_s180b_2kckpt \
 #     --iterations 100000
 #   STOP the run at step 20000 (kill tmux session). 10 ckpts + anchor preserved.
-# Probe: scripts/structural_diagnosis/fu1_value_spread_ladder.py (FU-1.5 ladder).
+# Probe: scripts/diagnosis/fu1_value_spread_ladder.py (FU-1.5 ladder).
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # ── ORIGINAL §S180b HEADER (verbatim — config body below is unchanged) ──────

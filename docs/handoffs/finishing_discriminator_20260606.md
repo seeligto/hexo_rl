@@ -1,7 +1,7 @@
 # D-EXPLOIT Phase 2 — in-window finishing discriminator: RESULT + VERDICT
 
 Date: 2026-06-06. Training-free. Companion: `exploit_probe_20260606.md` (Phase 1). Harness:
-`scripts/structural_diagnosis/finishing_sims_sweep.py`. Data: `reports/investigations/
+`scripts/diagnosis/finishing_sims_sweep.py`. Data: `reports/investigations/
 finishing_sims_sweep_vast_fixed.json`. All uncommitted (operator-gated).
 
 ---
