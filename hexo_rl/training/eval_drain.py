@@ -56,25 +56,11 @@ def drain_pending_eval(
         assert eval_model is not None
         assert best_model is not None
         # C1: promote the snapshot that actually passed the gate.
-        eval_base = getattr(eval_model, "_orig_mod", eval_model)
-        best_model.load_state_dict(eval_base.state_dict())
-        best_model.eval()
         new_best_step = prev.get("step", train_step)
-        # §D-LOOPFIX W3 — stamp the promotion save with the eval step + run_id +
-        # encoding so the written anchor is log/filename-distinguishable from the
-        # bootstrap (was a bare state_dict → loaders inferred step 0).
-        save_best_model_atomic(
-            best_model, best_model_path,
-            step=new_best_step, run_id=run_id, encoding=encoding,
+        promote_anchor(
+            eval_model, best_model, best_model_path, pool, new_best_step,
+            run_id=run_id, encoding=encoding,
         )
-        # §176 P9 — typed forwarder replaces direct ``_inference_server`` reach.
-        pool.sync_inference_weights(eval_base.state_dict())
-        # §D-WALLCAUSATION: self-play weights just changed to the promoted model,
-        # so refresh the replay recorder's checkpoint_step to match.  This is the
-        # ONLY weight-sync point — tagging here (not per train step) keeps every
-        # recorded game attributed to the weights that actually generated it.
-        if hasattr(pool, "update_checkpoint_step"):
-            pool.update_checkpoint_step(new_best_step)
         log.info(
             "best_model_promoted",
             step=train_step,
@@ -87,3 +73,39 @@ def drain_pending_eval(
         )
     eval_result[0] = None
     return None, new_best_step
+
+
+def promote_anchor(
+    eval_model: HexTacToeNet,
+    best_model: HexTacToeNet,
+    best_model_path: Path,
+    pool: Any,
+    promoted_step: Optional[int],
+    *,
+    run_id: Optional[str] = None,
+    encoding: Optional[str] = None,
+) -> None:
+    """Install the gated eval weights as the new anchor: copy → stamped atomic
+    save → sync self-play inference. Shared by the in-loop drain and the
+    §D-LOOPFIX W1 terminal close-out eval so the promotion mechanism (weight
+    snapshot, W3 provenance stamp, single weight-sync site) is identical on both
+    paths.
+
+    §176 P9 — ``sync_inference_weights`` is the typed forwarder (no direct
+    ``_inference_server`` reach). §D-WALLCAUSATION — this is the ONLY self-play
+    weight-sync point, so the replay recorder's checkpoint_step is re-tagged here
+    (not per train step) to attribute every recorded game to its generating weights.
+    """
+    eval_base = getattr(eval_model, "_orig_mod", eval_model)
+    best_model.load_state_dict(eval_base.state_dict())
+    best_model.eval()
+    # §D-LOOPFIX W3 — stamp the save with the eval step + run_id + encoding so the
+    # written anchor is log/filename-distinguishable from the bootstrap (was a bare
+    # state_dict → loaders inferred step 0).
+    save_best_model_atomic(
+        best_model, best_model_path,
+        step=promoted_step, run_id=run_id, encoding=encoding,
+    )
+    pool.sync_inference_weights(eval_base.state_dict())
+    if hasattr(pool, "update_checkpoint_step"):
+        pool.update_checkpoint_step(promoted_step)

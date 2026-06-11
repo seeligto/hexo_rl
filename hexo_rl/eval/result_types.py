@@ -65,6 +65,9 @@ class EvalRoundResult(TypedDict, total=False):
     eval_games: int
     value_fc2_weight_abs_max: float
     g4_value_head_band_pass: bool
+    # §D-LOOPFIX W1 — wall-clock of the round (set by step_coordinator._run_eval);
+    # sizes the final-drain budget at close-out.
+    eval_round_wall_sec: float
 
     # vs Random
     wr_random: float

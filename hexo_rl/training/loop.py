@@ -223,10 +223,16 @@ def run_training_loop(
 
     # ── StepCoordinatorConfig ────────────────────────────────────────────────
     from hexo_rl.training.step_coordinator import (
+        DEFAULT_FINAL_EVAL_DRAIN_HARD_CAP_SEC,
+        DEFAULT_FINAL_EVAL_DRAIN_SAFETY_FACTOR,
         DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC,
+        DEFAULT_TERMINAL_EVAL_HARD_CAP_SEC,
         StepCoordinator,
         StepCoordinatorConfig,
     )
+
+    def _lifecycle_knob(key: str, default: float) -> float:
+        return float(train_cfg.get(key, config.get(key, default)))
     _step_cfg = StepCoordinatorConfig(
         eval_interval=eval_interval,
         log_interval=log_interval,
@@ -255,11 +261,18 @@ def run_training_loop(
         draw_rate_min_step=_draw_rate_min_step,
         instrumentation_enabled=instrumentation_enabled,
         stop_step=stop_step,
-        final_eval_drain_timeout_sec=float(
-            train_cfg.get("eval_final_drain_timeout_sec",
-                          config.get("eval_final_drain_timeout_sec",
-                                     DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC))
-        ),
+        final_eval_drain_timeout_sec=_lifecycle_knob(
+            "eval_final_drain_timeout_sec", DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC),
+        # §D-LOOPFIX W1 — close-out lifecycle knobs (named defaults; no literals).
+        eval_final_drain_safety_factor=_lifecycle_knob(
+            "eval_final_drain_safety_factor", DEFAULT_FINAL_EVAL_DRAIN_SAFETY_FACTOR),
+        eval_final_drain_hard_cap_sec=_lifecycle_knob(
+            "eval_final_drain_hard_cap_sec", DEFAULT_FINAL_EVAL_DRAIN_HARD_CAP_SEC),
+        terminal_eval_enabled=bool(
+            train_cfg.get("terminal_eval_enabled",
+                          config.get("terminal_eval_enabled", True))),
+        terminal_eval_hard_cap_sec=_lifecycle_knob(
+            "terminal_eval_hard_cap_sec", DEFAULT_TERMINAL_EVAL_HARD_CAP_SEC),
         # §178 — bot-corpus slot share + refresh hook (DISABLED-by-default;
         # Wave 3 variant flips `enabled: true`).
         bot_batch_share=float(mixing_cfg.get("bot_batch_share", 0.0)),
@@ -358,6 +371,36 @@ def run_training_loop(
         run_id=run_id,
     )
 
+    # ── §D-LOOPFIX W1 — surface the schedule's promotion capacity at launch ────
+    # so a stride-parity cadence that drops the decision-capable phase to a
+    # near-empty schedule (the A/B's stride-2 × interval-12500 × 50k → only rounds
+    # 2 and 4) is LOUD, not silent. The terminal close-out eval covers the FINAL
+    # checkpoint regardless of stride.
+    if stop_step is not None and eval_pipeline is not None:
+        from hexo_rl.training.step_coordinator import promotion_capable_rounds
+        _best_stride = int(
+            eval_ext_config.get("eval_pipeline", {}).get("opponents", {})
+            .get("best_checkpoint", {}).get("stride", 1)
+        )
+        _capable = promotion_capable_rounds(stop_step, eval_interval, _best_stride)
+        log.info(
+            "eval_schedule_capability",
+            stop_step=stop_step,
+            eval_interval=eval_interval,
+            best_checkpoint_stride=_best_stride,
+            promotion_capable_in_run_rounds=len(_capable),
+            capable_round_steps=[r * eval_interval for r in _capable],
+            terminal_eval_covers_final=bool(_step_cfg.terminal_eval_enabled),
+        )
+        if not _capable:
+            log.warning(
+                "eval_schedule_no_in_run_promotion",
+                msg="NO in-run promotion-capable rounds for this "
+                    "stop_step/interval/best_checkpoint.stride — only the terminal "
+                    "close-out eval can promote. Lower best_checkpoint.stride to "
+                    "promote mid-run.",
+            )
+
     # ── Run and teardown ──────────────────────────────────────────────────────
     # R10: tracemalloc.start/stop wraps the run loop so the periodic snapshot
     # at log_interval cadence has data to read.  Stays here, not in coordinator.
@@ -366,10 +409,12 @@ def run_training_loop(
         coordinator.run_until_stopped()
     finally:
         tracemalloc.stop()
-        # R22 + D-012: drain a possibly-completed eval before teardown so a
-        # promotion at the final tick isn't silently lost.  Pool is still up
-        # here — the inference-server sync inside the drain needs it.
-        coordinator.flush_pending_eval()
+        # R22 + D-012 + §D-LOOPFIX W1: the run lifecycle epilogue — DRAIN the
+        # in-flight eval (budgeted), then run a TERMINAL full-battery eval on the
+        # final checkpoint so the last model gets a real promotion-capable decision
+        # instead of dying truncated on a stride boundary. Pool is still up here —
+        # the inference-server sync inside promotion needs it.
+        coordinator.close_out()
         emit_event({"event": "run_end", "step": coordinator.train_step})
         # R4 + R25: pool.stop() then subsys.teardown() — preserves the
         # gpu_util_pct read window during the last train_step_summary log.

@@ -48,6 +48,7 @@ from hexo_rl.training.mixing import (
 )
 from hexo_rl.training.buffer_persist import try_save_buffer as _try_save_buffer
 from hexo_rl.training.eval_drain import drain_pending_eval as _drain_pending_eval
+from hexo_rl.training.eval_drain import promote_anchor as _promote_anchor
 from hexo_rl.training.events import (
     emit_axis_distribution as _emit_axis_distribution,
     emit_training_events as _emit_training_events,
@@ -105,6 +106,7 @@ class EvalPipelineLike(Protocol):
         *,
         full_config: dict[str, Any],
         best_model_step: int | None,
+        ignore_stride: bool = False,
     ) -> dict[str, Any]: ...
 
 
@@ -167,6 +169,37 @@ class RealTracemalloc:
 # terminal so the wait is acceptable.
 DEFAULT_FINAL_EVAL_DRAIN_TIMEOUT_SEC: float = 900.0
 
+# §D-LOOPFIX W1 — the in-flight final drain budget is sized from the measured
+# eval-round wall-clock × a safety factor (NOT a flat 900 s, which is 10-16×
+# undersized for a full round under training load — the cap that killed the A/B's
+# terminal eval at sealbot game 99/100). ``final_eval_drain_timeout_sec`` above is
+# repurposed as the FLOOR (and the ``<= 0`` disable switch); these scale + cap it.
+DEFAULT_FINAL_EVAL_DRAIN_SAFETY_FACTOR: float = 3.0
+# Hard cap so a hung evaluator can't deadlock teardown (red-team). 4h ≫ any real
+# unloaded round (eval at close-out runs on a free GPU, ~10× faster than loaded).
+DEFAULT_FINAL_EVAL_DRAIN_HARD_CAP_SEC: float = 14400.0
+# Terminal full-battery eval (all phases, stride ignored) on the FINAL checkpoint.
+DEFAULT_TERMINAL_EVAL_HARD_CAP_SEC: float = 14400.0
+
+
+def promotion_capable_rounds(
+    stop_step: int | None, eval_interval: int, best_stride: int,
+) -> list[int]:
+    """§D-LOOPFIX W1 — the round indices in a bounded run that are promotion-capable
+    (the best_checkpoint opponent fires → a gate decision can land).
+
+    round_idx = step // eval_interval; a round is capable iff
+    ``round_idx % best_stride == 0``. Surfaced at launch so a schedule that drops
+    the decision-capable phase to a near-empty cadence (the A/B's stride-2 ×
+    interval-12500 × 50k → only rounds 2 and 4) is LOUD, not silent. The terminal
+    close-out eval additionally covers the FINAL checkpoint regardless of stride.
+    """
+    if stop_step is None or eval_interval <= 0:
+        return []
+    n_rounds = stop_step // eval_interval
+    stride = max(int(best_stride), 1)
+    return [r for r in range(1, n_rounds + 1) if r % stride == 0]
+
 
 def _recent_pool_draw_rate(per_worker_rates: "dict[int, float]") -> float:
     """§D-GOLONG — pool-wide recent self-play draw rate.
@@ -207,6 +240,11 @@ class StepCoordinatorConfig:
     instrumentation_enabled: bool
     stop_step: int | None
     final_eval_drain_timeout_sec: float
+    # §D-LOOPFIX W1 — close-out lifecycle knobs (named defaults above; no literals).
+    eval_final_drain_safety_factor: float = DEFAULT_FINAL_EVAL_DRAIN_SAFETY_FACTOR
+    eval_final_drain_hard_cap_sec: float = DEFAULT_FINAL_EVAL_DRAIN_HARD_CAP_SEC
+    terminal_eval_enabled: bool = True
+    terminal_eval_hard_cap_sec: float = DEFAULT_TERMINAL_EVAL_HARD_CAP_SEC
     # §CANARY-VAL stride-5 spam hard-abort (validated 2026-05-31: benign rolling
     # P90 ≤4 on all radius-5 runs; cosine-temp draw-collapse spam P90 86-133).
     # Gate fires when the pool's rolling-50 stride5 P90 stays ≥ threshold for
@@ -358,6 +396,9 @@ class StepCoordinator:
         from hexo_rl.encoding import normalize_encoding_name as _norm_enc
         _enc = self.full_config.get("encoding")
         self._encoding_name = _norm_enc(_enc) if _enc is not None else None
+        # §D-LOOPFIX W1 — wall-clock of the most recent COMPLETED eval round; sizes
+        # the final-drain budget (None until the first round completes → floor).
+        self._last_eval_round_sec: float | None = None
         self._clock = clock
         self._tracemalloc = tracemalloc_provider
         self._event_emitter = event_emitter
@@ -966,6 +1007,12 @@ class StepCoordinator:
                 )
                 if prev_thread is not None and self._eval_thread is None:
                     eval_drained = True
+                    # §D-LOOPFIX W1 — remember the round wall-clock so the final
+                    # drain budget scales from a real measurement, not a flat cap.
+                    if _pending_eval_result is not None:
+                        _rt = _pending_eval_result.get("eval_round_wall_sec")
+                        if _rt:
+                            self._last_eval_round_sec = float(_rt)
                     if self._best_model_step != prev_best_step:
                         promoted_step = self._best_model_step
 
@@ -1153,10 +1200,18 @@ class StepCoordinator:
                         try:
                             # L4: run_evaluation sets result["step"] itself; the
                             # post-hoc assignment here was dead code.
+                            import time as _eval_t
+                            _eval_t0 = _eval_t.time()
                             result: EvalRoundResult = eval_pipeline.run_evaluation(
                                 _model, _step, _best, full_config=_cfg,
                                 best_model_step=_best_step,
                             )
+                            # §D-LOOPFIX W1 — record the round wall-clock so the
+                            # final-drain budget is sized from a real measurement.
+                            try:
+                                result["eval_round_wall_sec"] = _eval_t.time() - _eval_t0
+                            except Exception:  # noqa: BLE001 — result may be a fixed dict in tests
+                                pass
                             eval_result[0] = result
                         except Exception:
                             import traceback
@@ -1347,13 +1402,30 @@ class StepCoordinator:
 
     # ── Final-drain (called from caller's finally:) ──────────────────────────
 
+    def _final_drain_budget_sec(self) -> float:
+        """§D-LOOPFIX W1 — the in-flight-eval drain budget = measured round
+        wall-clock × safety factor, FLOORED at ``final_eval_drain_timeout_sec``
+        and HARD-CAPPED so a hung evaluator can't deadlock teardown. The old flat
+        900 s was 10-16× smaller than a real round under training load → the
+        terminal eval was killed at sealbot game 99/100."""
+        cfg = self.config
+        floor = cfg.final_eval_drain_timeout_sec
+        measured = self._last_eval_round_sec
+        if measured is not None and measured > 0.0:
+            base = measured * cfg.eval_final_drain_safety_factor
+        else:
+            base = floor
+        return min(max(base, floor), cfg.eval_final_drain_hard_cap_sec)
+
     def flush_pending_eval(self) -> StepOutcome | None:
         """Drain any in-flight eval before the inference server tears down (D-012).
 
         Mirrors the closure's ``finally:`` block:
-          1. If ``final_eval_drain_timeout_sec > 0`` AND eval still alive AND
-             not a SIGINT save, join the eval thread up to the timeout.  Log
-             a warning on timeout.
+          1. If the drain budget > 0 AND eval still alive AND not a SIGINT save,
+             join the eval thread up to the BUDGET (measured round × safety
+             factor, floored + hard-capped — §D-LOOPFIX W1, no longer a flat
+             900 s). Overrun → WARN + proceed (the terminal eval re-covers the
+             final checkpoint, so no decision is silently lost).
           2. Always call ``drain_pending_eval`` to consume the eval result
              cell — promotes the anchor if the eval gated, no-op otherwise.
              Swallow exceptions and log a warning.
@@ -1361,21 +1433,24 @@ class StepCoordinator:
         Returns ``None`` (callers don't consume the outcome — they read
         ``coordinator.best_model_step`` post-call).
         """
-        cfg = self.config
-        if (cfg.final_eval_drain_timeout_sec > 0.0
+        budget = self._final_drain_budget_sec()
+        if (budget > 0.0
                 and self._eval_thread is not None
                 and self._eval_thread.is_alive()
                 and not self.shutdown.shutdown_save):
             self._logger.info(
                 "final_eval_drain_waiting",
-                timeout_sec=cfg.final_eval_drain_timeout_sec,
+                budget_sec=round(budget, 1),
+                measured_round_sec=(round(self._last_eval_round_sec, 1)
+                                    if self._last_eval_round_sec else None),
             )
-            self._eval_thread.join(timeout=cfg.final_eval_drain_timeout_sec)
+            self._eval_thread.join(timeout=budget)
             if self._eval_thread.is_alive():
                 self._logger.warning(
                     "final_eval_drain_timeout",
-                    timeout_sec=cfg.final_eval_drain_timeout_sec,
-                    msg="eval still running past timeout — proceeding to shutdown",
+                    budget_sec=round(budget, 1),
+                    msg="eval still running past drain budget — proceeding "
+                        "(the terminal full-battery eval re-covers the final checkpoint)",
                 )
         try:
             self._eval_thread, self._best_model_step = _drain_pending_eval(
@@ -1386,6 +1461,108 @@ class StepCoordinator:
         except Exception:
             self._logger.warning("final_eval_drain_failed", exc_info=True)
         return None
+
+    def run_terminal_eval(self) -> None:
+        """§D-LOOPFIX W1 — a TERMINAL full-battery eval on the FINAL checkpoint.
+
+        Training has stopped; run EVERY enabled opponent (``ignore_stride=True``)
+        on the final weights so the last checkpoint gets a real, promotion-capable
+        decision instead of dying truncated on a stride-skipped stop boundary. The
+        result is recorded as TERMINAL (a distinct ``terminal_eval_complete`` event,
+        step-stamped) and NEVER fed to the steering/abort history (it runs OUTSIDE
+        ``step()`` — there is no steering left to feed). Bounded by a hard cap so a
+        hung evaluator can't deadlock teardown.
+
+        No-op when no eval pipeline is configured or the knob is disabled.
+        """
+        cfg = self.config
+        if (self.eval_pipeline is None
+                or not cfg.terminal_eval_enabled
+                or self.eval_model is None):
+            return
+        # On SIGINT/SIGTERM (operator interrupt) skip the multi-minute terminal
+        # eval — flush_pending_eval already banked any in-flight promotion (D-012);
+        # the interrupt path wants a quick clean exit, not a full battery. The
+        # clean stop-at-N path (shutdown_save False) runs it.
+        if self.shutdown.shutdown_save:
+            self._logger.info("terminal_eval_skipped_on_interrupt", step=self._train_step)
+            return
+        step = self._train_step
+        self._logger.info("terminal_eval_start", step=step)
+        # Load the FINAL trainer weights into the eval model (mirrors the in-loop
+        # kickoff — eval reads EMA-vs-raw via Trainer.inference_state_dict).
+        _eval_base = getattr(self.eval_model, "_orig_mod", self.eval_model)
+        _eval_base.load_state_dict(self.trainer.inference_state_dict())
+
+        result_cell: list[dict[str, Any] | None] = [None]
+
+        def _run() -> None:
+            try:
+                result_cell[0] = self.eval_pipeline.run_evaluation(
+                    self.eval_model, step, self.best_model,
+                    full_config=self.full_config,
+                    best_model_step=self._best_model_step,
+                    ignore_stride=True,
+                )
+            except Exception:
+                import traceback
+                self._logger.error("terminal_eval_error", step=step,
+                                   tb=traceback.format_exc())
+                result_cell[0] = {"promoted": False, "error": True, "step": step}
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        thread.join(timeout=cfg.terminal_eval_hard_cap_sec)
+        if thread.is_alive():
+            self._logger.warning(
+                "terminal_eval_timeout",
+                step=step,
+                hard_cap_sec=cfg.terminal_eval_hard_cap_sec,
+                msg="terminal eval exceeded its hard cap — proceeding to shutdown "
+                    "without a terminal decision (hung evaluator backstop)",
+            )
+            self._event_emitter({
+                "event": "terminal_eval_complete", "terminal": True,
+                "step": step, "completed": False,
+            })
+            return
+
+        result = result_cell[0]
+        promoted = bool(result and result.get("promoted"))
+        if promoted:
+            # Final checkpoint beat the incumbent on the full battery → promote it
+            # (the SAME mechanism the in-loop drain uses — stamped save + sync).
+            assert self.best_model is not None
+            _promote_anchor(
+                self.eval_model, self.best_model, self.anchor_state.best_model_path,
+                self.pool, (result.get("step", step) if result else step),
+                run_id=self.run_id, encoding=self._encoding_name,
+            )
+            self._best_model_step = result.get("step", step) if result else step
+            self._logger.info("terminal_eval_promoted", step=step,
+                              eval_step=self._best_model_step, run_id=self.run_id)
+        self._event_emitter({
+            "event": "terminal_eval_complete",
+            "terminal": True,
+            "completed": bool(result is not None),
+            "step": (result.get("step", step) if result else step),
+            "promoted": promoted,
+            "wr_best": (result.get("wr_best") if result else None),
+            "wr_sealbot": (result.get("wr_sealbot") if result else None),
+            "offwindow_forced_win_rate": (
+                result.get("offwindow_forced_win_rate") if result else None),
+            "error": bool(result and result.get("error")),
+        })
+        self._logger.info("terminal_eval_complete", step=step, promoted=promoted,
+                          wr_best=(result.get("wr_best") if result else None))
+
+    def close_out(self) -> None:
+        """§D-LOOPFIX W1 — the run lifecycle epilogue: training has STOPPED; DRAIN
+        the in-flight eval (budgeted), then run the TERMINAL full-battery eval on
+        the final checkpoint. Called from the caller's ``finally:`` while the pool
+        is still up (promotion's inference sync needs it)."""
+        self.flush_pending_eval()
+        self.run_terminal_eval()
 
     # ── §S181-AUDIT Wave 3 Stage 2A — bot-corpus refresh hook ────────────────
 

@@ -276,6 +276,29 @@ def test_stride_skips_sealbot_off_cadence(
 
 
 @patch("hexo_rl.eval.eval_pipeline.Evaluator")
+def test_ignore_stride_runs_stride_skipped_opponent(
+    mock_evaluator_cls: MagicMock,
+    eval_config_with_strides: dict,
+) -> None:
+    """§D-LOOPFIX W1 — the terminal close-out eval passes ignore_stride=True so the
+    FINAL checkpoint gets a full-battery read (all opponents) regardless of the
+    stride parity that would skip them. Pre-fix the stride-4 nnue/offwindow phases
+    got ZERO reads in a 50k run (Objective-A coverage gap)."""
+    import torch
+    pipeline = EvalPipeline(eval_config_with_strides, torch.device("cpu"))
+    mock_eval = MagicMock()
+    mock_eval.evaluate_vs_random.return_value = EvalResult(win_rate=0.7, win_count=7, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_sealbot.return_value = EvalResult(win_rate=0.4, win_count=4, n_games=10, colony_wins=0)
+    mock_eval.evaluate_vs_model.return_value = EvalResult(win_rate=0.6, win_count=6, n_games=10, colony_wins=0)
+    mock_evaluator_cls.return_value = mock_eval
+
+    # step=100 → round_idx=1 → sealbot stride=4 (1%4!=0) would SKIP; ignore_stride forces it.
+    result = pipeline.run_evaluation(MagicMock(), 100, MagicMock(), ignore_stride=True)
+    mock_eval.evaluate_vs_sealbot.assert_called_once()
+    assert result["wr_sealbot"] == 0.4
+
+
+@patch("hexo_rl.eval.eval_pipeline.Evaluator")
 @pytest.mark.parametrize("stride", [1, 2, 4, 8])
 def test_stride_cadence_sealbot(
     mock_evaluator_cls: MagicMock,

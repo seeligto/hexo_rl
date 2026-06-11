@@ -228,6 +228,7 @@ class EvalPipeline:
         best_model: HexTacToeNet | None,
         full_config: dict[str, Any] | None = None,
         best_model_step: int | None = None,
+        ignore_stride: bool = False,
     ) -> EvalRoundResult:
         """Run a full evaluation round.
 
@@ -240,6 +241,11 @@ class EvalPipeline:
                 to identify distinct graduated anchors in the Elo DB — one
                 player row per anchor snapshot, not one row per run. Falls
                 back to legacy "best_checkpoint" when None (tests only).
+            ignore_stride: When True every enabled opponent fires regardless of
+                stride parity (§D-LOOPFIX W1). The terminal close-out eval sets
+                this so the FINAL checkpoint gets a full-battery, promotion-capable
+                read — pre-fix the stride-4 nnue / offwindow_adversary phases got
+                ZERO reads across a 50k run (Objective-A coverage gap).
 
         Returns:
             Dict with keys: promoted (bool), win_rates, ratings.
@@ -296,6 +302,8 @@ class EvalPipeline:
             )
 
         def _should_run(name: str, opp_cfg: dict[str, Any]) -> bool:
+            if ignore_stride:  # §D-LOOPFIX W1 — terminal full-battery read
+                return True
             stride = int(opp_cfg.get("stride", 1))
             if stride <= 1:
                 return True

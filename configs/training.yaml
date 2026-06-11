@@ -84,6 +84,20 @@ eval_interval: 5000            # overrides eval.yaml's eval_interval at trigger 
 checkpoint_interval: 500
 max_checkpoints_kept: 10
 preserve_eval_checkpoints: true   # never prune checkpoints at eval_interval boundaries
+
+# §D-LOOPFIX W1 — run close-out lifecycle (training-stop ≠ process-exit). At the
+# stop step the loop DRAINS the in-flight eval then runs a TERMINAL full-battery
+# eval (all opponents, stride parity ignored) on the FINAL checkpoint, so the last
+# model gets a real promotion-capable decision instead of dying truncated on a
+# stride boundary (the A/B's terminal round was killed at sealbot game 99/100).
+# All four are optional (named defaults in step_coordinator.py); listed here as the
+# SoT. The in-flight drain budget = measured eval-round wall-clock × safety factor,
+# FLOORED at eval_final_drain_timeout_sec and HARD-CAPPED (deadlock backstop).
+eval_final_drain_timeout_sec: 900.0      # floor + disable switch (<=0 disables the join)
+eval_final_drain_safety_factor: 3.0      # budget = measured_round_sec × this
+eval_final_drain_hard_cap_sec: 14400.0   # 4h hard cap — a hung evaluator can't deadlock
+terminal_eval_enabled: true              # run the terminal full-battery eval at close-out
+terminal_eval_hard_cap_sec: 14400.0      # backstop for the synchronous terminal eval
 log_interval: 10        # also controls web-dashboard send frequency
 aux_opp_reply_weight: 0.15
 entropy_reg_weight: 0.005  # policy entropy regularization (KrakenBot-style, prevents policy collapse)
