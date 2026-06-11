@@ -17,7 +17,7 @@ scripts/diagnosis/ is a REGULAR Python package (has __init__.py). Import as:
 | turn_wins.py | re-export shim (PRODUCTION dependency from forced_win_detector) | — |
 | new_probes.py, offwindow_placement_lift.py | §D-RECONVERGE/§D-EXTLINK→§D-MULTICLUSTER | 5222-5383 |
 | finishing_sims_sweep.py | §D-EXPLOIT | 5383+ |
-| value_calibration_ladder.py | arc UNASSIGNED — value-head calibration ladder, created 2026-06-11; tracked per D2 (active-in-flight); operator to assign arc tag | — |
+| value_calibration_ladder.py | §D-VALPROBE — fixture-agnostic value-calibration ladder (corpus/selfplay; E1-E2 + G1/G3 verdicts; kernels tested in tests/test_value_calibration_metrics.py) | — |
 
 ## CLOSED arcs (instruments retained for reference, no longer deployed)
 
