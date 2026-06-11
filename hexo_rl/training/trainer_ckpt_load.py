@@ -530,5 +530,13 @@ def load_checkpoint(
                     )
                 trainer.scheduler.load_state_dict(scheduler_state)
         trainer.step = ckpt["step"]
+    elif isinstance(ckpt, dict) and ckpt.get("step") is not None:
+        # §D-LOOPFIX W3 — a stamped promotion anchor is a PARTIAL payload
+        # (model_state + step + run_id, no optimizer/scaler/config) so
+        # is_full_ckpt is False; still recover its training step so
+        # best_model_loaded logs the real promotion step. Pre-fix this stayed
+        # at the constructor default 0, making promoted anchors log-
+        # indistinguishable from a freshly-copied bootstrap (promogate W3).
+        trainer.step = int(ckpt["step"])
 
     return trainer

@@ -263,8 +263,13 @@ def test_final_promotion_drains_on_shutdown(tmp_path: Path):
     # best_model.pt on disk was overwritten — this is the invariant the
     # shutdown drain exists to protect. Without it, the next restart would
     # load INITIAL_BEST_VALUE and silently revert the graduation.
+    # §D-LOOPFIX W3 — the promotion save now wraps the state_dict with
+    # provenance (step/run_id/promoted); the weights live under "model_state".
+    raw = torch.load(best_path, map_location="cpu", weights_only=True)
+    assert raw["step"] == 2500          # W3: promoted step is stamped (was lost → 0)
+    assert raw["promoted"] is True
     reloaded = _small_model()
-    reloaded.load_state_dict(torch.load(best_path, map_location="cpu", weights_only=True))
+    reloaded.load_state_dict(raw["model_state"])
     assert abs(_param_mean(reloaded) - EVAL_VALUE) < 0.01
 
     # Inference-server sync fired: post-promotion self-play uses the anchor.

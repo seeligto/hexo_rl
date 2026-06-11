@@ -322,6 +322,7 @@ class StepCoordinator:
         mixing_cfg: dict[str, Any] | None = None,
         batch_size_cfg: int | None = None,
         iterations: int | None = None,
+        run_id: str | None = None,
         clock: ClockLike = RealClock(),
         tracemalloc_provider: TracemallocLike = RealTracemalloc(),
         event_emitter: Callable[[dict[str, Any]], None] = emit_event,
@@ -351,6 +352,12 @@ class StepCoordinator:
         self.mixing_cfg = mixing_cfg if mixing_cfg is not None else {}
         self.batch_size_cfg = batch_size_cfg if batch_size_cfg is not None else config.batch_size
         self.iterations = iterations
+        self.run_id = run_id
+        # §D-LOOPFIX W3 — canonical encoding name stamped onto promotion saves so
+        # the written anchor records which encoding generated it.
+        from hexo_rl.encoding import normalize_encoding_name as _norm_enc
+        _enc = self.full_config.get("encoding")
+        self._encoding_name = _norm_enc(_enc) if _enc is not None else None
         self._clock = clock
         self._tracemalloc = tracemalloc_provider
         self._event_emitter = event_emitter
@@ -955,6 +962,7 @@ class StepCoordinator:
                 self._eval_thread, self._best_model_step = _drain_pending_eval(
                     self._eval_thread, self._eval_result, self.eval_model, self.best_model,
                     self.anchor_state.best_model_path, self._best_model_step, self.pool, self._train_step,
+                    run_id=self.run_id, encoding=self._encoding_name,
                 )
                 if prev_thread is not None and self._eval_thread is None:
                     eval_drained = True
@@ -1373,6 +1381,7 @@ class StepCoordinator:
             self._eval_thread, self._best_model_step = _drain_pending_eval(
                 self._eval_thread, self._eval_result, self.eval_model, self.best_model,
                 self.anchor_state.best_model_path, self._best_model_step, self.pool, self._train_step,
+                run_id=self.run_id, encoding=self._encoding_name,
             )
         except Exception:
             self._logger.warning("final_eval_drain_failed", exc_info=True)

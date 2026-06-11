@@ -37,6 +37,30 @@ def test_promotion_refreshes_recorder_checkpoint_step(tmp_path):
     pool.update_checkpoint_step.assert_called_once_with(12345)
 
 
+def test_promotion_stamps_step_and_run_id(tmp_path):
+    """§D-LOOPFIX W3 — the promotion save carries the eval step + run_id +
+    encoding so the written anchor is log/filename-distinguishable from bootstrap."""
+    pool = Mock()
+    eval_model = Mock()
+    eval_model._orig_mod = eval_model
+    eval_model.state_dict = Mock(return_value={})
+    best_model = Mock()
+    eval_result = [{"promoted": True, "step": 25000, "wr_best": 0.6}]
+
+    with patch("hexo_rl.training.eval_drain.save_best_model_atomic") as mock_save, \
+         patch("hexo_rl.training.eval_drain.emit_event"):
+        eval_drain.drain_pending_eval(
+            _dead_thread(), eval_result, eval_model, best_model,
+            tmp_path / "best.pt", best_model_step=0, pool=pool, train_step=26000,
+            run_id="e928c854", encoding="v6_live2",
+        )
+
+    _args, kwargs = mock_save.call_args
+    assert kwargs["step"] == 25000
+    assert kwargs["run_id"] == "e928c854"
+    assert kwargs["encoding"] == "v6_live2"
+
+
 def test_no_promotion_leaves_checkpoint_step_untouched(tmp_path):
     pool = Mock()
     eval_result = [{"promoted": False, "step": 12345}]

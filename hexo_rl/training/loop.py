@@ -354,6 +354,7 @@ def run_training_loop(
         mixing_cfg=mixing_cfg,
         batch_size_cfg=batch_size_cfg,
         iterations=args.iterations,
+        run_id=run_id,
     )
 
     # ── Run and teardown ──────────────────────────────────────────────────────

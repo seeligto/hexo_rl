@@ -24,6 +24,8 @@ def drain_pending_eval(
     best_model_step: Optional[int],
     pool: Any,
     train_step: int,
+    run_id: Optional[str] = None,
+    encoding: Optional[str] = None,
 ) -> tuple[Optional[threading.Thread], Optional[int]]:
     """Drain the most recent completed eval: emit event + promote if gated.
 
@@ -57,8 +59,14 @@ def drain_pending_eval(
         eval_base = getattr(eval_model, "_orig_mod", eval_model)
         best_model.load_state_dict(eval_base.state_dict())
         best_model.eval()
-        save_best_model_atomic(best_model, best_model_path)
         new_best_step = prev.get("step", train_step)
+        # §D-LOOPFIX W3 — stamp the promotion save with the eval step + run_id +
+        # encoding so the written anchor is log/filename-distinguishable from the
+        # bootstrap (was a bare state_dict → loaders inferred step 0).
+        save_best_model_atomic(
+            best_model, best_model_path,
+            step=new_best_step, run_id=run_id, encoding=encoding,
+        )
         # §176 P9 — typed forwarder replaces direct ``_inference_server`` reach.
         pool.sync_inference_weights(eval_base.state_dict())
         # §D-WALLCAUSATION: self-play weights just changed to the promoted model,
@@ -71,6 +79,8 @@ def drain_pending_eval(
             "best_model_promoted",
             step=train_step,
             eval_step=new_best_step,
+            run_id=run_id,
+            encoding=encoding,
             path=str(best_model_path),
             graduated=True,
             wr_best=prev.get("wr_best"),

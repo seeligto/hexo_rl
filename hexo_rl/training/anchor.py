@@ -9,6 +9,7 @@ Extracted from training/loop.py per §159 refactor. No behavior change.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +33,14 @@ _BOOTSTRAP_ANCHOR_CANDIDATES: tuple[str, ...] = (
 )
 
 
-def save_best_model_atomic(model: torch.nn.Module, path: Path) -> None:
+def save_best_model_atomic(
+    model: torch.nn.Module,
+    path: Path,
+    *,
+    step: int | None = None,
+    run_id: str | None = None,
+    encoding: str | None = None,
+) -> None:
     """Save ``state_dict()`` to ``path`` atomically with one-revision backup.
 
     Sequence:
@@ -43,12 +51,33 @@ def save_best_model_atomic(model: torch.nn.Module, path: Path) -> None:
 
     A SIGKILL between (3) and (4) leaves ``.bak`` as the recovery copy;
     ``load_best_model_resilient`` knows to fall through to it.
+
+    §D-LOOPFIX W3 — when ``step`` is supplied (the promotion path) the payload
+    is wrapped with provenance (``step`` / ``run_id`` / ``promoted`` /
+    ``encoding`` / ``metadata.encoding_name``) and a ``.provenance.json`` sidecar
+    is written, so a promoted anchor is log- AND filename-distinguishable from
+    the bootstrap. ``Trainer.load_checkpoint`` recovers ``step`` from the wrapper
+    (was 0 — promoted anchors looked like bootstrap). With ``step=None`` the
+    legacy bare-``state_dict`` payload is written (back-compat: callers that
+    don't track provenance, e.g. tests / startup fresh-init without a run_id).
     """
     path = Path(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
     bak = path.with_suffix(path.suffix + ".bak")
     sd = model.state_dict()
-    torch.save(sd, tmp)
+    payload: Any
+    if step is None:
+        payload = sd
+    else:
+        payload = {
+            "model_state": sd,
+            "step": int(step),
+            "run_id": run_id,
+            "promoted": True,
+            "encoding": encoding,
+            "metadata": {"encoding_name": encoding} if encoding is not None else {},
+        }
+    torch.save(payload, tmp)
     # Round-trip verify — torch.save is not atomic on some filesystems and
     # a process kill mid-write produces exactly the truncated zip we are
     # trying to defend against.
@@ -56,6 +85,22 @@ def save_best_model_atomic(model: torch.nn.Module, path: Path) -> None:
     if path.exists():
         path.replace(bak)
     tmp.replace(path)
+    if step is not None:
+        _write_provenance_sidecar(path, step=int(step), run_id=run_id, encoding=encoding)
+
+
+def _write_provenance_sidecar(
+    path: Path, *, step: int, run_id: str | None, encoding: str | None,
+) -> None:
+    """Write ``<path>.provenance.json`` (atomic) so a promoted anchor's identity
+    is greppable without loading torch — closes the W2/W3 forensic gap where a
+    promoted golong anchor could only be told apart from bootstrap by a
+    tensor-by-tensor compare."""
+    prov = {"step": step, "run_id": run_id, "encoding": encoding, "promoted": True}
+    sidecar = path.with_name(path.name + ".provenance.json")
+    tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
+    tmp.write_text(json.dumps(prov, indent=2))
+    tmp.replace(sidecar)
 
 
 def _quarantine_corrupt(path: Path) -> Path:
