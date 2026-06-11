@@ -58,9 +58,19 @@ eval_interval: 12500
 eval_pipeline:
   opponents:
     best_checkpoint:
+      # §D-LOOPFIX POWER (A-POWER). The n=50 override is REMOVED → inherits
+      # eval.yaml n_games=400, restoring gate power. Operating characteristics
+      # with the CI guard (require_ci_above_half) at n=400, bar = 220/400 (0.550):
+      #   P(promote | true 0.55)       = 0.521   (≥ 0.5 target — A-POWER PASS)
+      #   P(false-promote | true 0.50) = 0.0255  (≤ 0.05 target — A-POWER PASS)
+      # The dead band is GONE: at n=400 the CI-guard bar == the nominal 0.55 bar.
+      # vs the killed n=50 point: bar 32/50 (0.640), P(0.55)=0.127, dead band 0.55-0.62.
+      # OCs from the shipped evaluate_gate × binomial (§D-LOOPFIX Phase 4; reproduce
+      # over hexo_rl.eval.gate_logic.evaluate_gate). The W1 cadence (best stride →1,
+      # bootstrap_anchor stride/sims, nnue/offwindow in-run scheduling) is set
+      # coherently in the Phase 7 re-run runbook, NOT here.
       enabled: true
       stride: 2
-      n_games: 50
       opponent_sims: 64
     sealbot:
       enabled: true
