@@ -6026,3 +6026,79 @@ reads for rungs that predate its games — date the data vs the rung, don't disc
 floor guards can't orient near-chance heads — use late-phase bins (decided endgames) for orientation. L:
 strength-CI effective-n lesson extends to calibration ladders — CI per-game, not per-row (4000 rows = 150
 games here).
+
+## §D-VALCEIL — ceiling-vs-headroom + §D-VALPROBE loose ends — 2026-06-11
+
+Dispatcher: Q1 is the live 0.65 plateau intrinsic-ceiling or headroom; Q2 occ-stratified KSTRAT re-read of
+the G3 exclusion; Q3 per-source masked logging + value_accuracy anomaly + mixture mechanism; Q4 78-vs-56
+length gap. Eval/logging-only; verdicts pre-registered (dispatcher §2 + pre-read pins: KSTRAT adequacy
+floor n_rows≥100∧n_games≥30, occ strata = banked Phase-1 terciles). Branch pushed first (loss-risk);
+commits `becc48a` (stratified_tercile_masks kernel + 3 TDD tests — old within-stratum read was 96-100%
+degenerate to one bin), `fc46224` (10 additive per-source/masked value keys, 8 TDD tests, bit-identity
+EXACT incl. independent reviewer re-run, make test.py 1968 green), `2e4da69` (valceil_analysis.py).
+Per-row dumps regenerated on vast from exact ladder slices: ALL 96 cells bit-identical to banked JSONs.
+
+**Q1 CEIL: CEIL-HEADROOM** (registered; CI-robust). Livetail@50k vs corpus@50k per-phase (per-bank occ
+terciles, the ladder's method; livetail game-bootstrap CIs): early −0.063 [−0.110,−0.014], mid −0.105
+[−0.156,−0.050], late **−0.191 [−0.265,−0.115]** — late-gap CI entirely past both thresholds. Red-team
+STRENGTHENED it: matched-ABSOLUTE-occ re-bin widens every gap (−0.13…−0.23, all CI uppers <−0.07);
+one-row-per-game control holds (0.754 vs corpus 0.892). Magnitude stamp: decidability-controlled floor
+(rows ≤2 plies from termination) deficit −0.082 [−0.132,−0.033] — intrinsic-ceiling alternative KILLED on
+objectively-decided rows, but recoverable floor ≈0.08, not the full 0.19 distribution-level gap. Headroom
+signatures: 13.4% of late rows never called by ANY rung; 89-row confidently-wrong cluster (19 games,
+top-confidence quartile 0.729 < q3 0.786). Saturation is PHASE-UNIFORM post-20k (every post-20k delta CI
+straddles 0 in every phase) while corpus-LATE keeps climbing (0.782→0.892 — the post-20k corpus gain
+concentrates exactly where live headroom is largest). → value BACK on the live ceiling list (Idea-3
+reopened); route: value-investigation design dispatcher.
+
+**Q2 KSTRAT: G3 exclusion BANKED** (occ-stratified, registered rule). In-regime livetail: every adequate
+K≥2-vs-K1 gap POSITIVE (+0.04…+0.15; 2 cells significantly; pooled K4+ +0.132 [+0.050,+0.211]); K1 is the
+WORST bin — opposite sign of K-blindness; every adequate livetail cell CI-excludes −0.10. Worst adequate
+cell anywhere: occmatched mid-K4+ −0.052 [−0.145,+0.034]. Red-team: under unregistered occ-QUARTILES one
+adequate fresh cell fires the point rule (−0.108) — refuted by ANCHOR-RUNG control (gap −0.140 at step 0,
+pre-exists training, no worsening trend; in-regime livetail same cell +0.103) = bank-composition pocket,
+not learned blindness. Floors hide nothing (verdict invariant at 50/15 and 0/0). Open item 4 CLOSED with
+the fixed kernel: no within-stratum spread gradient survives occ control. AUC≈0.41 discrimination
+instrument stays a separate open question (REOPENED trigger did not fire).
+
+**Q3 SRC: anomaly RESOLVED + mixture CONFIRMED.** The "0.66" was a SPOT batch at step 50000 (trainer emits
+per-batch unsmoothed every 10 steps; σ_batch=0.028; 1.2σ below steady mean 0.6941±0.0028 SEM). Real-buffer
+reconstruction (250k rows, pyo3 load): 0.625·0.7651 + 0.375·0.5805 = 0.6959 ≈ live 0.6941; the 0.725
+prediction over-shot via population gap (−0.016: in-buffer selfplay decided-acc 0.609 ≠ livetail-bank
+0.651) + unmasked ply-capped z=0 rows (−0.011; 16% of selfplay rows, model "right" 0.433 there) + corpus
+in-batch (−0.003). Masked batch acc 0.7126 ≈ prediction — `value_accuracy_masked` is the
+headline-comparable key henceforth. Mixture (registered criteria, same-rows 20k-vs-50k): corpus BCE
+0.526→0.422 FALLING × selfplay BCE 0.657→0.653 FLAT × share 0.273→0.375 growing (w_pre=0.8·exp(−t/200k))
+= CONFIRMED; share-shift alone costs −0.020 batch acc (masks corpus gains in the aggregate curve).
+Buffer facts: win/loss/draw/capped = 43.1/41.3/0.0/15.6%; outcome mix + length stable all run. Premise
+correction: THIS run's ply_cap_value=0.0 (the −0.5 override belongs to the §S178 botmix launch). **NEW
+BUG flagged (Rust ticket):** .bin persist DROPS value_target_valid (`persist/load.rs:269` "acceptable
+shortcut") — any continue-from-ckpt auto-restore (known footgun) would supervise previously-capped rows
+at z=ply_cap_value. This run single-session = unaffected.
+
+**Q4 LENGTH: ESCALATE** (registered letter AMBIGUOUS — disclosed cause-attribution decision). Step-1
+exploration parity: PASS, configs identical on every axis. Step-2: **run e928c854 had ZERO promotions**
+(0 promoted events; 3 evals anchor_promoted=false, wr_best 0.36 only at 25k; best_model.pt mtime = init;
+verified 3×) → ALL 25,103 live games were generated by frozen BOOTSTRAP weights; every standalone bank
+used the 50k ckpt — the open item's "same weights" premise was FALSE. Matched-weights confirming run
+(pre-registered bands 74–84 resolve / 35–56 escalate): bootstrap-weights standalone = 59.7 [57.2,62.2] —
+weight identity explains ≤20% of the kept-vs-kept 20.4-ply gap, shift marginal (Welch p≈0.12 vs uniform
+bank; zero effect not excludable), k-TV to live got WORSE (0.183 vs 0.098), occ/k moved away → divergence
+is in the generation PATH; step-3 trace needs Rust (seed-pluggable worker RNG + per-move trace).
+Contamination scope: standalone path exclusive to selfplay_fixture_gen.py (+smoke/perf sibs);
+exploit_probe (eval path) + multicluster precheck (KClusterMCTSBot) NOT affected. Standing-record stamps:
+livetail bank at EVERY rung = bootstrap-play distribution (G2 REGIME-SPLIT reads "transfer to the
+bootstrap-play distribution saturates ~20k"); G1 FAIL certifies non-transfer to a regime no live game
+inhabited (verdicts stand, regime labels change); rt1's "~35–56 at same weights" REFUTED on content
+(59.7 entirely above band); matched-weights generation does NOT fix FIXTURE-VALID — livetail-style banks
+are the only in-regime fresh instrument until the path is traced.
+
+Review: 1 fresh process reviewer + 3 default-refute red-team lenses, all PASS_WITH_NOTES; must-fix
+amendments folded (report `reports/investigations/valceil_2026-06-11.md`). L: per-bank terciles can be
+the CONSERVATIVE binning — verify with a matched-absolute re-bin before calling a cross-bank phase
+comparison apples-oranges. L: anchor-rung (step-0) gaps are a free, decisive control separating
+bank-composition pockets from learned deficits — cite them before crediting any training-induced
+blindness. L: write confirming-run verdict bands to a timestamped artifact BEFORE launch (in-session
+registration was honored but unverifiable post-hoc). L: a zero-promotion run silently turns "live
+self-play distribution" into "frozen bootstrap-play distribution" — check promotion count before any
+regime claim about live games.
