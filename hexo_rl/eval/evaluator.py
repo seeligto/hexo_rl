@@ -29,7 +29,6 @@ from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
 from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding_name
-from hexo_rl.selfplay.utils import get_temperature
 
 try:
     import structlog

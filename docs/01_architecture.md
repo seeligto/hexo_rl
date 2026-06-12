@@ -267,7 +267,7 @@ This keeps the GPU busy rather than idle between single-position evaluations.
 ### Temperature scheduling
 
 The live self-play training schedule is implemented in Rust
-(`engine/src/game_runner/worker_loop.rs::compute_move_temperature`) as a
+(`engine/src/game_runner/worker_loop/rotate.rs::compute_move_temperature`) as a
 quarter-cosine over **compound moves**, with a hard floor once the
 threshold is reached. Compound move is derived from ply as
 `cm = (ply + 1) / 2` for `ply > 0`, else `0`.
@@ -277,21 +277,21 @@ threshold is reached. Compound move is derived from ply as
 τ(cm) = temp_min                                        if cm >= temp_threshold
 ```
 
-Config (live training): `selfplay.playout_cap.temperature_threshold_compound_moves:
-15`, `selfplay.playout_cap.temp_min: 0.05`. At `cm = 0` τ is 1.0; at
-`cm = 15` (ply ≈ 29) it clamps to `temp_min` for the rest of the game.
-Fast games (`fast_prob`, `fast_sims`) override this with τ = 1.0 at every
-move. Reconciled from a prior ply-based half-cosine draft at sprint §70
-C.1.
+Config keys: `selfplay.playout_cap.{temperature_threshold_compound_moves, temp_min}`.
+**Default (D-TEMPDECAY C1, 2026-06-12) = `0` / `0.5` = schedule OFF**: a constant
+τ = 0.5 at every move (the anti-colony §156/L9 posture). A variant turns the
+schedule ON by setting `temperature_threshold_compound_moves > 0`; then at `cm = 0`
+τ is 1.0, decaying to `temp_min` by the threshold and clamping there. Fast games
+(`fast_prob`, `fast_sims`) override with τ = 1.0 at every move.
 
-Evaluation and bootstrap temperatures live in their own paths:
-`configs/eval.yaml::eval_temperature: 0.5` (with `eval_random_opening_plies`
-for diversity) and the bootstrap minimax corpus uses τ = 0.5. A legacy
-ply-based step function (`1.0 if ply < 30 else 0.1`) persists in
-`hexo_rl/selfplay/utils.py::get_temperature` and is called only from
-`hexo_rl/selfplay/worker.py::SelfPlayWorker` (used by `OurModelBot`,
-`benchmark_mcts`, `evaluator`) — it is **not** on the self-play
-training path.
+Evaluation and bootstrap temperatures: `configs/eval.yaml::eval_temperature: 0.5`
+(with `eval_random_opening_plies` for diversity) and the bootstrap minimax corpus
+uses τ = 0.5. The eval/bot helper `hexo_rl/selfplay/utils.py::get_temperature`
+(reached only via `SelfPlayWorker`, used by `OurModelBot` / `benchmark_mcts` /
+corpus generation, **not** the training path) is **unified** onto the SAME
+compound-turn quarter-cosine (`quarter_cosine_temperature`, mirroring the Rust
+formula) — no separate ply-based step schedule. It honours the legacy
+`temperature_threshold_ply` as an eval alias (auto-converted plies → compound-turns).
 
 ### Dirichlet noise
 

@@ -173,6 +173,11 @@ compound_move = (ply + 1) / 2  for ply > 0, else 0
 |---|---|---|---|---|---|---|---|---|
 | τ | 1.0000 | 0.8660 | 0.5000 | 0.1045 | 0.0500 | 0.0500 | 0.0500 | 0.0500 |
 
+> **SUPERSEDED (§S178 2026-05-18 + D-TEMPDECAY C1 2026-06-12):** the live base
+> default is now `temperature_threshold_compound_moves: 0` / `temp_min: 0.5` =
+> schedule OFF (constant τ=0.5, the anti-colony posture). The `15` / `0.05`
+> cosine-ON parameterization below is the obsolete §143 setting — historical only.
+
 Config: `selfplay.playout_cap.temperature_threshold_compound_moves: 15`,
 `selfplay.playout_cap.temp_min: 0.05`. `mcts.temp_anneal_moves` /
 `mcts.temp_min` are not read by the Rust training path — the live keys

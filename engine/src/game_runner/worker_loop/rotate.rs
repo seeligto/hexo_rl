@@ -29,8 +29,9 @@ use crate::replay_buffer::sym_tables::SymTables;
 ///
 /// # Arguments
 /// * `compound_move`  — zero-indexed compound move number in the current game
-/// * `temp_threshold` — compound move at which the floor kicks in (CLAUDE.md: 15)
-/// * `temp_min`       — minimum temperature floor (CLAUDE.md: 0.05)
+/// * `temp_threshold` — compound move at which the floor kicks in. Config-driven;
+///   default `0` = schedule OFF (returns a constant `temp_min` at every move).
+/// * `temp_min`       — minimum temperature floor. Config-driven; default `0.5`.
 pub fn compute_move_temperature(
     compound_move: usize,
     temp_threshold: usize,

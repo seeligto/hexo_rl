@@ -123,12 +123,16 @@ impl Default for SelfPlayRunnerConfig {
             fast_prob: 0.0,
             fast_sims: 50,
             standard_sims: 0,
-            temp_threshold_compound_moves: 15,
+            // D-TEMPDECAY C1 (2026-06-12): cosine-OFF default (was 15). A variant
+            // omitting playout_cap must NOT re-arm the §156/L9 draw-collapse cosine.
+            temp_threshold_compound_moves: 0,
             draw_reward: -0.1,
             ply_cap_value: -0.1,
             quiescence_enabled: true,
             quiescence_blend_2: 0.3,
-            temp_min: 0.05,
+            // D-TEMPDECAY C1: anti-colony constant floor (was 0.05). With
+            // threshold=0 above, the schedule is a constant tau=0.5.
+            temp_min: 0.5,
             zoi_enabled: false,
             zoi_lookback: 16,
             zoi_margin: 5,
@@ -179,12 +183,12 @@ impl SelfPlayRunnerConfig {
         fast_prob = 0.0,
         fast_sims = 50,
         standard_sims = 0,
-        temp_threshold_compound_moves = 15,
+        temp_threshold_compound_moves = 0,
         draw_reward = -0.1,
         ply_cap_value = -0.1,
         quiescence_enabled = true,
         quiescence_blend_2 = 0.3,
-        temp_min = 0.05,
+        temp_min = 0.5,
         zoi_enabled = false,
         zoi_lookback = 16,
         zoi_margin = 5,
