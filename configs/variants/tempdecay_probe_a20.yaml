@@ -1,0 +1,27 @@
+# D-TEMPDECAY Phase-2 draw-safety probe — arm A20 (floor 0.20, aggressive).
+#
+# Static-weights generation from golong@50k via scripts/smoke_selfplay_bootstrap.py
+# --mode mcts. Identical to tempdecay_probe_control EXCEPT the within-game
+# temperature: quarter-cosine τ=1.0 (cm=0) → floor 0.20 by threshold=12
+# compound-turns. floor 0.20 = lc0 aggressive end (operator-requested); closest of
+# the arms to the never-tested toxic gap above the §143 0.05 — highest abort odds,
+# maps the firing threshold. Pre-registration + gates:
+# reports/investigations/tempdecay_phase0_2026-06-12.md.
+encoding: v6_live2
+in_channels: 4
+
+selfplay:
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  random_opening_plies: 0
+  playout_cap:
+    temperature_threshold_compound_moves: 12
+    temp_min: 0.20                             # lc0 aggressive end
+    # other playout_cap knobs inherit base = golong regime.
+
+game_replay:
+  enabled: true
+  sample_rate: 1
+  output_dir: logs/replays_tempdecay_a20

@@ -1,0 +1,33 @@
+# D-TEMPDECAY Phase-2 draw-safety probe — CONTROL arm (constant τ=0.5, schedule OFF).
+#
+# Static-weights generation from golong@50k
+# (checkpoints/golong_bank/checkpoint_00050000_PEAK_sb0.38.pt) via
+# scripts/smoke_selfplay_bootstrap.py --mode mcts. Replicates golong's v6_live2
+# generation regime (cap+CQV — the regime where the §152 cosine draw-collapse
+# lives) so the ONLY variable across the 4 probe arms is the within-game
+# temperature. Pre-registration + gates: reports/investigations/tempdecay_phase0_2026-06-12.md.
+#
+# CONTROL = today's golong behaviour: temperature_threshold_compound_moves=0 +
+# temp_min=0.5 == constant τ=0.5 (= base default since §S178/D-TEMPDECAY C1; set
+# explicitly here for apples-to-apples).
+encoding: v6_live2
+in_channels: 4
+
+selfplay:
+  completed_q_values: true        # match golong regime (cap+CQV)
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  random_opening_plies: 0
+  playout_cap:
+    temperature_threshold_compound_moves: 0    # schedule OFF
+    temp_min: 0.5                              # constant τ
+    # all other playout_cap knobs (fast_*, standard_sims, zoi_*, full_search_prob,
+    # n_sims_quick/full) inherit base configs/selfplay.yaml = golong's regime.
+
+# Record EVERY game (sample_rate 1) so golong_game_analysis.py + the opening-
+# diversity / τ-fired check have full data. Distinct output dir per arm.
+game_replay:
+  enabled: true
+  sample_rate: 1
+  output_dir: logs/replays_tempdecay_control
