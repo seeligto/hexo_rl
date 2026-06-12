@@ -40,7 +40,11 @@ aux_opp_reply_weight: 0.0
 # ── selfplay — IDENTICAL to Arm A ─────────────────────────────────────────────
 selfplay:
   completed_q_values: true
-  n_workers: 18
+  # n_workers 18→16: host-tuned for the 20-core 4080 vast box. make bench n=5
+  # showed 16w = +15% worker throughput (105.9k vs 92.5k pos/hr) — 18w
+  # oversubscribes (18 selfplay + inference-server + main > 20 cores). GPU stays
+  # 100% util / 99.7% batch-fill either way. Pristine 18w A/B-clone: .yaml.bak.
+  n_workers: 16
   inference_batch_size: 128
   inference_max_wait_ms: 16.0
   random_opening_plies: 0
