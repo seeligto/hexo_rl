@@ -117,6 +117,27 @@ def test_terminal_eval_runs_full_battery_ignoring_stride():
     assert terminal_events[0]["step"] == 50000
 
 
+def test_terminal_eval_complete_structlog_line_carries_completion_fields():
+    """§D-RERUNPREP F2: the structlog `terminal_eval_complete` line — the one the
+    JSONL log and the closeout integration test parse — must carry `completed`
+    and `terminal`, mirroring the event_emitter payload. It dropped them, so the
+    GPU smoke's integration test (`assert final.get('completed') is True`) failed
+    even though the terminal eval completed correctly (wr_best present)."""
+    coord, _ep, _events = _terminal_coord(
+        {"promoted": False, "step": 50000, "wr_best": 0.6}
+    )
+    coord._logger = Mock()
+    coord.run_terminal_eval()
+    calls = [
+        c for c in coord._logger.info.call_args_list
+        if c.args and c.args[0] == "terminal_eval_complete"
+    ]
+    assert len(calls) == 1, "expected exactly one terminal_eval_complete structlog line"
+    kw = calls[0].kwargs
+    assert kw.get("completed") is True, f"structlog line missing completed=True: {kw}"
+    assert kw.get("terminal") is True, f"structlog line missing terminal=True: {kw}"
+
+
 def test_terminal_eval_promotes_without_inference_sync():
     coord, _ep, _events = _terminal_coord(
         {"promoted": True, "step": 50000, "wr_best": 0.7}

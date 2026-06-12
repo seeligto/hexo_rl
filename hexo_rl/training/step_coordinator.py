@@ -1557,6 +1557,7 @@ class StepCoordinator:
             "error": bool(result and result.get("error")),
         })
         self._logger.info("terminal_eval_complete", step=step, promoted=promoted,
+                          completed=bool(result is not None), terminal=True,
                           wr_best=(result.get("wr_best") if result else None))
 
     def close_out(self, on_drained: "Callable[[], None] | None" = None) -> None:
