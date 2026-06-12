@@ -17,13 +17,15 @@ Companion artifacts:
 |---|---|---|
 | **Phase 0 — post-merge hygiene** | ✅ **P0-PASS** | FF linear merge; all 7 loopfix commits (`a4d43fe`→`ab8d71d`) reachable from HEAD `1845d47`; `make test` **1994 passed / 0 failed**; `engine/src` diff EMPTY → bench-SKIP justified (Python-only; hammerhead is a submodule pointer); laptop+vast trees clean (only untracked scratch); gate fix `b340e99` in master both hosts; `master==origin/master`. |
 | **Phase 1/2 — static sweep** | ✅ **0 BLOCKERS** | 6 buckets B1–B6 + aggregate/review/red-team. See §2. |
-| **Phase 3 — GPU smoke (run 1)** | ❌ **FAIL → fixes landed** | Ran on vast 5080. Caught **F1: the W2 incumbent-pin was non-functional on GPU** (fp16 runtime hash ≠ fp32 file pin; rm-path skipped the check) + F2 telemetry + F3 script bugs. Lifecycle itself PASSED. Full record: `phase3_smoke_results.md`. **F1+F2+F3 fixed (TDD, 8 anchor + closeout tests green); re-smoke pending.** |
+| **Phase 3 — GPU smoke (run 1)** | ❌ **FAIL → fixes landed** | Ran on vast 5080. Caught **F1: W2-VACUOUS** (the launch fresh-init path skipped the pin check) + a **host bootstrap DRIFT** (vast `4198d5cb` ≠ the laptop-derived pin `aba28e10`) + F2 telemetry + F3 script. (My first F1 diagnosis "fp16" was **wrong** — a GPU discriminator showed fp32; corrected.) Lifecycle itself PASSED. Full record: `phase3_smoke_results.md`. **Fixed (TDD, 12 anchor + closeout tests green); configs re-pinned to `4198d5cb` + hosts synced; re-smoke pending.** |
 | **Phase 4 — launch package** | ✅ this document | Design-only; no launch. |
 
-**Bottom line:** static sweep was GREEN, but the **Phase-3 GPU smoke FAILED** — it found the §D-LOOPFIX
-**W2 incumbent-pin was non-functional** (a marquee fix), exactly the static→runtime gap the smoke
-exists to close. **F1 (W2 pin), F2 (telemetry), F3 (script) are now fixed (§D-RERUNPREP, TDD).** Gate
-to the 50k: a **re-run of the Phase-3 smoke to GREEN** on the fixed code, then operator launch.
+**Bottom line:** static sweep was GREEN, but the **Phase-3 GPU smoke FAILED** — it caught a real code
+hole (**W2-VACUOUS**: the launch path never verified the incumbent pin) AND a **host bootstrap drift**
+(the pin was set from a dev-host copy that had drifted from the run host's bootstrap). My initial
+"fp16" mechanism was a misdiagnosis, corrected by a cheap GPU discriminator before any expensive run.
+**Fixes landed (§D-RERUNPREP, TDD); pin reconciled to the de-facto `4198d5cb`; hosts synced.** Gate
+to the 50k: a **re-run of the Phase-3 smoke to GREEN** on the fixed code + correct pin, then operator launch.
 
 ---
 

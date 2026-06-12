@@ -6,7 +6,7 @@
 > are **estimates** (throughput assumption stated below, not a verified golong number).
 
 **Run config:** `configs/variants/v6_live2_ls_ab.yaml` — encoding `v6_live2_ls`, `eval_interval 12500`, `--iterations 50000`
-**Incumbent pinned:** `bootstrap_model_v6_live2.pt` SHA `aba28e10bd80b2bac65e9b33e109cb9dc36a3a83871bf3a3fff0ca0f96d27165`
+**Incumbent pinned:** `bootstrap_model_v6_live2.pt` SHA `4198d5cbd2fc0ce77ad2e3d86e32311ee40c53c926f135c52ea3749816b0a186`
 **Corpus:** `data/bootstrap_corpus_v6_live2.npz` (1.70 GB — verified present on laptop + vast)
 **Hardware:** vast 5080 + Ryzen 9 9900X
 
@@ -63,7 +63,7 @@ At step 50,000 (`stop_step`):
 
 ## 4 · Vital event checklist (operator watches in order)
 
-- [ ] **Launch:** `anchor_identity sha256=aba28e10… pinned=aba28e10…` — no mismatch `RuntimeError`.
+- [ ] **Launch:** `anchor_identity sha256=4198d5cb… pinned=4198d5cb…` — no mismatch `RuntimeError`. (Pin is the **vast/de-facto** bootstrap `4198d5cb`, re-pinned from the laptop-derived `aba28e10` after the §D-RERUNPREP host-drift finding.)
 - [ ] **Launch:** `eval_schedule_capability promotion_capable_in_run_rounds=4`.
 - [ ] **Round 1 (12.5k):** draw_rate logged; best n=400 fires.
 - [ ] **Round 2 (25k):** bootstrap_anchor PRESENT (gate not blocked on missing-measurement); nnue + offwindow fire (Obj-A in-run).

@@ -121,7 +121,7 @@ eval_pipeline:
     # Preflight: rm -f checkpoints/best_model.pt{,.bak} so resolve_anchor
     # fresh-inits the pinned bootstrap. Reproduce the sha:
     #   python scripts/anchor_sha256.py checkpoints/bootstrap_model_v6_live2.pt
-    expected_anchor_sha256: "aba28e10bd80b2bac65e9b33e109cb9dc36a3a83871bf3a3fff0ca0f96d27165"
+    expected_anchor_sha256: "4198d5cbd2fc0ce77ad2e3d86e32311ee40c53c926f135c52ea3749816b0a186"
 
 # ── telemetry ─────────────────────────────────────────────────────────────────
 telemetry:

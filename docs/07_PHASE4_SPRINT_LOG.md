@@ -6264,17 +6264,25 @@ static sweep (6 read-only Explore buckets + aggregate/review/red-team) = 0 block
 smoke on vast 5080 (the acceptance §D-LOOPFIX deferred as "GPU-bound") = **FAIL**, and it caught
 what static analysis structurally could not:
 
-- **F1 (CORRECTION to W2): the W2 incumbent-pin was NON-FUNCTIONAL on GPU.** `resolve_anchor`
-  hashed the LIVE anchor model (`state_dict_sha256(best_model.state_dict())`); on CUDA that model
-  is fp16, so it diverged from the fp32 on-disk pin (`4198d5cb… ≠ aba28e10…`) and HARD-FAILED a
-  byte-copy of the pinned bootstrap. Invisible to B2 (mocked the loader) and B3 (hashed the file
-  statically) AND to every CPU test (`fp16_disabled_no_cuda` → fp32 → matches). Worse, the
-  runbook's preflight `rm best_model.pt` routes the launch through `anchor_fresh_init_no_bootstrap`,
-  which NEVER ran the pin check — so on the intended path the pin gave **zero** protection (the
-  real guard is the rm + fresh-init-from-`--checkpoint`). Fix: `checkpoint_state_sha256(path)`
-  hashes the STORED weights (single source of truth with `anchor_sha256.py`); the loader returns
-  the source PATH; `resolve_anchor` verifies the pin against the source on BOTH paths
-  (`verify_launch_anchor_pin` closes the fresh-init vacuum). TDD, 8 anchor tests green.
+- **F1 (CORRECTION to W2): the W2 incumbent-pin failed to protect the launch — TWO compounding
+  causes, and the first diagnosis was WRONG.** (a) **W2-VACUOUS (code):** the runbook's preflight
+  `rm best_model.pt` routes the launch through `anchor_fresh_init_no_bootstrap`, which NEVER ran the
+  pin check — so the launch had **zero** incumbent verification. (b) **Host bootstrap DRIFT (data):**
+  vast's `bootstrap_model_v6_live2.pt` (`4198d5cb`) ≠ the committed pin (`aba28e10`), which was
+  computed on the **laptop's** drifted copy (`ab8d71d`); the bootstrap is gitignored / distributed
+  out-of-band, so the dev host and the run host drifted silently (corpus stayed identical — only the
+  model). The original smoke's resume hard-failed because it loaded vast's bootstrap (`4198d5cb`) and
+  checked it against the laptop-derived pin (`aba28e10`). **The fp16/dtype theory was a MISDIAGNOSIS**
+  — a GPU discriminator (run before the re-smoke) showed the anchor is fp32 and OLD==NEW hashing
+  (`4198d5cb`); the divergence was the host file mismatch all along. I never reproduced `4198d5cb` on
+  the laptop and rationalized the gap instead of treating it as a failed reproduction. Code fix
+  (still valid): `checkpoint_state_sha256(path)` hashes the STORED weights (single source of truth
+  with `anchor_sha256.py` — prevents pin↔runtime drift); the loader returns the source PATH;
+  `verify_launch_anchor_pin` closes the fresh-init vacuum (fail-closed when a pin is set but the seed
+  is unverifiable). Data fix: de-facto bootstrap = vast's `4198d5cb` (golong + every vast run used the
+  only bootstrap ever on vast); re-pinned the configs/runbook to `4198d5cb` and synced hosts so
+  bootstrap+pin agree. TDD, 12 anchor tests green; full suite 1998 passed; the fix now correctly
+  PASSES the pin (where the wrong-pin smoke hard-failed).
 - **F2 (XS): the `terminal_eval_complete` structlog line dropped `completed`/`terminal`** — the
   fields the JSONL/integration test + watch sheet read. The eval completed fine (wr_best present);
   only the telemetry was incomplete. 2-kwarg fix, mirrors the event_emitter payload.
@@ -6282,10 +6290,16 @@ what static analysis structurally could not:
   lifecycle itself PASSED in run.log: iteration_limit_reached, budgeted drain (warn-never-kill),
   terminal full-battery (wr_best 0.605), n=400 gate, exploit_probe wiring. Fixed against real tokens.
 
-L: a content-identity sha must hash the SOURCE/stored representation, NEVER a live model whose
-runtime dtype (fp16 on CUDA) is lossy and device-dependent — and a CPU/mocked test can't see it.
-L: a safety GATE the launch-preflight routes AROUND is vacuous; verify the pin on the path the run
+L: DON'T ship a fix on an UNREPRODUCED hypothesis — I never reproduced `4198d5cb` on the laptop
+(got `aba28e10` on the file, `cae9ae8c` on an fp16 cast — neither matched) and rationalized it as
+"fp16, the exact bytes don't matter." They did: a cheap on-target GPU discriminator run BEFORE the
+3h re-smoke showed fp32 + OLD==NEW and the real cause (host file drift). Reproduce the exact symptom
+or keep digging. L: a gitignored artifact distributed out-of-band DRIFTS silently across hosts —
+the pin was computed on the dev host (laptop `aba28e10`) but the runs execute on vast (`4198d5cb`);
+compute/verify the pin on the SAME host the run uses, and make the verify catch the drift. L: a
+safety GATE the launch-preflight routes AROUND is vacuous; verify the pin on the path the run
 actually takes, not only the stale-anchor branch. L: front-loading the integration/GPU smoke before
-the expensive run is what turned a 4-day/$67 invalidation risk into a free local fix. Artifacts:
+the expensive run is what turned a 4-day/$67 invalidation risk into a free local catch — of BOTH a
+real code hole (W2-VACUOUS) and a misdiagnosis. Artifacts:
 `docs/handoffs/phase3_smoke_results.md`, `phase3_finding_terminal_eval_completed.md`,
 `armc_rerun_launch_package.md`, `armc_rerun_watchsheet.md`.

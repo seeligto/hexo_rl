@@ -1,10 +1,17 @@
 # D-RERUNPREP Phase 3 — GPU smoke RESULTS (vast 5080, 2026-06-11)
 
-> **RESOLUTION (2026-06-12):** F1 (W2 pin), F2 (telemetry), F3 (script) all FIXED via TDD —
-> `checkpoint_state_sha256` hashes the stored weights; the loader returns the source path;
-> `verify_launch_anchor_pin` closes the fresh-init vacuum; the structlog `terminal_eval_complete`
-> carries `completed`/`terminal`; the script checks real tokens. 8 anchor + 16 closeout unit tests
-> green, full suite 1997 passed. Re-smoke on the fixed code is the remaining gate before the 50k.
+> **RESOLUTION (2026-06-12) — and a CORRECTION.** The F1 "fp16 W2-pin" diagnosis below was
+> **WRONG on the mechanism**. A cheap GPU discriminator (run before the re-smoke) showed the anchor
+> is **fp32** and OLD==NEW hashing (`4198d5cb`). The real cause was a **host bootstrap DRIFT**:
+> vast's `bootstrap_model_v6_live2.pt` (`4198d5cb`) ≠ the committed pin (`aba28e10`, set from the
+> laptop's drifted copy; the file is gitignored / out-of-band). The genuine **code** bug is
+> **W2-VACUOUS** — the launch fresh-init path skipped the pin entirely. Fixes: `verify_launch_anchor_pin`
+> (closes W2-VACUOUS, fail-closed); `checkpoint_state_sha256` (DRY/source-hash robustness, not the
+> cause); F2 telemetry; F3 script. **Data fix:** de-facto bootstrap = vast's `4198d5cb` (golong +
+> all vast runs used it) → re-pinned configs/runbook to `4198d5cb`, synced hosts. 12 anchor + 16
+> closeout tests green, full suite 1998 passed. Re-smoke on the fixed code + correct pin is the
+> remaining gate. (The fp16 narrative in §F1 below is retained as the as-diagnosed record, struck
+> through by this banner.)
 
 **Verdict: FAIL** (do NOT launch the 50k). But the criteria *table* the script printed is
 mostly its own bugs — the real signal, mined from `run.log` / `resume.log`, is below.

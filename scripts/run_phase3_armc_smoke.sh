@@ -15,7 +15,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
-PIN="aba28e10bd80b2bac65e9b33e109cb9dc36a3a83871bf3a3fff0ca0f96d27165"
+PIN="4198d5cbd2fc0ce77ad2e3d86e32311ee40c53c926f135c52ea3749816b0a186"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="reports/phase3_armc_smoke_${STAMP}"; mkdir -p "$OUT"
 RUNLOG="$OUT/run.log"; RESUMELOG="$OUT/resume.log"

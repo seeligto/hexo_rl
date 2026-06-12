@@ -22,7 +22,7 @@ k_max 1→8 + legal-set action policy) vs the same `bootstrap_model_v6_live2` bo
 as Arm A. The variant is made re-run-ready:
 
 - **Incumbent PINNED:** `eval_pipeline.gating.expected_anchor_sha256:
-  "aba28e10bd80b2bac65e9b33e109cb9dc36a3a83871bf3a3fff0ca0f96d27165"` — the
+  "4198d5cbd2fc0ce77ad2e3d86e32311ee40c53c926f135c52ea3749816b0a186"` — the
   state-dict sha256 of `bootstrap_model_v6_live2.pt` (reproduce:
   `python scripts/anchor_sha256.py checkpoints/bootstrap_model_v6_live2.pt`). Launch
   HARD-FAILS if best_model.pt is anything else (closes W2). **Preflight: `rm -f
