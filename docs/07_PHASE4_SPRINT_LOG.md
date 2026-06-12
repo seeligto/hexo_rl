@@ -6255,3 +6255,37 @@ resume; make launch-hygiene gates per-invocation + name the legit case in the er
 "unloaded" eval must actually stop the pool FIRST — close_out before pool.stop() still ran under
 self-play load. L: schedule shape IS promotion capacity; surface it at launch, never drop the
 decision phase silently.
+
+## §D-RERUNPREP — Arm-C re-run pre-launch sweep + the W2-pin GPU correction — 2026-06-12
+
+Pre-launch sweep for the §D-LOOPFIX Arm-C re-run (DESIGN→IMPL→REVIEW→RED-TEAM, pre-registered).
+Phase 0 hygiene PASS (FF merge, 1994 tests, Python-only → bench-skip, hosts reconciled). Phase 1/2
+static sweep (6 read-only Explore buckets + aggregate/review/red-team) = 0 blockers. Phase-3 GPU
+smoke on vast 5080 (the acceptance §D-LOOPFIX deferred as "GPU-bound") = **FAIL**, and it caught
+what static analysis structurally could not:
+
+- **F1 (CORRECTION to W2): the W2 incumbent-pin was NON-FUNCTIONAL on GPU.** `resolve_anchor`
+  hashed the LIVE anchor model (`state_dict_sha256(best_model.state_dict())`); on CUDA that model
+  is fp16, so it diverged from the fp32 on-disk pin (`4198d5cb… ≠ aba28e10…`) and HARD-FAILED a
+  byte-copy of the pinned bootstrap. Invisible to B2 (mocked the loader) and B3 (hashed the file
+  statically) AND to every CPU test (`fp16_disabled_no_cuda` → fp32 → matches). Worse, the
+  runbook's preflight `rm best_model.pt` routes the launch through `anchor_fresh_init_no_bootstrap`,
+  which NEVER ran the pin check — so on the intended path the pin gave **zero** protection (the
+  real guard is the rm + fresh-init-from-`--checkpoint`). Fix: `checkpoint_state_sha256(path)`
+  hashes the STORED weights (single source of truth with `anchor_sha256.py`); the loader returns
+  the source PATH; `resolve_anchor` verifies the pin against the source on BOTH paths
+  (`verify_launch_anchor_pin` closes the fresh-init vacuum). TDD, 8 anchor tests green.
+- **F2 (XS): the `terminal_eval_complete` structlog line dropped `completed`/`terminal`** — the
+  fields the JSONL/integration test + watch sheet read. The eval completed fine (wr_best present);
+  only the telemetry was incomplete. 2-kwarg fix, mirrors the event_emitter payload.
+- **F3: the self-check script was buggy** (`grep -c` "0\n0" → false FAILs; wrong tokens). The
+  lifecycle itself PASSED in run.log: iteration_limit_reached, budgeted drain (warn-never-kill),
+  terminal full-battery (wr_best 0.605), n=400 gate, exploit_probe wiring. Fixed against real tokens.
+
+L: a content-identity sha must hash the SOURCE/stored representation, NEVER a live model whose
+runtime dtype (fp16 on CUDA) is lossy and device-dependent — and a CPU/mocked test can't see it.
+L: a safety GATE the launch-preflight routes AROUND is vacuous; verify the pin on the path the run
+actually takes, not only the stale-anchor branch. L: front-loading the integration/GPU smoke before
+the expensive run is what turned a 4-day/$67 invalidation risk into a free local fix. Artifacts:
+`docs/handoffs/phase3_smoke_results.md`, `phase3_finding_terminal_eval_completed.md`,
+`armc_rerun_launch_package.md`, `armc_rerun_watchsheet.md`.
