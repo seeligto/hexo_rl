@@ -1,0 +1,51 @@
+# D-TEMPDECAY Phase-3 training smoke — TREATMENT arm a30 (quarter-cosine floor 0.30).
+#
+# Identical to tempdecay_smoke_control EXCEPT the within-game temperature:
+# quarter-cosine τ=1.0 (cm=0) → floor 0.30 by threshold=12 compound-turns. a30 is
+# the pre-registered PRIMARY (lc0-band; tie-break = lowest draw-safe floor from the
+# Phase-2 probe). If the probe's smoke_recommend differs, clone this with that floor.
+# Pre-registration + gates: reports/investigations/tempdecay_phase0_2026-06-12.md.
+#
+# Launch:
+#   python scripts/train.py \
+#     --checkpoint checkpoints/golong_bank/checkpoint_00050000_PEAK_sb0.38.pt \
+#     --variant tempdecay_smoke_a30 --iterations 10000
+encoding: v6_live2
+in_channels: 4
+
+aux_opp_reply_weight: 0.0
+
+selfplay:
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  random_opening_plies: 0
+  playout_cap:
+    temperature_threshold_compound_moves: 12    # quarter-cosine ON
+    temp_min: 0.30                              # lc0-band primary floor
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+  # Per-arm buffer isolation (see tempdecay_smoke_control note).
+  buffer_persist_path: "checkpoints_tdsmoke_a30/replay_buffer.bin"
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+eval_interval: 999999
+eval_pipeline:
+  opponents:
+    best_checkpoint: { enabled: false }
+    sealbot:         { enabled: false }
+    bootstrap_anchor:{ enabled: false }
+    random:          { enabled: false }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.30
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0
