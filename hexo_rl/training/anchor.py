@@ -138,6 +138,79 @@ def state_dict_sha256(state_dict: dict[str, Any]) -> str:
     return h.hexdigest()
 
 
+def checkpoint_state_sha256(path: Path) -> str:
+    """sha256 of the MODEL weights STORED in a checkpoint file — the canonical,
+    dtype/device-independent identity the W2 pin compares against.
+
+    Hashes the STORED state (the same number ``scripts/anchor_sha256.py`` prints
+    and ``expected_anchor_sha256`` is set from), NOT a live model whose runtime
+    dtype diverges from disk. On CUDA the resolved anchor model is fp16, so
+    ``state_dict_sha256(model.state_dict())`` produced a different digest than
+    the fp32 on-disk pin and false-failed a CORRECT incumbent (§D-RERUNPREP F1,
+    caught by the Phase-3 GPU smoke; invisible on CPU where fp16 is disabled).
+    """
+    from hexo_rl.training.checkpoints import extract_model_state
+
+    raw = torch.load(path, map_location="cpu", weights_only=False)
+    return state_dict_sha256(extract_model_state(raw))
+
+
+def verify_launch_anchor_pin(
+    *,
+    eval_ext_config: dict[str, Any],
+    checkpoint_path: "str | Path | None",
+    trainer_step: int | None,
+    run_id: str | None,
+) -> None:
+    """§D-RERUNPREP F1 (W2-VACUOUS) — verify the launch pin on the fresh-init path.
+
+    ``resolve_anchor``'s existing-anchor branch only checks the pin when a
+    ``best_model.pt`` is present. But the runbook's preflight ``rm best_model.pt``
+    routes the intended launch through the fresh-init branch, which seeds the
+    anchor from the trainer's ``--checkpoint`` and never checked the pin — so the
+    W2 guard gave the real launch ZERO protection. Verify the pin against the
+    ``--checkpoint`` source here, hashing the STORED weights (dtype-invariant).
+    No-op when no pin is configured.
+    """
+    _pin = (
+        eval_ext_config.get("eval_pipeline", {})
+        .get("gating", {})
+        .get("expected_anchor_sha256")
+    )
+    if _pin is None:
+        return
+    if checkpoint_path is not None and Path(checkpoint_path).exists():
+        _seed_sha = checkpoint_state_sha256(Path(checkpoint_path))
+        log.info(
+            "anchor_identity",
+            path=str(checkpoint_path),
+            step=trainer_step,
+            run_id=run_id,
+            sha256=_seed_sha,
+            pinned=_pin,
+            source="fresh_init_checkpoint",
+        )
+        if _seed_sha != _pin:
+            raise RuntimeError(
+                f"anchor sha256 mismatch (fresh-init seed): the --checkpoint "
+                f"{checkpoint_path} resolved to {_seed_sha} but the run config "
+                f"pinned {_pin}. Refusing to launch. best_model.pt was absent, so "
+                f"the anchor is seeded from --checkpoint; launch with the pinned "
+                f"incumbent as --checkpoint, or clear expected_anchor_sha256."
+            )
+    else:
+        # Fail CLOSED (§D-RERUNPREP F1 review N2): a pin set + no verifiable source
+        # is the very "guard that proceeds on a warning" pattern this fix exists to
+        # kill — refuse rather than launch a 4-day run on an UNVERIFIED incumbent.
+        raise RuntimeError(
+            f"expected_anchor_sha256={_pin} is pinned but there is no readable "
+            f"--checkpoint to verify the fresh-init anchor against "
+            f"(checkpoint_path={checkpoint_path}). The launch incumbent would be "
+            f"UNVERIFIED — refusing to launch. Pass the pinned incumbent as "
+            f"--checkpoint, or clear expected_anchor_sha256."
+        )
+
+
 def _quarantine_corrupt(path: Path) -> Path:
     """Move a corrupt anchor aside with a unique suffix so it isn't overwritten
     by the next write. Returns the destination path for logging."""
@@ -153,23 +226,26 @@ def _try_load_anchor(
     checkpoint_dir: str,
     device: torch.device,
     fallback_config: dict[str, Any],
-) -> Optional[Trainer]:
+) -> "Optional[tuple[Trainer, Path]]":
     """Attempt to load ``candidate`` as an anchor checkpoint.
 
-    Returns the loaded Trainer on success, None on any failure (corrupt zip,
-    arch mismatch in the load path, unreadable file). Failures are logged
-    but not raised — the caller decides what to fall back to.
+    Returns ``(loaded Trainer, candidate path)`` on success, None on any failure
+    (corrupt zip, arch mismatch in the load path, unreadable file). The source
+    PATH is returned so the caller can hash the STORED weights for the W2 pin —
+    the live model's runtime dtype (fp16 on CUDA) diverges from disk (§D-RERUNPREP
+    F1). Failures are logged but not raised — the caller decides what to fall back to.
     """
     if not candidate.exists():
         return None
     try:
-        return Trainer.load_checkpoint(
+        trainer = Trainer.load_checkpoint(
             candidate,
             checkpoint_dir=checkpoint_dir,
             device=device,
             fallback_config=fallback_config,
             config_overrides={"input_channels": None, "in_channels": None},
         )
+        return (trainer, candidate)
     except Exception as exc:  # broad by design: corrupt zip, arch mismatch, CUDA OOM all fall through to next candidate
         log.warning(
             "anchor_load_failed",
@@ -186,8 +262,12 @@ def load_best_model_resilient(
     checkpoint_dir: str,
     device: torch.device,
     config: dict[str, Any],
-) -> Optional[Trainer]:
+) -> "Optional[tuple[Trainer, Path]]":
     """Try best_model.pt → its .bak → bootstrap candidates. None if all fail.
+
+    Returns ``(Trainer, source_path)`` — the path identifies WHICH file supplied
+    the weights so the W2 pin hashes the STORED (fp32) state rather than the live
+    (fp16-on-CUDA) model (§D-RERUNPREP F1).
 
     On corruption of ``best_model.pt`` the file is quarantined and the next
     candidate is tried; the eventual successful candidate is then promoted
@@ -307,13 +387,14 @@ def resolve_anchor(
     # _BOOTSTRAP_ANCHOR_CANDIDATES → fresh init from trainer.model.
     # A corrupt best_model.pt is quarantined with a timestamp suffix
     # instead of being silently discarded.
-    best_ref = load_best_model_resilient(
+    _loaded = load_best_model_resilient(
         best_model_path,
         checkpoint_dir=args.checkpoint_dir,
         device=device,
         config=config,
     )
-    if best_ref is not None:
+    if _loaded is not None:
+        best_ref, best_source_path = _loaded
         # Unwrap torch.compile — best_model's state_dict() is consumed
         # at multiple load_state_dict call sites below; leaving the
         # OptimizedModule wrapper would inject `_orig_mod.*` prefixes
@@ -327,9 +408,11 @@ def resolve_anchor(
         # silent .bak restore drove straight through — it installed golong@50k-
         # PEAK as the A/B's incumbent AND self-play generator. The resilient
         # load above may have come from best.pt, its .bak, or a bootstrap
-        # candidate; the assert reads the LOADED WEIGHTS, so ANY source that
-        # yields non-pinned weights is refused here (closes the .bak hole).
-        _anchor_sha = state_dict_sha256(best_model.state_dict())
+        # candidate; the assert hashes the STORED weights at ``best_source_path``
+        # (NOT the live model — its runtime fp16 cast on CUDA diverges from the
+        # fp32 on-disk pin and false-failed a CORRECT incumbent, §D-RERUNPREP F1),
+        # so ANY source that yields non-pinned weights is refused here.
+        _anchor_sha = checkpoint_state_sha256(best_source_path)
         _pin = (
             eval_ext_config.get("eval_pipeline", {})
             .get("gating", {})
@@ -337,7 +420,7 @@ def resolve_anchor(
         )
         log.info(
             "anchor_identity",
-            path=str(best_model_path),
+            path=str(best_source_path),
             step=best_model_step,
             run_id=run_id,
             sha256=_anchor_sha,
@@ -406,6 +489,16 @@ def resolve_anchor(
             )
     else:
         # No usable anchor anywhere — last-resort fresh init from trainer.model.
+        # §D-RERUNPREP F1 (W2-VACUOUS): this is the branch the runbook's preflight
+        # `rm best_model.pt` actually routes the launch through — verify the pin
+        # against the --checkpoint the anchor is seeded from BEFORE building it,
+        # so the W2 guard protects the real launch path (not just a stale-anchor one).
+        verify_launch_anchor_pin(
+            eval_ext_config=eval_ext_config,
+            checkpoint_path=getattr(args, "checkpoint", None),
+            trainer_step=trainer.step,
+            run_id=run_id,
+        )
         # On a clean run this should rarely fire: the bootstrap candidates above
         # are the canonical first-run anchor. Reaching this branch means the box
         # has neither best_model.pt, its .bak, nor any bootstrap_*.pt — flag it.

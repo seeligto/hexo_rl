@@ -21,14 +21,11 @@ import argparse
 import sys
 from pathlib import Path
 
-import torch
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from hexo_rl.training.anchor import state_dict_sha256
-from hexo_rl.training.checkpoints import extract_model_state
+from hexo_rl.training.anchor import checkpoint_state_sha256
 
 
 def main() -> int:
@@ -36,9 +33,9 @@ def main() -> int:
     ap.add_argument("checkpoint", help="path to a .pt checkpoint / anchor")
     args = ap.parse_args()
 
-    raw = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    state = extract_model_state(raw)
-    print(state_dict_sha256(state))
+    # SAME code path resolve_anchor uses for the W2 pin check — single source of
+    # truth, so the pin can never drift from the runtime comparison (§D-RERUNPREP F1).
+    print(checkpoint_state_sha256(Path(args.checkpoint)))
     return 0
 
 

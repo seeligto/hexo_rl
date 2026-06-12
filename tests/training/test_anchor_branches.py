@@ -70,7 +70,15 @@ def test_resolve_anchor_arch_mismatch_skips_sync(mock_save, mock_load, tmp_path)
     best_ref = MagicMock(spec=["model", "step"])
     best_ref.model = anchor_model
     best_ref.step = 5
-    mock_load.return_value = best_ref
+    # §D-RERUNPREP F1: the loader returns (trainer, source_path); resolve_anchor
+    # hashes the STORED weights at source_path for the W2 identity (not the live
+    # model), so a real checkpoint must exist there.
+    ckpt = tmp_path / "best_model.pt"
+    torch.save(
+        {"model_state": HexTacToeNet(board_size=5, res_blocks=1, filters=16).state_dict()},
+        ckpt,
+    )
+    mock_load.return_value = (best_ref, ckpt)
 
     inf_model = MagicMock(spec=["in_channels", "load_state_dict"])
     inf_model.in_channels = 8
