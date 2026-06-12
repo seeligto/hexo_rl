@@ -238,7 +238,7 @@ engine/        Rust core (board, MCTS, replay buffer, self-play runner)
 hexo_rl/       Python training + orchestration
 configs/       All hyperparameters (model, training, selfplay, monitoring, eval, corpus)
 docs/          Architecture, roadmap, rules, handoffs/, sprint_archive/, archive/
-vendor/bots/   SealBot + KrakenBot submodules — ELO benchmark references
+vendor/bots/   SealBot + Hammerhead submodules — ELO benchmark references
 scripts/       Entry points called by the Makefile (+ diagnosis/ instrument home)
 tests/         Python test suite + tests/fixtures (probe fixtures)
 ```
@@ -264,7 +264,7 @@ Run `make help` for the full target list.
 
 MIT — see [LICENSE](LICENSE).
 
-**Vendored submodules** (`vendor/bots/sealbot`, `vendor/bots/krakenbot`) are
+**Vendored submodules** (`vendor/bots/sealbot`, `vendor/bots/hammerhead`) are
 referenced as git submodules pointing at upstream repos. They do not ship a
 LICENSE file upstream; treat as "all rights reserved" per default copyright.
 This repo only stores the submodule commit SHA — no code is redistributed.

@@ -102,48 +102,6 @@ def _register_default_bots(model_ckpt: str, our_n_sims: int) -> None:
         from hexo_rl.bots.sealbot_bot import SealBotBot
         return SealBotBot(time_limit=0.5)
 
-    def make_kraken_minimax_strong() -> BotProtocol:
-        from hexo_rl.bots.krakenbot_bot import KrakenBotBot
-        return KrakenBotBot(time_limit=1.0)
-
-    def make_kraken_minimax_fast() -> BotProtocol:
-        from hexo_rl.bots.krakenbot_bot import KrakenBotBot
-        return KrakenBotBot(time_limit=0.1)
-
-    def make_kraken_random() -> BotProtocol:
-        from hexo_rl.bots.krakenbot_random import KrakenBotRandomBot
-        return KrakenBotRandomBot()
-
-    def make_kraken_mcts_resnet() -> BotProtocol:
-        from hexo_rl.bots.krakenbot_mcts import KrakenBotMCTSBot
-        return KrakenBotMCTSBot(
-            n_sims=200,
-            model_path=str(
-                _REPO_ROOT
-                / "vendor"
-                / "bots"
-                / "krakenbot"
-                / "training"
-                / "resnet_results"
-                / "best.pt"
-            ),
-        )
-
-    def make_kraken_mcts_selfplay() -> BotProtocol:
-        from hexo_rl.bots.krakenbot_mcts import KrakenBotMCTSBot
-        return KrakenBotMCTSBot(
-            n_sims=200,
-            model_path=str(
-                _REPO_ROOT
-                / "vendor"
-                / "bots"
-                / "krakenbot"
-                / "training"
-                / "mcts_results"
-                / "best.pt"
-            ),
-        )
-
     def make_our_v6_mcts() -> BotProtocol:
         from hexo_rl.bots.our_model_bot import OurModelBot
         return OurModelBot(
@@ -166,11 +124,6 @@ def _register_default_bots(model_ckpt: str, our_n_sims: int) -> None:
     BOT_REGISTRY.update({
         "randombot":             make_randombot,
         "sealbot":               make_sealbot,
-        "kraken_minimax_strong": make_kraken_minimax_strong,
-        "kraken_minimax_fast":   make_kraken_minimax_fast,
-        "kraken_random":         make_kraken_random,
-        "kraken_mcts_resnet":    make_kraken_mcts_resnet,
-        "kraken_mcts_selfplay":  make_kraken_mcts_selfplay,
         "our_v6_mcts128":        make_our_v6_mcts,
         "our_v6_argmax":         make_our_v6_argmax,
     })

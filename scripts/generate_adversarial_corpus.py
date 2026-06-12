@@ -6,8 +6,7 @@ Sources (operator-tunable weights):
   1. sealbot_vs_a1            SealBot (minimax) vs A1 (v6w25 argmax)
   2. scripted_far_line        FarLineOpponent (§164 P2) vs SealBot
   3. scripted_far_placement   FarPlacementOpponent (§164 P2) vs SealBot
-  4. krakenbot_vs_sealbot     KrakenBot (Python minimax) vs SealBot
-  5. sealbot_vs_sealbot       SealBot self-play (low weight; same-engine)
+  4. sealbot_vs_sealbot       SealBot self-play (low weight; same-engine)
 
 Output: NPZ in v8 (canvas_realness) wire format — same column schema as
 `data/bootstrap_corpus_v8.npz` (canvas_realness variant). Columns:
@@ -56,7 +55,6 @@ if str(REPO) not in sys.path:
 from engine import Board  # type: ignore
 from hexo_rl.bootstrap.bot_protocol import BotProtocol  # noqa: E402
 from hexo_rl.bots.sealbot_bot import SealBotBot  # noqa: E402
-from hexo_rl.bots.krakenbot_bot import KrakenBotBot  # noqa: E402
 from hexo_rl.bootstrap.dataset_v8 import (  # noqa: E402
     BOARD_SIZE_V8,
     LEGAL_MOVE_RADIUS_V8,
@@ -304,7 +302,6 @@ def _make_a1_argmax_bot(
 def _build_source_configs(
     a1_bot_factory: Optional[Callable[[], V6ArgmaxBot]],
     sealbot_time_limit: float,
-    krakenbot_time_limit: float,
     weights: dict,
 ) -> List[SourceConfig]:
     configs: List[SourceConfig] = []
@@ -373,28 +370,7 @@ def _build_source_configs(
             ),
         ))
 
-    # 4. KrakenBot vs SealBot
-    if weights.get("krakenbot_vs_sealbot", 0) > 0:
-        kraken = KrakenBotBot(time_limit=krakenbot_time_limit)
-        seal_d = SealBotBot(time_limit=sealbot_time_limit)
-
-        def _build_kvs(seed: int, _kr=kraken, _seal=seal_d):
-            if seed % 2 == 0:
-                return (_kr, _seal, f"KrakenBot_t{krakenbot_time_limit}")
-            return (_seal, _kr, f"KrakenBot_t{krakenbot_time_limit}")
-
-        configs.append(SourceConfig(
-            name="krakenbot_vs_sealbot",
-            weight=float(weights["krakenbot_vs_sealbot"]),
-            encoding_name="v8",  # §173 A6: r=8, no cluster widening (v8 game board)
-            build_bots=_build_kvs,
-            description=(
-                f"KrakenBot (t={krakenbot_time_limit}) vs SealBot "
-                f"(t={sealbot_time_limit})"
-            ),
-        ))
-
-    # 5. SealBot self-play (low-weight; same-engine, less informative)
+    # 4. SealBot self-play (low-weight; same-engine, less informative)
     if weights.get("sealbot_vs_sealbot", 0) > 0:
         # Two distinct SealBot instances avoid pending-move cache crosstalk.
         seal_e = SealBotBot(time_limit=sealbot_time_limit)
@@ -469,17 +445,12 @@ def main() -> int:
         "--sealbot-time-limit", type=float, default=0.1,
         help="SealBot search time per move (default 0.1s).",
     )
-    parser.add_argument(
-        "--krakenbot-time-limit", type=float, default=0.05,
-        help="KrakenBot search time per move (default 0.05s).",
-    )
     # Per-source weights — must sum approximately to 1.0. Defaults skew
     # toward (1) sealbot_vs_a1 + (2-3) scripted adversaries per the §170
     # P4 P2 prompt's recommendation.
     parser.add_argument("--weight-sealbot-vs-a1",         type=float, default=0.45)
     parser.add_argument("--weight-scripted-far-line",     type=float, default=0.13)
     parser.add_argument("--weight-scripted-far-placement",type=float, default=0.12)
-    parser.add_argument("--weight-krakenbot-vs-sealbot",  type=float, default=0.15)
     parser.add_argument("--weight-sealbot-vs-sealbot",    type=float, default=0.15)
     parser.add_argument(
         "--no-a1", action="store_true",
@@ -504,7 +475,6 @@ def main() -> int:
         "sealbot_vs_a1":         0.0 if args.no_a1 else args.weight_sealbot_vs_a1,
         "scripted_far_line":     args.weight_scripted_far_line,
         "scripted_far_placement":args.weight_scripted_far_placement,
-        "krakenbot_vs_sealbot":  args.weight_krakenbot_vs_sealbot,
         "sealbot_vs_sealbot":    args.weight_sealbot_vs_sealbot,
     }
     total_weight = sum(weights.values())
@@ -544,7 +514,6 @@ def main() -> int:
     sources = _build_source_configs(
         a1_bot_factory=factory,
         sealbot_time_limit=args.sealbot_time_limit,
-        krakenbot_time_limit=args.krakenbot_time_limit,
         weights=weights,
     )
     if not sources:
@@ -798,7 +767,6 @@ def main() -> int:
             "max_moves": args.max_moves,
             "random_opening_plies": args.random_opening_plies,
             "sealbot_time_limit": args.sealbot_time_limit,
-            "krakenbot_time_limit": args.krakenbot_time_limit,
             "a1_checkpoint": args.a1_checkpoint if not args.no_a1 else None,
             "weights_renormalised": weights,
             "legal_move_radius_v8": LEGAL_MOVE_RADIUS_V8,

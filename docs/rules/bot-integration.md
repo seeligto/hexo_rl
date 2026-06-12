@@ -17,7 +17,6 @@ Always use `git submodule add` — never clone into a tracked path:
 ```bash
 # Add a bot as a submodule under vendor/bots/
 git submodule add https://github.com/Ramora0/SealBot vendor/bots/sealbot
-git submodule add https://github.com/Ramora0/KrakenBot vendor/bots/krakenbot
 
 # After cloning the repo fresh, initialise submodules:
 git submodule update --init --recursive
@@ -41,7 +40,7 @@ git add vendor/bots/sealbot && git commit -m "chore(vendor): update sealbot to l
 | Path | Bot | Notes |
 |---|---|---|
 | `vendor/bots/sealbot` | Ramora0/SealBot | Strongest public bot — pybind11 minimax engine and primary ELO benchmark target for Phase 4+ |
-| `vendor/bots/krakenbot` | Ramora0/KrakenBot | KrakenBot community bot |
+| `vendor/bots/hammerhead` | seeligto/hammerhead | NNUE engine — nnue eval opponent (built on run host) |
 
 When the community adds new bots, add them here as submodules. Check the
 HexTacToeBots repo and the community Discord periodically for new entries.
