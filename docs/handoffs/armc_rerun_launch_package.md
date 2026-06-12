@@ -17,15 +17,16 @@ Companion artifacts:
 |---|---|---|
 | **Phase 0 — post-merge hygiene** | ✅ **P0-PASS** | FF linear merge; all 7 loopfix commits (`a4d43fe`→`ab8d71d`) reachable from HEAD `1845d47`; `make test` **1994 passed / 0 failed**; `engine/src` diff EMPTY → bench-SKIP justified (Python-only; hammerhead is a submodule pointer); laptop+vast trees clean (only untracked scratch); gate fix `b340e99` in master both hosts; `master==origin/master`. |
 | **Phase 1/2 — static sweep** | ✅ **0 BLOCKERS** | 6 buckets B1–B6 + aggregate/review/red-team. See §2. |
-| **Phase 3 — GPU smoke (run 1)** | ❌ **FAIL → fixes landed** | Ran on vast 5080. Caught **F1: W2-VACUOUS** (the launch fresh-init path skipped the pin check) + a **host bootstrap DRIFT** (vast `4198d5cb` ≠ the laptop-derived pin `aba28e10`) + F2 telemetry + F3 script. (My first F1 diagnosis "fp16" was **wrong** — a GPU discriminator showed fp32; corrected.) Lifecycle itself PASSED. Full record: `phase3_smoke_results.md`. **Fixed (TDD, 12 anchor + closeout tests green); configs re-pinned to `4198d5cb` + hosts synced; re-smoke pending.** |
+| **Phase 3 — GPU smoke (run 1)** | ❌ FAIL → diagnosed | Caught **W2-VACUOUS** (launch fresh-init skipped the pin) + **host bootstrap DRIFT** (vast `4198d5cb` ≠ laptop-derived pin `aba28e10`) + F2/F3. (Initial "fp16" mechanism was a misdiagnosis, corrected by a GPU discriminator.) Record: `phase3_smoke_results.md`. |
+| **Phase 3 — GPU re-smoke (run 2)** | ✅ **GREEN** | On the fixed code + reconciled pin `4198d5cb`. Stage A (closeout integration) PASS; criteria 1–7,9 PASS (crit4/crit5 confirmed via raw logs after a self-check grep fix), crit8 SKIP (no promotion; W3 unit-proven). **crit7 (pin verified) + stage-D resume PASSING the pin** (hard-failed in run 1) are the on-GPU proof the W2-VACUOUS fix + reconciliation work. terminal eval `completed=true, wr_best=0.565`. |
 | **Phase 4 — launch package** | ✅ this document | Design-only; no launch. |
 
-**Bottom line:** static sweep was GREEN, but the **Phase-3 GPU smoke FAILED** — it caught a real code
-hole (**W2-VACUOUS**: the launch path never verified the incumbent pin) AND a **host bootstrap drift**
-(the pin was set from a dev-host copy that had drifted from the run host's bootstrap). My initial
-"fp16" mechanism was a misdiagnosis, corrected by a cheap GPU discriminator before any expensive run.
-**Fixes landed (§D-RERUNPREP, TDD); pin reconciled to the de-facto `4198d5cb`; hosts synced.** Gate
-to the 50k: a **re-run of the Phase-3 smoke to GREEN** on the fixed code + correct pin, then operator launch.
+**Bottom line:** the Phase-3 GPU smoke FAILED on run 1 — catching a real code hole (**W2-VACUOUS**:
+the launch never verified the incumbent pin), a **host bootstrap drift**, and an initial misdiagnosis
+(corrected by a cheap GPU discriminator). After the fixes + pin reconciliation to the de-facto
+`4198d5cb`, the **Phase-3 re-smoke is GREEN** (pin now verified; the resume that hard-failed now
+passes). **The 50k is CLEARED for operator launch** — pending authorization to push `master` to origin
+(currently blocked) so vast can pull the fixes, OR an operator-run launch on the rsync'd vast code.
 
 ---
 
