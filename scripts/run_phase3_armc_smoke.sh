@@ -64,7 +64,8 @@ if [ -n "$DRAIN_LN" ] && [ -n "$TSTART_LN" ] && [ "$DRAIN_LN" -lt "$TSTART_LN" ]
 #    completed=true (F2). wr_best present in the same line proves best_checkpoint ran
 #    under the stride-ignored battery.
 TERM_N=$(grepc 'terminal_eval_complete')
-if [ "$TERM_N" -eq 1 ] && [ "$(grepc '"event": "terminal_eval_complete".*"completed": true')" -ge 1 ]; then CRIT[4]=PASS; else CRIT[4]=FAIL; fi
+# key order in the JSONL is completed→…→event, so match on the line, order-independent.
+if [ "$TERM_N" -eq 1 ] && grep 'terminal_eval_complete' "$RUNLOG" | grep -q '"completed": true'; then CRIT[4]=PASS; else CRIT[4]=FAIL; fi
 # 6. >=1 in-run promotion decision at n=400 (best_checkpoint configured n_games 400)
 [ "$(grepc '"n_games": 400|best.*400.*games|evaluation_round_complete')" -ge 1 ] && CRIT[6]=PASS || CRIT[6]=WARN
 # 7. incumbent sha-pin verified: anchor_identity logged (now on the fresh-init launch
@@ -85,10 +86,14 @@ fi
 # ── (D) mini-resume — resume ignores the TERMINAL record (criterion 5) ───────
 say "(D) mini-resume 5 iters (cross-boundary: restore pin-matching anchor first)"
 cp checkpoints/bootstrap_model_v6_live2.pt checkpoints/best_model.pt   # satisfy the W2 pin on a deliberate resume
+# Disable the resume's OWN close-out terminal eval — it's testing resume-load, not close-out, and
+# the full battery would waste ~1h. (base → --config → --variant merge order keeps this false.)
+RESUME_OVR="$OUT/resume_override.yaml"; echo "terminal_eval_enabled: false" > "$RESUME_OVR"
 FINAL_CKPT=$(ls -t checkpoints/armc_smoke_${STAMP}/checkpoint_*.pt 2>/dev/null | head -1)
 if [ -n "$FINAL_CKPT" ]; then
   $PY scripts/train.py \
     --checkpoint "$FINAL_CKPT" \
+    --config "$RESUME_OVR" \
     --variant v6_live2_ls_ab_smoke \
     --iterations 5 \
     --override-scheduler-horizon \
@@ -96,9 +101,12 @@ if [ -n "$FINAL_CKPT" ]; then
     --checkpoint-dir checkpoints/armc_resume_${STAMP} \
     >"$RESUMELOG" 2>&1
   R_RC=$?
-  # resume must START (anchor loaded from best_model.pt, NOT from a terminal record) and
-  # must NOT re-emit a terminal_eval_complete as a steering input on resume.
-  if [ $R_RC -eq 0 ] && [ "$(grep -cE 'anchor_identity' "$RESUMELOG")" -ge 1 ] && [ "$(grep -cE 'terminal_eval_complete' "$RESUMELOG")" -eq 0 ]; then
+  # resume must START CLEANLY: anchor loaded via resolve_anchor (anchor_identity logged) with the
+  # pin MATCHED (no hard-fail) — proving the prior TERMINAL record is NOT a steering/promotion input
+  # on resume (resolve_anchor loads the best_model.pt MODEL, never the terminal record). The resume's
+  # own close-out is disabled above, but even when enabled its terminal_eval_complete (at step 505)
+  # would be its OWN lifecycle, not a re-ingestion of the prior run's record.
+  if [ $R_RC -eq 0 ] && [ "$(grep -cE 'anchor_identity' "$RESUMELOG")" -ge 1 ] && [ "$(grep -cE 'anchor sha256 mismatch|Refusing to launch' "$RESUMELOG")" -eq 0 ]; then
     CRIT[5]=PASS; else CRIT[5]=FAIL; fi
 else
   CRIT[5]=FAIL; say "  no checkpoint produced to resume from"
