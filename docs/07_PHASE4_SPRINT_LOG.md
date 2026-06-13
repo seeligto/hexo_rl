@@ -6308,3 +6308,33 @@ the expensive run is what turned a 4-day/$67 invalidation risk into a free local
 real code hole (W2-VACUOUS) and a misdiagnosis. Artifacts:
 `docs/handoffs/phase3_smoke_results.md`, `phase3_finding_terminal_eval_completed.md`,
 `armc_rerun_launch_package.md`, `armc_rerun_watchsheet.md`.
+
+## §D-TEMPDECAY — per-game within-game temperature decay: clean-up + probe + smoke — 2026-06-12/13
+
+**Audit:** the within-game cosine (`compute_move_temperature`, quarter-cosine on the
+compound-turn clock) is CORRECT-BUT-TOXIC-LEVER, not a bug — the §156/L9 collapse was
+floor=0.05, not broken code. 11-agent audit + adversarial re-review: all 6 load-bearing
+claims held, 0 refutations. **Cleanup landed (commit `711919d`, pushed):** OFF=constant-0.5
+default (de-armed the latent re-arm footgun in `config.rs`/`pool.py`), eval helper
+`get_temperature` unified onto one shared `quarter_cosine_temperature` + compound-turn clock,
+dead `temperature_threshold_ply` field removed, cross-language Python↔Rust parity golden test.
+2006 py + engine + parity green. `gumbel_full.yaml` recreated.
+
+**Probe (Phase-2, golong@50k static, N=400/arm, vast 4080):** all 3 floors PASS draw-safety;
+the aggressive floors draw LESS than control (a20=0.020, a30=0.037 vs control 0.048) — the
+L9 collapse is a TRAINING dynamic, ABSENT in static generation (pre-registered hypothesis
+confirmed). `smoke_recommend=a20`.
+
+**Smoke (Phase-3, control vs a20, 10k steps each):** **TEMP-NEGATIVE.** Clean shared-corpus
+metric `value_accuracy_corpus` FLAT (Δ=−0.001, CI straddles 0); the pre-reg `value_accuracy_masked`
+"+0.016" was a CONFOUND (selfplay portion — a20's sharper games are easier to label on its OWN
+data; shared-corpus subset flat). NOT toxic (0.30 draw gate never fired) but a20 mildly elevates
++ slowly raises TRAINING draws (0.10 vs 0.065, rising) — opposite its static-probe behavior.
+Lever PARKED; CEIL-HEADROOM more likely loop-downstream.
+
+**Falsified-register:** re-enabling within-game cosine at floor 0.20 buys a training draw-tax for
+no shared-data value-calibration gain. **Meta-lesson:** cross-arm value comparison MUST use the
+shared-corpus subset (`value_accuracy_corpus`), never `value_accuracy_selfplay`/`_masked`
+(confounded by per-arm self-play distribution). Report: `docs/handoffs/tempdecay_report.md`;
+pre-registration: `reports/investigations/tempdecay_phase0_2026-06-12.md`. Branch
+`phase4.5/tempdecay`. Total vast run ~14h ≈ $2.9.
