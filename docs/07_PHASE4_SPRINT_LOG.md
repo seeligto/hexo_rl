@@ -6338,3 +6338,78 @@ shared-corpus subset (`value_accuracy_corpus`), never `value_accuracy_selfplay`/
 (confounded by per-arm self-play distribution). Report: `docs/handoffs/tempdecay_report.md`;
 pre-registration: `reports/investigations/tempdecay_phase0_2026-06-12.md`. Branch
 `phase4.5/tempdecay`. Total vast run ~14h ≈ $2.9.
+
+## §D-TEMPSTRENGTH — does within-game temp decay make a STRONGER model? (head-to-head) — 2026-06-14
+
+**Verdict: TEMP-STRENGTH-NULL.** D-TEMPDECAY judged temp decay on value CALIBRATION
+(`value_accuracy_corpus`, flat → NEGATIVE); the operator's real hypothesis is *sharper late play
+→ STRONGER model* — a STRENGTH question the Phase-3 smoke skipped (eval off). This dispatcher
+re-ran control (flat τ=0.5) vs a20 (quarter-cosine thr=12/floor 0.20), golong@50k PEAK → 65k
+(15k steps), eval-read ON, on vast 5080. Both arms generate from the SAME frozen 50k incumbent
+(golong regime, no promotions → temp the only delta, red-team #4 cleared).
+
+**Head-to-head (post-980bc4d round_robin, temp 0.0 + on-distribution opening-jitter 8 for
+effective-n, n=60/pair, distinct-game bootstrap CI):** a20 vs control WR = 0.508 / 0.467 / **0.483**
+at 55k/60k/65k — **every CI straddles 0.50** (65k CI [0.367, 0.608]). Effective-n HONEST
+(copy_multiplier 1.002, 59–60 distinct/pair, no low-power warning) — the NULL is real, not
+underpowered. BT-Elo: control marginally ahead at 65k (+130 vs +99) / 60k (+76 vs +65), tied at
+55k — direction leans control, CIs overlap (not separated). Both arms improve over the 50k anchor
+by 60k (only control@55k dips to 0.441 vs anchor, CI straddles 0.5 — not a real regression).
+
+**Supporting:** a20 draw-tax plateaus ~0.106 (~1.8× control's flat 0.059), flat-not-rising by 15k,
+0.30 gate never threatened (the smoke's "rising 0.096→0.106" was the asymptotic approach).
+Coherence: a20 forced_win_conversion 0.182 < control 0.285 — a20 manufactures MORE forcing turns
+(643 vs 438) but converts FEWER. off-window forced rate high both arms (0.62/0.71, the §D-EXTLINK
+blind spot, not lever-specific).
+
+**Pre-registered prediction (indirect signals → non-positive) CONFIRMED.** a15 escalation runs
+ONLY on POSITIVE → does NOT run. Do NOT extend (O1). Falsified-register: within-game temp decay
+floor 0.20 buys NO head-to-head strength + a persistent draw-tax — non-positive on BOTH strength
+and calibration. The D-TEMPDECAY value-NEGATIVE verdict stands independently. Report
+`reports/investigations/tempstrength_2026-06-14.md`; tooling `scripts/{run_tempstrength_rr,
+analyze_tempstrength,coherence_tempstrength}.{sh,py}` + `--opening-jitter-plies` on
+`eval_round_robin.py`; configs `configs/variants/tempstrength_{control,a20}.yaml`. Branch
+`phase4.5/tempdecay`. Total vast run ~15.7h. Commits pending operator ask.
+
+## §D-GUMBELSIMS — minimum-sim Gumbel operating point (Phase 0: design + method-validated) — 2026-06-14
+
+**Status: Phase 0 CLOSED (design + harness + dev smoke); Phase 1–3 operator-run (5080/vast), GATED on
+Arm-C 50k encoding verdict.** Branch `phase4.5/gumbelprep`. The prize D-GUMBELPREP buried: Gumbel's
+marquee result is policy improvement at DRASTICALLY fewer sims (Danihelka ICLR'22, n≈16–50). PUCT live
+≈350/move; if Gumbel matches PUCT-600 at n≈50 → ~7–12× games/GPU-hr at equal quality (attacks the GPU/
+self-play bottleneck). CHARACTERIZATION→DIRECTIONAL: proxy finds a candidate BRACKET, Phase-3 strength
+defines the committed n.
+
+**No new Rust (the load-bearing finding).** Matched-position reads looked to need a Rust Gumbel-on-
+position API (eval/ModelPlayer is PUCT-only; only self-play exercises SH). But PyO3 already exposes every
+SH primitive (`set_forced_root_child`, `get_root_children_info`, `get_improved_policy`,
+`apply_dirichlet_to_root`) and `analyze_api._run_gumbel` already drives faithful SH from Python — the
+TARGET is the IDENTICAL Rust `get_improved_policy`. Harness is Python-only, no bench gate.
+
+**6-agent fresh-review + red-team of the design (all verified vs source; ~all adopted, 2 refined):**
+M1 per-seed-PAIR JSD not JSD-of-means; M4 **Dirichlet gap** (production applies in the Gumbel branch
+`inner.rs:747`, driver didn't); M14 read-B improved-vs-improved (golong `completed_q_values:true` →
+PUCT also records `get_improved_policy`); M8 static coherence DEMOTED to provisional witness (D-TEMPDECAY
+static-vs-dynamic inversion class); M11 Phase-3 LOWER-anchor arm (the throughput-optimal n may be BELOW
+the proxy knee); M12 played-move witness (trajectories steered by the SH winner, not the target); M9
+refined: value target is z (`trainer.py:182`), so the read is v_mix-reliance not "value-target
+degradation". Full disposition: `reports/gumbelsims/DESIGN.md` §11.
+
+**Dev method-validation smoke (4060, golong@50k, dirichlet-OFF) — METHOD VALIDATED + metric REVISED.**
+The pre-registered improved-policy JSD is UNUSABLE: at production c_visit=50/c_scale=1 the completed-Q
+target is near-ONE-HOT (top≈1.0) → JSD ≈ argmax, and its n=400 SELF-floor ≈0.5–1.0 (the one-hot crown
+flips between near-equal moves on value-indifferent positions — the reference disagrees with itself).
+**Revised primary reads:** (A1) **visit-policy per-seed-pair JSD** vs n=400 (stable shape; self-floor
+≈0.19–0.29) + (A2) **played-move value-regret** under the n=400 reference Q (decision-relevant,
+indifference-robust); improved-JSD + argmax-agreement = witnesses; **dirichlet-OFF primary** (Dirichlet
+inflates the floor ~2×), dirichlet-ON + component-2 production self-play = transfer check. Standalone
+smoke: visit-JSD → floor by n≈50, regret → ~0.05 by n≈50 for m=16 (the Danihelka regime). Production CLI
+smoke (jittered fixture) conservatively reported knee_n=400 under wide small-fixture CIs — correctly
+refuses a false early knee; the knee is fixture-sensitive → full Phase-1 fixture (≥80–120 distinct games,
+R=12, 300–500 positions, regime-stratified, cluster-bootstrap CI) on the 5080 resolves it.
+
+**Artifacts (commits pending operator ask):** `hexo_rl/eval/gumbel_sims.py` (pure math: SH-budget
+parity, per-seed-pair JSD, game-id cluster bootstrap; `tests/eval/test_gumbel_sims.py` 14 green) +
+`hexo_rl/eval/gumbel_search_py.py` (faithful SH+PUCT driver, parity fixes) + `scripts/gumbel_sims_sweep.py`
+(Phase-1 fixture+curve harness, `--smoke`) + `scripts/gumbel_sims_smoke.py` + `reports/gumbelsims/
+{DESIGN,SMOKE_RESULT,PHASE1_RUNBOOK}.md`; `gumbel_ab_runbook.md` Step 0 added. Arm-C 50k untouched.
