@@ -221,6 +221,21 @@ if [[ -d "vendor/bots/sealbot/current" ]]; then
         || warn "SealBot current build failed (non-fatal — only needed for eval)"
 fi
 
+# hammerhead — NNUE eval opponent. Two-part build into the run venv: the Rust
+# engine (maturin develop --release on hammerhead-engine, whose rust-toolchain.toml
+# pins its own channel) + the editable Python SDK. nnue eval imports
+# `from hammerhead import Bot`; without this the nnue opponent — and any eval ROUND
+# that includes it (stride 2 + the terminal full-battery) — raises ModuleNotFoundError
+# and the whole round is discarded.
+echo "    Building hammerhead (NNUE eval opponent)..."
+if [[ -d "vendor/bots/hammerhead/hammerhead-engine" ]]; then
+    (cd vendor/bots/hammerhead/hammerhead-engine \
+        && env -u CONDA_PREFIX VIRTUAL_ENV="$REPO_ROOT/.venv" "$REPO_ROOT/.venv/bin/maturin" develop --release 2>&1) \
+        && "$REPO_ROOT/.venv/bin/pip" install -e vendor/bots/hammerhead/hammerhead --quiet \
+        && ok "hammerhead built" \
+        || warn "hammerhead build failed (non-fatal — only needed for nnue eval)"
+fi
+
 # ── [9/10] Download release artifacts from Hugging Face ──────────────────────
 step 9 "Downloading release artifacts from Hugging Face..."
 mkdir -p checkpoints data
