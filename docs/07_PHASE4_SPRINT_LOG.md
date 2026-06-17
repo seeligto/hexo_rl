@@ -6450,3 +6450,31 @@ distinct-game bootstrap CI) on pulled final checkpoints → zero vast eval time.
 (`defender_dispatch.build_model_bot` routing legal-set models through no-drop KClusterMCTSBot)
 committed this branch + synced to vast. Pre-flight GREEN (opponent imports, anchor sha, corpus).
 POSITIVE = Gumbel-100 non-inferior to PUCT-600 + real pos/hr multiplier + coherence not degraded.
+
+### Throughput optimization (2026-06-17) — host tuning is a PREREQUISITE for Gumbel affordability
+
+During the Phase-3 A/B, the vast Gumbel arm ran with the host **95% idle** (GPU 11%, load 0.93/24,
+batch fill 22%, 2310+ `waiting_for_games`) — single Python process / 43 threads (thread pool +
+InferenceServer), **inference-latency-bound**, not resource-saturated. `scripts/thr_optimize.py`
+(coordinate descent + interaction grid + n=5 validation via `benchmark.py` pool throughput) found
+the knob directions, validated thermal-clean by an alternating A/B (laptop mobile-4060 throttles →
+absolutes unreliable, ratios via interleaving). Full report (gitignored): `reports/thr_opt/REPORT.md`.
+
+**Knob directions (consistent both Gumbel + PUCT):** `n_workers`↑ (latency overlap), **`inference_batch_size`
+SMALLER (64≫128≫256)** — small batch fills fast / low dispatch latency, **`leaf_batch_size` 8→16**
+(fewer round-trips; NB changes search co-batching/targets → future-only, both-arms-matched),
+`inference_max_wait_ms`→2. Recommended vast Gumbel host config: **`n_workers=32, inference_batch_size=64,
+leaf_batch_size=16, inference_max_wait_ms=2`**.
+
+**Vast confirmation (5080) — the laptop MASSIVELY understated it (laptop 1.68× vs vast 15×):** the
+faster GPU makes the latency-bound base WORSE (workers starve it, 22% fill). Gumbel base-w18 **9.7k →
+opt-w32 150k pos/hr = ~15×**; the batch/leaf/wait knobs alone at w18 give 7.1×. PUCT (less throttled,
+58% fill base; compute-bound, optimum ≥w48): base-w18 13.0k → opt-w48 32.9k = 2.5×.
+
+**Affordability multiplier (each arm at its vast optimum): Gumbel-opt 149.6k ÷ PUCT-opt 32.9k = 4.5×**
+(vs naive 600/100=6×). **CRITICAL: contingent on host tuning — at the as-run 18w-base config Gumbel
+(9.7k) is 0.75× = SLOWER than PUCT (13.0k); optimization flips 0.75→4.5×.** Gumbel's affordability
+advantage exists ONLY with proper host tuning. End-to-end training speedup ≤4.5× (trainer becomes the
+bottleneck once `waiting_for_games` is gone — needs a real optimized run) and is only bankable if
+Gumbel-100 strength is non-inferior (the Phase-3 A/B, in progress). `p3_armc_*.yaml` left at 18w-base
+(strength-A/B record, lf8); optimized config is future-canonical-run-only.
