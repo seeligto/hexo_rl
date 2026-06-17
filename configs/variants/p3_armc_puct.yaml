@@ -55,7 +55,7 @@ eval_pipeline:
     best_checkpoint: { enabled: false }
     sealbot:         { enabled: false }
     random:          { enabled: true, stride: 1, n_games: 20 }
-    bootstrap_anchor:{ enabled: false }
+    bootstrap_anchor: { enabled: false }
     nnue:            { enabled: false }
     offwindow_adversary: { enabled: false }
   gating:
