@@ -29,6 +29,12 @@ from hexo_rl.model.network import HexTacToeNet
 from hexo_rl.selfplay.inference import LocalInferenceEngine
 from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding_name
+# build_model_bot routes a legal-set (multi-window) model-under-test through
+# KClusterMCTSBot (no-drop) instead of single-window ModelPlayer, which drops
+# off-window legal moves (get_move below, ~L111-113) and mis-routes it. Lazy
+# ModelPlayer import inside the helper → no import cycle. Single-window encodings
+# (policy_pool="none") are bitwise-unchanged.
+from hexo_rl.eval.defender_dispatch import build_model_bot
 
 try:
     import structlog
@@ -179,10 +185,12 @@ class Evaluator:
             model_sims: MCTS simulations per move for the model.
             phase: Label for logging.
         """
-        model_player = ModelPlayer(
-            self.model, self.config, self.device,
-            n_sims=model_sims,
-            temperature=self._eval_temperature,
+        _enc = _normalize_encoding_name(self.config.get("encoding"))
+        _c_puct = float(self.config.get("mcts", self.config).get("c_puct", DEFAULT_C_PUCT))
+        model_player = build_model_bot(
+            self.model, _lookup_encoding(_enc), self.device,
+            n_sims=model_sims, temperature=self._eval_temperature,
+            c_puct=_c_puct, encoding_label=_enc, config=self.config,
         )
         win_count = 0
         draw_count = 0
@@ -326,9 +334,11 @@ class Evaluator:
         from hexo_rl.eval.offwindow_probe import run_adversary_games
         encoding = _normalize_encoding_name(self.config.get("encoding"))
         spec = _lookup_encoding(encoding)
-        model_player = ModelPlayer(
-            self.model, self.config, self.device, n_sims=int(model_sims or self.sealbot_model_sims),
-            temperature=0.0,
+        _c_puct = float(self.config.get("mcts", self.config).get("c_puct", DEFAULT_C_PUCT))
+        model_player = build_model_bot(
+            self.model, spec, self.device,
+            n_sims=int(model_sims or self.sealbot_model_sims), temperature=0.0,
+            c_puct=_c_puct, encoding_label=encoding, config=self.config,
         )
         summary, _recs = run_adversary_games(
             model_player, encoding, spec, arm, int(n_games), int(model_sims or self.sealbot_model_sims),
@@ -384,9 +394,12 @@ class Evaluator:
             opponent_config["encoding"] = _normalize_encoding_name(opponent_encoding)
         else:
             opponent_config = self.config
-        opponent_player = ModelPlayer(
+        _opp_enc = _normalize_encoding_name(opponent_config.get("encoding"))
+        _opp_c_puct = float(opponent_config.get("mcts", opponent_config).get("c_puct", DEFAULT_C_PUCT))
+        opponent_player = build_model_bot(
             getattr(opponent_model, "_orig_mod", opponent_model),
-            opponent_config, self.device, n_sims=other_sims,
-            temperature=self._eval_temperature,
+            _lookup_encoding(_opp_enc), self.device, n_sims=other_sims,
+            temperature=self._eval_temperature, c_puct=_opp_c_puct,
+            encoding_label=_opp_enc, config=opponent_config,
         )
         return self.evaluate(opponent_player, n_games, current_sims, phase="best_arena")

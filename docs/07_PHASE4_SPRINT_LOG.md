@@ -6413,3 +6413,40 @@ parity, per-seed-pair JSD, game-id cluster bootstrap; `tests/eval/test_gumbel_si
 `hexo_rl/eval/gumbel_search_py.py` (faithful SH+PUCT driver, parity fixes) + `scripts/gumbel_sims_sweep.py`
 (Phase-1 fixture+curve harness, `--smoke`) + `scripts/gumbel_sims_smoke.py` + `reports/gumbelsims/
 {DESIGN,SMOKE_RESULT,PHASE1_RUNBOOK}.md`; `gumbel_ab_runbook.md` Step 0 added. Arm-C 50k untouched.
+
+### Phase 1 RESULT (2026-06-17) — GUMBEL-SIMS-NULL on the multiplier; Phase 3 LEAN launched
+
+**Ran Phase 1 on the WINNING encoding (v6_live2_ls) per the gate-cleared operator decision** —
+generator `armc_50000_final.pt` (Arm-C 50k final, sha `1f1b3c23…`), variant `v6_live2_ls_ab`
+(NOT the script default v6_live2_golong single-window — the multi-window legal-set must match the
+trained checkpoint). Fixture AUDIT PASS: 480 positions, 120/120 distinct (copy_mult 1.0), legal
+100→289 spanning mid+late (no opening-b≈25 regime — multi-window union is ~100 cells by ply 2, so
+the runbook's generic b≈25 note doesn't apply to this encoding). Full report (gitignored):
+`reports/gumbelsims/PHASE1_RESULT.md` + `curve_off_m{8,16,32}.json` + `curve_on_m16.json`.
+
+**Result — NO CLEAN KNEE, m-robust across 8/16/32 (dirichlet OFF), confirmed dirichlet ON.**
+`knee_n=None` every cell. visit-JSD is floor-limited (floor 0.30–0.52; the n=400 reference
+disagrees with itself on diffuse multi-window positions) and only enters the band at n=400 — the
+mid-range plateaus are FALSE (2× Δ<δ at 100→200 then Δ>δ at 200→400, curve resumes dropping).
+value-regret monotonic, NO bottoming (0.11–0.15 at n=400 vs smoke's 0.05); the sharp early drop is
+the mechanical SH-warmup at n≈1.5–2×m, not quality saturation. Higher m monotonically better at
+fixed budget. Sensitivity gates PASS (measurement trustworthy, genuinely plateau-above-floor).
+
+**The pre-registered candidate knee (m=16≈n=50) did NOT reproduce** — it was a low-diversity
+artifact of the 5-deterministic-position standalone smoke; this matches the production-CLI smoke
+(jittered fixture → knee_n=400, "correctly refused a false early knee"). The cheap 7–12× multiplier
+is NOT supported by the proxy. RED-TEAM confounds: (1) flat-armc model (PARTIALLY controlled — the
+strong golong also got knee_n=400 on a jittered fixture); (2) fixture diversity raises the floor
+[method]; (3) multi-window large action space (100–289 legal) genuinely needs more sims [REAL
+encoding property]. (2)+(3) sufficient.
+
+**Operator routing: Phase-3 LEAN head-to-head** (the proxy compared Gumbel-n vs Gumbel-400, NOT
+vs PUCT — it cannot rule out Gumbel making BETTER targets per-sim). Arms `configs/variants/
+p3_armc_{gumbel,puct}.yaml`: ONE variable = search regime. Arm-Gumbel (gumbel_mcts, m=32,
+n_sims_full=100, c_visit/c_scale 50/1.0) vs Arm-PUCT (standard, n_sims_full=600); fsp=0.5/quick=100/
+encoding/anchor `4198d5cb…`/corpus/18w held constant. Architecture: vast TRAINS only (15k steps
+each, ~16h/$11); laptop EVALS (round_robin via KClusterMCTSBot + `--encoding v6_live2_ls`,
+distinct-game bootstrap CI) on pulled final checkpoints → zero vast eval time. Eval-dispatch fix
+(`defender_dispatch.build_model_bot` routing legal-set models through no-drop KClusterMCTSBot)
+committed this branch + synced to vast. Pre-flight GREEN (opponent imports, anchor sha, corpus).
+POSITIVE = Gumbel-100 non-inferior to PUCT-600 + real pos/hr multiplier + coherence not degraded.

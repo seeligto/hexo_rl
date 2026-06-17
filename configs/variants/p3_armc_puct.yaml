@@ -1,0 +1,73 @@
+# configs/variants/p3_armc_puct.yaml
+#
+# §D-GUMBELSIMS Phase 3 LEAN — Arm-PUCT (CONTROL). Production-standard PUCT
+# search. Matched pair with p3_armc_gumbel.yaml: byte-identical EXCEPT the search
+# regime (gumbel_mcts + the full-search sim budget). Same encoding v6_live2_ls,
+# same anchor (bootstrap_model_v6_live2 4198d5cb), same mixing/host/n_workers.
+#
+# Design: hold playout-cap structure (full_search_prob=0.5, n_sims_quick=100)
+# constant; this arm runs PUCT at n_sims_full=600 (the production "PUCT-600"
+# budget). The Gumbel arm runs Gumbel-SH at n_sims_full=100 — the throughput
+# multiplier comes from that 6× cheaper full-search.
+#
+# In-run opponent eval DISABLED (vast trains only; mis-routes v6_live2_ls on the
+# 2ae505d dispatch + costs vast time). Strength read = standalone round_robin on
+# the laptop (correct KClusterMCTSBot dispatch + --encoding v6_live2_ls) on the
+# pulled final checkpoint. In-run = draw-rate L9 abort + checkpoint cadence only.
+#
+# LAUNCH (vast, operator-run):
+#   rm -f checkpoints/best_model.pt{,.bak}   # W2: fresh-init the pinned anchor
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6_live2.pt \
+#     --variant p3_armc_puct --iterations 15000
+
+# ── encoding (4-plane v6_live2_ls multi-window legal-set) ─────────────────────
+encoding: v6_live2_ls
+in_channels: 4
+
+# ── LR — re-warm cosine (identical to armc/golong) ────────────────────────────
+lr: 2e-3
+eta_min: 5e-4
+aux_opp_reply_weight: 0.0
+
+# ── selfplay — production PUCT; the ONE A/B variable is the search regime ──────
+selfplay:
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  random_opening_plies: 0
+  gumbel_mcts: false               # <-- CONTROL: standard PUCT
+  playout_cap:
+    full_search_prob: 0.5          # production cap (held constant vs Arm-Gumbel)
+    n_sims_full: 600               # PUCT-600 full-search budget
+    n_sims_quick: 100              # quick-search budget (held constant)
+
+# ── mixing — REUSE the v6_live2 corpus (== armc) ──────────────────────────────
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+
+# ── eval — TRIMMED: opponents OFF (laptop does the strength read). Keep a cheap
+#    cadence so the draw-rate L9 abort still checks. ─────────────────────────────
+eval_interval: 2500
+eval_pipeline:
+  opponents:
+    best_checkpoint: { enabled: false }
+    sealbot:         { enabled: false }
+    random:          { enabled: true, stride: 1, n_games: 20 }
+    bootstrap_anchor:{ enabled: false }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+  gating:
+    expected_anchor_sha256: "4198d5cbd2fc0ce77ad2e3d86e32311ee40c53c926f135c52ea3749816b0a186"
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── monitors — the 3 LIVE hard-abort gates + draw-rate L9 (identical to armc) ──
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0

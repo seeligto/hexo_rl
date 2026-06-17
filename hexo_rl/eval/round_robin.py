@@ -401,19 +401,35 @@ def step_for_label(label: str) -> int:
 
 
 class _CachedModelBot:
-    """Eval MCTS player for one checkpoint; net cached + shared, fresh per game."""
+    """Eval MCTS player for one checkpoint; net cached + shared, fresh per game.
+
+    Routes through ``defender_dispatch.build_model_bot`` so a legal-set (multi-window)
+    checkpoint plays through ``KClusterMCTSBot`` (no-drop) instead of single-window
+    ``ModelPlayer``, which DROPS off-window legal moves and mis-decodes the multi-window
+    action space (evaluator.py:111-113). ``encoding_override`` is REQUIRED for
+    ``v6_live2_ls`` (state-dict-identical to ``v6_live2`` → auto-detection returns the
+    arch family, so the legal-set dispatch would not fire)."""
 
     _NET_CACHE: dict = {}
 
-    def __init__(self, ckpt_path: str, n_sims: int, temperature: float, device):
-        from hexo_rl.eval.evaluator import ModelPlayer
-        if ckpt_path not in _CachedModelBot._NET_CACHE:
+    def __init__(self, ckpt_path: str, n_sims: int, temperature: float, device,
+                 encoding_override: Optional[str] = None):
+        key = (ckpt_path, encoding_override)
+        if key not in _CachedModelBot._NET_CACHE:
             from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
-            model, _spec, label = load_model_with_encoding(ckpt_path, device)
-            _CachedModelBot._NET_CACHE[ckpt_path] = (model, label)
-        model, label = _CachedModelBot._NET_CACHE[ckpt_path]
-        config = {"encoding": label, "mcts": {"c_puct": 1.5}}
-        self._player = ModelPlayer(model, config, device, n_sims=n_sims, temperature=temperature)
+            model, spec, label = load_model_with_encoding(ckpt_path, device)
+            if encoding_override:
+                from hexo_rl.encoding import lookup as _lookup
+                from hexo_rl.encoding import normalize_encoding_name as _norm
+                label = encoding_override
+                spec = _lookup(_norm(label))
+            _CachedModelBot._NET_CACHE[key] = (model, spec, label)
+        model, spec, label = _CachedModelBot._NET_CACHE[key]
+        from hexo_rl.eval.defender_dispatch import build_model_bot
+        self._player = build_model_bot(
+            model, spec, device, n_sims=n_sims, temperature=temperature,
+            encoding_label=label,
+        )
 
     def get_move(self, state, board):
         return self._player.get_move(state, board)
@@ -497,6 +513,7 @@ def play_round_robin(
     output: str, *, max_plies: int = 200, seed_base: int = 20260608,
     pair_shard: Optional[str] = None, device=None, opening_plies: int = 0,
     opening_jitter_plies: int = 0, opening_jitter_temp: float = 0.5,
+    encoding_override: Optional[str] = None,
 ) -> str:
     """All-pairs round-robin over banked checkpoints; writes per_game.jsonl with the
     full move list + checkpoint steps + the play command. GAME-OUTER ordering so an
@@ -518,10 +535,13 @@ def play_round_robin(
     play_command = {"sims": sims, "temp": temp, "max_plies": max_plies,
                     "seed_base": seed_base, "opening_plies": opening_plies,
                     "opening_jitter_plies": opening_jitter_plies,
-                    "opening_jitter_temp": opening_jitter_temp}
-    bots = {lab: _CachedModelBot(paths[lab], sims, temp, device) for lab in labels}
+                    "opening_jitter_temp": opening_jitter_temp,
+                    "encoding_override": encoding_override}
+    bots = {lab: _CachedModelBot(paths[lab], sims, temp, device,
+                                 encoding_override=encoding_override) for lab in labels}
     open_bots = (
-        {lab: _CachedModelBot(paths[lab], sims, opening_jitter_temp, device) for lab in labels}
+        {lab: _CachedModelBot(paths[lab], sims, opening_jitter_temp, device,
+                              encoding_override=encoding_override) for lab in labels}
         if opening_jitter_plies > 0 else {}
     )
 

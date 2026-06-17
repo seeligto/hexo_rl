@@ -41,6 +41,22 @@ def main() -> int:
     p.add_argument("--seed-base", type=int, default=20260608)
     p.add_argument("--opening-plies", type=int, default=0,
                    help="random uniform opening plies (off-distribution instrument; §D-FOUNDING 1b)")
+    p.add_argument("--opening-jitter-plies", type=int, default=0,
+                   help="on-distribution opening diversity (§D-ARGMAX argmax-at-power): each "
+                        "checkpoint's own net plays the first N plies sampled at "
+                        "--opening-jitter-temp, then argmax. Distinct games WITHOUT off-window "
+                        "scatter — use for temp-0 strength reads that need effective-n.")
+    p.add_argument("--opening-jitter-temp", type=float, default=0.5,
+                   help="sampling temp for the opening-jitter plies (default 0.5)")
+    p.add_argument("--encoding", default=None,
+                   help="Override the checkpoints' auto-detected encoding label. "
+                        "REQUIRED for v6_live2_ls: the legal-set variant is state-dict-"
+                        "identical to v6_live2, so detection returns 'v6_live2' "
+                        "(policy_pool=none) and the round-robin would play it through "
+                        "single-window ModelPlayer, which DROPS off-window legal moves and "
+                        "mis-decodes the multi-window action space. Pass 'v6_live2_ls' to "
+                        "route the no-drop KClusterMCTSBot. Applies to every checkpoint in "
+                        "--archive (use a single-encoding archive).")
     p.add_argument("--pair-shard", default=None, help="k/N — play pairs[k::N]")
     p.add_argument("--output", required=True)
 
@@ -55,6 +71,9 @@ def main() -> int:
             args.archive, steps, args.n_games, args.sims, args.temp, args.output,
             max_plies=args.max_plies, seed_base=args.seed_base, pair_shard=args.pair_shard,
             opening_plies=args.opening_plies,
+            opening_jitter_plies=args.opening_jitter_plies,
+            opening_jitter_temp=args.opening_jitter_temp,
+            encoding_override=args.encoding,
         )
         print(f"[play] wrote {path}", file=sys.stderr)
         return 0
