@@ -59,14 +59,17 @@ eval_interval: 30000        # §D-1M audit F1: real eval trigger = train_cfg.eva
                             # eval.yaml ep_cfg.eval_interval (2500, DEAD path). 15000 over-sampled the ±10pp floor 2×.
 eval_pipeline:
   opponents:
-    best_checkpoint: { enabled: true,  stride: 1, n_games: 400 }  # §D-1M F2 BLOCKER: n=50 + require_ci_above_half → de-facto bar 0.64 (loop-breaker §D-LOOPFIX A-POWER). n=400 → bar==nominal 0.55.
+    best_checkpoint: { enabled: true,  stride: 1, n_games: 200, model_sims: 64, opponent_sims: 64 }  # §D-1M restart 2026-06-22: was n=400/128-sims → ~6h/round eval = 52% of wall-clock. n=400→200 (de-facto bar 0.55→0.57, still turns the loop — promoted at 0.585) + sims 128→64 (relative net-vs-net comparison preserved) ≈ 4× cheaper (~1.5h/round). Saves ~3d off the 1M ETA. F2 power note: n=50→bar0.64 was the loop-breaker; 200→0.57 is fine.
     sealbot:         { enabled: true,  stride: 1, n_games: 100 }  # §D-1M F3: n=100 → Wilson95 ±10pp; stride 1 → every 30k (was stride4/n50 → clustered ~60k gaps).
     random:          { enabled: true,  stride: 1, n_games: 20  }
     bootstrap_anchor: { enabled: false }
     nnue:            { enabled: false }
     offwindow_adversary: { enabled: false }
   gating:
-    expected_anchor_sha256: "ebf2ed39fd64db525864aeade75972372da9418cc8179347afc8cecb60ba6db8"
+    # expected_anchor_sha256 DISABLED for RESUME (2026-06-22): best_model.pt legitimately advanced via the 60k
+    # promotion (now bb7e986f…), so the launch-incumbent pin (8300 bootstrap ebf2ed39) hard-fails resolve_anchor.
+    # The pin is a FRESH-LAUNCH assertion of the intended incumbent; re-enable + re-point it for any from-bootstrap relaunch.
+    # expected_anchor_sha256: "ebf2ed39fd64db525864aeade75972372da9418cc8179347afc8cecb60ba6db8"
     promotion_winrate: 0.55
     require_ci_above_half: true
     bootstrap_floor:
