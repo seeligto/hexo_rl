@@ -105,11 +105,14 @@ Phase-1 Bucket-B manifest.)
 
 ---
 
-## Pre-existing drift NOTED (not introduced here, not fixed — out of relocation scope)
+## Pre-existing drift FIXED (follow-up commit)
 
-The sprint-log §Index table points §66–§174 forensics at `reports/sprint_archive/§NNN_*.md`
-(gitignored, **empty**); the real per-§ files live in `docs/sprint_archive/`. Prior drift —
-flagged for a separate cleanup, not touched by this relocation.
+The sprint-log §Index table (106 refs), the §179/§180 refactor-cycle cross-pointers, and the
+§S181 handoff prompt pointed §66–§174 forensics at `reports/sprint_archive/` (gitignored,
+**empty**); the real per-§ files live in `docs/sprint_archive/`. Repointed
+`reports/sprint_archive/` → `docs/sprint_archive/` across those docs. Exception left as-is:
+`docs/archive/audit/structural/01_bootstrap_corpus_bias.md` uses `reports/sprint_archive/` to
+describe *checkpoint* absence (a historical audit finding, different semantic — not a doc link).
 
 ---
 

@@ -328,7 +328,7 @@ Decision lineage:
   - §179 sprint-log entry draft: `audit/rust-engine/cycle_2/close/sprint_log_entry_§179_draft.md`
   - Archive prep decision rationale: `audit/rust-engine/cycle_2/close/archive_prep_decision.md`
 - **Aggregated proposals + addenda** (local-only, cycle 1 carryover): `audit/rust-engine/00_aggregated_proposals.md` (90 proposals), `audit/rust-engine/01_file_split_addendum.md` (per-file verdicts), `audit/rust-engine/02_phase4_template_and_bench_audit.md` (Phase 5 spec), `audit/rust-engine/cycle_settled_decisions.md` (SD1-SD6 SoT).
-- **Cycle 1 archive** (cross-cycle continuity): `reports/sprint_archive/§178_rust_engine_audit.md`.
+- **Cycle 1 archive** (cross-cycle continuity): `docs/sprint_archive/§178_rust_engine_audit.md`.
 - **INV pin source:** `engine/tests/inv15_v6w25_encode_roundtrip.rs`, `engine/tests/inv16_v8_pass_slot_dispatch.rs`, `engine/tests/inv17_pyregistryspec_supersedes_pyencodingspec.rs`, `tests/test_inv17_pyregistryspec_retired.py`.
 - **Encoding registry SoT:** `engine/src/encoding/registry.toml` (8 encodings; SD2 retention rule applies).
 - **L26 rustdoc:** `engine/src/lib.rs:14-24` (post-Wave-6 Batch D landing).

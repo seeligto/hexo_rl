@@ -457,8 +457,8 @@ A cycle 4 PREP-time decision on `audit/` tree tracking policy is warranted (the 
   - `#[allow]` → cycle 4 refactor anchor map: `06_allow_to_cycle4_anchor_map.md` (22 real attribute lines + 7 doc-comment refs = 29 raw)
   - §180 sprint-log entry draft: `sprint_log_entry_§180_draft.md`
 - **Aggregated proposals + addenda** (local-only, cycle 1 carryover): `audit/rust-engine/00_aggregated_proposals.md`, `audit/rust-engine/01_file_split_addendum.md`, `audit/rust-engine/02_phase4_template_and_bench_audit.md`, `audit/rust-engine/cycle_settled_decisions.md` (SD1–SD7 SoT; **CRITICAL ESCALATION on tracking status — see above**).
-- **Cycle 1 archive:** `reports/sprint_archive/§178_rust_engine_audit.md`.
-- **Cycle 2 archive:** `reports/sprint_archive/§179_rust_engine_audit.md`.
+- **Cycle 1 archive:** `docs/sprint_archive/§178_rust_engine_audit.md`.
+- **Cycle 2 archive:** `docs/sprint_archive/§179_rust_engine_audit.md`.
 - **INV pin source files:**
   - `engine/tests/inv15_v6w25_encode_roundtrip.rs`
   - `engine/tests/inv16_v8_pass_slot_dispatch.rs`
