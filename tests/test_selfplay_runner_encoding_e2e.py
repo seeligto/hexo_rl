@@ -51,6 +51,7 @@ def _base_selfplay_cfg(encoding_version: str = "v6") -> Dict[str, Any]:
     return {
         "selfplay": sp,
         "mcts": {
+            "interior_selector": "puct",
             "n_simulations": 2,
             "c_puct": 1.5,
             "fpu_reduction": 0.25,

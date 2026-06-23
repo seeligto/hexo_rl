@@ -48,7 +48,7 @@ def _spin_pool(rotation: bool, capacity: int = 256) -> ReplayBuffer:
             },
             "random_opening_plies": 0,
         },
-        "mcts": {"n_simulations": 2, "c_puct": 1.5, "fpu_reduction": 0.25,
+        "mcts": {"interior_selector": "puct", "n_simulations": 2, "c_puct": 1.5, "fpu_reduction": 0.25,
                  "dirichlet_enabled": False},
         "training": {"draw_value": 0.0},
     }
