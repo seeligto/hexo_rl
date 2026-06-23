@@ -2324,3 +2324,34 @@ Pre-fix pattern (60k→75k dip from 0.64→0.40 with NO promotion/no opponent ch
 - `bootstrap_floor.enabled: false` (already applied mid-run, now permanent in variant)
 
 **Open question:** does a clean Gumbel long-run (both bugs fixed, full_search_prob=1.0) reach 60%+ SealBot by 200k? The post-fix trajectory trend (50→56%) is encouraging but the playout_cap waste caps the ceiling. A clean re-run is the test.
+
+---
+
+## §D-MONITORFIX → PARTIAL + §D-MONITORFIX-CONFIRM (2026-06-23)
+
+Red-team + rework of `scripts/d1m_monitor.py` (D-1M Gumbel-1M run monitor, read-only ssh consumer; PID 1512427 on vast never touched). No-restart, consumer-script-only.
+
+**Fix ledger (D-MONITORFIX):**
+- **F1, F4 — NO-OP.** Two handoff "confirmed errors" were already-correct on inspection. Investigation caught stale handoff claims. *Bank: handoff verdicts are claims under red-team, not given.*
+- **F2 — wr_sealbot green-gate.** Dropped the absolute `≥0.55` bar (a soft §101 anchor, never a gate). Green now requires a robust SLOPE read: Theil-Sen slope>0 ∧ measurement-error CI lower-bound>0 (small-sample t df=n−2, propagating each point's logged `ci_sealbot` half-width as σ; bootstrap + analytic, conservative bound) ∧ effect-size rise (slope×span) ≥ floor. Reworked + reverified vs the original false-green Monte-Carlo (the old z=1.96 normal-CI false-greened noisy plateaus at n=5–8).
+- **F3 — entropy LOW-FLOOR only.** Gated series = `policy_entropy_selfplay` (net selfplay policy-head entropy, `trainer.py:1088` `entr(p_fp32[n_pretrain:])`). Retained the same-regime selfplay-collapse floors (collapse 1.0 / warn 1.5, the §71.2 calibration on the selfplay stream); dropped the cross-regime 2.0 UPPER bar — high entropy is healthy, bounded by the DERIVED `ln(policy_logit_count)` ceiling (registry lookup, never a literal).
+- **F5 — depth descriptive vs run self-baseline.** No absolute depth floor (shallow-by-design under Gumbel-SH). `depth_health()` judges depth vs the run's own rolling median (±5% stable, >12% below = regression); root-concentration co-move is DESCRIPTIVE under Gumbel-SH.
+- **F6 — Tier-1 signals surfaced.** Gumbel-target entropy + KL-to-uniform (full-search head), opening diversity (early-game entropy + top1 mass = §D-ARGMAX effective-n), fp16 AMP-scale sharp-drop canary — all self-baseline reads.
+- **F7 — eval overhead** from timestamp gaps (approx); owed-notes for distinct-game / value-calibration.
+- **F8 — interim replay-analyzer** (`scripts/d1m_replay_analyzer.py`, new file): per-game `longest_line` + `n_components` reconstructed from self-play replay JSONL for the golong kill-gate. All outputs labelled INTERIM; definitions pinned to engine line/adjacency conventions to avoid an S7 measurement discontinuity. Hand-validated.
+
+**PHASE-A confirm outcomes (D-MONITORFIX-CONFIRM, read-only, pre-registered):**
+Live reads (ssh grep of `logs/d1m/d1m_gumbel_m16_n150.jsonl` @ step 149370): 3 sealbot rounds — 30k=0.23, 60k=0.24, 120k=0.27 (Theil-Sen +0.044/100k); `policy_entropy_selfplay`=2.668 (trailing 2.42–2.90); Gumbel-target fullsearch entropy=0.208.
+
+- **F2-C2 → PASS.** 3/3 wr_sealbot records carry `ci_sealbot` (100%) — the measurement-error CI has its per-point σ input on all points.
+- **F3-C1 → PASS.** Band gates `policy_entropy_selfplay` (selfplay net entropy, live 2.668); floor 1.5 is the §71.2 selfplay-stream collapse calibration — SAME regime. Gumbel-target entropy (0.208) is surfaced in the separate F6 descriptive panel, NOT run through the 1.0/1.5 floor (which would falsely RED it). No cross-regime borrow.
+- **F3-C2 → PASS.** Floor = §71.2 selfplay-collapse calibration + retained 1.0 low-anchor; sits ~1.2 nats BELOW the live 2.668 reading (and ~0.9 below the trailing min 2.42) — independent of the current value, not circular. Upper ref is the derived `ln(362)=5.89`, distinct from the §105 high-entropy 5.x settled band (different regime).
+- **F2-C1 → FAIL (literal "reads GREEN" bar) → HOLD-PARTIAL.** Synthetic at the live slope + the run's real per-point noise (logged `ci_sealbot`→Wilson n=100 σ≈0.042, run through the SHIPPED gauge) greens only at **n≥9**; reads honest "inconclusive (+slope/100k, CI straddles 0)" at n=5–8; flat plateaus never false-green. **Phase B proved the FAIL untightenable no-restart:** (1) dropping the effect-size floor to 0 leaves n=5–8 inconclusive → the binding constraint is the CI-lower>0, NOT the effect-size floor — the pre-registered FAIL cause is **REFUTED**; (2) greening the live climb at n=6 needs ci_level≤0.70, at which flat-plateau false-green = **4.10% ≫ 0.5%** bound. The non-green is correct statistics (a +4.4pp/100k slope is sub-noise vs n=100 Wilson σ≈0.042 until n≥9), not a false-negative. Gauge left as-is (correct). *Bank: a confirm can falsify its own pre-registered remedy.*
+
+**Verdict bin: HOLD-PARTIAL.** F2-C1 fails + untightenable no-restart → reverts to descriptive/owed (the F2 slope-gate fix is correct and ships unchanged; only the green-on-live-climb-at-small-n is owed). F2-C2/F3-C1/F3-C2 PASS. `make test` = baseline (2022 pass, 1 pre-existing unrelated fail in `scripts/forced_offwindow_test.py`, separate hygiene) — no new regression.
+
+**Owed (engine-add / S7, not buildable no-restart):**
+- **F2-C1** — green on a live-rate sealbot climb is unattainable at the run's realistic n (3 now; ~5–8 through the 200k gate at current ~30–60k cadence; n≥9 ≈ step 500k+). Only resolver = more sealbot eval games/point (tighter per-point CI) = restart-gated. Not a gauge defect.
+- **I7a** — `game_complete` has no game-id/hash → monitor distinct-game fraction owed (F8 interim-salvages via move-seq hashing: 1.000, no argmax-collapse).
+- **I7b** — `train_step` has no per-sample (predicted_value, outcome) → value-calibration curve owed.
+- **S7** — Rust `game_complete` emit of `longest_line`/`n_components`; F8 is the interim Python stand-in. One documented discontinuity to reconcile: per-player split vs color-blind `get_clusters` (analyzer dual-emits both).
