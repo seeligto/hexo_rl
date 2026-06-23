@@ -305,7 +305,7 @@ to the active wave. Until then, Step 2 + Step 3 (capacity) dominate.
 
 ---
 
-## Deliverables summary (all under `docs/perf/`)
+## Deliverables summary (all under `docs/archive/findings/perf_supply_wave_2026-04/`)
 
 - `20k_gumbel_targets_characterization.md` — Phase 2
 - `static_audit.md` — Phase A aggregate (all 8 buckets)

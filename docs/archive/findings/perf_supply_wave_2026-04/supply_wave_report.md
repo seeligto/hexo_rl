@@ -1,6 +1,6 @@
 # Supply-side wave — execution report (2026-04-22)
 
-Executes Step 2 of `docs/perf/recommendations.md` (supply-side critical-path
+Executes Step 2 of `docs/archive/findings/perf_supply_wave_2026-04/recommendations.md` (supply-side critical-path
 levers). Six items attempted on branch
 `perf/supply-side-wave-2026-04-21` (cut from
 `perf/investigation-2026-04-21` — see §Branch note below).
@@ -120,7 +120,7 @@ All other failures flagged by `make bench` roll up to this single metric.
 
 ## §4 — Regime-change verdict
 
-Pre-wave trainer-idle % (per 20k characterization, docs/perf/20k_gumbel_targets_characterization.md):
+Pre-wave trainer-idle % (per 20k characterization, docs/archive/findings/perf_supply_wave_2026-04/20k_gumbel_targets_characterization.md):
 **~95% idle.**
 
 Post-wave trainer-idle %: **not yet re-measured** in a sustained run; the
