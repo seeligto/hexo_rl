@@ -20,6 +20,7 @@ pub mod node;
 mod selection;
 mod backup;
 pub mod policy;
+mod completed_q;
 
 pub use node::{CachedPolicy, Node, TTEntry, MAX_NODES, VIRTUAL_LOSS_PENALTY};
 pub use backup::{pool_overflow_count, take_pool_overflow_count};
@@ -274,3 +275,7 @@ impl MCTSTree {
 
 #[cfg(test)]
 mod tests;
+
+// D-QFIX-LAND golden byte-identity harness (completed-Q sites S1/S2/S3).
+#[cfg(test)]
+mod golden_tests;

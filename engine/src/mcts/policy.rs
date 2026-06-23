@@ -4,7 +4,7 @@
 //!
 //! Extracted from mcts/mod.rs in §163.
 
-use super::MCTSTree;
+use super::{completed_q, MCTSTree};
 use crate::game_runner::records::{self, LegalSetPolicy};
 use fxhash::FxHashMap;
 
@@ -102,12 +102,15 @@ impl MCTSTree {
         // to bring them into root's perspective before computing completed-Q targets.
         let q_sign: f32 = if self.pool[0].moves_remaining == 1 { -1.0 } else { 1.0 };
 
-        // Collect per-child data: (flat_action_idx, visits, prior, q_value)
-        let mut child_data: Vec<(usize, u32, f32, f32)> = Vec::with_capacity(n_ch);
-        let mut sum_n: u32 = 0;
-        let mut max_n: u32 = 0;
-        let mut visited_prior_sum: f32 = 0.0;
-        let mut policy_weighted_q: f32 = 0.0;
+        // §D-QFIX-LAND A2a: completed-Q math lives in `super::completed_q`. The
+        // ONE S1↔S2 divergence (off-window handling + output container) stays
+        // here in the scatter: S1 drops `action >= n_actions`, scatters into a
+        // dense `Vec<f32>`. `actions[i]` is the flat index for `children[i]`.
+        let mut children: Vec<completed_q::CqChild> = Vec::with_capacity(n_ch);
+        let mut actions: Vec<usize> = Vec::with_capacity(n_ch);
+        let mut agg = completed_q::CqAgg {
+            sum_n: 0, max_n: 0, visited_prior_sum: 0.0, policy_weighted_q: 0.0, v_hat: 0.0,
+        };
 
         for j in 0..n_ch {
             let child = &self.pool[first + j];
@@ -127,105 +130,38 @@ impl MCTSTree {
                 0.0
             };
 
-            sum_n += visits;
-            if visits > max_n {
-                max_n = visits;
+            agg.sum_n += visits;
+            if visits > agg.max_n {
+                agg.max_n = visits;
             }
             if visits > 0 {
-                visited_prior_sum += prior;
-                policy_weighted_q += prior * q_val;
+                agg.visited_prior_sum += prior;
+                agg.policy_weighted_q += prior * q_val;
             }
 
-            child_data.push((action, visits, prior, q_val));
+            children.push(completed_q::CqChild { visits, prior, q_val });
+            actions.push(action);
         }
 
-        // Edge case: no visits at all — return prior distribution
-        if sum_n == 0 {
-            let mut total_prior = 0.0f32;
-            for &(action, _, prior, _) in &child_data {
-                policy[action] = prior;
-                total_prior += prior;
-            }
-            if total_prior > 0.0 {
-                for p in &mut policy {
-                    *p /= total_prior;
-                }
+        // Edge case: no visits at all — return prior distribution.
+        if agg.sum_n == 0 {
+            for (action, mass) in actions
+                .iter()
+                .zip(completed_q::prior_fallback_masses(&children))
+            {
+                policy[*action] = mass;
             }
             return policy;
         }
 
-        // v_hat: root value estimate (W/N from root node)
-        let v_hat = root.w_value / root.n_visits as f32;
+        // v_hat: root value estimate (W/N from root node).
+        agg.v_hat = root.w_value / root.n_visits as f32;
 
-        // v_mix: mixed value estimate for unvisited actions (paper Eq. 33).
-        // Note: child.prior values come from softmax and are assumed to sum to
-        // ~1.0 over legal actions. No normalization step needed unless expansion
-        // pruning is added in the future.
-        let v_mix = if visited_prior_sum > 1e-8 {
-            let sum_n_f = sum_n as f32;
-            // §F2: `v_hat + (sum_n_f / visited_prior_sum) * policy_weighted_q`
-            // → fused FMA on the inner mul-add.
-            (1.0 / (1.0 + sum_n_f))
-                * (sum_n_f / visited_prior_sum).mul_add(policy_weighted_q, v_hat)
-        } else {
-            v_hat
-        };
-
-        // Build completed Q-values and compute pi_improved = softmax(log_prior + sigma(completedQ))
-        // §P33: logits are sparse over legal actions — every illegal slot is
-        // -inf and contributes 0 to the softmax sum. Iterate child_data
-        // twice (max + sum) and once for the final scatter, instead of
-        // allocating an n_actions-wide -inf vector. Two-pass keeps numerical
-        // stability identical to the pre-P33 max_logit / sum_exp pair.
-        let sigma_scale = (c_visit + max_n as f32) * c_scale;
-
-        // Pass 1: find max_logit over child_data only (illegal slots are -inf
-        // which never wins a max).
-        let mut max_logit = f32::NEG_INFINITY;
-        for &(_, visits, prior, q_val) in &child_data {
-            let completed_q = if visits > 0 {
-                q_val.clamp(-1.0, 1.0)
-            } else {
-                v_mix.clamp(-1.0, 1.0)
-            };
-            let log_prior = (prior.max(1e-8)).ln();
-            // §F2: `log_prior + sigma_scale * completed_q` → fused FMA.
-            let l = sigma_scale.mul_add(completed_q, log_prior);
-            if l > max_logit { max_logit = l; }
-        }
-        if max_logit == f32::NEG_INFINITY {
-            return policy;
-        }
-
-        // Pass 2: sum-exp over child_data.
-        let mut sum_exp = 0.0f32;
-        for &(_, visits, prior, q_val) in &child_data {
-            let completed_q = if visits > 0 {
-                q_val.clamp(-1.0, 1.0)
-            } else {
-                v_mix.clamp(-1.0, 1.0)
-            };
-            let log_prior = (prior.max(1e-8)).ln();
-            // §F2: `log_prior + sigma_scale * completed_q` → fused FMA.
-            let l = sigma_scale.mul_add(completed_q, log_prior);
-            sum_exp += (l - max_logit).exp();
-        }
-        if sum_exp <= 0.0 {
-            return policy;
-        }
-
-        // Pass 3: scatter the softmax mass back into policy at each
-        // child's flat action index.
-        for &(action, visits, prior, q_val) in &child_data {
-            let completed_q = if visits > 0 {
-                q_val.clamp(-1.0, 1.0)
-            } else {
-                v_mix.clamp(-1.0, 1.0)
-            };
-            let log_prior = (prior.max(1e-8)).ln();
-            // §F2: `log_prior + sigma_scale * completed_q` → fused FMA.
-            let l = sigma_scale.mul_add(completed_q, log_prior);
-            policy[action] = (l - max_logit).exp() / sum_exp;
+        // Shared softmax(log_prior + sigma(completedQ)); empty ⇒ degenerate
+        // guard fired (byte-identical to the old early `return policy`).
+        let masses = completed_q::improved_policy_masses(&children, &agg, c_visit, c_scale);
+        for (action, mass) in actions.iter().zip(masses) {
+            policy[*action] = mass;
         }
 
         // Note: policy pruning is applied only in the Python training loop
@@ -315,12 +251,15 @@ impl MCTSTree {
         let trunk_sz = self.root_board.cluster_window_size() as i32;
         let half = (trunk_sz - 1) / 2;
 
-        // child_data: (q, r, flat, visits, prior, q_val). flat >= n_actions ⇒ off-window.
-        let mut child_data: Vec<(i32, i32, usize, u32, f32, f32)> = Vec::with_capacity(n_ch);
-        let mut sum_n: u32 = 0;
-        let mut max_n: u32 = 0;
-        let mut visited_prior_sum: f32 = 0.0;
-        let mut policy_weighted_q: f32 = 0.0;
+        // §D-QFIX-LAND A2a: completed-Q math is shared with S1 via
+        // `super::completed_q`. The ONE S1↔S2 divergence stays here: the
+        // off-window keep/drop decision + ragged scatter. `coords[i] = (q, r,
+        // flat)` for `children[i]`; flat >= n_actions ⇒ off-window (→ overflow).
+        let mut children: Vec<completed_q::CqChild> = Vec::with_capacity(n_ch);
+        let mut coords: Vec<(i32, i32, usize)> = Vec::with_capacity(n_ch);
+        let mut agg = completed_q::CqAgg {
+            sum_n: 0, max_n: 0, visited_prior_sum: 0.0, policy_weighted_q: 0.0, v_hat: 0.0,
+        };
 
         for j in 0..n_ch {
             let child = &self.pool[first + j];
@@ -341,91 +280,40 @@ impl MCTSTree {
                 0.0
             };
 
-            sum_n += visits;
-            if visits > max_n {
-                max_n = visits;
+            agg.sum_n += visits;
+            if visits > agg.max_n {
+                agg.max_n = visits;
             }
             if visits > 0 {
-                visited_prior_sum += prior;
-                policy_weighted_q += prior * q_val;
+                agg.visited_prior_sum += prior;
+                agg.policy_weighted_q += prior * q_val;
             }
 
-            child_data.push((q, r, flat, visits, prior, q_val));
+            children.push(completed_q::CqChild { visits, prior, q_val });
+            coords.push((q, r, flat));
         }
 
         // Edge case: no visits — return prior distribution (covered cells included).
-        if sum_n == 0 {
-            let mut total_prior = 0.0f32;
-            for &(q, r, flat, _, prior, _) in &child_data {
+        if agg.sum_n == 0 {
+            for (&(q, r, flat), mass) in coords
+                .iter()
+                .zip(completed_q::prior_fallback_masses(&children))
+            {
                 if flat < n_actions {
-                    dense[flat] = prior;
+                    dense[flat] = mass;
                 } else {
-                    overflow.insert((q, r), prior);
-                }
-                total_prior += prior;
-            }
-            if total_prior > 0.0 {
-                for p in &mut dense {
-                    *p /= total_prior;
-                }
-                for v in overflow.values_mut() {
-                    *v /= total_prior;
+                    overflow.insert((q, r), mass);
                 }
             }
             return LegalSetPolicy { dense, overflow };
         }
 
-        let v_hat = root.w_value / root.n_visits as f32;
-        let v_mix = if visited_prior_sum > 1e-8 {
-            let sum_n_f = sum_n as f32;
-            (1.0 / (1.0 + sum_n_f))
-                * (sum_n_f / visited_prior_sum).mul_add(policy_weighted_q, v_hat)
-        } else {
-            v_hat
-        };
-        let sigma_scale = (c_visit + max_n as f32) * c_scale;
+        agg.v_hat = root.w_value / root.n_visits as f32;
 
-        let mut max_logit = f32::NEG_INFINITY;
-        for &(_, _, _, visits, prior, q_val) in &child_data {
-            let completed_q = if visits > 0 {
-                q_val.clamp(-1.0, 1.0)
-            } else {
-                v_mix.clamp(-1.0, 1.0)
-            };
-            let log_prior = (prior.max(1e-8)).ln();
-            let l = sigma_scale.mul_add(completed_q, log_prior);
-            if l > max_logit {
-                max_logit = l;
-            }
-        }
-        if max_logit == f32::NEG_INFINITY {
-            return LegalSetPolicy { dense, overflow };
-        }
-
-        let mut sum_exp = 0.0f32;
-        for &(_, _, _, visits, prior, q_val) in &child_data {
-            let completed_q = if visits > 0 {
-                q_val.clamp(-1.0, 1.0)
-            } else {
-                v_mix.clamp(-1.0, 1.0)
-            };
-            let log_prior = (prior.max(1e-8)).ln();
-            let l = sigma_scale.mul_add(completed_q, log_prior);
-            sum_exp += (l - max_logit).exp();
-        }
-        if sum_exp <= 0.0 {
-            return LegalSetPolicy { dense, overflow };
-        }
-
-        for &(q, r, flat, visits, prior, q_val) in &child_data {
-            let completed_q = if visits > 0 {
-                q_val.clamp(-1.0, 1.0)
-            } else {
-                v_mix.clamp(-1.0, 1.0)
-            };
-            let log_prior = (prior.max(1e-8)).ln();
-            let l = sigma_scale.mul_add(completed_q, log_prior);
-            let mass = (l - max_logit).exp() / sum_exp;
+        // Shared softmax(log_prior + sigma(completedQ)); empty ⇒ degenerate
+        // guard fired (byte-identical to the old early returns).
+        let masses = completed_q::improved_policy_masses(&children, &agg, c_visit, c_scale);
+        for (&(q, r, flat), mass) in coords.iter().zip(masses) {
             if flat < n_actions {
                 dense[flat] = mass;
             } else {
