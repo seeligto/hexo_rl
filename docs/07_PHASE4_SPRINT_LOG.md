@@ -2355,3 +2355,25 @@ Live reads (ssh grep of `logs/d1m/d1m_gumbel_m16_n150.jsonl` @ step 149370): 3 s
 - **I7a** — `game_complete` has no game-id/hash → monitor distinct-game fraction owed (F8 interim-salvages via move-seq hashing: 1.000, no argmax-collapse).
 - **I7b** — `train_step` has no per-sample (predicted_value, outcome) → value-calibration curve owed.
 - **S7** — Rust `game_complete` emit of `longest_line`/`n_components`; F8 is the interim Python stand-in. One documented discontinuity to reconcile: per-player split vs color-blind `get_clusters` (analyzer dual-emits both).
+
+---
+
+## §D-CONSOLIDATE — land scattered Wave-1 work to master (2026-06-23)
+
+Brought four parallel-session outputs to `master` via the `phase4.5/gumbelprep` integration branch. **Local merge only** — the live D-1M run (PID 1512427 on vast, ~step 149k) keeps its own `.so` and was never touched. Outcome bin: **CLEAN-MERGE** (reached after a threading fix the dispatcher had pre-scoped to PARTIAL).
+
+**What merged** — master `81cb468` = origin/master `a71ae28` ⊕ gumbelprep `4b54c58`:
+- **docs (S4):** sprint-log split/archive + §D-MONITORFIX verdicts (already on the branch base).
+- **scripts (S1):** `d1m_monitor.py` + `d1m_replay_analyzer.py` (read-only consumers, no hot-path).
+- **mcts Rust (D-QFIX-LAND A2a+A1):** `completed_q.rs` dedup + explicit `InteriorSelector` planner split.
+- **audit:** authoritative 148-stat D-STATAUDIT re-run → `docs/audits/stat_audit_2026-06-23/` (supersedes the ephemeral /tmp 97-stat first audit; promotion-gate finding INVERTED — CI half-draw bug is conservative/false-negative, promotions trustworthy). `_audit/` mirror de-duped.
+
+**Rust red-team (deferred pass, completed): BYTE-PURE.** Two independent builds — new code (worktree) AND old `e132e67` inline math (oracle regen in a clean tree) — both pass the same golden `f32::to_bits()` fixtures (18/18 byte-identical), so committed goldens are genuine HEAD provenance, not captured-from-refactored. 3 adversarial static lenses (arith / default-path / config-INV19) high-confidence; S3 `gumbel_search.rs` empty diff (A2b correctly cancelled — no math divergence to unify); INV19 38-arg positional ctor surface intact. Default `interior_selector=puct` ⇒ leaf selection identical to HEAD.
+
+**Finding — A1 hard-read incompletely threaded (regression found + fixed).** `pool.py` hard-reads `mcts_cfg["interior_selector"]` (KeyError on missing, by design — no silent default). The A1 landing fixed `benchmark.py` but missed 9 test-fixture files → 23 `make test` regressions; the handback's "all WorkerPool call sites threaded" claim is FALSIFIED. Fix (`4b54c58`): added `"interior_selector": "puct"` to each pool-config fixture (matches `configs/selfplay.yaml`; preserves the hard-read). Dev scripts + eval already safe (they load `selfplay.yaml`). `make test` green afterward — only the untracked-WIP `forced_offwindow_test.py` probe fails locally (absent on master). *Bank: a "verified all call sites" handback claim is itself a claim under red-team.*
+
+**Topology note:** local `master` was stale (behind `origin/master` by 2 — `a71ae28` exploit_probe legal-set fix + `3e878fb` hammerhead install). Caught at merge time; reset to the fetched `origin/master` and re-merged. gumbelprep's gumbelsims exploit_probe work is byte-identical to `a71ae28` → clean auto-merge, no conflict.
+
+**Stayed WIP (excluded from master):** untracked `configs/variants/*`, `docs/handoffs/*`, `scripts/*` (incl. `forced_offwindow_test.py`), `exports/`. Cleanup: removed `worktree-d-qfix-land` + `statAudit_wt` worktrees; deleted `worktree-d-qfix-land` + `audit/stataudit-rerun` branches (content merged).
+
+**Owed (operator / next-run, out of scope here):** push `master` + rebuild the vast `.so` from merged master for the **NEXT** run only (rsync + git bundle, never `git pull`; never under the live PID). Next-run queue unchanged: Dirichlet-off A/B, CI half-draw fix, S7 bundle. Hygiene: `forced_offwindow_test.py` off-window-leak (allowlist/move). `/workspace`-vs-`/root` vast-repo migration still flagged, not actioned.
