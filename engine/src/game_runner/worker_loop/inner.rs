@@ -301,6 +301,7 @@ pub(super) fn run_worker_thread(
             depth: forced_win_policy_depth,
             weight: forced_win_policy_weight,
         },
+        interior_selector,
     } = params;
 
     let sym_tables = sym_tables_static;
@@ -308,6 +309,10 @@ pub(super) fn run_worker_thread(
     let mut tree = MCTSTree::new_full(c_puct, crate::mcts::VIRTUAL_LOSS_PENALTY, fpu_reduction);
     tree.quiescence_enabled = quiescence_enabled;
     tree.quiescence_blend_2 = quiescence_blend_2;
+    // D-QFIX-LAND A1: apply the interior (non-root) selection rule to this
+    // worker's tree (lower blast radius than extending `new_full`). `Puct` =
+    // HEAD behaviour (byte-identical); `GumbelImproved` is a wired placeholder.
+    tree.interior_selector = interior_selector;
     let mut rng = rng();
     let mut version_seen: Vec<u64> = Vec::with_capacity(8);
     #[cfg(feature = "debug_prior_trace")]

@@ -2,7 +2,7 @@
 
 use crate::board::{Board, MoveDiff};
 use fxhash::FxHashSet;
-use super::{CachedPolicy, MCTSTree};
+use super::{CachedPolicy, InteriorSelector, MCTSTree};
 
 /// §P8: single-pass argmax over `[first..first+n_ch)` by PUCT score, computing
 /// each child's score exactly once. Replaces the prior `.max_by()` closures
@@ -38,6 +38,33 @@ fn pick_best_puct(
         }
     }
     best_idx
+}
+
+/// D-QFIX-LAND A1: `GumbelImproved` interior-selection arm.
+///
+/// PLACEHOLDER: interior-Gumbel rule is future work. It is wired + config-
+/// selectable so a run can opt into `mcts.interior_selector: gumbel_improved`,
+/// but the real interior-Gumbel completed-Q rule is out of scope for land-now.
+/// Until it exists this delegates to `pick_best_puct` (byte-identical leaf
+/// selection) and emits a ONE-TIME stderr warning so it can never silently
+/// masquerade as a distinct rule. Signature is IDENTICAL to `pick_best_puct`.
+#[inline]
+fn pick_best_gumbel_improved(
+    tree: &MCTSTree,
+    first: usize,
+    n_ch: usize,
+    parent_idx: u32,
+    parent_n: f32,
+    fpu_value: f32,
+) -> u32 {
+    static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+    WARN_ONCE.call_once(|| {
+        eprintln!(
+            "WARNING: mcts.interior_selector=gumbel_improved is a PLACEHOLDER — \
+             interior-Gumbel rule is future work; delegating to PUCT for now."
+        );
+    });
+    pick_best_puct(tree, first, n_ch, parent_idx, parent_n, fpu_value)
 }
 
 impl MCTSTree {
@@ -120,7 +147,13 @@ impl MCTSTree {
                 0.0
             };
 
-            // Gumbel MCTS: at root (cur==0), skip PUCT and use the forced child.
+            // Gumbel MCTS: at root (cur==0), skip the interior selector and use
+            // the forced child. The `forced_root_child` override is Gumbel's
+            // root mechanism and stays OUTSIDE the interior selector (D-QFIX
+            // A1) — it is independent of `interior_selector`. Both else arms
+            // dispatch on `self.interior_selector`: `Puct` is byte-identical to
+            // HEAD (§P8 single-pass argmax); `GumbelImproved` is a wired
+            // placeholder that currently delegates to PUCT.
             let best = if cur == 0 {
                 if let Some(forced) = self.forced_root_child {
                     forced
@@ -131,10 +164,24 @@ impl MCTSTree {
                     // child's score exactly once and tracks the running best
                     // with the same NaN→Ordering::Equal fallback semantics
                     // (`partial_cmp(...).unwrap_or(Equal)`).
-                    pick_best_puct(self, first, n_ch, cur, parent_n, fpu_value)
+                    match self.interior_selector {
+                        InteriorSelector::Puct => {
+                            pick_best_puct(self, first, n_ch, cur, parent_n, fpu_value)
+                        }
+                        InteriorSelector::GumbelImproved => {
+                            pick_best_gumbel_improved(self, first, n_ch, cur, parent_n, fpu_value)
+                        }
+                    }
                 }
             } else {
-                pick_best_puct(self, first, n_ch, cur, parent_n, fpu_value)
+                match self.interior_selector {
+                    InteriorSelector::Puct => {
+                        pick_best_puct(self, first, n_ch, cur, parent_n, fpu_value)
+                    }
+                    InteriorSelector::GumbelImproved => {
+                        pick_best_gumbel_improved(self, first, n_ch, cur, parent_n, fpu_value)
+                    }
+                }
             };
 
             let val = self.pool[best as usize].action_idx;

@@ -381,6 +381,13 @@ class WorkerPool:
         _sp_config.forced_win_policy_enabled = bool(sp.get("forced_win_policy_enabled", False))
         _sp_config.forced_win_policy_depth = int(sp.get("forced_win_policy_depth", 2))
         _sp_config.forced_win_policy_weight = float(sp.get("forced_win_policy_weight", 1.0))
+        # D-QFIX-LAND A1: interior (non-root) MCTS selection rule. HARD-READ
+        # (`mcts_cfg[...]` → KeyError on a missing key, NO silent default) — the
+        # config is hard-read end-to-end and Rust panics on an unknown variant.
+        # Set as a `#[pyo3(get,set)]` attr (mirrors the forced_win block above) so
+        # the INV19 positional ctor surface is untouched. "puct" == byte-identical
+        # default; "gumbel_improved" == wired placeholder.
+        _sp_config.interior_selector = str(mcts_cfg["interior_selector"])
         self._runner = SelfPlayRunner(_sp_config)
         self._inference_server = InferenceServer(
             model, device, config, batcher=self._runner.batcher,

@@ -385,6 +385,10 @@ def benchmark_worker_pool(
         "dirichlet_alpha": float(_mcts.get("dirichlet_alpha", 0.3)),
         "epsilon": float(_mcts.get("epsilon", 0.25)),
         "dirichlet_enabled": bool(_mcts.get("dirichlet_enabled", True)),
+        # D-QFIX-LAND A1: WorkerPool hard-reads mcts["interior_selector"]
+        # (KeyError on missing). The synthetic bench config must supply it;
+        # bench the production-default Puct interior path.
+        "interior_selector": str(_mcts.get("interior_selector", "puct")),
     }
     bench_cfg["selfplay"] = {
         "n_workers": n_workers,

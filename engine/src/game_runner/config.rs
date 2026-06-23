@@ -100,6 +100,15 @@ pub struct SelfPlayRunnerConfig {
     /// blend with the improved-policy target.
     #[pyo3(get, set)]
     pub forced_win_policy_weight: f32,
+    /// D-QFIX-LAND A1: interior (non-root) MCTS selection rule, as a registry
+    /// string ("puct" | "gumbel_improved"). Added as a `#[pyo3(get, set)]`
+    /// attribute (set post-construction from Python) rather than a `new()`
+    /// positional kwarg so the INV19-pinned 38-arg positional ctor surface is
+    /// untouched. Parsed to `InteriorSelector` at `SelfPlayRunner::new`
+    /// (panics on an unknown variant). Default `"puct"` = HEAD behaviour; the
+    /// operative value is hard-read from `configs/selfplay.yaml` via `pool.py`.
+    #[pyo3(get, set)]
+    pub interior_selector: String,
 }
 
 /// §B1 (CONFIG-4, 2026-06-02) — semantic defaults SoT for Rust struct-literal
@@ -161,6 +170,9 @@ impl Default for SelfPlayRunnerConfig {
             forced_win_policy_enabled: false,
             forced_win_policy_depth: 2,
             forced_win_policy_weight: 1.0,
+            // D-QFIX-LAND A1: default "puct" = HEAD interior selection
+            // (byte-identical). Operative value hard-read from yaml via pool.py.
+            interior_selector: "puct".to_string(),
         }
     }
 }
