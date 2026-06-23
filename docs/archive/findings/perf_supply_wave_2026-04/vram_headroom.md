@@ -1,7 +1,7 @@
 # Phase D — VRAM headroom analysis
 
 Source inputs:
-- `docs/perf/20k_gumbel_targets_characterization.md` (reference-run physical check)
+- `docs/archive/findings/perf_supply_wave_2026-04/20k_gumbel_targets_characterization.md` (reference-run physical check)
 - Phase C1 `vram_probe` events (live training, probe step-100 cadence)
 - 2026-04-18 bench (inference-only peak: 0.08 GB)
 

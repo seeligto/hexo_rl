@@ -83,7 +83,7 @@ def _minimal_cfg(extra_sp: Dict[str, Any] | None = None) -> Dict[str, Any]:
         sp.update(extra_sp)
     return {
         "encoding": "v6",
-        "mcts": {"n_simulations": 1, "c_puct": 1.0, "fpu_reduction": 0.25},
+        "mcts": {"interior_selector": "puct", "n_simulations": 1, "c_puct": 1.0, "fpu_reduction": 0.25},
         "selfplay": sp,
         "training": {"draw_value": -0.1},
     }

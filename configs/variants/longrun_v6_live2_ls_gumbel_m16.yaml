@@ -1,0 +1,86 @@
+# ── §D-1M-LAUNCH clean Gumbel 1M run — config-audited 2026-06-21 ──────────────
+# Phase-0 audit verdict: GATE-FAIL→FIXED (config blockers applied below). Remaining
+# OPERATOR-HOST preconditions (NOT config — must be done on the vast launch host):
+#   1. best_model.pt must resolve to the 8300 anchor sha ebf2ed39… (C1):
+#        cp checkpoints/bootstrap_model_v6_live2_8300.pt checkpoints/best_model.pt && rm -f checkpoints/best_model.pt.bak
+#        verify: .venv/bin/python scripts/anchor_sha256.py checkpoints/best_model.pt  → ebf2ed39…ba6db8
+#   2. rm stale replay buffer before fresh launch (C1/third-bug): rm -f checkpoints/replay_buffer.bin checkpoints/replay_buffer.bin.recent.npz
+#   3. corpus sha-check on host (C6): sha256sum data/bootstrap_corpus_v6_live2.npz | cut -c1-8  → 8f7115ab
+#   4. sealbot native import preflight (F2): python -c "from hexo_rl.bots.sealbot_bot import SealBotBot; SealBotBot(time_limit=0.1)"
+#   5. LAUNCH WITH --iterations 1000000 (C2 — the cosine-LR horizon pin; see total_steps below).
+# OPEN DECISIONS (operator GO — not auto-applied): dirichlet_enabled under Gumbel (PUCT-1),
+#   ZOI move-filter (GB-6). See docs handoff / session notes.
+# ──────────────────────────────────────────────────────────────────────────────
+encoding: v6_live2_ls
+in_channels: 4
+lr: 2e-3
+eta_min: 5e-4
+aux_opp_reply_weight: 0.0
+training_steps_per_game: 1.0
+total_steps: 1000000        # §D-1M audit C2 BLOCKER: CosineAnnealingLR T_max=total_steps (trainer.py:431).
+                            # Open-ended run else inherits training.yaml 200_000 → LR floors at 200k then RISES
+                            # to peak by 400k (cycles every 400k = mis-anneal). MUST also launch --iterations 1000000.
+
+selfplay:
+  completed_q_values: true
+  n_workers: 32
+  inference_batch_size: 64
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 8
+  random_opening_plies: 0
+  gumbel_mcts: true
+  gumbel_m: 16
+  gumbel_explore_moves: 10
+  c_visit: 50.0
+  c_scale: 1.0
+  playout_cap:
+    full_search_prob: 1.0   # Gumbel: all positions are valid policy targets — 0.5 was discarding half; fixed 2026-06-21
+    n_sims_full: 150        # §D-1M audit GB-2: the ONE deliberate variable vs validated-200k (100→150).
+                            # n_sims_full IS the Gumbel SH budget (verified inner.rs:774-788; standard_sims/n_sims_quick inert here).
+    n_sims_quick: 150       # parity only (inert at full_search_prob=1.0; raised to avoid a future-edit footgun)
+
+mcts:
+  dirichlet_enabled: false  # §D-1M audit PUCT-1 (operator GO 2026-06-21): Dirichlet root-noise FIRED under Gumbel
+                            # (inner.rs:747) on top of Gumbel-Top-k = double root-noise inflating completed-Q policy
+                            # targets ~2×. Gumbel-Top-k supplies root exploration; disable the legacy PUCT noise.
+                            # (ZOI kept ON — single-variable discipline; see selfplay.playout_cap.)
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+  # §D-1M audit C5: pretrain_weight / pretrain_decay_rate are DEAD keys (read_mixing_params reads
+  # initial_pretrained_weight / min_pretrained_weight only). Live keys below (= base defaults; 0.8→floor 0.1).
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  decay_steps: 200000        # §D-1M audit C2 (decision, KEPT): floor 0.1 reached ~416k via max(0.1, 0.8·e^{-step/200000}),
+                             # so ~58% of a 1M run sits at floor. Phase-C 70%-rule → ~336000. Kept at validated-200k value
+                             # (D-1M spec pins corpus ENDPOINTS 0.8→0.1, not decay_steps; floor 0.1 always retained).
+
+eval_interval: 30000        # §D-1M audit F1: real eval trigger = train_cfg.eval_interval (loop.py:192), NOT
+                            # eval.yaml ep_cfg.eval_interval (2500, DEAD path). 15000 over-sampled the ±10pp floor 2×.
+eval_pipeline:
+  opponents:
+    best_checkpoint: { enabled: true,  stride: 1, n_games: 200, model_sims: 64, opponent_sims: 64 }  # §D-1M restart 2026-06-22: was n=400/128-sims → ~6h/round eval = 52% of wall-clock. n=400→200 (de-facto bar 0.55→0.57, still turns the loop — promoted at 0.585) + sims 128→64 (relative net-vs-net comparison preserved) ≈ 4× cheaper (~1.5h/round). Saves ~3d off the 1M ETA. F2 power note: n=50→bar0.64 was the loop-breaker; 200→0.57 is fine.
+    sealbot:         { enabled: true,  stride: 1, n_games: 100 }  # §D-1M F3: n=100 → Wilson95 ±10pp; stride 1 → every 30k (was stride4/n50 → clustered ~60k gaps).
+    random:          { enabled: true,  stride: 1, n_games: 20  }
+    bootstrap_anchor: { enabled: true, stride: 4, n_games: 50, model_sims: 64, opponent_sims: 64, path: checkpoints/bootstrap_model_v6_live2_8300.pt }  # §D-1M monitor (operator 2026-06-22): WR vs the FROZEN 8300 bootstrap — an ABSOLUTE-reference strength signal (complements the rotating vs-best), every 120k steps (stride 4 × 30k). DIAGNOSTIC ONLY: gating.bootstrap_floor stays DISABLED below, so wr_bootstrap_anchor is logged but NEVER gates promotion (audit PGL-2: floor-off removes the AND-requirement → no Bug-1). Points at the 8300 anchor, NOT eval.yaml's v7full default.
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+  gating:
+    # expected_anchor_sha256 DISABLED for RESUME (2026-06-22): best_model.pt legitimately advanced via the 60k
+    # promotion (now bb7e986f…), so the launch-incumbent pin (8300 bootstrap ebf2ed39) hard-fails resolve_anchor.
+    # The pin is a FRESH-LAUNCH assertion of the intended incumbent; re-enable + re-point it for any from-bootstrap relaunch.
+    # expected_anchor_sha256: "ebf2ed39fd64db525864aeade75972372da9418cc8179347afc8cecb60ba6db8"
+    promotion_winrate: 0.55
+    require_ci_above_half: true
+    bootstrap_floor:
+      enabled: false
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0

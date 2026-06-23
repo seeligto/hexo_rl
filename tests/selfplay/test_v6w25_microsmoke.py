@@ -55,6 +55,7 @@ def _v6w25_microsmoke_cfg() -> Dict[str, Any]:
     return {
         "selfplay": sp,
         "mcts": {
+            "interior_selector": "puct",
             "n_simulations": 4,
             "c_puct": 1.5,
             "fpu_reduction": 0.25,

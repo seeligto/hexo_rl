@@ -1,0 +1,37 @@
+# Desktop Gumbel MCTS — swept to D3 ceiling (n_workers=10, wait=5ms) 2026-04-16
+# Launch: make train VARIANT=gumbel_full
+#
+# Recreated 2026-06-12 (D-TEMPDECAY Gumbel #1) verbatim from git 913c5a0^ — the
+# §913c5a0 hygiene sweep archived it. Restores launchability; NOT activated/tuned.
+#
+# Graduation-gate calibration (prompt-8, 2026-04-17):
+#   D1 threshold      : 0.55    (eval.yaml)            — unchanged
+#   D2 eval_interval  : 5000    (training.yaml)        — unchanged
+#   D3 decay_steps    : 20_000  (training.yaml)        — unchanged
+#   D4 n_games        : 400     (eval.yaml)            — raised 200 → 400
+# Shared with gumbel_targets.yaml. Report: reports/graduation_calibration_2026-04-17.md
+#
+# Post-Option-A rebaseline (Prompt 16, 2026-04-19): lowered 4.0 → 2.0.
+# Option A drops game-level fast_prob (no more entirely-quick games), so
+# per-game compute rises. Trainer catches up faster, so SDG ratio drops.
+# Matches laptop's recent 1.5 → 2.0 direction; desktop Zen2 has lower IPC
+# so 2.0 is safe. Revisit if hour-1 idle >30% or <5%.
+training_steps_per_game: 2.0
+max_train_burst: 16
+selfplay:
+  n_workers: 10
+  max_game_moves: 200
+  inference_max_wait_ms: 5.0
+  gumbel_mcts: true
+  gumbel_m: 16
+  completed_q_values: true
+  playout_cap:
+    # §100 move-level cap inherited from base (full_search_prob=0.25,
+    # n_sims_quick=100, n_sims_full=600). Game-level fast_prob disabled —
+    # WorkerPool.__init__ enforces mutex with full_search_prob.
+    # §104 D-Gumbel verdict (reports/gumbel_target_quality_2026-04-17.md):
+    # quick-search completed-Q targets drift toward uniform (ΔH ≈ +3.5 nats),
+    # so the selective gate is discarding noise, not usable gradient —
+    # keep it. Cost: ~2.5× per-move compute vs the pre-§100 config;
+    # rebaseline games/hr on next restart.
+    fast_prob: 0.0

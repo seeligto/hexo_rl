@@ -57,7 +57,7 @@ own design + review. Do NOT inline-patch.
 ### F2 — XS: `terminal_eval_complete` structlog line omits `completed`/`terminal`
 Stage A (closeout integration test) failed on this. The terminal eval *completed correctly*
 (`wr_best=0.605`); only the JSONL telemetry line lacks the field the test (and the watch sheet)
-key on. Diagnosis + 2-kwarg patch: `docs/handoffs/phase3_finding_terminal_eval_completed.md`.
+key on. Diagnosis + 2-kwarg patch: `docs/archive/handoffs/20260612_phase3_finding_terminal_eval_completed.md`.
 
 ### F3 — the self-check script (`run_phase3_armc_smoke.sh`) has bugs → false FAILs
 - `grepc()` returns `"0\n0"` on zero matches (`grep -c` exits 1 → `|| echo 0` adds a second 0),

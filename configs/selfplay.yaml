@@ -23,7 +23,18 @@ mcts:
                            # Was 0.3 (chess-regime). Noise effective-temperature too low past opening.
   epsilon: 0.10            # §143 γ.2: was 0.25; bootstrap-v6 head intact, 25% noise overrides its signal
   dirichlet_enabled: true   # gates Dirichlet call in Rust training path; set false for noise-free eval
+  # LEGACY EVAL/BOT alias only — NOT the training path. Training self-play
+  # temperature lives in selfplay.playout_cap.{temperature_threshold_compound_moves,
+  # temp_min} (Rust quarter-cosine). get_temperature() honours this ply-clock key
+  # for eval/bot games, auto-converting plies -> compound-turns ((ply+1)//2). (D-TEMPDECAY C2.)
   temperature_threshold_ply: 30
+  # D-QFIX-LAND A1: interior (non-root) MCTS node selection rule. HARD-READ by
+  # pool.py (`mcts["interior_selector"]` — KeyError if removed); Rust panics on
+  # an unknown variant. "puct" = today's behaviour (PUCT interior, Gumbel forces
+  # only the root via Sequential Halving — byte-identical to pre-A1). Set to
+  # "gumbel_improved" to select the WIRED PLACEHOLDER arm (delegates to PUCT +
+  # warns once; the real interior-Gumbel rule is future work).
+  interior_selector: puct
 
 selfplay:
   # Gumbel completed Q-values (Danihelka et al., ICLR 2022).

@@ -385,6 +385,10 @@ def benchmark_worker_pool(
         "dirichlet_alpha": float(_mcts.get("dirichlet_alpha", 0.3)),
         "epsilon": float(_mcts.get("epsilon", 0.25)),
         "dirichlet_enabled": bool(_mcts.get("dirichlet_enabled", True)),
+        # D-QFIX-LAND A1: WorkerPool hard-reads mcts["interior_selector"]
+        # (KeyError on missing). The synthetic bench config must supply it;
+        # bench the production-default Puct interior path.
+        "interior_selector": str(_mcts.get("interior_selector", "puct")),
     }
     bench_cfg["selfplay"] = {
         "n_workers": n_workers,
@@ -411,6 +415,12 @@ def benchmark_worker_pool(
             "fast_prob": 0.0,
             "fast_sims": 64,
             "standard_sims": 0,
+            # D-TEMPDECAY: explicit cosine-OFF (= production default). This bench
+            # rebuilds selfplay from scratch, so it is the one site where pool.py's
+            # (0, 0.5) temperature fallback would otherwise fire — listed to
+            # document intent (affects move sampling only, never sim/s).
+            "temperature_threshold_compound_moves": 0,
+            "temp_min": 0.5,
             # Explicitly disable move-level playout cap — all benchmark
             # positions are full-search so pos/hr measures max throughput.
             # pool.py defaults these to 0.0/0/0 already; listed here to

@@ -36,7 +36,7 @@ def test_real_pool_satisfies_worker_pool_like():
     config = {
         "n_workers": 1,
         "playout_cap": {"fast_sims": 50, "standard_sims": 400},
-        "mcts": {"n_simulations": 50},
+        "mcts": {"interior_selector": "puct", "n_simulations": 50},
     }
     pool = WorkerPool(model, config, device, buf)
     assert isinstance(pool, WorkerPoolLike)
@@ -67,7 +67,7 @@ def test_real_eval_pipeline_satisfies_eval_pipeline_like():
     device = torch.device("cpu")
     config = {
         "eval": {"n_games": 2, "n_simulations": 10},
-        "mcts": {"n_simulations": 10},
+        "mcts": {"interior_selector": "puct", "n_simulations": 10},
     }
     ep, _, _ = build_eval_pipeline(config, device, "test-run", {})
     assert isinstance(ep, EvalPipelineLike)

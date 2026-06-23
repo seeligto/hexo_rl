@@ -270,6 +270,9 @@ impl SelfPlayRunner {
                 depth: self.forced_win_policy_depth,
                 weight: self.forced_win_policy_weight,
             },
+            // D-QFIX-LAND A1: thread the parsed interior-selector enum to each
+            // worker; applied to `tree.interior_selector` after `new_full`.
+            interior_selector: self.interior_selector,
         };
         (stats_proto, atomics_proto, channels_proto, params_proto)
     }

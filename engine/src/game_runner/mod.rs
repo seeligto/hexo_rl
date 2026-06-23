@@ -145,6 +145,12 @@ pub struct SelfPlayRunner {
     pub(crate) forced_win_policy_enabled: bool,
     pub(crate) forced_win_policy_depth: u8,
     pub(crate) forced_win_policy_weight: f32,
+    /// D-QFIX-LAND A1: interior (non-root) MCTS selection rule, parsed from the
+    /// `mcts.interior_selector` config string at `new()` (panics on an unknown
+    /// variant). Threaded to each worker via `WorkerParams` and applied to the
+    /// per-worker `MCTSTree` immediately after `new_full` in
+    /// `worker_loop/inner.rs`. `Puct` = HEAD behaviour (byte-identical).
+    pub(crate) interior_selector: crate::mcts::InteriorSelector,
     /// §173 A5a — full registry record for the active encoding; `None` for
     /// legacy callers that don't provide `encoding_spec`. Used by worker_loop
     /// to call `sym_tables_for(spec)` (H1-α) and to derive per-spec geometry
@@ -269,7 +275,12 @@ impl SelfPlayRunner {
             forced_win_policy_enabled,
             forced_win_policy_depth,
             forced_win_policy_weight,
+            interior_selector,
         } = config;
+        // D-QFIX-LAND A1: parse the interior-selector string → enum here (panics
+        // on an unknown variant — A1 config is hard-read end-to-end, no silent
+        // default). "puct" reproduces HEAD behaviour byte-for-byte.
+        let interior_selector = crate::mcts::InteriorSelector::from_config_str(&interior_selector);
         // §172 A10 T8b / cycle 3 Wave 8 Batch C FF.10 — derive feature_len /
         // policy_len from the named encoding's registry record. Pre-Wave-8
         // the registry was looked up Python-side and routed as a
@@ -384,6 +395,7 @@ impl SelfPlayRunner {
             forced_win_policy_enabled,
             forced_win_policy_depth,
             forced_win_policy_weight,
+            interior_selector,
             registry_spec: spec_static,
             radius_override: Arc::new(AtomicI32::new(radius_override.unwrap_or(-1))),
             running: Arc::new(AtomicBool::new(false)),

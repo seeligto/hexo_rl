@@ -444,20 +444,37 @@ def check_buffer_contamination(
         buffer_persist_enabled=mixing_cfg.get("buffer_persist", False),
     )
     if _looks_like_bootstrap_resume and buffer.size > 0 and trainer.step <= 0:
-        log.warning(
-            "buffer_contamination_suspected",
-            msg=(
-                "Bootstrap-like checkpoint (step <= 0) was loaded but the replay "
-                "buffer is non-empty before corpus load. The on-disk "
-                "replay_buffer.bin from a prior run was likely auto-restored. "
-                "Delete checkpoints/replay_buffer.bin (and *.recent) before a "
-                "fresh launch, or set training.mixing.buffer_persist=false on "
-                "the variant. See §149 task 4c/4d."
-            ),
-            buffer_size=buffer.size,
-            ckpt=_ckpt_path_str,
-            ckpt_step=trainer.step,
+        # §D-1M C1 — HARD-FAIL by default (was warn-only). A stale on-disk
+        # replay_buffer.bin can match wire_signature across encodings (e.g.
+        # v6_live2 vs v6_live2_ls produce an identical signature), so the
+        # shape guard does NOT catch it — 250k prior-run positions would load
+        # silently and poison the fresh buffer from step 0, wasting the run.
+        # The legitimate resume path has trainer.step > 0, so this only fires
+        # on fresh-from-bootstrap launches that inherited stale self-play data.
+        _msg = (
+            "Bootstrap-like checkpoint (step <= 0) was loaded but the replay "
+            "buffer is non-empty before corpus load — the on-disk "
+            "replay_buffer.bin from a prior run was auto-restored (its "
+            "wire_signature can match across encodings, so the shape guard "
+            "does NOT catch it). Delete checkpoints/replay_buffer.bin (and "
+            "*.recent) before a fresh launch, or set "
+            "training.mixing.buffer_persist=false on the variant. To override "
+            "deliberately, set training.mixing.allow_stale_buffer=true. "
+            "See §149 task 4c/4d / §D-1M C1."
         )
+        if bool(mixing_cfg.get("allow_stale_buffer", False)):
+            log.warning(
+                "buffer_contamination_suspected_allowed",
+                msg=_msg, buffer_size=buffer.size,
+                ckpt=_ckpt_path_str, ckpt_step=trainer.step,
+            )
+        else:
+            log.error(
+                "buffer_contamination_abort",
+                msg=_msg, buffer_size=buffer.size,
+                ckpt=_ckpt_path_str, ckpt_step=trainer.step,
+            )
+            raise RuntimeError(_msg)
 
 
 # ── Section 12: recent buffer ────────────────────────────────────────────────

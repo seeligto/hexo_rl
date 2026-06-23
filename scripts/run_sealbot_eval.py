@@ -192,10 +192,25 @@ def _eval_one_checkpoint(
     device: object,
     opponent_kind: str = "sealbot",
     opponent_time_ms: int = 500,
+    encoding_override: str | None = None,
+    defender: str = "auto",
 ) -> dict:
     """Load checkpoint, run n_games vs the selected ladder opponent, return
     result dict. ``opponent_kind`` ∈ {sealbot, nnue}."""
     model, spec, encoding_label = load_model_with_encoding(ckpt_path, device)
+    if encoding_override:
+        # v6_live2_ls is state-dict-identical to v6_live2 → auto-detection returns
+        # the arch family (v6_live2, single-window). Override to the trained
+        # action-space so the inference dispatcher builds the no-drop KClusterMCTSBot
+        # (else single-window play DROPS off-window legal moves and mis-routes it).
+        from hexo_rl.encoding import lookup as _lookup
+        from hexo_rl.encoding import normalize_encoding_name as _norm
+        encoding_label = encoding_override
+        spec = _lookup(_norm(encoding_label))
+        try:
+            model.encoding = encoding_label  # KClusterMCTSBot reads model.encoding
+        except Exception:
+            pass
     if policy_only_bias:
         if not getattr(model, "gpool_bias_active", False):
             raise RuntimeError(
@@ -217,11 +232,25 @@ def _eval_one_checkpoint(
         flush=True,
     )
 
-    model_bot = build_inference_method(
-        inference, model, device, encoding_label,
-        temperature=temperature, c_puct=c_puct,
-        kept_plane_indices=list(spec.kept_plane_indices),
-    )
+    if defender in ("modelplayer", "kcluster"):
+        # Force the bot kind for the drop-vs-no-drop instrument counterfactual
+        # (single-source dispatch). 'modelplayer' reproduces the single-window
+        # drop baseline; 'kcluster' the no-drop read. mcts-N only.
+        from hexo_rl.eval.defender_dispatch import build_model_bot
+        from hexo_rl.eval.inference_methods import _parse_method
+        kind, n_sims = _parse_method(inference)
+        if kind != "mcts":
+            raise ValueError("--defender override requires --inference mcts-N")
+        model_bot = build_model_bot(
+            model, spec, device, n_sims=n_sims, encoding_label=encoding_label,
+            temperature=temperature, c_puct=c_puct, mode=defender,
+        )
+    else:
+        model_bot = build_inference_method(
+            inference, model, device, encoding_label,
+            temperature=temperature, c_puct=c_puct,
+            kept_plane_indices=list(spec.kept_plane_indices),
+        )
 
     arm = ckpt_path.stem.replace("_v8full", "").replace("bootstrap_model_", "")
     print(
@@ -361,6 +390,20 @@ def main() -> int:
                         help="Plies of random play to seed each game's diversity.")
     parser.add_argument("--temperature", type=float, default=0.0,
                         help="Model temperature: 0 = argmax / argmax visit count.")
+    parser.add_argument("--defender", choices=["auto", "modelplayer", "kcluster"],
+                        default="auto",
+                        help="Force the model bot kind for the drop-vs-no-drop "
+                             "instrument counterfactual. 'modelplayer' = single-window "
+                             "(drops off-window legal moves); 'kcluster' = no-drop. "
+                             "'auto' (default) lets build_inference_method pick. "
+                             "mcts-N only.")
+    parser.add_argument("--encoding", default=None,
+                        help="Override the checkpoint's auto-detected encoding. "
+                             "REQUIRED for v6_live2_ls: it is state-dict-identical to "
+                             "v6_live2, so detection returns 'v6_live2' (single-window) "
+                             "and play would DROP off-window legal moves. Pass "
+                             "'v6_live2_ls' to route the no-drop KClusterMCTSBot "
+                             "(--inference mcts-N only; legal-set argmax is not wired).")
     parser.add_argument("--c-puct", type=float, default=1.5,
                         help="MCTS PUCT exploration constant (only for mcts-N inference).")
     parser.add_argument("--max-moves", type=int, default=200)
@@ -441,6 +484,7 @@ def main() -> int:
                 args.seed_base, args.random_opening_plies, args.temperature,
                 args.c_puct, args.max_moves, args.policy_only_bias, device,
                 args.opponent, args.opponent_time_ms,
+                encoding_override=args.encoding, defender=args.defender,
             )
         except RuntimeError as e:
             print(f"FATAL: {e}", file=sys.stderr)
@@ -486,6 +530,7 @@ def main() -> int:
                 args.seed_base, args.random_opening_plies, args.temperature,
                 args.c_puct, args.max_moves, args.policy_only_bias, device,
                 args.opponent, args.opponent_time_ms,
+                encoding_override=args.encoding, defender=args.defender,
             )
         except (RuntimeError, NotImplementedError) as e:
             print(f"[eval] ERROR on {ckpt_path.name}: {e}", file=sys.stderr)

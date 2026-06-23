@@ -1,9 +1,13 @@
 //! Regression guard for the quarter-cosine temperature schedule used in the
 //! self-play worker loop (F-006, reports/master_review_2026-04-18/F_tests_benches.md).
 //!
-//! CLAUDE.md pins the contract:
-//!   "per-compound-move quarter-cosine schedule with hard temp_min=0.05 floor
-//!    at compound_move ≥ 15"
+//! Pins the quarter-cosine FORMULA contract: per-compound-move
+//!   `max(temp_min, cos(π/2 · compound_move / temp_threshold))`, clamped at
+//!   `temp_min` for `compound_move ≥ temp_threshold`.
+//! The `(TEMP_THRESHOLD=15, TEMP_MIN=0.05)` constants below are illustrative
+//! FORMULA parameters (the legacy §143 config), NOT the production default —
+//! since D-TEMPDECAY C1 the shipped default is `0 / 0.5` (schedule OFF), pinned
+//! by `default_config_schedule_is_off_constant_floor` + `inv19_*`.
 //!
 //! `compute_move_temperature` was extracted from the inline closure in
 //! `worker_loop.rs:310-320` precisely so this integration test can pin the
@@ -14,10 +18,40 @@
 //! *current* behaviour; if the formula is intentionally changed, this file
 //! must be updated too, making the change visible to reviewers.
 
-use engine::game_runner::compute_move_temperature;
+use engine::game_runner::{compute_move_temperature, SelfPlayRunnerConfig};
 
 const TEMP_MIN: f32 = 0.05;
 const TEMP_THRESHOLD: usize = 15; // compound moves, not plies
+
+/// C1 (D-TEMPDECAY 2026-06-12) — the *default* config must leave the within-game
+/// schedule OFF: a variant that omits `playout_cap` must inherit cosine-OFF
+/// (constant `temp_min`), NOT silently re-arm the §156/L9 draw-collapse cosine.
+/// Pins the default to `temp_threshold_compound_moves = 0` + `temp_min = 0.5`
+/// (the shipped production posture; every live YAML already sets these).
+#[test]
+fn default_config_schedule_is_off_constant_floor() {
+    let cfg = SelfPlayRunnerConfig::default();
+    assert_eq!(
+        cfg.temp_threshold_compound_moves, 0,
+        "default threshold must be 0 (schedule OFF), got {}",
+        cfg.temp_threshold_compound_moves
+    );
+    assert!(
+        (cfg.temp_min - 0.5).abs() < 1e-9,
+        "default temp_min must be 0.5 (anti-colony constant floor), got {}",
+        cfg.temp_min
+    );
+    // Behavioral: with the default (threshold=0) the schedule is a constant
+    // == temp_min at every compound move (incl. cm=0), i.e. bit-identical to a
+    // fixed tau=0.5 — no schedule influence.
+    for cm in [0_usize, 1, 5, 12, 15, 40, 150] {
+        let t = compute_move_temperature(cm, cfg.temp_threshold_compound_moves, cfg.temp_min);
+        assert!(
+            (t - cfg.temp_min).abs() < 1e-6,
+            "default schedule must be constant temp_min; got {t} at cm={cm}"
+        );
+    }
+}
 
 /// At the start of a game (compound_move=0, progress=0), cosine of 0 is 1.0.
 #[test]

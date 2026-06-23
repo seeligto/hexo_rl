@@ -83,12 +83,12 @@ fn test_config_default_matches_pyo3_signature_defaults() {
         0.0,                                //  9 fast_prob
         50,                                 // 10 fast_sims
         0,                                  // 11 standard_sims
-        15,                                 // 12 temp_threshold_compound_moves
+        0,                                  // 12 temp_threshold_compound_moves (D-TEMPDECAY C1: cosine-OFF default)
         -0.1,                               // 13 draw_reward
         -0.1,                               // 14 ply_cap_value (§178 — back-compat default = draw_reward)
         true,                               // 15 quiescence_enabled
         0.3,                                // 15 quiescence_blend_2
-        0.05,                               // 16 temp_min
+        0.5,                                // 16 temp_min (D-TEMPDECAY C1: anti-colony constant floor)
         false,                              // 17 zoi_enabled
         16,                                 // 18 zoi_lookback
         5,                                  // 19 zoi_margin
@@ -125,12 +125,12 @@ fn test_config_default_matches_pyo3_signature_defaults() {
     assert!((cfg.fast_prob - 0.0).abs() < 1e-9);
     assert_eq!(cfg.fast_sims, 50);
     assert_eq!(cfg.standard_sims, 0);
-    assert_eq!(cfg.temp_threshold_compound_moves, 15);
+    assert_eq!(cfg.temp_threshold_compound_moves, 0);
     assert!((cfg.draw_reward - -0.1).abs() < 1e-9);
     assert!((cfg.ply_cap_value - -0.1).abs() < 1e-9);
     assert!(cfg.quiescence_enabled);
     assert!((cfg.quiescence_blend_2 - 0.3).abs() < 1e-9);
-    assert!((cfg.temp_min - 0.05).abs() < 1e-9);
+    assert!((cfg.temp_min - 0.5).abs() < 1e-9);
     assert!(!cfg.zoi_enabled);
     assert_eq!(cfg.zoi_lookback, 16);
     assert_eq!(cfg.zoi_margin, 5);
@@ -175,12 +175,12 @@ fn test_default_matches_pyo3_signature_defaults() {
     assert!((cfg.fast_prob - 0.0).abs() < 1e-9);
     assert_eq!(cfg.fast_sims, 50);
     assert_eq!(cfg.standard_sims, 0);
-    assert_eq!(cfg.temp_threshold_compound_moves, 15);
+    assert_eq!(cfg.temp_threshold_compound_moves, 0);
     assert!((cfg.draw_reward - -0.1).abs() < 1e-9);
     assert!((cfg.ply_cap_value - -0.1).abs() < 1e-9);
     assert!(cfg.quiescence_enabled);
     assert!((cfg.quiescence_blend_2 - 0.3).abs() < 1e-9);
-    assert!((cfg.temp_min - 0.05).abs() < 1e-9);
+    assert!((cfg.temp_min - 0.5).abs() < 1e-9);
     assert!(!cfg.zoi_enabled);
     assert_eq!(cfg.zoi_lookback, 16);
     assert_eq!(cfg.zoi_margin, 5);

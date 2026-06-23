@@ -59,6 +59,7 @@ def _base_selfplay_cfg(extra_selfplay: Dict[str, Any] | None = None,
     return {
         "selfplay": sp,
         "mcts": {
+            "interior_selector": "puct",
             "n_simulations": 2,
             "c_puct": 1.5,
             "fpu_reduction": 0.25,

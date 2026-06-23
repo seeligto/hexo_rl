@@ -20,6 +20,7 @@ pub mod node;
 mod selection;
 mod backup;
 pub mod policy;
+mod completed_q;
 
 pub use node::{CachedPolicy, Node, TTEntry, MAX_NODES, VIRTUAL_LOSS_PENALTY};
 pub use backup::{pool_overflow_count, take_pool_overflow_count};
@@ -47,6 +48,34 @@ pub const MAX_CHILDREN_PER_NODE: usize = 192;
 use crate::board::{Board, BOARD_SIZE};
 use fxhash::FxHashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// D-QFIX-LAND A1: interior (non-root) node selection rule.
+///
+/// `Puct` == today's behaviour (PUCT everywhere; Gumbel forces only the ROOT
+/// child via `forced_root_child`, which is independent of this selector).
+///
+/// `GumbelImproved` is WIRED + config-selectable but a documented PLACEHOLDER —
+/// it delegates to PUCT and warns once. The real interior-Gumbel rule is future
+/// work. Default is `Puct` so existing runs are byte-identical.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InteriorSelector {
+    Puct,
+    GumbelImproved,
+}
+
+impl InteriorSelector {
+    /// Parse the config string. Panics on an unknown variant (no silent default
+    /// — A1 config is hard-read end-to-end).
+    pub fn from_config_str(s: &str) -> Self {
+        match s {
+            "puct" => InteriorSelector::Puct,
+            "gumbel_improved" => InteriorSelector::GumbelImproved,
+            other => panic!(
+                "unknown mcts.interior_selector {other:?}; expected \"puct\" or \"gumbel_improved\""
+            ),
+        }
+    }
+}
 
 // ── Tree ─────────────────────────────────────────────────────────────────────
 
@@ -83,6 +112,10 @@ pub struct MCTSTree {
     /// directly to this child pool index. Used by Sequential Halving
     /// (Gumbel MCTS) to force simulations into a specific candidate's subtree.
     pub(crate) forced_root_child: Option<u32>,
+    /// D-QFIX-LAND A1: interior (non-root) selection rule. Default `Puct` =
+    /// today's behaviour (byte-identical). Set from `mcts.interior_selector` at
+    /// worker init (`worker_loop/inner.rs`, after `MCTSTree::new_full`).
+    pub interior_selector: InteriorSelector,
     /// Accumulated leaf depth across all simulations since last `new_game()`.
     /// Divide by `sim_count` to get mean depth per simulation.
     pub(crate) depth_accum: u64,
@@ -121,6 +154,7 @@ impl MCTSTree {
             quiescence_enabled: true,
             quiescence_blend_2: 0.3,
             forced_root_child: None,
+            interior_selector: InteriorSelector::Puct,
             quiescence_fire_count: AtomicU64::new(0),
         }
     }
@@ -274,3 +308,7 @@ impl MCTSTree {
 
 #[cfg(test)]
 mod tests;
+
+// D-QFIX-LAND golden byte-identity harness (completed-Q sites S1/S2/S3).
+#[cfg(test)]
+mod golden_tests;

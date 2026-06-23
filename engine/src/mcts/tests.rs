@@ -709,6 +709,95 @@ fn test_nonroot_uses_puct_when_root_forced() {
     tree.forced_root_child = None;
 }
 
+// ── D-QFIX-LAND A1: interior-selector tests ──────────────────────────────────
+
+#[test]
+fn test_interior_selector_default_is_puct() {
+    // A1 invariant: a freshly constructed tree defaults to `Puct` so existing
+    // runs are byte-identical (the selector must be opted into explicitly).
+    let tree = MCTSTree::new(1.5);
+    assert_eq!(tree.interior_selector, InteriorSelector::Puct);
+    let tree_full = MCTSTree::new_full(1.5, crate::mcts::VIRTUAL_LOSS_PENALTY, 0.0);
+    assert_eq!(tree_full.interior_selector, InteriorSelector::Puct);
+}
+
+#[test]
+fn test_interior_selector_from_config_str_parses_known_variants() {
+    // Both registry strings parse to their enum variant.
+    assert_eq!(InteriorSelector::from_config_str("puct"), InteriorSelector::Puct);
+    assert_eq!(
+        InteriorSelector::from_config_str("gumbel_improved"),
+        InteriorSelector::GumbelImproved
+    );
+}
+
+#[test]
+#[should_panic(expected = "unknown mcts.interior_selector")]
+fn test_interior_selector_from_config_str_panics_on_unknown() {
+    // A1 config is hard-read end-to-end: an unknown variant must panic rather
+    // than silently falling back to a default.
+    let _ = InteriorSelector::from_config_str("not_a_selector");
+}
+
+#[test]
+fn test_interior_selector_puct_arm_matches_head_path() {
+    // The `Puct` arm of `select_one_leaf` must select the same leaves as the
+    // pre-A1 `pick_best_puct` path. We run an identical search under the
+    // default tree (which dispatches through the `Puct` match arm) and an
+    // explicitly-set `Puct` tree, and assert the per-child visit distributions
+    // are byte-identical — locking the "Puct == HEAD behaviour" invariant.
+    let run = |sel: InteriorSelector| -> Vec<u32> {
+        let mut tree = setup_expanded_root();
+        tree.forced_root_child = None;
+        tree.interior_selector = sel;
+        let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+        let uniform = vec![1.0 / n_actions as f32; n_actions];
+        for _ in 0..30 {
+            let leaves = tree.select_leaves(1);
+            let n = leaves.len();
+            let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+            let values = vec![0.0f32; n];
+            tree.expand_and_backup(&policies, &values);
+        }
+        let first = tree.pool[0].first_child as usize;
+        let n_ch = tree.pool[0].n_children as usize;
+        (first..first + n_ch).map(|i| tree.pool[i].n_visits).collect()
+    };
+
+    // Default tree path (no explicit set) vs explicit `Puct` — both dispatch to
+    // `pick_best_puct`, so visit distributions must match exactly.
+    let visits_default = run(InteriorSelector::Puct);
+    let mut tree_default = setup_expanded_root();
+    tree_default.forced_root_child = None;
+    // (tree_default already defaults to Puct — verified by the default test.)
+    let n_actions = BOARD_SIZE * BOARD_SIZE + 1;
+    let uniform = vec![1.0 / n_actions as f32; n_actions];
+    for _ in 0..30 {
+        let leaves = tree_default.select_leaves(1);
+        let n = leaves.len();
+        let policies: Vec<Vec<f32>> = (0..n).map(|_| uniform.clone()).collect();
+        let values = vec![0.0f32; n];
+        tree_default.expand_and_backup(&policies, &values);
+    }
+    let first = tree_default.pool[0].first_child as usize;
+    let n_ch = tree_default.pool[0].n_children as usize;
+    let visits_default_tree: Vec<u32> =
+        (first..first + n_ch).map(|i| tree_default.pool[i].n_visits).collect();
+
+    assert_eq!(
+        visits_default, visits_default_tree,
+        "explicit Puct arm must match the default (HEAD) selection path"
+    );
+
+    // The placeholder `GumbelImproved` arm currently delegates to PUCT, so it
+    // produces the same distribution (documents the delegation contract).
+    let visits_gumbel = run(InteriorSelector::GumbelImproved);
+    assert_eq!(
+        visits_default, visits_gumbel,
+        "GumbelImproved placeholder must delegate to PUCT (byte-identical for now)"
+    );
+}
+
 #[test]
 fn test_last_search_stats_bounds_after_sims() {
     let mut tree = MCTSTree::new(1.5);

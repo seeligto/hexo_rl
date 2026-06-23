@@ -140,7 +140,7 @@ def test_selfplay_path_enables_rotation_via_workerpool():
             },
             "random_opening_plies": 0,
         },
-        "mcts": {"n_simulations": 2, "c_puct": 1.5, "fpu_reduction": 0.25,
+        "mcts": {"interior_selector": "puct", "n_simulations": 2, "c_puct": 1.5, "fpu_reduction": 0.25,
                  "dirichlet_enabled": False},
         "training": {"draw_value": 0.0},
     }
@@ -219,7 +219,7 @@ def test_rotation_disabled_via_workerpool_config():
             },
             "random_opening_plies": 0,
         },
-        "mcts": {"n_simulations": 2, "c_puct": 1.5, "fpu_reduction": 0.25,
+        "mcts": {"interior_selector": "puct", "n_simulations": 2, "c_puct": 1.5, "fpu_reduction": 0.25,
                  "dirichlet_enabled": False},
         "training": {"draw_value": 0.0},
     }

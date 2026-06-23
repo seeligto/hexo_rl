@@ -4,8 +4,8 @@ Assembled by **D-RERUNPREP** (Phases 0–2 complete + Phase-3 package ready). Th
 re-run does NOT launch until Phase 3 (GPU smoke) PASSES and the operator gates it.
 
 Companion artifacts:
-- Watch sheet: `docs/handoffs/armc_rerun_watchsheet.md`
-- Runbook (unchanged, still canonical): `docs/handoffs/loopfix_armc_rerun_runbook.md`
+- Watch sheet: `docs/archive/handoffs/20260612_armc_rerun_watchsheet.md`
+- Runbook (unchanged, still canonical): `docs/archive/handoffs/20260612_loopfix_armc_rerun_runbook.md`
 - Phase-3 smoke: `configs/variants/v6_live2_ls_ab_smoke.yaml` + `scripts/run_phase3_armc_smoke.sh`
 - Phase-1/2 raw verdicts: `reports/audits/d_rerunprep_phase12.workflow.js` (workflow), run `wf_6d6a620e-0d7`
 
@@ -39,7 +39,7 @@ passes). **The 50k is CLEARED for operator launch** — pending authorization to
 | **B3 — runbook↔config parity** | **PASS** | sha `aba28e10…` verified vs `bootstrap_model_v6_live2.pt`; bar **220/400=0.550** (`evaluate_gate`); bootstrap_anchor stride 1 / sims 128; nnue+offwindow stride 2; **corpus `bootstrap_corpus_v6_live2.npz` present on laptop+vast** (closes B3's own caveat); config loads no missing-key; `bootstrap_model.pt` (unversioned random footgun) **unreachable** from `resolve_anchor`. Objective-A in-run reads: nnue+offwindow at **rounds 2,4** (2 each) + terminal — W1's zero-reads sin closed. |
 | **B4 — opening-jitter pre-flight** | **PASS (moot)** | Jitter is **UNDEPLOYED** in the re-run (`random_opening_plies=0`), so the off-window-injection hazard cannot fire. Mechanism validated if ever used: 100% in-window on bootstrap, 55% distinct @3-ply, dedupe + effective-n guard work. **Caveat:** an off-window-specialised future checkpoint could drift jitter off-window — future-run validation, named in SYNTHESIS. |
 | **B5 — GREENLIGHT wiring** | **PASS** | (1) `exploit_probe.py` runnable, in-run offwindow stride-2 schedule; (2) `KClusterMCTSBot` 17 unit tests pass + instantiation smoke; (3) Arm-B **0.03** overlay source in design doc, explicit "beat Arm-B overlay" in runbook L64-66 (prose, not a separate template — operationally sufficient); (4) golong@50k `checkpoint_00050000_PEAK_sb0.38.pt` loadable (7 keys, 48.7 MB). |
-| **B6 — watch sheet** | **DELIVERED** | `docs/handoffs/armc_rerun_watchsheet.md` (authored; stride→round firing **corrected** — B6's draft mis-stated rounds 1,2,3, true mapping is rounds 2,4). |
+| **B6 — watch sheet** | **DELIVERED** | `docs/archive/handoffs/20260612_armc_rerun_watchsheet.md` (authored; stride→round firing **corrected** — B6's draft mis-stated rounds 1,2,3, true mapping is rounds 2,4). |
 
 **Adversarial passes:** review = CONCERNS (correctly flagged the redundant B1 patch); red-team =
 AGGREGATE-WEAK with `git_diff_clean=true` (no tracked source mutated during Phase 1 — Explore

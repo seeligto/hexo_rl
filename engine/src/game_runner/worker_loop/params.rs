@@ -100,4 +100,8 @@ pub(super) struct WorkerParams {
     pub(super) exploration_flags: ExplorationFlags,
     pub(super) move_constraint_flags: MoveConstraintFlags,
     pub(super) forced_win_policy: ForcedWinPolicy,
+    /// D-QFIX-LAND A1: interior (non-root) MCTS selection rule. Cloned from the
+    /// runner prototype per worker spawn, applied to the per-worker `MCTSTree`
+    /// after `new_full` in `inner::run_worker_thread`. `Copy` enum.
+    pub(super) interior_selector: crate::mcts::InteriorSelector,
 }

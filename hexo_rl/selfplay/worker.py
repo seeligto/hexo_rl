@@ -6,7 +6,9 @@ this module is NOT on the training data path.
 
 Phase 2 additions retained:
   - Dirichlet noise at root (self-play only, disabled for evaluation).
-  - Temperature scheduling by ply (tau=1.0 early, tau=0.1 late, tau=0 eval).
+  - Temperature: compound-turn quarter-cosine for self-play (mode="training"),
+    tau=0 for evaluation — unified with the Rust training path via
+    get_temperature() / quarter_cosine_temperature() (D-TEMPDECAY C4).
   - Both controlled by config and a `use_dirichlet` flag.
 
 §172 A4.2: encoding spec sourced from the new `hexo_rl.encoding` registry.
@@ -65,8 +67,10 @@ class SelfPlayWorker:
     Args:
         model:   Trained (or random) HexTacToeNet.
         config:  Config dict.  Used keys:
-                     n_simulations, c_puct, temperature_threshold_ply,
-                     board_size (must match network input).
+                     n_simulations, c_puct, dirichlet_alpha, epsilon,
+                     board_size (must match network input). Within-game
+                     temperature is resolved per-move by get_temperature()
+                     (honours the legacy eval alias temperature_threshold_ply).
         device:  torch.device.
         encoding_spec: Optional explicit registry-form `EncodingSpec`
                        (or any spec-like object with `.name`). If
@@ -96,7 +100,9 @@ class SelfPlayWorker:
         mcts_cfg = config.get("mcts", config)
         self.n_sims          = int(mcts_cfg.get("n_simulations", config.get("n_simulations", 50)))
         self.c_puct          = float(mcts_cfg.get("c_puct", 1.5))
-        self.temp_threshold  = int(mcts_cfg.get("temperature_threshold_ply", 30))
+        # D-TEMPDECAY C2/C4: within-game temperature is resolved per-move by
+        # get_temperature() from self.config (honours temperature_threshold_ply as
+        # a legacy eval alias). The cached temp_threshold field was dead — removed.
         self.dirichlet_alpha = float(mcts_cfg.get("dirichlet_alpha", 0.3))
         self.dirichlet_eps   = float(mcts_cfg.get("epsilon", 0.25))
 

@@ -33,6 +33,8 @@ Read it fully before doing anything. Rule files under `docs/rules/` are topic-sc
 
 Falsifications here are **objective- and regime-specific** (anti-colony ≠ over-spread-correction ≠ conversion-decline ≠ draw-collapse). Do **NOT** drop a candidate driver or fix by citing a prior falsified-register row, banked result, or prior § without re-validating that the prior finding's **context transfers**. Protocol: cite the prior → state the exact context it was falsified in → test whether that context transfers to the current objective → only then keep/drop. A drop resting on an un-re-validated prior = reject. (§D-OVERSPREAD 2026-06-08: every driver had a tempting prior to drop it on; tested fresh, D1 INVERTED its prior.)
 
+The falsified register itself (the consolidated table — central rows + the additions relocated from split-out phase bodies) lives in `docs/07_PHASE4_SPRINT_LOG.md` § "Falsified Hypotheses Register". This file holds only the protocol above, not the table.
+
 ---
 
 ## Verify the measurement unit before building a frame on it

@@ -38,6 +38,24 @@ from engine import ReplayBuffer
 log = structlog.get_logger()
 
 
+def resolve_playout_cap_temperature(pc: Dict[str, Any]) -> tuple[int, float]:
+    """Resolve ``(temp_threshold_compound_moves, temp_min)`` from a ``playout_cap`` dict.
+
+    Fallback = cosine-OFF ``(0, 0.5)`` — mirrors the Rust ``SelfPlayRunnerConfig``
+    default and the documented production posture: a variant that omits these keys
+    inherits a constant tau=0.5, and must NOT silently re-arm the §156/L9
+    draw-collapse cosine (the legacy fallback was the toxic 15 / 0.05). Schedule-ON
+    values (e.g. a D-TEMPDECAY probe/smoke arm) pass through unchanged.
+    (D-TEMPDECAY C1, 2026-06-12.)
+    """
+    thr = pc.get("temperature_threshold_compound_moves")
+    tmin = pc.get("temp_min")
+    return (
+        int(thr) if thr is not None else 0,       # absent OR explicit null -> OFF
+        float(tmin) if tmin is not None else 0.5,
+    )
+
+
 # §176 P9 — typed snapshot dataclasses replace ad-hoc reaches into the
 # private ``_runner`` / ``_inference_server`` attributes. Pure read-only
 # snapshots; no behaviour change. Consumers (events.py, step_coordinator,
@@ -296,6 +314,9 @@ class WorkerPool:
         # cycle 3 Wave 7 Batch A (P79): kwargs now ride on the
         # `SelfPlayRunnerConfig` builder; `SelfPlayRunner(config)` takes the
         # config struct. Breaking PyO3 API change — `!`-marked commit.
+        # D-TEMPDECAY C1: within-game temperature defaults to cosine-OFF (0, 0.5)
+        # when a variant omits the playout_cap keys — never the legacy 15 / 0.05.
+        _temp_threshold, _temp_min = resolve_playout_cap_temperature(pc)
         _sp_config = SelfPlayRunnerConfig(
             n_workers=self.n_workers,
             max_moves_per_game=int(sp.get("max_game_moves", sp.get("max_moves_per_game", 128))),
@@ -313,7 +334,7 @@ class WorkerPool:
             fast_prob=float(pc.get("fast_prob", 0.0)),
             fast_sims=int(pc["fast_sims"]),
             standard_sims=int(pc.get("standard_sims", 0)),
-            temp_threshold_compound_moves=int(pc.get("temperature_threshold_compound_moves", 15)),
+            temp_threshold_compound_moves=_temp_threshold,
             draw_reward=float(training_cfg.get("draw_value", -0.5)),
             # §178 ply_cap_value: split from draw_reward so the value head sees
             # distinct targets for organic draws vs ply-cap truncations. Falls
@@ -323,7 +344,7 @@ class WorkerPool:
             ),
             quiescence_enabled=self.quiescence_enabled,
             quiescence_blend_2=self.quiescence_blend_2,
-            temp_min=float(pc.get("temp_min", 0.05)),
+            temp_min=_temp_min,
             zoi_enabled=bool(pc.get("zoi_enabled", False)),
             zoi_lookback=int(pc.get("zoi_lookback", 16)),
             zoi_margin=int(pc.get("zoi_margin", 5)),
@@ -360,6 +381,13 @@ class WorkerPool:
         _sp_config.forced_win_policy_enabled = bool(sp.get("forced_win_policy_enabled", False))
         _sp_config.forced_win_policy_depth = int(sp.get("forced_win_policy_depth", 2))
         _sp_config.forced_win_policy_weight = float(sp.get("forced_win_policy_weight", 1.0))
+        # D-QFIX-LAND A1: interior (non-root) MCTS selection rule. HARD-READ
+        # (`mcts_cfg[...]` → KeyError on a missing key, NO silent default) — the
+        # config is hard-read end-to-end and Rust panics on an unknown variant.
+        # Set as a `#[pyo3(get,set)]` attr (mirrors the forced_win block above) so
+        # the INV19 positional ctor surface is untouched. "puct" == byte-identical
+        # default; "gumbel_improved" == wired placeholder.
+        _sp_config.interior_selector = str(mcts_cfg["interior_selector"])
         self._runner = SelfPlayRunner(_sp_config)
         self._inference_server = InferenceServer(
             model, device, config, batcher=self._runner.batcher,

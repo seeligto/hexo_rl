@@ -329,7 +329,20 @@ class EvalPipeline:
             should_run=_should_run,
         )
         for spec in OPPONENTS:
-            spec.run(ctx)
+            # §D-1M F2/F5 (Arm-C) — isolate each opponent: a crash in one
+            # runner (e.g. a host-side native-import failure in SealBot) must
+            # NOT abort the whole round and skip the promotion gate. A failed
+            # opponent simply leaves its metric absent in ``results`` (gating
+            # treats a missing wr_best as no-promotion — fail-safe).
+            try:
+                spec.run(ctx)
+            except Exception as exc:  # noqa: BLE001 — deliberate per-opponent isolation
+                log.error(
+                    "eval_opponent_failed",
+                    opponent=spec.name,
+                    step=train_step,
+                    error=str(exc),
+                )
 
         # ── Gating ────────────────────────────────────────────────────
         # Reads measurements written into ``results`` by the runners; the

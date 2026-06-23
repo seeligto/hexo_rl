@@ -100,6 +100,15 @@ pub struct SelfPlayRunnerConfig {
     /// blend with the improved-policy target.
     #[pyo3(get, set)]
     pub forced_win_policy_weight: f32,
+    /// D-QFIX-LAND A1: interior (non-root) MCTS selection rule, as a registry
+    /// string ("puct" | "gumbel_improved"). Added as a `#[pyo3(get, set)]`
+    /// attribute (set post-construction from Python) rather than a `new()`
+    /// positional kwarg so the INV19-pinned 38-arg positional ctor surface is
+    /// untouched. Parsed to `InteriorSelector` at `SelfPlayRunner::new`
+    /// (panics on an unknown variant). Default `"puct"` = HEAD behaviour; the
+    /// operative value is hard-read from `configs/selfplay.yaml` via `pool.py`.
+    #[pyo3(get, set)]
+    pub interior_selector: String,
 }
 
 /// §B1 (CONFIG-4, 2026-06-02) — semantic defaults SoT for Rust struct-literal
@@ -123,12 +132,16 @@ impl Default for SelfPlayRunnerConfig {
             fast_prob: 0.0,
             fast_sims: 50,
             standard_sims: 0,
-            temp_threshold_compound_moves: 15,
+            // D-TEMPDECAY C1 (2026-06-12): cosine-OFF default (was 15). A variant
+            // omitting playout_cap must NOT re-arm the §156/L9 draw-collapse cosine.
+            temp_threshold_compound_moves: 0,
             draw_reward: -0.1,
             ply_cap_value: -0.1,
             quiescence_enabled: true,
             quiescence_blend_2: 0.3,
-            temp_min: 0.05,
+            // D-TEMPDECAY C1: anti-colony constant floor (was 0.05). With
+            // threshold=0 above, the schedule is a constant tau=0.5.
+            temp_min: 0.5,
             zoi_enabled: false,
             zoi_lookback: 16,
             zoi_margin: 5,
@@ -157,6 +170,9 @@ impl Default for SelfPlayRunnerConfig {
             forced_win_policy_enabled: false,
             forced_win_policy_depth: 2,
             forced_win_policy_weight: 1.0,
+            // D-QFIX-LAND A1: default "puct" = HEAD interior selection
+            // (byte-identical). Operative value hard-read from yaml via pool.py.
+            interior_selector: "puct".to_string(),
         }
     }
 }
@@ -179,12 +195,12 @@ impl SelfPlayRunnerConfig {
         fast_prob = 0.0,
         fast_sims = 50,
         standard_sims = 0,
-        temp_threshold_compound_moves = 15,
+        temp_threshold_compound_moves = 0,
         draw_reward = -0.1,
         ply_cap_value = -0.1,
         quiescence_enabled = true,
         quiescence_blend_2 = 0.3,
-        temp_min = 0.05,
+        temp_min = 0.5,
         zoi_enabled = false,
         zoi_lookback = 16,
         zoi_margin = 5,

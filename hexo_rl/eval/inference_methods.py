@@ -92,8 +92,18 @@ def build_inference_method(
     # inference; the only difference is the wire-plane slice (v6tp 10 incl.
     # turn-phase 16/17, v6_live2 4 = [0,8,16,17] vs v6's 8), threaded via
     # kept_plane_indices into the shape-aware bots.
-    if encoding_label in ("v6", "v6tp", "v6_live2"):
+    if encoding_label in ("v6", "v6tp", "v6_live2", "v6_live2_ls"):
         if kind == "argmax":
+            if encoding_label == "v6_live2_ls":
+                # The legal-set (multi-window) action space has no single-window
+                # argmax bot — V6ArgmaxBot would drop off-window legal moves, the
+                # same mis-route defender_dispatch fixes. Use mcts-N (no-drop
+                # KClusterMCTSBot) for v6_live2_ls strength reads.
+                raise NotImplementedError(
+                    "v6_live2_ls argmax bot is not wired (single-window argmax "
+                    "drops off-window legal moves); use --inference mcts-N for the "
+                    "no-drop KClusterMCTSBot path."
+                )
             return V6ArgmaxBot(model, device, temperature=temperature)
         # v6 MCTS: Python K-cluster MCTS (KClusterMCTSBot) since §169 P1.
         # Rust MCTSTree is also available via evaluator.ModelPlayer but

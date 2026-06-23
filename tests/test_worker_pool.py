@@ -71,6 +71,7 @@ def test_worker_pool_produces_positions_threaded_smoke():
 
     config = {
         "mcts": {
+            "interior_selector": "puct",
             "n_simulations": 1,
             "c_puct": 1.0,
             "temperature_threshold_ply": 8,
@@ -256,6 +257,7 @@ def test_pool_init_rejects_both_playout_caps():
 
 _MINIMAL_CFG = {
     "mcts": {
+        "interior_selector": "puct",
         "n_simulations": 1,
         "c_puct": 1.0,
         "temperature_threshold_ply": 8,
