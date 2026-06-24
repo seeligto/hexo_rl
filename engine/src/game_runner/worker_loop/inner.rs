@@ -710,6 +710,12 @@ fn infer_and_expand(
 /// the caller should `continue` (root expansion failed). Calls
 /// `infer_and_expand` repeatedly inside.
 ///
+/// Dirichlet root noise is PUCT-only. Under Gumbel, Gumbel-Top-k IS the root
+/// exploration mechanism (ICLR2022, §104) — stacking Dirichlet on top inflates
+/// the completed-Q policy-target floor ~2x, so the Gumbel arm applies NONE.
+/// The `dirichlet_enabled/alpha/epsilon` params remain because the PUCT arm
+/// still consumes them.
+///
 /// Ports verbatim from the pre-Wave-11 inner.rs L352-L470.
 #[allow(clippy::too_many_arguments)] // MCTS dispatcher; hot-path-by-value per §173 A5b (bundle would add field-access overhead on each sim)
 fn run_mcts_search(
@@ -745,17 +751,10 @@ fn run_mcts_search(
         }
         let mut sims_used = root_sims;
 
-        // Apply Dirichlet noise to root priors after expansion. Skip at
-        // intermediate ply (second stone of compound turn). ply==0 is P1's
-        // single opening stone, which IS a turn boundary.
-        let is_intermediate_ply = board.moves_remaining == 1 && board.ply > 0;
-        if dirichlet_enabled && !is_intermediate_ply {
-            let n_ch = tree.pool[0].n_children as usize;
-            if n_ch > 0 {
-                let noise = crate::mcts::dirichlet::sample_dirichlet(dirichlet_alpha, n_ch, rng);
-                tree.apply_dirichlet_to_root(&noise, dirichlet_epsilon);
-            }
-        }
+        // NO Dirichlet root noise under Gumbel: Gumbel-Top-k IS the root
+        // exploration mechanism (ICLR2022, §104). Stacking Dirichlet on top
+        // doubles the completed-Q policy-target floor. Dirichlet lives in the
+        // PUCT `else` arm only.
 
         // Phase 2: Gumbel-Top-k candidate selection. Guard: if effective_m is
         // 0 (no budget or no children), fall back to the standard PUCT path.

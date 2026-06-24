@@ -199,6 +199,40 @@ fn s3_bits() -> Vec<u32> {
     out
 }
 
+/// S4 PUCT Dirichlet root-noise bits: build a seeded tree, expand root, sample
+/// symmetric Dirichlet on a FIXED seed (distinct from S3), apply to root, dump
+/// every root child's post-noise `prior` via `to_bits()`.
+///
+/// This pins the PUCT root-noise sequence f32::to_bits-identical. The B1
+/// gumbel-arm Dirichlet deletion touches only the `if gumbel_mcts` branch in
+/// `worker_loop/inner.rs`; the PUCT `else` arm calls the SAME
+/// `sample_dirichlet`+`apply_dirichlet_to_root` exercised here. S4 holding
+/// byte-identical proves the deletion cannot perturb the PUCT path.
+const S4_DIRICHLET_SEED: u64 = 0x5_4D_1_5EED;
+const S4_DIRICHLET_ALPHA: f32 = 0.3;
+const S4_DIRICHLET_EPSILON: f32 = 0.25;
+
+fn s4_puct_dirichlet_bits() -> Vec<u32> {
+    let mut tree = MCTSTree::new(1.5);
+    let mut board = Board::new();
+    board.apply_move(0, 0).expect("(0,0) legal");
+    tree.new_game(board);
+    let n_actions = N_ACTIONS;
+    let policy = vec![1.0 / n_actions as f32; n_actions];
+    let _ = tree.select_leaves(1);
+    tree.expand_and_backup(&[policy], &[0.0]);
+
+    let n_ch = tree.pool[0].n_children as usize;
+    let mut rng = StdRng::seed_from_u64(S4_DIRICHLET_SEED);
+    let noise = crate::mcts::dirichlet::sample_dirichlet(S4_DIRICHLET_ALPHA, n_ch, &mut rng);
+    tree.apply_dirichlet_to_root(&noise, S4_DIRICHLET_EPSILON);
+
+    let first = tree.pool[0].first_child as usize;
+    (0..n_ch)
+        .map(|j| tree.pool[first + j].prior.to_bits())
+        .collect()
+}
+
 // ── Golden roster: (name, live_bits) computed from the live code ──────────────
 
 /// All goldens as `(line-key, live u32 bits)`. The line-key must match the
@@ -212,6 +246,7 @@ fn all_goldens() -> Vec<(String, Vec<u32>)> {
     }
     out.push(("S2_OFFWINDOW".to_string(), s2_bits(&s2_offwindow_fixture())));
     out.push(("S3_SCORE".to_string(), s3_bits()));
+    out.push(("S4_PUCT_DIRICHLET".to_string(), s4_puct_dirichlet_bits()));
     out
 }
 
@@ -260,7 +295,7 @@ fn test_capture_goldens_print() {
 #[test]
 fn test_golden_s1_s2_byte_identical() {
     for (key, live) in all_goldens() {
-        if key.starts_with("S3") {
+        if key.starts_with("S3") || key.starts_with("S4") {
             continue;
         }
         let golden = parse_golden(&key);
@@ -287,5 +322,17 @@ fn test_golden_s3_score_unchanged() {
         live, golden,
         "S3_SCORE: gumbel_search.rs::score per-candidate bits changed — \
          A2a must NOT touch S3 (gumbel_search.rs untouched contract)"
+    );
+}
+
+#[test]
+fn test_golden_s4_puct_dirichlet_unchanged() {
+    let live = s4_puct_dirichlet_bits();
+    let golden = parse_golden("S4_PUCT_DIRICHLET");
+    assert_eq!(
+        live, golden,
+        "S4_PUCT_DIRICHLET: PUCT root Dirichlet noise bits changed — the B1 \
+         gumbel-arm Dirichlet deletion must NOT perturb the PUCT path \
+         (sample_dirichlet + apply_dirichlet_to_root untouched contract)"
     );
 }
