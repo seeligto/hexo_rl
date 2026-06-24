@@ -52,7 +52,9 @@ def test_uniform_vs_one_hot_split():
     assert m["policy_target_entropy_fastsearch"] == pytest.approx(0.0, abs=1e-5)
     assert m["policy_target_kl_uniform_fullsearch"] == pytest.approx(0.0, abs=1e-4)
     assert m["policy_target_kl_uniform_fastsearch"] == pytest.approx(LOG_N, abs=1e-4)
-    assert m["frac_fullsearch_in_batch"] == pytest.approx(0.5, abs=1e-9)
+    # frac_fullsearch_in_batch deleted in B5 (== full_search_frac, computed in
+    # train_step). The n_rows counts pin the same numerator (4 of 8 full-search).
+    assert "frac_fullsearch_in_batch" not in m
     assert m["n_rows_policy_loss"] == 4
     assert m["n_rows_total"] == 8
 
@@ -71,7 +73,7 @@ def test_all_full_search_batch():
     assert math.isnan(m["policy_target_kl_uniform_fastsearch"])
     assert m["policy_target_entropy_fullsearch"] == pytest.approx(LOG_N, abs=1e-4)
     assert m["policy_target_kl_uniform_fullsearch"] == pytest.approx(0.0, abs=1e-4)
-    assert m["frac_fullsearch_in_batch"] == pytest.approx(1.0, abs=1e-9)
+    assert "frac_fullsearch_in_batch" not in m  # deleted in B5
     assert m["n_rows_policy_loss"] == batch
     assert m["n_rows_total"] == batch
 
@@ -89,7 +91,7 @@ def test_all_fast_search_batch():
     assert math.isnan(m["policy_target_kl_uniform_fullsearch"])
     assert m["policy_target_entropy_fastsearch"] == pytest.approx(LOG_N, abs=1e-4)
     assert m["policy_target_kl_uniform_fastsearch"] == pytest.approx(0.0, abs=1e-4)
-    assert m["frac_fullsearch_in_batch"] == pytest.approx(0.0, abs=1e-9)
+    assert "frac_fullsearch_in_batch" not in m  # deleted in B5
     assert m["n_rows_policy_loss"] == 0
     assert m["n_rows_total"] == batch
 
@@ -107,7 +109,7 @@ def test_empty_valid_mask_returns_nan_without_raising():
     assert math.isnan(m["policy_target_entropy_fastsearch"])
     assert math.isnan(m["policy_target_kl_uniform_fullsearch"])
     assert math.isnan(m["policy_target_kl_uniform_fastsearch"])
-    assert m["frac_fullsearch_in_batch"] == pytest.approx(0.0, abs=1e-9)
+    assert "frac_fullsearch_in_batch" not in m  # deleted in B5
     assert m["n_rows_policy_loss"] == 0
     assert m["n_rows_total"] == 0
     # Every promised key must be present (so emitters can trust the dict shape).

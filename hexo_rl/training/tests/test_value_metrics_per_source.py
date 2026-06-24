@@ -242,8 +242,9 @@ def test_existing_keys_unchanged_and_not_renamed(tmp_path: Path):
         n_pretrain=0, value_target_valid=vv,
     )
     for k in ("loss", "policy_loss", "value_loss", "value_accuracy", "grad_norm",
-              "lr", "full_search_frac", "value_loss_main", "value_loss_composite"):
+              "lr", "full_search_frac", "value_loss_composite"):
         assert k in result
+    assert "value_loss_main" not in result  # redundant alias deleted in B5
     # n_pretrain=0 single-buffer path: corpus slice empty, selfplay == batch
     assert result["value_rows_corpus"] == 0
     assert np.isnan(result["value_accuracy_corpus"])

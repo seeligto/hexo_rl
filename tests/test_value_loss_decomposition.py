@@ -1,8 +1,8 @@
 """§D-VALPROBE Phase 3 — value-axis loss-logging decomposition (logging-only).
 
 Pins three properties of the train_step logging surface:
-  1. Explicit decomposition keys exist: value_loss_main (== the historical
-     value_loss key, which has always been the main BCE term),
+  1. Explicit decomposition keys exist: value_loss (the historical main BCE
+     term — the redundant value_loss_main alias was deleted in B5),
      value_loss_uncertainty / value_loss_aux (WEIGHTED contributions as they
      enter the total), and value_loss_composite == their exact sum.
   2. The decomposition accounts for the optimized total:
@@ -66,11 +66,11 @@ def fill_buffer(size: int = 32, seed: int = 0) -> ReplayBuffer:
 def test_decomposition_keys_and_sum_with_heads_on(tmp_path: Path):
     trainer = make_trainer(tmp_path, FULL_CFG)
     result = trainer.train_step(fill_buffer(), augment=False)
-    for k in ("value_loss_main", "value_loss_uncertainty",
+    # value_loss_main alias deleted in B5; value_loss is the main BCE term.
+    assert "value_loss_main" not in result
+    for k in ("value_loss", "value_loss_uncertainty",
               "value_loss_aux", "value_loss_composite"):
         assert k in result, f"{k} missing from loss_info"
-    # continuity: the historical value_loss key IS the main term
-    assert result["value_loss_main"] == result["value_loss"]
     # weighted contributions, not raw terms
     assert result["value_loss_uncertainty"] == pytest.approx(
         0.1 * result["uncertainty_loss"], rel=1e-9)
@@ -78,7 +78,7 @@ def test_decomposition_keys_and_sum_with_heads_on(tmp_path: Path):
         0.15 * result["opp_reply_loss"], rel=1e-9)
     # composite is the exact sum of the three logged parts
     assert result["value_loss_composite"] == pytest.approx(
-        result["value_loss_main"]
+        result["value_loss"]
         + result["value_loss_uncertainty"]
         + result["value_loss_aux"],
         rel=1e-12,
@@ -90,7 +90,7 @@ def test_decomposition_zero_weights_collapse_to_main(tmp_path: Path):
     result = trainer.train_step(fill_buffer(), augment=False)
     assert result["value_loss_uncertainty"] == 0.0
     assert result["value_loss_aux"] == 0.0
-    assert result["value_loss_composite"] == result["value_loss_main"]
+    assert result["value_loss_composite"] == result["value_loss"]
 
 
 # ── 2. decomposition accounts for the optimized total ────────────────────────
@@ -117,7 +117,8 @@ def test_train_step_log_carries_decomposition(tmp_path: Path):
     with structlog.testing.capture_logs() as captured:
         trainer.train_step(buf, augment=False)
     evt = [e for e in captured if e.get("event") == "train_step"][0]
-    for k in ("value_loss_main", "value_loss_uncertainty",
+    assert "value_loss_main" not in evt  # alias deleted in B5
+    for k in ("value_loss", "value_loss_uncertainty",
               "value_loss_aux", "value_loss_composite"):
         assert k in evt, f"{k} missing from train_step structlog event"
 

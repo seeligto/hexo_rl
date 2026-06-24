@@ -204,7 +204,7 @@ def emit_training_events(
         "loss_ownership":          float(loss_info.get("ownership_loss", 0.0)),
         "loss_threat":             float(loss_info.get("threat_loss", 0.0)),
         "loss_chain":              float(loss_info.get("chain_loss", 0.0)),
-        "aux_loss_rows":           int(loss_info.get("aux_loss_rows", 0)),
+        # B5: aux_loss_rows dropped (== value_rows_selfplay).
         "avg_sigma":               float(loss_info.get("avg_sigma", 0.0)),
         "policy_entropy":                  policy_entropy,
         "policy_entropy_pretrain":         float(loss_info.get("policy_entropy_pretrain", float("nan"))),
@@ -219,7 +219,7 @@ def emit_training_events(
         "policy_target_entropy_fastsearch":    float(loss_info.get("policy_target_entropy_fastsearch",    float("nan"))),
         "policy_target_kl_uniform_fullsearch": float(loss_info.get("policy_target_kl_uniform_fullsearch", float("nan"))),
         "policy_target_kl_uniform_fastsearch": float(loss_info.get("policy_target_kl_uniform_fastsearch", float("nan"))),
-        "frac_fullsearch_in_batch":            float(loss_info.get("frac_fullsearch_in_batch", 0.0)),
+        # B5: frac_fullsearch_in_batch dropped (== full_search_frac).
         "n_rows_policy_loss":                  int(loss_info.get("n_rows_policy_loss", 0)),
         "n_rows_total":                        int(loss_info.get("n_rows_total", 0)),
         "value_accuracy":          value_accuracy,
@@ -240,7 +240,12 @@ def emit_training_events(
 
     _buf_sp_pct = round(min(pool.self_play_positions_pushed / max(buffer.size, 1), 1.0), 4)
 
-    emit_event({
+    # B5 regime-guard: mcts_root_concentration + the §107 I2 cluster trio are
+    # PUCT-descent-specific (meaningless under Gumbel-root sampling), so emit
+    # them only when gumbel_mcts is OFF. mcts_mean_depth stays unconditional —
+    # interior-PUCT descent is Gumbel-valid (audit).
+    _puct_regime = not pool.gumbel_mcts
+    iteration_complete_event: dict[str, Any] = {
         "event": "iteration_complete",
         "step": train_step,
         "games_total":        games_played,
@@ -257,13 +262,24 @@ def emit_training_events(
         "corpus_selfplay_frac": round(1.0 - w_pre, 4),
         "batch_fill_pct":     pool.batch_fill_pct,
         "mcts_mean_depth":    rstats.mcts_mean_depth,
-        "mcts_root_concentration": rstats.mcts_mean_root_concentration,
+    }
+    if _puct_regime:
+        iteration_complete_event["mcts_root_concentration"] = rstats.mcts_mean_root_concentration
         # §107 I2 investigation metrics: lifetime-mean per-cluster std-dev of
         # values and top-1 policy disagreement (K≥2 positions only).
-        "cluster_value_std_mean":           rstats.cluster_value_std_mean,
-        "cluster_policy_disagreement_mean": rstats.cluster_policy_disagreement_mean,
-        "cluster_variance_sample_count":    rstats.cluster_variance_sample_count,
-    })
+        iteration_complete_event["cluster_value_std_mean"] = rstats.cluster_value_std_mean
+        iteration_complete_event["cluster_policy_disagreement_mean"] = rstats.cluster_policy_disagreement_mean
+        iteration_complete_event["cluster_variance_sample_count"] = rstats.cluster_variance_sample_count
+    emit_event(iteration_complete_event)
+
+    # B5 regime-guard (mirror of iteration_complete): suppress the
+    # PUCT-descent-specific root_concentration + I2 cluster trio under Gumbel.
+    _puct_log_kwargs: dict[str, Any] = {}
+    if _puct_regime:
+        _puct_log_kwargs["mcts_root_concentration"] = round(rstats.mcts_mean_root_concentration, 3)
+        _puct_log_kwargs["cluster_value_std_mean"] = rstats.cluster_value_std_mean
+        _puct_log_kwargs["cluster_policy_disagreement_mean"] = rstats.cluster_policy_disagreement_mean
+        _puct_log_kwargs["cluster_variance_sample_count"] = rstats.cluster_variance_sample_count
 
     # Richer summary structlog entry — fires at log_interval cadence alongside
     # the trainer's per-step ``train_step`` log. Kept under a distinct event
@@ -302,24 +318,21 @@ def emit_training_events(
         vram_gb=round(float(gpu_monitor.vram_used_gb), 2),
         ownership_loss=round(float(loss_info["ownership_loss"]), 4) if loss_info.get("ownership_loss") is not None else None,
         threat_loss=round(float(loss_info["threat_loss"]), 4) if loss_info.get("threat_loss") is not None else None,
-        aux_loss_rows=int(loss_info.get("aux_loss_rows", 0)),
+        # B5: aux_loss_rows dropped (== value_rows_selfplay).
         batch_fill_pct=round(pool.batch_fill_pct, 1),
         inf_forward_count=istats.forward_count,
         inf_total_requests=istats.total_requests,
         mcts_mean_depth=round(rstats.mcts_mean_depth, 3),
-        mcts_root_concentration=round(rstats.mcts_mean_root_concentration, 3),
         policy_target_entropy_fullsearch=float(loss_info.get("policy_target_entropy_fullsearch", float("nan"))),
         policy_target_entropy_fastsearch=float(loss_info.get("policy_target_entropy_fastsearch", float("nan"))),
         policy_target_kl_uniform_fullsearch=float(loss_info.get("policy_target_kl_uniform_fullsearch", float("nan"))),
         policy_target_kl_uniform_fastsearch=float(loss_info.get("policy_target_kl_uniform_fastsearch", float("nan"))),
-        frac_fullsearch_in_batch=float(loss_info.get("frac_fullsearch_in_batch", 0.0)),
+        # B5: frac_fullsearch_in_batch dropped (== full_search_frac).
         n_rows_policy_loss=int(loss_info.get("n_rows_policy_loss", 0)),
         n_rows_total=int(loss_info.get("n_rows_total", 0)),
-        cluster_value_std_mean=rstats.cluster_value_std_mean,
-        cluster_policy_disagreement_mean=rstats.cluster_policy_disagreement_mean,
-        cluster_variance_sample_count=rstats.cluster_variance_sample_count,
         early_game_entropy_mean=round(float(probe_metrics.get("early_game_entropy_mean", float("nan"))), 4)
             if probe_metrics else None,
         early_game_top1_mass_mean=round(float(probe_metrics.get("early_game_top1_mass_mean", float("nan"))), 4)
             if probe_metrics else None,
+        **_puct_log_kwargs,
     )

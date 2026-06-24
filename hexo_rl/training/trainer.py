@@ -108,7 +108,9 @@ def prune_policy_targets(
 _POLICY_TARGET_METRIC_KEYS = (
     "policy_target_entropy_fullsearch", "policy_target_entropy_fastsearch",
     "policy_target_kl_uniform_fullsearch", "policy_target_kl_uniform_fastsearch",
-    "frac_fullsearch_in_batch", "n_rows_policy_loss", "n_rows_total",
+    # B5 (STAT_AUDIT delete-4): frac_fullsearch_in_batch dropped — identical
+    # numerator AND denominator to full_search_frac (trainer.py train_step).
+    "n_rows_policy_loss", "n_rows_total",
 )
 
 
@@ -151,7 +153,6 @@ def compute_policy_target_metrics(
             "policy_target_entropy_fastsearch":    _div(H_fast_s, n_fast),
             "policy_target_kl_uniform_fullsearch": _div(KL_full_s, n_full),
             "policy_target_kl_uniform_fastsearch": _div(KL_fast_s, n_fast),
-            "frac_fullsearch_in_batch":            float(n_full) / batch_n if batch_n > 0 else 0.0,
             "n_rows_policy_loss":                  n_full,
             "n_rows_total":                        n_valid,
         }
@@ -163,7 +164,7 @@ _ZERO_POLICY_TARGET_METRICS: Dict[str, float] = {
     "policy_target_entropy_fastsearch":    float("nan"),
     "policy_target_kl_uniform_fullsearch": float("nan"),
     "policy_target_kl_uniform_fastsearch": float("nan"),
-    "frac_fullsearch_in_batch": 0.0, "n_rows_policy_loss": 0, "n_rows_total": 0,
+    "n_rows_policy_loss": 0, "n_rows_total": 0,
 }
 
 
@@ -986,8 +987,9 @@ class Trainer:
         # CAVEAT (review, §D-VALPROBE Phase 6): opp_reply aux is a POLICY-shaped
         # head and can dominate the composite — read value_loss_composite as
         # "total minus pure-policy accounting", NOT as value-head signal; the
-        # value-head signal is value_loss_main (+ value_loss_uncertainty).
-        result["value_loss_main"] = result["value_loss"]
+        # value-head signal is value_loss (+ value_loss_uncertainty).
+        # B5 (STAT_AUDIT delete-4): redundant value_loss_main alias dropped —
+        # it was an exact copy of value_loss (zero marginal signal).
         result["value_loss_uncertainty"] = (
             uncertainty_weight * result["uncertainty_loss"] if use_uncertainty else 0.0
         )
@@ -995,7 +997,7 @@ class Trainer:
             aux_weight * result["opp_reply_loss"] if use_aux else 0.0
         )
         result["value_loss_composite"] = (
-            result["value_loss_main"]
+            result["value_loss"]
             + result["value_loss_uncertainty"]
             + result["value_loss_aux"]
         )
@@ -1019,7 +1021,6 @@ class Trainer:
             total_loss=result["loss"],
             policy_loss=result["policy_loss"],
             value_loss=result["value_loss"],
-            value_loss_main=result["value_loss_main"],
             value_loss_uncertainty=result["value_loss_uncertainty"],
             value_loss_aux=result["value_loss_aux"],
             value_loss_composite=result["value_loss_composite"],
@@ -1133,7 +1134,8 @@ class Trainer:
         to the result dict. Mutates ``result`` in place; returns None.
 
         Field-order preserved from the inline block: opp_reply_loss → unc/sigma →
-        own → thr → chain → aux_loss_rows.
+        own → thr → chain. (B5: aux_loss_rows dropped — == value_rows_selfplay,
+        identical batch_n − n_pretrain.)
         """
         if use_aux:
             result["opp_reply_loss"] = opp_reply_loss.item()
@@ -1150,8 +1152,9 @@ class Trainer:
             result["chain_loss"] = chain_loss.item()
         if use_ply_index and ply_index_loss is not None:
             result["ply_index_loss"] = ply_index_loss.item()
-        if use_ownership or use_threat:
-            result["aux_loss_rows"] = max(0, batch_n - n_pretrain)
+        # B5 (STAT_AUDIT delete-4): aux_loss_rows dropped — exact duplicate of
+        # value_rows_selfplay (both == batch_n − n_pretrain). batch_n /
+        # n_pretrain params retained for signature stability (unused now).
 
     def _perf_probe_emit(
         self, *,

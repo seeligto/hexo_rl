@@ -134,7 +134,6 @@ class TerminalDashboard:
             "policy_target_entropy_fastsearch":    None,
             "policy_target_kl_uniform_fullsearch": None,
             "policy_target_kl_uniform_fastsearch": None,
-            "frac_fullsearch_in_batch":            None,
             "n_rows_policy_loss":                  None,
             "n_rows_total":                        None,
             "mcts_mean_depth": None,
@@ -229,7 +228,6 @@ class TerminalDashboard:
                 "policy_target_entropy_fastsearch",
                 "policy_target_kl_uniform_fullsearch",
                 "policy_target_kl_uniform_fastsearch",
-                "frac_fullsearch_in_batch",
                 "n_rows_policy_loss", "n_rows_total",
                 "lr", "grad_norm",
             ):

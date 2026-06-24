@@ -26,6 +26,22 @@ _COLONY_EXT_HEX_DIST = 6
 # distance-1 adjacency) miss it by construction.
 _STRIDE5_STEP = 5
 
+# B3a structural-metric geometry — PINNED to the engine win-line / cluster
+# conventions so the interim Python emit is numerically comparable to the
+# future S7 Rust emit (see scripts/d1m_replay_analyzer.py header PINNED
+# DEFINITIONS, A1-VALIDATED).
+#   engine/src/board/state/core.rs:54 — three positive hex axes (walked both
+#   ways via +dir and -dir => 6 directions).
+_HEX_AXES = [(1, 0), (0, 1), (1, -1)]
+# engine/src/board/moves.rs:44 — 6-in-a-row wins; longest_line capped here.
+_WIN_LENGTH = 6
+# engine/src/board/moves.rs:70 — DEFAULT_CLUSTER_THRESHOLD. n_components edge
+# iff hex_distance <= this. A PINNED engine constant (like _COLONY_EXT_HEX_DIST
+# / _STRIDE5_STEP above), NOT an operator tunable: it MUST equal the engine
+# get_clusters bound or the metric is incomparable. Mirrors the A1-VALIDATED
+# scripts/d1m_replay_analyzer.py DEFAULT_CLUSTER_THRESHOLD.
+_CLUSTER_THRESHOLD = 5
+
 
 def _compute_stride5_metrics(
     move_history: list[tuple[int, int]],
@@ -83,6 +99,26 @@ def _compute_stride5_metrics(
     return (stride5_max, row_max)
 
 
+def _split_players(
+    move_history: list[tuple[int, int]],
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Return ``(p1_stones, p2_stones)`` using the PINNED ply→player rule.
+
+    Ply 0 is P1; thereafter each player places 2 stones before the turn passes
+    (``compound_idx = (ply - 1) // 2``; P1 when that index is odd, else P2).
+    This is the single ply-rule owned by this module (was inline in
+    ``_compute_colony_extension``); the B3a structural metrics reuse it so
+    attribution stays byte-identical to colony_extension_fraction and to
+    scripts/d1m_replay_analyzer.py:split_players.
+    """
+    p1: list[tuple[int, int]] = []
+    p2: list[tuple[int, int]] = []
+    for ply, (q, r) in enumerate(move_history):
+        own_is_p1 = (ply == 0) or (((ply - 1) // 2) % 2 == 1)
+        (p1 if own_is_p1 else p2).append((q, r))
+    return p1, p2
+
+
 def _compute_colony_extension(move_history: list[tuple[int, int]]) -> tuple[int, int]:
     """Return (colony_extension_count, classified_total) for a finished game.
 
@@ -97,11 +133,7 @@ def _compute_colony_extension(move_history: list[tuple[int, int]]) -> tuple[int,
     """
     if not move_history:
         return (0, 0)
-    p1: list[tuple[int, int]] = []
-    p2: list[tuple[int, int]] = []
-    for ply, (q, r) in enumerate(move_history):
-        own_is_p1 = (ply == 0) or (((ply - 1) // 2) % 2 == 1)
-        (p1 if own_is_p1 else p2).append((q, r))
+    p1, p2 = _split_players(move_history)
     ext = 0
     total = 0
     for own, opp in ((p1, p2), (p2, p1)):
@@ -112,6 +144,127 @@ def _compute_colony_extension(move_history: list[tuple[int, int]]) -> tuple[int,
             if min(axial_distance(s, o) for o in opp) > _COLONY_EXT_HEX_DIST:
                 ext += 1
     return (ext, total)
+
+
+def _longest_straight_run(stones: list[tuple[int, int]]) -> int:
+    """Longest straight consecutive run of ``stones`` along any ``_HEX_AXES`` axis.
+
+    Reproduces engine count_in_line (moves.rs:222-233): for each stone, for each
+    axis, run = 1 + walk(+dir) + walk(-dir); take the global max. Matches
+    scripts/d1m_replay_analyzer.py:longest_line. NOT capped here — the caller
+    caps at ``_WIN_LENGTH`` (the engine never extends past a 6-win).
+    """
+    if not stones:
+        return 0
+    cells = set(stones)
+    best = 0
+
+    def walk(q: int, r: int, dq: int, dr: int) -> int:
+        n = 0
+        while True:
+            q += dq
+            r += dr
+            if (q, r) not in cells:
+                break
+            n += 1
+        return n
+
+    for (q, r) in cells:
+        for (dq, dr) in _HEX_AXES:
+            run = 1 + walk(q, r, dq, dr) + walk(q, r, -dq, -dr)
+            if run > best:
+                best = run
+    return best
+
+
+def _components(stones: list[tuple[int, int]], cluster_threshold: int) -> int:
+    """Connected components of ``stones`` under axial_distance <= cluster_threshold.
+
+    Same connectivity as engine get_clusters (moves.rs:478-520): BFS flood-fill,
+    edge iff hex_distance <= cluster_threshold. Applied per-player here (golong
+    winner-structure semantics). Matches scripts/d1m_replay_analyzer.py:n_components.
+    """
+    pts = list(set(stones))
+    n = len(pts)
+    if n == 0:
+        return 0
+    seen = [False] * n
+    comps = 0
+    for i in range(n):
+        if seen[i]:
+            continue
+        comps += 1
+        stack = [i]
+        seen[i] = True
+        while stack:
+            c = stack.pop()
+            for j in range(n):
+                if not seen[j] and axial_distance(pts[c], pts[j]) <= cluster_threshold:
+                    seen[j] = True
+                    stack.append(j)
+    return comps
+
+
+def _compute_longest_line(
+    move_history: list[tuple[int, int]],
+    cluster_threshold: int,
+    winner_code: int,
+) -> tuple[int, float]:
+    """Return ``(longest_line, longest_line_fraction)`` for a finished game.
+
+    PER-PLAYER (winner) structure, A1-VALIDATED against
+    scripts/d1m_replay_analyzer.py:analyze_game:
+      - decisive game: the WINNER's longest line and stone count.
+      - draw: the more-structured side (max longest_line; its stone count for
+        the fraction denominator).
+    ``longest_line`` is capped at ``_WIN_LENGTH`` (=6). ``longest_line_fraction``
+    = longest_line / max(1, player_stone_count) (colony-norm convention).
+    ``cluster_threshold`` is unused for longest_line but accepted so both B3a
+    structural emitters share one call signature. ``winner_code``: 0=draw,
+    1=P1, 2=P2 (pool convention).
+    """
+    if not move_history:
+        return (0, 0.0)
+    p1, p2 = _split_players(move_history)
+    ll_p1 = _longest_straight_run(p1)
+    ll_p2 = _longest_straight_run(p2)
+    if winner_code == 1:
+        ll, stones = ll_p1, len(p1)
+    elif winner_code == 2:
+        ll, stones = ll_p2, len(p2)
+    else:  # draw — more-structured side (max line + its stone count)
+        if ll_p1 >= ll_p2:
+            ll, stones = ll_p1, len(p1)
+        else:
+            ll, stones = ll_p2, len(p2)
+    ll = min(_WIN_LENGTH, ll)
+    return (ll, ll / max(1, stones))
+
+
+def _compute_n_components(
+    move_history: list[tuple[int, int]],
+    cluster_threshold: int,
+    winner_code: int,
+) -> int:
+    """Return PER-PLAYER (winner) ``n_components`` for a finished game.
+
+    A1-VALIDATED against scripts/d1m_replay_analyzer.py:analyze_game:
+      - decisive game: the WINNER's component count.
+      - draw: max(n_components_p1, n_components_p2) (headline-max).
+    Connectivity edge iff axial_distance <= ``cluster_threshold`` (engine
+    get_clusters convention). ``winner_code``: 0=draw, 1=P1, 2=P2.
+    """
+    if not move_history:
+        return 0
+    p1, p2 = _split_players(move_history)
+    if winner_code == 1:
+        return _components(p1, cluster_threshold)
+    if winner_code == 2:
+        return _components(p2, cluster_threshold)
+    return max(
+        _components(p1, cluster_threshold),
+        _components(p2, cluster_threshold),
+    )
 
 
 class PoolInstrumentation:
@@ -146,13 +299,18 @@ class PoolInstrumentation:
         mv_max: int,
         mv_distinct: int,
         stride5_run: int,
-    ) -> tuple[int, int, float, int]:
+        cluster_threshold: int = _CLUSTER_THRESHOLD,
+    ) -> tuple[int, int, float, int, int, float, int]:
         """Update all telemetry state for one completed game.
 
-        Returns ``(colony_ext_count, colony_ext_total, colony_ext_frac, stride5_p90)``.
-        Colony stats are 0/0/0.0 when ``log_investigation_metrics`` is False or
+        Returns ``(colony_ext_count, colony_ext_total, colony_ext_frac,
+        stride5_p90, longest_line, longest_line_fraction, n_components)``.
+        Colony + B3a structural stats are 0/0/0.0 (longest_line 0, fraction 0.0,
+        n_components 0) when ``log_investigation_metrics`` is False or
         ``move_history`` is empty.  ``stride5_p90`` is the rolling P90 including
-        this game.
+        this game.  ``cluster_threshold`` (the connectivity edge bound for
+        n_components) defaults to the PINNED ``_CLUSTER_THRESHOLD`` (engine
+        DEFAULT_CLUSTER_THRESHOLD=5); callers may override for tests.
         """
         if move_history:
             with lock:
@@ -176,10 +334,21 @@ class PoolInstrumentation:
         if self._log_investigation_metrics and move_history:
             ext_count, ext_total = _compute_colony_extension(move_history)
             ext_frac = float(ext_count / ext_total) if ext_total > 0 else 0.0
+            # B3a structural emit — PER-PLAYER (winner) longest_line + n_components.
+            longest_line, longest_line_frac = _compute_longest_line(
+                move_history, cluster_threshold, winner_code,
+            )
+            n_components = _compute_n_components(
+                move_history, cluster_threshold, winner_code,
+            )
         else:
             ext_count, ext_total, ext_frac = 0, 0, 0.0
+            longest_line, longest_line_frac, n_components = 0, 0.0, 0
 
-        return (ext_count, ext_total, ext_frac, stride5_p90)
+        return (
+            ext_count, ext_total, ext_frac, stride5_p90,
+            longest_line, longest_line_frac, n_components,
+        )
 
     def current_stride5_p90(self, lock: threading.Lock) -> int:
         """Rolling P90 of stride5_run over the last ≤50 completed games.

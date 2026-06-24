@@ -10,6 +10,8 @@ delegations to PoolInstrumentation for all per-game telemetry state.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import time
 import uuid
@@ -291,6 +293,31 @@ class WorkerPool:
                 f"n_sims_quick={n_sims_quick_cfg}, n_sims_full={n_sims_full_cfg}."
             )
 
+        # B5 sims/sec fix: effective per-MOVE sim count, config-sourced. The old
+        # drain bill (n_simulations * n_GAMES) counted ONE search per game and
+        # missed that every MOVE runs a search — a ~21x undercount. The new bill
+        # is delta(positions_generated) * effective_sims_per_move. Under a
+        # move-level playout cap, full-search moves cost n_sims_full and quick
+        # moves cost n_sims_quick; we bill at n_sims_full per move (the
+        # full-search ceiling — quick moves are cheaper, so the running estimate
+        # is an over-bill bounded by n_sims_full and never the worse ~21x
+        # under-bill). When no playout cap is configured, every move runs the
+        # flat n_simulations. ZERO-LITERAL: both branches read existing config
+        # (playout_cap.n_sims_full / mcts.n_simulations); hard ValueError on a
+        # mis-specified playout-cap regime above already guards n_sims_full > 0.
+        if full_search_prob_cfg > 0.0:
+            self._effective_sims_per_move = n_sims_full_cfg
+        else:
+            self._effective_sims_per_move = self.n_simulations
+        if self._effective_sims_per_move <= 0:
+            raise ValueError(
+                "sims/sec: could not resolve effective per-move sim count — "
+                f"full_search_prob={full_search_prob_cfg}, "
+                f"n_sims_full={n_sims_full_cfg}, n_simulations={self.n_simulations}. "
+                "Set mcts.n_simulations > 0 (flat regime) or "
+                "playout_cap.n_sims_full > 0 (move-level cap regime)."
+            )
+
         training_cfg = config.get("training", config)
         # Cycle 3 Wave 8 Batch C (FF.10, 2026-05-17): the legacy
         # `encoding_spec=PyRegistrySpec` round-trip retired alongside
@@ -409,6 +436,10 @@ class WorkerPool:
         self.draws = 0
         self._sims_per_sec: float = 0.0
         self._last_drain_time: float = time.monotonic()
+        # B5 sims/sec fix: last-seen runner positions_generated counter. Per
+        # drain we bill delta(positions_generated) * effective_sims_per_move
+        # (one search per MOVE), replacing the n_simulations * n_GAMES bill.
+        self._last_pos_generated: int = 0
         self._total_sims: int = 0
         self._game_lengths: deque[int] = deque(maxlen=200)
         self._avg_game_length: float = 0.0
@@ -441,7 +472,9 @@ class WorkerPool:
             "log_investigation_metrics",
             config.get("log_investigation_metrics", True),
         ))
-
+        # B3a — n_components connectivity bound is a PINNED engine constant
+        # (instrumentation._CLUSTER_THRESHOLD == engine DEFAULT_CLUSTER_THRESHOLD),
+        # not a per-pool tunable; on_game_complete defaults to it. No config key.
         instr_cfg = config.get("instrumentation", {}) or {}
         self._instrumentation_enabled = bool(instr_cfg.get("enabled", False))
         self._instrumentation = PoolInstrumentation(
@@ -473,6 +506,19 @@ class WorkerPool:
     @property
     def sims_per_sec(self) -> float:
         return self._sims_per_sec
+
+    @property
+    def gumbel_mcts(self) -> bool:
+        """Whether Gumbel-root MCTS is active (selfplay.gumbel_mcts).
+
+        B5 regime-guard: the PUCT-only diagnostics (mcts_root_concentration +
+        the §107 I2 cluster trio) are descent-rule-specific — meaningless under
+        Gumbel-root sampling — so emit_training_events suppresses them when this
+        is True. mcts_mean_depth stays emitted (interior-PUCT descent is
+        Gumbel-valid). Mirrors pool.py ctor read of sp['gumbel_mcts'].
+        """
+        sp = self.config.get("selfplay", self.config)
+        return bool(sp.get("gumbel_mcts", False))
 
     @property
     def avg_game_length(self) -> float:
@@ -716,12 +762,23 @@ class WorkerPool:
             # targets flow per-row via collect_data() above.
             games_batch = self._runner.drain_game_results()
 
-            # Compute sims/sec from elapsed time and known n_simulations per game.
+            # B5 sims/sec fix: bill one search per MOVE, not per GAME. The old
+            # bill `n_simulations * len(games_batch)` counted a single search per
+            # completed game — a ~21x undercount (a 150-ply game runs ~75 searches
+            # per player, one per move). Truth = delta(positions_generated) *
+            # effective_sims_per_move. positions_generated counts row-producing
+            # moves (the per-move unit); the delta is measured every drain so the
+            # rate tracks moves accrued in the interval, decoupled from game
+            # completions. positions_per_hour (events.py) is a SEPARATE, correct
+            # metric and is untouched.
             now = time.monotonic()
             elapsed = now - self._last_drain_time
             self._last_drain_time = now
-            if games_batch:
-                sims = self.n_simulations * len(games_batch)
+            pos_generated = int(getattr(self._runner, "positions_generated", 0))
+            pos_delta = max(0, pos_generated - self._last_pos_generated)
+            self._last_pos_generated = pos_generated
+            if pos_delta > 0:
+                sims = pos_delta * self._effective_sims_per_move
                 self._total_sims += sims
                 if elapsed > 0:
                     self._sims_per_sec = sims / elapsed
@@ -744,10 +801,13 @@ class WorkerPool:
                     _stride5_run = 0
                     _row_max_density = 0
 
-                _ext_count, _ext_total, _ext_frac, _stride5_p90 = (
+                (_ext_count, _ext_total, _ext_frac, _stride5_p90,
+                 _longest_line, _longest_line_frac, _n_components) = (
                     self._instrumentation.on_game_complete(
                         self._lock, winner_code, move_history, worker_id,
                         terminal_reason, mv_min, mv_max, mv_distinct, _stride5_run,
+                        # cluster_threshold defaults to the pinned engine constant
+                        # (instrumentation._CLUSTER_THRESHOLD); no config plumbing.
                     )
                 )
 
@@ -761,9 +821,20 @@ class WorkerPool:
                 # string convention used by reports/phase_b/.
                 _TR_NAMES = {0: "six_in_a_row", 1: "colony", 2: "ply_cap", 3: "other_draw"}
                 terminal_reason_name = _TR_NAMES.get(int(terminal_reason), "unknown")
+                # B3a — INTERIM effective-n instrument: deterministic byte-hash
+                # over the move sequence so byte-identical games dedupe (§D-ARGMAX
+                # effective-n = DISTINCT games, not game count). Recipe mirrors
+                # scripts/d1m_replay_analyzer.py:hash_moves so the live emit and
+                # the replay analyzer collide on identical games. Symmetry-canonical
+                # hash DEFERRED to B3b (needs Rust). game_id (uuid) stays unique
+                # per emit for dashboard/viewer keying.
+                _game_id_byte_hash = hashlib.sha1(
+                    json.dumps([list(m) for m in move_history]).encode()
+                ).hexdigest()
                 game_complete_payload: dict[str, Any] = {
                     "event": "game_complete",
                     "game_id": uuid.uuid4().hex,
+                    "game_id_byte_hash": _game_id_byte_hash,
                     "winner": winner_int,
                     "moves": plies,
                     "moves_list": moves_list,
@@ -777,6 +848,11 @@ class WorkerPool:
                     "colony_extension_stone_count": _ext_count,
                     "colony_extension_stone_total": _ext_total,
                     "colony_extension_fraction":    _ext_frac,
+                    # B3a — PER-PLAYER (winner) structural metrics. longest_line
+                    # capped at 6; fraction = longest_line / max(1, winner stones);
+                    # n_components under hex-dist <= structural_metric_cluster_threshold.
+                    "longest_line_fraction":        _longest_line_frac,
+                    "n_components":                 _n_components,
                     # Phase B' Class-1/3 instrumentation. Always emitted (cheap),
                     # so dashboards/post-hoc analysis can pick them up without
                     # re-running with the flag set.
@@ -784,7 +860,8 @@ class WorkerPool:
                     "model_version_min":        int(mv_min),
                     "model_version_max":        int(mv_max),
                     "model_version_distinct":   int(mv_distinct),
-                    "model_version_range_size": int(mv_max - mv_min),
+                    # B5: model_version_range_size dropped (== max − min, both
+                    # already in this game_complete event).
                     # Phase B' — stride-5 P90 retained as passive metric (§162).
                     "stride5_run_p90":   int(_stride5_p90),
                     # §176 P23 — densest hex-row stone count (any of 3 axes).
