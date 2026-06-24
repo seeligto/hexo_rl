@@ -351,6 +351,7 @@ class EvalPipeline:
         wr_best = results.get("wr_best")
         wins_best = results.pop("_best_wins", None)  # type: ignore[misc]
         n_best = results.pop("_best_n", None)  # type: ignore[misc]
+        draws_best = results.pop("_best_draws", 0)  # type: ignore[misc]
         wr_bootstrap_anchor = results.get("wr_bootstrap_anchor")
         threshold = float(self.gating_cfg.get("promotion_winrate", 0.55))
         floor_enabled = bool(self._bootstrap_floor_cfg.get("enabled", False))
@@ -362,7 +363,7 @@ class EvalPipeline:
                 promotion_winrate=threshold,
                 require_ci_above_half=bool(self.gating_cfg.get("require_ci_above_half", True)),
             )
-            outcome = evaluate_gate(wr_best, n_best, wins_best, gate_cfg)  # type: ignore[arg-type]
+            outcome = evaluate_gate(wr_best, n_best, wins_best, gate_cfg, draws=draws_best)  # type: ignore[arg-type]
             # §155 T2 — bootstrap floor gate.  When enabled, promotion AND-
             # combines with `wr_bootstrap_anchor >= min_winrate`.  Missing
             # measurement (anchor opponent stride-skipped or checkpoint

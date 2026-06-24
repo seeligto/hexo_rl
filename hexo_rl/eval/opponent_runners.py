@@ -369,6 +369,9 @@ def _run_best(ctx: _RunnerContext) -> None:
     # after gating to keep the returned dict to its documented shape.
     ctx.results["_best_wins"] = er.win_count  # type: ignore[typeddict-unknown-key]
     ctx.results["_best_n"] = n  # type: ignore[typeddict-unknown-key]
+    # §B2 — draw count threaded to the gate so its CI base (W+0.5D)/n matches
+    # the wr_best point estimate; without it the CI drops draws and false-blocks.
+    ctx.results["_best_draws"] = er.draw_count  # type: ignore[typeddict-unknown-key]
 
 
 # ── Registry ────────────────────────────────────────────────────────────────
