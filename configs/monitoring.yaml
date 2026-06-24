@@ -26,3 +26,25 @@ monitoring:
   # Rust-side I2 accumulates inside hot MCTS loop; I1 is pure Python per-game.
   # Disable on bench runs (adds <1% overhead but perturbs timing).
   log_investigation_metrics: true
+
+# ── B4 §D-DECIDE Track-B — run-feed reader (READ-ONLY consumer of Feed A) ──
+# Single source of truth for the d1m_monitor / run_feed_reader run identity +
+# Feed-A parse knobs. load_run_feed_config() HARD-ERRORS when this block (or any
+# required key) is missing — NO silent 'logs/d1m/...jsonl' default. Env overrides
+# (D1M_HOST / D1M_REPO / D1M_LOG / D1M_ENCODING) still win at the call site; this
+# block is the floor, not a fallback to a buried literal.
+run_feed:
+  # run identity (was hardcoded at d1m_monitor.py:149 + 1431-1433)
+  host: vast                          # ssh host alias (D1M_HOST)
+  repo: /workspace/hexo_rl            # remote repo root (D1M_REPO)
+  default_log_path: logs/d1m/d1m_gumbel_m16_n150.jsonl  # run-log path, relative to repo (D1M_LOG)
+  encoding: v6_live2_ls               # run encoding -> derived entropy upper ref (D1M_ENCODING)
+  # sealbot_slope CI knobs (load-bearing — VERBATIM from d1m_monitor.py)
+  sealbot_slope_min_points: 5         # K — false-green guard; < K -> neutral
+  sealbot_slope_ci_level: 0.95        # two-sided CI level
+  sealbot_min_rise: 0.03              # +3pp effect-size floor over the window
+  sealbot_fallback_sigma: 0.12        # conservative per-point sigma when CI absent
+  # parse sampling / binning (mirror the REMOTE collector constants)
+  bin_width: 30000                    # step-bucket width for binned trajectories
+  ts_sample: 200                      # sample every Nth train_step (value-bce trajectory)
+  gc_sample: 50                       # sample every Nth game_complete (colony trajectory)
