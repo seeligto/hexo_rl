@@ -54,9 +54,21 @@ decision-relevant comparison is 150→256. Expected PLATEAU. ~11h.
   `docs/handoffs/d_localize_p3_search_scaling_vast_runbook.md` §Step 6 / §OUTPUT.
   (Aggregate needs the banked net-vs-net rows — run on laptop after rsync if simpler.)
 
-## Pending (post-WF2)
-- Commit the D-LOCALIZE bundle (P3 infra + n-override patch + P4 code + P2 script +
-  this status) on `phase4.5/d-decide-track-b` (NOT master, no push).
-- Sprint-log §D-LOCALIZE entry with the P2 lever verdict + P3 result.
-- P3 aggregate + PLATEAU/CLIMBS verdict + rsync results back.
-- Corpus regen stays SPEC-ONLY, gated on P2=LINES. No GPU-week launched.
+## DONE (post-WF2)
+- **P2 verdict = VALUE-TARGET** (value head blind to SealBot-reachable losses;
+  corrected discriminator VALUE-BLIND 56/61 = 92%). bot-mix DROPPED, corpus regen
+  OFF/spec-only. Full record: `docs/handoffs/d_localize_findings.md`.
+- **Committed** on `phase4.5/d-decide-track-b` (NOT master, not pushed):
+  `4449a15` P4 deploy-matched in-loop gate · `cf89801` localization + ladder n-override
+  + findings + sprint-log §D-LOCALIZE · (+ p3_verdict aggregator). 14 P4 tests pass.
+- Corpus regen SPEC-ONLY (gated on P2=LINES, did not fire). No GPU-week launched.
+
+## P3 (still running on vast) — auto-aggregating
+- `p3sweep` tmux: n150 cell DONE (WR vs SealBot@d5: s150k .575 / s175k .350 / s200k .450
+  / s226k .425 — mid-cluster dip), n256 in progress; n128/n512/d4-redteam queued. ~10h.
+- **Auto-verdict:** `p3verdict` tmux waits for `p3sweep` to end, then runs
+  `scripts/eval/p3_verdict.py` → writes `reports/d_localize_p3/P3_VERDICT.md` (per-ckpt
+  WR-vs-SealBot + distinct-game bootstrap CI + PLATEAU/CLIMBS gate). No manual aggregate
+  needed.
+- **On return:** `rsync -az -e "ssh -p 13053 -i ~/.ssh/vast_hexo" root@ssh6.vast.ai:/workspace/hexo_rl/reports/d_localize_p3/ reports/d_localize_p3/`
+  then read `P3_VERDICT.md`. Predicted PLATEAU (value-blindness ⇒ search can't fix it).
