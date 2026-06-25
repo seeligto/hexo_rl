@@ -63,12 +63,10 @@ decision-relevant comparison is 150→256. Expected PLATEAU. ~11h.
   + findings + sprint-log §D-LOCALIZE · (+ p3_verdict aggregator). 14 P4 tests pass.
 - Corpus regen SPEC-ONLY (gated on P2=LINES, did not fire). No GPU-week launched.
 
-## P3 (still running on vast) — auto-aggregating
-- `p3sweep` tmux: n150 cell DONE (WR vs SealBot@d5: s150k .575 / s175k .350 / s200k .450
-  / s226k .425 — mid-cluster dip), n256 in progress; n128/n512/d4-redteam queued. ~10h.
-- **Auto-verdict:** `p3verdict` tmux waits for `p3sweep` to end, then runs
-  `scripts/eval/p3_verdict.py` → writes `reports/d_localize_p3/P3_VERDICT.md` (per-ckpt
-  WR-vs-SealBot + distinct-game bootstrap CI + PLATEAU/CLIMBS gate). No manual aggregate
-  needed.
-- **On return:** `rsync -az -e "ssh -p 13053 -i ~/.ssh/vast_hexo" root@ssh6.vast.ai:/workspace/hexo_rl/reports/d_localize_p3/ reports/d_localize_p3/`
-  then read `P3_VERDICT.md`. Predicted PLATEAU (value-blindness ⇒ search can't fix it).
+## P3 (DONE) — PLATEAU-by-150
+- All 1200 games complete on vast (~7h, co-tenant); results pulled to
+  `reports/d_localize_p3/` (gitignored) incl. `P3_VERDICT.md`. tmux sessions cleaned up.
+- **Verdict: PLATEAU-by-150** — no checkpoint has CI_lo(WR@256) > CI_hi(WR@150); 150→256
+  drops/flatlines (s150k .575→.400, s175k .350→.250), n512 no climb, depth-4 ≈ depth-5.
+  ⇒ keep n=150, 256 not worth 1.7×. Confirms value-blindness ≠ search-budget artifact.
+- Live d1m run unaffected: advanced 249k→269k during the sweep, still healthy.

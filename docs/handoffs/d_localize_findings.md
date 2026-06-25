@@ -90,10 +90,13 @@ mis-evaluates the leaves — search can't fix a mis-calibrated value.
   screen-band lo/hi are config-overridable — pin defaults before deploy.
 - **P0:** depth-5 = reproducible SealBot bar; **unit = HTTT turns** (depth-5 ≈ 10 stones;
   5 = median+1). **P1:** banked jsonl PARTIAL (moves, no value) → re-eval, no fresh games.
-- **P3 (search-scaling 150-vs-256):** running on vast (tmux `p3sweep`, co-tenant with the
-  live d1m run, nice-19). Driver `scripts/run_d_localize_p3_vast.sh`. Outputs stream to
-  `reports/d_localize_p3/`. Pre-registered PLATEAU-vs-CLIMBS gate. Aggregate + pull-back
-  per `docs/handoffs/d_localize_p3_search_scaling_vast_runbook.md`. **PENDING.**
+- **P3 (search-scaling 150-vs-256): COMPLETE → PLATEAU-by-150.** All 1200 games on vast
+  (~7h, co-tenant). **No checkpoint has CI_lo(WR@256) > CI_hi(WR@150)** — 150→256 drops or
+  flatlines everywhere (s120k .525→.350, s150k .575→.400, s175k .350→.250; only s200k
+  .450→.525, within noise); n512 no climb; depth-4 red-team matches depth-5 (bar-independent).
+  ⇒ keep n=150; 256 not worth the 1.7×. CONFIRMS the value-blindness is NOT a search-budget
+  artifact — more sims search deeper to the same mis-calibrated leaf values. Verdict
+  `reports/d_localize_p3/P3_VERDICT.md` (gitignored).
 
 ## Caveats
 1. `SealBot.extract_pv()` walks only the forced-mate PV (|score|≥~1e8); heuristic
