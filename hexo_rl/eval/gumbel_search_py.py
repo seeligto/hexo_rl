@@ -120,10 +120,19 @@ def run_gumbel_on_board(engine: LocalInferenceEngine, board: Board, *, n_sims: i
                         epsilon: float = 0.10, leaf_batch: int = 8,
                         virtual_loss: float = 1.0, fpu_reduction: float = 0.25,
                         quiescence_enabled: bool = True, quiescence_blend_2: float = 0.3,
+                        gumbel_scale: float = 1.0,
                         rng: Optional[np.random.Generator] = None) -> Dict:
     """Gumbel Sequential-Halving search (production-parity steering). Returns the
     completed-Q improved-policy TARGET (identical Rust fn), the SH-winner played move
-    (read C), the visit witness, and the v_mix-reliance witness (read D)."""
+    (read C), the visit witness, and the v_mix-reliance witness (read D).
+
+    ``gumbel_scale`` multiplies the Gumbel(0,1) root noise (mctx convention).
+    ``1.0`` = production self-play (training-time root exploration). ``0.0`` = the
+    canonical STRENGTH-EVAL head: the root noise is zeroed so candidate selection +
+    the SH winner are a DETERMINISTIC argmax over (log_prior + completed-Q sigma) — the
+    AGZ/mctx/LightZero deterministic deploy head. The interior PUCT descent and the
+    completed-Q SH math are byte-identical to self-play either way; only the +g_c root
+    term changes. D-LOCALIZE P4: the in-loop strength gate runs this at scale 0.0."""
     rng = rng if rng is not None else np.random.default_rng(0)
     tree = _make_tree(c_puct, virtual_loss, fpu_reduction, quiescence_enabled, quiescence_blend_2)
     tree.new_game(board)
@@ -145,8 +154,10 @@ def run_gumbel_on_board(engine: LocalInferenceEngine, board: Board, *, n_sims: i
     eff_m = min(int(m), int(n_sims), n_children)             # effective_m parity (inner.rs:757)
 
     # Gumbel(0,1) noise + log-prior → top-m candidates.
+    # gumbel_scale=0.0 (eval) zeroes the root noise → deterministic deploy head
+    # (mctx gumbel_scale=0): candidate select + SH winner = argmax(log_prior + sigma).
     u = rng.uniform(1e-10, 1.0 - 1e-7, size=n_children)
-    gumbels = -np.log(-np.log(u))
+    gumbels = float(gumbel_scale) * (-np.log(-np.log(u)))
     log_priors = np.log(np.maximum([c[2] for c in children], 1e-8))
     order = np.argsort(-(gumbels + log_priors))             # descending
     candidates = list(order[:eff_m])

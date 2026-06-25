@@ -380,6 +380,44 @@ def _run_best(ctx: _RunnerContext) -> None:
 # pipeline so the ``self.db.insert_match`` row order is unchanged.  Pinned
 # by ``tests/test_eval_opponent_runners.py::test_opponents_canonical_order``.
 
+def _run_deploy_strength(ctx: _RunnerContext) -> None:
+    # D-LOCALIZE P4 (TRACK B) — deploy-matched in-loop strength gate. Runs the DEPLOY
+    # head (Gumbel SH greedy, g=0, no temp, deploy sims) vs the rotating best anchor +
+    # a fixed-depth SealBot, with an adaptive screen->confirm and a distinct-game
+    # bootstrap BT-Elo gate (NO PUCT/temp/64-sim fallback — knobs are read from the run
+    # config and a missing knob hard-errors). DEFAULT OFF: variants opt in via
+    # opponents.deploy_strength.enabled. When it CONFIRMS, its bootstrap-CI promotion
+    # decision REPLACES the legacy wr_best+Wilson gate (eval_pipeline reads
+    # deploy_strength_* below). Appended last → no insert_match → BT row order unchanged.
+    pipeline = ctx.pipeline
+    cfg = pipeline.deploy_strength_cfg
+    if not (cfg.get("enabled", False) and ctx.should_run("deploy_strength", cfg)):
+        return
+    from hexo_rl.eval.deploy_strength_eval import DeployStrengthEvaluator
+
+    promotion_winrate = float(pipeline.gating_cfg.get("promotion_winrate", 0.55))
+    evaluator = DeployStrengthEvaluator(
+        ctx.evaluator.model, ctx.evaluator.device, ctx.evaluator.config,
+        deploy_cfg=cfg, promotion_winrate=promotion_winrate,
+    )
+    res = evaluator.run(ctx.best_model)
+    ctx.results["deploy_strength_wr_screen"] = res.wr_screen  # type: ignore[typeddict-unknown-key]
+    ctx.results["deploy_strength_confirmed"] = res.confirmed  # type: ignore[typeddict-unknown-key]
+    ctx.results["deploy_strength_promoted"] = res.promoted  # type: ignore[typeddict-unknown-key]
+    ctx.results["deploy_strength_reason"] = res.reason  # type: ignore[typeddict-unknown-key]
+    if res.wr_confirm is not None:
+        ctx.results["deploy_strength_wr_confirm"] = res.wr_confirm  # type: ignore[typeddict-unknown-key]
+    if res.elo_vs_best is not None:
+        ctx.results["deploy_strength_elo_vs_best"] = res.elo_vs_best  # type: ignore[typeddict-unknown-key]
+        ctx.results["deploy_strength_ci_boot"] = (res.ci_lo_boot, res.ci_hi_boot)  # type: ignore[typeddict-unknown-key]
+    if res.sealbot_wr is not None:
+        ctx.results["deploy_strength_sealbot_wr"] = res.sealbot_wr  # type: ignore[typeddict-unknown-key]
+    ctx.results["deploy_strength_copy_multiplier"] = res.copy_multiplier  # type: ignore[typeddict-unknown-key]
+    ctx.results["deploy_strength_distinct_per_pair_min"] = res.distinct_per_pair_min  # type: ignore[typeddict-unknown-key]
+    ctx.results["deploy_strength_head_fired_frac"] = res.head_fired_frac  # type: ignore[typeddict-unknown-key]
+    ctx.results["eval_games"] = ctx.results.get("eval_games", 0) + res.n_games
+
+
 def _run_offwindow_adversary(ctx: _RunnerContext) -> None:
     # D-EXPLOIT exploitability MONITOR — the off-window adversary's forced-win rate vs the
     # model's own MCTS (genuine resistance). A monitored TREND in ctx.results, NOT a BT
@@ -416,6 +454,10 @@ OPPONENTS: list[_OpponentSpec] = [
     # D-EXPLOIT Phase 3 — exploitability monitor, default-off, appended last (no
     # insert_match → does not perturb existing BT row order).
     _OpponentSpec("offwindow_adversary", _run_offwindow_adversary),
+    # D-LOCALIZE P4 (TRACK B) — deploy-matched strength gate, default-off, appended last
+    # (no insert_match → BT row order unchanged). When enabled+confirmed its bootstrap-CI
+    # decision REPLACES the legacy wr_best Wilson gate.
+    _OpponentSpec("deploy_strength", _run_deploy_strength),
 ]
 
 

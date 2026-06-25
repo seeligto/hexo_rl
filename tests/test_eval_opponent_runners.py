@@ -55,6 +55,9 @@ def test_opponents_canonical_order() -> None:
         # D-EXPLOIT Phase 3 — exploitability monitor, appended LAST (no insert_match,
         # so existing BT row order is preserved). Default-off.
         "offwindow_adversary",
+        # D-LOCALIZE P4 (TRACK B) — deploy-matched strength gate, appended LAST (no
+        # insert_match → existing BT row order preserved). Default-off.
+        "deploy_strength",
     ]
 
 

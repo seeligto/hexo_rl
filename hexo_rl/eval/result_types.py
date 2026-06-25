@@ -110,6 +110,21 @@ class EvalRoundResult(TypedDict, total=False):
     ci_best: tuple[float, float]
     colony_wins_best: int
 
+    # D-LOCALIZE P4 (TRACK B) — deploy-matched strength gate (Gumbel SH greedy g=0,
+    # no temp, deploy sims; adaptive screen->confirm; distinct-game bootstrap BT-Elo).
+    # When enabled+confirmed, deploy_strength_promoted REPLACES the wr_best Wilson gate.
+    deploy_strength_wr_screen: float
+    deploy_strength_wr_confirm: float
+    deploy_strength_confirmed: bool
+    deploy_strength_promoted: bool
+    deploy_strength_reason: str
+    deploy_strength_elo_vs_best: float
+    deploy_strength_ci_boot: tuple[float | None, float | None]
+    deploy_strength_sealbot_wr: float
+    deploy_strength_copy_multiplier: float
+    deploy_strength_distinct_per_pair_min: int | None
+    deploy_strength_head_fired_frac: float
+
     # Bradley-Terry ratings block
     ratings: dict[str, dict[str, object]]
     elo_estimate: float

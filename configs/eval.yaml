@@ -80,6 +80,44 @@ eval_pipeline:
       n_games: 100
       time_per_stone_ms: 500
       model_sims: 128
+    # D-LOCALIZE P4 (TRACK B) — deploy-matched in-loop strength gate. Replaces the
+    # §D-LADDER "triple miss" (PUCT visit-policy + eval_temperature=0.5 + model_sims=64
+    # — a head the model NEVER deploys) with the DEPLOY head: Gumbel Sequential-Halving
+    # GREEDY winner, Gumbel root noise g=0 (mctx gumbel_scale=0), NO temperature, deploy
+    # sims (n_sims_full / gumbel_m read FROM THE RUN CONFIG — a missing knob HARD-ERRORS,
+    # so the gate can never silently fall back to the proxy). External bar = fixed-depth
+    # SealBot (sealbot_max_depth, REPRODUCIBLE) — NOT wall-clock time_limit.
+    #
+    # DEFAULT OFF (single-variable: existing runs keep the legacy gate bitwise). When
+    # enabled+confirmed, its distinct-game bootstrap BT-Elo decision REPLACES the legacy
+    # wr_best+Wilson gate. Pair `enabled: true` with `best_checkpoint.enabled: true`
+    # (the deploy gate plays vs the rotating best anchor).
+    #
+    # ADAPTIVE SCREEN -> CONFIRM (the cost lever): each cadence plays `screen_n` games at
+    # deploy sims vs best; a full `confirm_n` confirm fires ONLY when the screen WR is
+    # promotion-ELIGIBLE (>= screen_confirm_lo). The clear-reject tail (WR < lo) skips the
+    # confirm (a confirm cannot rescue a checkpoint that cannot reach the bar). PRE-
+    # REGISTERED BAND (set BEFORE the adaptive logic; a post-hoc move = storytelling):
+    #   screen_confirm_lo = promotion_winrate − one screen Wilson half-width.
+    # At screen_n=80, p=0.5: half-width ≈ 1.96·sqrt(0.25/80) ≈ 0.110, so the default lo ≈
+    # 0.55 − 0.11 = 0.44. A TRUE candidate sitting exactly at the 0.55 bar whose screen
+    # point estimate scatters DOWN by up to a half-width is still ≥ lo → escalated. So the
+    # band CANNOT false-negative a true promotion candidate: every checkpoint whose screen
+    # WR could plausibly clear the bar is escalated to the full powered confirm; only
+    # clear non-candidates (screen WR a half-width below the bar) are dropped cheaply.
+    deploy_strength:
+      enabled: false
+      stride: 1
+      screen_n: 80            # cheap screen at deploy sims each cadence
+      confirm_n: 200          # full powered confirm (restores power; target < prior wall)
+      # screen_confirm_lo: 0.44   # default = promotion_winrate − screen Wilson half-width (auto)
+      screen_confirm_hi: 1.0  # escalate region is [lo, 1.0]: every eligible WR confirms
+      opening_plies: 4        # RNG-seeded opening diversity (distinct games for the
+                              # deterministic deploy regime; §D-ARGMAX effective-n)
+      sealbot_max_depth: 5    # fixed-depth REPRODUCIBLE external bar (drops time_limit=0.5)
+      n_boot: 1000            # distinct-game bootstrap replicates
+      min_distinct_per_pair: 10  # §D-ARGMAX analysis floor (low-power → block, untrusted CI)
+      seed_base: 20260625
   gating:
     promotion_winrate: 0.55
     best_model_path: checkpoints/best_model.pt

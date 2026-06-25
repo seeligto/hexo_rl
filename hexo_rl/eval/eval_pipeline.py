@@ -133,6 +133,12 @@ class EvalPipeline:
         self.nnue_cfg = opp.get("nnue", {})
         # D-EXPLOIT Phase 3 — off-window adversary exploitability monitor (default-off).
         self.offwindow_adversary_cfg = opp.get("offwindow_adversary", {})
+        # D-LOCALIZE P4 (TRACK B) — deploy-matched strength gate (default-off). Runs the
+        # DEPLOY head (Gumbel SH greedy, g=0, no temp, deploy sims) vs the best anchor +
+        # a fixed-depth SealBot with an adaptive screen->confirm and a distinct-game
+        # bootstrap BT-Elo gate. When enabled+confirmed it REPLACES the legacy wr_best
+        # Wilson gate (run_evaluation honours deploy_strength_promoted below).
+        self.deploy_strength_cfg = opp.get("deploy_strength", {})
 
         # D-EVALFOUND pre-flight (REVIEW lost-signal guard) — WARN LOUDLY at startup if no
         # Objective-A signal is active (SealBot-WR demoted + strength/robustness abort off +
@@ -180,6 +186,7 @@ class EvalPipeline:
             ("bootstrap_anchor", self.bootstrap_anchor_cfg),
             ("argmax_n", self.argmax_n_cfg),
             ("nnue", self.nnue_cfg),
+            ("deploy_strength", self.deploy_strength_cfg),
         ):
             if "stride" in opp_cfg:
                 s = opp_cfg["stride"]
@@ -383,6 +390,31 @@ class EvalPipeline:
             elif not floor_ok:
                 log.info("promotion_blocked_bootstrap_floor", step=train_step, wr_best=wr_best,
                          wr_bootstrap_anchor=wr_bootstrap_anchor, floor_threshold=floor_threshold)
+
+        # ── D-LOCALIZE P4 (TRACK B): deploy-matched strength gate OVERRIDE ──
+        # When the deploy_strength opponent ran AND escalated to a full confirm, its
+        # distinct-game bootstrap BT-Elo decision REPLACES the legacy wr_best+Wilson
+        # gate (the §D-LADDER triple-miss head). A confirmed run is authoritative for
+        # the strength axis; an un-escalated screen (clear non-candidate) blocks. The
+        # robustness/off-window axis below still AND-combines unchanged.
+        deploy_confirmed = bool(results.get("deploy_strength_confirmed", False))
+        deploy_enabled = bool(self.deploy_strength_cfg.get("enabled", False))
+        if deploy_enabled:
+            # FAIL-SAFE: once the deploy gate is enabled it is AUTHORITATIVE for the
+            # strength axis — the legacy wr_best+Wilson gate (the §D-LADDER triple-miss
+            # PUCT/temp/64-sim head) must NEVER silently re-decide. If the deploy runner
+            # crashed or stride-skipped this round (key absent), BLOCK rather than fall
+            # back to the proxy. A present `deploy_strength_promoted` is honoured verbatim.
+            wr_best_promoted = bool(results.get("deploy_strength_promoted", False))
+            if "deploy_strength_promoted" not in results:
+                log.warning("deploy_strength_missing_blocks", step=train_step,
+                            msg="deploy_strength enabled but produced no decision this "
+                                "round (crash/stride-skip) — blocking; no PUCT fallback")
+            else:
+                log.info("deploy_strength_gate", step=train_step,
+                         confirmed=deploy_confirmed,
+                         promoted=wr_best_promoted,
+                         reason=results.get("deploy_strength_reason"))
 
         # ── D-EVALFOUND conjunction (decisions 3+4): strength (fixed-reference
         # aggregate REPLACES wr_best when present) AND robustness (off-window gate
