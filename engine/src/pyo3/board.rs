@@ -16,6 +16,18 @@ use crate::board::{self, Board as RustBoard, Player, BOARD_SIZE};
 /// of each cluster window.
 type ClusterViewsOut = (Vec<Py<PyArray3<f32>>>, Vec<(i32, i32)>);
 
+/// Map a Python player id (1 = P1, -1 = P2) to the Rust `Player` enum.
+/// Used by the forcing-move primitive bindings. `ValueError` on any other value.
+fn player_from_i8(player: i8) -> PyResult<Player> {
+    match player {
+        1 => Ok(Player::One),
+        -1 => Ok(Player::Two),
+        other => Err(PyValueError::new_err(format!(
+            "player must be 1 (P1) or -1 (P2); got {other}"
+        ))),
+    }
+}
+
 /// A Hex Tac Toe board.
 ///
 /// Coordinate system: axial (q, r) with -9 ≤ q, r ≤ 9 for a 19×19 grid.
@@ -99,6 +111,52 @@ impl PyBoard {
     /// derivation in `mcts/backup.rs::expand_and_backup_single`.
     pub fn terminal_value_to_move(&self) -> f32 {
         self.inner.terminal_value_to_move()
+    }
+
+    // ── Forcing-move primitives (D-TACTICAL offline TSS/minimax oracle) ─────────
+    // Read-only queries over the tested Rust win-detection logic in
+    // `board/moves.rs`. Exposed for the offline tactical-search probe
+    // (reports/investigations/d_tactical_2026-06-26.md): a Python threat-space
+    // search / shallow MCTS-Solver minimax needs HeXO's OWN winning-move oracle
+    // (never SealBot's) to enumerate threats + defenses and prove forced losses.
+    // `player`: 1 = P1, -1 = P2 (matches `get`/`current_player`/`get_stones`).
+
+    /// Count empty legal cells that complete a 6-in-a-row for `player` (1 / -1).
+    /// `>= 3` ⇒ provably forced win next turn (opponent blocks at most 2/turn).
+    pub fn count_winning_moves(&self, player: i8) -> PyResult<u32> {
+        Ok(self.inner.count_winning_moves(player_from_i8(player)?))
+    }
+
+    /// All empty legal cells that complete a 6-in-a-row for `player`, sorted.
+    /// The threat/defense enumeration primitive: own-threats (player) and the
+    /// cells the opponent must block (call with the opponent's id).
+    pub fn winning_moves(&self, player: i8) -> PyResult<Vec<(i32, i32)>> {
+        Ok(self.inner.winning_moves(player_from_i8(player)?))
+    }
+
+    /// Lexicographically-first 6-completing cell for `player`, or None.
+    pub fn first_winning_move(&self, player: i8) -> PyResult<Option<(i32, i32)>> {
+        Ok(self.inner.first_winning_move(player_from_i8(player)?))
+    }
+
+    /// True if `player` has ≥ `min_len` consecutive stones along any hex axis.
+    pub fn has_player_long_run(&self, player: i8, min_len: usize) -> PyResult<bool> {
+        Ok(self.inner.has_player_long_run(player_from_i8(player)?, min_len))
+    }
+
+    /// Cells that, if `player` plays them, create ≥1 immediate winning move (an
+    /// open-4 → win-in-1) — the threat-creating move set for a threat-space search.
+    /// Computed in-engine so a Python caller pays ONE FFI hop, not a clone per cell.
+    pub fn threat_moves(&self, player: i8) -> PyResult<Vec<(i32, i32)>> {
+        Ok(self.inner.threat_moves(player_from_i8(player)?))
+    }
+
+    /// The immediate move for the SIDE TO MOVE that proves a within-turn forced
+    /// win, or None. depth≥1: a 6-completing move now; depth≥2 (only at
+    /// moves_remaining==2): a first placement that wins on the same turn's 2nd
+    /// stone. Reads turn-phase from moves_remaining (CF-1 discipline).
+    pub fn forced_win_move(&self, depth: u8) -> Option<(i32, i32)> {
+        self.inner.forced_win_move(depth)
     }
 
     /// List of all legal moves as list of (q, r) tuples.

@@ -326,6 +326,88 @@ impl Board {
         count
     }
 
+    /// All empty legal cells that complete a 6-in-a-row for `player`, sorted.
+    ///
+    /// The enumerating variant of `count_winning_moves` — same per-cell run
+    /// test, returns the cells (not just the count). The threat/defense
+    /// enumeration primitive for an offline threat-space search: the cells a
+    /// player can play to win NOW (own threats), and equivalently the cells the
+    /// opponent must occupy to deny them (defenses). Deterministic (sorted).
+    pub fn winning_moves(&self, player: Player) -> Vec<(i32, i32)> {
+        let cell = match player {
+            Player::One => Cell::P1,
+            Player::Two => Cell::P2,
+        };
+        let legal = self.legal_moves_set();
+        let mut wins: Vec<(i32, i32)> = Vec::new();
+        for &(q, r) in legal {
+            for &(dq, dr) in &HEX_AXES {
+                let run = 1
+                    + self.count_direction(q, r, dq, dr, cell)
+                    + self.count_direction(q, r, -dq, -dr, cell);
+                if run >= WIN_LENGTH {
+                    wins.push((q, r));
+                    break; // each cell at most once
+                }
+            }
+        }
+        wins.sort_unstable();
+        wins
+    }
+
+    /// Cells that, if `player` plays them, give `player` ≥1 immediate winning move
+    /// afterward — i.e. moves that CREATE a must-answer threat (an open-4 → win-in-1).
+    /// The threat-creating move set behind a threat-space search; lets the search
+    /// narrow branching to forcing moves and reach deep mates cheaply.
+    ///
+    /// Computed in-engine (a single scratch clone, mutate-probe per legal cell) so a
+    /// Python caller pays ONE FFI hop, not one clone per candidate. O(legal²) worst
+    /// case but gated to the legal set. Sorted/deterministic.
+    pub fn threat_moves(&self, player: Player) -> Vec<(i32, i32)> {
+        let pcell = match player {
+            Player::One => Cell::P1,
+            Player::Two => Cell::P2,
+        };
+        let mut legal: Vec<(i32, i32)> = self.legal_moves_set().iter().copied().collect();
+        legal.sort_unstable();
+        let mut out = Vec::new();
+        for &(cq, cr) in &legal {
+            // c is threat-creating iff some length-6 window THROUGH c has exactly 5
+            // player stones (counting c) + 1 empty — that empty is a NEW win-in-1 cell
+            // c just created. Requiring the window to contain c excludes pre-existing
+            // open-fives (those would not be new threats). Clone-free; O(legal·3·6·6).
+            let mut is_threat = false;
+            'axis: for &(dq, dr) in &HEX_AXES {
+                for s in -5..=0i32 {
+                    let mut pcount = 0;
+                    let mut empties = 0;
+                    let mut dead = false;
+                    for i in 0..6i32 {
+                        let (q, r) = (cq + (s + i) * dq, cr + (s + i) * dr);
+                        let occ = if (q, r) == (cq, cr) {
+                            Some(pcell)
+                        } else {
+                            self.cells.get(&(q, r)).copied()
+                        };
+                        match occ {
+                            Some(c) if c == pcell => pcount += 1,
+                            None => empties += 1,
+                            _ => { dead = true; break; } // opponent stone kills the window
+                        }
+                    }
+                    if !dead && pcount == 5 && empties == 1 {
+                        is_threat = true;
+                        break 'axis;
+                    }
+                }
+            }
+            if is_threat {
+                out.push((cq, cr));
+            }
+        }
+        out
+    }
+
     /// Returns the lexicographically-first empty legal cell that completes a
     /// 6-in-a-row for `player`, or `None`. Deterministic across `FxHashSet`
     /// iteration order (legal set is sorted). Mirrors `count_winning_moves`'s
