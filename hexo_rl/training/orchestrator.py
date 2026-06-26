@@ -213,6 +213,93 @@ def _resolve_fresh_in_channels(combined_config: dict) -> tuple[int, "list | None
     return in_channels_arg, input_channels_cfg
 
 
+# ── Resume config precedence (D-FULLSPEC E0) ─────────────────────────────────
+# Keys that MUST come from the CHECKPOINT on resume, never from the launch
+# variant. Everything else in ``combined_config`` is the operator's explicit
+# launch intent and WINS over the checkpoint-baked config.
+#
+# Pre-E0 the precedence was inverted: ``init_trainer`` built a tiny whitelist
+# (torch_compile[_mode], the four aux *_weight knobs, eta_min, scheduler_t_max,
+# total_steps, allow_fresh_scheduler, diagnostics) and the checkpoint config
+# WON for every other key (trainer_ckpt_load.load_checkpoint:333 does
+# ``config = dict(ckpt["config"])``). A resumed --variant therefore silently
+# dropped every runtime knob it did not whitelist — completed_q_values,
+# aux_chain_weight, ply_index_weight, per_class_target_temperature,
+# policy_prune_frac, entropy_reg_weight, grad_clip, value_distill_* — and
+# re-baked the reverted defaults of bot_batch_share / draw_value / ply_cap_value
+# into the next checkpoint, corrupting provenance and breaking later
+# resume-without-variant. This set inverts the precedence: the variant wins,
+# minus the small set below that the checkpoint owns by construction.
+RESUME_CHECKPOINT_OWNED_KEYS: frozenset = frozenset({
+    # Encoding pins — reconciled by _resolve_checkpoint_encoding /
+    # _propagate_encoding_into_config off the checkpoint's trained spec (read
+    # from fallback_config, NOT config_overrides). A resumed variant must not
+    # silently re-route plane geometry.
+    "encoding", "cluster_window_size", "cluster_threshold",
+    "legal_move_radius", "board_size",
+    # Model architecture — reconciled by _resolve_model_hparams, which RAISES
+    # on a config-vs-checkpoint-inferred disagreement. The trained shape is
+    # canonical; the variant cannot reshape a loaded model.
+    "in_channels", "input_channels", "res_blocks", "filters",
+    "se_reduction_ratio", "model",
+    # Optimizer / scheduler / step STATE — restored from the checkpoint's
+    # optimizer_state / scheduler_state / step blobs. The LR-anneal horizon
+    # keys (total_steps / scheduler_t_max) are gated back into the overrides
+    # ONLY under --override-scheduler-horizon, preserving the resume LR-anneal
+    # semantics that tests/test_scheduler_resume.py pins.
+    "total_steps", "scheduler_t_max", "eta_min", "min_lr",
+    "lr", "weight_decay", "lr_schedule",
+})
+
+
+def build_resume_config_overrides(
+    combined_config: dict,
+    *,
+    override_scheduler_horizon: bool = False,
+    allow_fresh_scheduler: bool = False,
+) -> dict:
+    """Build the resume ``config_overrides`` so the launch variant wins.
+
+    D-FULLSPEC E0 fix — inverts the pre-E0 resume precedence. Seeds the
+    overrides from the FULL ``combined_config`` minus
+    ``RESUME_CHECKPOINT_OWNED_KEYS`` (encoding/arch pins + optimizer/scheduler/
+    step state), so every runtime knob and provenance field carried by the
+    operator's --variant survives a checkpoint resume instead of reverting to
+    the checkpoint-baked value.
+
+    The ``--override-scheduler-horizon`` gate is preserved verbatim: the
+    scheduler-horizon keys re-enter the overrides (re-horizoning the LR
+    scheduler at load_checkpoint) ONLY when the flag is set. Without the flag
+    the checkpoint scheduler_state's T_max is restored untouched
+    (tests/test_scheduler_resume.py negative pin).
+
+    ``None``-valued launch keys are skipped so a stray null cannot nuke a real
+    checkpoint value.
+    """
+    overrides: dict = {
+        key: val
+        for key, val in combined_config.items()
+        if key not in RESUME_CHECKPOINT_OWNED_KEYS and val is not None
+    }
+    # torch_compile always travels with a concrete value (pre-E0 default path:
+    # a weights-only resume needs an explicit flag, not an absent key).
+    overrides["torch_compile"] = combined_config.get("torch_compile", False)
+    # §116: torch_compile_mode must travel alongside torch_compile on resume.
+    if combined_config.get("torch_compile_mode") is not None:
+        overrides["torch_compile_mode"] = combined_config["torch_compile_mode"]
+    # Scheduler-horizon gate: only --override-scheduler-horizon re-horizons the
+    # LR anneal. total_steps + scheduler_t_max enter the overrides together so
+    # the load_checkpoint re-horizon branch (scheduler_state['T_max']) fires.
+    if override_scheduler_horizon:
+        if combined_config.get("total_steps") is not None:
+            overrides["total_steps"] = int(combined_config["total_steps"])
+        if combined_config.get("scheduler_t_max") is not None:
+            overrides["scheduler_t_max"] = int(combined_config["scheduler_t_max"])
+    if allow_fresh_scheduler:
+        overrides["allow_fresh_scheduler"] = True
+    return overrides
+
+
 # ── Section 7: trainer init (resume vs fresh) ────────────────────────────────
 def init_trainer(
     args: argparse.Namespace,
@@ -233,27 +320,18 @@ def init_trainer(
     from hexo_rl.encoding import resolve_from_config as _registry_resolve
 
     if args.checkpoint:
-        config_overrides: dict = {"torch_compile": combined_config.get("torch_compile", False)}
-        # §116: torch_compile_mode must travel alongside torch_compile on resume.
-        # Without this, pre-§116 checkpoints resume at mode="default" regardless of
-        # configs/training.yaml's new reduce-overhead setting.
-        if combined_config.get("torch_compile_mode") is not None:
-            config_overrides["torch_compile_mode"] = combined_config["torch_compile_mode"]
-        for _key in (
-            "uncertainty_weight", "recency_weight", "ownership_weight", "threat_weight",
-            "eta_min", "scheduler_t_max",
-        ):
-            if combined_config.get(_key) is not None:
-                config_overrides[_key] = combined_config[_key]
-        if args.override_scheduler_horizon and combined_config.get("total_steps") is not None:
-            config_overrides["total_steps"] = int(combined_config["total_steps"])
-        if args.allow_fresh_scheduler:
-            config_overrides["allow_fresh_scheduler"] = True
-        # Perf-investigation: plumb diagnostics section so --config overrides
-        # the checkpoint-baked config for probe flags. Without this, probes
-        # cannot be enabled on a resumed run (checkpoint config wins by default).
-        if isinstance(combined_config.get("diagnostics"), dict):
-            config_overrides["diagnostics"] = combined_config["diagnostics"]
+        # D-FULLSPEC E0: invert the resume precedence — seed config_overrides
+        # from the full combined_config (variant = operator intent, wins over
+        # the checkpoint-baked config) minus the checkpoint-owned EXCLUDE-set.
+        # The diagnostics section, the four aux *_weight knobs, and every other
+        # runtime/provenance key now travel automatically (they are not in
+        # RESUME_CHECKPOINT_OWNED_KEYS); the --override-scheduler-horizon gate
+        # is preserved inside build_resume_config_overrides.
+        config_overrides = build_resume_config_overrides(
+            combined_config,
+            override_scheduler_horizon=bool(args.override_scheduler_horizon),
+            allow_fresh_scheduler=bool(args.allow_fresh_scheduler),
+        )
 
         trainer = Trainer.load_checkpoint(
             args.checkpoint,
