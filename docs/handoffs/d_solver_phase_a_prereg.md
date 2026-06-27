@@ -116,6 +116,47 @@ Runs 3 arms (baseline, backup_d5 matched-control, backup_d6 decisive), paired. R
 | FLAT | — | Short-band traps are not the dominant loss driver → re-scope (deeper backup test, or measure what fraction of SealBot losses ARE these traps) BEFORE any native build. Saves the weeks. |
 | INDETERMINATE | — | Too few overrides fired — raise `--n-games`, or the trap class is rarer in deploy play than the corpus suggested. |
 
+## RESULTS (vast RTX 5080, 2026-06-27, operator-run co-resident with longrun_c3)
+
+### A1 — LIFT (in-window tactical lever validated)
+`reports/d_solver_A1/run1/` (no off-window guard). baseline WR **0.470** → backup_d6 **0.635**;
+**paired delta +0.165, 95% CI [+0.110, +0.220], n_fired=39/200, P(>0)=1.000 → LIFT_IN_WINDOW.**
+Fired 526 proven wins (127 fired-and-won), 66 proven losses flagged, 16 colony-skips.
+
+**11 soundness violations** (false proofs) surfaced at n=200 — ALL off-window: their max|coord| =
+[9,9,11,11,12,12,13,14,14,14,15] (window edge = cheb 9), vs median 9 (in-window) for the 127 sound
+fired-and-won games. SealBot's single-window/pattern eval fabricates phantom mates off-window. These are
+backup LOSSES → they **drag the delta down**, so **+0.165 is a lower bound** on the clean in-window lift;
+the LIFT direction is unambiguous. FIX: `window_half` off-window proof guard (commit `1771a88`);
+**clean re-run `reports/d_solver_A1/run1_clean/` pending** (expect 0 violations, lift ≥ +0.165).
+
+### Off-window gate — the deploy head has a REAL hole (false-clear gate VALIDATED)
+`reports/d_solver_offwindow/` — same ckpt 272357, same adversary/seeds, three defender heads:
+
+| defender | off-window-forced | strict | verdict |
+|---|---|---|---|
+| kcluster (no-drop PUCT, sims 128) | **0.000** | 0.000 | DEFENDED |
+| modelplayer (capped/drop) | 0.335 ex / 0.0 ctrl | 0.17 | FORCEABLE |
+| **deploy (g=0 Gumbel-150)** | **0.335** | **0.165** | NOT defended |
+
+The g=0 deploy head behaves like the **capped** head, NOT the no-drop kcluster head — even though
+`v6_live2_ls` IS the no-drop encoding. The actual deployment regime does not exercise the off-window
+action space: a genuine **deploy-head off-window blind spot**. A1's in-window SealBot WR would have
+false-cleared this — the off-window gate is validated.
+
+### Convergence
+Both gates implicate the **off-window band**: the deploy net is blind there (off-window gate) AND SealBot
+cannot oracle there (the 11 false proofs). The interim SealBot backup is structurally an IN-WINDOW tool.
+→ Strong case for the Phase-B HeXO-native solver (infinite board, no flat-array OOB): it could fix the
+in-window traps AND extend off-window where SealBot can't go.
+
+### Decision
+- **In-window tactical lever: VALIDATED** (LIFT +0.165, robust) → build Phase B native solver.
+- **New orthogonal finding** (top follow-up): the g=0 deploy head is off-window-blind vs the kcluster PUCT
+  head — a deploy-regime defect worth its own investigation (why does Gumbel-150 g=0 not block off-window
+  threats PUCT-128 does? policy prior? Gumbel root candidate set? value head?).
+- **Phase-B requirement:** the native solver MUST be off-window-capable (SealBot isn't).
+
 ## Residual / caveats
 - Soundness check is game-level (a false proof in a game won by other means is invisible). The coord-OOB
   guard + draw-inclusive loss check remove the real false-proof channels; full per-turn proof
