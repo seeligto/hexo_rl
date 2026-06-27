@@ -154,6 +154,9 @@ class DeployHeadBot(BotProtocol):
             return legal[0]
         return (int(played[0]), int(played[1]))
 
+    def reset(self) -> None:
+        """Stateless (g=0 deterministic, RNG x0 at the root) — no per-game carry-over."""
+
     def name(self) -> str:
         return f"deploy_head({self._label},m{self._m},n{self._n_sims})"
 
