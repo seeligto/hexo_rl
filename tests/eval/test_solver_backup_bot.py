@@ -260,6 +260,30 @@ def test_two_stone_override_locks_turn_on_duplicate_second_stone():
     assert probe.calls == 1
 
 
+def test_offwindow_proven_move_not_overridden_when_window_half_set():
+    """SealBot's single-window eval is unreliable off-window (the 11 A1 false proofs were
+    all off-window) — its proof of an off-window MOVE must not be trusted."""
+    inner = _StubInner()
+    probe = _SpyProbe(result=[(15, 0)], last_score=1e8)  # proven win, move far off-window
+    bot = SolverBackupBot(inner, solver_probe=probe, window_half=9)
+    board = _FakeBoard(stones=[(0, 0, 1), (1, 0, -1), (0, 1, 1)])  # bbox center ~origin
+    move = bot.get_move(_FakeState(moves_remaining=1, centers=[0]), board)
+    assert move == _SENTINEL, "off-window proof untrusted -> delegate to the model"
+    assert bot.fired_win == 0
+    assert bot.skipped_offwindow == 1
+
+
+def test_inwindow_proven_move_still_overridden_with_window_half():
+    inner = _StubInner()
+    probe = _SpyProbe(result=[(3, 0)], last_score=1e8)  # in-window proven win
+    bot = SolverBackupBot(inner, solver_probe=probe, window_half=9)
+    board = _FakeBoard(stones=[(0, 0, 1), (1, 0, -1)])
+    move = bot.get_move(_FakeState(moves_remaining=1, centers=[0]), board)
+    assert move == (3, 0)
+    assert bot.fired_win == 1
+    assert bot.skipped_offwindow == 0
+
+
 def test_reset_forwards_to_inner_and_keeps_injected_probe():
     inner = _StubInner()
     probe = _SpyProbe(result=[(7, 7)], last_score=0.0)

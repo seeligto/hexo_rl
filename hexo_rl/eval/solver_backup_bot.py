@@ -75,6 +75,7 @@ class SolverBackupBot(BotProtocol):
         win_threshold: int = WIN_THRESHOLD,
         colony_max_clusters: int = 4,
         colony_max_coord: int = DEFAULT_COLONY_MAX_COORD,
+        window_half: Optional[int] = None,
         solver_probe: Optional[ProbeFn] = None,
     ) -> None:
         self._inner = inner
@@ -82,6 +83,11 @@ class SolverBackupBot(BotProtocol):
         self._thr = float(win_threshold)
         self._colony_max = colony_max_clusters
         self._colony_max_coord = colony_max_coord
+        # When set, SealBot proofs of an OFF-window move (cheb > window_half from the stone
+        # bbox center) are NOT trusted — SealBot's single-window/pattern eval is unreliable
+        # off-window (the source of all 11 D-SOLVER A1 false proofs, at coord 9-15). For
+        # v6_live2_ls the window half is 9. Restricts the backup to its sound in-window band.
+        self._window_half = window_half
         self._uses_default_probe = solver_probe is None
         self._probe: ProbeFn = solver_probe if solver_probe is not None else self._build_default_probe(depth)
         # 2-stone-turn state
@@ -91,6 +97,7 @@ class SolverBackupBot(BotProtocol):
         self.fired_win: int = 0
         self.fired_loss: int = 0
         self.skipped_colony: int = 0
+        self.skipped_offwindow: int = 0
         self.probes: int = 0
 
     def _build_default_probe(self, depth: int) -> ProbeFn:
@@ -137,9 +144,16 @@ class SolverBackupBot(BotProtocol):
         self.probes += 1
 
         if result and last_score >= self._thr:
+            s1 = (int(result[0][0]), int(result[0][1]))
+            # Off-window proofs are untrusted: SealBot's single-window eval mis-evaluates
+            # off-window, fabricating phantom mates (all 11 A1 false proofs were off-window).
+            if self._window_half is not None and stones and self._is_off_window(s1, stones):
+                self.skipped_offwindow += 1
+                if multi_stone:
+                    self._turn_is_net = True
+                return self._inner.get_move(state, board)
             # PROVEN WIN for the side-to-move — override the whole turn with the proof line.
             self.fired_win += 1
-            s1 = (int(result[0][0]), int(result[0][1]))
             if multi_stone:
                 # Lock the turn to the proof. Cache the proven 2nd stone only if it is a
                 # distinct LEGAL cell; otherwise lock the 2nd stone to the model rather than
@@ -160,6 +174,16 @@ class SolverBackupBot(BotProtocol):
         if multi_stone:
             self._turn_is_net = True
         return self._inner.get_move(state, board)
+
+    def _is_off_window(self, move: Move, stones: list) -> bool:
+        """True if ``move`` is off the single GLOBAL window — cheb-distance from the stone
+        bounding-box center (truncate toward zero) exceeds ``window_half``. Mirrors the
+        engine ``window_center``/``to_flat`` off-window test cheaply, encoding-free."""
+        qs = [q for q, _r, _p in stones]
+        rs = [r for _q, r, _p in stones]
+        cq = int((min(qs) + max(qs)) / 2)
+        cr = int((min(rs) + max(rs)) / 2)
+        return max(abs(move[0] - cq), abs(move[1] - cr)) > self._window_half
 
     def _skip_colony(self, state: Any, board: Any, multi_stone: bool) -> Move:
         self.skipped_colony += 1

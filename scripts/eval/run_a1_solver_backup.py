@@ -53,11 +53,11 @@ from hexo_rl.eval.deploy_strength_eval import (
 from hexo_rl.eval.solver_backup_bot import SolverBackupBot
 
 
-def _build_cand(arm: str, engine, knobs, backup_depth: int, seed: int):
+def _build_cand(arm: str, engine, knobs, backup_depth: int, seed: int, window_half):
     head = DeployHeadBot(engine, knobs, label=arm, seed=seed)
     if arm == "baseline":
         return head
-    return SolverBackupBot(head, depth=backup_depth)  # arm == backup_dN
+    return SolverBackupBot(head, depth=backup_depth, window_half=window_half)  # arm == backup_dN
 
 
 def _play_arm(
@@ -108,6 +108,9 @@ def main() -> None:
     ap.add_argument("--sealbot-depth", type=int, default=5, help="opponent SealBot fixed depth")
     ap.add_argument("--backup-depths", default="6",
                     help="comma list of backup probe depths; include the opponent depth for the matched control")
+    ap.add_argument("--window-half", type=int, default=9,
+                    help="off-window guard: SealBot proofs of moves >cheb this from the stone "
+                         "bbox center are untrusted (9 = v6_live2_ls window; 0/neg disables)")
     ap.add_argument("--opening-plies", type=int, default=4)
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--min-fired", type=int, default=10, help="power floor: n_fired below this = INDETERMINATE")
@@ -139,7 +142,8 @@ def main() -> None:
 
     for arm in arm_labels:
         depth = int(arm.split("_d")[1]) if arm != "baseline" else 0
-        cand = _build_cand(arm, engine, knobs, depth, seed=args.seed_base)  # same seed: g=0 deterministic
+        wh = args.window_half if args.window_half and args.window_half > 0 else None
+        cand = _build_cand(arm, engine, knobs, depth, seed=args.seed_base, window_half=wh)  # same seed: g=0 deterministic
         t0 = time.time()
         games = _play_arm(cand, arm, args.sealbot_depth, encoding, args.n_games,
                           args.opening_plies, args.seed_base)  # SAME seed_base => paired
@@ -155,7 +159,8 @@ def main() -> None:
         }
         if isinstance(cand, SolverBackupBot):
             res["backup"] = {"fired_win": cand.fired_win, "fired_loss": cand.fired_loss,
-                             "skipped_colony": cand.skipped_colony, "probes": cand.probes}
+                             "skipped_colony": cand.skipped_colony,
+                             "skipped_offwindow": cand.skipped_offwindow, "probes": cand.probes}
         arm_results[arm] = res
         games_by_arm[arm] = games
         all_games.extend(games)
