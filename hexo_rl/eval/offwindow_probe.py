@@ -71,8 +71,23 @@ def oneturn_win_cells(board: Any, side: int) -> list[tuple[int, int]]:
     return sorted(cells)
 
 
-def play_game(model_bot, adversary, board_enc, adv_side, spec, sims, max_plies, opening_plies, rng):
-    """One adversary-vs-model game. Returns a per-game record dict."""
+def play_game(model_bot, adversary, board_enc, adv_side, spec, sims, max_plies, opening_plies, rng,
+              adv_reference: str = "current"):
+    """One adversary-vs-model game. Returns a per-game record dict.
+
+    ``adv_reference`` selects the board the adversary's ``_is_off()`` classifies off-window
+    against (D-DECODE severity diagnostic, 2026-06-28, RESOLVED empirically on vast):
+      * ``"current"`` (DEFAULT, CORRECT) — the live board as the adversary builds. It INCLUDES
+        the adversary's own setup stones, so the centroid ≈ the model's upcoming block-decision
+        board ``B_def`` — the adversary aims at cells the model actually can't block. Effective:
+        single-window deploy forced 0.335, legal-set fix 0.0 (n=200).
+      * ``"snapshot"`` — ``model_last_snapshot`` (the board the model last DECIDED on). Was the
+        2026-06-27 "arm-aliasing fix", but it is BACKWARDS: at the adversary's threat-SETUP turn
+        that snapshot predates its own tendril, so it mis-aims the build and the off-window force
+        never materialises (both defenders 0.0 — a false negative). Retained only to reproduce
+        the diagnostic. The exploit==control CONTRAST collapse under "current" (centroid-shifting
+        defenders) is a known artifact; the ABSOLUTE off_window_forced rate is the load-bearing,
+        contrast-independent metric. The detector below is UNCHANGED either way."""
     board = Board.with_encoding_name(board_enc)
     state = GameState.from_board(board)
     model_bot.reset()
@@ -91,9 +106,10 @@ def play_game(model_bot, adversary, board_enc, adv_side, spec, sims, max_plies, 
         if ply < opening_plies:
             q, r = rng.choice(board.legal_moves())
         elif cp == adv_side:
-            # Pass model_last_snapshot so adversary._is_off() uses the same centroid
-            # as is_off_window(model_last_snapshot, ...) below — ARM-ALIASING fix.
-            if model_last_snapshot is not None:
+            # adv_reference: "snapshot" pins _is_off() to model_last_snapshot (detector-
+            # consistent); "current" leaves _is_off() on the live board (pre-fix, aims at
+            # cells off-window for the model's upcoming block). See play_game docstring.
+            if adv_reference == "snapshot" and model_last_snapshot is not None:
                 adversary.set_reference_board(model_last_snapshot)
             q, r = adversary.get_move(state, board)
         else:
