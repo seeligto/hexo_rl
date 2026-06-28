@@ -64,7 +64,15 @@ reference, `firm_block_positions.py` = the effective-n=50 firming).
 
 ---
 
-## Track 2 — Rust multi-window deploy port (READY-TO-BUILD)
+## Track 2 — Rust multi-window deploy port (✅ SHIPPED — commit 0338385)
+
+**STATUS:** built + validated. `MCTSTree.expand_and_backup_ls` (PyO3) + `infer_batch_per_cluster` +
+`run_gumbel_on_board(legal_set=…)` / `DeployHeadBot(legal_set=…)`. `legal_set` is **opt-in (default False)** —
+the live deploy gate stays single-window until flipped. n=50 oracle: single-window **0/50 at both 150 & 450 sims**
+(structural), offline reference **12/50 (0.24)**, production **Rust ls head 21/50 (0.42) ≥ floor** →
+`RUST_LS_REPRODUCES_FLOOR`. 44 touched-area tests pass; additive, no bench gate. **PENDING (vast):** complete the
+full-game `exploit_probe --defender deploy --legal_set` run (`off_window_forced → 0.0`) — the position-level
+structural gate (load-bearing) is already reproduced in production Rust.
 
 **Productionize the fix:** make the deploy Gumbel-SH head use the multi-window legal-set action space.
 **Verdict: SMALL-to-MEDIUM WIRING, ~1–2 days, ~90% reuse** — the Rust engine already has the no-drop machinery
@@ -87,7 +95,16 @@ quiescence/dynamic-FPU/virtual-loss.
 - **Open:** does the head need `get_improved_policy_ls` (only if it later feeds promotion-gate policy logging — not
   for the off-window proof). Center-order contract (recompute centers in Rust). Pin value min-pool in Rust.
 
-## Track 3 — native engine::tactics in-window-offense solver core (READY-TO-BUILD)
+## Track 3 — native engine::tactics in-window-offense solver core (🔨 FOUNDATION SHIPPED — commit 19bed8b)
+
+**STATUS:** foundation built (`engine/src/tactics/`, 944 LOC). Net-free AND-OR threat-space proof core (zero-clone
+descent, flip-aware negamax, engine-owned CF-1 sign only — value head never read), `is_off_window` in-window guard,
+`PyTacticalSolver.prove` binding (A1/ProbeFn-compatible). 6 tests pass incl. **soundness fuzz: 39 LOSS claims, all
+brute-confirmed, 0 false-LOSS**. mr==1 double-threat LOSS shortcut proven sound; mr==2 left to recursion. ADDITIVE +
+UNCALLED → bench-N/A, no hot-path touched. **DEFERRED (each its own focused effort):** the quiet-move alpha-beta
+body + threat-quiescence + PVS/LMR/aspiration/TT-aging/net-policy-ordering (the ~2M-NPS perf work past the 8%
+threat-only ceiling); A1 PAIRED validation tournament; deploy root hook (bench-gated); training-z corpus — all vast.
+**The not-in-check recursive-LOSS soundness surface needs a deeper adversarial audit before the training-z wiring.**
 
 A1-validated (+0.165 LIFT_IN_WINDOW). **Now simplified** by D-DECODE: in-window-offense-only + `finalize_game`
 z-correction — drop off-window capability.
