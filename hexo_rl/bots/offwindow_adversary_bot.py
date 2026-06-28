@@ -50,10 +50,36 @@ class OffWindowAdversaryBot(BotProtocol):
         self._n_actions = int(self._spec.policy_logit_count)
         self._axis = (int(axis[0]), int(axis[1]))
         self._rng = random.Random(seed)
+        # Reference board for off-window classification (model_last_snapshot).
+        # When set via set_reference_board(), _is_off uses this board's centroid
+        # instead of the current board — keeping _is_off consistent with the probe's
+        # is_off_window(model_last_snapshot, ...) measurement (ARM-ALIASING fix).
+        self._reference_board: Optional[object] = None
 
     # ── helpers ──────────────────────────────────────────────────────────────
+    def set_reference_board(self, board: object) -> None:
+        """Set the reference board for off-window classification.
+
+        ``play_game`` calls this with ``model_last_snapshot`` (the board BEFORE
+        the model's last move) so that ``_is_off`` uses the same centroid as the
+        probe's ``is_off_window(model_last_snapshot, ...)`` measurement.
+
+        Without this, ``_is_off`` uses the CURRENT board centroid (after the model
+        moved), which diverges from the probe whenever the model's stone shifts the
+        bbox centroid — collapsing exploit==control (ARM-ALIASING bug).
+        """
+        self._reference_board = board
+
     def _is_off(self, board: object, cell: Cell) -> bool:
-        return board.to_flat(int(cell[0]), int(cell[1])) >= self._n_actions  # type: ignore[attr-defined]
+        """True when ``cell`` is outside the NN policy window.
+
+        Uses ``_reference_board`` (model_last_snapshot) when set, falling back to
+        ``board`` (current board) otherwise.  The reference board keeps this check
+        consistent with the probe's ``is_off_window(model_last_snapshot, ...)``
+        classification — both use the centroid from BEFORE the model's last move.
+        """
+        ref = self._reference_board if self._reference_board is not None else board
+        return ref.to_flat(int(cell[0]), int(cell[1])) >= self._n_actions  # type: ignore[attr-defined]
 
     def _pick_win(self, board: object, wins: list[Cell]) -> Cell:
         """Deterministically pick a winning cell. ``get_threats`` order is not stable,
@@ -276,4 +302,4 @@ class OffWindowAdversaryBot(BotProtocol):
         return f"offwindow_adv_{self._arm}"
 
     def reset(self) -> None:
-        return
+        self._reference_board = None

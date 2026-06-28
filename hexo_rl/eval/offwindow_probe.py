@@ -91,6 +91,10 @@ def play_game(model_bot, adversary, board_enc, adv_side, spec, sims, max_plies, 
         if ply < opening_plies:
             q, r = rng.choice(board.legal_moves())
         elif cp == adv_side:
+            # Pass model_last_snapshot so adversary._is_off() uses the same centroid
+            # as is_off_window(model_last_snapshot, ...) below — ARM-ALIASING fix.
+            if model_last_snapshot is not None:
+                adversary.set_reference_board(model_last_snapshot)
             q, r = adversary.get_move(state, board)
         else:
             model_last_snapshot = board.clone()

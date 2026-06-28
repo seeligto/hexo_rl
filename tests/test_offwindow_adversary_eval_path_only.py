@@ -21,6 +21,7 @@ _ALLOWLIST = {
     "hexo_rl/bots/offwindow_adversary_bot.py",
     "hexo_rl/bots/offwindow_geom.py",
     "scripts/exploit_probe.py",
+    "scripts/forced_offwindow_test.py",
     # D-EXPLOIT Phase 3 — the in-pipeline exploitability eval opponent (eval-path only).
     "hexo_rl/eval/offwindow_probe.py",
     "hexo_rl/eval/evaluator.py",
@@ -29,7 +30,13 @@ _ALLOWLIST = {
     "tests/test_offwindow_adversary.py",
     "tests/test_offwindow_geom.py",
     "tests/test_offwindow_adversary_eval_path_only.py",
+    "tests/test_exploit_probe_arm_aliasing.py",
 }
+
+# Investigation probe sandbox — offline eval-path only (same category as
+# scripts/exploit_probe.py). Never imported by training/selfplay/engine hot paths;
+# the tighter test_training_and_selfplay_have_no_offwindow_adversary guard enforces that.
+_ALLOWLIST_PREFIXES = ("scripts/d_decode/",)
 
 _SCAN_DIRS = ("hexo_rl", "engine", "scripts")
 _EXCLUDE_PARTS = {"__pycache__", "vendor", ".git", "target", "node_modules"}
@@ -53,6 +60,8 @@ def test_offwindow_adversary_referenced_only_on_eval_path():
     for path in _iter_source_files():
         rel = path.relative_to(_REPO).as_posix()
         if rel in _ALLOWLIST:
+            continue
+        if any(rel.startswith(p) for p in _ALLOWLIST_PREFIXES):
             continue
         if _PATTERN.search(path.read_text(encoding="utf-8", errors="ignore")):
             offenders.append(rel)
