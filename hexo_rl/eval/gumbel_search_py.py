@@ -30,16 +30,33 @@ from hexo_rl.selfplay.inference import LocalInferenceEngine
 
 
 def _infer_and_expand(tree: MCTSTree, engine: LocalInferenceEngine,
-                      batch_size: int, n_sims: int) -> int:
-    """Drive n_sims through the tree via synchronous inference. Returns sims done."""
+                      batch_size: int, n_sims: int, legal_set: bool = False) -> int:
+    """Drive n_sims through the tree via synchronous inference. Returns sims done.
+
+    ``legal_set`` (§D-DECODE Track 2): when True, expand via the MULTI-WINDOW no-drop
+    legal-set action space (the action space the net trains under in self-play) instead
+    of the single-window dense head. Per-cluster RAW NN outputs are pooled in Rust
+    (``expand_and_backup_ls``: ``aggregate_policy_ls`` + value min-pool) so off-global-
+    window cells COVERED by a cluster get a child — the structural fix for the off-window
+    deploy hole. Spec scalars (stride / pass-slot / trunk) come from the engine's bound
+    ``EncodingSpec``; Rust cross-checks ``trunk == board.cluster_window_size()``."""
     done = 0
+    if legal_set:
+        spec = engine.encoding_spec
+        stride = int(spec.policy_logit_count)
+        pass_slot = bool(spec.has_pass_slot)
+        trunk = int(spec.cluster_window_size)
     while done < n_sims:
         batch = min(batch_size, n_sims - done)
         leaves = tree.select_leaves(batch)
         if not leaves:
             break
-        policies, values = engine.infer_batch(leaves)
-        tree.expand_and_backup(policies, values)
+        if legal_set:
+            policies, values, leaf_k = engine.infer_batch_per_cluster(leaves)
+            tree.expand_and_backup_ls(policies, values, leaf_k, stride, pass_slot, trunk)
+        else:
+            policies, values = engine.infer_batch(leaves)
+            tree.expand_and_backup(policies, values)
         done += len(leaves)
     return done
 
@@ -120,7 +137,7 @@ def run_gumbel_on_board(engine: LocalInferenceEngine, board: Board, *, n_sims: i
                         epsilon: float = 0.10, leaf_batch: int = 8,
                         virtual_loss: float = 1.0, fpu_reduction: float = 0.25,
                         quiescence_enabled: bool = True, quiescence_blend_2: float = 0.3,
-                        gumbel_scale: float = 1.0,
+                        gumbel_scale: float = 1.0, legal_set: bool = False,
                         rng: Optional[np.random.Generator] = None) -> Dict:
     """Gumbel Sequential-Halving search (production-parity steering). Returns the
     completed-Q improved-policy TARGET (identical Rust fn), the SH-winner played move
@@ -136,7 +153,7 @@ def run_gumbel_on_board(engine: LocalInferenceEngine, board: Board, *, n_sims: i
     rng = rng if rng is not None else np.random.default_rng(0)
     tree = _make_tree(c_puct, virtual_loss, fpu_reduction, quiescence_enabled, quiescence_blend_2)
     tree.new_game(board)
-    _infer_and_expand(tree, engine, batch_size=1, n_sims=1)   # expand root
+    _infer_and_expand(tree, engine, batch_size=1, n_sims=1, legal_set=legal_set)   # expand root
 
     if dirichlet and not _is_intermediate_ply(board):
         _apply_root_dirichlet(tree, alpha, epsilon, rng)   # BEFORE candidate select + target
@@ -193,7 +210,8 @@ def run_gumbel_on_board(engine: LocalInferenceEngine, board: Board, *, n_sims: i
                 break
             tree.forced_root_child = int(children[ci][1])
             done = _infer_and_expand(tree, engine, batch_size=leaf_batch,
-                                     n_sims=min(sims_per, budget - sims_used))
+                                     n_sims=min(sims_per, budget - sims_used),
+                                     legal_set=legal_set)
             sims_used += done
         tree.forced_root_child = None
 

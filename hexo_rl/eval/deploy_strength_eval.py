@@ -120,6 +120,7 @@ class DeployHeadBot(BotProtocol):
         knobs: Dict[str, Any],
         label: str,
         seed: int = 0,
+        legal_set: bool = False,
     ) -> None:
         self._engine = engine
         self._m = int(knobs["gumbel_m"])
@@ -128,6 +129,12 @@ class DeployHeadBot(BotProtocol):
         self._c_scale = float(knobs["c_scale"])
         self._c_puct = float(knobs["c_puct"])
         self._label = label
+        # §D-DECODE Track 2: when True, the deploy Gumbel-SH head expands over the
+        # MULTI-WINDOW no-drop legal-set action space (off-window saving cells get a
+        # child — the structural off-window-defense fix). Default False keeps the
+        # single-window dense head (the §D-DECODE 0/50 control + the live gate's
+        # existing behavior unchanged).
+        self._legal_set = bool(legal_set)
         # RNG threads through run_gumbel_on_board but is MULTIPLIED BY ZERO at the root
         # (gumbel_scale=0.0): the played move is deterministic regardless of seed. Kept
         # for signature parity / any future scale>0 diagnostic.
@@ -144,6 +151,7 @@ class DeployHeadBot(BotProtocol):
             c_puct=self._c_puct,
             dirichlet=False,
             gumbel_scale=EVAL_GUMBEL_SCALE,  # g=0 — deploy strength head
+            legal_set=self._legal_set,       # §D-DECODE Track 2 multi-window decode
             rng=self._rng,
         )
         played = out["played_move"]
@@ -158,7 +166,8 @@ class DeployHeadBot(BotProtocol):
         """Stateless (g=0 deterministic, RNG x0 at the root) — no per-game carry-over."""
 
     def name(self) -> str:
-        return f"deploy_head({self._label},m{self._m},n{self._n_sims})"
+        tag = ",ls" if self._legal_set else ""
+        return f"deploy_head({self._label},m{self._m},n{self._n_sims}{tag})"
 
 
 @dataclass(frozen=True)

@@ -137,3 +137,62 @@ class LocalInferenceEngine:
             results_v.append(v)
 
         return results_p, results_v
+
+    @torch.inference_mode()
+    def infer_batch_per_cluster(
+        self, boards: List[Board]
+    ) -> Tuple[List[List[float]], List[float], List[int]]:
+        """RAW per-cluster policy/value vectors for the Rust legal-set expand path.
+
+        §D-DECODE Track 2. Unlike ``infer_batch`` (which scatter-max collapses K
+        clusters into ONE dense global vector AND DROPS off-window moves where
+        ``mcts_idx >= n_actions-1``), this returns the per-cluster NN outputs RAW —
+        NO scatter-max, NO drop, NO min-pool. The Rust ``MCTSTree.expand_and_backup_ls``
+        does the legal-set aggregation (``aggregate_policy_ls`` + value min-pool) so the
+        deploy head pools BYTE-IDENTICALLY to the self-play worker
+        (``worker_loop/inner.rs::infer_and_expand``), retaining off-window cells covered
+        by some cluster.
+
+        Center order: ``GameState.from_board`` reads ``rust_board.get_cluster_views()``,
+        and the Rust ``expand_and_backup_ls`` RECOMPUTES centers from the same call on
+        the pending board — so the per-cluster rows align by construction. Rust asserts
+        ``sum(leaf_k) == len(policies)`` and per-leaf ``K`` agreement.
+
+        Returns:
+            policies: FLAT list of per-cluster prob vectors (length
+                      ``spec.policy_logit_count`` each, ``exp(log_policy)``), in
+                      leaf-major then ``get_cluster_views()`` cluster order; total length
+                      == ``sum(leaf_k)``.
+            values:   FLAT list of per-cluster scalar values, same order.
+            leaf_k:   ``K`` (cluster count) per board, order aligned with ``boards``.
+        """
+        if not boards:
+            return [], [], []
+
+        spec = self.encoding_spec
+
+        all_tensors = []
+        leaf_k: List[int] = []
+        for board in boards:
+            state = GameState.from_board(board)
+            tensor, centers = state.to_tensor()
+            if tensor.shape[1] != self.model.in_channels:
+                tensor = tensor[:, list(spec.kept_plane_indices)]
+            all_tensors.append(torch.from_numpy(tensor))
+            leaf_k.append(len(centers))
+
+        batch_tensor = torch.cat(all_tensors, dim=0).to(self.device)
+
+        self.model.eval()
+        with torch.amp.autocast(
+            device_type=self.device.type,
+            enabled=(self.device.type in ("cuda", "mps")),
+        ):
+            log_policy, value, _v_logit = self.model(batch_tensor.float())
+
+        policies_np = log_policy.exp().cpu().float().numpy()   # (TotalK, n_actions)
+        values_np = value.squeeze(-1).cpu().float().numpy()    # (TotalK,)
+
+        policies = [policies_np[i].tolist() for i in range(policies_np.shape[0])]
+        values = [float(v) for v in values_np]
+        return policies, values, leaf_k

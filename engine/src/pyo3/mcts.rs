@@ -5,9 +5,11 @@
 //! file-level doc comment, and the `register()` registration helper are new.
 
 use pyo3::prelude::*;
+use pyo3::exceptions::PyValueError;
 use numpy::{IntoPyArray, PyArray1};
 
 use crate::board::{self, BOARD_SIZE};
+use crate::game_runner::records;
 use crate::mcts::MCTSTree;
 use crate::pyo3::board::PyBoard;
 
@@ -111,6 +113,112 @@ impl PyMCTSTree {
         values: Vec<f32>,
     ) -> PyResult<()> {
         py.detach(|| self.inner.expand_and_backup(&policies, &values));
+        Ok(())
+    }
+
+    /// §D-DECODE Track 2 — legal-set (multi-window no-drop) counterpart of
+    /// `expand_and_backup`. Productionizes the off-window decoding fix: the
+    /// deploy Gumbel-SH head expands children over the FULL legal set (off-global-
+    /// window cells COVERED by a cluster get a child), the action space the net
+    /// already trains under in self-play.
+    ///
+    /// Mirrors the self-play worker aggregation EXACTLY
+    /// (`game_runner/worker_loop/inner.rs::infer_and_expand` L650-701): for each
+    /// pending leaf, slice its `K` RAW per-cluster prob vectors + values,
+    /// **recompute the cluster centers in Rust** via `get_cluster_views()` (the
+    /// self-play center-order contract — never trust a Python-supplied order),
+    /// **min-pool the values** (parity with selfplay `min_v`), build the ragged
+    /// `LegalSetPolicy` via `records::aggregate_policy_ls`, then expand+backup via
+    /// the inner `expand_and_backup_ls`. `aggregate_policy_ls` /
+    /// `expand_and_backup_ls` (inner) / `pick_topk_children_ls` are REUSED
+    /// UNCHANGED.
+    ///
+    /// Args:
+    ///     policies: FLAT list of per-cluster prob vectors (one per cluster, each
+    ///               length `policy_stride`, = exp(log_policy); NO scatter-max, NO
+    ///               drop, NO min-pool — Rust pools). Total len == sum(leaf_k).
+    ///     values:   FLAT list of per-cluster scalar values, same leaf-major order.
+    ///     leaf_k:   `K` (cluster count) per leaf; order aligned with the boards
+    ///               returned by the preceding `select_leaves` (== pending order).
+    ///     policy_stride:  action-space size (= encoding `policy_logit_count`).
+    ///     has_pass_slot:  whether the last slot is the (dead) pass slot.
+    ///     trunk_sz:       cluster window side length; cross-checked against each
+    ///                     leaf board's `cluster_window_size()`.
+    #[pyo3(signature = (policies, values, leaf_k, policy_stride, has_pass_slot, trunk_sz))]
+    pub fn expand_and_backup_ls(
+        &mut self,
+        py: Python<'_>,
+        policies: Vec<Vec<f32>>,
+        values: Vec<f32>,
+        leaf_k: Vec<usize>,
+        policy_stride: usize,
+        has_pass_slot: bool,
+        trunk_sz: i32,
+    ) -> PyResult<()> {
+        // K alignment: the flat per-cluster policy/value counts must equal sum(K).
+        let total_k: usize = leaf_k.iter().sum();
+        if total_k != policies.len() || total_k != values.len() {
+            return Err(PyValueError::new_err(format!(
+                "expand_and_backup_ls: K misalignment sum(leaf_k)={total_k} \
+                 policies={} values={}",
+                policies.len(),
+                values.len()
+            )));
+        }
+        if self.inner.pending.len() != leaf_k.len() {
+            return Err(PyValueError::new_err(format!(
+                "expand_and_backup_ls: pending leaves {} != leaf_k {}",
+                self.inner.pending.len(),
+                leaf_k.len()
+            )));
+        }
+
+        // Build the ragged ls priors + min-pooled values from an IMMUTABLE read of
+        // pending (centers RECOMPUTED in Rust — the self-play center-order contract).
+        let mut ls_vec: Vec<records::LegalSetPolicy> = Vec::with_capacity(leaf_k.len());
+        let mut min_vals: Vec<f32> = Vec::with_capacity(leaf_k.len());
+        {
+            let mut curr = 0usize;
+            for (i, (_leaf_idx, board)) in self.inner.pending.iter().enumerate() {
+                let k = leaf_k[i];
+                let (_views, centers) = board.get_cluster_views();
+                if centers.len() != k {
+                    return Err(PyValueError::new_err(format!(
+                        "expand_and_backup_ls leaf {i}: Rust K={} != Python leaf_k={k} \
+                         (get_cluster_views center-order contract violated)",
+                        centers.len()
+                    )));
+                }
+                if board.cluster_window_size() as i32 != trunk_sz {
+                    return Err(PyValueError::new_err(format!(
+                        "expand_and_backup_ls leaf {i}: trunk_sz={trunk_sz} != \
+                         board.cluster_window_size()={}",
+                        board.cluster_window_size()
+                    )));
+                }
+                let leaf_policies = &policies[curr..curr + k];
+                let leaf_values = &values[curr..curr + k];
+                // min-pool values (selfplay parity: worst window = leaf value).
+                let mut min_v = leaf_values[0];
+                for &v in leaf_values {
+                    if v < min_v {
+                        min_v = v;
+                    }
+                }
+                ls_vec.push(records::aggregate_policy_ls(
+                    policy_stride,
+                    has_pass_slot,
+                    trunk_sz,
+                    board,
+                    &centers,
+                    leaf_policies,
+                ));
+                min_vals.push(min_v);
+                curr += k;
+            }
+        }
+
+        py.detach(|| self.inner.expand_and_backup_ls(&ls_vec, &min_vals));
         Ok(())
     }
 
