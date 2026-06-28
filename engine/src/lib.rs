@@ -24,6 +24,10 @@ pub mod mcts;
 /// (44+ compile errors confirmed when the leading `::` is omitted).
 pub mod pyo3;
 pub mod replay_buffer;
+/// `engine::tactics` — native in-window-offense tactical proof solver
+/// (D-DECODE Track 3 FOUNDATION). Additive; the proof core is NET-FREE
+/// (value head never read inside the search) — see `tactics/mod.rs`.
+pub mod tactics;
 
 use ::pyo3::prelude::*;
 
@@ -37,6 +41,7 @@ fn engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     crate::pyo3::board::register(m)?;
     crate::pyo3::encoding::register(m)?;
     crate::pyo3::mcts::register(m)?;
+    crate::pyo3::tactics::register(m)?;
     crate::pyo3::utils::register(m)?;
     m.add_class::<crate::inference_bridge::InferenceBatcher>()?;
     m.add_class::<crate::game_runner::SelfPlayRunnerConfig>()?;

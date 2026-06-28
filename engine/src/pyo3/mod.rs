@@ -7,4 +7,5 @@
 pub mod board;
 pub mod encoding;
 pub mod mcts;
+pub mod tactics;
 pub mod utils;
