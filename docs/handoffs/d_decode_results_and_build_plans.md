@@ -70,9 +70,13 @@ reference, `firm_block_positions.py` = the effective-n=50 firming).
 `run_gumbel_on_board(legal_set=…)` / `DeployHeadBot(legal_set=…)`. `legal_set` is **opt-in (default False)** —
 the live deploy gate stays single-window until flipped. n=50 oracle: single-window **0/50 at both 150 & 450 sims**
 (structural), offline reference **12/50 (0.24)**, production **Rust ls head 21/50 (0.42) ≥ floor** →
-`RUST_LS_REPRODUCES_FLOOR`. 44 touched-area tests pass; additive, no bench gate. **PENDING (vast):** complete the
-full-game `exploit_probe --defender deploy --legal_set` run (`off_window_forced → 0.0`) — the position-level
-structural gate (load-bearing) is already reproduced in production Rust.
+`RUST_LS_REPRODUCES_FLOOR`. 44 touched-area tests pass; additive, no bench gate.
+
+**FULL-GAME DEFENSE CONFIRMED (vast 2×2, n=200, commit d5223c7):** single-window deploy forced **0.335**,
+legal-set fix **0.0**. (A first run read 0/200 both arms because the 2026-06-27 arm-aliasing "fix" mis-aimed the
+adversary — `model_last_snapshot` is right for the *detector* but wrong for the adversary's *targeting* at its
+setup turn; reverted to the correct `current` reference via `exploit_probe --adv-ref`. The off-window hole is real
+and the decode fix defends it end-to-end.)
 
 **Productionize the fix:** make the deploy Gumbel-SH head use the multi-window legal-set action space.
 **Verdict: SMALL-to-MEDIUM WIRING, ~1–2 days, ~90% reuse** — the Rust engine already has the no-drop machinery
