@@ -900,7 +900,18 @@ mod tests {
     /// oracle. Definitive contradictions:
     ///   solver LOSS  but brute WIN  => FALSE LOSS (a real defender escape exists)
     ///   solver WIN   but brute LOSS => FALSE WIN
+    ///
+    /// EXHAUSTIVE / SLOW (`#[ignore]`): the not-in-check verify is a full-width
+    /// expansion (no alpha-beta yet — the perf layer is deferred), so the 96
+    /// budget-1.5M solves run for minutes (≈2.4 h on the dev laptop, ~145 min on
+    /// the vast 5080). This is the on-demand deep soundness sweep — it is the test
+    /// that actually exercises a not-in-check ROOT LOSS certified by the verify
+    /// (the surface the fast in-check truncation tests cover only by code-path).
+    /// Run before promotion / on the perf box:
+    ///   `cargo test --lib tactics::search::tests::redteam_verify_grid_no_false_proof -- --ignored`
+    /// VERIFIED 0 false proofs on the vast 5080, 2026-06-29 (19/19, this sweep incl).
     #[test]
+    #[ignore = "exhaustive full-width verify sweep — minutes; run on-demand (--ignored)"]
     fn redteam_verify_grid_no_false_proof() {
         let mut loss_claims = 0usize;
         let mut win_claims = 0usize;
@@ -966,7 +977,12 @@ mod tests {
     /// brute is exhaustive-cheap), VERIFY config with a truncating cand_cap. Every
     /// LOSS cross-checked against brute; a brute WIN refutes. Bidirectional (WIN
     /// claims checked too). The not-in-check counter proves the attack surface ran.
+    ///
+    /// EXHAUSTIVE / SLOW (`#[ignore]`): 250 verify-config solves + per-claim brute.
+    /// On-demand companion to the grid sweep. VERIFIED 0 false proofs on vast 5080,
+    /// 2026-06-29. Run: `... redteam_verify_random_compact_no_false_proof -- --ignored`.
     #[test]
+    #[ignore = "exhaustive random verify sweep — run on-demand (--ignored)"]
     fn redteam_verify_random_compact_no_false_proof() {
         let mut rng = Lcg(0xBADC_0FFE_E0DD_F00D);
         let s = super::super::TacticalSolver::new(TacticalConfig {

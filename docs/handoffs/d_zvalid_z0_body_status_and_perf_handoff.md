@@ -190,5 +190,18 @@ Close this when the perf layer makes a deeper fixture affordable.
 `verify_recovers_truncated_win`, `verify_certifies_truncated_loss`,
 `verify_path_is_sound_over_grid`, `off_window_completing_stone_suppressed`
 (red-team §D-COHERENCE fix), `spread_multicluster_no_false_proof` (red-team
-immunity, measured). Run: `cd engine && cargo test --lib tactics:: -j4`
-(~13 s debug; dev-laptop thermal-safe, no release/LTO).
+immunity, measured), `redteam_flip_sign_two_stone_win_realized`,
+`redteam_budget_exhaustion_no_false_proof`. Default run:
+`cd engine && cargo test --lib tactics:: -j4` (17 tests, ~13 s debug,
+dev-laptop thermal-safe, no release/LTO).
+
+**On-demand exhaustive soundness sweeps** (`#[ignore]`, the not-in-check verify is
+full-width so they run for minutes): `redteam_verify_grid_no_false_proof` (the
+sweep that actually certifies a not-in-check ROOT LOSS via the verify — closes the
+review's test gap) and `redteam_verify_random_compact_no_false_proof`. Run before
+promotion / on the perf box: `cargo test --lib tactics:: -- --ignored`.
+
+**Verified on the vast RTX 5080 (2026-06-29): 19/19 green including both exhaustive
+sweeps — 0 false proofs** (isolated git worktree, branch `phase4.5/d-solver`). The
+dev laptop thermal-throttles under the parallel test load, so the full suite incl.
+sweeps is a vast/perf-box run; the laptop runs the fast 17 cleanly.
