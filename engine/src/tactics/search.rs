@@ -13,6 +13,8 @@
 //! wins/losses (mate-in-≤2-turns band); a position whose only escape/win is a
 //! quiet developmental move returns UNKNOWN (never a false proof).
 
+use fxhash::FxHashSet;
+
 use crate::board::Board;
 
 use super::ordering::candidates;
@@ -101,13 +103,20 @@ pub(crate) fn solve(
     // (5) Threat-guided candidate set (the narrow branching that reaches deep
     //     forcing mates cheaply). DEFERRED: net-policy ordering / killers /
     //     history (`ordering.rs`).
-    let moves = candidates(board, stm, opp, cfg.cand_cap);
+    // `in_check` (opp threatens an immediate win) is the prune-symmetry premise of
+    // the LOSS conclusion below — captured at the node state, before descent.
+    let in_check = board.count_winning_moves(opp) >= 1;
+    let moves = candidates(board, stm, opp, cfg.cand_cap, cfg.neighbor_dist);
     if moves.is_empty() {
         return Solved::unknown(); // no live threats => quiet => cannot prove
     }
+    let moves_len = moves.len();
+    // Remember the reduced set so the recall verify (below) searches only the
+    // DROPPED legal moves, not the ones already explored.
+    let searched: FxHashSet<(i32, i32)> = moves.iter().copied().collect();
 
     let mut saw_unknown = false;
-    for (q, r) in moves {
+    for &(q, r) in &moves {
         let node_player = board.current_player; // == stm
         let diff = match board.apply_move_tracked(q, r) {
             Ok(d) => d,
@@ -141,11 +150,75 @@ pub(crate) fn solve(
 
     // All candidates explored: any UNKNOWN => unresolved; else every move loses.
     if saw_unknown {
-        Solved::unknown()
-    } else {
-        tt.insert(key, Outcome::Loss); // proven, game-theoretic — cache it
-        Solved { outcome: Outcome::Loss, line: Vec::new() }
+        return Solved::unknown();
     }
+
+    // R3 LOSS-COMPLETENESS GUARD (load-bearing for sound z-LOSS labels).
+    // "Every CANDIDATE loses" only proves "every LEGAL move loses" when the
+    // candidate set provably covered all escapes:
+    //   - `in_check && moves_len < cand_cap`: opp threatens an immediate win, so a
+    //     non-block/non-counter loses to the standing threat (prune symmetry) —
+    //     valid ONLY if the set was not truncated (the dropped tail could hold a
+    //     saving block or a faster counter-win; see the truncation test). The
+    //     `< cand_cap` boundary is deliberately PESSIMISTIC: a set whose natural
+    //     (untruncated) size happens to equal cand_cap is treated as truncated, so
+    //     a real LOSS there is reported UNKNOWN — a recall false-negative, never a
+    //     soundness violation. Do NOT relax to `<=` (that reintroduces the hole).
+    //   - `moves_len >= legal_move_count()`: the candidate set IS the full legal
+    //     set, so exhaustiveness is trivial (covers not-in-check positions and the
+    //     quiet-move body, where prune symmetry does NOT hold).
+    // Otherwise the set is incomplete and a LOSS would be unsound -> UNKNOWN
+    // (conservative-safe). The recall-preserving full-legal verify of the dropped
+    // moves is the Track-3 quiet-move body's job and lands WITH it; until then a
+    // not-in-check / truncated forced loss is reported UNKNOWN, never a false LOSS.
+    let loss_complete =
+        (in_check && moves_len < cfg.cand_cap) || moves_len >= board.legal_move_count();
+    if loss_complete {
+        tt.insert(key, Outcome::Loss); // proven, game-theoretic — cache it
+        return Solved { outcome: Outcome::Loss, line: Vec::new() };
+    }
+
+    // RECALL-PRESERVING VERIFY (quiet-move body, `neighbor_dist` set). The reduced
+    // candidate set drove the search for good ordering + early WIN cutoffs, but it
+    // is too narrow to CERTIFY a LOSS (a dropped quiet move could escape). Search
+    // the dropped legal moves now: any WIN is an escape (return it — the position
+    // is a WIN the reduced set missed); any UNKNOWN leaves it unresolved; only when
+    // EVERY dropped move also loses is the LOSS certified (sound, full recall). The
+    // reduced ordering already cut off the common winning/unresolved cases, so this
+    // full expansion runs only on genuinely-lost nodes. Budget-bounded via tick().
+    // Without `neighbor_dist` (threat-only deploy mode) stay conservative -> UNKNOWN.
+    if cfg.neighbor_dist.is_some() {
+        for (q, r) in board.legal_moves() {
+            if searched.contains(&(q, r)) {
+                continue;
+            }
+            let node_player = board.current_player;
+            let diff = match board.apply_move_tracked(q, r) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let child = solve(board, depth_left - 1, budget, cfg, tt);
+            let flipped = board.current_player != node_player;
+            let rc = if flipped { child.outcome.negate() } else { child.outcome };
+            if rc == Outcome::Win {
+                let mut line = vec![(q, r)];
+                if !flipped {
+                    line.extend(child.line.iter().copied());
+                }
+                board.undo_move(diff);
+                return Solved { outcome: Outcome::Win, line };
+            }
+            board.undo_move(diff);
+            if rc == Outcome::Unknown {
+                return Solved::unknown();
+            }
+        }
+        // Every reduced candidate AND every dropped legal move loses => certified.
+        tt.insert(key, Outcome::Loss);
+        return Solved { outcome: Outcome::Loss, line: Vec::new() };
+    }
+
+    Solved::unknown() // candidate set incomplete, verify disabled -> cannot prove LOSS
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -160,7 +233,7 @@ mod tests {
     fn solver() -> super::super::TacticalSolver {
         // window_half=None for the core proof tests (offense-guard tested
         // separately); cand_cap matches solver.py.
-        super::super::TacticalSolver::new(TacticalConfig { cand_cap: 40, window_half: None })
+        super::super::TacticalSolver::new(TacticalConfig { cand_cap: 40, window_half: None, neighbor_dist: None })
     }
 
     // ── Independent exhaustive oracle (port of solver.py::_brute_solve) ─────────
@@ -275,6 +348,29 @@ mod tests {
     fn compact_double_threat(off_q: i32, off_r: i32, vertical: bool) -> Board {
         let mut stones: Vec<((i32, i32), Cell)> = Vec::new();
         for i in 0..5i32 {
+            if vertical {
+                stones.push(((off_q, off_r + i), Cell::P2));
+                stones.push(((off_q + 2, off_r + i), Cell::P2));
+            } else {
+                stones.push(((off_q + i, off_r), Cell::P2));
+                stones.push(((off_q + i, off_r + 2), Cell::P2));
+            }
+        }
+        let mut b = static_board(&stones, Player::One, 2);
+        b.set_legal_move_radius(2);
+        b
+    }
+
+    /// NOT-IN-CHECK tactical position: two parallel P2 open-FOURS (length-4 runs,
+    /// not 5) -> P2 has `threat_moves` (a 5th stone makes a win-in-1) but NO
+    /// `winning_moves` yet, so P1 (to move, mr=2) is NOT in check. This is the
+    /// not-in-check analogue of `compact_double_threat` and the surface the R3
+    /// guard protects: the prune-symmetry premise (`in_check`) is FALSE here, so a
+    /// LOSS may only be concluded when the candidate set is the full legal set.
+    /// Radius 2 keeps the brute oracle cheap.
+    fn compact_double_open_four(off_q: i32, off_r: i32, vertical: bool) -> Board {
+        let mut stones: Vec<((i32, i32), Cell)> = Vec::new();
+        for i in 0..4i32 {
             if vertical {
                 stones.push(((off_q, off_r + i), Cell::P2));
                 stones.push(((off_q + 2, off_r + i), Cell::P2));
@@ -411,9 +507,18 @@ mod tests {
         //   (B) constructed compact double-threats — guarantee real LOSS claims.
         // Assert 0 false-LOSS AND that the fuzz is non-vacuous (claims > 0).
         let mut rng = Lcg(0x0D_D5_01_5E_12_34_56_78);
+        // Stream (C) below adds NOT-IN-CHECK open-four doubles: the surface the R3
+        // guard protects (no prune symmetry). NOTE this `solver()` is threat-only
+        // (neighbor_dist=None), so the recall VERIFY is disabled and a not-in-check
+        // position falls through to UNKNOWN — i.e. stream C exercises the
+        // not-in-check candidate-generation SURFACE (asserting nic_checked > 0) and
+        // cross-checks any LOSS it does claim, but it does NOT exercise a
+        // verify-certified not-in-check LOSS. The verify path is covered separately
+        // by the `verify_*` tests (which force it via cand_cap=1 truncation).
         let s = solver();
         let mut checked = 0usize;
         let mut bad = 0usize;
+        let mut nic_checked = 0usize;
 
         let cross_check = |bd: &Board| -> (bool, bool) {
             // returns (claimed_loss, refuted_by_brute)
@@ -469,9 +574,35 @@ mod tests {
             }
         }
 
+        // (C) constructed NOT-IN-CHECK open-four doubles. Each is a genuine
+        //     not-in-check input (opp has no win-in-1); any LOSS claim is
+        //     cross-checked, and the count proves the not-in-check surface ran.
+        for off_q in -8..=4i32 {
+            for &(off_r, vert) in &[(0, false), (3, true), (-2, false)] {
+                let bd = compact_double_open_four(off_q, off_r, vert);
+                assert_eq!(
+                    bd.count_winning_moves(Player::Two),
+                    0,
+                    "stream C must be NOT-IN-CHECK (no P2 win-in-1), case {:?}",
+                    (off_q, off_r, vert)
+                );
+                nic_checked += 1;
+                let (claimed, refuted) = cross_check(&bd);
+                if claimed {
+                    checked += 1;
+                    if refuted {
+                        bad += 1;
+                    }
+                }
+            }
+        }
+
         assert_eq!(bad, 0, "SOUNDNESS: {bad}/{checked} LOSS claims refuted by exhaustive oracle");
         assert!(checked > 0, "soundness fuzz vacuous: no LOSS claims exercised");
-        eprintln!("soundness fuzz: {checked} LOSS claims, all brute-confirmed (0 false-LOSS)");
+        assert!(nic_checked > 0, "not-in-check surface not exercised (R3 guard untested)");
+        eprintln!(
+            "soundness fuzz: {checked} LOSS claims (all brute-confirmed), {nic_checked} not-in-check positions exercised"
+        );
     }
 
     #[test]
@@ -485,8 +616,8 @@ mod tests {
         let b = static_board(&stones, Player::One, 2);
         assert!(b.count_winning_moves(Player::One) >= 1, "P1 should have an immediate win");
 
-        let off = super::super::TacticalSolver::new(TacticalConfig { cand_cap: 40, window_half: Some(9) });
-        let on = super::super::TacticalSolver::new(TacticalConfig { cand_cap: 40, window_half: None });
+        let off = super::super::TacticalSolver::new(TacticalConfig { cand_cap: 40, window_half: Some(9), neighbor_dist: None });
+        let on = super::super::TacticalSolver::new(TacticalConfig { cand_cap: 40, window_half: None, neighbor_dist: None });
 
         let guarded = off.prove(&b, 8, 10_000);
         let unguarded = on.prove(&b, 8, 10_000);
@@ -494,5 +625,514 @@ mod tests {
         assert!(super::super::is_off_window(&b, unguarded.line[0], 9), "test setup: win cell must be off-window");
         assert_eq!(guarded.result, Outcome::Unknown, "in-window guard must suppress the off-window WIN");
         assert!(guarded.line.is_empty(), "suppressed proof carries no line");
+    }
+
+    /// Build a position that is genuinely a P1 WIN but whose only winning move is
+    /// a `threat_move` counter that `cand_cap` truncation drops:
+    ///   - P2 cluster: a compact double-threat (4 P2 win-in-1 cells) = on its own
+    ///     a forced P1 LOSS (see `test5`). This puts P1 IN CHECK.
+    ///   - P1 line: 0..3 on r=0, far from the P2 cluster. P1 has NO win-in-1 (only
+    ///     4 in a row), but (4,0) is a `threat_move`; at the root (mr=2) P1 plays
+    ///     (4,0) then (5,0) -> 0..5 = six -> P1 WINS on its own turn.
+    /// With a full candidate set the search finds (4,0) -> WIN. With `cand_cap=1`
+    /// the must-block cells come first and (4,0) is truncated out, so the pruned
+    /// search is forced down the losing block sequence and (UNGUARDED) concludes a
+    /// FALSE LOSS. The R3 loss-completeness guard must refuse that LOSS (the
+    /// candidate set was truncated: `in_check && moves_len == cand_cap`, and
+    /// `moves_len < legal_move_count`) and report UNKNOWN instead.
+    fn fork_with_p1_counter() -> Board {
+        // P2 compact double-threat far from the origin (radius-2 legal set).
+        let mut stones: Vec<((i32, i32), Cell)> = Vec::new();
+        for i in 0..5i32 {
+            stones.push(((10 + i, 10), Cell::P2));
+            stones.push(((10 + i, 12), Cell::P2));
+        }
+        // P1 four-in-a-row on r=0 (the counter line): (4,0)+(5,0) completes six.
+        for q in 0..4i32 {
+            stones.push(((q, 0), Cell::P1));
+        }
+        let mut b = static_board(&stones, Player::One, 2);
+        b.set_legal_move_radius(2);
+        b
+    }
+
+    #[test]
+    fn neighbor_dist_widens_not_in_check_candidates_to_full_legal() {
+        // Z0-B mechanism: at a NOT-IN-CHECK node, `neighbor_dist=Some(d)` with d
+        // covering the legal radius makes the candidate set the FULL legal set
+        // (the quiet developmental moves the threat-only set omits). This is what
+        // both raises the 8% ceiling AND lets the R3 guard prove not-in-check
+        // LOSSes (moves_len >= legal_move_count). `None` stays threat-only.
+        let b = compact_double_open_four(0, 0, false); // P2 open-fours, P1 to move
+        let (stm, opp) = (Player::One, Player::Two);
+        assert_eq!(b.count_winning_moves(opp), 0, "setup: P1 is NOT in check");
+        let nlegal = b.legal_move_count();
+
+        let threat_only = super::candidates(&b, stm, opp, 1000, None);
+        let widened = super::candidates(&b, stm, opp, 1000, Some(5));
+
+        assert!(
+            threat_only.len() < nlegal,
+            "threat-only set ({}) must be a strict subset of legal ({nlegal})",
+            threat_only.len()
+        );
+        assert_eq!(
+            widened.len(),
+            nlegal,
+            "neighbor_dist covering the radius must yield the full legal set"
+        );
+        // Widening is additive: every threat-only candidate is still present.
+        for m in &threat_only {
+            assert!(widened.contains(m), "widened set dropped threat candidate {m:?}");
+        }
+    }
+
+    #[test]
+    fn off_window_completing_stone_suppressed() {
+        // §D-COHERENCE (the COMPLETING cell, not the first, is reachability-
+        // relevant). The A1 override PLACES line[0] AND the cached completing
+        // line[1]; both must be in-window. A P2 block at (-1,0) forces P1's win
+        // rightward: line=[(4,0),(5,0)] — line[0]=(4,0) IN-window (cheb 3) but the
+        // COMPLETING line[1]=(5,0) OFF-window (cheb 4) about center (1,0)/half 3.
+        // The old first-stone-only guard PASSED this (line[0] in) and would drop
+        // the off-window completing stone; the completing-stone guard suppresses
+        // it. (With the current lex move-order line[0] is normally the outermost
+        // stone so line[0] already catches it — the block engineers the in-window-
+        // setup / off-window-completion case that net-policy ordering will make
+        // common; the guard must be correct for it.)
+        let stones = vec![
+            ((0, 0), Cell::P1), ((1, 0), Cell::P1), ((2, 0), Cell::P1), ((3, 0), Cell::P1),
+            ((-1, 0), Cell::P2),
+        ];
+        let mut b = static_board(&stones, Player::One, 2);
+        b.set_legal_move_radius(3);
+
+        let raw = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 40, window_half: None, neighbor_dist: None,
+        });
+        let ru = raw.prove(&b, 12, 80_000);
+        assert_eq!(ru.result, WIN, "unguarded must find the rightward win");
+        assert!(ru.line.len() >= 2, "expected a 2-stone win, got {:?}", ru.line);
+        assert!(!super::super::is_off_window(&b, ru.line[0], 3), "setup: line[0] must be IN-window, got {:?}", ru.line[0]);
+        assert!(super::super::is_off_window(&b, ru.line[1], 3), "setup: completing line[1] must be OFF-window, got {:?}", ru.line[1]);
+
+        let guarded = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 40, window_half: Some(3), neighbor_dist: None,
+        });
+        assert_eq!(
+            guarded.prove(&b, 12, 80_000).result,
+            Outcome::Unknown,
+            "an off-window COMPLETING stone must suppress the override"
+        );
+    }
+
+    #[test]
+    fn spread_multicluster_no_false_proof() {
+        // IMMUNITY (measured, not asserted): SealBot's phantom mates came from a
+        // flat [140][140]+70 array that OOBs past |coord|~63 and on multi-cluster
+        // geometry. The native solver is HashMap/run-length based — no flat array,
+        // no windowing/aliasing — so it must emit NO false proof in that exact
+        // regime. Each verdict is cross-checked against the exhaustive brute oracle
+        // at coord magnitudes > 63 and across disjoint clusters.
+        let s = solver();
+
+        // (a) a real forced P1 LOSS translated PAST the OOB boundary (coord 64-90).
+        // The compact double-threat is a brute-CONFIRMED forced loss at the origin
+        // (test5); proving the SAME verdict at |coord|>63 is the translation-
+        // invariance check that rules out any flat-array/aliasing corruption (the
+        // SealBot OOB failure mode) — cheap, no deep oracle needed.
+        for &(oq, orr) in &[(70, 70), (-80, 5), (64, -88)] {
+            let b = compact_double_threat(oq, orr, false);
+            assert!(
+                b.cells.keys().any(|&(q, r)| q.abs().max(r.abs()) > 63),
+                "setup: cluster must exceed the |coord|>63 OOB boundary"
+            );
+            assert_eq!(
+                s.prove(&b, 12, 400_000).result,
+                LOSS,
+                "native must prove the forced loss unchanged past the OOB boundary, coord {:?}",
+                (oq, orr)
+            );
+        }
+
+        // (b) a genuinely MULTI-CLUSTER, non-winning board at large coords (3
+        //     disjoint 3-stone clusters, no 5-run anywhere). Kept within a BOUNDED
+        //     bbox (the legal set is O(stones·ball) only when the bbox is bounded;
+        //     scattering clusters 150 cells apart makes the brute oracle's per-node
+        //     legal rebuild O(bbox) and pathological — a test artifact, not the
+        //     solver's deploy regime). The solver must never fabricate a proof the
+        //     oracle refutes.
+        let multi: Vec<((i32, i32), Cell)> = vec![
+            ((70, 70), Cell::P1), ((71, 70), Cell::P1), ((70, 71), Cell::P2),
+            ((78, 72), Cell::P2), ((79, 72), Cell::P2), ((78, 73), Cell::P1),
+            ((73, 78), Cell::P1), ((74, 78), Cell::P2), ((73, 79), Cell::P1),
+        ];
+        let mut mb = static_board(&multi, Player::One, 2);
+        mb.set_legal_move_radius(1); // tight legal set -> the brute oracle stays cheap
+        let res = s.prove(&mb, 6, 100_000);
+        let mut bb = Budget::new(80_000);
+        let brute = brute_solve(&mut mb.clone(), 6, &mut bb);
+        if res.result == WIN {
+            assert_ne!(brute, LOSS, "native FALSE WIN on multi-cluster board");
+        }
+        if res.result == LOSS {
+            assert_ne!(brute, WIN, "native FALSE LOSS on multi-cluster board");
+        }
+    }
+
+    #[test]
+    fn widened_solver_stays_sound() {
+        // SOUNDNESS of the quiet-move widening: with full neighbour coverage the
+        // search visits not-in-check interior nodes with the WIDE candidate set
+        // (the path the body adds). Its verdict must stay consistent with the
+        // exhaustive oracle — a LOSS claim is brute-confirmed LOSS, and a forced-
+        // loss position is NEVER reported a WIN. Non-vacuous (>=1 LOSS proven).
+        let s = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 1000,
+            window_half: None,
+            neighbor_dist: Some(5),
+        });
+        let cases = [(0, 0, false), (-3, 4, false), (2, -2, true), (-6, -1, true)];
+        let mut loss_claims = 0;
+        for &(q, r, vert) in &cases {
+            let b = compact_double_threat(q, r, vert);
+            let res = s.prove(&b, 12, 1_000_000);
+            assert_ne!(res.result, WIN, "widened FALSE WIN on a forced loss, case {:?}", (q, r, vert));
+            if res.result == LOSS {
+                loss_claims += 1;
+                let mut bb = Budget::new(2_000_000);
+                assert_eq!(
+                    brute_solve(&mut b.clone(), 12, &mut bb),
+                    LOSS,
+                    "widened FALSE LOSS (brute disagrees), case {:?}",
+                    (q, r, vert)
+                );
+            }
+        }
+        assert!(loss_claims > 0, "widened solver proved 0 LOSSes (vacuous) — raise budget/depth");
+    }
+
+    #[test]
+    fn verify_recovers_truncated_win() {
+        // Recall-preserving verify (Z0-C): the reduced candidate set drove the
+        // search; when all reduced candidates lose, the dropped legal moves are
+        // searched. Here cand_cap=1 truncates away P1's winning counter — the
+        // verify must search the dropped set, find it, and return WIN (the same
+        // position the bare R3 guard could only call UNKNOWN).
+        let b = fork_with_p1_counter();
+        let no_verify = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 1,
+            window_half: None,
+            neighbor_dist: None,
+        });
+        let verify = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 1,
+            window_half: None,
+            neighbor_dist: Some(2),
+        });
+        assert_eq!(no_verify.prove(&b, 20, 200_000).result, Outcome::Unknown, "no-verify: conservative UNKNOWN");
+        let res = verify.prove(&b, 20, 400_000);
+        assert_eq!(res.result, WIN, "verify must recover the truncated winning counter");
+        // The recovered line's first move must actually win the position.
+        assert!(!res.line.is_empty(), "WIN carries a line");
+    }
+
+    #[test]
+    fn verify_certifies_truncated_loss() {
+        // The other verify branch: a real forced loss whose reduced set was
+        // truncated. The dropped legal moves are searched and ALSO all lose, so
+        // the verify certifies the LOSS (brute-confirmed) where the bare guard,
+        // unable to trust the truncated set, returned UNKNOWN.
+        let b = compact_double_threat(0, 0, false);
+        let no_verify = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 1,
+            window_half: None,
+            neighbor_dist: None,
+        });
+        let verify = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 1,
+            window_half: None,
+            neighbor_dist: Some(2),
+        });
+        assert_eq!(no_verify.prove(&b, 12, 400_000).result, Outcome::Unknown, "no-verify: conservative UNKNOWN");
+        assert_eq!(verify.prove(&b, 12, 1_000_000).result, LOSS, "verify must certify the truncated LOSS");
+        let mut bb = Budget::new(2_000_000);
+        assert_eq!(brute_solve(&mut b.clone(), 12, &mut bb), LOSS, "brute confirms the LOSS (soundness)");
+    }
+
+    #[test]
+    fn verify_path_is_sound_over_grid() {
+        // SOUNDNESS of the recall verify across a grid: cand_cap=1 forces the
+        // reduced set to truncate at EVERY node, so the LOSS conclusion always
+        // routes through the full-legal verify. Every LOSS it certifies must be a
+        // real LOSS (brute-confirmed); a forced loss is NEVER reported a WIN.
+        let s = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 1,
+            window_half: None,
+            neighbor_dist: Some(2),
+        });
+        let cases = [(0, 0, false), (-3, 4, false), (2, -2, true), (-6, -1, true)];
+        for &(q, r, vert) in &cases {
+            let b = compact_double_threat(q, r, vert);
+            let res = s.prove(&b, 12, 1_500_000);
+            assert_ne!(res.result, WIN, "verify FALSE WIN on a forced loss, case {:?}", (q, r, vert));
+            if res.result == LOSS {
+                let mut bb = Budget::new(2_000_000);
+                assert_eq!(
+                    brute_solve(&mut b.clone(), 12, &mut bb),
+                    LOSS,
+                    "verify FALSE LOSS (brute disagrees), case {:?}",
+                    (q, r, vert)
+                );
+            }
+        }
+    }
+
+    // ── RED-TEAM adversarial soundness attacks (throwaway; #[ignore]-marked
+    //    heavy ones run explicitly). Goal: produce a FALSE proof (solver WIN/LOSS
+    //    contradicting the full-width brute oracle) or prove it cannot. ───────────
+
+    /// RED-TEAM (a)+(c): the verify path on NOT-IN-CHECK positions with a small,
+    /// truncating cand_cap + neighbor widening — the exact surface the handoff
+    /// claims is sound. Run the VERIFY config over a grid of not-in-check open-four
+    /// doubles AND in-check double threats, varying cand_cap (truncation stress)
+    /// and neighbor_dist, cross-checking EVERY proof against the full-width brute
+    /// oracle. Definitive contradictions:
+    ///   solver LOSS  but brute WIN  => FALSE LOSS (a real defender escape exists)
+    ///   solver WIN   but brute LOSS => FALSE WIN
+    #[test]
+    fn redteam_verify_grid_no_false_proof() {
+        let mut loss_claims = 0usize;
+        let mut win_claims = 0usize;
+        let mut nic_loss = 0usize;
+        let mut brute_unknown_on_loss = 0usize;
+        for &cap in &[1usize, 3] {
+            for &nd in &[2i32] {
+                let s = super::super::TacticalSolver::new(TacticalConfig {
+                    cand_cap: cap,
+                    window_half: None,
+                    neighbor_dist: Some(nd),
+                });
+                for off_q in -4..=3i32 {
+                    for &(off_r, vert) in &[(0, false), (3, true), (-2, false)] {
+                        for builder in 0..2 {
+                            let b = if builder == 0 {
+                                compact_double_open_four(off_q, off_r, vert)
+                            } else {
+                                compact_double_threat(off_q, off_r, vert)
+                            };
+                            let in_check = b.count_winning_moves(Player::Two) >= 1;
+                            let res = s.prove(&b, 12, 1_500_000);
+                            if res.result == LOSS {
+                                loss_claims += 1;
+                                if !in_check {
+                                    nic_loss += 1;
+                                }
+                                let mut bb = Budget::new(1_500_000);
+                                let brute = brute_solve(&mut b.clone(), 12, &mut bb);
+                                assert_ne!(
+                                    brute, WIN,
+                                    "FALSE LOSS: solver LOSS but brute finds an escape-to-WIN \
+                                     (cap={cap}, nd={nd}, in_check={in_check}, case {:?})",
+                                    (off_q, off_r, vert, builder)
+                                );
+                                if brute == Outcome::Unknown {
+                                    brute_unknown_on_loss += 1;
+                                }
+                            } else if res.result == WIN {
+                                win_claims += 1;
+                                let mut bb = Budget::new(1_500_000);
+                                let brute = brute_solve(&mut b.clone(), 12, &mut bb);
+                                assert_ne!(
+                                    brute, LOSS,
+                                    "FALSE WIN: solver WIN but brute proves LOSS \
+                                     (cap={cap}, nd={nd}, case {:?})",
+                                    (off_q, off_r, vert, builder)
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(loss_claims > 0, "vacuous: no LOSS claims exercised");
+        eprintln!(
+            "redteam grid: {loss_claims} LOSS ({nic_loss} not-in-check, {brute_unknown_on_loss} \
+             brute-unresolved), {win_claims} WIN — all brute-consistent, 0 false proofs"
+        );
+    }
+
+    /// RED-TEAM (a) random stream: random COMPACT positions (radius-2 legal set so
+    /// brute is exhaustive-cheap), VERIFY config with a truncating cand_cap. Every
+    /// LOSS cross-checked against brute; a brute WIN refutes. Bidirectional (WIN
+    /// claims checked too). The not-in-check counter proves the attack surface ran.
+    #[test]
+    fn redteam_verify_random_compact_no_false_proof() {
+        let mut rng = Lcg(0xBADC_0FFE_E0DD_F00D);
+        let s = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 2,
+            window_half: None,
+            neighbor_dist: Some(2),
+        });
+        let mut loss_claims = 0usize;
+        let mut nic_seen = 0usize;
+        let mut win_claims = 0usize;
+        let mut samples = 0usize;
+        let mut attempt = 0usize;
+        // Generate compact random positions: play random legal moves but keep the
+        // board in a small coordinate box so the radius-2 legal set stays small.
+        while samples < 250 && attempt < 4000 {
+            attempt += 1;
+            let mut bd = Board::new();
+            let plies = rng.range(6, 18);
+            let mut ok = true;
+            for _ in 0..plies {
+                // restrict to a compact box so brute stays cheap + dense tactics
+                let lm: Vec<(i32, i32)> = bd
+                    .legal_moves()
+                    .into_iter()
+                    .filter(|&(q, r)| q.abs() <= 3 && r.abs() <= 3)
+                    .collect();
+                if lm.is_empty() {
+                    ok = false;
+                    break;
+                }
+                let (q, r) = lm[rng.range(0, lm.len() - 1)];
+                if bd.apply_move(q, r).is_err() || bd.check_win() {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                continue;
+            }
+            bd.set_legal_move_radius(2);
+            if bd.legal_move_count() > 30 {
+                continue; // keep brute exhaustive-cheap
+            }
+            samples += 1;
+            let in_check = bd.count_winning_moves(bd.current_player.other()) >= 1;
+            let res = s.prove(&bd, 12, 1_000_000);
+            if res.result == LOSS {
+                loss_claims += 1;
+                if !in_check {
+                    nic_seen += 1;
+                }
+                let mut bb = Budget::new(1_500_000);
+                let brute = brute_solve(&mut bd.clone(), 12, &mut bb);
+                assert_ne!(
+                    brute, WIN,
+                    "FALSE LOSS (random): solver LOSS but brute escapes-to-WIN, in_check={in_check}"
+                );
+            } else if res.result == WIN {
+                win_claims += 1;
+                let mut bb = Budget::new(1_500_000);
+                let brute = brute_solve(&mut bd.clone(), 12, &mut bb);
+                assert_ne!(brute, LOSS, "FALSE WIN (random): solver WIN but brute proves LOSS");
+            }
+        }
+        eprintln!(
+            "redteam random: {samples} compact positions, {loss_claims} LOSS ({nic_seen} \
+             not-in-check), {win_claims} WIN — 0 false proofs"
+        );
+    }
+
+    /// RED-TEAM (b): flip-aware negamax SIGN. A genuine 2-stone-turn forcing WIN
+    /// (P1 has 0..3 on r=0; plays (4,0) then completes six). A flip-sign bug would
+    /// mislabel this WIN as LOSS/UNKNOWN. Assert WIN, then REALIZE the returned
+    /// same-turn line and confirm it produces a real 6-in-a-row (independent of the
+    /// brute oracle, which shares the flip logic and could not catch a flip bug).
+    #[test]
+    fn redteam_flip_sign_two_stone_win_realized() {
+        let stones: Vec<((i32, i32), Cell)> =
+            (0..4).map(|q| ((q, 0), Cell::P1)).collect();
+        let b = static_board(&stones, Player::One, 2);
+        assert_eq!(b.count_winning_moves(Player::One), 0, "setup: no single-stone win (needs 2)");
+        let res = solver().prove(&b, 12, 200_000);
+        assert_eq!(res.result, WIN, "2-stone forcing win must be WIN (flip-sign), got {:?}", res.result);
+        // Realize the same-turn line: both stones are P1's (mr=2 -> 1, not flipped),
+        // so line carries P1's two placements. Replaying must complete a 6.
+        assert!(res.line.len() >= 2, "same-turn win must carry both P1 stones, got {:?}", res.line);
+        let mut c = b.clone();
+        c.apply_move(res.line[0].0, res.line[0].1).unwrap();
+        c.apply_move(res.line[1].0, res.line[1].1).unwrap();
+        assert!(c.check_win(), "realized WIN line must produce a real 6, got line {:?}", res.line);
+        // And the SAME position must never be called a LOSS by the verify config.
+        let v = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 2,
+            window_half: None,
+            neighbor_dist: Some(2),
+        });
+        assert_ne!(v.prove(&b, 12, 500_000).result, LOSS, "winnable position must never be a LOSS");
+    }
+
+    /// RED-TEAM (d): budget exhaustion must NEVER manufacture a proof. A genuine
+    /// not-in-check verify target starved of budget must return UNKNOWN, never a
+    /// (possibly-false) LOSS/WIN. Sweep tiny budgets across the boundary.
+    #[test]
+    fn redteam_budget_exhaustion_no_false_proof() {
+        let v = super::super::TacticalSolver::new(TacticalConfig {
+            cand_cap: 1,
+            window_half: None,
+            neighbor_dist: Some(2),
+        });
+        // A real forced LOSS (brute-confirmed) so the full-budget result is LOSS;
+        // every STARVED result must be UNKNOWN (proof requires completing the search).
+        let b = compact_double_threat(0, 0, false);
+        let mut bb = Budget::new(2_000_000);
+        assert_eq!(brute_solve(&mut b.clone(), 12, &mut bb), LOSS, "setup: truly a forced LOSS");
+        // Find a budget large enough to prove it, then starve below that.
+        let full = v.prove(&b, 12, 1_000_000);
+        assert_eq!(full.result, LOSS, "full budget proves the LOSS");
+        for budget in 1u64..=full.nodes.saturating_sub(1).min(300) {
+            let r = v.prove(&b, 12, budget);
+            assert_ne!(
+                r.result, WIN,
+                "budget {budget}: starved search manufactured a WIN"
+            );
+            // A LOSS is permitted ONLY if the search actually completed (not exhausted).
+            if r.result == LOSS {
+                assert!(
+                    !r.budget_exhausted,
+                    "budget {budget}: EXHAUSTED search still returned a LOSS proof (unsound)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn neighbor_dist_does_not_widen_in_check_nodes() {
+        // IN CHECK the threat-only set is already complete; widening would only
+        // bloat it (and risk truncating a real block past cand_cap). The compact
+        // double-threat (4 P2 win-in-1 cells) puts P1 in check; the candidate set
+        // must be identical with and without neighbor_dist.
+        let b = compact_double_threat(0, 0, false);
+        let (stm, opp) = (Player::One, Player::Two);
+        assert!(b.count_winning_moves(opp) >= 1, "setup: P1 IS in check");
+        let plain = super::candidates(&b, stm, opp, 1000, None);
+        let widened = super::candidates(&b, stm, opp, 1000, Some(5));
+        assert_eq!(plain, widened, "in-check candidate set must not widen");
+    }
+
+    #[test]
+    fn r3_guard_suppresses_truncated_false_loss() {
+        // SOUNDNESS (R3): an incomplete candidate set must NEVER yield a LOSS.
+        // Here `cand_cap=1` truncates away P1's winning counter; the unguarded
+        // search would conclude a FALSE LOSS. The guard must report UNKNOWN.
+        let b = fork_with_p1_counter();
+        // Test-setup invariants: P1 is in check (4 P2 threats), has no win-in-1,
+        // but the position is truly a WIN (full-legal brute finds the counter).
+        assert_eq!(b.count_winning_moves(Player::Two), 4, "setup: 4 P2 threats (P1 in check)");
+        assert_eq!(b.count_winning_moves(Player::One), 0, "setup: P1 has no immediate win");
+        let mut bb = Budget::new(2_000_000);
+        assert_eq!(brute_solve(&mut b.clone(), 12, &mut bb), WIN, "setup: position is truly a P1 WIN");
+
+        let trunc = super::super::TacticalSolver::new(TacticalConfig { cand_cap: 1, window_half: None, neighbor_dist: None });
+        let res = trunc.prove(&b, 20, 200_000);
+        assert_ne!(
+            res.result, LOSS,
+            "R3: truncated candidate set must not yield a false LOSS (got {:?})",
+            res.result
+        );
     }
 }

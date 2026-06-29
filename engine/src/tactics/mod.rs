@@ -112,11 +112,21 @@ pub struct TacticalConfig {
     /// cheb-distance > `h` from the window center. `None` disables the guard
     /// (full game-theoretic result). Default `Some(9)` for v6 single-window.
     pub window_half: Option<i32>,
+    /// Quiet-move body (Track 3). `Some(d)` widens the NOT-IN-CHECK candidate set
+    /// with every empty legal cell within cheb-distance `d` of a stone (the
+    /// developmental moves that start ~80% of mates, A2) — the lever past the
+    /// threat-only 8% ceiling. `None` = threat-only (the foundation / fast deploy
+    /// override). When `d` covers the legal radius the set becomes the full legal
+    /// set, so the R3 LOSS guard's `moves_len >= legal_move_count()` branch fires
+    /// and not-in-check LOSSes are proven soundly (full recall). In-check nodes are
+    /// NOT widened: there the threat-only set is already complete (a quiet move
+    /// loses to the standing threat).
+    pub neighbor_dist: Option<i32>,
 }
 
 impl Default for TacticalConfig {
     fn default() -> Self {
-        TacticalConfig { cand_cap: 40, window_half: Some(9) }
+        TacticalConfig { cand_cap: 40, window_half: Some(9), neighbor_dist: None }
     }
 }
 
@@ -167,13 +177,17 @@ impl TacticalSolver {
         let mut result = solved.outcome;
         let mut line = solved.line;
 
-        // In-window offense guard: the move we would PLAY (line[0]) must be in
-        // the perception window. Off-window proofs are Track-2's scope; suppress
-        // here so the A1 override never fires off-window (mirrors
-        // `solver_backup_bot.py::_is_off_window`).
+        // In-window offense guard. The A1 override PLACES both stones of the turn
+        // — `line[0]` (played now) AND `line[1]` (the cached 2nd stone). BOTH must
+        // be in-window, not just the first: per CLAUDE.md §D-COHERENCE the
+        // reachability-relevant cell is the COMPLETING stone that LANDS the win,
+        // not the first. A win set up in-window but completing off-window would
+        // otherwise drop an off-window stone (Track-2 owns off-window). `take(2)`
+        // = exactly this turn's stones (deeper line entries are future forced
+        // moves the override does not place). Mirrors `solver_backup_bot.py`.
         if result == Outcome::Win {
             if let Some(half) = self.config.window_half {
-                if line.first().is_some_and(|&first| is_off_window(board, first, half)) {
+                if line.iter().take(2).any(|&m| is_off_window(board, m, half)) {
                     result = Outcome::Unknown;
                     line = Vec::new();
                 }

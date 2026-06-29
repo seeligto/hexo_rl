@@ -41,10 +41,10 @@ pub struct PyTacticalSolver {
 #[pymethods]
 impl PyTacticalSolver {
     #[new]
-    #[pyo3(signature = (window_half = Some(9), cand_cap = 40))]
-    pub fn new(window_half: Option<i32>, cand_cap: usize) -> Self {
+    #[pyo3(signature = (window_half = Some(9), cand_cap = 40, neighbor_dist = None))]
+    pub fn new(window_half: Option<i32>, cand_cap: usize, neighbor_dist: Option<i32>) -> Self {
         PyTacticalSolver {
-            inner: TacticalSolver::new(TacticalConfig { cand_cap, window_half }),
+            inner: TacticalSolver::new(TacticalConfig { cand_cap, window_half, neighbor_dist }),
         }
     }
 

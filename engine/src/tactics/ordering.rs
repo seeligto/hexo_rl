@@ -44,9 +44,12 @@ pub(crate) fn candidates(
     stm: Player,
     opp: Player,
     cand_cap: usize,
+    neighbor_dist: Option<i32>,
 ) -> Vec<(i32, i32)> {
     let must_block = board.winning_moves(opp);
     if !must_block.is_empty() {
+        // IN CHECK: the threat-only set (blocks ∪ counter-threats) is already
+        // complete (a non-response loses to the standing threat) — NOT widened.
         let mut seen: FxHashSet<(i32, i32)> = must_block.iter().copied().collect();
         let mut out = must_block;
         for m in board.threat_moves(stm) {
@@ -58,6 +61,9 @@ pub(crate) fn candidates(
         return out;
     }
 
+    // NOT IN CHECK. Threat-creating moves first (forcing — searched regardless of
+    // any prior, the 0-prior-refuter guarantee), then — under the quiet-move body
+    // — the developmental neighbour cells the threat-only set omits.
     let mut seen: FxHashSet<(i32, i32)> = FxHashSet::default();
     let mut out: Vec<(i32, i32)> = Vec::new();
     for m in board.threat_moves(stm).into_iter().chain(board.threat_moves(opp)) {
@@ -65,6 +71,27 @@ pub(crate) fn candidates(
             out.push(m);
         }
     }
+
+    // Quiet-move widening (Track 3, the lever past the 8% ceiling). Append every
+    // empty legal cell within cheb-distance `d` of a stone, in sorted order
+    // (deterministic). When `d` covers the legal radius the set becomes the FULL
+    // legal set, so a not-in-check LOSS satisfies the R3 guard's exhaustiveness
+    // branch (`moves_len >= legal_move_count`) and is proven soundly. Quiet cells
+    // come AFTER threats so forcing moves are still ordered first.
+    if let Some(d) = neighbor_dist {
+        for c in board.legal_moves() {
+            if !seen.contains(&c)
+                && board
+                    .cells
+                    .keys()
+                    .any(|&(sq, sr)| (c.0 - sq).abs().max((c.1 - sr).abs()) <= d)
+            {
+                seen.insert(c);
+                out.push(c);
+            }
+        }
+    }
+
     out.truncate(cand_cap);
     out
 }
