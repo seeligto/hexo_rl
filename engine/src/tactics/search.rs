@@ -17,51 +17,76 @@ use fxhash::FxHashSet;
 
 use crate::board::Board;
 
+use super::eval::heuristic_leaf;
 use super::ordering::candidates;
 use super::tt::ProofTt;
-use super::{Budget, Outcome, TacticalConfig};
+use super::{outcome_of, Budget, Outcome, TacticalConfig, MATE, NEG_INF, POS_INF, WIN_THRESHOLD};
 
-/// A resolved node: the proof outcome plus the principal variation (the move
-/// LINE). `line` is populated for WIN — `line[0]` is the move to play; for a
-/// 2-stone-turn forcing win `line[0]`/`line[1]` are the side-to-move's two
-/// stones (the A1 override caches `line[1]`). Empty for LOSS/UNKNOWN.
-pub struct Solved {
-    pub outcome: Outcome,
+/// A scored node value (D-PFIT P2 increment 1). `score` is a mate-distance-aware
+/// value: a proven mate is `±(MATE - ply)` (magnitude >= `WIN_THRESHOLD`); a
+/// heuristic / unresolved node is a bounded score (magnitude < `WIN_THRESHOLD`).
+/// `line` is the principal variation, populated for WIN — `line[0]` is the move
+/// to play; for a 2-stone-turn forcing win `line[0]`/`line[1]` are the
+/// side-to-move's two stones (the A1 override caches `line[1]`). Empty otherwise.
+pub struct Scored {
+    pub score: i32,
     pub line: Vec<(i32, i32)>,
 }
 
-impl Solved {
+impl Scored {
+    /// A bounded (non-proof) leaf value — clamped strictly inside the proof
+    /// region so `outcome_of` can NEVER read it as a WIN/LOSS proof.
     #[inline]
-    fn unknown() -> Self {
-        Solved { outcome: Outcome::Unknown, line: Vec::new() }
+    fn heuristic(score: i32) -> Self {
+        Scored { score: clamp_heuristic(score), line: Vec::new() }
     }
 }
 
-/// 3-valued AND-OR threat-space proof for `board.current_player`.
+/// Clamp a heuristic score strictly inside `(-WIN_THRESHOLD, WIN_THRESHOLD)` so a
+/// non-proof leaf can never masquerade as a mate (the soundness invariant: only
+/// the proof paths in `solve` may emit a mate-magnitude score).
+#[inline]
+pub(crate) fn clamp_heuristic(score: i32) -> i32 {
+    score.clamp(-(WIN_THRESHOLD - 1), WIN_THRESHOLD - 1)
+}
+
+/// Scored α-β AND-OR threat-space proof for `board.current_player` (negamax over
+/// HTTT compound turns). Returns a mate-distance-aware score; the 3-valued
+/// verdict is `outcome_of(score)` at the ROOT (full-window, exact).
 ///
-/// NET-FREE: proofs are ONLY terminal backups (`terminal_value_to_move`, CF-1)
-/// or stone-count shortcuts (immediate win / mr==1 double-threat). The value
-/// head is never read. UNKNOWN = unresolved within depth/budget (the search
-/// went quiet or ran out) — never a draw, never a false proof.
+/// # Soundness (the load-bearing property — α-β is pruning ONLY)
+/// NET-FREE: a mate-magnitude score is produced ONLY by a sound proof path —
+/// terminal CF-1 backup (`terminal_value_to_move`), the stone-count shortcuts, an
+/// all-candidates-lose node guarded by the R3 completeness check, or the recall
+/// verify. The value head / `eval.rs` heuristic is NEVER a proof: a heuristic
+/// leaf is `Scored::heuristic` (clamped below `WIN_THRESHOLD`). α-β changes
+/// neither: (a) the ROOT runs a FULL window so its value is EXACT and the verdict
+/// is sound; (b) a proven LOSS is concluded ONLY when the candidate loop ran to
+/// completion with NO β-cutoff, so the all-lose `best` is the exact node value;
+/// (c) the proven-WIN cutoff (`best >= WIN_THRESHOLD`) fires before any sibling is
+/// searched with `β <= -WIN_THRESHOLD`, so no fail-high LOSS bound can propagate
+/// or corrupt a winning PV. The `#[cfg(test)]` 3-valued reference (`solve_3valued`)
+/// + the brute oracle cross-check every verdict.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn solve(
     board: &mut Board,
     depth_left: i32,
+    ply: i32,
+    mut alpha: i32,
+    beta: i32,
     budget: &mut Budget,
     cfg: &TacticalConfig,
     tt: &mut ProofTt,
-) -> Solved {
+) -> Scored {
     if !budget.tick() {
-        return Solved::unknown();
+        return Scored::heuristic(0); // budget out => UNKNOWN, never a proof
     }
 
-    // (1) Terminal: the engine-owned CF-1 sign is the ONLY proof sign.
+    // (1) Terminal: the engine-owned CF-1 sign is the ONLY proof sign. Mate
+    //     distance = `ply` (shorter mates score higher in magnitude).
     if board.check_win() {
-        let outcome = if board.terminal_value_to_move() > 0.0 {
-            Outcome::Win
-        } else {
-            Outcome::Loss
-        };
-        return Solved { outcome, line: Vec::new() };
+        let score = if board.terminal_value_to_move() > 0.0 { MATE - ply } else { -(MATE - ply) };
+        return Scored { score, line: Vec::new() };
     }
 
     let stm = board.current_player;
@@ -71,86 +96,109 @@ pub(crate) fn solve(
     //     Sound stone-count proof (no net). Yields the winning cell for the PV.
     if board.count_winning_moves(stm) >= 1 {
         let line = board.first_winning_move(stm).map_or_else(Vec::new, |m| vec![m]);
-        return Solved { outcome: Outcome::Win, line };
+        return Scored { score: MATE - ply, line };
     }
 
-    // (3) Double-threat LOSS shortcut (mr==1 only — provably sound):
-    //     stm has NO immediate win (checked above) and places exactly ONE stone
-    //     before the turn flips; the opponent then has >=2 standing win-in-1
-    //     cells, so stm blocks at most 1 and >=1 survives -> opp wins next ->
-    //     LOSS. (A single placement cannot be a 2-stone self-win, so the mr==2
-    //     soundness hole does not exist at mr==1. mr==2 is left to the
-    //     recursion, which proves it soundly — often via this shortcut one ply
-    //     deeper. The general unblockable-multi-threat AND-OR over opponent
-    //     must-hit sets is DEFERRED; the recursion covers it.)
+    // (3) Double-threat LOSS shortcut (mr==1 only — provably sound): stm has NO
+    //     immediate win and places exactly ONE stone before the turn flips; opp
+    //     then has >=2 standing win-in-1 cells -> stm blocks <=1 -> LOSS.
     if board.moves_remaining == 1 && board.count_winning_moves(opp) >= 2 {
-        return Solved { outcome: Outcome::Loss, line: Vec::new() };
+        return Scored { score: -(MATE - ply), line: Vec::new() };
     }
 
-    // (4) TT probe — proven results are game-theoretic (depth-independent).
-    //     Only LOSS is cached (see `tt.rs`): a WIN cache hit would return an
-    //     empty PV and could truncate the override line, so WINs are always
-    //     reconstructed fresh.
+    // (4) TT probe — only PROVEN LOSS is cached (see `tt.rs`): a WIN hit would
+    //     return an empty PV and could truncate the override line. A cached LOSS
+    //     is game-theoretic; re-encode at this node's mate distance.
     let key = (board.zobrist_hash, stm as i8, board.moves_remaining);
     if let Some(outcome) = tt.get(key) {
-        return Solved { outcome, line: Vec::new() };
+        debug_assert_eq!(outcome, Outcome::Loss, "TT must cache only proven LOSS");
+        return Scored { score: -(MATE - ply), line: Vec::new() };
     }
 
     if depth_left <= 0 {
-        return Solved::unknown();
+        return Scored::heuristic(heuristic_leaf(board)); // horizon => non-proof leaf
     }
 
-    // (5) Threat-guided candidate set (the narrow branching that reaches deep
-    //     forcing mates cheaply). DEFERRED: net-policy ordering / killers /
-    //     history (`ordering.rs`).
     // `in_check` (opp threatens an immediate win) is the prune-symmetry premise of
     // the LOSS conclusion below — captured at the node state, before descent.
     let in_check = board.count_winning_moves(opp) >= 1;
     let moves = candidates(board, stm, opp, cfg.cand_cap, cfg.neighbor_dist);
     if moves.is_empty() {
-        return Solved::unknown(); // no live threats => quiet => cannot prove
+        return Scored::heuristic(heuristic_leaf(board)); // quiet => cannot prove
     }
     let moves_len = moves.len();
     // Remember the reduced set so the recall verify (below) searches only the
     // DROPPED legal moves, not the ones already explored.
     let searched: FxHashSet<(i32, i32)> = moves.iter().copied().collect();
 
-    let mut saw_unknown = false;
+    // Negamax-α-β OR-node. `best` is the side-to-move's best value over the
+    // candidate set; it stays `NEG_INF` until a child is examined (the all-Err
+    // guard below). A proven-WIN cutoff fires the instant `best >= WIN_THRESHOLD`
+    // (= the old "return on first WIN", PV-identical); the generic `alpha >= beta`
+    // β-cutoff prunes once a heuristic value dominates (the lever the eval/ordering
+    // increments exploit). Either cutoff returns `best` as a BOUND and never
+    // reaches the LOSS-proof logic.
+    let mut best = NEG_INF;
+    let mut best_line: Vec<(i32, i32)> = Vec::new();
+    let mut cutoff = false;
+
     for &(q, r) in &moves {
         let node_player = board.current_player; // == stm
         let diff = match board.apply_move_tracked(q, r) {
             Ok(d) => d,
             Err(_) => continue,
         };
-        let child = solve(board, depth_left - 1, budget, cfg, tt);
-        // Flip-aware negate: only when the to-move side flipped (turn-final stone).
-        let child_player = board.current_player;
-        let flipped = child_player != node_player;
-        let rc = if flipped { child.outcome.negate() } else { child.outcome };
+        // Flip-aware negamax: negate the child value (and flip the window) ONLY
+        // when the to-move side flipped (turn-final stone).
+        let flipped = board.current_player != node_player;
+        let (ca, cb) = if flipped { (-beta, -alpha) } else { (alpha, beta) };
+        let child = solve(board, depth_left - 1, ply + 1, ca, cb, budget, cfg, tt);
+        let rc = if flipped { -child.score } else { child.score };
 
-        if rc == Outcome::Win {
-            // OR-node: side-to-move has a winning/escaping move. Build the PV:
-            //  - same player continued (mr was 2): append the child's PV so the
-            //    line carries stm's 2nd stone (and beyond).
-            //  - flipped (turn-final): the move alone; the rest is the
-            //    opponent's forced-losing responses, not stm's moves to play.
+        if rc > best {
+            best = rc;
+            // PV: same player continued (mr was 2) => append the child's line so
+            // it carries stm's 2nd stone; flipped (turn-final) => the move alone.
             let mut line = vec![(q, r)];
             if !flipped {
                 line.extend(child.line.iter().copied());
             }
-            board.undo_move(diff);
-            return Solved { outcome: Outcome::Win, line };
+            best_line = line;
         }
-
         board.undo_move(diff);
-        if rc == Outcome::Unknown {
-            saw_unknown = true;
+
+        if best > alpha {
+            alpha = best;
+        }
+        if best >= WIN_THRESHOLD || alpha >= beta {
+            cutoff = true;
+            break;
         }
     }
 
-    // All candidates explored: any UNKNOWN => unresolved; else every move loses.
-    if saw_unknown {
-        return Solved::unknown();
+    // No candidate could be applied (degenerate) => UNKNOWN, never a false LOSS.
+    if best == NEG_INF {
+        return Scored::heuristic(0);
+    }
+
+    // Proven WIN (`best` is a mate magnitude): exact lower bound is already a win.
+    if best >= WIN_THRESHOLD {
+        return Scored { score: best, line: best_line };
+    }
+    // β-cutoff with a non-win `best`: `best` is a fail-high BOUND, not the exact
+    // value, so the LOSS-proof logic below must NOT run (it requires the exact
+    // node value from a fully-examined loop). Returning the bound is sound — it is
+    // strictly above `-WIN_THRESHOLD` (every node has `beta > -WIN_THRESHOLD`; see
+    // the soundness note), so it can never be misread as a proven LOSS.
+    if cutoff {
+        return Scored { score: best, line: best_line };
+    }
+
+    // Loop ran to completion with no cutoff => `best` is the EXACT node value.
+    //   best >  -WIN_THRESHOLD  : some candidate did not lose => UNKNOWN.
+    //   best <= -WIN_THRESHOLD  : EVERY candidate loses => candidate (R3) logic.
+    if outcome_of(best) != Outcome::Loss {
+        return Scored::heuristic(best);
     }
 
     // R3 LOSS-COMPLETENESS GUARD (load-bearing for sound z-LOSS labels).
@@ -158,35 +206,154 @@ pub(crate) fn solve(
     // candidate set provably covered all escapes:
     //   - `in_check && moves_len < cand_cap`: opp threatens an immediate win, so a
     //     non-block/non-counter loses to the standing threat (prune symmetry) —
-    //     valid ONLY if the set was not truncated (the dropped tail could hold a
-    //     saving block or a faster counter-win; see the truncation test). The
-    //     `< cand_cap` boundary is deliberately PESSIMISTIC: a set whose natural
-    //     (untruncated) size happens to equal cand_cap is treated as truncated, so
-    //     a real LOSS there is reported UNKNOWN — a recall false-negative, never a
-    //     soundness violation. Do NOT relax to `<=` (that reintroduces the hole).
+    //     valid ONLY if the set was not truncated. The `< cand_cap` boundary is
+    //     deliberately PESSIMISTIC (a natural-size-==-cand_cap set is treated as
+    //     truncated -> UNKNOWN, a recall false-negative, never a soundness break).
+    //     Do NOT relax to `<=`.
     //   - `moves_len >= legal_move_count()`: the candidate set IS the full legal
-    //     set, so exhaustiveness is trivial (covers not-in-check positions and the
-    //     quiet-move body, where prune symmetry does NOT hold).
-    // Otherwise the set is incomplete and a LOSS would be unsound -> UNKNOWN
-    // (conservative-safe). The recall-preserving full-legal verify of the dropped
-    // moves is the Track-3 quiet-move body's job and lands WITH it; until then a
-    // not-in-check / truncated forced loss is reported UNKNOWN, never a false LOSS.
+    //     set (covers not-in-check / quiet-move nodes where prune symmetry fails).
+    // Otherwise -> the recall verify (if enabled) or conservative UNKNOWN.
     let loss_complete =
         (in_check && moves_len < cfg.cand_cap) || moves_len >= board.legal_move_count();
     if loss_complete {
         tt.insert(key, Outcome::Loss); // proven, game-theoretic — cache it
-        return Solved { outcome: Outcome::Loss, line: Vec::new() };
+        return Scored { score: best, line: Vec::new() };
     }
 
     // RECALL-PRESERVING VERIFY (quiet-move body, `neighbor_dist` set). The reduced
-    // candidate set drove the search for good ordering + early WIN cutoffs, but it
-    // is too narrow to CERTIFY a LOSS (a dropped quiet move could escape). Search
-    // the dropped legal moves now: any WIN is an escape (return it — the position
-    // is a WIN the reduced set missed); any UNKNOWN leaves it unresolved; only when
-    // EVERY dropped move also loses is the LOSS certified (sound, full recall). The
-    // reduced ordering already cut off the common winning/unresolved cases, so this
-    // full expansion runs only on genuinely-lost nodes. Budget-bounded via tick().
-    // Without `neighbor_dist` (threat-only deploy mode) stay conservative -> UNKNOWN.
+    // candidate set drove the search; certifying a LOSS needs the DROPPED legal
+    // moves too. Search them with a FULL window (NO α-β pruning — preserve exact
+    // recall): any WIN is an escape (return it); any UNKNOWN leaves it unresolved;
+    // only when EVERY dropped move also loses is the LOSS certified. `vbest` tracks
+    // the slowest (least-negative) loss for a correct mate distance.
+    if cfg.neighbor_dist.is_some() {
+        let mut vbest = best;
+        for (q, r) in board.legal_moves() {
+            if searched.contains(&(q, r)) {
+                continue;
+            }
+            let node_player = board.current_player;
+            let diff = match board.apply_move_tracked(q, r) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let flipped = board.current_player != node_player;
+            let child = solve(board, depth_left - 1, ply + 1, NEG_INF, POS_INF, budget, cfg, tt);
+            let rc = if flipped { -child.score } else { child.score };
+            if rc >= WIN_THRESHOLD {
+                let mut line = vec![(q, r)];
+                if !flipped {
+                    line.extend(child.line.iter().copied());
+                }
+                board.undo_move(diff);
+                return Scored { score: rc, line };
+            }
+            board.undo_move(diff);
+            if outcome_of(rc) != Outcome::Loss {
+                return Scored::heuristic(0); // a dropped move escapes the loss
+            }
+            if rc > vbest {
+                vbest = rc;
+            }
+        }
+        // Every reduced candidate AND every dropped legal move loses => certified.
+        tt.insert(key, Outcome::Loss);
+        return Scored { score: vbest, line: Vec::new() };
+    }
+
+    Scored::heuristic(0) // candidate set incomplete, verify disabled -> cannot prove LOSS
+}
+
+/// 3-VALUED REFERENCE ORACLE (test-only). The pre-increment-1 proof core,
+/// verbatim, kept as the verdict-invariance oracle for the scored α-β `solve`:
+/// the scored search MUST reproduce this oracle's every WIN/LOSS conclusion (α-β
+/// is a pruning/ordering optimisation, never a verdict change). See
+/// `verdict_invariance_scored_matches_3valued`.
+#[cfg(test)]
+pub(crate) struct Solved3 {
+    pub outcome: Outcome,
+    pub line: Vec<(i32, i32)>,
+}
+
+#[cfg(test)]
+impl Solved3 {
+    #[inline]
+    fn unknown() -> Self {
+        Solved3 { outcome: Outcome::Unknown, line: Vec::new() }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn solve_3valued(
+    board: &mut Board,
+    depth_left: i32,
+    budget: &mut Budget,
+    cfg: &TacticalConfig,
+    tt: &mut ProofTt,
+) -> Solved3 {
+    if !budget.tick() {
+        return Solved3::unknown();
+    }
+    if board.check_win() {
+        let outcome =
+            if board.terminal_value_to_move() > 0.0 { Outcome::Win } else { Outcome::Loss };
+        return Solved3 { outcome, line: Vec::new() };
+    }
+    let stm = board.current_player;
+    let opp = stm.other();
+    if board.count_winning_moves(stm) >= 1 {
+        let line = board.first_winning_move(stm).map_or_else(Vec::new, |m| vec![m]);
+        return Solved3 { outcome: Outcome::Win, line };
+    }
+    if board.moves_remaining == 1 && board.count_winning_moves(opp) >= 2 {
+        return Solved3 { outcome: Outcome::Loss, line: Vec::new() };
+    }
+    let key = (board.zobrist_hash, stm as i8, board.moves_remaining);
+    if let Some(outcome) = tt.get(key) {
+        return Solved3 { outcome, line: Vec::new() };
+    }
+    if depth_left <= 0 {
+        return Solved3::unknown();
+    }
+    let in_check = board.count_winning_moves(opp) >= 1;
+    let moves = candidates(board, stm, opp, cfg.cand_cap, cfg.neighbor_dist);
+    if moves.is_empty() {
+        return Solved3::unknown();
+    }
+    let moves_len = moves.len();
+    let searched: FxHashSet<(i32, i32)> = moves.iter().copied().collect();
+    let mut saw_unknown = false;
+    for &(q, r) in &moves {
+        let node_player = board.current_player;
+        let diff = match board.apply_move_tracked(q, r) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let child = solve_3valued(board, depth_left - 1, budget, cfg, tt);
+        let flipped = board.current_player != node_player;
+        let rc = if flipped { child.outcome.negate() } else { child.outcome };
+        if rc == Outcome::Win {
+            let mut line = vec![(q, r)];
+            if !flipped {
+                line.extend(child.line.iter().copied());
+            }
+            board.undo_move(diff);
+            return Solved3 { outcome: Outcome::Win, line };
+        }
+        board.undo_move(diff);
+        if rc == Outcome::Unknown {
+            saw_unknown = true;
+        }
+    }
+    if saw_unknown {
+        return Solved3::unknown();
+    }
+    let loss_complete =
+        (in_check && moves_len < cfg.cand_cap) || moves_len >= board.legal_move_count();
+    if loss_complete {
+        tt.insert(key, Outcome::Loss);
+        return Solved3 { outcome: Outcome::Loss, line: Vec::new() };
+    }
     if cfg.neighbor_dist.is_some() {
         for (q, r) in board.legal_moves() {
             if searched.contains(&(q, r)) {
@@ -197,7 +364,7 @@ pub(crate) fn solve(
                 Ok(d) => d,
                 Err(_) => continue,
             };
-            let child = solve(board, depth_left - 1, budget, cfg, tt);
+            let child = solve_3valued(board, depth_left - 1, budget, cfg, tt);
             let flipped = board.current_player != node_player;
             let rc = if flipped { child.outcome.negate() } else { child.outcome };
             if rc == Outcome::Win {
@@ -206,19 +373,17 @@ pub(crate) fn solve(
                     line.extend(child.line.iter().copied());
                 }
                 board.undo_move(diff);
-                return Solved { outcome: Outcome::Win, line };
+                return Solved3 { outcome: Outcome::Win, line };
             }
             board.undo_move(diff);
             if rc == Outcome::Unknown {
-                return Solved::unknown();
+                return Solved3::unknown();
             }
         }
-        // Every reduced candidate AND every dropped legal move loses => certified.
         tt.insert(key, Outcome::Loss);
-        return Solved { outcome: Outcome::Loss, line: Vec::new() };
+        return Solved3 { outcome: Outcome::Loss, line: Vec::new() };
     }
-
-    Solved::unknown() // candidate set incomplete, verify disabled -> cannot prove LOSS
+    Solved3::unknown()
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -1150,5 +1315,140 @@ mod tests {
             "R3: truncated candidate set must not yield a false LOSS (got {:?})",
             res.result
         );
+    }
+
+    // ── D-PFIT P2 increment 1: scored α-β + mate distance ───────────────────────
+
+    /// Drive the scored α-β core directly (full root window) and return the
+    /// verdict + raw score + PV. (The public `prove` surface exposes only the
+    /// verdict; the score is the increment-1 deliverable under test.)
+    fn run_scored(
+        b: &Board,
+        cfg: &TacticalConfig,
+        depth: i32,
+        budget: u64,
+    ) -> (Outcome, i32, Vec<(i32, i32)>) {
+        let mut board = b.clone();
+        let mut bud = Budget::new(budget);
+        let mut tt = super::super::tt::ProofTt::new();
+        let s = super::solve(&mut board, depth, 0, NEG_INF, POS_INF, &mut bud, cfg, &mut tt);
+        (outcome_of(s.score), s.score, s.line)
+    }
+
+    /// The pre-increment-1 3-valued reference oracle's verdict (the invariance
+    /// target — α-β must never change it).
+    fn run_3valued(b: &Board, cfg: &TacticalConfig, depth: i32, budget: u64) -> Outcome {
+        let mut board = b.clone();
+        let mut bud = Budget::new(budget);
+        let mut tt = super::super::tt::ProofTt::new();
+        super::solve_3valued(&mut board, depth, &mut bud, cfg, &mut tt).outcome
+    }
+
+    #[test]
+    fn clamp_heuristic_never_reaches_proof_region() {
+        // SOUNDNESS: a heuristic leaf can NEVER masquerade as a mate. Clamp pins
+        // any eval (incl. ±∞-ish) strictly inside (-WIN_THRESHOLD, WIN_THRESHOLD).
+        for &v in &[i32::MIN, -MATE, -WIN_THRESHOLD, -1, 0, 1, WIN_THRESHOLD, MATE, i32::MAX] {
+            let c = super::clamp_heuristic(v);
+            assert!(c.abs() < WIN_THRESHOLD, "clamp({v}) = {c} leaked into the proof region");
+            assert_ne!(outcome_of(c), WIN, "clamped heuristic must never read as WIN");
+            assert_ne!(outcome_of(c), LOSS, "clamped heuristic must never read as LOSS");
+        }
+    }
+
+    #[test]
+    fn scored_mate_distance_prefers_shorter_win() {
+        // Mate-distance encoding: a SHORTER forced win scores higher. An immediate
+        // (1-stone) win at the root is exactly `MATE - 0 = MATE`; a 2-stone forcing
+        // win must score strictly less (it lands a ply deeper) but still proven.
+        let cfg = TacticalConfig { cand_cap: 40, window_half: None, neighbor_dist: None };
+
+        // Immediate win: P1 has 0..4 on r=0 (a single stone completes six).
+        let imm: Vec<((i32, i32), Cell)> = (0..5).map(|q| ((q, 0), Cell::P1)).collect();
+        let imm_b = static_board(&imm, Player::One, 2);
+        assert!(imm_b.count_winning_moves(Player::One) >= 1, "setup: immediate win");
+        let (o1, s1, _) = run_scored(&imm_b, &cfg, 12, 50_000);
+        assert_eq!(o1, WIN, "immediate win must be WIN");
+        assert_eq!(s1, MATE, "immediate win scores MATE - 0 = MATE, got {s1}");
+
+        // 2-stone forcing win: P1 has 0..3 on r=0 (needs (4,0) then (5,0)).
+        let two: Vec<((i32, i32), Cell)> = (0..4).map(|q| ((q, 0), Cell::P1)).collect();
+        let two_b = static_board(&two, Player::One, 2);
+        assert_eq!(two_b.count_winning_moves(Player::One), 0, "setup: no 1-stone win");
+        let (o2, s2, _) = run_scored(&two_b, &cfg, 12, 200_000);
+        assert_eq!(o2, WIN, "2-stone forcing win must be WIN");
+        assert!(s2 >= WIN_THRESHOLD, "2-stone win must be proven, got {s2}");
+        assert!(s2 < s1, "deeper mate must score lower: 2-stone {s2} !< immediate {s1}");
+    }
+
+    #[test]
+    fn scored_loss_is_mate_magnitude_negative() {
+        // A proven forced LOSS carries a mate-magnitude NEGATIVE score (the
+        // mate-distance loss encoding), and the verdict matches the oracle.
+        let cfg = TacticalConfig { cand_cap: 40, window_half: None, neighbor_dist: None };
+        let b = compact_double_threat(0, 0, false);
+        let (o, s, _) = run_scored(&b, &cfg, 12, 200_000);
+        assert_eq!(o, LOSS, "compact double-threat is a forced LOSS");
+        assert!(s <= -WIN_THRESHOLD, "LOSS must carry a mate-magnitude negative score, got {s}");
+    }
+
+    #[test]
+    fn verdict_invariance_scored_matches_3valued() {
+        // THE INVARIANCE GATE (red-team): the scored α-β `solve` must reproduce
+        // the pre-change 3-valued core's verdict on EVERY test position — across
+        // WIN / LOSS / UNKNOWN, threat-only and verify (neighbor_dist) configs,
+        // and the truncating cand_cap=1 surfaces. α-β is pruning/ordering ONLY.
+        type Case = (Board, TacticalConfig, i32, u64, &'static str);
+        let cfg = |cand_cap, neighbor_dist| TacticalConfig {
+            cand_cap,
+            window_half: None,
+            neighbor_dist,
+        };
+        let imm: Vec<((i32, i32), Cell)> = (0..5).map(|q| ((q, 0), Cell::P1)).collect();
+        let two: Vec<((i32, i32), Cell)> = (0..4).map(|q| ((q, 0), Cell::P1)).collect();
+        let mut quiet = Board::new();
+        for &(q, r) in &[(0, 0), (3, 3), (3, 4), (0, 1), (1, 0)] {
+            quiet.apply_move(q, r).unwrap();
+        }
+        let cases: Vec<Case> = vec![
+            (static_board(&imm, Player::One, 2), cfg(40, None), 12, 50_000, "immediate-win"),
+            (static_board(&two, Player::One, 2), cfg(40, None), 12, 200_000, "2-stone-win"),
+            (quiet, cfg(40, None), 20, 20_000, "quiet-not-loss"),
+            (build_fork(), cfg(40, None), 30, 300_000, "fork-loss-d30"),
+            (build_fork(), cfg(40, None), 12, 300_000, "fork-loss-d12"),
+            (compact_double_threat(0, 0, false), cfg(40, None), 12, 200_000, "compact-loss-a"),
+            (compact_double_threat(-3, 4, false), cfg(40, None), 12, 200_000, "compact-loss-b"),
+            (compact_double_threat(2, -2, true), cfg(40, None), 12, 200_000, "compact-loss-c"),
+            (compact_double_open_four(0, 0, false), cfg(40, None), 12, 80_000, "open4-threatonly-unknown"),
+            // verify (neighbor_dist) + truncating cand_cap surfaces:
+            (fork_with_p1_counter(), cfg(1, None), 20, 200_000, "trunc-r3-unknown"),
+            (fork_with_p1_counter(), cfg(1, Some(2)), 20, 400_000, "trunc-verify-win"),
+            (compact_double_threat(0, 0, false), cfg(1, Some(2)), 12, 1_000_000, "trunc-verify-loss"),
+            (compact_double_threat(0, 0, false), cfg(1, None), 12, 400_000, "trunc-noverify-unknown"),
+        ];
+        for (b, c, depth, budget, name) in cases {
+            let (scored, _, _) = run_scored(&b, &c, depth, budget);
+            let reference = run_3valued(&b, &c, depth, budget);
+            assert_eq!(
+                scored, reference,
+                "VERDICT INVARIANCE BROKEN ({name}): scored α-β = {scored:?}, 3-valued oracle = {reference:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scored_win_pv_is_realizable() {
+        // α-β must not corrupt the winning PV (the A1 override plays line[0..2]).
+        // The 2-stone forcing win's line must replay to a real 6-in-a-row.
+        let cfg = TacticalConfig { cand_cap: 40, window_half: None, neighbor_dist: None };
+        let two: Vec<((i32, i32), Cell)> = (0..4).map(|q| ((q, 0), Cell::P1)).collect();
+        let b = static_board(&two, Player::One, 2);
+        let (o, _, line) = run_scored(&b, &cfg, 12, 200_000);
+        assert_eq!(o, WIN, "must be WIN");
+        assert!(line.len() >= 2, "2-stone win carries both stones, got {line:?}");
+        let mut c = b.clone();
+        c.apply_move(line[0].0, line[0].1).unwrap();
+        c.apply_move(line[1].0, line[1].1).unwrap();
+        assert!(c.check_win(), "PV must realize a real 6, got {line:?}");
     }
 }

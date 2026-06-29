@@ -35,3 +35,14 @@ pub(crate) fn static_eval(_board: &Board) -> Option<i32> {
     // (ordering.rs step 6) and heuristic non-proof leaves (reported UNKNOWN).
     None
 }
+
+/// Heuristic value for a NON-PROOF leaf (horizon / quiet node), side-to-move
+/// perspective. Increment-1 stub: `None` => `0` (the scored search treats it as
+/// UNKNOWN). When the 729 table lands (increment 2) this returns the static
+/// pattern score. The caller (`search::solve`) CLAMPS this strictly inside the
+/// proof region (`clamp_heuristic`), so it can NEVER masquerade as a mate — the
+/// soundness invariant: a heuristic leaf is never a proof.
+#[inline]
+pub(crate) fn heuristic_leaf(board: &Board) -> i32 {
+    static_eval(board).unwrap_or(0)
+}

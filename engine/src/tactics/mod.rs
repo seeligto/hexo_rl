@@ -52,6 +52,42 @@ pub enum Outcome {
     Unknown,
 }
 
+/// Mate-score base (D-PFIT P2 increment 1 — scored α-β). A proven mate is
+/// encoded mate-distance-aware as `±(MATE - ply)` so a SHORTER forced win scores
+/// higher (better PV / move ordering), while the SOUNDNESS verdict depends ONLY
+/// on the magnitude crossing `WIN_THRESHOLD`. Alpha-beta is a pruning/ordering
+/// optimisation layered on this score — it NEVER changes a proven WIN/LOSS
+/// conclusion: the root runs a FULL window (exact root value) and a proven LOSS
+/// is concluded only on a node whose candidate loop ran to completion with NO
+/// β-cutoff (so `best` is the exact node value). See `search::solve`.
+pub(crate) const MATE: i32 = 1_000_000;
+
+/// Scores with magnitude >= this are mate-distance-encoded PROOFS; any bounded
+/// score below it is a heuristic / UNKNOWN leaf — NEVER a proof. The 1000-ply
+/// band keeps every realisable mate distance inside the proof region.
+pub(crate) const WIN_THRESHOLD: i32 = MATE - 1000;
+
+/// Window sentinels for the α-β search: strictly outside `[-MATE, MATE]` so a
+/// full window `[NEG_INF, POS_INF]` cannot clip any mate score.
+pub(crate) const POS_INF: i32 = MATE + 1000;
+pub(crate) const NEG_INF: i32 = -(MATE + 1000);
+
+/// Derive the 3-valued proof verdict from a scored-search value. The scored core
+/// guarantees a mate-magnitude score is ONLY ever produced by a sound proof path
+/// (terminal CF-1 backup, stone-count shortcut, completeness-guarded all-lose, or
+/// the recall verify), so the magnitude alone is a sound verdict at the ROOT
+/// (where the value is exact). UNKNOWN = bounded (heuristic / unresolved).
+#[inline]
+pub(crate) fn outcome_of(score: i32) -> Outcome {
+    if score >= WIN_THRESHOLD {
+        Outcome::Win
+    } else if score <= -WIN_THRESHOLD {
+        Outcome::Loss
+    } else {
+        Outcome::Unknown
+    }
+}
+
 impl Outcome {
     /// Flip WIN<->LOSS; UNKNOWN stays UNKNOWN (negamax for HTTT compound turns).
     #[inline]
@@ -172,10 +208,22 @@ impl TacticalSolver {
     ) -> ProofResult {
         let mut budget = Budget::new(node_budget);
         let mut tt = tt::ProofTt::new();
-        let solved = search::solve(board, max_depth as i32, &mut budget, &self.config, &mut tt);
+        // FULL window at the root: the root value is then EXACT, so the
+        // magnitude->verdict mapping (`outcome_of`) is a SOUND proof. `ply = 0`
+        // is the root mate-distance origin.
+        let scored = search::solve(
+            board,
+            max_depth as i32,
+            0,
+            NEG_INF,
+            POS_INF,
+            &mut budget,
+            &self.config,
+            &mut tt,
+        );
 
-        let mut result = solved.outcome;
-        let mut line = solved.line;
+        let mut result = outcome_of(scored.score);
+        let mut line = scored.line;
 
         // In-window offense guard. The A1 override PLACES both stones of the turn
         // — `line[0]` (played now) AND `line[1]` (the cached 2nd stone). BOTH must
