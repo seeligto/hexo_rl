@@ -284,6 +284,89 @@ def test_inwindow_proven_move_still_overridden_with_window_half():
     assert bot.skipped_offwindow == 0
 
 
+def test_offwindow_completing_stone_suppresses_override():
+    """FIX 5 / CLAUDE.md §D-COHERENCE: a 2-stone proof whose FIRST stone is in-window but
+    whose COMPLETING stone lands off-window must NOT fire — the reachability-relevant cell
+    is the COMPLETING stone that LANDS the win. The old line[0]-only guard would have
+    wrongly placed the off-window completing stone."""
+    inner = _StubInner()
+    # s1=(3,0) in-window (cheb 3 <= 9); s2=(15,0) the completing stone, off-window (cheb 15).
+    probe = _SpyProbe(result=[(3, 0), (15, 0)], last_score=1e8)
+    bot = SolverBackupBot(inner, solver_probe=probe, window_half=9)
+    board = _FakeBoard(stones=[(0, 0, 1), (1, 0, -1)])  # bbox center ~origin
+    move = bot.get_move(_FakeState(moves_remaining=2, centers=[0]), board)
+    assert move == _SENTINEL, "off-window COMPLETING stone -> suppress the whole override"
+    assert bot.fired_win == 0
+    assert bot.skipped_offwindow == 1
+
+
+# ── Native engine::tactics probe (Z1: route the backup through the native solver) ─────
+# A 4-in-a-row for P1 with P1 to move (mr=2): P1 wins its own turn by playing the 5th
+# then 6th stone (e.g. (4,0)+(5,0) -> 0..5 = six). The native threat-only solver proves
+# this WIN (threat_move (4,0) -> child win-in-1). Compact bbox + in-window so the solver's
+# own window_half=9 guard does not suppress it. P2 stones are scattered 3-runs (no 6, no
+# interference with row 0).
+WIN_NATIVE_SEQ = [
+    (0, 0),            # P1 opener
+    (0, 3), (1, 3),    # P2
+    (1, 0), (2, 0),    # P1
+    (2, 3), (0, -3),   # P2
+    (3, 0), (0, 6),    # P1  -> P1 has 0..3 on r=0 (four in a row) + (0,6)
+    (1, -3), (2, -3),  # P2  -> P1 to move, mr=2
+]
+# Quiet position: no forcing line -> native returns UNKNOWN (score 0 -> delegate).
+QUIET_NATIVE_SEQ = [(0, 0), (2, 0), (2, -2), (-1, 1), (3, -1)]
+
+
+def test_native_probe_proves_two_stone_win():
+    """The native probe maps a proven WIN to score 1e8 with a winning line[0]; the board
+    passed to the probe IS an engine.Board, so prove() takes it directly (no bridge)."""
+    board, state = _build(WIN_NATIVE_SEQ)
+    assert board.current_player == 1 and state.moves_remaining == 2, "setup: P1 to move, turn start"
+    bot = SolverBackupBot(_StubInner(), depth=12, probe_engine="native", window_half=None)
+    line, score = bot._probe(state, board)
+    assert score >= WIN_THRESHOLD, f"native must prove the 2-stone WIN, got score={score}"
+    assert line, "WIN proof must carry a move line"
+    # line[0] is a legal continuation toward the six.
+    assert board.get(line[0][0], line[0][1]) == 0, "proof stone-1 must be an empty cell"
+
+
+def test_native_probe_quiet_no_proof_delegates():
+    board, state = _build(QUIET_NATIVE_SEQ)
+    inner = _StubInner()
+    bot = SolverBackupBot(inner, depth=12, probe_engine="native", window_half=None)
+    move = bot.get_move(state, board)
+    assert move == _SENTINEL, "no proof -> delegate to the model"
+    assert bot.fired_win == 0 and bot.probes == 1
+
+
+def test_native_solverbackup_overrides_on_win():
+    board, state = _build(WIN_NATIVE_SEQ)
+    inner = _StubInner()
+    bot = SolverBackupBot(inner, depth=12, probe_engine="native", window_half=None)
+    move = bot.get_move(state, board)
+    assert move != _SENTINEL, "native proven WIN must override the model"
+    assert inner.calls == 0
+    assert bot.fired_win == 1
+    # The overridden move completes toward the six on row 0 (the proof line).
+    assert board.get(move[0], move[1]) == 0
+
+
+def test_native_disables_sealbot_colony_guard():
+    """Native is engine-native (no flat int8[140][140] OOB), so the SealBot colony/coord
+    guard — which exists only to dodge that OOB — is DISABLED on the native path. Leaving it
+    on would needlessly delegate the very spread-board positions native proves SOUNDLY (the
+    immunity the user chose 'wait for native' to get). Off-window is handled by the solver's
+    own window_half guard, so the Python off-window guard is also off here."""
+    bot = SolverBackupBot(
+        _StubInner(), depth=12, probe_engine="native",
+        colony_max_coord=60, colony_max_clusters=4, window_half=9,
+    )
+    assert bot._colony_max_coord > 10**6, "native must disable the SealBot coord guard"
+    assert bot._colony_max > 10**6, "native must disable the SealBot cluster guard"
+    assert bot._window_half is None, "native delegates off-window suppression to the solver"
+
+
 def test_reset_forwards_to_inner_and_keeps_injected_probe():
     inner = _StubInner()
     probe = _SpyProbe(result=[(7, 7)], last_score=0.0)

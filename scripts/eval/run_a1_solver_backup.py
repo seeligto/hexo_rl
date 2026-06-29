@@ -53,7 +53,8 @@ from hexo_rl.eval.deploy_strength_eval import (
 from hexo_rl.eval.solver_backup_bot import SolverBackupBot
 
 
-def _build_cand(arm: str, engine, knobs, backup_depth: int, seed: int, window_half, legal_set: bool = False):
+def _build_cand(arm: str, engine, knobs, backup_depth: int, seed: int, window_half,
+                legal_set: bool = False, probe_engine: str = "sealbot"):
     # §D-RECONFIRM R1: legal_set threads the MULTI-WINDOW no-drop decode into BOTH arms'
     # deploy head (baseline + the solver-backup's inner). The original A1 (+0.165) ran
     # legal_set=False = the SINGLE-window handicapped instrument; this re-measures the
@@ -61,7 +62,12 @@ def _build_cand(arm: str, engine, knobs, backup_depth: int, seed: int, window_ha
     head = DeployHeadBot(engine, knobs, label=arm, seed=seed, legal_set=legal_set)
     if arm == "baseline":
         return head
-    return SolverBackupBot(head, depth=backup_depth, window_half=window_half)  # arm == backup_dN
+    # §D-ZVALID Z1: probe_engine="native" routes the backup through engine::tactics (sound,
+    # spread-immune, no SealBot dep; capped at threat-forcing reach until the quiet-move body
+    # lands). The native solver's own window_half guard handles off-window, so the Python
+    # window_half/colony guards are disabled on that path (see SolverBackupBot).
+    return SolverBackupBot(head, depth=backup_depth, window_half=window_half,
+                           probe_engine=probe_engine)  # arm == backup_dN
 
 
 def _play_arm(
@@ -119,7 +125,12 @@ def main() -> None:
                          "was measured on. Set this to re-measure LIFT-HOLDS vs LIFT-SHRINKS.")
     ap.add_argument("--window-half", type=int, default=9,
                     help="off-window guard: SealBot proofs of moves >cheb this from the stone "
-                         "bbox center are untrusted (9 = v6_live2_ls window; 0/neg disables)")
+                         "bbox center are untrusted (9 = v6_live2_ls window; 0/neg disables). "
+                         "For --probe-engine native this is passed to the solver's OWN guard.")
+    ap.add_argument("--probe-engine", default="sealbot", choices=["sealbot", "native"],
+                    help="D-ZVALID Z1: 'native' routes the backup through engine::tactics "
+                         "(sound + spread-immune, no SealBot dep; capped at threat-forcing reach "
+                         "until the quiet-move body lands). 'sealbot' = interim vendored probe.")
     ap.add_argument("--opening-plies", type=int, default=4)
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--min-fired", type=int, default=10, help="power floor: n_fired below this = INDETERMINATE")
@@ -172,7 +183,7 @@ def main() -> None:
         depth = int(arm.split("_d")[1]) if arm != "baseline" else 0
         wh = args.window_half if args.window_half and args.window_half > 0 else None
         cand = _build_cand(arm, engine, knobs, depth, seed=args.seed_base, window_half=wh,
-                           legal_set=args.legal_set)  # same seed: g=0 deterministic; legal_set=multi-window decode
+                           legal_set=args.legal_set, probe_engine=args.probe_engine)  # same seed: g=0 deterministic
         t0 = time.time()
         games = _play_arm(cand, arm, args.sealbot_depth, encoding, args.n_games,
                           args.opening_plies, args.seed_base)  # SAME seed_base => paired

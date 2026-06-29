@@ -77,6 +77,9 @@ class SolverBackupBot(BotProtocol):
         colony_max_coord: int = DEFAULT_COLONY_MAX_COORD,
         window_half: Optional[int] = None,
         solver_probe: Optional[ProbeFn] = None,
+        probe_engine: str = "sealbot",
+        node_budget: int = 200_000,
+        cand_cap: int = 40,
     ) -> None:
         self._inner = inner
         self._depth = depth
@@ -88,8 +91,48 @@ class SolverBackupBot(BotProtocol):
         # off-window (the source of all 11 D-SOLVER A1 false proofs, at coord 9-15). For
         # v6_live2_ls the window half is 9. Restricts the backup to its sound in-window band.
         self._window_half = window_half
-        self._uses_default_probe = solver_probe is None
-        self._probe: ProbeFn = solver_probe if solver_probe is not None else self._build_default_probe(depth)
+        self._probe_engine = probe_engine
+        self._node_budget = node_budget
+        self._cand_cap = cand_cap
+        # Probe selection (D-ZVALID Z1):
+        #   - explicit solver_probe (DI) wins — used by the fast injected-logic tests.
+        #   - "native": the engine::tactics solver (engine-native, NO flat-array OOB and
+        #     multi-window-correct). It is IMMUNE to SealBot's spread-false-proofs, so the
+        #     SealBot colony/coord guard is DISABLED (leaving it on would needlessly delegate
+        #     the very spread positions native proves soundly). The solver's OWN window_half
+        #     suppresses off-window WINs, so the Python off-window guard is left off here.
+        #     WIN proofs are sound by construction (terminal backup), so the R3 LOSS guard
+        #     does not affect this WIN-only override. Capped at threat-forcing reach until the
+        #     quiet-move body lands; full reach follows from the same hook (no Python change).
+        #   - "sealbot" (default): the interim vendored SealBot probe (colony/window guards on).
+        if solver_probe is not None:
+            self._probe: ProbeFn = solver_probe
+            self._uses_default_probe = False
+        elif probe_engine == "native":
+            self._colony_max = 10**9
+            self._colony_max_coord = 10**9
+            # The native solver owns its OWN off-window guard (mod.rs, now vetting BOTH
+            # played stones), so the Python `_is_off_window` guard is left off here. But
+            # that guard only fires when the native solver's window_half is SET — with
+            # window_half=None it is OFF and off-window WINs fire unguarded. Warn loudly so
+            # the in-window-offense-only scope is an explicit operator choice (the A1 harness
+            # passes --window-half=9; the bare default object is otherwise unprotected).
+            if window_half is None:
+                import warnings
+
+                warnings.warn(
+                    "SolverBackupBot(probe_engine='native', window_half=None): the native "
+                    "off-window guard is DISABLED — off-window WIN proofs will fire the "
+                    "override. Pass window_half (e.g. 9 for v6_live2_ls) to restrict to the "
+                    "in-window-offense band.",
+                    stacklevel=2,
+                )
+            self._window_half = None
+            self._probe = self._build_native_probe(depth, node_budget, window_half, cand_cap)
+            self._uses_default_probe = False  # native solver is stateless per prove -> no rebuild
+        else:
+            self._probe = self._build_default_probe(depth)
+            self._uses_default_probe = True
         # 2-stone-turn state
         self._pending_override: Optional[Move] = None
         self._turn_is_net: bool = False
@@ -111,6 +154,28 @@ class SolverBackupBot(BotProtocol):
             game = _MockGame(board_dict, state.current_player, state.moves_remaining, len(board_dict))
             result = mbot.get_move(game)
             return result, float(mbot.last_score)
+
+        return probe
+
+    def _build_native_probe(
+        self, depth: int, node_budget: int, window_half: Optional[int], cand_cap: int
+    ) -> ProbeFn:
+        """Native engine::tactics WIN-proof probe (D-DECODE Track 3 / D-ZVALID Z1).
+
+        The harness ``board`` passed to a ProbeFn IS an ``engine.Board`` (see
+        ``deploy_strength_eval._play_one_game``), so ``prove`` takes it directly — no
+        mock-game serialization, no SealBot dependency, no flat-array OOB. ``prove`` is
+        stateless per call (fresh budget + TT each time), so the probe needs no per-game
+        reset. Maps the 3-valued result to the A1 score contract: WIN(1) -> +1e8 (>=
+        WIN_THRESHOLD, fires the override), LOSS(-1) -> -1e8, UNKNOWN(0) -> 0.0 (delegate)."""
+        from engine import TacticalSolver  # native solver (pyo3 binding)
+
+        solver = TacticalSolver(window_half=window_half, cand_cap=cand_cap)
+
+        def probe(state: Any, board: Any) -> Tuple[List[Move], float]:
+            result, line, _nodes = solver.prove(board, depth, node_budget)
+            score = 1e8 if result == 1 else (-1e8 if result == -1 else 0.0)
+            return [tuple(m) for m in line], float(score)
 
         return probe
 
@@ -145,9 +210,19 @@ class SolverBackupBot(BotProtocol):
 
         if result and last_score >= self._thr:
             s1 = (int(result[0][0]), int(result[0][1]))
+            # The override PLACES s1 now AND the cached completing stone s2 this same turn.
+            s2 = (int(result[1][0]), int(result[1][1])) if len(result) >= 2 else None
             # Off-window proofs are untrusted: SealBot's single-window eval mis-evaluates
             # off-window, fabricating phantom mates (all 11 A1 false proofs were off-window).
-            if self._window_half is not None and stones and self._is_off_window(s1, stones):
+            # Vet BOTH stones, not just s1: per CLAUDE.md §D-COHERENCE the reachability-
+            # relevant cell is the COMPLETING stone that LANDS the win — a proof whose 1st
+            # stone is in-window but whose completion s2 lands off-window must NOT fire.
+            if (
+                self._window_half is not None
+                and stones
+                and (self._is_off_window(s1, stones)
+                     or (s2 is not None and self._is_off_window(s2, stones)))
+            ):
                 self.skipped_offwindow += 1
                 if multi_stone:
                     self._turn_is_net = True
@@ -158,12 +233,8 @@ class SolverBackupBot(BotProtocol):
                 # Lock the turn to the proof. Cache the proven 2nd stone only if it is a
                 # distinct LEGAL cell; otherwise lock the 2nd stone to the model rather than
                 # replay an occupied/duplicate cell (degenerate — impossible for a real proof).
-                if len(result) >= 2:
-                    s2 = (int(result[1][0]), int(result[1][1]))
-                    if s2 != s1 and board.get(s2[0], s2[1]) == 0:
-                        self._pending_override = s2
-                    else:
-                        self._turn_is_net = True
+                if s2 is not None and s2 != s1 and board.get(s2[0], s2[1]) == 0:
+                    self._pending_override = s2
                 else:
                     self._turn_is_net = True
             return s1
@@ -202,4 +273,4 @@ class SolverBackupBot(BotProtocol):
 
     def name(self) -> str:
         inner_name = self._inner.name() if hasattr(self._inner, "name") else "model"
-        return f"solverbackup(d{self._depth},{inner_name})"
+        return f"solverbackup(d{self._depth},{self._probe_engine},{inner_name})"
