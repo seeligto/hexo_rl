@@ -106,13 +106,14 @@ pub(crate) fn solve(
         return Scored { score: -(MATE - ply), line: Vec::new() };
     }
 
-    // (4) TT probe — only PROVEN LOSS is cached (see `tt.rs`): a WIN hit would
-    //     return an empty PV and could truncate the override line. A cached LOSS
-    //     is game-theoretic; re-encode at this node's mate distance.
+    // (4) TT probe — only PROVEN LOSS is trusted as a proof (see `tt.rs`): a WIN
+    //     hit would return an empty PV and could truncate the override line. A
+    //     cached LOSS is game-theoretic; `get_loss_proof` decodes the mate distance
+    //     at THIS node's ply.
     let key = (board.zobrist_hash, stm as i8, board.moves_remaining);
-    if let Some(outcome) = tt.get(key) {
-        debug_assert_eq!(outcome, Outcome::Loss, "TT must cache only proven LOSS");
-        return Scored { score: -(MATE - ply), line: Vec::new() };
+    if let Some(score) = tt.get_loss_proof(key, ply) {
+        debug_assert!(score <= -WIN_THRESHOLD, "TT proof probe must decode a mate-magnitude LOSS");
+        return Scored { score, line: Vec::new() };
     }
 
     if depth_left <= 0 {
@@ -216,7 +217,7 @@ pub(crate) fn solve(
     let loss_complete =
         (in_check && moves_len < cfg.cand_cap) || moves_len >= board.legal_move_count();
     if loss_complete {
-        tt.insert(key, Outcome::Loss); // proven, game-theoretic — cache it
+        tt.store_loss_proof(key, best, ply, depth_left); // proven, game-theoretic — cache it
         return Scored { score: best, line: Vec::new() };
     }
 
@@ -257,7 +258,7 @@ pub(crate) fn solve(
             }
         }
         // Every reduced candidate AND every dropped legal move loses => certified.
-        tt.insert(key, Outcome::Loss);
+        tt.store_loss_proof(key, vbest, ply, depth_left);
         return Scored { score: vbest, line: Vec::new() };
     }
 
@@ -309,8 +310,8 @@ pub(crate) fn solve_3valued(
         return Solved3 { outcome: Outcome::Loss, line: Vec::new() };
     }
     let key = (board.zobrist_hash, stm as i8, board.moves_remaining);
-    if let Some(outcome) = tt.get(key) {
-        return Solved3 { outcome, line: Vec::new() };
+    if tt.get_loss_proof(key, 0).is_some() {
+        return Solved3 { outcome: Outcome::Loss, line: Vec::new() };
     }
     if depth_left <= 0 {
         return Solved3::unknown();
@@ -351,7 +352,7 @@ pub(crate) fn solve_3valued(
     let loss_complete =
         (in_check && moves_len < cfg.cand_cap) || moves_len >= board.legal_move_count();
     if loss_complete {
-        tt.insert(key, Outcome::Loss);
+        tt.store_loss_proof(key, -MATE, 0, depth_left);
         return Solved3 { outcome: Outcome::Loss, line: Vec::new() };
     }
     if cfg.neighbor_dist.is_some() {
@@ -380,7 +381,7 @@ pub(crate) fn solve_3valued(
                 return Solved3::unknown();
             }
         }
-        tt.insert(key, Outcome::Loss);
+        tt.store_loss_proof(key, -MATE, 0, depth_left);
         return Solved3 { outcome: Outcome::Loss, line: Vec::new() };
     }
     Solved3::unknown()
