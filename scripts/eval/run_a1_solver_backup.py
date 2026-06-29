@@ -53,8 +53,12 @@ from hexo_rl.eval.deploy_strength_eval import (
 from hexo_rl.eval.solver_backup_bot import SolverBackupBot
 
 
-def _build_cand(arm: str, engine, knobs, backup_depth: int, seed: int, window_half):
-    head = DeployHeadBot(engine, knobs, label=arm, seed=seed)
+def _build_cand(arm: str, engine, knobs, backup_depth: int, seed: int, window_half, legal_set: bool = False):
+    # §D-RECONFIRM R1: legal_set threads the MULTI-WINDOW no-drop decode into BOTH arms'
+    # deploy head (baseline + the solver-backup's inner). The original A1 (+0.165) ran
+    # legal_set=False = the SINGLE-window handicapped instrument; this re-measures the
+    # paired delta on the corrected multi-window head the net was trained under.
+    head = DeployHeadBot(engine, knobs, label=arm, seed=seed, legal_set=legal_set)
     if arm == "baseline":
         return head
     return SolverBackupBot(head, depth=backup_depth, window_half=window_half)  # arm == backup_dN
@@ -108,6 +112,11 @@ def main() -> None:
     ap.add_argument("--sealbot-depth", type=int, default=5, help="opponent SealBot fixed depth")
     ap.add_argument("--backup-depths", default="6",
                     help="comma list of backup probe depths; include the opponent depth for the matched control")
+    ap.add_argument("--legal-set", action="store_true",
+                    help="§D-RECONFIRM R1: route BOTH arms' deploy head through the MULTI-WINDOW "
+                         "no-drop legal-set decode (the corrected, trained-under instrument). "
+                         "Default off = single-window — the handicapped instrument A1's +0.165 "
+                         "was measured on. Set this to re-measure LIFT-HOLDS vs LIFT-SHRINKS.")
     ap.add_argument("--window-half", type=int, default=9,
                     help="off-window guard: SealBot proofs of moves >cheb this from the stone "
                          "bbox center are untrusted (9 = v6_live2_ls window; 0/neg disables)")
@@ -115,6 +124,13 @@ def main() -> None:
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--min-fired", type=int, default=10, help="power floor: n_fired below this = INDETERMINATE")
     ap.add_argument("--seed-base", type=int, default=20260627)
+    ap.add_argument("--n-sims-full", type=int, default=0,
+                    help="§D-RECONFIRM R2: override the deploy n_sims_full for ALL checkpoints "
+                         "(0 = use each ckpt's embedded knob). The d1m lineage embeds 100 sims at "
+                         "95k-200k but 150 at 272357 — fix this to ONE value (150 = the D-LADDER "
+                         "Gumbel@150 deploy regime) for a same-instrument cross-checkpoint WR ladder.")
+    ap.add_argument("--gumbel-m", type=int, default=0,
+                    help="override the deploy gumbel_m for ALL checkpoints (0 = embedded knob).")
     ap.add_argument("--out", default="reports/d_solver_A1", help="output dir")
     ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     args = ap.parse_args()
@@ -129,11 +145,23 @@ def main() -> None:
     model, _spec, auto_label = load_model_with_encoding(args.checkpoint, device)
     ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     knobs = extract_deploy_knobs(ck.get("config", {}))
+    # §D-RECONFIRM R2: fix the deploy search budget across a cross-checkpoint lineage so the WR
+    # ladder is same-instrument (the d1m lineage embeds 100 sims at 95k-200k vs 150 at 272357).
+    knob_overrides = {}
+    if args.n_sims_full:
+        knob_overrides["n_sims_full"] = (knobs.get("n_sims_full"), args.n_sims_full)
+        knobs["n_sims_full"] = args.n_sims_full
+    if args.gumbel_m:
+        knob_overrides["gumbel_m"] = (knobs.get("gumbel_m"), args.gumbel_m)
+        knobs["gumbel_m"] = args.gumbel_m
+    if knob_overrides:
+        print(f"[A1] KNOB OVERRIDE (same-instrument): {knob_overrides}", flush=True)
     encoding = args.encoding
     engine = _build_engine_for_model(model, encoding, device)
     print(f"[A1] ckpt={Path(args.checkpoint).name} auto_enc={auto_label} board_enc={encoding} "
           f"device={device} knobs={knobs} sealbot_d{args.sealbot_depth} backup_d{backup_depths} "
-          f"n={args.n_games}/arm PAIRED", flush=True)
+          f"n={args.n_games}/arm PAIRED decode={'MULTI-WINDOW(legal_set)' if args.legal_set else 'single-window'}",
+          flush=True)
 
     arm_labels = ["baseline"] + [f"backup_d{d}" for d in backup_depths]
     games_by_arm: Dict[str, List[Dict[str, Any]]] = {}
@@ -143,7 +171,8 @@ def main() -> None:
     for arm in arm_labels:
         depth = int(arm.split("_d")[1]) if arm != "baseline" else 0
         wh = args.window_half if args.window_half and args.window_half > 0 else None
-        cand = _build_cand(arm, engine, knobs, depth, seed=args.seed_base, window_half=wh)  # same seed: g=0 deterministic
+        cand = _build_cand(arm, engine, knobs, depth, seed=args.seed_base, window_half=wh,
+                           legal_set=args.legal_set)  # same seed: g=0 deterministic; legal_set=multi-window decode
         t0 = time.time()
         games = _play_arm(cand, arm, args.sealbot_depth, encoding, args.n_games,
                           args.opening_plies, args.seed_base)  # SAME seed_base => paired
@@ -197,6 +226,9 @@ def main() -> None:
 
     summary = {
         "checkpoint": str(args.checkpoint), "encoding": encoding, "knobs": knobs,
+        "legal_set": bool(args.legal_set),  # §D-RECONFIRM R1: multi-window(True) vs single-window(False) decode
+        "knob_overrides": {k: {"embedded": v[0], "forced": v[1]} for k, v in knob_overrides.items()},
+        "deploy_knobs": knobs,  # the ACTUAL knobs used (post-override) — same-instrument provenance for R2
         "sealbot_depth": args.sealbot_depth, "backup_depths": backup_depths,
         "n_games_per_arm": args.n_games, "opening_plies": args.opening_plies,
         "min_fired": args.min_fired, "design": "paired", "arms": arm_results, "deltas": deltas,
