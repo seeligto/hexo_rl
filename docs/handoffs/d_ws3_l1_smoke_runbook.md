@@ -98,22 +98,33 @@ that is the z-coverage proxy; if ~0 the loop is starved (raise depth/budget/neig
 # games, disjoint from the fine-tune's fresh self-play by construction):
 .venv/bin/python scripts/dpfit_export_heldout_traps.py
 
-# OPTIONAL but recommended — EXPAND the held-out set 4x for power (the 31-trap set is
-# thin; CPU SealBot, ~1h, NO GPU). Deterministic (seeded) -> reproducible on vast:
-.venv/bin/python scripts/dpfit_mine_heldout_traps.py        # -> heldout_traps_expanded.jsonl (~94 value-blind traps)
+# THE PRE-REGISTERED HEADLINE GATE — the REGISTERED 31 (the pre-reg population;
+# baseline ~9.7%, the static 16% floor / 25% pass apply AS WRITTEN):
+.venv/bin/python scripts/eval/run_l1_trapflip_smoke.py \
+    --baseline-ckpt reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt \
+    --candidate-ckpt checkpoints/checkpoint_z2_l1.pt \
+    --encoding v6_live2_ls --legal-set \
+    --out reports/d_zvalid_z2/l1_trapflip          # default --trap-set = the registered 31
+
+# POWERED CORROBORATION (run alongside, NOT as a goalpost move) — the 4x expansion.
+# Deterministic miner (CPU SealBot, ~1h, NO GPU; reproducible on vast):
+.venv/bin/python scripts/dpfit_mine_heldout_traps.py        # -> heldout_traps_expanded.jsonl (~94 value-blind)
 cat reports/d_tactical_2026-06-26/heldout_traps.jsonl \
     reports/d_tactical_2026-06-26/heldout_traps_expanded.jsonl \
     > reports/d_tactical_2026-06-26/heldout_traps_all.jsonl   # 125 total
-
-# the gate: baseline (200k anchor) vs candidate (fine-tuned), multi-window decode.
-# Use heldout_traps_all.jsonl (125, powered) if you mined the expansion, else
-# heldout_traps.jsonl (31):
 .venv/bin/python scripts/eval/run_l1_trapflip_smoke.py \
     --baseline-ckpt reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt \
     --candidate-ckpt checkpoints/checkpoint_z2_l1.pt \
     --encoding v6_live2_ls --legal-set \
     --trap-set reports/d_tactical_2026-06-26/heldout_traps_all.jsonl \
-    --out reports/d_zvalid_z2/l1_trapflip
+    --out reports/d_zvalid_z2/l1_trapflip_combined
+# IMPORTANT — POPULATION SHIFT: the mined 94 are a BROADER value-blind set than the
+# curated-hardest registered 31, so they flip EASIER at baseline (~20%). Measured
+# combined-125 baseline = 17.6% (22/125) — ABOVE the static 16% floor. So on the 125
+# set read GENERALIZES BASELINE-RELATIVE (candidate must clear 25% AND beat its OWN
+# 17.6% baseline — the evaluator's decide() already does this). Do NOT compare the
+# 125-candidate flip to the 16% floor naively. The 31 is the pre-registered verdict;
+# the 125 is the powered second opinion. Report BOTH baselines + both candidate flips.
 ```
 
 **Pre-measured baseline (use as a WIRING sanity-check).** The 200k anchor's
