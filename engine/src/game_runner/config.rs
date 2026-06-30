@@ -109,6 +109,45 @@ pub struct SelfPlayRunnerConfig {
     /// operative value is hard-read from `configs/selfplay.yaml` via `pool.py`.
     #[pyo3(get, set)]
     pub interior_selector: String,
+    /// D-WS3 L1 (solver-in-loop SOFT visit-injection) knobs. The native net-free
+    /// `engine::tactics` solver proves the side-to-move's forced win in self-play
+    /// and SOFT-injects visit mass onto the proving move into the POLICY training
+    /// target (the L1 "teach the policy the saving move" lever — a deep-search,
+    /// soft, off-window-aware generalisation of the O1 forced-win one-hot). Added
+    /// as `#[pyo3(get, set)]` attributes (set post-construction from the variant
+    /// config via `pool.py`) so the INV19-pinned 38-arg positional ctor surface is
+    /// untouched. Defaulted OFF — `solver_enabled=false` makes the per-move hook a
+    /// no-op, keeping the bench-gated self-play hot path byte-identical (the new
+    /// solver knobs must also stay OUT of `RESUME_CHECKPOINT_OWNED_KEYS` so a
+    /// resume keeps the variant's values).
+    #[pyo3(get, set)]
+    pub solver_enabled: bool,
+    /// Iterative-deepening max search depth in PLIES (each `solve` recursion = one
+    /// stone). A mate-in-d-TURNS trap needs ~2d plies to reach; the corpus band is
+    /// mate-in-2..9 turns → 16 covers the deep tail. `node_budget` caps the work.
+    #[pyo3(get, set)]
+    pub solver_depth: u32,
+    /// Per-`prove` node (board-expansion) budget — the honesty axis vs the deploy
+    /// search. Bounds worst-case cost on tactically dense positions; quiet
+    /// positions exit shallow via the solver's ID `hit_horizon` early-stop.
+    #[pyo3(get, set)]
+    pub solver_node_budget: u64,
+    /// Quiet-move widening radius (cheb-distance from a stone) at NOT-IN-CHECK
+    /// nodes — the recall lever past the threat-only 8% ceiling for the ~80%-quiet
+    /// trap class (A2 / D-TACTICAL). `< 0` → None (threat-only, fast). The native
+    /// in-tree solver carries the `neighbor_dist` body (the R3 LOSS guard makes
+    /// the widened set's LOSS sound; WIN proofs — the L1 injection signal — are
+    /// sound by construction regardless).
+    #[pyo3(get, set)]
+    pub solver_neighbor_dist: i32,
+    /// SOFT visit-injection weight (convex blend `target = (1-w)·target + w·e_m`).
+    /// `< 1.0` = soft injection (keeps the net's distribution, ADDS mass to the
+    /// proving move so it reaches the 67% ~0-prior saving moves re-weighting can't
+    /// — graft A); `1.0` = one-hot (the dpfit probe showed one-hot is collaterally
+    /// destructive → keep < 1.0). This IS the soft/one-hot knob the W1 KILL>16%
+    /// verdict softens.
+    #[pyo3(get, set)]
+    pub solver_visit_weight: f32,
 }
 
 /// §B1 (CONFIG-4, 2026-06-02) — semantic defaults SoT for Rust struct-literal
@@ -173,6 +212,15 @@ impl Default for SelfPlayRunnerConfig {
             // D-QFIX-LAND A1: default "puct" = HEAD interior selection
             // (byte-identical). Operative value hard-read from yaml via pool.py.
             interior_selector: "puct".to_string(),
+            // D-WS3 L1 solver-in-loop — OFF by default (byte-identical self-play
+            // hot path). Operative values come from the z2 variant via pool.py.
+            // depth 16 plies / 50k node budget / neighbor_dist 2 (quiet widen) /
+            // 0.3 soft injection weight are the smoke defaults when enabled.
+            solver_enabled: false,
+            solver_depth: 16,
+            solver_node_budget: 50_000,
+            solver_neighbor_dist: 2,
+            solver_visit_weight: 0.3,
         }
     }
 }

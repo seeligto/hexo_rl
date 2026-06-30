@@ -780,3 +780,125 @@ mod ls_tests {
         assert_eq!(picked, Some((28, 0)), "sampler picks the only off-window mass");
     }
 }
+
+#[cfg(test)]
+mod dws3_tests {
+    //! D-WS3 L1 solver-in-loop SOFT visit-injection — the solver→injection
+    //! composition the `inner::play_one_move` hook performs (native solver proves
+    //! the forced win → `line[0]` → soft blend into the policy target). The
+    //! per-knob plumbing is covered by the Rust ctor/INV tests; this pins the
+    //! load-bearing semantics: (1) the native solver surfaces a winning move on a
+    //! realistic board, (2) the SOFT (weight < 1) injection blends — it does NOT
+    //! one-hot — and stays a distribution while ADDING mass to the saving move
+    //! (reaching even a ~0-prior cell), (3) the LS coverage gate routes a covered
+    //! win in and no-ops an uncovered one (no uniform-fallback corruption).
+    use super::*;
+    use crate::board::{Cell, Player};
+    use crate::tactics::{Outcome, TacticalConfig, TacticalSolver};
+
+    /// 5 P1 stones in a row with `moves_remaining = 2` → P1 has an immediate
+    /// forced win (place the 6th). Mirrors the o1_tests fixture.
+    fn forced_win_board() -> Board {
+        let mut board = Board::new();
+        for q in 0..5i32 {
+            board.cells.insert((q, 0), Cell::P1);
+        }
+        board.has_stones = true;
+        board.min_q = -1;
+        board.max_q = 5;
+        board.min_r = 0;
+        board.max_r = 0;
+        board.cache_dirty.set(true);
+        board.current_player = Player::One;
+        board.moves_remaining = 2;
+        board
+    }
+
+    #[test]
+    fn test_solver_surfaces_forced_win_move() {
+        // The hook's solver half: window_half=None (surface off-window),
+        // neighbor_dist quiet-widening, generous depth/budget. The solver must
+        // prove a WIN and return a winning first stone in `line`.
+        let board = forced_win_board();
+        let cfg = TacticalConfig {
+            cand_cap: 40,
+            window_half: None,
+            neighbor_dist: Some(2),
+        };
+        let proof = TacticalSolver::new(cfg).prove(&board, 16, 50_000);
+        assert_eq!(proof.result, Outcome::Win, "5-in-a-row + moves_remaining=2 is a forced win");
+        let (wq, wr) = *proof.line.first().expect("WIN must carry a non-empty line");
+        // The surfaced move must be a legal completing move (one of the two open
+        // ends of the row).
+        assert!(
+            (wq, wr) == (5, 0) || (wq, wr) == (-1, 0),
+            "line[0] must complete the six, got ({wq},{wr})"
+        );
+    }
+
+    #[test]
+    fn test_soft_injection_blends_not_one_hot() {
+        // The hook's injection half (Dense): a SOFT weight (< 1) must blend toward
+        // the saving move (add mass, reach a ~0-prior cell) WITHOUT collapsing the
+        // distribution to a one-hot. Contrast weight=1 (one-hot, destructive).
+        let n = 10usize;
+        let action = 7usize;
+        let mut soft = vec![1.0f32 / n as f32; n]; // uniform prior, p[action] ~0.1
+        apply_forced_win_one_hot(&mut soft, action, 0.3);
+        let sum: f32 = soft.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-6, "soft injection stays a distribution, sum={sum}");
+        // (1-w)*0.1 + w = 0.7*0.1 + 0.3 = 0.37
+        assert!((soft[action] - 0.37).abs() < 1e-6, "saving move boosted softly, got {}", soft[action]);
+        assert!(soft.iter().filter(|&&p| p > 1e-6).count() > 1, "NOT a one-hot — other mass survives");
+
+        // weight=1 is the destructive one-hot the design forbids — confirm the
+        // boundary the W1 KILL>16% verdict softens.
+        let mut hot = vec![1.0f32 / n as f32; n];
+        apply_forced_win_one_hot(&mut hot, action, 1.0);
+        assert_eq!(hot.iter().filter(|&&p| p > 1e-6).count(), 1, "weight=1 collapses to one-hot");
+    }
+
+    #[test]
+    fn test_soft_injection_reaches_zero_prior_move() {
+        // graft A: INJECT, not re-weight — a ~0-prior saving move (the 67% the
+        // design targets) must receive mass under soft injection (re-weighting a
+        // 0 stays 0; the convex blend ADDS w).
+        let mut target = vec![0.0f32; 5];
+        target[0] = 1.0; // all mass elsewhere; the saving move (idx 3) is 0-prior
+        apply_forced_win_one_hot(&mut target, 3, 0.3);
+        assert!((target[3] - 0.3).abs() < 1e-6, "0-prior saving move reaches w mass, got {}", target[3]);
+        assert!((target.iter().sum::<f32>() - 1.0).abs() < 1e-6, "stays a distribution");
+    }
+
+    #[test]
+    fn test_solver_to_ls_injection_end_to_end() {
+        // Full composition on the LS (multi-window) path the v6_live2_ls smoke
+        // uses: solver proves the win → covered → soft LS injection fires and the
+        // saving move's mass climbs in the ragged target.
+        let board = forced_win_board();
+        let cfg = TacticalConfig { cand_cap: 40, window_half: None, neighbor_dist: Some(2) };
+        let proof = TacticalSolver::new(cfg).prove(&board, 16, 50_000);
+        let (wq, wr) = *proof.line.first().expect("non-empty WIN line");
+
+        let trunk = board.cluster_window_size() as i32;
+        let half = (trunk - 1) / 2;
+        let (bcq, bcr) = board.window_center();
+        let centers = vec![board.window_center()];
+        // a non-degenerate prior so the blend is observable
+        let mut cp = vec![0.0f32; (trunk * trunk + 1) as usize];
+        cp[10] = 0.5;
+        cp[20] = 0.5;
+        let mut ls = aggregate_policy_ls((trunk * trunk + 1) as usize, true, trunk, &board, &centers, &[cp]);
+
+        let covered = is_covered(wq, wr, &centers, trunk, half);
+        assert!(covered, "the completing move is inside the single global cluster window");
+        let before = ls.get(wq, wr, bcq, bcr, trunk, half, 0.0);
+        let fired = apply_forced_win_one_hot_ls(&mut ls, (wq, wr), 0.3, covered, bcq, bcr, trunk, half);
+        assert!(fired, "covered solver win must inject");
+        let after = ls.get(wq, wr, bcq, bcr, trunk, half, 0.0);
+        assert!(after > before + 0.25, "soft injection lifts the saving move's mass {before}->{after}");
+        // the ragged target must remain a distribution after the soft blend (dense + overflow)
+        let total: f32 = ls.dense.iter().sum::<f32>() + ls.overflow.values().sum::<f32>();
+        assert!((total - 1.0).abs() < 1e-5, "LS soft injection must stay a distribution, sum={total}");
+    }
+}

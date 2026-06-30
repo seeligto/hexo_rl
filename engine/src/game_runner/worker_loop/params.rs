@@ -64,6 +64,25 @@ pub(super) struct ForcedWinPolicy {
     pub(super) weight: f32,
 }
 
+/// D-WS3 L1 — native solver-in-loop SOFT visit-injection knobs. Themed sub-bundle
+/// (mirrors `ForcedWinPolicy`) threaded through `WorkerParams` to
+/// `inner::run_worker_thread`. `enabled == false` (default) makes the per-move
+/// `engine::tactics` solver call + injection a no-op — byte-identical to pre-D-WS3
+/// self-play (the bench-gated hot path is unchanged when off). See
+/// `inner::play_one_move`.
+#[derive(Clone, Copy)]
+pub(super) struct SolverInLoop {
+    pub(super) enabled: bool,
+    /// Iterative-deepening max search depth in PLIES.
+    pub(super) depth: u32,
+    /// Per-`prove` node (board-expansion) budget.
+    pub(super) node_budget: u64,
+    /// Quiet-move widening radius (`< 0` → None / threat-only).
+    pub(super) neighbor_dist: i32,
+    /// SOFT injection convex-blend weight (`< 1.0` = soft; `1.0` = one-hot).
+    pub(super) visit_weight: f32,
+}
+
 #[derive(Clone)]
 pub(super) struct WorkerParams {
     pub(super) max_moves: usize,
@@ -100,6 +119,9 @@ pub(super) struct WorkerParams {
     pub(super) exploration_flags: ExplorationFlags,
     pub(super) move_constraint_flags: MoveConstraintFlags,
     pub(super) forced_win_policy: ForcedWinPolicy,
+    /// D-WS3 L1: native solver-in-loop SOFT visit-injection knobs (cloned from the
+    /// runner prototype per worker spawn; default-OFF = byte-identical self-play).
+    pub(super) solver_in_loop: SolverInLoop,
     /// D-QFIX-LAND A1: interior (non-root) MCTS selection rule. Cloned from the
     /// runner prototype per worker spawn, applied to the per-worker `MCTSTree`
     /// after `new_full` in `inner::run_worker_thread`. `Copy` enum.

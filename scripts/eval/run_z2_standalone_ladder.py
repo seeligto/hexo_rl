@@ -60,17 +60,20 @@ from typing import Any, Dict, List, Optional, Tuple
 # ── Trap set (held-out) ──────────────────────────────────────────────────────────
 # A trap position = a board the net mis-evaluates and loses to SealBot from (the
 # §D-TACTICAL / D-LOCALIZE proven-loss class — net_value ~ +0.6..1.0 at a d6 forced
-# loss). Expected JSONL row format (one position per line):
-#   {"stones": [[q, r, player], ...],   # player in {1, 2}
-#    "current_player": 1, "moves_remaining": 2,
-#    "encoding": "v6_live2_ls",
-#    "source_game_id": "<id>"}          # for game-disjointness vs the fine-tune set
+# loss). MOVE-SEQUENCE JSONL row format (one position per line), emitted by
+# scripts/dpfit_export_heldout_traps.py — replays through the audited legal apply
+# path (zero bbox/turn-phase drift):
+#   {"pos_id", "source_game_id", "bucket", "encoding": "v6_live2_ls",
+#    "parent_move_seq": [[q,r],...],   # net to-move WITH the saving choice (playout start)
+#    "post_move_seq":   [[q,r],...],   # proven-loss-to-move POST board (forced loss — diagnostic)
+#    "current_player_parent": -1, "current_player_post": -1,
+#    "saving_move": [q,r], "blunder_move": [q,r], "in_window": true, ...}
 # GAME-DISJOINT: the held-out trap set MUST be drawn from games NOT in the solver-in-
 # loop fine-tune corpus (else the drop measures memorisation, not generalisation).
 def load_trap_set(path: Optional[str]) -> List[Dict[str, Any]]:
-    """Load held-out trap positions. STUB-SAFE: returns [] (and the caller reports
-    ``trap_set_unavailable``) when no path / file. TODO(z2-corpus): wire the held-out
-    trap corpus exporter (the D-TACTICAL proven-loss positions, game-disjoint split)."""
+    """Load held-out trap positions (move-sequence JSONL from
+    scripts/dpfit_export_heldout_traps.py). STUB-SAFE: returns [] when no path / file
+    (the caller reports the trap axis as unavailable)."""
     if not path:
         return []
     p = Path(path)
@@ -85,21 +88,30 @@ def load_trap_set(path: Optional[str]) -> List[Dict[str, Any]]:
     return rows
 
 
-def _board_from_trap(row: Dict[str, Any], encoding: str):
-    """Reconstruct an engine Board at a trap position. Reuses the same Board surface the
-    eval bots use (``Board.with_encoding_name`` + the apply path)."""
+def _board_from_trap(row: Dict[str, Any], encoding: str, which: str = "parent"):
+    """Reconstruct an engine Board at a trap position via MOVE-SEQUENCE replay (the
+    audited legal apply path — no bbox/turn-phase drift). ``which`` selects the board:
+      * "parent" (DEFAULT, the playout start): net to-move WITH the saving choice. The
+        methodologically-correct start for a generalisation-measuring playout — a net
+        that learned the saving move AVOIDS the loss here.
+      * "post": the proven-loss-to-move board (net already blundered). A FORCED loss —
+        a net loses regardless of strength, so it carries ~no generalisation signal;
+        kept only as a diagnostic. (This is why trap_loss_rate plays from "parent".)
+    Reuses the same Board surface the eval bots use (``Board.with_encoding_name`` + the
+    apply path). Soft-validates the recorded turn phase against the replayed board."""
     from engine import Board  # lazy: avoid importing the binding at module load
     from hexo_rl.encoding import normalize_encoding_name
 
     board = Board.with_encoding_name(normalize_encoding_name(row.get("encoding", encoding)))
-    # TODO(z2-corpus): set the exact position. The corpus exporter should emit a move
-    # sequence (preferred — replays through the legal apply path) OR a stone list + turn
-    # phase. A raw stone list needs a static-construction surface; the move-sequence form
-    # is recommended so this stays on the audited apply path (no bbox/turn-phase drift).
-    raise NotImplementedError(
-        "trap-position reconstruction pending the held-out corpus format decision "
-        "(move-sequence replay recommended) — see load_trap_set docstring"
-    )
+    seq = row.get(f"{which}_move_seq") or row.get("move_seq")
+    if seq is None:
+        raise ValueError(
+            f"trap row {row.get('pos_id')!r} has no {which}_move_seq (re-run the exporter "
+            "scripts/dpfit_export_heldout_traps.py to emit the move-sequence form)"
+        )
+    for q, r in seq:
+        board.apply_move(int(q), int(r))
+    return board
 
 
 def assert_traps_game_disjoint(
@@ -137,13 +149,43 @@ def trap_loss_rate(
     abort the whole eval)."""
     if not traps:
         return None
-    # TODO(z2-corpus): play each trap out (standalone head to move) vs SealBotBot(depth)
-    # from the post-blunder position; count terminal losses. Until the corpus reconstruction
-    # format lands, DEGRADE GRACEFULLY (return None) rather than crash — main() flags
-    # `trap_playout_unimplemented` in the summary and the verdict falls to INDETERMINATE.
-    print("[Z2] WARN: trap playout unimplemented (corpus reconstruction pending) -> "
-          "trap-loss-rate=None; verdict will be INDETERMINATE on the trap axis.", flush=True)
-    return None
+    from hexo_rl.bots.sealbot_bot import SealBotBot
+    from hexo_rl.env.game_state import GameState
+
+    head = head_factory()
+    losses = 0
+    counted = 0
+    skipped = 0
+    for t in traps:
+        try:
+            # PARENT board: net to-move WITH the saving choice. A net that internalised
+            # the saving move avoids the loss here (POST is a forced loss -> no signal).
+            board = _board_from_trap(t, encoding, which="parent")
+        except Exception as e:  # noqa: BLE001 — skip unreplayable rows, never abort the eval
+            print(f"[Z2] WARN trap {t.get('pos_id')!r} replay failed ({e}); skipping", flush=True)
+            skipped += 1
+            continue
+        net_side = int(t.get("current_player_parent", board.current_player))  # 1 (P1) / -1 (P2)
+        if hasattr(head, "reset"):
+            head.reset()
+        opp = SealBotBot(time_limit=60.0, max_depth=sealbot_depth)  # fixed depth, cold TT
+        state = GameState.from_board(board)
+        ply = 0
+        while ply < 200 and not board.check_win() and board.legal_move_count() > 0:
+            mover = head if board.current_player == net_side else opp
+            q, r = mover.get_move(state, board)
+            state = state.apply_move(board, q, r)
+            ply += 1
+        winner = board.winner() if board.check_win() else None  # 1 / -1 / None(draw)
+        counted += 1
+        if winner is not None and winner != net_side:  # opponent won -> net lost (draw = survived)
+            losses += 1
+    if counted == 0:
+        print(f"[Z2] WARN: all {skipped} trap playouts failed to replay -> trap-loss-rate=None", flush=True)
+        return None
+    if skipped:
+        print(f"[Z2] trap playout: {skipped} rows skipped (replay failure)", flush=True)
+    return losses / counted
 
 
 # ── Standalone ladder ────────────────────────────────────────────────────────────

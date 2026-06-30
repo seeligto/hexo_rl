@@ -69,6 +69,24 @@ selfplay:
   forced_win_policy_depth: 2
   forced_win_policy_weight: 1.0
 
+  # D-WS3 L1 — native solver-in-loop SOFT visit-injection (the L1 "teach the
+  # policy the saving move" lever). Per self-play move the net-free
+  # `engine::tactics` solver proves the side-to-move's forced win and SOFT-blends
+  # visit mass onto the proving move into the POLICY target (generalises the O1
+  # one-hot above to a deep search + soft injection + off-window multi-window
+  # decode). Default OFF — byte-identical hot path. The D-WS3 smoke variant
+  # (configs/variants/z2_solver_in_loop.yaml) flips `solver_enabled: true`.
+  # solver_visit_weight < 1.0 = SOFT (the design forbids one-hot — destructive);
+  # solver_neighbor_dist = quiet-move widening (< 0 → threat-only); solver_depth
+  # in PLIES (~2x mate-distance-in-turns); solver_node_budget caps per-move work.
+  # These keys must stay OUT of orchestrator RESUME_CHECKPOINT_OWNED_KEYS so a
+  # resumed variant keeps its solver values.
+  solver_enabled: false
+  solver_depth: 16
+  solver_node_budget: 50000
+  solver_neighbor_dist: 2
+  solver_visit_weight: 0.3
+
   # Gumbel MCTS search (Danihelka et al., ICLR 2022 §3.3-3.4).
   # Replaces PUCT exploration at root with Gumbel-Top-k sampling and Sequential
   # Halving budget allocation. Non-root nodes still use PUCT + dynamic FPU.

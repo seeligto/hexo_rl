@@ -151,6 +151,14 @@ pub struct SelfPlayRunner {
     /// per-worker `MCTSTree` immediately after `new_full` in
     /// `worker_loop/inner.rs`. `Puct` = HEAD behaviour (byte-identical).
     pub(crate) interior_selector: crate::mcts::InteriorSelector,
+    /// D-WS3 L1 solver-in-loop SOFT visit-injection knobs (threaded to
+    /// `worker_loop` via the `SolverInLoop` sub-bundle). `solver_enabled=false`
+    /// (default) makes the per-move hook a no-op — byte-identical to pre-D-WS3.
+    pub(crate) solver_enabled: bool,
+    pub(crate) solver_depth: u32,
+    pub(crate) solver_node_budget: u64,
+    pub(crate) solver_neighbor_dist: i32,
+    pub(crate) solver_visit_weight: f32,
     /// §173 A5a — full registry record for the active encoding; `None` for
     /// legacy callers that don't provide `encoding_spec`. Used by worker_loop
     /// to call `sym_tables_for(spec)` (H1-α) and to derive per-spec geometry
@@ -276,6 +284,11 @@ impl SelfPlayRunner {
             forced_win_policy_depth,
             forced_win_policy_weight,
             interior_selector,
+            solver_enabled,
+            solver_depth,
+            solver_node_budget,
+            solver_neighbor_dist,
+            solver_visit_weight,
         } = config;
         // D-QFIX-LAND A1: parse the interior-selector string → enum here (panics
         // on an unknown variant — A1 config is hard-read end-to-end, no silent
@@ -396,6 +409,11 @@ impl SelfPlayRunner {
             forced_win_policy_depth,
             forced_win_policy_weight,
             interior_selector,
+            solver_enabled,
+            solver_depth,
+            solver_node_budget,
+            solver_neighbor_dist,
+            solver_visit_weight,
             registry_spec: spec_static,
             radius_override: Arc::new(AtomicI32::new(radius_override.unwrap_or(-1))),
             running: Arc::new(AtomicBool::new(false)),

@@ -50,8 +50,8 @@ use super::super::{GameResultRow, WorkerResultRow, records};
 use super::atomics::WorkerAtomics;
 use super::channels::WorkerChannels;
 use super::params::{
-    ExplorationFlags, ForcedWinPolicy, MoveConstraintFlags, SearchFlags, WorkerGeometry,
-    WorkerParams,
+    ExplorationFlags, ForcedWinPolicy, MoveConstraintFlags, SearchFlags, SolverInLoop,
+    WorkerGeometry, WorkerParams,
 };
 use super::rotate::{
     compute_move_temperature, inv_sym_idx, rotate_aux_inplace, rotate_chain_inplace,
@@ -145,6 +145,13 @@ struct MovePlayContext {
     forced_win_enabled: bool,
     forced_win_depth: u8,
     forced_win_weight: f32,
+    // D-WS3 L1 solver-in-loop SOFT visit-injection (per-move; read at target
+    // extraction in `play_one_move`). Default-OFF = byte-identical hot path.
+    solver_enabled: bool,
+    solver_depth: u32,
+    solver_node_budget: u64,
+    solver_neighbor_dist: i32,
+    solver_visit_weight: f32,
 }
 
 /// Per-game scalar context bundled to keep `run_one_game` arity under
@@ -204,6 +211,13 @@ struct WorkerMoveCfg {
     forced_win_enabled: bool,
     forced_win_depth: u8,
     forced_win_weight: f32,
+    // D-WS3 L1 solver-in-loop SOFT visit-injection static knobs (mirror the
+    // MovePlayContext fields; built once per worker, copied through run_one_game).
+    solver_enabled: bool,
+    solver_depth: u32,
+    solver_node_budget: u64,
+    solver_neighbor_dist: i32,
+    solver_visit_weight: f32,
 }
 
 /// Result of `play_one_move`: signals the parent loop how to proceed.
@@ -301,6 +315,13 @@ pub(super) fn run_worker_thread(
             depth: forced_win_policy_depth,
             weight: forced_win_policy_weight,
         },
+        solver_in_loop: SolverInLoop {
+            enabled: solver_enabled,
+            depth: solver_depth,
+            node_budget: solver_node_budget,
+            neighbor_dist: solver_neighbor_dist,
+            visit_weight: solver_visit_weight,
+        },
         interior_selector,
     } = params;
 
@@ -347,6 +368,8 @@ pub(super) fn run_worker_thread(
         forced_win_enabled: forced_win_policy_enabled,
         forced_win_depth: forced_win_policy_depth,
         forced_win_weight: forced_win_policy_weight,
+        solver_enabled, solver_depth, solver_node_budget,
+        solver_neighbor_dist, solver_visit_weight,
     };
     let finalize_counters: (&AtomicUsize, &AtomicU64, &AtomicU64, &AtomicU64, &AtomicU64) = (
         &games_completed, &x_wins, &o_wins, &draws, &positions_dropped,
@@ -412,6 +435,8 @@ fn run_one_game(
         n_sims_quick, n_sims_full,
         completed_q_values, gumbel_mcts, dirichlet_enabled, zoi_enabled,
         forced_win_enabled, forced_win_depth, forced_win_weight,
+        solver_enabled, solver_depth, solver_node_budget,
+        solver_neighbor_dist, solver_visit_weight,
     } = move_cfg;
 
     let PerGameInit { mut board, mut records_vec, mut move_history,
@@ -426,6 +451,8 @@ fn run_one_game(
         game_sims, is_fast_game, sym_idx,
         completed_q_values, gumbel_mcts, dirichlet_enabled, zoi_enabled,
         forced_win_enabled, forced_win_depth, forced_win_weight,
+        solver_enabled, solver_depth, solver_node_budget,
+        solver_neighbor_dist, solver_visit_weight,
     };
 
     for _ in 0..init_ctx.max_moves {
@@ -1013,7 +1040,87 @@ fn play_one_move(
             },
             None => false,
         };
-    let record_full_search = move_is_full_search || forced_win_fired;
+
+    // D-WS3 L1 — native solver-in-loop SOFT visit-injection. The net-free
+    // `engine::tactics` solver proves the side-to-move's forced win and SOFT-
+    // injects visit mass onto the proving move's first stone (`line[0]`) into the
+    // POLICY training target. This is the L1 "teach the policy the saving move"
+    // lever: a generalisation of the O1 forced-win one-hot to (a) the native deep
+    // solver (recall past `forced_win_move`'s within-turn horizon — the ~80%-quiet
+    // trap class needs `neighbor_dist` widening, A2/D-TACTICAL), (b) SOFT injection
+    // (`visit_weight < 1` convex blend — NOT one-hot, which the dpfit probe showed
+    // is collaterally destructive; graft A INJECT-not-reweight reaches the 67%
+    // ~0-prior saving moves), (c) `window_half = None` so OFF-WINDOW forced wins
+    // are surfaced and routed through the multi-window legal_set coverage gate into
+    // the ragged target (the D-DECODE action-space fix; 60% of saves are off-
+    // window). WIN proofs are SOUND BY CONSTRUCTION (terminal backup; the attacker
+    // plays only threat moves → defender in-check at every node → `must_block`), so
+    // the L1 policy signal needs no R3 LOSS guard — that guard governs the L2
+    // value-z LOSS path (HELD), and this smoke writes NO LOSS-derived z. Fires once
+    // per move at target extraction, NOT in the per-sim hot path; `solver_enabled
+    // = false` (default) keeps the bench-gated hot path byte-identical. The O1 and
+    // solver levers compose (the z2 smoke runs O1 off + solver on); both inject the
+    // winning move — a double-fire is safe (additive convex blend, weight saturates
+    // at 1.0; NOT idempotent — `1-(1-wA)(1-wB)`).
+    let solver_fired = ctx.solver_enabled && {
+        let cfg = crate::tactics::TacticalConfig {
+            cand_cap: 40,
+            // legal_set (multi-window): None surfaces off-window forced wins; the
+            // coverage gate (below) gives them a ragged-target slot — the saving moves
+            // L1 must teach. DENSE (single-window): an off-window win has NO logit slot
+            // (`window_flat_idx` -> usize::MAX -> dropped), so surfacing it would just
+            // silently no-op (red-team F3); keep the single-window guard so the solver
+            // only spends budget on the expressible action space.
+            window_half: if legal_set { None } else { Some((agg_trunk_sz - 1) / 2) },
+            // Quiet-move widening for recall on the quiet trap class. < 0 → None
+            // (threat-only). The native in-tree solver carries the neighbor_dist
+            // body (NOT the stale pre-neighbor_dist Python binding).
+            neighbor_dist: if ctx.solver_neighbor_dist < 0 {
+                None
+            } else {
+                Some(ctx.solver_neighbor_dist)
+            },
+        };
+        let proof = crate::tactics::TacticalSolver::new(cfg).prove(
+            board,
+            ctx.solver_depth,
+            ctx.solver_node_budget,
+        );
+        if proof.result == crate::tactics::Outcome::Win {
+            match proof.line.first() {
+                Some(&(wq, wr)) => match &mut target_policy {
+                    MovePolicy::Dense(t) => {
+                        let action = board.window_flat_idx(wq, wr);
+                        if action < policy_stride {
+                            records::apply_forced_win_one_hot(t, action, ctx.solver_visit_weight);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    // §9.2a/§9.3 coverage-gated (mirrors the O1 LS path): a covered
+                    // (in- or off-window) win injects; an uncovered win is a no-op
+                    // (no uniform-fallback corruption). Coverage uses the SAME
+                    // centers as the record-time projection (`board` is the pre-move
+                    // search root).
+                    MovePolicy::Ls(ls) => {
+                        let (bcq, bcr) = board.window_center();
+                        let half = (agg_trunk_sz - 1) / 2;
+                        let (_, centers) = board.get_cluster_views();
+                        let covered = records::is_covered(wq, wr, &centers, agg_trunk_sz, half);
+                        records::apply_forced_win_one_hot_ls(
+                            ls, (wq, wr), ctx.solver_visit_weight, covered, bcq, bcr,
+                            agg_trunk_sz, half,
+                        )
+                    }
+                },
+                None => false,
+            }
+        } else {
+            false
+        }
+    };
+    let record_full_search = move_is_full_search || forced_win_fired || solver_fired;
 
     // ── Sample and apply move (ZOI-filtered legal set) ──
     let Some(move_idx) = select_move(

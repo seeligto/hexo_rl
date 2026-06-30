@@ -46,8 +46,8 @@ use super::SelfPlayRunner;
 use atomics::WorkerAtomics;
 use channels::WorkerChannels;
 use params::{
-    ExplorationFlags, ForcedWinPolicy, MoveConstraintFlags, SearchFlags, WorkerGeometry,
-    WorkerParams,
+    ExplorationFlags, ForcedWinPolicy, MoveConstraintFlags, SearchFlags, SolverInLoop,
+    WorkerGeometry, WorkerParams,
 };
 use stats::WorkerStats;
 
@@ -269,6 +269,14 @@ impl SelfPlayRunner {
                 enabled: self.forced_win_policy_enabled,
                 depth: self.forced_win_policy_depth,
                 weight: self.forced_win_policy_weight,
+            },
+            // D-WS3 L1: thread the native solver-in-loop knobs to each worker.
+            solver_in_loop: SolverInLoop {
+                enabled: self.solver_enabled,
+                depth: self.solver_depth,
+                node_budget: self.solver_node_budget,
+                neighbor_dist: self.solver_neighbor_dist,
+                visit_weight: self.solver_visit_weight,
             },
             // D-QFIX-LAND A1: thread the parsed interior-selector enum to each
             // worker; applied to `tree.interior_selector` after `new_full`.

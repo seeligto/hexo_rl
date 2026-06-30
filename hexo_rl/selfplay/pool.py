@@ -415,6 +415,18 @@ class WorkerPool:
         # the INV19 positional ctor surface is untouched. "puct" == byte-identical
         # default; "gumbel_improved" == wired placeholder.
         _sp_config.interior_selector = str(mcts_cfg["interior_selector"])
+        # D-WS3 L1 solver-in-loop SOFT visit-injection. SOFT-read (sp.get with
+        # default — mirror the forced_win block) so eval/bot/test paths and
+        # pre-D-WS3 variants that omit the keys stay default-OFF (byte-identical
+        # self-play hot path). Set as `#[pyo3(get,set)]` attrs (INV19 ctor surface
+        # untouched). The keys live in the `selfplay:` namespace and must NOT be
+        # added to orchestrator RESUME_CHECKPOINT_OWNED_KEYS so a resume keeps the
+        # variant's solver values. visit_weight < 1.0 = SOFT injection (NOT one-hot).
+        _sp_config.solver_enabled = bool(sp.get("solver_enabled", False))
+        _sp_config.solver_depth = int(sp.get("solver_depth", 16))
+        _sp_config.solver_node_budget = int(sp.get("solver_node_budget", 50_000))
+        _sp_config.solver_neighbor_dist = int(sp.get("solver_neighbor_dist", 2))
+        _sp_config.solver_visit_weight = float(sp.get("solver_visit_weight", 0.3))
         self._runner = SelfPlayRunner(_sp_config)
         self._inference_server = InferenceServer(
             model, device, config, batcher=self._runner.batcher,
