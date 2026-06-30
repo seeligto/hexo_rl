@@ -204,7 +204,41 @@ needs `base_trap − cand_trap ≥ 0.10`.
 | **GENERALIZES** | full GPU-week training-z (soft injection + WIN-backup deploy). Success metric (W3) = STANDALONE net strength (backup OFF) gaining on the EVAL LADDER (SealBot-d5 fixed-depth + self-play BT-Elo over DISTINCT games), NOT the SealBot-WR soft number. End-state (W2) = net standalone on the ~69% + PERMANENT deploy-backup on the ~31% value-bound tail (L2 held at the D-FULLSPEC wall) — a net+tactical-backup agent, NOT a pure standalone net. Report the standalone/with-backup split explicitly; do NOT declare "standalone beats SealBot". |
 | **MEMORIZES** | deploy-backup permanent for the whole class; standalone-strong net out of reach via this path → from-bootstrap solver-in-loop from step 0 is the only remaining bet (separately gated, a real gamble). Saves the GPU-week. |
 | **KILL>16%** | soften `solver_visit_weight`, re-smoke before any verdict. |
-| **INDETERMINATE** | expand corpus / run longer; do not over-read thin power. |
+| **INDETERMINATE** | expand corpus / run longer; do not over-read thin power. Corpus already pre-expanded offline (`scripts/dpfit_mine_heldout_traps.py`, no GPU) — re-export + re-run before concluding. |
+
+The §1–5 commands above ARE the full sequence (this runbook is the source of truth).
+For convenience a one-block runner `scripts/run_d_ws3_smoke_vast.sh` is generated
+locally (gitignored per the `scripts/run_*_vast.sh` one-off convention; `set CAND=`
+to the fine-tune ckpt) — recreate it by pasting §1–5 if it's not on the box.
+
+---
+
+## 6.5 GPU-week (gated on W1 = GENERALIZES) — pre-staged
+
+Do NOT launch unless the smoke verdict is **GENERALIZES**. Pre-staged scaffold:
+**`configs/variants/z2_solver_in_loop_full.yaml`** — IDENTICAL lever to the smoke
+(same selfplay/solver/mcts/mixing), the only diffs are run-length + the FULL eval
+ladder restored (W3 success = standalone strength on the ladder, not a quick smoke).
+
+```bash
+# warm-start the SMOKE candidate if it generalized (else the 200k anchor); decision ckpt ~150-200k:
+.venv/bin/python -m hexo_rl.training.run \
+    --resume checkpoints/checkpoint_z2_l1.pt \
+    --variant configs/variants/z2_solver_in_loop_full.yaml \
+    --iterations 200000
+```
+
+**W3 success metric (STANDALONE, backup OFF):** `run_l1_trapflip_smoke.py` (held-out
+flip, target ≥50% at the decision ckpt) + `run_z2_standalone_ladder.py` (SealBot-d5
+WR + self-play BT-Elo, distinct-game bootstrap CI_lo > 0). The eval LADDER is the bar,
+NOT the soft SealBot-WR number. **W2 end-state:** net standalone on the ~69% +
+PERMANENT deploy-backup on the ~31% value-bound tail — a net+tactical-backup AGENT;
+never declare "standalone beats SealBot". **Live KILLs every 5k:** mean_v drift > 0.2
+below bootstrap; argmax self-ladder WR regressed > 5%; C1-C3 regress; off-window rises.
+**Fail-fast at 100k:** no trap-flip movement above baseline AND mean_v depressing → KILL.
+
+(The WIN-backup deploy-root hook is the SEPARATE deploy-backup workstream —
+`docs/handoffs/l1_backup_shipping_runbook.md` WS2, `make bench`-gated — not this run.)
 
 ---
 

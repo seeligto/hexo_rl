@@ -1,0 +1,99 @@
+# ── D-WS3 W3 — L1 solver-in-loop FULL training-z run (the GPU-week) ───────────
+#
+# GATED ON W1 = GENERALIZES (the smoke `z2_solver_in_loop.yaml` cleared held-out
+# trap-flip >=25% + co-gates). Do NOT launch this until the smoke verdict is
+# GENERALIZES — a MEMORIZES/KILL smoke means this run cannot succeed.
+#
+# IDENTICAL lever to the smoke variant (same selfplay/solver/mcts/mixing block) —
+# the ONLY differences are RUN-LENGTH + the EVAL LADDER restored to the full
+# anchor cadence, because W3's success metric is STANDALONE strength on the eval
+# ladder (backup OFF), not a quick smoke. End-state (W2): a net standalone on the
+# ~69% + a PERMANENT deploy-backup on the ~31% value-bound tail (the L2 value-z is
+# HELD at the D-FULLSPEC wall) — a net+tactical-backup AGENT, never a pure
+# standalone net. Do NOT declare "standalone beats SealBot".
+#
+# LAUNCH (vast 5080; decision ckpt ~150-200k; warm-start the SMOKE candidate if it
+# generalized, else the 200k anchor). LR continues the anchor's 1M cosine
+# (total_steps OWNED -> checkpoint wins; do NOT set it, do NOT --override-scheduler-
+# horizon):
+#   .venv/bin/python -m hexo_rl.training.run \
+#     --resume checkpoints/checkpoint_z2_l1.pt \
+#     --variant configs/variants/z2_solver_in_loop_full.yaml \
+#     --iterations 200000
+#
+# SUCCESS METRIC (W3, run periodically + at the decision ckpt) — STANDALONE,
+# backup OFF (Z3 discipline): scripts/eval/run_l1_trapflip_smoke.py (held-out flip,
+# target >=50% at the decision ckpt per the spec) AND scripts/eval/run_z2_standalone_ladder.py
+# (SealBot-d5 fixed-depth WR + self-play BT-Elo over DISTINCT games, distinct-game
+# bootstrap CI_lo > 0). The eval LADDER (not the soft SealBot-WR number) is the bar
+# — GNN-95% confirms SealBot is a soft gate.
+#
+# LIVE KILLs every 5k (operator monitors): mean_v drift > 0.2 below bootstrap
+# (anti-correlation); argmax self-ladder WR regressed > 5%; threat-probe C1-C3
+# regress; off-window forced rate rises. FAIL-FAST at 100k: no trap-flip movement
+# above baseline AND mean_v depressing -> KILL before the second GPU-week-half.
+encoding: v6_live2_ls
+in_channels: 4
+lr: 2e-3
+eta_min: 5e-4
+aux_opp_reply_weight: 0.0
+training_steps_per_game: 1.0
+
+# IDENTICAL to z2_solver_in_loop.yaml — the single lever under test, unchanged at scale.
+selfplay:
+  completed_q_values: true
+  n_workers: 32
+  inference_batch_size: 64
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 8
+  random_opening_plies: 0
+  gumbel_mcts: true
+  gumbel_m: 16
+  gumbel_explore_moves: 10
+  c_visit: 50.0
+  c_scale: 1.0
+  playout_cap:
+    full_search_prob: 1.0
+    n_sims_full: 150
+    n_sims_quick: 150
+  solver_enabled: true
+  solver_depth: 16
+  solver_node_budget: 50000
+  solver_neighbor_dist: 2
+  solver_visit_weight: 0.3
+  forced_win_policy_enabled: false
+
+mcts:
+  dirichlet_enabled: false
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  decay_steps: 200000
+
+# FULL eval ladder restored (vs the smoke's shrunk cadence) — the anchor's config.
+eval_interval: 30000
+eval_pipeline:
+  opponents:
+    best_checkpoint: { enabled: true,  stride: 1, n_games: 200, model_sims: 64, opponent_sims: 64 }
+    sealbot:         { enabled: true,  stride: 1, n_games: 100 }
+    random:          { enabled: true,  stride: 1, n_games: 20  }
+    bootstrap_anchor: { enabled: true, stride: 4, n_games: 50, model_sims: 64, opponent_sims: 64, path: checkpoints/bootstrap_model_v6_live2_8300.pt }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+  gating:
+    promotion_winrate: 0.55
+    require_ci_above_half: true
+    bootstrap_floor:
+      enabled: false
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0
