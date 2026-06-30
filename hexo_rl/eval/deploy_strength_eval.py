@@ -48,6 +48,7 @@ from hexo_rl.encoding import lookup as _lookup_encoding
 from hexo_rl.encoding import normalize_encoding_name as _normalize_encoding
 from hexo_rl.env.game_state import GameState
 from hexo_rl.eval.gumbel_search_py import run_gumbel_on_board
+from hexo_rl.eval.defender_dispatch import needs_no_drop_bot
 from hexo_rl.eval.round_robin import (
     aggregate_games,
     bootstrap_ratings_ci,
@@ -365,14 +366,22 @@ class DeployStrengthEvaluator:
         self.device = device
         self.config = config
         self.encoding_name = _normalize_encoding(config.get("encoding"))
+        # §D-PFIT WS1: decode in the encoding's TRAINED action space. legal_set_scatter_max
+        # encodings (v6_live2_ls) train + in-loop-eval under the MULTI-WINDOW no-drop head;
+        # decoding the promotion gate single-window handicaps the off-window defense. Derived
+        # from the encoding's policy_pool (the single dispatch source of truth) → provably
+        # bitwise-unchanged for single-window encodings (policy_pool=="none").
+        self._legal_set = needs_no_drop_bot(_lookup_encoding(self.encoding_name))
         self.knobs = extract_deploy_knobs(config)  # HARD ERROR if any knob missing
         self.dcfg = DeployStrengthConfig.from_cfg(deploy_cfg, promotion_winrate)
         self._engine = _build_engine_for_model(model, self.encoding_name, device)
-        self._cand = DeployHeadBot(self._engine, self.knobs, label="cand", seed=self.dcfg.seed_base)
+        self._cand = DeployHeadBot(self._engine, self.knobs, label="cand",
+                                   seed=self.dcfg.seed_base, legal_set=self._legal_set)
 
     def _best_bot(self, best_model: HexTacToeNet) -> DeployHeadBot:
         eng = _build_engine_for_model(best_model, self.encoding_name, self.device)
-        return DeployHeadBot(eng, self.knobs, label="best", seed=self.dcfg.seed_base + 101)
+        return DeployHeadBot(eng, self.knobs, label="best",
+                             seed=self.dcfg.seed_base + 101, legal_set=self._legal_set)
 
     def _sealbot(self) -> BotProtocol:
         from hexo_rl.bots.sealbot_bot import SealBotBot

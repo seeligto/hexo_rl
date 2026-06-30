@@ -89,6 +89,39 @@ def test_extract_deploy_knobs_reads_run_config() -> None:
     assert k["gumbel_m"] == 16 and k["n_sims_full"] == 150 and k["c_puct"] == 1.5
 
 
+# ── (2b) §D-PFIT WS1: deploy head decodes in the encoding's TRAINED action space ──
+
+
+def _make_deploy_evaluator(enc: str):
+    """Minimal DeployStrengthEvaluator on CPU (no forward pass needed — the test only
+    inspects the bots' decode flag)."""
+    from hexo_rl.model.network import HexTacToeNet
+    from hexo_rl.eval.deploy_strength_eval import DeployStrengthEvaluator
+
+    model = HexTacToeNet(encoding=enc).eval()
+    config = {
+        "encoding": enc,
+        "selfplay": {"gumbel_m": 16, "c_visit": 50.0, "c_scale": 1.0,
+                     "playout_cap": {"n_sims_full": 150}},
+        "mcts": {"c_puct": 1.5},
+    }
+    ev = DeployStrengthEvaluator(model, torch.device("cpu"), config, {}, 0.55)
+    return ev, model
+
+
+def test_deploy_strength_legal_set_derived_from_encoding() -> None:
+    """The promotion-gate deploy head must decode in the SAME action space the encoding
+    trains under: MULTI-WINDOW no-drop for legal_set_scatter_max encodings (v6_live2_ls),
+    single-window for the rest (v6_live2). Else the strength gate handicaps the off-window
+    defense the net was trained to express (train↔deploy decode mismatch, §D-PFIT WS1)."""
+    ev_ls, m_ls = _make_deploy_evaluator("v6_live2_ls")
+    assert ev_ls._cand._legal_set is True
+    assert ev_ls._best_bot(m_ls)._legal_set is True, "best anchor must flip symmetrically"
+
+    ev_sw, _ = _make_deploy_evaluator("v6_live2")
+    assert ev_sw._cand._legal_set is False, "single-window encoding must stay legal_set=False"
+
+
 # ── (3) pre-registered screen->confirm band ────────────────────────────────────
 
 
