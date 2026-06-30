@@ -118,11 +118,16 @@ pub struct Budget {
     cap: u64,
     pub nodes: u64,
     pub exhausted: bool,
+    /// Set whenever a node returns at the DEPTH horizon (`depth_left <= 0`). The
+    /// iterative-deepening driver reads it to stop early when a search fully
+    /// resolved within depth (no truncation ⇒ deepening cannot change the verdict)
+    /// — avoids re-paying the expensive root candidate-gen on quiet positions.
+    pub hit_horizon: bool,
 }
 
 impl Budget {
     pub fn new(cap: u64) -> Self {
-        Budget { cap, nodes: 0, exhausted: false }
+        Budget { cap, nodes: 0, exhausted: false, hit_horizon: false }
     }
 
     /// Charge one node. Returns false (and latches `exhausted`) once over cap.
@@ -208,18 +213,18 @@ impl TacticalSolver {
     ) -> ProofResult {
         let mut budget = Budget::new(node_budget);
         let mut tt = tt::ProofTt::new();
-        // FULL window at the root: the root value is then EXACT, so the
-        // magnitude->verdict mapping (`outcome_of`) is a SOUND proof. `ply = 0`
-        // is the root mate-distance origin.
-        let scored = search::solve(
+        let mut ordering = ordering::OrderingState::new();
+        // Iterative-deepening + aspiration root driver. Each accepted iteration
+        // resolves to an EXACT root value (full/widened window), so the
+        // magnitude->verdict mapping (`outcome_of`) is a SOUND proof; ID stops on
+        // the first proven mate. `ply = 0` is the root mate-distance origin.
+        let scored = search::solve_root(
             board,
             max_depth as i32,
-            0,
-            NEG_INF,
-            POS_INF,
             &mut budget,
             &self.config,
             &mut tt,
+            &mut ordering,
         );
 
         let mut result = outcome_of(scored.score);

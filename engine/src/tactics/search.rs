@@ -18,8 +18,8 @@ use fxhash::FxHashSet;
 use crate::board::Board;
 
 use super::eval::heuristic_leaf;
-use super::ordering::candidates;
-use super::tt::ProofTt;
+use super::ordering::{candidates, order_moves, OrderingState};
+use super::tt::{Bound, ProofTt};
 use super::{outcome_of, Budget, Outcome, TacticalConfig, MATE, NEG_INF, POS_INF, WIN_THRESHOLD};
 
 /// A scored node value (D-PFIT P2 increment 1). `score` is a mate-distance-aware
@@ -77,6 +77,7 @@ pub(crate) fn solve(
     budget: &mut Budget,
     cfg: &TacticalConfig,
     tt: &mut ProofTt,
+    ordering: &mut OrderingState,
 ) -> Scored {
     if !budget.tick() {
         return Scored::heuristic(0); // budget out => UNKNOWN, never a proof
@@ -117,20 +118,25 @@ pub(crate) fn solve(
     }
 
     if depth_left <= 0 {
+        budget.hit_horizon = true; // a real depth truncation — deepening could help
         return Scored::heuristic(heuristic_leaf(board)); // horizon => non-proof leaf
     }
 
     // `in_check` (opp threatens an immediate win) is the prune-symmetry premise of
     // the LOSS conclusion below — captured at the node state, before descent.
     let in_check = board.count_winning_moves(opp) >= 1;
-    let moves = candidates(board, stm, opp, cfg.cand_cap, cfg.neighbor_dist);
+    let mut moves = candidates(board, stm, opp, cfg.cand_cap, cfg.neighbor_dist);
     if moves.is_empty() {
         return Scored::heuristic(heuristic_leaf(board)); // quiet => cannot prove
     }
     let moves_len = moves.len();
     // Remember the reduced set so the recall verify (below) searches only the
-    // DROPPED legal moves, not the ones already explored.
+    // DROPPED legal moves, not the ones already explored. Built BEFORE ordering so
+    // it is order-independent (ordering is a permutation: same set, same guard).
     let searched: FxHashSet<(i32, i32)> = moves.iter().copied().collect();
+    // Best-first ORDERING (permutation only — never changes the set or a verdict):
+    // TT best move, killers, history. Earlier α-β cutoffs, identical conclusions.
+    order_moves(&mut moves, tt.get_best_move(key), ply, ordering);
 
     // Negamax-α-β OR-node. `best` is the side-to-move's best value over the
     // candidate set; it stays `NEG_INF` until a child is examined (the all-Err
@@ -143,7 +149,7 @@ pub(crate) fn solve(
     let mut best_line: Vec<(i32, i32)> = Vec::new();
     let mut cutoff = false;
 
-    for &(q, r) in &moves {
+    for (idx, &(q, r)) in moves.iter().enumerate() {
         let node_player = board.current_player; // == stm
         let diff = match board.apply_move_tracked(q, r) {
             Ok(d) => d,
@@ -152,9 +158,45 @@ pub(crate) fn solve(
         // Flip-aware negamax: negate the child value (and flip the window) ONLY
         // when the to-move side flipped (turn-final stone).
         let flipped = board.current_player != node_player;
-        let (ca, cb) = if flipped { (-beta, -alpha) } else { (alpha, beta) };
-        let child = solve(board, depth_left - 1, ply + 1, ca, cb, budget, cfg, tt);
-        let rc = if flipped { -child.score } else { child.score };
+        let dchild = depth_left - 1;
+
+        // PVS + LMR (pruning/ordering ONLY — verdict-exact; see the soundness note
+        // above and `verdict_invariance_fuzz_*`). idx 0 = principal variation:
+        // full window, full depth. Later moves: a null-window scout (LMR-reduced
+        // depth for late quiet not-in-check moves), re-searched at FULL depth+window
+        // whenever the scout could affect the node value.
+        let (rc, child_line) = if idx == 0 {
+            let (ca, cb) = if flipped { (-beta, -alpha) } else { (alpha, beta) };
+            let c = solve(board, dchild, ply + 1, ca, cb, budget, cfg, tt, ordering);
+            (if flipped { -c.score } else { c.score }, c.line)
+        } else {
+            let reduce = lmr_reduction(idx, depth_left, in_check);
+            let (na, nb) = if flipped { (-alpha - 1, -alpha) } else { (alpha, alpha + 1) };
+            let c = solve(board, dchild - reduce, ply + 1, na, nb, budget, cfg, tt, ordering);
+            let mut rc = if flipped { -c.score } else { c.score };
+            let mut line = c.line;
+            // Re-search at full depth + full window when the scout could matter:
+            //   - PVS scout (reduce==0): the move beats α inside the window
+            //     (alpha < rc < beta) so the null result is not exact.
+            //   - LMR (reduce>0): the reduced search beat α OR was inconclusive
+            //     (UNKNOWN) — either way the reduced value cannot be trusted to
+            //     EXCLUDE a deeper proof, so confirm at full depth. The ONLY case
+            //     we accept the reduced value is a reduced-PROVEN result that does
+            //     not beat α (a sub-α loss proof) — verdict-irrelevant, so skipping
+            //     its full re-search leaves the node value/verdict unchanged.
+            let need_full = if reduce > 0 {
+                rc > alpha || outcome_of(rc) == Outcome::Unknown
+            } else {
+                rc > alpha && rc < beta
+            };
+            if need_full {
+                let (fa, fb) = if flipped { (-beta, -alpha) } else { (alpha, beta) };
+                let c = solve(board, dchild, ply + 1, fa, fb, budget, cfg, tt, ordering);
+                rc = if flipped { -c.score } else { c.score };
+                line = c.line;
+            }
+            (rc, line)
+        };
 
         if rc > best {
             best = rc;
@@ -162,7 +204,7 @@ pub(crate) fn solve(
             // it carries stm's 2nd stone; flipped (turn-final) => the move alone.
             let mut line = vec![(q, r)];
             if !flipped {
-                line.extend(child.line.iter().copied());
+                line.extend(child_line.iter().copied());
             }
             best_line = line;
         }
@@ -172,6 +214,8 @@ pub(crate) fn solve(
             alpha = best;
         }
         if best >= WIN_THRESHOLD || alpha >= beta {
+            // Cutoff move (WIN or β): reward it for ordering future siblings.
+            ordering.record_cutoff(ply, (q, r), depth_left);
             cutoff = true;
             break;
         }
@@ -184,6 +228,9 @@ pub(crate) fn solve(
 
     // Proven WIN (`best` is a mate magnitude): exact lower bound is already a win.
     if best >= WIN_THRESHOLD {
+        // ORDERING hint only (is_proof=false; never returned as a verdict — a WIN
+        // is always reconstructed). The winning move ordered first next visit.
+        tt.store_bound(key, best, ply, Bound::Lower, best_line.first().copied(), depth_left);
         return Scored { score: best, line: best_line };
     }
     // β-cutoff with a non-win `best`: `best` is a fail-high BOUND, not the exact
@@ -192,6 +239,7 @@ pub(crate) fn solve(
     // strictly above `-WIN_THRESHOLD` (every node has `beta > -WIN_THRESHOLD`; see
     // the soundness note), so it can never be misread as a proven LOSS.
     if cutoff {
+        tt.store_bound(key, best, ply, Bound::Lower, best_line.first().copied(), depth_left);
         return Scored { score: best, line: best_line };
     }
 
@@ -239,7 +287,9 @@ pub(crate) fn solve(
                 Err(_) => continue,
             };
             let flipped = board.current_player != node_player;
-            let child = solve(board, depth_left - 1, ply + 1, NEG_INF, POS_INF, budget, cfg, tt);
+            // Full window, full depth, NO PVS/LMR — the verify preserves EXACT
+            // recall for the LOSS certification (the soundness-critical path).
+            let child = solve(board, depth_left - 1, ply + 1, NEG_INF, POS_INF, budget, cfg, tt, ordering);
             let rc = if flipped { -child.score } else { child.score };
             if rc >= WIN_THRESHOLD {
                 let mut line = vec![(q, r)];
@@ -263,6 +313,103 @@ pub(crate) fn solve(
     }
 
     Scored::heuristic(0) // candidate set incomplete, verify disabled -> cannot prove LOSS
+}
+
+/// LMR depth reduction for a non-PV candidate. Reduce late (`idx >= 6`) moves at
+/// sufficient depth (`depth_left >= 4`) by one ply; never reduce in check (every
+/// candidate is a forced defense). Matches SealBot's `search.h:715` index/depth
+/// gate. SOUNDNESS: the reduction is VERDICT-EXACT — `solve` re-searches at full
+/// depth whenever a reduced child could affect the node value, so a reduction can
+/// only SKIP the deep re-search of a child already proved losing below α (a
+/// verdict-irrelevant short-cut). It never reduces depth on a move that matters.
+#[inline]
+fn lmr_reduction(idx: usize, depth_left: i32, in_check: bool) -> i32 {
+    if !in_check && idx >= 6 && depth_left >= 4 {
+        1
+    } else {
+        0
+    }
+}
+
+/// Iterative-deepening + aspiration ROOT driver (D-PFIT P2 increment 4). Deepens
+/// `1..=max_depth`, reusing the TT + ordering state across iterations for earlier
+/// cutoffs; stops as soon as a depth proves a mate (a proof is final) or the node
+/// budget is exhausted, keeping the deepest COMPLETED result.
+///
+/// SOUNDNESS: every accepted iteration's root window resolves to an EXACT value
+/// (`aspiration_search` widens to ±∞ on a fail), so `outcome_of(score)` is a sound
+/// verdict — the same premise as the single full-window root search.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn solve_root(
+    board: &mut Board,
+    max_depth: i32,
+    budget: &mut Budget,
+    cfg: &TacticalConfig,
+    tt: &mut ProofTt,
+    ordering: &mut OrderingState,
+) -> Scored {
+    let mut result = Scored::heuristic(0);
+    let mut have = false;
+    let mut last = 0i32;
+    let mut depth = 1;
+    while depth <= max_depth {
+        budget.hit_horizon = false; // track whether THIS iteration was depth-truncated
+        let s = aspiration_search(board, depth, last, have, budget, cfg, tt, ordering);
+        if budget.exhausted {
+            if !have {
+                result = s; // first iteration starved: best effort
+            }
+            break;
+        }
+        result = s;
+        last = result.score;
+        have = true;
+        if outcome_of(result.score) != Outcome::Unknown {
+            break; // proven WIN/LOSS — final; deeper search cannot change it
+        }
+        if !budget.hit_horizon {
+            break; // tree fully resolved within depth — deepening cannot change it
+        }
+        depth += 1;
+    }
+    result
+}
+
+/// One aspiration-windowed root search at `depth`. A narrow window around the
+/// previous score yields faster cutoffs; a fail-low/high widens that side to ±∞
+/// and re-searches so the RETURNED value is always exact (never a clipped bound).
+#[allow(clippy::too_many_arguments)]
+fn aspiration_search(
+    board: &mut Board,
+    depth: i32,
+    last: i32,
+    have: bool,
+    budget: &mut Budget,
+    cfg: &TacticalConfig,
+    tt: &mut ProofTt,
+    ordering: &mut OrderingState,
+) -> Scored {
+    const W: i32 = 64; // aspiration half-width (heuristic units)
+    let (mut alpha, mut beta) = (NEG_INF, POS_INF);
+    if have && last.abs() < WIN_THRESHOLD {
+        alpha = (last - W).max(NEG_INF);
+        beta = (last + W).min(POS_INF);
+    }
+    loop {
+        let s = solve(board, depth, 0, alpha, beta, budget, cfg, tt, ordering);
+        if budget.exhausted {
+            return s; // starved: caller keeps the last completed result
+        }
+        if s.score <= alpha && alpha > NEG_INF {
+            alpha = NEG_INF; // fail low: widen down, re-search exact
+            continue;
+        }
+        if s.score >= beta && beta < POS_INF {
+            beta = POS_INF; // fail high: widen up, re-search exact
+            continue;
+        }
+        return s; // strictly in-window => exact value
+    }
 }
 
 /// 3-VALUED REFERENCE ORACLE (test-only). The pre-increment-1 proof core,
@@ -1332,7 +1479,8 @@ mod tests {
         let mut board = b.clone();
         let mut bud = Budget::new(budget);
         let mut tt = super::super::tt::ProofTt::new();
-        let s = super::solve(&mut board, depth, 0, NEG_INF, POS_INF, &mut bud, cfg, &mut tt);
+        let mut ordering = super::OrderingState::new();
+        let s = super::solve(&mut board, depth, 0, NEG_INF, POS_INF, &mut bud, cfg, &mut tt, &mut ordering);
         (outcome_of(s.score), s.score, s.line)
     }
 
@@ -1452,4 +1600,179 @@ mod tests {
         c.apply_move(line[1].0, line[1].1).unwrap();
         assert!(c.check_win(), "PV must realize a real 6, got {line:?}");
     }
+
+    // ── D-PFIT P2 increment 4: PVS / LMR / aspiration + killers/history ─────────
+
+    #[test]
+    fn verdict_invariance_fuzz_scored_matches_3valued() {
+        // REVIEW-REQUESTED HARDENING. The fixed 13-case `verdict_invariance_*` is
+        // widened to a RANDOMIZED stream so the fail-soft mate-bound corners (PVS
+        // null-window, LMR reduction, ordering permutation) are stressed, not just
+        // the hand-picked cases. The scored α-β `solve` (PVS + LMR + killers /
+        // history / TT ordering) is VERDICT-EXACT vs the plain 3-valued oracle —
+        // they share the candidate set + budget, so:
+        //   - they must NEVER contradict (one WIN, other LOSS) — the hard invariant;
+        //   - when BOTH are conclusive they must be EQUAL;
+        //   - any scored verdict is additionally brute-confirmed (compact => cheap).
+        // (A scored-conclusive / oracle-UNKNOWN split is an allowed α-β pruning win,
+        // never a soundness break — and is asserted brute-sound.)
+        let mut rng = Lcg(0xF17E_55ED_2026_0629);
+        // THREAT-ONLY configs: PVS + LMR + killers/history/TT ordering (the
+        // increment-4 additions under test) ALL run on the threat-only path; the
+        // recall VERIFY (neighbor_dist=Some) deliberately uses NO PVS/LMR (kept
+        // full-window for exact recall) so this fuzz needs no verify config — and a
+        // depth-deep full-width verify on a random non-loss board is a minutes-long
+        // full-legal expansion, not the fast-suite budget. The verify path's
+        // soundness is covered by `verify_path_is_sound_over_grid` + the #[ignore]
+        // red-team sweeps. Varied cand_cap (incl. cand_cap=1 truncation) stresses
+        // the PVS/LMR mate-bound corners + the R3 guard interaction.
+        let cfgs = [(1usize, None), (2, None), (40, None)];
+        let (mut win, mut loss, mut unknown, mut checked, mut exact_agree) = (0, 0, 0, 0, 0);
+
+        let check = |b: &Board, cand: usize, nd: Option<i32>, depth: i32, budget: u64,
+                     win: &mut i32, loss: &mut i32, unknown: &mut i32, checked: &mut i32, exact: &mut i32| {
+            let cfg = TacticalConfig { cand_cap: cand, window_half: None, neighbor_dist: nd };
+            let (scored, _, _) = run_scored(b, &cfg, depth, budget);
+            let reference = run_3valued(b, &cfg, depth, budget);
+            assert!(
+                !(scored == WIN && reference == LOSS) && !(scored == LOSS && reference == WIN),
+                "FUZZ CONTRADICTION: scored {scored:?} vs oracle {reference:?} (cand={cand}, nd={nd:?})"
+            );
+            if scored != Outcome::Unknown && reference != Outcome::Unknown {
+                assert_eq!(scored, reference, "FUZZ INVARIANCE: both conclusive but unequal (cand={cand}, nd={nd:?})");
+                *exact += 1;
+            }
+            // brute-confirm any scored verdict (the ultimate soundness gate). Boards
+            // are radius-2 compact so the full-width brute terminates cheaply.
+            if scored == LOSS || scored == WIN {
+                let mut bb = Budget::new(200_000);
+                let brute = brute_solve(&mut b.clone(), 12, &mut bb);
+                if scored == LOSS {
+                    assert_ne!(brute, WIN, "FUZZ FALSE LOSS: scored LOSS but brute escapes to WIN");
+                } else {
+                    assert_ne!(brute, LOSS, "FUZZ FALSE WIN: scored WIN but brute proves LOSS");
+                }
+            }
+            match scored {
+                Outcome::Win => *win += 1,
+                Outcome::Loss => *loss += 1,
+                Outcome::Unknown => *unknown += 1,
+            }
+            *checked += 1;
+        };
+
+        // (A) random COMPACT boards (tight ±2 box + radius-2 legal set so the
+        //     full-width brute + oracle stay cheap), one random threat-only config
+        //     each.
+        let (mut samples, mut attempt) = (0, 0);
+        while samples < 36 && attempt < 4000 {
+            attempt += 1;
+            let mut bd = Board::new();
+            let mut ok = true;
+            let plies = rng.range(5, 10);
+            for _ in 0..plies {
+                let lm: Vec<(i32, i32)> = bd
+                    .legal_moves()
+                    .into_iter()
+                    .filter(|&(q, r)| q.abs() <= 2 && r.abs() <= 2)
+                    .collect();
+                if lm.is_empty() {
+                    ok = false;
+                    break;
+                }
+                let (q, r) = lm[rng.range(0, lm.len() - 1)];
+                if bd.apply_move(q, r).is_err() || bd.check_win() {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                continue;
+            }
+            bd.set_legal_move_radius(2);
+            if bd.legal_move_count() > 36 {
+                continue;
+            }
+            samples += 1;
+            let (cand, nd) = cfgs[rng.range(0, cfgs.len() - 1)];
+            check(&bd, cand, nd, 6, 40_000, &mut win, &mut loss, &mut unknown, &mut checked, &mut exact_agree);
+        }
+
+        // (B) constructed double-threats (in-check + not-in-check) across every
+        //     config — guarantee a stream of forced-LOSS verdicts under truncation.
+        for off_q in -4..=3i32 {
+            for &(off_r, vert) in &[(0, false), (3, true)] {
+                for builder in 0..2 {
+                    let b = if builder == 0 {
+                        compact_double_threat(off_q, off_r, vert)
+                    } else {
+                        compact_double_open_four(off_q, off_r, vert)
+                    };
+                    let (cand, nd) = cfgs[rng.range(0, cfgs.len() - 1)];
+                    check(&b, cand, nd, 8, 100_000, &mut win, &mut loss, &mut unknown, &mut checked, &mut exact_agree);
+                }
+            }
+        }
+
+        // (C) constructed WIN positions translated over a grid + every config —
+        //     WIN-side coverage. P1 holds 0..4 on r=off (an open FIVE: an immediate
+        //     win via the pre-candidate shortcut, so WIN is proven instantly for ANY
+        //     cand_cap incl. truncation, and the brute returns WIN at its first
+        //     count_winning_moves check — keeps this stream cheap + deterministic).
+        //     Radius-2 capped so the rare truncation path can't expand a wide tree.
+        for off in -4..=3i32 {
+            let stones: Vec<((i32, i32), Cell)> =
+                (0..5).map(|q| ((q, off), Cell::P1)).collect();
+            let mut b = static_board(&stones, Player::One, 2);
+            b.set_legal_move_radius(2);
+            let (cand, nd) = cfgs[rng.range(0, cfgs.len() - 1)];
+            check(&b, cand, nd, 8, 80_000, &mut win, &mut loss, &mut unknown, &mut checked, &mut exact_agree);
+        }
+
+        assert!(checked > 40, "fuzz too small ({checked} positions)");
+        assert!(win > 0, "fuzz vacuous: no WIN verdict exercised");
+        assert!(loss > 0, "fuzz vacuous: no LOSS verdict exercised");
+        assert!(unknown > 0, "fuzz should include UNKNOWN positions (mate-bound corners)");
+        eprintln!(
+            "verdict-invariance fuzz: {checked} positions ({win} WIN, {loss} LOSS, {unknown} UNKNOWN), \
+             {exact_agree} both-conclusive agreements, 0 contradictions, 0 brute-refuted verdicts"
+        );
+    }
+
+    #[test]
+    fn iterative_deepening_proves_short_mate_and_is_idempotent() {
+        // The ID + aspiration root driver (public `prove`) must prove a forced mate
+        // and — mate-early-stop — return the SAME verdict regardless of max_depth
+        // (a deeper cap cannot change a proven mate). Also a generous cap must not
+        // blow the node budget on the shallow proof (early-stop bounds the work).
+        let s = solver();
+        let b = compact_double_threat(0, 0, false); // forced P1 LOSS in a few plies
+        let shallow = s.prove(&b, 6, 400_000);
+        let deep = s.prove(&b, 40, 400_000);
+        assert_eq!(shallow.result, LOSS, "ID must prove the short forced LOSS at a small cap");
+        assert_eq!(deep.result, LOSS, "ID verdict idempotent under a deeper cap");
+        assert!(
+            deep.nodes < 400_000 && !deep.budget_exhausted,
+            "mate-early-stop must prove the shallow mate well within budget (nodes={}, exhausted={})",
+            deep.nodes,
+            deep.budget_exhausted
+        );
+    }
+
+    #[test]
+    fn iterative_deepening_win_pv_is_realizable() {
+        // ID/aspiration must not corrupt the root WIN PV (deploy override plays
+        // line[0..2]). The 2-stone forcing win replayed must complete a real 6.
+        let s = solver();
+        let two: Vec<((i32, i32), Cell)> = (0..4).map(|q| ((q, 0), Cell::P1)).collect();
+        let b = static_board(&two, Player::One, 2);
+        let r = s.prove(&b, 20, 200_000);
+        assert_eq!(r.result, WIN, "ID must prove the 2-stone forcing WIN");
+        assert!(r.line.len() >= 2, "WIN carries both stones, got {:?}", r.line);
+        let mut c = b.clone();
+        c.apply_move(r.line[0].0, r.line[0].1).unwrap();
+        c.apply_move(r.line[1].0, r.line[1].1).unwrap();
+        assert!(c.check_win(), "ID WIN PV must realize a real 6, got {:?}", r.line);
+    }
 }
+
