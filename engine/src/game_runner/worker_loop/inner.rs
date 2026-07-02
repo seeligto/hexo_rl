@@ -50,7 +50,7 @@ use super::super::{GameResultRow, WorkerResultRow, records};
 use super::atomics::WorkerAtomics;
 use super::channels::WorkerChannels;
 use super::params::{
-    ExplorationFlags, ForcedWinPolicy, MoveConstraintFlags, SearchFlags, SolverInLoop,
+    ExplorationFlags, ForcedWinPolicy, MoveConstraintFlags, SearchFlags, SeedCorpus, SolverInLoop,
     WorkerGeometry, WorkerParams,
 };
 use super::rotate::{
@@ -97,6 +97,24 @@ struct MoveAccumulators<'a> {
     mcts_stat_count: &'a AtomicU64,
     mcts_quiescence_fires: &'a AtomicU64,
     positions_generated: &'a AtomicUsize,
+}
+
+/// Per-sub-fn arg bundle: D-WS3V3 in-run solver fire-rate counter refs.
+///
+/// Bundles the 8 cumulative `AtomicU64` refs the seeding + solver-injection
+/// hooks increment. `Copy` — passed by value with zero allocation. Incremented
+/// ONLY under the `solver_enabled` / seeded branches so an OFF run leaves the
+/// bench-gated hot path byte-identical.
+#[derive(Clone, Copy)]
+struct SolverCounters<'a> {
+    moves_eligible: &'a AtomicU64,
+    win_proven: &'a AtomicU64,
+    injected: &'a AtomicU64,
+    injected_offwindow: &'a AtomicU64,
+    budget_exhausted: &'a AtomicU64,
+    moves_eligible_seeded: &'a AtomicU64,
+    injected_seeded: &'a AtomicU64,
+    seeded_games_started: &'a AtomicU64,
 }
 
 /// Type alias for per-position record tuple pushed into `records_vec`.
@@ -152,6 +170,15 @@ struct MovePlayContext {
     solver_node_budget: u64,
     solver_neighbor_dist: i32,
     solver_visit_weight: f32,
+    // D-WS3V3 — per-game seeding state. `game_start_ply` = the absolute ply the
+    // organic self-play begins at (0 for organic games; == seed prefix_len for a
+    // seeded game). Gates Gumbel exploration RELATIVE to game start so a seeded
+    // game (start ply 40-80) still explores instead of collapsing to argmax from
+    // its first move (the D-ARGMAX dup trap). `seeded` scopes the `*_seeded`
+    // solver counters. The temperature schedule stays on ABSOLUTE ply (matches
+    // the organic regime).
+    game_start_ply: usize,
+    seeded: bool,
 }
 
 /// Per-game scalar context bundled to keep `run_one_game` arity under
@@ -277,6 +304,14 @@ pub(super) fn run_worker_thread(
         cluster_value_std_accum,
         cluster_policy_disagreement_accum,
         cluster_variance_samples,
+        solver_moves_eligible,
+        solver_win_proven,
+        solver_injected,
+        solver_injected_offwindow,
+        solver_budget_exhausted,
+        solver_moves_eligible_seeded,
+        solver_injected_seeded,
+        seeded_games_started,
     } = stats;
     let WorkerAtomics { running, radius_override } = atomics;
     let WorkerChannels { batcher, results_queue, recent_game_results } = channels;
@@ -322,6 +357,7 @@ pub(super) fn run_worker_thread(
             neighbor_dist: solver_neighbor_dist,
             visit_weight: solver_visit_weight,
         },
+        seed_corpus,
         interior_selector,
     } = params;
 
@@ -351,6 +387,16 @@ pub(super) fn run_worker_thread(
         mcts_stat_count: &mcts_stat_count,
         mcts_quiescence_fires: &mcts_quiescence_fires,
         positions_generated: &positions_generated,
+    };
+    let solver_counters = SolverCounters {
+        moves_eligible: &solver_moves_eligible,
+        win_proven: &solver_win_proven,
+        injected: &solver_injected,
+        injected_offwindow: &solver_injected_offwindow,
+        budget_exhausted: &solver_budget_exhausted,
+        moves_eligible_seeded: &solver_moves_eligible_seeded,
+        injected_seeded: &solver_injected_seeded,
+        seeded_games_started: &seeded_games_started,
     };
     let init_ctx = PerGameInitCtx {
         max_moves, random_opening_plies, legal_move_radius_jitter,
@@ -384,8 +430,9 @@ pub(super) fn run_worker_thread(
             &mut tree, &mut rng, &mut version_seen, &running, &radius_override,
             &batcher, sym_tables, worker_registry_spec, init_ctx, kept_planes,
             policy_stride, has_pass_slot, agg_trunk_sz, legal_set, move_cfg,
-            variance_atomics, move_accumulators, &results_queue,
-            &recent_game_results, finalize_counters, dbg_game_idx_for_game,
+            variance_atomics, move_accumulators, solver_counters, &seed_corpus,
+            &results_queue, &recent_game_results, finalize_counters,
+            dbg_game_idx_for_game,
         );
     }
 }
@@ -414,6 +461,8 @@ fn run_one_game(
     move_cfg: WorkerMoveCfg,
     variance_atomics: ClusterVarianceAtomics,
     move_accumulators: MoveAccumulators,
+    solver_counters: SolverCounters,
+    seed: &SeedCorpus,
     results_queue: &Mutex<VecDeque<WorkerResultRow>>,
     recent_game_results: &Mutex<VecDeque<GameResultRow>>,
     finalize_counters: (
@@ -440,8 +489,14 @@ fn run_one_game(
     } = move_cfg;
 
     let PerGameInit { mut board, mut records_vec, mut move_history,
-        sym_idx, inv_idx, is_fast_game, game_sims } =
-        init_per_game_board(worker_registry_spec, init_ctx, radius_override, rng, version_seen);
+        sym_idx, inv_idx, is_fast_game, game_sims, seeded, prefix_len } =
+        init_per_game_board(worker_registry_spec, init_ctx, radius_override, rng, version_seen, seed);
+
+    // D-WS3V3: count a seeded game once at start (the seed prefix was replayed in
+    // `init_per_game_board`). `seeded == false` for organic games (byte-identical).
+    if seeded {
+        solver_counters.seeded_games_started.fetch_add(1, Ordering::Relaxed);
+    }
 
     let infer = InferContext { batcher, sym_tables, sym_idx, inv_idx };
     let play_ctx = MovePlayContext {
@@ -453,16 +508,30 @@ fn run_one_game(
         forced_win_enabled, forced_win_depth, forced_win_weight,
         solver_enabled, solver_depth, solver_node_budget,
         solver_neighbor_dist, solver_visit_weight,
+        game_start_ply: prefix_len, seeded,
     };
 
-    for _ in 0..init_ctx.max_moves {
+    // D-WS3V3: a seeded game starts `prefix_len` plies in; cap the organic move
+    // budget so the total ply stays ~<= max_moves (game_lengths weighting stays
+    // comparable). `.max(20)` guarantees a deep-seed game still plays out. Organic
+    // games (prefix_len == 0) get the unchanged `max_moves` budget.
+    let mut solver_fires: u32 = 0;
+    let move_iters = if seeded {
+        init_ctx.max_moves.saturating_sub(prefix_len).max(20)
+    } else {
+        init_ctx.max_moves
+    };
+    for _ in 0..move_iters {
         if !running.load(Ordering::Relaxed) || board.check_win() || board.legal_move_count() == 0 {
             break;
         }
 
         // §115 random-opening plies: skip MCTS + recording for the first
-        // `random_opening_plies` plies of every game.
-        if board.ply < init_ctx.random_opening_plies {
+        // `random_opening_plies` plies of every game. D-WS3V3: skipped entirely
+        // for a seeded game — the corpus prefix already supplies off-canonical
+        // early-game diversity (and `prefix_len >= random_opening_plies` makes it
+        // a natural no-op anyway).
+        if !seeded && board.ply < init_ctx.random_opening_plies {
             let legal = board.legal_moves();
             if legal.is_empty() { break; }
             let (mq, mr) = *legal.choose(rng).unwrap();
@@ -475,8 +544,8 @@ fn run_one_game(
             tree, &mut board, &mut records_vec, &mut move_history,
             version_seen, rng, running, play_ctx, kept_planes,
             init_ctx.n_cells, policy_stride, has_pass_slot, agg_trunk_sz, legal_set,
-            infer, variance_atomics, move_accumulators,
-            init_ctx.worker_id, dbg_game_idx,
+            infer, variance_atomics, move_accumulators, solver_counters,
+            &mut solver_fires, init_ctx.worker_id, dbg_game_idx,
         ) {
             MoveOutcome::Played | MoveOutcome::Continue => {},
             MoveOutcome::Break => break,
@@ -495,6 +564,7 @@ fn run_one_game(
         &board, init_ctx.max_moves, records_vec, move_history, version_seen,
         sym_idx, sym_tables, init_ctx.n_cells, init_ctx.draw_reward,
         init_ctx.ply_cap_value, init_ctx.results_queue_cap, init_ctx.worker_id,
+        seeded, solver_fires,
         results_queue, recent_game_results,
         games_completed, x_wins, o_wins, draws, positions_dropped,
     );
@@ -510,6 +580,11 @@ struct PerGameInit {
     inv_idx: usize,
     is_fast_game: bool,
     game_sims: usize,
+    // D-WS3V3 — start-position seeding outputs. `seeded` = this game replayed a
+    // corpus prefix; `prefix_len` = plies removed from the organic budget + the
+    // game-start ply for the relative Gumbel-explore gate (0 for organic games).
+    seeded: bool,
+    prefix_len: usize,
 }
 
 /// Per-game board + state initializer (Wave 11 Batch B; warm path).
@@ -524,6 +599,7 @@ fn init_per_game_board(
     radius_override: &AtomicI32,
     rng: &mut ThreadRng,
     version_seen: &mut Vec<u64>,
+    seed: &SeedCorpus,
 ) -> PerGameInit {
     // §P3.2 — bind the registry-resolved spec at per-game Board construction.
     // v6w25/v7full/etc. carry their own perception (cluster window, threshold,
@@ -535,7 +611,7 @@ fn init_per_game_board(
     // §P67: pre-size per-game record vectors against the upper-bound on moves
     // per game so the typical 64-128-move game never re-allocates.
     let records_vec = Vec::with_capacity(init_ctx.max_moves);
-    let move_history: Vec<(i32, i32)> = Vec::with_capacity(init_ctx.max_moves);
+    let mut move_history: Vec<(i32, i32)> = Vec::with_capacity(init_ctx.max_moves);
     version_seen.clear();
 
     // §174: curriculum radius override takes precedence over encoding default
@@ -557,6 +633,35 @@ fn init_per_game_board(
         board.set_legal_move_radius(r);
     }
 
+    // D-WS3V3 — start-position seeding (KataGo startPoses). HARD INVARIANT
+    // (INV25/26-class): the rng is drawn ONLY when the corpus is non-empty, so the
+    // DEFAULT path (empty corpus OR `seed_fraction == 0.0`) leaves the rng stream —
+    // and therefore every downstream sym_idx / is_fast_game / MCTS draw — byte-
+    // identical to pre-D-WS3V3. When it fires, a prefix is chosen uniformly and
+    // dry-replayed onto the board (ctor-validated, so `apply_move` cannot fail at
+    // runtime — a failure is a debug_assert + graceful unseeded fall-back). Seeded
+    // prefix moves go into `move_history` (state is fully derived by replay:
+    // current_player, moves_remaining, ply, window/bbox, zobrist) but NOT
+    // `records_vec`, and do NOT bump `positions_generated` (the random_opening_plies
+    // convention).
+    let (seeded, prefix_len) = if !seed.corpus.is_empty() && seed.seed_fraction > 0.0
+        && rng.random::<f32>() < seed.seed_fraction
+    {
+        let prefix = seed.corpus.choose(rng).expect("corpus non-empty checked above");
+        let mut ok = true;
+        for &(q, r) in prefix {
+            if board.apply_move(q, r).is_err() {
+                debug_assert!(false, "seed prefix replay failed at ({q},{r}) — corpus is ctor-validated");
+                ok = false;
+                break;
+            }
+            move_history.push((q, r));
+        }
+        if ok { (true, prefix.len()) } else { (false, move_history.len()) }
+    } else {
+        (false, 0)
+    };
+
     // §130: sample per-game rotation across the 12-element hex dihedral group
     // when self-play rotation is enabled.
     let sym_idx: usize = if init_ctx.selfplay_rotation_enabled {
@@ -570,7 +675,10 @@ fn init_per_game_board(
     let is_fast_game = init_ctx.fast_prob > 0.0 && rng.random::<f32>() < init_ctx.fast_prob;
     let game_sims = if is_fast_game { init_ctx.fast_sims } else { init_ctx.standard_sims };
 
-    PerGameInit { board, records_vec, move_history, sym_idx, inv_idx, is_fast_game, game_sims }
+    PerGameInit {
+        board, records_vec, move_history, sym_idx, inv_idx, is_fast_game, game_sims,
+        seeded, prefix_len,
+    }
 }
 
 /// Per-batch NN inference + leaf expansion (Wave 11 Batch B; HOT path).
@@ -892,6 +1000,8 @@ fn play_one_move(
     infer: InferContext,
     variance: ClusterVarianceAtomics,
     accumulators: MoveAccumulators,
+    solver_counters: SolverCounters,
+    solver_fires: &mut u32,
     worker_id: usize,
     dbg_game_idx: u32,
 ) -> MoveOutcome {
@@ -1062,7 +1172,13 @@ fn play_one_move(
     // solver levers compose (the z2 smoke runs O1 off + solver on); both inject the
     // winning move — a double-fire is safe (additive convex blend, weight saturates
     // at 1.0; NOT idempotent — `1-(1-wA)(1-wB)`).
-    let solver_fired = ctx.solver_enabled && {
+    let solver_fired = if ctx.solver_enabled {
+        // D-WS3V3 in-run fire-rate: the solver runs on EVERY move under
+        // `solver_enabled`, so every move reaching here is "eligible".
+        solver_counters.moves_eligible.fetch_add(1, Ordering::Relaxed);
+        if ctx.seeded {
+            solver_counters.moves_eligible_seeded.fetch_add(1, Ordering::Relaxed);
+        }
         let cfg = crate::tactics::TacticalConfig {
             cand_cap: 40,
             // legal_set (multi-window): None surfaces off-window forced wins; the
@@ -1086,39 +1202,67 @@ fn play_one_move(
             ctx.solver_depth,
             ctx.solver_node_budget,
         );
+        if proof.budget_exhausted {
+            solver_counters.budget_exhausted.fetch_add(1, Ordering::Relaxed);
+        }
         if proof.result == crate::tactics::Outcome::Win {
+            solver_counters.win_proven.fetch_add(1, Ordering::Relaxed);
             match proof.line.first() {
-                Some(&(wq, wr)) => match &mut target_policy {
-                    MovePolicy::Dense(t) => {
-                        let action = board.window_flat_idx(wq, wr);
-                        if action < policy_stride {
-                            records::apply_forced_win_one_hot(t, action, ctx.solver_visit_weight);
-                            true
-                        } else {
-                            false
+                // (injected, off_window) — off_window is only reachable on the LS
+                // path (the Dense path drops an off-window win: no logit slot).
+                Some(&(wq, wr)) => {
+                    let (injected, off_window) = match &mut target_policy {
+                        MovePolicy::Dense(t) => {
+                            let action = board.window_flat_idx(wq, wr);
+                            if action < policy_stride {
+                                records::apply_forced_win_one_hot(t, action, ctx.solver_visit_weight);
+                                (true, false)
+                            } else {
+                                (false, false)
+                            }
                         }
+                        // §9.2a/§9.3 coverage-gated (mirrors the O1 LS path): a covered
+                        // (in- or off-window) win injects; an uncovered win is a no-op
+                        // (no uniform-fallback corruption). Coverage uses the SAME
+                        // centers as the record-time projection (`board` is the pre-move
+                        // search root).
+                        MovePolicy::Ls(ls) => {
+                            let (bcq, bcr) = board.window_center();
+                            let half = (agg_trunk_sz - 1) / 2;
+                            let (_, centers) = board.get_cluster_views();
+                            let covered = records::is_covered(wq, wr, &centers, agg_trunk_sz, half);
+                            let did = records::apply_forced_win_one_hot_ls(
+                                ls, (wq, wr), ctx.solver_visit_weight, covered, bcq, bcr,
+                                agg_trunk_sz, half,
+                            );
+                            // Off-window = injected into the ragged OVERFLOW target: the
+                            // win maps outside the dense global window
+                            // (`window_flat_idx_at_geom` == usize::MAX >= policy_stride).
+                            let off = did
+                                && Board::window_flat_idx_at_geom(wq, wr, bcq, bcr, agg_trunk_sz, half)
+                                    >= policy_stride;
+                            (did, off)
+                        }
+                    };
+                    if injected {
+                        solver_counters.injected.fetch_add(1, Ordering::Relaxed);
+                        if ctx.seeded {
+                            solver_counters.injected_seeded.fetch_add(1, Ordering::Relaxed);
+                        }
+                        if off_window {
+                            solver_counters.injected_offwindow.fetch_add(1, Ordering::Relaxed);
+                        }
+                        *solver_fires += 1;
                     }
-                    // §9.2a/§9.3 coverage-gated (mirrors the O1 LS path): a covered
-                    // (in- or off-window) win injects; an uncovered win is a no-op
-                    // (no uniform-fallback corruption). Coverage uses the SAME
-                    // centers as the record-time projection (`board` is the pre-move
-                    // search root).
-                    MovePolicy::Ls(ls) => {
-                        let (bcq, bcr) = board.window_center();
-                        let half = (agg_trunk_sz - 1) / 2;
-                        let (_, centers) = board.get_cluster_views();
-                        let covered = records::is_covered(wq, wr, &centers, agg_trunk_sz, half);
-                        records::apply_forced_win_one_hot_ls(
-                            ls, (wq, wr), ctx.solver_visit_weight, covered, bcq, bcr,
-                            agg_trunk_sz, half,
-                        )
-                    }
-                },
+                    injected
+                }
                 None => false,
             }
         } else {
             false
         }
+    } else {
+        false
     };
     let record_full_search = move_is_full_search || forced_win_fired || solver_fired;
 
@@ -1142,6 +1286,18 @@ fn play_one_move(
     move_history.push((move_idx.0, move_idx.1));
     accumulators.positions_generated.fetch_add(1, Ordering::Relaxed);
     MoveOutcome::Played
+}
+
+/// D-WS3V3 — Gumbel-explore gate on ply RELATIVE to game start.
+///
+/// Returns true once `ply - game_start_ply >= explore_moves` (the deterministic
+/// argmax winner regime). `game_start_ply == 0` for organic games → the gate is
+/// byte-identical to the pre-D-WS3V3 absolute-ply test. A seeded game
+/// (`game_start_ply == prefix_len`) explores for `explore_moves` moves AFTER its
+/// deep start instead of collapsing to argmax from move 1 (the D-ARGMAX dup trap).
+#[inline]
+fn relative_explore_gate(ply: usize, game_start_ply: usize, explore_moves: usize) -> bool {
+    ply.saturating_sub(game_start_ply) >= explore_moves
 }
 
 /// Per-move legal-move sampler (Wave 11 Batch B; warm path).
@@ -1182,8 +1338,14 @@ fn select_move(
     };
 
     // Move selection: Gumbel winner or visit-count sampling.
+    // D-WS3V3: gate exploration on ply RELATIVE to game start (`game_start_ply` ==
+    // seed prefix_len; 0 for organic games → byte-identical). A seeded game starts
+    // deep (ply 40-80); an absolute-ply gate would take deterministic argmax from
+    // its first move and collapse the fixed corpus into near-duplicate games (the
+    // D-ARGMAX dup trap). The temperature schedule stays on ABSOLUTE ply (organic
+    // regime) — see MovePlayContext.
     let use_gumbel_winner = gumbel_state.is_some()
-        && board.ply as usize >= ctx.gumbel_explore_moves;
+        && relative_explore_gate(board.ply as usize, ctx.game_start_ply, ctx.gumbel_explore_moves);
     let move_idx = if use_gumbel_winner {
         let mut gs = gumbel_state.unwrap();
         let best_pool = gs.best_action_pool_idx(tree);
@@ -1300,6 +1462,8 @@ fn finalize_game(
     ply_cap_value: f32,
     results_queue_cap: usize,
     worker_id: usize,
+    seeded: bool,
+    solver_fires: u32,
     results_queue: &Mutex<VecDeque<WorkerResultRow>>,
     recent_game_results: &Mutex<VecDeque<GameResultRow>>,
     games_completed: &AtomicUsize,
@@ -1389,6 +1553,7 @@ fn finalize_game(
         rg.push_back((
             plies, winner_code, move_history, worker_id,
             terminal_reason, mv_min, mv_max, mv_distinct,
+            u8::from(seeded), solver_fires,
         ));
         // Cap at 2000 entries to avoid unbounded growth if Python is slow.
         if rg.len() > 2000 {
@@ -1404,6 +1569,115 @@ fn finalize_game(
             games_results.pop_front();
         }
         positions_dropped.fetch_add(to_drop as u64, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod seeding_tests {
+    //! D-WS3V3 — start-position seeding + relative-explore gate + the dense
+    //! proven-vs-injected classification predicate. The full solver-injection
+    //! counter path fires only inside self-play (no per-move behavioural unit test
+    //! exercises play_one_move end-to-end — same constraint as O1); these pin the
+    //! load-bearing seeding semantics + the exact predicates the counter code uses.
+    use super::*;
+    use crate::board::Cell;
+    use std::sync::Arc;
+
+    fn test_init_ctx() -> PerGameInitCtx {
+        PerGameInitCtx {
+            max_moves: 150,
+            random_opening_plies: 1,
+            legal_move_radius_jitter: false,
+            selfplay_rotation_enabled: false,
+            fast_prob: 0.0,
+            fast_sims: 64,
+            standard_sims: 200,
+            n_cells: 361,
+            draw_reward: -0.1,
+            ply_cap_value: -0.1,
+            results_queue_cap: 10_000,
+            worker_id: 0,
+        }
+    }
+
+    #[test]
+    fn test_seeded_prefix_replay_matches_manual_apply() {
+        // (a) A seeded game's board == the same prefix applied stone-by-stone on a
+        // fresh board (state fully derived by replay: ply, current_player,
+        // moves_remaining, stones).
+        let prefix = vec![(0, 0), (1, 0), (2, 0)];
+        let seed = SeedCorpus { corpus: Arc::new(vec![prefix.clone()]), seed_fraction: 1.0 };
+        let radius = AtomicI32::new(-1);
+        let mut rng = rng();
+        let mut version_seen = Vec::new();
+        let init = init_per_game_board(None, test_init_ctx(), &radius, &mut rng, &mut version_seen, &seed);
+        assert!(init.seeded, "seed_fraction=1.0 + non-empty corpus must seed");
+        assert_eq!(init.prefix_len, 3);
+        assert_eq!(init.move_history, prefix, "seed prefix goes into move_history");
+
+        let mut manual = Board::new();
+        for &(q, r) in &prefix {
+            manual.apply_move(q, r).unwrap();
+        }
+        assert_eq!(init.board.ply, manual.ply, "ply derived by replay");
+        assert_eq!(init.board.current_player, manual.current_player);
+        assert_eq!(init.board.moves_remaining, manual.moves_remaining);
+        assert_eq!(init.board.cells, manual.cells, "stones match manual replay");
+    }
+
+    #[test]
+    fn test_seed_fraction_zero_never_seeds() {
+        // (c) seed_fraction=0.0 short-circuits BEFORE the rng draw (`!empty &&
+        // fraction>0 && rng<..` — `&&` is left-to-right) so the default path's rng
+        // stream is untouched (INV25/26-class). Observable: never seeded.
+        let seed = SeedCorpus { corpus: Arc::new(vec![vec![(0, 0), (1, 0)]]), seed_fraction: 0.0 };
+        let radius = AtomicI32::new(-1);
+        let mut rng = rng();
+        let mut version_seen = Vec::new();
+        let init = init_per_game_board(None, test_init_ctx(), &radius, &mut rng, &mut version_seen, &seed);
+        assert!(!init.seeded, "seed_fraction=0.0 must never seed");
+        assert_eq!(init.prefix_len, 0);
+        assert_eq!(init.board.ply, 0, "unseeded game starts at ply 0");
+    }
+
+    #[test]
+    fn test_empty_corpus_never_seeds() {
+        // (c') empty corpus short-circuits before the rng draw even at fraction=1.
+        let seed = SeedCorpus { corpus: Arc::new(Vec::new()), seed_fraction: 1.0 };
+        let radius = AtomicI32::new(-1);
+        let mut rng = rng();
+        let mut version_seen = Vec::new();
+        let init = init_per_game_board(None, test_init_ctx(), &radius, &mut rng, &mut version_seen, &seed);
+        assert!(!init.seeded);
+        assert_eq!(init.prefix_len, 0);
+    }
+
+    #[test]
+    fn test_relative_explore_gate_uses_relative_ply() {
+        // (d) organic (game_start_ply=0) is byte-identical to the absolute-ply test.
+        assert!(!relative_explore_gate(9, 0, 10));
+        assert!(relative_explore_gate(10, 0, 10));
+        // A seeded game starting at ply 40 must still explore for `explore_moves`
+        // moves AFTER its deep start — NOT collapse to argmax from move 1.
+        assert!(!relative_explore_gate(40, 40, 10), "seeded first move must explore");
+        assert!(!relative_explore_gate(49, 40, 10));
+        assert!(relative_explore_gate(50, 40, 10), "gate fires 10 plies past the seed start");
+    }
+
+    #[test]
+    fn test_dense_offwindow_win_is_proven_not_injected() {
+        // (e) Dense path injection is gated on `window_flat_idx(wq,wr) <
+        // policy_stride`. An off-window proven win maps to usize::MAX (>= stride) →
+        // PROVEN but NOT injected (the win_proven vs injected counter split); an
+        // in-window win maps to a real logit slot (injected).
+        let mut board = Board::new();
+        for q in 0..5i32 { board.cells.insert((q, 0), Cell::P1); }
+        board.has_stones = true;
+        board.min_q = -1; board.max_q = 5; board.min_r = 0; board.max_r = 0;
+        board.cache_dirty.set(true);
+        let stride = 19 * 19 + 1;
+        assert!(board.window_flat_idx(5, 0) < stride, "in-window win maps to a logit slot (injected)");
+        assert_eq!(board.window_flat_idx(100, 0), usize::MAX, "off-window win has no dense slot (proven-not-injected)");
     }
 }
 

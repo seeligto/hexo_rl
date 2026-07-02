@@ -169,8 +169,16 @@ def emit_training_events(
     qfire_delta: int,
     early_game_probe: Optional[EarlyGameProbe] = None,
     trainer_model: Optional[Any] = None,
+    solver_deltas: Optional[dict[str, Any]] = None,
 ) -> None:
-    """Emit ``training_step`` + ``iteration_complete`` events and structlog entry."""
+    """Emit ``training_step`` + ``iteration_complete`` events and structlog entry.
+
+    ``solver_deltas`` (D-WS3V3) carries per-step solver fire-rate fields computed
+    from the ``_last_*`` counter deltas in the step coordinator
+    (``solver_eligible_per_step`` / ``solver_injected_per_step`` /
+    ``solver_fire_rate`` / ``solver_fire_rate_seeded``); merged into the
+    ``training_step`` event. ``None`` on an OFF run (no keys emitted).
+    """
     policy_entropy = float(loss_info.get("policy_entropy", 0.0))
     value_accuracy = float(loss_info.get("value_accuracy", 0.0))
     grad_norm      = float(loss_info.get("grad_norm", float("nan")))
@@ -229,6 +237,10 @@ def emit_training_events(
     }
     if probe_metrics:
         training_step_event.update(probe_metrics)
+    # D-WS3V3 — per-step solver fire-rate deltas (null-safe fire-rate when
+    # eligible==0). Merged only when solver-in-loop is active (deltas supplied).
+    if solver_deltas:
+        training_step_event.update(solver_deltas)
     emit_event(training_step_event)
 
     gph    = games_per_hour_fn()
@@ -262,6 +274,15 @@ def emit_training_events(
         "corpus_selfplay_frac": round(1.0 - w_pre, 4),
         "batch_fill_pct":     pool.batch_fill_pct,
         "mcts_mean_depth":    rstats.mcts_mean_depth,
+        # D-WS3V3 — cumulative in-run solver fire-rate totals (all 0 on an OFF run).
+        "solver_moves_eligible":       rstats.solver_moves_eligible,
+        "solver_win_proven":           rstats.solver_win_proven,
+        "solver_injected":             rstats.solver_injected,
+        "solver_injected_offwindow":   rstats.solver_injected_offwindow,
+        "solver_budget_exhausted":     rstats.solver_budget_exhausted,
+        "solver_moves_eligible_seeded": rstats.solver_moves_eligible_seeded,
+        "solver_injected_seeded":      rstats.solver_injected_seeded,
+        "seeded_games_started":        rstats.seeded_games_started,
     }
     if _puct_regime:
         iteration_complete_event["mcts_root_concentration"] = rstats.mcts_mean_root_concentration

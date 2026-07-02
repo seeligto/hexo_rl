@@ -83,6 +83,19 @@ pub(super) struct SolverInLoop {
     pub(super) visit_weight: f32,
 }
 
+/// D-WS3V3 — trap-corpus START-POSITION seeding bundle (KataGo startPoses).
+/// Holds the ctor-validated move-prefix corpus (`Arc`-shared across workers, read
+/// only) + the per-game seeding probability. `seed_fraction == 0.0` OR an empty
+/// corpus keeps `init_per_game_board` byte-identical (no rng draw — the default
+/// path's rng stream is untouched, INV25/26-class). Threaded through
+/// `WorkerParams` (cheap `Arc::clone` per worker spawn) and consumed by
+/// `inner::init_per_game_board`.
+#[derive(Clone)]
+pub(super) struct SeedCorpus {
+    pub(super) corpus: std::sync::Arc<Vec<Vec<(i32, i32)>>>,
+    pub(super) seed_fraction: f32,
+}
+
 #[derive(Clone)]
 pub(super) struct WorkerParams {
     pub(super) max_moves: usize,
@@ -122,6 +135,9 @@ pub(super) struct WorkerParams {
     /// D-WS3 L1: native solver-in-loop SOFT visit-injection knobs (cloned from the
     /// runner prototype per worker spawn; default-OFF = byte-identical self-play).
     pub(super) solver_in_loop: SolverInLoop,
+    /// D-WS3V3: trap-corpus start-position seeding (cloned per worker spawn;
+    /// empty corpus / `seed_fraction == 0.0` = byte-identical self-play).
+    pub(super) seed_corpus: SeedCorpus,
     /// D-QFIX-LAND A1: interior (non-root) MCTS selection rule. Cloned from the
     /// runner prototype per worker spawn, applied to the per-worker `MCTSTree`
     /// after `new_full` in `inner::run_worker_thread`. `Copy` enum.

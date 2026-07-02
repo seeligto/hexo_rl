@@ -155,20 +155,24 @@ def test_rust_runner_collect_data_format():
             
         assert runner.games_completed >= 1
 
-        # drain_game_results returns metadata 8-tuples (Phase B' instrumentation:
-        # adds terminal_reason + model_version_min/max/distinct). Spatial aux
-        # flows per-row via collect_data() instead.
+        # drain_game_results returns metadata 10-tuples (Phase B' instrumentation:
+        # terminal_reason + model_version_min/max/distinct; D-WS3V3: seeded +
+        # solver_fires). Spatial aux flows per-row via collect_data() instead.
         drained = runner.drain_game_results()
         assert len(drained) > 0
         (
             plies_drain, winner_code, move_history, worker_id,
             terminal_reason, mv_min, mv_max, mv_distinct,
+            seeded, solver_fires,
         ) = drained[0]
         assert isinstance(worker_id, int)
         assert worker_id == 0
         assert isinstance(terminal_reason, int) and 0 <= terminal_reason <= 3
         assert mv_max >= mv_min
         assert mv_distinct >= 1 if plies_drain > 0 else mv_distinct >= 0
+        # D-WS3V3: default (no seeding / solver OFF) → seeded 0, no fires.
+        assert seeded == 0
+        assert solver_fires == 0
 
         # collect_data returns 10 numpy arrays:
         # (feats, chain, pols, vals, plies, own, wl, is_full_search, position_index, value_valid)

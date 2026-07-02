@@ -24,4 +24,15 @@ pub(super) struct WorkerStats {
     pub(super) cluster_value_std_accum: Arc<AtomicU64>,
     pub(super) cluster_policy_disagreement_accum: Arc<AtomicU64>,
     pub(super) cluster_variance_samples: Arc<AtomicU64>,
+    // D-WS3V3 in-run solver fire-rate counters (cumulative since `start()`).
+    // Incremented ONLY under the `solver_enabled` / seeded branches so an OFF
+    // (default) self-play run leaves the bench-gated hot path byte-identical.
+    pub(super) solver_moves_eligible: Arc<AtomicU64>,
+    pub(super) solver_win_proven: Arc<AtomicU64>,
+    pub(super) solver_injected: Arc<AtomicU64>,
+    pub(super) solver_injected_offwindow: Arc<AtomicU64>,
+    pub(super) solver_budget_exhausted: Arc<AtomicU64>,
+    pub(super) solver_moves_eligible_seeded: Arc<AtomicU64>,
+    pub(super) solver_injected_seeded: Arc<AtomicU64>,
+    pub(super) seeded_games_started: Arc<AtomicU64>,
 }

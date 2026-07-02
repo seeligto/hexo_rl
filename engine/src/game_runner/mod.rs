@@ -47,8 +47,11 @@ pub(crate) type WorkerResultRow = (Vec<f32>, Vec<f32>, Vec<f32>, f32, usize, Vec
 /// `recent_game_results` field doc for the field semantics.
 ///
 /// Fields (in order): `(plies, winner_code, move_history, worker_id,
-/// terminal_reason, model_version_min, model_version_max, model_version_distinct)`.
-pub(crate) type GameResultRow = (usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32);
+/// terminal_reason, model_version_min, model_version_max, model_version_distinct,
+/// seeded, solver_fires)`. `seeded` (D-WS3V3, u8 0/1) marks a start-position-seeded
+/// game; `solver_fires` (u32) is the per-game count of solver-injected moves. Both
+/// are metadata-only (drained via `recent_game_results`, NOT the replay buffer).
+pub(crate) type GameResultRow = (usize, u8, Vec<(i32, i32)>, usize, u8, u64, u64, u32, u8, u32);
 
 /// Return tuple of `collect_data` — ten NumPy arrays bound to the GIL
 /// lifetime. Fields: `(feat, chain, policy, value, plies, ownership,
@@ -159,6 +162,12 @@ pub struct SelfPlayRunner {
     pub(crate) solver_node_budget: u64,
     pub(crate) solver_neighbor_dist: i32,
     pub(crate) solver_visit_weight: f32,
+    /// D-WS3V3 — trap-corpus START-POSITION seeding. `seed_fraction` = per-game
+    /// probability of replaying a `seed_corpus` move-prefix before self-play; the
+    /// `Arc`-shared corpus is dry-replay validated once at `new()` and cloned to
+    /// each worker via the `SeedCorpus` bundle. `0.0` / empty = byte-identical.
+    pub(crate) seed_fraction: f32,
+    pub(crate) seed_corpus: Arc<Vec<Vec<(i32, i32)>>>,
     /// §173 A5a — full registry record for the active encoding; `None` for
     /// legacy callers that don't provide `encoding_spec`. Used by worker_loop
     /// to call `sym_tables_for(spec)` (H1-α) and to derive per-spec geometry
@@ -224,6 +233,22 @@ pub struct SelfPlayRunner {
     pub(crate) cluster_policy_disagreement_accum: Arc<AtomicU64>,
     /// I2 investigation metric: count of K≥2 multi-cluster positions scored.
     pub(crate) cluster_variance_samples: Arc<AtomicU64>,
+    /// D-WS3V3 in-run solver fire-rate counters (cumulative since `start()`).
+    /// `solver_moves_eligible` = every move the solver ran on (all moves when
+    /// `solver_enabled`); `solver_win_proven` = proofs returning `Outcome::Win`;
+    /// `solver_injected` = wins that actually blended into the policy target;
+    /// `solver_injected_offwindow` = LS injections landing off the global window
+    /// (ragged overflow target); `solver_budget_exhausted` = proofs that hit the
+    /// node budget. The `*_seeded` twins scope eligible/injected to seeded games;
+    /// `seeded_games_started` = count of games that replayed a corpus prefix.
+    pub(crate) solver_moves_eligible: Arc<AtomicU64>,
+    pub(crate) solver_win_proven: Arc<AtomicU64>,
+    pub(crate) solver_injected: Arc<AtomicU64>,
+    pub(crate) solver_injected_offwindow: Arc<AtomicU64>,
+    pub(crate) solver_budget_exhausted: Arc<AtomicU64>,
+    pub(crate) solver_moves_eligible_seeded: Arc<AtomicU64>,
+    pub(crate) solver_injected_seeded: Arc<AtomicU64>,
+    pub(crate) seeded_games_started: Arc<AtomicU64>,
 }
 
 #[pymethods]
@@ -289,6 +314,8 @@ impl SelfPlayRunner {
             solver_node_budget,
             solver_neighbor_dist,
             solver_visit_weight,
+            seed_fraction,
+            seed_corpus,
         } = config;
         // D-QFIX-LAND A1: parse the interior-selector string → enum here (panics
         // on an unknown variant — A1 config is hard-read end-to-end, no silent
@@ -353,6 +380,25 @@ impl SelfPlayRunner {
                  when full_search_prob > 0 (got n_sims_quick={n_sims_quick}, n_sims_full={n_sims_full})",
             )));
         }
+        // D-WS3V3 — dry-replay validate every seed prefix ONCE at construction on a
+        // scratch (spec-aware) Board. A prefix is a move sequence from game start;
+        // an illegal move loud-fails here (with the seed index) so the worker-loop
+        // replay hook can trust the corpus (runtime failure there = debug_assert).
+        let seed_corpus_vec: Vec<Vec<(i32, i32)>> = seed_corpus.unwrap_or_default();
+        for (i, prefix) in seed_corpus_vec.iter().enumerate() {
+            let mut scratch = match spec_static {
+                Some(spec) => crate::board::Board::with_registry_spec(spec),
+                None       => crate::board::Board::new(),
+            };
+            for &(q, r) in prefix {
+                if scratch.apply_move(q, r).is_err() {
+                    return Err(PyValueError::new_err(format!(
+                        "SelfPlayRunner: seed_corpus index {i} has an illegal prefix move \
+                         ({q},{r}) — validate the corpus miner output"
+                    )));
+                }
+            }
+        }
         // cycle 3 P55 / Wave 9 — auto-derive InferenceBatcher.pool_size from
         // spec.k_max when Python omits the explicit kwarg. Heuristic:
         // `n_workers * leaf_batch_size * k_max * 2`, floored at 512 so the
@@ -414,6 +460,8 @@ impl SelfPlayRunner {
             solver_node_budget,
             solver_neighbor_dist,
             solver_visit_weight,
+            seed_fraction,
+            seed_corpus: Arc::new(seed_corpus_vec),
             registry_spec: spec_static,
             radius_override: Arc::new(AtomicI32::new(radius_override.unwrap_or(-1))),
             running: Arc::new(AtomicBool::new(false)),
@@ -433,6 +481,14 @@ impl SelfPlayRunner {
             cluster_value_std_accum: Arc::new(AtomicU64::new(0)),
             cluster_policy_disagreement_accum: Arc::new(AtomicU64::new(0)),
             cluster_variance_samples: Arc::new(AtomicU64::new(0)),
+            solver_moves_eligible: Arc::new(AtomicU64::new(0)),
+            solver_win_proven: Arc::new(AtomicU64::new(0)),
+            solver_injected: Arc::new(AtomicU64::new(0)),
+            solver_injected_offwindow: Arc::new(AtomicU64::new(0)),
+            solver_budget_exhausted: Arc::new(AtomicU64::new(0)),
+            solver_moves_eligible_seeded: Arc::new(AtomicU64::new(0)),
+            solver_injected_seeded: Arc::new(AtomicU64::new(0)),
+            seeded_games_started: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -662,6 +718,50 @@ impl SelfPlayRunner {
         self.cluster_variance_samples.load(Ordering::Relaxed)
     }
 
+    // D-WS3V3 in-run solver fire-rate counters (cumulative since `start()`).
+    // All zero on an OFF run. `pool.py::runner_stats()` snapshots them; the
+    // step-coordinator bills per-step deltas into the `training_step` event and
+    // the cumulative totals into `iteration_complete`.
+    #[getter]
+    pub fn solver_moves_eligible(&self) -> u64 {
+        self.solver_moves_eligible.load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    pub fn solver_win_proven(&self) -> u64 {
+        self.solver_win_proven.load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    pub fn solver_injected(&self) -> u64 {
+        self.solver_injected.load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    pub fn solver_injected_offwindow(&self) -> u64 {
+        self.solver_injected_offwindow.load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    pub fn solver_budget_exhausted(&self) -> u64 {
+        self.solver_budget_exhausted.load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    pub fn solver_moves_eligible_seeded(&self) -> u64 {
+        self.solver_moves_eligible_seeded.load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    pub fn solver_injected_seeded(&self) -> u64 {
+        self.solver_injected_seeded.load(Ordering::Relaxed)
+    }
+
+    #[getter]
+    pub fn seeded_games_started(&self) -> u64 {
+        self.seeded_games_started.load(Ordering::Relaxed)
+    }
+
     /// Drain and return all buffered game results since the last call.
     ///
     /// Each entry: (plies, winner_code, move_history, worker_id,
@@ -748,7 +848,7 @@ mod tests {
 
         while completed_workers.len() < 4 && attempts < 50 {
             let results = runner.drain_game_results_raw();
-            for (_, _, _, worker_id, _, _, _, _) in results {
+            for (_, _, _, worker_id, _, _, _, _, _, _) in results {
                 assert!(worker_id < 4);
                 completed_workers.insert(worker_id);
             }
@@ -961,5 +1061,67 @@ mod tests {
             priors_before, priors_after,
             "Disabled gate must not modify root priors"
         );
+    }
+
+    // ── D-WS3V3: solver fire-rate counters + seed-corpus config ──────────────
+
+    fn ws3v3_base_config() -> SelfPlayRunnerConfig {
+        SelfPlayRunnerConfig {
+            max_moves_per_game: 0,
+            n_simulations: 1,
+            leaf_batch_size: 1,
+            feature_len: Some(8 * 19 * 19),
+            policy_len: Some(19 * 19 + 1),
+            fast_prob: 1.0,
+            fast_sims: 1,
+            standard_sims: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_ws3v3_solver_counters_start_at_zero() {
+        let runner = SelfPlayRunner::new(ws3v3_base_config()).unwrap();
+        assert_eq!(runner.solver_moves_eligible(), 0);
+        assert_eq!(runner.solver_win_proven(), 0);
+        assert_eq!(runner.solver_injected(), 0);
+        assert_eq!(runner.solver_injected_offwindow(), 0);
+        assert_eq!(runner.solver_budget_exhausted(), 0);
+        assert_eq!(runner.solver_moves_eligible_seeded(), 0);
+        assert_eq!(runner.solver_injected_seeded(), 0);
+        assert_eq!(runner.seeded_games_started(), 0);
+    }
+
+    #[test]
+    fn test_ws3v3_seed_config_round_trips() {
+        let runner = SelfPlayRunner::new(SelfPlayRunnerConfig {
+            seed_fraction: 0.5,
+            seed_corpus: Some(vec![vec![(0, 0), (1, 0)]]),
+            ..ws3v3_base_config()
+        })
+        .unwrap();
+        assert!((runner.seed_fraction - 0.5).abs() < 1e-6);
+        assert_eq!(runner.seed_corpus.len(), 1);
+        assert_eq!(runner.seed_corpus[0], vec![(0, 0), (1, 0)]);
+    }
+
+    #[test]
+    fn test_ws3v3_illegal_seed_prefix_rejected() {
+        // Dry-replay validation loud-fails on an illegal prefix (second move on an
+        // already-occupied cell) — the worker-loop replay hook then trusts the corpus.
+        let res = SelfPlayRunner::new(SelfPlayRunnerConfig {
+            seed_fraction: 1.0,
+            seed_corpus: Some(vec![vec![(0, 0), (0, 0)]]),
+            ..ws3v3_base_config()
+        });
+        assert!(res.is_err(), "illegal seed prefix must be rejected at construction");
+    }
+
+    #[test]
+    fn test_ws3v3_empty_seed_corpus_constructs() {
+        // Default (no seeding) path: empty corpus + fraction 0 constructs cleanly.
+        let runner = SelfPlayRunner::new(ws3v3_base_config()).unwrap();
+        assert!(runner.seed_corpus.is_empty());
+        assert_eq!(runner.seed_fraction, 0.0);
     }
 }

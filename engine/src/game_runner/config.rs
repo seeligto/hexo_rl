@@ -148,6 +148,20 @@ pub struct SelfPlayRunnerConfig {
     /// verdict softens.
     #[pyo3(get, set)]
     pub solver_visit_weight: f32,
+    /// D-WS3V3 — trap-corpus START-POSITION seeding (KataGo startPoses). Per-game
+    /// probability of replaying a corpus move-prefix before self-play begins, to
+    /// densify the solver fire-rate on seeded games. Added as `#[pyo3(get, set)]`
+    /// attributes (set post-construction from `pool.py`) so the INV19-pinned 38-arg
+    /// positional ctor surface is untouched. Defaulted OFF (`0.0` / empty) —
+    /// byte-identical self-play. The keys live in the `selfplay:` namespace and must
+    /// stay OUT of `RESUME_CHECKPOINT_OWNED_KEYS`.
+    #[pyo3(get, set)]
+    pub seed_fraction: f32,
+    /// Move-prefix corpus, parsed PYTHON-side from the JSONL (`pool.py`) and passed
+    /// as a list-of-list-of-`(q, r)`. `None` / empty = no seeding. Dry-replay
+    /// validated once at `SelfPlayRunner::new`.
+    #[pyo3(get, set)]
+    pub seed_corpus: Option<Vec<Vec<(i32, i32)>>>,
 }
 
 /// §B1 (CONFIG-4, 2026-06-02) — semantic defaults SoT for Rust struct-literal
@@ -221,6 +235,11 @@ impl Default for SelfPlayRunnerConfig {
             solver_node_budget: 50_000,
             solver_neighbor_dist: 2,
             solver_visit_weight: 0.3,
+            // D-WS3V3 start-position seeding — OFF by default (byte-identical
+            // self-play). Operative values come from the ws3v3 arm variants via
+            // pool.py (seed_fraction + seed_corpus parsed from the JSONL corpus).
+            seed_fraction: 0.0,
+            seed_corpus: None,
         }
     }
 }

@@ -87,6 +87,15 @@ selfplay:
   solver_neighbor_dist: 2
   solver_visit_weight: 0.3
 
+  # D-WS3V3 — trap-corpus START-POSITION seeding (KataGo startPoses). Per-game
+  # probability of replaying a corpus move-prefix before self-play, to densify the
+  # solver fire-rate on seeded games (~100% on ARM-SEEDED). Parsed PYTHON-side in
+  # pool.py (JSONL → list-of-list-of-(q,r)) and passed to Rust as the seed_corpus
+  # attr; dry-replay validated once at SelfPlayRunner::new. Default OFF (0.0 / null)
+  # = byte-identical self-play. Keys stay OUT of RESUME_CHECKPOINT_OWNED_KEYS.
+  seed_fraction: 0.0
+  seed_corpus_path: null
+
   # Gumbel MCTS search (Danihelka et al., ICLR 2022 §3.3-3.4).
   # Replaces PUCT exploration at root with Gumbel-Top-k sampling and Sequential
   # Halving budget allocation. Non-root nodes still use PUCT + dynamic FPU.

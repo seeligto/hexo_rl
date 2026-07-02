@@ -485,6 +485,11 @@ class StepCoordinator:
         self.last_iter_games = self._games_played
         self._last_quiescence_fires = 0
         self._last_pool_overflows = 0
+        # D-WS3V3 — solver fire-rate per-step delta state (mirror _last_quiescence_fires).
+        self._last_solver_eligible = 0
+        self._last_solver_injected = 0
+        self._last_solver_eligible_seeded = 0
+        self._last_solver_injected_seeded = 0
         self._rolling_gph = RollingGamesPerHour(t_start=clock.now())
 
         # §174 — radius curriculum state
@@ -1262,10 +1267,40 @@ class StepCoordinator:
 
             # D8: emit training events + pool-overflow soft warning
             if self._train_step % cfg.log_interval == 0:
-                # §176 P9 — typed snapshot replaces direct ``_runner`` reach.
-                _cur_qfire = self.pool.runner_stats().mcts_quiescence_fires
+                # §176 P9 — typed snapshot replaces direct ``_runner`` reach. One
+                # snapshot feeds both the quiescence-fire delta and the D-WS3V3
+                # solver fire-rate deltas below.
+                _rstats = self.pool.runner_stats()
+                _cur_qfire = _rstats.mcts_quiescence_fires
                 _qfire_delta = _cur_qfire - self._last_quiescence_fires
                 self._last_quiescence_fires = _cur_qfire
+                # D-WS3V3 — per-step solver fire-rate deltas (_last_* pattern). The
+                # fire-rate is null-safe when the eligible delta is 0 (no solver
+                # activity in the interval). `None` deltas dict on a fully-OFF run
+                # (cumulative eligible AND injected still 0) → no training_step keys.
+                _d_elig = _rstats.solver_moves_eligible - self._last_solver_eligible
+                _d_inj = _rstats.solver_injected - self._last_solver_injected
+                _d_elig_s = (
+                    _rstats.solver_moves_eligible_seeded
+                    - self._last_solver_eligible_seeded
+                )
+                _d_inj_s = (
+                    _rstats.solver_injected_seeded - self._last_solver_injected_seeded
+                )
+                self._last_solver_eligible = _rstats.solver_moves_eligible
+                self._last_solver_injected = _rstats.solver_injected
+                self._last_solver_eligible_seeded = _rstats.solver_moves_eligible_seeded
+                self._last_solver_injected_seeded = _rstats.solver_injected_seeded
+                _solver_deltas: dict[str, Any] | None = None
+                if _rstats.solver_moves_eligible > 0 or _rstats.solver_injected > 0:
+                    _solver_deltas = {
+                        "solver_eligible_per_step": _d_elig,
+                        "solver_injected_per_step": _d_inj,
+                        "solver_fire_rate": (_d_inj / _d_elig) if _d_elig > 0 else None,
+                        "solver_fire_rate_seeded": (
+                            (_d_inj_s / _d_elig_s) if _d_elig_s > 0 else None
+                        ),
+                    }
                 # Pool-overflow surface — soft warning only, not hard-fail.  We
                 # don't know production frequency yet; aborting on first
                 # occurrence would risk killing healthy runs over a benign
@@ -1305,6 +1340,7 @@ class StepCoordinator:
                     self.games_per_hour, _qfire_delta,
                     early_game_probe=self.subsystems.early_game_probe,
                     trainer_model=self.trainer.model,
+                    solver_deltas=_solver_deltas,
                 )
                 self.last_iter_games = self._games_played
 

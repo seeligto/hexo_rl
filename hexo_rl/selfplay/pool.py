@@ -78,6 +78,16 @@ class RunnerStats:
     cluster_value_std_mean: float
     cluster_policy_disagreement_mean: float
     cluster_variance_sample_count: int
+    # D-WS3V3 in-run solver fire-rate counters (cumulative since pool start).
+    # `getattr` defaults cover engine wheels that pre-date the counters (all 0).
+    solver_moves_eligible: int = 0
+    solver_win_proven: int = 0
+    solver_injected: int = 0
+    solver_injected_offwindow: int = 0
+    solver_budget_exhausted: int = 0
+    solver_moves_eligible_seeded: int = 0
+    solver_injected_seeded: int = 0
+    seeded_games_started: int = 0
     # §P3.2: ``runner_encoding`` retired alongside the legacy 4-field
     # PyEncodingSpec PyO3 class.  Field kept as a vestigial ``None``-valued
     # slot to avoid breaking external callers that construct ``RunnerStats``
@@ -210,6 +220,49 @@ def _draw_outcome_band(
     lo = min(draw_value, ply_cap_value) - eps
     hi = max(draw_value, ply_cap_value) + eps
     return lo, hi
+
+
+def _load_seed_corpus(
+    path: Optional[str], seed_fraction: float
+) -> Optional[list[list[tuple[int, int]]]]:
+    """Parse the D-WS3V3 seed-corpus JSONL into move prefixes for the Rust runner.
+
+    One JSON object per line (see the D-WS3V3 interface contract); only
+    ``seed_moves`` (a list of ``[q, r]`` pairs) is consumed here. Returns a list of
+    ``(q, r)`` tuple-prefixes, or ``None`` when no path is configured.
+
+    Loud ``ValueError`` on a malformed/empty corpus when ``seed_fraction > 0`` — a
+    seeded run with no usable prefixes is a silent no-op the operator must catch.
+    A path with ``seed_fraction == 0`` is parsed for validation but never fires.
+    """
+    if path is None:
+        if seed_fraction > 0.0:
+            raise ValueError(
+                "selfplay.seed_fraction > 0 requires selfplay.seed_corpus_path — "
+                "no corpus to seed from."
+            )
+        return None
+    prefixes: list[list[tuple[int, int]]] = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                moves = obj["seed_moves"]
+                prefixes.append([(int(q), int(r)) for q, r in moves])
+    except (OSError, KeyError, ValueError, TypeError) as exc:
+        raise ValueError(
+            f"selfplay.seed_corpus_path {path!r} is malformed (expected JSONL with a "
+            f"'seed_moves' list-of-[q,r] per line): {exc}"
+        ) from exc
+    if seed_fraction > 0.0 and not prefixes:
+        raise ValueError(
+            f"selfplay.seed_corpus_path {path!r} yielded ZERO prefixes but "
+            f"seed_fraction={seed_fraction} > 0 — seeding would be a silent no-op."
+        )
+    return prefixes
 
 
 class WorkerPool:
@@ -427,6 +480,17 @@ class WorkerPool:
         _sp_config.solver_node_budget = int(sp.get("solver_node_budget", 50_000))
         _sp_config.solver_neighbor_dist = int(sp.get("solver_neighbor_dist", 2))
         _sp_config.solver_visit_weight = float(sp.get("solver_visit_weight", 0.3))
+        # D-WS3V3 — trap-corpus START-POSITION seeding. The JSONL corpus is parsed
+        # HERE (Python side) into move prefixes and passed to Rust via the
+        # `seed_corpus` attr as a list-of-list-of-(q, r) tuple; Rust dry-replay
+        # validates every prefix once at SelfPlayRunner construction. SOFT-read
+        # (default OFF) so pre-D-WS3V3 variants stay byte-identical; keys live in the
+        # `selfplay:` namespace and must NOT enter RESUME_CHECKPOINT_OWNED_KEYS.
+        _sp_config.seed_fraction = float(sp.get("seed_fraction", 0.0))
+        _seed_corpus_path = sp.get("seed_corpus_path", None)
+        _seed_prefixes = _load_seed_corpus(_seed_corpus_path, _sp_config.seed_fraction)
+        if _seed_prefixes is not None:
+            _sp_config.seed_corpus = _seed_prefixes
         self._runner = SelfPlayRunner(_sp_config)
         self._inference_server = InferenceServer(
             model, device, config, batcher=self._runner.batcher,
@@ -575,6 +639,16 @@ class WorkerPool:
             cluster_variance_sample_count=int(
                 getattr(r, "cluster_variance_sample_count", 0)
             ),
+            solver_moves_eligible=int(getattr(r, "solver_moves_eligible", 0)),
+            solver_win_proven=int(getattr(r, "solver_win_proven", 0)),
+            solver_injected=int(getattr(r, "solver_injected", 0)),
+            solver_injected_offwindow=int(getattr(r, "solver_injected_offwindow", 0)),
+            solver_budget_exhausted=int(getattr(r, "solver_budget_exhausted", 0)),
+            solver_moves_eligible_seeded=int(
+                getattr(r, "solver_moves_eligible_seeded", 0)
+            ),
+            solver_injected_seeded=int(getattr(r, "solver_injected_seeded", 0)),
+            seeded_games_started=int(getattr(r, "seeded_games_started", 0)),
             # §P3.2: legacy `r.encoding` getter retired alongside the
             # Rust `SelfPlayRunner.encoding` field; runner_encoding stays
             # at the field default (`None`) for vestigial-field callers.
@@ -796,11 +870,14 @@ class WorkerPool:
                     self._sims_per_sec = sims / elapsed
 
             for entry in games_batch:
-                # Phase B' instrumentation: drain returns 8-tuples
+                # Phase B' instrumentation: drain returns 10-tuples
                 # (plies, winner_code, move_history, worker_id, terminal_reason,
-                #  mv_min, mv_max, mv_distinct).
+                #  mv_min, mv_max, mv_distinct, seeded, solver_fires). The last two
+                # are D-WS3V3 per-game metadata (seeded start-position flag + count
+                # of solver-injected moves this game).
                 (plies, winner_code, move_history, worker_id,
-                 terminal_reason, mv_min, mv_max, mv_distinct) = entry
+                 terminal_reason, mv_min, mv_max, mv_distinct,
+                 seeded, solver_fires) = entry
                 winner = self._WINNER_NAMES[winner_code] if winner_code < 3 else "unknown"
                 game_length = (plies + 1) // 2  # compound moves
                 self._game_lengths.append(game_length)
@@ -878,6 +955,9 @@ class WorkerPool:
                     "stride5_run_p90":   int(_stride5_p90),
                     # §176 P23 — densest hex-row stone count (any of 3 axes).
                     "row_max_density":   int(_row_max_density),
+                    # D-WS3V3 — per-game seeding + solver-fire metadata.
+                    "seeded":            int(seeded),
+                    "solver_fires":      int(solver_fires),
                 }
                 emit_event(game_complete_payload)
 

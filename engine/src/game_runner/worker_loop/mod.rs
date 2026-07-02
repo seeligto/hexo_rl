@@ -46,7 +46,7 @@ use super::SelfPlayRunner;
 use atomics::WorkerAtomics;
 use channels::WorkerChannels;
 use params::{
-    ExplorationFlags, ForcedWinPolicy, MoveConstraintFlags, SearchFlags, SolverInLoop,
+    ExplorationFlags, ForcedWinPolicy, MoveConstraintFlags, SearchFlags, SeedCorpus, SolverInLoop,
     WorkerGeometry, WorkerParams,
 };
 use stats::WorkerStats;
@@ -215,6 +215,14 @@ impl SelfPlayRunner {
             cluster_value_std_accum: self.cluster_value_std_accum.clone(),
             cluster_policy_disagreement_accum: self.cluster_policy_disagreement_accum.clone(),
             cluster_variance_samples: self.cluster_variance_samples.clone(),
+            solver_moves_eligible: self.solver_moves_eligible.clone(),
+            solver_win_proven: self.solver_win_proven.clone(),
+            solver_injected: self.solver_injected.clone(),
+            solver_injected_offwindow: self.solver_injected_offwindow.clone(),
+            solver_budget_exhausted: self.solver_budget_exhausted.clone(),
+            solver_moves_eligible_seeded: self.solver_moves_eligible_seeded.clone(),
+            solver_injected_seeded: self.solver_injected_seeded.clone(),
+            seeded_games_started: self.seeded_games_started.clone(),
         };
         let atomics_proto = WorkerAtomics {
             running: self.running.clone(),
@@ -277,6 +285,12 @@ impl SelfPlayRunner {
                 node_budget: self.solver_node_budget,
                 neighbor_dist: self.solver_neighbor_dist,
                 visit_weight: self.solver_visit_weight,
+            },
+            // D-WS3V3: thread the ctor-validated seed corpus (cheap Arc clone) +
+            // seeding probability to each worker.
+            seed_corpus: SeedCorpus {
+                corpus: self.seed_corpus.clone(),
+                seed_fraction: self.seed_fraction,
             },
             // D-QFIX-LAND A1: thread the parsed interior-selector enum to each
             // worker; applied to `tree.interior_selector` after `new_full`.
