@@ -101,6 +101,27 @@ def replay(seq, encoding):
     return b
 
 
+def build_exclusion_set(corpus_rows, exclude_paths, log=print) -> set:
+    """Union of corpus `game_idx` + every `game_idx` in each --exclude-trap-sets
+    JSONL. `log` receives one progress line per exclude path (default `print`;
+    tests pass a no-op to stay quiet). Missing paths WARN and are skipped, not
+    fatal — a stale runbook path must not crash the mine."""
+    used = {int(r["game_idx"]) for r in corpus_rows}
+    for excl_path in exclude_paths:
+        p = Path(excl_path)
+        if not p.exists():
+            log(f"[mine] WARNING --exclude-trap-sets path not found, skipping: {p}")
+            continue
+        n_before = len(used)
+        with open(p) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                used.add(int(json.loads(line)["game_idx"]))
+        log(f"[mine] excluded {len(used) - n_before} new game_idx from {p} (union so far {len(used)})")
+    return used
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--per-game", default="reports/d_ladder_2026-06-24/per_game_seald5.jsonl")
@@ -117,6 +138,21 @@ def main() -> None:
     ap.add_argument("--drop-off-window", action="store_true")
     ap.add_argument("--seed", type=int, default=20260630)
     ap.add_argument("--out", default="reports/d_tactical_2026-06-26/heldout_traps_expanded.jsonl")
+    ap.add_argument(
+        "--exclude-trap-sets", nargs="*", default=[],
+        help=(
+            "Additional held-out/eval trap JSONL file(s) whose game_idx values "
+            "join the exclusion set (today --corpus alone gates it; a re-run "
+            "without this WOULD re-mine games already reserved for eval, e.g. "
+            "the D-WS3V3 seed-corpus builder mining against the same "
+            "per-game source as the registered-31 / mined-94 eval sets)."
+        ),
+    )
+    ap.add_argument(
+        "--bucket", default="expand",
+        help="bucket label stamped on each mined trap (default 'expand'; the "
+             "D-WS3V3 seed-corpus builder passes 'seed').",
+    )
     args = ap.parse_args()
 
     depths = [int(d) for d in args.sealbot_depths.split(",")]
@@ -130,7 +166,10 @@ def main() -> None:
 
     games = [json.loads(l) for l in open(args.per_game) if l.strip()]
     corpus = [json.loads(l) for l in open(args.corpus) if l.strip()]
-    used = {int(r["game_idx"]) for r in corpus}
+    used = build_exclusion_set(
+        corpus, args.exclude_trap_sets,
+        log=lambda msg: print(msg, file=sys.stderr, flush=True),
+    )
 
     cand = []
     for i, g in enumerate(games):
@@ -214,7 +253,7 @@ def main() -> None:
                 "pos_id": f"expand_g{gi}_p{pidx}",
                 "source_game_id": f"expand_g{gi}_p{pidx}",
                 "game_idx": gi,
-                "bucket": "expand",
+                "bucket": args.bucket,
                 "encoding": args.encoding,
                 "parent_move_seq": [[int(q), int(r)] for q, r in moves[:pidx]],
                 "post_move_seq": [[int(q), int(r)] for q, r in moves[:post_idx]],
