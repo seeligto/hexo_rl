@@ -78,3 +78,42 @@ fn inv_dws3_solver_knobs_thread_end_to_end() {
         "inner.rs no longer destructures the SolverInLoop bundle from WorkerParams"
     );
 }
+
+/// D-WS3V3 — the in-run fire-rate counters, start-position seeding, and the
+/// relative-ply Gumbel-explore gate must stay wired end-to-end. Same rationale as
+/// the L1 pins above: the full path fires only inside self-play, so a static
+/// "clean up" could strip a counter increment / the seed replay / the relative
+/// gate with no behavioural test catching it.
+#[test]
+fn inv_dws3v3_seeding_and_counters_wired() {
+    // Counter increments live in the solver / seeding branches of inner.rs.
+    for marker in [
+        "solver_counters.moves_eligible",
+        "solver_counters.win_proven",
+        "solver_counters.injected",
+        "solver_counters.injected_offwindow",
+        "solver_counters.budget_exhausted",
+        "solver_counters.seeded_games_started",
+    ] {
+        assert!(INNER.contains(marker), "D-WS3V3 counter increment `{marker}` removed from inner.rs");
+    }
+    // Start-position seeding: the corpus bundle + the relative-explore gate.
+    assert!(
+        INNER.contains("seed.corpus") && INNER.contains("seed.seed_fraction"),
+        "the seed-corpus replay hook (rng drawn ONLY when corpus non-empty) was removed"
+    );
+    assert!(
+        INNER.contains("relative_explore_gate"),
+        "the relative-ply Gumbel-explore gate (D-ARGMAX dup-trap fix) was removed"
+    );
+    assert!(
+        PARAMS.contains("struct SeedCorpus"),
+        "the SeedCorpus WorkerParams sub-bundle was removed (seeding no longer reaches workers)"
+    );
+    for field in ["seed_fraction", "seed_corpus"] {
+        assert!(
+            CONFIG.contains(field),
+            "D-WS3V3 seeding config knob `{field}` removed from SelfPlayRunnerConfig"
+        );
+    }
+}

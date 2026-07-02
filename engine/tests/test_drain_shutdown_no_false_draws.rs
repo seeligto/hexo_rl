@@ -76,7 +76,7 @@ fn test_drain_shutdown_no_false_draws() {
     runner.stop();
 
     let drained = runner.drain_game_results();
-    for (plies, _wc, _mh, worker_id, terminal_reason, _vmin, _vmax, _vd) in &drained {
+    for (plies, _wc, _mh, worker_id, terminal_reason, _vmin, _vmax, _vd, _seeded, _sf) in &drained {
         assert_ne!(
             *terminal_reason, 3,
             "P22 violated: worker {worker_id} pushed game with terminal_reason=3 \
@@ -113,7 +113,7 @@ fn test_drain_natural_completion_terminal_reason_2() {
         !completed.is_empty(),
         "at least one natural completion expected in 5s",
     );
-    for (_plies, _wc, _mh, _wid, terminal_reason, _vmin, _vmax, _vd) in &completed {
+    for (_plies, _wc, _mh, _wid, terminal_reason, _vmin, _vmax, _vd, _seeded, _sf) in &completed {
         // Under random play with max_moves=20: every game reaches ply_cap
         // (no winning line, no legal-move exhaustion). terminal_reason==2.
         assert_eq!(

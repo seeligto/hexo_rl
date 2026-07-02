@@ -71,7 +71,7 @@ fn drive_to_completion(
     let deadline = std::time::Instant::now() + timeout;
     let mut games = Vec::new();
     while std::time::Instant::now() < deadline {
-        for (plies, _wc, _mh, _wid, terminal_reason, _vmin, _vmax, _vd)
+        for (plies, _wc, _mh, _wid, terminal_reason, _vmin, _vmax, _vd, _seeded, _sf)
             in runner.drain_game_results()
         {
             games.push((plies, terminal_reason));
@@ -82,7 +82,7 @@ fn drive_to_completion(
         std::thread::sleep(Duration::from_millis(20));
     }
     runner.stop();
-    for (plies, _wc, _mh, _wid, terminal_reason, _vmin, _vmax, _vd)
+    for (plies, _wc, _mh, _wid, terminal_reason, _vmin, _vmax, _vd, _seeded, _sf)
         in runner.drain_game_results()
     {
         games.push((plies, terminal_reason));
