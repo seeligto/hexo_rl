@@ -1,0 +1,16 @@
+{
+  "version": 6,
+  "ext_logit_mean": 1.2835809528827666,
+  "ext_logit_std": 0.688419382295196,
+  "ctrl_logit_mean": -6.025950372219086,
+  "ctrl_logit_std": 3.1023322219005856,
+  "contrast_mean": 7.309531325101853,
+  "contrast_std": 3.36436249337963,
+  "ext_in_top5_frac": 0.3,
+  "ext_in_top5_pct": 30.0,
+  "ext_in_top10_frac": 0.4,
+  "ext_in_top10_pct": 40.0,
+  "n": 20,
+  "checkpoint": "checkpoint_00200000.pt",
+  "generated_at": "2026-07-02T08:55:01.387390+00:00"
+}

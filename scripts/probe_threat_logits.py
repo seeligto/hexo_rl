@@ -42,6 +42,14 @@ Usage:
   # Probe a trained checkpoint against the saved baseline:
   python scripts/probe_threat_logits.py --checkpoint <ckpt> \\
       --output reports/probes/step5000.md
+
+  # Gate a resumed fine-tune against its warm-start ANCHOR instead of the
+  # bootstrap (--baseline-json), and mint a NEW alternate baseline file
+  # without touching the canonical bootstrap baseline (--write-baseline-to):
+  python scripts/probe_threat_logits.py --checkpoint <anchor_ckpt> \\
+      --write-baseline-to tests/fixtures/threat_probe_baseline_anchor200k.json
+  python scripts/probe_threat_logits.py --checkpoint <candidate_ckpt> \\
+      --baseline-json tests/fixtures/threat_probe_baseline_anchor200k.json
 """
 
 from __future__ import annotations
@@ -436,6 +444,7 @@ def format_report(
     baseline: Optional[Dict] = None,
     baseline_agg: Optional[Dict] = None,
     baseline_name: Optional[str] = None,
+    baseline_json_path: Path = BASELINE_JSON_PATH,
 ) -> str:
     """Render markdown report with three explicit PASS conditions + C4 warning."""
     lines: List[str] = []
@@ -571,7 +580,7 @@ def format_report(
     lines.append(
         f"*Positions: {agg['n']}  "
         f"Seed: {_PROBE_SEED}  "
-        f"Baseline: {BASELINE_JSON_PATH.name}*"
+        f"Baseline: {baseline_json_path.name}*"
     )
 
     return "\n".join(lines)
@@ -602,6 +611,29 @@ def main() -> None:
         type=Path,
         default=None,
         help="Optional: probe this checkpoint and show side-by-side comparison.",
+    )
+    parser.add_argument(
+        "--baseline-json",
+        type=Path,
+        default=BASELINE_JSON_PATH,
+        help=(
+            "Baseline JSON used for the C1 contrast floor, the C4 warning, and "
+            f"the report display (default: {BASELINE_JSON_PATH} — the bootstrap "
+            "baseline). Point at an alternate baseline (e.g. "
+            "tests/fixtures/threat_probe_baseline_anchor200k.json) to gate a "
+            "resumed fine-tune against its own warm-start ANCHOR instead of the "
+            "bootstrap."
+        ),
+    )
+    parser.add_argument(
+        "--write-baseline-to",
+        type=Path,
+        default=None,
+        help=(
+            "Save probe results as a baseline JSON to this path WITHOUT "
+            f"touching the canonical baseline file ({BASELINE_JSON_PATH}). Use "
+            "this (not --write-baseline) to mint an alternate anchor baseline."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -702,12 +734,18 @@ def main() -> None:
         # for subsequent probe.latest calls.
         if args.write_baseline:
             save_baseline_json(agg, ckpt_name=args.checkpoint.name)
+        # --write-baseline-to mints an alternate baseline (e.g. an anchor
+        # checkpoint's own probe numbers) WITHOUT touching the canonical file.
+        if args.write_baseline_to is not None:
+            save_baseline_json(agg, ckpt_name=args.checkpoint.name, path=args.write_baseline_to)
 
-        # Load saved baseline for PASS evaluation.
-        baseline = load_baseline_json()
+        # Load the gating baseline for PASS evaluation (default: canonical
+        # bootstrap baseline; --baseline-json points at an alternate anchor).
+        baseline = load_baseline_json(args.baseline_json)
         if baseline is None:
             print(
-                "WARNING: no baseline recorded — run make probe.bootstrap first. "
+                f"WARNING: no baseline recorded at {args.baseline_json} — run "
+                "make probe.bootstrap first (or pass --baseline-json). "
                 "C1 will fall back to the absolute 0.38 floor; C4 warning skipped.",
                 file=sys.stderr,
             )
@@ -729,6 +767,7 @@ def main() -> None:
             baseline=baseline,
             baseline_agg=baseline_agg,
             baseline_name=baseline_name,
+            baseline_json_path=args.baseline_json,
         )
 
         if args.output is not None:

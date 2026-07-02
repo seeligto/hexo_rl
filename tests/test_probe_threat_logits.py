@@ -443,6 +443,75 @@ def test_load_baseline_json_absent() -> None:
     assert result is None
 
 
+def test_check_pass_honors_alternate_baseline_json() -> None:
+    """check_pass, fed an alternate --baseline-json (an absurdly strong
+    contrast_mean), FLIPS the verdict vs the default-shaped baseline — the
+    exact plumbing --baseline-json exercises (load_baseline_json(path) ->
+    check_pass(agg, baseline=...)). Guards D-WS3V3's anchor-baseline gate:
+    a resumed fine-tune must be judged against its warm-start ANCHOR, not the
+    bootstrap, and swapping the file must actually change the verdict."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    from probe_threat_logits import (
+        check_pass,
+        load_baseline_json,
+        save_baseline_json,
+        THRESH_EXT_IN_TOP5_PCT,
+        THRESH_EXT_IN_TOP10_PCT,
+    )
+
+    # A realistic candidate aggregate that PASSes against a modest baseline.
+    agg = {
+        "ext_logit_mean": 1.0,
+        "contrast_mean": 1.0,
+        "ext_in_top5_frac": THRESH_EXT_IN_TOP5_PCT / 100.0,
+        "ext_in_top10_frac": THRESH_EXT_IN_TOP10_PCT / 100.0,
+    }
+
+    modest = {"ext_logit_mean": 0.6, "contrast_mean": 0.6}
+    ok_modest, conds_modest = check_pass(agg, baseline=modest)
+    assert ok_modest, f"Expected PASS against modest baseline, got {conds_modest}"
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+        tmp_path = Path(f.name)
+    try:
+        # An absurdly strong baseline (e.g. the anchor's measured +7.31
+        # contrast) raises the C1 floor (0.8x) far above the candidate's 1.0
+        # -> the verdict FLIPS to FAIL purely from swapping --baseline-json.
+        save_baseline_json(
+            {
+                "ext_logit_mean": 1.28, "ext_logit_std": 0.0,
+                "ctrl_logit_mean": -6.0, "ctrl_logit_std": 0.0,
+                "contrast_mean": 7.31, "contrast_std": 0.0,
+                "ext_in_top5_frac": 0.3, "ext_in_top10_frac": 0.4, "n": 20,
+            },
+            ckpt_name="fake_anchor.pt",
+            path=tmp_path,
+        )
+        absurd = load_baseline_json(path=tmp_path)
+        assert absurd is not None
+        ok_absurd, conds_absurd = check_pass(agg, baseline=absurd)
+        assert not ok_absurd, "Expected FAIL against the absurd anchor baseline"
+        assert not conds_absurd["contrast"]
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def test_cli_exposes_baseline_json_and_write_baseline_to_flags() -> None:
+    """--baseline-json / --write-baseline-to are real CLI flags (argparse
+    wiring, no model load) and --write-baseline-to is documented as NOT
+    touching the canonical baseline file."""
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "probe_threat_logits.py"), "--help"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0
+    assert "--baseline-json" in result.stdout
+    assert "--write-baseline-to" in result.stdout
+    assert "WITHOUT" in result.stdout
+
+
 @pytest.mark.skipif(
     not BOOTSTRAP_CKPT.exists() or not _bootstrap_is_v6(),
     reason="bootstrap_model.pt missing or not v6 (synthetic fixture is v6-only)",

@@ -347,12 +347,50 @@ def init_trainer(
         # bootstrap loaded against a v6-default variant would route
         # correctly inside the trainer but feed v6 plane geometry into
         # the self-play workers (§171 P3 blocker).
+        #
+        # D-WS3V3 FIX1c (2026-07-02): this back-propagation is exactly the
+        # mechanism that silently routed the whole v3 build through stale
+        # single-window `v6_live2` (the anchor checkpoint's baked
+        # metadata['encoding_name']) despite every variant declaring
+        # multi-window `v6_live2_ls` — see `scripts/make_ws3v3_warmstart.py`
+        # FIX1 docstring. Emit a LOUD warning whenever the pre-propagation
+        # variant encoding and the ckpt-resolved encoding disagree, so a
+        # future case like this one doesn't burn a GPU-day silently.
+        # LOG-ONLY: does NOT change precedence — ckpt-resolved still wins
+        # (§171 P3 depends on it).
+        _pre_prop_enc = combined_config.get("encoding")
+        _pre_prop_enc_name = (
+            _pre_prop_enc.get("version") if isinstance(_pre_prop_enc, dict) else _pre_prop_enc
+        )
         for _enc_key in (
             "cluster_window_size", "cluster_threshold",
             "legal_move_radius", "encoding",
         ):
             if _enc_key in trainer.config:
                 combined_config[_enc_key] = trainer.config[_enc_key]
+        _post_prop_enc = combined_config.get("encoding")
+        _post_prop_enc_name = (
+            _post_prop_enc.get("version") if isinstance(_post_prop_enc, dict) else _post_prop_enc
+        )
+        if (
+            _pre_prop_enc_name is not None
+            and _post_prop_enc_name is not None
+            and _pre_prop_enc_name != _post_prop_enc_name
+        ):
+            log.warning(
+                "checkpoint_encoding_overrides_variant",
+                variant_encoding=_pre_prop_enc_name,
+                checkpoint_resolved_encoding=_post_prop_enc_name,
+                checkpoint=args.checkpoint,
+                msg=(
+                    "checkpoint-resolved encoding overrides the variant's "
+                    "declared encoding; ckpt-resolved wins (precedence "
+                    "unchanged) — self-play will route through "
+                    f"{_post_prop_enc_name!r}, NOT the variant's "
+                    f"{_pre_prop_enc_name!r}. If this is unintended, re-stamp "
+                    "the checkpoint's metadata['encoding_name'] before resuming."
+                ),
+            )
         # §172 A10: board_size retired — re-resolve trunk_size from registry.
         try:
             _post_load_spec = _registry_resolve(combined_config)
