@@ -2683,3 +2683,15 @@ only then launch the other two — ~23 GPU-hours sit downstream of that gate),
 and §3's "control flat" PASS condition operationalized numerically
 (registered-31 flip count in [2,6], combined-125 in [19,29], C1≥5.848/
 C2≥25%/C3≥40% vs the anchor baseline) instead of a qualitative "flat" read.
+
+**Bench gate (2026-07-02, vast 5080, remote-host targets):** commits `87b9c96..dddb07b`
+benched at 2×`make bench` (n=5 each) per side, patch-applied vs `0c494b7` baseline —
+**PASS, 10/10 targets met in all 4 snapshots.** One WATCH per the >5% rule:
+`buffer_push_per_s` −5.4% median-of-medians (pre 990k/1028k → post 931k/978k).
+ACCEPTED as host noise, not code: the diff touches ZERO replay-buffer code
+(`git diff 0c494b7..dddb07b -- engine/src/replay_buffer/` is empty; the push
+microbench never exercises game_runner), best-case pairing is −1.2%, the driver is
+the pre2=1028k HIGH outlier vs the documented §180 vast median 1007k (range
+994k–1.01M), and post medians hold 77–86% headroom over the 525k target. JSONs:
+`reports/benchmarks/20260702_ws3v3_{pre,post,post2}.json` + `2026-07-02_13-38.json`
+(pre2), archived locally. Vast tree restored to pre-gate state after the runs.
