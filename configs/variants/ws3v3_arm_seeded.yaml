@@ -1,0 +1,129 @@
+# ── D-WS3V3 — ARM-SEEDED — solver-in-loop + trap-corpus start-position seeding ─
+#
+# v2 (2026-07-01/02) was CONFOUNDED: `--resume checkpoint_00200000.pt` is a
+# FULL checkpoint, so the resume inherited the anchor's 1M-cosine LR schedule
+# AND the replay buffer had been rm'd (cold start). v3 fixes both — see
+# ws3v3_arm_control.yaml header for the full mechanism (weights-only warm-
+# start pins LR flat at 1e-4; `min_buffer_size: 25000` closes the cold-start
+# hole). v2 ALSO measured a low offline solver fire-rate (5.6% overall /
+# 16.4% late-game; no in-run logging existed then) — fresh self-play mostly
+# never REACHES a position the solver can prove anything at.
+#
+# THIS ARM is the DENSITY lever: `selfplay.seed_fraction: 0.15` starts that
+# fraction of self-play games from a trap-corpus PREFIX (KataGo `startPoses`
+# mechanism; `reports/d_ws3v3/seed_corpus.jsonl`, built by
+# `scripts/build_ws3v3_seed_corpus.py`, MEASURED game-disjoint from every eval
+# corpus by `scripts/check_ws3v3_disjointness.py` — paste its output into the
+# run log per the runbook before trusting this arm's flip numbers) instead of
+# the empty board, so the solver fires near ~100% of the time on seeded games
+# without ever training on (or near) a position the trap-flip evaluator later
+# scores. Distinguishes GENERALIZES (net internalises the lever, MEMORIZES
+# with high fire-rate confirmed (fire-rate high but held-out flip stays at the
+# memorization floor) from THIN-STILL (fire-rate high, flip unmoved — needs
+# one escalation to solver_visit_weight 1.0 before declaring).
+#
+# SINGLE VARIABLE vs ws3v3_arm_inject.yaml: seed_fraction (0.15 here, 0.0
+# there) + seed_corpus_path (the mined corpus here, null there). The
+# solver_enabled/depth/node_budget/neighbor_dist/visit_weight block is
+# IDENTICAL between inject and seeded.
+#
+# LAUNCH (vast 5080; the REAL entrypoint — NOT `-m hexo_rl.training.run`).
+# --variant is the BARE NAME (scripts/train.py builds
+# configs/variants/{name}.yaml internally — a yaml PATH here 404s).
+# --checkpoint-dir / --run-name are REQUIRED (per-arm isolation).
+# STOP-GATE: do NOT launch this arm until ws3v3_arm_control.yaml has run AND
+# cleared the runbook §3 validity gate:
+#   .venv/bin/python scripts/build_ws3v3_seed_corpus.py    # mines + writes reports/d_ws3v3/seed_corpus.jsonl (CPU, ~1h)
+#   .venv/bin/python scripts/check_ws3v3_disjointness.py   # PASTE this output into the run log
+#   .venv/bin/python scripts/make_ws3v3_warmstart.py       # mints checkpoints/ws3v3_warmstart_200k.pt (once, shared across arms)
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/ws3v3_warmstart_200k.pt \
+#     --variant ws3v3_arm_seeded \
+#     --checkpoint-dir checkpoints/ws3v3_seeded \
+#     --run-name ws3v3_seeded \
+#     --iterations 8000
+# -> checkpoints/ws3v3_seeded/checkpoint_00208000.pt (ABSOLUTE step, see
+#    ws3v3_arm_control.yaml header for why).
+# NOTE (FIX2): ARM-SEEDED's mechanism is DUAL — trap-decision z-labels densify
+# ALWAYS (no solver needed), solver POLICY-injection densifies only on
+# native-provable conversions (the honest ceiling is measured by
+# scripts/measure_native_provable_fraction.py, NOT ~1.0 — see runbook §0.5/§3.5).
+# Full runbook: docs/handoffs/d_ws3v3_smoke_runbook.md
+encoding: v6_live2_ls
+in_channels: 4
+lr: 1.0e-4          # PINNED flat — see ws3v3_arm_control.yaml header for why a full-ckpt resume can't do this.
+lr_schedule: none
+aux_opp_reply_weight: 0.0
+training_steps_per_game: 1.0
+min_buffer_size: 25000   # POSITIONS. Selfplay prefill warmup gate (step_coordinator.py:736).
+
+selfplay:
+  completed_q_values: true
+  n_workers: 24               # =nproc on the 5080 host; 32 oversubscribed (load ~29) under the per-move solver CPU cost
+  inference_batch_size: 64
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 8
+  random_opening_plies: 0
+  gumbel_mcts: true
+  gumbel_m: 16
+  gumbel_explore_moves: 10
+  c_visit: 50.0
+  c_scale: 1.0
+  playout_cap:
+    full_search_prob: 1.0
+    n_sims_full: 150
+    n_sims_quick: 150
+
+  # ── THE SOLVER LEVER — identical to ws3v3_arm_inject.yaml (single-variable
+  # vs that arm is seed_fraction / seed_corpus_path below, not this block) ────
+  solver_enabled: true
+  solver_depth: 16            # PLIES (~2x mate-distance-in-turns; corpus band mate-in-2..9 turns)
+  solver_node_budget: 20000   # per-prove node cap — see ws3v3_arm_inject.yaml for the recall-safe measurement.
+  solver_neighbor_dist: 2     # quiet-move widening for recall on the ~80%-quiet trap class (A2); <0 = threat-only
+  solver_visit_weight: 0.5    # SOFT injection (convex blend); 1.0 held as an escalation if this reads THIN-STILL.
+  forced_win_policy_enabled: false   # O1 forced-win one-hot stays OFF (the solver supersedes it; single-variable).
+
+  # ── THE DENSITY LEVER — the one new knob this arm adds over ws3v3_arm_inject ─
+  seed_fraction: 0.15                                   # fraction of self-play games start from a seed prefix.
+  seed_corpus_path: "reports/d_ws3v3/seed_corpus.jsonl"  # built by build_ws3v3_seed_corpus.py; disjointness
+                                                          # MEASURED (not assumed) by check_ws3v3_disjointness.py.
+
+mcts:
+  dirichlet_enabled: false    # Gumbel-Top-k IS root exploration; no double root-noise (anchor pin)
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  decay_steps: 200000
+  buffer_persist_path: "checkpoints/replay_buffer_ws3v3_seeded.bin"   # per-arm isolation;
+                                                                      # the shared default
+                                                                      # cross-contaminates runs.
+
+# Shorter eval cadence for the ~1-GPU-day smoke (the anchor's 30000 would not fire
+# inside an 8k run). The smoke's HEADLINE gate is the OFFLINE held-out trap-flip
+# evaluator (scripts/eval/run_l1_trapflip_smoke.py), NOT the in-loop promotion eval
+# — keep the in-loop eval light so it does not eat the GPU-day.
+eval_interval: 4000
+eval_pipeline:
+  opponents:
+    sealbot:         { enabled: true,  stride: 1, n_games: 100 }
+    best_checkpoint: { enabled: false }
+    random:          { enabled: false }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+  gating:
+    promotion_winrate: 0.55
+    require_ci_above_half: true
+    bootstrap_floor:
+      enabled: false
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0

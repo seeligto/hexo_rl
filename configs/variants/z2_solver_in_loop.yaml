@@ -1,5 +1,18 @@
 # ── D-WS3 / Z2 — L1 solver-in-loop SOFT visit-injection smoke ────────────────
 #
+# HISTORICAL RECORD (2026-07-02): the v2 smoke run off THIS file was CONFOUNDED
+# (`--resume checkpoint_00200000.pt` is a full checkpoint → silently inherited the
+# anchor's ~1.85e-3 1M-cosine LR instead of this file's `lr: 2e-3`/`eta_min: 5e-4`,
+# plus a cold-started replay buffer). A solver-OFF CONTROL arm under the SAME
+# broken regime reproduced the trap-flip damage almost exactly (12.9%→6.5% BOTH
+# arms) — the injection is EXONERATED, the read is INDETERMINATE. The LIVE re-run
+# is the three-arm `configs/variants/ws3v3_arm_{control,inject,seeded}.yaml`
+# (weights-only warm-start that actually pins the LR, a real buffer-prefill gate,
+# in-run fire-rate logging; runbook `docs/handoffs/d_ws3v3_smoke_runbook.md`). This
+# file's values (solver_node_budget=20000, solver_visit_weight=0.15, etc.) are kept
+# as-is below for the historical record — do NOT launch off this file; launch the
+# ws3v3_arm_* variants instead.
+#
 # The GPU-DAY GATE that decides whether L1 GENERALIZES (self-play teaches the
 # POLICY to propose the saving move standalone, held-out trap-flip >=25%) or caps
 # at the ~16% memorization floor (MEMORIZES → deploy-backup permanent for the
@@ -15,20 +28,44 @@
 # solver_* keys are NOT in the OWNED set so the resume keeps them (the
 # resume-variant-override fix).
 #
-# LAUNCH (vast 5080; ~5-10k steps ≈ 1 GPU-day). LR continues its decay along the
-# anchor's 1M cosine (total_steps is OWNED → checkpoint wins; do NOT set it here,
-# do NOT pass --override-scheduler-horizon):
+# LAUNCH: DO NOT — this file is the HISTORICAL RECORD (see banner above); launch
+# the ws3v3_arm_* variants instead (docs/handoffs/d_ws3v3_smoke_runbook.md §2).
+# The command below is kept for the historical record only and was ALSO wrong on
+# two counts even at the time: `-m hexo_rl.training.run` is not a real entrypoint
+# (the real CLI is `scripts/train.py --checkpoint <ckpt> --variant <bare-name>`,
+# not `--resume`+a yaml path), and per the FIX1/FIX4 retraction above, resuming
+# checkpoint_00200000.pt this way self-plays single-window v6_live2, not this
+# file's declared v6_live2_ls:
 #   .venv/bin/python -m hexo_rl.training.run \
 #     --resume reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt \
 #     --variant configs/variants/z2_solver_in_loop.yaml \
 #     --iterations 8000
 # Full runbook + the discriminator + co-gates: docs/handoffs/d_ws3_l1_smoke_runbook.md
+# (superseded, see its own banner) — LIVE runbook: docs/handoffs/d_ws3v3_smoke_runbook.md
 #
 # HARD INVARIANT (graft A): self-play decode MUST match deploy decode. v6_live2_ls
 # is policy_pool=legal_set_scatter_max → self-play runs the multi-window no-drop
 # legal_set path AND the deploy head decodes legal_set=True (needs_no_drop_bot) —
 # both reach the same Rust aggregate_policy_ls kernel, so off-window saving moves
-# are expressible in BOTH (else the ratchet silently dies). Confirmed, no mismatch.
+# are expressible in BOTH (else the ratchet silently dies).
+#
+# RETRACTED (D-WS3V3 FIX1/FIX4, found 2026-07-02): "Confirmed, no mismatch" above
+# was FALSE AT RUNTIME. `reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt`
+# carries STALE `metadata['encoding_name']='v6_live2'` (single-window, NOT
+# v6_live2_ls). `trainer_ckpt_load.py` prefers checkpoint metadata unconditionally
+# and `orchestrator.py` back-propagates the ckpt-resolved encoding into the
+# variant's combined config, which `pool.py` resolves for the Rust self-play
+# runner — so the `--resume checkpoint_00200000.pt` launch below (and v2's actual
+# run) self-played SINGLE-WINDOW v6_live2 the whole time, regardless of this
+# file's `encoding: v6_live2_ls` declaration. The single-window Dense self-play
+# path DROPS off-window wins outright, so the off-window injection routing this
+# invariant describes was DEAD in v2 — not confirmed, not even exercised. The
+# fix (checkpoint re-stamping with a wire-signature-validated encoding override,
+# `scripts/make_ws3v3_warmstart.py`) lives in the v3 rebuild
+# (`configs/variants/ws3v3_arm_*.yaml`, `docs/handoffs/d_ws3v3_smoke_runbook.md`).
+# See `docs/07_PHASE4_SPRINT_LOG.md` §D-WS3 for the full retro-correction,
+# including an OPEN FORENSIC QUESTION on how far back this cascades (do NOT
+# investigate further here — flagged, not resolved).
 encoding: v6_live2_ls
 in_channels: 4
 lr: 2e-3
@@ -38,7 +75,7 @@ training_steps_per_game: 1.0
 
 selfplay:
   completed_q_values: true
-  n_workers: 32
+  n_workers: 24               # =nproc on the 5080 host; 32 oversubscribed (load ~29) under the per-move solver CPU cost
   inference_batch_size: 64
   inference_max_wait_ms: 2.0
   leaf_batch_size: 8
@@ -62,9 +99,22 @@ selfplay:
   # the legal_set coverage gate into the ragged target (D-DECODE action-space fix).
   solver_enabled: true
   solver_depth: 16            # PLIES (~2x mate-distance-in-turns; corpus band mate-in-2..9 turns)
-  solver_node_budget: 50000   # per-prove node cap; quiet positions exit shallow via ID hit_horizon
+  solver_node_budget: 20000   # per-prove node cap. MEASURED 2026-07-01 (release solver, 31 trap parents):
+                              # no-win moves exhaust to the budget at BOTH depth 10 and 16 → budget (NOT depth)
+                              # is the throughput cost lever; ≤8-ply wins (corpus proven_depth≤8, all 31+125)
+                              # are proven in the narrow must-block tree well under 20k → recall-safe, ~2.5x faster.
   solver_neighbor_dist: 2     # quiet-move widening for recall on the ~80%-quiet trap class (A2); <0 = threat-only
-  solver_visit_weight: 0.3    # SOFT injection (convex blend) — NOT one-hot (one-hot is collaterally destructive)
+  solver_visit_weight: 0.15   # SOFT injection (convex blend). 0.3 RAN 2026-07-02 → KILL (normal-play
+                              # deploy-disagree 47%, threat-probe C2 FAIL, trap-flip DROPPED, value-spread
+                              # +0.617→+0.140). AT THE TIME this read as "0.3 too aggressive, soften to
+                              # 0.15" — but a solver-OFF control run under the SAME confounded regime
+                              # (full-ckpt resume LR drift + cold buffer) reproduced the SAME KILL
+                              # signature (deploy-disagree 49%, trap-flip 12.9%→6.5%) WITHOUT the
+                              # solver at all. FALSIFIED: the 0.3→0.15 softening rationale attributed
+                              # regime damage to the injection. Weight itself is not re-validated as
+                              # corrupting — ws3v3_arm_inject.yaml re-runs at 0.5 under the fixed
+                              # regime instead of continuing to soften a lever that was never shown
+                              # guilty. See docs/handoffs/d_ws3v3_smoke_runbook.md §0.
   # O1 forced-win one-hot stays OFF (the solver supersedes it; single-variable).
   forced_win_policy_enabled: false
 

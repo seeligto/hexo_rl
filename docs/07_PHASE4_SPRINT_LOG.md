@@ -2457,3 +2457,229 @@ Brought four parallel-session outputs to `master` via the `phase4.5/gumbelprep` 
 - **"The deep value-blind losses need the expensive frontier (deeper/wider net or MuZero) — they are not bounded-tactical."** → **REJECTED.** SealBot (a bounded minimax) proves all 33 value-blind proven-core at depth 6–8 turns (fast for short mates) ⇒ they ARE bounded-tactical game-tree properties; the deeper-net frontier is NOT earned. The lever is SEARCH-in-the-loop, discriminated from "deeper net" — advances §D-FULLSPEC's two-survivor close to one.
 - **"A CHEAP tactical add (threat-space search / shallow minimax) flips ≥40% of the traps at <10× the deploy node budget (cheap-HYBRID-VIABLE)."** → **FALSIFIED.** A HeXO-native, net-free, SealBot-free threat-space proof search flips only 3/38 = 8% (all mate-in-2-turns; mid/deep 0%); BROADENING the candidate set (open-3 / dist-1 / full-brute) REGRESSES to 0/38 at ~100× cost (wider branching collapses reachable depth). 0 soundness violations; oracle-leak-clean; REVIEW+RED-TEAM confirm. ⇒ the cheap-add ceiling is fundamental: a competent SealBot-GRADE pattern-guided minimax is required, not a one-primitive probe. Deploy solver-backup is affordable (measured 2.6–2.8M NPS, root-d6 ~0.5 s/move) ONLY for the short ≤2-turn band; mid/deep are a bounded residual handled training-time.
 - **"Policy-guided candidate ordering with the current deploy net would lift the cheap-search flip-rate (the AlphaZero ingredient already helps)."** → **FALSIFIED for the CURRENT net (Probe C).** Augmenting candidates with the net's top-K policy → 0/14 flips (the net is ~0-prior-blind on the very refuting moves, per T0). ⇒ policy-guidance only helps AFTER the net is trained with search-in-the-loop — confirms the exceed-SealBot route runs THROUGH the bootstrap, not around it.
+
+## §D-WS3 — L1 solver-in-loop smoke: v2 CONFOUNDED (regime, not lever) → v3 three-arm re-run pre-registered — 2026-07-01/02
+
+**Question (follow-on to §D-TACTICAL's native-solver lever).** Does the L1 solver-
+in-loop SOFT visit-injection fine-tune (per-move `engine::tactics` proves the side-
+to-move's forced win, blends visit mass onto the proving move into the POLICY
+training target) teach the POLICY to play the saving move **standalone**
+(GENERALIZES, held-out move-level trap-flip ≥25% → fund the GPU-week) or cap at the
+~16% memorization floor (MEMORIZES → deploy-backup permanent for the class)? Spec
+`docs/designs/coupled_valuez_decode_design.md` §0/§5 (Stage-1A); runbooks
+`docs/handoffs/d_ws3_l1_smoke_runbook.md` (v2, superseded) and
+`docs/handoffs/d_ws3v3_smoke_runbook.md` (v3, live).
+
+**v2 RAN on vast (2026-07-01/02, single candidate arm `solver_visit_weight=0.3`,
+`--resume checkpoint_00200000.pt`) → CONFOUNDED, not a clean read.** `checkpoint_00200000.pt`
+is a FULL checkpoint (`model_state`+`config`+`optimizer_state`+`scaler_state`+`step`),
+so `trainer_ckpt_load.load_checkpoint` classified the resume `is_full_ckpt=True` and
+the run silently inherited the ANCHOR's LR scheduler STATE instead of the variant's
+intended fresh `lr: 2e-3`→`eta_min: 5e-4` decay: run-logs confirm **~1.85e-3**
+(`ws3_z2_l1.jsonl` last train_step lr=0.0018557751539875656 at step 200802;
+`ws3_ctrl.jsonl` lr=0.0018456274188078784 at step 208000), the anchor's 1M-step
+cosine evaluated near step 200k. The replay buffer had ALSO been rm'd before the
+run (`ws3_ctrl.jsonl`'s first `warmup` event: `{"buffer": 0, "target": 256, "games": 0}`)
+— training began on a cold buffer, `min_buffer_size` at the training.yaml default 256
+(not a real prefill gate).
+
+A solver-OFF CONTROL arm (`z2_solver_in_loop_control.yaml`) was launched under the
+SAME broken regime and reproduced the candidate's damage almost exactly:
+
+| metric | control (solver OFF) | candidate (solver ON, w=0.3) |
+|---|---|---|
+| trap-flip, registered-31 | 12.9% → **6.5%** | 12.9% → **6.5%** |
+| trap-flip, combined-125 | 19.2% → 15.2% | 19.2% → 15.2% |
+| deploy-disagree (KILL co-gate, n=55) | 49.1% | 47.3% |
+| threat-probe C2 (top5, vs BOOTSTRAP baseline) | 30% PASS | 20% FAIL |
+| off-window forced rate (deploy + modelplayer) | 0.0 | 0.0 |
+
+Both arms crater identically on the same held-out corpus → the regime drift (LR +
+cold buffer), not the solver injection, produced the damage. **VERDICT: the
+injection is EXONERATED; the v2 read is INDETERMINATE** (a broken-regime null
+result cannot support MEMORIZES, KILL, or GENERALIZES — nothing was actually
+tested). C2 is the one metric that differed between arms but was gated against the
+WRONG baseline (bootstrap `contrast_mean=+0.599`; the anchor's own is +7.3095, 12×
+sharper — gating a resumed fine-tune against bootstrap is nearly a no-op floor).
+Also measured (v2, offline; no in-run fire-rate logging existed then): solver
+fire-rate 5.6% of moves overall / 16.4% late-game — a real starvation risk for
+fresh, unseeded self-play.
+
+**Banked lessons (mechanism, not just this run):**
+1. A **weights-only warm-start is required to pin a fine-tune's LR** — a full-
+   checkpoint `--resume`/`--checkpoint` CANNOT do it: `RESUME_CHECKPOINT_OWNED_KEYS`
+   (`hexo_rl/training/orchestrator.py:233-252`) includes `lr`/`lr_schedule`/
+   `eta_min`/`min_lr`/`total_steps`/`scheduler_t_max` — the variant's LR intent is
+   silently discarded whenever `config`/`optimizer_state`/`scaler_state` are present
+   in the source checkpoint (`trainer_ckpt_load.py`'s `is_full_ckpt` gate,
+   L328-336). Strip to `{model_state, metadata, step}` BEFORE the resume.
+2. **The replay buffer must be explicitly restored (or a real prefill gate set),
+   not implicitly reused.** A cold/rm'd buffer under the training.yaml default
+   `min_buffer_size: 256` trains on ~0 real self-play positions for the whole run.
+3. **In-run solver fire-rate logging is mandatory**, not a post-hoc offline probe —
+   otherwise a THIN-STILL (density-starved) read is indistinguishable from a true
+   MEMORIZES read.
+4. **Probe gates must compare against the run's own warm-start ANCHOR, not the
+   generic bootstrap baseline** — the anchor is far sharper on the threat-probe
+   (contrast +7.31 vs bootstrap's +0.60), so a bootstrap-gated C1 floor is nearly
+   vacuous for a resumed fine-tune; only C2/C3's flat percentage thresholds bit at
+   all, and even those should be read against the anchor's own values (C3 sits
+   EXACTLY at its 40% threshold at n=20 — a borderline anchor score needs the
+   comparison to be honest about that).
+
+**v3 pre-registration (`docs/handoffs/d_ws3v3_smoke_runbook.md`).** Fixes: (V0)
+weights-only warm-start pins `lr: 1.0e-4` flat (`lr_schedule: none`), per-arm
+`mixing.buffer_persist_path` + `min_buffer_size: 25000` (POSITIONS) real prefill
+gate, threat-probe gated vs `tests/fixtures/threat_probe_baseline_anchor200k.json`
+(minted 2026-07-02, CPU: contrast_mean=+7.3095, top5=30%, top10=40%, n=20 —
+matches the vast-measured anchor numbers from the v2 logs exactly), in-run solver
+fire-rate Rust counters (`solver_moves_eligible/injected/...`) surfaced as
+`training_step.solver_fire_rate`/`solver_fire_rate_seeded`. (V1) trap-corpus
+START-POSITION SEEDING (`selfplay.seed_fraction`, KataGo `startPoses` mechanism;
+`scripts/build_ws3v3_seed_corpus.py` mines NEW proven-loss traps from the untapped
+`per_game_seald5.jsonl` games EXCLUDING every eval corpus at mine-time, expands each
+into seeds at cuts k∈{0,2,4} plies before the parent; `scripts/check_ws3v3_disjointness.py`
+MEASURES — not assumes — game-level, position-level, and leakage-distance
+disjointness from the eval sets before the seeded arm's flip numbers are trusted).
+(V2) `solver_visit_weight: 0.5` (0.3's "too aggressive, soften to 0.15" rationale is
+itself FALSIFIED by the control-arm exoneration above — the weight was never shown
+guilty — so v3 steps UP to 0.5 under the fixed regime instead of continuing to
+soften; 1.0 held as an escalation). (V3) three arms — **ARM-CONTROL** (solver OFF,
+no seeding — the pre-registered VALIDITY GATE, read FIRST: must hold flat on
+deploy-disagree/trap-flip/threat-probe-vs-anchor before either ON arm is read at
+all), **ARM-INJECT** (solver ON w=0.5, no seeding), **ARM-SEEDED** (solver ON w=0.5,
+seeding ON, `seed_fraction: 0.15`).
+
+**Verdict definitions (pre-registered, `docs/handoffs/d_ws3v3_smoke_runbook.md` §6):**
+GENERALIZES (an ON-arm flip ≥25% AND control flat AND KILL≤16% AND co-gates clear →
+fund the GPU-week + carry seeding forward); MEMORIZES (ON-arm flip ≤16% held-out
+AND, for ARM-SEEDED, `solver_fire_rate_seeded` confirmed high — the density lever
+fired, it just didn't teach → D-BOOTSTRAP fires, solver-in-loop from step 0);
+THIN-STILL (fire-rate high but flip unmoved vs ARM-INJECT → one escalation to
+`solver_visit_weight: 1.0` before declaring MEMORIZES); KILL (deploy-disagree >0.16
+on an ON-arm with control clean → soften the weight, re-smoke); INDETERMINATE
+(control itself drifts → the regime is still broken, fix before reading anything —
+the exact trap v2 fell into). GPU run is operator-run on vast; this session shipped
+the build (weights-only strip script, probe `--baseline-json`/`--write-baseline-to`,
+seed-corpus miner + disjointness checker, three arm variants) — no training executed
+locally (laptop is CPU/thermal-capped for this workload).
+
+**v3 review + red-team fixes (2026-07-02, same session, before any GPU spend).**
+Review + red-team of the v3 build surfaced two additional issues, fixed before
+launch:
+
+**FIX1 (BLOCKER — encoding).** `reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt`
+carries STALE `metadata['encoding_name']='v6_live2'` (single-window).
+`hexo_rl/training/trainer_ckpt_load.py::load_checkpoint` prefers checkpoint
+metadata unconditionally, and `hexo_rl/training/orchestrator.py::init_trainer`
+(the `:343-355` back-propagation loop) writes the ckpt-resolved encoding into
+`combined_config`, which `hexo_rl/selfplay/pool.py` resolves for the Rust
+self-play runner. Left uncorrected, **all three v3 arms would have self-played
+single-window v6_live2 despite every variant declaring v6_live2_ls** — the
+entire point of the multi-window off-window-injection routing this workstream
+exists to test. Fix, at the artifact boundary (not the propagation mechanism —
+`orchestrator.py`'s ckpt-wins precedence is intentional, §171 P3 depends on
+it): `scripts/make_ws3v3_warmstart.py` gained `--encoding-name` (default
+`v6_live2_ls`), which re-stamps `metadata['encoding_name']` in the stripped
+payload AFTER validating — via the encoding registry — that the override
+shares the original's WIRE SIGNATURE (`n_planes`, `board_size`,
+`policy_logit_count`, `has_pass_slot`, `sym_table_id`; mirrors Rust
+`RegistrySpec::wire_signature()`). v6_live2 and v6_live2_ls share this tuple
+exactly (`(4, 19, 362, True, "size_19")` — they differ only in self-play/decode
+MECHANICS: cluster_window_size, is_multi_window, value_pool, policy_pool), so
+the re-stamp is safe; a genuinely different encoding (verified with `v6`,
+`n_planes=8`) is REJECTED loudly. `orchestrator.py`'s propagation loop also
+gained a LOUD `checkpoint_encoding_overrides_variant` structlog warning
+(log-only, precedence unchanged) for any future case like this one.
+`checkpoints/ws3v3_warmstart_200k.pt` was regenerated with the fix. END-TO-END
+VERIFIED locally 2026-07-02 via a real 3-step launch
+(`--variant ws3v3_arm_control --iterations 3 --min-buffer-size 64`,
+`logs/train_60cc566090434086a8218697040a54ed.jsonl`): `checkpoint_encoding_resolved`
+and `train_encoding_resolved` both read `v6_live2_ls`/`is_multi_window=true`,
+no `checkpoint_encoding_overrides_variant` warning fired (variant and
+ckpt-resolved encoding now agree), `train_step.lr` read `0.0001` flat across
+all 3 steps, step continuation `200000→200003` (absolute).
+
+**Retroactive implication for v2 (and possibly further back).** The same
+propagation mechanism means **v2 (`docs/handoffs/d_ws3_l1_smoke_runbook.md`)
+ALSO self-played single-window v6_live2**, not the `z2_solver_in_loop.yaml`
+variant's declared v6_live2_ls — confirmed from `reports/vast_ws3_v2/logs/ws3_clean.jsonl`
+and `ws3_ctrl.jsonl`: `checkpoint_encoding_resolved=v6_live2` with the identical
+propagation path. Consequently v2's off-window injection routing
+(`window_half=None` → legal_set ragged target) was **DEAD** — the single-window
+Dense self-play path drops off-window wins outright — and the
+`z2_solver_in_loop.yaml` header's "HARD INVARIANT graft A ... Confirmed, no
+mismatch" claim was **FALSE AT RUNTIME** (retracted in the file's own comment
+block). This adds a THIRD item to v2's confound list (alongside the LR-schedule
+and cold-buffer holes already documented above): encoding — v2's self-play ran
+v6_live2 single-window; the checkpoint metadata cascade overrode the variant's
+declared encoding; the off-window injection path was never actually exercised.
+
+**OPEN FORENSIC QUESTION (flagged, NOT investigated this session):** the same
+200k anchor's own BAKED config (inside `checkpoint_00200000.pt`) reads
+`encoding=v6_live2` / `cluster_window_size=None` — whether the entire
+`d_decide`/`d1m` training lineage that PRODUCED this anchor self-played
+single-window all along (the metadata cascading through a chain of resumes,
+not just this workstream's own resume) is an open question that needs a
+dedicated audit, not a fix folded into this one. Evidence pointer for that
+audit: `checkpoint_encoding_resolved` events across the lineage's run logs +
+each checkpoint's baked `config['encoding']`/`config['cluster_window_size']`.
+
+**FIX2 (MAJOR — seed fire-density expectation).** Red-team measured that seed
+landing positions at cuts k∈{0,2,4} (before the trap PARENT) prove NO forced
+win by construction (the parent is a "saving move exists" position), and even
+the tested trap's POST-blunder position was NOT native-solver-provable at
+budget 50k (matches [[d-tactical-search-viable-not-cheap]] — native solver has
+weak recall on quiet traps) — so ARM-SEEDED's "`fire_rate_seeded ~1.0`"
+expectation was wrong. Fix: `scripts/measure_native_provable_fraction.py`
+MEASURES the honest ceiling (combined held-out corpus, POST position,
+`TacticalSolver(window_half=None, cand_cap=40, neighbor_dist=2)`, depth 16,
+budget 20000). Laptop debug build paces ~60-80s/trap, so the local
+measurement is a SAMPLED estimate (uniform n=40/125,
+`--sample 40 --seed 20260702`, deterministic order-preserving subset) —
+**sampled fraction: 0/40 proven = 0.000, Wilson 95% CI [0.000, 0.088]**
+(n_skipped=0; ZERO proven in EVERY sampled mate_distance bucket, 2 through 9
+turns — not a deep-mate-only failure; 3498s ≈ 87s/trap debug; see
+`reports/d_ws3v3/native_provable_fraction_sample40.json` + `_records.jsonl`);
+the FULL-125 exact number is a v3 runbook §1(i) vast precondition (release
+build ~2.5× faster, ~1h, optional but recommended — replaces the sampled CI
+with the population value). `scripts/build_ws3v3_seed_corpus.py`
+now additionally emits POST-blunder seeds (`cut: -1`) ONLY for traps the native
+solver can prove AT BUILD TIME (computed fresh, not the miner's stored
+`native_loss_verified` flag — the DS1 stale-label lesson); given the ~0
+measured fraction, this gate is expected to emit few-to-zero `_kpost` seeds —
+correct behavior, it refuses to seed positions the solver can't convert.
+ARM-SEEDED's mechanism is now documented as DUAL: (i) trap-decision z-labels
+densify ALWAYS (the KataGo `startPoses` value, no solver required), (ii)
+solver policy-injection densifies only on native-provable conversions — at
+the measured ~0 ceiling this half of the lever is expected DORMANT on this
+corpus, making ARM-SEEDED's live mechanism the z-label half. A pre-registered
+**SEED-STARVED** branch was added to the runbook §6 verdict table:
+`solver_fire_rate_seeded < 2× the organic rate` (organic v2 = 5.6%, so
+**< 11.2%**) → the seeding lever did not densify INJECTION for this class —
+per the 0/40 measurement this branch is the DEFAULT expectation, not an edge
+case → do not read MEMORIZES off ARM-SEEDED's flip alone (the z-label
+mechanism may still show in the flip); interpret ARM-SEEDED against
+ARM-INJECT instead of standalone, and the follow-up lever is native-solver
+recall (D-TACTICAL), not more GPU.
+
+**FIX3 (MAJOR — launch commands + clobber).** The runbook's launch commands
+passed `--variant` a YAML PATH (`configs/variants/ws3v3_arm_control.yaml`);
+`scripts/train.py` takes the BARE NAME and constructs
+`configs/variants/{name}.yaml` internally — the path form 404s
+(`FileNotFoundError`, verified). Also, none of the three launches specified
+`--checkpoint-dir`/`--run-name`, so all three arms would have written the SAME
+`checkpoints/checkpoint_00208000.pt` (ABSOLUTE step — the trainer's
+`self.step` starts at the warm-start's own step field 200000 and increments
+per training step, `f"checkpoint_{self.step:08d}.pt"`, NOT relative
+`00008000`) and the SAME default log file. Fixed everywhere (runbook, the
+three `ws3v3_arm_*.yaml` header comments, `d_ws3_l1_smoke_runbook.md` §6.5's
+still-nonexistent `-m hexo_rl.training.run --resume` form): bare `--variant`
+name, per-arm `--checkpoint-dir checkpoints/ws3v3_<arm>` +
+`--run-name ws3v3_<arm>`, `--out` added to both §5 `exploit_probe.py` calls
+(`required=True` — omitting it fails argparse before anything runs), an
+explicit LAUNCH-ORDERING STOP-GATE (launch ARM-CONTROL alone, gate on §3,
+only then launch the other two — ~23 GPU-hours sit downstream of that gate),
+and §3's "control flat" PASS condition operationalized numerically
+(registered-31 flip count in [2,6], combined-125 in [19,29], C1≥5.848/
+C2≥25%/C3≥40% vs the anchor baseline) instead of a qualitative "flat" read.

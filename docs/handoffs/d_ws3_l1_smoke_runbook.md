@@ -1,5 +1,20 @@
 # D-WS3 W1 — L1 solver-in-loop smoke (the GPU-day GENERALIZES/MEMORIZES gate)
 
+> **SUPERSEDED (2026-07-02).** This v2 smoke RAN on vast 2026-07-01/02 and came
+> back **INDETERMINATE-CONFOUNDED**: `--resume checkpoint_00200000.pt` is a FULL
+> checkpoint, so the resume silently inherited the anchor's 1M-step cosine LR
+> schedule (~1.85e-3, not the variant's intended 2e-3→5e-4 fresh decay) AND the
+> replay buffer started cold (rm'd, `min_buffer_size` default 256). A solver-OFF
+> CONTROL arm run under the SAME broken regime reproduced the candidate's trap-flip
+> damage almost exactly (12.9%→6.5% BOTH arms) — **the solver injection is
+> EXONERATED**, but the read itself is void (a broken-regime null result proves
+> nothing about the lever). The live runbook is
+> **`docs/handoffs/d_ws3v3_smoke_runbook.md`** (three arms: CONTROL / INJECT /
+> SEEDED, weights-only warm-start that actually pins the LR, a real buffer-prefill
+> gate, in-run fire-rate logging, and the threat-probe gated against the ANCHOR
+> baseline instead of bootstrap). Keep this file as the historical record of the
+> confound + the pre-v3 build; do not launch off §2 below.
+
 **Status:** IMPLEMENTED + locally validated (Claude Code session 2026-06-30). The GPU
 run is **operator-run on vast** (laptop is thermal-capped; LTO builds forbidden
 locally). This runbook is the launch + discriminator + pre-registered verdict.
@@ -74,9 +89,20 @@ WARM-START (resume) from the 200k anchor; the resume pins encoding/arch/schedule
 (LR continues its decay along the anchor's 1M cosine — do NOT set total_steps, do NOT
 pass --override-scheduler-horizon); the variant supplies only the `solver_*` lever.
 
+> **CORRECTION (2026-07-02):** the command below was never a real entrypoint —
+> `hexo_rl.training.run` does not exist as a `-m`-runnable module. The v2 run
+> that actually executed used `scripts/train.py --checkpoint <ckpt> --variant
+> <name> --iterations N` (this IS the real entrypoint — see
+> `docs/handoffs/d_ws3v3_smoke_runbook.md` §2 for the corrected, three-arm form).
+> This is ALSO the confound this file's SUPERSEDED banner documents: a full-
+> checkpoint `--checkpoint` resume (not a dedicated `--resume` flag either — the
+> real CLI reuses `--checkpoint`/`--bootstrap` for both fresh-start and resume)
+> silently inherits the anchor's LR schedule state, which is exactly what broke
+> v2.
+
 ```bash
-.venv/bin/python -m hexo_rl.training.run \
-    --resume reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt \
+.venv/bin/python scripts/train.py \
+    --checkpoint reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt \
     --variant configs/variants/z2_solver_in_loop.yaml \
     --iterations 8000
 # → the fine-tuned candidate at checkpoints/<...>.pt  (rename to checkpoint_z2_l1.pt)
@@ -242,10 +268,16 @@ Do NOT launch unless the smoke verdict is **GENERALIZES**. Pre-staged scaffold:
 ladder restored (W3 success = standalone strength on the ladder, not a quick smoke).
 
 ```bash
-# warm-start the SMOKE candidate if it generalized (else the 200k anchor); decision ckpt ~150-200k:
-.venv/bin/python -m hexo_rl.training.run \
-    --resume checkpoints/checkpoint_z2_l1.pt \
-    --variant configs/variants/z2_solver_in_loop_full.yaml \
+# warm-start the SMOKE candidate if it generalized (else the 200k anchor); decision ckpt ~150-200k.
+# CORRECTION (2026-07-02, same fix already applied to §2): `-m hexo_rl.training.run`
+# is not a real entrypoint. The real CLI is `scripts/train.py --checkpoint <ckpt>
+# --variant <bare-name> --iterations N` (see docs/handoffs/d_ws3v3_smoke_runbook.md
+# §2 for --checkpoint-dir/--run-name per-run isolation, load-bearing here too):
+.venv/bin/python scripts/train.py \
+    --checkpoint checkpoints/checkpoint_z2_l1.pt \
+    --variant z2_solver_in_loop_full \
+    --checkpoint-dir checkpoints/z2_full \
+    --run-name z2_full \
     --iterations 200000
 ```
 
@@ -266,7 +298,7 @@ below bootstrap; argmax self-ladder WR regressed > 5%; C1-C3 regress; off-window
 ## 7. Durability + hygiene
 
 - `reports/` is gitignored → **copy the run off the vast box before session cleanup**
-  (`rsync -avz vast:~/hexo_rl/reports/d_zvalid_z2/ reports/d_zvalid_z2/`; same for any
+  (`rsync -avz vast:/workspace/hexo_rl/reports/d_zvalid_z2/ reports/d_zvalid_z2/`; same for any
   `heldout_traps.jsonl` regenerated on the box). Memory: audit artifacts must be durable.
 - d1m / longrun runs are untouched — the smoke is a separate fine-tune from the 200k
   anchor.

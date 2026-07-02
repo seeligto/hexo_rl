@@ -1,0 +1,124 @@
+# ── D-WS3V3 — ARM-CONTROL — the validity-gate arm ────────────────────────────
+#
+# v2 (2026-07-01/02) was CONFOUNDED: `--resume checkpoint_00200000.pt` is a
+# FULL checkpoint, so the resume inherited the anchor's 1M-cosine LR schedule
+# (effective LR 1.8569e-3 at step 200k, confirmed in the run logs — NOT the
+# variant's `lr: 2e-3`/`eta_min: 5e-4`) AND the replay buffer had been rm'd
+# (cold start at min_buffer_size 256). A solver-OFF control arm under that
+# SAME broken regime reproduced the trap-flip damage almost exactly (12.9% ->
+# 6.5%, matching the solver-ON candidate's 12.9% -> 6.5%) -> the regime drift
+# (LR + cold buffer), NOT the solver injection, did the damage. v3 fixes both:
+# a WEIGHTS-ONLY warm-start (`scripts/make_ws3v3_warmstart.py`) pins the LR
+# flat at 1e-4 (a full-ckpt resume CANNOT pin LR — RESUME_CHECKPOINT_OWNED_KEYS
+# includes lr/lr_schedule/eta_min/min_lr/total_steps/scheduler_t_max,
+# `hexo_rl/training/orchestrator.py:233-252`), and a real prefill warmup gate
+# (`min_buffer_size: 25000`, unit=POSITIONS) replaces the 256 cold-start hole.
+#
+# THIS ARM is the READ-FIRST validity gate (runbook §3): solver_enabled=false,
+# seed_fraction=0.0 — under the FIXED regime this arm must hold ~flat
+# (deploy-disagree <= 0.16, trap-flip within noise of the anchor baseline,
+# threat-probe C1-C3 PASS vs the ANCHOR baseline). If ARM-CONTROL drifts, the
+# regime is STILL broken — fix before reading ARM-INJECT / ARM-SEEDED at all.
+#
+# SINGLE VARIABLE vs ws3v3_arm_inject.yaml: solver_enabled (false here, true
+# there) + seed_fraction (0.0 both — seeding is ARM-SEEDED's own variable).
+# The solver_* knobs below are READ but INERT when solver_enabled=false — the
+# hot self-play path is byte-identical to a no-solver run (INV19/25/26).
+#
+# LAUNCH (vast 5080; the REAL entrypoint — NOT `-m hexo_rl.training.run`).
+# --variant is the BARE NAME (scripts/train.py builds
+# configs/variants/{name}.yaml internally — a yaml PATH here 404s).
+# --checkpoint-dir / --run-name are REQUIRED (per-arm isolation — without
+# them every arm writes the SAME checkpoints/checkpoint_00208000.pt and the
+# SAME default log file):
+#   .venv/bin/python scripts/make_ws3v3_warmstart.py   # mints checkpoints/ws3v3_warmstart_200k.pt
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/ws3v3_warmstart_200k.pt \
+#     --variant ws3v3_arm_control \
+#     --checkpoint-dir checkpoints/ws3v3_control \
+#     --run-name ws3v3_control \
+#     --iterations 8000
+# -> checkpoints/ws3v3_control/checkpoint_00208000.pt (ABSOLUTE step: warm-start's
+#    own step 200000 + 8000 iterations, NOT relative 00008000).
+# STOP-GATE: launch this arm ALONE first; only launch ws3v3_arm_inject.yaml /
+# ws3v3_arm_seeded.yaml after this arm clears the runbook §3 validity gate.
+# Full runbook: docs/handoffs/d_ws3v3_smoke_runbook.md
+encoding: v6_live2_ls
+in_channels: 4
+lr: 1.0e-4          # PINNED flat — LIVE only via the weights-only warm-start (a full-ckpt resume
+                    # cannot pin LR; see header). No eta_min: a flat LR needs no decay floor.
+lr_schedule: none   # -> Trainer._build_scheduler returns None; optimizer LR never moves off `lr`.
+aux_opp_reply_weight: 0.0
+training_steps_per_game: 1.0
+min_buffer_size: 25000   # POSITIONS. Selfplay prefill warmup gate (step_coordinator.py:736);
+                         # v2's default 256 was the cold-start hole this arm closes.
+
+selfplay:
+  completed_q_values: true
+  n_workers: 24               # =nproc on the 5080 host; 32 oversubscribed (load ~29) under the per-move solver CPU cost
+  inference_batch_size: 64
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 8
+  random_opening_plies: 0
+  gumbel_mcts: true
+  gumbel_m: 16
+  gumbel_explore_moves: 10
+  c_visit: 50.0
+  c_scale: 1.0
+  playout_cap:
+    full_search_prob: 1.0
+    n_sims_full: 150
+    n_sims_quick: 150
+
+  # ── the ONE lever, held OFF for this arm — written explicitly so the diff vs
+  # ws3v3_arm_inject.yaml is a pure solver_enabled flip, nothing else moves ──
+  solver_enabled: false
+  solver_depth: 16
+  solver_node_budget: 20000
+  solver_neighbor_dist: 2
+  solver_visit_weight: 0.5
+  forced_win_policy_enabled: false
+
+  # ── seeding, held OFF for this arm (ARM-SEEDED's own variable) ──────────────
+  seed_fraction: 0.0
+  seed_corpus_path: null
+
+mcts:
+  dirichlet_enabled: false    # Gumbel-Top-k IS root exploration; no double root-noise (anchor pin)
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  decay_steps: 200000
+  buffer_persist_path: "checkpoints/replay_buffer_ws3v3_control.bin"   # per-arm isolation;
+                                                                       # the shared default
+                                                                       # cross-contaminates runs.
+
+# Shorter eval cadence for the ~1-GPU-day smoke (the anchor's 30000 would not fire
+# inside an 8k run). The smoke's HEADLINE gate is the OFFLINE held-out trap-flip
+# evaluator (scripts/eval/run_l1_trapflip_smoke.py), NOT the in-loop promotion eval
+# — keep the in-loop eval light so it does not eat the GPU-day.
+eval_interval: 4000
+eval_pipeline:
+  opponents:
+    sealbot:         { enabled: true,  stride: 1, n_games: 100 }
+    best_checkpoint: { enabled: false }
+    random:          { enabled: false }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+  gating:
+    promotion_winrate: 0.55
+    require_ci_above_half: true
+    bootstrap_floor:
+      enabled: false
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0

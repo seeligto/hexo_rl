@@ -1,0 +1,132 @@
+# ── D-WS3V3 — ARM-INJECT — solver-in-loop, no seeding ────────────────────────
+#
+# v2 (2026-07-01/02) was CONFOUNDED: `--resume checkpoint_00200000.pt` is a
+# FULL checkpoint, so the resume inherited the anchor's 1M-cosine LR schedule
+# (effective LR 1.8569e-3 at step 200k) AND the replay buffer had been rm'd
+# (cold start at min_buffer_size 256). A solver-OFF control arm under that
+# SAME broken regime reproduced the trap-flip damage almost exactly -> the
+# regime drift, NOT the injection, did the damage — the v2 injection is
+# EXONERATED but the read stays INDETERMINATE until it re-runs clean. v3
+# fixes both: a WEIGHTS-ONLY warm-start (`scripts/make_ws3v3_warmstart.py`)
+# pins the LR flat at 1e-4 (see ws3v3_arm_control.yaml header for the full
+# mechanism), and `min_buffer_size: 25000` (POSITIONS) replaces the 256
+# cold-start hole with a real selfplay prefill warmup gate.
+#
+# THIS ARM answers the ORIGINAL W1 question under the fixed regime: does the
+# L1 solver-in-loop SOFT visit-injection teach the POLICY to propose the
+# saving move standalone (GENERALIZES, held-out trap-flip >=25%)? Read ONLY
+# after ws3v3_arm_control.yaml clears the validity gate (runbook §3) —
+# otherwise a flip lift here can't be distinguished from more regime drift.
+#
+# solver_visit_weight: 0.5 — v2's 0.3 was PROVEN non-corrupting once the
+# regime confound was isolated (the control arm reproduced the SAME KILL
+# signature at weight 0.0, i.e. no solver at all); 0.5 is the next step up
+# toward the injection actually mattering, with 1.0 held as an escalation if
+# 0.5 reads THIN-STILL (fire-rate high but flip unmoved).
+#
+# SINGLE VARIABLE vs ws3v3_arm_control.yaml: solver_enabled (true here, false
+# there) — everything else, INCLUDING seed_fraction (0.0 both arms), is
+# identical. SINGLE VARIABLE vs ws3v3_arm_seeded.yaml: seed_fraction (0.0
+# here, 0.15 there) + seed_corpus_path (null here, the mined corpus there) —
+# the solver_* block is IDENTICAL between inject and seeded.
+#
+# LAUNCH (vast 5080; the REAL entrypoint — NOT `-m hexo_rl.training.run`).
+# --variant is the BARE NAME (scripts/train.py builds
+# configs/variants/{name}.yaml internally — a yaml PATH here 404s).
+# --checkpoint-dir / --run-name are REQUIRED (per-arm isolation).
+# STOP-GATE: do NOT launch this arm until ws3v3_arm_control.yaml has run AND
+# cleared the runbook §3 validity gate:
+#   .venv/bin/python scripts/make_ws3v3_warmstart.py   # mints checkpoints/ws3v3_warmstart_200k.pt (once, shared across arms)
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/ws3v3_warmstart_200k.pt \
+#     --variant ws3v3_arm_inject \
+#     --checkpoint-dir checkpoints/ws3v3_inject \
+#     --run-name ws3v3_inject \
+#     --iterations 8000
+# -> checkpoints/ws3v3_inject/checkpoint_00208000.pt (ABSOLUTE step, see
+#    ws3v3_arm_control.yaml header for why).
+# Full runbook: docs/handoffs/d_ws3v3_smoke_runbook.md
+encoding: v6_live2_ls
+in_channels: 4
+lr: 1.0e-4          # PINNED flat — see ws3v3_arm_control.yaml header for why a full-ckpt resume can't do this.
+lr_schedule: none
+aux_opp_reply_weight: 0.0
+training_steps_per_game: 1.0
+min_buffer_size: 25000   # POSITIONS. Selfplay prefill warmup gate (step_coordinator.py:736).
+
+selfplay:
+  completed_q_values: true
+  n_workers: 24               # =nproc on the 5080 host; 32 oversubscribed (load ~29) under the per-move solver CPU cost
+  inference_batch_size: 64
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 8
+  random_opening_plies: 0
+  gumbel_mcts: true
+  gumbel_m: 16
+  gumbel_explore_moves: 10
+  c_visit: 50.0
+  c_scale: 1.0
+  playout_cap:
+    full_search_prob: 1.0
+    n_sims_full: 150
+    n_sims_quick: 150
+
+  # ── THE ONE NEW LEVER — native solver-in-loop SOFT visit-injection (L1) ──────
+  # Per self-play move the net-free engine::tactics solver proves the side-to-
+  # move's forced win and SOFT-blends visit mass onto the proving move (line[0])
+  # into the POLICY training target. WIN proofs are sound by construction (no R3
+  # LOSS-guard dependency — this smoke writes NO LOSS-derived z; that is the HELD
+  # L2 value-z path). window_half=None surfaces off-window wins -> routed through
+  # the legal_set coverage gate into the ragged target (D-DECODE action-space fix).
+  solver_enabled: true
+  solver_depth: 16            # PLIES (~2x mate-distance-in-turns; corpus band mate-in-2..9 turns)
+  solver_node_budget: 20000   # per-prove node cap. MEASURED 2026-07-01 (release solver, 31 trap parents):
+                              # ≤8-ply wins (corpus proven_depth≤8, all 31+125) are proven in the narrow
+                              # must-block tree well under 20k -> recall-safe, ~2.5x faster than 50k.
+  solver_neighbor_dist: 2     # quiet-move widening for recall on the ~80%-quiet trap class (A2); <0 = threat-only
+  solver_visit_weight: 0.5    # SOFT injection (convex blend). 0.3 exonerated (control reproduced its damage
+                              # at weight 0.0) -> stepped up to 0.5 for v3; 1.0 held as an escalation.
+  forced_win_policy_enabled: false   # O1 forced-win one-hot stays OFF (the solver supersedes it; single-variable).
+
+  seed_fraction: 0.0          # ARM-SEEDED's own variable — OFF here.
+  seed_corpus_path: null
+
+mcts:
+  dirichlet_enabled: false    # Gumbel-Top-k IS root exploration; no double root-noise (anchor pin)
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  decay_steps: 200000
+  buffer_persist_path: "checkpoints/replay_buffer_ws3v3_inject.bin"   # per-arm isolation;
+                                                                      # the shared default
+                                                                      # cross-contaminates runs.
+
+# Shorter eval cadence for the ~1-GPU-day smoke (the anchor's 30000 would not fire
+# inside an 8k run). The smoke's HEADLINE gate is the OFFLINE held-out trap-flip
+# evaluator (scripts/eval/run_l1_trapflip_smoke.py), NOT the in-loop promotion eval
+# — keep the in-loop eval light so it does not eat the GPU-day.
+eval_interval: 4000
+eval_pipeline:
+  opponents:
+    sealbot:         { enabled: true,  stride: 1, n_games: 100 }
+    best_checkpoint: { enabled: false }
+    random:          { enabled: false }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+  gating:
+    promotion_winrate: 0.55
+    require_ci_above_half: true
+    bootstrap_floor:
+      enabled: false
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0
