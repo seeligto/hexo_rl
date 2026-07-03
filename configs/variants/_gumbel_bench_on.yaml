@@ -1,0 +1,15 @@
+# Gumbel-vs-standard throughput ablation — GUMBEL ON arm (D-GUMBELPREP Phase 0).
+# Matched pair with _gumbel_bench_off.yaml: IDENTICAL selfplay search knobs,
+# flips ONLY `gumbel_mcts`. Bench-only (underscore prefix); never a live/train
+# variant. benchmark.py forces playout_cap (fast_prob=0, full_search=0) and
+# per-move sims=--worker-sims, so only the search-method switch differs.
+selfplay:
+  n_workers: 10
+  inference_max_wait_ms: 5.0
+  leaf_batch_size: 8
+  gumbel_mcts: true        # <-- the ONE switch under test
+  gumbel_m: 16
+  gumbel_explore_moves: 10
+  completed_q_values: true
+  c_visit: 50.0
+  c_scale: 1.0

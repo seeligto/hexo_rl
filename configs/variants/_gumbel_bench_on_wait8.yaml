@@ -1,0 +1,12 @@
+# Gumbel ON arm, inference_max_wait_ms=8 — coalescing-window lever test
+# (D-GUMBELPREP). Identical to _gumbel_bench_on.yaml except wait_ms. Bench-only.
+selfplay:
+  n_workers: 10
+  inference_max_wait_ms: 8.0
+  leaf_batch_size: 8
+  gumbel_mcts: true
+  gumbel_m: 16
+  gumbel_explore_moves: 10
+  completed_q_values: true
+  c_visit: 50.0
+  c_scale: 1.0

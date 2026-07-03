@@ -1,0 +1,11 @@
+encoding: v6_live2_ls
+in_channels: 4
+selfplay:
+  gumbel_mcts: true
+  gumbel_m: 32
+  gumbel_explore_moves: 10
+  c_visit: 50.0
+  c_scale: 1.0
+  inference_max_wait_ms: 2.0
+  inference_batch_size: 64
+  leaf_batch_size: 16
