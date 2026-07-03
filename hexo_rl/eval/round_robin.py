@@ -408,21 +408,32 @@ class _CachedModelBot:
     ``ModelPlayer``, which DROPS off-window legal moves and mis-decodes the multi-window
     action space (evaluator.py:111-113). ``encoding_override`` is REQUIRED for
     ``v6_live2_ls`` (state-dict-identical to ``v6_live2`` → auto-detection returns the
-    arch family, so the legal-set dispatch would not fire)."""
+    arch family, so the legal-set dispatch would not fire).
+
+    D-EVALGATE fix wave: ``encoding_override`` is a deliberate DECODE-TIME cross-decode
+    (threaded as ``decode_override`` — never raises on a disagreeing stamp, only logs
+    loudly) since round-robin ladders routinely re-decode stale/single-window-stamped
+    checkpoints under the multi-window action space. ``expect_encoding`` is the
+    ASSERTION form (threaded as ``declared_encoding`` — raises on stamp disagreement),
+    for callers that want to pin a checkpoint to a known encoding rather than force a
+    cross-decode. The two are mutually exclusive (enforced by the loader)."""
 
     _NET_CACHE: dict = {}
 
     def __init__(self, ckpt_path: str, n_sims: int, temperature: float, device,
-                 encoding_override: Optional[str] = None):
-        key = (ckpt_path, encoding_override)
+                 encoding_override: Optional[str] = None,
+                 expect_encoding: Optional[str] = None):
+        key = (ckpt_path, encoding_override, expect_encoding)
         if key not in _CachedModelBot._NET_CACHE:
             from hexo_rl.eval.checkpoint_loader import load_model_with_encoding
-            model, spec, label = load_model_with_encoding(ckpt_path, device)
-            if encoding_override:
-                from hexo_rl.encoding import lookup as _lookup
-                from hexo_rl.encoding import normalize_encoding_name as _norm
-                label = encoding_override
-                spec = _lookup(_norm(label))
+            # D-EVALGATE: encoding_override is the decode-time cross-decode (loud,
+            # never raises); expect_encoding is the assertion (raises on mismatch).
+            # The loader itself enforces mutual exclusivity.
+            model, spec, label = load_model_with_encoding(
+                ckpt_path, device,
+                declared_encoding=expect_encoding,
+                decode_override=encoding_override,
+            )
             _CachedModelBot._NET_CACHE[key] = (model, spec, label)
         model, spec, label = _CachedModelBot._NET_CACHE[key]
         from hexo_rl.eval.defender_dispatch import build_model_bot

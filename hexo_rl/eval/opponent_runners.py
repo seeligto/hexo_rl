@@ -264,8 +264,34 @@ def _run_bootstrap_anchor(ctx: _RunnerContext) -> None:
 
     if pipeline._bootstrap_anchor_model is None:
         log.info("bootstrap_anchor_loading", path=str(anchor_path))
+        # D-EVALGATE fix wave (red-team HOLE 3): this load feeds
+        # `wr_bootstrap_anchor`, which AND-combines into the LIVE promotion
+        # boolean (`gating.bootstrap_floor`) — it must never resolve the
+        # anchor's encoding by silent shape/filename sniffing.
+        #   * config `opponents.bootstrap_anchor.encoding` present -> threaded
+        #     as declared_encoding: an ASSERTION against the anchor's OWN
+        #     stamp, NEVER a comparison against the candidate's encoding (F07
+        #     semantics unchanged: the anchor may legitimately differ from the
+        #     candidate).
+        #   * no declaration -> require_encoding_source=True: the anchor's own
+        #     stamp must exist and wins; an unstamped, undeclared anchor
+        #     RAISES instead of silently sniffing. Currently-shipped
+        #     bootstrap_model_*.pt anchors are unstamped bare state_dicts, so
+        #     enabling bootstrap_anchor without declaring `encoding:` in the
+        #     variant's own block now fails loudly at first anchor load —
+        #     stamp the anchor or declare its encoding.
+        # NOTE deep-merge trap (verified: hexo_rl/utils/config.py _deep_merge):
+        # `opponents.bootstrap_anchor` merges KEY-BY-KEY base <- variant, and
+        # many variants override ONLY `path` (repointing at a differently-
+        # shaped anchor). Base configs/eval.yaml therefore deliberately
+        # carries NO `encoding:` key — a base-level value would be inherited
+        # into every path-only override and manufacture a false declaration.
+        # Declare `encoding:` alongside `path:` in the SAME config block.
+        expected_encoding = pipeline.bootstrap_anchor_cfg.get("encoding")
         anchor_model, anchor_spec, anchor_label = _load_anchor_model(
             anchor_path, pipeline.device,
+            declared_encoding=expected_encoding,
+            require_encoding_source=expected_encoding is None,
         )
         pipeline._bootstrap_anchor_model = anchor_model
         # F07 — cache the anchor's TRUE encoding so the opponent ModelPlayer

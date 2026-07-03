@@ -182,6 +182,11 @@ def flatten_config_and_resolve_encoding(
         board_size=board_size,
         n_planes=_registry_spec.n_planes,
         is_multi_window=_registry_spec.is_multi_window,
+        # D-FORENSIC F1: this event fires BEFORE checkpoint load — it is the
+        # variant's DECLARED intent, not what self-play will run. The
+        # post-load truth is `checkpoint_encoding_resolved`. The d1m
+        # forensic mis-read this event as ground truth for a week.
+        source="variant_declared_pre_checkpoint",
     )
     res_blocks = int(combined_config.get("res_blocks", 10))
     filters    = int(combined_config.get("filters",    128))

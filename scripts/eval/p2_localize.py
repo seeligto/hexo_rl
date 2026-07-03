@@ -407,7 +407,7 @@ def process_bucket(
     records to dec_fh (flushed). Returns the bucket summary dict (incl. the
     naive-vs-filter reclassification counts)."""
     ck = CKPT_DIR / BUCKET_CKPT[bucket]
-    _, cfg = load_state_and_config(ck)
+    _, cfg, _raw = load_state_and_config(ck)
     knobs = extract_deploy_knobs(cfg)
     engine = _build_engine(str(ck), ENCODING, device)
     seal = SealBotBot(time_limit=60.0, max_depth=6)

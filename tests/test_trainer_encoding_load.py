@@ -354,3 +354,163 @@ def test_load_checkpoint_metadata_with_non_string_encoding_name_falls_back(
     # Falls back through shape inference; v6 still resolves correctly.
     assert resolve_from_config(trainer.config).trunk_size == 19
     assert trainer.config["encoding"]["version"] == "v6"
+
+
+# ── D-FORENSIC F1 (2026-07-02) — declared-encoding gate ──────────────────
+#
+# The d1m lineage self-played single-window v6_live2 for 272k+ steps while
+# every variant declared multi-window v6_live2_ls. Two holes, both closed
+# here:
+#   1. `_resolve_checkpoint_encoding` treated the CANONICAL string form
+#      `encoding: "v6_live2_ls"` (§172 A4.5) as "unspecified" (dict-only
+#      check) → filename/shape inference won silently.
+#   2. The metadata['encoding_name'] preference branch (§172 A4.3) never
+#      compared against the variant's declared encoding → a stale stamp
+#      self-perpetuated through every later resume.
+# v6_live2 and v6_live2_ls are state-dict-shape-identical (window fields
+# only), so shape inference CANNOT disambiguate them — the declared config
+# is the only truthful source.
+
+
+def _live2_train_cfg() -> dict:
+    """v6_live2-family base config (4-plane trunk)."""
+    return {**_base_train_cfg(), "in_channels": 4}
+
+
+def _make_v6_live2_ckpt(
+    tmp_path: Path, filename: str = "bootstrap_model_v6_live2_8300.pt",
+) -> Path:
+    """Weights-only v6_live2-shaped net; filename mirrors the production
+    bootstrap artifact (no '_ls' substring → filename heuristic resolves
+    single-window v6_live2)."""
+    model = HexTacToeNet(
+        board_size=19,
+        in_channels=4,
+        filters=_FAST_FILTERS,
+        res_blocks=_FAST_RES_BLOCKS,
+        encoding="v6_live2",
+    )
+    return _save_weights_only(model, tmp_path / filename)
+
+
+def test_string_form_encoding_mismatch_raises(tmp_path: Path) -> None:
+    """Canonical string-form `encoding: v6_live2_ls` is an EXPLICIT declaration.
+
+    Weights-only v6_live2-shaped bootstrap (filename without '_ls') must NOT
+    silently win via shape/filename inference — this exact silent win routed
+    the whole d1m lineage through single-window self-play.
+    """
+    ckpt_path = _make_v6_live2_ckpt(tmp_path)
+    cfg = {
+        **_live2_train_cfg(),
+        "encoding": "v6_live2_ls",  # string form — §172 A4.5 canonical
+    }
+    with pytest.raises(ValueError) as excinfo:
+        Trainer.load_checkpoint(
+            ckpt_path,
+            checkpoint_dir=tmp_path,
+            fallback_config=cfg,
+        )
+    msg = str(excinfo.value)
+    assert "'v6_live2_ls'" in msg
+    assert "'v6_live2'" in msg
+
+
+def test_string_form_encoding_agreement_loads(tmp_path: Path) -> None:
+    """String-form declaration that AGREES with the ckpt loads cleanly."""
+    ckpt_path = _make_v6_live2_ckpt(tmp_path)
+    cfg = {
+        **_live2_train_cfg(),
+        "encoding": "v6_live2",
+    }
+    trainer = Trainer.load_checkpoint(
+        ckpt_path,
+        checkpoint_dir=tmp_path,
+        fallback_config=cfg,
+    )
+    assert trainer.config["encoding"]["version"] == "v6_live2"
+    assert resolve_from_config(trainer.config).trunk_size == 19
+
+
+def _make_v6_live2_full_ckpt_with_metadata(tmp_path: Path) -> Path:
+    """Full ckpt shape mirroring the d1m resume artifacts: baked config +
+    metadata['encoding_name'] both stamped single-window v6_live2."""
+    model = HexTacToeNet(
+        board_size=19,
+        in_channels=4,
+        filters=_FAST_FILTERS,
+        res_blocks=_FAST_RES_BLOCKS,
+        encoding="v6_live2",
+    )
+    payload = {
+        "model_state": model.state_dict(),
+        "config": {**_live2_train_cfg(), "encoding": {"version": "v6_live2"}},
+        "metadata": {
+            "encoding_name": "v6_live2",
+            "schema_version": 1,
+        },
+    }
+    path = tmp_path / "checkpoint_00272357.pt"
+    torch.save(payload, path)
+    return path
+
+
+@pytest.mark.parametrize(
+    "declared",
+    ["v6_live2_ls", {"version": "v6_live2_ls"}],
+    ids=["string-form", "dict-form"],
+)
+def test_metadata_encoding_mismatch_with_explicit_config_raises(
+    tmp_path: Path, declared,
+) -> None:
+    """metadata['encoding_name'] must not silently override an explicit
+    variant declaration — that unconditional preference is the
+    self-perpetuation mechanism (stale stamp survives every resume)."""
+    ckpt_path = _make_v6_live2_full_ckpt_with_metadata(tmp_path)
+    cfg = {
+        **_live2_train_cfg(),
+        "encoding": declared,
+    }
+    with pytest.raises(ValueError) as excinfo:
+        Trainer.load_checkpoint(
+            ckpt_path,
+            checkpoint_dir=tmp_path,
+            fallback_config=cfg,
+        )
+    msg = str(excinfo.value)
+    assert "'v6_live2_ls'" in msg
+    assert "'v6_live2'" in msg
+    assert "metadata" in msg
+
+
+def test_metadata_encoding_wins_when_config_declares_nothing(
+    tmp_path: Path,
+) -> None:
+    """No explicit declaration → metadata stamp still wins (§171 P3 /
+    §172 A4.3 backward-compat: minimal configs accept the ckpt encoding)."""
+    ckpt_path = _make_v6_live2_full_ckpt_with_metadata(tmp_path)
+    cfg = _live2_train_cfg()  # no `encoding` key
+    trainer = Trainer.load_checkpoint(
+        ckpt_path,
+        checkpoint_dir=tmp_path,
+        fallback_config=cfg,
+    )
+    assert trainer.config["encoding"]["version"] == "v6_live2"
+
+
+def test_metadata_encoding_agreement_with_explicit_config_loads(
+    tmp_path: Path,
+) -> None:
+    """Explicit declaration that AGREES with the metadata stamp loads
+    cleanly (the sanctioned re-stamp workflow lands here)."""
+    ckpt_path = _make_v6_live2_full_ckpt_with_metadata(tmp_path)
+    cfg = {
+        **_live2_train_cfg(),
+        "encoding": "v6_live2",
+    }
+    trainer = Trainer.load_checkpoint(
+        ckpt_path,
+        checkpoint_dir=tmp_path,
+        fallback_config=cfg,
+    )
+    assert trainer.config["encoding"]["version"] == "v6_live2"

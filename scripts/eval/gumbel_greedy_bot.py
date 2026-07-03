@@ -95,31 +95,74 @@ def extract_deploy_knobs(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return knobs
 
 
-def _resolve_encoding_name(cfg: Dict[str, Any], explicit: Optional[str]) -> str:
-    """Encoding name for the planner. CLI override wins; else config; else error.
+def _resolve_encoding_name(
+    raw: Dict[str, Any], ckpt_path: "str | Path", explicit: Optional[str],
+) -> str:
+    """Encoding name for the planner, via the SHARED gated stamp resolution.
 
-    The checkpoint embeds {'encoding': {'version': 'v6_live2'}} (the wire-shape
-    marker) — that is NOT the runtime encoding label. The live run is
-    'v6_live2_ls' (multi-window legal-set); the operator must pass it (or the
-    variant config must carry `encoding: v6_live2_ls` at top level).
+    D-EVALGATE fix wave (ESCAPE 5): this used to be a hand-rolled
+    ``if explicit: return explicit`` — a silent override that never compared
+    against the checkpoint's own stamp. It now reuses
+    ``checkpoint_loader._resolve_ckpt_stamped_encoding`` (no duplicated
+    logic): ``explicit`` (``--encoding``) is a DECODE-TIME cross-decode — it
+    ALWAYS wins, but a disagreeing stamp is logged loudly
+    (``encoding_decode_override``), never silently. With no ``--encoding``,
+    the checkpoint's OWN stamp (metadata/config/raw['encoding']) is
+    authoritative over the embedded run config's bare ``encoding`` field
+    (which is itself just a copy of the same stamp — kept as a last-resort
+    fallback for checkpoints saved before the stamp existed).
     """
+    from hexo_rl.eval.checkpoint_loader import (
+        _log as _ckpt_log,
+        _normalize_or_raise,
+        _resolve_ckpt_stamped_encoding,
+    )
+
+    ckpt_stamp_name, ckpt_stamp_source = _resolve_ckpt_stamped_encoding(raw, ckpt_path)
+
     if explicit:
-        return explicit
-    enc = cfg.get("encoding")
+        override_name = _normalize_or_raise(
+            explicit, side="decode_override", source="--encoding",
+        )
+        log_fields = {
+            "checkpoint": str(ckpt_path),
+            "ckpt_stamp": ckpt_stamp_name,
+            "ckpt_stamp_source": ckpt_stamp_source,
+            "decode_as": override_name,
+        }
+        if ckpt_stamp_name is not None and override_name != ckpt_stamp_name:
+            _ckpt_log.warning("encoding_decode_override", **log_fields)
+        else:
+            _ckpt_log.info("encoding_decode_override", **log_fields)
+        return override_name
+
+    if ckpt_stamp_name is not None:
+        return ckpt_stamp_name
+
+    cfg = raw.get("config", {}) if isinstance(raw, dict) else {}
+    enc = cfg.get("encoding") if isinstance(cfg, dict) else None
     if isinstance(enc, str):
         return enc
     raise ValueError(
-        "encoding not resolvable from checkpoint config; pass --encoding "
-        "(live d1m run = 'v6_live2_ls')"
+        "encoding not resolvable from checkpoint stamp or config; pass "
+        "--encoding (live d1m run = 'v6_live2_ls')"
     )
 
 
-def load_state_and_config(ckpt_path: str | Path) -> Tuple[dict, Dict[str, Any]]:
-    """Load a checkpoint, return (normalized_state_dict, embedded_config).
+def load_state_and_config(
+    ckpt_path: str | Path,
+) -> Tuple[dict, Dict[str, Any], Dict[str, Any]]:
+    """Load a checkpoint, return (normalized_state_dict, embedded_config, raw).
 
     Accepts both a bare state-dict (inference_only.pt) and a full training
     checkpoint (carries 'model_state' + 'config'). A bare state-dict has no
     embedded config — caller must then supply knobs/encoding explicitly.
+
+    ``raw`` is the untouched top-level checkpoint dict (or the bare state
+    dict itself when there is no wrapper) — callers that need the checkpoint's
+    OWN encoding stamp (metadata/config/raw['encoding']) use it with
+    ``checkpoint_loader._resolve_ckpt_stamped_encoding`` instead of
+    re-parsing the file.
     """
     raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     cfg: Dict[str, Any] = {}
@@ -133,7 +176,7 @@ def load_state_and_config(ckpt_path: str | Path) -> Tuple[dict, Dict[str, Any]]:
                 state = raw[key]
                 break
     state = normalize_model_state_dict_keys(state)
-    return state, cfg
+    return state, cfg, raw
 
 
 class GumbelGreedyBot(BotProtocol):
@@ -290,8 +333,36 @@ def distinct_game_count(games: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _build_engine(ckpt_path: str, encoding_name: str, device: torch.device) -> LocalInferenceEngine:
-    state, _cfg = load_state_and_config(ckpt_path)
+def _build_engine(
+    ckpt_path: str, encoding_name: str, device: torch.device,
+    expect_encoding: Optional[str] = None,
+) -> LocalInferenceEngine:
+    """Build a LocalInferenceEngine decoding ``ckpt_path`` under ``encoding_name``.
+
+    ``encoding_name`` is DECODE-only (the checkpoint's own stamp is never
+    consulted) — historical behaviour, kept for cross-decode callers.
+    ``expect_encoding`` (D-WS3V3 A1 amendment) is the ASSERTION form: the
+    checkpoint's OWN stamp must exist AND match, else this raises
+    (``DeclaredEncodingMismatchError`` on disagreement, ``ValueError`` when
+    the checkpoint is unstamped — an unstamped ckpt cannot satisfy an
+    assertion). Pass both the same value to pin a gated read.
+    """
+    state, _cfg, raw = load_state_and_config(ckpt_path)
+    if expect_encoding is not None:
+        from hexo_rl.eval.checkpoint_loader import (
+            _check_declared_vs_stamped_encoding,
+            _resolve_ckpt_stamped_encoding,
+        )
+        stamp_name, stamp_source = _resolve_ckpt_stamped_encoding(raw, ckpt_path)
+        if stamp_name is None:
+            raise ValueError(
+                f"--expect-encoding {expect_encoding!r}: checkpoint {ckpt_path} "
+                "carries NO encoding stamp (metadata['encoding_name'] / "
+                "config['encoding'] / raw['encoding']) — an unstamped checkpoint "
+                "cannot satisfy an encoding assertion. Re-stamp it (e.g. "
+                "scripts/make_ws3v3_warmstart.py) or drop --expect-encoding."
+            )
+        _check_declared_vs_stamped_encoding(expect_encoding, stamp_name, stamp_source)
     spec = _lookup_encoding(_normalize_encoding(encoding_name))
     model = _build_model_from_spec(state, spec)
     model.to(device).eval()
@@ -315,13 +386,13 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cfg_ckpt = args.config_checkpoint or args.checkpoint
-    _state, cfg = load_state_and_config(cfg_ckpt)
+    _state, cfg, raw = load_state_and_config(cfg_ckpt)
     if not cfg:
         raise ValueError(
             f"{cfg_ckpt} carries no embedded config; pass --config-checkpoint pointing "
             "at a full training checkpoint so deploy knobs are read, not guessed."
         )
-    encoding_name = _resolve_encoding_name(cfg, args.encoding)
+    encoding_name = _resolve_encoding_name(raw, cfg_ckpt, args.encoding)
     knobs = extract_deploy_knobs(cfg)
     print(f"[knobs] {json.dumps(knobs)}  encoding={encoding_name}  device={device}")
 

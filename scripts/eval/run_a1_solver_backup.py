@@ -153,7 +153,14 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     backup_depths = [int(d) for d in str(args.backup_depths).split(",") if str(d).strip()]
 
-    model, _spec, auto_label = load_model_with_encoding(args.checkpoint, device)
+    # D-EVALGATE fix wave: --encoding (the deploy board/engine encoding, usually
+    # v6_live2_ls) is threaded as decode_override — this script routinely
+    # cross-decodes stale/single-window-stamped checkpoints (see the module
+    # docstring's d1m lineage caveats), so a disagreeing stamp must log loudly,
+    # never raise.
+    model, _spec, auto_label = load_model_with_encoding(
+        args.checkpoint, device, decode_override=args.encoding,
+    )
     ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     knobs = extract_deploy_knobs(ck.get("config", {}))
     # §D-RECONFIRM R2: fix the deploy search budget across a cross-checkpoint lineage so the WR

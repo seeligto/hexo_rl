@@ -201,7 +201,15 @@ def _build_standalone_head(ckpt: str, encoding: str, device, seed: int, legal_se
         extract_deploy_knobs,
     )
 
-    model, _spec, auto_label = load_model_with_encoding(ckpt, device)
+    # D-EVALGATE fix wave: `encoding` (the --encoding CLI board/engine encoding,
+    # default v6_live2_ls) is threaded as decode_override — the baseline/candidate
+    # ladder routinely cross-decodes checkpoints under the multi-window action
+    # space regardless of their own stamp, so a disagreeing stamp must log
+    # loudly, never raise (this call is not user-overridable per-checkpoint;
+    # both baseline and candidate always decode under the SAME `--encoding`).
+    model, _spec, auto_label = load_model_with_encoding(
+        ckpt, device, decode_override=encoding,
+    )
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     knobs = extract_deploy_knobs(ck.get("config", {}))
     engine = _build_engine_for_model(model, encoding, device)
@@ -413,6 +421,12 @@ def main() -> None:
         "baseline_ckpt": str(args.baseline_ckpt),
         "candidate_ckpt": str(args.candidate_ckpt),
         "encoding": args.encoding,
+        # D-EVALGATE fix wave: the RESOLVED decode label each head was actually
+        # built under (post decode_override — always == args.encoding today
+        # since the override is unconditional here; recorded so a future
+        # per-checkpoint divergence is visible in the artifact rather than
+        # silently dropped, per review point "dead auto_label/base_enc/cand_enc").
+        "decode_label": {"baseline": base_enc, "candidate": cand_enc},
         "sealbot_depth": args.sealbot_depth,
         "trap_loss_rate": {"baseline": base_trap, "candidate": cand_trap,
                            "available": bool(traps), "n_traps": len(traps),

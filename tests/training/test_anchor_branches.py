@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 
 from hexo_rl.model.network import HexTacToeNet
@@ -100,3 +101,112 @@ def test_resolve_anchor_arch_mismatch_skips_sync(mock_save, mock_load, tmp_path)
     inf_model.load_state_dict.assert_not_called()
     assert state.best_model is anchor_model
     assert state.best_model_step == 5
+
+
+# ── D-FORENSIC F1 (2026-07-02) — anchor-path encoding-mismatch visibility ──
+
+
+def _stamped_v6_live2_anchor(path):
+    """Full-ckpt anchor stamped single-window v6_live2 (the d1m lineage shape)."""
+    model = HexTacToeNet(
+        board_size=19, in_channels=4, filters=16, res_blocks=2,
+        encoding="v6_live2",
+    )
+    torch.save(
+        {
+            "model_state": model.state_dict(),
+            "config": {"in_channels": 4, "encoding": {"version": "v6_live2"}},
+            "metadata": {"encoding_name": "v6_live2", "schema_version": 1},
+        },
+        path,
+    )
+    return path
+
+
+_LS_DECLARING_CFG = {
+    "batch_size": 8,
+    "lr": 2e-3,
+    "weight_decay": 1e-4,
+    "torch_compile": False,
+    "res_blocks": 2,
+    "filters": 16,
+    "in_channels": 4,
+    "encoding": "v6_live2_ls",  # declared multi-window vs stamped v6_live2
+}
+
+
+def test_try_load_anchor_encoding_mismatch_raises_with_dedicated_event(tmp_path):
+    """Encoding disagreement is a CONFIGURATION error, not corruption: it must
+    RAISE (hard-fail the launch, matching the trainer path) after emitting its
+    own ERROR event — NOT return None, which routes a valid anchor into the
+    corruption-quarantine/fresh-init machinery (F1 review BLOCKER)."""
+    import structlog.testing
+
+    from hexo_rl.training.anchor import _try_load_anchor
+
+    candidate = _stamped_v6_live2_anchor(tmp_path / "best_model.pt")
+    with structlog.testing.capture_logs() as cap_logs:
+        with pytest.raises(ValueError, match="Encoding version disagrees"):
+            _try_load_anchor(
+                candidate,
+                checkpoint_dir=str(tmp_path),
+                device=torch.device("cpu"),
+                fallback_config=dict(_LS_DECLARING_CFG),
+            )
+    events = [e.get("event") for e in cap_logs]
+    assert "anchor_encoding_mismatch" in events, f"events: {events}"
+
+
+def test_resilient_load_encoding_mismatch_never_quarantines(tmp_path):
+    """load_best_model_resilient must NOT quarantine (rename) or replace a
+    VALID anchor whose only problem is an encoding disagreement — the F1
+    review reproduced best_model.pt being renamed .corrupt-* and silently
+    replaced by a fresh-init net. The ValueError must propagate instead."""
+    from hexo_rl.training.anchor import load_best_model_resilient
+
+    best = _stamped_v6_live2_anchor(tmp_path / "best_model.pt")
+    original_bytes = best.read_bytes()
+    with pytest.raises(ValueError, match="Encoding version disagrees"):
+        load_best_model_resilient(
+            best,
+            checkpoint_dir=str(tmp_path),
+            device=torch.device("cpu"),
+            config=dict(_LS_DECLARING_CFG),
+        )
+    # File untouched at its original path — no quarantine, no overwrite.
+    assert best.exists(), "best_model.pt was moved/quarantined"
+    assert best.read_bytes() == original_bytes, "best_model.pt was rewritten"
+    corpses = list(tmp_path.glob("best_model.pt.corrupt-*"))
+    assert corpses == [], f"valid anchor quarantined: {corpses}"
+
+
+def test_resilient_load_foreign_bootstrap_mismatch_skips_not_raises(
+    tmp_path, monkeypatch,
+):
+    """The hardcoded _BOOTSTRAP_ANCHOR_CANDIDATES are v6-family by
+    construction — a fresh launch of any OTHER encoding on a host where
+    such a bootstrap exists (and no best_model.pt yet) must SKIP the
+    mismatched foreign candidate and fall through (→ fresh-init at the
+    caller), not hard-crash the launch (red-team R3b regression). The
+    raise is reserved for the same-lineage best_model.pt/.bak tiers."""
+    from hexo_rl.training import anchor as anchor_mod
+
+    # v6-shaped weights-only bootstrap (8-plane) — foreign to the declared
+    # v6_live2_ls (4-plane) variant.
+    boot_model = HexTacToeNet(
+        board_size=19, in_channels=8, filters=16, res_blocks=2, encoding="v6",
+    )
+    boot = tmp_path / "bootstrap_model_v6.pt"
+    torch.save(boot_model.state_dict(), boot)
+    monkeypatch.setattr(
+        anchor_mod, "_BOOTSTRAP_ANCHOR_CANDIDATES", (str(boot),),
+    )
+
+    out = anchor_mod.load_best_model_resilient(
+        tmp_path / "best_model.pt",  # does not exist — fresh launch
+        checkpoint_dir=str(tmp_path),
+        device=torch.device("cpu"),
+        config=dict(_LS_DECLARING_CFG),
+    )
+    assert out is None  # skipped the foreign candidate; caller fresh-inits
+    assert boot.exists()  # and the bootstrap file was not touched

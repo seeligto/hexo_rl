@@ -226,6 +226,7 @@ def _try_load_anchor(
     checkpoint_dir: str,
     device: torch.device,
     fallback_config: dict[str, Any],
+    skip_encoding_mismatch: bool = False,
 ) -> "Optional[tuple[Trainer, Path]]":
     """Attempt to load ``candidate`` as an anchor checkpoint.
 
@@ -234,6 +235,13 @@ def _try_load_anchor(
     PATH is returned so the caller can hash the STORED weights for the W2 pin —
     the live model's runtime dtype (fp16 on CUDA) diverges from disk (§D-RERUNPREP
     F1). Failures are logged but not raised — the caller decides what to fall back to.
+
+    Exception (D-FORENSIC F1): an encoding disagreement RAISES by default —
+    it is a configuration error, not corruption, and must not enter the
+    quarantine/fresh-init machinery. ``skip_encoding_mismatch=True`` restores
+    skip-on-mismatch for FOREIGN multi-candidate fallbacks (the hardcoded
+    v6-family bootstrap list), where not matching a non-v6 variant is by
+    design, not lineage rot (red-team R3b).
     """
     if not candidate.exists():
         return None
@@ -247,6 +255,40 @@ def _try_load_anchor(
         )
         return (trainer, candidate)
     except Exception as exc:  # broad by design: corrupt zip, arch mismatch, CUDA OOM all fall through to next candidate
+        # D-FORENSIC F1: an encoding disagreement is a CONFIGURATION error,
+        # NOT corruption — returning None here routes a VALID anchor into the
+        # quarantine/fresh-init machinery (rename to .corrupt-*, then a
+        # silent fresh-init overwrite of best_model.pt; the d1m single-window
+        # cascade entered via exactly this bootstrap path). RAISE instead:
+        # hard-fail the launch, matching the trainer path. Dedicated ERROR
+        # event first so it can't hide among routine anchor_load_failed
+        # warnings.
+        if isinstance(exc, ValueError) and "Encoding version disagrees" in str(exc):
+            if skip_encoding_mismatch:
+                log.warning(
+                    "anchor_encoding_mismatch_skipped",
+                    path=str(candidate),
+                    error=str(exc),
+                    msg=(
+                        "foreign bootstrap candidate's encoding does not "
+                        "match the declared config encoding — skipping to "
+                        "the next candidate (by-design mismatch, not "
+                        "lineage rot)."
+                    ),
+                )
+                return None
+            log.error(
+                "anchor_encoding_mismatch",
+                path=str(candidate),
+                error=str(exc),
+                msg=(
+                    "anchor candidate's encoding disagrees with the "
+                    "explicitly declared config encoding — refusing to fall "
+                    "through to backup/bootstrap/fresh-init. Re-stamp the "
+                    "anchor or fix the variant's `encoding:`."
+                ),
+            )
+            raise
         log.warning(
             "anchor_load_failed",
             path=str(candidate),
@@ -307,7 +349,10 @@ def load_best_model_resilient(
             log.info("anchor_recovered_from_bak", path=str(bak))
             return ref
 
-    # 3. Repo-level bootstrap candidates.
+    # 3. Repo-level bootstrap candidates — FOREIGN files (v6-family by
+    # construction): an encoding mismatch here is by design for any non-v6
+    # variant, so skip instead of raising (red-team R3b; the raise is for
+    # the same-lineage best/.bak tiers above).
     for rel in _BOOTSTRAP_ANCHOR_CANDIDATES:
         cand = Path(rel)
         ref = _try_load_anchor(
@@ -315,6 +360,7 @@ def load_best_model_resilient(
             checkpoint_dir=checkpoint_dir,
             device=device,
             fallback_config=fallback_cfg,
+            skip_encoding_mismatch=True,
         )
         if ref is not None:
             log.info("anchor_loaded_from_bootstrap", path=str(cand))

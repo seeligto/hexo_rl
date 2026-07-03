@@ -64,6 +64,29 @@ eval_pipeline:
       # only after independently validating the new bootstrap ≥ v7full WR
       # vs SealBot.
       path: checkpoints/bootstrap_model_v7full.pt
+      # §D-EVALGATE — WARNING: any `encoding:` key added HERE inherits into
+      # EVERY variant via deep-merge (hexo_rl/utils/config.py _deep_merge —
+      # variants that override only `path` keep the base `encoding`).
+      #
+      # Optional key `encoding: <name>` — the anchor's OWN declared encoding,
+      # an ASSERTION against the anchor checkpoint's stamp (reconciled by
+      # hexo_rl.eval.checkpoint_loader.load_model_with_encoding via
+      # eval_pipeline._load_anchor_model / opponent_runners._run_bootstrap_anchor).
+      # NEVER compared against the candidate's encoding (F07 semantics
+      # unchanged — the anchor may legitimately differ from the candidate).
+      # DELIBERATELY unset in this base file: because of the deep merge, a
+      # static value here would silently apply to every variant that repoints
+      # `path` to a DIFFERENTLY-shaped checkpoint (v6_live2 / v6tp / v6_p5ctl
+      # anchors exist) without repointing `encoding`, turning a benign path
+      # swap into a hard crash. Declare `path` AND `encoding` together in the
+      # SAME block (base or variant).
+      # With NO `encoding:` declared anywhere, the loader runs with
+      # require_encoding_source=True: the anchor checkpoint's OWN stamp
+      # (metadata['encoding_name'] / config['encoding'] / raw['encoding'])
+      # must exist and wins; an UNSTAMPED, undeclared anchor now fails loudly
+      # at first anchor load instead of silently shape-sniffing (currently-
+      # shipped bootstrap_model_*.pt files are unstamped bare state_dicts —
+      # stamp the anchor or declare its encoding in the variant block).
     # §P6 — Hammerhead minimax+NNUE second ladder opponent (eval-only, vendored
     # at vendor/bots/hammerhead).  A LOWER rung than SealBot: reads whether the
     # SealBot WR ceiling is a GENERAL strength plateau (NNUE WR >> SealBot WR)

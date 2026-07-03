@@ -122,7 +122,11 @@ def _resolve_checkpoint_encoding(
     # loaded against minimal configs.
     if in_memory_config is None:
         in_memory_config = {}
-    explicit_encoding = isinstance(in_memory_config.get("encoding"), dict)
+    # D-FORENSIC F1: the string form `encoding: "v6_live2_ls"` is the
+    # CANONICAL §172 A4.5 spelling — a dict-only check here treated every
+    # canonical variant as "unspecified" and let filename/shape inference
+    # win silently (d1m self-played single-window for 272k+ steps on this).
+    explicit_encoding = in_memory_config.get("encoding") is not None
     explicit_pins: Dict[str, Any] = {}
     for key in ("board_size", "cluster_window_size", "cluster_threshold"):
         if in_memory_config.get(key) is not None:
@@ -381,6 +385,29 @@ def load_checkpoint(
             )
 
     if registry_spec_from_meta is not None:
+        # D-FORENSIC F1: the metadata stamp must NOT silently override an
+        # EXPLICIT in-memory declaration. A stale stamp self-perpetuates —
+        # save_checkpoint re-stamps it from the loaded config, so one wrong
+        # resolution survives every later resume. Disagreement with a
+        # declared encoding raises, mirroring _resolve_checkpoint_encoding;
+        # configs with no `encoding` key keep the §171 P3 / §172 A4.3
+        # behavior (metadata wins). Sanctioned encoding change = weights-only
+        # strip + re-stamp of metadata['encoding_name'].
+        if in_memory_view.get("encoding") is not None:
+            declared_spec = registry_resolve_config(in_memory_view)
+            if declared_spec.name != registry_spec_from_meta.name:
+                raise ValueError(
+                    f"Encoding version disagrees: in-memory "
+                    f"config['encoding']={declared_spec.name!r} vs "
+                    f"checkpoint {checkpoint_path!s} "
+                    f"metadata['encoding_name']="
+                    f"{registry_spec_from_meta.name!r}. The checkpoint "
+                    "stamp would silently re-route self-play plane "
+                    "geometry away from the declared encoding. Re-stamp "
+                    "the checkpoint (weights-only strip + "
+                    "metadata['encoding_name']) or fix the variant; "
+                    "refusing to silently override either direction."
+                )
         # Cycle 3 Wave 8 Batch C (FF.10): legacy WireFormatSpec bridge
         # retired; propagation reads board_size / cluster_* /
         # legal_move_radius directly off the registry record.

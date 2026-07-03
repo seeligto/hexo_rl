@@ -37,6 +37,8 @@ from hexo_rl.model.network import HexTacToeNet
 
 def _load_anchor_model(
     path: Path, device: torch.device,
+    declared_encoding: Any | None = None,
+    require_encoding_source: bool = False,
 ) -> tuple[HexTacToeNet, EncodingSpec, str]:
     """Load a frozen anchor checkpoint for eval-only play.
 
@@ -52,8 +54,23 @@ def _load_anchor_model(
     across encoding migrations — but the caller MUST log the label so
     silent drift is observable. See ``project_171_p2_complete`` for the
     cross-encoding caveat semantics.
+
+    D-EVALGATE fix wave (red-team HOLE 3): this call site used to be fully
+    ungated (bare ``load_model_with_encoding(path, device)``), feeding
+    ``wr_bootstrap_anchor`` which AND-combines into the LIVE promotion
+    boolean (``gating.bootstrap_floor``). ``declared_encoding`` is the
+    ANCHOR's own declared-vs-stamp assertion — F07 semantics are unchanged:
+    this NEVER compares the anchor against the candidate's encoding, only
+    the anchor's declaration against the anchor's OWN stamp (the anchor may
+    legitimately differ from the candidate). ``require_encoding_source``
+    lets the caller refuse an unstamped, undeclared anchor outright instead
+    of silently falling through to shape/filename inference.
     """
-    return load_model_with_encoding(path, device)
+    return load_model_with_encoding(
+        path, device,
+        declared_encoding=declared_encoding,
+        require_encoding_source=require_encoding_source,
+    )
 
 try:
     import structlog

@@ -178,7 +178,7 @@ def _build_field(
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    _state, cfg = load_state_and_config(knobs_from)
+    _state, cfg, _raw = load_state_and_config(knobs_from)
     if not cfg:
         raise ValueError(f"{knobs_from} carries no embedded config; pass a full training ckpt.")
     knobs = extract_deploy_knobs(cfg)

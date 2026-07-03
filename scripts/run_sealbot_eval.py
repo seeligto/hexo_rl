@@ -193,16 +193,24 @@ def _eval_one_checkpoint(
     opponent_kind: str = "sealbot",
     opponent_time_ms: int = 500,
     encoding_override: str | None = None,
+    expect_encoding: str | None = None,
     defender: str = "auto",
 ) -> dict:
     """Load checkpoint, run n_games vs the selected ladder opponent, return
     result dict. ``opponent_kind`` ∈ {sealbot, nnue}."""
-    model, spec, encoding_label = load_model_with_encoding(ckpt_path, device)
-    if encoding_override:
-        # v6_live2_ls is state-dict-identical to v6_live2 → auto-detection returns
-        # the arch family (v6_live2, single-window). Override to the trained
-        # action-space so the inference dispatcher builds the no-drop KClusterMCTSBot
-        # (else single-window play DROPS off-window legal moves and mis-routes it).
+    # D-EVALGATE fix wave: encoding_override is a deliberate DECODE-TIME cross-decode
+    # (threaded as decode_override — loud log on stamp disagreement, never raises;
+    # v6_live2 vs v6_live2_ls are state-dict-shape-identical so shape inference alone
+    # cannot tell them apart, and this is the documented runbook escape hatch).
+    # expect_encoding is the ASSERTION form (declared_encoding — raises on stamp
+    # disagreement), for a verdict read that must be pinned to a known encoding.
+    # The two are mutually exclusive (enforced by the loader / CLI parser below).
+    model, spec, encoding_label = load_model_with_encoding(
+        ckpt_path, device,
+        declared_encoding=expect_encoding,
+        decode_override=encoding_override,
+    )
+    if encoding_override or expect_encoding:
         from hexo_rl.encoding import lookup as _lookup
         from hexo_rl.encoding import normalize_encoding_name as _norm
         encoding_label = encoding_override
@@ -398,12 +406,20 @@ def main() -> int:
                              "'auto' (default) lets build_inference_method pick. "
                              "mcts-N only.")
     parser.add_argument("--encoding", default=None,
-                        help="Override the checkpoint's auto-detected encoding. "
-                             "REQUIRED for v6_live2_ls: it is state-dict-identical to "
-                             "v6_live2, so detection returns 'v6_live2' (single-window) "
-                             "and play would DROP off-window legal moves. Pass "
-                             "'v6_live2_ls' to route the no-drop KClusterMCTSBot "
-                             "(--inference mcts-N only; legal-set argmax is not wired).")
+                        help="DECODE-TIME cross-decode override (loud, never raises on "
+                             "a disagreeing stamp) for the checkpoint's auto-detected/"
+                             "stamped encoding. REQUIRED for v6_live2_ls: it is "
+                             "state-dict-identical to v6_live2, so detection returns "
+                             "'v6_live2' (single-window) and play would DROP off-window "
+                             "legal moves. Pass 'v6_live2_ls' to route the no-drop "
+                             "KClusterMCTSBot (--inference mcts-N only; legal-set argmax "
+                             "is not wired). Mutually exclusive with --expect-encoding.")
+    parser.add_argument("--expect-encoding", default=None,
+                        help="ASSERTION that the checkpoint IS this encoding — raises if "
+                             "it disagrees with the checkpoint's own stamp. Use this (not "
+                             "--encoding) when the eval result must be pinned to a known "
+                             "encoding rather than force a cross-decode. Mutually "
+                             "exclusive with --encoding.")
     parser.add_argument("--c-puct", type=float, default=1.5,
                         help="MCTS PUCT exploration constant (only for mcts-N inference).")
     parser.add_argument("--max-moves", type=int, default=200)
@@ -438,6 +454,10 @@ def main() -> int:
     # ── Resolve inference method ──────────────────────────────────────────────
     if args.inference is not None and args.model_sims is not None:
         print("FATAL: --inference and --model-sims are mutually exclusive", file=sys.stderr)
+        return 1
+    if args.encoding and args.expect_encoding:
+        print("FATAL: --encoding and --expect-encoding are mutually exclusive "
+              "(decode-time override vs stamp assertion)", file=sys.stderr)
         return 1
     if args.model_sims is not None:
         inference = _model_sims_to_inference(args.model_sims)
@@ -484,7 +504,8 @@ def main() -> int:
                 args.seed_base, args.random_opening_plies, args.temperature,
                 args.c_puct, args.max_moves, args.policy_only_bias, device,
                 args.opponent, args.opponent_time_ms,
-                encoding_override=args.encoding, defender=args.defender,
+                encoding_override=args.encoding, expect_encoding=args.expect_encoding,
+                defender=args.defender,
             )
         except RuntimeError as e:
             print(f"FATAL: {e}", file=sys.stderr)
@@ -530,7 +551,8 @@ def main() -> int:
                 args.seed_base, args.random_opening_plies, args.temperature,
                 args.c_puct, args.max_moves, args.policy_only_bias, device,
                 args.opponent, args.opponent_time_ms,
-                encoding_override=args.encoding, defender=args.defender,
+                encoding_override=args.encoding, expect_encoding=args.expect_encoding,
+                defender=args.defender,
             )
         except (RuntimeError, NotImplementedError) as e:
             print(f"[eval] ERROR on {ckpt_path.name}: {e}", file=sys.stderr)
