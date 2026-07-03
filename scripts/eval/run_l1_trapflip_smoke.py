@@ -222,6 +222,11 @@ def main() -> None:
     ap.add_argument("--encoding", default="v6_live2_ls",
                     help="MUST be v6_live2_ls — the .pt auto-detects as v6_live2 (policy_pool none); "
                          "pass the _ls form to resolve the trained multi-window action space")
+    ap.add_argument("--expect-encoding", default=None,
+                    help="D-WS3V3 A1 gated read: ASSERT both checkpoints' OWN stamp equals this "
+                         "(raises on mismatch or unstamped ckpt) AND decode under it. Use "
+                         "--expect-encoding v6_live2_ls for all v3 arm/baseline reads — never "
+                         "bare --encoding (which decodes blind, stamp never consulted).")
     ap.add_argument("--trap-set", default=DEFAULT_TRAPS)
     ap.add_argument("--legal-set", dest="legal_set", action="store_true", default=True,
                     help="multi-window no-drop decode (the L1 regime; DEFAULT)")
@@ -235,6 +240,10 @@ def main() -> None:
     ap.add_argument("--out", default="reports/d_zvalid_z2/l1_trapflip")
     args = ap.parse_args()
 
+    if args.expect_encoding is not None:
+        # Assertion form implies the decode name too — one value, both roles.
+        args.encoding = args.expect_encoding
+
     device = torch.device(
         ("cuda" if torch.cuda.is_available() else "cpu") if args.device == "auto" else args.device)
     traps = [json.loads(l) for l in open(args.trap_set) if l.strip()]
@@ -243,8 +252,10 @@ def main() -> None:
     print(f"[l1] {len(traps)} held-out traps "
           f"({sum(t.get('in_window', True) for t in traps)} in-window), legal_set={args.legal_set}")
 
-    base_eng = _build_engine(args.baseline_ckpt, args.encoding, device)
-    cand_eng = _build_engine(args.candidate_ckpt, args.encoding, device)
+    base_eng = _build_engine(args.baseline_ckpt, args.encoding, device,
+                             expect_encoding=args.expect_encoding)
+    cand_eng = _build_engine(args.candidate_ckpt, args.encoding, device,
+                             expect_encoding=args.expect_encoding)
 
     base = flip_rates(base_eng, traps, args.encoding, args.legal_set)
     cand = flip_rates(cand_eng, traps, args.encoding, args.legal_set)
@@ -259,6 +270,14 @@ def main() -> None:
         "baseline_ckpt": args.baseline_ckpt,
         "candidate_ckpt": args.candidate_ckpt,
         "legal_set": args.legal_set,
+        # RED-TEAM (D-WS3V3 A1 amendment): record WHICH loader semantics produced
+        # this artifact — the original 12.9%/19.2% baselines didn't say, which is
+        # how the strip-vs-raw / gated-vs-blind ambiguity survived.
+        "encoding_decode": args.encoding,
+        "expect_encoding": args.expect_encoding,
+        "loader": ("gated: stamp asserted == expect_encoding" if args.expect_encoding
+                   else "blind decode under --encoding; ckpt stamp never consulted"),
+        "trap_set": args.trap_set,
         "thresholds": {"pass": args.pass_thr, "floor": args.floor_thr, "kill": args.kill_thr},
         "baseline_flip": base,
         "candidate_flip": cand,
