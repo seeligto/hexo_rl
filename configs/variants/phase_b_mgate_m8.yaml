@@ -1,0 +1,84 @@
+# configs/variants/phase_b_mgate_m8.yaml
+#
+# §D-LONGRUN-READY Phase B — m-gate discriminator Arm-m8.
+#
+# ONE variable vs phase_b_mgate_m16/m32: gumbel_m = 8 (deepest, fewest branches).
+# At fixed n=100, m=8 → 3 SH phases, fewer root candidates, more sims/candidate
+# → deeper search per candidate vs m=32. Tests whether depth advantage translates
+# to stronger per-step training targets → stronger model.
+#
+# Throughput flat at fixed n=100 across m-arms (m only reallocates the 100 sims;
+# pos/hr should be ~equal — confirm as part of the m-gate read).
+#
+# Launch from A2 bootstrap (v6_live2_ls arch, 8300-game corpus pretrain).
+# Run ~12k steps (3 eval checkpoints at 2500-step cadence); compare:
+#   (1) m8 vs m16 vs m32 strength head-to-head (distinct-game CI, round_robin)
+#   (2) each arm vs BANKED PUCT-15k (reports/p3_rr_agg/ — DO NOT re-run PUCT)
+#   (3) depth (avg tree depth) + value-regret per arm
+#   (4) pos/hr per arm (should be ~flat — flag if not)
+#
+# LAUNCH (vast, after A2 bootstrap is in place):
+#   rm -f checkpoints/best_model.pt{,.bak}
+#   python scripts/train.py \
+#     --checkpoint checkpoints/bootstrap_model_v6_live2_8300.pt \
+#     --variant phase_b_mgate_m8 --iterations 12000 \
+#     --checkpoint-dir checkpoints/phase_b_m8
+
+# ── encoding ─────────────────────────────────────────────────────────────────
+encoding: v6_live2_ls
+in_channels: 4
+
+# ── LR ───────────────────────────────────────────────────────────────────────
+lr: 2e-3
+eta_min: 5e-4
+aux_opp_reply_weight: 0.0
+
+# ── data freshness ───────────────────────────────────────────────────────────
+training_steps_per_game: 1.0
+
+# ── selfplay — ONE variable = gumbel_m ───────────────────────────────────────
+selfplay:
+  completed_q_values: true
+  n_workers: 32                     # vast Gumbel throughput optimum (24-thread host)
+  inference_batch_size: 64          # low dispatch latency (fills fast at 32w)
+  inference_max_wait_ms: 2.0        # low batching delay
+  leaf_batch_size: 8
+  random_opening_plies: 0
+  gumbel_mcts: true
+  gumbel_m: 8                       # <<< THE VARIABLE — deepest, fewest branches
+  gumbel_explore_moves: 10          # fixed across all m-arms
+  c_visit: 50.0                     # paper default (fixed across all m-arms)
+  c_scale: 1.0                      # paper default (fixed across all m-arms)
+  playout_cap:
+    full_search_prob: 0.5
+    n_sims_full: 100                 # FIXED n across all m-arms (m is the lever)
+    n_sims_quick: 100
+
+# ── mixing — 8300-game corpus ─────────────────────────────────────────────────
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+
+# ── eval — minimal in-run (strength read done standalone on laptop post-run) ──
+eval_interval: 2500
+eval_pipeline:
+  opponents:
+    best_checkpoint: { enabled: false }
+    sealbot:         { enabled: false }
+    random:          { enabled: true, stride: 1, n_games: 20 }
+    bootstrap_anchor: { enabled: false }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+  gating:
+    # FILL AFTER A2: sha256 of the new bootstrap_model_v6_live2_8300.pt
+    expected_anchor_sha256: "ebf2ed39fd64db525864aeade75972372da9418cc8179347afc8cecb60ba6db8"
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# ── monitors ─────────────────────────────────────────────────────────────────
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0
