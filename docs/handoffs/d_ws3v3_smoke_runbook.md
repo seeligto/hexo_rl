@@ -132,6 +132,66 @@ given the measurement).
 
 ---
 
+## 0.6 A1 INSTRUMENT RE-BASELINE (amendment, 2026-07-03) — VERDICT: MATCH
+
+D-EVALGATE's "intended drift" (the gated eval loader resolves the strip's stamp
+`v6_live2_ls` where the old shape/filename inference said `v6_live2`) forced a
+pre-registered re-baseline BEFORE any v3 arm read: arm-vs-baseline must not
+cross instruments.
+
+**RED-TEAM provenance record (the original record didn't say — now it does):**
+- The original 12.9% (4/31) / 19.2% (24/125) flip baselines were measured on the
+  **RAW full checkpoint** `reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt`
+  (stamp: stale `v6_live2`), NOT the strip — via
+  `gumbel_greedy_bot._build_engine` (blind `torch.load`, **stamp never
+  consulted**), decode forced by bare `--encoding v6_live2_ls` (the evaluator's
+  default), `legal_set=True`, deploy knobs g=0/m=16/n_sims=150 (deterministic).
+  Trap sets: `heldout_traps.jsonl` (31) / `heldout_traps_all.jsonl` (125).
+  Host: vast 5080. Decode geometry was therefore ALREADY `v6_live2_ls` — the
+  old-loader mislabel never touched the flip decode, only the label.
+- Strip `ws3v3_warmstart_200k.pt` weights verified **byte-identical** to the raw
+  200k `model_state` (2026-07-03, per-tensor `torch.equal` over the full dict).
+
+**A1 re-measure (laptop 4060, gated loader, `--expect-encoding v6_live2_ls`,
+strip as baseline ckpt, same sets/knobs/script):**
+
+| set | original (vast, old instrument) | A1 (laptop, gated) | pre-reg band | verdict |
+|---|---|---|---|---|
+| registered-31 | 4/31 = 12.9% | **3/31 = 9.7%** | count ∈ [2,6] | **MATCH** |
+| combined-125 | 24/125 = 19.2% | **22/125 = 17.6%** | count ∈ [19,29] | **MATCH** |
+
+Attribution discriminator (ran both instruments on the SAME host): old
+instrument (raw ckpt + bare `--encoding`) on the laptop = **byte-identical**
+3/31, 22/125 to the gated read → the instrument correction is a **no-op** on
+flip baselines; the residual −1/−2 flips vs vast are **host fp** (borderline
+argmax flips, scattered both directions per-trap: 3/31 resp. 5/125 traps
+changed class). Artifacts: `reports/d_ws3v3/a1_rebaseline_{31,125}/`,
+`a1_oldinstrument_local_{31,125}/` (summary JSON now records
+`encoding_decode`/`expect_encoding`/`loader`/`trap_set`).
+
+**Probe C1–C3 anchor numbers:** reproduce **byte-exact** through the gated
+loader — C1 +7.310 / C2 30% / C3 40%, C4 Δ=0.000 — PROVIDED the probe reads the
+`v6_live2` position fixture. On `_ls`-stamped ckpts (the strip and every v3 arm
+ckpt) the probe's implicit fixture fallback previously swapped SILENTLY to the
+default v6 fixture and manufactured C1 +10.97 / C2 45% / C3 75% (different
+position set, would have PASSed); the probe now hard-fails that fallback —
+**always pass `--positions tests/fixtures/threat_probe_positions_v6_live2.npz`
+on _ls-stamped ckpts** (valid: v6_live2/_ls are trunk- and shape-identical).
+
+**Consequences for §3/§4 reads (all pre-registered here, none moved silently):**
+1. Validity bands STAND as written ([2,6] / [19,29], C1≥5.848 / C2≥25% / C3≥40%).
+2. All flip reads use `--expect-encoding v6_live2_ls` (never bare `--encoding`)
+   and the **strip** as `--baseline-ckpt` (the raw 200k's stale stamp now
+   correctly RAISES under the assertion). First gated read of a vast-side arm
+   ckpt doubles as the loader's vast confirmation.
+3. **HOST-MATCH rule** (new, from the discriminator): the baseline an arm is
+   compared against must come from the SAME host as the arm read. Arm reads on
+   vast → re-run the strip self-baseline once on vast first (expect ≈4/31,
+   24/125; minutes). Arm reads on the laptop → the A1 numbers (3/31, 22/125)
+   are the operative baseline and the bands re-center on them ([1,5] / [17,27]).
+
+---
+
 ## 1. Vast preconditions
 
 ```bash
@@ -181,7 +241,10 @@ mv /workspace/hexo_rl/checkpoints/replay_buffer.bin \
 
 # (f) mint the ANCHOR threat-probe baseline (once; laptop already minted a CPU copy —
 #     re-run on vast if the GPU numbers should differ from the CPU-measured ones:
-#     contrast_mean +7.3095, top5 30%, top10 40%, n=20):
+#     contrast_mean +7.3095, top5 30%, top10 40%, n=20).
+#     A1 amendment 2026-07-03: VERIFIED byte-exact through the gated loader
+#     (raw ckpt stamp v6_live2 -> v6_live2 fixture auto-selected; C4 delta 0.000)
+#     — this mint command stands unchanged:
 .venv/bin/python scripts/probe_threat_logits.py \
     --checkpoint reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt \
     --write-baseline-to tests/fixtures/threat_probe_baseline_anchor200k.json
@@ -347,22 +410,42 @@ lift measured against a broken control is exactly v2's mistake repeated.
 ```bash
 # in-run LR check (§2) must read 1.0e-4 flat for the whole ARM-CONTROL run.
 
-# trap-flip, registered-31 + combined-125:
+# HOST-MATCH first (§0.6 rule): once per host, the strip self-baseline —
+# on vast expect ≈4/31 + 24/125 (paste actual counts into the run log; the §3
+# bands below re-center on whatever this prints):
 .venv/bin/python scripts/eval/run_l1_trapflip_smoke.py \
-    --baseline-ckpt reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt \
+    --baseline-ckpt checkpoints/ws3v3_warmstart_200k.pt \
+    --candidate-ckpt checkpoints/ws3v3_warmstart_200k.pt \
+    --expect-encoding v6_live2_ls --legal-set \
+    --out reports/d_ws3v3/hostbaseline_trapflip
+.venv/bin/python scripts/eval/run_l1_trapflip_smoke.py \
+    --baseline-ckpt checkpoints/ws3v3_warmstart_200k.pt \
+    --candidate-ckpt checkpoints/ws3v3_warmstart_200k.pt \
+    --expect-encoding v6_live2_ls --legal-set \
+    --trap-set reports/d_tactical_2026-06-26/heldout_traps_all.jsonl \
+    --out reports/d_ws3v3/hostbaseline_trapflip_combined
+
+# trap-flip, registered-31 + combined-125 (A1 amendment: --expect-encoding, NEVER
+# bare --encoding; baseline = the STRIP — the raw 200k's stale v6_live2 stamp
+# correctly RAISES under the assertion; strip weights byte-identical, §0.6):
+.venv/bin/python scripts/eval/run_l1_trapflip_smoke.py \
+    --baseline-ckpt checkpoints/ws3v3_warmstart_200k.pt \
     --candidate-ckpt checkpoints/ws3v3_control/checkpoint_00208000.pt \
-    --encoding v6_live2_ls --legal-set \
+    --expect-encoding v6_live2_ls --legal-set \
     --out reports/d_ws3v3/control_trapflip
 .venv/bin/python scripts/eval/run_l1_trapflip_smoke.py \
-    --baseline-ckpt reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt \
+    --baseline-ckpt checkpoints/ws3v3_warmstart_200k.pt \
     --candidate-ckpt checkpoints/ws3v3_control/checkpoint_00208000.pt \
-    --encoding v6_live2_ls --legal-set \
+    --expect-encoding v6_live2_ls --legal-set \
     --trap-set reports/d_tactical_2026-06-26/heldout_traps_all.jsonl \
     --out reports/d_ws3v3/control_trapflip_combined
 
-# threat-probe vs the ANCHOR baseline (NOT bootstrap — the v2 mistake):
+# threat-probe vs the ANCHOR baseline (NOT bootstrap — the v2 mistake).
+# --positions is REQUIRED on _ls-stamped ckpts (§0.6: the implicit fixture
+# fallback now hard-fails; the v6_live2 fixture is the valid shape-identical read):
 .venv/bin/python scripts/probe_threat_logits.py \
     --checkpoint checkpoints/ws3v3_control/checkpoint_00208000.pt \
+    --positions tests/fixtures/threat_probe_positions_v6_live2.npz \
     --baseline-json tests/fixtures/threat_probe_baseline_anchor200k.json
 ```
 
@@ -444,16 +527,18 @@ comes up.
 ```bash
 # registered-31 (pre-reg headline) + combined-125 (powered corroboration) —
 # run BOTH per arm, same pattern as §3 with each arm's own candidate ckpt:
+# A1 amendment: baseline = the STRIP (raw 200k's stale stamp RAISES under the
+# assertion; weights byte-identical), --expect-encoding NEVER bare --encoding:
 for ARM in inject seeded; do
   .venv/bin/python scripts/eval/run_l1_trapflip_smoke.py \
-      --baseline-ckpt reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt \
+      --baseline-ckpt checkpoints/ws3v3_warmstart_200k.pt \
       --candidate-ckpt checkpoints/ws3v3_${ARM}/checkpoint_00208000.pt \
-      --encoding v6_live2_ls --legal-set \
+      --expect-encoding v6_live2_ls --legal-set \
       --out reports/d_ws3v3/${ARM}_trapflip
   .venv/bin/python scripts/eval/run_l1_trapflip_smoke.py \
-      --baseline-ckpt reports/d_decide_2026-06-24/checkpoints/checkpoint_00200000.pt \
+      --baseline-ckpt checkpoints/ws3v3_warmstart_200k.pt \
       --candidate-ckpt checkpoints/ws3v3_${ARM}/checkpoint_00208000.pt \
-      --encoding v6_live2_ls --legal-set \
+      --expect-encoding v6_live2_ls --legal-set \
       --trap-set reports/d_tactical_2026-06-26/heldout_traps_all.jsonl \
       --out reports/d_ws3v3/${ARM}_trapflip_combined
 done
@@ -478,16 +563,18 @@ borderline regression is visible.
 #     REQUIRED (scripts/exploit_probe.py: `required=True`) — omitting it
 #     fails argparse before anything runs.
 .venv/bin/python scripts/exploit_probe.py --checkpoint checkpoints/ws3v3_${ARM}/checkpoint_00208000.pt \
-    --encoding v6_live2_ls --defender deploy --legal-set --adv-ref current \
+    --expect-encoding v6_live2_ls --defender deploy --legal-set --adv-ref current \
     --out reports/d_ws3v3/${ARM}_exploit_deploy
 
 # (b) ModelPlayer false-clear cross-check (arm-aliasing-immune):
 .venv/bin/python scripts/exploit_probe.py --checkpoint checkpoints/ws3v3_${ARM}/checkpoint_00208000.pt \
-    --encoding v6_live2_ls --defender modelplayer --adv-ref current \
+    --expect-encoding v6_live2_ls --defender modelplayer --adv-ref current \
     --out reports/d_ws3v3/${ARM}_exploit_modelplayer
 
-# (c) threat-probe C1-C3 vs the ANCHOR baseline (already run in §4-style loop):
+# (c) threat-probe C1-C3 vs the ANCHOR baseline (already run in §4-style loop).
+#     --positions REQUIRED on _ls-stamped arm ckpts (§0.6):
 .venv/bin/python scripts/probe_threat_logits.py --checkpoint checkpoints/ws3v3_${ARM}/checkpoint_00208000.pt \
+    --positions tests/fixtures/threat_probe_positions_v6_live2.npz \
     --baseline-json tests/fixtures/threat_probe_baseline_anchor200k.json
 ```
 
