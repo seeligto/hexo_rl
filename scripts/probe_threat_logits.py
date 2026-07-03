@@ -655,12 +655,26 @@ def main() -> None:
     args = parser.parse_args()
 
     # Auto-detect encoding from checkpoint when not explicitly supplied.
+    # D-EVALGATE remnant fix (D-WS3V3 A1): the ckpt's OWN stamp wins over
+    # shape/filename inference — detect_encoding_label is shape-only, so on a
+    # stamped ckpt (e.g. ws3v3_warmstart_200k.pt = v6_live2_ls) it returned the
+    # shape-identical arch family (v6_live2) and the load_model integrity check
+    # then crashed against the gated loader's stamp-resolved label. Mirror the
+    # loader's precedence here so probe auto-detect and load agree.
     if args.encoding is None:
-        from hexo_rl.eval.checkpoint_loader import detect_encoding_label
+        from hexo_rl.eval.checkpoint_loader import (
+            _resolve_ckpt_stamped_encoding,
+            detect_encoding_label,
+        )
         ckpt_raw = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-        state = ckpt_raw.get("model_state", ckpt_raw) if isinstance(ckpt_raw, dict) else ckpt_raw
-        args.encoding = detect_encoding_label(args.checkpoint, state)
-        print(f"[probe] auto-detected encoding: {args.encoding}")
+        stamp_name, stamp_source = _resolve_ckpt_stamped_encoding(ckpt_raw, args.checkpoint)
+        if stamp_name is not None:
+            args.encoding = stamp_name
+            print(f"[probe] encoding from checkpoint stamp: {args.encoding} ({stamp_source})")
+        else:
+            state = ckpt_raw.get("model_state", ckpt_raw) if isinstance(ckpt_raw, dict) else ckpt_raw
+            args.encoding = detect_encoding_label(args.checkpoint, state)
+            print(f"[probe] auto-detected encoding (unstamped ckpt, shape/filename): {args.encoding}")
 
     exit_code = 0
     try:
@@ -680,6 +694,29 @@ def main() -> None:
             enc_fixture = REPO_ROOT / "tests" / "fixtures" / f"threat_probe_positions_{args.encoding}.npz"
             if enc_fixture.exists():
                 fixture_path = enc_fixture
+            else:
+                # D-WS3V3 A1 guard: no encoding-specific fixture -> the default
+                # would be probed SILENTLY, and its position set/planes may not
+                # match this encoding (a v6_live2_ls ckpt on the default v6
+                # fixture manufactured C1 +10.97 vs the real +7.31 — different
+                # positions, not drift). Refuse the implicit fallback when the
+                # default's embedded encoding disagrees; an EXPLICIT --positions
+                # is the operator's escape (e.g. shape-identical family reads:
+                # v6_live2_ls ckpts probe --positions ..._v6_live2.npz).
+                _emb = np.load(str(fixture_path), allow_pickle=False)
+                _emb_enc = str(_emb.get("encoding", np.array(["v6"], dtype="U16"))[0])
+                if _emb_enc != args.encoding:
+                    print(
+                        f"ERROR: no fixture for encoding {args.encoding!r} "
+                        f"({enc_fixture.name} missing) and the default fixture is "
+                        f"{_emb_enc!r} — a silent cross-fixture probe is not comparable "
+                        "to any baseline. Pass --positions explicitly (shape-identical "
+                        "family reads are valid, e.g. v6_live2_ls ckpts on "
+                        "threat_probe_positions_v6_live2.npz) or generate the fixture: "
+                        f"python scripts/generate_threat_probe_fixtures.py --encoding {args.encoding}",
+                        file=sys.stderr,
+                    )
+                    sys.exit(2)
 
         if not fixture_path.exists():
             print(f"ERROR: positions file not found: {fixture_path}", file=sys.stderr)
