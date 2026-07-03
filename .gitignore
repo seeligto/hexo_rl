@@ -205,3 +205,8 @@ scripts/eval_gpool_bias.sh
 scripts/pretrain_gpool_bias.sh
 scripts/probe_tf32_channels_last.py
 scripts/migrations/2026_05_12_checkpoint_manifest.json
+
+# D-WS3V3 A0 (2026-07-03) — session scratch/data-export, never committed
+/scratchpad/
+/scratchpad_calib.py
+/exports/
