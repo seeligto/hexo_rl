@@ -39,6 +39,25 @@ _ALLOWLISTED_FILES: dict[str, str] = {
     "scripts/bench_v6w25_nn.py": "synthetic NN bench input (source-layout)",
     # `policies[:, 0]` — action-index 0 of a POLICY array, not a state plane.
     "scripts/probe_tf32_channels_last.py": "policy action index, not a state plane",
+    # D-VDERISK / D-FULLSPEC offline analysis scripts — closed-arc diagnostics
+    # over the FROZEN 4-plane v6_live2 buffer layout (planes 0/1 stones,
+    # 2/3 turn-phase); never on the live training/eval path. Whole-file
+    # allowlisted as a family; a new encoding never routes through these.
+    "scripts/dvderisk_closeout_indep_review.py": "offline v6_live2 4-plane diagnostic",
+    "scripts/dvderisk_closeout_probe.py": "offline v6_live2 4-plane diagnostic",
+    "scripts/dvderisk_e1_fullspec.py": "offline v6_live2 4-plane diagnostic",
+    "scripts/dvderisk_e1_redteam.py": "offline v6_live2 4-plane diagnostic",
+    "scripts/dvderisk_e1_review_indep.py": "offline v6_live2 4-plane diagnostic",
+    "scripts/dvderisk_e2_featablation.py": "offline threat-plane diagnostic (E2 fixture layout)",
+    "scripts/dvderisk_e2_indep_review.py": "offline threat-plane diagnostic (E2 fixture layout)",
+    "scripts/dvderisk_e2_redteam_verify.py": "offline threat-plane diagnostic (E2 fixture layout)",
+    "scripts/dvderisk_e2_reprobe.py": "offline threat-plane diagnostic (E2 fixture layout)",
+    "scripts/dvderisk_lighttrunk_probe.py": "offline v6_live2 4-plane diagnostic",
+    "scripts/dvderisk_lighttrunk_redteam.py": "offline v6_live2 4-plane diagnostic",
+    "scripts/dvderisk_lighttrunk_review_indep.py": "offline v6_live2 4-plane diagnostic",
+    # D-PFIT stage-0 reranker — `feat[:, 0/1]` are FEATURE columns of its own
+    # per-move feature matrix, not state planes.
+    "scripts/dpfit_stage0_rerank.py": "feature-matrix column index, not a state plane",
 }
 
 # Inline escape hatch for one-off justified lines outside an allowlisted file.

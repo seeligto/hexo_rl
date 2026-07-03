@@ -18,8 +18,10 @@ def test_offwindow_adversary_registered_default_off():
     from hexo_rl.eval.opponent_runners import OPPONENTS
     names = [spec.name for spec in OPPONENTS]
     assert "offwindow_adversary" in names
-    # appended last (no insert_match → existing BT row order preserved)
-    assert names[-1] == "offwindow_adversary"
+    # appended after the original BT rows (no insert_match → existing row order
+    # preserved). NOT pinned to LAST: deploy_strength (D-LOCALIZE P4, 4449a15)
+    # legitimately appended after it — pin the relative order instead.
+    assert names.index("offwindow_adversary") > names.index("nnue")
 
 
 def test_evaluator_exposes_exploitability_method():
