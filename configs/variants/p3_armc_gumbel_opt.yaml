@@ -1,0 +1,74 @@
+# configs/variants/p3_armc_gumbel_opt.yaml
+#
+# §D-GUMBELSIMS Phase 3 AFFORDABILITY test — optimized Gumbel arm vs the done
+# PUCT-18w-15k, at EQUAL GPU-HOURS. Tests whether the best cheap-Gumbel deployment
+# beats standard PUCT for the same cost (the project's affordability question).
+#
+# vs p3_armc_gumbel.yaml, this changes ONLY throughput + data-freshness levers that
+# do NOT change the search targets (so the per-position target is identical to the
+# matched arm; lf8 kept — lf16 would alter co-batching/targets):
+#   n_workers 18→32, inference_batch_size 128→64, inference_max_wait_ms 16→2
+#   (byte-identical to the targets; ~remove the latency-starvation that throttled the
+#    18w arm to 11% GPU / 22% fill — see reports/thr_opt/REPORT.md)
+#   training_steps_per_game 2.0→1.0 (the throughput surplus pays for FRESHER data:
+#    same trainer-bound step rate, but 2× more distinct games consumed per step).
+#
+# RUN: equal GPU-hours to PUCT-18w-15k (~9.6h wall-clock on vast). Launch with a high
+# --iterations cap and kill at the wall-clock match; compare the latest checkpoint to
+# the done checkpoints/p3_puct final via the same eval (H2H + coherence + SealBot).
+#
+# LAUNCH (vast):
+#   rm -f checkpoints/best_model.pt{,.bak} checkpoints/replay_buffer.bin
+#   python scripts/train.py --checkpoint checkpoints/bootstrap_model_v6_live2.pt \
+#     --variant p3_armc_gumbel_opt --iterations 80000 --checkpoint-dir checkpoints/p3_gumbel_opt
+
+encoding: v6_live2_ls
+in_channels: 4
+lr: 2e-3
+eta_min: 5e-4
+aux_opp_reply_weight: 0.0
+
+# fresher data — the throughput surplus's best use (operator §1:1)
+training_steps_per_game: 1.0
+
+selfplay:
+  completed_q_values: true
+  n_workers: 32                    # vast Gumbel throughput optimum (24 threads)
+  inference_batch_size: 64         # smaller batch → fills fast, low dispatch latency
+  inference_max_wait_ms: 2.0       # low batching delay (byte-identical to targets)
+  leaf_batch_size: 8               # KEPT at 8 — lf16 would change co-batching/targets
+  random_opening_plies: 0
+  gumbel_mcts: true
+  gumbel_m: 32
+  gumbel_explore_moves: 10
+  c_visit: 50.0
+  c_scale: 1.0
+  playout_cap:
+    full_search_prob: 0.5
+    n_sims_full: 100
+    n_sims_quick: 100
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+
+eval_interval: 2500
+eval_pipeline:
+  opponents:
+    best_checkpoint: { enabled: false }
+    sealbot:         { enabled: false }
+    random:          { enabled: true, stride: 1, n_games: 20 }
+    bootstrap_anchor: { enabled: false }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+  gating:
+    expected_anchor_sha256: "4198d5cbd2fc0ce77ad2e3d86e32311ee40c53c926f135c52ea3749816b0a186"
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0
