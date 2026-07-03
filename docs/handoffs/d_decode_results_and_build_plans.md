@@ -52,6 +52,28 @@ the candidate selector.
 - MW single-move block rate is 0.24 on diverse forcing positions (vs 0.6 on the earlier already-won set) — the
   gate rests on SW=0-structural + MW>0, both confirmed; MW's full-game defense is 0.0 (prevention + block).
 
+### CORRECTION — 2026-07-02, §D-FORENSIC F1 (lineage encoding forensic)
+
+**G0 is FALSIFIED for the exact checkpoint this document used** (`checkpoint_00272357.pt`): the
+d1m lineage self-played **single-window `v6_live2` from step 0 through ≥272,357** — the variant's
+declared `v6_live2_ls` was silently overridden at load (string-form `encoding:` treated as
+unspecified → filename inference on the bootstrap; then self-perpetuated via the checkpoint's
+`metadata['encoding_name']` stamp). Artifact-grade evidence: production run-logs
+(`checkpoint_encoding_resolved=v6_live2` at every launch/resume), `torch.load` on six lineage
+checkpoints, and game replay (2/48,512 ≈ 0.004% off-window moves vs 1.97% in a genuine
+multi-window comparator run). G0's own trace hardcoded `ENC="v6_live2_ls"` and never read the
+checkpoint's stamp. Full report: `reports/investigations/f1_lineage_encoding_forensic_2026-07-02.md`.
+
+Status of this document's claims under the correction:
+- **Position-level 0/50-vs-12/50 (the gate-carrying result): SURVIVES** — it is structural
+  (no logit slot → no block) and does not depend on what the net self-played.
+- **G0 row above: WRONG** — the net was NOT trained to search/value off-window; multi-window
+  deploy does NOT "align to training". It surfaces moves the net never generated in self-play.
+- **WR 0.50 "no in-window regression": now MORE surprising** (multi-window deploy on a
+  single-window-trained net holds WR) — re-verify before any load-bearing use.
+- The graft-A requirement ("self-play decode MUST match deploy decode") is unchanged and now
+  has a 272k-step existence proof of the failure mode it guards against.
+
 ### Bug fixed (committed with this work)
 `exploit_probe` **arm-aliasing**: `OffWindowAdversaryBot._is_off()` classified against the *current* board
 centroid (post model-move) while the probe used the `model_last_snapshot` centroid — a centroid-shifting defender

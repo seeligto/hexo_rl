@@ -563,6 +563,7 @@ Do not re-litigate. Each row points at the § that closed it.
 | §S185 | The residual ~44% `legal_moves_set` self-time is `cells.contains_key`-dominated (the §S184 post-mortem's interim inference) | §S185 laptop flamegraph | `FxHashSet::insert` 56.8% vs `contains_key` 27.7% — insert is dominant. δ's failure was a fix-design error, not a contains_key mechanism. |
 | §S186 | Strategy β: incremental `legal_cov` delta maintenance amortizes below the once-per-leaf rebuild | §S186 vast + laptop bench | −49.5% sims/s. The delta runs once per descent *step* (`apply_move` ×depth + `undo_move` ×2·depth), not once per leaf — de-amortized to ~3× the rebuild's work, on the hot path. The residual `legal_moves_set` cost is a structural floor; see the "Perf-investigation arc" appendix. |
 | §D-LADDER (2026-06-24) | The d1m 150k+ stall is a colony-attractor / off-window divergence (self-play-strong-but-SealBot-weak mid cluster) | §D-LADDER fixed-depth-SealBot reproduction | The "SealBot exploits the 150k mid cluster" trajectory FLIPPED between a wall-clock time-limited bar (s150k WR 0.35) and a reproducible fixed-depth-5 bar (s150k 0.55) → a SealBot-instance artifact, NOT a model off-window defect. The single-axis model⊥minimax intransitivity is itself real + reproducible (transitive-null P≈0.003→0.004, 8/9 cycles SealBot-routed) but its specific shape is bar-dependent. Endpoint verdict = TRUE-STALL (deploy-matched Gumbel@150 self-ladder 120k→226k flat; brief s200k peak not held). |
+| §D-STRIX S3 (2026-07-02) | Custom CUDA kernel (hexo-strix/Vladdy pattern) would speed HeXO forward path | §D-STRIX S3 verdict, RED-TEAM confirmed | Their kernel solves GNN variable-size ragged batching — a problem HeXO's dense CNN+attention does not have. K-cluster multi-window batching varies batch COUNT, not tensor SHAPE (fixed-geometry windows `torch.cat`'d on batch dim; `hexo_rl/selfplay/inference.py`) — the standard variable-N case cuDNN/flash already handles. If forward-throughput ever binds: torch.compile → smaller net → quantized eval, in that order. |
 
 
 ### Consolidated Falsified-Register additions (relocated from split-out phase bodies)
@@ -2399,6 +2400,12 @@ Brought four parallel-session outputs to `master` via the `phase4.5/gumbelprep` 
 
 **Process note (banked):** an early read had a doubled-denominator WR bug (WR(A,B)+WR(B,A)=0.5) that inverted the apparent self-ladder; caught by the independent re-derivation. And the n=20 screen's "colony-attractor" point-estimate story was over-claimed → corrected to TRUE-STALL by the pre-registered CI gate + adversarial red-team, then the fixed-depth de-risk falsified the mechanism. Pre-registration before the run + fresh re-derivation + adversarial bar-swap each caught a distinct error.
 
+**CORRECTION — 2026-07-02 (§D-FORENSIC F1):** the entire d1m lineage self-played **single-window
+`v6_live2`** (declared `v6_live2_ls` silently overridden at load; see §D-FORENSIC). TRUE-STALL
+stands as measured, but it characterizes the **single-window self-play regime only** — 120k→226k
+flat is a statement about a net that never generated an off-window move in training. It does NOT
+bound what multi-window self-play (first ever run in the §D-WS3 v3 arms) can reach.
+
 ---
 
 ## §D-LOCALIZE — gap-localization (VALUE-TARGET) + deploy-matched in-loop eval + search-scaling launch — 2026-06-25
@@ -2624,6 +2631,13 @@ not just this workstream's own resume) is an open question that needs a
 dedicated audit, not a fix folded into this one. Evidence pointer for that
 audit: `checkpoint_encoding_resolved` events across the lineage's run logs +
 each checkpoint's baked `config['encoding']`/`config['cluster_window_size']`.
+**→ RESOLVED 2026-07-02 (§D-FORENSIC F1): CASCADE-CONFIRMED, full lineage,
+from step 0** — worse than flagged: the override fired at the initial fresh
+launch (string-form `encoding:` bug), not through resume cascades. One
+consequence for the v3 verdict read: the control arm is itself absorbing a
+FIRST-EVER multi-window self-play distribution shift (the 200k warm-start
+never generated an off-window move) — control-vs-anchor drift ≠ candidate
+damage. See §D-FORENSIC below.
 
 **FIX2 (MAJOR — seed fire-density expectation).** Red-team measured that seed
 landing positions at cuts k∈{0,2,4} (before the trap PARENT) prove NO forced
@@ -2695,3 +2709,214 @@ the pre2=1028k HIGH outlier vs the documented §180 vast median 1007k (range
 994k–1.01M), and post medians hold 77–86% headroom over the 525k target. JSONs:
 `reports/benchmarks/20260702_ws3v3_{pre,post,post2}.json` + `2026-07-02_13-38.json`
 (pre2), archived locally. Vast tree restored to pre-gate state after the runs.
+
+---
+
+## §D-FORENSIC — lineage encoding audit (F1) + solver budget-escalation diagnostic (F2) — 2026-07-02
+
+**Dispatcher (CPU-cheap, parallel to the v3 smoke).** F1 resolved the G0-vs-anchor-config
+contradiction flagged as §D-WS3's open forensic question; F2 tested the ONE knob the 0/40
+native-provable finding hadn't (solver budget) — a BUDGET-BOUND result would have revived
+ARM-SEEDED's injection half pre-launch. Both ran read-only/CPU on the laptop while the smoke
+stayed operator-gated. Reports: `reports/investigations/f1_lineage_encoding_forensic_2026-07-02.md`,
+`reports/investigations/f2_solver_budget_escalation_2026-07-02.md` (both with review addenda).
+
+### F1 VERDICT = CASCADE-CONFIRMED — full lineage, from step 0 (worse than pre-registered)
+
+d1m (`longrun_v6_live2_ls_gumbel_m16`) self-played **single-window `v6_live2` for its entire
+history (step 0 → ≥272,357)** despite every variant declaring multi-window `v6_live2_ls`.
+NOT a resume-cascade: the override fired at the initial fresh launch (2026-06-21).
+**Root cause (E0-independent, two stacked holes):** (1) `_resolve_checkpoint_encoding`
+(`trainer_ckpt_load.py:125`) treated the CANONICAL string form `encoding: v6_live2_ls` as
+"unspecified" (dict-only isinstance) → filename/shape inference resolved the bootstrap
+(`bootstrap_model_v6_live2_8300.pt`, no `_ls` substring; v6_live2/v6_live2_ls are
+state-dict-shape-IDENTICAL) to single-window; (2) `save_checkpoint` restamped the wrong
+resolution into `metadata['encoding_name']`, and the §172 A4.3 metadata-preference branch never
+compared against the declared encoding → self-perpetuation through every resume. `encoding` was
+checkpoint-owned both before AND after the E0 fix (`fe34e3f`, 2026-06-26) — E0 provably
+irrelevant. **Evidence artifact-grade** (independently re-derived by fresh review, zero
+discrepancies): production run-logs (`checkpoint_encoding_resolved=v6_live2` at 12:57/13:01
+launch + 19:54 94k-resume), torch.load on 6 lineage ckpts (all stamped v6_live2), game replay
+via `to_flat>=362` sentinel (d1m 2/48,512 ≈ 0.004% off-window vs positive-control `longrun_c3`
+61/3,094 = 1.97%).
+
+**Fixes LANDED (TDD, review SHIP-AFTER-FIXES → fixes applied same day):**
+- `trainer_ckpt_load.py`: string-form `encoding:` now counts as explicit; NEW hard gate —
+  `metadata['encoding_name']` disagreeing with an explicitly declared config encoding RAISES
+  (mirrors `_resolve_checkpoint_encoding`; restores the documented §171 P3 "refuse to silently
+  override" intent that the metadata stamp had bypassed). No-declaration configs keep
+  metadata-wins backward-compat. Sanctioned encoding change = weights-only strip + re-stamp
+  (the v3 warm-start path, unaffected).
+- `anchor.py`: encoding mismatch on an anchor candidate emits dedicated ERROR
+  `anchor_encoding_mismatch` + RAISES. Review BLOCKER caught the first version (return-None
+  routed a VALID best_model.pt into quarantine-rename + silent fresh-init overwrite —
+  reproduced end-to-end); fixed + pinned by integration test
+  `test_resilient_load_encoding_mismatch_never_quarantines`.
+- `orchestrator.py`: `train_encoding_resolved` now stamped `source="variant_declared_pre_checkpoint"`
+  (it fires PRE-load; reading it as ground truth mis-routed the v2 forensic for a week —
+  post-load truth is `checkpoint_encoding_resolved`).
+- Regression tests pin both real failure shapes (weights-only generic-filename bootstrap; full
+  ckpt with baked config + metadata stamp, string+dict declared forms). Targeted sweep
+  537 passed / 0 failed; tests/training 117 passed.
+
+**Lineage corrections applied:** D-DECODE G0 ("net was trained multi-window; deploy aligns to
+training") FALSIFIED — correction block in `docs/handoffs/d_decode_results_and_build_plans.md`
+(G0's trace hardcoded `ENC=v6_live2_ls`, never read the ckpt stamp). The position-level
+0/50-vs-12/50 action-space result SURVIVES (structural). §D-LADDER TRUE-STALL re-scoped:
+characterizes the single-window regime only. §D-WS3 v3: the control arm absorbs a FIRST-EVER
+multi-window self-play distribution shift — control-vs-anchor drift ≠ candidate damage (noted
+at the § itself).
+
+**OPEN (F1 follow-ups):** (1) `hexo_rl/eval/checkpoint_loader.py` + `opponent_runners.py` are a
+SEPARATE unfixed encoding-inference path (same ambiguity class, feeds SealBot eval /
+exploit_probe / promotion-eval) — needs the same declared-vs-resolved gate; (2) the D-DECODE
+full-game defense 0.0 + WR 0.50 results are MORE surprising under CASCADE-CONFIRMED (multi-window
+deploy of a single-window-trained net) — re-verify before load-bearing use; (3) the 2/48,512
+anomalous off-window hits are code-plausibly the legal-set escape valve (radius-5 ball independent
+of window recentring) but the two plies were not position-verified.
+
+### F2 VERDICT = ALGORITHM-BOUND — budget escalation buys ZERO conversions; injection half stays dead
+
+Same 40-position fixture as the 0/40 (durably stored, hard-asserted, baseline reproduced
+node-exact at 1×): **0/40 proven at 20k, 200k, 1M, AND 3M nodes** (all budget-exhausted; Wilson
+[0, 0.088] at every tier). SealBot node cost MEASURED on the same positions via its own `_nodes`
+counter: **median 11,054 at d8** (mean 2.04M, p95 16.3M — a band, not a point; 3M = 271× median,
+≥ full d8 cost for 34/40). Native proves 0/40 at 271× the median SealBot spend → budget is not
+the constraint. R3 LOSS-guard confirmed active at all tiers (`search.rs:253-270` + recall-verify).
+Component inventory vs premise: 729-eval/scored-α-β/PVS+LMR/aged-TT all LANDED; **quiescence tail
+DOES NOT EXIST**; eval-ordering tie-break unwired; net-policy ordering INERT by default.
+
+**Localization (5 positions SealBot proves in 3–2,054 nodes):** the line is dropped at
+**candidate-generation** — late-game roots have 347–408 legal moves, the widened candidate set
+(178–201 cells) is truncated to cand_cap=40, and on `s150k_g241_p96` SealBot's principal defender
+reply is NOT in the post-truncate set. Walking SealBot's own mating PV, native is budget-exhausted
+UNKNOWN at every quiet interior ply and only proves the in-check mate-in-1-turn tail. The WIN-side
+(OR-node, injection-facing, needs ONE line, no recall) is STILL unprovable at 1M → not just the
+LOSS-frame recall cost. Cost arithmetic: sound LOSS certification compounds ~legal_move_count per
+defender turn (mate-3 ≈ 5.8e6 lower bound, mate-5 ≈ 8e11) — 37/40 fixture positions are mate≥3,
+structurally beyond any affordable tier. SealBot wins by an unsound-in-principle reduced movegen +
+quiescence + eval ordering that happens to be right here.
+
+**Consequences:** ARM-SEEDED's injection half does NOT revive (pre-registered fold into v3
+declined; SEED-STARVED default stands, mechanism now localized). Post-smoke lever = native
+RECALL work (quiet-move candidate-gen under real ordering + quiescence tail + eval-tie-break
+wiring, possibly an unsound-but-tagged fast path for seeding/labeling kept OUT of sound z-label
+channels) — consistent with §D-TACTICAL and D-SOLVER A2; not budget, not GPU.
+
+**Process note (banked, matches [[workflow-agent-may-background-heavy-compute]]):** the F2 agent
+died on a session limit while its detached 3M workers ran; its report pre-filled the 3M row with
+PROJECTED wall stats 30 min before the data existed. Verdict-bearing numbers verified correct
+against the real JSON post-completion; projected wall stats corrected (report provenance note).
+Always diff a background-worker report's numbers against the artifacts it cites.
+
+**Both probes' purpose served:** the GPU-week's verdict-reading frame is now fixed BEFORE it's
+bought — v3's control arm carries the multi-window-shift caveat, and a SEEDED-arm null on
+injection can't be mistaken for "budget was too low."
+
+**RED-TEAM (distinct, adversarial — both verdicts STAND, strengthened):**
+- F1 attack backfired into STRONGER evidence: the Dense/single-window path sorts off-window
+  cells at prior 0.0 and truncates at `MAX_CHILDREN_PER_NODE=192` (`mcts/mod.rs:46`) — all 61
+  positive-control (c3) off-window hits sat at in-window-avail 199–259 (> cap, escape-valve
+  MATHEMATICALLY impossible → genuine multi-window decode), while d1m's 2 hits sat at 190/182
+  (just under cap — textbook escape-valve). The two anomalous plies are now position-verified
+  (F1 OPEN item 3 CLOSED). Honest residual: game-replay ground truth only exists for the
+  ~120k/~200k eras; steps 0→94k rest on the config/log chain (correctly labeled in the report).
+- F2: unit-mismatch attack bounded out (both node counters tick once per recursive search call);
+  WIN-side gap closed LIVE at 3M (still unprovable, 237s); **cand_cap=200 (5× width) × 200k/1M
+  probed on the localized positions: 0/6** — ALGORITHM-BOUND is not an artifact of holding
+  candidate width fixed. Affordability arithmetic reproduces exactly (the "~10-20% throughput
+  hit" headline is UNVERIFIED-not-refuted, non-load-bearing).
+- Fix regression CAUGHT + FIXED (R3b): the anchor raise initially also fired on the hardcoded
+  v6-family `_BOOTSTRAP_ANCHOR_CANDIDATES` fallback tier — a fresh non-v6 launch on a host with
+  `bootstrap_model_v6.pt` present (and no best_model.pt yet) hard-crashed where it should skip →
+  fresh-init. Fixed: raise scoped to the same-lineage best/.bak tiers; foreign bootstrap
+  candidates skip with `anchor_encoding_mismatch_skipped` (warning); pinned by
+  `test_resilient_load_foreign_bootstrap_mismatch_skips_not_raises`. 118 tests green.
+- STILL-LIVE gaps (restated): ~12/61 variants declare no `encoding:` → metadata-wins compat
+  branch leaves them as cascade-exposed as before (the recommended pre-flight hard gate is
+  unbuilt); `hexo_rl/eval/checkpoint_loader.py` has NO gate at all (confirmed, not partial) on
+  the eval/promotion path.
+
+## §D-STRIX — comparative audit vs hexo-strix + landscape read (read-only, parallel to v3) — 2026-07-02
+
+Dispatcher: S1 economics diff ∥ S4 play-UI spec → S2 portability (gated on S1) → S3 kernel verdict
+(no work) → REVIEW (fresh) → RED-TEAM (distinct). Deliverables (each carries appended `## REVIEW`
++ `## RED-TEAM` sections): `docs/handoffs/d_strix_s1_economics_diff.md`,
+`d_strix_s2_portability.md`, `d_strix_s4_play_ui_spec.md`, `d_strix_dispatcher_report.md`.
+hexo-strix clone was sandbox-only (scratchpad), read-only, nothing vendored.
+
+**Headline: the "days-from-0" premise EVAPORATED as a verified claim.** Their repo
+(github.com/SootyOwl/hexo-strix @ 1b8ae4d, 17 commits, ~2h-old history) is a code+config-only
+export — zero committed run logs, eval results, checkpoints, or throughput numbers; their own
+config comments show a mixed record (`jk-long: collapsed at S3`, layerscale "regressed, loss
++20%"); the one positive ("beats sealbot 5s") is an unquantified code comment. Days-to-parity
+formally NOT comparable anyway (their SealBot gate is time-limited/machine-speed-dependent vs our
+fixed-depth-5 probe). Iteration-efficiency gap = config-implied, unconfirmed either direction.
+Cheapest re-test: ask author to run their own `hexo-a0 eval-sealbot` and share output.
+
+**Recipe diff (all MEASURED):** 222,146 vs 4,254,283 params (19.1×; production count confirmed
+by instantiation — the pre-briefed "2.9M" matches an older smaller-trunk config res10/f112, NOT
+aux heads); self-play sims 128 vs 400 (3×); 5-stage win-length+radius curriculum vs none; 2 vs 8
+loss heads; buffer 250K vs 500K–1M; train==deploy Gumbel vs our PUCT-train/Gumbel-deploy.
+
+**Portability verdicts (post REVIEW + RED-TEAM):**
+- Radius curriculum: PORTABLE→**TESTABLE-CHEAP** (red-team downgrade). Radius scheduling already
+  wired + live (`legal_move_radius_schedule`, vast.yaml lineage ran past its 50k transition) but
+  no diagnostic ever isolated the transition's effect; §167 v7full argmax eval shows WR RISING
+  with radius (6.5→15%) — open tension with small-early; L9 jitter protection unverified for
+  radius-driven narrowing; vast.yaml's 5→8 endpoints are 25×25-calibrated, must re-derive for
+  19×19 (v6_live2_golong precedent). win_length axis OUT (hardcoded Rust const, bench-gated).
+  Spec in S2 doc; single-variable arm only, composes post-v3, never bundled with solver/seeding.
+- Tiny net: TESTABLE-CHEAP, SURVIVES red-team. 2×2 width×aux-heads economics probe spec in S2
+  doc; precondition added: verify launch anchor single-window-clean (F1) before comparing arms.
+- Axis-graph line-topology input: NOTE-ONLY banked representation card (restart-gated; adjacent
+  to D-FULLSPEC ENTANGLED_R but frozen-trunk context does not formally falsify from-scratch).
+- No-window simplicity: confirmation of already-actioned F1/D-DECODE work.
+- Train==deploy search: NOTE-ONLY; §D-GUMBELSIMS stands at GUMBEL-SIMS-NULL/affordability-PARITY
+  (REVIEW corrected S2's stale 15k cite); open lever = matched-total-sim (m,n) sweep.
+- Custom kernel: REJECT, banked to falsified register (row above) — GNN ragged-batching problem
+  we don't have; K-cluster varies batch COUNT not tensor SHAPE.
+
+**Play-UI (S4):** hero.did.science = DNS-dead; real site hexo.did.science is multiplayer-only, no
+checkpoint plug-in hook → NOT zero-build. Full `hexo-play/` separate-repo spec delivered (FastAPI
++ JS hex board, compound-turn click-click-confirm, DeployHeadBot + SolverBackupBot via existing
+eval path, SQLite log). Red-team: `/viewer` (09_VIEWER_SPEC, complete 2026-04-03) already covers
+play-vs-model locally; hexo-play's real deltas are persistence + public deploy; realistic effort
+1.5–2 days with admin/upload scope, ~1 day without. Operator picks.
+
+**Pre-registration scored:** curriculum-as-big-driver WEAKENED (no verified outcome on either
+side); tiny-net probe CONFIRMED worth specing; axis-graph banked as predicted; kernel REJECT as
+predicted; landscape-panic-unwarranted HELD and STRENGTHENED (their verified record is thinner
+than briefed).
+
+**CORRECTION 2026-07-03 (§D-EVALGATE G2):** the line above previously read "...small-sample
+caveat applies to operator's own wins over their bot too, n undocumented" — VOID. No head-to-head
+vs hexo-strix (or its bot) exists at all; strength ordering vs hexo-strix = UNKNOWN in both
+directions, not an undocumented-n result.
+
+## §D-EVALGATE — eval-side encoding-inference gate (G1) + record corrections (G2) + head-to-head protocol (G3) — 2026-07-03
+
+**Why:** F1 proved the zero-gate encoding-inference class burned the d1m lineage; trainer-side landed, but the SAME class was open on the eval side (`checkpoint_loader.py` + call sites) — the exact instruments (SealBot eval, exploit_probe, promotion-eval) about to read the v3 arms. Gate required BEFORE any v3 verdict read.
+
+**G1 build (2 waves: impl → fresh review BLOCK + red-team → fix wave).**
+Core design — TWO semantics, split after review proved the naive trainer-port broke the sanctioned D-DECODE workflow:
+- `declared_encoding` = assertion "ckpt IS X" → mismatch vs any stamp RAISES (`DeclaredEncodingMismatchError`). d1m shape pinned: stamped `v6_live2` + declared `v6_live2_ls` → raise.
+- `decode_override` (new) = deliberate decode-time cross-decode (D-DECODE lever: same net, multi-window decode) → ALWAYS wins, NEVER silent: structured `encoding_decode_override` warning naming ckpt_stamp + decode_as. Both kwargs together → ValueError.
+- Stamp resolution: 3 sources reconciled (metadata['encoding_name'] → config['encoding'] → top-level raw['encoding'] — the last was a priority-1 gate BYPASS pre-fix); internal stamp disagreement → raise (corrupt ckpt). Stamp authoritative over filename/shape sniff (sniff = last resort only). Malformed values raise symmetrically.
+- Wired: exploit_probe + run_sealbot_eval (`--encoding`→decode_override, NEW `--expect-encoding`→assertion for v3 reads), round_robin `_CachedModelBot` (+`expect_encoding`), **promotion-floor anchor loader** `eval_pipeline._load_anchor_model` (red-team CRITICAL: fed `wr_bootstrap_anchor` which AND-combines into the live promotion boolean, default-enabled — was fully ungated; now config-declared→assert, else `require_encoding_source=True`), run_a1_solver_backup + run_z2_standalone_ladder (decode_override; Z2 dead labels now emitted as `decode_label`), gumbel_greedy_bot (hand-rolled silent resolver replaced with shared gated helpers).
+- Deep-merge trap AVOIDED (helper-agent find): `configs/eval.yaml` deep-merges into variants → a base anchor `encoding:` key would inherit into ~15 path-only-override variants = crash regression. Base deliberately carries NO encoding key (warning comment added); regression test pins it.
+- Tests: `tests/test_checkpoint_loader_encoding_gate.py` 32/32; eval sweep 155 passed/6 skipped + 119 passed/9 skipped consumer supplement; 1 pre-existing unrelated failure (offwindow OPPONENTS order) reproduces on stash.
+
+**Acceptance (byte-identical baselines through gated loaders): HOLDS where it must.** Empirical old-vs-new resolution on local ckpts: both v2 flip-baseline ckpts (`reports/vast_ws3_v2/runs/{ws3_ctrl,ws3_z2_l1}/checkpoint_00208000.pt`) SAME (`v6_live2`); 16/17 red-team-sampled ckpts SAME. ONE intended drift: `checkpoints/ws3v3_warmstart_200k.pt` old=`v6_live2` new=`v6_live2_ls` (multi_window true) — this is the deliberately re-stamped LS warm-start the OLD eval loader was mislabeling (F1's exact bug class); drift = the correction working, documented in the module docstring (naive "byte-for-byte" claim deleted).
+
+**GATE STATUS: v3 ON-arm reads may proceed** through `--expect-encoding v6_live2_ls` on exploit_probe/run_sealbot_eval (assertion raises on any mis-stamped arm ckpt). Recommended: v3 runbook reads use `--expect-encoding`, not bare `--encoding`.
+
+**Operational flags (operator):**
+1. Local `bootstrap_model_*.pt` anchors are unstamped bare state_dicts + `bootstrap_anchor.enabled: true` is the eval.yaml default → next floor-enabled run hard-fails at anchor load (intended loud-fail). Fix BEFORE next vast promotion run: per-variant `opponents.bootstrap_anchor.encoding:` key, or stamped COPIES (do NOT mutate SHA-pinned originals — `bootstrap_model_v6.pt` SHA is pinned in CLAUDE.md §S178).
+2. Re-run ws3v3 arm instruments against vast-side `ws3v3_arm_*` ckpts with `--expect-encoding v6_live2_ls` to confirm clean pass (ckpts not local).
+
+**Residuals (open, non-gating):** 12/61 no-encoding-variant preflight not enforced at variant level (mechanism `require_encoding_source` now live at anchor loader only); non-anchor candidate-side pipeline loads + sniff-default paths (round_robin/sealbot with no flags) still sniff when unstamped; `viewer/model_loader.py` + `bots/our_model_bot.py` = different class (pure shape inference, no name resolution — viewer will render `v6_live2_ls` ckpts as v6 until fixed).
+
+**G2 (record corrections, propagated):** beats-claim VOID — no head-to-head vs hexo-strix ("tyto-bot" = hexo-strix, SootyOwl's bot; no literal "tyto" in repo) exists either direction; CORRECTION notes added in d_strix_dispatcher_report, d_strix_s1_economics_diff, §D-STRIX above, memory. Param count (4.25M) + URL facts (hero.did.science DNS-dead / hexo.did.science multiplayer-only) verified ALREADY correct everywhere — no edits needed.
+
+**G3:** `docs/handoffs/d_strix_head_to_head_protocol.md` — pre-registered match protocol (n=40, 20/side strict alternation, distinct openings mandatory per §D-ARGMAX effective-n, deduped-bootstrap CI, disconnects excluded-and-logged) + artifact-ask template + claim-scope pinned BEFORE play: site cannot enforce compute → default reading = "deployment beats deployment", net-strength claim only if disclosed budgets match; 25-75% WR = INDETERMINATE (not parity). Operator executes socially.
