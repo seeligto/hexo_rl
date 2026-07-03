@@ -1,0 +1,71 @@
+# D-TEMPSTRENGTH — CONTROL arm (constant τ=0.5, schedule OFF).
+#
+# The STRENGTH re-test of within-game temp decay (D-TEMPDECAY judged value-head
+# CALIBRATION → TEMP-NEGATIVE; the operator's real hypothesis is sharper late
+# play → STRONGER model, which the Phase-3 smoke skipped by disabling eval).
+#
+# IDENTICAL to tempdecay_smoke_control EXCEPT:
+#   - checkpoint_interval: 5000  → persists checkpoints at the 5k/10k/15k rungs
+#     for the POST-HOC head-to-head round_robin (a20 vs control vs golong@50k anchor).
+#     No max_checkpoints_kept → no pruning (checkpoints.py:235).
+#   - target 15k steps (--iterations 15000), vs the smoke's 10k.
+#
+# Head-to-head is POST-HOC: each arm trains eval-OFF (no sealbot/nnue build deps);
+# both arms' rung checkpoints + the golong anchor are dropped into one archive dir
+# and scored by scripts/eval_round_robin.py (all-pairs, distinct-games CI, post-980bc4d).
+# Both arms read at eval temp 0.0 + opening-plies jitter → measures the TRAINED model;
+# training-temp is the only delta. Pre-reg + gates: the D-TEMPSTRENGTH dispatcher.
+#
+# Launch:
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/golong_bank/checkpoint_00050000_PEAK_sb0.38.pt \
+#     --variant tempstrength_control --checkpoint-dir checkpoints_tstr_control \
+#     --run-name tstr_control --iterations 15000 --no-web-dashboard
+encoding: v6_live2
+in_channels: 4
+
+aux_opp_reply_weight: 0.0            # CF-5 (match golong)
+
+selfplay:
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  random_opening_plies: 0
+  playout_cap:
+    temperature_threshold_compound_moves: 0     # schedule OFF (control)
+    temp_min: 0.5
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"   # decay_steps 200k inherits base
+  # Per-arm buffer ISOLATION (project_buffer_persist_guard_bypass): distinct path
+  # per arm so arm2 (step>0) cannot auto-load arm1's persisted buffer.
+  buffer_persist_path: "checkpoints_tstr_control/replay_buffer.bin"
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+# Checkpoint at the eval rungs (5k/10k/15k) for the post-hoc head-to-head.
+checkpoint_interval: 5000
+
+# Eval OFF in-run (head-to-head is post-hoc round_robin; avoids slow arenas +
+# sealbot/nnue build deps). drift reference (arm vs anchor) folds into the same
+# all-pairs round_robin.
+eval_interval: 999999
+eval_pipeline:
+  opponents:
+    best_checkpoint: { enabled: false }
+    sealbot:         { enabled: false }
+    bootstrap_anchor:{ enabled: false }
+    random:          { enabled: false }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+
+# In-run draw safety gate (CARRIED from smoke): recent-window draw rate >= 0.30
+# for 3 consecutive eval points → halt arm, bank, report.
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.30
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0

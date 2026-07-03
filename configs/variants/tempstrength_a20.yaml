@@ -1,0 +1,56 @@
+# D-TEMPSTRENGTH — TREATMENT arm a20 (quarter-cosine floor 0.20).
+#
+# The STRENGTH re-test of the Phase-2 probe's draw-safe floor pick (probe draw
+# 0.020 < control 0.048, best opening diversity). quarter-cosine τ=1.0 (cm=0) →
+# floor 0.20 by threshold=12 compound-turns.
+#
+# IDENTICAL to tempstrength_control EXCEPT the within-game temperature
+# (temperature_threshold_compound_moves 12 / temp_min 0.20). Same base
+# (golong@50k PEAK), same mixing (0.8 corpus / 0.1 selfplay), same 15k horizon,
+# same checkpoint rungs → training-temp is the ONLY delta (red-team #4).
+#
+# Launch:
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/golong_bank/checkpoint_00050000_PEAK_sb0.38.pt \
+#     --variant tempstrength_a20 --checkpoint-dir checkpoints_tstr_a20 \
+#     --run-name tstr_a20 --iterations 15000 --no-web-dashboard
+encoding: v6_live2
+in_channels: 4
+
+aux_opp_reply_weight: 0.0
+
+selfplay:
+  completed_q_values: true
+  n_workers: 18
+  inference_batch_size: 128
+  inference_max_wait_ms: 16.0
+  random_opening_plies: 0
+  playout_cap:
+    temperature_threshold_compound_moves: 12    # quarter-cosine ON
+    temp_min: 0.20                              # probe-winning aggressive floor
+
+mixing:
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+  buffer_persist_path: "checkpoints_tstr_a20/replay_buffer.bin"
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+checkpoint_interval: 5000
+
+eval_interval: 999999
+eval_pipeline:
+  opponents:
+    best_checkpoint: { enabled: false }
+    sealbot:         { enabled: false }
+    bootstrap_anchor:{ enabled: false }
+    random:          { enabled: false }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  hard_abort_draw_rate: 0.30
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0
