@@ -130,6 +130,7 @@ eval_pipeline:
       model_sims: 128
       opponent_sims: 128
       path: "<auto>"            # resolves to checkpoints/bootstrap_model_v6w25.pt
+      encoding: v6w25   # §D-EVALGATE: anchor's OWN encoding — assertion vs its stamp (unstamped anchor otherwise hard-fails when enabled); declare path+encoding in the SAME block
     sealbot:
       n_games: 20               # smoke threshold (stride:1 inherited from base)
     argmax_n:

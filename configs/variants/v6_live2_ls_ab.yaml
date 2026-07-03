@@ -103,6 +103,7 @@ eval_pipeline:
       model_sims: 128
       opponent_sims: 128
       path: "checkpoints/bootstrap_model_v6_live2.pt"
+      encoding: v6_live2   # §D-EVALGATE: anchor's OWN encoding — assertion vs its stamp (unstamped anchor otherwise hard-fails when enabled); declare path+encoding in the SAME block
     nnue:
       # §D-LOOPFIX W1: stride 4→2 — the §P6 strength-ladder read lands IN-RUN at
       # rounds 2,4 (was stride 4 → a single terminal-only read).

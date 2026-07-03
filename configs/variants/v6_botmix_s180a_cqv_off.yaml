@@ -138,6 +138,7 @@ eval_pipeline:
   opponents:
     bootstrap_anchor:
       path: "checkpoints/bootstrap_model_v6.pt"  # explicit; NOT bootstrap_model.pt (random init)
+      encoding: v6   # §D-EVALGATE: anchor's OWN encoding — assertion vs its stamp (unstamped anchor otherwise hard-fails when enabled); declare path+encoding in the SAME block
     sealbot:
       enabled: true
     randombot:

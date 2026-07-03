@@ -79,7 +79,7 @@ eval_pipeline:
     best_checkpoint: { enabled: true,  stride: 1, n_games: 200, model_sims: 64, opponent_sims: 64 }
     sealbot:         { enabled: true,  stride: 1, n_games: 100 }
     random:          { enabled: true,  stride: 1, n_games: 20  }
-    bootstrap_anchor: { enabled: true, stride: 4, n_games: 50, model_sims: 64, opponent_sims: 64, path: checkpoints/bootstrap_model_v6_live2_8300.pt }
+    bootstrap_anchor: { enabled: true, stride: 4, n_games: 50, model_sims: 64, opponent_sims: 64, path: checkpoints/bootstrap_model_v6_live2_8300.pt, encoding: v6_live2 }  # §D-EVALGATE: anchor's OWN declared encoding (assertion vs stamp; unstamped .pt otherwise hard-fails when enabled)
     nnue:            { enabled: false }
     offwindow_adversary: { enabled: false }
   gating:

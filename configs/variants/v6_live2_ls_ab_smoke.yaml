@@ -71,6 +71,7 @@ eval_pipeline:
       model_sims: 128
       opponent_sims: 128
       path: "checkpoints/bootstrap_model_v6_live2.pt"
+      encoding: v6_live2   # §D-EVALGATE: anchor's OWN encoding — assertion vs its stamp (unstamped anchor otherwise hard-fails when enabled); declare path+encoding in the SAME block
     nnue:
       enabled: true
       stride: 2             # fires at round_idx 2 (step 400) in-run

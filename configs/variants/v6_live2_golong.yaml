@@ -134,6 +134,7 @@ eval_pipeline:
       # >50% and bootstrap_floor (0.45) is a harmless sanity gate — the SealBot-WR
       # gate is the real colony-capture catcher (plan PHASE 1).
       path: "checkpoints/bootstrap_model_v6_live2.pt"
+      encoding: v6_live2   # §D-EVALGATE: anchor's OWN encoding — assertion vs its stamp (unstamped anchor otherwise hard-fails when enabled); declare path+encoding in the SAME block
     nnue:
       # §P6 Hammerhead 2nd ladder — PERIODIC general-strength read (plan PHASE 2).
       # REQUIRES hammerhead built on the run host (maturin develop --release in

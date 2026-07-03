@@ -73,6 +73,7 @@ eval_pipeline:
       # Self-anchor: same encoding (10-plane) so the model loads. Measures
       # drift from the v6tp pretrain, not a cross-encoding comparison.
       path: "checkpoints/bootstrap_model_v6tp.pt"
+      encoding: v6tp   # §D-EVALGATE: anchor's OWN encoding — assertion vs its stamp (unstamped anchor otherwise hard-fails when enabled); declare path+encoding in the SAME block
     sealbot:
       enabled: true
     randombot:
