@@ -1,0 +1,203 @@
+# ── D-RUN2 — first multi-window production run, FRESH FROM BOOTSTRAP ─────────
+#
+# DESIGN doc (read first, has the full reasoning for every key below):
+#   docs/designs/d_run2_multiwindow_run_spec.md
+#
+# STATUS: DESIGN ONLY — do NOT launch off this file until the D-WS3V3 v3 smoke
+# (docs/handoffs/d_ws3v3_smoke_runbook.md) has reported its verdict AND the
+# operator has completed the §10 launch checklist (anchor/corpus preflight,
+# bench-gate, registry audit, HOST-MATCH baseline mint).
+#
+# PREMISE (design doc §0): the entire d1m lineage self-played SINGLE-WINDOW its
+# whole life (a string-form `encoding:` bug + checkpoint-metadata self-
+# perpetuation silently downgraded every declared v6_live2_ls launch to plain
+# v6_live2). This run is the FIRST-EVER multi-window self-play from step 0.
+# There is no clean control; d1m comparisons are CONTEXT ONLY, never evidence
+# (design doc §8).
+#
+# encoding: v6_live2_ls mirrors v6_live2's 4-plane wire shape ([0,8,16,17],
+# 362-logit head) — v6_live2 weights/corpus load with NO reshape. The only
+# difference is is_multi_window=true + cluster_threshold=5 + k_max=8 +
+# policy_pool=legal_set_scatter_max (the ragged legal-set fix, engine/src/
+# encoding/registry.toml:325-348; design: docs/designs/
+# dmulticluster_362_legalset_design.md §9).
+#
+# LAUNCH (real entrypoint — NOT `-m hexo_rl.training.run`). --checkpoint MUST
+# point at the MINTED re-stamped weights-only artifact (design doc §10 step 3a)
+# — NOT at bootstrap_model_v6_live2_8300.pt directly: the raw bootstrap is an
+# unstamped bare state_dict whose filename disambiguation resolves 'v6_live2'
+# (filename lacks '_ls'), which hard-fails the explicit-encoding mismatch check
+# (trainer_ckpt_load.py:148-156) against this file's `encoding: v6_live2_ls`.
+# No CLI override exists. The minted artifact carries metadata['encoding_name']
+# ='v6_live2_ls' (wire signature (4,19,362,True,"size_19") unchanged — weights
+# load no-reshape) and step=0 (absolute-step schedules below key off it):
+#   .venv/bin/python scripts/train.py \
+#     --checkpoint checkpoints/run2_bootstrap_v6_live2_ls.pt \
+#     --variant run2_mw_fresh \
+#     --iterations 1000000 \
+#     2>&1 | tee logs/run2_mw_fresh.log
+# --iterations 1000000 is MANDATORY alongside total_steps below — a mismatch
+# silently mis-anneals the cosine LR schedule (D-1M audit C2 lesson).
+encoding: v6_live2_ls
+in_channels: 4
+lr: 2e-3
+eta_min: 5e-4
+aux_opp_reply_weight: 0.0
+training_steps_per_game: 1.0
+total_steps: 1000000        # CosineAnnealingLR T_max (trainer.py). Matches the D-1M
+                            # production-run precedent for this encoding. MUST launch
+                            # with --iterations 1000000 (see header).
+min_buffer_size: 25000      # POSITIONS. Real self-play prefill gate before the first
+                            # training step (step_coordinator.py:736). Base default 256
+                            # is NOT a real gate — inheriting it reproduces the v2
+                            # cold-buffer confound (training began on ~0 real self-play
+                            # positions; docs/handoffs/d_ws3v3_smoke_runbook.md §0 V0b).
+                            # Design doc §5's 5k/25k buffer-health gate reads this value.
+
+selfplay:
+  completed_q_values: true
+  # n_workers=24 (NOT 32): operator-measured on the 5080+9900X host — 32
+  # oversubscribes under any per-move solver CPU cost (load ~29). =nproc.
+  # Kept at 24 even with the solver OFF so the worker-pool sizing does not
+  # change if/when Decision 3 (below) flips solver_enabled mid-run.
+  n_workers: 24
+  inference_batch_size: 64
+  inference_max_wait_ms: 2.0
+  leaf_batch_size: 8
+  random_opening_plies: 0
+  gumbel_mcts: true
+  gumbel_m: 16
+  gumbel_explore_moves: 10
+  c_visit: 50.0
+  c_scale: 1.0
+  playout_cap:
+    full_search_prob: 1.0   # every position a valid Gumbel policy target (D-1M audit GB-2 fix)
+    n_sims_full: 150
+    n_sims_quick: 150
+
+  # ── Decision 2 (design doc §2) — radius curriculum, staged via the
+  # SCHEDULE mechanism, NOT legal_move_radius_jitter. Design-doc §1.6 found
+  # legal_move_radius_jitter is DEAD CODE for any registry-spec encoding
+  # (which today means every encoding, including plain v6) — the jitter
+  # guard at engine/src/game_runner/worker_loop/inner.rs:630 requires
+  # worker_registry_spec.is_none(), which is never true once encoding_name
+  # is passed (always, post the §172/§173 registry migration). Do NOT add
+  # legal_move_radius_jitter: true here — it would be a no-op that
+  # misleadingly implies per-game diversity this run does not have.
+  # override_legal_move_radius (core.rs:313-322, "works WITH encoding") is
+  # what actually fires; legal_move_radius_schedule (read by
+  # hexo_rl/training/step_coordinator.py:_resolve_radius) drives it.
+  # Endpoints re-derived for v6_live2_ls's 19x19 window (cluster_window_size
+  # =19, half=9): radius<=8 (LEGAL_MOVE_RADIUS official rule ceiling) fits
+  # comfortably. Draw-collapse + colony canary watched 3 evals post each
+  # transition (design doc §2 Decision 2, §5).
+  legal_move_radius_schedule:
+    - {step: 0,      radius: 4}
+    - {step: 200000, radius: 5}
+    - {step: 400000, radius: 6}
+    - {step: 600000, radius: 8}
+
+  # ── Decision 3 (design doc §2/§7) — solver-in-loop + trap-corpus seeding.
+  # LAUNCH DEFAULT = OFF. Flips to true ONLY if the D-WS3V3 v3 smoke verdict
+  # is GENERALIZES (docs/handoffs/d_ws3v3_smoke_runbook.md §6 verdict table).
+  # Do NOT flip these on THIN-STILL (needs one escalation first per the
+  # runbook), MEMORIZES, KILL, or INDETERMINATE.
+  solver_enabled: false
+  solver_depth: 16            # PLIES (~2x mate-distance-in-turns); matches v3 smoke
+  # node_budget=20000 (NOT the stale z2_solver_in_loop_full.yaml's 50000):
+  # operator-measured 2026-07-01 — no-win moves exhaust the budget at BOTH
+  # depth 10 and 16, so budget (not depth) is the throughput lever; corpus
+  # wins (<=8-ply) prove well under 20k, recall-safe, ~2.5x faster.
+  solver_node_budget: 20000
+  solver_neighbor_dist: 2     # quiet-move widening for recall (A2 trap class)
+  # PLACEHOLDER — the 0.3->0.15 softening in z2_solver_in_loop.yaml is
+  # FALSIFIED (a solver-OFF control under the same confounded regime
+  # reproduced the identical KILL signature; weight itself never shown
+  # guilty, docs/handoffs/d_ws3v3_smoke_runbook.md §0). Overwrite this value
+  # with whatever the v3 smoke's GENERALIZES arm actually validates
+  # (ARM-INJECT/ARM-SEEDED test 0.5; THIN-STILL escalates to 1.0) BEFORE
+  # activating solver_enabled — do not launch Decision 3 with 0.5 by
+  # silent inheritance from this placeholder.
+  solver_visit_weight: 0.5
+  seed_fraction: 0.0                # Decision 3 — 0.0 at launch; set per the
+  seed_corpus_path: null            # winning smoke arm only on GENERALIZES.
+  forced_win_policy_enabled: false  # solver supersedes O1 when active (single-variable)
+
+mcts:
+  # Documentation no-op on the Gumbel branch (engine/src/game_runner/
+  # worker_loop/inner.rs:889-892 — Dirichlet on the Gumbel root was DELETED
+  # at the engine level, commit f4413d6; this flag is only read by the PUCT
+  # `else` arm, which this run never takes with gumbel_mcts:true). Kept
+  # explicit for grep-ability / hygiene parity with every other v6_live2_ls
+  # variant. See design doc §2 Decision 1.
+  dirichlet_enabled: false
+
+mixing:
+  # DELIBERATE REUSE of the v6_live2 corpus (design doc §2 Decision 7 —
+  # operator-owned call). Provenance is CLEAN (built from static human game
+  # records via export_corpus_npz.py, NOT self-play — F1-cascade-exempt by
+  # construction), but its policy targets were encoded under off-window-DROP
+  # semantics (zero mass on exactly the moves this run stops dropping) — a
+  # conscious, documented confound if reused (design doc §1.1/§8). The
+  # registry's canonical _ls corpus (data/bootstrap_corpus_v6_live2_ls.npz,
+  # resolvers.py _CORPUS_PATHS) does NOT exist yet, and export_corpus_npz.py's
+  # --encoding choices do not include v6_live2_ls — regeneration needs that
+  # wiring first (design doc §2 Decision 7 RECOMMENDS doing it pre-launch).
+  # NOTE: "<auto>" here would resolve to the nonexistent _ls path and fail —
+  # the explicit v6_live2 path is the reuse decision made visible.
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"  # loads no-reshape into v6_live2_ls
+  # Restated-for-visibility ONLY — all three values below are IDENTICAL to
+  # configs/training.yaml base defaults (§1.4 canonical mixing schedule).
+  initial_pretrained_weight: 0.8
+  min_pretrained_weight: 0.1
+  decay_steps: 200000
+
+# Real eval trigger (loop.py reads THIS root key, not eval.yaml's — D-1M
+# audit F1). Aligned to the design doc §5 "milestone" cadence.
+eval_interval: 25000
+eval_pipeline:
+  opponents:
+    best_checkpoint: { enabled: true,  stride: 1, n_games: 200, model_sims: 64, opponent_sims: 64 }
+    sealbot:         { enabled: true,  stride: 1, n_games: 100 }
+    random:          { enabled: true,  stride: 1, n_games: 20  }
+    # Anchor's OWN declared encoding (D-EVALGATE deep-merge trap, design doc
+    # §1.2) — never the candidate's. bootstrap_model_v6_live2_8300.pt is
+    # itself v6_live2-stamped (single-window shape, shared wire signature).
+    bootstrap_anchor: { enabled: true, stride: 4, n_games: 50, model_sims: 64, opponent_sims: 64, path: checkpoints/bootstrap_model_v6_live2_8300.pt, encoding: v6_live2 }
+    nnue:            { enabled: false }
+    offwindow_adversary: { enabled: false }
+    # BUNDLE item (design doc §3.3) — pinned ON from step 0, unlike every
+    # prior v6_live2_ls variant (which only got a deploy-matched read via an
+    # ad-hoc mid-investigation harness, D-DECIDE A2). Reads the SAME
+    # (gumbel_m, n_sims_full, c_visit, c_scale) this run trains under — no
+    # silent proxy-regime substitution (D-LOCALIZE "triple miss" lesson).
+    # All other deploy_strength.* keys left at configs/eval.yaml base
+    # defaults (screen_n:80, confirm_n:200, sealbot_max_depth:5, n_boot:1000,
+    # min_distinct_per_pair:10).
+    deploy_strength:
+      enabled: true
+  gating:
+    # Fresh-launch incumbent pin (D-LOOPFIX W2) — asserts best_model.pt
+    # resolves to the intended bootstrap anchor at launch. MUST be
+    # cleared/repointed on any resume after the first promotion (it will
+    # legitimately hard-fail otherwise — see design doc §4).
+    expected_anchor_sha256: "ebf2ed39fd64db525864aeade75972372da9418cc8179347afc8cecb60ba6db8"
+    promotion_winrate: 0.55
+    require_ci_above_half: true
+    bootstrap_floor:
+      enabled: false   # diagnostic-only wr_bootstrap_anchor; matches D-1M precedent (audit PGL-2)
+
+telemetry:
+  emit_outcome_distribution: true
+  emit_value_pred_at_ply_cap: true
+
+monitors:
+  hard_abort_grad_norm: 10.0
+  # Draw-collapse hard abort (L9 class) — design doc §6 KILL condition.
+  # DELIBERATE per-variant ARM: base configs/monitors.yaml:25 ships this
+  # DEFAULT-OFF (0.0) and expects the operator to arm it per run variant
+  # (its own comment names v6_live2_golong as the precedent). 0.55/3 matches
+  # every armed v6_live2_ls production variant.
+  hard_abort_draw_rate: 0.55
+  hard_abort_draw_rate_consec: 3
+  hard_abort_draw_rate_min_step: 0
