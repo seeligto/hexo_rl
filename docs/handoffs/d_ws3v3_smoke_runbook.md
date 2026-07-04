@@ -476,22 +476,33 @@ script's own output already demotes it ("collateral proxy — C1–C3 is the aut
 normal-play canary"). This is an instrument-frame correction, not a recalibration-to-pass
 (L12): the ≤0.16 bar is RETAINED where it is well-posed — the §6 ON-vs-CONTROL differential.
 
-Separately, off-window flips GREW with exposure (1/6 @2k → 4/6 @8k; 0/9 → 5/9 combined) —
-mechanism-matched to the v6_live2 mixing corpus's off-window-DROP semantics at live
-w_pre ≈ 0.283 (28% of every batch teaching zero off-window mass on an _ls net). All three
-arm variants now mix the same-provenance `_ls` regeneration
-(`data/bootstrap_corpus_v6_live2_ls.npz`, sha `3813edc2…345c97`, Decision 7 of the run2 spec).
+**v3.1-CORRECTED (2026-07-05, operator-approved).** The paragraph that stood here claimed
+"off-window flips GREW with exposure … mechanism-matched to the corpus's off-window-DROP
+semantics" and ordered an `_ls`-corpus swap. That was a **SIGN ERROR on the instrument**
+(CLAUDE.md "verify the measurement unit" class): in `run_l1_trapflip_smoke.py`,
+`flip = sum(cls == "saving")` — **flip counts traps where the net PLAYS THE SAVE; higher
+is BETTER.** Corrected r1 reading: off-window saves went 0/6 → 4/6 (0/9 → 5/9) —
+**improvement**, not erosion; reg-31 saves 4 → 7 (+3, out of the ±2 band on the HIGH side);
+comb-125 flat (24 → 23). The likely mechanism for the improvement: the baseline strip is
+the F1 crippled-lineage net (single-window self-play its whole life) and these 8000 steps
+were its first TRUE multi-window self-play (FIX1) — i.e. genuinely NEW off-window signal,
+so the band's "no new signal should not improve" rationale does not apply to this warm-start.
+The error-driven `_ls`-swap re-run (r2) measured comb-125 saves 24 → **17** (a conversion
+REGRESSION vs both baseline and r1, ~1.5σ at n=125) — the swap was REVERTED; r2 is banked
+as a corpus-ablation datapoint (`reports/d_ws3v3/control_r2_*`), and it is a yellow flag to
+note (not transfer) against `_ls`-corpus mixing in WARM-START regimes (run2 is
+fresh-bootstrap — different regime, Decision 7 stands on its own rationale).
 
-**v3.1 PASS conditions for the control RE-RUN (control vs strip):**
-1. threat-probe C1–C3 vs `threat_probe_baseline_anchor200k.json` — all PASS (unchanged).
-2. registered-31 flip count in **[2, 6]** AND combined-125 flip count in **[19, 29]** (unchanged).
-3. **NEW — off-window-heal band (the corpus-diagnosis falsifier):** off-window flips
-   ≤ **1/6** (registered) AND ≤ **1/9** (combined). If off-window flips do NOT heal with the
-   _ls corpus, the corpus diagnosis is FALSIFIED — STOP, do not launch ON arms, re-diagnose.
-4. deploy-disagree (control vs strip) is RECORDED as a descriptive covariate, NOT gated.
-   The **≤ 0.16 bar applies to the §4/§6 ON-arm reads as ON-vs-CONTROL differential**
-   (both ckpts evaluated on the same position set; disagreement between ARM-INJECT/SEEDED
-   and the SAME-regime control isolates the solver's marginal effect — well-posed).
+**v3.1-CORRECTED PASS disposition (r1 = canonical control, operator-accepted):**
+1. threat-probe C1–C3 vs `threat_probe_baseline_anchor200k.json` — all PASS ✓ (measured
+   +9.671 / 30% / 45%).
+2. combined-125 saves in **[19, 29]** ✓ (23). registered-31 saves 7 vs band [2, 6] —
+   out-of-band HIGH accepted under the FIX1 new-signal explanation above (an
+   IMPROVEMENT anomaly, and the band rationale is stale for this warm-start).
+3. deploy-disagree (control vs strip) RECORDED as descriptive covariate (0.418/0.45;
+   0.382 already at step 2k = base-rate training drift), NOT gated. The **≤ 0.16 bar
+   applies to the §4/§6 ON-arm reads as ON-vs-CONTROL differential** (both ckpts on the
+   same position set; isolates the solver's marginal effect — well-posed).
 
 **ORIGINAL v3 conditions (SUPERSEDED by the above for the re-run; kept for the record):**
 

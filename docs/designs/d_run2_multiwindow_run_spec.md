@@ -449,6 +449,14 @@ config action; this is a decision to NOT touch `uncertainty_weight`, `ownership_
 > the May-29 build (8,300 games vs 7,199 — 1,101 scraped since). The yaml's
 > `mixing.pretrained_buffer_path` now points at the _ls NPZ; the fallback text below is
 > retained for the record only.
+>
+> **Ablation flag (2026-07-05, D-WS3V3 r1-vs-r2, note-don't-transfer):** in the v3 smoke's
+> WARM-START regime (200k net, w_pre ≈ 0.283), swapping this _ls corpus in for v6_live2
+> measured combined-125 trap-conversion saves 23 → 17 (a ~1.5σ regression, n=125;
+> `reports/d_ws3v3/control_r2_*`). Different regime from this run (fresh bootstrap,
+> w_pre 0.8 from step 0, no prior single-window lineage) — the regeneration rationale
+> above stands on its own; but if run2's 5k/25k conversion gates read LOW, this
+> datapoint names the mixing corpus as an early suspect to ablate.
 
 Two facts, stated together so neither hides the other:
 
