@@ -462,6 +462,39 @@ lift measured against a broken control is exactly v2's mistake repeated.
     --baseline-json tests/fixtures/threat_probe_baseline_anchor200k.json
 ```
 
+**v3.1 AMENDMENT (2026-07-04, pre-registered BEFORE the control re-run — operator-approved
+after the v3 control run FAILED the original gate; original conditions retained below for
+the record):**
+
+The v3 control run (8000 steps, LR verified 1.0e-4 flat) measured deploy-disagree
+0.418/0.45 vs the ≤0.16 bar — but 0.382 was already present at step 2000
+(`reports/d_ws3v3/control_trapflip_step2k`), C1–C3 PASSED (contrast +9.671, improved), and
+combined-125 conversion was flat (23/125). Conclusion: absolute control-vs-strip argmax
+disagreement is BASE-RATE TRAINING DRIFT in this regime (v2 measured 49%/47%, v3 42–45%,
+saturated by 2k steps) — the quantity cannot read ≤0.16 under ANY 8k fine-tune, and the l1
+script's own output already demotes it ("collateral proxy — C1–C3 is the authoritative
+normal-play canary"). This is an instrument-frame correction, not a recalibration-to-pass
+(L12): the ≤0.16 bar is RETAINED where it is well-posed — the §6 ON-vs-CONTROL differential.
+
+Separately, off-window flips GREW with exposure (1/6 @2k → 4/6 @8k; 0/9 → 5/9 combined) —
+mechanism-matched to the v6_live2 mixing corpus's off-window-DROP semantics at live
+w_pre ≈ 0.283 (28% of every batch teaching zero off-window mass on an _ls net). All three
+arm variants now mix the same-provenance `_ls` regeneration
+(`data/bootstrap_corpus_v6_live2_ls.npz`, sha `3813edc2…345c97`, Decision 7 of the run2 spec).
+
+**v3.1 PASS conditions for the control RE-RUN (control vs strip):**
+1. threat-probe C1–C3 vs `threat_probe_baseline_anchor200k.json` — all PASS (unchanged).
+2. registered-31 flip count in **[2, 6]** AND combined-125 flip count in **[19, 29]** (unchanged).
+3. **NEW — off-window-heal band (the corpus-diagnosis falsifier):** off-window flips
+   ≤ **1/6** (registered) AND ≤ **1/9** (combined). If off-window flips do NOT heal with the
+   _ls corpus, the corpus diagnosis is FALSIFIED — STOP, do not launch ON arms, re-diagnose.
+4. deploy-disagree (control vs strip) is RECORDED as a descriptive covariate, NOT gated.
+   The **≤ 0.16 bar applies to the §4/§6 ON-arm reads as ON-vs-CONTROL differential**
+   (both ckpts evaluated on the same position set; disagreement between ARM-INJECT/SEEDED
+   and the SAME-regime control isolates the solver's marginal effect — well-posed).
+
+**ORIGINAL v3 conditions (SUPERSEDED by the above for the re-run; kept for the record):**
+
 **PASS conditions (all three required, PRE-REGISTERED numerically — "flat" is
 not a vibe check):**
 - deploy-disagree (KILL gate) **≤ 0.16** — the same co-gate §4 uses for the ON

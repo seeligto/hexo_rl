@@ -87,7 +87,13 @@ mcts:
   dirichlet_enabled: false    # Gumbel-Top-k IS root exploration; no double root-noise (anchor pin)
 
 mixing:
-  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"
+  # SWAPPED 2026-07-04 (v3 gate FAIL diagnosis): the v6_live2 NPZ carries
+  # off-window-DROP policy semantics; at live w_pre ~0.283 that is 28% of every
+  # batch actively teaching zero off-window mass on a multi-window (_ls) net —
+  # observed: off-window flip 0/6->4/6, 0/9->5/9 + deploy-disagree 0.42-0.45 on
+  # ARM-CONTROL with C1-C3 PASS. Same-provenance _ls regeneration (Decision 7,
+  # sha 3813edc2...345c97) removes the semantic confound; regime otherwise unchanged.
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2_ls.npz"
   initial_pretrained_weight: 0.8
   min_pretrained_weight: 0.1
   decay_steps: 200000
