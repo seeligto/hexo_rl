@@ -74,7 +74,7 @@ Output: (log_policy, value, value_logit)  ← always 3-tuple for all inference c
 
 **Policy target pruning:** Zero out entries < 2% of max visits, renormalise before CE/KL loss. Config: `policy_prune_frac: 0.02`. Applied once in Python training — Rust `get_improved_policy()` no longer prunes (double-pruning removed at §62 because first prune + renorm makes second prune non-idempotent, producing targets much sharper than intended).
 
-**Entropy regularisation:** `L_total = L_policy + L_value + w_aux·L_aux − w_entropy·H(π)`. Weight `entropy_reg_weight: 0.01`. Expected range ~3–6 nats; < 1.0 signals collapse.
+**Entropy regularisation:** `L_total = L_policy + L_value + w_aux·L_aux − w_entropy·H(π)`. Weight `entropy_reg_weight: 0.01`. Healthy measured band 2.1–2.9 nats (D-RUN2 2026-07-04; the earlier "~3–6 nats" citation is falsified — live selfplay entropy trails 2.42–2.90, see F3-C1); < 1.0 signals collapse.
 
 **Uncertainty head (DISABLED):** Built at §33 (`forward(uncertainty=True)` returns σ², gradient stopped before reaching value head). Head exists in `network.py` but `uncertainty_weight: 0.0` in `configs/training.yaml` gates it entirely — `use_uncertainty=False` means the head never runs in the current training path. Disabled at §59 because Gaussian NLL diverges when σ² → 1e-6 clamp floor, causing `total_loss` spikes to ~394. `uncertainty_weight: 0.0` must be explicit in config — absence causes the trainer default to silently match but is fragile on resume. Re-enable only after adding σ² regularisation (log-barrier or β-VAE-style KL).
 
@@ -803,7 +803,7 @@ Distilled meta-lessons. Cite a row before re-deriving its rule.
 | L6 | Bench metric `positions_pushed` is bimodal (burst artifact). `positions_generated` continuous counter replaces it. Pre-§128 throughput numbers are obsolete. | §128 |
 | L7 | Always run bench twice on new hardware; discard first run (CUDA JIT warmup). | §90, §125 |
 | L8 | More pretrain epochs is not strictly better. Value-head over-fits to corpus-mode signal that selfplay cannot reproduce. | §174 e50 |
-| L9 | Cosine temperature schedule is the load-bearing knob in draw-collapse. Pair with LEGAL_MOVE_RADIUS jitter when active. | §156, §157 |
+| L9 | Cosine temperature schedule is the load-bearing knob in draw-collapse. ~~Pair with LEGAL_MOVE_RADIUS jitter when active~~ — CORRECTED 2026-07-04 (D-RUN2): `legal_move_radius_jitter` is dead code for all registry-spec encodings since §172/§173 (triple-verified); the live radius lever is `legal_move_radius_schedule` (curriculum). Cosine-temp ban/variant-pinning UNCHANGED. | §156, §157; corrected D-RUN2 |
 | L10 | Cross-encoding checkpoint loading is brittle. Encoding header in `persist.rs` (§173 HEXB v7) rejects mismatched loads. | §172, §173 |
 | L11 | K-cluster encoding has no board-AI precedent but is structural twin of MVCNN view-pooling, SwAV multi-crop, PointNet++ set-abstraction, deep MIL pooling. 12pp gain at matched MCTS perception is structural inductive bias, not TTA. | §170 P4, §167 T2 |
 | L12 | Never recalibrate gate thresholds to match failing runs. Never extend smoke runs past stated step limits without explicit go-ahead. | §155, §144 |
