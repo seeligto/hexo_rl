@@ -252,6 +252,19 @@ mv /workspace/hexo_rl/checkpoints/replay_buffer.bin \
 # (g) make bench (game_runner touched this build — vast-only; do NOT run on laptop):
 make bench
 
+# (g2) ANCHOR INCUMBENT RE-STAMP (ADDED 2026-07-04 after a live launch crash — this
+#      precondition is REQUIRED since the D-EVALGATE/A0 anchor gates, commits
+#      9729e5b..a33f7df, which POST-DATE this runbook's §1 list). resolve_anchor
+#      hard-refuses a best_model.pt whose stamp disagrees with the arm variants'
+#      declared v6_live2_ls (anchor.py:249 "refusing to fall through" — observed:
+#      the stale v6_live2 incumbent dc369bae…597228 crashed ARM-CONTROL 40s after
+#      launch, BEFORE any training). Park the incumbent (mv, do not rm — it may be
+#      a production best model) and install the _ls-stamped warmstart as the
+#      smoke's incumbent (the natural arm-relative baseline: the starting net):
+mv checkpoints/best_model.pt checkpoints/best_model.pt.pre_ws3v3_$(date +%Y%m%d)
+cp checkpoints/ws3v3_warmstart_200k.pt checkpoints/best_model.pt
+# (no expected_anchor_sha256 pin in the arm variants — no pin update needed)
+
 # (h) optional: re-run the native tactics soundness sweeps (the widened
 #     neighbor_dist path this smoke uses):
 cd engine && cargo test --lib tactics:: -- --ignored && cd ..

@@ -96,6 +96,36 @@ selfplay:
     - {step: 200000, radius: 5}
     - {step: 400000, radius: 6}
     - {step: 600000, radius: 8}
+  # ── OQ8 amendment 2026-07-04 (D-PRELAUNCH) — WIDEN-EARLY signature gate on
+  # the schedule above. OPERATOR-PROCEDURAL: _resolve_radius is a pure
+  # step-keyed table lookup (hexo_rl/training/step_coordinator.py:502-514,
+  # re-read at log cadence line ~1257) — NO metric-triggered advancement
+  # machinery exists in the trainer, and none is built for this gate.
+  # RULE: advance to the NEXT stage BEFORE its step threshold iff
+  # forced_win_conversion SATURATES at the current radius. "Saturates" ≡
+  # EMA forced_win_conversion (ForcedWinTrend snapshot,
+  # hexo_rl/diagnostics/forced_win_detector.py:392) >= 0.85 AND slope
+  # <= +0.02 between reads, sustained across >=2 CONSECUTIVE signature-
+  # cadence reads (design doc §5, 25k cadence), each read informed by
+  # n >= 30 forced-win games (ForcedWinTrend skips games with no forced win;
+  # low-n reads are advisory-only per its own docstring — they do NOT fire).
+  # Band anchors: golong healthy pre-break 0.89 vs d1m mid-run 0.538
+  # (docs/handoffs/d_decide_track_a_status.md lines 34/28) — derived-from-
+  # anchor-points convention, not a falsified-tested threshold (same
+  # labeling as the Decision 2 colony 0.10 band).
+  # RED-TEAM constraints (design doc §2 Decision 2 signature-gate text):
+  #   * WIDEN-ONLY — this gate can never shrink radius nor delay the table:
+  #     each stage fires at min(step threshold, signature); the steps above
+  #     remain a hard CEILING on how late each stage starts.
+  #   * HYSTERESIS — the >=2-consecutive-reads + n>=30 requirement above.
+  #   * IRREVERSIBLE — once a stage fires early, no rollback on a post-widen
+  #     conversion dip. (The Decision 2 draw/colony BREACH action — revert to
+  #     flat radius 5 — is a separate pre-registered safety and still takes
+  #     precedence over this gate.)
+  # MECHANICS: operator edits this schedule in place (drop the next stage's
+  # step to the current step, leave later stages untouched) + resume, same
+  # resume rules as design doc §10 step 8 (RESUME_CHECKPOINT_OWNED_KEYS
+  # precedence, memory/resume-variant-override-bug-fixed.md).
 
   # ── Decision 3 (design doc §2/§7) — solver-in-loop + trap-corpus seeding.
   # LAUNCH DEFAULT = OFF. Flips to true ONLY if the D-WS3V3 v3 smoke verdict
@@ -133,19 +163,17 @@ mcts:
   dirichlet_enabled: false
 
 mixing:
-  # DELIBERATE REUSE of the v6_live2 corpus (design doc §2 Decision 7 —
-  # operator-owned call). Provenance is CLEAN (built from static human game
-  # records via export_corpus_npz.py, NOT self-play — F1-cascade-exempt by
-  # construction), but its policy targets were encoded under off-window-DROP
-  # semantics (zero mass on exactly the moves this run stops dropping) — a
-  # conscious, documented confound if reused (design doc §1.1/§8). The
-  # registry's canonical _ls corpus (data/bootstrap_corpus_v6_live2_ls.npz,
-  # resolvers.py _CORPUS_PATHS) does NOT exist yet, and export_corpus_npz.py's
-  # --encoding choices do not include v6_live2_ls — regeneration needs that
-  # wiring first (design doc §2 Decision 7 RECOMMENDS doing it pre-launch).
-  # NOTE: "<auto>" here would resolve to the nonexistent _ls path and fail —
-  # the explicit v6_live2 path is the reuse decision made visible.
-  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2.npz"  # loads no-reshape into v6_live2_ls
+  # Decision 7 RESOLVED: REGENERATED (D-PRELAUNCH 2026-07-04). _ls corpus built
+  # via export_corpus_npz.py --encoding v6_live2_ls (per-cluster-row legal-set
+  # scatter, dmulticluster_362_legalset_design.md §4 Tier-2 variant-(b)) from
+  # the SAME static human-game scrape tree (data/corpus/raw_human — NOT
+  # self-play, F1-cascade-exempt by construction). 610,954 rows = 472,537 plies
+  # + 138,417 scatter rows (22.7% containing-window mass the v6_live2 emission
+  # zeroed); 0.53% plies outside all windows dropped (unrepresentable, same as
+  # v6 path). Source-tree caveat, recorded: this is a NEWER snapshot than the
+  # May-29 v6_live2 NPZ (8,300 games vs 7,199 — 1,101 scraped since).
+  # sha256: 3813edc2fb10a7c5ab976a0293e38cbba0fd6b84e5295630f339ca421b345c97
+  pretrained_buffer_path: "data/bootstrap_corpus_v6_live2_ls.npz"
   # Restated-for-visibility ONLY — all three values below are IDENTICAL to
   # configs/training.yaml base defaults (§1.4 canonical mixing schedule).
   initial_pretrained_weight: 0.8
@@ -165,7 +193,26 @@ eval_pipeline:
     # itself v6_live2-stamped (single-window shape, shared wire signature).
     bootstrap_anchor: { enabled: true, stride: 4, n_games: 50, model_sims: 64, opponent_sims: 64, path: checkpoints/bootstrap_model_v6_live2_8300.pt, encoding: v6_live2 }
     nnue:            { enabled: false }
-    offwindow_adversary: { enabled: false }
+    # OQ10 RESOLVED 2026-07-04 (D-PRELAUNCH): ENABLED — closes the D-EVALFOUND
+    # objective_a_coverage_gap warning (design doc Open Question 10). Arms the
+    # IN-loop Objective-A guard: writes offwindow_forced_win_rate, which feeds
+    # BOTH the promotion gate (decide_promotion BLOCKS at the code-default
+    # gating.robustness_threshold=0.06, eval_pipeline.py:443 — no yaml key
+    # needed) and the step-coordinator WARN (D_EVALFOUND_design.md §7). Shape
+    # follows the v6_live2_golong.yaml precedent (arm "exploit", n=100,
+    # model_sims 128, ~3min/round — fast forced games) EXCEPT stride 1, not
+    # golong's watch-only 4: the promotion gate reads "missing = pass", so any
+    # skipped round is an unguarded promotion — stride 1 keeps the guard live
+    # at every eval round. Bonus: on a live multi-window decode this rate
+    # should sit ~0.0 (D-DECODE legal-set precedent) — a sustained high read
+    # doubles as an F1-recurrence signal alongside design doc §5's M6 checks.
+    # TRUST SCOPE (memory/exploit-probe-arm-aliasing-bug.md): the known
+    # arm-aliasing bug contaminates exploit-vs-CONTROL CONTRAST verdicts only;
+    # this monitor reads the single exploit arm's ABSOLUTE forced rate (valid
+    # per that memo + offwindow_probe.py's adv_reference="current" empirical
+    # resolution, 2026-06-28). Do NOT add a control-arm contrast read in-loop
+    # until that bug is fixed.
+    offwindow_adversary: { enabled: true, stride: 1, n_games: 100, arm: "exploit", model_sims: 128 }
     # BUNDLE item (design doc §3.3) — pinned ON from step 0, unlike every
     # prior v6_live2_ls variant (which only got a deploy-matched read via an
     # ad-hoc mid-investigation harness, D-DECIDE A2). Reads the SAME

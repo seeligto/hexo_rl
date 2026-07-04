@@ -248,6 +248,35 @@ point, not a jittered set):**
 | S3 | 400,000 | 6 | widen toward the rule bound |
 | S4 | 600,000 | 8 | hard rule ceiling (`LEGAL_MOVE_RADIUS`); no further widening possible |
 
+**Signature escape hatch (OQ8 amendment, 2026-07-04, D-PRELAUNCH) — widen EARLY on
+`forced_win_conversion` saturation.** The step table above becomes a hard **ceiling**, not the only
+trigger: each stage advances at **min(step threshold, signature fire)**. The signature: the net has
+*mastered conversion at the current radius*, so cheap early games have stopped teaching.
+**"Saturates" is defined concretely:** EMA `forced_win_conversion` (the `ForcedWinTrend` snapshot
+field, `hexo_rl/diagnostics/forced_win_detector.py:392`) **≥ 0.85 with no upward slope (inter-read
+delta ≤ +0.02), sustained across ≥ 2 consecutive signature-cadence reads (§5, 25k cadence), each
+read informed by n ≥ 30 forced-win games** (`ForcedWinTrend` skips games with no forced win; its own
+docstring flags near-zero-n reads as advisory-only — an under-n read never fires the gate). **Band
+derivation (cite):** the only measured healthy sustained-run conversion in this lineage is golong's
+pre-break **0.89** (`docs/handoffs/d_decide_track_a_status.md` line 34 — the same anchor §3.1/§6
+already use for the terminal-break signature `0.89→0.66`); d1m's mid-run, clearly-non-saturated read
+is **0.538** (same doc, line 28). 0.85 sits just under the healthy anchor and far above the
+non-saturated read — labeled per this section's own convention: derived-from-anchor-points, **not** a
+falsified-tested threshold. **RED-TEAM constraints (mandatory):** (i) **WIDEN-ONLY** — the gate can
+never shrink radius nor delay the step schedule (the table stays the latest-start ceiling); (ii)
+**hysteresis** — the ≥2-consecutive-reads + n-floor requirement above, so a single noisy EMA read
+cannot fire it; (iii) **IRREVERSIBLE** once fired — no rollback if conversion dips after the widen
+(an untested transition shape, same rationale as this section's no-mid-schedule-rollback rule). The
+draw/colony **breach action below (revert to flat radius 5) is a separate pre-registered safety and
+takes precedence** — a breach revert is not a violation of (i), it is a different gate.
+**Machinery status (checked 2026-07-04):** `_resolve_radius`
+(`hexo_rl/training/step_coordinator.py:502-514`, re-evaluated at log cadence, line 1257) is a pure
+step-keyed table lookup — **no conditional/metric-triggered advancement machinery exists**, and none
+is built for this gate. It lands as an **OPERATOR-PROCEDURAL rule**: on fire, the operator edits
+`legal_move_radius_schedule` in the yaml in place (drop the next stage's `step` to the current step,
+later stages untouched) and resumes per §10 step 8's resume rules; the yaml carries a matching
+comment block next to the schedule.
+
 **Radius ↔ cluster-threshold interaction (surfaced at review, own it rather than bury it):** with
 `cluster_threshold=5` (registry), disjoint stone clusters cannot form while `radius ≤ 5` — every
 legal move lands within hex-distance 5 of an existing stone, so the BFS-union at `≤ 5`
@@ -405,6 +434,21 @@ config action; this is a decision to NOT touch `uncertainty_weight`, `ownership_
 `threat_weight`, or the value loss function from their current base defaults.
 
 ### Decision 7 — Mixing corpus: reuse the v6_live2 NPZ vs regenerate an _ls corpus (OPERATOR-OWNED)
+
+> **RESOLVED — REGENERATED (D-PRELAUNCH, 2026-07-04).** The RECOMMENDED path below was taken:
+> `--encoding v6_live2_ls` wired into `export_corpus_npz.py` (per-cluster-row scatter,
+> `dmulticluster_362_legalset_design.md` §4 Tier-2 variant-(b); emission in
+> `hexo_rl/bootstrap/dataset.py::replay_game_to_triples_ls`), corpus rebuilt from the same
+> static human-game scrape tree (`data/corpus/raw_human` — the May-29 NPZ's true source per its
+> `.metadata.json`; `data/hexo_human_corpus.jsonl` never existed locally). Output
+> `data/bootstrap_corpus_v6_live2_ls.npz`, sha256 `3813edc2…345c97`, 610,954 rows
+> (472,537 plies + 138,417 scatter rows = 22.7% previously-zeroed containing-window mass;
+> 0.53% outside-all-windows plies dropped, unrepresentable in dense-362, same as the v6 path).
+> Red-team spot-check: 8/8 off-window-adjacent positions show secondary-window one-hot rows the
+> v6_live2 corpus zeroed. Snapshot caveat, recorded: the source tree is a newer snapshot than
+> the May-29 build (8,300 games vs 7,199 — 1,101 scraped since). The yaml's
+> `mixing.pretrained_buffer_path` now points at the _ls NPZ; the fallback text below is
+> retained for the record only.
 
 Two facts, stated together so neither hides the other:
 
@@ -565,6 +609,7 @@ which is a documentation no-op on the Gumbel branch per Decision 1, kept for gre
 | `eval_pipeline.opponents.random` | `{enabled:true, stride:1, n_games:20}` | matches precedent |
 | `eval_pipeline.opponents.bootstrap_anchor` | `{enabled:true, stride:4, n_games:50, model_sims:64, opponent_sims:64, path: checkpoints/bootstrap_model_v6_live2_8300.pt, encoding: v6_live2}` | matches D-1M precedent; `encoding:` declared per the D-EVALGATE deep-merge warning (§1.2) — the anchor's OWN stamp, never the candidate's |
 | `eval_pipeline.opponents.deploy_strength.enabled` | `true` | §3.3 — the one opponent-block flip that is NEW vs every prior `v6_live2_ls` variant; all other `deploy_strength.*` keys left at `configs/eval.yaml` base defaults (`screen_n:80`, `confirm_n:200`, `sealbot_max_depth:5`, `n_boot:1000`, `min_distinct_per_pair:10`) |
+| `eval_pipeline.opponents.offwindow_adversary` | `{enabled:true, stride:1, n_games:100, arm:"exploit", model_sims:128}` | OQ10 RESOLVED (2026-07-04, D-PRELAUNCH): arms the D-EVALFOUND §7 IN-loop Objective-A guard — `offwindow_forced_win_rate` feeds `decide_promotion` (BLOCKS at code-default `gating.robustness_threshold=0.06`, `eval_pipeline.py:443`) + the step-coordinator WARN; closes the `objective_a_coverage_gap` warning. Shape = `v6_live2_golong.yaml` precedent EXCEPT `stride:1` (a promotion gate reads missing = pass; a skipped round is an unguarded promotion). TRUST SCOPE: absolute exploit-arm rate only — `memory/exploit-probe-arm-aliasing-bug.md` (see §5) |
 | `eval_pipeline.gating.expected_anchor_sha256` | `ebf2ed39fd64db525864aeade75972372da9418cc8179347afc8cecb60ba6db8` | fresh-launch incumbent pin (`§D-LOOPFIX` W2) — asserts `best_model.pt` resolves to the intended bootstrap anchor at launch; **must be cleared/repointed on any resume after the first promotion** (same caveat the D-1M variant documents) |
 | `eval_pipeline.gating.promotion_winrate` / `require_ci_above_half` | `0.55` / `true` | matches precedent |
 | `eval_pipeline.gating.bootstrap_floor.enabled` | `false` | matches D-1M precedent (diagnostic-only `wr_bootstrap_anchor`, does not gate — audit PGL-2) |
@@ -585,13 +630,37 @@ everything else about the encoding's geometry is read from the registry by name,
 | Cadence | What | Metric / band | Action |
 |---|---|---|---|
 | 5k, 25k | Machinery gates | fire counters (`solver_eligible_per_step`/`solver_injected_per_step`/`solver_fire_rate`, only if Decision 3 fired), seeding fraction realized vs `seed_fraction` config, encoding stamp on the saved checkpoint (`metadata['encoding_name'] == 'v6_live2_ls'`), buffer health (`min_buffer_size: 25000` reached, no drop-queue overflow — `results_queue_cap: 10000`, `positions_dropped` getter), **multi-window liveness check (F1-recurrence guard — see below this table)** | Abort-fix-relaunch. Pre-committed as CHEAP at this stage — do not tolerate a broken machinery gate past 25k hoping it self-corrects. |
-| 25k, 50k, 100k | Signature reads, NOT strength bars | entropy in the ~2.1-2.9 nat healthy band, warn <2.0, KILL <1.0 (Decision 1, corrected band); draw rate (intrinsic ~0-5% per `configs/monitors.yaml:20-21`, watch above 0.20 sustained — escalate-only, never standalone abort, Decision 2); colony_extension rolling mean vs the 0.10 alarm band (Decision 2); game length distribution; structural metrics trend (`longest_line`, `n_components` — §3.1, bucket by game-count until first promotion); threat-probe C1-C3 **against the RIGHT fixture** (`--positions tests/fixtures/threat_probe_positions_v6_live2.npz` on this `_ls`-stamped run — the cross-fixture fallback trap, `memory/d-ws3v3-a1-rebaseline-match-hostmatch.md`) — **early-run caveat: the C1-C3 baseline (`threat_probe_baseline_anchor200k.json`) is anchored to a 200k-step warm-start; a 25k fresh-bootstrap net has NO expected band against it — early reads are purely directional trend (is C1 rising?), never PASS/FAIL, so a low C1 at 25k is NOT a regression signal**; trap-flip on held-out 31/125 (`scripts/eval/run_l1_trapflip_smoke.py`) vs a HOST-MATCH-minted baseline (§1.5) — only meaningful once Decision 3 has fired, otherwise this is a no-op (no solver/z-label lever to move it) | Canonical runs for this encoding go 200k-1M (D-1M precedent); these are trend checks, not pass/fail bars. Escalate to operator review on any 2-of-5 metric simultaneous drift. |
+| 25k, 50k, 100k | Signature reads, NOT strength bars | entropy in the ~2.1-2.9 nat healthy band, warn <2.0, KILL <1.0 (Decision 1, corrected band); draw rate (intrinsic ~0-5% per `configs/monitors.yaml:20-21`, watch above 0.20 sustained — escalate-only, never standalone abort, Decision 2); colony_extension rolling mean vs the 0.10 alarm band (Decision 2); game length distribution; structural metrics trend (`longest_line`, `n_components` — §3.1, bucket by game-count until first promotion); threat-probe C1-C3 **against the RIGHT fixture** (`--positions tests/fixtures/threat_probe_positions_v6_live2.npz` on this `_ls`-stamped run — the cross-fixture fallback trap, `memory/d-ws3v3-a1-rebaseline-match-hostmatch.md`) — **early-run caveat: the C1-C3 baseline (`threat_probe_baseline_anchor200k.json`) is anchored to a 200k-step warm-start; a 25k fresh-bootstrap net has NO expected band against it — early reads are purely directional trend (is C1 rising?), never PASS/FAIL, so a low C1 at 25k is NOT a regression signal**; trap-flip on held-out 31/125 (`scripts/eval/run_l1_trapflip_smoke.py`) vs a HOST-MATCH-minted baseline (§1.5) — only meaningful once Decision 3 has fired, otherwise this is a no-op (no solver/z-label lever to move it); `forced_win_conversion` EMA vs the §2 Decision 2 **saturation band** (≥0.85, slope ≤ +0.02, ≥2 consecutive reads, n≥30 — the OQ8 widen-early signature gate); `offwindow_forced_win_rate` in-loop trend (stride 1, every eval round — OQ10, absolute-rate read only, see the trust-scope block below this table) | Canonical runs for this encoding go 200k-1M (D-1M precedent); these are trend checks, not pass/fail bars. Escalate to operator review on any 2-of-5 metric simultaneous drift. EXCEPTIONS with their own actions: `forced_win_conversion` saturation fire → operator widens the radius schedule EARLY per §2 Decision 2 (widen-only, irreversible, yaml edit + resume); `offwindow_forced_win_rate` > 0.06 → promotion BLOCKED automatically in-loop (`decide_promotion` robustness gate — not an operator read). |
 | 100k+ | Deploy-matched SealBot-d5 slope; self-ladder BT | `deploy_strength` WR trajectory read in this doc's own distinct-game bootstrap-CI terms (never an absolute threshold — `§D-LADDER`'s own lesson: a wall-clock time-limited bar vs a fixed-depth bar flipped a verdict): **UP** = the inter-milestone WR delta's 95% distinct-game bootstrap CI excludes zero from above; **FLAT** = the delta CI straddles zero across **2 consecutive milestone reads**; **DOWN** = excludes zero from below. Self-play BT-Elo same discipline: distinct-game bootstrap (dedupe byte-identical sequences before the CI — CLAUDE.md effective-n corollary, `§D-ARGMAX`), decision on `ci_lo_boot`/`ci_hi_boot`, never the raw-count CI | UP → continue; FLAT/DOWN per the CI definition above → escalate to a `§D-DECIDE`-style plateau review (the exact aggregation-matrix pattern that closed the d1m lineage) before spending further GPU-weeks. |
 
 Read cadence for the 25k/50k/100k row rides the yaml's `eval_interval: 25000`; the 5k/25k machinery
 row is read via the `checkpoint_interval: 500` / `anchor_every_steps: 5000` guarantees (base config,
 unmodified) — a checkpoint always exists at every 5k boundary regardless of the eval cadence, so the
 machinery gate does not need its own eval-pipeline round.
+
+**In-loop Objective-A robustness guard (OQ10 RESOLVED 2026-07-04, D-PRELAUNCH — supersedes the
+"unguarded in-loop promotion path" caveat this doc previously carried).** The
+`offwindow_adversary` eval opponent is now **ENABLED** in the yaml (`{enabled:true, stride:1,
+n_games:100, arm:"exploit", model_sims:128}` — `v6_live2_golong.yaml` precedent shape, stride
+tightened to 1 because the promotion gate treats a missing `robustness_rate` as PASS, so any skipped
+round would be an unguarded promotion). `offwindow_forced_win_rate` now flows to BOTH the promotion
+gate (`decide_promotion` BLOCKS at the code-default `gating.robustness_threshold=0.06`,
+`hexo_rl/eval/eval_pipeline.py:443` — no yaml key needed) and the step-coordinator WARN, per
+`D_EVALFOUND_design.md` §7; the `objective_a_coverage_gap` startup warning no longer fires. The §5
+M6 paired-decode `exploit_probe` reads and the §6 seeding co-gate remain the decisive OUT-of-loop
+instruments; this monitor is the always-on in-loop backstop. **TRUST SCOPE (arm-aliasing bug,
+`memory/exploit-probe-arm-aliasing-bug.md`):** the shared adversary code path
+(`hexo_rl/eval/offwindow_probe.py`, mirrored by `scripts/exploit_probe.py`) has a known
+arm-aliasing bug — the adversary's `_is_off` classifies against the CURRENT board, not
+`model_last_snapshot`, so exploit-vs-CONTROL **contrast** verdicts are contaminated
+(exploit==control byte-identical under centroid-shifting defenders). The in-loop monitor reads the
+**single exploit arm's ABSOLUTE forced rate only**, which that memo (and `offwindow_probe.py`'s own
+2026-06-28 `adv_reference="current"` empirical resolution) holds VALID — the gate as configured does
+not inherit the contamination. Do **NOT** add a control-arm contrast read to the in-loop gate, and
+do not cite in-loop exploit-vs-control deltas anywhere, until that bug is fixed. Secondary value: on
+a live multi-window decode the absolute rate should sit ~0.0 (D-DECODE legal-set precedent,
+`memory/d-decode-offwindow-decoding-reframe.md`) — a sustained high read is an additional
+F1-recurrence signal alongside the M6 checks below.
 
 **Multi-window liveness check (F1-recurrence guard — red-team addition).** The machinery gate's
 `metadata['encoding_name'] == 'v6_live2_ls'` stamp check trusts exactly the signal class that failed
@@ -655,6 +724,13 @@ dict, run at the 5k gate and re-run at 25k:
   §5) — a sustained breach past 0.16 is a hard stop on the solver lever specifically (revert to
   `solver_enabled: false`, keep the rest of the run going on its multi-window-only merits), not a
   whole-run abort.
+- **Not a KILL — armed promotion-blocker (OQ10 RESOLVED, for completeness of this table):** the
+  in-loop `offwindow_adversary` robustness gate (§5) BLOCKS individual promotions at
+  `offwindow_forced_win_rate > 0.06`; it never stops the run. The previously-documented gap ("the
+  IN-loop promotion path has no Objective-A guard as configured") is closed — a checkpoint can no
+  longer promote off-window-exploitable unguarded. A *persistently* blocked promotion stream
+  (3+ consecutive eval rounds robustness-BLOCKED) is an operator-review escalation on the
+  multi-window machinery (cross-check the §5 M6 paired-decode probe), not an automatic abort.
 
 ---
 
@@ -809,13 +885,18 @@ estimate with assumptions" instruction.
    host runs this launch (vast) — do not reuse the laptop-side A1 numbers cross-host.
 3. **Anchor + corpus preflight** (mirrors the D-1M launch's own checklist,
    `configs/variants/longrun_v6_live2_ls_gumbel_m16.yaml` header):
-   - **CORRECTIVE STEP REQUIRED (verified at review):** the current `checkpoints/best_model.pt`
-     sha is `dc369bae…597228` ≠ the pinned `ebf2ed39…ba6db8` — the yaml's
-     `expected_anchor_sha256` pin would hard-fail `resolve_anchor` at launch as-is. Run the same
-     corrective the D-1M header prescribes (`longrun_v6_live2_ls_gumbel_m16.yaml:4-6`):
-     `cp checkpoints/bootstrap_model_v6_live2_8300.pt checkpoints/best_model.pt && rm -f
+   - **CORRECTIVE STEP (AMENDED at D-PRELAUNCH dry-run, 2026-07-04 — the D-1M raw-bootstrap cp
+     is INSUFFICIENT for this variant):** copying the RAW `bootstrap_model_v6_live2_8300.pt` into
+     `best_model.pt` passes the sha pin but hard-fails `resolve_anchor` on encoding
+     (`anchor.py:249` — raw stamp resolves `v6_live2` vs the variant's declared `v6_live2_ls`;
+     `anchor_encoding_mismatch`, "refusing to fall through" — observed live in the acceptance
+     dry-run). The anchor incumbent must be the step-3a MINTED `_ls`-stamped artifact instead:
+     `cp checkpoints/run2_bootstrap_v6_live2_ls.pt checkpoints/best_model.pt && rm -f
      checkpoints/best_model.pt.bak`, then RE-VERIFY:
-     `scripts/anchor_sha256.py checkpoints/best_model.pt` → `ebf2ed39…ba6db8`.
+     `scripts/anchor_sha256.py checkpoints/best_model.pt` → `ebf2ed39…ba6db8` — the pin is
+     UNCHANGED because `checkpoint_state_sha256` hashes MODEL WEIGHTS ONLY (sorted keys + raw
+     tensor bytes; its own docstring) and the mint carries byte-identical weights. Ordering
+     consequence: step 3a (mint) must run BEFORE this anchor copy.
    - `rm -f checkpoints/replay_buffer.bin checkpoints/replay_buffer.bin.recent.npz` (no stale buffer
      from a prior run bleeding into this fresh bootstrap).
    - `sha256sum data/bootstrap_corpus_v6_live2.npz` matches the expected corpus — OR, if Decision 7's
@@ -928,27 +1009,38 @@ estimate with assumptions" instruction.
    engine-test level (the source-level argument stands; the test that would pin it does not exist).
    The §1.6 20-game smoke doubles as the cheapest re-cover; a proper regression test is a small
    follow-up commit.
-8. **K>1 exposure timing under the radius curriculum (from the Decision 2 review addition):** at
-   radius ≤ 5 (< `cluster_threshold=5` adjacency bound), disjoint clusters cannot form, so the S1/S2
-   stages (steps 0-400k) exercise multi-window K>1 dynamics only via massive-cluster multi-anchoring
-   at an unknown rate. Whether to accept the 4→5→6→8 economics-first staging (this design's default)
-   or start flat at radius 6 to buy K>1 exposure from step 0 is an operator call at launch; the §5
-   `k_ge2_row_fraction` counter measures the actual exposure either way. Related smaller unknown: the
-   massive-cluster multi-anchor mechanism's K>1 rate at fresh-bootstrap play strength has never been
-   measured (v2's max_k=3 read was on a 200k-trained net).
-9. **Decision 7 regeneration wiring:** `export_corpus_npz.py --encoding v6_live2_ls` does not run
-   today (choices list excludes it, and the per-cluster-row emission for multi-window corpora is
-   specced — `dmulticluster_362_legalset_design.md` §4 Tier-2 variant-(b) — but unbuilt). If the
-   operator takes Decision 7's RECOMMENDED regeneration path, that script work happens pre-launch;
-   if the fallback (reuse) is taken, the off-window-eligible-fraction measurement (Decision 7) runs
-   pre-launch instead and its number goes in the run log.
-10. **D-EVALFOUND `objective_a_coverage_gap` warning fires on this config** (observed live while
-   validating the yaml through `build_eval_pipeline`): with `offwindow_adversary.enabled: false`
-   (this yaml, matching all `v6_live2_ls` precedent) the pipeline warns "no Objective-A signal
-   active ... a run can promote an off-window-exploitable checkpoint unguarded. Enable the
-   off-window robustness monitor before a live run — see docs/designs/D_EVALFOUND_design.md §7."
-   This design's §5 M6 paired-decode exploit_probe reads (5k/25k) and the §6 seeding co-gate cover
-   the off-window axis OUT-of-loop, but the IN-loop promotion path has no Objective-A guard as
-   configured. Whether to enable the `offwindow_adversary` opponent (cost + design implications not
-   reviewed this session — `D_EVALFOUND_design.md` §7 is the reference) is an operator decision to
-   take before launch; not silently resolved here.
+8. **PARTIALLY RESOLVED 2026-07-04 (D-PRELAUNCH) — K>1 exposure timing under the radius curriculum
+   (from the Decision 2 review addition):** at radius ≤ 5 (< `cluster_threshold=5` adjacency bound),
+   disjoint clusters cannot form, so the S1/S2 stages (steps 0-400k) exercise multi-window K>1
+   dynamics only via massive-cluster multi-anchoring at an unknown rate.
+   **Resolution taken: the 4→5→6→8 economics-first staging is KEPT, with a signature escape hatch
+   added** — the §2 Decision 2 widen-early gate (operator-procedural, no trainer machinery) advances
+   a stage before its step threshold when `forced_win_conversion` saturates at the current radius
+   (EMA ≥ 0.85, slope ≤ +0.02, ≥2 consecutive §5 reads, n ≥ 30; widen-only, hysteresis, irreversible
+   — full definition and band derivation in §2 Decision 2; matching comment block in the yaml). This
+   bounds the worst case of the economics-first choice: a net that masters the cheap-radius regime
+   early no longer waits idle for the step threshold to buy K>1 exposure. **Still OPEN:** the flat-
+   radius-6-from-step-0 alternative remains an operator call at launch, and the massive-cluster
+   multi-anchor mechanism's K>1 rate at fresh-bootstrap play strength has never been measured (v2's
+   max_k=3 read was on a 200k-trained net); the §5 `k_ge2_row_fraction` counter measures actual
+   exposure either way.
+9. **RESOLVED 2026-07-04 (D-PRELAUNCH) — Decision 7 regeneration wiring BUILT and corpus
+   REGENERATED.** (Was: `export_corpus_npz.py --encoding v6_live2_ls` does not run today.) The
+   per-cluster-row emission was built (`hexo_rl/bootstrap/dataset.py::replay_game_to_triples_ls`),
+   the choice wired in, and `data/bootstrap_corpus_v6_live2_ls.npz` regenerated — see the
+   resolution note at the top of §2 Decision 7 for shas, row counts, and the snapshot caveat.
+10. **RESOLVED 2026-07-04 (D-PRELAUNCH) — decision: ENABLED.** (Was: D-EVALFOUND
+   `objective_a_coverage_gap` warning fires on this config — with `offwindow_adversary.enabled:
+   false` the pipeline warned "no Objective-A signal active ... a run can promote an
+   off-window-exploitable checkpoint unguarded"; the IN-loop promotion path had no Objective-A
+   guard as configured.) The yaml now sets `eval_pipeline.opponents.offwindow_adversary:
+   {enabled:true, stride:1, n_games:100, arm:"exploit", model_sims:128}` per the
+   `D_EVALFOUND_design.md` §7 recipe (config shape = `v6_live2_golong.yaml` precedent; stride
+   tightened to 1 because the promotion gate treats missing `robustness_rate` as pass). The rate
+   feeds `decide_promotion` (blocks at code-default `gating.robustness_threshold=0.06`) + the
+   step-coordinator WARN — see the §5 "In-loop Objective-A robustness guard" block and the §4
+   config-table row. **Trust-scope caveat carried with the resolution:** the adversary shares the
+   `exploit_probe` code path's known arm-aliasing bug (`memory/exploit-probe-arm-aliasing-bug.md`)
+   — only the single-arm ABSOLUTE forced rate (what the in-loop monitor reads) is trustworthy;
+   exploit-vs-control CONTRAST verdicts stay contaminated until that bug is fixed and must not be
+   added to (or cited from) the in-loop gate.
