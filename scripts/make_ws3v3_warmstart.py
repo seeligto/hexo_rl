@@ -51,6 +51,29 @@ self-play/decode MECHANICS (cluster_window_size, is_multi_window,
 value_pool, policy_pool), not in anything the model weights care about. A
 genuinely different encoding (e.g. v6, v8) would NOT share the tuple and the
 script refuses to stamp it.
+
+D-RUN2 B1 (2026-07-04) — `--synthesize-metadata`: the run2 launch warm-starts
+from `checkpoints/bootstrap_model_v6_live2_8300.pt`, an UNSTAMPED bare
+state_dict (no `model_state`/`metadata`/`step` wrapper at all). The default
+path above hard-requires `metadata['encoding_name']` on the input and so
+crashes on it; the trainer loader likewise refuses the raw file against a
+variant declaring `encoding: v6_live2_ls` (trainer_ckpt_load.py:148-156,
+no CLI override). `--synthesize-metadata` accepts a bare state_dict (or a
+dict wrapping one under `model_state`/`state_dict` — detected, never
+guessed), synthesizes fresh metadata `{encoding_name: --encoding-name}`
+AFTER the same wire-signature assertion (source encoding `--source-encoding`,
+default `v6_live2`, must share the tuple with the target — refuse loudly
+otherwise), and emits the payload EXACTLY {'model_state', 'metadata',
+'step'} with **step=0** (the run's absolute-step schedules — radius
+curriculum, mixing decay, cosine T_max — key off this). The SHA-pinned
+source file is NEVER mutated: only --out is written, and --out == --in is
+refused outright.
+
+Usage (D-RUN2 B1 mint):
+  python scripts/make_ws3v3_warmstart.py \\
+      --synthesize-metadata \\
+      --in checkpoints/bootstrap_model_v6_live2_8300.pt \\
+      --out checkpoints/run2_bootstrap_v6_live2_ls.pt
 """
 from __future__ import annotations
 
@@ -73,6 +96,15 @@ from hexo_rl.encoding import (  # noqa: E402
 
 STRIPPED_KEYS = ("model_state", "metadata", "step")
 FORBIDDEN_KEYS = ("config", "optimizer_state", "scaler_state")
+
+# Wrapper/bookkeeping keys that can NEVER appear inside a bare state_dict —
+# if any is present alongside neither `model_state` nor `state_dict`, the
+# payload is some unknown checkpoint schema and we refuse rather than guess.
+_KNOWN_WRAPPER_KEYS = (
+    "metadata", "step", "config", "optimizer_state", "scaler_state", "scheduler_state",
+)
+
+DEFAULT_SOURCE_ENCODING = "v6_live2"
 
 DEFAULT_IN = REPO_ROOT / "reports" / "d_decide_2026-06-24" / "checkpoints" / "checkpoint_00200000.pt"
 DEFAULT_OUT = REPO_ROOT / "checkpoints" / "ws3v3_warmstart_200k.pt"
@@ -153,6 +185,75 @@ def strip_checkpoint(ckpt: Dict[str, Any]) -> Dict[str, Any]:
     return {k: ckpt[k] for k in STRIPPED_KEYS}
 
 
+def extract_model_state(src: Dict[str, Any]) -> tuple:
+    """Locate the model weights inside `src` — DETECT the layout, never guess.
+
+    Returns (model_state, layout_description). Accepted layouts, in order:
+      1. dict with a `model_state` key  (trainer full/stripped checkpoint)
+      2. dict with a `state_dict` key   (common torch.save wrapper)
+      3. bare state_dict                (every value a torch.Tensor, no
+                                         wrapper/bookkeeping keys present)
+    Anything else raises ValueError with the observed keys in the message.
+    """
+    if not isinstance(src, dict):
+        raise ValueError(f"unsupported checkpoint payload type: {type(src)!r}")
+    if "model_state" in src:
+        return src["model_state"], "wrapped (model_state key)"
+    if "state_dict" in src:
+        return src["state_dict"], "wrapped (state_dict key)"
+    wrapper_hits = [k for k in _KNOWN_WRAPPER_KEYS if k in src]
+    if wrapper_hits:
+        raise ValueError(
+            f"input carries checkpoint bookkeeping key(s) {wrapper_hits} but "
+            "no 'model_state'/'state_dict' — unknown schema, refusing to "
+            "guess which sub-dict holds the weights."
+        )
+    if not src or not all(isinstance(v, torch.Tensor) for v in src.values()):
+        non_tensor = sorted(k for k, v in src.items() if not isinstance(v, torch.Tensor))[:8]
+        raise ValueError(
+            "input is neither a wrapped checkpoint (no 'model_state'/"
+            f"'state_dict' key) nor a bare state_dict (non-tensor values under "
+            f"{non_tensor or '<empty dict>'}); refusing to guess."
+        )
+    return src, "bare state_dict"
+
+
+def synthesize_payload(
+    src: Dict[str, Any],
+    source_encoding: str,
+    new_encoding_name: str,
+    provenance: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """D-RUN2 B1: build a weights-only {'model_state', 'metadata', 'step'}
+    payload from an UNSTAMPED input, synthesizing fresh metadata.
+
+    - `source_encoding` is the operator's declaration of what encoding the
+      bare weights were trained under; it is validated against
+      `new_encoding_name` through the SAME wire-signature gate as the
+      re-stamp path (restamp_encoding) — a mismatch refuses loudly.
+    - `step` is hard-pinned to 0: the run's absolute-step schedules (radius
+      curriculum, mixing decay, cosine T_max) key off this field.
+    - Refuses input that already carries a stamped metadata dict — that is
+      the default re-stamp path's job; silently discarding real metadata
+      here would hide provenance.
+    """
+    if isinstance(src, dict):
+        existing_meta = src.get("metadata")
+        if isinstance(existing_meta, dict) and existing_meta.get("encoding_name"):
+            raise ValueError(
+                "input already carries metadata['encoding_name']="
+                f"{existing_meta.get('encoding_name')!r}; use the default "
+                "re-stamp path (no --synthesize-metadata) so the original "
+                "stamp is validated, not discarded."
+            )
+    model_state, layout = extract_model_state(src)
+    print(f"  input layout: {layout}; synthesizing fresh metadata (source encoding assumed {source_encoding!r})")
+    metadata = restamp_encoding({"encoding_name": source_encoding}, new_encoding_name)
+    if provenance:
+        metadata.update(provenance)
+    return {"model_state": model_state, "metadata": metadata, "step": 0}
+
+
 def _sha256_of_file(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -182,6 +283,23 @@ def main() -> None:
             "override."
         ),
     )
+    ap.add_argument(
+        "--synthesize-metadata", action="store_true",
+        help=(
+            "D-RUN2 B1: accept an UNSTAMPED input (bare state_dict, or a dict "
+            "wrapping one under 'model_state'/'state_dict') and synthesize "
+            "fresh metadata {'encoding_name': --encoding-name} + step=0. The "
+            "wire-signature gate still applies: --source-encoding must share "
+            "the tuple with --encoding-name. The source file is never mutated."
+        ),
+    )
+    ap.add_argument(
+        "--source-encoding", dest="source_encoding", default=DEFAULT_SOURCE_ENCODING,
+        help=(
+            "(only with --synthesize-metadata) registry name of the encoding "
+            f"the bare weights were trained under (default: {DEFAULT_SOURCE_ENCODING!r})."
+        ),
+    )
     args = ap.parse_args()
 
     if not args.in_path.exists():
@@ -190,6 +308,13 @@ def main() -> None:
     if args.out_path.exists() and not args.force:
         print(f"ERROR: {args.out_path} already exists; pass --force to overwrite.", file=sys.stderr)
         sys.exit(2)
+    if args.out_path.resolve() == args.in_path.resolve():
+        print(
+            f"ERROR: --out resolves to the same file as --in ({args.in_path}); "
+            "the source checkpoint is never mutated — pick a different --out.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     print(f"Loading: {args.in_path}", file=sys.stderr)
     src = torch.load(args.in_path, map_location="cpu", weights_only=False)
@@ -197,19 +322,40 @@ def main() -> None:
         print(f"ERROR: unsupported checkpoint payload type: {type(src)!r}", file=sys.stderr)
         sys.exit(2)
 
-    stripped = strip_checkpoint(src)
-
-    if args.encoding_name:
+    if args.synthesize_metadata:
+        if not args.encoding_name:
+            print(
+                "ERROR: --synthesize-metadata requires a non-empty --encoding-name "
+                "(there is no source stamp to keep verbatim).",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        provenance = {
+            "synthesized_metadata": True,
+            "synthesized_from": args.in_path.name,
+            "source_sha256": _sha256_of_file(args.in_path),
+        }
         try:
-            stripped["metadata"] = restamp_encoding(stripped["metadata"], args.encoding_name)
+            stripped = synthesize_payload(
+                src, args.source_encoding, args.encoding_name, provenance=provenance,
+            )
         except ValueError as exc:
-            print(f"ERROR: encoding re-stamp refused: {exc}", file=sys.stderr)
+            print(f"ERROR: metadata synthesis refused: {exc}", file=sys.stderr)
             sys.exit(2)
     else:
-        print(
-            f"  encoding stamp: kept verbatim ({stripped['metadata'].get('encoding_name')!r}), "
-            "--encoding-name='' passed",
-        )
+        stripped = strip_checkpoint(src)
+
+        if args.encoding_name:
+            try:
+                stripped["metadata"] = restamp_encoding(stripped["metadata"], args.encoding_name)
+            except ValueError as exc:
+                print(f"ERROR: encoding re-stamp refused: {exc}", file=sys.stderr)
+                sys.exit(2)
+        else:
+            print(
+                f"  encoding stamp: kept verbatim ({stripped['metadata'].get('encoding_name')!r}), "
+                "--encoding-name='' passed",
+            )
 
     present_forbidden = [k for k in FORBIDDEN_KEYS if k in stripped]
     assert not present_forbidden, f"BUG: stripped payload carries forbidden key(s): {present_forbidden}"
