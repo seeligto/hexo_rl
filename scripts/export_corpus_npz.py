@@ -59,7 +59,10 @@ if str(ROOT) not in sys.path:
 
 from hexo_rl.bootstrap.corpus_io import compute_npz_sha256, save_corpus
 from hexo_rl.bootstrap.pretrain import _game_winner_from_replay
-from hexo_rl.bootstrap.dataset import replay_game_to_triples
+from hexo_rl.bootstrap.dataset import (
+    replay_game_to_triples,
+    replay_game_to_triples_ls,
+)
 from hexo_rl.bootstrap.dataset_v6w25 import (
     BOARD_SIZE_V6W25,
     N_ACTIONS_V6W25,
@@ -271,13 +274,20 @@ def main() -> None:
                              "scanning the raw data/corpus/ tree. Human-only; used "
                              "by the `make install` jumpstart on a fresh checkout.")
     parser.add_argument(
-        "--encoding", choices=("v6", "v6tp", "v6_live2", "v6w25", "v8"), default="v6",
+        "--encoding",
+        choices=("v6", "v6tp", "v6_live2", "v6_live2_ls", "v6w25", "v8"),
+        default="v6",
         help="Corpus encoding version: 'v6' (default; 8-plane × 19×19 K-cluster, "
              "362-action with pass slot), 'v6tp' (§P5-CT CF-2 — v6 + turn-phase "
-             "planes 16/17, 10-plane × 19×19, 362-action), 'v6w25' (§168 — "
-             "8-plane × 25×25 K-cluster at matched R=8 perception, 626-action "
-             "with pass slot), or 'v8' (11-plane × 25×25 bbox, 625-action no "
-             "pass; Path β per docs/designs/encoding_v8_contract.md).",
+             "planes 16/17, 10-plane × 19×19, 362-action), 'v6_live2_ls' "
+             "(§D-MULTICLUSTER-S0 legal-set — v6_live2 4-plane shape, per-"
+             "cluster-row emission: the played move is scattered across ALL "
+             "containing windows, NO off-window drop; "
+             "dmulticluster_362_legalset_design.md §4 Tier-2 variant-(b)), "
+             "'v6w25' (§168 — 8-plane × 25×25 K-cluster at matched R=8 "
+             "perception, 626-action with pass slot), or 'v8' (11-plane × "
+             "25×25 bbox, 625-action no pass; Path β per "
+             "docs/designs/encoding_v8_contract.md).",
     )
     parser.add_argument(
         "--with-global-crop", action="store_true",
@@ -300,10 +310,13 @@ def main() -> None:
         parser.error("--canvas-realness is only valid under --encoding v8")
 
     encoding = args.encoding
+    # Registry spec for the active encoding — single source of truth for
+    # plane slice / policy width / K-cap (no hardcoded shape constants).
+    enc_spec = _lookup_encoding(encoding)
     # Active kept-plane slice for the v6-family single-window path (v6=8,
-    # v6tp=10 incl. turn-phase 16/17). Resolved once here so it is always
-    # bound; unused for the v8 / v6w25 native-plane paths.
-    kept_plane_indices = list(_lookup_encoding(encoding).kept_plane_indices)
+    # v6tp=10 incl. turn-phase 16/17; v6_live2/_ls=4). Resolved once here so
+    # it is always bound; unused for the v8 / v6w25 native-plane paths.
+    kept_plane_indices = list(enc_spec.kept_plane_indices)
     if args.out:
         out_path = Path(args.out)
     elif encoding == "v8":
@@ -313,6 +326,9 @@ def main() -> None:
         out_path = ROOT / "data" / "bootstrap_corpus_v6w25.npz"
     elif encoding == "v6tp":
         out_path = ROOT / "data" / "bootstrap_corpus_v6tp.npz"
+    elif encoding == "v6_live2_ls":
+        # Canonical path per hexo_rl/encoding/resolvers.py _CORPUS_PATHS.
+        out_path = ROOT / "data" / "bootstrap_corpus_v6_live2_ls.npz"
     elif encoding == "v6_live2":
         out_path = ROOT / "data" / "bootstrap_corpus_v6_live2.npz"
     else:
@@ -413,6 +429,13 @@ def main() -> None:
             dtype=np.float16,
         )
         policies_buf = np.empty((n_sample, N_ACTIONS_V6W25), dtype=np.float32)
+    elif encoding == "v6_live2_ls":
+        # Legal-set per-cluster-row path (§D-MULTICLUSTER-S0 Tier-2
+        # variant-(b)): a sampled ply emits ONE ROW PER CONTAINING WINDOW
+        # (1..k_max rows), so the row count is not known up front —
+        # accumulate in lists, stack once at the end.
+        states_buf = None  # type: ignore[assignment]
+        policies_buf = None  # type: ignore[assignment]
     else:
         # v6 / v6tp single-window 19×19 path. Plane count is the encoding's
         # kept-slice width (v6=8, v6tp=10 incl. turn-phase 16/17). Both replay
@@ -421,6 +444,16 @@ def main() -> None:
         policies_buf = np.empty((n_sample, 362), dtype=np.float32)
     outcomes_buf = np.empty(n_sample, dtype=np.float32)
     weights_buf = np.empty(n_sample, dtype=np.float32)
+    # v6_live2_ls list accumulators + telemetry (unused on other paths)
+    ls_states: list[np.ndarray] = []
+    ls_policies: list[np.ndarray] = []
+    ls_outcomes: list[np.ndarray] = []
+    ls_weights: list[np.ndarray] = []
+    ls_plies_emitted = 0        # sampled plies with >=1 containing window
+    ls_plies_dropped = 0        # sampled plies with move outside ALL windows
+    ls_scatter_extra_rows = 0   # rows BEYOND the first containing window per
+                                # ply — exactly the mass v6_live2's first-
+                                # containing-window emission zeroed
     global_crops_buf: np.ndarray | None = None
     if args.with_global_crop:
         global_crops_buf = np.empty(
@@ -435,6 +468,40 @@ def main() -> None:
         g = records[gi]
         pos_weight = g["weight"] / g["game_len"]
         game_global_crops: np.ndarray | None = None
+        if encoding == "v6_live2_ls":
+            # Per-cluster-row emission: rows carry their ORIGINAL ply index,
+            # so sampled plies select rows by ply membership (no positional
+            # row/ply identity as on the single-row-per-ply paths).
+            s, p, o, ply_idx = replay_game_to_triples_ls(
+                g["moves"], g["winner"],
+                kept_plane_indices=kept_plane_indices,
+                policy_size=enc_spec.policy_logit_count,
+                k_max=enc_spec.k_max,
+            )
+            if g["winner"] == 1:
+                p1_wins += 1
+            for pi in sorted(ply_indices):
+                row_mask = ply_idx == pi
+                n_rows_pi = int(row_mask.sum())
+                if n_rows_pi == 0:
+                    # Ply not emitted: move outside ALL cluster windows (or
+                    # replay ended early). Count only true in-game plies.
+                    if pi < len(g["moves"]):
+                        ls_plies_dropped += 1
+                    continue
+                ls_states.append(s[row_mask])
+                ls_policies.append(p[row_mask])
+                ls_outcomes.append(o[row_mask])
+                # Each cluster row is an independent training sample (mirrors
+                # the Rust legal-set per-cluster-local buffer rows) → full
+                # per-position weight per row.
+                ls_weights.append(
+                    np.full(n_rows_pi, pos_weight, dtype=np.float32)
+                )
+                ls_plies_emitted += 1
+                ls_scatter_extra_rows += n_rows_pi - 1
+                out_idx += n_rows_pi
+            continue
         if encoding == "v8":
             s, _chain, p, o, n_clipped = replay_game_to_triples_v8(
                 g["moves"], g["winner"],
@@ -468,16 +535,36 @@ def main() -> None:
                 out_idx += 1
 
     # Trim to actual count (some plies may have been out of bounds after replay)
-    states_out = states_buf[:out_idx]
-    policies_out = policies_buf[:out_idx]
-    outcomes_out = outcomes_buf[:out_idx]
-    global_crops_out = global_crops_buf[:out_idx] if global_crops_buf is not None else None
+    if encoding == "v6_live2_ls":
+        if not ls_states:
+            print("ERROR: v6_live2_ls emission produced 0 rows.")
+            sys.exit(1)
+        states_out = np.concatenate(ls_states, axis=0)
+        policies_out = np.concatenate(ls_policies, axis=0)
+        outcomes_out = np.concatenate(ls_outcomes, axis=0)
+        global_crops_out = None
+        assert states_out.shape[0] == out_idx, (
+            f"_ls row bookkeeping mismatch: {states_out.shape[0]} vs {out_idx}"
+        )
+        print(
+            f"Legal-set scatter: {ls_plies_emitted:,} plies → {out_idx:,} rows "
+            f"(+{ls_scatter_extra_rows:,} extra containing-window rows that "
+            f"v6_live2 first-containing-window emission zeroed; "
+            f"{ls_plies_dropped:,} plies outside all windows dropped)"
+        )
+    else:
+        states_out = states_buf[:out_idx]
+        policies_out = policies_buf[:out_idx]
+        outcomes_out = outcomes_buf[:out_idx]
+        global_crops_out = global_crops_buf[:out_idx] if global_crops_buf is not None else None
     # When subselecting (--max-positions < n_available) Elo bias is already baked
     # in via rng.choice(p=w) and uniform weights at train time are correct.
     # When keeping every position, rng.choice with replace=False degenerates to a
     # permutation, so save per-position Elo-band weights for WeightedRandomSampler.
     if args.max_positions is not None and args.max_positions < n_available:
         weights_out = np.ones(out_idx, dtype=np.float32)
+    elif encoding == "v6_live2_ls":
+        weights_out = np.concatenate(ls_weights, axis=0).astype(np.float32)
     else:
         weights_out = weights_buf[:out_idx].astype(np.float32)
 
@@ -491,6 +578,23 @@ def main() -> None:
                        outcomes=outcomes_out, weights=weights_out)
     if global_crops_out is not None:
         save_kwargs["global_crops"] = global_crops_out
+    extra_meta = {
+        "pretrain_mode": pretrain_mode,
+        "with_global_crop": bool(args.with_global_crop),
+        "canvas_realness": bool(args.canvas_realness),
+        "compressed": compress,
+        "max_positions": args.max_positions,
+        "min_game_length": MIN_GAME_LENGTH,
+        "position_start": POSITION_START,
+        "position_end": POSITION_END,
+    }
+    if encoding == "v6_live2_ls":
+        extra_meta.update({
+            "k_max": enc_spec.k_max,
+            "ls_plies_emitted": ls_plies_emitted,
+            "ls_scatter_extra_rows": ls_scatter_extra_rows,
+            "ls_plies_dropped": ls_plies_dropped,
+        })
     # Route through corpus_io.save_corpus (§172 A5.2, SSR17) — writes the npz
     # AND a `.metadata.json` sidecar (sha256 + encoding_name + n_positions +
     # git commit). Replaces the prior inline np.savez + hashlib block.
@@ -503,16 +607,7 @@ def main() -> None:
             if pretrain_mode
             else "scripts/export_corpus_npz.py"
         ),
-        extra={
-            "pretrain_mode": pretrain_mode,
-            "with_global_crop": bool(args.with_global_crop),
-            "canvas_realness": bool(args.canvas_realness),
-            "compressed": compress,
-            "max_positions": args.max_positions,
-            "min_game_length": MIN_GAME_LENGTH,
-            "position_start": POSITION_START,
-            "position_end": POSITION_END,
-        },
+        extra=extra_meta,
         compress=compress,
     )
     sha256_hex = compute_npz_sha256(out_path)
