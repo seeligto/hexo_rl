@@ -420,6 +420,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)] // debug_assert-backed contract — meaningless (and failing) under --release
     fn store_loss_proof_rejects_non_loss_in_debug() {
         // The store API asserts its contract (mate-magnitude LOSS) in debug.
         let r = std::panic::catch_unwind(|| {
