@@ -382,7 +382,15 @@ print('first', lrs[0], 'last', lrs[-1], 'min', min(lrs), 'max', max(lrs))
 **In-run fire-rate watch** (`training_step` event fields, per the interface
 contract): `solver_eligible_per_step`, `solver_injected_per_step`,
 `solver_fire_rate` (injected/eligible delta, null-safe), `solver_fire_rate_seeded`
-(seeded-games-only slice). ARM-SEEDED's `solver_fire_rate_seeded` should sit near
+(seeded-games-only slice).
+**WHERE TO READ (verified live 2026-07-05 — do not repeat this detour):** the
+`training_step` event goes to the MONITORING stream (web dashboard, SocketIO on
+`:5001`), NOT the structlog JSONL — the JSONL's `train_step` event is a different
+emission and never carries solver keys. One-shot read:
+`socketio.SimpleClient().connect("http://localhost:5001")` and scan received
+frames for `solver_*` keys (events.py `_emit_training_events` → `emit_event`).
+ARM-INJECT measured live: fire_rate ~5-11% organic, eligible ~100-340/interval
+post-prefill — counters + hook CONFIRMED firing under the deployed Gumbel regime. ARM-SEEDED's `solver_fire_rate_seeded` should sit near
 the seeded-game density target (close to 1.0 on seeded games, since a seed prefix
 is chosen to land near a proven position); if it reads near-0 even on seeded games,
 the seed prefixes are landing on already-resolved boards — widen the cut set or
