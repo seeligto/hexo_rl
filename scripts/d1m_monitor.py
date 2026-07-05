@@ -312,7 +312,89 @@ def fetch(cfg, host, repo, log):
     except RuntimeError as e:
         return {"error": str(e)}
     snap = parse_feed(records, bin_width=cfg.bin_width, ts_sample=1, gc_sample=1)
-    return snap.as_dict()
+    out = snap.as_dict()
+    out["log"] = log  # run identity for run-specific panels (e.g. run2 curriculum)
+    return out
+
+
+def _run2_variant_cfg():
+    """run2_mw_fresh curriculum knobs, read from the variant yaml (local repo copy).
+
+    Returns (radius_schedule, mixing) or (None, None) when the yaml is absent —
+    the panel degrades to live-log fields only.
+    """
+    try:
+        import yaml
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[1] / "configs" / "variants" / "run2_mw_fresh.yaml"
+        cfg = yaml.safe_load(p.read_text())
+        sched = (cfg.get("selfplay") or {}).get("legal_move_radius_schedule")
+        mixing = cfg.get("mixing") or {}
+        return sched, mixing
+    except Exception:
+        return None, None
+
+
+def _run2_panel(step, ls, fwt, eta_rate):
+    """run2_mw_fresh curriculum / mixing panel — the run-defining knobs the
+    generic D-1M panels don't surface: radius stage (+ OQ8 widen-early signature
+    gate), corpus mixing weight decay, buffer fill, entropy vs the MEASURED
+    2.1-2.9 band (sprint-log corrected 2026-07-04; the old ~3-6 citation is
+    falsified)."""
+    from rich.table import Table
+    from rich.text import Text
+    from rich.panel import Panel
+    from rich.console import Group
+
+    t = Table.grid(padding=(0, 1))
+    t.add_column(style="bold", justify="right")
+    t.add_column()
+
+    sched, mixing = _run2_variant_cfg()
+    if sched:
+        cur = max((e for e in sched if e["step"] <= step), key=lambda e: e["step"], default=sched[0])
+        nxt = min((e for e in sched if e["step"] > step), key=lambda e: e["step"], default=None)
+        stage_idx = sched.index(cur) + 1
+        if nxt is not None:
+            rem = nxt["step"] - step
+            eta = "  ETA %.1fh" % (rem / eta_rate) if eta_rate > 0 else ""
+            nxt_txt = "next r=%d @ %s (%s away%s)" % (
+                nxt["radius"], f"{nxt['step']:,}", f"{rem:,}", eta)
+        else:
+            nxt_txt = "final stage (hard rule ceiling)"
+        t.add_row("radius stage", "S%d  r=%d   %s" % (stage_idx, cur["radius"], nxt_txt))
+        conv_last = None
+        if fwt:
+            conv_last = fwt[-1].get("forced_win_conversion")
+        sig = "conv %s vs >=0.85 x2 25k-reads (slope <=+0.02, n>=30)" % (
+            ("%.3f" % conv_last) if conv_last is not None else "?")
+        t.add_row("OQ8 widen-early", Text(sig, style=(
+            "bold yellow" if (conv_last is not None and conv_last >= 0.85) else "dim")))
+
+    w_pre = ls.get("pretrained_weight")
+    if w_pre is not None:
+        floor = (mixing or {}).get("min_pretrained_weight", 0.1)
+        t.add_row("mixing w_pre", "%.3f  (0.8 -> %.1f floor over 200k; corpus share of batch)"
+                  % (w_pre, floor))
+    bs, bc = ls.get("buffer_size"), ls.get("buffer_capacity")
+    if bs is not None:
+        sp_pct = ls.get("buffer_self_play_pct")
+        t.add_row("buffer", "%s / %s%s" % (
+            f"{bs:,}", f"{bc:,}" if bc else "?",
+            ("   self-play %.0f%%" % (sp_pct * 100)) if sp_pct is not None else ""))
+    dr = ls.get("draw_rate")
+    if dr is not None:
+        t.add_row("draw_rate", Text("%.3f  (hard-abort 0.55 x3 evals)" % dr,
+                                    style="bold red" if dr >= 0.45 else ""))
+    pe = ls.get("policy_entropy_selfplay")
+    if pe is not None:
+        in_band = 2.1 <= pe <= 2.9
+        t.add_row("entropy_sp", Text("%.3f  vs measured band 2.1-2.9 (<1.0 collapse)" % pe,
+                                     style="" if in_band else "yellow"))
+    note = Text("seeding OFF at launch (D-WS3V3 THIN-STILL); mid-run intervention if "
+                "trap-flip plateaus — see run2 spec Decision 3", style="italic dim")
+    return Panel(Group(t, note), title="run2 curriculum / mixing (run-defining knobs)",
+                 border_style="green")
 
 
 # ----------------------------------------------------------------------------
@@ -363,7 +445,12 @@ def build(data, show_help, use_charts, cfg, default_encoding):
         data.get("rate_effective", 0), data.get("rate_recent", 0)))
     prog.add_row("throughput", "{:,.0f} games/hr | {:,.0f} sims/s".format(
         ls.get("games_per_hour", 0), ls.get("sims_per_sec", 0)))
-    miles = [(30000, "30k first-eval"), (200000, "200k gate"), (1000000, "1M target")]
+    _is_run2 = "run2" in (data.get("log") or "")
+    if _is_run2:
+        miles = [(5000, "5k probe gate"), (25000, "25k signature"),
+                 (200000, "200k radius S2"), (1000000, "1M target")]
+    else:
+        miles = [(30000, "30k first-eval"), (200000, "200k gate"), (1000000, "1M target")]
     miles = [m for m in miles if m[0] <= total]
     if total not in [m[0] for m in miles]:
         miles.append((total, "target"))
@@ -424,7 +511,8 @@ def build(data, show_help, use_charts, cfg, default_encoding):
                        style="italic " + (sb_slope["style"] or "dim"))
         body = Group(st, sb_note)
     else:
-        body = Text("no eval rounds yet (first at step 30,000; now at %d)" % step,
+        body = Text("no eval rounds yet (first at step %s; now at %d)"
+                    % ("25,000" if _is_run2 else "30,000", step),
                     style="dim")
     panels.append(Panel(body, title="strength (eval rounds)", border_style="magenta"))
 
@@ -458,6 +546,10 @@ def build(data, show_help, use_charts, cfg, default_encoding):
                     style="italic dim")
     panels.append(Panel(Group(coh, coh_note), title="COHERENCE cluster (golong kill-gate)",
                         border_style="yellow"))
+
+    # ---- run2 curriculum / mixing (only on a run2 log) ----
+    if _is_run2:
+        panels.append(_run2_panel(step, ls, fwt, eta_rate))
 
     # ---- value-divergence canary ----
     vd = Table.grid(padding=(0, 1))
