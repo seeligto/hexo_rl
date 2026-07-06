@@ -543,11 +543,40 @@ def parse_feed(records: Iterable[dict], bin_width: int = 30000,
         except Exception:
             pass
 
-    # latest train_step (high-freq fields: grad_norm, lr, value_bce, value_acc)
-    for d in reversed(recs):
-        if isinstance(d, dict) and d.get("event") == "train_step":
-            last_train = d
-            break
+    # latest train_step (high-freq fields: grad_norm, lr, value_bce, value_acc).
+    # max BY TIMESTAMP, not read-order — with multi-segment (glob) reads the last
+    # file in the stream is an ARCHIVED segment, so a reversed read-order scan would
+    # return a stale record; the globally-latest ts is the live run's newest step.
+    _lt = [(i, d) for i, d in enumerate(recs)
+           if isinstance(d, dict) and d.get("event") == "train_step"]
+    if _lt:
+        # max by (ISO timestamp string, read-index): live's newest step wins across
+        # segments; ties (or missing ts) fall back to read-order-last (old behavior).
+        last_train = max(_lt, key=lambda t: (t[1].get("timestamp") or "", t[0]))[1]
+
+    # Multi-segment support (restart logs read together via a glob): summaries can
+    # arrive out of order and with OVERLAPPING steps (a resumed run re-emits steps
+    # >= its resume point). Dedup by step keeping the LATEST-timestamp record (the
+    # most recent run's value at each step), then sort by step -> the ts->step
+    # bisect map, the summary binning, and last_summary are all chronological and
+    # overlap-clean regardless of file/segment order. No-op on a single clean log.
+    if summ:
+        # ISO-8601 timestamps sort lexicographically = chronologically; compare the
+        # raw string (safe on records lacking a timestamp — real logs always have
+        # one; a missing field just sorts first / keeps read-order on ties).
+        _by_step: Dict[int, dict] = {}
+        for s in summ:
+            _st = s.get("step")
+            if _st is None:
+                continue
+            _prev = _by_step.get(_st)
+            if _prev is None or (s.get("timestamp") or "") >= (_prev.get("timestamp") or ""):
+                _by_step[_st] = s
+        # sort by TIMESTAMP (not step): the step_at bisect map needs ts-monotonic
+        # order. In a single append-only log read-order already = ts-order (so this
+        # is a no-op, even across a resume-rewind where step dips but ts keeps
+        # rising); across glob segments it re-interleaves them chronologically.
+        summ = sorted(_by_step.values(), key=lambda s: s.get("timestamp") or "")
 
     # ts -> step map (summaries) for events lacking a step field
     stimes = [_record_ts(s) for s in summ]
@@ -840,8 +869,16 @@ def read_remote_ssh(host: str, repo: str, log: str, ts_sample: int = 200,
     subsampled. ssh hardened with BatchMode (no password hang) + ConnectTimeout.
     Raises RuntimeError on ssh failure / timeout so the renderer surfaces a
     FETCH ERROR panel."""
-    remote_cmd = "cd '%s' && awk -v TS=%d -v GC=%d -f - '%s'" % (
-        repo, max(1, int(ts_sample)), max(1, int(gc_sample)), log)
+    # `log` may be a GLOB (e.g. logs/run2_mw_fresh*.jsonl) to read every restart
+    # segment as one continuous history — pass it UNQUOTED so the remote shell
+    # expands it into awk's file args (awk reads the program from stdin via -f -,
+    # then processes each matched file; parse_feed dedups+sorts by step so segment
+    # order/overlap doesn't matter). A plain path (no glob metachar) is quoted as
+    # before. Guard: only treat as a glob when it actually contains * / ? / [.
+    _is_glob = any(ch in log for ch in "*?[")
+    _log_arg = log if _is_glob else "'%s'" % log
+    remote_cmd = "cd '%s' && awk -v TS=%d -v GC=%d -f - %s" % (
+        repo, max(1, int(ts_sample)), max(1, int(gc_sample)), _log_arg)
     cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, remote_cmd]
     try:
         p = subprocess.run(cmd, input=_REMOTE_SUBSAMPLE_AWK, capture_output=True,
