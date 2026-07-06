@@ -221,8 +221,21 @@ eval_pipeline:
     # All other deploy_strength.* keys left at configs/eval.yaml base
     # defaults (screen_n:80, confirm_n:200, sealbot_max_depth:5, n_boot:1000,
     # min_distinct_per_pair:10).
+    #
+    # stride: 4 → deploy gate runs every 100k steps (round_idx = step//eval_interval,
+    # fires when round_idx % 4 == 0 → 100k/200k/…; step-based, restart-safe). ADDED
+    # 2026-07-06 (D-PRELAUNCH live-ops): at stride 1 the Gumbel-150 in-loop gate,
+    # sharing GPU with 24 self-play workers, ran 10h+ for the SINGLE 25k round,
+    # HALVED training throughput (4520→2300 steps/h) and stalled the promotion
+    # decision (it is authoritative; a strided-OUT round correctly withholds
+    # promotion via the eval_pipeline fail-safe — NO wr_best proxy fallback, which
+    # is the D-LADDER false-positive this gate exists to remove). Promotion cadence
+    # is therefore every 100k; the 25k normal-eval rounds (sealbot/best_arena/
+    # offwindow) run for MONITORING only. SealBot WR (measured every 25k) is the
+    # true-north strength signal and does not depend on promotion.
     deploy_strength:
       enabled: true
+      stride: 4
   gating:
     # Fresh-launch incumbent pin (D-LOOPFIX W2) — asserts best_model.pt
     # resolves to the intended bootstrap anchor at launch. MUST be
